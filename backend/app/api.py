@@ -36,15 +36,13 @@ from app.names import sanitize_session_name
 from app.models import SessionInfo, CreatedSessionInfo, ChatEvent, session_key
 from app.pqueue import (PromptQueue, _transcript_start_ts, committed_user_lines,
                         fila_interna_pendente, linha_mais_parecida)
-from app.chain import ThenLink
 from app import terminal_input
 from app.terminal_input import TerminalInput, drain
 from app.adapters import CLAUDE_HEADLESS, get_adapter
 from app.adapters.claude_headless import sessions as headless_sessions
 from app.adapters.codex import sessions as codex_sessions
 from app.uploads import MAX_BYTES
-from app.config import (list_config_dirs, _backend_config_base, settings,
-                        automations_enabled)
+from app.config import (list_config_dirs, _backend_config_base, settings)
 from app import runtime_config
 from app.guest_header import guest_of, guest_safe
 from app.share_life import session_life
@@ -179,23 +177,13 @@ async def _codex_rust_port(name: str, request: Request):
         # O painel da fila (`queue/...`) é do Rust também: o Python só repassa.
         rota = route.split("?")[0]
         # A pergunta lateral vai sempre: a rota do Rust decide provedor e sessão.
-        if reply is None and (rota == "btw" or (rota in {"input", "answer", "select", "select/submit", "permission-mode", "permission-modes", "model-effort", "recarregar"} or rota.startswith("queue/"))
+        if reply is None and (rota == "btw" or (rota in {"input", "answer", "select", "select/submit", "permission-mode", "permission-modes", "model-effort"} or rota.startswith("queue/"))
                 and getattr(await _cached_info(name), "provider", "claude") == "claude"):
-            # O fork sem terminal tem 180 s e a reabertura espera o Claude subir por até 5 min; o prazo padrão da
-            # ponte cortaria a resposta. Quem pediu a recarga vai ao diário do Rust.
-            reload = rota == "recarregar"
-            prazo = (200,) if rota == "btw" else (360,) if reload else ()
-            who = {"headers": _who_asked(request)} if reload else {}
-            reply = await asyncio.to_thread(runtime_coordinator.rust_claude, name, route, request.method, body, *prazo, **who)
+            # O fork sem terminal tem 180 s; o prazo padrão da ponte cortaria a resposta.
+            prazo = (200,) if rota == "btw" else ()
+            reply = await asyncio.to_thread(runtime_coordinator.rust_claude, name, route, request.method, body, *prazo)
         if reply:
             raise _RustReply(*reply)
-
-
-def _who_asked(request: Request) -> dict:
-    """Cliente, pedido e origem de quem chegou pelo Connect, para o diário do Rust."""
-    origin = request.headers.get("x-forwarded-for") or (request.client.host if request.client else "")
-    return {key: value for key, value in (("user-agent", request.headers.get("user-agent")),
-            ("x-hangar-req", request.headers.get("x-hangar-req")), ("x-forwarded-for", origin)) if value}
 
 
 app = FastAPI(title="hangar", lifespan=_lifespan)
@@ -906,28 +894,6 @@ get_adapter(CLAUDE_HEADLESS).apos_entrega = (
     lambda name: _agendar_confirmacao(name, _CONFIRM_GRACE_HEADLESS + 0.5))
 
 
-def _maybe_chain(name: str) -> None:
-    """Encadeamento de sessao (feature #12): `name` acabou de confirmar idle no MESMO ponto do push de
-    'terminou' (state == 'idle' em _on_hook_transition — so vira idle no hook Stop, entao ja e turno
-    REALMENTE terminado, nao redraw). Se ha um vinculo 'then' armado, enfileira o prompt na sessao ALVO
-    e dispara o drain dela (mesmo mecanismo do /input), depois consome o vinculo (one-shot: nao e DAG,
-    so 1 hop -- sem isto o alvo levaria o MESMO prompt de novo no proximo turno da fonte).
-    Kill-switch mestre no topo (app.config.automations_enabled) -- desliga esta e a auto-resume junto."""
-    if not automations_enabled():
-        return
-    link = ThenLink(name)
-    data = link.get()
-    if not data:
-        return
-    target, text = data.get("target"), data.get("text")
-    try:
-        if target and text:
-            PromptQueue(target).append(text, delivered=False)
-            _drain_session(target)
-    finally:
-        link.clear()  # one-shot sempre, mesmo se target/text vier malformado -> nao fica repetindo lixo
-
-
 class _StrictBody(BaseModel):
     # rejeita campos desconhecidos no corpo (contrato estrito; pega typo de campo do cliente -> 422).
     model_config = ConfigDict(extra="forbid")
@@ -1011,17 +977,6 @@ class ModoExecucaoBody(_StrictBody):
     terminal: bool = Field(strict=True)
 
 
-@app.post("/api/sessions/{name}/recarregar", dependencies=[Depends(require_auth), Depends(_codex_rust_port)])
-async def recarregar_sessao(name: str):
-    info = await _cached_info(name)
-    if not info:
-        raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessão não encontrada"))
-    if info.provider in ("claude", "codex"):
-        raise registry_mod.SessionOpenNeedsRust()
-    raise HTTPException(409, detail=erro("erro_recarregar_so_sem_terminal",
-                                         "recarregar só vale para sessão Claude sem terminal"))
-
-
 @app.post("/api/sessions/{name}/modo-execucao", dependencies=[Depends(require_auth), Depends(_codex_rust_port)])
 async def modo_execucao(name: str, body: ModoExecucaoBody):
     """Trocar entre terminal e sem terminal é do Rust; aqui só as recusas sem ele."""
@@ -1044,30 +999,6 @@ async def rename_session(name: str, request: Request):
     """Trocar o nome é do Rust; aqui chega só quem entrou por uma porta do Python (Connect, convidado
     com conta), e segue pela ponte."""
     return await _repasse_ao_rust(request, f"/__hangar_server/claude/{urllib.parse.quote(name, safe='')}/rename")
-
-
-class ThenLinkBody(_StrictBody):
-    target: str = Field(min_length=1)
-    text: str = Field(min_length=1)
-
-
-@app.put("/api/sessions/{name}/then", dependencies=[Depends(require_auth)])
-def set_then_link(name: str, body: ThenLinkBody):
-    """Arma o vinculo 'then' (feature #12): quando `name` confirmar idle (turno terminado), `body.text`
-    e enviado pra `body.target` -- ver app.chain.ThenLink e app.api._maybe_chain. Um hop so (nao DAG):
-    setar de novo so troca alvo/texto, nao encadeia mais niveis."""
-    if body.target == name:
-        raise HTTPException(400, detail=erro("erro_encadeamento_proprio", "sessao nao pode encadear pra si mesma"))
-    if not _session_exists(body.target):
-        raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessao alvo nao encontrada"))
-    ThenLink(name).set(body.target, body.text)
-    return {"ok": True}
-
-
-@app.delete("/api/sessions/{name}/then", dependencies=[Depends(require_auth)])
-def clear_then_link(name: str):
-    ThenLink(name).clear()
-    return {"ok": True}
 
 
 @app.get("/api/sessions/{name}/history", dependencies=[Depends(require_auth)], response_model=list[ChatEvent])
@@ -1120,20 +1051,6 @@ async def history(request: Request, response: Response, name: str, limit: int | 
     if limit is not None and limit > 0:
         return evs[-limit:]
     return evs
-
-
-@app.get("/api/sessions/{name}/peer-address", dependencies=[Depends(require_auth)])
-async def peer_address(name: str):
-    """Endereço do inbox nativo desta sessão (cross-session messaging), ou `null`.
-
-    Existe pro `hangar-send` decidir com FATO se o caminho nativo alcança este alvo, em vez de supor
-    pelo tipo da sessão: quem não tem socket (sessão aberta antes da liberação da Anthropic, Codex,
-    Pi) não aparece no `ListAgents` de ninguém, e mandar o modelo usar `SendMessage` ali seria
-    mandá-lo bater numa porta que não existe. `null` nunca é erro — é a resposta "aqui não tem".
-    """
-    # `registry` aqui é a INSTÂNCIA (SessionRegistry); inbox_socket_of é função de MÓDULO.
-    from app.registry import inbox_socket_of
-    return {"uds": await asyncio.to_thread(inbox_socket_of, name)}
 
 
 @app.get("/api/sessions/{name}/subagents", dependencies=[Depends(require_auth)])
@@ -1867,23 +1784,6 @@ async def plugin_input(name: str):
 @app.api_route("/api/sessions/{name}/btw", methods=["GET", "POST"], dependencies=[Depends(require_auth), Depends(_codex_rust_port)])
 async def pergunta_lateral_precisa_do_rust(name: str):
     raise HTTPException(503, detail=erro("btw_needs_rust_server", "a pergunta lateral precisa do servidor Rust"))
-
-
-@app.get("/api/sessions/{name}/pane", dependencies=[Depends(require_auth)])
-def pane(name: str, lines: int = 200):
-    # Pane CRU (texto ja composto pelo tmux: sem ANSI/cursor-move). O espelho do pane (TerminalMirror)
-    # le isto pra mostrar overlays so-TUI (/status, /config, /help, pickers) que nao caem no .jsonl.
-    # `lines` = quanto SCROLLBACK trazer acima da tela visivel (capture-pane -S). O espelho pede mais
-    # quando o usuario rola pro topo; clampeado pra uma janela absurda nao virar payload gigante a
-    # cada poll de 450ms.
-    from app import tmux
-    if not tmux.has_session(name):
-        raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessao nao encontrada"))
-    # `scrollback` diz se pedir mais linhas ADIANTA. Num TUI de tela alternada (Claude Code) vale 0:
-    # o tmux nao guarda historico ali, e quem quer subir tem que rolar o PROPRIO TUI (PageUp), nao o
-    # tmux. Sem esse dado a UI ofereceria "carregar mais historico" que nunca traria nada.
-    return {"text": tmux.capture_pane(name, lines=max(50, min(lines, 5000))),
-            "scrollback": tmux.pane_scrollback(name)}
 
 
 def _erro_conta_codex(exc: codex_accounts.AccountError) -> HTTPException:

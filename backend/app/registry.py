@@ -20,7 +20,6 @@ from app import runtime_config
 from app.models import SessionInfo, session_key
 from app.pqueue import merged_history
 from app.archive import _texto_simples, conversation_files
-from app.chain import ThenLink
 from app.pair import PairLink
 from app.adapters.claude_headless import sessions as headless_sessions
 from app.adapters.codex import sessions as codex_sessions
@@ -486,46 +485,6 @@ def name_of_pid(pid: int) -> Optional[str]:
         return None                                  # NAO cacheia falha: a proxima tentativa retenta
     _NOME_POR_PID[pid] = (nascimento, achado)
     return achado
-
-
-def inbox_socket_of(name: str) -> Optional[str]:
-    """Socket de inbox do cross-session messaging desta sessao, ou None se ela nao tem.
-
-    O Claude Code (2.1.224+) liga um socket por sessao em `$XDG_RUNTIME_DIR/cc-socks/<pid>.sock`
-    (medido em 07/08/2026; o pid e o do processo `claude`). Ter o socket e o que torna a sessao
-    alcancavel pelo `SendMessage` de outra — e o que o `ListAgents` de la vai listar.
-
-    Serve pro hangar-send decidir, com FATO em vez de suposicao, se o caminho nativo existe pra este
-    alvo: sessao aberta antes da liberacao, sessao Codex/Pi ou sessao de outra maquina nao tem
-    socket nenhum, e mandar o modelo usar `SendMessage` nesses casos seria mandar ele bater numa
-    porta que nao existe.
-    """
-    # Gate de plataforma ANTES de qualquer coisa: `os.getuid()` nao existe no Windows, e e justamente
-    # la que XDG_RUNTIME_DIR costuma faltar — o AttributeError subia direto pra rota /peer-address e
-    # ela dava 500 em TODA chamada naquela plataforma (achado da revisao). O Claude Code tambem nao
-    # oferece a feature no Windows nativo, entao "sem socket" e a resposta certa, nao um erro.
-    if os.name != "posix":
-        return None
-    try:
-        # O `is_dir()` tambem fica DENTRO do try: ele engole ENOENT/ENOTDIR mas RELEVANTA EACCES, e
-        # um XDG_RUNTIME_DIR sem permissao (backend sob outro uid, escopo do systemd mais apertado,
-        # container com namespace proprio) mandava PermissionError direto pra rota /peer-address —
-        # 500 em toda chamada naquele ambiente. Mesma classe do gate de Windows acima, um passo antes
-        # (achado da revisao).
-        run = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
-        socks = Path(run) / "cc-socks"
-        if not socks.is_dir():
-            return None                              # feature ausente/desligada nesta maquina
-        pane = tmux.pane_pid(name)
-        if not pane:
-            return None
-        for p in _descendant_pids(pane, _proc_children_map()):
-            caminho = socks / f"{p}.sock"
-            if caminho.exists():
-                return str(caminho)
-    except Exception:                                # noqa: BLE001
-        _log.warning("inbox_socket_of(%r) falhou; tratando como sem socket", name, exc_info=True)
-    return None
 
 
 def _claude_config_dir(info) -> Optional[str]:
@@ -996,11 +955,9 @@ class SessionRegistry:
                 jsonl, tracked = None, False
             else:
                 jsonl, tracked = self.resolve_tracked(p["name"], p["cwd"], p["pid"], children)
-            link = ThenLink(p["name"]).get()
             pair = PairLink(p["name"]).get()
             info = SessionInfo(name=p["name"], cwd=p["cwd"], jsonl=jsonl, tracked=tracked,
                                lifecycle_id=session_life(p["name"], meta=None, birth=p.get("session_created")),
-                               then_target=link.get("target") if link else None,
                                pair_peers=pair.get("peers") if pair else None,
                                pair_external=_pair_external(p["name"], pair.get("peers") if pair else None),
                                pair_gid=pair.get("gid") if pair else None,
@@ -1048,7 +1005,6 @@ class SessionRegistry:
                 provider="codex", tracked=True, conta=f"codex:{codex_home}",
                 codex_home=codex_home, headless=bool(meta.get("headless")),
                 codex_service_tier=meta.get("service_tier"),
-                then_target=(ThenLink(meta["name"]).get() or {}).get("target"),
                 pair_peers=(PairLink(meta["name"]).get() or {}).get("peers"),
                 pair_external=_pair_external(meta["name"], (PairLink(meta["name"]).get() or {}).get("peers")),
                 pair_gid=(PairLink(meta["name"]).get() or {}).get("gid"),
@@ -1070,7 +1026,6 @@ class SessionRegistry:
                 conta=(meta.get("engine_credential_id") if meta.get("engine_account") else
                        f"chave:{meta['engine']}" if meta.get("engine") else
                        f"claude:{Path(cdir or Path.home() / '.claude').resolve()}"),
-                then_target=(ThenLink(meta["name"]).get() or {}).get("target"),
                 pair_peers=(PairLink(meta["name"]).get() or {}).get("peers"),
                 pair_external=_pair_external(meta["name"], (PairLink(meta["name"]).get() or {}).get("peers")),
                 pair_gid=(PairLink(meta["name"]).get() or {}).get("gid"),

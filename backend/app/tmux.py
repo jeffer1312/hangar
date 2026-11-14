@@ -1051,27 +1051,6 @@ def _paste_linha_a_linha(name: str, text: str) -> bool:
     return True
 
 
-def pane_scrollback(name: str) -> int:
-    """Linhas de scrollback que o tmux REALMENTE tem pra este pane (0 = nenhuma).
-
-    Um TUI de tela cheia (Claude Code) roda na TELA ALTERNADA, e nela o tmux nao acumula historico:
-    `alternate_on=1` -> `history_size=0`, e `capture-pane -S -N` nunca devolve mais que a tela
-    visivel por mais linhas que se peca. A TUI do Codex sobe com `--no-alt-screen`, entao ali o
-    scrollback existe de verdade. Quem desenha a UI precisa saber a diferenca pra nao oferecer
-    "carregar mais historico" onde nao ha historico nenhum.
-    """
-    cp = _run(["tmux", "display", "-p", "-t", _pane_target(name),
-               "#{?alternate_on,0,#{history_size}}"])
-    if cp.returncode != 0:
-        # 0 aqui significaria "nao ha historico" — e tmux QUEBRADO (ausente, sem permissao, travado
-        # no timeout, sessao zumbi) daria a MESMA resposta, escondendo a falha atras de uma UI que
-        # so some com o botao. Ainda devolve 0 (a UI nao pode explodir), mas nao em silencio.
-        _log.warning("tmux display falhou pra %r: %s", name, (cp.stderr or "").strip()[:200])
-        return 0
-    out = cp.stdout.strip()
-    return int(out) if out.isdigit() else 0
-
-
 def capture_pane(name: str, lines: int = 200, cores: bool = False) -> str:
     """`cores=True` mantém os códigos ANSI (`-e`). Padrão False: todo o resto do backend
     (classify, statusline, gate de envio) casa texto puro linha a linha, e um `\\x1b[...m` no

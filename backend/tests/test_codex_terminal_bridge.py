@@ -213,7 +213,7 @@ def test_guest_write_to_pi_does_not_wait_for_the_codex_bridge(monkeypatch):
 
 
 def test_relaunch_routes_entering_the_guest_or_connect_port_go_to_the_rust():
-    for path in ("/api/sessions/{name}/modo-execucao", "/api/sessions/{name}/recarregar"):
+    for path in ("/api/sessions/{name}/modo-execucao",):
         route = next(r for r in api_mod.app.routes if getattr(r, "path", None) == path and "POST" in r.methods)
         assert any(d.dependency is api_mod._codex_rust_port for d in route.dependencies), path
 
