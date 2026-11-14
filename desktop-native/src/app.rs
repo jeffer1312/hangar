@@ -2396,6 +2396,7 @@ impl Hangar {
     }
 
     fn replace_sessions(&mut self, sessions: Vec<SessionInfo>, window: &mut Window, cx: &mut Context<Self>) {
+        self.mission_sessions_changed(&sessions,window,cx);
         let old = self.selected.clone();
         // Aba com o foco, pela posição na lista antiga: se a sessão dela sumir, o foco não pode ficar numa alça morta.
         let focused_tab = self.visible_order(cx).into_iter().enumerate().find(|(_, target)| self.is_active_key(&target.server)

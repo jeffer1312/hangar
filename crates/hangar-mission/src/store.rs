@@ -6,7 +6,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
-const FORMAT_VERSION: u32 = 2;
+const FORMAT_VERSION: u32 = 3;
 const MAX_STAGES: usize = 12;
 const MAX_EVIDENCE: usize = 200;
 /// Teto de um arquivo que a sessão anexa pelo caminho: cabe um vídeo curto de funcionamento.
@@ -47,10 +47,14 @@ struct File {
     stages: Vec<Stage>,
     #[serde(default)]
     items: Vec<Item>,
+    #[serde(default)]
+    remote_links: std::collections::BTreeMap<String,String>,
+    #[serde(default)]
+    remote_groups: std::collections::BTreeMap<String,String>,
 }
 
 impl Default for File {
-    fn default() -> Self { Self { version: FORMAT_VERSION, stages: default_stages(), items: Vec::new() } }
+    fn default() -> Self { Self { version: FORMAT_VERSION, stages: default_stages(), items: Vec::new(), remote_links:Default::default(),remote_groups:Default::default() } }
 }
 
 impl File {
@@ -62,7 +66,7 @@ impl File {
         if !self.items.iter().any(|i| i.connector == connector && i.ticket_id == ticket_id) {
             self.items.push(Item { connector: connector.to_owned(), ticket_id: ticket_id.to_owned(), key: String::new(),
                 title: String::new(), url: String::new(), session: None, session_key: None, conversation: None, stage: None, approved: Vec::new(),
-                history: Vec::new(), evidence: Vec::new(), delivered_at: None });
+                history: Vec::new(), evidence: Vec::new(), delivered_at: None, sessions: Vec::new(), session_keys:Default::default(), group_ids:Vec::new(), group_members:Default::default(), repository: None });
         }
         let item = self.item_mut(connector, ticket_id)?;
         (item.key, item.title, item.url) = (ticket.key, ticket.title, ticket.url);
@@ -82,6 +86,12 @@ pub struct Link {
 
 pub struct TicketMetadata { pub key: String, pub title: String, pub url: String }
 
+pub struct ImportedEvidence { evidence: Evidence, path: PathBuf, kept: bool }
+pub struct ReportBinding { pub session_key: Option<String>, pub history_revision: usize }
+impl Drop for ImportedEvidence {
+    fn drop(&mut self) {if !self.kept {let _=std::fs::remove_file(&self.path);}}
+}
+
 impl TicketMetadata {
     pub fn validate(&self) -> Result<(),Error> {metadata_valid(self)}
 }
@@ -97,6 +107,7 @@ fn metadata_valid(ticket: &TicketMetadata) -> Result<(), Error> {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum OwnerChange {
+    Repository { path: String, key: String, title: String, url: String },
     /// Põe o ticket numa etapa, sem portão: o dono decide.
     Stage { stage: String },
     /// Aprova a etapa com portão em que o ticket está e o leva à seguinte.
@@ -222,13 +233,13 @@ impl Store {
     }
 
     pub fn link_action(&self, action: &ActionGuard<'_>, link: Link) -> Result<(Item, bool), Error> {
-        self.link_with_action(&action.key.0, &action.key.1, link, Some(action),None)
+        self.link_with_action(&action.key.0, &action.key.1, link, Some(action),None,None)
     }
 
     pub fn link_bound_action(&self, action: &ActionGuard<'_>, link: Link, key: &str, conversation: Option<&str>) -> Result<(Item,bool), Error> {
         text("session_key",key,1024,false)?;
         if let Some(value) = conversation {text("conversation",value,1024,false)?;}
-        self.link_with_action(&action.key.0,&action.key.1,link,Some(action),Some((key,conversation)))
+        self.link_with_action(&action.key.0,&action.key.1,link,Some(action),Some((key,conversation)),None)
     }
 
     pub fn track_action(&self, action: &ActionGuard<'_>, ticket: TicketMetadata) -> Result<Item, Error> {
@@ -282,13 +293,82 @@ impl Store {
         Ok(Snapshot { stages: file.stages, items: file.items })
     }
 
+    pub fn remote_owner(&self,name: &str,life: &str) -> Result<Option<String>,Error> {
+        Ok(self.read()?.remote_links.get(&format!("{name}\0{life}")).cloned())
+    }
+
+    pub fn remember_remote(&self,name: &str,life: &str,owner: &str) -> Result<(),Error> {
+        if self.remote_owner(name,life)?.as_deref()==Some(owner) {return Ok(());}
+        self.update(|file|{file.remote_links.insert(format!("{name}\0{life}"),owner.to_owned());Ok(())})
+    }
+
+    pub fn remote_group(&self,gid: &str) -> Result<Option<String>,Error> {Ok(self.read()?.remote_groups.get(gid).cloned())}
+
+    pub fn remember_remote_group(&self,gid: &str,owner: &str) -> Result<(),Error> {
+        if self.remote_group(gid)?.as_deref()==Some(owner) {return Ok(());}
+        self.update(|file|{file.remote_groups.insert(gid.to_owned(),owner.to_owned());Ok(())})
+    }
+
+    /// Agrupar associa os participantes ao mesmo ticket. Separar ou fechar o grupo conserva o trabalho já associado.
+    pub fn sync_groups(&self, groups: &[crate::model::Group]) -> Result<Snapshot, Error> {
+        fn apply(items: &mut [Item], groups: &[crate::model::Group]) -> bool {
+            let mut changed=false;
+            for item in items {
+                if let Some(anchor)=&item.session && !item.sessions.contains(anchor) {item.sessions.push(anchor.clone());changed=true;}
+                if let Some((anchor,key))=item.session.as_ref().zip(item.session_key.as_ref()) {
+                    if item.session_keys.get(anchor)!=Some(key) {item.session_keys.insert(anchor.clone(),key.clone());changed=true;}
+                }
+                for group in groups {
+                    let known_group=item.group_ids.contains(&group.id);
+                    let known_member=group.members.iter().any(|member|item.sessions.contains(member)
+                        && item.session_keys.get(member).is_some_and(|key|group.keys.get(member)==Some(key)));
+                    if !known_group && !known_member {continue;}
+                    if !item.group_ids.contains(&group.id) {item.group_ids.push(group.id.clone());changed=true;}
+                    if item.group_members.get(&group.id)!=Some(&group.members) {item.group_members.insert(group.id.clone(),group.members.clone());changed=true;}
+                    for member in &group.members {
+                        if !known_group && let Some(expected)=item.session_keys.get(member) && group.keys.get(member).is_some_and(|key|key!=expected) {continue;}
+                        if !item.sessions.contains(member) {item.sessions.push(member.clone());changed=true;}
+                        if let Some(key)=group.keys.get(member) && item.session_keys.get(member)!=Some(key) {item.session_keys.insert(member.clone(),key.clone());changed=true;}
+                        if item.session.as_ref()==Some(member) && let Some(key)=group.keys.get(member) && item.session_key.as_ref()!=Some(key) {item.session_key=Some(key.clone());changed=true;}
+                    }
+                }
+                item.sessions.sort();item.sessions.dedup();
+            }
+            changed
+        }
+        let mut snapshot=self.snapshot()?;
+        if !apply(&mut snapshot.items,groups) {return Ok(snapshot);}
+        self.update(|file| {
+            apply(&mut file.items,groups);
+            Ok(Snapshot {stages:file.stages.clone(),items:file.items.clone()})
+        })
+    }
+
+    pub fn bind_participant(&self, connector: &str, ticket: &str, name: &str, key: &str) -> Result<Item,Error> {
+        text("session_key",key,1024,false)?;
+        self.update(|file| {
+            let item=file.item_mut(connector,ticket)?;
+            if item.session_keys.get(name).is_some_and(|expected|expected!=key) {return Err(Error::not_linked());}
+            if !item.sessions.iter().any(|member|member==name) {item.sessions.push(name.to_owned());}
+            item.session_keys.insert(name.to_owned(),key.to_owned());
+            Ok(item.clone())
+        })
+    }
+
     pub fn rename_session(&self,old: &str,new: &str) -> Result<bool,Error> {
         if !hangar_core::ids::valid_session_name(old) || !hangar_core::ids::valid_session_name(new) {return Err(Error::invalid("nome da sessão inválido"));}
         let _active=self.actions.lock().unwrap_or_else(|e|e.into_inner());
         self.update(|file| {
             let mut changed=false;
-            for item in file.items.iter_mut().filter(|item|item.session.as_deref()==Some(old)) {
-                item.session=Some(new.to_owned());changed=true;
+            let prefix=format!("{old}\0");
+            let routes=file.remote_links.iter().filter_map(|(key,owner)|key.strip_prefix(&prefix).map(|life|(key.clone(),format!("{new}\0{life}"),owner.clone()))).collect::<Vec<_>>();
+            for (old,new,owner) in routes {file.remote_links.remove(&old);file.remote_links.insert(new,owner);changed=true;}
+            for item in &mut file.items {
+                if item.session.as_deref()==Some(old) {item.session=Some(new.to_owned());changed=true;}
+                for session in &mut item.sessions {if session==old {*session=new.to_owned();changed=true;}}
+                item.sessions.sort();item.sessions.dedup();
+                if let Some(key)=item.session_keys.remove(old) {item.session_keys.insert(new.to_owned(),key);changed=true;}
+                for members in item.group_members.values_mut() {for member in members {if member==old {*member=new.to_owned();changed=true;}}}
             }
             Ok(changed)
         })
@@ -340,30 +420,73 @@ impl Store {
     /// Liga o ticket à sessão. A sessão sai de outro ticket em que estivesse: uma sessão, um ticket.
     /// `true` junto do item quando a sessão é nova para o ticket (quem chama a avisa).
     pub fn link(&self, connector: &str, ticket_id: &str, link: Link) -> Result<(Item, bool), Error> {
-        self.link_with_action(connector, ticket_id, link, None,None)
+        self.link_with_action(connector, ticket_id, link, None,None,None)
     }
 
-    fn link_with_action(&self, connector: &str, ticket_id: &str, link: Link, action: Option<&ActionGuard<'_>>, binding: Option<(&str,Option<&str>)>) -> Result<(Item, bool), Error> {
+    pub fn link_owner(&self,connector: &str,ticket: &str,link: Link,key: Option<&str>,groups: &[crate::model::Group]) -> Result<(Item,bool),Error> {
+        if let Some(key)=key {text("session_key",key,1024,false)?;}
+        self.link_with_action(connector,ticket,link,None,key.map(|key|(key,None)),Some(groups))
+    }
+
+    fn link_with_action(&self, connector: &str, ticket_id: &str, link: Link, action: Option<&ActionGuard<'_>>, binding: Option<(&str,Option<&str>)>, owner_groups: Option<&[crate::model::Group]>) -> Result<(Item, bool), Error> {
         let ticket = TicketMetadata { key: link.key, title: link.title, url: link.url };
         metadata_valid(&ticket)?;
         if !hangar_core::ids::valid_session_name(&link.session) { return Err(Error::invalid("nome de sessão fora do formato")); }
         let active = self.mutation(connector, ticket_id, action)?;
         self.update(|file| {
-            for other in file.items.iter_mut().filter(|i| i.session.as_deref() == Some(link.session.as_str()) || binding.is_some_and(|(key,_)|i.session_key.as_deref()==Some(key))) {
+            if let Some(groups)=owner_groups {
+                let group=groups.iter().find(|group|group.members.contains(&link.session) && binding.is_some_and(|(key,_)|group.keys.get(&link.session).is_some_and(|current|current==key)));
+                let members=group.map_or_else(||vec![link.session.clone()],|group|group.members.clone());
+                for other in file.items.iter_mut().filter(|item|item.connector!=connector || item.ticket_id!=ticket_id) {
+                    let same_life=members.iter().any(|name|other.sessions.contains(name) && (group.is_some() || binding.is_none_or(|(key,_)|other.session_keys.get(name).is_some_and(|stored|stored==key))));
+                    if group.is_some_and(|group|other.group_ids.contains(&group.id)) || same_life {
+                        if active.iter().any(|(source,ticket)|source==&other.connector && ticket==&other.ticket_id) {return Err(action_busy());}
+                        other.sessions.retain(|name|!members.contains(name));
+                        other.session_keys.retain(|name,_|!members.contains(name));
+                        let old_ids=other.group_members.iter().filter(|(_,prior)|prior.iter().any(|name|members.contains(name))).map(|(id,_)|id.clone()).collect::<std::collections::HashSet<_>>();
+                        other.group_ids.retain(|id|!old_ids.contains(id) && group.is_none_or(|group|id!=&group.id));
+                        other.group_members.retain(|id,_|!old_ids.contains(id) && group.is_none_or(|group|id!=&group.id));
+                        if other.session.as_ref().is_some_and(|name|members.contains(name)) {other.session=None;other.session_key=None;other.conversation=None;}
+                    }
+                }
+            }
+            for other in file.items.iter_mut().filter(|i| {
+                let named=i.session.as_deref()==Some(&link.session) || i.sessions.contains(&link.session);
+                named && binding.is_none_or(|(key,_)|i.session_keys.get(&link.session).is_none_or(|old|old==key))
+                    || binding.is_some_and(|(key,_)|i.session_key.as_deref()==Some(key))
+            }) {
                 if action.is_some() && (other.connector!=connector || other.ticket_id!=ticket_id) {
                     return Err(Error::new(Kind::Gate,"ticket_session_assigned","a sessão já está associada a outro ticket"));
                 }
                 if (other.connector != connector || other.ticket_id != ticket_id)
                     && active.iter().any(|(c, t)| c == &other.connector && t == &other.ticket_id) { return Err(action_busy()); }
-                if other.connector != connector || other.ticket_id != ticket_id { other.session = None; other.session_key=None; other.conversation=None; }
+                if other.connector != connector || other.ticket_id != ticket_id {
+                    other.sessions.retain(|session|session!=&link.session);
+                    other.session_keys.remove(&link.session);
+                    if other.session.as_deref()==Some(&link.session) {other.session=None;other.session_key=None;other.conversation=None;}
+                }
             }
             let item = file.upsert(connector, ticket_id, ticket)?;
-            let fresh = item.session.as_deref() != Some(link.session.as_str());
+            if binding.is_some() && item.session_key.is_none() && item.group_ids.is_empty()
+                && let Some(old)=item.session.clone().filter(|old|old!=&link.session && !item.session_keys.contains_key(old)) {
+                item.sessions.retain(|member|member!=&old);
+            }
+            if !item.sessions.contains(&link.session) {item.sessions.push(link.session.clone());}
+            let fresh = item.session.as_deref() != Some(link.session.as_str()) || binding.is_some_and(|(key,_)|item.session_key.as_deref()!=Some(key));
             if fresh {
                 item.history.push(event(EventKind::Linked, "dono", None, Some(&link.session)));
                 item.session = Some(link.session);
             }
             item.session_key=binding.map(|(key,_)|key.to_owned());
+            if action.is_none() && binding.is_none() {item.session_keys.remove(item.session.as_ref().unwrap());}
+            if let Some((key,_))=binding {item.session_keys.insert(item.session.clone().unwrap(),key.to_owned());}
+            if let Some(group)=owner_groups.and_then(|groups|groups.iter().find(|group|item.session.as_ref().is_some_and(|name|group.members.contains(name))
+                && binding.is_some_and(|(key,_)|item.session.as_ref().and_then(|name|group.keys.get(name)).is_some_and(|current|current==key)))) {
+                if !item.group_ids.contains(&group.id) {item.group_ids.push(group.id.clone());}
+                item.group_members.insert(group.id.clone(),group.members.clone());
+                for name in &group.members {if !item.sessions.contains(name) {item.sessions.push(name.clone());}}
+                item.session_keys.extend(group.keys.clone());
+            }
             item.conversation=binding.and_then(|(_,conversation)|conversation.map(str::to_owned));
             Ok((item.clone(), fresh))
         })
@@ -381,6 +504,18 @@ impl Store {
     }
 
     pub fn owner_change(&self, connector: &str, ticket_id: &str, change: OwnerChange) -> Result<Item, Error> {
+        if let OwnerChange::Repository { path, key, title, url } = &change {
+            text("repository", path, 4096, false)?;
+            if path.contains('\0') || path.trim() != path { return Err(Error::invalid("pasta inválida")); }
+            let metadata = TicketMetadata { key:key.clone(), title:title.clone(), url:url.clone() };
+            metadata_valid(&metadata)?;
+            let _active = self.mutation(connector, ticket_id, None)?;
+            return self.update(|file| {
+                let item = file.upsert(connector,ticket_id,metadata)?;
+                item.repository = Some(path.clone());
+                Ok(item.clone())
+            });
+        }
         let _active = self.mutation(connector, ticket_id, None)?;
         self.update(|file| {
             let File { stages, items, .. } = file;
@@ -424,6 +559,7 @@ impl Store {
                     item.delivered_at = Some(now());
                 }
                 OwnerChange::Reset => { (item.stage, item.delivered_at) = (None, None); }
+                OwnerChange::Repository { .. } => unreachable!("repositório já tratado"),
             }
             Ok(item.clone())
         })
@@ -432,13 +568,24 @@ impl Store {
     /// Relato da sessão: etapa, nota e evidências. O agente não passa de etapa com portão sem aprovação, e voltar
     /// para antes de um portão o fecha de novo.
     pub fn report(&self, session: &str, report: Report) -> Result<Item, Error> {
+        let linked = self.read()?.items.into_iter().find(|i| i.session.as_deref() == Some(session)).ok_or_else(Error::not_linked)?;
+        self.report_for(&linked.connector, &linked.ticket_id, session, report)
+    }
+
+    /// O servidor confere o grupo antes de aceitar o relato de outro participante.
+    pub fn report_for(&self, connector: &str, ticket_id: &str, session: &str, report: Report) -> Result<Item, Error> {
+        self.report_imported(connector,ticket_id,session,report,Vec::new(),None)
+    }
+
+    pub fn report_imported(&self, connector: &str, ticket_id: &str, session: &str, report: Report, mut imported: Vec<ImportedEvidence>, binding: Option<ReportBinding>) -> Result<Item,Error> {
         if let Some(note) = &report.note { text("note", note, MAX_TEXT, true)?; }
         for (_, caption) in &report.evidence { text("caption", caption, 500, true)?; }
         // Antes de copiar: sessão sem ticket ou ticket cheio não ocupam disco.
-        let linked = self.read()?.items.into_iter().find(|i| i.session.as_deref() == Some(session)).ok_or_else(Error::not_linked)?;
-        if linked.evidence.len() + report.evidence.len() > MAX_EVIDENCE { return Err(Error::too_much_evidence()); }
+        let linked = self.read()?.items.into_iter().find(|i| i.connector == connector && i.ticket_id == ticket_id).ok_or_else(Error::not_linked)?;
+        let binding=binding.unwrap_or_else(||ReportBinding {session_key:linked.session_keys.get(session).cloned(),history_revision:linked.history.len()});
+        if linked.evidence.len() + report.evidence.len() + imported.len() > MAX_EVIDENCE { return Err(Error::too_much_evidence()); }
         let mut staged = Staged { store: self, ids: Vec::new(), kept: false };
-        let mut copies = Vec::new();
+        let mut copies = imported.iter().map(|entry|Evidence {by:session.to_owned(),..entry.evidence.clone()}).collect::<Vec<_>>();
         for (path, caption) in &report.evidence {
             let evidence = self.stage_evidence(path)?;
             staged.ids.push(evidence.id.clone());
@@ -446,7 +593,15 @@ impl Store {
         }
         let item = self.update(|file| {
             let File { stages, items, .. } = file;
-            let item = items.iter_mut().find(|i| i.session.as_deref() == Some(session)).ok_or_else(Error::not_linked)?;
+            let item = items.iter_mut().find(|i| i.connector == connector && i.ticket_id == ticket_id).ok_or_else(Error::not_linked)?;
+            if item.session.as_deref()!=Some(session) && !item.sessions.iter().any(|member|member==session)
+                || binding.session_key.as_ref().is_some_and(|key|item.session_keys.get(session)!=Some(key)) {
+                return Err(Error::new(Kind::Gate,"ticket_association_changed","a associação mudou durante o relato; confira o ticket novamente"));
+            }
+            if report.stage.is_some() && report.stage!=item.stage && item.history.get(binding.history_revision..).is_none_or(|events|
+                events.iter().any(|event|matches!(event.kind,EventKind::Stage|EventKind::Approved|EventKind::Changes|EventKind::Delivered))) {
+                return Err(Error::new(Kind::Gate,"ticket_stage_changed","a etapa mudou durante o relato; consulte o ticket antes de repetir"));
+            }
             let note = report.note.as_deref().filter(|n| !n.trim().is_empty());
             match &report.stage {
                 Some(stage) if item.stage.as_deref() != Some(stage.as_str()) => {
@@ -466,7 +621,25 @@ impl Store {
             Ok(item.clone())
         })?;
         staged.kept = true;
+        for entry in &mut imported {entry.kept=true;}
         Ok(item)
+    }
+
+    pub fn import_evidence(&self,name: &str,bytes: &[u8],caption: &str) -> Result<ImportedEvidence,Error> {
+        text("caption",caption,500,true)?;
+        let mut evidence=self.store_bytes(name,bytes)?;
+        evidence.caption=caption.to_owned();
+        Ok(ImportedEvidence {path:self.evidence_path(&evidence.id),evidence,kept:false})
+    }
+
+    pub fn source_file(&self,path: &Path) -> Result<(std::fs::File,String,String),Error> {
+        if !path.is_absolute() {return Err(Error::invalid("caminho precisa ser absoluto"));}
+        let file=std::fs::File::open(path).map_err(|error|Error::io("leitura da evidência",&error))?;
+        let meta=file.metadata().map_err(|error|Error::io("leitura da evidência",&error))?;
+        let name=path.file_name().and_then(|name|name.to_str()).ok_or_else(||Error::invalid("nome inválido"))?;
+        let mime=evidence_mime(name).ok_or_else(||Error::invalid("só imagem, vídeo, PDF ou texto"))?;
+        if !meta.is_file() || meta.len()>MAX_EVIDENCE_BYTES {return Err(Error::invalid("evidência inválida ou maior que 512 MiB"));}
+        Ok((file,name.to_owned(),mime.to_owned()))
     }
 
     /// Evidência enviada pelo dono (bytes já lidos), no ticket.
@@ -550,7 +723,7 @@ impl Store {
         };
         let mut file: File = serde_json::from_slice(&bytes)
             .map_err(|_| Error::new(Kind::Unavailable, "mission_unreadable", "mission.json ilegível"))?;
-        if file.version == 1 { file.version = FORMAT_VERSION; }
+        if matches!(file.version,1|2) { file.version = FORMAT_VERSION; }
         if file.version != FORMAT_VERSION {
             return Err(Error::new(Kind::Unavailable, "mission_unreadable", format!("mission.json na versão {} desconhecida", file.version)));
         }

@@ -8,7 +8,7 @@ import { useSessions } from '../../stores/sessions';
 import * as m from '../../paraglide/messages';
 
 export const STATE_TONE: Record<WorktreeState, Tone> = {
-  gone: 'error', session: 'accent', residual: 'warning', dirty: 'warning', merged: 'success', detached: 'neutral', active: 'neutral',
+  gone: 'error', session: 'accent', residual: 'warning', dirty: 'warning', merged: 'success', equivalent: 'neutral', detached: 'neutral', active: 'neutral',
 };
 
 export function stateLabel(k: WorktreeState): string {
@@ -18,6 +18,7 @@ export function stateLabel(k: WorktreeState): string {
     case 'residual': return m.worktree_estado_residual();
     case 'dirty': return m.worktree_estado_nao_commitado();
     case 'merged': return m.worktree_estado_mesclada();
+    case 'equivalent': return m.worktree_estado_equivalente();
     case 'detached': return m.worktree_estado_sem_branch();
     case 'active': return m.worktree_estado_andamento();
   }
@@ -32,6 +33,7 @@ export function useStateColor() {
     residual: theme.tokens.status.warning,
     dirty: theme.tokens.status.warning,
     merged: theme.tokens.status.success,
+    equivalent: theme.tokens.text.secondary,
     detached: theme.tokens.text.muted,
     active: theme.tokens.text.secondary,
   })[k];

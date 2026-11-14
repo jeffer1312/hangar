@@ -223,6 +223,7 @@ vi.mock('../../paraglide/messages', () => ({
   nova_conversa_nome_automatico: () => 'nova_conversa_nome_automatico',
   nova_conversa_retomada_selecionada: () => 'nova_conversa_retomada_selecionada',
   nova_conversa_criacao_incerta: () => 'nova_conversa_criacao_incerta', nova_conversa_envio_incerto: () => 'nova_conversa_envio_incerto',
+  criar_sessao_recuperacao_nao_vazia: () => 'criar_sessao_recuperacao_nao_vazia',
   nova_conversa_salvar_erro: () => 'nova_conversa_salvar_erro', nova_conversa_servidor_ausente: () => 'nova_conversa_servidor_ausente',
   nova_conversa_resultado_salvar_erro: () => 'nova_conversa_resultado_salvar_erro',
   nova_conversa_envio_recusado: ({ erro }: { erro: string }) => `nova_conversa_envio_recusado:${erro}`,
@@ -2218,6 +2219,22 @@ describe('CreateSessionSheet Codex', () => {
         await act(async () => Promise.resolve());
         const created = calls.create.mock.calls[0][1].name;
         expect(calls.replace).toHaveBeenCalledWith(`/s/server-b/${created}`);
+      } finally { act(() => root.unmount()); }
+    });
+
+    it('resposta perdida não abre uma conversa existente com histórico', async () => {
+      calls.scan.mockResolvedValue({ entries: [folder] });
+      calls.create.mockRejectedValue(new Error('Network request failed'));
+      calls.sessions.mockImplementation(async () => calls.create.mock.calls.map((call) => ({ name: call[1].name, cwd: '/repo/hangar' })));
+      calls.history.mockResolvedValue([{ id: 'antiga', kind: 'assistant_msg', text: 'Conversa anterior' }]);
+      const { container, root } = await renderForm();
+      try {
+        await pickFolder(container);
+        await act(async () => button(container, 'criar_criar')!.click());
+        await act(async () => Promise.resolve());
+        expect(calls.replace).not.toHaveBeenCalled();
+        expect([...container.querySelectorAll('[role="alert"]')].map((node) => node.textContent))
+          .toContain('criar_sessao_recuperacao_nao_vazia');
       } finally { act(() => root.unmount()); }
     });
 

@@ -7,6 +7,12 @@ it('resíduo registrado nunca parece limpo ou mesclado', () => {
   expect(worktreeReady(w)).toBe(false);
 });
 
+it('commits equivalentes com merge inconclusivo têm estado próprio e não liberam limpeza', () => {
+  const worktree={exists:true,sessions:[],dirty:0,merged:false,equivalent_commits:true,branch:'topic'} as never;
+  expect(worktreeState(worktree)).toBe('equivalent');
+  expect(worktreeReady(worktree)).toBe(false);
+});
+
 describe('worktreeLabel', () => {
   it('usa a pasta da worktree onde o agente está', () => {
     expect(worktreeLabel({ name: 's', worktree: true, worktree_path: '/r/hangar-rust-parte3', cwd: '/r/hangar' } as never))

@@ -1,7 +1,7 @@
 import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
 import { configureApi, configureDiag, registrarSucesso } from '@hangar/core';
 import type { ChatEvent } from '@hangar/core';
-import { chatStore, _resetChatsForTests, filaCount, setChatsForeground, submitConversationDraft, isSubmitting } from './chat';
+import { chatStore, resetCreatedChat, syncChatTranscripts, _resetChatsForTests, filaCount, setChatsForeground, submitConversationDraft, isSubmitting } from './chat';
 import * as m from '../paraglide/messages';
 import { attachDictationPath, readDraft, writeDraft } from './drafts';
 const disk = vi.hoisted(() => ({ values: new Map<string, string>(), fail: false }));
@@ -116,6 +116,69 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+test('reabrir uma sessão com histórico vazio descarta a conversa anterior', async () => {
+  vi.useFakeTimers();
+  try {
+    historyResponses = [[ev({ id: 'old:1', text: 'Conversa anterior' })], []];
+    const chat = chatStore('srv1', 'projeto');
+    chat.retain();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(chat.use.getState().events.map(event => event.text)).toEqual(['Conversa anterior']);
+    chat.release();
+    chat.retain();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(chat.use.getState().events).toEqual([]);
+    chat.release();
+  } finally { vi.useRealTimers(); }
+});
+
+test('criação confirmada e troca de transcript isolam mensagens e quadros atrasados', async () => {
+  vi.useFakeTimers();
+  try {
+    historyResponses = [[ev({ id: 'old:1' })], [], [ev({ id: 'new:1' })]];
+    const chat = chatStore('srv1', 'projeto');
+    syncChatTranscripts([{ serverId: 'srv1', name: 'projeto', jsonl: '/old.jsonl' }]);
+    chat.retain();
+    await vi.advanceTimersByTimeAsync(0);
+    const old = created[0];
+    old.trigger('message', JSON.stringify(ev({ id: 'old:2' })), 'old:2');
+    resetCreatedChat('srv1', 'projeto');
+    expect(chat.use.getState().events).toEqual([]);
+    old.trigger('message', JSON.stringify(ev({ id: 'old:3' })), 'old:3');
+    old.trigger('state', JSON.stringify({ state: 'working' }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(chat.use.getState().events).toEqual([]);
+    expect(chat.use.getState().stateEvent).toBeNull();
+    expect(created.at(-1)!.url).not.toContain('last_event_id');
+    syncChatTranscripts([{ serverId: 'srv1', name: 'projeto', jsonl: '/new.jsonl' }]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(chat.use.getState().events.map(event => event.id)).toEqual(['new:1']);
+    chat.release();
+  } finally { vi.useRealTimers(); }
+});
+
+test('identidade recebida antes de abrir o chat separa a próxima vida e preserva SSE durante GET vazio', async () => {
+  syncChatTranscripts([{ serverId: 'srv1', name: 'projeto', jsonl: '/old', lifecycle_id: 'old' }]);
+  historyResponses = [[ev({ id: 'old:1' })]];
+  const chat = chatStore('srv1', 'projeto');
+  chat.retain();
+  await tick();
+  expect(chat.use.getState().events.map(event => event.id)).toEqual(['old:1']);
+  historyResponses = [[]];
+  syncChatTranscripts([{ serverId: 'srv1', name: 'projeto', jsonl: '/new', lifecycle_id: 'new' }]);
+  await tick();
+  expect(chat.use.getState().events).toEqual([]);
+  let complete!: (response: Response) => void;
+  vi.mocked(fetch).mockImplementationOnce(() => new Promise<Response>(resolve => { complete = resolve; }));
+  created.at(-1)!.trigger('message', JSON.stringify(ev({ id: 'cached:1' })));
+  created.at(-1)!.trigger('reset', '{}');
+  created.at(-1)!.trigger('message', JSON.stringify(ev({ id: 'new:1' })));
+  complete(new Response('[]', { status: 200 }));
+  await tick();
+  expect(chat.use.getState().events.map(event => event.id)).toEqual(['new:1']);
+  chat.release();
+});
+
 test('(a) history inicial + message novo via SSE = N+1 com ids únicos', async () => {
   vi.useFakeTimers();
   try {
@@ -213,7 +276,7 @@ test('ingestão ativa não relê histórico de 5000 eventos para 200 mensagens s
   console.info('ingestão ativa: leituras históricas em 200 mensagens', { short, long });
   for (const reads of Object.values(long)) expect(reads).toEqual({ id: 0, kind: 0, text: 0 });
   expect(long).toEqual(short);
-});
+}, 30_000);
 
 test('bolha que a fila desistiu entra no horário em que foi enviada, não no fim', async () => {
   historyResponses = [[

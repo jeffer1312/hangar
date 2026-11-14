@@ -40,6 +40,8 @@ pub struct Request {
     pub confirm_retry: bool,
     #[serde(default="execute_by_default")]
     pub execute: bool,
+    #[serde(default)]
+    pub start: bool,
 }
 
 pub(crate) fn execute_by_default() -> bool {true}
@@ -215,13 +217,17 @@ impl Engine {
             return Ok(());
         }
         let linked = previous.as_ref().and_then(|item|item.session.clone()).or_else(||recovery.as_ref().and_then(|a|a.session.clone()));
-        let key = previous.as_ref().and_then(|item|item.session_key.clone()).or_else(||recovery.as_ref().and_then(|a|a.session_key.clone()));
-        let resolved = match linked {Some(name)=>self.sessions.resolve(name,key.clone()).await?,None=>None};
-        if key.is_some() && resolved.is_none() && request.open.is_none() {return Err(Failure::new(409,"ticket_session_changed","a sessão vinculada foi encerrada ou recriada"));}
+        let key = previous.as_ref().and_then(|item|item.session_key.clone().or_else(||item.session.as_ref().and_then(|name|item.session_keys.get(name).cloned())))
+            .or_else(||recovery.as_ref().and_then(|a|a.session_key.clone()));
+        let weak=previous.as_ref().is_some_and(|item|item.session.is_some()) && key.is_none();
+        if weak && !request.start {return Err(Failure::new(409,"ticket_session_identity_required","confirme a associação da sessão no ticket antes de executar a etapa"));}
+        let resolved = if weak {None} else {match linked {Some(name)=>self.sessions.resolve(name,key.clone()).await?,None=>None}};
+        let open = request.open.clone().or_else(||previous.as_ref().and_then(|item|item.repository.as_ref()).map(|cwd|serde_json::json!({"cwd":cwd})));
+        if key.is_some() && resolved.is_none() && open.is_none() {return Err(Failure::new(409,"ticket_session_changed","a sessão vinculada foi encerrada ou recriada"));}
         let session = match resolved {
             Some(session) => session,
             None => {
-                let options = self.sessions.validate_open(request.open.clone().ok_or_else(||Failure::new(409,"ticket_action_folder_required","escolha a pasta para abrir a sessão"))?)?;
+                let options = self.sessions.validate_open(open.ok_or_else(||Failure::new(409,"ticket_action_folder_required","escolha a pasta para abrir a sessão"))?)?;
                 let key: String = ticket.key.chars().filter(|c|c.is_ascii_alphanumeric()||*c=='-').take(32).collect();
                 let name = format!("ticket-{key}-{}",&request.attempt[..8]);
                 self.record(&request.attempt,Status::Opening,Some(&name),None)?;

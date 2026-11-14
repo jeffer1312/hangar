@@ -731,7 +731,10 @@ pub fn status(
             .collect();
     }
     // O provedor só complementa a prova local; sua indisponibilidade não desfaz a ancestralidade.
-    let external = if !probe.failed && !ancestor && ahead > 0 {
+    let equivalence = if !probe.failed && !ancestor && ahead > 0 {
+        base.as_deref().zip(head.as_deref()).map(|(base,head)|crate::worktree_merge::equivalent(Path::new(cwd),base,head)).unwrap_or_default()
+    } else {crate::worktree_merge::Equivalence::default()};
+    let external = if !probe.failed && !ancestor && !equivalence.merged && ahead > 0 {
         match (branch.as_deref(), base.as_deref()) {
             (Some(branch), Some(base)) => {
                 crate::worktree_merge::probe(Path::new(cwd), branch, base)
@@ -741,7 +744,7 @@ pub fn status(
     } else {
         crate::worktree_merge::Proof::default()
     };
-    let merged = ancestor || external.merged;
+    let merged = ancestor || equivalence.merged || external.merged;
     let ignored = if exists {
         ignored_lost(&mut probe, path, main)
     } else {
@@ -774,7 +777,8 @@ pub fn status(
     json!({
         "path": path, "repo": main, "exists": exists, "branch": branch, "base": base,
         "main_branch": repo.main_branch, "head": head,
-        "merge_method": if ancestor { Some("ancestor") } else if external.merged { Some("pull_request") } else { None },
+        "merge_method": if ancestor { Some("ancestor") } else if equivalence.merged { Some("equivalent") } else if external.merged { Some("pull_request") } else { None },
+        "equivalent_commits":equivalence.commits,
         "merge_problem": external.problem,
         // Leitura que falhou deixa dirty/ignored zerados: a situação nunca pode parecer segura.
         "merged": merged && !failed, "degraded": failed,
