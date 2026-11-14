@@ -206,20 +206,27 @@ async fn unowned_controls_answer_in_rust_with_the_python_codes() {
 }
 
 #[tokio::test]
-async fn guest_reaches_python_and_bodies_the_route_refuses_are_a_rust_422() {
+async fn stranger_gets_the_rust_401_and_bodies_the_route_refuses_are_a_rust_422() {
     let dir = tempfile::tempdir().unwrap();
     let registry = Arc::new(registry(dir.path()));
     let case = golden().into_iter().find(|c| c["name"] == "model_ok").unwrap();
     open(&registry, dir.path(), &case).await;
     let (python, server) = serve(registry, dir.path()).await;
-    assert_eq!(call(server, &case, "token-errado").await.1, Value::String("from-python".into()), "convidado segue ao Python");
+    // Achado 3 da revisão: o Python não tem mais a rota; a recusa de quem não pode é do Rust.
+    assert_eq!(call(server, &case, "token-errado").await, (401, json!({"detail": {"code": "erro_nao_autorizado", "params": {}, "msg": "unauthorized"}})));
+    for (method, route) in [("GET", "models"), ("GET", "limits"), ("GET", "commands"), ("POST", "codex/plan/implement")] {
+        let probe = json!({"name": route, "method": method, "route": route, "body": {}});
+        assert_eq!(call(server, &probe, "token-errado").await.0, 401, "{route}");
+    }
     let tier = json!({"service_tier": "turbo"});
     for (route, body) in [("model", json!({"model": "gpt-5", "x": 1})), ("model", json!({"model": 5})), ("model", json!({"effort": "low"})), ("service-tier", tier)] {
         let refused = json!({"name": "corpo", "method": "POST", "route": route, "body": body});
         let (status, reply) = call(server, &refused, OWNER).await;
         assert_eq!((status, reply["detail"]["code"].as_str()), (422, Some("erro_corpo_invalido")), "{body}");
     }
-    assert_eq!(python.hits_to("/api/sessions/s/model") + python.hits_to("/api/sessions/s/service-tier"), 1, "só o convidado foi ao Python");
+    for route in ["model", "service-tier", "models", "limits", "commands", "codex/plan/implement"] {
+        assert_eq!(python.hits_to(&format!("/api/sessions/s/{route}")), 0, "{route}: nada ao Python");
+    }
 }
 
 /// Falhas do ator que o cano falso não produz: a função de resposta com o erro do caso dá o mesmo corpo.

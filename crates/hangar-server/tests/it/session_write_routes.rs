@@ -119,23 +119,48 @@ async fn post(server: std::net::SocketAddr, route: &str, body: &str, token: &str
 
 const ROUTES: &[&str] = &["input", "steer", "interrupt", "select", "select/submit", "answer", "keys", "term-input"];
 
-/// R2-27 (decisão 8): escrita do dono antes de o runtime existir é o 503 `server_starting` da subida,
-/// e o cliente repete; nada vai ao Python, nem as rotas do Codex.
-#[tokio::test]
-async fn without_runtime_every_write_route_is_server_starting_and_never_python() {
-    let (python, server) = serve_with(None).await;
-    let starting = (503, r#"{"detail":"server_starting"}"#.to_owned());
-    let codex = ["models", "model", "codex/mode", "service-tier", "question/skip", "codex-permissions", "codex/plan/implement", "codex/terminate"];
-    for route in ROUTES.iter().chain(&codex) {
-        assert_eq!(post(server, route, r#"{"text":"oi","x":1}"#, OWNER).await, starting, "{route}");
+const CODEX_ROUTES: [&str; 8] = ["models", "model", "codex/mode", "service-tier", "question/skip", "codex-permissions", "codex/plan/implement", "codex/terminate"];
+
+/// Cada escrita do dono (POST das rotas de escrita e do Codex, mais fila e leituras do Codex), com a
+/// resposta que voltou; depois confere que nada chegou ao Python.
+async fn every_write(python: &Fake, server: std::net::SocketAddr) -> Vec<(String, (u16, Value))> {
+    let mut answers = Vec::new();
+    let parse = |(status, text): (u16, String)| (status, serde_json::from_str(&text).unwrap_or(Value::String(text)));
+    for route in ROUTES.iter().chain(&CODEX_ROUTES) {
+        answers.push((format!("POST {route}"), parse(post(server, route, r#"{"text":"oi","x":1}"#, OWNER).await)));
     }
     for (method, route) in [(reqwest::Method::DELETE, "queue/e1"), (reqwest::Method::PATCH, "queue/e1"), (reqwest::Method::GET, "limits"), (reqwest::Method::GET, "models")] {
         let response = client().request(method.clone(), format!("http://{server}/api/sessions/s/{route}"))
             .header("content-type", "application/json").header("authorization", format!("Bearer {OWNER}")).body(r#"{"text":"oi"}"#).send().await.unwrap();
-        assert_eq!((response.status().as_u16(), response.text().await.unwrap()), starting, "{method} {route}");
+        answers.push((format!("{method} {route}"), parse((response.status().as_u16(), response.text().await.unwrap()))));
     }
-    for route in ROUTES.iter().chain(&codex).chain(&["queue/e1", "limits"]) {
+    for route in ROUTES.iter().chain(&CODEX_ROUTES).chain(&["queue/e1", "limits"]) {
         assert_eq!(python.hits_to(&format!("/api/sessions/s/{route}")), 0, "{route}: nada chega ao Python");
+    }
+    answers
+}
+
+/// R2-27 e achado 1 da revisão: servidor que subiu sem o registro de sessões (sem `runtime_instance`)
+/// nunca o terá; a escrita é 503 `runtime_unavailable`, código que não pede repetição.
+#[tokio::test]
+async fn without_a_runtime_every_write_is_runtime_unavailable_and_never_python() {
+    let (python, server) = serve_with(None).await;
+    for (route, (status, body)) in every_write(&python, server).await {
+        assert_eq!((status, body["detail"]["code"].as_str()), (503, Some("runtime_unavailable")), "{route}: {body}");
+    }
+}
+
+/// R2-27 (decisão 8): na subida em curso a porta é do `startup::guard`, com o 503 `server_starting` que o
+/// cliente repete, antes de qualquer rota de escrita e sem ir ao Python.
+#[tokio::test]
+async fn while_starting_every_write_is_server_starting_and_never_python() {
+    let (python, upstream) = spawn_fake().await;
+    let mut state = AppState::new(config(upstream, "127.0.0.1"));
+    state.startup = hangar_server::startup::Readiness::pending();
+    assert!(state.state.runtime.set(registry().await).is_ok());
+    let server = spawn_state(state).await;
+    for (route, answer) in every_write(&python, server).await {
+        assert_eq!(answer, (503, json!({"detail": "server_starting"})), "{route}");
     }
 }
 
@@ -154,13 +179,20 @@ async fn open_entry_with_a_body_the_route_refuses_is_a_rust_422_never_python() {
 }
 
 #[tokio::test]
-async fn guest_goes_straight_to_python_even_with_the_gate_closed() {
+/// Achado 3 da revisão: quem não pode na sessão recebe o 401 do Rust na hora, sem esperar a porta e
+/// sem chegar ao Python, que não tem mais as rotas.
+#[tokio::test]
+async fn stranger_gets_the_rust_401_at_once_even_with_the_gate_closed() {
     let (dir, registry) = (tempfile::tempdir().unwrap(), registry().await);
     open_entry(&registry, dir.path(), "k", "s").await;
     registry.ingress().close("s", Duration::from_secs(1)).await.unwrap();
-    let (_python, server) = serve_with(Some(registry)).await;
-    let answer = tokio::time::timeout(Duration::from_secs(2), post(server, "input", r#"{"text":"oi"}"#, "token-errado")).await;
-    assert_eq!(answer.unwrap(), (200, "from-python".into()));
+    let (python, server) = serve_with(Some(registry)).await;
+    let unauthorized = (401, r#"{"detail":{"code":"erro_nao_autorizado","params":{},"msg":"unauthorized"}}"#.to_owned());
+    for route in ROUTES {
+        let answer = tokio::time::timeout(Duration::from_secs(2), post(server, route, r#"{"text":"oi"}"#, "token-errado")).await;
+        assert_eq!(answer.unwrap(), unauthorized, "{route}");
+        assert_eq!(python.hits_to(&format!("/api/sessions/s/{route}")), 0, "{route}");
+    }
 }
 
 #[tokio::test]

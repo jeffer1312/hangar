@@ -38,6 +38,7 @@ use serde_json::{Value, json};
 
 use crate::proxy::Forward;
 use crate::routes::{AppState, cors, pass, who};
+use crate::share::caller::Caller;
 use crate::runtime::gateway::{RuntimeRegistry, WriteTarget};
 use crate::runtime::ingress::{GateClosed, IngressPass};
 pub use table::{Owner, Provider, WriteRoute, decide};
@@ -79,19 +80,17 @@ pub(crate) async fn forward_whole(st: &AppState, parts: Parts, bytes: Bytes, fwd
 }
 
 /// Decide quem atende. `Ok`: o Rust atende, com o passe na mão e o corpo já lido. `Err`: a resposta
-/// pronta (repasse ao Python só de quem não pode na sessão, recusa da porta fechada, ou a recusa do Rust).
+/// pronta (recusa de quem não pode na sessão, recusa da porta fechada, ou a recusa do Rust).
 pub(crate) async fn admit(st: &Arc<AppState>, peer: SocketAddr, req: Request, route: WriteRoute) -> Result<(Ctx, Bytes), Response> {
-    let (fwd, who) = match who(st, peer, &req).await { Ok(value) => value, Err(e) => return Err(crate::auth::unavailable(e)) };
+    let (_, who) = match who(st, peer, &req).await { Ok(value) => value, Err(e) => return Err(crate::auth::unavailable(e)) };
     let runtime = st.state.runtime.get().cloned();
     let name = session_name(req.uri().path()).filter(|n| who.as_ref().is_some_and(|c| c.can(n, req.method())));
+    let Some(name) = name else { return Err(stranger(st, peer, req, who.as_ref()).await) };
     if matches!(route, WriteRoute::Input | WriteRoute::Interrupt)
-        && let Some(name) = name.as_deref()
-        && let Some(response) = orchestration_guard(st, name, req.headers()).await {
+        && let Some(response) = orchestration_guard(st, &name, req.headers()).await {
         return Err(response);
     }
-    // Quem não pode nesta sessão segue ao Python, que o recusa.
-    let Some(name) = name else { return Err(pass(st, req, &fwd).await) };
-    let Some(runtime) = runtime else { return Err(starting(req.headers())) };
+    let Some(runtime) = runtime else { return Err(no_runtime(req.headers())) };
     let (parts, body) = req.into_parts();
     let Ok(bytes) = to_bytes(body, BODY_LIMIT).await else { return Err(too_large(&parts.headers)) };
     let shaped = table::body_ok(route, &bytes);
@@ -139,17 +138,34 @@ pub(crate) async fn orchestration_guard(st: &Arc<AppState>, name: &str, headers:
     Some(response)
 }
 
-/// Escrita que chega antes de o runtime existir (subida): 503 `server_starting`, e o cliente repete.
-pub(crate) fn starting(headers: &axum::http::HeaderMap) -> Response {
-    let mut response = crate::startup::unavailable();
+/// Servidor sem o registro de sessões (subiu sem `runtime_instance`): ele nunca vai existir nesta vida,
+/// então o código não pede repetição. A subida em curso já é o `server_starting` do `startup::guard`,
+/// porque o registro é ligado antes de a porta atender.
+pub(crate) fn no_runtime(headers: &axum::http::HeaderMap) -> Response {
+    let mut response = detail(StatusCode::SERVICE_UNAVAILABLE, "runtime_unavailable",
+        "o servidor está sem o registro de sessões; nada foi enviado. Reinicie o Hangar.", json!({}));
     cors(headers, response.headers_mut());
     response
 }
 
-/// Recusa do Rust a uma sessão dele: esperar a conversa abrir é 409; o resto, 503.
-pub(crate) fn failed_status(error: &crate::runtime::protocol::RuntimeError) -> StatusCode {
-    if error.code == crate::runtime::codex_relaunch::STARTING || error.code == crate::runtime::gateway::ASLEEP_WAKING || error.code=="other_terminal_starting" { StatusCode::CONFLICT } else { StatusCode::SERVICE_UNAVAILABLE }
+/// Quem não pode escrever nesta sessão: o Python não tem mais as rotas, a recusa é daqui. Convidado
+/// com login fora do alcance dele é 403 e não perde o login; desconhecido recebe o 401 contado.
+pub(crate) async fn stranger(st: &AppState, peer: SocketAddr, req: Request, who: Option<&Caller>) -> Response {
+    if !matches!(who, Some(Caller::Guest(_))) { return crate::routes::refuse_without_python(st, peer, req, None).await; }
+    let mut response = detail(StatusCode::FORBIDDEN, "erro_fora_do_convidado", "fora do acesso do convidado", json!({}));
+    cors(req.headers(), response.headers_mut());
+    response
 }
+
+/// Recusa do Rust a uma sessão dele: esperar a conversa abrir é 409; rota que não existe para a sessão
+/// também, porque repetir não muda nada; o resto, 503.
+pub(crate) fn failed_status(error: &crate::runtime::protocol::RuntimeError) -> StatusCode {
+    if error.code == crate::runtime::codex_relaunch::STARTING || error.code == crate::runtime::gateway::ASLEEP_WAKING || error.code=="other_terminal_starting"
+        || error.code == ROUTE_UNAVAILABLE || error.code == PROVIDER_UNKNOWN { StatusCode::CONFLICT } else { StatusCode::SERVICE_UNAVAILABLE }
+}
+
+const ROUTE_UNAVAILABLE: &str = "session_route_unavailable";
+const PROVIDER_UNKNOWN: &str = "runtime_provider_unknown";
 
 
 /// Quem atende uma escrita. `Failed`: a sessão é do Rust e não pôde ser atendida (entrada doente,
@@ -201,10 +217,10 @@ pub(crate) async fn route_write(runtime: &RuntimeRegistry, name: &str, route: Wr
         },
     };
     let Some(provider) = Provider::from_str(&target.provider) else {
-        return Write::Failed(RuntimeError::new("runtime_provider_unknown", "a sessão tem um agente que o servidor não conhece; nada foi enviado"));
+        return Write::Failed(RuntimeError::new(PROVIDER_UNKNOWN, "a sessão tem um agente que o servidor não conhece; nada foi enviado"));
     };
     if decide(route, provider, target.terminal) == Owner::Refused {
-        return Write::Failed(RuntimeError::new("session_route_unavailable", "esta ação não existe para este tipo de sessão; nada foi enviado"));
+        return Write::Failed(RuntimeError::new(ROUTE_UNAVAILABLE, "esta ação não existe para este tipo de sessão; nada foi enviado"));
     }
     if target.busy { target.healthy = runtime.settle_busy(name, &target).await; }
     // Exceção da entrada doente: o modo de permissão do Codex sem terminal cujo processo caiu e não voltou
@@ -234,4 +250,17 @@ pub(crate) fn invalid_body(headers: &axum::http::HeaderMap) -> Response {
     let mut response = detail(StatusCode::UNPROCESSABLE_ENTITY, "erro_corpo_invalido", INVALID_BODY_MSG, json!({}));
     cors(headers, response.headers_mut());
     response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::protocol::RuntimeError;
+
+    /// Achado 2 da revisão: recusa que repetir não muda é 409, nunca o 503 de "tente de novo".
+    #[test]
+    fn permanent_refusals_are_409_and_unhealthy_stays_503() {
+        for code in [ROUTE_UNAVAILABLE, PROVIDER_UNKNOWN] { assert_eq!(failed_status(&RuntimeError::new(code, "x")), StatusCode::CONFLICT, "{code}"); }
+        assert_eq!(failed_status(&RuntimeError::new("runtime_unhealthy", "x")), StatusCode::SERVICE_UNAVAILABLE);
+    }
 }

@@ -18,7 +18,7 @@ use super::input::{MSG_CODEX_CONTROL, MSG_CONTROL_UNCONFIRMED, answer, codex_con
 use super::{Ctx, Owner, Provider, WriteRoute, admit, decide, detail_body, enter_then_find, invalid_body, json_response, session_name};
 use crate::mods::state::random_hex;
 use crate::permission_control::PermissionAction;
-use crate::routes::{AppState, cors, pass, who};
+use crate::routes::{AppState, cors, who};
 use crate::runtime::gateway::EntryHandle;
 use crate::runtime::protocol::{Disposition, OperationKind, RuntimeCommand, RuntimeError, RuntimeReply};
 
@@ -305,13 +305,13 @@ async fn admit_codex(st: &Arc<AppState>, peer: SocketAddr, req: Request) -> Resu
     admit_codex_as(st, peer, req, WriteRoute::CodexControl).await
 }
 
-/// Dono e convidado com acesso à sessão passam pelo mesmo caminho; quem não pode segue ao Python.
+/// Dono e convidado com acesso à sessão passam pelo mesmo caminho; quem não pode recebe a recusa do Rust.
 async fn admit_codex_as(st: &Arc<AppState>, peer: SocketAddr, req: Request, route: WriteRoute) -> Result<(Ctx, Bytes), Response> {
-    let (fwd, who) = match who(st, peer, &req).await { Ok(value) => value, Err(e) => return Err(crate::auth::unavailable(e)) };
+    let (_, who) = match who(st, peer, &req).await { Ok(value) => value, Err(e) => return Err(crate::auth::unavailable(e)) };
     let Some(name) = session_name(req.uri().path()).filter(|n| who.as_ref().is_some_and(|c| c.can(n, req.method()))) else {
-        return Err(pass(st, req, &fwd).await);
+        return Err(super::stranger(st, peer, req, who.as_ref()).await);
     };
-    if st.state.runtime.get().is_none() { return Err(super::starting(req.headers())); }
+    if st.state.runtime.get().is_none() { return Err(super::no_runtime(req.headers())); }
     match ours(st, Some(&name), req.method() == axum::http::Method::GET).await {
         Ok(true) => admit(st, peer, req, route).await,
         Ok(false) => Err(not_codex(st, &name, req).await),
@@ -350,7 +350,7 @@ async fn not_codex(st: &Arc<AppState>, name: &str, req: Request) -> Response {
         _ => true,
     };
     if !shaped { return invalid_body(headers); }
-    let Some(runtime) = st.state.runtime.get() else { return super::starting(headers) };
+    let Some(runtime) = st.state.runtime.get() else { return super::no_runtime(headers) };
     let rust_session = runtime.writable(name).await.is_some();
     let sidecar = crate::runtime::codex_sidecar::path(&crate::runtime::codex_sidecar::dir(&runtime.codex_environment().home), name);
     let orphan = !rust_session && tokio::task::spawn_blocking(move || sidecar.exists()).await.unwrap_or(false);
@@ -433,10 +433,10 @@ pub async fn mode(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInf
 /// `/limits` nunca é erro nem espera, como no Python: porta fechada (troca em curso) ou leitura que falha
 /// dão a resposta neutra.
 pub async fn limits(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    let (fwd, who) = match who(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
+    let (_, who) = match who(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     let name = session_name(req.uri().path()).filter(|n| who.as_ref().is_some_and(|c| c.can(n, req.method())));
-    let Some(name) = name else { return pass(&st, req, &fwd).await };
-    let Some(runtime) = st.state.runtime.get() else { return super::starting(req.headers()) };
+    let Some(name) = name else { return super::stranger(&st, peer, req, who.as_ref()).await };
+    let Some(runtime) = st.state.runtime.get() else { return super::no_runtime(req.headers()) };
     match ours(&st, Some(&name), true).await {
         Ok(true) => {}
         Ok(false) => return not_codex(&st, &name, req).await,
