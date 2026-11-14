@@ -23,6 +23,8 @@ pub struct Machine {
     pub env: BTreeMap<String, String>,
     /// Empacotar e instalar scripts só existe em Linux.
     pub linux: bool,
+    /// Pasta do diário de uso: desfazer que falha vai para lá.
+    pub diary: Option<PathBuf>,
 }
 
 /// Estado da chave `shortcuts` antes da gravação de uma importação, para o desfazer.

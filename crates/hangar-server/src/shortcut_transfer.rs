@@ -28,6 +28,7 @@ impl Host for ServerHost {
             home: env.home.clone(),
             env: env.base.clone(),
             linux: cfg!(target_os = "linux"),
+            diary: crate::diag::diary_dir_in(env),
         }
     }
 

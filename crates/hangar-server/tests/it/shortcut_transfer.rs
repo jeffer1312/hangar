@@ -28,7 +28,9 @@ use crate::fake::OWNER;
 const LIMIT: &str = "Limite de avisos atingido; confira as demais dependências manualmente.";
 const CONFIRM: &str = "Confira os scripts: importar instala os arquivos; executar um atalho pode executar esse código.";
 const VERIFY_WARNING: &str = "Importar roda o comando de verificação de cada atalho logo depois: confira os comandos acima.";
-const RESTORED: &str = "importação falhou; arquivos anteriores restaurados";
+/// O import que falhou depois de gravar, com a causa injetada `failed after write` e tudo restaurado.
+const RESTORED: &str = "importação falhou: failed after write; arquivos anteriores restaurados";
+const FILES_NOT_RESTORED: &str = "; restauração dos arquivos falhou, confira os destinos";
 // Montados em pedaços: a trava de pre-commit do repositório barra chave e senha literais.
 const COLON: &str = ":";
 const AT: &str = "@";
@@ -261,6 +263,17 @@ fn invalid(code: &str, motivo: &str) -> Value {
 
 fn import_error(motivo: &str) -> (u16, Value) {
     (400, invalid("erro_shortcut_import_invalido", motivo))
+}
+
+/// Falha de disco no import (nunca recusa): a causa do sistema no meio, o sufixo de sempre no fim.
+fn assert_io_failure(result: &Result<Value, Error>, suffix: &str) -> String {
+    match result {
+        Err(Error::Io(message)) => {
+            assert!(message.starts_with("importação falhou: ") && message.ends_with(suffix), "{message}");
+            message.clone()
+        }
+        other => panic!("esperava Error::Io, veio {other:?}"),
+    }
 }
 
 fn bundle(content: &str, path: &str, executable: bool) -> Value {
@@ -1209,7 +1222,9 @@ async fn import_config_failure_restores_scripts_and_created_dirs() {
     std::fs::write(scene.config_path(), "{ilegível").unwrap();
     let mut data = bundle("echo ok", ".local/bin/demo", true);
     data["scripts"].as_array_mut().unwrap().push(json!({"path": "bin/new", "content": "echo new", "executable": true}));
-    assert_eq!(scene.import(json!({"data": data, "apply": true})).await, import_error(RESTORED));
+    // A configuração ilegível é recusa da gravação: com tudo restaurado, continua recusa, agora com a causa.
+    assert_eq!(scene.import(json!({"data": data, "apply": true})).await,
+        import_error("importação falhou: runtime-config.json ilegível; arquivo preservado; arquivos anteriores restaurados"));
     assert_eq!(std::fs::read_to_string(&demo).unwrap(), "original");
     assert_eq!(mode_of(&demo), 0o755);
     assert!(!scene.home.join("bin").exists(), "D7.8: a pasta criada e vazia sai");
@@ -1235,7 +1250,9 @@ async fn import_script_write_failure_restores_previous_scripts() {
     host.linux = true;
     let result = hangar_shortcut_transfer::import(&host, request(data, true, json!({})));
     set_mode(&scene.home.join("bin"), 0o755);
-    assert_eq!(result, Err(Error::Invalid(RESTORED.into())));
+    // Falha de disco sai como `Io`, com o arquivo que não gravou na causa.
+    let message = assert_io_failure(&result, "; arquivos anteriores restaurados");
+    assert!(message.contains(&scene.home.join("bin/new").display().to_string()), "{message}");
     assert_eq!(std::fs::read_to_string(&demo).unwrap(), "original");
     assert!(!scene.home.join("bin/new").exists());
     assert!(!host.saved.load(Ordering::SeqCst) && !host.undone.load(Ordering::SeqCst));
@@ -1260,7 +1277,13 @@ async fn import_restore_failure_is_reported() {
     if writable {
         return;
     }
-    assert_eq!(result, Err(Error::Invalid("importação falhou; restauração dos arquivos falhou, confira os destinos".into())));
+    // A causa, o arquivo que ficou com o conteúdo novo e o motivo; e a linha no diário.
+    let message = assert_io_failure(&result, FILES_NOT_RESTORED);
+    assert!(message.starts_with("importação falhou: fail; não restaurados: "), "{message}");
+    assert!(message.contains(&demo.display().to_string()), "{message}");
+    let diary = scene.home.join(".hangar/logs/diario/servidor-rust");
+    let lines: String = std::fs::read_dir(&diary).unwrap().flatten().map(|f| std::fs::read_to_string(f.path()).unwrap()).collect();
+    assert!(lines.contains("shortcut_import_undo_failed"), "{lines}");
     assert_eq!(std::fs::read_to_string(&demo).unwrap(), "echo ok");
     // A gravação da configuração foi desfeita (D7.8: o arquivo não existia, então sai).
     assert!(!scene.config_path().exists());
@@ -1285,7 +1308,7 @@ async fn import_failure_after_save_undoes_only_shortcuts() {
     let mut data = bundle("echo ok", ".local/bin/demo", true);
     data["shortcuts"] = json!([{"id": "new", "type": "send_text", "label": "New", "text": "new"}]);
     let result = hangar_shortcut_transfer::import(&host, request(data, true, json!({})));
-    assert_eq!(result, Err(Error::Invalid(RESTORED.into())));
+    assert_eq!(result, Err(Error::Io(RESTORED.into())));
     assert_eq!(scene.saved(), before);
     assert_eq!(scene.config()["upload_retention_days"], json!(92));
     assert_eq!(mode_of(&scene.config_path()), 0o644, "D7.8: modo de antes (o Python deixava 0600)");
@@ -1306,7 +1329,7 @@ async fn import_failure_after_save_keeps_a_later_shortcuts_write() {
         Err(Error::Io("failed after write".into()))
     }));
     let result = hangar_shortcut_transfer::import(&host, request(bundle("echo ok", ".local/bin/demo", true), true, json!({})));
-    assert_eq!(result, Err(Error::Invalid(RESTORED.into())));
+    assert_eq!(result, Err(Error::Io(RESTORED.into())));
     assert!(host.undone.load(Ordering::SeqCst));
     assert_eq!(scene.saved(), later);
     assert!(!scene.home.join(".local/bin/demo").exists());
@@ -1351,7 +1374,7 @@ async fn import_undo_over_unreadable_config_is_reported() {
         Err(Error::Io("failed after write".into()))
     }));
     let result = hangar_shortcut_transfer::import(&host, request(bundle("echo ok", ".local/bin/demo", true), true, json!({})));
-    assert_eq!(result, Err(Error::Invalid(format!("{RESTORED}; restauração dos atalhos na configuração falhou"))));
+    assert_eq!(result, Err(Error::Io(format!("{RESTORED}; restauração dos atalhos na configuração falhou"))));
     assert!(!scene.home.join(".local/bin/demo").exists());
 }
 
@@ -1364,7 +1387,7 @@ async fn import_undo_failure_is_reported() {
     host.fail_undo = true;
     host.after_save = Some(Box::new(|_: &Path| Err(Error::Io("failed after write".into()))));
     let result = hangar_shortcut_transfer::import(&host, request(bundle("echo ok", ".local/bin/demo", true), true, json!({})));
-    assert_eq!(result, Err(Error::Invalid(format!("{RESTORED}; restauração dos atalhos na configuração falhou"))));
+    assert_eq!(result, Err(Error::Io(format!("{RESTORED}; restauração dos atalhos na configuração falhou"))));
 }
 
 // ── R7c: verify ──────────────────────────────────────────────────────────────────────────────────

@@ -20,6 +20,7 @@ const CONFIRM_SCRIPTS: &str =
 const CONFIRM_VERIFY: &str =
     "Importar roda o comando de verificação de cada atalho logo depois: confira os comandos acima.";
 const RESERVED: &str = "prefixo script: reservado aos arquivos do pacote";
+const UNDO_FAILED: &str = "shortcut_import_undo_failed";
 
 /// O corpo de `POST /api/shortcuts/import`, já conferido na forma.
 #[derive(Clone, Debug)]
@@ -238,16 +239,39 @@ fn save(host: &dyn Host, machine: &Machine, scripts: &[Script], incoming: &[Valu
         write()?;
         return Ok(counts);
     }
-    let outcome = scripts::apply_files(&machine.home, scripts, write);
-    let Err(message) = outcome else { return Ok(counts) };
+    let Err((cause, not_restored)) = scripts::apply_files(&machine.home, scripts, write) else {
+        return Ok(counts);
+    };
     // Só desfaz a gravação desta importação; outro campo ou gravação posterior permanece.
-    if let Some((serialized, before)) = &written
-        && let Err(reason) = host.undo(serialized, before)
-    {
-        tracing::warn!(code = "shortcut_import_undo_failed", "{reason}");
-        return Err(Error::Invalid(format!("{message}; restauração dos atalhos na configuração falhou")));
+    let config_undo = written.as_ref().and_then(|(serialized, before)| host.undo(serialized, before).err());
+    Err(import_failed(machine, &cause, &not_restored, config_undo.as_deref()))
+}
+
+/// A causa, os arquivos que não voltaram e os sufixos de sempre no fim. A recusa (`Invalid`) só fica
+/// recusa quando tudo voltou; restauração que falha é falha da máquina (`Io`) e vai ao diário.
+fn import_failed(machine: &Machine, cause: &Error, not_restored: &[String], config_undo: Option<&str>) -> Error {
+    let (Error::Invalid(reason) | Error::Io(reason)) = cause;
+    let mut message = format!("importação falhou: {reason}");
+    if not_restored.is_empty() {
+        message.push_str("; arquivos anteriores restaurados");
+    } else {
+        message.push_str(&format!("; não restaurados: {}", not_restored.join(", ")));
+        message.push_str("; restauração dos arquivos falhou, confira os destinos");
     }
-    Err(Error::Invalid(message))
+    if config_undo.is_some() {
+        message.push_str("; restauração dos atalhos na configuração falhou");
+    }
+    if not_restored.is_empty() && config_undo.is_none() {
+        return match cause {
+            Error::Invalid(_) => Error::Invalid(message),
+            Error::Io(_) => Error::Io(message),
+        };
+    }
+    tracing::warn!(code = UNDO_FAILED, "{message}");
+    let line = json!({"evento": "atalhos.importar", "nivel": "erro", "codigo": UNDO_FAILED, "detalhe": message,
+        "arquivos": not_restored, "configuracao": config_undo});
+    hangar_core::diag::record_blocking(machine.diary.as_deref(), &[line], "shortcut import");
+    Error::Io(message)
 }
 
 fn parse(host: &dyn Host, data: &Value) -> Result<Vec<Value>, Error> {

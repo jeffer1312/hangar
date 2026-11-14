@@ -226,35 +226,40 @@ pub(crate) fn collect(
     Ok((collector.scripts, collector.warnings))
 }
 
-/// Grava cada script, guardando o anterior, e só então a configuração; falha desfaz tudo.
-pub(crate) fn apply_files(home: &Path, scripts: &[Script], save: impl FnOnce() -> Result<(), Error>) -> Result<(), String> {
+/// Grava cada script, guardando o anterior, e só então a configuração; falha desfaz tudo e devolve a
+/// causa com os arquivos que não voltaram (`caminho: motivo`).
+pub(crate) fn apply_files(
+    home: &Path,
+    scripts: &[Script],
+    save: impl FnOnce() -> Result<(), Error>,
+) -> Result<(), (Error, Vec<String>)> {
     let mut backups: Vec<(PathBuf, Option<Vec<u8>>, u32)> = Vec::new();
     let mut created = Vec::new();
-    let outcome = write_all(home, scripts, &mut backups, &mut created).and_then(|()| save().map_err(|_| ()));
-    if outcome.is_ok() {
+    let Err(cause) = write_all(home, scripts, &mut backups, &mut created).and_then(|()| save()) else {
         return Ok(());
-    }
-    let mut failed = false;
+    };
+    let mut not_restored = Vec::new();
     for (target, data, mode) in backups.iter().rev() {
-        let restored = (|| -> Result<(), ()> {
-            let relative = target.strip_prefix(home).map_err(|_| ())?.to_string_lossy().replace('\\', "/");
-            destination(home, &relative).map_err(|_| ())?;
+        let restored = (|| -> Result<(), String> {
+            let relative = target.strip_prefix(home).map_err(|_| "fora da pasta pessoal".to_owned())?;
+            destination(home, &relative.to_string_lossy().replace('\\', "/")).map_err(str::to_owned)?;
             match data {
                 None => match fs::remove_file(target) {
-                    Err(error) if error.kind() != io::ErrorKind::NotFound => Err(()),
+                    Err(error) if error.kind() != io::ErrorKind::NotFound => Err(error.to_string()),
                     _ => Ok(()),
                 },
-                Some(data) => write_file(target, data, *mode, &mut Vec::new()).map_err(|_| ()),
+                Some(data) => write_file(target, data, *mode, &mut Vec::new()).map_err(|error| error.to_string()),
             }
         })();
-        failed |= restored.is_err();
+        if let Err(reason) = restored {
+            not_restored.push(format!("{}: {reason}", target.display()));
+        }
     }
     // A pasta que esta importação criou e ficou vazia sai; `remove_dir` não apaga pasta com conteúdo.
     for dir in created.iter().rev() {
         let _ = fs::remove_dir(dir);
     }
-    let suffix = if failed { "; restauração dos arquivos falhou, confira os destinos" } else { "; arquivos anteriores restaurados" };
-    Err(format!("importação falhou{suffix}"))
+    Err((cause, not_restored))
 }
 
 impl Collector<'_> {
@@ -440,14 +445,22 @@ fn write_all(
     scripts: &[Script],
     backups: &mut Vec<(PathBuf, Option<Vec<u8>>, u32)>,
     created: &mut Vec<PathBuf>,
-) -> Result<(), ()> {
+) -> Result<(), Error> {
     for script in scripts {
-        let target = destination(home, &script.path).map_err(|_| ())?;
-        let previous = if target.exists() { Some(read_file(&target).map_err(|_| ())?) } else { None };
-        let mode = if previous.is_some() { mode(&target).map_err(|_| ())? } else { 0 };
+        let target = destination(home, &script.path).map_err(|reason| Error::Invalid(reason.into()))?;
+        let disk = |error: io::Error| Error::Io(format!("{}: {error}", target.display()));
+        let previous = if target.exists() {
+            Some(read_file(&target).map_err(|error| match error {
+                FileError::Invalid(reason) => Error::Invalid(format!("{}: {reason}", target.display())),
+                FileError::Io(error) => disk(error),
+            })?)
+        } else {
+            None
+        };
+        let mode = if previous.is_some() { mode(&target).map_err(disk)? } else { 0 };
         backups.push((target.clone(), previous, mode));
         let mode = if script.executable { 0o700 } else { 0o600 };
-        write_file(&target, script.content.as_bytes(), mode, created).map_err(|_| ())?;
+        write_file(&target, script.content.as_bytes(), mode, created).map_err(disk)?;
     }
     Ok(())
 }
