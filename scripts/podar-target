@@ -56,7 +56,7 @@ membros() {
 }
 
 podar_cache() {
-    local t="$1" p n nomes
+    local t="$1" p n d nomes
     nomes="$(membros "$t")" || return 1
     rm -rf "$t"/flycheck*
     while IFS= read -r p; do
@@ -65,7 +65,11 @@ podar_cache() {
         find "$p" -maxdepth 1 -type f -delete
         while IFS= read -r n; do
             [[ -n "$n" ]] || continue
-            rm -rf "$p/.fingerprint/$n"-* "$p/build/$n"-* "$p/build/$n"
+            # Só o sufixo de hash: `membro-*` pegaria também a dependência `membro-extra`.
+            for d in "$p/.fingerprint/$n"-* "$p/build/$n"-*; do
+                if [[ "${d##*/}" =~ ^"$n"-[0-9a-f]+$ ]]; then rm -rf "$d"; fi
+            done
+            rm -rf "$p/build/$n"
             n="${n//-/_}"
             rm -f "$p/deps/$n"-* "$p/deps/lib$n"-*
         done <<< "$nomes"

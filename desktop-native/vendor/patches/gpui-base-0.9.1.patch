@@ -839,15 +839,19 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
          } else {
              "- ".to_string()
          };
-@@ -2120,6 +2123,7 @@
+@@ -2118,8 +2121,11 @@
+     rem_size: Pixels,
+     mono_family: SharedString,
      inline_code: HighlightStyle,
++    /// Modified for Hangar: the view's own code font measures code cells instead of `mono_family`.
++    inline_code_font_family: Option<SharedString>,
      /// Maxima from ordinary text only. Custom cells may shrink after an update.
      widths: Vec<f32>,
 +    word_widths: Vec<f32>,
      custom_cells: Vec<(usize, usize)>,
  }
  
-@@ -2643,6 +2647,79 @@
+@@ -2643,6 +2649,79 @@
                      .text_color(style.muted_foreground())
                      .child(lang)
              });
@@ -927,7 +931,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
  
          let block = div()
              .w_full()
-@@ -2662,26 +2739,7 @@
+@@ -2662,26 +2741,7 @@
              .line_height(relative(1.6))
              .relative()
              .refine_style(&style.code_block())
@@ -955,7 +959,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
          let actions = node_cx.code_block_actions.clone().map(|actions| {
              div()
                  .id("actions")
-@@ -2734,14 +2792,7 @@
+@@ -2734,14 +2794,7 @@
              }
          };
  
@@ -971,7 +975,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
      }
  }
  
-@@ -2757,6 +2808,7 @@
+@@ -2757,6 +2810,7 @@
      pub(crate) code_block_highlighter: Option<Arc<CodeBlockHighlighterFn>>,
      pub(crate) table_actions: Option<Arc<TableActionsFn>>,
      pub(crate) image_source: Option<Arc<super::text_view::ImageSourceFn>>,
@@ -979,7 +983,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
      pub(crate) link_click_handler: Option<Arc<LinkClickHandlerFn>>,
      pub(crate) task_toggle_handler: Option<Arc<TaskToggleHandlerFn>>,
      pub(crate) markdown_extensions: Arc<MarkdownExtensions>,
-@@ -2782,12 +2834,12 @@
+@@ -2782,12 +2836,12 @@
      fn image_source(&self, image: &ImageNode) -> ImageSource {
          match &self.image_source {
              Some(resolve) => resolve(&image.url),
@@ -994,7 +998,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
      }
  
      /// The fade ranges of the text leaf `key`, in its rendered byte space.
-@@ -2877,11 +2929,13 @@
+@@ -2877,11 +2931,13 @@
              strikethrough: style.text.strikethrough,
              ..Default::default()
          });
@@ -1012,7 +1016,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
                  .unwrap_or_else(|| cx.theme().tokens.typography.mono.clone()),
          );
      }
-@@ -3510,6 +3564,9 @@
+@@ -3510,6 +3566,9 @@
  /// shaped with the runs the cell renders with, plus the cell's padding and
  /// border. Never capped: a cap would clip overflowing text *and* leave it
  /// outside the scrollable width, making it unreachable.
@@ -1022,7 +1026,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
  fn measure_table_columns(
      table: &Table,
      col_count: usize,
-@@ -3517,6 +3574,17 @@
+@@ -3517,10 +3576,22 @@
      window: &mut Window,
      cx: &mut App,
  ) -> Vec<f32> {
@@ -1040,7 +1044,18 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
      let text_styles = TableTextStyles::new(&node_cx.style, window);
      let rem_size = window.rem_size();
      let mono_family = cx.theme().tokens.typography.mono.clone();
-@@ -3535,7 +3603,7 @@
+     let inline_code = node_cx.style.inline_code_highlight();
++    let inline_code_font_family = node_cx.style.inline_code_font_family().cloned();
+     let cached = table.column_widths_cache.0.lock().ok().and_then(|cache| {
+         cache
+             .as_ref()
+@@ -3530,12 +3601,13 @@
+                     && cached.rem_size == rem_size
+                     && cached.mono_family == mono_family
+                     && cached.inline_code == inline_code
++                    && cached.inline_code_font_family == inline_code_font_family
+                     && cached.text_system == text_system_id(window)
+             })
              .cloned()
      });
      let measured = cached.unwrap_or_else(|| {
@@ -1049,15 +1064,17 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
              measure_table_text_columns(table, col_count, &text_styles, node_cx, window, cx);
          let measured = Arc::new(TableColumnWidths {
              text_system: text_system_id(window),
-@@ -3544,6 +3612,7 @@
+@@ -3543,7 +3615,9 @@
+             rem_size,
              mono_family,
              inline_code,
++            inline_code_font_family,
              widths,
 +            word_widths,
              custom_cells,
          });
          if let Ok(mut cache) = table.column_widths_cache.0.lock() {
-@@ -3556,6 +3625,7 @@
+@@ -3556,6 +3630,7 @@
      // unchanged. Keep callbacks outside the cache lock and do not retain their
      // widths: a loaded image or a plugin can get narrower as well as wider.
      let mut col_w = measured.widths.clone();
@@ -1065,7 +1082,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
      for &(row_ix, ix) in &measured.custom_cells {
          let cell = &table.children[row_ix].children[ix];
          let items = cell.children.inline_flow_items(None, &[], &[], node_cx, cx);
-@@ -3569,8 +3639,9 @@
+@@ -3569,8 +3644,9 @@
              0.
          };
          col_w[ix] = col_w[ix].max(f32::from(width) + CELL_PAD_PX + border);
@@ -1076,7 +1093,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
  }
  
  // The first measurement still visits all ordinary cells. This cache avoids
-@@ -3582,14 +3653,16 @@
+@@ -3582,14 +3658,16 @@
      node_cx: &NodeContext,
      window: &mut Window,
      cx: &mut App,
@@ -1095,7 +1112,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
                  continue;
              };
              if cell
-@@ -3604,6 +3677,7 @@
+@@ -3604,6 +3682,7 @@
              let text = cell.children.text();
              let highlights = cell.children.inline_highlights(node_cx, cx);
              let mut w = 0.0_f32;
@@ -1103,7 +1120,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
              let mut line_start = 0;
              for line in text.split('\n') {
                  let start = line_start + (line.len() - line.trim_start().len());
-@@ -3641,8 +3715,29 @@
+@@ -3641,8 +3720,29 @@
                      let runs = text_runs(range.len(), text_style, &highlights);
                      line_w += window
                          .text_system()
@@ -1134,7 +1151,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
                  }
                  w = w.max(f32::from(line_w));
              }
-@@ -3654,9 +3749,10 @@
+@@ -3654,9 +3754,10 @@
                  0.
              };
              *slot = slot.max(w + CELL_PAD_PX + border);
@@ -1146,7 +1163,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
  }
  
  impl Paragraph {
-@@ -3771,8 +3867,12 @@
+@@ -3771,8 +3872,12 @@
                  .iter()
                  .enumerate()
                  .map(|(i, child)| {
@@ -1160,7 +1177,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
                      } else {
                          "- ".to_string()
                      };
-@@ -3841,6 +3941,7 @@
+@@ -3841,6 +3946,7 @@
      fn render_list_item_row(
          content: AnyElement,
          ix: usize,
@@ -1168,7 +1185,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
          options: NodeRenderOptions,
          checked: Option<bool>,
          task_toggle: Option<(Arc<TaskToggleHandlerFn>, TaskToggleEvent)>,
-@@ -3868,6 +3969,7 @@
+@@ -3868,6 +3974,7 @@
                          .refine_style(style.list_style())
                          .child(
                              list_item_prefix(
@@ -1176,7 +1193,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
                                  ix,
                                  options.list_start,
                                  options.ordered,
-@@ -3960,10 +4062,12 @@
+@@ -3960,10 +4067,12 @@
                  spread,
                  checked,
                  task_marker,
@@ -1190,7 +1207,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
                  let task_toggle = match (&node_cx.task_toggle_handler, checked, span, task_marker) {
                      (Some(handler), Some(checked), Some(item), Some(marker)) => Some((
                          handler.clone(),
-@@ -4026,6 +4130,7 @@
+@@ -4026,6 +4135,7 @@
                                      items.push(Self::render_list_item_row(
                                          text,
                                          ix,
@@ -1198,7 +1215,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
                                          options,
                                          *checked,
                                          task_toggle.clone(),
-@@ -4071,6 +4176,7 @@
+@@ -4071,6 +4181,7 @@
                                          items.push(Self::render_list_item_row(
                                              block,
                                              ix,
@@ -1206,7 +1223,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
                                              options,
                                              *checked,
                                              task_toggle.clone(),
-@@ -4135,14 +4241,10 @@
+@@ -4135,14 +4246,10 @@
          window: &mut Window,
          cx: &mut App,
      ) -> impl IntoElement {
@@ -1225,7 +1242,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
          const TABLE_BORDER_PX: f32 = 2.0; // the frame's border_1, left + right
  
          let table = match item {
-@@ -4157,7 +4259,8 @@
+@@ -4157,7 +4264,8 @@
              .map(|row| row.children.len())
              .max()
              .unwrap_or(0);
@@ -1235,7 +1252,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
          let scroll = matches!(style.table().overflow.x, Some(Overflow::Scroll));
          let nowrap = style.table_cell().text.white_space == Some(WhiteSpace::Nowrap);
          let rem_size = window.rem_size();
-@@ -4177,8 +4280,8 @@
+@@ -4177,8 +4285,8 @@
                  let floor = if scroll && nowrap {
                      w
                  } else if scroll {
@@ -1246,7 +1263,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
                          .min(w)
                  } else {
                      w.min(wrap_min_px)
-@@ -4238,7 +4341,12 @@
+@@ -4238,7 +4346,12 @@
                  // shrink-to-fit (their text wrapping), the definite
                  // `w(min_total_w)` keeps the floors once they are reached,
                  // letting the track exceed the viewport and scroll.
@@ -1260,7 +1277,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
              )
              .into_any_element()
          } else {
-@@ -6009,6 +6117,7 @@
+@@ -6009,6 +6122,7 @@
              spread: false,
              checked: None,
              task_marker: None,
@@ -1268,7 +1285,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
              span: None,
          };
          let unselected_item = BlockNode::ListItem {
-@@ -6018,6 +6127,7 @@
+@@ -6018,6 +6132,7 @@
              spread: false,
              checked: None,
              task_marker: None,
@@ -1276,7 +1293,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
              span: None,
          };
          let list = BlockNode::List {
-@@ -6036,6 +6146,7 @@
+@@ -6036,6 +6151,7 @@
              spread: false,
              checked: None,
              task_marker: None,
@@ -1284,7 +1301,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
              span: None,
          };
          let list = BlockNode::List {
-@@ -6102,6 +6213,7 @@
+@@ -6102,6 +6218,7 @@
                      spread: false,
                      checked: None,
                      task_marker: None,
@@ -1292,7 +1309,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
                      span: None,
                  },
                  BlockNode::ListItem {
-@@ -6109,6 +6221,7 @@
+@@ -6109,6 +6226,7 @@
                      spread: false,
                      checked: None,
                      task_marker: None,
@@ -1300,7 +1317,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
                      span: None,
                  },
              ],
-@@ -6131,6 +6244,7 @@
+@@ -6131,6 +6249,7 @@
                      spread: false,
                      checked: None,
                      task_marker: None,
@@ -1308,7 +1325,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
                      span: None,
                  },
                  BlockNode::ListItem {
-@@ -6138,6 +6252,7 @@
+@@ -6138,6 +6257,7 @@
                      spread: false,
                      checked: None,
                      task_marker: None,
@@ -1316,7 +1333,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
                      span: None,
                  },
              ],
-@@ -6161,6 +6276,7 @@
+@@ -6161,6 +6281,7 @@
                      spread: false,
                      checked: None,
                      task_marker: None,
@@ -1324,7 +1341,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
                      span: None,
                  },
                  BlockNode::ListItem {
-@@ -6168,6 +6284,7 @@
+@@ -6168,6 +6289,7 @@
                      spread: false,
                      checked: None,
                      task_marker: None,
@@ -1332,7 +1349,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
                      span: None,
                  },
              ],
-@@ -6182,6 +6299,7 @@
+@@ -6182,6 +6304,7 @@
                      spread: false,
                      checked: None,
                      task_marker: None,
@@ -1340,7 +1357,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
                      span: None,
                  },
                  BlockNode::ListItem {
-@@ -6189,6 +6307,7 @@
+@@ -6189,6 +6312,7 @@
                      spread: false,
                      checked: None,
                      task_marker: None,
@@ -1348,7 +1365,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
                      span: None,
                  },
              ],
-@@ -6211,6 +6330,7 @@
+@@ -6211,6 +6335,7 @@
                      spread: true,
                      checked: None,
                      task_marker: None,
@@ -1356,7 +1373,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
                      span: None,
                  },
                  BlockNode::ListItem {
-@@ -6218,6 +6338,7 @@
+@@ -6218,6 +6343,7 @@
                      spread: false,
                      checked: None,
                      task_marker: None,
@@ -1364,7 +1381,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
                      span: None,
                  },
              ],
-@@ -6242,6 +6363,7 @@
+@@ -6242,6 +6368,7 @@
                  spread: false,
                  checked: None,
                  task_marker: None,
@@ -1372,7 +1389,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
                  span: None,
              }],
          };
-@@ -6255,6 +6377,7 @@
+@@ -6255,6 +6382,7 @@
                      spread: false,
                      checked: None,
                      task_marker: None,
@@ -1380,7 +1397,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
                      span: None,
                  },
                  BlockNode::ListItem {
-@@ -6262,6 +6385,7 @@
+@@ -6262,6 +6390,7 @@
                      spread: false,
                      checked: None,
                      task_marker: None,
@@ -1388,7 +1405,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
                      span: None,
                  },
              ],
-@@ -6284,6 +6408,7 @@
+@@ -6284,6 +6413,7 @@
                      spread: false,
                      checked: Some(true),
                      task_marker: None,
@@ -1396,7 +1413,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
                      span: None,
                  },
                  BlockNode::ListItem {
-@@ -6291,6 +6416,7 @@
+@@ -6291,6 +6421,7 @@
                      spread: false,
                      checked: Some(false),
                      task_marker: None,
@@ -1404,7 +1421,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
                      span: None,
                  },
              ],
-@@ -6747,6 +6873,7 @@
+@@ -6747,6 +6878,7 @@
                              spread: false,
                              checked: None,
                              task_marker: None,
@@ -1412,7 +1429,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
                              span: None,
                          },
                          BlockNode::ListItem {
-@@ -6754,6 +6881,7 @@
+@@ -6754,6 +6886,7 @@
                              spread: false,
                              checked: None,
                              task_marker: None,

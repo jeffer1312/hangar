@@ -109,12 +109,15 @@ for perfil in debug dist x86_64-unknown-linux-gnu/dist; do
     arquivo "$t/build/hangar-membro/dddddddddddddddd/out/it-dddddddddddddddd" "" x   # layout novo
     arquivo "$t/build/hangar-membro/dddddddddddddddd/fingerprint/x"
     arquivo "$t/build/serde/3333333333333333/out/libserde-3333333333333333.rlib"
+    arquivo "$t/.fingerprint/hangar-membro-extra-5555555555555555/x"            # dependência com o mesmo prefixo
+    arquivo "$t/build/hangar-membro-extra-5555555555555555/out"
+    arquivo "$t/build/hangar-membro-extra/6666666666666666/out/libhangar_membro_extra-6666666666666666.rlib"
     arquivo "$t/incremental/hangar_membro-1abc/s/a"
     arquivo "$t/examples/exemplo-cccccccccccccccc" "" x
 done
 "$P" --cache "$d/ws/target" >/dev/null || { echo "FALHOU podar-target saiu com erro (cache)"; falhou=1; }
 for perfil in debug dist x86_64-unknown-linux-gnu/dist; do
-    confere "cache $perfil" "$(sobrou "$d/ws/target/$perfil")" ".fingerprint/serde-1111111111111111/x build/ring-2222222222222222/out build/serde/3333333333333333/out/libserde-3333333333333333.rlib deps/libserde-1111111111111111.rlib "
+    confere "cache $perfil" "$(sobrou "$d/ws/target/$perfil")" ".fingerprint/hangar-membro-extra-5555555555555555/x .fingerprint/serde-1111111111111111/x build/hangar-membro-extra-5555555555555555/out build/hangar-membro-extra/6666666666666666/out/libhangar_membro_extra-6666666666666666.rlib build/ring-2222222222222222/out build/serde/3333333333333333/out/libserde-3333333333333333.rlib deps/libserde-1111111111111111.rlib "
 done
 rm -rf "$d"
 
