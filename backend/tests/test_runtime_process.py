@@ -287,7 +287,7 @@ _SPAWN_ON_GO = ("import os,subprocess,sys,time\n"
 
 
 def test_refresh_members_of_a_live_child_does_not_scan_the_machine(tmp_path, monkeypatch):
-    # O Supervisor chama a cada 250 ms; no Windows `status()` e `num_threads()` listam todos os processos.
+    # O Supervisor chama a toda volta; no Windows `status()` e `num_threads()` listam todos os processos.
     from app import runtime_process
     from app.runtime_process import spawn_contained, cleanup, refresh_members
     proc = spawn_contained([sys.executable, '-c', 'import time; time.sleep(60)'],
@@ -395,6 +395,16 @@ def test_windows_job_refresh_writes_once(tmp_path, monkeypatch):
     for _ in range(4):
         refresh_members(holder)
     assert len(writes) == 1
+
+
+def test_refresh_members_of_an_exited_child_writes_nothing(tmp_path, monkeypatch):
+    from app.runtime_process import refresh_members
+    holder = _fake_job_holder(tmp_path, monkeypatch)
+    holder.poll = lambda: 0
+    writes = _count_writes(monkeypatch)
+    refresh_members(holder)
+    assert writes == []
+    assert not (tmp_path / 'containment.json').exists()
 
 
 def test_refresh_members_retries_after_failed_write(tmp_path, monkeypatch):

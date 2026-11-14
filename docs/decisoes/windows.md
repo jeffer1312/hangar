@@ -206,6 +206,9 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   `hangar-backend` com logon `Interactive` é o que mantém o cofre; mudar o principal dela ou lançar o
   servidor por SSH tira o cofre da máquina. Medição em
   [plataforma.md](plataforma.md#cofre-de-senhas-uma-máquina-dona-chave-no-chaveiro-uso-aprovado-por-senha-30102026).
+- **O Supervisor confere se o filho Rust vive por `proc.poll()`, nunca por `psutil` `status()` ou
+  `num_threads()`**: no Windows cada uma lista todos os processos da máquina, e a conferência roda a
+  toda volta do Supervisor. Medição em [Supervisor confere o filho Rust por `poll()`](#supervisor-confere-o-filho-rust-por-poll-14112026).
 
 ## Reinício sem início e porta do front (05/11/2026)
 
