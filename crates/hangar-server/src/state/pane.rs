@@ -15,8 +15,15 @@ use crate::session_write::{detail_body, json_response, session_name};
 
 /// `lines` do FastAPI (`int`, padrão 200) preso em 50..5000: o espelho pede mais ao rolar, e o teto
 /// segura o tamanho de cada leitura do poll.
+/// Medido no pydantic 2.13.4 da base: `1_000` e `5.00` valem, `5.` não.
 pub fn lines(query: Option<&str>) -> Result<u32, Value> {
-    crate::archive_list::int_param(query, "lines", 200).map(|n| n.clamp(50, 5000) as u32)
+    let parsed = crate::archive_list::int_param(query, "lines", 200);
+    let raw = crate::auth::query_param(query, "lines").unwrap_or_default();
+    if parsed.is_ok() && raw.trim().ends_with('.') {
+        return Err(serde_json::json!({"type": "int_parsing", "loc": ["query", "lines"],
+            "msg": "Input should be a valid integer, unable to parse string as an integer", "input": raw}));
+    }
+    parsed.map(|n| n.clamp(50, 5000) as u32)
 }
 
 pub async fn route(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
@@ -85,7 +92,7 @@ mod tests {
         #[test]
         fn an_integer_is_clamped(n in -1_000_000_000i64..1_000_000_000, plus in any::<bool>(), zeros in 0usize..3, pad in 0usize..3) {
             let sign = if n >= 0 && plus { "+" } else { "" };
-            let raw = format!("{}{sign}{n}{}{}", " ".repeat(pad), if zeros > 0 { format!(".{}", "0".repeat(zeros - 1)) } else { String::new() }, " ".repeat(pad));
+            let raw = format!("{}{sign}{n}{}{}", " ".repeat(pad), if zeros > 0 { format!(".{}", "0".repeat(zeros)) } else { String::new() }, " ".repeat(pad));
             prop_assert_eq!(lines(Some(&query(&raw))), Ok(n.clamp(50, 5000) as u32));
         }
 
@@ -100,8 +107,8 @@ mod tests {
         }
     }
 
-    /// `5.`, `5.00`: inteiros para o pydantic, fora do caso recusado.
-    fn decimal_zeros(raw: &str) -> bool { raw.split_once('.').is_some_and(|(a, b)| !a.is_empty() && a.bytes().all(|c| c.is_ascii_digit()) && b.bytes().all(|c| c == b'0')) }
+    /// `5.0`, `5.00`: inteiros para o pydantic, fora do caso recusado (`5.` é recusado).
+    fn decimal_zeros(raw: &str) -> bool { raw.split_once('.').is_some_and(|(a, b)| !a.is_empty() && a.bytes().all(|c| c.is_ascii_digit()) && !b.is_empty() && b.bytes().all(|c| c == b'0')) }
 
     #[test]
     fn absent_is_200_and_the_last_value_wins() {
@@ -111,7 +118,8 @@ mod tests {
         assert_eq!(lines(Some("lines=1_000")), Ok(1000));
         assert_eq!(lines(Some("lines=-5")), Ok(50));
         assert_eq!(lines(Some(&format!("lines={}", "9".repeat(40)))), Ok(5000));
-        for raw in ["", " ", "1e3", "0x10", "1__0", "_1", "1.5", "abc"] {
+        assert_eq!(lines(Some("lines=%2B500.00")), Ok(500));
+        for raw in ["", " ", "1e3", "0x10", "1__0", "_1", "1.5", "abc", "5.", " 70. "] {
             assert!(lines(Some(&query(raw))).is_err(), "{raw:?}");
         }
     }

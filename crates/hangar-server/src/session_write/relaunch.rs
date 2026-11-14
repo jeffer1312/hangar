@@ -114,7 +114,8 @@ pub async fn reload(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
     };
     let Some(runtime) = st.state.runtime.get().cloned() else { return super::no_runtime(req.headers()) };
     let code = if matches!(who, Some(Caller::Guest(_))) { "session_reload_requested_by_guest" } else { "session_reload_requested_by_owner" };
-    st.diag.record_line(super::bridge::asked_line("sessao.recarga_pedida", code, &name, req.headers(), peer));
+    // Só vai ao diário a recarga que um agente do Rust aceitou; recusa de nome sem dono não é recarga.
+    let asked = super::bridge::asked_line("sessao.recarga_pedida", code, &name, req.headers(), peer);
     if let Some(home)=st.list.env().dirs.as_ref().map(|dirs|&dirs.home) {
         let pending=crate::runtime::claude_reopen::transfer::store(home).incomplete_for_session(&name);
         match pending {
@@ -124,6 +125,7 @@ pub async fn reload(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
                     Err(error)=>{let mut response=json_response(StatusCode::CONFLICT,json!({"detail":error.public()}));cors(req.headers(),response.headers_mut());return response},
                 };
                 if let Some(record)=records.into_iter().find(|r|r.name==name && current_key.as_ref().is_none_or(|key|r.origin_meta["key"]==*key)) {
+                st.diag.record_line(asked);
                 let (st2,owned)=(st.clone(),name.clone());
                 let result=tokio::spawn(async move {during_life_change(&st2,&owned,runtime.recover_transfer(record)).await}).await
                     .unwrap_or_else(|_|Err(hangar_conversation_transfer::TransferError::new("session_transfer_restore_failed")));
@@ -144,6 +146,7 @@ pub async fn reload(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
             model: None, effort: None, service_tier: None };
         during_life_change(&st2, &owned, runtime.reopen_claude_session(&owned, change, None)).await.map(|r| Relaunched::Claude(r, from_terminal))
     }).await;
+    if outcome.is_some() { st.diag.record_line(asked); }
     let (status, body) = match outcome {
         None => unowned_reload(&st, &name).await,
         Some(Relaunched::Codex(Ok(value))) => (StatusCode::OK, value),

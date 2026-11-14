@@ -60,7 +60,8 @@ async fn pane_r3_01_02_06_text_is_the_raw_capture_with_the_clamped_scrollback() 
 async fn pane_r3_03_a_non_integer_lines_is_the_fastapi_422() {
     let rig = Rig::new().await;
     rig.pane("p1", "bash --norc --noprofile");
-    for raw in ["abc", "", "1.5"] {
+    // Medido no pydantic 2.13.4 de c22f75dc8: `1_000` vale 1000 (caso acima), `5.` é recusado.
+    for raw in ["abc", "", "1.5", "5."] {
         assert_eq!(get(&rig, &format!("p1/pane?lines={raw}")).await, (422, json!({"detail": [{"type": "int_parsing", "loc": ["query", "lines"],
             "msg": "Input should be a valid integer, unable to parse string as an integer", "input": raw}]})), "{raw:?}");
     }
@@ -145,6 +146,35 @@ async fn pane_r3_11_guest_reads_through_the_owner_path() {
     assert_eq!(rig.python.hits_to("/api/sessions/p1/pane"), 0);
 }
 
+/// Pedido com o convidado de par já decidido, como o porteiro da 8766 o entrega ao roteador.
+async fn as_pair(rig: &Rig, method: &str, path: &str) -> (u16, Value) {
+    use tower::ServiceExt;
+    let mut request = axum::http::Request::builder().method(method).uri(format!("/api/sessions/{path}"))
+        .body(axum::body::Body::empty()).unwrap();
+    request.extensions_mut().insert(axum::extract::ConnectInfo::<std::net::SocketAddr>("127.0.0.1:1234".parse().unwrap()));
+    request.extensions_mut().insert(hangar_core::guest::Caller::Guest(std::sync::Arc::new(hangar_core::guest::GuestGrant {
+        token: "par".into(), token_hash: "par-hash".into(), pair_roots: vec![], invite: false,
+        sessions: std::collections::HashMap::from([("p1".into(), hangar_core::guest::Kind::Pair)]) })));
+    let response = hangar_server::routes::router(rig.state.clone()).oneshot(request).await.unwrap();
+    let status = response.status().as_u16();
+    let body = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+    (status, serde_json::from_slice(&body).unwrap_or(Value::Null))
+}
+
+// R3-11 (`Caller::can`): o par de leitura lê o espelho no handler e não recarrega. Na 8766 o porteiro
+// recusa o `pane` antes (`share/caller.rs:23`, `PAIR_READ` sem "pane"; `:99`).
+#[tokio::test]
+async fn pane_r3_11_a_pair_guest_reads_but_never_reloads() {
+    let rig = Rig::new().await;
+    rig.pane("p1", "bash --norc --noprofile -c 'echo PAR-VE; exec sleep 100000'");
+    rig.screen_shows("p1", "PAR-VE").await;
+    let (status, reply) = as_pair(&rig, "GET", "p1/pane").await;
+    assert_eq!(status, 200, "{reply}");
+    assert!(reply["text"].as_str().unwrap().contains("PAR-VE"));
+    assert_eq!(as_pair(&rig, "POST", "p1/recarregar").await, (403, detail("erro_fora_do_convidado", "fora do acesso do convidado")));
+    assert_eq!(rig.python.hits_to("/api/sessions/p1/pane") + rig.python.hits_to("/api/sessions/p1/recarregar"), 0);
+}
+
 // R3-12..17 (decisão 9): `peer-address` saiu; quem alcança a sessão recebe o 404 de rota inexistente.
 #[tokio::test]
 async fn peer_address_r3_12_17_is_a_gone_route() {
@@ -222,8 +252,13 @@ async fn reload_r3_31_32_the_guest_reloads_through_the_owner_path_and_the_diary_
     assert_eq!(call(&rig, reqwest::Method::POST, "sh1/recarregar", GUEST).await,
         (409, detail("erro_recarregar_so_sem_terminal", "recarregar só vale para sessão Claude sem terminal")));
     assert_eq!(call(&rig, reqwest::Method::POST, "sh1/recarregar", BLIND).await, (403, detail("erro_fora_do_convidado", "fora do acesso do convidado")));
+    // O diário diz quem pediu a recarga que o Rust aceitou (o Claude do pane); a recusa do shell não entra.
+    rig.pane("cl1", "bash --norc --noprofile -c '( exec -a claude sleep 100000 ); exec sleep 100000'");
+    rig.agent_runs("cl1", "claude").await;
+    assert_eq!(call(&rig, reqwest::Method::POST, "cl1/recarregar", GUEST).await.0, 409);
     let python = rig.python.clone();
     crate::fake::wait_until(move || python.diag().iter().any(|line| line["evento"] == "sessao.recarga_pedida"
-        && line["codigo"] == "session_reload_requested_by_guest" && line["sessao"] == "sh1")).await;
-    assert_eq!(rig.python.hits_to("/api/sessions/sh1/recarregar"), 0);
+        && line["codigo"] == "session_reload_requested_by_guest" && line["sessao"] == "cl1")).await;
+    assert!(!rig.python.diag().iter().any(|line| line["evento"] == "sessao.recarga_pedida" && line["sessao"] == "sh1"), "recusa não é recarga");
+    assert_eq!(rig.python.hits_to("/api/sessions/sh1/recarregar") + rig.python.hits_to("/api/sessions/cl1/recarregar"), 0);
 }
