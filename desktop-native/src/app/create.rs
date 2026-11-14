@@ -139,6 +139,16 @@ pub(crate) fn base_button(id: &'static str, base: String) -> Button {
     Button::new(id).outline().small().w_full().label(base).dropdown_caret(true)
 }
 
+/// Uma linha do menu do modo, na tela e na novidade: o nome e, embaixo, o que muda para quem usa.
+pub(crate) fn mode_row(id: &'static str, on: bool, headless: bool, codex: bool) -> Button {
+    let summary = match (headless, codex) {
+        (false, false) => "create_mode_tmux_summary", (true, false) => "create_mode_headless_summary",
+        (false, true) => "create_mode_tmux_summary_codex", (true, true) => "create_mode_headless_summary_codex",
+    };
+    menu_row_with(id, on, tr(if headless { "create_mode_headless" } else { "create_mode_tmux" }), String::new(),
+        Some(div().text_xs().text_color(theme::muted()).whitespace_normal().child(tr(summary)).into_any_element()))
+}
+
 /// Uma base da lista, com quanto ela está atrás da remota.
 pub(crate) fn base_row(id: impl Into<ElementId>, on: bool, name: String, behind: u64) -> Button {
     let hint = if behind > 0 { tr("folder_git_behind").replace("{n}", &behind.to_string()) } else { String::new() };
@@ -471,13 +481,13 @@ pub(super) struct ServerChoice { pub(super) key: String, pub(super) label: Strin
 
 /// Os menus da tela sem sessão, cada um preso à própria pílula.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::app) enum Menu { Machine, Folder, Model, Account, Branch }
+pub(in crate::app) enum Menu { Machine, Folder, Model, Account, Branch, Mode }
 
 impl Menu {
     pub(in crate::app) fn anchor(self) -> &'static str {
         match self {
             Menu::Machine => "new-chat-machine", Menu::Folder => "new-chat-folder", Menu::Model => "new-chat-model",
-            Menu::Account => "new-chat-account", Menu::Branch => "new-chat-branch",
+            Menu::Account => "new-chat-account", Menu::Branch => "new-chat-branch", Menu::Mode => "new-chat-mode",
         }
     }
     /// A pasta fica no título, acima do compositor: o menu dela abre para cima, sem cobrir o campo.
@@ -1144,6 +1154,16 @@ impl NewSession {
             send(CreateReply::HeadlessSaved(seq, api.server_send(reqwest::Method::POST, &["config"],
                 Some(json!({"headless_default": headless})), 8).await)).await;
         }));
+    }
+
+    /// A pílula da tela sem sessão: vale só para esta conversa, nunca grava o padrão do servidor.
+    fn choose_mode(&mut self, headless: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.menu.set(None);
+        if self.creating || self.headless_saving { return; }
+        self.headless = headless;
+        self.headless_touched = true;
+        self.build_permission_pick(window, cx);
+        cx.notify();
     }
 
     fn headless_inherited(&self) -> bool { self.headless_owner != Some(true) && !self.headless_touched }
@@ -2291,7 +2311,7 @@ impl NewSession {
         if leaving_account && self.leave_exhausted_account() { self.build_config_pick(window, cx); self.load_models(window, cx); }
         if open && menu == Menu::Folder { self.query.update(cx, |input, cx| input.focus(window, cx)); }
         // No menu de branch a busca só aparece nas listas internas; quem as abre põe o foco nela.
-        else if open { self.menu_query.update(cx, |input, cx| { input.set_value("", window, cx); if menu != Menu::Branch { input.focus(window, cx); } }); }
+        else if open { self.menu_query.update(cx, |input, cx| { input.set_value("", window, cx); if !matches!(menu, Menu::Branch | Menu::Mode) { input.focus(window, cx); } }); }
         // O menu da máquina traz também onde o agente trabalha: abre com o mesmo começo do de branch.
         if open && (menu == Menu::Branch || menu == Menu::Machine && !self.no_project()) { (self.picking, self.base_open) = (false, false); self.git_opened(cx); }
         cx.notify();
@@ -2425,6 +2445,21 @@ impl NewSession {
                 mark_pill(Menu::Account, open == Some(Menu::Account), account_mark(badge.as_ref(), self.provider, 14.), label, aria, None,
                     self.configs.loading || self.codex.loading, cx)
             }))
+            .children(self.render_mode_pill(open == Some(Menu::Mode), cx))
+    }
+
+    /// Com ou sem terminal, só para esta conversa; antes da escolha mostra o padrão do servidor.
+    fn render_mode_pill(&self, open: bool, cx: &mut Context<Self>) -> Option<Div> {
+        if self.scheduled || self.target().is_some() || !matches!(self.provider, "claude" | "codex") { return None; }
+        let text = tr(if self.headless { "create_mode_headless" } else { "create_mode_tmux" });
+        let id = Menu::Mode.anchor();
+        // Antes da leitura da configuração, o valor à vista ainda não é o padrão do servidor.
+        let unread = self.jev.loading && self.headless_owner.is_none();
+        Some(popup::anchor(div(), id).child(quiet_button(id, IconName::SquareTerminal, text.clone(), true, cx)
+            .selected(open).disabled(self.creating || self.headless_saving || unread)
+            .accessibility_label(format!("{}: {text}", tr("create_mode")))
+            .when(!self.headless_touched, |button| button.tooltip(tr("session_mode_server_default")))
+            .on_click(cx.listener(|this, _, window, cx| this.toggle_menu(Menu::Mode, window, cx)))))
     }
 
     /// A pílula única de branch: onde o agente trabalha e, depois, a situação do Git da pasta.
@@ -2544,6 +2579,13 @@ impl NewSession {
         let body = match menu {
             Menu::Folder => return self.render_compact_folders(cx).p_3().max_h(room).into_any_element(),
             Menu::Model => return self.render_model_menu(cx).into_any_element(),
+            Menu::Mode => {
+                let (codex, current, creating) = (self.provider == "codex", self.headless, self.creating);
+                let row = |id: &'static str, headless: bool, cx: &mut Context<Self>| mode_row(id, current == headless, headless, codex)
+                    .disabled(creating).on_click(cx.listener(move |this, _, window, cx| this.choose_mode(headless, window, cx)));
+                return div().p(px(popup::INSET)).flex().flex_col().gap(px(2.)).child(popup::title(tr("create_mode"), None))
+                    .child(row("new-chat-mode-tmux", false, cx)).child(row("new-chat-mode-headless", true, cx)).into_any_element();
+            }
             // O Git da pasta e as worktrees passam da altura livre em tela baixa: o menu rola dentro dela.
             Menu::Branch => return div().id("new-chat-branch-menu").max_h(room).overflow_y_scroll().p(px(popup::INSET))
                 .flex().flex_col().gap(px(2.)).when(self.picking, |el| el.child(self.menu_search()))
