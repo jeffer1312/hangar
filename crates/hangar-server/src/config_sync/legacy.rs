@@ -1,6 +1,7 @@
 //! Escolha indivisível do modelo auxiliar anterior à configuração compartilhada.
 use super::runtime::RuntimeConfig;
 use crate::orchestration::truthy;
+use hangar_core::llm_url::base_url;
 use serde_json::{Map, Value, json};
 use std::path::Path;
 
@@ -22,13 +23,6 @@ pub(super) fn text(value:Option<&Value>)->String {
         Some(value)=>crate::orchestration::codec::python_string(value).trim().into(),
         None=>String::new(),
     }
-}
-
-pub fn base_url(value:&str)->String {
-    // A query pertence ao endpoint, depois do caminho da operação.
-    let split=value.find(['?','#']).unwrap_or(value.len());
-    let path=value[..split].trim_end_matches('/');
-    format!("{}{}",path.strip_suffix("/chat/completions").unwrap_or(path),&value[split..])
 }
 
 fn values(url:String,key:String,model:String,effort:String)->Map<String,Value> {

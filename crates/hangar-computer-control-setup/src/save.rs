@@ -4,6 +4,8 @@ use std::path::Path;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
+use hangar_core::llm_url::base_url;
+
 use crate::files::{installed, known_from, read_entry};
 use crate::writer::{Entry, remove_entry, write_entry};
 use crate::{Error, Facts, Paths};
@@ -95,10 +97,12 @@ pub fn save(
     write_entry(paths, &entry, jev)
 }
 
-/// Modelo diferente do auxiliar sumiria calado: volta erro com os campos, na ordem do corpo.
+/// Modelo diferente do auxiliar sumiria calado: volta erro com os campos, na ordem do corpo. Os dois
+/// endereços passam pela mesma normalização: o gravado pode ter a barra final que o cliente não manda.
 fn reject_own_model(body: &SaveRequest, aux: &Aux, cliproxy_keys: &[String]) -> Result<(), Error> {
+    let stored_url = base_url(&aux.base_url);
     let sent = [
-        ("llm_url", base_url(body.llm_url.trim()), &aux.base_url),
+        ("llm_url", base_url(body.llm_url.trim()), &stored_url),
         ("llm_model", body.llm_model.trim().to_owned(), &aux.model),
         ("llm_effort", body.llm_effort.trim().to_owned(), &aux.effort),
         ("llm_key", body.llm_key.as_deref().unwrap_or("").trim().to_owned(), &aux.api_key),
@@ -121,13 +125,6 @@ fn reject_own_model(body: &SaveRequest, aux: &Aux, cliproxy_keys: &[String]) -> 
         msg: "o modelo do Computer Use agora é o modelo auxiliar da página Jev".into(),
         params: json!({"fields": moved.join(",")}),
     })
-}
-
-/// O `sem_chat_completions` do Python: tira o `/chat/completions` do caminho, mantendo a query.
-fn base_url(value: &str) -> String {
-    let split = value.find(['?', '#']).unwrap_or(value.len());
-    let path = value[..split].trim_end_matches('/');
-    format!("{}{}", path.strip_suffix("/chat/completions").unwrap_or(path), &value[split..])
 }
 
 #[cfg(test)]
@@ -179,11 +176,14 @@ mod tests {
         assert!(entry["env"].get("HCC_AGENT_CONFIG").is_none(), "{entry}");
     }
 
+    /// O endereço gravado com barra final e o do cliente com `/chat/completions` são o mesmo modelo.
     #[test]
-    fn base_url_keeps_the_query() {
-        assert_eq!(base_url("http://x/v1/chat/completions"), "http://x/v1");
-        assert_eq!(base_url("https://a.b/v1/chat/completions/?x=1"), "https://a.b/v1?x=1");
-        assert_eq!(base_url("http://x/v1/"), "http://x/v1");
+    fn the_stored_url_is_normalized_like_the_sent_one() {
+        let aux = Aux { base_url: "https://x/v1/".into(), ..Aux::default() };
+        let body = request(json!({"enabled": true, "llm_url": "https://x/v1/chat/completions"}));
+        reject_own_model(&body, &aux, &[]).unwrap();
+        let other = request(json!({"enabled": true, "llm_url": "https://y/v1"}));
+        assert_eq!(reject_own_model(&other, &aux, &[]).unwrap_err().code, "erro_computer_control_llm_movido");
     }
 
     proptest! {

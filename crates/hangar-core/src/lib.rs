@@ -25,6 +25,7 @@ pub mod http_route_response;
 pub mod ids;
 pub mod install_root;
 pub mod json_envelope;
+pub mod llm_url;
 pub mod log_rotate;
 pub mod net;
 pub mod orq_codec;

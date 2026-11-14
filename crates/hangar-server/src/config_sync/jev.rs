@@ -1,10 +1,11 @@
 //! Publicação do Jev nos registros ativos e guardados do Computer Use. A escrita é a do escritor único
 //! da entrada (`hangar_computer_control_setup`); aqui ficam o env do Jev e as contas.
 use super::{
-    legacy::{AUX, base_url, text},
+    legacy::{AUX, text},
     runtime::RuntimeConfig,
 };
 use crate::orchestration::truthy;
+use hangar_core::llm_url::base_url;
 use hangar_computer_control_setup as setup;
 use serde_json::{Map, Value, json};
 use std::path::Path;
