@@ -1,6 +1,5 @@
 """Ponte privada da lista: com o Rust de pé, a descoberta e o cache de resolução do transcript são
-dele. Falha levanta, nunca devolve lista vazia: lista vazia é "ninguém vivo" para quem varre pares
-e faz `prune`."""
+dele. Falha levanta, nunca devolve lista vazia: lista vazia é "ninguém vivo" para quem varre pares."""
 import asyncio
 import http.client
 import ipaddress

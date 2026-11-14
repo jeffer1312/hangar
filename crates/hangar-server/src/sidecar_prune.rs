@@ -19,6 +19,14 @@ use crate::startup::Readiness;
 
 type Discovered = (Arc<Vec<SessionRow>>, Arc<Vec<Pane>>, bool);
 
+/// Ligado, todo spec de `~/.hangar/session-specs` conta como sessão viva; desligado, só a fotografia
+/// do restore. O spec não sai quando a sessão fecha: ligado, protege todo nome que já existiu.
+const SPECS_COUNT_AS_LIVE: bool = false;
+
+/// Quem ainda pode voltar, pelo registro em disco.
+#[derive(Debug, Default, PartialEq)]
+struct Recorded { keys: HashSet<String>, names: HashSet<String>, stems: HashSet<String> }
+
 /// Primeira rodada só com o servidor preparado: antes disso a descoberta ainda não responde.
 pub(crate) async fn run(state: Arc<AppState>) {
     let readiness = state.startup.clone();
@@ -35,16 +43,19 @@ where
 }
 
 async fn round(state: Arc<AppState>) -> bool {
+    // O registro antes da descoberta: sessão retomada entre as duas leituras já está na lista.
+    let home = state.accounts.env.home.clone();
+    let recorded = tokio::task::spawn_blocking(move || recorded(&home, SPECS_COUNT_AS_LIVE)).await
+        .unwrap_or_else(|_| Err(io::Error::other("leitura do registro interrompida")));
     let discovered = state.list.live_round().await;
-    let (home, accounts) = (state.accounts.env.home.clone(), state.accounts.clone());
+    let accounts = state.accounts.clone();
     let done = tokio::task::spawn_blocking(move || {
         let (bases, catalog) = bases(&accounts);
-        (sweep(discovered, &home, &bases, SystemTime::now()), catalog)
+        (sweep(discovered, recorded, &bases, SystemTime::now()), catalog)
     }).await;
     let (line, ran) = match done {
         Err(_) => (json!({"nivel": "erro", "codigo": "sidecar_prune_interrupted"}), false),
-        Ok((Err(code), _)) => (json!({"nivel": "erro", "codigo": code}), false),
-        Ok((Ok(report), catalog)) => (summary(&report, catalog), true),
+        Ok((swept, catalog)) => verdict(swept, catalog),
     };
     if ran {
         tracing::info!(line = %line, "poda dos sidecars de sessão morta");
@@ -67,59 +78,79 @@ fn bases(accounts: &AccountService) -> (Vec<PathBuf>, bool) {
     }
 }
 
-/// Descoberta que falhou pula a rodada inteira: sem ela nem a sobra de tmp sai.
-fn sweep(discovered: Result<Discovered, ListError>, home: &Path, bases: &[PathBuf], now: SystemTime) -> Result<Report, &'static str> {
-    let (rows, panes, partial) = discovered.map_err(|error| error.code)?;
-    Ok(hangar_sidecar_prune::prune(bases, &live(&rows, &panes, partial, home), now))
-}
-
-fn live(rows: &[SessionRow], panes: &[Pane], partial: bool, home: &Path) -> Live {
-    // Pane descartado na leitura: a linha dele sumiu da rodada, então nomes e chaves também estão incompletos.
-    if partial { return Live::default(); }
-    let mut stems: HashSet<String> = rows.iter().filter_map(|row| row.jsonl.as_deref()).filter(|jsonl| !jsonl.is_empty())
-        .map(crate::locate::session_key).collect();
-    let mut names: HashSet<String> = rows.iter().map(|row| crate::session_rename::files::stem(&row.name)).collect();
-    let panes = panes.iter().map(|pane| pane.pane_id.trim_start_matches('%').to_owned()).filter(|id| !id.is_empty()).collect();
-    let mut keys = HashSet::new();
-    match recorded(home, &mut keys, &mut names, &mut stems) {
-        Ok(()) => Live { stems: Some(stems), names: Some(names), panes: Some(panes), keys: Some(keys) },
-        Err(error) => {
-            tracing::warn!(kind = ?error.kind(), "registro das sessões ilegível; famílias por chave e nome ficam nesta rodada");
-            Live { stems: None, names: None, panes: Some(panes), keys: None }
+/// Rodada sem descoberta, com pane descartado ou com registro ilegível tenta de novo logo; sem
+/// sessão nenhuma (conjunto vazio de verdade) espera o dia, como a que deu certo.
+fn verdict(swept: Result<(Report, Option<&'static str>), &'static str>, catalog: bool) -> (serde_json::Value, bool) {
+    match swept {
+        Err(code) => (json!({"nivel": "erro", "codigo": code}), false),
+        Ok((report, degraded)) => {
+            let mut line = summary(&report, catalog);
+            if let Some(code) = degraded { line["codigo"] = json!(code); }
+            (line, degraded.is_none())
         }
     }
 }
 
-/// Sessão com spec ou na fotografia do restore ainda pode voltar (a subida depois do reboot): conta como viva.
-fn recorded(home: &Path, keys: &mut HashSet<String>, names: &mut HashSet<String>, stems: &mut HashSet<String>) -> io::Result<()> {
+/// Descoberta que falhou pula a rodada inteira: sem ela nem a sobra de tmp sai. O `Option` é o
+/// motivo de uma rodada que rodou sem saber quem estava vivo.
+fn sweep(discovered: Result<Discovered, ListError>, recorded: io::Result<Recorded>, bases: &[PathBuf], now: SystemTime)
+    -> Result<(Report, Option<&'static str>), &'static str> {
+    let (rows, panes, partial) = discovered.map_err(|error| error.code)?;
+    let (live, degraded) = live(&rows, &panes, partial, recorded);
+    Ok((hangar_sidecar_prune::prune(bases, &live, now), degraded))
+}
+
+fn live(rows: &[SessionRow], panes: &[Pane], partial: bool, recorded: io::Result<Recorded>) -> (Live, Option<&'static str>) {
+    // Pane descartado na leitura: a linha dele sumiu da rodada, então nomes e chaves também estão incompletos.
+    if partial { return (Live::default(), Some("list_panes_partial")); }
+    let panes = panes.iter().map(|pane| pane.pane_id.trim_start_matches('%').to_owned()).filter(|id| !id.is_empty()).collect();
+    let mut recorded = match recorded {
+        Ok(recorded) => recorded,
+        Err(error) => {
+            tracing::warn!(kind = ?error.kind(), "registro das sessões ilegível; famílias por chave e nome ficam nesta rodada");
+            return (Live { stems: None, names: None, panes: Some(panes), keys: None }, Some("session_registry_unreadable"));
+        }
+    };
+    recorded.stems.extend(rows.iter().filter_map(|row| row.jsonl.as_deref()).filter(|jsonl| !jsonl.is_empty())
+        .map(crate::locate::session_key));
+    recorded.names.extend(rows.iter().map(|row| crate::session_rename::files::stem(&row.name)));
+    (Live { stems: Some(recorded.stems), names: Some(recorded.names), panes: Some(panes), keys: Some(recorded.keys) }, None)
+}
+
+/// Sessão na fotografia do restore (e, com `specs`, com spec gravado) ainda pode voltar depois do
+/// reboot: conta como viva.
+fn recorded(home: &Path, specs: bool) -> io::Result<Recorded> {
     use crate::session_open::{record, restore};
     let stem = crate::session_rename::files::stem;
-    match std::fs::read_dir(record::dir(home)) {
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error),
-        Ok(entries) => for entry in entries {
+    let mut out = Recorded::default();
+    let listing = if specs { Some(std::fs::read_dir(record::dir(home))) } else { None };
+    match listing {
+        None => {}
+        Some(Err(error)) if error.kind() == io::ErrorKind::NotFound => {}
+        Some(Err(error)) => return Err(error),
+        Some(Ok(entries)) => for entry in entries {
             let file = entry?.file_name();
             // Só a chave que o Hangar grava (hex de 32); `.switching` e sobra de tmp ficam de fora.
             let Some(key) = file.to_str().and_then(|n| n.strip_suffix(".json"))
                 .filter(|k| k.len() == 32 && k.bytes().all(|b| b.is_ascii_hexdigit())) else { continue };
             let Some(spec) = record::read(home, key)? else { continue };
-            keys.insert(spec.key);
-            names.insert(stem(&spec.name));
-            stems.extend(spec.conversation);
+            out.keys.insert(spec.key);
+            out.names.insert(stem(&spec.name));
+            out.stems.extend(spec.conversation);
         },
     }
     let raw = match std::fs::read(home.join(".hangar").join(restore::FILE)) {
         Ok(raw) => raw,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(out),
         Err(error) => return Err(error),
     };
     let snapshot: restore::Snapshot = serde_json::from_slice(&raw).map_err(io::Error::other)?;
     for (key, entry) in snapshot.sessions {
-        keys.insert(key);
-        names.insert(stem(&entry.name));
-        stems.extend(entry.conversation);
+        out.keys.insert(key);
+        out.names.insert(stem(&entry.name));
+        out.stems.extend(entry.conversation);
     }
-    Ok(())
+    Ok(out)
 }
 
 /// Só escalares: o diário descarta lista e objeto.
@@ -183,7 +214,7 @@ mod tests {
         let tmp = old_file(&base.join(".hangar-preview"), "a.json.tmp");
         let marker = old_file(&base.join(".hangar-active"), "x.json");
         let failed = Err(ListError { code: "list_bridge_unavailable", detail: "descoberta indisponível" });
-        assert_eq!(sweep(failed, dir.path(), &[base], now()), Err("list_bridge_unavailable"));
+        assert_eq!(sweep(failed, Ok(Recorded::default()), &[base], now()), Err("list_bridge_unavailable"));
         assert!(dead.exists() && tmp.exists() && marker.exists());
     }
 
@@ -205,27 +236,55 @@ mod tests {
         fs::write(specs.join("nao-e-chave.json"), "{").unwrap();
         fs::write(home.join(".hangar").join("session-restore.json"), json!({"sessions": {"fedcba9876543210fedcba9876543210":
             {"name": "restaurar", "provider": "claude", "conversation": "conversa-do-restore"}}}).to_string()).unwrap();
-        let live = live(&rows, &panes, false, home);
-        // Se o formato do spec mudar, este teste mostra: o spec ilegível deixa as famílias por chave e nome inteiras.
+        // Com o interruptor desligado, só a fotografia do restore conta; o spec fica de fora.
+        let (live, degraded) = live(&rows, &panes, false, recorded(home, false));
+        assert_eq!(degraded, None);
+        assert_eq!(live.stems, set(&["aaa", "vivo-kimi", "conversa-do-restore"]));
+        assert_eq!(live.names, set(&["minha-sessao", "kimi", "sem-transcript", "restaurar"]));
+        assert_eq!(live.panes, set(&["42"]));
+        assert_eq!(live.keys, set(&["fedcba9876543210fedcba9876543210"]));
+        // Ligado, o spec conta. Se o formato dele mudar, este teste mostra: spec ilegível é registro ilegível.
+        let (live, _) = live_of(&rows, &panes, recorded(home, true));
         assert_eq!(live.stems, set(&["aaa", "vivo-kimi", "conversa-do-spec", "conversa-do-restore"]));
         assert_eq!(live.names, set(&["minha-sessao", "kimi", "sem-transcript", "a-voltar", "restaurar"]));
-        assert_eq!(live.panes, set(&["42"]));
         assert_eq!(live.keys, set(&[key, "fedcba9876543210fedcba9876543210"]));
     }
 
-    #[test]
-    fn a_dropped_pane_makes_every_live_set_unknown() {
-        let dir = tempfile::tempdir().unwrap();
-        let live = live(&[row("s", Some("/p/aaa.jsonl"))], &[pane("%1")], true, dir.path());
-        assert_eq!((live.stems, live.names, live.panes, live.keys), (None, None, None, None));
+    fn live_of(rows: &[SessionRow], panes: &[Pane], recorded: io::Result<Recorded>) -> (Live, Option<&'static str>) {
+        live(rows, panes, false, recorded)
     }
 
     #[test]
-    fn an_unreadable_restore_record_keeps_the_key_and_name_families() {
+    fn a_dropped_pane_makes_every_live_set_unknown_and_the_round_retries_soon() {
+        let (live, degraded) = live(&[row("s", Some("/p/aaa.jsonl"))], &[pane("%1")], true, Ok(Recorded::default()));
+        assert_eq!((live.stems, live.names, live.panes, live.keys), (None, None, None, None));
+        assert_eq!(degraded, Some("list_panes_partial"));
+        let (line, ran) = verdict(Ok((Report::default(), degraded)), true);
+        assert!(!ran);
+        assert_eq!(line["codigo"], "list_panes_partial");
+    }
+
+    #[test]
+    fn an_unreadable_restore_record_keeps_the_key_and_name_families_and_the_round_retries_soon() {
         let dir = tempfile::tempdir().unwrap();
         fs::create_dir_all(dir.path().join(".hangar")).unwrap();
         fs::write(dir.path().join(".hangar").join("session-restore.json"), "{").unwrap();
-        let live = live(&[row("s", Some("/p/aaa.jsonl"))], &[pane("%1")], false, dir.path());
+        let (live, degraded) = live(&[row("s", Some("/p/aaa.jsonl"))], &[pane("%1")], false, recorded(dir.path(), false));
         assert_eq!((live.stems, live.names, live.panes, live.keys), (None, None, set(&["1"]), None));
+        assert_eq!(degraded, Some("session_registry_unreadable"));
+        assert!(!verdict(Ok((Report::default(), degraded)), true).1);
+    }
+
+    #[test]
+    fn an_idle_machine_with_no_session_waits_the_day() {
+        let dir = tempfile::tempdir().unwrap();
+        let (live, degraded) = live(&[], &[], false, recorded(dir.path(), false));
+        assert_eq!(degraded, None);
+        let report = hangar_sidecar_prune::prune(&[dir.path().to_path_buf()], &live, now());
+        let (line, ran) = verdict(Ok((report, degraded)), true);
+        assert!(ran);
+        // Conjuntos vazios de verdade: famílias puladas, mas a rodada aconteceu.
+        assert_eq!(line["pulados"], "stems, names, tickets");
+        assert!(!verdict(Err("list_bridge_unavailable"), true).1);
     }
 }
