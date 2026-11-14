@@ -23,6 +23,8 @@ use hangar_server::runtime::gateway::RuntimeRegistry;
 use serde_json::{Value, json};
 
 const MSG_UNBOUND: &str = "vínculo gerenciado indisponível; escrita suspensa";
+pub(crate) const GUEST: &str = "convidado-ana";
+pub(crate) const BLIND: &str = "convidado-bia";
 
 pub(crate) struct Rig {
     pub dir: tempfile::TempDir,
@@ -116,6 +118,7 @@ impl Rig {
 case " $* " in *" send-keys "*" -l "*) [ -e '{root}/fail-literal' ] && exit 1;; esac
 case "$1" in load-buffer|paste-buffer|set-buffer) [ -e '{root}/fail-buffer' ] && exit 1;; esac
 [ "$1" = send-keys ] && [ -e '{root}/slow-keys' ] && grep -qx -- "$3" '{root}/slow-keys' && sleep 2
+[ "$1" = capture-pane ] && [ -e '{root}/fail-capture' ] && exit 1
 exec tmux -L '{label}' -f /dev/null "$@"
 "#, root = root.display()));
         let rig_label = label.clone();
@@ -138,6 +141,14 @@ exec tmux -L '{label}' -f /dev/null "$@"
         let (python, upstream) = fake::spawn_fake().await;
         let mut state = AppState::new(fake::config(upstream, "127.0.0.1"));
         state.diag = python.bind_diary(state.diag.clone());
+        // Convidados com conta: `GUEST` vê as sessões do dono, `BLIND` não.
+        let guests = hangar_server::login_guests::Service::new(hangar_server::login_guests::Settings { guests: root.join("guests.json"),
+            vault: root.join("vault.json"), runtime_config: root.join("runtime-config.json"), sync_enabled: false, bootstrap: String::new(),
+            secret: vec![1], secure: false, rate_max: 10.into(), rate_window: 300.into() });
+        let root_text = root.to_string_lossy().into_owned();
+        guests.store.create("Ana", &root_text, true, true, "ana".into(), GUEST.into()).unwrap();
+        guests.store.create("Bia", &root_text, false, true, "bia".into(), BLIND.into()).unwrap();
+        state.login_guests = Arc::new(guests);
         state.list = Arc::new(ListBridge::new(ListEnv { mux: Mux::with_program(&wrapper, Duration::from_secs(5)),
             capture_program: wrapper.clone().into_os_string(), procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs },
             FactsClient::new(upstream, SECRET.into())));

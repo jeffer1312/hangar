@@ -136,13 +136,13 @@ pub async fn reload(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
             Err(error)=>{let mut response=json_response(StatusCode::CONFLICT,json!({"detail":error.public()}));cors(req.headers(),response.headers_mut());return response},
         }
     }
-    let st2 = st.clone();
+    let (st2, owned) = (st.clone(), name.clone());
     let outcome = detached_relaunch(async move {
-        if let Some(codex) = runtime.restart_codex(&name).await { return Some(Relaunched::Codex(codex)); }
-        let from_terminal = runtime.claude_headless(&name).await.is_none_or(|headless| !headless);
+        if let Some(codex) = runtime.restart_codex(&owned).await { return Some(Relaunched::Codex(codex)); }
+        let from_terminal = runtime.claude_headless(&owned).await.is_none_or(|headless| !headless);
         let change = SessionChange { reason: ChangeReason::Reload, surface: None, account: None, permission_mode: None,
             model: None, effort: None, service_tier: None };
-        during_life_change(&st2, &name, runtime.reopen_claude_session(&name, change, None)).await.map(|r| Relaunched::Claude(r, from_terminal))
+        during_life_change(&st2, &owned, runtime.reopen_claude_session(&owned, change, None)).await.map(|r| Relaunched::Claude(r, from_terminal))
     }).await;
     let (status, body) = match outcome {
         None => unowned_reload(&st, &name).await,

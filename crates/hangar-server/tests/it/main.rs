@@ -299,6 +299,7 @@ mod session_close_by_name;
 mod session_write_routes;
 mod session_write_unowned;
 mod session_write_unowned_routes;
+mod session_pane_routes;
 mod session_rename;
 mod share_reach;
 mod share_store;
