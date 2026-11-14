@@ -11,8 +11,8 @@ use axum::response::{IntoResponse, Response};
 use serde_json::{Map, Value, json};
 
 use hangar_computer_control_setup::{
-    Aux, Facts, Github, Paths, Policy, REPO, SaveRequest, Swapped, TargetRequest, Transport, create_target, save, targets,
-    update_tick,
+    Aux, Facts, Github, Paths, Policy, REPO, SaveRequest, Swapped, TargetRequest, Transport, create_target, install_if_missing,
+    save, targets, update_tick,
 };
 
 fn paths() -> (tempfile::TempDir, Paths) {
@@ -140,4 +140,23 @@ async fn rot86_swaps_the_exe_in_use() {
     assert!(still_running, "o processo do agente caiu na troca");
     assert_eq!(std::fs::read(paths.exe()).unwrap(), b"MZ-v0.7.0");
     assert_eq!(std::fs::read(paths.install_dir().join("windows-agent.exe.anterior")).unwrap(), old);
+}
+
+/// No Windows só o exe é usado: release sem o binário Linux instala.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_release_with_only_the_exe_installs() {
+    let (_root, paths) = paths();
+    let fake = Arc::new(Fake::default());
+    let app = axum::Router::new().fallback(serve).with_state(fake.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let github = Github { api: base.clone(), download: base };
+    *fake.release.lock().unwrap() = Some(json!({"tag_name": "v0.7.0", "body": "", "assets": [{"name": "windows-agent.exe"}]}));
+    fake.assets.lock().unwrap().insert(format!("/{REPO}/releases/download/v0.7.0/windows-agent.exe"), b"MZ-v0.7.0".to_vec());
+    let http = hangar_core::net::http_client().build().unwrap();
+    let swapped = install_if_missing(&paths, &http, &github, None).await;
+    server.abort();
+    assert_eq!(swapped.unwrap(), Swapped::Yes { tag: "v0.7.0".into() });
+    assert_eq!(std::fs::read(paths.exe()).unwrap(), b"MZ-v0.7.0");
 }

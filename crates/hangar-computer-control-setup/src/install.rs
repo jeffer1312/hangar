@@ -65,7 +65,7 @@ pub enum Swapped {
 struct Release {
     tag: String,
     body: String,
-    linux: bool,
+    assets: Vec<String>,
 }
 
 struct Done {
@@ -94,7 +94,7 @@ pub async fn install_if_missing(paths: &Paths, http: &reqwest::Client, github: &
         let (paths, diary) = (paths.clone(), diary.map(Path::to_owned));
         off_thread(move || {
             tidy(&paths);
-            let present = required(&paths).iter().all(|path| path.is_file());
+            let present = required(&paths, cfg!(windows)).iter().all(|(path, ..)| path.is_file());
             if present && paths.migration_pending_file().exists() {
                 report_skipped(diary.as_deref(), &migrate_targets(&paths));
             }
@@ -204,26 +204,34 @@ async fn latest(paths: &Paths, http: &reqwest::Client, github: &Github, only_if_
             }
         }
     }
-    if !release.linux {
+    let required = required(paths, cfg!(windows));
+    if let Some(name) = missing_asset(&release, &required) {
         return Err(Error {
             status: 502,
             code: NO_BINARY,
-            msg: format!("a release {} não tem o binário {LINUX_ASSET}", release.tag),
+            msg: format!("a release {} não tem o binário {name}", release.tag),
             params: json!({"tag": release.tag}),
         });
     }
-    let mut downloads = vec![(paths.exe(), asset(http, github, &release.tag, EXE_ASSET, b"MZ").await?)];
-    if !cfg!(windows) {
-        downloads.push((paths.binary(), asset(http, github, &release.tag, LINUX_ASSET, b"\x7fELF").await?));
+    let mut downloads = Vec::new();
+    for (path, name, magic) in required {
+        downloads.push((path, asset(http, github, &release.tag, name, magic).await?));
     }
     let (paths, tag) = (paths.clone(), release.tag.clone());
     let skipped = off_thread(move || put_in_place(&paths, downloads, &tag)).await??;
     Ok(Some(Done { tag: release.tag, body: release.body, before, skipped }))
 }
 
-/// Os arquivos que a plataforma usa: no Windows o exe é o próprio MCP (`Paths::binary`).
-fn required(paths: &Paths) -> Vec<PathBuf> {
-    if cfg!(windows) { vec![paths.exe()] } else { vec![paths.binary(), paths.exe()] }
+/// Os arquivos que a plataforma usa, com o asset e o começo de cada um: no Windows o exe é o próprio
+/// MCP (`Paths::binary`).
+fn required(paths: &Paths, windows: bool) -> Vec<(PathBuf, &'static str, &'static [u8])> {
+    let exe = (paths.exe(), EXE_ASSET, &b"MZ"[..]);
+    if windows { vec![exe] } else { vec![(paths.install_dir().join(crate::NAME), LINUX_ASSET, &b"\x7fELF"[..]), exe] }
+}
+
+/// O primeiro asset que a plataforma usa e a release não lista.
+fn missing_asset(release: &Release, required: &[(PathBuf, &'static str, &'static [u8])]) -> Option<&'static str> {
+    required.iter().map(|(_, name, _)| *name).find(|name| !release.assets.iter().any(|asset| asset == name))
 }
 
 /// Um asset da release, conferido pelo começo do arquivo: página de erro com 200 ou corpo vazio
@@ -278,16 +286,17 @@ async fn get(http: &reqwest::Client, url: &str, timeout: Duration) -> Result<Vec
     Ok(body)
 }
 
-/// Tag, corpo e se há o binário Linux; sem `tag_name` texto não vazio é `None`.
+/// Tag, corpo e os nomes dos assets; sem `tag_name` texto não vazio é `None`.
 fn parse_release(bytes: &[u8]) -> Option<Release> {
     let value: Value = serde_json::from_slice(bytes).ok()?;
     let tag = value.get("tag_name")?.as_str().filter(|tag| !tag.is_empty())?.to_owned();
     let body = value.get("body").and_then(Value::as_str).unwrap_or("").to_owned();
-    let linux = value
+    let assets = value
         .get("assets")
         .and_then(Value::as_array)
-        .is_some_and(|assets| assets.iter().any(|asset| asset.get("name").and_then(Value::as_str) == Some(LINUX_ASSET)));
-    Some(Release { tag, body, linux })
+        .map(|assets| assets.iter().filter_map(|asset| asset.get("name")?.as_str().map(str::to_owned)).collect())
+        .unwrap_or_default();
+    Some(Release { tag, body, assets })
 }
 
 /// `vX.Y.Z` por versão semântica (pré-release antes da final); `None` quando um lado não é versão.
@@ -723,16 +732,28 @@ mod tests {
             assert_eq!(parse_release(bytes), None);
         }
         let release = parse_release(br#"{"tag_name": "v1", "body": null, "assets": [{"name": "hangar-computer-control-linux-x86_64"}]}"#);
-        assert_eq!(release, Some(Release { tag: "v1".into(), body: String::new(), linux: true }));
+        let assets = vec!["hangar-computer-control-linux-x86_64".to_owned()];
+        assert_eq!(release, Some(Release { tag: "v1".into(), body: String::new(), assets }));
     }
 
     #[test]
     fn required_files_follow_the_platform() {
         let paths = Paths::new(PathBuf::from("/h"), Vec::new());
-        #[cfg(windows)]
-        assert_eq!(required(&paths), [paths.exe()]);
-        #[cfg(not(windows))]
-        assert_eq!(required(&paths), [paths.binary(), paths.exe()]);
+        let files = |windows| required(&paths, windows).into_iter().map(|(path, ..)| path).collect::<Vec<_>>();
+        assert_eq!(files(true), [paths.exe()]);
+        assert_eq!(files(false), [paths.install_dir().join(crate::NAME), paths.exe()]);
+        assert_eq!(files(cfg!(windows))[0], paths.binary());
+    }
+
+    /// No Windows só o exe é baixado: release sem o binário Linux instala; no Linux ela falta.
+    #[test]
+    fn the_missing_asset_follows_the_platform() {
+        let paths = Paths::new(PathBuf::from("/h"), Vec::new());
+        let release = Release { tag: "v1.0.0".into(), body: String::new(), assets: vec![EXE_ASSET.into()] };
+        assert_eq!(missing_asset(&release, &required(&paths, true)), None);
+        assert_eq!(missing_asset(&release, &required(&paths, false)), Some(LINUX_ASSET));
+        let empty = Release { assets: Vec::new(), ..release };
+        assert_eq!(missing_asset(&empty, &required(&paths, true)), Some(EXE_ASSET));
     }
 
     #[test]
