@@ -1144,7 +1144,7 @@ impl NewSession {
 
     /// `save`: o dono grava a escolha como padrão do servidor; sem ele, vale só para esta conversa.
     fn set_headless(&mut self, headless: bool, save: bool, window: &mut Window, cx: &mut Context<Self>) {
-        if self.headless_saving || self.creating || self.headless_unread() { return; }
+        if self.headless_locked() { return; }
         self.scheduled_touch(&["headless"]);
         self.headless = headless;
         self.headless_touched = true;
@@ -1170,6 +1170,8 @@ impl NewSession {
 
     /// Antes da leitura da configuração, o valor à vista ainda não é o padrão do servidor.
     fn headless_unread(&self) -> bool { self.jev.loading && self.headless_owner.is_none() }
+
+    fn headless_locked(&self) -> bool { self.headless_saving || self.creating || self.headless_unread() }
 
     fn provider_ready(&self) -> Option<bool> {
         if self.providers.loading { return None; }
@@ -2461,7 +2463,7 @@ impl NewSession {
         let label = if from_server { format!("{}: {text}, {}", tr("create_mode"), tr("session_mode_server_default")) } else { format!("{}: {text}", tr("create_mode")) };
         let id = Menu::Mode.anchor();
         Some(popup::anchor(div(), id).child(quiet_button(id, IconName::SquareTerminal, text, true, cx)
-            .selected(open).disabled(self.creating || self.headless_unread())
+            .selected(open).disabled(self.headless_locked())
             .accessibility_label(label)
             .when(from_server, |button| button.tooltip(tr("session_mode_server_default")))
             .on_click(cx.listener(|this, _, window, cx| this.toggle_menu(Menu::Mode, window, cx)))))
@@ -2586,7 +2588,7 @@ impl NewSession {
             Menu::Model => return self.render_model_menu(cx).into_any_element(),
             Menu::Mode => {
                 let (codex, current, inherited) = (self.provider == "codex", self.headless, self.headless_inherited());
-                let locked = self.creating || self.headless_unread();
+                let locked = self.headless_locked();
                 let row = |id: &'static str, headless: bool, cx: &mut Context<Self>| mode_row(id, current == headless && !inherited, headless, codex)
                     .disabled(locked).on_click(cx.listener(move |this, _, window, cx| this.choose_mode(headless, window, cx)));
                 return div().p(px(popup::INSET)).flex().flex_col().gap(px(2.)).child(popup::title(tr("create_mode"), None))
