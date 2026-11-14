@@ -1253,7 +1253,12 @@ impl Executor {
                         "input"=>match if facts.as_ref().is_some_and(|f|f.as_ref().is_ok_and(|f|!input::presses_keys(f,text))) {None} else {self.focus_guard(root,facts.as_ref().is_some_and(|f|f.as_ref().is_ok_and(|f|f.plugin_live))).await} {
                             Some(code)=>DeliveryResult {disposition:input::Disposition::Deferred,stage:input::DeliveryStage::Composer,cleanup:input::Cleanup::NotNeeded,
                                 native:false,message_id:None,code:code.into(),draft:None,consumed:false},
-                            None=>driver.prompt(text,&publication).await,
+                            None=>{
+                                // Sem a guarda de foco nada tocou o pane desde a leitura acima, só o diário: ela vale
+                                // como a primeira do driver. Com a guarda (teclas), ele relê.
+                                if let Some(Ok(read))=facts.as_ref() && !input::presses_keys(read,text) {driver.hand_facts(read.clone());}
+                                driver.prompt(text,&publication).await
+                            },
                         },
                         "steer"|"steer_queue"=>driver.steer().await,
                         "key"|"navigation_key"=>driver.key(payload["key"].as_str().unwrap(),false).await,
