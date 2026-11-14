@@ -623,13 +623,84 @@ async fn keys_reach_the_pane_through_the_actor() {
     assert_eq!(python.hits_to("/api/sessions/t/keys"), 0);
 }
 
-#[tokio::test]
-async fn select_submit_without_a_terminal_goes_to_python() {
+const MSG_NO_TERMINAL: &str = "esta sessão não tem terminal; nada foi enviado";
+
+fn no_terminal() -> (u16, Value) {
+    (502, json!({"detail": {"code": "erro_envio_falhou", "params": {"erro": MSG_NO_TERMINAL}, "msg": MSG_NO_TERMINAL}}))
+}
+
+/// Claude (`s`, cano que anota cada envelope) e Codex (`c`) sem terminal no mesmo servidor.
+async fn headless_pair() -> (tempfile::TempDir, Arc<std::sync::Mutex<Vec<Value>>>, Arc<std::sync::Mutex<Vec<String>>>, Arc<Fake>, std::net::SocketAddr) {
     let (dir, registry) = (tempfile::tempdir().unwrap(), registry().await);
-    open_headless(&registry, dir.path(), "s").await;
+    let sink = open_headless(&registry, dir.path(), "s").await;
+    let methods: Arc<std::sync::Mutex<Vec<String>>> = Arc::default();
+    crate::groups_deliver::open_codex_headless(&registry, dir.path(), "c", methods.clone()).await;
     let (python, server) = serve(registry).await;
-    assert_eq!(send(server, "POST", "s/select/submit", "").await, (200, "from-python".into()));
-    assert_eq!(python.hits_to("/api/sessions/s/select/submit"), 1);
+    (dir, sink, methods, python, server)
+}
+
+// R2-01, R2-02 (`api.py:2746`, Python 502 `erro_envio_falhou`): tecla em sessão sem terminal não vai a pane
+// nenhum nem ao Python; a recusa é do Rust, igual para Claude e Codex.
+#[tokio::test]
+async fn keys_without_a_terminal_are_a_rust_502_and_nothing_is_sent() {
+    let (_dir, sink, methods, python, server) = headless_pair().await;
+    let (claude, codex) = (sink.lock().unwrap().len(), methods.lock().unwrap().len());
+    for name in ["s", "c"] {
+        assert_eq!(send(server, "POST", &format!("{name}/keys"), r#"{"key":"Down"}"#).await, no_terminal(), "{name}");
+        assert_eq!(send(server, "POST", &format!("{name}/keys"), r#"{"key":5}"#).await.1["detail"]["code"], "erro_corpo_invalido", "{name}");
+        assert_eq!(python.hits_to(&format!("/api/sessions/{name}/keys")), 0, "{name}");
+    }
+    assert_eq!((sink.lock().unwrap().len(), methods.lock().unwrap().len()), (claude, codex), "nada chegou aos canos");
+}
+
+// R2-03 (`api.py:2760`): corpo sem texto nem tecla é 200 sem tocar em nada; com texto ou tecla, a recusa de R2-01.
+#[tokio::test]
+async fn term_input_without_a_terminal_is_ok_when_empty_and_a_502_otherwise() {
+    let (_dir, sink, methods, python, server) = headless_pair().await;
+    let (claude, codex) = (sink.lock().unwrap().len(), methods.lock().unwrap().len());
+    for name in ["s", "c"] {
+        for body in ["{}", r#"{"text":null,"key":null}"#, r#"{"text":"","key":""}"#] {
+            assert_eq!(send(server, "POST", &format!("{name}/term-input"), body).await, (200, json!({"ok": true})), "{name} {body}");
+        }
+        for body in [r#"{"text":"ls"}"#, r#"{"key":"Enter"}"#, r#"{"text":"ls","key":"Enter"}"#] {
+            assert_eq!(send(server, "POST", &format!("{name}/term-input"), body).await, no_terminal(), "{name} {body}");
+        }
+        assert_eq!(python.hits_to(&format!("/api/sessions/{name}/term-input")), 0, "{name}");
+    }
+    assert_eq!((sink.lock().unwrap().len(), methods.lock().unwrap().len()), (claude, codex), "nada chegou aos canos");
+}
+
+// R2-04 (`api.py:2408`, Python 409 `erro_opcao_nao_convergiu` com o detalhe do picker ausente) e R2-05
+// (Codex, Python 502 `erro_envio_falhou`); decisão 7: sem `interaction_id`, 409 sem identidade antes.
+#[tokio::test]
+async fn select_submit_without_a_terminal_is_refused_in_rust() {
+    let (_dir, sink, methods, python, server) = headless_pair().await;
+    let (claude, codex) = (sink.lock().unwrap().len(), methods.lock().unwrap().len());
+    for name in ["s", "c"] {
+        for body in ["", "{}", r#"{"interaction_id":null}"#, r#"{"interaction_id":""}"#] {
+            let (status, reply) = send(server, "POST", &format!("{name}/select/submit"), body).await;
+            assert_eq!((status, reply["detail"]["code"].as_str()), (409, Some("erro_interacao_sem_identidade")), "{name} {body:?}");
+        }
+        assert_eq!(python.hits_to(&format!("/api/sessions/{name}/select/submit")), 0, "{name}");
+    }
+    assert_eq!(send(server, "POST", "s/select/submit", r#"{"interaction_id":"i-1"}"#).await, (409, json!({"detail": {"code": "erro_opcao_nao_convergiu",
+        "params": {"detalhe": "nao ha picker de multipla escolha na tela — nada enviado"}, "msg": "não consegui enviar as opções marcadas — tente de novo"}})));
+    assert_eq!(send(server, "POST", "c/select/submit", r#"{"interaction_id":"i-1"}"#).await, no_terminal());
+    assert_eq!((sink.lock().unwrap().len(), methods.lock().unwrap().len()), (claude, codex), "nada chegou aos canos");
+}
+
+// R2-06, R2-10, R2-16 (`test_codex_models_claude_rejected_with_400`, `test_limits_claude_rejected_with_400`,
+// `api.py:2692`): sessão Claude do Rust nas rotas do Codex recebe o 400 da rota, sem ir ao Python.
+#[tokio::test]
+async fn codex_routes_on_a_rust_claude_session_are_the_python_400s() {
+    let (_dir, sink, _methods, python, server) = headless_pair().await;
+    let before = sink.lock().unwrap().len();
+    assert_eq!(send(server, "GET", "s/models", "").await, (400, json!({"detail": {"code": "erro_models_so_codex", "params": {}, "msg": "models so existe pra sessoes Codex"}})));
+    assert_eq!(send(server, "GET", "s/limits", "").await, (400, json!({"detail": {"code": "erro_limits_so_codex", "params": {}, "msg": "limits so existe pra sessoes Codex"}})));
+    assert_eq!(send(server, "POST", "s/codex/plan/implement", "").await,
+        (400, json!({"detail": {"code": "erro_model_so_codex", "params": {}, "msg": "esta ação só existe para sessões Codex"}})));
+    for route in ["models", "limits", "codex/plan/implement"] { assert_eq!(python.hits_to(&format!("/api/sessions/s/{route}")), 0, "{route}"); }
+    assert_eq!(sink.lock().unwrap().len(), before, "nada chegou ao cano do Claude");
 }
 
 /// `/compact` do Codex com terminal servido pelo motor: o mesmo corpo do `_send_managed` do Python.

@@ -78,8 +78,7 @@ pub(crate) async fn refusal(st: &AppState, name: &str, route: WriteRoute, body: 
         Some(Sent::Answer(status, body)) => (status, json!({"detail": body["error"]})),
         Some(Sent::Missing) => match route {
             Steer => refused(StatusCode::NOT_FOUND, "erro_sessao_inexistente", "sessão não encontrada", json!({})),
-            SelectSubmit => refused(StatusCode::NOT_FOUND, "erro_sessao_opcao_nao_enviada", "sessão não encontrada — opção NÃO enviada", json!({})),
-            Select => select_not_sent(),
+            Select | SelectSubmit => refused(StatusCode::NOT_FOUND, "erro_sessao_opcao_nao_enviada", "sessão não encontrada — opção NÃO enviada", json!({})),
             _ => unbound(),
         },
         None => {
@@ -308,6 +307,28 @@ fn clear_queue(path: &Path) {
     for file in [path.to_path_buf(), path.with_extension("jsonl.tmp")] {
         if let Err(error) = std::fs::remove_file(&file) && error.kind() != std::io::ErrorKind::NotFound {
             tracing::warn!(path = %file.display(), %error, "fila do Codex cru não apagada no /clear");
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::identified;
+
+    #[test]
+    fn interaction_id_must_be_non_empty_text() {
+        assert!(identified(br#"{"interaction_id":"i-1"}"#));
+        for body in [&b""[..], b"{}", br#"{"interaction_id":null}"#, br#"{"interaction_id":""}"#, br#"{"interaction_id":1}"#, b"[]", br#""i-1""#, b"x"] {
+            assert!(!identified(body), "{}", String::from_utf8_lossy(body));
+        }
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn identified_never_panics_and_matches_the_field(raw in proptest::collection::vec(proptest::prelude::any::<u8>(), 0..256), id in ".{0,16}") {
+            let _ = identified(&raw);
+            let body = serde_json::json!({"interaction_id": id, "option": 1}).to_string();
+            proptest::prop_assert_eq!(identified(body.as_bytes()), !id.is_empty());
         }
     }
 }

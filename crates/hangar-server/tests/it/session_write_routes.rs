@@ -119,19 +119,24 @@ async fn post(server: std::net::SocketAddr, route: &str, body: &str, token: &str
 
 const ROUTES: &[&str] = &["input", "steer", "interrupt", "select", "select/submit", "answer", "keys", "term-input"];
 
+/// R2-27 (decisão 8): escrita do dono antes de o runtime existir é o 503 `server_starting` da subida,
+/// e o cliente repete; nada vai ao Python, nem as rotas do Codex.
 #[tokio::test]
-async fn without_runtime_every_write_route_reaches_python_with_the_same_body() {
+async fn without_runtime_every_write_route_is_server_starting_and_never_python() {
     let (python, server) = serve_with(None).await;
-    for route in ROUTES {
-        let body = r#"{"text":"oi","x":1}"#;
-        assert_eq!(post(server, route, body, OWNER).await, (200, "from-python".into()), "{route}");
-        assert_eq!(python.last_hit().0, format!("/api/sessions/s/{route}"));
-        assert_eq!(python.last_body(), body.as_bytes(), "{route}");
+    let starting = (503, r#"{"detail":"server_starting"}"#.to_owned());
+    let codex = ["models", "model", "codex/mode", "service-tier", "question/skip", "codex-permissions", "codex/plan/implement", "codex/terminate"];
+    for route in ROUTES.iter().chain(&codex) {
+        assert_eq!(post(server, route, r#"{"text":"oi","x":1}"#, OWNER).await, starting, "{route}");
     }
-    let response = client().delete(format!("http://{server}/api/sessions/s/queue/e1"))
-        .header("authorization", format!("Bearer {OWNER}")).send().await.unwrap();
-    assert_eq!(response.text().await.unwrap(), "from-python");
-    assert_eq!(python.last_hit().0, "/api/sessions/s/queue/e1");
+    for (method, route) in [(reqwest::Method::DELETE, "queue/e1"), (reqwest::Method::PATCH, "queue/e1"), (reqwest::Method::GET, "limits"), (reqwest::Method::GET, "models")] {
+        let response = client().request(method.clone(), format!("http://{server}/api/sessions/s/{route}"))
+            .header("content-type", "application/json").header("authorization", format!("Bearer {OWNER}")).body(r#"{"text":"oi"}"#).send().await.unwrap();
+        assert_eq!((response.status().as_u16(), response.text().await.unwrap()), starting, "{method} {route}");
+    }
+    for route in ROUTES.iter().chain(&codex).chain(&["queue/e1", "limits"]) {
+        assert_eq!(python.hits_to(&format!("/api/sessions/s/{route}")), 0, "{route}: nada chega ao Python");
+    }
 }
 
 #[tokio::test]
@@ -348,4 +353,24 @@ async fn unhealthy_write_reopens_the_session_in_rust() {
     let seen = seen.lock().unwrap();
     assert!(!seen.iter().any(|line| line == "POST /internal/diag HTTP/1.1"));
     assert!(!seen.iter().any(|line| line.contains("/reopen")), "nada vai ao coordenador do Python: {seen:?}");
+}
+
+/// R2-28: as combinações que a tabela entregava ao Python e que nenhuma sessão alcança (Pi/omp/Kimi sem
+/// terminal; controle do Codex numa sessão Claude) agora são recusa do Rust, e a posse anunciada na
+/// saúde (`owns`) não muda.
+#[test]
+fn table_hands_nothing_to_python_and_the_announced_ownership_stays() {
+    use hangar_server::session_write::{Owner, Provider, WriteRoute, decide, table::owned_modes};
+    for provider in [Provider::Pi, Provider::Omp, Provider::Kimi] {
+        assert_ne!(decide(WriteRoute::Input, provider, false), Owner::Rust, "{provider:?} sem terminal não existe");
+        assert_eq!(decide(WriteRoute::Input, provider, true), Owner::Rust, "{provider:?}");
+    }
+    for terminal in [true, false] {
+        assert_ne!(decide(WriteRoute::CodexControl, Provider::Claude, terminal), Owner::Rust);
+        for route in [WriteRoute::Keys, WriteRoute::TermInput, WriteRoute::SelectSubmit] {
+            assert_eq!(decide(route, Provider::Claude, terminal), Owner::Rust, "{route:?}: a rota recusa sem terminal");
+        }
+    }
+    assert_eq!(owned_modes(), vec![(Provider::Claude, true), (Provider::Claude, false), (Provider::Codex, true), (Provider::Codex, false),
+        (Provider::Pi, false), (Provider::Omp, false), (Provider::Kimi, false)]);
 }
