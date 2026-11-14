@@ -262,6 +262,7 @@ mod mods_tree;
 mod pages_routes;
 mod perf_accounts_uploads;
 mod plans_routes;
+mod owner_refusal;
 mod prewarm_routes;
 mod plugin_loopback;
 mod proxy;

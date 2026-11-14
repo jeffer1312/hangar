@@ -317,11 +317,14 @@ fn close_failed(st: &AppState, name: &str, error: &crate::runtime::protocol::Run
 
 /// O fechamento que deu certo vai ao diário com o cliente, a origem e quem pediu (dono ou convidado).
 fn closed_line(name: &str, owner: bool, headers: &axum::http::HeaderMap, peer: SocketAddr) {
-    let line = match owner {
+    crate::diag::record(crate::diag::diary_dir(), vec![close_line_by(name, owner, headers, peer)], "sessão fechada");
+}
+
+fn close_line_by(name: &str, owner: bool, headers: &axum::http::HeaderMap, peer: SocketAddr) -> Value {
+    match owner {
         true => close_line(name, headers, peer),
         false => asked_line("sessao.fechamento_pedido", "session_close_requested_by_guest", name, headers, peer),
-    };
-    crate::diag::record(crate::diag::diary_dir(), vec![line], "sessão fechada");
+    }
 }
 
 /// Depois de o Rust encerrar a sessão: revoga os convites e some da lista. A saída do grupo é de quem chamou.
@@ -446,6 +449,15 @@ mod close_tests {
         let line = super::close_line("s1", &headers, "127.0.0.1:5000".parse().unwrap());
         assert_eq!((line["evento"].as_str(), line["sessao"].as_str(), line["codigo"].as_str()), (Some("sessao.fechamento_pedido"), Some("s1"), Some("session_close_requested_by_owner")));
         assert_eq!((line["cliente"].as_str(), line["origem"].as_str()), (Some("curl/8.10"), Some("127.0.0.1")));
+    }
+
+    /// R1-20, decisão 3: o fechamento pedido pelo convidado vai ao diário com o código próprio.
+    #[test]
+    fn the_guest_close_has_its_own_code() {
+        let (headers, peer) = (axum::http::HeaderMap::new(), "127.0.0.1:5000".parse().unwrap());
+        let line = super::close_line_by("s1", false, &headers, peer);
+        assert_eq!((line["evento"].as_str(), line["codigo"].as_str()), (Some("sessao.fechamento_pedido"), Some("session_close_requested_by_guest")));
+        assert_eq!(super::close_line_by("s1", true, &headers, peer)["codigo"], "session_close_requested_by_owner");
     }
 }
 

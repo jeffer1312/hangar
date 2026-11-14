@@ -470,9 +470,9 @@ async fn surrogate_task_is_422() {
     assert!(!srv.pair.join("s0.json").exists());
 }
 
-/// BRG-25, R1.3-7/8/10: sessão sem entrada aqui (pane Claude que o Rust não adotou) fecha no Rust pelo
-/// nome, sai do grupo daqui e segue marcada ao Python com a conversa da lista, para o nome fechado; a
-/// pergunta aberta dela não fica para uma sessão futura com a mesma conversa.
+/// BRG-25, R1.3-7/8/10, R1-09/R1-10/R1-11: sessão sem entrada aqui (pane Claude que o Rust não adotou)
+/// fecha no Rust pelo nome, sai do grupo daqui e guarda o nome fechado pela conversa da lista, sem passar
+/// pelo Python; a pergunta aberta dela não fica para uma sessão futura com a mesma conversa.
 #[tokio::test(flavor = "multi_thread")]
 async fn repassed_close_leaves_the_group_r1_3() {
     let dir = tempfile::tempdir().unwrap();
@@ -490,11 +490,11 @@ async fn repassed_close_leaves_the_group_r1_3() {
     let (status, _) = call(srv.addr, "DELETE", "s0", None, OWNER).await;
     assert_eq!(status, 200);
     assert_eq!(list_support::calls(dir.path(), "kill-session"), 1, "o Rust fecha o pane");
-    assert_eq!(srv.python.hits_to("/api/sessions/s0"), 1, "o Python só limpa as lojas dele");
-    let (_, headers) = srv.python.last_hit();
-    assert_eq!(headers.get("x-hangar-rust-closed").and_then(|v| v.to_str().ok()), Some(SECRET));
-    let closed = headers.get("x-hangar-closed-transcript").and_then(|v| v.to_str().ok()).unwrap();
-    assert_eq!(percent_encoding::percent_decode_str(closed).decode_utf8().unwrap(), jsonl.to_string_lossy());
+    assert_eq!(srv.python.hits_to("/api/sessions/s0"), 0, "nada segue ao Python");
+    let names = std::fs::read(claude.join("closed-sessions.json")).ok()
+        .and_then(|raw| serde_json::from_slice::<Value>(&raw).ok()).unwrap_or(Value::Null);
+    let real = std::fs::canonicalize(&jsonl).map_or_else(|_| jsonl.to_string_lossy().into_owned(), |p| p.to_string_lossy().into_owned());
+    assert_eq!(names[real.as_str()]["name"], "s0", "{names}");
     assert!(!ask.exists(), "pergunta aberta apagada");
     assert!(!srv.pair.join("s0.json").exists(), "quem fechou saiu");
     assert_eq!(srv.groups.link("s1").await.unwrap().unwrap().peers, ["s2"]);

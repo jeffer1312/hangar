@@ -353,8 +353,10 @@ async fn close_session_refuses_itself_unknown_server_and_unknown() {
         let result = mcp.call("close_session", json!({"alvo": alvo})).await;
         assert!(failed(&result) && first_text(&result).contains(error), "{alvo}: {result}");
     }
-    assert!(!failed(&mcp.call("close_session", json!({"alvo": "outra"})).await));
-    assert_eq!(s.python.hits_to("/api/sessions/outra"), 1);
+    // Sem o registro das sessões (servidor subindo) o fechamento falha com código, nunca vai ao Python.
+    let closed = mcp.call("close_session", json!({"alvo": "outra"})).await;
+    assert!(failed(&closed), "{closed}");
+    assert_eq!(s.python.hits_to("/api/sessions/outra"), 0);
     let voice = hangar_server::voice::machines::voice_signature(SECRET).unwrap();
     let refused = Mcp::open(s.addr, &[("x-hangar-voice", &voice)]).await.call("close_session", json!({"alvo": "outra"})).await;
     assert!(failed(&refused) && first_text(&refused).contains("sim"), "fechar pela voz só com o sim falado");

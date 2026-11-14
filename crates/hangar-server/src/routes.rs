@@ -659,9 +659,8 @@ fn private_share_router(state: &Arc<AppState>, pair: Option<&Arc<PairState>>) ->
 
 async fn owner_only(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request,
                     next: axum::middleware::Next) -> Response {
-    if let Some(response) = crate::share::gate::preflight(&req) { return response; }
     let (fwd, owner) = match gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
-    // Quem não é o dono recebe a recusa do `pass`, sem chegar ao Python.
+    // Quem não é o dono recebe a recusa do `pass`, sem chegar ao Python; o preflight o porteiro do login já respondeu.
     if !owner || req.method() == Method::OPTIONS {
         return pass(&st, req, &fwd).await;
     }
