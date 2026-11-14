@@ -93,6 +93,8 @@ async fn questions_without_an_interaction_id_are_409_before_the_name() {
 async fn writes_to_a_shell_pane_are_refused_and_nothing_is_typed() {
     let rig = Rig::new().await;
     rig.pane("sh1", "bash --norc --noprofile");
+    // O prompt do bash aparece quando ele quer: espera-o, para a tela de antes já tê-lo.
+    rig.screen_shows("sh1", "$").await;
     let before = rig.tmux(&["capture-pane", "-p", "-t", "=sh1:"]);
     assert_eq!(post(&rig, "sh1/steer", r#"{"text":"oi"}"#).await, unbound());
     assert_eq!(post(&rig, "sh1/select", r#"{"option":1,"interaction_id":"i-1"}"#).await,
@@ -100,7 +102,9 @@ async fn writes_to_a_shell_pane_are_refused_and_nothing_is_typed() {
     for (route, body) in PANE_ROUTES {
         assert_eq!(post(&rig, &format!("sh1/{route}"), body).await, unbound(), "{route}");
     }
-    assert_eq!(rig.tmux(&["capture-pane", "-p", "-t", "=sh1:"]), before, "nada digitado no shell");
+    let after = rig.tmux(&["capture-pane", "-p", "-t", "=sh1:"]);
+    assert!(!after.contains("ls") && !after.contains("oi"), "nada digitado no shell: {after:?}");
+    assert_eq!(after, before, "a tela não mudou");
 }
 
 // R2-19..24, u3 e u4 (B6, decisão 6): o Python digitava no `claude login` e no Codex cru (Esc, número,

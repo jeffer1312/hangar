@@ -119,7 +119,8 @@ async fn post(server: std::net::SocketAddr, route: &str, body: &str, token: &str
 
 const ROUTES: &[&str] = &["input", "steer", "interrupt", "select", "select/submit", "answer", "keys", "term-input"];
 
-const CODEX_ROUTES: [&str; 8] = ["models", "model", "codex/mode", "service-tier", "question/skip", "codex-permissions", "codex/plan/implement", "codex/terminate"];
+// Só as que aceitam POST: `models` é só GET (a leitura vai no laço de baixo), e um POST nela não é escrita.
+const CODEX_ROUTES: [&str; 7] = ["model", "codex/mode", "service-tier", "question/skip", "codex-permissions", "codex/plan/implement", "codex/terminate"];
 
 /// Cada escrita do dono (POST das rotas de escrita e do Codex, mais fila e leituras do Codex), com a
 /// resposta que voltou; depois confere que nada chegou ao Python.
@@ -134,7 +135,7 @@ async fn every_write(python: &Fake, server: std::net::SocketAddr) -> Vec<(String
             .header("content-type", "application/json").header("authorization", format!("Bearer {OWNER}")).body(r#"{"text":"oi"}"#).send().await.unwrap();
         answers.push((format!("{method} {route}"), parse((response.status().as_u16(), response.text().await.unwrap()))));
     }
-    for route in ROUTES.iter().chain(&CODEX_ROUTES).chain(&["queue/e1", "limits"]) {
+    for route in ROUTES.iter().chain(&CODEX_ROUTES).chain(&["queue/e1", "limits", "models"]) {
         assert_eq!(python.hits_to(&format!("/api/sessions/s/{route}")), 0, "{route}: nada chega ao Python");
     }
     answers

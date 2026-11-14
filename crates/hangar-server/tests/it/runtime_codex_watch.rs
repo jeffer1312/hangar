@@ -2152,7 +2152,8 @@ async fn codex_terminal_turn_without_time_does_not_sleep() {
     assert!(registry.owns_codex_terminal("cx-proof") && fx.sidecar("cx-proof").unwrap().get("asleep").is_none());
 }
 
-/// Ler por uma rota do Codex uma sessão Claude adormecida não a acorda: segue ao Python, que a conhece.
+/// Ler por uma rota do Codex uma sessão Claude adormecida não a acorda: o Rust responde a recusa da rota
+/// (o 400 "só Codex" que o Python dava, R2-06/10/14), e o catálogo de comandos é o do Claude.
 #[tokio::test]
 async fn reading_a_codex_route_of_an_asleep_claude_wakes_nothing() {
     let fx = fixture();
@@ -2163,11 +2164,14 @@ async fn reading_a_codex_route_of_an_asleep_claude_wakes_nothing() {
     let registry = sleep_registry(&fx).await;
     registry.bind_watcher(fx.watcher());
     let (python,addr) = serve_owner(registry.clone()).await;
-    for route in ["models","commands","limits","codex-permissions"] {
-        let _ = crate::fake::client().get(format!("http://{addr}/api/sessions/cl/{route}"))
+    for (route,code) in [("models",Some("erro_models_so_codex")),("commands",None),("limits",Some("erro_limits_so_codex")),("codex-permissions",Some("erro_permissao_so_codex"))] {
+        let response = crate::fake::client().get(format!("http://{addr}/api/sessions/cl/{route}"))
             .header("authorization",format!("Bearer {}",crate::fake::OWNER)).send().await.unwrap();
-        // O catálogo de comandos do Claude é do Rust: só as outras rotas seguem ao Python.
-        assert_eq!(python.hits_to(&format!("/api/sessions/cl/{route}")),usize::from(route != "commands"),"{route}: segue ao Python");
+        let status = response.status().as_u16();
+        let body:Value = serde_json::from_str(&response.text().await.unwrap()).unwrap_or(Value::Null);
+        // O catálogo do Claude já era do Rust: aqui só importa que não acorda nem vai ao Python.
+        if let Some(code) = code { assert_eq!((status,body["detail"]["code"].as_str()),(400,Some(code)),"{route}: {body}"); }
+        assert_eq!(python.hits_to(&format!("/api/sessions/cl/{route}")),0,"{route}: nada ao Python");
     }
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert!(registry.waking_key("cl").is_none(),"nenhum acordar");

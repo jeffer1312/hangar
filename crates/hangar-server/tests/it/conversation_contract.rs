@@ -221,8 +221,13 @@ async fn claude_bridge_serves_input_answers_and_queue_of_a_rust_claude() {
     assert_eq!(call(reqwest::Method::POST, "s/input", r#"{"text":"oi"}"#, false).await.0, 404);
     // Sessão que o Rust não tem não entra pela ponte.
     assert_eq!(post("nada/input", json!({"text": "oi"}).to_string()).await.0, 421);
-    // Fora do recorte: aba Submit sem pane, outra rota, outro método, sessão desconhecida.
-    assert_eq!(post("s/select/submit", "{}".into()).await.0, 421);
+    // Aba Submit sem pane: o Python não tem mais a rota, e a recusa é do Rust (decisões 6 e 7), sem
+    // `interaction_id` primeiro e, com ele, a do picker ausente.
+    let (status, reply) = post("s/select/submit", "{}".into()).await;
+    assert_eq!((status, reply["detail"]["code"].as_str()), (409, Some(MISSING)), "{reply}");
+    let (status, reply) = post("s/select/submit", json!({"interaction_id": "i-1"}).to_string()).await;
+    assert_eq!((status, reply["detail"]["code"].as_str()), (409, Some("erro_opcao_nao_convergiu")), "{reply}");
+    // Fora do recorte: outra rota, outro método, sessão desconhecida.
     assert_eq!(post("s/not-a-route", "{}".into()).await.0, 421);
     assert_eq!(call(reqwest::Method::GET, "s/answer", "", true).await.0, 421);
     assert_eq!(post("nada/answer", json!({"answers": [option()]}).to_string()).await.0, 421);
@@ -248,36 +253,59 @@ async fn claude_bridge_serves_input_answers_and_queue_of_a_rust_claude() {
     }
 }
 
-/// O `DELETE` do Claude que entrou pelo Connect chega à ponte (`POST close`) e é encerrado pelo mesmo
-/// `kill_claude` da 8765: a entrada sai do Rust. O processo daqui não se comprova desta vida, então nada é
-/// morto e a resposta é 421, para o Python fechar pelo nome; sessão que o Rust não tem também é 421.
+/// Servidor do dono com a lista, o multiplexador e a conta numa pasta da prova: é o mesmo `DELETE` que o
+/// Connect usa (o aparelho troca a credencial pela do dono), sem a ponte `POST close`, que saiu.
+#[cfg(unix)]
+async fn owner_with_mux(registry: Arc<RuntimeRegistry>, home: &std::path::Path) -> (Arc<Fake>, std::net::SocketAddr) {
+    use hangar_server::list::bridge::{ListBridge, ListEnv, parse_dirs};
+    let mux = home.join("tmux");
+    // Nenhuma sessão no multiplexador: o `has-session` diz que ela não existe.
+    crate::write_executable(&mux, "#!/bin/sh\n[ \"$1\" = has-session ] && { echo \"can't find session: x\" >&2; exit 1; }\nexit 0\n".to_owned());
+    let (python, upstream) = fake::spawn_fake().await;
+    let mut state = hangar_server::routes::AppState::new(fake::config(upstream, "127.0.0.1"));
+    let text = home.to_string_lossy().into_owned();
+    state.accounts = hangar_server::accounts::AccountService::new(hangar_server::accounts::environment::AccountEnvironment::from_map(
+        [("HOME".to_owned(), text.clone()), ("USERPROFILE".to_owned(), text)].into()));
+    let dirs = parse_dirs(&json!({"home": home, "claude": home.join(".claude"), "codex_home": home.join(".codex"), "pi_sessions": home.join(".pi/agent/sessions"),
+        "omp_config": home.join(".omp"), "omp_agent": home.join(".omp/agent"), "kimi_home": home.join(".kimi-code")}).to_string());
+    assert!(dirs.is_some());
+    state.list = Arc::new(ListBridge::new(ListEnv { mux: hangar_server::list::mux::Mux::with_program(&mux, Duration::from_secs(5)),
+        capture_program: mux.clone().into_os_string(), procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs },
+        hangar_server::list::facts::FactsClient::new(upstream, SECRET.into())));
+    assert!(state.state.runtime.set(registry).is_ok());
+    (python, fake::spawn_state(state).await)
+}
+
+#[cfg(unix)]
+async fn delete(server: std::net::SocketAddr, name: &str) -> (u16, Value) {
+    let response = fake::client().delete(format!("http://{server}/api/sessions/{name}")).bearer_auth(OWNER).send().await.unwrap();
+    let status = response.status().as_u16();
+    (status, serde_json::from_str(&response.text().await.unwrap()).unwrap_or(Value::Null))
+}
+
+/// Decisão 4: o fechamento do Claude do Rust pelo Connect é o `DELETE` da 8765, com todas as limpezas: a
+/// entrada desta vida sai do Rust, a resposta é a do fechamento e nada vai ao Python; sessão que o Rust não
+/// tem fecha pelo nome (já acabou: 200).
+#[cfg(unix)]
 #[tokio::test]
 async fn connect_delete_of_a_rust_claude_closes_through_the_bridge() {
     let (dir, store) = (tempfile::tempdir().unwrap(), Arc::new(InteractionStore::default()));
     let (registry, _plugin) = registry_with_plugin(&store).await;
     open_headless(&registry, dir.path(), "s").await;
-    let (python, upstream) = fake::spawn_fake().await;
-    let state = hangar_server::routes::AppState::new(fake::config(upstream, "127.0.0.1"));
-    assert!(state.state.runtime.set(registry.clone()).is_ok());
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let private = listener.local_addr().unwrap();
-    let router = hangar_server::routes::terminal_router(Arc::new(state));
-    tokio::spawn(async move { axum::serve(listener, router.into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap() });
-    let close = |name: &'static str| async move {
-        fake::client().post(format!("http://{private}/__hangar_server/claude/{name}/close"))
-            .header("x-hangar-internal", SECRET).send().await.unwrap().status().as_u16()
-    };
-    assert_eq!(close("nada").await, 421);
-    assert_eq!(close("s").await, 421);
+    let home = tempfile::tempdir().unwrap();
+    let (python, server) = owner_with_mux(registry.clone(), home.path()).await;
+    assert_eq!(delete(server, "nada").await, (200, json!({"ok": true, "warning": null})));
+    let (status, body) = delete(server, "s").await;
+    assert_eq!(status, 200, "{body}");
     assert!(!registry.has_entry(None, "s").await, "o encerramento passou pelo Rust: a entrada desta vida saiu");
-    assert_eq!(python.hits_to("/api/sessions/s"), 0, "a ponte nunca devolve ao Python");
+    assert_eq!(python.hits_to("/api/sessions/s") + python.hits_to("/api/sessions/nada"), 0, "nunca vai ao Python");
 }
 
-/// O fechamento pela ponte recusado (409) deixa a sessão viva, e ela continua voltando no reboot; o 421 (o
-/// Python fecha pelo nome) a tira da fotografia, como o fechamento que deu certo.
+/// O fechamento recusado (409, troca de conversa em curso) deixa a sessão viva, e ela continua voltando no
+/// reboot; o que fecha de fato a tira da fotografia.
+#[cfg(unix)]
 #[tokio::test]
 async fn refused_connect_close_keeps_the_session_in_the_restore_snapshot() {
-    use hangar_server::list::bridge::{ListBridge, ListEnv, parse_dirs};
     let (dir, store) = (tempfile::tempdir().unwrap(), Arc::new(InteractionStore::default()));
     let (registry, _plugin) = registry_with_plugin(&store).await;
     open_headless(&registry, dir.path(), "s").await;
@@ -288,30 +316,13 @@ async fn refused_connect_close_keeps_the_session_in_the_restore_snapshot() {
         "k-nada": {"name": "nada", "provider": "claude", "conversation": null}}}).to_string()).unwrap();
     let names = || serde_json::from_slice::<Value>(&std::fs::read(&snapshot).unwrap()).unwrap()["sessions"].as_object().unwrap()
         .values().map(|entry| entry["name"].as_str().unwrap().to_owned()).collect::<Vec<_>>();
-    let (_python, upstream) = fake::spawn_fake().await;
-    let mut state = hangar_server::routes::AppState::new(fake::config(upstream, "127.0.0.1"));
-    let h = home.path();
-    let dirs = parse_dirs(&json!({"home": h, "claude": h.join(".claude"), "codex_home": h.join(".codex"), "pi_sessions": h.join(".pi/agent/sessions"),
-        "omp_config": h.join(".omp"), "omp_agent": h.join(".omp/agent"), "kimi_home": h.join(".kimi-code")}).to_string());
-    assert!(dirs.is_some());
-    state.list = Arc::new(ListBridge::new(ListEnv { mux: Default::default(), capture_program: "missing-test-mux".into(),
-        procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs },
-        hangar_server::list::facts::FactsClient::new(upstream, SECRET.into())));
-    assert!(state.state.runtime.set(registry.clone()).is_ok());
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let private = listener.local_addr().unwrap();
-    let router = hangar_server::routes::terminal_router(Arc::new(state));
-    tokio::spawn(async move { axum::serve(listener, router.into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap() });
-    let close = |name: &'static str| async move {
-        fake::client().post(format!("http://{private}/__hangar_server/claude/{name}/close"))
-            .header("x-hangar-internal", SECRET).send().await.unwrap().status().as_u16()
-    };
+    let (_python, server) = owner_with_mux(registry.clone(), home.path()).await;
     registry.ingress().hold("s", Duration::from_secs(1)).await.unwrap();
-    assert_eq!(close("s").await, 409);
+    assert_eq!(delete(server, "s").await.0, 409);
     assert!(names().contains(&"s".to_owned()), "recusado: a sessão viva segue na fotografia");
     registry.ingress().release("s");
-    assert_eq!(close("nada").await, 421);
-    assert!(!names().contains(&"nada".to_owned()), "421: o Python fecha pelo nome, e ela não volta no reboot");
+    assert_eq!(delete(server, "nada").await.0, 200);
+    assert!(!names().contains(&"nada".to_owned()), "fechada de fato, ela não volta no reboot");
 }
 
 /// O Reabrir (`/recarregar`) do Claude que entrou pelo Connect chega à ponte e é atendido pela mesma rota
