@@ -324,21 +324,22 @@ impl RepairHost for Repair {
 
     fn record(&self, outcome: &Outcome) {
         let plugin = outcome.id.as_str();
-        let (level, code, detail) = match &outcome.result {
+        // A saída da CLI fica só no log: o diário é exportável e leva só o código.
+        let (level, code) = match &outcome.result {
             Ok(_) if outcome.fixed => {
                 tracing::info!(code = "plugins_repaired", plugin, "plugins: pasta de instalação sumiu, plugin reinstalado");
-                ("aviso", "reinstalled", String::new())
+                ("aviso", "reinstalled")
             }
             Ok(_) => {
                 tracing::warn!(code = "plugins_repair_failed", plugin, "plugins: reinstalado pela CLI, mas a pasta não foi confirmada");
-                ("erro", "folder_not_confirmed", String::new())
+                ("erro", "folder_not_confirmed")
             }
             Err(error) => {
                 tracing::warn!(code = "plugins_repair_failed", plugin, %error, "plugins: pasta de instalação sumiu e a reinstalação falhou");
-                ("erro", error.code(), error.message().unwrap_or_default().chars().take(300).collect())
+                ("erro", error.code())
             }
         };
-        self.0.diag.record_line(json!({"evento": "plugins.repair", "nivel": level, "codigo": code, "plugin": plugin, "detalhe": detail}));
+        self.0.diag.record_line(json!({"evento": "plugins.repair", "nivel": level, "codigo": code, "plugin": plugin}));
     }
 }
 

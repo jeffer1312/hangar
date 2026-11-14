@@ -99,6 +99,8 @@ impl Repairer {
     /// cadeado e outras reinstalações.
     async fn pass(&mut self, host: &impl RepairHost, clock: impl Fn() -> Instant) -> Vec<Outcome> {
         let Some(missing) = host.missing().await else { return vec![] };
+        // Plugin que voltou por outro caminho recomeça a contagem: só falhas seguidas dobram a espera.
+        self.failed.retain(|id, _| missing.iter().any(|m| m.as_str() == id));
         let mut attempts = Vec::new();
         for id in missing {
             if self.failed.get(id.as_str()).is_some_and(|(at, times)| clock().duration_since(*at) < retry_after(*times)) {
@@ -239,6 +241,23 @@ mod tests {
         assert!(repairer.pass(&failing, || second + RETRY_AFTER).await.is_empty());
         assert_eq!(repairer.pass(&failing, || second + 2 * RETRY_AFTER).await.len(), 1);
         assert_eq!(failing.installs(), 3);
+    }
+
+    #[tokio::test]
+    async fn a_plugin_fixed_another_way_starts_counting_again() {
+        let mut repairer = Repairer::default();
+        let failing = Fake { result: || Err(PluginsError::CliTimeout), ..Fake::new(vec![Some(vec![id("a@m")])]) };
+        let start = Instant::now();
+        repairer.pass(&failing, || start).await;
+        repairer.pass(&failing, || start + RETRY_AFTER).await;
+        assert_eq!(repairer.failed["a@m"].1, 2);
+        assert!(repairer.pass(&Fake::new(vec![Some(vec![])]), || start + RETRY_AFTER).await.is_empty());
+        assert!(repairer.failed.is_empty());
+        // Quebrou de novo: a primeira falha nova espera só RETRY_AFTER.
+        let later = start + 10 * RETRY_AFTER;
+        repairer.pass(&failing, || later).await;
+        assert_eq!(repairer.failed["a@m"].1, 1);
+        assert_eq!(repairer.pass(&failing, || later + RETRY_AFTER).await.len(), 1);
     }
 
     #[tokio::test]
