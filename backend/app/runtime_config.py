@@ -1,6 +1,5 @@
 import copy
 import json
-import logging
 import os
 import tempfile
 import threading
@@ -234,54 +233,15 @@ _CAMPOS_AUX = ("jev_aux_base_url", "jev_aux_api_key", "jev_aux_modelo", "jev_aux
 
 
 def _jev_aux_legado(estrito: bool = False) -> dict[str, str]:
-    """Auxiliar de antes da configuração única, vindo INTEIRO de uma origem: o `jev_texto_*` do
-    navegador ou o `LLM_*` do Computer Use. Vale só enquanto nenhum `jev_aux_*` foi gravado.
-
-    As duas com o mesmo endereço e modelo são a mesma escolha: o campo vazio numa vem da outra (o
-    esforço só existe no Computer Use). Diferentes, vale a mais completa (empate: a do navegador), e o
-    diário registra; a do Computer Use fica guardada pelo `sync_jev` antes de ser trocada."""
+    """Auxiliar de antes da configuração única: o `jev_texto_*` do navegador. Vale só enquanto
+    nenhum `jev_aux_*` foi gravado."""
     d = _carregar()
     texto = {}
     if str(d.get("jev_texto_base_url") or "").strip():
         texto = dict(zip(_CAMPOS_AUX, (sem_chat_completions(str(d.get("jev_texto_base_url"))),
                                         str(d.get("jev_texto_api_key") or "").strip(),
                                         str(d.get("jev_texto_modelo") or "").strip(), "")))
-    from app import computer_control
-    try:
-        env = (computer_control._known_entry() or {}).get("env") or {}
-    except (OSError, computer_control.ComputerControlError) as e:
-        # Gravar sem ler o legado o perderia de vez: quem grava recusa. Só ler segue, sem derrubar a página.
-        if estrito:
-            raise ValueError(f"jev_aux: não consegui ler o modelo antigo do Computer Use ({e}); tente de novo") from e
-        logging.getLogger(__name__).warning("jev_aux: modelo do Computer Use ilegível: %s", e)
-        env = {}
-    mcp = {}
-    if str(env.get("LLM_PROXY_URL") or "").strip():
-        mcp = dict(zip(_CAMPOS_AUX, (sem_chat_completions(str(env["LLM_PROXY_URL"])),
-                                      str(env.get("LLM_PROXY_KEY") or "").strip(),
-                                      str(env.get("LLM_MODEL") or "").strip(),
-                                      str(env.get("LLM_EFFORT") or "").strip())))
-    if not (texto and mcp):
-        return texto or mcp
-    mesma = all(texto[c] == mcp[c] for c in ("jev_aux_base_url", "jev_aux_modelo")) and \
-        (not texto["jev_aux_api_key"] or not mcp["jev_aux_api_key"] or texto["jev_aux_api_key"] == mcp["jev_aux_api_key"])
-    if mesma:
-        return {c: texto[c] or mcp[c] for c in _CAMPOS_AUX}
-    completo = lambda o: sum(bool(o[c]) for c in _CAMPOS_AUX)
-    escolha, nome = (texto, "navegador") if completo(texto) >= completo(mcp) else (mcp, "Computer Use")
-    logging.getLogger(__name__).warning(
-        "jev_aux: o modelo auxiliar do navegador (%s, %s) e o do Computer Use (%s, %s) eram diferentes; vale o do %s",
-        texto["jev_aux_base_url"], texto["jev_aux_modelo"], mcp["jev_aux_base_url"], mcp["jev_aux_modelo"], nome)
-    return escolha
-
-
-def migrar_jev_aux() -> None:
-    """Grava o legado como `jev_aux_*` uma vez, para quem lê o arquivo direto (o Rust) ver o mesmo."""
-    if any(c in _carregar() for c, _ in JEV_AUX):
-        return
-    legado = {c: v for c, v in _jev_aux_legado(estrito=True).items() if v}
-    if legado:
-        aplicar(legado)
+    return texto
 
 
 def jev_aux() -> dict[str, str]:
@@ -605,12 +565,6 @@ def _aplicar_travado(mudancas: dict[str, Any], remover: set[str]) -> dict[str, A
     global _cache
     atual = _carregar()
     mudancas = dict(mudancas)
-    if mudancas.pop("jev_aux_cliproxy", None) is True:
-        from app import computer_control
-        chaves = computer_control._cliproxy_keys()
-        if not chaves:
-            raise ValueError("jev_aux_cliproxy: o ~/.cli-proxy-api/config.yaml não tem nenhuma api-key")
-        mudancas["jev_aux_api_key"] = chaves[0]
     tocou_aux = {c for c, _ in JEV_AUX} & (mudancas.keys() | remover)
     if tocou_aux and not any(c in atual for c, _ in JEV_AUX):
         # Primeira gravação: o legado vira arquivo, senão o campo que ficou de fora voltaria do legado.
@@ -675,13 +629,6 @@ def _aplicar_travado(mudancas: dict[str, Any], remover: set[str]) -> dict[str, A
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
         raise
-    if tocou_aux or {"jev_api_key", "jev_endpoint", "jev_model"} & (mudancas.keys() | remover):
-        from app import computer_control
-        try:
-            computer_control.sync_jev()
-        except (OSError, computer_control.ComputerControlError) as e:
-            # Gravado aqui e não lá: a tela mantém o rascunho e salvar de novo repete o repasse.
-            raise ValueError(f"jev: salvo, mas o Computer Use não recebeu a configuração: {e}") from e
     return atual
 
 

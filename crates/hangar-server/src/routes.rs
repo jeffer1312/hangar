@@ -918,6 +918,8 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         // Planos e catálogo de plugins e skills: o dono no Rust; o resto segue ao Python.
         .merge(crate::plans::routes::router())
         .merge(hangar_desktop_theme::router(hangar_core::edge::Edge { trusted: state.cfg.trusted.clone(), auth: state.auth.clone(), diag: state.diag.clone() }, state.desktop_theme.clone()))
+        // Exportar, importar e verificar atalhos: só o dono, nunca repassados (o Python não tem as rotas).
+        .merge(hangar_shortcut_transfer::router(hangar_core::edge::Edge { trusted: state.cfg.trusted.clone(), auth: state.auth.clone(), diag: state.diag.clone() }, Arc::new(crate::shortcut_transfer::ServerHost(state.clone()))))
         .route("/api/claude/customizations", get(crate::claude_customizations::catalog_route).fallback(pass_any))
         // Senha do chaveiro: só o dono, nunca repassada; só o preflight do CORS vai ao Python.
         .route("/api/keyring/unlock", axum::routing::post(crate::keyring::unlock_route).options(pass_any))
@@ -1219,6 +1221,11 @@ pub(crate) async fn pass_any(
         return crate::auxiliary::handle(State(st), ConnectInfo(peer), req).await;
     }
     let decoded_path=percent_encoding::percent_decode_str(req.uri().path()).decode_utf8_lossy();
+    // `%2F` ou `//` escapam do roteador: os atalhos continuam do Rust, nunca do Python.
+    if hangar_shortcut_transfer::owns_path(req.uri().path()) {
+        let edge=hangar_core::edge::Edge { trusted: st.cfg.trusted.clone(), auth: st.auth.clone(), diag: st.diag.clone() };
+        return hangar_shortcut_transfer::handle(edge,Arc::new(crate::shortcut_transfer::ServerHost(st.clone())),Some(peer),req).await;
+    }
     if crate::worktree_fetch::owns(&decoded_path) {
         return crate::worktree_fetch::route(st,peer,req).await;
     }
@@ -1354,6 +1361,9 @@ pub(crate) async fn pass_any(
     }
     if crate::reviews::matches(req.method(), req.uri().path()) {
         return crate::reviews::route(st, peer, req).await;
+    }
+    if crate::computer_control::matches(req.method(), req.uri().path()) {
+        return crate::computer_control::route(st, peer, req).await;
     }
     if crate::workspace_routes::matches(req.method(), req.uri().path()) {
         return crate::workspace_routes::public(st, peer, req).await;

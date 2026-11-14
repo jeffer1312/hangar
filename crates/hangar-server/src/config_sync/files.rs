@@ -353,25 +353,6 @@ fn replace_checked(
         }
     })
 }
-pub(super) fn write_file_checked(
-    path: &Path,
-    blob: &Blob,
-    expected: Option<&[u8]>,
-    link: Option<&Path>,
-) -> Result<(), Error> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| Error::invalid("arquivo sem pasta"))?;
-    std::fs::create_dir_all(parent)?;
-    let mut file = tempfile::Builder::new()
-        .prefix(".hangar-config-")
-        .tempfile_in(parent)?;
-    file.write_all(&blob.data)?;
-    file.as_file().sync_all()?;
-    chmod(file.path(), blob.mode)?;
-    let file = file.into_temp_path();
-    replace_checked(&file, path, expected, link)
-}
 #[cfg(test)]
 thread_local! {
     static PUBLICATION_RACE: std::cell::RefCell<Option<(PathBuf, Box<dyn FnOnce()>)>> = const {std::cell::RefCell::new(None)};

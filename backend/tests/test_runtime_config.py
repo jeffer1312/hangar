@@ -7,17 +7,12 @@ import json
 
 import pytest
 
-from app import computer_control as cc
 from app import runtime_config as rc
 
 
 @pytest.fixture(autouse=True)
 def _isola(tmp_path, monkeypatch):
     monkeypatch.setattr(rc, "_backend_config_base", lambda: tmp_path)
-    # Gravar o Jev repassa ao MCP do Computer Use: sem isto a chave de teste ia para o ~/.claude.json real.
-    monkeypatch.setattr(cc, "_config_files", lambda: [tmp_path / ".claude.json"])
-    monkeypatch.setattr(cc, "_main_file", lambda: tmp_path / ".claude.json")
-    monkeypatch.setattr(cc, "_parked_file", lambda: tmp_path / "computer-control.json")
     yield
 
 
@@ -275,16 +270,6 @@ def test_jev_aux_primeira_gravacao_leva_o_legado_e_valida():
         rc.aplicar({"jev_aux_base_url": "llm.exemplo"})
 
 
-def test_jev_aux_cliproxy_usa_a_chave_do_servidor(monkeypatch):
-    monkeypatch.setattr(cc, "_cliproxy_keys", lambda: [])
-    with pytest.raises(ValueError, match="jev_aux_cliproxy"):
-        rc.aplicar({"jev_aux_cliproxy": True})
-    monkeypatch.setattr(cc, "_cliproxy_keys", lambda: ["proxy-key"])
-    rc.aplicar({"jev_aux_base_url": "http://127.0.0.1:8317/v1", "jev_aux_cliproxy": True})
-    assert rc.get("jev_aux_api_key") == "proxy-key"
-    assert "jev_aux_cliproxy" not in rc.estado()
-
-
 def test_env_jev_ligado_leva_endpoint_e_modelo_do_jev():
     rc.aplicar({"jev_api_key": "sk-or-x", "jev_endpoint": "https://openrouter.ai/api/alpha/decisions",
                 "jev_model": "typesafe/jev-1.13-20260917"})
@@ -451,15 +436,3 @@ def test_whisper_configuration_requires_installed_files(field):
             "model_path": "/opt/ggml-small.bin", field: ""}
     with pytest.raises(ValueError, match=field):
         rc.aplicar({"transcription_providers": [item]})
-
-
-
-
-def test_jev_aux_primeira_gravacao_recusa_com_legado_ilegivel(monkeypatch):
-    def quebrado():
-        raise cc.ComputerControlError(500, "erro_computer_control_read", "ilegível")
-    monkeypatch.setattr(cc, "_known_entry", quebrado)
-    assert rc.jev_aux()["jev_aux_modelo"] == ""   # só ler não derruba
-    with pytest.raises(ValueError, match="modelo antigo"):
-        rc.aplicar({"jev_aux_modelo": "m"})
-    assert "jev_aux_modelo" not in rc._carregar()

@@ -6,7 +6,6 @@ import logging
 import os
 import re
 import secrets
-import subprocess
 import threading
 import time
 import urllib.parse
@@ -16,7 +15,7 @@ from contextlib import asynccontextmanager
 from dataclasses import asdict
 from pathlib import Path
 from typing import Literal, Optional
-from fastapi import FastAPI, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.gzip import GZipMiddleware
@@ -2775,78 +2774,6 @@ def term_input(name: str, body: TermInputBody):
     return {"ok": True}
 
 
-
-
-_DISPLAY_VARS = ("DISPLAY", "WAYLAND_DISPLAY", "XDG_CURRENT_DESKTOP", "HYPRLAND_INSTANCE_SIGNATURE")
-
-
-def _shortcut_env() -> dict[str, str]:
-    """Ambiente do atalho com as variaveis de tela do gerenciador systemd do usuario.
-
-    A unit do backend sobe antes do compositor exportar DISPLAY/WAYLAND_DISPLAY, entao o
-    ambiente herdado nao tem tela e programa grafico (xfreerdp3, editor) morre sem abrir janela.
-    O que o processo ja tiver vence; systemctl ausente (Windows, container) = ambiente herdado."""
-    env = os.environ.copy()
-    if os.name == "nt":
-        return env
-    try:
-        out = subprocess.run(["systemctl", "--user", "show-environment"],
-                             capture_output=True, text=True, errors="replace", timeout=3).stdout
-    except (OSError, subprocess.SubprocessError):
-        return env
-    for line in (out or "").splitlines():
-        key, _, value = line.partition("=")
-        if key in _DISPLAY_VARS and key not in env:
-            env[key] = value
-    return env
-
-
-
-
-
-
-class ShortcutImportBody(BaseModel):
-    # O conteudo do arquivo: `{"version": 1, "shortcuts": [...]}` ou a lista crua.
-    data: dict | list
-    apply: bool = False
-    # {id do atalho: {nome do marcador: valor}}. Nunca vai pro log.
-    secrets: dict[str, dict[str, str]] = Field(default_factory=dict)
-
-
-@app.get("/api/shortcuts/export", dependencies=[Depends(require_auth)])
-def shortcuts_export(ids: list[str] | None = Query(default=None), include_scripts: bool = True):
-    # Sem credencial: cada valor de segredo sai como marcador (app/shortcut_transfer.py).
-    from app import shortcut_transfer
-    try:
-        return shortcut_transfer.export_payload([] if ids == [""] else ids, include_scripts=include_scripts)
-    except ValueError as e:
-        raise HTTPException(400, detail=str(e))
-
-
-# POST: o import tem corpo e muda a config; o GET/POST e o par que o proxy da frente aceita.
-@app.post("/api/shortcuts/import", dependencies=[Depends(require_auth)])
-def shortcuts_import(body: ShortcutImportBody):
-    from app import shortcut_transfer
-    try:
-        return shortcut_transfer.import_shortcuts(body.data, apply=body.apply, secrets=body.secrets)
-    except ValueError as e:
-        raise HTTPException(400, detail=erro("erro_shortcut_import_invalido", str(e), motivo=str(e)))
-
-
-class ShortcutVerifyBody(BaseModel):
-    ids: list[str]
-    # Caminhos dos scripts instalados pela importação, citados no pedido de correção.
-    scripts: list[str] = Field(default_factory=list)
-
-
-@app.post("/api/shortcuts/verify", dependencies=[Depends(require_auth)])
-def shortcuts_verify(body: ShortcutVerifyBody):
-    from app import shortcut_transfer
-    return shortcut_transfer.run_checks(body.ids, body.scripts[:50], _shortcut_env())
-
-
-
-
 def _erro_conta_codex(exc: codex_accounts.AccountError) -> HTTPException:
     mensagens = {
         "codex_account_ambiguous_rollout": "a conversa Codex existe em mais de uma conta; escolha a conta",
@@ -2857,79 +2784,6 @@ def _erro_conta_codex(exc: codex_accounts.AccountError) -> HTTPException:
     }
     return HTTPException(exc.status, detail=erro(
         exc.code, mensagens.get(exc.code, "operação de arquivo Codex recusada"), **exc.params))
-
-
-# ── MCP hangar-computer-control: liga/desliga e configura nos .claude.json de todas as contas ──
-class ComputerControlBody(_StrictBody):
-    enabled: bool
-    mode: Literal["package", "local"] | None = None   # None = mantém o modo atual
-    project_dir: str = ""
-    agent_config: str = ""
-    # Cliente antigo: o modelo é o auxiliar da página Jev; igual passa, diferente volta erro.
-    llm_url: str = ""
-    llm_model: str = ""
-    llm_effort: str = ""
-    llm_key: str | None = None
-    jev_key: str | None = None     # cliente antigo: vazio passa, chave digitada volta erro (o Jev vem da página dele)
-    use_cliproxy_key: bool = False
-
-
-def _computer_control_call(fn, *a):
-    from app import computer_control as cc
-    try:
-        return fn(*a)
-    except cc.ComputerControlError as e:
-        raise HTTPException(e.status, detail=erro(e.code, e.msg, **e.params)) from None
-
-
-@app.get("/api/computer-control", dependencies=[Depends(require_auth)])
-def computer_control_get():
-    from app import computer_control as cc
-    return _computer_control_call(cc.state)
-
-
-@app.put("/api/computer-control", dependencies=[Depends(require_auth)])
-def computer_control_put(body: ComputerControlBody):
-    from app import computer_control as cc
-    return _computer_control_call(cc.save, body.model_dump())
-
-
-class ComputerControlTargetBody(_StrictBody):
-    project_dir: str
-    name: str
-    transport: Literal["ssh", "local"] = "ssh"
-    host: str = ""
-    proxy_command: str = ""
-    request_timeout: int | None = Field(default=None, ge=1, le=600)
-
-
-class ComputerControlTestHostBody(_StrictBody):
-    host: str
-    proxy_command: str = ""
-
-
-@app.post("/api/computer-control/test-host", dependencies=[Depends(require_auth)])
-def computer_control_test_host(body: ComputerControlTestHostBody):
-    from app import computer_control as cc
-    return _computer_control_call(cc.test_host, body.host, body.proxy_command)
-
-
-@app.get("/api/computer-control/windows-setup", dependencies=[Depends(require_auth)])
-def computer_control_windows_setup(host: str = ""):
-    from app import computer_control as cc
-    return _computer_control_call(cc.windows_setup, host)
-
-
-@app.post("/api/computer-control/install", dependencies=[Depends(require_auth)])
-def computer_control_install():
-    from app import computer_control as cc
-    return _computer_control_call(cc.install)
-
-
-@app.post("/api/computer-control/targets", dependencies=[Depends(require_auth)])
-def computer_control_new_target(body: ComputerControlTargetBody):
-    from app import computer_control as cc
-    return _computer_control_call(cc.create_target, body.model_dump())
 
 
 class AnswerItem(_StrictBody):

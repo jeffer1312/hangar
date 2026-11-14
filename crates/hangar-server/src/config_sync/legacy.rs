@@ -16,7 +16,7 @@ pub fn read_object(path:&Path)->Result<Map<String,Value>,String> {
     value.as_object().cloned().ok_or_else(||format!("{} não é um objeto JSON",path.display()))
 }
 
-fn text(value:Option<&Value>)->String {
+pub(super) fn text(value:Option<&Value>)->String {
     match value.filter(|v|truthy(v)) {
         Some(Value::String(value))=>value.trim().into(),
         Some(value)=>crate::orchestration::codec::python_string(value).trim().into(),
@@ -39,14 +39,9 @@ impl RuntimeConfig {
     pub fn legacy_aux(&self,current:&Map<String,Value>,strict:bool)->Result<Map<String,Value>,String> {
         let url=text(current.get("jev_texto_base_url"));
         let browser=if url.is_empty(){Map::new()}else{values(url,text(current.get("jev_texto_api_key")),text(current.get("jev_texto_modelo")),String::new())};
-        let known=(|| {
-            let path=self.env.home.join(".claude.json");
-            let active=read_object(&path)?;
-            let servers=active.get("mcpServers").filter(|v|truthy(v));
-            if servers.is_some_and(|v|!v.is_object()) {return Err(format!("mcpServers em {} não é um objeto JSON",path.display()));}
-            if let Some(entry)=servers.and_then(|v|v.get("hangar-computer-control")).and_then(Value::as_object) {return Ok(entry.clone());}
-            read_object(&self.env.home.join(".hangar/computer-control.json"))
-        })();
+        // O leitor do Computer Use aceita o surrogate solto que o Claude Code grava no `.claude.json`.
+        let paths=hangar_computer_control_setup::Paths::new(self.env.home.clone(),Vec::new());
+        let known=hangar_computer_control_setup::known_entry(&paths).map(Option::unwrap_or_default).map_err(|e|e.msg);
         let known=match known {
             Ok(entry)=>entry,
             Err(error) if strict=>return Err(format!("jev_aux: não consegui ler o modelo antigo do Computer Use ({error}); tente de novo")),

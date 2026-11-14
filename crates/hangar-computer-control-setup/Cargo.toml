@@ -1,0 +1,23 @@
+[package]
+name = "hangar-computer-control-setup"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+hangar-core.workspace = true
+hangar-update-news = { path = "../hangar-update-news" }
+regex.workspace = true
+# Mesmas features do hangar-core: sem elas, compilar este crate sozinho guarda outra cópia do reqwest.
+reqwest = { workspace = true, features = ["rustls", "multipart"] }
+semver.workspace = true
+serde = { workspace = true, features = ["alloc"] }
+serde_json = { workspace = true, features = ["float_roundtrip", "alloc", "unbounded_depth", "arbitrary_precision", "raw_value"] }
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt", "macros", "process", "time"] }
+tracing = { workspace = true }
+
+[dev-dependencies]
+axum = { workspace = true }
+proptest.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net"] }
