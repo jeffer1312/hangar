@@ -151,11 +151,13 @@ async fn run(command: &str, env: &BTreeMap<String, String>, home: &Path, shell: 
         let _ = child.wait().await;
         return Err(error);
     }
-    let (code, error) = match tokio::time::timeout(timeout, child.wait()).await {
-        Ok(status) => {
+    // Espera sem recolher o líder: recolhido, o número do grupo pode ir a outro processo antes do `finish`.
+    let (code, error) = match tokio::time::timeout(timeout, hangar_core::terminal_process::leader_exited(&mut child)).await {
+        Ok(exited) => {
+            exited?;
             // Filho deixado em segundo plano escreveria na saída durante a leitura: o grupo acaba antes.
             hangar_core::terminal_process::finish(&mut tree).await;
-            (exit_code(status?), None)
+            (exit_code(child.wait().await?), None)
         }
         Err(_) => {
             // Matar só o shell deixaria os filhos dele rodando sem dono.
