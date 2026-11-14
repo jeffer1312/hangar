@@ -691,17 +691,22 @@ rodar_passos() {   # $1 = sha, resto = passos; cwd = árvore preparada
         LIMPO=(env PATH="$py:$PATH" "${CARGO_ENV[@]}" CARGO_INCREMENTAL=0)
     fi
 
-    local p ini dur log falhou=0 resumo=()
+    local p ini dur log roteiro falhou=0 resumo=()
     for p in "$@"; do
         log="$LOGS/${sha:0:10}-$SO-$p.log"
         echo ">> $SO: $p…" >&3
         ini=$SECONDS
+        # Por arquivo: as funções mais a lista de arquivos de um diff grande passam do limite de um
+        # argumento só (128 KB no Linux), e o `bash -c` nem começava.
+        roteiro="${log%.log}.roteiro"
+        { declare -f; declare -p RUNTIME_TESTS PROCESSOS PLANO ARQUIVOS HANGAR_VERIFICAR_BASE MEM_CHECK_GB MEM_BUILD_GB MEMORY_WAIT; echo "passo_$p"; } > "$roteiro"
         # setsid no Linux: o passo vira grupo próprio e o vigia mata a árvore inteira.
-        "${LIMPO[@]}" SO="$SO" $SETSID bash -c "$(declare -f); $(declare -p RUNTIME_TESTS PROCESSOS PLANO ARQUIVOS HANGAR_VERIFICAR_BASE MEM_CHECK_GB MEM_BUILD_GB MEMORY_WAIT); passo_$p" >"$log" 2>&1 &
+        "${LIMPO[@]}" SO="$SO" $SETSID bash "$roteiro" >"$log" 2>&1 &
         local spid=$! vigia rc
         vigiar_disco "$spid" "$log" &
         vigia=$!
         wait "$spid"; rc=$?
+        rm -f "$roteiro"
         kill "$vigia" 2>/dev/null; wait "$vigia" 2>/dev/null
         if (( rc == 0 )); then
             dur=$((SECONDS - ini)); resumo+=("ok      $p ${dur}s")
@@ -838,7 +843,10 @@ podar_target() {   # $1 = target, $2 = teto em KB
     while (( usado > teto )) && read -r _ tamanho caminho; do
         rm -f "$caminho"
         usado=$(( usado - tamanho ))
-    done < <(find "$dir/debug/deps" -maxdepth 1 -type f -perm -u+x -printf '%T@ %k %p\n' 2>/dev/null | sort -n)
+    done < <({ find "$dir/debug/deps" -maxdepth 1 -type f -perm -u+x -printf '%T@ %k %p\n'
+               # Layout novo do cargo: build/<pacote>/<hash>/out/. Script de build fica.
+               find "$dir/debug/build" -mindepth 4 -maxdepth 4 -path '*/out/*' -type f -perm -u+x \
+                   ! -name 'build_script_*' ! -name 'build-script-*' -printf '%T@ %k %p\n'; } 2>/dev/null | sort -n)
     usado="$(du -sk "$dir" | awk '{print $1}')"
     if (( usado > teto )); then
         echo "verificar-local: a poda não bastou; apagando $dir (a rodada compila do zero)."

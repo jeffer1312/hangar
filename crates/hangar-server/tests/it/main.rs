@@ -83,11 +83,13 @@ mod shortcut_transfer;
 /// loopback nova (um detector de servidor local manda `HEAD /`): o falso não conta o que não é rota.
 pub fn app_route(path: &str) -> bool { path.starts_with("/api/") || path.starts_with("/internal/") }
 
-/// O `hangar-cano` de `target/<perfil>/`, ao lado de `deps/` (o binário de outro crate não tem
-/// `CARGO_BIN_EXE_*`), fixado no servidor sem mexer no ambiente do processo.
+/// O `hangar-cano` de `target/<perfil>/`, a primeira pasta acima deste executável que o tem (o
+/// binário de outro crate não tem `CARGO_BIN_EXE_*`, e quantos níveis acima depende do layout do
+/// cargo), fixado no servidor sem mexer no ambiente do processo.
 pub fn use_cano_bin() {
-    let bin = std::env::current_exe().unwrap().parent().unwrap().parent().unwrap().join("hangar-cano");
-    assert!(bin.exists(), "rode `cargo build -p hangar-cano` antes: {}", bin.display());
+    let exe = std::env::current_exe().unwrap();
+    let bin = exe.ancestors().skip(1).map(|dir| dir.join("hangar-cano")).find(|bin| bin.is_file())
+        .unwrap_or_else(|| panic!("rode `cargo build -p hangar-cano` antes: nenhum acima de {}", exe.display()));
     if let Err(other) = hangar_server::runtime::process::use_cano_binary(bin) {
         panic!("o cano já tinha sido resolvido para {}", other.display());
     }

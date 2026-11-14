@@ -37,6 +37,19 @@ for fingerprints in "$build"/*/.fingerprint "$build"/*/*/.fingerprint; do
         done
     done
 done
+# Layout novo do cargo: o fingerprint de cada unidade fica em <perfil>/build/<pacote>/<hash>/fingerprint.
+for local_name in "${names[@]}"; do
+    for entry in "$build"/*/build/"$local_name"/*/fingerprint "$build"/*/*/build/"$local_name"/*/fingerprint; do
+        if [[ -L "$entry" ]]; then
+            rm -- "$entry"
+        elif [[ -d "$entry" ]]; then
+            rm -r -- "$entry"
+        else
+            continue
+        fi
+        removed=$((removed+1))
+    done
+done
 # Uma compilação falha também pode deixar artefatos desta árvore no target comum.
 temporary=$(mktemp "$build/.hangar-cargo-workspace.XXXXXX")
 trap 'rm -f -- "$temporary"' EXIT
