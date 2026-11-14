@@ -236,8 +236,11 @@ fn save(host: &dyn Host, machine: &Machine, scripts: &[Script], incoming: &[Valu
         result
     };
     if scripts.is_empty() {
-        write()?;
-        return Ok(counts);
+        let Err(cause) = write() else { return Ok(counts) };
+        // Falha depois de a lista ser gravada: desfeita como no ramo com scripts.
+        let Some((serialized, before)) = &written else { return Err(cause) };
+        let config_undo = host.undo(serialized, before).err();
+        return Err(import_failed(machine, &cause, &[], config_undo.as_deref()));
     }
     let Err((cause, not_restored)) = scripts::apply_files(&machine.home, scripts, write) else {
         return Ok(counts);

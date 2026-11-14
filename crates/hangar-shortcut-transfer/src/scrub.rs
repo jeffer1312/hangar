@@ -85,12 +85,14 @@ static PASS_WORD: LazyLock<regex::Regex> = LazyLock::new(|| plain(r"(?i)(?:^|_)p
 /// `fish` usa as aspas simples do fish; `shell = false` é conteúdo de outra linguagem.
 pub fn scrub(text: &str, fish: bool, shell: bool) -> (String, Vec<String>) {
     let mut names = Vec::new();
-    match scrub_into(text, fish, shell, &mut names) {
+    // Marcador que já está no texto não é reaproveitado: dois segredos nunca dividem um nome.
+    let taken = placeholder_names(text);
+    match scrub_into(text, fish, shell, &mut names, &taken) {
         Ok(text) => (text, names),
         // Regex que estoura o limite de retrocesso: o texto inteiro sai como segredo, nunca cru.
         Err(_) => {
             names.clear();
-            let marker = mark(&mut names, "segredo");
+            let marker = mark(&mut names, &[], "segredo");
             (marker, names)
         }
     }
@@ -115,7 +117,7 @@ pub(crate) fn fill(text: &str, value: impl Fn(&str) -> Option<String>) -> String
         .into_owned()
 }
 
-fn scrub_into(text: &str, fish: bool, shell: bool, names: &mut Vec<String>) -> Result<String, fancy_regex::Error> {
+fn scrub_into(text: &str, fish: bool, shell: bool, names: &mut Vec<String>, taken: &[String]) -> Result<String, fancy_regex::Error> {
     let dialect = match (shell, fish) {
         (false, _) => Dialect::Literal,
         (true, true) => Dialect::Fish,
@@ -124,38 +126,52 @@ fn scrub_into(text: &str, fish: bool, shell: bool, names: &mut Vec<String>) -> R
     let rules = &RULES[dialect as usize];
     let mut text = text.to_owned();
     for rule in rules {
-        text = substitute(rule, &text, fish, shell, names)?;
+        text = substitute(rule, &text, fish, shell, names, taken)?;
     }
     if shell {
-        text = substitute(&FISH_SET, &text, fish, shell, names)?;
+        text = substitute(&FISH_SET, &text, fish, shell, names, taken)?;
     }
     let mut out = String::with_capacity(text.len());
     let mut last = 0;
     for found in TOKEN.find_iter(text.as_str()) {
         let found = found?;
         out.push_str(&text[last..found.start()]);
-        out.push_str(&mark(names, "token"));
+        out.push_str(&mark(names, taken, "token"));
         last = found.end();
     }
     out.push_str(&text[last..]);
     Ok(out)
 }
 
-fn substitute(rule: &Rule, text: &str, fish: bool, shell: bool, names: &mut Vec<String>) -> Result<String, fancy_regex::Error> {
+fn substitute(
+    rule: &Rule,
+    text: &str,
+    fish: bool,
+    shell: bool,
+    names: &mut Vec<String>,
+    taken: &[String],
+) -> Result<String, fancy_regex::Error> {
     let mut out = String::with_capacity(text.len());
     let mut last = 0;
     for captures in rule.regex.captures_iter(text) {
         let captures = captures?;
         let whole = captures.get(0).expect("grupo 0 de toda captura");
         out.push_str(&text[last..whole.start()]);
-        out.push_str(&replacement(&captures, rule.kind, fish, shell, names));
+        out.push_str(&replacement(&captures, rule.kind, fish, shell, names, taken)?);
         last = whole.end();
     }
     out.push_str(&text[last..]);
     Ok(out)
 }
 
-fn replacement(captures: &Captures<'_, str>, kind: Kind, fish: bool, shell: bool, names: &mut Vec<String>) -> String {
+fn replacement(
+    captures: &Captures<'_, str>,
+    kind: Kind,
+    fish: bool,
+    shell: bool,
+    names: &mut Vec<String>,
+    taken: &[String],
+) -> Result<String, fancy_regex::Error> {
     let whole = captures.get(0).expect("grupo 0 de toda captura");
     let found = captures.name("v").expect("toda regra tem o valor");
     let token = found.as_str();
@@ -163,8 +179,15 @@ fn replacement(captures: &Captures<'_, str>, kind: Kind, fish: bool, shell: bool
     let quoted = if fish || !shell || fish_rule { &QUOTED_FISH } else { &QUOTED_BASH };
     let quote = quoted.is_match(token).then(|| token.chars().next().expect("valor entre aspas"));
     let value = if quote.is_some() { &token[1..token.len() - 1] } else { token };
+    let source = whole.as_str();
+    let (start, end) = (found.start() - whole.start(), found.end() - whole.start());
     if is_reference(value, quote, fish || fish_rule, shell) {
-        return whole.as_str().to_owned();
+        if PLACEHOLDER_FULL.is_match(value) || VARIABLE.is_match(value) {
+            return Ok(source.to_owned());
+        }
+        // Substituição de comando fica, mas o que ela traz dentro (`$(API_KEY=valor cmd)`) é varrido.
+        let inner = scrub_into(token, fish, shell, names, taken)?;
+        return Ok(format!("{}{inner}{}", &source[..start], &source[end..]));
     }
     let base = match kind {
         Kind::Fixed(base) => base.to_owned(),
@@ -175,20 +198,18 @@ fn replacement(captures: &Captures<'_, str>, kind: Kind, fish: bool, shell: bool
         Kind::Env | Kind::FishSet => {
             let name = captures.name("name").map(|m| m.as_str()).unwrap_or_default();
             if !secret_name(name) {
-                return whole.as_str().to_owned();
+                return Ok(source.to_owned());
             }
             name.to_owned()
         }
     };
-    let marker = mark(names, &base);
+    let marker = mark(names, taken, &base);
     let marker = match quote {
         Some(quote) => format!("{quote}{marker}{quote}"),
         None if !shell => format!("'{marker}'"),
         None => marker,
     };
-    let source = whole.as_str();
-    let (start, end) = (found.start() - whole.start(), found.end() - whole.start());
-    format!("{}{marker}{}", &source[..start], &source[end..])
+    Ok(format!("{}{marker}{}", &source[..start], &source[end..]))
 }
 
 fn is_reference(value: &str, quote: Option<char>, fish: bool, shell: bool) -> bool {
@@ -208,11 +229,17 @@ fn secret_name(name: &str) -> bool {
     SECRET_WORDS.iter().any(|word| lower.contains(word)) || PASS_WORD.is_match(name)
 }
 
-/// Dois segredos do mesmo tipo no mesmo texto ganham nomes distintos (`senha`, `senha_2`).
-fn mark(names: &mut Vec<String>, base: &str) -> String {
+/// Dois segredos do mesmo tipo no mesmo texto ganham nomes distintos (`senha`, `senha_2`); nome já usado
+/// (`token_2` vindo de uma variável) ou já no texto (`taken`) passa ao número seguinte.
+fn mark(names: &mut Vec<String>, taken: &[String], base: &str) -> String {
     let prefix = format!("{base}_");
     let count = names.iter().filter(|name| *name == base || name.starts_with(&prefix)).count();
-    let name = if count == 0 { base.to_owned() } else { format!("{base}_{}", count + 1) };
+    let mut name = if count == 0 { base.to_owned() } else { format!("{base}_{}", count + 1) };
+    let mut next = count + 1;
+    while names.contains(&name) || taken.contains(&name) {
+        next += 1;
+        name = format!("{base}_{next}");
+    }
     let marker = format!("⟦SEGREDO:{name}⟧");
     names.push(name);
     marker

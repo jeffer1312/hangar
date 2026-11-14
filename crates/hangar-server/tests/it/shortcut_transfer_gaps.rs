@@ -332,6 +332,25 @@ async fn export_total_limit_is_one_mebibyte() {
     assert_eq!(body["removed"], 0);
 }
 
+/// Os limites valem depois da varredura: script de 128 KiB cujo segredo vira um marcador maior fica
+/// fora com aviso, e o pacote exportado é aceito pela importação.
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread")]
+async fn export_limits_apply_after_the_scrub() {
+    let scene = Scene::new();
+    let head = "#!/bin/sh\nPASSWORD=a\n#";
+    let content = format!("{head}{}\n", "x".repeat(128 * 1024 - head.len() - 1));
+    assert_eq!(content.len(), 128 * 1024);
+    scene.script(".local/bin/big", content.as_bytes(), 0o700);
+    scene.save(shell("big"));
+    let (status, body) = scene.export("").await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["scripts"], json!([]));
+    assert_eq!(body["warnings"], json!([format!("{EXCLUDED} Caminho: ⟦HOME⟧/.local/bin/big")]));
+    let (status, preview) = scene.import(json!({"data": body})).await;
+    assert_eq!(status, 200, "{preview}");
+}
+
 /// ATA-60: arquivo sem bit de execução vai com `executable: false`.
 #[cfg(target_os = "linux")]
 #[tokio::test(flavor = "multi_thread")]

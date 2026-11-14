@@ -420,6 +420,26 @@ fn scrub_table_matches_the_python() {
     }
 }
 
+/// A substituição de comando fica, mas o segredo de dentro vira marcador; referência simples fica.
+#[test]
+fn scrub_reaches_inside_command_substitutions() {
+    assert_eq!(scrub("PASSWORD=$(API_KEY=valor_secreto helper)", false, true),
+        ("PASSWORD=$(API_KEY=⟦SEGREDO:API_KEY⟧ helper)".to_owned(), vec!["API_KEY".to_owned()]));
+    assert_eq!(scrub("PASSWORD=\"`TOKEN=t1 helper`\"", false, true),
+        ("PASSWORD=\"`TOKEN=⟦SEGREDO:TOKEN⟧ helper`\"".to_owned(), vec!["TOKEN".to_owned()]));
+    assert_eq!(scrub("PASSWORD=$API_KEY run", false, true), ("PASSWORD=$API_KEY run".to_owned(), vec![]));
+}
+
+/// Cada segredo ganha um nome que não está em uso nem já no texto: dois locais nunca dividem um valor.
+#[test]
+fn scrub_never_reuses_a_marker_name() {
+    let token = fake("ghp_");
+    assert_eq!(scrub(&format!("token_2=segredo_a; echo {token}"), false, true),
+        ("token_2=⟦SEGREDO:token_2⟧; echo ⟦SEGREDO:token_3⟧".to_owned(), vec!["token_2".to_owned(), "token_3".to_owned()]));
+    assert_eq!(scrub("cli --token ⟦SEGREDO:token⟧ --auth-token abc", false, true),
+        ("cli --token ⟦SEGREDO:token⟧ --auth-token ⟦SEGREDO:token_2⟧".to_owned(), vec!["token_2".to_owned()]));
+}
+
 /// Classes do `re` do Python: `\s` cobre \x1c-\x1f, `\w` cobre `²` e não cobre marca combinante, e o
 /// `\b` segue esse `\w`. Esperado tirado do `scrub` do Python (ponta `7ef9011ba`).
 #[test]
@@ -1406,6 +1426,45 @@ async fn import_undo_failure_is_reported() {
     assert_eq!(result, Err(Error::Io(format!("{RESTORED}; restauração dos atalhos na configuração falhou"))));
 }
 
+/// Duas importações no mesmo script: B começa enquanto A ainda vai falhar. O desfazer de A nunca grava o
+/// original por cima de B concluída, porque B só escreve depois de A terminar.
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_failed_import_never_restores_over_a_concurrent_one() {
+    let scene = Scene::new();
+    let demo = scene.script(".local/bin/demo", "original", 0o700);
+    let second: Arc<std::sync::Mutex<Option<std::thread::JoinHandle<Result<Value, Error>>>>> = Arc::default();
+    let (state, slot) = (scene.state.clone(), second.clone());
+    let mut host = Injected::new(&scene);
+    host.after_save = Some(Box::new(move |_: &Path| {
+        let state = state.clone();
+        *slot.lock().unwrap() = Some(std::thread::spawn(move || {
+            hangar_shortcut_transfer::import(&ServerHost(state), request(bundle("echo B", ".local/bin/demo", true), true, json!({})))
+        }));
+        Err(Error::Io("failed after write".into()))
+    }));
+    let result = hangar_shortcut_transfer::import(&host, request(bundle("echo A", ".local/bin/demo", true), true, json!({})));
+    assert_eq!(result, Err(Error::Io(RESTORED.into())));
+    let b = second.lock().unwrap().take().expect("B começou").join().unwrap();
+    assert!(b.is_ok(), "{b:?}");
+    assert_eq!(std::fs::read_to_string(&demo).unwrap(), "echo B");
+}
+
+/// Pacote sem scripts que falha depois de gravar a lista: a lista volta, como no ramo com scripts.
+#[tokio::test(flavor = "multi_thread")]
+async fn import_without_scripts_undoes_the_list_after_a_failure() {
+    let scene = Scene::new();
+    scene.save(json!([{"id": "old", "type": "send_text", "label": "Old", "text": "old"}]));
+    let before = scene.saved();
+    let mut host = Injected::new(&scene);
+    host.after_save = Some(Box::new(|_: &Path| Err(Error::Io("failed after write".into()))));
+    let data = json!([{"id": "new", "type": "send_text", "label": "New", "text": "new"}]);
+    let result = hangar_shortcut_transfer::import(&host, request(data, true, json!({})));
+    assert_eq!(result, Err(Error::Io(RESTORED.into())));
+    assert!(host.undone.load(Ordering::SeqCst));
+    assert_eq!(scene.saved(), before);
+}
+
 // ── R7c: verify ──────────────────────────────────────────────────────────────────────────────────
 
 fn verify_scene() -> Scene {
@@ -1572,6 +1631,22 @@ async fn verify_timeout_kills_the_whole_group() {
         }
     }
     panic!("filho em segundo plano sobreviveu ao estouro do prazo");
+}
+
+/// O shell sai normal e deixa um filho em segundo plano: o grupo acaba antes de a saída ser lida.
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread")]
+async fn verify_normal_exit_ends_the_background_children() {
+    let scene = verify_scene();
+    let pidfile = scene.home.join("child.pid");
+    let command = format!("sleep 30 & echo $! > {}; echo pronto", pidfile.display());
+    scene.save(json!([{"id": "s", "type": "shell", "label": "S", "command": "s", "verify": command}]));
+    let body = hangar_shortcut_transfer::run_checks(&scene.host(), &["s".into()], &[], std::time::Duration::from_secs(20)).await.unwrap();
+    assert_eq!((body["checks"][0]["code"].clone(), body["checks"][0]["output"].clone()), (json!(0), json!("pronto\n")), "{body}");
+    let pid = std::fs::read_to_string(&pidfile).unwrap().trim().to_owned();
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat"));
+    let zombie = stat.as_ref().is_ok_and(|text| text.rsplit_once(')').is_some_and(|(_, tail)| tail.split_whitespace().next() == Some("Z")));
+    assert!(stat.is_err() || zombie, "filho em segundo plano sobreviveu à saída do shell");
 }
 
 /// D7.5: erro inesperado do verify vira `Io`, que a rota responde 500 `erro_shortcut_verify_io`.

@@ -233,6 +233,9 @@ pub(crate) fn apply_files(
     scripts: &[Script],
     save: impl FnOnce() -> Result<(), Error>,
 ) -> Result<(), (Error, Vec<String>)> {
+    // Uma importação com scripts por vez: o desfazer de uma nunca grava o original por cima de outra concluída.
+    static IMPORTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _turn = IMPORTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut backups: Vec<(PathBuf, Option<Vec<u8>>, u32)> = Vec::new();
     let mut created = Vec::new();
     let Err(cause) = write_all(home, scripts, &mut backups, &mut created).and_then(|()| save()) else {
@@ -395,10 +398,12 @@ impl Collector<'_> {
         if self.scripts.len() >= MAX_FILES {
             return None;
         }
-        let raw = read_file(&target).ok()?;
-        let size = raw.len();
-        let content = String::from_utf8(raw).ok()?;
-        (self.total + size <= MAX_TOTAL_BYTES).then_some((target, size, content))
+        let content = String::from_utf8(read_file(&target).ok()?).ok()?;
+        // Os limites valem para o que o export entrega: o marcador do segredo pode ser maior que ele.
+        let fish = is_fish(&content, Some(relative), self.machine);
+        let exported = scrub(&content, fish, is_shell_script(&content, Some(relative))).0;
+        let size = hangar_core::path_markers::canonicalize(&exported, &self.machine.roots).len();
+        (size <= MAX_FILE_BYTES && self.total + size <= MAX_TOTAL_BYTES).then_some((target, size, content))
     }
 
     /// Só caminho literal entra no aviso; argv e atribuição podem trazer uma senha.

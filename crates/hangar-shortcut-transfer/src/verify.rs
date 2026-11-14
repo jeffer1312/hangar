@@ -152,7 +152,11 @@ async fn run(command: &str, env: &BTreeMap<String, String>, home: &Path, shell: 
         return Err(error);
     }
     let (code, error) = match tokio::time::timeout(timeout, child.wait()).await {
-        Ok(status) => (exit_code(status?), None),
+        Ok(status) => {
+            // Filho deixado em segundo plano escreveria na saída durante a leitura: o grupo acaba antes.
+            hangar_core::terminal_process::finish(&mut tree).await;
+            (exit_code(status?), None)
+        }
         Err(_) => {
             // Matar só o shell deixaria os filhos dele rodando sem dono.
             if let Err(error) = tree.terminate() {
