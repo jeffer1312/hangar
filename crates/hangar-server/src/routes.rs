@@ -417,6 +417,7 @@ pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest:
     let _session_restore = crate::session_open::restore::spawn(state.clone(),restoration.clone()).map(crate::AbortOnDrop);
     if _session_restore.is_none() {restoration.finish();}
     let _scheduled_tasks=crate::AbortOnDrop(crate::scheduled_tasks::spawn(state.clone(),restoration));
+    let _dream_clock = crate::AbortOnDrop(crate::dream::spawn(state.clone()));
     let _group_sweep = crate::groups::sweep::spawn(state.clone()).map(crate::AbortOnDrop);
     let _link_return = crate::groups::link_return::spawn(state.clone()).map(crate::AbortOnDrop);
     let _session_sleep = crate::AbortOnDrop(crate::session_sleep::spawn(state.clone()));
@@ -1372,6 +1373,9 @@ pub(crate) async fn pass_any(
     }
     if crate::reviews::matches(req.method(), req.uri().path()) {
         return crate::reviews::route(st, peer, req).await;
+    }
+    if crate::dream::routes::matches(req.method(), req.uri().path()) {
+        return crate::dream::routes::route(st, peer, req).await;
     }
     if crate::computer_control::matches(req.method(), req.uri().path()) {
         return crate::computer_control::route(st, peer, req).await;

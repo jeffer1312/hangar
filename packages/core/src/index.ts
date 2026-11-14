@@ -86,3 +86,4 @@ export * from './passwordVault';
 export * from './plugins';
 
 export * from './scheduledTasks';
+export * from './dream';

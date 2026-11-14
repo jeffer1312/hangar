@@ -114,6 +114,7 @@ pub mod plans;
 mod forwarded;
 pub mod worktree_routes;
 pub mod reviews;
+pub mod dream;
 mod computer_control;
 mod computer_control_install;
 mod worktree_context;

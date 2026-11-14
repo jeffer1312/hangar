@@ -9,6 +9,7 @@ mod connect_approval;
 mod desktop_tool_look;
 mod dictation_pill;
 mod login_browser;
+mod memory_dream;
 mod new_chat_mode;
 mod no_project;
 mod password_vault;
@@ -79,6 +80,7 @@ pub fn animation(name: &str) -> Option<NewsAnimation> {
         "scheduled-tasks" => Some(scheduled_tasks::render),
         "atualizacoes-e-manual" => Some(updates_manual::render),
         "estilo-claude-desktop" => Some(desktop_tool_look::render),
+        "sonho-da-memoria" => Some(memory_dream::render),
         _ => None,
     }
 }

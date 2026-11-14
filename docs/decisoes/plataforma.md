@@ -4770,3 +4770,48 @@ de rede não desfaz a recuperação já comprovada pela última leitura boa pres
 regressão cobrem a decisão de abertura, a rotação, o reinício e o formato anterior, com
 arquivos temporários e relógio controlado. O reparo local removeu somente a marca antiga;
 uma sessão criada pelo Hangar abriu na conta pedida antes e depois de reiniciar o serviço.
+
+## Sonho da memória (13/11/2026)
+
+Fontes: o vídeo "A Anthropic revelou como faz os agentes do Claude corrigirem a própria memória
+(Dreaming)", o artigo da Anthropic (anthropic.com/research/components-of-agent-memory) e o cookbook
+"Dreaming with a dynamic workflow", de onde vêm os prompts (MIT, aviso no topo de cada um).
+
+Medido no Claude Code 2.1.323:
+
+- O auto-dream já existe no binário (`autoDreamEnabled`), mas o servidor da Anthropic o deixa
+  desligado (`tengu_onyx_plover.enabled=false`, `minHours 24`, `minSessions 3`). A trava dele é
+  `<memory>/.consolidate-lock`: conteúdo = PID, mtime = última consolidação, vence em 1 h; ao
+  terminar o arquivo fica vazio. O sonho do Hangar usa a mesma trava.
+- `claude -p --output-format json --max-budget-usd … --safe-mode --setting-sources "" --tools
+  Read,Write,Edit,Glob,Grep --permission-mode acceptEdits`: com a chave (`ANTHROPIC_API_KEY` e
+  `CLAUDE_CONFIG_DIR` vazio) custou US$ 0,0029 numa tarefa de 7 turnos; com a conta, US$ 0,0027.
+  Nos dois o modelo não recebe CLAUDE.md, rules, skills nem memória. Escrita fora do `cwd`, shell,
+  leitura de `~/.claude/runtime-config.json`, `~/.ssh/config` e `/proc/self/environ` são recusadas.
+- `--max-budget-usd` para entre turnos, não no meio: teto de US$ 0,0001 gastou US$ 0,000245
+  (`subtype: error_max_budget_usd`). Por isso o teto de cada chamada é o que resta dividido pelas
+  chamadas simultâneas, com folga de 20%.
+- Crédito esgotado da chave: "Your credit balance is too low to access the Anthropic API…"
+  (texto do binário; não provocado de verdade).
+- Volume: o projeto hangar teve 71 transcrições em 14 dias, 1,2 GB de JSONL; só o texto da pessoa e
+  do agente mais as chamadas de ferramenta cortadas em 300 caracteres dão ~10 MB, ~2,9 M tokens,
+  ~US$ 8 pela taxa do vídeo (US$ 2,70 por milhão de tokens de transcrição).
+- As contas da máquina já dividem a pasta `memory/` de cada projeto (`link_memory`); entre máquinas
+  nada sincronizava. A pasta é a da raiz git principal: uma worktree escreve na memória do repositório.
+
+Decisões: uma máquina sonha por todas e busca as transcrições nos peers em partes de ≤512 KB
+(teto de 1 MiB do `PeerClient`); cursor por sessão em eventos lidos, porque o leitor do Pi depende
+do estado desde o início do arquivo; teto do mês só sobre o gasto da chave (é o crédito da
+Anthropic), com passagem para a conta Claude de mais folga abaixo de 70% na semana; qualquer falha
+de analisador recusa a rodada e a memória fica intacta; a memória de antes fica 30 dias no registro
+da rodada e serve o Desfazer, por projeto. Limite conhecido: nas outras máquinas só a pasta principal
+do projeto é gravada, não as pastas próprias de contas.
+
+Prova real (13/11/2026, `chat-suporte-web`, 1 sessão curta, 13 notas): US$ 0,08–0,12 por rodada do
+projeto e ~US$ 0,18 da passada do usuário (Sonnet). Três defeitos só apareceram no uso real e foram
+corrigidos: o limpador do relatório de problema trocava caminho, IP e hash e fazia a conferência recusar
+nota legítima (o sonho tem limpador próprio, só de credenciais, que apaga a credencial em vez de
+recusar); o prompt do cookbook reescrevia o `name:` de cada nota para o nome do arquivo (o `name` é o
+identificador do Claude Code e fica); e o Desfazer não voltava o cursor das sessões nem a data do último
+sonho, então o sonho seguinte não relia o que foi desfeito. A passada do usuário nasce desligada
+(`user_memory`): o arquivo global entra em toda sessão e a pessoa liga depois de ler o que ele gera.
