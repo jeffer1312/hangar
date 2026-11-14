@@ -168,6 +168,16 @@ impl AppState {
             trusted: self.cfg.trusted.clone(), sources: Arc::new(crate::plugin::sources::NativeSources::new(self)) })
     }
 
+    /// A borda que as rotas de crate próprio recebem: proxies confiáveis, autenticação e diário.
+    pub(crate) fn edge(&self) -> hangar_core::edge::Edge {
+        hangar_core::edge::Edge { trusted: self.cfg.trusted.clone(), auth: self.auth.clone(), diag: self.diag.clone() }
+    }
+
+    /// O servidor no papel de `Host` das rotas de atalhos, pelo roteador e pelo caminho com `%2F` ou `//`.
+    pub(crate) fn shortcut_host(self: &Arc<Self>) -> Arc<crate::shortcut_transfer::ServerHost> {
+        Arc::new(crate::shortcut_transfer::ServerHost(self.clone()))
+    }
+
     pub fn new(cfg: Config) -> AppState {
         Self::with_server_id(cfg, String::new())
     }
@@ -917,9 +927,9 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .merge(crate::connect::routes::router())
         // Planos e catálogo de plugins e skills: o dono no Rust; o resto segue ao Python.
         .merge(crate::plans::routes::router())
-        .merge(hangar_desktop_theme::router(hangar_core::edge::Edge { trusted: state.cfg.trusted.clone(), auth: state.auth.clone(), diag: state.diag.clone() }, state.desktop_theme.clone()))
+        .merge(hangar_desktop_theme::router(state.edge(), state.desktop_theme.clone()))
         // Exportar, importar e verificar atalhos: só o dono, nunca repassados (o Python não tem as rotas).
-        .merge(hangar_shortcut_transfer::router(hangar_core::edge::Edge { trusted: state.cfg.trusted.clone(), auth: state.auth.clone(), diag: state.diag.clone() }, Arc::new(crate::shortcut_transfer::ServerHost(state.clone()))))
+        .merge(hangar_shortcut_transfer::router(state.edge(), state.shortcut_host()))
         .route("/api/claude/customizations", get(crate::claude_customizations::catalog_route).fallback(pass_any))
         // Senha do chaveiro: só o dono, nunca repassada; só o preflight do CORS vai ao Python.
         .route("/api/keyring/unlock", axum::routing::post(crate::keyring::unlock_route).options(pass_any))
@@ -1223,8 +1233,7 @@ pub(crate) async fn pass_any(
     let decoded_path=percent_encoding::percent_decode_str(req.uri().path()).decode_utf8_lossy();
     // `%2F` ou `//` escapam do roteador: os atalhos continuam do Rust, nunca do Python.
     if hangar_shortcut_transfer::owns_path(req.uri().path()) {
-        let edge=hangar_core::edge::Edge { trusted: st.cfg.trusted.clone(), auth: st.auth.clone(), diag: st.diag.clone() };
-        return hangar_shortcut_transfer::handle(edge,Arc::new(crate::shortcut_transfer::ServerHost(st.clone())),Some(peer),req).await;
+        return hangar_shortcut_transfer::handle(st.edge(),st.shortcut_host(),Some(peer),req).await;
     }
     if crate::worktree_fetch::owns(&decoded_path) {
         return crate::worktree_fetch::route(st,peer,req).await;

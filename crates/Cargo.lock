@@ -2036,7 +2036,6 @@ dependencies = [
  "form_urlencoded",
  "hangar-core",
  "libc",
- "percent-encoding",
  "regex",
  "serde_json",
  "tempfile",

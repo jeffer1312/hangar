@@ -10,7 +10,7 @@ use serde_json::{Map, Value, json};
 
 use hangar_core::edge::Edge;
 use hangar_core::guest::{Caller, caller};
-use hangar_core::http::{detail, json_response};
+use hangar_core::http::{detail, json_response, uvicorn_path};
 
 use crate::host::{Error, Host};
 use crate::transfer::{ImportRequest, export, import};
@@ -31,25 +31,13 @@ struct Http {
 
 /// O caminho cru é das três rotas, também escrito com `%2F` ou com barra repetida.
 pub fn owns_path(path: &str) -> bool {
-    let path = normalized(path);
+    let path = uvicorn_path(path);
     BASES.iter().any(|base| path == *base || path.strip_prefix(base).is_some_and(|tail| tail.starts_with('/')))
 }
 
 /// Para quem achou o pedido fora do roteador (caminho com `%2F` ou `//`): o mesmo tratamento.
 pub async fn handle(edge: Edge, host: Arc<dyn Host>, peer: Option<SocketAddr>, request: Request) -> Response {
     serve(Arc::new(Http { edge, host }), peer, request).await
-}
-
-/// Decodificado e sem barra repetida: `/api//shortcuts%2Fexport` é `/api/shortcuts/export`.
-fn normalized(path: &str) -> String {
-    let decoded = percent_encoding::percent_decode_str(path).decode_utf8_lossy();
-    let mut out = String::with_capacity(decoded.len());
-    for c in decoded.chars() {
-        if !(c == '/' && out.ends_with('/')) {
-            out.push(c);
-        }
-    }
-    out
 }
 
 pub fn router<S: Clone + Send + Sync + 'static>(edge: Edge, host: Arc<dyn Host>) -> Router<S> {
@@ -84,7 +72,7 @@ async fn serve(state: Arc<Http>, peer: Option<SocketAddr>, request: Request) -> 
 }
 
 async fn reply(state: Arc<Http>, peer: Option<SocketAddr>, request: Request) -> Response {
-    let path = normalized(request.uri().path());
+    let path = uvicorn_path(request.uri().path());
     let socket = peer.unwrap_or_else(|| "0.0.0.0:0".parse().expect("endereço estático válido"));
     let (_, https) = state.edge.trusted.resolve(socket.ip(), request.headers());
     let decision = hangar_core::http_contract::resolve(ROUTES, request.method().as_str(), &path);
