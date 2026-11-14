@@ -242,8 +242,10 @@ impl ProcessIo {
         let typed = verb == "send-keys";
         match done {
             // Alvo que sumiu: o servidor responde OK com o erro e não executa nada.
-            Ok(Ok(stdout)) if stdout.starts_with(b"ERROR: can't find ") =>
+            Ok(Ok(stdout)) if typed && stdout.starts_with(b"ERROR: can't find ") =>
                 Some(Err(IoFailure { code: "psmux_direct_refused", may_have_written: false })),
+            // Na captura o mesmo texto pode ser a tela: quem decide é o CLI.
+            Ok(Ok(stdout)) if stdout.starts_with(b"ERROR: can't find ") => None,
             Ok(Ok(stdout)) => Some(Ok((CommandOutput { success: true, stdout }, Vec::new()))),
             Ok(Err(failure)) if typed && failure.written => Some(Err(IoFailure { code: failure.code, may_have_written: true })),
             Ok(Err(failure)) => {

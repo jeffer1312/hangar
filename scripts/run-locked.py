@@ -5,6 +5,7 @@ Uso: run-locked.py <arquivo-da-trava> <comando> [args...]
 O sistema solta a trava quando o processo morre, então ela nunca fica presa por uma build interrompida.
 """
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -14,7 +15,11 @@ def hold(path):
     lock = open(path, "a+b")
     if os.name != "nt":
         import fcntl
-        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            print(f"run-locked: esperando a vez em {path}", file=sys.stderr, flush=True)
+            fcntl.flock(lock, fcntl.LOCK_EX)
         return lock
     import msvcrt
     waiting = False
@@ -62,6 +67,9 @@ def main():
     path, *command = sys.argv[1:]
     if os.name == "nt":
         die_together()
+    else:
+        # O `subprocess.call` mata o filho ao sair por exceção: o build não segue sem a trava.
+        signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
     lock = hold(path)
     try:
         if not command:

@@ -54,6 +54,26 @@ def test_killing_the_lock_holder_kills_the_command(tmp_path):
         kernel.CloseHandle(ctypes.c_void_p(handle))
 
 
+@pytest.mark.skipif(os.name == "nt", reason="SIGTERM é do POSIX; no Windows vale o Job")
+def test_sigterm_to_the_lock_holder_kills_the_command(tmp_path):
+    import signal
+    import time
+    child = "import os,time; print(os.getpid(), flush=True); time.sleep(120)"
+    holder = subprocess.Popen([sys.executable, str(SCRIPT), str(tmp_path / "x.lock"), sys.executable, "-c", child],
+                              stdout=subprocess.PIPE, text=True)
+    pid = int(holder.stdout.readline())
+    holder.send_signal(signal.SIGTERM)
+    assert holder.wait(timeout=60) == 143
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return
+        time.sleep(0.05)
+    pytest.fail("o comando sobreviveu sem a trava")
+
+
 def test_exit_code_of_the_command_is_returned(tmp_path):
     done = subprocess.run([sys.executable, str(SCRIPT), str(tmp_path / "x.lock"), sys.executable, "-c", "raise SystemExit(7)"], timeout=60)
     assert done.returncode == 7

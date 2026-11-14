@@ -220,7 +220,9 @@ async fn read_sessions(program: &OsStr, sessions: Option<Vec<String>>) -> Result
     // porta reaproveitada por outro servidor: vale o CLI.
     if let Some(sessions) = &sessions {
         let lines = futures_util::future::join_all(sessions.iter().map(|session| async move {
-            direct(program, session, &args).await.filter(|line| line.starts_with(&format!("{session}\t")))
+            // Linha truncada que o `parse` descartaria viraria lista vazia e apagaria os atalhos vivos.
+            direct(program, session, &args).await
+                .filter(|line| line.starts_with(&format!("{session}\t")) && parse(line, |_| (true, None)).len() == 1)
         })).await;
         if let Some(lines) = lines.into_iter().collect::<Option<Vec<_>>>() { return Ok(Some(lines.concat())); }
     }
