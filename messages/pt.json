@@ -3378,6 +3378,8 @@
   "erro_computer_control_ssh_resolve": "o ssh -G {host} falhou: {error}",
   "erro_computer_control_ssh_timeout": "o ssh -G {host} não respondeu a tempo",
   "erro_computer_control_update_app": "Atualize o app: o Computer Use agora é instalado sozinho",
+  "erro_computer_control_unavailable": "O Computer Use não está disponível nesta máquina",
+  "erro_computer_control_io": "Erro de disco no Computer Use: {error}",
   "erro_connect_codigo_invalido": "código de ligação inválido",
   "erro_connect_plataforma": "este sistema não tem o Connect",
   "erro_connect_download": "não consegui baixar o frpc ou o Caddy",
