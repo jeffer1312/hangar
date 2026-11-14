@@ -3555,6 +3555,7 @@
   "erro_sessao_esperando_resposta": "há uma permissão ou pergunta esperando resposta",
   "erro_fila_pendente": "há mensagens na fila esperando entrega",
   "erro_permissao_reabrir": "a sessão não reabriu em bypass e voltou ao modo de antes",
+  "erro_permissao_sessao_parada": "a sessão está parada; reabra-a para trocar o modo de permissão",
   "erro_menu_aberto": "há um menu aberto no terminal da sessão; feche-o e tente de novo",
   "erro_par_externo_orq": "A sessão é árbitra de uma orquestração e não pareia com outra máquina; o grupo dela ficou como estava.",
   "erro_modo_so_claude": "a troca de modo só vale para sessões Claude",

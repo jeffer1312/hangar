@@ -258,6 +258,8 @@ async fn delete_r1_01_login_guest_closes_through_the_owner_close() {
 async fn r4_19_login_guest_reaches_mode_and_model_in_rust() {
     let e = env().await;
     e.sessions(&["cat1"]);
+    // Um Claude sem terminal do Rust com o nome que a Ana vê: o cano falso confirma cada pedido de controle.
+    crate::session_write_control::open_headless(&e.registry, &e.root, "cat1").await;
     let send = |method: reqwest::Method, route: &'static str, token: &'static str| {
         let request = fake::client().request(method, format!("http://{}/api/sessions/cat1/{route}", e.server)).bearer_auth(token)
             .header("content-type", "application/json");
@@ -272,8 +274,8 @@ async fn r4_19_login_guest_reaches_mode_and_model_in_rust() {
         let (status, body) = send(method.clone(), route, BLIND).await;
         assert_eq!((status, body["detail"]["code"].as_str()), (403, Some("erro_fora_do_convidado")), "{route}: {body}");
         let (status, body) = send(method, route, GUEST).await;
-        assert_ne!(status, 401, "{route}: o convidado não perde o login: {body}");
-        assert!(status == 200 || body["detail"]["code"].is_string(), "{route}: recusa com código: {status} {body}");
+        assert_ne!(body["detail"]["code"].as_str(), Some("erro_fora_do_convidado"), "{route}: a sessão é visível para ela");
+        assert_eq!(status, 200, "{route}: a rota do dono atende o convidado: {body}");
         assert_eq!(e.python.hits_to(&format!("/api/sessions/cat1/{route}")), 0, "{route}");
     }
 }

@@ -119,6 +119,24 @@ async fn permissions_r4_08_parked_headless_claude_is_read_from_its_record() {
     assert_eq!(crate::list_support::calls(dir.path(), "new-session"), 0, "ler não sobe o processo");
 }
 
+/// Contrato (c): Claude sem terminal parado que a escrita não consegue religar (registro sem a chave da
+/// vida, que a lista ainda mostra) é 409 `erro_permissao_sessao_parada`: repetir não adianta, só reabrir.
+/// Nunca o 503 `runtime_unhealthy` de "tente de novo".
+#[tokio::test(flavor = "multi_thread")]
+async fn permissions_parked_headless_that_cannot_relaunch_is_409_stopped() {
+    let dir = tempfile::tempdir().unwrap();
+    let (cwd, sidecars) = (dir.path().join("wq"), dir.path().join("home/.hangar/claude-headless"));
+    std::fs::create_dir_all(&cwd).unwrap();
+    std::fs::create_dir_all(&sidecars).unwrap();
+    std::fs::write(sidecars.join("q2.json"), json!({"name": "q2", "provider": "claude", "headless": true, "cwd": cwd,
+        "session_id": "00000000-0000-0000-0000-0000000000cc", "permission_mode": "plan", "cano": null}).to_string()).unwrap();
+    let (python, server) = serve(dir.path(), false).await;
+    let (status, reply) = send(server, "POST", "q2/permission-mode", r#"{"mode":"auto"}"#).await;
+    assert_eq!((status, reply["detail"]["code"].as_str()), (409, Some("erro_permissao_sessao_parada")), "{reply}");
+    assert_eq!(python_hits(&python, "q2"), 0);
+    assert_eq!(crate::list_support::calls(dir.path(), "new-session"), 0, "ler não sobe o processo");
+}
+
 /// R4-03, R4-07 e R4-08 (`test_perm_post_invalida_409`, `test_perm_post_aceita_permission_mode_alias`): o
 /// Claude sem terminal lê os seis modos sem sonda (`?sondar=xyz` vale falso) e troca pelo pedido de
 /// controle; vazio é 422, modo fora da lista 409, campo a mais 422, e `previous_non_plan` vem sempre.

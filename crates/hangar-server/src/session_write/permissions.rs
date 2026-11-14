@@ -81,6 +81,8 @@ async fn serve(st:Arc<AppState>,peer:SocketAddr,req:Request,set:bool)->Response 
         Ok(None)=>return match listed(&st,&name).await {
             Ok(None)=>reply(StatusCode::NOT_FOUND,detail_body("erro_sessao_inexistente","sessao nao encontrada",json!({}))),
             Ok(Some((provider,_))) if provider!="claude"=>reply(StatusCode::CONFLICT,detail_body(ONLY_CLAUDE,ONLY_CLAUDE_MSG,json!({}))),
+            // Sem terminal parado que nada religou: repetir não muda; só reabrir a sessão.
+            Ok(Some((_,true)))=>reply(StatusCode::CONFLICT,detail_body("erro_permissao_sessao_parada","a sessão está parada; reabra-a para trocar o modo de permissão",json!({}))),
             Ok(Some(_))=>reply(StatusCode::SERVICE_UNAVAILABLE,detail_body("runtime_unhealthy","o terminal desta sessão não está com o servidor; tente de novo",json!({}))),
             Err(code)=>reply(StatusCode::SERVICE_UNAVAILABLE,detail_body("erro_lista_indisponivel","a lista de sessões está indisponível",json!({"detalhe":code}))),
         },

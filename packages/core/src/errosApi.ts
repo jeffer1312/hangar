@@ -533,6 +533,7 @@ const ERROS: Record<string, (params: Parametros) => string> = {
   erro_sessao_esperando_resposta: () => m.erro_sessao_esperando_resposta(),
   erro_fila_pendente: () => m.erro_fila_pendente(),
   erro_permissao_reabrir: () => m.erro_permissao_reabrir(),
+  erro_permissao_sessao_parada: () => m.erro_permissao_sessao_parada(),
   erro_menu_aberto: () => m.erro_menu_aberto(),
   erro_par_externo_orq: () => m.erro_par_externo_orq(),
   erro_modo_so_claude: () => m.erro_modo_so_claude(),
