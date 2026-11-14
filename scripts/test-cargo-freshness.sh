@@ -14,14 +14,23 @@ dependency="$build/debug/.fingerprint/local-dependency-012abc"
 external="$build/debug/.fingerprint/serde-012abc"
 similar="$build/debug/.fingerprint/local-package-extra-012abc"
 artifact="$build/debug/deps/library.rlib"
-mkdir -p "$local_entry" "$cross" "$dependency" "$external" "$similar" "${artifact%/*}"
+# As mesmas entradas no layout novo do cargo: <perfil>/build/<pacote>/<hash>/{fingerprint,out}.
+unit_local="$build/debug/build/local-package/012abc"
+unit_cross="$build/triple/release/build/local-package/012abc"
+unit_external="$build/debug/build/serde/012abc"
+unit_similar="$build/debug/build/local-package-extra/012abc"
+mkdir -p "$local_entry" "$cross" "$dependency" "$external" "$similar" "${artifact%/*}" \
+    "$unit_local/fingerprint" "$unit_local/out" "$unit_cross/fingerprint" "$unit_external/fingerprint" "$unit_similar/fingerprint"
 printf artifact > "$artifact"
+printf artifact > "$unit_local/out/library.rlib"
 jq -n --arg workspace "$sandbox/first" --arg target "$target" --arg build "$build" \
     '{workspace_root:$workspace,target_directory:$target,build_directory:$build,packages:[{name:"local-package",source:null,dependencies:[{name:"local-dependency",path:"local"}]}]}' > "$sandbox/metadata.json"
 prepare() { bash "$root/scripts/cargo-freshness.sh" "$sandbox/metadata.json" "$target"; }
 prepare
 [[ ! -e "$local_entry" && ! -e "$cross" && ! -e "$dependency" ]]
 [[ -d "$external" && -d "$similar" && $(cat "$artifact") == artifact ]]
+[[ ! -e "$unit_local/fingerprint" && ! -e "$unit_cross/fingerprint" ]]
+[[ -d "$unit_external/fingerprint" && -d "$unit_similar/fingerprint" && $(cat "$unit_local/out/library.rlib") == artifact ]]
 mkdir -p "$local_entry"
 prepare
 [[ -d "$local_entry" ]]
@@ -45,6 +54,8 @@ for name in first second; do
     checkout="$sandbox/$name"
     mkdir -p "$checkout/scripts" "$checkout/crates/library/src" "$checkout/crates/app/src"
     cp "$root/scripts/cargo-pinned" "$root/scripts/pin-auth-pair.py" "$root/scripts/cargo-freshness.sh" "$checkout/scripts/"
+    # O layout do target muda com a versão do cargo: a prova usa a do repositório.
+    cp "$root/crates/rust-toolchain.toml" "$checkout/crates/"
     git init -q "$checkout"
     printf '[workspace]\nmembers=["library","app"]\nresolver="3"\n' > "$checkout/crates/Cargo.toml"
     printf '[package]\nname="cargo-freshness-library"\nversion="0.1.0"\nedition="2024"\n[lib]\ncrate-type=["rlib","cdylib"]\n' > "$checkout/crates/library/Cargo.toml"

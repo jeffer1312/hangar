@@ -51,6 +51,26 @@ touch -t "$(horas_atras 96)" "$t/incremental/it-3ghi"
 confere "máquina" "$(sobrou "$t")" "deps/hangar_server-cccccccccccccccc deps/hangar_server-dddddddddddddddd deps/it-aaaaaaaaaaaaaaaa deps/it-aaaaaaaaaaaaaaaa.d deps/libserde-1111111111111111.rlib deps/libserde-2222222222222222.rlib deps/libserde_derive-3333333333333333.so deps/libserde_derive-4444444444444444.so deps/proxy-ffffffffffffffff incremental/hangar_server-1abc/s-novo/a incremental/it-3ghi/s/a "
 rm -rf "$d"
 
+# ── máquina, layout novo (build/<pacote>/<hash>/): a unidade velha sai inteira ────────────────
+d="$(mktemp -d)"
+t="$d/target/debug"
+arquivo "$t/build/hangar-server/aaaaaaaaaaaaaaaa/out/it-aaaaaaaaaaaaaaaa" "" x           # teste atual
+arquivo "$t/build/hangar-server/aaaaaaaaaaaaaaaa/fingerprint/test-it"
+arquivo "$t/build/hangar-server/bbbbbbbbbbbbbbbb/out/it-bbbbbbbbbbbbbbbb" 72 x           # cópia velha do mesmo teste
+arquivo "$t/build/hangar-server/bbbbbbbbbbbbbbbb/out/it-bbbbbbbbbbbbbbbb.d" 72
+arquivo "$t/build/hangar-server/bbbbbbbbbbbbbbbb/fingerprint/test-it" 72
+arquivo "$t/build/hangar-server/cccccccccccccccc/out/hangar_server" "" x                 # binário não leva hash no nome
+arquivo "$t/build/hangar-server/dddddddddddddddd/out/hangar_server" 120 x
+arquivo "$t/build/hangar-server/eeeeeeeeeeeeeeee/out/libhangar_server-eeeeeeeeeeeeeeee.rlib" 216   # biblioteca nunca sai
+arquivo "$t/build/hangar-cano/ffffffffffffffff/out/it-ffffffffffffffff" 216 x            # `it` de outro pacote, sozinho
+arquivo "$t/build/serde_derive/1111111111111111/out/libserde_derive-1111111111111111.so" 216 x
+arquivo "$t/build/ring/2222222222222222/out/build_script_build" 216 x                    # script de build fica
+arquivo "$t/build/ring/3333333333333333/out/build_script_build" "" x
+arquivo "$t/build/ring-4444444444444444/out/bin/gerado" 216 x                            # saída de script do layout antigo
+"$P" "$d/target" >/dev/null || { echo "FALHOU podar-target saiu com erro (máquina, layout novo)"; falhou=1; }
+confere "máquina, layout novo" "$(sobrou "$t")" "build/hangar-cano/ffffffffffffffff/out/it-ffffffffffffffff build/hangar-server/aaaaaaaaaaaaaaaa/fingerprint/test-it build/hangar-server/aaaaaaaaaaaaaaaa/out/it-aaaaaaaaaaaaaaaa build/hangar-server/cccccccccccccccc/out/hangar_server build/hangar-server/eeeeeeeeeeeeeeee/out/libhangar_server-eeeeeeeeeeeeeeee.rlib build/ring-4444444444444444/out/bin/gerado build/ring/2222222222222222/out/build_script_build build/ring/3333333333333333/out/build_script_build build/serde_derive/1111111111111111/out/libserde_derive-1111111111111111.so "
+rm -rf "$d"
+
 # ── cache do CI: sai tudo do workspace, ficam as dependências de terceiros ────────────────────
 d="$(mktemp -d)"
 mkdir -p "$d/ws/membro/src"
@@ -86,12 +106,15 @@ for perfil in debug dist x86_64-unknown-linux-gnu/dist; do
     arquivo "$t/.fingerprint/serde-1111111111111111/x"
     arquivo "$t/build/hangar-membro-aaaaaaaaaaaaaaaa/out"
     arquivo "$t/build/ring-2222222222222222/out"
+    arquivo "$t/build/hangar-membro/dddddddddddddddd/out/it-dddddddddddddddd" "" x   # layout novo
+    arquivo "$t/build/hangar-membro/dddddddddddddddd/fingerprint/x"
+    arquivo "$t/build/serde/3333333333333333/out/libserde-3333333333333333.rlib"
     arquivo "$t/incremental/hangar_membro-1abc/s/a"
     arquivo "$t/examples/exemplo-cccccccccccccccc" "" x
 done
 "$P" --cache "$d/ws/target" >/dev/null || { echo "FALHOU podar-target saiu com erro (cache)"; falhou=1; }
 for perfil in debug dist x86_64-unknown-linux-gnu/dist; do
-    confere "cache $perfil" "$(sobrou "$d/ws/target/$perfil")" ".fingerprint/serde-1111111111111111/x build/ring-2222222222222222/out deps/libserde-1111111111111111.rlib "
+    confere "cache $perfil" "$(sobrou "$d/ws/target/$perfil")" ".fingerprint/serde-1111111111111111/x build/ring-2222222222222222/out build/serde/3333333333333333/out/libserde-3333333333333333.rlib deps/libserde-1111111111111111.rlib "
 done
 rm -rf "$d"
 

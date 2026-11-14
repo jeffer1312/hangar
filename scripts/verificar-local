@@ -838,7 +838,10 @@ podar_target() {   # $1 = target, $2 = teto em KB
     while (( usado > teto )) && read -r _ tamanho caminho; do
         rm -f "$caminho"
         usado=$(( usado - tamanho ))
-    done < <(find "$dir/debug/deps" -maxdepth 1 -type f -perm -u+x -printf '%T@ %k %p\n' 2>/dev/null | sort -n)
+    done < <({ find "$dir/debug/deps" -maxdepth 1 -type f -perm -u+x -printf '%T@ %k %p\n'
+               # Layout novo do cargo: build/<pacote>/<hash>/out/. Script de build fica.
+               find "$dir/debug/build" -mindepth 4 -maxdepth 4 -path '*/out/*' -type f -perm -u+x \
+                   ! -name 'build_script_*' ! -name 'build-script-*' -printf '%T@ %k %p\n'; } 2>/dev/null | sort -n)
     usado="$(du -sk "$dir" | awk '{print $1}')"
     if (( usado > teto )); then
         echo "verificar-local: a poda não bastou; apagando $dir (a rodada compila do zero)."
