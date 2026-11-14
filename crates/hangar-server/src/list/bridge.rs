@@ -1330,14 +1330,10 @@ enum Operation {
     Discover { #[serde(default)] newer_than: Option<f64> },
     #[serde(rename = "list.snapshot")]
     Snapshot {},
-    #[serde(rename = "list.invalidate")]
-    Invalidate {},
     #[serde(rename = "list.resolve")]
     Resolve { name: String, cwd: String, #[serde(default)] pid: Option<i64> },
     #[serde(rename = "list.seed")]
     Seed { name: String, jsonl: String },
-    #[serde(rename = "list.forget")]
-    Forget { name: String },
     #[serde(rename = "state.facts")]
     StateFacts { name: String, facts: crate::state::facts::StateFacts },
 }
@@ -1373,13 +1369,11 @@ async fn execute(bridge: &Arc<ListBridge>, op: Operation) -> Result<Value, ListE
             }
             rows(&produced.rows)
         }
-        Operation::Invalidate {} => { bridge.invalidate(); Ok(Value::Null) }
         Operation::Resolve { name, cwd, pid } => {
             let t = bridge.resolve(&name, &cwd, pid).await?;
             Ok(json!({"jsonl": t.jsonl, "tracked": t.tracked}))
         }
         Operation::Seed { name, jsonl } => cache(Box::new(move |b| b.seed(&name, &jsonl))).await,
-        Operation::Forget { name } => cache(Box::new(move |b| b.forget(&name))).await,
         Operation::StateFacts { name, facts } => {
             use crate::state::facts::Push;
             Ok(match bridge.state_facts.push(&name, facts, Instant::now()) {

@@ -640,20 +640,6 @@ def _guardar_snap(forcar: bool = False) -> list[SessionInfo]:
         return infos
 
 
-def _invalidate_lists() -> None:
-    """Descarta o snapshot cru: quem pedir /api/sessions depois de uma mudança de membro ou de modo
-    recalcula em vez de ver a sessão como era."""
-    with _list_lock:
-        _list_snap["snap"] = None
-    if registry_mod._rust_caches():
-        # A mudança já aconteceu: a falha fica no diário (`lista.ponte`), o retrato do Rust vence
-        # em 2 s e quem procura a sessão nova pede descoberta mais nova (`newer_than`).
-        try:
-            list_bridge.invalidate()
-        except (list_bridge.ListBridgeError, tmux.MuxIndisponivel):
-            pass
-
-
 def _cached_info_sync(name: str) -> SessionInfo | None:
     """Gemeo SINCRONO do _cached_info, pro handler `def` (que o FastAPI ja roda na threadpool e
     portanto pode chamar registry.list() direto). Mesmo dicionario dos dois lados: um hit vindo de

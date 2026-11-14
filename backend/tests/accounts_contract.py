@@ -567,7 +567,6 @@ def _worker() -> None:
         return deny_external()
 
     with patch.object(runtime_coordinator, "current", return_value=instance), \
-            patch.object(api, "_invalidate_lists"), \
             patch.object(api.tmux, "has_session", side_effect=lambda name: name in mux and any(child.poll() is None for child in children)), \
             patch.object(api.tmux, "_run", side_effect=mux_command), \
             patch.object(api.tmux, "is_hidden", return_value=False), \

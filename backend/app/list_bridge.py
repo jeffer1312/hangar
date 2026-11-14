@@ -132,10 +132,6 @@ def snapshot() -> list[SessionInfo]:
     return _rows(_request("list.snapshot", {}))
 
 
-def invalidate() -> None:
-    _request("list.invalidate", {})
-
-
 def resolve(name: str, cwd: str, pid: int | None = None) -> tuple[str | None, bool]:
     result = _request("list.resolve", {"name": name, "cwd": cwd, "pid": pid})
     if (not isinstance(result, dict) or type(result.get("tracked")) is not bool
