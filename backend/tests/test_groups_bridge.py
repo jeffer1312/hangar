@@ -42,12 +42,6 @@ def _rust(monkeypatch, reply=None, error=None):
     return calls
 
 
-def _sidecar(name, peers, gid="g1", orq=False):
-    """Sidecar como o Rust o grava."""
-    body = {"peers": peers, "task": "", "gid": gid, "harness": {}, **({"orq": True} if orq else {})}
-    (pair._pair_dir() / f"{name}.json").write_text(json.dumps(body), encoding="utf-8")
-
-
 def test_ownership_follows_mode(monkeypatch):
     for mode, owned in (("rust", True), ("pending", True)):
         monkeypatch.setattr(runtime_coordinator, "_current", SimpleNamespace(mode=mode))
@@ -150,36 +144,6 @@ def test_call_waits_while_the_mode_is_settling(monkeypatch):
         owner.loop.call_soon_threadsafe(owner.loop.stop)
 
 
-def _close_stubs(monkeypatch):
-    monkeypatch.setattr(api.registry, "kill", lambda n, closed_by_rust=False: [])
-    monkeypatch.setattr(api, "_invalidate_lists", lambda: None)
-    monkeypatch.setattr(api.share_bridge, "revoke_session", lambda n: None)
-
-
-@pytest.mark.parametrize("content", ["{torto", '{"peers": 5}', '{"peers": 0}', '{"peers": null}'])
-def test_close_with_an_unreadable_sidecar_still_leaves_and_journals(monkeypatch, client, content):
-    """Sidecar que existe e não se lê não é "sem grupo": a saída vai pela ponte e a falha vai ao diário."""
-    (pair._pair_dir() / "a.json").write_text(content, encoding="utf-8")
-    calls = _rust(monkeypatch, reply={"ex_peers": [], "warnings": []})
-    _close_stubs(monkeypatch)
-    journal = []
-    monkeypatch.setattr(api.diag, "registrar", lambda evento, nivel="ok", **c: journal.append((evento, nivel, c)))
-    r = client.delete("/api/sessions/a", headers=H)
-    assert r.status_code == 200, r.text
-    assert calls == [("group.leave", {"name": "a", "phases": {}})]
-    assert ("grupos.sidecar_ilegivel", "erro", {"sessao": "a"}) in journal
-
-
-def test_close_of_a_session_without_group_never_asks_the_bridge(monkeypatch, client):
-    """Sem sidecar não há grupo a deixar: ponte fora do ar não vira aviso falso no fechamento."""
-    calls = _rust(monkeypatch, error="groups_bridge_off")
-    monkeypatch.setattr(api.registry, "kill", lambda n, closed_by_rust=False: [])
-    monkeypatch.setattr(api, "_invalidate_lists", lambda: None)
-    monkeypatch.setattr(api.share_bridge, "revoke_session", lambda n: None)
-    r = client.delete("/api/sessions/solo", headers=H)
-    assert (r.status_code, r.json()["warning"], calls) == (200, None, [])
-
-
 def test_lone_surrogate_in_the_task_reaches_the_rust_instead_of_500(monkeypatch):
     # Parity B13 (`test_set_com_surrogate_solto_na_task_grava_e_le_de_volta`): texto colado com surrogate
     # solto não pode derrubar a rota; o Rust só aceita UTF-8 válido, então vai o caractere de troca.
@@ -233,25 +197,6 @@ def test_bridge_gives_up_on_a_silent_rust_with_a_code(monkeypatch):
         groups_bridge.configure(None, None)
 
 
-
-
-def test_close_that_skipped_rust_leaves_without_rebuilding_orq_facts(monkeypatch, client):
-    """A saída segue pela ponte; o Rust resolve a execução sem fatos reconstruídos no Python."""
-    from app import internal_api
-    internal_api.set_secret("s3gredo")
-    _sidecar("a", ["b"], orq=True)
-    not_notified = {"sessao": "srv::x", "erro": {"code": "erro_peer_nao_avisado", "params": {}, "msg": "srv inacessível"}}
-    calls = _rust(monkeypatch, reply={"ex_peers": ["srv::x"], "warnings": [not_notified]})
-    monkeypatch.setattr(api.registry, "kill", lambda n, closed_by_rust=False: [])
-    monkeypatch.setattr(api, "_invalidate_lists", lambda: None)
-    monkeypatch.setattr(api.share_bridge, "revoke_session", lambda n: None)
-    try:
-        r = client.delete("/api/sessions/a", headers=H)
-        assert r.status_code == 200, r.text
-        assert calls == [("group.leave", {"name": "a", "phases": {}})]
-        assert r.json()["warning"]["params"]["avisos"] == [not_notified]
-    finally:
-        internal_api.set_secret(None)
 
 
 def test_pair_route_forwards_status_and_body(monkeypatch, client):
@@ -344,24 +289,3 @@ def test_child_gets_group_env(monkeypatch, tmp_path):
     assert "HANGAR_SERVER_ID" not in env
     assert "HANGAR_PEERS_FILE" not in env
     assert env["HANGAR_PAIR_ARCHIVE"] == str(pair._arquivo_dir())
-
-
-def test_close_of_a_grouped_session_without_owner_closes_and_warns(monkeypatch, client):
-    """Fechar nunca é barrado; sem o Rust a saída do grupo não acontece e isso volta no aviso e no diário."""
-    monkeypatch.setattr(runtime_coordinator, "_current", None)
-    monkeypatch.setattr(groups_bridge, "call", lambda *a, **k: pytest.fail("sem Rust não há ponte"))
-    _sidecar("a", ["b"])
-    killed, recorded = [], []
-    monkeypatch.setattr(api.registry, "kill", lambda n, closed_by_rust=False: killed.append(n) or [])
-    monkeypatch.setattr(api, "_invalidate_lists", lambda: None)
-    monkeypatch.setattr(api, "_jsonl_of_session", lambda n: None)
-    monkeypatch.setattr(api.share_bridge, "revoke_session", lambda n: None)
-    monkeypatch.setattr(api.diag, "registrar", lambda evento, nivel="ok", **f: recorded.append((nivel, f.get("codigo"))))
-    r = client.delete("/api/sessions/a", headers=H)
-    assert r.status_code == 200, r.text
-    assert killed == ["a"]
-    assert [x["erro"]["code"] for x in r.json()["warning"]["params"]["avisos"]] == ["groups_need_rust_server"]
-    assert ("erro", "groups_need_rust_server") in recorded
-    # Fora de grupo: sem aviso.
-    r = client.delete("/api/sessions/c", headers=H)
-    assert (r.status_code, r.json()["warning"]) == (200, None)

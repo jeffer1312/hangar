@@ -7,12 +7,8 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
-from fastapi.testclient import TestClient
 
 from app import api, diag, groups_bridge, pair
-from app.config import settings
-
-H = {"Authorization": "Bearer secret"}
 
 
 @pytest.fixture(autouse=True)
@@ -84,30 +80,6 @@ def test_uncaught_bridge_error_is_503_with_the_journal_line(journal):
     body = json.loads(resp.body)
     assert (resp.status_code, body["detail"]["code"], body["detail"]["params"]["detalhe"]) == (503, "erro_grupo_indisponivel", "groups_bridge_off")
     assert journal == [("grupos.indisponivel", "erro", {"codigo": "groups_bridge_off", "detalhe": "POST /api/sessions/a/rename"})]
-
-
-def test_close_done_by_the_rust_never_touches_the_group(monkeypatch):
-    """BRG-26: fechada pelo Rust (`x-hangar-rust-closed`), o Python não chama a ponte nem mexe no arquivo de grupo."""
-    from app import internal_api
-    monkeypatch.setattr(settings, "auth_token", "secret")
-    side = pair._pair_dir() / "a.json"
-    side.write_text(json.dumps({"peers": ["b"], "task": "", "gid": "g1", "harness": {}}), encoding="utf-8")
-    before = (side.read_bytes(), side.stat().st_mtime_ns)
-    monkeypatch.setattr(groups_bridge, "rust_owns_groups", lambda: True)
-
-    def forbidden(op, **args):
-        pytest.fail(f"a ponte não pode ser chamada num fechamento do Rust: {op}")
-    monkeypatch.setattr(groups_bridge, "call", forbidden)
-    monkeypatch.setattr(api.registry, "kill", lambda n, closed_by_rust=False: [])
-    monkeypatch.setattr(api, "_invalidate_lists", lambda: None)
-    monkeypatch.setattr(api.share_bridge, "revoke_session", lambda n: None)
-    internal_api.set_secret("s3gredo")
-    try:
-        r = TestClient(api.app).delete("/api/sessions/a", headers={**H, "x-hangar-rust-closed": "s3gredo"})
-    finally:
-        internal_api.set_secret(None)
-    assert r.status_code == 200, r.text
-    assert (side.read_bytes(), side.stat().st_mtime_ns) == before
 
 
 def test_python_mode_list_reads_the_group_and_a_broken_outside_registry_is_empty(tmp_path, monkeypatch):

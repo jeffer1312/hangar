@@ -318,14 +318,14 @@ async fn search_context_shows_a_repeated_held_prompt_once() {
 
 #[tokio::test]
 async fn search_context_is_answered_by_rust_only_for_the_owner() {
-    // Sem o token do dono o pedido segue ao Python, que recusa como hoje.
+    // R5 (decisão 5): sem o token do dono, o 401 que o Python dava sai do Rust.
     let scene = Scene::new(None).await;
     let response = client().get(format!("http://{}/api/search/context?project={NORMAL_P}&session_id={NORMAL_S}&event_id={MID}", scene.address))
         .send().await.unwrap();
-    let _ = response.status();
-    assert_eq!(scene.python.hits_to("/api/search/context"), 1);
+    assert_eq!(response.status().as_u16(), 401);
+    assert_eq!(scene.python.hits_to("/api/search/context"), 0);
     scene.ctx(NORMAL_P, NORMAL_S, MID, None).await;
-    assert_eq!(scene.python.hits_to("/api/search/context"), 1);
+    assert_eq!(scene.python.hits_to("/api/search/context"), 0);
     assert!(hangar_server::migration_status::rust_route(&axum::http::Method::GET, "/api/search/context"));
 }
 

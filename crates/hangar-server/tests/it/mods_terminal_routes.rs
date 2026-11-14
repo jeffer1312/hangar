@@ -68,20 +68,21 @@ async fn typing_is_refused_without_waiting_the_turn_or_the_transfer_guard() {
 }
 
 #[tokio::test]
-async fn requests_not_from_the_owner_go_to_python() {
+async fn requests_not_from_the_owner_get_401_from_rust() {
     let (python, server, _mods, pane) = terminal_app().await;
-    // Nenhum token tem tratamento pelo formato: o de convidado (`secrets.token_urlsafe(32)`, 43 caracteres de
-    // base64url) e o errado seguem ao Python, que autentica, recusa o convidado e conta a falha.
+    // Nenhum token tem tratamento pelo formato: o com cara de convidado (`secrets.token_urlsafe(32)`, 43
+    // caracteres de base64url) e o errado recebem do Rust o 401 que o Python dava, contando a falha.
     let guest = format!("{}-_", "g".repeat(41));
     for token in [guest.as_str(), "errado"] {
         for (route, body) in [("press", json!({"site": "pm-mock-mr", "plugin": "pm-mock", "key": "mr-a"})), ("show", json!({"site": "pm-mock-mr"})),
             ("close", json!({"site": "pm-mock-mr"})),
             ("input", json!({"site": "pm-mock-mr", "plugin": "pm-mock", "key": "k", "kind": "submit", "value": "x"}))] {
-            assert_eq!(post_as(server, route, body, token).await.1, "from-python", "{route} {token}");
+            let (status, body) = post_as(server, route, body, token).await;
+            assert_eq!((status, body["detail"]["code"].as_str()), (401, Some("erro_nao_autorizado")), "{route} {token}");
         }
     }
     assert_eq!(python.hits_to("/api/sessions/t/plugin/press") + python.hits_to("/api/sessions/t/plugin/show")
-        + python.hits_to("/api/sessions/t/plugin/close") + python.hits_to("/api/sessions/t/plugin/input"), 8);
+        + python.hits_to("/api/sessions/t/plugin/close") + python.hits_to("/api/sessions/t/plugin/input"), 0);
     assert!(pane.actions().is_empty());
 }
 

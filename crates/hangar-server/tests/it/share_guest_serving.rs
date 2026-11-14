@@ -357,6 +357,29 @@ async fn guest_forward_never_touches_the_owner_backoff() {
     assert!(srv.st.auth.is_owner(&lan.to_string(), Some(OWNER.as_bytes())), "o dono nesse IP segue livre");
 }
 
+/// R5-12 (`routes.rs` `pass`): na 8766 um caminho aberto do porteiro, sem convidado decidido, nunca
+/// vai ao Python como dono, nem com a senha do dono: 404 do Rust.
+#[tokio::test(flavor = "multi_thread")]
+async fn r5_12_guest_port_without_a_decided_guest_is_404() {
+    let dir = tempfile::tempdir().unwrap();
+    let srv = plain_srv(dir.path(), |_| {}).await;
+    let response = client().get(format!("http://{}/par/x/nada", srv.guest)).bearer_auth(OWNER).send().await.unwrap();
+    assert_eq!(response.status().as_u16(), 404);
+    assert_eq!(response.text().await.unwrap(), r#"{"detail":"Not Found"}"#);
+    assert_eq!(srv.python.hits_to("/par/x/nada"), 0);
+}
+
+/// Achado 1 da revisão: na 8766 a senha do dono não fecha sessão; o porteiro recusa e nada morre.
+#[tokio::test(flavor = "multi_thread")]
+async fn guest_port_delete_with_the_owner_token_closes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let srv = list_srv(dir.path(), 1).await;
+    let response = client().delete(format!("http://{}/api/sessions/s0", srv.guest)).bearer_auth(OWNER).send().await.unwrap();
+    assert_eq!(response.status().as_u16(), 401);
+    assert_eq!(list_support::calls(dir.path(), "kill-session"), 0, "nada foi encerrado");
+    assert_eq!(srv.python.hits_to("/api/sessions/s0"), 0);
+}
+
 /// O proxy genérico precisa encerrar o WebSocket quando o convite é revogado.
 #[tokio::test(flavor = "multi_thread")]
 async fn forwarded_guest_websocket_closes_4410_when_revoked() {

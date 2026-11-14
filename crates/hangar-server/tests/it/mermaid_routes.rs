@@ -86,11 +86,13 @@ async fn cached_png_and_parse_error_are_served() {
 }
 
 #[tokio::test]
-async fn not_the_owner_goes_to_python() {
+async fn not_the_owner_gets_401_from_rust() {
     let s = scene().await;
     let r = post(&s, &json!({"source": "graph TD; A-->B", "theme": "dark", "width": 600}).to_string(), false).await;
-    assert_eq!(r.text().await.unwrap(), "from-python");
-    assert_eq!(s.python.hits_to("/api/mermaid"), 1);
+    assert_eq!(r.status().as_u16(), 401);
+    assert!(r.headers().contains_key("access-control-allow-origin"), "o PWA de outra origem lê a recusa");
+    assert_eq!(json_of(r).await, json!({"detail": {"code": "erro_nao_autorizado", "params": {}, "msg": "unauthorized"}}));
+    assert_eq!(s.python.hits_to("/api/mermaid"), 0);
 }
 
 /// O dono do Connect chega ao Python, que o autentica e repassa pela ponte privada com o caminho original.

@@ -641,7 +641,7 @@ fn pair_state(state: &Arc<AppState>) -> Option<Arc<PairState>> {
     Some(Arc::new(pair_routes::PairState { app: state.clone(), owner, remote: Arc::new(pair_routes::Direct) }))
 }
 
-/// Convites e par externo do dono na 8765; quem não é o dono segue ao Python, que recusa como antes.
+/// Convites e par externo do dono na 8765; quem não é o dono recebe a recusa do Rust (401 ou 403).
 fn owner_share_router(state: &Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router {
     let Some(pair) = pair else { return Router::new() };
     crate::share::owner_routes::owner_router(pair.owner.clone())
@@ -660,7 +660,7 @@ fn private_share_router(state: &Arc<AppState>, pair: Option<&Arc<PairState>>) ->
 async fn owner_only(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request,
                     next: axum::middleware::Next) -> Response {
     let (fwd, owner) = match gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
-    // O preflight do CORS também é do Python.
+    // Quem não é o dono recebe a recusa do `pass`, sem chegar ao Python; o preflight o porteiro do login já respondeu.
     if !owner || req.method() == Method::OPTIONS {
         return pass(&st, req, &fwd).await;
     }
@@ -1106,6 +1106,7 @@ async fn request_auth(mut req: Request, next: axum::middleware::Next) -> Respons
     // O porteiro externo e o roteador interno compartilham a mesma admissão.
     if req.extensions().get::<RequestAuth>().is_none() {
         req.extensions_mut().insert(RequestAuth::default());
+        req.extensions_mut().insert(NotOwner::default());
     }
     // Cliente nenhum escolhe uma admissão anterior.
     req.headers_mut().remove("x-hangar-auth-receipt");
@@ -1113,9 +1114,36 @@ async fn request_auth(mut req: Request, next: axum::middleware::Next) -> Respons
     next.run(req).await
 }
 
+/// Um handler já decidiu, por `gate` ou `who`, que quem pede não é o dono: o `pass` não leva o pedido ao Python.
+#[derive(Clone, Default)]
+pub(crate) struct NotOwner(Arc<std::sync::atomic::AtomicBool>);
+
 pub(crate) fn gate(st: &AppState, peer: SocketAddr, req: &Request)
     -> impl std::future::Future<Output = Result<(Forward, bool), auth::AuthError>> + Send + use<> {
-    hangar_core::edge::gate(&st.cfg.trusted, &st.auth, peer, req)
+    let admission = hangar_core::edge::gate(&st.cfg.trusted, &st.auth, peer, req);
+    let marker = req.extensions().get::<NotOwner>().cloned();
+    async move {
+        let (forward, owner) = admission.await?;
+        if !owner && let Some(NotOwner(flag)) = marker { flag.store(true, Ordering::Relaxed); }
+        Ok((forward, owner))
+    }
+}
+
+/// A recusa de quem um handler já viu que não é o dono: o `require_auth` do Python, aqui (401 contado,
+/// 429, 503), e 403 ao convidado com login, que não perde o login por isso. `None` = o `require_auth`
+/// aceitaria (servidor sem senha), e o pedido segue.
+async fn not_owner_refusal(st: &AppState, req: &Request, fwd: &Forward) -> Option<Response> {
+    let marked = req.extensions().get::<NotOwner>().is_some_and(|NotOwner(flag)| flag.load(Ordering::Relaxed));
+    // O preflight não leva credencial: segue como antes.
+    if !marked || fwd.guest.is_some() || req.method() == Method::OPTIONS { return None; }
+    let mut response = if matches!(crate::share::caller::caller(req), Some(Caller::Guest(_))) {
+        crate::login_guests::gate::refused()
+    } else {
+        let token = auth::presented_token(req.headers(), req.uri().query(), req.method(), fwd.https);
+        hangar_core::edge::require_auth(&st.auth, fwd.client_ip.clone(), token).await.err()?
+    };
+    cors(req.headers(), response.headers_mut());
+    Some(response)
 }
 
 pub(crate) fn owner_gate(st: &AppState, peer: SocketAddr, req: &Request)
@@ -1143,7 +1171,14 @@ pub(crate) async fn refuse_without_python(st: &AppState, peer: SocketAddr, req: 
 
 pub(crate) fn who(st: &AppState, peer: SocketAddr, req: &Request)
     -> impl std::future::Future<Output = Result<(Forward, Option<Caller>), auth::AuthError>> + Send + use<> {
-    hangar_core::edge::who(&st.cfg.trusted, &st.auth, peer, req)
+    let resolved = hangar_core::edge::who(&st.cfg.trusted, &st.auth, peer, req);
+    // Na 8766 quem não tem convidado decidido já recebe o 404 do `pass`.
+    let marker = req.extensions().get::<NotOwner>().cloned().filter(|_| !on_guest_port(req));
+    async move {
+        let (forward, caller) = resolved.await?;
+        if caller.is_none() && let Some(NotOwner(flag)) = marker { flag.store(true, Ordering::Relaxed); }
+        Ok((forward, caller))
+    }
 }
 
 pub(crate) fn forward_for(st: &AppState, peer: SocketAddr, req: &Request) -> Forward {
@@ -1161,6 +1196,7 @@ pub(crate) fn on_connect_port(req: &Request) -> bool {
 
 
 pub(crate) async fn pass(st: &AppState, mut req: Request, fwd: &Forward) -> Response {
+    if !on_guest_port(&req) && let Some(response) = not_owner_refusal(st, &req, fwd).await { return response; }
     let _transfer_pass=if !matches!(*req.method(),Method::GET|Method::HEAD|Method::OPTIONS) {
         if let (Some(runtime),Some(name))=(st.state.runtime.get(),crate::session_write::session_name(req.uri().path())) {
             if runtime.transfer_blocked(&name).await {

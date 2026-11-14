@@ -5,7 +5,6 @@ import json
 import logging
 import os
 import re
-import secrets
 import threading
 import time
 import urllib.parse
@@ -21,7 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.requests import ClientDisconnect
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from app import (atomico, closed_names, diag,
+from app import (atomico, diag,
                  loop_monitor, permission_mode, plugin_bridge, procinfo, quem_chama, tmux,
                  uds_messaging)
 from app import groups_bridge, internal_api, list_bridge, share_bridge
@@ -32,7 +31,7 @@ from app.mensagens import erro
 from app import claude_customizations
 from app import model_args
 from app import registry as registry_mod
-from app.registry import KillFailed, SessionRegistry
+from app.registry import SessionRegistry
 from app.names import sanitize_session_name
 from app.models import SessionInfo, CreatedSessionInfo, ChatEvent, session_key
 from app.pqueue import (PromptQueue, _transcript_start_ts, committed_user_lines,
@@ -55,7 +54,6 @@ from app import archive_providers
 from app.archive import (archive_cwd, archive_jsonl,
                          list_folders)
 from app import codex_contas as codex_accounts
-from app.pair import PairLink
 from app.hook_state import hook_state
 
 _log = logging.getLogger("hangar")
@@ -1007,104 +1005,6 @@ def _codex_as_claude_mode(name: str) -> str | None:
 @app.post("/api/sessions", dependencies=[Depends(require_auth)], response_model=CreatedSessionInfo)
 async def create_session(request: Request) -> CreatedSessionInfo:
     raise registry_mod.SessionOpenNeedsRust()
-
-
-def _jsonl_of_session(name: str) -> str | None:
-    try:
-        return next((s.jsonl for s in registry.list() if s.name == name and s.jsonl), None)
-    except Exception:
-        # A lista falhar não impede fechar; só a conversa fica sem o nome no arquivo.
-        _log.warning("transcript of %s not found before close", name, exc_info=True)
-        return None
-
-
-def _sidecar_state(name: str) -> str:
-    """`grouped`, `absent` (sem arquivo, ou válido sem grupo) ou `unreadable` (existe e não se lê)."""
-    link = PairLink(name)
-    if link.get() is not None:
-        return "grouped"
-    try:
-        data = json.loads(link.path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return "absent"
-    except (OSError, ValueError):
-        return "unreadable"
-    if not isinstance(data, dict) or not isinstance(data.get("peers", []), list):
-        return "unreadable"
-    return "absent"
-
-
-async def _rust_leave(name: str, phases: dict) -> list[dict]:
-    try:
-        out = await asyncio.to_thread(groups_bridge.call, "group.leave", name=name, phases=phases)
-    except groups_bridge.GroupsBridgeError as e:
-        _log.warning("kill(%s): o Rust não tirou a sessão do grupo: %s", name, e.code)
-        return [{"sessao": name, "erro": erro("erro_grupo_indisponivel", "os grupos estão indisponíveis agora", detalhe=e.code)}]
-    return out.get("warnings") if isinstance(out.get("warnings"), list) else []
-
-
-@app.delete("/api/sessions/{name}", dependencies=[Depends(require_auth)])
-async def kill_session(name: str, by: str | None = None, request: Request = None):
-    # 500 quando a sessao SOBREVIVE ao kill — mesmo padrao do /rename logo abaixo, que ja confere e
-    # responde 404/500. Antes era {"ok": true} incondicional: o card sumia da UI e a sessao reaparecia
-    # na varredura seguinte, sem fila e sem pareamento (ver SessionRegistry.kill).
-    # Marca do Rust: ele já encerrou o Codex com terminal dele (e o grupo); aqui só as lojas daqui.
-    marked = lambda h: bool(request and internal_api._secret) and secrets.compare_digest(request.headers.get(h, "").encode(), internal_api._secret.encode())
-    closed = marked("x-hangar-rust-closed")
-    # Fechamento que não passou pelo Rust (Connect, convidado) e o do Claude pelo Connect, que o Rust
-    # encerrou sem sair do grupo: a saída vai pela ponte, com a fase do `orq` lida aqui antes, para o
-    # Rust não perguntar de volta.
-    skip_leave = closed
-    # Sem sidecar não há grupo a deixar: a ponte nem é chamada. Ilegível não é ausente: sai pela ponte.
-    sidecar = "absent" if skip_leave else await asyncio.to_thread(_sidecar_state, name)
-    if sidecar == "unreadable":
-        diag.registrar("grupos.sidecar_ilegivel", "erro", sessao=name)
-    grouped = sidecar != "absent"
-    phases = {} if grouped and groups_bridge.rust_owns_groups() else None
-    # Sem o Rust a saída do grupo não acontece: fechar segue, e a falta vai no aviso e no diário.
-    orphan = grouped and phases is None
-    # Fechada pelo Rust a sessão já saiu da lista: o transcript vem no cabeçalho ou na resposta dele.
-    if closed:
-        jsonl = urllib.parse.unquote(request.headers.get("x-hangar-closed-transcript", "")) or None
-    else:
-        jsonl = await asyncio.to_thread(_jsonl_of_session, name)
-    try:
-        errs = await asyncio.to_thread(registry.kill, name, closed_by_rust=closed) or []
-        if phases is not None:
-            errs = [*errs, *await _rust_leave(name, phases)]
-        if orphan:
-            diag.registrar("grupos.saida_sem_rust", "erro", sessao=name, codigo="groups_need_rust_server")
-            errs = [*errs, {"sessao": name, "erro": _groups_need_rust()}]
-    except KillFailed as e:
-        raise HTTPException(500, e.detail or str(e)) from None
-    finally:
-        if not closed:
-            await asyncio.to_thread(_invalidate_lists)
-    if jsonl:
-        try:
-            await asyncio.to_thread(closed_names.record, jsonl, name)
-        except OSError:
-            # Fechar já aconteceu; sem o nome, a conversa só não volta pelo nome antigo.
-            _log.warning("closed name not recorded for %s", name, exc_info=True)
-    elif closed:
-        _log.warning("closed name not recorded for %s: Rust close sent no transcript", name)
-    else:
-        _log.info("closed name not recorded for %s: no transcript", name)
-    plugin_bridge.esquecer(name)
-    # O Rust revoga e desliga o túnel; fora do ar, fechar segue e o aviso volta na resposta. Fechada
-    # pelo Rust, ele já revogou: perguntar de volta dentro da chamada dele prenderia o pool daqui.
-    share_failed = None if closed else await asyncio.to_thread(share_bridge.revoke_session, name)
-    warn = None
-    if errs:
-        if share_failed:
-            errs = [*errs, {"sessao": name, "erro": share_failed}]
-        warn = erro("erro_pareamento_saida_falhou",
-                    "aviso de saída falhou: " + "; ".join(
-                        f"{x['sessao']}: {_erro_texto(x['erro'])}" for x in errs),
-                    avisos=errs)
-    elif share_failed:
-        warn = share_failed
-    return {"ok": True, "warning": warn}
 
 
 class ModoExecucaoBody(_StrictBody):

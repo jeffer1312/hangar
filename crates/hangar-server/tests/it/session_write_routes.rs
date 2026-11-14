@@ -178,9 +178,8 @@ async fn open_entry_with_a_body_the_route_refuses_is_a_rust_422_never_python() {
     assert_eq!(python.hits_to("/api/sessions/s/input"), 0);
 }
 
-#[tokio::test]
-/// Achado 3 da revisão: quem não pode na sessão recebe o 401 do Rust na hora, sem esperar a porta e
-/// sem chegar ao Python, que não tem mais as rotas.
+/// Decisão 5: quem não pode na sessão recebe o 401 do Rust na hora, sem esperar a porta e sem chegar
+/// ao Python, que não tem mais as rotas.
 #[tokio::test]
 async fn stranger_gets_the_rust_401_at_once_even_with_the_gate_closed() {
     let (dir, registry) = (tempfile::tempdir().unwrap(), registry().await);

@@ -212,7 +212,7 @@ async fn stranger_gets_the_rust_401_and_bodies_the_route_refuses_are_a_rust_422(
     let case = golden().into_iter().find(|c| c["name"] == "model_ok").unwrap();
     open(&registry, dir.path(), &case).await;
     let (python, server) = serve(registry, dir.path()).await;
-    // Achado 3 da revisão: o Python não tem mais a rota; a recusa de quem não pode é do Rust.
+    // Decisão 5: quem não pode na sessão leva o 401 do Rust; o Python não tem mais a rota.
     assert_eq!(call(server, &case, "token-errado").await, (401, json!({"detail": {"code": "erro_nao_autorizado", "params": {}, "msg": "unauthorized"}})));
     for (method, route) in [("GET", "models"), ("GET", "limits"), ("GET", "commands"), ("POST", "codex/plan/implement")] {
         let probe = json!({"name": route, "method": method, "route": route, "body": {}});
