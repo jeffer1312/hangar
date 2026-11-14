@@ -359,7 +359,8 @@ fn his_55_nothing_configured_still_marks() {
     assert!(home.failures().is_empty());
 }
 
-// HIS-55 (r5-marca-presente): com a marca e a página vazia, a chave do MCP não volta; o repasse a tira.
+// HIS-55 (r5-marca-presente): com a marca e a página vazia, a chave do MCP não volta; o repasse a tira,
+// guardada antes (JEV-18).
 #[test]
 fn his_55_marker_keeps_the_mcp_key_from_coming_back() {
     let home = Home::new();
@@ -371,7 +372,23 @@ fn his_55_marker_keeps_the_mcp_key_from_coming_back() {
     assert!(!home.exists(RUNTIME));
     assert_eq!(home.json(MAIN), home.main_doc(json!({"FOO": "bar"})));
     assert_eq!(home.json(ACCOUNT), home.account_doc(json!({"FOO": "bar"})));
-    assert!(!home.exists(OLD_KEYS));
+    let mut kept = Map::new();
+    kept.insert(home.source(MAIN), json!(["chave-antiga-mcp"]));
+    kept.insert(home.account_source(), json!(["chave-antiga-mcp"]));
+    assert_eq!(home.json(OLD_KEYS), Value::Object(kept));
+}
+
+// JEV-18: página vazia e chave só na conta (o principal sem ela): o repasse a tira, guardada antes.
+#[test]
+fn jev_18_account_key_removed_by_an_empty_page_is_kept() {
+    let home = Home::new();
+    home.account(key_env("so-na-conta"));
+    home.main(json!({"FOO": "bar"}));
+    home.start();
+    assert_eq!(home.json(ACCOUNT), home.account_doc(json!({})));
+    let mut kept = Map::new();
+    kept.insert(home.account_source(), json!(["so-na-conta"]));
+    assert_eq!(home.json(OLD_KEYS), Value::Object(kept));
 }
 
 // HIS-18 (test_key_removed_on_the_jev_page_does_not_come_back_on_restart): chave apagada na página não

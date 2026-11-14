@@ -105,8 +105,12 @@ fn register(state: &AppState) {
 /// Com os caminhos já resolvidos (a rota de alvos os tem); a falha o crate já mandou ao diário.
 pub(crate) fn register_in(state: &AppState, paths: &setup::Paths) {
     let diary = crate::diag::diary_dir_in(&state.accounts.env);
-    // O env do Jev relido sob a trava, como no PUT.
-    let jev = || -> Result<_, setup::Error> { Ok(RuntimeConfig::from_state(state).map_err(setup::Error::io)?.jev_env()) };
+    // O env do Jev relido sob a trava, como no PUT; só é pedido quando alguma entrada vai ser reescrita.
+    let jev = || -> Result<_, setup::Error> {
+        let runtime = RuntimeConfig::from_state(state).map_err(setup::Error::io)?;
+        runtime.keep_keys_before_register().map_err(setup::Error::io)?;
+        Ok(runtime.jev_env())
+    };
     if let Ok(setup::Registered::Written) = setup::register(paths, setup::hyprland_found, jev, diary.as_deref()) {
         tracing::info!("Computer Use: MCP registrado");
     }

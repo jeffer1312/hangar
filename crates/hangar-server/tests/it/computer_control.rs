@@ -802,6 +802,29 @@ async fn rot38_created_target_registers_the_mcp_unless_turned_off_by_hand() {
     assert_eq!(off.read(".claude.json").as_deref(), Some("{}"));
 }
 
+/// D4.2, JEV-18: o registro não converte entrada antiga cuja chave a migração do Jev ainda vai levar à
+/// página; com a migração feita, converte e guarda a chave trocada.
+#[tokio::test]
+async fn register_keeps_the_old_jev_key_of_a_converted_entry() {
+    let s = Scene::new().await;
+    s.installed();
+    let old = json!({"mcpServers": {"hangar-computer-control": {"command": "/velho/uvx", "args": [], "env": {"TYPESAFE_API_KEY": "chave-antiga-123"}}}});
+    s.json_file(".claude.json", old.clone());
+    assert_eq!(s.target(json!({"project_dir": "", "name": "vm", "host": "vm"})).await.0, StatusCode::OK);
+    assert_eq!(serde_json::from_str::<Value>(&s.read(".claude.json").unwrap()).unwrap(), old);
+
+    s.write(".hangar/jev-migrated", "");
+    s.write(".claude/runtime-config.json", "{\n  \"jev_api_key\": \"chave-nova-456\"\n}");
+    assert_eq!(s.target(json!({"project_dir": "", "name": "vm2", "host": "vm2"})).await.0, StatusCode::OK);
+    let main: Value = serde_json::from_str(&s.read(".claude.json").unwrap()).unwrap();
+    let entry = &main["mcpServers"]["hangar-computer-control"];
+    assert_eq!(entry["command"], s.h(json!("«HOME»/.hangar/computer-control/hangar-computer-control")));
+    assert_eq!(entry["env"]["TYPESAFE_API_KEY"], "chave-nova-456");
+    let kept: Value = serde_json::from_str(&s.read(".hangar/jev-chave-antiga-computer-use.json").unwrap()).unwrap();
+    let source = s.home.join(".claude.json").to_string_lossy().into_owned();
+    assert_eq!(kept, json!({source: ["chave-antiga-123"]}));
+}
+
 /// ROT-02 (r1-alvo-campo-desconhecido).
 #[tokio::test]
 async fn rot02_target_unknown_field_is_422() {

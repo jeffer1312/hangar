@@ -95,6 +95,15 @@ impl RuntimeConfig {
         self.sync_jev()
     }
 
+    /// Antes de o registro reescrever entradas com o env do Jev: a chave que a migração ainda vai levar à
+    /// página não sai do MCP, e toda chave trocada fica guardada, como no repasse.
+    pub(crate) fn keep_keys_before_register(&self) -> Result<(), String> {
+        if self.unmigrated_mcp_key()?.is_some() {
+            return Err("a chave do Jev do Computer Use ainda não migrou para a página Jev".into());
+        }
+        self.keep_replaced_keys(&self.jev_key())
+    }
+
     /// A chave que o repasse grava no MCP.
     fn jev_key(&self) -> String {
         self.get("jev_api_key").as_str().unwrap_or("").trim().to_owned()
@@ -116,10 +125,7 @@ impl RuntimeConfig {
 
     /// Guarda, por arquivo de origem, a chave do MCP que o próximo repasse troca por `new`.
     fn keep_replaced_keys(&self, new: &str) -> Result<(), String> {
-        if new.is_empty() {
-            return Ok(());
-        }
-        // Origem ilegível fica de fora: o leitor é o mesmo do repasse, que recusa o mesmo arquivo antes de
+        // `new` vazio também troca: o repasse tira a chave de quem a tem. Origem ilegível fica de fora: o leitor é o mesmo do repasse, que recusa o mesmo arquivo antes de
         // gravar qualquer um; nenhuma chave é trocada sem a antiga guardada.
         let paths = self
             .computer_use_paths()
