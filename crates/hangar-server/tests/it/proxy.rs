@@ -221,6 +221,7 @@ async fn blocked_origin_never_gets_the_owner_shortcut() {
             .unwrap();
         assert_eq!(r.status(), 401);
     }
+    // `test_backoff_barra_apos_max_fails`: bloqueada, nem a senha certa passa; o 429 agora é do Rust.
     let r = client()
         .get(format!("http://{srv}/api/sessions/s/history"))
         .header("x-forwarded-for", ip)
@@ -228,7 +229,9 @@ async fn blocked_origin_never_gets_the_owner_shortcut() {
         .send()
         .await
         .unwrap();
-    assert_eq!(r.text().await.unwrap(), "from-python");
+    assert_eq!(r.status(), 429);
+    assert_eq!(r.headers()["retry-after"], "30");
+    assert_eq!(fake.hits_to("/api/sessions/s/history"), 0);
     assert_eq!(fake.info_calls(), 0, "bloqueado: o token do dono nem é avaliado");
 
     // Controle: outra origem com o mesmo token segue pelo atalho.
@@ -255,6 +258,7 @@ async fn origin_limited_by_python_gets_owner_requests_proxied() {
         .await
         .unwrap();
     assert_eq!(r.status(), 429);
+    // A origem que o Python saturou fica bloqueada também no Rust: o dono dali recebe o 429 dele.
     let r = client()
         .get(format!("http://{srv}/api/sessions/s/history"))
         .header("x-forwarded-for", ip)
@@ -262,7 +266,7 @@ async fn origin_limited_by_python_gets_owner_requests_proxied() {
         .send()
         .await
         .unwrap();
-    assert_eq!(r.text().await.unwrap(), "from-python");
+    assert_eq!(r.status(), 429);
     // `/events` não existe mais no Python: a origem bloqueada recebe o 429 do próprio Rust.
     let r = client()
         .get(format!("http://{srv}/api/sessions/s/events"))
@@ -274,7 +278,7 @@ async fn origin_limited_by_python_gets_owner_requests_proxied() {
     assert_eq!(r.status(), 429);
     assert_eq!(r.headers()["retry-after"], "30");
     assert_eq!(r.json::<serde_json::Value>().await.unwrap()["detail"]["code"], "erro_muitas_tentativas");
-    assert_eq!(fake.hits_to("/api/sessions/s/history"), 1);
+    assert_eq!(fake.hits_to("/api/sessions/s/history"), 0);
     assert_eq!(fake.hits_to("/api/sessions/s/events"), 0);
     assert_eq!(fake.info_calls(), 0, "o 429 do Python desliga o atalho dessa origem");
 }

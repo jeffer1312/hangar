@@ -13,7 +13,6 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use axum::http::StatusCode;
 use fake::*;
 use futures_util::future::BoxFuture;
 use futures_util::StreamExt;
@@ -349,11 +348,13 @@ async fn guest_forward_never_touches_the_owner_backoff() {
     let srv = plain_srv(dir.path(), |_| {}).await;
     let t = srv.g.token("cc", Kind::Share);
     let url = format!("http://{lan}:{}/api/sessions/cc/input", srv.guest.port());
-    for status in [StatusCode::UNAUTHORIZED, StatusCode::TOO_MANY_REQUESTS] {
-        srv.python.set_input_reply(Some((status, json!({}))));
-        assert_eq!(post_json(url.clone(), &t, json!({"text": "oi"})).await.0, status.as_u16());
+    // Decisões 1 e 8: a escrita do convidado é do Rust; sem o registro de sessões, 503 com código e
+    // nada vai ao Python. Recusas seguidas do convidado nunca entram no bloqueio do dono.
+    for _ in 0..9 {
+        let (status, body) = post_json(url.clone(), &t, json!({"text": "oi"})).await;
+        assert_eq!((status, body["detail"]["code"].as_str()), (503, Some("runtime_unavailable")), "{body}");
     }
-    assert_eq!(srv.python.input_calls(), 2);
+    assert_eq!(srv.python.input_calls(), 0);
     assert!(srv.st.auth.is_owner(&lan.to_string(), Some(OWNER.as_bytes())), "o dono nesse IP segue livre");
 }
 
