@@ -226,7 +226,8 @@ async fn latest(paths: &Paths, http: &reqwest::Client, github: &Github, only_if_
 /// MCP (`Paths::binary`).
 fn required(paths: &Paths, windows: bool) -> Vec<(PathBuf, &'static str, &'static [u8])> {
     let exe = (paths.exe(), EXE_ASSET, &b"MZ"[..]);
-    if windows { vec![exe] } else { vec![(paths.install_dir().join(crate::NAME), LINUX_ASSET, &b"\x7fELF"[..]), exe] }
+    // Exe antes do binário Linux: a ordem de download do Python.
+    if windows { vec![exe] } else { vec![exe, (paths.install_dir().join(crate::NAME), LINUX_ASSET, &b"\x7fELF"[..])] }
 }
 
 /// O primeiro asset que a plataforma usa e a release não lista.
@@ -489,7 +490,13 @@ fn migrate_targets(paths: &Paths) -> Vec<String> {
     let binary = paths.binary().to_string_lossy().into_owned();
     let mut skipped = Vec::new();
     let mut write_failed = false;
-    for name in targets::target_files(paths) {
+    let names = targets::target_files_checked(paths).unwrap_or_else(|error| {
+        // Sem a lista, a pendência fica: a próxima subida tenta de novo.
+        tracing::warn!(code = DISK_FAILED, %error, "Computer Use: alvos não listados para a migração");
+        write_failed = true;
+        Vec::new()
+    });
+    for name in names {
         let path = paths.targets_dir().join(&name);
         let Some(Value::Object(cfg)) = std::fs::read(&path).ok().and_then(|bytes| files::parse(&bytes)) else {
             tracing::warn!(alvo = %name, "Computer Use: alvo ilegível não migrou");
@@ -741,8 +748,8 @@ mod tests {
         let paths = Paths::new(PathBuf::from("/h"), Vec::new());
         let files = |windows| required(&paths, windows).into_iter().map(|(path, ..)| path).collect::<Vec<_>>();
         assert_eq!(files(true), [paths.exe()]);
-        assert_eq!(files(false), [paths.install_dir().join(crate::NAME), paths.exe()]);
-        assert_eq!(files(cfg!(windows))[0], paths.binary());
+        assert_eq!(files(false), [paths.exe(), paths.install_dir().join(crate::NAME)]);
+        assert!(files(cfg!(windows)).contains(&paths.binary()));
     }
 
     /// No Windows só o exe é baixado: release sem o binário Linux instala; no Linux ela falta.

@@ -133,14 +133,26 @@ pub fn create_target(paths: &Paths, request: &TargetRequest) -> Result<(), Error
 
 /// Os `<nome>-agent.json` de `targets/`, em ordem de nome.
 pub(crate) fn target_files(paths: &Paths) -> Vec<String> {
-    let Ok(listing) = std::fs::read_dir(paths.targets_dir()) else { return Vec::new() };
-    let mut names: Vec<String> = listing
-        .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
+    target_files_checked(paths).unwrap_or_default()
+}
+
+/// Como `target_files`, mas falha de leitura da pasta (que não seja ela faltar) vira erro.
+pub(crate) fn target_files_checked(paths: &Paths) -> std::io::Result<Vec<String>> {
+    let listing = match std::fs::read_dir(paths.targets_dir()) {
+        Ok(listing) => listing,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e),
+    };
+    let mut names = Vec::new();
+    for entry in listing {
+        let Ok(name) = entry?.file_name().into_string() else { continue };
         // Mesmo recorte do glob do Python: oculto fica fora.
-        .filter(|name| name.ends_with(SUFFIX) && !name.starts_with('.'))
-        .collect();
+        if name.ends_with(SUFFIX) && !name.starts_with('.') {
+            names.push(name);
+        }
+    }
     names.sort();
-    names
+    Ok(names)
 }
 
 fn exists(name: &str) -> Error {
