@@ -9,6 +9,13 @@ use crate::queue_panel::{self as model, QueueEdit, QueueEntry};
 
 /// Cerca de quatro linhas à vista; o resto rola dentro do painel.
 const LIST_MAX: f32 = 4. * 28.;
+/// Medidas fixas do painel: cabeçalho, linha, vão entre linhas, pé da lista, borda e o vão até o cartão do composer.
+const HEAD_HEIGHT: f32 = 32.;
+const ROW_HEIGHT: f32 = 26.;
+const ROW_GAP: f32 = 1.;
+const LIST_PAD: f32 = 6.;
+const BORDER: f32 = 1.;
+const PANEL_GAP: f32 = 6.;
 
 /// O que se arrasta pela alça.
 #[derive(Clone)]
@@ -36,11 +43,57 @@ pub(super) struct QueueUi {
     drop: Option<(String, bool)>,
     /// Entrada que saiu pela alça; só vale enquanto há arrasto ativo.
     dragged: Option<String>,
+    /// Texto da única mensagem que o painel mostra: de onde ela sai em viagem para a conversa.
+    pub(super) shown_text: Option<String>,
+    /// Falso na conversa recém-aberta: o primeiro desenho adota o estado do painel sem animar.
+    settled: bool,
+    open: bool,
+    /// O painel deslizando: a fração de onde partiu, se abre, e desde quando.
+    slide: Option<(f32, bool, Instant)>,
+    /// As entradas do último desenho com o painel aberto: é o que ele mostra enquanto fecha.
+    last: Rc<[QueueEntry]>,
+    /// Linhas à vista e se o painel pode deslizar, como no último desenho: a raiz faz a conta da altura por eles.
+    shape: (usize, bool),
+    /// A altura deslizante com que o painel foi desenhado no último quadro, e a que a raiz já contou para este.
+    drawn: Option<f32>,
+    planned: Option<f32>,
 }
 
 impl QueueUi {
     /// Outra conversa abre com o painel aberto.
-    pub(super) fn on_select(&mut self) { self.collapsed = false; self.drop = None; self.dragged = None; }
+    pub(super) fn on_select(&mut self) {
+        (self.collapsed, self.drop, self.dragged) = (false, None, None);
+        (self.shown_text, self.settled) = (None, false);
+        // O deslize era do painel da outra conversa: a raiz não conta altura por ele.
+        (self.slide, self.drawn, self.planned) = (None, None, None);
+    }
+
+    /// Quanto da altura o painel mostra agora: 1 aberto, 0 fechado, entre os dois enquanto desliza.
+    fn fraction(&self) -> f32 {
+        match self.slide {
+            Some((from, opening, at)) => {
+                let spec = slide_spec(opening);
+                send_flight::panel_fraction(from, opening, spec.ease(spec.raw(at)))
+            }
+            None => if self.open { 1. } else { 0. },
+        }
+    }
+
+    /// A altura do painel deslizando agora; `None` parado ou sem poder deslizar.
+    fn sliding_height(&self) -> Option<f32> {
+        let (rows, slides) = self.shape;
+        (slides && self.slide.is_some_and(|(_, opening, at)| slide_spec(opening).raw(at) < 1.))
+            .then(|| (panel_height(rows) + PANEL_GAP) * self.fraction())
+    }
+}
+
+fn slide_spec(opening: bool) -> motion::Spec { if opening { motion::QUEUE_OPEN } else { motion::FLIGHT } }
+
+/// Altura do painel com `rows` linhas à vista (0 recolhido ou sem mensagens), pelas medidas com que ele é desenhado:
+/// abrir e fechar por uma altura calculada não espera a medida de um quadro para acertar a do seguinte.
+fn panel_height(rows: usize) -> f32 {
+    let list = if rows == 0 { 0. } else { (rows as f32 * ROW_HEIGHT + (rows - 1) as f32 * ROW_GAP + LIST_PAD).min(LIST_MAX) };
+    2. * BORDER + HEAD_HEIGHT + list
 }
 
 /// "Mandar direto": só Claude e Codex têm o Orientar por mensagem, e só com o agente trabalhando.
@@ -229,16 +282,50 @@ impl Hangar {
 
     /// O painel; sem mensagem esperando só aparece com o "mandar direto" ligado e o agente trabalhando, porque aí nada entra
     /// na fila e esta é a única caixinha para desligá-lo.
+    /// Quanto a altura do painel deslizando muda do último quadro para este. A raiz soma isso à altura medida da faixa
+    /// de baixo, que é a do quadro anterior, e o painel é desenhado com a mesma conta.
+    pub(super) fn queue_slide_step(&mut self) -> f32 {
+        self.queue.planned = self.queue.sliding_height();
+        match (self.queue.drawn, self.queue.planned) { (Some(before), Some(now)) => now - before, _ => 0. }
+    }
+
     pub(super) fn render_queue_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        // A mensagem que saiu do campo com a sessão parada vai direto à conversa: passar pela fila por um instante não
+        // abre o painel.
+        let skip = self.send_skips_queue().map(str::to_owned);
+        let (planned, _) = (self.queue.planned.take(), self.queue.drawn.take());
         let panel = self.chat.queue_panel();
         let direct = appearance::get().steer_while_working;
         let supports = matches!(self.provider().0, "claude" | "codex");
-        if panel.entries.is_empty() && !(supports && direct && self.chat.state.state == "working") { return None; }
         let read_only = self.selected.as_ref().is_some_and(|s| s.read_only());
         let stalled = stalled_notice(&panel, self.chat.state.problema.as_deref(), read_only);
         // Uma cópia por quadro, dividida pelas linhas e pelos handlers de setas e de soltar.
-        let (entries, actions): (Rc<[QueueEntry]>, bool) = (panel.entries.iter().cloned().collect(), panel.actions);
+        let (entries, actions): (Rc<[QueueEntry]>, bool) =
+            (panel.entries.iter().filter(|e| skip.as_deref() != Some(e.text.trim())).cloned().collect(), panel.actions);
         drop(panel);
+        let live = !entries.is_empty() || supports && direct && self.chat.state.state == "working";
+        // O painel abre e fecha pela altura, para a conversa ganhar e perder o espaço aos poucos.
+        let moving = !cx.reduce_motion();
+        // Com o aviso de entrega parada a altura depende do texto dele: o painel não desliza.
+        let slides = !stalled;
+        if !self.queue.settled { (self.queue.settled, self.queue.open, self.queue.slide) = (true, live, None); }
+        if live != self.queue.open {
+            // Inverter no meio parte da fração em que o painel estava.
+            let from = self.queue.fraction();
+            (self.queue.open, self.queue.slide) = (live, moving.then(|| (from, live, Instant::now())));
+        }
+        if live { self.queue.last = entries.clone(); }
+        if self.queue.slide.is_some_and(|(_, opening, at)| slide_spec(opening).raw(at) >= 1.) { self.queue.slide = None; }
+        if !live && self.queue.slide.is_none() {
+            self.queue.shown_text = None;
+            return None;
+        }
+        // Fechando, ele mostra o que tinha, sem ações: a fila de verdade já esvaziou.
+        let (entries, actions) = if live { (entries, actions) } else { (self.queue.last.clone(), false) };
+        self.queue.shown_text = (entries.len() == 1).then(|| entries[0].text.trim().to_owned());
+        if live && entries.len() == 1 { self.send_reaches_queue(&entries[0].text); }
+        let rows = if self.queue.collapsed { 0 } else { entries.len() };
+        self.queue.shape = (rows, slides);
         if supports { self.refresh_queue_jev(cx); }
         let jev_ready = self.queue_jev_ready();
         let jev_state = self.selected_key().and_then(|key| self.queue.jev.get(&key.server)).map(|(_, _, state)| state);
@@ -264,7 +351,7 @@ impl Hangar {
             .child(chrome::small_icon(if expanded { IconName::ChevronDown } else { IconName::ChevronUp }, 14., theme::faint()));
         let list = (expanded && !entries.is_empty()).then(|| {
             let rows: Vec<AnyElement> = (0..entries.len()).map(|i| self.render_queue_row(&entries, actions, i, window, cx)).collect();
-            div().id("queue-panel-list").max_h(px(LIST_MAX)).overflow_y_scroll().flex().flex_col().gap(px(1.)).px(px(6.)).pb(px(6.))
+            div().id("queue-panel-list").max_h(px(LIST_MAX)).overflow_y_scroll().flex().flex_col().gap(px(ROW_GAP)).px(px(6.)).pb(px(LIST_PAD))
                 .children(rows)
         });
         // Fora do cabeçalho: clicar na caixinha não abre nem fecha o painel.
@@ -274,7 +361,7 @@ impl Hangar {
             .checked(appearance::get().jev_delivery && jev_ready).disabled(!jev_ready)
             .tooltip(jev_help)
             .on_click(cx.listener(|this, checked: &bool, _, cx| this.set_queue_jev(*checked, cx))));
-        let top = div().flex().flex_wrap().items_center().gap(px(6.)).pr(px(10.))
+        let top = div().h(px(HEAD_HEIGHT)).flex_shrink_0().flex().flex_wrap().items_center().gap(px(6.)).pr(px(10.))
             .child(div().flex_1().min_w_0().child(header)).children(toggle).children(jev_toggle);
         // Fora da lista: com o painel recolhido o aviso e o Reabrir continuam à vista.
         let stalled = stalled.then(|| div().id("queue-stalled").flex().flex_wrap().items_center().gap(px(8.)).px(px(12.)).pb(px(6.))
@@ -286,7 +373,17 @@ impl Hangar {
         let body = div().id("queue-panel").flex().flex_col().rounded(px(12.)).border_1().border_color(theme::border_strong())
             .bg(theme::boxed()).child(top).children(stalled).children(list);
         let body = popup::anchor(body, crate::tour::anchors::QUEUE_PANEL);
-        Some(div().mb(px(6.)).child(chrome::glass_panel(body, px(12.))).into_any_element())
+        let panel = chrome::glass_panel(body, px(12.));
+        // A conta da raiz para este quadro, quando ela a fez; no primeiro quadro do deslize, a mesma conta aqui.
+        let Some(height) = self.queue.sliding_height().map(|now| planned.unwrap_or(now)) else {
+            return Some(div().mb(px(PANEL_GAP)).child(panel).into_any_element());
+        };
+        self.queue.drawn = Some(height);
+        motion::request_frame(window, cx);
+        // O painel fica preso ao pé da caixa que cresce ou encolhe: nasce do campo, com a linha da mensagem primeiro,
+        // e volta para ele. O vão até o cartão do composer vai junto.
+        Some(div().relative().overflow_hidden().h(px(height))
+            .child(div().absolute().left_0().right_0().bottom(px(PANEL_GAP)).child(panel)).into_any_element())
     }
 
     fn render_queue_row(&mut self, entries: &Rc<[QueueEntry]>, actions: bool, i: usize, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -297,7 +394,7 @@ impl Hangar {
         let dragging = cx.has_active_drag();
         let drop_line = self.queue.drop.as_ref().filter(|(over, _)| dragging && *over == id).map(|(_, after)| *after);
         let mut row = div().id(SharedString::from(format!("queue-row-{i}"))).relative().flex().items_center().gap(px(4.))
-            .min_h(px(26.)).px(px(4.)).rounded(px(8.)).when(editing, |el| el.bg(theme::accent_dim()));
+            .h(px(ROW_HEIGHT)).flex_shrink_0().px(px(4.)).rounded(px(8.)).when(editing, |el| el.bg(theme::accent_dim()));
         if let Some(after) = drop_line {
             let line = div().absolute().left_0().right_0().h(px(2.)).rounded_full().bg(theme::accent());
             row = row.child(if after { line.bottom_0() } else { line.top_0() });
@@ -349,6 +446,9 @@ impl Hangar {
         let full = super::quotes::summary(&text);
         row = row.child(div().id(SharedString::from(format!("queue-text-{i}"))).flex_1().min_w_0().px(px(4.)).truncate()
             .text_size(px(12.5)).text_color(theme::text()).child(conversation::one_line(&full, 400))
+            // Sozinha na fila, a linha diz onde está: a mensagem enviada pousa nela e sai dela em viagem.
+            .when(entries.len() == 1, |el| el.relative().child(send_flight::record(&self.flight_places, |p| &p.queue))
+                .when(self.send_hides_queue_text(), |el| el.opacity(0.)))
             .tooltip(move |window, cx| gpui_kit::component::tooltip::Tooltip::new(full.clone()).build(window, cx)));
         if !actions { return row.into_any_element(); }
         if editing {
@@ -356,12 +456,17 @@ impl Hangar {
                 .on_click(cx.listener(|this, _, window, cx| this.finish_queue_edit(window, cx)))).into_any_element();
         }
         let (edit, steer, remove) = (id.clone(), id.clone(), id);
+        let steered = text.clone();
         row.child(Button::new(SharedString::from(format!("queue-edit-{i}"))).ghost().xsmall().icon(IconName::Pencil)
                 .tooltip(tr_shared("queue_panel_edit", &[])).accessibility_label(tr_shared("queue_panel_edit", &[])).disabled(busy)
                 .on_click(cx.listener(move |this, _, window, cx| this.begin_queue_edit(&edit, window, cx))))
             .child(Button::new(SharedString::from(format!("queue-steer-{i}"))).ghost().xsmall().icon(IconName::CornerUpRight)
                 .label(tr_shared("codex_orientar", &[])).tooltip(tr_shared("codex_orientar_ajuda", &[])).disabled(busy)
-                .on_click(cx.listener(move |this, _, _, cx| this.act(Action::QueueSteer(steer.clone()), steer.clone(), cx))))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    // A viagem até a conversa parte no clique: a bolha já nasce como destino dela.
+                    this.send_takeoff_from_queue(&steered, cx);
+                    this.act(Action::QueueSteer(steer.clone()), steer.clone(), cx)
+                })))
             .child(Button::new(SharedString::from(format!("queue-remove-{i}"))).ghost().xsmall().icon(IconName::Close)
                 .tooltip(tr_shared("queue_panel_remove", &[])).accessibility_label(tr_shared("queue_panel_remove", &[])).disabled(busy)
                 .on_click(cx.listener(move |this, _, _, cx| this.act(Action::QueueCancel(remove.clone()), remove.clone(), cx))))
@@ -371,8 +476,16 @@ impl Hangar {
 
 #[cfg(test)]
 mod tests {
-    use super::{sends_direct, stalled_notice};
+    use super::{panel_height, sends_direct, stalled_notice};
     use crate::api::dto::ChatEvent;
+
+    #[test]
+    fn the_panel_height_follows_the_rows_shown_up_to_the_list_ceiling() {
+        assert_eq!(panel_height(0), 34., "recolhido ou sem mensagens: borda e cabeçalho");
+        assert_eq!(panel_height(1), 34. + 26. + 6.);
+        assert_eq!(panel_height(2), 34. + 2. * 26. + 1. + 6.);
+        assert_eq!(panel_height(9), 34. + 112., "a lista para em quatro linhas e rola");
+    }
 
     #[test]
     fn queue_panel_shows_the_stalled_delivery_with_reopen() {

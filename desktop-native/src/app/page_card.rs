@@ -85,6 +85,14 @@ pub fn frame_height(page: &PageRef, width: f32, reported: Option<f32>) -> f32 {
     capped.clamp(MIN as f32, MAX as f32)
 }
 
+/// Giros da roda a menos disto um do outro são o mesmo gesto: quem começou com ele continua com ele.
+const WHEEL_LATCH: std::time::Duration = std::time::Duration::from_millis(400);
+
+/// A conversa levou um giro há pouco: o próximo ainda é dela, mesmo com o cursor em cima da página.
+fn wheel_latched(last: Option<std::time::Instant>, now: std::time::Instant) -> bool {
+    last.is_some_and(|at| now.saturating_duration_since(at) < WHEEL_LATCH)
+}
+
 /// A página rola dentro do quadro (o agente limitou a altura ou ela passa do teto): só então a roda é dela.
 fn scrolls_inside(page: &PageRef, width: f32, reported: Option<f32>) -> bool {
     natural(page, width, reported) > frame_height(page, width, reported) + 0.5
@@ -264,6 +272,8 @@ pub struct Pages {
     window: AnyWindowHandle,
     /// Largura do cartão no último desenho: escolhe a altura medida mais próxima e a imagem.
     width: Rc<Cell<f32>>,
+    /// Último giro da roda que a conversa levou: enquanto ele é recente, a página não fica com a roda.
+    pub wheel_latch: Rc<Cell<Option<std::time::Instant>>>,
     live: bool,
     /// Chromium já de pé para a conversa aberta, que tem página.
     #[cfg(target_os = "linux")]
@@ -274,7 +284,7 @@ impl Pages {
     pub fn new(window: AnyWindowHandle) -> Self {
         let live = cfg!(any(target_os = "linux", target_os = "windows")) && Engine::available().is_ok();
         Self {
-            views: HashMap::new(), budget: Budget::default(), paint: Rc::default(), window, width: Rc::new(Cell::new(COLUMN)), live,
+            views: HashMap::new(), budget: Budget::default(), paint: Rc::default(), window, width: Rc::new(Cell::new(COLUMN)), wheel_latch: Rc::default(), live,
             #[cfg(target_os = "linux")]
             warm: None,
         }
@@ -821,6 +831,7 @@ impl Hangar {
             let site = view.page.url.clone().map(|start| view.running.as_ref().and_then(|r| r.at.clone()).unwrap_or(start));
             let (paint, origin, width_cell, mark) = (self.pages.paint.clone(), view.origin.clone(), self.pages.width.clone(), id.clone());
             let shown = engine.clone();
+            let latch = self.pages.wheel_latch.clone();
             let surface = canvas(|bounds, window, _| window.insert_hitbox(bounds, HitboxBehavior::Normal), move |bounds, hitbox, window, _| {
                 origin.set(bounds.origin);
                 record_width(&width_cell, bounds, window);
@@ -831,6 +842,8 @@ impl Hangar {
                 if inside {
                     window.on_mouse_event(move |event: &ScrollEvent, phase, window, cx| {
                         if phase != DispatchPhase::Capture || !hitbox.should_handle_scroll(window) { return; }
+                        // Quem vem rolando a conversa passa por cima da página sem ficar preso nela.
+                        if wheel_latched(latch.get(), std::time::Instant::now()) { return; }
                         let delta = event.delta.pixel_delta(px(16.));
                         engine.wheel(event.position - bounds.origin, point(-delta.x, -delta.y));
                         cx.stop_propagation();
@@ -920,7 +933,16 @@ fn toggle_button(id: &str, collapsed: bool, cx: &mut Context<Hangar>) -> Button 
 mod tests {
     // Sem `super::*`: o glob da gpui_kit traz um `test` próprio que sombreia o `#[test]` da std.
     use super::{Budget, HostMsg, Miss, PageRef, ViewState, expandable, frame_height, miss, page_failure, page_from_result, parse_host,
-        scrolls_inside};
+        scrolls_inside, wheel_latched};
+
+    #[test]
+    fn a_wheel_gesture_started_on_the_conversation_stays_with_it() {
+        let now = std::time::Instant::now();
+        let ago = |ms| now.checked_sub(std::time::Duration::from_millis(ms));
+        assert!(wheel_latched(ago(100), now), "mesmo gesto: a página não pega a roda");
+        assert!(!wheel_latched(ago(500), now), "giro novo com o cursor na página é dela");
+        assert!(!wheel_latched(None, now));
+    }
 
     #[test]
     fn answered_call_without_page_is_a_visible_failure() {

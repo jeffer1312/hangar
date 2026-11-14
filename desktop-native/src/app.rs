@@ -27,6 +27,7 @@ mod create;
 mod device;
 mod follow;
 mod row_patch;
+mod send_flight;
 mod landing;
 mod edits;
 mod terminal_look;
@@ -143,6 +144,8 @@ const PREVIEW: &str = "__preview__";
 const WORKING: &str = "__working__";
 /// Entrada da linha "trabalhando"; a marca, desenhada fora da conversa, entra no mesmo tempo.
 const WORKING_FADE: Duration = motion::WORKING.duration();
+/// Quanto a nota do Jev sobre o caminho do envio fica na tela.
+const JEV_NOTE_TTL: Duration = Duration::from_secs(6);
 // A miniatura citada chegando: abre do centro, borrada, e fica nítida no fim.
 const REVEAL: Duration = Duration::from_millis(1400);
 /// Mensagem mais velha que isto (segundos) é histórico: a imagem dela aparece sem a revelação.
@@ -649,6 +652,9 @@ pub struct Hangar {
     file_cards: HashMap<(SessionKey, Source), FileCard>,
     /// Painel "Na fila": edição em curso, recolhido e arrasto.
     queue: queue::QueueUi,
+    /// A mensagem enviada em viagem até o lugar dela, e onde as pontas da viagem foram desenhadas.
+    send_flight: Option<send_flight::Flight>,
+    flight_places: std::rc::Rc<send_flight::Places>,
     /// Terminais de atalho vivos da máquina ativa (evento `shortcut_terminals`); as outras máquinas guardam no `RemoteList`.
     live_terms: Vec<terminal::LiveTerm>,
     /// Máquinas (chave `servers::norm`, ativa e outras) com o chaveiro trancado, pelo evento `keyring` da lista de cada uma.
@@ -1171,7 +1177,7 @@ impl Hangar {
             history_installed: false, pending_chat: Vec::new(),
             history_limit: 400, has_older: false, etag: None, error: None, list_error: None,
             delivery: DeliveryTracker::default(), stopping: HashSet::new(), stop_feedback: HashMap::new(), drafts: HashMap::new(), input_history: HashMap::new(),
-            flight: InFlight::default(), action_feedback: HashMap::new(), file_cards: HashMap::new(), queue: Default::default(), live_terms: Vec::new(), keyring: HashMap::new(), vault: HashMap::new(), vault_page: None, plugins_page: None, guide: Default::default(), rename_suggest: Default::default(), tags: HashMap::new(), question_open: None, question_card: None,
+            flight: InFlight::default(), action_feedback: HashMap::new(), file_cards: HashMap::new(), queue: Default::default(), send_flight: None, flight_places: Default::default(), live_terms: Vec::new(), keyring: HashMap::new(), vault: HashMap::new(), vault_page: None, plugins_page: None, guide: Default::default(), rename_suggest: Default::default(), tags: HashMap::new(), question_open: None, question_card: None,
             hangar_open: false, hangar_focus: cx.focus_handle(), hangar_error: None, live_clock: None, ask_form: AskForm::default(), ask_drafts: HashMap::new(), plans_dismissed: HashSet::new(), answered_tools: HashSet::new(), answering: HashMap::new(), ask_scroll: Default::default(), plan_scroll: Default::default(), plan_view: None,
             plan_review: Default::default(),
             list_state, rail_hover: None, follow: Default::default(), row_ids: Vec::new(), row_signatures: Vec::new(), conversation: Default::default(), row_assets: Vec::new(), expanded: HashSet::new(), kept_expanded: HashMap::new(), orq_days: HashSet::new(),
@@ -1690,6 +1696,7 @@ impl Hangar {
         self.suggest_dismissed = None;
         self.side.on_select();
         self.queue.on_select();
+        self.send_flight = None;
         self.dossier = None;
         self.controls.on_select();
         self.reset_subagent_count();
@@ -2322,7 +2329,21 @@ impl Hangar {
                 "refused" => ("queue_jev_refused", true),
                 _ => ("queue_jev_unavailable", true),
             };
-            self.action_feedback.insert(key.clone(), (tr(message), warning));
+            let shown = tr(message);
+            self.action_feedback.insert(key.clone(), (shown.clone(), warning));
+            // A nota do Jev só conta por onde o envio foi: some sozinha. Envio que falhou fica até a pessoa agir.
+            let session = key.clone();
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(JEV_NOTE_TTL).await;
+                if let Some(this) = this.upgrade() {
+                    this.update(cx, |this, cx| {
+                        if this.action_feedback.get(&session).is_some_and(|(text, _)| *text == shown) {
+                            this.action_feedback.remove(&session);
+                            cx.notify();
+                        }
+                    });
+                }
+            }).detach();
         }
         if result.is_ok() {
             self.bridge_sending(key.clone(), cx);
@@ -3040,7 +3061,10 @@ impl Hangar {
         }
         // As referências da bandeja vão antes do digitado; o que volta ao campo numa falha é só o digitado.
         let message = quotes::compose_refs(&refs, &text);
+        // Só o texto digitado, sozinho, viaja até o lugar dele; o resto entra como sempre.
+        let flies = refs.is_empty() && !command && group.is_none();
         if self.deliver(key.clone(), message, field.clone(), steer, known, group, cx) {
+            if flies { self.send_takeoff(&field, self.chat.state.state != "working", window, cx); }
             self.delivery.mark_typed(&key, field);
             self.clear_sent_field(&key, window, cx);
         }
@@ -3771,7 +3795,8 @@ impl Hangar {
             let signature = if day { format!("day{}", signature(item, events)) } else { signature(item, events) };
             let signature = if after_card(&self.conversation.items, events, from + n) { format!("card{signature}") } else { signature };
             // Entrar ou sair do painel muda a altura da linha sem mudar o evento.
-            let signature = if crate::queue_panel::hidden(&id, &queue) { format!("queued{signature}") } else { signature };
+            // A bolha em que a viagem pousa fica na conversa mesmo listada na fila por um instante.
+            let signature = if crate::queue_panel::hidden(&id, &queue) && !self.send_targets_bubble(&id) { format!("queued{signature}") } else { signature };
             (id, signature)
         }).unzip();
         if !self.chat.live_thinking.is_empty() { ids.push(LIVE_THINKING.into()); signatures.push(String::new()); }
@@ -3846,6 +3871,27 @@ impl Hangar {
                 rich.row = id.clone();
                 self.rich.insert(id, rich);
             }
+        }
+        // Bolha do usuário que passa a aparecer: linha nova, ou a que esperava escondida no painel "Na fila".
+        let shown: Vec<(String, String, bool)> = {
+            let events = &self.chat.events;
+            (0..ids.len()).filter(|&i| !signatures[i].starts_with("queued") && kind_of(&self.conversation.items, from + i, events) == Some("user_msg"))
+                .filter_map(|i| {
+                    let unhidden = self.row_ids[from..].iter().position(|old| *old == ids[i])
+                        .is_some_and(|old| self.row_signatures[from + old].starts_with("queued"));
+                    let Some(Item::Event(e)) = self.conversation.items.get(from + i) else { return None };
+                    (unhidden || patch.insert.contains(&i)).then(|| (ids[i].clone(), events[*e].text.clone().unwrap_or_default(), unhidden))
+                }).collect()
+        };
+        // O destino da viagem trocou de id (o envio virou a mensagem gravada): ela segue para a mesma bolha.
+        let lost = self.send_bubble_target().is_some_and(|row| self.row_ids[from..].iter().any(|id| id == row) && !ids.iter().any(|id| id == row));
+        for (id, text, unhidden) in shown {
+            if lost { if self.send_follows_bubble(&id, &text) { break; } continue; }
+            // A viagem que já saiu (do campo ou do Orientar) fica com a bolha em qualquer troca de linhas.
+            if !(unhidden || entering || self.send_expects(&text)) { continue; }
+            // A que saiu agora do campo ou do painel é o destino da viagem; outra que só deixou o painel entra com o fade.
+            if self.send_lands_on_bubble(&id, &text, cx) { self.arrived.remove(&id); break; }
+            if unhidden && prefix > 0 { self.arrived.insert(id, Instant::now()); }
         }
         // Parte nova num grupo da Árvore entra animada pela mesma regra: conversa já na tela e poucas de uma vez, uma
         // depois da outra.
@@ -4017,7 +4063,7 @@ impl Hangar {
     fn render_row(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let Some(id) = self.row_ids.get(index).cloned() else { return div().into_any_element(); };
         // A mensagem que espera no painel "Na fila" não é bolha da conversa: a linha fica sem altura.
-        if id.starts_with("queued-") && crate::queue_panel::hidden(&id, &self.chat.queue_panel()) {
+        if id.starts_with("queued-") && crate::queue_panel::hidden(&id, &self.chat.queue_panel()) && !self.send_targets_bubble(&id) {
             return div().id(SharedString::from(id)).into_any_element();
         }
         self.tree_motion = false;
@@ -4048,6 +4094,17 @@ impl Hangar {
         let row = match entering {
             Some(raw) => { motion::request_frame(window, cx); motion::fade_in(row, motion::FADE_IN.ease(raw)) }
             None => { self.arrived.remove(&id); row }
+        };
+        // A cópia em viagem ainda não chegou: a linha abre o lugar aos poucos, com a bolha invisível dentro. A altura
+        // inteira é medida com a linha ainda fechada, então o primeiro quadro não depende de medida anterior.
+        let row = match self.send_row_growth(&id) {
+            Some(open) => {
+                let places = self.flight_places.clone();
+                div().relative().overflow_hidden().h(px(places.row.get() * open))
+                    .child(div().absolute().top_0().left_0().right_0().opacity(0.).child(row)
+                        .child(canvas(move |bounds, _, _| places.row.set(f32::from(bounds.size.height)), |_, _, _, _| {}).absolute().inset_0()))
+            }
+            None => row,
         };
         row.id(SharedString::from(id)).into_any_element()
     }
@@ -5111,6 +5168,8 @@ impl Hangar {
         let placeholder = if readable && !self.terminal_suggestion.is_empty() {
             tr("terminal_suggestion").replace("{text}", &conversation::one_line(&self.terminal_suggestion, 120))
         } else { tr("composer").replace("{agent}", agent_name(provider)) };
+        // Com a mensagem enviada ainda por cima do campo, o texto de exemplo apareceria por baixo dela.
+        let placeholder = if self.send_over_field() { String::new() } else { placeholder };
         if self.composer_placeholder != placeholder {
             self.composer_placeholder = placeholder.clone();
             self.composer.update(cx, |input, cx| input.set_placeholder(placeholder, window, cx));
@@ -5150,7 +5209,9 @@ impl Hangar {
                         cx.stop_propagation();
                     }
                 }))
-            .child(textarea);
+            .child(textarea)
+            // De onde o texto enviado sai em viagem até a conversa ou a fila.
+            .when(!preview && !roomy, |el| el.relative().child(send_flight::record(&self.flight_places, |p| &p.input)));
 
         // Aviso e sugestões seguem o que se digita: ficam presos à borda de cima, sem cortina. Os painéis abertos por
         // botão moram na camada da raiz (`popup.rs`), presos ao botão.
@@ -5584,8 +5645,13 @@ impl Hangar {
             .children(text)
             .when_some(more, |el, more| el.child(more))
             .when_some(files, |el, files| el.child(files));
+        let landing = self.send_targets_bubble(&id).then(|| self.flight_places.clone());
         let row = div().id(SharedString::from(format!("message-{id}"))).group(ROW_GROUP).w_full().flex().flex_col().gap_2()
-            .map(|el| if user { el.items_end().child(match peer_scope { Some(scope) => peer_bubble(content, scope), None => user_bubble(content) }) }
+            .map(|el| if user { el.items_end().child(match peer_scope {
+                    Some(scope) => peer_bubble(content, scope),
+                    // A bolha em que a mensagem enviada pousa diz onde está.
+                    None => user_bubble(content).when_some(landing, |el, places| el.relative().child(send_flight::record(&places, |p| &p.bubble))),
+                }) }
                 else if dotted { el.child(terminal_look::assistant_text_row(content, conversation_line(false))) }
                 else { el.child(content) })
             .when_some(note, |el, note| el.child(div().flex().items_center().gap_2().when(user, |el| el.justify_end())
@@ -7586,7 +7652,9 @@ impl Hangar {
         let stop_note = selected_key.as_ref().and_then(|key| self.stop_feedback.get(key)).cloned();
         // O que saiu do campo e o backend ainda não respondeu fica à vista, apagado, até virar mensagem da conversa.
         let outgoing: Vec<SharedString> = selected_key.as_ref()
-            .map(|key| self.delivery.outgoing(key).into_iter().map(|text| SharedString::from(text.to_owned())).collect()).unwrap_or_default();
+            // O envio que a cópia em viagem já mostra não ganha a bolha apagada: ela empurraria a conversa por um quadro.
+            .map(|key| self.delivery.outgoing(key).into_iter().filter(|text| !self.send_carries(text))
+                .map(|text| SharedString::from(text.to_owned())).collect()).unwrap_or_default();
         let prethread_open = self.prethread_key().is_some();
         // Passando do teto, o que não encolhe sai por cima: o compositor, embaixo, fica sempre à vista.
         let mut content = div().w_full().min_h_0().flex().flex_col().justify_end();
@@ -8019,6 +8087,10 @@ impl Render for Hangar {
             else { chrome::session_avatar(&look, 26., None).into_any_element() }
         });
         let landing::Frame { drop, shown, rise } = self.landing_frame(window, cx);
+        // A faixa de baixo tem a altura medida no quadro anterior; o painel "Na fila" deslizando muda de altura por uma
+        // conta conhecida, que entra já neste quadro: a faixa e a conversa mudam juntas, e a conversa segura o fim.
+        let queue_step = self.queue_slide_step();
+        self.follow_bottom_grew(queue_step);
         let opening = self.opening.clone().filter(|_| self.selected.is_none());
         // Terminal e faixa do cofre mudam o teto da faixa de baixo sem mudar a coluna: só ela, guardada, refaz.
         let term = self.docked_terminal_height(window).unwrap_or(0.);
@@ -8062,12 +8134,14 @@ impl Render for Hangar {
             .when(page.is_none() && !self.new_chat_screen(), |el| el.child(self.working_mark_float(panes::Area::Conversation, WORKING_FADE, cx.reduce_motion())))
             .children(vault)
             .child(self.pane_element(panes::Area::Bottom, if self.new_chat_screen() { StyleRefinement::default().w_full().flex_1().min_h_0() }
-                else { StyleRefinement::default().w_full().flex_shrink_0().h(px(self.panes.bottom_height.get())).top(px(-drop)) }))
+                else { StyleRefinement::default().w_full().flex_shrink_0().h(px(self.panes.bottom_height.get() + queue_step)).top(px(-drop)) }))
             // Os avatares animados da faixa de baixo (subagentes e pai da filha), pintados fora da cópia guardada dela.
             .when(page.is_none() && !self.new_chat_screen(), |el| el.child(self.working_mark_float(panes::Area::Bottom, WORKING_FADE, cx.reduce_motion())))
             .children(self.render_terminal(window, cx))
             .children(self.render_file_view(window, cx))
-            .children(self.render_vault_float(cx));
+            .children(self.render_vault_float(cx))
+            // Depois das áreas: lê onde elas desenharam o campo, a linha da fila e a bolha.
+            .children(self.render_send_flight(window, cx));
         // Visor de arquivos expandido: sem a lista de sessões e sem o painel direito.
         let files_expanded = self.files_expanded();
         let list_hidden = page.is_some() || costs_page || tool_page || files_expanded;

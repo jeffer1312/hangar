@@ -83,6 +83,10 @@ const FOCUS_STOPS: [(f32, f32); 7] = [(0., 0.), (10.8, 0.12), (25.2, 0.55), (36.
 const FOCUS_STRIP: f32 = 3.;
 /// Linha trocando de lugar na lista (FLIP): desliza da posição antiga para a nova, e a que muda de seção acende.
 pub const REORDER: Spec = Spec::new(320, EASE_OUT_QUINT);
+/// A mensagem enviada indo do campo (ou do painel "Na fila") até o lugar dela; o painel fecha no mesmo tempo.
+pub const FLIGHT: Spec = Spec::new(320, EASE_OUT_EXPO);
+/// O painel "Na fila" abrindo para a mensagem que chega.
+pub const QUEUE_OPEN: Spec = Spec::new(240, EASE_OUT_EXPO);
 /// `zeron-pulse`: período dos esqueletos de carregando.
 pub const PULSE: Duration = Duration::from_millis(2400);
 
