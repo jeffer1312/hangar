@@ -40,8 +40,32 @@ impl MuxProcess {
 
     /// Só o `capture-pane`: quem chama decide se confere a sessão.
     pub async fn capture(&self, target: &str) -> Result<String, &'static str> {
+        if let Some(done) = self.direct_capture(target).await { return done; }
         let out = self.output(&["capture-pane", "-p", "-t", target, "-S", "-200"]).await?;
         read_output(out.status.success(), &out.stdout)
+    }
+
+    /// No Windows, um `tmux.exe` por quadro passa de 1 s com a máquina carregada; o servidor do psmux
+    /// que a lista conferiu responde direto. Ele responde OK até para alvo que sumiu (vazio, ou
+    /// `ERROR: can't find pane`): esses e as falhas seguem pelo CLI, que separa recusa de pane vazio.
+    /// Prazo estourado não segue: o CLI pagaria outro prazo inteiro na mesma máquina carregada.
+    async fn direct_capture(&self, target: &str) -> Option<Result<String, &'static str>> {
+        if !cfg!(windows) { return None; }
+        let base = target.strip_prefix('=')?.split(':').next()?.to_owned();
+        let dir = crate::list::mux::verified_direct(&self.program, &base)?;
+        let args = ["capture-pane", "-p", "-t", target, "-S", "-200"].map(str::to_owned);
+        let deadline = std::time::Instant::now() + self.timeout;
+        let code = match tokio::task::spawn_blocking(move || hangar_psmux::command(&dir, &base, &args, deadline)).await {
+            Ok(Ok(stdout)) => return read_output(true, &stdout).ok()
+                .filter(|text| !text.is_empty() && !text.starts_with("ERROR: ")).map(Ok),
+            Ok(Err(failure)) if failure.code == "psmux_direct_timeout" => return Some(Err("capture_timeout")),
+            Ok(Err(failure)) => failure.code,
+            Err(_) => "psmux_direct_panicked",
+        };
+        if crate::warn_limit::allow(Some(target), code) {
+            tracing::warn!(code, session = target, "captura direta do psmux falhou; segue pelo CLI");
+        }
+        None
     }
 
     /// `None` = o multiplexador não respondeu, que não é sessão morta.
@@ -290,5 +314,92 @@ mod tests {
         }).await.expect("o Monitor publicou");
         task.abort();
         assert_eq!((event.state.as_str(), event.problema), ("idle", None));
+    }
+}
+
+#[cfg(all(test, windows))]
+mod psmux_direct_tests {
+    use super::{MuxProcess, TIMEOUT};
+    use std::io::{BufRead, BufReader, Write};
+
+    /// Servidor de sessão falso: responde ao `list-panes` da conferência e ao `capture-pane` com `body`.
+    fn server(dir: &std::path::Path, base: &str, body: &'static str) -> std::thread::JoinHandle<Vec<String>> {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        std::fs::write(dir.join(format!("{base}.port")), listener.local_addr().unwrap().port().to_string()).unwrap();
+        std::fs::write(dir.join(format!("{base}.key")), "k").unwrap();
+        std::thread::spawn(move || (0..2).map(|_| {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let (mut auth, mut cmd) = (String::new(), String::new());
+            reader.read_line(&mut auth).unwrap(); reader.read_line(&mut cmd).unwrap();
+            let reply = if cmd.starts_with("list-panes") { "main\n".to_owned() } else { body.to_owned() };
+            (&stream).write_all(format!("OK\n{reply}").as_bytes()).unwrap();
+            cmd
+        }).collect())
+    }
+
+    fn verify(program: &str, dir: &std::path::Path) {
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let listing = hangar_psmux::list_panes(dir, "#{session_name}", until).unwrap();
+        crate::list::mux::verify_for_test(program, dir, listing.servers);
+    }
+
+    #[tokio::test]
+    async fn a_verified_session_is_captured_without_opening_the_program() {
+        let dir = tempfile::tempdir().unwrap();
+        let seen = server(dir.path(), "main", "quadro\n");
+        verify("missing-capture-mux", dir.path());
+        // O programa não existe: o quadro só pode ter vindo do servidor.
+        let text = MuxProcess::new("missing-capture-mux", TIMEOUT).capture("=main:").await.unwrap();
+        assert_eq!(text, "quadro\n");
+        assert!(seen.join().unwrap()[1].starts_with("\"capture-pane\""));
+    }
+
+    /// O servidor não recusa alvo inexistente: quadro vazio volta ao CLI, que separa recusa de pane vazio.
+    #[tokio::test]
+    async fn an_empty_direct_frame_falls_back_to_the_cli() {
+        let dir = tempfile::tempdir().unwrap();
+        let seen = server(dir.path(), "main", "");
+        verify("missing-capture-mux-2", dir.path());
+        let failed = MuxProcess::new("missing-capture-mux-2", TIMEOUT).capture("=main:").await.unwrap_err();
+        assert_eq!(failed, "capture_spawn_failed");
+        seen.join().unwrap();
+    }
+
+    /// Pane que sumiu: o servidor responde OK com o erro no lugar do quadro, e quem recusa é o CLI.
+    #[tokio::test]
+    async fn a_missing_pane_reply_is_not_a_frame() {
+        let dir = tempfile::tempdir().unwrap();
+        let seen = server(dir.path(), "main", "ERROR: can't find pane: 7\n");
+        verify("missing-capture-mux-3", dir.path());
+        let failed = MuxProcess::new("missing-capture-mux-3", TIMEOUT).capture("=main:0.7").await.unwrap_err();
+        assert_eq!(failed, "capture_spawn_failed");
+        seen.join().unwrap();
+    }
+
+    /// Servidor calado: a captura falha no prazo dela, sem gastar outro prazo inteiro no CLI.
+    #[tokio::test]
+    async fn a_silent_server_times_out_without_the_cli() {
+        let dir = tempfile::tempdir().unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        std::fs::write(dir.path().join("main.port"), listener.local_addr().unwrap().port().to_string()).unwrap();
+        std::fs::write(dir.path().join("main.key"), "k").unwrap();
+        let (release, held) = std::sync::mpsc::channel::<()>();
+        let silent = std::thread::spawn(move || {
+            {
+                let (listing, _) = listener.accept().unwrap();
+                let mut reader = BufReader::new(listing.try_clone().unwrap());
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap(); reader.read_line(&mut line).unwrap();
+                (&listing).write_all(b"OK\nmain\n").unwrap();
+            }
+            let (_capture, _) = listener.accept().unwrap();
+            let _ = held.recv();
+        });
+        verify("missing-capture-mux-4", dir.path());
+        let failed = MuxProcess::new("missing-capture-mux-4", std::time::Duration::from_millis(500)).capture("=main:").await.unwrap_err();
+        assert_eq!(failed, "capture_timeout");
+        drop(release);
+        silent.join().unwrap();
     }
 }

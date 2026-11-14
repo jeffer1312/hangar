@@ -187,3 +187,14 @@ fn a_session_outside_the_registry_is_not_tried() {
         assert_eq!(command(dir.path(), base, &args, soon(500)), Err(CommandFailure { code: "psmux_direct_registry", written: false }), "{base}");
     }
 }
+
+#[test]
+fn any_build_from_the_minimum_version_up_is_tried() {
+    assert!(known_version("tmux 3.3.8\npsmux 3.3.8 (66cf613 2026-08-18)"));
+    assert!(known_version("tmux 3.3.8\npsmux 3.3.8 (8c9ef12 2026-10-03)"));
+    assert!(known_version("tmux 3.4.0\npsmux 3.4.0 (20aa1d7 2026-10-13)"));
+    assert!(known_version("tmux 3.10\npsmux 3.10.0 (abcdef0 2027-05-01)"));
+    assert!(!known_version("tmux 3.3\npsmux 3.3.7 (0000000 2026-06-01)"));
+    assert!(!known_version("tmux 3.3a"));
+    assert!(!known_version(""));
+}
