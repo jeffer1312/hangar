@@ -299,8 +299,8 @@ mod tests {
     #[tokio::test]
     async fn no_shortcut_session_skips_the_mux() {
         let (program, children) = (OsString::from("missing-test-mux"), ChildrenMap::default());
-        assert_eq!(list_all(&program, &children, false).await, Ok("[]".to_owned()), "sem sessão de atalho o multiplexador foi chamado");
-        assert_eq!(list_all(&program, &children, true).await, Err("shortcuts_mux_unavailable"));
+        assert_eq!(list_all(&program, &children, Some(Vec::new())).await, Ok("[]".to_owned()), "sem sessão de atalho o multiplexador foi chamado");
+        assert_eq!(list_all(&program, &children, None).await, Err("shortcuts_mux_unavailable"));
     }
 
     #[tokio::test]
