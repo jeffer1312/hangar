@@ -33,7 +33,7 @@ impl Host for ServerHost {
     }
 
     fn shortcuts(&self) -> Result<Value, Error> {
-        Ok(self.config()?.get("shortcuts"))
+        self.config()?.get_checked("shortcuts").map_err(|error| Error::Io(error.message))
     }
 
     fn validate(&self, text: &str) -> Result<(), String> {

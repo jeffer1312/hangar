@@ -589,7 +589,9 @@ async fn import_v2_resolves_home_in_command_and_verify() {
     assert_eq!(status, 200, "{body}");
     assert_eq!(body["verify_commands"], json!([{"id": "a", "label": "A", "command": format!("test -f {home}/y")}]));
     assert_eq!(body["warnings"], json!([VERIFY_WARNING]));
-    assert_eq!(scene.saved(), format!(r#"[{{"id": "a", "type": "shell", "label": "A", "command": "{home}/bin/x", "verify": "test -f {home}/y"}}]"#));
+    // Serializado pelo mesmo gravador: no Windows o HOME tem `\`, que o JSON escapa.
+    let expected = json!([{"id": "a", "type": "shell", "label": "A", "command": format!("{home}/bin/x"), "verify": format!("test -f {home}/y")}]);
+    assert_eq!(scene.saved(), hangar_core::pycompat::pyjson::dumps(&expected, false));
 }
 
 // ── verify (ATA-92, ATA-93, ATA-B4) ──────────────────────────────────────────────────────────────

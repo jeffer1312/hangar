@@ -44,6 +44,10 @@ impl RuntimeConfig {
         let current=Values(self.read());
         self.effective(key,&current)
     }
+    /// O `get` que devolve o erro do arquivo ilegível em vez de lê-lo como vazio.
+    pub fn get_checked(&self,key:&str)->Result<Value,RuntimeError> {
+        Ok(self.effective(key,&read_for_write(&self.path)?))
+    }
     /// Configuração efetiva compartilhada pela transcrição e pela organização do ditado.
     pub(crate) fn transcription_snapshot(&self) -> ValueGuard {
         // Uma leitura só: uma escrita no meio não mistura duas versões do arquivo.

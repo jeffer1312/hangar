@@ -620,6 +620,17 @@ async fn disk_failures_answer_500_with_code() {
     }
 }
 
+/// `runtime-config.json` ilegível no export é falha com código, nunca um pacote vazio com 200.
+#[tokio::test(flavor = "multi_thread")]
+async fn export_with_an_unreadable_config_is_an_io_failure() {
+    let scene = Scene::new();
+    std::fs::create_dir_all(scene.config_path().parent().unwrap()).unwrap();
+    std::fs::write(scene.config_path(), "{x").unwrap();
+    let (status, body) = scene.export("").await;
+    assert_eq!((status, body["detail"]["code"].clone()), (500, json!("erro_shortcut_io")), "{body}");
+    assert_eq!(std::fs::read(scene.config_path()).unwrap(), b"{x");
+}
+
 /// ATA-34 (r7-export-prefixo-script).
 #[tokio::test(flavor = "multi_thread")]
 async fn export_refuses_reserved_prefix() {
@@ -972,7 +983,7 @@ async fn import_refusals_change_nothing() {
     let scene = Scene::new();
     scene.save(json!([{"id": "a", "type": "send_text", "label": "A", "text": "oi"}]));
     let before = std::fs::read(scene.config_path()).unwrap();
-    let cases = [
+    let mut cases = vec![
         (json!({"version": 1}), "arquivo sem lista de atalhos"),
         (json!([{"id": "x", "type": "foguete"}]), "shortcuts: item 1 tem type desconhecido 'foguete'"),
         (json!([{"id": "x", "type": "shell", "label": "X", "command": " "}]), "shortcuts: item 1 (shell) sem comando"),
@@ -981,10 +992,13 @@ async fn import_refusals_change_nothing() {
         (json!([{"id": "a", "type": "send_text", "label": "A", "text": "x"}, {"id": "a", "type": "send_text", "label": "A", "text": "y"}]), "id de atalho duplicado"),
         (json!({"version": 3, "shortcuts": []}), "versão do pacote de atalhos não suportada"),
         (json!({"version": true, "shortcuts": []}), "versão do pacote de atalhos não suportada"),
-        (json!({"version": 2, "shortcuts": [], "scripts": [{"path": ".local/bin/a", "content": "a\u{0}", "executable": true}]}), "conteúdo ou permissão de script inválido"),
         (json!({"version": 2, "shortcuts": [{"id": "script:a", "type": "send_text", "label": "A", "text": "a"}]}), "prefixo script: reservado aos arquivos do pacote"),
         (json!({"version": 1, "shortcuts": [], "scripts": [{"path": ".local/bin/a"}]}), "scripts exigem pacote versão 2"),
     ];
+    // Fora do Linux a recusa de plataforma vem antes do conteúdo (`import_outside_linux_refuses_scripts_only`).
+    if cfg!(target_os = "linux") {
+        cases.push((json!({"version": 2, "shortcuts": [], "scripts": [{"path": ".local/bin/a", "content": "a\u{0}", "executable": true}]}), "conteúdo ou permissão de script inválido"));
+    }
     for (data, motivo) in cases {
         assert_eq!(scene.import(json!({"data": data, "apply": true})).await, import_error(motivo), "{data}");
     }
@@ -1179,7 +1193,9 @@ async fn import_resolves_pasta_only_for_version_2() {
     assert_eq!(scene.import(json!({"data": data})).await, (200, response.clone()));
     assert!(!scene.config_path().exists());
     assert_eq!(scene.import(json!({"data": data, "apply": true})).await, (200, response));
-    assert_eq!(scene.saved(), format!(r#"[{{"id": "a", "type": "shell", "label": "A", "command": "echo ok", "pasta": "{}/Projects/example"}}]"#, scene.home()));
+    // Serializado pelo mesmo gravador: no Windows o HOME tem `\`, que o JSON escapa.
+    let expected = json!([{"id": "a", "type": "shell", "label": "A", "command": "echo ok", "pasta": format!("{}/Projects/example", scene.home())}]);
+    assert_eq!(scene.saved(), hangar_core::pycompat::pyjson::dumps(&expected, false));
     assert!(!scene.home.join("Projects").exists());
 }
 
