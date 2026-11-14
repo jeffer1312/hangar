@@ -37,7 +37,6 @@ from app.names import sanitize_session_name
 from app.models import SessionInfo, CreatedSessionInfo, ChatEvent, session_key
 from app.pqueue import (PromptQueue, _transcript_start_ts, committed_user_lines,
                         fila_interna_pendente, linha_mais_parecida)
-from app.prune import prune_loop as _prune_loop
 from app.chain import ThenLink
 from app import terminal_input
 from app.terminal_input import TerminalInput, drain
@@ -143,19 +142,6 @@ async def _lifespan(app: FastAPI):
 
     loop_monitor_task = asyncio.create_task(loop_monitor.watch(), name="loop-monitor")
 
-    # Poda periodica dos sidecars de sessao morta (Task G3): varre na subida e depois a cada
-    # 24h — ver app/prune.py para o criterio conservador (chave de sessao nao viva + idade
-    # minima de 7 dias) e o porquê de periodica em vez de so no startup.
-    prune_task = asyncio.create_task(_prune_loop())
-
-    def _prune_done(t: asyncio.Task) -> None:
-        if not t.cancelled():
-            exc = t.exception()
-            if exc is not None:
-                _log.exception("prune.prune_loop crashed", exc_info=exc)
-
-    prune_task.add_done_callback(_prune_done)
-
     # O drain do Codex e assincrono (app-server) e quem o chama sao
     # threads (Timer da confirmacao, gatilho de hook). Ver `_drenar`.
     global _loop_servidor
@@ -170,16 +156,11 @@ async def _lifespan(app: FastAPI):
         get_adapter(CLAUDE_HEADLESS).desligar_todas()
         task.cancel()
         loop_monitor_task.cancel()
-        prune_task.cancel()
         try:
             await task
         except asyncio.CancelledError:
             pass
         await asyncio.gather(loop_monitor_task, return_exceptions=True)
-        try:
-            await prune_task
-        except asyncio.CancelledError:
-            pass
 
 
 class _RustReply(Exception):

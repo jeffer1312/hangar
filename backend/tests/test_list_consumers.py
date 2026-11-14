@@ -3,13 +3,12 @@ descoberta Python (`registry.list`, `resolve_tracked`, `list_with_state`, o prod
 roda em caminho nenhum. Erro da ponte levanta; nunca vira lista vazia nem a lista do Python."""
 import asyncio
 import json
-import os
 import threading
 import time
 
 import pytest
 
-from app import list_bridge, prune, registry, runtime_coordinator
+from app import list_bridge, registry, runtime_coordinator
 from app.models import SessionInfo
 from app.registry import SessionRegistry
 
@@ -112,21 +111,3 @@ def test_registry_waits_pending_then_fails_with_code(monkeypatch):
         loop.call_soon_threadsafe(loop.stop)
         thread.join(2)
         loop.close()
-
-
-
-
-
-
-
-
-def test_prune_keeps_files_on_bridge_error(rust, tmp_path, monkeypatch):
-    monkeypatch.setattr(list_bridge, "discover", _down)
-    status = tmp_path / ".claude" / ".hangar-status"
-    status.mkdir(parents=True)
-    old = status / "morta.json"
-    old.write_text("{}")
-    os.utime(old, (1, 1))
-    with pytest.raises(list_bridge.ListBridgeError):
-        prune.prune_sidecars(bases=[tmp_path / ".claude"], agora=time.time())
-    assert old.exists()
