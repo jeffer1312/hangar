@@ -359,10 +359,9 @@ pub async fn announce(s: &Service, old: &str) -> Value {
     json!(rows)
 }
 /// O aparelho do caminho do Connect de `id` mora na outra máquina: a revogação lá, pelo endereço salvo com
-/// a senha do dono dela ou pelo Connect com a própria credencial. Lida antes de a entrada sair; quem chama
-/// apaga e só depois a roda, sem segurar a resposta.
-pub fn connect_device_revoke(s: &Service, id: &str) -> Option<impl Future<Output = ()> + Send + 'static> {
-    let entries = s.store.tolerant();
+/// a senha do dono dela ou pelo Connect com a própria credencial. `entries`: o que a remoção tirou; quem chama
+/// a roda sem segurar a resposta.
+pub fn connect_device_revoke(entries: &super::store::Book, id: &str) -> Option<impl Future<Output = ()> + Send + 'static> {
     // Com a marca, o `token` é aparelho, e aparelho não revoga o que não aprovou.
     let entry = entries.get(id).filter(|entry| !super::store::is_device_entry(entry))?;
     let device = entry["connect_device"].as_str().filter(|device| super::store::valid_device(device))?.to_owned();
@@ -394,6 +393,8 @@ pub async fn revoke_device(label: &str, saved: Option<(String, String)>, connect
             Ok(_) | Err(PeerError::Refused { status: 404, .. }) => return,
             // A própria credencial recusada já não abre nada lá.
             Err(PeerError::Refused { status: 401, .. }) if own => return,
+            // A senha do dono mudou lá: a credencial do aparelho ainda pode revogar a si mesma.
+            Err(e @ PeerError::Refused { status: 401, .. }) => failure = e.text(label),
             Err(e @ PeerError::Transport(_)) => failure = e.text(label),
             Err(e) => { failure = e.text(label); break; }
         }

@@ -190,7 +190,8 @@ async fn enroll(service: &Service, id: &str, link: &str, machines: &[AccountMach
         return Err(("connect_peer_invalid_reply", format!("'{id}' não devolveu a credencial de aparelho")));
     };
     let (store, key, device_id, saved_token, saved_url) = (service.store.clone(), id.to_owned(), device.to_owned(), token.to_owned(), url.clone());
-    let saved = tokio::task::spawn_blocking(move || store.set_connect_route(&key, &saved_url, &saved_token, &device_id)).await;
+    let issued_by = (base.clone(), owner.clone());
+    let saved = tokio::task::spawn_blocking(move || store.set_connect_route(&key, (&issued_by.0, &issued_by.1), &saved_url, &saved_token, &device_id)).await;
     let failure = match saved {
         Ok(Ok(previous)) => {
             // Caminho que já estava lá foi substituído: o aparelho dele se revoga pelo próprio Connect.
@@ -202,9 +203,11 @@ async fn enroll(service: &Service, id: &str, link: &str, machines: &[AccountMach
         Ok(Err(e)) => (e.code, e.msg),
         Err(_) => ("peers_response_failed", "a gravação foi interrompida".to_owned()),
     };
-    // Sem gravar aqui (entrada apagada ou recusada no meio), a credencial emitida lá ficaria valendo sem dono.
-    // O endereço e as duas credenciais já estão à mão: a entrada pode nem existir mais.
+    // Sem gravar aqui (entrada apagada, trocada ou recusada no meio), a credencial emitida lá ficaria valendo sem
+    // dono. O endereço e as duas credenciais já estão à mão: a entrada pode nem existir mais.
     revoke_device(id, Some((base, owner)), Some((url, token.to_owned())), device).await;
+    // Entrada trocada não é falha desta máquina: sem a espera, o próximo evento já emite para o endereço novo.
+    if failure.0 == "peers_entry_changed" { return Ok(Enrolled::Done); }
     Err(failure)
 }
 

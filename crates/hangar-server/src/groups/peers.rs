@@ -233,7 +233,7 @@ impl PeerClient {
         let last = attempts.len() - 1;
         let mut failure = PeerError::Unknown;
         for (at, (route, base, token)) in attempts.into_iter().enumerate() {
-            match self.after(server, route, at == last, once(at, route, base, token).await).await {
+            match self.after(server, route, token, at == last, once(at, route, base, token).await).await {
                 ControlFlow::Break(result) => return result,
                 ControlFlow::Continue(error) => failure = error,
             }
@@ -244,20 +244,20 @@ impl PeerClient {
     /// `Continue`: tentar o próximo caminho. Só quando o pedido não chegou ao Hangar de lá (falha de conexão, ou o
     /// proxy do Connect sem alcançá-lo) ou o Connect recusou a credencial; prazo de leitura ou outra resposta
     /// faria recado e cofre chegarem em dobro.
-    async fn after<T>(&self, server: &str, route: Route, last: bool, outcome: Result<T, Failed>) -> ControlFlow<Result<T, PeerError>, PeerError> {
+    async fn after<T>(&self, server: &str, route: Route, token: &str, last: bool, outcome: Result<T, Failed>) -> ControlFlow<Result<T, PeerError>, PeerError> {
         let outcome = match outcome {
-            Err(Failed { error, .. }) if route == Route::Connect && proxy_unreached(&error) => Err(Failed { error, unsent: true }),
+            Err(Failed { error, bare_502: true, .. }) if route == Route::Connect => Err(Failed { error, unsent: true, bare_502: true }),
             other => other,
         };
         match outcome {
             Ok(value) => { self.remember(server, Some(route)); ControlFlow::Break(Ok(value)) }
-            Err(Failed { unsent: true, error }) => {
+            Err(Failed { unsent: true, error, .. }) => {
                 // Só a falha de conexão tira o Connect da frente.
                 if route == Route::Connect || last { self.remember(server, None); }
                 ControlFlow::Continue(error)
             }
             Err(Failed { error: error @ PeerError::Refused { status: 401, .. }, .. }) if route == Route::Connect => {
-                self.refuse_connect(server).await;
+                self.refuse_connect(server, token).await;
                 ControlFlow::Continue(error)
             }
             // Resposta HTTP (o 5xx do proxy incluído) prova que o caminho conecta: ele segue à frente, e a
@@ -266,14 +266,16 @@ impl PeerClient {
         }
     }
 
-    /// O dono de lá tirou o aparelho: a marca impede que o caminho volte sozinho.
-    async fn refuse_connect(&self, server: &str) {
+    /// O dono de lá tirou o aparelho: a marca impede que o caminho volte sozinho. Só a credencial que levou o
+    /// 401 sai: um caminho gravado depois desta tentativa fica.
+    async fn refuse_connect(&self, server: &str, token: &str) {
         self.remember(server, None);
         let Some(path) = self.book.path.clone() else { return };
-        let id = server.to_owned();
-        let cleared = tokio::task::spawn_blocking(move || crate::machine_peers::store::Store::new(path).clear_connect_route(&id, true)).await;
+        let (id, token) = (server.to_owned(), Zeroizing::new(token.to_owned()));
+        let cleared = tokio::task::spawn_blocking(move || crate::machine_peers::store::Store::new(path).refuse_connect_route(&id, &token)).await;
         let outcome = match &cleared {
-            Ok(Ok(())) => "caminho tirado".to_owned(),
+            Ok(Ok(true)) => "caminho tirado".to_owned(),
+            Ok(Ok(false)) => "o caminho já era outro e ficou".to_owned(),
             Ok(Err(e)) => format!("o caminho não foi tirado: {}", e.msg),
             Err(_) => "a remoção do caminho foi interrompida".to_owned(),
         };
@@ -420,19 +422,25 @@ impl PeerClient {
     }
 }
 
-/// 502 de corpo vazio é o Caddy de lá sem alcançar a 8768: é a resposta padrão dele, sem `handle_errors`
-/// no Caddyfile. Os 502 do próprio Hangar sempre levam corpo (JSON com código, ou o texto do repasse ao Python).
-/// O `frps` e o `frpc` fora derrubam o TLS, que já é falha de conexão.
-fn proxy_unreached(error: &PeerError) -> bool {
-    matches!(error, PeerError::Refused { status: 502, detail: Value::String(text) } if text.trim().is_empty())
-}
-
 /// Erro de uma tentativa; `unsent`: a conexão nem abriu (DNS, recusada, prazo de conexão), nada chegou lá.
-struct Failed { error: PeerError, unsent: bool }
+/// `bare_502`: 502 com o corpo lido até o fim e vazio, a resposta padrão do Caddy de lá sem alcançar a 8768
+/// (sem `handle_errors` no Caddyfile). Os 502 do próprio Hangar sempre levam corpo; o `frps` e o `frpc` fora
+/// derrubam o TLS, que já é falha de conexão.
+struct Failed { error: PeerError, unsent: bool, bare_502: bool }
 
 impl Failed {
-    fn sent(error: PeerError) -> Self { Self { error, unsent: false } }
-    fn from_send(label: &str, e: &reqwest::Error) -> Self { Self { error: transport(label, e), unsent: e.is_connect() } }
+    fn sent(error: PeerError) -> Self { Self { error, unsent: false, bare_502: false } }
+    fn from_send(label: &str, e: &reqwest::Error) -> Self { Self { error: transport(label, e), unsent: e.is_connect(), bare_502: false } }
+    /// Resposta fora de 2xx; `complete`: o corpo foi lido até o fim, sem corte nem erro no meio.
+    fn refused(status: reqwest::StatusCode, raw: &[u8], complete: bool) -> Self {
+        let text = String::from_utf8_lossy(raw);
+        let bare_502 = status == reqwest::StatusCode::BAD_GATEWAY && complete && text.trim().is_empty();
+        let detail = match serde_json::from_str::<Value>(&text) {
+            Ok(Value::Object(mut map)) => map.remove("detail").unwrap_or_else(|| Value::String(text.clone().into_owned())),
+            _ => Value::String(text.into_owned()),
+        };
+        Self { error: PeerError::Refused { status: status.as_u16(), detail }, unsent: false, bare_502 }
+    }
 }
 
 /// Uma tentativa do `send_secret`, com o corpo 2xx cru em `Zeroizing`.
@@ -444,25 +452,20 @@ async fn secret_once(http: &reqwest::Client, server: &str, url: &str, token: &st
     let status = resp.status();
     // Capacidade reservada antes: o vetor que cresce deixa cópias do corpo sem zerar.
     let mut raw = Zeroizing::new(Vec::with_capacity(resp.content_length().map_or(SECRET_RESERVE.min(limit), |n| (n as usize).min(limit))));
-    loop {
+    let complete = loop {
         match resp.chunk().await {
             Ok(Some(chunk)) if raw.len() + chunk.len() > limit => {
                 if status.is_success() { return Err(Failed::sent(PeerError::Transport(TOO_LARGE.into()))); }
-                break;
+                break false;
             }
             Ok(Some(chunk)) => raw.extend_from_slice(&chunk),
-            Ok(None) => break,
+            Ok(None) => break true,
             Err(e) if status.is_success() => return Err(Failed::sent(transport(server, &e))),
-            Err(_) => break,
+            Err(_) => break false,
         }
-    }
+    };
     if !status.is_success() {
-        let text = String::from_utf8_lossy(&raw);
-        let detail = match serde_json::from_str::<Value>(&text) {
-            Ok(Value::Object(mut map)) => map.remove("detail").unwrap_or_else(|| Value::String(text.clone().into_owned())),
-            _ => Value::String(text.into_owned()),
-        };
-        return Err(Failed::sent(PeerError::Refused { status: status.as_u16(), detail }));
+        return Err(Failed::refused(status, &raw, complete));
     }
     Ok((status.as_u16(), raw))
 }
@@ -497,34 +500,30 @@ async fn request_observed(agent: Option<&str>, http: &reqwest::Client, label: &s
     })?;
     let status = resp.status();
     let mut raw = Vec::new();
-    loop {
+    let complete = loop {
         match resp.chunk().await {
             Ok(Some(chunk)) => {
                 raw.extend_from_slice(&chunk);
                 if raw.len() > MAX_BODY {
                     // A recusa ainda se lê pelo primeiro 1 MiB; o sucesso grande é incerto.
-                    if !status.is_success() { raw.truncate(MAX_BODY); break; }
+                    if !status.is_success() { raw.truncate(MAX_BODY); break false; }
                     if let Some(operation)=operation{operation.result(&method,None,Some(("transporte_resultado_incerto","OSError")));}
                     return Err(Failed::sent(PeerError::Transport(TOO_LARGE.into())));
                 }
             }
-            Ok(None) => break,
+            Ok(None) => break true,
             Err(e) if status.is_success() => {
                 if let Some(operation)=operation{operation.result(&method,None,Some(("transporte_resultado_incerto",transport_kind(&e))));}
                 return Err(Failed::sent(transport(label, &e)));
             },
-            Err(_) => break,
+            Err(_) => break false,
         }
-    }
-    let text = String::from_utf8_lossy(&raw);
+    };
     if !status.is_success() {
         if let Some(operation)=operation{operation.result(&method,Some(status.as_u16()),Some(("http_recusado","HTTPError")));}
-        let detail = match serde_json::from_str::<Value>(&text) {
-            Ok(Value::Object(mut map)) => map.remove("detail").unwrap_or_else(|| Value::String(text.clone().into_owned())),
-            _ => Value::String(text.into_owned()),
-        };
-        return Err(Failed::sent(PeerError::Refused { status: status.as_u16(), detail }));
+        return Err(Failed::refused(status, &raw, complete));
     }
+    let text = String::from_utf8_lossy(&raw);
     let result=if text.trim().is_empty(){Ok((status.as_u16(),None))}else{
         serde_json::from_str(&text).map(|v| (status.as_u16(), Some(v))).map_err(|e| PeerError::Transport(format!("{label} respondeu corpo ilegível: {e}")))
     };

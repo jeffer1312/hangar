@@ -1969,7 +1969,10 @@ impl Hangar {
                 if let Some((address, token)) = self.unsaved_connection.take() {
                     let known = self.servers.iter().any(|s| servers::norm(&s.address) == servers::norm(&address));
                     let label = if known { String::new() } else { servers::default_label(&address) };
-                    servers::upsert(&mut self.servers, servers::ServerEntry { id: servers::new_id(), label, address, token, disabled: false, invite: false, lan: None, ephemeral: false, ..Default::default() });
+                    // O Connect aprendido antes de a entrada existir não passou por `remember_connect`.
+                    let (connect, connect_refused) = api::route::connect_known(&address);
+                    servers::upsert(&mut self.servers, servers::ServerEntry { id: servers::new_id(), label, address, token, disabled: false, invite: false, lan: None, ephemeral: false,
+                        connect, connect_refused, ..Default::default() });
                     // Disco fora da thread da janela; só a falha volta.
                     self.persist_servers();
                     self.sync_updater(cx);

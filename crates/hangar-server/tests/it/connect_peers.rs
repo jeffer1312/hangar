@@ -906,6 +906,17 @@ async fn removing_a_peer_revokes_through_connect_when_the_saved_address_is_down(
     wait_for("o aparelho não foi revogado pelo Connect", || w.b.store.verify(token.as_bytes()).is_none()).await;
 }
 
+/// A senha do dono mudou lá (401 no endereço salvo): o aparelho ainda revoga a si mesmo pelo Connect.
+#[tokio::test]
+async fn removing_a_peer_revokes_through_connect_when_the_saved_password_is_refused() {
+    let w = world().await;
+    let (device, token) = w.b.store.enroll("pc-a").unwrap();
+    write_peers(&w.a, &json!({"pc-b": {"base_url": format!("http://{}", w.b.main), "token": "senha-velha",
+        "connect_url": format!("http://{}", w.b.connect), "connect_token": token, "connect_device": device}}));
+    assert_eq!(delete_peer(&w.a).await, 200);
+    wait_for("o aparelho não foi revogado pelo Connect", || w.b.store.verify(token.as_bytes()).is_none()).await;
+}
+
 /// O dono põe o nome em outro endereço: o Connect da máquina antiga sai, e o aparelho dela é revogado lá.
 #[tokio::test]
 async fn moving_a_peer_to_another_address_revokes_the_old_route() {

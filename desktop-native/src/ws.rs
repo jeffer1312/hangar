@@ -89,7 +89,7 @@ impl Terminal {
     /// No Hangar `shortcut`, que não pertence a sessão nenhuma.
     #[allow(clippy::too_many_arguments)]
     pub fn open(runtime: &Handle, api: &Api, session: &str, shortcut: Option<&str>, hangar: bool, token: String, cols: u16, rows: u16) -> Self {
-        Self::connect(runtime, terminal_url(api, session, shortcut, hangar, &token, cols, rows))
+        Self::connect(runtime, terminal_url(api, session, shortcut, hangar, &token, cols, rows), Some(api.identity()))
     }
 
     pub fn send(&self, bytes: &[u8]) -> Result<(), Error> { self.enqueue(2, bytes) }
@@ -104,7 +104,7 @@ impl Terminal {
 impl TextSocket {
     /// `path` já leva a query; o token entra como no terminal, credencial da conexão de `api`.
     pub fn open(runtime: &Handle, api: &Api, path: &str, token: String) -> Self {
-        Self::connect(runtime, text_url(api, path, &token))
+        Self::connect(runtime, text_url(api, path, &token), Some(api.identity()))
     }
 
     pub fn send(&self, text: &str) -> Result<(), Error> { self.enqueue(1, text.as_bytes()) }
@@ -112,13 +112,14 @@ impl TextSocket {
 
 impl CdpSocket {
     /// `url` http do WebSocket, sem credencial nenhuma: quem está do outro lado não é o Hangar.
-    pub fn open_url(runtime: &Handle, url: url::Url) -> Self { Self::connect(runtime, url) }
+    pub fn open_url(runtime: &Handle, url: url::Url) -> Self { Self::connect(runtime, url, None) }
 
     pub fn send(&self, text: &str) -> Result<(), Error> { self.enqueue(1, text.as_bytes()) }
 }
 
 impl<E: Incoming> Socket<E> {
-    fn connect(runtime: &Handle, url: url::Url) -> Self {
+    /// `identity`: a entrada cuja credencial vai na URL; `None` quando não é credencial do Hangar.
+    fn connect(runtime: &Handle, url: url::Url, identity: Option<String>) -> Self {
         let (commands, input) = async_channel::bounded(8);
         let (output, events) = async_channel::bounded(8);
         let (stop, mut stopped) = oneshot::channel();
@@ -126,7 +127,7 @@ impl<E: Incoming> Socket<E> {
             let connected = tokio::select! {
                 biased;
                 _ = &mut stopped => return,
-                result = handshake(url) => result,
+                result = handshake(url, identity) => result,
             };
             let result = match connected {
                 Err(error) => Err(error),
@@ -210,7 +211,7 @@ fn check_handshake(status: StatusCode, headers: &header::HeaderMap, key: &str) -
     Ok(())
 }
 
-async fn handshake(url: url::Url) -> Result<reqwest::Upgraded, Error> {
+async fn handshake(url: url::Url, identity: Option<String>) -> Result<reqwest::Upgraded, Error> {
     let mut nonce = [0; 16];
     SystemRandom::new().fill(&mut nonce).map_err(|_| Error::Network)?;
     let key = STANDARD.encode(nonce);
@@ -229,7 +230,7 @@ async fn handshake(url: url::Url) -> Result<reqwest::Upgraded, Error> {
             .header(header::SEC_WEBSOCKET_VERSION, "13").header(header::SEC_WEBSOCKET_KEY, &key)
             .send().await.map_err(|_| Error::Network)?;
         // Só a recusa HTTP do aperto de mão diz "credencial revogada"; fechamento depois de aberto não.
-        if response.status() == StatusCode::UNAUTHORIZED { crate::api::route::refused_at(&target); }
+        if response.status() == StatusCode::UNAUTHORIZED && let Some(identity) = &identity { crate::api::route::refused_at(identity, &target); }
         check_handshake(response.status(), response.headers(), &key)?;
         response.upgrade().await.map_err(|_| Error::Network)
     }).await.map_err(|_| Error::Network)?
@@ -426,7 +427,7 @@ mod tests {
         assert_eq!((cdp.host_str(), token(cdp.clone()).as_deref()), (Some("casa.socket.hangar.dev.br"), Some("device-secret")));
         assert_eq!(cdp.query_pairs().filter(|(k, _)| k == "token").count(), 1, "um token só na URL");
         // Revogada a credencial, o socket para o Connect não leva a senha do dono: a URL nem tem para onde ir.
-        route::refused_at(&url::Url::parse("https://casa.socket.hangar.dev.br/api/voice").unwrap());
+        route::refused_at(&api.identity(), &url::Url::parse("https://casa.socket.hangar.dev.br/api/voice").unwrap());
         route::route_to(&api, url::Url::parse("https://casa.socket.hangar.dev.br/").unwrap());
         for refused in [text_url(&api, "/api/voice", "owner"), terminal_url(&api, "pm-1", None, false, "owner", 80, 24)] {
             assert_eq!((refused.host_str(), token(refused.clone())), (None, None));

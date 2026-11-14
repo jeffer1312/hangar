@@ -264,7 +264,7 @@ impl Service {
     /// Apagar o par revoga o aparelho emitido para ele. Quem renomeia grava a entrada nova e apaga a
     /// velha com o próprio aparelho: só esse caso poupa, senão uma entrada de sombra salvaria quem o
     /// dono removeu.
-    fn remove_peer(&self, id: &str) -> Result<Value, Error> {
+    fn remove_peer(&self, id: &str) -> Result<(Value, store::Book), Error> {
         let data = self.store.tolerant();
         let renaming = |device: &str| self.device_caller.as_deref() == Some(device)
             && data.iter().any(|(key, entry)| key != id && entry["connect_return_device"].as_str() == Some(device));
@@ -584,11 +584,10 @@ pub async fn dispatch(
                     {
                         service.store.token(id)
                     } else if method == Method::DELETE {
-                        // Lida antes de apagar: a revogação usa o endereço e a senha da própria entrada.
-                        let revoke = network::connect_device_revoke(&service, decoded);
-                        let rows = service.remove_peer(decoded)?;
+                        // A entrada como saiu, sob a trava da remoção: a revogação usa o endereço e a senha dela.
+                        let (rows, removed) = service.remove_peer(decoded)?;
                         // Fora do ar lá, a remoção daqui não espera.
-                        if let Some(revoke) = revoke { tokio::spawn(revoke); }
+                        if let Some(revoke) = network::connect_device_revoke(&removed, decoded) { tokio::spawn(revoke); }
                         Ok(rows)
                     } else {
                         Err(Error {

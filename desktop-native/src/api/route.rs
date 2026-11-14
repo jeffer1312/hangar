@@ -177,6 +177,17 @@ pub fn on_learned(device_name: String, f: impl Fn(String, Learned) + Send + Sync
     *LEARNED.lock().unwrap_or_else(|e| e.into_inner()) = Some(Box::new(f));
 }
 
+/// O que a tabela já sabe do Connect de `address` (credencial em uso, recusa): a entrada criada depois de `Learned`
+/// chegar nasce com isso, senão a credencial emitida não seria gravada nem revogada ao remover a máquina.
+pub fn connect_known(address: &str) -> (Option<ConnectRoute>, bool) {
+    let Some(key) = key(address) else { return (None, false) };
+    with(|t| match t.get(&key).map(|k| &k.connect) {
+        Some(ConnectState::Active(c, ..)) => (Some(c.clone()), false),
+        Some(ConnectState::Refused) => (None, true),
+        _ => (None, false),
+    })
+}
+
 /// Conexão caiu: a rede pode ter mudado, a próxima conexão decide de novo.
 pub fn forget(api: &Api) {
     with(|t| if let Some(known) = t.get_mut(api.base.as_str()) { known.route = None; });
@@ -192,18 +203,18 @@ pub fn reset_refused(address: &str) {
     });
 }
 
-/// 401 vindo do endereço do Connect: a credencial de aparelho foi revogada.
-pub(crate) fn refused_at(url: &Url) {
+/// 401 vindo do endereço do Connect para um pedido da entrada `identity`: a credencial de aparelho dela foi revogada.
+/// Outra entrada da mesma máquina tem credencial própria, que segue valendo.
+pub(crate) fn refused_at(identity: &str, url: &Url) {
     // As rotas do próprio Connect respondem 401 na porta dele mesmo com credencial válida.
     if url.path().contains("/api/connect/") { return; }
     let origin = url.origin();
-    let keys: Vec<String> = with(|t| t.iter_mut()
-        .filter(|(_, k)| matches!(&k.connect, ConnectState::Active(_, _, own) if *own == origin))
-        .map(|(key, k)| { set_connect(k, ConnectState::Refused); key.clone() }).collect());
-    for key in keys {
-        crate::log_line(&format!("connect: credencial de aparelho recusada (401) para {key}; o Connect sai dos caminhos dela"));
-        notify(key, Learned::ConnectRefused);
-    }
+    let refused = with(|t| t.get_mut(identity)
+        .filter(|k| matches!(&k.connect, ConnectState::Active(_, _, own) if *own == origin))
+        .map(|k| set_connect(k, ConnectState::Refused)).is_some());
+    if !refused { return; }
+    crate::log_line(&format!("connect: credencial de aparelho recusada (401) para {identity}; o Connect sai dos caminhos dela"));
+    notify(identity.to_owned(), Learned::ConnectRefused);
 }
 
 impl Api {
@@ -382,13 +393,17 @@ async fn learn(api: &Api) -> Option<Lan> {
     Some(lan)
 }
 
-/// Endereço que a máquina anuncia para o Connect (`/api/alcance`); `None` sem Connect, em máquina antiga ou fora do ar.
-async fn announced(api: &Api) -> Option<String> {
+/// Endereço que a máquina anuncia para o Connect (`/api/alcance`); `Ok(None)` sem Connect ou em máquina antiga, `Err`
+/// quando a máquina não respondeu (rede ou 5xx), que vale uma nova leitura.
+async fn announced(api: &Api) -> Result<Option<String>, ()> {
     let mut url = api.route();
-    url.path_segments_mut().ok()?.pop_if_empty().extend(["api", "alcance"]);
-    let r = api.client.get(url).timeout(SAVED_TIMEOUT).send().await.ok()?;
-    if !r.status().is_success() { return None; }
-    connect_announced(r.json::<Value>().await.ok()?.get("connect")?.as_str()?)
+    let Ok(mut parts) = url.path_segments_mut() else { return Ok(None) };
+    parts.pop_if_empty().extend(["api", "alcance"]);
+    drop(parts);
+    let r = api.client.get(url).timeout(SAVED_TIMEOUT).send().await.map_err(drop)?;
+    if r.status().is_server_error() { return Err(()); }
+    if !r.status().is_success() { return Ok(None); }
+    Ok(r.json::<Value>().await.ok().and_then(|body| connect_announced(body.get("connect")?.as_str()?)))
 }
 
 fn connect_announced(raw: &str) -> Option<String> {
@@ -413,7 +428,12 @@ async fn refresh_connect(api: Api) {
         k.connect_checked = Some(id.clone());
         Some((id, current))
     })) else { return };
-    let Some(url) = announced(&api).await else { return };
+    let url = match announced(&api).await {
+        Ok(Some(url)) => url,
+        Ok(None) => return,
+        // Queda de rede não é resposta: a próxima decisão lê de novo.
+        Err(()) => return with(|t| if let Some(k) = t.get_mut(&identity) && k.connect_checked.as_ref() == Some(&id) { k.connect_checked = None; }),
+    };
     // Endereço salvo que já é o do Connect: não há outro caminho para guardar.
     if key(&url).as_deref() == Some(identity.as_str()) { return; }
     match current {
@@ -647,8 +667,19 @@ mod tests {
         let api = Api::new(&closed().await, "owner").unwrap();
         let identity = api.identity();
         seed(&identity, false, None, Some(&connect_route(&connect)), false);
-        refused_at(&Url::parse(&format!("{connect}/api/connect/state")).unwrap());
+        refused_at(&identity, &Url::parse(&format!("{connect}/api/connect/state")).unwrap());
         assert_eq!(state(&identity), Some("active"));
+    }
+
+    #[tokio::test]
+    async fn a_401_refuses_only_the_entry_that_sent_the_request() {
+        let connect = closed().await;
+        let (one, other) = (Api::new(&closed().await, "owner").unwrap(), Api::new(&closed().await, "owner").unwrap());
+        seed(&one.identity(), false, None, Some(&connect_route(&connect)), false);
+        seed(&other.identity(), false, None, Some(&ConnectRoute { device_id: "dev-2".into(), token: "other-secret".into(), ..connect_route(&connect) }), false);
+        refused_at(&one.identity(), &Url::parse(&format!("{connect}/api/sessions")).unwrap());
+        assert_eq!(state(&one.identity()), Some("refused"));
+        assert_eq!(state(&other.identity()), Some("active"), "a credencial da outra entrada segue valendo");
     }
 
     #[tokio::test]
@@ -670,7 +701,7 @@ mod tests {
         seed(&identity, false, None, Some(&connect_route(&connect)), false);
         // URL calculada antes da recusa, como a de um SSE ou socket já aberto.
         let late = Url::parse(&format!("{connect}/api/sessions")).unwrap();
-        refused_at(&late);
+        refused_at(&identity, &late);
         assert!(matches!(credential(&identity, &late), Credential::Blocked));
         assert_eq!(api.socket_token(&late, "owner"), None);
         assert!(api.client.get(late.clone()).send().await.is_err());
@@ -727,6 +758,27 @@ mod tests {
         refresh_connect(api.clone()).await;
         server.abort();
         assert_eq!(reads.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn an_entry_created_later_reads_what_the_table_learned() {
+        let connect = closed().await;
+        let api = Api::new(&closed().await, "owner").unwrap();
+        let identity = api.identity();
+        assert_eq!(connect_known(&identity), (None, false));
+        seed(&identity, false, None, Some(&connect_route(&connect)), false);
+        assert_eq!(connect_known(identity.trim_end_matches('/')), (Some(connect_route(&connect)), false));
+        refused_at(&identity, &Url::parse(&format!("{connect}/api/sessions")).unwrap());
+        assert_eq!(connect_known(&identity), (None, true));
+    }
+
+    #[tokio::test]
+    async fn a_machine_that_did_not_answer_is_read_again() {
+        let api = Api::new(&closed().await, "owner").unwrap();
+        let identity = api.identity();
+        seed(&identity, false, Some(&Lan { url: String::new(), id: "casa".into() }), None, false);
+        refresh_connect(api.clone()).await;
+        assert!(with(|t| t.get(&identity).is_some_and(|k| k.connect_checked.is_none())), "sem resposta, a leitura fica para a próxima decisão");
     }
 
     #[tokio::test]
