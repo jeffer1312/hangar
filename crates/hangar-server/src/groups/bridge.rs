@@ -24,17 +24,6 @@ const MAX_REPLY: usize = 4 << 20;
 #[derive(Deserialize)]
 #[serde(tag = "op", content = "args")]
 enum Operation {
-    /// A ponte conserva só método, destino e corpo; o servidor resolve os fatos.
-    #[serde(rename = "group.route")]
-    Route {
-        method: String,
-        name: String,
-        route: String,
-        #[serde(default)]
-        body: Value,
-        #[serde(default)]
-        facts: Value,
-    },
     /// Fechamento que não passou pelo `delete` do Rust (Connect, convidado).
     #[serde(rename = "group.leave")]
     Leave {
@@ -297,23 +286,6 @@ async fn execute(
     op: Operation,
 ) -> Result<Value, Failed> {
     match op {
-        Operation::Route {
-            method,
-            name,
-            route: path,
-            body,
-            facts: _,
-        } => {
-            let ctx = BridgeCtx::new();
-            let started = std::time::Instant::now();
-            let mut out = CTX
-                .scope(ctx.clone(), route(st.clone(), &method, &name, &path, body))
-                .await?;
-            let failed = deliver_deferred(&st, ctx.take_deliveries(), bridge_wait(started)).await;
-            report_failed(&st, &mut out["body"], failed, "rust.groups_bridge_delivery_failed", &[]);
-            out["post"] = json!([]);
-            Ok(out)
-        }
         Operation::Leave { name, phases: _ } => {
             // A saída de grupo entre máquinas avisa quem ficou sozinho; sessão sem dono recebe depois.
             let ctx = BridgeCtx::new();

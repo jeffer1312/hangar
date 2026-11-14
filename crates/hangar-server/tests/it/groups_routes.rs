@@ -327,6 +327,32 @@ async fn stranger_gets_401_from_rust_and_cross_machine_stays_in_rust() {
     assert!(!srv.pair.join("s0.json").exists());
 }
 
+/// R4-15/R4-16 (contrato c): servidor sem pastas de grupo responde ao dono o corpo que a ponte do Python
+/// devolvia (`test_route_bridge_failure_is_coded`): 503 `erro_grupo_indisponivel` com `detalhe:
+/// groups_bridge_off`, em todas as rotas de grupo; quem não é o dono leva o 401 do Rust. Nada vai ao Python.
+#[tokio::test(flavor = "multi_thread")]
+async fn r4_15_without_group_folders_every_group_route_is_503_from_rust() {
+    let (python, upstream) = fake::spawn_fake().await;
+    let mut state = AppState::new(fake::config(upstream, ""));
+    state.groups = None;
+    let addr = fake::spawn_state(state).await;
+    let off = json!({"detail": {"code": "erro_grupo_indisponivel", "params": {"detalhe": "groups_bridge_off"}, "msg": "os grupos estão indisponíveis agora"}});
+    let routes = [("POST", "a/pair", Some(json!({"peer": "b"}))), ("DELETE", "a/pair", None), ("POST", "a/group-message", Some(json!({"text": "oi"}))),
+        ("GET", "a/pair/contract", None), ("PUT", "a/pair/contract", Some(json!({"content": "x", "mtime": null}))),
+        ("POST", "a/pair-remote", Some(json!({"initiator": "srv::x"}))), ("POST", "a/unpair-remote", Some(json!({"peer": "srv::x"})))];
+    for (method, path, body) in &routes {
+        assert_eq!(call(addr, method, path, body.as_ref(), OWNER).await, (503, off.clone()), "{method} {path}");
+    }
+    // Poucas tentativas erradas: o bloqueio da origem vem depois de oito.
+    for (method, path, body) in &routes[..2] {
+        let (status, refused) = call(addr, method, path, body.as_ref(), "outro").await;
+        assert_eq!((status, refused["detail"]["code"].clone()), (401, json!("erro_nao_autorizado")), "{method} {path}");
+    }
+    for path in ["pair", "group-message", "pair/contract", "pair-remote", "unpair-remote"] {
+        assert_eq!(python.hits_to(&format!("/api/sessions/a/{path}")), 0, "{path}");
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn orchestrator_lookup_failure_is_503() {
     let dir = tempfile::tempdir().unwrap();
