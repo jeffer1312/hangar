@@ -619,6 +619,45 @@ async fn r4_19_share_guest_changes_mode_and_model_through_the_owner_route() {
     }
 }
 
+/// R4-11 (`_invalidate_lists` depois da troca): a linha da lista do Rust não leva o modo de permissão; quem o
+/// mostra ao vivo é o `state` do chat (`claude_permission_mode`), publicado pelo ator assim que a troca é
+/// confirmada, sem releitura pedida pela rota.
+#[tokio::test(flavor = "multi_thread")]
+async fn r4_11_the_changed_mode_reaches_the_live_state_without_a_refresh() {
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path();
+    let registry = Arc::new(RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(), "secret-test".into(), "instance-test".into())
+        .with_processes(Arc::new(crate::runtime_open::RecipeProcesses("sid-1"))));
+    let srv = plain_srv(d, |st| {
+        st.write_gate_wait = Duration::from_secs(5);
+        registry.bind_lifecycle();
+        registry.bind_hubs(st.side.hubs.downgrade());
+        let _ = st.state.lifecycle.set(registry.clone());
+        let _ = st.side.runtime.set(registry.clone());
+        assert!(st.state.runtime.set(registry.clone()).is_ok());
+    }).await;
+    let transcript = d.join("s.jsonl");
+    append_lines(&transcript, 0..1);
+    srv.python.set_info(info_json("claude-headless", &transcript));
+    let sink = Arc::new(Mutex::new(Vec::new()));
+    registry.open(RuntimeTarget { key: "k-s".into(), generation: 1, name: "s".into(), provider: "claude".into(),
+        metadata: json!({"name": "s", "headless": true, "session_id": "sid-1", "initialized": true}),
+        binding: CanoBinding { pid: 42, escuta: cano(sink.clone()).await, token: "secret-test".into(), versao: 2 },
+        lease_path: d.join("s.lock"), state_path: d.join("s.queue-state.json"), projection_dir: d.join("s-projection"),
+        transcript: transcript.clone(), created: 0.0 }).await.unwrap();
+    let mut events = sse(open_events(srv.owner, "s", "", &[]).await);
+    next_named(&mut events, "state").await;
+    let (status, body) = post_json(format!("http://{}/api/sessions/s/permission-mode", srv.owner), OWNER, json!({"mode": "plan"})).await;
+    assert_eq!((status, body["current"].clone()), (200, json!("plan")), "{body}");
+    let mut seen = Vec::new();
+    for _ in 0..10 {
+        let state: Value = serde_json::from_str(&next_named(&mut events, "state").await.data).unwrap();
+        if state["claude_permission_mode"] == "plan" { return; }
+        seen.push(state["claude_permission_mode"].clone());
+    }
+    panic!("o modo novo não chegou ao estado ao vivo: {seen:?}");
+}
+
 // ── mods ─────────────────────────────────────────────────────────────────────────────────────
 
 fn terminal_target(dir: &Path, name: &str) -> TerminalTarget {
