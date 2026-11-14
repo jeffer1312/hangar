@@ -168,9 +168,6 @@ def test_dead_runtime_does_not_re_adopt(tmp_path, monkeypatch):
     async def scenario():
         await supervisor.deactivate_runtime(confirmed_dead=True)
         assert coordinator.transport is None and coordinator.instance is None and coordinator.mode == "pending"
-        await supervisor.hand_to_python()
-        assert await coordinator.prepare_session("session", "claude")
-        assert slot.phase == Phase.Python and not slot.lease.closed
     try:
         asyncio.run(scenario())
     finally:

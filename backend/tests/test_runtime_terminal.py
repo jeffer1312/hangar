@@ -363,31 +363,6 @@ def test_generation_changed_during_serial_wait_has_zero_effect(monkeypatch,tmp_p
     asyncio.run(flow())
 
 
-def test_native_receipt_for_appended_entry_without_root(monkeypatch,tmp_path):
-    import uuid
-    from app import terminal_input as ti, runtime_terminal as terminal
-    owner,slot,_=live_owner(monkeypatch,tmp_path)
-    sender='uds:fake'
-    mid=str(uuid.uuid5(uuid.NAMESPACE_URL,f'hangar:{slot.binding.key}:entry'))
-    real_service=terminal._service
-    def service(coordinator,descriptor,operation,request,kind,payload):
-        if kind=='terminal_facts':
-            return dict(binding=payload['binding'],ready=True,idle=True,open_question=False,plugin_live=False,
-                plugin_user=False,clipboard_available=False,native={'message_id':mid})
-        return real_service(coordinator,descriptor,operation,request,kind,payload)
-    monkeypatch.setattr(terminal,'_service',service)
-    monkeypatch.setattr(terminal,'_native_send',lambda *args:'written')
-    async def flow():
-        slot.store.exec(1,'append',{'monotonic_s':1,'epoch_s':10},
-            {'kind':'append','text':'[de: sender] hi','delivered':False,'ts':10,'pre_transcript':False,'entry_id':'entry'})
-        assert (await owner.op('session',{'kind':'drain'},'drain'))['sent']==1
-        assert 'entry' not in slot.store.state['operations']
-        assert await owner.native_receipt(mid,'refused')
-        assert slot.store.state['rows'][0]['desistiu']
-        assert not slot.store.state['rows'][0].get('confirmed')
-    asyncio.run(flow())
-
-
 def test_rust_terminal_drain_shape_normalized_for_existing_callers(monkeypatch,tmp_path):
     gateway=TerminalGateway()
     owner,slot,_=live_owner(monkeypatch,tmp_path,gateway=gateway)
@@ -652,6 +627,7 @@ def test_restart_validates_terminal_life_and_advances_clear(monkeypatch,tmp_path
     monkeypatch.setattr(sessions,'list_all',lambda:[])
     monkeypatch.setattr(codex_sessions,'list_all',lambda:[])
     restored=RuntimeCoordinator()
+    restored._owns=set()            # a sessão fica com o Python: o registro durável é o dele
     async def flow():
         await restored.start_sessions({'claude':object(),'codex':object()})
         current=restored.slot('session')

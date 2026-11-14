@@ -57,6 +57,7 @@ def test_startup_unresolved_same_terminal_life_recovers_without_second_restart(t
     identity = {'value': None}
     monkeypatch.setattr(terminal, '_collect', lambda name: identity['value'])
     restored = rc.RuntimeCoordinator()
+    restored._owns = set()          # a sessão fica com o Python: o registro durável é o dele
     async def flow():
         await restored.start_sessions({'claude': object(), 'codex': object()})
         waiting = restored.slot('session')
@@ -235,6 +236,7 @@ def test_awaiting_identity_record_retires_when_binding_returns_with_other_key(tm
     identity = {'value': None}
     monkeypatch.setattr(terminal, '_collect', lambda name: identity['value'])
     restored = rc.RuntimeCoordinator()
+    restored._owns = set()          # a sessão fica com o Python: o registro durável é o dele
     async def flow():
         await restored.start_sessions({'claude': object(), 'codex': object()})
         waiting = restored.slot('session')
@@ -321,6 +323,7 @@ def test_waiting_record_of_a_dead_life_never_holds_the_name(tmp_path, monkeypatc
     monkeypatch.setattr(codex_sessions, 'list_all', lambda: [])
     monkeypatch.setattr(terminal, '_collect', lambda name: None)
     restored = rc.RuntimeCoordinator()
+    restored._owns = set()          # a sessão fica com o Python: o registro durável é o dele
     monkeypatch.setattr(rc, '_current', restored)
     async def flow():
         restored.loop = asyncio.get_running_loop()
@@ -353,6 +356,7 @@ def test_waiting_record_only_claims_the_name_in_its_own_tmux_life(tmp_path, monk
     events = []
     monkeypatch.setattr(diag, 'registrar', lambda evento, *a, **k: events.append(evento))
     restored = rc.RuntimeCoordinator()
+    restored._owns = set()          # a sessão fica com o Python: o registro durável é o dele
     monkeypatch.setattr(rc, '_current', restored)
     async def flow():
         restored.loop = asyncio.get_running_loop()
@@ -361,27 +365,6 @@ def test_waiting_record_only_claims_the_name_in_its_own_tmux_life(tmp_path, monk
     assert restored.managed_queue('session') is claims
     assert ('runtime.registration_failed' in events) is claims
     assert ('runtime.stale_terminal_record' in events) is not claims
-
-
-def test_one_session_failing_to_recover_does_not_stop_the_takeover(monkeypatch):
-    from types import SimpleNamespace
-    from app import diag, runtime_coordinator as rc
-    recovered, logged = [], []
-    coordinator = rc.RuntimeCoordinator()
-    coordinator.slots = {k: SimpleNamespace(binding=SimpleNamespace(name=k, key=k), phase=rc.Phase.Rust, awaiting_identity=False)
-                         for k in ('a', 'b')}
-    coordinator.slots['c'] = SimpleNamespace(binding=SimpleNamespace(name='c', key='c'), phase=rc.Phase.RecoveringPython,
-                                             awaiting_identity=True)
-    coordinator.names = {'a': 'a', 'b': 'b', 'c': 'c'}
-    async def recover(name, confirmed_dead, containment=None):
-        if name in ('a', 'c'):
-            raise RuntimeError('vida não volta')
-        recovered.append(name)
-    coordinator.recover = recover
-    monkeypatch.setattr(diag, 'registrar', lambda evento, nivel, **kw: logged.append((evento, kw.get('sessao'))))
-    asyncio.run(coordinator.enter_python())
-    assert recovered == ['b'] and ('runtime.recover_failed', 'a') in logged
-    assert ('runtime.recover_failed', 'c') not in logged and coordinator.mode == "python"
 
 
 def test_failed_recovery_retires_the_record_so_the_name_is_not_stuck(tmp_path, monkeypatch):

@@ -28,15 +28,14 @@ def configure(address: str | None, secret: str | None) -> None:
 
 
 def rust_owns_groups() -> bool:
-    """Fora do modo `python` os grupos são do Rust; no `python` não há dono nem reserva."""
+    """Os grupos são do Rust; sem coordenador ainda não há dono."""
     from app import runtime_coordinator
-    owner = runtime_coordinator.current()
-    return owner is not None and owner.mode != "python"
+    return runtime_coordinator.current() is not None
 
 
 def _await_rust() -> None:
     """O servidor limpa as pontes antes de (re)subir o Rust: no `pending` espera o desfecho até
-    `PENDING_WAIT_S`; desfecho `python` não chama a ponte."""
+    `PENDING_WAIT_S`."""
     from app import runtime_coordinator
     owner = runtime_coordinator.current()
     if owner is not None and (owner.mode == "pending" or getattr(owner, "_settling", False)) \
@@ -48,8 +47,6 @@ def _await_rust() -> None:
             raise GroupsBridgeError("groups_runtime_starting") from e
         except RuntimeError as e:
             raise GroupsBridgeError("groups_wait_on_loop") from e
-    if owner is not None and owner.mode == "python":
-        raise GroupsBridgeError("groups_runtime_python")
 
 
 def call(op: str, **args) -> dict:

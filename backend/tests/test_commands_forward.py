@@ -63,16 +63,6 @@ def test_claude_commands_forwards_original_path_query_and_status(command_port):
     assert seen == [("/__hangar_server/forwarded?fixture=value", "/api/sessions/commands-migration-absent/commands", "fixture-private")]
 
 
-def test_claude_commands_without_rust_has_no_python_fallback(command_port, monkeypatch):
-    from app import runtime_coordinator
-    monkeypatch.setattr(runtime_coordinator.current(), "mode", "python")
-    client, seen = command_port
-    response = client.get("/api/sessions/commands-migration-absent/commands", headers={"Authorization": "Bearer commands-fixture"})
-    assert response.status_code == 503
-    assert response.json()["detail"]["code"] == "commands_need_rust_server"
-    assert not seen
-
-
 def test_claude_commands_requires_auth_before_forwarding(command_port):
     client, seen = command_port
     response = client.get("/api/sessions/commands-migration-absent/commands")
@@ -93,12 +83,7 @@ def test_session_defaults_forwards_from_connect(command_port, method):
 
 
 @pytest.mark.parametrize("method", ["GET", "PUT"])
-def test_session_defaults_needs_auth_and_rust(command_port, monkeypatch, method):
-    from app import runtime_coordinator
+def test_session_defaults_needs_auth(command_port, method):
     client, seen = command_port
     assert client.request(method, "/api/session-defaults?provider=claude").status_code == 401
-    monkeypatch.setattr(runtime_coordinator.current(), "mode", "python")
-    response = client.request(method, "/api/session-defaults?provider=claude", headers={"Authorization": "Bearer commands-fixture"})
-    assert response.status_code == 503
-    assert response.json()["detail"]["code"] == "session_defaults_unavailable"
     assert not seen

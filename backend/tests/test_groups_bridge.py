@@ -1,5 +1,5 @@
 """O Rust é o único que grava `.hangar-pair`: o que chega às portas do Python segue pela ponte
-`/__hangar_server/groups`, num sentido; no modo `python` as rotas de grupo recusam com código."""
+`/__hangar_server/groups`, num sentido; sem coordenador as rotas de grupo recusam com código."""
 import asyncio
 import json
 import threading
@@ -49,7 +49,7 @@ def _sidecar(name, peers, gid="g1", orq=False):
 
 
 def test_ownership_follows_mode(monkeypatch):
-    for mode, owned in (("rust", True), ("pending", True), ("python", False)):
+    for mode, owned in (("rust", True), ("pending", True)):
         monkeypatch.setattr(runtime_coordinator, "_current", SimpleNamespace(mode=mode))
         assert groups_bridge.rust_owns_groups() is owned, mode
     monkeypatch.setattr(runtime_coordinator, "_current", None)
@@ -128,19 +128,6 @@ def test_call_waits_for_pending_rust_then_uses_the_new_bridge(monkeypatch):
         assert groups_bridge.call("group.rename", old="a", new="b") == {}
     finally:
         srv.shutdown()
-        groups_bridge.configure(None, None)
-        owner.loop.call_soon_threadsafe(owner.loop.stop)
-
-
-def test_call_after_pending_falls_to_python_never_touches_the_bridge(monkeypatch):
-    groups_bridge.configure("127.0.0.1:9", "s")
-    owner = _pending_owner("python")
-    monkeypatch.setattr(runtime_coordinator, "_current", owner)
-    try:
-        with pytest.raises(groups_bridge.GroupsBridgeError) as e:
-            groups_bridge.call("group.leave", name="a")
-        assert e.value.code == "groups_runtime_python"
-    finally:
         groups_bridge.configure(None, None)
         owner.loop.call_soon_threadsafe(owner.loop.stop)
 
@@ -298,10 +285,9 @@ def test_connect_group_route_is_one_way(monkeypatch, client, method, path, route
     assert not (pair._pair_dir() / "a.json").exists()
 
 
-@pytest.mark.parametrize("mode", ["python", None])
 @pytest.mark.parametrize("method,path,route,body", GROUP_ROUTES)
-def test_python_mode_group_routes_refuse(monkeypatch, client, mode, method, path, route, body):
-    monkeypatch.setattr(runtime_coordinator, "_current", mode and SimpleNamespace(mode=mode))
+def test_group_routes_refuse_without_owner(monkeypatch, client, method, path, route, body):
+    monkeypatch.setattr(runtime_coordinator, "_current", None)
     monkeypatch.setattr(groups_bridge, "call", lambda *a, **k: pytest.fail("sem Rust não há ponte"))
     kw = {"json": body} if body is not None else {}
     r = getattr(client, method)(path, headers=H, **kw)
@@ -344,18 +330,6 @@ def test_associate_in_rust_mode_forwards_without_rebuilding_orq_facts(monkeypatc
     assert calls == [("/__hangar_server/forwarded", "POST", "/api/sessions/arb/orq/grupo", {"gid": "g1", "mtime": 1.5}, {"limit": None})]
 
 
-@pytest.mark.parametrize("mode", ["python", None])
-def test_orq_grupo_in_python_mode_refuses(monkeypatch, client, mode):
-    monkeypatch.setattr(runtime_coordinator, "_current", mode and SimpleNamespace(mode=mode))
-    monkeypatch.setattr(groups_bridge, "call", lambda *a, **k: pytest.fail("sem Rust não há ponte"))
-    _sidecar("arb", [], gid="g1", orq=True)
-    before = sorted(p.name for p in pair._pair_dir().iterdir())
-    r = client.post("/api/sessions/planner/orq/grupo", headers=H, json={"gid": "g1", "mtime": 1.5})
-    assert r.status_code == 503, r.text
-    assert r.json()["detail"]["code"] == "groups_need_rust_server"
-    assert sorted(p.name for p in pair._pair_dir().iterdir()) == before
-
-
 def test_child_gets_group_env(monkeypatch, tmp_path):
     from app import rust_server
     monkeypatch.delenv("HANGAR_SERVER_ID", raising=False)
@@ -372,10 +346,9 @@ def test_child_gets_group_env(monkeypatch, tmp_path):
     assert env["HANGAR_PAIR_ARCHIVE"] == str(pair._arquivo_dir())
 
 
-@pytest.mark.parametrize("mode", ["python", None])
-def test_python_mode_close_of_a_grouped_session_closes_and_warns(monkeypatch, client, mode):
+def test_close_of_a_grouped_session_without_owner_closes_and_warns(monkeypatch, client):
     """Fechar nunca é barrado; sem o Rust a saída do grupo não acontece e isso volta no aviso e no diário."""
-    monkeypatch.setattr(runtime_coordinator, "_current", mode and SimpleNamespace(mode=mode))
+    monkeypatch.setattr(runtime_coordinator, "_current", None)
     monkeypatch.setattr(groups_bridge, "call", lambda *a, **k: pytest.fail("sem Rust não há ponte"))
     _sidecar("a", ["b"])
     killed, recorded = [], []

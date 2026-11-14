@@ -1,7 +1,7 @@
 """Contas pelas portas do Python (Connect, convidado): o Rust é o único escritor.
 
 Com o Rust de pé, o pedido de conta que chega ao Python, já autenticado, vai pela ponte privada.
-A resposta do Rust volta como veio; sem o Rust (modo python), indisponível.
+A resposta do Rust volta como veio.
 """
 import json
 import threading
@@ -100,23 +100,12 @@ def test_unauthenticated_request_never_reaches_the_owner(rust):
     assert _Rust.seen == []
 
 
-def test_python_mode_answers_unavailable_without_the_owner(rust, monkeypatch):
-    monkeypatch.setattr(runtime_coordinator, "current", lambda: SimpleNamespace(mode="python"))
-    response = TestClient(app).get("/api/claude-configs", headers=AUTH)
-    assert response.status_code == 503
-    assert response.json()["detail"]["code"] == "accounts_need_rust_server"
-    assert _Rust.seen == []
-
-
-def test_jev_aux_goes_to_the_rust_owner_and_needs_it(rust, monkeypatch):
+def test_jev_aux_goes_to_the_rust_owner(rust):
     response = TestClient(app).post("/api/jev/aux/models", headers=AUTH, json={"base_url": "http://x/v1"})
     assert response.status_code == _Rust.reply[0]
     [seen] = _Rust.seen
     assert (seen["path"], seen["account_path"]) == ("/__hangar_server/jev/aux", "/api/jev/aux/models")
     assert TestClient(app).get("/api/jev/aux/cliproxy").status_code == 401
-    monkeypatch.setattr(runtime_coordinator, "current", lambda: SimpleNamespace(mode="python"))
-    response = TestClient(app).get("/api/jev/aux/cliproxy", headers=AUTH)
-    assert (response.status_code, response.json()["detail"]["code"]) == (503, "erro_jev_aux_precisa_rust")
     assert len(_Rust.seen) == 1
 
 
@@ -145,14 +134,8 @@ def test_plan_routes_and_catalog_go_to_the_rust_owner(rust):
     assert json.loads(_Rust.seen[1]["body"]) == {"stem": "p", "idx": 0, "done": True}
 
 
-def test_plan_routes_need_rust_and_never_reach_it_unauthenticated(rust, monkeypatch):
+def test_plan_routes_never_reach_rust_unauthenticated(rust):
     assert TestClient(app).get("/api/sessions/s1/plan").status_code == 401
-    assert _Rust.seen == []
-    monkeypatch.setattr(runtime_coordinator, "current", lambda: SimpleNamespace(mode="python"))
-    response = TestClient(app).get("/api/sessions/s1/plan-preview", headers=AUTH)
-    assert (response.status_code, response.json()["detail"]["code"]) == (503, "erro_planos_precisa_rust")
-    response = TestClient(app).get("/api/claude/customizations?cwd=/tmp", headers=AUTH)
-    assert (response.status_code, response.json()["detail"]["code"]) == (503, "claude_customizations_unavailable")
     assert _Rust.seen == []
 
 

@@ -62,8 +62,6 @@ def _saida_para_log(argv: list[str]) -> None:
 if __name__ == "__main__":
     _saida_para_log(sys.argv)
 
-import uvicorn
-
 from app.config import settings, resolve_bind_ip, list_config_dirs, _backend_config_base
 from app import migracao_sidecars, resilient_accept, rust_server
 from app.hook_state import hook_state
@@ -166,34 +164,20 @@ def main():
     kw = dict(host=bind, port=settings.port, workers=1, proxy_headers=True,
               forwarded_allow_ips=settings.forwarded_allow_ips,
               timeout_graceful_shutdown=rust_server.GRACEFUL_SHUTDOWN_S)
-    if settings.reload:
-        # O reload recria o processo e só religa o endereço da config: no dev não há porta de convite.
-        uvicorn.run("app.api:app", reload=True, **kw)
-        return
-    rust_bin = rust_server.wanted_binary(settings.rust_server)
+    rust_bin = rust_server.wanted_binary()
+    if rust_bin is None:
+        # Sem o hangar-server não há quem atenda a porta: o Python não a atende sozinho.
+        print("[hangar] ERRO: hangar-server não encontrado (CP_RUST_SERVER_BIN, bin/ da versão, "
+              "crates/target/release, ~/.hangar/bin) ou sem par de autenticação válido", file=sys.stderr)
+        sys.exit(1)
     try:
         main_sock = _tcp_socket(bind, settings.port)
     except OSError as e:
         print(f"[hangar] ERRO: porta {settings.port} indisponível ({e})", file=sys.stderr)
         sys.exit(1)
-    # A porta do convite (8766) é do hangar-server: o Python nunca a abre, com Rust ou sem.
-    extras = []
-    if rust_bin is not None:
-        # A porta pública fica com o hangar-server; o bind acima só provou que ela estava livre.
-        main_sock.close()
-        sys.exit(rust_server.run("app.api:app", kw, rust_bin, settings.auth_token,
-                                 [_tcp_socket("127.0.0.1", 0)] + extras,
-                                 lambda: _tcp_socket(bind, settings.port)))
-    from app import migration_status
-    if settings.rust_server:
-        migration_status.set_reason("sem_binario")
-    migration_status.set_listen_port(settings.port)
-    # Um Server com dois sockets: um lifespan só (dois Server rodariam watchers e hooks em dobro).
-    config = uvicorn.Config("app.api:app", **kw)
-    server = rust_server.Server(config)
-    server.run(sockets=[main_sock] + extras)
-    if not server.started:
-        sys.exit(3)                              # mesmo código do uvicorn.run: o systemd reinicia
+    # A porta pública fica com o hangar-server; o bind acima só provou que ela estava livre.
+    main_sock.close()
+    sys.exit(rust_server.run("app.api:app", kw, rust_bin, settings.auth_token, [_tcp_socket("127.0.0.1", 0)]))
 
 
 if __name__ == "__main__":

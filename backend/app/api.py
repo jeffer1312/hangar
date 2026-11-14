@@ -24,7 +24,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from app import (atomico, closed_names, diag,
                  loop_monitor, permission_mode, plugin_bridge, procinfo, quem_chama, tmux,
                  uds_messaging)
-from app import groups_bridge, internal_api, list_bridge, migration_status, share_bridge
+from app import groups_bridge, internal_api, list_bridge, share_bridge
 from app.auth import require_auth
 from app.send_executor import send_thread as _send_thread
 from app.model_picker import PickerError
@@ -52,7 +52,6 @@ from app import runtime_config
 from app.guest_header import guest_of, guest_safe
 from app.share_life import session_life
 from app import contas, default_model, procinfo
-from app import loop as loop_mod
 from app.transcript import last_assistant_text
 from app import archive_providers
 from app.archive import (archive_cwd, archive_jsonl,
@@ -131,13 +130,7 @@ async def _lifespan(app: FastAPI):
     # abas os 40 acabam e a API inteira congela, sem erro e sem log. Watcher parado nao gasta CPU,
     # so o slot, entao subir o teto e barato.
     anyio.to_thread.current_default_thread_limiter().total_tokens = 200
-    # Inbox do socket nativo: é o endereço de resposta dos recados que o backend escreve nos
-    # sockets do Claude; sem ele o recibo de retenção/recusa não tem pra onde voltar.
-    if uds_messaging.INBOX.ligar(_ao_recibo_nativo):
-        _log.info("inbox nativo ligado em %s", uds_messaging.INBOX.path)
-    await _boot_sessions(runtime)
     _state_dirs =list({Path(c.path) for c in list_config_dirs()} | {_backend_config_base().resolve()})
-    hook_state.on_transition = _on_hook_transition  # drain server-side + confirmacao de entrega
     task = asyncio.create_task(hook_state.watch(_state_dirs))
 
     def _watch_done(t: asyncio.Task) -> None:
@@ -167,7 +160,6 @@ async def _lifespan(app: FastAPI):
     # threads (Timer da confirmacao, gatilho de hook). Ver `_drenar`.
     global _loop_servidor
     _loop_servidor = asyncio.get_running_loop()
-    codex_warm_task = asyncio.create_task(get_adapter("codex").watch_sessions())
     try:
         yield
     finally:
@@ -176,8 +168,6 @@ async def _lifespan(app: FastAPI):
         await runtime.close_events()
         # Claude sem terminal fica vivo no cano: só fecha a conexão; o próximo backend religa.
         get_adapter(CLAUDE_HEADLESS).desligar_todas()
-        codex_warm_task.cancel()
-        await asyncio.gather(codex_warm_task, return_exceptions=True)
         task.cancel()
         loop_monitor_task.cancel()
         prune_task.cancel()
@@ -313,17 +303,14 @@ async def _grupos_indisponiveis(request: Request, exc: groups_bridge.GroupsBridg
     return JSONResponse(status_code=503, content={"detail": _group_unavailable(exc.code).detail})
 
 
-async def _repasse_ao_rust(request: Request, sem_rust: dict, destino: str, **repasse):
+async def _repasse_ao_rust(request: Request, destino: str, **repasse):
     """Pedido de uma rota que só o Rust atende, chegado por uma porta do Python (Connect,
-    convidado): autenticado aqui, ele segue pela ponte privada e a resposta volta como veio. Sem o
-    Rust não há reserva Python: a rota responde indisponível, com o código de `sem_rust`."""
+    convidado): autenticado aqui, ele segue pela ponte privada e a resposta volta como veio."""
     from app import account_bridge
     try:
         await require_auth(request)
     except HTTPException as error:
         return JSONResponse({"detail": error.detail}, status_code=error.status_code, headers=error.headers)
-    if account_bridge.owner_mode() == "python":
-        return JSONResponse({"detail": sem_rust}, status_code=503)
     return await account_bridge.forward_public(request, destino, **repasse)
 
 
@@ -356,15 +343,9 @@ async def _providers_via_rust(request: Request, call_next):
             await require_auth(request)
         except HTTPException as error:
             return JSONResponse({"detail": error.detail}, status_code=error.status_code, headers=error.headers)
-        if account_bridge.owner_mode() == "python":
-            return JSONResponse({"detail": {"code": "providers_need_rust_server"}}, status_code=503)
         response = await account_bridge.forward_stream(request, guest=guest_of(request) is not None)
         return await call_next(request) if response.status_code == 421 else response
-    unavailable = (erro("orq_conductor_need_rust_server", "o condutor precisa do servidor Rust, que não está rodando")
-                   if re.fullmatch(r"/api/orq/[^/]+/conductor", path) else
-                   _groups_need_rust() if re.fullmatch(r"/api/sessions/[^/]+/orq/grupo", path) else
-                   {"code": "providers_need_rust_server"})
-    response = await _repasse_ao_rust(request, unavailable, "/__hangar_server/forwarded", limit=None)
+    response = await _repasse_ao_rust(request, "/__hangar_server/forwarded", limit=None)
     return await call_next(request) if write and response.status_code == 421 else response
 
 
@@ -375,7 +356,7 @@ async def _contas_pelo_rust(request: Request, call_next):
     listing = request.method == "GET" and request.url.path == "/api/credenciais"
     if not (listing or request.url.path.startswith(account_bridge.ACCOUNT_PREFIXES)):
         return await call_next(request)
-    return await _repasse_ao_rust(request, account_bridge.NEED_RUST, "/__hangar_server/accounts/public")
+    return await _repasse_ao_rust(request, "/__hangar_server/accounts/public")
 
 
 @app.middleware("http")
@@ -390,10 +371,8 @@ async def _worktrees_pelo_rust(request: Request, call_next):
         return await call_next(request)
     if guest_of(request) is not None:
         return JSONResponse({"detail": "convidado não acessa worktrees"}, status_code=403)
-    if account_bridge.owner_mode() == "python" and path not in {"/api/worktrees/settings", "/api/worktrees/fetch"}:
-        return await call_next(request)
     options = {"limit": None, "default_json_content_type": False} if path == "/api/worktrees/fetch" else {}
-    return await _repasse_ao_rust(request, {"code": "worktrees_need_rust_server"}, "/__hangar_server/forwarded", **options)
+    return await _repasse_ao_rust(request, "/__hangar_server/forwarded", **options)
 
 
 @app.middleware("http")
@@ -405,8 +384,7 @@ async def _jev_aux_pelo_rust(request: Request, call_next):
         return await call_next(request)
     if delivery and (guest_of(request) is not None):
         return JSONResponse({"detail": "Not Found"}, status_code=404)
-    return await _repasse_ao_rust(request, erro("erro_jev_aux_precisa_rust", "o servidor está sem o processo Rust; reinicie o Hangar"),
-                                  "/__hangar_server/forwarded" if delivery else "/__hangar_server/jev/aux")
+    return await _repasse_ao_rust(request, "/__hangar_server/forwarded" if delivery else "/__hangar_server/jev/aux")
 
 
 @app.middleware("http")
@@ -419,7 +397,7 @@ async def _grupos_pelo_rust(request: Request, call_next):
         return await call_next(request)
     if guest_of(request) is not None:
         return JSONResponse({"detail": erro("erro_fora_do_convite", "fora da sessao compartilhada")}, status_code=403)
-    return await _repasse_ao_rust(request, _groups_need_rust(), "/__hangar_server/forwarded")
+    return await _repasse_ao_rust(request, "/__hangar_server/forwarded")
 
 
 # Rotas de plano e o catálogo de plugins e skills: o dono é o Rust (`plans::routes`, `claude_customizations`).
@@ -438,16 +416,13 @@ async def _planos_pelo_rust(request: Request, call_next):
     if metodo == "GET" and path == _CATALOGO:
         if guest_of(request) is not None:
             return JSONResponse({"detail": erro("erro_fora_da_pasta", "a seleção de plugins pertence ao dono")}, status_code=403)
-        return await _repasse_ao_rust(request, erro("claude_customizations_unavailable", "a seleção de plugins e skills precisa do servidor Rust"),
-                                      "/__hangar_server/forwarded")
+        return await _repasse_ao_rust(request, "/__hangar_server/forwarded")
     if metodo == "POST" and _RETOMAR.match(path):
-        return await _repasse_ao_rust(request, erro(registry_mod.SessionOpenNeedsRust.code, "abrir e reabrir sessão precisam do servidor Rust, que não está rodando"),
-                                      "/__hangar_server/forwarded")
+        return await _repasse_ao_rust(request, "/__hangar_server/forwarded")
     padrao = _PLANOS_ESCRITA if metodo == "POST" else _PLANOS_LEITURA if metodo == "GET" else None
     if padrao is None or not padrao.match(path):
         return await call_next(request)
-    return await _repasse_ao_rust(request, erro("erro_planos_precisa_rust", "os planos precisam do servidor Rust, que não está rodando"),
-                                  "/__hangar_server/forwarded")
+    return await _repasse_ao_rust(request, "/__hangar_server/forwarded")
 
 
 # Busca, Perguntar e Arquivo são só do Rust: sem ele, indisponível com código, sem reserva.
@@ -494,9 +469,6 @@ async def _midia_pelo_rust(request: Request, call_next):
         await require_auth(request)
     except HTTPException as error:
         return JSONResponse({"detail": error.detail}, status_code=error.status_code, headers=error.headers)
-    if account_bridge.owner_mode() == "python":
-        return JSONResponse({"detail": erro("erro_midia_precisa_rust", "anexos, transcrição e saída de ferramenta precisam do servidor Rust, que não está rodando")},
-                            status_code=503)
     guest = guest_of(request) is not None
     return await account_bridge.forward_stream(request, guest=guest)
 
@@ -511,8 +483,7 @@ async def mermaid_pelo_rust(request: Request):
     e quem o Rust não reconheceu como dono. O convidado fica sem a rota, como antes."""
     if guest_of(request) is not None:
         return JSONResponse({"detail": "Not Found"}, status_code=404)
-    return await _repasse_ao_rust(request, erro("mermaid_indisponivel", "o desenho de diagramas precisa do servidor Rust"),
-                                  "/__hangar_server/forwarded", keep=_MERMAID_HEADERS, limit=64 * 1024 * 1024)
+    return await _repasse_ao_rust(request, "/__hangar_server/forwarded", keep=_MERMAID_HEADERS, limit=64 * 1024 * 1024)
 
 
 @app.api_route("/api/session-defaults", methods=["GET", "PUT"], dependencies=[Depends(require_auth)])
@@ -520,8 +491,7 @@ async def session_defaults_forward(request: Request):
     """O Connect só transporta o padrão; leitura e escrita pertencem ao Rust."""
     if guest_of(request) is not None:
         raise HTTPException(403, detail=erro("session_defaults_owner_only", "só o dono pode acessar o padrão da abertura"))
-    return await _repasse_ao_rust(request, erro("session_defaults_unavailable", "o padrão da abertura precisa do servidor Rust"),
-                                  "/__hangar_server/forwarded")
+    return await _repasse_ao_rust(request, "/__hangar_server/forwarded")
 
 
 @app.put("/api/sessions/prewarm", dependencies=[Depends(require_auth)])
@@ -530,8 +500,7 @@ async def prewarm_forward(request: Request):
     """A reserva pré-aquecida é do Rust (`prewarm::http`); o Connect só autentica e repassa."""
     if _convidado(request):
         raise HTTPException(403, detail=erro("prewarm_owner_only", "só o dono reserva uma sessão pré-aquecida"))
-    return await _repasse_ao_rust(request, erro(registry_mod.SessionOpenNeedsRust.code, "abrir e reabrir sessão precisam do servidor Rust, que não está rodando"),
-                                  "/__hangar_server/forwarded")
+    return await _repasse_ao_rust(request, "/__hangar_server/forwarded")
 
 
 @app.get("/api/client-api")
@@ -540,8 +509,7 @@ async def client_api_pelo_rust(request: Request):
     ponte; sem o Rust é 503 com código, nunca um número que o Python não conhece."""
     if _convidado(request):
         return JSONResponse({"detail": "Not Found"}, status_code=404)
-    return await _repasse_ao_rust(request, erro("client_api_need_rust_server", "a versão da API precisa do servidor Rust"),
-                                  "/__hangar_server/forwarded")
+    return await _repasse_ao_rust(request, "/__hangar_server/forwarded")
 
 
 @app.middleware("http")
@@ -649,7 +617,6 @@ app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=5)
 app.include_router(plugin_bridge.plugin_router)
 # Convites e par externo são do Rust; aqui só o repasse do dono que chega pelo Connect.
 app.include_router(share_bridge.router)
-app.include_router(migration_status.router)
 app.include_router(internal_api.router)
 registry = SessionRegistry()
 terminal = TerminalInput()
@@ -778,7 +745,6 @@ def _agendar_confirmacao(name: str, delay: float) -> None:
         timer.daemon = True
         _confirm_pend[name] = (timer, due)
     timer.start()
-_RECHECA_KIMI = 5.0
 
 
 # Loop do servidor, pra pontes sync->async (mesmo papel do `INBOX.ligar_loop`). Setado no lifespan.
@@ -881,9 +847,9 @@ def _confirm_and_drain(name: str) -> None:
         grace = _CONFIRM_GRACE_HEADLESS if headless else _CONFIRM_GRACE
         # UMA leitura do oraculo pros dois ramos. None = nao deu pra ler o transcript (ver
         # committed_user_lines): sai SEM decidir e SEM reagendar. Sem reagendar de proposito — um
-        # Timer a cada `grace` contra um arquivo que nao abre e tempestade sem fim; o proximo fim
-        # de turno (`_on_hook_transition`) ou a proxima mensagem chamam isto de novo, e ate la a
-        # entrada fica visivel como bolha "na fila". Falha VISIVEL, nunca mensagem duplicada.
+        # Timer a cada `grace` contra um arquivo que nao abre e tempestade sem fim; a proxima
+        # mensagem chama isto de novo, e ate la a entrada fica visivel como bolha "na fila".
+        # Falha VISIVEL, nunca mensagem duplicada.
         # As DUAS leituras do transcript ficam juntas e falham juntas. `_transcript_start_ts` abre
         # o mesmo arquivo uma segunda vez, e o 0.0 dele desliga a poda por idade — sem ela, entrada
         # de sessao ANTERIOR nao e mais dispensada e vai parar no caminho que REDIGITA. Ou seja: o
@@ -983,114 +949,6 @@ def _maybe_chain(name: str) -> None:
             _drain_session(target)
     finally:
         link.clear()  # one-shot sempre, mesmo se target/text vier malformado -> nao fica repetindo lixo
-
-
-# Sessoes com uma reavaliacao de "idle mentiroso" ja agendada. UMA cadeia por sessao: sem isto, cada
-# transicao espuria abria a sua propria corrente de Timers, e duas correntes em paralelo dobram o
-# `registry.list()` (que toca tmux) a cada 5s, sem limite e sem ninguem notar.
-
-
-# Tentativas seguidas com FALHA antes de abandonar a cadeia de reavaliacao de uma sessao.
-
-
-            # Reagenda MESMO ASSIM quando o idle era suspeito: a falha pode ter sido pontual
-            # (registry/tmux piscando), e desistir aqui e o que deixa a sessao presa. Mas com TETO:
-            # falha PERMANENTE (jsonl corrompido, erro reproduzivel no registry) reergueria a mesma
-            # excecao a cada 5s pra sempre, pagando `registry.list()` (tmux) toda volta. Depois de
-            # _RETRY_FALHA tentativas a cadeia para e diz isso no log — sessao presa e ruim, laco
-            # eterno tocando tmux e pior.
-
-
-_recheca_armada: set[str] = set()
-
-
-_recheca_lock = threading.Lock()
-
-
-_RETRY_FALHA = 5
-
-
-_falhas_seguidas: dict[str, int] = {}
-
-
-def _armar_recheca(session_id: str) -> bool:
-    """True se ESTA chamada ficou dona da cadeia de reavaliacao da sessao."""
-    with _recheca_lock:
-        if session_id in _recheca_armada:
-            return False
-        _recheca_armada.add(session_id)
-        return True
-
-
-def _recheca_kimi(session_id: str, state: str) -> None:
-    """Elo da cadeia: solta a posse ANTES de reavaliar, pra a proxima passada poder rearmar. Soltar
-    depois prenderia a cadeia numa unica corrente que morre junto com uma excecao."""
-    with _recheca_lock:
-        _recheca_armada.discard(session_id)
-    _on_hook_transition(session_id, state)
-
-
-def _on_hook_transition(session_id: str, state: str) -> None:
-    if state == "awaiting_input":
-        return
-    def _work() -> None:
-        try:
-            info = next((s for s in registry.list()
-                         if s.jsonl and session_key(s.jsonl) == session_id), None)
-            if info and _rust_conduz(info):
-                return
-            if info and info.jsonl:
-                real = state
-                sent = _drenar(info.name, info.jsonl, info.provider)
-                # Confirmacao em TODO idle (nao so pos-drain): Timers pendentes morrem no restart
-                # do backend — sem isto, entrada entregue ficava sem confirmar indefinidamente.
-                if sent or real == "idle":
-                    _agendar_confirmacao(info.name, _CONFIRM_GRACE + 0.5)
-                loop_d = loop_mod.LoopLink(info.name).get()
-                loop_active = loop_d is not None and loop_d["status"] in loop_mod.ACTIVE
-                # Encadeamento (feature #12): so quando NAO ha loop ativo — turno REALMENTE terminado,
-                # reusando o info.name ja resolvido nesta thread — ver _maybe_chain.
-                if real == "idle" and not loop_active:
-                    _maybe_chain(info.name)
-                # Idle desmentido pelo transcript: o fim de turno REAL nao vai gerar transicao
-                # nenhuma (o Stop grava idle sobre idle, e hook_state._apply so avisa quando o
-                # estado MUDA). Sem reagendar, o turno terminaria sem drenar a fila, sem ticar o
-                # loop e sem disparar o `then`. O reagendamento converge sozinho: quando o turno
-                # acaba, o wire.jsonl para de crescer e a proxima passada ve idle de verdade.
-                # UMA cadeia por sessao (_recheca_armada): cada transicao espuria abria a sua, e
-                # duas cadeias em paralelo dobram `registry.list()` (tmux) a cada 5s pra sempre.
-                _falhas_seguidas.pop(session_id, None)   # esta volta foi ate o fim: zera o teto
-        except Exception as exc:
-            from app.runtime_coordinator import RustCacheInvalid
-            # Cache inválido já vai ao diário uma vez por sequência pelo coordenador; aqui repetiria a cada volta.
-            if not isinstance(exc, RustCacheInvalid):
-                _log.warning("transicao de estado falhou sid=%s state=%s — sem reavaliacao automatica "
-                             "ate a proxima transicao", session_id, state, exc_info=True)
-            # Reagenda MESMO ASSIM quando o idle era suspeito: a falha pode ter sido pontual
-            # (registry/tmux piscando), e desistir aqui e o que deixa a sessao presa. Mas com TETO:
-            # falha PERMANENTE (jsonl corrompido, erro reproduzivel no registry) reergueria a mesma
-            # excecao a cada 5s pra sempre, pagando `registry.list()` (tmux) toda volta. Depois de
-            # _RETRY_FALHA tentativas a cadeia para e diz isso no log — sessao presa e ruim, laco
-            # eterno tocando tmux e pior.
-            if state == "idle":
-                n = _falhas_seguidas.get(session_id, 0) + 1
-                if n <= _RETRY_FALHA:
-                    _falhas_seguidas[session_id] = n
-                    if _armar_recheca(session_id):
-                        threading.Timer(_RECHECA_KIMI, _recheca_kimi,
-                                        args=(session_id, state)).start()
-                elif n == _RETRY_FALHA + 1:
-                    # NAO zera o contador aqui: zerando, o proximo evento recomecava a contagem e o
-                    # laco voltava a girar de 5 em 5s — teto que reinicia nao e teto. Quem zera e a
-                    # volta que COMPLETA (no fim do `_work`), que e a prova de que voltou a
-                    # funcionar. Loga uma vez so, na virada.
-                    _falhas_seguidas[session_id] = n
-                    _log.error("reavaliacao de %s abandonada apos %d falhas seguidas — a sessao so "
-                               "volta a drenar sozinha na proxima transicao de estado",
-                               session_id, _RETRY_FALHA)
-                else:
-                    _falhas_seguidas[session_id] = n
-    threading.Thread(target=_work, daemon=True).start()
 
 
 class _StrictBody(BaseModel):
@@ -1312,48 +1170,6 @@ async def modo_execucao(name: str, body: ModoExecucaoBody):
     raise HTTPException(409, detail=erro("erro_modo_so_claude", "a troca de modo só vale para sessões Claude"))
 
 
-async def _python_owns_headless() -> None:
-    """O Python é o dono das sessões Claude sem terminal: religa os canos vivos e reagenda as
-    conferências de entrega (Timers em memória que o restart apagou)."""
-    try:
-        religadas = await get_adapter(CLAUDE_HEADLESS).reconectar_todas()
-        if religadas:
-            _log.info("claude headless: %d sessão(ões) religada(s) ao cano", religadas)
-        for meta in await asyncio.to_thread(headless_sessions.list_all):
-            get_adapter(CLAUDE_HEADLESS).apos_entrega(meta["name"])
-    except Exception:
-        _log.warning("claude headless: religação de canos falhou", exc_info=True)
-
-
-async def _boot_sessions(runtime) -> None:
-    """Sessões Claude sem terminal na subida. O cano sobrevive ao restart; só morre aqui o de
-    sessão encerrada com o backend fora. Com o Rust esperado, nada mais roda antes do desfecho
-    dele: o modo `rust` abre as sessões nele, e o `python` (desistência) faz o que vinha aqui.
-    A varredura de órfãos tem dono só: com o Rust de pé é dele, na subida dele."""
-    async def sweep_orphans():
-        try:
-            from app.adapters.claude_headless.adapter import matar_orfaos
-            mortos = await asyncio.to_thread(matar_orfaos)
-            if mortos:
-                _log.info("claude headless: %d cano(s) de sessão já encerrada finalizado(s)", mortos)
-        except Exception:
-            _log.warning("claude headless: varredura de canos órfãos falhou", exc_info=True)
-
-
-    async def after_python():
-        await sweep_orphans()
-        try:
-            await runtime.register_claude_sessions()
-        except Exception:
-            _log.exception("registro das sessões Claude no Python falhou")
-        await _python_owns_headless()
-
-    runtime.mode_hooks.update(python=after_python)
-    if runtime.mode == "python":
-        await sweep_orphans()
-        await _python_owns_headless()
-
-
 @app.get("/api/sessions/{name}/conta", dependencies=[Depends(require_auth)])
 async def contas_destino(name: str):
     """As contas de destino e a troca de conta são do Rust."""
@@ -1364,8 +1180,7 @@ async def contas_destino(name: str):
 async def rename_session(name: str, request: Request):
     """Trocar o nome é do Rust; aqui chega só quem entrou por uma porta do Python (Connect, convidado
     com conta), e segue pela ponte."""
-    return await _repasse_ao_rust(request, erro("rename_needs_rust_server", "trocar o nome da sessão precisa do servidor Rust"),
-                                  f"/__hangar_server/claude/{urllib.parse.quote(name, safe='')}/rename")
+    return await _repasse_ao_rust(request, f"/__hangar_server/claude/{urllib.parse.quote(name, safe='')}/rename")
 
 
 class ThenLinkBody(_StrictBody):
@@ -1489,9 +1304,6 @@ async def peer_address(name: str):
 async def subagents_pelo_rust(request: Request, name: str, agent_id: str | None = None):
     # Subagentes são do Rust, que sabe qual conversa é a da sessão: convidado e Connect só repassam.
     from app import account_bridge
-    if account_bridge.owner_mode() == "python":
-        raise HTTPException(503, detail=erro("erro_subagentes_precisa_rust",
-                                             "o servidor está sem o processo Rust; reinicie o Hangar"))
     return await account_bridge.forward_public(request, "/__hangar_server/subagents")
 
 
@@ -1504,10 +1316,6 @@ def _erro_texto(e) -> str:
     """
     return e if isinstance(e, str) else (e.get("msg") if isinstance(e, dict) else str(e))
 
-
-# Recados escritos no socket nativo, por msg_id: (remetente, alvo, começo do texto). Só serve pro
-# recibo de retenção/recusa que o receptor devolve no inbox do backend (uds_messaging.INBOX).
-_RECADOS_NATIVOS: dict[str, tuple[str, str, str]] = {}
 
 
 def _sessao_claude_de(name: str) -> tuple[Optional[str], Optional[str]]:
@@ -1556,7 +1364,7 @@ def _send_native_available(name: str, text: str) -> Optional[str]:
     ([de:/grupo:/painel:]), sessão sem socket, ou o socket não aceitou — quem chama cai pro
     próximo degrau (plugin, tmux, fila). Só recado vai por aqui: a fala da pessoa continua
     entrando como prompt dela, nunca embrulhada como mensagem de outra sessão."""
-    remetente, corpo = uds_messaging.separar_prefixo(text)
+    remetente, _ = uds_messaging.separar_prefixo(text)
     if remetente is None:
         return None
     try:
@@ -1568,48 +1376,7 @@ def _send_native_available(name: str, text: str) -> Optional[str]:
     except Exception:                                # noqa: BLE001
         _log.warning("socket nativo falhou name=%s; caindo pro caminho de sempre", name, exc_info=True)
         return None
-    _RECADOS_NATIVOS[mid] = (remetente, name, corpo[:80])
-    if len(_RECADOS_NATIVOS) > 500:
-        for k in list(_RECADOS_NATIVOS)[:100]:
-            _RECADOS_NATIVOS.pop(k, None)
     return mid
-
-
-def _ao_recibo_nativo(mid: str, estado: str, detalhe: str) -> None:
-    """Recibo `peer_message_status` do receptor (retido/recusado): avisa a sessão remetente pelo
-    caminho normal. Roda na thread do inbox; o envio vai pro loop do servidor."""
-    from app import runtime_coordinator
-    from app.runtime_adapter import run_sync
-    coordinator = runtime_coordinator.current()
-    if coordinator is not None and coordinator.loop is not None:
-        if run_sync(lambda: coordinator.native_receipt(mid, estado), coordinator.loop):
-            diag.registrar("recado.nativo.recibo", "aviso", codigo=estado or "delivered")
-            return
-    info = _RECADOS_NATIVOS.pop(mid, None)
-    diag.registrar("recado.nativo.recibo", "aviso", sessao=info[1] if info else None,
-                   detalhe=f"{estado} {detalhe}".strip())
-    if estado in ("delivered", "released", ""):
-        return
-    if not info or _loop_servidor is None:
-        # Sem correlacao (recibo de antes do restart, ou msg_id ja purgado) ou sem loop: o aviso
-        # nao tem pra quem ir, mas a recusa nao pode virar silencio.
-        _log.warning("recibo nativo %s sem destino: msg_id=%s info=%s loop=%s detalhe=%s",
-                     estado, mid, bool(info), _loop_servidor is not None, detalhe)
-        return
-    remetente, alvo, inicio = info
-    if sanitize_session_name(remetente) != remetente:
-        # Aviso do próprio app ([painel: …]): não há sessão remetente a avisar, a recusa fica no log.
-        _log.warning("aviso do app %s por %s: %s (%r)", estado, alvo, detalhe, inicio)
-        return
-    aviso = (f"[painel: entrega de recado] Seu recado para {alvo} ({inicio!r}) foi {estado}"
-             f"{': ' + detalhe if detalhe else ''}. Ele não chegou ao modelo de lá.")
-    fut = asyncio.run_coroutine_threadsafe(_enviar(remetente, aviso), _loop_servidor)
-
-    def _feito(f) -> None:
-        # Remetente pode ter fechado entre o envio e o recibo: o aviso nao chega, mas fica no log.
-        if (exc := f.exception()) is not None:
-            _log.warning("aviso de recibo nao entregue a %s: %r", remetente, exc)
-    fut.add_done_callback(_feito)
 
 
 def _jsonl_atual(name: str) -> str | None:
@@ -3229,8 +2996,7 @@ def _bypass_no_ciclo(name: str) -> bool:
 @app.get("/api/sessions/{name}/navegador", dependencies=[Depends(require_auth)])
 async def navegador_da_sessao(name: str, request: Request):
     request = Request({**request.scope, "path": f"/api/sessions/{urllib.parse.quote(name, safe='')}/navegador"}, request.receive)
-    return await _repasse_ao_rust(request, erro("browser_need_rust_server", "o navegador precisa do servidor Rust, que não está rodando"),
-                                  "/__hangar_server/forwarded")
+    return await _repasse_ao_rust(request, "/__hangar_server/forwarded")
 
 
 @app.get("/api/sessions/{name}/commands", dependencies=[Depends(require_auth), Depends(_codex_rust_port)])
@@ -3244,5 +3010,4 @@ async def commands(name: str, request: Request):
                       if s["name"] != "compact"]]
         except RuntimeError:
             raise HTTPException(409, detail=erro("erro_codex_controle", "O Codex não aceitou a alteração; atualize a sessão e tente novamente.")) from None
-    return await _repasse_ao_rust(request, erro("commands_need_rust_server", "os comandos precisam do servidor Rust, que não está rodando"),
-                                  "/__hangar_server/forwarded")
+    return await _repasse_ao_rust(request, "/__hangar_server/forwarded")

@@ -72,15 +72,12 @@ def test_connect_forwards_groups_routes(rust):
     assert _Rust.seen[-1]["original"] == "/api/groups/x/y"
 
 
-def test_groups_routes_refuse_guest_and_python_mode_with_code(rust, monkeypatch, forwarded_guest):
+def test_groups_routes_refuse_guest_with_code(rust, forwarded_guest):
     client = TestClient(api.app)
     assert client.get("/api/groups/g1").status_code == 401
     with forwarded_guest():
         r = client.get("/api/groups/g1", headers=AUTH)
         assert (r.status_code, r.json()["detail"]["code"]) == (403, "erro_fora_do_convite")
-    monkeypatch.setattr(runtime_coordinator, "current", lambda: SimpleNamespace(mode="python"))
-    r = client.get("/api/sessions/a/group", headers=AUTH)
-    assert (r.status_code, r.json()["detail"]["code"]) == (503, "groups_need_rust_server")
     assert _Rust.seen == []
 
 

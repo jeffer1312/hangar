@@ -687,37 +687,6 @@ def test_routes_require_auth(api_client):
 # ---------------------------------------------------------------------------
 
 
-def _rust_owner_world(monkeypatch):
-    """Rust de pé, dono de Claude e Codex; uma sessão Claude e uma Kimi na lista. Grava o que o
-    Python faria por cada transição (fila, confirmação, loop, `then`, avisos)."""
-    from app import runtime_coordinator
-    fake = SimpleNamespace(mode="rust", rust_owns=lambda provider, headless: provider in ("claude", "codex"))
-    monkeypatch.setattr(runtime_coordinator, "current", lambda: fake)
-    rows = [SimpleNamespace(name="c1", jsonl="/p/claude-sid.jsonl", provider="claude", headless=False),
-            SimpleNamespace(name="k1", jsonl="/k/kimi-sid.jsonl", provider="kimi", headless=False)]
-    monkeypatch.setattr(api_mod.registry, "list", lambda: rows)
-    monkeypatch.setattr(api_mod.threading, "Thread", lambda target, daemon=None, **kw: SimpleNamespace(start=target))
-    monkeypatch.setattr(api_mod.hook_state, "get_state", lambda sid: None)
-    feitos = []
-    monkeypatch.setattr(api_mod, "_drenar", lambda name, jsonl, provider: feitos.append(("drain", name)) or 0)
-    monkeypatch.setattr(api_mod, "_agendar_confirmacao", lambda name, delay: feitos.append(("confirm", name)))
-    monkeypatch.setattr(api_mod, "_maybe_chain", lambda name: feitos.append(("then", name)))
-    monkeypatch.setattr(api_mod.loop_mod, "LoopLink", lambda name: SimpleNamespace(
-        get=lambda: {"status": "running"} if name == "c1" else None,
-        update=lambda **kw: feitos.append(("pausa", name))))
-    monkeypatch.setattr(api_mod.settings, "notify_dead", True)
-    return feitos
-
-
-def test_rust_owned_session_transitions_do_nothing_in_python(monkeypatch):
-    # Com o Rust de pé, fila, confirmação, loop, `then` e avisos da sessão Claude são do Rust:
-    # o Python repetiria a cutucada e mandaria o aviso em dobro.
-    feitos = _rust_owner_world(monkeypatch)
-    for state in ("idle", "awaiting_input", "dead"):
-        api_mod._on_hook_transition("claude-sid", state)
-    assert feitos == []
-
-
 # ---------------------------------------------------------------------------
 # Feature #12: encadeamento de sessao (_maybe_chain) + kill-switch mestre (automations_enabled)
 # ---------------------------------------------------------------------------
@@ -1201,41 +1170,6 @@ def test_broadcast_uses_send_thread(api_client, monkeypatch):
     assert r.status_code == 200
     # _session_exists e patchado como lambda pelo fixture -> checa o ENVIO real (_send_one) pelas 2 sessoes
     assert calls.count("_send_one") == 2
-
-
-# 13/08/2026 — o "idle" mentiroso do Kimi no caminho de ACAO
-# ---------------------------------------------------------------------------
-# Um turno Kimi que comeca a partir de um prompt enfileirado na TUI nao dispara evento nenhum, entao
-# o marcador fica congelado no idle do turno ANTERIOR enquanto o novo roda. As leituras (lista e
-# chat) ja corrigem isso; aqui esta o caminho que MEXE: sem a checagem, o loop re-prompta uma sessao
-# ocupada e o vinculo `then` e CONSUMIDO — e como o Stop real grava idle SOBRE idle, o
-# hook_state._apply nao avisa ninguem e o fim de turno de verdade nunca dispararia o `then` de novo.
-
-
-def test_recheca_desiste_depois_de_falhas_seguidas(monkeypatch, tmp_path):
-    # Falha PERMANENTE (jsonl corrompido, erro reproduzivel no registry) reerguia a mesma excecao a
-    # cada 5s pra sempre, pagando registry.list() (tmux) toda volta. Com teto, a cadeia para e diz
-    # isso no log — sessao presa e ruim, laco eterno tocando tmux e pior.
-    from types import SimpleNamespace
-    timers = []
-    def _explode():
-        raise RuntimeError("tmux fora")
-    monkeypatch.setattr(api_mod.registry, "list", _explode)
-    monkeypatch.setattr(api_mod.threading, "Timer",
-                        lambda *a, **k: (timers.append(a), SimpleNamespace(start=lambda: None))[1])
-    monkeypatch.setattr(api_mod.threading, "Thread",
-                        lambda target, daemon=None: SimpleNamespace(start=target))
-    api_mod._recheca_armada.clear()
-    api_mod._falhas_seguidas.pop("s-falha", None)
-
-    for _ in range(api_mod._RETRY_FALHA + 3):
-        api_mod._recheca_armada.clear()
-        api_mod._on_hook_transition("s-falha", "idle")
-    agendados = [a for a in timers if a[1] is api_mod._recheca_kimi]
-    assert len(agendados) == api_mod._RETRY_FALHA        # para no teto, nao gira pra sempre
-    # o contador NAO zera ao desistir: zerando, o proximo evento recomeca a contagem e o laco volta
-    # a girar — teto que reinicia nao e teto. Quem zera e a volta que completa.
-    assert api_mod._falhas_seguidas["s-falha"] > api_mod._RETRY_FALHA
 
 
 def test_espera_picker_fechar(monkeypatch):

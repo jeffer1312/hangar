@@ -857,25 +857,22 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   (`/api/ask-history`) e o Arquivo (`/api/archive*`) com o token do dono, e o terminal real do dono (só pelo
   `?token=`, sem conferir Origin). Custos e uso têm índice próprio
   (`custos-rust.sqlite3`) no cache local; a faixa `stats` do chat também é do Rust. `/events`,
-  `/api/costs`, `/api/cotacao` e o custo de sessão não têm rota no Python (404 no modo `python`). Contas Claude/Codex e
-  cotas são só do Rust: no modo `python` respondem `accounts_need_rust_server`, sem reserva
-  Python. Anexos, o `/transcribe` da sessão, a saída ao vivo de ferramenta (`bash-output`,
-  `tool-progress`) e a imagem colada no terminal são só do Rust, com a sessão tirada da lista dele:
-  as portas do Python autenticam e repassam em fluxo por `/__hangar_server/forwarded`, e no modo
-  `python` respondem 503 `erro_midia_precisa_rust`. Imagens de conversa transferida (`transfer:`)
+  `/api/costs`, `/api/cotacao` e o custo de sessão não têm rota no Python. Contas Claude/Codex e
+  cotas são só do Rust, sem reserva Python. Anexos, o `/transcribe` da sessão, a saída ao vivo de
+  ferramenta (`bash-output`, `tool-progress`) e a imagem colada no terminal são só do Rust, com a
+  sessão tirada da lista dele: as portas do Python autenticam e repassam em fluxo por
+  `/__hangar_server/forwarded`. Imagens de conversa transferida (`transfer:`)
   também são lidas no Rust, com conferência do snapshot e do vínculo da thread. Evidência em
   [accounts-uploads-rust.md](docs/decisoes/accounts-uploads-rust.md#anexos). O resto, convidado
   incluído, é repassado com `X-Forwarded-For`. A 8766 e a 8768 são do Rust. Sem binário
-  (`CP_RUST_SERVER_BIN`, `bin/` da versão do pacote, `crates/target/release`, `~/.hangar/bin`), com `CP_RUST_SERVER=0`, com
-  `protocol` da saúde diferente de `RUST_SERVER_PROTOCOL`, sem endereço privado válido ou com 3
-  quedas em 60 s, um segundo `uvicorn.Server` com `lifespan="off"` assume a porta: nunca um segundo
-  lifespan. O processo tem um modo só (`pending`/`rust`/`python`): queda 1–2 deixa as sessões
-  Claude sem dono por segundos (`pending`, até 30 s) e o Rust novo as reabre; a desistência as
-  passa ao Python, cada uma uma vez, e o Supervisor religa o Rust sozinho com espera crescente
-  (`RETRY_DELAYS`, zera só após uma `CRASH_WINDOW` de pé): o Python solta as sessões pela passagem
-  normal (`leave_python`, de volta a `pending`; falhou = não sobe), depois a porta, e só então o
-  filho nasce; não subiu, nova desistência. Falha determinística só tenta de novo com o binário
-  mudado. Nunca duas portas nem dois donos; a saída dos SSE é do sinal real, não do `should_exit`. O segredo interno nunca entra no `os.environ`. Formato de
+  (`CP_RUST_SERVER_BIN`, `bin/` da versão do pacote, `crates/target/release`, `~/.hangar/bin`) o
+  backend não sobe (sai com erro): o Python nunca atende a porta pública. O Supervisor só religa o
+  Rust: com `protocol` da saúde diferente de `RUST_SERVER_PROTOCOL`, sem endereço privado válido
+  ou com 3 quedas em 60 s, ele desiste (`hangar_server.reserva` no diário), a porta fica sem dono e
+  ele tenta de novo com espera crescente (`RETRY_DELAYS`, zera só após uma `CRASH_WINDOW` de pé).
+  Queda 1–2 deixa as sessões Claude sem dono por segundos (`pending`, até 30 s) e o Rust novo as
+  reabre. Falha determinística só tenta de novo com o binário mudado. A saída dos SSE é do sinal
+  real, não do `should_exit`. O segredo interno nunca entra no `os.environ`. Formato de
   `ChatEvent`, ids de evento e contrato interno
   mudam nos dois lados no mesmo commit. Mexeu no contrato interno (rotas `/internal`, canal
   privado do estado, variáveis do filho): suba `RUST_SERVER_PROTOCOL` (Python) e `INTERNAL_PROTOCOL`

@@ -7,7 +7,6 @@ import urllib.error
 import urllib.request
 
 from app.account_lifecycle import AccountKey
-from app.mensagens import erro
 
 
 def terminal_instances() -> dict[str, str]:
@@ -48,7 +47,7 @@ _opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedire
 def owner_mode() -> str:
     from app import runtime_coordinator
     coordinator = runtime_coordinator.current()
-    return "python" if coordinator is None else getattr(coordinator, "mode", "python")
+    return "pending" if coordinator is None else coordinator.mode
 
 
 def private_transport():
@@ -87,7 +86,7 @@ def configure_preparation(address, secret):
 def request_process_uses(key: AccountKey, pid: int) -> bool | None:
     """Se o processo usa a conta, pela varredura do Rust; None quando não dá para saber."""
     config = _preparation_transport
-    if owner_mode() == "python" or config is None:
+    if config is None:
         return None
     try:
         result = _post(config, "/__hangar_server/accounts",
@@ -103,8 +102,6 @@ def request_process_uses(key: AccountKey, pid: int) -> bool | None:
 def request_claude(action, *, path):
     """Encaminha consumidores Python ao dono Rust; pending nunca usa reserva Python."""
     from fastapi import HTTPException
-    if owner_mode() == "python":
-        return None
     unavailable = {"code": "account_auth_bridge_unavailable"}
     config = _preparation_transport
     if config is None:
@@ -122,8 +119,6 @@ def request_claude(action, *, path):
 def request_quotas(*, force=False, cached_only=False, invalidate=None):
     """Encaminha cotas ao único escritor; falha em pending não ativa leitura Python."""
     from fastapi import HTTPException
-    if owner_mode() == "python":
-        return None
     unavailable = {"code": "quota_bridge_unavailable"}
     config = _preparation_transport
     if config is None:
@@ -136,29 +131,9 @@ def request_quotas(*, force=False, cached_only=False, invalidate=None):
         raise HTTPException(503, detail=unavailable) from None
 
 
-def request_device(action):
-    """Encaminha somente a operação; credenciais permanecem no cofre local."""
-    from fastapi import HTTPException
-    mode = owner_mode()
-    if mode == "python":
-        raise HTTPException(503, detail=NEED_RUST)
-    unavailable = {"code": "account_device_bridge_unavailable"}
-    config = _preparation_transport
-    if mode != "rust" or config is None:
-        raise HTTPException(503, detail=unavailable)
-    try:
-        return _post(config, "/__hangar_server/accounts", {"device_action": action},
-                     timeout=45, limit=256 * 1024)
-    except urllib.error.HTTPError as error:
-        raise HTTPException(error.code, detail=_error_detail(error, unavailable)) from None
-    except (OSError, ValueError):
-        raise HTTPException(503, detail=unavailable) from None
-
-
-# Rotas de conta e cota que só o Rust atende; sem ele, respondem NEED_RUST.
+# Rotas de conta e cota que só o Rust atende.
 ACCOUNT_PREFIXES = ("/api/claude-configs", "/api/codex-contas", "/api/cotas", "/api/conta-estado",
                     "/api/credenciais/codex")
-NEED_RUST = erro("accounts_need_rust_server", "contas e cotas precisam do servidor Rust")
 
 
 async def forward_public(request, target: str = "/__hangar_server/accounts/public", *,
@@ -166,7 +141,7 @@ async def forward_public(request, target: str = "/__hangar_server/accounts/publi
                          default_json_content_type: bool = True):
     """Leva ao Rust o pedido de conta que entrou pelas portas do Python, já autenticado, e devolve
     a resposta dele como veio. Em pending, sem transporte, recusa: nunca abre um segundo
-    escritor. Quem chama já respondeu NEED_RUST no modo python. `keep` são os cabeçalhos da
+    escritor. `keep` são os cabeçalhos da
     resposta do Rust que voltam ao cliente além do tipo."""
     import asyncio
     from starlette.responses import JSONResponse, Response
