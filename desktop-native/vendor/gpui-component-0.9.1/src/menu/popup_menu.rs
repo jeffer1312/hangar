@@ -1389,7 +1389,8 @@ impl PopupMenu {
             Size::Small => (rems(1.25), options.radius.half()),
             _ => (rems(1.625), options.radius),
         };
-        let item_height = self.appearance.as_ref().and_then(|appearance| appearance.item_height).unwrap_or(item_height);
+        let item_height: gpui::DefiniteLength = self.appearance.as_ref().and_then(|appearance| appearance.item_height)
+            .map_or(item_height.into(), Into::into);
 
         let this = MenuItemElement::new(ix)
             .relative()

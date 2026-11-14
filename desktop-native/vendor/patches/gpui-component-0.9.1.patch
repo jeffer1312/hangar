@@ -458,15 +458,16 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
          })
      }
  
-@@ -1333,6 +1389,7 @@
+@@ -1333,6 +1389,8 @@
              Size::Small => (rems(1.25), options.radius.half()),
              _ => (rems(1.625), options.radius),
          };
-+        let item_height = self.appearance.as_ref().and_then(|appearance| appearance.item_height).unwrap_or(item_height);
++        let item_height: gpui::DefiniteLength = self.appearance.as_ref().and_then(|appearance| appearance.item_height)
++            .map_or(item_height.into(), Into::into);
  
          let this = MenuItemElement::new(ix)
              .relative()
-@@ -1371,7 +1428,7 @@
+@@ -1371,7 +1429,7 @@
                  (item.is_checked() || self.checkable.contains(&ix)).then(|| item.is_checked()),
              );
  
@@ -475,7 +476,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
              PopupMenuItem::Separator => this
                  .h_auto()
                  .p_0()
-@@ -1380,14 +1437,21 @@
+@@ -1380,14 +1438,21 @@
                  .border_b(px(2.))
                  .border_color(cx.theme().border)
                  .disabled(true),
@@ -505,7 +506,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
              PopupMenuItem::ElementItem {
                  render,
                  icon,
-@@ -1532,6 +1596,12 @@
+@@ -1532,6 +1597,12 @@
                          .with_priority(self.priority + 1)
                      })
                  }),
@@ -518,7 +519,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
          }
      }
  }
-@@ -1594,7 +1664,9 @@
+@@ -1594,7 +1665,9 @@
              radius: cx.theme().radius.min(px(8.)),
          };
  
@@ -529,7 +530,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
              .id("popup-menu")
              .test_support()
              .role(Role::Menu)
-@@ -1609,6 +1681,8 @@
+@@ -1609,6 +1682,8 @@
              .on_mouse_down_out(cx.listener(Self::on_mouse_down_out))
              .popover_style(cx)
              .text_color(cx.theme().popover_foreground)
@@ -538,7 +539,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
              .relative()
              .occlude()
              .child(
-@@ -1616,6 +1690,7 @@
+@@ -1616,6 +1691,7 @@
                      .id("items")
                      .p_1()
                      .gap_y_0p5()
@@ -546,7 +547,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
                      .min_w(rems(8.))
                      .when_some(self.min_width, |this, min_width| this.min_w(min_width))
                      .map(|this| match self.max_width {
-@@ -1653,7 +1728,7 @@
+@@ -1653,7 +1729,7 @@
              )
              .when(self.scrollable, |this| {
                  this.vertical_scrollbar(&self.scroll_handle)
