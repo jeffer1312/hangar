@@ -161,7 +161,7 @@ fn parse_raw(obj: &Map<String, Value>, resolve: PeerResolver) -> Vec<ChatEvent> 
     }
 }
 
-/// Avisos da CLI que o terminal mostra e o transcript grava, somados por turno como no Claude sem terminal.
+/// Avisos da CLI que o terminal mostra e o transcript grava, como no Claude sem terminal.
 /// Só linhas `"entrypoint":"cli"`: as do sem terminal (`sdk-cli`) já viram nota pelo ator.
 #[derive(Default)]
 pub(crate) struct NoticeFold {
@@ -170,22 +170,68 @@ pub(crate) struct NoticeFold {
     synced: bool,
     /// Turno em curso: a mensagem da fila (`queued_command`) no meio dele é injetada no turno, não abre outro.
     turn_open: bool,
-    /// Falhas do turno por `hookName` → (detalhe da primeira, total). Por nome: o `stderr` muda a cada chamada.
-    hooks: std::collections::BTreeMap<String, (String, u32)>,
+    /// Falhas do arquivo por `hookName`: a primeira vira nota, as outras só somam nela. Por nome: o `stderr`
+    /// muda a cada chamada.
+    hooks: std::collections::BTreeMap<String, HookFails>,
+    /// As falhas de antes desta leitura já foram contadas (ou ela começou no byte 0): sem isso a repetição
+    /// viraria uma "primeira" com outro id.
+    hooks_known: bool,
     /// Maior tentativa do grupo aberto pela `retryAttempt == 1`.
     retries: Option<u64>,
 }
 
+struct HookFails {
+    id: String,
+    detail: String,
+    count: u32,
+}
+
+const HOOK_FAILURE: &str = "hook_non_blocking_error";
 const HOOK_STDERR_PREFIX: &str = "Failed with non-blocking status code: ";
 
 impl NoticeFold {
     /// Leitura que começa no byte 0 sabe onde está: a falha do `SessionStart`, antes do primeiro prompt, também conta.
     pub(crate) fn new(from_file_start: bool) -> Self {
-        Self { synced: from_file_start, ..Self::default() }
+        Self { synced: from_file_start, hooks_known: from_file_start, ..Self::default() }
     }
 
     pub(crate) fn file_start(&mut self) {
         self.synced = true;
+        self.hooks_known = true;
+    }
+
+    /// Conta as falhas de hook de `[0, to)` sem gerar nota, uma vez por leitor. Só a linha com a marca passa pelo
+    /// json: o arquivo inteiro é lido a cada leitura que começa no meio.
+    pub(crate) fn seed_hooks(&mut self, path: &std::path::Path, to: u64) -> std::io::Result<()> {
+        use std::io::BufRead;
+        if std::mem::replace(&mut self.hooks_known, true) {
+            return Ok(());
+        }
+        let mut rd = std::io::BufReader::new(std::fs::File::open(path)?);
+        let (mut at, mut raw) = (0u64, Vec::new());
+        while at < to {
+            raw.clear();
+            match rd.read_until(b'\n', &mut raw)? {
+                0 => break,
+                n => at += n as u64,
+            }
+            if memchr::memmem::find(&raw, HOOK_FAILURE.as_bytes()).is_none() {
+                continue;
+            }
+            if let Some(Value::Object(obj)) = pyjson::loads_lossless(&String::from_utf8_lossy(&raw)) {
+                if obj.get("entrypoint").and_then(Value::as_str) == Some("cli") && obj.get("type").and_then(Value::as_str) == Some("attachment") {
+                    self.hook_failure(&obj, obj.get("uuid").and_then(Value::as_str).unwrap_or(""), None);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// O total entra na nota da primeira falha, que é a única que a conversa mostra.
+    pub(crate) fn stamp(&self, event: &mut ChatEvent) {
+        if let Some(fails) = self.hooks.values().find(|fails| fails.count > 1 && fails.id == event.id) {
+            event.hook_error = Some(format!("{} (falhou {} vezes)", fails.detail, fails.count));
+        }
     }
 
     /// Notas da linha: o fecho do turno anterior entra antes dos eventos dela (o prompt novo vem depois), o resto depois.
@@ -198,16 +244,14 @@ impl NoticeFold {
         match obj.get("type").and_then(Value::as_str) {
             // Turno interrompido não grava `turn_duration`: o prompt seguinte também fecha, e a marca da CLI
             // ("[Request interrupted by user]") conta como prompt.
-            Some("user") if is_prompt(obj) => self.open_turn(uid, at, events),
+            Some("user") if is_prompt(obj) => self.open_turn(),
             // Recado de outra sessão: `isMeta`, sem prompt; com a sessão parada é ele que abre o turno.
             Some("user") if !self.turn_open && obj.get("origin").and_then(|o| o.get("kind")).and_then(Value::as_str) == Some("peer") => {
-                self.wake(uid, at, events)
+                self.wake()
             }
             Some("user") => self.retries = None,
             Some("system") => match obj.get("subtype").and_then(Value::as_str) {
                 Some("turn_duration") => {
-                    let closed = self.close_turn(uid, at);
-                    events.extend(closed);
                     self.synced = true;
                     self.turn_open = false;
                     self.retries = None;
@@ -243,47 +287,43 @@ impl NoticeFold {
     }
 
     /// Fila ou recado com a sessão parada. Antes da sincronia não se sabe se ela estava parada (a leitura pode ter
-    /// começado no meio de um turno, onde a fila é injetada): só marca o turno, sem soma nem nota.
-    fn wake(&mut self, uid: &str, at: Option<f64>, events: &mut Vec<ChatEvent>) {
+    /// começado no meio de um turno, onde a fila é injetada): só marca o turno.
+    fn wake(&mut self) {
         if self.synced {
-            self.open_turn(uid, at, events);
+            self.open_turn();
         } else {
             self.turn_open = true;
         }
     }
 
-    /// Prompt novo: fecha as somas do turno anterior antes dele (turno interrompido não grava `turn_duration`).
-    fn open_turn(&mut self, uid: &str, at: Option<f64>, events: &mut Vec<ChatEvent>) {
-        let closed = self.close_turn(uid, at);
-        events.splice(0..0, closed);
+    fn open_turn(&mut self) {
         self.synced = true;
         self.turn_open = true;
         self.retries = None;
     }
 
-    /// Prompt que vem da fila com a sessão parada abre turno; falha de hook (não bloqueio) vira nota, as seguintes somam.
+    /// Prompt que vem da fila com a sessão parada abre turno; falha de hook (não bloqueio) vira nota.
     fn on_attachment(&mut self, obj: &Map<String, Value>, uid: &str, at: Option<f64>, events: &mut Vec<ChatEvent>) {
-        let Some(att) = obj.get("attachment").and_then(Value::as_object) else { return };
-        match att.get("type").and_then(Value::as_str) {
-            Some("queued_command") if !self.turn_open => return self.wake(uid, at, events),
-            Some("hook_non_blocking_error") if self.synced => {}
-            _ => return,
+        match obj.get("attachment").and_then(|att| att.get("type")).and_then(Value::as_str) {
+            Some("queued_command") if !self.turn_open => self.wake(),
+            Some(HOOK_FAILURE) if self.hooks_known => events.extend(self.hook_failure(obj, uid, at)),
+            _ => {}
         }
+    }
+
+    /// A primeira falha de cada hook no arquivo vira nota; as seguintes só somam nela.
+    fn hook_failure(&mut self, obj: &Map<String, Value>, uid: &str, at: Option<f64>) -> Option<ChatEvent> {
+        let att = obj.get("attachment").and_then(Value::as_object).filter(|att| att.get("type").and_then(Value::as_str) == Some(HOOK_FAILURE))?;
         let name = att.get("hookName").or_else(|| att.get("hookEvent")).and_then(Value::as_str).unwrap_or("hook").to_owned();
-        if let Some(streak) = self.hooks.get_mut(&name) {
-            streak.1 += 1;
-            return;
+        if let Some(fails) = self.hooks.get_mut(&name) {
+            fails.count += 1;
+            return None;
         }
         let reason = hook_failure_reason(att.get("stderr").and_then(Value::as_str), att.get("exitCode").and_then(Value::as_i64));
         let detail = format!("{name}: {reason}");
-        events.push(hook_note(format!("hookfail:{uid}"), detail.clone(), at));
-        self.hooks.insert(name, (detail, 1));
-    }
-
-    fn close_turn(&mut self, uid: &str, at: Option<f64>) -> Vec<ChatEvent> {
-        std::mem::take(&mut self.hooks).into_iter().filter(|(_, (_, count))| *count > 1)
-            .map(|(name, (detail, count))| hook_note(format!("hookfail-sum:{uid}:{}", md5_8(&name)), format!("{detail} ({count}× neste turno)"), at))
-            .collect()
+        let id = format!("hookfail:{uid}");
+        self.hooks.insert(name, HookFails { id: id.clone(), detail: detail.clone(), count: 1 });
+        Some(hook_note(id, detail, at))
     }
 }
 

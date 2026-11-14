@@ -21,8 +21,9 @@ use crate::transcript::{py, pyjson, Provider};
 /// (`_FOLGA_SAIDA_LOCAL_S`); a mais velha já está no `/history`, no lugar do relógio dela.
 pub(crate) const LOCAL_NOTE_GRACE_S: f64 = 30.0;
 
-/// Desistência, entrega, confirmação e consumo: o que, mudando, faz a entrada sair de novo.
-type Signature = (Option<bool>, Option<bool>, bool, Option<bool>);
+/// Desistência, entrega, confirmação, consumo e o detalhe do aviso (a nota de hook é regravada com o total): o
+/// que, mudando, faz a entrada sair de novo.
+type Signature = (Option<bool>, Option<bool>, bool, Option<bool>, Option<String>);
 
 /// Identidade do arquivo entre rodadas: a projeção é trocada inteira, então a marca muda a cada gravação.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -261,13 +262,16 @@ pub(crate) struct QueueFollow {
     start: f64,
     first: bool,
     seen: HashMap<String, Signature>,
+    /// Notas locais que já eram velhas na primeira rodada: estão no `/history`, e a regravação delas não sai ao
+    /// vivo (quem não as carregou ganharia uma nota nova no fim da conversa).
+    aged: HashSet<String>,
     /// `None`: nunca leu.
     marker: Option<Option<Marker>>,
 }
 
 impl QueueFollow {
     pub(crate) fn new(min_ts: f64, start: f64) -> Self {
-        QueueFollow { min_ts, start, first: true, seen: HashMap::new(), marker: None }
+        QueueFollow { min_ts, start, first: true, seen: HashMap::new(), aged: HashSet::new(), marker: None }
     }
 
     /// Sem corte, o início da conversa é procurado de novo a cada rodada, como no painel: o transcript que
@@ -361,12 +365,16 @@ impl QueueFollow {
         if confirmed {
             event.queued_confirmed = Some(true);
         }
-        let signature = (event.desistiu, event.queued_delivered, confirmed, event.queued_consumed);
+        if self.first && local && cut {
+            self.aged.insert(id.clone());
+        }
+        let signature = (event.desistiu, event.queued_delivered, confirmed, event.queued_consumed, event.hook_error.clone());
         if self.seen.get(&id) == Some(&signature) {
             return Ok(None);
         }
+        let hidden = cut || self.aged.contains(&id);
         self.seen.insert(id, signature);
-        if cut {
+        if hidden {
             return Ok(None);
         }
         let data = serde_json::to_string(&event).map_err(|_| "json")?;
@@ -460,6 +468,30 @@ mod tests {
 
     /// Cada cenário do Python, passo a passo: mesmos eventos e `data` byte a byte. Onde o Python cai com
     /// linha ruim, vale o `.esperado_rust` (a mesma situação sem a linha).
+    #[test]
+    fn rewritten_hook_note_is_published_again_unless_it_was_already_old() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("fila.jsonl");
+        let row = |detail: &str| serde_json::json!({"id":"hookfail:1:0","text":format!("Hook falhou — {detail}"),"ts":100.0,
+            "delivered":true,"confirmed":true,"papel":"assistant","hook_error":detail,"notice":"hook_failed"}).to_string() + "\n";
+        let write = |detail: &str| apply(&serde_json::json!({"write": row(detail)}), &path);
+        let mut follow = QueueFollow::new(0.0, 100.0);
+        write("Stop: x");
+        assert_eq!(events(&follow.poll(&path).unwrap().frames).len(), 1);
+        write("Stop: x (falhou 2 vezes)");
+        let again = events(&follow.poll(&path).unwrap().frames);
+        assert_eq!(again.len(), 1, "a nota regravada com o total sai de novo");
+        let event: Value = serde_json::from_str(&again[0].1).unwrap();
+        assert_eq!((event["id"].as_str(), event["hook_error"].as_str()), (Some("local-hookfail:1:0"), Some("Stop: x (falhou 2 vezes)")));
+
+        // Seguidor que nasce muito depois da nota: ela está no `/history`, e a regravação não a traz para o fim.
+        let mut late = QueueFollow::new(0.0, 1000.0);
+        write("Stop: x");
+        assert!(events(&late.poll(&path).unwrap().frames).is_empty());
+        write("Stop: x (falhou 2 vezes)");
+        assert!(events(&late.poll(&path).unwrap().frames).is_empty());
+    }
+
     #[test]
     fn matches_the_python_follow_golden() {
         let golden = golden();

@@ -1210,8 +1210,9 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
                         let confirms = payload["source"].as_str().map(str::to_owned);
                         let hook_error = payload["hook_error"].as_str().map(str::to_owned);
                         let notice = payload["notice"].as_str().map(str::to_owned);
+                        let entry_id = payload["entry_id"].as_str().map(str::to_owned);
                         jobs.spawn(async move { Job::Saved(queue.exec(generation,&format!("local:{}",unique()),sample,
-                            Action::AppendLocal { text,entry_id:None,confirms,hook_error,notice }).await.map(|_|()).map_err(io_failure)) });
+                            Action::AppendLocal { text,entry_id,confirms,hook_error,notice }).await.map(|_|()).map_err(io_failure)) });
                         continue;
                     }
                     sequence += 1;

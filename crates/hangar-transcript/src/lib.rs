@@ -102,6 +102,7 @@ pub struct LineParser {
     rewrite: claude::RewriteFilter,
     peer_resolver: claude::PeerResolver,
     run_dir: Option<std::path::PathBuf>,
+    path: Option<std::path::PathBuf>,
     notices: Option<claude::NoticeFold>,
     pi: PiStream,
 }
@@ -112,7 +113,7 @@ impl LineParser {
     pub fn has_pending(&self) -> bool { self.pi.has_pending() }
     pub fn pending_offset(&self) -> Option<u64> { self.pi.pending_offset() }
     pub fn new(provider: Provider) -> Self {
-        Self { provider, rewrite: claude::RewriteFilter::default(), peer_resolver: peer::name_of_pid, run_dir: None, notices: None, pi: PiStream::default() }
+        Self { provider, rewrite: claude::RewriteFilter::default(), peer_resolver: peer::name_of_pid, run_dir: None, path: None, notices: None, pi: PiStream::default() }
     }
 
     /// Com as notas dos avisos da CLI (hook que falha, nova tentativa, recusa). Só o chat as pede: quem procura
@@ -126,6 +127,7 @@ impl LineParser {
 
     pub fn with_path(mut self, path: &std::path::Path) -> Self {
         self.run_dir = path.parent().map(std::path::Path::to_path_buf);
+        self.path = Some(path.to_path_buf());
         self
     }
 
@@ -151,7 +153,15 @@ impl LineParser {
 
     fn at_line(&mut self, offset: u64) {
         if offset == 0 { self.pi = PiStream::default(); }
-        if offset == 0 && let Some(fold) = self.notices.as_mut() { fold.file_start(); }
+        let Some(fold) = self.notices.as_mut() else { return };
+        if offset == 0 {
+            fold.file_start();
+        } else if let Some(path) = &self.path {
+            // Leitor que começa no meio: as falhas de hook de antes contam, senão a repetição viraria nota nova.
+            if let Err(e) = fold.seed_hooks(path, offset) {
+                tracing::warn!(code = "transcript_notice_seed", path = %path.display(), "notas: falhas de hook anteriores não lidas: {e}");
+            }
+        }
     }
 
     /// Eventos de uma linha completa; `offset` é o byte onde ela começa (vira o `id:` do SSE).

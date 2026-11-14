@@ -857,6 +857,13 @@ fn apply(state: &mut State, action: Action, clock: ClockSample, call_id: &str) -
             if pre_transcript { row["pre_transcript"] = json!(true); }
             append_row(state,row)?
         }
+        // Aviso com id próprio que volta é o mesmo aviso com o total novo: troca o texto da linha, não empilha outra.
+        Action::AppendLocal { text, entry_id: Some(id), hook_error, .. } if state.rows.iter().any(|r| row_id(r) == id && r["papel"] == "assistant") => {
+            let row = state.rows.iter_mut().find(|r| row_id(r) == id).expect("conferida acima");
+            row["text"] = json!(text);
+            if let Some(hook_error) = hook_error { row["hook_error"] = json!(hook_error); }
+            row.clone()
+        }
         Action::AppendLocal { text, entry_id, confirms, hook_error, notice } => {
             let mut row = json!({"id":entry_id.unwrap_or_else(||call_id.into()),
                 "text":text,"ts":clock.epoch_s,"delivered":true,"confirmed":true,"papel":"assistant"});
@@ -1481,6 +1488,29 @@ mod headless_delivery_tests {
         store.exec(1,&format!("append:{id}"),clock(ts),Action::Append { text:id.into(),delivered:false,ts:Some(ts),pre_transcript:false,entry_id:Some(id.into()) }).unwrap();
     }
     fn row(store:&Store,id:&str) -> Value { store.state().rows.iter().find(|r|r["id"] == id).unwrap().clone() }
+
+    /// A nota de hook tem id fixo: voltar com o total troca o texto da linha; id que a fila não tem (linha
+    /// cortada pelo teto) nasce como linha nova, uma só.
+    #[test]
+    fn hook_note_with_known_id_rewrites_and_with_lost_id_appends() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = store(&dir);
+        let note = |text:&str,detail:&str| Action::AppendLocal { text:text.into(),entry_id:Some("hookfail:1:0".into()),confirms:None,
+            hook_error:Some(detail.into()),notice:Some("hook_failed".into()) };
+        store.exec(1,"local:a",clock(10.0),note("Hook falhou — Stop: x","Stop: x")).unwrap();
+        store.exec(1,"local:b",clock(20.0),note("Hook falhou — Stop: x (falhou 2 vezes)","Stop: x (falhou 2 vezes)")).unwrap();
+        assert_eq!(store.state().rows.len(),1,"a mesma linha, não outra");
+        let rewritten = row(&store,"hookfail:1:0");
+        assert_eq!(rewritten["hook_error"],"Stop: x (falhou 2 vezes)");
+        assert_eq!(rewritten["text"],"Hook falhou — Stop: x (falhou 2 vezes)");
+        assert_eq!(rewritten["ts"],10.0,"a nota fica onde nasceu");
+        assert_eq!(rewritten["notice"],"hook_failed");
+        // Mensagem da pessoa com o mesmo id não é aviso: a regravação não a toca.
+        append(&mut store,"hookfail:9:9",30.0);
+        let clash = Action::AppendLocal { text:"y".into(),entry_id:Some("hookfail:9:9".into()),confirms:None,hook_error:None,notice:None };
+        assert!(store.exec(1,"local:c",clock(40.0),clash).is_err(),"id de entrada da pessoa não vira nota");
+        assert_eq!(row(&store,"hookfail:9:9")["text"],"hookfail:9:9");
+    }
 
     /// A leitura da fila não copia o estado: duas leituras sem escrita entre elas são o mesmo; a escrita troca.
     #[tokio::test]

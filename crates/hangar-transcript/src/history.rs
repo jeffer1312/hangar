@@ -263,17 +263,19 @@ pub fn turn_seed_start(path: &Path, before: u64) -> u64 {
 /// Passa `[from, to)` só pelo fold das notas: a janela do `/history` que começa no meio do turno conta as falhas
 /// desde o começo dele, como a cauda ao vivo. O filtro de reescrita é à parte: não muda o que a janela mostra.
 fn seed_notices(path: &Path, fold: &mut claude::NoticeFold, from: u64, to: u64) {
-    if from == 0 {
-        fold.file_start();
-    }
-    if from >= to {
-        return;
-    }
     let failed = |e: io::Error| {
         if hangar_core::warn_limit::allow(None, "transcript_notice_seed") {
             tracing::warn!(code = "transcript_notice_seed", path = %path.display(), "notas: semeadura do turno parou; somas podem sair incompletas: {e}");
         }
     };
+    if from == 0 {
+        fold.file_start();
+    } else if let Err(e) = fold.seed_hooks(path, from) {
+        failed(e);
+    }
+    if from >= to {
+        return;
+    }
     let mut rd = match File::open(path).and_then(|f| { let mut rd = BufReader::new(f); rd.seek(SeekFrom::Start(from)).map(|_| rd) }) {
         Ok(rd) => rd,
         Err(e) => return failed(e),
@@ -427,6 +429,9 @@ fn parse_from(req: &HistoryRequest, offset: u64, start_ts: f64, notices: bool) -
     }
     let clock = p.prev_ts;
     absorb(&mut p, clock, i, pi.flush(), &mut held_ids);
+    if let Some(fold) = &notices {
+        p.items.iter_mut().for_each(|(_, _, ev)| fold.stamp(ev));
+    }
     Ok(p)
 }
 

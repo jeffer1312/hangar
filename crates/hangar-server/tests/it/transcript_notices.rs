@@ -12,7 +12,7 @@ fn rows(name:&str) -> Vec<Value> {
 fn uuid(rows:&[Value],at:usize) -> String { rows[at]["uuid"].as_str().unwrap().to_owned() }
 
 fn is_note(event:&ChatEvent) -> bool {
-    ["hookfail:","hookfail-sum:","retry:","retry-ok:","refusal:"].iter().any(|prefix|event.id.starts_with(prefix))
+    ["hookfail:","retry:","retry-ok:","refusal:"].iter().any(|prefix|event.id.starts_with(prefix))
 }
 fn notes(events:Vec<ChatEvent>) -> Vec<(String,String,Option<String>)> {
     events.into_iter().filter(is_note).map(|event|(event.id,event.text.unwrap_or_default(),event.hook_error)).collect()
@@ -37,20 +37,14 @@ fn live_text(text:&str,with_notices:bool) -> Vec<(String,String,Option<String>)>
 }
 
 #[test]
-fn terminal_hook_failures_sum_per_turn_in_history_and_live() {
+fn terminal_hook_failure_is_one_note_per_file_with_the_total_in_history() {
     let lines = rows("terminal_hooks.jsonl");
-    // md5("PostToolUse:Bash")[..8]
-    let sum_id = |closing:usize| format!("hookfail-sum:{}:5182a3be",uuid(&lines,closing));
+    let id = format!("hookfail:{}",uuid(&lines,1));
     let detail = "PostToolUse:Bash: falhou-de-proposito".to_owned();
-    let expected = vec![
-        (format!("hookfail:{}",uuid(&lines,1)),"hook_failed".to_owned(),Some(detail.clone())),
-        (sum_id(4),"hook_failed".to_owned(),Some(format!("{detail} (3× neste turno)"))),
-        // Turno interrompido: sem `turn_duration`, a soma fecha no prompt seguinte.
-        (format!("hookfail:{}",uuid(&lines,6)),"hook_failed".to_owned(),Some(detail.clone())),
-        (sum_id(8),"hook_failed".to_owned(),Some(format!("{detail} (2× neste turno)"))),
-    ];
-    assert_eq!(history("terminal_hooks.jsonl",None,TAIL_WINDOW),expected,"a linha `sdk-cli` não gera nota");
-    assert_eq!(live("terminal_hooks.jsonl",true),expected);
+    // Cinco falhas em dois turnos: uma nota. A linha `sdk-cli` não conta.
+    assert_eq!(history("terminal_hooks.jsonl",None,TAIL_WINDOW),vec![(id.clone(),"hook_failed".to_owned(),Some(format!("{detail} (falhou 5 vezes)")))]);
+    // Ao vivo a nota sai na primeira falha, antes de haver total; as repetições não geram evento.
+    assert_eq!(live("terminal_hooks.jsonl",true),vec![(id,"hook_failed".to_owned(),Some(detail))]);
     assert!(live("terminal_hooks.jsonl",false).is_empty(),"quem não pede as notas (push, última resposta) não as recebe");
     let plain = merged_history(&request(fixture("terminal_hooks.jsonl"),None,TAIL_WINDOW)).unwrap();
     assert!(notes(plain).is_empty(),"lista, retorno da filha e ditado leem o histórico comum, sem notas");
@@ -73,13 +67,15 @@ fn terminal_turn_opened_by_the_queue_still_counts() {
     let mut queued = with_uuid(failure,"q1");
     queued["attachment"] = json!({"type":"queued_command","prompt":"mensagem da fila","commandMode":"prompt"});
     let lines = [prompt.clone(),with_uuid(end,"d1"),queued,with_uuid(failure,"h1"),with_uuid(failure,"h2"),with_uuid(end,"d2")];
-    let expected = vec![
-        ("hookfail:h1".to_owned(),"hook_failed".to_owned(),Some("PostToolUse:Bash: falhou-de-proposito".to_owned())),
-        ("hookfail-sum:d2:5182a3be".to_owned(),"hook_failed".to_owned(),Some("PostToolUse:Bash: falhou-de-proposito (2× neste turno)".to_owned())),
-    ];
     let (history,live) = both(&lines);
-    assert_eq!(history,expected);
-    assert_eq!(live,expected);
+    assert_eq!(history,vec![h1(2)]);
+    assert_eq!(live,vec![h1(1)]);
+}
+
+/// A nota da primeira falha (`h1`) do `PostToolUse:Bash`, com o total quando ele passa de um.
+fn h1(count:u32) -> (String,String,Option<String>) {
+    let total = if count > 1 { format!(" (falhou {count} vezes)") } else { String::new() };
+    ("hookfail:h1".to_owned(),"hook_failed".to_owned(),Some(format!("PostToolUse:Bash: falhou-de-proposito{total}")))
 }
 
 /// Recado de outra sessão (`hangar-send`) chega como `isMeta` com `origin.kind: "peer"`, sem prompt: abre o turno
@@ -93,13 +89,9 @@ fn terminal_turn_opened_by_a_peer_message_counts() {
     peer["origin"] = json!({"kind":"peer","name":"outra-sessao","body":"[de: outra-sessao] rode ls"});
     peer["message"] = json!({"role":"user","content":"Another Claude session sent a message: rode ls"});
     let lines = [peer,with_uuid(failure,"h1"),with_uuid(failure,"h2"),with_uuid(end,"d1")];
-    let expected = vec![
-        ("hookfail:h1".to_owned(),"hook_failed".to_owned(),Some("PostToolUse:Bash: falhou-de-proposito".to_owned())),
-        ("hookfail-sum:d1:5182a3be".to_owned(),"hook_failed".to_owned(),Some("PostToolUse:Bash: falhou-de-proposito (2× neste turno)".to_owned())),
-    ];
     let (history,live) = both(&lines);
-    assert_eq!(history,expected);
-    assert_eq!(live,expected);
+    assert_eq!(history,vec![h1(2)]);
+    assert_eq!(live,vec![h1(1)]);
 }
 
 #[test]
@@ -114,13 +106,9 @@ fn terminal_compact_summary_and_local_command_do_not_end_the_turn() {
     let mut blocks = with_uuid(prompt,"c3");
     blocks["message"] = json!({"role":"user","content":[{"type":"text","text":"<command-name>/model</command-name>"},{"type":"text","text":"lembrete"}]});
     let lines = [prompt.clone(),with_uuid(failure,"h1"),compact,command,blocks,with_uuid(failure,"h2"),with_uuid(end,"d1")];
-    let expected = vec![
-        ("hookfail:h1".to_owned(),"hook_failed".to_owned(),Some("PostToolUse:Bash: falhou-de-proposito".to_owned())),
-        ("hookfail-sum:d1:5182a3be".to_owned(),"hook_failed".to_owned(),Some("PostToolUse:Bash: falhou-de-proposito (2× neste turno)".to_owned())),
-    ];
     let (history,live) = both(&lines);
-    assert_eq!(history,expected);
-    assert_eq!(live,expected);
+    assert_eq!(history,vec![h1(2)]);
+    assert_eq!(live,vec![h1(1)]);
 }
 
 #[test]
@@ -155,9 +143,10 @@ fn backfill_notes(lines:&[Value],resume_at:Option<usize>) -> Vec<(String,String,
     }).collect())
 }
 
-/// O aparelho que volta no meio do turno: a fila injetada no turno não abre outro, e a soma sai igual à do histórico.
+/// O aparelho que volta depois da primeira falha: as repetições não viram nota nova, porque as falhas de antes
+/// do ponto de retomada foram contadas.
 #[test]
-fn terminal_resumed_tail_mid_turn_keeps_the_turn() {
+fn terminal_resumed_tail_after_the_first_failure_adds_no_note() {
     let rows = rows("terminal_hooks.jsonl");
     let (prompt,failure,end) = (&rows[0],&rows[1],&rows[4]);
     let mut queued = with_uuid(failure,"q1");
@@ -165,14 +154,14 @@ fn terminal_resumed_tail_mid_turn_keeps_the_turn() {
     // O segundo prompt é o real: a cópia do primeiro com outro `uuid` cai no filtro de reescrita do `--resume`.
     let lines = [prompt.clone(),with_uuid(end,"d0"),rows[5].clone(),with_uuid(failure,"h1"),queued,
         with_uuid(failure,"h2"),with_uuid(failure,"h3"),with_uuid(end,"d1")];
-    let sum = ("hookfail-sum:d1:5182a3be".to_owned(),"hook_failed".to_owned(),Some("PostToolUse:Bash: falhou-de-proposito (3× neste turno)".to_owned()));
-    assert!(both(&lines).0.contains(&sum));
-    assert_eq!(backfill_notes(&lines,Some(4)),vec![sum]);
+    assert_eq!(both(&lines).0,vec![h1(3)]);
+    assert_eq!(backfill_notes(&lines,Some(4)),vec![]);
+    assert_eq!(backfill_notes(&lines,Some(3)),vec![h1(1)],"retomada antes da primeira falha ainda a mostra");
 }
 
-/// Turno mais longo que as 200 linhas da cauda: o fold começa no último fim de turno, não no meio.
+/// Primeira falha fora das 200 linhas da cauda e da janela do `/history`: a repetição dentro delas não vira nota.
 #[test]
-fn terminal_long_turn_still_sums_in_the_tail() {
+fn terminal_repetition_far_from_the_first_failure_adds_no_note() {
     let rows = rows("terminal_hooks.jsonl");
     let (prompt,failure,end) = (&rows[0],&rows[1],&rows[4]);
     let mut lines = vec![prompt.clone(),with_uuid(end,"d0"),rows[5].clone(),with_uuid(failure,"h1")];
@@ -183,16 +172,42 @@ fn terminal_long_turn_still_sums_in_the_tail() {
         lines.push(filler);
     }
     lines.extend([with_uuid(failure,"h2"),with_uuid(end,"d1")]);
-    let sum = ("hookfail-sum:d1:5182a3be".to_owned(),"hook_failed".to_owned(),Some("PostToolUse:Bash: falhou-de-proposito (2× neste turno)".to_owned()));
-    assert_eq!(backfill_notes(&lines,None),vec![sum.clone()]);
-    // O `/history` com janela começa no meio do turno e conta igual.
+    assert_eq!(backfill_notes(&lines,None),vec![]);
     let text:String = lines.iter().map(|row|format!("{row}\n")).collect();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("t.jsonl");
     std::fs::write(&path,&text).unwrap();
     let full = notes(merged_history_with_notices(&request(path.clone(),None,TAIL_WINDOW)).unwrap());
+    assert_eq!(full,vec![h1(2)]);
+    // A janela curta cresce para trás até ter os itens pedidos: ou traz a nota de `h1`, ou nenhuma. Nunca uma de `h2`.
     let window = notes(merged_history_with_notices(&request(path,Some(5),2048)).unwrap());
-    assert!(window.contains(&sum) && window.iter().all(|note|full.contains(note)),"{window:?} × {full:?}");
+    assert!(window.iter().all(|note|full.contains(note)),"{window:?} × {full:?}");
+}
+
+/// A marca da falha dentro do texto de um prompt ou de uma mensagem da fila não é falha: a contagem das linhas
+/// de antes da janela só olha anexo de hook.
+#[test]
+fn terminal_marker_inside_a_prompt_is_not_a_failure() {
+    let rows = rows("terminal_hooks.jsonl");
+    let (prompt,failure,end) = (&rows[0],&rows[1],&rows[4]);
+    let mut talk = with_uuid(prompt,"t1");
+    talk["message"] = json!({"role":"user","content":"o anexo hook_non_blocking_error do PostToolUse:Bash aparece no transcript"});
+    let mut queued = with_uuid(failure,"q1");
+    queued["attachment"] = json!({"type":"queued_command","prompt":"conta os hook_non_blocking_error","commandMode":"prompt"});
+    let mut lines = vec![talk,queued,with_uuid(end,"d0"),rows[5].clone()];
+    for i in 0..250 {
+        let mut filler = with_uuid(prompt,&format!("f{i}"));
+        filler["type"] = json!("assistant");
+        filler["message"] = json!({"role":"assistant","content":[{"type":"text","text":"ok"}]});
+        lines.push(filler);
+    }
+    lines.extend([with_uuid(failure,"h1"),with_uuid(end,"d1")]);
+    assert_eq!(backfill_notes(&lines,None),vec![h1(1)],"a cauda começa depois das duas linhas com a marca");
+    let text:String = lines.iter().map(|row|format!("{row}\n")).collect();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("t.jsonl");
+    std::fs::write(&path,&text).unwrap();
+    assert_eq!(notes(merged_history_with_notices(&request(path,Some(3),2048)).unwrap()),vec![h1(1)]);
 }
 
 #[test]
@@ -200,11 +215,11 @@ fn terminal_history_tail_never_invents_a_different_note() {
     let full = history("terminal_hooks.jsonl",None,TAIL_WINDOW);
     let text = std::fs::read_to_string(fixture("terminal_hooks.jsonl")).unwrap();
     let starts:Vec<u64> = std::iter::once(0).chain(text.match_indices('\n').map(|(at,_)|at as u64 + 1)).collect();
-    // Janela que começa em cada linha do meio (+1: o `tail_offset` pula a linha cortada). `limit` 4 = os itens da
-    // janela que começa no fim do 1º turno (2 prompts, 2 notas): ela para ali, sem voltar ao byte 0, e não corta nota.
+    // Janela que começa em cada linha do meio (+1: o `tail_offset` pula a linha cortada). `limit` 3 = os itens da
+    // janela que começa na primeira falha (a nota e 2 prompts): ela para ali, sem voltar ao byte 0, e não corta a nota.
     let mut seen = 0;
     for start in &starts[1..starts.len() - 1] {
-        let tail = history("terminal_hooks.jsonl",Some(4),text.len() as u64 - start + 1);
+        let tail = history("terminal_hooks.jsonl",Some(3),text.len() as u64 - start + 1);
         assert!(tail.iter().all(|note|full.contains(note)),"linha em {start}: {tail:?} fora de {full:?}");
         seen += tail.len();
     }

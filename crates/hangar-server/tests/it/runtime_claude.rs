@@ -1082,12 +1082,14 @@ fn notice_hook_slow_label_after_three_seconds() {
 }
 
 #[test]
-fn notice_hook_failure_streak() {
+fn notice_hook_failure_is_one_note_per_process_with_the_total() {
     let hooks = fixture("hooks.jsonl");
     let mut engine = turn_engine();
     line(&mut engine,hooks[4].clone(),10.0);
-    let first = hook_notes(&line(&mut engine,hooks[5].clone(),10.2));
+    let effects = line(&mut engine,hooks[5].clone(),10.2);
+    let first = hook_notes(&effects);
     assert_eq!(first,vec![("Hook falhou — PostToolUse:Bash: falhou-de-proposito".to_owned(),json!("hook_failed"))]);
+    let row = note_rows(&effects).remove(0);
     for at in [11.0,12.0] {
         line(&mut engine,hooks[4].clone(),at);
         assert!(notes(&line(&mut engine,hooks[5].clone(),at+0.2)).is_empty(),"repetição só soma");
@@ -1100,10 +1102,23 @@ fn notice_hook_failure_streak() {
     line(&mut engine,hooks[4].clone(),14.0);
     assert!(notes(&line(&mut engine,hooks[5].clone(),14.2)).is_empty());
     let effects = line(&mut engine,turn_end("completed",false),16.0);
-    assert_eq!(notes(&effects),vec!["Hook falhou — PostToolUse:Bash: falhou-de-proposito (4× neste turno)".to_owned()]);
+    assert_eq!(notes(&effects),vec!["Hook falhou — PostToolUse:Bash: falhou-de-proposito (falhou 4 vezes)".to_owned()]);
+    assert_eq!(note_rows(&effects),vec![row.clone()],"o total regrava a linha da primeira nota");
 
-    line(&mut engine,hooks[4].clone(),17.0);
-    assert_eq!(notes(&line(&mut engine,hooks[5].clone(),17.2)).len(),1,"turno novo avisa de novo");
+    line(&mut engine,json!({"type":"command_lifecycle","state":"started"}),17.0);
+    line(&mut engine,hooks[4].clone(),17.1);
+    assert!(notes(&line(&mut engine,hooks[5].clone(),17.2)).is_empty(),"turno novo não avisa de novo");
+    let effects = line(&mut engine,turn_end("completed",false),18.0);
+    assert_eq!(notes(&effects),vec!["Hook falhou — PostToolUse:Bash: falhou-de-proposito (falhou 5 vezes)".to_owned()]);
+    assert_eq!(note_rows(&effects),vec![row]);
+    assert!(notes(&line(&mut engine,turn_end("completed",false),19.0)).is_empty(),"sem falha nova o total não é regravado");
+}
+
+fn note_rows(effects:&[Effect]) -> Vec<String> {
+    effects.iter().filter_map(|effect|match effect {
+        Effect::Policy { kind,payload,.. } if kind == "local_output" => payload["entry_id"].as_str().map(str::to_owned),
+        _ => None,
+    }).collect()
 }
 
 #[test]
@@ -1117,18 +1132,26 @@ fn notice_hook_failure_with_changing_message_is_one_note() {
     }
     assert_eq!(shown,vec!["Hook falhou — PostToolUse:Edit: lint falhou em arquivo0.rs".to_owned()]);
     let effects = line(&mut engine,turn_end("completed",false),20.0);
-    assert_eq!(notes(&effects),vec!["Hook falhou — PostToolUse:Edit: lint falhou em arquivo0.rs (3× neste turno)".to_owned()]);
+    assert_eq!(notes(&effects),vec!["Hook falhou — PostToolUse:Edit: lint falhou em arquivo0.rs (falhou 3 vezes)".to_owned()]);
 }
 
+/// O caso do `SessionStart:compact` que falha a cada compactação: uma linha só, com o total.
 #[test]
-fn notice_hook_failure_outside_a_turn_is_not_summed() {
+fn notice_hook_failure_outside_a_turn_rewrites_the_same_note() {
     let mut engine = notice_engine();
-    let failure = json!({"type":"system","subtype":"hook_response","hook_id":"s","hook_name":"SessionStart:startup",
+    let failure = json!({"type":"system","subtype":"hook_response","hook_id":"s","hook_name":"SessionStart:compact",
         "hook_event":"SessionStart","stderr":"sem rede","outcome":"error","exit_code":1});
-    assert_eq!(notes(&line(&mut engine,failure.clone(),10.0)).len(),1);
-    assert_eq!(notes(&line(&mut engine,failure,11.0)).len(),1,"sem turno não há soma: cada falha avisa");
+    let first = line(&mut engine,failure.clone(),10.0);
+    assert_eq!(notes(&first),vec!["Hook falhou — SessionStart:compact: sem rede".to_owned()]);
+    let second = line(&mut engine,failure.clone(),11.0);
+    assert_eq!(notes(&second),vec!["Hook falhou — SessionStart:compact: sem rede (falhou 2 vezes)".to_owned()]);
+    assert_eq!(note_rows(&second),note_rows(&first),"sem turno o total sai na hora, na mesma linha");
     line(&mut engine,json!({"type":"command_lifecycle","state":"started"}),12.0);
-    assert!(notes(&line(&mut engine,turn_end("completed",false),13.0)).is_empty(),"nada vira \"neste turno\"");
+    assert!(notes(&line(&mut engine,turn_end("completed",false),13.0)).is_empty(),"nada pendente no fim do turno");
+    line(&mut engine,json!({"type":"conversation_reset"}),14.0);
+    let again = line(&mut engine,failure,15.0);
+    assert_eq!(notes(&again),vec!["Hook falhou — SessionStart:compact: sem rede".to_owned()],"conversa nova avisa de novo");
+    assert_ne!(note_rows(&again),note_rows(&first));
 }
 
 #[test]
@@ -1163,7 +1186,7 @@ fn notice_turn_end_from_transcript_clears_labels() {
     let effects = engine.transcript_turn_end();
     let label = shown_label(&engine);
     assert!(!label.contains("Rodando hook") && !label.contains("Nova tentativa"),"{label}");
-    assert_eq!(notes(&effects),vec!["Hook falhou — PostToolUse:Bash: falhou-de-proposito (2× neste turno)".to_owned()]);
+    assert_eq!(notes(&effects),vec!["Hook falhou — PostToolUse:Bash: falhou-de-proposito (falhou 2 vezes)".to_owned()]);
 }
 
 #[test]
@@ -1241,9 +1264,21 @@ fn turn_end(reason:&str,is_error:bool) -> Value {
 #[test]
 fn notice_terminal_reason_hook_stop() {
     let mut engine = notice_engine();
-    let effects = line(&mut engine,turn_end("stop_hook_prevented",false),11.0);
-    assert_eq!(notes(&effects),vec!["⚙️ Turno parado: um hook parou o turno".to_owned()]);
-    assert!(engine.view()["public_state"]["problema"].is_null(),"turno sem erro não abre faixa");
+    for (reason,at) in [("stop_hook_prevented",11.0),("hook_stopped",31.0)] {
+        let effects = line(&mut engine,turn_end(reason,false),at);
+        assert!(notes(&effects).is_empty(),"hook que segura o turno é rotina, não nota: {:?}",notes(&effects));
+        assert!(effects.iter().any(|effect|matches!(effect,Effect::StateChanged)));
+        assert_eq!(shown_label(&engine),"Um hook parou o turno");
+        assert!(engine.view()["public_state"]["problema"].is_null(),"turno sem erro não abre faixa");
+        tick(&mut engine,at+7.9);
+        assert_eq!(shown_label(&engine),"Um hook parou o turno");
+        let effects = tick(&mut engine,at+8.1);
+        assert!(effects.iter().any(|effect|matches!(effect,Effect::StateChanged)),"o rótulo sai sozinho");
+        assert_eq!(shown_label(&engine),"");
+    }
+    line(&mut engine,turn_end("stop_hook_prevented",false),50.0);
+    line(&mut engine,json!({"type":"command_lifecycle","state":"started"}),51.0);
+    assert!(!shown_label(&engine).contains("hook parou"),"o turno seguinte não herda: {}",shown_label(&engine));
 }
 
 #[test]
