@@ -15,7 +15,8 @@ use serde_json::{Value, json};
 use crate::fake::{self, Fake, SECRET};
 use crate::session_write_control::{open_headless, policy, send};
 
-const MODES: [&str; 6] = ["plan", "auto", "manual", "acceptEdits", "bypassPermissions", "dontAsk"];
+/// `model_args.MODOS_PERMISSAO_CLAUDE`, na ordem do Python.
+const MODES: [&str; 6] = ["acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan"];
 
 /// Lista no tmux falso com `s0` (Claude com terminal) e `p0` (Pi, pela escolha da criação). O registro
 /// não tem vigia: não adota ninguém. `headless`: um Claude sem terminal `h` aberto no Rust.
@@ -102,12 +103,19 @@ async fn permissions_r4_08_parked_headless_claude_is_read_from_its_record() {
     let (cwd, sidecars) = (dir.path().join("wq"), dir.path().join("home/.hangar/claude-headless"));
     std::fs::create_dir_all(&cwd).unwrap();
     std::fs::create_dir_all(&sidecars).unwrap();
-    std::fs::write(sidecars.join("q0.json"), json!({"name": "q0", "provider": "claude", "headless": true, "key": "ef".repeat(16),
-        "cwd": cwd, "session_id": "00000000-0000-0000-0000-0000000000aa", "permission_mode": "acceptEdits", "cano": null}).to_string()).unwrap();
+    // `q0` guarda o último modo fora do plano; `q1` não: o Python devolvia `meta.get("previous_non_plan")`.
+    for (name, key, sid, previous) in [("q0", "ef", "aa", Some("auto")), ("q1", "fe", "bb", None)] {
+        let mut meta = json!({"name": name, "provider": "claude", "headless": true, "key": key.repeat(16), "cwd": cwd,
+            "session_id": format!("00000000-0000-0000-0000-0000000000{sid}"), "permission_mode": "plan", "cano": null});
+        if let Some(previous) = previous { meta["previous_non_plan"] = json!(previous); }
+        std::fs::write(sidecars.join(format!("{name}.json")), meta.to_string()).unwrap();
+    }
     let (python, server) = serve(dir.path(), false).await;
-    let (status, reply) = send(server, "GET", "q0/permission-modes", "").await;
-    assert_eq!((status, reply), (200, json!({"current": "acceptEdits", "modes": MODES, "sondavel": false, "previous_non_plan": null})));
-    assert_eq!(python_hits(&python, "q0"), 0);
+    for (name, previous) in [("q0", json!("auto")), ("q1", Value::Null)] {
+        let (status, reply) = send(server, "GET", &format!("{name}/permission-modes"), "").await;
+        assert_eq!((status, reply), (200, json!({"current": "plan", "modes": MODES, "sondavel": false, "previous_non_plan": previous})), "{name}");
+        assert_eq!(python_hits(&python, name), 0);
+    }
     assert_eq!(crate::list_support::calls(dir.path(), "new-session"), 0, "ler não sobe o processo");
 }
 
@@ -127,7 +135,7 @@ async fn permissions_r4_08_headless_claude_reads_and_sets_through_the_actor() {
     assert_eq!(code(server, "POST", "h/permission-mode", "{}").await, (422, invalid.clone()));
     assert_eq!(code(server, "POST", "h/permission-mode", r#"{"mode":""}"#).await, (422, invalid.clone()));
     assert_eq!(code(server, "POST", "h/permission-mode", r#"{"mode":"wrong"}"#).await, (409, invalid.clone()));
-    assert_eq!(code(server, "POST", "h/permission-mode", r#"{"mode":"plan","x":1}"#).await, (422, invalid));
+    assert_eq!(code(server, "POST", "h/permission-mode", r#"{"mode":"plan","x":1}"#).await, (422, json!("erro_corpo_invalido")), "decisão 11");
     let (status, reply) = send(server, "POST", "h/permission-mode", r#"{"permission_mode":"plan"}"#).await;
     assert_eq!((status, reply["mode"].clone(), reply["current"].clone()), (200, json!("plan"), json!("plan")), "{reply}");
     assert!(reply.as_object().unwrap().contains_key("previous_non_plan"), "{reply}");

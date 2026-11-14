@@ -5,12 +5,15 @@ use serde::Deserialize;
 use serde_json::{Value,json};
 use crate::{routes::{AppState,who,cors},runtime::{gateway::EntryHandle,protocol::{OperationKind,RuntimeCommand,Disposition}}};
 use super::{BODY_LIMIT,enter_then_find,json_response,detail_body,session_name};
-const MODES:[&str;6]=["plan","auto","manual","acceptEdits","bypassPermissions","dontAsk"];
+// A ordem do `MODOS_PERMISSAO_CLAUDE` do Python: é a que os clientes recebiam.
+const MODES:[&str;6]=["acceptEdits","auto","bypassPermissions","manual","dontAsk","plan"];
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ModeBody {mode:Option<String>,permission_mode:Option<String>}
 fn mode_body(bytes:&[u8])->Result<String,(&'static str,StatusCode)> {
-    let body:ModeBody=serde_json::from_slice(bytes).map_err(|_|("erro_permissao_invalida",StatusCode::UNPROCESSABLE_ENTITY))?;
+    // Corpo fora de forma (campo a mais, tipo errado, não objeto) é o 422 de corpo; modo ausente é o da permissão.
+    let body:ModeBody=serde_json::from_slice::<Value>(bytes).ok().filter(Value::is_object).and_then(|v|serde_json::from_value(v).ok())
+        .ok_or(("erro_corpo_invalido",StatusCode::UNPROCESSABLE_ENTITY))?;
     let mode=body.mode.or(body.permission_mode).filter(|s|!s.is_empty()).ok_or(("erro_permissao_invalida",StatusCode::UNPROCESSABLE_ENTITY))?;
     if !MODES.contains(&mode.as_str()) {return Err(("erro_permissao_invalida",StatusCode::CONFLICT));}
     Ok(mode)
@@ -36,7 +39,10 @@ async fn listed(st:&AppState,name:&str)->Result<Option<(String,bool)>,&'static s
 /// O modo gravado no spec, para quem não deve acordar nem subir o processo só para ler.
 async fn reply_spec(runtime:&crate::runtime::gateway::RuntimeRegistry,name:&str,reply:impl Fn(StatusCode,Value)->Response)->Response {
     let (status,body)=match runtime.claude_spec(name).await {
-        Some(Ok(spec))=>(StatusCode::OK,json!({"current":spec.permission_mode.map(crate::session_open::PermissionMode::name),"modes":MODES,"sondavel":false,"previous_non_plan":null})),
+        Some(Ok(spec))=>{
+            let previous=runtime.claude_previous_non_plan(name).await;
+            (StatusCode::OK,json!({"current":spec.permission_mode.map(crate::session_open::PermissionMode::name),"modes":MODES,"sondavel":false,"previous_non_plan":previous}))
+        },
         Some(Err(error))=>(StatusCode::CONFLICT,detail_body(public_code(&error.code),&error.message,json!({}))),
         None=>(StatusCode::CONFLICT,detail_body("runtime_binding","a sessão parada não tem registro legível",json!({}))),
     };
@@ -86,7 +92,7 @@ async fn serve(st:Arc<AppState>,peer:SocketAddr,req:Request,set:bool)->Response 
     let probe=form_urlencoded::parse(query.as_bytes()).find(|(key,_)|key=="sondar").is_some_and(|(_,value)|matches!(value.to_ascii_lowercase().as_str(),"1"|"true"|"on"|"yes"));
     let mode=if set {
         match to_bytes(req.into_body(),BODY_LIMIT).await {
-            Ok(bytes)=>match mode_body(&bytes) {Ok(mode)=>Some(mode),Err((code,status))=>{let mut response=json_response(status,detail_body(code,"modo de permissão inválido",json!({})));cors(&headers,response.headers_mut());return response}},
+            Ok(bytes)=>match mode_body(&bytes) {Ok(mode)=>Some(mode),Err(("erro_corpo_invalido",_))=>return super::invalid_body(&headers),Err((code,status))=>{let mut response=json_response(status,detail_body(code,"modo de permissão inválido",json!({})));cors(&headers,response.headers_mut());return response}},
             Err(_)=>return super::too_large(&headers),
         }
     } else {None};
@@ -156,7 +162,11 @@ mod tests {
     fn legacy_alias_and_rejection_status_are_preserved() {
         assert_eq!(mode_body(br#"{"permission_mode":"bypassPermissions"}"#).unwrap(),"bypassPermissions");
         assert_eq!(mode_body(br#"{"mode":"plan","permission_mode":"manual"}"#).unwrap(),"plan");
-        assert_eq!(mode_body(b"{}").unwrap_err().1,StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(mode_body(b"{}").unwrap_err(),("erro_permissao_invalida",StatusCode::UNPROCESSABLE_ENTITY));
+        // Decisão 11: corpo fora de forma é o 422 de corpo, não o da permissão.
+        for body in [&br#"{"mode":"plan","x":1}"#[..],br#"{"mode":5}"#,b"[]",b"x"] {
+            assert_eq!(mode_body(body).unwrap_err(),("erro_corpo_invalido",StatusCode::UNPROCESSABLE_ENTITY));
+        }
         assert_eq!(mode_body(br#"{"mode":"wrong"}"#).unwrap_err().1,StatusCode::CONFLICT);
     }
     #[test]
