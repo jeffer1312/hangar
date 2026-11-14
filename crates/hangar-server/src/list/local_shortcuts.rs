@@ -216,14 +216,13 @@ pub(crate) fn maintain(rows: &[Row]) {
 async fn read_sessions(program: &OsStr, sessions: Option<Vec<String>>) -> Result<Option<String>, &'static str> {
     if sessions.as_ref().is_some_and(Vec::is_empty) { return Ok(None); }
     let args = ["list-sessions", "-F", FORMAT];
-    // No psmux cada sessão tem servidor próprio, que responde só a linha dela.
+    // No psmux cada sessão tem servidor próprio, que responde só a linha dela. Linha de outra sessão é
+    // porta reaproveitada por outro servidor: vale o CLI.
     if let Some(sessions) = &sessions {
-        let mut text = Some(String::new());
-        for session in sessions {
-            let Some(line) = direct(program, session, &args).await else { text = None; break };
-            text.as_mut().map(|t| t.push_str(&line));
-        }
-        if text.is_some() { return Ok(text); }
+        let lines = futures_util::future::join_all(sessions.iter().map(|session| async move {
+            direct(program, session, &args).await.filter(|line| line.starts_with(&format!("{session}\t")))
+        })).await;
+        if let Some(lines) = lines.into_iter().collect::<Option<Vec<_>>>() { return Ok(Some(lines.concat())); }
     }
     let out = mux(program, &args).await.ok_or("shortcuts_mux_unavailable")?;
     Ok(Some(if out.status.success() { String::from_utf8_lossy(&out.stdout).into_owned() } else { String::new() }))
@@ -381,6 +380,17 @@ mod psmux_direct_tests {
         assert_eq!(parse(&text, |_| (true, None)).iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ["ab12cd", "cd34ef"]);
         assert!(a.join().unwrap().get(1).is_some_and(|cmd| cmd.starts_with("\"list-sessions\"")));
         b.join().unwrap();
+    }
+
+    /// Porta que outro servidor reaproveitou responde a sessão dele: quem decide é o CLI.
+    #[tokio::test]
+    async fn a_reply_for_another_session_goes_to_the_program() {
+        let dir = tempfile::tempdir().unwrap();
+        let seen = server(dir.path(), "shortcut-a", 1, |_| "shortcut-z\t\tab12cd\t100\t0\t\t4242\t2\tk\to\t0\tZ\n");
+        verify("missing-shortcut-mux-4", dir.path());
+        let read = read_sessions(OsStr::new("missing-shortcut-mux-4"), Some(vec!["shortcut-a".to_owned()])).await;
+        assert_eq!(read, Err("shortcuts_mux_unavailable"));
+        seen.join().unwrap();
     }
 
     #[tokio::test]
