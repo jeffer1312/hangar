@@ -359,6 +359,14 @@ async fn not_codex(st: &Arc<AppState>, name: &str, req: Request) -> Response {
         tracing::warn!(session = %name, route = %route, code = "codex_sidecar_invalid", "rota do Codex num arquivo de sessão sem dono no Rust; nada foi enviado");
         return reply(refused());
     }
+    // Nome que não existe não é "sessão que não é Codex" (decisão 9).
+    if route == "limits" && !rust_session && runtime.asleep(name).await.is_none() {
+        match super::unowned::presence(st, name).await {
+            Err(error) => return reply((StatusCode::SERVICE_UNAVAILABLE, json!({"detail": crate::list::hub::unavailable_detail(&error)}))),
+            Ok(super::unowned::Presence::Missing) => return reply((StatusCode::NOT_FOUND, detail_body("erro_sessao_inexistente", "sessão não encontrada", json!({})))),
+            Ok(_) => {}
+        }
+    }
     let only_codex = |code: &str, msg: &str| (StatusCode::BAD_REQUEST, detail_body(code, msg, json!({})));
     reply(match route.as_str() {
         "models" => only_codex("erro_models_so_codex", "models so existe pra sessoes Codex"),

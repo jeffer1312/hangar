@@ -1143,11 +1143,12 @@ async fn delete_r1_3_codex_headless_with_a_live_actor_closes_in_rust() {
 #[tokio::test]
 async fn relaunch_routes_go_to_python_when_the_session_is_not_a_codex_of_the_rust() {
     let (python, server) = serve_owner(registry().await).await;
-    for (route, body) in [("modo-execucao", json!({"terminal": true})), ("recarregar", json!({}))] {
+    // A recarga não tem mais rota no Python: o que o Rust não atende ele mesmo recusa.
+    for (route, body, hits) in [("modo-execucao", json!({"terminal": true}), 1), ("recarregar", json!({}), 0)] {
         crate::fake::client().post(format!("http://{server}/api/sessions/claude-x/{route}"))
             .header("authorization", format!("Bearer {}", crate::fake::OWNER)).header("content-type", "application/json")
             .body(body.to_string()).send().await.unwrap();
-        assert_eq!(python.hits_to(&format!("/api/sessions/claude-x/{route}")), 1, "{route} sem vigia vai ao Python");
+        assert_eq!(python.hits_to(&format!("/api/sessions/claude-x/{route}")), hits, "{route} sem vigia");
     }
     // Com a vigia ligada: sem sidecar Codex, ou sem terminal que o Rust não abriu, a vez é do Python.
     let fx = fixture();

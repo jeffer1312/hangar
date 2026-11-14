@@ -165,15 +165,28 @@ async fn send_owned(deps: Deps, name: &str, text: &str) -> Sent {
 }
 
 /// Sem pane: sidecar que o Rust não adotou é sessão estragada, com código; sem sidecar, não existe.
-async fn no_pane(deps: &Deps, name: &str) -> Sent {
-    let Some(home) = deps.list.env().dirs.as_ref().map(|dirs| dirs.home.clone()) else { return Sent::Missing };
+/// Arquivo de sessão Codex ou Claude sem terminal com esse nome: o código da recusa dele.
+async fn sidecar_code(list: &crate::list::bridge::ListBridge, name: &str) -> Option<&'static str> {
+    let home = list.env().dirs.as_ref().map(|dirs| dirs.home.clone())?;
     let owned = name.to_owned();
-    let sidecar = tokio::task::spawn_blocking(move || {
+    tokio::task::spawn_blocking(move || {
         use crate::runtime::codex_sidecar::{dir, path};
         if path(&dir(&home), &owned).exists() { Some("codex_sidecar_invalid") }
         else if path(&home.join(".hangar").join("claude-headless"), &owned).exists() { Some("claude_sidecar_invalid") } else { None }
-    }).await.ok().flatten();
-    match sidecar {
+    }).await.ok().flatten()
+}
+
+/// O que o nome tem quando nenhum agente do Rust o atende.
+pub(crate) enum Presence { Pane, Sidecar(&'static str), Missing }
+
+/// Como `exists`, mas a lista que não responde é erro, nunca "não existe".
+pub(crate) async fn presence(st: &AppState, name: &str) -> Result<Presence, crate::list::bridge::ListError> {
+    if !st.list.runtime_context(name).await?.panes.is_empty() { return Ok(Presence::Pane); }
+    Ok(sidecar_code(&st.list, name).await.map_or(Presence::Missing, Presence::Sidecar))
+}
+
+async fn no_pane(deps: &Deps, name: &str) -> Sent {
+    match sidecar_code(&deps.list, name).await {
         Some(code) => {
             deps.diag.report("runtime.send_failed", name, code, "sidecar sem dono no Rust; nada foi enviado");
             Sent::Answer(StatusCode::SERVICE_UNAVAILABLE, json!({"ok": false, "error": detail_body(code, "o arquivo da sessão não abre no servidor; feche e abra a sessão", json!({}))["detail"], "delivered": false}))

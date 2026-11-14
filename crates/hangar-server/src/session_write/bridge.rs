@@ -39,8 +39,7 @@ fn as_owner(req: &mut Request, name: &str, rest: &str) -> bool {
 /// `/__hangar_server/claude/<nome>/<rota>`: `POST` em `input`, `answer`, `select`, `select/submit`,
 /// `permission-mode` e `model-effort`, `GET` em `permission-modes`, e as rotas do painel da fila (`DELETE`/`PATCH
 /// queue/<id>`, `POST queue/reorder` e `queue/<id>/steer`), de sessão Claude com entrada no Rust, pela
-/// mesma rota do dono; `POST`/`GET btw` e `POST recarregar` de qualquer sessão (a rota decide). Outra rota,
-/// método ou sessão: 421.
+/// mesma rota do dono; `POST`/`GET btw` de qualquer sessão (a rota decide). Outra rota, método ou sessão: 421.
 pub async fn claude(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, mut req: Request) -> Response {
     use super::{answer, control, input, permissions};
     if !crate::workspace_routes::private_ok(&st, peer, req.headers()) { return StatusCode::NOT_FOUND.into_response(); }
@@ -48,13 +47,6 @@ pub async fn claude(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
     // Abrir Claude com terminal pelo que entrou direto no Python (Connect, MCP): o nome vem no corpo.
     if rest == "open" && req.method() == Method::POST {
         return crate::session_open::server::bridge(State(st), ConnectInfo(peer), req).await;
-    }
-    // Reabrir que entrou pelo Connect: a rota da 8765 decide Codex, Claude e o que segue ao Python (421).
-    if rest == "recarregar" && req.method() == Method::POST {
-        let line = asked_line("sessao.recarga_pedida", "session_reload_requested_by_owner", &name, req.headers(), peer);
-        crate::diag::record(crate::diag::diary_dir(), vec![line], "sessão recarregada");
-        if !as_owner(&mut req, &name, &rest) { return not_ours(); }
-        return super::relaunch::reload(State(st), ConnectInfo(peer), req).await;
     }
     // Trocar o nome pelo que entrou no Python (Connect, convidado com conta): a rota inteira é do Rust.
     if rest == "rename" && req.method() == Method::POST {
@@ -386,7 +378,6 @@ async fn dispatch(st: Arc<AppState>, peer: SocketAddr, method: &str, rest: &str,
         ("GET", "codex-permissions") => codex::permissions(s, c, req).await,
         ("POST", "codex-permissions") => codex::set_permission(s, c, req).await,
         ("POST", "modo-execucao") => relaunch::mode(s, c, req).await,
-        ("POST", "recarregar") => relaunch::reload(s, c, req).await,
         _ => not_ours(),
     }
 }
@@ -397,7 +388,7 @@ fn close_line(name: &str, headers: &axum::http::HeaderMap, peer: SocketAddr) -> 
     asked_line("sessao.fechamento_pedido", "session_close_requested_by_owner", name, headers, peer)
 }
 
-fn asked_line(evento: &str, codigo: &str, name: &str, headers: &axum::http::HeaderMap, peer: SocketAddr) -> serde_json::Value {
+pub(crate) fn asked_line(evento: &str, codigo: &str, name: &str, headers: &axum::http::HeaderMap, peer: SocketAddr) -> serde_json::Value {
     let header = |key: &str| headers.get(key).and_then(|v| v.to_str().ok()).map(|v| v.chars().take(80).collect::<String>());
     json!({"evento": evento, "nivel": "ok", "sessao": name, "codigo": codigo,
         "cliente": header("user-agent"), "req": header("x-hangar-req"), "origem": header("x-forwarded-for").unwrap_or_else(|| peer.ip().to_string())})

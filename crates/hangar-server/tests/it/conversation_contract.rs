@@ -325,11 +325,11 @@ async fn refused_connect_close_keeps_the_session_in_the_restore_snapshot() {
     assert!(!names().contains(&"nada".to_owned()), "fechada de fato, ela não volta no reboot");
 }
 
-/// O Reabrir (`/recarregar`) do Claude que entrou pelo Connect chega à ponte e é atendido pela mesma rota
-/// da 8765: a recusa da reabertura (aqui o arquivo da sessão ilegível) volta com o código do Rust, e o que
-/// não é Claude daqui é 421, sem nunca voltar ao Python.
+/// O Reabrir (`/recarregar`) do Claude é atendido pela rota da 8765, que o Connect também usa: a recusa da
+/// reabertura (aqui o arquivo da sessão ilegível) volta com o código do Rust, sem nunca ir ao Python. A
+/// ponte privada não tem mais a recarga: quem a chamava era a rota Python que saiu.
 #[tokio::test]
-async fn connect_reload_of_a_claude_goes_through_the_bridge() {
+async fn reload_of_a_claude_answers_with_the_rust_code() {
     let home = tempfile::tempdir().unwrap();
     let dir = home.path().join(".hangar/claude-headless");
     std::fs::create_dir_all(&dir).unwrap();
@@ -341,19 +341,11 @@ async fn connect_reload_of_a_claude_goes_through_the_bridge() {
     let (python, upstream) = fake::spawn_fake().await;
     let state = hangar_server::routes::AppState::new(fake::config(upstream, "127.0.0.1"));
     assert!(state.state.runtime.set(registry).is_ok());
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let private = listener.local_addr().unwrap();
-    let router = hangar_server::routes::terminal_router(Arc::new(state));
-    tokio::spawn(async move { axum::serve(listener, router.into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap() });
-    let reload = |name: &'static str| async move {
-        let response = fake::client().post(format!("http://{private}/__hangar_server/claude/{name}/recarregar"))
-            .header("x-hangar-internal", SECRET).send().await.unwrap();
-        let status = response.status().as_u16();
-        (status, serde_json::from_str::<Value>(&response.text().await.unwrap()).unwrap_or(Value::Null))
-    };
-    let (status, reply) = reload("s").await;
+    let server = fake::spawn_state(state).await;
+    let response = fake::client().post(format!("http://{server}/api/sessions/s/recarregar")).bearer_auth(fake::OWNER).send().await.unwrap();
+    let status = response.status().as_u16();
+    let reply = serde_json::from_str::<Value>(&response.text().await.unwrap()).unwrap_or(Value::Null);
     assert_eq!((status, reply["detail"]["code"].as_str(), reply["detail"]["params"]["code"].as_str()),
         (409, Some("erro_recarregar"), Some("claude_sidecar_read")), "{reply}");
-    assert_eq!(reload("nada").await.0, 421);
-    assert_eq!(python.hits_to("/api/sessions/s/recarregar") + python.hits_to("/api/sessions/nada/recarregar"), 0);
+    assert_eq!(python.hits_to("/api/sessions/s/recarregar"), 0);
 }
