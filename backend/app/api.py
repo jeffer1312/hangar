@@ -847,9 +847,9 @@ def _confirm_and_drain(name: str) -> None:
         grace = _CONFIRM_GRACE_HEADLESS if headless else _CONFIRM_GRACE
         # UMA leitura do oraculo pros dois ramos. None = nao deu pra ler o transcript (ver
         # committed_user_lines): sai SEM decidir e SEM reagendar. Sem reagendar de proposito — um
-        # Timer a cada `grace` contra um arquivo que nao abre e tempestade sem fim; a proxima
-        # mensagem chama isto de novo, e ate la a entrada fica visivel como bolha "na fila".
-        # Falha VISIVEL, nunca mensagem duplicada.
+        # Timer a cada `grace` contra um arquivo que não abre é tempestade sem fim; a próxima
+        # mensagem chama isto de novo, e até lá a entrada fica visível como bolha "na fila".
+        # Falha VISÍVEL, nunca mensagem duplicada.
         # As DUAS leituras do transcript ficam juntas e falham juntas. `_transcript_start_ts` abre
         # o mesmo arquivo uma segunda vez, e o 0.0 dele desliga a poda por idade — sem ela, entrada
         # de sessao ANTERIOR nao e mais dispensada e vai parar no caminho que REDIGITA. Ou seja: o
