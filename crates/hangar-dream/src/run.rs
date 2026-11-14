@@ -18,7 +18,9 @@ use crate::state::Suggestion;
 
 pub const ANALYZER_MODEL: &str = "claude-haiku-5-5";
 pub const ORGANIZER_MODEL: &str = "claude-sonnet-5-5";
-pub const INDEX_MAX_LINES: usize = 200;
+/// Abaixo das 200 linhas que o Claude Code carrega: sobra folga para o que as sessões gravam entre
+/// uma noite e outra.
+pub const INDEX_MAX_LINES: usize = 160;
 pub const INDEX_MAX_BYTES: usize = 25 * 1024;
 pub const USER_MEMORY_FILE: &str = "memoria-do-usuario.md";
 pub const USER_MEMORY_MAX_LINES: usize = 100;
