@@ -276,7 +276,7 @@ async fn sessions_marks_the_caller() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn send_goes_through_the_input_route_as_the_caller() {
-    // A escrita é do Rust (sem runtime ela é a recusa da subida): o recado chega ao cano de `s0`.
+    // A escrita é do Rust (sem registro ela é o `runtime_unavailable`): o recado chega ao cano de `s0`.
     let s = scene_owned().await;
     let mut mcp = Mcp::open(s.addr, &[("x-hangar-pane", "%7")]).await;
     let result = mcp.call("send", json!({"alvo": "s0", "texto": "[de: beta] oi"})).await;
@@ -432,7 +432,7 @@ async fn interrupt_only_reaches_a_linked_child() {
     assert!(failed(&other) && first_text(&other).starts_with("erro_interromper_nao_ligada"), "filha de outro pai: {other}");
     assert_eq!(s.python.hits_to("/api/sessions/outra/interrupt"), 0);
     write_json(&sidecar, json!({"peers": ["beta"], "task": "", "gid": "g1", "harness": {}, "linked_by": "beta"}));
-    // Ligada, passa a guarda e a rota responde no Rust (cena sem runtime: a recusa da subida), nunca o Python.
+    // Ligada, passa a guarda e a rota responde no Rust (cena sem registro: `runtime_unavailable`), nunca o Python.
     let done = mcp.call("interrupt", json!({"alvo": "outra"})).await;
     assert!(!first_text(&done).starts_with("erro_interromper_nao_ligada"), "{done}");
     assert_eq!(s.python.hits_to("/api/sessions/outra/interrupt"), 0);
