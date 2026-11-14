@@ -452,6 +452,23 @@ async fn delete_r1_17_vault_files_leave_only_with_a_confirmed_close() {
     assert!(!file.exists(), "fechada de fato, o arquivo do cofre saiu");
 }
 
+/// Achado 2 da revisão (R1-10): fechamentos ao mesmo tempo não perdem nome fechado; ler, juntar e gravar
+/// `closed-sessions.json` é um ciclo só, sob a trava.
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread")]
+async fn delete_r1_10_concurrent_closes_keep_every_closed_name() {
+    let e = env().await;
+    let names: Vec<String> = (0..6).map(|i| format!("cx{i}")).collect();
+    for (i, name) in names.iter().enumerate() {
+        e.put_sidecar("codex", name, json!({"name": name, "provider": "codex", "headless": true,
+            "key": format!("kkkkkkkk000001{i:02}"), "cano": null, "rollout_path": format!("/r/{name}.jsonl")}));
+    }
+    let closes = names.iter().map(|name| e.delete(name));
+    for (status, body) in futures_util::future::join_all(closes).await { assert_eq!(status, 200, "{body}"); }
+    let recorded = e.closed_names();
+    for name in &names { assert_eq!(recorded[format!("/r/{name}.jsonl").as_str()]["name"], name.as_str(), "{recorded}"); }
+}
+
 /// R1-10 (`test_closed_names_ilegivel_vai_para_o_lado_antes_de_gravar`): o arquivo de nomes ilegível vai
 /// para o lado (o `.bad` anterior fica, este vira `.bad.2`) e o nome novo é gravado num arquivo limpo.
 #[cfg(target_os = "linux")]
@@ -483,6 +500,19 @@ async fn delete_r1_3_codex_bridge_kill_closes_a_parked_headless() {
     let response = fake::client().post(format!("http://{private}/__hangar_server/codex/cxb/kill")).header("x-hangar-internal", SECRET).send().await.unwrap();
     assert_eq!(response.status().as_u16(), 200);
     assert!(!sidecar.exists() && !e.projection("cxb").exists());
+}
+
+/// Achado 4 da revisão: a ponte `/__hangar_server/claude/<n>/close` não tem chamador (o Connect saiu do
+/// Python em 6bdd33994) e saiu: 421, nada fecha, e o fechamento é só o `DELETE`.
+#[tokio::test]
+async fn the_claude_close_bridge_is_gone() {
+    let e = env().await;
+    e.sessions(&["cat1"]);
+    let private = e.private().await;
+    let response = fake::client().post(format!("http://{private}/__hangar_server/claude/cat1/close")).header("x-hangar-internal", SECRET).send().await.unwrap();
+    assert_eq!(response.status().as_u16(), 421);
+    assert_eq!(e.alive(), ["cat1"]);
+    assert!(e.calls("kill-session").is_empty());
 }
 
 /// D16: o cano do Codex sem terminal que ignora o SIGTERM segura o fechamento: 500 com código, e sidecar e
@@ -648,6 +678,58 @@ async fn delete_r1_3_other_terminal_close_takes_the_marked_shell() {
     let closed = registry.close_other("pi-a").await.expect("Pi daqui");
     assert!(closed.is_ok(), "{:?}", closed.err().map(|e| e.code));
     assert_eq!(std::fs::read_to_string(root.join("sessions")).unwrap(), "term-pi-a\n");
+}
+
+/// Achado 3 da revisão e decisão 4: o fechamento do Pi/omp/Kimi passa pela limpeza ligada ao ator
+/// (`other_cleanup`, a mesma de `routes.rs` na subida): o `then` sai e o nome fechado vai à pasta que o
+/// Arquivo lê (`claude_base`, decisão do usuário), não à `dirs.claude` da lista.
+#[tokio::test]
+async fn delete_r1_other_terminal_close_runs_the_owner_cleanups() {
+    use hangar_server::runtime::other_terminal::{OtherDiscovery, OtherDiscoveryState, OtherOptions, OtherTarget};
+    let dir = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(dir.path()).unwrap();
+    let tmux = fake_tmux(&root, "pi-a");
+    std::fs::write(root.join("sessions"), "pi-a\n").unwrap();
+    let dirs = hangar_server::list::discover_other::Dirs { home: root.join("home"), claude: root.join(".claude"), codex_home: root.join(".codex"),
+        pi_sessions: root.join(".pi/agent/sessions"), omp_config: root.join(".omp"), omp_agent: root.join(".omp/agent"), kimi_home: root.join(".kimi-code") };
+    std::fs::create_dir_all(&dirs.home).unwrap();
+    let transcript = root.join("c.jsonl");
+    std::fs::write(&transcript, "").unwrap();
+    let chain = root.join(".claude/.hangar-chain/pi-a.json");
+    std::fs::create_dir_all(chain.parent().unwrap()).unwrap();
+    std::fs::write(&chain, r#"{"target":"outra","text":"oi"}"#).unwrap();
+    let target = OtherTarget { key: "life-a".into(), generation: 1, name: "pi-a".into(), provider: hangar_transcript::Provider::Pi,
+        binding: hangar_server::terminal_input::TerminalBinding { name: "pi-a".into(), pane: "%1".into(), conversation: "c".into(), generation: 1,
+            created: 100, mux_argv: vec![tmux.to_string_lossy().into_owned()], windows: false, clipboard_lock_path: None },
+        pane_address: "%1".into(), dirs: dirs.clone(), cwd: root.to_string_lossy().into_owned(), pane_pid: 1, agent_pid: i64::from(exited_pid()), agent_birth: 1.0,
+        transcript: transcript.clone(), state_path: root.join("runtime/life-a.json"), lease_path: root.join("runtime/life-a.lock"),
+        projection_dir: root.join("queue"), config_dirs: vec![root.clone()], created: 100.0 };
+    let upstream = crate::refused_address();
+    let mut state = AppState::new(fake::config(upstream, "127.0.0.1"));
+    let (home, base) = (root.join("home").to_string_lossy().into_owned(), root.join("conta").to_string_lossy().into_owned());
+    state.accounts = hangar_server::accounts::AccountService::new(hangar_server::accounts::environment::AccountEnvironment::from_map(
+        [("HOME".to_owned(), home.clone()), ("USERPROFILE".to_owned(), home), ("CLAUDE_CONFIG_DIR".to_owned(), base)].into()));
+    let list_dirs = parse_dirs(&json!({"home": dirs.home, "claude": dirs.claude, "codex_home": dirs.codex_home, "pi_sessions": dirs.pi_sessions,
+        "omp_config": dirs.omp_config, "omp_agent": dirs.omp_agent, "kimi_home": dirs.kimi_home}).to_string());
+    state.list = Arc::new(ListBridge::new(ListEnv { mux: Mux::with_program(&tmux, Duration::from_secs(5)), capture_program: tmux.clone().into_os_string(),
+        procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs: list_dirs }, FactsClient::new(upstream, SECRET.into())));
+    let registry = crate::runtime_open::registry().await;
+    assert!(state.state.runtime.set(registry.clone()).is_ok());
+    let st = Arc::new(state);
+    let mut options = OtherOptions::new(hangar_server::terminal_control::TerminalPool::new(), hangar_server::provider_models::inbox::Store::new(),
+        Arc::new(hangar_server::list::procs::SystemProcs::default()), Arc::new(hangar_server::interactions::InteractionStore::default()));
+    options.after_closed = Some(hangar_server::session_write::bridge::other_cleanup(Arc::downgrade(&st)));
+    let found = target.clone();
+    registry.bind_other(options, OtherDiscovery {
+        find: Arc::new(move |_| { let found = found.clone(); Box::pin(async move { Some(Ok(OtherDiscoveryState::Ready(found))) }) }),
+        names: Arc::new(|| Box::pin(async { Ok(vec![]) })),
+    }).unwrap();
+    let closed = registry.close_other("pi-a").await.expect("Pi daqui").map_err(|e| e.code);
+    assert_eq!(closed.as_ref().map(|v| v["warnings"].clone()), Ok(json!([])), "{closed:?}");
+    assert!(!chain.exists(), "o then da vida encerrada saiu");
+    let names: Value = serde_json::from_slice(&std::fs::read(root.join("conta/closed-sessions.json")).unwrap()).unwrap();
+    assert_eq!(names[&*transcript.to_string_lossy()]["name"], "pi-a", "{names}");
+    assert!(!root.join(".claude/closed-sessions.json").exists(), "nunca na pasta da lista");
 }
 
 /// Pid de um processo que já saiu.

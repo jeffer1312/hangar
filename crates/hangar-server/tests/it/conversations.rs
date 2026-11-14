@@ -349,12 +349,13 @@ async fn history_negative_limit_is_the_whole_history_like_python() {
 }
 
 #[tokio::test]
-async fn history_without_owner_or_supported_provider_goes_to_python() {
+async fn history_without_owner_is_401_and_unsupported_provider_goes_to_python() {
     let (_dir, jsonl, _offs, fake, srv) = setup(0..2, "sess-j").await;
     let url = format!("http://{srv}/api/sessions/s/history");
 
+    // R5 (decisão 5): sem o dono, o 401 sai do Rust.
     let r = client().get(&url).bearer_auth("convidado").send().await.unwrap();
-    assert_eq!(r.text().await.unwrap(), "from-python");
+    assert_eq!(r.status().as_u16(), 401);
     assert_eq!(fake.info_calls(), 0);
 
     let r = client().get(format!("{url}?limit=abc")).bearer_auth(OWNER).send().await.unwrap();

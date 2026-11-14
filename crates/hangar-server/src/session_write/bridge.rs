@@ -39,8 +39,8 @@ fn as_owner(req: &mut Request, name: &str, rest: &str) -> bool {
 /// `/__hangar_server/claude/<nome>/<rota>`: `POST` em `input`, `answer`, `select`, `select/submit`,
 /// `permission-mode` e `model-effort`, `GET` em `permission-modes`, e as rotas do painel da fila (`DELETE`/`PATCH
 /// queue/<id>`, `POST queue/reorder` e `queue/<id>/steer`), de sessão Claude com entrada no Rust, pela
-/// mesma rota do dono; `POST`/`GET btw` e `POST recarregar` de qualquer sessão (a rota decide); `POST close`, o
-/// `DELETE` do Claude aberto aqui que entrou pelo Connect. Outra rota, método ou sessão: 421.
+/// mesma rota do dono; `POST`/`GET btw` e `POST recarregar` de qualquer sessão (a rota decide). Outra rota,
+/// método ou sessão: 421.
 pub async fn claude(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, mut req: Request) -> Response {
     use super::{answer, control, input, permissions};
     if !crate::workspace_routes::private_ok(&st, peer, req.headers()) { return StatusCode::NOT_FOUND.into_response(); }
@@ -49,7 +49,6 @@ pub async fn claude(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
     if rest == "open" && req.method() == Method::POST {
         return crate::session_open::server::bridge(State(st), ConnectInfo(peer), req).await;
     }
-    if rest == "close" && req.method() == Method::POST { return close_bridged(st, peer, &name, req.headers()).await; }
     // Reabrir que entrou pelo Connect: a rota da 8765 decide Codex, Claude e o que segue ao Python (421).
     if rest == "recarregar" && req.method() == Method::POST {
         let line = asked_line("sessao.recarga_pedida", "session_reload_requested_by_owner", &name, req.headers(), peer);
@@ -154,6 +153,8 @@ pub async fn delete(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
         Some(who) if who.can(&name, req.method()) => matches!(who, crate::share::caller::Caller::Owner),
         // Convidado fora desta sessão (par de leitura): 403, sem contar falha de senha.
         Some(_) => return crate::routes::refuse_without_python(&st, peer, req, caller.as_ref()).await,
+        // Na 8766 o token do dono não decide: sem convidado, 404, como o `pass` responde lá.
+        None if crate::routes::on_guest_port(&req) => return crate::routes::not_found(req.headers()),
         // Sem identidade: o `require_auth` do Python, aqui; aceito só sem senha configurada.
         None => match crate::routes::owner_gate(&st, peer, &req).await {
             Ok(_) => true,
@@ -331,7 +332,6 @@ fn close_line_by(name: &str, owner: bool, headers: &axum::http::HeaderMap, peer:
 /// Devolve o aviso da revogação que falhou: o fechamento segue, e a pessoa fica sabendo.
 async fn after_close(st: &Arc<AppState>, name: &str) -> Option<Value> {
     let mut warning = None;
-    // Convites e par da sessão são do Rust: o Python marcado não volta a pedir a revogação.
     if let Some(share) = st.share.clone() {
         match share.store.revoke_session(name, None) {
             Ok(0) => {}
@@ -352,36 +352,11 @@ async fn after_close(st: &Arc<AppState>, name: &str) -> Option<Value> {
     warning
 }
 
-/// Os terminais de atalho da sessão encerrada, também quando quem encerrou foi o Python.
+/// Os terminais de atalho da sessão encerrada.
 async fn close_shortcuts(st: &AppState, name: &str) {
     for warning in crate::shortcuts::close_for_session(st, name, || Box::pin(async { true })).await {
         let code = warning["code"].as_str().unwrap_or("shortcut_close_failed");
         st.diag.report("rust.close_failed", name, code, "terminal de atalho da sessão encerrada não fechou");
-    }
-}
-
-/// O `DELETE` do Claude que entrou pelo Connect (8768): o encerramento da 8765, sem repasse e sem a saída
-/// do grupo, que o Python faz depois com a fase do `orq` já lida (o Rust não pergunta de volta numa chamada
-/// dele). 421 = não é Claude aberto aqui, e o Python segue.
-async fn close_bridged(st: Arc<AppState>, peer: SocketAddr, name: &str, headers: &axum::http::HeaderMap) -> Response {
-    let Some(runtime) = st.state.runtime.get().cloned() else { return not_ours() };
-    let closed = runtime.kill_claude(name).await;
-    match &closed {
-        Some(Err(error)) => st.diag.report("rust.close_failed", name, &error.code, "o fechamento da sessão falhou"),
-        _ => { crate::diag::record(crate::diag::diary_dir(), vec![close_line(name, headers, peer)], "sessão fechada"); }
-    }
-    // Recusado, a sessão segue viva e volta no reboot; no 421 o Python a fecha pelo nome, então ela sai.
-    if !matches!(closed, Some(Err(_))) && let Some(dirs) = st.list.env().dirs.as_ref() {
-        crate::session_open::restore::forget(&dirs.home, name);
-    }
-    match closed {
-        None => not_ours(),
-        Some(Err(error)) => close_refusal(&error),
-        Some(Ok(mut closed)) => {
-            close_shortcuts(&st, name).await;
-            if let Some(warning) = after_close(&st, name).await { closed["warning"] = warning; }
-            super::json_response(StatusCode::OK, closed)
-        }
     }
 }
 
@@ -480,20 +455,25 @@ pub fn other_cleanup(state:std::sync::Weak<AppState>)->crate::runtime::other_ter
         let guard_life=life.clone();let weak=Arc::downgrade(&runtime);
         warnings.extend(crate::shortcuts::close_for_session(&st,&name,move||{let weak=weak.clone();let life=guard_life.clone();Box::pin(async move{match weak.upgrade(){Some(runtime)=>runtime.other_cleanup_allowed(&life).await.unwrap_or(false),None=>false}})}).await);
         if runtime.other_cleanup_allowed(&life).await? && let Some(path)=life.transcript().map(std::path::Path::to_path_buf) {
-            let config=life.dirs().claude.clone();let closed_name=name.clone();let result=tokio::task::spawn_blocking(move||record_other_closed_name(&config,&path,&closed_name)).await;
+            // A pasta que o Arquivo lê, a mesma do fechamento do dono.
+            let config=st.accounts.env.claude_base.clone();let closed_name=name.clone();let result=tokio::task::spawn_blocking(move||record_other_closed_name(&config,&path,&closed_name)).await;
             if !matches!(result,Ok(Ok(()))){warnings.push(json!({"code":"other_closed_name_failed"}));}
         }
         Ok(warnings)
     })})
 }
 fn record_other_closed_name(config:&std::path::Path,path:&std::path::Path,name:&str)->std::io::Result<()> {
-    static SERIAL:std::sync::Mutex<()>=std::sync::Mutex::new(());let _guard=SERIAL.lock().unwrap_or_else(|error|error.into_inner());let target=config.join("closed-sessions.json");
+    std::fs::create_dir_all(config)?;
+    // Pasta real: a trava é o mesmo arquivo antes e depois de o `closed-sessions.json` existir.
+    let target=std::fs::canonicalize(config)?.join("closed-sessions.json");
+    // Ler, separar o ilegível e gravar sob uma trava só: dois fechamentos juntos não perdem nome.
+    let _lock=hangar_core::config_lock::lock_owned(&target).map_err(std::io::Error::other)?;
     let mut data:serde_json::Map<String,Value>=match crate::runtime::queue::read_replaced(&target){
         Ok(bytes)=>match serde_json::from_slice::<Value>(&bytes){Ok(Value::Object(map))=>map,_=>{set_aside(&target)?;Default::default()}},
         Err(error) if error.kind()==std::io::ErrorKind::NotFound=>Default::default(),Err(error)=>return Err(error)};
     let real=std::fs::canonicalize(path).unwrap_or_else(|_|path.into());let now=std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs_f64();data.insert(real.to_string_lossy().into_owned(),json!({"name":name,"closed_at":now}));
     if data.len()>500 {let mut oldest=data.iter().map(|(path,value)|(path.clone(),value["closed_at"].as_f64().unwrap_or(0.0))).collect::<Vec<_>>();oldest.sort_by(|a,b|a.1.total_cmp(&b.1));for(key,_)in oldest.into_iter().take(data.len()-500){data.remove(&key);}}
-    std::fs::create_dir_all(config)?;crate::runtime::queue::atomic_write(&target,&serde_json::to_vec(&data)?)
+    crate::runtime::queue::atomic_write(&target,&serde_json::to_vec(&data)?)
 }
 /// O arquivo ilegível vai para o lado (`.bad`, `.bad.2`…) antes da gravação nova apagar o que ele tinha.
 fn set_aside(path:&std::path::Path)->std::io::Result<()> {

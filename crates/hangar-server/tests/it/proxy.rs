@@ -187,7 +187,7 @@ async fn proxy_passes_websocket_upgrade_both_ways() {
 }
 
 #[tokio::test]
-async fn guest_token_is_always_passed_to_python() {
+async fn unknown_token_gets_401_from_rust() {
     let (fake, up) = spawn_fake().await;
     let srv = spawn_server(config(up, "127.0.0.1")).await;
     let r = client()
@@ -196,7 +196,9 @@ async fn guest_token_is_always_passed_to_python() {
         .send()
         .await
         .unwrap();
-    assert_eq!(r.text().await.unwrap(), "from-python");
+    // R5 (decisão 5): token que nenhum porteiro reconhece leva o 401 do Rust, sem chegar ao Python.
+    assert_eq!(r.status().as_u16(), 401);
+    assert_eq!(fake.hits_to("/api/sessions/s/history"), 0);
     assert_eq!(fake.info_calls(), 0, "convidado nunca chega às rotas internas");
 
     // Controle: o mesmo pedido com o token do dono passa pelo atalho e consulta a rota interna.

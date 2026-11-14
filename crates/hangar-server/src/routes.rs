@@ -1113,7 +1113,7 @@ async fn request_auth(mut req: Request, next: axum::middleware::Next) -> Respons
     next.run(req).await
 }
 
-/// Um handler já decidiu, por `gate`, que quem pede não é o dono: o `pass` não leva o pedido ao Python.
+/// Um handler já decidiu, por `gate` ou `who`, que quem pede não é o dono: o `pass` não leva o pedido ao Python.
 #[derive(Clone, Default)]
 pub(crate) struct NotOwner(Arc<std::sync::atomic::AtomicBool>);
 
@@ -1170,7 +1170,14 @@ pub(crate) async fn refuse_without_python(st: &AppState, peer: SocketAddr, req: 
 
 pub(crate) fn who(st: &AppState, peer: SocketAddr, req: &Request)
     -> impl std::future::Future<Output = Result<(Forward, Option<Caller>), auth::AuthError>> + Send + use<> {
-    hangar_core::edge::who(&st.cfg.trusted, &st.auth, peer, req)
+    let resolved = hangar_core::edge::who(&st.cfg.trusted, &st.auth, peer, req);
+    // Na 8766 quem não tem convidado decidido já recebe o 404 do `pass`.
+    let marker = req.extensions().get::<NotOwner>().cloned().filter(|_| !on_guest_port(req));
+    async move {
+        let (forward, caller) = resolved.await?;
+        if caller.is_none() && let Some(NotOwner(flag)) = marker { flag.store(true, Ordering::Relaxed); }
+        Ok((forward, caller))
+    }
 }
 
 pub(crate) fn forward_for(st: &AppState, peer: SocketAddr, req: &Request) -> Forward {

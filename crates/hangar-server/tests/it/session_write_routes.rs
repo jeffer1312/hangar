@@ -149,13 +149,15 @@ async fn open_entry_with_a_body_the_route_refuses_is_a_rust_422_never_python() {
 }
 
 #[tokio::test]
-async fn guest_goes_straight_to_python_even_with_the_gate_closed() {
+async fn stranger_is_refused_at_once_even_with_the_gate_closed() {
     let (dir, registry) = (tempfile::tempdir().unwrap(), registry().await);
     open_entry(&registry, dir.path(), "k", "s").await;
     registry.ingress().close("s", Duration::from_secs(1)).await.unwrap();
-    let (_python, server) = serve_with(Some(registry)).await;
-    let answer = tokio::time::timeout(Duration::from_secs(2), post(server, "input", r#"{"text":"oi"}"#, "token-errado")).await;
-    assert_eq!(answer.unwrap(), (200, "from-python".into()));
+    let (python, server) = serve_with(Some(registry)).await;
+    // R5 (decisão 5): token que não é o do dono leva o 401 do Rust na hora, sem esperar a porta.
+    let (status, body) = tokio::time::timeout(Duration::from_secs(2), post(server, "input", r#"{"text":"oi"}"#, "token-errado")).await.unwrap();
+    assert_eq!(status, 401, "{body}");
+    assert_eq!(python.hits_to("/api/sessions/s/input"), 0);
 }
 
 #[tokio::test]
