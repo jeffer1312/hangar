@@ -398,6 +398,166 @@ async fn export_without_scripts_reads_no_dependency() {
     assert!(!body.to_string().contains("NEVER_READ"));
 }
 
+#[cfg(target_os = "linux")]
+fn script_entry(path: &str, content: &str, executable: bool) -> Value {
+    json!({"path": path, "content": content, "executable": executable})
+}
+
+/// ATA-40: os avisos do export passam pela varredura: o caminho junto pelo shlex (`gh"p_…"`) leva uma
+/// chave que a varredura do comando não pegou, e o aviso sai com o marcador.
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread")]
+async fn export_scrubs_its_warnings() {
+    let scene = Scene::new();
+    let command = format!("/opt/gh\"p_{}\"/y", "x1Y2".repeat(7));
+    scene.save(shell(&command));
+    assert_eq!(scene.export("").await, (200, json!({"version": 2, "shortcuts": shell(&command), "scripts": [],
+        "warnings": ["Dependência fora das pastas locais permitidas não foi incluída. Caminho: /opt/⟦SEGREDO:token⟧/y"],
+        "removed": 0})));
+}
+
+/// ATA-44: função fish vence o homônimo no PATH, e `~/bin` entra na busca mesmo fora do PATH.
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread")]
+async fn export_prefers_the_fish_function_and_searches_home_bin() {
+    let scene = Scene::new();
+    scene.script(".local/bin/tool", b"echo bin", 0o700);
+    scene.script(".config/fish/functions/tool.fish", b"function tool\n echo fish\nend", 0o644);
+    scene.script("bin/other", b"echo other", 0o700);
+    scene.save(shell("tool; other"));
+    assert_eq!(scene.export("").await, (200, json!({"version": 2, "shortcuts": shell("tool; other"), "scripts": [
+        script_entry(".config/fish/functions/tool.fish", "function tool\n echo fish\nend", false),
+        script_entry("bin/other", "echo other", true),
+    ], "warnings": [], "removed": 0})));
+}
+
+/// ATA-45: `\` + quebra de linha junta as linhas (`next` é argumento, não comando) e nada do script é
+/// executado para achar dependência.
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread")]
+async fn export_joins_continued_lines_and_runs_nothing() {
+    let scene = Scene::new();
+    let main = "#!/bin/sh\necho \\\nnext\ntouch ~/executado\n";
+    scene.script(".local/bin/main", main.as_bytes(), 0o700);
+    scene.script(".local/bin/next", b"echo next", 0o700);
+    scene.save(shell("main"));
+    assert_eq!(scene.export("").await, (200, json!({"version": 2, "shortcuts": shell("main"),
+        "scripts": [script_entry(".local/bin/main", main, true)], "warnings": [], "removed": 0})));
+    assert!(!scene.home.join("executado").exists());
+}
+
+/// ATA-46: atribuição e palavra de controle puladas; `exec`/`command`/`env` com flags e atribuições
+/// pulados; `function`/`fi` ignorados; `source` e `.` incluem o arquivo (o `.` corrige o Python, que o
+/// pulava: decisão do usuário); interpretador inclui o 1º argumento, e com flag avisa (`--version` não).
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread")]
+async fn export_reads_each_segment_like_the_python() {
+    let scene = Scene::new();
+    let main = "#!/bin/sh\nFOO=1 dep1\nexec dep2\ncommand dep3\nenv -i X=1 dep4\nfunction f\nend\nsh dep5 arg\npython3 -u x.py\nbash --version\nsource dep6\n. dep7\nif dep8; then\nfi\n";
+    scene.script(".local/bin/main", main.as_bytes(), 0o700);
+    for dep in ["dep1", "dep2", "dep3", "dep4", "dep5", "dep6", "dep7", "dep8"] {
+        scene.script(&format!(".local/bin/{dep}"), b"echo", 0o700);
+    }
+    scene.save(shell("main"));
+    let mut scripts = vec![script_entry(".local/bin/main", main, true)];
+    scripts.extend(["dep1", "dep2", "dep3", "dep4", "dep5", "dep6", "dep7", "dep8"].map(|dep| script_entry(&format!(".local/bin/{dep}"), "echo", true)));
+    assert_eq!(scene.export("").await, (200, json!({"version": 2, "shortcuts": shell("main"), "scripts": scripts,
+        "warnings": ["Comando de interpretador com opções precisa de conferência manual das dependências."], "removed": 0})));
+}
+
+/// ATA-51: `$HOME`, `${HOME}` e `~/` expandidos, também no caminho do aviso; coringa é dinâmico.
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread")]
+async fn export_expands_home_and_warns_on_dynamic_tokens() {
+    let scene = Scene::new();
+    let main = "#!/bin/sh\nsource $HOME/.local/bin/lib1\nsource ${HOME}/.local/bin/lib2\nsource ~/.local/bin/lib3\nsource ~/.local/bin/x*\ncat $HOME/.local/vm.pw\n";
+    scene.script(".local/bin/main", main.as_bytes(), 0o700);
+    for lib in ["lib1", "lib2", "lib3"] {
+        scene.script(&format!(".local/bin/{lib}"), b"echo lib", 0o700);
+    }
+    scene.save(shell("main"));
+    assert_eq!(scene.export("").await, (200, json!({"version": 2, "shortcuts": shell("main"), "scripts": [
+        script_entry(".local/bin/main", main, true),
+        script_entry(".local/bin/lib1", "echo lib", true),
+        script_entry(".local/bin/lib2", "echo lib", true),
+        script_entry(".local/bin/lib3", "echo lib", true),
+    ], "warnings": [
+        format!("{CREDENTIAL} Caminho: ⟦HOME⟧/.local/vm.pw"),
+        "Dependências dinâmicas precisam de conferência manual; nenhum comando foi executado.",
+    ], "removed": 0})));
+}
+
+/// ATA-54: cada arquivo uma vez, mesmo citado duas vezes e com ciclo (`a` → `b` → `a`).
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread")]
+async fn export_visits_each_file_once() {
+    let scene = Scene::new();
+    scene.script(".local/bin/a", b"#!/bin/sh\nsource ~/.local/bin/b\n", 0o700);
+    scene.script(".local/bin/b", b"#!/bin/sh\nsource ~/.local/bin/a\na\n", 0o700);
+    scene.save(shell("a; a"));
+    assert_eq!(scene.export("").await, (200, json!({"version": 2, "shortcuts": shell("a; a"), "scripts": [
+        script_entry(".local/bin/a", "#!/bin/sh\nsource ~/.local/bin/b\n", true),
+        script_entry(".local/bin/b", "#!/bin/sh\nsource ~/.local/bin/a\na\n", true),
+    ], "warnings": [], "removed": 0})));
+}
+
+/// ATA-56: FIFO no PATH não é arquivo regular e fica fora com aviso. Se o export abrir o FIFO
+/// esperando um escritor, um socorro abre o outro lado depois de 5 s e o teste falha em vez de travar.
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread")]
+async fn export_excludes_a_fifo_without_blocking() {
+    use std::os::unix::fs::OpenOptionsExt;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::{Duration, Instant};
+
+    let scene = Scene::new();
+    let fifo = scene.home.join(".local/bin/fifo");
+    std::fs::create_dir_all(fifo.parent().unwrap()).unwrap();
+    assert!(std::process::Command::new("mkfifo").arg("-m").arg("700").arg(&fifo).status().unwrap().success());
+    scene.save(shell("fifo"));
+    let done = Arc::new(AtomicBool::new(false));
+    let rescued = Arc::new(AtomicBool::new(false));
+    let rescuer = {
+        let (done, rescued, fifo) = (done.clone(), rescued.clone(), fifo.clone());
+        std::thread::spawn(move || {
+            let start = Instant::now();
+            while !done.load(Ordering::SeqCst) {
+                // O_NONBLOCK: abrir para escrita só dá certo com um leitor preso do outro lado.
+                if start.elapsed() > Duration::from_secs(5)
+                    && std::fs::OpenOptions::new().write(true).custom_flags(libc::O_NONBLOCK).open(&fifo).is_ok()
+                {
+                    rescued.store(true, Ordering::SeqCst);
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        })
+    };
+    let exported = tokio::time::timeout(Duration::from_secs(60), scene.export("")).await;
+    done.store(true, Ordering::SeqCst);
+    rescuer.join().unwrap();
+    assert!(!rescued.load(Ordering::SeqCst), "o export ficou preso abrindo o FIFO");
+    assert_eq!(exported.expect("export sem resposta em 60 s"), (200, json!({"version": 2, "shortcuts": shell("fifo"), "scripts": [],
+        "warnings": [format!("{EXCLUDED} Caminho: ⟦HOME⟧/.local/bin/fifo")], "removed": 0})));
+}
+
+/// ATA-55: destino com `\` e destino que existe e não é arquivo regular recusam antes de gravar.
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread")]
+async fn import_refuses_backslash_and_non_regular_destinations() {
+    let scene = Scene::new();
+    std::fs::create_dir_all(scene.home.join(".local/bin/dir")).unwrap();
+    for (path, motivo) in [(".local/bin/a\\b", "caminho de script inválido"), (".local/bin/dir", "destino do script não é um arquivo regular")] {
+        let data = json!({"version": 2, "shortcuts": [], "scripts": [{"path": path, "content": "echo", "executable": true}]});
+        for apply in [false, true] {
+            assert_eq!(scene.import(json!({"data": data, "apply": apply})).await, (400, invalid("erro_shortcut_import_invalido", motivo)), "{path}");
+        }
+    }
+    assert!(scene.home.join(".local/bin/dir").is_dir());
+    assert!(!scene.home.join(".local/bin/a\\b").exists());
+    assert!(!scene.config_path().exists());
+}
+
 // ── import (ATA-72, ATA-78) ─────────────────────────────────────────────────────────────────────
 
 /// ATA-78: a lista juntada (salva + importada) é revalidada inteira; atalho inválido que já estava

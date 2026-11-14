@@ -787,4 +787,11 @@ mod tests {
             assert_eq!(Value::Object(migrated(&obj(before.clone()), exe, bin)), after, "{before}");
         }
     }
+
+    /// ROT-80, ROT-82: os prazos do `_get` do Python, 15 s para `releases/latest` e 120 s por asset.
+    #[test]
+    fn github_deadlines_match_the_python() {
+        assert_eq!(RELEASE_TIMEOUT, Duration::from_secs(15));
+        assert_eq!(ASSET_TIMEOUT, Duration::from_secs(120));
+    }
 }
