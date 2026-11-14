@@ -55,7 +55,8 @@ async fn only_the_registered_dreamer_writes_memory_and_only_over_what_it_read() 
     let st = state(home.path());
     dreamer_is(&st, "vps");
     let empty = hangar_dream::memory::digest(&Default::default());
-    let put = |from: &str, digest: &str| json!({"root": "/srv/proj", "files": {"MEMORY.md": "- [a](a.md) — x\n", "a.md": "fato"}, "expect_digest": digest, "from_machine": from});
+    let root = home.path().join("proj").to_string_lossy().into_owned();
+    let put = |from: &str, digest: &str| json!({"root": root,"files": {"MEMORY.md": "- [a](a.md) — x\n", "a.md": "fato"}, "expect_digest": digest, "from_machine": from});
 
     let (status, body) = call(&st, "PUT", "/api/dream/memory", put("notebook", &empty)).await;
     assert_eq!(status, 403, "{body}");
@@ -66,10 +67,11 @@ async fn only_the_registered_dreamer_writes_memory_and_only_over_what_it_read() 
 
     let (status, body) = call(&st, "PUT", "/api/dream/memory", put("vps", &empty)).await;
     assert_eq!(status, 200, "{body}");
-    let dir = hangar_dream::project::memory_dir(&home.path().join(".claude"), std::path::Path::new("/srv/proj"));
+    let dir = hangar_dream::project::memory_dir(&home.path().join(".claude"), std::path::Path::new(&root));
     assert_eq!(std::fs::read_to_string(dir.join("a.md")).unwrap(), "fato");
 
-    let (status, body) = call(&st, "GET", "/api/dream/memory?root=%2Fsrv%2Fproj", Value::Null).await;
+    let query: String = form_urlencoded::byte_serialize(root.as_bytes()).collect();
+    let (status, body) = call(&st, "GET", &format!("/api/dream/memory?root={query}"), Value::Null).await;
     assert_eq!(status, 200);
     assert_eq!(body["files"]["a.md"], "fato");
 }

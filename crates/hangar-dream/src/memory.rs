@@ -238,8 +238,8 @@ mod tests {
     fn live_lock_refuses_stale_or_dead_is_taken() {
         let (_tmp, dir) = setup(&[("MEMORY.md", "x")]);
         let before = read(&dir).unwrap();
-        // PID 1 vive e não é este processo: trava recente recusa.
-        fs::write(dir.join(LOCK), "1").unwrap();
+        // PID 1 (no Windows, o 4 do System) vive e não é este processo: trava recente recusa.
+        fs::write(dir.join(LOCK), if cfg!(windows) { "4" } else { "1" }).unwrap();
         assert!(matches!(write(&dir, &files(&[("MEMORY.md", "y")]), &before.digest), Err(WriteError::Locked)));
         let old = SystemTime::now() - Duration::from_secs(2 * 3600);
         fs::File::options().write(true).open(dir.join(LOCK)).unwrap().set_modified(old).unwrap();
