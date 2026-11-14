@@ -108,6 +108,10 @@ impl Paths {
     pub fn install_error_file(&self) -> PathBuf {
         self.install_dir().join("install-error.json")
     }
+    /// Alvo que não regravou na migração: a próxima passada repete, sem esperar outra release.
+    pub fn migration_pending_file(&self) -> PathBuf {
+        self.install_dir().join("migration-pending")
+    }
     pub fn exe(&self) -> PathBuf {
         self.install_dir().join("windows-agent.exe")
     }

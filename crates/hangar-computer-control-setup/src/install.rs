@@ -91,10 +91,14 @@ pub async fn install_if_missing(paths: &Paths, http: &reqwest::Client, github: &
         return Ok(Swapped::No);
     }
     let present = {
-        let paths = paths.clone();
+        let (paths, diary) = (paths.clone(), diary.map(Path::to_owned));
         off_thread(move || {
             tidy(&paths);
-            required(&paths).iter().all(|path| path.is_file())
+            let present = required(&paths).iter().all(|path| path.is_file());
+            if present && paths.migration_pending_file().exists() {
+                report_skipped(diary.as_deref(), &migrate_targets(&paths));
+            }
+            present
         })
         .await?
     };
@@ -475,6 +479,7 @@ fn migrate_targets(paths: &Paths) -> Vec<String> {
     let exe = paths.exe().to_string_lossy().into_owned();
     let binary = paths.binary().to_string_lossy().into_owned();
     let mut skipped = Vec::new();
+    let mut write_failed = false;
     for name in targets::target_files(paths) {
         let path = paths.targets_dir().join(&name);
         let Some(Value::Object(cfg)) = std::fs::read(&path).ok().and_then(|bytes| files::parse(&bytes)) else {
@@ -488,13 +493,26 @@ fn migrate_targets(paths: &Paths) -> Vec<String> {
             if let Err(error) = hangar_core::fs::atomic_write(&path, text.as_bytes()) {
                 tracing::warn!(alvo = %name, %error, "Computer Use: alvo não regravado");
                 skipped.push(name);
+                write_failed = true;
             }
         } else if pyjson::dumps(cfg.get("command").unwrap_or(&Value::Null), false).contains("linux_agent.py") {
             // Comando que a troca não reconheceu: continua no agente Python.
             skipped.push(name);
         }
     }
+    let pending = paths.migration_pending_file();
+    let marked = if write_failed { hangar_core::fs::atomic_write(&pending, b"") } else { remove_if_present(&pending) };
+    if let Err(error) = marked {
+        tracing::warn!(code = DISK_FAILED, %error, "Computer Use: pendência da migração não gravada");
+    }
     skipped
+}
+
+fn remove_if_present(path: &Path) -> std::io::Result<()> {
+    match std::fs::remove_file(path) {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
+        _ => Ok(()),
+    }
 }
 
 fn migrated(cfg: &Map<String, Value>, exe: &str, binary: &str) -> Map<String, Value> {

@@ -177,7 +177,8 @@ pub(crate) fn register_entry(
     Ok(Some(wrote))
 }
 
-/// Desliga: guarda a entrada ativa (0600, a marca de "desligado à mão") e tira a chave de todo arquivo que a tem.
+/// Desliga: guarda a entrada ativa (0600, a marca de "desligado à mão"), ou grava a marca do registro se não
+/// há entrada ativa, e tira a chave de todo arquivo que a tem.
 pub fn remove_entry(paths: &Paths) -> Result<(), Error> {
     let _locks = lock_all(paths)?;
     let files = read_entries(paths)?;
@@ -189,6 +190,9 @@ pub fn remove_entry(paths: &Paths) -> Result<(), Error> {
         // A guardada é só a cópia da última entrada ativa: não precisa ser lida.
         let parked = paths.parked_file();
         written.note(&parked, update(&parked, true, |_| Ok(Some(active.clone()))))?;
+    } else {
+        // Desligar antes do primeiro registro: a marca sem a entrada é "desligado à mão" e segura o registro sozinho.
+        written.note(&paths.registered_marker(), mark(paths))?;
     }
     let main = paths.main_file();
     for file in files {

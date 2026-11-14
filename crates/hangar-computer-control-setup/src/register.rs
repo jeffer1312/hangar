@@ -188,6 +188,17 @@ mod tests {
         assert_eq!(home.main_entry(), Some(wanted));
     }
 
+    /// P1: alvo SSH cadastrado depois do registro pelo Hyprland não vira o padrão mostrado do MCP ligado.
+    #[test]
+    fn a_target_added_after_hyprland_does_not_become_the_shown_default() {
+        let home = Home::new();
+        assert_eq!(home.run(true).unwrap(), Registered::Written);
+        home.target("vm");
+        assert_eq!(home.run(true).unwrap(), Registered::Unchanged);
+        let state = crate::state(&home.paths, &crate::Facts::default()).unwrap();
+        assert_eq!((state["enabled"].clone(), state["agent_config"].clone()), (json!(true), json!("")));
+    }
+
     /// D4.1: sem o binário do pacote, nada, nem com alvo.
     #[test]
     fn without_the_package_binary_nothing_is_registered() {
@@ -373,6 +384,20 @@ mod tests {
         assert_eq!(home.main_entry().unwrap()["command"], json!(home.binary()));
         assert!(home.paths.registered_marker().is_file());
         assert_eq!(home.run(false).unwrap(), Registered::Unchanged);
+    }
+
+    /// Desligado pela tela antes do primeiro registro fica desligado quando o alvo aparece; o PUT de ligar religa.
+    #[test]
+    fn turned_off_before_the_first_registration_stays_off() {
+        let home = Home::new();
+        crate::remove_entry(&home.paths).unwrap();
+        let target = home.target("a");
+        assert_eq!(home.run(true).unwrap(), Registered::Skipped);
+        assert_eq!(home.main_entry(), None);
+
+        let body: crate::SaveRequest = serde_json::from_value(json!({"enabled": true, "agent_config": target})).unwrap();
+        crate::save(&home.paths, &crate::Facts::default(), &crate::Aux::default(), &body, || Ok(jev())).unwrap();
+        assert_eq!(home.main_entry().unwrap()["command"], json!(home.binary()));
     }
 
     /// Máquina com a entrada ativa de antes da marca: a passada só grava a marca.

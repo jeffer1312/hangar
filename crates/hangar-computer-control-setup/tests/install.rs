@@ -435,10 +435,19 @@ mod linux {
         // Um executável de verdade no lugar do binário: escrever por cima dele daria ETXTBSY.
         std::fs::copy("/bin/sh", s.paths.binary()).unwrap();
         let old = std::fs::read(s.paths.binary()).unwrap();
-        let mut live = std::process::Command::new(s.paths.binary()).args(["-c", "sleep 300; :"]).spawn().unwrap();
+        // `read` é embutido no sh: nenhum filho, e o guard encerra e espera o processo até no unwind.
+        struct Live(std::process::Child);
+        impl Drop for Live {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+        let mut live = Live(std::process::Command::new(s.paths.binary()).args(["-c", "read line"])
+            .stdin(std::process::Stdio::piped()).spawn().unwrap());
         s.publish("v0.7.0", "", true);
         assert_eq!(s.update(&latest_policy()).await.unwrap(), Swapped::Yes { tag: "v0.7.0".into() });
-        assert!(live.try_wait().unwrap().is_none(), "o processo do hcu caiu na troca");
+        assert!(live.0.try_wait().unwrap().is_none(), "o processo do hcu caiu na troca");
         assert_eq!(s.read(&s.paths.binary()).as_deref(), Some("\x7fELF-v0.7.0"));
         assert_eq!(std::fs::read(s.dir().join("hangar-computer-control.anterior")).unwrap(), old);
         assert_eq!(s.read(&s.dir().join("windows-agent.exe.anterior")).as_deref(), Some("MZ-v0.6.0"));
@@ -448,9 +457,7 @@ mod linux {
         let anteriores = std::fs::read_dir(s.dir()).unwrap()
             .filter(|e| e.as_ref().unwrap().file_name().to_string_lossy().ends_with(".anterior")).count();
         assert_eq!(anteriores, 2, "um `.anterior` por arquivo");
-        assert!(live.try_wait().unwrap().is_none());
-        live.kill().unwrap();
-        live.wait().unwrap();
+        assert!(live.0.try_wait().unwrap().is_none());
     }
 
     /// D3.11, P3: a troca grava a novidade do hcu sem tocar a versão do Hangar; corpo só com o
@@ -507,6 +514,30 @@ mod linux {
         assert_eq!(skipped.len(), 1, "{skipped:?}");
         assert_eq!(skipped[0]["alvos"], "d-custom-agent.json, e-quebrado-agent.json");
         assert_eq!(skipped[0]["evento"], "computer_control.migracao");
+    }
+
+    /// Alvo que não regravou na troca fica pendente: a passada seguinte, na mesma versão, o migra.
+    #[tokio::test]
+    async fn rot90_a_target_that_failed_to_write_migrates_on_the_next_pass() {
+        use std::os::unix::fs::PermissionsExt;
+        let s = Scene::new().await;
+        s.installed("v0.6.0");
+        let bin = s.paths.binary().to_string_lossy().into_owned();
+        let python = s.target("a-python", r#"{"transport": "local", "command": ["python3", "/hcu/linux_agent.py"]}"#);
+        let mode = |m| std::fs::set_permissions(s.paths.targets_dir(), std::fs::Permissions::from_mode(m)).unwrap();
+        mode(0o500);
+        s.publish("v0.7.0", "", true);
+        let swapped = s.update(&latest_policy()).await;
+        mode(0o700);
+        assert_eq!(swapped.unwrap(), Swapped::Yes { tag: "v0.7.0".into() });
+        assert!(s.read(&python).unwrap().contains("linux_agent.py"), "a gravação falhou");
+        assert!(s.paths.migration_pending_file().exists());
+
+        assert_eq!(s.install().await.unwrap(), Swapped::No);
+        let parsed: Value = serde_json::from_str(&s.read(&python).unwrap()).unwrap();
+        assert_eq!(parsed["command"], json!([bin, "agent"]));
+        assert!(!s.paths.migration_pending_file().exists());
+        assert_eq!(s.requests().len(), 3, "a repetição não baixa nada");
     }
 }
 

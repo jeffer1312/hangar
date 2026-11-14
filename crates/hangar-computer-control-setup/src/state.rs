@@ -47,7 +47,8 @@ pub fn state(paths: &Paths, facts: &Facts) -> Result<Value, Error> {
         let account = read_entry(path, true)?;
         files.push(json!({"path": account.path.to_string_lossy(), "enabled": account.entry.is_some()}));
     }
-    let default_agent = agents.first().cloned().unwrap_or_else(|| json!(""));
+    // Entrada ativa sem alvo usa o `linux` automático do Hyprland: o primeiro alvo só sugere com o MCP desligado.
+    let default_agent = agents.first().filter(|_| !enabled).cloned().unwrap_or_else(|| json!(""));
     let mut out = json!({
         // O exe sai DAQUI até para o alvo remoto (copiado na 1ª conexão): sem ele, nenhum alvo funciona.
         "agent_exe": {"path": exe.to_string_lossy(), "exists": exe_size.is_some(), "size": exe_size.unwrap_or(0)},
