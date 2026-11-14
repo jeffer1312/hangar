@@ -52,8 +52,9 @@ async fn login_guests_public_gate_denies_owner_routes_before_upstream() {
     task.abort();
 }
 
-/// Achado 3 da revisão da R2: convidado com login em escrita de sessão fora do alcance dele recebe o 403
-/// do Rust e não perde o login; o Python (fora do ar aqui) não é procurado.
+/// Guarda (achado 3 da revisão da R2): convidado com login em escrita de sessão fora do alcance dele
+/// recebe o 403 e não perde o login; o Python (fora do ar aqui) não é procurado. Já valia antes da R2,
+/// pelo porteiro do login (`login_guests/gate.rs` `check` → `deny`), que a remoção não pode perder.
 #[tokio::test]
 async fn login_guest_write_outside_its_reach_is_the_rust_403() {
     use hangar_server::login_guests::{Service, Settings};
