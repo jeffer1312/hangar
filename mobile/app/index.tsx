@@ -76,7 +76,7 @@ export default function Index() {
     onPanResponderRelease: (_event, gesture) => { if (gesture.dy > 40) showSessions(); },
   }), [mode, showSessions]);
 
-  const topButton = (icon: 'Server' | 'Settings' | 'ChartNoAxesCombined', label: string, onPress: () => void) => (
+  const topButton = (icon: 'Server' | 'Settings' | 'ChartNoAxesCombined' | 'GitPullRequest', label: string, onPress: () => void) => (
     <Pressable onPress={onPress} style={styles.icon} accessibilityRole="button" accessibilityLabel={label} hitSlop={4}>
       <Icon name={icon} size={20} color={theme.tokens.text.secondary} />
     </Pressable>
@@ -97,6 +97,7 @@ export default function Index() {
           <View style={styles.spacer} />
           {activeId ? <LiveVoiceChatButton serverId={activeId} /> : null}
           {topButton('ChartNoAxesCombined', m.nav_custos(), () => router.push('/costs' as never))}
+          {topButton('GitPullRequest', m.native_review_title(), () => router.push('/reviews' as never))}
           {topButton('Server', m.maquinas_este_aparelho(), () => setServersOpen(true))}
           {topButton('Settings', m.config_modal_titulo(), () => router.push('/config' as never))}
         </View> : null}

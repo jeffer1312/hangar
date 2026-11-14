@@ -1,4 +1,5 @@
 import { ScheduledTasksAnimation } from './ScheduledTasksAnimation';
+import { ReviewsAnimation } from './reviews-animation';
 import type { ComponentType } from 'react';
 import { AutoReportAnimation } from './AutoReportAnimation';
 import { CodexActivityAnimation } from './CodexActivityAnimation';
@@ -22,6 +23,7 @@ import { WorktreeFreshAnimation } from './WorktreeFreshAnimation';
 
 // Miniaturas feitas dos componentes reais (ex.: src/chat/ComposerField.tsx) entram aqui pelo nome da novidade.
 const animations: Record<string, ComponentType<{ width: number }>> = {
+  'revisoes-mobile': ReviewsAnimation,
   'scheduled-tasks': ScheduledTasksAnimation,
   'adormecer-ocultas': SleepHiddenAnimation,
   'atualizacoes-e-manual': UpdatesManualAnimation,

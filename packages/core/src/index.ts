@@ -1,4 +1,5 @@
 export * from './api';
+export * from './reviews';
 export * from './prewarm';
 export * from './esfriamento';
 export * from './sessions';
