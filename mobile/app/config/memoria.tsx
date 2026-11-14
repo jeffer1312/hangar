@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { RefreshControl } from 'react-native';
 import { Stack, useRouter } from 'expo-router';
-import { dismissDreamSuggestion, dreamErrorText, dreamLastText, dreamMonthText, parseDreamCap, putDreamConfig, startDream, validDreamHour,
+import { dismissDreamSuggestion, dreamErrorText, dreamFactsText, dreamLastText, dreamMonthText, parseDreamCap, putDreamConfig, startDream, validDreamHour,
   type DreamConfigPatch } from '@hangar/core';
 import { Pagina } from '../../src/features/config/Pagina';
 import { InfoNotice } from '../../src/features/config/InfoNotice';
@@ -19,7 +19,7 @@ export default function Memoria() {
   const { config, status, dreamer, servers, configs, busy } = d;
   // Servidores que não gravaram a última escolha de máquina: a escolha vale em todos.
   const [unconfirmed, setUnconfirmed] = useState<string[]>([]);
-  const put = (patch: DreamConfigPatch) => { if (dreamer) void d.act(() => putDreamConfig(dreamer, patch)); };
+  const put = (patch: DreamConfigPatch) => (dreamer ? d.act(() => putDreamConfig(dreamer, patch)) : Promise.resolve(false));
   const chooseMachine = (serverId: string) => {
     const machine = configs[serverId]?.this_machine;
     if (!machine) return;
@@ -34,11 +34,12 @@ export default function Memoria() {
     const value = parseDreamCap(text);
     // Só o teto do mês aceita vazio (sem teto).
     if (value === undefined || (value === null && field === 'project_cap_usd')) { toast.erro(m.dream_invalid_cap()); return false; }
-    put(value !== null && field === 'project_cap_usd' ? { project_cap_usd: value } : { month_cap_usd: value });
-    return true;
+    return put(value !== null && field === 'project_cap_usd' ? { project_cap_usd: value } : { month_cap_usd: value });
   };
+  // Máquina cuja configuração não veio: o motivo, para não parecer que ela só não tem sonho.
+  const unreachable = servers.filter((s) => d.failures[s.id]).map((s) => `${s.label}: ${d.failures[s.id]}`);
 
-  return <Pagina refreshControl={<RefreshControl refreshing={d.loading && !!status} onRefresh={() => void d.reload()} />}>
+  return <Pagina refreshControl={<RefreshControl refreshing={d.refreshing} onRefresh={() => void d.refresh()} />}>
     <Stack.Screen options={{ title: m.dream_title() }} />
     <MachineHelp>{m.dream_lead()}</MachineHelp>
     {d.error ? <><Notice text={d.error} error /><MachineGroup>
@@ -47,17 +48,17 @@ export default function Memoria() {
     {!status && d.loading ? <InfoNotice text={m.comum_carregando()} /> : null}
     {config && status ? <>
       <MachineGroup>
-        <SwitchRow title={m.dream_enabled()} description={m.dream_enabled_hint()} value={config.enabled} disabled={busy} onChange={(enabled) => put({ enabled })} />
+        <SwitchRow title={m.dream_enabled()} description={m.dream_enabled_hint()} value={config.enabled} disabled={busy} onChange={(enabled) => void put({ enabled })} />
         <SwitchRow title={m.dream_user_memory()} description={m.dream_user_memory_hint()} value={config.user_memory} disabled={busy}
-          onChange={(user_memory) => put({ user_memory })} />
+          onChange={(user_memory) => void put({ user_memory })} />
         <PickerRow title={m.dream_machine()} description={m.dream_machine_hint()} disabled={busy}
-          value={config.machine ? d.labelOf(config.machine) : '—'} error={unconfirmed.join('\n') || undefined}
+          value={config.machine ? d.labelOf(config.machine) : '—'} error={[...unconfirmed, ...unreachable].join('\n') || undefined}
           options={servers.map((s) => ({ id: s.id, title: s.label, selected: !!config.machine && configs[s.id]?.this_machine === config.machine, disabled: !configs[s.id] }))}
           onPick={chooseMachine} />
         <FieldRow key={config.api_key} title={m.dream_key()} description={m.dream_key_hint()} value="" placeholder={config.api_key || '—'} secureTextEntry
-          disabled={busy} onCommit={(text) => { if (text.trim()) put({ api_key: text.trim() }); return true; }} />
+          disabled={busy} onCommit={(text) => (text.trim() ? put({ api_key: text.trim() }) : true)} />
         <FieldRow title={m.dream_hour()} value={config.hour} keyboardType="numbers-and-punctuation" disabled={busy}
-          onCommit={(text) => { if (!validDreamHour(text.trim())) { toast.erro(m.dream_invalid_hour()); return false; } put({ hour: text.trim() }); return true; }} />
+          onCommit={(text) => { if (!validDreamHour(text.trim())) { toast.erro(m.dream_invalid_hour()); return false; } return put({ hour: text.trim() }); }} />
         <FieldRow title={m.dream_project_cap()} description={m.dream_project_cap_hint()} value={String(config.project_cap_usd)} keyboardType="decimal-pad"
           disabled={busy} onCommit={(text) => cap(text, 'project_cap_usd')} />
         <FieldRow title={m.dream_month_cap()} description={m.dream_month_cap_hint()} value={config.month_cap_usd === null ? '' : String(config.month_cap_usd)}
@@ -70,7 +71,7 @@ export default function Memoria() {
       </MachineGroup>
       {status.projects.length ? <SectionCard icon="Folder" title={m.dream_projects()}>
         {status.projects.map((p) => <TapRow key={p.id} title={p.name}
-          description={`${p.machines.map(d.labelOf).join(', ')} · ${m.dream_new_sessions({ n: p.new_sessions })}\n${dreamLastText(p.last_dream_at, p.last_cost_usd)}`}
+          description={`${dreamFactsText(p.machines.map(d.labelOf).join(', '), p.new_sessions)}\n${dreamLastText(p.last_dream_at, p.last_cost_usd)}`}
           error={p.last_error ? dreamErrorText(p.last_error) : undefined}
           onPress={() => router.push({ pathname: '/config/memoria-project', params: { id: p.id } } as never)} />)}
       </SectionCard> : <InfoNotice text={m.dream_projects_empty()} />}

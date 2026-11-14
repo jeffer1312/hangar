@@ -8,6 +8,8 @@ import { useSettingsColors } from '../config/colors';
 import * as m from '../../paraglide/messages';
 
 const KIND = { added: m.dream_file_added, removed: m.dream_file_removed, changed: m.dream_file_changed };
+// Uma memória enorme travaria a thread do JS desenhando cada linha.
+const LINES_MAX = 400;
 
 /** Um arquivo da rodada; o toque abre o antes e depois, linha a linha. */
 export const FileChange = memo(function FileChange({ change, before, after }: { change: DreamFileChange; before: string; after: string }) {
@@ -25,9 +27,10 @@ export const FileChange = memo(function FileChange({ change, before, after }: { 
       <Icon name={open ? 'ChevronUp' : 'ChevronDown'} size={15} color={c.faint} />
     </Pressable>
     {open ? <View style={[styles.diff, { backgroundColor: c.inset }]}>
-      {lines.map((line, i) => <Text key={i} selectable style={[styles.line, {
+      {lines.slice(0, LINES_MAX).map((line, i) => <Text key={i} selectable style={[styles.line, {
         color: line.kind === '+' ? theme.tokens.status.success : line.kind === '-' ? theme.tokens.status.error : c.muted,
       }]}>{`${line.kind} ${line.text}`}</Text>)}
+      {lines.length > LINES_MAX ? <Text style={[styles.line, { color: c.faint }]}>…</Text> : null}
     </View> : null}
   </View>;
 });

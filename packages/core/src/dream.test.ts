@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { configureApi, _resetApiEnvForTests } from './apiEnv';
 import * as m from './paraglide/messages';
-import { dismissDreamSuggestion, dreamErrorText, dreamFailure, dreamFileChanges, dreamLineDiff, dreamMonthText, getDreamConfig, getDreamRun, getDreamStatus,
-  parseDreamCap, putDreamConfig, putDreamProject, startDream, undoDreamRun, validDreamHour } from './dream';
+import { dismissDreamSuggestion, dreamErrorText, dreamFactsText, dreamFailure, dreamFileChanges, dreamFirstMatch, dreamLineDiff, dreamMonthText,
+  dreamUndoFailures, getDreamConfig, getDreamRun, getDreamStatus, parseDreamCap, putDreamConfig, putDreamProject, startDream, undoDreamRun,
+  validDreamHour } from './dream';
 
 const server = { id: 'test', label: 'Servidor', baseUrl: 'https://dream.test', token: 'owner' };
 beforeEach(() => {
@@ -83,4 +84,26 @@ it('mostra antes e depois linha a linha, mantendo as iguais', () => {
   ]);
   expect(dreamLineDiff('', 'novo')).toEqual([{ kind: '+', text: 'novo' }]);
   expect(dreamLineDiff('velho', '')).toEqual([{ kind: '-', text: 'velho' }]);
+});
+
+it('deixa de fora a contagem de conversas desconhecida', () => {
+  expect(dreamFactsText('vps', 3)).toBe(`vps · ${m.dream_new_sessions({ n: 3 })}`);
+  expect(dreamFactsText('vps', null)).toBe('vps');
+  expect(dreamFactsText('', 0)).toBe(m.dream_new_sessions({ n: 0 }));
+});
+
+it('diz o motivo de cada lugar que o desfazer não restaurou', () => {
+  const label = (machine: string) => machine.toUpperCase();
+  expect(dreamUndoFailures([
+    { project: 'git:x', machine: 'vps', root: '/a', ok: true, error: null },
+    { project: 'git:x', machine: 'nb', root: '/b', ok: false, error: 'dream_memory_changed: nb' },
+    { project: 'user-memory', machine: 'vps', root: '/c', ok: false, error: null },
+  ], label)).toEqual([`NB: ${m.dream_error_dream_memory_changed({ detail: 'nb' })}`, m.dream_undo_failed({ machine: 'VPS' })]);
+});
+
+it('acha a primeira leitura que casa sem esperar as lentas', async () => {
+  const never = new Promise<number>(() => {});
+  expect(await dreamFirstMatch([never, Promise.reject(new Error('fora')), Promise.resolve(2)], (n) => n === 2)).toBe(2);
+  expect(await dreamFirstMatch([Promise.resolve(1), Promise.reject(new Error('fora'))], (n) => n === 2)).toBeNull();
+  expect(await dreamFirstMatch<number>([], () => true)).toBeNull();
 });

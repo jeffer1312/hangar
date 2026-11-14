@@ -33,8 +33,9 @@ struct Project {
     name: String,
     #[serde(default)]
     machines: Vec<String>,
+    /// `None` = o servidor não conseguiu contar; o fato fica de fora.
     #[serde(default)]
-    new_sessions: u64,
+    new_sessions: Option<u64>,
     enabled: bool,
     mode: String,
     last_dream_at: Option<String>,
@@ -103,6 +104,9 @@ struct UndoResult {
     #[serde(default)]
     machine: String,
     ok: bool,
+    /// Código do servidor quando o lugar não voltou.
+    #[serde(default)]
+    error: Option<String>,
 }
 
 /// Uma máquina da pessoa: o id dela só se sabe pela leitura da configuração dela.
@@ -111,6 +115,8 @@ struct Target {
     active: bool,
     api: Option<Api>,
     config: Option<Config>,
+    /// Por que a configuração dela não veio: sem isso ela pareceria só não ter sonho.
+    error: Option<String>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -170,7 +176,7 @@ impl Hangar {
     fn dream_targets(&self, active_label: String) -> Vec<Target> {
         let own: Vec<&ServerEntry> = self.servers.iter().filter(|s| !s.invite && !s.disabled && !s.ephemeral).collect();
         if own.is_empty() {
-            return vec![Target { label: active_label, active: true, api: self.api.clone(), config: None }];
+            return vec![Target { label: active_label, active: true, api: self.api.clone(), config: None, error: None }];
         }
         own.into_iter()
             .map(|s| {
@@ -180,6 +186,7 @@ impl Hangar {
                     active: self.is_active_key(&key),
                     api: self.machine_api(&key).or_else(|| Api::new(&s.address, &s.token).ok()),
                     config: None,
+                    error: None,
                 }
             })
             .collect()
@@ -264,7 +271,7 @@ impl DreamPage {
         cx.notify();
     }
 
-    /// O id de cada outra máquina, para o seletor; máquina fora do ar só fica de fora dele.
+    /// O id de cada outra máquina, para o seletor; máquina fora do ar fica de fora dele, com o motivo à vista.
     fn load_machines(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let apis: Vec<(usize, Api)> =
             self.targets.iter().enumerate().filter(|(_, t)| !t.active).filter_map(|(n, t)| t.api.clone().map(|api| (n, api))).collect();
@@ -275,19 +282,32 @@ impl DreamPage {
             &self.runtime,
             async move {
                 Ok(futures::future::join_all(apis.into_iter().map(|(n, api)| async move {
-                    (n, parse::<Config>(api.server_read(&["dream", "config"], &[], 10).await).ok())
+                    (n, parse::<Config>(api.server_read(&["dream", "config"], &[], 10).await))
                 }))
                 .await)
             },
             window,
             cx,
-            |this, result: Result<Vec<(usize, Option<Config>)>, Failure>, window, cx| {
-                for (n, config) in result.unwrap_or_default() {
-                    if let Some(target) = this.targets.get_mut(n) {
-                        target.config = config;
+            |this, result: Result<Vec<(usize, Result<Config, Failure>)>, Failure>, window, cx| {
+                match result {
+                    Ok(replies) => {
+                        for (n, reply) in replies {
+                            let Some(target) = this.targets.get_mut(n) else { continue };
+                            (target.config, target.error) = match reply {
+                                Ok(config) => (Some(config), None),
+                                Err(error) => (None, Some(Hangar::fetch_failure(&error))),
+                            };
+                        }
+                    }
+                    Err(error) => {
+                        let text = Hangar::fetch_failure(&error);
+                        for target in this.targets.iter_mut().filter(|t| !t.active && t.api.is_some()) {
+                            target.error = Some(text.clone());
+                        }
                     }
                 }
                 this.load_status(window, cx);
+                cx.notify();
             },
         );
     }
@@ -460,7 +480,7 @@ impl DreamPage {
                 this.busy.remove("machine");
                 for (n, reply) in result.unwrap_or_default() {
                     match reply {
-                        Ok(config) => this.targets[n].config = Some(config),
+                        Ok(config) => (this.targets[n].config, this.targets[n].error) = (Some(config), None),
                         Err(_) => this.unconfirmed.push(this.targets[n].label.clone()),
                     }
                 }
@@ -536,7 +556,11 @@ impl DreamPage {
             }
             for result in failed {
                 let machine = this.machine_label(&result.machine);
-                window.push_notification(Notification::warning(tr_shared("dream_undo_failed", &[("machine", &machine)])), cx);
+                let text = match &result.error {
+                    Some(code) => format!("{machine}: {}", error_text(code)),
+                    None => tr_shared("dream_undo_failed", &[("machine", &machine)]),
+                };
+                window.push_notification(Notification::warning(text), cx);
             }
         }, window, cx);
     }
@@ -687,12 +711,13 @@ impl DreamPage {
 
 // Partes da página que a animação da novidade (`news/memory_dream.rs`) também desenha: quem chama liga o clique.
 
-/// O que se sabe do projeto numa linha: máquinas, conversas novas e o último sonho (quando e quanto custou).
-pub(crate) fn facts(machines: String, new_sessions: u64, last: Option<(String, f64)>) -> String {
+/// O que se sabe do projeto numa linha: máquinas, conversas novas (quando contadas) e o último sonho (quando e quanto custou).
+pub(crate) fn facts(machines: String, new_sessions: impl Into<Option<u64>>, last: Option<(String, f64)>) -> String {
     let last = last
         .map(|(when, cost)| tr_shared("dream_last", &[("when", &when), ("cost", &usd(cost))]))
         .unwrap_or_else(|| t("dream_never"));
-    [machines, tr_shared("dream_new_sessions", &[("n", &new_sessions.to_string())]), last]
+    let sessions = new_sessions.into().map(|n| tr_shared("dream_new_sessions", &[("n", &n.to_string())])).unwrap_or_default();
+    [machines, sessions, last]
         .into_iter()
         .filter(|s| !s.is_empty())
         .collect::<Vec<_>>()
@@ -892,7 +917,10 @@ impl Render for DreamPage {
             .flex_col()
             .gap(px(2.))
             .child(t("dream_machine_hint"))
-            .children(unconfirmed.iter().map(|label| div().text_color(theme::danger()).child(tr_shared("dream_machine_unconfirmed", &[("server", label)]))));
+            .children(unconfirmed.iter().map(|label| div().text_color(theme::danger()).child(tr_shared("dream_machine_unconfirmed", &[("server", label)]))))
+            .children(self.targets.iter().filter_map(|t| {
+                t.error.as_ref().map(|e| div().text_color(theme::danger()).whitespace_normal().child(format!("{}: {e}", t.label)))
+            }));
         let key_spent = match config.month_cap_usd {
             Some(cap) => format!("{}/{}", usd(status.month.key_usd), usd(cap)),
             None => usd(status.month.key_usd),
@@ -1125,7 +1153,14 @@ fn file_changes(place: &Place) -> Vec<(String, &'static str)> {
 #[cfg(test)]
 mod tests {
     // Nomes explícitos: o `super::*` traz um `test` do gpui que encobre o `#[test]` padrão.
-    use super::{cap, error_text, file_changes, tr_shared, valid_hour, Place};
+    use super::{cap, error_text, facts, file_changes, t, tr_shared, valid_hour, Place};
+
+    #[test]
+    fn unknown_session_count_is_left_out() {
+        let counted = tr_shared("dream_new_sessions", &[("n", "3")]);
+        assert_eq!(facts("vps".into(), 3u64, None), format!("vps · {counted} · {}", t("dream_never")));
+        assert_eq!(facts("vps".into(), None::<u64>, None), format!("vps · {}", t("dream_never")));
+    }
 
     #[test]
     fn hour_and_cap_validation() {

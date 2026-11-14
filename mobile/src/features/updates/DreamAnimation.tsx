@@ -34,11 +34,12 @@ export function DreamAnimation({ width }: { width: number }) {
   useEffect(() => { const sub = AppState.addEventListener('change', (state) => setActive(state === 'active')); return () => sub.remove(); }, []);
   useEffect(() => {
     if (!focused || !active) return;
-    const check = () => stage.current?.measureInWindow((_x, y, _w, height) => setVisible(height > 0 && y < window.height && y + height > 0));
+    const check = () => stage.current?.measureInWindow((x, y, w, height) =>
+      setVisible(height > 0 && w > 0 && y < window.height && y + height > 0 && x < window.width && x + w > 0));
     check();
     const timer = setInterval(check, 500);
     return () => clearInterval(timer);
-  }, [focused, active, window.height]);
+  }, [focused, active, window.height, window.width]);
   const still = reduced || !active || !focused || !visible;
   const t = useScriptStep(STEPS, CYCLE, STILL, still);
   const running = t >= RUN && t < DONE;

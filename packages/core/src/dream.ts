@@ -20,7 +20,8 @@ export interface DreamConfig {
 export type DreamConfigPatch = Partial<Omit<DreamConfig, 'this_machine'>>;
 export type DreamMode = 'key' | 'account';
 export interface DreamProject {
-  id: string; name: string; machines: string[]; new_sessions: number; enabled: boolean; mode: DreamMode;
+  /** `new_sessions` `null` = contagem desconhecida; o fato fica de fora. */
+  id: string; name: string; machines: string[]; new_sessions: number | null; enabled: boolean; mode: DreamMode;
   last_dream_at: string | null; last_cost_usd: number; last_run_id: string | null; last_error: string | null; needs_confirm: boolean;
 }
 export interface DreamMonth { month: string; key_usd: number; account_usd: number }
@@ -76,6 +77,21 @@ export function dreamFailure(error: unknown): string {
   return m.dream_error_generic({ detail: e.message || String(error) });
 }
 
+/** Uma linha por lugar que não voltou: o motivo do servidor quando ele manda, senão a frase antiga. */
+export const dreamUndoFailures = (results: DreamUndoResult[], labelOf: (machine: string) => string) =>
+  results.filter((r) => !r.ok).map((r) =>
+    r.error ? `${labelOf(r.machine)}: ${dreamErrorText(r.error)}` : m.dream_undo_failed({ machine: labelOf(r.machine) }));
+
+/** A primeira leitura que casa, sem esperar as lentas; `null` quando todas terminaram sem casar. Falha conta como não casar. */
+export function dreamFirstMatch<T>(reads: Promise<T>[], match: (value: T) => boolean): Promise<T | null> {
+  return new Promise((resolve) => {
+    let left = reads.length;
+    if (!left) resolve(null);
+    const miss = () => { if (--left === 0) resolve(null); };
+    for (const read of reads) read.then((value) => { if (match(value)) resolve(value); else miss(); }, miss);
+  });
+}
+
 export type DreamFileChange = { file: string; kind: 'added' | 'removed' | 'changed' };
 /** Só os arquivos que mudaram, em ordem de nome. */
 export function dreamFileChanges(before: Record<string, string>, after: Record<string, string>): DreamFileChange[] {
@@ -90,6 +106,9 @@ export function dreamFileChanges(before: Record<string, string>, after: Record<s
 }
 
 export const dreamUsd = (value: number) => value.toFixed(2);
+/** Máquinas e conversas novas do projeto; contagem desconhecida não aparece. */
+export const dreamFactsText = (machines: string, newSessions: number | null) =>
+  [machines, newSessions === null ? '' : m.dream_new_sessions({ n: newSessions })].filter(Boolean).join(' · ');
 export const dreamLastText = (at: string | null, cost: number) =>
   at ? m.dream_last({ when: fmtWhen(Date.parse(at) / 1000), cost: dreamUsd(cost) }) : m.dream_never();
 /** Gasto do mês; com teto, a chave mostra `gasto/teto`. */

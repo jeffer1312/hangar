@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { Pressable, Switch, Text, TextInput, View, type TextInputProps } from 'react-native';
 import { MenuView } from '@react-native-menu/menu';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
@@ -17,6 +17,9 @@ function Texts({ title, description, error }: { title: string; description?: str
     {error ? <Text selectable style={[styles.description, { color: theme.tokens.status.error }]}>{error}</Text> : null}
   </View>;
 }
+
+/** O rótulo próprio da linha cala os textos de dentro: a falha precisa ir junto na dica. */
+const hintOf = (description?: string, error?: string) => [description, error].filter(Boolean).join('\n') || undefined;
 
 export function SwitchRow({ title, description, value, disabled, onChange }: {
   title: string; description?: string; value: boolean; disabled?: boolean; onChange: (value: boolean) => void;
@@ -37,7 +40,7 @@ export function PickerRow({ title, value, description, error, options, disabled,
   const c = useSettingsColors();
   return <MenuView title={title} actions={options.map((o) => ({ id: o.id, title: o.title, state: o.selected ? 'on' as const : 'off' as const, attributes: { disabled: !!o.disabled } }))}
     onPressAction={({ nativeEvent }) => { if (!disabled) onPick(nativeEvent.event); }}>
-    <Pressable accessibilityRole="button" accessibilityLabel={title} accessibilityValue={{ text: value }} accessibilityHint={description}
+    <Pressable accessibilityRole="button" accessibilityLabel={title} accessibilityValue={{ text: value }} accessibilityHint={hintOf(description, error)}
       accessibilityState={{ disabled }} disabled={disabled} style={[styles.row, { borderTopColor: c.border, opacity: disabled ? 0.5 : 1 }]}>
       <Texts title={title} description={description} error={error} />
       <Text style={[styles.value, { color: c.muted }]} numberOfLines={1}>{value}</Text>
@@ -46,17 +49,23 @@ export function PickerRow({ title, value, description, error, options, disabled,
   </MenuView>;
 }
 
-/** Campo editado no lugar; grava ao sair do campo, só quando o texto mudou. `false` = recusado, volta o valor. */
+/**
+ * Campo editado no lugar; grava ao sair do campo, só quando o texto mudou. Terminada a gravação, aceita ou não,
+ * o campo volta a mostrar o valor do servidor (`onCommit` só responde depois de reler).
+ */
 export function FieldRow({ title, description, value, onCommit, disabled, ...input }: Omit<TextInputProps, 'value' | 'onChangeText'> & {
-  title: string; description?: string; value: string; disabled?: boolean; onCommit: (text: string) => boolean;
+  title: string; description?: string; value: string; disabled?: boolean; onCommit: (text: string) => boolean | Promise<boolean>;
 }) {
   const c = useSettingsColors();
-  const [draft, setDraft] = useState(value);
-  useEffect(() => setDraft(value), [value]);
-  const commit = () => { if (draft !== value && !onCommit(draft)) setDraft(value); };
+  // `null` = mostra o valor do servidor; texto = o que a pessoa digitou e ainda não foi resolvido.
+  const [draft, setDraft] = useState<string | null>(null);
+  const commit = async () => {
+    if (draft !== null && draft !== value) await onCommit(draft);
+    setDraft(null);
+  };
   return <View style={[styles.row, { borderTopColor: c.border }]}>
     <Texts title={title} description={description} />
-    <TextInput {...input} value={draft} onChangeText={setDraft} onEndEditing={commit} editable={!disabled}
+    <TextInput {...input} value={draft ?? value} onChangeText={setDraft} onEndEditing={() => void commit()} editable={!disabled}
       autoCapitalize="none" autoCorrect={false} returnKeyType="done" accessibilityLabel={title} accessibilityHint={description}
       placeholderTextColor={c.faint} style={[styles.input, { color: c.text }]} />
   </View>;
@@ -67,7 +76,7 @@ export function TapRow({ title, value, description, error, onPress, disabled, ch
 }) {
   const c = useSettingsColors();
   return <Pressable accessibilityRole="button" accessibilityLabel={title} accessibilityValue={value ? { text: value } : undefined}
-    accessibilityHint={description} accessibilityState={{ disabled }} disabled={disabled} onPress={onPress}
+    accessibilityHint={hintOf(description, error)} accessibilityState={{ disabled }} disabled={disabled} onPress={onPress}
     style={({ pressed }) => [styles.row, { borderTopColor: c.border, opacity: disabled ? 0.5 : 1 }, pressed && { backgroundColor: c.hover }]}>
     <Texts title={title} description={description} error={error} />
     {children}
