@@ -691,17 +691,22 @@ rodar_passos() {   # $1 = sha, resto = passos; cwd = árvore preparada
         LIMPO=(env PATH="$py:$PATH" "${CARGO_ENV[@]}" CARGO_INCREMENTAL=0)
     fi
 
-    local p ini dur log falhou=0 resumo=()
+    local p ini dur log roteiro falhou=0 resumo=()
     for p in "$@"; do
         log="$LOGS/${sha:0:10}-$SO-$p.log"
         echo ">> $SO: $p…" >&3
         ini=$SECONDS
+        # Por arquivo: as funções mais a lista de arquivos de um diff grande passam do limite de um
+        # argumento só (128 KB no Linux), e o `bash -c` nem começava.
+        roteiro="${log%.log}.roteiro"
+        { declare -f; declare -p RUNTIME_TESTS PROCESSOS PLANO ARQUIVOS HANGAR_VERIFICAR_BASE MEM_CHECK_GB MEM_BUILD_GB MEMORY_WAIT; echo "passo_$p"; } > "$roteiro"
         # setsid no Linux: o passo vira grupo próprio e o vigia mata a árvore inteira.
-        "${LIMPO[@]}" SO="$SO" $SETSID bash -c "$(declare -f); $(declare -p RUNTIME_TESTS PROCESSOS PLANO ARQUIVOS HANGAR_VERIFICAR_BASE MEM_CHECK_GB MEM_BUILD_GB MEMORY_WAIT); passo_$p" >"$log" 2>&1 &
+        "${LIMPO[@]}" SO="$SO" $SETSID bash "$roteiro" >"$log" 2>&1 &
         local spid=$! vigia rc
         vigiar_disco "$spid" "$log" &
         vigia=$!
         wait "$spid"; rc=$?
+        rm -f "$roteiro"
         kill "$vigia" 2>/dev/null; wait "$vigia" 2>/dev/null
         if (( rc == 0 )); then
             dur=$((SECONDS - ini)); resumo+=("ok      $p ${dur}s")
