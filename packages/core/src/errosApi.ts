@@ -326,6 +326,9 @@ const ERROS: Record<string, (params: Parametros) => string> = {
     : m.erro_lista_indisponivel({ detalhe: String(p.detalhe) }),
   erro_mux_indisponivel: (p) => p.detalhe == null ? m.erro_mux_indisponivel_sem_detalhe()
     : m.erro_mux_indisponivel({ detalhe: String(p.detalhe) }),
+  erro_espelho_indisponivel: (p) => m.erro_espelho_indisponivel({ detalhe: String(p.detalhe ?? '') }),
+  codex_sidecar_invalid: () => m.codex_sidecar_invalid(),
+  claude_sidecar_invalid: () => m.claude_sidecar_invalid(),
   erro_workflow_inexistente: () => m.erro_workflow_inexistente(),
   erro_agente_inexistente: () => m.erro_agente_inexistente(),
   erro_subagente_inexistente: () => m.erro_subagente_inexistente(),

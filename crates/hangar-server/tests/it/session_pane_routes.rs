@@ -112,7 +112,8 @@ async fn pane_r3_08_a_failed_capture_is_an_error_with_a_code() {
     rig.pane("p1", "bash --norc --noprofile");
     rig.flag("fail-capture", true);
     let (status, reply) = get(&rig, "p1/pane").await;
-    assert_eq!((status, reply["detail"]["code"].as_str()), (503, Some("capture_refused")), "{reply}");
+    assert_eq!((status, reply["detail"]["code"].as_str(), reply["detail"]["params"]["detalhe"].as_str()),
+        (503, Some("erro_espelho_indisponivel"), Some("capture_refused")), "{reply}");
     assert_eq!(rig.python.hits_to("/api/sessions/p1/pane"), 0);
 }
 
@@ -124,7 +125,8 @@ async fn pane_r3_09_a_silent_multiplexer_is_503_not_404() {
     mute(&rig, true);
     let (status, reply) = get(&rig, "p1/pane").await;
     mute(&rig, false);
-    assert_eq!((status, reply["detail"]["code"].as_str()), (503, Some("capture_mux_no_answer")), "{reply}");
+    assert_eq!((status, reply["detail"]["code"].as_str(), reply["detail"]["params"]["detalhe"].as_str()),
+        (503, Some("erro_espelho_indisponivel"), Some("capture_mux_no_answer")), "{reply}");
     assert_eq!(rig.python.hits_to("/api/sessions/p1/pane"), 0);
 }
 

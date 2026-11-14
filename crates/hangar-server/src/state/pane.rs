@@ -55,7 +55,8 @@ fn failed(st: &AppState, name: &str, code: &str) -> (StatusCode, Value) {
         tracing::warn!(session = name, code, "espelho: o pane da sessão não pôde ser lido");
         st.diag.report("rust.pane_failed", name, code, "o pane da sessão não pôde ser lido para o espelho");
     }
-    (StatusCode::SERVICE_UNAVAILABLE, detail_body(code, "não consegui ler o terminal da sessão; tente de novo", json!({})))
+    (StatusCode::SERVICE_UNAVAILABLE, detail_body("erro_espelho_indisponivel",
+        &format!("não consegui ler o terminal da sessão ({code}); tente de novo"), json!({"detalhe": code})))
 }
 
 /// Linhas de histórico que pedir mais traria: 0 na tela alternada (o Claude), onde subir é do próprio TUI.
