@@ -7,7 +7,7 @@ use chrono::{DateTime, Duration, Utc};
 
 use crate::state::{Mode, Month};
 
-/// Média medida no vídeo de referência: US$ 3,60 por ~1,3 M tokens de transcrição.
+/// Estimativa por milhão de tokens de transcrição; a medição está em docs/decisoes/plataforma.md.
 pub const USD_PER_MTOK_ESTIMATE: f64 = 2.70;
 pub const CHARS_PER_TOKEN: f64 = 3.5;
 pub const FIRST_DREAM_DAYS: i64 = 14;

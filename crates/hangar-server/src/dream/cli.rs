@@ -1,5 +1,5 @@
 //! O modelo do sonho pelo `claude -p`: só ferramentas de arquivo, presas à pasta de trabalho, sem
-//! nada da conta (CLAUDE.md, hooks, MCP) no contexto. Flags e respostas medidas no Claude Code 2.1.323.
+//! nada da conta (CLAUDE.md, hooks, MCP) no contexto.
 
 use std::sync::LazyLock;
 use std::time::Duration;

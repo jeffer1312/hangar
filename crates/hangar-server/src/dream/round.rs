@@ -1,7 +1,7 @@
 //! Uma rodada completa: inventário de todas as máquinas, um sonho por projeto (do mais recente ao
 //! teto), gravação conferida em cada pasta de memória e a passada do usuário no fim.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -314,6 +314,9 @@ async fn dream_one(ctx: &Ctx<'_>, state: &mut State, pid: &str, ps: &ProjectStat
 
     // Memória de cada lugar onde o projeto existe.
     let mut snapshots: Vec<(PlaceChange, String)> = Vec::new();
+    // Lugar sem leitura entra no registro como falha: sem isto os cursores andariam e aquela
+    // máquina nunca receberia o que foi lido.
+    let mut unread: Vec<PlaceChange> = Vec::new();
     for (machine, root) in &places {
         if machine == ctx.me {
             for dir in inventory::memory_dirs(&st.accounts.env.claude_base, ctx.account_dirs, Path::new(root)) {
@@ -323,7 +326,10 @@ async fn dream_one(ctx: &Ctx<'_>, state: &mut State, pid: &str, ps: &ProjectStat
         } else {
             match peers::memory_get(st, machine, root).await {
                 Ok(snap) => snapshots.push((place(machine, root, None, snap.files), snap.digest)),
-                Err(e) => st.diag.record_line(json!({"evento": "dream.peer_unreachable", "nivel": "aviso", "maquina": machine, "codigo": super::code_of(&e)})),
+                Err(e) => {
+                    st.diag.record_line(json!({"evento": "dream.peer_unreachable", "nivel": "aviso", "maquina": machine, "codigo": super::code_of(&e)}));
+                    unread.push(unread_place(machine, root));
+                }
             }
         }
     }
@@ -387,6 +393,7 @@ async fn dream_one(ctx: &Ctx<'_>, state: &mut State, pid: &str, ps: &ProjectStat
         change.error = result.err();
         changes.push(change);
     }
+    changes.extend(unread);
     let cost = spent.key_usd + spent.account_usd;
     let cursors_before = picked.iter().map(|i| (pieces[*i].cursor_key.clone(), state.cursors.get(&pieces[*i].cursor_key).copied())).collect();
     let record = RunRecord {
@@ -441,15 +448,25 @@ fn place(machine: &str, root: &str, dir: Option<&Path>, files: BTreeMap<String, 
     }
 }
 
+pub(super) fn unread_place(machine: &str, root: &str) -> PlaceChange {
+    PlaceChange { error: Some("dream_peer_failed".into()), ..place(machine, root, None, BTreeMap::new()) }
+}
+
 pub(crate) fn record_dir(paths: &Paths, run_id: &str) -> PathBuf {
     paths.runs().join(run_id)
 }
 
-fn save_record(paths: &Paths, record: &RunRecord) -> Result<(), String> {
+pub(super) fn save_record(paths: &Paths, record: &RunRecord) -> Result<(), String> {
     let dir = record_dir(paths, &record.run_id);
     std::fs::create_dir_all(&dir).map_err(|e| format!("dream_io: {e}"))?;
     let bytes = serde_json::to_vec(record).map_err(|e| format!("dream_io: {e}"))?;
-    hangar_core::fs::atomic_write(&dir.join(format!("{}.json", sanitize(&record.project))), &bytes).map_err(|e| format!("dream_io: {e}"))
+    hangar_core::fs::atomic_write(&dir.join(record_file(&record.project)), &bytes).map_err(|e| format!("dream_io: {e}"))
+}
+
+/// `git:a/b-c` e `git:a/b/c` dão o mesmo nome limpo: o hash do id separa os dois registros.
+fn record_file(project: &str) -> String {
+    let hash = sha1_smol::Sha1::from(project).digest().to_string();
+    format!("{}-{}.json", sanitize(project), &hash[..12])
 }
 
 pub(crate) fn load_records(paths: &Paths, run_id: &str) -> Result<Vec<RunRecord>, String> {
@@ -488,12 +505,38 @@ pub(crate) fn read_or_empty(path: &Path) -> Result<String, String> {
     }
 }
 
+/// Grava o arquivo global; texto vazio apaga. Com `expect`, só grava se o atual ainda for ele.
+pub(crate) fn write_user_memory(target: &Path, content: &str, expect: Option<&str>) -> Result<(), String> {
+    if let Some(expect) = expect {
+        if read_or_empty(target)? != expect {
+            return Err("dream_memory_changed".into());
+        }
+    }
+    let written = if content.is_empty() {
+        std::fs::remove_file(target).or_else(|e| if e.kind() == std::io::ErrorKind::NotFound { Ok(()) } else { Err(e) })
+    } else {
+        target.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|()| hangar_core::fs::atomic_write(target, content.as_bytes()))
+    };
+    written.map_err(|_| "dream_io".into())
+}
+
 /// Notas `user`/`feedback` de todos os projetos desta máquina viram o arquivo global.
 async fn user_pass(ctx: &Ctx<'_>, state: &mut State) -> Result<(), String> {
     let st = ctx.st;
     let base = st.accounts.env.claude_base.clone();
     let scan = base.clone();
-    let notes = tokio::task::spawn_blocking(move || user_notes(&scan.join("projects"))).await.map_err(|e| e.to_string())?;
+    // Projeto desligado na tela não manda nota para o arquivo global.
+    let read: &State = state;
+    let disabled: HashSet<String> = read
+        .roots
+        .iter()
+        .filter_map(|(key, entry)| {
+            let machine = key.split_once('/')?.0;
+            let off = machine == ctx.me && read.projects.get(&project_key(read, &entry.project, machine)).is_some_and(|p| !p.enabled);
+            off.then(|| sanitize(&entry.root))
+        })
+        .collect();
+    let notes = tokio::task::spawn_blocking(move || user_notes(&scan.join("projects"), &disabled)).await.map_err(|e| e.to_string())?;
     if notes.is_empty() {
         return Ok(());
     }
@@ -524,17 +567,15 @@ async fn user_pass(ctx: &Ctx<'_>, state: &mut State) -> Result<(), String> {
         month.account_usd += spent.account_usd;
     }
     let outcome = outcome.map_err(|e| e.to_string())?;
-    if let Some(dir) = target.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| format!("dream_io: {e}"))?;
-    }
     // A versão de antes fica no registro da rodada, como a memória dos projetos.
     let record = record_dir(ctx.paths, ctx.run_id);
     std::fs::create_dir_all(&record).map_err(|e| format!("dream_io: {e}"))?;
     hangar_core::fs::atomic_write(&record.join(USER_BEFORE), current.as_bytes()).map_err(|e| format!("dream_io: {e}"))?;
     hangar_core::fs::atomic_write(&record.join(USER_AFTER), outcome.content.as_bytes()).map_err(|e| format!("dream_io: {e}"))?;
-    hangar_core::fs::atomic_write(&target, outcome.content.as_bytes()).map_err(|e| format!("dream_io: {e}"))?;
+    write_user_memory(&target, &outcome.content, None)?;
+    // Sem conferência: esta máquina é a única que escreve o arquivo global.
     for peer in st.peers.enabled_ids() {
-        if let Err(e) = peers::user_put(st, &peer, &outcome.content, ctx.me).await {
+        if let Err(e) = peers::user_put(st, &peer, &outcome.content, None, ctx.me).await {
             st.diag.record_line(json!({"evento": "dream.peer_unreachable", "nivel": "aviso", "maquina": peer, "codigo": super::code_of(&e)}));
         }
     }
@@ -543,10 +584,13 @@ async fn user_pass(ctx: &Ctx<'_>, state: &mut State) -> Result<(), String> {
 }
 
 /// `(pasta do projeto, conteúdo)` das notas cujo cabeçalho diz `type: user` ou `type: feedback`.
-fn user_notes(projects: &Path) -> Vec<(String, String)> {
+fn user_notes(projects: &Path, skip: &HashSet<String>) -> Vec<(String, String)> {
     let mut out = Vec::new();
     let Ok(entries) = std::fs::read_dir(projects) else { return out };
     for project in entries.flatten() {
+        if skip.contains(project.file_name().to_string_lossy().as_ref()) {
+            continue;
+        }
         let Ok(notes) = std::fs::read_dir(project.path().join("memory")) else { continue };
         for note in notes.flatten() {
             let name = note.file_name().to_string_lossy().into_owned();

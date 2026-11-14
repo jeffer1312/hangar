@@ -219,13 +219,14 @@ pub async fn dream_project(job: &Job<'_>, payer: &Payer<'_>, model: &dyn Model) 
         if !crate::memory::valid_name(name) {
             return Err(DreamError::Rejected(format!("nome inválido na base: {name}")));
         }
-        fs::write(mem.join(name), content)?;
+        // Nota gravada à mão pode trazer credencial: nada sai para o modelo sem o limpador.
+        fs::write(mem.join(name), (job.scrub)(content))?;
     }
     for input in job.inputs {
         if !valid_input_name(&input.name) {
             return Err(DreamError::Rejected(format!("nome inválido na entrada: {}", input.name)));
         }
-        fs::write(inputs.join(&input.name), &input.text)?;
+        fs::write(inputs.join(&input.name), (job.scrub)(&input.text))?;
     }
     let cap = job.cap_usd;
     // Montadas antes e em caixa: um `map` que devolve bloco async deixa o futuro sem `Send` provável
@@ -312,9 +313,9 @@ pub async fn dream_user(job: &UserJob<'_>, payer: &Payer<'_>, model: &dyn Model)
     let inputs = job.workdir.join("inputs");
     fs::create_dir_all(&inputs)?;
     for (n, (project, content)) in job.notes.iter().enumerate() {
-        fs::write(inputs.join(format!("notes-{n}.md")), format!("PROJECT {project}\n\n{content}"))?;
+        fs::write(inputs.join(format!("notes-{n}.md")), format!("PROJECT {project}\n\n{}", (job.scrub)(content)))?;
     }
-    fs::write(inputs.join("CLAUDE.md"), job.claude_md)?;
+    fs::write(inputs.join("CLAUDE.md"), (job.scrub)(job.claude_md))?;
     fs::write(job.workdir.join(USER_MEMORY_FILE), job.current)?;
     let cap = job.cap_usd;
     payer.call(model, ORGANIZER_MODEL, USER_MEMORY, job.workdir, |spent| organizer_call_cap(cap, spent)).await?;
@@ -484,6 +485,42 @@ mod tests {
         let job = Job { workdir: tmp.path(), base: &base, inputs: &inputs, cap_usd: 15.0, scrub: &redact };
         let out = dream_project(&job, &payer, &model).await.unwrap();
         assert_eq!(out.files["deploy.md"], "token [chave]abc");
+    }
+
+    #[tokio::test]
+    async fn secrets_in_the_base_and_inputs_never_reach_the_model() {
+        let tmp = tempfile::tempdir().unwrap();
+        let model = fake(|call, _| {
+            for dir in ["memory", "inputs"] {
+                for entry in fs::read_dir(call.workdir.join(dir)).unwrap() {
+                    let text = fs::read_to_string(entry.unwrap().path()).unwrap();
+                    assert!(!text.contains("sk-ant-"), "{text}");
+                }
+            }
+            agents(call);
+            ok(0.1)
+        });
+        let none = || None;
+        let payer = Payer::new(Auth::Key, &none);
+        let mut base = base();
+        base.insert("deploy.md".into(), "token sk-ant-base".into());
+        let inputs = vec![Input { name: "s1.txt".into(), text: "USER:\nsk-ant-conversa".into() }];
+        let job = Job { workdir: tmp.path(), base: &base, inputs: &inputs, cap_usd: 15.0, scrub: &redact };
+        dream_project(&job, &payer, &model).await.unwrap();
+
+        let tmp = tempfile::tempdir().unwrap();
+        let model = fake(|call, _| {
+            for entry in fs::read_dir(call.workdir.join("inputs")).unwrap() {
+                let text = fs::read_to_string(entry.unwrap().path()).unwrap();
+                assert!(!text.contains("sk-ant-"), "{text}");
+            }
+            fs::write(call.workdir.join(USER_MEMORY_FILE), "- x\n").unwrap();
+            ok(0.1)
+        });
+        let payer = Payer::new(Auth::Key, &none);
+        let notes = vec![("git:a/b/c".to_string(), "chave sk-ant-nota".to_string())];
+        let job = UserJob { workdir: tmp.path(), notes: &notes, claude_md: "sk-ant-global", current: "", cap_usd: 5.0, scrub: &redact };
+        dream_user(&job, &payer, &model).await.unwrap();
     }
 
     #[tokio::test]

@@ -107,21 +107,108 @@ fn undo_of_the_user_file_tells_no_pass_from_unreadable_record() {
     // Registro que existe mas não se lê é falha, não "nada a desfazer".
     std::fs::create_dir_all(record.join(USER_BEFORE)).unwrap();
     std::fs::write(record.join(USER_AFTER), "depois").unwrap();
-    assert_eq!(undo_user_local(&record, &target), Err("dream_io"));
+    assert_eq!(undo_user_local(&record, &target), Err("dream_io".into()));
     std::fs::remove_dir(record.join(USER_BEFORE)).unwrap();
 
     std::fs::write(record.join(USER_BEFORE), "antes").unwrap();
     std::fs::write(&target, "mexido depois").unwrap();
-    assert_eq!(undo_user_local(&record, &target), Err("dream_memory_changed"));
+    assert_eq!(undo_user_local(&record, &target), Err("dream_memory_changed".into()));
 
     std::fs::write(&target, "depois").unwrap();
-    assert_eq!(undo_user_local(&record, &target), Ok(Some("antes".into())));
+    assert_eq!(undo_user_local(&record, &target), Ok(Some(("antes".into(), "depois".into()))));
     assert_eq!(std::fs::read_to_string(&target).unwrap(), "antes");
 
     // O arquivo atual ilegível não vira vazio.
     std::fs::remove_file(&target).unwrap();
     std::fs::create_dir(&target).unwrap();
-    assert_eq!(undo_user_local(&record, &target), Err("dream_io"));
+    assert_eq!(undo_user_local(&record, &target), Err("dream_io".into()));
+}
+
+#[test]
+fn user_file_write_checks_what_it_expects_and_empty_removes() {
+    use super::round::write_user_memory;
+    let tmp = tempfile::tempdir().unwrap();
+    let target = tmp.path().join("rules").join("memoria.md");
+
+    // Ausente conta como vazio; a pasta nasce junto.
+    assert_eq!(write_user_memory(&target, "nova", Some("")), Ok(()));
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), "nova");
+
+    assert_eq!(write_user_memory(&target, "outra", Some("velha")), Err("dream_memory_changed".into()));
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), "nova");
+
+    assert_eq!(write_user_memory(&target, "", Some("nova")), Ok(()));
+    assert!(!target.exists());
+    assert_eq!(write_user_memory(&target, "", None), Ok(()));
+}
+
+#[tokio::test]
+async fn peer_refuses_the_user_file_undo_when_it_changed() {
+    let _t = TESTS.lock().await;
+    let home = tempfile::tempdir().unwrap();
+    let st = state(home.path());
+    dreamer_is(&st, "vps");
+    let target = home.path().join(".claude").join(super::round::USER_MEMORY_PATH);
+    std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+    std::fs::write(&target, "mexido aqui").unwrap();
+
+    let (status, body) = call(&st, "PUT", "/api/dream/user-memory", json!({"content": "antes", "expect": "depois", "from_machine": "vps"})).await;
+    assert_eq!(status, 409, "{body}");
+    assert_eq!(body["detail"]["code"], "dream_memory_changed", "{body}");
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), "mexido aqui");
+
+    let (status, body) = call(&st, "PUT", "/api/dream/user-memory", json!({"content": "", "expect": "mexido aqui", "from_machine": "vps"})).await;
+    assert_eq!(status, 200, "{body}");
+    assert!(!target.exists());
+}
+
+#[tokio::test]
+async fn state_writes_wait_for_the_round() {
+    let _t = TESTS.lock().await;
+    let home = tempfile::tempdir().unwrap();
+    let st = state(home.path());
+    *super::RUNNING.lock().unwrap() = Some("20261114-010000-abcd".into());
+    let (status, body) = call(&st, "PUT", "/api/dream/project?id=git%3Aa%2Fb", json!({"enabled": false})).await;
+    *super::RUNNING.lock().unwrap() = None;
+    assert_eq!(status, 409, "{body}");
+    assert_eq!(body["detail"]["code"], "dream_running", "{body}");
+    assert!(!super::Paths::of(&st).state().exists());
+}
+
+#[test]
+fn records_of_projects_with_the_same_clean_name_do_not_overwrite_each_other() {
+    use super::round::{load_records, save_record, RunRecord};
+    let tmp = tempfile::tempdir().unwrap();
+    let paths = super::Paths { dir: tmp.path().to_path_buf() };
+    let run_id = "20261114-010000-abcd";
+    for project in ["git:a/b-c", "git:a/b/c"] {
+        let record = RunRecord {
+            run_id: run_id.into(),
+            project: project.into(),
+            at: chrono::Utc::now(),
+            cost_usd: 0.0,
+            places: Vec::new(),
+            cursors_before: Default::default(),
+            last_dream_before: None,
+        };
+        save_record(&paths, &record).unwrap();
+    }
+    let mut projects: Vec<String> = load_records(&paths, run_id).unwrap().into_iter().map(|r| r.project).collect();
+    projects.sort();
+    assert_eq!(projects, ["git:a/b-c", "git:a/b/c"]);
+}
+
+#[tokio::test]
+async fn turning_the_dream_on_waits_for_the_next_hour() {
+    let _t = TESTS.lock().await;
+    let home = tempfile::tempdir().unwrap();
+    let st = state(home.path());
+    let Some(zone) = iana_time_zone::get_timezone().ok().and_then(|z| z.parse::<chrono_tz::Tz>().ok()) else { return };
+    // O horário de um minuto atrás: contar de ontem sonharia agora.
+    let hour = (chrono::Utc::now() - chrono::Duration::minutes(1)).with_timezone(&zone).format("%H:%M").to_string();
+    DreamConfig { enabled: true, hour, machine: super::this_machine(&st), ..DreamConfig::default() }.save(&super::Paths::of(&st).config()).unwrap();
+    let wait = super::next_wait(&st).expect("esta máquina sonha");
+    assert!(wait > std::time::Duration::from_secs(22 * 3600), "{wait:?}");
 }
 
 #[test]
@@ -141,6 +228,8 @@ fn a_place_left_unwritten_holds_the_cursors_and_names_code_and_machines() {
         place_failure(&[place("notebook", None), place("vps", Some("dream_locked")), place("vps", Some("dream_io")), place("pc", Some("dream_peer_failed"))]),
         Some("dream_locked: pc, vps".into())
     );
+    // Peer sem leitura da memória segura os cursores como um que não gravou.
+    assert_eq!(place_failure(&[place("notebook", None), super::round::unread_place("pc", "/srv/proj")]), Some("dream_peer_failed: pc".into()));
 }
 
 #[tokio::test]

@@ -111,7 +111,8 @@ fn next_wait(st: &AppState) -> Option<std::time::Duration> {
         return None;
     };
     let schedule = hangar_scheduled_tasks::Schedule::Weekly { time: config.hour.clone(), weekdays: (0..7).collect() };
-    let last = load_state(st).ok().and_then(|s| s.last_round_at).unwrap_or_else(|| Utc::now() - chrono::Duration::days(1));
+    // Sem rodada anterior conta de agora: ligar o sonho espera o próximo horário, não sonha na hora.
+    let last = load_state(st).ok().and_then(|s| s.last_round_at).unwrap_or_else(Utc::now);
     let next = hangar_scheduled_tasks::next_run(&schedule, last, &zone).ok()??;
     Some((next - Utc::now()).to_std().unwrap_or_default())
 }

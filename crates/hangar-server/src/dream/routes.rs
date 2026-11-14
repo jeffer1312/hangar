@@ -3,8 +3,8 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{Arc, LazyLock, Mutex};
+use std::time::{Duration, Instant};
 
 use axum::extract::Request;
 use axum::http::{Method, StatusCode};
@@ -112,6 +112,11 @@ fn failure(message: &str) -> Response {
         _ => 500,
     };
     error(status, code, message)
+}
+
+/// A rodada grava o `state.json` ao fim de cada projeto: gravar por cima dela perderia uma das duas.
+fn round_running() -> Option<Response> {
+    RUNNING.lock().unwrap_or_else(|e| e.into_inner()).is_some().then(|| failure("dream_running: uma rodada está em andamento"))
 }
 
 async fn body<T: for<'de> Deserialize<'de>>(req: Request) -> Result<T, Response> {
@@ -304,6 +309,9 @@ struct ProjectPatch {
 }
 
 async fn put_project(st: &Arc<AppState>, query: &HashMap<String, String>, req: Request) -> Response {
+    if let Some(busy) = round_running() {
+        return busy;
+    }
     let Some(id) = query.get("id").cloned() else { return error(422, "erro_corpo_invalido", "falta o id") };
     let patch: ProjectPatch = match body(req).await {
         Ok(p) => p,
@@ -340,6 +348,9 @@ struct Dismiss {
 }
 
 async fn dismiss(st: &Arc<AppState>, req: Request) -> Response {
+    if let Some(busy) = round_running() {
+        return busy;
+    }
     let d: Dismiss = match body(req).await {
         Ok(d) => d,
         Err(r) => return r,
@@ -367,6 +378,9 @@ fn run_detail(st: &AppState, run_id: &str) -> Response {
 /// Grava a memória de antes onde a rodada gravou, só se a pasta ainda for a que a rodada deixou.
 /// Com `project`, só aquele projeto volta: a rodada da noite cobre vários.
 async fn undo(st: &Arc<AppState>, run_id: &str, project: Option<&str>) -> Response {
+    if let Some(busy) = round_running() {
+        return busy;
+    }
     let records = match round::load_records(&Paths::of(st), run_id) {
         Ok(r) => r,
         Err(e) => return failure(&e),
@@ -436,14 +450,14 @@ async fn undo_user_memory(st: &Arc<AppState>, run_id: &str, me: &str) -> Vec<Val
     };
     let record = round::record_dir(&Paths::of(st), run_id);
     let target = st.accounts.env.claude_base.join(USER_MEMORY_PATH);
-    let before = match undo_user_local(&record, &target) {
+    let (before, after) = match undo_user_local(&record, &target) {
         Ok(None) => return Vec::new(),
-        Ok(Some(before)) => before,
-        Err(code) => return vec![result(me, Err(code.into()))],
+        Ok(Some(texts)) => texts,
+        Err(code) => return vec![result(me, Err(code))],
     };
     let mut results = vec![result(me, Ok(()))];
     for peer in st.peers.enabled_ids() {
-        let outcome = peers::user_put(st, &peer, &before, me).await.map_err(|e| super::code_of(&e));
+        let outcome = peers::user_put(st, &peer, &before, Some(&after), me).await.map_err(|e| super::code_of(&e));
         if let Err(code) = &outcome {
             st.diag.record_line(json!({"evento": "dream.undo_peer_failed", "nivel": "aviso", "maquina": peer, "codigo": code}));
         }
@@ -453,23 +467,16 @@ async fn undo_user_memory(st: &Arc<AppState>, run_id: &str, me: &str) -> Vec<Val
 }
 
 /// Parte local do Desfazer do arquivo global: `Ok(None)` = a rodada não teve a passada do usuário;
-/// `Ok(Some(antes))` = voltou aqui e o texto de antes segue para os peers.
-pub(super) fn undo_user_local(record: &Path, target: &Path) -> Result<Option<String>, &'static str> {
+/// `Ok(Some((antes, depois)))` = voltou aqui; os peers recebem o de antes só se ainda tiverem o de depois.
+pub(super) fn undo_user_local(record: &Path, target: &Path) -> Result<Option<(String, String)>, String> {
     let read = |name: &str| match std::fs::read_to_string(record.join(name)) {
         Ok(text) => Ok(Some(text)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(_) => Err("dream_io"),
+        Err(_) => Err("dream_io".to_string()),
     };
     let (Some(before), Some(after)) = (read(round::USER_BEFORE)?, read(round::USER_AFTER)?) else { return Ok(None) };
-    if round::read_or_empty(target).map_err(|_| "dream_io")? != after {
-        return Err("dream_memory_changed");
-    }
-    let written = if before.is_empty() {
-        std::fs::remove_file(target).or_else(|e| if e.kind() == std::io::ErrorKind::NotFound { Ok(()) } else { Err(e) })
-    } else {
-        hangar_core::fs::atomic_write(target, before.as_bytes())
-    };
-    written.map(|()| Some(before)).map_err(|_| "dream_io")
+    round::write_user_memory(target, &before, Some(&after))?;
+    Ok(Some((before, after)))
 }
 
 /// Peer: só a máquina registrada aqui como a que sonha grava memória nesta.
@@ -497,6 +504,29 @@ async fn serve_inventory(st: &Arc<AppState>, query: &HashMap<String, String>) ->
     }
 }
 
+/// `(caminho, from, to)` → partes já renderizadas e o fim: a máquina que sonha pede uma parte por
+/// chamada e cada chamada relia a sessão inteira.
+type PartsKey = (String, usize, Option<usize>);
+static PARTS: LazyLock<Mutex<HashMap<PartsKey, (Instant, Vec<String>, usize)>>> = LazyLock::new(Default::default);
+const PARTS_TTL: Duration = Duration::from_secs(10 * 60);
+const PARTS_KEPT: usize = 8;
+
+/// `(total de partes, a parte pedida, fim)` se a sessão já foi renderizada há pouco.
+fn cached_part(key: &PartsKey, part: usize) -> Option<(usize, Option<String>, usize)> {
+    let mut cache = PARTS.lock().unwrap_or_else(|e| e.into_inner());
+    cache.retain(|_, (at, ..)| at.elapsed() < PARTS_TTL);
+    cache.get(key).map(|(_, parts, end)| (parts.len(), parts.get(part).cloned(), *end))
+}
+
+fn keep_parts(key: PartsKey, parts: Vec<String>, end: usize) {
+    let mut cache = PARTS.lock().unwrap_or_else(|e| e.into_inner());
+    while cache.len() >= PARTS_KEPT && !cache.contains_key(&key) {
+        let Some(oldest) = cache.iter().min_by_key(|(_, (at, ..))| *at).map(|(k, _)| k.clone()) else { break };
+        cache.remove(&oldest);
+    }
+    cache.insert(key, (Instant::now(), parts, end));
+}
+
 /// Uma parte do texto novo de uma sessão; só serve arquivo que está no índice.
 async fn serve_transcript(st: &Arc<AppState>, query: &HashMap<String, String>) -> Response {
     let (Some(path), Some(from), Some(part)) = (
@@ -507,8 +537,14 @@ async fn serve_transcript(st: &Arc<AppState>, query: &HashMap<String, String>) -
         return error(422, "erro_corpo_invalido", "path, from e part obrigatórios");
     };
     let until = query.get("to").and_then(|v| v.parse::<usize>().ok());
+    if let Some(to) = until {
+        if let Some((total, text, end)) = cached_part(&(path.clone(), from, Some(to)), part) {
+            return ok(json!({"parts": total, "text": text, "end_event": end}));
+        }
+    }
     let index = st.search.path().to_owned();
     let machine = this_machine(st);
+    let key_path = path.clone();
     let result = tokio::task::spawn_blocking(move || -> Result<Option<(Vec<String>, usize)>, String> {
         let conn = rusqlite::Connection::open_with_flags(&index, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(|e| format!("dream_index_unavailable: {e}"))?;
         let provider: Option<String> = conn.query_row("SELECT provider FROM files WHERE path=?1", [&path], |r| r.get(0)).ok();
@@ -520,7 +556,12 @@ async fn serve_transcript(st: &Arc<AppState>, query: &HashMap<String, String>) -
     })
     .await;
     match result {
-        Ok(Ok(Some((parts, end)))) => ok(json!({"parts": parts.len(), "text": parts.get(part), "end_event": end})),
+        Ok(Ok(Some((parts, end)))) => {
+            let response = ok(json!({"parts": parts.len(), "text": parts.get(part), "end_event": end}));
+            // As partes seguintes chegam com `to` = este fim: a sessão é renderizada uma vez só.
+            keep_parts((key_path, from, Some(until.unwrap_or(end))), parts, end);
+            response
+        }
         Ok(Ok(None)) => error(404, "dream_unknown_transcript", "transcrição fora do índice"),
         Ok(Err(e)) => failure(&e),
         Err(e) => failure(&format!("dream_io: {e}")),
@@ -570,6 +611,9 @@ async fn receive_memory(st: &Arc<AppState>, req: Request) -> Response {
 #[derive(Deserialize)]
 struct UserMemoryPut {
     content: String,
+    /// O Desfazer manda o texto que a rodada gravou: o arquivo mexido depois não volta.
+    #[serde(default)]
+    expect: Option<String>,
     from_machine: String,
 }
 
@@ -585,14 +629,8 @@ async fn receive_user_memory(st: &Arc<AppState>, req: Request) -> Response {
         return error(422, "erro_corpo_invalido", "arquivo grande demais");
     }
     let target = st.accounts.env.claude_base.join(USER_MEMORY_PATH);
-    let write = || -> std::io::Result<()> {
-        if let Some(dir) = target.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
-        hangar_core::fs::atomic_write(&target, put.content.as_bytes())
-    };
-    match write() {
+    match round::write_user_memory(&target, &put.content, put.expect.as_deref()) {
         Ok(()) => ok(json!({"ok": true})),
-        Err(e) => failure(&format!("dream_io: {e}")),
+        Err(code) => failure(&code),
     }
 }

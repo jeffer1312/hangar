@@ -60,7 +60,8 @@ pub async fn memory_put(st: &AppState, machine: &str, root: &str, files: &BTreeM
     st.peers.call(machine, Method::PUT, "/api/dream/memory", Some(&body)).await.map(|_| ()).map_err(|e| failed(machine, e))
 }
 
-pub async fn user_put(st: &AppState, machine: &str, content: &str, from: &str) -> Result<(), String> {
-    let body = json!({"content": content, "from_machine": from});
+/// `expect`: o peer só grava se o arquivo de lá ainda for este (`dream_memory_changed`, senão).
+pub async fn user_put(st: &AppState, machine: &str, content: &str, expect: Option<&str>, from: &str) -> Result<(), String> {
+    let body = json!({"content": content, "expect": expect, "from_machine": from});
     st.peers.call(machine, Method::PUT, "/api/dream/user-memory", Some(&body)).await.map(|_| ()).map_err(|e| failed(machine, e))
 }
