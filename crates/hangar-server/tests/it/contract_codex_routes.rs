@@ -122,19 +122,21 @@ async fn call(server: std::net::SocketAddr, case: &Value, token: &str) -> (u16, 
     (status, serde_json::from_str(&text).unwrap_or(Value::String(text)))
 }
 
+/// Nome sem sessão Codex do Rust: o Rust responde com o código da rota Python (`expect` do golden quando
+/// ele existe), e nada vai ao Python.
 async fn check_unowned_route(server: std::net::SocketAddr, python: &Fake, case: &Value) {
     let (status, body) = call(server, case, OWNER).await;
     let path = format!("/api/sessions/s/{}", case["route"].as_str().unwrap());
-    assert_eq!(status, 200, "{}", case["name"]);
     if case["route"] == "commands" {
+        assert_eq!(status, 200, "{}", case["name"]);
         let commands = body.as_array().expect("catálogo Claude no Rust");
         assert!(commands.iter().any(|command| command["name"] == "reload-plugins"));
-        assert_eq!(python.hits_to(&path), 0, "o catálogo Claude não volta ao Python");
+    } else if case["expect"].is_null() {
+        assert_eq!((status, body), (400, json!({"detail": {"code": "erro_model_so_codex", "params": {}, "msg": "model so existe pra sessoes Codex"}})), "{}", case["name"]);
     } else {
-        assert_eq!(body, Value::String("from-python".into()), "{}", case["name"]);
-        assert_eq!(python.last_hit().0, path);
-        if case["method"] == "POST" { assert_eq!(python.last_body(), case["body"].to_string().as_bytes()); }
+        assert_eq!((status, &body), (case["expect"]["status"].as_u64().unwrap() as u16, &case["expect"]["body"]), "{}", case["name"]);
     }
+    assert_eq!(python.hits_to(&path), 0, "{}: nunca ao Python", case["name"]);
 }
 
 /// ID que a pergunta assíncrona da sessão recebe ao ser exibida (o `<shown>` do golden).
@@ -194,7 +196,7 @@ async fn skip_route_accepts_and_forwards_the_displayed_interaction_id() {
 }
 
 #[tokio::test]
-async fn unowned_controls_relay_but_claude_commands_stay_in_rust() {
+async fn unowned_controls_answer_in_rust_with_the_python_codes() {
     let dir = tempfile::tempdir().unwrap();
     let registry = Arc::new(registry(dir.path()));
     let (python, server) = serve(registry, dir.path()).await;
@@ -204,20 +206,27 @@ async fn unowned_controls_relay_but_claude_commands_stay_in_rust() {
 }
 
 #[tokio::test]
-async fn guest_reaches_python_and_bodies_the_route_refuses_are_a_rust_422() {
+async fn stranger_gets_the_rust_401_and_bodies_the_route_refuses_are_a_rust_422() {
     let dir = tempfile::tempdir().unwrap();
     let registry = Arc::new(registry(dir.path()));
     let case = golden().into_iter().find(|c| c["name"] == "model_ok").unwrap();
     open(&registry, dir.path(), &case).await;
     let (python, server) = serve(registry, dir.path()).await;
-    assert_eq!(call(server, &case, "token-errado").await.1, Value::String("from-python".into()), "convidado segue ao Python");
+    // Achado 3 da revisão: o Python não tem mais a rota; a recusa de quem não pode é do Rust.
+    assert_eq!(call(server, &case, "token-errado").await, (401, json!({"detail": {"code": "erro_nao_autorizado", "params": {}, "msg": "unauthorized"}})));
+    for (method, route) in [("GET", "models"), ("GET", "limits"), ("GET", "commands"), ("POST", "codex/plan/implement")] {
+        let probe = json!({"name": route, "method": method, "route": route, "body": {}});
+        assert_eq!(call(server, &probe, "token-errado").await.0, 401, "{route}");
+    }
     let tier = json!({"service_tier": "turbo"});
     for (route, body) in [("model", json!({"model": "gpt-5", "x": 1})), ("model", json!({"model": 5})), ("model", json!({"effort": "low"})), ("service-tier", tier)] {
         let refused = json!({"name": "corpo", "method": "POST", "route": route, "body": body});
         let (status, reply) = call(server, &refused, OWNER).await;
         assert_eq!((status, reply["detail"]["code"].as_str()), (422, Some("erro_corpo_invalido")), "{body}");
     }
-    assert_eq!(python.hits_to("/api/sessions/s/model") + python.hits_to("/api/sessions/s/service-tier"), 1, "só o convidado foi ao Python");
+    for route in ["model", "service-tier", "models", "limits", "commands", "codex/plan/implement"] {
+        assert_eq!(python.hits_to(&format!("/api/sessions/s/{route}")), 0, "{route}: nada ao Python");
+    }
 }
 
 /// Falhas do ator que o cano falso não produz: a função de resposta com o erro do caso dá o mesmo corpo.
@@ -250,8 +259,8 @@ async fn limits_never_errors_nor_waits_with_the_gate_closed() {
 }
 
 #[tokio::test]
-async fn terminal_controls_relay_but_claude_commands_bypass_the_write_gate() {
-    // A entrada Claude exercita o desvio dos controles Codex; seu catálogo é uma leitura do Rust.
+async fn codex_controls_on_a_claude_terminal_and_its_commands_skip_the_write_gate() {
+    // A entrada Claude exercita a recusa dos controles Codex; seu catálogo é uma leitura do Rust.
     let dir = tempfile::tempdir().unwrap();
     let registry = Arc::new(registry(dir.path()));
     let binding = TerminalBinding { name: "s".into(), pane: "%1".into(), conversation: "sid".into(), generation: 1, created: 1,
@@ -263,7 +272,7 @@ async fn terminal_controls_relay_but_claude_commands_bypass_the_write_gate() {
         transcript, created: 0.0, plugin_key: None,
         metadata: hangar_server::terminal_facts::TerminalMetadata { config_dir:dir.path().into(),agent_pid:std::process::id(),agent_birth:hangar_server::terminal_facts::agent_birth(std::process::id()).unwrap(),legacy_import_after:None,fingerprint:"fixture".into(),origin:"uds:fixture".into() } }).await.unwrap();
     assert!(registry.writable("s").await.unwrap().terminal);
-    // A porta fechada prova que o desvio vem antes dela: o Python responde sem esperar.
+    // A porta fechada prova que a recusa vem antes dela: responde sem esperar.
     registry.ingress().close("s", Duration::from_secs(1)).await.unwrap();
     let (python, server) = serve(registry, dir.path()).await;
     for case in golden().iter().filter(|c| c["relay"] == "terminal") {
@@ -335,4 +344,61 @@ async fn permissions_of_a_dead_headless_codex_answer_from_the_session_file_not_5
     // Outra rota da mesma sessão doente continua 503 com o código.
     let models = client().get(format!("http://{server}/api/sessions/s/models")).header("authorization", format!("Bearer {OWNER}")).send().await.unwrap();
     assert_eq!(models.status().as_u16(), 503);
+}
+
+/// Pedido cru a uma rota de `s`: método, rota e corpo, com o token do dono.
+async fn raw(server: std::net::SocketAddr, method: &str, route: &str, body: Value) -> (u16, Value) {
+    call(server, &json!({"name": route, "method": method, "route": route, "body": body}), OWNER).await
+}
+
+fn refusal(code: &str, msg: &str) -> Value { json!({"detail": {"code": code, "params": {}, "msg": msg}}) }
+
+// R2-07, R2-08, R2-09, R2-11, R2-12, R2-14, R2-15, R2-16 (`api.py:2542-2745`): nome sem sessão Codex do Rust.
+// Corpo fora do modelo é o 422 do Rust (decisão 11); o resto, o status e o código da rota Python. O
+// `service-tier` (B3) responde o 400 que o Python tinha e não alcançava; `codex/terminate` nunca existiu nele.
+#[tokio::test]
+async fn codex_routes_on_a_name_without_codex_answer_like_the_python_routes() {
+    let dir = tempfile::tempdir().unwrap();
+    let (python, server) = serve(Arc::new(registry(dir.path())), dir.path()).await;
+    let invalid = |(status, body): (u16, Value)| (status, body["detail"]["code"].clone());
+    for (route, body) in [("model", json!({"model": 5})), ("service-tier", json!({"service_tier": "turbo"})), ("codex/mode", json!({"mode": "bypassPermissions"})),
+        ("question/skip", json!({"interaction_id": "i"})), ("codex-permissions", json!({}))] {
+        assert_eq!(invalid(raw(server, "POST", route, body.clone()).await), (422, json!("erro_corpo_invalido")), "{route} {body}");
+    }
+    assert_eq!(raw(server, "POST", "model", json!({"model": "gpt-5", "effort": null})).await, (400, refusal("erro_model_so_codex", "model so existe pra sessoes Codex")));
+    assert_eq!(raw(server, "POST", "service-tier", json!({"service_tier": "priority"})).await,
+        (400, refusal("erro_fast_indisponivel", "Fast exige Codex ou Claude com GPT no CLIProxyAPI local")));
+    assert_eq!(raw(server, "POST", "codex/mode", json!({"mode": "plan"})).await, (400, refusal("erro_model_so_codex", "model só existe para sessões Codex")));
+    assert_eq!(raw(server, "POST", "question/skip", json!({"request_id": "r1", "interaction_id": null})).await,
+        (409, refusal("erro_codex_resposta_invalida", "A pergunta mudou ou não aceita essas respostas. Confira as opções e tente novamente.")));
+    assert_eq!(raw(server, "POST", "codex/terminate", json!({"process_id": "p1"})).await, (404, json!({"detail": "Not Found"})));
+    let permission = refusal("erro_permissao_so_codex", "este modo de permissao so vale para sessoes Codex");
+    assert_eq!(raw(server, "GET", "codex-permissions", Value::Null).await, (400, permission.clone()));
+    assert_eq!(raw(server, "POST", "codex-permissions", json!({"mode": "Full Access"})).await, (400, permission));
+    assert_eq!(raw(server, "POST", "codex/plan/implement", Value::Null).await,
+        (404, refusal("erro_sessao_opcao_nao_enviada", "sessão não encontrada — plano NÃO iniciado")));
+    for route in ["model", "service-tier", "codex/mode", "question/skip", "codex/terminate", "codex-permissions", "codex/plan/implement"] {
+        assert_eq!(python.hits_to(&format!("/api/sessions/s/{route}")), 0, "{route}");
+    }
+}
+
+// R2-13, R2-17 (`adapter.py:917-932`): arquivo de sessão Codex que o Rust não adota. As rotas que o Python
+// respondia com `erro_codex_controle` ficam; `/limits` é a resposta neutra; as que digitavam no pane
+// (`codex-permissions`, `plan/implement`) passam a recusar com o mesmo código (decisão 6).
+#[tokio::test]
+async fn codex_routes_on_a_sidecar_rust_does_not_adopt_never_type_and_answer_with_a_code() {
+    let dir = tempfile::tempdir().unwrap();
+    let sidecars = dir.path().join(".hangar/codex-sessions");
+    std::fs::create_dir_all(&sidecars).unwrap();
+    std::fs::write(sidecars.join("s.json"), "{}").unwrap();
+    let (python, server) = serve(Arc::new(registry(dir.path())), dir.path()).await;
+    let control = (409, refusal("erro_codex_controle", "O Codex não aceitou a alteração; atualize a sessão e tente novamente."));
+    for (method, route, body) in [("GET", "models", Value::Null), ("POST", "model", json!({"model": "gpt-5"})), ("POST", "service-tier", json!({"service_tier": "priority"})),
+        ("POST", "codex/mode", json!({"mode": "plan"})), ("GET", "commands", Value::Null), ("GET", "codex-permissions", Value::Null),
+        ("POST", "codex-permissions", json!({"mode": "Full Access"})), ("POST", "codex/plan/implement", Value::Null)] {
+        assert_eq!(raw(server, method, route, body).await, control, "{method} {route}");
+        assert_eq!(python.hits_to(&format!("/api/sessions/s/{route}")), 0, "{route}");
+    }
+    assert_eq!(raw(server, "GET", "limits", Value::Null).await, (200, json!({"primary": null, "secondary": null, "planType": null})));
+    assert_eq!(python.hits_to("/api/sessions/s/limits"), 0);
 }

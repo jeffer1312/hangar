@@ -2,7 +2,7 @@ import json
 import time
 from pathlib import Path
 from app import askquestion
-from app.askquestion import read_pending_askq, clear_pending_askq, pergunta_aberta
+from app.askquestion import clear_pending_askq, pergunta_aberta
 
 
 _Q = [{"header": "Cor", "question": "Escolha", "multiSelect": True,
@@ -31,28 +31,6 @@ def _layout(tmp_path: Path, questions=_Q, sid="sess-123",
                 "transcript_path": str(jsonl),
             }), encoding="utf-8")
     return str(jsonl), sc
-
-
-def test_read_pending_askq_returns_payload(tmp_path):
-    jsonl, _ = _layout(tmp_path)
-    out = read_pending_askq(jsonl)
-    assert out is not None
-    assert out.questions[0].header == "Cor"
-    assert out.questions[0].options[0].label == "A"
-    assert out.questions[0].multiSelect is True
-
-
-def test_read_pending_askq_none_when_no_sidecar(tmp_path):
-    jsonl, _ = _layout(tmp_path, write_sidecar=False)
-    assert read_pending_askq(jsonl) is None
-
-
-def test_read_pending_askq_none_on_garbage(tmp_path):
-    jsonl, sc = _layout(tmp_path, sidecar_text="{not valid json")
-    assert read_pending_askq(jsonl) is None
-    # JSON valido porem sem tool_input -> tambem None
-    sc.write_text(json.dumps({"session_id": "x", "tool_name": "AskUserQuestion"}), encoding="utf-8")
-    assert read_pending_askq(jsonl) is None
 
 
 def test_clear_pending_askq_removes_sidecar(tmp_path):

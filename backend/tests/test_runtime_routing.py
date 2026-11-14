@@ -862,19 +862,6 @@ def test_codex_close_falls_back_to_python_kill_when_rust_had_no_process(codex_bi
     assert killed == ["cx"], "sem a sessão aberta no Rust, o processo não fica vivo sem dono"
 
 
-def test_codex_sandbox_switch_of_a_stopped_session_goes_to_rust(codex_birth, monkeypatch):
-    # Cano gravado mas morto e a sessão fora do Rust: a troca não pode virar 503 de cliente Python.
-    codex_birth.codex_sessions.update("cx", cano={"pid":999_999_999, "escuta":"unix:/tmp/morto.sock", "token":"t", "ts":1.0})
-    owner, transport = _lifecycle_owner(codex_birth, monkeypatch)
-    async def scenario():
-        owner.loop = asyncio.get_running_loop()
-        return await api.trocar_permissao_do_codex("cx", api.CodexPermissionBody(mode="Ask for approval"))
-    result = asyncio.run(scenario())
-    controls = [(command["control"], command["payload"]) for command in transport.commands if command["kind"] == "control"]
-    assert controls == [("set_permission_mode", {"mode": "Ask for approval"})]
-    assert result == {"current": "Ask for approval"}
-
-
 def test_codex_switch_to_terminal_has_no_python_hand_over(codex_birth, monkeypatch):
     # Relançar é do Rust: sem passagem, nenhum cliente Python religa no cano, e a sessão volta ao Rust.
     owner, transport = _lifecycle_owner(codex_birth, monkeypatch)
@@ -893,24 +880,6 @@ def test_codex_switch_to_terminal_has_no_python_hand_over(codex_birth, monkeypat
     assert not hasattr(owner, "python_client_released")
     assert "cx" not in codex_birth.codex._sessions, "nenhum cliente Python fica no cano do Rust"
     assert owner.slot("cx").phase == runtime_coordinator.Phase.Rust
-
-
-@pytest.mark.parametrize("code,status,api_code", [
-    ("erro_permissao_ocupada", 409, "erro_permissao_ocupada"),
-    ("erro_modo_desconhecido", 400, "erro_permissao_picker"),
-])
-def test_codex_permission_refusal_from_rust_keeps_the_python_codes(codex_birth, monkeypatch, code, status, api_code):
-    from fastapi import HTTPException
-    message = "a sessão está trabalhando; mudar o sandbox reiniciaria o Codex — espere ela terminar"
-    owner, transport = _lifecycle_owner(codex_birth, monkeypatch, control_error=(code, message))
-    async def scenario():
-        owner.loop = asyncio.get_running_loop()
-        await owner.ensure_open("cx")
-        await api.trocar_permissao_do_codex("cx", api.CodexPermissionBody(mode="Ask for approval"))
-    with pytest.raises(HTTPException) as caught:
-        asyncio.run(scenario())
-    assert caught.value.status_code == status
-    assert caught.value.detail["code"] == api_code and caught.value.detail["msg"] == message
 
 
 def test_python_never_drains_a_terminal_claude_queue_the_rust_owns(monkeypatch):

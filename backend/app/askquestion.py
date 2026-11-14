@@ -23,24 +23,6 @@ def _sidecar_path(jsonl: str) -> Path:
     return p.parents[2] / ".hangar-askq" / (p.stem + ".json")
 
 
-def read_pending_askq(jsonl: str) -> AskQuestion | None:
-    """Le o sidecar gravado pelo hook PreToolUse (askq_capture.py) e devolve o AskQuestion pendente,
-    ou None. O sidecar fica em <config_dir>/.hangar-askq/<session_id>.json; ambos derivam do
-    path do jsonl do transcript: <config_dir>/projects/<sanitized_cwd>/<session_id>.jsonl."""
-    try:
-        data = json.loads(_sidecar_path(jsonl).read_text(encoding="utf-8"))
-        return AskQuestion.model_validate({"questions": data["tool_input"]["questions"]})
-    except FileNotFoundError:
-        # Caminho NORMAL: nao ha pergunta pendente. Acontece em quase todo poll -> nunca loga.
-        return None
-    except Exception:
-        # O arquivo EXISTE mas nao da pra ler: contrato do hook quebrado (askq_capture.py velho, ou
-        # o Claude Code mudou o shape do tool_input). Sem este log isso ficava indistinguivel do
-        # caso normal acima e o stepper simplesmente nunca mais abriria, calado.
-        _log.warning("sidecar do askq malformado jsonl=%s", jsonl, exc_info=True)
-        return None
-
-
 def _quando(obj: dict) -> float:
     """Epoch do `timestamp` ISO da entrada, ou 0.0 se ilegivel."""
     from datetime import datetime

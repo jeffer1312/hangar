@@ -2,8 +2,8 @@
 //! `/commands`, `/codex-permissions`) da sessão Codex do Rust, com o corpo e o código da rota
 //! Python no modo `python` (`api.py`). Com terminal valem as mesmas rotas quando a tabela entrega o
 //! modo ao Rust; lá `/codex-permissions` dirige o seletor da TUI (`permission_control::codex`). O que
-//! não é sessão Codex do Rust segue ao Python antes da porta: a lista de comandos do Claude não pode
-//! esperar uma troca de agente.
+//! não é sessão Codex do Rust é recusado antes da porta (`not_codex`): a lista de comandos do Claude
+//! não pode esperar uma troca de agente.
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -18,7 +18,7 @@ use super::input::{MSG_CODEX_CONTROL, MSG_CONTROL_UNCONFIRMED, answer, codex_con
 use super::{Ctx, Owner, Provider, WriteRoute, admit, decide, detail_body, enter_then_find, invalid_body, json_response, session_name};
 use crate::mods::state::random_hex;
 use crate::permission_control::PermissionAction;
-use crate::routes::{AppState, cors, gate, pass, who};
+use crate::routes::{AppState, cors, who};
 use crate::runtime::gateway::EntryHandle;
 use crate::runtime::protocol::{Disposition, OperationKind, RuntimeCommand, RuntimeError, RuntimeReply};
 
@@ -300,30 +300,81 @@ fn codex_owned(provider: &str, terminal: bool) -> bool {
     provider == "codex" && decide(WriteRoute::CodexControl, Provider::Codex, terminal) == Owner::Rust
 }
 
-/// Só a sessão Codex do Rust passa pela porta; o resto vai ao Python como chegou.
+/// Só a sessão Codex do Rust passa pela porta; o que não é Codex recebe a recusa da rota (`not_codex`).
 async fn admit_codex(st: &Arc<AppState>, peer: SocketAddr, req: Request) -> Result<(Ctx, Bytes), Response> {
     admit_codex_as(st, peer, req, WriteRoute::CodexControl).await
 }
 
+/// Dono e convidado com acesso à sessão passam pelo mesmo caminho; quem não pode recebe a recusa do Rust.
 async fn admit_codex_as(st: &Arc<AppState>, peer: SocketAddr, req: Request, route: WriteRoute) -> Result<(Ctx, Bytes), Response> {
-    let (fwd, owner) = match gate(st, peer, &req).await { Ok(value) => value, Err(e) => return Err(crate::auth::unavailable(e)) };
-    // Só o dono abre ou adota: o convidado segue ao Python, que o autentica.
-    if !owner { return Err(pass(st, req, &fwd).await); }
-    let name = session_name(req.uri().path());
-    match ours(st, name.as_deref(), req.method() == axum::http::Method::GET).await {
+    let (_, who) = match who(st, peer, &req).await { Ok(value) => value, Err(e) => return Err(crate::auth::unavailable(e)) };
+    let Some(name) = session_name(req.uri().path()).filter(|n| who.as_ref().is_some_and(|c| c.can(n, req.method()))) else {
+        return Err(super::stranger(st, peer, req, who.as_ref()).await);
+    };
+    if st.state.runtime.get().is_none() { return Err(super::no_runtime(req.headers())); }
+    match ours(st, Some(&name), req.method() == axum::http::Method::GET).await {
         Ok(true) => admit(st, peer, req, route).await,
-        Ok(false) => Err(pass(st, req, &fwd).await),
+        Ok(false) => Err(not_codex(st, &name, req).await),
         Err(error) => {
-            let asleep = match name.as_deref() {
-                Some(name) if error.code == ASLEEP_READ => asleep_answer(st, name, req.uri().path(), route).await,
-                _ => None,
-            };
+            let asleep = if error.code == ASLEEP_READ { asleep_answer(st, &name, req.uri().path(), route).await } else { None };
             let (status, body) = asleep.unwrap_or_else(|| (super::failed_status(&error), detail_body(&error.code, &error.message, json!({}))));
             let mut response = json_response(status, body);
             cors(req.headers(), response.headers_mut());
             Err(response)
         }
     }
+}
+
+/// As rotas do Codex numa sessão que não é Codex do Rust, com o status e o código da rota Python; nada é
+/// escrito em pane nenhum. Arquivo de sessão Codex sem dono no Rust (que o `adopt_now` não adota) é
+/// `erro_codex_controle`, e o `/limits` dele a resposta neutra. `/codex/terminate` nunca existiu no Python.
+async fn not_codex(st: &Arc<AppState>, name: &str, req: Request) -> Response {
+    let (parts, body) = req.into_parts();
+    let headers = &parts.headers;
+    let route = parts.uri.path().strip_prefix("/api/sessions/").and_then(|tail| tail.split_once('/')).map_or("", |(_, route)| route).to_owned();
+    let reply = |(status, body): Answer| {
+        let mut response = json_response(status, body);
+        cors(headers, response.headers_mut());
+        response
+    };
+    if route == "codex/terminate" { return reply((StatusCode::NOT_FOUND, json!({"detail": "Not Found"}))); }
+    let Ok(bytes) = axum::body::to_bytes(body, super::BODY_LIMIT).await else { return super::too_large(headers) };
+    let post = parts.method == axum::http::Method::POST;
+    let fields = || object(&bytes, headers);
+    let shaped = match route.as_str() {
+        "model" => fields().and_then(|f| strings(&f, "model", Some("effort"))).is_some(),
+        "service-tier" => fields().and_then(|f| literal(&f, "service_tier", &["default", "priority"])).is_some(),
+        "codex/mode" => fields().and_then(|f| literal(&f, "mode", &["default", "plan"])).is_some(),
+        "question/skip" => fields().and_then(|f| strings(&f, "request_id", Some("interaction_id"))).is_some(),
+        "codex-permissions" if post => fields().and_then(|f| strings(&f, "mode", None)).is_some(),
+        _ => true,
+    };
+    if !shaped { return invalid_body(headers); }
+    let Some(runtime) = st.state.runtime.get() else { return super::no_runtime(headers) };
+    let rust_session = runtime.writable(name).await.is_some();
+    let sidecar = crate::runtime::codex_sidecar::path(&crate::runtime::codex_sidecar::dir(&runtime.codex_environment().home), name);
+    let orphan = !rust_session && tokio::task::spawn_blocking(move || sidecar.exists()).await.unwrap_or(false);
+    if orphan {
+        if route == "limits" { return reply(limits_answer(&Err(RuntimeError::new("codex_sidecar_invalid", "sem dono no Rust")))); }
+        tracing::warn!(session = %name, route = %route, code = "codex_sidecar_invalid", "rota do Codex num arquivo de sessão sem dono no Rust; nada foi enviado");
+        return reply(refused());
+    }
+    let only_codex = |code: &str, msg: &str| (StatusCode::BAD_REQUEST, detail_body(code, msg, json!({})));
+    reply(match route.as_str() {
+        "models" => only_codex("erro_models_so_codex", "models so existe pra sessoes Codex"),
+        "model" => only_codex("erro_model_so_codex", "model so existe pra sessoes Codex"),
+        "service-tier" => only_codex("erro_fast_indisponivel", "Fast exige Codex ou Claude com GPT no CLIProxyAPI local"),
+        "codex/mode" => only_codex("erro_model_so_codex", "model só existe para sessões Codex"),
+        "limits" => only_codex("erro_limits_so_codex", "limits so existe pra sessoes Codex"),
+        "question/skip" => (StatusCode::CONFLICT, detail_body("erro_codex_resposta_invalida", MSG_INVALID_ANSWER, json!({}))),
+        "codex-permissions" => only_codex("erro_permissao_so_codex", "este modo de permissao so vale para sessoes Codex"),
+        "codex/plan/implement" => {
+            let exists = rust_session || runtime.asleep(name).await.is_some() || super::unowned::exists(st, name).await;
+            if exists { only_codex("erro_model_so_codex", "esta ação só existe para sessões Codex") }
+            else { (StatusCode::NOT_FOUND, detail_body("erro_sessao_opcao_nao_enviada", "sessão não encontrada — plano NÃO iniciado", json!({}))) }
+        }
+        _ => refused(),
+    })
 }
 
 async fn run(ctx: &Ctx, kind: OperationKind, payload: Value) -> Result<RuntimeReply, RuntimeError> {
@@ -382,12 +433,13 @@ pub async fn mode(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInf
 /// `/limits` nunca é erro nem espera, como no Python: porta fechada (troca em curso) ou leitura que falha
 /// dão a resposta neutra.
 pub async fn limits(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    let (fwd, who) = match who(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
+    let (_, who) = match who(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     let name = session_name(req.uri().path()).filter(|n| who.as_ref().is_some_and(|c| c.can(n, req.method())));
-    let (Some(runtime), Some(name)) = (st.state.runtime.get(), name) else { return pass(&st, req, &fwd).await };
+    let Some(name) = name else { return super::stranger(&st, peer, req, who.as_ref()).await };
+    let Some(runtime) = st.state.runtime.get() else { return super::no_runtime(req.headers()) };
     match ours(&st, Some(&name), true).await {
         Ok(true) => {}
-        Ok(false) => return pass(&st, req, &fwd).await,
+        Ok(false) => return not_codex(&st, &name, req).await,
         // Conversa ainda abrindo ou adormecida: não há cota a ler, e a resposta é a neutra.
         Err(error) if error.code == crate::runtime::codex_relaunch::STARTING || error.code == ASLEEP_READ => {}
         // Do Rust e não abriu: o código da falha, como nas outras rotas do Codex, nunca a resposta neutra.

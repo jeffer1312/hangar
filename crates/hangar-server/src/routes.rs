@@ -726,6 +726,8 @@ where H: axum::handler::Handler<T, Arc<AppState>>, T: 'static {
         .route("/api/sessions/{name}/limits", get(crate::session_write::codex::limits).fallback(fallback.clone()))
         .route("/api/sessions/{name}/question/skip", axum::routing::post(crate::session_write::codex::skip_question).fallback(fallback.clone()))
         .route("/api/sessions/{name}/codex/terminate", axum::routing::post(crate::session_write::codex::terminate).fallback(fallback.clone()))
+        // Também na 8766: o Python não tem mais a rota, e o convidado completo inicia o plano por aqui.
+        .route("/api/sessions/{name}/codex/plan/implement", axum::routing::post(crate::session_write::codex::plan_implement).fallback(fallback.clone()))
         .route("/api/orq/{exec_id}/conductor", get(crate::orq_conductor::public).fallback(fallback.clone()))
         .route("/api/sessions/{name}/navegador", get(crate::remote_browser::url::route).head(fallback.clone()).fallback(fallback.clone()))
         .route("/api/sessions/{name}/commands", get(crate::commands::route).fallback(fallback.clone()))
@@ -848,7 +850,6 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/broadcast", axum::routing::post(crate::session_write::input::broadcast).fallback(pass_any))
         .route("/api/sessions/{name}/permission-modes", get(crate::session_write::permissions::modes).fallback(pass_any))
         .route("/api/sessions/{name}/permission-mode", axum::routing::post(crate::session_write::permissions::set_mode).fallback(pass_any))
-        .route("/api/sessions/{name}/codex/plan/implement", axum::routing::post(crate::session_write::codex::plan_implement).fallback(pass_any))
         // Relançar o Codex do Rust (troca de modo e reinício) é dele do começo ao fim; o resto segue ao Python.
         .route("/api/sessions/{name}/modo-execucao", axum::routing::post(crate::session_write::relaunch::mode).fallback(pass_any))
         .route("/api/sessions/{name}/recarregar", axum::routing::post(crate::session_write::relaunch::reload).fallback(pass_any))

@@ -584,8 +584,8 @@ pub async fn write_input(st: &AppState, name: &str, text: &str, steer: bool) -> 
         Write::Opening(key) => queue_opening(st, name, &key, text, steer).await,
         Write::Asleep(key) => queue_while_asleep(st, name, &key, text).await,
         // Pedido que veio pela ponte do Python: a entrega sai depois da resposta da rota, num prazo
-        // (`groups::bridge::deliver_deferred`). `Python` aqui é provedor sem dono na tabela: ninguém digita.
-        Write::Unowned | Write::Python => match crate::groups::bridge::current() {
+        // (`groups::bridge::deliver_deferred`).
+        Write::Unowned => match crate::groups::bridge::current() {
             Some(ctx) => { ctx.defer_delivery(name, text, steer); (StatusCode::OK, json!({"ok": true, "deferred": true})) }
             None => super::unowned::input_answer(super::unowned::send(st, name, text).await),
         },

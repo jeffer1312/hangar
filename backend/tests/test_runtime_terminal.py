@@ -655,50 +655,6 @@ def test_clear_serialized_and_clears_old_queue(monkeypatch,tmp_path):
     asyncio.run(flow())
 
 
-@pytest.mark.parametrize('kind', ['option','text'])
-def test_answer_model_dump_reaches_terminal_contract(monkeypatch,tmp_path,kind):
-    from app import api
-    from app.runtime_terminal import answer_sync
-    gateway=TerminalGateway()
-    owner,slot,_=live_owner(monkeypatch,tmp_path,gateway=gateway)
-    item=api.AnswerItem(kind=kind,question_id='question-a',indices=[0] if kind=='option' else None,
-        labels=['A'] if kind=='option' else [],value='texto' if kind=='text' else None,
-        type_index=1 if kind=='text' else None,chat_index=1 if kind=='chat' else None)
-    observed=[]
-    original=gateway.op
-    async def op(target,command,operation,clock):
-        if command['kind']=='control':
-            observed.append(command['payload'])
-        return await original(target,command,operation,clock)
-    gateway.op=op
-    async def flow():
-        await _to_rust(owner,'session')
-        # Id explícito de pergunta TUI evita o caminho composto para chat sem pedido.
-        result=await asyncio.to_thread(answer_sync,'session',[item.model_dump()],'tui-request',None)
-        assert result['disposition']=='accepted'
-        assert observed[0]['answers'][0]['question_id']=='question-a'
-        assert observed[0]['answers'][0]['indices']==([0] if kind=='option' else [])
-        await owner.detach('session')
-    asyncio.run(flow())
-
-
-def test_explicit_claude_steer_uses_owner_and_transcript_confirmation(monkeypatch,tmp_path):
-    from app import api
-    owner,slot,_=live_owner(monkeypatch,tmp_path,gateway=TerminalGateway())
-    monkeypatch.setattr(api,'_provider_of',lambda name:'claude')
-    monkeypatch.setattr(api,'_headless',lambda name:False)
-    monkeypatch.setattr(api,'_session_exists',lambda name:True)
-    monkeypatch.setattr(api,'_pane_info',lambda name:('claude','%1'))
-    monkeypatch.setattr(api.PromptQueue,'confirm_delivered',lambda *args:pytest.fail('confirmação por ausência de prova'))
-    async def flow():
-        await _to_rust(owner,'session')
-        result=await api.steer_session('session')
-        assert result['promoted'] and result['confirmed']==0
-        assert owner.transport.calls[-2:]==['control','confirm']
-        await owner.detach('session')
-    asyncio.run(flow())
-
-
 @pytest.mark.parametrize('text', ['bad\x7f','bad\u0085'])
 def test_terminal_unicode_controls_rejected_before_intent(monkeypatch,tmp_path,text):
     from app import terminal_input as ti

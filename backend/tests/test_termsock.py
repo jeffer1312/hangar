@@ -444,15 +444,6 @@ def test_fechamento_feio_nao_deixa_zumbi_nem_trava_a_listagem(sessao):
     assert not _anexado(sessao)
 
 
-def test_selecionar_opcao_recusa_com_painel_aberto(sessao, monkeypatch):
-    monkeypatch.setitem(termsock._ativos, sessao, object())
-    c = _client()
-    r = c.post(f"/api/sessions/{sessao}/select",
-               json={"option": 1}, headers={"Authorization": "Bearer secret"})
-    assert r.status_code == 409
-    assert r.json()["detail"]["code"] == "erro_terminal_aberto"
-
-
 def test_mandar_prompt_continua_funcionando_com_painel_aberto(sessao, monkeypatch):
     # Enviar e NUCLEO: nao pode ficar esperando feature (incidente de 2026-07-23).
     monkeypatch.setitem(termsock._ativos, sessao, object())

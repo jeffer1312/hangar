@@ -55,21 +55,6 @@ def command_port(monkeypatch, tmp_path):
         assert not worker.is_alive(), "o servidor de prova não terminou"
 
 
-def test_claude_commands_forwards_original_path_query_and_status(command_port):
-    client, seen = command_port
-    response = client.get("/api/sessions/commands-migration-absent/commands?fixture=value", headers={"Authorization": "Bearer commands-fixture"})
-    assert response.status_code == 207
-    assert response.json() == {"fixture": "commands-response"}
-    assert seen == [("/__hangar_server/forwarded?fixture=value", "/api/sessions/commands-migration-absent/commands", "fixture-private")]
-
-
-def test_claude_commands_requires_auth_before_forwarding(command_port):
-    client, seen = command_port
-    response = client.get("/api/sessions/commands-migration-absent/commands")
-    assert response.status_code == 401
-    assert not seen
-
-
 @pytest.mark.parametrize("method", ["GET", "PUT"])
 def test_session_defaults_forwards_from_connect(command_port, method):
     client, seen = command_port
