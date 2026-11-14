@@ -34,7 +34,10 @@ async fn run(st: Arc<AppState>, machines: Option<Vec<AccountMachine>>) {
     let Ok(Some(linked)) = st.connect_supervisor.read_linked().await else { return };
     let link = format!("https://{}", linked.host);
     let (store, read_link) = (service.store.clone(), link.clone());
-    let mut ids = tokio::task::spawn_blocking(move || candidates(&store.tolerant(), Some(&read_link))).await.unwrap_or_default();
+    let mut ids = match tokio::task::spawn_blocking(move || candidates(&store.tolerant(), Some(&read_link))).await {
+        Ok(ids) => ids,
+        Err(_) => return report(&st, "", "peers_read_failed", "a lista de máquinas não foi lida"),
+    };
     let now = Instant::now();
     ids.retain(|id| !busy(&key(&service.store.path, id), now));
     if ids.is_empty() {
@@ -159,7 +162,10 @@ enum Enrolled {
 async fn enroll(service: &Service, id: &str, link: &str, machines: &[AccountMachine]) -> Result<Enrolled, Failure> {
     // Relida dentro da vez desta máquina: outro evento pode ter acabado de gravar o caminho ou a recusa.
     let (store, key) = (service.store.clone(), id.to_owned());
-    let entry = tokio::task::spawn_blocking(move || store.tolerant().get(&key).cloned()).await.ok().flatten().unwrap_or_default();
+    let entry = match tokio::task::spawn_blocking(move || store.tolerant().get(&key).cloned()).await {
+        Ok(entry) => entry.unwrap_or_default(),
+        Err(_) => return Err(("peers_read_failed", "a entrada da máquina não foi lida".to_owned())),
+    };
     if !candidate(&entry, Some(link)) {
         return Ok(Enrolled::Done);
     }

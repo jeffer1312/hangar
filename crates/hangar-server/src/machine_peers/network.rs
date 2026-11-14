@@ -382,7 +382,10 @@ impl super::store::OldRoute {
 /// mal: qualquer falha de transporte tenta o outro. Falha só vai ao log.
 pub async fn revoke_device(label: &str, saved: Option<(String, String)>, connect: Option<(String, String)>, device: &str) {
     use crate::groups::peers::PeerError;
-    if !super::store::valid_device(device) { return; }
+    if !super::store::valid_device(device) {
+        tracing::warn!(code = "connect.peer_revoke_failed", peer = label, "id do aparelho inválido: a credencial de lá não foi revogada");
+        return;
+    }
     let path = format!("/api/connect/devices/{device}");
     let mut failure = "sem endereço".to_owned();
     for ((base, token), own) in saved.into_iter().map(|route| (route, false)).chain(connect.into_iter().map(|route| (route, true))) {

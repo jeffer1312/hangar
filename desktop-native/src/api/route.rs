@@ -158,7 +158,9 @@ fn set_connect(known: &mut Known, connect: ConnectState) {
 pub fn seed(address: &str, invite: bool, lan: Option<&Lan>, connect: Option<&ConnectRoute>, refused: bool) {
     let Some(key) = key(address) else { return };
     let changed = connect.filter(|c| with(|t| !matches!(t.get(&key).map(|k| &k.connect), Some(ConnectState::Active(known, ..)) if known == *c)));
-    let client = changed.and_then(|c| super::bearer_client(&c.token).ok());
+    let client = changed.and_then(|c| super::bearer_client(&c.token)
+        .map_err(|_| crate::log_line(&format!("connect: cliente da credencial de aparelho de {key} não montou; o Connect fica fora")))
+        .ok());
     with(|t| {
         let known = t.entry(key).or_default();
         known.invite = invite;
