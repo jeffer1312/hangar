@@ -14,7 +14,8 @@ impl Agent {
         let (root,op,name,text) = (self.root.clone(),op.to_owned(),name.to_owned(),text.to_owned());
         Box::pin(async move {
             // estavel: este processo é a fronteira externa do agente; não simula host, store ou dispatcher.
-            let output = tokio::process::Command::new("node").args(["--input-type=module", "-e", r#"
+            let mut command = tokio::process::Command::new("node");
+            command.args(["--input-type=module", "-e", r#"
 import fs from 'node:fs';
 import path from 'node:path';
 const [root,op,name,text] = process.argv.slice(1);
@@ -51,9 +52,14 @@ if (op==='send') {
   reply='queued';
 }
 process.stdout.write(JSON.stringify(reply));
-"#]).arg(root).arg(op).arg(name).arg(text).env_clear().kill_on_drop(true).output().await
-                .map_err(|_| Failure::new(503,"agent_unavailable","agente indisponível"))?;
-            if !output.status.success() { return Err(Failure::new(503,"agent_failed","agente recusou a operação")); }
+"#]).arg(root).arg(op).arg(name).arg(text).env_clear().kill_on_drop(true);
+            // O Node vem do PATH do executor; no Windows, SystemRoot permite inicializar a criptografia.
+            for key in ["PATH", "SystemRoot"] {
+                if let Some(value)=std::env::var_os(key) {command.env(key,value);}
+            }
+            let output=command.output().await
+                .map_err(|error| Failure::new(503,"agent_unavailable",format!("agente indisponível: {error}")))?;
+            if !output.status.success() {return Err(Failure::new(503,"agent_failed",format!("agente recusou a operação ({}): {}",output.status,String::from_utf8_lossy(&output.stderr))));}
             serde_json::from_slice(&output.stdout).map_err(|_| Failure::new(503,"agent_invalid","resposta inválida"))
         })
     }

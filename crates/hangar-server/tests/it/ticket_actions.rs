@@ -58,7 +58,7 @@ async fn board_action_uses_the_bound_runtime_input_and_reports_an_uncertain_ack(
     state.connectors=hangar_connectors::Host::new(hangar_connectors::registry::Registry::new(temp.path().join("connectors.json")),Default::default());
     let script=std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/connectors/work_tracking.mjs");
     state.connectors.add(hangar_connectors::manifest::Manifest::parse(json!({"manifest_version":1,"id":"js-demo","name":"Demo","version":"1","protocol_version":1,
-        "capabilities":{"work_tracking":1},"command":["/usr/bin/node",script]}).to_string().as_bytes(),temp.path()).unwrap()).unwrap();
+        "capabilities":{"work_tracking":1},"command":["node",script]}).to_string().as_bytes(),temp.path()).unwrap()).unwrap();
     state.state.runtime.set(registry.clone()).unwrap_or_else(|_|panic!("runtime já configurado"));
     state.side.runtime.set(registry.clone()).unwrap_or_else(|_|panic!("runtime do hub já configurado"));
     let state=Arc::new(state);
@@ -73,6 +73,8 @@ async fn board_action_uses_the_bound_runtime_input_and_reports_an_uncertain_ack(
     let body:Value=serde_json::from_slice(&to_bytes(response.into_body(),1024*1024).await.unwrap()).unwrap();
     assert_eq!(status,202,"{body}");
     let attempt=tokio::time::timeout(std::time::Duration::from_secs(30),state.ticket_actions.get().unwrap().completed(id)).await.unwrap().unwrap();
+    assert_eq!(attempt.status,hangar_ticket_actions::Status::Uncertain,"{attempt:?}");
+    assert_eq!(attempt.code.as_deref(),Some("ticket_action_uncertain"));
     let item=state.mission.snapshot().unwrap().items.remove(0);
     let delivered=tokio::time::timeout(std::time::Duration::from_secs(30),text).await.unwrap().unwrap();
     registry.close("life-1",1).await.unwrap();
@@ -81,7 +83,5 @@ async fn board_action_uses_the_bound_runtime_input_and_reports_an_uncertain_ack(
     stop.send(()).unwrap();policy_task.await.unwrap();
     assert!(delivered.contains("Planeje este ticket."));
     assert_eq!(item.session_key.as_deref(),Some("life-1"));
-    assert_eq!(attempt.status,hangar_ticket_actions::Status::Uncertain);
-    assert_eq!(attempt.code.as_deref(),Some("ticket_action_uncertain"));
     assert!(item.stage.is_none(),"o resultado incerto não confirma a mudança de etapa");
 }
