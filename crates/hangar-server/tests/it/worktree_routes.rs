@@ -221,8 +221,28 @@ async fn cleanup_known_repo_is_safe_when_another_discovery_root_is_missing() {
     }).to_string());
     env.mux = Mux::with_program(&mux, Duration::from_secs(5));
     state.list = Arc::new(ListBridge::new(env, FactsClient::new(upstream, fake::SECRET.into())));
-    hangar_workspace::worktree_settings::WorktreeSettings { delete_unchanged: true, ..Default::default() }
-        .save_at(&home.join(".hangar/worktree-settings.json"), &home).unwrap();
+    let settings=hangar_workspace::worktree_settings::WorktreeSettings { delete_unchanged: true, ..Default::default() };
+    settings.save_at(&home.join(".hangar/worktree-settings.json"), &home).unwrap();
+    let wt=root.join("repo-wt");
+    let past=std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs()-2*86400;
+    let git_config=tempfile::NamedTempFile::new().unwrap();
+    let admin=std::process::Command::new("git").arg("-C").arg(&wt)
+        .args(["rev-parse","--path-format=absolute","--git-path","commondir"])
+        .env("GIT_CONFIG_GLOBAL",git_config.path()).env("GIT_CONFIG_NOSYSTEM","1")
+        .env_remove("GIT_CONFIG_PARAMETERS").env_remove("GIT_CONFIG_COUNT").output().unwrap();
+    assert!(admin.status.success());
+    // A descoberta parcial é conferida numa worktree já observada pelo prazo de segurança.
+    for path in [&wt, &wt.join(".git"), std::path::Path::new(std::str::from_utf8(&admin.stdout).unwrap().trim())] {
+        let mut options=std::fs::OpenOptions::new();options.read(true);
+        #[cfg(windows)] {
+            use std::os::windows::fs::OpenOptionsExt;
+            use windows_sys::Win32::Storage::FileSystem::{FILE_FLAG_BACKUP_SEMANTICS,FILE_WRITE_ATTRIBUTES,FILE_READ_ATTRIBUTES};
+            options.access_mode(FILE_WRITE_ATTRIBUTES|FILE_READ_ATTRIBUTES).custom_flags(FILE_FLAG_BACKUP_SEMANTICS);
+        }
+        options.open(path).unwrap().set_times(std::fs::FileTimes::new()
+            .set_modified(std::time::UNIX_EPOCH+Duration::from_secs(past))).unwrap();
+    }
+    assert!(hangar_workspace::worktree_cleanup::candidate(wt.to_str().unwrap(),&[],&[],&home,&settings,past,None).unwrap().is_none());
     let rows = hangar_workspace::worktrees::list_all(&[repo.to_string_lossy().into()], &[],
         Some(&[root.to_string_lossy().into(), root.join("unavailable").to_string_lossy().into()]), None, false, &[]);
     assert_eq!(rows[0]["discovery_partial"], true);
