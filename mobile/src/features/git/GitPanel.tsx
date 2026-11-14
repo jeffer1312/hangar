@@ -5,6 +5,7 @@ import { basename, checkoutBranch, commitFiles, discardFile, getBranches, getCha
 import { Icon, type IconName } from '../../ui/Icon';
 import { MultilineInput } from '../../ui/MultilineInput';
 import { haptic } from '../../ui/haptics';
+import { PatchLine } from './patch-line';
 import { useServers } from '../../stores/servers';
 import * as m from '../../paraglide/messages';
 
@@ -86,7 +87,7 @@ function GitDiff({ server, name, target, kind, revision }: { server: Server; nam
         {content.truncated ? <Text style={styles.meta}>{m.git_diff_cortado()}</Text> : null}
         <FlatList data={content.diff ? content.diff.split('\n') : []} keyExtractor={(_, index) => String(index)}
           ListEmptyComponent={<Text style={styles.meta}>{m.native_git_diff_empty()}</Text>}
-          renderItem={({ item }) => <Text selectable style={[styles.diffLine, item.startsWith('+') ? styles.add : item.startsWith('-') ? styles.remove : null]}>{item || ' '}</Text>} />
+          renderItem={({ item }) => <PatchLine line={item} />} />
       </>}
   </View>;
 }
@@ -357,7 +358,6 @@ const styles = StyleSheet.create((theme) => ({
   root: { flex: 1, minHeight: 0, minWidth: 0 },
   output: { maxHeight: 144, flexGrow: 0, flexShrink: 1 },
   diff: { flex: 2, minHeight: 100 },
-  diffLine: { color: theme.tokens.text.primary, fontSize: theme.base.text.xs, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', paddingHorizontal: theme.base.space[2] },
   disabled: { opacity: 0.5 },
   selected: { color: theme.tokens.accent.base, fontWeight: theme.base.weight.semibold },
   composer: { padding: theme.base.space[2], borderTopWidth: 1, borderColor: theme.tokens.border.subtle },

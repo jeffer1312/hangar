@@ -61,6 +61,7 @@ export function DrawerMenu({ open, onClose, onOpenServers }: { open: boolean; on
         {item('Server', m.maquinas_titulo(), () => { onClose(); onOpenServers(); })}
         {item('CircleUser', m.contas_titulo(), () => go('/config/contas'), quota || undefined)}
         {item('GitBranch', m.worktrees_titulo(), () => go('/config/worktrees'))}
+        {item('GitPullRequest', m.native_review_title(), () => go('/reviews'))}
         {recent.length ? <Text style={styles.section} accessibilityRole="header">{m.conversas_recentes()}</Text> : null}
         {recent.map((s) => <RecentRow key={`${s.serverId}:${s.name}`} session={s} onOpen={openSession} />)}
         <Pressable onPress={onClose} accessibilityRole="button" style={({ pressed }) => [styles.item, pressed && styles.pressed]}>
