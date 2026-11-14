@@ -680,7 +680,7 @@ impl DreamPage {
         row_frame(&project.id)
             .child(row_head(project.name.clone(), enabled, facts, switch))
             .children(project.last_error.as_deref().map(|e| alert(SharedString::from(format!("dream-error-{}", project.id)), error_text(e))))
-            .child(row_bar(picker, pair, run, changes, undo))
+            .child(row_bar(picker, pair.map(IntoElement::into_any_element), run, changes, undo))
             .into_any_element()
     }
 }
@@ -802,7 +802,7 @@ pub(crate) fn row_head(name: String, enabled: bool, facts: String, switch: Switc
 }
 
 /// Barra de baixo da linha: quem paga à esquerda, as ações à direita.
-pub(crate) fn row_bar(picker: Div, pair: Option<Button>, run: Button, changes: Option<Button>, undo: Option<Button>) -> Div {
+pub(crate) fn row_bar(picker: Div, pair: Option<AnyElement>, run: Button, changes: Option<Button>, undo: Option<Button>) -> Div {
     div()
         .flex()
         .flex_wrap()
