@@ -311,7 +311,7 @@ impl Hangar {
 
     pub(super) fn computer_opened(&mut self, cx: &mut Context<Self>) {
         if self.computer.busy.is_none() {
-            (self.computer.error, self.computer.note, self.computer.migration_warning) = (None, None, None);
+            (self.computer.error, self.computer.note) = (None, None);
             self.load_computer(true, cx);
         }
     }
