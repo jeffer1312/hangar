@@ -146,7 +146,7 @@ impl BridgeCtx {
 
 pub(crate) struct Failed {
     pub(crate) code: String,
-    detail: String,
+    pub(crate) detail: String,
 }
 
 fn fail(code: &str, detail: impl Into<String>) -> Failed {

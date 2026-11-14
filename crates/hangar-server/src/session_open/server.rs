@@ -407,7 +407,10 @@ async fn link_child(st: &Arc<AppState>, link: super::LinkPlan, opened: &Value) -
             let detail = &reply["body"]["detail"];
             detail["code"].as_str().or(detail.as_str()).map_or_else(|| format!("http_{}", reply["status"]), str::to_owned)
         }
-        Err(failed) => failed.code,
+        Err(failed) => {
+            tracing::warn!(code = %failed.code, detail = %failed.detail, session = %child, "a ligação ao grupo falhou");
+            failed.code
+        }
     };
     tracing::warn!(code = "erro_link_grupo", session = %child, parent = %parent, detail = %code, "a sessão abriu sem ligação");
     Some(json!({"code": "erro_link_grupo", "detail": code}))
