@@ -188,7 +188,7 @@
       {/if}
       <!-- A instalação roda sozinha no servidor: sem isto a tela ficaria no estado de antes até ser reaberta. -->
       {#if !current.package_exists && current.unavailable !== 'platform'}
-        <button type="button" class="action" onclick={load} disabled={saving}>{m.lista_tentar_novamente()}</button>
+        <button type="button" class="action" onclick={load} disabled={saving || loading}>{m.lista_tentar_novamente()}</button>
       {/if}
       {#if savedMessage}<p class="status" role="status">{savedMessage}</p>{/if}
     </div>
