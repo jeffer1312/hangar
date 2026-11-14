@@ -88,3 +88,24 @@ fn changing_server_invalidates_the_old_save_reply(cx: &mut TestAppContext) {
         assert_eq!(dialog.saved_default, Some(choice("other")));
     }));
 }
+
+#[::gpui::test]
+fn home_mode_pill_applies_to_this_conversation_only(cx: &mut TestAppContext) {
+    let (view, cx) = dialog(cx);
+    cx.update(|window, cx| view.update(cx, |dialog, cx| {
+        dialog.provider = "claude";
+        dialog.jev.loading = true;
+        dialog.choose_mode(false, window, cx);
+        assert!(dialog.headless && !dialog.headless_touched, "a escolha antes da leitura do padrão não vale");
+
+        dialog.jev.loading = false;
+        dialog.headless_owner = Some(false);
+        assert!(dialog.headless_inherited());
+        assert_eq!(dialog.open_body("s", "/p", "", cx)["headless"], Value::Null, "sem escolha, quem decide é o servidor");
+
+        dialog.headless_owner = Some(true);
+        dialog.choose_mode(false, window, cx);
+        assert!(!dialog.headless_saving, "a pílula nunca grava o padrão do servidor");
+        assert_eq!(dialog.open_body("s", "/p", "", cx)["headless"], json!(false));
+    }));
+}
