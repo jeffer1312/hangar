@@ -57,10 +57,6 @@ impl Scene {
         Self { _root: root, home, state, app }
     }
 
-    fn home(&self) -> String {
-        self.home.to_string_lossy().into_owned()
-    }
-
     fn config_path(&self) -> PathBuf {
         self.home.join(".claude/runtime-config.json")
     }
@@ -601,14 +597,14 @@ async fn import_revalidates_the_merged_list() {
 #[tokio::test(flavor = "multi_thread")]
 async fn import_v2_resolves_home_in_command_and_verify() {
     let scene = Scene::new();
-    let home = scene.home();
+    // O HOME como a resolução dos marcadores o escreve (no Windows, com `/`).
+    let home = hangar_core::path_markers::resolve("⟦HOME⟧", &scene.host().machine().roots);
     let data = json!({"version": 2, "shortcuts": [{"id": "a", "type": "shell", "label": "A", "command": "⟦HOME⟧/bin/x",
         "verify": "test -f ⟦HOME⟧/y"}], "scripts": []});
     let (status, body) = scene.import(json!({"data": data, "apply": true})).await;
     assert_eq!(status, 200, "{body}");
     assert_eq!(body["verify_commands"], json!([{"id": "a", "label": "A", "command": format!("test -f {home}/y")}]));
     assert_eq!(body["warnings"], json!([VERIFY_WARNING]));
-    // Serializado pelo mesmo gravador: no Windows o HOME tem `\`, que o JSON escapa.
     let expected = json!([{"id": "a", "type": "shell", "label": "A", "command": format!("{home}/bin/x"), "verify": format!("test -f {home}/y")}]);
     assert_eq!(scene.saved(), hangar_core::pycompat::pyjson::dumps(&expected, false));
 }

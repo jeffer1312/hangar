@@ -38,8 +38,9 @@ impl Home {
     fn at(&self, rel: &str) -> PathBuf {
         self.dir.path().join(rel)
     }
+    /// O caminho como o escritor o monta: um componente por vez (no Windows, com `\`).
     fn source(&self, rel: &str) -> String {
-        self.at(rel).to_string_lossy().into_owned()
+        rel.split('/').fold(self.dir.path().to_owned(), |path, part| path.join(part)).to_string_lossy().into_owned()
     }
     fn text(&self, rel: &str, text: &str) {
         let path = self.at(rel);

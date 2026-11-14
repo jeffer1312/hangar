@@ -32,6 +32,7 @@ const VERIFY_WARNING: &str = "Importar roda o comando de verificação de cada a
 const RESTORED: &str = "importação falhou: failed after write; arquivos anteriores restaurados";
 const FILES_NOT_RESTORED: &str = "; restauração dos arquivos falhou, confira os destinos";
 // Montados em pedaços: a trava de pre-commit do repositório barra chave e senha literais.
+const NOT_LINUX: &str = "Scripts não incluídos: o empacotamento de scripts locais só está disponível em Linux.";
 const COLON: &str = ":";
 const AT: &str = "@";
 
@@ -286,6 +287,16 @@ fn request(data: Value, apply: bool, secrets: Value) -> ImportRequest {
 
 fn fake(prefix: &str) -> String {
     format!("{prefix}{}", "x1Y2".repeat(7))
+}
+
+/// Avisos do export com scripts de atalhos shell: fora do Linux o empacotamento não roda e avisa.
+fn script_warnings() -> Value {
+    if cfg!(target_os = "linux") { json!([]) } else { json!([NOT_LINUX]) }
+}
+
+/// O HOME como a resolução dos marcadores o escreve (no Windows, com `/`).
+fn resolved_home(scene: &Scene) -> String {
+    resolve("⟦HOME⟧", &scene.host().machine().roots)
 }
 
 fn rdp_rel_terminal() -> Value {
@@ -577,7 +588,9 @@ async fn export_scrubs_counts_and_keeps_the_config() {
         {"id": "rel", "type": "send_text", "label": "Rel", "text": "/relatorio-pm"},
         {"id": "terminal", "type": "internal", "action": "terminal"},
     ], "scripts": [], "warnings": [], "removed": 1});
-    assert_eq!(scene.export("").await, (200, expected.clone()));
+    let mut with_scripts = expected.clone();
+    with_scripts["warnings"] = script_warnings();
+    assert_eq!(scene.export("").await, (200, with_scripts));
     // ATA-39 (r7-export-sem-scripts): a lista do seletor não abre scripts.
     assert_eq!(scene.export("?include_scripts=false").await, (200, expected));
     assert_eq!(std::fs::read(scene.config_path()).unwrap(), before);
@@ -591,7 +604,7 @@ async fn export_selection_rules() {
     let subset = json!({"version": 2, "shortcuts": [
         {"id": "rdp", "type": "shell", "label": "RDP", "command": "xfreerdp /v:h /p:⟦SEGREDO:senha⟧"},
         {"id": "rel", "type": "send_text", "label": "Rel", "text": "/relatorio-pm"},
-    ], "scripts": [], "warnings": [], "removed": 1});
+    ], "scripts": [], "warnings": script_warnings(), "removed": 1});
     assert_eq!(scene.export("?ids=rel&ids=rdp").await, (200, subset));
     let empty = json!({"version": 2, "shortcuts": [], "scripts": [], "warnings": [], "removed": 0});
     assert_eq!(scene.export("?ids=").await, (200, empty));
@@ -1213,8 +1226,8 @@ async fn import_resolves_pasta_only_for_version_2() {
     assert_eq!(scene.import(json!({"data": data})).await, (200, response.clone()));
     assert!(!scene.config_path().exists());
     assert_eq!(scene.import(json!({"data": data, "apply": true})).await, (200, response));
-    // Serializado pelo mesmo gravador: no Windows o HOME tem `\`, que o JSON escapa.
-    let expected = json!([{"id": "a", "type": "shell", "label": "A", "command": "echo ok", "pasta": format!("{}/Projects/example", scene.home())}]);
+    // HOME como a resolução o escreve e serializado pelo mesmo gravador, nos dois sistemas.
+    let expected = json!([{"id": "a", "type": "shell", "label": "A", "command": "echo ok", "pasta": format!("{}/Projects/example", resolved_home(&scene))}]);
     assert_eq!(scene.saved(), hangar_core::pycompat::pyjson::dumps(&expected, false));
     assert!(!scene.home.join("Projects").exists());
 }
@@ -1224,8 +1237,9 @@ async fn import_resolves_pasta_only_for_version_2() {
 async fn import_package_warnings_are_resolved_and_scrubbed() {
     let scene = Scene::new();
     let data = json!({"version": 2, "shortcuts": [], "scripts": [], "warnings": ["Credencial externa: ⟦HOME⟧/.local/vm.pw --token private-value", "dup", "dup"]});
-    assert_eq!(scene.import(json!({"data": data})).await, (200, scene.at_home(json!({"added": 0, "replaced": 0, "placeholders": [], "verify": [], "verify_commands": [],
-        "files": [], "warnings": ["Credencial externa: «HOME»/.local/vm.pw --token ⟦SEGREDO:token⟧", "dup"]}))));
+    let warning = format!("Credencial externa: {}/.local/vm.pw --token ⟦SEGREDO:token⟧", resolved_home(&scene));
+    assert_eq!(scene.import(json!({"data": data})).await, (200, json!({"added": 0, "replaced": 0, "placeholders": [], "verify": [], "verify_commands": [],
+        "files": [], "warnings": [warning, "dup"]})));
 }
 
 /// ATA-69 (r7-import-fora-do-linux-*): pacote com script fora do Linux é recusado mesmo na prévia;
