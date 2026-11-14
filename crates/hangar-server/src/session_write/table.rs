@@ -49,18 +49,18 @@ pub enum WriteRoute {
     StopTask,
 }
 
+/// `Refused`: a rota não existe para esse provedor e modo; o Rust recusa com código, nada é escrito.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Owner { Rust, Python }
+pub enum Owner { Rust, Refused }
 
-/// Claude e Codex, com e sem terminal, são do Rust. Entrada doente não muda o dono: `route_write`
-/// recusa com código, e o Python nunca relança nem responde por ela.
+/// Toda escrita é do Rust. Entrada doente não muda o dono: `route_write` recusa com código. Sem
+/// terminal, teclas cruas e a aba Submit são recusadas pela própria rota (não há pane).
 pub fn decide(route: WriteRoute, provider: Provider, terminal: bool) -> Owner {
     if route == WriteRoute::StopTask { return Owner::Rust; }
-    if !terminal && matches!(provider,Provider::Pi|Provider::Omp|Provider::Kimi) {return Owner::Python;}
+    // Pi, omp e Kimi só existem com terminal.
+    if !terminal && matches!(provider,Provider::Pi|Provider::Omp|Provider::Kimi) {return Owner::Refused;}
     match route {
-        WriteRoute::CodexControl | WriteRoute::CodexPermission if provider == Provider::Claude => Owner::Python,
-        // Teclas cruas e a aba Submit só existem num pane: sem terminal quem responde é o Python, como hoje.
-        WriteRoute::Keys | WriteRoute::TermInput | WriteRoute::SelectSubmit if !terminal => Owner::Python,
+        WriteRoute::CodexControl | WriteRoute::CodexPermission if provider == Provider::Claude => Owner::Refused,
         _ => Owner::Rust,
     }
 }
@@ -108,12 +108,9 @@ mod tests {
     }
 
     #[test]
-    fn without_a_terminal_only_the_pane_routes_go_to_python() {
+    fn without_a_terminal_every_route_is_rust_too() {
         for provider in [Provider::Claude, Provider::Codex] {
-            for route in ALL {
-                let want = if matches!(route, Keys | TermInput | SelectSubmit) { Owner::Python } else { Owner::Rust };
-                assert_eq!(decide(route, provider, false), want, "{provider:?} {route:?}");
-            }
+            for route in ALL { assert_eq!(decide(route, provider, false), Owner::Rust, "{provider:?} {route:?}"); }
         }
     }
 
@@ -121,7 +118,7 @@ mod tests {
     fn codex_control_is_rust_for_codex_in_both_modes_only() {
         for terminal in [true, false] {
             assert_eq!(decide(CodexControl, Provider::Codex, terminal), Owner::Rust);
-            assert_eq!(decide(CodexControl, Provider::Claude, terminal), Owner::Python);
+            assert_eq!(decide(CodexControl, Provider::Claude, terminal), Owner::Refused);
         }
     }
 

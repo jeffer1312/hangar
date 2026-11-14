@@ -79,7 +79,7 @@ pub(crate) async fn forward_whole(st: &AppState, parts: Parts, bytes: Bytes, fwd
 }
 
 /// Decide quem atende. `Ok`: o Rust atende, com o passe na mão e o corpo já lido. `Err`: a resposta
-/// pronta (repasse ao Python com o corpo intacto, recusa da porta fechada, ou a recusa do Rust).
+/// pronta (repasse ao Python só de quem não pode na sessão, recusa da porta fechada, ou a recusa do Rust).
 pub(crate) async fn admit(st: &Arc<AppState>, peer: SocketAddr, req: Request, route: WriteRoute) -> Result<(Ctx, Bytes), Response> {
     let (fwd, who) = match who(st, peer, &req).await { Ok(value) => value, Err(e) => return Err(crate::auth::unavailable(e)) };
     let runtime = st.state.runtime.get().cloned();
@@ -89,9 +89,9 @@ pub(crate) async fn admit(st: &Arc<AppState>, peer: SocketAddr, req: Request, ro
         && let Some(response) = orchestration_guard(st, name, req.headers()).await {
         return Err(response);
     }
-    let (Some(runtime), Some(name)) = (runtime, name) else {
-        return Err(pass(st, req, &fwd).await);
-    };
+    // Quem não pode nesta sessão segue ao Python, que o recusa.
+    let Some(name) = name else { return Err(pass(st, req, &fwd).await) };
+    let Some(runtime) = runtime else { return Err(starting(req.headers())) };
     let (parts, body) = req.into_parts();
     let Ok(bytes) = to_bytes(body, BODY_LIMIT).await else { return Err(too_large(&parts.headers)) };
     let shaped = table::body_ok(route, &bytes);
@@ -104,7 +104,13 @@ pub(crate) async fn admit(st: &Arc<AppState>, peer: SocketAddr, req: Request, ro
         Write::Unowned if route == WriteRoute::Input => Err(input::unowned_response(st, &name, peer, &parts.headers, &bytes).await),
         // O Python não tem a rota de parar: sem agente do Rust no nome, a recusa é a mesma do Codex.
         Write::Unowned if route == WriteRoute::StopTask => Err(control::stop_unowned(&parts.headers)),
-        Write::Unowned | Write::Python => Err(forward_whole(st, parts, bytes, &fwd).await),
+        Write::Unowned if !shaped && !matches!(route, WriteRoute::QueueEdit | WriteRoute::QueueReorder | WriteRoute::QueueSteer) => Err(invalid_body(&parts.headers)),
+        Write::Unowned => {
+            let (status, body) = unowned::refusal(st, &name, route, &bytes).await;
+            let mut response = json_response(status, body);
+            cors(&parts.headers, response.headers_mut());
+            Err(response)
+        }
         Write::Busy => {
             let mut response = json_response(StatusCode::CONFLICT, busy_body());
             cors(&parts.headers, response.headers_mut());
@@ -133,6 +139,13 @@ pub(crate) async fn orchestration_guard(st: &Arc<AppState>, name: &str, headers:
     Some(response)
 }
 
+/// Escrita que chega antes de o runtime existir (subida): 503 `server_starting`, e o cliente repete.
+pub(crate) fn starting(headers: &axum::http::HeaderMap) -> Response {
+    let mut response = crate::startup::unavailable();
+    cors(headers, response.headers_mut());
+    response
+}
+
 /// Recusa do Rust a uma sessão dele: esperar a conversa abrir é 409; o resto, 503.
 pub(crate) fn failed_status(error: &crate::runtime::protocol::RuntimeError) -> StatusCode {
     if error.code == crate::runtime::codex_relaunch::STARTING || error.code == crate::runtime::gateway::ASLEEP_WAKING || error.code=="other_terminal_starting" { StatusCode::CONFLICT } else { StatusCode::SERVICE_UNAVAILABLE }
@@ -143,9 +156,8 @@ pub(crate) fn failed_status(error: &crate::runtime::protocol::RuntimeError) -> S
 /// Codex com terminal que não deu para adotar); a escrita nunca cai no Python.
 /// `Opening`: texto para o Codex com terminal que ainda abre a conversa, com a chave da fila dela.
 /// `Asleep`: texto para a sessão adormecida (ou acordando), com a chave da fila dela.
-/// `Unowned`: nenhum agente do Rust no nome (shell, Codex cru, nome inexistente); o texto é do `unowned`.
-/// `Python`: rota que a tabela não dá ao Rust para esse provedor e modo.
-pub(crate) enum Write { Rust(IngressPass, WriteTarget), Python, Unowned, Busy, Opening(String), Asleep(String), Failed(crate::runtime::protocol::RuntimeError) }
+/// `Unowned`: nenhum agente do Rust no nome (shell, Codex cru, nome inexistente); a resposta é do `unowned`.
+pub(crate) enum Write { Rust(IngressPass, WriteTarget), Unowned, Busy, Opening(String), Asleep(String), Failed(crate::runtime::protocol::RuntimeError) }
 
 /// Porta, entrada e tabela, nessa ordem. O passe só volta com `Rust`: repasse nunca o segura. Sem
 /// entrada, o Codex com terminal do Rust é adotado na hora (`adopt_now`) e a entrada procurada de novo;
@@ -188,8 +200,12 @@ pub(crate) async fn route_write(runtime: &RuntimeRegistry, name: &str, route: Wr
             },
         },
     };
-    let Some(provider) = Provider::from_str(&target.provider) else { return Write::Python };
-    if decide(route, provider, target.terminal) == Owner::Python { return Write::Python; }
+    let Some(provider) = Provider::from_str(&target.provider) else {
+        return Write::Failed(RuntimeError::new("runtime_provider_unknown", "a sessão tem um agente que o servidor não conhece; nada foi enviado"));
+    };
+    if decide(route, provider, target.terminal) == Owner::Refused {
+        return Write::Failed(RuntimeError::new("session_route_unavailable", "esta ação não existe para este tipo de sessão; nada foi enviado"));
+    }
     if target.busy { target.healthy = runtime.settle_busy(name, &target).await; }
     // Exceção da entrada doente: o modo de permissão do Codex sem terminal cujo processo caiu e não voltou
     // é lido e gravado no arquivo da sessão, e vale na próxima subida (como no Python).
