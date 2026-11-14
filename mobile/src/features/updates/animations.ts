@@ -4,6 +4,7 @@ import { AutoReportAnimation } from './AutoReportAnimation';
 import { CodexActivityAnimation } from './CodexActivityAnimation';
 import { CompactIdleAnimation } from './CompactIdleAnimation';
 import { ConnectAnimation } from './ConnectAnimation';
+import { DreamAnimation } from './DreamAnimation';
 import { FolderBranchAnimation } from './FolderBranchAnimation';
 import { HideFromListAnimation } from './HideFromListAnimation';
 import { ImageRevealAnimation } from './ImageRevealAnimation';
@@ -34,6 +35,7 @@ const animations: Record<string, ComponentType<{ width: number }>> = {
   'revelacao-imagem': ImageRevealAnimation,
   'pedido-na-sessao': SessionVaultAnimation,
   'sem-projeto': NoProjectAnimation,
+  'sonho-da-memoria': DreamAnimation,
   'sugestao-de-nome': RenameSuggestionAnimation,
   'worktree-atualizada': WorktreeFreshAnimation,
 };
