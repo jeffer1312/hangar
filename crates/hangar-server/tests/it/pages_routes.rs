@@ -142,11 +142,12 @@ async fn shot_without_chromium_is_404_with_code() {
 }
 
 #[tokio::test]
-async fn guest_is_passed_to_python() {
+async fn stranger_gets_401_from_rust() {
+    // R5-07: a página só existe no Rust; sem dono nem bilhete, 401 em vez do 404 do FastAPI.
     let s = scene().await;
     let r = client().get(format!("http://{}/api/sessions/s1/pages/abc", s.public)).send().await.unwrap();
-    assert_eq!(r.text().await.unwrap(), "from-python");
-    assert_eq!(s.python.hits_to("/api/sessions/s1/pages/abc"), 1);
+    assert_eq!(r.status().as_u16(), 401);
+    assert_eq!(s.python.hits_to("/api/sessions/s1/pages/abc"), 0);
 }
 
 #[tokio::test]
@@ -165,9 +166,10 @@ async fn nav_ticket_opens_only_its_page() {
     assert!(shell.text().await.unwrap().contains("<title>A</title>"));
     assert_eq!(s.python.hits_to(&format!("/api/sessions/s1/pages/{page}")), 0, "atendida no Rust, sem senha");
 
-    assert_eq!(open(&other, &ticket).await.unwrap().text().await.unwrap(), "from-python", "outra página segue sem dono");
+    assert_eq!(open(&other, &ticket).await.unwrap().status().as_u16(), 401, "outra página segue sem dono");
     let expired = tickets.issue("s1", &page, now - hangar_server::nav_requests::TTL_SECS as u64 - 1);
-    assert_eq!(open(&page, &expired).await.unwrap().text().await.unwrap(), "from-python", "vencido");
+    assert_eq!(open(&page, &expired).await.unwrap().status().as_u16(), 401, "vencido");
+    assert_eq!(s.python.hits_to(&format!("/api/sessions/s1/pages/{other}")), 0);
 }
 
 #[tokio::test]

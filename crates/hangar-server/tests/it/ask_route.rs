@@ -195,13 +195,14 @@ async fn ask_route_body_is_strict_like_fastapi() {
 
 #[tokio::test]
 async fn ask_route_is_answered_by_rust_only_for_the_owner() {
-    // ASK-01: sem o token do dono segue ao Python, que recusa como hoje.
+    // ASK-01 e R5 (decisão 5): sem o token do dono o 401 sai do Rust, sem passar pelo Python.
     let cli = FakeCli::answering(&[]);
     let scene = scene(&cli).await;
     assert_eq!(ask(&scene, "zzznadaqui").await.0, StatusCode::OK);
     assert_eq!(scene.python.hits_to("/api/ask-history"), 0);
-    let _ = post(&scene, br#"{"question": "clippy"}"#, false).await;
-    assert_eq!(scene.python.hits_to("/api/ask-history"), 1);
+    let (status, body) = post(&scene, br#"{"question": "clippy"}"#, false).await;
+    assert_eq!((status, body["detail"]["code"].as_str()), (StatusCode::UNAUTHORIZED, Some("erro_nao_autorizado")), "{body}");
+    assert_eq!(scene.python.hits_to("/api/ask-history"), 0);
     assert!(cli.calls().is_empty());
     assert!(hangar_server::migration_status::rust_route(&axum::http::Method::POST, "/api/ask-history"));
 }
