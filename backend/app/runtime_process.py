@@ -329,7 +329,9 @@ def refresh_members(proc):
     containment = proc.runtime_containment
     if containment.record is None or containment.cleaned:
         return
-    if not _same_process(containment.pid, containment.birth):
+    # O filho é nosso e o handle dele fica aberto: `poll()` responde sem listar os processos da máquina,
+    # o que `status()` e `num_threads()` fazem no Windows a cada chamada.
+    if proc.poll() is not None:
         return
     members = {}
     if containment.job is None:
