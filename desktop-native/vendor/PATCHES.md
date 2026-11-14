@@ -19,6 +19,19 @@ original extraído).
 Depois de qualquer mudança à mão num crate vendorizado, rodar `vendor/rebase.sh export`: o `.patch` é o registro do que
 fizemos, e só vale se acompanhar a cópia.
 
+## Estado na atualização 0.9.0 → 0.9.1 (gpui-pre 0.3.11 → 0.3.12)
+
+Todos os ajustes seguem, menos um. Onde os dois lados mexeram:
+
+| Ajuste | Onde | Estado | Por quê |
+|---|---|---|---|
+| `CreateTargetForHwnd(hwnd, false)` | gpui-pre-windows `directx_renderer.rs` | descartado | a 0.3.12 já cria o alvo com `false` |
+| Folga e régua do fim da lista | gpui-pre `elements/list.rs` | adaptado | a lista passou a descontar recuo e borda horizontais da largura do item; a nossa limpeza da folga ficou antes dessa conta |
+| Nós de acessibilidade do desenho adiado | gpui-pre `window.rs` | adaptado | o upstream passou a guardar no desenho adiado as entidades lidas; a captura dos nós envolve a mesma chamada |
+| Número digitado do item de lista (`value`) | gpui-base `text/node.rs`, `format/*`, `editor_host.rs` | adaptado | `BlockNode::ListItem` ganhou `task_marker` do kit; os dois campos convivem |
+| Blocos fora da tela não montados | gpui-base `text/mod.rs`/`state.rs` | mantido | só imports ao lado do bloco de superfície novo do kit |
+| Aparência do menu | gpui-component `menu/popup_menu.rs` | mantido | só imports |
+
 ## Estado na atualização 0.7.0 → 0.9.0 (gpui-pre 0.3.7 → 0.3.11)
 
 | Ajuste | Onde | Estado | Por quê |
@@ -50,7 +63,6 @@ gpui-pre-apple/-macos: só checagem de tipos para `aarch64-apple-darwin`, com o 
 | `PrimitiveBatch::Surfaces` desenhado como sprite policromático, alpha forçado a 1 | gpui-pre-wgpu `wgpu_renderer.rs`/`shaders.wgsl` | o renderer wgpu ignorava superfícies; em XRGB o byte X não é alpha |
 | `PaintSurface::texture`/`paint_surface` também no Windows | gpui-pre `scene.rs`/`window.rs` | a página da conversa chega do screencast da WebView2 como textura externa, como no Linux |
 | `SurfaceTexture` e `draw_surfaces` desenhando a textura como sprite policromático | gpui-pre-windows `directx_devices.rs`/`directx_renderer.rs` | o DirectX ignorava superfícies; a textura é criada no device do GPUI e escrita na thread da janela |
-| `CreateTargetForHwnd(hwnd, false)` | gpui-pre-windows `directx_renderer.rs` | com topmost a composição cobre a janela filha do WebView2; o GPUI deixa de desenhar por cima dela |
 
 ## Bandeja
 

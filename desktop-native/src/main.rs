@@ -36,12 +36,12 @@ mod ui_map;
 mod update;
 mod voice;
 #[cfg(test)]
-#[path = "../vendor/gpui-pre-0.3.11/src/elements/list_tail.rs"]
+#[path = "../vendor/gpui-pre-0.3.12/src/elements/list_tail.rs"]
 mod list_tail_tests;
 #[cfg(test)]
 mod a11y_snapshot_tests {
     use gpui_kit::accesskit;
-    include!("../vendor/gpui-pre-0.3.11/src/window/a11y/snapshot.rs");
+    include!("../vendor/gpui-pre-0.3.12/src/window/a11y/snapshot.rs");
 }
 use gpui_kit::{component::{Root, Theme, ThemeMode}, *};
 use std::{borrow::Cow, sync::Arc};
