@@ -76,22 +76,31 @@ pub(crate) fn entry_of(path: &Path, data: &Map<String, Value>) -> Result<Option<
 
 /// Ausente = `{}`; ilegível, JSON inválido ou não objeto = `erro_computer_control_read`.
 pub(crate) fn read_object(path: &Path, empty_ok: bool) -> Result<Map<String, Value>, Error> {
-    // O Claude Code troca o arquivo por rename: no Windows a leitura no meio da troca falha por um instante.
-    let bytes = match hangar_core::fs::read_replaced(path) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Map::new()),
-        Err(error) => return Err(unreadable(path, &error)),
-    };
-    object_of(path, &bytes, empty_ok)
+    parsed(path, read_raw(path)?.as_deref(), empty_ok)
 }
 
-pub(crate) fn unreadable(path: &Path, error: &std::io::Error) -> Error {
+/// Os bytes do arquivo; ausente = `None`.
+pub(crate) fn read_raw(path: &Path) -> Result<Option<Vec<u8>>, Error> {
+    // O Claude Code troca o arquivo por rename: no Windows a leitura no meio da troca falha por um instante.
+    match hangar_core::fs::read_replaced(path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(unreadable(path, &error)),
+    }
+}
+
+/// Ausente = `{}`.
+pub(crate) fn parsed(path: &Path, bytes: Option<&[u8]>, empty_ok: bool) -> Result<Map<String, Value>, Error> {
+    bytes.map_or_else(|| Ok(Map::new()), |bytes| object_of(path, bytes, empty_ok))
+}
+
+fn unreadable(path: &Path, error: &std::io::Error) -> Error {
     let error = crate::strerror(error);
     Error::read(path, &error, format!("não consegui ler {}: {error}", path.display()))
 }
 
 /// O objeto JSON de um arquivo já lido, com os mesmos erros de `read_object`.
-pub(crate) fn object_of(path: &Path, bytes: &[u8], empty_ok: bool) -> Result<Map<String, Value>, Error> {
+fn object_of(path: &Path, bytes: &[u8], empty_ok: bool) -> Result<Map<String, Value>, Error> {
     if empty_ok && bytes.is_empty() {
         return Ok(Map::new());
     }

@@ -133,6 +133,43 @@ fn verbatim_stripped(text: &str) -> Option<String> {
     text.strip_prefix(r"\\?\").filter(|rest| rest.as_bytes().get(1) == Some(&b':')).map(str::to_owned)
 }
 
+/// Os bits de permissão (`& 0o777`). Fora do Unix não há modo: `Unsupported`, e quem chama decide o padrão.
+pub fn file_mode(path: &Path) -> io::Result<u32> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        Ok(path.metadata()?.permissions().mode() & 0o777)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        Err(io::ErrorKind::Unsupported.into())
+    }
+}
+
+/// Fora do Unix não faz nada.
+pub fn chmod(path: &Path, mode: u32) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (path, mode);
+        Ok(())
+    }
+}
+
+/// A mensagem do sistema sem o " (os error N)" do Rust, e o N: o `strerror` e o `errno` do Python.
+pub fn os_error_parts(error: &io::Error) -> (String, Option<i32>) {
+    let text = error.to_string();
+    match error.raw_os_error() {
+        Some(number) => (text.strip_suffix(&format!(" (os error {number})")).map_or_else(|| text.clone(), str::to_owned), Some(number)),
+        None => (text, None),
+    }
+}
+
 #[cfg(test)]
 mod verbatim_tests {
     use super::verbatim_stripped;

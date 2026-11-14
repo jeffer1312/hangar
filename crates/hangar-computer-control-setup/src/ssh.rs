@@ -181,7 +181,7 @@ async fn run(program: &Path, args: &[String], env: &BTreeMap<String, String>, de
     #[cfg(unix)]
     tree.attach(&child).map_err(RunError::Other)?;
     match tokio::time::timeout(deadline, child.wait_with_output()).await {
-        Ok(Ok(output)) => Ok(Output { code: exit_code(&output.status), stdout: text(&output.stdout), stderr: text(&output.stderr) }),
+        Ok(Ok(output)) => Ok(Output { code: hangar_core::terminal_process::exit_code(output.status).unwrap_or(-1), stdout: text(&output.stdout), stderr: text(&output.stderr) }),
         Ok(Err(error)) => Err(RunError::Other(error)),
         Err(_) => {
             #[cfg(unix)]
@@ -189,17 +189,6 @@ async fn run(program: &Path, args: &[String], env: &BTreeMap<String, String>, de
             Err(RunError::Timeout)
         }
     }
-}
-
-/// Morto por sinal vira negativo, como o `returncode` do Python.
-fn exit_code(status: &std::process::ExitStatus) -> i32 {
-    #[cfg(unix)]
-    {
-        if let Some(signal) = std::os::unix::process::ExitStatusExt::signal(status) {
-            return -signal;
-        }
-    }
-    status.code().unwrap_or(-1)
 }
 
 /// `text=True, errors="replace"`: bytes inválidos trocados e quebras universais.

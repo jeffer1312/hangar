@@ -10,29 +10,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
+pub use hangar_core::fs::chmod;
+
 pub fn mode(path: &Path) -> std::io::Result<u32> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        Ok(path.metadata()?.permissions().mode() & 0o777)
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = path;
-        Ok(0o644)
-    }
-}
-pub fn chmod(path: &Path, mode: u32) -> std::io::Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = (path, mode);
-        Ok(())
-    }
+    if cfg!(unix) { hangar_core::fs::file_mode(path) } else { Ok(0o644) }
 }
 pub fn write_file(path: &Path, blob: &Blob) -> Result<(), Error> {
     let parent = path

@@ -132,9 +132,5 @@ pub fn supported() -> bool {
 
 /// O `strerror` do Python: a mensagem do sistema sem o " (os error N)" do Rust.
 fn strerror(error: &std::io::Error) -> String {
-    let text = error.to_string();
-    match text.rfind(" (os error ") {
-        Some(at) if text.ends_with(')') => text[..at].to_owned(),
-        _ => text,
-    }
+    hangar_core::fs::os_error_parts(error).0
 }

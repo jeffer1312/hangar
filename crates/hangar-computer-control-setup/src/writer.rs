@@ -10,7 +10,7 @@ use hangar_core::config_lock::{ConfigLock, lock_config};
 use hangar_core::orq_codec::codec::python_string;
 use hangar_core::pycompat::{pyjson, truthy};
 
-use crate::files::{entry_of, known_from, object_of, read_entries, read_entry, unreadable};
+use crate::files::{entry_of, known_from, parsed, read_entries, read_entry, read_raw};
 use crate::{Error, NAME, Paths};
 
 /// As variáveis da página Jev, na ordem em que o Python as gravava.
@@ -384,19 +384,6 @@ fn update(
     Err(Error::io(format!("Arquivo continua mudando: {}; tentar novamente", path.display())))
 }
 
-fn read_raw(path: &Path) -> Result<Option<Vec<u8>>, Error> {
-    match hangar_core::fs::read_replaced(path) {
-        Ok(bytes) => Ok(Some(bytes)),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(unreadable(path, &error)),
-    }
-}
-
-/// Ausente = `{}`.
-fn parsed(path: &Path, bytes: Option<&[u8]>, empty_ok: bool) -> Result<Map<String, Value>, Error> {
-    bytes.map_or_else(|| Ok(Map::new()), |bytes| object_of(path, bytes, empty_ok))
-}
-
 /// O JSON do Python (`indent=2`, ASCII; surrogate solto lido volta como estava), trocado de uma vez só
 /// se o que sai do lugar for `expected`. `private` grava 0600 (tem chave); senão fica o modo que o
 /// arquivo tinha, lido através do link.
@@ -408,44 +395,18 @@ pub fn write_json(
     link: Option<&Path>,
 ) -> Result<(), Error> {
     let bytes = pyjson::dumps_indent(&Value::Object(data), 2, true).into_bytes();
-    let mode = if private { 0o600 } else { mode(path).unwrap_or(0o644) };
+    let mode = if private { 0o600 } else { hangar_core::fs::file_mode(path).unwrap_or(0o644) };
     let parent = path.parent().ok_or_else(|| Error::io(format!("{}: arquivo sem pasta", path.display())))?;
     let io = |error: std::io::Error| Error::at(path, &error);
     std::fs::create_dir_all(parent).map_err(io)?;
     let mut file = tempfile::Builder::new().prefix(".hangar-config-").tempfile_in(parent).map_err(io)?;
     file.write_all(&bytes).map_err(io)?;
     file.as_file().sync_all().map_err(io)?;
-    chmod(file.path(), mode).map_err(io)?;
+    hangar_core::fs::chmod(file.path(), mode).map_err(io)?;
     let file = file.into_temp_path();
     #[cfg(test)]
     race::fire(path);
     hangar_core::fs_replace::replace(&file, path, expected, link).map_err(Error::io)
-}
-
-fn mode(path: &Path) -> Option<u32> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        path.metadata().ok().map(|m| m.permissions().mode() & 0o777)
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = path;
-        None
-    }
-}
-
-fn chmod(path: &Path, mode: u32) -> std::io::Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = (path, mode);
-        Ok(())
-    }
 }
 
 /// Escrita alheia no último instante antes da troca, para provar que ela é retida e não perdida.

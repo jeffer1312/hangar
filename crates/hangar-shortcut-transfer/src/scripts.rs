@@ -483,34 +483,13 @@ pub(crate) fn write_file(target: &Path, data: &[u8], mode: u32, created: &mut Ve
     fs::create_dir_all(parent)?;
     let mut file = tempfile::Builder::new().prefix(".hangar-shortcut-").tempfile_in(parent)?;
     file.write_all(data)?;
-    set_mode(file.path(), mode)?;
+    hangar_core::fs::chmod(file.path(), mode)?;
     file.persist(target).map_err(|error| error.error)?;
     Ok(())
 }
 
 pub(crate) fn mode(path: &Path) -> io::Result<u32> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        Ok(fs::metadata(path)?.permissions().mode() & 0o777)
-    }
-    #[cfg(not(unix))]
-    {
-        fs::metadata(path).map(|_| 0o600)
-    }
-}
-
-fn set_mode(path: &Path, mode: u32) -> io::Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(mode))
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = (path, mode);
-        Ok(())
-    }
+    if cfg!(unix) { hangar_core::fs::file_mode(path) } else { fs::metadata(path).map(|_| 0o600) }
 }
 
 fn executable(path: &Path) -> io::Result<bool> {

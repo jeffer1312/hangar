@@ -8,7 +8,7 @@ use std::time::Duration;
 use serde_json::{Map, Value, json};
 
 use hangar_core::pycompat::py;
-use hangar_core::terminal_process::{CommandTree, OwnedTree, PRIVATE_ENV_KEYS};
+use hangar_core::terminal_process::{CommandTree, OwnedTree, PRIVATE_ENV_KEYS, exit_code};
 
 use crate::host::{Error, Host};
 use crate::scrub::has_placeholder;
@@ -181,27 +181,10 @@ fn argv(command: &str, shell: &str) -> Vec<String> {
     }
 }
 
-/// Código de saída como o do `subprocess`: morto por sinal é o número do sinal, negativo.
-fn exit_code(status: std::process::ExitStatus) -> Option<i32> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::ExitStatusExt;
-        status.code().or_else(|| status.signal().map(|signal| -signal))
-    }
-    #[cfg(not(unix))]
-    {
-        status.code()
-    }
-}
-
 /// A mensagem do `OSError` do Python: `[Errno 2] No such file or directory: '/bin/x'`.
 fn spawn_message(error: &io::Error, program: &str) -> String {
-    match error.raw_os_error() {
-        Some(number) => {
-            let text = error.to_string();
-            let text = text.strip_suffix(&format!(" (os error {number})")).unwrap_or(&text);
-            format!("[Errno {number}] {text}: '{program}'")
-        }
-        None => error.to_string(),
+    match hangar_core::fs::os_error_parts(error) {
+        (text, Some(number)) => format!("[Errno {number}] {text}: '{program}'"),
+        (text, None) => text,
     }
 }
