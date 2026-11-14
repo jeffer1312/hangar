@@ -757,7 +757,6 @@ fn terminal_router_with(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> 
         .route("/__hangar_server/quotas", axum::routing::post(crate::accounts::quotas::private))
         .route("/__hangar_server/accounts/claude", axum::routing::post(crate::accounts::http::private_claude))
         .route("/__hangar_server/accounts/public", axum::routing::any(crate::accounts::http::private_public))
-        .route("/__hangar_server/groups", axum::routing::post(crate::groups::bridge::private))
         .route("/__hangar_server/codex/{*rest}", axum::routing::any(crate::session_write::bridge::codex))
         .route("/__hangar_server/claude/{*rest}", axum::routing::any(crate::session_write::bridge::claude))
         .route("/__hangar_server/jev/aux", axum::routing::any(crate::jev_aux::private))

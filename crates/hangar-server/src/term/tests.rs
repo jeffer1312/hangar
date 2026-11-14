@@ -430,34 +430,20 @@ async fn one_panel_across_owner_and_guest() {
     until("só o dono", || tmux.clients("p2").len() == 1).await;
 }
 
-/// `term.active` da ponte: o 409 do Python pergunta por aqui.
-mod bridge {
-    use super::*;
-
-    async fn ask(private: SocketAddr, name: &str) -> serde_json::Value {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        let body = serde_json::json!({"op": "term.active", "args": {"name": name}}).to_string();
-        let mut s = tokio::net::TcpStream::connect(private).await.unwrap();
-        s.write_all(format!("POST /__hangar_server/list HTTP/1.0\r\nHost: x\r\nx-hangar-internal: s\r\n\
-            content-type: application/json\r\ncontent-length: {}\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
-        let mut out = String::new();
-        s.read_to_string(&mut out).await.unwrap();
-        serde_json::from_str(out.split("\r\n\r\n").nth(1).unwrap()).unwrap()
-    }
-
-    #[tokio::test]
-    async fn term_active() {
-        let tmux = Tmux::new();
-        tmux.session("p3");
-        let srv = server(&tmux, |_| {}).await;
-        let private = private_addr(srv.addr).await;
-        assert_eq!(ask(private, "p3").await, serde_json::json!({"ok": true, "result": {"active": false}}));
-        let ws = connect(srv.addr, "/api/sessions/p3/term?token=dono").await.expect("abre");
-        until("anexado", || tmux.clients("p3").len() == 1).await;
-        assert_eq!(ask(private, "p3").await, serde_json::json!({"ok": true, "result": {"active": true}}));
-        assert_eq!(ask(private, "outra").await["result"]["active"], false);
-        drop(ws);
-        until("painel fechado", || srv.terms.active().is_empty()).await;
-        assert_eq!(ask(private, "p3").await["result"]["active"], false);
-    }
+/// R4: `term.active` saiu da ponte da lista com o último chamador do Python (o 409 do painel aberto):
+/// a operação é a recusa de operação desconhecida.
+#[tokio::test]
+async fn term_active_is_gone_from_the_list_bridge() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let tmux = Tmux::new();
+    tmux.session("p3");
+    let srv = server(&tmux, |_| {}).await;
+    let private = private_addr(srv.addr).await;
+    let body = serde_json::json!({"op": "term.active", "args": {"name": "p3"}}).to_string();
+    let mut s = tokio::net::TcpStream::connect(private).await.unwrap();
+    s.write_all(format!("POST /__hangar_server/list HTTP/1.0\r\nHost: x\r\nx-hangar-internal: s\r\n\
+        content-type: application/json\r\ncontent-length: {}\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+    let mut out = String::new();
+    s.read_to_string(&mut out).await.unwrap();
+    assert!(out.starts_with("HTTP/1.0 400") || out.starts_with("HTTP/1.1 400"), "{out}");
 }

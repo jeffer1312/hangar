@@ -319,9 +319,9 @@ class RuntimeTransport:
 
 def _point_bridges(address: str | None, secret: str | None) -> None:
     """Pontes Python → Rust no endereço privado dele, ou em nada; a lista primeiro, que recusa endereço torto."""
-    from app import account_bridge, groups_bridge, list_bridge, transcription_bridge
+    from app import account_bridge, list_bridge, transcription_bridge
     for bridge in (list_bridge, claude_customizations,
-                   groups_bridge, transcription_bridge):
+                   transcription_bridge):
         bridge.configure(address, secret)
     account_bridge.configure_preparation(address, secret)
 

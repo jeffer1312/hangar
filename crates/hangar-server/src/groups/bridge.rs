@@ -1,6 +1,5 @@
-//! Ponte privada dos grupos (`/__hangar_server/groups`): no modo `rust`/`pending` só o Rust grava
-//! `.hangar-pair`. Registry e as rotas que chegam pelas portas do Python pedem
-//! aqui, com o envelope das outras pontes (`{op, args}` → `{ok, result}` | `{ok: false, error}`).
+//! Rota de grupo chamada por dentro do servidor como se viesse do dono (`route`, a filha ligada) e a
+//! entrega adiada dos recados de quem pede entre máquinas (`deferring`). Sem ponte do Python: ela saiu.
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -8,51 +7,20 @@ use std::time::Duration;
 use axum::body::{Body, to_bytes};
 use axum::extract::{ConnectInfo, Request, State};
 use axum::http::{Method, StatusCode, header};
-use axum::response::{IntoResponse, Response};
-use serde::Deserialize;
+use axum::response::Response;
 use serde_json::{Value, json};
 
-use super::exit::{notify_exit, segment};
+use super::exit::segment;
 use super::local::JoinRefusal;
 use super::routes::Bridged;
-use super::service::{GroupError, GroupService, PromoteError};
+use super::service::{GroupError, PromoteError};
 use crate::routes::AppState;
 
-const MAX_BODY: usize = 1 << 20;
 const MAX_REPLY: usize = 4 << 20;
-
-#[derive(Deserialize)]
-#[serde(tag = "op", content = "args")]
-enum Operation {
-    /// Fechamento que não passou pelo `delete` do Rust (Connect, convidado).
-    #[serde(rename = "group.leave")]
-    Leave {
-        name: String,
-        #[serde(default)]
-        phases: Value,
-    },
-    #[serde(rename = "group.orq_associate")]
-    OrqAssociate {
-        name: String,
-        gid: String,
-        mtime: f64,
-        #[serde(default)]
-        facts: Value,
-    },
-}
 
 /// Prazo de cada sessão na entrega adiada de quem entrou pela porta do Connect, abaixo do prazo da
 /// dona (`DELIVER_WAIT`, 5 s), como o das sessões do Rust.
 const DEFERRED_WAIT: Duration = Duration::from_secs(3);
-
-/// Teto da rota mais as entregas dela num pedido da ponte, abaixo dos 90 s que o Python espera: passou
-/// disso, quem não recebeu vira aviso e a resposta sai antes de o Python desistir.
-const BRIDGE_BUDGET: Duration = Duration::from_secs(75);
-
-/// O que sobra do teto da ponte para as entregas, contado do começo do pedido.
-fn bridge_wait(started: std::time::Instant) -> Option<Duration> {
-    Some(BRIDGE_BUDGET.saturating_sub(started.elapsed()).max(Duration::from_secs(1)))
-}
 
 /// Pedido repassado pelo Python: o recado a sessão sem dono no Rust sai depois da rota (`deliver_deferred`).
 pub(crate) struct BridgeCtx {
@@ -278,117 +246,4 @@ pub(crate) async fn route(
     let body = serde_json::from_slice(&bytes)
         .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&bytes).into_owned()));
     Ok(json!({"status": status, "body": body}))
-}
-
-async fn execute(
-    st: Arc<AppState>,
-    groups: Arc<GroupService>,
-    op: Operation,
-) -> Result<Value, Failed> {
-    match op {
-        Operation::Leave { name, phases: _ } => {
-            // A saída de grupo entre máquinas avisa quem ficou sozinho; sessão sem dono recebe depois.
-            let ctx = BridgeCtx::new();
-            let started = std::time::Instant::now();
-            let (ex, mut warnings) = CTX
-                .scope(ctx.clone(), async {
-                    let (ex, tell) = super::exit::leave(&st, &groups, &name, None)
-                        .await
-                        .map_err(group_failed)?;
-                    Ok::<_, Failed>((ex, notify_exit(&st, &groups, &name, &tell).await))
-                })
-                .await?;
-            let failed = deliver_deferred(&st, ctx.take_deliveries(), bridge_wait(started)).await;
-            // O aviso vai na resposta, em `warnings`; daqui sai só a linha do diário (o corpo é descartado).
-            report_failed(&st, &mut json!({}), failed.clone(), "rust.groups_bridge_delivery_failed", &[]);
-            warnings.extend(failed);
-            Ok(json!({"ex_peers": ex, "warnings": warnings}))
-        }
-        Operation::OrqAssociate {
-            name,
-            gid,
-            mtime,
-            facts: _,
-        } => {
-            // Sob o lock: um join ou uma saída concorrente não vê o time meio associado.
-            let done = groups
-                .locked(async {
-                    let root = groups.pair_root().to_path_buf();
-                    let home = st.accounts.env.home.clone();
-                    let mux = st.list.env().capture_program.to_string_lossy().into_owned();
-                    tokio::task::spawn_blocking(move || {
-                        let _lock = crate::orchestration::context::WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-                        crate::orchestration::context::associate(
-                            &home, &root, &name, &gid, mtime, &mux,
-                        )
-                    })
-                    .await
-                    .map_err(|e| {
-                        GroupError::Store(super::store::StoreError::Io(std::io::Error::other(e)))
-                    })
-                })
-                .await
-                .map_err(group_failed)?;
-            let (status, body) = match done {
-                Ok(body) => (200, body),
-                Err(crate::orchestration::context::AssociateError::Invalid(msg)) => (
-                    409,
-                    json!({"detail": {"code": "erro_orq_celula_invalida", "params": {}, "msg": msg}}),
-                ),
-                Err(crate::orchestration::context::AssociateError::Changed(msg)) => (
-                    409,
-                    json!({"detail": {"code": "erro_orq_arquivo_mudou", "params": {}, "msg": msg}}),
-                ),
-            };
-            Ok(json!({"status": status, "body": body}))
-        }
-    }
-}
-
-fn reply(value: Value) -> Response {
-    (
-        StatusCode::OK,
-        [(header::CONTENT_TYPE, "application/json")],
-        value.to_string(),
-    )
-        .into_response()
-}
-
-pub async fn private(
-    State(st): State<Arc<AppState>>,
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
-    req: Request,
-) -> Response {
-    if !crate::workspace_routes::private_ok(&st, peer, req.headers()) {
-        return StatusCode::NOT_FOUND.into_response();
-    }
-    let refused = |code: &'static str| {
-        if crate::warn_limit::allow(None, code) {
-            tracing::warn!(code, "ponte de grupos recusou o pedido");
-        }
-        StatusCode::BAD_REQUEST.into_response()
-    };
-    let Ok(Ok(bytes)) =
-        tokio::time::timeout(Duration::from_secs(6), to_bytes(req.into_body(), MAX_BODY)).await
-    else {
-        return refused("groups_bridge_body");
-    };
-    // Operação desconhecida aqui costuma ser Python e Rust de versões diferentes.
-    let Ok(op) = serde_json::from_slice::<Operation>(&bytes) else {
-        return refused("groups_bridge_invalid_request");
-    };
-    let Some(groups) = st.groups.clone() else {
-        return reply(
-            json!({"ok": false, "error": {"code": "groups_bridge_off", "detail": "sem pastas de grupo"}}),
-        );
-    };
-    match execute(st, groups, op).await {
-        Ok(result) => reply(json!({"ok": true, "result": result})),
-        Err(e) => {
-            if crate::warn_limit::allow(None, "groups_bridge_failed") {
-                tracing::warn!(code = %e.code, "ponte de grupos falhou");
-            }
-            reply(json!({"ok": false, "error": {"code": e.code, "detail": e.detail}}))
-        }
-    }
 }

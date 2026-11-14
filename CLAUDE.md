@@ -320,8 +320,8 @@ registrado, fora do caminho de leitura, para não competir com o que vale hoje.
   Um painel por sessão em todas as portas; xterm com fundo `rgba(0,0,0,0)`, nunca `'transparent'`.
   Com o painel aberto, quem conta linha de pane responde 409 — e o app tem que MOSTRAR esse texto.
   Com o Rust de pé, o PTY é só dele (Windows incluído): o `termsock` faz a porta de entrada de quem
-  chega ao Python (convidado) e liga os bytes a `/__hangar_server/term`; o 409 pergunta
-  `term.active` e erro da ponte é 503 (fechamento 1013 no socket), nunca PTY no Python.
+  chega ao Python (convidado) e liga os bytes a `/__hangar_server/term`; o 409 do painel aberto é
+  do Rust e erro da ponte é 503 (fechamento 1013 no socket), nunca PTY no Python.
 - **WebSocket do dono com `?token=` não confere Origin** (terminal, voz e navegador, Rust e
   Python). A Origin (`_origem_aceita`, `CP_TERM_ORIGINS`) só barra credencial que o navegador manda
   sozinho: hoje, o login de convidado no `termsock`. [Motivo](docs/decisoes/plataforma.md#websocket-do-dono-com-token-não-confere-origin-17102026).
@@ -991,9 +991,8 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   Medidas em [plataforma.md](docs/decisoes/plataforma.md#lista-do-dono-no-hangar-server).
 - **Os grupos são só do Rust; o Python não tem lógica de grupo.** Sidecars, fusão, contrato,
   texto do protocolo e a varredura de membro morto (ausência por tempo, lista sem fatos não varre)
-  moram em `groups/`. O Python só lê o arquivo de grupo e, nas portas dele (`orq`), repassa num sentido pela ponte `groups_bridge`
-  (`/__hangar_server/groups`). No modo `python` toda operação de grupo responde 503
-  `groups_need_rust_server`; fechar sessão em grupo ainda fecha, com esse aviso. Motivo em
+  moram em `groups/`. O Python só lê o arquivo de grupo; não há ponte de grupos. Sem pastas de grupo,
+  as rotas respondem 503 `erro_grupo_indisponivel` (`detalhe: groups_bridge_off`). Motivo em
   [plataforma.md](docs/decisoes/plataforma.md#grupos-o-rust-grava).
 - **Grupo entre máquinas do dono: uma dona, um `gid`, fila em disco.** Parear com
   `servidor::sessao` junta as máquinas do `peers.json` num grupo só; a máquina dona guarda o
