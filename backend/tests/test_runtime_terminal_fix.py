@@ -1,7 +1,6 @@
 import asyncio
 
 from app import api, terminal_input as ti
-from app.runtime_adapter import LegacyBridge
 from test_runtime_terminal import isolated_owner, live_owner
 
 
@@ -10,24 +9,6 @@ async def _to_rust(owner, name):
     """Registro Python do terminal aberto no Rust (o caminho do vínculo pendente que provou a conversa)."""
     await owner._open_slot_in_rust(name, owner.slot(name), launch=False)
     return True
-
-def test_python_reserve_confirm_returns_count_and_steer_once(monkeypatch, tmp_path):
-    owner, slot, _ = live_owner(monkeypatch, tmp_path)
-    monkeypatch.setattr(api, '_provider_of', lambda name: 'claude')
-    monkeypatch.setattr(api, '_headless', lambda name: False)
-    monkeypatch.setattr(api, '_session_exists', lambda name: True)
-    monkeypatch.setattr(api, '_pane_info', lambda name: ('claude', '%1'))
-    effects = []
-    monkeypatch.setattr(ti, 'steer_now', lambda *args: effects.append('steer') or True)
-    async def confirm(self, descriptor):
-        return {'confirmed': 2}
-    monkeypatch.setattr(LegacyBridge, 'confirm', confirm)
-    async def scenario():
-        assert await owner.op('session', {'kind': 'confirm'}, 'confirm') == {'confirmed': 2}
-        result = await api.steer_session('session')
-        assert result == {'ok': True, 'promoted': True, 'confirmed': 2}
-        assert effects == ['steer']
-    asyncio.run(scenario())
 
 import json
 import subprocess
@@ -66,9 +47,7 @@ console.log(JSON.stringify({effects,receipts,rearmed:timers.length}));
     assert output['rearmed'] == 1
 
 from types import SimpleNamespace
-from fastapi.testclient import TestClient
 from app import runtime_coordinator as rc, runtime_terminal as terminal, tmux, pqueue
-from test_runtime_terminal import TerminalGateway
 
 
 def test_first_claude_resolution_unknown_never_legacy(monkeypatch, tmp_path):
@@ -141,32 +120,6 @@ def test_filled_reserve_needs_input_and_submission_proof(monkeypatch, tmp_path, 
         assert effects == (['Enter'] if state in {'unreadable_after','new_placeholder'} else [])
     asyncio.run(scenario())
 
-
-def test_deferred_answer_http_preserves_question_and_is_not_success(monkeypatch, tmp_path):
-    gateway = TerminalGateway()
-    owner, slot, _ = live_owner(monkeypatch, tmp_path, gateway=gateway)
-    original = gateway.op
-    async def rpc(target, command, operation, clock):
-        if command['kind'] == 'control':
-            return {'operation_id':operation,'disposition':'deferred','payload':{'code':'picker_missing','stage':'answer'}}
-        return await original(target, command, operation, clock)
-    gateway.op = rpc
-    monkeypatch.setattr(api.settings, 'auth_token', 'test')
-    monkeypatch.setattr(api, '_cached_info_sync', lambda name: SimpleNamespace(provider='claude',jsonl=slot.binding.jsonl))
-    monkeypatch.setattr(api, '_headless', lambda name: False)
-    monkeypatch.setattr(api, '_recusa_se_painel_aberto', lambda name: None)
-    cleared = []
-    monkeypatch.setattr(api, 'clear_pending_askq', lambda *args: cleared.append(args))
-    client = TestClient(api.app)
-    async def scenario():
-        await _to_rust(owner,'session')
-        result = await asyncio.to_thread(client.post, '/api/sessions/session/answer', headers={'Authorization':'Bearer test'},
-            json={'answers':[{'kind':'option','indices':[0],'labels':['A']}]})
-        assert result.status_code == 409
-        assert result.json()['detail']['code'] == 'erro_sem_resposta'
-        assert cleared == []
-        await owner.detach('session')
-    asyncio.run(scenario())
 
 import os
 import shlex

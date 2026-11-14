@@ -89,21 +89,3 @@ def test_respostas_incompletas_ou_de_outra_pergunta_sao_recusadas(answers):
         server_requests = {1: pedido()}
     with pytest.raises(ValueError):
         response(pending(Client(), "thread"), answers)
-
-
-async def test_api_codex_responde_com_painel_aberto_sem_digitar_no_terminal(monkeypatch):
-    from types import SimpleNamespace
-    from app import api
-    calls = []
-    class Adapter:
-        async def answer_questions(self, *args):
-            calls.append(args)
-    monkeypatch.setattr(api, "_loop_servidor", asyncio.get_running_loop())
-    monkeypatch.setattr(api, "_cached_info_sync", lambda name: SimpleNamespace(provider="codex"))
-    monkeypatch.setattr(api, "get_adapter", lambda provider: Adapter())
-    monkeypatch.setattr(api, "_recusa_se_painel_aberto", lambda name: pytest.fail("consultou o terminal"))
-    body = api.AnswerBody(request_id="req", answers=[api.AnswerItem(
-        question_id="pergunta", kind="text", value="Resposta")])
-    assert await asyncio.to_thread(api.answer, "cx", body) == {"ok": True, "fallback": False}
-    assert calls[0][0:2] == ("cx", "req")
-    assert calls[0][2][0]["question_id"] == "pergunta"

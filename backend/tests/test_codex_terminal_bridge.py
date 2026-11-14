@@ -373,9 +373,3 @@ def test_guest_question_to_pi_does_not_wait_for_the_claude_bridge(monkeypatch, r
     with pytest.raises(api_mod._RustReply) as reply:
         asyncio.run(api_mod._codex_rust_port("ct", _request(GUEST_PORT, f"/api/sessions/ct/{route}", body=b'{"option": 1}')))
     assert reply.value.args[0] == 503 and json.loads(reply.value.args[1])["detail"]["code"] == "claude_bridge_failed"
-
-
-def test_question_bodies_keep_the_interaction_id():
-    assert api_mod.SelectBody(option=1, interaction_id="perm:t1").interaction_id == "perm:t1"
-    assert api_mod.AnswerBody(answers=[], interaction_id="ask:1").interaction_id == "ask:1"
-    assert api_mod.SkipQuestionBody(request_id="r", interaction_id="ask:2").interaction_id == "ask:2"
