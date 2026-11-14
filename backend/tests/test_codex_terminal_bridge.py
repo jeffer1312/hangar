@@ -1,9 +1,7 @@
 """Repasse num sentido, à ponte do Rust, do que entra pelo Python para um Codex com terminal dele."""
 import asyncio
 import http.server
-import logging
 import threading
-import urllib.parse
 
 import pytest
 from starlette.requests import Request
@@ -137,19 +135,6 @@ def test_bridge_failures_become_a_coded_failure_never_an_exception(monkeypatch):
     assert early[0] == 503 and code(early) == "codex_bridge_failed", "prazo antes de enviar: pode repetir"
 
 
-def test_delete_answers_the_rust_code_when_the_close_fails(monkeypatch):
-    from fastapi import HTTPException
-    from app.registry import KillFailed
-
-    def refuse(name, closed_by_rust=False):
-        raise KillFailed(name, {"code": "codex_bridge_failed", "params": {}, "msg": "fora"})
-    monkeypatch.setattr(api_mod.registry, "kill", refuse)
-    monkeypatch.setattr(api_mod, "_invalidate_lists", lambda: None)
-    with pytest.raises(HTTPException) as failed:
-        asyncio.run(api_mod.kill_session("cx"))
-    assert failed.value.status_code == 500 and failed.value.detail["code"] == "codex_bridge_failed"
-
-
 def test_the_claude_bridge_carries_who_asked(monkeypatch):
     seen = []
 
@@ -231,47 +216,6 @@ def test_relaunch_routes_entering_the_guest_or_connect_port_go_to_the_rust():
     for path in ("/api/sessions/{name}/modo-execucao", "/api/sessions/{name}/recarregar"):
         route = next(r for r in api_mod.app.routes if getattr(r, "path", None) == path and "POST" in r.methods)
         assert any(d.dependency is api_mod._codex_rust_port for d in route.dependencies), path
-
-
-def test_delete_marked_by_the_rust_only_cleans_python_stores(monkeypatch):
-    from app import internal_api
-    monkeypatch.setattr(internal_api, "_secret", "segredo")
-    calls = []
-    monkeypatch.setattr(api_mod.registry, "kill", lambda name, closed_by_rust=False: calls.append(closed_by_rust) or [])
-    monkeypatch.setattr(api_mod, "_invalidate_lists", lambda: calls.append("invalidate"))
-    monkeypatch.setattr(api_mod.share_bridge, "revoke_session", lambda name: calls.append("revoke"))
-
-    def request(mark):
-        return Request({"type": "http", "method": "DELETE", "path": "/api/sessions/cx", "query_string": b"",
-                        "headers": [(b"x-hangar-rust-closed", mark)]})
-    assert asyncio.run(api_mod.kill_session("cx", request=request(b"segredo")))["ok"] is True
-    assert calls == [True], "marcado pelo Rust: só as lojas daqui, sem invalidar a lista nem pedir a revogação a ele"
-    asyncio.run(api_mod.kill_session("cx", request=request(b"forjado")))
-    assert calls[1:] == [False, "invalidate", "revoke"], "marca que não é o segredo não vale"
-    asyncio.run(api_mod.kill_session("cx"))
-    assert calls[4:] == [False, "invalidate", "revoke"], "chamada em processo (MCP) encerra como sempre"
-
-
-def test_delete_closed_by_the_rust_records_the_closed_name_from_its_transcript(monkeypatch, caplog):
-    from app import internal_api
-    monkeypatch.setattr(internal_api, "_secret", "segredo")
-    killed, recorded = [], []
-    monkeypatch.setattr(api_mod.registry, "kill", lambda name, closed_by_rust=False: killed.append(name) or [])
-    monkeypatch.setattr(api_mod.registry, "list", lambda: pytest.fail("fechada pelo Rust: não procura na lista"))
-    monkeypatch.setattr(api_mod.share_bridge, "revoke_session", lambda name: None)
-    monkeypatch.setattr(api_mod.closed_names, "record", lambda jsonl, name: recorded.append((jsonl, name)))
-
-    def request(*extra):
-        return Request({"type": "http", "method": "DELETE", "path": "/api/sessions/cx", "query_string": b"",
-                        "headers": [(b"x-hangar-rust-closed", b"segredo"), *extra]})
-    path = "/home/u/Área de trabalho/rollout-1.jsonl"
-    encoded = urllib.parse.quote(path, safe="").encode()
-    asyncio.run(api_mod.kill_session("cx", request=request((b"x-hangar-closed-transcript", encoded))))
-    assert recorded == [(path, "cx")]
-    with caplog.at_level(logging.WARNING, logger=api_mod._log.name):
-        assert asyncio.run(api_mod.kill_session("cx", request=request()))["ok"] is True
-    assert recorded == [(path, "cx")] and killed == ["cx", "cx"], "sem transcript a limpeza segue"
-    assert "Rust close sent no transcript" in caplog.text
 
 
 def test_claude_question_reaches_the_rust_whole_and_421_leaves_it_to_python(monkeypatch):

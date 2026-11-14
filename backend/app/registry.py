@@ -18,14 +18,14 @@ from app import claude_customizations as session_customizations
 from app import plugin_bridge
 from app import runtime_config
 from app.models import SessionInfo, session_key
-from app.pqueue import PromptQueue, merged_history
+from app.pqueue import merged_history
 from app.archive import _texto_simples, conversation_files
 from app.chain import ThenLink
 from app.pair import PairLink
 from app.adapters.claude_headless import sessions as headless_sessions
 from app.adapters.codex import sessions as codex_sessions
 from app import codex_contas
-from app.askquestion import clear_pending_askq, pergunta_aberta
+from app.askquestion import pergunta_aberta
 from app.state import (classify, _live_spinner, rate_limit_reset,
                        codex_turno_aberto, menu_codex,
                        status_line as _pane_status)
@@ -560,15 +560,6 @@ _STATUS_TTL = 20.0
 _STATUS_BUDGET = 2
 
 
-class KillFailed(Exception):
-    """A sessao continuou de pe depois do kill. Existe pra a rota DELETE reportar em vez de responder
-    {"ok": true} e a UI sumir com um card de sessao que segue viva (ver SessionRegistry.kill)."""
-
-    def __init__(self, name: str, detail: dict | None = None):
-        super().__init__(f"a sessao '{name}' continua de pe depois do kill-session")
-        self.name, self.detail = name, detail
-
-
 class SessionOpenNeedsRust(Exception):
     """Abrir e subir sessão é do Rust (abertura única); sem ele, não tem quem faça."""
     code = "session_open_needs_rust_server"
@@ -832,20 +823,6 @@ class SessionRegistry:
             except (list_bridge.ListBridgeError, tmux.MuxIndisponivel):
                 if required:
                     raise
-
-    def _forget(self, name: str, required: bool = False) -> None:
-        """Esquece o nome aqui e no Rust. `required`: criação, antes de qualquer efeito; a falha
-        levanta, porque o nome reusado herdaria o cache e abriria a conversa da morta. Nos demais
-        a sessão já morreu ou trocou: a falha fica no diário (`lista.ponte`) e a criação seguinte
-        do mesmo nome esquece de novo."""
-        if _rust_caches():
-            from app import list_bridge
-            try:
-                list_bridge.forget(name)
-            except (list_bridge.ListBridgeError, tmux.MuxIndisponivel):
-                if required:
-                    raise
-        self._forget_local(name)
 
     def _forget_local(self, name: str) -> None:
         self._jsonl_cache.pop(name, None)
@@ -1526,90 +1503,6 @@ class SessionRegistry:
                                             env=dict(os.environ), cwd=meta["cwd"], config_dir=meta.get("config_dir"))
             cmd = tmux.join_cmd([*prefix, "/bin/sh", "-c", cmd])
         return cmd
-
-
-    @staticmethod
-    def _kill_hidden_shell(name: str) -> None:
-        # Task 6 (achado da revisao, rodada 2): mata `term-<name>` SO se a marca confirmar que a
-        # sessao e NOSSA -- consulta DIRETA ao tmux (`is_hidden`), nao inferida de `self.list()`
-        # (que tambem filtra por sidecar Codex, e "sumir da lista" nao e o mesmo que "estar
-        # marcada"). Sem esta checagem, um "term-<name>" de TERCEIRO (o mesmo cenario alcancavel
-        # que o I1 reconheceu na rota /shell) seria derrubado JUNTO quando o agente `name` fosse
-        # encerrado, com trabalho rodando e sem afordancia nenhuma pro dono perceber -- so um
-        # `_log.debug`. Best-effort: falhar aqui NAO pode derrubar o kill principal, que ja
-        # aconteceu antes desta chamada.
-        alvo = f"term-{name}"
-        if tmux.is_hidden(alvo) and not tmux.kill_session(alvo):
-            _log.debug("kill: shell escondido de %r nao saiu (pode nao existir)", name)
-
-    def kill(self, name: str, *, closed_by_rust: bool = False) -> list[dict]:
-        """Devolve avisos de saída (sempre vazio: a saída do grupo é do Rust, depois do fechamento).
-        `closed_by_rust`: o Rust já encerrou a sessão (pane, app-server, sidecar, fila, grupo) e
-        repassou; só as lojas daqui, sem nenhuma chamada de volta a ele."""
-        if closed_by_rust:
-            self._forget_local(name)
-            ThenLink(name).clear()
-            return []
-
-        # Levanta KillFailed quando a sessao SOBREVIVE. Antes o retorno do tmux era descartado e a
-        # limpeza duravel (cache, fila, then, pareamento) rodava do mesmo jeito: o card sumia da UI, o
-        # pareamento se desfazia, a rota respondia {"ok": true} — e a sessao reaparecia na varredura
-        # seguinte, sem fila e sem par, parecendo um bug sem relacao com o "encerrar" de minutos antes.
-        # Pesa mais no Windows, onde o kill-session do psmux nao derruba a sessao (medido).
-        if headless_sessions.exists(name):
-            # Claude sem terminal: SIGTERM no processo (se vivo), sidecar fora, estado durável limpo.
-            from app.adapters import get_adapter, CLAUDE_HEADLESS
-            # Sidecar PRIMEIRO: sem ele, um drain que chegue no meio não sobe outro processo. O
-            # meta vai junto: é nele que mora o pid do cano, que vive fora do backend.
-            meta = headless_sessions.load(name)
-            headless_sessions.delete(name)
-            try:
-                get_adapter(CLAUDE_HEADLESS).close_sync(name, meta)
-            except Exception:
-                headless_sessions.restaurar(meta, preserve_process=True)
-                raise
-            self._forget(name)
-            PromptQueue(name).clear()
-            ThenLink(name).clear()
-            return []
-        if codex_sessions.exists(name):
-            # Sessao Codex: fecha app-server e TUI tmux, apaga o sidecar e limpa estado duravel.
-            from app.adapters import get_adapter
-            # O tmux PRIMEIRO. Invertido, `close_sync` matava o app-server e so entao o kill era
-            # tentado: falhando ele (o caso que esta funcao existe pra pegar), a excecao dizia "nao
-            # consegui encerrar" com a TUI ja sem servidor — sinal trocado, e a sessao que sobrou na
-            # tela nao fala mais com ninguem. Agora falha antes de qualquer estrago.
-            # Codex com terminal do Rust: quem encerra (pane, app-server, sidecar, fila) é ele; as lojas daqui seguem abaixo.
-            from app.runtime_coordinator import rust_codex_terminal
-            if (rust := rust_codex_terminal(name, "kill")) is not None and rust[0] != 200:
-                raise KillFailed(name, json.loads(rust[1]).get("detail"))
-            if rust is None and not (codex_sessions.load(name) or {}).get("headless") and not tmux.kill_session(name):
-                raise KillFailed(name)
-            get_adapter("codex").close_sync(name) if rust is None else get_adapter("codex").forget_memory(name)
-            self._kill_hidden_shell(name)
-            codex_sessions.delete(name)
-            self._forget(name)
-            PromptQueue(name).clear()
-            ThenLink(name).clear()
-            return []
-        # Limpa o sidecar do AskUserQuestion ANTES de matar (precisa do processo vivo pra resolver o
-        # jsonl), best-effort: cleanup nunca bloqueia/quebra o kill. Senao um stale reabriria o stepper
-        # numa sessao futura de mesmo nome.
-        try:
-            jsonl = next((s.jsonl for s in self.list() if s.name == name), None)
-            if jsonl:
-                clear_pending_askq(jsonl)
-        except Exception:
-            pass
-        if not tmux.kill_session(name):
-            raise KillFailed(name)
-        self._kill_hidden_shell(name)
-        self._forget(name)  # cache invalido: nome pode ser reusado por outra sessao depois
-        # Sessao morta nao deixa fila pra tras: senao acumula orfaos e uma futura sessao de mesmo
-        # nome herdaria essas entradas como bubble-fantasma (mesmo motivo do clear no create()).
-        PromptQueue(name).clear()
-        ThenLink(name).clear()  # mesmo motivo, pro vinculo 'then' (feature #12)
-        return []
 
     # ── Resume de sessao "sem id" ────────────────────────────────────────────────
     # Uma sessao aberta com `claude` cru (sem --session-id) JA tem um transcript <uuid>.jsonl; so nao da

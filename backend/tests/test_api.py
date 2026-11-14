@@ -1,4 +1,3 @@
-import os
 import time
 import pytest
 from types import SimpleNamespace
@@ -940,8 +939,6 @@ from app.models import AskQuestion, AskQuestionItem, AskOption
 
 # --- POST /api/archive/{project}/{session_id}/resume: "Retomar conversa" do Arquivo ---
 
-_SID = "11111111-1111-1111-1111-111111111111"
-
 
 # --- Retomar conversa CODEX do Arquivo (ticket 08) ---
 # A rota recusava com 409. O id da conversa e o uuid do fim do nome do rollout, e e ele que o
@@ -1195,32 +1192,6 @@ def test_espera_picker_fechar_estoura_e_envia_assim_mesmo(monkeypatch):
                         lambda n: "  ❯ 1. presa\n  ↑↓ to navigate · Enter to select")
     monkeypatch.setattr(api_mod.time, "sleep", lambda s: None)
     assert api_mod._espera_picker_fechar("s", timeout=0.3) is False
-
-
-def test_kill_nao_avisa_ninguem_do_grupo(api_client):
-    # A saída do grupo e os avisos são do Rust, depois do fechamento; aqui só o kill.
-    with patch("app.api.registry.kill", return_value=[]) as kill:
-        r = api_client.delete("/api/sessions/a", headers=_h())
-    assert r.status_code == 200 and r.json() == {"ok": True, "warning": None}
-    kill.assert_called_once_with("a", closed_by_rust=False)
-
-
-def test_kill_guarda_o_nome_para_o_arquivo(api_client, monkeypatch, tmp_path):
-    from app import closed_names
-    monkeypatch.setattr(closed_names, "_path_override", tmp_path / "closed.json")
-    jsonl = tmp_path / f"{_SID}.jsonl"
-    with patch("app.api.registry.list", return_value=[SessionInfo(name="auditoria-migracao", cwd="/p", jsonl=str(jsonl))]), \
-         patch("app.api.registry.kill"):
-        r = api_client.delete("/api/sessions/auditoria-migracao", headers=_h())
-    assert r.status_code == 200
-    assert closed_names.names() == {os.path.realpath(jsonl): "auditoria-migracao"}
-
-
-def test_kill_que_falha_responde_500(api_client):
-    from app.registry import KillFailed
-    with patch("app.api.registry.kill", side_effect=KillFailed("a")):
-        r = api_client.delete("/api/sessions/a", headers=_h())
-    assert r.status_code == 500
 
 
 def test_input_value_error_do_send_vira_envelope(api_client):

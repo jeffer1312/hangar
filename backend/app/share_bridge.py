@@ -83,24 +83,6 @@ def _failed(op: str, reason: str) -> None:
     diag.registrar("convites.ponte", "aviso", operacao_rust=op, motivo=reason)
 
 
-def _warning(e: ShareBridgeError) -> dict:
-    # O convidado perderia o convite (ou o manteria numa sessão que não existe) sem ninguém saber.
-    return erro("erro_convite_nao_acompanhou",
-                f"o convite desta sessão não acompanhou a mudança ({e.code})", codigo=e.code)
-
-
-
-
-def revoke_session(name: str) -> dict | None:
-    try:
-        call("revoke_session", name=name)
-    except ShareBridgeError as e:
-        # Sem Rust (reserva ou subindo) a varredura dele revoga ao voltar: a sessão fechada é
-        # ausência confirmada. Avisar a cada fechamento na reserva seria ruído; o diário já tem.
-        return None if e.code == "share_bridge_off" else _warning(e)
-    return None
-
-
 # --- Rotas do dono pelo Connect: repasse fino às rotas privadas explícitas do Rust. ---
 
 router = APIRouter()

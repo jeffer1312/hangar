@@ -410,6 +410,26 @@ async fn delete_r1_3_parked_codex_headless_closes_in_rust() {
     assert_eq!(e.python.hits_to("/api/sessions/cxh"), 0);
 }
 
+/// R1-10 (`test_closed_names_ilegivel_vai_para_o_lado_antes_de_gravar`): o arquivo de nomes ilegível vai
+/// para o lado (o `.bad` anterior fica, este vira `.bad.2`) e o nome novo é gravado num arquivo limpo.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn delete_r1_10_unreadable_closed_names_are_set_aside() {
+    let e = env().await;
+    let claude = e.home.join(".claude");
+    std::fs::create_dir_all(&claude).unwrap();
+    std::fs::write(claude.join("closed-sessions.json.bad"), "anterior").unwrap();
+    std::fs::write(claude.join("closed-sessions.json"), "{quebrado").unwrap();
+    e.put_sidecar("codex", "cxa", json!({"name": "cxa", "provider": "codex", "headless": true, "key": "kkkkkkkk00000011",
+        "cano": null, "rollout_path": "/r/a.jsonl"}));
+    let (status, body) = e.delete("cxa").await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(std::fs::read_to_string(claude.join("closed-sessions.json.bad")).unwrap(), "anterior", "o .bad anterior fica");
+    assert_eq!(std::fs::read_to_string(claude.join("closed-sessions.json.bad.2")).unwrap(), "{quebrado");
+    let names = e.closed_names();
+    assert_eq!((names.as_object().map(|m| m.len()), &names["/r/a.jsonl"]["name"]), (Some(1), &json!("cxa")), "{names}");
+}
+
 /// O `kill` da ponte do Codex (o `DELETE` que entrou pelo Python, Connect e convidado) fecha aqui o Codex
 /// sem terminal parado: 200, nunca o 421 que devolvia ao Python.
 #[tokio::test]

@@ -488,8 +488,18 @@ pub fn other_cleanup(state:std::sync::Weak<AppState>)->crate::runtime::other_ter
 }
 fn record_other_closed_name(config:&std::path::Path,path:&std::path::Path,name:&str)->std::io::Result<()> {
     static SERIAL:std::sync::Mutex<()>=std::sync::Mutex::new(());let _guard=SERIAL.lock().unwrap_or_else(|error|error.into_inner());let target=config.join("closed-sessions.json");
-    let mut data:serde_json::Map<String,Value>=match crate::runtime::queue::read_replaced(&target){Ok(bytes)=>serde_json::from_slice(&bytes).map_err(|error|std::io::Error::new(std::io::ErrorKind::InvalidData,error))?,Err(error) if error.kind()==std::io::ErrorKind::NotFound=>Default::default(),Err(error)=>return Err(error)};
+    let mut data:serde_json::Map<String,Value>=match crate::runtime::queue::read_replaced(&target){
+        Ok(bytes)=>match serde_json::from_slice::<Value>(&bytes){Ok(Value::Object(map))=>map,_=>{set_aside(&target)?;Default::default()}},
+        Err(error) if error.kind()==std::io::ErrorKind::NotFound=>Default::default(),Err(error)=>return Err(error)};
     let real=std::fs::canonicalize(path).unwrap_or_else(|_|path.into());let now=std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs_f64();data.insert(real.to_string_lossy().into_owned(),json!({"name":name,"closed_at":now}));
     if data.len()>500 {let mut oldest=data.iter().map(|(path,value)|(path.clone(),value["closed_at"].as_f64().unwrap_or(0.0))).collect::<Vec<_>>();oldest.sort_by(|a,b|a.1.total_cmp(&b.1));for(key,_)in oldest.into_iter().take(data.len()-500){data.remove(&key);}}
     std::fs::create_dir_all(config)?;crate::runtime::queue::atomic_write(&target,&serde_json::to_vec(&data)?)
+}
+/// O arquivo ilegível vai para o lado (`.bad`, `.bad.2`…) antes da gravação nova apagar o que ele tinha.
+fn set_aside(path:&std::path::Path)->std::io::Result<()> {
+    let name=path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+    let mut dest=path.with_file_name(format!("{name}.bad"));
+    for n in 2.. { if !dest.exists() { break; } dest=path.with_file_name(format!("{name}.bad.{n}")); }
+    tracing::warn!(file=%dest.display(),"nomes de sessão fechada ilegíveis; guardados ao lado");
+    std::fs::rename(path,dest)
 }
