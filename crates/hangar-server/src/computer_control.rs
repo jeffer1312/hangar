@@ -8,9 +8,11 @@ use axum::{
     response::Response,
 };
 use hangar_computer_control_setup as setup;
+use hangar_core::http::uvicorn_path;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
+use crate::config_sync::runtime::RuntimeConfig;
 use crate::routes::AppState;
 
 const BODY_LIMIT: usize = 64 * 1024;
@@ -25,24 +27,12 @@ struct TestHostBody {
 
 pub(crate) fn matches(method: &Method, path: &str) -> bool {
     matches!(
-        (method.as_str(), normalized(path).as_str()),
+        // Variação de escrita do caminho não pode levar ao Python, que não confere o dono.
+        (method.as_str(), uvicorn_path(path).as_str()),
         ("GET", "/api/computer-control" | "/api/computer-control/windows-setup")
             | ("PUT", "/api/computer-control")
             | ("POST", "/api/computer-control/targets" | "/api/computer-control/test-host" | "/api/computer-control/install")
     )
-}
-
-/// O caminho como o uvicorn o veria (`%2F` decodificado, `//` juntos): variação de escrita não pode
-/// levar ao Python, que não confere o dono.
-fn normalized(path: &str) -> String {
-    let decoded = crate::workspace_http::decoded(path);
-    let mut out = String::with_capacity(decoded.len());
-    for c in decoded.chars() {
-        if !(c == '/' && out.ends_with('/')) {
-            out.push(c);
-        }
-    }
-    out
 }
 
 pub(crate) async fn route(st: Arc<AppState>, peer: SocketAddr, req: Request) -> Response {
@@ -65,18 +55,17 @@ async fn reply(st: Arc<AppState>, peer: SocketAddr, req: Request) -> Response {
     }
     let headers = req.headers().clone();
     let env = st.accounts.env.clone();
-    let path = normalized(req.uri().path());
+    let path = uvicorn_path(req.uri().path());
     let result = match path.as_str() {
         "/api/computer-control" if *req.method() == Method::PUT => {
             let Some(body) = body::<setup::SaveRequest>(req).await else {
                 return crate::session_write::invalid_body(&headers);
             };
             let state = st.clone();
-            blocking(&st, move |paths| {
-                let config = || crate::config_sync::runtime::RuntimeConfig::from_state(&state).map_err(setup::Error::io);
+            blocking(&st, move |paths, facts, config| {
                 // O env do Jev relido sob a trava: o que a página Jev gravou no meio não volta atrás.
-                let jev = || -> Result<_, setup::Error> { Ok(config()?.jev_env()) };
-                setup::save(paths, &facts(&state)?, &config()?.jev_aux(), &body, jev)
+                let jev = || -> Result<_, setup::Error> { Ok(RuntimeConfig::from_state(&state).map_err(setup::Error::io)?.jev_env()) };
+                setup::save(paths, facts, &config.jev_aux(), &body, jev)
             })
             .await
         }
@@ -85,13 +74,13 @@ async fn reply(st: Arc<AppState>, peer: SocketAddr, req: Request) -> Response {
             return hangar_core::http::detail(StatusCode::GONE, "erro_computer_control_update_app",
                 "Atualize o app: o Computer Use agora é instalado sozinho", json!({}));
         }
-        "/api/computer-control" => blocking(&st, |_| Ok(())).await,
+        "/api/computer-control" => blocking(&st, |_, _, _| Ok(())).await,
         "/api/computer-control/targets" => {
             let Some(body) = body::<setup::TargetRequest>(req).await.filter(setup::TargetRequest::valid) else {
                 return crate::session_write::invalid_body(&headers);
             };
             let state = st.clone();
-            blocking(&st, move |paths| {
+            blocking(&st, move |paths, _, _| {
                 setup::create_target(paths, &body)?;
                 // Alvo novo liga o MCP sozinho; falha do registro vai ao diário, não à resposta.
                 crate::computer_control_install::register_in(&state, paths);
@@ -126,16 +115,19 @@ async fn reply(st: Arc<AppState>, peer: SocketAddr, req: Request) -> Response {
     }
 }
 
-/// A escrita (se houver) e o estado inteiro, fora do executor: tudo é disco e uma sonda de 0,5 s.
+/// A escrita (se houver) e o estado inteiro, fora do executor: tudo é disco e uma sonda de 0,5 s. Os
+/// fatos e a configuração são lidos uma vez por pedido e servem à escrita e ao estado.
 async fn blocking(
     st: &Arc<AppState>,
-    write: impl FnOnce(&setup::Paths) -> Result<(), setup::Error> + Send + 'static,
+    write: impl FnOnce(&setup::Paths, &setup::Facts, &RuntimeConfig) -> Result<(), setup::Error> + Send + 'static,
 ) -> Result<Value, setup::Error> {
     let st = st.clone();
     tokio::task::spawn_blocking(move || {
         let paths = paths(&st)?;
-        write(&paths)?;
-        setup::state(&paths, &facts(&st)?)
+        let config = RuntimeConfig::from_state(&st).map_err(setup::Error::io)?;
+        let facts = facts(&st, &config);
+        write(&paths, &facts, &config)?;
+        setup::state(&paths, &facts)
     })
     .await
     .map_err(setup::Error::io)?
@@ -164,15 +156,14 @@ pub(crate) fn account_paths(accounts: &crate::accounts::AccountService) -> Resul
     Ok(setup::Paths::new(home.clone(), homes))
 }
 
-fn facts(st: &AppState) -> Result<setup::Facts, setup::Error> {
-    let config = crate::config_sync::runtime::RuntimeConfig::from_state(st).map_err(setup::Error::io)?;
+fn facts(st: &AppState, config: &RuntimeConfig) -> setup::Facts {
     let env = &st.accounts.env;
-    Ok(setup::Facts {
+    setup::Facts {
         jev: config.jev_env(),
         cliproxy_keys: crate::jev_aux::cliproxy_keys(&env.home),
         cliproxy_installed: crate::cli_probe::resolve_program("cli-proxy-api", env).is_some(),
         hyprland: setup::hyprland_found(),
-    })
+    }
 }
 
 async fn body<T: DeserializeOwned>(req: Request) -> Option<T> {
