@@ -21,7 +21,8 @@ pub enum Registered {
 }
 
 /// Roda na subida, no relógio de 1 h, depois de criar alvo e depois de trocar o binário. `hyprland` só é
-/// perguntado sem alvo cadastrado; `jev` dá o env do Jev, lido sob a trava. Falha vai ao diário com código.
+/// perguntado sem alvo cadastrado, antes da trava; `jev` dá o env do Jev, lido sob a trava. Falha vai ao
+/// diário com código.
 pub fn register(
     paths: &Paths,
     hyprland: impl FnOnce() -> bool,
@@ -47,11 +48,14 @@ fn register_on(
     if !supported || !installed(paths)? {
         return Ok(Registered::Skipped);
     }
+    // O alvo `linux` automático do Hyprland não tem arquivo: alvo padrão vazio. A sonda pode levar
+    // segundos, e o Claude Code espera a trava do `.claude.json` só 1 s: roda antes dela.
+    let target = first_target(paths);
+    let hyprland = target.is_none() && hyprland();
     // Desligar no meio daqui até a trava: a decisão abaixo, toda sob a trava, já o vê.
     #[cfg(test)]
     crate::writer::race::fire(&paths.parked_file());
-    // O alvo `linux` automático do Hyprland não tem arquivo: alvo padrão vazio.
-    Ok(match register_entry(paths, first_target(paths), hyprland, jev)? {
+    Ok(match register_entry(paths, target, hyprland, jev)? {
         None => Registered::Skipped,
         Some(false) => Registered::Unchanged,
         Some(true) => Registered::Written,
@@ -335,6 +339,18 @@ mod tests {
         assert!(!hyprland_running(&vars("nenhuma_4")));
         assert!(!hyprland_running(&vars("")));
         assert!(!hyprland_running(&[("HYPRLAND_INSTANCE_SIGNATURE".to_owned(), "viva_1".to_owned())]), "sem pasta de runtime");
+    }
+
+    /// A sonda do Hyprland (até segundos) roda antes de tomar a trava do `.claude.json`.
+    #[test]
+    fn hyprland_is_asked_before_the_lock() {
+        let home = Home::new();
+        let lock = hangar_core::config_lock::lock_path(&home.paths.main_file());
+        let asked = || {
+            assert!(!lock.exists(), "Hyprland sondado com a trava do .claude.json tomada");
+            true
+        };
+        assert_eq!(register(&home.paths, asked, || Ok(jev()), None).unwrap(), Registered::Written);
     }
 
     /// Pasta de uma instância morta não é Hyprland: sem alvo, nada é registrado.

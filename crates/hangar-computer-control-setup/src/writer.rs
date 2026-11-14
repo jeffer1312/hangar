@@ -102,14 +102,14 @@ fn managed_env(paths: &Paths, agent_config: &str, previous: Map<String, Value>, 
 
 /// O registro sozinho, decidido inteiro sob a trava: um desligar que chega antes nunca é desfeito.
 /// Principal sem a entrada: registra só sem a guardada e sem a marca (com qualquer uma das duas ela foi
-/// desligada ou tirada à mão) e com alvo (`target`) ou Hyprland. Entrada que já roda o binário do pacote
-/// fica intocada; com outro programa vira o binário, com o env dela. Conta aberta sem a entrada recebe a
-/// do principal. Com a entrada no principal, a marca é gravada se faltar. `None` = não registra; senão,
+/// desligada ou tirada à mão) e com alvo (`target`) ou Hyprland (sondado antes da trava). Entrada que já
+/// roda o binário do pacote fica intocada; com outro programa vira o binário, com o env dela. Conta aberta
+/// sem a entrada recebe a do principal. Com a entrada no principal, a marca é gravada se faltar. `None` = não registra; senão,
 /// se gravou alguma entrada.
 pub(crate) fn register_entry(
     paths: &Paths,
     target: Option<String>,
-    hyprland: impl FnOnce() -> bool,
+    hyprland: bool,
     jev: impl FnOnce() -> Result<Map<String, Value>, Error>,
 ) -> Result<Option<bool>, Error> {
     let _locks = lock_all(paths)?;
@@ -121,7 +121,7 @@ pub(crate) fn register_entry(
     let off = || -> Result<bool, Error> {
         Ok(crate::files::parked_entry(paths)?.is_some() || paths.registered_marker().exists())
     };
-    if active.is_none() && (off()? || (target.is_none() && !hyprland())) {
+    if active.is_none() && (off()? || (target.is_none() && !hyprland)) {
         return Ok(None);
     }
     let binary = paths.binary().to_string_lossy().into_owned();
