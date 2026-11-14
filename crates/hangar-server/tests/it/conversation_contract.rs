@@ -237,10 +237,9 @@ async fn claude_bridge_serves_input_answers_and_queue_of_a_rust_claude() {
     assert_eq!(post("s/queue/a/b/steer", String::new()).await.0, 421);
     assert_eq!(call(reqwest::Method::GET, "s/queue/a", "", true).await.0, 421);
     assert_eq!(call(reqwest::Method::POST, "s/answer", "{}", false).await.0, 404, "sem o segredo a ponte não existe");
-    // Parity M1: o modo pedido pelo convidado ou pelo Connect é do Rust, como o do dono.
-    let (status, reply) = call(reqwest::Method::GET, "s/permission-modes", "", true).await;
-    assert_eq!((status, reply["sondavel"].as_bool()), (200, Some(false)), "{reply}");
-    assert_eq!(post("s/permission-modes", "{}".into()).await.0, 421, "lista só por GET");
+    // O modo de permissão do convidado é atendido na rota do dono (decisão 1): a ponte não o tem mais.
+    assert_eq!(call(reqwest::Method::GET, "s/permission-modes", "", true).await.0, 421);
+    assert_eq!(post("s/permission-mode", json!({"mode": "plan"}).to_string()).await.0, 421);
     assert_eq!(python.hits_to("/api/sessions/s/permission-modes"), 0);
     // Btw: a pergunta lateral do Connect chega à rota do Rust, que responde até o corpo errado.
     let (status, reply) = post("s/btw", r#"{"question":"q","x":1}"#.into()).await;

@@ -132,10 +132,6 @@ def snapshot() -> list[SessionInfo]:
     return _rows(_request("list.snapshot", {}))
 
 
-def invalidate() -> None:
-    _request("list.invalidate", {})
-
-
 def resolve(name: str, cwd: str, pid: int | None = None) -> tuple[str | None, bool]:
     result = _request("list.resolve", {"name": name, "cwd": cwd, "pid": pid})
     if (not isinstance(result, dict) or type(result.get("tracked")) is not bool
@@ -151,14 +147,6 @@ def seed(name: str, jsonl: str) -> None:
 def endpoint() -> tuple[str, str] | None:
     """Endereço e segredo da porta privada do Rust, ou None com a ponte desligada."""
     return _config
-
-
-def term_active(name: str) -> bool:
-    result = _request("term.active", {"name": name}, timeout=5)
-    if not isinstance(result, dict) or type(result.get("active")) is not bool:
-        _failed("term.active", "list_bridge_invalid")
-        raise ListBridgeError("list_bridge_invalid", "term.active")
-    return result["active"]
 
 
 def push_state_facts(name: str, facts: dict) -> None:

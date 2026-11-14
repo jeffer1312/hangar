@@ -1330,19 +1330,12 @@ enum Operation {
     Discover { #[serde(default)] newer_than: Option<f64> },
     #[serde(rename = "list.snapshot")]
     Snapshot {},
-    #[serde(rename = "list.invalidate")]
-    Invalidate {},
     #[serde(rename = "list.resolve")]
     Resolve { name: String, cwd: String, #[serde(default)] pid: Option<i64> },
     #[serde(rename = "list.seed")]
     Seed { name: String, jsonl: String },
-    #[serde(rename = "list.forget")]
-    Forget { name: String },
     #[serde(rename = "state.facts")]
     StateFacts { name: String, facts: crate::state::facts::StateFacts },
-    /// Painel de terminal real aberto na sessão: o 409 de quem conta linha do pane.
-    #[serde(rename = "term.active")]
-    TermActive { name: String },
 }
 
 async fn execute(bridge: &Arc<ListBridge>, op: Operation) -> Result<Value, ListError> {
@@ -1376,15 +1369,11 @@ async fn execute(bridge: &Arc<ListBridge>, op: Operation) -> Result<Value, ListE
             }
             rows(&produced.rows)
         }
-        Operation::Invalidate {} => { bridge.invalidate(); Ok(Value::Null) }
         Operation::Resolve { name, cwd, pid } => {
             let t = bridge.resolve(&name, &cwd, pid).await?;
             Ok(json!({"jsonl": t.jsonl, "tracked": t.tracked}))
         }
         Operation::Seed { name, jsonl } => cache(Box::new(move |b| b.seed(&name, &jsonl))).await,
-        Operation::Forget { name } => cache(Box::new(move |b| b.forget(&name))).await,
-        // Respondido pelo `private`, que tem os painéis.
-        Operation::TermActive { .. } => Err(fail("list_bridge_invalid_request", "operação fora do private")),
         Operation::StateFacts { name, facts } => {
             use crate::state::facts::Push;
             Ok(match bridge.state_facts.push(&name, facts, Instant::now()) {
@@ -1394,10 +1383,6 @@ async fn execute(bridge: &Arc<ListBridge>, op: Operation) -> Result<Value, ListE
             })
         }
     }
-}
-
-fn term_active(st: &AppState, name: &str) -> Result<Value, ListError> {
-    Ok(json!({"active": st.term.is_active(name)}))
 }
 
 fn reply(value: Value) -> Response {
@@ -1421,11 +1406,7 @@ pub async fn private(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connect
     let Ok(op) = serde_json::from_slice::<Operation>(&bytes) else {
         return refused("list_bridge_invalid_request");
     };
-    let result = match op {
-        Operation::TermActive { name } => term_active(&st, &name),
-        op => execute(&st.list, op).await,
-    };
-    match result {
+    match execute(&st.list, op).await {
         Ok(result) => reply(json!({"ok": true, "result": result})),
         Err(e) => {
             if crate::warn_limit::allow(None, e.code) {

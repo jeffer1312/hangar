@@ -95,9 +95,9 @@ async def test_list_bridge_on_the_loop_is_logged_once_and_still_runs(bridge, mon
     monkeypatch.setattr(list_bridge, "_on_loop_seen", set())
     bridge["reply"] = {"ok": True, "result": None}
     for _ in range(2):
-        list_bridge.invalidate()
-    assert logged == [("lista.ponte_no_laco", "list.invalidate")]
-    list_bridge.invalidate()
-    await asyncio.to_thread(list_bridge.invalidate)
-    assert logged == [("lista.ponte_no_laco", "list.invalidate")] * 2
+        list_bridge.seed("a", "/x/a.jsonl")
+    assert logged == [("lista.ponte_no_laco", "list.seed")]
+    list_bridge.seed("a", "/x/a.jsonl")
+    await asyncio.to_thread(list_bridge.seed, "a", "/x/a.jsonl")
+    assert logged == [("lista.ponte_no_laco", "list.seed")] * 2
     assert len(bridge["requests"]) == 4

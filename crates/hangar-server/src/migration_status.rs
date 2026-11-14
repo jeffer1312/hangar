@@ -231,9 +231,9 @@ pub fn rust_route(method: &Method, path: &str) -> bool {
     if tail.is_some_and(|t| crate::session_write::control::queue_route(method, t).is_some()) {
         return true;
     }
-    // Grupos (`groups::routes`): o convidado segue ao Python, que recusa.
+    // Grupos (`groups::routes`): o convidado é recusado pelo porteiro, antes da rota.
     if matches!((method.as_str(), tail), ("POST", Some("pair" | "group-message" | "pair-remote" | "unpair-remote"))
-        | ("DELETE", Some("pair")) | ("GET", Some("pair/contract"))) {
+        | ("DELETE", Some("pair")) | ("GET" | "PUT", Some("pair/contract"))) {
         return true;
     }
     (*method == Method::GET && path == crate::claude_customizations::CATALOG_PATH)
@@ -506,7 +506,8 @@ mod tests {
             && !rust_route(&Method::POST, "/api/sessions/a/queue/e1") && rust_route(&Method::POST, "/api/sessions/a/queue/e1/steer")
             && rust_route(&Method::PATCH, "/api/sessions/a/queue/e1") && get("/api/cotas") && rust_route(&Method::POST, "/api/worktrees/create"));
         assert!(rust_route(&Method::POST, "/api/sessions/a/pair") && rust_route(&Method::DELETE, "/api/sessions/a/pair")
-            && get("/api/sessions/a/pair/contract") && rust_route(&Method::POST, "/api/sessions/a/unpair-remote")
+            && get("/api/sessions/a/pair/contract") && rust_route(&Method::PUT, "/api/sessions/a/pair/contract")
+            && rust_route(&Method::POST, "/api/sessions/a/unpair-remote")
             && !get("/api/sessions/a/pair") && rust_route(&Method::POST, "/api/sessions/a/pair-invite"));
         assert!(rust_route(&Method::POST, "/api/sessions/a/share") && rust_route(&Method::DELETE, "/api/sessions/a/share/s1")
             && get("/api/share/prereqs") && rust_route(&Method::POST, "/api/share/reachability")

@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import Optional
 from app import diag, tmux
 from app import agentpane
-from app import permission_mode as modo_permissao
 from app.config import settings
 from app import claude_customizations as session_customizations
 from app import plugin_bridge

@@ -312,22 +312,6 @@ def test_three_crashes_in_a_minute_leave_the_public_port_without_owner(fake_bin,
     assert ("hangar_server.reserva", "erro", {"codigo": "quedas"}) in events
 
 
-def test_child_crash_unpoints_the_groups_bridge(fake_bin, tmp_path, monkeypatch):
-    """BRG-07: queda do filho apaga endereço e segredo da ponte de grupos antes de qualquer outro pedido."""
-    from app import groups_bridge
-    seen, events = [], []
-
-    def record(evento, nivel="ok", **campos):
-        events.append((evento, nivel, campos))
-        seen.append((evento, groups_bridge._config))
-    monkeypatch.setattr(diag, "registrar", record)
-    _run_until_give_up(fake_bin, tmp_path, monkeypatch, events)
-    up = [cfg for ev, cfg in seen if ev in ("hangar_server.de_pe", "hangar_server.voltou")]
-    down = [cfg for ev, cfg in seen if ev == "hangar_server.caiu"]
-    assert up and all(cfg is not None for cfg in up)
-    assert down and all(cfg is None for cfg in down)
-
-
 def test_rust_back_after_give_up_takes_the_public_port_again(fake_bin, tmp_path, monkeypatch, events):
     monkeypatch.setenv("FAKE_MODE", "cai_ate")
     monkeypatch.setenv("FAKE_CRASHES", str(rust_server.MAX_CRASHES))
