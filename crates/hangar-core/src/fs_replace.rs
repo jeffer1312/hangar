@@ -28,7 +28,12 @@ impl std::error::Error for Error {}
 
 /// Põe `source` no lugar de `target` só se o que sai de lá for `expected` (e o link `link`). Cada troca
 /// espera, no Windows, o processo que segura o arquivo (o Claude Code lendo o `.claude.json`), pela
-/// mesma política do `fs::replace`; a falha só desfaz o que a troca já fez, então tentar de novo é seguro.
+/// mesma política do `fs::replace`; `Io` e `Changed` só desfazem o que a troca já fez, então tentar de novo
+/// é seguro.
+///
+/// # Errors
+/// `Displaced` não desfaz nada: `source` pode já estar em `target` e a versão que saiu fica no caminho da
+/// mensagem. Confira os dois caminhos antes de repetir.
 pub fn replace(source: &Path, target: &Path, expected: Option<&[u8]>, link: Option<&Path>) -> Result<(), Error> {
     if expected.is_none() && link.is_none() {
         return retry_while_held(|| move_new(source,target)).map_err(|error| if error.kind()==io::ErrorKind::AlreadyExists {
