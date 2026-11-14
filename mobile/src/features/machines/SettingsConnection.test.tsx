@@ -20,13 +20,17 @@ vi.mock('react-native', async (original) => {
       React.createElement('input', { value, placeholder, 'aria-label': accessibilityLabel, onChange: (event: React.ChangeEvent<HTMLInputElement>) => onChangeText?.(event.currentTarget.value) }),
   };
 });
-vi.mock('expo-router', () => ({ useRouter: () => ({ push: vi.fn() }) }));
+vi.mock('expo-router', () => ({ useRouter: () => ({ push: vi.fn() }), useFocusEffect: () => {} }));
 vi.mock('expo-router/react-navigation', () => ({ useHeaderHeight: () => 0 }));
 vi.mock('@react-native-menu/menu', () => ({ MenuView: ({ children }: { children: React.ReactNode }) => children }));
 vi.mock('expo-secure-store', () => ({ getItemAsync: vi.fn(async () => null), setItemAsync: vi.fn(async () => {}), deleteItemAsync: vi.fn(async () => {}) }));
 vi.mock('expo-blur', async () => ({ BlurTargetView: (await import('react-native')).View }));
 vi.mock('expo-linear-gradient', async () => ({ LinearGradient: (await import('react-native')).View }));
 vi.mock('expo-file-system', () => ({ Directory: class {}, File: class {}, Paths: { cache: '/tmp' } }));
+vi.mock('react-native-mmkv', () => ({ createMMKV: () => {
+  const store = new Map<string, string>();
+  return { getString: (k: string) => store.get(k), set: (k: string, v: string) => { store.set(k, v); }, remove: (k: string) => { store.delete(k); } };
+} }));
 vi.mock('sonner-native', () => ({ toast: { error: vi.fn(), success: vi.fn() }, Toaster: () => null }));
 vi.mock('../../stores/aparencia', async () => {
   const { create } = await import('zustand');

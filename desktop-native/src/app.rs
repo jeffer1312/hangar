@@ -30,6 +30,7 @@ mod row_patch;
 mod landing;
 mod edits;
 mod terminal_look;
+mod desktop_look;
 mod git;
 mod grouping;
 mod group_sheet;
@@ -80,6 +81,7 @@ mod servers;
 pub(crate) use servers::{ServerEntry, new_id as new_server_id};
 // Partes de vista que a miniatura das novidades (`crate::news`) também desenha.
 pub(crate) use rows::{agent_card, agent_clock};
+pub(crate) use desktop_look::{call_button as desktop_call_button, desktop_summary, group_block as desktop_group_block, summary_button as desktop_summary_button};
 pub(crate) use session_tabs::{PlateMark, PlateSegment, plate, tab_frame, tab_title, with_context_ring};
 pub(crate) use tags::{account_icon, machine_icon};
 pub(crate) use voice_ui::{call_actions, call_footer, call_header, call_status, equalizer as voice_equalizer, mute_button, speech_pause_button, stop_button};
@@ -90,7 +92,7 @@ pub(crate) use reviews::{Comment as ReviewComment, Summary as ReviewSummary, Thr
     row_view as review_row_view, thread_actions as review_thread_actions, thread_box as review_thread_box, thread_buttons as review_thread_buttons};
 pub(crate) use connect::device_card;
 pub(crate) use scheduled::{row_frame as scheduled_row_frame, row_text as scheduled_row_text};
-pub(crate) use settings::{memory_dream, setting_row, settings_box};
+pub(crate) use settings::{memory_dream, news_group_heading, news_kind_icon, news_kind_pill, news_markdown_block, setting_row, settings_box};
 pub(crate) use plugins::{plugin_meta, plugin_name, plugin_switch, plugin_update_button, reopen_notice as plugins_reopen_notice,
     row_box as plugin_row_box, text_block as plugin_text_block};
 pub(crate) use accounts::{login_heading, target_row};
@@ -658,6 +660,8 @@ pub struct Hangar {
     vault_page: Option<(u64, Entity<vault::VaultPage>)>,
     /// Página Plugins aberta, com a conexão em que nasceu.
     plugins_page: Option<(u64, Entity<plugins::PluginsPage>)>,
+    /// Atualizações e Manual das Configurações: o que foi lido e onde a pessoa está nas duas páginas.
+    guide: settings::Guide,
     rename_suggest: rename_suggest::RenameSuggest,
     /// Último evento `tags` da lista de cada máquina (chave `servers::norm`); máquina sem ele é servidor antigo.
     /// Fica na queda do stream: a etiqueta não muda por a máquina estar fora.
@@ -1158,7 +1162,7 @@ impl Hangar {
             history_installed: false, pending_chat: Vec::new(),
             history_limit: 400, has_older: false, etag: None, error: None, list_error: None,
             delivery: DeliveryTracker::default(), stopping: HashSet::new(), stop_feedback: HashMap::new(), drafts: HashMap::new(), input_history: HashMap::new(),
-            flight: InFlight::default(), action_feedback: HashMap::new(), file_cards: HashMap::new(), queue: Default::default(), live_terms: Vec::new(), keyring: HashMap::new(), vault: HashMap::new(), vault_page: None, plugins_page: None, rename_suggest: Default::default(), tags: HashMap::new(), question_open: None, question_card: None,
+            flight: InFlight::default(), action_feedback: HashMap::new(), file_cards: HashMap::new(), queue: Default::default(), live_terms: Vec::new(), keyring: HashMap::new(), vault: HashMap::new(), vault_page: None, plugins_page: None, guide: Default::default(), rename_suggest: Default::default(), tags: HashMap::new(), question_open: None, question_card: None,
             hangar_open: false, hangar_focus: cx.focus_handle(), hangar_error: None, live_clock: None, ask_form: AskForm::default(), ask_drafts: HashMap::new(), plans_dismissed: HashSet::new(), answered_tools: HashSet::new(), answering: HashMap::new(), ask_scroll: Default::default(), plan_scroll: Default::default(), plan_view: None,
             plan_review: Default::default(),
             list_state, rail_hover: None, follow: Default::default(), row_ids: Vec::new(), row_signatures: Vec::new(), conversation: Default::default(), row_assets: Vec::new(), expanded: HashSet::new(), kept_expanded: HashMap::new(), orq_days: HashSet::new(),
@@ -3709,11 +3713,7 @@ impl Hangar {
         let stable = self.chat.take_unsynced();
         self.conversation.require_agent_states(self.provider().0 == "codex");
         self.conversation.set_agent_states(self.codex_agent_states());
-        let delta = self.conversation.update(&self.chat.events, stable, conversation::View {
-            thinking: a.thinking_tools, tasks: a.task_list,
-            merge_thinking: a.tool_look == appearance::ToolLook::Tree,
-            every_run_groups: a.tool_look == appearance::ToolLook::Terminal,
-        });
+        let delta = self.conversation.update(&self.chat.events, stable, conversation::View::for_look(a.tool_look, a.thinking_tools, a.task_list));
         if delta.activity_changed { self.sync_activity(cx); }
         self.orq_days = if self.selected.as_ref().is_some_and(SessionInfo::orq) { orq_timeline::day_starts(self.chat.events.iter().filter(|event| event.orq.is_some())) } else { HashSet::new() };
         api::open_trace(|| format!("sync_rows built {} items, {} rows unchanged", self.conversation.items.len(), delta.from));
@@ -3744,10 +3744,11 @@ impl Hangar {
         let opening = self.opening_row_shown();
         let queue = self.chat.queue_panel();
         let events = &self.chat.events;
-        let (mut ids, mut signatures): (Vec<String>, Vec<String>) = self.conversation.items[from..].iter().map(|item| {
+        let (mut ids, mut signatures): (Vec<String>, Vec<String>) = self.conversation.items[from..].iter().enumerate().map(|(n, item)| {
             let id = item.id(events);
             let day = matches!(item, Item::Event(_)) && self.orq_days.contains(&id);
             let signature = if day { format!("day{}", signature(item, events)) } else { signature(item, events) };
+            let signature = if after_card(&self.conversation.items, events, from + n) { format!("card{signature}") } else { signature };
             // Entrar ou sair do painel muda a altura da linha sem mudar o evento.
             let signature = if crate::queue_panel::hidden(&id, &queue) { format!("queued{signature}") } else { signature };
             (id, signature)
@@ -3999,7 +4000,7 @@ impl Hangar {
         };
         if self.tree_motion { motion::request_frame(window, cx); }
         let message = id == PREVIEW || id == landing::OPENING || matches!(self.conversation.items.get(index), Some(Item::Event(_)));
-        let row = row_frame(inner, message);
+        let row = row_frame(inner, message).when(after_card(&self.conversation.items, &self.chat.events, index), |el| el.pt(px(8.)));
         // Pede quadro só para a área da conversa, e só enquanto a linha entra; rolar até ela depois não a anima de novo.
         let entering = self.arrived.get(&id).map(|at| motion::FADE_IN.raw(*at)).filter(|raw| *raw < 1. && !cx.reduce_motion());
         let row = match entering {
@@ -4148,8 +4149,12 @@ impl Hangar {
 
     fn render_tool(&mut self, tool: Tool, row: &str, cx: &mut Context<Self>) -> AnyElement {
         if let Some(card) = self.render_agent_card(tool, cx) { return card; }
-        if appearance::get().tool_look == appearance::ToolLook::Chips { return self.render_single_chip(tool, row, cx); }
-        if appearance::get().tool_look == appearance::ToolLook::Terminal { return self.render_terminal_tool(tool, row, cx); }
+        match appearance::get().tool_look {
+            appearance::ToolLook::Chips => return self.render_single_chip(tool, row, cx),
+            appearance::ToolLook::Terminal => return self.render_terminal_tool(tool, row, cx),
+            appearance::ToolLook::ClaudeDesktop => return self.render_desktop_tool(tool, row, cx),
+            appearance::ToolLook::Classic | appearance::ToolLook::Tree => {}
+        }
         let call = &self.chat.events[tool.call];
         let key = call.id.clone();
         let name = call.tool_name.clone().unwrap_or_else(|| tr("tool"));
@@ -4202,8 +4207,10 @@ impl Hangar {
             Some(_) if has_diff && !error => body,
             Some(i) => {
                 let result_key = format!("{key}:result");
+                let code = self.chat.events[i].result.as_deref().and_then(desktop_look::exit_code_line);
                 let result = self.prepared_detail(&result_key, || self.chat.events[i].result.clone().unwrap_or_default());
-                body.child(self.detail(row, &result_key, result, tr("tool_output"), tr("copy_result"), error, cx))
+                body.children(code)
+                    .child(self.detail(row, &result_key, result, tr("tool_output"), tr("copy_result"), error, cx))
             }
             None => body.child(div().text_sm().text_color(theme::muted()).child(self.tool_status(tool).0)),
         }
@@ -4300,9 +4307,13 @@ impl Hangar {
     }
 
     fn render_group(&mut self, row: &str, tools: &[Tool], cx: &mut Context<Self>) -> AnyElement {
-        if appearance::get().tool_look == appearance::ToolLook::Chips { return self.render_chip_group(row, tools, cx); }
-        if appearance::get().tool_look == appearance::ToolLook::Tree { return self.render_tree_group(row, tools, cx); }
-        if appearance::get().tool_look == appearance::ToolLook::Terminal { return self.render_terminal_group(row, tools, cx); }
+        match appearance::get().tool_look {
+            appearance::ToolLook::Chips => return self.render_chip_group(row, tools, cx),
+            appearance::ToolLook::Tree => return self.render_tree_group(row, tools, cx),
+            appearance::ToolLook::Terminal => return self.render_terminal_group(row, tools, cx),
+            appearance::ToolLook::ClaudeDesktop => return self.render_desktop_group(row, tools, cx),
+            appearance::ToolLook::Classic => {}
+        }
         let events = &self.chat.events;
         let names: Vec<String> = tools.iter().map(|t| events[t.call].tool_name.clone().unwrap_or_else(|| tr("tool"))).collect();
         let mut distinct = names.clone();
@@ -5625,6 +5636,16 @@ fn chat_text_runnable(view: &Entity<TextViewState>, cx: &App, runner: Option<Wea
 const ROW_GROUP: &str = "message-row";
 
 /// Recuo e coluna de uma linha da conversa; mensagem tem mais ar em cima e embaixo.
+/// Linha logo depois de um cartão de subagente que não é outro cartão: o cartão tem borda, e sem respiro a linha encosta
+/// nele. Entra na assinatura da linha, para a altura medida acompanhar quando o cartão chega antes dela.
+fn after_card(items: &[Item], events: &[ChatEvent], index: usize) -> bool {
+    let card = |item: Option<&Item>| matches!(item, Some(Item::Tool(t)) if {
+        let name = events[t.call].tool_name.as_deref();
+        conversation::is_agent_call(name) || conversation::is_page_call(name)
+    });
+    index > 0 && items.get(index).is_some() && card(items.get(index - 1)) && !card(items.get(index))
+}
+
 fn row_frame(inner: AnyElement, message: bool) -> Div {
     div().w_full().px(px(16.)).when(message, |el| el.py(px(8.))).when(!message, |el| el.py(px(2.)))
         .flex().justify_center()
@@ -8158,7 +8179,7 @@ impl Render for Hangar {
             .on_action(cx.listener(|this, _: &CycleToolLook, _, cx| {
                 use appearance::ToolLook::*;
                 let mut next = appearance::get();
-                next.tool_look = match next.tool_look { Classic => Chips, Chips => Tree, Tree => Terminal, Terminal => Classic };
+                next.tool_look = match next.tool_look { Classic => Chips, Chips => Tree, Tree => Terminal, Terminal => ClaudeDesktop, ClaudeDesktop => Classic };
                 this.apply_appearance(next, true, cx);
             }))
             .on_action(cx.listener(|this, _: &CycleNavigation, _, cx| {
@@ -8731,6 +8752,17 @@ mod tests {
         assert!(!super::sends_files(&read));
         assert_eq!(super::tool_file_refs(&read), vec![(Source::Cited("/tmp/a/print.png".into()), "print.png".into(), true)]);
         assert!(super::tool_file_refs(&call("Bash", serde_json::json!({"command": "ls /tmp/a/print.png"}))).is_empty());
+    }
+
+    #[test]
+    fn row_after_an_agent_card_gets_room_but_the_next_card_does_not() {
+        let call = |name: &str| ChatEvent { kind: "tool_use".into(), tool_name: Some(name.into()), ..Default::default() };
+        let events = vec![call("Agent"), call("Agent"), ChatEvent { kind: "thinking".into(), ..Default::default() }, call("Bash")];
+        use crate::conversation::{Item, Tool};
+        let tool = |call| Item::Tool(Tool { call, result: None });
+        let items = vec![tool(0), tool(1), Item::Thinking { id: "p".into(), parts: vec![2] }, tool(3)];
+        let room: Vec<bool> = (0..5).map(|i| super::after_card(&items, &events, i)).collect();
+        assert_eq!(room, [false, false, true, false, false]);
     }
 
     #[test]

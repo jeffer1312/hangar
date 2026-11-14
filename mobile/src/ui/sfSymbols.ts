@@ -48,6 +48,7 @@ export const SF_SYMBOLS: Partial<Record<IconName, SFSymbol>> = {
   CreditCard: 'creditcard',
   Wallet: 'wallet.bifold',
   Database: 'cylinder',
+  Diamond: 'diamond',
   Delete: 'delete.left',
   Download: 'square.and.arrow.down',
   Ellipsis: 'ellipsis',

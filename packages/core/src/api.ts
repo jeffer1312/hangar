@@ -27,6 +27,8 @@ import type {
   UpdateMode,
   UpdateNotes,
   UpdateNews,
+  NewsHistory,
+  Manual,
   MigrationStatus,
   SessionInfo,
   Provider,
@@ -2708,6 +2710,26 @@ export async function getArrivedNews(s: Server, device: string, fetcher?: typeof
   }
 }
 
+/** Histórico de todas as novidades. Servidor sem a rota (404/405): `null`. */
+export async function getNewsHistory(s: Server, fetcher?: typeof fetch): Promise<NewsHistory | null> {
+  try {
+    return await apiFetchForServer<NewsHistory>(s, '/api/news', undefined, 20000, true, fetcher);
+  } catch (e) {
+    if (isMissingRoute(e)) return null;
+    throw e;
+  }
+}
+
+/** Manual do app por categoria. Servidor sem a rota (404/405): `null`. */
+export async function getManual(s: Server, fetcher?: typeof fetch): Promise<Manual | null> {
+  try {
+    return await apiFetchForServer<Manual>(s, '/api/manual', undefined, 20000, true, fetcher);
+  } catch (e) {
+    if (isMissingRoute(e)) return null;
+    throw e;
+  }
+}
+
 /** Marca visto até `through`; o servidor nunca recua o cursor e devolve o que ficou. */
 export function markArrivedSeen(s: Server, device: string, through: number, fetcher?: typeof fetch): Promise<{ through: number }> {
   return apiFetchForServer(s, '/api/update/arrived/seen',
@@ -4191,6 +4213,11 @@ export function terminateCodexCommand(name: string, processId: string, server?: 
   return sessionFetch(server, `/api/sessions/${encodeURIComponent(name)}/codex/terminate`, {
     method: 'POST', body: JSON.stringify({ process_id: processId }),
   });
+}
+
+/** Para um subagente (`agent_id`) ou shell de fundo do Claude. 202 `pending`: a confirmação vem pelo estado da tarefa. */
+export function stopTask(name: string, taskId: string, server?: Server | null): Promise<{ pending: boolean }> {
+  return sessionFetch(server, `/api/sessions/${encodeURIComponent(name)}/tasks/${encodeURIComponent(taskId)}/stop`, { method: 'POST' });
 }
 
 export function implementCodexPlan(name: string, server?: Server | null): Promise<void> {

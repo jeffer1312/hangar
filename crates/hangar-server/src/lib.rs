@@ -65,6 +65,7 @@ pub mod session_visibility;
 pub mod tags;
 pub mod tour_progress;
 pub mod update_arrived;
+pub mod docs_routes;
 pub mod plugins;
 pub mod push;
 pub mod push_expo;

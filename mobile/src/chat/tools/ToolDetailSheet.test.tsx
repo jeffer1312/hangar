@@ -15,6 +15,7 @@ vi.mock('../../ui/Icon', () => ({ Icon: () => null }));
 vi.mock('../../ui/Toast', () => ({ toast: { erro: vi.fn() } }));
 
 import { ToolDetailSheet, type ToolDetailHandle } from './ToolDetailSheet';
+import * as m from '../../paraglide/messages';
 
 it('cada trecho do patch recebe seu arquivo, inclusive vários trechos do mesmo arquivo', async () => {
   const patch = `*** Begin Patch
@@ -42,5 +43,18 @@ it('cada trecho do patch recebe seu arquivo, inclusive vários trechos do mesmo 
   expect(paths[0].parentElement!.textContent).toContain('newFirst');
   expect(paths[0].parentElement!.textContent).toContain('newAgain');
   expect(paths[1].parentElement!.textContent).toContain('newSecond');
+  act(() => root.unmount());
+});
+
+it('mostra o código de saída acima da saída', async () => {
+  const use: ChatEvent = { id: 'shell', kind: 'tool_use', tool_name: 'Bash', tool_input: { command: 'false' } };
+  const result: ChatEvent = { id: 'result', kind: 'tool_result', result: 'Exit code 2\nboom', is_error: true };
+  const ref = createRef<ToolDetailHandle>();
+  const container = document.createElement('div');
+  const root = createRoot(container);
+  await act(async () => root.render(createElement(ToolDetailSheet, { ref, resultOf: () => result })));
+  await act(async () => ref.current!.abrir(use));
+  // Em inglês a etiqueta repete a primeira linha da saída: a prova é ela logo antes do texto cru.
+  expect(container.textContent).toContain(`${m.ferr_desktop_codigo_saida({ n: 2 })}${result.result}`);
   act(() => root.unmount());
 });

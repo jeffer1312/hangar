@@ -40,6 +40,14 @@ describe('aparencia', () => {
     expect(mem.get('aparencia.ferramentas')).toBe('classic');
   });
 
+  it('restaura o estilo Claude Desktop gravado nas chamadas de ferramenta', async () => {
+    const { useAparencia } = await import('./aparencia');
+    useAparencia.getState().setFerramentas('claudeDesktop');
+    vi.resetModules();
+    const { useAparencia: restored } = await import('./aparencia');
+    expect(restored.getState().ferramentas).toBe('claudeDesktop');
+  });
+
   it('tema padrão é system', async () => {
     const { useAparencia } = await import('./aparencia');
     expect(useAparencia.getState().tema).toBe('system');

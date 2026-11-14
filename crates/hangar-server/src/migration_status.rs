@@ -144,7 +144,7 @@ pub fn rust_route(method: &Method, path: &str) -> bool {
     if *method == Method::POST && matches!(path, "/api/update/accept" | "/api/update/arrived/seen") { return true; }
     if *method == Method::POST && path == "/api/ask-history" { return true; }
     if *method == Method::GET {
-        if matches!(path, "/api/sessions" | "/api/sessions/events" | "/api/sessions/creation-progress" | "/api/costs" | "/api/cotacao" | "/api/uso" | "/api/migration/status" | "/api/presence" | "/api/update/notes" | "/api/update/arrived"
+        if matches!(path, "/api/sessions" | "/api/sessions/events" | "/api/sessions/creation-progress" | "/api/costs" | "/api/cotacao" | "/api/uso" | "/api/migration/status" | "/api/presence" | "/api/update/notes" | "/api/update/arrived" | "/api/news" | "/api/manual"
             | "/api/voice" | "/api/voice/settings" | "/api/voice/memory" | "/api/jev/aux/cliproxy" | "/api/jev/delivery" | "/api/client-api"
             | "/api/search" | "/api/search/context") {
             return true;
@@ -185,6 +185,11 @@ pub fn rust_route(method: &Method, path: &str) -> bool {
     }
     // Texto a um subagente em segundo plano: o plugin do Claude entrega pelo `/pull`.
     if *method == Method::POST && tail.and_then(|t| t.strip_prefix("subagents/")).and_then(|t| t.strip_suffix("/message"))
+        .is_some_and(|id| !id.is_empty() && !id.contains('/')) {
+        return true;
+    }
+    // Parar uma tarefa: o Rust responde por todo provedor, sem rota no Python.
+    if *method == Method::POST && tail.and_then(|t| t.strip_prefix("tasks/")).and_then(|t| t.strip_suffix("/stop"))
         .is_some_and(|id| !id.is_empty() && !id.contains('/')) {
         return true;
     }

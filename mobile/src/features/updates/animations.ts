@@ -3,6 +3,7 @@ import type { ComponentType } from 'react';
 import { AutoReportAnimation } from './AutoReportAnimation';
 import { CodexActivityAnimation } from './CodexActivityAnimation';
 import { CompactIdleAnimation } from './CompactIdleAnimation';
+import { DesktopToolLookAnimation } from './DesktopToolLookAnimation';
 import { ConnectAnimation } from './ConnectAnimation';
 import { DreamAnimation } from './DreamAnimation';
 import { FolderBranchAnimation } from './FolderBranchAnimation';
@@ -15,6 +16,7 @@ import { RenameSuggestionAnimation } from './RenameSuggestionAnimation';
 import { SleepHiddenAnimation } from './SleepHiddenAnimation';
 import { SessionVaultAnimation } from './SessionVaultAnimation';
 import { TagsPlateAnimation } from './TagsPlateAnimation';
+import { UpdatesManualAnimation } from './UpdatesManualAnimation';
 import { VaultAnimation } from './VaultAnimation';
 import { WorktreeFreshAnimation } from './WorktreeFreshAnimation';
 
@@ -22,10 +24,12 @@ import { WorktreeFreshAnimation } from './WorktreeFreshAnimation';
 const animations: Record<string, ComponentType<{ width: number }>> = {
   'scheduled-tasks': ScheduledTasksAnimation,
   'adormecer-ocultas': SleepHiddenAnimation,
+  'atualizacoes-e-manual': UpdatesManualAnimation,
   'branch-no-celular': FolderBranchAnimation,
   'cofre-de-senhas': VaultAnimation,
   'codex-atividade': CodexActivityAnimation,
   'compactar-parada': CompactIdleAnimation,
+  'estilo-claude-desktop': DesktopToolLookAnimation,
   'etiquetas-maquina-conta': TagsPlateAnimation,
   'hangar-connect': ConnectAnimation,
   'login-usuario-senha': LoginPasswordAnimation,

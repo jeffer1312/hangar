@@ -6,7 +6,9 @@ import { useUnistyles } from 'react-native-unistyles';
 import { sfSymbol } from './sfSymbols';
 
 // Exclui os membros do namespace que não são ícones (helpers/contexto do pacote).
-export type IconName = Exclude<keyof typeof Lucide, 'Icon' | 'createLucideIcon' | 'useLucideContext' | 'LucideProvider'>;
+const NOT_ICONS = ['Icon', 'createLucideIcon', 'useLucideContext', 'LucideProvider'] as const;
+export type IconName = Exclude<keyof typeof Lucide, typeof NOT_ICONS[number]>;
+export const isIconName = (name: string): name is IconName => name in Lucide && !(NOT_ICONS as readonly string[]).includes(name);
 
 type IconCmp = ComponentType<{ size: number; color: string; strokeWidth?: number }>;
 

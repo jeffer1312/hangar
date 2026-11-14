@@ -6,6 +6,7 @@ mod codex_activity;
 mod compact_idle;
 mod composer_history;
 mod connect_approval;
+mod desktop_tool_look;
 mod dictation_pill;
 mod login_browser;
 mod memory_dream;
@@ -21,6 +22,7 @@ mod sleep_hidden;
 mod speech_pause;
 mod session_vault;
 mod tour;
+mod updates_manual;
 mod worktree_fresh;
 mod reviews;
 
@@ -74,6 +76,8 @@ pub fn animation(name: &str) -> Option<NewsAnimation> {
         "plugins-do-claude" => Some(plugins::render),
         "revisoes-pr-mr" => Some(reviews::render),
         "scheduled-tasks" => Some(scheduled_tasks::render),
+        "atualizacoes-e-manual" => Some(updates_manual::render),
+        "estilo-claude-desktop" => Some(desktop_tool_look::render),
         "sonho-da-memoria" => Some(memory_dream::render),
         _ => None,
     }

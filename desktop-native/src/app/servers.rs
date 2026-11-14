@@ -286,11 +286,16 @@ impl Hangar {
         self.sync_updater(cx);
     }
 
+    /// O servidor desta máquina (loopback), ativo ou não.
+    pub(super) fn this_machine_api(&self) -> Option<Api> {
+        self.api.as_ref().filter(|api| api.is_loopback()).cloned()
+            .or_else(|| self.servers.iter().filter(|s| !s.disabled).find_map(|s| Api::new(&s.address, &s.token).ok().filter(Api::is_loopback)))
+    }
+
     /// Dá ao atualizador o servidor ativo (aviso de desatualizado) e o desta máquina ("Atualizar tudo"), este só loopback:
     /// sem o recuo para o servidor ativo do `desktop_api`, que atualizaria outra máquina com o rótulo "desta máquina".
     pub(super) fn sync_updater(&self, cx: &mut Context<Self>) {
-        let local = self.api.as_ref().filter(|api| api.is_loopback()).cloned()
-            .or_else(|| self.servers.iter().filter(|s| !s.disabled).find_map(|s| Api::new(&s.address, &s.token).ok().filter(Api::is_loopback)));
+        let local = self.this_machine_api();
         let active = self.api.clone().filter(|_| !self.active_invite());
         let Some(updater) = cx.try_global::<crate::update::Handle>().map(|handle| handle.0.clone()) else { return };
         updater.update(cx, |updater, cx| {

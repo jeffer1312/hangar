@@ -6,6 +6,7 @@ import { callTarget } from './fold';
 import type { Ferramentas } from '../../stores/aparencia';
 import { Icon } from '../../ui/Icon';
 import { TerminalTool } from './TerminalTool';
+import { DesktopToolCall } from './DesktopToolGroup';
 import * as m from '../../paraglide/messages';
 
 // Uma chamada como linha, no desenho escolhido em Aparência › Chamadas de ferramenta:
@@ -40,6 +41,9 @@ export const ToolCard = memo(function ToolCard({
   const cor = falhou ? theme.tokens.status.warning : theme.tokens.text.muted;
   const erro = falhou ? summarizeToolResult(result, use.tool_name) : '';
   const rodando = escrevendo ? m.tool_fase_escrevendo() : m.estado_em_execucao();
+
+  // Claude Desktop: chamada solta vira a mesma linha de resumo; o Agent fica na linha da Árvore.
+  if (look === 'claudeDesktop' && use.tool_name !== 'Agent') return <DesktopToolCall use={use} result={result ?? null} onExpand={onExpand} onOpen={onPress} writing={escrevendo} />;
 
   if (look === 'terminal') return <TerminalTool use={use} result={result} escrevendo={escrevendo} onExpand={onExpand} onOpen={onPress} />;
 

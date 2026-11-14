@@ -74,6 +74,8 @@ use gpui_kit::component::tab::{Tab, TabBar};
 const COUNT_EVERY: Duration = Duration::from_secs(5);
 /// O "há N min" dos shells anda de 20 em 20 s, e só com a aba à vista.
 const CLOCK_EVERY: Duration = Duration::from_secs(20);
+/// Quanto o ■ espera o feed mostrar o fim da tarefa antes de dizer que ela não parou.
+const STOP_CONFIRM: Duration = Duration::from_secs(15);
 /// Consulta do subagente aberto, como o `ActivitySheet`.
 const DETAIL_EVERY: Duration = Duration::from_millis(2500);
 /// Falhas seguidas que param a consulta; o 404 para na primeira.
@@ -98,6 +100,8 @@ pub(super) enum ActivityReply {
     /// Resposta do envio de mensagem ao subagente: a aba (nenhuma = o detalhe da lista) e o número do envio.
     Sent(Option<u64>, u64, Result<Value, Failure>),
     CommandStopped(SessionKey, String, Result<Value, Failure>),
+    /// Resposta do pedido de parar a tarefa (subagente ou shell do Claude), pelo id dela e a época do pedido.
+    TaskStopped(SessionKey, String, u64, Result<Value, Failure>),
 }
 
 /// Um subagente do disco (`GET …/subagents`), só com o que a lista mostra e casa.
@@ -349,11 +353,13 @@ fn calls_line(sub: &SubRun) -> String {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-struct AgentLine { key: String, description: String, tags: Vec<(String, bool)>, now: Option<String>, sub: Option<String> }
+struct AgentLine { key: String, description: String, tags: Vec<(String, bool)>, now: Option<String>, sub: Option<String>, since: Option<f64>,
+    task: Option<String>, background: bool }
+/// `background`: lançado por um Agent em segundo plano, o único que o ■ consegue parar.
 #[derive(Clone, Debug, PartialEq)]
-struct OrphanLine { key: String, title: String, tag: Option<String>, now: String, done: bool, failed: bool }
+struct OrphanLine { key: String, title: String, tag: Option<String>, now: String, done: bool, failed: bool, since: Option<f64>, background: bool }
 #[derive(Clone, Debug, PartialEq)]
-struct ShellLine { key: String, label: String, raw: String, now: String }
+struct ShellLine { key: String, label: String, raw: String, now: String, since: Option<f64>, task: Option<String> }
 #[derive(Clone, Debug, PartialEq)]
 struct TaskLine { mark: &'static str, text: String, status: TaskStatus }
 
@@ -413,6 +419,16 @@ pub(super) struct ActivityPanel {
     tab_id: Option<u64>,
     /// "Mais antigos" aberto.
     older_open: bool,
+    /// "Finalizadas: N" aberto, no estilo Claude Desktop.
+    finished_open: bool,
+    /// A sessão aberta é do Claude: só nela o ■ para subagente e shell pelo servidor.
+    claude: bool,
+    /// Tarefas com a parada pedida, esperando o feed mostrar o fim.
+    stopping: HashSet<String>,
+    /// Muda a cada troca de sessão: o prazo de uma parada anterior não mexe na parada nova da mesma tarefa.
+    stop_epoch: u64,
+    /// O aviso de uma parada e a tarefa dele: some quando ela sai da lista.
+    stop_note: Option<(String, String)>,
     /// O compositor do subagente: nasce no primeiro desenho do detalhe (o campo pede a janela).
     input: Option<(Entity<TextareaState>, Subscription)>,
     sending: bool,
@@ -430,7 +446,7 @@ impl ActivityPanel {
             command_error: None, command_view: None, read_only: false,
             loading: false, failed: false, lines: Lines::default(), clock: None, scroll: ScrollHandle::new(), opened: None, detail_seq: 0,
             poll: None, notice: None, pending: None, conversation: cx.new(|_| SubConversation::new()), back_focus: cx.focus_handle().tab_stop(true),
-            marks: Default::default(), tab_id: None, older_open: false, input: None, sending: false, send_seq: 0, send_error: None,
+            marks: Default::default(), tab_id: None, older_open: false, finished_open: false, claude: false, stopping: HashSet::new(), stop_epoch: 0, stop_note: None, input: None, sending: false, send_seq: 0, send_error: None,
             clear_input: false, placeholder: String::new() }
     }
 
@@ -446,7 +462,9 @@ impl ActivityPanel {
             let mut tags = Vec::new();
             if let Some(t) = &a.subagent_type { tags.push((t.clone(), false)); }
             if let Some(m) = match sub { Some(sub) => sub.model.clone(), None => a.model.clone() } { tags.push((m, true)); }
-            AgentLine { key: a.id.clone(), description: a.description.clone(), tags, now: sub.map(calls_line), sub: sub.map(|s| s.agent_id.clone()) }
+            AgentLine { key: a.id.clone(), description: a.description.clone(), tags, now: sub.map(calls_line), sub: sub.map(|s| s.agent_id.clone()),
+                // Só o id do lançamento: o casamento por prompt pode achar uma execução anterior de prompt igual.
+                since: a.started_at.or(sub.and_then(|s| s.started)), task: a.agent_id.clone(), background: a.background }
         }).collect();
         // Quem já está na linha de um Agent rodando não se repete entre os subagentes rodando.
         let shown: HashSet<String> = self.activity.agents.iter().filter(live)
@@ -459,7 +477,8 @@ impl ActivityPanel {
             let silent = match status { SubStatus::Silent(at) => Some(at), _ => None };
             // Ilegível não diz "0 chamadas": os campos vêm zerados porque o registro não foi lido.
             let calls = if s.unreadable { web("atividade_sub_ilegivel") } else { calls_line(s) };
-            let line = OrphanLine { key: s.agent_id.clone(), title: sub_title(&self.subs, s), tag: s.agent_type.clone(), done: ended.is_some() || silent.is_some(), failed,
+            let line = OrphanLine { key: s.agent_id.clone(), title: sub_title(&self.subs, s), tag: s.agent_type.clone(), done: ended.is_some() || silent.is_some(), failed, since: s.started,
+                background: parent_of(&self.activity.agents, &self.subs, s).is_some_and(|a| a.background),
                 now: match (ended, silent) {
                     (None, Some(at)) => format!("{} · {calls}", web_with("atividade_sem_noticia", "t", interval(now - at))),
                     (None, None) if status == SubStatus::Unknown => web("atividade_estado_indisponivel"),
@@ -488,7 +507,7 @@ impl ActivityPanel {
                 if !now_text.is_empty() { now_text.push_str(" · "); }
                 now_text.push_str(&web_with("atividade_shell_ha", "t", interval(now - ts)));
             }
-            ShellLine { key: s.id.clone(), label: s.label.clone(), raw: s.command.clone(), now: now_text }
+            ShellLine { key: s.id.clone(), label: s.label.clone(), raw: s.command.clone(), now: now_text, since: s.ts, task: s.task_id.clone() }
         }).collect();
         let processes = self.processes.iter().map(|p| {
             let mut now_text = format!("pid {}", p.pid);
@@ -496,7 +515,7 @@ impl ActivityPanel {
                 timed = true;
                 now_text.push_str(&format!(" · {}", web_with("atividade_shell_ha", "t", interval(now - since))));
             }
-            ShellLine { key: p.pid.to_string(), label: p.cmd.clone(), raw: p.cmd.clone(), now: now_text }
+            ShellLine { key: p.pid.to_string(), label: p.cmd.clone(), raw: p.cmd.clone(), now: now_text, since: p.desde, task: None }
         }).collect();
         let tasks = self.activity.tasks.iter().map(|t| TaskLine {
             mark: match t.status { TaskStatus::Completed => "✓", TaskStatus::InProgress => "◐", TaskStatus::Pending => "○" },
@@ -506,9 +525,30 @@ impl ActivityPanel {
         // O subagente parado vira terminado com o tempo: o relógio da aba relê.
         timed |= !running.is_empty();
         let lines = Lines { agents, running, finished, older: older_lines, uncertain, shells, processes, tasks, timed };
-        if lines == self.lines { return false; }
+        let changed = lines != self.lines;
         self.lines = lines;
-        true
+        self.settle_stops(now) | changed
+    }
+
+    /// A parada provada sai da espera, e o aviso da tarefa some quando o fim dela se prova.
+    fn settle_stops(&mut self, now: f64) -> bool {
+        let listed = listed_tasks(&self.lines);
+        let proven: Vec<String> = self.stopping.iter().filter(|task| self.stop_proven(task, &listed, now)).cloned().collect();
+        // Só a parada provada leva o aviso: com a lista falhando a tarefa some de `listed` sem ter parado.
+        let note_gone = self.stop_note.as_ref().is_some_and(|(task, _)| self.stop_proven(task, &listed, now));
+        for task in &proven { self.stopping.remove(task); }
+        if note_gone { self.stop_note = None; }
+        !proven.is_empty() || note_gone
+    }
+
+    /// O shell se prova pelo fim no transcript; o subagente só com a lista lida, saindo dela ou terminando: lista
+    /// recarregando ou que falhou não prova nada, e o silencioso ou de estado indisponível segue listado sem ter parado.
+    fn stop_proven(&self, task: &str, listed: &HashSet<&str>, now: f64) -> bool {
+        let (activity, subs, ready) = (&self.activity, &self.subs, !self.loading && !self.failed);
+        !listed.contains(task) && (
+            activity.shells.iter().any(|s| s.task_id.as_deref() == Some(task) && !s.running)
+            || ready && subs.iter().find(|s| s.agent_id == task)
+                .is_none_or(|s| matches!(sub_status(&activity.agents, subs, s, now), SubStatus::Finished(_) | SubStatus::Failed(_))))
     }
 
     /// Conversa e estado novos da sessão aberta: a view só redesenha se a lista mudou.
@@ -547,6 +587,50 @@ impl ActivityPanel {
             let result = link.api.act(&key.name, &["codex", "terminate"], Some(json!({"process_id": process_id})), false, 15).await;
             let _ = link.tx.send(Envelope { connection: link.connection, selection: None, payload: Payload::Activity(ActivityReply::CommandStopped(key, id, result)) }).await;
         });
+        cx.notify();
+    }
+
+    /// O ■ de um subagente ou shell do Claude: a linha fica "Parando…" até o feed mostrar o fim.
+    fn stop_task(&mut self, task: String, cx: &mut Context<Self>) {
+        if self.read_only || !self.claude || self.stopping.contains(&task) { return; }
+        let (Some(link), Some(key)) = (self.link.clone(), self.key.clone()) else { return; };
+        self.stopping.insert(task.clone());
+        self.stop_note = None;
+        let epoch = self.stop_epoch;
+        link.runtime.spawn(async move {
+            let result = link.api.act(&key.name, &["tasks", &task, "stop"], None, false, 15).await;
+            let _ = link.tx.send(Envelope { connection: link.connection, selection: None, payload: Payload::Activity(ActivityReply::TaskStopped(key, task, epoch, result)) }).await;
+        });
+        cx.notify();
+    }
+
+    /// O servidor só aceita o pedido (202): quem confirma é o feed. Recusa volta a linha e mostra o motivo.
+    /// Resposta de um pedido de antes da troca de sessão (outra época) não mexe na parada nova da mesma tarefa.
+    fn receive_task_stopped(&mut self, key: &SessionKey, task: &str, epoch: u64, result: Result<Value, Failure>, cx: &mut Context<Self>) {
+        if self.key.as_ref() != Some(key) || epoch != self.stop_epoch || !self.stopping.contains(task) { return; }
+        match result {
+            Err(failure) => {
+                self.stopping.remove(task);
+                // Sem resposta do servidor, o `detail` é a chave da frase; com resposta, já é a frase traduzida.
+                self.stop_note = Some((task.to_owned(), if failure.status.is_none() { tr(&failure.detail) } else { failure.detail }));
+            }
+            Ok(_) => {
+                let task = task.to_owned();
+                cx.spawn(async move |this, cx| {
+                    cx.background_executor().timer(STOP_CONFIRM).await;
+                    let _ = this.update(cx, |this, cx| this.stop_unconfirmed(&task, epoch, cx));
+                }).detach();
+            }
+        }
+        cx.notify();
+    }
+
+    /// Passado o prazo, a tarefa sem fim provado não parou: a linha volta com o aviso.
+    fn stop_unconfirmed(&mut self, task: &str, epoch: u64, cx: &mut Context<Self>) {
+        if epoch != self.stop_epoch || !self.stopping.remove(task) { return; }
+        if !self.stop_proven(task, &listed_tasks(&self.lines), now_seconds()) {
+            self.stop_note = Some((task.to_owned(), web("atividade_parar_sem_confirmacao")));
+        }
         cx.notify();
     }
 
@@ -595,10 +679,12 @@ impl ActivityPanel {
             // Aba que volta a aparecer relê do zero, como o web, que desmonta a lista ao trocar de aba; resposta da
             // sessão anterior não entra na desta.
             self.seq += 1;
-            (self.subs, self.failed, self.loading) = (Vec::new(), false, false);
+            // Carregando até a releitura voltar: a lista vazia de agora não prova parada nenhuma.
+            (self.subs, self.failed, self.loading) = (Vec::new(), false, true);
             if other {
                 self.close_detail(cx); (self.notice, self.pending) = (None, None);
                 self.command_open = None; self.command_pending.clear(); self.command_error = None; self.command_view = None;
+                self.stopping.clear(); self.stop_epoch += 1; self.stop_note = None;
             }
             self.key = Some(key);
             self.link = Some(link);
@@ -845,7 +931,8 @@ fn warning_text(text: String) -> AnyElement {
     div().font_family(theme::MONO).text_size(px(10.)).text_color(theme::warning()).child(text).into_any_element()
 }
 
-fn shell_row(prefix: &str, line: &ShellLine) -> AnyElement {
+/// `stop`: o ■ do shell de fundo que dá para parar.
+fn shell_row(prefix: &str, line: &ShellLine, stop: Option<AnyElement>) -> AnyElement {
     let raw = line.raw.clone();
     div().id(SharedString::from(format!("{prefix}-{}", line.key))).flex().items_start().gap_2()
         .tooltip(move |window, cx| Tooltip::new(raw.clone()).build(window, cx))
@@ -853,7 +940,71 @@ fn shell_row(prefix: &str, line: &ShellLine) -> AnyElement {
         .child(div().flex_1().min_w_0().flex().flex_col().gap(px(3.))
             .child(div().font_family(theme::MONO).text_sm().text_color(theme::text()).line_clamp(2).child(line.label.clone()))
             .when(!line.now.is_empty(), |el| el.child(now_text(line.now.clone()))))
+        .children(stop)
         .into_any_element()
+}
+
+/// Uma linha de "Tarefas em segundo plano" no estilo Claude Desktop: subagente ou shell rodando. `open` é o subagente
+/// do disco que o clique abre.
+#[derive(Clone, Debug, PartialEq)]
+/// `task`: o id que a parada pede (o `agentId` do subagente, o id de fundo do shell).
+struct BackgroundRow { key: String, shell: bool, name: String, raw: String, since: Option<f64>, open: Option<String>, task: Option<String> }
+
+fn background_rows(lines: &Lines) -> Vec<BackgroundRow> {
+    let agents = lines.agents.iter().map(|a| BackgroundRow { key: format!("agent-{}", a.key), shell: false, name: a.description.clone(),
+        raw: a.description.clone(), since: a.since, open: a.sub.clone(), task: a.task.clone().filter(|_| a.background) });
+    let subs = lines.running.iter().map(|s| BackgroundRow { key: format!("sub-{}", s.key), shell: false, name: s.title.clone(),
+        raw: s.title.clone(), since: s.since, open: Some(s.key.clone()), task: Some(s.key.clone()).filter(|_| s.background) });
+    let shells = lines.shells.iter().map(|s| BackgroundRow { key: format!("shell-{}", s.key), shell: true, name: s.label.clone(),
+        raw: s.raw.clone(), since: s.since, open: None, task: s.task.clone() });
+    agents.chain(subs).chain(shells).collect()
+}
+
+/// O id de parada de toda tarefa que a lista ainda mostra: Agent, subagente rodando ou incerto, shell.
+fn listed_tasks(lines: &Lines) -> HashSet<&str> {
+    lines.agents.iter().filter_map(|a| a.task.as_deref())
+        .chain(lines.running.iter().chain(&lines.uncertain).map(|s| s.key.as_str()))
+        .chain(lines.shells.iter().filter_map(|s| s.task.as_deref())).collect()
+}
+
+/// "Finalizadas: N", com os de antes de hoje que a seção Terminados também conta.
+fn finished_label(lines: &Lines) -> Option<String> {
+    let n = lines.finished.len() + lines.older.len();
+    (n > 0).then(|| web_with("atividade_desktop_finalizadas", "n", n.to_string()))
+}
+
+/// O ◇ do subagente, na largura dos ícones da lista.
+fn diamond() -> Div { div().w(px(14.)).flex_shrink_0().text_center().text_sm().text_color(theme::muted()).child("◇") }
+
+fn chevron(open: bool) -> Icon { chrome::small_icon(if open { IconName::ChevronDown } else { IconName::ChevronRight }, 14., theme::faint()) }
+
+/// Linha que abre e fecha uma lista ("Finalizadas", "Mais antigos"): clique, ou Enter e espaço com o foco do Tab, como
+/// o `openable`; quem chama põe o conteúdo.
+fn toggle_row(id: &'static str, label: String, toggle: fn(&mut ActivityPanel), window: &mut Window, cx: &mut Context<ActivityPanel>) -> Stateful<Div> {
+    let focus = window.use_keyed_state(SharedString::from(format!("{id}-focus")), cx, |_, cx| cx.focus_handle().tab_stop(true)).read(cx).clone();
+    div().id(id).track_focus(&focus).flex().items_center().mx(px(-8.)).px(px(8.)).rounded(px(8.))
+        .cursor_pointer().hover(|el| el.bg(theme::hover()))
+        .when(focus.is_focused(window), |el| el.focus_ring_style(window, cx))
+        .role(Role::Button).aria_label(label)
+        .on_click(cx.listener(move |this, _, _, cx| { toggle(this); cx.notify(); }))
+        .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
+            if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                toggle(this);
+                cx.notify();
+                cx.stop_propagation();
+            }
+        }))
+}
+
+/// Ícone, nome cortado numa linha e o tempo desde o começo, que corre pintado fora da view.
+fn background_line(row: &BackgroundRow, marks: &super::panes::MarkPlaces, stop: Option<AnyElement>) -> Div {
+    let icon = if row.shell { chrome::small_icon(IconName::SquareTerminal, 14., theme::muted()).into_any_element() } else { diamond().into_any_element() };
+    div().h(px(22.)).flex().items_center().gap_2().min_w_0()
+        .child(icon)
+        .child(div().flex_1().min_w_0().truncate().text_sm().text_color(theme::text()).child(row.name.clone()))
+        .when_some(row.since.and_then(since_wall), |el, since| el.child(div().h_full().text_xs().text_color(theme::faint())
+            .child(super::panes::elapsed_place(marks, super::panes::Area::Side, format!("act-bg-elapsed-{}", row.key), since))))
+        .children(stop)
 }
 
 impl ActivityPanel {
@@ -901,6 +1052,52 @@ impl ActivityPanel {
         Some(group.into_any_element())
     }
 
+    /// "Tarefas em segundo plano" do estilo Claude Desktop: subagentes e shells rodando, cada um com o ■, e as
+    /// finalizadas atrás de uma linha que abre.
+    fn render_background(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<Div> {
+        let lines = &self.lines;
+        let background = background_rows(lines);
+        let finished = finished_label(lines);
+        if background.is_empty() && finished.is_none() { return None; }
+        let mut group = section(web("atividade_desktop_titulo"), None);
+        for row in &background {
+            let stop = self.stop_control(row.task.as_deref(), &row.key, &row.name, cx);
+            let line = background_line(row, &self.marks, stop);
+            group = group.child(match &row.open {
+                Some(sub) => openable(format!("act-bg-{}", row.key), sub.clone(), row.name.clone(), line, window, cx),
+                None => {
+                    let raw = row.raw.clone();
+                    line.id(SharedString::from(format!("act-bg-{}", row.key)))
+                        .tooltip(move |window, cx| Tooltip::new(raw.clone()).build(window, cx)).into_any_element()
+                }
+            });
+        }
+        if let Some(label) = finished {
+            let open = self.finished_open;
+            group = group.child(toggle_row("act-finished", label.clone(), |this| this.finished_open = !this.finished_open, window, cx).h(px(30.)).gap_2()
+                .child(diamond())
+                .child(div().flex_1().min_w_0().truncate().text_sm().text_color(theme::text()).child(label))
+                .child(chevron(open)));
+            if open { group = group.children(lines.finished.iter().chain(&lines.older).map(|s| sub_row(s, None, window, cx))); }
+        }
+        if let Some((_, note)) = &self.stop_note { group = group.child(warning_line(note.clone())); }
+        Some(group)
+    }
+
+    /// O ■ de uma tarefa que dá para parar, ou "Parando…" enquanto o feed não mostra o fim; nada para quem não pode.
+    fn stop_control(&self, task: Option<&str>, key: &str, name: &str, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let task = task.filter(|_| self.claude && !self.read_only)?.to_owned();
+        if self.stopping.contains(&task) {
+            return Some(div().flex_shrink_0().text_xs().text_color(theme::faint()).child(web("atividade_parando")).into_any_element());
+        }
+        let label = format!("{}: {name}", web("atividade_desktop_parar"));
+        Some(Button::new(SharedString::from(format!("act-bg-stop-{key}"))).ghost().xsmall().accessibility_label(label)
+            .tooltip(web("atividade_desktop_parar"))
+            .child(div().size(px(9.)).rounded(px(2.)).bg(theme::text()))
+            .on_click(cx.listener(move |this, _, _, cx| { cx.stop_propagation(); this.stop_task(task.clone(), cx); }))
+            .into_any_element())
+    }
+
     /// Views guardadas dentro desta, que redesenham junto na troca de aba (`side_tab_in`).
     pub(super) fn views(&self) -> Vec<EntityId> { vec![self.conversation.entity_id()] }
 }
@@ -917,60 +1114,58 @@ impl Render for ActivityPanel {
         }
         if let Some(notice) = &self.notice { body = body.child(warning_line(notice.clone())); }
         if let Some(code) = self.subs.iter().find_map(|s| s.problem.as_deref()) { body = body.child(warning_line(web(code))); }
-        let sub_row = |s: &OrphanLine, window: &mut Window, cx: &mut Context<Self>| {
-            let content = div().flex().flex_col().gap(px(3.)).when(s.done && !s.failed, |el| el.opacity(0.6))
-                .child(div().flex().items_center().gap_1().min_w_0()
-                    .child(div().min_w_0().truncate().text_sm().text_color(theme::text()).child(s.title.clone()))
-                    .when_some(s.tag.clone(), |el, t| el.child(tag(t, false))))
-                .child(if s.failed { warning_text(s.now.clone()) } else { now_text(s.now.clone()) });
-            openable(format!("act-orphan-{}", s.key), s.key.clone(), s.title.clone(), content, window, cx)
-        };
-        if !lines.agents.is_empty() || !lines.running.is_empty() {
-            let mut rows: Vec<AnyElement> = lines.agents.iter().map(|a| {
-                let content = div().flex().items_start().gap_2().child(spinning(format!("act-agent-spin-{}", a.key)))
-                    .child(div().flex_1().min_w_0().flex().flex_col().gap(px(3.))
-                        .child(div().flex().items_center().gap_1().min_w_0()
-                            .child(div().min_w_0().truncate().text_sm().text_color(theme::text()).child(a.description.clone()))
-                            .children(a.tags.iter().map(|(t, muted)| tag(t.clone(), *muted))))
-                        .when_some(a.now.clone(), |el, now| el.child(now_text(now))));
-                // Só abre quem casou com o disco; o resto é informação.
-                match &a.sub {
-                    Some(sub) => openable(format!("act-agent-{}", a.key), sub.clone(), a.description.clone(), content, window, cx),
-                    None => content.into_any_element(),
-                }
-            }).collect();
-            rows.extend(lines.running.iter().map(|s| sub_row(s, window, cx)));
-            // Os sem notícia (`done` na seção Rodando) aparecem aqui, mas não contam como rodando.
-            let count = (lines.agents.len() + lines.running.iter().filter(|s| !s.done).count()).to_string();
-            body = body.child(section(web_with("atividade_grupo_rodando", "n", count), None).children(rows));
-        }
-        if !lines.finished.is_empty() || !lines.older.is_empty() {
-            let rows: Vec<AnyElement> = lines.finished.iter().map(|s| sub_row(s, window, cx)).collect();
-            let count = (lines.finished.len() + lines.older.len()).to_string();
-            let mut group = section(web_with("atividade_grupo_terminados", "n", count), None).children(rows);
-            if !lines.older.is_empty() {
-                let open = self.older_open;
-                let label = web_with("atividade_grupo_antigos", "n", lines.older.len().to_string());
-                group = group.child(div().id("act-older").flex().items_center().gap_1().mx(px(-8.)).px(px(8.)).py(px(4.)).rounded(px(8.))
-                    .cursor_pointer().hover(|el| el.bg(theme::hover())).role(Role::Button).aria_label(label.clone())
-                    .child(chrome::small_icon(if open { IconName::ChevronDown } else { IconName::ChevronRight }, 14., theme::faint()))
-                    .child(chrome::section_label(label))
-                    .on_click(cx.listener(|this, _, _, cx| { this.older_open = !this.older_open; cx.notify(); })));
-                if open { group = group.children(lines.older.iter().map(|s| sub_row(s, window, cx))); }
+        let uncertain = (!lines.uncertain.is_empty()).then(|| section(web("atividade_subagentes"), None)
+            .children(lines.uncertain.iter().map(|sub| sub_row(sub, None, window, cx))));
+        if crate::appearance::get().tool_look == crate::appearance::ToolLook::ClaudeDesktop {
+            body = body.children(self.render_background(window, cx)).children(uncertain);
+        } else {
+            if !lines.agents.is_empty() || !lines.running.is_empty() {
+                let mut rows: Vec<AnyElement> = lines.agents.iter().map(|a| {
+                    let content = div().flex().items_start().gap_2().child(spinning(format!("act-agent-spin-{}", a.key)))
+                        .child(div().flex_1().min_w_0().flex().flex_col().gap(px(3.))
+                            .child(div().flex().items_center().gap_1().min_w_0()
+                                .child(div().min_w_0().truncate().text_sm().text_color(theme::text()).child(a.description.clone()))
+                                .children(a.tags.iter().map(|(t, muted)| tag(t.clone(), *muted))))
+                            .when_some(a.now.clone(), |el, now| el.child(now_text(now))))
+                        .children(self.stop_control(a.task.as_deref().filter(|_| a.background), &format!("agent-{}", a.key), &a.description, cx));
+                    // Só abre quem casou com o disco; o resto é informação.
+                    match &a.sub {
+                        Some(sub) => openable(format!("act-agent-{}", a.key), sub.clone(), a.description.clone(), content, window, cx),
+                        None => content.into_any_element(),
+                    }
+                }).collect();
+                rows.extend(lines.running.iter().map(|s| {
+                    let stop = self.stop_control(Some(s.key.as_str()).filter(|_| s.background), &format!("sub-{}", s.key), &s.title, cx);
+                    sub_row(s, stop, window, cx)
+                }));
+                // Os sem notícia (`done` na seção Rodando) aparecem aqui, mas não contam como rodando.
+                let count = (lines.agents.len() + lines.running.iter().filter(|s| !s.done).count()).to_string();
+                body = body.child(section(web_with("atividade_grupo_rodando", "n", count), None).children(rows));
             }
-            body = body.child(group);
-        }
-        if !lines.uncertain.is_empty() {
-            body = body.child(section(web("atividade_subagentes"), None)
-                .children(lines.uncertain.iter().map(|sub| sub_row(sub, window, cx))));
-        }
-        if !lines.shells.is_empty() {
-            body = body.child(section(web("atividade_shells"), Some(lines.shells.len()))
-                .children(lines.shells.iter().map(|s| shell_row("act-shell", s))));
+            if !lines.finished.is_empty() || !lines.older.is_empty() {
+                let rows: Vec<AnyElement> = lines.finished.iter().map(|s| sub_row(s, None, window, cx)).collect();
+                let count = (lines.finished.len() + lines.older.len()).to_string();
+                let mut group = section(web_with("atividade_grupo_terminados", "n", count), None).children(rows);
+                if !lines.older.is_empty() {
+                    let open = self.older_open;
+                    let label = web_with("atividade_grupo_antigos", "n", lines.older.len().to_string());
+                    group = group.child(toggle_row("act-older", label.clone(), |this| this.older_open = !this.older_open, window, cx).gap_1().py(px(4.))
+                        .child(chevron(open))
+                        .child(chrome::section_label(label)));
+                    if open { group = group.children(lines.older.iter().map(|s| sub_row(s, None, window, cx))); }
+                }
+                body = body.child(group);
+            }
+            body = body.children(uncertain);
+            if !lines.shells.is_empty() {
+                body = body.child(section(web("atividade_shells"), Some(lines.shells.len()))
+                    .children(lines.shells.iter().map(|s| shell_row("act-shell", s, self.stop_control(s.task.as_deref(), &format!("shell-{}", s.key), &s.label, cx)))));
+            }
+            if let Some((_, note)) = &self.stop_note { body = body.child(warning_line(note.clone())); }
         }
         if !lines.processes.is_empty() {
             body = body.child(section(web("atividade_processos"), Some(lines.processes.len()))
-                .children(lines.processes.iter().map(|p| shell_row("act-proc", p))));
+                .children(lines.processes.iter().map(|p| shell_row("act-proc", p, None))));
         }
         body = body.when_some(commands, |body, commands| body.child(commands));
         if !lines.tasks.is_empty() {
@@ -993,6 +1188,20 @@ impl Render for ActivityPanel {
         }
         div().id("activity-scroll").size_full().overflow_y_scroll().track_scroll(&self.scroll).child(body).into_any_element()
     }
+}
+
+/// Subagente lido do disco: título, etiqueta e o que faz agora, e o ■ quando roda; o clique abre a conversa dele.
+fn sub_row(s: &OrphanLine, stop: Option<AnyElement>, window: &mut Window, cx: &mut Context<ActivityPanel>) -> AnyElement {
+    let content = div().flex().flex_col().gap(px(3.)).when(s.done && !s.failed, |el| el.opacity(0.6))
+        .child(div().flex().items_center().gap_1().min_w_0()
+            .child(div().min_w_0().truncate().text_sm().text_color(theme::text()).child(s.title.clone()))
+            .when_some(s.tag.clone(), |el, t| el.child(tag(t, false))))
+        .child(if s.failed { warning_text(s.now.clone()) } else { now_text(s.now.clone()) });
+    let content = match stop {
+        Some(stop) => div().flex().items_start().gap_2().child(content.flex_1().min_w_0()).child(stop),
+        None => content,
+    };
+    openable(format!("act-orphan-{}", s.key), s.key.clone(), s.title.clone(), content, window, cx)
 }
 
 fn warning_line(text: String) -> AnyElement {
@@ -1260,7 +1469,8 @@ impl Hangar {
         let empty_states = NativeAgents::new();
         let states = self.chat.state.codex_subagents.as_ref()
             .or_else(|| (self.provider().0 == "codex").then_some(&empty_states));
-        self.act.view.update(cx, |view, cx| { view.set_native_states(states, cx); view.set_data(activity, processes, cx); view.set_commands(commands, output, read_only, cx); view.set_plugin_servers(&servers, cx); view.show(target, cx); });
+        let claude = self.provider().0 == "claude";
+        self.act.view.update(cx, |view, cx| { view.claude = claude; view.set_native_states(states, cx); view.set_data(activity, processes, cx); view.set_commands(commands, output, read_only, cx); view.set_plugin_servers(&servers, cx); view.show(target, cx); });
         for tab in &self.act.tabs { tab.view.update(cx, |view, cx| { view.set_native_states(states, cx); view.set_data(activity, processes, cx); view.set_plugin_servers(&servers, cx); }); }
     }
 
@@ -1379,6 +1589,7 @@ impl Hangar {
             }
             ActivityReply::List(seq, result) => self.act.view.update(cx, |view, cx| view.receive(seq, result, cx)),
             ActivityReply::CommandStopped(key, id, result) => self.act.view.update(cx, |view, cx| view.receive_command_stopped(&key, &id, result, cx)),
+            ActivityReply::TaskStopped(key, id, epoch, result) => self.act.view.update(cx, |view, cx| view.receive_task_stopped(&key, &id, epoch, result, cx)),
             ActivityReply::Detail(seq, result) => self.act.view.update(cx, |view, cx| view.receive_detail(seq, result, cx)),
             ActivityReply::Sent(None, seq, result) => self.act.view.update(cx, |view, cx| view.receive_sent(seq, result, cx)),
             ActivityReply::Sent(Some(id), seq, result) => {
@@ -1402,6 +1613,8 @@ impl Hangar {
     pub(super) fn restyle_subagent(&mut self, cx: &mut Context<Self>) {
         let conversation = self.act.view.read(cx).conversation.clone();
         conversation.update(cx, |view, cx| view.restyle(cx));
+        // A lista da aba muda de desenho com o estilo Claude Desktop.
+        self.act.view.update(cx, |_, cx| cx.notify());
         for tab in &self.act.tabs {
             let conversation = tab.view.read(cx).conversation.clone();
             conversation.update(cx, |view, cx| view.restyle(cx));
@@ -1686,7 +1899,7 @@ mod tests {
     #[test]
     fn codex_history_waits_for_proven_state_and_late_detail_cannot_reopen_finished_child() {
         let agent = AgentRun { call: 0, id: "spawn".into(), description: "review".into(), subagent_type: None,
-            model: None, prompt: None, running: true, waiting: false, agent_id: None, agent_path: Some("/root/review".into()), started_at: None, finished_at: None };
+            model: None, prompt: None, running: true, waiting: false, agent_id: None, agent_path: Some("/root/review".into()), started_at: None, finished_at: None, background: false };
         assert!(!super::native_running(&agent, &[], None, false));
         let mut states = super::NativeAgents::from([("child".into(), super::CodexSubagent {
             agent_path: Some("/root/review".into()), state: Some("finished".into()), ended_at: Some(1000.), ..Default::default()
@@ -1835,6 +2048,233 @@ mod tests {
         });
     }
 
+    #[gpui::test]
+    fn desktop_look_lists_running_work_as_background_tasks_and_counts_the_finished(cx: &mut gpui::TestAppContext) {
+        use gpui::AppContext;
+        crate::i18n::english_in_this_thread(false);
+        let panel = cx.new(super::ActivityPanel::new);
+        panel.update(cx, |panel, _| {
+            let named = |id: &str, description: &str| AgentRun { description: description.into(), started_at: Some(50.), ..parent(id, description, None, true) };
+            panel.activity.agents = vec![named("t1", "Revisar"), named("t2", "Testar")];
+            panel.activity.shells = vec![crate::conversation::ShellRun { id: "s1".into(), command: "npm run dev".into(), label: "npm run dev".into(),
+                description: None, ts: Some(100.), running: true, task_id: None }];
+            panel.subs = vec![SubRun { finished: true, ..sub("k", "outra tarefa") }];
+            panel.prepare();
+            let rows = super::background_rows(&panel.lines);
+            assert_eq!(rows.iter().map(|r| (r.shell, r.name.as_str(), r.since)).collect::<Vec<_>>(),
+                [(false, "Revisar", Some(50.)), (false, "Testar", Some(50.)), (true, "npm run dev", Some(100.))]);
+            assert_eq!(super::finished_label(&panel.lines).as_deref(), Some("Finalizadas: 1"));
+            panel.subs.clear();
+            panel.prepare();
+            assert_eq!(super::finished_label(&panel.lines), None);
+        });
+    }
+
+    #[gpui::test]
+    fn task_stop_sends_the_session_route_with_the_task_id(cx: &mut gpui::TestAppContext) {
+        use gpui::AppContext;
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        let runtime = super::Arc::new(super::Runtime::new().unwrap());
+        let listener = runtime.block_on(tokio::net::TcpListener::bind("127.0.0.1:0")).unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = runtime.spawn(async move {
+            let (stream, _) = tokio::time::timeout(super::Duration::from_secs(3), listener.accept()).await.unwrap().unwrap();
+            let mut stream = BufReader::new(stream);
+            let mut line = String::new();
+            stream.read_line(&mut line).await.unwrap();
+            assert_eq!(line.trim(), "POST /api/sessions/fixture-session/tasks/bg1/stop HTTP/1.1");
+            loop {
+                line.clear();
+                stream.read_line(&mut line).await.unwrap();
+                if line == "\r\n" { break; }
+            }
+            stream.write_all(b"HTTP/1.1 202 Accepted\r\nContent-Type: application/json\r\nContent-Length: 16\r\nConnection: close\r\n\r\n{\"pending\":true}").await.unwrap();
+        });
+        let (tx, rx) = async_channel::unbounded();
+        let key = super::SessionKey { server: "server-b".into(), name: "fixture-session".into(), jsonl: "thread-1".into() };
+        let panel = cx.new(super::ActivityPanel::new);
+        panel.update(cx, |panel, cx| {
+            panel.key = Some(key.clone());
+            panel.claude = true;
+            panel.link = Some(super::Link { api: super::Api::new(&format!("http://{address}"), "fixture-owner").unwrap(), runtime: runtime.clone(), tx, connection: 7 });
+            panel.stop_task("bg1".into(), cx);
+            assert!(panel.stopping.contains("bg1"));
+        });
+        let reply = runtime.block_on(async { tokio::time::timeout(super::Duration::from_secs(3), rx.recv()).await.unwrap().unwrap() });
+        match reply.payload {
+            super::Payload::Activity(super::ActivityReply::TaskStopped(reply_key, id, _, result)) => {
+                assert_eq!((reply_key, id.as_str()), (key, "bg1"));
+                assert_eq!(result.unwrap(), serde_json::json!({"pending": true}));
+            }
+            _ => panic!("unexpected stop reply"),
+        }
+        runtime.block_on(server).unwrap();
+    }
+
+    #[gpui::test]
+    fn task_stop_refusal_shows_its_code_and_a_silent_task_reverts(cx: &mut gpui::TestAppContext) {
+        use gpui::AppContext;
+        crate::i18n::english_in_this_thread(false);
+        let panel = cx.new(super::ActivityPanel::new);
+        panel.update(cx, |panel, cx| {
+            let key = super::SessionKey { server: "server-b".into(), name: "session".into(), jsonl: "thread-1".into() };
+            panel.key = Some(key.clone());
+            panel.stopping.insert("bg1".into());
+            // O `detail` chega já traduzido pelo `failure_detail` da API.
+            let refused = super::Failure { status: Some(409), code: Some("erro_parar_plugin_antigo".into()),
+                ..super::Failure::local(super::web("erro_parar_plugin_antigo")) };
+            panel.receive_task_stopped(&key, "bg1", panel.stop_epoch, Err(refused), cx);
+            assert!(panel.stopping.is_empty());
+            assert_eq!(panel.stop_note, Some(("bg1".into(), super::web("erro_parar_plugin_antigo"))));
+            // Sem mudança no feed, a linha volta e diz que não houve confirmação; a que sumiu só sai da espera.
+            panel.activity.shells = vec![crate::conversation::ShellRun { id: "s2".into(), command: "sleep 99".into(), label: "sleep 99".into(),
+                description: None, ts: None, running: true, task_id: Some("bg2".into()) }];
+            panel.prepare();
+            panel.stopping.extend(["bg2".to_owned(), "bg3".to_owned()]);
+            panel.stop_note = None;
+            panel.stop_unconfirmed("bg3", panel.stop_epoch, cx);
+            assert_eq!((panel.stopping.contains("bg3"), stop_note(panel)), (false, None));
+            panel.stop_unconfirmed("bg2", panel.stop_epoch, cx);
+            assert!(panel.stopping.is_empty());
+            assert_eq!(panel.stop_note, Some(("bg2".into(), super::web("atividade_parar_sem_confirmacao"))));
+            // O prazo de uma parada de antes da troca de sessão não desfaz a parada nova da mesma tarefa.
+            panel.stopping.insert("bg2".into());
+            let before = panel.stop_epoch;
+            panel.stop_epoch += 1;
+            panel.stop_unconfirmed("bg2", before, cx);
+            assert!(panel.stopping.contains("bg2"));
+            // Nem a resposta HTTP daquele pedido antigo: recusa ou aceite não mexem na espera nova.
+            panel.stop_note = None;
+            panel.receive_task_stopped(&key, "bg2", before, Err(super::Failure::local("old")), cx);
+            assert_eq!((panel.stopping.contains("bg2"), stop_note(panel)), (true, None));
+        });
+    }
+
+    /// "Mais antigos" entra no Tab e abre e fecha com Enter e espaço.
+    #[gpui::test]
+    fn older_toggle_takes_focus_and_opens_with_the_keyboard(cx: &mut gpui::TestAppContext) {
+        crate::i18n::english_in_this_thread(false);
+        cx.update(gpui_kit::init);
+        let (panel, cx) = cx.add_window_view(|_, cx| super::ActivityPanel::new(cx));
+        panel.update(cx, |panel, cx| {
+            panel.lines.older = vec![super::OrphanLine { key: "old".into(), title: "old work".into(), tag: None, now: String::new(), done: true, failed: false, since: None, background: false }];
+            cx.notify();
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| { let _ = window.draw(cx); window.focus_next(cx); });
+        cx.simulate_keystrokes("enter");
+        assert!(panel.read_with(cx, |panel, _| panel.older_open));
+        cx.simulate_keystrokes("space");
+        assert!(!panel.read_with(cx, |panel, _| panel.older_open));
+    }
+
+    /// Fora do Claude Desktop o ■ e o "Parando…" ficam nas linhas de sempre (os testes rodam no Clássico).
+    #[gpui::test]
+    fn classic_rows_offer_the_stop_control(cx: &mut gpui::TestAppContext) {
+        crate::i18n::english_in_this_thread(false);
+        cx.update(gpui_kit::init);
+        let (panel, cx) = cx.add_window_view(|window, cx| { window.retain_a11y_tree(true); super::ActivityPanel::new(cx) });
+        panel.update(cx, |panel, cx| {
+            panel.claude = true;
+            panel.activity.shells = vec![crate::conversation::ShellRun { id: "s2".into(), command: "sleep 99".into(), label: "sleep 99".into(),
+                description: None, ts: None, running: true, task_id: Some("bg2".into()) }];
+            panel.prepare();
+            cx.notify();
+        });
+        let snapshot = |cx: &mut gpui::VisualTestContext| {
+            cx.run_until_parked();
+            cx.update(|window, cx| { let _ = window.draw(cx); window.a11y_snapshot(None).unwrap() })
+        };
+        let stop = format!("{}: sleep 99", super::web("atividade_desktop_parar"));
+        let shown = snapshot(cx);
+        assert!(shown.contains(&stop), "{shown}");
+        panel.update(cx, |panel, cx| { panel.stopping.insert("bg2".into()); cx.notify(); });
+        let shown = snapshot(cx);
+        assert!(!shown.contains(&stop) && shown.contains(&super::web("atividade_parando")), "{shown}");
+    }
+
+    fn stop_note(panel: &super::ActivityPanel) -> Option<String> { panel.stop_note.clone().map(|(_, note)| note) }
+
+    /// Pede a parada de `task` e deixa o prazo vencer: `true` quando a linha volta com o aviso de sem confirmação.
+    fn unconfirmed(panel: &mut super::ActivityPanel, task: &str, cx: &mut gpui::Context<super::ActivityPanel>) -> bool {
+        panel.stop_note = None;
+        panel.stopping.insert(task.into());
+        panel.stop_unconfirmed(task, panel.stop_epoch, cx);
+        stop_note(panel).is_some()
+    }
+
+    #[gpui::test]
+    fn task_stop_is_proven_by_a_shell_end_or_by_a_loaded_subagent_list(cx: &mut gpui::TestAppContext) {
+        use gpui::AppContext;
+        crate::i18n::english_in_this_thread(false);
+        let panel = cx.new(super::ActivityPanel::new);
+        panel.update(cx, |panel, cx| {
+            panel.subs = vec![SubRun { problem: Some("erro_subagente_estado_indisponivel".into()), ..sub("u", "ilegível") },
+                SubRun { state: Some("finished".into()), ..sub("f", "terminou") }];
+            panel.activity.shells = vec![crate::conversation::ShellRun { id: "s1".into(), command: "sleep 9".into(), label: "sleep 9".into(),
+                description: None, ts: None, running: false, task_id: Some("bg".into()) }];
+            panel.prepare();
+            assert!(unconfirmed(panel, "u", cx), "estado indisponível segue listado e não parou");
+            assert!(!unconfirmed(panel, "f", cx));
+            assert!(!unconfirmed(panel, "gone", cx));
+            panel.failed = true;
+            assert!(unconfirmed(panel, "gone", cx), "lista que falhou não prova a parada");
+            panel.prepare();
+            assert!(stop_note(panel).is_some(), "o aviso fica até a parada se provar");
+            assert!(!unconfirmed(panel, "bg", cx), "o shell se prova pelo transcript");
+            (panel.failed, panel.loading) = (false, true);
+            assert!(unconfirmed(panel, "gone", cx), "lista recarregando não prova a parada");
+        });
+    }
+
+    #[gpui::test]
+    fn stop_note_leaves_with_the_task_it_is_about(cx: &mut gpui::TestAppContext) {
+        use gpui::AppContext;
+        crate::i18n::english_in_this_thread(false);
+        let panel = cx.new(super::ActivityPanel::new);
+        panel.update(cx, |panel, cx| {
+            panel.activity.shells = vec![crate::conversation::ShellRun { id: "s2".into(), command: "sleep 99".into(), label: "sleep 99".into(),
+                description: None, ts: None, running: true, task_id: Some("bg2".into()) }];
+            panel.prepare();
+            assert!(unconfirmed(panel, "bg2", cx));
+            panel.prepare();
+            assert!(stop_note(panel).is_some(), "a tarefa segue rodando");
+            panel.activity.shells[0].running = false;
+            panel.prepare();
+            assert_eq!(stop_note(panel), None);
+        });
+    }
+
+    #[gpui::test]
+    fn a_background_agent_waits_for_its_launch_id_instead_of_an_older_run_with_the_same_prompt(cx: &mut gpui::TestAppContext) {
+        use gpui::AppContext;
+        let panel = cx.new(super::ActivityPanel::new);
+        panel.update(cx, |panel, _| {
+            panel.activity.agents = vec![AgentRun { background: true, ..parent("t1", "mesma tarefa", None, true) }];
+            panel.subs = vec![sub("old", "mesma tarefa")];
+            panel.prepare();
+            let rows: Vec<_> = super::background_rows(&panel.lines).into_iter().map(|r| (r.key, r.task)).collect();
+            assert_eq!(rows, [("agent-t1".into(), None)]);
+        });
+    }
+
+    /// O TaskStop do Claude Code para só o que roda em segundo plano: Agent de primeiro plano e subagente sem um Agent
+    /// de fundo que o lançou ficam sem o ■.
+    #[gpui::test]
+    fn only_background_tasks_offer_the_stop(cx: &mut gpui::TestAppContext) {
+        use gpui::AppContext;
+        let panel = cx.new(super::ActivityPanel::new);
+        panel.update(cx, |panel, _| {
+            panel.activity.agents = vec![AgentRun { background: true, ..parent("t1", "tarefa um", Some("a"), true) }, parent("t2", "tarefa dois", Some("b"), true)];
+            panel.activity.shells = vec![crate::conversation::ShellRun { id: "s1".into(), command: "sleep 9".into(), label: "sleep 9".into(),
+                description: None, ts: None, running: true, task_id: Some("bg".into()) }];
+            panel.subs = vec![sub("a", "tarefa um"), sub("b", "tarefa dois"), sub("c", "tarefa três")];
+            panel.prepare();
+            let rows: Vec<_> = super::background_rows(&panel.lines).into_iter().map(|r| (r.key, r.task)).collect();
+            assert_eq!(rows, [("agent-t1".into(), Some("a".into())), ("agent-t2".into(), None), ("sub-c".into(), None), ("shell-s1".into(), Some("bg".into()))]);
+        });
+    }
+
     #[test]
     fn a_full_page_may_have_older_events_and_the_next_asks_one_page_more() {
         assert!(has_older(DETAIL_PAGE, DETAIL_PAGE));
@@ -1864,7 +2304,7 @@ mod tests {
 
     fn parent(id: &str, prompt: &str, agent_id: Option<&str>, running: bool) -> AgentRun {
         AgentRun { call: 0, id: id.into(), description: String::new(), subagent_type: None, model: None, prompt: Some(prompt.into()),
-            running, waiting: false, agent_id: agent_id.map(Into::into), agent_path: None, started_at: None, finished_at: None }
+            running, waiting: false, agent_id: agent_id.map(Into::into), agent_path: None, started_at: None, finished_at: None, background: false }
     }
 
     /// Interrompido não manda aviso ao pai: fora do Codex, a faixa de rodando aceita o fim que o servidor leu.

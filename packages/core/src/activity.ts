@@ -121,6 +121,7 @@ export interface ShellRun {
   description?: string;
   ts?: number;       // quando começou (epoch s), pro rótulo de tempo decorrido na folha
   running: boolean;  // sem a notificação de fim = ainda rodando
+  taskId?: string;   // id de fundo que o resultado do Bash anuncia: é o que parar a tarefa pede
 }
 
 // Encanamento de shell que não diz NADA sobre o que o comando faz, e ocupa a linha inteira numa
@@ -283,6 +284,8 @@ export function createActivityFolder(): ActivityFolder {
         const bg = r.match(/Command running in background with ID:\s*([A-Za-z0-9_-]+)/);
         if (bg) {
           bgAgent.set(bg[1], e.tool_use_id);
+          const shell = shells.find((s) => s.id === e.tool_use_id);
+          if (shell) shell.taskId = bg[1];
           if (completedIds.delete(bg[1])) resulted.add(e.tool_use_id);
           return;   // foi pro fundo: quem fecha e a <task-notification>
         }

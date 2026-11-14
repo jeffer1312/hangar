@@ -4,6 +4,7 @@ tipo: novo
 onde: todos
 experimente: No computador, abra Configurações › Connect e ligue com a sua conta. No celular, toque em "Entrar com o Hangar Connect" na tela de entrada e escolha a máquina.
 animacao: hangar-connect
+manual: conectar-celular
 ---
 
 Entre com a conta do Hangar Connect no celular e escolha a máquina: o pedido aparece na tela do computador, e você

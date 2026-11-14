@@ -2,7 +2,7 @@
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import type { Activity, ChatEvent, Server, WorkflowSummary } from '@hangar/core';
+import type { Activity, ChatEvent, Server, SubagentRun, WorkflowSummary } from '@hangar/core';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const data = vi.hoisted(() => ({
@@ -10,7 +10,9 @@ const data = vi.hoisted(() => ({
   server: { id: 'a', label: 'A', baseUrl: 'https://a.test', token: 'token-a' } as Server,
   events: [] as ChatEvent[],
   workflows: [] as WorkflowSummary[],
+  ferramentas: 'tree',
 }));
+vi.mock('../../stores/aparencia', () => ({ useAparencia: (select: (state: unknown) => unknown) => select({ ferramentas: data.ferramentas }) }));
 vi.mock('./useActivity', () => ({ useActivity: () => data.activity }));
 vi.mock('../../stores/chat', () => ({ chatStore: () => ({
   use: (select: (state: { events: ChatEvent[]; eventsRevision: number; stateEvent: null }) => unknown) =>
@@ -22,7 +24,10 @@ vi.mock('@hangar/core', async (original) => ({
   getWorkflows: vi.fn(async () => data.workflows),
   getWorkflow: vi.fn().mockResolvedValue(null),
   getSubagents: vi.fn().mockResolvedValue([]),
+  stopTask: vi.fn(async () => ({ pending: true })),
 }));
+const toastErro = vi.hoisted(() => vi.fn());
+vi.mock('../../ui/Toast', () => ({ toast: { erro: toastErro } }));
 vi.mock('expo-router', () => ({
   Stack: { Screen: () => null },
 }));
@@ -48,7 +53,14 @@ async function mount(onBackRequest?: (handler: () => boolean) => void) {
 beforeEach(() => {
   data.activity = { tasks: [], agents: [], shells: [], total: 0, done: 0, inProgress: 0, runningAgents: 0, runningShells: 0 };
   data.workflows = [];
+  data.ferramentas = 'tree';
+  data.events = [];
 });
+// O ■ de agente pede o lançamento de fundo no transcript: o TaskStop só para tarefa de fundo.
+const backgroundLaunch = (call: string, agentId: string): ChatEvent[] => [
+  { id: call, kind: 'tool_use', tool_use_id: call, tool_name: 'Agent', tool_input: { run_in_background: true } },
+  { id: `r-${call}`, kind: 'tool_result', tool_use_id: call, bg_agent_id: agentId, result: 'Async agent launched' },
+];
 afterEach(async () => {
   if (root) await act(async () => root!.unmount());
   root = undefined;
@@ -107,4 +119,278 @@ it('consome o voltar só no detalhe e libera o handler ao desmontar', async () =
   await act(async () => root!.unmount());
   root = undefined;
   expect(back()).toBe(false);
+});
+
+it('Claude Desktop junta subagentes e shells em Tarefas em segundo plano e recolhe as finalizadas', async () => {
+  data.ferramentas = 'claudeDesktop';
+  data.activity = { ...data.activity, runningAgents: 2, runningShells: 1,
+    agents: [
+      { id: 'call-cpu', kind: 'agent', description: 'diag-cpu', running: true },
+      { id: 'call-disk', kind: 'agent', description: 'diag-disk', running: true },
+    ],
+    shells: [{ id: 'call-sh', command: 'npm run dev', rotulo: 'npm run dev', running: true }] };
+  const finished: SubagentRun = { agentId: 'done-1', agentType: null, prompt: 'diag-services', startedAt: '2026-11-13T08:00:00Z',
+    updatedAt: '2026-11-13T08:05:00Z', endedAt: new Date().toISOString(), mtime: 0, toolCalls: 3, tools: [], recent: [], lastText: '', state: 'finished' };
+  const { getSubagents } = await import('@hangar/core');
+  vi.mocked(getSubagents).mockResolvedValue([finished]);
+  try {
+    const el = await mount();
+    expect(el.textContent).toContain(m.atividade_desktop_titulo());
+    for (const name of ['diag-cpu', 'diag-disk', 'npm run dev']) expect(el.textContent).toContain(name);
+    expect(el.textContent).not.toContain(m.atividade_grupo_rodando({ n: 2 }));
+    expect(el.textContent).not.toContain(m.atividade_shells());
+    expect(el.textContent).not.toContain('diag-services');
+    const more = el.querySelector<HTMLElement>(`[aria-label="${m.atividade_desktop_finalizadas({ n: 1 })}"]`);
+    expect(more).not.toBeNull();
+    await act(async () => more!.click());
+    expect(el.textContent).toContain('diag-services');
+  } finally {
+    vi.mocked(getSubagents).mockResolvedValue([]);
+  }
+});
+
+const stopButton = (el: HTMLElement) => el.querySelector<HTMLElement>(`[aria-label="${m.atividade_desktop_parar()}: npm run dev"]`);
+
+it('■ para o shell do Claude, mostra parando e volta com aviso sem confirmação em 15 s', async () => {
+  data.ferramentas = 'claudeDesktop';
+  data.activity = { ...data.activity, runningShells: 1,
+    shells: [{ id: 'call-sh', command: 'npm run dev', rotulo: 'npm run dev', running: true, taskId: 'bg1' }] };
+  const { stopTask } = await import('@hangar/core');
+  vi.mocked(stopTask).mockClear();
+  toastErro.mockClear();
+  const el = await mount();
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  expect(stopButton(el)).not.toBeNull();
+  await act(async () => stopButton(el)!.click());
+  expect(stopTask).toHaveBeenCalledWith('sess', 'bg1', data.server);
+  expect(el.textContent).toContain(m.atividade_parando());
+  expect(stopButton(el)).toBeNull();
+  expect(el.querySelector('[aria-busy="true"]')?.textContent).toContain('npm run dev');
+  expect(el.querySelector('[accessibilityliveregion="polite"]')?.textContent).toBe(m.atividade_parando());
+  await act(async () => { await vi.advanceTimersByTimeAsync(14_000); });
+  expect(el.textContent).toContain(m.atividade_parando());
+  await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+  expect(el.textContent).not.toContain(m.atividade_parando());
+  expect(stopButton(el)).not.toBeNull();
+  expect(toastErro).toHaveBeenCalledWith(m.atividade_parar_sem_confirmacao());
+});
+
+it('■ só encerra o parando pela ausência da tarefa depois que a lista carregou', async () => {
+  data.ferramentas = 'claudeDesktop';
+  data.activity = { ...data.activity, runningAgents: 1,
+    agents: [{ id: 'call-cpu', kind: 'agent', description: 'diag-cpu', running: true, agentId: 'ag-cpu' }] };
+  data.events = backgroundLaunch('call-cpu', 'ag-cpu');
+  const { getSubagents } = await import('@hangar/core');
+  let loadSubs: (subs: SubagentRun[]) => void = () => {};
+  vi.mocked(getSubagents).mockImplementationOnce(() => new Promise((resolve) => { loadSubs = resolve; }));
+  toastErro.mockClear();
+  const el = await mount();
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  const button = () => el.querySelector<HTMLElement>(`[aria-label="${m.atividade_desktop_parar()}: diag-cpu"]`);
+  await act(async () => button()!.click());
+  expect(el.textContent).toContain(m.atividade_parando());
+  const agents = data.activity.agents;
+  const rerenderWith = async (list: typeof agents) => {
+    data.activity = { ...data.activity, runningAgents: list.length, agents: list };
+    await act(async () => root!.render(createElement(ActivityPanel, { serverId: 'a', name: 'sess', focused: true })));
+  };
+  // Lista ainda carregando: a tarefa some do conjunto, mas isso não prova a parada.
+  await rerenderWith([]);
+  await rerenderWith(agents);
+  expect(el.textContent).toContain(m.atividade_parando());
+  expect(button()).toBeNull();
+  // Lista carregada e a tarefa fora dela: a parada se confirmou.
+  await rerenderWith([]);
+  await act(async () => { loadSubs([]); });
+  await rerenderWith(agents);
+  expect(el.textContent).not.toContain(m.atividade_parando());
+  expect(button()).not.toBeNull();
+  await act(async () => { await vi.advanceTimersByTimeAsync(15_000); });
+  expect(toastErro).not.toHaveBeenCalled();
+});
+
+it('■ recusado pelo servidor volta a linha e mostra o texto do código', async () => {
+  data.ferramentas = 'claudeDesktop';
+  data.activity = { ...data.activity, runningShells: 1,
+    shells: [{ id: 'call-sh', command: 'npm run dev', rotulo: 'npm run dev', running: true, taskId: 'bg1' }] };
+  const { stopTask } = await import('@hangar/core');
+  vi.mocked(stopTask).mockRejectedValueOnce(Object.assign(new Error(m.erro_parar_sem_plugin()), { status: 409, code: 'erro_parar_sem_plugin' }));
+  toastErro.mockClear();
+  const el = await mount();
+  expect(stopButton(el)).not.toBeNull();
+  await act(async () => stopButton(el)!.click());
+  expect(toastErro).toHaveBeenCalledWith(m.erro_parar_sem_plugin());
+  expect(el.textContent).not.toContain(m.atividade_parando());
+  expect(stopButton(el)).not.toBeNull();
+});
+
+it('■ também nas seções da Árvore: shell, agente e subagente rodando, com o mesmo parando', async () => {
+  data.activity = { ...data.activity, runningAgents: 1, runningShells: 1,
+    agents: [{ id: 'call-cpu', kind: 'agent', description: 'diag-cpu', running: true, agentId: 'ag-cpu' }],
+    shells: [{ id: 'call-sh', command: 'npm run dev', rotulo: 'npm run dev', running: true, taskId: 'bg1' }] };
+  const running: SubagentRun = { agentId: 'ag-sub', agentType: null, prompt: 'diag-sub', startedAt: '2026-11-13T08:00:00Z',
+    updatedAt: new Date().toISOString(), endedAt: null, mtime: 0, toolCalls: 1, tools: [], recent: [], lastText: '', state: 'running' };
+  data.events = [...backgroundLaunch('call-cpu', 'ag-cpu'), ...backgroundLaunch('call-sub', 'ag-sub')];
+  const { getSubagents, stopTask } = await import('@hangar/core');
+  vi.mocked(getSubagents).mockResolvedValue([running]);
+  vi.mocked(stopTask).mockClear();
+  try {
+    const el = await mount();
+    const button = (title: string) => el.querySelector<HTMLElement>(`[aria-label="${m.atividade_desktop_parar()}: ${title}"]`);
+    expect(button('diag-cpu')).not.toBeNull();
+    expect(button('diag-sub')).not.toBeNull();
+    expect(stopButton(el)).not.toBeNull();
+    await act(async () => stopButton(el)!.click());
+    expect(stopTask).toHaveBeenCalledWith('sess', 'bg1', data.server);
+    expect(el.textContent).toContain(m.atividade_parando());
+    expect(stopButton(el)).toBeNull();
+    await act(async () => button('diag-cpu')!.click());
+    expect(stopTask).toHaveBeenCalledWith('sess', 'ag-cpu', data.server);
+  } finally {
+    vi.mocked(getSubagents).mockResolvedValue([]);
+  }
+});
+
+it('■ fica fora do convidado só de leitura e do Codex', async () => {
+  data.activity = { ...data.activity, runningShells: 1,
+    shells: [{ id: 'call-sh', command: 'npm run dev', rotulo: 'npm run dev', running: true, taskId: 'bg1' }] };
+  const { useSessions } = await import('../../stores/sessions');
+  const before = useSessions.getState().rows;
+  for (const row of [{ provider: 'codex' }, { provider: 'claude', guest_kind: 'pair' }]) {
+    useSessions.setState({ rows: [{ serverId: 'a', name: 'sess', ...row }] as never });
+    try {
+      const el = await mount();
+      expect(el.textContent).toContain('npm run dev');
+      expect(stopButton(el)).toBeNull();
+      await act(async () => root!.unmount());
+      root = undefined;
+    } finally {
+      useSessions.setState({ rows: before });
+    }
+  }
+});
+
+it('■ só em Agent de fundo: nem no de primeiro plano nem no subagente sem lançamento de fundo', async () => {
+  const sub = (agentId: string, prompt: string): SubagentRun => ({ agentId, agentType: null, prompt, startedAt: '2026-11-13T08:00:00Z',
+    updatedAt: new Date().toISOString(), endedAt: null, mtime: 0, toolCalls: 1, tools: [], recent: [], lastText: '', state: 'running' });
+  const launch = (id: string, background: boolean): ChatEvent => ({ id, kind: 'tool_use', tool_use_id: id, tool_name: 'Agent',
+    tool_input: { description: id, prompt: id, ...(background ? { run_in_background: true } : {}) } });
+  data.events = [launch('call-fg', false), launch('call-bg', true), launch('call-bg2', true),
+    { id: 'r-bg', kind: 'tool_result', tool_use_id: 'call-bg', bg_agent_id: 'ag-bg', result: 'Async agent launched' },
+    { id: 'r-bg2', kind: 'tool_result', tool_use_id: 'call-bg2', bg_agent_id: 'ag-bg2', result: 'Async agent launched' }];
+  data.activity = { ...data.activity, runningAgents: 2, agents: [
+    { id: 'call-fg', kind: 'agent', description: 'diag-fg', prompt: 'diag-fg', running: true },
+    { id: 'call-bg', kind: 'agent', description: 'diag-bg', running: true },
+  ] };
+  const { getSubagents } = await import('@hangar/core');
+  vi.mocked(getSubagents).mockResolvedValue([sub('ag-fg', 'diag-fg'), sub('ag-bg2', 'diag-bg2'), sub('ag-orphan', 'diag-orphan')]);
+  try {
+    for (const look of ['tree', 'claudeDesktop']) {
+      data.ferramentas = look;
+      const el = await mount();
+      const button = (title: string) => el.querySelector(`[aria-label="${m.atividade_desktop_parar()}: ${title}"]`);
+      for (const title of ['diag-fg', 'diag-bg', 'diag-bg2', 'diag-orphan']) expect(el.textContent).toContain(title);
+      expect(button('diag-bg')).not.toBeNull();
+      expect(button('diag-bg2')).not.toBeNull();
+      expect(button('diag-fg')).toBeNull();
+      expect(button('diag-orphan')).toBeNull();
+      await act(async () => root!.unmount());
+      root = undefined;
+    }
+  } finally {
+    vi.mocked(getSubagents).mockResolvedValue([]);
+  }
+});
+
+it('■ de Agent de fundo espera o id do lançamento, sem herdar o de um subagente anterior de prompt igual', async () => {
+  const old: SubagentRun = { agentId: 'ag-old', agentType: null, prompt: 'mesma tarefa', startedAt: '2026-11-13T08:00:00Z',
+    updatedAt: new Date().toISOString(), endedAt: null, mtime: 0, toolCalls: 1, tools: [], recent: [], lastText: '', state: 'running' };
+  data.events = [{ id: 'call-new', kind: 'tool_use', tool_use_id: 'call-new', tool_name: 'Agent',
+    tool_input: { description: 'nova', prompt: 'mesma tarefa', run_in_background: true } }];
+  data.activity = { ...data.activity, runningAgents: 1, agents: [
+    { id: 'call-new', kind: 'agent', description: 'nova', prompt: 'mesma tarefa', running: true },
+  ] };
+  const { getSubagents } = await import('@hangar/core');
+  vi.mocked(getSubagents).mockResolvedValue([old]);
+  try {
+    const el = await mount();
+    expect(el.textContent).toContain('nova');
+    expect(el.querySelector(`[aria-label="${m.atividade_desktop_parar()}: nova"]`)).toBeNull();
+  } finally {
+    vi.mocked(getSubagents).mockResolvedValue([]);
+  }
+});
+
+it('shell sem id de fundo não ganha ■', async () => {
+  data.ferramentas = 'claudeDesktop';
+  data.activity = { ...data.activity, runningShells: 1,
+    shells: [{ id: 'call-sh', command: 'npm run dev', rotulo: 'npm run dev', running: true }] };
+  const el = await mount();
+  expect(el.textContent).toContain('npm run dev');
+  expect(stopButton(el)).toBeNull();
+});
+
+it('■ de shell se confirma pelo transcript mesmo com a lista de subagentes falhando', async () => {
+  data.ferramentas = 'claudeDesktop';
+  const shell = { id: 'call-sh', command: 'npm run dev', rotulo: 'npm run dev', running: true, taskId: 'bg1' };
+  data.activity = { ...data.activity, runningShells: 1, shells: [shell] };
+  const { getSubagents } = await import('@hangar/core');
+  vi.mocked(getSubagents).mockRejectedValueOnce(new Error('offline'));
+  toastErro.mockClear();
+  const el = await mount();
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  await act(async () => stopButton(el)!.click());
+  expect(el.textContent).toContain(m.atividade_parando());
+  data.activity = { ...data.activity, runningShells: 0, shells: [{ ...shell, running: false }] };
+  await act(async () => root!.render(createElement(ActivityPanel, { serverId: 'a', name: 'sess', focused: true })));
+  expect(el.textContent).not.toContain(m.atividade_parando());
+  await act(async () => { await vi.advanceTimersByTimeAsync(15_000); });
+  expect(toastErro).not.toHaveBeenCalled();
+});
+
+it('■ de subagente que só ficou sem estado legível continua parando e avisa em 15 s', async () => {
+  const running: SubagentRun = { agentId: 'ag-sub', agentType: null, prompt: 'diag-sub', startedAt: '2026-11-13T08:00:00Z',
+    updatedAt: new Date().toISOString(), endedAt: null, mtime: 0, toolCalls: 1, tools: [], recent: [], lastText: '' };
+  data.events = backgroundLaunch('call-sub', 'ag-sub');
+  const { getSubagents } = await import('@hangar/core');
+  vi.mocked(getSubagents).mockResolvedValue([running]);
+  toastErro.mockClear();
+  try {
+    const el = await mount();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const button = () => el.querySelector<HTMLElement>(`[aria-label="${m.atividade_desktop_parar()}: diag-sub"]`);
+    await act(async () => button()!.click());
+    expect(el.textContent).toContain(m.atividade_parando());
+    // Sem estado legível o subagente sai dos rodando, mas segue listado: isso não prova a parada.
+    vi.mocked(getSubagents).mockResolvedValue([{ ...running, problema: 'erro_subagente_estado_indisponivel' }]);
+    data.activity = { ...data.activity, agents: [{ id: 'call-x', kind: 'agent', description: 'outro', running: false }] };
+    await act(async () => root!.render(createElement(ActivityPanel, { serverId: 'a', name: 'sess', focused: true })));
+    expect(el.textContent).toContain(m.erro_subagente_estado_indisponivel());
+    expect(el.textContent).toContain(m.atividade_parando());
+    await act(async () => { await vi.advanceTimersByTimeAsync(15_000); });
+    expect(toastErro).toHaveBeenCalledWith(m.atividade_parar_sem_confirmacao());
+  } finally {
+    vi.mocked(getSubagents).mockResolvedValue([]);
+  }
+});
+
+it('■ recusa atrasada de uma tentativa anterior não encerra a tentativa nova', async () => {
+  data.ferramentas = 'claudeDesktop';
+  data.activity = { ...data.activity, runningShells: 1,
+    shells: [{ id: 'call-sh', command: 'npm run dev', rotulo: 'npm run dev', running: true, taskId: 'bg1' }] };
+  const { stopTask } = await import('@hangar/core');
+  let rejectFirst: (error: Error) => void = () => {};
+  vi.mocked(stopTask).mockImplementationOnce(() => new Promise((_, reject) => { rejectFirst = reject; }));
+  vi.mocked(stopTask).mockImplementationOnce(() => new Promise(() => {}));
+  toastErro.mockClear();
+  const el = await mount();
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  await act(async () => stopButton(el)!.click());
+  await act(async () => { await vi.advanceTimersByTimeAsync(15_000); });
+  expect(toastErro).toHaveBeenCalledWith(m.atividade_parar_sem_confirmacao());
+  await act(async () => stopButton(el)!.click());
+  expect(el.textContent).toContain(m.atividade_parando());
+  await act(async () => { rejectFirst(new Error('antiga')); });
+  expect(el.textContent).toContain(m.atividade_parando());
+  expect(toastErro).not.toHaveBeenCalledWith('antiga');
 });

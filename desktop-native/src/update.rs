@@ -688,7 +688,7 @@ fn read_api(runtime: &Runtime, api: &Api) -> tokio::task::JoinHandle<Option<u32>
     runtime.spawn(async move { client_api(api.server_read(&["client-api"], &[], 20).await) })
 }
 
-fn mark_seen(runtime: &Runtime, api: Api, device: String, through: u64) {
+pub(crate) fn mark_seen(runtime: &Runtime, api: Api, device: String, through: u64) {
     runtime.spawn(async move {
         let body = serde_json::json!({"device": device, "through": through});
         if let Err(error) = api.server_send(reqwest::Method::POST, &["update", "arrived", "seen"], Some(body), 20).await {
