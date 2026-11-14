@@ -58,6 +58,8 @@ async fn run(st: Arc<AppState>, machines: Option<Vec<AccountMachine>>) {
             match enroll(&service, &id, &link, &machines).await {
                 Ok(Enrolled::Done) => slot.end(None),
                 Ok(Enrolled::Absent) => slot.end(Some(Instant::now())),
+                // Sem espera: a vez solta, e a entrada nova passa pelo mesmo caminho de um evento.
+                Ok(Enrolled::Changed) => { slot.end(None); spawn(&st, Some(machines.to_vec())); }
                 Err((code, detail)) => {
                     slot.end(Some(Instant::now()));
                     tracing::warn!(code = "connect.peer_route_failed", reason = code, peer = %id, "o Connect não virou caminho de '{id}': {detail}");
@@ -157,6 +159,8 @@ enum Enrolled {
     Done,
     /// Lá não está no Connect: não é falha, mas espera como uma, senão cada tela e gravação perguntaria de novo.
     Absent,
+    /// O dono trocou a entrada durante a emissão: o evento dele achou a vez ocupada, então a vez seguinte é desta.
+    Changed,
 }
 
 async fn enroll(service: &Service, id: &str, link: &str, machines: &[AccountMachine]) -> Result<Enrolled, Failure> {
@@ -206,10 +210,9 @@ async fn enroll(service: &Service, id: &str, link: &str, machines: &[AccountMach
     // Sem gravar aqui (entrada apagada, trocada ou recusada no meio), a credencial emitida lá ficaria valendo sem
     // dono. O endereço e as duas credenciais já estão à mão: a entrada pode nem existir mais.
     revoke_device(id, Some((base, owner)), Some((url, token.to_owned())), device).await;
-    // Entrada trocada não é falha desta máquina: sem a espera, o próximo evento já emite para o endereço novo.
     if failure.0 == "peers_entry_changed" {
-        tracing::info!(code = "connect.peer_route_entry_changed", peer = id, "a entrada mudou durante a emissão: o aparelho emitido foi revogado e o próximo evento emite para o endereço novo");
-        return Ok(Enrolled::Done);
+        tracing::info!(code = "connect.peer_route_entry_changed", peer = id, "a entrada mudou durante a emissão: o aparelho emitido foi revogado e a entrada nova é lida de novo");
+        return Ok(Enrolled::Changed);
     }
     Err(failure)
 }

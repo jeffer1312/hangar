@@ -845,7 +845,8 @@ impl Api {
         }
         if let Some(body) = body { req = req.json(&body); }
         let r = req.timeout(Duration::from_secs(seconds)).send().await.map_err(|_| Failure::transport(post))?;
-        let r = self.checked_as(r, post, label.as_str()).await?;
+        // O 401 daqui é da sessão `cp_sync` ou da senha do login, com o mesmo código do porteiro do Connect: não recusa o aparelho.
+        let r = checked_response(r, post, label.as_str(), None).await?;
         let session = r.headers().get_all(header::SET_COOKIE).iter().filter_map(|v| v.to_str().ok())
             .filter_map(|v| v.split(';').next()).find(|v| v.starts_with("cp_sync=")).map(str::to_owned);
         Ok((r.json().await.map_err(|_| Failure::local("invalid_response"))?, session))

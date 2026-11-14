@@ -293,6 +293,23 @@ async fn a_broken_answer_after_connecting_never_goes_through_connect() {
     assert!(connect_seen.lock().unwrap().is_empty());
 }
 
+/// O endereço salvo atendeu um POST com redirect: o pedido já chegou lá. O 3xx volta como resposta, sem seguir para
+/// onde talvez nem conecte, e o Connect não o repete.
+#[tokio::test]
+async fn a_redirect_that_does_not_connect_is_not_sent_again_through_connect() {
+    let (connect_seen, connect) = counting("connect", StatusCode::OK).await;
+    let away = format!("http://{}/x", crate::refused_address());
+    let saved = serve(Router::new().route("/x", any(move || {
+        let away = away.clone();
+        async move { Response::builder().status(307).header("location", away).body(axum::body::Body::empty()).unwrap() }
+    }))).await;
+    let dir = tempfile::tempdir().unwrap();
+    let client = routed(dir.path(), &format!("http://{saved}"), &format!("http://{connect}"));
+    let err = client.call("lab", reqwest::Method::POST, "/x", Some(&json!({}))).await.unwrap_err();
+    assert!(matches!(err, PeerError::Refused { status: 307, .. }), "{err:?}");
+    assert!(connect_seen.lock().unwrap().is_empty(), "o POST já tinha chegado ao endereço salvo");
+}
+
 /// Quem não aceita o Connect (o anúncio, a emissão do aparelho) fica só no endereço salvo.
 #[tokio::test]
 async fn without_opting_in_the_connect_route_is_never_used() {

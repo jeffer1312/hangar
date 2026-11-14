@@ -191,6 +191,9 @@ pub struct PeerClient {
     /// O último caminho que respondeu 2xx, por máquina: a próxima chamada começa por ele.
     routes: Mutex<HashMap<String, Route>>,
     http: OnceLock<reqwest::Client>,
+    /// Pedidos que mudam algo lá (`writes`, e `waiting`, que só leva POST): sem redirect. Uma conexão que falha
+    /// depois do 3xx parece não enviada, e o Connect repetiria o que lá já foi feito.
+    writes: OnceLock<reqwest::Client>,
     waiting: OnceLock<reqwest::Client>,
     /// `send_secret` (curto e longo): sem redirect.
     secret: OnceLock<reqwest::Client>,
@@ -200,7 +203,7 @@ pub struct PeerClient {
 impl PeerClient {
     pub fn new(book: PeerBook) -> Self {
         Self { diagnostics: None, book: Arc::new(book), connect_route: false, routes: Mutex::default(), http: OnceLock::new(),
-            waiting: OnceLock::new(), secret: OnceLock::new(), long: OnceLock::new() }
+            writes: OnceLock::new(), waiting: OnceLock::new(), secret: OnceLock::new(), long: OnceLock::new() }
     }
 
     /// Aceita o Connect da entrada quando o endereço salvo não conecta.
@@ -306,8 +309,8 @@ impl PeerClient {
     }
 
     /// `peers.call` (peers.py:401-411): prazo de 8 s por leitura e 16 s no total, corpo até 1 MiB,
-    /// segue redirect como o Python. O `reqwest` tira o `Authorization` quando o redirect troca de
-    /// host, porta ou esquema (`redirect::remove_sensitive_headers`), e o `urllib` não tirava.
+    /// `GET`/`HEAD` seguem redirect como o Python; o resto devolve o 3xx como recusa. O `reqwest` tira o
+    /// `Authorization` quando o redirect troca de host, porta ou esquema (`redirect::remove_sensitive_headers`).
     pub async fn call(&self, server: &str, method: reqwest::Method, path: &str, body: Option<&Value>) -> Result<Option<Value>, PeerError> {
         self.call_status(server, method, path, body).await.map(|(_, v)| v)
     }
@@ -341,12 +344,15 @@ impl PeerClient {
             if let Some(operation)=operation{operation.emit(serde_json::json!({"evento":"peer.recusado","nivel":"erro","etapa":method.as_str(),"detalhe":"configuracao_ausente_ou_incompleta"}));}
             return Err(PeerError::Unknown);
         };
-        let (slot, read, total) = if waiting { (&self.waiting, OWNER_WAIT_TIMEOUT, OWNER_WAIT_TIMEOUT) } else { (&self.http, READ_TIMEOUT, TOTAL_TIMEOUT) };
+        let reads = method == reqwest::Method::GET || method == reqwest::Method::HEAD;
+        let (slot, read, total) = if waiting { (&self.waiting, OWNER_WAIT_TIMEOUT, OWNER_WAIT_TIMEOUT) }
+            else if reads { (&self.http, READ_TIMEOUT, TOTAL_TIMEOUT) } else { (&self.writes, READ_TIMEOUT, TOTAL_TIMEOUT) };
         let http = match slot.get() {
             Some(http) => http,
             None => {
-                let built = crate::http_client().connect_timeout(READ_TIMEOUT).read_timeout(read).timeout(total).build()
-                    .map_err(|e| transport(server, &e))?;
+                let mut builder = crate::http_client().connect_timeout(READ_TIMEOUT).read_timeout(read).timeout(total);
+                if waiting || !reads { builder = builder.redirect(reqwest::redirect::Policy::none()); }
+                let built = builder.build().map_err(|e| transport(server, &e))?;
                 slot.get_or_init(|| built)
             }
         };
