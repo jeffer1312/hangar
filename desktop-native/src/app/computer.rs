@@ -9,7 +9,7 @@ use serde::Deserialize;
 use std::rc::Rc;
 
 #[derive(Clone, Deserialize)]
-struct AgentExe { exists: bool }
+struct AgentExe { exists: bool, #[serde(default)] path: String }
 
 #[derive(Clone, Deserialize)]
 struct ConfigFile { enabled: bool }
@@ -32,6 +32,8 @@ struct ComputerState {
     enabled: bool,
     mode: String,
     installed_tag: String,
+    /// O programa instalado, o mesmo predicado do PUT e do registro; o exe que falta vem em `agent_exe`.
+    package_exists: bool,
     agent_exe: AgentExe,
     project_dir: String,
     agent_config: String,
@@ -46,6 +48,9 @@ struct ComputerState {
     targets: Vec<ComputerTarget>,
     ssh_hosts: Vec<String>,
     local_available: bool,
+    /// Alvo `linux` automático do Hyprland: liga sem alvo cadastrado; servidor antigo não manda.
+    #[serde(default)]
+    hyprland: bool,
     files: Vec<ConfigFile>,
     /// `platform` (sem binário para esta máquina) ou `install_failed` (com `install_error`); servidor antigo não manda.
     #[serde(default)]
@@ -359,7 +364,7 @@ impl Hangar {
         let Some(state) = self.computer.state.ok() else { return };
         let Some(form) = &self.computer.form else { return };
         if self.computer.busy.is_some() || self.computer.state.loading { return; }
-        if !state.agent_exe.exists { return; }
+        if !state.package_exists { return; }
         let project_dir = form.project_dir.read(cx).value().trim().to_owned();
         let (local_available, ssh_hosts) = (state.local_available, state.ssh_hosts.clone());
         let hangar = cx.entity();
@@ -399,7 +404,8 @@ impl Hangar {
     fn save_computer(&mut self, cx: &mut Context<Self>) {
         let (Some(api), Some(state), Some(form)) = (self.api.clone(), self.computer.state.ok(), self.computer.form.as_ref()) else { return };
         if self.computer.busy.is_some() || self.computer.state.loading { return; }
-        if self.computer.enabled && (!state.agent_exe.exists || form.agent_config.read(cx).value().trim().is_empty()) { return; }
+        let target_missing = form.agent_config.read(cx).value().trim().is_empty() && !state.hyprland;
+        if self.computer.enabled && (!state.package_exists || target_missing) { return; }
         let body = json!({
             "enabled": self.computer.enabled, "mode": state.mode,
             "project_dir": form.project_dir.read(cx).value().trim(),
@@ -567,9 +573,10 @@ impl Hangar {
         };
         let Some(form) = &self.computer.form else { return page.into_any_element() };
         let busy = self.computer.busy.is_some();
-        let installed = state.agent_exe.exists;
+        let installed = state.package_exists;
         let package = state.mode == "package";
-        let target_missing = form.agent_config.read(cx).value().trim().is_empty();
+        // Só com o Hyprland (alvo `linux` automático) o alvo padrão pode ficar vazio.
+        let target_missing = form.agent_config.read(cx).value().trim().is_empty() && !state.hyprland;
         let flow = [("computer_control_flow_session", "computer_control_flow_session_hint"), ("computer_control_flow_jev", "computer_control_flow_jev_hint"),
             ("computer_control_flow_vision", "computer_control_flow_vision_hint")];
         let mut strip = div().flex().items_center().gap_2();
@@ -598,6 +605,8 @@ impl Hangar {
             .when(failed, |el| el.child(div().id("computer-install-failed").role(Role::Alert).text_sm().text_color(theme::danger()).whitespace_normal()
                 .child(tr("computer_control_install_failed").replace("{code}", &state.install_error))))
             .when(!platform && !failed, |el| el.child(div().text_sm().text_color(theme::muted()).whitespace_normal().child(install_hint)))
+            .when(installed && !state.agent_exe.exists, |el| el.child(div().id("computer-agent-missing").role(Role::Alert).text_sm()
+                .text_color(theme::danger()).whitespace_normal().child(tr("computer_control_agent_missing_package").replace("{path}", &state.agent_exe.path))))
             .when(!package && (installed || state.enabled), |el| el.child(self.mark(input_row("computer_control_dir", &form.project_dir, busy), "computer_control_dir")));
         let target = if let Some(picker) = &form.target_picker {
             div().child(Select::new(picker).small().disabled(busy || !installed).accessibility_label(tr("computer_control_target")))

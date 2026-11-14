@@ -186,6 +186,7 @@ export interface ComputerControlState {
   targets: ComputerControlTarget[];
   ssh_hosts: string[];              // os Host do ~/.ssh/config do servidor
   local_available: boolean;   // o servidor é Windows: a própria máquina pode ser alvo
+  hyprland?: boolean;         // alvo `linux` automático: liga sem alvo cadastrado (servidor antigo não manda)
   enabled: boolean;
   project_dir: string;
   agent_config: string;

@@ -252,6 +252,8 @@ const ERROS: Record<string, (params: Parametros) => string> = {
   erro_computer_control_target_host: () => m.erro_computer_control_target_host(),
   erro_computer_control_not_installed: () => m.erro_computer_control_not_installed(),
   erro_computer_control_no_ssh_key: () => m.erro_computer_control_no_ssh_key(),
+  erro_computer_control_ssh_resolve: (p) => m.erro_computer_control_ssh_resolve({ host: String(p.host), error: String(p.error ?? '') }),
+  erro_computer_control_ssh_timeout: (p) => m.erro_computer_control_ssh_timeout({ host: String(p.host) }),
   erro_computer_control_update_app: () => m.erro_computer_control_update_app(),
   erro_nao_encontrado: () => m.erro_nao_encontrado(),
   erro_imagem_nao_encontrada: () => m.erro_imagem_nao_encontrada(),

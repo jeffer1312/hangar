@@ -193,7 +193,7 @@
          gerenciador do navegador ignora o autocomplete e enfia e-mail e senha salvos nos campos. -->
     <form onsubmit={save} autocomplete="off">
       <label class="check">
-        <input type="checkbox" bind:checked={enabled} disabled={saving || (!enabled && (!current.targets.length || (current.mode === 'package' && !current.package_exists)))} />
+        <input type="checkbox" bind:checked={enabled} disabled={saving || (!enabled && ((!current.targets.length && !current.hyprland) || (current.mode === 'package' && !current.package_exists)))} />
         <span>{m.computer_control_enable()}</span>
       </label>
       <p class="hint">{m.computer_control_enable_hint()}</p>
@@ -302,7 +302,7 @@
           : m.browser_jev_cu_aux_missing()}</p>
       </div>
 
-      <button class="action primary" type="submit" disabled={saving || (enabled && (!agentConfig || (current.mode === 'package' && !current.package_exists)))} aria-busy={saving}>
+      <button class="action primary" type="submit" disabled={saving || (enabled && ((!agentConfig && !current.hyprland) || (current.mode === 'package' && !current.package_exists)))} aria-busy={saving}>
         {saving ? m.computer_control_saving() : m.computer_control_save()}
       </button>
     </form>
