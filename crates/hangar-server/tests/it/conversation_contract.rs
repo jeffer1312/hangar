@@ -325,6 +325,28 @@ async fn refused_connect_close_keeps_the_session_in_the_restore_snapshot() {
     assert!(!names().contains(&"nada".to_owned()), "fechada de fato, ela não volta no reboot");
 }
 
+/// Achado 4 da revisão: a ponte `POST /__hangar_server/claude/<n>/close` não tem chamador (o Connect saiu
+/// do Python em 6bdd33994) e saiu. Antes ela tirava a entrada da vida do Claude do Rust; agora é 421 e
+/// nada fecha: o fechamento é só o `DELETE`.
+#[tokio::test]
+async fn the_claude_close_bridge_is_gone() {
+    let (dir, store) = (tempfile::tempdir().unwrap(), Arc::new(InteractionStore::default()));
+    let (registry, _plugin) = registry_with_plugin(&store).await;
+    open_headless(&registry, dir.path(), "s").await;
+    let (python, upstream) = fake::spawn_fake().await;
+    let state = hangar_server::routes::AppState::new(fake::config(upstream, "127.0.0.1"));
+    assert!(state.state.runtime.set(registry.clone()).is_ok());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let private = listener.local_addr().unwrap();
+    let router = hangar_server::routes::terminal_router(Arc::new(state));
+    tokio::spawn(async move { axum::serve(listener, router.into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap() });
+    let response = fake::client().post(format!("http://{private}/__hangar_server/claude/s/close"))
+        .header("x-hangar-internal", SECRET).send().await.unwrap();
+    assert_eq!(response.status().as_u16(), 421);
+    assert!(registry.has_entry(None, "s").await, "nada foi encerrado: a entrada desta vida segue");
+    assert_eq!(python.hits_to("/api/sessions/s"), 0);
+}
+
 /// O Reabrir (`/recarregar`) do Claude que entrou pelo Connect chega à ponte e é atendido pela mesma rota
 /// da 8765: a recusa da reabertura (aqui o arquivo da sessão ilegível) volta com o código do Rust, e o que
 /// não é Claude daqui é 421, sem nunca voltar ao Python.

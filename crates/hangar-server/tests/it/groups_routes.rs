@@ -22,6 +22,9 @@ use hangar_server::routes::{AppState, router};
 use hangar_server::runtime::gateway::RuntimeRegistry;
 use serde_json::{Value, json};
 
+/// Token do convidado com conta de `server_built`.
+const GUEST: &str = "convidado-ana";
+
 struct Server { addr: SocketAddr, python: Arc<fake::Fake>, groups: Arc<GroupService>, pair: PathBuf, runtime: Arc<RuntimeRegistry>,
     share: Arc<hangar_server::share::ShareState>, sink: crate::sink::Sink, list: Arc<ListBridge> }
 
@@ -56,6 +59,12 @@ async fn server_built(root: &Path, n: usize, orq: Option<Arc<dyn hangar_server::
         capture_program: script.into_os_string(), procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs },
         FactsClient::new(upstream, SECRET.into())));
     let list = state.list.clone();
+    // Convidado com conta que vê as sessões sem dono: o fechamento dele é o mesmo do dono.
+    let guests = hangar_server::login_guests::Service::new(hangar_server::login_guests::Settings { guests: root.join("guests.json"),
+        vault: root.join("vault.json"), runtime_config: root.join("runtime-config.json"), sync_enabled: false, bootstrap: String::new(),
+        secret: vec![1], secure: false, rate_max: 10.into(), rate_window: 300.into() });
+    guests.store.create("Ana", &root.to_string_lossy(), true, true, "ana".into(), GUEST.into()).unwrap();
+    state.login_guests = Arc::new(guests);
     let pair = home.join(".claude/.hangar-pair");
     let groups = Arc::new(GroupService::new(PairDir::new(pair.clone(), root.join("arquivo")),
         orq.unwrap_or_else(|| Arc::new(PythonOrq::from_state(&state).with_paths(home.clone(), pair.clone()))), "casa".into()).with_diary(state.diag.clone()));
@@ -473,8 +482,9 @@ async fn surrogate_task_is_422() {
     assert!(!srv.pair.join("s0.json").exists());
 }
 
-/// R1-13 (`_forget` + `_invalidate_lists`): fechada a sessão, a lista esquece a conversa que guardava
-/// para o nome; o pane de mesmo nome que segue no multiplexador falso (uma sessão nova) não a herda.
+/// R1-13 (`_forget` + `_invalidate_lists`): fechada pelo convidado com conta (antes ia ao Python), a lista
+/// esquece a conversa que guardava para o nome; o pane de mesmo nome que segue no multiplexador falso
+/// (uma sessão nova) não a herda.
 #[tokio::test(flavor = "multi_thread")]
 async fn delete_r1_13_the_list_forgets_the_closed_name() {
     let dir = tempfile::tempdir().unwrap();
@@ -485,22 +495,26 @@ async fn delete_r1_13_the_list_forgets_the_closed_name() {
     srv.list.seed("s0", &old);
     let jsonl = |found: Option<(hangar_api::session::SessionRow, Option<u32>)>| found.and_then(|(row, _)| row.jsonl);
     assert_eq!(jsonl(srv.list.discovered_session("s0").await.ok().flatten()).as_deref(), Some(old.as_str()));
-    let (status, body) = call(srv.addr, "DELETE", "s0", None, OWNER).await;
-    assert_eq!(status, 200, "{body}");
+    let (status, body) = call(srv.addr, "DELETE", "s0", None, GUEST).await;
+    assert_eq!((status, body), (200, json!({"ok": true, "warning": null})));
+    assert_eq!(srv.python.hits_to("/api/sessions/s0"), 0);
     let after = jsonl(srv.list.discovered_session("s0").await.ok().flatten());
     assert!(after.is_some_and(|path| path != old), "a sessão nova com o nome não herda a conversa da fechada");
 }
 
-/// R1-18 (`test_orq_readonly.py`, `forwarded.rs`): o orquestrador com execução viva não fecha por
-/// `DELETE`: 409 `erro_sessao_orq` com o texto do guarda, nada morre e o Python não recebe nada.
+/// R1-18 (`test_orq_readonly.py`, `forwarded.rs`) e decisão 3: o orquestrador com execução viva não fecha
+/// por `DELETE`, nem pelo dono nem pelo convidado com conta (antes o guarda só valia para o dono): 409
+/// `erro_sessao_orq` com o texto do guarda, nada morre e o Python não recebe nada.
 #[tokio::test(flavor = "multi_thread")]
 async fn delete_r1_18_live_orchestrator_is_refused() {
     let dir = tempfile::tempdir().unwrap();
     let srv = server_unowned(dir.path(), 1).await;
     orchestrators(&srv, &json!(["g1-orq"]));
-    let (status, body) = call(srv.addr, "DELETE", "g1-orq", None, OWNER).await;
-    assert_eq!((status, body), (409, json!({"detail": {"code": "erro_sessao_orq", "params": {},
-        "msg": "o orquestrador não recebe mensagens; fale com o árbitro"}})));
+    for token in [GUEST, OWNER] {
+        let (status, body) = call(srv.addr, "DELETE", "g1-orq", None, token).await;
+        assert_eq!((status, body), (409, json!({"detail": {"code": "erro_sessao_orq", "params": {},
+            "msg": "o orquestrador não recebe mensagens; fale com o árbitro"}})), "{token}");
+    }
     assert_eq!(list_support::calls(dir.path(), "kill-session"), 0);
     assert_eq!(srv.python.hits_to("/api/sessions/g1-orq"), 0);
 }
