@@ -1138,3 +1138,9 @@ cada rodada da lista mesmo sem atalho, e 37 por minuto de `display -p` do cursor
 pergunta. Agora o `list-sessions` só roda com sessão de atalho nos panes da rodada e vai direto a cada
 servidor (no psmux cada sessão tem o seu e responde só a linha dela, igual à do CLI); `display` e
 `capture-pane` da pergunta também vão direto. Sem conferência, o CLI de antes.
+
+Medido no notebook com as três mudanças (3 sessões de carga, sem terminal de atalho, 5 min por
+cenário): ~7 `tmux.exe` por minuto trabalhando e ~10 parado, contra ~170 da versão instalada
+(0.1.0.10381) parada logo antes; CPU dos servidores do psmux de 2,4% para 1,0–1,3% de um núcleo. O
+"antes" variou entre ~103 e ~170 por minuto em rodadas diferentes da mesma máquina; o "depois" ficou
+estável.
