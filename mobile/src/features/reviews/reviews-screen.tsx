@@ -50,8 +50,8 @@ export function ReviewsScreen() {
     </View>,
   };
   const errors = buckets.filter((bucket) => bucket.error);
-  const unavailable = errors.length > 0 && buckets.every((bucket) => !bucket.listing);
-  const inaccessible = buckets.length > 0 && buckets.every((bucket) => !bucket.listing || !bucket.listing.reviews.length && bucket.listing.hosts.some((host) => host.state !== 'ok'));
+  const unavailable = errors.length > 0 && all.length === 0 && buckets.every((bucket) => !!bucket.error || !bucket.listing);
+  const inaccessible = buckets.length > 0 && buckets.every((bucket) => !bucket.listing || !bucket.listing.reviews.length && bucket.listing.hosts.length > 0 && bucket.listing.hosts.every((host) => host.state !== 'ok'));
 
   return <Screen edges={['bottom', 'left', 'right']}>
     <Stack.Screen options={headerOptions} />
