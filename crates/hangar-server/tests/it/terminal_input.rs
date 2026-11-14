@@ -1130,15 +1130,6 @@ impl TerminalServices for Counted {
  fn publish<'a>(&'a self, b: &'a TerminalBinding, r: PluginRequest) -> ServiceFuture<'a, PluginReply> { self.inner.publish(b, r) }
  fn permission_guard<'a>(&'a self, _: &'a TerminalBinding) -> ServiceFuture<'a, ()> { Box::pin(async { Ok(()) }) }
 }
-fn handed(io: Arc<FakeIo>, s: Arc<Counted>) -> TerminalDriver { let d = driver(io, s.clone()); d.hand_facts(s.inner.facts.lock().unwrap().clone()); d }
-#[tokio::test]
-async fn terminal_input_handed_facts_spare_the_reads_before_delivery() {
- let io = Arc::new(FakeIo::new(vec![screen("")])); let s = Arc::new(Counted::new(usize::MAX));
- let r = handed(io.clone(), s.clone()).prompt("long original message", "id").await;
- assert_eq!(r.disposition, Disposition::Accepted);
- assert_eq!(s.inner.published.lock().unwrap().len(), 1);
- assert_eq!(*s.calls.lock().unwrap(), 1, "só a entrega relê os fatos");
-}
 #[tokio::test]
 async fn terminal_input_composer_is_read_right_after_the_verified_facts() {
  let io = Arc::new(FakeIo::new(vec![screen("")])); let s = Arc::new(Counted::new(usize::MAX));
@@ -1147,8 +1138,9 @@ async fn terminal_input_composer_is_read_right_after_the_verified_facts() {
 }
 #[tokio::test]
 async fn terminal_input_life_changed_after_the_composer_read_publishes_nothing() {
- let io = Arc::new(FakeIo::new(vec![screen("")])); let s = Arc::new(Counted::new(1));
- let r = handed(io.clone(), s.clone()).prompt("long original message", "id").await;
+ // A segunda leitura é a da entrega, depois do composer.
+ let io = Arc::new(FakeIo::new(vec![screen("")])); let s = Arc::new(Counted::new(2));
+ let r = driver(io.clone(), s.clone()).prompt("long original message", "id").await;
  assert_ne!(r.disposition, Disposition::Accepted);
  assert!(s.inner.published.lock().unwrap().is_empty()); assert!(io.writes().is_empty());
 }

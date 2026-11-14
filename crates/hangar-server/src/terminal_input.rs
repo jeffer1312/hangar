@@ -585,8 +585,6 @@ pub struct TerminalDriver {
     footer_kept: bool,
     /// Controles do dono sem guarda de interação: conferem só o pane (`verify_light`).
     controls: bool,
-    /// Fatos que quem criou o driver acabou de ler e conferir, sem nada escrito no pane desde então.
-    handed: std::sync::Mutex<Option<InputFacts>>,
 }
 /// Sequência inteira na mesma trava da entrada, sem reentrar pelos métodos públicos do driver.
 pub(crate) struct PermissionSequence<'a> {
@@ -652,7 +650,7 @@ impl TerminalDriver {
     pub(crate) async fn permission_sequence(&self) -> PermissionSequence<'_> {
         PermissionSequence { driver: self, _serial: self.serial.lock().await }
     }
-    pub fn new(binding: TerminalBinding, services: Arc<dyn TerminalServices>, io: Arc<dyn TerminalIo>, limits: InputLimits) -> Self { Self { interactions: None, interaction_source: None, binding, services, io, limits, serial: Arc::new(Mutex::new(())), pane_checked: false, footer_kept: false, controls: false, handed: std::sync::Mutex::new(None) } }
+    pub fn new(binding: TerminalBinding, services: Arc<dyn TerminalServices>, io: Arc<dyn TerminalIo>, limits: InputLimits) -> Self { Self { interactions: None, interaction_source: None, binding, services, io, limits, serial: Arc::new(Mutex::new(())), pane_checked: false, footer_kept: false, controls: false } }
     pub fn controls(mut self) -> Self { self.controls = true; self }
     pub fn with_serial(mut self, serial: Arc<Mutex<()>>) -> Self { self.serial = serial; self }
     pub fn with_interactions(mut self, store: Arc<InteractionStore>) -> Self { self.interactions = Some(store); self }
@@ -660,10 +658,7 @@ impl TerminalDriver {
     /// Driver para as operações de um clique de mod cujo pane já teve a identidade conferida na mesma
     /// reserva (`PaneOp::Hold`): sem a conferência, cada operação é um processo do multiplexador a menos.
     pub fn pane_checked(mut self) -> Self { self.pane_checked = true; self }
-    pub fn footer_kept(mut self) -> Self { self.footer_kept = true; self }
-    /// A primeira leitura dos fatos usa estes. Só para fatos lidos e conferidos agora, sem escrita no pane depois.
-    pub fn hand_facts(&self, facts: InputFacts) { *self.handed.lock().unwrap_or_else(|e| e.into_inner()) = Some(facts); }
-    pub fn binding(&self) -> &TerminalBinding { &self.binding }
+    pub fn footer_kept(mut self) -> Self { self.footer_kept = true; self }    pub fn binding(&self) -> &TerminalBinding { &self.binding }
     fn request(&self, args: Vec<String>, stdin: Vec<u8>) -> Result<CommandRequest, IoFailure> {
         let (program, prefix) = self.binding.mux_argv.split_first().ok_or(IoFailure { code: "mux_missing", may_have_written: false })?;
         Ok(CommandRequest { program: program.clone(), args: prefix.iter().cloned().chain(args).collect(), stdin })
@@ -673,12 +668,11 @@ impl TerminalDriver {
         self.binding.windows && self.binding.mux_argv.first().is_some_and(|program| self.io.writes_direct(program, &self.binding.name))
     }
     async fn facts(&self) -> Result<InputFacts, IoFailure> {
-        let handed = self.handed.lock().unwrap_or_else(|e| e.into_inner()).take();
         // Falha da pergunta conserva a causa; o resto continua sendo "terminal indisponível".
-        let facts = match handed { Some(facts) => facts, None => self.services.facts(&self.binding).await.map_err(|error| IoFailure {
+        let facts = self.services.facts(&self.binding).await.map_err(|error| IoFailure {
             code: if error.0.starts_with("askq_") || InteractionError::from_code(error.0).is_some() { error.0 } else { "facts_unavailable" },
             may_have_written: false,
-        })? };
+        })?;
         if facts.binding != self.binding || self.binding.name.is_empty() || self.binding.conversation.is_empty()
             || self.binding.mux_argv.is_empty() || (self.binding.windows && !self.binding.pane.starts_with(&format!("={}:", self.binding.name))) {
             return Err(IoFailure { code: "stale_binding", may_have_written: false });
