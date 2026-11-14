@@ -82,6 +82,8 @@ pub(crate) async fn maintenance(state: Arc<crate::routes::AppState>) {
     state.costs.schedule_warmup(std::time::Duration::from_secs(30));
     let _search_producer = state.search.start();
     crate::pages::routes::spawn_sweep(state.list.clone(), state.pages.clone());
+    // Só aqui, pelo mesmo motivo do tmux abaixo: apaga arquivos das contas da máquina.
+    tokio::spawn(crate::sidecar_prune::run(state.clone()));
     // Só aqui, nunca no `serve_until`: os testes sobem servidores contra o tmux de verdade.
     #[cfg(unix)]
     tokio::spawn({
