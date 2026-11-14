@@ -966,7 +966,7 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   sessão (`caller.can`), fecha inteiro no Rust, pelo nome quando não há entrada
   (`runtime/close_name.rs`), com `then`, nome fechado, grupo, convites, atalhos e cofre; o Python
   não recebe nada. Processo que sobrevive é 500 `session_kill_unconfirmed`, com fila, sidecar e
-  convite intactos. Quem um handler viu por `routes::gate` que não é o dono nunca chega ao Python:
+  convite intactos. Quem um handler viu por `routes::gate` ou `routes::who` que não é o dono nunca chega ao Python:
   o `pass` responde o 401 contado (429 bloqueado) ou o 403 do convidado com login. Python:
   autorização das portas dele com o repasse acima. Responsabilidade migrada nunca volta ao Python em
   `rust`/`pending`: Rust indisponível é erro visível. Modo de permissão gravado desconhecido é
