@@ -159,7 +159,7 @@
     { tela: 'jev', rotulo: m.jev_text_title, descricao: m.jev_text_help },
 
     { tela: 'computer', rotulo: m.computer_control_enable, descricao: m.computer_control_enable_hint },
-    { tela: 'computer', rotulo: m.computer_control_install, descricao: m.computer_control_mode_local_hint },
+    { tela: 'computer', rotulo: m.computer_control_step_program, descricao: m.computer_control_install_hint },
     { tela: 'computer', rotulo: m.computer_control_target, descricao: m.computer_control_target_hint },
     { tela: 'computer', rotulo: m.computer_control_new_target, descricao: m.computer_control_target_host_hint },
     { tela: 'computer', rotulo: m.computer_control_setup_title, descricao: m.computer_control_setup_hint },

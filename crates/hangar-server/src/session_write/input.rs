@@ -689,8 +689,9 @@ pub async fn steer(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
         }
         headless => {
             let (kind, payload) = match &text {
-                Some(text) => (OperationKind::Steer, json!({"text": text, "turn_id": null})),
-                None => (OperationKind::SteerQueue, json!({"entry_id": null})),
+                // `now`: o botão corta o turno do Claude; o Codex ignora.
+                Some(text) => (OperationKind::Steer, json!({"text": text, "turn_id": null, "now": true})),
+                None => (OperationKind::SteerQueue, json!({"entry_id": null, "now": true})),
             };
             let sent = headless.command(RuntimeCommand { operation_id, kind, payload }).await;
             let codex = ctx.target.provider == "codex";

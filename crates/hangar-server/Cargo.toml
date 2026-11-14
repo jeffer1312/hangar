@@ -36,6 +36,7 @@ path = "tests/other_terminal_lifecycle.rs"
 
 [dependencies]
 hangar-scheduled-tasks.workspace = true
+hangar-dream.workspace = true
 chrono-tz.workspace = true
 iana-time-zone.workspace = true
 hangar-conversation-transfer.workspace = true
@@ -59,6 +60,7 @@ hangar-plugins.workspace = true
 hangar-workflows.workspace = true
 hangar-http-file.workspace = true
 hangar-desktop-theme.workspace = true
+hangar-shortcut-transfer.workspace = true
 hangar-opencode-cookie.workspace = true
 hangar-deploy.workspace = true
 hangar-port-preview.workspace = true
@@ -66,6 +68,7 @@ hangar-connect.workspace = true
 toml = { version = "=1.1.7", default-features = false, features = ["parse", "std", "serde", "preserve_order"] }
 hangar-workspace = { path = "../hangar-workspace" }
 hangar-reviews.workspace = true
+hangar-computer-control-setup.workspace = true
 hangar-psmux.workspace = true
 # Pacote por versão: índice, manifesto e extração conferida (`update/`).
 hangar-package = { path = "../hangar-package" }

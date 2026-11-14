@@ -9,6 +9,8 @@ mod connect_approval;
 mod desktop_tool_look;
 mod dictation_pill;
 mod login_browser;
+mod memory_dream;
+mod new_chat_mode;
 mod no_project;
 mod password_vault;
 mod plugins;
@@ -67,6 +69,7 @@ pub fn animation(name: &str) -> Option<NewsAnimation> {
         "revelacao-imagem" => Some(image_reveal::render),
         "adormecer-ocultas" => Some(sleep_hidden::render),
         "sem-projeto" => Some(no_project::render),
+        "modo-da-conversa" => Some(new_chat_mode::render),
         "pilula-do-ditado" => Some(dictation_pill::render),
         "pausar-fala" => Some(speech_pause::render),
         "hangar-connect" => Some(connect_approval::render),
@@ -77,6 +80,7 @@ pub fn animation(name: &str) -> Option<NewsAnimation> {
         "scheduled-tasks" => Some(scheduled_tasks::render),
         "atualizacoes-e-manual" => Some(updates_manual::render),
         "estilo-claude-desktop" => Some(desktop_tool_look::render),
+        "sonho-da-memoria" => Some(memory_dream::render),
         _ => None,
     }
 }

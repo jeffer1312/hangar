@@ -44,6 +44,11 @@ impl RuntimeConfig {
         let current=Values(self.read());
         self.effective(key,&current)
     }
+    /// O `get` que devolve o erro do arquivo ilegível em vez de lê-lo como vazio.
+    pub fn get_checked(&self,key:&str)->Result<Value,RuntimeError> {
+        let current=read_for_write(&self.path)?;
+        Ok(self.effective(key,&current))
+    }
     /// Configuração efetiva compartilhada pela transcrição e pela organização do ditado.
     pub(crate) fn transcription_snapshot(&self) -> ValueGuard {
         // Uma leitura só: uma escrita no meio não mistura duas versões do arquivo.
@@ -225,6 +230,51 @@ impl RuntimeConfig {
             self.sync_jev().map_err(|error|format!("jev: salvo, mas o Computer Use não recebeu a configuração: {error}"))?;
         }
         Ok(current.into_map())
+    }
+    /// Lê o valor efetivo de `shortcuts`, passa a `change` e grava o texto devolvido, tudo sob a
+    /// trava de escrita: outra gravação no meio não se perde. Devolve o valor de `shortcuts` no
+    /// arquivo antes da gravação, o modo do arquivo (`None` = não existia) e se a pasta existia.
+    /// `Ok(Err(_))` = `change` recusou e nada foi gravado.
+    pub fn update_shortcuts<E>(&self, change:impl FnOnce(&Value)->Result<String,E>)->Result<Result<(Option<Value>,Option<u32>,bool),E>,RuntimeError> {
+        let _guard=WRITES.lock().unwrap_or_else(|e|e.into_inner());
+        let parent_existed=self.path.parent().is_some_and(std::path::Path::exists);
+        let mode=match std::fs::metadata(&self.path) {
+            Ok(_)=>Some(super::files::mode(&self.path).map_err(|e|RuntimeError::io(&e,StorageOperation::Read))?),
+            Err(e) if e.kind()==std::io::ErrorKind::NotFound=>None,
+            Err(e)=>return Err(RuntimeError::io(&e,StorageOperation::Read)),
+        };
+        let mut current=read_for_write(&self.path)?;
+        let before=current.get("shortcuts").map(codec::clone_value);
+        let effective=ValueGuard(self.effective("shortcuts",&current));
+        let serialized=match change(&effective.0) { Ok(text)=>text, Err(refused)=>return Ok(Err(refused)) };
+        current.insert("shortcuts".into(),preferences::coerce("shortcuts",&json!(serialized))?);
+        write_values(&self.path,&current)?;
+        Ok(Ok((before,mode,parent_existed)))
+    }
+    /// Desfaz a gravação de `shortcuts` de uma importação, só se a chave ainda é a que ela gravou:
+    /// outro campo ou gravação posterior permanece. O arquivo volta ao modo de antes; se não existia
+    /// e ficou vazio, sai (e a pasta, se esta gravação a criou).
+    pub fn undo_shortcuts(&self, serialized:&str, before:Option<&Value>, mode:Option<u32>, parent_existed:bool)->Result<(),RuntimeError> {
+        let _guard=WRITES.lock().unwrap_or_else(|e|e.into_inner());
+        // Ilegível não dá para conferir nem restaurar: a falha vai para a mensagem do import.
+        let mut current=read_for_write(&self.path)?;
+        let ours=json!(serialized);
+        if current.get("shortcuts")!=Some(&ours) || before==Some(&ours) { return Ok(()); }
+        match before {
+            Some(value)=>current.insert("shortcuts".into(),codec::clone_value(value)),
+            None=>{ if let Some(value)=current.shift_remove("shortcuts"){codec::discard(value);} }
+        }
+        if mode.is_none() && current.is_empty() {
+            std::fs::remove_file(&self.path).map_err(|e|RuntimeError::io(&e,StorageOperation::Write))?;
+            CACHE.lock().unwrap_or_else(|e|e.into_inner()).remove(&self.path);
+            if !parent_existed && let Some(parent)=self.path.parent() { let _=std::fs::remove_dir(parent); }
+            return Ok(());
+        }
+        write_values(&self.path,&current)?;
+        if let Some(mode)=mode {
+            super::files::chmod(&self.path,mode).map_err(|e|RuntimeError::io(&e,StorageOperation::Write))?;
+        }
+        Ok(())
     }
     fn write_thinking(&self,value:bool)->Result<(),RuntimeError> {
         let mut data=self.thinking().ok_or("mostrar_pensamento: settings.json ilegível — não mexi nele")?;

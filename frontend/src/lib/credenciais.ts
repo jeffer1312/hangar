@@ -180,12 +180,13 @@ export interface ComputerControlTarget { name: string; path: string; transport: 
 
 export interface ComputerControlState {
   agent_exe: { path: string; exists: boolean; size: number };   // windows-agent.exe desta máquina
-  mode: 'package' | 'local';      // package = instalado pelo botão (uvx + release); local = pasta com o código
+  mode: 'package' | 'local';      // package = programa da release; local = pasta com o código (só servidor antigo)
   installed_tag: string;
   package_exists: boolean;
   targets: ComputerControlTarget[];
   ssh_hosts: string[];              // os Host do ~/.ssh/config do servidor
   local_available: boolean;   // o servidor é Windows: a própria máquina pode ser alvo
+  hyprland?: boolean;         // alvo `linux` automático: liga sem alvo cadastrado (servidor antigo não manda)
   enabled: boolean;
   project_dir: string;
   agent_config: string;
@@ -202,7 +203,9 @@ export interface ComputerControlState {
   jev_model?: string;
   cliproxy: { preset_url: string; has_keys: boolean; key_is_cliproxy: boolean; installed: boolean; running: boolean };
   files: { path: string; enabled: boolean }[];
-  migration_skipped?: string[];   // só no retorno do install: alvos da pasta local que não deu pra ler
+  // Servidor novo: `platform` = sem programa para esta máquina; `install_failed` = a instalação automática falhou.
+  unavailable?: 'platform' | 'install_failed' | null;
+  install_error?: string;
 }
 
 export interface ComputerControlRequest {
@@ -223,11 +226,6 @@ export function getComputerControl(target: Server | null): Promise<ComputerContr
 
 export function saveComputerControl(target: Server | null, request: ComputerControlRequest): Promise<ComputerControlState> {
   return em(target, '/api/computer-control', { method: 'PUT', body: JSON.stringify(request) });
-}
-
-// Baixa a release: pode levar mais que o teto padrão de 8 s de uma chamada a outro servidor.
-export function installComputerControl(target: Server | null): Promise<ComputerControlState> {
-  return em(target, '/api/computer-control/install', { method: 'POST' }, 180000);
 }
 
 export function testComputerControlHost(target: Server | null, request: { host: string; proxy_command?: string }):
