@@ -141,12 +141,15 @@ pub(crate) fn base_button(id: &'static str, base: String) -> Button {
 
 /// Uma linha do menu do modo, na tela e na novidade: o nome e, embaixo, o que muda para quem usa.
 pub(crate) fn mode_row(id: &'static str, on: bool, headless: bool, codex: bool) -> Button {
-    let summary = match (headless, codex) {
+    menu_row_with(id, on, tr(if headless { "create_mode_headless" } else { "create_mode_tmux" }), String::new(),
+        Some(div().text_xs().text_color(theme::muted()).whitespace_normal().child(tr(mode_summary(headless, codex))).into_any_element()))
+}
+
+fn mode_summary(headless: bool, codex: bool) -> &'static str {
+    match (headless, codex) {
         (false, false) => "create_mode_tmux_summary", (true, false) => "create_mode_headless_summary",
         (false, true) => "create_mode_tmux_summary_codex", (true, true) => "create_mode_headless_summary_codex",
-    };
-    menu_row_with(id, on, tr(if headless { "create_mode_headless" } else { "create_mode_tmux" }), String::new(),
-        Some(div().text_xs().text_color(theme::muted()).whitespace_normal().child(tr(summary)).into_any_element()))
+    }
 }
 
 /// Uma base da lista, com quanto ela está atrás da remota.
@@ -1139,14 +1142,15 @@ impl NewSession {
         cx.notify();
     }
 
-    fn set_headless(&mut self, headless: bool, window: &mut Window, cx: &mut Context<Self>) {
-        if self.headless_saving || self.creating || (self.jev.loading && self.headless_owner.is_none()) { return; }
+    /// `save`: o dono grava a escolha como padrão do servidor; sem ele, vale só para esta conversa.
+    fn set_headless(&mut self, headless: bool, save: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.headless_saving || self.creating || self.headless_unread() { return; }
         self.scheduled_touch(&["headless"]);
         self.headless = headless;
         self.headless_touched = true;
         self.build_permission_pick(window, cx);
         cx.notify();
-        if self.headless_owner != Some(true) { return; }
+        if !save || self.headless_owner != Some(true) { return; }
         self.headless_saving = true;
         let seq = self.jev.seq;
         self.error = None;
@@ -1159,14 +1163,13 @@ impl NewSession {
     /// A pílula da tela sem sessão: vale só para esta conversa, nunca grava o padrão do servidor.
     fn choose_mode(&mut self, headless: bool, window: &mut Window, cx: &mut Context<Self>) {
         self.menu.set(None);
-        if self.creating || self.headless_saving { return; }
-        self.headless = headless;
-        self.headless_touched = true;
-        self.build_permission_pick(window, cx);
-        cx.notify();
+        self.set_headless(headless, false, window, cx);
     }
 
     fn headless_inherited(&self) -> bool { self.headless_owner != Some(true) && !self.headless_touched }
+
+    /// Antes da leitura da configuração, o valor à vista ainda não é o padrão do servidor.
+    fn headless_unread(&self) -> bool { self.jev.loading && self.headless_owner.is_none() }
 
     fn provider_ready(&self) -> Option<bool> {
         if self.providers.loading { return None; }
@@ -2142,8 +2145,8 @@ impl NewSession {
             let codex = self.provider == "codex";
             let inherited = self.headless_inherited();
             let mode = |id: &'static str, on: bool, title: String, beta: bool, summary: String, headless: bool| {
-                option_card(id, on, title, beta, summary, busy || self.headless_saving || (self.jev.loading && self.headless_owner.is_none()), cx)
-                    .on_click(cx.listener(move |this, _, window, cx| this.set_headless(headless, window, cx)))
+                option_card(id, on, title, beta, summary, busy || self.headless_saving || self.headless_unread(), cx)
+                    .on_click(cx.listener(move |this, _, window, cx| this.set_headless(headless, true, window, cx)))
             };
             let help = match (codex, self.headless) {
                 (false, false) => "create_mode_tmux_help", (false, true) => "create_mode_headless_help",
@@ -2155,9 +2158,9 @@ impl NewSession {
                 .when(inherited, |el| el.child(muted(tr("session_mode_server_default"))))
                 .child(div().id("create-modes").role(Role::Group).aria_label(tr("create_mode")).flex().gap(px(12.))
                     .child(mode("create-mode-tmux", !self.headless && !inherited, tr("create_mode_tmux"), false,
-                        tr(if codex { "create_mode_tmux_summary_codex" } else { "create_mode_tmux_summary" }), false))
+                        tr(mode_summary(false, codex)), false))
                     .child(mode("create-mode-headless", self.headless && !inherited, tr("create_mode_headless"), false,
-                        tr(if codex { "create_mode_headless_summary_codex" } else { "create_mode_headless_summary" }), true)))
+                        tr(mode_summary(true, codex)), true)))
                 .child(div().child(Disclosure::new("create-difference", self.difference, tr("create_mode_difference"), true)
                     .on_change(move |open, cx| { let _ = this.update(cx, |this, cx| { this.difference = open; cx.notify(); }); })))
                 .when(self.difference, |el| el.child(muted(tr(help))))
@@ -2451,14 +2454,16 @@ impl NewSession {
     /// Com ou sem terminal, só para esta conversa; antes da escolha mostra o padrão do servidor.
     fn render_mode_pill(&self, open: bool, cx: &mut Context<Self>) -> Option<Div> {
         if self.scheduled || self.target().is_some() || !matches!(self.provider, "claude" | "codex") { return None; }
-        let text = tr(if self.headless { "create_mode_headless" } else { "create_mode_tmux" });
+        // Sem ser dono, o padrão do servidor não é lido: a pílula não afirma um modo que ele pode não ter.
+        let inherited = self.headless_inherited();
+        let text = tr(if inherited { "session_mode_server_default" } else if self.headless { "create_mode_headless" } else { "create_mode_tmux" });
+        let from_server = !self.headless_touched && !inherited;
+        let label = if from_server { format!("{}: {text}, {}", tr("create_mode"), tr("session_mode_server_default")) } else { format!("{}: {text}", tr("create_mode")) };
         let id = Menu::Mode.anchor();
-        // Antes da leitura da configuração, o valor à vista ainda não é o padrão do servidor.
-        let unread = self.jev.loading && self.headless_owner.is_none();
-        Some(popup::anchor(div(), id).child(quiet_button(id, IconName::SquareTerminal, text.clone(), true, cx)
-            .selected(open).disabled(self.creating || self.headless_saving || unread)
-            .accessibility_label(format!("{}: {text}", tr("create_mode")))
-            .when(!self.headless_touched, |button| button.tooltip(tr("session_mode_server_default")))
+        Some(popup::anchor(div(), id).child(quiet_button(id, IconName::SquareTerminal, text, true, cx)
+            .selected(open).disabled(self.creating || self.headless_unread())
+            .accessibility_label(label)
+            .when(from_server, |button| button.tooltip(tr("session_mode_server_default")))
             .on_click(cx.listener(|this, _, window, cx| this.toggle_menu(Menu::Mode, window, cx)))))
     }
 
@@ -2580,9 +2585,10 @@ impl NewSession {
             Menu::Folder => return self.render_compact_folders(cx).p_3().max_h(room).into_any_element(),
             Menu::Model => return self.render_model_menu(cx).into_any_element(),
             Menu::Mode => {
-                let (codex, current, creating) = (self.provider == "codex", self.headless, self.creating);
-                let row = |id: &'static str, headless: bool, cx: &mut Context<Self>| mode_row(id, current == headless, headless, codex)
-                    .disabled(creating).on_click(cx.listener(move |this, _, window, cx| this.choose_mode(headless, window, cx)));
+                let (codex, current, inherited) = (self.provider == "codex", self.headless, self.headless_inherited());
+                let locked = self.creating || self.headless_unread();
+                let row = |id: &'static str, headless: bool, cx: &mut Context<Self>| mode_row(id, current == headless && !inherited, headless, codex)
+                    .disabled(locked).on_click(cx.listener(move |this, _, window, cx| this.choose_mode(headless, window, cx)));
                 return div().p(px(popup::INSET)).flex().flex_col().gap(px(2.)).child(popup::title(tr("create_mode"), None))
                     .child(row("new-chat-mode-tmux", false, cx)).child(row("new-chat-mode-headless", true, cx)).into_any_element();
             }
