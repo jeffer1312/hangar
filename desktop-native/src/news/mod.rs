@@ -8,6 +8,7 @@ mod composer_history;
 mod connect_approval;
 mod dictation_pill;
 mod login_browser;
+mod memory_dream;
 mod no_project;
 mod password_vault;
 mod plugins;
@@ -73,6 +74,7 @@ pub fn animation(name: &str) -> Option<NewsAnimation> {
         "plugins-do-claude" => Some(plugins::render),
         "revisoes-pr-mr" => Some(reviews::render),
         "scheduled-tasks" => Some(scheduled_tasks::render),
+        "sonho-da-memoria" => Some(memory_dream::render),
         _ => None,
     }
 }

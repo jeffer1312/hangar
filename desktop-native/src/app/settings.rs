@@ -10,7 +10,7 @@ use gpui_kit::component::{color_picker::{ColorPicker, ColorPickerEvent, ColorPic
     IndexPath, select::{Select, SelectEvent, SelectState}, searchable_list::{SearchableListItem, SearchableVec}};
 
 mod appearance_page;
-mod memory_dream;
+pub(crate) mod memory_dream;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Page {

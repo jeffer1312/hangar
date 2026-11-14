@@ -90,7 +90,7 @@ pub(crate) use reviews::{Comment as ReviewComment, Summary as ReviewSummary, Thr
     row_view as review_row_view, thread_actions as review_thread_actions, thread_box as review_thread_box, thread_buttons as review_thread_buttons};
 pub(crate) use connect::device_card;
 pub(crate) use scheduled::{row_frame as scheduled_row_frame, row_text as scheduled_row_text};
-pub(crate) use settings::{setting_row, settings_box};
+pub(crate) use settings::{memory_dream, setting_row, settings_box};
 pub(crate) use plugins::{plugin_meta, plugin_name, plugin_switch, plugin_update_button, reopen_notice as plugins_reopen_notice,
     row_box as plugin_row_box, text_block as plugin_text_block};
 pub(crate) use accounts::{login_heading, target_row};

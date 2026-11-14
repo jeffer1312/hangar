@@ -622,60 +622,19 @@ impl DreamPage {
             .into_any_element()
     }
 
-    /// "Quem paga": uma silhueta só, o escolhido com o fundo de destaque, como os segmentados das Configurações.
-    fn mode_picker(&self, project: &Project, busy: bool, cx: &mut Context<Self>) -> Div {
-        let modes = [("key", "dream_mode_key"), ("account", "dream_mode_account")];
-        div().flex().rounded(px(6.)).border_1().border_color(theme::border_strong()).overflow_hidden().children(modes.iter().enumerate().map(
-            |(n, &(mode, key))| {
-                let (on, id) = (project.mode == mode, project.id.clone());
-                Button::new(SharedString::from(format!("dream-mode-{}-{mode}", project.id)))
-                    .custom(
-                        ButtonCustomVariant::new(cx)
-                            .color(if on { theme::accent_dim() } else { transparent_black() })
-                            .foreground(if on { theme::accent_text() } else { theme::muted() })
-                            .hover(theme::hover())
-                            .active(theme::hover()),
-                    )
-                    .small()
-                    .h(px(28.))
-                    .px(px(11.))
-                    .rounded(px(0.))
-                    .text_color(if on { theme::accent_text() } else { theme::muted() })
-                    .when(on, |el| el.bg(theme::accent_dim()))
-                    .when(n == 0, |el| el.border_r_1().border_color(theme::border_strong()))
-                    .selected(on)
-                    .disabled(busy)
-                    .label(t(key))
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        if !on {
-                            this.update_project(&id, json!({ "mode": mode }), window, cx);
-                        }
-                    }))
-            },
-        ))
-    }
-
     fn project_row(&self, project: &Project, status: &Status, cx: &mut Context<Self>) -> AnyElement {
         let busy = self.busy.contains(&format!("project:{}", project.id));
         let running = status.running.is_some() || self.busy.iter().any(|b| b.starts_with("run:"));
         let machines = project.machines.iter().map(|m| self.machine_label(m)).collect::<Vec<_>>().join(", ");
-        let last = project
-            .last_dream_at
-            .as_deref()
-            .map(|at| tr_shared("dream_last", &[("when", &local_time(at)), ("cost", &usd(project.last_cost_usd))]))
-            .unwrap_or_else(|| t("dream_never"));
-        let facts = [machines, tr_shared("dream_new_sessions", &[("n", &project.new_sessions.to_string())]), last]
-            .into_iter()
-            .filter(|s| !s.is_empty())
-            .collect::<Vec<_>>()
-            .join(" · ");
+        let facts = facts(machines, project.new_sessions, project.last_dream_at.as_deref().map(|at| (local_time(at), project.last_cost_usd)));
         let (toggle_id, run_id) = (project.id.clone(), project.id.clone());
         let enabled = project.enabled;
-        let switch = Switch::new(SharedString::from(format!("dream-project-{}", project.id)))
-            .checked(enabled)
-            .disabled(busy)
-            .accessibility_label(format!("{}, {}", t("dream_project_enabled"), project.name))
+        let switch = project_switch(&project.id, &project.name, enabled, busy)
             .on_click(cx.listener(move |this, on: &bool, window, cx| this.update_project(&toggle_id, json!({ "enabled": *on }), window, cx)));
+        let (weak, mode_id) = (cx.entity().downgrade(), project.id.clone());
+        let picker = mode_picker(&project.id, &project.mode, busy, Some(move |mode: &'static str, window: &mut Window, cx: &mut App| {
+            let _ = weak.update(cx, |this, cx| this.update_project(&mode_id, json!({ "mode": mode }), window, cx));
+        }), cx);
         // Projeto sem git é por pasta: só junta máquinas quando a pessoa diz qual é o mesmo.
         let pair = project.needs_confirm.then(|| {
             let others: Vec<(String, String)> = status
@@ -706,81 +665,178 @@ impl DreamPage {
         let last_run = project.last_run_id.clone();
         let changes = last_run.clone().map(|run| {
             let project = project.id.clone();
-            Button::new(SharedString::from(format!("dream-changes-{}", project)))
-                .ghost()
-                .small()
-                .icon(IconName::FileText)
-                .label(t("dream_changes"))
+            changes_button(&project)
                 .on_click(cx.listener(move |this, _, window, cx| this.open_changes(run.clone(), project.clone(), window, cx)))
         });
         let undo = last_run.map(|run| {
             let project = project.id.clone();
-            Button::new(SharedString::from(format!("dream-undo-{project}")))
-                .ghost()
-                .small()
-                .icon(IconName::Undo2)
-                .label(t("dream_undo"))
-                .disabled(self.busy.contains(&format!("undo:{run}:{project}")))
+            undo_button(&project, self.busy.contains(&format!("undo:{run}:{project}")))
                 .on_click(cx.listener(move |this, _, window, cx| this.undo(run.clone(), project.clone(), window, cx)))
         });
-        div()
-            .id(SharedString::from(format!("dream-row-{}", project.id)))
-            .mt(px(-1.))
-            .border_t_1()
-            .border_color(theme::border())
-            .px_4()
-            .py(px(14.))
-            .flex()
-            .flex_col()
-            .gap(px(10.))
-            .child(
-                div()
-                    .flex()
-                    .items_start()
-                    .gap(px(14.))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .flex()
-                            .flex_col()
-                            .gap(px(3.))
-                            .child(
-                                div()
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(if enabled { theme::text() } else { theme::muted() })
-                                    .truncate()
-                                    .child(project.name.clone()),
-                            )
-                            .child(div().text_xs().text_color(theme::muted()).whitespace_normal().child(facts)),
-                    )
-                    .child(switch),
-            )
+        let run = run_button(SharedString::from(format!("dream-run-{}", project.id)), false)
+            .outline()
+            .disabled(running || !enabled)
+            .on_click(cx.listener(move |this, _, window, cx| this.run_now(Some(run_id.clone()), window, cx)));
+        row_frame(&project.id)
+            .child(row_head(project.name.clone(), enabled, facts, switch))
             .children(project.last_error.as_deref().map(|e| alert(SharedString::from(format!("dream-error-{}", project.id)), error_text(e))))
-            .child(
-                div()
-                    .flex()
-                    .flex_wrap()
-                    .items_center()
-                    .gap_2()
-                    .child(div().text_xs().text_color(theme::muted()).child(t("dream_mode")))
-                    .child(self.mode_picker(project, busy, cx))
-                    .children(pair)
-                    .child(div().flex_1())
-                    .child(
-                        Button::new(SharedString::from(format!("dream-run-{}", project.id)))
-                            .outline()
-                            .small()
-                            .icon(IconName::Play)
-                            .label(t("dream_run_now"))
-                            .disabled(running || !enabled)
-                            .on_click(cx.listener(move |this, _, window, cx| this.run_now(Some(run_id.clone()), window, cx))),
-                    )
-                    .children(changes)
-                    .children(undo),
-            )
+            .child(row_bar(picker, pair, run, changes, undo))
             .into_any_element()
     }
+}
+
+// Partes da página que a animação da novidade (`news/memory_dream.rs`) também desenha: quem chama liga o clique.
+
+/// O que se sabe do projeto numa linha: máquinas, conversas novas e o último sonho (quando e quanto custou).
+pub(crate) fn facts(machines: String, new_sessions: u64, last: Option<(String, f64)>) -> String {
+    let last = last
+        .map(|(when, cost)| tr_shared("dream_last", &[("when", &when), ("cost", &usd(cost))]))
+        .unwrap_or_else(|| t("dream_never"));
+    [machines, tr_shared("dream_new_sessions", &[("n", &new_sessions.to_string())]), last]
+        .into_iter()
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join(" · ")
+}
+
+pub(crate) fn project_switch(project_id: &str, name: &str, enabled: bool, busy: bool) -> Switch {
+    Switch::new(SharedString::from(format!("dream-project-{project_id}")))
+        .checked(enabled)
+        .disabled(busy)
+        .accessibility_label(format!("{}, {}", t("dream_project_enabled"), name))
+}
+
+/// "Quem paga": uma silhueta só, o escolhido com o fundo de destaque, como os segmentados das Configurações.
+/// Sem `on_pick` só é desenhado, fora da ordem do Tab.
+pub(crate) fn mode_picker<F>(project_id: &str, mode: &str, busy: bool, on_pick: Option<F>, cx: &App) -> Div
+where
+    F: Fn(&'static str, &mut Window, &mut App) + Clone + 'static,
+{
+    let modes = [("key", "dream_mode_key"), ("account", "dream_mode_account")];
+    div().flex().rounded(px(6.)).border_1().border_color(theme::border_strong()).overflow_hidden().children(modes.iter().enumerate().map(
+        |(n, &(choice, key))| {
+            let on = mode == choice;
+            Button::new(SharedString::from(format!("dream-mode-{project_id}-{choice}")))
+                .custom(
+                    ButtonCustomVariant::new(cx)
+                        .color(if on { theme::accent_dim() } else { transparent_black() })
+                        .foreground(if on { theme::accent_text() } else { theme::muted() })
+                        .hover(theme::hover())
+                        .active(theme::hover()),
+                )
+                .small()
+                .h(px(28.))
+                .px(px(11.))
+                .rounded(px(0.))
+                .text_color(if on { theme::accent_text() } else { theme::muted() })
+                .when(on, |el| el.bg(theme::accent_dim()))
+                .when(n == 0, |el| el.border_r_1().border_color(theme::border_strong()))
+                .selected(on)
+                .disabled(busy)
+                .label(t(key))
+                .map(|el| match on_pick.clone() {
+                    Some(pick) => el.on_click(move |_, window, cx| {
+                        if !on {
+                            pick(choice, window, cx);
+                        }
+                    }),
+                    None => el.tab_stop(false),
+                })
+        },
+    ))
+}
+
+/// Sonhar agora; `running` troca o rótulo por Sonhando…. Quem chama escolhe a variante (a da seção é a principal).
+pub(crate) fn run_button(id: impl Into<ElementId>, running: bool) -> Button {
+    Button::new(id).small().icon(IconName::Play).label(t(if running { "dream_running" } else { "dream_run_now" }))
+}
+
+pub(crate) fn changes_button(project_id: &str) -> Button {
+    Button::new(SharedString::from(format!("dream-changes-{project_id}"))).ghost().small().icon(IconName::FileText).label(t("dream_changes"))
+}
+
+pub(crate) fn undo_button(project_id: &str, busy: bool) -> Button {
+    Button::new(SharedString::from(format!("dream-undo-{project_id}"))).ghost().small().icon(IconName::Undo2).label(t("dream_undo")).disabled(busy)
+}
+
+pub(crate) fn refresh_button(loading: bool) -> Button {
+    Button::new("dream-refresh").ghost().small().icon(IconName::RefreshCw).accessibility_label(tr("reload")).tooltip(tr("reload")).disabled(loading)
+}
+
+/// Cabeçalho "Projetos" com as ações da seção (recarregar e sonhar todos).
+pub(crate) fn projects_head(refresh: Button, run_all: Button) -> Div {
+    let actions = div().flex().items_center().gap_2().child(refresh).child(run_all).into_any_element();
+    section_head(IconName::Folder, t("dream_projects"), None, Some(actions), px(0.))
+}
+
+pub(crate) fn row_frame(project_id: &str) -> Stateful<Div> {
+    div()
+        .id(SharedString::from(format!("dream-row-{project_id}")))
+        .mt(px(-1.))
+        .border_t_1()
+        .border_color(theme::border())
+        .px_4()
+        .py(px(14.))
+        .flex()
+        .flex_col()
+        .gap(px(10.))
+}
+
+/// Nome do projeto e os fatos dele, com o interruptor à direita.
+pub(crate) fn row_head(name: String, enabled: bool, facts: String, switch: Switch) -> Div {
+    div()
+        .flex()
+        .items_start()
+        .gap(px(14.))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap(px(3.))
+                .child(div().font_weight(FontWeight::MEDIUM).text_color(if enabled { theme::text() } else { theme::muted() }).truncate().child(name))
+                .child(div().text_xs().text_color(theme::muted()).whitespace_normal().child(facts)),
+        )
+        .child(switch)
+}
+
+/// Barra de baixo da linha: quem paga à esquerda, as ações à direita.
+pub(crate) fn row_bar(picker: Div, pair: Option<Button>, run: Button, changes: Option<Button>, undo: Option<Button>) -> Div {
+    div()
+        .flex()
+        .flex_wrap()
+        .items_center()
+        .gap_2()
+        .child(div().text_xs().text_color(theme::muted()).child(t("dream_mode")))
+        .child(picker)
+        .children(pair)
+        .child(div().flex_1())
+        .child(run)
+        .children(changes)
+        .children(undo)
+}
+
+/// Um arquivo da lista "O que mudou", com a etiqueta (nova, alterada, removida) na cor dela.
+pub(crate) fn file_button(id: impl Into<ElementId>, file: String, key: &str, picked: bool) -> Button {
+    Button::new(id).ghost().small().justify_start().selected(picked).child(
+        div()
+            .w_full()
+            .flex()
+            .items_center()
+            .gap_2()
+            .child(div().flex_1().min_w_0().truncate().font_family(theme::MONO).child(file))
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(match key {
+                        "dream_file_added" => theme::success(),
+                        "dream_file_removed" => theme::removed(),
+                        _ => theme::muted(),
+                    })
+                    .child(t(key)),
+            ),
+    )
 }
 
 impl Render for DreamPage {
@@ -857,30 +913,11 @@ impl Render for DreamPage {
             .child(setting_row(false, IconName::Wallet, t("dream_month_spent"), div(), true,
                 div().text_sm().text_color(theme::text()).child(spent).into_any_element()));
         let running = status.running.is_some() || self.busy.iter().any(|b| b.starts_with("run:"));
-        let actions = div()
-            .flex()
-            .items_center()
-            .gap_2()
-            .child(
-                Button::new("dream-refresh")
-                    .ghost()
-                    .small()
-                    .icon(IconName::RefreshCw)
-                    .accessibility_label(tr("reload"))
-                    .tooltip(tr("reload"))
-                    .disabled(self.loading)
-                    .on_click(cx.listener(|this, _, window, cx| this.load(window, cx))),
-            )
-            .child(
-                Button::new("dream-run-all")
-                    .primary()
-                    .small()
-                    .icon(IconName::Play)
-                    .label(t(if status.running.is_some() { "dream_running" } else { "dream_run_now" }))
-                    .disabled(running || status.projects.is_empty())
-                    .on_click(cx.listener(|this, _, window, cx| this.run_now(None, window, cx))),
-            )
-            .into_any_element();
+        let refresh = refresh_button(self.loading).on_click(cx.listener(|this, _, window, cx| this.load(window, cx)));
+        let run_all = run_button("dream-run-all", status.running.is_some())
+            .primary()
+            .disabled(running || status.projects.is_empty())
+            .on_click(cx.listener(|this, _, window, cx| this.run_now(None, window, cx)));
         let projects = if status.projects.is_empty() {
             div()
                 .py(px(40.))
@@ -940,7 +977,7 @@ impl Render for DreamPage {
                 div()
                     .flex()
                     .flex_col()
-                    .child(section_head(IconName::Folder, t("dream_projects"), None, Some(actions), px(0.)))
+                    .child(projects_head(refresh, run_all))
                     .child(projects),
             )
             .children(suggestions)
@@ -990,24 +1027,7 @@ impl Render for Changes {
                 .children(files.into_iter().map(|(file, key)| {
                     let on = picked.as_deref() == Some(file.as_str());
                     let chosen = file.clone();
-                    Button::new(SharedString::from(format!("dream-file-{pi}-{li}-{file}")))
-                        .ghost()
-                        .small()
-                        .justify_start()
-                        .selected(on)
-                        .child(
-                            div()
-                                .w_full()
-                                .flex()
-                                .items_center()
-                                .gap_2()
-                                .child(div().flex_1().min_w_0().truncate().font_family(theme::MONO).child(file))
-                                .child(div().text_xs().text_color(match key {
-                                    "dream_file_added" => theme::success(),
-                                    "dream_file_removed" => theme::removed(),
-                                    _ => theme::muted(),
-                                }).child(t(key))),
-                        )
+                    file_button(SharedString::from(format!("dream-file-{pi}-{li}-{file}")), file, key, on)
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.pick = if on { None } else { Some((pi, li, chosen.clone())) };
                             cx.notify();
