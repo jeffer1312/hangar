@@ -295,6 +295,9 @@ def test_refresh_members_of_a_live_child_does_not_scan_the_machine(tmp_path, mon
     try:
         def scan(*a, **k):
             raise AssertionError('varreu os processos da máquina')
+        # Fora do Windows a coleta de membros usa status() para pular zumbi; aqui só a conferência de vida conta.
+        monkeypatch.setattr(runtime_process, '_tree_members', lambda c: [c.pid])
+        monkeypatch.setattr(runtime_process, '_group_members', lambda c: [c.pid])
         monkeypatch.setattr(runtime_process.psutil.Process, 'status', scan)
         monkeypatch.setattr(runtime_process.psutil.Process, 'num_threads', scan)
         proc.runtime_containment.saved = False
