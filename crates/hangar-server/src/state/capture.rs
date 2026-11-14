@@ -363,6 +363,19 @@ mod psmux_direct_tests {
         assert!(seen.join().unwrap()[1].starts_with("\"capture-pane\""));
     }
 
+    /// R3-10: o espelho do terminal (`state::pane`) lê pelo servidor do psmux com o histórico que pediu,
+    /// sem abrir o `tmux.exe` (um por leitura custava ~350 ms).
+    #[tokio::test]
+    async fn the_mirror_reads_the_requested_history_through_the_psmux_server() {
+        let dir = tempfile::tempdir().unwrap();
+        let seen = server(dir.path(), "main", "quadro\n");
+        verify("missing-capture-mux-5", dir.path());
+        let text = MuxProcess::new("missing-capture-mux-5", TIMEOUT).capture_checked_lines("main", "=main:", 777).await.unwrap();
+        assert_eq!(text, "quadro\n");
+        let capture = &seen.join().unwrap()[1];
+        assert!(capture.starts_with("\"capture-pane\"") && capture.contains("\"-777\""), "{capture}");
+    }
+
     /// O servidor não recusa alvo inexistente: quadro vazio volta ao CLI, que separa recusa de pane vazio.
     #[tokio::test]
     async fn an_empty_direct_frame_falls_back_to_the_cli() {

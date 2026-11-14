@@ -198,6 +198,21 @@ async fn reload_r3_27_28_30_what_no_rust_agent_serves_is_answered_in_rust() {
     assert_eq!(rig.python.hits_to("/api/sessions/ghost/recarregar") + rig.python.hits_to("/api/sessions/sh1/recarregar"), 0);
 }
 
+// R3-29 (`api.py:286-292`, decisão 9): Claude no pane que o Rust não prova não cai mais no 503
+// `session_open_needs_rust_server` do Python; a recusa leva o código real de quem falhou, também ao convidado.
+#[tokio::test]
+async fn reload_r3_29_an_unproven_claude_pane_answers_with_the_real_code() {
+    let rig = Rig::new().await;
+    rig.pane("cl1", "bash --norc --noprofile -c '( exec -a claude sleep 100000 ); exec sleep 100000'");
+    rig.agent_runs("cl1", "claude").await;
+    for token in [OWNER, GUEST] {
+        let (status, reply) = call(&rig, reqwest::Method::POST, "cl1/recarregar", token).await;
+        assert_eq!((status, reply["detail"]["code"].as_str(), reply["detail"]["params"]["code"].as_str()),
+            (409, Some("erro_recarregar"), Some("claude_terminal_conversation_unproved")), "{token}: {reply}");
+    }
+    assert_eq!(rig.python.hits_to("/api/sessions/cl1/recarregar"), 0);
+}
+
 // R3-31, R3-32 (decisão 2): o convidado completo recarrega pelo caminho do dono, e o diário diz quem pediu;
 // quem não vê a sessão leva 403.
 #[tokio::test]
