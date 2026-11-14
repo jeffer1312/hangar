@@ -18,6 +18,18 @@ use crate::session_write_control::{open_headless, policy, send};
 /// `model_args.MODOS_PERMISSAO_CLAUDE`, na ordem do Python.
 const MODES: [&str; 6] = ["acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan"];
 
+const GUEST: &str = "convidado-ana";
+const BLIND: &str = "convidado-bia";
+
+/// O sidecar que o registro e o ator leem para o Claude sem terminal de `open_headless` (chave `k-<nome>`,
+/// conversa `sid-1`, cano 42): é onde a troca de modo fica gravada e conferida.
+pub(crate) fn headless_sidecar(home: &Path, name: &str) {
+    let dir = home.join(".hangar/claude-headless");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join(format!("{name}.json")), json!({"name": name, "provider": "claude", "headless": true, "key": format!("k-{name}"),
+        "session_id": "sid-1", "cwd": home, "permission_mode": "manual", "cano": {"pid": 42}}).to_string()).unwrap();
+}
+
 /// Lista no tmux falso com `s0` (Claude com terminal) e `p0` (Pi, pela escolha da criação). O registro
 /// não tem vigia: não adota ninguém. `headless`: um Claude sem terminal `h` aberto no Rust.
 async fn serve(root: &Path, headless: bool) -> (Arc<Fake>, std::net::SocketAddr) {
@@ -36,9 +48,20 @@ async fn serve(root: &Path, headless: bool) -> (Arc<Fake>, std::net::SocketAddr)
     let env = hangar_server::accounts::environment::AccountEnvironment::from_map([("HOME".to_owned(), home.to_string_lossy().into_owned())].into());
     let registry = Arc::new(RuntimeRegistry::new(policy(calls).await, "secret-test".into(), "instance-test".into())
         .with_processes(Arc::new(crate::runtime_open::RecipeProcesses("sid-1"))).with_codex_environment(env));
-    if headless { open_headless(&registry, root, "h").await; }
+    if headless {
+        headless_sidecar(&home, "h");
+        open_headless(&registry, root, "h").await;
+    }
     let (python, upstream) = fake::spawn_fake().await;
     let mut state = AppState::new(fake::config(upstream, "127.0.0.1"));
+    // Convidados com conta: a Ana vê as sessões do dono, a Bia não.
+    let guests = hangar_server::login_guests::Service::new(hangar_server::login_guests::Settings { guests: root.join("guests.json"),
+        vault: root.join("vault.json"), runtime_config: root.join("runtime-config.json"), sync_enabled: false, bootstrap: String::new(),
+        secret: vec![1], secure: false, rate_max: 10.into(), rate_window: 300.into() });
+    let text = root.to_string_lossy().into_owned();
+    guests.store.create("Ana", &text, true, true, "ana".into(), GUEST.into()).unwrap();
+    guests.store.create("Bia", &text, false, true, "bia".into(), BLIND.into()).unwrap();
+    state.login_guests = Arc::new(guests);
     state.list = Arc::new(ListBridge::new(ListEnv { mux: Mux::with_program(&script, Duration::from_secs(5)),
         capture_program: script.into_os_string(), procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs },
         FactsClient::new(upstream, SECRET.into())));
@@ -158,4 +181,31 @@ async fn permissions_r4_08_headless_claude_reads_and_sets_through_the_actor() {
     assert_eq!((status, reply["mode"].clone(), reply["current"].clone()), (200, json!("plan"), json!("plan")), "{reply}");
     assert!(reply.as_object().unwrap().contains_key("previous_non_plan"), "{reply}");
     assert_eq!(python_hits(&python, "h"), 0);
+}
+
+/// R4-19, decisões 1 e 2 (D2): o convidado com conta chega a modos e modelo da sessão que vê pela rota do
+/// dono e recebe a resposta do Rust (antes, o 401 do Python, que o deslogava); a que não vê a sessão
+/// leva o 403 do porteiro. Nada vai ao Python.
+#[tokio::test(flavor = "multi_thread")]
+async fn r4_19_login_guest_reaches_mode_and_model_in_rust() {
+    let dir = tempfile::tempdir().unwrap();
+    let (python, server) = serve(dir.path(), true).await;
+    let send = |method: reqwest::Method, route: &'static str, token: &'static str| {
+        let request = fake::client().request(method, format!("http://{server}/api/sessions/h/{route}")).bearer_auth(token)
+            .header("content-type", "application/json");
+        async move {
+            let body = match route { "permission-mode" => r#"{"mode":"plan"}"#, "model-effort" => r#"{"model":"sonnet"}"#, _ => "" };
+            let response = request.body(body).send().await.unwrap();
+            let status = response.status().as_u16();
+            (status, serde_json::from_str::<Value>(&response.text().await.unwrap()).unwrap_or(Value::Null))
+        }
+    };
+    for (method, route) in [(reqwest::Method::GET, "permission-modes"), (reqwest::Method::POST, "permission-mode"), (reqwest::Method::POST, "model-effort")] {
+        let (status, body) = send(method.clone(), route, BLIND).await;
+        assert_eq!((status, body["detail"]["code"].as_str()), (403, Some("erro_fora_do_convidado")), "{route}: {body}");
+        let (status, body) = send(method, route, GUEST).await;
+        assert_ne!(body["detail"]["code"].as_str(), Some("erro_fora_do_convidado"), "{route}: a sessão é visível para ela");
+        assert_eq!(status, 200, "{route}: a rota do dono atende o convidado: {body}");
+        assert_eq!(python.hits_to(&format!("/api/sessions/h/{route}")), 0, "{route}");
+    }
 }

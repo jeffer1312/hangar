@@ -571,6 +571,14 @@ async fn share_guest_writes_its_session_and_nothing_else() {
     assert_eq!(srv.python.hits_to("/api/sessions/s/interrupt"), 0);
 }
 
+/// HOME da prova com o sidecar de `s` (chave `k-s`, conversa `sid-1`, cano 42), onde o ator grava e
+/// confere a troca de modo: nunca o HOME da máquina.
+fn proof_home(dir: &Path) -> hangar_server::accounts::environment::AccountEnvironment {
+    let home = dir.join("home");
+    crate::session_write_permissions::headless_sidecar(&home, "s");
+    hangar_server::accounts::environment::AccountEnvironment::from_map([("HOME".to_owned(), home.to_string_lossy().into_owned())].into())
+}
+
 /// R4-19, decisões 1 e 2 (D2): o convidado completo lê e troca o modo de permissão e o modelo da sessão
 /// dele pela rota do dono (antes, o 404 do `pass` na 8766). O par de leitura, outra sessão e as rotas de
 /// grupo (R4-17) seguem recusados no porteiro. Nada vai ao Python.
@@ -578,7 +586,7 @@ async fn share_guest_writes_its_session_and_nothing_else() {
 async fn r4_19_share_guest_changes_mode_and_model_through_the_owner_route() {
     let dir = tempfile::tempdir().unwrap();
     let registry = Arc::new(RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(), "secret-test".into(), "instance-test".into())
-        .with_processes(Arc::new(crate::runtime_open::RecipeProcesses("sid-1"))));
+        .with_processes(Arc::new(crate::runtime_open::RecipeProcesses("sid-1"))).with_codex_environment(proof_home(dir.path())));
     let sink = Arc::new(Mutex::new(Vec::new()));
     let d = dir.path();
     registry.open(RuntimeTarget { key: "k-s".into(), generation: 1, name: "s".into(), provider: "claude".into(),
@@ -627,7 +635,7 @@ async fn r4_11_the_changed_mode_reaches_the_live_state_without_a_refresh() {
     let dir = tempfile::tempdir().unwrap();
     let d = dir.path();
     let registry = Arc::new(RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(), "secret-test".into(), "instance-test".into())
-        .with_processes(Arc::new(crate::runtime_open::RecipeProcesses("sid-1"))));
+        .with_processes(Arc::new(crate::runtime_open::RecipeProcesses("sid-1"))).with_codex_environment(proof_home(d)));
     let srv = plain_srv(d, |st| {
         st.write_gate_wait = Duration::from_secs(5);
         registry.bind_lifecycle();
