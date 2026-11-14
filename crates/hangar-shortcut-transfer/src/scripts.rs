@@ -327,7 +327,8 @@ impl Collector<'_> {
             return Ok(());
         }
         let executable = name(first);
-        if executable == "source" || executable == "." {
+        // `name(".")` é vazio: o `.` vem da palavra inteira.
+        if executable == "source" || first == "." {
             if let Some(file) = words.get(1) {
                 self.include(file)?;
             }

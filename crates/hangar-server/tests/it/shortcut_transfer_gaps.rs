@@ -447,20 +447,20 @@ async fn export_joins_continued_lines_and_runs_nothing() {
 }
 
 /// ATA-46: atribuição e palavra de controle puladas; `exec`/`command`/`env` com flags e atribuições
-/// pulados; `function`/`fi` ignorados; `source` inclui o arquivo; interpretador inclui o 1º argumento,
-/// e com flag avisa (`--version` não).
+/// pulados; `function`/`fi` ignorados; `source` e `.` incluem o arquivo (o `.` corrige o Python, que o
+/// pulava: decisão do usuário); interpretador inclui o 1º argumento, e com flag avisa (`--version` não).
 #[cfg(target_os = "linux")]
 #[tokio::test(flavor = "multi_thread")]
 async fn export_reads_each_segment_like_the_python() {
     let scene = Scene::new();
-    let main = "#!/bin/sh\nFOO=1 dep1\nexec dep2\ncommand dep3\nenv -i X=1 dep4\nfunction f\nend\nsh dep5 arg\npython3 -u x.py\nbash --version\nsource dep6\nif dep8; then\nfi\n";
+    let main = "#!/bin/sh\nFOO=1 dep1\nexec dep2\ncommand dep3\nenv -i X=1 dep4\nfunction f\nend\nsh dep5 arg\npython3 -u x.py\nbash --version\nsource dep6\n. dep7\nif dep8; then\nfi\n";
     scene.script(".local/bin/main", main.as_bytes(), 0o700);
-    for dep in ["dep1", "dep2", "dep3", "dep4", "dep5", "dep6", "dep8"] {
+    for dep in ["dep1", "dep2", "dep3", "dep4", "dep5", "dep6", "dep7", "dep8"] {
         scene.script(&format!(".local/bin/{dep}"), b"echo", 0o700);
     }
     scene.save(shell("main"));
     let mut scripts = vec![script_entry(".local/bin/main", main, true)];
-    scripts.extend(["dep1", "dep2", "dep3", "dep4", "dep5", "dep6", "dep8"].map(|dep| script_entry(&format!(".local/bin/{dep}"), "echo", true)));
+    scripts.extend(["dep1", "dep2", "dep3", "dep4", "dep5", "dep6", "dep7", "dep8"].map(|dep| script_entry(&format!(".local/bin/{dep}"), "echo", true)));
     assert_eq!(scene.export("").await, (200, json!({"version": 2, "shortcuts": shell("main"), "scripts": scripts,
         "warnings": ["Comando de interpretador com opções precisa de conferência manual das dependências."], "removed": 0})));
 }
