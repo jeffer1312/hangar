@@ -470,6 +470,20 @@ async fn surrogate_task_is_422() {
     assert!(!srv.pair.join("s0.json").exists());
 }
 
+/// R1-18 (`test_orq_readonly.py`, `forwarded.rs`): o orquestrador com execução viva não fecha por
+/// `DELETE`: 409 `erro_sessao_orq` com o texto do guarda, nada morre e o Python não recebe nada.
+#[tokio::test(flavor = "multi_thread")]
+async fn delete_r1_18_live_orchestrator_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let srv = server_unowned(dir.path(), 1).await;
+    orchestrators(&srv, &json!(["g1-orq"]));
+    let (status, body) = call(srv.addr, "DELETE", "g1-orq", None, OWNER).await;
+    assert_eq!((status, body), (409, json!({"detail": {"code": "erro_sessao_orq", "params": {},
+        "msg": "o orquestrador não recebe mensagens; fale com o árbitro"}})));
+    assert_eq!(list_support::calls(dir.path(), "kill-session"), 0);
+    assert_eq!(srv.python.hits_to("/api/sessions/g1-orq"), 0);
+}
+
 /// BRG-25, R1.3-7/8/10, R1-09/R1-10/R1-11: sessão sem entrada aqui (pane Claude que o Rust não adotou)
 /// fecha no Rust pelo nome, sai do grupo daqui e guarda o nome fechado pela conversa da lista, sem passar
 /// pelo Python; a pergunta aberta dela não fica para uma sessão futura com a mesma conversa.
