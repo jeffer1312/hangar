@@ -250,7 +250,7 @@ def test_claude_question_reaches_the_rust_whole_and_421_leaves_it_to_python(monk
         server.shutdown()
 
 
-@pytest.mark.parametrize("route", ["input", "answer", "select", "select/submit", "model-effort"])
+@pytest.mark.parametrize("route", ["input", "answer", "select", "select/submit"])
 def test_claude_question_from_guest_or_connect_goes_to_the_rust(monkeypatch, route):
     calls = []
     _provider(monkeypatch, ct="claude")

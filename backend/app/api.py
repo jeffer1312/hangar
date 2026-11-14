@@ -13,7 +13,7 @@ from datetime import datetime
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Optional
 from fastapi import FastAPI, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -23,13 +23,11 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from app import (atomico, diag,
                  loop_monitor, permission_mode, plugin_bridge, procinfo, quem_chama, tmux,
                  uds_messaging)
-from app import groups_bridge, internal_api, list_bridge, share_bridge
+from app import internal_api, list_bridge, share_bridge
 from app.auth import require_auth
 from app.send_executor import send_thread as _send_thread
-from app.model_picker import PickerError
 from app.mensagens import erro
 from app import claude_customizations
-from app import model_args
 from app import registry as registry_mod
 from app.registry import SessionRegistry
 from app.names import sanitize_session_name
@@ -179,7 +177,7 @@ async def _codex_rust_port(name: str, request: Request):
         # O painel da fila (`queue/...`) é do Rust também: o Python só repassa.
         rota = route.split("?")[0]
         # A pergunta lateral vai sempre: a rota do Rust decide provedor e sessão.
-        if reply is None and (rota == "btw" or (rota in {"input", "answer", "select", "select/submit", "permission-mode", "permission-modes", "model-effort", "recarregar"} or rota.startswith("queue/"))
+        if reply is None and (rota == "btw" or (rota in {"input", "answer", "select", "select/submit", "recarregar"} or rota.startswith("queue/"))
                 and getattr(await _cached_info(name), "provider", "claude") == "claude"):
             # O fork sem terminal tem 180 s e a reabertura espera o Claude subir por até 5 min; o prazo padrão da
             # ponte cortaria a resposta. Quem pediu a recarga vai ao diário do Rust.
@@ -266,18 +264,6 @@ async def _lista_indisponivel(request: Request, exc: list_bridge.ListBridgeError
     diag.registrar("lista.indisponivel", "erro", codigo=exc.code, detalhe=f"{request.method} {request.url.path}")
     return JSONResponse(status_code=503, content={"detail": erro(
         "erro_lista_indisponivel", "a lista de sessões está indisponível", detalhe=exc.code)})
-
-
-def _group_unavailable(code: str) -> HTTPException:
-    return HTTPException(503, detail=erro("erro_grupo_indisponivel",
-                                          "os grupos estão indisponíveis agora", detalhe=code))
-
-
-@app.exception_handler(groups_bridge.GroupsBridgeError)
-async def _grupos_indisponiveis(request: Request, exc: groups_bridge.GroupsBridgeError):
-    """Ponte dos grupos fora vira 503 com código, nunca 500 sem explicação."""
-    diag.registrar("grupos.indisponivel", "erro", codigo=exc.code, detalhe=f"{request.method} {request.url.path}")
-    return JSONResponse(status_code=503, content={"detail": _group_unavailable(exc.code).detail})
 
 
 async def _repasse_ao_rust(request: Request, destino: str, **repasse):
@@ -1677,148 +1663,6 @@ async def broadcast(body: BroadcastBody):
     return {"results": results}
 
 
-class PairBody(_StrictBody):
-    # peer (1) OU peers (N) — peers vence; peer fica por compat (hangar-send --pair manda um só).
-    peer: str = ""
-    peers: list[str] = []
-    task: str = ""
-    replace_task: bool = False
-    # Sem efeito: veterano nunca é avisado. Fica porque o corpo é estrito e o vigia ainda o manda.
-    notify_members: bool = True
-    # Grupo de orquestração: o kick-off de cada papel já diz canal, contrato e branch, então o
-    # pareamento não entrega nada a ninguém (nem protocolo, nem entrada) e o hook reinjeta a versão curta.
-    orq: bool = False
-
-
-def _bridge_reply(out: dict) -> JSONResponse:
-    """`{status, body}` de uma rota do Rust, devolvido como veio."""
-    status = out.get("status")
-    if type(status) is not int:
-        raise _group_unavailable("groups_bridge_invalid")
-    return JSONResponse(out.get("body"), status_code=status)
-
-
-def _groups_need_rust() -> dict:
-    return erro("groups_need_rust_server", "os grupos precisam do servidor Rust, que não está rodando")
-
-
-def _require_rust_groups() -> None:
-    if not groups_bridge.rust_owns_groups():
-        raise HTTPException(503, detail=_groups_need_rust())
-
-
-async def _group_route(method: str, name: str, route: str, body: BaseModel | None = None):
-    """Grupos são do Rust; aqui chega só o que entrou pela 8768 e segue num sentido. Sem o Rust não
-    há reserva Python."""
-    _require_rust_groups()
-    data = body.model_dump() if body is not None else None
-    try:
-        out = await asyncio.to_thread(groups_bridge.call, "group.route", method=method, name=name, route=route,
-                                      body=data, facts={})
-    except groups_bridge.GroupsBridgeError as e:
-        raise _group_unavailable(e.code) from None
-    return _bridge_reply(out)
-
-
-@app.post("/api/sessions/{name}/pair", dependencies=[Depends(require_auth)])
-async def pair_session(name: str, body: PairBody):
-    """Junta `name` e peer(s) num GRUPO de trabalho (une os grupos existentes de todos) e injeta
-    em CADA membro o prompt do grupo atualizado — a partir daí trocam recados via hangar-send por
-    iniciativa própria, dentro do escopo da tarefa. Badge `pair_peers` aparece na lista."""
-    return await _group_route("POST", name, "pair", body)
-
-
-class PairRemoteBody(_StrictBody):
-    initiator: str        # 'srv::nome' — quem iniciou o pareamento, na máquina remota
-    task: str = ""
-
-
-@app.post("/api/sessions/{name}/pair-remote", dependencies=[Depends(require_auth)])
-async def pair_remote(name: str, body: PairRemoteBody):
-    """Lado RECEPTOR do pareamento cross-server: registra `name` (sessão LOCAL) pareada ao iniciador
-    remoto `body.initiator` (srv::nome) e injeta o protocolo. NÃO chama de volta (o iniciador já
-    registrou o próprio lado — chamar de volta recursaria). Chamado só pelo backend do outro server
-    via peers.call, autenticado pelo token do peers.json."""
-    return await _group_route("POST", name, "pair-remote", body)
-
-
-class UnpairRemoteBody(_StrictBody):
-    peer: str             # 'srv::nome' que saiu do pareamento, na máquina remota
-
-
-@app.post("/api/sessions/{name}/unpair-remote", dependencies=[Depends(require_auth)])
-async def unpair_remote(name: str, body: UnpairRemoteBody):
-    """`name` (local) tinha um par remoto que saiu — remove o vínculo local e avisa. Idempotente
-    (sair de quem não está pareado é no-op). Chamado pelo backend peer no unpair do outro lado."""
-    return await _group_route("POST", name, "unpair-remote", body)
-
-
-class GroupMsgBody(_StrictBody):
-    text: str
-    # O hangar-send diz se o REMETENTE tem socket ($CLAUDE_CODE_MESSAGING_SOCKET); o backend
-    # decide o resto: peer local com inbox = caminho nativo alcança os dois lados = não digita
-    # nele, devolve em `pulados` pro modelo mandar por SendMessage. Mesmo critério do 1:1.
-    remetente_nativo: bool = False
-    forcar_tmux: bool = False
-
-
-@app.post("/api/sessions/{name}/group-message", dependencies=[Depends(require_auth)])
-async def group_message(name: str, body: GroupMsgBody):
-    """Aviso pro GRUPO todo (hangar-send --group): entrega o texto a CADA companheiro de `name` numa
-    tacada, como `[grupo: <name>]`. Unidirecional por contrato (o prompt instrui a NUNCA responder
-    um [grupo:] com --group) — é o que impede o loop de N sessões se avisando em cascata.
-    Slash-command fora (mesmo racional do /broadcast)."""
-    return await _group_route("POST", name, "group-message", body)
-
-
-@app.get("/api/sessions/{name}/pair/contract", dependencies=[Depends(require_auth)])
-async def pair_contract(name: str):
-    """Contrato compartilhado do GRUPO (markdown que os membros editam via fs; keyed pelo gid —
-    estável quando membro entra/sai). 404 sem grupo; content vazio se ainda não existe."""
-    return await _group_route("GET", name, "contract")
-
-
-class PairContractBody(_StrictBody):
-    content: str
-    mtime: str | None = None
-
-
-@app.put("/api/sessions/{name}/pair/contract", dependencies=[Depends(require_auth)])
-async def pair_contract_put(name: str, body: PairContractBody):
-    """Grava o contrato com o `mtime` lido; o Rust decide, aqui só o repasse da 8768."""
-    return await _group_route("PUT", name, "contract", body)
-
-
-@app.delete("/api/sessions/{name}/pair", dependencies=[Depends(require_auth)])
-async def unpair_session(name: str):
-    """`name` SAI do grupo (os demais membros continuam entre si; grupo restante de 1 dissolve).
-    Avisa quem saiu e quem ficou. Idempotente. Aviso que falhar NÃO refaz o vínculo (fora do grupo
-    é o estado desejado) — só reporta no result."""
-    return await _group_route("DELETE", name, "pair")
-
-
-def _recusa_se_painel_aberto(name: str) -> None:
-    # Com o Rust dono, pergunta pela ponte (HTTP): rota `async` chama por `asyncio.to_thread`.
-    # Com o painel anexado, a janela do tmux esta no tamanho DELE (~120x20). Quem conta linha no
-    # pane — o seletor de opcao, o stepper do AskUserQuestion (terminal_input.answer_questions /
-    # answer_question_pi) e o model_picker (lista e troca de modelo, que dirige o /model contando
-    # linhas do pane) — leria um pane truncado e escolheria errado.
-    #
-    # O termsock NAO importa `pty` no topo justamente pra este import funcionar no Windows.
-    from app import termsock
-    try:
-        aberto = termsock.painel_aberto(name)
-    except list_bridge.ListBridgeError as e:
-        # Sem resposta do Rust não dá pra dizer que o painel está fechado; a ponte já foi ao diário.
-        raise HTTPException(status_code=503, detail=erro(
-            "erro_terminal_indisponivel", "nao consegui conferir o painel de terminal", detalhe=e.code))
-    if aberto:
-        raise HTTPException(status_code=409,
-                            detail=erro("erro_terminal_aberto",
-                                        "Terminal aberto nesta sessao. Feche o painel pra responder "
-                                        "por aqui."))
-
-
 class PluginPressBody(_StrictBody):
     site: str = Field(min_length=1, max_length=64)
     # O mod do botão: a `key` só é única dentro de um mod. O app de antes desta versão não o manda.
@@ -1896,232 +1740,6 @@ def _erro_conta_codex(exc: codex_accounts.AccountError) -> HTTPException:
     }
     return HTTPException(exc.status, detail=erro(
         exc.code, mensagens.get(exc.code, "operação de arquivo Codex recusada"), **exc.params))
-
-
-class ModelEffortBody(_StrictBody):
-    # scope: 'session' (aperta `s`) ou 'default' (aperta Enter).
-    model: str | None = None
-    effort: str | None = None
-    scope: Literal["session", "default"] = "session"
-
-
-@app.post("/api/sessions/{name}/model-effort", dependencies=[Depends(require_auth), Depends(_codex_rust_port)])
-async def model_effort(name: str, body: ModelEffortBody):
-    info = await _cached_info(name)
-    if info is not None and getattr(info, "provider", "claude") == "claude":
-        raise HTTPException(503, detail=erro("model_effort_needs_rust_server", "trocar modelo e esforço precisa do servidor Rust"))
-    await asyncio.to_thread(_recusa_se_painel_aberto, name)
-    try:
-        return await asyncio.to_thread(terminal.set_model_effort, name, body.model, body.effort, body.scope)
-    except PickerError as e:
-        raise HTTPException(e.status, e.detail)
-    except ValueError as e:
-        raise HTTPException(422, str(e))
-
-
-# ── Modo de permissão em sessão viva (Task 5) ─────────────────────────────────────────
-# Leitura pelo rodapé do pane (⏸/⏵⏵) e troca via BTab (Shift+Tab). Medido em
-# 2026-08-20: stdin da statusline não traz o modo, /permissions não aceita arg,
-# BTab cicla 4 (plan/auto/manual/acceptEdits) ou 5 com bypassPermissions no arranque,
-# dontAsk só no arranque e sai do ciclo. Ver docs/superpowers/specs/2026-08-19-medicao-permissao-viva.md
-import app.permission_mode as perm_mode
-
-class PermissionModeBody(_StrictBody):
-    mode: str | None = None
-    permission_mode: str | None = None
-
-# Cache da lista viva por sessão (enquanto ela viver). Chave = "nome::jsonl" ou
-# "nome::sem-jsonl" quando ainda sem transcript; valor = (current, modos).
-_perm_modes_cache: dict[str, tuple[str, list[str]]] = {}
-
-def _cache_key_perm(name: str, info) -> str:
-    j = getattr(info, "jsonl", None) if info else None
-    return f"{name}::{j or 'sem-jsonl'}"
-
-def _tracking_key_perm(name: str, info) -> str:
-    j = getattr(info, "jsonl", None) if info else None
-    return Path(j).stem if j else name
-
-def _guard_perm(name: str, info) -> None:
-    """409 quando sessão não é claude, painel aberto, ou há menu aberto no pane."""
-    if info is None:
-        raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessao nao encontrada"))
-    if getattr(info, "provider", "claude") not in (None, "claude"):
-        raise HTTPException(409, detail=erro("erro_permissao_so_claude", "modo de permissao so vale para claude"))
-    _recusa_se_painel_aberto(name)
-    # Sem `_require_drivable` aqui, de propósito: ele recusa sessão trabalhando porque `/model` é
-    # TEXTO e cairia no campo. BTab é tecla e o Claude a aplica no meio do turno (medido). Só um
-    # menu aberto engoliria a tecla.
-    from app import tmux
-    from app.state import is_overlay
-    if not tmux.has_session(name):
-        raise HTTPException(409, "sessao nao esta viva")
-    try:
-        pane = tmux.capture_pane(name)
-    except Exception:
-        pane = ""
-    if pane and is_overlay(pane):
-        raise HTTPException(409, "ha um menu aberto no terminal da sessao")
-
-@app.get("/api/sessions/{name}/permission-modes", dependencies=[Depends(require_auth), Depends(_codex_rust_port)])
-async def permission_modes(name: str, sondar: bool = False):
-    """Lista dos modos de permissão.
-
-    Sem sondar (default): só lê o modo atual via capture-pane (zero teclas) e devolve
-    o cache de `modes` se já existir, ou [] — não sonda. Com `?sondar=1`: dá a volta
-    completa de BTab, anota os modos, volta ao original e cacheia. `sondavel` diz se
-    a sessão pode ser sondada (false quando current == dontAsk, que não tem volta).
-    """
-    info = await _cached_info(name)
-    if not info:
-        raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessao nao encontrada"))
-    if _headless(name):
-        # Sem rodapé pra ler: o modo é o que o processo confirmou (ou o do sidecar, parada), e a
-        # lista é a fechada da CLI — `set_permission_mode` aceita qualquer um, sem sondar.
-        hl = get_adapter(CLAUDE_HEADLESS)
-        from app.runtime_adapter import runtime_data
-        if (view := runtime_data(name)) is not None:
-            return {"current":view.get("permission_mode"), "modes":list(model_args.MODOS_PERMISSAO_CLAUDE),
-                "sondavel":False, "previous_non_plan":view.get("previous_non_plan")}
-        vivo = hl._sessions.get(name)
-        meta = headless_sessions.load(name) or {}
-        atual = (vivo.permission_mode if vivo and vivo.vivo else None) or meta.get("permission_mode")
-        anterior = (vivo.modo_nao_plan if vivo and vivo.vivo else None) or meta.get("previous_non_plan")
-        return {"current": atual, "modes": list(model_args.MODOS_PERMISSAO_CLAUDE), "sondavel": False,
-                "previous_non_plan": anterior}
-    await asyncio.to_thread(_guard_perm, name, info)
-    key = _cache_key_perm(name, info)
-    # leitura do atual sem tecla (bloqueador 1)
-    try:
-        cur_now = await asyncio.to_thread(perm_mode.ler_modo, name)
-    except Exception:
-        # Pane em transição e bug de parse caem no mesmo 409; sem o log os dois ficam
-        # indistinguíveis pra quem for depurar.
-        _log.debug("permission-modes: leitura do modo falhou em %s", name, exc_info=True)
-        cur_now = None
-    if cur_now is None:
-        raise HTTPException(409, detail=erro("erro_permissao_leitura", "não consegui ler o modo atual no rodapé"))
-    tracking_key = _tracking_key_perm(name, info)
-    cur_now, anterior_nao_plan = perm_mode.observar_ou_confirmado(
-        tracking_key, cur_now, sessao=name)
-    sondavel = cur_now != "dontAsk"
-    if not sondar:
-        # sem sondar: devolver cache se houver, ou []
-        hit = _perm_modes_cache.get(key)
-        if hit is not None:
-            _, modos_cached = hit
-            # revalida current mas mantém modos do cache
-            return {"current": cur_now, "modes": modos_cached, "sondavel": sondavel,
-                    "previous_non_plan": anterior_nao_plan}
-        return {"current": cur_now, "modes": [], "sondavel": sondavel,
-                "previous_non_plan": anterior_nao_plan}
-    # com sondar=1: comportamento de antes (listar_modos + cache)
-    # se não sondável (dontAsk), não chamar listar_modos (bloqueador 2)
-    if not sondavel:
-        return {"current": cur_now, "modes": [], "sondavel": False,
-                "previous_non_plan": anterior_nao_plan}
-    hit = _perm_modes_cache.get(key)
-    if hit is not None:
-        _, modos_cached = hit
-        return {"current": cur_now, "modes": modos_cached, "sondavel": sondavel,
-                "previous_non_plan": anterior_nao_plan}
-    try:
-        cur, modos = await asyncio.to_thread(
-            perm_mode.executar_controlado, name, perm_mode.listar_modos, name)
-    except RuntimeError as e:
-        raise HTTPException(409, detail=erro("erro_permissao_leitura", str(e)))
-    # Chave é nome::jsonl, então sessão nova nunca reusa entrada: sem poda o dict cresce pela
-    # vida do processo. ponytail: teto burro, o cache é só pra evitar re-sondar a mesma sessão.
-    if len(_perm_modes_cache) > 200:
-        _perm_modes_cache.clear()
-    _perm_modes_cache[key] = (cur, modos)
-    cur, anterior_nao_plan = perm_mode.observar_ou_confirmado(
-        tracking_key, cur, sessao=name)
-    # A sonda dá voltas de BTab de verdade. Se não conseguiu voltar, a sessão FICOU noutro modo de
-    # permissão por causa de uma chamada que o usuário leu como leitura — isso não pode sair calado.
-    restaurado = cur == cur_now
-    if not restaurado:
-        _log.warning("permission-modes: sonda deixou %s em %s (era %s)", name, cur, cur_now)
-    return {"current": cur, "modes": modos, "sondavel": cur != "dontAsk",
-            "restaurado": restaurado, "previous_non_plan": anterior_nao_plan}
-
-@app.post("/api/sessions/{name}/permission-mode", dependencies=[Depends(require_auth), Depends(_codex_rust_port)])
-async def permission_mode_set(name: str, body: PermissionModeBody):
-    """Troca o modo de permissão via BTab até casar o alvo (teto 6 teclas).
-
-    Devolve SEMPRE o modo que FICOU, nunca o pedido. Teto estourado ou alvo fora do
-    ciclo → 409 com o modo que ficou. 409 também quando sessão não é claude,
-    painel aberto, ou estado recusa digitação.
-    """
-    alvo = body.mode if body.mode is not None else body.permission_mode
-    if not alvo:
-        raise HTTPException(422, detail=erro("erro_permissao_invalida", "informe o modo desejado"))
-    # valida contra lista fechada antes de qualquer efeito
-    if alvo not in model_args.MODOS_PERMISSAO_CLAUDE:
-        raise HTTPException(409, detail=erro("erro_permissao_invalida", f"permission_mode: use um de {', '.join(model_args.MODOS_PERMISSAO_CLAUDE)}"))
-    info = await _cached_info(name)
-    if not info:
-        raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessao nao encontrada"))
-    if _headless(name):
-        # `control_request set_permission_mode` no stdin: o processo responde com o modo que ficou.
-        hl = get_adapter(CLAUDE_HEADLESS)
-        try:
-            ficou = await hl.set_permission_mode(name, alvo)
-        except Exception as e:
-            if alvo != "bypassPermissions":
-                raise HTTPException(409, detail=erro("erro_permissao_leitura", f"não consegui trocar o modo: {e}"))
-            _log.warning("permissão: %s recusou bypass sem reiniciar (%s); reabrindo em bypass", name, e)
-            ficou = None
-        if alvo == "bypassPermissions" and ficou != alvo:
-            # Entrar em bypass reabrindo a sessão é do Rust.
-            raise registry_mod.SessionOpenNeedsRust()
-        vivo = hl._sessions.get(name)
-        await asyncio.to_thread(_invalidate_lists)
-        from app.runtime_adapter import runtime_data
-        view = runtime_data(name)
-        return {"mode": ficou, "current": ficou,
-                "previous_non_plan":view.get("previous_non_plan") if view is not None else vivo.modo_nao_plan if vivo else None}
-    await asyncio.to_thread(_guard_perm, name, info)
-    if alvo == "bypassPermissions" and not await asyncio.to_thread(_bypass_no_ciclo, name):
-        raise registry_mod.SessionOpenNeedsRust()
-    tracking_key = _tracking_key_perm(name, info)
-    try:
-        inicial = await asyncio.to_thread(perm_mode.ler_modo, name)
-    except Exception:
-        inicial = None
-    if inicial is not None:
-        perm_mode.observar_ou_confirmado(tracking_key, inicial, sessao=name)
-    try:
-        ficou = await asyncio.to_thread(
-            perm_mode.executar_controlado, name, perm_mode.trocar_modo, name, alvo)
-    except RuntimeError as e:
-        raise HTTPException(409, detail=erro("erro_permissao_leitura", str(e)))
-    except ValueError as e:
-        raise HTTPException(409, detail=erro("erro_permissao_invalida", str(e)))
-    finally:
-        await asyncio.to_thread(_invalidate_lists)
-    # cache da lista pode ter ficado com current velho; atualiza o current mas mantém modos
-    key = _cache_key_perm(name, info)
-    hit = _perm_modes_cache.get(key)
-    if hit is not None:
-        _, modos_cached = hit
-        _perm_modes_cache[key] = (ficou, modos_cached)
-    if ficou != alvo:
-        raise HTTPException(status_code=409, detail=erro("erro_permissao_teto", f"não alcançou {alvo!r} em {perm_mode.TETO_TECLAS} teclas — ficou em {ficou!r}", alvo=alvo, ficou=ficou, mode=ficou))
-    return {"mode": ficou, "current": ficou,
-            "previous_non_plan": perm_mode.observar_modo(tracking_key, ficou)}
-
-
-_FLAGS_BYPASS = ("--dangerously-skip-permissions", "--allow-dangerously-skip-permissions",
-                 "--permission-mode bypassPermissions")
-
-
-def _bypass_no_ciclo(name: str) -> bool:
-    """O Claude só põe o bypass no Shift+Tab de quem nasceu com ele. Sem a flag no comando do
-    processo, reabrir custa um restart; BTab às cegas giraria o modo sem chegar lá."""
-    agent = registry_mod._pid_do_agente((registry._pane_of(name) or {}).get("pid"))
-    cmd = " ".join(procinfo._cmdline(agent).split()).replace("--permission-mode=", "--permission-mode ") if agent else ""
-    return any(f in cmd for f in _FLAGS_BYPASS)
 
 
 @app.get("/api/sessions/{name}/navegador", dependencies=[Depends(require_auth)])

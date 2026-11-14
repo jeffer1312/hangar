@@ -153,14 +153,6 @@ def endpoint() -> tuple[str, str] | None:
     return _config
 
 
-def term_active(name: str) -> bool:
-    result = _request("term.active", {"name": name}, timeout=5)
-    if not isinstance(result, dict) or type(result.get("active")) is not bool:
-        _failed("term.active", "list_bridge_invalid")
-        raise ListBridgeError("list_bridge_invalid", "term.active")
-    return result["active"]
-
-
 def push_state_facts(name: str, facts: dict) -> None:
     """Empurrão de `state_facts`: prazo curto e sem diário aqui, porque quem envia registra uma vez
     por queda, não uma por envio."""

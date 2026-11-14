@@ -1,6 +1,5 @@
 """O que dos grupos fica no Python depois da migração: ponte num sentido, leitores
 da lista e o fechamento que o Rust já fez. Fecha linhas da `conferencia.md` da Task 6."""
-import asyncio
 import json
 import socket
 import threading
@@ -8,7 +7,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
-from app import api, diag, groups_bridge, pair
+from app import diag, groups_bridge, pair
 
 
 @pytest.fixture(autouse=True)
@@ -70,16 +69,6 @@ def test_bad_bridge_answers_are_unavailable_and_journaled(journal, case):
         if srv:
             srv.shutdown()
     assert [(ev, nivel, c["operacao_rust"]) for ev, nivel, c in journal] == [("grupos.ponte", "aviso", "group.leave")]
-
-
-def test_uncaught_bridge_error_is_503_with_the_journal_line(journal):
-    """BRG-08: erro da ponte que escapa de uma rota vira 503 `erro_grupo_indisponivel` e `grupos.indisponivel`."""
-    from starlette.requests import Request
-    request = Request({"type": "http", "method": "POST", "path": "/api/sessions/a/rename", "headers": [], "query_string": b""})
-    resp = asyncio.run(api._grupos_indisponiveis(request, groups_bridge.GroupsBridgeError("groups_bridge_off")))
-    body = json.loads(resp.body)
-    assert (resp.status_code, body["detail"]["code"], body["detail"]["params"]["detalhe"]) == (503, "erro_grupo_indisponivel", "groups_bridge_off")
-    assert journal == [("grupos.indisponivel", "erro", {"codigo": "groups_bridge_off", "detalhe": "POST /api/sessions/a/rename"})]
 
 
 def test_python_mode_list_reads_the_group_and_a_broken_outside_registry_is_empty(tmp_path, monkeypatch):

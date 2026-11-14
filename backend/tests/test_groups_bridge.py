@@ -1,5 +1,5 @@
 """O Rust é o único que grava `.hangar-pair`: o que chega às portas do Python segue pela ponte
-`/__hangar_server/groups`, num sentido; sem coordenador as rotas de grupo recusam com código."""
+`/__hangar_server/groups`, num sentido."""
 import asyncio
 import json
 import threading
@@ -26,20 +26,6 @@ def _tmp_pair_dir(tmp_path, monkeypatch):
 def client(monkeypatch):
     monkeypatch.setattr(settings, "auth_token", "secret")
     return TestClient(api.app)
-
-
-def _rust(monkeypatch, reply=None, error=None):
-    """Modo Rust com a ponte trocada por uma lista de chamadas."""
-    calls = []
-    monkeypatch.setattr(groups_bridge, "rust_owns_groups", lambda: True)
-
-    def call(op, **args):
-        calls.append((op, args))
-        if error is not None:
-            raise groups_bridge.GroupsBridgeError(error)
-        return reply(op, args) if callable(reply) else reply
-    monkeypatch.setattr(groups_bridge, "call", call)
-    return calls
 
 
 def test_ownership_follows_mode(monkeypatch):
@@ -197,65 +183,6 @@ def test_bridge_gives_up_on_a_silent_rust_with_a_code(monkeypatch):
         groups_bridge.configure(None, None)
 
 
-
-
-def test_pair_route_forwards_status_and_body(monkeypatch, client):
-    calls = _rust(monkeypatch, reply={"status": 409, "body": {"detail": {"code": "erro_pareamento_tarefa_existente"}}})
-    r = client.post("/api/sessions/a/pair", json={"peer": "b", "task": "y"}, headers=H)
-    assert r.status_code == 409 and r.json()["detail"]["code"] == "erro_pareamento_tarefa_existente"
-    assert calls == [("group.route", {"method": "POST", "name": "a", "route": "pair", "body": {
-        "peer": "b", "peers": [], "task": "y", "replace_task": False, "notify_members": True, "orq": False},
-        "facts": {}})]
-
-
-GROUP_ROUTES = [
-    ("post", "/api/sessions/a/pair", "pair", {}),
-    ("delete", "/api/sessions/a/pair", "pair", None),
-    ("post", "/api/sessions/a/group-message", "group-message", {"text": "oi"}),
-    ("get", "/api/sessions/a/pair/contract", "contract", None),
-    ("put", "/api/sessions/a/pair/contract", "contract", {"content": "x", "mtime": None}),
-    ("post", "/api/sessions/a/pair-remote", "pair-remote", {"initiator": "srv::x"}),
-    ("post", "/api/sessions/a/unpair-remote", "unpair-remote", {"peer": "srv::x"}),
-]
-
-
-@pytest.mark.parametrize("method,path,route,body", GROUP_ROUTES)
-def test_connect_group_route_is_one_way(monkeypatch, client, method, path, route, body):
-    """Pela 8768 a rota só repassa: status e corpo do Rust voltam como vieram, sem lógica aqui."""
-    calls = _rust(monkeypatch, reply={"status": 418, "body": {"de": "rust"}})
-    kw = {"json": body} if body is not None else {}
-    r = getattr(client, method)(path, headers=H, **kw)
-    assert (r.status_code, r.json()) == (418, {"de": "rust"})
-    assert [(op, a["method"], a["route"]) for op, a in calls] == [("group.route", method.upper(), route)]
-    assert not (pair._pair_dir() / "a.json").exists()
-
-
-@pytest.mark.parametrize("method,path,route,body", GROUP_ROUTES)
-def test_group_routes_refuse_without_owner(monkeypatch, client, method, path, route, body):
-    monkeypatch.setattr(runtime_coordinator, "_current", None)
-    monkeypatch.setattr(groups_bridge, "call", lambda *a, **k: pytest.fail("sem Rust não há ponte"))
-    kw = {"json": body} if body is not None else {}
-    r = getattr(client, method)(path, headers=H, **kw)
-    assert r.status_code == 503, r.text
-    assert r.json()["detail"]["code"] == "groups_need_rust_server"
-    assert list(pair._pair_dir().iterdir()) == []
-
-
-def test_route_bridge_failure_is_coded(monkeypatch, client):
-    _rust(monkeypatch, error="groups_runtime_starting")
-    r = client.delete("/api/sessions/a/pair", headers=H)
-    assert r.status_code == 503
-    assert r.json()["detail"]["code"] == "erro_grupo_indisponivel"
-    assert r.json()["detail"]["params"]["detalhe"] == "groups_runtime_starting"
-
-
-def test_bridge_failure_is_an_explicit_error():
-    exc = groups_bridge.GroupsBridgeError("groups_bridge_off")
-    handler = api.app.exception_handlers[type(exc)]
-    r = asyncio.run(handler(SimpleNamespace(method="POST", url=SimpleNamespace(path="/x")), exc))
-    body = json.loads(r.body)
-    assert r.status_code == 503 and body["detail"]["code"] == "erro_grupo_indisponivel"
-    assert body["detail"]["params"]["detalhe"] == "groups_bridge_off"
 
 
 def test_associate_in_rust_mode_forwards_without_rebuilding_orq_facts(monkeypatch, client):

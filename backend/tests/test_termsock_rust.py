@@ -5,7 +5,7 @@ import time
 from types import SimpleNamespace
 
 import pytest
-from fastapi import FastAPI, HTTPException, WebSocket
+from fastapi import FastAPI, WebSocket
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 from websockets.asyncio.server import serve
@@ -192,38 +192,6 @@ def test_python_mode_keeps_the_python_pty(rust, no_pty, monkeypatch):
     with _owner().websocket_connect(f"{OWNER_WS}/api/sessions/cc/term?token=secret") as ws:
         assert ws.receive_bytes() == b"python-pty"
     assert no_pty == ["cc"] and rust.requests == []
-
-
-def test_409_asks_rust_and_503_on_bridge_error(monkeypatch):
-    from app import api
-    monkeypatch.setattr(runtime_coordinator, "_current", SimpleNamespace(mode="rust"))
-    # Um painel antigo do Python não conta: no modo `rust` o painel é do Rust.
-    monkeypatch.setitem(termsock._ativos, "s1", object())
-    answers = {"s1": {"active": False}, "s2": {"active": True}}
-    asked = []
-
-    def request(operation, arguments, **kw):
-        asked.append((operation, arguments))
-        if arguments["name"] == "s3":
-            raise list_bridge.ListBridgeError("list_bridge_unavailable")
-        return answers[arguments["name"]]
-    monkeypatch.setattr(list_bridge, "_request", request)
-    api._recusa_se_painel_aberto("s1")
-    with pytest.raises(HTTPException) as e:
-        api._recusa_se_painel_aberto("s2")
-    assert e.value.status_code == 409 and e.value.detail["code"] == "erro_terminal_aberto"
-    with pytest.raises(HTTPException) as e:
-        api._recusa_se_painel_aberto("s3")
-    assert e.value.status_code == 503
-    assert e.value.detail["code"] == "erro_terminal_indisponivel"
-    assert e.value.detail["params"]["detalhe"] == "list_bridge_unavailable"
-    assert asked[0] == ("term.active", {"name": "s1"})
-    # Modo `python` (reserva): o painel é o do Python, sem perguntar ao Rust.
-    monkeypatch.setattr(runtime_coordinator, "_current", SimpleNamespace(mode="python"))
-    asked.clear()
-    with pytest.raises(HTTPException) as e:
-        api._recusa_se_painel_aberto("s1")
-    assert e.value.status_code == 409 and asked == []
 
 
 @pytest.mark.parametrize("status, code", [(403, 1008), (404, 1013), (500, 1013)])
