@@ -39,9 +39,13 @@ impl MuxProcess {
     }
 
     /// Só o `capture-pane`: quem chama decide se confere a sessão.
-    pub async fn capture(&self, target: &str) -> Result<String, &'static str> {
-        if let Some(done) = self.direct_capture(target).await { return done; }
-        let out = self.output(&["capture-pane", "-p", "-t", target, "-S", "-200"]).await?;
+    pub async fn capture(&self, target: &str) -> Result<String, &'static str> { self.capture_lines(target, 200).await }
+
+    /// `capture` com `lines` linhas de histórico acima da tela.
+    pub async fn capture_lines(&self, target: &str, lines: u32) -> Result<String, &'static str> {
+        let start = format!("-{lines}");
+        if let Some(done) = self.direct_capture(target, &start).await { return done; }
+        let out = self.output(&["capture-pane", "-p", "-t", target, "-S", &start]).await?;
         read_output(out.status.success(), &out.stdout)
     }
 
@@ -49,11 +53,11 @@ impl MuxProcess {
     /// que a lista conferiu responde direto. Ele responde OK até para alvo que sumiu (vazio, ou
     /// `ERROR: can't find pane`): esses e as falhas seguem pelo CLI, que separa recusa de pane vazio.
     /// Prazo estourado não segue: o CLI pagaria outro prazo inteiro na mesma máquina carregada.
-    async fn direct_capture(&self, target: &str) -> Option<Result<String, &'static str>> {
+    async fn direct_capture(&self, target: &str, start: &str) -> Option<Result<String, &'static str>> {
         if !cfg!(windows) { return None; }
         let base = target.strip_prefix('=')?.split(':').next()?.to_owned();
         let dir = crate::list::mux::verified_direct(&self.program, &base)?;
-        let args = ["capture-pane", "-p", "-t", target, "-S", "-200"].map(str::to_owned);
+        let args = ["capture-pane", "-p", "-t", target, "-S", start].map(str::to_owned);
         let deadline = std::time::Instant::now() + self.timeout;
         let code = match tokio::task::spawn_blocking(move || hangar_psmux::command(&dir, &base, &args, deadline)).await {
             Ok(Ok(stdout)) => return read_output(true, &stdout).ok()
@@ -102,7 +106,11 @@ impl MuxProcess {
     /// Captura que, recusada ou vazia, separa a sessão que sumiu da que falhou: o psmux aceita
     /// comando que não executa, e o vazio de uma sessão morta não pode virar pane parado.
     pub async fn capture_checked(&self, name: &str, target: &str) -> Result<String, &'static str> {
-        match self.capture(target).await {
+        self.capture_checked_lines(name, target, 200).await
+    }
+
+    pub async fn capture_checked_lines(&self, name: &str, target: &str, lines: u32) -> Result<String, &'static str> {
+        match self.capture_lines(target, lines).await {
             Err("capture_refused") => Err(match self.has_session(name).await {
                 Some(false) => "capture_session_missing",
                 Some(true) => "capture_refused",

@@ -137,6 +137,27 @@ impl StateEnv {
     fn facts(&self) -> &FactsStore { &self.list.state_facts }
 
     fn program(&self) -> std::ffi::OsString { self.list.env().capture_program.clone() }
+
+    /// Pane do agente (cache de 60 s); sem resposta da descoberta, `=nome:` sem guardar.
+    pub(crate) async fn agent_target(&self, name: &str) -> String {
+        if let Some(registry) = self.runtime.get()
+            && let Ok(Some(target)) = registry.terminal_target(name).await {
+            return target.binding.pane;
+        }
+        let fallback = || format!("={name}:");
+        if let Some(t) = self.agents.cached(name, Instant::now()) {
+            return t.unwrap_or_else(fallback);
+        }
+        match self.list.agent_target(name).await {
+            Ok(t) => self.agents.target(name, Instant::now(), || t).unwrap_or_else(fallback),
+            Err(e) => {
+                if crate::warn_limit::allow(Some(name), "state_agent_pane_failed") {
+                    tracing::warn!(session = name, code = e.code, "estado: descoberta do pane do agente falhou; usa a janela ativa");
+                }
+                fallback()
+            }
+        }
+    }
 }
 
 /// A fábrica do hub: um `Monitor` de produção por hub de Claude com terminal e um feed do runtime
@@ -243,26 +264,7 @@ impl LiveSources {
 
     fn publish_raw(&self, event: &str, data: &str) -> bool { self.hub.upgrade().is_some_and(|h| h.publish_own(event, data)) }
 
-    /// Pane do agente (cache de 60 s); sem resposta da descoberta, `=nome:` sem guardar.
-    async fn target(&self) -> String {
-        if let Some(registry) = self.env.runtime.get()
-            && let Ok(Some(target)) = registry.terminal_target(&self.name).await {
-            return target.binding.pane;
-        }
-        let fallback = || format!("={}:", self.name);
-        if let Some(t) = self.env.agents.cached(&self.name, Instant::now()) {
-            return t.unwrap_or_else(fallback);
-        }
-        match self.env.list.agent_target(&self.name).await {
-            Ok(t) => self.env.agents.target(&self.name, Instant::now(), || t).unwrap_or_else(fallback),
-            Err(e) => {
-                if crate::warn_limit::allow(Some(&self.name), "state_agent_pane_failed") {
-                    tracing::warn!(session = self.name.as_str(), code = e.code, "estado: descoberta do pane do agente falhou; usa a janela ativa");
-                }
-                fallback()
-            }
-        }
-    }
+    async fn target(&self) -> String { self.env.agent_target(&self.name).await }
 
     /// Captura da época atual: troca de época ou de pane recria a fonte (o pool solta o vínculo
     /// anterior do mesmo consumidor sozinho).

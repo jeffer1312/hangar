@@ -706,6 +706,10 @@ where H: axum::handler::Handler<T, Arc<AppState>>, T: 'static {
         .route("/api/sessions/{name}/answer", axum::routing::post(crate::session_write::answer::answer).fallback(fallback.clone()))
         .route("/api/sessions/{name}/keys", axum::routing::post(crate::session_write::control::keys).fallback(fallback.clone()))
         .route("/api/sessions/{name}/term-input", axum::routing::post(crate::session_write::control::term_input).fallback(fallback.clone()))
+        // Espelho do terminal: dono e convidado da sessão, nas duas portas.
+        .route("/api/sessions/{name}/pane", get(crate::state::pane::route).fallback(fallback.clone()))
+        // Sem chamador desde que o `hangar-send` parou de pedir (decisão 9): sai como rota inexistente.
+        .route("/api/sessions/{name}/peer-address", axum::routing::any(peer_address_gone))
         // Pergunta lateral: inteira no Rust, com e sem terminal; o convidado completo também.
         // Trocar o nome da sessão: inteiro no Rust; o convidado com acesso completo também.
         .route("/api/sessions/{name}/rename", axum::routing::post(crate::session_rename::route).fallback(fallback.clone()))
@@ -1174,6 +1178,14 @@ pub(crate) async fn refuse_without_python(st: &AppState, peer: SocketAddr, req: 
     };
     cors(&headers, response.headers_mut());
     response
+}
+
+/// `GET peer-address` saiu: quem alcança a sessão leva o 404 de rota inexistente, o resto a recusa de sempre.
+async fn peer_address_gone(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
+    let (_, caller) = match who(&st, peer, &req).await { Ok(value) => value, Err(e) => return auth::unavailable(e) };
+    let reaches = crate::session_write::session_name(req.uri().path()).is_some_and(|n| caller.as_ref().is_some_and(|c| c.can(&n, req.method())));
+    if !reaches { return crate::session_write::stranger(&st, peer, req, caller.as_ref()).await; }
+    not_found(req.headers())
 }
 
 pub(crate) fn who(st: &AppState, peer: SocketAddr, req: &Request)

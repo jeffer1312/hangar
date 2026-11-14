@@ -9,6 +9,7 @@ pub mod live;
 pub mod monitor;
 pub mod other;
 pub mod other_preview;
+pub mod pane;
 pub mod parked;
 pub mod permission;
 pub mod preview;
