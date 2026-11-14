@@ -57,7 +57,7 @@ Leitores de `codex_contas` encontrados por busca e GitNexus na base: adaptadores
 Codex (`adapter`, `appserver`, `sem_terminal`), `api`, `registry`,
 `list_bridge`, `archive`, `archive_providers`, `bastao`, `cliproxy_accounts`,
 `costs_sources`, `cotas`,
-`credenciais`, `orq_politica`, `config_sync`, `config_sync_paths`, `codex_appserver`,
+`credenciais`, `orq_politica`, `config_sync`, `codex_appserver`,
 `codex_models`, `codex_importador`, serviço/rotas de contas e reconciliadores de
 sync/plugins. Os lançadores e probes também leem o formato. Esses consumidores
 não autorizam escritor Python de cadastro/login com Rust ativo.

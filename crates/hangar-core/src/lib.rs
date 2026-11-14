@@ -5,12 +5,16 @@ pub mod account_env;
 pub mod auth;
 pub mod clock;
 pub mod config;
+pub mod config_lock;
 pub mod costs_failure;
 pub mod credentials;
 pub mod diag;
 pub mod display_env;
 pub mod edge;
 pub mod fs;
+// Troca atômica com o destino conferido: chamadas de `libc` e `windows-sys`.
+#[allow(unsafe_code)]
+pub mod fs_replace;
 pub mod guest;
 pub mod http;
 pub mod http_body_input;
@@ -21,9 +25,11 @@ pub mod http_route_response;
 pub mod ids;
 pub mod install_root;
 pub mod json_envelope;
+pub mod llm_url;
 pub mod log_rotate;
 pub mod net;
 pub mod orq_codec;
+pub mod path_markers;
 pub mod paths;
 // Descritor de segurança do Windows: chamadas de `windows-sys`.
 #[cfg(windows)]
