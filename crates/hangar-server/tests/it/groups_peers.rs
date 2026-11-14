@@ -6,7 +6,7 @@ use axum::Router;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get};
-use hangar_server::groups::peers::{PeerBook, PeerCfg, PeerClient, PeerError};
+use hangar_server::groups::peers::{ConnectRoute, PeerBook, PeerCfg, PeerClient, PeerError, Route};
 use serde_json::json;
 
 async fn serve(app: Router) -> SocketAddr {
@@ -39,7 +39,7 @@ fn book_reads_only_entries_with_base_url_and_token() {
         "torto": "x",
     }).to_string()).unwrap();
     let book = PeerBook::new(Some(file.clone()));
-    assert_eq!(book.get("lab"), Some(PeerCfg { base_url: "http://100.64.0.2:8765".into(), token: "t1".into() }));
+    assert_eq!(book.get("lab"), Some(PeerCfg { base_url: "http://100.64.0.2:8765".into(), token: "t1".into(), connect: None }));
     assert_eq!(book.get("off").map(|c| c.token), Some("t2".into()), "desligada da varredura continua endereçável");
     for absent in ["tela", "sem-token", "torto", "ninguem"] { assert_eq!(book.get(absent), None, "{absent}"); }
     // Arquivo novo é relido; ausente ou torto = nenhuma máquina.
@@ -201,4 +201,227 @@ async fn coded_404_is_not_old_version() {
     // Fora de `/api/groups/*` o 404 sem código continua recusa comum.
     let err = client.call("lab", reqwest::Method::GET, "/api/outra", None).await.unwrap_err();
     assert!(matches!(err, PeerError::Refused { status: 404, .. }), "{err:?}");
+}
+
+/// Máquina que conta os pedidos e devolve `status` com `{"via": via}`.
+async fn counting(via: &'static str, status: StatusCode) -> (Arc<Mutex<Vec<Option<String>>>>, SocketAddr) {
+    let seen: Arc<Mutex<Vec<Option<String>>>> = Arc::default();
+    let log = seen.clone();
+    let addr = serve(Router::new().route("/x", any(move |headers: HeaderMap| {
+        let log = log.clone();
+        async move {
+            log.lock().unwrap().push(headers.get("authorization").and_then(|v| v.to_str().ok()).map(str::to_owned));
+            js(status, json!({"via": via}))
+        }
+    }))).await;
+    (seen, addr)
+}
+
+fn write_routed(file: &std::path::Path, saved: &str, connect: &str) {
+    std::fs::write(file, json!({"lab": {"base_url": saved, "token": "dono", "connect_url": connect, "connect_token": "aparelho",
+        "connect_device": "abc"}}).to_string()).unwrap();
+}
+
+/// `lab` com o endereço salvo e o Connect; o cliente aceita o Connect.
+fn routed(dir: &std::path::Path, saved: &str, connect: &str) -> PeerClient {
+    let file = dir.join("peers.json");
+    write_routed(&file, saved, connect);
+    PeerClient::new(PeerBook::new(Some(file))).with_connect_route()
+}
+
+#[test]
+fn the_connect_route_is_read_beside_the_saved_address_and_its_token_is_redacted() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("peers.json");
+    write_routed(&file, "https://lab.tail.ts.net", "https://lab.acme.hangar.dev.br/");
+    let book = PeerBook::new(Some(file.clone()));
+    assert_eq!(book.get("lab").unwrap().connect, Some(ConnectRoute { url: "https://lab.acme.hangar.dev.br".into(), token: "aparelho".into() }));
+    assert!(book.tokens().contains(&"aparelho".to_owned()), "a credencial de aparelho também sai do que volta ao modelo");
+    // Com a marca `connect` o próprio endereço já é o Connect: não há caminho a somar.
+    std::fs::write(&file, json!({"lab": {"base_url": "https://lab.acme.hangar.dev.br", "token": "t", "connect": true,
+        "connect_url": "https://x", "connect_token": "y"}}).to_string()).unwrap();
+    assert_eq!(book.get("lab").unwrap().connect, None);
+}
+
+#[tokio::test]
+async fn a_closed_saved_address_goes_through_connect_and_the_next_call_starts_there() {
+    let (connect_seen, connect) = counting("connect", StatusCode::OK).await;
+    let dir = tempfile::tempdir().unwrap();
+    let client = routed(dir.path(), &format!("http://{}", crate::refused_address()), &format!("http://{connect}"));
+    assert_eq!(client.route("lab"), None);
+    let got = client.call("lab", reqwest::Method::POST, "/x", Some(&json!({}))).await.unwrap();
+    assert_eq!(got, Some(json!({"via": "connect"})));
+    assert_eq!(*connect_seen.lock().unwrap(), vec![Some("Bearer aparelho".to_owned())], "pelo Connect só a credencial de aparelho");
+    assert_eq!(client.route("lab"), Some(Route::Connect));
+    // O endereço salvo voltou, mas a próxima chamada começa pelo caminho que atendeu.
+    let (saved_seen, saved) = counting("saved", StatusCode::OK).await;
+    write_routed(&dir.path().join("peers.json"), &format!("http://{saved}"), &format!("http://{connect}"));
+    assert_eq!(client.call("lab", reqwest::Method::GET, "/x", None).await.unwrap(), Some(json!({"via": "connect"})));
+    assert!(saved_seen.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn an_answer_from_the_saved_address_never_goes_through_connect() {
+    let (connect_seen, connect) = counting("connect", StatusCode::OK).await;
+    let (saved_seen, saved) = counting("saved", StatusCode::INTERNAL_SERVER_ERROR).await;
+    let dir = tempfile::tempdir().unwrap();
+    let client = routed(dir.path(), &format!("http://{saved}"), &format!("http://{connect}"));
+    let err = client.call("lab", reqwest::Method::POST, "/x", Some(&json!({}))).await.unwrap_err();
+    assert!(matches!(err, PeerError::Refused { status: 500, .. }), "{err:?}");
+    assert_eq!(saved_seen.lock().unwrap().len(), 1);
+    assert!(connect_seen.lock().unwrap().is_empty(), "o recado pode ter chegado: nada de segunda entrega");
+    assert_eq!(client.route("lab"), None, "recusa não é caminho bom");
+}
+
+/// A conexão abriu e caiu no meio do corpo: o pedido chegou lá, então o Connect não é tentado.
+#[tokio::test]
+async fn a_broken_answer_after_connecting_never_goes_through_connect() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let (connect_seen, connect) = counting("connect", StatusCode::OK).await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let saved = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut buffer = [0u8; 4096];
+        let _ = socket.read(&mut buffer).await;
+        let _ = socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n{\"via\"").await;
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let client = routed(dir.path(), &format!("http://{saved}"), &format!("http://{connect}"));
+    let err = client.call("lab", reqwest::Method::POST, "/x", Some(&json!({}))).await.unwrap_err();
+    assert!(err.is_transport(), "{err:?}");
+    assert!(connect_seen.lock().unwrap().is_empty());
+}
+
+/// O endereço salvo atendeu um POST com redirect: o pedido já chegou lá. O 3xx volta como resposta, sem seguir para
+/// onde talvez nem conecte, e o Connect não o repete.
+#[tokio::test]
+async fn a_redirect_that_does_not_connect_is_not_sent_again_through_connect() {
+    let (connect_seen, connect) = counting("connect", StatusCode::OK).await;
+    let away = format!("http://{}/x", crate::refused_address());
+    let saved = serve(Router::new().route("/x", any(move || {
+        let away = away.clone();
+        async move { Response::builder().status(307).header("location", away).body(axum::body::Body::empty()).unwrap() }
+    }))).await;
+    let dir = tempfile::tempdir().unwrap();
+    let client = routed(dir.path(), &format!("http://{saved}"), &format!("http://{connect}"));
+    let err = client.call("lab", reqwest::Method::POST, "/x", Some(&json!({}))).await.unwrap_err();
+    assert!(matches!(err, PeerError::Refused { status: 307, .. }), "{err:?}");
+    assert!(connect_seen.lock().unwrap().is_empty(), "o POST já tinha chegado ao endereço salvo");
+}
+
+/// Quem não aceita o Connect (o anúncio, a emissão do aparelho) fica só no endereço salvo.
+#[tokio::test]
+async fn without_opting_in_the_connect_route_is_never_used() {
+    let (connect_seen, connect) = counting("connect", StatusCode::OK).await;
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("peers.json");
+    write_routed(&file, &format!("http://{}", crate::refused_address()), &format!("http://{connect}"));
+    let err = PeerClient::new(PeerBook::new(Some(file))).call("lab", reqwest::Method::POST, "/x", Some(&json!({}))).await.unwrap_err();
+    assert!(err.is_transport(), "{err:?}");
+    assert!(connect_seen.lock().unwrap().is_empty());
+}
+
+/// O dono de lá revogou o aparelho: o caminho sai do `peers.json` com a marca, e nada o religa sozinho.
+#[tokio::test]
+async fn a_refused_connect_credential_marks_the_entry() {
+    let (_, connect) = counting("connect", StatusCode::UNAUTHORIZED).await;
+    let dir = tempfile::tempdir().unwrap();
+    let client = routed(dir.path(), &format!("http://{}", crate::refused_address()), &format!("http://{connect}"));
+    let err = client.call("lab", reqwest::Method::GET, "/x", None).await.unwrap_err();
+    assert!(matches!(err, PeerError::Refused { status: 401, .. }), "{err:?}");
+    let saved: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.path().join("peers.json")).unwrap()).unwrap();
+    assert_eq!(saved["lab"]["connect_refused"], true);
+    for field in ["connect_url", "connect_token", "connect_device"] { assert!(saved["lab"].get(field).is_none(), "{field}"); }
+    assert_eq!(saved["lab"]["base_url"], format!("http://{}", crate::refused_address()).as_str());
+    assert_eq!(client.route("lab"), None);
+}
+
+/// O 401 chegou depois de o caminho ser trocado por outro aparelho: o novo fica, sem a marca.
+#[tokio::test]
+async fn a_late_refusal_keeps_a_route_saved_after_the_attempt() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("peers.json");
+    let swap = file.clone();
+    let connect = serve(Router::new().route("/x", any(move || {
+        let swap = swap.clone();
+        async move {
+            let mut entry: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&swap).unwrap()).unwrap();
+            entry["lab"]["connect_token"] = json!("novo");
+            entry["lab"]["connect_device"] = json!("def");
+            std::fs::write(&swap, entry.to_string()).unwrap();
+            js(StatusCode::UNAUTHORIZED, json!({}))
+        }
+    }))).await;
+    write_routed(&file, &format!("http://{}", crate::refused_address()), &format!("http://{connect}"));
+    let client = PeerClient::new(PeerBook::new(Some(file.clone()))).with_connect_route();
+    let err = client.call("lab", reqwest::Method::GET, "/x", None).await.unwrap_err();
+    assert!(matches!(err, PeerError::Refused { status: 401, .. }), "{err:?}");
+    let saved: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    assert_eq!((saved["lab"]["connect_token"].as_str(), saved["lab"]["connect_device"].as_str()), (Some("novo"), Some("def")));
+    assert!(saved["lab"].get("connect_refused").is_none());
+}
+
+/// Um `(status, corpo)` trocável no meio do teste, como o Connect de outra máquina.
+async fn switchable(status: u16, body: &'static str) -> (Arc<Mutex<(u16, &'static str)>>, Arc<Mutex<usize>>, SocketAddr) {
+    let (answer, hits) = (Arc::new(Mutex::new((status, body))), Arc::new(Mutex::new(0usize)));
+    let (current, count) = (answer.clone(), hits.clone());
+    let addr = serve(Router::new().route("/x", any(move || {
+        let (current, count) = (current.clone(), count.clone());
+        async move {
+            *count.lock().unwrap() += 1;
+            let (status, body) = *current.lock().unwrap();
+            Response::builder().status(status).header("content-type", "application/json").body(axum::body::Body::from(body)).unwrap()
+        }
+    }))).await;
+    (answer, hits, addr)
+}
+
+/// O 502 do próprio Hangar (com corpo) prova que o pedido chegou: o Connect segue à frente e nada é repetido.
+/// Só a falha de conexão nele o tira.
+#[tokio::test]
+async fn a_hangar_error_through_connect_keeps_it_in_front_and_only_a_connect_failure_drops_it() {
+    let (answer, _, connect) = switchable(200, r#"{"via":"connect"}"#).await;
+    let closed = format!("http://{}", crate::refused_address());
+    let dir = tempfile::tempdir().unwrap();
+    let client = routed(dir.path(), &closed, &format!("http://{connect}"));
+    client.call("lab", reqwest::Method::GET, "/x", None).await.unwrap();
+    assert_eq!(client.route("lab"), Some(Route::Connect));
+    *answer.lock().unwrap() = (502, r#"{"detail":{"code":"claude_plugins_failed","params":{},"msg":"não"}}"#);
+    let (saved_seen, saved) = counting("saved", StatusCode::OK).await;
+    write_routed(&dir.path().join("peers.json"), &format!("http://{saved}"), &format!("http://{connect}"));
+    let err = client.call("lab", reqwest::Method::GET, "/x", None).await.unwrap_err();
+    assert!(matches!(err, PeerError::Refused { status: 502, .. }), "{err:?}");
+    assert!(saved_seen.lock().unwrap().is_empty(), "o Hangar de lá recebeu o pedido: nada de segunda entrega");
+    assert_eq!(client.route("lab"), Some(Route::Connect), "a próxima chamada não paga o prazo de conexão do endereço salvo");
+    // `detail` vazio ainda é corpo: o Hangar de lá respondeu.
+    *answer.lock().unwrap() = (502, r#"{"detail":""}"#);
+    assert!(matches!(client.call("lab", reqwest::Method::POST, "/x", Some(&json!({}))).await.unwrap_err(), PeerError::Refused { status: 502, .. }));
+    assert!(saved_seen.lock().unwrap().is_empty());
+    // O Connect nem conecta e o endereço salvo voltou: ele atende e passa à frente.
+    write_routed(&dir.path().join("peers.json"), &format!("http://{saved}"), &closed);
+    assert_eq!(client.call("lab", reqwest::Method::GET, "/x", None).await.unwrap(), Some(json!({"via": "saved"})));
+    assert_eq!(saved_seen.lock().unwrap().len(), 1);
+    assert_eq!(client.route("lab"), Some(Route::Saved));
+}
+
+/// O Caddy de lá sem alcançar o Hangar responde 502 de corpo vazio: o pedido não chegou, então o endereço salvo
+/// (o Tailscale de volta) é tentado uma vez e passa à frente.
+#[tokio::test]
+async fn an_empty_502_from_the_connect_proxy_falls_back_to_the_saved_address() {
+    let (answer, connect_hits, connect) = switchable(200, r#"{"via":"connect"}"#).await;
+    let closed = format!("http://{}", crate::refused_address());
+    let dir = tempfile::tempdir().unwrap();
+    let client = routed(dir.path(), &closed, &format!("http://{connect}"));
+    client.call("lab", reqwest::Method::GET, "/x", None).await.unwrap();
+    assert_eq!(client.route("lab"), Some(Route::Connect));
+    *answer.lock().unwrap() = (502, "");
+    let (saved_seen, saved) = counting("saved", StatusCode::OK).await;
+    write_routed(&dir.path().join("peers.json"), &format!("http://{saved}"), &format!("http://{connect}"));
+    assert_eq!(client.call("lab", reqwest::Method::POST, "/x", Some(&json!({}))).await.unwrap(), Some(json!({"via": "saved"})));
+    assert_eq!((*connect_hits.lock().unwrap(), saved_seen.lock().unwrap().len()), (2, 1));
+    assert_eq!(client.route("lab"), Some(Route::Saved));
+    // Já com o endereço salvo à frente, o Connect não é mais chamado.
+    client.call("lab", reqwest::Method::GET, "/x", None).await.unwrap();
+    assert_eq!(*connect_hits.lock().unwrap(), 2);
 }

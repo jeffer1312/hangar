@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { baseOf, comTeto, decidirRota, esquecerRota, type LanInfo, type Server } from '@hangar/core';
+import { baseOf, comTeto, decidirRota, esquecerRota, routeKind, type LanInfo, type Server } from '@hangar/core';
 import { ownServers, useServers } from '../../stores/servers';
 import { useSessions } from '../../stores/sessions';
 import { confirmMachineRoute, discover, ensureActive, normalizeUrl, readReach, reason, type Discovered } from './api';
@@ -40,6 +40,7 @@ function ConnectionOverview({ server, onNavigate }: { server: Server; onNavigate
   const route = baseOf(server);
   const remote = server.remote?.url || (/\.ts\.net(?::|\/|$)/.test(server.baseUrl) ? server.baseUrl : '');
   const local = server.lan?.url || '';
+  const connect = server.connect?.url || '';
   const live = !!bucket?.loaded && !bucket.error;
   return <MachinePage title={m.mobile_machines_connection_title()}>
     <MachineGroup>
@@ -47,8 +48,10 @@ function ConnectionOverview({ server, onNavigate }: { server: Server; onNavigate
         value={live && route === local ? m.mobile_machines_in_use() : undefined} />
       <MachineRow title={m.mobile_machines_remote_address()} description={remote || m.mobile_machines_not_discovered()}
         value={live && route === remote ? m.mobile_machines_in_use() : undefined} />
-      {server.baseUrl !== local && server.baseUrl !== remote ? <MachineRow title={m.mobile_machines_saved_address()}
+      {server.baseUrl !== local && server.baseUrl !== remote && server.baseUrl !== connect ? <MachineRow title={m.mobile_machines_saved_address()}
         description={server.baseUrl} value={live && route === server.baseUrl ? m.mobile_machines_in_use() : undefined} /> : null}
+      {connect ? <MachineRow title={m.mobile_machines_route_connect()} description={connect}
+        value={live && route === connect ? m.mobile_machines_in_use() : undefined} /> : null}
       <MachineRow title={m.mobile_machines_discover()} action onPress={() => onNavigate('discover')} />
       <MachineRow title={m.mobile_machines_remote_edit()} onPress={() => onNavigate('remote')} />
     </MachineGroup>

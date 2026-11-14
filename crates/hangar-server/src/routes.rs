@@ -260,7 +260,7 @@ impl AppState {
         let vault_requests = Arc::new(crate::vault::requests::Requests::default());
         let accounts = crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::capture());
         let search = crate::search::Index::server(accounts.clone());
-        AppState { scheduled_tasks: Arc::default(), desktop_theme: Arc::new(hangar_desktop_theme::DesktopTheme::system()), local_commands: Arc::new(crate::auxiliary::NativeCommands(accounts.env.clone())), startup: Default::default(), startup_producers: Arc::default(), settings_snapshot: std::sync::OnceLock::new(), login_guests: Arc::new(crate::login_guests::Service::uninitialized(&accounts.env.home,&accounts.env.claude_base)), accounts, search, claude_p: None, command_catalog: Arc::default(), groups, server_id, machine_identity: std::sync::RwLock::new(None), peers: Arc::new(crate::groups::peers_from_env()), auth: Auth::configured(&cfg.auth_token), http, side, cfg, terminal, terminal_address: None, public_v6: None, front: None, connect: None, preview: None, connect_previews: Arc::default(), connect_preview_reach: Arc::new(crate::share::owner_routes::Reach::preview()), diag,
+        AppState { scheduled_tasks: Arc::default(), desktop_theme: Arc::new(hangar_desktop_theme::DesktopTheme::system()), local_commands: Arc::new(crate::auxiliary::NativeCommands(accounts.env.clone())), startup: Default::default(), startup_producers: Arc::default(), settings_snapshot: std::sync::OnceLock::new(), login_guests: Arc::new(crate::login_guests::Service::uninitialized(&accounts.env.home,&accounts.env.claude_base)), accounts, search, claude_p: None, command_catalog: Arc::default(), groups, server_id, machine_identity: std::sync::RwLock::new(None), peers: Arc::new(crate::groups::peers_from_env().with_connect_route()), auth: Auth::configured(&cfg.auth_token), http, side, cfg, terminal, terminal_address: None, public_v6: None, front: None, connect: None, preview: None, connect_previews: Arc::default(), connect_preview_reach: Arc::new(crate::share::owner_routes::Reach::preview()), diag,
             migration_branch: Arc::default(),
             workspace_slots: Arc::new(tokio::sync::Semaphore::new(4)),
             login_browser: Arc::default(),
@@ -398,6 +398,8 @@ pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest:
     let _vault_backup = crate::AbortOnDrop(crate::vault::backup::spawn(state.clone()));
     let _vault_files = crate::AbortOnDrop(tokio::spawn(crate::vault::files::sweep_at_start()));
     let _auto_report = crate::AbortOnDrop(crate::diag_report::auto::spawn(state.clone()));
+    // O Connect gravado volta junto com o servidor: é o evento "Connect ligado" da subida.
+    crate::machine_peers::connect_route::spawn(&state, None);
     // Abortada na saída: a tarefa segura o estado do servidor, que sobreviveria a ele.
     // As sessões com terminal que o multiplexador perdeu voltam pelo spec; antes da varredura de grupos, que
     // conta como vivos os nomes à espera dele.
