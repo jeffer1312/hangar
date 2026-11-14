@@ -30,14 +30,30 @@ fn line(engine:&mut ClaudeEngine,value:Value,seconds:f64) -> Vec<Effect> { engin
 fn command(kind:OperationKind,payload:Value) -> RuntimeCommand { RuntimeCommand { operation_id:"op-1".into(),kind,payload } }
 fn writes(effects:&[Effect]) -> Vec<Value> { effects.iter().filter_map(|e|match e { Effect::Write { frame,.. } => Some(frame.clone()),_=>None }).collect() }
 
+fn consumed(effects:&[Effect]) -> Vec<String> {
+    effects.iter().filter_map(|e|match e { Effect::Reply { operation_id,payload,.. } if payload["consumed"] == true => Some(operation_id.clone()),_=>None }).collect()
+}
+
 #[test]
-fn steer_cuts_the_running_turn_and_input_waits_for_it() {
+fn button_steer_cuts_the_turn_and_the_cut_is_not_a_stop() {
     let mut engine = engine(json!({"name":"session","session_id":"sid","initialized":true}));
+    let steer = |engine:&mut ClaudeEngine,id:&str,payload:Value,at:f64| writes(&engine.command(RuntimeCommand { operation_id:id.into(),
+        kind:OperationKind::Steer,payload },clock(at)).unwrap());
     let input = writes(&engine.command(command(OperationKind::Input,json!({"text":"primeiro"})),clock(11.0)).unwrap());
     assert!(input[0].get("priority").is_none());
-    let steer = writes(&engine.command(RuntimeCommand { operation_id:"op-2".into(),kind:OperationKind::Steer,
-        payload:json!({"text":"muda de rumo"}) },clock(12.0)).unwrap());
-    assert_eq!(steer[0]["priority"],"now");
+    assert!(steer(&mut engine,"recado",json!({"text":"[de: outra] oi"}),12.0)[0].get("priority").is_none(),"recado não corta o turno");
+    assert_eq!(steer(&mut engine,"botao",json!({"text":"muda de rumo","now":true}),13.0)[0]["priority"],"now");
+    assert!(steer(&mut engine,"botao-2",json!({"text":"e mais","now":true}),13.5)[0].get("priority").is_none(),"o mesmo corte não corta duas vezes");
+
+    let cut = line(&mut engine,json!({"type":"result","subtype":"success","terminal_reason":"aborted_tools"}),14.0);
+    assert_eq!(consumed(&cut),vec!["op-1".to_owned()]);
+    assert!(!cut.iter().any(|e|matches!(e,Effect::WakeQueue)),"a fila espera o turno orientado");
+    assert_eq!(engine.view()["in_progress"],true,"o corte não aparece como parada");
+
+    let done = line(&mut engine,json!({"type":"result","subtype":"success","terminal_reason":"completed"}),20.0);
+    assert_eq!(consumed(&done),vec!["botao".to_owned()]);
+    assert!(done.iter().any(|e|matches!(e,Effect::WakeQueue)));
+    assert_eq!(engine.view()["in_progress"],false);
 }
 
 #[test]

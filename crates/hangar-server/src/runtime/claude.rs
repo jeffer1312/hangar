@@ -86,6 +86,8 @@ pub struct ClaudeEngine {
     effort_intent: Option<Value>,
     effort_deadline: Option<f64>,
     active_input: Option<String>,
+    /// Orientação escrita com `now` no meio do turno: o próximo `result` é o do corte, e ela vira o turno seguinte.
+    steer_now: Option<String>,
     /// Último `/comando` escrito no processo: a CLI responde alguns sozinha, sem linha no transcript.
     slash_input: Option<String>,
     /// O que já foi avisado nesta vida do processo: tipos desconhecidos e as chaves de `notice_once`.
@@ -179,7 +181,7 @@ impl ClaudeEngine {
             preview:LiveBuffer::default(),thinking:LiveBuffer::default(),tool_input:LiveBuffer::default(),tool_name:None,tool_visible:false,
             label:None,retry_label:None,hooks_running:BTreeMap::new(),hook_streaks:BTreeMap::new(),diary_counts:BTreeMap::new(),compacting:false,turn_start:None,label_deadline:None,tokens_closed:0,tokens_message:None,gen_start:None,
             token_chars:0,thinking_start:None,thought_s:0.0,tasks:Vec::new(),usage:metadata.get("usage").cloned().unwrap_or(Value::Null),
-            context_window:metadata["context_window"].as_u64(),cost:metadata["cost"].as_f64(),effort_intent,effort_deadline:None,active_input:None,slash_input:None,unknown:BTreeSet::new(),replaying:false,surface:None,stderr_tail:Vec::new(),problem_persisted,subagents:BTreeMap::new(),echoes:std::collections::VecDeque::new(),background:BTreeSet::new(),active_at:clock.monotonic_s,deaf:false,idle_compact:IdleCompact::default(),metadata };
+            context_window:metadata["context_window"].as_u64(),cost:metadata["cost"].as_f64(),effort_intent,effort_deadline:None,active_input:None,steer_now:None,slash_input:None,unknown:BTreeSet::new(),replaying:false,surface:None,stderr_tail:Vec::new(),problem_persisted,subagents:BTreeMap::new(),echoes:std::collections::VecDeque::new(),background:BTreeSet::new(),active_at:clock.monotonic_s,deaf:false,idle_compact:IdleCompact::default(),metadata };
         if let Some(controls) = engine.metadata["control_carry"].as_array() {
             for control in controls {
                 let Ok(request_id) = serde_json::from_value::<RequestId>(control["request_id"].clone()) else { continue };
@@ -261,7 +263,7 @@ impl ClaudeEngine {
         self.waiters.clear(); self.policies.clear(); self.last_format_request = None; self.format_gate.reset();
         self.pending.clear(); self.question = None; self.effort_intent = None; self.subagents.clear();
         self.tasks.clear(); self.background.clear(); self.label = None; self.drop_turn_notices();
-        self.effort_deadline = None; self.active_input = None; self.restore_plan = None;
+        self.effort_deadline = None; self.active_input = None; self.steer_now = None; self.restore_plan = None;
         self.in_progress = false; self.turn_start = None; self.label_deadline = None;
         self.clear_streams(effects);
     }
@@ -661,14 +663,15 @@ impl ClaudeEngine {
                 let text = payload["text"].as_str().ok_or_else(||error("mensagem sem texto"))?;
                 if text.trim_start().starts_with('/') { self.slash_input = Some(text.trim().to_owned()); }
                 self.wires.insert(operation_id.clone(),Wire { interaction:None,kind:"input".into(),request_id:None,final_result:false });
+                // Só o Orientar do botão corta o turno, como o ctrl+x ctrl+s; recado com `steer:true` espera a ferramenta acabar.
+                let cut = command.kind == OperationKind::Steer && payload["now"] == true && self.in_progress && self.steer_now.is_none();
                 if !self.in_progress {
                     self.active_input = Some(operation_id.clone());
                     self.start_turn();
                 }
                 self.expect_echo(&operation_id);
                 let mut frame=Self::input_frame(&operation_id,&payload);
-                // `now` faz a CLI cortar o turno em curso, como o ctrl+x ctrl+s do terminal; sem ele, espera a ferramenta acabar.
-                if command.kind == OperationKind::Steer { frame["priority"]=json!("now"); }
+                if cut { frame["priority"]=json!("now"); self.steer_now = Some(operation_id.clone()); }
                 effects.push(Effect::Write { operation_id:Some(operation_id),frame });
             }
             OperationKind::Interrupt => {
@@ -839,6 +842,7 @@ impl ClaudeEngine {
                 self.question = None;
             }
         }
+        if outcome == WriteOutcome::NotWritten && self.steer_now.as_deref() == Some(operation_id.as_str()) { self.steer_now = None; }
         if kind == "input" && self.active_input.as_deref() == Some(operation_id.as_str()) && outcome == WriteOutcome::NotWritten {
             self.active_input = None; self.in_progress = false; self.turn_start = None; self.label_deadline = None;
         }
@@ -1102,9 +1106,14 @@ impl ClaudeEngine {
                 self.turn_limit = None;
                 if local { effects.push(Effect::ConfirmLocalCommands); }
                 self.apply_usage(&event,effects);
+                // O corte não é parada: a CLI já segue com a orientação, e a fila espera o turno dela acabar.
+                let steered = self.steer_now.take();
+                if let Some(id) = &steered { self.active_input = Some(id.clone()); self.start_turn(); }
                 self.clear_streams(effects); self.changed(effects,true);
-                if self.effort_intent.as_ref().is_some_and(|intent|intent["status"] == "prepared") { self.dispatch_effort(effects); }
-                else { effects.push(Effect::WakeQueue); }
+                if steered.is_none() {
+                    if self.effort_intent.as_ref().is_some_and(|intent|intent["status"] == "prepared") { self.dispatch_effort(effects); }
+                    else { effects.push(Effect::WakeQueue); }
+                }
             }
             "rate_limit_event" => {
                 self.rate_limit_info = event["rate_limit_info"].clone();
@@ -1120,7 +1129,7 @@ impl ClaudeEngine {
                 let working = self.in_progress || !self.pending.is_empty() || self.question.is_some();
                 self.alive = false; self.in_progress = false; self.initializing = false;
                 self.turn_start = None; self.label_deadline = None; self.init_warning = None; self.effort_deadline = None;
-                self.pending.clear(); self.question = None; self.clear_streams(effects);
+                self.pending.clear(); self.question = None; self.steer_now = None; self.clear_streams(effects);
                 // O trabalho de fundo morre com o processo.
                 self.tasks.clear(); self.background.clear(); self.label = None; self.drop_turn_notices();
                 for agent in self.subagents.values_mut().filter(|agent|agent["state"] == "running") { agent["state"] = json!("stopped"); }
