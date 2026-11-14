@@ -1957,6 +1957,7 @@ dependencies = [
  "hangar-scheduled-tasks",
  "hangar-session-tools",
  "hangar-shortcut-transfer",
+ "hangar-sidecar-prune",
  "hangar-transcript",
  "hangar-update-news",
  "hangar-workflows",
@@ -2041,6 +2042,18 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "hangar-sidecar-prune"
+version = "0.1.0"
+dependencies = [
+ "hangar-core",
+ "proptest",
+ "regex",
+ "serde_json",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]
