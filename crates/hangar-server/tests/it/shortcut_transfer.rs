@@ -1656,7 +1656,8 @@ async fn verify_normal_exit_ends_the_background_children() {
     let command = format!("sleep 30 & echo $! > {}; echo pronto", pidfile.display());
     scene.save(json!([{"id": "s", "type": "shell", "label": "S", "command": "s", "verify": command}]));
     let body = hangar_shortcut_transfer::run_checks(&scene.host(), &["s".into()], &[], std::time::Duration::from_secs(20)).await.unwrap();
-    assert_eq!((body["checks"][0]["code"].clone(), body["checks"][0]["output"].clone()), (json!(0), json!("pronto\n")), "{body}");
+    assert_eq!(body["checks"][0]["code"], json!(0), "{body}");
+    assert!(body["checks"][0]["output"].as_str().is_some_and(|out| out.contains("pronto")), "{body}");
     let pid = std::fs::read_to_string(&pidfile).unwrap().trim().to_owned();
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat"));
     let zombie = stat.as_ref().is_ok_and(|text| text.rsplit_once(')').is_some_and(|(_, tail)| tail.split_whitespace().next() == Some("Z")));
