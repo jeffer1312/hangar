@@ -23,7 +23,7 @@ use hangar_server::runtime::gateway::RuntimeRegistry;
 use serde_json::{Value, json};
 
 struct Server { addr: SocketAddr, python: Arc<fake::Fake>, groups: Arc<GroupService>, pair: PathBuf, runtime: Arc<RuntimeRegistry>,
-    share: Arc<hangar_server::share::ShareState>, sink: crate::sink::Sink }
+    share: Arc<hangar_server::share::ShareState>, sink: crate::sink::Sink, list: Arc<ListBridge> }
 
 /// `n` sessões Claude (`s0`..) e o roteador de grupo montado na frente do principal.
 async fn server(root: &Path, n: usize) -> Server {
@@ -55,6 +55,7 @@ async fn server_built(root: &Path, n: usize, orq: Option<Arc<dyn hangar_server::
     state.list = Arc::new(ListBridge::new(ListEnv { mux: Mux::with_program(&script, Duration::from_secs(5)),
         capture_program: script.into_os_string(), procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs },
         FactsClient::new(upstream, SECRET.into())));
+    let list = state.list.clone();
     let pair = home.join(".claude/.hangar-pair");
     let groups = Arc::new(GroupService::new(PairDir::new(pair.clone(), root.join("arquivo")),
         orq.unwrap_or_else(|| Arc::new(PythonOrq::from_state(&state).with_paths(home.clone(), pair.clone()))), "casa".into()).with_diary(state.diag.clone()));
@@ -76,7 +77,7 @@ async fn server_built(root: &Path, n: usize, orq: Option<Arc<dyn hangar_server::
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    Server { addr, python, groups, pair, runtime, share, sink }
+    Server { addr, python, groups, pair, runtime, share, sink, list }
 }
 
 async fn call(addr: SocketAddr, method: &str, path: &str, body: Option<&Value>, token: &str) -> (u16, Value) {
@@ -468,6 +469,24 @@ async fn surrogate_task_is_422() {
     assert_eq!((status, body["detail"]["code"].clone()), (422, json!("erro_corpo_invalido")));
     assert_eq!(srv.python.hits_to("/api/sessions/s0/pair"), 0);
     assert!(!srv.pair.join("s0.json").exists());
+}
+
+/// R1-13 (`_forget` + `_invalidate_lists`): fechada a sessão, a lista esquece a conversa que guardava
+/// para o nome; o pane de mesmo nome que segue no multiplexador falso (uma sessão nova) não a herda.
+#[tokio::test(flavor = "multi_thread")]
+async fn delete_r1_13_the_list_forgets_the_closed_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let srv = server_unowned(dir.path(), 1).await;
+    let old = dir.path().join("velha.jsonl");
+    std::fs::write(&old, "").unwrap();
+    let old = old.to_string_lossy().into_owned();
+    srv.list.seed("s0", &old);
+    let jsonl = |found: Option<(hangar_api::session::SessionRow, Option<u32>)>| found.and_then(|(row, _)| row.jsonl);
+    assert_eq!(jsonl(srv.list.discovered_session("s0").await.ok().flatten()).as_deref(), Some(old.as_str()));
+    let (status, body) = call(srv.addr, "DELETE", "s0", None, OWNER).await;
+    assert_eq!(status, 200, "{body}");
+    let after = jsonl(srv.list.discovered_session("s0").await.ok().flatten());
+    assert!(after.is_some_and(|path| path != old), "a sessão nova com o nome não herda a conversa da fechada");
 }
 
 /// R1-18 (`test_orq_readonly.py`, `forwarded.rs`): o orquestrador com execução viva não fecha por

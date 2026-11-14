@@ -128,12 +128,15 @@ fn fake_tmux(root: &Path, display: &str) -> PathBuf {
         // O ator do terminal do Claude pergunta o pane; `#{{pane_pid}}` responde o pid de quem chamou.
         "  display-message) for last; do :; done; case \"$last\" in '#{{pane_pid}}'*) printf \"$PPID\\t\";; esac; printf '{display}\\t%%1\\t1\\n';;\n",
         "  capture-pane) printf '────────────────────────────────\\n❯ \\n────────────────────────────────\\n';;\n",
-        "  has-session) grep -qx -- \"${{3#=}}\" \"$S\";;\n",
+        "  has-session) grep -qx -- \"${{3#=}}\" \"$S\" || {{ echo \"can't find session: ${{3#=}}\" >&2; exit 1; }};;\n",
+        // Terminais de atalho: as linhas do `list-sessions -F` ficam num arquivo.
+        "  list-sessions) cat '{shortcuts}' 2>/dev/null;;\n",
         "  kill-session) [ -e '{survive}' ] && exit 0; grep -vx -- \"${{3#=}}\" \"$S\" > \"$S.new\"; mv \"$S.new\" \"$S\";;\n",
         "  show-options) n=\"${{4#=}}\"; grep -qx -- \"${{n%:}}\" '{hidden}' && echo 1;;\n",
         "  list-panes) exit 0;;\n",
         "  *) exit 0;;\nesac\n"),
-        calls = calls.display(), sessions = sessions.display(), hidden = hidden.display(), survive = survive.display(), display = display));
+        calls = calls.display(), sessions = sessions.display(), hidden = hidden.display(), survive = survive.display(), display = display,
+        shortcuts = root.join("shortcuts").display()));
     std::fs::write(&sessions, "").unwrap();
     std::fs::write(&hidden, "").unwrap();
     script
@@ -408,6 +411,45 @@ async fn delete_r1_3_parked_codex_headless_closes_in_rust() {
     }
     assert_eq!(e.alive(), ["term-cxn"], "sem a marca o shell é de outro: fica");
     assert_eq!(e.python.hits_to("/api/sessions/cxh"), 0);
+}
+
+/// R1-15: os terminais de atalho da sessão fechada saem junto, ainda com o nome reservado; o de outra
+/// sessão fica.
+#[tokio::test]
+async fn delete_r1_15_shortcut_terminals_of_the_session_close_with_it() {
+    let e = env().await;
+    e.sessions(&["cat1", "shortcut-a1b2c3", "shortcut-d4e5f6"]);
+    std::fs::write(e.root.join("shortcuts"), concat!("shortcut-a1b2c3\tcat1\ta1b2c3\t100\t0\t\t0\t1\t\t\t0\tdev\n",
+        "shortcut-d4e5f6\toutra\td4e5f6\t100\t0\t\t0\t1\t\t\t0\tdev\n")).unwrap();
+    let (status, body) = e.delete("cat1").await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(e.alive(), ["shortcut-d4e5f6"], "o atalho da sessão fechou, o da outra ficou");
+    assert!(e.calls("kill-session").contains(&"kill-session -t =shortcut-a1b2c3".to_owned()), "{:?}", e.calls(""));
+}
+
+/// R1-17 (decisão 3): os arquivos do cofre da sessão saem só com o fechamento confirmado, também
+/// quando quem fecha é o convidado; recusado, o arquivo fica com a sessão viva.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn delete_r1_17_vault_files_leave_only_with_a_confirmed_close() {
+    let dir = hangar_server::vault::files::base().expect("XDG_RUNTIME_DIR: a pasta dos arquivos do cofre");
+    let e = env().await;
+    let name = format!("cofre-r1-17-{}", std::process::id());
+    e.sessions(&[name.as_str()]);
+    let file = hangar_server::vault::files::write(&dir, "", &name, b"segredo").unwrap();
+    std::fs::write(e.root.join("survive"), "").unwrap();
+    assert_eq!(e.delete_as(&name, GUEST).await.0, 500);
+    // estavel: a limpeza do cofre roda numa tarefa; meio segundo basta para uma limpeza indevida aparecer.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(file.exists(), "recusado: o arquivo segue com a sessão viva");
+    std::fs::remove_file(e.root.join("survive")).unwrap();
+    assert_eq!(e.delete_as(&name, GUEST).await.0, 200);
+    for _ in 0..100 {
+        if !file.exists() { break; }
+        // estavel: intervalo da espera pela tarefa da limpeza; a condição encerra antes do teto de 5 s.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(!file.exists(), "fechada de fato, o arquivo do cofre saiu");
 }
 
 /// R1-10 (`test_closed_names_ilegivel_vai_para_o_lado_antes_de_gravar`): o arquivo de nomes ilegível vai
