@@ -277,13 +277,33 @@ def _fake_job_holder(tmp_path, monkeypatch):
         def members(self): return []
     monkeypatch.setattr(runtime_process, '_same_process', lambda pid, birth: True)
     containment = Containment(os.getpid(), 1.0, Job(), record=tmp_path / 'containment.json', life='t')
-    return type('Contained', (), {'runtime_containment': containment})()
+    return type('Contained', (), {'runtime_containment': containment, 'poll': lambda self: None})()
 
 
 _SPAWN_ON_GO = ("import os,subprocess,sys,time\n"
     "while not os.path.exists(sys.argv[1]): time.sleep(.01)\n"
     "p=subprocess.Popen([sys.executable,'-c','import time;time.sleep(60)'])\n"
     "open(sys.argv[2],'w').write(str(p.pid)); time.sleep(60)")
+
+
+def test_refresh_members_of_a_live_child_does_not_scan_the_machine(tmp_path, monkeypatch):
+    # O Supervisor chama a cada 250 ms; no Windows `status()` e `num_threads()` listam todos os processos.
+    from app import runtime_process
+    from app.runtime_process import spawn_contained, cleanup, refresh_members
+    proc = spawn_contained([sys.executable, '-c', 'import time; time.sleep(60)'],
+        env=dict(os.environ), record_path=tmp_path / 'containment.json')
+    try:
+        def scan(*a, **k):
+            raise AssertionError('varreu os processos da máquina')
+        monkeypatch.setattr(runtime_process.psutil.Process, 'status', scan)
+        monkeypatch.setattr(runtime_process.psutil.Process, 'num_threads', scan)
+        proc.runtime_containment.saved = False
+        refresh_members(proc)
+        assert proc.runtime_containment.saved
+    finally:
+        monkeypatch.undo()
+        proc.kill(); proc.wait(5)
+        cleanup(proc, timeout=3)
 
 
 @pytest.mark.skipif(sys.platform == 'win32', reason='grupo de processo POSIX')
