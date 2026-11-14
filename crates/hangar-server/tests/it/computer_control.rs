@@ -251,9 +251,13 @@ fn process_alive(pid: &str) -> bool {
     }
 }
 
+/// Sem o que depende da máquina que roda o teste: CLIProxy no ar e Hyprland vivo.
 fn without_running(mut body: Value) -> Value {
     if let Some(cliproxy) = body.get_mut("cliproxy").and_then(Value::as_object_mut) {
         cliproxy.remove("running");
+    }
+    if let Some(body) = body.as_object_mut() {
+        assert!(body.remove("hyprland").is_none_or(|v| v.is_boolean()), "hyprland é booleano");
     }
     body
 }
@@ -1178,27 +1182,30 @@ async fn rot60_windows_setup_identity() {
     assert!(prompt.contains("4. Autorize esta chave pública pro usuário primeiro (é o usuário com que o Hangar vai entrar; se ele não existir aqui, use o administrador logado e me diga qual é):\n   ssh-ed25519 AAAAC3Nza dono@máquina\n"), "{prompt}");
 }
 
-/// ROT-62 (r1-windows-sem-chave), ROT-61 (r1-windows-sem-ssh, r1-windows-ssh-falha).
+/// ROT-62 (r1-windows-sem-chave), ROT-61 (r1-windows-sem-ssh, r1-windows-ssh-falha): sem chave e sem
+/// `ssh` é "sem chave"; `ssh -G` que falha é erro próprio com a saída, não "sem chave".
 #[tokio::test]
 async fn rot62_windows_setup_without_key() {
     let s = Scene::new().await;
     s.ssh(RESOLVED);
     s.assert_error(&s.windows("?host=h").await, 400, "erro_computer_control_no_ssh_key", json!({}));
     s.write(".ssh/id_ed25519.pub", KEY);
-    s.ssh("exit 255");
-    s.assert_error(&s.windows("?host=h").await, 400, "erro_computer_control_no_ssh_key", json!({}));
+    s.ssh("printf 'config ruim\\n' >&2; exit 255");
+    s.assert_error(&s.windows("?host=h").await, 500, "erro_computer_control_ssh_resolve",
+        json!({"host": "h", "code": 255, "error": "config ruim"}));
     std::fs::remove_file(s.bin.join("ssh")).unwrap();
     s.assert_error(&s.windows("?host=h").await, 400, "erro_computer_control_no_ssh_key", json!({}));
 }
 
-/// ROT-61 (r1-windows-ssh-prazo): no prazo de 10 s do `ssh -G` cai o grupo inteiro.
+/// ROT-61 (r1-windows-ssh-prazo): no prazo de 10 s do `ssh -G` cai o grupo inteiro e a resposta diz
+/// que ele não respondeu.
 #[tokio::test]
 async fn rot61_windows_setup_resolve_deadline() {
     let s = Scene::new().await;
     s.write(".ssh/id_ed25519.pub", KEY);
     s.hanging_ssh();
     let started = Instant::now();
-    s.assert_error(&s.windows("?host=h").await, 400, "erro_computer_control_no_ssh_key", json!({}));
+    s.assert_error(&s.windows("?host=h").await, 504, "erro_computer_control_ssh_timeout", json!({"host": "h"}));
     assert!(started.elapsed() < Duration::from_secs(60));
     s.assert_group_dead().await;
 }

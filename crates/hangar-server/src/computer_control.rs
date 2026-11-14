@@ -147,16 +147,21 @@ async fn ssh_program(env: &crate::accounts::environment::AccountEnvironment) -> 
     tokio::task::spawn_blocking(move || crate::cli_probe::resolve_program("ssh", &env)).await.map_err(setup::Error::io)
 }
 
-/// A mesma lista de contas do `sync_jev`: as do catálogo, menos a pasta padrão.
 pub(crate) fn paths(st: &AppState) -> Result<setup::Paths, setup::Error> {
-    let env = &st.accounts.env;
-    let default = crate::accounts::catalog::resolved(&env.home.join(".claude"));
-    let accounts = st.accounts.claude_accounts().map_err(|e| setup::Error::io(e.message))?
+    account_paths(&st.accounts).map_err(setup::Error::io)
+}
+
+/// `~/.claude.json` e o de cada conta do catálogo, menos a pasta padrão: a lista das rotas, do registro
+/// e do `sync_jev`.
+pub(crate) fn account_paths(accounts: &crate::accounts::AccountService) -> Result<setup::Paths, String> {
+    let home = &accounts.env.home;
+    let default = crate::accounts::catalog::resolved(&home.join(".claude"));
+    let homes = accounts.claude_accounts().map_err(|e| e.message)?
         .into_iter()
         .map(|(_, account)| account.home)
-        .filter(|home| crate::accounts::catalog::resolved(home) != default)
+        .filter(|account| crate::accounts::catalog::resolved(account) != default)
         .collect();
-    Ok(setup::Paths::new(env.home.clone(), accounts))
+    Ok(setup::Paths::new(home.clone(), homes))
 }
 
 fn facts(st: &AppState) -> Result<setup::Facts, setup::Error> {
@@ -166,6 +171,7 @@ fn facts(st: &AppState) -> Result<setup::Facts, setup::Error> {
         jev: config.jev_env(),
         cliproxy_keys: crate::jev_aux::cliproxy_keys(&env.home),
         cliproxy_installed: crate::cli_probe::resolve_program("cli-proxy-api", env).is_some(),
+        hyprland: setup::hyprland_found(),
     })
 }
 

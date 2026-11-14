@@ -17,6 +17,8 @@ pub struct Facts {
     pub jev: Map<String, Value>,
     pub cliproxy_keys: Vec<String>,
     pub cliproxy_installed: bool,
+    /// Hyprland vivo nesta máquina: o alvo `linux` automático, que liga sem alvo cadastrado.
+    pub hyprland: bool,
 }
 
 /// Lê na ordem do Python, para o mesmo arquivo ruim aparecer primeiro.
@@ -51,12 +53,14 @@ pub fn state(paths: &Paths, facts: &Facts) -> Result<Value, Error> {
         "agent_exe": {"path": exe.to_string_lossy(), "exists": exe_size.is_some(), "size": exe_size.unwrap_or(0)},
         "mode": "package",
         "installed_tag": install.get("tag").cloned().unwrap_or_else(|| json!("")),
-        "package_exists": installed_with(paths, &install) && exe_size.is_some(),
+        // O mesmo predicado do PUT e do registro; o exe que falta aparece em `agent_exe.exists`.
+        "package_exists": installed_with(paths, &install),
         "unavailable": unavailable,
         "targets": targets,
         "ssh_hosts": ssh_hosts(paths),
         "local_available": cfg!(windows) || (crate::supported() && binary),
         "platform": if cfg!(windows) { "windows" } else { "linux" },
+        "hyprland": facts.hyprland,
         "enabled": enabled,
         "project_dir": "",
         "agent_config": env.get("HCC_AGENT_CONFIG").cloned().unwrap_or(default_agent),
@@ -117,6 +121,20 @@ fn cliproxy_running() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `package_exists` é o `installed` do PUT e do registro: o exe que falta não o derruba.
+    #[cfg(not(windows))]
+    #[test]
+    fn package_exists_does_not_need_the_windows_exe() {
+        let home = tempfile::tempdir().unwrap();
+        let paths = Paths::new(home.path().to_owned(), Vec::new());
+        std::fs::create_dir_all(paths.install_dir()).unwrap();
+        std::fs::write(paths.binary(), b"\x7fELF").unwrap();
+        std::fs::write(paths.install_json(), br#"{"tag": "v2.0.0"}"#).unwrap();
+        let out = state(&paths, &Facts::default()).unwrap();
+        assert_eq!(out["package_exists"], json!(true));
+        assert_eq!(out["agent_exe"]["exists"], json!(false));
+    }
 
     #[test]
     fn tail_counts_code_points() {

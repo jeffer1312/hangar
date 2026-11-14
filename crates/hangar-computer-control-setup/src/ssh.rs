@@ -58,12 +58,17 @@ pub async fn test_host(host: &str, proxy_command: &str, ssh: Option<&Path>, env:
     let detail = if ok {
         String::new()
     } else {
-        let text = py::strip(if out.stderr.is_empty() { &out.stdout } else { &out.stderr });
-        let count = text.chars().count();
-        let tail: String = text.chars().skip(count.saturating_sub(400)).collect();
+        let tail = tail(if out.stderr.is_empty() { &out.stdout } else { &out.stderr });
         if tail.is_empty() { format!("saiu com {}", out.code) } else { tail }
     };
     Ok(json!({"ok": ok, "detail": detail}))
+}
+
+/// Os últimos 400 code points da saída aparada.
+fn tail(text: &str) -> String {
+    let text = py::strip(text);
+    let count = text.chars().count();
+    text.chars().skip(count.saturating_sub(400)).collect()
 }
 
 /// Texto para colar num agente rodando no Windows; host vazio vira `novo-windows`.
@@ -97,11 +102,33 @@ fn hosts_of(text: &str) -> Vec<String> {
     hosts
 }
 
-/// (usuário, chave pública) que o `ssh` usaria para o host, pelo próprio `ssh -G`.
+/// (usuário, chave pública) que o `ssh` usaria para o host, pelo próprio `ssh -G`. Sem `ssh` não há
+/// chave; `ssh -G` que não responde ou que falha é erro com código, nunca "sem chave".
 async fn identity(paths: &Paths, host: &str, ssh: Option<&Path>, env: &BTreeMap<String, String>) -> Result<(String, String), Error> {
     let Some(ssh) = ssh else { return Ok(Default::default()) };
     let args = ["-G".to_owned(), "--".to_owned(), host.to_owned()];
-    let Ok(out) = run(ssh, &args, env, RESOLVE_DEADLINE).await else { return Ok(Default::default()) };
+    let out = match run(ssh, &args, env, RESOLVE_DEADLINE).await {
+        Ok(out) => out,
+        Err(RunError::Missing) => return Ok(Default::default()),
+        Err(RunError::Timeout) => {
+            return Err(Error {
+                status: 504,
+                code: "erro_computer_control_ssh_timeout",
+                msg: format!("ssh -G {host} não respondeu em {} s", RESOLVE_DEADLINE.as_secs()),
+                params: json!({"host": host}),
+            });
+        }
+        Err(RunError::Other(error)) => return Err(Error::at(ssh, &error)),
+    };
+    if out.code != 0 {
+        let detail = tail(if out.stderr.is_empty() { &out.stdout } else { &out.stderr });
+        return Err(Error {
+            status: 500,
+            code: "erro_computer_control_ssh_resolve",
+            msg: format!("ssh -G {host} saiu com {}: {detail}", out.code),
+            params: json!({"host": host, "code": out.code, "error": detail}),
+        });
+    }
     let home = paths.home.clone();
     tokio::task::spawn_blocking(move || identity_of(&out.stdout, &home)).await.map_err(Error::io)?
 }

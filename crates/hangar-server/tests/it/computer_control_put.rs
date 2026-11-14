@@ -227,14 +227,17 @@ async fn rot73_old_client_model() {
     assert_eq!(s.json_at(".claude.json"), s.h(with_entry(MAIN, full_env())));
 }
 
-/// ROT-72 (r2-alvo-inexistente, r2-alvo-vazio): o alvo padrão precisa existir.
+/// ROT-72 (r2-alvo-inexistente, r2-alvo-vazio): o alvo padrão precisa existir. Vazio só passa com o
+/// Hyprland (P1), que depende da máquina que roda o teste; o caso com Hyprland é do `save.rs`.
 #[tokio::test]
 async fn rot72_default_target_must_exist() {
     let s = Scene::new().await;
     s.r2();
     let missing = "«HOME»/.hangar/computer-control/targets/nao-existe-agent.json";
     s.refused(merged(on(), json!({"agent_config": missing})), 400, "erro_computer_control_agent", json!({"file": missing})).await;
-    s.refused(merged(on(), json!({"agent_config": ""})), 400, "erro_computer_control_agent", json!({"file": ""})).await;
+    if !hangar_computer_control_setup::hyprland_found() {
+        s.refused(merged(on(), json!({"agent_config": ""})), 400, "erro_computer_control_agent", json!({"file": ""})).await;
+    }
 }
 
 /// D2.2 (r2-modo-local-com-binario, r2-modo-local-sem-binario): o modo local saiu; nada gravado.

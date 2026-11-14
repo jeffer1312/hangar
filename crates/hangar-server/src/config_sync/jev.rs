@@ -78,16 +78,7 @@ impl RuntimeConfig {
     }
     /// `~/.claude.json` e o de cada outra conta Claude.
     pub(super) fn computer_use_paths(&self) -> Result<setup::Paths, String> {
-        let service = crate::accounts::AccountService::new(self.env.clone());
-        let default = crate::accounts::catalog::resolved(&self.env.home.join(".claude"));
-        let accounts = service
-            .claude_accounts()
-            .map_err(|e| e.message)?
-            .into_iter()
-            .map(|(_, account)| account.home)
-            .filter(|home| crate::accounts::catalog::resolved(home) != default)
-            .collect();
-        Ok(setup::Paths::new(self.env.home.clone(), accounts))
+        crate::computer_control::account_paths(&crate::accounts::AccountService::new(self.env.clone()))
     }
     pub fn sync_jev(&self) -> Result<(), String> {
         setup::sync_jev(&self.computer_use_paths()?, &self.jev_env()).map_err(|e| e.msg)

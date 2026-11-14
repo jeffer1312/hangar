@@ -21,6 +21,7 @@ const ASSET_TIMEOUT: Duration = Duration::from_secs(120);
 const RELEASE_FAILED: &str = "computer_control_release_failed";
 const NO_BINARY: &str = "computer_control_release_sem_binario";
 const DISK_FAILED: &str = "computer_control_install_io_failed";
+const CLIENT_FAILED: &str = "computer_control_http_failed";
 const NEWS_FAILED: &str = "computer_control_news_failed";
 const TAG_INCOMPARABLE: &str = "computer_control_tag_incomparavel";
 const TAG_INVALID: &str = "computer_control_tag_invalida";
@@ -146,6 +147,14 @@ pub async fn update_tick(paths: &Paths, http: &reqwest::Client, github: &Github,
         }
     })
     .await?
+}
+
+/// Sem cliente http a passada não instala nem atualiza: vai ao diário e fica como a falha da instalação,
+/// que o `GET` mostra se o binário faltar.
+pub fn client_failed(paths: &Paths, error: &str, diary: Option<&Path>) {
+    let error = Error { status: 500, code: CLIENT_FAILED, msg: format!("sem cliente http: {error}"), params: json!({"error": error}) };
+    remember_failure(paths, &error);
+    report(diary, "computer_control.instalar", &error);
 }
 
 /// O código da última instalação automática que falhou, se ainda não houve uma que deu certo.
@@ -307,17 +316,16 @@ fn put_in_place(paths: &Paths, downloads: Vec<(PathBuf, Vec<u8>)>, tag: &str) ->
         }
     }
     let swapped = swap_all(&staged)?;
+    // Os alvos só migram com o `install.json` gravado: falhou, os binários voltam e os alvos nem mudaram.
     let written = std::fs::create_dir_all(paths.targets_dir()).map_err(|e| disk(&paths.targets_dir(), &e)).and_then(|()| {
-        let skipped = migrate_targets(paths);
         let install = paths.install_json();
         let text = pyjson::dumps_indent(&json!({"tag": tag}), 2, true);
-        hangar_core::fs::atomic_write(&install, text.as_bytes()).map_err(|e| disk(&install, &e))?;
-        Ok(skipped)
+        hangar_core::fs::atomic_write(&install, text.as_bytes()).map_err(|e| disk(&install, &e))
     });
-    if written.is_err() {
-        undo(&swapped);
+    if let Err(error) = written {
+        return Err(not_restored(error, undo(&swapped)));
     }
-    written
+    Ok(migrate_targets(paths))
 }
 
 /// Temporário novo (nome aleatório, nunca reaproveitado) ao lado do destino, gravado no disco antes
@@ -361,12 +369,15 @@ fn stage(path: &Path, bytes: &[u8], executable: bool) -> std::io::Result<PathBuf
 fn swap_all(staged: &[(PathBuf, PathBuf)]) -> Result<Vec<(PathBuf, Option<PathBuf>)>, Error> {
     let mut done = Vec::new();
     for (index, (temp, path)) in staged.iter().enumerate() {
+        let mut failures = Vec::new();
         let aside = if path.is_file() { set_aside(path).map(Some) } else { Ok(None) };
         let placed = aside.and_then(|aside| {
             hangar_core::fs::replace(temp, path)
                 .inspect_err(|_| {
-                    if let Some(aside) = &aside {
-                        let _ = hangar_core::fs::replace(aside, path);
+                    if let Some(aside) = &aside
+                        && let Err(error) = hangar_core::fs::replace(aside, path)
+                    {
+                        failures.push(restore_failure(path, &error));
                     }
                 })
                 .map(|()| aside)
@@ -377,8 +388,8 @@ fn swap_all(staged: &[(PathBuf, PathBuf)]) -> Result<Vec<(PathBuf, Option<PathBu
                 for (temp, _) in &staged[index..] {
                     let _ = std::fs::remove_file(temp);
                 }
-                undo(&done);
-                return Err(disk(path, &error));
+                failures.extend(undo(&done));
+                return Err(not_restored(disk(path, &error), failures));
             }
         }
     }
@@ -398,17 +409,40 @@ fn set_aside(path: &Path) -> std::io::Result<PathBuf> {
     Ok(target)
 }
 
-/// Devolve a versão de antes; o arquivo que não existia sai.
-fn undo(swapped: &[(PathBuf, Option<PathBuf>)]) {
+/// Devolve a versão de antes; o arquivo que não existia sai. Devolve os que não voltaram.
+fn undo(swapped: &[(PathBuf, Option<PathBuf>)]) -> Vec<String> {
+    let mut failures = Vec::new();
     for (path, aside) in swapped.iter().rev() {
         let restored = match aside {
             Some(aside) => hangar_core::fs::replace(aside, path),
-            None => std::fs::remove_file(path),
+            None => match std::fs::remove_file(path) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                other => other,
+            },
         };
         if let Err(error) = restored {
-            tracing::warn!(code = DISK_FAILED, path = %path.display(), %error, "Computer Use: versão anterior não voltou");
+            failures.push(restore_failure(path, &error));
         }
     }
+    failures
+}
+
+fn restore_failure(path: &Path, error: &std::io::Error) -> String {
+    tracing::warn!(code = DISK_FAILED, path = %path.display(), %error, "Computer Use: versão anterior não voltou");
+    format!("{}: {}", path.display(), crate::strerror(error))
+}
+
+/// A falha leva os arquivos que não voltaram à versão de antes (na mensagem, que vai ao diário, e em
+/// `params.not_restored`).
+fn not_restored(mut error: Error, failures: Vec<String>) -> Error {
+    if failures.is_empty() {
+        return error;
+    }
+    error.msg = format!("{}; não voltaram à versão anterior: {}", error.msg, failures.join(", "));
+    if let Some(params) = error.params.as_object_mut() {
+        params.insert("not_restored".into(), json!(failures));
+    }
+    error
 }
 
 /// Sobras de um tique interrompido (`.<arquivo>.novo-*`) e cópias `.anterior-*` postas de lado.
@@ -614,6 +648,55 @@ mod tests {
             let quoted = shell_quote(&text);
             prop_assert!(!quoted.is_empty());
         }
+    }
+
+    /// `install.json` que não grava: os binários voltam e os alvos nem chegam a migrar.
+    #[cfg(not(windows))]
+    #[test]
+    fn a_failed_install_json_leaves_the_targets_alone() {
+        let home = tempfile::tempdir().unwrap();
+        let paths = Paths::new(home.path().to_owned(), Vec::new());
+        std::fs::create_dir_all(paths.targets_dir()).unwrap();
+        std::fs::write(paths.binary(), b"\x7fELF-old").unwrap();
+        std::fs::write(paths.exe(), b"MZ-old").unwrap();
+        // Uma pasta no lugar do `install.json`: o rename por cima dela falha.
+        std::fs::create_dir_all(paths.install_json()).unwrap();
+        let target = paths.targets_dir().join("linux-agent.json");
+        let old_target = br#"{"transport": "local", "command": ["python3", "/x/linux_agent.py"]}"#;
+        std::fs::write(&target, old_target).unwrap();
+        let downloads = vec![(paths.exe(), b"MZ-new".to_vec()), (paths.binary(), b"\x7fELF-new".to_vec())];
+        let error = put_in_place(&paths, downloads, "v1.0.0").unwrap_err();
+        assert_eq!(error.code, DISK_FAILED);
+        assert_eq!(std::fs::read(&target).unwrap(), old_target);
+        assert_eq!(std::fs::read(paths.binary()).unwrap(), b"\x7fELF-old");
+        assert_eq!(std::fs::read(paths.exe()).unwrap(), b"MZ-old");
+    }
+
+    /// O desfazer devolve quem não voltou; arquivo novo que já sumiu não conta como falha.
+    #[test]
+    fn undo_lists_what_did_not_come_back() {
+        let home = tempfile::tempdir().unwrap();
+        let path = home.path().join("hangar-computer-control");
+        std::fs::write(&path, b"novo").unwrap();
+        let failures = undo(&[(path.clone(), Some(home.path().join("sumiu.anterior"))), (home.path().join("nunca-existiu"), None)]);
+        assert_eq!(failures.len(), 1, "{failures:?}");
+        assert!(failures[0].starts_with(&path.display().to_string()), "{failures:?}");
+        let error = not_restored(Error::plain(500, DISK_FAILED, "falhou"), failures.clone());
+        assert!(error.msg.starts_with("falhou; não voltaram à versão anterior: "), "{}", error.msg);
+        assert_eq!(error.params["not_restored"], json!(failures));
+        assert_eq!(not_restored(Error::plain(500, DISK_FAILED, "falhou"), Vec::new()).msg, "falhou");
+    }
+
+    /// Sem cliente http: falha da instalação gravada com código e linha no diário.
+    #[test]
+    fn a_missing_http_client_is_remembered_and_reported() {
+        let home = tempfile::tempdir().unwrap();
+        let paths = Paths::new(home.path().to_owned(), Vec::new());
+        let diary = home.path().join("diario");
+        client_failed(&paths, "tls", Some(&diary));
+        assert_eq!(install_error(&paths).as_deref(), Some(CLIENT_FAILED));
+        let lines: String = std::fs::read_dir(&diary).unwrap().flatten().map(|f| std::fs::read_to_string(f.path()).unwrap()).collect();
+        assert!(lines.contains(CLIENT_FAILED), "{lines}");
     }
 
     #[test]

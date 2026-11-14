@@ -63,16 +63,16 @@ pub fn save(
     if body.jev_key.as_deref().is_some_and(|key| !key.trim().is_empty()) {
         return Err(Error::plain(400, "erro_computer_control_jev_key_moved", "a chave do Jev do Computer Use agora é a da página Jev"));
     }
-    if !body.enabled {
-        return remove_entry(paths);
-    }
-    // O modo local saiu: só o binário instalado pelo Hangar.
+    // O modo local saiu: só o binário instalado pelo Hangar. Recusa também ao desligar (D2.2).
     if body.mode == Some(Mode::Local) {
         return Err(Error::plain(
             400,
             "erro_computer_control_update_app",
             "Atualize o app: o Computer Use agora é instalado e ligado sozinho",
         ));
+    }
+    if !body.enabled {
+        return remove_entry(paths);
     }
     // Na ordem do Python, para o mesmo arquivo ruim aparecer primeiro.
     let main = read_entry(paths.main_file(), false)?;
@@ -81,7 +81,8 @@ pub fn save(
         return Err(Error::plain(400, "erro_computer_control_not_installed", "instale a versão publicada antes de usar esse modo"));
     }
     let agent = body.agent_config.trim();
-    if !Path::new(agent).is_file() {
+    // Só com o alvo `linux` automático do Hyprland o padrão fica vazio, como no registro.
+    if !(Path::new(agent).is_file() || (agent.is_empty() && facts.hyprland)) {
         return Err(Error {
             status: 400,
             code: "erro_computer_control_agent",
@@ -134,6 +135,49 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
+
+    /// Pacote instalado (`install.json` com tag e binário), sem `.claude.json`.
+    fn installed_home() -> (tempfile::TempDir, Paths) {
+        let home = tempfile::tempdir().unwrap();
+        let paths = Paths::new(home.path().to_owned(), Vec::new());
+        std::fs::create_dir_all(paths.targets_dir()).unwrap();
+        std::fs::write(paths.binary(), b"\x7fELF").unwrap();
+        std::fs::write(paths.install_json(), br#"{"tag": "v2.0.0"}"#).unwrap();
+        (home, paths)
+    }
+
+    fn request(body: Value) -> SaveRequest {
+        serde_json::from_value(body).unwrap()
+    }
+
+    /// D2.2: `mode: "local"` recusa também ao desligar, sem guardar nem tirar a entrada.
+    #[test]
+    fn local_mode_is_refused_even_when_turning_off() {
+        let (_home, paths) = installed_home();
+        std::fs::write(paths.main_file(), br#"{"mcpServers": {"hangar-computer-control": {"command": "x"}}}"#).unwrap();
+        let before = std::fs::read(paths.main_file()).unwrap();
+        let body = request(json!({"enabled": false, "mode": "local"}));
+        let error = save(&paths, &Facts::default(), &Aux::default(), &body, || Ok(Map::new())).unwrap_err();
+        assert_eq!(error.code, "erro_computer_control_update_app");
+        assert_eq!(std::fs::read(paths.main_file()).unwrap(), before);
+        assert!(!paths.parked_file().exists());
+    }
+
+    /// P1: só com o Hyprland (alvo `linux` automático) o padrão vazio liga, sem `HCC_AGENT_CONFIG`.
+    #[test]
+    fn empty_default_target_turns_on_only_with_hyprland() {
+        let (_home, paths) = installed_home();
+        let body = request(json!({"enabled": true, "mode": "package", "agent_config": ""}));
+        let error = save(&paths, &Facts::default(), &Aux::default(), &body, || Ok(Map::new())).unwrap_err();
+        assert_eq!(error.code, "erro_computer_control_agent");
+        assert!(!paths.main_file().exists());
+        let facts = Facts { hyprland: true, ..Facts::default() };
+        save(&paths, &facts, &Aux::default(), &body, || Ok(Map::new())).unwrap();
+        let data: Value = serde_json::from_slice(&std::fs::read(paths.main_file()).unwrap()).unwrap();
+        let entry = &data["mcpServers"][crate::NAME];
+        assert_eq!(entry["command"], json!(paths.binary().to_string_lossy()));
+        assert!(entry["env"].get("HCC_AGENT_CONFIG").is_none(), "{entry}");
+    }
 
     #[test]
     fn base_url_keeps_the_query() {
