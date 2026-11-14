@@ -31,6 +31,16 @@ fn command(kind:OperationKind,payload:Value) -> RuntimeCommand { RuntimeCommand 
 fn writes(effects:&[Effect]) -> Vec<Value> { effects.iter().filter_map(|e|match e { Effect::Write { frame,.. } => Some(frame.clone()),_=>None }).collect() }
 
 #[test]
+fn steer_cuts_the_running_turn_and_input_waits_for_it() {
+    let mut engine = engine(json!({"name":"session","session_id":"sid","initialized":true}));
+    let input = writes(&engine.command(command(OperationKind::Input,json!({"text":"primeiro"})),clock(11.0)).unwrap());
+    assert!(input[0].get("priority").is_none());
+    let steer = writes(&engine.command(RuntimeCommand { operation_id:"op-2".into(),kind:OperationKind::Steer,
+        payload:json!({"text":"muda de rumo"}) },clock(12.0)).unwrap());
+    assert_eq!(steer[0]["priority"],"now");
+}
+
+#[test]
 fn init_timeout_not_deliverable() {
     let mut engine = engine(json!({"name":"session"}));
     let effects = engine.start_initialize("init".into()).unwrap();

@@ -409,6 +409,9 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   das teclas): outro `claude` na sessão recebe 409 e a entrega não passa por ele.
 - **Steer no Claude é só pelo botão**: `ctrl+x ctrl+s` INTERROMPE o turno em curso. Colado num
   recado (`steer:true`), abortaria o trabalho da sessão que recebe — o automático é só do Kimi.
+- **Steer no Claude sem terminal vai com `"priority":"now"` na mensagem do stdin**: a CLI corta o
+  turno em curso (`interrupt`) e segue com ela, como o acorde do terminal. Sem a prioridade, a
+  mensagem só entrava quando a ferramenta em curso acabava (um `ssh` de 590 s segurava o Orientar).
 - **Modo de permissão troca COM a sessão trabalhando** — é tecla, não texto. O guard de "está
   trabalhando" existe para o `/model`, que é texto.
 - **Depois do BTab, o rodapé é lido na hora, sem pausa fixa**, e o Shift+Tab do app mostra o modo

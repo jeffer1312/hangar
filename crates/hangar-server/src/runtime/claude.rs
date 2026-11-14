@@ -666,7 +666,9 @@ impl ClaudeEngine {
                     self.start_turn();
                 }
                 self.expect_echo(&operation_id);
-                let frame=Self::input_frame(&operation_id,&payload);
+                let mut frame=Self::input_frame(&operation_id,&payload);
+                // `now` faz a CLI cortar o turno em curso, como o ctrl+x ctrl+s do terminal; sem ele, espera a ferramenta acabar.
+                if command.kind == OperationKind::Steer { frame["priority"]=json!("now"); }
                 effects.push(Effect::Write { operation_id:Some(operation_id),frame });
             }
             OperationKind::Interrupt => {
