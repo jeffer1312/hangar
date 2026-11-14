@@ -218,6 +218,9 @@ pub fn import(host: &dyn Host, request: ImportRequest) -> Result<Value, Error> {
 /// Grava os scripts e depois a junção com a lista salva, lida e gravada numa seção só da trava da
 /// configuração; falha desfaz os scripts e, se a lista chegou a ser gravada, a lista.
 fn save(host: &dyn Host, machine: &Machine, scripts: &[Script], incoming: &[Value]) -> Result<(usize, usize), Error> {
+    // Uma importação por vez, até o fim do desfazer: o de uma nunca grava o original por cima de outra.
+    static IMPORTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _turn = IMPORTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut counts = (0, 0);
     let mut written: Option<(String, Snapshot)> = None;
     let mut write = || -> Result<(), Error> {

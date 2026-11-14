@@ -233,9 +233,6 @@ pub(crate) fn apply_files(
     scripts: &[Script],
     save: impl FnOnce() -> Result<(), Error>,
 ) -> Result<(), (Error, Vec<String>)> {
-    // Uma importação com scripts por vez: o desfazer de uma nunca grava o original por cima de outra concluída.
-    static IMPORTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    let _turn = IMPORTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut backups: Vec<(PathBuf, Option<Vec<u8>>, u32)> = Vec::new();
     let mut created = Vec::new();
     let Err(cause) = write_all(home, scripts, &mut backups, &mut created).and_then(|()| save()) else {
