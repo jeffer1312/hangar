@@ -15,32 +15,37 @@ export interface SettingsItem {
   labelColor?: string;
 }
 
-export function SettingsList({ items, onPick, searchable = true }: {
-  items: SettingsItem[]; onPick: (id: string) => void; searchable?: boolean;
+export function SettingsList({ items, onPick, searchable = true, comfortable = false }: {
+  items: SettingsItem[]; onPick: (id: string) => void; searchable?: boolean | 'always'; comfortable?: boolean;
 }) {
   const { theme } = useUnistyles();
   const [query, setQuery] = useState('');
-  const long = searchable && items.length > 8;
+  const long = searchable === 'always' || (searchable && items.length > 8);
   const q = long ? query.trim().toLowerCase() : '';
   const visible = q ? items.filter((it) => `${it.label} ${it.hint ?? ''}`.toLowerCase().includes(q)) : items;
   return <>
-    {long ? <View style={styles.search}>
+    {long ? <View style={[styles.search, comfortable && styles.comfortableSearch]}>
       <Icon name="Search" size={14} color={theme.tokens.text.muted} />
       <TextInput value={query} onChangeText={setQuery} placeholder={m.native_ctl_search()}
         accessibilityLabel={m.native_ctl_search()} placeholderTextColor={theme.tokens.text.muted}
-        autoCorrect={false} autoCapitalize="none" returnKeyType="search" style={styles.searchInput} />
+        autoCorrect={false} autoCapitalize="none" returnKeyType="search" style={[styles.searchInput, comfortable && styles.comfortableSearchInput]} />
     </View> : null}
-    {visible.length ? <ScrollView style={styles.list} keyboardShouldPersistTaps="handled" nestedScrollEnabled accessibilityRole="radiogroup">
+    {visible.length ? <ScrollView style={comfortable ? styles.comfortableList : styles.list} keyboardShouldPersistTaps="handled" nestedScrollEnabled accessibilityRole="radiogroup">
       {visible.map((it) => <Pressable key={it.id} onPress={() => onPick(it.id)} disabled={it.disabled}
-        style={({ pressed }) => [styles.row, { backgroundColor: it.selected ? theme.tokens.accent.dim : pressed ? theme.tokens.fillSubtle : 'transparent' }, it.disabled && styles.disabled]}
+        style={({ pressed }) => [styles.row, comfortable && styles.comfortableRow, { backgroundColor: it.selected ? theme.tokens.accent.dim : pressed ? theme.tokens.fillSubtle : 'transparent' }, it.disabled && styles.disabled]}
         accessibilityRole="radio" accessibilityLabel={it.label} accessibilityHint={it.hint}
-        accessibilityState={{ selected: !!it.selected, disabled: !!it.disabled }}>
+        accessibilityState={{ selected: !!it.selected, checked: !!it.selected, disabled: !!it.disabled }}>
         {it.leading}
-        <Text style={styles.rowText} numberOfLines={2}>
+        {comfortable ? <View style={styles.rowText}>
+          <Text style={styles.comfortableName}>{it.label}</Text>
+          {it.hint ? <Text style={styles.comfortableHint}>{it.hint}</Text> : null}
+        </View> : <Text style={styles.rowText} numberOfLines={2}>
           <Text style={[styles.modelName, it.labelColor ? { color: it.labelColor } : null]}>{it.label}</Text>
           {it.hint ? <Text style={styles.detail}>{`  ${it.hint}`}</Text> : null}
-        </Text>
-        {it.selected ? <Icon name="Check" size={16} color={theme.tokens.accent.base} /> : null}
+        </Text>}
+        {comfortable ? <View style={[styles.indicator, it.selected && styles.indicatorSelected]}>
+          {it.selected ? <Icon name="Check" size={15} color={theme.tokens.accent.base} /> : null}
+        </View> : it.selected ? <Icon name="Check" size={16} color={theme.tokens.accent.base} /> : null}
       </Pressable>)}
     </ScrollView> : <Text style={styles.empty}>{q ? m.native_ctl_no_results() : m.comum_nenhum_modelo()}</Text>}
   </>;
@@ -50,7 +55,15 @@ const styles = StyleSheet.create((theme) => ({
   search: { height: 32, marginHorizontal: theme.base.space[1], marginBottom: theme.base.space[1], flexDirection: 'row', alignItems: 'center', gap: theme.base.space[1.5],
     paddingHorizontal: theme.base.space[2], borderRadius: theme.base.radius.sm, borderWidth: 1, borderColor: theme.tokens.border.default, backgroundColor: theme.tokens.fillSubtle },
   searchInput: { flex: 1, padding: 0, fontSize: theme.base.text.xs, color: theme.tokens.text.primary },
+  comfortableSearch: { height: 44 },
+  comfortableSearchInput: { fontSize: theme.base.text.sm },
   list: { flexGrow: 0, flexShrink: 1, minHeight: 72, maxHeight: 288 },
+  comfortableList: { flexGrow: 0, flexShrink: 1, minHeight: 0 },
+  comfortableRow: { minHeight: 66, paddingHorizontal: theme.base.space[3], paddingVertical: theme.base.space[3], borderRadius: theme.base.radius.lg },
+  comfortableName: { fontSize: theme.base.text.sm, fontWeight: theme.base.weight.semibold, color: theme.tokens.text.primary },
+  comfortableHint: { marginTop: theme.base.space[1], fontSize: theme.base.text.xxs, color: theme.tokens.text.secondary },
+  indicator: { width: 24, height: 24, borderRadius: theme.base.radius.full, borderWidth: 1, borderColor: theme.tokens.border.default, alignItems: 'center', justifyContent: 'center' },
+  indicatorSelected: { borderColor: 'transparent', backgroundColor: theme.tokens.accent.dim },
   row: { minHeight: 36, flexDirection: 'row', alignItems: 'center', gap: theme.base.space[2], paddingHorizontal: theme.base.space[2], paddingVertical: theme.base.space[1.5], borderRadius: theme.base.radius.sm },
   rowText: { flex: 1, minWidth: 0, fontSize: theme.base.text.xs, color: theme.tokens.text.primary },
   modelName: { fontWeight: theme.base.weight.medium },

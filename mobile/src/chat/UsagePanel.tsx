@@ -16,12 +16,13 @@ interface Props {
   serverId: string;
   name: string;
   onOpenLimits?: () => void;
+  showTitle?: boolean;
 }
 
 const clamp = (n: number) => Math.min(100, Math.max(0, n));
 
 // Lê só o que o SSE já trouxe; sem dado, mostra o vazio.
-export function UsagePanel({ serverId, name, onOpenLimits }: Props) {
+export function UsagePanel({ serverId, name, onOpenLimits, showTitle = true }: Props) {
   const { theme } = useUnistyles();
   const router = useRouter();
   const chat = chatStore(serverId, name);
@@ -65,7 +66,7 @@ export function UsagePanel({ serverId, name, onOpenLimits }: Props) {
 
   return (
       <ScrollView contentContainerStyle={styles.inner} accessibilityLabel={m.uso_aria()}>
-        <Text style={[styles.title, { color: theme.tokens.text.primary }]} accessibilityRole="header">{m.uso_titulo()}</Text>
+        {showTitle ? <Text style={[styles.title, { color: theme.tokens.text.primary }]} accessibilityRole="header">{m.uso_titulo()}</Text> : null}
 
         {empty ? <Text style={[styles.sub, { color: theme.tokens.text.muted }]}>{m.uso_vazio()}</Text> : null}
 

@@ -15,10 +15,10 @@ import * as m from '../paraglide/messages';
 interface Props {
   serverId: string;
   name: string;
-  onOpenSettings?: (which: 'mode' | 'account') => void;
+  onOpenSettings?: (which: 'mode' | 'account' | 'usage') => void;
 }
 
-// Só os itens de uso abrem a folha; modo e conta reaproveitam os ajustes da sessão.
+// O chat usa uma folha só; consumidores sem controlador conservam a folha de uso própria.
 export function ComposerStatusLine({ serverId, name, onOpenSettings }: Props) {
   const { theme } = useUnistyles();
   const { fontScale } = useWindowDimensions();
@@ -35,7 +35,7 @@ export function ComposerStatusLine({ serverId, name, onOpenSettings }: Props) {
 
   const tone = (pct: number) => (pct >= 90 ? theme.tokens.status.error : pct >= 70 ? theme.tokens.status.warning : theme.tokens.text.muted);
   const muted = theme.tokens.text.muted;
-  const openUsage = () => setUsageOpen(true);
+  const openUsage = () => onOpenSettings ? onOpenSettings('usage') : setUsageOpen(true);
   const items: { key: string; node: ReactNode; spoken: string; shrink?: boolean; onPress?: () => void }[] = [];
   if (status.folder) {
     items.push({ key: 'folder', spoken: status.folder, shrink: true, onPress: openUsage, node: (

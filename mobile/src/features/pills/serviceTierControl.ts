@@ -9,13 +9,14 @@ interface Args {
   serverId: string;
   name: string;
   provider: string | null;
+  model: string | null;
   open: boolean;
 }
 
 type Tier = 'default' | 'priority';
 type Catalog = { tier: string | null; supported: boolean; visible: boolean };
 
-export function useServiceTierControl({ serverId, name, provider, open }: Args) {
+export function useServiceTierControl({ serverId, name, provider, model: selectedModel, open }: Args) {
   const server = useServers((s) => s.servers.find((x) => x.id === serverId) ?? null);
   const session = useSessions((s) => s.byServerRecord?.[serverId]?.find((x) => x.name === name)
     ?? s.rows.find((x) => x.serverId === serverId && x.name === name) ?? null);
@@ -50,7 +51,7 @@ export function useServiceTierControl({ serverId, name, provider, open }: Args) 
     setError(null);
     setNotice(null);
     return () => { seq.current++; };
-  }, [server, name, provider, engine, listedModel, statusModel]);
+  }, [server, name, provider, engine, listedModel, statusModel, selectedModel]);
 
   // O ACK cobre o atraso do SSE, mas não pode vencer uma mudança posterior no terminal.
   useEffect(() => {
@@ -94,7 +95,7 @@ export function useServiceTierControl({ serverId, name, provider, open }: Args) 
     }
   }, [candidate, server, name, isCodex, engine]);
 
-  useEffect(() => { if (open) void load(); }, [open, load, listedModel, statusModel]);
+  useEffect(() => { if (open) void load(); }, [open, load, listedModel, statusModel, selectedModel]);
 
   const tier = isCodex
     ? (confirmed && confirmed.before === liveTier ? confirmed.tier : liveTier ?? catalog?.tier)
