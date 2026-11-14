@@ -50,15 +50,28 @@ pub fn read_replaced_to_string(path: &Path) -> io::Result<String> {
 /// `rename` que sobrevive ao Windows: lá um leitor aberto sem FILE_SHARE_DELETE (o CLI lendo
 /// o JSON) recusa a troca por um instante. No POSIX a troca nunca falha por leitor aberto.
 pub fn replace(from: &Path, to: &Path) -> io::Result<()> {
+    retry_while_held(|| std::fs::rename(from,to))
+}
+
+/// A política de espera do `replace` para qualquer troca de arquivo: no Windows, enquanto outro
+/// processo segura o arquivo, tenta de novo por ~0,4 s e devolve o erro da última tentativa.
+pub fn retry_while_held<T>(mut operation: impl FnMut() -> io::Result<T>) -> io::Result<T> {
     #[cfg(windows)]
     for wait in [20,40,60,80,100,120] {
-        match std::fs::rename(from,to) {
-            Ok(()) => return Ok(()),
-            Err(error) if error.kind() == io::ErrorKind::PermissionDenied => std::thread::sleep(std::time::Duration::from_millis(wait)),
-            Err(error) => return Err(error),
+        match operation() {
+            Err(error) if held(&error) => std::thread::sleep(std::time::Duration::from_millis(wait)),
+            outcome => return outcome,
         }
     }
-    std::fs::rename(from,to)
+    operation()
+}
+
+/// Arquivo segurado por outro processo. O std só traduz ERROR_ACCESS_DENIED (5) para
+/// `PermissionDenied`; violação de compartilhamento (32), de trava (33) e o "não deu para apagar o
+/// substituído" do `ReplaceFileW` (1175, os dois arquivos ficam com o nome de antes) vêm crus.
+#[cfg(windows)]
+fn held(error: &io::Error) -> bool {
+    error.kind() == io::ErrorKind::PermissionDenied || matches!(error.raw_os_error(), Some(32 | 33 | 1175))
 }
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
     atomic_write_inner(path,bytes, |_| Ok(()))
