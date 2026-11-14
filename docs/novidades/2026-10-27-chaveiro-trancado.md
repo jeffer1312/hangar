@@ -4,6 +4,7 @@ tipo: novo
 onde: todos
 sistema: linux
 experimente: Quando aparecer "chaveiro trancado" na lista de sessões, digite a senha do chaveiro daquela máquina (em geral, a mesma do login) e toque em Destrancar.
+manual: sessao-parada
 ---
 
 Quando uma máquina liga e o chaveiro dela fica trancado, o Chrome, o Slack e outros apps dela ficam esperando a senha. O Hangar avisa na lista de sessões de qualquer aparelho seu e deixa você destrancar dali mesmo, sem ir até a máquina.

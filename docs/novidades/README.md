@@ -20,7 +20,12 @@ A seta ↑ na caixa de mensagem traz de volta as mensagens que você já mandou 
 ```
 
 O nome do arquivo é `<data>-<nome>.md` (ex.: `2026-10-26-historico-do-compositor.md`); sem o
-`.md`, ele é o id da novidade. O corpo é o texto do cartão, Markdown curto.
+`.md`, ele é o id da novidade, e a data dele é a que a tela Atualizações mostra. O corpo é o texto do
+cartão, Markdown curto.
+
+**O primeiro parágrafo do corpo é o resumo** (até a primeira linha em branco): é o que a lista da
+tela Atualizações mostra. Texto depois dele, ou uma `animacao` que o app conhece, faz a linha abrir
+uma página própria com o texto todo. Novidade de um parágrafo só, sem animação, fica só na lista.
 
 | Campo | Para que serve |
 |---|---|
@@ -31,6 +36,7 @@ O nome do arquivo é `<data>-<nome>.md` (ex.: `2026-10-26-historico-do-composito
 | `experimente` | Opcional. Uma frase dizendo como testar agora. |
 | `animacao` | Opcional. Nome de um roteiro animado que os apps conhecem. Nome que o app não conhece vira cartão só com texto. `correcao` nunca tem animação: o campo é descartado. |
 | `ancora` | Opcional. Id de uma peça da tela do app nativo (lista em `desktop-native/src/tour/anchors.rs`); com ele, o modal oferece "Mostrar no app", que aponta a peça com um balão. Id desconhecido: o teste do nativo falha. O Expo ignora. |
+| `manual` | Opcional. Id de um artigo de `docs/manual/` (o nome do arquivo sem `.md`). Vira o botão "Ler no manual" e põe a novidade em "Mudou recentemente" no artigo. Artigo que não existe: o botão não aparece. |
 
 ## Mudança visível sem novidade
 

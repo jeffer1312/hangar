@@ -10,16 +10,23 @@ use gpui_kit::component::{color_picker::{ColorPicker, ColorPickerEvent, ColorPic
     IndexPath, select::{Select, SelectEvent, SelectState}, searchable_list::{SearchableListItem, SearchableVec}};
 
 mod appearance_page;
+mod guide;
+mod manual_page;
+mod updates_page;
+
+pub(super) use guide::Guide;
+// As partes que a animação da novidade `atualizacoes-e-manual` desenha.
+pub(crate) use guide::{group_heading as news_group_heading, kind_icon as news_kind_icon, kind_pill as news_kind_pill, markdown_block as news_markdown_block};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Page {
-    General, Appearance, Sessions, Diary, About, Migration,
+    General, Appearance, Sessions, Updates, Manual, Diary, About, Migration,
     Servers, Sync, Connect, Devices, SharedConfig, Accounts, Plugins, Scheduled, Vault, Orchestration, Harnesses, Voice, Jev, Windows, Notifications, Shortcuts, Attachments, Worktrees, Advanced,
 }
 
 impl Page {
     // Sessões fica no geral: a configuração vale para todas as máquinas, sem seletor.
-    const DEVICE: [Page; 4] = [Page::General, Page::Appearance, Page::Sessions, Page::About];
+    const DEVICE: [Page; 6] = [Page::General, Page::Appearance, Page::Sessions, Page::Updates, Page::Manual, Page::About];
     // O diário é do servidor escolhido no seletor ("O registro de uso de <servidor>"), não do aparelho.
     const SERVER: [Page; 20] = [Page::Diary, Page::Servers, Page::Sync, Page::Connect, Page::Devices, Page::SharedConfig, Page::Accounts, Page::Plugins, Page::Scheduled, Page::Vault, Page::Orchestration, Page::Harnesses,
         Page::Voice, Page::Jev, Page::Windows, Page::Notifications, Page::Shortcuts, Page::Attachments, Page::Worktrees, Page::Advanced];
@@ -35,7 +42,7 @@ impl Page {
 
     pub(super) fn key(self) -> &'static str {
         match self {
-            Page::General => "general", Page::Appearance => "appearance", Page::Sessions => "sessions", Page::Diary => "diary", Page::About => "about", Page::Migration => "migration",
+            Page::General => "general", Page::Appearance => "appearance", Page::Sessions => "sessions", Page::Updates => "updates", Page::Manual => "manual", Page::Diary => "diary", Page::About => "about", Page::Migration => "migration",
             Page::Servers => "servers", Page::Sync => "sync", Page::Connect => "connect", Page::Devices => "devices", Page::SharedConfig => "shared_config", Page::Accounts => "accounts", Page::Plugins => "plugins", Page::Scheduled => "scheduled", Page::Vault => "vault", Page::Orchestration => "orchestration",
             Page::Harnesses => "harnesses", Page::Voice => "voice", Page::Jev => "jev", Page::Windows => "windows", Page::Notifications => "notifications",
             Page::Shortcuts => "shortcuts", Page::Attachments => "attachments", Page::Worktrees => "worktrees", Page::Advanced => "advanced",
@@ -45,6 +52,7 @@ impl Page {
     fn icon(self) -> IconName {
         match self {
             Page::General => IconName::Globe, Page::Appearance => IconName::Palette, Page::Sessions => IconName::EyeOff, Page::Diary => IconName::FileText,
+            Page::Updates => IconName::Sparkles, Page::Manual => IconName::BookOpen,
             Page::About => IconName::Info, Page::Migration => IconName::Activity, Page::Servers => IconName::Server, Page::Sync => IconName::RefreshCw, Page::Connect => IconName::Globe, Page::Devices => IconName::Smartphone, Page::SharedConfig => IconName::Layers,
             Page::Accounts => IconName::User, Page::Plugins => IconName::Package, Page::Scheduled => IconName::Clock, Page::Vault => IconName::KeyRound, Page::Orchestration => IconName::Users, Page::Harnesses => IconName::Activity,
             Page::Voice => IconName::Mic, Page::Jev => IconName::Zap, Page::Windows => IconName::Monitor, Page::Notifications => IconName::Bell,
@@ -466,8 +474,10 @@ impl SettingsUi {
         let search = cx.new(|cx| InputState::new(window, cx).placeholder(tr("settings_search")));
         subscriptions.push(cx.subscribe_in(&search, window, |this: &mut Hangar, state, event: &InputEvent, _, cx| match event {
             InputEvent::Change => {
+                // Atualizações e Manual somem para o convidado; a busca também não os acha.
+                let found = find(&state.read(cx).value(), this.api.as_ref()).into_iter().filter(|f| this.guide_visible(f.page)).collect();
                 let ui = &mut this.settings_ui;
-                ui.found = find(&state.read(cx).value(), this.api.as_ref());
+                ui.found = found;
                 (ui.pick, ui.hit) = (0, None);
                 cx.notify();
             }
@@ -494,7 +504,8 @@ impl Hangar {
         self.costs.view = None;
         (self.worktrees.view, self.worktrees.open) = (None, None);
         self.close_reviews(window, cx);
-        self.settings = Some(page);
+        // A navegação entre páginas também passa por aqui; o que é por abertura só roda saindo de fechadas.
+        let opening = self.settings.replace(page).is_none();
         // O Cofre relê a cada abertura, e a senha revelada não passa para a próxima.
         self.vault_page = None;
         self.plugins_page = None;
@@ -510,6 +521,8 @@ impl Hangar {
         self.close_controls();
         self.command_panel = false;
         self.close_recent();
+        // Na troca de página, as bolinhas do que chegou ficam até a próxima abertura.
+        if opening { self.guide_settings_opened(cx); }
         self.settings_opened(page, cx);
         cx.notify();
     }
@@ -519,6 +532,7 @@ impl Hangar {
         self.settings_ui.search.update(cx, |input, cx| input.set_placeholder(tr("settings_search"), window, cx));
         self.sync_type_picks(window, cx);
         self.relabel_worktree_settings(window, cx);
+        self.relabel_guide(window, cx);
     }
 
     pub(super) fn close_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -814,6 +828,7 @@ impl Hangar {
         let floating = theme::is_floating();
         // Na caixa solta o destaque suave some sobre o vidro; o item da página aberta leva mais cor.
         let selected = if floating { theme::accent().alpha(0.26) } else { theme::selected_row() };
+        let new_count = self.guide.new_count();
         let nav_item = |page_item: Page, current: Page, cx: &mut Context<Self>| {
             let on = page_item == current;
             Button::new(SharedString::from(format!("settings-nav-{}", page_item.key())))
@@ -826,7 +841,11 @@ impl Hangar {
                 // O botão centraliza o conteúdo; a linha de navegação alinha ícone e nome à esquerda.
                 .child(div().w_full().flex().items_center().gap(px(10.))
                     .child(chrome::small_icon(page_item.icon(), 16., if on { theme::text() } else { theme::faint() }))
-                    .child(div().text_size(px(13.5)).child(page_item.title())))
+                    .child(div().text_size(px(13.5)).child(page_item.title()))
+                    // Não vistas desde a última visita; some com a página aberta, que as marca vistas.
+                    .when(page_item == Page::Updates && !on && new_count > 0, |el| el.child(div().ml_auto()
+                        .child(super::vault::chip(if new_count == 1 { tr("updates_new_one") } else { tr("updates_new_count").replace("{n}", &new_count.to_string()) },
+                            theme::on_accent(), theme::accent()).rounded_full()))))
                 .on_click(cx.listener(move |this, _, window, cx| this.open_settings(page_item, window, cx)))
                 .map(|button| div().when(page_item == Page::Scheduled, |el| popup::anchor(el, crate::tour::anchors::SCHEDULED_TASKS)).child(button))
         };
@@ -849,7 +868,7 @@ impl Hangar {
             .child(if searching { self.render_found(cx) } else {
                 div().id("settings-nav").role(Role::TabList).aria_label(tr("settings")).flex_1().min_h_0().overflow_y_scroll().flex().flex_col().gap(px(2.))
                     .child(group(tr("settings_group_device")))
-                    .children(Page::DEVICE.map(|p| nav_item(p, page, cx)))
+                    .children(Page::DEVICE.into_iter().filter(|p| self.guide_visible(*p)).map(|p| nav_item(p, page, cx)))
                     .child(group(tr("settings_group_server")).child(server))
                     .children(Page::SERVER.into_iter().filter(|p| p.visible(self.api.as_ref())).map(|p| nav_item(p, page, cx)))
             })
@@ -866,7 +885,11 @@ impl Hangar {
         let accounts_wide = page == Page::Accounts && window.viewport_size().width >= px(1320.);
         // Servidores põe o detalhe num painel ao lado da lista: usa a largura que houver.
         let servers_wide = page == Page::Servers;
+        // O artigo do Manual leva o "Nesta página" ao lado do texto.
+        let article_wide = page == Page::Manual && self.article_wide(window);
         let body = match page {
+            Page::Updates => self.render_updates(window, cx),
+            Page::Manual => self.render_manual(window, cx),
             Page::Appearance => self.render_appearance(wide, cx),
             Page::General => self.render_general(cx),
             Page::Sessions => self.render_sessions_settings(window, cx),
@@ -891,9 +914,11 @@ impl Hangar {
         };
         let scroll = div().id("settings-content").role(Role::TabPanel).aria_label(page.title())
             .accessibility_id(format!("settings-page-{}", page.key())).flex_1().min_h_0().overflow_y_scroll().track_scroll(&self.settings_ui.scroll)
-            .child(div().w_full().flex().justify_center().child(motion::fade_quick(div().w(px(if accounts_wide || servers_wide { 1040. } else { 720. })).max_w_full().px_4().pt(px(44.)).pb(px(40.)), body_in).child(body)));
-        let tabs = (page == Page::Appearance).then(|| div().w_full().flex_shrink_0().flex().justify_center().px_4().pt(px(14.)).pb(px(6.))
-            .child(div().w(px(720.)).max_w_full().child(self.section_tabs(cx))));
+            .child(div().w_full().flex().justify_center().child(motion::fade_quick(div().w(px(if accounts_wide || servers_wide { 1040. }
+                else if article_wide { 960. } else { 720. })).max_w_full().px_4().pt(px(44.)).pb(px(40.)), body_in).child(body)));
+        let strip = match page { Page::Appearance => Some(self.section_tabs(cx)), Page::Manual => self.manual_tabs(cx), _ => None };
+        let tabs = strip.map(|strip| div().w_full().flex_shrink_0().flex().justify_center().px_4().pt(px(14.)).pb(px(6.))
+            .child(div().w(px(720.)).max_w_full().when(page == Page::Manual, |el| el.flex().justify_center()).child(strip)));
         let content = div().flex_1().min_w_0().h_full().flex().flex_col().children(tabs).child(scroll).children(self.server_config_footer(page, cx));
         // A prévia fica fora da rolagem: continua à vista enquanto a página desce.
         let content = if wide {
@@ -937,18 +962,7 @@ impl Hangar {
         // O atalho de seção só vale sem busca: os dois disputariam o mesmo pedido de rolagem.
         let jump = self.settings_ui.hit.is_none() && self.settings_ui.jump == Some(key);
         if !hit && !jump { return el; }
-        let (scroll, reveal) = (self.settings_ui.scroll.clone(), self.settings_ui.reveal.clone());
-        el.relative().when(hit, |el| el.bg(theme::accent_dim())).child(canvas(move |bounds, window, _| {
-            if !reveal.get() { return; }
-            let area = scroll.bounds();
-            // O contêiner ainda não foi medido neste desenho: tenta de novo no próximo.
-            if area.size.height <= px(0.) { window.refresh(); return; }
-            let (offset, max) = (scroll.offset(), scroll.max_offset());
-            let y = (offset.y - (bounds.top() - area.top()) + px(96.)).clamp(-max.y, px(0.));
-            scroll.set_offset(point(offset.x, y));
-            reveal.set(false);
-            window.refresh();
-        }, |_, _, _, _| {}).absolute().inset_0())
+        el.relative().when(hit, |el| el.bg(theme::accent_dim())).child(reveal_here(self.settings_ui.scroll.clone(), self.settings_ui.reveal.clone()))
     }
 
     /// A Aparência numa caixa de 360px sobre a conversa, arrastável pelo cabeçalho; a posição fica gravada.
@@ -1003,8 +1017,24 @@ impl Hangar {
     }
 }
 
-/// A vista da linha de configuração, sem o destaque da busca.
-pub(crate) fn setting_row(live: bool, icon: IconName, title: String, description: Div, enabled: bool, control: AnyElement) -> Div {
+/// Rola a página até o elemento (`relative`) que leva este filho, uma vez por pedido em `reveal`.
+fn reveal_here(scroll: ScrollHandle, reveal: Rc<Cell<bool>>) -> impl IntoElement {
+    canvas(move |bounds, window, _| {
+        if !reveal.get() { return; }
+        let area = scroll.bounds();
+        // O contêiner ainda não foi medido neste desenho: tenta de novo no próximo.
+        if area.size.height <= px(0.) { window.refresh(); return; }
+        let (offset, max) = (scroll.offset(), scroll.max_offset());
+        let y = (offset.y - (bounds.top() - area.top()) + px(96.)).clamp(-max.y, px(0.));
+        scroll.set_offset(point(offset.x, y));
+        reveal.set(false);
+        window.refresh();
+    }, |_, _, _, _| {}).absolute().inset_0()
+}
+
+/// A vista da linha de configuração, sem o destaque da busca. O título aceita um elemento: a linha de novidade leva
+/// a bolinha e o selo nele.
+pub(crate) fn setting_row(live: bool, icon: IconName, title: impl IntoElement, description: Div, enabled: bool, control: AnyElement) -> Div {
     // Na caixa ao vivo (360px) o controle desce para baixo do título, senão espreme o texto.
     let head = div().flex_1().min_w_0().flex().items_center().gap(px(if live { 10. } else { 14. }))
         .child(div().size(px(if live { 28. } else { 36. })).flex_shrink_0().rounded(px(if live { 8. } else { 10. })).border_1()
@@ -1077,6 +1107,20 @@ impl RenderOnce for Disclosure {
             .child(label)
             .when_some(on_change, |el, handler| el.on_change(move |open, _, _, cx| handler(open, cx)))
     }
+}
+
+/// Faixa de abas em pílula fora da rolagem: as seções da Aparência e as categorias do Manual.
+fn tab_strip(id: &'static str) -> Stateful<Div> {
+    div().id(id).max_w_full().flex().gap(px(4.)).p(px(3.)).rounded(px(10.)).border_1()
+        .border_color(theme::border()).bg(theme::inset()).overflow_x_scroll()
+}
+
+fn strip_tab(id: impl Into<ElementId>, label: String, on: bool, cx: &App) -> Button {
+    Button::new(id)
+        .custom(ButtonCustomVariant::new(cx).color(if on { theme::accent_dim() } else { transparent_black() })
+            .foreground(if on { theme::accent_text() } else { theme::muted() }).hover(theme::hover()).active(theme::hover()))
+        .small().h(px(28.)).px(px(11.)).rounded(px(7.)).flex_shrink_0().label(label)
+        .when(on, |el| el.bg(theme::accent_dim()))
 }
 
 /// Controle segmentado: uma silhueta só, segmento escolhido com fundo de destaque suave.

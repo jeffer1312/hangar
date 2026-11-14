@@ -27,6 +27,8 @@ import type {
   UpdateMode,
   UpdateNotes,
   UpdateNews,
+  NewsHistory,
+  Manual,
   MigrationStatus,
   SessionInfo,
   Provider,
@@ -2702,6 +2704,26 @@ export async function getUpdateNotesEm(s: Server | null, fetcher?: typeof fetch)
 export async function getArrivedNews(s: Server, device: string, fetcher?: typeof fetch): Promise<{ news: UpdateNews[]; through: number } | null> {
   try {
     return await apiFetchForServer(s, `/api/update/arrived?device=${encodeURIComponent(device)}`, undefined, 20000, true, fetcher);
+  } catch (e) {
+    if (isMissingRoute(e)) return null;
+    throw e;
+  }
+}
+
+/** Histórico de todas as novidades. Servidor sem a rota (404/405): `null`. */
+export async function getNewsHistory(s: Server, fetcher?: typeof fetch): Promise<NewsHistory | null> {
+  try {
+    return await apiFetchForServer<NewsHistory>(s, '/api/news', undefined, 20000, true, fetcher);
+  } catch (e) {
+    if (isMissingRoute(e)) return null;
+    throw e;
+  }
+}
+
+/** Manual do app por categoria. Servidor sem a rota (404/405): `null`. */
+export async function getManual(s: Server, fetcher?: typeof fetch): Promise<Manual | null> {
+  try {
+    return await apiFetchForServer<Manual>(s, '/api/manual', undefined, 20000, true, fetcher);
   } catch (e) {
     if (isMissingRoute(e)) return null;
     throw e;

@@ -5,8 +5,9 @@ use crate::session_write::{detail_body, json_response};
 use axum::extract::{ConnectInfo, Request, State};
 use axum::http::StatusCode;
 use axum::response::Response;
+use hangar_docs::{frontmatter, is_note_file, news_item};
 use serde_json::{Value, json};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -132,21 +133,6 @@ async fn list_md(repo: &Path, rev: &str, dir: &str) -> Result<Vec<String>, ()> {
     Ok(names)
 }
 
-pub(crate) fn is_note_file(name: &str) -> bool { name.ends_with(".md") && !name.to_uppercase().starts_with("README") }
-
-/// Espelho do `_frontmatter` de `backend/app/atualizacoes.py`: `chave: valor` entre `---`.
-fn frontmatter(text: &str) -> (HashMap<String, String>, String) {
-    let lines: Vec<&str> = text.lines().collect();
-    if lines.first().is_none_or(|l| l.trim() != "---") { return (HashMap::new(), text.to_owned()); }
-    let Some(end) = lines.iter().skip(1).position(|l| *l == "---").map(|i| i + 1) else { return (HashMap::new(), text.to_owned()) };
-    let fields = lines[1..end].iter()
-        .filter(|l| !l.trim().is_empty() && !l.trim_start().starts_with('#'))
-        .filter_map(|l| l.split_once(':'))
-        .map(|(k, v)| (k.trim().to_owned(), v.trim().to_owned()))
-        .collect();
-    (fields, lines[end + 1..].join("\n").trim().to_owned())
-}
-
 /// A branch que o Atualizar segue, como o `alvo()` do Python: `CP_UPDATE_BRANCH` do ambiente, senão
 /// do `backend/.env` (o pydantic lê de lá e o filho não herda), senão a main. Nome inválido = main.
 pub(crate) fn update_branch(env: Option<String>, dotenv: Option<&str>) -> String {
@@ -158,30 +144,6 @@ pub(crate) fn update_branch(env: Option<String>, dotenv: Option<&str>) -> String
     if valid { value.to_owned() } else { "main".to_owned() }
 }
 
-
-/// `sistema` vazio = todos; nome fora de `linux`/`windows`/`macos` = arquivo ignorado, como o `onde`.
-/// A mesma regra do `_for_system` do `scripts/montar-pacote.py`.
-fn for_system(field: Option<&String>, os: &str) -> Option<bool> {
-    let names: Vec<&str> = field.map(String::as_str).unwrap_or_default().split(|c: char| c == ',' || c.is_whitespace()).filter(|n| !n.is_empty()).collect();
-    if names.iter().any(|n| !matches!(*n, "linux" | "windows" | "macos")) { return None; }
-    Some(names.is_empty() || names.contains(&os))
-}
-
-/// `os`: o sistema da máquina que vai atualizar, nos nomes do `std::env::consts::OS`.
-pub(crate) fn news_item(id: &str, text: &str, os: &str) -> Option<(u8, Value)> {
-    let (f, body) = frontmatter(text);
-    let title = f.get("titulo").filter(|t| !t.is_empty())?;
-    if !for_system(f.get("sistema"), os)? { return None; }
-    let (rank, kind) = match f.get("tipo").map(String::as_str)? { "novo" => (0, "new"), "melhoria" => (1, "improvement"), "correcao" => (2, "fix"), _ => return None };
-    let platforms = match f.get("onde").map(String::as_str)? { "desktop" => "desktop", "celular" => "mobile", "todos" => "all", _ => return None };
-    let opt = |k: &str| f.get(k).filter(|v| !v.is_empty()).cloned();
-    // Correção não ganha animação: não há gesto novo a mostrar.
-    let animation = if kind == "fix" { None } else { opt("animacao") };
-    let mut item = json!({"id": id, "title": title, "kind": kind, "text": body, "platforms": platforms, "try_it": opt("experimente"), "animation": animation});
-    // Ausente sai sem a chave: o JSON de quem não usa o campo continua o de antes.
-    if let Some(anchor) = opt("ancora") { item["anchor"] = Value::String(anchor); }
-    Some((rank, item))
-}
 
 /// `state_dir`: a pasta do `aplicados.json`; ilegível é erro, ausente é nada aplicado.
 async fn warnings(repo: &Path, target: &str, state_dir: &Path) -> Result<Vec<Value>, ()> {

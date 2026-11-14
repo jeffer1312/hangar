@@ -857,6 +857,9 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         // O que as atualizações já trouxeram e cada aparelho ainda não viu: só o dono, nunca repassado.
         .route("/api/update/arrived", get(crate::update_arrived::unseen))
         .route("/api/update/arrived/seen", axum::routing::post(crate::update_arrived::seen))
+        // Histórico das novidades e manual da versão em uso: só o dono, nunca repassados.
+        .route("/api/news", get(crate::docs_routes::news))
+        .route("/api/manual", get(crate::docs_routes::manual))
         .route("/api/claude/defaults", axum::routing::post(crate::claude_defaults::save).fallback(pass_any))
         .route("/api/session-defaults", axum::routing::get(crate::session_defaults::handle).put(crate::session_defaults::handle))
         // O que já foi visto do tour do nativo: só o dono, nunca repassado (o Python não tem a rota).

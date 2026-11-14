@@ -144,10 +144,11 @@ def test_pacote_tem_exatamente_os_arquivos_do_manifesto(tmp_path, monkeypatch, o
                  # O setup-windows-tmux.ps1 (passo 5b do install.ps1) copia o modelo de docs/.
                  "docs/tmux.conf.windows.example", "docs/tmux.conf.example"):
         assert any(n == must or n.startswith(must.rstrip("/") + "/") for n in members), must
-    # De docs/ só os passos, as novidades e os dois modelos de tmux, não a pasta inteira.
-    assert {n for n in members if n.startswith("docs/") and not n.startswith(("docs/atualizacoes/", "docs/novidades/"))} == {
+    # De docs/ só os passos, as novidades, o manual e os dois modelos de tmux, não a pasta inteira.
+    assert {n for n in members if n.startswith("docs/") and not n.startswith(("docs/atualizacoes/", "docs/novidades/", "docs/manual/"))} == {
         "docs/tmux.conf.windows.example", "docs/tmux.conf.example"}
     assert "docs/novidades/2026-10-26-historico-do-compositor.md" in members
+    assert any(n.startswith("docs/manual/") and not n.endswith("README.md") for n in members)
     for name in members:
         assert not name.startswith(("crates/", "frontend/", "backend/tests/", ".git")), name
         assert "node_modules" not in name, name

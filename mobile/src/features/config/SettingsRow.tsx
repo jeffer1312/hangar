@@ -18,13 +18,20 @@ type Props = {
   children?: ReactNode;
   /** Peça à direita do título, na mesma linha (ponto de estado, botão pequeno). */
   right?: ReactNode;
+  /** Peças na linha do título, antes e depois dele (bolinha de não visto, selo). */
+  titleBefore?: ReactNode;
+  titleAfter?: ReactNode;
+  /** Rótulo da linha (com ou sem toque) quando o título sozinho não diz tudo (o selo fica fora do texto). */
+  accessibilityLabel?: string;
 };
 
 // O Pressable envolve só o bloco ícone+título, nunca a linha inteira: um Pressable com rótulo
 // próprio funde tudo que está dentro dele num nó só de acessibilidade, e o botão de `right`
 // ou do controle some pro leitor de tela.
-export function SettingsRow({ title, description, icon, onPress, onLongPress, children, right }: Props) {
+export function SettingsRow({ title, description, icon, onPress, onLongPress, children, right, titleBefore, titleAfter, accessibilityLabel }: Props) {
   const c = useSettingsColors();
+  const inLine = !!(titleBefore || titleAfter);
+  const titleText = <Text style={[icon ? styles.title : styles.titleSmall, inLine && styles.titleShrink, { color: c.text }]}>{title}</Text>;
   const head = (
     <>
       {icon ? (
@@ -33,7 +40,9 @@ export function SettingsRow({ title, description, icon, onPress, onLongPress, ch
         </View>
       ) : null}
       <View style={styles.texts}>
-        <Text style={[icon ? styles.title : styles.titleSmall, { color: c.text }]}>{title}</Text>
+        {inLine
+          ? <View style={styles.titleLine}>{titleBefore}{titleText}{titleAfter}</View>
+          : titleText}
         {description ? (
           <Text style={[icon ? styles.desc : styles.descSmall, { color: c.muted }]}>{description}</Text>
         ) : null}
@@ -50,13 +59,14 @@ export function SettingsRow({ title, description, icon, onPress, onLongPress, ch
             onPress={onPress}
             onLongPress={onLongPress}
             accessibilityRole="button"
-            accessibilityLabel={title}
+            accessibilityLabel={accessibilityLabel ?? title}
             style={({ pressed }) => [styles.head, pressed && { opacity: 0.6 }]}
           >
             {head}
           </Pressable>
         ) : (
-          <View style={styles.head}>{head}</View>
+          // Sem toque, o rótulo dado ainda vale: o bloco ícone+título vira um nó só com ele.
+          <View style={styles.head} accessible={accessibilityLabel ? true : undefined} accessibilityLabel={accessibilityLabel}>{head}</View>
         )}
         {right}
       </View>
@@ -74,6 +84,8 @@ const styles = StyleSheet.create((theme) => ({
   title: { fontSize: theme.base.text.sm, fontWeight: theme.base.weight.medium },
   desc: { fontSize: theme.base.text.xs },
   titleSmall: { fontSize: theme.base.text.sm, fontWeight: theme.base.weight.medium },
+  titleShrink: { flexShrink: 1 },
+  titleLine: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: theme.base.space[1.5] },
   descSmall: { fontSize: theme.base.text.xs },
   controlIndented: { paddingLeft: ICON_BOX + theme.base.space[3] },
 }));
