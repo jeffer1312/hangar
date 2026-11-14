@@ -45,6 +45,19 @@ pub fn cors(req: &HeaderMap, resp: &mut HeaderMap) {
     }
 }
 
+/// O caminho como o uvicorn o veria: `%2F` decodificado e `//` juntos, então `/api//x%2Fy` é `/api/x/y`.
+/// Quem confere o dono pelo caminho usa este, para variação de escrita não escapar da conferência.
+pub fn uvicorn_path(path: &str) -> String {
+    let decoded = percent_encoding::percent_decode_str(path).decode_utf8_lossy();
+    let mut out = String::with_capacity(decoded.len());
+    for c in decoded.chars() {
+        if !(c == '/' && out.ends_with('/')) {
+            out.push(c);
+        }
+    }
+    out
+}
+
 /// Gzip só quando o cliente pede e o corpo passa de 1 KB. SSE nunca: o gzip seguraria os quadros.
 pub fn maybe_gzip(req: &HeaderMap, resp: &mut HeaderMap, body: Vec<u8>) -> Vec<u8> {
     gzip_with_minimum(req, resp, body, 1024)

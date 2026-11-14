@@ -1646,6 +1646,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-computer-control-setup"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "hangar-core",
+ "hangar-update-news",
+ "proptest",
+ "regex",
+ "reqwest",
+ "semver",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "hangar-connect"
 version = "0.1.0"
 dependencies = [
@@ -1845,9 +1863,12 @@ name = "hangar-plugins"
 version = "0.1.0"
 dependencies = [
  "hangar-core",
+ "notify",
  "serde",
  "serde_json",
  "tempfile",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -1934,6 +1955,7 @@ dependencies = [
  "hangar-codex",
  "hangar-codex-account-sync",
  "hangar-codex-transfer",
+ "hangar-computer-control-setup",
  "hangar-connect",
  "hangar-conversation-transfer",
  "hangar-core",
@@ -1952,6 +1974,7 @@ dependencies = [
  "hangar-reviews",
  "hangar-scheduled-tasks",
  "hangar-session-tools",
+ "hangar-shortcut-transfer",
  "hangar-transcript",
  "hangar-update-news",
  "hangar-workflows",
@@ -2020,6 +2043,22 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+]
+
+[[package]]
+name = "hangar-shortcut-transfer"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "fancy-regex",
+ "form_urlencoded",
+ "hangar-core",
+ "libc",
+ "regex",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

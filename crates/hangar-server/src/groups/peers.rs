@@ -1,4 +1,6 @@
 //! Outras máquinas do mesmo dono: leitura do livro e transporte autenticado.
+use std::collections::HashMap;
+use std::ops::ControlFlow;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
@@ -25,7 +27,21 @@ pub(crate) const MAX_BODY: usize = 1 << 20;
 pub const TOO_LARGE: &str = "resposta maior que 1 MiB";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PeerCfg { pub base_url: String, pub token: String }
+pub struct PeerCfg { pub base_url: String, pub token: String, pub connect: Option<ConnectRoute> }
+
+/// O Connect como caminho a mais, com a credencial de aparelho que a outra máquina emitiu.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConnectRoute { pub url: String, pub token: String }
+
+/// Por onde a última chamada a uma máquina foi atendida.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Route { Saved, Connect }
+
+impl Route {
+    pub fn name(self) -> &'static str {
+        match self { Route::Saved => "saved", Route::Connect => "connect" }
+    }
+}
 
 type Version = (i128, u64);
 
@@ -42,7 +58,8 @@ impl PeerBook {
 
     /// Todos os tokens do `peers.json`, para tirá-los do que volta ao modelo.
     pub fn tokens(&self) -> Vec<String> {
-        self.load().values().filter_map(|v| v["token"].as_str()).filter(|t| !t.is_empty()).map(str::to_owned).collect()
+        self.load().values().flat_map(|v| [v["token"].as_str(), v["connect_token"].as_str()]).flatten()
+            .filter(|t| !t.is_empty()).map(str::to_owned).collect()
     }
 
     /// Peers da varredura: com endereço e token, sem `enabled: false`.
@@ -78,10 +95,15 @@ impl PeerBook {
     }
 }
 
-fn cfg(entry: &Value) -> Option<PeerCfg> {
-    let entry = entry.as_object()?;
+fn cfg(value: &Value) -> Option<PeerCfg> {
+    let entry = value.as_object()?;
     let field = |k: &str| entry.get(k).and_then(Value::as_str).filter(|v| !v.is_empty());
-    Some(PeerCfg { base_url: field("base_url")?.trim_end_matches('/').to_owned(), token: field("token")?.to_owned() })
+    let connect = match (field("connect_url"), field("connect_token")) {
+        (Some(url), Some(token)) if !crate::machine_peers::store::is_device_entry(value) =>
+            Some(ConnectRoute { url: url.trim_end_matches('/').to_owned(), token: token.to_owned() }),
+        _ => None,
+    };
+    Some(PeerCfg { base_url: field("base_url")?.trim_end_matches('/').to_owned(), token: field("token")?.to_owned(), connect })
 }
 
 fn version(path: &std::path::Path) -> Option<Version> {
@@ -127,11 +149,12 @@ struct Operation {
     context: DiagnosticContext,
     id: String,
     started: std::time::Instant,
-    cause: Option<&'static str>,
+    /// Mutex: a operação vai por referência compartilhada a cada tentativa de caminho.
+    cause: Mutex<Option<&'static str>>,
 }
 impl Operation {
     fn new(context: &DiagnosticContext) -> Self {
-        let value=Self {context:context.clone(),id:crate::mods::state::random_hex(8),started:std::time::Instant::now(),cause:None};
+        let value=Self {context:context.clone(),id:crate::mods::state::random_hex(8),started:std::time::Instant::now(),cause:Mutex::new(None)};
         value.emit(serde_json::json!({"evento":"peer.chamar.inicio","nivel":"ok"}));
         value
     }
@@ -140,16 +163,16 @@ impl Operation {
         event["operacao"]=Value::String(self.id.clone());
         crate::diag::record_blocking(Some(&self.context.directory), &[event], "chamada de peer");
     }
-    fn result(&mut self, method: &reqwest::Method, status: Option<u16>, failure: Option<(&'static str,&'static str)>) {
+    fn result(&self, method: &reqwest::Method, status: Option<u16>, failure: Option<(&'static str,&'static str)>) {
         let method=match method.as_str(){"GET"|"POST"|"PUT"|"PATCH"|"DELETE"=>method.as_str(),_=>"outro"};
         let mut event=serde_json::json!({"evento":if failure.is_some(){"peer.falhou"}else{"peer.respondeu"},"nivel":if failure.is_some(){"erro"}else{"ok"},"etapa":method,"ms":self.started.elapsed().as_millis() as u64});
         if let Some(status)=status {event["codigo"]=Value::String(status.to_string());}
-        if let Some((detail,kind))=failure {event["detalhe"]=Value::String(detail.into());event["erro_tipo"]=Value::String(kind.into());self.cause=Some(kind);}
+        if let Some((detail,kind))=failure {event["detalhe"]=Value::String(detail.into());event["erro_tipo"]=Value::String(kind.into());*self.cause.lock().unwrap_or_else(|e| e.into_inner())=Some(kind);}
         self.emit(event);
     }
     fn finish(&self, failed: bool) {
         let mut event=serde_json::json!({"evento":"peer.chamar.fim","nivel":if failed{"erro"}else{"ok"},"codigo":if failed{"excecao"}else{"retornou"},"ms":self.started.elapsed().as_millis() as u64});
-        if failed {event["erro_tipo"]=Value::String("PeerError".into());if let Some(cause)=self.cause {event["causa_tipo"]=Value::String(cause.into());}}
+        if failed {event["erro_tipo"]=Value::String("PeerError".into());if let Some(cause)=*self.cause.lock().unwrap_or_else(|e| e.into_inner()) {event["causa_tipo"]=Value::String(cause.into());}}
         self.emit(event);
     }
 }
@@ -163,7 +186,14 @@ fn transport_kind(error:&reqwest::Error)->&'static str {
 pub struct PeerClient {
     diagnostics: Option<DiagnosticContext>,
     book: Arc<PeerBook>,
+    /// Quem leva a senha do dono no corpo (o anúncio) ou pede o que só a senha faz fica sem o Connect.
+    connect_route: bool,
+    /// O último caminho que respondeu 2xx, por máquina: a próxima chamada começa por ele.
+    routes: Mutex<HashMap<String, Route>>,
     http: OnceLock<reqwest::Client>,
+    /// Pedidos que mudam algo lá (`writes`, e `waiting`, que só leva POST): sem redirect. Uma conexão que falha
+    /// depois do 3xx parece não enviada, e o Connect repetiria o que lá já foi feito.
+    writes: OnceLock<reqwest::Client>,
     waiting: OnceLock<reqwest::Client>,
     /// `send_secret` (curto e longo): sem redirect.
     secret: OnceLock<reqwest::Client>,
@@ -172,7 +202,87 @@ pub struct PeerClient {
 
 impl PeerClient {
     pub fn new(book: PeerBook) -> Self {
-        Self { diagnostics: None, book: Arc::new(book), http: OnceLock::new(), waiting: OnceLock::new(), secret: OnceLock::new(), long: OnceLock::new() }
+        Self { diagnostics: None, book: Arc::new(book), connect_route: false, routes: Mutex::default(), http: OnceLock::new(),
+            writes: OnceLock::new(), waiting: OnceLock::new(), secret: OnceLock::new(), long: OnceLock::new() }
+    }
+
+    /// Aceita o Connect da entrada quando o endereço salvo não conecta.
+    pub fn with_connect_route(mut self) -> Self { self.connect_route = true; self }
+
+    /// O último caminho que atendeu `server` com 2xx; `None` sem chamada boa desde a subida ou depois de uma falha de conexão no Connect.
+    pub fn route(&self, server: &str) -> Option<Route> { self.routes.lock().unwrap_or_else(|e| e.into_inner()).get(server).copied() }
+
+    fn remember(&self, server: &str, route: Option<Route>) {
+        let mut routes = self.routes.lock().unwrap_or_else(|e| e.into_inner());
+        match route {
+            Some(route) => { routes.insert(server.to_owned(), route); }
+            None => { routes.remove(server); }
+        }
+    }
+
+    /// As tentativas em ordem: o caminho que atendeu por último vem primeiro.
+    fn attempts<'a>(&self, server: &str, cfg: &'a PeerCfg) -> Vec<(Route, &'a str, &'a str)> {
+        let saved = (Route::Saved, cfg.base_url.as_str(), cfg.token.as_str());
+        let Some(connect) = cfg.connect.as_ref().filter(|_| self.connect_route) else { return vec![saved] };
+        let connect = (Route::Connect, connect.url.as_str(), connect.token.as_str());
+        if self.route(server) == Some(Route::Connect) { vec![connect, saved] } else { vec![saved, connect] }
+    }
+
+    /// Uma tentativa por caminho, em ordem, até um decidir; sem decisão, volta o erro do último.
+    async fn over_routes<'a, T, Fut>(&self, server: &str, cfg: &'a PeerCfg, mut once: impl FnMut(usize, Route, &'a str, &'a str) -> Fut)
+        -> Result<T, PeerError>
+    where Fut: Future<Output = Result<T, Failed>> {
+        let attempts = self.attempts(server, cfg);
+        let last = attempts.len() - 1;
+        let mut failure = PeerError::Unknown;
+        for (at, (route, base, token)) in attempts.into_iter().enumerate() {
+            match self.after(server, route, token, at == last, once(at, route, base, token).await).await {
+                ControlFlow::Break(result) => return result,
+                ControlFlow::Continue(error) => failure = error,
+            }
+        }
+        Err(failure)
+    }
+
+    /// `Continue`: tentar o próximo caminho. Só quando o pedido não chegou ao Hangar de lá (falha de conexão, ou o
+    /// proxy do Connect sem alcançá-lo) ou o Connect recusou a credencial; prazo de leitura ou outra resposta
+    /// faria recado e cofre chegarem em dobro.
+    async fn after<T>(&self, server: &str, route: Route, token: &str, last: bool, outcome: Result<T, Failed>) -> ControlFlow<Result<T, PeerError>, PeerError> {
+        let outcome = match outcome {
+            Err(Failed { error, bare_502: true, .. }) if route == Route::Connect => Err(Failed { error, unsent: true, bare_502: true }),
+            other => other,
+        };
+        match outcome {
+            Ok(value) => { self.remember(server, Some(route)); ControlFlow::Break(Ok(value)) }
+            Err(Failed { unsent: true, error, .. }) => {
+                // Só a falha de conexão tira o Connect da frente.
+                if route == Route::Connect || last { self.remember(server, None); }
+                ControlFlow::Continue(error)
+            }
+            Err(Failed { error: error @ PeerError::Refused { status: 401, .. }, .. }) if route == Route::Connect => {
+                self.refuse_connect(server, token).await;
+                ControlFlow::Continue(error)
+            }
+            // Resposta HTTP (o 5xx do proxy incluído) prova que o caminho conecta: ele segue à frente, e a
+            // próxima chamada não paga de novo o prazo de conexão do endereço salvo.
+            Err(Failed { error, .. }) => ControlFlow::Break(Err(error)),
+        }
+    }
+
+    /// O dono de lá tirou o aparelho: a marca impede que o caminho volte sozinho. Só a credencial que levou o
+    /// 401 sai: um caminho gravado depois desta tentativa fica.
+    async fn refuse_connect(&self, server: &str, token: &str) {
+        self.remember(server, None);
+        let Some(path) = self.book.path.clone() else { return };
+        let (id, token) = (server.to_owned(), Zeroizing::new(token.to_owned()));
+        let cleared = tokio::task::spawn_blocking(move || crate::machine_peers::store::Store::new(path).refuse_connect_route(&id, &token)).await;
+        let outcome = match &cleared {
+            Ok(Ok(true)) => "caminho tirado".to_owned(),
+            Ok(Ok(false)) => "o caminho já era outro e ficou".to_owned(),
+            Ok(Err(e)) => format!("o caminho não foi tirado: {}", e.msg),
+            Err(_) => "a remoção do caminho foi interrompida".to_owned(),
+        };
+        tracing::warn!(code = "connect.peer_route_refused", peer = server, "o Connect de '{server}' recusou a credencial de aparelho: {outcome}");
     }
 
     pub fn with_diagnostics(mut self, directory: PathBuf, request: String) -> Self { self.diagnostics=Some(DiagnosticContext{directory,request});self }
@@ -199,8 +309,8 @@ impl PeerClient {
     }
 
     /// `peers.call` (peers.py:401-411): prazo de 8 s por leitura e 16 s no total, corpo até 1 MiB,
-    /// segue redirect como o Python. O `reqwest` tira o `Authorization` quando o redirect troca de
-    /// host, porta ou esquema (`redirect::remove_sensitive_headers`), e o `urllib` não tirava.
+    /// `GET`/`HEAD` seguem redirect como o Python; o resto devolve o 3xx como recusa. O `reqwest` tira o
+    /// `Authorization` quando o redirect troca de host, porta ou esquema (`redirect::remove_sensitive_headers`).
     pub async fn call(&self, server: &str, method: reqwest::Method, path: &str, body: Option<&Value>) -> Result<Option<Value>, PeerError> {
         self.call_status(server, method, path, body).await.map(|(_, v)| v)
     }
@@ -219,31 +329,40 @@ impl PeerClient {
 
     async fn send(&self, agent: Option<&str>, waiting: bool, server: &str, method: reqwest::Method, path: &str, body: Option<&Value>)
         -> Result<(u16, Option<Value>), PeerError> {
-        let mut operation=self.diagnostics.as_ref().map(Operation::new);
-        let result=self.send_inner(agent,waiting,server,method,path,body,operation.as_mut()).await;
+        let operation=self.diagnostics.as_ref().map(Operation::new);
+        let result=self.send_inner(agent,waiting,server,method,path,body,operation.as_ref()).await;
         if let Some(operation)=operation {operation.finish(result.is_err());}
         result
     }
 
-    async fn send_inner(&self, agent: Option<&str>, waiting: bool, server: &str, method: reqwest::Method, path: &str, body: Option<&Value>, mut operation:Option<&mut Operation>)
+    async fn send_inner(&self, agent: Option<&str>, waiting: bool, server: &str, method: reqwest::Method, path: &str, body: Option<&Value>, operation:Option<&Operation>)
         -> Result<(u16, Option<Value>), PeerError> {
         let book = self.book.clone();
         let key = server.to_owned();
         let cfg = tokio::task::spawn_blocking(move || book.get(&key)).await.ok().flatten();
         let Some(cfg)=cfg else {
-            if let Some(operation)=operation.as_mut(){operation.emit(serde_json::json!({"evento":"peer.recusado","nivel":"erro","etapa":method.as_str(),"detalhe":"configuracao_ausente_ou_incompleta"}));}
+            if let Some(operation)=operation{operation.emit(serde_json::json!({"evento":"peer.recusado","nivel":"erro","etapa":method.as_str(),"detalhe":"configuracao_ausente_ou_incompleta"}));}
             return Err(PeerError::Unknown);
         };
-        let (slot, read, total) = if waiting { (&self.waiting, OWNER_WAIT_TIMEOUT, OWNER_WAIT_TIMEOUT) } else { (&self.http, READ_TIMEOUT, TOTAL_TIMEOUT) };
+        let reads = method == reqwest::Method::GET || method == reqwest::Method::HEAD;
+        let (slot, read, total) = if waiting { (&self.waiting, OWNER_WAIT_TIMEOUT, OWNER_WAIT_TIMEOUT) }
+            else if reads { (&self.http, READ_TIMEOUT, TOTAL_TIMEOUT) } else { (&self.writes, READ_TIMEOUT, TOTAL_TIMEOUT) };
         let http = match slot.get() {
             Some(http) => http,
             None => {
-                let built = crate::http_client().connect_timeout(READ_TIMEOUT).read_timeout(read).timeout(total).build()
-                    .map_err(|e| transport(server, &e))?;
+                let mut builder = crate::http_client().connect_timeout(READ_TIMEOUT).read_timeout(read).timeout(total);
+                if waiting || !reads { builder = builder.redirect(reqwest::redirect::Policy::none()); }
+                let built = builder.build().map_err(|e| transport(server, &e))?;
                 slot.get_or_init(|| built)
             }
         };
-        request_observed(agent, http, server, &format!("{}{path}", cfg.base_url), Some(&cfg.token), method, body, operation).await
+        self.over_routes(server, &cfg, |at, route, base, token| {
+            if at > 0 && let Some(operation) = operation {
+                operation.emit(serde_json::json!({"evento":"peer.outro_caminho","nivel":"aviso","etapa":route.name()}));
+            }
+            let (url, method) = (format!("{base}{path}"), method.clone());
+            async move { request_observed(agent, http, server, &url, Some(token), method, body, operation).await }
+        }).await
     }
 
     /// Como `call`, sem redirect e com o corpo 2xx cru em `Zeroizing` até `limit`: a resposta pode levar
@@ -266,34 +385,12 @@ impl PeerClient {
             }
         };
         let kind = body.as_ref().map_or("application/json", |(_, kind)| *kind);
-        let mut req = http.request(method, format!("{}{path}", cfg.base_url))
-            .header(reqwest::header::CONTENT_TYPE, kind).bearer_auth(&cfg.token);
-        if let Some((body, _)) = body { req = req.body(body); }
-        let mut resp = req.send().await.map_err(|e| transport(server, &e))?;
-        let status = resp.status();
-        // Capacidade reservada antes: o vetor que cresce deixa cópias do corpo sem zerar.
-        let mut raw = Zeroizing::new(Vec::with_capacity(resp.content_length().map_or(SECRET_RESERVE.min(limit), |n| (n as usize).min(limit))));
-        loop {
-            match resp.chunk().await {
-                Ok(Some(chunk)) if raw.len() + chunk.len() > limit => {
-                    if status.is_success() { return Err(PeerError::Transport(TOO_LARGE.into())); }
-                    break;
-                }
-                Ok(Some(chunk)) => raw.extend_from_slice(&chunk),
-                Ok(None) => break,
-                Err(e) if status.is_success() => return Err(transport(server, &e)),
-                Err(_) => break,
-            }
-        }
-        if !status.is_success() {
-            let text = String::from_utf8_lossy(&raw);
-            let detail = match serde_json::from_str::<Value>(&text) {
-                Ok(Value::Object(mut map)) => map.remove("detail").unwrap_or_else(|| Value::String(text.clone().into_owned())),
-                _ => Value::String(text.into_owned()),
-            };
-            return Err(PeerError::Refused { status: status.as_u16(), detail });
-        }
-        Ok((status.as_u16(), raw))
+        // `Bytes` divide o mesmo buffer entre as tentativas: a senha não ganha cópia.
+        let body = body.map(|(body, _)| bytes::Bytes::from(body));
+        self.over_routes(server, &cfg, |_, _, base, token| {
+            let (url, method, body) = (format!("{base}{path}"), method.clone(), body.clone());
+            async move { secret_once(http, server, &url, token, method, kind, body, limit).await }
+        }).await
     }
 
     /// `call_group` de um pedido à dona que espera outras máquinas (`op: join`, `op: message`), com
@@ -331,6 +428,54 @@ impl PeerClient {
     }
 }
 
+/// Erro de uma tentativa; `unsent`: a conexão nem abriu (DNS, recusada, prazo de conexão), nada chegou lá.
+/// `bare_502`: 502 com o corpo lido até o fim e vazio, a resposta padrão do Caddy de lá sem alcançar a 8768
+/// (sem `handle_errors` no Caddyfile). Os 502 do próprio Hangar sempre levam corpo; o `frps` e o `frpc` fora
+/// derrubam o TLS, que já é falha de conexão.
+struct Failed { error: PeerError, unsent: bool, bare_502: bool }
+
+impl Failed {
+    fn sent(error: PeerError) -> Self { Self { error, unsent: false, bare_502: false } }
+    fn from_send(label: &str, e: &reqwest::Error) -> Self { Self { error: transport(label, e), unsent: e.is_connect(), bare_502: false } }
+    /// Resposta fora de 2xx; `complete`: o corpo foi lido até o fim, sem corte nem erro no meio.
+    fn refused(status: reqwest::StatusCode, raw: &[u8], complete: bool) -> Self {
+        let text = String::from_utf8_lossy(raw);
+        let bare_502 = status == reqwest::StatusCode::BAD_GATEWAY && complete && text.trim().is_empty();
+        let detail = match serde_json::from_str::<Value>(&text) {
+            Ok(Value::Object(mut map)) => map.remove("detail").unwrap_or_else(|| Value::String(text.clone().into_owned())),
+            _ => Value::String(text.into_owned()),
+        };
+        Self { error: PeerError::Refused { status: status.as_u16(), detail }, unsent: false, bare_502 }
+    }
+}
+
+/// Uma tentativa do `send_secret`, com o corpo 2xx cru em `Zeroizing`.
+async fn secret_once(http: &reqwest::Client, server: &str, url: &str, token: &str, method: reqwest::Method, kind: &str,
+                     body: Option<bytes::Bytes>, limit: usize) -> Result<(u16, Zeroizing<Vec<u8>>), Failed> {
+    let mut req = http.request(method, url).header(reqwest::header::CONTENT_TYPE, kind).bearer_auth(token);
+    if let Some(body) = body { req = req.body(body); }
+    let mut resp = req.send().await.map_err(|e| Failed::from_send(server, &e))?;
+    let status = resp.status();
+    // Capacidade reservada antes: o vetor que cresce deixa cópias do corpo sem zerar.
+    let mut raw = Zeroizing::new(Vec::with_capacity(resp.content_length().map_or(SECRET_RESERVE.min(limit), |n| (n as usize).min(limit))));
+    let complete = loop {
+        match resp.chunk().await {
+            Ok(Some(chunk)) if raw.len() + chunk.len() > limit => {
+                if status.is_success() { return Err(Failed::sent(PeerError::Transport(TOO_LARGE.into()))); }
+                break false;
+            }
+            Ok(Some(chunk)) => raw.extend_from_slice(&chunk),
+            Ok(None) => break true,
+            Err(e) if status.is_success() => return Err(Failed::sent(transport(server, &e))),
+            Err(_) => break false,
+        }
+    };
+    if !status.is_success() {
+        return Err(Failed::refused(status, &raw, complete));
+    }
+    Ok((status.as_u16(), raw))
+}
+
 pub(crate) fn json_body(body: Option<&Value>) -> Option<(Vec<u8>, &'static str)> { body.map(|b| (b.to_string().into_bytes(), "application/json")) }
 
 /// O cliente com os prazos do `peers.call`: 8 s por leitura e 16 s no total.
@@ -346,54 +491,50 @@ pub(crate) fn transport(label: &str, e: &dyn std::error::Error) -> PeerError {
 /// token vazio não manda `Authorization`.
 pub(crate) async fn request(http: &reqwest::Client, label: &str, url: &str, token: Option<&str>, method: reqwest::Method,
                             body: Option<&Value>) -> Result<(u16, Option<Value>), PeerError> {
-    request_observed(None,http,label,url,token,method,body,None).await
+    request_observed(None,http,label,url,token,method,body,None).await.map_err(|failed| failed.error)
 }
 async fn request_observed(agent: Option<&str>, http: &reqwest::Client, label: &str, url: &str, token: Option<&str>, method: reqwest::Method,
-    body:Option<&Value>, mut operation:Option<&mut Operation>)->Result<(u16,Option<Value>),PeerError> {
+    body:Option<&Value>, operation:Option<&Operation>)->Result<(u16,Option<Value>),Failed> {
     let mut req = http.request(method.clone(), url).header(reqwest::header::CONTENT_TYPE, "application/json");
     if let Some(agent) = agent { req = req.header(reqwest::header::USER_AGENT, agent); }
-    if let Some(operation)=operation.as_ref() && !operation.context.request.is_empty(){req=req.header("x-hangar-req",&operation.context.request);}
+    if let Some(operation)=operation &&!operation.context.request.is_empty(){req=req.header("x-hangar-req",&operation.context.request);}
     if let Some(token) = token.filter(|t| !t.is_empty()) { req = req.bearer_auth(token); }
     if let Some(body) = body { req = req.body(body.to_string()); }
     let mut resp = req.send().await.map_err(|e| {
-        if let Some(operation)=operation.as_mut(){operation.result(&method,None,Some(("transporte_resultado_incerto",transport_kind(&e))));}
-        transport(label, &e)
+        if let Some(operation)=operation{operation.result(&method,None,Some(("transporte_resultado_incerto",transport_kind(&e))));}
+        Failed::from_send(label, &e)
     })?;
     let status = resp.status();
     let mut raw = Vec::new();
-    loop {
+    let complete = loop {
         match resp.chunk().await {
             Ok(Some(chunk)) => {
                 raw.extend_from_slice(&chunk);
                 if raw.len() > MAX_BODY {
                     // A recusa ainda se lê pelo primeiro 1 MiB; o sucesso grande é incerto.
-                    if !status.is_success() { raw.truncate(MAX_BODY); break; }
-                    if let Some(operation)=operation.as_mut(){operation.result(&method,None,Some(("transporte_resultado_incerto","OSError")));}
-                    return Err(PeerError::Transport(TOO_LARGE.into()));
+                    if !status.is_success() { raw.truncate(MAX_BODY); break false; }
+                    if let Some(operation)=operation{operation.result(&method,None,Some(("transporte_resultado_incerto","OSError")));}
+                    return Err(Failed::sent(PeerError::Transport(TOO_LARGE.into())));
                 }
             }
-            Ok(None) => break,
+            Ok(None) => break true,
             Err(e) if status.is_success() => {
-                if let Some(operation)=operation.as_mut(){operation.result(&method,None,Some(("transporte_resultado_incerto",transport_kind(&e))));}
-                return Err(transport(label, &e));
+                if let Some(operation)=operation{operation.result(&method,None,Some(("transporte_resultado_incerto",transport_kind(&e))));}
+                return Err(Failed::sent(transport(label, &e)));
             },
-            Err(_) => break,
+            Err(_) => break false,
         }
+    };
+    if !status.is_success() {
+        if let Some(operation)=operation{operation.result(&method,Some(status.as_u16()),Some(("http_recusado","HTTPError")));}
+        return Err(Failed::refused(status, &raw, complete));
     }
     let text = String::from_utf8_lossy(&raw);
-    if !status.is_success() {
-        if let Some(operation)=operation.as_mut(){operation.result(&method,Some(status.as_u16()),Some(("http_recusado","HTTPError")));}
-        let detail = match serde_json::from_str::<Value>(&text) {
-            Ok(Value::Object(mut map)) => map.remove("detail").unwrap_or_else(|| Value::String(text.clone().into_owned())),
-            _ => Value::String(text.into_owned()),
-        };
-        return Err(PeerError::Refused { status: status.as_u16(), detail });
-    }
     let result=if text.trim().is_empty(){Ok((status.as_u16(),None))}else{
         serde_json::from_str(&text).map(|v| (status.as_u16(), Some(v))).map_err(|e| PeerError::Transport(format!("{label} respondeu corpo ilegível: {e}")))
     };
-    if let Some(operation)=operation.as_mut(){operation.result(&method,Some(status.as_u16()),result.as_ref().err().map(|_|("resposta_json_ilegivel","JSONDecodeError")));}
-    result
+    if let Some(operation)=operation{operation.result(&method,Some(status.as_u16()),result.as_ref().err().map(|_|("resposta_json_ilegivel","JSONDecodeError")));}
+    result.map_err(Failed::sent)
 }
 
 /// O erro e suas causas numa linha: o do `reqwest` sozinho não diz o que caiu.
@@ -406,4 +547,37 @@ pub(crate) fn chain(e: &dyn std::error::Error) -> String {
         source = cause.source();
     }
     text
+}
+
+#[cfg(test)]
+mod connect_route_tests {
+    use super::*;
+
+    /// O cofre segue a regra do `call`: o Connect só quando o endereço salvo nem conecta.
+    #[tokio::test]
+    async fn secrets_go_through_connect_only_when_the_saved_address_does_not_connect() {
+        let seen: Arc<Mutex<Vec<String>>> = Arc::default();
+        let log = seen.clone();
+        let app = axum::Router::new().route("/x", axum::routing::any(move |headers: axum::http::HeaderMap| {
+            let log = log.clone();
+            async move {
+                log.lock().unwrap().push(headers.get("authorization").and_then(|v| v.to_str().ok()).unwrap_or("").to_owned());
+                "{\"via\":\"connect\"}"
+            }
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let connect = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        // Porta que acabou de ser liberada: recusa a conexão.
+        let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("peers.json");
+        std::fs::write(&file, serde_json::json!({"lab": {"base_url": format!("http://{closed}"), "token": "dono",
+            "connect_url": format!("http://{connect}"), "connect_token": "aparelho", "connect_device": "abc"}}).to_string()).unwrap();
+        let client = PeerClient::new(PeerBook::new(Some(file))).with_connect_route();
+        let (status, raw) = client.send_secret(false, "lab", reqwest::Method::POST, "/x", Some((b"{}".to_vec(), "application/json")), 1024).await.unwrap();
+        assert_eq!((status, raw.as_slice()), (200, b"{\"via\":\"connect\"}".as_slice()));
+        assert_eq!(*seen.lock().unwrap(), vec!["Bearer aparelho".to_owned()]);
+        assert_eq!(client.route("lab"), Some(Route::Connect));
+    }
 }

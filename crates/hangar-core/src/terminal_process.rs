@@ -31,6 +31,19 @@ pub fn can_execute(path: &std::path::Path) -> bool {
     })
 }
 
+/// Código de saída como o `returncode` do Python: morto por sinal é o número do sinal, negativo.
+pub fn exit_code(status: std::process::ExitStatus) -> Option<i32> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        status.code().or_else(|| status.signal().map(|signal| -signal))
+    }
+    #[cfg(not(unix))]
+    {
+        status.code()
+    }
+}
+
 pub trait OwnedTree: Send {
     fn terminate(&mut self)->io::Result<()>;
     fn active(&mut self)->io::Result<bool>;

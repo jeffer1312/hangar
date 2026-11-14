@@ -142,7 +142,7 @@ const PAGE_ROWS: &[(Page, &[(&str, Option<&str>)])] = &[
         ("worktree_settings_unchanged", Some("worktree_settings_unchanged_help")), ("worktree_settings_keep", Some("worktree_settings_keep_help"))]),
     (Page::Attachments, &[("server_keep_attachments", Some("server_keep_attachments_help"))]),
     (Page::Windows, &[("computer_control_enable", Some("computer_control_enable_hint")),
-        ("computer_control_install", None), ("computer_control_dir", None), ("computer_control_target", Some("computer_control_target_hint")),
+        ("computer_control_step_program", None), ("computer_control_dir", None), ("computer_control_target", Some("computer_control_target_hint")),
         ("computer_control_step_jev", Some("computer_control_jev_status")), ("computer_control_llm", Some("computer_control_llm_hint"))]),
     (Page::Advanced, &[("server_automations", Some("server_automations_help")), ("server_thinking", Some("server_thinking_help")),
         ("server_translate_thinking", Some("server_translate_thinking_help")),

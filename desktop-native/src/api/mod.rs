@@ -99,7 +99,36 @@ pub fn mermaid_failure(status: u16, message: String) -> MermaidReply {
 
 // `plain` busca mídia de terceiros: nunca leva o token do servidor.
 #[derive(Clone)]
-pub struct Api { client: Client, plain: Client, base: Url, token: String }
+pub struct Api { client: Authed, plain: Client, base: Url, token: String }
+
+/// Cliente com a senha do dono. Pedido à origem do Connect sai com a credencial de aparelho: lá a senha é recusada.
+#[derive(Clone)]
+struct Authed { owner: Client, identity: String }
+
+impl Authed {
+    fn get(&self, url: Url) -> reqwest::RequestBuilder { self.request(Method::GET, url) }
+    fn post(&self, url: Url) -> reqwest::RequestBuilder { self.request(Method::POST, url) }
+    fn delete(&self, url: Url) -> reqwest::RequestBuilder { self.request(Method::DELETE, url) }
+    fn request(&self, method: Method, url: Url) -> reqwest::RequestBuilder {
+        match route::credential(&self.identity, &url) {
+            route::Credential::Owner => self.owner.request(method, url),
+            route::Credential::Device(client, _) => client.request(method, url),
+            // A senha do dono nunca vai ao Connect: o pedido falha no `send`, sem abrir conexão.
+            route::Credential::Blocked => self.owner.request(method, route::blocked_url()),
+        }
+    }
+}
+
+/// Cliente que leva `token` em todo pedido, sem seguir redirecionamento.
+fn bearer_client(token: &str) -> Result<Client, Failure> {
+    let mut value = header::HeaderValue::from_str(&format!("Bearer {}", token.trim()))
+        .map_err(|_| Failure::local("invalid_token"))?;
+    value.set_sensitive(true);
+    let mut headers = header::HeaderMap::new();
+    headers.insert(header::AUTHORIZATION, value);
+    Client::builder().default_headers(headers).connect_timeout(Duration::from_secs(10))
+        .redirect(reqwest::redirect::Policy::none()).build().map_err(|_| Failure::local("network_error"))
+}
 
 /// Escolha capturada antes do ditado; a resposta não troca seu modo, modelo ou destino.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -318,13 +347,7 @@ impl Api {
             return Err(Failure::local("invalid_url"));
         }
         if !base.path().ends_with('/') { base.set_path(&format!("{}/", base.path())); }
-        let mut value = header::HeaderValue::from_str(&format!("Bearer {}", token.trim()))
-            .map_err(|_| Failure::local("invalid_token"))?;
-        value.set_sensitive(true);
-        let mut headers = header::HeaderMap::new();
-        headers.insert(header::AUTHORIZATION, value);
-        let client = Client::builder().default_headers(headers).connect_timeout(Duration::from_secs(10))
-            .redirect(reqwest::redirect::Policy::none()).build().map_err(|_| Failure::local("network_error"))?;
+        let client = Authed { owner: bearer_client(token)?, identity: base.as_str().to_owned() };
         let plain = Client::builder().connect_timeout(Duration::from_secs(10)).redirect(reqwest::redirect::Policy::limited(3))
             .build().map_err(|_| Failure::local("network_error"))?;
         Ok(Self { client, plain, base, token: token.trim().to_owned() })
@@ -346,26 +369,18 @@ impl Api {
         url
     }
 
-    async fn checked(response: Response, post: bool) -> Result<Response, Failure> {
-        Self::checked_as(response, post, if post { "POST" } else { "GET" }).await
+    async fn checked(&self, response: Response, post: bool) -> Result<Response, Failure> {
+        self.checked_as(response, post, if post { "POST" } else { "GET" }).await
     }
 
     /// `method` só rotula a falha guardada para o relatório de diagnóstico.
-    async fn checked_as(response: Response, post: bool, method: &str) -> Result<Response, Failure> {
-        if response.status().is_success() || response.status() == StatusCode::NOT_MODIFIED { return Ok(response); }
-        let status = response.status().as_u16();
-        let url = response.url().clone();
-        let retry_after = response.headers().get(header::RETRY_AFTER).and_then(|s| s.to_str().ok()).and_then(|s| s.parse().ok());
-        let body = response.json::<Value>().await.ok();
-        let code = envelope_code(body.as_ref());
-        recent::record(method, &url, status, code.as_deref());
-        let detail = failure_detail(body, status);
-        Err(Failure { status: Some(status), detail: detail.chars().take(500).collect(), retry_after, uncertain: post && status >= 500, code })
+    async fn checked_as(&self, response: Response, post: bool, method: &str) -> Result<Response, Failure> {
+        checked_response(response, post, method, Some(self.base.as_str())).await
     }
 
     pub async fn sessions(&self) -> Result<Vec<SessionInfo>, Failure> {
         let r = self.client.get(self.endpoint(None, None)).timeout(Duration::from_secs(15)).send().await.map_err(|_| Failure::transport(false))?;
-        Self::checked(r, false).await?.json().await.map_err(|_| Failure::local("invalid_response"))
+        self.checked(r, false).await?.json().await.map_err(|_| Failure::local("invalid_response"))
     }
 
     pub async fn history(&self, name: &str, limit: usize, etag: Option<&str>) -> Result<History, Failure> {
@@ -373,7 +388,7 @@ impl Api {
         url.query_pairs_mut().append_pair("limit", &limit.to_string());
         let mut req = self.client.get(url).timeout(Duration::from_secs(30));
         if let Some(tag) = etag { req = req.header(header::IF_NONE_MATCH, tag); }
-        let r = Self::checked(req.send().await.map_err(|_| Failure::transport(false))?, false).await?;
+        let r = self.checked(req.send().await.map_err(|_| Failure::transport(false))?, false).await?;
         open_trace(|| format!("history headers {}", r.status().as_u16()));
         if r.status() == StatusCode::NOT_MODIFIED { return Ok(History { events: None, etag: etag.map(str::to_owned) }); }
         let etag = r.headers().get(header::ETAG).and_then(|h| h.to_str().ok()).map(str::to_owned);
@@ -398,7 +413,7 @@ impl Api {
         let r = self.client.post(self.endpoint(Some(name), Some("steer")))
             .json(&json!({"text": text})).timeout(Duration::from_secs(60))
             .send().await.map_err(|_| Failure::transport(true))?;
-        let value: Value = Self::checked(r, true).await?.json().await.map_err(|_| Failure::transport(true))?;
+        let value: Value = self.checked(r, true).await?.json().await.map_err(|_| Failure::transport(true))?;
         if value.get("ok").and_then(Value::as_bool) != Some(true) { return Err(Failure::transport(true)); }
         Ok(Delivery { ok: true, delivered: true, ..Default::default() })
     }
@@ -411,7 +426,7 @@ impl Api {
         let r = self.client.post(self.endpoint(Some(name), Some("input")))
             .json(&body).timeout(Duration::from_secs(60))
             .send().await.map_err(|_| Failure::transport(true))?;
-        let delivery: Delivery = Self::checked(r, true).await?.json().await.map_err(|_| Failure::transport(true))?;
+        let delivery: Delivery = self.checked(r, true).await?.json().await.map_err(|_| Failure::transport(true))?;
         if !delivery.ok { return Err(Failure::transport(true)); }
         Ok(delivery)
     }
@@ -419,7 +434,7 @@ impl Api {
     pub async fn commands(&self, name: &str) -> Result<Vec<CommandInfo>, Failure> {
         let r = self.client.get(self.endpoint(Some(name), Some("commands"))).timeout(Duration::from_secs(30))
             .send().await.map_err(|_| Failure::transport(false))?;
-        Self::checked(r, false).await?.json().await.map_err(|_| Failure::local("invalid_response"))
+        self.checked(r, false).await?.json().await.map_err(|_| Failure::local("invalid_response"))
     }
 
     // Corpo cru, sem multipart. Queda depois de mandar é incerteza: o arquivo pode ter sido salvo.
@@ -429,7 +444,7 @@ impl Api {
             .header("X-Filename", crate::composer::encode_component(if filename.is_empty() { "arquivo" } else { filename }))
             .body(bytes).timeout(Duration::from_secs(UPLOAD_SECONDS))
             .send().await.map_err(|_| Failure::transport(true))?;
-        Self::checked(r, true).await?.json().await.map_err(|_| Failure::transport(true))
+        self.checked(r, true).await?.json().await.map_err(|_| Failure::transport(true))
     }
 
     /// Áudio do ditado nos anexos (`?audio_only=1`): o backend não trata como vídeo (quadros e transcrição de fala).
@@ -442,7 +457,7 @@ impl Api {
             // 30 min de ditado dão ~58 MB: em 180 s só passariam acima de ~2,6 Mbit/s, abaixo de uma VPN em relay.
             .body(bytes).timeout(Duration::from_secs(600))
             .send().await.map_err(|_| Failure::transport(true))?;
-        Self::checked(r, true).await?.json().await.map_err(|_| Failure::transport(true))
+        self.checked(r, true).await?.json().await.map_err(|_| Failure::transport(true))
     }
 
     /// Sem `name` (nova conversa, antes de a sessão existir) só transcreve, sem guardar o áudio numa sessão.
@@ -453,20 +468,20 @@ impl Api {
             .header(header::CONTENT_TYPE, crate::composer::mime_for(filename))
             .header("X-Filename", crate::composer::encode_component(filename))
             .body(bytes);
-        Self::transcribed(request).await
+        self.transcribed(request).await
     }
 
     /// Transcreve um áudio que já está nos anexos da sessão (`?arquivo=`, nome solto ou o caminho que o servidor
     /// devolveu): corpo vazio, nada é salvo de novo.
     pub async fn transcribe_saved(&self, name: &str, filename: &str, clean: bool, style: Option<&str>) -> Result<Value, Failure> {
-        Self::transcribed(self.client.post(self.transcribe_url(Some(name), Some(filename), clean, style))).await
+        self.transcribed(self.client.post(self.transcribe_url(Some(name), Some(filename), clean, style))).await
     }
 
     pub async fn dictate(&self,name:Option<&str>,filename:&str,bytes:Vec<u8>,style:Option<&str>,options:&DictationOptions)->Result<Value,Failure> {
         if bytes.len() as u64>MAX_BYTES{return Err(Failure::local("attach_too_big"));}
         let request=self.client.post(self.transcribe_url_with_options(name,None,true,style,options))
             .header(header::CONTENT_TYPE,crate::composer::mime_for(filename)).header("X-Filename",crate::composer::encode_component(filename)).body(bytes);
-        Self::transcribed(request).await
+        self.transcribed(request).await
     }
 
     /// Pedaço do ditado em curso: só a transcrição (`limpar=0`), sem sessão nem anexo; o texto juntado é organizado no
@@ -475,22 +490,22 @@ impl Api {
         let r = self.client.post(self.transcribe_url(None, None, false, None))
             .header(header::CONTENT_TYPE, "audio/wav").header("X-Filename", "ditado.wav").body(wav)
             .timeout(Duration::from_secs(60)).send().await.map_err(|_| Failure::transport(true))?;
-        Self::checked(r, true).await?.json().await.map_err(|_| Failure::local("invalid_response"))
+        self.checked(r, true).await?.json().await.map_err(|_| Failure::local("invalid_response"))
     }
 
     pub async fn dictate_saved(&self,name:&str,filename:&str,style:Option<&str>,options:&DictationOptions)->Result<Value,Failure> {
-        Self::transcribed(self.client.post(self.transcribe_url_with_options(Some(name),Some(filename),true,style,options))).await
+        self.transcribed(self.client.post(self.transcribe_url_with_options(Some(name),Some(filename),true,style,options))).await
     }
 
     pub async fn dictation_models(&self,session:&str,fresh:bool)->Result<Value,Failure> {
         let response=self.client.get(self.server_url(&["dictation","models"],&[("session",session),("fresh",if fresh{"true"}else{"false"})]))
             .timeout(Duration::from_secs(60)).send().await.map_err(|_|Failure::transport(false))?;
-        Self::checked(response,false).await?.json().await.map_err(|_|Failure::local("invalid_response"))
+        self.checked(response,false).await?.json().await.map_err(|_|Failure::local("invalid_response"))
     }
 
     pub async fn test_transcription_provider(&self, id: &str, filename: &str, bytes: Vec<u8>) -> Result<Value, Failure> {
         if bytes.len() as u64 > MAX_BYTES { return Err(Failure::local("attach_too_big")); }
-        Self::transcribed(self.client.post(self.server_url(&["transcription", "providers", id, "test"], &[]))
+        self.transcribed(self.client.post(self.server_url(&["transcription", "providers", id, "test"], &[]))
             .header(header::CONTENT_TYPE, "application/octet-stream")
             .header("X-Filename", crate::composer::encode_component(filename)).body(bytes)).await
     }
@@ -520,10 +535,10 @@ impl Api {
         url
     }
 
-    async fn transcribed(request: reqwest::RequestBuilder) -> Result<Value, Failure> {
+    async fn transcribed(&self, request: reqwest::RequestBuilder) -> Result<Value, Failure> {
         // Cobre o ditado mais longo (30 min de áudio) mais a organização: o servidor responde só no fim.
         let r = request.timeout(Duration::from_secs(35 * 60)).send().await.map_err(|_| Failure::transport(true))?;
-        Self::checked(r, true).await?.json().await.map_err(|_| Failure::local("invalid_response"))
+        self.checked(r, true).await?.json().await.map_err(|_| Failure::local("invalid_response"))
     }
 
     pub async fn uploads(&self, name: &str) -> Result<Vec<UploadFile>, Failure> {
@@ -531,14 +546,14 @@ impl Api {
         struct Listing { #[serde(default)] files: Vec<UploadFile> }
         let r = self.client.get(self.endpoint(Some(name), Some("uploads"))).timeout(Duration::from_secs(30))
             .send().await.map_err(|_| Failure::transport(false))?;
-        let listing: Listing = Self::checked(r, false).await?.json().await.map_err(|_| Failure::local("invalid_response"))?;
+        let listing: Listing = self.checked(r, false).await?.json().await.map_err(|_| Failure::local("invalid_response"))?;
         Ok(listing.files)
     }
 
     // Bytes de um anexo: do cofre, de caminho citado ou de imagem do transcript, autenticados; remoto, sem token.
     pub async fn fetch(&self, name: &str, source: &Source) -> Result<Vec<u8>, Failure> {
         let mut url = self.endpoint(Some(name), None);
-        let mut client = &self.client;
+        let mut remote = false;
         match source {
             Source::Upload(file) => { url.path_segments_mut().expect("validated HTTP base").extend(["uploads", file]); }
             Source::Cited(path) | Source::Workspace(path) => {
@@ -549,17 +564,18 @@ impl Api {
             Source::Transcript(id, index) => { url.path_segments_mut().expect("validated HTTP base").extend(["transcript-image", id, &index.to_string()]); }
             Source::Remote(address) => {
                 url = Url::parse(address).ok().filter(|url| matches!(url.scheme(), "http" | "https")).ok_or_else(|| Failure::local("invalid_url"))?;
-                client = &self.plain;
+                remote = true;
             }
             Source::Memory(_, bytes) => return Ok(bytes.0.to_vec()),
         }
-        let r = client.get(url).timeout(Duration::from_secs(UPLOAD_SECONDS)).send().await.map_err(|_| Failure::transport(false))?;
+        let request = if remote { self.plain.get(url) } else { self.client.get(url) };
+        let r = request.timeout(Duration::from_secs(UPLOAD_SECONDS)).send().await.map_err(|_| Failure::transport(false))?;
         // Erro de terceiro não tem o corpo lido: nem memória, nem texto escolhido por ele na tela.
         if matches!(source, Source::Remote(_)) && !r.status().is_success() {
             let status = r.status().as_u16();
             return Err(Failure { status: Some(status), detail: failure_detail(None, status), retry_after: None, uncertain: false, code: None });
         }
-        let r = Self::checked(r, false).await?;
+        let r = self.checked(r, false).await?;
         if r.content_length().is_some_and(|n| n > MAX_BYTES) { return Err(Failure::local("attach_too_big")); }
         // Resposta sem tamanho declarado para no teto enquanto chega.
         let mut body = Vec::new();
@@ -579,7 +595,7 @@ impl Api {
         url.path_segments_mut().expect("validated HTTP base").push(id).extend(extra);
         if !query.is_empty() { url.query_pairs_mut().extend_pairs(query); }
         let r = self.client.get(url).timeout(Duration::from_secs(30)).send().await.map_err(|_| Failure::transport(false))?;
-        Ok(Self::checked(r, false).await?.bytes().await.map_err(|_| Failure::transport(false))?.to_vec())
+        Ok(self.checked(r, false).await?.bytes().await.map_err(|_| Failure::transport(false))?.to_vec())
     }
 
     /// Diagrama desenhado pelo servidor (`POST /api/mermaid`). Só 503, rede e prazo podem passar numa nova tentativa.
@@ -610,7 +626,7 @@ impl Api {
         let mut url = self.endpoint(Some(name), Some("interrupt"));
         url.query_pairs_mut().append_pair("clear", if clear { "true" } else { "false" });
         let r = self.client.post(url).timeout(Duration::from_secs(15)).send().await.map_err(|_| Failure::transport(true))?;
-        Self::checked(r, true).await?;
+        self.checked(r, true).await?;
         Ok(())
     }
 
@@ -629,7 +645,7 @@ impl Api {
         let mut req = self.client.request(method, url);
         if let Some(body) = body { req = req.json(&body); }
         let r = req.timeout(Duration::from_secs(seconds)).send().await.map_err(|e| Failure::lost(label.as_str(), &e, true))?;
-        let r = Self::checked_as(r, true, label.as_str()).await?;
+        let r = self.checked_as(r, true, label.as_str()).await?;
         r.json().await.map_err(|_| Failure::transport(true))
     }
 
@@ -681,7 +697,7 @@ impl Api {
             if let Some(refusal) = share_refusal(status, &body) { return Err(refusal); }
             return Err(ShareFailure::Other(Failure { status: Some(status), detail: failure_detail(Some(body), status), retry_after: None, uncertain: false, code: None }));
         }
-        Self::checked(r, true).await.map_err(ShareFailure::Other)?.json().await.map_err(|_| ShareFailure::Other(Failure::transport(true)))
+        self.checked(r, true).await.map_err(ShareFailure::Other)?.json().await.map_err(|_| ShareFailure::Other(Failure::transport(true)))
     }
 
     /// Só consulta o que falta; não liga o Funnel.
@@ -729,14 +745,14 @@ impl Api {
         url.path_segments_mut().expect("validated HTTP base").extend(path);
         if !query.is_empty() { url.query_pairs_mut().extend_pairs(query); }
         let r = self.client.get(url).timeout(Duration::from_secs(seconds)).send().await.map_err(|_| Failure::transport(false))?;
-        Self::checked(r, false).await?.json().await.map_err(|_| Failure::local("invalid_response"))
+        self.checked(r, false).await?.json().await.map_err(|_| Failure::local("invalid_response"))
     }
 
     pub async fn config(&self) -> Result<Value, Failure> {
         let mut url = self.route();
         url.path_segments_mut().expect("validated HTTP base").pop_if_empty().extend(["api", "config"]);
         let r = self.client.get(url).timeout(Duration::from_secs(15)).send().await.map_err(|_| Failure::transport(false))?;
-        Self::checked(r, false).await?.json().await.map_err(|_| Failure::local("invalid_response"))
+        self.checked(r, false).await?.json().await.map_err(|_| Failure::local("invalid_response"))
     }
 
     /// `/api/<path>` do servidor (fora de uma sessão), com o método pedido.
@@ -751,7 +767,7 @@ impl Api {
     pub async fn server_read(&self, path: &[&str], query: &[(&str, &str)], seconds: u64) -> Result<Value, Failure> {
         let r = self.client.get(self.server_url(path, query)).timeout(Duration::from_secs(seconds)).send().await
             .map_err(|e| Failure::lost("GET", &e, false))?;
-        Self::checked(r, false).await?.json().await.map_err(|_| Failure::local("invalid_response"))
+        self.checked(r, false).await?.json().await.map_err(|_| Failure::local("invalid_response"))
     }
 
     /// Como `server_read`, com o valor de um cabeçalho da resposta (o total de conversas da busca).
@@ -759,7 +775,7 @@ impl Api {
         -> Result<(Value, Option<String>), Failure> {
         let r = self.client.get(self.server_url(path, query)).timeout(Duration::from_secs(seconds)).send().await
             .map_err(|e| Failure::lost("GET", &e, false))?;
-        let r = Self::checked(r, false).await?;
+        let r = self.checked(r, false).await?;
         let value = r.headers().get(header).and_then(|h| h.to_str().ok()).map(str::to_owned);
         Ok((r.json().await.map_err(|_| Failure::local("invalid_response"))?, value))
     }
@@ -768,7 +784,7 @@ impl Api {
     pub async fn server_bytes(&self, path: &[&str], seconds: u64) -> Result<Vec<u8>, Failure> {
         let r = self.client.get(self.server_url(path, &[])).timeout(Duration::from_secs(seconds)).send().await
             .map_err(|_| Failure::transport(false))?;
-        let r = Self::checked(r, false).await?;
+        let r = self.checked(r, false).await?;
         if r.content_length().is_some_and(|n| n > MAX_BYTES) { return Err(Failure::local("attach_too_big")); }
         let bytes = r.bytes().await.map_err(|_| Failure::transport(false))?;
         if bytes.len() as u64 > MAX_BYTES { return Err(Failure::local("attach_too_big")); }
@@ -779,13 +795,13 @@ impl Api {
     pub async fn server_post(&self, path: &[&str], seconds: u64) -> Result<Value, Failure> {
         let r = self.client.post(self.server_url(path, &[])).timeout(Duration::from_secs(seconds)).send().await
             .map_err(|_| Failure::transport(true))?;
-        Self::checked(r, true).await?.json().await.map_err(|_| Failure::transport(true))
+        self.checked(r, true).await?.json().await.map_err(|_| Failure::transport(true))
     }
 
     pub async fn server_post_query(&self, path: &[&str], query: &[(&str, &str)], seconds: u64) -> Result<Value, Failure> {
         let r = self.client.post(self.server_url(path, query)).timeout(Duration::from_secs(seconds)).send().await
             .map_err(|_| Failure::transport(true))?;
-        Self::checked(r, true).await?.json().await.map_err(|_| Failure::transport(true))
+        self.checked(r, true).await?.json().await.map_err(|_| Failure::transport(true))
     }
 
     /// Mutação (PUT, POST, DELETE), com ou sem corpo JSON, sem retry: queda depois de enviar é incerteza.
@@ -799,7 +815,7 @@ impl Api {
         let mut req = self.client.request(method, self.server_url(path, query));
         if let Some(body) = body { req = req.json(&body); }
         let r = req.timeout(Duration::from_secs(seconds)).send().await.map_err(|e| Failure::lost(label.as_str(), &e, true))?;
-        let r = Self::checked_as(r, true, label.as_str()).await?;
+        let r = self.checked_as(r, true, label.as_str()).await?;
         // 204 não tem corpo para ler.
         if r.status() == StatusCode::NO_CONTENT { return Ok(Value::Null); }
         r.json().await.map_err(|_| Failure::transport(true))
@@ -815,7 +831,7 @@ impl Api {
             let code = envelope_code(body.as_ref());
             return Err(Failure { status: Some(409), detail: failure_detail(body, 409).chars().take(500).collect(), retry_after: None, uncertain: false, code });
         }
-        Self::checked_as(r, true, "DELETE").await?.json().await.map(Removed::Done).map_err(|_| Failure::transport(true))
+        self.checked_as(r, true, "DELETE").await?.json().await.map(Removed::Done).map_err(|_| Failure::transport(true))
     }
 
     /// Rota do hub de sincronização: a sessão ali é o cookie `cp_sync`, não o token. Devolve também o `cp_sync=…` que a
@@ -831,7 +847,8 @@ impl Api {
         }
         if let Some(body) = body { req = req.json(&body); }
         let r = req.timeout(Duration::from_secs(seconds)).send().await.map_err(|_| Failure::transport(post))?;
-        let r = Self::checked_as(r, post, label.as_str()).await?;
+        // O 401 daqui é da sessão `cp_sync` ou da senha do login, com o mesmo código do porteiro do Connect: não recusa o aparelho.
+        let r = checked_response(r, post, label.as_str(), None).await?;
         let session = r.headers().get_all(header::SET_COOKIE).iter().filter_map(|v| v.to_str().ok())
             .filter_map(|v| v.split(';').next()).find(|v| v.starts_with("cp_sync=")).map(str::to_owned);
         Ok((r.json().await.map_err(|_| Failure::local("invalid_response"))?, session))
@@ -849,7 +866,7 @@ impl Api {
             if let Some(name) = live { return Ok(Resumed::Live(name)); }
             return Err(Failure { status: Some(409), detail: failure_detail(body, 409).chars().take(500).collect(), retry_after: None, uncertain: false, code: None });
         }
-        let session = Self::checked(r, true).await?.json().await.map_err(|_| Failure::local("invalid_response"))?;
+        let session = self.checked(r, true).await?.json().await.map_err(|_| Failure::local("invalid_response"))?;
         Ok(Resumed::New(session))
     }
 
@@ -857,14 +874,14 @@ impl Api {
     pub async fn server_delete(&self, path: &[&str], query: &[(&str, &str)], seconds: u64) -> Result<Value, Failure> {
         let r = self.client.delete(self.server_url(path, query)).timeout(Duration::from_secs(seconds)).send().await
             .map_err(|_| Failure::transport(true))?;
-        Self::checked_as(r, true, "DELETE").await?.json().await.map_err(|_| Failure::transport(true))
+        self.checked_as(r, true, "DELETE").await?.json().await.map_err(|_| Failure::transport(true))
     }
 
     /// Manifesto da configuração compartilhada, com as etapas da leitura em `on` (`None` = Hangar sem etapas).
     pub async fn config_sync_manifest<F, Fut>(&self, on: F) -> Result<Value, Failure>
     where F: FnMut(Option<Value>) -> Fut, Fut: std::future::Future<Output = ()> {
         let req = self.client.get(self.server_url(&["config-sync", "manifest"], &[("stream", "1")]));
-        Self::ndjson(req, false, 60, on).await
+        self.ndjson(req, false, 60, on).await
     }
 
     /// Pacote da origem (gzip). `keys` é o JSON `{item: [chaves]}` das entradas marcadas.
@@ -873,7 +890,7 @@ impl Api {
         if let Some(keys) = keys { query.push(("keys", keys)); }
         let r = self.client.get(self.server_url(&["config-sync", "bundle"], &query)).timeout(Duration::from_secs(180)).send().await
             .map_err(|_| Failure::transport(false))?;
-        let r = Self::checked(r, false).await?;
+        let r = self.checked(r, false).await?;
         if r.content_length().is_some_and(|n| n > MAX_BYTES) { return Err(Failure::local("attach_too_big")); }
         let bytes = r.bytes().await.map_err(|_| Failure::transport(false))?;
         if bytes.len() as u64 > MAX_BYTES { return Err(Failure::local("attach_too_big")); }
@@ -885,18 +902,18 @@ impl Api {
     where F: FnMut(Option<Value>) -> Fut, Fut: std::future::Future<Output = ()> {
         let req = self.client.post(self.server_url(&["config-sync", "apply"], &[("items", items), ("stream", "1")]))
             .header(header::CONTENT_TYPE, "application/gzip").body(bundle);
-        Self::ndjson(req, true, 600, on).await
+        self.ndjson(req, true, 600, on).await
     }
 
     /// Resposta NDJSON: `progress` vai para `on`, `done` é o resultado e `error` a falha. Hangar antigo ignora `stream=1`
     /// e responde JSON inteiro: `on(None)` e o corpo é o resultado. `seconds` vale para a resposta e para cada silêncio.
-    async fn ndjson<F, Fut>(req: reqwest::RequestBuilder, post: bool, seconds: u64, mut on: F) -> Result<Value, Failure>
+    async fn ndjson<F, Fut>(&self, req: reqwest::RequestBuilder, post: bool, seconds: u64, mut on: F) -> Result<Value, Failure>
     where F: FnMut(Option<Value>) -> Fut, Fut: std::future::Future<Output = ()> {
         use futures::StreamExt;
         let wait = Duration::from_secs(seconds);
         let cut = || if post { Failure { uncertain: true, ..Failure::local("shared_config_stream_cut") } } else { Failure::transport(false) };
         let r = tokio::time::timeout(wait, req.send()).await.map_err(|_| Failure::transport(post))?.map_err(|_| Failure::transport(post))?;
-        let r = Self::checked(r, post).await?;
+        let r = self.checked(r, post).await?;
         let ndjson = r.headers().get(header::CONTENT_TYPE).and_then(|h| h.to_str().ok()).is_some_and(|t| t.starts_with("application/x-ndjson"));
         if !ndjson {
             on(None).await;
@@ -940,7 +957,7 @@ impl Api {
         let mut url = self.route();
         url.path_segments_mut().expect("validated HTTP base").pop_if_empty().extend(["api", "desktop", "palette"]);
         let r = self.client.get(url).timeout(Duration::from_secs(10)).send().await.map_err(|_| Failure::transport(false))?;
-        Self::checked(r, false).await?.json().await.map_err(|_| Failure::local("invalid_response"))
+        self.checked(r, false).await?.json().await.map_err(|_| Failure::local("invalid_response"))
     }
 
     /// Foto do papel de parede desta máquina, para o fundo Desktop em Vidro. Mesma regra da paleta: 403 fora
@@ -949,7 +966,7 @@ impl Api {
         let mut url = self.route();
         url.path_segments_mut().expect("validated HTTP base").pop_if_empty().extend(["api", "desktop", "wallpaper"]);
         let r = self.client.get(url).timeout(Duration::from_secs(20)).send().await.map_err(|_| Failure::transport(false))?;
-        let r = Self::checked(r, false).await?;
+        let r = self.checked(r, false).await?;
         let limit = crate::media::BACKDROP_MAX_BYTES;
         if r.content_length().is_some_and(|n| n > limit) { return Err(Failure::local("backdrop_too_big")); }
         // Resposta sem tamanho declarado para no teto enquanto chega, sem juntar tudo antes de conferir.
@@ -971,7 +988,7 @@ impl Api {
         if !cursor.is_empty() { req = req.header("Last-Event-ID", cursor); }
         let r = tokio::time::timeout(Duration::from_secs(15), req.send()).await
             .map_err(|_| Failure::transport(false))?.map_err(|_| Failure::transport(false))?;
-        let r = Self::checked(r, false).await?;
+        let r = self.checked(r, false).await?;
         if !r.headers().get(header::CONTENT_TYPE).and_then(|h| h.to_str().ok()).unwrap_or("").starts_with("text/event-stream") {
             return Err(Failure::local("invalid_response"));
         }
@@ -1086,7 +1103,21 @@ pub async fn redeem_invite(address: &str, code: &str, device: &str, token: Optio
     if let Some(token) = token { body["token"] = json!(token); }
     let r = client.post(url).json(&body).timeout(Duration::from_secs(20)).send().await
         .map_err(|_| Failure::transport(true))?;
-    Api::checked(r, true).await?.json().await.map_err(|_| Failure::local("invalid_response"))
+    checked_response(r, true, "POST", None).await?.json().await.map_err(|_| Failure::local("invalid_response"))
+}
+
+/// `identity`: a entrada que fez o pedido; só ela perde o Connect num 401 (sem entrada, nada a recusar).
+async fn checked_response(response: Response, post: bool, method: &str, identity: Option<&str>) -> Result<Response, Failure> {
+    if response.status().is_success() || response.status() == StatusCode::NOT_MODIFIED { return Ok(response); }
+    let status = response.status().as_u16();
+    let url = response.url().clone();
+    let retry_after = response.headers().get(header::RETRY_AFTER).and_then(|s| s.to_str().ok()).and_then(|s| s.parse().ok());
+    let body = response.json::<Value>().await.ok();
+    let code = envelope_code(body.as_ref());
+    recent::record(method, &url, status, code.as_deref());
+    if status == 401 && let Some(identity) = identity { route::refused_at(identity, &url); }
+    let detail = failure_detail(body, status);
+    Err(Failure { status: Some(status), detail: detail.chars().take(500).collect(), retry_after, uncertain: post && status >= 500, code })
 }
 
 #[derive(Clone, serde::Deserialize, PartialEq)]

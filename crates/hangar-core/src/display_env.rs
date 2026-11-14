@@ -67,12 +67,18 @@ fn sources(current: &impl Fn(&str) -> Option<String>) -> (String, Option<PathBuf
 
 /// Com prazo: barramento do usuário quebrado não pode prender quem lança.
 fn systemd_environment() -> Option<String> {
-    read_with_limit(std::process::Command::new("systemctl").args(["--user", "show-environment"]), std::time::Duration::from_secs(3))
+    systemd_environment_from("systemctl")
+}
+
+fn systemd_environment_from(program: &str) -> Option<String> {
+    read_with_limit(std::process::Command::new(program).args(["--user", "show-environment"]), std::time::Duration::from_secs(3))
 }
 
 /// A saída é lida enquanto o filho roda (pipe cheio o prenderia); estourado o prazo, ele é morto e colhido.
+/// Stdin nulo: o do servidor é o cano do Python, que filho nenhum pode herdar.
 fn read_with_limit(command: &mut std::process::Command, limit: std::time::Duration) -> Option<String> {
-    let mut child = command.stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).spawn()
+    let mut child = command.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null()).spawn()
         .map_err(|e| tracing::info!(target: "voice", "display env: spawn failed kind={:?}", e.kind())).ok()?;
     let mut stdout = child.stdout.take()?;
     let (tx, rx) = std::sync::mpsc::channel();
@@ -151,6 +157,21 @@ mod tests {
         let current = |key: &str| Some(match key { "HYPRLAND_INSTANCE_SIGNATURE" => "morto_1".to_owned(), "WAYLAND_DISPLAY" => "wayland-1".to_owned(),
             "DISPLAY" => ":0".to_owned(), _ => dir.clone() });
         assert_eq!(for_launch(current)[2], ("HYPRLAND_INSTANCE_SIGNATURE".into(), "vivo_2".into()));
+    }
+
+    /// O `systemctl` falso registra o próprio stdin: tem de ser /dev/null, nunca o do servidor.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn systemctl_runs_with_null_stdin() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let record = dir.path().join("stdin");
+        let fake = dir.path().join("systemctl");
+        std::fs::write(&fake, format!("#!/bin/sh\nreadlink /proc/self/fd/0 > '{}'\necho DISPLAY=:7\n", record.display())).unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let out = systemd_environment_from(fake.to_str().unwrap()).unwrap();
+        assert_eq!(out, "DISPLAY=:7\n");
+        assert_eq!(std::fs::read_to_string(&record).unwrap().trim(), "/dev/null");
     }
 
     #[test]

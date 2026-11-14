@@ -2,7 +2,7 @@ use std::path::Path;
 
 use serde_json::{Value, json};
 
-use hangar_update_news::{known_version, mark_seen, record, unseen, valid_device};
+use hangar_update_news::{Kind, known_version, mark_seen, record, record_component, unseen, valid_device};
 
 fn item(id: &str, title: &str) -> Value { json!({ "id": id, "title": title, "kind": "new", "platforms": "all" }) }
 
@@ -160,6 +160,45 @@ fn going_back_to_the_previous_version_drops_what_the_new_one_brought() {
     // Instalada de verdade depois, aparece.
     record(home.path(), "1.4", "1.5", vec![item("a", "A")]).unwrap();
     assert_eq!(ids(&unseen(home.path(), "phone").unwrap().news), ["a"]);
+}
+
+/// Volta de versão do Hangar com uma chegada do hcu no meio continua desfazendo a do Hangar, e a do hcu fica.
+#[test]
+fn going_back_with_an_hcu_arrival_in_between_still_drops_the_hangar_arrival() {
+    let home = tempfile::tempdir().unwrap();
+    unseen(home.path(), "phone").unwrap();
+    record(home.path(), "1.4", "1.5", vec![item("a", "A")]).unwrap();
+    record_component(home.path(), Kind::ComputerControl, "v0.7.0", "v0.8.0", vec![item("computer-control-v0.8.0", "C")]).unwrap();
+    record(home.path(), "1.5", "1.4", vec![]).unwrap();
+    assert_eq!(ids(&unseen(home.path(), "phone").unwrap().news), ["computer-control-v0.8.0"]);
+    assert_eq!(known_version(home.path()).unwrap().as_deref(), Some("1.4"));
+}
+
+/// A chegada do hcu não toca a versão do Hangar e nunca é desfeita por ela, mesmo com versões que batem.
+#[test]
+fn a_component_arrival_keeps_the_hangar_version_and_is_never_undone() {
+    let home = tempfile::tempdir().unwrap();
+    unseen(home.path(), "phone").unwrap();
+    record(home.path(), "0", "1.4", vec![]).unwrap();
+    assert_eq!(record_component(home.path(), Kind::ComputerControl, "1.5", "1.4", vec![item("c", "C")]).unwrap(), Some(1));
+    assert_eq!(known_version(home.path()).unwrap().as_deref(), Some("1.4"));
+    record(home.path(), "1.4", "1.5", vec![]).unwrap();
+    assert_eq!(ids(&unseen(home.path(), "phone").unwrap().news), ["c"]);
+    assert_eq!(stored(home.path())["arrivals"][0]["kind"], "computer-control");
+    assert_eq!(record_component(home.path(), Kind::ComputerControl, "1.4", "1.6", vec![]).unwrap(), None);
+}
+
+/// Chegada gravada antes do campo `kind` é do Hangar, e a do Hangar continua sem o campo.
+#[test]
+fn an_arrival_without_kind_reads_as_hangar() {
+    let home = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(home.path().join(".hangar")).unwrap();
+    let old = json!({ "seq": 1, "from": "1.4", "to": "1.5", "at": "2026-01-01T00:00:00Z", "news": [item("a", "A")] });
+    std::fs::write(file(home.path()), json!({ "version": "1.5", "seq": 1, "arrivals": [old], "devices": {} }).to_string()).unwrap();
+    record(home.path(), "1.5", "1.4", vec![]).unwrap();
+    assert_eq!(stored(home.path())["arrivals"], json!([]));
+    record(home.path(), "1.4", "1.5", vec![item("b", "B")]).unwrap();
+    assert!(stored(home.path())["arrivals"][0].get("kind").is_none());
 }
 
 #[test]

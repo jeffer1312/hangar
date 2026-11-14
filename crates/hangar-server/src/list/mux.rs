@@ -315,8 +315,9 @@ impl Mux {
             // É a versão do programa chamado; a dos servidores vivos fica provada só pela comparação.
             // Tem o orçamento da leitura direta: um `-V` lento não tira o prazo do CLI.
             let (_, probe) = direct_window(tokio::time::Instant::now(), deadline, self.direct_budget);
-            let code = match self.version_until(probe).await {
-                Some(v) if hangar_psmux::known_version(&v) => None,
+            let version = self.version_until(probe).await;
+            let code = match &version {
+                Some(v) if hangar_psmux::known_version(v) => None,
                 Some(_) => Some("psmux_direct_version"),
                 None => Some("psmux_direct_version_unread"),
             };
@@ -324,7 +325,8 @@ impl Mux {
             direct.set(gate.clone());
             if let Some(code) = code {
                 if crate::warn_limit::allow(None, code) {
-                    tracing::warn!(code, "psmux: versão do programa não conferida; a lista segue pelo CLI");
+                    let version = version.as_deref().map(|v| v.split_whitespace().collect::<Vec<_>>().join(" "));
+                    tracing::warn!(code, ?version, "psmux: versão do programa não conferida; a lista segue pelo CLI");
                 }
                 return DirectRead::Skip;
             }
@@ -622,13 +624,15 @@ mod tests {
         fn eager(&self, timeout: Duration) -> Mux { self.mux(timeout).revalidating(Duration::ZERO) }
     }
 
-    const UNKNOWN: &str = "tmux 9.9\npsmux 9.9.9 (0000000 2099-01-01)";
+    const UNKNOWN: &str = "tmux 3.3\npsmux 3.3.7 (0000000 2026-06-01)";
+    const V338: &str = "tmux 3.3.8 psmux 3.3.8 (66cf613 2026-08-18)";
+    const V340: &str = "tmux 3.4.0 psmux 3.4.0 (20aa1d7 2026-10-13)";
     /// Prazo dos testes que contam leitura direta × CLI: a leitura direta recebe metade dele.
     const ROOMY: Duration = Duration::from_secs(20);
 
     #[tokio::test]
     async fn the_cli_runs_again_at_each_revalidation_and_keeps_the_direct_confirmed() {
-        let cli = FakeCli::new(hangar_psmux::VERSIONS[1]);
+        let cli = FakeCli::new(V340);
         let a = FakeServer::start("ka", LINE_A.into());
         a.register(&cli.data, "a", "ka");
         cli.lists(LINE_A);
@@ -642,7 +646,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_program_replaced_by_an_unknown_version_turns_the_direct_off() {
-        let cli = FakeCli::new(hangar_psmux::VERSIONS[1]);
+        let cli = FakeCli::new(V340);
         let a = FakeServer::start("ka", LINE_A.into());
         a.register(&cli.data, "a", "ka");
         cli.lists(LINE_A);
@@ -661,7 +665,7 @@ mod tests {
         cli.lists(LINE_A);
         cli.mux(ROOMY).list_panes().await.unwrap();
         assert_eq!(a.conns(), 0);
-        cli.reports(hangar_psmux::VERSIONS[0]);
+        cli.reports(V338);
         cli.eager(ROOMY).list_panes().await.unwrap();
         cli.mux(ROOMY).list_panes().await.unwrap();
         assert_eq!((cli.calls(), cli.reads()), (2, 2));
@@ -669,7 +673,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_failed_version_probe_is_retried_not_kept_as_a_refusal() {
-        let cli = FakeCli::new(hangar_psmux::VERSIONS[1]);
+        let cli = FakeCli::new(V340);
         let a = FakeServer::start("ka", LINE_A.into());
         a.register(&cli.data, "a", "ka");
         cli.lists(LINE_A);
@@ -683,7 +687,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_slow_version_probe_leaves_the_cli_its_deadline() {
-        let cli = FakeCli::new(hangar_psmux::VERSIONS[1]);
+        let cli = FakeCli::new(V340);
         let a = FakeServer::start("ka", LINE_A.into());
         a.register(&cli.data, "a", "ka");
         cli.lists(LINE_A);
@@ -696,7 +700,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_unparsable_direct_reply_goes_back_to_the_cli() {
-        let cli = FakeCli::new(hangar_psmux::VERSIONS[1]);
+        let cli = FakeCli::new(V340);
         let a = FakeServer::start("ka", LINE_A.into());
         a.register(&cli.data, "a", "ka");
         cli.lists(LINE_A);
@@ -720,7 +724,7 @@ mod tests {
 
     #[tokio::test]
     async fn direct_reading_starts_after_matching_the_cli_and_then_skips_it() {
-        let cli = FakeCli::new(hangar_psmux::VERSIONS[1]);
+        let cli = FakeCli::new(V340);
         let a = FakeServer::start("ka", LINE_A.into());
         a.register(&cli.data, "a", "ka");
         cli.lists(LINE_A);
@@ -735,7 +739,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_short_lived_mux_reuses_the_confirmation_of_the_same_program_and_folder() {
-        let cli = FakeCli::new(hangar_psmux::VERSIONS[1]);
+        let cli = FakeCli::new(V340);
         let a = FakeServer::start("ka", LINE_A.into());
         a.register(&cli.data, "a", "ka");
         cli.lists(LINE_A);
@@ -748,7 +752,7 @@ mod tests {
 
     #[tokio::test]
     async fn the_two_line_version_the_real_psmux_prints_is_recognized() {
-        let real = hangar_psmux::VERSIONS[0].replacen(" psmux", "\npsmux", 1);
+        let real = V338.replacen(" psmux", "\npsmux", 1);
         let cli = FakeCli::new(&real);
         let a = FakeServer::start("ka", LINE_A.into());
         a.register(&cli.data, "a", "ka");
@@ -759,8 +763,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_unknown_version_never_connects() {
-        let cli = FakeCli::new("tmux 9.9 psmux 9.9.9 (0000000 2099-01-01)");
+    async fn a_version_below_the_minimum_never_connects() {
+        let cli = FakeCli::new(UNKNOWN);
         let a = FakeServer::start("ka", LINE_A.into());
         a.register(&cli.data, "a", "ka");
         cli.lists(LINE_A);
@@ -771,7 +775,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_new_or_recreated_server_needs_a_new_comparison() {
-        let cli = FakeCli::new(hangar_psmux::VERSIONS[0]);
+        let cli = FakeCli::new(V338);
         let a = FakeServer::start("ka", LINE_A.into());
         a.register(&cli.data, "a", "ka");
         cli.lists(LINE_A);
@@ -800,7 +804,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_mismatch_keeps_the_cli_and_gives_up_after_three_tries() {
-        let cli = FakeCli::new(hangar_psmux::VERSIONS[1]);
+        let cli = FakeCli::new(V340);
         let a = FakeServer::start("ka", LINE_B.into());
         a.register(&cli.data, "a", "ka");
         cli.lists(LINE_A);
@@ -811,7 +815,7 @@ mod tests {
 
     #[tokio::test]
     async fn no_sessions_is_the_cli_answer_and_does_not_disable_direct_reading() {
-        let cli = FakeCli::new(hangar_psmux::VERSIONS[1]);
+        let cli = FakeCli::new(V340);
         let mux = cli.mux(ROOMY);
         for _ in 0..4 { assert_eq!(mux.list_panes().await.unwrap(), Vec::new()); }
         let a = FakeServer::start("ka", LINE_A.into());
@@ -825,7 +829,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_failing_server_falls_back_to_the_cli_within_the_deadline() {
-        let cli = FakeCli::new(hangar_psmux::VERSIONS[1]);
+        let cli = FakeCli::new(V340);
         let a = FakeServer::start("ka", LINE_A.into());
         a.register(&cli.data, "a", "ka");
         cli.lists(LINE_A);

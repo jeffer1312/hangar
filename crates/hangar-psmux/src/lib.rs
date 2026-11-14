@@ -1,23 +1,23 @@
 //! Leitura direta dos servidores do psmux: o mesmo pedido que o `tmux.exe list-panes -a` faz, sem
-//! abrir um processo por consulta. O formato da conversa não é API pública do psmux; só as versões
-//! conferidas contra o código delas usam este caminho.
+//! abrir um processo por consulta. O formato da conversa não é API pública do psmux: só a partir da
+//! versão mínima, e quem chama confere a resposta contra o CLI antes de confiar nela.
 use std::hash::{Hash, Hasher};
 use std::io::{ErrorKind, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-/// Saída de `tmux -V` das versões cujo `list-panes -a` e cuja autenticação foram lidos no código.
+/// Versão do psmux desde a qual `list-panes -a` e a autenticação foram lidos no código. Mais nova também
+/// é tentada: a lista só usa o caminho direto depois de a resposta bater com a do CLI, e falha volta ao CLI.
 /// É a versão do programa chamado; a dos servidores vivos não é verificada aqui.
-pub const VERSIONS: &[&str] = &[
-    "tmux 3.3.8 psmux 3.3.8 (66cf613 2026-08-18)",
-    "tmux 3.4.0 psmux 3.4.0 (20aa1d7 2026-10-13)",
-];
+pub const MIN_VERSION: (u32, u32, u32) = (3, 3, 8);
 
-/// O `-V` do psmux sai em duas linhas (`tmux X` e `psmux X (commit data)`); conta só a sequência de palavras.
+/// O `-V` do psmux sai em duas linhas (`tmux X` e `psmux X (commit data)`); vale o número depois de `psmux`.
 pub fn known_version(output: &str) -> bool {
-    let words = output.split_whitespace().collect::<Vec<_>>().join(" ");
-    VERSIONS.contains(&words.as_str())
+    let number = output.split_whitespace().skip_while(|w| *w != "psmux").nth(1).unwrap_or("");
+    let mut parts = number.split('.').map(|n| n.parse::<u32>().ok());
+    let mut part = || parts.next().flatten();
+    matches!((part(), part(), part()), (Some(a), Some(b), Some(c)) if (a, b, c) >= MIN_VERSION)
 }
 
 /// Resposta de um servidor de sessão; acima disso não é `list-panes`.

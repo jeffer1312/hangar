@@ -3,7 +3,7 @@ import { createHash, createHmac } from 'node:crypto';
 import { apiEnv, configureApi, _resetApiEnvForTests } from './apiEnv';
 import { fetchCostsForServer, openEventStream, openEventStreamForServer, openSessionsStream, probeServerResponse } from './api';
 import { hmacSha256Hex, sha256Hex } from './hmac';
-import { baseOf, decidirRota, discoverConnectRoute, discoverRemoteRoute, esquecerRota, readConnectUrl, verifyServerIdentity, _resetRotasForTests } from './rota';
+import { baseOf, decidirRota, discoverConnectRoute, discoverRemoteRoute, esquecerRota, readConnectUrl, routeKind, verifyServerIdentity, _resetRotasForTests } from './rota';
 import type { LanInfo, Server } from './servers';
 
 const TS = 'https://maq.tail.ts.net';
@@ -486,5 +486,42 @@ describe('rota do Connect', () => {
     rede({ [TS]: { ...maqDevice, atraso: 100, lan_url: LAN }, [LAN]: maqDevice, [CONNECT]: maqDevice });
     await decidirRota(device({ lan: { url: LAN, id: 'maq' } }));
     expect(baseOf(device({ lan: { url: LAN, id: 'maq' } }))).toBe(LAN);
+  });
+
+  describe('routeKind', () => {
+    it('says connect when the Connect is the route in use', async () => {
+      env(null);
+      rede({ [CONNECT]: maqDevice });
+      await decidirRota(device());
+      expect(routeKind(device())).toBe('connect');
+    });
+
+    it('says local when the proven local address wins', async () => {
+      env(null);
+      const server = device({ lan: { url: LAN, id: 'maq' } });
+      rede({ [TS]: { ...maqDevice, atraso: 100, lan_url: LAN }, [LAN]: maqDevice });
+      await decidirRota(server);
+      expect(routeKind(server)).toBe('local');
+    });
+
+    it('says tailscale when the learned Tailscale address answers for a saved non-Tailscale one', async () => {
+      env(null);
+      const server: Server = { id: 's1', label: 'maq', baseUrl: 'https://pc.example', token: 't', remote: { url: TS, id: 'maq' } };
+      rede({ [TS]: maq });
+      await decidirRota(server);
+      expect(baseOf(server)).toBe(TS);
+      expect(routeKind(server)).toBe('tailscale');
+    });
+
+    it('classifies the saved address by its host', () => {
+      expect(routeKind({ ...srv(), baseUrl: TS })).toBe('tailscale');
+      expect(routeKind({ ...srv(), baseUrl: 'https://pc.example' })).toBe('saved');
+      expect(routeKind({ ...srv(), baseUrl: 'https://100.64.0.2:8443' })).toBe('tailscale');
+      expect(routeKind({ ...srv(), baseUrl: 'https://100.128.0.1:8443' })).toBe('saved');
+    });
+
+    it('ignores a trailing slash when comparing addresses', () => {
+      expect(routeKind({ ...srv({ url: 'https://pc.example/', id: 'maq' }), baseUrl: 'https://pc.example' })).toBe('local');
+    });
   });
 });

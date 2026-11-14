@@ -2,6 +2,7 @@
 //! (`registrarPeerDoisLados`). "Mostrar as sessões dele" grava a entrada neste aparelho (`addServer` do web).
 use super::*;
 use url::{Host, Url};
+use crate::api::route::tailscale_host;
 
 /// Porta em que o backend nasce: quem digita só o IP quase sempre quer ela.
 const PORT: u16 = 8765;
@@ -105,17 +106,6 @@ fn reason(error: &Failure) -> Option<String> {
 fn failed(errors: &[&Failure]) -> String {
     let parts = errors.iter().filter_map(|e| reason(e)).collect::<Vec<_>>();
     if parts.is_empty() { tr("connection_failed") } else { format!("{}: {}", tr("connection_failed"), parts.join(" · ")) }
-}
-
-/// Nome da tailnet ou faixa 100.64.0.0/10: costuma depender do Tailscale ligado neste aparelho.
-fn tailscale_host(base: &str) -> Option<String> {
-    let url = Url::parse(base).ok()?;
-    let tailscale = match url.host()? {
-        Host::Domain(name) => name.ends_with(".ts.net"),
-        Host::Ipv4(ip) => ip.octets()[0] == 100 && (64..=127).contains(&ip.octets()[1]),
-        Host::Ipv6(_) => false,
-    };
-    tailscale.then(|| url.host_str().unwrap_or_default().to_owned())
 }
 
 fn failed_at(base: &str, errors: &[&Failure]) -> String {
@@ -342,7 +332,7 @@ impl AddMachine {
         let messages = !own_id.is_empty() && self.messages;
         if !messages && !self.follow { self.error = Some(tr("machines_add_error_none")); cx.notify(); return; }
         if messages && found.id.is_empty() { self.error = Some(tr("machines_add_error_no_id")); cx.notify(); return; }
-        let entry = ServerEntry { id: servers::new_id(), label, address: found.base.clone(), token: found.token.clone(), disabled: false, invite: false, lan: None, ephemeral: false };
+        let entry = ServerEntry { id: servers::new_id(), label, address: found.base.clone(), token: found.token.clone(), disabled: false, invite: false, lan: None, ephemeral: false, ..Default::default() };
         if self.follow && !retry &&!hangar.update(cx, |hangar, cx| hangar.save_machine(entry, window, cx)) {
             self.error = Some(tr("machines_add_error_invite"));
             cx.notify();
@@ -624,6 +614,7 @@ impl Hangar {
         let Some(entry) = self.servers.iter_mut().find(|s| s.id == entry_id) else { return false };
         let old = servers::norm(&entry.address);
         (entry.address, entry.token, entry.label, entry.disabled) = (found.base.clone(), found.token.clone(), label, false);
+        servers::clear_connect_refusal(entry);
         self.servers_changed(cx);
         self.reopen_edited(&[old, key.clone()], &key, window, cx);
         true
@@ -689,7 +680,7 @@ mod tests {
     #[test]
     fn saving_updates_the_same_address_and_never_an_invite() {
         let entry = |address: &str, token: &str, invite: bool| ServerEntry { id: token.into(), label: token.into(), address: address.into(),
-            token: token.into(), disabled: true, invite, lan: None, ephemeral: false };
+            token: token.into(), disabled: true, invite, lan: None, ephemeral: false, ..Default::default() };
         let mut list = vec![entry("http://casa:8765", "old", false), entry("https://h:8443", "guest", true)];
         assert!(place_machine(&mut list, ServerEntry { disabled: false, ..entry("http://CASA:8765/", "new", false) }));
         assert_eq!((list.len(), list[0].token.as_str(), list[0].disabled), (2, "new", false));

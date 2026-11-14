@@ -17,6 +17,12 @@ pub(crate) struct ServerEntry {
     /// Rede local aprendida pelo endereço salvo; ausente = nunca perguntado.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lan: Option<api::route::Lan>,
+    /// Terceiro caminho, só quando a rede local e o endereço salvo falham. `token` continua sendo a senha do dono.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connect: Option<api::route::ConnectRoute>,
+    /// O dono revogou a credencial do Connect: não se pede outra sozinho.
+    #[serde(default)]
+    pub connect_refused: bool,
     /// Entrada só do par externo: refeita da lista de pares a cada abertura, nunca gravada.
     #[serde(skip, default)]
     pub ephemeral: bool,
@@ -44,6 +50,7 @@ pub(crate) fn upsert(list: &mut Vec<ServerEntry>, entry: ServerEntry) {
     match list.iter_mut().find(|s| norm(&s.address) == norm(&entry.address)) {
         Some(found) => {
             if !entry.label.is_empty() { found.label = entry.label; }
+            if found.token != entry.token { clear_connect_refusal(found); }
             found.token = entry.token;
             found.disabled = entry.disabled;
             // Entrada só do par vira a de quem chegou (servidor próprio ou convite) e passa a ser gravada; nas demais o
@@ -53,6 +60,12 @@ pub(crate) fn upsert(list: &mut Vec<ServerEntry>, entry: ServerEntry) {
         }
         None => list.push(entry),
     }
+}
+
+/// O dono trocou o endereço ou o token da máquina: a recusa do Connect deixa de valer, aqui e na tabela de rotas.
+pub(crate) fn clear_connect_refusal(entry: &mut ServerEntry) {
+    entry.connect_refused = false;
+    api::route::reset_refused(&entry.address);
 }
 
 /// O que vai ao arquivo: a entrada só do par é refeita a cada abertura e nunca é gravada.
@@ -93,7 +106,7 @@ impl Hangar {
         self.keyring.retain(|key, _| *key == active || wanted.iter().any(|s| &norm(&s.address) == key));
         self.vault.retain(|key, _| *key == active || wanted.iter().any(|s| &norm(&s.address) == key));
         self.tags.retain(|key, _| *key == active || wanted.iter().any(|s| &norm(&s.address) == key));
-        for s in &self.servers { api::route::seed(&s.address, s.invite, s.lan.as_ref()); }
+        for s in &self.servers { api::route::seed(&s.address, s.invite, s.lan.as_ref(), s.connect.as_ref(), s.connect_refused); }
         for entry in wanted {
             let key = norm(&entry.address);
             let list = self.remote.entry(key.clone()).or_default();
@@ -333,6 +346,27 @@ impl Hangar {
         self.persist_servers();
     }
 
+    /// Endereço do Connect e credencial de aparelho aprendidos na decisão da rota (`api::route`).
+    pub(super) fn remember_connect(&mut self, address: &str, connect: api::route::ConnectRoute) {
+        let Some(entry) = self.servers.iter_mut().find(|s| norm(&s.address) == norm(address)) else { return };
+        if entry.connect.as_ref() == Some(&connect) { return; }
+        entry.connect = Some(connect);
+        self.persist_servers();
+    }
+
+    /// 401 pelo Connect: a credencial sai e a máquina reconecta pelos outros caminhos. Sem reconectar, o 401 que vem
+    /// atrás abriria o diálogo de senha, e a senha do dono continua valendo.
+    pub(super) fn connect_refused(&mut self, address: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(entry) = self.servers.iter_mut().find(|s| norm(&s.address) == norm(address)) else { return };
+        if entry.connect.is_none() && entry.connect_refused { return; }
+        entry.connect = None;
+        entry.connect_refused = true;
+        let entry = entry.clone();
+        self.persist_servers();
+        if self.is_active_key(&norm(address)) { self.activate_server(entry, window, cx); }
+        else { self.start_remote_lists(); }
+    }
+
     pub(super) fn persist_servers(&self) {
         let active = Some((self.server.clone().unwrap_or_default(), self.active_token.clone())).filter(|(a, t)| !a.is_empty() && !t.is_empty());
         let servers = persistable(&self.servers);
@@ -427,7 +461,7 @@ mod tests {
 
     #[test]
     fn upsert_matches_same_machine_and_keeps_label() {
-        let entry = |label: &str, address: &str, token: &str| ServerEntry { id: "x".into(), label: label.into(), address: address.into(), token: token.into(), disabled: false, invite: false, lan: None, ephemeral: false };
+        let entry = |label: &str, address: &str, token: &str| ServerEntry { id: "x".into(), label: label.into(), address: address.into(), token: token.into(), disabled: false, invite: false, lan: None, ephemeral: false, ..Default::default() };
         let mut list = vec![entry("PC", "http://127.0.0.1:8765", "a")];
         upsert(&mut list, entry("", "http://127.0.0.1:8765/", "b"));
         upsert(&mut list, entry("notebook", "https://notebook.ts.net", "c"));
@@ -437,15 +471,27 @@ mod tests {
     }
 
     #[test]
+    fn new_token_from_the_owner_lifts_the_connect_refusal() {
+        let refused = |token: &str| ServerEntry { address: "https://refusal-test.invalid".into(), token: token.into(), connect_refused: true, ..Default::default() };
+        let mut list = vec![refused("old")];
+        // Reconectar com o mesmo token não é ação do dono: a recusa fica.
+        upsert(&mut list, refused("old"));
+        assert!(list[0].connect_refused);
+        upsert(&mut list, refused("new"));
+        assert!(!list[0].connect_refused);
+    }
+
+    #[test]
     fn invite_flag_survives_the_plain_upsert_of_the_first_connection() {
         let mut list = vec![ServerEntry { id: "i".into(), label: "Convite · Jefferson".into(), address: "https://h:8443".into(),
-            token: "g".into(), disabled: false, invite: true, lan: None, ephemeral: false }];
+            token: "g".into(), disabled: false, invite: true, lan: None, ephemeral: false, ..Default::default() }];
         // O `Sessions(Ok)` da conexão faz upsert sem a marca: ela não pode cair.
         upsert(&mut list, ServerEntry { id: "x".into(), label: String::new(), address: "https://h:8443/".into(),
-            token: "g".into(), disabled: false, invite: false, lan: None, ephemeral: false });
+            token: "g".into(), disabled: false, invite: false, lan: None, ephemeral: false, ..Default::default() });
         assert!(list[0].invite);
         let old: ServerEntry = serde_json::from_str(r#"{"id":"a","label":"PC","address":"http://127.0.0.1:8765","token":"t"}"#).unwrap();
         assert!(!old.invite);
+        assert!(old.connect.is_none() && !old.connect_refused, "arquivo de antes do Connect carrega sem o terceiro caminho");
     }
 
     #[test]

@@ -716,13 +716,15 @@ impl ListBridge {
         // Um ator lento não soma o prazo dele ao dos fatos.
         let runtime = async { match self.runtime.get() { Some(r) => Some(r.snapshots().await), None => None } };
         let (program, kids) = (self.env.capture_program.clone(), children.clone());
-        // Os panes desta rodada já dizem se existe sessão de atalho. No Windows a leitura direta do psmux
-        // não foi conferida para isso, e lá o `list-sessions` segue a cada rodada. Com atalho na última
-        // lista a leitura continua: só ela confirma que o último saiu. Leitura de panes que descartou
-        // linha também não prova ausência.
-        let unproved = { let last = lock(&self.local); last.panes_partial || last.shortcuts.as_deref().is_some_and(|list| list != "[]") };
-        let present = cfg!(windows) || unproved || panes.iter().any(|pane| pane.session.starts_with(local_shortcuts::PREFIX));
-        let shortcuts = self.shortcuts.round(move || async move { local_shortcuts::list_all(&program, &kids, present).await });
+        // Os panes desta rodada já dizem quais sessões de atalho existem. Sem nenhuma, com atalho na última
+        // lista, só o multiplexador confirma que o último saiu; leitura de panes que descartou linha também
+        // não prova ausência.
+        let mut seen: Vec<String> = panes.iter().filter(|pane| pane.session.starts_with(local_shortcuts::PREFIX)).map(|pane| pane.session.clone()).collect();
+        seen.sort();
+        seen.dedup();
+        let unproved = { let last = lock(&self.local); last.panes_partial || (seen.is_empty() && last.shortcuts.as_deref().is_some_and(|list| list != "[]")) };
+        let sessions = (!unproved).then_some(seen);
+        let shortcuts = self.shortcuts.round(move || async move { local_shortcuts::list_all(&program, &kids, sessions).await });
         let (runtime, plugins) = tokio::join!(runtime, self.plugin_facts(&rows));
         let (facts_ok, facts_fresh) = (fetched.ok, fetched.fresh);
         let states = fetched.states;
@@ -1017,7 +1019,7 @@ impl Caches {
                 .map(|item| expand_home(&labelled_path(item), &dirs.home)).collect(),
             None => match std::fs::read_dir(&dirs.home) {
                 Ok(entries) => entries.flatten()
-                    .filter(|e| e.file_name().to_string_lossy().starts_with(".claude") && e.path().is_dir())
+                    .filter(|e| account_dir_name(&e.file_name().to_string_lossy()) && e.path().is_dir())
                     .map(|e| e.path()).collect(),
                 Err(e) => {
                     // Sem as outras contas os marcadores delas somem: avisa e não guarda, tenta de novo no tique.
@@ -1035,6 +1037,12 @@ impl Caches {
         *lock(&self.config_dirs) = Some((Instant::now(), v.clone()));
         v
     }
+}
+
+/// `~/.claude*` sem as travas do Claude Code (`~/.claude.json.lock`, `~/.claude-x.lock`): quem usa
+/// esta lista grava estado nas pastas, e a trava que ganha arquivo nunca mais é removida.
+fn account_dir_name(name: &str) -> bool {
+    name.starts_with(".claude") && !name.ends_with(".lock")
 }
 
 pub(crate) fn expand_home(path: &str, home: &Path) -> PathBuf {
@@ -1416,6 +1424,16 @@ pub async fn private(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connect
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn claude_lock_dirs_are_not_account_dirs() {
+        for name in [".claude", ".claude-jefferson", ".claude-200-04", ".claude-x.lockado"] {
+            assert!(account_dir_name(name), "{name}");
+        }
+        for name in [".claude.json.lock", ".claude.lock", ".claude-200-01.lock", ".codex", "claude"] {
+            assert!(!account_dir_name(name), "{name}");
+        }
+    }
 
     #[tokio::test]
     async fn real_round_rebuilds_rows_and_keeps_only_same_life_projection_on_error() {

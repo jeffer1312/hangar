@@ -4351,9 +4351,10 @@ Descartados: ferramentas de leitura restritas à pasta e desligar a pesquisa com
 - Na TypeSafe, vazio fica vazio: cada cliente usa o seu padrão.
 - **Controle do Windows.** O `computer` mandava a chave do OpenRouter ao endereço fixo da TypeSafe e
   recebia 401. Agora a entrada do MCP e o ambiente do `computer` da voz levam `JEV_ENDPOINT` e
-  `JEV_MODEL` da chave. O hangar-computer-control ainda não lê esses valores: tanto o
-  `laco_uia.py` quanto `crates/hcc-laco/src/jev.rs` têm a TypeSafe fixa no código. A tela avisa
-  isso quando a chave do Windows é do OpenRouter.
+  `JEV_MODEL` da chave. O hangar-computer-control lê os dois (`motor_real.rs`, com a TypeSafe só
+  como padrão quando vêm vazios) e escolhe o formato do pedido pelo endereço:
+  `url.contains("openrouter.ai")` em `crates/hcc-laco/src/jev.rs`. (Corrigido em 13/11/2026: esta
+  entrada dizia que o hcu tinha a TypeSafe fixa no código.)
 - **Tela do Jev no nativo (uma chave).**
   - A caixa "Chave do Jev" mostra o provedor que sai da chave e o modelo em três botões: o
     recomendado (vazio = padrão do provedor), "Sempre o mais novo" e "Outro", que abre o Avançado.

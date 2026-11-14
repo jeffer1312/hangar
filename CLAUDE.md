@@ -748,6 +748,14 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   condicionada ao resumo lido, com a trava `.consolidate-lock` do auto-dream nativo, e nunca troca
   a pasta, que pode ser atalho das outras contas. Diário e `last_error` guardam só o código.
   [Medição](docs/decisoes/plataforma.md#sonho-da-memória-13112026).
+- **Computer Use e transferência de atalhos são do Rust.** `/api/computer-control*` mora no crate
+  `hangar-computer-control-setup` e `/api/shortcuts/*` no `hangar-shortcut-transfer`, sem reserva
+  Python (modo `python` = 404). O hcu se instala sozinho da release e se atualiza só por tag
+  semver mais nova, trocando mesmo com sessão aberta; `/install` responde 410
+  `erro_computer_control_update_app`. Com máquina-alvo, o MCP se registra sozinho em todas as
+  contas; desligado à mão (tela ou fora do Hangar) fica desligado. A entrada do MCP tem um escritor
+  só, no crate. Evidência em
+  [plataforma.md](docs/decisoes/plataforma.md#computer-use-e-transferência-de-atalhos-são-do-rust-13112026).
 - **Nada nasce no Python: o objetivo é tirá-lo do projeto.** Rota, ponte, poller, integração e
   qualquer recurso novo vão para o Rust (`crates/`). Sem pedido explícito do usuário, no
   `backend/app/` só se apaga código. Toda linha que ACRESCENTA no Python — lógica, releitura,

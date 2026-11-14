@@ -13,9 +13,17 @@
 set -euo pipefail
 
 raiz="$(git rev-parse --show-toplevel)"
+trava="${HANGAR_BUILD_LOCK:-/tmp/hangar-build.lock}"
+if ! command -v flock >/dev/null; then
+    # Git Bash não tem flock: o mesmo script roda de novo segurando a trava pelo run-locked.py.
+    [[ -n "${HANGAR_BUILD_LOCK_HELD:-}" ]] || HANGAR_BUILD_LOCK_HELD=1 exec python3 "$raiz/scripts/run-locked.py" \
+        "$(cygpath -w "$trava")" "$(cygpath -w "$BASH")" "$raiz/scripts/cargo-pinned" "$@"
+fi
 cd "$raiz/crates"
-exec 9>"${HANGAR_BUILD_LOCK:-/tmp/hangar-build.lock}"
-flock 9
+if command -v flock >/dev/null; then
+    exec 9>"$trava"
+    flock 9
+fi
 
 metadata="$(mktemp)"
 artifacts="$(mktemp)"
@@ -87,9 +95,11 @@ if [[ -n "$livre" ]] && timeout 5 "${escopo[@]}" true >/dev/null 2>&1; then
 else
     echo "cargo-pinned: -j $jobs, sem teto de memória" >&2
 fi
+baixa=(nice -n 19)
+command -v ionice >/dev/null && baixa+=(ionice -c 3)
 compila() {   # $@ = prefixo antes do nice: vazio ou o escopo com teto
     set +e
-    "$@" nice -n 19 ionice -c 3 cargo "${args[@]}" -j "$jobs" --message-format=json-render-diagnostics |
+    "$@" "${baixa[@]}" cargo "${args[@]}" -j "$jobs" --message-format=json-render-diagnostics |
         # No `cargo test` a saída dos testes vem misturada às mensagens do cargo: ela passa adiante.
         jq -rR --unbuffered '. as $l | (try fromjson catch null) as $j
             | if ($j | type) != "object" then "L\t" + $l

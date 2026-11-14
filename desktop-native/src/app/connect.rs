@@ -180,6 +180,13 @@ fn redraw_on_change(input: &Entity<InputState>, cx: &mut Context<Hangar>) -> Sub
 
 struct LinkForm { account: Entity<InputState>, password: Entity<InputState>, machine: Entity<InputState>, preview_port: Entity<InputState>, _subscriptions: [Subscription; 4] }
 
+/// Servidor guardado que é esta máquina do Connect: salvo pelo endereço dela ou com ela como terceiro caminho.
+fn saved_with_connect(servers: &[super::servers::ServerEntry], host: &str) -> bool {
+    let address = super::servers::norm(&format!("https://{host}"));
+    servers.iter().any(|entry| super::servers::norm(&entry.address) == address
+        || entry.connect.as_ref().is_some_and(|c| super::servers::norm(&c.url) == address))
+}
+
 /// O nome que o app já mostra para esta máquina, no formato que o serviço aceita: minúsculas, números e hífen, sem `--`.
 fn machine_label(shown: &str) -> String {
     let mut label = String::new();
@@ -1023,8 +1030,7 @@ impl Hangar {
 
     /// O mesmo nome de máquina num servidor desta lista: pelo endereço do Connect.
     fn in_app_list(&self, host: &str) -> bool {
-        let address = super::servers::norm(&format!("https://{host}"));
-        self.servers.iter().any(|entry| super::servers::norm(&entry.address) == address) || self.remote.contains_key(&address)
+        saved_with_connect(&self.servers, host) || self.remote.contains_key(&super::servers::norm(&format!("https://{host}")))
     }
 
     fn render_account_machines(&self, this_host: &str, cx: &mut Context<Self>) -> Div {
@@ -1184,6 +1190,20 @@ mod tests {
 
     fn device(id: &str, status: DeviceStatus) -> Device {
         Device { device_id: id.to_owned(), name: format!("Pixel {id}"), status, last_seen: None, install_code: None, install_group: None, created_at: None }
+    }
+
+    #[test]
+    fn machine_saved_with_its_connect_route_is_in_the_list() {
+        use crate::api::route::ConnectRoute;
+        use crate::app::servers::ServerEntry;
+        let saved = |address: &str, connect: Option<&str>| ServerEntry { address: address.into(),
+            connect: connect.map(|url| ConnectRoute { url: url.into(), ..ConnectRoute::default() }), ..ServerEntry::default() };
+        let host = "casa.jeff.hangar.dev.br";
+        // Guardada pelo Tailscale, com o Connect como terceiro caminho: é ela.
+        assert!(super::saved_with_connect(&[saved("https://casa.tail1.ts.net", Some("https://Casa.jeff.hangar.dev.br/"))], host));
+        assert!(super::saved_with_connect(&[saved("https://casa.jeff.hangar.dev.br", None)], host));
+        assert!(!super::saved_with_connect(&[saved("https://casa.tail1.ts.net", Some("https://outra.jeff.hangar.dev.br"))], host));
+        assert!(!super::saved_with_connect(&[saved("https://casa.tail1.ts.net", None)], host));
     }
 
     #[test]

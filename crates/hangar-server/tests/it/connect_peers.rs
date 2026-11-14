@@ -682,3 +682,250 @@ async fn only_the_owner_outside_connect_starts_a_link() {
     assert_eq!(link_row(&w.a, "pc-b").await, Value::Null);
     assert_eq!(start_link(&w.a, "pc-a").await.status(), 400, "consigo mesma não");
 }
+
+/// Par salvo pelo Tailscale com outro nome: o caminho do Connect somado já conta como adicionado.
+#[tokio::test]
+async fn account_machines_mark_a_peer_added_by_its_connect_route() {
+    let w = world().await;
+    write_peers(&w.a, &json!({"notebook-jefferson": {"base_url": "https://notebook.tail.ts.net", "token": "senha-de-b"}}));
+    assert_eq!(account_list(&w.a).await.1["machines"][0]["added"], false);
+    write_peers(&w.a, &json!({"notebook-jefferson": {"base_url": "https://notebook.tail.ts.net", "token": "senha-de-b",
+        "connect_url": format!("https://{}", host_of("pc-b")), "connect_token": "aparelho", "connect_device": "abc"}}));
+    assert_eq!(account_list(&w.a).await.1["machines"][0]["added"], true);
+}
+
+fn with_route(base_url: &str, token: &str, device: &str) -> Value {
+    json!({"pc-b": {"base_url": base_url, "token": token, "connect_url": format!("https://{}", host_of("pc-b")),
+        "connect_token": "aparelho-de-b", "connect_device": device}})
+}
+
+async fn delete_peer(a: &Machine) -> u16 {
+    client().delete(format!("http://{}/api/peers/pc-b", a.main)).bearer_auth(OWNER).send().await.unwrap().status().as_u16()
+}
+
+#[tokio::test]
+async fn removing_a_peer_revokes_its_connect_device_on_the_other_machine() {
+    let w = world().await;
+    let (device, token) = w.b.store.enroll("pc-a").unwrap();
+    write_peers(&w.a, &with_route(&format!("http://{}", w.b.main), OWNER, &device));
+    assert_eq!(delete_peer(&w.a).await, 200);
+    assert!(peers_of(&w.a).get("pc-b").is_none());
+    // A revogação roda depois da resposta.
+    wait_for("o aparelho não foi revogado pela senha do dono de lá", || w.b.store.verify(token.as_bytes()).is_none()).await;
+}
+
+#[tokio::test]
+async fn removing_a_peer_still_deletes_when_the_other_machine_is_away() {
+    let w = world().await;
+    let (device, token) = w.b.store.enroll("pc-a").unwrap();
+    let mut peers = with_route(&format!("http://127.0.0.1:{}", free_port()), OWNER, &device);
+    // Os dois caminhos fora: o Connect também é tentado, numa porta local fechada, nunca no serviço real.
+    peers["pc-b"]["connect_url"] = json!(format!("http://127.0.0.1:{}", free_port()));
+    write_peers(&w.a, &peers);
+    assert_eq!(delete_peer(&w.a).await, 200);
+    assert!(peers_of(&w.a).get("pc-b").is_none());
+    assert!(w.b.store.verify(token.as_bytes()).is_some());
+}
+
+/// Com a marca `connect`, o `token` salvo é um aparelho de lá: a revogação nem é tentada. A senha no
+/// lugar dele aqui só mostra que nenhuma chamada saiu.
+#[tokio::test]
+async fn removing_a_connect_marked_peer_does_not_try_to_revoke() {
+    let w = world().await;
+    let (device, token) = w.b.store.enroll("pc-a").unwrap();
+    let mut peers = with_route(&format!("http://{}", w.b.main), OWNER, &device);
+    peers["pc-b"]["connect"] = json!(true);
+    write_peers(&w.a, &peers);
+    assert_eq!(delete_peer(&w.a).await, 200);
+    // A revogação roda depois da resposta: o prazo deixa ela chegar, se fosse sair.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(w.b.store.verify(token.as_bytes()).is_some());
+}
+
+/// Outra máquina já salva pelo Tailscale: diz em que host do Connect está e emite aparelho para quem tem a senha dela.
+async fn saved_machine(host: String) -> (Arc<Mutex<Vec<(String, Value)>>>, String) {
+    saved_machine_wiping(host, None).await
+}
+
+/// `wipe`: o dono apaga a entrada `(peers.json, id)` daqui enquanto o aparelho é emitido lá.
+async fn saved_machine_wiping(host: String, wipe: Option<(PathBuf, String)>) -> (Arc<Mutex<Vec<(String, Value)>>>, String) {
+    let seen: Arc<Mutex<Vec<(String, Value)>>> = Arc::default();
+    let owner = |headers: &HeaderMap| headers.get(header::AUTHORIZATION).is_some_and(|value| value.as_bytes() == b"Bearer senha-de-b");
+    let (state_log, enroll_log, revoke_log) = (seen.clone(), seen.clone(), seen.clone());
+    let app = axum::Router::new()
+        .route("/api/connect", get(move |headers: HeaderMap| {
+            let (log, host) = (state_log.clone(), host.clone());
+            async move {
+                if !owner(&headers) { return (StatusCode::UNAUTHORIZED, String::new()); }
+                log.lock().unwrap().push(("state".into(), Value::Null));
+                (StatusCode::OK, json!({"enabled": true, "running": true, "host": host, "error": null}).to_string())
+            }
+        }))
+        .route("/api/connect/devices/self", post(move |headers: HeaderMap, body: Bytes| {
+            let (log, wipe) = (enroll_log.clone(), wipe.clone());
+            async move {
+                if !owner(&headers) { return (StatusCode::UNAUTHORIZED, String::new()); }
+                log.lock().unwrap().push(("enroll".into(), serde_json::from_slice(&body).unwrap()));
+                if let Some((path, id)) = wipe {
+                    let mut peers: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+                    peers.as_object_mut().unwrap().remove(&id);
+                    std::fs::write(&path, peers.to_string()).unwrap();
+                }
+                (StatusCode::OK, json!({"device_id": "0a1b2c3d4e5f", "token": "aparelho-de-b"}).to_string())
+            }
+        }))
+        .route("/api/connect/devices/{id}", axum::routing::delete(move |headers: HeaderMap, Path(id): Path<String>| {
+            let log = revoke_log.clone();
+            async move {
+                if !owner(&headers) { return StatusCode::UNAUTHORIZED; }
+                log.lock().unwrap().push(("revoke".into(), json!(id)));
+                StatusCode::OK
+            }
+        }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    (seen, format!("http://{addr}"))
+}
+
+async fn owner_saves(a: &Machine, id: &str, base_url: &str) {
+    let saved = client().post(format!("http://{}/api/peers", a.main)).bearer_auth(OWNER).header("content-type", "application/json")
+        .body(json!({"id": id, "base_url": base_url, "token": "senha-de-b"}).to_string()).send().await.unwrap();
+    assert_eq!(saved.status(), 200);
+}
+
+/// Máquina salva pelo Tailscale com outro nome: o Connect entra junto, sem tirar o endereço salvo.
+#[tokio::test]
+async fn a_saved_machine_gains_the_connect_route_by_itself() {
+    let w = world().await;
+    let (seen, url) = saved_machine(host_of("pc-b")).await;
+    owner_saves(&w.a, "notebook-jefferson", &url).await;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while peers_of(&w.a)["notebook-jefferson"]["connect_url"].is_null() {
+        assert!(Instant::now() < deadline, "o caminho do Connect não chegou: {}", peers_of(&w.a));
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let entry = peers_of(&w.a)["notebook-jefferson"].clone();
+    assert_eq!(entry["base_url"], url.as_str());
+    assert_eq!(entry["token"], "senha-de-b");
+    assert_eq!(entry["connect_url"], format!("https://{}", host_of("pc-b")).as_str());
+    assert_eq!((entry["connect_token"].as_str(), entry["connect_device"].as_str()), (Some("aparelho-de-b"), Some("0a1b2c3d4e5f")));
+    let enrolls: Vec<Value> = seen.lock().unwrap().iter().filter(|(kind, _)| kind == "enroll").map(|(_, body)| body.clone()).collect();
+    assert_eq!(enrolls, vec![json!({"device_name": "máquina pc-a"})], "uma credencial só, com o nome desta máquina");
+}
+
+/// A outra máquina diz estar num host que não é desta conta: nada é emitido nem gravado.
+#[tokio::test]
+async fn a_host_outside_the_account_is_refused() {
+    let w = world().await;
+    let (seen, url) = saved_machine("intruso.outra.hangar.dev.br".to_owned()).await;
+    owner_saves(&w.a, "notebook-jefferson", &url).await;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while seen.lock().unwrap().is_empty() {
+        assert!(Instant::now() < deadline, "a outra máquina nem foi consultada");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(seen.lock().unwrap().iter().all(|(kind, _)| kind == "state"), "nenhum aparelho emitido lá");
+    assert!(peers_of(&w.a)["notebook-jefferson"].get("connect_url").is_none());
+}
+
+/// Fora do Connect lá não é falha, mas espera como uma: a tela da conta não pergunta de novo; o dono
+/// gravando a máquina, sim.
+#[tokio::test]
+async fn a_machine_outside_connect_waits_until_the_owner_saves_it_again() {
+    let w = world().await;
+    let (seen, url) = saved_machine(String::new()).await;
+    owner_saves(&w.a, "notebook-jefferson", &url).await;
+    wait_for("a outra máquina nem foi consultada", || seen.lock().unwrap().len() == 1).await;
+    client().get(format!("http://{}/api/connect/machines", w.a.main)).bearer_auth(OWNER).send().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(seen.lock().unwrap().len(), 1, "a tela da conta perguntou de novo");
+    owner_saves(&w.a, "notebook-jefferson", &url).await;
+    wait_for("a gravação do dono não perguntou de novo", || seen.lock().unwrap().len() == 2).await;
+    assert!(seen.lock().unwrap().iter().all(|(kind, _)| kind == "state"), "nenhum aparelho emitido lá");
+}
+
+/// O anúncio leva a senha do dono no corpo: com o endereço salvo fechado, ele falha e nunca tenta o Connect.
+#[tokio::test]
+async fn announce_never_falls_back_to_the_connect_route() {
+    let w = world().await;
+    let (seen, url) = recorder().await;
+    write_peers(&w.a, &json!({"pc-b": {"base_url": format!("http://127.0.0.1:{}", free_port()), "token": OWNER,
+        "connect_url": url, "connect_token": "aparelho-de-b", "connect_device": "abc"}}));
+    let rows = network::announce(&linked_service(&w.a), "").await;
+    assert_eq!(rows[0]["estado"], "falhou", "{rows}");
+    assert!(seen.lock().unwrap().is_empty(), "nada chegou pelo Connect");
+}
+
+async fn wait_for(what: &str, done: impl Fn() -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !done() {
+        assert!(Instant::now() < deadline, "{what}");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+/// Subida, gravação e tela da conta podem chegar juntas: a máquina ganha uma credencial só.
+#[tokio::test]
+async fn simultaneous_events_issue_a_single_device() {
+    let w = world().await;
+    let (seen, url) = saved_machine(host_of("pc-b")).await;
+    let machines = client().get(format!("http://{}/api/connect/machines", w.a.main)).bearer_auth(OWNER).send();
+    let (_, listed) = tokio::join!(owner_saves(&w.a, "notebook-jefferson", &url), machines);
+    assert_eq!(listed.unwrap().status(), 200);
+    // A tela pode ter lido a lista antes da gravação: outra leitura garante os dois eventos sobre a mesma entrada.
+    client().get(format!("http://{}/api/connect/machines", w.a.main)).bearer_auth(OWNER).send().await.unwrap();
+    wait_for("o caminho do Connect não chegou", || !peers_of(&w.a)["notebook-jefferson"]["connect_url"].is_null()).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let enrolls = seen.lock().unwrap().iter().filter(|(kind, _)| kind == "enroll").count();
+    assert_eq!(enrolls, 1, "{:?}", seen.lock().unwrap());
+}
+
+/// O dono apagou a máquina enquanto o aparelho era emitido: ele é revogado lá com o que já estava à mão.
+#[tokio::test]
+async fn a_device_issued_for_an_entry_deleted_midway_is_revoked() {
+    let w = world().await;
+    let (seen, url) = saved_machine_wiping(host_of("pc-b"), Some((peers_path(&w.a), "notebook-jefferson".to_owned()))).await;
+    owner_saves(&w.a, "notebook-jefferson", &url).await;
+    wait_for("o aparelho emitido não foi revogado", || seen.lock().unwrap().iter().any(|(kind, _)| kind == "revoke")).await;
+    let revoked: Vec<Value> = seen.lock().unwrap().iter().filter(|(kind, _)| kind == "revoke").map(|(_, id)| id.clone()).collect();
+    assert_eq!(revoked, vec![json!("0a1b2c3d4e5f")]);
+    assert!(peers_of(&w.a).get("notebook-jefferson").is_none());
+}
+
+/// Tailscale fora: apagar a máquina revoga o aparelho pelo Connect, com a própria credencial dele.
+#[tokio::test]
+async fn removing_a_peer_revokes_through_connect_when_the_saved_address_is_down() {
+    let w = world().await;
+    let (device, token) = w.b.store.enroll("pc-a").unwrap();
+    write_peers(&w.a, &json!({"pc-b": {"base_url": format!("http://127.0.0.1:{}", free_port()), "token": OWNER,
+        "connect_url": format!("http://{}", w.b.connect), "connect_token": token, "connect_device": device}}));
+    assert_eq!(delete_peer(&w.a).await, 200);
+    assert!(peers_of(&w.a).get("pc-b").is_none());
+    wait_for("o aparelho não foi revogado pelo Connect", || w.b.store.verify(token.as_bytes()).is_none()).await;
+}
+
+/// A senha do dono mudou lá (401 no endereço salvo): o aparelho ainda revoga a si mesmo pelo Connect.
+#[tokio::test]
+async fn removing_a_peer_revokes_through_connect_when_the_saved_password_is_refused() {
+    let w = world().await;
+    let (device, token) = w.b.store.enroll("pc-a").unwrap();
+    write_peers(&w.a, &json!({"pc-b": {"base_url": format!("http://{}", w.b.main), "token": "senha-velha",
+        "connect_url": format!("http://{}", w.b.connect), "connect_token": token, "connect_device": device}}));
+    assert_eq!(delete_peer(&w.a).await, 200);
+    wait_for("o aparelho não foi revogado pelo Connect", || w.b.store.verify(token.as_bytes()).is_none()).await;
+}
+
+/// O dono põe o nome em outro endereço: o Connect da máquina antiga sai, e o aparelho dela é revogado lá.
+#[tokio::test]
+async fn moving_a_peer_to_another_address_revokes_the_old_route() {
+    let w = world().await;
+    let (device, token) = w.b.store.enroll("pc-a").unwrap();
+    write_peers(&w.a, &json!({"pc-b": {"base_url": format!("http://{}", w.b.main), "token": OWNER,
+        "connect_url": format!("http://{}", w.b.connect), "connect_token": token, "connect_device": device}}));
+    owner_saves(&w.a, "pc-b", &format!("http://127.0.0.1:{}", free_port())).await;
+    let entry = peers_of(&w.a)["pc-b"].clone();
+    for field in ["connect_url", "connect_token", "connect_device"] { assert!(entry.get(field).is_none(), "{field}: {entry}"); }
+    wait_for("o aparelho da máquina antiga ficou valendo", || w.b.store.verify(token.as_bytes()).is_none()).await;
+}

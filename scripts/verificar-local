@@ -69,6 +69,9 @@ if command -v flock >/dev/null; then
         fi
         flock "${HANGAR_BUILD_LOCK:-/tmp/hangar-build.lock}" "${scope[@]}" cargo "$@"
     }
+else
+    # Git Bash: a mesma trava pelo run-locked.py; os caminhos vão literais porque a função segue aos passos.
+    eval "cargo() { python3 $(printf %q "$here/run-locked.py") $(printf %q "$(cygpath -w "${HANGAR_BUILD_LOCK:-/tmp/hangar-build.lock}")") cargo \"\$@\"; }"
 fi
 # Memória disponível (GB) que um `cargo check` do workspace e um build do hangar-server pedem.
 MEM_CHECK_GB="${HANGAR_VERIFY_CHECK_GB:-7}"
@@ -676,7 +679,7 @@ preparar_arvore() {   # $1 = sha, $2 = bundle ("-" = sem bundle); usa $SO
 
 rodar_passos() {   # $1 = sha, resto = passos; cwd = árvore preparada
     local sha="$1"; shift
-    SETSID=""; [[ "$SO" == linux ]] && SETSID=setsid
+    SETSID=""; [[ "$SO" == linux ]] && command -v setsid >/dev/null && SETSID=setsid
     local casa; casa="$(mktemp -d)"
     if [[ "$SO" == linux ]]; then
         ambiente_limpo "$casa"
@@ -793,6 +796,9 @@ vm_rodar() {   # $1 = sha, resto = passos; saída inteira no stdout
     # Arquivo remoto deixa o stdin fechado também durante a espera do mutex.
     runner="run-${sha:0:10}-$$.sh"
     scp -q -o BatchMode=yes "$SCRIPT" "$VM:$VM_WIN/$runner" 2>/dev/null || { echo "scp do roteiro para $VM falhou"; return 2; }
+    # Lá o Git Bash não tem flock: o `cargo()` do roteiro procura a trava ao lado dele.
+    scp -q -o BatchMode=yes "$(dirname "$SCRIPT")/run-locked.py" "$VM:$VM_WIN/run-locked.py" 2>/dev/null \
+        || { echo "scp do run-locked.py para $VM falhou"; return 2; }
     # Mutex do sistema: prioridade abaixo do normal também vale para os filhos.
     ps="\$ProgressPreference='SilentlyContinue'
 \$m = New-Object System.Threading.Mutex(\$false, 'Global\\hangar-verificacao')
@@ -1039,11 +1045,17 @@ if [[ -n "${HANGAR_VERIFY_CALLER_CGROUP:-}" && "$own_cgroup" != "$HANGAR_VERIFY_
 fi
 exec 3> >(marcar "$ANDAMENTO" >&2)
 (
-    exec 9>"$TRAVA" || exit 10
-    if ! flock -n 9; then
-        echo "verificar-local: na fila, outra verificação roda nesta máquina…" >&2
-        printf '%(%s)T fila\n' -1 >> "$ANDAMENTO"
-        flock 9 || exit 10
+    if command -v flock >/dev/null; then
+        exec 9>"$TRAVA" || exit 10
+        if ! flock -n 9; then
+            echo "verificar-local: na fila, outra verificação roda nesta máquina…" >&2
+            printf '%(%s)T fila\n' -1 >> "$ANDAMENTO"
+            flock 9 || exit 10
+        fi
+    else
+        # Git Bash: o run-locked.py segura a trava até este subshell fechar o cano dele.
+        coproc TRAVA_WIN { python3 "$here/run-locked.py" "$(cygpath -w "$TRAVA")"; }
+        read -r _ <&"${TRAVA_WIN[0]}" || exit 10
     fi
     # Busca primeiro, sob a trava: o Windows sai do mesmo clone.
     git -C "$FIXO" fetch -q --no-tags "$ORIGEM" "$sha" || exit 10
@@ -1058,8 +1070,10 @@ exec 3> >(marcar "$ANDAMENTO" >&2)
     rl=0
     if [[ -n "$plano_lin" ]]; then
         # shellcheck disable=SC2086
+        baixa=(nice -n 10)
+        command -v ionice >/dev/null && baixa+=(ionice -c 3)
         ORIGEM="$ORIGEM" HANGAR_VERIFICAR_PROCESSOS="$PROCESSOS" HANGAR_VERIFICAR_ARQUIVOS="${arquivos:-}" \
-            HANGAR_VERIFICAR_BASE="$base" nice -n 10 ionice -c 3 \
+            HANGAR_VERIFICAR_BASE="$base" "${baixa[@]}" \
             bash "$SCRIPT" --executar linux "$sha" - $plano_lin 9>&- | tee "$saida_lin"
         rl=${PIPESTATUS[0]}
     fi

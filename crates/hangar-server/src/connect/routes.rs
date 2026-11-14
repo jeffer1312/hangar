@@ -215,8 +215,13 @@ async fn link(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<So
         return with_cors(&headers, response);
     }
     let body: LinkRequest = match parse(req).await { Ok(body) => body, Err(response) => return response };
-    let supervisor = st.connect_supervisor.clone();
-    let outcome = tokio::spawn(async move { supervisor.link(body).await }).await;
+    let (supervisor, state) = (st.connect_supervisor.clone(), st.clone());
+    let outcome = tokio::spawn(async move {
+        let linked = supervisor.link(body).await;
+        // Connect ligado agora: as máquinas já salvas ganham o caminho por ele.
+        if linked.is_ok() { crate::machine_peers::connect_route::spawn(&state, None); }
+        linked
+    }).await;
     finished(&st, &headers, outcome)
 }
 
@@ -286,7 +291,8 @@ async fn peer_links(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
     reply(&headers, StatusCode::OK, json!(st.connect_supervisor.peer_links().list()))
 }
 
-/// As outras máquinas da conta, marcando as que já estão no `peers.json` desta (pelo endereço ou pelo nome).
+/// As outras máquinas da conta, marcando as que já estão no `peers.json` desta (pelo endereço, pelo
+/// caminho do Connect somado a outro endereço ou pelo nome).
 async fn account_list(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
     let headers = req.headers().clone();
     if let Err(response) = owner_gate(&st, peer, &req).await {
@@ -301,6 +307,7 @@ async fn account_list(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connec
         Ok(machines) => machines,
         Err(failure) => return error(&headers, failure.status, failure.code, &failure.msg),
     };
+    crate::machine_peers::connect_route::spawn(&st, Some(machines.clone()));
     let store = match crate::machine_peers::Service::from_state(&st) {
         Ok(service) => service.store,
         Err(failure) => return error(&headers, StatusCode::SERVICE_UNAVAILABLE, failure.code, &failure.msg),
@@ -313,7 +320,7 @@ async fn account_list(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connec
     let rows: Vec<Value> = machines.into_iter().map(|machine| {
         let address = format!("https://{}", machine.host);
         let added = (&book).into_iter().any(|(key, entry)| *key == machine.machine_id
-            || entry["base_url"].as_str().is_some_and(|url| url.trim_end_matches('/') == address));
+            || ["base_url", "connect_url"].iter().any(|field| entry[*field].as_str().is_some_and(|url| url.trim_end_matches('/') == address)));
         json!({"machine_id": machine.machine_id, "name": machine.name, "host": machine.host, "online": machine.online, "added": added})
     }).collect();
     reply(&headers, StatusCode::OK, json!({"this": {"machine_id": linked.machine_id, "host": linked.host}, "machines": rows}))

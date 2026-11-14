@@ -1,10 +1,42 @@
 //! A troca conserva a versão deslocada; conflito não tenta desfazer sobre uma terceira escrita.
-use super::Error;
 use std::{fs, io, path::Path};
 
-pub(super) fn replace(source: &Path, target: &Path, expected: Option<&[u8]>, link: Option<&Path>) -> Result<(), Error> {
+use crate::fs::retry_while_held;
+
+#[derive(Debug)]
+pub enum Error {
+    Io(io::Error),
+    /// O destino mudou antes da troca; nada foi gravado.
+    Changed(String),
+    /// A versão que saiu do lugar não era a esperada e ficou guardada no caminho da mensagem.
+    Displaced(String),
+}
+impl From<io::Error> for Error {
+    fn from(e: io::Error) -> Self {
+        Self::Io(e)
+    }
+}
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Io(e) => write!(f, "{e}"),
+            Self::Changed(e) | Self::Displaced(e) => write!(f, "{e}"),
+        }
+    }
+}
+impl std::error::Error for Error {}
+
+/// Põe `source` no lugar de `target` só se o que sai de lá for `expected` (e o link `link`). Cada troca
+/// espera, no Windows, o processo que segura o arquivo (o Claude Code lendo o `.claude.json`), pela
+/// mesma política do `fs::replace`.
+///
+/// # Errors
+/// `Changed` e o `Io` de antes da publicação desfazem o que a troca já fez. `Io` ao apagar a cópia de
+/// recuperação vem depois de publicar: `source` já está em `target`. `Displaced` não desfaz nada: a versão
+/// que saiu fica no caminho da mensagem. Nesses dois, confira os caminhos antes de repetir.
+pub fn replace(source: &Path, target: &Path, expected: Option<&[u8]>, link: Option<&Path>) -> Result<(), Error> {
     if expected.is_none() && link.is_none() {
-        return move_new(source,target).map_err(|error| if error.kind()==io::ErrorKind::AlreadyExists {
+        return retry_while_held(|| move_new(source,target)).map_err(|error| if error.kind()==io::ErrorKind::AlreadyExists {
             Error::Changed(format!("Arquivo criado durante a integração: {}",target.display()))
         } else {error.into()});
     }
@@ -13,17 +45,17 @@ pub(super) fn replace(source: &Path, target: &Path, expected: Option<&[u8]>, lin
     #[cfg(windows)]
     if link.is_some() {
         // ReplaceFileW recusa links; mover o próprio link conserva também o alvo externo.
-        fs::rename(target, &recovery)?;
+        retry_while_held(|| fs::rename(target, &recovery))?;
         if fs::read_link(&recovery).ok().as_deref() != link || fs::read(&recovery).as_deref().ok() != expected {
             return Err(Error::Displaced(format!("Link alterado; versão deslocada preservada em {}", recovery.display())));
         }
-        if let Err(error) = move_new(source, target) {
+        if let Err(error) = retry_while_held(|| move_new(source, target)) {
             return Err(Error::Displaced(format!("Publicação interrompida; link preservado em {}: {error}", recovery.display())));
         }
         fs::remove_file(&recovery)?;
         return Ok(());
     }
-    if let Err(error)=exchange(source,target,&recovery) {
+    if let Err(error)=retry_while_held(||exchange(source,target,&recovery)) {
         return Err(Error::Displaced(format!("Falha na troca do arquivo; eventual versão deslocada preservada em {}: {error}",recovery.display())));
     }
     // O arquivo fica retido também quando a leitura falha: nunca apagar uma versão não conferida.

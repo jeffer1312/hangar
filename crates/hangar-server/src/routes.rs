@@ -168,6 +168,16 @@ impl AppState {
             trusted: self.cfg.trusted.clone(), sources: Arc::new(crate::plugin::sources::NativeSources::new(self)) })
     }
 
+    /// A borda que as rotas de crate próprio recebem: proxies confiáveis, autenticação e diário.
+    pub(crate) fn edge(&self) -> hangar_core::edge::Edge {
+        hangar_core::edge::Edge { trusted: self.cfg.trusted.clone(), auth: self.auth.clone(), diag: self.diag.clone() }
+    }
+
+    /// O servidor no papel de `Host` das rotas de atalhos, pelo roteador e pelo caminho com `%2F` ou `//`.
+    pub(crate) fn shortcut_host(self: &Arc<Self>) -> Arc<crate::shortcut_transfer::ServerHost> {
+        Arc::new(crate::shortcut_transfer::ServerHost(self.clone()))
+    }
+
     pub fn new(cfg: Config) -> AppState {
         Self::with_server_id(cfg, String::new())
     }
@@ -260,7 +270,7 @@ impl AppState {
         let vault_requests = Arc::new(crate::vault::requests::Requests::default());
         let accounts = crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::capture());
         let search = crate::search::Index::server(accounts.clone());
-        AppState { scheduled_tasks: Arc::default(), desktop_theme: Arc::new(hangar_desktop_theme::DesktopTheme::system()), local_commands: Arc::new(crate::auxiliary::NativeCommands(accounts.env.clone())), startup: Default::default(), startup_producers: Arc::default(), settings_snapshot: std::sync::OnceLock::new(), login_guests: Arc::new(crate::login_guests::Service::uninitialized(&accounts.env.home,&accounts.env.claude_base)), accounts, search, claude_p: None, command_catalog: Arc::default(), groups, server_id, machine_identity: std::sync::RwLock::new(None), peers: Arc::new(crate::groups::peers_from_env()), auth: Auth::configured(&cfg.auth_token), http, side, cfg, terminal, terminal_address: None, public_v6: None, front: None, connect: None, preview: None, connect_previews: Arc::default(), connect_preview_reach: Arc::new(crate::share::owner_routes::Reach::preview()), diag,
+        AppState { scheduled_tasks: Arc::default(), desktop_theme: Arc::new(hangar_desktop_theme::DesktopTheme::system()), local_commands: Arc::new(crate::auxiliary::NativeCommands(accounts.env.clone())), startup: Default::default(), startup_producers: Arc::default(), settings_snapshot: std::sync::OnceLock::new(), login_guests: Arc::new(crate::login_guests::Service::uninitialized(&accounts.env.home,&accounts.env.claude_base)), accounts, search, claude_p: None, command_catalog: Arc::default(), groups, server_id, machine_identity: std::sync::RwLock::new(None), peers: Arc::new(crate::groups::peers_from_env().with_connect_route()), auth: Auth::configured(&cfg.auth_token), http, side, cfg, terminal, terminal_address: None, public_v6: None, front: None, connect: None, preview: None, connect_previews: Arc::default(), connect_preview_reach: Arc::new(crate::share::owner_routes::Reach::preview()), diag,
             migration_branch: Arc::default(),
             workspace_slots: Arc::new(tokio::sync::Semaphore::new(4)),
             login_browser: Arc::default(),
@@ -398,6 +408,8 @@ pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest:
     let _vault_backup = crate::AbortOnDrop(crate::vault::backup::spawn(state.clone()));
     let _vault_files = crate::AbortOnDrop(tokio::spawn(crate::vault::files::sweep_at_start()));
     let _auto_report = crate::AbortOnDrop(crate::diag_report::auto::spawn(state.clone()));
+    // O Connect gravado volta junto com o servidor: é o evento "Connect ligado" da subida.
+    crate::machine_peers::connect_route::spawn(&state, None);
     // Abortada na saída: a tarefa segura o estado do servidor, que sobreviveria a ele.
     // As sessões com terminal que o multiplexador perdeu voltam pelo spec; antes da varredura de grupos, que
     // conta como vivos os nomes à espera dele.
@@ -918,7 +930,9 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .merge(crate::connect::routes::router())
         // Planos e catálogo de plugins e skills: o dono no Rust; o resto segue ao Python.
         .merge(crate::plans::routes::router())
-        .merge(hangar_desktop_theme::router(hangar_core::edge::Edge { trusted: state.cfg.trusted.clone(), auth: state.auth.clone(), diag: state.diag.clone() }, state.desktop_theme.clone()))
+        .merge(hangar_desktop_theme::router(state.edge(), state.desktop_theme.clone()))
+        // Exportar, importar e verificar atalhos: só o dono, nunca repassados (o Python não tem as rotas).
+        .merge(hangar_shortcut_transfer::router(state.edge(), state.shortcut_host()))
         .route("/api/claude/customizations", get(crate::claude_customizations::catalog_route).fallback(pass_any))
         // Senha do chaveiro: só o dono, nunca repassada; só o preflight do CORS vai ao Python.
         .route("/api/keyring/unlock", axum::routing::post(crate::keyring::unlock_route).options(pass_any))
@@ -1220,6 +1234,10 @@ pub(crate) async fn pass_any(
         return crate::auxiliary::handle(State(st), ConnectInfo(peer), req).await;
     }
     let decoded_path=percent_encoding::percent_decode_str(req.uri().path()).decode_utf8_lossy();
+    // `%2F` ou `//` escapam do roteador: os atalhos continuam do Rust, nunca do Python.
+    if hangar_shortcut_transfer::owns_path(req.uri().path()) {
+        return hangar_shortcut_transfer::handle(st.edge(),st.shortcut_host(),Some(peer),req).await;
+    }
     if crate::worktree_fetch::owns(&decoded_path) {
         return crate::worktree_fetch::route(st,peer,req).await;
     }
@@ -1358,6 +1376,9 @@ pub(crate) async fn pass_any(
     }
     if crate::dream::routes::matches(req.method(), req.uri().path()) {
         return crate::dream::routes::route(st, peer, req).await;
+    }
+    if crate::computer_control::matches(req.method(), req.uri().path()) {
+        return crate::computer_control::route(st, peer, req).await;
     }
     if crate::workspace_routes::matches(req.method(), req.uri().path()) {
         return crate::workspace_routes::public(st, peer, req).await;

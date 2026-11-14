@@ -1,5 +1,6 @@
 //! Máquinas do dono, lista dos apps e alcance, sem passagem pelo backend Python.
 pub mod cli;
+pub mod connect_route;
 pub mod doctor;
 pub mod pairing;
 pub mod dotenv;
@@ -263,7 +264,7 @@ impl Service {
     /// Apagar o par revoga o aparelho emitido para ele. Quem renomeia grava a entrada nova e apaga a
     /// velha com o próprio aparelho: só esse caso poupa, senão uma entrada de sombra salvaria quem o
     /// dono removeu.
-    fn remove_peer(&self, id: &str) -> Result<Value, Error> {
+    fn remove_peer(&self, id: &str) -> Result<(Value, store::Book), Error> {
         let data = self.store.tolerant();
         let renaming = |device: &str| self.device_caller.as_deref() == Some(device)
             && data.iter().any(|(key, entry)| key != id && entry["connect_return_device"].as_str() == Some(device));
@@ -446,6 +447,9 @@ async fn handle_inner(
         Ok(mut value) => {
             use crate::orchestration::codec;
             if device_caller && path=="/api/peers/app-list" {store::mask_app_tokens(&mut value);}
+            // Gravada pelo dono (ou anunciada por outra máquina com a senha): pode ganhar o Connect.
+            if method==Method::POST && path=="/api/peers" && !device_caller {connect_route::spawn(&st, None);}
+            if method==Method::GET && path=="/api/peers" {with_routes(&st.peers,&mut value);}
             if codec::contains_surrogate(&value){codec::discard(value);crate::http_cors::internal_error()}
             else{codec::response(StatusCode::OK,codec::normalize_response(value))}
         },
@@ -458,6 +462,15 @@ async fn handle_inner(
             ),
         ),
         Err(e) => e.response(),
+    }
+}
+/// `route`: o caminho da última chamada desta máquina que a outra atendeu com 2xx; fica de fora sem chamada assim
+/// ou depois de o Connect nem conectar.
+fn with_routes(peers: &crate::groups::peers::PeerClient, rows: &mut Value) {
+    for row in rows.as_array_mut().into_iter().flatten() {
+        if let Some(route) = row["id"].as_str().and_then(|id| peers.route(id)) {
+            row["route"] = json!(route.name());
+        }
     }
 }
 /// Em HTTP/2 o host vem na `:authority`, não no cabeçalho.
@@ -531,6 +544,21 @@ pub async fn dispatch(
             Ok(network::announce(&service, "").await)
         }
         ("GET", "/api/peers/descobrir") => network::discover(&service).await,
+        ("POST", "/api/peers") => {
+            let (store, device) = (service.store.clone(), service.device_caller.clone());
+            let id = body["id"].as_str().map(str::to_owned);
+            let (rows, moved) = tokio::task::spawn_blocking(move || store.put_with_route(&body, device.as_deref()))
+                .await
+                .map_err(|_| Error::unavailable())??;
+            if service.device_caller.is_none() && let Some(id) = id {
+                connect_route::forget_failure(&service.store.path, &id);
+            }
+            // Endereço novo pode ser outra máquina: o aparelho da antiga sai pelo Connect dela, sem segurar a resposta.
+            if let Some(old) = moved {
+                tokio::spawn(old.revoke());
+            }
+            Ok(rows)
+        }
         ("GET", "/api/alcance") => Ok(network::reach(&service).await),
         ("GET", "/api/alcance/pareamento") => network::pairing(&service, q("endereco")).await,
         _ => {
@@ -538,7 +566,6 @@ pub async fn dispatch(
             let path = path.to_owned();
             tokio::task::spawn_blocking(move || match (method.as_str(), path.as_str()) {
                 ("GET", "/api/peers") => Ok(service.store.list()),
-                ("POST", "/api/peers") => service.store.put_from(&body,service.device_caller.as_deref()),
                 ("GET", "/api/peers/app-list") => service.store.app_list(),
                 ("PUT", "/api/peers/app-list") => service.store.app_write(&body),
                 _ => {
@@ -557,7 +584,11 @@ pub async fn dispatch(
                     {
                         service.store.token(id)
                     } else if method == Method::DELETE {
-                        service.remove_peer(&decoded)
+                        // A entrada como saiu, sob a trava da remoção: a revogação usa o endereço e a senha dela.
+                        let (rows, removed) = service.remove_peer(decoded)?;
+                        // Fora do ar lá, a remoção daqui não espera.
+                        if let Some(revoke) = network::connect_device_revoke(&removed, decoded) { tokio::spawn(revoke); }
+                        Ok(rows)
                     } else {
                         Err(Error {
                             status: 405,

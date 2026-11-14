@@ -263,7 +263,7 @@ pub async fn reach(s: &Service) -> Value {
 }
 /// Pela marca ou pelo endereço: o dono também grava par do Connect, e aí a marca não existe.
 fn through_connect(s: &Service, entry: &Value) -> bool {
-    entry["connect"] == true
+    super::store::is_device_entry(entry)
         || entry["base_url"].as_str().is_some_and(|url| crate::connect::peers::on_connect_host(s.connect.as_deref(), url))
 }
 /// O corpo de `POST /api/peers` para `entry` e o aparelho renovado nele com o token novo, ou o motivo
@@ -357,6 +357,49 @@ pub async fn announce(s: &Service, old: &str) -> Value {
         });
     }
     json!(rows)
+}
+/// O aparelho do caminho do Connect de `id` mora na outra máquina: a revogação lá, pelo endereço salvo com
+/// a senha do dono dela ou pelo Connect com a própria credencial. `entries`: o que a remoção tirou; quem chama
+/// a roda sem segurar a resposta.
+pub fn connect_device_revoke(entries: &super::store::Book, id: &str) -> Option<impl Future<Output = ()> + Send + 'static> {
+    // Com a marca, o `token` é aparelho, e aparelho não revoga o que não aprovou.
+    let entry = entries.get(id).filter(|entry| !super::store::is_device_entry(entry))?;
+    let device = entry["connect_device"].as_str().filter(|device| super::store::valid_device(device))?.to_owned();
+    let pair = |url: &str, token: &str| Some((entry[url].as_str().filter(|v| !v.is_empty())?.to_owned(), entry[token].as_str().filter(|v| !v.is_empty())?.to_owned()));
+    let (saved, connect, id) = (pair("base_url", "token"), pair("connect_url", "connect_token"), id.to_owned());
+    Some(async move { revoke_device(&id, saved, connect, &device).await })
+}
+impl super::store::OldRoute {
+    /// Caminho que saiu: o aparelho dele se revoga pelo próprio Connect, com a credencial dele.
+    pub async fn revoke(self) {
+        revoke_device(&self.id, None, Some((self.url, self.token)), &self.device).await;
+    }
+}
+/// `DELETE /api/connect/devices/{device}`: primeiro em `saved` (endereço e senha do dono de lá); sem
+/// atender, em `connect` (endereço do Connect e a credencial do próprio aparelho, que pode revogar a si
+/// mesmo, `remove_by`), para o Tailscale fora não deixar o aparelho valendo. Revogar duas vezes não faz
+/// mal: qualquer falha de transporte tenta o outro. Falha só vai ao log.
+pub async fn revoke_device(label: &str, saved: Option<(String, String)>, connect: Option<(String, String)>, device: &str) {
+    use crate::groups::peers::PeerError;
+    if !super::store::valid_device(device) {
+        tracing::warn!(code = "connect.peer_revoke_failed", peer = label, "id do aparelho inválido: a credencial de lá não foi revogada");
+        return;
+    }
+    let path = format!("/api/connect/devices/{device}");
+    let mut failure = "sem endereço".to_owned();
+    for ((base, token), own) in saved.into_iter().map(|route| (route, false)).chain(connect.into_iter().map(|route| (route, true))) {
+        // `pairs::call` não segue redirect: a senha do dono não vai a outro endereço.
+        match crate::share::pairs::call(base.trim_end_matches('/'), Some(&token), reqwest::Method::DELETE, &path, None).await {
+            Ok(_) | Err(PeerError::Refused { status: 404, .. }) => return,
+            // A própria credencial recusada já não abre nada lá.
+            Err(PeerError::Refused { status: 401, .. }) if own => return,
+            // A senha do dono mudou lá: a credencial do aparelho ainda pode revogar a si mesma.
+            Err(e @ PeerError::Refused { status: 401, .. }) => failure = e.text(label),
+            Err(e @ PeerError::Transport(_)) => failure = e.text(label),
+            Err(e) => { failure = e.text(label); break; }
+        }
+    }
+    tracing::warn!(code = "connect.peer_revoke_failed", peer = label, device = %device, "o aparelho do Connect ficou valendo na outra máquina: {failure}");
 }
 pub fn qr_svg(url: &str) -> Result<String, Error> {
     let qr = qrcode::QrCode::new(url.as_bytes())

@@ -352,8 +352,8 @@ enum Payload {
     /// Resultado de Abrir/Salvar: o arquivo gravado e se veio vazio, ou a falha e se ele não existe no servidor.
     Saved(SessionKey, Source, bool, Result<(PathBuf, bool), (String, bool)>),
     ConnectionNotSaved(String),
-    // Rede local aprendida para a máquina deste endereço salvo.
-    Lan(String, api::route::Lan),
+    // Rede local ou Connect aprendidos para a máquina deste endereço salvo.
+    Route(String, api::route::Learned),
     AppearanceSaved(Result<(), String>),
     // Paleta do papel de parede pedida à conexão atual (`GET /api/desktop/palette`), com o número do pedido.
     DesktopPalette(u64, Result<Value, Failure>),
@@ -1049,7 +1049,7 @@ impl Hangar {
         if let Some((address, token)) = &saved
             && !known_servers.iter().any(|s| servers::norm(&s.address) == servers::norm(address)) {
             known_servers.insert(0, servers::ServerEntry { id: servers::new_id(), label: servers::default_label(address),
-                address: address.clone(), token: token.clone(), disabled: false, invite: false, lan: None, ephemeral: false });
+                address: address.clone(), token: token.clone(), disabled: false, invite: false, lan: None, ephemeral: false, ..Default::default() });
         }
         let (saved_address, saved_token) = saved.clone().unwrap_or_else(|| ("http://127.0.0.1:8765".into(), String::new()));
         let address = cx.new(|cx| InputState::new(window, cx).default_value(saved_address).placeholder(tr("server")));
@@ -1082,9 +1082,18 @@ impl Hangar {
         cx.subscribe(&command_search, |this, _, _: &InputEvent, cx| this.redraw(panes::Area::Bottom, cx)).detach();
         let (tx, rx) = async_channel::bounded::<Envelope>(256);
         let learned = tx.clone();
-        // ponytail: fila cheia perde o aviso; a rede local é reaprendida na próxima decisão.
-        api::route::on_learned(move |address, lan| {
-            let _ = learned.try_send(Envelope { connection: 0, selection: None, payload: Payload::Lan(address, lan) });
+        api::route::on_learned(format!("Hangar desktop {}", invite::device_label()), move |address, learned_route| {
+            let envelope = Envelope { connection: 0, selection: None, payload: Payload::Route(address, learned_route) };
+            // Direto mantém a ordem com o 401 que vem atrás; com a fila cheia, espera vaga: a recusa do Connect não pode
+            // se perder, senão a próxima abertura manda a credencial revogada de novo.
+            if let Err(async_channel::TrySendError::Full(envelope)) = learned.try_send(envelope) {
+                let learned = learned.clone();
+                match tokio::runtime::Handle::try_current() {
+                    Ok(runtime) => { runtime.spawn(async move { let _ = learned.send(envelope).await; }); }
+                    // Fora do runtime pode ser a própria thread que esvazia a fila: espera em outra.
+                    Err(_) => { std::thread::spawn(move || { let _ = learned.send_blocking(envelope); }); }
+                }
+            }
         });
         cx.spawn_in(window, async move |this, cx| {
             while let Ok(envelope) = rx.recv().await {
@@ -1891,7 +1900,16 @@ impl Hangar {
             Payload::Backdrop(seq, result) => { self.receive_backdrop(seq, result, window, cx); return; }
             Payload::BackdropPicked(result) => { self.receive_picked_backdrop(result, window, cx); return; }
             Payload::BackdropRemoved(result) => { self.receive_removed_backdrop(result, window, cx); return; }
-            Payload::Lan(address, lan) => { self.remember_lan(&address, lan); return; }
+            Payload::Route(address, learned) => {
+                match learned {
+                    api::route::Learned::Lan(lan) => self.remember_lan(&address, lan),
+                    api::route::Learned::Connect(connect) => self.remember_connect(&address, connect),
+                    api::route::Learned::ConnectRefused => self.connect_refused(&address, window, cx),
+                    // A página Servidores diz o caminho em uso.
+                    api::route::Learned::Route => cx.notify(),
+                }
+                return;
+            }
             Payload::Keyring(key, result) => { self.receive_keyring(key, result, cx); return; }
             Payload::ConnectNotice(reply) => { self.receive_connect_notice(reply, cx); return; }
             // Cada máquina responde por si: a troca do ativo não descarta a resposta.
@@ -1955,7 +1973,10 @@ impl Hangar {
                 if let Some((address, token)) = self.unsaved_connection.take() {
                     let known = self.servers.iter().any(|s| servers::norm(&s.address) == servers::norm(&address));
                     let label = if known { String::new() } else { servers::default_label(&address) };
-                    servers::upsert(&mut self.servers, servers::ServerEntry { id: servers::new_id(), label, address, token, disabled: false, invite: false, lan: None, ephemeral: false });
+                    // O Connect aprendido antes de a entrada existir não passou por `remember_connect`.
+                    let (connect, connect_refused) = api::route::connect_known(&address);
+                    servers::upsert(&mut self.servers, servers::ServerEntry { id: servers::new_id(), label, address, token, disabled: false, invite: false, lan: None, ephemeral: false,
+                        connect, connect_refused, ..Default::default() });
                     // Disco fora da thread da janela; só a falha volta.
                     self.persist_servers();
                     self.sync_updater(cx);
@@ -2264,7 +2285,7 @@ impl Hangar {
             Payload::Sent(..) | Payload::Interrupted(..) | Payload::Acted(..) | Payload::Files(..) | Payload::UploadStep(..)
                 | Payload::UploadsDone(..) | Payload::Saved(..) | Payload::ConnectionNotSaved(..) | Payload::Reply(..) | Payload::HeadlessPlan(..)
                 | Payload::AppearanceSaved(..) | Payload::Backdrop(..) | Payload::BackdropPicked(..) | Payload::BackdropRemoved(..)
-                | Payload::Remote(..) | Payload::Lan(..) | Payload::Keyring(..) | Payload::ConnectNotice(..) | Payload::Presence(..) | Payload::Voice(..) | Payload::VoiceGate(..) | Payload::VoiceMemory(..) | Payload::VoiceModels(..) | Payload::QueueJev(..)
+                | Payload::Remote(..) | Payload::Route(..) | Payload::Keyring(..) | Payload::ConnectNotice(..) | Payload::Presence(..) | Payload::Voice(..) | Payload::VoiceGate(..) | Payload::VoiceMemory(..) | Payload::VoiceModels(..) | Payload::QueueJev(..)
                 | Payload::Mermaid(..) | Payload::TourProgress(..) => unreachable!(),
         }
         // Lista que trocou ou tirou a sessão aberta refaz a conversa.
