@@ -116,7 +116,8 @@ async fn reply(st: Arc<AppState>, peer: SocketAddr, req: Request) -> Response {
 }
 
 /// A escrita (se houver) e o estado inteiro, fora do executor: tudo é disco e uma sonda de 0,5 s. Os
-/// fatos e a configuração são lidos uma vez por pedido e servem à escrita e ao estado.
+/// fatos e a configuração são lidos uma vez por pedido e servem à escrita e ao estado; só o Jev é relido
+/// depois da escrita.
 async fn blocking(
     st: &Arc<AppState>,
     write: impl FnOnce(&setup::Paths, &setup::Facts, &RuntimeConfig) -> Result<(), setup::Error> + Send + 'static,
@@ -125,8 +126,10 @@ async fn blocking(
     tokio::task::spawn_blocking(move || {
         let paths = paths(&st)?;
         let config = RuntimeConfig::from_state(&st).map_err(setup::Error::io)?;
-        let facts = facts(&st, &config);
+        let mut facts = facts(&st, &config);
         write(&paths, &facts, &config)?;
+        // Outro pedido pode ter trocado o Jev antes da trava da escrita: a resposta leva o gravado.
+        facts.jev = RuntimeConfig::from_state(&st).map_err(setup::Error::io)?.jev_env();
         setup::state(&paths, &facts)
     })
     .await
