@@ -143,50 +143,45 @@ pub async fn codex(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
     }
 }
 
-/// Marca do `DELETE` que o Rust já encerrou e repassa: o valor é o segredo interno, e o Python, ao vê-la,
-/// limpa só as lojas dele, sem voltar ao Rust.
-pub const RUST_CLOSED: &str = "x-hangar-rust-closed";
-/// Transcript (percent-encoded) da sessão que o Rust encerrou, junto da marca.
-pub const CLOSED_TRANSCRIPT: &str = "x-hangar-closed-transcript";
-
-/// `DELETE /api/sessions/{name}` do dono. Toda sessão encerra aqui: Pi/omp/Kimi pelo ator; Codex e Claude
-/// abertos no Rust pela vida guardada; o resto (sem terminal parado, agente morto, pane de outro programa, a
-/// que já acabou) pelo nome. Depois do encerramento, a saída do grupo e o pedido marcado ao Python, para
-/// "then", terminais de atalho e caches dele. Falha no encerramento responde com o código e não repassa.
-pub async fn delete(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, mut req: Request) -> Response {
-    let (fwd, owner) = match crate::routes::gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
-    // Só o próprio Rust põe a marca: a que vier de fora sai antes de qualquer decisão.
-    req.headers_mut().remove(RUST_CLOSED);
-    req.headers_mut().remove(CLOSED_TRANSCRIPT);
-    let name = super::session_name(req.uri().path());
-    if owner && let Some(name) = name.as_deref()
-        && let Some(response) = super::orchestration_guard(&st, name, req.headers()).await {
+/// `DELETE /api/sessions/{name}` do dono e do convidado que alcança a sessão (`caller.can`). Toda sessão
+/// encerra aqui: Pi/omp/Kimi pelo ator; Codex e Claude abertos no Rust pela vida guardada; o resto (sem
+/// terminal parado, agente morto, pane de outro programa, a que já acabou) pelo nome. Depois, o `then`, o
+/// nome fechado, a saída do grupo e os convites. Nada vai ao Python; falha responde com o código.
+pub async fn delete(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
+    let Some(name) = super::session_name(req.uri().path()) else { return crate::routes::not_found(req.headers()) };
+    let (_, caller) = match crate::routes::who(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
+    let owner = match &caller {
+        Some(who) if who.can(&name, req.method()) => matches!(who, crate::share::caller::Caller::Owner),
+        // Convidado fora desta sessão (par de leitura): 403, sem contar falha de senha.
+        Some(_) => return crate::routes::refuse_without_python(&st, peer, req, caller.as_ref()).await,
+        // Sem identidade: o `require_auth` do Python, aqui; aceito só sem senha configurada.
+        None => match crate::routes::owner_gate(&st, peer, &req).await {
+            Ok(_) => true,
+            Err(mut response) => { crate::routes::cors(req.headers(), response.headers_mut()); return response; }
+        },
+    };
+    if let Some(response) = super::orchestration_guard(&st, &name, req.headers()).await { return response; }
+    let Some(runtime) = st.state.runtime.get().cloned() else {
+        let mut response = super::detail(StatusCode::SERVICE_UNAVAILABLE, "runtime_watcher", "o servidor ainda não abriu as sessões", json!({}));
+        crate::routes::cors(req.headers(), response.headers_mut());
         return response;
-    }
+    };
     // A chave antes do kill (depois dele o pane não a diz mais); os arquivos do cofre saem só no sucesso.
-    let vault_files = match (owner, name.as_deref()) { (true, Some(name)) => crate::vault::files::before_close(&st, name).await, _ => None };
-    if let (Some(runtime),Some(name))=(st.state.runtime.get(),name.as_deref()) {
-        let (_,caller)=match crate::routes::who(&st,peer,&req).await {Ok(value)=>value,Err(error)=>return crate::auth::unavailable(error)};
-        if caller.as_ref().is_some_and(|caller|caller.can(name,req.method())) && let Some(closed)=runtime.close_other(name).await {
-            match closed {
-                Ok(body)=>{
-                    if let Some(files) = vault_files { files.done(); }
-                    if owner { closed_line(name, req.headers(), peer); }
-                    return super::json_response(StatusCode::OK,body);
-                },
-                // A sessão já acabou: fecha pelo nome, como qualquer outra que acabou (D17).
-                Err(error) if error.code=="other_terminal_dead"=>{},
-                Err(error)=>return close_failed(&st, name, &error, req.headers()),
-            }
+    let vault_files = crate::vault::files::before_close(&st, &name).await;
+    if let Some(closed) = runtime.close_other(&name).await {
+        match closed {
+            Ok(body) => {
+                if let Some(files) = vault_files { files.done(); }
+                closed_line(&name, owner, req.headers(), peer);
+                let mut response = super::json_response(StatusCode::OK, body);
+                crate::routes::cors(req.headers(), response.headers_mut());
+                return response;
+            },
+            // A sessão já acabou: fecha pelo nome, como qualquer outra que acabou (D17).
+            Err(error) if error.code == "other_terminal_dead" => {},
+            Err(error) => return close_failed(&st, &name, &error, req.headers()),
         }
     }
-    let passed = name.clone();
-    let (Some(runtime), true, Some(name)) = (st.state.runtime.get().cloned(), owner, name)
-        else {
-            let response = crate::routes::pass(&st, req, &fwd).await;
-            if response.status().is_success() && let Some(name) = passed.as_deref() { close_shortcuts(&st, name).await; }
-            return vault_files_after(vault_files, response);
-        };
     // Na janela da subida, a vigia é quem lê o sidecar do Codex: sem ela o fechamento pelo nome deixaria o
     // cano de um Codex sem terminal vivo. Subida que não liga vigia segue pelo nome.
     if let Err(error) = runtime.wait_watcher().await { return close_failed(&st, &name, &error, req.headers()); }
@@ -217,30 +212,34 @@ pub async fn delete(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
     };
     // Fechada de propósito não volta no próximo reboot, de qualquer agente; recusada, segue voltando.
     if let Some(dirs) = st.list.env().dirs.as_ref() { crate::session_open::restore::forget(&dirs.home, &name); }
-    closed_line(&name, req.headers(), peer);
+    closed_line(&name, owner, req.headers(), peer);
     if let Some(files) = vault_files { files.done(); }
-    // Só o caminho da conversa, para o Python guardar o nome fechado; sem ele, o Python registra a falta.
-    if let Some(path) = closed["transcript"].as_str() {
-        let encoded = percent_encoding::utf8_percent_encode(path, percent_encoding::NON_ALPHANUMERIC).to_string();
-        if let Ok(value) = axum::http::HeaderValue::from_str(&encoded) { req.headers_mut().insert(CLOSED_TRANSCRIPT, value); }
+    // O `then` da vida que acabou não dispara na próxima sessão com o nome (o Claude e o Codex abertos
+    // aqui não passam pela limpeza do nome).
+    if let Err(error) = crate::loops::store(&st).clear_chain(&name) {
+        tracing::error!(session = %name, code = "close_chain_failed", kind = ?error.kind(), "vínculo then da sessão encerrada não saiu");
+        st.diag.report("rust.close_failed", &name, "close_chain_failed", "o vínculo then da sessão encerrada não saiu");
     }
+    record_closed_name(&st, &name, closed["transcript"].as_str()).await;
     let leave = match st.groups.clone() { Some(groups) => leave_warnings(&st, &groups, &name).await, None => Vec::new() };
     let share = after_close(&st, &name).await;
-    match axum::http::HeaderValue::from_str(&st.cfg.internal_secret) {
-        Ok(mark) => { req.headers_mut().insert(RUST_CLOSED, mark); }
-        // Sem a marca o Python tentaria encerrar de novo pela ponte: não repassa, e a limpeza dele que
-        // não rodou vai no aviso.
-        Err(_) => {
-            tracing::error!(session = %name, code = "close_python_cleanup_skipped", "segredo interno não vira cabeçalho; limpeza do Python não rodou");
-            let warning = json!({"code": "close_python_cleanup_skipped", "params": {},
-                "msg": "Sessão encerrada, mas convites, atalhos e caches dela não foram limpos."});
-            let mut response = super::json_response(StatusCode::OK, json!({"ok": true, "warning": warning}));
-            crate::routes::cors(req.headers(), response.headers_mut());
-            return with_warnings(&name, response, leave, share).await;
-        }
-    }
-    let response = crate::routes::pass(&st, req, &fwd).await;
+    let mut response = super::json_response(StatusCode::OK, json!({"ok": true, "warning": null}));
+    crate::routes::cors(req.headers(), response.headers_mut());
     with_warnings(&name, response, leave, share).await
+}
+
+/// O nome que a conversa tinha, para o Arquivo e o "reabre a X" (o `closed_names.record` do Python, na
+/// mesma pasta que o Arquivo lê). Falhar não desfaz o fechamento: só vai ao log e ao diário.
+async fn record_closed_name(st: &AppState, name: &str, transcript: Option<&str>) {
+    let Some(path) = transcript.filter(|path| !path.is_empty()).map(std::path::PathBuf::from) else {
+        tracing::info!(session = %name, "nome fechado não guardado: sem conversa conhecida");
+        return;
+    };
+    let (config, owned) = (st.accounts.env.claude_base.clone(), name.to_owned());
+    if !matches!(tokio::task::spawn_blocking(move || record_other_closed_name(&config, &path, &owned)).await, Ok(Ok(()))) {
+        tracing::warn!(session = %name, code = "close_name_record_failed", "nome fechado não guardado");
+        st.diag.report("rust.close_failed", name, "close_name_record_failed", "o nome da sessão fechada não foi guardado");
+    }
 }
 
 /// Pastas e multiplexador da lista para o fechamento pelo nome sem a vigia do Codex.
@@ -253,12 +252,6 @@ fn name_env(st: &AppState) -> Option<crate::runtime::close_name::NameEnv> {
 /// A conversa que a lista conhece para o nome (o `_jsonl_of_session` do Python).
 async fn listed_transcript(st: &AppState, name: &str) -> Option<std::path::PathBuf> {
     st.list.discovered_session(name).await.ok().flatten().and_then(|(row, _)| row.jsonl).map(std::path::PathBuf::from)
-}
-
-/// Os arquivos do cofre da sessão fechada pelo Python saem só com o fechamento confirmado.
-fn vault_files_after(files: Option<crate::vault::files::Closing>, response: Response) -> Response {
-    if let Some(files) = files.filter(|_| response.status().is_success()) { files.done(); }
-    response
 }
 
 /// Sai do grupo; os avisos que não saíram e a falha da própria saída viram `{sessao, erro}`.
@@ -322,9 +315,13 @@ fn close_failed(st: &AppState, name: &str, error: &crate::runtime::protocol::Run
     response
 }
 
-/// O fechamento que deu certo vai ao diário com o cliente e a origem.
-fn closed_line(name: &str, headers: &axum::http::HeaderMap, peer: SocketAddr) {
-    crate::diag::record(crate::diag::diary_dir(), vec![close_line(name, headers, peer)], "sessão fechada");
+/// O fechamento que deu certo vai ao diário com o cliente, a origem e quem pediu (dono ou convidado).
+fn closed_line(name: &str, owner: bool, headers: &axum::http::HeaderMap, peer: SocketAddr) {
+    let line = match owner {
+        true => close_line(name, headers, peer),
+        false => asked_line("sessao.fechamento_pedido", "session_close_requested_by_guest", name, headers, peer),
+    };
+    crate::diag::record(crate::diag::diary_dir(), vec![line], "sessão fechada");
 }
 
 /// Depois de o Rust encerrar a sessão: revoga os convites e some da lista. A saída do grupo é de quem chamou.
