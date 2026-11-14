@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value, json};
 
-use hangar_core::config_lock::{ConfigLock, lock_config};
+use hangar_core::config_lock::{ConfigLock, lock_config, lock_owned};
 use hangar_core::orq_codec::codec::python_string;
 use hangar_core::pycompat::{pyjson, truthy};
 
@@ -350,19 +350,22 @@ fn keep_old_llm(paths: &Paths, source: &Path, old: &Map<String, Value>, new: &Ma
 }
 
 /// Trava, em ordem fixa, todo arquivo que um escritor desta entrada toca: duas gravações nunca se cruzam.
+/// Os `.claude.json` levam a trava do Claude Code; os do Hangar, uma que o `kill -9` não deixa largada.
 fn lock_all(paths: &Paths) -> Result<Vec<ConfigLock>, Error> {
-    let mut files = paths.config_files();
-    files.extend([paths.parked_file(), paths.old_llm_file()]);
-    let mut files: Vec<PathBuf> = files.into_iter().map(|path| path.canonicalize().unwrap_or(path)).collect();
+    let mut files: Vec<PathBuf> = paths.config_files().into_iter().map(|path| path.canonicalize().unwrap_or(path)).collect();
     files.sort();
     files.dedup();
+    let owned = [paths.parked_file(), paths.old_llm_file()];
     files
         .iter()
-        .map(|path| {
+        .map(|path| (path, false))
+        .chain(owned.iter().map(|path| (path, true)))
+        .map(|(path, hangar)| {
             if let Some(parent) = path.parent() {
                 std::fs::create_dir_all(parent).map_err(|e| Error::at(parent, &e))?;
             }
-            lock_config(path).map_err(|e| Error::io(format!("{}: {e}", path.display())))
+            let lock = if hangar { lock_owned(path) } else { lock_config(path) };
+            lock.map_err(|e| Error::io(format!("{}: {e}", path.display())))
         })
         .collect()
 }
@@ -548,6 +551,22 @@ mod tests {
         .unwrap();
         assert!(!lock.exists());
         assert!(std::fs::read_to_string(paths.main_file()).unwrap().contains("fixture-key"));
+    }
+
+    /// Pasta de trava que um `kill -9` deixou na guardada e no modelo antigo não segura ligar, desligar
+    /// nem o repasse do Jev: esses arquivos só o Hangar trava, e a trava dele sai com o processo.
+    #[test]
+    fn a_leftover_lock_on_hangar_files_does_not_block_the_writers() {
+        let home = tempfile::tempdir().unwrap();
+        let paths = paths(home.path());
+        std::fs::create_dir_all(paths.parked_file().parent().unwrap()).unwrap();
+        for file in [paths.parked_file(), paths.old_llm_file()] {
+            std::fs::create_dir(hangar_core::config_lock::lock_path(&file)).unwrap();
+        }
+        write_entry(&paths, &entry(), || Ok(jev())).unwrap();
+        sync_jev(&paths, &Map::from_iter([("TYPESAFE_API_KEY".to_owned(), json!("outra"))])).unwrap();
+        remove_entry(&paths).unwrap();
+        assert!(paths.parked_file().is_file());
     }
 
     /// Falha no meio: o erro diz quais arquivos já foram gravados.
