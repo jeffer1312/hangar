@@ -2,6 +2,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { Pressable, Text, View, useWindowDimensions, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { LegendList, type LegendListRef } from '@legendapp/list/react-native';
+import Animated, { FadeIn, useReducedMotion } from 'react-native-reanimated';
+import { arrivedCount } from './arrivals';
 import { Icon } from '../ui/Icon';
 import { superficie } from '../theme/superficie';
 import { UserBubble } from './UserBubble';
@@ -124,6 +126,21 @@ export function MessageList({
   // Render descartado ou repetido não publica o seu cache nem modifica o snapshot anterior.
   useLayoutEffect(() => { previous.current = projection; }, [projection]);
   const data = projection.data;
+  // Linha que chega com a conversa aberta entra esmaecendo, uma vez; a resposta que toma o lugar da
+  // prévia continua o mesmo texto e aparece direto. Quem entrou fica com o invólucro: tirá-lo
+  // remontaria a bolha.
+  const reducedMotion = useReducedMotion();
+  const arrivals = useRef<{ keys: string[] | null; at: Map<string, number>; preview: number }>({ keys: null, at: new Map(), preview: 0 });
+  const keys = useMemo(() => data.map(keyOf), [data]);
+  if (visiblePreview) arrivals.current.preview = Date.now();
+  if (arrivals.current.keys !== keys) {
+    const now = Date.now();
+    for (const row of data.slice(data.length - arrivedCount(arrivals.current.keys, keys))) {
+      const heir = row.type === 'event' && row.ev.kind === 'assistant_msg' && now - arrivals.current.preview < 500;
+      if (!heir) arrivals.current.at.set(row.id, now);
+    }
+    arrivals.current.keys = keys;
+  }
   const results = projection.results;
   const resultDe = useCallback((t: ChatEvent) => results.get(t.tool_use_id ?? '') ?? null, [results]);
   const starts = projection.starts;
@@ -192,7 +209,7 @@ export function MessageList({
     [ferramenta],
   );
 
-  const renderItem = useCallback(({ item }: { item: MessageRow }) => {
+  const renderRow = useCallback((item: MessageRow) => {
     switch (item.type) {
       case 'fold':
         return <ToolGroup parts={item.parts} summary={item.summary} resultOf={item.resultOf!} onAbrir={abrirDetalhe} onExpand={preserveExpansion ? pauseForToolGroup : undefined} look={look} pluginServers={session?.plugin_tool_servers ?? undefined} />;
@@ -233,6 +250,13 @@ export function MessageList({
       }
     }
   }, [abrirDetalhe, sessionName, serverId, look, working, session?.provider, session?.headless, session?.plugin_tool_servers, stateEvent?.problema, goToQuote, canQuote, preserveExpansion, pauseForToolGroup]);
+  const renderItem = useCallback(({ item }: { item: MessageRow }) => {
+    const row = renderRow(item);
+    const arrived = arrivals.current.at.get(item.id);
+    if (arrived === undefined || !row) return row;
+    const fresh = !reducedMotion && look !== 'terminal' && Date.now() - arrived < 1000;
+    return <Animated.View entering={fresh ? FadeIn.duration(220) : undefined}>{row}</Animated.View>;
+  }, [renderRow, reducedMotion, look]);
 
   // "Ir pro fim" (como o web): aparece com mais de uma tela entre o que se vê e o fim. Mensagem que
   // chega nesse meio-tempo muda o botão pra aviso, senão a conversa anda sem a pessoa saber.

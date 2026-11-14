@@ -3788,7 +3788,15 @@ impl Hangar {
         let prefix = patch.remove.start;
         let added = patch.insert.len();
         let spliced = !patch.remove.is_empty() || added > 0;
-        let entering = prefix > 0 && patch.remove.is_empty() && (1..=4).contains(&added);
+        // Linha ao vivo que sai (prévia, ferramenta ou pensamento em andamento) dá lugar à gravada: ainda é chegada.
+        // A linha da mensagem que esperava no painel "Na fila" não tinha altura: sair dela não é troca à vista.
+        let replaced: Vec<&str> = patch.remove.clone().filter(|&i| !self.row_signatures[i].starts_with("queued"))
+            .map(|i| self.row_ids[i].as_str()).collect();
+        let entering = row_patch::arriving(prefix, &replaced, added, &[PREVIEW, LIVE_TOOL, LIVE_THINKING]);
+        // A resposta que toma o lugar da prévia continua o mesmo texto: herda a visão já montada e não entra de novo.
+        let heir = self.row_ids[patch.remove.clone()].iter().any(|id| id == PREVIEW).then(|| {
+            patch.insert.clone().rev().find(|&i| kind_of(&self.conversation.items, from + i, events) == Some("assistant_msg")).map(|i| ids[i].clone())
+        }).flatten().filter(|id| !self.rich.contains_key(id));
         let mut old_parts = HashSet::new();
         if rebuilt.is_some() {
             for assets in self.row_assets.drain(from..) {
@@ -3822,12 +3830,22 @@ impl Hangar {
         // Só linha que muda de altura puxa a mola: um quadro sem mudança não pode desgrudar a lista do fim.
         if spliced || !patch.resized.is_empty() || !rewritten.is_empty() { self.follow_content_changed(cx); }
         if spliced { self.splice_rows(patch.remove.clone(), &ids[patch.insert.clone()]); }
-        // Só o bloco novo entra animado: um acréscimo pequeno no meio ou no fim de uma conversa já aberta. Troca de linha (a
-        // prévia virando a resposta gravada, o envio virando a mensagem real), histórico carregando ou páginas antigas
-        // chegando em cima aparecem direto.
+        // Só o bloco novo entra animado: um acréscimo pequeno no meio ou no fim de uma conversa já aberta. A resposta que
+        // herda a prévia, o envio virando a mensagem real, histórico carregando ou páginas antigas chegando em cima
+        // aparecem direto.
+        // Só herda quem continua o que já estava na tela: prévia curta diante da resposta inteira é chegada, e entra animada.
+        let heir = heir.filter(|id| matches!((self.rich.get(PREVIEW), self.prepared.get(id)),
+            (Some(rich), Some(Prepared::Message { markdown, .. })) if row_patch::continues(&rich.source, markdown)));
         if entering {
             let now = Instant::now();
-            for id in &ids[patch.insert.clone()] { if id != WORKING { self.arrived.insert(id.clone(), now); } }
+            for id in &ids[patch.insert.clone()] { if id != WORKING && Some(id) != heir.as_ref() { self.arrived.insert(id.clone(), now); } }
+        }
+        if let Some(id) = heir {
+            if let Some(mut rich) = self.rich.remove(PREVIEW) {
+                rich._observer = self.observe_text(&rich.view, id.clone(), cx);
+                rich.row = id.clone();
+                self.rich.insert(id, rich);
+            }
         }
         // Parte nova num grupo da Árvore entra animada pela mesma regra: conversa já na tela e poucas de uma vez, uma
         // depois da outra.
@@ -3981,16 +3999,19 @@ impl Hangar {
             if let Some(old) = self.rich.iter().min_by_key(|(_, v)| v.touched).map(|(id, _)| id.clone()) { self.rich.remove(&old); }
         }
         let view = cx.new(|cx| TextViewState::markdown(&source, cx));
-        let owner = row.to_owned();
-        // O parse que termina já redesenha quem mostra o texto (o estado é lido no desenho); aqui só a
-        // altura da linha é refeita, sem um segundo quadro para a janela inteira.
         api::open_trace(|| format!("markdown start {row} {} bytes", source.len()));
-        let observer = cx.observe(&view, move |this, _, cx| {
-            api::open_trace(|| format!("markdown parsed {owner}"));
-            if let Some(i) = this.row_ids.iter().position(|id| id == &owner) { this.follow_content_changed(cx); this.list_state.remeasure_items(i..i+1); }
-        });
+        let observer = self.observe_text(&view, row.to_owned(), cx);
         self.rich.insert(key.to_owned(), RichText { source, view: view.clone(), _observer: observer, touched: self.render_tick, row: row.to_owned(), offset: None });
         view
+    }
+
+    /// O parse que termina já redesenha quem mostra o texto (o estado é lido no desenho); aqui só a
+    /// altura da linha `owner` é refeita, sem um segundo quadro para a janela inteira.
+    fn observe_text(&self, view: &Entity<TextViewState>, owner: String, cx: &mut Context<Self>) -> Subscription {
+        cx.observe(view, move |this, _, cx| {
+            api::open_trace(|| format!("markdown parsed {owner}"));
+            if let Some(i) = this.row_ids.iter().position(|id| id == &owner) { this.follow_content_changed(cx); this.list_state.remeasure_items(i..i+1); }
+        })
     }
 
     fn render_row(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -5570,7 +5591,9 @@ impl Hangar {
             .when_some(note, |el, note| el.child(div().flex().items_center().gap_2().when(user, |el| el.justify_end())
                 .child(div().min_w_0().text_sm().text_color(theme::warning()).child(note))
                 .when_some(discard, |el, button| el.child(button))))
-            .when_some(actions, |el, actions| el.child(actions));
+            .when_some(actions, |el, actions| el.child(actions))
+            // A prévia guarda o lugar da faixa de ações: virar a resposta gravada não muda a altura da linha.
+            .when(id == PREVIEW, |el| el.child(div().h(px(24.))));
         with_copy_menu(row, id, cx.weak_entity())
     }
 }
