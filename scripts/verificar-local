@@ -796,6 +796,9 @@ vm_rodar() {   # $1 = sha, resto = passos; saída inteira no stdout
     # Arquivo remoto deixa o stdin fechado também durante a espera do mutex.
     runner="run-${sha:0:10}-$$.sh"
     scp -q -o BatchMode=yes "$SCRIPT" "$VM:$VM_WIN/$runner" 2>/dev/null || { echo "scp do roteiro para $VM falhou"; return 2; }
+    # Lá o Git Bash não tem flock: o `cargo()` do roteiro procura a trava ao lado dele.
+    scp -q -o BatchMode=yes "$(dirname "$SCRIPT")/run-locked.py" "$VM:$VM_WIN/run-locked.py" 2>/dev/null \
+        || { echo "scp do run-locked.py para $VM falhou"; return 2; }
     # Mutex do sistema: prioridade abaixo do normal também vale para os filhos.
     ps="\$ProgressPreference='SilentlyContinue'
 \$m = New-Object System.Threading.Mutex(\$false, 'Global\\hangar-verificacao')

@@ -244,8 +244,8 @@ impl ProcessIo {
             // Alvo que sumiu: o servidor responde OK com o erro e não executa nada.
             Ok(Ok(stdout)) if typed && stdout.starts_with(b"ERROR: can't find ") =>
                 Some(Err(IoFailure { code: "psmux_direct_refused", may_have_written: false })),
-            // Na captura o mesmo texto pode ser a tela: quem decide é o CLI.
-            Ok(Ok(stdout)) if stdout.starts_with(b"ERROR: can't find ") => None,
+            // Na captura o mesmo texto pode ser a tela, e corpo vazio é alvo que sumiu: quem decide é o CLI.
+            Ok(Ok(stdout)) if !typed && (stdout.is_empty() || stdout.starts_with(b"ERROR: can't find ")) => None,
             Ok(Ok(stdout)) => Some(Ok((CommandOutput { success: true, stdout }, Vec::new()))),
             Ok(Err(failure)) if typed && failure.written => Some(Err(IoFailure { code: failure.code, may_have_written: true })),
             Ok(Err(failure)) => {
@@ -2061,7 +2061,7 @@ mod psmux_direct_tests {
         server.join().unwrap();
     }
 
-    /// Pane que sumiu: o servidor responde OK com o erro e não executa; quem recusa é o CLI.
+    /// Pane que sumiu: o servidor responde OK com o erro e não executa; a escrita é recusada sem ir ao CLI.
     #[tokio::test]
     async fn a_missing_pane_reply_is_not_a_success() {
         let dir = tempfile::tempdir().unwrap();

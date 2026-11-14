@@ -224,7 +224,9 @@ async fn read_sessions(program: &OsStr, sessions: Option<Vec<String>>) -> Result
             direct(program, session, &args).await
                 .filter(|line| line.starts_with(&format!("{session}\t")) && parse(line, |_| (true, None)).len() == 1)
         })).await;
-        if let Some(lines) = lines.into_iter().collect::<Option<Vec<_>>>() { return Ok(Some(lines.concat())); }
+        if let Some(lines) = lines.into_iter().collect::<Option<Vec<_>>>() {
+            return Ok(Some(lines.iter().map(|l| format!("{}\n", l.trim_end_matches(['\r', '\n']))).collect()));
+        }
     }
     let out = mux(program, &args).await.ok_or("shortcuts_mux_unavailable")?;
     Ok(Some(if out.status.success() { String::from_utf8_lossy(&out.stdout).into_owned() } else { String::new() }))
