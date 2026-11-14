@@ -356,7 +356,7 @@ pub(super) struct GitPanel {
     /// Painel de sessão: o servidor (que fecha worktree) e a página de worktrees aberta numa pasta.
     others: Option<(Api, Rc<dyn Fn(String, &mut Window, &mut App)>)>,
     /// A revisão (PR ou MR) da branch, só no diálogo grande.
-    review: Option<Entity<super::reviews::ReviewView>>,
+    review: Option<Entity<super::reviews::BranchReviews>>,
     /// Trocou a branch: o chip da faixa desta pasta é esquecido.
     forget_chip: Option<Rc<dyn Fn(&mut App)>>,
     _subscriptions: Vec<Subscription>,
