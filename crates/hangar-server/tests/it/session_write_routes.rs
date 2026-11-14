@@ -151,8 +151,9 @@ async fn without_a_runtime_every_write_is_runtime_unavailable_and_never_python()
     }
 }
 
-/// R2-27 (decisão 8): na subida em curso a porta é do `startup::guard`, com o 503 `server_starting` que o
-/// cliente repete, antes de qualquer rota de escrita e sem ir ao Python.
+/// Guarda da R2-27 (decisão 8): na subida em curso a porta é do `startup::guard`, com o 503
+/// `server_starting` que o cliente repete, antes de qualquer rota de escrita e sem ir ao Python. Já valia
+/// antes da R2; separa a subida do servidor sem registro (`runtime_unavailable`, o teste acima).
 #[tokio::test]
 async fn while_starting_every_write_is_server_starting_and_never_python() {
     let (python, upstream) = spawn_fake().await;
