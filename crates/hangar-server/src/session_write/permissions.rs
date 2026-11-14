@@ -3,7 +3,7 @@ use std::{net::SocketAddr,sync::Arc};
 use axum::{extract::{ConnectInfo,Request,State},body::to_bytes,http::StatusCode,response::Response};
 use serde::Deserialize;
 use serde_json::{Value,json};
-use crate::{routes::{AppState,gate,pass,cors},runtime::{gateway::EntryHandle,protocol::{OperationKind,RuntimeCommand,Disposition}}};
+use crate::{routes::{AppState,who,cors},runtime::{gateway::EntryHandle,protocol::{OperationKind,RuntimeCommand,Disposition}}};
 use super::{BODY_LIMIT,enter_then_find,json_response,detail_body,session_name};
 const MODES:[&str;6]=["plan","auto","manual","acceptEdits","bypassPermissions","dontAsk"];
 #[derive(Deserialize)]
@@ -27,37 +27,60 @@ fn result(reply:crate::runtime::protocol::RuntimeReply)->(StatusCode,Value) {
     if params["requested"].is_string() {params["alvo"]=params["requested"].clone();params["ficou"]=params["current"].clone();}
     (StatusCode::CONFLICT,detail_body(code,"não consegui confirmar o modo de permissão; confira a sessão",params))
 }
+const ONLY_CLAUDE:&str="erro_permissao_so_claude";
+const ONLY_CLAUDE_MSG:&str="modo de permissao so vale para claude";
+/// Provedor e "sem terminal" da linha da lista; erro é o código da lista.
+async fn listed(st:&AppState,name:&str)->Result<Option<(String,bool)>,&'static str> {
+    st.list.discovered_session(name).await.map(|row|row.map(|(row,_)|(row.provider,row.headless))).map_err(|e|e.code)
+}
+/// O modo gravado no spec, para quem não deve acordar nem subir o processo só para ler.
+async fn reply_spec(runtime:&crate::runtime::gateway::RuntimeRegistry,name:&str,reply:impl Fn(StatusCode,Value)->Response)->Response {
+    let (status,body)=match runtime.claude_spec(name).await {
+        Some(Ok(spec))=>(StatusCode::OK,json!({"current":spec.permission_mode.map(crate::session_open::PermissionMode::name),"modes":MODES,"sondavel":false,"previous_non_plan":null})),
+        Some(Err(error))=>(StatusCode::CONFLICT,detail_body(public_code(&error.code),&error.message,json!({}))),
+        None=>(StatusCode::CONFLICT,detail_body("runtime_binding","a sessão parada não tem registro legível",json!({}))),
+    };
+    reply(status,body)
+}
 async fn serve(st:Arc<AppState>,peer:SocketAddr,req:Request,set:bool)->Response {
-    let (forward,owner)=match gate(&st,peer,&req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
-    let Some(runtime)=st.state.runtime.get().cloned().filter(|_|owner) else {return pass(&st,req,&forward).await;};
-    let Some(name)=session_name(req.uri().path()) else {return pass(&st,req,&forward).await;};
+    // Dono e convidado que alcança a sessão pelo mesmo caminho; o Python não tem mais estas rotas.
+    let (_,caller)=match who(&st,peer,&req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
+    let Some(name)=session_name(req.uri().path()).filter(|n|caller.as_ref().is_some_and(|c|c.can(n,req.method()))) else {
+        return super::stranger(&st,peer,req,caller.as_ref()).await;
+    };
+    let Some(runtime)=st.state.runtime.get().cloned() else {return super::no_runtime(req.headers())};
+    // Cópia dos cabeçalhos: o pedido não atravessa os `await` emprestado, e o futuro segue `Send`.
+    let headers=req.headers().clone();
+    let reply=|status:StatusCode,body:Value|{let mut response=json_response(status,body);cors(&headers,response.headers_mut());response};
     // Ler não acorda a adormecida (o app pergunta ao passar o mouse na aba): o modo vem do spec dela.
-    if !set && runtime.asleep(&name).await.is_some() {
-        let (status,body)=match runtime.claude_spec(&name).await {
-            Some(Ok(spec))=>(StatusCode::OK,json!({"current":spec.permission_mode.map(crate::session_open::PermissionMode::name),"modes":MODES,"sondavel":false,"previous_non_plan":null})),
-            Some(Err(error))=>(StatusCode::CONFLICT,detail_body(public_code(&error.code),&error.message,json!({}))),
-            None=>(StatusCode::CONFLICT,detail_body("runtime_binding","a sessão adormecida não tem registro legível",json!({}))),
-        };
-        let mut response=json_response(status,body);cors(req.headers(),response.headers_mut());return response;
-    }
+    if !set && runtime.asleep(&name).await.is_some() {return reply_spec(&runtime,&name,reply).await;}
     // Claude com terminal ainda sem ator aqui: o Rust o adota agora, em vez de mandar ao Python.
     let found=match enter_then_find(&runtime,&name,st.write_gate_wait).await {
+        // Sem terminal parado, como a adormecida: ler não sobe o processo.
+        Ok(None) if !set && listed(&st,&name).await.is_ok_and(|row|row.is_some_and(|(provider,headless)|provider=="claude" && headless))
+            =>return reply_spec(&runtime,&name,reply).await,
         Ok(None)=>match runtime.adopt_now(&name).await {
             Some(Ok(()))=>enter_then_find(&runtime,&name,st.write_gate_wait).await,
             // Codex abrindo a conversa: esta rota é do Claude, e segue como antes.
             Some(Err(error)) if error.code==crate::runtime::codex_relaunch::STARTING=>Ok(None),
-            Some(Err(error))=>{let mut response=json_response(StatusCode::CONFLICT,detail_body(public_code(&error.code),&error.message,json!({})));cors(req.headers(),response.headers_mut());return response},
+            Some(Err(error))=>return reply(StatusCode::CONFLICT,detail_body(public_code(&error.code),&error.message,json!({}))),
             None=>Ok(None),
         },
         other=>other,
     };
     let target=match found {
         Ok(Some((held,target))) if target.provider=="claude"=>(held,target),
-        Ok(_)=>return pass(&st,req,&forward).await,
-        Err(_)=>{let mut response=json_response(StatusCode::CONFLICT,super::busy_body());cors(req.headers(),response.headers_mut());return response},
+        Ok(Some(_))=>return reply(StatusCode::CONFLICT,detail_body(ONLY_CLAUDE,ONLY_CLAUDE_MSG,json!({}))),
+        // Sem entrada aqui: a linha da lista diz se a sessão existe e de quem é; nunca Shift+Tab por fora.
+        Ok(None)=>return match listed(&st,&name).await {
+            Ok(None)=>reply(StatusCode::NOT_FOUND,detail_body("erro_sessao_inexistente","sessao nao encontrada",json!({}))),
+            Ok(Some((provider,_))) if provider!="claude"=>reply(StatusCode::CONFLICT,detail_body(ONLY_CLAUDE,ONLY_CLAUDE_MSG,json!({}))),
+            Ok(Some(_))=>reply(StatusCode::SERVICE_UNAVAILABLE,detail_body("runtime_unhealthy","o terminal desta sessão não está com o servidor; tente de novo",json!({}))),
+            Err(code)=>reply(StatusCode::SERVICE_UNAVAILABLE,detail_body("erro_lista_indisponivel","a lista de sessões está indisponível",json!({"detalhe":code}))),
+        },
+        Err(_)=>return reply(StatusCode::CONFLICT,super::busy_body()),
     };
     let (held,target)=target;
-    let headers=req.headers().clone();
     let id=headers.get("x-hangar-operation-id").and_then(|v|v.to_str().ok()).filter(|id|!id.is_empty() && id.len()<=200 && id.bytes().all(|b|b.is_ascii_alphanumeric() || b"._:-".contains(&b))).map(str::to_owned).unwrap_or_else(||crate::mods::state::random_hex(16));
     let query=req.uri().query().unwrap_or("");
     let probe=form_urlencoded::parse(query.as_bytes()).find(|(key,_)|key=="sondar").is_some_and(|(_,value)|matches!(value.to_ascii_lowercase().as_str(),"1"|"true"|"on"|"yes"));

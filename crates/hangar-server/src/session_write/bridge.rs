@@ -36,13 +36,13 @@ fn as_owner(req: &mut Request, name: &str, rest: &str) -> bool {
     true
 }
 
-/// `/__hangar_server/claude/<nome>/<rota>`: `POST` em `input`, `answer`, `select`, `select/submit`,
-/// `permission-mode` e `model-effort`, `GET` em `permission-modes`, e as rotas do painel da fila (`DELETE`/`PATCH
+/// `/__hangar_server/claude/<nome>/<rota>`: `POST` em `input`, `answer`, `select` e `select/submit`,
+/// e as rotas do painel da fila (`DELETE`/`PATCH
 /// queue/<id>`, `POST queue/reorder` e `queue/<id>/steer`), de sessão Claude com entrada no Rust, pela
 /// mesma rota do dono; `POST`/`GET btw` e `POST recarregar` de qualquer sessão (a rota decide). Outra rota,
 /// método ou sessão: 421.
 pub async fn claude(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, mut req: Request) -> Response {
-    use super::{answer, control, input, permissions};
+    use super::{answer, control, input};
     if !crate::workspace_routes::private_ok(&st, peer, req.headers()) { return StatusCode::NOT_FOUND.into_response(); }
     let Some((name, rest)) = split(&req, "/__hangar_server/claude/") else { return not_ours() };
     // Abrir Claude com terminal pelo que entrou direto no Python (Connect, MCP): o nome vem no corpo.
@@ -70,15 +70,14 @@ pub async fn claude(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
     }
     let queue = control::queue_route(req.method(), &rest);
     let allowed = queue.is_some() || match *req.method() {
-        Method::POST => matches!(rest.as_str(), "input" | "answer" | "select" | "select/submit" | "permission-mode" | "model-effort"),
-        Method::GET => rest == "permission-modes",
+        Method::POST => matches!(rest.as_str(), "input" | "answer" | "select" | "select/submit"),
         _ => false,
     };
     if !allowed { return not_ours(); }
     let Some(runtime) = st.state.runtime.get().cloned() else { return not_ours() };
     // Texto que nasce no Python (grupo, par, MCP) para o Claude com terminal: o Rust o adota aqui, e a
-    // fila da sessão é uma só. O seletor do `/model` do convidado também só existe no ator.
-    if matches!(rest.as_str(), "input" | "model-effort") && !runtime.has_entry(None, &name).await {
+    // fila da sessão é uma só.
+    if rest == "input" && !runtime.has_entry(None, &name).await {
         match runtime.adopt_now(&name).await {
             None => return not_ours(),
             // Sem sidecar o Python toma o Codex que ainda abre por Claude: o `/input` o guarda na fila dele.
@@ -99,9 +98,6 @@ pub async fn claude(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
         "input" => input::input(s, c, req).await,
         "answer" => answer::answer(s, c, req).await,
         "select" => control::select(s, c, req).await,
-        "permission-mode" => permissions::set_mode(s, c, req).await,
-        "permission-modes" => permissions::modes(s, c, req).await,
-        "model-effort" => super::engine::effort(s, c, req).await,
         _ => control::select_submit(s, c, req).await,
     }
 }

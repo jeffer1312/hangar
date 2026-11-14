@@ -251,6 +251,33 @@ async fn delete_r1_01_login_guest_closes_through_the_owner_close() {
     assert_eq!(e.python.hits_to("/api/sessions/cat1") + e.python.hits_to("/api/sessions/cat2"), 0);
 }
 
+/// R4-19, decisões 1 e 2 (D2): o convidado com conta chega a modos e modelo da sessão que vê pela rota do
+/// dono, com a resposta do Rust, nunca o 401 do Python que o deslogava; o que não a vê leva o 403 do
+/// porteiro. Nada vai ao Python.
+#[tokio::test]
+async fn r4_19_login_guest_reaches_mode_and_model_in_rust() {
+    let e = env().await;
+    e.sessions(&["cat1"]);
+    let send = |method: reqwest::Method, route: &'static str, token: &'static str| {
+        let request = fake::client().request(method, format!("http://{}/api/sessions/cat1/{route}", e.server)).bearer_auth(token)
+            .header("content-type", "application/json");
+        async move {
+            let body = match route { "permission-mode" => r#"{"mode":"plan"}"#, "model-effort" => r#"{"model":"sonnet"}"#, _ => "" };
+            let response = request.body(body).send().await.unwrap();
+            let status = response.status().as_u16();
+            (status, serde_json::from_str::<Value>(&response.text().await.unwrap()).unwrap_or(Value::Null))
+        }
+    };
+    for (method, route) in [(reqwest::Method::GET, "permission-modes"), (reqwest::Method::POST, "permission-mode"), (reqwest::Method::POST, "model-effort")] {
+        let (status, body) = send(method.clone(), route, BLIND).await;
+        assert_eq!((status, body["detail"]["code"].as_str()), (403, Some("erro_fora_do_convidado")), "{route}: {body}");
+        let (status, body) = send(method, route, GUEST).await;
+        assert_ne!(status, 401, "{route}: o convidado não perde o login: {body}");
+        assert!(status == 200 || body["detail"]["code"].is_string(), "{route}: recusa com código: {status} {body}");
+        assert_eq!(e.python.hits_to(&format!("/api/sessions/cat1/{route}")), 0, "{route}");
+    }
+}
+
 /// R5 (decisão 5): o convidado com conta numa rota só do dono que o porteiro deixa passar (a reserva
 /// pré-aquecida) leva 403 do Rust, que não o desloga, e o Python não recebe nada.
 #[tokio::test]

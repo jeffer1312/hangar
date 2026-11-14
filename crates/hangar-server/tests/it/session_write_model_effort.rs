@@ -177,28 +177,12 @@ async fn model_effort_b3_transfer_in_progress_is_busy() {
     assert_eq!(python.hits_to("/api/sessions/s/model-effort"), 0);
 }
 
-/// B2: convidado e Connect chegam pela ponte privada do Claude e recebem a resposta do Rust.
+/// R4-12 (contrato c): sem o registro de sessões, o dono recebe 503 com código, nunca o Python.
 #[tokio::test]
-async fn model_effort_b2_private_bridge_serves_the_route() {
-    let (dir, terms) = (tempfile::tempdir().unwrap(), Arc::new(Terms::new(TermConfig::default())));
-    let registry = registry(&terms).await;
-    open_headless(&registry, dir.path(), "s").await;
+async fn model_effort_r4_12_without_runtime_is_503_with_a_code() {
     let (python, upstream) = fake::spawn_fake().await;
-    let mut state = AppState::new(fake::config(upstream, "127.0.0.1"));
-    state.term = terms;
-    assert!(state.state.runtime.set(registry).is_ok());
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let private = listener.local_addr().unwrap();
-    let router = hangar_server::routes::terminal_router(Arc::new(state));
-    tokio::spawn(async move { axum::serve(listener, router.into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap() });
-    let call = |name: &'static str, body: &'static str| async move {
-        let response = fake::client().post(format!("http://{private}/__hangar_server/claude/{name}/model-effort"))
-            .header("content-type", "application/json").header("x-hangar-internal", SECRET).body(body).send().await.unwrap();
-        let status = response.status().as_u16();
-        (status, serde_json::from_str::<Value>(&response.text().await.unwrap()).unwrap_or(Value::Null))
-    };
-    assert_eq!(call("s", r#"{"model":"sonnet"}"#).await, (200, json!({"ok": true, "scope": "session", "result": null})));
-    assert_eq!(call("s", r#"{"model":"bad id!"}"#).await.0, 422);
-    assert_eq!(call("nada", r#"{"model":"sonnet"}"#).await.0, 421, "sessão que o Rust não tem segue ao Python");
+    let server = fake::spawn_state(AppState::new(fake::config(upstream, "127.0.0.1"))).await;
+    let (status, reply) = post(server, "s", r#"{"model":"sonnet"}"#).await;
+    assert_eq!((status, reply["detail"]["code"].as_str()), (503, Some("runtime_unavailable")), "{reply}");
     assert_eq!(python.hits_to("/api/sessions/s/model-effort"), 0);
 }

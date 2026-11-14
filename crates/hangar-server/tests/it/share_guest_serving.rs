@@ -571,6 +571,54 @@ async fn share_guest_writes_its_session_and_nothing_else() {
     assert_eq!(srv.python.hits_to("/api/sessions/s/interrupt"), 0);
 }
 
+/// R4-19, decisões 1 e 2 (D2): o convidado completo lê e troca o modo de permissão e o modelo da sessão
+/// dele pela rota do dono (antes, o 404 do `pass` na 8766). O par de leitura, outra sessão e as rotas de
+/// grupo (R4-17) seguem recusados no porteiro. Nada vai ao Python.
+#[tokio::test(flavor = "multi_thread")]
+async fn r4_19_share_guest_changes_mode_and_model_through_the_owner_route() {
+    let dir = tempfile::tempdir().unwrap();
+    let registry = Arc::new(RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(), "secret-test".into(), "instance-test".into())
+        .with_processes(Arc::new(crate::runtime_open::RecipeProcesses("sid-1"))));
+    let sink = Arc::new(Mutex::new(Vec::new()));
+    let d = dir.path();
+    registry.open(RuntimeTarget { key: "k-s".into(), generation: 1, name: "s".into(), provider: "claude".into(),
+        metadata: json!({"name": "s", "headless": true, "session_id": "sid-1", "initialized": true}),
+        binding: CanoBinding { pid: 42, escuta: cano(sink.clone()).await, token: "secret-test".into(), versao: 2 },
+        lease_path: d.join("s.lock"), state_path: d.join("s.queue-state.json"), projection_dir: d.join("s-projection"),
+        transcript: d.join("s.jsonl"), created: 0.0 }).await.unwrap();
+    let srv = plain_srv(dir.path(), |st| {
+        st.write_gate_wait = Duration::from_secs(5);
+        assert!(st.state.runtime.set(registry).is_ok());
+    }).await;
+    let t = srv.g.token("s", Kind::Share);
+    let url = |route: &str| format!("http://{}/api/sessions/{route}", srv.guest);
+    let (status, body) = get_json(url("s/permission-modes"), &t).await;
+    assert_eq!((status, body["sondavel"].clone()), (200, json!(false)), "{body}");
+    assert_eq!(body["modes"].as_array().map(Vec::len), Some(6), "{body}");
+    let (status, body) = post_json(url("s/permission-mode"), &t, json!({"mode": "plan"})).await;
+    assert_eq!((status, body["current"].clone()), (200, json!("plan")), "{body}");
+    let (status, body) = post_json(url("s/model-effort"), &t, json!({"model": "sonnet"})).await;
+    assert_eq!((status, body), (200, json!({"ok": true, "scope": "session", "result": null})));
+    let frames: Vec<Value> = sink.lock().unwrap().iter().filter_map(|e| serde_json::from_str(e["frame"].as_str()?).ok()).collect();
+    for subtype in ["set_permission_mode", "set_model"] {
+        assert!(frames.iter().any(|f| f["request"]["subtype"] == subtype), "{subtype}: {frames:?}");
+    }
+    let p = srv.g.token("s", Kind::Pair);
+    assert_eq!(get_json(url("s/permission-modes"), &p).await.0, 403, "o par de leitura não alcança os modos");
+    assert_eq!(post_json(url("s/permission-mode"), &p, json!({"mode": "plan"})).await.0, 403);
+    assert_eq!(post_json(url("s/model-effort"), &p, json!({"model": "sonnet"})).await.0, 403);
+    srv.g.alive("o");
+    assert_eq!(post_json(url("o/permission-mode"), &t, json!({"mode": "plan"})).await.0, 403, "sessão fora do convite");
+    for (route, body) in [("s/pair", json!({"peer": "o"})), ("s/group-message", json!({"text": "oi"}))] {
+        let (status, refused) = post_json(url(route), &t, body).await;
+        assert_eq!((status, refused["detail"]["code"].clone()), (403, json!("erro_fora_do_convite")), "{route}");
+    }
+    assert_eq!(get_json(url("s/pair/contract"), &t).await.0, 403);
+    for route in ["permission-modes", "permission-mode", "model-effort", "pair", "group-message", "pair/contract"] {
+        assert_eq!(srv.python.hits_to(&format!("/api/sessions/s/{route}")), 0, "{route}");
+    }
+}
+
 // ── mods ─────────────────────────────────────────────────────────────────────────────────────
 
 fn terminal_target(dir: &Path, name: &str) -> TerminalTarget {

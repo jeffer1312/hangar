@@ -153,9 +153,12 @@ pub async fn model(State(st):State<Arc<AppState>>,ConnectInfo(peer):ConnectInfo<
 /// `/engine/model`. As outras sessões Claude, pelo seletor do `/model` ou pelo ator sem terminal
 /// (`model_effort`).
 pub async fn effort(State(st):State<Arc<AppState>>,ConnectInfo(peer):ConnectInfo<SocketAddr>,req:Request) -> Response {
-    let (fwd,owner)=match gate(&st,peer,&req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
-    let runtime=st.state.runtime.get().cloned();
-    let (Some(runtime),true,Some(name))=(runtime,owner,session_name(req.uri().path())) else {return crate::routes::pass(&st,req,&fwd).await};
+    // Dono e convidado que alcança a sessão pelo mesmo caminho; o Python não tem mais esta rota.
+    let (_,caller)=match crate::routes::who(&st,peer,&req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
+    let Some(name)=session_name(req.uri().path()).filter(|n|caller.as_ref().is_some_and(|c|c.can(n,req.method()))) else {
+        return super::stranger(&st,peer,req,caller.as_ref()).await;
+    };
+    let Some(runtime)=st.state.runtime.get().cloned() else {return super::no_runtime(req.headers())};
     let (parts,body)=req.into_parts();
     let Ok(bytes)=to_bytes(body,BODY_LIMIT).await else {return too_large(&parts.headers)};
     let spec=match runtime.claude_spec(&name).await {
