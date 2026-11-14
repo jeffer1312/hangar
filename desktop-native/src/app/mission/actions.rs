@@ -34,6 +34,7 @@ pub(super) struct Pending {
     confirm_retry: bool,
     has_message: bool,
     execute: bool,
+    start: bool,
 }
 
 impl Hangar {
@@ -54,7 +55,7 @@ impl Hangar {
         let Some(card)=board.tickets.iter().find(|card|card.id==ticket) else {return;};
         if self.ticket_view(card).stage.is_some_and(|current|current.id==stage) {return;}
         self.mission.dispatch_seq+=1;
-        self.mission.action_pending=Some(Pending {server,connector,ticket,stage,repeat:false,action:None,confirm_retry:false,has_message:false,execute:false});
+        self.mission.action_pending=Some(Pending {server,connector,ticket,stage,repeat:false,action:None,confirm_retry:false,has_message:false,execute:false,start:false});
         self.continue_ticket_action(window,cx);
     }
     pub(super) fn load_ticket_receipt(&mut self,api: Api,connector: String,ticket: String,window: &mut Window,cx: &mut Context<Self>) {
@@ -95,6 +96,14 @@ impl Hangar {
     }
 
     pub(super) fn request_ticket_action(&mut self,ticket: String,stage: String,repeat: bool,window: &mut Window,cx: &mut Context<Self>) {
+        self.prepare_ticket_action(ticket,stage,repeat,false,window,cx);
+    }
+
+    pub(super) fn request_ticket_start(&mut self,ticket: String,stage: String,window: &mut Window,cx: &mut Context<Self>) {
+        self.prepare_ticket_action(ticket,stage,true,true,window,cx);
+    }
+
+    fn prepare_ticket_action(&mut self,ticket: String,stage: String,repeat: bool,start: bool,window: &mut Window,cx: &mut Context<Self>) {
         if self.mission_busy() {return;}
         let (Some(api),Some(connector),Some(board))=(self.api.clone(),self.mission.connector.clone(),self.mission_board()) else {return;};
         let Some(config)=board.work.stages.iter().find(|s|s.id==stage).cloned() else {return;};
@@ -105,7 +114,7 @@ impl Hangar {
             self.load_ticket_receipt(api,connector,ticket,window,cx);return;
         }
         let first=board.work.stages.first().is_some_and(|first|first.id==stage);
-        let pending=Pending {server:api.identity(),connector:connector.clone(),ticket:ticket.clone(),stage,repeat,action:None,confirm_retry:false,has_message:false,execute:true};
+        let pending=Pending {server:api.identity(),connector:connector.clone(),ticket:ticket.clone(),stage,repeat,action:None,confirm_retry:false,has_message:false,execute:true,start};
         self.mission.dispatch_seq+=1;
         let seq=self.mission.dispatch_seq;
         self.mission.action_pending=Some(pending.clone());
@@ -204,7 +213,8 @@ impl Hangar {
         let alive=self.mission_board().and_then(|board|board.tickets.iter().find(|ticket|ticket.id==pending.ticket)
             .and_then(|ticket|self.ticket_session(ticket,board.item(&pending.connector,&pending.ticket))))
             .and_then(|linked|linked.session).is_some_and(|session|session.state!="dead");
-        if pending.has_message && !alive && self.mission.launch_options.is_none() {
+        let repository=self.mission_board().and_then(|board|board.item(&pending.connector,&pending.ticket)).and_then(|item|item.repository.clone());
+        if pending.has_message && !alive && repository.is_none() {
             self.open_ticket_launch(window,cx);
             return;
         }
@@ -217,7 +227,7 @@ impl Hangar {
         let id:String=raw.iter().map(|b|format!("{b:02x}")).collect();
         let body=json!({"attempt":id,"connector":pending.connector,"ticket_id":pending.ticket,"stage":pending.stage,
             "action":pending.action.as_ref().map(|a|&a.id),"fingerprint":pending.action.as_ref().map(|a|&a.fingerprint),
-            "open":self.mission.launch_options,"repeat":pending.repeat,"confirm_retry":pending.confirm_retry,"execute":pending.execute});
+            "open":repository.map(|cwd|json!({"cwd":cwd})),"repeat":pending.repeat,"confirm_retry":pending.confirm_retry,"execute":pending.execute,"start":pending.start});
         self.mission.dispatching.insert(pending.ticket.clone());
         self.mission.receipts.insert(pending.ticket.clone(),Receipt {id:id.clone(),status:"preparing".into(),session:None,message:None,execute:pending.execute});
         let request=async move {

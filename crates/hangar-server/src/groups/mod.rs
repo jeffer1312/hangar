@@ -30,7 +30,7 @@ use store::PairDir;
 /// Serviço do processo sobre o `.hangar-pair` da conta padrão (`settings.projects_dir.parent`, a
 /// pasta `claude` da lista). Arquivo de contratos vem do Python (`HANGAR_PAIR_ARCHIVE`) e o id da
 /// máquina de quem monta o `AppState` (o `main` lê `HANGAR_SERVER_ID`); sem as pastas da lista não há serviço.
-pub fn from_env(dirs: Option<&Dirs>, server_id: String, orq: Arc<dyn OrqFacts>, list: Arc<crate::list::bridge::ListBridge>, diary: crate::diag::DiagClient) -> Option<Arc<GroupService>> {
+pub fn from_env(dirs: Option<&Dirs>, server_id: String, orq: Arc<dyn OrqFacts>, list: Arc<crate::list::bridge::ListBridge>, diary: crate::diag::DiagClient, mission: Arc<hangar_mission::Store>) -> Option<Arc<GroupService>> {
     let dirs = dirs?;
     let var = |key: &str| std::env::var(key).ok().filter(|v| !v.is_empty());
     // Mesmo padrão do `pair._arquivo_dir`: o cofre `~/.hangar`, não a conta.
@@ -45,8 +45,17 @@ pub fn from_env(dirs: Option<&Dirs>, server_id: String, orq: Arc<dyn OrqFacts>, 
     }
     // Mudou o grupo: a lista relê o disco na hora, em vez de servir a descoberta de até 1 s atrás, e
     // o retorno da filha ligada confere se passou a ter filha para vigiar.
-    let service = GroupService::new(dir, orq, server_id).with_diary(diary);
-    Some(Arc::new(service.with_change_hook(Arc::new(move || { list.invalidate(); link_return::wake(); }))))
+    let home=dirs.home.clone();
+    let program=list.env().capture_program.clone();
+    let service = GroupService::new(dir.clone(), orq, server_id).with_diary(diary);
+    Some(Arc::new(service.with_change_hook(Arc::new(move || {
+        list.invalidate();link_return::wake();
+        match dir.sidecars().map_err(|error|error.to_string()).and_then(|sidecars|
+            mission.sync_groups(&crate::mission_notify::ticket_groups(&home,&program,sidecars)).map(|_|()).map_err(|error|error.to_string())) {
+            Ok(())=>{},
+            Err(_)=>tracing::warn!(code="ticket_group_sync_failed","não foi possível gravar os participantes dos tickets"),
+        }
+    }))))
 }
 
 /// O livro das outras máquinas é resolvido no Rust, no mesmo lugar das rotas e do CLI.

@@ -358,6 +358,68 @@ pub fn probe(cwd: &Path, branch: &str, base: &str) -> Proof {
     VERIFIER.verify(cwd, branch, base)
 }
 
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Equivalence { pub commits: bool, pub merged: bool }
+
+type EquivalentKey = (std::path::PathBuf,String,String);
+static EQUIVALENT: LazyLock<Mutex<HashMap<EquivalentKey,(Instant,Equivalence)>>> = LazyLock::new(Mutex::default);
+
+/// O pareamento exclusivo conserva ordem e multiplicidade; resoluções de merge precisam de prova própria.
+pub(crate) fn equivalent(cwd: &Path, base: &str, head: &str) -> Equivalence {
+    let Some(base_head)=read(cwd,&["rev-parse","--verify",&format!("{base}^{{commit}}")]) else {return Equivalence::default();};
+    let key=(crate::real(cwd),base_head.clone(),head.to_owned());
+    if let Some((at,hit))=EQUIVALENT.lock().unwrap_or_else(|e|e.into_inner()).get(&key)
+        && at.elapsed()<Duration::from_secs(60) {return *hit;}
+    let result=equivalent_at(cwd,&base_head,head).unwrap_or_default();
+    if read(cwd,&["rev-parse","--verify",&format!("{base}^{{commit}}")]).as_deref()!=Some(&base_head) {return Equivalence::default();}
+    let mut cache=EQUIVALENT.lock().unwrap_or_else(|e|e.into_inner());
+    if cache.len()>512 {cache.clear();}
+    cache.insert(key,(Instant::now(),result));
+    result
+}
+
+fn equivalent_at(cwd: &Path,base: &str,head: &str) -> Option<Equivalence> {
+    let range=format!("{base}..{head}");
+    let reverse=format!("{head}..{base}");
+    let source=read(cwd,&["rev-list","--no-merges",&range])?;
+    let mut remaining:std::collections::HashSet<_>=source.lines().collect();
+    if remaining.is_empty() || remaining.len()>256 {return None;}
+    let cherry=read(cwd,&["cherry",base,head])?;
+    if cherry.is_empty() || !cherry.lines().all(|line|line.starts_with("- ")) {return None;}
+    let target=read(cwd,&["rev-list","--no-merges",&reverse])?;
+    let targets:std::collections::HashSet<_>=target.lines().collect();
+    let diff=read(cwd,&["-c","diff.external=","range-diff","--no-ext-diff","--no-textconv","--no-color","--abbrev=40",&range,&reverse])?;
+    let mut last=0usize;
+    let mut source_index=0usize;
+    for line in diff.lines() {
+        let parts=line.split_whitespace().collect::<Vec<_>>();
+        if parts.len()<5 {return None;}
+        if parts[0]=="-:" && parts[2]==">" {continue;}
+        if parts[2]!="=" || !remaining.remove(parts[1]) || !targets.contains(parts[4]) {return None;}
+        let next_source=parts[0].strip_suffix(':')?.parse::<usize>().ok()?;
+        if next_source!=source_index+1 {return None;}
+        source_index=next_source;
+        let index=parts[3].strip_suffix(':')?.parse::<usize>().ok()?;
+        if index<=last {return None;}
+        last=index;
+    }
+    if !remaining.is_empty() {return None;}
+    let commits=true;
+    let merges=read(cwd,&["rev-list","--merges","--parents",&range])?;
+    if !merges.is_empty() {
+        let drivers=crate::git::command(cwd,&["config","--get-regexp",r"^merge\..*\.driver$"]).ok()?;
+        if drivers.code!=1 {return Some(Equivalence {commits,merged:false});}
+    }
+    for merge in merges.lines() {
+        let parents=merge.split_whitespace().collect::<Vec<_>>();
+        if parents.len()!=3 {return Some(Equivalence {commits,merged:false});}
+        let tree=read(cwd,&["merge-tree","--write-tree",parents[1],parents[2]]);
+        let expected=read(cwd,&["rev-parse","--verify",&format!("{}^{{tree}}",parents[0])]);
+        if tree.is_none() || tree!=expected {return Some(Equivalence {commits,merged:false});}
+    }
+    Some(Equivalence {commits,merged:true})
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -447,6 +509,36 @@ mod tests {
     struct Host {
         response: Result<String, &'static str>,
         calls: Arc<AtomicUsize>,
+    }
+
+    #[test]
+    fn rebased_equivalent_commits_record_integration_and_a_later_commit_is_protected() {
+        let repo = Repository::squashed();
+        repo.git(&["switch","main"]);
+        repo.git(&["reset","--hard","HEAD^"]);
+        repo.git(&["commit","--allow-empty","-m","Base avançou"]);
+        repo.git(&["cherry-pick",&repo.head]);
+        repo.git(&["update-ref","refs/remotes/origin/main","HEAD"]);
+        repo.git(&["switch","feature"]);
+        repo.git(&["config", "branch.feature.hangar-base", "origin/main"]);
+        repo.git(&["remote","set-url","origin","file:///fixture"]);
+        let status = crate::worktrees::status_of(repo.path.to_str().unwrap(), &[], false, &[]);
+        assert_eq!(status["merged"], true, "a base contém a mesma alteração com outro hash");
+        repo.git(&["switch", "main"]);
+        repo.git(&["revert", "--no-edit", "HEAD"]);
+        repo.git(&["update-ref", "refs/remotes/origin/main", "HEAD"]);
+        repo.git(&["switch", "feature"]);
+        let status = crate::worktrees::status_of(repo.path.to_str().unwrap(), &[], false, &[]);
+        assert_eq!(status["merged"], true, "reverter depois não desfaz a integração histórica, como na prova por PR");
+        repo.git(&["revert","--no-edit","HEAD"]);
+        repo.git(&["cherry-pick",&repo.head]);
+        let status = crate::worktrees::status_of(repo.path.to_str().unwrap(), &[], false, &[]);
+        assert_eq!(status["merged"], false, "reaplicação posterior não reutiliza um pareamento já consumido");
+        std::fs::write(repo.path.join("new.txt"), "nova alteração\n").unwrap();
+        repo.git(&["add", "new.txt"]);
+        repo.git(&["commit", "-m", "Trabalho posterior"]);
+        let status = crate::worktrees::status_of(repo.path.to_str().unwrap(), &[], false, &[]);
+        assert_eq!(status["merged"], false);
     }
     impl Host {
         fn new(value: Value) -> Self {

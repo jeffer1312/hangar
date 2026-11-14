@@ -30,6 +30,8 @@ pub(super) struct WorktreeStatus {
     pub main_branch: Option<String>,
     pub merged: bool,
     #[serde(default)]
+    pub equivalent_commits: bool,
+    #[serde(default)]
     pub merge_method: Option<String>,
     #[serde(default)]
     pub merge_problem: Option<String>,
@@ -89,6 +91,7 @@ struct WorktreeSnapshot { repos: Vec<WorktreeRepo>, #[serde(default)] warning: O
 struct MachineWorktrees { label: String, snapshot: Option<WorktreeSnapshot>, loading: bool, error: Option<String> }
 
 fn merge_notice(worktree: &WorktreeStatus) -> Option<String> {
+    if worktree.equivalent_commits {return None;}
     worktree.merge_problem.as_deref().filter(|problem| !problem.trim().is_empty()).map(|problem|
         tr(if problem == "worktree_merge_base_unconfirmed" { "worktree_merge_base_unconfirmed" } else { "worktree_merge_check_failed" }))
 }
@@ -99,7 +102,7 @@ pub(super) struct BranchList { current: Option<String>, #[serde(default)] branch
 
 /// Um estado só por worktree, na ordem do que mais importa antes de apagar (o `worktreeState` do core).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum WtState { Gone, Session, Residual, Dirty, Merged, Detached, Active }
+pub(super) enum WtState { Gone, Session, Residual, Dirty, Merged, Equivalent, Detached, Active }
 
 pub(super) fn state_of(w: &WorktreeStatus) -> WtState {
     if !w.exists { WtState::Gone }
@@ -107,6 +110,7 @@ pub(super) fn state_of(w: &WorktreeStatus) -> WtState {
     else if w.residual { WtState::Residual }
     else if w.dirty > 0 { WtState::Dirty }
     else if w.merged { WtState::Merged }
+    else if w.equivalent_commits { WtState::Equivalent }
     else if w.branch.is_none() { WtState::Detached }
     else { WtState::Active }
 }
@@ -117,6 +121,7 @@ impl WtState {
             WtState::Gone => "worktree_estado_sumida", WtState::Session => "worktree_estado_em_uso",
             WtState::Residual => "worktree_estado_residual",
             WtState::Dirty => "worktree_estado_nao_commitado", WtState::Merged => "worktree_estado_mesclada",
+            WtState::Equivalent => "worktree_estado_equivalente",
             WtState::Detached => "worktree_estado_sem_branch", WtState::Active => "worktree_estado_andamento",
         }, &[])
     }
@@ -124,6 +129,7 @@ impl WtState {
         match self {
             WtState::Gone => theme::danger(), WtState::Session => theme::accent(), WtState::Dirty => theme::warning(),
             WtState::Residual => theme::warning(),
+            WtState::Equivalent => theme::muted(),
             WtState::Merged => theme::success(), WtState::Detached => theme::faint(), WtState::Active => theme::muted(),
         }
     }
@@ -134,6 +140,7 @@ impl WtState {
             WtState::Residual => tr_shared("worktree_residual_warning", &[]),
             WtState::Dirty => tr_shared("worktree_veredito_nao_commitado", &[("n", &w.dirty.to_string())]),
             WtState::Merged => tr_shared("worktree_veredito_mesclada", &[]),
+            WtState::Equivalent => tr_shared("worktree_veredito_equivalente", &[]),
             WtState::Detached => tr_shared("worktree_veredito_sem_branch", &[]),
             WtState::Active => tr_shared("worktree_veredito_andamento", &[("n", &w.ahead.to_string())]),
         }
@@ -1239,7 +1246,7 @@ impl Hangar {
         }).chain((!rest.is_empty()).then(|| div().px(px(6.)).py(px(4.))
             .child(line(tr_shared("worktrees_disco_outras", &[("n", &rest.len().to_string())]), String::new(), sum_size(rest.iter().copied()),
                 sum_label(rest.iter().copied()), theme::border_strong())).into_any_element())).collect();
-        let states = [WtState::Merged, WtState::Dirty, WtState::Residual, WtState::Session, WtState::Active, WtState::Detached];
+        let states = [WtState::Merged, WtState::Equivalent, WtState::Dirty, WtState::Residual, WtState::Session, WtState::Active, WtState::Detached];
         Some(card_plain().gap(px(10.))
             .child(div().flex().items_center().gap(px(10.)).flex_wrap()
                 .child(div().text_size(px(15.)).font_weight(FontWeight::SEMIBOLD).child(tr_shared("worktrees_disco_titulo", &[])))

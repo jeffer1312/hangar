@@ -4,11 +4,12 @@ import { ProviderGlyph } from '../../ui/ProviderGlyph';
 import { AccessibilityInfo, ActivityIndicator, AppState, BackHandler, Platform, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useRouter } from 'expo-router';
+import { resetCreatedChat } from '../../stores/chat';
 import { getArchivePorCwd, getCodexAccountsForServer, defaultCodexAccount,
   getEnginesForServer, getSessionDefaultsForServer, fetchSessionsForServer, listClaudeConfigsForServer, probeServerResponse,
   modelOptionsForServer, resumeArchivedConversation, getProvidersForServer, createSessionForServer, sanitizeSessionName, getWorktreesForServer,
   commitsLeftOut, folderGitActionForServer, freshBase, getFolderBranchesForServer,
-  PrewarmReserve, prewarmSessionForServer, releasePrewarmForServer } from '@hangar/core';
+  PrewarmReserve, prewarmSessionForServer, releasePrewarmForServer, getHistory } from '@hangar/core';
 import { basename, ctxWindow, providerName, contaComFolga, cotaDaConta, cotaParada, janelaEsgotada, motivoCotaAntiga, resumoCota, CLAUDE_PERMISSION_MODES, EFFORT_LEVELS,
   SESSION_PROVIDERS, hasExecutionMode, effortLevels, contextRefsPlainText, machineLabel, serverColor, tagHex } from '@hangar/core';
 import type { AccountBadge } from '@hangar/core';
@@ -993,7 +994,10 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     let chosen = retry ? previous : typed ? { name: typed, known: true }
       : ticket ? { name: ticket.name, known: true } : await autoSessionName(active, body.cwd);
     // Quem cancelou já saiu: a sessão nasceu e fica na lista, sem puxar a pessoa de volta.
-    const open = (session: string) => { if (mounted.current) router.replace(`/s/${active.id}/${session}` as never); };
+    const open = (session: string) => {
+      resetCreatedChat(active.id, session);
+      if (mounted.current) router.replace(`/s/${active.id}/${session}` as never);
+    };
     try {
       for (let first = true; ; first = false) {
         attemptName.current = { key, ...chosen };
@@ -1024,10 +1028,12 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
       if (!lost) attemptName.current = null;
       const exists = !lost ? false : await fetchSessionsForServer(active)
         .then((list) => list.some((session) => session.name === finalName), () => null);
-      if (exists) open(finalName);
+      const empty = exists && await getHistory(finalName, 1, undefined, 8_000, active)
+        .then((events) => events.length === 0, () => false);
+      if (empty) open(finalName);
       else if (mounted.current) {
         reserve.current?.resume();
-        setError(exists === null ? m.nova_conversa_criacao_incerta() : cause instanceof Error ? cause.message : m.criar_sessao_erro());
+        setError(exists ? m.criar_sessao_recuperacao_nao_vazia({ nome: finalName }) : exists === null ? m.nova_conversa_criacao_incerta() : cause instanceof Error ? cause.message : m.criar_sessao_erro());
       }
     } finally {
       createInFlight.current = false;

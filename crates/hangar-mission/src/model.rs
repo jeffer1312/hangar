@@ -3,6 +3,13 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+#[derive(Clone, Debug, Default)]
+pub struct Group {
+    pub id: String,
+    pub members: Vec<String>,
+    pub keys: BTreeMap<String,String>,
+}
+
 /// Etapa do trabalho. Com `gate`, o agente não passa dela sem a aprovação do dono.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Stage {
@@ -81,6 +88,18 @@ pub struct Item {
     pub session_key: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conversation: Option<String>,
+    /// Sessões associadas ao trabalho; fechar a coordenadora não desfaz os vínculos dos participantes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sessions: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub session_keys: BTreeMap<String,String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub group_ids: Vec<String>,
+    #[serde(default,skip_serializing_if="BTreeMap::is_empty")]
+    pub group_members: BTreeMap<String,Vec<String>>,
+    /// Pasta escolhida no ticket, usada quando uma ação precisa abrir a sessão.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repository: Option<String>,
     /// Etapa informada pelo agente ou escolhida pelo dono; sem ela, o cliente deduz pelo plano da sessão.
     #[serde(default)]
     pub stage: Option<String>,

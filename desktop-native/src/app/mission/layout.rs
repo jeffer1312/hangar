@@ -14,14 +14,21 @@ pub(super) struct TicketDrag {
     pub(super) server: String,
     pub(super) connector: String,
     pub(super) ticket: String,
-    pub(super) label: String,
+    pub(super) card: Ticket,
+    pub(super) waiting: bool,
+    pub(super) evidence: usize,
+    pub(super) session: Option<SessionInfo>,
+    pub(super) review: Option<Review>,
 }
 
-pub(super) struct TicketDragChip {pub(super) label: String}
+pub(super) struct TicketDragChip {pub(super) drag: TicketDrag}
 impl Render for TicketDragChip {
     fn render(&mut self,_: &mut Window,_: &mut Context<Self>) -> impl IntoElement {
-        div().max_w(px(360.)).px(px(12.)).py(px(8.)).rounded(px(8.)).bg(theme::raised()).border_1().border_color(theme::border_strong())
-            .shadow(theme::popover_shadow()).text_sm().text_color(theme::text()).truncate().child(self.label.clone())
+        let drag=&self.drag;
+        ticket_card_view("tickets-drag-card".into(),drag.card.key.clone(),drag.card.title.clone(),drag.card.status.name.clone(),true,drag.waiting,drag.evidence)
+            .w(px(250.)).bg(theme::raised()).shadow(theme::popover_shadow())
+            .children(drag.session.as_ref().map(session_line))
+            .children(drag.review.as_ref().map(review_line))
     }
 }
 

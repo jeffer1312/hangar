@@ -80,6 +80,12 @@ struct Item {
     session: Option<String>,
     #[serde(default)]
     session_key: Option<String>,
+    #[serde(default)]
+    sessions: Vec<String>,
+    #[serde(default)]
+    session_keys: BTreeMap<String,String>,
+    #[serde(default)]
+    repository: Option<String>,
     stage: Option<String>,
     #[serde(default)]
     approved: Vec<String>,
@@ -116,7 +122,6 @@ enum Source { Reported, Status, Review, Plan, None }
 #[derive(Default)]
 pub(super) struct Mission {
     pub(super) open: bool,
-    pub(super) launch_options: Option<Value>,
     pub(super) conversation: bool,
     dispatch_seq: u64,
     action_pending: Option<actions::Pending>,
@@ -238,6 +243,14 @@ impl Hangar {
 
     fn mission_busy(&self) -> bool {self.mission.busy || !self.mission.dispatching.is_empty()}
 
+    pub(super) fn mission_sessions_changed(&mut self,incoming: &[SessionInfo],window: &mut Window,cx: &mut Context<Self>) {
+        if !self.mission.open {return;}
+        let groups=|rows:&[SessionInfo]|rows.iter().map(|row|(
+            row.name.clone(),(row.lifecycle_id.clone(),row.pair_gid.clone(),row.pair_peers.clone())
+        )).collect::<BTreeMap<_,_>>();
+        if groups(&self.sessions)!=groups(incoming) {self.reload_work(window,cx);}
+    }
+
     pub(super) fn receive_tickets(&mut self, reply: Reply, window: &mut Window, cx: &mut Context<Self>) {
         match reply {
             Reply::Launch {server,dialog,options} => {
@@ -245,8 +258,7 @@ impl Hangar {
                 self.new_session=None;
                 window.close_dialog(cx);
                 if self.mission.open && self.mission.server.as_deref()==Some(&server) {
-                    self.mission.launch_options=Some(options);
-                    self.continue_ticket_action(window,cx);
+                    if let Some(path)=options["cwd"].as_str() {self.save_ticket_repository(path.to_owned(),window,cx);}
                 }
                 cx.notify();
             }
@@ -314,7 +326,6 @@ impl Hangar {
         };
         if !same {
             if self.mission.stages_editor.is_some() {window.close_dialog(cx);self.mission.stages_editor=None;}
-            self.mission.launch_options=None;
             self.mission.action_pending=None;
             self.mission.receipts.clear();
             self.mission.execution_receipts.clear();
@@ -468,12 +479,12 @@ impl Hangar {
     /// Sessão do ticket: a ligada pelo Iniciar ou, sem ela, a viva que leva a chave na branch ou no nome.
     fn ticket_session<'a>(&'a self, ticket: &'a Ticket, item: Option<&'a Item>) -> Option<Linked<'a>> {
         if let Some(name) = item.and_then(|item| item.session.as_deref()) {
-            let expected=item.and_then(|item|item.session_key.as_deref());
+            let expected=item.and_then(|item|item.session_key.as_deref().or_else(||item.session_keys.get(name).map(String::as_str)));
             let session=self.sessions.iter().find(|s|match expected {
                 Some(key)=>hangar_api::session::runtime_key(s.lifecycle_id.as_deref())==Some(key),
-                None=>s.name==name,
+                None=>s.name==name && named_after(s,&ticket.key),
             });
-            return Some(Linked { name:session.map(|s|s.name.as_str()).unwrap_or(name), session, stored: true });
+            if expected.is_some() || session.is_some() {return Some(Linked { name:session.map(|s|s.name.as_str()).unwrap_or(name), session, stored: expected.is_some() });}
         }
         self.sessions.iter().find(|s| s.state != "dead" && named_after(s, &ticket.key))
             .map(|s| Linked { name: s.name.as_str(), session: Some(s), stored: false })
@@ -561,11 +572,45 @@ impl Hangar {
         let (Some(Ok(view)),Some(board))=(&self.mission.detail,self.mission_board()) else {return;};
         let ticket=view.detail.ticket.id.clone();
         let stage=self.ticket_view(&view.detail.ticket).stage.or_else(||board.work.stages.first()).map(|stage|stage.id.clone());
-        if let Some(stage)=stage {self.request_ticket_action(ticket,stage,true,window,cx);}
+        if let Some(stage)=stage {self.request_ticket_start(ticket,stage,window,cx);}
+    }
+
+    fn save_ticket_repository(&mut self,path: String,window: &mut Window,cx: &mut Context<Self>) {
+        let (Some(api),Some(connector),Some(Ok(view)))=(self.api.clone(),self.mission.connector.clone(),&self.mission.detail) else {return;};
+        let ticket=view.detail.ticket.clone();
+        let server=api.identity();
+        let body=json!({"action":"repository","path":path,"key":ticket.key,"title":ticket.title,"url":ticket.url});
+        let id=ticket.id.clone();let source=connector.clone();
+        self.mission.busy=true;
+        let request=async move {
+            let value=api.server_send(reqwest::Method::PATCH,&["mission","items",&source,&id],Some(body),15).await?;
+            serde_json::from_value::<Item>(value["item"].clone()).map_err(|_|Failure::local("invalid_response"))
+        };
+        run(&self.runtime,request,window,cx,move |this: &mut Hangar,result,window,cx| {
+            if this.mission.server.as_deref()!=Some(&server) || this.mission.connector.as_deref()!=Some(&connector) {return;}
+            this.mission.busy=false;
+            match result {
+                Ok(item)=> {
+                    if let Some(Ok(board))=this.mission.board.as_mut() {
+                        board.work.items.retain(|old|old.connector!=connector || old.ticket_id!=ticket.id);
+                        board.work.items.push(item);
+                    }
+                    this.continue_ticket_action(window,cx);
+                }
+                Err(error)=>{this.cancel_ticket_action();window.push_notification(Notification::error(failure_text(&error)),cx);}
+            }
+            cx.notify();
+        });
+    }
+
+    pub(super) fn ticket_repository(&self) -> Option<String> {
+        let (Some(connector),Some(ticket),Some(board))=(&self.mission.connector,&self.mission.selected,self.mission_board()) else {return None;};
+        board.item(connector,ticket).and_then(|item|item.repository.clone())
     }
 
     fn link_session(&mut self, api: Api, connector: String, ticket: Ticket, session: String, window: &mut Window, cx: &mut Context<Self>) {
-        let body = json!({"key": ticket.key, "title": ticket.title, "url": ticket.url, "session": session});
+        let key=self.sessions.iter().find(|row|row.name==session).and_then(|row|hangar_api::session::runtime_key(row.lifecycle_id.as_deref()));
+        let body = json!({"key": ticket.key, "title": ticket.title, "url": ticket.url, "session": session,"session_key":key});
         let request = async move {
             api.server_send(reqwest::Method::PUT, &["mission", "items", &connector, &ticket.id], Some(body), 15).await.map(|_| ())
         };
@@ -674,7 +719,11 @@ impl Hangar {
 
     fn open_linked(&mut self, name: String, window: &mut Window, cx: &mut Context<Self>) {
         let Some(server) = self.mission.server.clone() else { return };
-        self.open_embedded_conversation(sidebar::Target::new(&servers::norm(&server),&name),window,cx);
+        let target=match name.split_once("::") {
+            Some((server,name))=>sidebar::Target::new(server,name),
+            None=>sidebar::Target::new(&servers::norm(&server),&name),
+        };
+        self.open_embedded_conversation(target,window,cx);
         self.mission.conversation=self.embedded_conversation();
         cx.notify();
     }
@@ -706,17 +755,11 @@ impl Hangar {
         let expanded=self.mission.detail_expanded && self.mission.selected.is_some();
         let body = (!expanded).then(||self.render_mission_body(window,cx));
         let panel = self.mission.selected.clone().map(|_| self.render_ticket_panel(window,cx));
-        let folder=self.mission.launch_options.as_ref().and_then(|options|options["cwd"].as_str()).map(str::to_owned);
         let controls=div().id("tickets-controls").w(px(220.)).flex_shrink_0().h_full().overflow_y_scroll().border_r_1().border_color(theme::border())
             .p(px(12.)).flex().flex_col().gap(px(16.))
             .child(div().flex().flex_col().gap(px(6.)).child(div().text_xs().text_color(theme::muted()).child(tr("mission_search"))).children(search))
             .when_some(chooser,|el,chooser|el.child(div().flex().flex_col().gap(px(6.))
-                .child(div().text_xs().text_color(theme::muted()).child(tr("mission_origin"))).child(chooser)))
-            .child(div().flex().flex_col().gap(px(6.))
-                .child(div().text_xs().text_color(theme::muted()).child(tr("mission_folder")))
-                .when_some(folder,|el,path|el.child(div().text_xs().whitespace_normal().child(path)))
-                .child(Button::new("tickets-folder").outline().small().w_full().icon(IconName::FolderOpen).label(tr("mission_folder_options"))
-                    .on_click(cx.listener(|this,_,window,cx|this.open_ticket_launch(window,cx)))));
+                .child(div().text_xs().text_color(theme::muted()).child(tr("mission_origin"))).child(chooser)));
         page_frame(div().size_full().flex().flex_col().child(header)
             .child(div().flex_1().min_h_0().flex().child(controls).children(body).children(panel)))
     }
@@ -803,14 +846,15 @@ impl Hangar {
         });
         let evidence = view.item.map_or(0, |item| item.evidence.len());
         let waiting = view.waiting.map(|stage| stage.name.clone());
-        let drag=layout::TicketDrag {server:self.mission.server.clone().unwrap_or_default(),connector:self.mission.connector.clone().unwrap_or_default(),ticket:ticket.id.clone(),label:format!("{} · {}",ticket.key,ticket.title)};
+        let drag=layout::TicketDrag {server:self.mission.server.clone().unwrap_or_default(),connector:self.mission.connector.clone().unwrap_or_default(),ticket:ticket.id.clone(),card:ticket.clone(),waiting:waiting.is_some(),evidence,
+            session:view.linked.as_ref().and_then(|linked|linked.session).cloned(),review:view.review.cloned()};
         ticket_card_view(format!("mission-card-{}", ticket.id),ticket.key.clone(),ticket.title.clone(),ticket.status.name.clone(),selected,waiting.is_some(),evidence)
             .cursor_pointer().hover(|s| s.border_color(theme::accent().alpha(0.5)))
             .children(session)
             .children(view.review.map(review_line))
             .children(waiting.map(|stage| div().text_size(px(11.5)).text_color(theme::warning()).child(tr("mission_waiting_you").replace("{etapa}", &stage))))
             .on_click(cx.listener(move |this, _, window, cx| this.select_ticket(id.clone(), window, cx)))
-            .when(!self.mission_busy(),|el|el.on_drag(drag,|drag,_,_,cx|cx.new(|_|layout::TicketDragChip {label:drag.label.clone()})))
+            .when(!self.mission_busy(),|el|el.on_drag(drag,|drag,_,_,cx|cx.new(|_|layout::TicketDragChip {drag:drag.clone()})))
             .into_any_element()
     }
 
@@ -925,7 +969,7 @@ impl Hangar {
             actions = actions.child(Button::new("mission-forget").ghost().small().label(tr("mission_forget")).disabled(busy)
                 .on_click(cx.listener(|this, _, window, cx| this.forget_ticket(window, cx))));
         }
-        if tv.linked.is_some() && let Some(stage)=tv.stage {
+        if tv.linked.as_ref().is_some_and(|linked|linked.stored && linked.session.is_some()) && let Some(stage)=tv.stage {
             let (ticket,stage)=(ticket.id.clone(),stage.id.clone());
             primary=primary.child(Button::new("tickets-run-stage").outline().small().icon(IconName::Play).label(tr("mission_action_run")).disabled(busy)
                 .on_click(cx.listener(move |this,_,window,cx|this.request_ticket_action(ticket.clone(),stage.clone(),true,window,cx))));
@@ -991,6 +1035,19 @@ impl Hangar {
             None => note_box(tr("mission_session_gone").replace("{name}", name), theme::muted()),
         });
 
+        let participants=item.filter(|item|item.sessions.len()>1).map(|item| {
+            div().flex().flex_col().gap(px(4.))
+                .child(div().text_xs().text_color(theme::muted()).child(tr("mission_participants")))
+                .children(item.sessions.iter().map(|name| {
+                    let open=name.clone();
+                    let alive=name.contains("::") || self.sessions.iter().any(|session|session.name==*name
+                        && item.session_keys.get(name).is_none_or(|key|hangar_api::session::runtime_key(session.lifecycle_id.as_deref())==Some(key.as_str())));
+                    Button::new(SharedString::from(format!("ticket-participant-{name}"))).ghost().small().icon(IconName::MessageSquare).label(name.clone())
+                        .disabled(!alive)
+                        .on_click(cx.listener(move |this,_,window,cx|this.open_linked(open.clone(),window,cx)))
+                }))
+        });
+
         let review = self.render_ticket_review(&tv, cx);
         let evidence = self.render_evidence(item, cx);
         let history = item.filter(|i| !i.history.is_empty()).map(|i| render_history(i, stages));
@@ -1007,10 +1064,17 @@ impl Hangar {
                     .child(div().text_size(px(12.)).text_color(theme::muted()).child(meta)))
                 )
             .child(stage_line)
+            .child(div().flex().flex_col().gap(px(6.))
+                .child(div().text_xs().text_color(theme::muted()).child(tr("mission_repository")))
+                .child(Button::new("tickets-folder").outline().small().icon(IconName::FolderOpen)
+                    .label(item.and_then(|item|item.repository.as_deref()).unwrap_or(&tr("mission_repository_choose")).to_owned())
+                    .disabled(busy).on_click(cx.listener(|this,_,window,cx|this.open_ticket_launch(window,cx))))
+                .child(div().text_xs().text_color(theme::muted()).child(tr("mission_repository_hint"))))
             .child(actions)
             .children(self.render_ticket_receipt())
             .children(gate)
             .children(session)
+            .children(participants)
             .children(review)
             .child(evidence)
             .children(history)
@@ -1106,7 +1170,7 @@ impl Hangar {
 pub(crate) fn ticket_card_view(id: String,key: String,title: String,status: String,selected: bool,waiting: bool,evidence: usize) -> Stateful<Div> {
     div().id(SharedString::from(id)).w_full().p(px(10.)).rounded(px(10.)).border_1()
         .border_color(if selected {theme::accent()} else if waiting {theme::warning().alpha(0.6)} else {theme::border()})
-        .bg(theme::boxed()).flex().flex_col().gap(px(6.))
+        .bg(theme::boxed()).text_color(theme::text()).flex().flex_col().gap(px(6.))
         .child(div().flex().items_center().gap(px(6.))
             .child(div().font_family(theme::MONO).text_size(px(11.5)).text_color(theme::muted()).child(key))
             .child(div().flex_1())

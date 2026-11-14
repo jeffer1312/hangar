@@ -1904,6 +1904,7 @@ impl NewSession {
     /// A ação do botão do formulário, também a do Enter: retoma a conversa escolhida ou cria. Com o nome sugerido ainda
     /// chegando, a criação espera por ele em vez de o Enter se perder.
     fn submit(&mut self, cx: &mut Context<Self>) {
+        if matches!(self.purpose,SessionDialogPurpose::Tickets) {self.choose_ticket_repository(cx);return;}
         if !self.scheduled && self.target().is_some() { return self.resume(cx); }
         if self.can_create(cx) { self.create(None, cx); }
         else if self.sessions.loading && !self.creating { self.create_when_ready = true; }
@@ -2980,6 +2981,18 @@ impl NewSession {
     }
 }
 
+impl NewSession {
+    fn choose_ticket_repository(&mut self,cx: &mut Context<Self>) {
+        if self.creating {return;}
+        let Some(cwd)=self.picked.clone() else {return;};
+        self.creating=true;
+        let (tx,connection,server,dialog)=(self.link.tx.clone(),self.link.connection,self.link.api.identity(),cx.entity_id());
+        self.link.runtime.spawn(async move {
+            let _=tx.send(Envelope {connection,selection:None,payload:Payload::Tickets(super::mission::Reply::Launch {server,dialog,options:json!({"cwd":cwd})})}).await;
+        });
+    }
+}
+
 impl Render for NewSession {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.is_transfer() { return self.render_transfer(window, cx); }
@@ -2987,6 +3000,14 @@ impl Render for NewSession {
         if self.compact { return div(); }
         // Topo, margem de baixo do kit e o preenchimento do diálogo: o resto da janela, até a altura do web.
         let height = (window.viewport_size().height - px(DIALOG_TOP + 16. + 40.)).min(px(760.)).max(px(320.));
+        if matches!(self.purpose,SessionDialogPurpose::Tickets) {
+            return div().h(height).w_full().flex().flex_col().gap(px(12.))
+                .child(self.render_left(cx).w_full().flex_1().min_h_0())
+                .child(div().text_sm().text_color(theme::muted()).whitespace_normal()
+                    .child(self.picked.clone().unwrap_or_else(||tr("mission_repository_hint"))))
+                .child(Button::new("tickets-repository-save").primary().label(tr("mission_repository_save")).disabled(self.picked.is_none() || self.creating)
+                    .on_click(cx.listener(|this,_,_,cx|this.choose_ticket_repository(cx))));
+        }
         let right = match self.picked.clone() {
             _ if self.customizations.is_open() => self.render_customizations(cx),
             Some(path) => self.render_form(&path, cx),
@@ -3009,7 +3030,7 @@ impl Hangar {
 
     pub(super) fn open_ticket_launch(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(api)=self.api.clone() else {return};
-        let previous=self.mission.launch_options.clone().map(|launch|json!({"launch":launch}));
+        let previous=self.ticket_repository().map(|cwd|json!({"launch":{"cwd":cwd}}));
         self.open_launch_picker(api,previous,true,window,cx);
     }
 
@@ -3045,7 +3066,7 @@ impl Hangar {
         });
         self.new_session = Some(dialog.clone());
         let weak = cx.entity().downgrade();
-        let width = (window.viewport_size().width * 0.94).min(px(1320.));
+        let width = (window.viewport_size().width * 0.94).min(px(if tickets {760.} else {1320.}));
         window.open_dialog(cx, move |d, _, cx| {
             let weak = weak.clone();
             let busy = dialog.read(cx).creating;

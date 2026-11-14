@@ -7,6 +7,45 @@ use serde_json::{Value,json};
 use tokio::io::{AsyncBufReadExt,AsyncWriteExt,BufReader};
 use tower::ServiceExt;
 
+#[tokio::test]
+async fn ticket_group_is_projected_from_real_sidecars_and_members_can_report() {
+    use hangar_server::groups::{service::{GroupService,JoinOwned},store::PairDir,orq::PythonOrq};
+    let temp=tempfile::tempdir().unwrap();
+    let cfg=Config {listen:"127.0.0.1:0".parse().unwrap(),upstream:"127.0.0.1:9".parse().unwrap(),internal_secret:"test".into(),auth_token:"owner-ticket".into(),log_path:None,trusted:hangar_server::auth::TrustedHosts::parse("127.0.0.1")};
+    let mut state=AppState::new(cfg);
+    state.hangar_dir=temp.path().join(".hangar");
+    state.origins_home=temp.path().to_owned();
+    state.mission=Arc::new(hangar_mission::Store::new(temp.path().join("mission")));
+    let groups=Arc::new(GroupService::new(PairDir::new(temp.path().join("pair"),temp.path().join("archive")),
+        Arc::new(PythonOrq::from_state(&state)),"test".into()));
+    state.groups=Some(groups.clone());
+    for (name,key) in [("coordinator","a".repeat(32)),("backend","b".repeat(32))] {
+        let folder=temp.path().join(".hangar/claude-headless");std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join(format!("{name}.json")),json!({"name":name,"key":key,"cwd":temp.path(),"session_id":format!("sid-{name}")}).to_string()).unwrap();
+    }
+    state.mission.link_owner("help","T-1",hangar_mission::store::Link {key:"T-1".into(),title:"Ticket compartilhado".into(),url:"https://example.invalid/1".into(),session:"coordinator".into()},Some(&"a".repeat(32)),&[]).unwrap();
+    groups.join(JoinOwned {name:"coordinator".into(),others:vec!["backend".into()],task:"T-1".into(),replace_task:false,harness:Default::default(),orq:false,outside:Default::default(),linked:false}).await.unwrap();
+    let state=Arc::new(state);
+    let app=hangar_server::routes::router(state.clone());
+    let request=|method,path,body:Value| {
+        let mut request=Request::builder().method(method).uri(path).header("authorization","Bearer owner-ticket").header("content-type","application/json").body(Body::from(body.to_string())).unwrap();
+        request.extensions_mut().insert(ConnectInfo(std::net::SocketAddr::from(([127,0,0,1],40000))));request
+    };
+    let response=app.clone().oneshot(request("GET","/api/mission",Value::Null)).await.unwrap();
+    assert_eq!(response.status(),200);
+    let body:Value=serde_json::from_slice(&to_bytes(response.into_body(),1024*1024).await.unwrap()).unwrap();
+    assert_eq!(body["items"][0]["sessions"],json!(["backend","coordinator"]));
+    let response=app.clone().oneshot(request("POST","/api/mission/report",json!({"session":"backend","key":"b".repeat(32),"stage":"execucao","note":"Backend concluído"}))).await.unwrap();
+    assert_eq!(response.status(),200);
+    let item=state.mission.snapshot().unwrap().items.remove(0);
+    assert_eq!(item.session.as_deref(),Some("coordinator"));
+    assert_eq!(item.stage.as_deref(),Some("execucao"));
+    assert_eq!(item.history.last().unwrap().by,"backend");
+    groups.leave("backend").await.unwrap();
+    let response=app.oneshot(request("POST","/api/mission/report",json!({"session":"backend","key":"b".repeat(32),"note":"Depois de sair"}))).await.unwrap();
+    assert_eq!(response.status(),200);
+}
+
 #[tokio::test(flavor="multi_thread")]
 async fn board_action_uses_the_bound_runtime_input_and_reports_an_uncertain_ack() {
     let temp=tempfile::tempdir().unwrap();
@@ -40,7 +79,7 @@ async fn board_action_uses_the_bound_runtime_input_and_reports_an_uncertain_ack(
         // estavel: somente a leitura do SO é substituída pelos PIDs do processo externo da prova.
         .with_processes(Arc::new(crate::sink::RecipeProcesses("sid-1"))));
     registry.bind_lifecycle();
-    registry.open(RuntimeTarget {key:"life-1".into(),generation:1,name:"ticket-session".into(),provider:"claude".into(),
+    registry.open(RuntimeTarget {key:"11111111111111111111111111111111".into(),generation:1,name:"ticket-session".into(),provider:"claude".into(),
         metadata:json!({"name":"ticket-session","headless":true,"session_id":"sid-1","initialized":true}),
         binding:CanoBinding {pid:42,escuta:format!("tcp:{address}"),token:"secret-test".into(),versao:2},
         lease_path:temp.path().join("session.lock"),state_path:temp.path().join("state.json"),projection_dir:temp.path().join("projection"),
@@ -54,7 +93,7 @@ async fn board_action_uses_the_bound_runtime_input_and_reports_an_uncertain_ack(
     let mut stages=state.mission.snapshot().unwrap().stages;
     stages[0].prompt=Some("Planeje este ticket.".into());
     state.mission.set_stages(stages).unwrap();
-    state.mission.link("js-demo","c0ffee-01",hangar_mission::store::Link {key:"OPS/7".into(),title:"Impressora".into(),url:"https://example.invalid/7".into(),session:"ticket-session".into()}).unwrap();
+    state.mission.link_owner("js-demo","c0ffee-01",hangar_mission::store::Link {key:"OPS/7".into(),title:"Impressora".into(),url:"https://example.invalid/7".into(),session:"ticket-session".into()},Some("11111111111111111111111111111111"),&[]).unwrap();
     state.connectors=hangar_connectors::Host::new(hangar_connectors::registry::Registry::new(temp.path().join("connectors.json")),Default::default());
     let script=std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/connectors/work_tracking.mjs");
     state.connectors.add(hangar_connectors::manifest::Manifest::parse(json!({"manifest_version":1,"id":"js-demo","name":"Demo","version":"1","protocol_version":1,
@@ -77,11 +116,11 @@ async fn board_action_uses_the_bound_runtime_input_and_reports_an_uncertain_ack(
     assert_eq!(attempt.code.as_deref(),Some("ticket_action_uncertain"));
     let item=state.mission.snapshot().unwrap().items.remove(0);
     let delivered=tokio::time::timeout(std::time::Duration::from_secs(30),text).await.unwrap().unwrap();
-    registry.close("life-1",1).await.unwrap();
+    registry.close("11111111111111111111111111111111",1).await.unwrap();
     state.connectors.shutdown().await;
     tokio::time::timeout(std::time::Duration::from_secs(30),cano).await.unwrap().unwrap();
     stop.send(()).unwrap();policy_task.await.unwrap();
     assert!(delivered.contains("Planeje este ticket."));
-    assert_eq!(item.session_key.as_deref(),Some("life-1"));
+    assert_eq!(item.session_key.as_deref(),Some("11111111111111111111111111111111"));
     assert!(item.stage.is_none(),"o resultado incerto não confirma a mudança de etapa");
 }

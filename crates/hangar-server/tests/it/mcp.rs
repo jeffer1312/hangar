@@ -17,7 +17,7 @@ use serde_json::{Value, json};
 const PYTHON_CATALOG: &str = include_str!("fixtures/mcp_catalog_python.json");
 const PYTHON_INSTRUCTIONS: &str = "Hangar: sessões vizinhas e o navegador embutido desta sessão. Mostrar algo que você montou ao usuário (desenho, mock de tela, comparação, gráfico, tabela, diagrama): html_render, sem esperar pedido; imagem por caminho só para print real de tela. Ver ou testar uma página: browser_open e depois browser (um verbo) ou browser_batch (vários já conhecidos); tela desconhecida com várias ações: browser_goal, quando a sessão tem o Jev. Falar com outra sessão: sessions, send, group, pair; abrir ou fechar: new_session, close_session.";
 
-struct Scene { addr: SocketAddr, python: Arc<fake::Fake>, home: PathBuf, sink: crate::sink::Sink, _dir: tempfile::TempDir }
+struct Scene { addr: SocketAddr, python: Arc<fake::Fake>, home: PathBuf, sink: crate::sink::Sink, state: Arc<AppState>, _dir: tempfile::TempDir }
 
 /// Sessões `s0` (pane `%0`) e `s1` (`%1`) com conversa; `beta` com os panes `%1` (repetido, como no
 /// psmux) e `%7`; `sem-term` sem terminal, de chave `k123`; o Python falso atrás.
@@ -32,13 +32,17 @@ async fn scene_full(groups: bool, peers: Option<hangar_server::groups::peers::Pe
 async fn scene_owned() -> Scene { scene_built(true, None, true).await }
 
 async fn scene_built(groups: bool, peers: Option<hangar_server::groups::peers::PeerClient>, owned: bool) -> Scene {
+    scene_named(groups,peers,owned,"casa").await
+}
+
+async fn scene_named(groups: bool, peers: Option<hangar_server::groups::peers::PeerClient>, owned: bool, server: &str) -> Scene {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     list_support::sessions(root, 2);
     let (w0, w1) = (root.join("w0"), root.join("w1"));
     let script = root.join("tmux");
     crate::write_executable(&script, format!(
-        "#!/bin/sh\n[ \"$1\" = show-environment ] && [ \"${{3#=}}\" = s1 ] && {{ printf 'CP_SESSION_KEY=fedcba9876543210fedcba9876543210\\n'; exit 0; }}\n[ \"$1\" = show-environment ] && {{ [ \"${{3#=}}\" = s0 ] || [ \"${{3#=}}\" = beta ]; }} && {{ printf 'CP_SESSION_KEY=dddddddddddddddddddddddddddddddd\\n'; exit 0; }}\n[ \"$1\" = list-panes ] || {{ printf 'ok\\n'; exit 0; }}\nprintf 's0\\t1\\t\\t{}\\t%%0\\t\\t\\t\\t0\\t0\\ns1\\t1\\t\\t{}\\t%%1\\t\\t\\t\\t0\\t0\\nbeta\\t1\\t\\t{}\\t%%1\\t\\t\\t\\t0\\t0\\nbeta\\t1\\t\\t{}\\t%%7\\t\\t\\t\\t0\\t1\\n'\n",
+        "#!/bin/sh\ncase \"$1:$4\" in list-panes:*CP_SESSION_KEY*) printf 's0\\tdddddddddddddddddddddddddddddddd\\ns1\\tfedcba9876543210fedcba9876543210\\nbeta\\tdddddddddddddddddddddddddddddddd\\n'; exit 0;; esac\n[ \"$1\" = show-environment ] && [ \"${{3#=}}\" = s1 ] && {{ printf 'CP_SESSION_KEY=fedcba9876543210fedcba9876543210\\n'; exit 0; }}\n[ \"$1\" = show-environment ] && {{ [ \"${{3#=}}\" = s0 ] || [ \"${{3#=}}\" = beta ]; }} && {{ printf 'CP_SESSION_KEY=dddddddddddddddddddddddddddddddd\\n'; exit 0; }}\n[ \"$1\" = list-panes ] || {{ printf 'ok\\n'; exit 0; }}\nprintf 's0\\t1\\t\\t{}\\t%%0\\t\\t\\t\\t0\\t0\\ns1\\t1\\t\\t{}\\t%%1\\t\\t\\t\\t0\\t0\\nbeta\\t1\\t\\t{}\\t%%1\\t\\t\\t\\t0\\t0\\nbeta\\t1\\t\\t{}\\t%%7\\t\\t\\t\\t0\\t1\\n'\n",
         w0.display(), w1.display(), w1.display(), w1.display()));
     let home = root.join("home");
     write_json(&home.join(".hangar/claude-headless/sem-term.json"), json!({"name": "sem-term", "key": "k123", "session_id": "s"}));
@@ -47,6 +51,7 @@ async fn scene_built(groups: bool, peers: Option<hangar_server::groups::peers::P
         "omp_agent": home.join(".omp/agent"), "kimi_home": home.join(".kimi-code")}).to_string());
     let (python, upstream) = fake::spawn_fake().await;
     let mut state = AppState::new(fake::config(upstream, "127.0.0.1"));
+    state.server_id=server.to_owned();
     let sink = crate::sink::Sink::default();
     if owned {
         let runtime = Arc::new(crate::sink::registry().await);
@@ -58,21 +63,24 @@ async fn scene_built(groups: bool, peers: Option<hangar_server::groups::peers::P
         capture_program: script.into_os_string(), procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs },
         FactsClient::new(upstream, SECRET.into())));
     state.list = list.clone();
+    if let Some(runtime)=state.state.runtime.get() {list.set_runtime(runtime.clone());list.set_plugin_runtime(runtime.clone());}
     state.side.locate = Arc::new(hangar_server::locate::ListLocate { list });
     state.pages = Arc::new(hangar_server::pages::store::Store::new(root.join("paginas")));
     state.chromium = || None;
     state.mission = Arc::new(hangar_mission::Store::new(root.join("mission")));
+    state.origins_home = home.clone();
     if let Some(peers) = peers { state.peers = Arc::new(peers); }
     if groups {
         use hangar_server::groups::{orq::PythonOrq, service::GroupService, store::PairDir};
         let pair = PairDir::new(home.join(".claude/.hangar-pair"), root.join("arquivo"));
-        state.groups = Some(Arc::new(GroupService::new(pair, Arc::new(PythonOrq::from_state(&state)), "casa".into())));
+        state.groups = Some(Arc::new(GroupService::new(pair, Arc::new(PythonOrq::from_state(&state)), server.into())));
     }
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let app = router(Arc::new(state)).into_make_service_with_connect_info::<SocketAddr>();
+    let state=Arc::new(state);
+    let app = router(state.clone()).into_make_service_with_connect_info::<SocketAddr>();
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    Scene { addr, python, home, sink, _dir: dir }
+    Scene { addr, python, home, sink, state, _dir: dir }
 }
 
 fn write_json(path: &Path, value: Value) {
@@ -598,7 +606,7 @@ async fn browser_open_with_a_dead_desktop_server_fails_at_once() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn mission_reads_and_reports_as_the_linked_caller() {
-    let s = scene().await;
+    let s = scene_owned().await;
     let mut mcp = Mcp::open(s.addr, &[("x-hangar-pane", "%7")]).await;
     let unlinked = mcp.call("mission", json!({})).await;
     assert!(failed(&unlinked) && first_text(&unlinked).starts_with("mission_session_not_linked"), "{unlinked}");
@@ -607,11 +615,12 @@ async fn mission_reads_and_reports_as_the_linked_caller() {
         .json(&json!({"key": "PM-7", "title": "Tela", "url": "https://help.invalid/pm/PM-7", "session": "beta"})).send().await.unwrap();
     assert_eq!(linked.status(), 200);
     // O aviso do vínculo entra pela rota de entrada da sessão, numa tarefa à parte.
-    for _ in 0..100 {
-        if s.python.hits_to("/api/sessions/beta/input") > 0 { break; }
+    let until=std::time::Instant::now()+Duration::from_secs(30);
+    while s.sink.count("beta")==0 && std::time::Instant::now()<until {
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
-    assert_eq!(s.python.hits_to("/api/sessions/beta/input"), 1, "a sessão ligada recebe o aviso da tool");
+    assert_eq!(s.sink.count("beta"),1,"a vida associada recebe o aviso pela entrada real");
+    assert_eq!(s.python.hits_to("/api/sessions/beta/input"),0);
     let read = mcp.call("mission", json!({})).await;
     assert!(!failed(&read), "{read}");
     assert_eq!(read["structuredContent"]["item"]["key"], "PM-7");
@@ -627,6 +636,41 @@ async fn mission_reads_and_reports_as_the_linked_caller() {
     let gated = mcp.call("mission", json!({"etapa": "entrega"})).await;
     assert!(failed(&gated) && first_text(&gated).starts_with("mission_gate_pending"), "{gated}");
     assert_eq!(s.python.hits_to("/api/mission/report"), 0, "o Mission Control não vai ao Python");
+}
+
+#[tokio::test(flavor="multi_thread")]
+async fn mission_follows_a_federated_group_and_copies_remote_evidence_to_its_owner() {
+    use hangar_server::groups::peers::{PeerClient,PeerBook};
+    let links=tempfile::tempdir().unwrap();
+    let (owner_book,worker_book)=(links.path().join("owner.json"),links.path().join("worker.json"));
+    let owner=scene_named(true,Some(PeerClient::new(PeerBook::new(Some(owner_book.clone())))),false,"casa").await;
+    let worker=scene_named(true,Some(PeerClient::new(PeerBook::new(Some(worker_book.clone())))),true,"lab").await;
+    write_json(&owner_book,json!({"lab":{"base_url":format!("http://{}",worker.addr),"token":OWNER}}));
+    write_json(&worker_book,json!({"casa":{"base_url":format!("http://{}",owner.addr),"token":OWNER}}));
+    owner.state.mission.link_owner("help","T-1",hangar_mission::store::Link {key:"T-1".into(),title:"Trabalho em grupo".into(),url:"https://example.invalid/1".into(),session:"s0".into()},Some("dddddddddddddddddddddddddddddddd"),&[]).unwrap();
+    let response=client().post(format!("http://{}/api/sessions/s0/pair",owner.addr)).bearer_auth(OWNER)
+        .json(&json!({"peers":["lab::s1","lab::beta"],"task":"T-1"})).send().await.unwrap();
+    let status=response.status();let body=response.text().await.unwrap();assert_eq!(status,200,"{body}");
+    let mut mcp=Mcp::open(worker.addr,&[("x-hangar-session","s1")]).await;
+    let read=mcp.call("mission",json!({})).await;
+    assert!(!failed(&read),"{read}");
+    assert_eq!(read["structuredContent"]["item"]["key"],"T-1");
+    let source=worker.home.join("evidence.txt");
+    std::fs::write(&source,"prova da outra máquina".as_bytes()).unwrap();
+    let reported=mcp.call("mission",json!({"etapa":"execucao","nota":"Módulo concluído","evidencias":[{"caminho":source,"legenda":"Resultado remoto"}]})).await;
+    assert!(!failed(&reported),"{reported}");
+    let item=owner.state.mission.snapshot().unwrap().items.remove(0);
+    assert_eq!(item.stage.as_deref(),Some("execucao"));
+    assert_eq!(item.evidence[0].by,"lab::s1");
+    let (file,_)=owner.state.mission.evidence_file(&item.evidence[0].id).unwrap();
+    assert_eq!(std::fs::read(file).unwrap(),"prova da outra máquina".as_bytes());
+    assert!(worker.state.mission.snapshot().unwrap().items.is_empty(),"o estado do ticket tem uma máquina dona");
+    let response=client().delete(format!("http://{}/api/sessions/s0/pair",owner.addr)).bearer_auth(OWNER).send().await.unwrap();
+    let status=response.status();let body=response.text().await.unwrap();assert_eq!(status,200,"{body}");
+    let final_note=mcp.call("mission",json!({"nota":"Nota depois de sair a coordenadora"})).await;
+    let life=worker.state.list.snapshot().await.unwrap().rows.iter().find(|row|row.name=="s1").and_then(|row|row.lifecycle_id.clone());
+    let known=life.as_ref().map(|life|worker.state.mission.remote_owner("s1",life).unwrap());
+    assert!(!failed(&final_note),"relato={final_note:?}; vida={life:?}; rota={known:?}");
 }
 
 #[tokio::test(flavor = "multi_thread")]

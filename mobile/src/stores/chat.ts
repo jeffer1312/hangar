@@ -130,6 +130,8 @@ export function filaCount(state: Pick<ChatState, 'events' | 'pending'>, provider
 }
 
 export interface ChatApi {
+  resetConversation: () => void;
+  setIdentity: (identity: { jsonl?: string | null; lifecycle_id?: string | null; provider?: string | null }) => void;
   use: UseBoundStore<StoreApi<ChatState>>;
   retain: () => void;
   release: () => void;
@@ -213,6 +215,7 @@ function criarChatStore(serverId: string, name: string): ChatApi {
   let retryDelay = SSE_RETRY_MIN_MS;
   let alive = false;
   let refs = 0;
+  let identity: { jsonl?: string | null; lifecycle_id?: string | null; provider?: string | null } | undefined;
   let releaseTimer: ReturnType<typeof setTimeout> | null = null;
   function teardown() {
     releaseTimer = null;
@@ -384,7 +387,7 @@ function criarChatStore(serverId: string, name: string): ChatApi {
       const merged = mergeHistoryWithLiveRetiring(tail, useChatStore.getState().events,
         { cachedEvents, removedIds: retiredQueuedIds, retireQueuedFromCurrent: true });
       for (const id of merged.retired) retiredQueuedIds.add(id);
-      aplicarEvents(merged.events);
+      aplicarEvents(tail.length ? merged.events : useChatStore.getState().events.filter(event => !cachedEvents.has(event)));
       baseLoaded = true;
       useChatStore.setState({ error: '', olderFailed: '' });
       // Histórico antigo NÃO vem automático (diferente da PWA): entra sob demanda no
@@ -413,7 +416,12 @@ function criarChatStore(serverId: string, name: string): ChatApi {
       if (g !== histGen || !alive || r === 'igual') return;
       etag = r.etag;
       const atual = useChatStore.getState().events;
-      if (!r.eventos.length) return;
+      if (!r.eventos.length) {
+        lastEventId = null;
+        aplicarEvents(atual.filter(event => !cachedEvents.has(event)));
+        useChatStore.setState({ olderFailed: '' });
+        return;
+      }
       if (!atual.length || !hasSeam(r.eventos, atual)) {
         // Lista trocada pela cauda: o cursor antigo reenviaria o buraco DEPOIS dela, fora de ordem.
         lastEventId = null;
@@ -563,7 +571,18 @@ function criarChatStore(serverId: string, name: string): ChatApi {
     es = null;
     if (!target) return;
 
-    es = openEventStreamForServer(target, name, undefined, lastEventId);
+    const opened = openEventStreamForServer(target, name, undefined, lastEventId);
+    // O adapter pode entregar um quadro já enfileirado depois do close.
+    es = {
+      addEventListener: (type, listener) => opened.addEventListener(type, event => {
+        if (es === source && alive) listener(event);
+      }),
+      close: () => opened.close(),
+      removeEventListener: (type, listener) => opened.removeEventListener(type, listener),
+      get readyState() { return opened.readyState; },
+      set onerror(listener: EventSourceLike['onerror']) { opened.onerror = listener ? event => { if (es === source && alive) listener(event); } : null; },
+      set onopen(listener: EventSourceLike['onopen']) { opened.onopen = listener ? event => { if (es === source && alive) listener(event); } : null; },
+    };
     const source = es;
     let queueSeen = false;
     let pluginUiRaw: unknown = null;
@@ -898,8 +917,40 @@ function criarChatStore(serverId: string, name: string): ChatApi {
     return currentQueuePanel(s.queuePanel, s.events).entries;
   };
 
+  function resetConversation() {
+    identity = undefined;
+    histGen++;
+    histAbort?.abort();
+    es?.close();
+    es = null;
+    clearTimeout(retryTimer);
+    clearTimeout(queueAbsentTimer);
+    clearTimeout(pensamentoTimer);
+    clearTimeout(ferramentaTimer);
+    cancelPreviewDrop();
+    dropQueuedPreview();
+    lastEventId = null;
+    etag = null;
+    baseLoaded = false;
+    resetAt = Date.now();
+    retiredQueuedIds.clear();
+    prevState = null;
+    previewMd = false;
+    previewFull = false;
+    publishEvents([], 'rebuild', { ...useChatStore.getInitialState(), eventsRevision: useChatStore.getState().eventsRevision + 1 });
+    sincronizar();
+  }
+
   return {
     use: useChatStore,
+    resetConversation,
+    setIdentity(next) {
+      if (identity && (identity.jsonl && next.jsonl !== identity.jsonl
+          || identity.lifecycle_id && next.lifecycle_id && next.lifecycle_id !== identity.lifecycle_id
+          || identity.provider && next.provider && next.provider !== identity.provider)) resetConversation();
+      else if (!identity?.jsonl && next.jsonl && baseLoaded && alive && foreground) void loadHistory();
+      identity = next;
+    },
     historyLoaded: () => baseLoaded,
     startQueueEdit(id: string, draft: string): string {
       const entry = queueEntries().find((e) => e.id === id);
@@ -1175,15 +1226,33 @@ export async function submitConversationDraft(serverId: string, name: string, te
 
 // Um store por sessão, registry global — remonta só quando todos os consumers soltam.
 const chats = new Map<string, ChatApi>();
+type ChatIdentity = Parameters<ChatApi['setIdentity']>[0];
+const chatIdentities = new Map<string, ChatIdentity>();
 
 export function chatStore(serverId: string, name: string): ChatApi {
   const chave = `${serverId}::${name}`;
   let api = chats.get(chave);
   if (!api) {
     api = criarChatStore(serverId, name);
+    const identity = chatIdentities.get(chave);
+    if (identity) api.setIdentity(identity);
     chats.set(chave, api);
   }
   return api;
+}
+
+/** A criação confirmada começa outra vida, mesmo quando reaproveita o nome. */
+export function resetCreatedChat(serverId: string, name: string): void {
+  chats.get(`${serverId}::${name}`)?.resetConversation();
+}
+
+export function syncChatTranscripts(rows: readonly { serverId: string; name: string; jsonl?: string | null; lifecycle_id?: string | null; provider?: string | null }[]): void {
+  for (const row of rows) {
+    const key = `${row.serverId}::${row.name}`;
+    const identity = { jsonl: row.jsonl ?? null, lifecycle_id: row.lifecycle_id, provider: row.provider };
+    chatIdentities.set(key, identity);
+    chats.get(key)?.setIdentity(identity);
+  }
 }
 
 export function setChatsForeground(active: boolean): void {
@@ -1196,6 +1265,7 @@ export function _resetChatsForTests(graceMs = 0): void {
   releaseGraceMs = 0;
   for (const api of chats.values()) api.release();
   chats.clear();
+  chatIdentities.clear();
   foregroundAtual = true;
   releaseGraceMs = graceMs;
 }

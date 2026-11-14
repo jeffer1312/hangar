@@ -11,9 +11,17 @@ use std::sync::{Arc, Mutex};
 use tower::ServiceExt;
 
 #[derive(Default)]
-struct Notices(Mutex<Vec<(String, String)>>);
+struct Notices(Mutex<Vec<(String, String)>>, Mutex<Vec<Vec<String>>>, Mutex<std::collections::BTreeMap<String,String>>);
 
 impl hangar_mission::http::Notify for Notices {
+    fn identity(&self,session: String) -> std::pin::Pin<Box<dyn std::future::Future<Output=Result<Option<String>,hangar_mission::store::Error>> + Send>> {
+        let key=self.2.lock().unwrap().get(&session).cloned();Box::pin(async move {Ok(key)})
+    }
+    fn groups(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output=Result<Vec<hangar_mission::model::Group>,hangar_mission::store::Error>> + Send>> {
+        let keys=self.2.lock().unwrap().clone();
+        let groups=self.1.lock().unwrap().iter().enumerate().map(|(index,members)|hangar_mission::model::Group {id:format!("g{index}"),members:members.clone(),keys:keys.clone()}).collect();
+        Box::pin(async move {Ok(groups)})
+    }
     fn send(&self, session: String, text: String) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
         self.0.lock().unwrap().push((session, text));
         Box::pin(async {})
@@ -22,6 +30,118 @@ impl hangar_mission::http::Notify for Notices {
 
 const TOKEN: &str = "dono-da-prova";
 const ITEM: &str = "/api/mission/items/help/PM%3A1%2F2";
+
+#[tokio::test]
+async fn group_members_share_the_ticket_and_reports_keep_the_real_author() {
+    let bench=Bench::new();
+    *bench.notices.2.lock().unwrap()=[("coordinator".into(),"coord-life".into()),("backend".into(),"backend-life".into()),("frontend".into(),"frontend-life".into())].into();
+    bench.link("coordinator").await;
+    *bench.notices.1.lock().unwrap()=vec![vec!["coordinator".into(),"backend".into()]];
+    let (status,snapshot)=bench.send("GET","/api/mission",None).await;
+    assert_eq!(status,StatusCode::OK);
+    assert_eq!(snapshot["items"][0]["sessions"],json!(["backend","coordinator"]));
+    let (status,saved)=bench.send("PATCH",ITEM,Some(json!({"action":"repository","path":"/projects/server","key":"PM-1","title":"Imprimir","url":"https://help.invalid/PM-1"}))).await;
+    assert_eq!(status,StatusCode::OK);
+    assert_eq!(saved["item"]["sessions"],json!(["backend","coordinator"]),"salvar o repositório conserva participantes na resposta do PATCH");
+    let (status,reply)=bench.send("POST","/api/mission/report",Some(json!({"session":"backend","key":"backend-life","stage":"execucao","note":"Servidor implementado"}))).await;
+    assert_eq!(status,StatusCode::OK,"{reply}");
+    assert_eq!(reply["item"]["session"],"coordinator");
+    assert_eq!(reply["item"]["history"].as_array().unwrap().last().unwrap()["by"],"backend");
+    bench.notices.1.lock().unwrap()[0].push("frontend".into());
+    let (status,_)=bench.send("POST","/api/mission/report",Some(json!({"session":"frontend","key":"frontend-life","note":"Interface implementada"}))).await;
+    assert_eq!(status,StatusCode::OK,"um membro criado depois também participa");
+    bench.notices.1.lock().unwrap().clear();
+    let (status,_)=bench.send("POST","/api/mission/report",Some(json!({"session":"frontend","key":"frontend-life","note":"Já saiu"}))).await;
+    assert_eq!(status,StatusCode::OK,"sair do grupo conserva o trabalho associado");
+}
+
+#[tokio::test]
+async fn repository_is_saved_on_its_ticket_before_any_session_exists() {
+    let bench=Bench::new();
+    let body=json!({"action":"repository","path":"/projects/server","key":"PM-1","title":"Imprimir","url":"https://help.invalid/PM-1"});
+    let (status,reply)=bench.send("PATCH",ITEM,Some(body)).await;
+    assert_eq!(status,StatusCode::OK,"{reply}");
+    assert!(reply["item"]["session"].is_null());
+    bench.link("coordinator").await;
+    let (_,snapshot)=bench.send("GET","/api/mission",None).await;
+    assert_eq!(snapshot["items"][0]["repository"],"/projects/server");
+    assert!(bench.notices.0.lock().unwrap().iter().all(|(_,text)|!text.contains("/projects/server")),"salvar a pasta não envia ação");
+}
+
+#[tokio::test]
+async fn participant_identity_survives_the_coordinator_and_rejects_a_reused_name() {
+    let bench=Bench::new();
+    let (coordinator,backend,recreated)=("a".repeat(32),"b".repeat(32),"c".repeat(32));
+    *bench.notices.1.lock().unwrap()=vec![vec!["coordinator".into(),"backend".into()]];
+    *bench.notices.2.lock().unwrap()=[("coordinator".into(),coordinator),("backend".into(),backend.clone())].into();
+    bench.link("coordinator").await;
+    let uri=format!("/api/mission/session?session=backend&key={backend}&group_id=g0");
+    assert_eq!(bench.send("GET",&uri,None).await.0,StatusCode::OK);
+    *bench.notices.1.lock().unwrap()=vec![vec!["backend".into()]];
+    assert_eq!(bench.send("GET",&uri,None).await.0,StatusCode::OK,"o vínculo permanece sem a coordenadora");
+    bench.notices.2.lock().unwrap().insert("coordinator".into(),recreated.clone());
+    bench.notices.1.lock().unwrap().push(vec!["coordinator".into(),"unrelated".into()]);
+    assert_eq!(bench.send("GET",&format!("/api/mission/session?session=coordinator&key={recreated}&group_id=g1"),None).await.0,StatusCode::NOT_FOUND);
+    let (_,snapshot)=bench.send("GET","/api/mission",None).await;
+    assert!(!snapshot["items"][0]["sessions"].as_array().unwrap().contains(&json!("unrelated")));
+    assert_eq!(bench.send("PATCH",ITEM,Some(json!({"action":"stage","stage":"validacao"}))).await.0,StatusCode::OK);
+    assert_eq!(bench.send("PATCH",ITEM,Some(json!({"action":"approve","stage":"validacao"}))).await.0,StatusCode::OK);
+    let (status,_) = bench.send("PATCH",ITEM,Some(json!({"action":"delivered"}))).await;
+    assert_eq!(status,StatusCode::OK);
+    let (status,reply)=bench.send("POST","/api/mission/report",Some(json!({"session":"backend","key":backend,"note":"Nota final depois da entrega"}))).await;
+    assert_eq!(status,StatusCode::OK,"{reply}");
+}
+
+#[tokio::test]
+async fn manual_adoption_captures_life_before_the_first_group() {
+    let bench=Bench::new();
+    bench.notices.2.lock().unwrap().insert("coordinator".into(),"original-life".into());
+    let linked=bench.link("coordinator").await;
+    assert_eq!(linked["session_key"],"original-life");
+    bench.notices.2.lock().unwrap().insert("coordinator".into(),"new-life".into());
+    *bench.notices.1.lock().unwrap()=vec![vec!["coordinator".into(),"unrelated".into()]];
+    assert_eq!(bench.send("GET","/api/mission/session?session=coordinator&key=new-life&group_id=g0",None).await.0,StatusCode::NOT_FOUND);
+    let (_,snapshot)=bench.send("GET","/api/mission",None).await;
+    assert!(!snapshot["items"][0]["sessions"].as_array().unwrap().contains(&json!("unrelated")));
+}
+
+#[tokio::test]
+async fn explicit_reassignment_moves_the_group_and_a_recreated_worker_can_rejoin() {
+    let bench=Bench::new();
+    *bench.notices.2.lock().unwrap()=[("coordinator".into(),"coord-life".into()),("backend".into(),"worker-life".into())].into();
+    *bench.notices.1.lock().unwrap()=vec![vec!["coordinator".into(),"backend".into()]];
+    bench.link("coordinator").await;
+    let uri="/api/mission/items/help/T-2";
+    let body=json!({"key":"T-2","title":"Outro trabalho","url":"https://example.invalid/2","session":"backend","session_key":"worker-life"});
+    assert_eq!(bench.send("PUT",uri,Some(body.clone())).await.0,StatusCode::OK);
+    let (_,snapshot)=bench.send("GET","/api/mission",None).await;
+    let previous:hangar_mission::model::Item=serde_json::from_value(snapshot["items"][0].clone()).unwrap();
+    assert!(previous.sessions.is_empty());assert!(previous.group_ids.is_empty());assert!(previous.session.is_none());
+    let (status,read)=bench.send("GET","/api/mission/session?session=coordinator&key=coord-life&group_id=g0",None).await;
+    assert_eq!(status,StatusCode::OK);assert_eq!(read["item"]["key"],"T-2");
+    bench.notices.2.lock().unwrap().insert("backend".into(),"worker-recreated".into());
+    assert_eq!(bench.send("GET","/api/mission/session?session=backend&key=worker-recreated&group_id=g0",None).await.0,StatusCode::OK);
+    assert_eq!(bench.send("GET","/api/mission/session?session=backend&key=worker-life&group_id=g0",None).await.0,StatusCode::NOT_FOUND);
+    assert_eq!(bench.send("PUT",uri,Some(body)).await.0,StatusCode::CONFLICT,"a escolha antiga não associa outra vida");
+}
+
+#[test]
+fn delayed_report_cannot_undo_a_stage_change_or_restore_an_old_association() {
+    use hangar_mission::store::{Link, OwnerChange, Report, ReportBinding};
+    let dir=tempfile::tempdir().unwrap();
+    let store=Store::new(dir.path().join("mission"));
+    let link=||Link {key:"T-1".into(),title:"Trabalho".into(),url:"https://example.invalid/1".into(),session:"worker".into()};
+    let (item,_)=store.link_owner("help","1",link(),Some("life-1"),&[]).unwrap();
+    let revision=item.history.len();
+    store.owner_change("help","1",OwnerChange::Stage {stage:"execucao".into()}).unwrap();
+    let report=||Report {stage:Some("planejamento".into()),note:Some("Relato atrasado".into()),evidence:Vec::new()};
+    let binding=||Some(ReportBinding {session_key:Some("life-1".into()),history_revision:revision});
+    assert_eq!(store.report_imported("help","1","worker",report(),Vec::new(),binding()).unwrap_err().code,"ticket_stage_changed");
+    let note=Report {stage:None,note:Some("Nota complementar".into()),evidence:Vec::new()};
+    assert_eq!(store.report_imported("help","1","worker",note,Vec::new(),binding()).unwrap().stage.as_deref(),Some("execucao"));
+    store.link_owner("help","2",link(),Some("life-1"),&[]).unwrap();
+    assert_eq!(store.report_imported("help","1","worker",report(),Vec::new(),binding()).unwrap_err().code,"ticket_association_changed");
+}
 
 struct Bench { dir: tempfile::TempDir, app: axum::Router, notices: Arc<Notices> }
 
@@ -168,7 +288,7 @@ async fn stage_workflow_migrates_the_legacy_file_without_losing_ticket_history()
     let (status, _) = bench.send("PUT", "/api/mission/stages", Some(json!({"stages": stages}))).await;
     assert_eq!(status, StatusCode::OK);
     let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-    assert_eq!(saved["version"], json!(2), "o marcador impede que um servidor antigo descarte campos novos");
+    assert_eq!(saved["version"], json!(3), "o marcador impede que um servidor antigo descarte campos novos");
     let (_, snapshot) = bench.send("GET", "/api/mission", None).await;
     let item = snapshot["items"].as_array().unwrap().iter().find(|i| i["session"] == "pm-1").unwrap();
     assert_eq!(item["key"], json!("PM-1"));

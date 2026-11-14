@@ -591,20 +591,80 @@ impl Tools {
     /// Sem nada a informar, lê; com etapa, nota ou evidências, relata. As duas pelas rotas de Tickets.
     async fn mission(&self, headers: &HeaderMap, a: Mission) -> Outcome {
         let me = self.me(headers, &a.sessao).await?;
-        let evidence = a.evidencias;
-        if a.etapa.is_none() && a.nota.is_none() && evidence.is_empty() {
-            let (status, value) = self.route(Method::GET, "/api/mission", None).await;
-            if !(200..300).contains(&status) { return Err(coded(status, &value)); }
-            let item = value["items"].as_array().and_then(|items| items.iter().find(|i| i["session"] == me.as_str())).cloned();
-            let Some(item) = item else {
-                return Err("mission_session_not_linked: esta sessão não está ligada a um ticket".into());
-            };
-            return Ok(dict(json!({"item": item, "stages": value["stages"]})));
+        let rows=self.st.list.snapshot().await.map_err(|_|"ticket_session_unavailable: não foi possível conferir a vida da sessão")?;
+        let key=hangar_mission::http::Notify::identity(&*self.st.mission_notify,me.clone()).await.map_err(|error|error.to_string())?;
+        let life=rows.rows.iter().find(|row|row.name==me).and_then(|row|row.lifecycle_id.clone()).or_else(||key.as_ref().map(|key|format!("k:{key}")));
+        let group=match &self.st.groups {Some(groups)=>groups.link(&me).await.map_err(|_|"ticket_groups_unavailable: grupo ilegível")?,None=>None};
+        let query=|session:&str| {
+            let mut fields=vec![("session",session.to_owned())];
+            if let Some(key)=&key {fields.push(("key",key.clone()));}
+            if let Some(group)=&group {fields.push(("group_id",group.gid.clone()));}
+            format!("/api/mission/session?{}",form_urlencoded::Serializer::new(String::new()).extend_pairs(fields).finish())
+        };
+        let (status,local)=self.route(Method::GET,&query(&me),None).await;
+        let mut owner=None;
+        let mut value=local;
+        let mut session=me.clone();
+        if !(200..300).contains(&status) && status!=404 {return Err(coded(status,&value));}
+        {
+            let mut servers=std::collections::BTreeSet::new();
+            if let Some(life)=&life {
+                let (store,name,life)=(self.st.mission.clone(),me.clone(),life.clone());
+                if let Some(owner)=tokio::task::spawn_blocking(move||store.remote_owner(&name,&life)).await.map_err(|_|"ticket_remote_unavailable: leitura do vínculo interrompida")?.map_err(|_|"ticket_remote_unavailable: vínculo ilegível")? {servers.insert(owner);}
+            }
+            if let Some(group)=&group {
+                let (store,gid)=(self.st.mission.clone(),group.gid.clone());
+                if let Some(owner)=tokio::task::spawn_blocking(move||store.remote_group(&gid)).await.map_err(|_|"ticket_remote_unavailable: leitura do grupo interrompida")?.map_err(|_|"ticket_remote_unavailable: vínculo do grupo ilegível")? {servers.insert(owner);}
+                servers.extend(group.peers.iter().filter_map(|name|name.split_once("::").map(|(server,_)|server.to_owned())));
+                if let Some(fed)=&group.fed {servers.insert(fed.owner.clone());}
+            }
+            servers.remove(&self.st.server_id);
+            let known=self.st.peers.ids();
+            let remote_session=format!("{}::{me}",self.st.server_id);
+            for server in servers.into_iter().filter(|server|known.contains(server)) {
+                let reply=self.st.peers.send_secret(false,&server,reqwest::Method::GET,&query(&remote_session),None,1024*1024).await;
+                match reply {
+                    Ok((_,raw))=> {
+                        let found:Value=serde_json::from_slice(&raw).map_err(|_|"ticket_remote_invalid: resposta de ticket ilegível")?;
+                        let _:hangar_mission::model::Item=serde_json::from_value(found["item"].clone()).map_err(|_|"ticket_remote_invalid: resposta de ticket incompleta")?;
+                        let selected=owner.is_some() || (200..300).contains(&status);
+                        if selected {
+                            let current_active=value["item"]["delivered_at"].is_null();
+                            let next_active=found["item"]["delivered_at"].is_null();
+                            if current_active && next_active {return Err("ticket_group_conflict: o grupo está associado a tickets em máquinas diferentes".into());}
+                            if current_active || !next_active && value["item"]["delivered_at"].as_str()>=found["item"]["delivered_at"].as_str() {continue;}
+                        }
+                        owner=Some(server);value=found;session=remote_session.clone();
+                    }
+                    Err(crate::groups::peers::PeerError::Refused {status:404,detail}) if detail["code"]=="mission_session_not_linked"=>{},
+                    Err(_)=>return Err("ticket_remote_unavailable: não foi possível conferir o ticket na outra máquina".into()),
+                }
+            }
+            if owner.is_none() && status==404 {return Err(coded(status,&value));}
         }
-        let evidence: Vec<Value> = evidence.into_iter().map(|e| json!({"path": e.caminho, "caption": e.legenda})).collect();
-        let body = json!({"session": me, "stage": a.etapa, "note": a.nota, "evidence": evidence});
-        let (status, value) = self.route_from(Some(&me), Method::POST, "/api/mission/report", Some(body)).await;
-        if (200..300).contains(&status) { Ok(dict(value)) } else { Err(coded(status, &value)) }
+        if let Some((owner,life))=owner.as_ref().zip(life.as_ref()) {
+            let (store,name,life,owner,gid)=(self.st.mission.clone(),me.clone(),life.clone(),owner.clone(),group.as_ref().map(|group|group.gid.clone()));
+            tokio::task::spawn_blocking(move|| {
+                store.remember_remote(&name,&life,&owner)?;
+                if let Some(gid)=gid {store.remember_remote_group(&gid,&owner)?;}
+                Ok::<_,hangar_mission::store::Error>(())
+            }).await.map_err(|_|"ticket_remote_unavailable: gravação do vínculo interrompida")?.map_err(|_|"ticket_remote_unavailable: não foi possível guardar o vínculo")?;
+        }
+        if a.etapa.is_none() && a.nota.is_none() && a.evidencias.is_empty() {return Ok(dict(value));}
+        let evidence:Vec<Value>=a.evidencias.into_iter().map(|e|json!({"path":e.caminho,"caption":e.legenda})).collect();
+        let mut body=json!({"session":session,"key":key,"group_id":group.map(|group|group.gid),"connector":value["item"]["connector"],"ticket_id":value["item"]["ticket_id"],"history_revision":value["item"]["history"].as_array().map(Vec::len),"stage":a.etapa,"note":a.nota,"evidence":evidence});
+        if let Some(owner)=owner {
+            body["source_server"]=json!(self.st.server_id);
+            let (_,raw)=match self.st.peers.send_secret(true,&owner,reqwest::Method::POST,"/api/mission/report",Some((body.to_string().into_bytes(),"application/json")),1024*1024).await {
+                Ok(reply)=>reply,
+                Err(crate::groups::peers::PeerError::Refused {status,detail}) if status<500=>return Err(coded(status,&json!({"detail":detail}))),
+                Err(_)=>return Err("ticket_remote_report_uncertain: confira o ticket antes de repetir; a outra máquina não confirmou o relato".into()),
+            };
+            let value:Value=serde_json::from_slice(&raw).map_err(|_|"ticket_remote_report_uncertain: a resposta do relato ficou ilegível; confira antes de repetir")?;
+            return Ok(dict(value));
+        }
+        let (status,value)=self.route_from(Some(&me),Method::POST,"/api/mission/report",Some(body)).await;
+        if (200..300).contains(&status) {Ok(dict(value))} else {Err(coded(status,&value))}
     }
 
     async fn html_render(&self, headers: &HeaderMap, a: HtmlRender) -> Outcome {

@@ -275,11 +275,12 @@ impl AppState {
                 Arc::new(crate::device_install::UsbLink::new(&hangar_dir)), Arc::new(crate::device_install::apple::IsideloadSigner), &hangar_dir)
                 .with_config(Arc::new(move || crate::runtime::codex_launch::runtime_config(&env))))
         };
+        let mission=Arc::new(hangar_mission::Store::new(hangar_dir.join("mission")));
         let groups = crate::groups::from_env(list.env().dirs.as_ref(), server_id.clone(),
             Arc::new(crate::groups::orq::PythonOrq::new(cfg.upstream, cfg.internal_secret.clone(), http.clone())
                 .with_paths(list.env().dirs.as_ref().map(|d| d.home.clone()).unwrap_or_default(),
                     list.env().dirs.as_ref().map(|d| d.claude.join(".hangar-pair")).unwrap_or_default())
-                .with_mux(list.env().capture_program.to_string_lossy().into_owned())), list.clone(), diag.clone());
+                .with_mux(list.env().capture_program.to_string_lossy().into_owned())), list.clone(), diag.clone(), mission.clone());
         let vault_requests = Arc::new(crate::vault::requests::Requests::default());
         let accounts = crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::capture());
         let search = crate::search::Index::server(accounts.clone());
@@ -313,7 +314,7 @@ impl AppState {
             vault_requests,
             claude_plugins: Arc::default(),
             connectors,
-            mission: Arc::new(hangar_mission::Store::new(hangar_dir.join("mission"))),
+            mission,
             mission_notify,
             ticket_actions: Default::default(),
             hangar_dir, device_install,

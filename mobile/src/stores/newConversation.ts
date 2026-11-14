@@ -9,7 +9,7 @@ import type {
 import { prefs } from './prefs';
 import { useServers } from './servers';
 import { clearDraft, readDraft, withoutUpload, writeDraft, type DraftAttachment } from './drafts';
-import { submitConversationDraft } from './chat';
+import { resetCreatedChat, submitConversationDraft } from './chat';
 import * as m from '../paraglide/messages';
 
 // O servidor expande na abertura: o app não sabe a pasta do usuário e ela costuma estar fora das raízes.
@@ -204,6 +204,7 @@ async function runCreate(serverId: string, input: NewConversationInput, retried 
   let session: SessionInfo;
   try {
     session = await createSessionForServer(server, creating.body);
+    resetCreatedChat(serverId, session.name);
   } catch (cause) {
     const status = statusOf(cause);
     // 4xx definitivo não criou nada; 409, 408, 5xx e rede podem ter criado. Nome em uso é recusa:
@@ -424,6 +425,7 @@ export function adoptCandidate(serverId: string, attemptId: string): boolean {
     return false;
   }
   if (!next) return false;
+  resetCreatedChat(serverId, issue.session.name);
   setIssue(serverId, null);
   return true;
 }

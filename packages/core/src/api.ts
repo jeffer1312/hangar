@@ -1693,6 +1693,7 @@ export interface WorktreeStatus {
   path: string; repo: string; exists: boolean; branch: string | null; base: string | null;
   main_branch: string | null;   // branch da pasta principal, onde as conversas retomam
   merged: boolean; ahead: number; dirty: number; ignored: string[]; sessions: string[]; closed: number;
+  equivalent_commits?: boolean;
   degraded?: boolean;   // leitura do git falhou: dirty/ignored podem estar zerados sem ser verdade
   residual?: boolean;
   residual_files?: string[];
@@ -1711,7 +1712,7 @@ export interface WorktreeStatus {
 export interface WorktreeCommit { sha: string; subject: string; at: number }
 export interface WorktreeRepo { repo: string; worktrees: WorktreeStatus[] }
 
-export type WorktreeState = 'gone' | 'session' | 'residual' | 'dirty' | 'merged' | 'detached' | 'active';
+export type WorktreeState = 'gone' | 'session' | 'residual' | 'dirty' | 'merged' | 'equivalent' | 'detached' | 'active';
 
 /** Um estado só por worktree, na ordem do que mais importa antes de apagar. */
 export function worktreeState(w: WorktreeStatus): WorktreeState {
@@ -1720,6 +1721,7 @@ export function worktreeState(w: WorktreeStatus): WorktreeState {
   if (w.residual) return 'residual';
   if (w.dirty) return 'dirty';
   if (w.merged) return 'merged';
+  if (w.equivalent_commits) return 'equivalent';
   if (!w.branch) return 'detached';
   return 'active';
 }
