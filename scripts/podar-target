@@ -20,20 +20,29 @@ if [[ "${1:-}" == --cache ]]; then cache=1; shift; fi
 tamanho() { du -sk "$1" 2>/dev/null | awk '{print $1}'; }
 # "<mtime> <nome>" das entradas diretas de $1 que casam com os predicados do find em seguida: um find por
 # pasta (GNU), ou um stat por lote (BSD, sem -printf).
+# `executaveis <perfil>`: "<mtime> <pacote>/<hash>/out/<arquivo>" dos executáveis das unidades do layout
+# novo, menos biblioteca e script de build.
+unidade=(-mindepth 4 -maxdepth 4 -path '*/out/*' -type f -perm -u+x ! -name 'lib*' ! -name 'build_script_*' ! -name 'build-script-*')
 if find . -maxdepth 0 -printf '' 2>/dev/null; then
     listar() { local d="$1"; shift; find "$d" -mindepth 1 -maxdepth 1 "$@" -printf '%Ts %f\n'; }
+    executaveis() { find "$1/build" "${unidade[@]}" -printf '%Ts %P\n'; }
 else
     listar() {
         local d="$1"; shift
         find "$d" -mindepth 1 -maxdepth 1 "$@" -exec stat -f '%m %N' {} + | sed 's|^\([0-9]*\) .*/|\1 |'
     }
+    executaveis() {
+        find "$1/build" "${unidade[@]}" -exec stat -f '%m %N' {} + |
+            awk -v pre="$1/build/" '{ print $1, substr($0, length($1) + 2 + length(pre)) }'
+    }
 fi
 
-# Pastas de perfil (debug/, release/, dist/) e as de alvo cruzado (<triplo>/<perfil>/): as que têm deps/.
+# Pastas de perfil (debug/, release/, dist/) e as de alvo cruzado (<triplo>/<perfil>/): as que têm deps/
+# ou build/. O cargo novo grava cada unidade em build/<pacote>/<hash>/{out,fingerprint} e não usa deps/.
 perfis() {
     local t="$1" p
     for p in "$t"/* "$t"/*/*; do
-        [[ -d "$p/deps" ]] && echo "$p"
+        [[ -d "$p/deps" || -d "$p/build" ]] && echo "$p"
     done
     return 0
 }
@@ -55,7 +64,8 @@ podar_cache() {
         # Na raiz do perfil só ficam as cópias dos executáveis e bibliotecas do workspace.
         find "$p" -maxdepth 1 -type f -delete
         while IFS= read -r n; do
-            rm -rf "$p/.fingerprint/$n"-* "$p/build/$n"-*
+            [[ -n "$n" ]] || continue
+            rm -rf "$p/.fingerprint/$n"-* "$p/build/$n"-* "$p/build/$n"
             n="${n//-/_}"
             rm -f "$p/deps/$n"-* "$p/deps/lib$n"-*
         done <<< "$nomes"
@@ -71,12 +81,25 @@ velhas() {
 }
 
 podar_maquina() {
-    local t="$1" p f
+    local t="$1" p f pacote hash
     while IFS= read -r p; do
         # Executáveis: sem extensão (ou .exe), nunca lib*; os .d e .pdb do mesmo hash vão junto.
-        while IFS= read -r f; do
-            rm -f "$p/deps/${f%.exe}" "$p/deps/${f%.exe}".*
-        done < <(listar "$p/deps" -type f -perm -u+x ! -name 'lib*' | awk '$2 ~ /-[0-9a-f]+(\.exe)?$/' | velhas)
+        if [[ -d "$p/deps" ]]; then
+            while IFS= read -r f; do
+                rm -f "$p/deps/${f%.exe}" "$p/deps/${f%.exe}".*
+            done < <(listar "$p/deps" -type f -perm -u+x ! -name 'lib*' | awk '$2 ~ /-[0-9a-f]+(\.exe)?$/' | velhas)
+        fi
+        # Layout novo: só o executável de teste leva hash no nome, então o nome é <pacote>/<executável> e
+        # o hash é o da pasta da unidade, que sai inteira (objetos, fingerprint e .d juntos).
+        if [[ -d "$p/build" ]]; then
+            while IFS= read -r f; do
+                pacote="${f%%/*}" hash="${f##*-}"
+                [[ -n "$pacote" && -n "$hash" ]] || continue
+                rm -rf "${p:?}/build/$pacote/$hash"
+            done < <(executaveis "$p" | awk '{ split($2, a, "/"); if (a[3] != "out") next
+                                               nome = a[4]; sub(/[.]exe$/, "", nome); sub(/-[0-9a-f]+$/, "", nome)
+                                               print $1, a[1] "/" nome "-" a[2] }' | velhas)
+        fi
         [[ -d "$p/incremental" ]] || continue
         while IFS= read -r f; do
             rm -rf "${p:?}/incremental/$f"

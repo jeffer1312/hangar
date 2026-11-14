@@ -242,6 +242,20 @@ podar 1024 "deps/libdep-1.rlib deps/novo-1 deps/velho-1 incremental/x/a "
 podar 220 "deps/libdep-1.rlib deps/novo-1 deps/velho-1 "
 podar 160 "deps/libdep-1.rlib deps/novo-1 "
 podar 32 ""
+# O mesmo no layout novo do cargo (build/<pacote>/<hash>/out/): o script de build não é executável de teste.
+alvo() {
+    local d f; d="$(mktemp -d)"
+    mkdir -p "$d/debug/incremental/x" "$d/debug/build/dep/1/out" "$d/debug/build/app/2/out" "$d/debug/build/app/3/out"
+    for f in debug/incremental/x/a debug/build/dep/1/out/build_script_build debug/build/app/2/out/velho-2 debug/build/app/3/out/novo-3; do
+        head -c 65536 /dev/urandom > "$d/$f"
+    done
+    chmod +x "$d/debug/build/dep/1/out/build_script_build" "$d/debug/build/app/2/out/velho-2" "$d/debug/build/app/3/out/novo-3"
+    touch -d '3 days ago' "$d/debug/build/dep/1/out/build_script_build" "$d/debug/build/app/2/out/velho-2"
+    echo "$d"
+}
+podar 250 "build/app/2/out/velho-2 build/app/3/out/novo-3 build/dep/1/out/build_script_build "
+podar 180 "build/app/3/out/novo-3 build/dep/1/out/build_script_build "
+podar 32 ""
 
 # Memória curta põe as faixas em fila: limite padrão 6 GB, ajustável; leitura falha conta como curta.
 memoria() {   # $1 = MemAvailable em kB ("" = sem a linha), $2 = limite em GB ("" = padrão), $3 = curta|folga

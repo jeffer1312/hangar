@@ -241,6 +241,12 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   incremental. O `i18n:compile` de front, core e app passa por `scripts/i18n-compile.mjs` e pula
   quando entrada e saída batem com o carimbo da última compilação. Evidência em
   [Build e teste locais rápidos](#build-e-teste-locais-rápidos-23102026).
+- **Nada depende de onde o cargo guarda os intermediários do target.** Script e teste só contam com
+  o que o cargo publica na raiz do perfil (`target/<perfil>/<binário>`) e com o `executable` das
+  mensagens JSON. Quem precisa dos intermediários (`podar-target`, `cargo-freshness.sh`, a poda por
+  teto do `verificar-local`, `cargo_test_binary`) atende os dois layouts, `deps/` e
+  `build/<pacote>/<hash>/`, com um caso de cada no teste. Evidência em
+  [Layout do target no Cargo 1.100](#layout-do-target-no-cargo-1100-14112026).
 - **Build Rust: testes de integração do `hangar-server` num executável só, e o CI publica com LTO
   fat só na `main`.** Teste novo entra como módulo de `crates/hangar-server/tests/it/`; teste que
   mexe em estado do processo inteiro (PATH, HOME, TZ, logger global, gancho de pânico) vai para um
@@ -1054,6 +1060,26 @@ os passos do que mudou, e árvore que já passou não roda nada.
   verificado inteiro, e cada push seguinte nele ou na `main` também.
 - **`release.yml` saiu.** Empacotava o shell Electron em tag `v*` (última em 25/08); nada no
   instalador, no Atualizar, no app nativo nem no site lê essas releases.
+
+## Layout do target no Cargo 1.100 (14/11/2026)
+
+O Cargo 1.100 passou a gravar os intermediários em `<perfil>/build/<pacote>/<hash>/{out,fingerprint}`
+(`build.build-dir-new-layout is now always enabled`, na lista de recursos do próprio cargo). Visto num
+workspace mínimo compilado com a 1.100.0: o perfil novo não tem `deps/` nem `.fingerprint/`; o teste
+fica em `out/it-<hash>`, o binário em `out/<nome>` sem hash, e o publicado continua em
+`<perfil>/<binário>` (link do `out/`), para onde `CARGO_BIN_EXE_*` aponta; `incremental/` não mudou.
+
+O que dependia do layout antigo e o que cada um fazia com a 1.100 antes do conserto:
+
+- `use_cano_bin` (testes do `hangar-server`) subia dois níveis fixos a partir do executável de teste:
+  39 testes do job `server / testes` do Linux falharam com "rode `cargo build -p hangar-cano` antes".
+  Passou a procurar o `hangar-cano` nas pastas acima.
+- `hangar_core::process::cargo_test_binary` reconhecia o teste pela pasta `deps`: respondia falso, e o
+  teste de integração deixava de ser tratado como teste (diário da máquina e aviso ao celular do dono).
+- `scripts/cargo-freshness.sh` só apagava `<perfil>/.fingerprint/<pacote>-<hash>`: na troca de árvore
+  não invalidava nada.
+- `scripts/podar-target` achava o perfil pela pasta `deps/`: não podava nada, nem no cache do CI nem na
+  máquina. A poda por teto do `verificar-local` não achava executável e apagava o target inteiro.
 
 ## Build e teste locais rápidos (23/10/2026)
 
