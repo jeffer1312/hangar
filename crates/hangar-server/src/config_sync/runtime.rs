@@ -46,7 +46,8 @@ impl RuntimeConfig {
     }
     /// O `get` que devolve o erro do arquivo ilegível em vez de lê-lo como vazio.
     pub fn get_checked(&self,key:&str)->Result<Value,RuntimeError> {
-        Ok(self.effective(key,&read_for_write(&self.path)?))
+        let current=read_for_write(&self.path)?;
+        Ok(self.effective(key,&current))
     }
     /// Configuração efetiva compartilhada pela transcrição e pela organização do ditado.
     pub(crate) fn transcription_snapshot(&self) -> ValueGuard {
