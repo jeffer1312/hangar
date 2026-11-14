@@ -1132,18 +1132,25 @@ pub(crate) fn gate(st: &AppState, peer: SocketAddr, req: &Request)
 /// A recusa de quem um handler já viu que não é o dono: o `require_auth` do Python, aqui (401 contado,
 /// 429, 503), e 403 ao convidado com login, que não perde o login por isso. `None` = o `require_auth`
 /// aceitaria (servidor sem senha), e o pedido segue.
-async fn not_owner_refusal(st: &AppState, req: &Request, fwd: &Forward) -> Option<Response> {
+// O pedido é lido antes da espera: `&Request` atravessando um `await` tira o `Send` de todo handler.
+fn not_owner_refusal<'a>(st: &'a AppState, req: &Request, fwd: &Forward)
+    -> impl std::future::Future<Output = Option<Response>> + Send + use<'a> {
     let marked = req.extensions().get::<NotOwner>().is_some_and(|NotOwner(flag)| flag.load(Ordering::Relaxed));
     // O preflight não leva credencial: segue como antes.
-    if !marked || fwd.guest.is_some() || req.method() == Method::OPTIONS { return None; }
-    let mut response = if matches!(crate::share::caller::caller(req), Some(Caller::Guest(_))) {
-        crate::login_guests::gate::refused()
-    } else {
-        let token = auth::presented_token(req.headers(), req.uri().query(), req.method(), fwd.https);
-        hangar_core::edge::require_auth(&st.auth, fwd.client_ip.clone(), token).await.err()?
-    };
-    cors(req.headers(), response.headers_mut());
-    Some(response)
+    let skip = !marked || fwd.guest.is_some() || req.method() == Method::OPTIONS;
+    let guest = matches!(crate::share::caller::caller(req), Some(Caller::Guest(_)));
+    let token = auth::presented_token(req.headers(), req.uri().query(), req.method(), fwd.https);
+    let (headers, origin) = (req.headers().clone(), fwd.client_ip.clone());
+    async move {
+        if skip { return None; }
+        let mut response = if guest {
+            crate::login_guests::gate::refused()
+        } else {
+            hangar_core::edge::require_auth(&st.auth, origin, token).await.err()?
+        };
+        cors(&headers, response.headers_mut());
+        Some(response)
+    }
 }
 
 pub(crate) fn owner_gate(st: &AppState, peer: SocketAddr, req: &Request)
