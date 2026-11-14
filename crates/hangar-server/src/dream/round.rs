@@ -120,7 +120,10 @@ async fn execute(st: &Arc<AppState>, opts: &Options, run_id: &str) -> Result<(),
     let paths = Paths::of(st);
     let mut state = load_state(st)?;
     let now = Utc::now();
-    prune_runs(&paths.runs());
+    let pruned_failed = prune_runs(&paths.runs());
+    if pruned_failed > 0 {
+        st.diag.record_line(json!({"evento": "dream.prune_failed", "nivel": "aviso", "codigo": "dream_io", "pastas": pruned_failed}));
+    }
     let scrub = |t: &str| hangar_dream::secrets::scrub(t).into_owned();
 
     // Janela fixa: um projeto que nunca sonhou não aparece no estado, e a data de outro projeto
@@ -368,15 +371,16 @@ async fn dream_one(ctx: &Ctx<'_>, state: &mut State, pid: &str, ps: &ProjectStat
 
     let mut changes = Vec::new();
     for (mut change, digest) in snapshots {
-        let result = match &change.dir {
+        // Só o código fica no registro: o erro do peer e o de IO podem trazer caminho ou texto de lá.
+        let result: Result<(), String> = match &change.dir {
             Some(dir) => {
                 let (dir, files, digest) = (PathBuf::from(dir), outcome.files.clone(), digest.clone());
                 tokio::task::spawn_blocking(move || memory::write(&dir, &files, &digest))
                     .await
-                    .map_err(|e| e.to_string())
-                    .and_then(|r| r.map_err(|e| format!("{e:?}")))
+                    .map_err(|_| "dream_io".to_string())
+                    .and_then(|r| r.map_err(|e| e.code().to_string()))
             }
-            None => peers::memory_put(st, &change.machine, &change.root, &outcome.files, &digest, ctx.me).await,
+            None => peers::memory_put(st, &change.machine, &change.root, &outcome.files, &digest, ctx.me).await.map_err(|e| super::code_of(&e)),
         };
         change.after = outcome.files.clone();
         change.written = result.is_ok();
@@ -396,21 +400,33 @@ async fn dream_one(ctx: &Ctx<'_>, state: &mut State, pid: &str, ps: &ProjectStat
     };
     save_record(ctx.paths, &record)?;
 
-    // Nenhuma pasta gravada: o que foi lido volta na próxima noite.
-    if record.places.iter().any(|p| p.written) {
+    // Uma pasta sem gravar: o que foi lido volta na próxima noite, senão aquela máquina nunca o recebe.
+    let failure = place_failure(&record.places);
+    if failure.is_none() {
         for i in &picked {
             state.cursors.insert(pieces[*i].cursor_key.clone(), pieces[*i].end);
         }
     }
-    let failed: Vec<String> = record.places.iter().filter(|p| !p.written).map(|p| p.machine.clone()).collect();
     let entry = state.projects.entry(pid.into()).or_default();
-    entry.last_dream_at = Some(ctx.now);
+    // A data também fica: com ela a sessão de cursor antigo e mtime anterior seria pulada.
+    if failure.is_none() {
+        entry.last_dream_at = Some(ctx.now);
+    }
     entry.last_cost_usd = cost;
     entry.last_run_id = Some(ctx.run_id.into());
-    entry.last_error = (!failed.is_empty()).then(|| format!("dream_memory_changed: {}", failed.join(", ")));
+    entry.last_error = failure;
     st.diag.record_line(json!({"evento": "dream.project_done", "nivel": "info", "projeto": pid, "custo_usd": cost,
         "notas": outcome.files.len(), "aposentadas": outcome.retired, "sessoes": picked.len()}));
     Ok(true)
+}
+
+/// `None` com todas as pastas gravadas; senão o primeiro código e as máquinas que falharam
+/// (`dream_locked: vps`).
+pub(super) fn place_failure(places: &[PlaceChange]) -> Option<String> {
+    let failed: Vec<&PlaceChange> = places.iter().filter(|p| !p.written).collect();
+    let code = failed.first()?.error.clone().unwrap_or_else(|| "dream_failed".into());
+    let machines: BTreeSet<&str> = failed.iter().map(|p| p.machine.as_str()).collect();
+    Some(format!("{code}: {}", machines.into_iter().collect::<Vec<_>>().join(", ")))
 }
 
 fn place(machine: &str, root: &str, dir: Option<&Path>, files: BTreeMap<String, String>) -> PlaceChange {
@@ -449,15 +465,26 @@ pub(crate) fn load_records(paths: &Paths, run_id: &str) -> Result<Vec<RunRecord>
     Ok(out)
 }
 
-/// A memória de antes fica 30 dias, para o Desfazer.
-fn prune_runs(dir: &Path) {
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
+/// A memória de antes fica 30 dias, para o Desfazer. Devolve quantas pastas velhas não saíram.
+fn prune_runs(dir: &Path) -> usize {
+    let Ok(entries) = std::fs::read_dir(dir) else { return 0 };
     let limit = std::time::Duration::from_secs(RUNS_KEPT_DAYS * 86_400);
+    let mut failed = 0;
     for entry in entries.flatten() {
         let old = entry.metadata().and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|age| age > limit);
-        if old {
-            let _ = std::fs::remove_dir_all(entry.path());
+        if old && std::fs::remove_dir_all(entry.path()).is_err() {
+            failed += 1;
         }
+    }
+    failed
+}
+
+/// O texto do arquivo; só o que não existe vira vazio.
+pub(crate) fn read_or_empty(path: &Path) -> Result<String, String> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => Ok(text),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(_) => Err("dream_io".into()),
     }
 }
 
@@ -470,9 +497,9 @@ async fn user_pass(ctx: &Ctx<'_>, state: &mut State) -> Result<(), String> {
     if notes.is_empty() {
         return Ok(());
     }
-    let claude_md = std::fs::read_to_string(base.join("CLAUDE.md")).unwrap_or_default();
+    let claude_md = read_or_empty(&base.join("CLAUDE.md"))?;
     let target = base.join(USER_MEMORY_PATH);
-    let current = std::fs::read_to_string(&target).unwrap_or_default();
+    let current = read_or_empty(&target)?;
     let limits = Limits { project_cap_usd: ctx.config.project_cap_usd, month_cap_usd: ctx.config.month_cap_usd };
     let month = state.month_at(ctx.now).clone();
     // Quem pôs todos os projetos na conta não quer a chave gasta na passada do usuário.

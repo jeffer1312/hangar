@@ -30,6 +30,18 @@ pub enum WriteError {
     Io(io::Error),
 }
 
+impl WriteError {
+    /// O código que vai ao registro da rodada e ao diário; o detalhe pode trazer caminho.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::Changed => "dream_memory_changed",
+            Self::Locked => "dream_locked",
+            Self::InvalidName(_) => "dream_invalid_name",
+            Self::Io(_) => "dream_io",
+        }
+    }
+}
+
 impl From<io::Error> for WriteError {
     fn from(e: io::Error) -> Self {
         Self::Io(e)
@@ -106,8 +118,10 @@ pub fn write(dir: &Path, files: &BTreeMap<String, String>, expect_digest: &str) 
         }
         Ok(())
     })();
-    lock.release(result.is_ok());
-    result
+    let released = lock.release(result.is_ok());
+    result?;
+    // A memória já está gravada; a trava que não soltou ainda precisa aparecer como falha.
+    released.map_err(WriteError::Io)
 }
 
 /// Pastas que este processo está gravando: o PID no arquivo é o mesmo para duas gravações daqui.
@@ -150,6 +164,7 @@ impl<'a> Lock<'a> {
         let previous = fs::metadata(&path).and_then(|m| m.modified()).ok();
         let fresh = previous.is_some_and(|mtime| SystemTime::now().duration_since(mtime).map_or(true, |age| age < LOCK_STALE));
         let holder = fs::read_to_string(&path).ok().and_then(|s| s.trim().parse::<u32>().ok());
+        // PID que não dá para conferir conta como vivo só enquanto a trava é recente.
         if fresh && holder.is_some_and(|p| pid_alive(p).unwrap_or(true)) {
             return Err(WriteError::Locked);
         }
@@ -163,21 +178,18 @@ impl<'a> Lock<'a> {
 
     /// Como o nativo: conteúdo vazio solta a trava e o mtime guarda a última consolidação; na falha o
     /// mtime volta ao de antes.
-    fn release(self, done: bool) {
+    fn release(self, done: bool) -> io::Result<()> {
         HELD.lock().unwrap_or_else(|e| e.into_inner()).remove(&self.key);
         let path = self.dir.join(LOCK);
         match (done, self.previous) {
-            (false, None) => {
-                let _ = fs::remove_file(&path);
-            }
-            (false, Some(when)) => {
-                let _ = atomic_write(&path, b"")
-                    .and_then(|()| fs::File::options().write(true).open(&path))
-                    .and_then(|f| f.set_modified(when));
-            }
-            (true, _) => {
-                let _ = atomic_write(&path, b"");
-            }
+            (false, None) => match fs::remove_file(&path) {
+                Err(e) if e.kind() != io::ErrorKind::NotFound => Err(e),
+                _ => Ok(()),
+            },
+            (false, Some(when)) => atomic_write(&path, b"")
+                .and_then(|()| fs::File::options().write(true).open(&path))
+                .and_then(|f| f.set_modified(when)),
+            (true, _) => atomic_write(&path, b""),
         }
     }
 }

@@ -92,6 +92,57 @@ async fn config_masks_the_key_and_keeps_it_when_the_mask_comes_back() {
     assert_eq!(status, 422, "{body}");
 }
 
+#[test]
+fn undo_of_the_user_file_tells_no_pass_from_unreadable_record() {
+    use super::round::{USER_AFTER, USER_BEFORE};
+    use super::routes::undo_user_local;
+    let tmp = tempfile::tempdir().unwrap();
+    let record = tmp.path().join("run");
+    let target = tmp.path().join("rules").join("memoria.md");
+    std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+
+    // Rodada sem a passada do usuário: nada a desfazer.
+    assert_eq!(undo_user_local(&record, &target), Ok(None));
+
+    // Registro que existe mas não se lê é falha, não "nada a desfazer".
+    std::fs::create_dir_all(record.join(USER_BEFORE)).unwrap();
+    std::fs::write(record.join(USER_AFTER), "depois").unwrap();
+    assert_eq!(undo_user_local(&record, &target), Err("dream_io"));
+    std::fs::remove_dir(record.join(USER_BEFORE)).unwrap();
+
+    std::fs::write(record.join(USER_BEFORE), "antes").unwrap();
+    std::fs::write(&target, "mexido depois").unwrap();
+    assert_eq!(undo_user_local(&record, &target), Err("dream_memory_changed"));
+
+    std::fs::write(&target, "depois").unwrap();
+    assert_eq!(undo_user_local(&record, &target), Ok(Some("antes".into())));
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), "antes");
+
+    // O arquivo atual ilegível não vira vazio.
+    std::fs::remove_file(&target).unwrap();
+    std::fs::create_dir(&target).unwrap();
+    assert_eq!(undo_user_local(&record, &target), Err("dream_io"));
+}
+
+#[test]
+fn a_place_left_unwritten_holds_the_cursors_and_names_code_and_machines() {
+    use super::round::{place_failure, PlaceChange};
+    let place = |machine: &str, error: Option<&str>| PlaceChange {
+        machine: machine.into(),
+        root: "/srv/proj".into(),
+        dir: None,
+        before: Default::default(),
+        after: Default::default(),
+        written: error.is_none(),
+        error: error.map(Into::into),
+    };
+    assert_eq!(place_failure(&[place("notebook", None), place("vps", None)]), None);
+    assert_eq!(
+        place_failure(&[place("notebook", None), place("vps", Some("dream_locked")), place("vps", Some("dream_io")), place("pc", Some("dream_peer_failed"))]),
+        Some("dream_locked: pc, vps".into())
+    );
+}
+
 #[tokio::test]
 async fn run_now_is_refused_off_the_dreamer() {
     let _t = TESTS.lock().await;

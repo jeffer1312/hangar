@@ -23,6 +23,7 @@ pub struct SessionRef {
 pub fn local_sessions(index: &Path, since: Option<DateTime<Utc>>) -> Result<Vec<SessionRef>, String> {
     let conn = rusqlite::Connection::open_with_flags(index, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(|e| format!("dream_index_unavailable: {e}"))?;
+    // Sem a espera a leitura só desiste antes, e isso já sai como `dream_index_unavailable`.
     let _ = conn.busy_timeout(std::time::Duration::from_secs(10));
     let since_ns = since.and_then(|t| t.timestamp_nanos_opt()).unwrap_or(0);
     let mut stmt = conn

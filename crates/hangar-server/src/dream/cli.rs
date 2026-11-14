@@ -126,6 +126,8 @@ fn classify(out: &crate::claude_p::Output) -> Result<Reply, ModelError> {
         Some(r) if r["subtype"] == "error_max_budget_usd" => Err(ModelError::Budget { cost_usd: cost }),
         _ if NO_CREDIT.is_match(&all) => Err(ModelError::NoCredit),
         _ if crate::claude_p::limited(out) => Err(ModelError::Limited),
+        // Sem a linha de resultado não há custo nem motivo confiável; só o código sai daqui.
+        None => Err(ModelError::Other("dream_unparsed_output".into())),
         _ => Err(ModelError::Other(last_line(&all))),
     }
 }
@@ -153,6 +155,10 @@ mod tests {
         assert_eq!(classify(&budget).err(), Some(ModelError::Budget { cost_usd: 0.00024536 }));
         let credit = out(1, r#"{"type":"result","subtype":"success","is_error":true,"result":"Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.","total_cost_usd":0}"#);
         assert_eq!(classify(&credit).err(), Some(ModelError::NoCredit));
-        assert!(matches!(classify(&out(1, "lixo")), Err(ModelError::Other(_))));
+        assert_eq!(classify(&out(1, "lixo")).err(), Some(ModelError::Other("dream_unparsed_output".into())));
+        assert_eq!(
+            hangar_dream::run::DreamError::Model(ModelError::Other("dream_unparsed_output".into())).to_string(),
+            "dream_unparsed_output"
+        );
     }
 }

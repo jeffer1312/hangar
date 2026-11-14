@@ -231,13 +231,20 @@ async fn status(st: &Arc<AppState>) -> Response {
     let me = this_machine(st);
     let index = st.search.path().to_owned();
     let since = state.last_round_at;
-    let local = tokio::task::spawn_blocking(move || inventory::local_sessions(&index, since)).await.ok().and_then(Result::ok).unwrap_or_default();
-    let mut new_sessions: BTreeMap<String, usize> = BTreeMap::new();
-    for s in &local {
-        if let Some(project) = &s.project {
-            *new_sessions.entry(round::project_key(&state, project, &me)).or_default() += 1;
-        }
+    let local = tokio::task::spawn_blocking(move || inventory::local_sessions(&index, since)).await.ok().and_then(Result::ok);
+    // Índice ilegível não é "nenhuma sessão nova": a contagem sai `null`.
+    if local.is_none() {
+        st.diag.record_line(json!({"evento": "dream.status_inventory_failed", "nivel": "aviso", "codigo": "dream_inventory_unavailable"}));
     }
+    let new_sessions: Option<BTreeMap<String, usize>> = local.map(|local| {
+        let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+        for s in &local {
+            if let Some(project) = &s.project {
+                *counts.entry(round::project_key(&state, project, &me)).or_default() += 1;
+            }
+        }
+        counts
+    });
     let mut machines: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for (key, entry) in &state.roots {
         let machine = key.split('/').next().unwrap_or_default().to_string();
@@ -257,7 +264,7 @@ async fn status(st: &Arc<AppState>) -> Response {
                 "id": id,
                 "name": id.rsplit(['/', ':']).next().unwrap_or(id),
                 "machines": machines.get(id).cloned().unwrap_or_default(),
-                "new_sessions": new_sessions.get(id).copied().unwrap_or(0),
+                "new_sessions": new_sessions.as_ref().map(|n| n.get(id).copied().unwrap_or(0)),
                 "enabled": p.enabled, "mode": p.mode, "last_dream_at": p.last_dream_at,
                 "last_cost_usd": p.last_cost_usd, "last_run_id": p.last_run_id, "last_error": p.last_error,
                 "needs_confirm": id.starts_with("dir:"),
@@ -369,15 +376,16 @@ async fn undo(st: &Arc<AppState>, run_id: &str, project: Option<&str>) -> Respon
     for record in records.iter().filter(|r| project.map_or(true, |p| p == r.project)) {
         for place in record.places.iter().filter(|p| p.written) {
             let expect = memory::digest(&place.after);
-            let result = match &place.dir {
+            // Só o código vai na resposta: o erro do peer e o de IO podem trazer caminho ou texto de lá.
+            let result: Result<(), String> = match &place.dir {
                 Some(dir) => {
                     let (dir, before) = (PathBuf::from(dir), place.before.clone());
                     tokio::task::spawn_blocking(move || memory::write(&dir, &before, &expect))
                         .await
-                        .map_err(|e| e.to_string())
-                        .and_then(|r| r.map_err(|e| format!("{e:?}")))
+                        .map_err(|_| "dream_io".to_string())
+                        .and_then(|r| r.map_err(|e| e.code().to_string()))
                 }
-                None => peers::memory_put(st, &place.machine, &place.root, &place.before, &expect, &me).await,
+                None => peers::memory_put(st, &place.machine, &place.root, &place.before, &expect, &me).await.map_err(|e| super::code_of(&e)),
             };
             results.push(json!({"project": record.project, "machine": place.machine, "root": place.root, "ok": result.is_ok(), "error": result.err()}));
         }
@@ -394,28 +402,25 @@ async fn undo(st: &Arc<AppState>, run_id: &str, project: Option<&str>) -> Respon
         })
         .collect();
     if !restored.is_empty() {
-        match load_state(st) {
-            Ok(mut state) => {
-                for (key, before) in restored.iter().flat_map(|r| &r.cursors_before) {
-                    match before {
-                        Some(n) => state.cursors.insert(key.clone(), *n),
-                        None => state.cursors.remove(key),
-                    };
-                }
-                for record in &restored {
-                    state.projects.entry(record.project.clone()).or_default().last_dream_at = record.last_dream_before;
-                }
-                if let Err(e) = state.save(&Paths::of(st).state()) {
-                    return failure(&format!("dream_io: {e}"));
-                }
+        let saved = load_state(st).and_then(|mut state| {
+            for (key, before) in restored.iter().flat_map(|r| &r.cursors_before) {
+                match before {
+                    Some(n) => state.cursors.insert(key.clone(), *n),
+                    None => state.cursors.remove(key),
+                };
             }
-            Err(e) => return failure(&e),
+            for record in &restored {
+                state.projects.entry(record.project.clone()).or_default().last_dream_at = record.last_dream_before;
+            }
+            state.save(&Paths::of(st).state()).map_err(|e| format!("dream_io: {e}"))
+        });
+        // A memória já voltou: a resposta diz onde, mesmo sem o estado gravado.
+        if let Err(e) = saved {
+            return hangar_core::http::detail(StatusCode::INTERNAL_SERVER_ERROR, &super::code_of(&e), &e, json!({"results": results}));
         }
     }
     if project.is_none() {
-        if let Some(result) = undo_user_memory(st, run_id, &me).await {
-            results.push(result);
-        }
+        results.extend(undo_user_memory(st, run_id, &me).await);
     }
     if results.is_empty() {
         return failure("dream_run_not_found: nada a desfazer nesta rodada");
@@ -423,21 +428,48 @@ async fn undo(st: &Arc<AppState>, run_id: &str, project: Option<&str>) -> Respon
     ok(json!({"results": results}))
 }
 
-/// O arquivo global volta ao de antes da rodada, aqui e nos peers, só se ainda for o que ela gravou.
-async fn undo_user_memory(st: &Arc<AppState>, run_id: &str, me: &str) -> Option<Value> {
-    let dir = round::record_dir(&Paths::of(st), run_id);
-    let before = std::fs::read_to_string(dir.join(round::USER_BEFORE)).ok()?;
-    let after = std::fs::read_to_string(dir.join(round::USER_AFTER)).ok()?;
+/// O arquivo global volta ao de antes da rodada, aqui e depois nos peers, só se ainda for o que ela
+/// gravou. Um resultado por máquina; rodada sem a passada do usuário não devolve nenhum.
+async fn undo_user_memory(st: &Arc<AppState>, run_id: &str, me: &str) -> Vec<Value> {
+    let result = |machine: &str, outcome: Result<(), String>| {
+        json!({"project": "user-memory", "machine": machine, "root": "", "ok": outcome.is_ok(), "error": outcome.err()})
+    };
+    let record = round::record_dir(&Paths::of(st), run_id);
     let target = st.accounts.env.claude_base.join(USER_MEMORY_PATH);
-    let current = std::fs::read_to_string(&target).unwrap_or_default();
-    if current != after {
-        return Some(json!({"project": "user-memory", "machine": me, "root": "", "ok": false, "error": "dream_memory_changed"}));
-    }
-    let written = if before.is_empty() { std::fs::remove_file(&target) } else { hangar_core::fs::atomic_write(&target, before.as_bytes()) };
+    let before = match undo_user_local(&record, &target) {
+        Ok(None) => return Vec::new(),
+        Ok(Some(before)) => before,
+        Err(code) => return vec![result(me, Err(code.into()))],
+    };
+    let mut results = vec![result(me, Ok(()))];
     for peer in st.peers.enabled_ids() {
-        let _ = peers::user_put(st, &peer, &before, me).await;
+        let outcome = peers::user_put(st, &peer, &before, me).await.map_err(|e| super::code_of(&e));
+        if let Err(code) = &outcome {
+            st.diag.record_line(json!({"evento": "dream.undo_peer_failed", "nivel": "aviso", "maquina": peer, "codigo": code}));
+        }
+        results.push(result(peer.as_str(), outcome));
     }
-    Some(json!({"project": "user-memory", "machine": me, "root": "", "ok": written.is_ok(), "error": written.err().map(|e| e.to_string())}))
+    results
+}
+
+/// Parte local do Desfazer do arquivo global: `Ok(None)` = a rodada não teve a passada do usuário;
+/// `Ok(Some(antes))` = voltou aqui e o texto de antes segue para os peers.
+pub(super) fn undo_user_local(record: &Path, target: &Path) -> Result<Option<String>, &'static str> {
+    let read = |name: &str| match std::fs::read_to_string(record.join(name)) {
+        Ok(text) => Ok(Some(text)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(_) => Err("dream_io"),
+    };
+    let (Some(before), Some(after)) = (read(round::USER_BEFORE)?, read(round::USER_AFTER)?) else { return Ok(None) };
+    if round::read_or_empty(target).map_err(|_| "dream_io")? != after {
+        return Err("dream_memory_changed");
+    }
+    let written = if before.is_empty() {
+        std::fs::remove_file(target).or_else(|e| if e.kind() == std::io::ErrorKind::NotFound { Ok(()) } else { Err(e) })
+    } else {
+        hangar_core::fs::atomic_write(target, before.as_bytes())
+    };
+    written.map(|()| Some(before)).map_err(|_| "dream_io")
 }
 
 /// Peer: só a máquina registrada aqui como a que sonha grava memória nesta.

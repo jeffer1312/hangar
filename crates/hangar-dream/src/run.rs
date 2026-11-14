@@ -84,6 +84,8 @@ impl fmt::Display for DreamError {
             Self::Model(ModelError::Budget { .. }) => write!(f, "dream_budget_exhausted"),
             Self::Model(ModelError::Limited) => write!(f, "dream_account_limited"),
             Self::Model(ModelError::Timeout { .. }) => write!(f, "dream_timeout"),
+            // O modelo que já deu um código (`dream_unparsed_output`) aparece com ele.
+            Self::Model(ModelError::Other(e)) if e.starts_with("dream_") && e.bytes().all(|b| b.is_ascii_lowercase() || b == b'_') => write!(f, "{e}"),
             Self::Model(ModelError::Other(e)) => write!(f, "dream_model_failed: {e}"),
             Self::Rejected(why) => write!(f, "dream_rejected: {why}"),
             Self::Io(e) => write!(f, "dream_io: {e}"),
