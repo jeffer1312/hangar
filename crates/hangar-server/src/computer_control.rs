@@ -129,7 +129,11 @@ async fn blocking(
         let mut facts = facts(&st, &config);
         write(&paths, &facts, &config)?;
         // Outro pedido pode ter trocado o Jev antes da trava da escrita: a resposta leva o gravado.
-        facts.jev = RuntimeConfig::from_state(&st).map_err(setup::Error::io)?.jev_env();
+        // A escrita já está no disco: releitura que falha não a torna erro, a resposta fica com o Jev lido antes.
+        match RuntimeConfig::from_state(&st) {
+            Ok(config) => facts.jev = config.jev_env(),
+            Err(error) => tracing::warn!(code = "computer_control_jev_reread_failed", %error, "Computer Use: Jev não relido após a escrita"),
+        }
         setup::state(&paths, &facts)
     })
     .await
