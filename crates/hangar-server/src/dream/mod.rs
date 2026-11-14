@@ -112,7 +112,14 @@ fn next_wait(st: &AppState) -> Option<std::time::Duration> {
     };
     let schedule = hangar_scheduled_tasks::Schedule::Weekly { time: config.hour.clone(), weekdays: (0..7).collect() };
     // Sem rodada anterior conta de agora: ligar o sonho espera o próximo horário, não sonha na hora.
-    let last = load_state(st).ok().and_then(|s| s.last_round_at).unwrap_or_else(Utc::now);
+    let last = match load_state(st) {
+        Ok(state) => state.last_round_at,
+        Err(e) => {
+            st.diag.record_line(serde_json::json!({"evento": "dream.state_unreadable", "nivel": "aviso", "codigo": code_of(&e)}));
+            None
+        }
+    }
+    .unwrap_or_else(Utc::now);
     let next = hangar_scheduled_tasks::next_run(&schedule, last, &zone).ok()??;
     Some((next - Utc::now()).to_std().unwrap_or_default())
 }
