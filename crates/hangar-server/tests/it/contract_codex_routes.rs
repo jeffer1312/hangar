@@ -15,7 +15,7 @@ use hangar_server::runtime::terminal::TerminalTarget;
 use hangar_server::terminal_input::TerminalBinding;
 use hangar_server::session_write::codex::{permission_answer, skip_answer};
 use serde_json::{Value, json};
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 #[test]
 fn clear_with_an_open_terminal_panel_has_the_same_409_as_other_pane_controls() {
