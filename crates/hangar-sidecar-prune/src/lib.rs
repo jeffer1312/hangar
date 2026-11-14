@@ -132,9 +132,10 @@ impl Sweep {
         for (name, path) in dirs {
             let Some(dir) = self.dir(&path) else { continue };
             if !self.seen_tmp.insert(dir.clone()) { continue; }
+            let Some(children) = self.list(&dir) else { continue };
             // Também um nível abaixo: o catálogo do Pi mora em `.hangar-pi/models`.
             let mut targets = vec![dir.clone()];
-            for child in self.list(&dir).unwrap_or_default() {
+            for child in children {
                 if !child.file_type().is_ok_and(|t| t.is_dir() || t.is_symlink()) { continue; }
                 if let Some(child) = self.dir(&child.path()) && self.seen_tmp.insert(child.clone()) { targets.push(child); }
             }
