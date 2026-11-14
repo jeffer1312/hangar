@@ -233,21 +233,15 @@ _CAMPOS_AUX = ("jev_aux_base_url", "jev_aux_api_key", "jev_aux_modelo", "jev_aux
 
 
 def _jev_aux_legado(estrito: bool = False) -> dict[str, str]:
-    """Auxiliar de antes da configuração única, vindo INTEIRO de uma origem: o `jev_texto_*` do
-    navegador ou o `LLM_*` do Computer Use. Vale só enquanto nenhum `jev_aux_*` foi gravado.
-
-    As duas com o mesmo endereço e modelo são a mesma escolha: o campo vazio numa vem da outra (o
-    esforço só existe no Computer Use). Diferentes, vale a mais completa (empate: a do navegador), e o
-    diário registra; a do Computer Use fica guardada pelo `sync_jev` antes de ser trocada."""
+    """Auxiliar de antes da configuração única: o `jev_texto_*` do navegador. Vale só enquanto
+    nenhum `jev_aux_*` foi gravado."""
     d = _carregar()
     texto = {}
     if str(d.get("jev_texto_base_url") or "").strip():
         texto = dict(zip(_CAMPOS_AUX, (sem_chat_completions(str(d.get("jev_texto_base_url"))),
                                         str(d.get("jev_texto_api_key") or "").strip(),
                                         str(d.get("jev_texto_modelo") or "").strip(), "")))
-    mcp = {}
-    if not (texto and mcp):
-        return texto or mcp
+    return texto
 
 
 def jev_aux() -> dict[str, str]:
