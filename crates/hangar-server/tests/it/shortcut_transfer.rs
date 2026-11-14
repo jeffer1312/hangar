@@ -1268,16 +1268,25 @@ async fn import_outside_linux_refuses_scripts_only() {
 async fn import_config_failure_restores_scripts_and_created_dirs() {
     let scene = Scene::new();
     let demo = scene.script(".local/bin/demo", "original", 0o755);
-    std::fs::create_dir_all(scene.config_path().parent().unwrap()).unwrap();
-    std::fs::write(scene.config_path(), "{ilegível").unwrap();
+    scene.save(json!([{"id": "old", "type": "send_text", "label": "Old", "text": "old"}]));
+    let saved = scene.saved();
     let mut data = bundle("echo ok", ".local/bin/demo", true);
     data["scripts"].as_array_mut().unwrap().push(json!({"path": "bin/new", "content": "echo new", "executable": true}));
-    // A configuração ilegível é recusa da gravação: com tudo restaurado, continua recusa, agora com a causa.
-    assert_eq!(scene.import(json!({"data": data, "apply": true})).await,
-        import_error("importação falhou: runtime-config.json ilegível; arquivo preservado; arquivos anteriores restaurados"));
+    let mut host = Injected::new(&scene);
+    host.after_save = Some(Box::new(|_| Err(Error::Invalid("configuração recusada".into()))));
+    // A recusa da gravação, com tudo restaurado, continua recusa, agora com a causa.
+    let result = hangar_shortcut_transfer::import(&host, request(data.clone(), true, json!({})));
+    assert_eq!(result, Err(Error::Invalid("importação falhou: configuração recusada; arquivos anteriores restaurados".into())));
     assert_eq!(std::fs::read_to_string(&demo).unwrap(), "original");
     assert_eq!(mode_of(&demo), 0o755);
     assert!(!scene.home.join("bin").exists(), "D7.8: a pasta criada e vazia sai");
+    assert_eq!(scene.saved(), saved);
+    // Configuração ilegível falha antes de tocar em qualquer script.
+    std::fs::write(scene.config_path(), "{ilegível").unwrap();
+    let (status, body) = scene.import(json!({"data": data, "apply": true})).await;
+    assert_eq!((status, body["detail"]["code"].clone()), (500, json!("erro_shortcut_io")), "{body}");
+    assert_eq!(std::fs::read_to_string(&demo).unwrap(), "original");
+    assert!(!scene.home.join("bin").exists());
     assert_eq!(std::fs::read_to_string(scene.config_path()).unwrap(), "{ilegível");
 }
 

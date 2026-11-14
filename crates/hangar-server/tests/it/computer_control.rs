@@ -157,7 +157,9 @@ impl Scene {
         self.write(&format!("{name}/.credentials.json"), "{}");
         self.write(&format!("{name}/projects/p/s.jsonl"), "{}\n");
         let modified = SystemTime::UNIX_EPOCH + Duration::from_secs(2_000_000_000 - age);
-        std::fs::File::open(self.home.join(name).join("projects")).unwrap().set_modified(modified).unwrap();
+        // A recência da conta é o arquivo mais novo dentro de `projects/`, não a pasta.
+        std::fs::File::options().write(true).open(self.home.join(name).join("projects/p/s.jsonl")).unwrap()
+            .set_modified(modified).unwrap();
     }
 
     /// `ssh` falso no PATH: anota `$0` e o argv e roda `body`.
