@@ -409,7 +409,7 @@ impl ClaudeEngine {
     /// resposta inventada (a CLI já a gravou), e daqui em diante o fim de cada turno desta vida vem do transcript.
     pub fn transcript_turn_end(&mut self) -> Vec<Effect> {
         let mut effects = Vec::new();
-        self.deaf = true;
+        self.deaf = true; self.steer_now = None;
         self.in_progress = false; self.turn_start = None; self.label_deadline = None; self.label = None;
         self.end_turn_notices(&mut effects);
         self.pending.clear(); self.question = None;
@@ -442,7 +442,7 @@ impl ClaudeEngine {
     /// como não escrito; o que pode ter saído (`handed`) fica incerto e a conferência pelo transcript decide.
     pub fn transport_lost(&mut self,handed:&BTreeSet<String>) -> Vec<Effect> {
         let mut effects = Vec::new();
-        self.transport_up = false;
+        self.transport_up = false; self.steer_now = None;
         let open:Vec<String> = self.wires.iter().filter(|(_,wire)|!wire.final_result).map(|(id,_)|id.clone()).collect();
         for operation_id in open {
             if handed.contains(&operation_id) { self.uncertain_wire(operation_id,&mut effects); }
@@ -461,7 +461,7 @@ impl ClaudeEngine {
         for operation_id in open { self.on_ack(operation_id,WriteOutcome::NotWritten,&mut effects); }
         self.waiters.clear();
         self.transport_up = true;
-        self.in_progress = false; self.turn_start = None; self.label_deadline = None; self.active_input = None;
+        self.in_progress = false; self.turn_start = None; self.label_deadline = None; self.active_input = None; self.steer_now = None;
         self.drop_turn_notices();
         self.pending.clear(); self.question = None; self.clear_streams(&mut effects);
         effects.extend(self.hydrate(snapshot)?);
@@ -686,7 +686,7 @@ impl ClaudeEngine {
                 for (index,id) in requests.into_iter().enumerate() {
                     self.answer(format!("{operation_id}:deny:{index}"),id,json!({"behavior":"deny","message":"Interrompido pelo usuário."}),&mut effects);
                 }
-                self.restore_plan = None;
+                self.restore_plan = None; self.steer_now = None;
                 self.control(operation_id.clone(),"interrupt",json!({}),&mut effects);
                 // O Parar vale quando chega ao stdin (como no Python): esperar a resposta da CLI virava incerto.
                 if let Some(wire) = self.wires.get_mut(&operation_id) { wire.kind = "interrupt".into(); }
@@ -842,7 +842,7 @@ impl ClaudeEngine {
                 self.question = None;
             }
         }
-        if outcome == WriteOutcome::NotWritten && self.steer_now.as_deref() == Some(operation_id.as_str()) { self.steer_now = None; }
+        if outcome != WriteOutcome::Written && self.steer_now.as_deref() == Some(operation_id.as_str()) { self.steer_now = None; }
         if kind == "input" && self.active_input.as_deref() == Some(operation_id.as_str()) && outcome == WriteOutcome::NotWritten {
             self.active_input = None; self.in_progress = false; self.turn_start = None; self.label_deadline = None;
         }
@@ -949,7 +949,24 @@ impl ClaudeEngine {
                 self.on_system(&event,effects);
             },
             "stream_event" => self.on_stream(&event["event"],effects),
-            "command_lifecycle" if event["state"] == "started" => { if !self.in_progress { self.start_turn(); self.changed(effects,true); } }
+            "command_lifecycle" => {
+                let steer = self.steer_now.clone().filter(|id|event["command_uuid"].as_str() == Some(echo_uuid(id).as_str()));
+                match event["state"].as_str() {
+                    Some("started") => {
+                        // A orientação que cortou vira o turno, e o `result` dele é a resposta dela.
+                        if let Some(id) = steer { self.steer_now = None; if self.active_input.is_none() { self.active_input = Some(id); } }
+                        if !self.in_progress { self.start_turn(); self.changed(effects,true); }
+                    }
+                    Some("cancelled") if steer.is_some() => {
+                        self.steer_now = None;
+                        if self.active_input.is_none() {
+                            self.in_progress = false; self.turn_start = None; self.label_deadline = None;
+                            self.changed(effects,true); effects.push(Effect::WakeQueue);
+                        }
+                    }
+                    _ => {}
+                }
+            }
             "assistant" => {
                 if let Some(limit) = usage_limit(&event,&self.rate_limit_info,self.clock.epoch_s) { self.turn_limit = Some(limit); }
                 if let Some(error) = event["error"].as_str() { self.turn_error = Some(error.to_owned()); }
@@ -1106,11 +1123,11 @@ impl ClaudeEngine {
                 self.turn_limit = None;
                 if local { effects.push(Effect::ConfirmLocalCommands); }
                 self.apply_usage(&event,effects);
-                // O corte não é parada: a CLI já segue com a orientação, e a fila espera o turno dela acabar.
-                let steered = self.steer_now.take();
-                if let Some(id) = &steered { self.active_input = Some(id.clone()); self.start_turn(); }
+                // O corte não é parada: a CLI começa a orientação logo depois (`command_lifecycle`), e a fila espera.
+                let cut = self.steer_now.is_some();
+                if cut { self.start_turn(); }
                 self.clear_streams(effects); self.changed(effects,true);
-                if steered.is_none() {
+                if !cut {
                     if self.effort_intent.as_ref().is_some_and(|intent|intent["status"] == "prepared") { self.dispatch_effort(effects); }
                     else { effects.push(Effect::WakeQueue); }
                 }
@@ -1173,7 +1190,7 @@ impl ClaudeEngine {
                     if self.stderr_tail.len() > STDERR_TAIL { self.stderr_tail.remove(0); }
                 }
             }
-            "keep_alive" | "tool_progress" | "command_lifecycle" => {},
+            "keep_alive" | "tool_progress" => {},
             _ => {
                 self.policy("unknown_private",json!({"kind":kind,"event":event}),effects);
                 if self.unknown.insert(kind.into()) { self.policy("local_output",json!({"text":format!("⚙️ Evento desconhecido da CLI: {kind}")}),effects); }

@@ -412,7 +412,8 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
 - **Orientar do botão no Claude sem terminal vai com `"priority":"now"`; recado com `steer:true`
   vai sem.** Só as rotas `/steer` e `queue/<id>/steer` marcam `now`, e só a primeira entrada de uma
   orientação corta o turno. A CLI devolve um `result` do turno cortado antes do orientado: esse
-  `result` não é parada (a vista segue trabalhando e a fila não acorda). Ver
+  `result` não é parada (a vista segue trabalhando e a fila não acorda) até o `command_lifecycle`
+  da orientação dizer `started` (ela vira o turno) ou `cancelled` (o turno acaba). Ver
   [Orientar corta o turno](#orientar-corta-o-turno-do-claude-sem-terminal-14112026).
 - **Modo de permissão troca COM a sessão trabalhando** — é tecla, não texto. O guard de "está
   trabalhando" existe para o `/model`, que é texto.
@@ -1114,8 +1115,11 @@ um `system/init` e então o turno da orientação, com o `result` dele (`complet
 
 Esse primeiro `result` zerava o turno no motor: a vista passava por parada, a fila acordava e podia
 entregar uma mensagem no meio do turno orientado, e o `result` final respondia por ela. Por isso o
-motor guarda a orientação que cortou (`steer_now`) e, no `result` do corte, a faz turno ativo sem
-acordar a fila. Recado entre sessões (`send` do MCP, `hangar-send`, ponte de grupo) chega por
+motor guarda a orientação que cortou (`steer_now`) e, no `result` do corte, segura o turno sem
+acordar a fila. Quem decide é o `command_lifecycle` da CLI, cujo `command_uuid` é o `uuid` da
+mensagem escrita: `started` faz dela o turno ativo, `cancelled` encerra. Contar `result` prendia a
+vista em "trabalhando" quando o corte não vinha (Parar logo depois, escrita incerta, `result`
+perdido); por isso Parar, escrita sem prova, queda do socket e fim pelo transcript também soltam. Recado entre sessões (`send` do MCP, `hangar-send`, ponte de grupo) chega por
 `/input` com `steer:true` e não corta: abortaria o trabalho de quem recebe. Várias entradas numa
 orientação levavam `now` cada uma, e a segunda cortaria o turno da primeira.
 
