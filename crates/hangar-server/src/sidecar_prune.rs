@@ -19,10 +19,6 @@ use crate::startup::Readiness;
 
 type Discovered = (Arc<Vec<SessionRow>>, Arc<Vec<Pane>>, bool);
 
-/// Ligado, todo spec de `~/.hangar/session-specs` conta como sessão viva; desligado, só a fotografia
-/// do restore. O spec não sai quando a sessão fecha: ligado, protege todo nome que já existiu.
-const SPECS_COUNT_AS_LIVE: bool = false;
-
 /// Quem ainda pode voltar, pelo registro em disco.
 #[derive(Debug, Default, PartialEq)]
 struct Recorded { keys: HashSet<String>, names: HashSet<String>, stems: HashSet<String> }
@@ -45,7 +41,7 @@ where
 async fn round(state: Arc<AppState>) -> bool {
     // O registro antes da descoberta: sessão retomada entre as duas leituras já está na lista.
     let home = state.accounts.env.home.clone();
-    let recorded = match tokio::task::spawn_blocking(move || recorded(&home, SPECS_COUNT_AS_LIVE)).await {
+    let recorded = match tokio::task::spawn_blocking(move || recorded(&home)).await {
         Ok(recorded) => recorded,
         Err(error) => {
             tracing::error!(code = "sidecar_prune_record_interrupted", panic = error.is_panic(), %error, "leitura do registro da poda interrompida");
@@ -97,7 +93,8 @@ fn verdict(swept: Result<(Report, Option<&'static str>), &'static str>, catalog:
         Ok((report, degraded)) => {
             let mut line = summary(&report, catalog);
             if let Some(code) = degraded { line["codigo"] = json!(code); }
-            (line, degraded.is_none())
+            // Catálogo ilegível varreu só a base: as pastas de conta esperam a nova tentativa, não o dia.
+            (line, degraded.is_none() && catalog)
         }
     }
 }
@@ -128,28 +125,12 @@ fn live(rows: &[SessionRow], panes: &[Pane], partial: bool, recorded: io::Result
     (Live { stems: Some(recorded.stems), names: Some(recorded.names), panes: Some(panes), keys: Some(recorded.keys) }, None)
 }
 
-/// Sessão na fotografia do restore (e, com `specs`, com spec gravado) ainda pode voltar depois do
-/// reboot: conta como viva.
-fn recorded(home: &Path, specs: bool) -> io::Result<Recorded> {
-    use crate::session_open::{record, restore};
+/// Sessão na fotografia do restore ainda pode voltar depois do reboot: conta como viva. O spec não
+/// conta: ele não sai quando a sessão fecha e protegeria todo nome que já existiu.
+fn recorded(home: &Path) -> io::Result<Recorded> {
+    use crate::session_open::restore;
     let stem = crate::session_rename::files::stem;
     let mut out = Recorded::default();
-    let listing = if specs { Some(std::fs::read_dir(record::dir(home))) } else { None };
-    match listing {
-        None => {}
-        Some(Err(error)) if error.kind() == io::ErrorKind::NotFound => {}
-        Some(Err(error)) => return Err(error),
-        Some(Ok(entries)) => for entry in entries {
-            let file = entry?.file_name();
-            // Só a chave que o Hangar grava (hex de 32); `.switching` e sobra de tmp ficam de fora.
-            let Some(key) = file.to_str().and_then(|n| n.strip_suffix(".json"))
-                .filter(|k| k.len() == 32 && k.bytes().all(|b| b.is_ascii_hexdigit())) else { continue };
-            let Some(spec) = record::read(home, key)? else { continue };
-            out.keys.insert(spec.key);
-            out.names.insert(stem(&spec.name));
-            out.stems.extend(spec.conversation);
-        },
-    }
     let raw = match std::fs::read(home.join(".hangar").join(restore::FILE)) {
         Ok(raw) => raw,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(out),
@@ -247,22 +228,21 @@ mod tests {
         fs::write(specs.join("nao-e-chave.json"), "{").unwrap();
         fs::write(home.join(".hangar").join("session-restore.json"), json!({"sessions": {"fedcba9876543210fedcba9876543210":
             {"name": "restaurar", "provider": "claude", "conversation": "conversa-do-restore"}}}).to_string()).unwrap();
-        // Com o interruptor desligado, só a fotografia do restore conta; o spec fica de fora.
-        let (live, degraded) = live(&rows, &panes, false, recorded(home, false));
+        // Só a fotografia do restore conta; o spec, mesmo com conversa, fica de fora.
+        let (live, degraded) = live(&rows, &panes, false, recorded(home));
         assert_eq!(degraded, None);
         assert_eq!(live.stems, set(&["aaa", "vivo-kimi", "conversa-do-restore"]));
         assert_eq!(live.names, set(&["minha-sessao", "kimi", "sem-transcript", "restaurar"]));
         assert_eq!(live.panes, set(&["42"]));
         assert_eq!(live.keys, set(&["fedcba9876543210fedcba9876543210"]));
-        // Ligado, o spec conta. Se o formato dele mudar, este teste mostra: spec ilegível é registro ilegível.
-        let (live, _) = live_of(&rows, &panes, recorded(home, true));
-        assert_eq!(live.stems, set(&["aaa", "vivo-kimi", "conversa-do-spec", "conversa-do-restore"]));
-        assert_eq!(live.names, set(&["minha-sessao", "kimi", "sem-transcript", "a-voltar", "restaurar"]));
-        assert_eq!(live.keys, set(&[key, "fedcba9876543210fedcba9876543210"]));
     }
 
-    fn live_of(rows: &[SessionRow], panes: &[Pane], recorded: io::Result<Recorded>) -> (Live, Option<&'static str>) {
-        live(rows, panes, false, recorded)
+    /// Catálogo ilegível varreu só a base: a rodada tenta de novo logo, mesmo com a descoberta boa.
+    #[test]
+    fn an_unreadable_catalog_retries_soon() {
+        let (line, ran) = verdict(Ok((Report::default(), None)), false);
+        assert!(!ran);
+        assert_eq!(line["codigo"], "accounts_catalog_failed");
     }
 
     #[test]
@@ -280,7 +260,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         fs::create_dir_all(dir.path().join(".hangar")).unwrap();
         fs::write(dir.path().join(".hangar").join("session-restore.json"), "{").unwrap();
-        let (live, degraded) = live(&[row("s", Some("/p/aaa.jsonl"))], &[pane("%1")], false, recorded(dir.path(), false));
+        let (live, degraded) = live(&[row("s", Some("/p/aaa.jsonl"))], &[pane("%1")], false, recorded(dir.path()));
         assert_eq!((live.stems, live.names, live.panes, live.keys), (None, None, set(&["1"]), None));
         assert_eq!(degraded, Some("session_registry_unreadable"));
         assert!(!verdict(Ok((Report::default(), degraded)), true).1);
@@ -314,7 +294,7 @@ mod tests {
     #[test]
     fn an_idle_machine_with_no_session_waits_the_day() {
         let dir = tempfile::tempdir().unwrap();
-        let (live, degraded) = live(&[], &[], false, recorded(dir.path(), false));
+        let (live, degraded) = live(&[], &[], false, recorded(dir.path()));
         assert_eq!(degraded, None);
         let report = hangar_sidecar_prune::prune(&[dir.path().to_path_buf()], &live, now());
         let (line, ran) = verdict(Ok((report, degraded)), true);
