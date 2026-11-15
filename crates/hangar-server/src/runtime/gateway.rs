@@ -2269,7 +2269,7 @@ impl RuntimeRegistry {
                         None
                     },
                 };
-                if let Some(target)=&runtime_target {super::lifecycle::delete_sidecar(&self.claude_sidecar_dir()?,target,&closed.binding.conversation)?;}
+                if let Some(target)=&runtime_target {super::lifecycle::delete_sidecar(&self.policy.claude_sidecar_dir()?,target,&closed.binding.conversation)?;}
                 drop(store);drop(lease);
             }
         } else if let Some(store) = &self.interactions { store.forget(key).map_err(crate::interactions::runtime_error)?; }
