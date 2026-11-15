@@ -31,10 +31,23 @@ function FlyingCopy({ flight }: { flight: Flight }) {
   const { theme } = useUnistyles();
   const progress = useSharedValue(0);
   const { from, to, target, dim } = flight;
+  const endLeft = useSharedValue(from.left);
+  const endBottom = useSharedValue(from.bottom);
+  const endWidth = useSharedValue(from.width);
+  const endHeight = useSharedValue(from.height);
+  const started = useRef(false);
   useEffect(() => {
-    if (to) progress.value = withTiming(1, { duration: FLIGHT_MS, easing: Easing.out(Easing.cubic) });
-  }, [to, progress]);
-  const end = to ?? from;
+    if (!to) return;
+    // O destino que se mexe no meio da viagem é alcançado aos poucos, sem salto.
+    const reach = (value: number) => (started.current ? withTiming(value, { duration: 100 }) : value);
+    endLeft.value = reach(to.left);
+    endBottom.value = reach(to.bottom);
+    endWidth.value = reach(to.width);
+    endHeight.value = reach(to.height);
+    if (started.current) return;
+    started.current = true;
+    progress.value = withTiming(1, { duration: FLIGHT_MS, easing: Easing.out(Easing.cubic) });
+  }, [to, progress, endLeft, endBottom, endWidth, endHeight]);
   const inputSize = theme.type.body.fontSize;
   const endSize = target === 'queue' ? theme.base.text.xs : theme.base.text.base * theme.conversa.texto;
   const inputPad = theme.base.space[2];
@@ -42,10 +55,10 @@ function FlyingCopy({ flight }: { flight: Flight }) {
   const box = useAnimatedStyle(() => {
     const t = progress.value;
     return {
-      left: from.left + (end.left - from.left) * t,
-      bottom: from.bottom + (end.bottom - from.bottom) * t,
-      width: from.width + (end.width - from.width) * t,
-      height: from.height + (end.height - from.height) * t,
+      left: from.left + (endLeft.value - from.left) * t,
+      bottom: from.bottom + (endBottom.value - from.bottom) * t,
+      width: from.width + (endWidth.value - from.width) * t,
+      height: from.height + (endHeight.value - from.height) * t,
       paddingHorizontal: inputPad + (endPad - inputPad) * t,
       opacity: dim ? 1 - 0.5 * t : 1,
     };

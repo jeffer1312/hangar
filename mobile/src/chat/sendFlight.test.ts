@@ -8,12 +8,14 @@ const at = (x: number, y: number, width: number, height: number) => ({
 describe('voo da mensagem enviada', () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    vi.stubGlobal('requestAnimationFrame', (frame: () => void) => setTimeout(frame, 16));
     useSendFlight.setState({ flight: null });
     // Área do chat: 400 de largura, de y=100 a y=700.
     setFlightHost('s::a', at(0, 100, 400, 600));
   });
   afterEach(() => {
     setFlightHost('s::a', null);
+    vi.unstubAllGlobals();
     vi.useRealTimers();
   });
 
@@ -54,6 +56,23 @@ describe('voo da mensagem enviada', () => {
     land('s::a', 'oi', 'queue', at(0, 600, 10, 10));
     expect(useSendFlight.getState().flight?.target).toBe('chat');
 
+    vi.advanceTimersByTime(FLIGHT_MS + 100);
+    expect(useSendFlight.getState().flight).toBeNull();
+  });
+
+  test('o destino que se mexe durante a viagem é seguido, e o que desmonta mantém a última medida', () => {
+    let place = { x: 300, y: 600, width: 80, height: 36 };
+    const moving = { measureInWindow: (done: (x: number, y: number, width: number, height: number) => void) => done(place.x, place.y, place.width, place.height) };
+    takeoff('s::a', 'oi', at(20, 640, 300, 40));
+    land('s::a', 'oi', 'chat', moving);
+    expect(useSendFlight.getState().flight?.to?.bottom).toBe(64);
+    // A lista rolou até o fim: a bolha subiu.
+    place = { ...place, y: 520 };
+    vi.advanceTimersByTime(40);
+    expect(useSendFlight.getState().flight?.to?.bottom).toBe(144);
+    place = { x: 0, y: 0, width: 0, height: 0 };
+    vi.advanceTimersByTime(40);
+    expect(useSendFlight.getState().flight?.to?.bottom).toBe(144);
     vi.advanceTimersByTime(FLIGHT_MS + 100);
     expect(useSendFlight.getState().flight).toBeNull();
   });

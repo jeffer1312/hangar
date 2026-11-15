@@ -92,6 +92,25 @@ export function land(route: string, text: string, target: FlightTarget, node: Me
     if (!lands(to, hostHeight)) { clear(flight.id); return; }
     useSendFlight.setState({ flight: { ...current, to, target, dim } });
     timer = setTimeout(() => clear(flight.id), FLIGHT_MS + OVERLAP_MS);
+    follow(flight.id, route, node);
+  });
+}
+
+// O destino ainda se mexe durante a viagem (a lista rola até o fim, o teclado fecha, a linha de trabalho entra
+// embaixo da bolha): a cópia persegue a medida de cada quadro, senão pousa onde a bolha estava.
+function follow(id: number, route: string, node: Measurable): void {
+  requestAnimationFrame(() => {
+    if (useSendFlight.getState().flight?.id !== id) return;
+    measure(route, node, (to) => {
+      const current = useSendFlight.getState().flight;
+      if (current?.id !== id || !current.to) return;
+      // Destino desmontado (a mensagem real tomou o lugar do eco) mede zero: vale a última medida boa.
+      const was = current.to;
+      if (to.width > 0 && (to.left !== was.left || to.bottom !== was.bottom || to.width !== was.width || to.height !== was.height)) {
+        useSendFlight.setState({ flight: { ...current, to } });
+      }
+      follow(id, route, node);
+    });
   });
 }
 
