@@ -2833,7 +2833,7 @@ impl RuntimeRegistry {
         store.exec(current_generation,&format!("{step}:advance"),clock,Action::AdvanceLifecycle {generation:target.generation,state:json!({"metadata":target.metadata})}).map_err(|_|failure("queue_io"))?;
         let mut original_target=target.clone();original_target.generation=generation;original_target.metadata["cano"]=serde_json::to_value(&original).unwrap();
         original_target.binding=CanoBinding {pid:sidecar_expected_pid,escuta:original.escuta.clone(),token:original.token.clone(),versao:original.versao};
-        if super::lifecycle::patch_sidecar(&original_target,&json!({"cano":serde_json::to_value(&cano).unwrap()}))?["updated"]!=true {return Err(failure("lifecycle_sidecar_changed"));}
+        if super::lifecycle::patch_sidecar_in(&self.policy.claude_sidecar_dir()?,&original_target,&json!({"cano":serde_json::to_value(&cano).unwrap()}))?["updated"]!=true {return Err(failure("lifecycle_sidecar_changed"));}
         drop(store);drop(lease);
         let result=async {
             self.open_headless_locked(target.clone(),None,false,false).await?;
