@@ -15,13 +15,14 @@ interface Args {
   provider: string | null;
   chosen: Chosen;
   onChosen: (next: Chosen) => void;
-  // Fecha a folha de ajustes depois de trocar o modelo.
+  // Expõe confirmações na conversa e falhas que impedem a troca.
   close: () => void;
 }
 
 // A statusline escreve "Opus5.5·1M" e a lista do Claude, "Opus 5.5": compara sem espaço, pontuação
 // e o sufixo de contexto, senão o modelo atual nunca aparece marcado.
 const semEnfeite = (s: string) => s.split('·')[0].toLowerCase().replace(/[^a-z0-9]/g, '');
+const fullModelName = (s: string) => s.toLowerCase().replace(/\(1m context\)|·1m|\[1m\]/g, '1m').replace(/[^a-z0-9]/g, '');
 function mesmoModelo(nome: string, statusModel: string | null | undefined): boolean {
   return !!statusModel && semEnfeite(nome) === semEnfeite(statusModel);
 }
@@ -62,6 +63,14 @@ export function useModelControl({ serverId, name, provider, chosen, onChosen, cl
   }, []);
 
   const model = pillLabels(statusFields, chosen).model;
+  const selectedItems = useMemo(() => {
+    if (!model) return items;
+    const name = fullModelName(model);
+    const named = items.filter(item => fullModelName(item.label) === name);
+    const exact = items.find(item => item.id === model || item.hint === model) ?? (named.length === 1 ? named[0] : null);
+    if (!exact) return items;
+    return items.map(item => ({ ...item, selected: item === exact }));
+  }, [items, model]);
   const display = tempError ?? (model ? spacedModel(model) : m.composer_modelo());
 
   const load = useCallback(async (refresh = false) => {
@@ -107,46 +116,45 @@ export function useModelControl({ serverId, name, provider, chosen, onChosen, cl
     async (it: PillMenuItem) => {
       if (!server) { setNotice(m.chat_servidor_removido()); return; }
       const id = it.id ?? it.label;
-      let closedEarly = false;
+      const applyChoice = (next: Chosen) => {
+        const key = it.id ?? it.hint ?? it.label;
+        setItems(current => current.map(item => ({ ...item, selected: (item.id ?? item.hint ?? item.label) === key })));
+        onChosen(next);
+      };
       setNotice(null);
       try {
         const cat = catalog.current;
         if (isCodex && cat.kind === 'codex') {
           // Trocar de modelo leva o nível padrão do NOVO: o antigo pode nem existir na lista dele.
           const md = cat.data.models.find((x) => x.model === id);
-          const effort = id === cat.data.current.model
-            ? (cat.data.current.effort ?? md?.defaultEffort ?? null)
+          const currentModel = chosen.model ?? statusFields?.model ?? cat.data.current.model;
+          const effort = id === currentModel
+            ? (chosen.effort ?? statusFields?.effort ?? cat.data.current.effort ?? md?.defaultEffort ?? null)
             : (md?.defaultEffort ?? md?.efforts[0]?.value ?? null);
           await setCodexModel(name, id, effort, server);
-          onChosen({ model: id, effort });
-          close();
+          applyChoice({ model: id, effort });
         } else if (isPi) {
           const alias = it.hint ?? it.label;
           const slash = alias.indexOf('/');
           const res = await setPiModel(name, { provider: slash >= 0 ? alias.slice(0, slash) : undefined, model: slash >= 0 ? alias.slice(slash + 1) : alias }, server);
-          onChosen({ ...chosen, model: res.current?.name ?? res.current?.id ?? it.label, effort: res.thinking ?? chosen.effort });
-          close();
+          applyChoice({ ...chosen, model: res.current?.name ?? res.current?.id ?? it.label, effort: res.thinking ?? chosen.effort });
         } else if (isKimi) {
           const res = await setKimiModel(name, { model: id }, server);
-          onChosen({ ...chosen, model: res.current?.name ?? it.label });
-          close();
+          applyChoice({ ...chosen, model: res.current?.name ?? it.label });
         } else if (cat.kind === 'engine') {
           // Sessão de motor: o id do provedor é o rótulo, e a troca vale só nesta sessão.
           const res = await setEngineModel(name, { model: id, effort: chosen.effort ?? statusFields?.effort ?? undefined }, server);
-          onChosen({ ...chosen, model: res.model });
+          applyChoice({ ...chosen, model: res.model });
           if (res.effort_error) {
             setNotice(m.modelo_trocado_esforco_nao({ erro: res.effort_error }));
             return;
           }
-          close();
         } else {
-          // Fecha antes da resposta: a troca pode abrir uma confirmação na conversa, que a folha taparia.
-          closedEarly = true;
-          close();
           const res = await setModelEffort(name, { model: id, scope: 'session' }, server);
-          if (res?.pending_confirm) return;
+          // A confirmação precisa ficar acessível na conversa antes de continuar os ajustes.
+          if (res?.pending_confirm) { close(); return; }
           const label = cat.kind === 'claude' ? cat.names.get(id) : undefined;
-          onChosen({
+          applyChoice({
             ...chosen,
             model: id === 'default' ? null : label?.replace(/\s*\(1M context\)/i, '·1M').trim() || id.charAt(0).toUpperCase() + id.slice(1),
           });
@@ -154,7 +162,7 @@ export function useModelControl({ serverId, name, provider, chosen, onChosen, cl
       } catch (e) {
         const status = (e as { status?: number }).status;
         const msg = e instanceof Error ? e.message : String(e);
-        if (status === 409 || closedEarly) {
+        if (status === 409) {
           close();
           flash(msg || m.composer_sessao_trabalhando());
         } else {
@@ -162,10 +170,10 @@ export function useModelControl({ serverId, name, provider, chosen, onChosen, cl
         }
       }
     },
-    [name, server, isCodex, isPi, isKimi, chosen, onChosen, statusFields?.effort, flash, close],
+    [name, server, isCodex, isPi, isKimi, chosen, onChosen, statusFields?.model, statusFields?.effort, flash, close],
   );
 
   const refresh = useCallback(() => load(true), [load]);
-  return { model, display, failed: tempError !== null, items, loading, error, notice, load, select,
+  return { model, display, failed: tempError !== null, items: selectedItems, loading, error, notice, load, select,
     refresh: !isCodex && !isPi && !isKimi ? refresh : undefined };
 }

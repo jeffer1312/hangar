@@ -52,7 +52,7 @@ interface Props {
   // Texto devolvido pelo Parar/cancelar: entra antes do que já está no campo, nunca no lugar.
   returned?: { text: string };
   onReturnedAdopted?: () => void;
-  settingsRequest?: { which: 'mode' | 'account'; n: number } | null;
+  settingsRequest?: { which: 'mode' | 'account' | 'usage'; n: number } | null;
   onSettingsRequestConsumed?: (n: number) => void;
   firstInputId?: string;
   firstInputSent?: boolean;
@@ -580,7 +580,7 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
   const organizationOff = useDictationOrganization(styleServer) === 'off';
   const [commandSheetOpen, setCommandSheetOpen] = useState(false);
   // Comandos e rodapé abrem a mesma folha; o número sobe a cada pedido.
-  const [selectorRequest, setSelectorRequest] = useState<{ which: 'model' | 'effort' | 'mode' | 'account'; n: number } | null>(null);
+  const [selectorRequest, setSelectorRequest] = useState<{ which: 'model' | 'effort' | 'mode' | 'account' | 'usage'; n: number } | null>(null);
   const lastSettingsRequest = useRef<number | null>(null);
   // null = pergunta lateral fechada; string = a pergunta que veio com o `/btw` (pode ser vazia).
   const [sideQuestion, setSideQuestion] = useState<string | null>(null);
@@ -1540,7 +1540,7 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
     }
   }, [replaceText, isClaude, origin]);
 
-  const openSelector = useCallback((which: 'model' | 'effort' | 'mode' | 'account') => {
+  const openSelector = useCallback((which: 'model' | 'effort' | 'mode' | 'account' | 'usage') => {
     setSelectorRequest((cur) => ({ which, n: (cur?.n ?? 0) + 1 }));
   }, []);
   useEffect(() => {
