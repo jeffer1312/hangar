@@ -24,7 +24,8 @@ export const ECHO_SETTLE_MS = 5000;
  *  na tela e só guarda qual bolha é a dele. Sem eco para ela, devolve a mesma lista. */
 export function bindQueued(pending: PendingMsg[], incoming: ChatEvent): PendingMsg[] {
   if (incoming.kind !== 'user_msg' || !incoming.id.startsWith('queued-') || !incoming.text) return pending;
-  const at = pending.findIndex((p) => (p.solid || p.queue) && !p.entry && sameMessage(p.text, incoming.text!));
+  const id = incoming.id.slice('queued-'.length);
+  const at = pending.findIndex((p) => (p.solid || p.queue) && !p.entry && !p.known?.includes(id) && sameMessage(p.text, incoming.text!));
   if (at < 0) return pending;
   return pending.map((p, i) => (i === at ? { ...p, entry: incoming.id } : p));
 }
@@ -44,7 +45,9 @@ export function settleQueued(pending: PendingMsg[], listed: readonly { id: strin
     taken.add(entry.id);
     return false;
   });
-  return next.length === pending.length ? pending : next;
+  if (next.length === pending.length) return pending;
+  // O próximo retrato repete a entrada que já tirou um eco: os ecos que ficaram passam a conhecê-la.
+  return taken.size ? next.map((p) => (p.queue ? { ...p, known: [...(p.known ?? []), ...taken] } : p)) : next;
 }
 
 // Legenda canônica: sem o marcador "📎 imagem:/arquivo: `path`" + "—" que liga.

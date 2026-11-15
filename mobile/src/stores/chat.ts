@@ -553,6 +553,7 @@ function criarChatStore(serverId: string, name: string): ChatApi {
     if (ev.kind === 'assistant_msg' && ev.text && currentPreview()) limparPreview();
   }
 
+  const echoDeadlines = new Map<string, ReturnType<typeof setTimeout>>();
   // O eco de envio com a sessão parada fica na conversa enquanto a mensagem passa pela fila. Se ela continuar na
   // fila quando o painel aparece, o lugar dela é o painel; se a mensagem real não vier, a bolha da fila diz por quê.
   function settleEcho(entry: string): void {
@@ -566,7 +567,9 @@ function criarChatStore(serverId: string, name: string): ChatApi {
     };
     // Um pouco depois do painel: um instante com a mensagem nos dois lugares, nunca um sem ela.
     setTimeout(() => drop(true), QUEUE_APPEAR_MS + 60);
-    setTimeout(() => drop(false), ECHO_SETTLE_MS);
+    // A entrada listada tarde recomeça o prazo final: o antigo tiraria o eco antes de o painel aparecer.
+    clearTimeout(echoDeadlines.get(entry));
+    echoDeadlines.set(entry, setTimeout(() => { echoDeadlines.delete(entry); drop(false); }, ECHO_SETTLE_MS));
   }
 
   function connectSSE(): void {

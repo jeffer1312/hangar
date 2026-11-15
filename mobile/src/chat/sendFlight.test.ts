@@ -8,14 +8,12 @@ const at = (x: number, y: number, width: number, height: number) => ({
 describe('voo da mensagem enviada', () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    vi.stubGlobal('requestAnimationFrame', (frame: () => void) => setTimeout(frame, 16));
     useSendFlight.setState({ flight: null });
     // Área do chat: 400 de largura, de y=100 a y=700.
     setFlightHost('s::a', at(0, 100, 400, 600));
   });
   afterEach(() => {
     setFlightHost('s::a', null);
-    vi.unstubAllGlobals();
     vi.useRealTimers();
   });
 
@@ -68,10 +66,10 @@ describe('voo da mensagem enviada', () => {
     expect(useSendFlight.getState().flight?.to?.bottom).toBe(64);
     // A lista rolou até o fim: a bolha subiu.
     place = { ...place, y: 520 };
-    vi.advanceTimersByTime(40);
+    vi.advanceTimersByTime(60);
     expect(useSendFlight.getState().flight?.to?.bottom).toBe(144);
     place = { x: 0, y: 0, width: 0, height: 0 };
-    vi.advanceTimersByTime(40);
+    vi.advanceTimersByTime(60);
     expect(useSendFlight.getState().flight?.to?.bottom).toBe(144);
     vi.advanceTimersByTime(FLIGHT_MS + 100);
     expect(useSendFlight.getState().flight).toBeNull();

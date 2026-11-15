@@ -344,7 +344,9 @@ impl Hangar {
                 this.update(cx, |this, cx| {
                     if this.local_send.is_none() && this.local_queue.is_none() { return; }
                     // A entrada do servidor que chegou nesse meio é a troca normal, feita pelo painel.
-                    let listed = this.chat.queue_panel().entries.iter().any(|e| this.local_queue.as_ref().is_some_and(|l| !l.known.contains(&e.id)));
+                    // Só a dela: entrada nova de outro envio não segura a linha local depois do prazo.
+                    let listed = this.chat.queue_panel().entries.iter()
+                        .any(|e| this.local_queue.as_ref().is_some_and(|l| !l.known.contains(&e.id) && same_text(&e.text, &l.text)));
                     if !listed && this.local_queue.as_ref().is_some_and(|l| local_expired(l.sent.map(|at| at.elapsed()))) {
                         this.local_queue_released("the server answered and no entry came", cx);
                     }
@@ -508,6 +510,8 @@ impl Hangar {
                     None if send.since.elapsed() > LOCAL_MAX => return false,
                     None => {}
                 }
+                // A entrada apareceu com a sessão já trabalhando: a conferência do prazo é marcada agora.
+                handoff |= entry.is_some() && send.working_since.is_some();
                 send.entry = entry;
             }
             if working && send.working_since.is_none() { handoff |= send.entry.is_some(); }
@@ -675,6 +679,13 @@ impl Hangar {
         let arriving = id == LOCAL_QUEUE && matches!(flight.target, Some((Target::Queue, _)))
             && matches!(self.send_phase(), Some(Phase::Waiting | Phase::Flying(_)));
         arriving || flight.from_queue && single
+    }
+
+    /// A cópia ainda viaja para o painel e esta é a linha da mensagem dela: a entrada do servidor pode tomar o lugar
+    /// da linha local no meio da viagem, e continua sendo o destino.
+    pub(super) fn send_arrives_at_queue_text(&self, text: &str) -> bool {
+        self.send_flight.as_ref().is_some_and(|f| matches!(f.target, Some((Target::Queue, _))) && same_text(&f.text, text))
+            && matches!(self.send_phase(), Some(Phase::Waiting | Phase::Flying(_)))
     }
 
     /// A cópia saiu do campo e ainda pode estar por cima dele: o texto de exemplo espera.

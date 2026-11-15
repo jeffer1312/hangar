@@ -111,7 +111,13 @@ describe('eco que passa pela fila', () => {
   test('duas mensagens iguais: cada entrada tira um eco só, e a que já estava no painel não tira nenhum', () => {
     const first = { ...p('ok', 'p1'), queue: true, known: [] };
     const second = { ...p('ok', 'p2'), queue: true, known: [] };
-    expect(settleQueued([first, second], [{ id: '1', text: 'ok' }], [])).toEqual([second]);
+    const left = settleQueued([first, second], [{ id: '1', text: 'ok' }], []);
+    expect(left).toEqual([{ ...second, known: ['1'] }]);
+    // O mesmo retrato de novo não tira o segundo: a entrada 1 já foi usada.
+    expect(settleQueued(left, [{ id: '1', text: 'ok' }], [])).toBe(left);
+    // A bolha de uma entrada que o eco já conhecia não é a dele.
+    expect(bindQueued(left, incoming('ok', 'queued-1'))).toBe(left);
+    expect(bindQueued(left, incoming('ok', 'queued-2'))[0].entry).toBe('queued-2');
     // Enviada com um "ok" antigo ainda esperando: a entrada antiga não é a dela.
     const later = { ...p('ok', 'p3'), queue: true, known: ['1'] };
     const kept = [later];
@@ -122,7 +128,7 @@ describe('eco que passa pela fila', () => {
   test('a entrada que tira o eco preso a ela não tira também o eco igual que veio depois', () => {
     const first = { ...p('ok', 'p1'), queue: true, known: [], entry: 'queued-1' };
     const second = { ...p('ok', 'p2'), queue: true, known: [] };
-    expect(settleQueued([first, second], [{ id: '1', text: 'ok' }], [])).toEqual([second]);
+    expect(settleQueued([first, second], [{ id: '1', text: 'ok' }], [])).toEqual([{ ...second, known: ['1'] }]);
   });
 
   test('o eco do painel preso a uma bolha sai quando a entrada dela é listada, mesmo com outro texto', () => {

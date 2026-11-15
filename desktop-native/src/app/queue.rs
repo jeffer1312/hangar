@@ -353,9 +353,10 @@ impl Hangar {
         }
         // Fechando, ele mostra o que tinha, sem ações: a fila de verdade já esvaziou.
         let (entries, actions) = if live { (entries, actions) } else { (self.queue.last.clone(), false) };
-        self.queue.shown_text = (entries.len() == 1).then(|| entries[0].text.trim().to_owned());
+        // Recolhido, nenhuma linha é desenhada: não há de onde uma mensagem saia em viagem.
+        self.queue.shown_text = (entries.len() == 1 && !self.queue.collapsed).then(|| entries[0].text.trim().to_owned());
         // Só a linha única e a linha local gravam o lugar; com outras, a medida anterior não é de ninguém.
-        if entries.len() != 1 && !entries.iter().any(|e| e.id == send_flight::LOCAL_QUEUE) { self.flight_places.queue.set(None); }
+        if self.queue.collapsed || entries.len() != 1 && !entries.iter().any(|e| e.id == send_flight::LOCAL_QUEUE) { self.flight_places.queue.set(None); }
         let rows = if self.queue.collapsed { 0 } else { entries.len() };
         self.queue.shape = (rows, slides);
         if supports { self.refresh_queue_jev(cx); }
@@ -479,12 +480,13 @@ impl Hangar {
                 .when(dragging && self.queue.dragged.as_deref() == Some(id.as_str()), |el| el.opacity(0.5));
         }
         let full = super::quotes::summary(&text);
+        let arriving = self.send_arrives_at_queue_text(&text);
         row = row.child(div().id(SharedString::from(format!("queue-text-{i}"))).flex_1().min_w_0().px(px(4.)).truncate()
             .text_size(px(12.5)).text_color(theme::text()).child(conversation::one_line(&full, 400))
             // A linha local e a que está sozinha na fila dizem onde estão: a mensagem enviada pousa na primeira, e sai da
             // segunda em viagem para a conversa.
-            .when(local || single, |el| el.relative().child(send_flight::record(&self.flight_places, |p| &p.queue))
-                .when(self.send_hides_queue_text(&id, single), |el| el.opacity(0.)))
+            .when(local || single || arriving, |el| el.relative().child(send_flight::record(&self.flight_places, |p| &p.queue))
+                .when(arriving || self.send_hides_queue_text(&id, single), |el| el.opacity(0.)))
             .tooltip(move |window, cx| gpui_kit::component::tooltip::Tooltip::new(full.clone()).build(window, cx)));
         if !actions { return row.into_any_element(); }
         if editing {

@@ -312,7 +312,12 @@ impl Hangar {
                     wheel_trace(|| format!("event delta={:?} ours={} reduce_motion={} at={:?}", event.delta, hitbox.should_handle_scroll(window), cx.reduce_motion(), window.mouse_position()));
                 }
                 let ScrollDelta::Lines(lines) = event.delta else { return };
-                if phase != DispatchPhase::Capture || lines.y == 0. || cx.reduce_motion() || !hitbox.should_handle_scroll(window) { return; }
+                if phase != DispatchPhase::Capture || lines.y == 0. || !hitbox.should_handle_scroll(window) { return; }
+                if cx.reduce_motion() {
+                    // Sem deslize a lista rola sozinha, mas o gesto começado na conversa continua sendo dela.
+                    view.update(cx, |this, _| this.pages.wheel_latch.set(Some(Instant::now()))).ok();
+                    return;
+                }
                 cx.stop_propagation();
                 view.update(cx, |this, cx| this.wheel_lines(lines.y, cx)).ok();
             });

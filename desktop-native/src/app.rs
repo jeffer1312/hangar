@@ -649,6 +649,8 @@ pub struct Hangar {
     input_history: HashMap<SessionKey, composer::InputHistory>,
     flight: InFlight,
     action_feedback: HashMap<SessionKey, (String, bool)>,
+    /// Quando a nota do Jev de cada conversa entrou: o prazo de uma nota não apaga a seguinte, de mesmo texto.
+    jev_note_at: HashMap<SessionKey, Instant>,
     file_cards: HashMap<(SessionKey, Source), FileCard>,
     /// Painel "Na fila": edição em curso, recolhido e arrasto.
     queue: queue::QueueUi,
@@ -1187,7 +1189,7 @@ impl Hangar {
             history_installed: false, pending_chat: Vec::new(),
             history_limit: 400, has_older: false, etag: None, error: None, list_error: None,
             delivery: DeliveryTracker::default(), stopping: HashSet::new(), stop_feedback: HashMap::new(), drafts: HashMap::new(), input_history: HashMap::new(),
-            flight: InFlight::default(), action_feedback: HashMap::new(), file_cards: HashMap::new(), queue: Default::default(), send_flight: None, local_send: None, local_queue: None, idle_sends: Vec::new(), send_landed: Vec::new(),
+            flight: InFlight::default(), action_feedback: HashMap::new(), jev_note_at: HashMap::new(), file_cards: HashMap::new(), queue: Default::default(), send_flight: None, local_send: None, local_queue: None, idle_sends: Vec::new(), send_landed: Vec::new(),
             note_slide: Default::default(), note_last: None, flight_places: Default::default(), live_terms: Vec::new(), keyring: HashMap::new(), vault: HashMap::new(), vault_page: None, plugins_page: None, guide: Default::default(), rename_suggest: Default::default(), tags: HashMap::new(), question_open: None, question_card: None,
             hangar_open: false, hangar_focus: cx.focus_handle(), hangar_error: None, live_clock: None, ask_form: AskForm::default(), ask_drafts: HashMap::new(), plans_dismissed: HashSet::new(), answered_tools: HashSet::new(), answering: HashMap::new(), ask_scroll: Default::default(), plan_scroll: Default::default(), plan_view: None,
             plan_review: Default::default(),
@@ -2352,12 +2354,17 @@ impl Hangar {
             };
             let shown = tr(message);
             self.action_feedback.insert(key.clone(), (shown.clone(), warning));
+            let born = Instant::now();
+            self.jev_note_at.insert(key.clone(), born);
             // A nota do Jev só conta por onde o envio foi: some sozinha. Envio que falhou fica até a pessoa agir.
             let session = key.clone();
             cx.spawn(async move |this, cx| {
                 cx.background_executor().timer(JEV_NOTE_TTL).await;
                 if let Some(this) = this.upgrade() {
                     this.update(cx, |this, cx| {
+                        // Só a nota deste envio: outra de mesmo texto, mais nova, tem o prazo dela.
+                        if this.jev_note_at.get(&session) != Some(&born) { return; }
+                        this.jev_note_at.remove(&session);
                         if this.action_feedback.get(&session).is_some_and(|(text, _)| *text == shown) {
                             this.action_feedback.remove(&session);
                             cx.notify();
@@ -3084,7 +3091,8 @@ impl Hangar {
         let message = quotes::compose_refs(&refs, &text);
         // Só o texto digitado, sozinho, ganha o destino local e viaja até ele; o resto entra como sempre. Com a sessão
         // trabalhando e sem "mandar direto", o destino é o painel "Na fila"; senão, o fim da conversa.
-        let flies = refs.is_empty() && !command && group.is_none();
+        // Texto longo fica no caminho de sempre: a bolha local o mostraria inteiro, sem o corte da mensagem gravada.
+        let flies = refs.is_empty() && !command && group.is_none() && send_flight::flies(&field);
         let idle = self.chat.state.state != "working";
         let to_queue = !idle && steer != SendTiming::Direct;
         let known_before = if flies { known.clone() } else { HashSet::new() };

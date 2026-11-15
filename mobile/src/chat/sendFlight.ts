@@ -97,9 +97,11 @@ export function land(route: string, text: string, target: FlightTarget, node: Me
 }
 
 // O destino ainda se mexe durante a viagem (a lista rola até o fim, o teclado fecha, a linha de trabalho entra
-// embaixo da bolha): a cópia persegue a medida de cada quadro, senão pousa onde a bolha estava.
+// embaixo da bolha): a cópia persegue a medida dele, senão pousa onde a bolha estava. A medida passa pelo JS:
+// uma a cada 50 ms, e a cópia alcança o lugar novo na thread de UI.
+const FOLLOW_MS = 50;
 function follow(id: number, route: string, node: Measurable): void {
-  requestAnimationFrame(() => {
+  setTimeout(() => {
     if (useSendFlight.getState().flight?.id !== id) return;
     measure(route, node, (to) => {
       const current = useSendFlight.getState().flight;
@@ -111,7 +113,7 @@ function follow(id: number, route: string, node: Measurable): void {
       }
       follow(id, route, node);
     });
-  });
+  }, FOLLOW_MS);
 }
 
 /** A mensagem desta peça está em viagem: a peça fica invisível até o pouso. */
