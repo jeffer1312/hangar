@@ -7,8 +7,8 @@ import { toast } from '../../ui/Toast';
 import { haptic } from '../../ui/haptics';
 import * as m from '../../paraglide/messages';
 
-/** `readAt`: quando a leitura do status começou; o andamento dela só vale se começou depois do último evento ao vivo. */
-type Data = { dreamerId: string; status: DreamStatus; readAt: number };
+/** `events`: quantos eventos ao vivo tinham chegado quando a leitura começou; o andamento dela só vale se nenhum chegou depois. */
+type Data = { dreamerId: string; status: DreamStatus; events: number };
 
 /**
  * Configuração, estado e ações do sonho valem na máquina que sonha: o servidor ativo só diz qual é.
@@ -29,6 +29,8 @@ export function useDream() {
   const generation = useRef(0);
   const operation = useRef(false);
   const loaded = useRef(false);
+  // Contador, não horário: evento e leitura no mesmo milissegundo empatariam.
+  const eventCount = useRef(0);
 
   const load = useCallback(async () => {
     const g = ++generation.current;
@@ -55,9 +57,9 @@ export function useDream() {
       // Máquina escolhida que o app não conhece (ou ainda nenhuma): o ativo responde por ela.
       const dreamer = !own.machine || own.machine === own.this_machine ? active
         : (await dreamFirstMatch(reads, (r) => r?.config.this_machine === own.machine))?.server ?? active;
-      const readAt = Date.now();
+      const events = eventCount.current;
       const status = await getDreamStatus(dreamer);
-      if (live()) { loaded.current = true; setData({ dreamerId: dreamer.id, status, readAt }); }
+      if (live()) { loaded.current = true; setData({ dreamerId: dreamer.id, status, events }); }
     } catch (e) {
       if (live()) setError(`${m.dream_load_error()} · ${dreamFailure(e)}`);
     } finally {
@@ -82,18 +84,17 @@ export function useDream() {
   const latest = useRef<DreamProgress | null>(null);
   // Vale o mais novo: status lido antes do último evento ao vivo não passa por cima dele, e rodada que o evento
   // deu por acabada nunca volta pelo status.
-  const eventAt = useRef(0);
   const ended = useRef<string | null>(null);
   // Outra máquina sonhando: nada da rodada da anterior vale para ela. Vem antes do efeito do status, que roda
   // em seguida no mesmo commit e aplica o andamento da máquina nova.
   const dreamerId = data?.dreamerId;
   useEffect(() => {
-    latest.current = null; ended.current = null; eventAt.current = 0;
+    latest.current = null; ended.current = null;
     setProgress(null); setFinished(null);
   }, [dreamerId]);
   // Por leitura, não por valor: dois status seguidos com `null` aplicam os dois.
   useEffect(() => {
-    if (!data || data.readAt < eventAt.current) return;
+    if (!data || data.events !== eventCount.current) return;
     const next = data.status.progress ?? null;
     if (next?.run_id && next.run_id === ended.current) return;
     latest.current = next;
@@ -112,7 +113,7 @@ export function useDream() {
     let source: EventSourceLike | null = null;
     const onEvent = (next: DreamProgress | null) => {
       attempt = 0;
-      eventAt.current = Date.now();
+      eventCount.current++;
       const before = latest.current;
       latest.current = next;
       setProgress(next);
