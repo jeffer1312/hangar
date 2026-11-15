@@ -197,24 +197,24 @@ Desenho (medidas do mock, em px da tela dele):
 - O aviso de hook do Codex (`hook_failed`/`hook_prompt` sem `notice_meta`) segue no desenho de hoje.
 - Linha de fim de turno: com `state.turn_note` presente, `✻ Trabalhou por 48s · {turn_note}`, o trecho da nota em `warning_text`. Some quando o servidor tira a nota (8 s). Campo próprio, e não o `label`: parada, a sessão ainda manda no `label` o agente em segundo plano.
 
-- [ ] **Step 1: Testes que falham**
+- [x] **Step 1: Testes que falham**
 
 `notice_title_for_hook_uses_subject`, `notice_title_for_cli_note_strips_the_gear_and_keeps_the_first_line`, `notice_hidden_only_for_ignored_key`, `notice_without_key_is_never_hidden_and_has_no_ignore`, `event_without_notice_meta_is_not_a_notice_line`.
 
-- [ ] **Step 2: Rodar e ver falhar**
+- [x] **Step 2: Rodar e ver falhar** (pulado: uma rodada por tarefa)
 
 Run: `scripts/cargo-pinned test --locked --manifest-path ../desktop-native/Cargo.toml notice_`
 Expected: FAIL.
 
-- [ ] **Step 3: Implementar módulo, ligação em `render_message`, cliente da rota e rótulo em `render_working`**
+- [x] **Step 3: Implementar módulo, ligação em `render_message`, cliente da rota e rótulo em `render_working`**
 
-- [ ] **Step 4: Rodar e ver passar**
+- [x] **Step 4: Rodar e ver passar**
 
-- [ ] **Step 5: Verificação manual no app**
+- [ ] **Step 5: Verificação manual no app** (pendente: precisa do servidor desta branch no ar e do app compilado)
 
 Janela de pré-visualização (sem trocar o app instalado dele) numa sessão `cx-*` sem terminal com um hook que falha de propósito: print da linha fechada, aberta, ignorada e do rótulo de turno parado. Comparar cada print com o mock no mesmo estado e listar o que difere.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 `feat(native): Claude notices as a discreet expandable line with Ignore`.
 
@@ -256,8 +256,8 @@ Status: ready-for-agent
 
 Uma linha de ajuste "Avisos ignorados" com o total; abre a lista (os quatro estados: carregando, vazio, erro, lista), cada item com "Voltar a mostrar".
 
-- [ ] **Step 1: Teste do rótulo da chave** (`notice_key_label("hook:Stop") == "Hook Stop"`, chave desconhecida mostra a própria chave)
-- [ ] **Step 2: Implementar nos dois clientes**
+- [x] **Step 1: Teste do rótulo da chave** (`notice_key_label("hook:Stop") == "Hook Stop"`, chave desconhecida mostra a própria chave)
+- [ ] **Step 2: Implementar nos dois clientes** (nativo feito, no mesmo commit da Task 4; Expo espera o mock do celular, junto com a Task 5)
 - [ ] **Step 3: Verificação manual** (ignorar na conversa, voltar a mostrar em Configurações, aviso reaparece)
 - [ ] **Step 4: Commit** — `feat: list of ignored notices in settings`
 

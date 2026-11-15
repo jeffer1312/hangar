@@ -182,6 +182,13 @@ impl Hangar {
                         changed = stored == Some(true);
                         stored.is_some()
                     }
+                    "notice_ignores" => {
+                        let stored = super::notice_line::store(&mut self.notice_ignores, &key, &frame.data);
+                        // Não mexe na barra de sessões: só a conversa aberta nessa máquina muda.
+                        changed = false;
+                        if stored == Some(true) { self.notice_ignores_changed(&key, cx); }
+                        stored.is_some()
+                    }
                     _ => { changed = false; true }
                 };
                 let _ = frame.applied.send(applied);
