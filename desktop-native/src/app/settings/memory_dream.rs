@@ -108,6 +108,15 @@ struct NoteCounts {
     removed: usize,
 }
 
+/// O que a tarefa do `events` manda à página.
+enum StreamEvent {
+    Progress(Option<Progress>),
+    /// A conexão caiu: o andamento mostrado já não é confiável.
+    Lost,
+    /// Voltou depois de cair.
+    Reconnected,
+}
+
 #[derive(Clone, Deserialize)]
 struct CallMeta {
     n: usize,
@@ -216,9 +225,11 @@ struct DreamPage {
     /// A rodada no ar (pelo `events` da máquina que sonha) e a última que acabou com a página aberta.
     progress: Option<Progress>,
     finished: Option<Progress>,
-    /// Endereço da máquina que o `events` acompanha e a tarefa que o lê.
-    watching: Option<String>,
+    /// A máquina (endereço e credencial) que o `events` acompanha, a tarefa que o lê e a geração dela: evento de
+    /// uma conexão anterior que ainda estava no canal não vale.
+    watching: Option<Api>,
     stream: Option<tokio::task::JoinHandle<()>>,
+    stream_gen: u64,
     calls: Option<WeakEntity<Calls>>,
 }
 
@@ -242,6 +253,12 @@ struct Calls {
     pick: Option<usize>,
     detail: Option<Result<CallDetail, String>>,
     show_prompt: bool,
+    /// Resposta de um pedido anterior que chega depois da de um novo é descartada.
+    list_seq: u64,
+    detail_seq: u64,
+    /// Fase e chamadas feitas do projeto na última releitura da lista: só relê quando mudam.
+    seen: Option<(String, usize)>,
+    detail_at: Option<std::time::Instant>,
 }
 
 struct Changes {
@@ -333,6 +350,7 @@ impl DreamPage {
             finished: None,
             watching: None,
             stream: None,
+            stream_gen: 0,
             calls: None,
         };
         page.load(window, cx);
@@ -423,24 +441,47 @@ impl DreamPage {
     /// Acompanha o andamento na máquina que sonha; trocar de máquina troca a conexão.
     fn watch(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let api = self.dreamer_api();
-        if self.watching.as_deref() == Some(api.identity().as_str()) {
+        // Mesmo endereço com outro token também troca: a conexão velha seguiria com a credencial antiga.
+        if self.watching.as_ref().is_some_and(|w| w.same_credential(&api)) {
             return;
         }
         if let Some(task) = self.stream.take() {
             task.abort();
         }
-        self.watching = Some(api.identity());
-        let (tx, rx) = async_channel::unbounded::<Option<Progress>>();
+        self.stream_gen += 1;
+        let generation = self.stream_gen;
+        self.watching = Some(api.clone());
+        // A conexão anterior era de outra máquina: o andamento dela não vale aqui.
+        self.progress = None;
+        let (tx, rx) = async_channel::unbounded::<StreamEvent>();
         self.stream = Some(self.runtime.spawn(progress_stream(api, tx)));
         // A tarefa abortada solta o `tx`: o `recv` falha e este laço acaba junto.
         cx.spawn_in(window, async move |this, cx| {
-            while let Ok(progress) = rx.recv().await {
-                if this.update_in(cx, |this, window, cx| this.on_progress(progress, window, cx)).is_err() {
+            while let Ok(event) = rx.recv().await {
+                let applied = this.update_in(cx, |this, window, cx| {
+                    if generation == this.stream_gen {
+                        this.on_stream(event, window, cx);
+                    }
+                });
+                if applied.is_err() {
                     break;
                 }
             }
         })
         .detach();
+    }
+
+    fn on_stream(&mut self, event: StreamEvent, window: &mut Window, cx: &mut Context<Self>) {
+        match event {
+            StreamEvent::Progress(progress) => self.on_progress(progress, window, cx),
+            // Sem conexão não se sabe se ainda sonha: "Sonhando" com Parar ficaria mentindo até voltar.
+            StreamEvent::Lost => {
+                self.progress = None;
+                cx.notify();
+            }
+            // Voltou: o que mudou enquanto estava fora (a rodada pode ter acabado) vem do status.
+            StreamEvent::Reconnected => self.load(window, cx),
+        }
     }
 
     fn on_progress(&mut self, progress: Option<Progress>, window: &mut Window, cx: &mut Context<Self>) {
@@ -453,7 +494,9 @@ impl DreamPage {
         self.progress = progress;
         if let Some(calls) = self.calls.as_ref().and_then(WeakEntity::upgrade) {
             let live = self.progress.as_ref().map(|p| p.run_id.clone());
-            calls.update(cx, |calls, cx| calls.refresh(live.as_deref(), window, cx));
+            let id = calls.read(cx).project.clone();
+            let seen = self.progress.as_ref().and_then(|p| p.projects.iter().find(|x| x.id == id)).map(|x| (x.status.clone(), x.calls_done));
+            calls.update(cx, |calls, cx| calls.refresh(live.as_deref(), seen, window, cx));
         }
         // Acabou: os projetos ganham a data, o custo e o erro novos.
         if ended {
@@ -1378,19 +1421,36 @@ impl Render for Changes {
 
 impl Calls {
     fn new(api: Api, runtime: Arc<Runtime>, run_id: String, project: String, live: bool, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let mut calls = Self { api, runtime, run_id, project, live, list: None, pick: None, detail: None, show_prompt: false };
+        let mut calls = Self {
+            api,
+            runtime,
+            run_id,
+            project,
+            live,
+            list: None,
+            pick: None,
+            detail: None,
+            show_prompt: false,
+            list_seq: 0,
+            detail_seq: 0,
+            seen: None,
+            detail_at: None,
+        };
         calls.load_list(window, cx);
         calls
     }
 
     fn load_list(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.list_seq += 1;
+        let seq = self.list_seq;
         let (api, run_id, project) = (self.api.clone(), self.run_id.clone(), self.project.clone());
         run(
             &self.runtime,
             async move { parse::<CallList>(api.server_read(&["dream", "runs", &run_id, "calls"], &[("project", &project)], 20).await) },
             window,
             cx,
-            |this, result, window, cx| match result {
+            move |this, result, window, cx| match result {
+                _ if seq != this.list_seq => {}
                 Ok(list) => {
                     // Sem escolha, abre a chamada que está trabalhando; senão a primeira.
                     if this.pick.is_none() {
@@ -1406,6 +1466,9 @@ impl Calls {
 
     fn load_detail(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(n) = self.pick else { return };
+        self.detail_seq += 1;
+        self.detail_at = Some(std::time::Instant::now());
+        let seq = self.detail_seq;
         let (api, run_id, project) = (self.api.clone(), self.run_id.clone(), self.project.clone());
         run(
             &self.runtime,
@@ -1416,22 +1479,28 @@ impl Calls {
             window,
             cx,
             move |this, result, _, _| {
-                if this.pick == Some(n) {
+                if seq == this.detail_seq && this.pick == Some(n) {
                     this.detail = Some(result.map_err(|e| failure_text(&e)));
                 }
             },
         );
     }
 
-    /// Andamento novo: relê a lista e, se a escolhida ainda trabalha, o detalhe dela.
-    fn refresh(&mut self, live_run: Option<&str>, window: &mut Window, cx: &mut Context<Self>) {
+    /// Andamento novo. A lista só se relê quando o projeto mudou de fase ou terminou uma chamada; o detalhe da
+    /// escolhida que ainda trabalha, no máximo a cada 2 s. O fim da rodada relê os dois uma última vez.
+    fn refresh(&mut self, live_run: Option<&str>, seen: Option<(String, usize)>, window: &mut Window, cx: &mut Context<Self>) {
         if !self.live {
             return;
         }
         self.live = live_run == Some(self.run_id.as_str());
+        let ended = !self.live;
+        if ended || seen != self.seen {
+            self.seen = seen;
+            self.load_list(window, cx);
+        }
         let picked_running = self.detail.as_ref().and_then(|d| d.as_ref().ok()).is_none_or(|d| d.meta.status == "running");
-        self.load_list(window, cx);
-        if picked_running {
+        let due = self.detail_at.is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(2));
+        if picked_running && (ended || due) {
             self.load_detail(window, cx);
         }
     }
@@ -1757,10 +1826,17 @@ fn span(seconds: i64) -> String {
     }
 }
 
-/// "6 passos · 42 s · US$ 0.04" de uma chamada que acabou.
+/// "6 passos · 42 s · US$ 0.04" de uma chamada que acabou; sem custo (morta sem a linha final), "custo desconhecido".
 fn call_meta(c: &CallMeta) -> String {
     let duration = c.ended_at.as_deref().map(|end| span(between(&c.started_at, end))).unwrap_or_default();
-    tr_shared("dream_call_meta", &[("steps", &c.steps.to_string()), ("duration", &duration), ("cost", &usd(c.cost_usd.unwrap_or(0.)))])
+    let full = tr_shared("dream_call_meta", &[("steps", &c.steps.to_string()), ("duration", &duration), ("cost", "")]);
+    // A frase termina em "· US$ {cost}" nos dois idiomas: o custo entra pela chave própria.
+    let base = full.rsplit_once(" · ").map_or(full.as_str(), |(head, _)| head);
+    let cost = match c.cost_usd {
+        Some(cost) => tr_shared("dream_call_cost", &[("cost", &usd(cost))]),
+        None => t("dream_call_cost_unknown"),
+    };
+    format!("{base} · {cost}")
 }
 
 /// Nome da chamada pelo arquivo que ela leu: `s3-p0.txt` é a conversa 4 (com a parte, quando ela tem mais de uma),
@@ -1791,15 +1867,19 @@ fn model_name(model: &str) -> String {
     chars.next().map(|c| c.to_uppercase().collect::<String>() + chars.as_str()).unwrap_or_default()
 }
 
-/// Lê o `events` do sonho e manda cada andamento; caiu, volta com espera crescente.
-async fn progress_stream(api: Api, tx: async_channel::Sender<Option<Progress>>) {
+/// Lê o `events` do sonho e manda cada andamento; caiu, avisa e volta com espera crescente.
+async fn progress_stream(api: Api, tx: async_channel::Sender<StreamEvent>) {
     use eventsource_stream::Eventsource;
     use futures::StreamExt;
     let mut delay = 1u64;
+    let mut lost = false;
     loop {
         crate::api::route::ensure(&api).await;
         if let Ok(response) = api.server_events(&["dream", "events"]).await {
             delay = 1;
+            if std::mem::take(&mut lost) && tx.send(StreamEvent::Reconnected).await.is_err() {
+                return;
+            }
             // O servidor manda um comentário a cada 10 s, que o leitor de eventos não repassa: o prazo fica nos bytes.
             let bytes = futures::stream::unfold(Box::pin(response.bytes_stream()), |mut stream| async move {
                 match tokio::time::timeout(Duration::from_secs(25), stream.next()).await {
@@ -1813,14 +1893,17 @@ async fn progress_stream(api: Api, tx: async_channel::Sender<Option<Progress>>) 
                     continue;
                 }
                 let Ok(progress) = serde_json::from_str::<Option<Progress>>(&item.data) else { continue };
-                if tx.send(progress).await.is_err() {
+                if tx.send(StreamEvent::Progress(progress)).await.is_err() {
                     return;
                 }
             }
             crate::api::route::forget(&api);
         }
-        if tx.is_closed() {
-            return;
+        if !lost {
+            lost = true;
+            if tx.send(StreamEvent::Lost).await.is_err() {
+                return;
+            }
         }
         tokio::time::sleep(Duration::from_secs(delay)).await;
         delay = (delay * 2).min(30);

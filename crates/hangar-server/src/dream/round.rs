@@ -422,6 +422,9 @@ async fn dream_one(
     let payer = run::Payer::new(auth, &on_no_credit).observed(&recorder);
     let job = run::Job { workdir: workdir.path(), base: &base, inputs: &inputs, cap_usd: cap, scrub: ctx.scrub };
     let outcome = run::dream_project(&job, &payer, &model).await;
+    if recorder.unrecorded() {
+        st.diag.record_line(json!({"evento": "dream.call_unrecorded", "nivel": "aviso", "projeto": pid, "codigo": "dream_call_unrecorded"}));
+    }
     let spent = payer.spent();
     {
         let month = state.month_at(ctx.now);
@@ -627,6 +630,9 @@ async fn user_pass(ctx: &Ctx<'_>, state: &mut State, idx: usize) -> Result<(), S
     let payer = run::Payer::new(auth, &none).observed(&recorder);
     let job = run::UserJob { workdir: workdir.path(), notes: &notes, claude_md: &claude_md, current: &current, cap_usd: cap, scrub: ctx.scrub };
     let outcome = run::dream_user(&job, &payer, &model).await;
+    if recorder.unrecorded() {
+        st.diag.record_line(json!({"evento": "dream.call_unrecorded", "nivel": "aviso", "projeto": progress::USER_PROJECT, "codigo": "dream_call_unrecorded"}));
+    }
     let spent = payer.spent();
     {
         let month = state.month_at(ctx.now);

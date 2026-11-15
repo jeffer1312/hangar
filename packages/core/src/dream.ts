@@ -86,7 +86,11 @@ export function openDreamEvents(server: Server, onProgress: (progress: DreamProg
   const url = `${base}/api/dream/events${sameOrigin ? '' : `?token=${encodeURIComponent(server.token)}`}`;
   const source = apiEnv().createEventSource(url, { withCredentials: sameOrigin });
   source.addEventListener('progress', (ev) => {
-    try { onProgress(JSON.parse(ev.data) as DreamProgress | null); } catch { /* evento torto: espera o próximo */ }
+    // `null` quer dizer "acabou"; só dado vazio ou torto é ignorado.
+    if (!ev.data) return;
+    let next: DreamProgress | null;
+    try { next = JSON.parse(ev.data) as DreamProgress | null; } catch { return; }
+    onProgress(next);
   });
   return source;
 }

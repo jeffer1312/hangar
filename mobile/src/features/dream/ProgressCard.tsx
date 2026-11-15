@@ -9,7 +9,7 @@ import { Icon } from '../../ui/Icon';
 import { Pulse } from './rows';
 import * as m from '../../paraglide/messages';
 
-/** Relógio da tela para "há N s": só corre com a tela em foco. Não lê o servidor. */
+/** Relógio da tela para "há N s" e "Sonhou há…": só corre com a tela em foco. Não lê o servidor. */
 function useNow(running: boolean) {
   const [now, setNow] = useState(() => Date.now());
   useFocusEffect(useCallback(() => {
@@ -42,7 +42,7 @@ export function ProgressCard({ live, finished, busy, nextHour, onStop, onChanges
 }) {
   const c = useSettingsColors();
   const { theme } = useUnistyles();
-  const now = useNow(!!live);
+  const now = useNow(!!live || !!finished);
   if (live) {
     const lines = dreamProgressLines(live);
     return <SectionCard>
@@ -75,7 +75,7 @@ export function ProgressCard({ live, finished, busy, nextHour, onStop, onChanges
     <View style={[styles.body, styles.row]}>
       <Icon name={stopped ? 'X' : 'Check'} size={18} color={stopped ? theme.tokens.status.error : theme.tokens.status.success} />
       <View style={styles.texts}>
-        <Text style={[styles.title, { color: c.text }]}>{stopped ? m.dream_progress_failed() : m.dream_progress_done({ ago: dreamSince(finished.last_activity_at) })}</Text>
+        <Text style={[styles.title, { color: c.text }]}>{stopped ? m.dream_progress_failed() : m.dream_progress_done({ ago: dreamSince(finished.last_activity_at, now) })}</Text>
         <Text style={[styles.sub, { color: c.muted }]}>{stopped && failure ? dreamErrorText(failure)
           : [m.dream_progress_done_sub({ done: done.length, total: counted.length, cost: dreamUsd(finished.spent_usd),
             duration: dreamSpan(Date.parse(finished.last_activity_at) - Date.parse(finished.started_at)) }),

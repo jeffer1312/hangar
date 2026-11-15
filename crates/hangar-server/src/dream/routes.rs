@@ -311,10 +311,13 @@ fn events() -> Response {
 }
 
 fn stop() -> Response {
-    if RUNNING.lock().unwrap_or_else(|e| e.into_inner()).is_none() {
+    // Com a marca presa, uma rodada nova não começa (e zera o Parar) entre a conferência e o pedido.
+    let running = RUNNING.lock().unwrap_or_else(|e| e.into_inner());
+    if running.is_none() {
         return error(409, "dream_not_running", "nenhuma rodada em andamento");
     }
     progress::stop();
+    drop(running);
     ok(json!({"stopping": true}))
 }
 

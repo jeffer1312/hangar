@@ -79,7 +79,9 @@ pub fn begin(run_id: &str, projects: Vec<(String, String)>) {
         .into_iter()
         .map(|(id, name)| ProjectProgress { id, name, status: Status::Queued, calls_total: 0, calls_done: 0, cost_usd: 0.0, error: None, notes: None })
         .collect();
-    PROGRESS.send_replace(Some(Progress { run_id: run_id.into(), started_at: now, last_activity_at: now, spent_usd: 0.0, stopping: false, current: None, projects }));
+    // O Parar pode ter chegado durante o inventário, antes de haver andamento.
+    let stopping = stopping();
+    PROGRESS.send_replace(Some(Progress { run_id: run_id.into(), started_at: now, last_activity_at: now, spent_usd: 0.0, stopping, current: None, projects }));
 }
 
 pub fn end() {
@@ -146,11 +148,24 @@ pub struct Recorder {
     project: usize,
     next: AtomicUsize,
     calls: Mutex<Vec<CallMeta>>,
+    /// Alguma escrita do registro falhou: quem chama põe uma linha no diário, uma vez por projeto.
+    unrecorded: std::sync::atomic::AtomicBool,
 }
 
 impl Recorder {
     pub fn new(dir: PathBuf, workdir: &Path, project: usize) -> Self {
-        Self { dir, workdir: workdir.to_path_buf(), project, next: AtomicUsize::new(0), calls: Mutex::new(Vec::new()) }
+        Self {
+            dir,
+            workdir: workdir.to_path_buf(),
+            project,
+            next: AtomicUsize::new(0),
+            calls: Mutex::new(Vec::new()),
+            unrecorded: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+
+    pub fn unrecorded(&self) -> bool {
+        self.unrecorded.load(Ordering::SeqCst)
     }
 
     fn save(&self, meta: &CallMeta) {
@@ -159,7 +174,7 @@ impl Recorder {
             .and_then(|()| serde_json::to_vec(meta).map_err(std::io::Error::other))
             .and_then(|bytes| hangar_core::fs::atomic_write(&self.dir.join(format!("{}.json", meta.n)), &bytes));
         if saved.is_err() {
-            tracing::warn!(target: "dream", codigo = "dream_call_unrecorded", "passo do sonho não gravado");
+            self.unrecorded.store(true, Ordering::SeqCst);
         }
     }
 
@@ -213,7 +228,7 @@ impl Observer for Recorder {
         let parsed: Vec<Step> = steps::parse(line, &self.workdir).into_iter().map(scrub).collect();
         if !parsed.is_empty() {
             if self.append(n, &parsed).is_err() {
-                tracing::warn!(target: "dream", codigo = "dream_call_unrecorded", "passo do sonho não gravado");
+                self.unrecorded.store(true, Ordering::SeqCst);
             }
             if let Some(meta) = self.calls.lock().unwrap_or_else(|e| e.into_inner()).iter_mut().find(|m| m.n == n) {
                 meta.steps += parsed.len();

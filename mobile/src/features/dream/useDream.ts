@@ -78,23 +78,36 @@ export function useDream() {
   const [progress, setProgress] = useState<DreamProgress | null>(null);
   const [finished, setFinished] = useState<DreamProgress | null>(null);
   const latest = useRef<DreamProgress | null>(null);
+  // O evento ao vivo é mais novo que o status: depois do primeiro, o status só traz rodada que o evento não conhece,
+  // e nunca uma que o evento já deu por acabada (status lido antes do fim a ressuscitaria).
+  const sawEvent = useRef(false);
+  const ended = useRef<string | null>(null);
   const statusProgress = data?.status.progress ?? null;
-  useEffect(() => { latest.current = statusProgress; setProgress(statusProgress); }, [statusProgress]);
+  useEffect(() => {
+    if (statusProgress?.run_id && statusProgress.run_id === ended.current) return;
+    if (sawEvent.current && (!statusProgress || statusProgress.run_id === latest.current?.run_id)) return;
+    latest.current = statusProgress;
+    setProgress(statusProgress);
+  }, [statusProgress]);
   const dreamerRef = useRef(dreamer);
   dreamerRef.current = dreamer;
+  const loadRef = useRef(load);
+  loadRef.current = load;
   useFocusEffect(useCallback(() => {
     const server = dreamerRef.current;
     if (!server) return;
+    sawEvent.current = false;
     const source = openDreamEvents(server, (next) => {
+      sawEvent.current = true;
       const before = latest.current;
       latest.current = next;
       setProgress(next);
       if (next) { if (before?.run_id !== next.run_id) setFinished(null); return; }
       // A rodada acabou: o retrato final fica na tela e a lista relê os últimos sonhos.
-      if (before) { setFinished(before); void load(); }
+      if (before) { ended.current = before.run_id; setFinished(before); void loadRef.current(); }
     });
     return () => source.close();
-  }, [data?.dreamerId, load]));
+  }, [data?.dreamerId]));
   const labelOf = useCallback((machine: string) =>
     servers.find((s) => configs[s.id]?.this_machine === machine)?.label ?? machine, [servers, configs]);
 

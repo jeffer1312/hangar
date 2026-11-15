@@ -98,8 +98,12 @@ impl ClaudeModel {
             };
             let mut o = Vec::new();
             let read_out = async {
-                let mut lines = tokio::io::BufReader::new(&mut out).lines();
-                while let Some(line) = lines.next_line().await? {
+                let mut reader = tokio::io::BufReader::new(&mut out);
+                let mut raw = Vec::new();
+                // Em bytes: um UTF-8 quebrado no meio de uma conversa lida não derruba a chamada.
+                while reader.read_until(b'\n', &mut raw).await? > 0 {
+                    let line = String::from_utf8_lossy(&raw).trim_end_matches(['\n', '\r']).to_string();
+                    raw.clear();
                     (call.on_line)(&line);
                     // As mensagens trazem o texto das conversas lidas; na classificação ele faria qualquer
                     // falha parecer "limite da conta". Fica só o resto, onde está a linha `result`.

@@ -39,7 +39,8 @@ function Step({ step }: { step: DreamStep }) {
 }
 
 export default function MemoriaCall() {
-  const { run, project, n } = useLocalSearchParams<{ run?: string; project?: string; n?: string }>();
+  // `title` vem da lista, que conhece as partes da sessão ("Conversa 3 · parte 2").
+  const { run, project, n, title } = useLocalSearchParams<{ run?: string; project?: string; n?: string; title?: string }>();
   const d = useDream();
   const { dreamer, progress } = d;
   const c = useSettingsColors();
@@ -48,8 +49,8 @@ export default function MemoriaCall() {
   const [attempt, setAttempt] = useState(0);
   const [showPrompt, setShowPrompt] = useState(false);
   const running = call?.meta.status === 'running';
-  // Chamada em andamento relê a cada evento da rodada; acabada, não muda mais.
-  const tick = running && progress && progress.run_id === run ? progress.last_activity_at : null;
+  // Chamada em andamento relê no máximo a cada 2 s de atividade da rodada; acabada, não muda mais.
+  const tick = running && progress && progress.run_id === run ? Math.floor(Date.parse(progress.last_activity_at) / 2000) : null;
   useEffect(() => {
     if (!dreamer || !run || !project || n === undefined) return;
     let alive = true;
@@ -64,11 +65,11 @@ export default function MemoriaCall() {
   const header = meta ? [
     dreamModelName(meta.model),
     meta.ended_at ? dreamSpan(Date.parse(meta.ended_at) - Date.parse(meta.started_at)) : m.dream_call_running({ elapsed: dreamSince(meta.started_at) }),
-    meta.cost_usd === null ? '' : `US$ ${dreamUsd(meta.cost_usd)}`,
+    meta.cost_usd === null ? (meta.ended_at ? m.dream_call_cost_unknown() : '') : m.dream_call_cost({ cost: dreamUsd(meta.cost_usd) }),
   ].filter(Boolean).join(' · ') : '';
 
   return <Pagina>
-    <Stack.Screen options={{ title: meta ? dreamCallTitle(dreamCallLabel(meta.label), d.labelOf) : m.dream_calls_title() }} />
+    <Stack.Screen options={{ title: title ?? (meta ? dreamCallTitle(dreamCallLabel(meta.label), d.labelOf) : m.dream_calls_title()) }} />
     {failure ? <><Notice text={failure} error /><MachineGroup>
       <MachineRow title={m.lista_tentar_novamente()} action onPress={() => { if (dreamer) setAttempt((x) => x + 1); else void d.reload(); }} />
     </MachineGroup></> : null}
