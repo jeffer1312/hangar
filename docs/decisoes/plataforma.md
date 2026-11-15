@@ -4815,3 +4815,20 @@ recusar); o prompt do cookbook reescrevia o `name:` de cada nota para o nome do 
 identificador do Claude Code e fica); e o Desfazer não voltava o cursor das sessões nem a data do último
 sonho, então o sonho seguinte não relia o que foi desfeito. A passada do usuário nasce desligada
 (`user_memory`): o arquivo global entra em toda sessão e a pessoa liga depois de ler o que ele gera.
+
+Andamento, Parar e "Como sonhou" (15/11/2026). A tela só dizia "Sonhando…" e ninguém sabia se a
+rodada travou. O `claude -p` do sonho passou para `--output-format stream-json --verbose` (o `stream-json`
+com `-p` exige `--verbose`; a última linha, `result`, tem os mesmos `subtype`, `is_error` e
+`total_cost_usd` do modo `json`, medido com uma chamada real de US$ 0,0012). A classificação do erro olha
+só essa linha e o stderr: as mensagens trazem o texto das conversas lidas, e a regex de limite de uso
+casava com elas. O andamento mora em memória (`dream/progress.rs`, um `watch`) e sai em
+`/api/dream/events` (SSE) e em `progress` no status. O Parar é uma marca que fica ligada até o fim da
+rodada, conferida por cada chamada antes de começar (as que esperam na fila de 4 também a veem), mata a
+árvore do CLI como no prazo, e a chamada morta entra no gasto do mês com zero: sem a linha `result` o
+custo não é conhecido, e contar o teto inteiro (como o prazo faz) lançou US$ 12 por uma chamada parada
+0,14 s depois de começar, na prova real; ele nunca interrompe a
+gravação da memória, porque gravar metade dos lugares deixaria lugar sem Desfazer. Rodada da noite parada
+não marca `last_round_at`. De cada chamada fica em `runs/<rodada>/calls/` só o que o modelo disse e as
+ferramentas que pediu, com o alvo e o texto escrito (cortado em 4000), passado pelo limpador e em 0600; o
+que as ferramentas devolvem (o texto das conversas) não é gravado. Chamada que ficou `running` numa
+rodada que não está mais no ar sai como `dream_interrupted`. `CLIENT_API` foi a 11.

@@ -747,6 +747,8 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   ferramentas de arquivo presas à pasta de trabalho. A memória é gravada arquivo a arquivo,
   condicionada ao resumo lido, com a trava `.consolidate-lock` do auto-dream nativo, e nunca troca
   a pasta, que pode ser atalho das outras contas. Diário e `last_error` guardam só o código.
+  O registro de cada chamada guarda os passos do modelo, nunca o que as ferramentas devolvem; o
+  Parar mata as chamadas, mas nunca interrompe a gravação da memória.
   [Medição](docs/decisoes/plataforma.md#sonho-da-memória-13112026).
 - **Computer Use e transferência de atalhos são do Rust.** `/api/computer-control*` mora no crate
   `hangar-computer-control-setup` e `/api/shortcuts/*` no `hangar-shortcut-transfer`, sem reserva

@@ -5,6 +5,7 @@
 pub mod cli;
 pub mod inventory;
 pub mod peers;
+pub mod progress;
 pub mod round;
 pub mod routes;
 #[cfg(test)]

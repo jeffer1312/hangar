@@ -45,6 +45,44 @@ pub struct Call<'a> {
     pub workdir: &'a Path,
     pub budget_usd: f64,
     pub auth: Auth,
+    /// Cada linha que o modelo solta enquanto trabalha (o `stream-json` do CLI).
+    pub on_line: &'a (dyn Fn(&str) + Sync),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CallKind {
+    Analyzer,
+    Organizer,
+    User,
+}
+
+impl CallKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Analyzer => "analyzer",
+            Self::Organizer => "organizer",
+            Self::User => "user",
+        }
+    }
+}
+
+/// Quem acompanha as chamadas: a tela mostra o andamento e o "Como sonhou" a partir daqui.
+pub trait Observer: Sync {
+    /// Devolve o número da chamada, que volta em `line` e `finished`.
+    fn started(&self, kind: CallKind, label: &str, model: &str, prompt: &str) -> usize;
+    fn line(&self, call: usize, line: &str);
+    /// `error` é o texto do `DreamError`, que começa pelo código.
+    fn finished(&self, call: usize, cost_usd: Option<f64>, error: Option<&str>);
+}
+
+pub struct Silent;
+
+impl Observer for Silent {
+    fn started(&self, _: CallKind, _: &str, _: &str, _: &str) -> usize {
+        0
+    }
+    fn line(&self, _: usize, _: &str) {}
+    fn finished(&self, _: usize, _: Option<f64>, _: Option<&str>) {}
 }
 
 pub struct Reply {
@@ -62,6 +100,8 @@ pub enum ModelError {
     Limited,
     /// A chamada passou do prazo e foi morta; conta como gasto o teto que ela tinha.
     Timeout { cost_usd: f64 },
+    /// A pessoa mandou parar; `cost_usd` é o que se sabe do gasto até ali.
+    Stopped { cost_usd: f64 },
     Other(String),
 }
 
@@ -84,6 +124,7 @@ impl fmt::Display for DreamError {
             Self::Model(ModelError::Budget { .. }) => write!(f, "dream_budget_exhausted"),
             Self::Model(ModelError::Limited) => write!(f, "dream_account_limited"),
             Self::Model(ModelError::Timeout { .. }) => write!(f, "dream_timeout"),
+            Self::Model(ModelError::Stopped { .. }) => write!(f, "dream_stopped"),
             // O modelo que já deu um código (`dream_unparsed_output`) aparece com ele.
             Self::Model(ModelError::Other(e)) if e.starts_with("dream_") && e.bytes().all(|b| b.is_ascii_lowercase() || b == b'_') => write!(f, "{e}"),
             Self::Model(ModelError::Other(e)) => write!(f, "dream_model_failed: {e}"),
@@ -109,6 +150,7 @@ pub struct Input {
 pub struct Payer<'a> {
     ledger: Mutex<Ledger>,
     on_no_credit: &'a (dyn Fn() -> Option<Auth> + Sync),
+    observer: &'a dyn Observer,
 }
 
 struct Ledger {
@@ -137,7 +179,11 @@ pub struct Spent {
 
 impl<'a> Payer<'a> {
     pub fn new(auth: Auth, on_no_credit: &'a (dyn Fn() -> Option<Auth> + Sync)) -> Self {
-        Self { ledger: Mutex::new(Ledger { auth, key_usd: 0.0, account_usd: 0.0, no_account: false }), on_no_credit }
+        Self { ledger: Mutex::new(Ledger { auth, key_usd: 0.0, account_usd: 0.0, no_account: false }), on_no_credit, observer: &Silent }
+    }
+
+    pub fn observed(self, observer: &'a dyn Observer) -> Self {
+        Self { observer, ..self }
     }
 
     pub fn spent(&self) -> Spent {
@@ -148,10 +194,33 @@ impl<'a> Payer<'a> {
     async fn call(
         &self,
         model: &dyn Model,
+        kind: CallKind,
+        label: &str,
         name: &'static str,
         prompt: &str,
         workdir: &Path,
         budget: impl Fn(f64) -> f64,
+    ) -> Result<Reply, DreamError> {
+        let id = self.observer.started(kind, label, name, prompt);
+        let on_line = |line: &str| self.observer.line(id, line);
+        let result = self.call_paying(model, name, prompt, workdir, budget, &on_line).await;
+        let cost = match &result {
+            Ok(reply) => Some(reply.cost_usd),
+            Err(DreamError::Model(ModelError::Budget { cost_usd } | ModelError::Timeout { cost_usd } | ModelError::Stopped { cost_usd })) => Some(*cost_usd),
+            Err(_) => None,
+        };
+        self.observer.finished(id, cost, result.as_ref().err().map(ToString::to_string).as_deref());
+        result
+    }
+
+    async fn call_paying(
+        &self,
+        model: &dyn Model,
+        name: &'static str,
+        prompt: &str,
+        workdir: &Path,
+        budget: impl Fn(f64) -> f64,
+        on_line: &(dyn Fn(&str) + Sync),
     ) -> Result<Reply, DreamError> {
         let mut switched = false;
         loop {
@@ -162,7 +231,7 @@ impl<'a> Payer<'a> {
             if budget_usd <= 0.0 {
                 return Err(DreamError::Model(ModelError::Budget { cost_usd: 0.0 }));
             }
-            let call = Call { model: name, prompt: prompt.to_string(), workdir, budget_usd, auth: auth.clone() };
+            let call = Call { model: name, prompt: prompt.to_string(), workdir, budget_usd, auth: auth.clone(), on_line };
             match model.call(call).await {
                 Ok(reply) => {
                     self.ledger.lock().unwrap().add(&auth, reply.cost_usd);
@@ -182,8 +251,8 @@ impl<'a> Payer<'a> {
                         }
                     }
                 }
-                Err(e) if matches!(e, ModelError::Budget { .. } | ModelError::Timeout { .. }) => {
-                    let (ModelError::Budget { cost_usd } | ModelError::Timeout { cost_usd }) = e else { unreachable!() };
+                Err(e) if matches!(e, ModelError::Budget { .. } | ModelError::Timeout { .. } | ModelError::Stopped { .. }) => {
+                    let (ModelError::Budget { cost_usd } | ModelError::Timeout { cost_usd } | ModelError::Stopped { cost_usd }) = e else { unreachable!() };
                     self.ledger.lock().unwrap().add(&auth, cost_usd);
                     return Err(DreamError::Model(e));
                 }
@@ -236,7 +305,9 @@ pub async fn dream_project(job: &Job<'_>, payer: &Payer<'_>, model: &dyn Model) 
         .iter()
         .map(|input| -> BoxFut<'_, Result<Reply, DreamError>> {
             let prompt = ANALYZER.replace("{input}", &format!("inputs/{}", input.name));
-            Box::pin(async move { payer.call(model, ANALYZER_MODEL, &prompt, job.workdir, move |spent| analyzer_call_cap(cap, spent)).await })
+            Box::pin(async move {
+                payer.call(model, CallKind::Analyzer, &input.name, ANALYZER_MODEL, &prompt, job.workdir, move |spent| analyzer_call_cap(cap, spent)).await
+            })
         })
         .collect();
     let results: Vec<Result<Reply, DreamError>> = stream::iter(calls).buffer_unordered(MAX_PARALLEL).collect().await;
@@ -247,7 +318,7 @@ pub async fn dream_project(job: &Job<'_>, payer: &Payer<'_>, model: &dyn Model) 
     let prompt = ORGANIZER
         .replace("{notes_before}", &before.to_string())
         .replace("{notes_cap}", &((before.max(5) as f64 * GROWTH).ceil() as usize).to_string());
-    let reply = payer.call(model, ORGANIZER_MODEL, &prompt, job.workdir, |spent| organizer_call_cap(cap, spent)).await?;
+    let reply = payer.call(model, CallKind::Organizer, "organizer", ORGANIZER_MODEL, &prompt, job.workdir, |spent| organizer_call_cap(cap, spent)).await?;
     let (files, retired) = collect(job.workdir, job.scrub)?;
     Ok(Outcome { files, retired, organizer_reply: reply.text })
 }
@@ -318,7 +389,7 @@ pub async fn dream_user(job: &UserJob<'_>, payer: &Payer<'_>, model: &dyn Model)
     fs::write(inputs.join("CLAUDE.md"), (job.scrub)(job.claude_md))?;
     fs::write(job.workdir.join(USER_MEMORY_FILE), job.current)?;
     let cap = job.cap_usd;
-    payer.call(model, ORGANIZER_MODEL, USER_MEMORY, job.workdir, |spent| organizer_call_cap(cap, spent)).await?;
+    payer.call(model, CallKind::User, "user", ORGANIZER_MODEL, USER_MEMORY, job.workdir, |spent| organizer_call_cap(cap, spent)).await?;
     let content = fs::read_to_string(job.workdir.join(USER_MEMORY_FILE))?;
     if content.lines().count() > USER_MEMORY_MAX_LINES {
         return Err(DreamError::Rejected(format!("{USER_MEMORY_FILE} com {} linhas", content.lines().count())));
@@ -548,6 +619,63 @@ mod tests {
         let out = dream_project(&job, &payer, &model).await.unwrap();
         assert!(!out.files.contains_key("velha.md"));
         assert_eq!(out.retired, 1);
+    }
+
+    #[derive(Default)]
+    struct Log(Mutex<Vec<String>>);
+
+    impl Observer for Log {
+        fn started(&self, kind: CallKind, label: &str, model: &str, _prompt: &str) -> usize {
+            let mut log = self.0.lock().unwrap();
+            log.push(format!("start {kind:?} {label} {model}"));
+            log.len()
+        }
+        fn line(&self, _call: usize, line: &str) {
+            self.0.lock().unwrap().push(format!("line {line}"));
+        }
+        fn finished(&self, _call: usize, cost_usd: Option<f64>, error: Option<&str>) {
+            self.0.lock().unwrap().push(format!("end {cost_usd:?} {error:?}"));
+        }
+    }
+
+    #[tokio::test]
+    async fn every_call_is_reported_with_its_lines_and_end() {
+        let tmp = tempfile::tempdir().unwrap();
+        let model = fake(|call, _| {
+            (call.on_line)("passo");
+            if call.model == ANALYZER_MODEL && call.prompt.contains("s2.txt") {
+                return Err(ModelError::Budget { cost_usd: 0.5 });
+            }
+            agents(call);
+            ok(0.1)
+        });
+        let none = || None;
+        let log = Log::default();
+        let payer = Payer::new(Auth::Key, &none).observed(&log);
+        let inputs = vec![Input { name: "s1.txt".into(), text: "USER:\na".into() }];
+        let base = base();
+        let job = Job { workdir: tmp.path(), base: &base, inputs: &inputs, cap_usd: 15.0, scrub: &redact };
+        dream_project(&job, &payer, &model).await.unwrap();
+        let log = log.0.lock().unwrap().clone();
+        assert_eq!(
+            log,
+            [
+                "start Analyzer s1.txt claude-haiku-5-5",
+                "line passo",
+                "end Some(0.1) None",
+                "start Organizer organizer claude-sonnet-5-5",
+                "line passo",
+                "end Some(0.1) None",
+            ]
+        );
+
+        let tmp = tempfile::tempdir().unwrap();
+        let failed = Log::default();
+        let payer = Payer::new(Auth::Key, &none).observed(&failed);
+        let inputs = vec![Input { name: "s2.txt".into(), text: "USER:\nb".into() }];
+        let job = Job { workdir: tmp.path(), base: &base, inputs: &inputs, cap_usd: 15.0, scrub: &redact };
+        assert!(dream_project(&job, &payer, &model).await.is_err());
+        assert_eq!(failed.0.lock().unwrap().last().unwrap(), "end Some(0.5) Some(\"dream_budget_exhausted\")");
     }
 
     #[tokio::test]

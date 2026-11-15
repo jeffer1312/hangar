@@ -72,6 +72,87 @@ struct Status {
     suggestions: Vec<Suggestion>,
 }
 
+/// O andamento da rodada, como o `GET /api/dream/events` manda.
+#[derive(Clone, Deserialize)]
+struct Progress {
+    run_id: String,
+    started_at: String,
+    last_activity_at: String,
+    #[serde(default)]
+    spent_usd: f64,
+    #[serde(default)]
+    stopping: bool,
+    current: Option<usize>,
+    projects: Vec<ProjectProgress>,
+}
+
+#[derive(Clone, Deserialize)]
+struct ProjectProgress {
+    id: String,
+    name: String,
+    status: String,
+    #[serde(default)]
+    calls_total: usize,
+    #[serde(default)]
+    calls_done: usize,
+    #[serde(default)]
+    cost_usd: f64,
+    error: Option<String>,
+    notes: Option<NoteCounts>,
+}
+
+#[derive(Clone, Copy, Deserialize)]
+struct NoteCounts {
+    new: usize,
+    changed: usize,
+    removed: usize,
+}
+
+/// O que a tarefa do `events` manda à página.
+enum StreamEvent {
+    Progress(Option<Progress>),
+    /// A conexão caiu: o andamento mostrado já não é confiável.
+    Lost,
+    /// Voltou depois de cair.
+    Reconnected,
+}
+
+#[derive(Clone, Deserialize)]
+struct CallMeta {
+    n: usize,
+    kind: String,
+    label: String,
+    model: String,
+    status: String,
+    started_at: String,
+    ended_at: Option<String>,
+    cost_usd: Option<f64>,
+    error: Option<String>,
+    #[serde(default)]
+    steps: usize,
+}
+
+#[derive(Clone, Deserialize)]
+struct CallList {
+    calls: Vec<CallMeta>,
+}
+
+#[derive(Clone, Deserialize)]
+struct CallDetail {
+    meta: CallMeta,
+    #[serde(default)]
+    prompt: String,
+    #[serde(default)]
+    steps: Vec<Step>,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum Step {
+    Text { text: String },
+    Tool { tool: String, target: Option<String>, detail: Option<String> },
+}
+
 #[derive(Clone, Deserialize)]
 struct RunDetail {
     projects: Vec<RunProject>,
@@ -141,6 +222,47 @@ struct DreamPage {
     unconfirmed: Vec<String>,
     inputs: Vec<(Field, Entity<InputState>)>,
     _subscriptions: Vec<Subscription>,
+    /// A rodada no ar (pelo `events` da máquina que sonha) e a última que acabou com a página aberta.
+    progress: Option<Progress>,
+    finished: Option<Progress>,
+    /// A máquina (endereço e credencial) que o `events` acompanha, a tarefa que o lê e a geração dela: evento de
+    /// uma conexão anterior que ainda estava no canal não vale.
+    watching: Option<Api>,
+    stream: Option<tokio::task::JoinHandle<()>>,
+    stream_gen: u64,
+    calls: Option<WeakEntity<Calls>>,
+}
+
+impl Drop for DreamPage {
+    fn drop(&mut self) {
+        if let Some(task) = self.stream.take() {
+            task.abort();
+        }
+    }
+}
+
+/// "Como sonhou": as chamadas de um projeto numa rodada e o detalhe da escolhida.
+struct Calls {
+    api: Api,
+    runtime: Arc<Runtime>,
+    run_id: String,
+    project: String,
+    /// Rodada ainda no ar: a lista se refaz a cada andamento.
+    live: bool,
+    list: Option<Result<Vec<CallMeta>, String>>,
+    pick: Option<usize>,
+    detail: Option<Result<CallDetail, String>>,
+    show_prompt: bool,
+    /// Resposta de um pedido anterior que chega depois da de um novo é descartada.
+    list_seq: u64,
+    detail_seq: u64,
+    /// Fase e chamadas feitas do projeto na última releitura da lista: só relê quando mudam.
+    seen: Option<(String, usize)>,
+    detail_at: Option<std::time::Instant>,
+    /// Detalhe pedido e ainda sem resposta; `detail_dirty` = andou de novo nesse meio tempo, relê quando ela chegar.
+    /// Sem isso, um detalhe mais lento que a cadência seria sempre descartado.
+    detail_pending: bool,
+    detail_dirty: bool,
 }
 
 struct Changes {
@@ -228,6 +350,12 @@ impl DreamPage {
             unconfirmed: Vec::new(),
             inputs,
             _subscriptions: subscriptions,
+            progress: None,
+            finished: None,
+            watching: None,
+            stream: None,
+            stream_gen: 0,
+            calls: None,
         };
         page.load(window, cx);
         page.load_machines(window, cx);
@@ -263,6 +391,7 @@ impl DreamPage {
                         this.status = Some(status);
                         this.show_config(window, cx);
                         this.load_status(window, cx);
+                        this.watch(window, cx);
                     }
                     Ok((Err(error), _) | (_, Err(error))) | Err(error) => this.error = Some(Hangar::fetch_failure(&error)),
                 }
@@ -307,9 +436,103 @@ impl DreamPage {
                     }
                 }
                 this.load_status(window, cx);
+                this.watch(window, cx);
                 cx.notify();
             },
         );
+    }
+
+    /// Acompanha o andamento na máquina que sonha; trocar de máquina troca a conexão.
+    fn watch(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let api = self.dreamer_api();
+        // Mesmo endereço com outro token também troca: a conexão velha seguiria com a credencial antiga.
+        if self.watching.as_ref().is_some_and(|w| w.same_credential(&api)) {
+            return;
+        }
+        if let Some(task) = self.stream.take() {
+            task.abort();
+        }
+        self.stream_gen += 1;
+        let generation = self.stream_gen;
+        self.watching = Some(api.clone());
+        // A conexão anterior era de outra máquina: o andamento e a rodada terminada dela não valem aqui.
+        self.progress = None;
+        self.finished = None;
+        let (tx, rx) = async_channel::unbounded::<StreamEvent>();
+        self.stream = Some(self.runtime.spawn(progress_stream(api, tx)));
+        // A tarefa abortada solta o `tx`: o `recv` falha e este laço acaba junto.
+        cx.spawn_in(window, async move |this, cx| {
+            while let Ok(event) = rx.recv().await {
+                let applied = this.update_in(cx, |this, window, cx| {
+                    if generation == this.stream_gen {
+                        this.on_stream(event, window, cx);
+                    }
+                });
+                if applied.is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    fn on_stream(&mut self, event: StreamEvent, window: &mut Window, cx: &mut Context<Self>) {
+        match event {
+            StreamEvent::Progress(progress) => self.on_progress(progress, window, cx),
+            // Sem conexão não se sabe se ainda sonha: "Sonhando" com Parar ficaria mentindo até voltar.
+            StreamEvent::Lost => {
+                self.progress = None;
+                cx.notify();
+            }
+            // Voltou: o que mudou enquanto estava fora (a rodada pode ter acabado) vem do status.
+            StreamEvent::Reconnected => self.load(window, cx),
+        }
+    }
+
+    fn on_progress(&mut self, progress: Option<Progress>, window: &mut Window, cx: &mut Context<Self>) {
+        let ended = progress.is_none() && self.progress.is_some();
+        if ended {
+            self.finished = self.progress.take();
+        } else if progress.is_some() {
+            self.finished = None;
+        }
+        self.progress = progress;
+        if let Some(calls) = self.calls.as_ref().and_then(WeakEntity::upgrade) {
+            let live = self.progress.as_ref().map(|p| p.run_id.clone());
+            let id = calls.read(cx).project.clone();
+            let seen = self.progress.as_ref().and_then(|p| p.projects.iter().find(|x| x.id == id)).map(|x| (x.status.clone(), x.calls_done));
+            calls.update(cx, |calls, cx| calls.refresh(live.as_deref(), seen, window, cx));
+        }
+        // Acabou: os projetos ganham a data, o custo e o erro novos.
+        if ended {
+            self.load(window, cx);
+        }
+        cx.notify();
+    }
+
+    /// O andamento do projeto na rodada no ar ou na que acabou de terminar.
+    fn row_state(&self, id: &str) -> Option<&ProjectProgress> {
+        self.progress.as_ref().or(self.finished.as_ref())?.projects.iter().find(|p| p.id == id)
+    }
+
+    fn stop(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.act("stop".into(), reqwest::Method::POST, path(&["dream", "stop"]), Vec::new(), None, |_, _, _, _| {}, window, cx);
+    }
+
+    fn open_calls(&mut self, run_id: String, project: String, name: String, window: &mut Window, cx: &mut Context<Self>) {
+        let live = self.progress.as_ref().is_some_and(|p| p.run_id == run_id);
+        // O id da rodada começa pela hora em UTC (`20261115-085314-5081`).
+        let when = chrono::NaiveDateTime::parse_from_str(run_id_prefix(&run_id), "%Y%m%d-%H%M%S")
+            .ok()
+            .map(|t| t.and_utc().with_timezone(&chrono::Local).format("%d/%m %H:%M").to_string());
+        let (api, runtime) = (self.dreamer_api(), self.runtime.clone());
+        let calls = cx.new(|cx| Calls::new(api, runtime, run_id, project, live, window, cx));
+        self.calls = Some(calls.downgrade());
+        let mut title = format!("{} · {name}", t("dream_calls_title"));
+        if let Some(when) = when {
+            title = format!("{title} · {}", tr_shared("dream_calls_run", &[("when", &when)]));
+        }
+        window.open_dialog(cx, move |d, _, _| popup::dialog(d).title(title.clone()).w(px(820.)).max_w_full().child(calls.clone()));
     }
 
     /// A máquina que sonha guarda o estado: projetos, rodadas, Sonhar agora e Desfazer vão para ela.
@@ -571,7 +794,8 @@ impl DreamPage {
             |_, _, _, _| {}, window, cx);
     }
 
-    fn open_changes(&mut self, run_id: String, project: String, window: &mut Window, cx: &mut Context<Self>) {
+    /// `project` `None` = a rodada inteira (o bloco "Sonhou").
+    fn open_changes(&mut self, run_id: String, project: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
         let (api, runtime) = (self.dreamer_api(), self.runtime.clone());
         let labels = self
             .targets
@@ -646,11 +870,123 @@ impl DreamPage {
             .into_any_element()
     }
 
+    /// Bloco acima de Projetos: o sonho no ar (projeto, conversa, barra, gasto e Parar) ou como a última rodada terminou.
+    fn progress_card(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if let Some(p) = &self.progress {
+            let active: Vec<&ProjectProgress> = p.projects.iter().filter(|x| x.status != "skipped").collect();
+            let current = p.current.and_then(|i| p.projects.get(i));
+            let n = current.and_then(|c| active.iter().position(|x| x.id == c.id)).map_or(0, |i| i + 1);
+            let title = tr_shared("dream_progress_running", &[("n", &n.to_string()), ("total", &active.len().to_string())]);
+            let sub = current.map(progress_line).unwrap_or_default();
+            let stop = Button::new("dream-stop")
+                .outline()
+                .small()
+                .icon(IconName::Square)
+                .label(t(if p.stopping { "dream_progress_stopping" } else { "dream_progress_stop" }))
+                .disabled(p.stopping || self.busy.contains("stop"))
+                .on_click(cx.listener(|this, _, window, cx| this.stop(window, cx)));
+            let foot = tr_shared(
+                "dream_progress_foot",
+                &[("elapsed", &span(since(&p.started_at))), ("cost", &usd(p.spent_usd)), ("idle", &span(since(&p.last_activity_at)))],
+            );
+            let bar = div()
+                .h(px(6.))
+                .w_full()
+                .rounded(px(3.))
+                .bg(theme::hover())
+                .overflow_hidden()
+                .child(div().h_full().w(relative(fraction(p))).rounded(px(3.)).bg(theme::accent()));
+            let card = card_head(pulse_dot("card", 10.), title, sub, stop.into_any_element())
+                .child(bar)
+                .child(div().text_xs().text_color(theme::muted()).child(foot));
+            return Some(card.id("dream-progress").role(Role::Status).into_any_element());
+        }
+        let f = self.finished.as_ref()?;
+        let active: Vec<&ProjectProgress> = f.projects.iter().filter(|x| x.status != "skipped").collect();
+        let done = active.iter().filter(|x| x.status == "done").count();
+        let first_error = active.iter().find_map(|x| x.error.clone());
+        let card = match first_error.filter(|_| done == 0) {
+            Some(error) => {
+                let retry = Button::new("dream-retry-round")
+                    .primary()
+                    .small()
+                    .label(t("dream_progress_retry"))
+                    .disabled(self.busy.iter().any(|b| b.starts_with("run:")))
+                    .on_click(cx.listener(|this, _, window, cx| this.run_now(None, window, cx)));
+                let icon = chrome::small_icon(IconName::CircleX, 18., theme::danger()).into_any_element();
+                card_head(icon, t("dream_progress_failed"), error_text(&error), retry.into_any_element())
+            }
+            None => {
+                let run_id = f.run_id.clone();
+                let changes = Button::new("dream-round-changes")
+                    .outline()
+                    .small()
+                    .icon(IconName::FileText)
+                    .label(t("dream_changes"))
+                    .on_click(cx.listener(move |this, _, window, cx| this.open_changes(run_id.clone(), None, window, cx)));
+                let sub = tr_shared(
+                    "dream_progress_done_sub",
+                    &[
+                        ("done", &done.to_string()),
+                        ("total", &active.len().to_string()),
+                        ("cost", &usd(f.spent_usd)),
+                        ("duration", &span(between(&f.started_at, &f.last_activity_at))),
+                    ],
+                );
+                let sub = match self.config.as_ref().filter(|c| c.enabled) {
+                    Some(c) => format!("{sub} · {}", tr_shared("dream_progress_next", &[("hour", &c.hour)])),
+                    None => sub,
+                };
+                let icon = chrome::small_icon(IconName::CircleCheck, 18., theme::success()).into_any_element();
+                card_head(icon, tr_shared("dream_progress_done", &[("ago", &span(since(&f.last_activity_at)))]), sub, changes.into_any_element())
+            }
+        };
+        Some(card.id("dream-progress").role(Role::Status).into_any_element())
+    }
+
     fn project_row(&self, project: &Project, status: &Status, cx: &mut Context<Self>) -> AnyElement {
         let busy = self.busy.contains(&format!("project:{}", project.id));
-        let running = status.running.is_some() || self.busy.iter().any(|b| b.starts_with("run:"));
+        let running = self.progress.is_some() || status.running.is_some() || self.busy.iter().any(|b| b.starts_with("run:"));
         let machines = project.machines.iter().map(|m| self.machine_label(m)).collect::<Vec<_>>().join(", ");
-        let facts = facts(machines, project.new_sessions, project.last_dream_at.as_deref().map(|at| (local_time(at), project.last_cost_usd)));
+        let live = self.row_state(&project.id).cloned();
+        let sessions = project.new_sessions.map(|n| tr_shared("dream_new_sessions", &[("n", &n.to_string())])).unwrap_or_default();
+        let joined = |parts: &[&str]| parts.iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>().join(" · ");
+        let facts: AnyElement = match live.as_ref() {
+            Some(p) if p.status == "queued" => joined(&[machines.as_str(), sessions.as_str(), t("dream_row_queued").as_str()]).into_any_element(),
+            Some(p) if is_active(&p.status) => div()
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .gap(px(6.))
+                .child(format!("{machines} ·"))
+                .child(pulse_dot(&format!("row-{}", project.id), 7.))
+                .child(div().text_color(theme::accent_text()).child(row_activity(p)))
+                .into_any_element(),
+            Some(p) if p.status == "done" => {
+                let done = tr_shared("dream_row_done", &[("notes", &notes_summary(p.notes)), ("cost", &usd(p.cost_usd))]);
+                joined(&[machines.as_str(), done.as_str()]).into_any_element()
+            }
+            _ => facts(machines, project.new_sessions, project.last_dream_at.as_deref().map(|at| (local_time(at), project.last_cost_usd)))
+                .into_any_element(),
+        };
+        // Durante a rodada vale o erro dela; o `last_error` de antes seria velho.
+        let error = match live.as_ref() {
+            Some(p) => p.error.clone(),
+            None => project.last_error.clone(),
+        };
+        let calls_run = match live.as_ref() {
+            Some(p) if p.status != "queued" && p.status != "skipped" => self.progress.as_ref().or(self.finished.as_ref()).map(|r| r.run_id.clone()),
+            _ => project.last_run_id.clone(),
+        };
+        let calls = calls_run.map(|run| {
+            let (id, name) = (project.id.clone(), project.name.clone());
+            Button::new(SharedString::from(format!("dream-calls-{}", project.id)))
+                .ghost()
+                .small()
+                .icon(IconName::Activity)
+                .label(t("dream_calls_open"))
+                .on_click(cx.listener(move |this, _, window, cx| this.open_calls(run.clone(), id.clone(), name.clone(), window, cx)))
+        });
         let (toggle_id, run_id) = (project.id.clone(), project.id.clone());
         let enabled = project.enabled;
         let switch = project_switch(&project.id, &project.name, enabled, busy)
@@ -690,7 +1026,7 @@ impl DreamPage {
         let changes = last_run.clone().map(|run| {
             let project = project.id.clone();
             changes_button(&project)
-                .on_click(cx.listener(move |this, _, window, cx| this.open_changes(run.clone(), project.clone(), window, cx)))
+                .on_click(cx.listener(move |this, _, window, cx| this.open_changes(run.clone(), Some(project.clone()), window, cx)))
         });
         let undo = last_run.map(|run| {
             let project = project.id.clone();
@@ -703,8 +1039,8 @@ impl DreamPage {
             .on_click(cx.listener(move |this, _, window, cx| this.run_now(Some(run_id.clone()), window, cx)));
         row_frame(&project.id)
             .child(row_head(project.name.clone(), enabled, facts, switch))
-            .children(project.last_error.as_deref().map(|e| alert(SharedString::from(format!("dream-error-{}", project.id)), error_text(e))))
-            .child(row_bar(picker, pair.map(IntoElement::into_any_element), run, changes, undo))
+            .children(error.as_deref().map(|e| alert(SharedString::from(format!("dream-error-{}", project.id)), error_text(e))))
+            .child(row_bar(picker, pair.map(IntoElement::into_any_element), run, changes, undo).children(calls))
             .into_any_element()
     }
 }
@@ -788,9 +1124,10 @@ pub(crate) fn refresh_button(loading: bool) -> Button {
     Button::new("dream-refresh").ghost().small().icon(IconName::RefreshCw).accessibility_label(tr("reload")).tooltip(tr("reload")).disabled(loading)
 }
 
-/// Cabeçalho "Projetos" com as ações da seção (recarregar e sonhar todos).
-pub(crate) fn projects_head(refresh: Button, run_all: Button) -> Div {
-    let actions = div().flex().items_center().gap_2().child(refresh).child(run_all).into_any_element();
+/// Cabeçalho "Projetos" com as ações da seção (recarregar e sonhar todos). Sonhando, o bloco de andamento
+/// acima toma o lugar do "Sonhar agora".
+pub(crate) fn projects_head(refresh: Button, run_all: Option<Button>) -> Div {
+    let actions = div().flex().items_center().gap_2().child(refresh).children(run_all).into_any_element();
     section_head(IconName::Folder, t("dream_projects"), None, Some(actions), px(0.))
 }
 
@@ -808,7 +1145,7 @@ pub(crate) fn row_frame(project_id: &str) -> Stateful<Div> {
 }
 
 /// Nome do projeto e os fatos dele, com o interruptor à direita.
-pub(crate) fn row_head(name: String, enabled: bool, facts: String, switch: Switch) -> Div {
+pub(crate) fn row_head(name: String, enabled: bool, facts: impl IntoElement, switch: Switch) -> Div {
     div()
         .flex()
         .items_start()
@@ -940,12 +1277,14 @@ impl Render for DreamPage {
                 true, self.field_control(Field::MonthCap, 96., "dream_month_cap")))
             .child(setting_row(false, IconName::Wallet, t("dream_month_spent"), div(), true,
                 div().text_sm().text_color(theme::text()).child(spent).into_any_element()));
-        let running = status.running.is_some() || self.busy.iter().any(|b| b.starts_with("run:"));
+        let running = self.progress.is_some() || status.running.is_some() || self.busy.iter().any(|b| b.starts_with("run:"));
         let refresh = refresh_button(self.loading).on_click(cx.listener(|this, _, window, cx| this.load(window, cx)));
-        let run_all = run_button("dream-run-all", status.running.is_some())
-            .primary()
-            .disabled(running || status.projects.is_empty())
-            .on_click(cx.listener(|this, _, window, cx| this.run_now(None, window, cx)));
+        let run_all = self.progress.is_none().then(|| {
+            run_button("dream-run-all", status.running.is_some())
+                .primary()
+                .disabled(running || status.projects.is_empty())
+                .on_click(cx.listener(|this, _, window, cx| this.run_now(None, window, cx)))
+        });
         let projects = if status.projects.is_empty() {
             div()
                 .py(px(40.))
@@ -1001,6 +1340,7 @@ impl Render for DreamPage {
                 })))
         });
         page.child(settings)
+            .children(self.progress_card(cx))
             .child(
                 div()
                     .flex()
@@ -1013,7 +1353,7 @@ impl Render for DreamPage {
 }
 
 impl Changes {
-    fn new(api: Api, runtime: Arc<Runtime>, run_id: String, project: String, labels: HashMap<String, String>, window: &mut Window,
+    fn new(api: Api, runtime: Arc<Runtime>, run_id: String, project: Option<String>, labels: HashMap<String, String>, window: &mut Window,
         cx: &mut Context<Self>) -> Self {
         run(
             &runtime,
@@ -1022,9 +1362,9 @@ impl Changes {
             cx,
             move |this, result, _, _| {
                 // A rodada da noite traz todos os projetos; a linha mostra só o dela.
-                this.detail = Some(
-                    result.map_err(|e| failure_text(&e)).map(|detail| detail.projects.into_iter().filter(|p| p.project == project).collect()),
-                );
+                this.detail = Some(result.map_err(|e| failure_text(&e)).map(|detail| {
+                    detail.projects.into_iter().filter(|p| project.as_ref().is_none_or(|id| &p.project == id)).collect()
+                }));
             },
         );
         Self { labels, detail: None, pick: None }
@@ -1081,6 +1421,510 @@ impl Render for Changes {
                         }))
                 }))
         }))
+    }
+}
+
+impl Calls {
+    fn new(api: Api, runtime: Arc<Runtime>, run_id: String, project: String, live: bool, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let mut calls = Self {
+            api,
+            runtime,
+            run_id,
+            project,
+            live,
+            list: None,
+            pick: None,
+            detail: None,
+            show_prompt: false,
+            list_seq: 0,
+            detail_seq: 0,
+            seen: None,
+            detail_at: None,
+            detail_pending: false,
+            detail_dirty: false,
+        };
+        calls.load_list(window, cx);
+        calls
+    }
+
+    fn load_list(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.list_seq += 1;
+        let seq = self.list_seq;
+        let (api, run_id, project) = (self.api.clone(), self.run_id.clone(), self.project.clone());
+        run(
+            &self.runtime,
+            async move { parse::<CallList>(api.server_read(&["dream", "runs", &run_id, "calls"], &[("project", &project)], 20).await) },
+            window,
+            cx,
+            move |this, result, window, cx| match result {
+                _ if seq != this.list_seq => {}
+                Ok(list) => {
+                    // Sem escolha, abre a chamada que está trabalhando; senão a primeira.
+                    if this.pick.is_none() {
+                        this.pick = list.calls.iter().find(|c| c.status == "running").or(list.calls.first()).map(|c| c.n);
+                        this.load_detail(window, cx);
+                    }
+                    this.list = Some(Ok(list.calls));
+                }
+                Err(error) => this.list = Some(Err(failure_text(&error))),
+            },
+        );
+    }
+
+    fn load_detail(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(n) = self.pick else { return };
+        self.detail_seq += 1;
+        self.detail_at = Some(std::time::Instant::now());
+        (self.detail_pending, self.detail_dirty) = (true, false);
+        let seq = self.detail_seq;
+        let (api, run_id, project) = (self.api.clone(), self.run_id.clone(), self.project.clone());
+        run(
+            &self.runtime,
+            async move {
+                let n = n.to_string();
+                parse::<CallDetail>(api.server_read(&["dream", "runs", &run_id, "calls", &n], &[("project", &project)], 20).await)
+            },
+            window,
+            cx,
+            move |this, result, window, cx| {
+                // Resposta de um pedido já trocado (outra chamada escolhida) não vale nem solta o pendente.
+                if seq != this.detail_seq || this.pick != Some(n) {
+                    return;
+                }
+                this.detail = Some(result.map_err(|e| failure_text(&e)));
+                this.detail_pending = false;
+                if this.detail_dirty {
+                    this.load_detail(window, cx);
+                }
+            },
+        );
+    }
+
+    /// Andamento novo. A lista só se relê quando o projeto mudou de fase ou terminou uma chamada; o detalhe da
+    /// escolhida que ainda trabalha, no máximo a cada 2 s. O fim da rodada relê os dois uma última vez.
+    fn refresh(&mut self, live_run: Option<&str>, seen: Option<(String, usize)>, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.live {
+            return;
+        }
+        self.live = live_run == Some(self.run_id.as_str());
+        let ended = !self.live;
+        if ended || seen != self.seen {
+            self.seen = seen;
+            self.load_list(window, cx);
+        }
+        let picked_running = self.detail.as_ref().and_then(|d| d.as_ref().ok()).is_none_or(|d| d.meta.status == "running");
+        let due = self.detail_at.is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(2));
+        if picked_running && (ended || due) {
+            if self.detail_pending {
+                self.detail_dirty = true;
+            } else {
+                self.load_detail(window, cx);
+            }
+        }
+    }
+
+    fn choose(&mut self, n: usize, window: &mut Window, cx: &mut Context<Self>) {
+        self.pick = Some(n);
+        self.detail = None;
+        self.show_prompt = false;
+        self.load_detail(window, cx);
+        cx.notify();
+    }
+}
+
+impl Render for Calls {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let body = div().id("dream-calls").h(px(520.)).flex().gap(px(14.));
+        let calls = match &self.list {
+            None => return body.child(div().id("dream-calls-loading").role(Role::Status).child(muted(tr("loading")))),
+            Some(Err(error)) => return body.child(alert("dream-calls-error", error.clone())),
+            Some(Ok(calls)) => calls.clone(),
+        };
+        if calls.is_empty() && !self.live {
+            return body.child(muted(t("dream_calls_empty")));
+        }
+        let labels: Vec<&str> = calls.iter().map(|c| c.label.as_str()).collect();
+        // O organizador só começa depois dos analisadores: enquanto isso aparece esperando.
+        let waiting = self.live && self.project != "user" && calls.iter().all(|c| c.kind == "analyzer");
+        let rows: Vec<AnyElement> = calls
+            .iter()
+            .map(|c| {
+                let on = self.pick == Some(c.n);
+                let n = c.n;
+                let sub = match c.status.as_str() {
+                    "running" => tr_shared("dream_call_running", &[("elapsed", &span(since(&c.started_at)))]),
+                    "failed" => c.error.as_deref().map(error_text).unwrap_or_default(),
+                    _ => call_meta(c),
+                };
+                Button::new(SharedString::from(format!("dream-call-{n}")))
+                    .ghost()
+                    .w_full()
+                    .h_auto()
+                    .justify_start()
+                    .selected(on)
+                    .accessibility_label(call_title(&c.label, &labels))
+                    .on_click(cx.listener(move |this, _, window, cx| this.choose(n, window, cx)))
+                    .child(
+                        div()
+                            .w_full()
+                            .py(px(4.))
+                            .flex()
+                            .flex_col()
+                            .items_start()
+                            .gap(px(2.))
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(7.))
+                                    .text_sm()
+                                    .text_color(theme::text())
+                                    .child(status_mark(&c.status, &format!("call-{n}")))
+                                    .child(call_title(&c.label, &labels)),
+                            )
+                            .child(div().text_xs().text_color(theme::muted()).whitespace_normal().text_left().child(sub)),
+                    )
+                    .into_any_element()
+            })
+            .collect();
+        let organizer = waiting.then(|| {
+            div()
+                .px_3()
+                .py(px(8.))
+                .flex()
+                .flex_col()
+                .gap(px(2.))
+                .child(div().flex().items_center().gap(px(7.)).text_sm().child(status_mark("waiting", "organizer")).child(t("dream_call_organizer")))
+                .child(div().text_xs().text_color(theme::muted()).child(t("dream_call_waiting")))
+        });
+        let list = div()
+            .id("dream-calls-list")
+            .w(relative(0.38))
+            .flex_shrink_0()
+            .overflow_y_scroll()
+            .flex()
+            .flex_col()
+            .gap(px(2.))
+            .children(rows)
+            .children(organizer);
+        let detail = match &self.detail {
+            None if self.pick.is_some() => div().id("dream-call-loading").role(Role::Status).child(muted(tr("loading"))).into_any_element(),
+            None => div().into_any_element(),
+            Some(Err(error)) => alert("dream-call-error", error.clone()).into_any_element(),
+            Some(Ok(detail)) => {
+                let meta = &detail.meta;
+                let head = match meta.status.as_str() {
+                    "running" => div()
+                        .flex()
+                        .items_center()
+                        .gap(px(7.))
+                        .text_xs()
+                        .text_color(theme::muted())
+                        .child(pulse_dot("detail", 7.))
+                        .child(format!("{} · {}", model_name(&meta.model), tr_shared("dream_call_running", &[("elapsed", &span(since(&meta.started_at)))]))),
+                    _ => div().text_xs().text_color(theme::muted()).child(format!("{} · {}", model_name(&meta.model), call_meta(meta))),
+                };
+                let prompt_open = self.show_prompt;
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(10.))
+                    .child(head)
+                    .children(meta.error.as_deref().map(|e| alert("dream-call-failed", error_text(e))))
+                    .children(detail.steps.iter().map(step_view))
+                    .child(
+                        Button::new("dream-call-prompt")
+                            .ghost()
+                            .small()
+                            .justify_start()
+                            .label(t("dream_call_prompt"))
+                            .selected(prompt_open)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.show_prompt = !prompt_open;
+                                cx.notify();
+                            })),
+                    )
+                    .when(prompt_open, |el| el.child(code_box(detail.prompt.clone())))
+                    .into_any_element()
+            }
+        };
+        body.child(list)
+            .child(div().w(px(1.)).h_full().bg(theme::border()))
+            .child(div().id("dream-call-detail").flex_1().min_w_0().overflow_y_scroll().child(detail))
+    }
+}
+
+/// Cabeçalho dos blocos de andamento: ícone no quadradinho, título, a linha de baixo e a ação à direita.
+fn card_head(icon: AnyElement, title: String, sub: String, action: AnyElement) -> Div {
+    settings_box().px_4().py(px(14.)).gap(px(10.)).child(
+        div()
+            .flex()
+            .items_center()
+            .gap(px(14.))
+            .child(
+                div()
+                    .size(px(36.))
+                    .flex_shrink_0()
+                    .rounded(px(10.))
+                    .border_1()
+                    .border_color(theme::border())
+                    .bg(theme::inset())
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(icon),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.))
+                    .child(div().text_size(px(15.)).font_weight(FontWeight::SEMIBOLD).child(title))
+                    .child(div().text_size(px(13.)).text_color(theme::muted()).whitespace_normal().child(sub)),
+            )
+            .child(action),
+    )
+}
+
+/// Bolinha que pulsa: algo está trabalhando agora.
+fn pulse_dot(id: &str, size: f32) -> AnyElement {
+    div()
+        .size(px(size))
+        .flex_shrink_0()
+        .rounded_full()
+        .bg(theme::accent())
+        .with_animation(SharedString::from(format!("dream-pulse-{id}")), Animation::new(Duration::from_millis(1200)).repeat(), |el, t| {
+            el.opacity(0.3 + 0.7 * (0.5 + 0.5 * (t * std::f32::consts::TAU).cos()))
+        })
+        .into_any_element()
+}
+
+/// Marca da chamada na lista: pulsando, feita, falhou ou esperando.
+fn status_mark(status: &str, id: &str) -> AnyElement {
+    match status {
+        "running" => pulse_dot(id, 7.),
+        "done" => chrome::small_icon(IconName::Check, 13., theme::success()).into_any_element(),
+        "failed" => chrome::small_icon(IconName::CircleX, 13., theme::danger()).into_any_element(),
+        _ => chrome::small_icon(IconName::Circle, 11., theme::muted()).into_any_element(),
+    }
+}
+
+fn step_view(step: &Step) -> AnyElement {
+    match step {
+        Step::Text { text } => div().text_sm().text_color(theme::text()).whitespace_normal().child(text.clone()).into_any_element(),
+        Step::Tool { tool, target, detail } => {
+            let (icon, verb) = match tool.as_str() {
+                "Read" => (IconName::FileText, t("dream_call_read")),
+                "Write" => (IconName::Pencil, t("dream_call_wrote")),
+                "Edit" | "MultiEdit" => (IconName::Pencil, t("dream_call_edited")),
+                "Glob" | "Grep" => (IconName::Search, t("dream_call_searched")),
+                other => (IconName::Activity, other.to_owned()),
+            };
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(5.))
+                .child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .items_center()
+                        .gap(px(6.))
+                        .text_xs()
+                        .text_color(theme::muted())
+                        .child(chrome::small_icon(icon, 12., theme::muted()))
+                        .child(verb)
+                        .children(target.clone().map(|target| {
+                            div().px(px(5.)).rounded(px(4.)).bg(theme::inset()).font_family(theme::MONO).text_color(theme::text()).child(target)
+                        })),
+                )
+                .children(detail.clone().map(code_box))
+                .into_any_element()
+        }
+    }
+}
+
+fn code_box(text: String) -> Div {
+    div()
+        .rounded(px(8.))
+        .border_1()
+        .border_color(theme::border())
+        .bg(theme::inset())
+        .p(px(10.))
+        .text_xs()
+        .font_family(theme::MONO)
+        .whitespace_normal()
+        .child(text)
+}
+
+fn is_active(status: &str) -> bool {
+    matches!(status, "reading" | "analyzing" | "organizing" | "writing")
+}
+
+/// Nome do projeto no andamento; o `user` é a passada da memória do usuário.
+fn display_name(p: &ProjectProgress) -> String {
+    if p.id == "user" { t("dream_progress_user") } else { p.name.clone() }
+}
+
+/// O que o projeto em andamento está fazendo, com o nome dele ("hangar · conversa 34 de 85").
+fn progress_line(p: &ProjectProgress) -> String {
+    let project = display_name(p);
+    let analyzers = p.calls_total.saturating_sub(1);
+    match p.status.as_str() {
+        "reading" => tr_shared("dream_progress_reading", &[("project", &project)]),
+        "analyzing" => tr_shared(
+            "dream_progress_analyzing",
+            &[("project", &project), ("done", &p.calls_done.min(analyzers).to_string()), ("total", &analyzers.to_string())],
+        ),
+        "organizing" => tr_shared("dream_progress_organizing", &[("project", &project)]),
+        "writing" => tr_shared("dream_progress_writing", &[("project", &project)]),
+        _ => project,
+    }
+}
+
+/// A linha do projeto enquanto ele sonha: a contagem das conversas; nas outras fases, a fase.
+fn row_activity(p: &ProjectProgress) -> String {
+    let analyzers = p.calls_total.saturating_sub(1);
+    match p.status.as_str() {
+        "analyzing" => tr_shared("dream_row_running", &[("done", &p.calls_done.min(analyzers).to_string()), ("total", &analyzers.to_string())]),
+        _ => progress_line(p),
+    }
+}
+
+fn notes_summary(notes: Option<NoteCounts>) -> String {
+    let Some(n) = notes else { return t("dream_notes_none") };
+    let parts: Vec<String> = [("dream_notes_new", n.new), ("dream_notes_changed", n.changed), ("dream_notes_removed", n.removed)]
+        .into_iter()
+        .filter(|(_, count)| *count > 0)
+        .map(|(key, count)| tr_shared(key, &[("n", &count.to_string())]))
+        .collect();
+    if parts.is_empty() { t("dream_notes_none") } else { parts.join(", ") }
+}
+
+/// Quanto da rodada andou: projetos acabados contam inteiros, o atual pela parte das chamadas.
+fn fraction(p: &Progress) -> f32 {
+    let active: Vec<&ProjectProgress> = p.projects.iter().filter(|x| x.status != "skipped").collect();
+    if active.is_empty() {
+        return 0.;
+    }
+    let sum: f32 = active
+        .iter()
+        .map(|x| match x.status.as_str() {
+            "done" | "failed" | "stopped" => 1.,
+            "queued" => 0.,
+            _ if x.calls_total > 0 => x.calls_done as f32 / x.calls_total as f32,
+            _ => 0.,
+        })
+        .sum();
+    (sum / active.len() as f32).clamp(0., 1.)
+}
+
+fn since(at: &str) -> i64 {
+    chrono::DateTime::parse_from_rfc3339(at).map(|t| (chrono::Utc::now() - t.with_timezone(&chrono::Utc)).num_seconds().max(0)).unwrap_or(0)
+}
+
+fn run_id_prefix(run_id: &str) -> &str {
+    run_id.get(..15).unwrap_or(run_id)
+}
+
+fn between(from: &str, to: &str) -> i64 {
+    match (chrono::DateTime::parse_from_rfc3339(from), chrono::DateTime::parse_from_rfc3339(to)) {
+        (Ok(a), Ok(b)) => (b - a).num_seconds().max(0),
+        _ => 0,
+    }
+}
+
+fn span(seconds: i64) -> String {
+    match seconds {
+        s if s < 60 => format!("{s} s"),
+        s if s < 3600 => format!("{} min", s / 60),
+        s => format!("{} h {} min", s / 3600, (s % 3600) / 60),
+    }
+}
+
+/// "6 passos · 42 s · US$ 0.04" de uma chamada que acabou; sem custo (morta sem a linha final), "custo desconhecido".
+fn call_meta(c: &CallMeta) -> String {
+    let duration = c.ended_at.as_deref().map(|end| span(between(&c.started_at, end))).unwrap_or_default();
+    let full = tr_shared("dream_call_meta", &[("steps", &c.steps.to_string()), ("duration", &duration), ("cost", "")]);
+    // A frase termina em "· US$ {cost}" nos dois idiomas: o custo entra pela chave própria.
+    let base = full.rsplit_once(" · ").map_or(full.as_str(), |(head, _)| head);
+    let cost = match c.cost_usd {
+        Some(cost) => tr_shared("dream_call_cost", &[("cost", &usd(cost))]),
+        None => t("dream_call_cost_unknown"),
+    };
+    format!("{base} · {cost}")
+}
+
+/// Nome da chamada pelo arquivo que ela leu: `s3-p0.txt` é a conversa 4 (com a parte, quando ela tem mais de uma),
+/// `memory-vps-1.txt` as notas daquela máquina.
+fn call_title(label: &str, labels: &[&str]) -> String {
+    match label {
+        "organizer" => return t("dream_call_organizer"),
+        "user" => return t("dream_progress_user"),
+        _ => {}
+    }
+    if let Some(machine) = label.strip_prefix("memory-").and_then(|r| r.strip_suffix(".txt")).and_then(|r| r.rsplit_once('-')).map(|(m, _)| m) {
+        return tr_shared("dream_call_notes_from", &[("machine", machine)]);
+    }
+    let parsed = label.strip_prefix('s').and_then(|r| r.strip_suffix(".txt")).and_then(|r| r.split_once("-p"));
+    let Some((Ok(session), Ok(part))) = parsed.map(|(s, p)| (s.parse::<usize>(), p.parse::<usize>())) else { return label.to_owned() };
+    let prefix = format!("s{session}-p");
+    if labels.iter().filter(|l| l.starts_with(&prefix)).count() > 1 {
+        tr_shared("dream_call_conversation_part", &[("n", &(session + 1).to_string()), ("part", &(part + 1).to_string())])
+    } else {
+        tr_shared("dream_call_conversation", &[("n", &(session + 1).to_string())])
+    }
+}
+
+/// `claude-haiku-5-5` → `Haiku`.
+fn model_name(model: &str) -> String {
+    let family = model.split('-').nth(1).unwrap_or(model);
+    let mut chars = family.chars();
+    chars.next().map(|c| c.to_uppercase().collect::<String>() + chars.as_str()).unwrap_or_default()
+}
+
+/// Lê o `events` do sonho e manda cada andamento; caiu, avisa e volta com espera crescente.
+async fn progress_stream(api: Api, tx: async_channel::Sender<StreamEvent>) {
+    use eventsource_stream::Eventsource;
+    use futures::StreamExt;
+    let mut delay = 1u64;
+    let mut lost = false;
+    loop {
+        crate::api::route::ensure(&api).await;
+        if let Ok(response) = api.server_events(&["dream", "events"]).await {
+            delay = 1;
+            if std::mem::take(&mut lost) && tx.send(StreamEvent::Reconnected).await.is_err() {
+                return;
+            }
+            // O servidor manda um comentário a cada 10 s, que o leitor de eventos não repassa: o prazo fica nos bytes.
+            let bytes = futures::stream::unfold(Box::pin(response.bytes_stream()), |mut stream| async move {
+                match tokio::time::timeout(Duration::from_secs(25), stream.next()).await {
+                    Ok(Some(chunk)) => Some((chunk, stream)),
+                    _ => None,
+                }
+            });
+            let mut events = Box::pin(bytes.eventsource());
+            while let Some(Ok(item)) = events.next().await {
+                if item.event != "progress" {
+                    continue;
+                }
+                let Ok(progress) = serde_json::from_str::<Option<Progress>>(&item.data) else { continue };
+                if tx.send(StreamEvent::Progress(progress)).await.is_err() {
+                    return;
+                }
+            }
+            crate::api::route::forget(&api);
+        }
+        if !lost {
+            lost = true;
+            if tx.send(StreamEvent::Lost).await.is_err() {
+                return;
+            }
+        }
+        tokio::time::sleep(Duration::from_secs(delay)).await;
+        delay = (delay * 2).min(30);
     }
 }
 
@@ -1153,7 +1997,49 @@ fn file_changes(place: &Place) -> Vec<(String, &'static str)> {
 #[cfg(test)]
 mod tests {
     // Nomes explícitos: o `super::*` traz um `test` do gpui que encobre o `#[test]` padrão.
-    use super::{cap, error_text, facts, file_changes, t, tr_shared, valid_hour, Place};
+    use super::{
+        call_title, cap, error_text, facts, file_changes, fraction, model_name, notes_summary, span, t, tr_shared, valid_hour, NoteCounts, Place,
+        Progress, ProjectProgress,
+    };
+
+    #[test]
+    fn calls_are_named_by_what_they_read() {
+        let labels = ["s0-p0.txt", "s1-p0.txt", "s1-p1.txt", "memory-vps-2.txt", "organizer"];
+        assert_eq!(call_title("s0-p0.txt", &labels), tr_shared("dream_call_conversation", &[("n", "1")]));
+        assert_eq!(call_title("s1-p1.txt", &labels), tr_shared("dream_call_conversation_part", &[("n", "2"), ("part", "2")]));
+        assert_eq!(call_title("memory-vps-2.txt", &labels), tr_shared("dream_call_notes_from", &[("machine", "vps")]));
+        assert_eq!(call_title("organizer", &labels), t("dream_call_organizer"));
+        assert_eq!(call_title("estranho", &labels), "estranho");
+        assert_eq!(model_name("claude-haiku-5-5"), "Haiku");
+    }
+
+    #[test]
+    fn spans_notes_and_bar() {
+        assert_eq!((span(8), span(660), span(3900)), ("8 s".into(), "11 min".into(), "1 h 5 min".into()));
+        assert_eq!(notes_summary(Some(NoteCounts { new: 0, changed: 0, removed: 0 })), t("dream_notes_none"));
+        let both = notes_summary(Some(NoteCounts { new: 2, changed: 1, removed: 0 }));
+        assert!(both.contains('2') && both.contains('1'), "{both}");
+        let project = |status: &str, done: usize| ProjectProgress {
+            id: status.into(),
+            name: status.into(),
+            status: status.into(),
+            calls_total: 4,
+            calls_done: done,
+            cost_usd: 0.,
+            error: None,
+            notes: None,
+        };
+        let progress = Progress {
+            run_id: "r".into(),
+            started_at: String::new(),
+            last_activity_at: String::new(),
+            spent_usd: 0.,
+            stopping: false,
+            current: Some(1),
+            projects: vec![project("done", 4), project("analyzing", 2), project("queued", 0), project("skipped", 0)],
+        };
+        assert!((fraction(&progress) - 0.5).abs() < 1e-6);
+    }
 
     #[test]
     fn unknown_session_count_is_left_out() {
