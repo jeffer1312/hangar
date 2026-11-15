@@ -161,7 +161,7 @@ pub async fn delete(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
         match closed {
             Ok(body) => {
                 if let Some(files) = vault_files { files.done(); }
-                closed_line(&name, owner, req.headers(), peer);
+                closed_line(&st, &name, owner, req.headers(), peer);
                 let mut response = super::json_response(StatusCode::OK, body);
                 crate::routes::cors(req.headers(), response.headers_mut());
                 return response;
@@ -201,7 +201,7 @@ pub async fn delete(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
     };
     // Fechada de propósito não volta no próximo reboot, de qualquer agente; recusada, segue voltando.
     if let Some(dirs) = st.list.env().dirs.as_ref() { crate::session_open::restore::forget(&dirs.home, &name); }
-    closed_line(&name, owner, req.headers(), peer);
+    closed_line(&st, &name, owner, req.headers(), peer);
     if let Some(files) = vault_files { files.done(); }
     // O `then` da vida que acabou não dispara na próxima sessão com o nome (o Claude e o Codex abertos
     // aqui não passam pela limpeza do nome).
@@ -310,9 +310,10 @@ fn close_failed(st: &AppState, name: &str, error: &crate::runtime::protocol::Run
     response
 }
 
-/// O fechamento que deu certo vai ao diário com o cliente, a origem e quem pediu (dono ou convidado).
-fn closed_line(name: &str, owner: bool, headers: &axum::http::HeaderMap, peer: SocketAddr) {
-    crate::diag::record(crate::diag::diary_dir(), vec![close_line_by(name, owner, headers, peer)], "sessão fechada");
+/// O fechamento que deu certo vai ao diário com o cliente, a origem e quem pediu (dono ou convidado),
+/// no destino que o servidor escolheu para o diário.
+fn closed_line(st: &AppState, name: &str, owner: bool, headers: &axum::http::HeaderMap, peer: SocketAddr) {
+    st.diag.record_line(close_line_by(name, owner, headers, peer));
 }
 
 fn close_line_by(name: &str, owner: bool, headers: &axum::http::HeaderMap, peer: SocketAddr) -> Value {

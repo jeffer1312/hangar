@@ -89,7 +89,8 @@ fn failure(status: StatusCode, code: &str, message: &str) -> Response {
 
 pub async fn handle(State(state): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, request: Request) -> Response {
     if !(match gate(&state, peer, &request).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) }).1 {
-        return failure(StatusCode::FORBIDDEN, "session_defaults_owner_only", "só o dono pode ler ou alterar o padrão da abertura");
+        // A recusa uniforme: convidado leva o 403 sem perder o login, o resto o 401 contado.
+        return crate::session_write::not_owner(&state, peer, request).await;
     }
     serve(&state, request).await
 }

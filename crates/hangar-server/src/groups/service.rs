@@ -203,7 +203,13 @@ impl GroupService {
             let dir = self.dir.clone();
             let owner = name.to_owned();
             // A fase só interessa a sidecar `orq`; `Live` e `Unknown` contam como viva.
-            let link = blocking({ let (dir, owner) = (dir.clone(), owner.clone()); move || reader(&dir)(&owner) }).await?;
+            let read = blocking({ let (dir, owner) = (dir.clone(), owner.clone()); move || dir.sidecar(&owner) }).await?;
+            let link = read.unwrap_or_else(|error| {
+                tracing::warn!(code = "groups_sidecar_unreadable", name, %error, "groups: sidecar ilegível ao sair, tratado como sem grupo");
+                // Existe e não se lê não é "sem grupo" para quem investiga: vai ao diário, como no Python.
+                self.report("rust.grupos_sidecar_ilegivel", name, "groups_sidecar_unreadable", "sidecar de grupo ilegível ao sair; tratado como sem grupo");
+                None
+            });
             let alive = match link {
                 Some(s) if s.orq => matches!(orq.phase(&s.gid).await, OrqPhase::Live | OrqPhase::Unknown),
                 _ => false,
