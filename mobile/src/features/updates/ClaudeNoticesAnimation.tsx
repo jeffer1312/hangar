@@ -3,7 +3,7 @@ import { AppState, View, useWindowDimensions } from 'react-native';
 import { useIsFocused } from 'expo-router/react-navigation';
 import Animated, { FadeIn, FadeOut, useReducedMotion } from 'react-native-reanimated';
 import { StyleSheet } from 'react-native-unistyles';
-import { ApiErrorBox, IgnoredLine, NoticeBody, NoticeLineView } from '../../chat/ClaudeNotice';
+import { ApiErrorBox, IgnoredLine, NoticeBody, NoticeLineView } from '../../chat/NoticeParts';
 import { superficie } from '../../theme/superficie';
 import { useScriptStep } from './scriptStep';
 import * as m from '../../paraglide/messages';

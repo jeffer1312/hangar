@@ -24,6 +24,7 @@ vi.mock('../../ui/Toast', () => ({ toast: { erro: vi.fn() } }));
 vi.mock('../../ui/Icon', () => ({ Icon: () => null }));
 vi.mock('./Pagina', () => ({ Pagina: ({ children }: { children: ReactNode }) => createElement('main', null, children) }));
 vi.mock('./Slider', () => ({ Slider: () => null }));
+vi.mock('../notices/IgnoredNotices', () => ({ IgnoredNotices: () => null }));
 vi.mock('react-native', async (original) => ({
   ...await original<typeof import('react-native')>(),
   Pressable: ({ children, onPress, style, accessibilityRole, accessibilityLabel, accessibilityState }: {
