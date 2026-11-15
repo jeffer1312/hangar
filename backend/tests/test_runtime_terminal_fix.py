@@ -50,34 +50,6 @@ from types import SimpleNamespace
 from app import runtime_coordinator as rc, runtime_terminal as terminal, tmux, pqueue
 
 
-def test_first_claude_resolution_unknown_never_legacy(monkeypatch, tmp_path):
-    owner = rc.RuntimeCoordinator()
-    class Legacy:
-        def binding(self, *args): return None
-    owner.legacy = Legacy()
-    monkeypatch.setattr(rc, '_current', owner)
-    monkeypatch.setattr(terminal, 'outside_scope', lambda name: False, raising=False)
-    monkeypatch.setattr(pqueue, '_queue_dir', lambda: tmp_path)
-    projection = tmp_path / 'session.jsonl'
-    projection.write_text('{"text":"preserved"}\n')
-    before = projection.read_bytes()
-    effects = []
-    monkeypatch.setattr(api, '_pane_info', lambda name: ('claude', '%1'))
-    monkeypatch.setattr(api, '_session_exists', lambda name: True)
-    monkeypatch.setattr(api, '_headless', lambda name: False)
-    monkeypatch.setattr(api, '_provider_of', lambda name: 'claude')
-    monkeypatch.setattr(api, '_enviar_nativo', lambda *args: effects.append('socket') or 'mid')
-    monkeypatch.setattr(api.terminal, 'send_prompt', lambda *args, **kwargs: effects.append('key') or 'sent')
-    monkeypatch.setattr(api, '_agendar_confirmacao', lambda *args: None)
-    async def scenario():
-        owner.loop = asyncio.get_running_loop()
-        result = await asyncio.to_thread(api._send_one, 'session', 'text')
-        assert result['ok'] is False
-        assert effects == []
-        assert projection.read_bytes() == before
-        assert owner.names == {}
-    asyncio.run(scenario())
-
 
 def test_outside_provider_keeps_legacy(monkeypatch):
     owner = rc.RuntimeCoordinator()

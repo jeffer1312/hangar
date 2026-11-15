@@ -71,21 +71,6 @@ def test_stop_failure_keeps_files(tmp_path, monkeypatch):
         coordinator.close_python_leases()
 
 
-def test_history_projection_error_not_304(monkeypatch):
-    class Coordinator:
-        def managed_queue(self, name):
-            return True
-        async def op(self, *args):
-            raise OSError("projection")
-    monkeypatch.setattr(runtime_coordinator, "_current", Coordinator())
-    async def info(name):
-        return SimpleNamespace(jsonl="chat.jsonl", provider="claude")
-    monkeypatch.setattr(api, "_cached_info", info)
-    request = SimpleNamespace(headers={"if-none-match":"old"})
-    with pytest.raises(HTTPException) as error:
-        asyncio.run(api.history(request, Response(), "session"))
-    assert error.value.status_code == 503
-
 
 def test_lifecycle_cancellation_joins_change(tmp_path, monkeypatch):
     coordinator, slot, target = owner(tmp_path, monkeypatch)

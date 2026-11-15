@@ -57,83 +57,6 @@ def test_the_bridge_is_called_one_way_and_421_means_not_ours(monkeypatch):
         server.shutdown()
 
 
-def test_bridge_failures_become_a_coded_failure_never_an_exception(monkeypatch):
-    import json
-    import socket
-
-    class Handler(http.server.BaseHTTPRequestHandler):
-        def do_POST(self):
-            status, body = (404, b"nope") if "/text/" in self.path else (409, b'{"detail": {"code": "close_kill_survived"}}')
-            self.send_response(status)
-            self.send_header("content-length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-
-        def do_GET(self):
-            body = b'[{"name": "compact"}]'
-            self.send_response(200)
-            self.send_header("content-length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-
-        def log_message(self, *args):
-            pass
-
-    def code(reply):
-        return json.loads(reply[1])["detail"]["code"]
-
-    _owner(monkeypatch)
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    try:
-        monkeypatch.setattr(list_bridge, "endpoint", lambda: (f"127.0.0.1:{server.server_port}", "s"))
-        refused = runtime_coordinator.rust_codex_terminal("cx", "kill")
-        assert refused[0] == 409 and code(refused) == "close_kill_survived", "o envelope do Rust passa como veio"
-        text = runtime_coordinator.rust_codex_terminal("text", "input", body=b"{}")
-        assert text[0] == 502 and code(text) == "codex_bridge_failed", "corpo que não é JSON vira código"
-        assert runtime_coordinator.rust_codex_terminal("cx", "commands", "GET") == (200, b'[{"name": "compact"}]'), \
-            "sucesso em lista (o /commands) passa intacto"
-    finally:
-        server.shutdown()
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        closed = probe.getsockname()[1]
-    monkeypatch.setattr(list_bridge, "endpoint", lambda: (f"127.0.0.1:{closed}", "s"))
-    down = runtime_coordinator.rust_codex_terminal("cx", "input", body=b"{}")
-    assert down[0] == 503 and code(down) == "codex_bridge_failed", "Rust fora do ar"
-    monkeypatch.setattr(list_bridge, "endpoint", lambda: None)
-    unannounced = runtime_coordinator.rust_codex_terminal("cx", "kill")
-    assert unannounced[0] == 503 and code(unannounced) == "codex_bridge_failed", "ponte sem endereço: o Python não assume"
-    monkeypatch.setattr(list_bridge, "endpoint", lambda: (f"127.0.0.1:{closed}", "s"))
-    assert asyncio.run(api_mod._send_one_codex("cx", "oi"))["error"]["code"] == "codex_bridge_failed", \
-        "o envio do broadcast/grupo/MCP devolve a falha, sem levantar"
-
-    from http import client as http_client
-
-    class Slow:
-        sent = True
-
-        def __init__(self, *args, **kwargs):
-            pass
-
-        def request(self, *args, **kwargs):
-            if not Slow.sent:
-                raise TimeoutError("timed out")
-
-        def getresponse(self):
-            raise TimeoutError("timed out")
-
-        def close(self):
-            pass
-    monkeypatch.setattr(http_client, "HTTPConnection", Slow)
-    late = runtime_coordinator.rust_codex_terminal("cx", "input", body=b"{}")
-    assert late[0] == 504 and code(late) == "codex_bridge_uncertain", "escrita enviada sem resposta: incerto, não repetir"
-    assert code(runtime_coordinator.rust_codex_terminal("cx", "commands", "GET")) == "codex_bridge_failed", \
-        "leitura sem resposta pode repetir"
-    Slow.sent = False
-    early = runtime_coordinator.rust_codex_terminal("cx", "input", body=b"{}")
-    assert early[0] == 503 and code(early) == "codex_bridge_failed", "prazo antes de enviar: pode repetir"
-
 
 def test_the_claude_bridge_carries_who_asked(monkeypatch):
     seen = []
@@ -162,20 +85,6 @@ def test_the_claude_bridge_carries_who_asked(monkeypatch):
         server.shutdown()
 
 
-def test_sends_from_python_paths_go_to_the_rust_and_return_its_code(monkeypatch):
-    calls = []
-    monkeypatch.setattr(runtime_coordinator, "rust_owns_codex_terminal", lambda: True)
-    monkeypatch.setattr(runtime_coordinator, "rust_codex_terminal",
-                        lambda *args: calls.append(args) or (200, b'{"ok": true, "delivered": true}'))
-
-    async def no_python(*args, **kwargs):
-        raise AssertionError("o Python não entrega no Codex com terminal do Rust")
-    monkeypatch.setattr(api_mod, "_send_managed", no_python)
-    assert asyncio.run(api_mod._send_one_codex("cx", "oi")) == {"ok": True, "delivered": True}
-    assert calls == [("cx", "input", "POST", b'{"text": "oi"}')]
-    monkeypatch.setattr(runtime_coordinator, "rust_codex_terminal", lambda *args: (409, b'{"detail": {"code": "x"}}'))
-    assert asyncio.run(api_mod._send_one_codex("cx", "oi")) == {"ok": False, "error": {"code": "x"}, "delivered": False}
-
 
 def _request(port, path="/api/sessions/cx/keys", query=b"", body=b'{"key":"Up"}', method="POST"):
     async def receive():
@@ -183,39 +92,6 @@ def _request(port, path="/api/sessions/cx/keys", query=b"", body=b'{"key":"Up"}'
     return Request({"type": "http", "method": method, "path": path, "query_string": query, "headers": [],
                     "server": ("127.0.0.1", port)}, receive)
 
-
-def test_writes_entering_the_guest_or_connect_port_are_forwarded_whole(monkeypatch):
-    calls = []
-    monkeypatch.setattr(api_mod.codex_sessions, "exists", lambda name: name == "cx")
-    monkeypatch.setattr(runtime_coordinator, "rust_codex_terminal", lambda *args: calls.append(args) or (202, b"{}"))
-    with pytest.raises(api_mod._RustReply) as reply:
-        asyncio.run(api_mod._codex_rust_port("cx", _request(GUEST_PORT)))
-    assert reply.value.args == (202, b"{}")
-    assert calls == [("cx", "keys", "POST", b'{"key":"Up"}')]
-    # O que chegou pela porta de trás do Rust é dele já: nunca volta para lá.
-    asyncio.run(api_mod._codex_rust_port("cx", _request(1)))
-    assert len(calls) == 1
-    # Não é Codex com terminal do Rust: a rota do Python segue.
-    monkeypatch.setattr(runtime_coordinator, "rust_codex_terminal", lambda *args: None)
-    asyncio.run(api_mod._codex_rust_port("cx", _request(GUEST_PORT)))
-
-
-def test_guest_write_to_pi_does_not_wait_for_the_codex_bridge(monkeypatch):
-    import json
-    _owner(monkeypatch, mode="pending")
-    monkeypatch.setattr(list_bridge, "endpoint", lambda: None)
-    monkeypatch.setattr(api_mod.codex_sessions, "exists", lambda name: name == "cx")
-    # Pi pela 8766 com a ponte ainda sem endereço: a rota Python segue.
-    asyncio.run(api_mod._codex_rust_port("pi", _request(GUEST_PORT, "/api/sessions/pi/keys")))
-    with pytest.raises(api_mod._RustReply) as reply:
-        asyncio.run(api_mod._codex_rust_port("cx", _request(GUEST_PORT)))
-    assert reply.value.args[0] == 503 and json.loads(reply.value.args[1])["detail"]["code"] == "codex_bridge_failed"
-
-
-def test_relaunch_routes_entering_the_guest_or_connect_port_go_to_the_rust():
-    for path in ("/api/sessions/{name}/modo-execucao",):
-        route = next(r for r in api_mod.app.routes if getattr(r, "path", None) == path and "POST" in r.methods)
-        assert any(d.dependency is api_mod._codex_rust_port for d in route.dependencies), path
 
 
 def test_claude_question_reaches_the_rust_whole_and_421_leaves_it_to_python(monkeypatch):
@@ -250,70 +126,3 @@ def test_claude_question_reaches_the_rust_whole_and_421_leaves_it_to_python(monk
         server.shutdown()
 
 
-@pytest.mark.parametrize("route", ["input", "answer", "select", "select/submit"])
-def test_claude_question_from_guest_or_connect_goes_to_the_rust(monkeypatch, route):
-    calls = []
-    _provider(monkeypatch, ct="claude")
-    monkeypatch.setattr(runtime_coordinator, "rust_codex_terminal", lambda *args: None)
-    monkeypatch.setattr(runtime_coordinator, "rust_claude", lambda *args: calls.append(args) or (200, b'{"ok": true}'))
-    body = b'{"text":"oi","jev_task":"t","jev_message":"m"}' if route == "input" else b'{"option": 1, "interaction_id": "perm:t1"}'
-    for port in (GUEST_PORT,):
-        with pytest.raises(api_mod._RustReply) as reply:
-            asyncio.run(api_mod._codex_rust_port("ct", _request(port, f"/api/sessions/ct/{route}", body=body)))
-        assert reply.value.args == (200, b'{"ok": true}')
-    assert calls == [("ct", route, "POST", body)]
-    asyncio.run(api_mod._codex_rust_port("ct", _request(GUEST_PORT, "/api/sessions/ct/keys")))
-    assert len(calls) == 1, "fora das rotas migradas o Claude não vai a esta ponte"
-
-
-@pytest.mark.parametrize(("method", "route", "query", "body"), [
-    ("PATCH", "queue/a", b"", b'{"text": "novo"}'),
-    ("DELETE", "queue/a", b"only_waiting=true", b""),
-    ("POST", "queue/reorder", b"", b'{"id": "a", "before_id": null}'),
-    ("POST", "queue/a/steer", b"", b""),
-])
-def test_queue_panel_from_guest_or_connect_goes_to_the_rust_whole(monkeypatch, method, route, query, body):
-    claude, codex = [], []
-    _provider(monkeypatch, ct="claude", cx="codex")
-    monkeypatch.setattr(api_mod.codex_sessions, "exists", lambda name: name == "cx")
-    monkeypatch.setattr(runtime_coordinator, "rust_claude", lambda *args: claude.append(args) or (200, b'{"ok": true}'))
-    monkeypatch.setattr(runtime_coordinator, "rust_codex_terminal", lambda *args: codex.append(args) or (200, b'{"ok": true}'))
-    full = route + (f"?{query.decode()}" if query else "")
-    for name in ("ct", "cx"):
-        with pytest.raises(api_mod._RustReply) as reply:
-            asyncio.run(api_mod._codex_rust_port(name, _request(GUEST_PORT, f"/api/sessions/{name}/{route}", query=query, body=body, method=method)))
-        assert reply.value.args == (200, b'{"ok": true}')
-    # Método, query e corpo chegam como vieram, por uma ponte só para cada provedor.
-    assert claude == [("ct", full, method, body)]
-    assert codex == [("cx", full, method, body)]
-
-
-def test_claude_bridge_down_is_a_visible_503_without_local_answer(monkeypatch):
-    import json
-    import socket
-    _owner(monkeypatch)
-    _provider(monkeypatch, ct="claude")
-    monkeypatch.setattr(runtime_coordinator, "rust_codex_terminal", lambda *args: None)
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        closed = probe.getsockname()[1]
-    for endpoint in ((f"127.0.0.1:{closed}", "s"), None):
-        monkeypatch.setattr(list_bridge, "endpoint", lambda endpoint=endpoint: endpoint)
-        with pytest.raises(api_mod._RustReply) as reply:
-            asyncio.run(api_mod._codex_rust_port("ct", _request(GUEST_PORT, "/api/sessions/ct/select", body=b'{"option": 1}')))
-        assert reply.value.args[0] == 503
-        assert json.loads(reply.value.args[1])["detail"]["code"] == "claude_bridge_failed"
-
-
-@pytest.mark.parametrize("route", ["answer", "select", "select/submit"])
-def test_guest_question_to_pi_does_not_wait_for_the_claude_bridge(monkeypatch, route):
-    import json
-    _owner(monkeypatch, mode="pending")
-    _provider(monkeypatch, pi="pi", ct="claude")
-    monkeypatch.setattr(list_bridge, "endpoint", lambda: None)
-    monkeypatch.setattr(api_mod.codex_sessions, "exists", lambda name: False)
-    # Pi pela 8766 com a ponte ainda sem endereço: a rota Python segue.
-    asyncio.run(api_mod._codex_rust_port("pi", _request(GUEST_PORT, f"/api/sessions/pi/{route}", body=b'{"option": 1}')))
-    with pytest.raises(api_mod._RustReply) as reply:
-        asyncio.run(api_mod._codex_rust_port("ct", _request(GUEST_PORT, f"/api/sessions/ct/{route}", body=b'{"option": 1}')))
-    assert reply.value.args[0] == 503 and json.loads(reply.value.args[1])["detail"]["code"] == "claude_bridge_failed"

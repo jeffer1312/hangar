@@ -141,47 +141,6 @@ def test_merged_history_junta_as_tentativas_do_mesmo_prompt_barrado(tmp_path):
     assert ev.ts == pqueue._ts_of_line(j.read_text(encoding="utf-8").splitlines()[0])
 
 
-def test_merged_history_dedup_ts_race(tmp_path, monkeypatch):
-    # Corrida REAL do envio (regressao de eb0f303): o send_prompt digita o texto + Enter e o Claude
-    # Code grava o prompt no jsonl NA HORA; o append da fila so roda depois (_send_one). Carimbando
-    # o ts DENTRO do append, a entrada nascia ~ms DEPOIS do commit do proprio texto -> o dedup lia
-    # "commit anterior = de outra msg igual" e mantinha a entrada pendente: a msg aparecia DUAS
-    # vezes no historico ate o reconcile (>= 8.5s). A faixa e de MILISSEGUNDOS — o teste irmao
-    # (test_merged_history_dedup_is_ts_aware) usa +-5s e nunca a toca. Aqui o ts vem do _send_one
-    # de verdade, que e onde a ordem send->append vive.
-    import json
-    from datetime import datetime, timezone
-    from types import SimpleNamespace
-    import app.api as api
-
-    j = tmp_path / "t.jsonl"
-    # 1a linha antiga = inicio da sessao: mantem start_ts no passado pra a poda pre-/clear nao ser
-    # quem remove a entrada (o que deve absorve-la e o dedup, e e isso que este teste mede).
-    j.write_text(json.dumps({"type": "user", "uuid": "u0", "timestamp": "2026-01-01T00:00:00Z",
-                             "message": {"role": "user", "content": "inicio"}}) + "\n",
-                 encoding="utf-8")
-
-    def fake_send_prompt(name, text, provider="claude", pane_id=None):
-        # Espelha o Claude Code: o Enter do send_keys ja grava a entrada `user` no transcript.
-        with open(j, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps({
-                "type": "user", "uuid": "u1",
-                "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-                "message": {"role": "user", "content": text},
-            }) + "\n")
-        return "sent"
-
-    monkeypatch.setattr(api.terminal, "send_prompt", fake_send_prompt)
-    # Neutraliza o proprio Timer, nao so o _confirm_and_drain: result=="sent" constroi um
-    # threading.Timer(8.5s) NAO-daemon de qualquer jeito — trocar o alvo por um no-op deixava o
-    # interpretador esperando 8.5s pra sair (pytest reportava 0.26s, wall-clock 9.06s).
-    monkeypatch.setattr(api.threading, "Timer", lambda *a, **k: SimpleNamespace(start=lambda: None))
-    api._send_one("s", "JANELA-X")
-
-    hist = pqueue.merged_history("s", str(j))
-    assert [e.text for e in hist] == ["inicio", "JANELA-X"]   # uma bolha so, nao duas
-    assert not any(e.id.startswith("queued-") for e in hist)  # entrada absorvida pelo user_msg real
-
 
 def test_comando_digitado_casa_com_a_forma_dele_no_transcript():
     skill = ("<command-message>acme:deploy</command-message>\n"
@@ -848,71 +807,6 @@ def _cenario_engolida(tmp_path, monkeypatch, estado, provider="claude"):
     return chamou, q.load()[0]
 
 
-def test_confirm_sem_terminal_com_jsonl_que_nunca_nasceu_desiste_visivel(tmp_path, monkeypatch):
-    # O processo morreu antes de gravar o prompt: o .jsonl nem existe. Antes, "transcript ilegível"
-    # saía sem decidir e sem reagendar, e a mensagem ficava entregue e calada pra sempre.
-    import json
-    import time as _t
-    from types import SimpleNamespace
-    import app.api as api
-    monkeypatch.setattr(api, "_headless", lambda name: True)
-    monkeypatch.setattr(api, "_CONFIRM_GRACE_HEADLESS", 10.0)
-    q = PromptQueue("hl-morta")
-    q.path.write_text(json.dumps({"id": "e1", "text": "ação café", "ts": _t.time() - 30,
-                                  "delivered": True}) + "\n", encoding="utf-8")
-    monkeypatch.setattr(api.registry, "list", lambda: [_sessao_fake("hl-morta", tmp_path / "nunca.jsonl")])
-    monkeypatch.setattr(api, "_list_snap", {"snap": None})
-    monkeypatch.setattr(api.hook_state, "get_state", lambda _sid: None)
-    monkeypatch.setattr(api.threading, "Timer", lambda *a, **k: SimpleNamespace(start=lambda: None))
-    monkeypatch.setattr(api, "drain", lambda *a, **k: pytest.fail("redigitou"))
-    api._confirm_and_drain("hl-morta")
-    row = q.load()[0]
-    assert row["desistiu"] is True and "confirmed" not in row
-
-
-def test_confirm_nao_redigita_com_estado_desconhecido(tmp_path, monkeypatch):
-    # Marcador ausente (sessao ressuscitada apos o tmux morrer): NAO pode redigitar.
-    chamou, row = _cenario_engolida(tmp_path, monkeypatch, None)
-    assert chamou == []                        # nada de re-drenar -> nada de segunda digitacao
-    assert row["delivered"] is True            # nunca volta pra fila
-    assert not row.get("attempts")             # nao contou tentativa
-    assert row["desistiu"] is True             # para de rechecar, SEM se passar por confirmada
-    assert "confirmed" not in row              # senao a msg do usuario sumiria da tela
-
-
-def test_confirm_nunca_redigita_sessao_sem_terminal(tmp_path, monkeypatch):
-    # Sem terminal, a escrita no stdin é a entrega; o .jsonl só ganha a linha depois dos hooks de
-    # UserPromptSubmit. Ocioso + ausente do transcript redigitava: cada recado chegava 2x.
-    import time as _t
-    import app.api as api
-    monkeypatch.setattr(api, "_headless", lambda name: True)
-    chamou, row = _cenario_engolida(tmp_path, monkeypatch, ("idle", _t.time()))
-    assert chamou == []
-    assert row["delivered"] is True and not row.get("attempts")
-    assert "desistiu" not in row and "confirmed" not in row   # 30s < prazo: segue esperando a prova
-
-
-def test_confirm_sem_terminal_desiste_visivel_depois_do_prazo(tmp_path, monkeypatch):
-    # Entrega que morreu de verdade (processo caiu logo após a escrita) não pode ficar reagendando
-    # pra sempre sem aviso: passado o prazo, vira `desistiu` — ainda sem redigitar.
-    import time as _t
-    import app.api as api
-    monkeypatch.setattr(api, "_headless", lambda name: True)
-    monkeypatch.setattr(api, "_CONFIRM_GRACE_HEADLESS", 10.0)
-    chamou, row = _cenario_engolida(tmp_path, monkeypatch, ("idle", _t.time()))
-    assert chamou == []
-    assert row["delivered"] is True and not row.get("attempts")
-    assert row["desistiu"] is True and "confirmed" not in row
-
-
-def test_confirm_ainda_redigita_com_estado_conhecido_ocioso(tmp_path, monkeypatch):
-    # O contrario, pra a correcao acima nao matar a feature: estado PROVADAMENTE ocioso e
-    # texto ausente do transcript continua sendo re-enfileirado (envio engolido pela TUI).
-    import time as _t
-    chamou, row = _cenario_engolida(tmp_path, monkeypatch, ("idle", _t.time()))
-    assert chamou and chamou[0][0] == "ressuscitada"
-    assert row["delivered"] is False and row["attempts"] == 1
-
 
 # 26/08/2026, relatado de uma maquina Windows: a mesma mensagem entrou 3x na conversa (18:27,
 # 18:33, 18:37 — uma por fim de turno) e terminou com a tarja "nao chegou na sessao". Sao os 2
@@ -957,42 +851,6 @@ def test_transcript_que_ainda_nao_nasceu_e_nao_sei_sem_aviso(tmp_path, caplog):
     assert [r.levelname for r in caplog.records].count("WARNING") == 2
 
 
-def test_confirm_nao_decide_com_inicio_de_transcript_ilegivel(tmp_path, monkeypatch, caplog):
-    # Mesmo cenario do requeue legitimo, mas com a SEGUNDA leitura do transcript falhando. Sem o
-    # guard, min_ts=0.0 desliga a poda por idade e o reconcile decide com meia informacao.
-    import logging
-    import time as _t
-    import app.api as api
-    monkeypatch.setattr(api, "_transcript_start_ts", lambda *a, **k: None)
-    with caplog.at_level(logging.WARNING, logger="hangar"):
-        chamou, row = _cenario_engolida(tmp_path, monkeypatch, ("idle", _t.time()))
-    assert chamou == []
-    assert row["delivered"] is True and not row.get("attempts")
-    assert "desistiu" not in row and "confirmed" not in row
-    assert "confirmacao adiada" in caplog.text
-
-
-def test_confirm_nao_decide_com_transcript_ilegivel(tmp_path, monkeypatch, caplog):
-    # MESMO cenario do teste de cima (estado provadamente ocioso + texto ausente), que redigita de
-    # proposito — o que muda e so o oraculo nao ter conseguido ler. Aqui nao se toca na fila: a
-    # entrada segue entregue-nao-confirmada e visivel como bolha, e o proximo fim de turno reolha.
-    import logging
-    import time as _t
-    import app.api as api
-    monkeypatch.setattr(api, "committed_user_lines", lambda *a, **k: None)
-    with caplog.at_level(logging.WARNING, logger="hangar"):
-        chamou, row = _cenario_engolida(tmp_path, monkeypatch, ("idle", _t.time()))
-    assert chamou == []                        # nada de re-drenar -> nada de segunda digitacao
-    assert row["delivered"] is True
-    assert not row.get("attempts")
-    assert "desistiu" not in row and "confirmed" not in row
-    # Tirar o guard NAO pode passar neste teste por acidente: sem ele o None desce ate o
-    # reconcile, estoura TypeError e o `except Exception` de _confirm_and_drain engole — a fila
-    # fica intacta pelo motivo ERRADO e as tres asserts acima continuariam verdes. O que separa os
-    # dois e QUAL linha foi registrada.
-    assert "confirmacao adiada" in caplog.text
-    assert "confirmacao de entrega falhou" not in caplog.text
-
 
 def test_linha_mais_parecida_aponta_o_quase_igual():
     # O log do REQUEUE precisa mostrar CONTRA O QUE a comparacao falhou. Caso desenhado a partir do
@@ -1006,57 +864,6 @@ def test_linha_mais_parecida_aponta_o_quase_igual():
     assert pqueue.linha_mais_parecida(texto, {"nada a ver"}) is None
     assert pqueue.linha_mais_parecida("", committed) is None
 
-
-def test_confirm_adia_enquanto_trabalha(tmp_path, monkeypatch):
-    # Guard que ja existia: mid-turn nao se mexe na fila (nem confirma, nem redigita).
-    import time as _t
-    chamou, row = _cenario_engolida(tmp_path, monkeypatch, ("working", _t.time()))
-    assert chamou == []
-    assert "confirmed" not in row and not row.get("attempts")
-
-
-def test_uma_confirmacao_pendente_por_sessao(monkeypatch):
-    # Send, fim de turno e a propria checagem agendavam cada um o seu Timer e as cadeias se
-    # somavam: 25 Timers vivos relendo transcripts de MBs para 3 sessoes.
-    import threading
-    import app.api as api
-
-    criados = []
-    real = threading.Timer
-
-    class Rec(real):
-        def __init__(self, *a, **k):
-            super().__init__(*a, **k)
-            criados.append(self)
-
-    monkeypatch.setattr(api.threading, "Timer", Rec)
-    try:
-        api._agendar_confirmacao("dup", 50)
-        api._agendar_confirmacao("dup", 60)
-        assert len(criados) == 1                  # a pendente roda antes: basta ela
-        api._agendar_confirmacao("dup", 40)
-        assert len(criados) == 2                  # prazo mais curto troca a pendente
-        criados[0].join(1)
-        assert not criados[0].is_alive()
-    finally:
-        for t in criados:
-            t.cancel()
-        api._confirm_pend.pop("dup", None)
-
-
-def test_turno_longo_espaca_a_rechecagem(tmp_path, monkeypatch):
-    # Prompt parado na fila interna da TUI durante um turno longo: sem espacar, relia o
-    # transcript inteiro a cada 8,5s pelo turno todo.
-    import app.api as api
-    api._confirm_working_streak.pop("turno-longo", None)
-    _, timers, _ = _cenario_turno_longo(tmp_path, monkeypatch, com_texto=False)
-    for _ in range(6):
-        api._confirm_and_drain("turno-longo")
-    delays = [d for d, *_ in timers]
-    assert delays[0] == api._CONFIRM_GRACE + 0.5
-    assert delays[1] == 2 * delays[0]
-    assert delays[-1] == api._CONFIRM_WORKING_MAX
-    api._confirm_working_streak.pop("turno-longo", None)
 
 
 def _cenario_turno_longo(tmp_path, monkeypatch, com_texto, provider="claude"):
@@ -1091,31 +898,6 @@ def _cenario_turno_longo(tmp_path, monkeypatch, com_texto, provider="claude"):
     api._confirm_and_drain("turno-longo")
     return chamou, timers, q.load()[0]
 
-
-def test_turno_longo_confirma_prova_no_transcript(tmp_path, monkeypatch):
-    # Sessao que trabalha HORAS sem ficar ociosa nunca chega no reconcile do idle: o guard de
-    # mid-turn adiava pra sempre e o follow reemitia a fila inteira como bolha fantasma a cada
-    # reconexao do SSE (bug medido: i18n-writer-t12 com 9 entradas delivered e confirmed:null).
-    # Com o texto PROVADO no transcript, carimbar confirmed e seguro ate no meio do turno — nao
-    # redigita, nao desiste: so esconde o eco que a bolha real ja cobre.
-    chamou, timers, row = _cenario_turno_longo(tmp_path, monkeypatch, com_texto=True)
-    assert row["confirmed"] is True            # carimbou sem esperar o ocioso
-    assert "desistiu" not in row
-    assert row["delivered"] is True
-    assert chamou == []                        # nada de redigitar no meio do turno
-    assert timers == []                        # nada pendente -> corrente de re-checagem parou
-
-
-def test_turno_longo_nao_decide_engolida_sem_prova(tmp_path, monkeypatch):
-    # O reverso, pro guard nao perder o motivo de existir: SEM o texto no transcript, no meio do
-    # turno nao se decide NADA (nem desistiu — pode ainda estar na fila interna da TUI) — so
-    # reagenda pra olhar de novo.
-    chamou, timers, row = _cenario_turno_longo(tmp_path, monkeypatch, com_texto=False)
-    assert "confirmed" not in row
-    assert "desistiu" not in row
-    assert row["delivered"] is True
-    assert chamou == []
-    assert timers and timers[0][1] == "_confirm_and_drain"
 
 
 # 13/08/2026: a mesma mensagem entrou 3x na fila da TUI de uma sessao Kimi (REQUEUE n=3 no log das

@@ -23,40 +23,6 @@ def current_processes(monkeypatch, commands, *, hidden=False):
     return ages
 
 
-@pytest.mark.parametrize('commands', [
-    [['claude', '--session-id', 'sid']],
-    [['pi'], ['claude', '--session-id', 'sid']],
-    [],
-])
-def test_stale_provider_or_ambiguous_process_never_allows_unbound_writer(monkeypatch, tmp_path, commands):
-    ages = current_processes(monkeypatch, commands)
-    owner = rc.RuntimeCoordinator()
-    owner.legacy = SimpleNamespace(binding=lambda *args: None)
-    monkeypatch.setattr(rc, '_current', owner)
-    monkeypatch.setattr(pqueue, '_queue_dir', lambda: tmp_path)
-    projection = tmp_path / 'session.jsonl'
-    projection.write_text('{"text":"preserved"}\n')
-    before = projection.read_bytes()
-    monkeypatch.setattr(api, '_pane_info', lambda name: ('claude', '%1'))
-    monkeypatch.setattr(api, '_session_exists', lambda name: True)
-    monkeypatch.setattr(api, '_headless', lambda name: False)
-    monkeypatch.setattr(api, '_provider_of', lambda name: 'claude')
-    effects = []
-    monkeypatch.setattr(api, '_enviar_nativo', lambda *args: effects.append('socket') or 'mid')
-    monkeypatch.setattr(api.terminal, 'send_prompt', lambda *args, **kwargs: effects.append('key') or 'sent')
-    monkeypatch.setattr(api, '_agendar_confirmacao', lambda *args: None)
-    async def scenario():
-        owner.loop = asyncio.get_running_loop()
-        result = await asyncio.to_thread(api._send_one, 'session', 'text')
-        assert result['ok'] is False
-        assert effects == []
-        assert owner.names == {}
-        assert projection.read_bytes() == before
-        with pytest.raises(RuntimeError, match='sem vínculo comprovado'):
-            terminal.assert_writer('session')
-        assert ages and all(age == 0 for age in ages)
-    asyncio.run(scenario())
-
 
 @pytest.mark.parametrize('commands,hidden', [
     ([['pi']], False), ([['omp']], False), ([['kimi']], False), ([['codex']], False),

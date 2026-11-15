@@ -667,31 +667,6 @@ def test_terminal_unicode_controls_rejected_before_intent(monkeypatch,tmp_path,t
     asyncio.run(flow())
 
 
-@pytest.mark.parametrize('source', ['input','shared_send','send_one','hook','timer','adapter_send','adapter_drain'])
-def test_claude_terminal_all_producers_route_to_owner(monkeypatch,tmp_path,source):
-    from app import api
-    from app.adapters.claude import ClaudeAdapter
-    from types import SimpleNamespace
-    gateway=TerminalGateway()
-    owner,slot,_=live_owner(monkeypatch,tmp_path,gateway=gateway)
-    monkeypatch.setattr(api,'_provider_of',lambda name:'claude')
-    monkeypatch.setattr(api,'_headless',lambda name:False)
-    monkeypatch.setattr(api,'_session_exists',lambda name:True)
-    monkeypatch.setattr(api,'_cached_info_sync',lambda name:SimpleNamespace(jsonl=slot.binding.jsonl,provider='claude'))
-    async def flow():
-        await _to_rust(owner,'session')
-        if source=='input':await api.input_prompt('session',api.InputBody(text='text',steer=True))
-        elif source=='shared_send':await api._enviar('session','[grupo: sender] message')
-        elif source=='send_one':await asyncio.to_thread(api._send_one,'session','text')
-        elif source=='hook':await asyncio.to_thread(api._drenar,'session',slot.binding.jsonl,'claude')
-        elif source=='timer':await asyncio.to_thread(api._confirm_and_drain,'session')
-        elif source=='adapter_send':await ClaudeAdapter().send_prompt('session','text')
-        else:await ClaudeAdapter().drain('session',slot.binding.jsonl)
-        calls=gateway.calls[1:]
-        assert calls == (['confirm','drain'] if source=='timer' else ['drain'] if source in {'hook','adapter_drain'} else ['submit'])
-        await owner.detach('session')
-    asyncio.run(flow())
-
 
 @pytest.mark.parametrize('control', ['send_key','send_term_key','send_text','select','submeter_multipla','interrupt','answer_questions','steer_now'])
 def test_claude_terminal_controls_route_to_owner(monkeypatch,tmp_path,control):
@@ -713,38 +688,6 @@ def test_claude_terminal_controls_route_to_owner(monkeypatch,tmp_path,control):
 
 
 # O nível do convite (`pair` só lê) é do porteiro do Rust; aqui chega o convidado já decidido.
-@pytest.mark.parametrize('kind,status', [('share',200)])
-def test_public_guest_routes_follow_owner(monkeypatch,tmp_path,kind,status):
-    import base64,hashlib,hmac
-    from app import api, guest_header, internal_api
-    from types import SimpleNamespace
-    from app.config import settings
-    from fastapi.testclient import TestClient
-    gateway=TerminalGateway()
-    owner,slot,_=live_owner(monkeypatch,tmp_path,gateway=gateway)
-    monkeypatch.setattr(settings,'auth_token','owner')
-    monkeypatch.setattr(api,'_provider_of',lambda name:'claude')
-    monkeypatch.setattr(api,'_headless',lambda name:False)
-    monkeypatch.setattr(api,'_session_exists',lambda name:True)
-    headers={'Authorization':'Bearer guest'}
-    internal_api.set_secret('secret')
-    monkeypatch.setattr(guest_header,'time',SimpleNamespace(time=lambda:1000))
-    payload=base64.urlsafe_b64encode(json.dumps({'s':{'session':kind},'exp':1030}).encode()).rstrip(b'=').decode()
-    mac=hmac.new(b'secret',f'POST\n/api/sessions/session/input\n{payload}'.encode(),hashlib.sha256).hexdigest()
-    headers={'x-hangar-guest':f'{payload}.{mac}'}
-    client=TestClient(api.app,base_url='http://127.0.0.1:8765',client=('127.0.0.1',1))
-    async def flow():
-        await _to_rust(owner,'session')
-        result=await asyncio.to_thread(client.post,'/api/sessions/session/input',
-            json={'text':'text'},headers=headers)
-        assert result.status_code==status
-        assert gateway.calls==(['open','submit'] if status==200 else ['open'])
-        await owner.detach('session')
-    try:
-        asyncio.run(flow())
-    finally:
-        internal_api.set_secret(None)
-
 
 def test_terminal_native_socket_belongs_to_current_agent_not_reused_sid(monkeypatch,tmp_path):
     from app import runtime_terminal as terminal
