@@ -1,4 +1,4 @@
-import { memo, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import { Text, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import type { ChatEvent } from '@hangar/core';
@@ -20,6 +20,15 @@ export const ClaudeNotice = memo(function ClaudeNotice({ event, serverId }: { ev
   // A lista da máquina chega pelo evento e decide as outras linhas.
   const [local, setLocal] = useState<boolean | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
+  const localRef = useRef(local);
+  localRef.current = local;
+  // Outro aparelho mudou a mesma chave depois: a lista volta a decidir. Só na chegada da lista, para o "ignorado"
+  // recém-feito aqui não cair antes de o evento dele chegar.
+  useEffect(() => {
+    if (!key) return;
+    const has = ignoredKeys.includes(key);
+    if ((localRef.current === true && !has) || (localRef.current === false && has)) setLocal(null);
+  }, [ignoredKeys, key]);
 
   if (isApiError(event)) return <ApiErrorBox text={plainNotice(event).trim()} />;
   if (key && local === null && ignoredKeys.includes(key)) return null;

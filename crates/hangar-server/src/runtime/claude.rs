@@ -1426,6 +1426,8 @@ impl ClaudeEngine {
         // Por nome, não por motivo: o `stderr` muda a cada chamada (arquivo, linha) e viraria uma nota por ferramenta.
         if let Some(fails) = self.hook_fails.get_mut(&name) {
             fails.count += 1;
+            // Uma vez bloqueio, a nota fica sem chave de ignorar.
+            fails.blocking |= event["exit_code"].as_i64() == Some(2);
             // No turno o total sai de uma vez no fim dele; fora (`SessionStart`, compactação) não há fim para esperar.
             if !self.in_progress { self.flush_hook_fails(effects); }
             return;
