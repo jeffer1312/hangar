@@ -477,8 +477,18 @@ impl hangar_server::list::procs::ProcessView for Processes {
     }
 }
 #[cfg(unix)]
+/// Grava o multiplexador falso sem abrir o arquivo para escrita neste processo: quem grava é um `install` à
+/// parte. Gravado aqui, um filho de outro teste nascido nesse instante herdaria o descritor de escrita, e rodar o
+/// script daria "Text file busy" (o teste via `mux_unavailable`). Cópia do `write_executable` de `tests/it`.
+fn write_executable(path: &Path, content: impl AsRef<[u8]>) {
+    let source = path.with_extension("conteudo");
+    std::fs::write(&source, content).unwrap();
+    let status = std::process::Command::new("install").arg("-m").arg("700").arg(&source).arg(path).status().unwrap();
+    assert!(status.success(), "install não gravou {}", path.display());
+    std::fs::remove_file(&source).unwrap();
+}
+
 fn raw_list(root: &Path, agent: bool) -> Arc<hangar_server::list::bridge::ListBridge> {
-    use std::os::unix::fs::PermissionsExt;
     std::fs::write(root.join("alive"), b"1").unwrap();
     if agent {
         std::fs::write(root.join("agent"), b"1").unwrap();
@@ -496,8 +506,7 @@ fn raw_list(root: &Path, agent: bool) -> Arc<hangar_server::list::bridge::ListBr
         quote(&root.join("refuse")),
         quote(&root.join("alive"))
     );
-    std::fs::write(&program, script).unwrap();
-    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+    write_executable(&program, script);
     Arc::new(hangar_server::list::bridge::ListBridge::new(
         hangar_server::list::bridge::ListEnv {
             mux: hangar_server::list::mux::Mux::with_program(&program, Duration::from_secs(2)),
@@ -540,7 +549,7 @@ async fn other_lifecycle_factory_without_key_writes_no_spec_when_the_key_cannot_
         &format!("show-environment) printf '%s\\n' 'CP_SESSION_KEY={KEY}';;"),
         "show-environment) printf '%s\\n' 'unknown variable: CP_SESSION_KEY' >&2; exit 1;;",
     );
-    std::fs::write(&program, script).unwrap();
+    write_executable(&program, script);
     let specs = || std::fs::read_dir(hangar_server::session_open::record::dir(root.path())).unwrap().count();
     let before = specs();
     for _ in 0..2 {
@@ -1022,10 +1031,10 @@ async fn other_lifecycle_reused_claude_name_registers_pi_without_killing_current
         )
         .replace("pi-a\t%1\t100", "pi-a\t%1\t99")
         .replace("\tpi\t100\t", "\tpi\t99\t");
-    std::fs::write(&program, old_script).unwrap();
+    write_executable(&program, old_script);
     registry.open_terminal(old).await.unwrap();
     let had_old = registry.list_snapshots().await.contains_key(OLD_KEY);
-    std::fs::write(program, new_script).unwrap();
+    write_executable(&program, new_script);
     let adopted = registry.adopt_now("pi-a").await;
     let snapshots=registry.list_snapshots().await;
     let old_remains = snapshots.contains_key(OLD_KEY);
