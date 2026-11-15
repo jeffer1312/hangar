@@ -179,13 +179,6 @@ def cli(monkeypatch, tmp_path):
     return TestClient(app)
 
 
-def test_rota_do_condutor_sem_rust_recusa(cli, monkeypatch):
-    from app import account_bridge
-    monkeypatch.setattr(account_bridge, "owner_mode", lambda: "python")
-    response = cli.get("/api/orq/2026-09-25-g1/conductor", headers=H)
-    assert response.status_code == 503
-    assert response.json()["detail"]["code"] == "orq_conductor_need_rust_server"
-
 
 def test_rota_do_condutor_exige_autenticacao(cli):
     assert cli.get("/api/orq/x/conductor").status_code == 401

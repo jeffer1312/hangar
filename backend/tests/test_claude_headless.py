@@ -131,23 +131,6 @@ def test_reload_keeps_session_when_termination_fails_off_loop(adapter, monkeypat
     assert adapter._sessions["s1"] is session
 
 
-def test_kill_failure_preserves_process_identity(adapter, monkeypatch):
-    from app import adapters
-    from app.registry import SessionRegistry
-    meta = S.update("s1", cano={"pid": 4242})
-    session = adapter._sessions["s1"]
-    session.meta = meta
-    monkeypatch.setattr(adapters, "get_adapter", lambda provider: adapter)
-    def fail_stop(*args):
-        raise RuntimeError("process still alive")
-    monkeypatch.setattr(A, "_matar_grupo", fail_stop)
-    with pytest.raises(RuntimeError, match="process still alive"):
-        SessionRegistry().kill("s1")
-    assert S.load("s1") == meta
-    assert adapter._sessions["s1"] is session
-    assert not session.encerrando
-
-
 @pytest.mark.parametrize("failure", ["exit_code", "timeout", "still_alive"])
 def test_windows_termination_failure_is_reported(monkeypatch, failure):
     import subprocess

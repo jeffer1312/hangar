@@ -349,22 +349,30 @@ async fn history_negative_limit_is_the_whole_history_like_python() {
 }
 
 #[tokio::test]
-async fn history_without_owner_or_supported_provider_goes_to_python() {
+async fn history_without_owner_is_401_and_bad_limit_and_unknown_provider_stay_in_rust() {
     let (_dir, jsonl, _offs, fake, srv) = setup(0..2, "sess-j").await;
     let url = format!("http://{srv}/api/sessions/s/history");
 
+    // R5 (decisão 5): sem o dono, o 401 sai do Rust.
     let r = client().get(&url).bearer_auth("convidado").send().await.unwrap();
-    assert_eq!(r.text().await.unwrap(), "from-python");
+    assert_eq!(r.status().as_u16(), 401);
     assert_eq!(fake.info_calls(), 0);
 
+    // O 422 do FastAPI (`limit: int | None`), antes de procurar a sessão.
     let r = client().get(format!("{url}?limit=abc")).bearer_auth(OWNER).send().await.unwrap();
-    assert_eq!(r.text().await.unwrap(), "from-python");
-    assert_eq!(fake.info_calls(), 1, "a validação do limite resolve primeiro o provedor");
+    assert_eq!(r.status().as_u16(), 422);
+    assert_eq!(r.json::<Value>().await.unwrap(), json!({"detail": [{"type": "int_parsing", "loc": ["query", "limit"],
+        "msg": "Input should be a valid integer, unable to parse string as an integer", "input": "abc"}]}));
+    assert_eq!(fake.info_calls(), 0, "o limite é validado antes da sessão");
 
+    // Provedor desconhecido: o `merged_history` do Python lia com o leitor do Claude.
+    let claude: InternalInfo = serde_json::from_value(info_json("claude", &jsonl)).unwrap();
+    let expected = serde_json::to_value(merged_history(&claude.history_request(None).unwrap()).unwrap()).unwrap();
     fake.set_info(json!({"provider": "unsupported", "jsonl": jsonl, "session_key": "sess-j", "history": {}}));
     let r = client().get(&url).bearer_auth(OWNER).send().await.unwrap();
-    assert_eq!(r.text().await.unwrap(), "from-python");
-    assert_eq!(fake.info_calls(), 2, "cada pedido do dono resolve o provedor antes do repasse");
+    assert_eq!(r.status().as_u16(), 200);
+    assert_eq!(r.json::<Value>().await.unwrap(), expected);
+    assert_eq!(fake.hits_to("/api/sessions/s/history"), 0, "nada chega ao Python");
 }
 
 #[tokio::test]
@@ -434,16 +442,18 @@ async fn events_without_info_answers_503() {
 }
 
 #[tokio::test]
-async fn missing_session_still_reaches_python_404() {
+async fn missing_session_is_the_rust_404() {
     let (_dir, _jsonl, _offs, fake, srv) = setup(0..2, "sess-missing").await;
     fake.set_info(Value::Null);
+    // O corpo que o `history` do Python dava.
     let r = client().get(format!("http://{srv}/api/sessions/s/history")).bearer_auth(OWNER).send().await.unwrap();
-    assert_eq!(r.text().await.unwrap(), "from-python");
-    // O Python não tem `/events`: o Rust responde a sessão inexistente com o código.
+    assert_eq!(r.status(), 404);
+    assert_eq!(r.json::<Value>().await.unwrap(),
+        json!({"detail": {"code": "erro_sessao_inexistente", "params": {}, "msg": "session or transcript not found"}}));
     let r = open_events(srv, "s", "", &[]).await;
     assert_eq!(r.status(), 404);
     assert_eq!(r.json::<Value>().await.unwrap()["detail"]["code"], "erro_sessao_inexistente");
-    assert_eq!(fake.hits_to("/api/sessions/s/history"), 1);
+    assert_eq!(fake.hits_to("/api/sessions/s/history"), 0);
     assert_eq!(fake.hits_to("/api/sessions/s/events"), 0);
     assert!(fake.diag().is_empty(), "sessão inexistente não é falha");
 }

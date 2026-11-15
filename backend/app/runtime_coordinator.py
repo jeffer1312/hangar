@@ -308,11 +308,8 @@ class RuntimeCoordinator:
         self.rebind_capped = set()
         self.drains = {}
         self.mode = _initial_mode
-        self.mode_hooks = {}        # "rust"/"python" -> corrotina que o lifespan registra
-        self._hooks_ran = set()
         self._settling = False      # entrando num modo: as sessões ainda abrindo ou voltando
         self._mode_event = None
-        self.python_left = None     # ligado quando o Python solta as sessões ao Rust que volta
         # Sessões cuja recusa de fundo por cache inválido já foi ao diário nesta sequência.
         self._cache_invalid_logged: set[str] = set()
         # Antes da saúde do Rust vale o que se espera dele; depois, o que ele anuncia.
@@ -342,17 +339,6 @@ class RuntimeCoordinator:
                 pass
         return self.mode
 
-    async def _run_hook(self, mode):
-        hook = self.mode_hooks.get(mode)
-        if hook is None or mode in self._hooks_ran:
-            return
-        self._hooks_ran.add(mode)
-        try:
-            await hook()
-        except Exception as exc:
-            from app import diag
-            diag.registrar("runtime.mode_hook_failed", "erro", etapa=mode, **failure_reason(exc))
-
     async def enter_pending(self):
         """O Rust caiu (queda 1 ou 2): as sessões ficam com ele, sem dono por segundos, até o
         próximo subir e abri-las de novo. Nada volta ao Python aqui."""
@@ -363,57 +349,6 @@ class RuntimeCoordinator:
             if slot.phase == Phase.Rust:
                 slot.cache_valid = False
                 self._signal(slot)
-
-    async def enter_python(self, containment=None):
-        """O Rust desistiu: o Python é o dono até o backend reiniciar. Cada sessão do Rust é
-        retomada uma vez; depois roda o que o lifespan faria sem o Rust."""
-        self._set_mode("python", settling=True)
-        self.python_left = asyncio.Event()
-        token = _mode_bypass.set(True)
-        try:
-            for slot in tuple(self.slots.values()):
-                if (self.names.get(slot.binding.name) != slot.binding.key or slot.phase == Phase.Python
-                        or slot.awaiting_identity):
-                    continue
-                try:
-                    await self.recover(slot.binding.name, confirmed_dead=True, containment=containment)
-                except Exception as exc:
-                    # Uma sessão que não volta fica suspensa sozinha; a porta e as outras seguem.
-                    _registration_failed("runtime.recover_failed", slot.binding.name, exc)
-            await self._run_hook("python")      # registra e religa antes de liberar quem espera
-        finally:
-            _mode_bypass.reset(token)
-            self._set_mode("python")
-
-    async def leave_python(self):
-        """Religar o Rust: cada sessão sai do Python pela passagem normal (operação em curso termina,
-        `quiesce`, trava solta) e fica como numa queda. Exceção = quem chama devolve tudo ao Python."""
-        adapters = self.legacy.adapters if self.legacy is not None else {}
-        codex = adapters.get("codex")
-        if any(sess["client"].tem_processo_proprio for sess in getattr(codex, "_sessions", {}).values()):
-            raise RuntimeError("Codex com processo do Python: soltar o cliente mataria o processo")
-        self._set_mode("pending")
-        self._hooks_ran.discard("python")       # nova desistência religa os clientes de novo
-        if self.python_left is not None:
-            self.python_left.set()              # os SSE com estado do Python fecham e reconectam no Rust
-        for slot in tuple(self.slots.values()):
-            if self.names.get(slot.binding.name) != slot.binding.key or slot.phase != Phase.Python:
-                continue
-            async with self._barrier(slot):
-                await asyncio.wait_for(self._wait_active(slot), _ACTIVE_WAIT_S)
-                await self.legacy.quiesce(slot.binding.descriptor())
-                with slot.guard:
-                    if slot.lease is not None:
-                        slot.lease.close()
-                    slot.lease, slot.store, slot.phase, slot.cache_valid = None, None, Phase.Rust, False
-            self._signal(slot)
-        # Cliente sem registro (cano religado só para ver o estado): basta fechar a ligação.
-        if (claude := adapters.get("claude")) is not None:
-            claude.desligar_todas()
-            claude._sessions.clear()
-        for name in list(getattr(codex, "_sessions", ())):
-            await codex.release_client(name)
-
 
     async def _enter_rust(self):
         """Rust novo de pé: ele adota sozinho na subida o que é dele (canos vivos, fila pendente, terminais
@@ -436,7 +371,6 @@ class RuntimeCoordinator:
             _mode_bypass.reset(token)
             if not cancelled:
                 self._set_mode("rust")
-        await self._run_hook("rust")
 
     async def prepare_session(self, name, provider, *, launch=False):
         """`launch`: quem chama pode subir o processo (envio, acordar); leitura e parada nunca sobem."""
@@ -739,13 +673,10 @@ class RuntimeCoordinator:
         from app.runtime_adapter import LegacyBridge
         self.loop = asyncio.get_running_loop()
         self.legacy = LegacyBridge(self, adapters)
-        # Com o Rust esperado as sessões Claude esperam por ele: nada de trava, fila ou cliente
-        # Python antes do desfecho. O que o Rust não anuncia como dele fica com o Python.
-        if self.mode == "python":
-            await self.register_claude_sessions()
-        else:
-            await self._register_durable_terminals(owned=False)
-        if self.mode == "python" or not self.rust_owns("codex", True):
+        # As sessões Claude esperam pelo Rust: nada de trava, fila ou cliente Python antes do
+        # desfecho. O que o Rust não anuncia como dele fica com o Python.
+        await self._register_durable_terminals(owned=False)
+        if not self.rust_owns("codex", True):
             from app.adapters.codex import sessions as codex_sessions
             await self._prepare_listed("codex", await asyncio.to_thread(codex_sessions.list_all))
 
@@ -757,18 +688,9 @@ class RuntimeCoordinator:
                 except Exception as exc:
                     _registration_failed("runtime.registration_failed", meta["name"], exc)
 
-    async def register_claude_sessions(self):
-        """Sessões Claude do estado durável. Python dono: registra todas nele. Rust de pé: ele adota
-        sozinho as com e sem terminal na subida."""
-        if self.transport is not None:
-            return
-        await self._register_durable_terminals(owned=None)
-        from app.adapters.claude_headless import sessions as claude_sessions
-        await self._prepare_listed("claude", await asyncio.to_thread(claude_sessions.list_all))
-
     async def _register_durable_terminals(self, *, owned):
         """Registros de terminal do estado durável da fila: `owned` True só os de provedor que o Rust
-        atende, False só os do Python, None todos."""
+        atende, False só os do Python."""
         from app.pqueue import _queue_dir
         terminals = []
         for path in (_queue_dir() / "runtime").glob("*.json"):
@@ -819,37 +741,6 @@ class RuntimeCoordinator:
                 if binding.meta.get("terminal"):
                     terminals.append(binding)
         return terminals
-
-    async def native_receipt(self, message_id, status):
-        # Com o Rust de pé os recados da fila saem pela caixa de entrada dele, e é lá que o recibo volta;
-        # ler o arquivo de estado aqui, enquanto o Rust o troca, falharia no Windows.
-        if self.mode != "python":
-            return False
-        for slot in tuple(self.slots.values()):
-            if self.names.get(slot.binding.name) != slot.binding.key:
-                continue
-            state = await asyncio.to_thread(lambda: json.loads(slot.binding.state_path.read_bytes()))
-            for operation_id, operation in state["operations"].items():
-                if operation["payload"].get("kind") not in {"input", "steer"}:
-                    continue
-                root_id = operation.get("entry_id") or operation_id
-                if slot.binding.meta.get("terminal"):
-                    result = operation.get("result") or {}
-                    delivery = result.get("payload") or {}
-                    if (delivery.get("native") is not True or delivery.get("message_id") != message_id
-                            or operation["payload"].get("payload", {}).get("_terminal_generation") != slot.binding.generation):
-                        continue
-                expected = str(uuid.uuid5(uuid.NAMESPACE_URL, "hangar:" + slot.binding.key + ":" + root_id))
-                if message_id != expected:
-                    continue
-                disposition = "accepted" if status in {"delivered", "released", ""} else "rejected" if status in {"rejected", "refused"} else "unknown"
-                await self.op(slot.binding.name, {"kind":"queue", "action":{"kind":"finish", "id":root_id,
-                    "status":disposition, "result":{"operation_id":root_id, "disposition":disposition,
-                        "payload":{"native_status":status}}}}, "native-receipt:" + message_id + ":" + status)
-                if disposition == "accepted":
-                    await self.op(slot.binding.name, {"kind":"confirm"}, uuid.uuid4().hex)
-                return True
-        return False
 
     def configure_transport(self, transport, owns=None):
         if self.events_task is not None and not self.events_task.done():

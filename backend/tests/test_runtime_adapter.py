@@ -574,58 +574,6 @@ def test_quiesce_settles_entry_claimed_by_cancelled_drain(tmp_path, monkeypatch,
     assert adapter.drain_claims == {}
 
 
-def test_leave_python_lets_the_drain_in_flight_get_its_ack(tmp_path, monkeypatch):
-    # Religar o Rust depois da desistência: a sessão sai do Python pela passagem normal. A escrita
-    # do drain em voo recebe o ack antes do stdin fechar; a entrada fica entregue, uma vez só.
-    from app import runtime_adapter, runtime_queue
-    from app.adapters.claude_headless.adapter import ClaudeHeadlessAdapter
-    from app.pqueue import PromptQueue
-    from app.runtime_adapter import LegacyBridge, _legacy_operation
-    from app.runtime_coordinator import Binding, Phase, RuntimeCoordinator
-    coordinator = RuntimeCoordinator()
-    coordinator.mode = "python"
-    monkeypatch.setattr(runtime_coordinator, "_current", coordinator)
-    monkeypatch.setattr(runtime_queue, "_coordinator", coordinator)
-    slot = coordinator.register(Binding("session", "key", "claude", True, {"key":"key"},
-        str(tmp_path / "chat"), tmp_path / "projection", tmp_path / "state", tmp_path / "lease", 1))
-    adapter = ClaudeHeadlessAdapter()
-    coordinator.legacy = LegacyBridge(coordinator, {"claude": adapter})
-    async def discard():
-        return None
-    buffers = SimpleNamespace(discard=discard, invalidate=lambda: None)
-    sess = SimpleNamespace(name="session", initialized=asyncio.Event(), model=None, effort=None, permission_mode=None,
-        modo_nao_plan=None, comandos=[], comandos_terminal=[], usage=None, context_window=None, cost=None,
-        desligando=False, live_active=None, drenador=None, proc=None, leitor=None,
-        preview_buffer=buffers, thinking_buffer=buffers, tool_buffer=buffers)
-    adapter._sessions["session"] = sess
-    claimed, written = asyncio.Event(), []
-    async def write(sess, frame):
-        claimed.set()
-        await asyncio.sleep(0.2)              # o ack do cano chega depois de a passagem começar
-        written.append(frame["message"]["content"])
-    adapter._write = write
-    monkeypatch.setattr(runtime_adapter, "_WRITE_WAIT_S", 0.5)
-    async def send_prompt(name, text):
-        await adapter._escrever_prompt(sess, text)
-        await asyncio.Event().wait()
-    adapter.send_prompt = send_prompt
-    async def scenario():
-        await asyncio.to_thread(PromptQueue("session").append, "texto", delivered=False)
-        token = _legacy_operation.set({"operation_id":"drain-op"})
-        coordinator.legacy_active.add("drain-op")
-        sess.drenador = asyncio.create_task(adapter.drain("session", ""))
-        _legacy_operation.reset(token)
-        await asyncio.wait_for(claimed.wait(), 3)
-        rows = slot.store.state["rows"]
-        await coordinator.leave_python()
-        return rows
-    rows = asyncio.run(scenario())
-    assert written == [[{"type":"text", "text":"texto"}]], "saiu uma vez, com o ack"
-    assert adapter.drain_claims == {} and sess.drenador.cancelled()
-    assert rows[0]["delivered"] is True and not rows[0].get("desistiu")
-    assert slot.phase == Phase.Rust and slot.lease is None and coordinator.mode == "pending"
-
-
 def test_quiesce_stops_drain_outside_the_cancelled_tasks(tmp_path, monkeypatch):
     # Drain dono de uma reivindicação, fora das tarefas da sessão, não sobrevive à passagem.
     from app.adapters.claude_headless.adapter import ClaudeHeadlessAdapter

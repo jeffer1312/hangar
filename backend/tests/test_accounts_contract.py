@@ -457,13 +457,3 @@ def test_python_asks_rust_whether_a_process_uses_an_account(tmp_path, monkeypatc
         reference.close()
 
 
-def test_python_does_not_open_sessions(tmp_path):
-    """Abrir é do Rust: na referência Python a abertura recusa com o código, sem nascer nada."""
-    reference = PythonReference(tmp_path / "home")
-    try:
-        response = reference.start_session_async(provider="codex", account_id="alpha").result(timeout=20)
-        assert response.status_code == 503
-        assert response.json()["detail"]["code"] == "session_open_needs_rust_server"
-        assert reference.request("GET", "/__contract__/usage").json()["sessions"] == []
-    finally:
-        reference.close()

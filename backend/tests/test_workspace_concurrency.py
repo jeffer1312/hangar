@@ -9,7 +9,7 @@ _BINARY = Path(__file__).parents[2] / "crates/target/debug/hangar-server"
 
 
 def test_supervisor_starts_runtime_and_workspace_bridges_together(tmp_path, monkeypatch):
-    from app import (account_bridge, groups_bridge, internal_api, runtime_coordinator, runtime_queue,
+    from app import (account_bridge, internal_api, runtime_coordinator, runtime_queue,
                      rust_server)
 
     monkeypatch.setattr(runtime_coordinator, "_current", None)
@@ -31,8 +31,6 @@ def test_supervisor_starts_runtime_and_workspace_bridges_together(tmp_path, monk
             assert supervisor.runtime_transport is not None
             configured = account_bridge.private_transport() is not None
             assert configured, "a ponte de contas não recebeu o endereço privado"
-            configured = groups_bridge._config is not None
-            assert configured, "a ponte de grupos não recebeu o endereço privado"
         finally:
             await supervisor.stop()
             internal_api.set_secret(None)
@@ -40,7 +38,5 @@ def test_supervisor_starts_runtime_and_workspace_bridges_together(tmp_path, monk
         # O segredo interno não pode seguir para uma porta que o filho morto liberou.
         cleared = account_bridge.private_transport() is None
         assert cleared, "a ponte de contas ainda guarda o endereço do filho encerrado"
-        cleared = groups_bridge._config is None
-        assert cleared, "a ponte de grupos ainda guarda o endereço do filho encerrado"
 
     asyncio.run(scenario())

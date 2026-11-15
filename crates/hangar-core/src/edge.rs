@@ -122,11 +122,18 @@ pub fn owner_gate(trusted: &TrustedHosts, auth: &Auth, peer: SocketAddr, req: &R
     async move {
     let (forward, owner) = admission.await.map_err(auth::unavailable)?;
     if owner { return Ok(forward); }
+    require_auth(&auth, forward.client_ip.clone(), token).await?;
+    Ok(forward)
+    }
+}
+
+/// O `require_auth` do Python: aceita, ou recusa com 401/429 (503 sem contador), contando a tentativa.
+pub async fn require_auth(auth: &Auth, origin: String, token: Option<Vec<u8>>) -> Result<(), Response> {
     let decision = auth.evaluate(auth::AuthAttempt {
-        profile: auth::Profile::RequireAuthHttp, origin: forward.client_ip.clone(),
+        profile: auth::Profile::RequireAuthHttp, origin,
         presented_token: token, verified_guest: false, login_guest: false,
     }).await.map_err(auth::unavailable)?;
-    if decision.status == 0 { return Ok(forward); }
+    if decision.status == 0 { return Ok(()); }
     let blocked = decision.status == auth::AuthDecision::BLOCKED.status;
     let (status, code, msg) = if blocked {
         (StatusCode::TOO_MANY_REQUESTS, "erro_muitas_tentativas", "muitas tentativas — aguarde")
@@ -136,7 +143,6 @@ pub fn owner_gate(trusted: &TrustedHosts, auth: &Auth, peer: SocketAddr, req: &R
     let mut response = crate::http::json_response(status, serde_json::json!({"detail":{"code":code,"params":{},"msg":msg}}));
     if blocked { response.headers_mut().insert(header::RETRY_AFTER, axum::http::HeaderValue::from_static("30")); }
     Err(response)
-    }
 }
 
 /// Entrou pela 8766 ou um porteiro de convidado já disse quem pede: o token do dono não decide.

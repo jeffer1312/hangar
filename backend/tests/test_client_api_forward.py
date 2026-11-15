@@ -62,10 +62,3 @@ def test_unauthenticated_and_guest_never_reach_rust(rust, forwarded_guest):
     with forwarded_guest():
         assert TestClient(app).get("/api/client-api", headers=AUTH).status_code == 404
     assert _Rust.seen == []
-
-
-def test_python_mode_answers_503_with_code(rust, monkeypatch):
-    monkeypatch.setattr(runtime_coordinator, "current", lambda: SimpleNamespace(mode="python"))
-    response = TestClient(app).get("/api/client-api", headers=AUTH)
-    assert (response.status_code, response.json()["detail"]["code"]) == (503, "client_api_need_rust_server")
-    assert _Rust.seen == []

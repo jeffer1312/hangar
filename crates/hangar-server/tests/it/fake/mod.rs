@@ -56,7 +56,8 @@ pub struct Fake {
     plugin_status: Mutex<Option<StatusCode>>,
     plugin_gets: AtomicUsize,
     plugin_posts: Mutex<Vec<Value>>,
-    /// Resposta do `/api/sessions/{n}/input` repassado; `None` = o "from-python" de sempre.
+    /// Resposta do `/api/sessions/{n}/input` e do `/api/diag` repassados (o `/api/diag` é rota que o Python
+    /// ainda atende, para provar um salto até ele); `None` = o "from-python" de sempre.
     input_reply: Mutex<Option<(StatusCode, Value)>>,
     /// Rotas `/internal/pair/*`, `/internal/orq/*` e `/internal/external-pairs/*` (caminho sem
     /// `/internal/`): resposta e corpos recebidos.
@@ -272,7 +273,7 @@ async fn fake_python(State(f): State<Arc<Fake>>, mut req: Request) -> Response {
     if path.ends_with("/input") && f.hold_input.load(SeqCst) {
         f.release.notified().await;
     }
-    if path.ends_with("/input") && let Some((code, body)) = f.input_reply.lock().unwrap().clone() {
+    if (path.ends_with("/input") || path == "/api/diag") && let Some((code, body)) = f.input_reply.lock().unwrap().clone() {
         return Response::builder().status(code).header("content-type", "application/json").body(Body::from(body.to_string())).unwrap();
     }
     match path.as_str() {

@@ -60,6 +60,19 @@ impl PolicyClient {
     pub(super) fn codex_environment(&self) -> crate::accounts::environment::AccountEnvironment {
         self.codex_env.as_deref().cloned().unwrap_or_else(crate::accounts::environment::AccountEnvironment::capture)
     }
+    /// Pasta dos sidecars do Claude sem terminal: a do ambiente em que o registro abre a sessão
+    /// (`claude_dirs`), para o ator gravar o modo no mesmo arquivo que o registro leu.
+    pub(super) fn claude_sidecar_dir(&self) -> Result<std::path::PathBuf,RuntimeError> {
+        match &self.codex_env { Some(env)=>Ok(env.home.join(".hangar").join("claude-headless")), None=>super::lifecycle::claude_sidecar_dir() }
+    }
+}
+
+/// A pasta do sidecar do Claude para o ator: a da política, ou a do processo sem ela.
+fn claude_dir(policy:Option<&PolicyClient>) -> Result<std::path::PathBuf,RuntimeError> {
+    policy.map_or_else(super::lifecycle::claude_sidecar_dir,PolicyClient::claude_sidecar_dir)
+}
+
+impl PolicyClient {
     /// Janelas de cota da conta, só quando vai formatar, lidas do módulo de contas (cache dele). Falha
     /// formata sem janelas; o log leva o código, nunca o dado.
     pub async fn quota_windows(&self,key:&str,config_dir:&str) -> Option<Value> {
@@ -1230,7 +1243,7 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
                     // Sem terminal (Codex que o Rust sobe, Claude): o mesmo, com a vida pela chave e sob a trava
                     // que o Python também segura ao gravar o arquivo.
                     let headless_dir = matches!(kind.as_str(),"session.patch_meta" | "session.clear_cano").then(|| match target.provider.as_str() {
-                        "claude" => Some(super::lifecycle::claude_sidecar_dir()),
+                        "claude" => Some(claude_dir(engine.policy.as_ref())),
                         _ => engine.launch.as_ref().filter(|_|adoption.is_none()).map(|launch|Ok(launch.sidecar_dir.clone())),
                     }).flatten();
                     // Estes serviços não escrevem na CLI (formatar status, carimbo, sidecar, log): repetir é
@@ -1281,7 +1294,9 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
                     if sid_transition {continue;}
                     state_version+=1;
                     let version=state_version;let view=engine.view();let sample=clock(start);
+                    let sidecar_dir=claude_dir(engine.policy.as_ref());
                     let saved=async {
+                        let sidecar_dir=sidecar_dir.clone()?;
                         save_view(&queue,target.generation,sample,&state_gate,version,&view,false).await?;
                         let _guard=state_gate.lock().await;
                         let state=queue.snapshot().await.map_err(io_failure)?;
@@ -1289,7 +1304,7 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
                         let mut captured=target.clone();
                         if let Some(metadata)=state.runtime_state.get("metadata").filter(|metadata|metadata["key"]==target.key && metadata["cano"]["pid"]==target.binding.pid) {captured.metadata=metadata.clone();}
                         let lease=queue.lease();let values=patch.clone();
-                        let result=tokio::task::spawn_blocking(move || {let _lease=lease;super::lifecycle::patch_sidecar(&captured,&values)}).await.map_err(|_|failure("lifecycle_worker"))??;
+                        let result=tokio::task::spawn_blocking(move || {let _lease=lease;super::lifecycle::patch_sidecar_in(&sidecar_dir,&captured,&values)}).await.map_err(|_|failure("lifecycle_worker"))??;
                         if result["updated"]!=true {return Err(failure("lifecycle_sidecar_stale"));}
                         let mut metadata=result["metadata"].clone();metadata["lifecycle_pending"]=target.metadata["lifecycle_pending"].clone();
                         queue.exec(target.generation,&format!("claude-metadata:{}",unique()),sample,Action::AdvanceLifecycle {generation:target.generation,state:json!({"metadata":metadata})}).await.map_err(io_failure)?;
@@ -1305,7 +1320,7 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
                         Err(failed)=>{
                             if let Some(id)=operation_id {mode_failures.insert(id,failed.clone());}
                             // Sidecar apagado: a sessão foi fechada pelo nome e não há onde gravar; a religação a solta.
-                            if failed.code!="lifecycle_sidecar_read" || !super::lifecycle::claude_sidecar_absent(&target.name).await {enter_error(&mut error,&target,failed);}
+                            if failed.code!="lifecycle_sidecar_read" || !super::lifecycle::claude_sidecar_absent_in(sidecar_dir.clone(),&target.name).await {enter_error(&mut error,&target,failed);}
                             else {
                                 if crate::warn_limit::allow(Some(&target.key),"claude_sidecar_absent") {
                                     tracing::warn!(key=%target.key,session=%target.name,"sidecar da sessão sumiu; a gravação do estado não foi feita");
@@ -1603,8 +1618,8 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
                     Message::LifecycleReady {proof,response}=> {
                         let result=async {
                             if target.provider!="claude" || sid_transition {return Err(failure("lifecycle_commit"));}
-                            let captured=target.clone();
-                            let digest=tokio::task::spawn_blocking(move ||super::lifecycle::sidecar_digest(&captured)).await.map_err(|_|failure("lifecycle_worker"))??;
+                            let (captured,dir)=(target.clone(),claude_dir(engine.policy.as_ref())?);
+                            let digest=tokio::task::spawn_blocking(move ||super::lifecycle::sidecar_digest_in(&dir,&captured)).await.map_err(|_|failure("lifecycle_worker"))??;
                             mode_ready_proof(&target,&engine.view(),mode_commit.as_ref(),&proof,&digest,error.as_ref())?;
                             let mut metadata=target.metadata.clone();metadata["lifecycle_pending"]=json!(false);
                             queue.exec(target.generation,&format!("lifecycle-ready:{}:{}:{}",target.generation,target.binding.pid,proof.operation_id),clock(start),Action::AdvanceLifecycle {generation:target.generation,state:json!({"metadata":metadata})}).await.map_err(io_failure)?;

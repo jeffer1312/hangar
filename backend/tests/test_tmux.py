@@ -571,38 +571,6 @@ def test_new_session_execs_command_so_claude_owns_tty(monkeypatch):
     assert captured["args"][-1].endswith("claude --session-id x")
 
 
-# --- scrollback real vs tela alternada ------------------------------------------------------
-# Claude Code roda em tela alternada, onde o tmux NAO acumula historico: pedir mais linhas nunca
-# traz nada e a UI nao pode oferecer "carregar mais historico". A TUI do Codex sobe com
-# --no-alt-screen, entao la o scrollback existe. O formato do display resolve os dois num comando so.
-
-def test_pane_scrollback_zero_em_tela_alternada():
-    from unittest.mock import patch
-    from app import tmux as t
-    with patch.object(t, "_run", return_value=SimpleNamespace(stdout="0\n", returncode=0)):
-        assert t.pane_scrollback("sess") == 0
-
-
-def test_pane_scrollback_devolve_historico_quando_existe():
-    from unittest.mock import patch
-    from app import tmux as t
-    with patch.object(t, "_run", return_value=SimpleNamespace(stdout="1873\n", returncode=0)):
-        assert t.pane_scrollback("sess") == 1873
-
-
-def test_pane_scrollback_falha_de_tmux_e_zero_MAS_logada(caplog):
-    # 0 = "sem historico" E tmux quebrado davam a MESMA resposta: a UI so escondia o botao e a falha
-    # real (tmux ausente, travado no timeout, sessao zumbi) sumia. Segue devolvendo 0 pra UI nao
-    # explodir, mas TEM que aparecer no log.
-    from unittest.mock import patch
-    from app import tmux as t
-    with caplog.at_level("WARNING"), \
-         patch.object(t, "_run",
-                      return_value=SimpleNamespace(stdout="", stderr="no server running", returncode=1)):
-        assert t.pane_scrollback("sess") == 0
-    assert "no server running" in caplog.text
-
-
 def test_capture_pane_falha_de_tmux_e_logada(caplog):
     # stdout vazio numa falha e indistinguivel de pane genuinamente vazio -> o /pane devolvia 200
     # com texto "" e ninguem sabia que o tmux falhou.

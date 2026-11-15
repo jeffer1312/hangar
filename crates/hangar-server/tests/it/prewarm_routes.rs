@@ -13,21 +13,56 @@ fn with_client(body: &str) -> String {
     value.to_string()
 }
 
-/// Quem não é o dono segue ao Python, como no Mermaid: ele dá 403 ao convidado e 401 a quem não tem credencial.
+/// R5-01 (decisão 5): quem não é o dono recebe do Rust o 401 do `require_auth` (`test_needs_auth`), com
+/// CORS, e o Python não recebe nada.
 #[tokio::test]
-async fn not_the_owner_goes_to_python() {
+async fn r5_01_not_the_owner_is_401_from_rust() {
     let (python, upstream) = spawn_fake().await;
     let srv = spawn_server(config(upstream, "127.0.0.1")).await;
+    let refused = json!({"detail": {"code": "erro_nao_autorizado", "params": {}, "msg": "unauthorized"}});
     for token in [None, Some("convidado")] {
-        let put = client().put(format!("http://{srv}/api/sessions/prewarm")).header("content-type", "application/json").body(with_client(REFUSED));
+        let put = client().put(format!("http://{srv}/api/sessions/prewarm")).header("origin", "http://outro")
+            .header("content-type", "application/json").body(with_client(REFUSED));
         let put = match token { Some(t) => put.bearer_auth(t), None => put };
-        assert_eq!(put.send().await.unwrap().text().await.unwrap(), "from-python", "token {token:?}");
+        let response = put.send().await.unwrap();
+        assert_eq!(response.status().as_u16(), 401, "token {token:?}");
+        assert!(response.headers().contains_key("access-control-allow-origin"), "o PWA de outra origem lê a recusa");
+        assert_eq!(response.json::<Value>().await.unwrap(), refused, "token {token:?}");
         let delete = client().delete(format!("http://{srv}/api/sessions/prewarm/abc"));
         let delete = match token { Some(t) => delete.bearer_auth(t), None => delete };
-        assert_eq!(delete.send().await.unwrap().text().await.unwrap(), "from-python", "token {token:?}");
+        assert_eq!(delete.send().await.unwrap().status().as_u16(), 401, "token {token:?}");
     }
-    assert_eq!(python.hits_to("/api/sessions/prewarm"), 2);
-    assert_eq!(python.hits_to("/api/sessions/prewarm/abc"), 2);
+    assert_eq!(python.hits_to("/api/sessions/prewarm"), 0);
+    assert_eq!(python.hits_to("/api/sessions/prewarm/abc"), 0);
+}
+
+/// R5-02/R5-04 (`test_backoff_barra_apos_max_fails`): oito erros da mesma origem dão 401 e o nono 429 com
+/// `Retry-After: 30`, sem avaliar a senha, nem a certa; outra origem segue livre. Tudo no Rust.
+#[tokio::test]
+async fn r5_02_eight_wrong_tokens_block_the_origin_in_rust() {
+    let (python, upstream) = spawn_fake().await;
+    let srv = spawn_server(config(upstream, "127.0.0.1")).await;
+    let put = |token: &str, origin: &str| client().put(format!("http://{srv}/api/sessions/prewarm")).bearer_auth(token)
+        .header("x-forwarded-for", origin).header("content-type", "application/json").body(with_client(REFUSED)).send();
+    for attempt in 0..8 { assert_eq!(put("errado", "203.0.113.9").await.unwrap().status().as_u16(), 401, "tentativa {attempt}"); }
+    let blocked = put("errado", "203.0.113.9").await.unwrap();
+    assert_eq!(blocked.status().as_u16(), 429);
+    assert_eq!(blocked.headers()["retry-after"], "30");
+    assert_eq!(blocked.json::<Value>().await.unwrap()["detail"]["code"], "erro_muitas_tentativas");
+    assert_eq!(put(OWNER, "203.0.113.9").await.unwrap().status().as_u16(), 429, "bloqueada, nem a senha certa entra");
+    assert_eq!(put("errado", "203.0.113.10").await.unwrap().status().as_u16(), 401, "outra origem não é afetada");
+    assert_eq!(python.hits_to("/api/sessions/prewarm"), 0);
+}
+
+/// R5-11: o cookie só autentica `GET`/`HEAD`; num `PUT` ele não vale, e a recusa é do Rust.
+#[tokio::test]
+async fn r5_11_cookie_on_a_write_is_401_from_rust() {
+    let (python, upstream) = spawn_fake().await;
+    let srv = spawn_server(config(upstream, "127.0.0.1")).await;
+    let response = client().put(format!("http://{srv}/api/sessions/prewarm")).header("cookie", format!("cp_token={OWNER}"))
+        .header("content-type", "application/json").body(with_client(REFUSED)).send().await.unwrap();
+    assert_eq!(response.status().as_u16(), 401);
+    assert_eq!(python.hits_to("/api/sessions/prewarm"), 0);
 }
 
 /// A recusa é a da abertura: mesmo status e mesmo corpo do `POST /api/sessions` para o mesmo pedido.

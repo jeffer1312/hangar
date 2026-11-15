@@ -28,12 +28,6 @@ def _get(client, headers=None):
     return client.get(ROUTE, headers=headers if headers is not None else {"X-Hangar-Internal": SECRET})
 
 
-def test_workspace_context_refuses_before_reading_the_registry():
-    with patch("app.api._guardar_snap") as snapshot:
-        response = _client("203.0.113.7").get("/internal/workspace/context", headers={"X-Hangar-Internal":SECRET})
-    assert response.status_code == 404
-    snapshot.assert_not_called()
-
 
 @pytest.mark.parametrize("headers", [{}, {"X-Hangar-Internal": "errado"}, {"X-Hangar-Internal": ""}])
 def test_wrong_secret_404(headers):
@@ -82,11 +76,6 @@ def test_secret_never_goes_to_environ(monkeypatch):
 def test_outside_loopback_404_even_with_secret():
     assert _get(_client("10.0.0.7")).status_code == 404
 
-
-def test_left_out_of_the_api_schema():
-    paths = api_mod.app.openapi()["paths"]
-    assert "/api/sessions/{name}/history" in paths
-    assert not any(p.startswith("/internal") for p in paths)
 
 
 def test_policy_route_is_gone():

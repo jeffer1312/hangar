@@ -241,8 +241,10 @@ pub(crate) fn claude_sidecar_dir()->Result<std::path::PathBuf,RuntimeError> {
 
 /// O sidecar da sessão não existe (só a ausência; ilegível não conta): o fechamento pelo nome o apaga
 /// antes de matar o cano.
-pub(super) async fn claude_sidecar_absent(name:&str)->bool {
-    let Ok(path)=claude_sidecar_dir().map(|dir|super::codex_sidecar::path(&dir,name)) else {return false};
+pub(super) async fn claude_sidecar_absent(name:&str)->bool {claude_sidecar_absent_in(claude_sidecar_dir(),name).await}
+/// Como `claude_sidecar_absent`, na pasta de quem abriu a sessão; pasta desconhecida não é ausência.
+pub(super) async fn claude_sidecar_absent_in(dir:Result<std::path::PathBuf,RuntimeError>,name:&str)->bool {
+    let Ok(path)=dir.map(|dir|super::codex_sidecar::path(&dir,name)) else {return false};
     tokio::task::spawn_blocking(move||sidecar_absent_by(&path,super::queue::read_replaced)).await.unwrap_or(false)
 }
 /// Uma leitura que tolera a troca (`read_replaced`): no Windows quem lê no instante da troca recebe
@@ -252,11 +254,11 @@ fn sidecar_absent_by(path:&std::path::Path,read:impl FnOnce(&std::path::Path)->s
 }
 
 /// O arquivo já existe: esta operação nunca cadastra nem prepara uma conta.
-/// O chamador segura a lease do Store e o portão de revisão do ator.
-pub fn delete_sidecar(target:&super::protocol::RuntimeTarget,conversation:&str)->Result<(),RuntimeError> {
+/// O chamador segura a lease do Store e o portão de revisão do ator. `dir`: a pasta em que o registro
+/// abriu a sessão, a mesma que o ator grava.
+pub fn delete_sidecar(dir:&std::path::Path,target:&super::protocol::RuntimeTarget,conversation:&str)->Result<(),RuntimeError> {
     if target.provider!="claude" || target.name.is_empty() || !target.name.bytes().all(|b|b.is_ascii_alphanumeric() || b"._-".contains(&b)) {return Err(failure("lifecycle_sidecar_path"));}
-    let dir=claude_sidecar_dir()?;
-    super::codex_sidecar::locked(&dir,&target.name,|path|Ok(delete_locked(path,target,conversation))).map_err(|_|failure("lifecycle_sidecar_lock"))?
+    super::codex_sidecar::locked(dir,&target.name,|path|Ok(delete_locked(path,target,conversation))).map_err(|_|failure("lifecycle_sidecar_lock"))?
 }
 fn delete_locked(path:&std::path::Path,target:&super::protocol::RuntimeTarget,conversation:&str)->Result<(),RuntimeError> {
     let bytes=match super::queue::read_replaced(path) {Ok(bytes)=>bytes,Err(error) if error.kind()==std::io::ErrorKind::NotFound=>return Ok(()),Err(_)=>return Err(failure("lifecycle_sidecar_read"))};
@@ -267,16 +269,18 @@ fn delete_locked(path:&std::path::Path,target:&super::protocol::RuntimeTarget,co
 }
 
 fn sidecar_hash(bytes:&[u8])->String {ring::digest::digest(&ring::digest::SHA256,bytes).as_ref().iter().map(|byte|format!("{byte:02x}")).collect()}
-pub(super) fn sidecar_digest(target:&super::protocol::RuntimeTarget)->Result<String,RuntimeError> {
+pub(super) fn sidecar_digest_in(dir:&std::path::Path,target:&super::protocol::RuntimeTarget)->Result<String,RuntimeError> {
     if target.provider!="claude" || target.name.is_empty() || !target.name.bytes().all(|b|b.is_ascii_alphanumeric() || b"._-".contains(&b)) {return Err(failure("lifecycle_sidecar_path"));}
-    let path=claude_sidecar_dir()?.join(format!("{}.json",target.name));
+    let path=dir.join(format!("{}.json",target.name));
     let bytes=super::queue::read_replaced(&path).map_err(|_|failure("lifecycle_sidecar_read"))?;Ok(sidecar_hash(&bytes))
 }
 /// Sob a trava `<nome>.lock` do arquivo, a mesma que o Python segura ao gravá-lo.
 pub fn patch_sidecar(target:&super::protocol::RuntimeTarget,patch:&serde_json::Value)->Result<serde_json::Value,RuntimeError> {
+    patch_sidecar_in(&claude_sidecar_dir()?,target,patch)
+}
+pub(super) fn patch_sidecar_in(dir:&std::path::Path,target:&super::protocol::RuntimeTarget,patch:&serde_json::Value)->Result<serde_json::Value,RuntimeError> {
     if target.provider!="claude" || !target.name.bytes().all(|b|b.is_ascii_alphanumeric() || b"._-".contains(&b)) || target.name.is_empty() {return Err(failure("lifecycle_sidecar_path"));}
-    let dir=claude_sidecar_dir()?;
-    super::codex_sidecar::locked(&dir,&target.name,|path|Ok(patch_locked(path,target,patch))).map_err(|_|failure("lifecycle_sidecar_lock"))?
+    super::codex_sidecar::locked(dir,&target.name,|path|Ok(patch_locked(path,target,patch))).map_err(|_|failure("lifecycle_sidecar_lock"))?
 }
 fn patch_locked(path:&std::path::Path,target:&super::protocol::RuntimeTarget,patch:&serde_json::Value)->Result<serde_json::Value,RuntimeError> {
     use serde_json::{Value,json};

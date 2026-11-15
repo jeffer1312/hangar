@@ -144,6 +144,8 @@ pub fn rust_route(method: &Method, path: &str) -> bool {
     if *method == Method::POST && matches!(path, "/api/device-install/trust" | "/api/device-install/start" | "/api/device-install/code" | "/api/device-install/certs") { return true; }
     if *method == Method::POST && matches!(path, "/api/update/accept" | "/api/update/arrived/seen") { return true; }
     if *method == Method::POST && path == "/api/ask-history" { return true; }
+    // `peer-address` saiu: o Rust responde qualquer método com o 404 de rota inexistente.
+    if path.strip_prefix("/api/sessions/").and_then(|r| r.split_once('/')).is_some_and(|(_, t)| t == "peer-address") { return true; }
     if *method == Method::GET {
         if matches!(path, "/api/sessions" | "/api/sessions/events" | "/api/sessions/creation-progress" | "/api/costs" | "/api/cotacao" | "/api/uso" | "/api/migration/status" | "/api/presence" | "/api/update/notes" | "/api/update/arrived" | "/api/news" | "/api/manual"
             | "/api/voice" | "/api/voice/settings" | "/api/voice/memory" | "/api/jev/aux/cliproxy" | "/api/jev/delivery" | "/api/client-api"
@@ -152,7 +154,7 @@ pub fn rust_route(method: &Method, path: &str) -> bool {
         }
         let tail = path.strip_prefix("/api/sessions/").and_then(|r| r.split_once('/')).map(|(_, t)| t);
         // `term`: o painel abre no Rust; login de convidado e Connect passam pelo Python e voltam ao mesmo PTY.
-        if matches!(tail, Some("history" | "events" | "artifacts" | "cost" | "term" | "nav-remoto" | "models" | "limits" | "commands" | "codex-permissions" | "conta")) || tail.is_some_and(|t| t.starts_with("pages/")) {
+        if matches!(tail, Some("history" | "events" | "artifacts" | "cost" | "term" | "nav-remoto" | "models" | "limits" | "commands" | "codex-permissions" | "conta" | "pane" | "permission-modes")) || tail.is_some_and(|t| t.starts_with("pages/")) {
             return true;
         }
         if tail.is_some_and(|t| t == "subagents" || t.strip_prefix("subagents/").is_some_and(|id| !id.is_empty() && !id.contains('/'))) {
@@ -231,9 +233,9 @@ pub fn rust_route(method: &Method, path: &str) -> bool {
     if tail.is_some_and(|t| crate::session_write::control::queue_route(method, t).is_some()) {
         return true;
     }
-    // Grupos (`groups::routes`): o convidado segue ao Python, que recusa.
+    // Grupos (`groups::routes`): o convidado é recusado pelo porteiro, antes da rota.
     if matches!((method.as_str(), tail), ("POST", Some("pair" | "group-message" | "pair-remote" | "unpair-remote"))
-        | ("DELETE", Some("pair")) | ("GET", Some("pair/contract"))) {
+        | ("DELETE", Some("pair")) | ("GET" | "PUT", Some("pair/contract"))) {
         return true;
     }
     (*method == Method::GET && path == crate::claude_customizations::CATALOG_PATH)
@@ -507,7 +509,8 @@ mod tests {
             && !rust_route(&Method::POST, "/api/sessions/a/queue/e1") && rust_route(&Method::POST, "/api/sessions/a/queue/e1/steer")
             && rust_route(&Method::PATCH, "/api/sessions/a/queue/e1") && get("/api/cotas") && rust_route(&Method::POST, "/api/worktrees/create"));
         assert!(rust_route(&Method::POST, "/api/sessions/a/pair") && rust_route(&Method::DELETE, "/api/sessions/a/pair")
-            && get("/api/sessions/a/pair/contract") && rust_route(&Method::POST, "/api/sessions/a/unpair-remote")
+            && get("/api/sessions/a/pair/contract") && rust_route(&Method::PUT, "/api/sessions/a/pair/contract")
+            && rust_route(&Method::POST, "/api/sessions/a/unpair-remote")
             && !get("/api/sessions/a/pair") && rust_route(&Method::POST, "/api/sessions/a/pair-invite"));
         assert!(rust_route(&Method::POST, "/api/sessions/a/share") && rust_route(&Method::DELETE, "/api/sessions/a/share/s1")
             && get("/api/share/prereqs") && rust_route(&Method::POST, "/api/share/reachability")

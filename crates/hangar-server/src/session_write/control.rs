@@ -156,6 +156,27 @@ fn parse_submit(bytes: &Bytes) -> Option<Option<String>> {
 
 // ── /select/submit ──────────────────────────────────────────────────────────────────────────────
 
+const MSG_NO_TERMINAL: &str = "esta sessão não tem terminal; nada foi enviado";
+const MSG_NO_MULTI_PICKER: &str = "nao ha picker de multipla escolha na tela — nada enviado";
+
+/// Tecla ou texto de terminal numa sessão sem terminal: nada sai, com o 502 do Python.
+pub fn no_terminal() -> Answer {
+    (StatusCode::BAD_GATEWAY, detail_body("erro_envio_falhou", MSG_NO_TERMINAL, json!({"erro": MSG_NO_TERMINAL})))
+}
+
+/// Tecla fora da lista do terminal é a validação do Python (400), com ou sem pane para recebê-la.
+pub(crate) fn key_refused(key: Option<&str>, interactive: bool) -> Option<Answer> {
+    key.filter(|key| !key.is_empty() && crate::terminal_input::allowed_key(key, interactive).is_none())
+        .map(|_| (StatusCode::BAD_REQUEST, json!({"detail": "tecla não permitida"})))
+}
+
+/// A aba Submit só existe num pane: o Claude sem terminal recusa como o picker ausente do Python, o
+/// Codex sem terminal com o 502 dele.
+pub fn submit_headless(provider: &str) -> Answer {
+    if provider == "codex" { return no_terminal(); }
+    failure("erro_opcao_nao_convergiu", MSG_NOT_SUBMITTED, json!({"detalhe": MSG_NO_MULTI_PICKER}))
+}
+
 pub fn submit_answer(sent: &Result<RuntimeReply, RuntimeError>) -> (Answer, Diary) {
     if let Some(failed) = interaction_result(sent) { return (failed, None); }
     let reply = match sent {
@@ -422,6 +443,11 @@ pub async fn select_submit(State(st): State<Arc<AppState>>, ConnectInfo(peer): C
         Err(response) => return response,
     };
     let Some(supplied) = parse_submit(&bytes).filter(|_| bytes.is_empty() || json_content_type(ctx.headers())) else { return invalid_body(ctx.headers()) };
+    if matches!(ctx.target.handle, EntryHandle::Headless(_)) {
+        if supplied.as_deref().is_none_or(str::is_empty) { return answer(&ctx, interaction_failure(InteractionError::Missing)); }
+        if ctx.target.provider != "codex" { report(&ctx, Some(("opcao.envio_falhou", "no_terminal".into()))); }
+        return answer(&ctx, submit_headless(&ctx.target.provider));
+    }
     let expected = match expected(&ctx, supplied.as_deref()).await { Ok(expected) => expected, Err(failed) => return answer(&ctx, failed) };
     // A TUI do Codex não tem a aba Submit do Claude: a pergunta dele se responde pelo `/answer`.
     if matches!(ctx.target.handle, EntryHandle::CodexTerminal { .. }) { return answer(&ctx, interaction_failure(InteractionError::Changed)); }
@@ -430,7 +456,7 @@ pub async fn select_submit(State(st): State<Arc<AppState>>, ConnectInfo(peer): C
         let (answered,diary)=submit_answer(&handle.control(random_hex(16),"submit_selected".into(),json!({"interaction_id":supplied})).await);
         report(&ctx,diary);return answer(&ctx,answered);
     }
-    let EntryHandle::Terminal { handle, .. } = &ctx.target.handle else { unreachable!("a tabela manda o sem terminal ao Python") };
+    let EntryHandle::Terminal { handle, .. } = &ctx.target.handle else { unreachable!("o sem terminal foi recusado acima") };
     if expected.target.kind != crate::interactions::InteractionKind::Menu { return answer(&ctx, interaction_failure(InteractionError::Changed)); }
     let result = if st.term.is_active(&ctx.name) { panel_open_refusal() } else {
         let (answered, diary) = submit_answer(&handle.control(random_hex(16), "submit_selected".into(), json!({"interaction_id": supplied})).await);
@@ -541,7 +567,7 @@ pub async fn keys(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInf
         // Codex com terminal: o pane é do Rust também, pelo mesmo escritor de teclas.
         EntryHandle::CodexTerminal { target, cell, .. } => pane_step_answer(&crate::runtime::codex_terminal::pane_driver(&target.terminal, cell.pane_serial(), None).key(&key, false).await),
         EntryHandle::OtherTerminal {handle,..} => control_step_answer(&handle.control(random_hex(16), "navigation_key".into(), json!({"key":key})).await),
-        EntryHandle::Headless(_) => unreachable!("a tabela manda o sem terminal ao Python"),
+        EntryHandle::Headless(_) => Err(key_refused(Some(key.as_str()), false).unwrap_or_else(no_terminal)),
     };
     answer(&ctx, result.map_or_else(|refused| refused, |()| ok()))
 }
@@ -552,6 +578,7 @@ pub async fn term_input(State(st): State<Arc<AppState>>, ConnectInfo(peer): Conn
         Err(response) => return response,
     };
     let Some((text, key)) = parse_term_input(&bytes).filter(|_| json_content_type(ctx.headers())) else { return invalid_body(ctx.headers()) };
+    if matches!(ctx.target.handle, EntryHandle::Headless(_)) && let Some(refused) = key_refused(key.as_deref(), true) { return answer(&ctx, refused); }
     let result = match term_input_steps(text.as_deref(), key.as_deref()) {
         Err(refused) => refused,
         Ok(steps) => {
@@ -565,7 +592,8 @@ pub async fn term_input(State(st): State<Arc<AppState>>, ConnectInfo(peer): Conn
                             else { driver.key(payload["key"].as_str().unwrap_or(""), true).await })
                     }
                     EntryHandle::OtherTerminal {handle,..} => control_step_answer(&handle.control(random_hex(16), control.into(), payload).await),
-                    EntryHandle::Headless(_) => unreachable!("a tabela manda o sem terminal ao Python"),
+                    // Corpo sem texto nem tecla não chega aqui: segue `ok` sem tocar em nada, como no Python.
+                    EntryHandle::Headless(_) => Err(no_terminal()),
                 };
                 if let Err(refused) = step { done = refused; break; }
             }

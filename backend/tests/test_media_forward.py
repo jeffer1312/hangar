@@ -146,11 +146,3 @@ def test_transport_failure_is_503_without_a_second_attempt(rust, monkeypatch):
 def test_unauthenticated_request_never_reaches_rust(rust):
     assert TestClient(app).post("/api/sessions/s/upload", content=b"x").status_code == 401
     assert _Rust.seen == []
-
-
-@pytest.mark.parametrize("method,url", ROUTES)
-def test_python_mode_answers_unavailable_with_code(rust, monkeypatch, method, url):
-    monkeypatch.setattr(runtime_coordinator, "current", lambda: SimpleNamespace(mode="python"))
-    response = TestClient(app).request(method, url, headers=AUTH, content=b"x" if method == "POST" else None)
-    assert (response.status_code, response.json()["detail"]["code"]) == (503, "erro_midia_precisa_rust")
-    assert _Rust.seen == []

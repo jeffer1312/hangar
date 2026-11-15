@@ -411,12 +411,9 @@ def history(path: Path, provider: str, queue_name: str) -> dict:
     return out
 
 
-# ── /input e /steer: o corpo HTTP que o Python devolve para cada resposta do ator ─────────────────
-# Chama o `input_prompt` e o `steer_session` de verdade, com um coordenador falso que responde a
+# ── /input: o corpo HTTP que o Python devolve para cada resposta do ator ─────────────────
+# Chama o `input_prompt` de verdade, com um coordenador falso que responde a
 # disposição do caso. O Rust lê estes arquivos e tem de responder o mesmo corpo e o mesmo código.
-# Divergências deliberadas, já espelhadas na rota do Python:
-# - /steer sem terminal recusado pelo ator vira 409 `erro_sem_turno` (antes o ValueError virava 500);
-# - /steer com terminal, falha do runtime no controle ou no confirm vira 502 `erro_envio_falhou` (antes 500).
 # Diferenças que o golden NÃO compara: o `msg` de falha do runtime (Rust: `codigo: mensagem`; Python
 # real: "IPC recusou a operação (...)") e o `codigo` do diário `runtime.send_failed` (Rust: código do
 # runtime; Python: nome da classe da exceção). Aqui a exceção do ator já traz o texto `codigo: mensagem`.
@@ -457,43 +454,8 @@ INPUT_CASES = [
     ("terminal_op_error", True, "oi", False, "terminal_closed: pane saiu", None),
 ]
 
-# (nome, terminal, corpo, resposta do control, resposta do confirm). Corpo None = pedido sem corpo.
-STEER_CASES = [
-    ("headless_text_accepted", False, "oriente", ("accepted", {}), None),
-    ("headless_text_rejected_coded", False, "oriente", ("rejected", {"error": "sem turno"}), None),
-    ("headless_text_rejected_plain", False, "oriente", ("rejected", {}), None),
-    ("headless_text_unknown", False, "oriente", ("unknown", {}), None),
-    ("headless_text_deferred", False, "oriente", ("deferred", {}), None),
-    ("headless_text_op_error", False, "oriente", "runtime_closed: ator saiu", None),
-    ("headless_queue_accepted", False, None, ("accepted", {"ids": ["a", "b"]}), None),
-    ("headless_queue_empty", False, None, ("accepted", {"ids": []}), None),
-    ("headless_queue_rejected", False, None, ("rejected", {}), None),
-    ("headless_queue_op_error", False, None, "runtime_closed: ator saiu", None),
-    ("terminal_promoted", True, None, ("accepted", {}), {"confirmed": 2}),
-    ("terminal_not_promoted", True, None, ("accepted", {"promoted": False}), {"confirmed": 0}),
-    ("terminal_no_confirmed_count", True, None, ("accepted", {}), {}),
-    ("terminal_body_is_ignored", True, "oriente", ("accepted", {}), {"confirmed": 1}),
-    ("terminal_deferred", True, None, ("deferred", {}), None),
-    ("terminal_rejected", True, None, ("rejected", {}), None),
-    ("terminal_unknown", True, None, ("unknown", {}), None),
-    ("terminal_op_error", True, None, "terminal_closed: pane saiu", None),
-    ("terminal_confirm_error", True, None, ("accepted", {}), "terminal_closed: pane saiu"),
-]
 
-# Codex sem terminal: qualquer recusa do ator é 409 `erro_codex_controle` com a frase do Codex.
-CODEX_STEER_CASES = [
-    ("codex_text_accepted", False, "oriente", ("accepted", {}), None),
-    ("codex_text_rejected_coded", False, "oriente", ("rejected", {"error": "sem turno"}), None),
-    ("codex_text_unknown", False, "oriente", ("unknown", {}), None),
-    ("codex_text_deferred", False, "oriente", ("deferred", {}), None),
-    ("codex_text_op_error", False, "oriente", "runtime_closed: ator saiu", None),
-    ("codex_queue_accepted", False, None, ("accepted", {"ids": ["a", "b"]}), None),
-    ("codex_queue_rejected", False, None, ("rejected", {"error": "sem turno"}), None),
-    ("codex_queue_op_error", False, None, "runtime_closed: ator saiu", None),
-]
-
-
-def session_write_rows() -> tuple[list, list]:
+def session_write_rows() -> list:
     import asyncio
     import threading
     from types import SimpleNamespace
@@ -563,255 +525,15 @@ def session_write_rows() -> tuple[list, list]:
             return {"status": response.status_code, "body": json.loads(response.body)}
 
     async def main():
-        inputs, steers = [], []
+        inputs = []
         for name, terminal, text, steer, reply, queue in INPUT_CASES:
             expect = await run(lambda: api.input_prompt("s", api.InputBody(text=text, steer=steer)),
                                terminal, Owner(terminal, reply, queue))
             inputs.append({"name": name, "terminal": terminal, "text": text, "steer": steer, "reply": as_json(reply),
                            "queue": as_json(queue), "expect": expect, "diary": list(diary)})
-        cases = [(*case, "claude") for case in STEER_CASES] + [(*case, "codex") for case in CODEX_STEER_CASES]
-        for name, terminal, text, reply, confirm, provider in cases:
-            body = None if text is None else api.InputBody(text=text)
-            expect = await run(lambda: api.steer_session("s", body), terminal, Owner(terminal, reply, None, confirm), provider)
-            steers.append({"name": name, "provider": provider, "terminal": terminal, "text": text, "reply": as_json(reply),
-                           "confirm": confirm, "expect": expect})
-        return inputs, steers
+        return inputs
 
     return asyncio.run(main())
-
-
-# ── /interrupt, /keys, /term-input, /select, /select/submit e DELETE …/queue/{id} ──────────────────
-# Mesmo método: a rota do Python de verdade, com o ator falso. Cada caso diz a rota, o que o plugin
-# segura (`pending`), se o painel está aberto e a resposta do ator (`reply`): uma disposição real, ou
-# "!erro: msg" para a falha do runtime. Divergências deliberadas, já espelhadas nas rotas do Python:
-# - /select com terminal: ator `unknown` -> 409 `erro_sem_confirmacao_resposta`; `rejected` -> 409
-#   "não consegui marcar essa opção…" com `detalhe` e diário `opcao.nao_convergiu` (antes: "Não foi
-#   possível confirmar o controle…" sem `detalhe`, que o app mostrava como "(undefined)");
-# - /select/submit com terminal: `rejected` -> 409 "não consegui enviar as opções marcadas…" com
-#   `detalhe` e diário `opcao.envio_falhou`;
-# - /select sem terminal: ator sem permissão pendente (erro `no_pending_permission`) -> 409 "nenhum
-#   pedido de permissão pendente" (antes: 503); recusa, adiamento ou incerteza seguem 503 com o motivo;
-# - falha do runtime em /keys, /term-input, /select/submit, /interrupt com terminal e DELETE …/queue
-#   -> 502 `erro_envio_falhou` (antes: 500);
-# - /interrupt sem terminal: ator recusou, incerto ou falhou -> 409 `erro_sem_turno` com o motivo (antes: 500).
-# Diferença que o golden NÃO compara: o texto de `params.detalhe`.
-def _c(name, route, **kw):
-    return {"name": name, "route": route, "provider": "claude", "terminal": True, "pending": None, "panel_open": False,
-            "reply": ("accepted", {}), "rust_reply": None, "args": {}, **kw}
-
-
-CONTROL_CASES = [
-    _c("select_accepted", "select", args={"option": 2}),
-    _c("select_perm_yes", "select", args={"option": 1}, pending={"id": "perm:1"}),
-    _c("select_perm_no_with_panel_open", "select", args={"option": 2}, pending={"id": "perm:1"}, panel_open=True),
-    _c("select_perm_option_3", "select", args={"option": 3}, pending={"id": "perm:1"}),
-    _c("select_ask_pending", "select", args={"option": 2}, pending={"id": "ask:1"}),
-    _c("select_panel_open_no_pending", "select", args={"option": 1}, panel_open=True),
-    _c("select_panel_open_ask", "select", args={"option": 1}, pending={"id": "ask:1"}, panel_open=True),
-    _c("select_deferred", "select", args={"option": 1}, reply=("deferred", {})),
-    _c("select_uncertain", "select", args={"option": 1}, reply=("unknown", {})),
-    _c("select_runtime_error", "select", args={"option": 1}, reply="!erro: runtime_closed: ator saiu"),
-    _c("select_refused", "select", args={"option": 1}, reply=("rejected", {"code": "cursor"})),
-    _c("select_headless_accepted", "select", terminal=False, args={"option": 1}),
-    _c("select_headless_no_permission", "select", terminal=False, args={"option": 1}, reply="!no_pending"),
-    _c("select_headless_rejected", "select", terminal=False, args={"option": 1}, reply=("rejected", {"error": "opção inválida"})),
-    _c("select_headless_deferred", "select", terminal=False, args={"option": 1}, reply=("deferred", {})),
-    _c("select_headless_unknown", "select", terminal=False, args={"option": 1}, reply=("unknown", {})),
-    _c("select_headless_error", "select", terminal=False, args={"option": 1}, reply="!erro: runtime_closed: ator saiu"),
-    _c("submit_accepted", "select_submit"),
-    _c("submit_panel_open", "select_submit", panel_open=True),
-    _c("submit_deferred", "select_submit", reply=("deferred", {})),
-    _c("submit_unknown", "select_submit", reply=("unknown", {})),
-    _c("submit_refused", "select_submit", reply=("rejected", {"code": "tab"})),
-    _c("submit_runtime_error", "select_submit", reply="!erro: runtime_closed: ator saiu"),
-    _c("interrupt_headless_accepted", "interrupt", terminal=False),
-    _c("interrupt_headless_no_turn", "interrupt", terminal=False, reply=("accepted", {"interrupted": False})),
-    _c("interrupt_headless_rejected", "interrupt", terminal=False, reply=("rejected", {"error": "sem turno"})),
-    _c("interrupt_headless_rejected_plain", "interrupt", terminal=False, reply=("rejected", {})),
-    _c("interrupt_headless_deferred", "interrupt", terminal=False, reply=("deferred", {})),
-    _c("interrupt_headless_unknown", "interrupt", terminal=False, reply=("unknown", {})),
-    _c("interrupt_headless_error", "interrupt", terminal=False, reply="!erro: runtime_closed: ator saiu"),
-    _c("interrupt_terminal_runtime_error", "interrupt", pending={"id": "ask:9"}, reply="!erro: runtime_closed: ator saiu"),
-    _c("interrupt_terminal_accepted", "interrupt"),
-    _c("interrupt_terminal_with_question", "interrupt", pending={"id": "ask:9"}),
-    _c("interrupt_terminal_clear", "interrupt", args={"clear": True}, pending={"id": "ask:9"}),
-    _c("interrupt_terminal_deferred", "interrupt", pending={"id": "ask:9"}, reply=("deferred", {})),
-    _c("interrupt_terminal_unknown", "interrupt", pending={"id": "ask:9"}, reply=("unknown", {})),
-    _c("keys_accepted", "keys", args={"key": "Down"}),
-    _c("keys_not_allowed", "keys", args={"key": "Nope"}, reply=None, rust_reply=("rejected", {"code": "key_not_allowed"})),
-    _c("keys_deferred", "keys", args={"key": "Down"}, reply=("deferred", {})),
-    _c("keys_unknown", "keys", args={"key": "Down"}, reply=("unknown", {})),
-    _c("keys_runtime_error", "keys", args={"key": "Down"}, reply="!erro: runtime_closed: ator saiu"),
-    _c("term_text", "term_input", args={"text": "ls"}),
-    _c("term_key", "term_input", args={"key": "C-c"}),
-    _c("term_text_and_key", "term_input", args={"text": "ls", "key": "Enter"}),
-    _c("term_empty_text_and_key", "term_input", args={"text": "", "key": "Enter"}),
-    _c("term_nothing", "term_input", args={}),
-    _c("term_bad_text", "term_input", args={"text": "a\x01b"}, reply=None),
-    _c("term_bad_key_after_text", "term_input", args={"text": "ls", "key": "Nope"}, rust_reply=("rejected", {"code": "key_not_allowed"})),
-    _c("term_text_deferred", "term_input", args={"text": "ls", "key": "Enter"}, reply=("deferred", {})),
-    _c("term_key_unknown", "term_input", args={"key": "Enter"}, reply=("unknown", {})),
-    _c("term_runtime_error", "term_input", args={"text": "ls"}, reply="!erro: runtime_closed: ator saiu"),
-    _c("queue_removed", "queue_remove", terminal=False, args={"removed": True}),
-    _c("queue_not_found", "queue_remove", terminal=False, args={"removed": False}),
-    _c("queue_runtime_error", "queue_remove", terminal=False, args={"error": "runtime_closed: ator saiu"}),
-    # Codex sem terminal: interrupção sem turno ou recusada é 409 `erro_codex_controle` (falha antes: 500).
-    _c("codex_interrupt_accepted", "interrupt", provider="codex", terminal=False),
-    _c("codex_interrupt_no_turn", "interrupt", provider="codex", terminal=False, reply=("accepted", {"interrupted": False})),
-    _c("codex_interrupt_rejected", "interrupt", provider="codex", terminal=False, reply=("rejected", {"error": "sem turno"})),
-    _c("codex_interrupt_unknown", "interrupt", provider="codex", terminal=False, reply=("unknown", {})),
-    _c("codex_interrupt_error", "interrupt", provider="codex", terminal=False, reply="!erro: runtime_closed: ator saiu"),
-    _c("codex_select_accepted", "select", provider="codex", terminal=False, args={"option": 1}),
-    _c("codex_select_no_permission", "select", provider="codex", terminal=False, args={"option": 1}, reply="!no_pending"),
-    _c("codex_select_rejected", "select", provider="codex", terminal=False, args={"option": 1}, reply=("rejected", {"error": "opção inválida"})),
-    _c("codex_select_error", "select", provider="codex", terminal=False, args={"option": 1}, reply="!erro: runtime_closed: ator saiu"),
-    _c("codex_queue_removed", "queue_remove", provider="codex", terminal=False, args={"removed": True}),
-    _c("codex_queue_not_found", "queue_remove", provider="codex", terminal=False, args={"removed": False}),
-]
-
-
-def control_rows() -> list:
-    import asyncio
-    import threading
-    from types import SimpleNamespace
-
-    from fastapi import HTTPException
-    from app import api, runtime_coordinator, termsock
-    from app.rust_server import RustOpError
-    from app.runtime_adapter import RuntimeAdapter, RuntimeView
-
-    loop = asyncio.new_event_loop()
-    threading.Thread(target=loop.run_forever, daemon=True).start()
-    sent, notified, diary = [], [], []
-
-    class Owner:
-        instance = "runtime"
-        legacy = object()
-
-        def __init__(self, terminal, reply):
-            self.terminal, self.reply, self.loop = terminal, reply, loop
-
-        def slot(self, name):
-            return SimpleNamespace(binding=SimpleNamespace(provider="claude", meta={"terminal": {"pane": "%1"}} if self.terminal else {}))
-
-        def managed_runtime(self, name):
-            return True
-
-        async def prepare_session(self, name, provider, *, launch=False, engine_models=None):
-            return True
-
-        async def op(self, name, command, operation_id):
-            if command["kind"] == "control":
-                sent.append({"control": command["control"], "payload": command["payload"]})
-            if self.reply == "!no_pending":
-                raise RustOpError("IPC recusou a operação (400: no_pending_permission)", 400, "no_pending_permission")
-            if isinstance(self.reply, str):
-                raise RuntimeError(self.reply.removeprefix("!erro: "))
-            return {"operation_id": operation_id, "disposition": self.reply[0], "payload": self.reply[1]}
-
-    api.diag.registrar = lambda event, level="ok", **fields: event.startswith(("runtime.", "opcao.")) and diary.append(event)
-    api._session_exists = lambda name: True
-    api._provider_of = lambda name: "claude"
-    api._cached_info_sync = lambda name: SimpleNamespace(provider="claude", headless=False)
-    api._loop_servidor = loop
-    api.plugin_bridge.interrompeu = lambda name, ident: notified.append(ident)
-
-    async def call(case):
-        args = case["args"]
-        if case["route"] == "select":
-            return await asyncio.to_thread(api.select, "s", api.SelectBody(**args))
-        if case["route"] == "select_submit":
-            return await asyncio.to_thread(api.select_submit, "s")
-        if case["route"] == "interrupt":
-            return await api.interrupt("s", **args)
-        if case["route"] == "keys":
-            return await asyncio.to_thread(api.keys, "s", api.KeyBody(**args))
-        if case["route"] == "term_input":
-            return await asyncio.to_thread(api.term_input, "s", api.TermInputBody(**args))
-        class Queue:
-            def __init__(self, name):
-                pass
-
-            def remove(self, entry_id):
-                if "error" in args:
-                    raise RuntimeError(args["error"])
-                return args["removed"]
-        api.PromptQueue = Queue
-        return await api.descartar_da_fila("s", "e1")
-
-    async def run(case):
-        reply = case["reply"]
-        runtime_coordinator._current = Owner(case["terminal"], reply)
-        api._headless = lambda name: not case["terminal"] and case["provider"] == "claude"
-        api._provider_of = lambda name: case["provider"]
-        api._cached_info_sync = lambda name: SimpleNamespace(provider=case["provider"], headless=not case["terminal"])
-        api._codex_sem_terminal = lambda name: case["provider"] == "codex" and not case["terminal"]
-        adapter = RuntimeAdapter(case["provider"])
-        adapter.view = lambda name, mutating=False: RuntimeView("k", 1, 1, {})
-        api.get_adapter = lambda key: SimpleNamespace(select=lambda name, option: adapter.dispatch("select", name, {"option": option}),
-                                                      interrupt=lambda name: adapter.dispatch("interrupt", name, {}))
-        api.plugin_bridge.pergunta_pendente = lambda name: case["pending"]
-        termsock.painel_aberto = lambda name: case["panel_open"]
-        sent.clear(), notified.clear(), diary.clear()
-        try:
-            return {"status": 200, "body": await call(case)}
-        except HTTPException as exc:
-            return {"status": exc.status_code, "body": {"detail": exc.detail}}
-        except api.TerminalControlError as exc:
-            response = await api.terminal_control_failed(None, exc)
-            return {"status": response.status_code, "body": json.loads(response.body)}
-
-    def as_json(value):
-        return None if value is None else value if isinstance(value, str) else {"disposition": value[0], "payload": value[1]}
-
-    async def main():
-        rows = []
-        for case in CONTROL_CASES:
-            expect = await run(case)
-            rows.append({"name": case["name"], "route": case["route"], "provider": case["provider"], "terminal": case["terminal"], "args": case["args"],
-                         "pending": case["pending"], "panel_open": case["panel_open"], "reply": as_json(case["reply"]),
-                         "rust_reply": as_json(case["rust_reply"]), "expect": expect,
-                         "sent": list(sent), "notified": list(notified), "diary": list(diary)})
-        return rows
-
-    return asyncio.run(main())
-
-
-ANS_OPT = {"kind": "option", "indices": [0], "labels": ["A"]}
-ANS_MULTI = {"kind": "option", "indices": [0, 2], "multi": True, "labels": ["A", "C"]}
-ANS_TEXT = {"kind": "text", "value": "oi", "type_index": 3}
-ANS_CHAT = {"kind": "chat", "chat_index": 4}
-
-# Linhas do "Conversar sobre isso": respostas dadas + o que o sidecar sabe das perguntas.
-CHAT_TEXT_CASES = [
-    ("one_chat_one_answer", [ANS_OPT, ANS_CHAT], ["Cor?", "Tamanho?"]),
-    ("several_chats", [ANS_OPT, ANS_CHAT, {"kind": "chat", "chat_index": 5}], ["Cor?", "Tamanho?", "Forma?"]),
-    ("no_sidecar", [ANS_OPT, ANS_CHAT], None),
-    ("sidecar_shorter_than_answers", [ANS_OPT, ANS_TEXT, ANS_CHAT], ["Cor?"]),
-    ("chat_without_question_text", [ANS_OPT, ANS_CHAT], ["Cor?", ""]),
-    ("only_chat", [ANS_CHAT], ["Cor?"]),
-    ("only_empty_answers", [{"kind": "text", "value": "", "type_index": 1}, ANS_CHAT], ["Cor?"]),
-    ("text_answer", [ANS_TEXT, ANS_CHAT], ["Cor?", "Tamanho?"]),
-    ("multi_labels_joined", [ANS_MULTI, ANS_CHAT], ["Cor?", "Tamanho?"]),
-    ("option_without_labels_is_skipped", [{"kind": "option", "indices": [0]}, ANS_OPT, ANS_CHAT], ["Cor?", "Tamanho?", "Forma?"]),
-    ("answer_without_question_is_a_bare_line", [ANS_OPT, ANS_TEXT], None),
-    ("no_chat_at_all", [ANS_OPT, ANS_TEXT], ["Cor?", "Tamanho?"]),
-    ("accents_and_quotes", [{"kind": "text", "value": "não «sei»", "type_index": 1}, ANS_CHAT], ["Qual é o ônus?", "Tamanho?"]),
-]
-
-
-def chat_text_rows() -> list:
-    from types import SimpleNamespace
-    from app import api
-
-    rows = []
-    for name, answers, questions in CHAT_TEXT_CASES:
-        full = [{"kind": a["kind"], "value": a.get("value"), "labels": a.get("labels") or []} for a in answers]
-        api.read_pending_askq = lambda jsonl, q=questions: None if q is None else SimpleNamespace(
-            questions=[SimpleNamespace(question=x) for x in q])
-        rows.append({"name": name, "answers": full, "questions": questions,
-                     "expect": api._askq_conversar_text(full, "/c/projects/p/sid.jsonl")})
-    return rows
 
 
 def write_session_write(out: Path | None = None) -> None:
@@ -825,9 +547,7 @@ def write_session_write(out: Path | None = None) -> None:
                terminal_input.TerminalInput)
     saved = [(owner, dict(vars(owner))) for owner in patched]
     try:
-        inputs, steers = session_write_rows()
-        rows_by_name = (("input.json", inputs), ("steer.json", steers), ("control.json", control_rows()),
-                        ("askq_chat_text.json", chat_text_rows()))
+        rows_by_name = (("input.json", session_write_rows()),)
     finally:
         for owner, before in saved:
             for name in set(vars(owner)) - set(before):

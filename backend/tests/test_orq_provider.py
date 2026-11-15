@@ -161,14 +161,6 @@ def test_orq_row_refuses_input_kill_interrupt(root, monkeypatch, method, path, b
     assert r.json()["detail"]["code"] == "erro_sessao_orq"
 
 
-def test_name_ending_in_orq_without_a_live_run_is_not_refused(root, monkeypatch, cli):
-    _run(root, "2026-09-28-g1", "g1", ended=True)
-    cli.upstream_response = {"status": 404, "body": {"detail": {"code": "erro_sessao_recado_nao_enfileirado"}}}
-    r = cli.post("/api/sessions/g1-orq/input", headers=H, json={"text": "oi"})
-    assert r.status_code == 404
-    assert r.json()["detail"]["code"] == "erro_sessao_recado_nao_enfileirado"
-    assert [request["path"] for request in cli.deliveries] == ["/api/sessions/g1-orq/input"]
-
 
 def test_panel_route_serves_one_snapshot_per_run(root, monkeypatch, cli):
     _run(root, "2026-09-28-g1", "g1")

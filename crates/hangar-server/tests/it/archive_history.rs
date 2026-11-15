@@ -125,14 +125,16 @@ async fn assert_case(h: &Harness, case: &str, path: &str) {
     assert!(h.hits.lock().unwrap().is_empty(), "{case} foi repassado ao Python");
 }
 
-/// ARQ-01: sem token o pedido vai ao Python, que recusa; com `?token=` o Rust atende as duas rotas.
+/// ARQ-01: sem token o Rust recusa com 401, sem ir ao Python; com `?token=` atende as duas rotas.
 #[tokio::test]
 async fn arq01_owner_only_and_query_token_is_accepted() {
     let h = Harness::new().await;
     let path = history(NORMAL.0, NORMAL.1, "");
     let response = h.client.get(h.url(&path)).send().await.unwrap();
     assert_eq!(response.status(), 401);
-    assert!(h.forwarded(&path));
+    let body: Value = response.json().await.unwrap();
+    assert_eq!(body["detail"]["code"], "erro_nao_autorizado");
+    assert!(!h.forwarded(&path), "a recusa é do Rust");
     h.hits.lock().unwrap().clear();
     let response = h.client.get(h.url(&format!("{path}?token={OWNER}"))).send().await.unwrap();
     assert_eq!(response.status(), 200);

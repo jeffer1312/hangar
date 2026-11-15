@@ -5,12 +5,10 @@ import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi.testclient import TestClient
 
 from app.adapters.claude_headless import adapter as A
 from app.adapters.claude_headless import sessions as S
 from app.adapters.claude_headless.adapter import ClaudeHeadlessAdapter, _Sessao
-from app.config import settings
 
 
 @pytest.fixture
@@ -87,29 +85,3 @@ def test_recarregar_sessao_parada_so_acorda(conta):
     asyncio.run(ad.recarregar("s1"))
     ad._encerrar.assert_not_awaited()
     ad.acordar.assert_called_once_with("s1")
-
-
-@pytest.fixture
-def cliente(monkeypatch):
-    import app.api as api_mod
-    settings.auth_token = "secret"
-    monkeypatch.setattr(api_mod, "_session_exists", lambda name: True)
-    return TestClient(api_mod.app)
-
-
-_H = {"Authorization": "Bearer secret"}
-
-
-@pytest.mark.parametrize("provider", ["claude", "codex", "pi", None])
-def test_reload_route_is_rust_only(cliente, provider):
-    from app.models import SessionInfo
-    info = SessionInfo(name="s1", cwd="/tmp", provider=provider) if provider else None
-    with patch("app.api._cached_info", AsyncMock(return_value=info)):
-        r = cliente.post("/api/sessions/s1/recarregar", headers=_H)
-    code = r.json()["detail"]["code"]
-    if provider is None:
-        assert r.status_code == 404 and code == "erro_sessao_inexistente"
-    elif provider == "pi":
-        assert r.status_code == 409 and code == "erro_recarregar_so_sem_terminal"
-    else:
-        assert r.status_code == 503 and code == "session_open_needs_rust_server"

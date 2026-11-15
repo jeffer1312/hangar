@@ -1,5 +1,4 @@
 """Codex sem terminal: app-server (falso, em stdio) atrás do cano real, sem pane."""
-import asyncio
 import json
 import os
 import sys
@@ -11,7 +10,6 @@ from unittest.mock import patch
 import pytest
 
 from app import tmux
-from app import api as api_mod
 from app.adapters.codex import adapter as codex_adapter
 from app.adapters.codex import sem_terminal
 from app.adapters.codex import sessions as codex_sessions
@@ -148,50 +146,6 @@ def test_identidade_vai_ao_shell_do_codex_por_set(ambiente):
             chave, toml = valor.split("=", 1)
             sets[chave.removeprefix(prefixo)] = tomllib.loads(f"v = {toml}")["v"]
     assert sets == {"CP_SESSION_NAME": "cx-shell", "CP_SESSION_KEY": meta["key"], "HANGAR_CANO_KEY": meta["key"]}
-
-
-def test_api_le_permissao_headless_durante_o_turno(ambiente, monkeypatch):
-    _sidecar("cx-permissao", ambiente)
-
-    class Adapter:
-        async def deliverable(self, _name):
-            return False
-
-        def permission_modes_sem_terminal(self, _name):
-            return sem_terminal.modos_para_tela("Full Access")
-
-    adapter = Adapter()
-    monkeypatch.setattr(api_mod, "_provider_of", lambda _name: "codex")
-    monkeypatch.setattr(api_mod, "_codex_sem_terminal", lambda _name: True)
-    monkeypatch.setattr(api_mod, "get_adapter", lambda _provider: adapter)
-
-    result = asyncio.run(api_mod.permissoes_do_codex("cx-permissao"))
-
-    assert result["current"] == "Full Access"
-
-
-def test_api_explica_por_que_nao_troca_permissao_headless_durante_o_turno(ambiente, monkeypatch):
-    _sidecar("cx-permissao", ambiente)
-
-    class Adapter:
-        async def deliverable(self, _name):
-            return False
-
-        async def set_permission_mode_sem_terminal(self, _name, _mode):
-            raise sem_terminal.Ocupada(
-                "a sessão está trabalhando; mudar o sandbox reiniciaria o Codex — espere ela terminar")
-
-    adapter = Adapter()
-    monkeypatch.setattr(api_mod, "_provider_of", lambda _name: "codex")
-    monkeypatch.setattr(api_mod, "_codex_sem_terminal", lambda _name: True)
-    monkeypatch.setattr(api_mod, "get_adapter", lambda _provider: adapter)
-
-    with pytest.raises(api_mod.HTTPException) as exc:
-        asyncio.run(api_mod.trocar_permissao_do_codex(
-            "cx-permissao", api_mod.CodexPermissionBody(mode="Full Access")))
-
-    assert exc.value.status_code == 409
-    assert "sandbox reiniciaria o Codex" in str(exc.value.detail)
 
 
 def test_politica_por_modo():

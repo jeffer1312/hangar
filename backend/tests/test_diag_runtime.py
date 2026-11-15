@@ -107,20 +107,6 @@ def test_partial_exports_stage_and_cleanup_without_composer(monkeypatch):
     assert "segredo" not in diag.ler_tudo() and "segunda linha" not in diag.ler_tudo()
 
 
-def test_send_thread_preserves_request_context():
-    from app.api import _send_thread
-
-    async def run():
-        token = diag.req_atual.set("aba-envio")
-        try:
-            await _send_thread(diag.registrar, "teste.envio")
-        finally:
-            diag.req_atual.reset(token)
-
-    asyncio.run(run())
-    row = next(r for r in events() if r["evento"] == "teste.envio")
-    assert row["req"] == "aba-envio"
-
 
 def test_export_identifies_current_environment():
     header = events()[0]

@@ -98,10 +98,3 @@ def test_guest_stays_without_the_route(rust, forwarded_guest):
         response = TestClient(app).post("/api/mermaid", headers=AUTH, json=BODY)
     assert response.status_code == 404
     assert _Rust.seen == []
-
-
-def test_python_mode_answers_unavailable_without_the_owner(rust, monkeypatch):
-    monkeypatch.setattr(runtime_coordinator, "current", lambda: SimpleNamespace(mode="python"))
-    response = TestClient(app).post("/api/mermaid", headers=AUTH, json=BODY)
-    assert (response.status_code, response.json()["detail"]["code"]) == (503, "mermaid_indisponivel")
-    assert _Rust.seen == []

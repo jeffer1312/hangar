@@ -122,7 +122,6 @@ def test_python_transport_keeps_emoji_name_accepted_by_original_get(border_http,
 
 
 @pytest.mark.parametrize("mode,configured,code", [
-    ("python", True, "browser_need_rust_server"),
     ("pending", False, "account_bridge_unavailable"),
 ])
 def test_no_python_fallback_when_rust_is_unavailable(border, rust, monkeypatch, mode, configured, code):

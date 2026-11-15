@@ -3,6 +3,7 @@
 //! cru recebe digitação, pela mesma condução com prova do Pi/omp/Kimi (`other_terminal::drive`), sem
 //! ator, e só com a caixa de digitar vazia e pronta: fora disso é 409 com código, sem fila (ninguém a
 //! drenaria). O resto é recusa com código, na hora. Respostas no formato do `_send_one` do Python.
+//! As outras escritas (teclas, opção, resposta, fila…) nunca digitam: `refusal`.
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
@@ -10,7 +11,8 @@ use std::sync::{Arc, LazyLock, Mutex};
 use axum::http::StatusCode;
 use serde_json::{Value, json};
 
-use super::detail_body;
+use super::{WriteRoute, detail_body};
+use crate::interactions::InteractionError;
 use crate::list::discover::{PaneSession, Resolver, discover_panes};
 use crate::list::discover_other::Dirs;
 use crate::list::mux::Pane;
@@ -44,10 +46,77 @@ struct Deps {
     diag: crate::diag::DiagClient,
 }
 
+impl Deps {
+    fn of(st: &AppState) -> Deps {
+        Deps { list: st.list.clone(), terminal: st.terminal.clone(), interactions: st.interactions.clone(), diag: st.diag.clone() }
+    }
+}
+
+const MSG_SELECT_NOT_SENT: &str = "não consegui responder pelo terminal — opção NÃO enviada";
+const MSG_NOT_IN_QUEUE: &str = "entrada não está na fila";
+const MSG_QUEUE_UNAVAILABLE: &str = "esta sessão não permite mexer na fila agora";
+
+/// As escritas que não são texto num nome sem agente do Rust: nada é digitado, nem no Codex cru nem no
+/// `claude login`, e a recusa tem o status e o código da rota do Python. Pergunta sem `interaction_id`
+/// é recusada antes, como nas sessões do Rust; fila sem ator não tem entrada a tirar nem a mexer.
+pub(crate) async fn refusal(st: &AppState, name: &str, route: WriteRoute, body: &[u8]) -> (StatusCode, Value) {
+    use WriteRoute::*;
+    let refused = |status: StatusCode, code: &str, msg: &str, params: Value| (status, detail_body(code, msg, params));
+    let unbound = || refused(StatusCode::BAD_GATEWAY, "erro_envio_falhou", MSG_UNBOUND, json!({"erro": MSG_UNBOUND}));
+    let select_not_sent = || refused(StatusCode::SERVICE_UNAVAILABLE, "erro_opcao_nao_convergiu", MSG_SELECT_NOT_SENT, json!({"detalhe": MSG_UNBOUND}));
+    match route {
+        QueueRemove => return refused(StatusCode::NOT_FOUND, "erro_fila_entrada_nao_encontrada", MSG_NOT_IN_QUEUE, json!({})),
+        QueueEdit | QueueReorder | QueueSteer => return refused(StatusCode::CONFLICT, "queue_action_unavailable", MSG_QUEUE_UNAVAILABLE, json!({})),
+        Select | SelectSubmit | Answer if !identified(body) => {
+            let missing = InteractionError::Missing;
+            return (missing.status(), detail_body(missing.code(), missing.message(), json!({})));
+        }
+        Keys | TermInput => {
+            let key = serde_json::from_slice::<Value>(body).ok().and_then(|value| value["key"].as_str().map(str::to_owned));
+            if let Some(refused) = super::control::key_refused(key.as_deref(), route == TermInput) { return refused; }
+        }
+        _ => {}
+    }
+    let deps = Deps::of(st);
+    let pane = match pane_or(&deps, name).await {
+        Ok(pane) => pane,
+        Err(error) => return (StatusCode::SERVICE_UNAVAILABLE, json!({"detail": crate::list::hub::unavailable_detail(&error)})),
+    };
+    match pane {
+        Some(Sent::Answer(status, body)) => (status, json!({"detail": body["error"]})),
+        Some(Sent::Missing) => match route {
+            Steer => refused(StatusCode::NOT_FOUND, "erro_sessao_inexistente", "sessão não encontrada", json!({})),
+            Select | SelectSubmit => refused(StatusCode::NOT_FOUND, "erro_sessao_opcao_nao_enviada", "sessão não encontrada — opção NÃO enviada", json!({})),
+            _ => unbound(),
+        },
+        None => {
+            deps.diag.report("runtime.send_failed", name, "unowned_pane", "pane sem agente que o Rust escreva; nada foi digitado");
+            if route == Select { select_not_sent() } else { unbound() }
+        }
+    }
+}
+
+/// `interaction_id` em texto não vazio no corpo (vazio vale `{}`).
+fn identified(body: &[u8]) -> bool {
+    let value = if body.is_empty() { json!({}) } else { serde_json::from_slice::<Value>(body).unwrap_or(Value::Null) };
+    value["interaction_id"].as_str().is_some_and(|id| !id.is_empty())
+}
+
+/// O nome existe sem dono no Rust: pane, ou arquivo de sessão que o Rust não adotou. A lista que não
+/// responde é erro, nunca "não existe".
+pub(crate) async fn exists(st: &AppState, name: &str) -> Result<bool, crate::list::bridge::ListError> {
+    Ok(!matches!(pane_or(&Deps::of(st), name).await?, Some(Sent::Missing)))
+}
+
+/// `None`: o nome tem pane. Sem pane, o `no_pane` (inexistente, ou a recusa do arquivo sem dono).
+async fn pane_or(deps: &Deps, name: &str) -> Result<Option<Sent>, crate::list::bridge::ListError> {
+    if deps.list.runtime_context(name).await?.panes.is_empty() { Ok(Some(no_pane(deps, name).await)) } else { Ok(None) }
+}
+
 /// O envio inteiro, numa tarefa à parte: quem pediu pode desistir (cliente fechou), a digitação começada
 /// termina e a fila fica gravada, como o `asyncio.shield` do Python.
 pub(crate) async fn send(st: &AppState, name: &str, text: &str) -> Sent {
-    let deps = Deps { list: st.list.clone(), terminal: st.terminal.clone(), interactions: st.interactions.clone(), diag: st.diag.clone() };
+    let deps = Deps::of(st);
     let (name, text) = (name.to_owned(), text.to_owned());
     match tokio::spawn(async move { send_owned(deps, &name, &text).await }).await {
         Ok(sent) => sent,
@@ -87,8 +156,12 @@ fn unbound(deps: &Deps, name: &str, code: &str) -> Sent {
 }
 
 async fn send_owned(deps: Deps, name: &str, text: &str) -> Sent {
-    let context = deps.list.runtime_context(name).await.ok();
-    let Some(context) = context.filter(|context| !context.panes.is_empty()) else { return no_pane(&deps, name).await };
+    let context = match deps.list.runtime_context(name).await {
+        Ok(context) => context,
+        Err(error) => return Sent::Answer(StatusCode::SERVICE_UNAVAILABLE,
+            json!({"ok": false, "error": crate::list::hub::unavailable_detail(&error), "delivered": false})),
+    };
+    if context.panes.is_empty() { return no_pane(&deps, name).await }
     let (panes, children, procs, projects) = (context.panes.clone(), context.children.clone(), deps.list.env().procs.clone(), context.dirs.claude.join("projects"));
     let found = tokio::task::spawn_blocking(move || {
         let row = discover_panes(&panes, &*procs, &children, &projects, &mut Resolver::default(), &|_| false).into_iter().next();
@@ -104,15 +177,28 @@ async fn send_owned(deps: Deps, name: &str, text: &str) -> Sent {
 }
 
 /// Sem pane: sidecar que o Rust não adotou é sessão estragada, com código; sem sidecar, não existe.
-async fn no_pane(deps: &Deps, name: &str) -> Sent {
-    let Some(home) = deps.list.env().dirs.as_ref().map(|dirs| dirs.home.clone()) else { return Sent::Missing };
+/// Arquivo de sessão Codex ou Claude sem terminal com esse nome: o código da recusa dele.
+async fn sidecar_code(list: &crate::list::bridge::ListBridge, name: &str) -> Option<&'static str> {
+    let home = list.env().dirs.as_ref().map(|dirs| dirs.home.clone())?;
     let owned = name.to_owned();
-    let sidecar = tokio::task::spawn_blocking(move || {
+    tokio::task::spawn_blocking(move || {
         use crate::runtime::codex_sidecar::{dir, path};
         if path(&dir(&home), &owned).exists() { Some("codex_sidecar_invalid") }
         else if path(&home.join(".hangar").join("claude-headless"), &owned).exists() { Some("claude_sidecar_invalid") } else { None }
-    }).await.ok().flatten();
-    match sidecar {
+    }).await.ok().flatten()
+}
+
+/// O que o nome tem quando nenhum agente do Rust o atende.
+pub(crate) enum Presence { Pane, Sidecar(&'static str), Missing }
+
+/// Como `exists`, mas a lista que não responde é erro, nunca "não existe".
+pub(crate) async fn presence(st: &AppState, name: &str) -> Result<Presence, crate::list::bridge::ListError> {
+    if !st.list.runtime_context(name).await?.panes.is_empty() { return Ok(Presence::Pane); }
+    Ok(sidecar_code(&st.list, name).await.map_or(Presence::Missing, Presence::Sidecar))
+}
+
+async fn no_pane(deps: &Deps, name: &str) -> Sent {
+    match sidecar_code(&deps.list, name).await {
         Some(code) => {
             deps.diag.report("runtime.send_failed", name, code, "sidecar sem dono no Rust; nada foi enviado");
             Sent::Answer(StatusCode::SERVICE_UNAVAILABLE, json!({"ok": false, "error": detail_body(code, "o arquivo da sessão não abre no servidor; feche e abra a sessão", json!({}))["detail"], "delivered": false}))
@@ -246,6 +332,28 @@ fn clear_queue(path: &Path) {
     for file in [path.to_path_buf(), path.with_extension("jsonl.tmp")] {
         if let Err(error) = std::fs::remove_file(&file) && error.kind() != std::io::ErrorKind::NotFound {
             tracing::warn!(path = %file.display(), %error, "fila do Codex cru não apagada no /clear");
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::identified;
+
+    #[test]
+    fn interaction_id_must_be_non_empty_text() {
+        assert!(identified(br#"{"interaction_id":"i-1"}"#));
+        for body in [&b""[..], b"{}", br#"{"interaction_id":null}"#, br#"{"interaction_id":""}"#, br#"{"interaction_id":1}"#, b"[]", br#""i-1""#, b"x"] {
+            assert!(!identified(body), "{}", String::from_utf8_lossy(body));
+        }
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn identified_never_panics_and_matches_the_field(raw in proptest::collection::vec(proptest::prelude::any::<u8>(), 0..256), id in ".{0,16}") {
+            let _ = identified(&raw);
+            let body = serde_json::json!({"interaction_id": id, "option": 1}).to_string();
+            proptest::prop_assert_eq!(identified(body.as_bytes()), !id.is_empty());
         }
     }
 }

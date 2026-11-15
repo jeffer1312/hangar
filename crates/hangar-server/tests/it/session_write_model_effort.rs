@@ -124,6 +124,45 @@ async fn model_effort_r1_4_other_providers_are_refused_in_rust() {
     assert_eq!(python.hits_to("/api/sessions/pi1/model-effort"), 0, "nada ao Python");
 }
 
+/// R4-13 (`api.py:3015-3021`, bug D3): o Codex com ator no Rust e o omp e o Kimi da lista recebem o 409 de
+/// "só Claude", como o Pi; o Python digitava o seletor `/model` do Claude no terminal deles.
+#[cfg(unix)]
+#[tokio::test]
+async fn model_effort_r4_13_codex_omp_and_kimi_are_refused_like_pi() {
+    use hangar_server::list::bridge::{ListBridge, ListEnv, parse_dirs};
+    let dir = tempfile::tempdir().unwrap();
+    let (root, home) = (dir.path(), dir.path().join("home"));
+    let script = root.join("tmux");
+    for cwd in ["wo", "wk"] { std::fs::create_dir_all(root.join(cwd)).unwrap(); }
+    crate::write_executable(&script, format!(
+        "#!/bin/sh\necho \"$1\" >> '{}'\n[ \"$1\" = list-panes ] || {{ printf '● pronto\\n❯\\n'; exit 0; }}\nprintf 'om1\\t1\\t\\t{}\\t%%0\\t\\tomp\\t\\t0\\t0\\nkm1\\t1\\t\\t{}\\t%%1\\t\\tkimi\\t\\t0\\t0\\n'\n",
+        root.join("calls.log").display(), root.join("wo").display(), root.join("wk").display()));
+    let dirs = parse_dirs(&json!({"home": home, "claude": home.join(".claude"), "codex_home": home.join(".codex"),
+        "pi_sessions": home.join(".pi/agent/sessions"), "omp_config": home.join(".omp"), "omp_agent": home.join(".omp/agent"),
+        "kimi_home": home.join(".kimi-code")}).to_string());
+    let terms = Arc::new(Terms::new(TermConfig::default()));
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    // Os sidecars que o registro lê são os da pasta da prova, nunca os da máquina.
+    let env = hangar_server::accounts::environment::AccountEnvironment::from_map([("HOME".to_owned(), home.to_string_lossy().into_owned())].into());
+    let registry = Arc::new(RuntimeRegistry::new(policy(calls).await, "secret-test".into(), "instance-test".into())
+        .with_processes(Arc::new(crate::runtime_open::RecipeProcesses("sid-1"))).with_terms(terms.clone()).with_codex_environment(env));
+    crate::groups_deliver::open_codex_headless(&registry, root, "c", Default::default()).await;
+    let (python, upstream) = fake::spawn_fake().await;
+    let mut state = AppState::new(fake::config(upstream, "127.0.0.1"));
+    state.list = Arc::new(ListBridge::new(ListEnv { mux: hangar_server::list::mux::Mux::with_program(&script, Duration::from_secs(5)),
+        capture_program: script.into_os_string(), procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs },
+        hangar_server::list::facts::FactsClient::new(upstream, SECRET.into())));
+    state.term = terms;
+    assert!(state.state.runtime.set(registry).is_ok());
+    let server = fake::spawn_state(state).await;
+    for name in ["c", "om1", "km1"] {
+        let (status, reply) = post(server, name, r#"{"model":"sonnet"}"#).await;
+        assert_eq!((status, reply["detail"]["code"].as_str()), (409, Some("erro_model_effort_so_claude")), "{name}: {reply}");
+        assert_eq!(python.hits_to(&format!("/api/sessions/{name}/model-effort")), 0, "{name}");
+    }
+    assert_eq!(crate::list_support::calls(root, "send-keys"), 0, "nenhuma tecla");
+}
+
 /// R1.4-1: Claude que o Rust não atende (sem vigia, ou com terminal que não se adota) é Claude pela linha da
 /// lista: 503 `model_effort_needs_rust_server`, nunca o 409 de "só Claude".
 #[cfg(unix)]
@@ -177,28 +216,12 @@ async fn model_effort_b3_transfer_in_progress_is_busy() {
     assert_eq!(python.hits_to("/api/sessions/s/model-effort"), 0);
 }
 
-/// B2: convidado e Connect chegam pela ponte privada do Claude e recebem a resposta do Rust.
+/// R4-12 (contrato c): sem o registro de sessões, o dono recebe 503 com código, nunca o Python.
 #[tokio::test]
-async fn model_effort_b2_private_bridge_serves_the_route() {
-    let (dir, terms) = (tempfile::tempdir().unwrap(), Arc::new(Terms::new(TermConfig::default())));
-    let registry = registry(&terms).await;
-    open_headless(&registry, dir.path(), "s").await;
+async fn model_effort_r4_12_without_runtime_is_503_with_a_code() {
     let (python, upstream) = fake::spawn_fake().await;
-    let mut state = AppState::new(fake::config(upstream, "127.0.0.1"));
-    state.term = terms;
-    assert!(state.state.runtime.set(registry).is_ok());
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let private = listener.local_addr().unwrap();
-    let router = hangar_server::routes::terminal_router(Arc::new(state));
-    tokio::spawn(async move { axum::serve(listener, router.into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap() });
-    let call = |name: &'static str, body: &'static str| async move {
-        let response = fake::client().post(format!("http://{private}/__hangar_server/claude/{name}/model-effort"))
-            .header("content-type", "application/json").header("x-hangar-internal", SECRET).body(body).send().await.unwrap();
-        let status = response.status().as_u16();
-        (status, serde_json::from_str::<Value>(&response.text().await.unwrap()).unwrap_or(Value::Null))
-    };
-    assert_eq!(call("s", r#"{"model":"sonnet"}"#).await, (200, json!({"ok": true, "scope": "session", "result": null})));
-    assert_eq!(call("s", r#"{"model":"bad id!"}"#).await.0, 422);
-    assert_eq!(call("nada", r#"{"model":"sonnet"}"#).await.0, 421, "sessão que o Rust não tem segue ao Python");
+    let server = fake::spawn_state(AppState::new(fake::config(upstream, "127.0.0.1"))).await;
+    let (status, reply) = post(server, "s", r#"{"model":"sonnet"}"#).await;
+    assert_eq!((status, reply["detail"]["code"].as_str()), (503, Some("runtime_unavailable")), "{reply}");
     assert_eq!(python.hits_to("/api/sessions/s/model-effort"), 0);
 }

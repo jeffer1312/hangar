@@ -92,6 +92,7 @@ async fn invalid_permission_and_unreadable_storage_never_become_an_empty_default
     fixture.stop().await;
 }
 
+/// Decisão 5 e R5-09: quem não é o dono leva o 401 contado do Rust, com o corpo do `require_auth`.
 #[tokio::test]
 async fn defaults_require_owner_credentials() {
     let mut fixture = Fixture::start().await;
@@ -99,7 +100,9 @@ async fn defaults_require_owner_credentials() {
     for method in [reqwest::Method::GET, reqwest::Method::PUT] {
         let response = client.request(method, format!("{}?provider=claude", fixture.base))
             .header("content-type", "application/json").body(r#"{"defaults":null}"#).send().await.unwrap();
-        assert_eq!(response.status(), 403);
+        assert_eq!(response.status(), 401);
+        assert_eq!(serde_json::from_slice::<Value>(&response.bytes().await.unwrap()).unwrap(),
+            json!({"detail": {"code": "erro_nao_autorizado", "params": {}, "msg": "unauthorized"}}));
     }
     fixture.stop().await;
 }

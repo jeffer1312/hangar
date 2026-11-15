@@ -67,17 +67,6 @@ async def test_skill_usa_identidade_nativa_e_mantem_texto_para_historico(chat):
     assert [s["name"] for s in await adapter.list_skills("sess")] == ["revisar"]
 
 
-async def test_compact_uses_native_rpc_without_prompt_or_queue(chat, monkeypatch):
-    from app import api
-    adapter, client = chat
-    monkeypatch.setattr(api, "get_adapter", lambda _: adapter)
-    monkeypatch.setattr(api.PromptQueue, "append", lambda *a, **k: pytest.fail("comando foi enfileirado"))
-    result = await api._send_one_codex_locked("sess", "/compact")
-    assert result["ok"] and result["delivered"]
-    assert client.calls[-1] == ("thread/compact/start", {"threadId": "thread-1"})
-    assert not any(method in {"turn/start", "skills/list"} for method, _ in client.calls)
-    assert adapter._sessions["sess"]["in_progress"]
-
 
 async def test_compact_failure_is_reported_without_starting_a_turn(chat):
     adapter, client = chat

@@ -1,5 +1,5 @@
 # backend/tests/test_rust_server.py
-"""main.py com o hangar-server: sobe, espera a saúde, religa, e o Python assume a porta pública.
+"""main.py com o hangar-server: sobe, espera a saúde e religa; desistiu, a porta fica sem dono até a próxima tentativa.
 
 O binário é um falso em Python que escuta a porta pública e responde a saúde como o de verdade,
 e sai quando o stdin fecha, também como o de verdade; o modo (`FAKE_MODE`) decide se ele fica
@@ -23,7 +23,6 @@ import pytest
 import uvicorn
 
 from app import diag, internal_api, main, rust_server
-from app.config import Settings
 
 pytestmark = pytest.mark.skipif(not sys.platform.startswith("linux"),
                                 reason="binário falso com shebang e /proc")
@@ -157,13 +156,6 @@ def events(monkeypatch):
     return got
 
 
-@pytest.fixture
-def relog(monkeypatch):
-    calls = []
-    monkeypatch.setattr(rust_server.diag_logging, "instalar", lambda *a: calls.append(a))
-    return calls
-
-
 def _free_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
@@ -177,8 +169,23 @@ def _setup(app, public_port):
     return server, main._tcp_socket("127.0.0.1", 0), kw
 
 
-def _bind(port):
-    return lambda: main._tcp_socket("127.0.0.1", port)
+def _gave_up(events) -> bool:
+    return any(e[0] == "hangar_server.reserva" for e in events)
+
+
+def _port_closed(port: int) -> bool:
+    try:
+        _get(port, "/")
+    except OSError:
+        return True
+    return False
+
+
+async def _until(check, timeout=15.0):
+    deadline = time.monotonic() + timeout
+    while not check():
+        assert time.monotonic() < deadline, "condição não chegou"
+        await asyncio.sleep(0.05)
 
 
 def _spawns(tmp_path) -> list[dict]:
@@ -256,13 +263,12 @@ def test_child_takes_public_port_and_gets_the_contract_env(fake_bin, tmp_path, e
     upstream = internal.getsockname()[1]
 
     async def scenario():
-        task = asyncio.create_task(
-            rust_server.serve(server, [internal], fake_bin, kw, "tok", _bind(port)))
+        task = asyncio.create_task(rust_server.serve(server, [internal], fake_bin, kw, "tok"))
         await _wait_get(port, rust_server.HEALTH_PATH, lambda b: json.loads(b)["ok"] is True)
         server.should_exit = True
         return await task
 
-    assert asyncio.run(scenario()) is True
+    assert asyncio.run(scenario()) is None
     [spawn] = _spawns(tmp_path)
     assert spawn["listen"] == f"127.0.0.1:{port}"
     assert spawn["upstream"] == f"127.0.0.1:{upstream}"
@@ -278,49 +284,35 @@ def test_child_takes_public_port_and_gets_the_contract_env(fake_bin, tmp_path, e
     assert app.startups == 1
 
 
-def _run_until_takeover(fake_bin, tmp_path, monkeypatch, *, crash):
-    if crash:
-        monkeypatch.setenv("FAKE_MODE", "cai")
+def _run_until_give_up(fake_bin, tmp_path, monkeypatch, events):
+    monkeypatch.setenv("FAKE_MODE", "cai")
+    monkeypatch.setattr(rust_server, "RETRY_DELAYS", (60.0,))
     app, port = _App(), _free_port()
     server, internal, kw = _setup(app, port)
 
     async def scenario():
-        task = asyncio.create_task(
-            rust_server.serve(server, [internal], fake_bin, kw, "tok", _bind(port)))
-        await _wait_get(port, "/", lambda b: b == b"python")
+        task = asyncio.create_task(rust_server.serve(server, [internal], fake_bin, kw, "tok"))
+        await _until(lambda: _gave_up(events))
+        closed = await asyncio.to_thread(_port_closed, port)
         server.should_exit = True
-        return await task
+        await task
+        return closed
 
-    assert asyncio.run(scenario()) is True
+    assert asyncio.run(scenario()) is True, "desistiu: a porta pública fica sem dono, o Python não a atende"
     spawns = _spawns(tmp_path)
     assert len(spawns) == rust_server.MAX_CRASHES
     assert all(_dead(s["pid"]) for s in spawns)
     assert len({s["secret"] for s in spawns}) == rust_server.MAX_CRASHES   # segredo novo a cada subida
-    assert app.startups == 1                        # a porta pública não rodou o lifespan de novo
+    assert app.startups == 1
 
 
-def test_three_crashes_in_a_minute_hand_the_public_port_to_python(
-        fake_bin, tmp_path, monkeypatch, events, relog):
-    _run_until_takeover(fake_bin, tmp_path, monkeypatch, crash=True)
+def test_three_crashes_in_a_minute_leave_the_public_port_without_owner(fake_bin, tmp_path, monkeypatch, events):
+    _run_until_give_up(fake_bin, tmp_path, monkeypatch, events)
     assert [e for e in events if e[0] == "hangar_server.caiu"]
     assert ("hangar_server.reserva", "erro", {"codigo": "quedas"}) in events
-    assert relog                                    # o diário voltou a ouvir o uvicorn
 
 
-def test_child_crash_unpoints_the_groups_bridge(fake_bin, tmp_path, monkeypatch, relog):
-    """BRG-07: queda do filho apaga endereço e segredo da ponte de grupos antes de qualquer outro pedido."""
-    from app import groups_bridge
-    seen = []
-    monkeypatch.setattr(diag, "registrar", lambda evento, nivel="ok", **campos: seen.append((evento, groups_bridge._config)))
-    _run_until_takeover(fake_bin, tmp_path, monkeypatch, crash=True)
-    up = [cfg for ev, cfg in seen if ev in ("hangar_server.de_pe", "hangar_server.voltou")]
-    down = [cfg for ev, cfg in seen if ev == "hangar_server.caiu"]
-    assert up and all(cfg is not None for cfg in up)
-    assert down and all(cfg is None for cfg in down)
-
-
-def test_rust_back_after_give_up_takes_the_public_port_again(
-        fake_bin, tmp_path, monkeypatch, events, relog):
+def test_rust_back_after_give_up_takes_the_public_port_again(fake_bin, tmp_path, monkeypatch, events):
     monkeypatch.setenv("FAKE_MODE", "cai_ate")
     monkeypatch.setenv("FAKE_CRASHES", str(rust_server.MAX_CRASHES))
     monkeypatch.setattr(rust_server, "RETRY_DELAYS", (0.5,))
@@ -328,14 +320,13 @@ def test_rust_back_after_give_up_takes_the_public_port_again(
     server, internal, kw = _setup(app, port)
 
     async def scenario():
-        task = asyncio.create_task(
-            rust_server.serve(server, [internal], fake_bin, kw, "tok", _bind(port)))
-        await _wait_get(port, "/", lambda b: b == b"python")
+        task = asyncio.create_task(rust_server.serve(server, [internal], fake_bin, kw, "tok"))
+        await _until(lambda: _gave_up(events))
         await _wait_get(port, "/", lambda b: b.startswith(b"{"))     # o Rust voltou à porta
         server.should_exit = True
         return await task
 
-    assert asyncio.run(scenario()) is True
+    assert asyncio.run(scenario()) is None
     spawns = _spawns(tmp_path)
     assert len(spawns) == rust_server.MAX_CRASHES + 1
     assert all(_dead(s["pid"]) for s in spawns)
@@ -345,15 +336,7 @@ def test_rust_back_after_give_up_takes_the_public_port_again(
     assert names.index("hangar_server.reserva") < names.index("hangar_server.voltou")
 
 
-async def _until(check, timeout=15.0):
-    deadline = time.monotonic() + timeout
-    while not check():
-        assert time.monotonic() < deadline, "condição não chegou"
-        await asyncio.sleep(0.05)
-
-
-def test_failed_retry_gives_the_port_back_to_python_and_the_wait_grows(
-        fake_bin, tmp_path, monkeypatch, events, relog):
+def test_failed_retry_waits_longer_each_time(fake_bin, tmp_path, monkeypatch, events):
     monkeypatch.setenv("FAKE_MODE", "cai")
     monkeypatch.setattr(rust_server, "RETRY_DELAYS", (0.3, 0.6))
     app, port = _App(), _free_port()
@@ -361,21 +344,18 @@ def test_failed_retry_gives_the_port_back_to_python_and_the_wait_grows(
     tries = lambda: [e[2]["tentativa"] for e in events if e[0] == "hangar_server.religar"]
 
     async def scenario():
-        task = asyncio.create_task(
-            rust_server.serve(server, [internal], fake_bin, kw, "tok", _bind(port)))
-        await _until(lambda: tries() == [1])
-        await _wait_get(port, "/", lambda b: b == b"python")     # o Rust caiu de novo: o Python retomou
+        task = asyncio.create_task(rust_server.serve(server, [internal], fake_bin, kw, "tok"))
         await _until(lambda: len(tries()) == 2)
         server.should_exit = True
         return await task
 
-    assert asyncio.run(scenario()) is True
+    assert asyncio.run(scenario()) is None
     assert tries() == [1, 2], "subir e cair em seguida não zera a espera"
     assert len(_spawns(tmp_path)) >= 2 * rust_server.MAX_CRASHES
     assert app.startups == 1
 
 
-def test_retry_count_resets_only_after_the_rust_stays_up(fake_bin, tmp_path, monkeypatch, events, relog):
+def test_retry_count_resets_only_after_the_rust_stays_up(fake_bin, tmp_path, monkeypatch, events):
     monkeypatch.setenv("FAKE_MODE", "cai_ate")
     monkeypatch.setenv("FAKE_CRASHES", str(rust_server.MAX_CRASHES))
     monkeypatch.setattr(rust_server, "RETRY_DELAYS", (0.3,))
@@ -383,9 +363,8 @@ def test_retry_count_resets_only_after_the_rust_stays_up(fake_bin, tmp_path, mon
     server, internal, kw = _setup(app, port)
 
     async def scenario():
-        task = asyncio.create_task(
-            rust_server.serve(server, [internal], fake_bin, kw, "tok", _bind(port)))
-        await _wait_get(port, "/", lambda b: b == b"python")
+        task = asyncio.create_task(rust_server.serve(server, [internal], fake_bin, kw, "tok"))
+        await _until(lambda: _gave_up(events))
         await _wait_get(port, "/", lambda b: b.startswith(b"{"))
         assert rust_server._supervisor.attempt == 1, "acabou de voltar: ainda conta a tentativa"
         monkeypatch.setattr(rust_server, "CRASH_WINDOW", 0.3)
@@ -393,163 +372,62 @@ def test_retry_count_resets_only_after_the_rust_stays_up(fake_bin, tmp_path, mon
         server.should_exit = True
         return await task
 
-    assert asyncio.run(scenario()) is True
+    assert asyncio.run(scenario()) is None
 
 
-def test_sessions_that_do_not_leave_python_keep_the_rust_down(fake_bin, tmp_path, monkeypatch, events, relog):
-    from app import runtime_coordinator
-    monkeypatch.setenv("FAKE_MODE", "cai_ate")
-    monkeypatch.setenv("FAKE_CRASHES", str(rust_server.MAX_CRASHES))
-    monkeypatch.setattr(rust_server, "RETRY_DELAYS", (0.2,))
-    handed = []
-    async def leave_python():
-        raise RuntimeError("fila da sessão em uso no Python")
-    async def enter_python(containment=None):
-        handed.append("python")
-    owner = runtime_coordinator.ensure()
-    monkeypatch.setattr(owner, "leave_python", leave_python)
-    monkeypatch.setattr(owner, "enter_python", enter_python)
-    app, port = _App(), _free_port()
-    server, internal, kw = _setup(app, port)
-    failed = lambda: sum(e[0] == "hangar_server.religar_falhou" for e in events)
-
-    async def scenario():
-        task = asyncio.create_task(
-            rust_server.serve(server, [internal], fake_bin, kw, "tok", _bind(port)))
-        await _until(lambda: failed() >= 2)
-        assert await asyncio.to_thread(_get, port, "/") == b"python"
-        server.should_exit = True
-        return await task
-
-    assert asyncio.run(scenario()) is True
-    assert len(_spawns(tmp_path)) == rust_server.MAX_CRASHES, "sessão presa no Python: o Rust não sobe"
-    assert len(handed) >= 3, "cada falha devolve as sessões ao Python"
-
-
-def test_stop_while_the_port_is_released_does_not_start_the_child(
-        fake_bin, tmp_path, monkeypatch, events, relog):
+def test_stop_during_the_retry_wait_does_not_start_the_child(fake_bin, tmp_path, monkeypatch, events):
     monkeypatch.setenv("FAKE_MODE", "cai")
-    monkeypatch.setattr(rust_server, "RETRY_DELAYS", (0.3,))
+    monkeypatch.setattr(rust_server, "RETRY_DELAYS", (60.0,))
     app, port = _App(), _free_port()
     server, internal, kw = _setup(app, port)
 
-    class StopDuringRelease(rust_server.Server):
-        async def serve(self, sockets=None):
-            await super().serve(sockets=sockets)
-            server.should_exit = True                # o SIGTERM chegou enquanto a porta era solta
-    monkeypatch.setattr(rust_server, "Server", StopDuringRelease)
-
     async def scenario():
-        task = asyncio.create_task(
-            rust_server.serve(server, [internal], fake_bin, kw, "tok", _bind(port)))
-        return await task
+        task = asyncio.create_task(rust_server.serve(server, [internal], fake_bin, kw, "tok"))
+        await _until(lambda: _gave_up(events))
+        server.should_exit = True                    # o SIGTERM chegou durante a espera
+        return await asyncio.wait_for(task, 10)
 
-    assert asyncio.run(scenario()) is True
+    assert asyncio.run(scenario()) is None
     assert len(_spawns(tmp_path)) == rust_server.MAX_CRASHES
 
 
-def test_same_binary_with_the_same_protocol_is_retried_only_after_it_changes(
-        fake_bin, tmp_path, monkeypatch, events, relog):
+def test_same_binary_with_the_same_protocol_is_retried_only_after_it_changes(fake_bin, tmp_path, monkeypatch, events):
     monkeypatch.setenv("FAKE_PROTOCOL", "999")
     monkeypatch.setattr(rust_server, "RETRY_DELAYS", (0.2,))
     app, port = _App(), _free_port()
     server, internal, kw = _setup(app, port)
 
     async def scenario():
-        task = asyncio.create_task(
-            rust_server.serve(server, [internal], fake_bin, kw, "tok", _bind(port)))
-        await _wait_get(port, "/", lambda b: b == b"python")
+        task = asyncio.create_task(rust_server.serve(server, [internal], fake_bin, kw, "tok"))
+        await _until(lambda: _gave_up(events))
         await asyncio.sleep(1.0)
-        assert len(_spawns(tmp_path)) == 1, "o mesmo binário falharia igual: a porta fica com o Python"
+        assert len(_spawns(tmp_path)) == 1, "o mesmo binário falharia igual: só religa quando ele mudar"
         monkeypatch.setenv("FAKE_PROTOCOL", str(rust_server.RUST_SERVER_PROTOCOL))
         fake_bin.write_text(fake_bin.read_text() + "\n# atualizado\n")       # binário trocado no mesmo caminho
         await _wait_get(port, "/", lambda b: b.startswith(b"{"))
         server.should_exit = True
         return await task
 
-    assert asyncio.run(scenario()) is True
+    assert asyncio.run(scenario()) is None
     assert len(_spawns(tmp_path)) == 2
 
 
-class _Streaming(_App):
-    """Um SSE de verdade (`sse_starlette`, o dos `/events`), aberto até alguém o fechar."""
-
-    async def __call__(self, scope, receive, send):
-        if scope["type"] == "lifespan":
-            return await super().__call__(scope, receive, send)
-        from sse_starlette.sse import EventSourceResponse
-
-        async def events():
-            yield {"data": "python"}
-            await asyncio.Event().wait()
-        await EventSourceResponse(events())(scope, receive, send)
-
-
-def test_retry_closes_open_streams_without_an_asgi_error(fake_bin, tmp_path, monkeypatch, events, relog, capfd):
-    from sse_starlette.sse import AppStatus
-    monkeypatch.setattr(AppStatus, "should_exit", False)
-    monkeypatch.setattr(AppStatus, "enable_automatic_graceful_drain", True)
-    monkeypatch.setenv("FAKE_MODE", "cai_ate")
-    monkeypatch.setenv("FAKE_CRASHES", str(rust_server.MAX_CRASHES))
-    monkeypatch.setattr(rust_server, "RETRY_DELAYS", (1.0,))
-    app, port = _Streaming(), _free_port()
-    server, internal, kw = _setup(app, port)
-    kw["timeout_graceful_shutdown"] = 1
-
-    async def scenario():
-        task = asyncio.create_task(
-            rust_server.serve(server, [internal], fake_bin, kw, "tok", _bind(port)))
-        await _until(lambda: any(e[0] == "hangar_server.reserva" for e in events))
-        await asyncio.sleep(0.2)
-        reader, writer = await asyncio.open_connection("127.0.0.1", port)
-        writer.write(b"GET /events HTTP/1.1\r\nhost: x\r\n\r\n")
-        await writer.drain()
-        assert b"200" in await reader.readline()
-        await _wait_get(port, "/", lambda b: b.startswith(b"{"))
-        writer.close()
-        server.should_exit = True
-        return await task
-
-    assert asyncio.run(scenario()) is True
-    # O uvicorn escreve o próprio log no stderr, fora do `logging` raiz.
-    assert "Exception in ASGI application" not in capfd.readouterr().err
-    from sse_starlette.sse import AppStatus
-    assert AppStatus.should_exit is False, "soltar a porta pública não encerra os SSE do processo"
-
-
-def test_child_that_never_answers_is_killed_and_python_takes_over(
-        fake_bin, tmp_path, monkeypatch, events, relog):
+def test_child_that_never_answers_is_killed_and_the_port_waits(fake_bin, tmp_path, monkeypatch, events):
     monkeypatch.setenv("FAKE_MODE", "mudo")
     monkeypatch.setattr(rust_server, "START_TIMEOUT", 1.0)
     app, port = _App(), _free_port()
     server, internal, kw = _setup(app, port)
 
     async def scenario():
-        task = asyncio.create_task(
-            rust_server.serve(server, [internal], fake_bin, kw, "tok", _bind(port)))
-        await _wait_get(port, "/", lambda b: b == b"python")
+        task = asyncio.create_task(rust_server.serve(server, [internal], fake_bin, kw, "tok"))
+        await _until(lambda: _gave_up(events))
         server.should_exit = True
         return await task
 
-    assert asyncio.run(scenario()) is True
+    assert asyncio.run(scenario()) is None
     [spawn] = _spawns(tmp_path)
     assert _dead(spawn["pid"])
     assert ("hangar_server.reserva", "erro", {"codigo": "sem_resposta"}) in events
-
-
-def test_public_port_taken_at_takeover_ends_the_process_with_failure(
-        fake_bin, monkeypatch, events, relog):
-    monkeypatch.setenv("FAKE_MODE", "cai")
-    app, port = _App(), _free_port()
-    server, internal, kw = _setup(app, port)
-
-    def occupied():
-        raise OSError(98, "Address already in use")
-
-    assert asyncio.run(
-        rust_server.serve(server, [internal], fake_bin, kw, "tok", occupied)) is False
-    assert any(e[0] == "hangar_server.reserva" and e[2].get("codigo") == "porta_ocupada"
-               for e in events)
 
 
 _CHILD_ENV = dict(HANGAR_SERVER_LISTEN="127.0.0.1:1", HANGAR_SERVER_UPSTREAM="127.0.0.1:2",
@@ -631,20 +509,18 @@ def test_child_dies_when_python_is_killed(fake_bin, tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("answer,got", [("1", 1), ("sem", None)])
-def test_other_protocol_means_python_alone_and_a_diary_line(
-        fake_bin, tmp_path, monkeypatch, events, relog, answer, got):
+def test_other_protocol_gives_up_with_a_diary_line(fake_bin, tmp_path, monkeypatch, events, answer, got):
     monkeypatch.setenv("FAKE_PROTOCOL", answer)
     app, port = _App(), _free_port()
     server, internal, kw = _setup(app, port)
 
     async def scenario():
-        task = asyncio.create_task(
-            rust_server.serve(server, [internal], fake_bin, kw, "tok", _bind(port)))
-        await _wait_get(port, "/", lambda b: b == b"python")
+        task = asyncio.create_task(rust_server.serve(server, [internal], fake_bin, kw, "tok"))
+        await _until(lambda: _gave_up(events))
         server.should_exit = True
         return await task
 
-    assert asyncio.run(scenario()) is True
+    assert asyncio.run(scenario()) is None
     [spawn] = _spawns(tmp_path)                     # protocolo errado não religa
     assert _dead(spawn["pid"])
     assert ("hangar_server.protocolo", "erro",
@@ -655,34 +531,34 @@ def test_other_protocol_means_python_alone_and_a_diary_line(
 def test_run_trusts_loopback_inside_and_keeps_the_owner_list_outside(monkeypatch):
     seen = {}
 
-    async def fake_serve(server, sockets, binary, kw, token, bind_public):
+    async def fake_serve(server, sockets, binary, kw, token):
         seen["internal"] = server.config.forwarded_allow_ips
         seen["public"] = kw["forwarded_allow_ips"]
-        return True
 
     monkeypatch.setattr(rust_server, "serve", fake_serve)
     kw = dict(host="127.0.0.1", port=1, workers=1, proxy_headers=True, forwarded_allow_ips="10.0.0.2")
-    assert rust_server.run(_App(), kw, Path("x"), "tok", [], lambda: None) == 3   # nada subiu
+    assert rust_server.run(_App(), kw, Path("x"), "tok", []) == 3   # nada subiu
     assert seen == {"internal": "10.0.0.2,127.0.0.1", "public": "10.0.0.2"}
 
 
-def test_rust_server_off_never_looks_for_the_binary(monkeypatch):
-    monkeypatch.setattr(rust_server.rust_bins, "find_bin",
-                        lambda *a: pytest.fail("CP_RUST_SERVER=0 não procura binário"))
-    assert rust_server.wanted_binary(False) is None
-
-
-def test_missing_binary_means_python_alone_and_a_diary_line(monkeypatch, events):
+def test_missing_binary_is_none_and_a_diary_line(monkeypatch, events):
     monkeypatch.setattr(rust_server.rust_bins, "find_bin", lambda name, env_var: None)
-    assert rust_server.wanted_binary(True) is None
-    assert ("hangar_server.reserva", "aviso", {"codigo": "sem_binario"}) in events
+    assert rust_server.wanted_binary() is None
+    assert ("hangar_server.reserva", "erro", {"codigo": "sem_binario"}) in events
 
 
-def test_cp_rust_server_zero_turns_it_off(monkeypatch):
-    monkeypatch.setenv("CP_RUST_SERVER", "0")
-    assert Settings(_env_file=None).rust_server is False
-    monkeypatch.delenv("CP_RUST_SERVER")
-    assert Settings(_env_file=None).rust_server is True
+def test_main_without_binary_exits_with_an_error(monkeypatch, capsys):
+    monkeypatch.setattr(main.rust_server, "wanted_binary", lambda: None)
+    for name in ("startup_guard", "_setup_diag_logging", "_saida_utf8"):
+        monkeypatch.setattr(main, name, lambda *a: None)
+    monkeypatch.setattr(main.migracao_sidecars, "migrar", lambda dirs: None)
+    monkeypatch.setattr(main.hook_state, "load_existing", lambda dirs: None)
+    monkeypatch.setattr(main.resilient_accept, "install", lambda: None)
+    monkeypatch.setattr(main, "_tcp_socket", lambda *a: pytest.fail("sem binário a porta nem é aberta"))
+    with pytest.raises(SystemExit) as exit:
+        main.main()
+    assert exit.value.code == 1
+    assert "hangar-server não encontrado" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("ips,expected", [

@@ -207,15 +207,17 @@ fn enc(text: &str) -> String { form_urlencoded::byte_serialize(text.as_bytes()).
 
 fn sids(v: &Value) -> Vec<&str> { v.as_array().unwrap().iter().map(|e| &e["session_id"].as_str().unwrap()[..8]).collect() }
 
-/// ARQ-01: as quatro rotas são só do dono; sem token o pedido vai ao Python, que recusa.
+/// ARQ-01: as quatro rotas são só do dono; sem token o Rust recusa com 401, sem ir ao Python.
 #[tokio::test]
 async fn arq01_owner_only() {
     let h = Harness::new(Mode::NoIndex).await;
     for path in ["/api/archive", format!("/api/archive/{HANGAR}").as_str(), "/api/archive/recent", "/api/archive-por-cwd?cwd=/x"] {
         let response = h.client.get(h.url(path)).send().await.unwrap();
         assert_eq!(response.status(), 401, "{path}");
-        assert!(h.hits.lock().unwrap().iter().any(|hit| hit == path), "{path} não foi ao Python");
+        let body: Value = response.json().await.unwrap();
+        assert_eq!(body["detail"]["code"], "erro_nao_autorizado", "{path}");
     }
+    h.assert_not_forwarded();
     h.hits.lock().unwrap().clear();
     let response = h.client.get(h.url(&format!("/api/archive?token={OWNER}"))).send().await.unwrap();
     assert_eq!(response.status(), 200);
