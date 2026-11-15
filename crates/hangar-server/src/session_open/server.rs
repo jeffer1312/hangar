@@ -551,9 +551,9 @@ pub async fn create(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
             access_diary("POST /api/sessions", &response, started, &diag);
             response
         }
-        // O `create_session` do Python só respondia esta recusa.
+        // Só Pi, omp e Kimi sem terminal chegam aqui (`opens_here`): a combinação não existe, o servidor está de pé.
         Decision::NotOurs => {
-            let mut response = reply(&OpenError::new(503, "session_open_needs_rust_server", "esta sessão não abre pelo servidor Rust"));
+            let mut response = reply(&OpenError::new(400, "erro_orq_headless_provider", "sem terminal só vale para claude ou codex"));
             crate::routes::cors(&parts.headers, response.headers_mut());
             access_diary("POST /api/sessions", &response, started, &diag);
             response
