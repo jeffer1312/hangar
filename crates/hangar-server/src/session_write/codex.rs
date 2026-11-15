@@ -418,9 +418,12 @@ async fn not_codex(st: &Arc<AppState>, name: &str, req: Request) -> Response {
         "question/skip" => (StatusCode::CONFLICT, detail_body("erro_codex_resposta_invalida", MSG_INVALID_ANSWER, json!({}))),
         "codex-permissions" => only_codex("erro_permissao_so_codex", "este modo de permissao so vale para sessoes Codex"),
         "codex/plan/implement" => {
-            let exists = rust_session || runtime.asleep(name).await.is_some() || super::unowned::exists(st, name).await;
-            if exists { only_codex("erro_model_so_codex", "esta ação só existe para sessões Codex") }
-            else { (StatusCode::NOT_FOUND, detail_body("erro_sessao_opcao_nao_enviada", "sessão não encontrada — plano NÃO iniciado", json!({}))) }
+            let exists = if rust_session || runtime.asleep(name).await.is_some() { Ok(true) } else { super::unowned::exists(st, name).await };
+            match exists {
+                Ok(true) => only_codex("erro_model_so_codex", "esta ação só existe para sessões Codex"),
+                Ok(false) => (StatusCode::NOT_FOUND, detail_body("erro_sessao_opcao_nao_enviada", "sessão não encontrada — plano NÃO iniciado", json!({}))),
+                Err(error) => (StatusCode::SERVICE_UNAVAILABLE, json!({"detail": crate::list::hub::unavailable_detail(&error)})),
+            }
         }
         _ => refused(),
     })

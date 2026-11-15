@@ -78,7 +78,11 @@ pub(crate) async fn refusal(st: &AppState, name: &str, route: WriteRoute, body: 
         _ => {}
     }
     let deps = Deps::of(st);
-    match pane_or(&deps, name).await {
+    let pane = match pane_or(&deps, name).await {
+        Ok(pane) => pane,
+        Err(error) => return (StatusCode::SERVICE_UNAVAILABLE, json!({"detail": crate::list::hub::unavailable_detail(&error)})),
+    };
+    match pane {
         Some(Sent::Answer(status, body)) => (status, json!({"detail": body["error"]})),
         Some(Sent::Missing) => match route {
             Steer => refused(StatusCode::NOT_FOUND, "erro_sessao_inexistente", "sessão não encontrada", json!({})),
@@ -98,15 +102,15 @@ fn identified(body: &[u8]) -> bool {
     value["interaction_id"].as_str().is_some_and(|id| !id.is_empty())
 }
 
-/// O nome existe sem dono no Rust: pane, ou arquivo de sessão que o Rust não adotou.
-pub(crate) async fn exists(st: &AppState, name: &str) -> bool {
-    !matches!(pane_or(&Deps::of(st), name).await, Some(Sent::Missing))
+/// O nome existe sem dono no Rust: pane, ou arquivo de sessão que o Rust não adotou. A lista que não
+/// responde é erro, nunca "não existe".
+pub(crate) async fn exists(st: &AppState, name: &str) -> Result<bool, crate::list::bridge::ListError> {
+    Ok(!matches!(pane_or(&Deps::of(st), name).await?, Some(Sent::Missing)))
 }
 
 /// `None`: o nome tem pane. Sem pane, o `no_pane` (inexistente, ou a recusa do arquivo sem dono).
-async fn pane_or(deps: &Deps, name: &str) -> Option<Sent> {
-    let found = deps.list.runtime_context(name).await.ok().is_some_and(|context| !context.panes.is_empty());
-    if found { None } else { Some(no_pane(deps, name).await) }
+async fn pane_or(deps: &Deps, name: &str) -> Result<Option<Sent>, crate::list::bridge::ListError> {
+    if deps.list.runtime_context(name).await?.panes.is_empty() { Ok(Some(no_pane(deps, name).await)) } else { Ok(None) }
 }
 
 /// O envio inteiro, numa tarefa à parte: quem pediu pode desistir (cliente fechou), a digitação começada
@@ -152,8 +156,12 @@ fn unbound(deps: &Deps, name: &str, code: &str) -> Sent {
 }
 
 async fn send_owned(deps: Deps, name: &str, text: &str) -> Sent {
-    let context = deps.list.runtime_context(name).await.ok();
-    let Some(context) = context.filter(|context| !context.panes.is_empty()) else { return no_pane(&deps, name).await };
+    let context = match deps.list.runtime_context(name).await {
+        Ok(context) => context,
+        Err(error) => return Sent::Answer(StatusCode::SERVICE_UNAVAILABLE,
+            json!({"ok": false, "error": crate::list::hub::unavailable_detail(&error), "delivered": false})),
+    };
+    if context.panes.is_empty() { return no_pane(&deps, name).await }
     let (panes, children, procs, projects) = (context.panes.clone(), context.children.clone(), deps.list.env().procs.clone(), context.dirs.claude.join("projects"));
     let found = tokio::task::spawn_blocking(move || {
         let row = discover_panes(&panes, &*procs, &children, &projects, &mut Resolver::default(), &|_| false).into_iter().next();
