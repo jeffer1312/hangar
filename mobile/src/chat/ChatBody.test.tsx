@@ -44,7 +44,7 @@ vi.mock('../stores/chat', () => {
     stateEvent: { session: 'chat', state: 'idle' }, askOpen: false,
   }));
   const chat = { use, retain: h.retain, release: h.release };
-  return { chatStore: () => chat, setChatsForeground: () => {} };
+  return { chatStore: () => chat, setChatsForeground: () => {}, syncChatTranscripts: () => {} };
 });
 vi.mock('../stores/servers', () => {
   const state = { ready: true, servers: [{ id: 'srv', label: 'local' }], ensureActive: () => true, ensureOwnActive: () => {},
@@ -53,7 +53,7 @@ vi.mock('../stores/servers', () => {
 });
 vi.mock('../stores/sessions', () => {
   const state = { rows: [h.session], retain: () => () => {}, setForeground: () => {} };
-  return { setMachineDiscovery: () => {}, useSessions: Object.assign((select: (s: typeof state) => unknown) => select(state), { getState: () => state }) };
+  return { setMachineDiscovery: () => {}, useSessions: Object.assign((select: (s: typeof state) => unknown) => select(state), { getState: () => state, subscribe: () => () => {} }) };
 });
 vi.mock('../stores/newConversation', () => ({
   useNewConversation: (select: (s: unknown) => unknown) => select({ attempts: {}, busy: {}, issues: {} }),

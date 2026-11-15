@@ -191,6 +191,7 @@
   const discoResto = $derived(porTamanho.slice(TOPO));
   const legenda: { e: WorktreeState; rotulo: () => string }[] = [
     { e: 'merged', rotulo: m.worktrees_filtro_prontas },
+    { e: 'equivalent', rotulo: m.worktree_estado_equivalente },
     { e: 'dirty', rotulo: m.worktrees_filtro_nao_commitado },
     { e: 'session', rotulo: m.worktrees_filtro_em_uso },
     { e: 'active', rotulo: m.worktree_estado_andamento },

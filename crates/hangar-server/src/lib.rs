@@ -105,6 +105,8 @@ pub mod workspace_routes;
 pub(crate) mod workspace_http;
 pub mod uploads;
 pub use hangar_core::user_data;
+pub mod connectors_cli;
+pub mod mission_notify;
 pub mod machine_peers;
 pub mod install_root;
 pub mod update;
@@ -185,6 +187,7 @@ pub async fn serve_until_with_guest(
     let browser_dir = state.hangar_dir.join("nav");
     let browser_list = state.list.clone();
     let transcription = state.transcription.clone();
+    let connectors = state.connectors.clone();
     let startup_producers = state.startup_producers.clone();
     let omp_sync = state.omp_sync.clone();
     let codex_setup = state.codex_setup.clone();
@@ -322,6 +325,8 @@ pub async fn serve_until_with_guest(
             Some(Err(_)) | None => Ok(()),
         };
         transcription.shutdown().await;
+        // Conectores vivos saem com a árvore inteira, não só o processo líder.
+        connectors.shutdown().await;
         let refresh = refresh_loop.lock().unwrap().take();
         if let Some((stop, task)) = refresh { let _ = stop.send(true); let _ = task.await; }
         tokio::join!(codex_readers.close(),codex_logins.close(),device_logins.close());

@@ -6,14 +6,14 @@ use std::collections::{BTreeMap, BTreeSet};
 #[serde(rename_all = "snake_case")]
 enum Command {
     FocusComposer, OpenSettings, CopyLastReply, Find, NextSession, PreviousSession, NewChat, NewChatNoProject, NewSession, CloseSession, RenameSession, Costs,
-    Search, ProjectFile, ProjectText, Sidebar, Worktrees, Dictation, Permission, ToolLook, Navigation,
+    Search, ProjectFile, ProjectText, Sidebar, Worktrees, Mission, Dictation, Permission, ToolLook, Navigation,
     CloseFile, PreviousFile, NextFile, SaveFile, FindFile, FileLine, CopyTerminal, PasteTerminal,
 }
 
 impl Command {
-    const ALL: [Self; 29] = [Self::FocusComposer, Self::OpenSettings, Self::CopyLastReply, Self::Find,
+    const ALL: [Self; 30] = [Self::FocusComposer, Self::OpenSettings, Self::CopyLastReply, Self::Find,
         Self::NextSession, Self::PreviousSession, Self::NewChat, Self::NewChatNoProject, Self::NewSession, Self::CloseSession, Self::RenameSession, Self::Costs, Self::Search, Self::ProjectFile,
-        Self::ProjectText, Self::Sidebar, Self::Worktrees, Self::Dictation, Self::Permission, Self::ToolLook, Self::Navigation,
+        Self::ProjectText, Self::Sidebar, Self::Worktrees, Self::Mission, Self::Dictation, Self::Permission, Self::ToolLook, Self::Navigation,
         Self::CloseFile, Self::PreviousFile, Self::NextFile, Self::SaveFile, Self::FindFile, Self::FileLine,
         Self::CopyTerminal, Self::PasteTerminal];
 
@@ -24,7 +24,7 @@ impl Command {
             Self::PreviousSession => "keyboard_previous_session", Self::NewChat => "keyboard_new_chat", Self::NewChatNoProject => "keyboard_new_chat_no_project", Self::NewSession => "keyboard_new_session", Self::CloseSession => "keyboard_close_session",
             Self::RenameSession => "keyboard_rename_session", Self::Costs => "keyboard_costs",
             Self::Search => "keyboard_search", Self::ProjectFile => "keyboard_project_file", Self::ProjectText => "keyboard_project_text",
-            Self::Sidebar => "keyboard_sidebar", Self::Worktrees => "keyboard_worktrees", Self::Dictation => "keyboard_dictation",
+            Self::Sidebar => "keyboard_sidebar", Self::Worktrees => "keyboard_worktrees", Self::Mission => "keyboard_mission", Self::Dictation => "keyboard_dictation",
             Self::Permission => "keyboard_permission", Self::ToolLook => "keyboard_tool_look", Self::Navigation => "keyboard_navigation",
             Self::CloseFile => "keyboard_close_file", Self::PreviousFile => "keyboard_previous_file",
             Self::NextFile => "keyboard_next_file", Self::SaveFile => "keyboard_save_file", Self::FindFile => "keyboard_find_file",
@@ -63,7 +63,7 @@ impl Command {
             Self::Find => "secondary-f", Self::NextSession => "secondary-down", Self::PreviousSession => "secondary-up",
             Self::NewChat => "secondary-n", Self::NewChatNoProject => "secondary-shift-n", Self::NewSession => "secondary-shift-t", Self::CloseSession => "secondary-w", Self::RenameSession => "f2", Self::Costs => "secondary-alt-c", Self::Search => "secondary-k",
             Self::ProjectFile => "secondary-p", Self::ProjectText => "secondary-shift-f", Self::Sidebar => "secondary-b",
-            Self::Worktrees => "secondary-alt-w", Self::Dictation => "ctrl-space", Self::Permission => "alt-shift-p",
+            Self::Worktrees => "secondary-alt-w", Self::Mission => "secondary-alt-m", Self::Dictation => "ctrl-space", Self::Permission => "alt-shift-p",
             Self::ToolLook => "secondary-alt-v", Self::Navigation => "secondary-alt-b",
             Self::CloseFile => "alt-w", Self::PreviousFile => "ctrl-pageup", Self::NextFile => "ctrl-pagedown",
             Self::SaveFile => "secondary-s", Self::FindFile => "secondary-f", Self::FileLine => "secondary-g",
@@ -78,7 +78,7 @@ impl Command {
             Self::NextSession => Box::new(NextSession), Self::PreviousSession => Box::new(PreviousSession), Self::NewChat => Box::new(NewChat), Self::NewChatNoProject => Box::new(NewChatNoProject), Self::NewSession => Box::new(OpenNewSession), Self::CloseSession => Box::new(CloseSession),
             Self::RenameSession => Box::new(RenameSession),
             Self::Costs => Box::new(OpenCosts), Self::Search => Box::new(OpenSearch), Self::ProjectFile => Box::new(FindProjectFile),
-            Self::ProjectText => Box::new(FindProjectText), Self::Sidebar => Box::new(ToggleSidebar), Self::Worktrees => Box::new(OpenWorktrees),
+            Self::ProjectText => Box::new(FindProjectText), Self::Sidebar => Box::new(ToggleSidebar), Self::Worktrees => Box::new(OpenWorktrees), Self::Mission => Box::new(OpenMission),
             Self::Dictation => Box::new(ToggleDictation), Self::Permission => Box::new(CyclePermission),
             Self::ToolLook => Box::new(CycleToolLook), Self::Navigation => Box::new(CycleNavigation),
             Self::CloseFile => Box::new(files::CloseFile), Self::PreviousFile => Box::new(files::PreviousFile),

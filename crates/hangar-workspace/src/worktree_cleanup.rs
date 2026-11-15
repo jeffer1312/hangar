@@ -536,8 +536,9 @@ pub fn candidate(
     if st["degraded"] != false || st["base"].as_str().is_none() || st["head"].as_str().is_none() {
         return Ok(None);
     }
-    let by_state = settings.delete_merged && st["merged"] == true
-        || settings.delete_unchanged && st["ahead"].as_u64() == Some(0);
+    let no_commits = st["ahead"].as_u64() == Some(0);
+    let by_state = settings.delete_merged && st["merged"] == true || settings.delete_unchanged && no_commits;
+    let unchanged = by_state && no_commits;
     if !by_state && !can_observe_inactivity {
         return Ok(None);
     }
@@ -546,9 +547,8 @@ pub fn candidate(
         return Ok(None);
     }
     let mut inactive = false;
-    if let Some(days) = settings.inactive_days
-        && let Some(activity) = activity
-    {
+    let mut unchanged_ready = !unchanged;
+    if unchanged || can_observe_inactivity {
         let file = home.join(".hangar/worktree-observations.json");
         let last_activity = worktree_settings::locked(&file, || {
             let mut observations: BTreeMap<String, Observation> = match std::fs::read(&file) {
@@ -562,7 +562,8 @@ pub fn candidate(
                 .filter(|o| o.fingerprint == fingerprint)
                 .map_or(now, |o| o.last_activity)
                 .max(newest)
-                .max(activity);
+                .max(activity.unwrap_or(0))
+                .max(st["created_at"].as_u64().unwrap_or(now));
             observations.insert(
                 path.into(),
                 Observation {
@@ -573,9 +574,12 @@ pub fn candidate(
             worktree_settings::write_json(&file, &observations)?;
             Ok(last)
         })?;
-        inactive = now.saturating_sub(last_activity) >= u64::from(days) * 86400;
+        let quiet = now.saturating_sub(last_activity);
+        unchanged_ready = quiet >= 86400;
+        inactive = can_observe_inactivity && settings.inactive_days.is_some_and(|days| quiet >= u64::from(days) * 86400);
     }
-    let eligible = inactive || by_state;
+    if st["created_at"].as_u64().is_none_or(|created|now.saturating_sub(created)<86400) { return Ok(None); }
+    let eligible = inactive || by_state && unchanged_ready;
     if !eligible {
         return Ok(None);
     }
@@ -932,8 +936,11 @@ mod tests {
         assert_ne!(tree_stamp(dir.path()).unwrap().0, with_repo, "repositório com nome de artefato continua lido");
     }
     fn git(dir: &Path, args: &[&str]) {
-        let o = crate::git::command(dir, args).unwrap();
-        assert_eq!(o.code, 0, "{}", o.stderr);
+        let config=tempfile::NamedTempFile::new().unwrap();
+        let out=std::process::Command::new("git").args(["-c","core.hooksPath=","-c","commit.gpgSign=false"])
+            .arg("-C").arg(dir).args(args).env("GIT_CONFIG_GLOBAL",config.path()).env("GIT_CONFIG_NOSYSTEM","1")
+            .env_remove("GIT_CONFIG_PARAMETERS").env_remove("GIT_CONFIG_COUNT").output().unwrap();
+        assert!(out.status.success(),"{}",String::from_utf8_lossy(&out.stderr));
     }
     fn policy_fixture() -> (tempfile::TempDir, PathBuf, PathBuf) {
         let dir = tempfile::tempdir().unwrap();
@@ -962,6 +969,13 @@ mod tests {
         (dir, repo, wt)
     }
 
+    fn mature_candidate(path: &str, home: &Path, settings: &WorktreeSettings) -> (Candidate,u64) {
+        let now = std::time::SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let _ = candidate(path,&[],&[],home,settings,now,None).unwrap();
+        let later = now + 86400;
+        (candidate(path,&[],&[],home,settings,later,None).unwrap().expect("worktree observada por um dia"),later)
+    }
+
     #[test]
     fn missing_worktree_removes_only_its_registration_without_needing_the_branch() {
         let (dir, repo, wt) = policy_fixture();
@@ -978,6 +992,31 @@ mod tests {
         assert_eq!(result["branch_deleted"], false);
         assert_eq!(worktrees::worktree_paths(repo.to_str().unwrap()).into_iter().map(PathBuf::from).collect::<Vec<_>>(), vec![other]);
         git(&repo, &["rev-parse", "--verify", "refs/heads/other"]);
+    }
+
+    #[test]
+    fn unchanged_worktree_waits_a_day_and_recent_activity_restarts_the_wait() {
+        let (dir, _repo, wt) = policy_fixture();
+        let now = std::time::SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let settings = WorktreeSettings { delete_unchanged: true, ..Default::default() };
+        let check = |at, activity| candidate(wt.to_str().unwrap(), &[], &[], dir.path(), &settings, at, activity).unwrap();
+        assert!(check(now, None).is_none(), "não apagar uma worktree recém-criada");
+        assert!(check(now + 86399, None).is_none());
+        assert!(check(now + 86400, None).is_some());
+        assert!(check(now + 86400, Some(now + 86400)).is_none());
+        assert!(check(now + 172799, None).is_none());
+        assert!(check(now + 172800, None).is_some());
+        assert!(wt.exists(), "a prova só consulta elegibilidade");
+    }
+
+    #[test]
+    fn advancing_the_base_does_not_bypass_the_fresh_worktree_deadline() {
+        let (dir,repo,wt)=policy_fixture();
+        git(&repo,&["-c","user.name=Teste","-c","user.email=test@example.invalid","commit","--allow-empty","-m","Base avançou"]);
+        let now=std::time::SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let settings=WorktreeSettings {delete_merged:true,..Default::default()};
+        assert!(candidate(wt.to_str().unwrap(),&[],&[],dir.path(),&settings,now,None).unwrap().is_none());
+        assert!(wt.exists());
     }
 
     #[test]
@@ -1363,11 +1402,7 @@ mod tests {
                 .is_none()
         );
         settings.keep_when = KeepWhen::TrackedChanges;
-        assert!(
-            candidate(path, &[], &[], dir.path(), &settings, now, None)
-                .unwrap()
-                .is_some()
-        );
+        let _ = mature_candidate(path,dir.path(),&settings);
         std::fs::write(wt.join(".gitignore"), "ignored.txt\n").unwrap();
         git(&wt, &["add", ".gitignore"]);
         git(
@@ -1392,11 +1427,7 @@ mod tests {
                 .is_none()
         );
         settings.keep_when = KeepWhen::UncommittedChanges;
-        assert!(
-            candidate(path, &[], &[], dir.path(), &settings, now, None)
-                .unwrap()
-                .is_some()
-        );
+        let _ = mature_candidate(path,dir.path(),&settings);
     }
 
     #[test]
@@ -1437,42 +1468,36 @@ mod tests {
             )
             .unwrap();
         std::fs::write(wt.join("untracked"), "discardable").unwrap();
-        let c = candidate(path, &[], &[], dir.path(), &settings, 0, None)
-            .unwrap()
-            .unwrap();
+        let (c,now) = mature_candidate(path,dir.path(),&settings);
         std::fs::write(wt.join("tracked"), "new version").unwrap();
-        assert!(!remove_candidate(&c, &[], &[], dir.path(), 0, None).unwrap());
+        assert!(!remove_candidate(&c, &[], &[], dir.path(), now, None).unwrap());
         assert_eq!(
             std::fs::read_to_string(wt.join("tracked")).unwrap(),
             "new version"
         );
         std::fs::write(wt.join("tracked"), "original").unwrap();
-        let c = candidate(path, &[], &[], dir.path(), &settings, 0, None)
-            .unwrap()
-            .unwrap();
+        let (c,now) = mature_candidate(path,dir.path(),&settings);
         let live = [Session {
             name: "new-session".into(),
             cwd: Some(path.into()),
             ..Session::default()
         }];
-        assert!(!remove_candidate(&c, &live, &[], dir.path(), 0, None).unwrap());
+        assert!(!remove_candidate(&c, &live, &[], dir.path(), now, None).unwrap());
         WorktreeSettings::default()
             .save_at(
                 &dir.path().join(".hangar/worktree-settings.json"),
                 dir.path(),
             )
             .unwrap();
-        assert!(!remove_candidate(&c, &[], &[], dir.path(), 0, None).unwrap());
+        assert!(!remove_candidate(&c, &[], &[], dir.path(), now, None).unwrap());
         settings
             .save_at(
                 &dir.path().join(".hangar/worktree-settings.json"),
                 dir.path(),
             )
             .unwrap();
-        let c = candidate(path, &[], &[], dir.path(), &settings, 0, None)
-            .unwrap()
-            .unwrap();
-        assert!(remove_candidate(&c, &[], &[], dir.path(), 0, None).unwrap());
+        let (c,now) = mature_candidate(path,dir.path(),&settings);
+        assert!(remove_candidate(&c, &[], &[], dir.path(), now, None).unwrap());
         assert!(!wt.exists());
         git(&repo, &["show-ref", "--verify", "refs/heads/topic"]);
     }
@@ -1512,15 +1537,13 @@ mod tests {
                 dir.path(),
             )
             .unwrap();
-        let c = candidate(path, &[], &[], dir.path(), &settings, 0, None)
-            .unwrap()
-            .unwrap();
+        let (c,now) = mature_candidate(path,dir.path(),&settings);
         let previous =
             std::collections::HashMap::from([(path.to_owned(), "previous/main".to_owned())]);
         let map = dir.path().join(".hangar/worktrees-removidas.json");
         worktree_settings::write_json(&map, &previous).unwrap();
         assert!(
-            remove_candidate_with_guard(&c, &[], &[], dir.path(), 0, None, &|_| Err(error(
+            remove_candidate_with_guard(&c, &[], &[], dir.path(), now, None, &|_| Err(error(
                 409,
                 "sessão recém-aberta"
             )))
@@ -1532,7 +1555,7 @@ mod tests {
             std::fs::write(wt.join("tracked"), "new version").unwrap();
             Ok(())
         };
-        assert!(remove_candidate_with_guard(&c, &[], &[], dir.path(), 0, None, &guard).is_err());
+        assert!(remove_candidate_with_guard(&c, &[], &[], dir.path(), now, None, &guard).is_err());
         assert_eq!(
             std::fs::read_to_string(wt.join("tracked")).unwrap(),
             "new version"
@@ -1607,11 +1630,9 @@ mod tests {
             .unwrap();
         std::fs::write(wt.join("local"), "preserve").unwrap();
         std::fs::write(wt.join(".env"), "preserve ignored").unwrap();
-        let c = candidate(path, &[], &[], dir.path(), &settings, 0, None)
-            .unwrap()
-            .unwrap();
+        let (c,now) = mature_candidate(path,dir.path(),&settings);
         assert!(
-            remove_candidate_with_guard(&c, &[], &[], dir.path(), 0, None, &|_| Err(error(
+            remove_candidate_with_guard(&c, &[], &[], dir.path(), now, None, &|_| Err(error(
                 409,
                 "sessão abriu"
             )))
@@ -1645,7 +1666,7 @@ mod tests {
             Ok(())
         };
         assert!(
-            remove_candidate_with_guard(&c, &[], &[], dir.path(), 0, None, &changed_base).is_err()
+            remove_candidate_with_guard(&c, &[], &[], dir.path(), now, None, &changed_base).is_err()
         );
         assert!(wt.join("local").exists());
         assert!(wt.join(".env").exists());
@@ -1655,7 +1676,7 @@ mod tests {
             "invalid map",
         )
         .unwrap();
-        assert!(remove_candidate(&c, &[], &[], dir.path(), 0, None).is_err());
+        assert!(remove_candidate(&c, &[], &[], dir.path(), now, None).is_err());
         assert!(wt.join("local").exists());
         assert!(wt.join(".env").exists());
     }

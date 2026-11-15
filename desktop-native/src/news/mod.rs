@@ -26,6 +26,7 @@ mod tour;
 mod updates_manual;
 mod worktree_fresh;
 mod reviews;
+mod tickets;
 
 use std::{cell::Cell, time::{Duration, Instant}};
 use gpui_kit::*;
@@ -77,6 +78,7 @@ pub fn animation(name: &str) -> Option<NewsAnimation> {
         "compactar-parada" => Some(compact_idle::render),
         "plugins-do-claude" => Some(plugins::render),
         "revisoes-pr-mr" => Some(reviews::render),
+        "tickets-board" => Some(tickets::render),
         "scheduled-tasks" => Some(scheduled_tasks::render),
         "atualizacoes-e-manual" => Some(updates_manual::render),
         "estilo-claude-desktop" => Some(desktop_tool_look::render),

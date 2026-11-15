@@ -106,6 +106,12 @@ impl Hangar {
             .selected(self.reviews.view.is_some()).disabled(!online)
             .accessibility_label(tr("review_title")).tooltip(tr("review_title"))
             .on_click(cx.listener(|this, _, window, cx| this.toggle_reviews(window, cx)));
+        let mission = Button::new("topbar-mission").custom(ButtonCustomVariant::new(cx).color(transparent_black()).foreground(theme::muted())
+                .hover(theme::hover()).active(theme::hover()))
+            .icon(chrome::small_icon(IconName::LayoutDashboard, 16., theme::muted())).size(px(28.)).rounded(px(6.))
+            .selected(self.mission.open).disabled(!online)
+            .accessibility_label(tr("mission_title")).tooltip_with_action(tr("mission_title"), &OpenMission, None)
+            .on_click(cx.listener(|this, _, window, cx| this.toggle_mission(window, cx)));
         // A conta da sessão em foco, como a pílula de cota do web: glifo, anel e "44% 5h · nome"; clique abre o cartão de contas.
         let proxy = self.has_proxy_session();
         let account = self.focused_account().or_else(|| proxy.then(|| ("codex".into(), tr("create_proxy_choose_account"), None)))
@@ -191,6 +197,7 @@ impl Hangar {
                     .child(control(Button::new("topbar-orq-history").ghost().icon(IconName::Clock).size(px(28.)).disabled(!online)
                         .tooltip(tr_shared("orq_history_title", &[])).accessibility_label(tr_shared("orq_history_title", &[]))
                         .on_click(cx.listener(|this, _, window, cx| this.open_orq_history(window, cx)))))
+                    .child(control(mission))
                     .child(control(worktrees))
                     .child(popup::anchor(control(reviews), crate::tour::anchors::TOPBAR_REVIEWS))
                     .child(control(pill))

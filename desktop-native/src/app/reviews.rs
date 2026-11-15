@@ -38,8 +38,8 @@ pub(crate) struct Summary {
 
 impl Summary {
     fn key(&self) -> String { format!("{}/{}#{}", self.host, self.repo, self.number) }
-    fn gitlab(&self) -> bool { self.provider == "gitlab" }
-    fn number_label(&self) -> String { format!("{}{}", if self.gitlab() { "!" } else { "#" }, self.number) }
+    pub(super) fn gitlab(&self) -> bool { self.provider == "gitlab" }
+    pub(super) fn number_label(&self) -> String { format!("{}{}", if self.gitlab() { "!" } else { "#" }, self.number) }
     /// Pede a atenção da pessoa: pediram a revisão dela, ou é dela e tem pipeline falho, conflito ou thread aberta.
     fn needs_attention(&self) -> bool {
         self.state == "open" && (self.review_requested && !self.mine || self.pipeline.as_deref() == Some("failed")
@@ -107,7 +107,7 @@ pub(super) struct Detail {
 /// A revisão da branch de uma pasta: o estado da busca e, quando há, o detalhe.
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
-pub(super) struct BranchReview { state: String, host: String, branch: String, cli: Option<String>, summary: Option<Summary>, review: Option<Detail> }
+pub(super) struct BranchReview { pub(super) state: String, host: String, pub(super) branch: String, pub(super) cli: Option<String>, pub(super) summary: Option<Summary>, review: Option<Detail> }
 
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
@@ -124,7 +124,7 @@ fn blocker_text(code: &str) -> String {
     if text == key { tr("review_block_blocked") } else { text }
 }
 
-fn pipeline_label(status: Option<&str>) -> String {
+pub(super) fn pipeline_label(status: Option<&str>) -> String {
     tr(match status {
         Some("success") => "review_pipeline_success",
         Some("failed") => "review_pipeline_failed",
@@ -136,7 +136,7 @@ fn pipeline_label(status: Option<&str>) -> String {
     })
 }
 
-fn status_color(status: Option<&str>) -> Hsla {
+pub(super) fn status_color(status: Option<&str>) -> Hsla {
     match status {
         Some("success") => theme::success(),
         Some("failed") => theme::danger(),
@@ -146,7 +146,7 @@ fn status_color(status: Option<&str>) -> Hsla {
 }
 
 /// Pílula de estado: ponto e texto na cor dele, contorno discreto.
-fn pill(text: String, color: Hsla, dot: bool) -> Div {
+pub(super) fn pill(text: String, color: Hsla, dot: bool) -> Div {
     div().flex_shrink_0().h(px(20.)).px(px(8.)).flex().items_center().gap(px(5.)).rounded_full().border_1().border_color(color.opacity(0.4))
         .text_size(px(11.5)).text_color(color).whitespace_nowrap()
         .when(dot, |el| el.child(div().size(px(6.)).rounded_full().bg(color)))
@@ -290,6 +290,59 @@ pub(super) type SendFn = Rc<dyn Fn(SendThreads, &mut Window, &mut App)>;
 #[derive(Clone)]
 pub(super) enum Target { Branch(String), Item { host: String, repo: String, number: u64 } }
 
+/// Mantém o grupo canônico, a máquina da pasta e a sessão aberta primeiro; a mesma pasta só precisa de uma revisão.
+fn review_repositories(origin: &super::sidebar::Target, rows: &[super::grouping::Row<'_>], ids: &HashMap<String, String>) -> Vec<(super::sidebar::Target, String)> {
+    use super::grouping::{Member, global_groups};
+    use super::sidebar::Target;
+    let members = global_groups(rows, ids).into_iter().find(|group| group.members.iter().any(|member| {
+        matches!(member, Member::Here { server, name } if server == &origin.server && name == &origin.name)
+    })).map(|group| group.members).unwrap_or_default();
+    let mut repositories = Vec::new();
+    for row in rows.iter().filter(|row| row.server == origin.server && row.session.name == origin.name)
+        .chain(rows.iter().filter(|row| members.iter().any(|member| {
+            matches!(member, Member::Here { server, name } if server == row.server && name == &row.session.name)
+        }))) {
+        let Some(dir) = row.session.git_dir().filter(|dir| !dir.is_empty()) else { continue };
+        if !repositories.iter().any(|(target, path): &(Target, String)| target.server == row.server && path == dir) {
+            repositories.push((Target::new(row.server, &row.session.name), dir.to_owned()));
+        }
+    }
+    repositories
+}
+
+/// Cada repositório conserva seu detalhe e seus rascunhos; só o escolhido faz a primeira leitura.
+pub(super) struct BranchReviews {
+    branches: Vec<(String, Entity<ReviewView>)>,
+    selected: usize,
+    origin: Option<usize>,
+}
+
+impl BranchReviews {
+    pub(super) fn show(&mut self, cx: &mut Context<Self>) {
+        if let Some((_, view)) = self.branches.get(self.selected) { view.update(cx, |view, cx| view.show(cx)); }
+    }
+
+    pub(super) fn branch_changed(&mut self, cx: &mut Context<Self>) {
+        // O seletor de branch do Git altera apenas a pasta da sessão que abriu o diálogo.
+        if let Some((_, view)) = self.origin.and_then(|index| self.branches.get(index)) { view.update(cx, |view, cx| view.branch_changed(cx)); }
+    }
+}
+
+impl Render for BranchReviews {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        div().size_full().flex().flex_col().gap_3()
+            .when(self.branches.len() > 1, |el| el.child(div().flex_shrink_0().flex().flex_col().gap_1()
+                .child(div().text_xs().text_color(theme::muted()).child(tr("review_group_repositories")))
+                .child(div().id("review-repositories").max_h(px(96.)).overflow_y_scroll().flex().flex_wrap().gap_1()
+                    .children(self.branches.iter().enumerate().map(|(index, (label, _))| {
+                        Button::new(SharedString::from(format!("review-repository-{index}"))).outline().small()
+                            .label(label.clone()).toggled(self.selected == index)
+                            .on_click(cx.listener(move |this, _, _, cx| { this.selected = index; this.show(cx); cx.notify(); }))
+                    })))))
+            .child(div().flex_1().min_h_0().child(self.branches[self.selected].1.clone()))
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 enum Sub { #[default] Threads, Files, Activity }
 
@@ -331,7 +384,7 @@ fn prepared(mut data: BranchReview) -> Rc<BranchReview> {
 }
 
 /// A revisão da branch de uma pasta; `summary` pede só o resumo (o chip), sem o detalhe.
-fn fetch_branch(runtime: &Runtime, api: Api, dir: String, summary: bool) -> tokio::task::JoinHandle<Result<BranchReview, Failure>> {
+pub(super) fn fetch_branch(runtime: &Runtime, api: Api, dir: String, summary: bool) -> tokio::task::JoinHandle<Result<BranchReview, Failure>> {
     runtime.spawn(async move {
         let query: &[(&str, &str)] = if summary { &[("path", &dir), ("summary", "1")] } else { &[("path", &dir)] };
         api.server_read(&["reviews", "branch"], query, 60).await
@@ -744,7 +797,7 @@ impl Render for ReviewView {
 struct MachineReviews { label: String, listing: Option<Listing>, loading: bool, error: Option<String> }
 
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
-enum Filter { #[default] All, Attention, Mine, Requested }
+enum Filter { #[default] All, Attention, Requested }
 
 #[derive(Default)]
 pub(super) struct Reviews {
@@ -771,6 +824,7 @@ impl Hangar {
         self.close_settings(window, cx);
         self.close_costs(window, cx);
         self.close_worktrees(window, cx);
+        self.close_mission(window, cx);
         self.close_popups();
         self.command_panel = false;
         self.reviews.view = Some(());
@@ -875,11 +929,25 @@ impl Hangar {
     }
 
     fn open_review_item(&mut self, item: &Summary, cx: &mut Context<Self>) {
+        let weak = cx.entity().downgrade();
+        let back: Rc<dyn Fn(&mut Window, &mut App)> = Rc::new(move |_, cx| { let _ = weak.update(cx, |this, cx| { this.reviews.open = None; cx.notify(); }); });
+        self.open_review_item_with(item, back, cx);
+    }
+
+    /// A revisão do ticket aberta pelo Mission Control: a página de Revisões com ela, e o voltar devolve ao painel.
+    pub(super) fn open_review_from_mission(&mut self, item: &Summary, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_reviews(window, cx);
+        let weak = cx.entity().downgrade();
+        let back: Rc<dyn Fn(&mut Window, &mut App)> = Rc::new(move |window, cx| {
+            let _ = weak.update(cx, |this, cx| { this.reviews.open = None; this.open_mission(window, cx); });
+        });
+        self.open_review_item_with(item, back, cx);
+    }
+
+    fn open_review_item_with(&mut self, item: &Summary, back: Rc<dyn Fn(&mut Window, &mut App)>, cx: &mut Context<Self>) {
         let Some(api) = self.worktree_sources().into_iter().find(|(k, _, _)| k == &item.server).map(|(_, _, api)| api) else { return };
         let target = Target::Item { host: item.host.clone(), repo: item.repo.clone(), number: item.number };
         let send = self.review_send_fn(cx);
-        let weak = cx.entity().downgrade();
-        let back: Rc<dyn Fn(&mut Window, &mut App)> = Rc::new(move |_, cx| { let _ = weak.update(cx, |this, cx| { this.reviews.open = None; cx.notify(); }); });
         let changed = self.review_changed_fn(None, cx);
         let view = cx.new(|_| ReviewView::new(api, item.server.clone(), self.runtime.clone(), target, send, changed).with_back(back));
         view.update(cx, |view, cx| view.load(cx));
@@ -909,13 +977,31 @@ impl Hangar {
     }
 
     /// A vista da revisão da branch de uma sessão, para a aba do git.
-    pub(super) fn branch_review_view(&mut self, cx: &mut Context<Self>) -> Option<Entity<ReviewView>> {
-        let (api, session) = (self.session_api()?, self.selected.clone()?);
-        let dir = session.git_dir()?.to_owned();
-        let server = super::servers::norm(&api.identity());
+    pub(super) fn branch_review_view(&mut self, cx: &mut Context<Self>) -> Option<Entity<BranchReviews>> {
+        let origin = self.selected_target()?;
+        let session = self.selected.as_ref()?;
+        let machines = self.group_machines();
+        let mut rows = vec![super::grouping::Row { server: &origin.server, session, invite: self.invite_target(&origin) }];
+        for server in &machines {
+            for session in self.sessions_of(server) {
+                if server != &origin.server || session.name != origin.name {
+                    rows.push(super::grouping::Row { server, session, invite: false });
+                }
+            }
+        }
+        let repositories = review_repositories(&origin, &rows, &self.identities());
         let send = self.review_send_fn(cx);
-        let changed = self.review_changed_fn(Some((server.clone(), dir.clone())), cx);
-        Some(cx.new(|_| ReviewView::new(api, server, self.runtime.clone(), Target::Branch(dir), send, changed)))
+        let mut branches = Vec::new();
+        let mut origin_index = None;
+        for (target, dir) in repositories {
+            let Some(api) = self.machine_api(&target.server) else { continue };
+            if target == origin { origin_index = Some(branches.len()); }
+            let label = if target.server == origin.server { target.name.clone() } else { format!("{} · {}", target.name, self.machine_label(&target.server, cx)) };
+            let changed = self.review_changed_fn(Some((target.server.clone(), dir.clone())), cx);
+            let view = cx.new(|_| ReviewView::new(api, target.server, self.runtime.clone(), Target::Branch(dir), send.clone(), changed));
+            branches.push((label, view));
+        }
+        if branches.is_empty() { None } else { Some(cx.new(|_| BranchReviews { branches, selected: 0, origin: origin_index })) }
     }
 
     /// A branch da pasta trocou: o chip dela é pedido de novo no próximo desenho, sem mostrar o da anterior.
@@ -964,6 +1050,8 @@ impl Hangar {
             .aria_label(tr("review_search")).prefix(chrome::small_icon(IconName::Search, 13., theme::faint())).into_any_element());
         let header = self.costs_header(tr("review_title"), |this, window, cx| this.close_reviews(window, cx),
             search.into_iter().chain([
+                chrome::icon_button("reviews-access", IconName::Settings, tr("review_hosts_title"), cx)
+                    .on_click(cx.listener(|this, _, window, cx| this.open_review_hosts(window, cx))).into_any_element(),
                 Button::new("reviews-refresh").outline().small().label(tr("review_refresh")).loading(loading).disabled(loading)
                     .on_click(cx.listener(|this, _, _, cx| { this.reviews.chips.clear(); this.load_reviews(cx); })).into_any_element(),
             ]).collect(), cx);
@@ -981,7 +1069,7 @@ impl Hangar {
 
     fn render_review_list(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let machines = &self.reviews.machines;
-        if machines.is_empty() || machines.values().all(|m| m.loading && m.listing.is_none()) {
+        if machines.is_empty() || machines.values().all(|m| m.listing.is_none()) && machines.values().any(|m| m.loading) {
             return loading_state().into_any_element();
         }
         let query = self.reviews.search.as_ref().map(|i| i.read(cx).value().trim().to_lowercase()).unwrap_or_default();
@@ -992,12 +1080,12 @@ impl Hangar {
         let filter = self.reviews.filter;
         let items: Vec<Summary> = all.into_iter()
             .filter(|r| self.reviews.host_filter.as_ref().is_none_or(|h| &r.host == h))
-            .filter(|r| match filter { Filter::All => true, Filter::Attention => r.needs_attention(), Filter::Mine => r.mine, Filter::Requested => r.review_requested })
+            .filter(|r| match filter { Filter::All => true, Filter::Attention => r.needs_attention(), Filter::Requested => r.review_requested })
             .filter(|r| query.is_empty() || format!("{} {} {} {}", r.title, r.repo, r.number_label(), r.source).to_lowercase().contains(&query))
             .collect();
         let chip = |id: String, label: String, on: bool| Button::new(SharedString::from(id)).small().map(|b| if on { b } else { b.ghost() }).selected(on).label(label);
         let filters = div().flex().items_center().gap(px(6.)).flex_wrap()
-            .children([(Filter::All, tr("review_filter_all")), (Filter::Attention, tr("review_filter_attention")), (Filter::Mine, tr("review_filter_mine")),
+            .children([(Filter::All, tr("review_filter_all")), (Filter::Attention, tr("review_filter_attention")),
                 (Filter::Requested, tr("review_filter_requested"))].into_iter().map(|(f, label)| chip(format!("reviews-filter-{label}"), label, filter == f)
                 .on_click(cx.listener(move |this, _, _, cx| { this.reviews.filter = f; cx.notify(); }))))
             .when(hosts.len() > 1 || host_filter.is_some(), |el| el.child(div().w(px(1.)).h(px(18.)).mx_1().bg(theme::border()))
@@ -1010,10 +1098,9 @@ impl Hangar {
                         }))
                 })));
         let mut list = div().flex().flex_col().gap(px(2.));
-        let errors: Vec<(String, String)> = machines.values().filter_map(|m| m.error.clone().map(|e| (m.label.clone(), e))).collect();
-        let host_errors: Vec<HostRow> = machines.values().flat_map(|m| m.listing.iter().flat_map(|l| l.hosts.iter().filter(|h| h.state == "error").cloned())).collect();
         if items.is_empty() {
-            list = list.child(empty_state(if query.is_empty() && filter == Filter::All && host_filter.is_none() { tr("review_list_empty") } else { tr("review_list_filtered") }));
+            list = list.child(empty_state(if machines.values().all(|m| m.listing.is_none()) { tr("review_list_unavailable") }
+                else if query.is_empty() && filter == Filter::All && host_filter.is_none() { tr("review_list_empty") } else { tr("review_list_filtered") }));
         } else {
             let (attention, rest): (Vec<_>, Vec<_>) = items.into_iter().partition(Summary::needs_attention);
             for (title, group) in [(tr("review_group_attention"), attention), (tr("review_group_other"), rest)] {
@@ -1024,11 +1111,7 @@ impl Hangar {
         }
         div().flex().flex_col().gap(px(10.))
             .child(filters)
-            .children(errors.into_iter().map(|(label, e): (String, String)| super::costs::note_box(tr("review_machine_error").replace("{maquina}", &label).replace("{erro}", &e), theme::warning())))
-            .children(host_errors.into_iter().map(|h| super::costs::note_box(tr("review_host_error").replace("{host}", &h.host)
-                .replace("{erro}", h.error.as_deref().unwrap_or("")), theme::warning())))
             .child(list)
-            .child(self.render_review_hosts())
             .into_any_element()
     }
 
@@ -1042,26 +1125,42 @@ impl Hangar {
             .into_any_element()
     }
 
-    /// Os hosts que a máquina achou nos repositórios e quem atende cada um: é o que substitui uma configuração.
+    fn open_review_hosts(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let hangar = cx.entity().downgrade();
+        window.open_dialog(cx, move |dialog, _, cx| {
+            let content = hangar.upgrade().map(|h| h.read(cx).render_review_hosts());
+            popup::dialog(dialog).w(px(720.)).title(tr("review_hosts_title")).children(content)
+        });
+    }
+
+    /// O acesso fica fora da lista de revisões; o diálogo lê a mesma resposta já carregada.
     fn render_review_hosts(&self) -> AnyElement {
-        let rows: Vec<HostRow> = self.reviews.machines.values().flat_map(|m| m.listing.iter().flat_map(|l| l.hosts.clone())).collect();
-        if rows.is_empty() { return div().into_any_element(); }
-        div().mt(px(16.)).pt(px(12.)).border_t_1().border_color(theme::border()).flex().flex_col().gap(px(6.))
-            .child(div().text_size(px(12.)).font_weight(FontWeight::SEMIBOLD).text_color(theme::muted()).child(tr("review_hosts_title")))
-            .children(rows.into_iter().map(|h| {
-                let (text, color) = match h.state.as_str() {
-                    "ok" => (format!("{} · {}", h.cli.clone().unwrap_or_default(), h.user.clone().unwrap_or_default()), theme::success()),
-                    "no_login" => (tr("review_host_no_login").replace("{comando}", &format!("{} auth login --hostname {}", h.cli.clone().unwrap_or_default(), h.host)), theme::warning()),
-                    "cli_missing" => (tr("review_host_cli_missing").replace("{cli}", &h.cli.clone().unwrap_or_default()), theme::warning()),
-                    "error" => (tr("review_host_failed"), theme::danger()),
-                    _ => (tr("review_host_unknown"), theme::faint()),
-                };
-                div().flex().items_center().gap(px(10.)).text_size(px(12.))
-                    .child(div().w(px(220.)).flex_shrink_0().truncate().font_family(theme::MONO).text_color(theme::text()).child(h.host.clone()))
-                    .child(div().w(px(110.)).flex_shrink_0().text_color(theme::faint()).child(if h.repos == 1 { tr("review_host_repo") } else { tr("review_host_repos").replace("{n}", &h.repos.to_string()) }))
-                    .child(div().flex_1().min_w_0().whitespace_normal().text_color(color).child(text))
+        div().id("review-hosts").max_h(px(420.)).overflow_y_scroll().flex().flex_col().gap(px(20.))
+            .child(div().text_size(px(12.5)).text_color(theme::muted()).whitespace_normal().child(tr("review_hosts_hint")))
+            .children(self.reviews.machines.values().map(|machine| {
+                let rows = machine.listing.as_ref().map(|l| l.hosts.as_slice()).unwrap_or_default();
+                div().flex().flex_col().gap(px(8.))
+                    .child(div().text_size(px(13.)).font_weight(FontWeight::SEMIBOLD).child(machine.label.clone()))
+                    .when_some(machine.error.clone(), |el, e| el.child(div().text_size(px(12.5)).text_color(theme::muted()).whitespace_normal()
+                        .child(tr("review_machine_error").replace("{maquina}", &machine.label).replace("{erro}", &e))))
+                    .when(machine.loading, |el| el.child(loading_state()))
+                    .when(!machine.loading && machine.error.is_none() && rows.is_empty(), |el| el.child(empty_state(tr("review_hosts_empty"))))
+                    .children(rows.iter().map(|h| {
+                        let (text, color) = match h.state.as_str() {
+                            "ok" => (format!("{} · {}", h.cli.clone().unwrap_or_default(), h.user.clone().unwrap_or_default()), theme::success()),
+                            "no_login" => (tr("review_host_no_login").replace("{comando}", &format!("{} auth login --hostname {}", h.cli.clone().unwrap_or_default(), h.host)), theme::warning()),
+                            "cli_missing" => (tr("review_host_cli_missing").replace("{cli}", &h.cli.clone().unwrap_or_default()), theme::warning()),
+                            "error" => (tr("review_host_failed"), theme::danger()),
+                            _ => (tr("review_host_unknown"), theme::faint()),
+                        };
+                        div().flex().flex_col().gap(px(3.)).text_size(px(12.))
+                            .child(div().flex().items_center().gap(px(10.))
+                                .child(div().flex_1().min_w_0().truncate().text_color(theme::text()).child(h.host.clone()))
+                                .child(div().flex_shrink_0().text_color(theme::faint()).child(if h.repos == 1 { tr("review_host_repo") } else { tr("review_host_repos").replace("{n}", &h.repos.to_string()) })))
+                            .child(div().whitespace_normal().text_color(color).child(text))
+                            .when_some(h.error.clone(), |el, error| el.child(div().text_color(theme::muted()).whitespace_normal().child(error)))
+                    }))
             }))
-            .child(div().text_size(px(11.5)).text_color(theme::faint()).whitespace_normal().child(tr("review_hosts_hint")))
             .into_any_element()
     }
 }
@@ -1069,6 +1168,33 @@ impl Hangar {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn conversation_repositories_follow_the_group_across_machines() {
+        use super::super::grouping::Row;
+        use super::super::sidebar::Target;
+        let session = |name: &str, dir: &str, gid: &str, owner: &str| SessionInfo {
+            name: name.into(), cwd: Some("/checkout".into()), git_cwd: Some(dir.into()),
+            pair_gid: Some(gid.into()), pair_owner: Some(owner.into()), ..Default::default()
+        };
+        let coordinator = session("coordinator", "/workspace/server", "work", "one");
+        let duplicate = session("server", "/workspace/server", "work", "one");
+        let client = session("client", "/workspace/client", "work", "one");
+        let remote = session("client", "/workspace/client", "work", "one");
+        let unrelated = session("unrelated", "/workspace/other", "work", "two");
+        let rows = [Row { server: "a", session: &coordinator, invite: false }, Row { server: "a", session: &duplicate, invite: false },
+            Row { server: "a", session: &client, invite: false }, Row { server: "b", session: &remote, invite: false },
+            Row { server: "b", session: &unrelated, invite: false }];
+        let ids = HashMap::from([("a".into(), "one".into()), ("b".into(), "two".into())]);
+        assert_eq!(review_repositories(&Target::new("a", "coordinator"), &rows, &ids), vec![
+            (Target::new("a", "coordinator"), "/workspace/server".into()),
+            (Target::new("a", "client"), "/workspace/client".into()),
+            (Target::new("b", "client"), "/workspace/client".into()),
+        ]);
+        let standalone = session("solo", "/workspace/solo", "", "");
+        assert_eq!(review_repositories(&Target::new("a", "solo"), &[Row { server: "a", session: &standalone, invite: false }], &ids),
+            vec![(Target::new("a", "solo"), "/workspace/solo".into())]);
+    }
     // O glob traz o `test` da gpui, que colide com o atributo padrão; o nome explícito vence o glob.
     use core::prelude::v1::test;
 

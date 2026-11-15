@@ -149,6 +149,13 @@ pub struct AppState {
     pub vault_requests: Arc<crate::vault::requests::Requests>,
     /// Cadeado das mudanças em plugins do Claude e o último `check` bem-sucedido.
     pub claude_plugins: Arc<crate::plugins::Service>,
+    /// Host dos conectores (`hangar-connectors`): catálogo em `~/.hangar/connectors.json`, processos sob demanda.
+    pub connectors: Arc<hangar_connectors::Host>,
+    /// Mission Control (`hangar-mission`): etapas, vínculos e evidências em `~/.hangar/mission/`.
+    pub mission: Arc<hangar_mission::Store>,
+    /// Avisos do Mission Control à sessão, pelo handler da rota de entrada; o estado entra quando o roteador nasce.
+    pub mission_notify: Arc<crate::mission_notify::SessionNotify>,
+    pub ticket_actions: std::sync::OnceLock<Arc<hangar_ticket_actions::Engine>>,
 }
 
 impl AppState {
@@ -224,6 +231,7 @@ impl AppState {
                       list_env: crate::list::bridge::ListEnv) -> AppState {
         crate::transcript::set_orq_parser(crate::orchestration::timeline::parse_obj);
         let http = proxy::client();
+        let mission_notify = Arc::new(crate::mission_notify::SessionNotify { state: Default::default() });
         let mods = crate::mods::state::Mods::default();
         let interactions = Arc::new(crate::interactions::InteractionStore::default());
         let plugin = Arc::new(crate::plugin::Store::new(interactions.clone()));
@@ -248,6 +256,8 @@ impl AppState {
         side.monitors = Some(crate::state::live::spawner(state.clone()));
         // O mesmo `~` do app nativo e do Python (USERPROFILE no Windows), que gravam `~/.hangar/nav`.
         let hangar_dir = std::env::home_dir().unwrap_or_default().join(".hangar");
+        let connector_registry=hangar_connectors::registry::Registry::new(hangar_dir.join("connectors.json"));
+        let connectors = hangar_connectors::Host::new(connector_registry, Default::default());
         let connect_devices = Arc::new(crate::connect::devices::Store::new(hangar_dir.join("connect"), None));
         let connect_supervisor = Arc::new(crate::connect::supervisor::Supervisor::new(hangar_dir.join("connect"),
             crate::runtime::local_policy::log_base().unwrap_or_else(|| hangar_dir.join("logs")), connect_devices.clone(), cfg.listen.port()));
@@ -262,11 +272,12 @@ impl AppState {
                 Arc::new(crate::device_install::UsbLink::new(&hangar_dir)), Arc::new(crate::device_install::apple::IsideloadSigner), &hangar_dir)
                 .with_config(Arc::new(move || crate::runtime::codex_launch::runtime_config(&env))))
         };
+        let mission=Arc::new(hangar_mission::Store::new(hangar_dir.join("mission")));
         let groups = crate::groups::from_env(list.env().dirs.as_ref(), server_id.clone(),
             Arc::new(crate::groups::orq::PythonOrq::new(cfg.upstream, cfg.internal_secret.clone(), http.clone())
                 .with_paths(list.env().dirs.as_ref().map(|d| d.home.clone()).unwrap_or_default(),
                     list.env().dirs.as_ref().map(|d| d.claude.join(".hangar-pair")).unwrap_or_default())
-                .with_mux(list.env().capture_program.to_string_lossy().into_owned())), list.clone(), diag.clone());
+                .with_mux(list.env().capture_program.to_string_lossy().into_owned())), list.clone(), diag.clone(), mission.clone());
         let vault_requests = Arc::new(crate::vault::requests::Requests::default());
         let accounts = crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::capture());
         let search = crate::search::Index::server(accounts.clone());
@@ -299,6 +310,10 @@ impl AppState {
             hub: Arc::new(crate::list::hub::ListHub::with_vault(vault_requests.feed())),
             vault_requests,
             claude_plugins: Arc::default(),
+            connectors,
+            mission,
+            mission_notify,
+            ticket_actions: Default::default(),
             hangar_dir, device_install,
             upload_naming: Default::default(),
             origins: std::sync::Mutex::new(indexmap::IndexMap::new()),
@@ -797,6 +812,7 @@ pub fn router(state: Arc<AppState>) -> Router {
 
 fn router_with(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router {
     let api = public_routes(state.clone(), pair);
+    let _ = state.mission_notify.state.set(Arc::downgrade(&state));
     // O MCP chama as tools pelas mesmas rotas que o `hangar-send` chama: o roteador público inteiro.
     api.clone().merge(crate::mcp::router(state.clone(), api))
         .layer(axum::middleware::from_fn_with_state(state.clone(), crate::login_guests::gate::guard))
@@ -939,6 +955,12 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .merge(hangar_desktop_theme::router(state.edge(), state.desktop_theme.clone()))
         // Exportar, importar e verificar atalhos: só o dono, nunca repassados (o Python não tem as rotas).
         .merge(hangar_shortcut_transfer::router(state.edge(), state.shortcut_host()))
+        // Conectores: só o dono, nunca repassados (o Python não tem as rotas).
+        .merge(hangar_connectors::http::router(state.edge(), state.connectors.clone()))
+        .merge(hangar_mission::http::router(state.edge(), state.mission.clone(), state.mission_notify.clone()))
+        .merge(hangar_ticket_actions::http::router(state.edge(),
+            state.ticket_actions.get_or_init(|| hangar_ticket_actions::Engine::new(hangar_ticket_actions::Ledger::new(state.hangar_dir.join("ticket-actions")),
+                state.mission.clone(),state.connectors.clone(),state.mission_notify.clone())).clone()))
         .route("/api/claude/customizations", get(crate::claude_customizations::catalog_route).fallback(pass_registered))
         // Senha do chaveiro: só o dono, nunca repassada; só o preflight do CORS vai ao Python.
         .route("/api/keyring/unlock", axum::routing::post(crate::keyring::unlock_route).options(pass_any))

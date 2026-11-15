@@ -69,7 +69,7 @@ fn mux_down() -> Refusal { no(StatusCode::SERVICE_UNAVAILABLE, "erro_mux_indispo
 struct Ctx { st: Arc<AppState>, runtime: Arc<RuntimeRegistry>, home: PathBuf, claude: PathBuf, mux: MuxProcess }
 
 /// O que já mudou, na ordem: o desfazer percorre ao contrário.
-enum Done { Group, Mux, Sidecar(PathBuf), File(PathBuf, PathBuf), LoopFile(PathBuf, PathBuf), LoopBackup(PathBuf, PathBuf), ParkedQueue(String), Guest, Spec, Transfer, Share, Pairs, Shortcuts(Vec<String>), HiddenShell }
+enum Done { Group, Mux, Sidecar(PathBuf), File(PathBuf, PathBuf), LoopFile(PathBuf, PathBuf), LoopBackup(PathBuf, PathBuf), ParkedQueue(String), Guest, Spec, Mission, Transfer, Share, Pairs, Shortcuts(Vec<String>), HiddenShell }
 
 #[derive(PartialEq)]
 enum Kind { ClaudeHeadless, CodexHeadless, Terminal }
@@ -206,6 +206,8 @@ impl Ctx {
         if blocking(move || files::move_guest(&claude, &o, &n)).await.map_err(|e| ("guest", io_code(&e)))? { done.push(Done::Guest); }
         let (home, o, n) = (self.home.clone(), old.to_owned(), new.to_owned());
         if blocking(move || files::move_spec(&home, &o, &n)).await.map_err(|e| ("spec", io_code(&e)))? { done.push(Done::Spec); }
+        let (mission,o,n)=(self.st.mission.clone(),old.to_owned(),new.to_owned());
+        if blocking(move||mission.rename_session(&o,&n)).await.map_err(|e|("mission",e.code.to_owned()))? {done.push(Done::Mission);}
         let (meta, life) = self.identity(new).await;
         let (home, o, n) = (self.home.clone(), old.to_owned(), new.to_owned());
         if blocking(move || files::move_transfer(&home, &o, &n, life.as_deref(), meta.as_ref())).await.map_err(|e| ("transfer", io_code(&e)))? { done.push(Done::Transfer); }
@@ -388,6 +390,10 @@ impl Ctx {
                     let (meta, life) = self.identity(old).await;
                     let (h, o, n) = (self.home.clone(), old.to_owned(), new.to_owned());
                     ("transfer", matches!(blocking(move || files::move_transfer(&h, &n, &o, life.as_deref(), meta.as_ref())).await, Ok(true)))
+                },
+                Done::Mission => {
+                    let (mission,o,n)=(self.st.mission.clone(),old.to_owned(),new.to_owned());
+                    ("mission",blocking(move||mission.rename_session(&n,&o)).await.is_ok())
                 },
                 Done::Share => ("share", self.st.share.as_ref().is_none_or(|s| s.store.rename(new, old).is_ok())),
                 Done::Pairs => ("share_pairs", self.st.share.as_ref().is_none_or(|s| s.pairs.rename_local(new, old).is_ok())),
