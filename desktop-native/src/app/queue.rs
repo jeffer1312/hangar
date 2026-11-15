@@ -480,7 +480,8 @@ impl Hangar {
                 .when(dragging && self.queue.dragged.as_deref() == Some(id.as_str()), |el| el.opacity(0.5));
         }
         let full = super::quotes::summary(&text);
-        let arriving = self.send_arrives_at_queue_text(&text);
+        // Só a última: a mensagem nova entra no fim da fila, e outra mais antiga de mesmo texto não é o destino.
+        let arriving = i + 1 == entries.len() && self.send_arrives_at_queue_text(&text);
         row = row.child(div().id(SharedString::from(format!("queue-text-{i}"))).flex_1().min_w_0().px(px(4.)).truncate()
             .text_size(px(12.5)).text_color(theme::text()).child(conversation::one_line(&full, 400))
             // A linha local e a que está sozinha na fila dizem onde estão: a mensagem enviada pousa na primeira, e sai da
