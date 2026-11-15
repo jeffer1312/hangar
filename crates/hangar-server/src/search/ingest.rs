@@ -105,7 +105,7 @@ pub(super) struct Found {
 
 struct Known {
     id: i64, size: i64, mtime_ns: i64, ino: i64, offset: i64, config_dir: Option<String>,
-    head_len: i64, head_hash: Option<String>, provider: String, cwd: Option<String>,
+    provider: String, cwd: Option<String>,
 }
 
 /// Bytes do começo do arquivo guardados como hash: `cp` por cima mantém o inode e não encolhe.
@@ -194,9 +194,10 @@ pub(super) fn discover(accounts: &[Account], agents: Option<&AccountEnvironment>
 pub(super) fn pass(conn: &mut Connection, accounts: &[Account], agents: Option<&AccountEnvironment>, index: &super::Index) -> Result<(), IndexError> {
     let report = |code, detail| index.report(code, detail);
     let pi_account = |provider: &str| agents.and_then(|env| crate::provider_accounts::pi_account(env, Some(provider))).unwrap_or_default();
-    let known: BTreeMap<String, Known> = conn.prepare("SELECT path, id, size, mtime_ns, ino, offset, config_dir, head_len, head_hash, provider, cwd FROM files")?
+    // Só colunas anteriores a `rewrite`: ler uma posterior faz o SQLite atravessar o filtro guardado de cada arquivo.
+    let known: BTreeMap<String, Known> = conn.prepare("SELECT path, id, size, mtime_ns, ino, offset, config_dir, provider, cwd FROM files")?
         .query_map([], |r| Ok((r.get(0)?, Known { id: r.get(1)?, size: r.get(2)?, mtime_ns: r.get(3)?, ino: r.get(4)?,
-            offset: r.get(5)?, config_dir: r.get(6)?, head_len: r.get(7)?, head_hash: r.get(8)?, provider: r.get(9)?, cwd: r.get(10)? })))?
+            offset: r.get(5)?, config_dir: r.get(6)?, provider: r.get(7)?, cwd: r.get(8)? })))?
         .collect::<Result<_, _>>()?;
     // Transcript de agente parado não é reaberto: o cwd e a fase da transferência ficam como o índice leu.
     let stored = |path: &Path| -> Option<Option<String>> {
@@ -418,8 +419,9 @@ fn ingest(tx: &Transaction, path: &str, found: &Found, ino: i64, old: Option<&Kn
         }
         Some(k) => {
             // Começo diferente com o mesmo inode e sem encolher: regravado do zero (`cp` por cima).
+            let (head_len, head): (i64, Option<String>) = tx.query_row("SELECT head_len, head_hash FROM files WHERE id=?", [k.id], |r| Ok((r.get(0)?, r.get(1)?)))?;
             let rewritten = k.ino != ino || stat.size < k.offset
-                || (k.head_len > 0 && Some(head_hash(&mut file, k.head_len)?) != k.head_hash);
+                || (head_len > 0 && Some(head_hash(&mut file, head_len)?) != head);
             if rewritten {
                 tx.execute("DELETE FROM msg WHERE file_id=?", [k.id])?;
                 tx.execute("UPDATE files SET offset=0, lines=0, cwd=NULL, preview='', head_done=0, internal=NULL, \

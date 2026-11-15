@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { parseStatusLine, getPiModels, getKimiModels, getCodexModels, setModelEffort, setPiModel, setKimiModel, setCodexModel } from '@hangar/core';
 import { chatStore } from '../../stores/chat';
 import { useServers } from '../../stores/servers';
@@ -10,13 +10,14 @@ interface Args {
   serverId: string;
   name: string;
   provider: string | null;
+  model: string | null;
   chosen: Chosen;
   onChosen: (next: Chosen) => void;
   // Fecha a folha quando a troca abre uma confirmação na conversa, que ela taparia.
   close: () => void;
 }
 
-export function useEffortControl({ serverId, name, provider, chosen, onChosen, close }: Args) {
+export function useEffortControl({ serverId, name, provider, model, chosen, onChosen, close }: Args) {
   const chat = chatStore(serverId, name);
   const server = useServers((s) => s.servers.find((x) => x.id === serverId) ?? null);
   const statusLine = chat.use((s) => s.statusLine);
@@ -34,14 +35,19 @@ export function useEffortControl({ serverId, name, provider, chosen, onChosen, c
   const [items, setItems] = useState<PillMenuItem[]>([]);
   // Modelo do Codex a que os níveis pertencem: o POST exige o modelo junto.
   const codexModel = useRef<string | null>(null);
+  const readSequence = useRef(0);
+  useEffect(() => () => { readSequence.current++; }, [name, server, provider]);
 
   const labels = pillLabels(statusFields, chosen);
+  const currentModel = labels.model ?? model;
   // Haiku não usa esforço (o picker responde "Effort not supported"): seção ausente, não inútil.
-  const hidden = isClaude && semEsforco(labels.model);
+  const hidden = isClaude && semEsforco(currentModel);
 
   const load = useCallback(async () => {
-    if (hidden) return;
-    if (!server) { setItems([]); setError(m.chat_servidor_removido()); return; }
+    const read = ++readSequence.current;
+    codexModel.current = null;
+    if (hidden) { setItems([]); setLoading(false); return; }
+    if (!server) { setItems([]); setError(m.chat_servidor_removido()); setLoading(false); return; }
     setLoading(true);
     setError(null);
     setNotice(null);
@@ -50,29 +56,32 @@ export function useEffortControl({ serverId, name, provider, chosen, onChosen, c
     try {
       if (isPi) {
         const res = await getPiModels(name, server);
+        if (read !== readSequence.current) return;
         setItems((res.levels ?? []).map(mark));
       } else if (isKimi) {
         const res = await getKimiModels(name, server);
-        const curName = (labels.model ?? '').toLowerCase();
+        if (read !== readSequence.current) return;
+        const curName = (currentModel ?? '').toLowerCase();
         const entry = res.models.find((mo) => mo.name.toLowerCase() === curName);
         setItems((entry?.efforts ?? []).map(mark));
       } else if (isCodex) {
         // Os níveis são do modelo ATUAL; sem modelo conhecido não há o que oferecer (cair no primeiro
         // do catálogo trocaria o modelo calado).
         const res = await getCodexModels(name, server);
+        if (read !== readSequence.current) return;
         codexModel.current = res.current.model ?? null;
         const line = res.models.find((mo) => mo.model === codexModel.current);
         const active = chosen.effort ?? res.current.effort ?? line?.defaultEffort ?? null;
         setItems((line?.efforts ?? []).map((e) => ({ label: e.value, hint: e.description ?? undefined, selected: e.value === active })));
       } else {
-        setItems(claudeEfforts(labels.model).map(mark));
+        setItems(claudeEfforts(currentModel).map(mark));
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      if (read === readSequence.current) setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setLoading(false);
+      if (read === readSequence.current) setLoading(false);
     }
-  }, [hidden, name, server, isPi, isKimi, isCodex, labels.effort, labels.model, chosen.effort]);
+  }, [hidden, name, server, isPi, isKimi, isCodex, labels.effort, currentModel, chosen.effort]);
 
   const select = useCallback(
     async (level: string) => {

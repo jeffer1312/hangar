@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act, createElement, type ReactNode } from 'react';
+import { act, createElement, forwardRef, useImperativeHandle, useState, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { StateEvent, SessionInfo } from '@hangar/core';
@@ -16,8 +16,19 @@ vi.mock('../stores/chat', () => ({ chatStore: () => ({ use: (select: (s: typeof 
 vi.mock('../stores/sessions', () => ({ useSessions: (select: (s: typeof state.sessions) => unknown) => select(state.sessions) }));
 vi.mock('expo-router', () => ({ useRouter: () => ({ push: vi.fn() }) }));
 vi.mock('../ui/Icon', () => ({ Icon: () => null }));
-vi.mock('../ui/Sheet', () => ({ Sheet: ({ open, children, onDismiss }: { open: boolean; children: ReactNode; onDismiss: () => void }) => open
-  ? createElement('section', { 'data-testid': 'usage-sheet' }, children, createElement('button', { onClick: onDismiss, 'aria-label': 'close-sheet' })) : null }));
+vi.mock('@lodev09/react-native-true-sheet', () => ({ TrueSheet: forwardRef(function NativeSheet({ children, onDidDismiss }: {
+  children: ReactNode; onDidDismiss?: () => void;
+}, ref) {
+  const [visible, setVisible] = useState(false);
+  useImperativeHandle(ref, () => ({ present: async () => { setVisible(true); }, dismiss: async () => { setVisible(false); } }));
+  return visible ? createElement('section', { 'data-testid': 'usage-sheet' }, children,
+    createElement('button', { 'aria-label': 'close-sheet', onClick: () => { setVisible(false); onDidDismiss?.(); } })) : null;
+}) }));
+vi.mock('react-native-mmkv', () => ({ createMMKV: () => ({ getString: () => undefined, set: () => {} }) }));
+vi.mock('expo-secure-store', () => ({ getItemAsync: async () => null, setItemAsync: async () => {} }));
+vi.mock('expo-blur', async () => ({ BlurView: (await import('react-native')).View }));
+vi.mock('expo-glass-effect', async () => ({ GlassView: (await import('react-native')).View, isLiquidGlassAvailable: () => false }));
+vi.mock('sonner-native', () => ({ toast: Object.assign(() => {}, { success: () => {}, error: () => {}, dismiss: () => {} }), Toaster: () => null }));
 vi.mock('react-native', async (original) => {
   const actual = await original<typeof import('react-native')>();
   const props = (p: ViewProps & { children?: ReactNode }) => {
@@ -97,7 +108,17 @@ describe('conta da lista no rodapé', () => {
 });
 
 describe('ações do rodapé', () => {
-  it('modo e conta abrem o ajuste certo; contexto, cotas e custo abrem e fecham Uso', async () => {
+  it('contexto e cota pedem a aba Uso da mesma folha de ajustes', async () => {
+    const onOpenSettings = vi.fn();
+    const { container } = await render({ onOpenSettings });
+    await act(async () => item(container, 'ctx')!.click());
+    expect(onOpenSettings).toHaveBeenLastCalledWith('usage');
+    expect(container.querySelector('[data-testid="usage-sheet"]')).toBeNull();
+    await act(async () => item(container, '7d')!.click());
+    expect(onOpenSettings.mock.calls).toEqual([['usage'], ['usage']]);
+  });
+
+  it('modo conta contexto cotas e custo abrem a aba correspondente nos ajustes', async () => {
     const onOpenSettings = vi.fn();
     state.sessions.rows[0].conta = 'claude:/home/test/.claude-conta-muito-longa';
     const { container } = await render({ onOpenSettings });
@@ -109,8 +130,7 @@ describe('ações do rodapé', () => {
     expect(container.querySelector('[data-testid="usage-sheet"]')).toBeNull();
     for (const key of ['ctx', '5h', '7d', '30d', 'cost']) {
       await act(async () => item(container, key)!.click());
-      expect(container.querySelector('[data-testid="usage-sheet"]')).not.toBeNull();
-      await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="close-sheet"]')!.click());
+      expect(onOpenSettings).toHaveBeenLastCalledWith('usage');
       expect(container.querySelector('[data-testid="usage-sheet"]')).toBeNull();
     }
     expect(item(container, '5h')!.textContent).toBe('5h 0%');

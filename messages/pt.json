@@ -1,4 +1,13 @@
 {
+  "native_session_settings_title": "Ajustes da sessão",
+  "news_session_model_primary": "GPT-6.1-Sol",
+  "news_session_model_primary_hint": "Uso geral e código",
+  "news_session_model_second": "GPT-6-Astra",
+  "news_session_model_second_hint": "Problemas complexos",
+  "news_session_model_third": "GPT-6.1 Terra",
+  "news_session_model_third_hint": "Código e ferramentas",
+  "native_ctl_all_models": "Todos os modelos",
+  "native_ctl_featured_models": "Modelos em destaque",
   "worktree_estado_residual": "Pasta residual",
   "worktree_residual_warning": "Esta pasta perdeu o vínculo .git, mas continua registrada. Apagar remove todos os arquivos remanescentes, inclusive fontes e ignorados. A branch será preservada.",
   "worktree_residual_entries": "{n} entradas remanescentes. Exemplos:",

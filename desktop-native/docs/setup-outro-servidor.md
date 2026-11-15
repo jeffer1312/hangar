@@ -4,7 +4,7 @@ Mesmo usuário, mesmo CachyOS. Cada passo: conferir primeiro, instalar só o que
 
 1. Hangar na `main` atual: `cd ~/Projetos/hangar && git status` (árvore suja → pare e avise), `git pull --ff-only`; a `main` do notebook está em `3fdd2abd`. Depois `./scripts/install-hangar-send.sh`, `./scripts/install-claude-wrapper.sh` e `systemctl --user restart hangar-backend.service`.
 2. Claude Code: `claude --version` ≥ 2.1.281; senão `claude update`.
-3. Rust: `rustup --version`; `rustup toolchain install 1.99.1 --profile minimal`; `rustup component add rust-analyzer --toolchain 1.99.1`; se `rust-analyzer` não estiver no PATH: `ln -s /usr/bin/rustup ~/.local/bin/rust-analyzer` (o rustup vira o proxy).
+3. Rust: `rustup --version`; `rustup toolchain install 1.100.0 --profile minimal`; `rustup component add rust-analyzer --toolchain 1.100.0`; se `rust-analyzer` não estiver no PATH: `ln -s /usr/bin/rustup ~/.local/bin/rust-analyzer` (o rustup vira o proxy).
 4. Plugin LSP: `CLAUDE_CONFIG_DIR=$HOME/.claude claude plugin install rust-analyzer-lsp@claude-plugins-official` e, em `~/.claude/settings.json` (o principal, nunca a cópia de uma conta), `"rust-analyzer-lsp@claude-plugins-official": true` em `enabledPlugins`.
 5. Skills do gpui-kit (a biblioteca de interface do app): `npx -y skills add longbridge/gpui-kit -g -a claude-code -y -s gpui-kit` e o mesmo com `-s gpui-kit-design-guides`. Confira `~/.claude/skills/gpui-kit/SKILL.md`.
 6. ECC com Rust ligado: acrescente `rust-patterns` e `rust-testing` a `~/.claude/ecc-slim-keep.txt`, `rust-reviewer` e `rust-build-resolver` a `~/.claude/ecc-agents-keep.txt`, `rust-build`, `rust-review` e `rust-test` a `~/.claude/ecc-slim-keep-commands.txt` (sem duplicar), depois `bash ~/.claude/bin/ecc-slim.sh`.

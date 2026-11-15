@@ -300,6 +300,62 @@ test('eventsRevision só conserva a revisão no append e invalida replace, remo�
   expect(chat.use.getState().events.map(e => e.id)).toEqual(['reset:1']);
 });
 
+test('o eco do envio atravessa a fila sem sumir e sai com a mensagem real, com a entrada apagada ou preso na fila', async () => {
+  vi.useFakeTimers();
+  try {
+    historyResponses = [[ev({ id: 'a:1' })]];
+    const chat = chatStore('srv1', 'sess');
+    chat.retain();
+    await vi.advanceTimersByTimeAsync(0);
+    const source = created[0];
+    const pending = () => chat.use.getState().pending;
+    const queue = (entries: { id: string; text: string }[], removed: string[] = []) =>
+      source.trigger('queue', JSON.stringify({ entries, removed, actions: true }));
+    queue([]);
+
+    // Sessão parada: o eco fica na conversa enquanto a mensagem passa pela fila, e a real o tira.
+    chat.use.setState({ pending: [{ id: 'p1', text: 'oi', solid: true }] });
+    source.trigger('message', JSON.stringify(ev({ id: 'queued-1', text: 'oi' })));
+    expect(pending()).toEqual([{ id: 'p1', text: 'oi', solid: true, entry: 'queued-1' }]);
+    queue([{ id: '1', text: 'oi' }]);
+    queue([]);
+    expect(pending()).toHaveLength(1);
+    source.trigger('message', JSON.stringify(ev({ id: 'real:1', text: 'oi' })));
+    expect(pending()).toEqual([]);
+
+    // Continua na fila quando o painel aparece: o lugar dela passa a ser o painel.
+    chat.use.setState({ pending: [{ id: 'p2', text: 'presa', solid: true }] });
+    source.trigger('message', JSON.stringify(ev({ id: 'queued-2', text: 'presa' })));
+    queue([{ id: '2', text: 'presa' }]);
+    await vi.advanceTimersByTimeAsync(700);
+    expect(pending()).toEqual([]);
+
+    // Sessão trabalhando: o eco é a linha do painel até o servidor listar a entrada.
+    chat.use.setState({ pending: [{ id: 'p3', text: 'na fila', queue: true }] });
+    source.trigger('message', JSON.stringify(ev({ id: 'queued-3', text: 'na fila' })));
+    expect(pending()).toHaveLength(1);
+    queue([{ id: '2', text: 'presa' }, { id: '3', text: 'na fila' }]);
+    expect(pending()).toEqual([]);
+
+    // Um "ok" antigo já listado: a bolha dele não apaga o eco do "ok" enviado depois.
+    queue([{ id: '5', text: 'ok' }]);
+    chat.use.setState({ pending: [{ id: 'p5', text: 'ok', queue: true, known: ['5'] }] });
+    source.trigger('message', JSON.stringify(ev({ id: 'queued-5', text: 'ok' })));
+    expect(pending()).toHaveLength(1);
+    queue([{ id: '5', text: 'ok' }, { id: '6', text: 'ok' }]);
+    expect(pending()).toEqual([]);
+
+    // Entrada apagada noutro aparelho leva o eco junto.
+    chat.use.setState({ pending: [{ id: 'p4', text: 'apagada', solid: true }] });
+    source.trigger('message', JSON.stringify(ev({ id: 'queued-4', text: 'apagada' })));
+    queue([{ id: '2', text: 'presa' }], ['4']);
+    expect(pending()).toEqual([]);
+    chat.release();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 test('confirmações antigas da fila não publicam atualizações após carregar o histórico', async () => {
   historyResponses = [[...Array.from({ length: 400 }, (_, i) => ev({
     id: `history:${i}`, kind: i % 2 ? 'assistant_msg' : 'user_msg', text: `histórico ${i}`,

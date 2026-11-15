@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act, createElement } from 'react';
+import { act, createElement, forwardRef, useImperativeHandle, useState, type ReactNode } from 'react';
 import type { ChangeEvent, KeyboardEvent } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
@@ -29,7 +29,15 @@ vi.mock('react-native-mmkv', () => ({ createMMKV: () => ({ getString: () => unde
 vi.mock('expo-clipboard', () => ({ setStringAsync: vi.fn(async () => {}) }));
 const servers = vi.hoisted(() => [{ id: 'srv2', label: 'two', baseUrl: 'http://10.0.0.2:8765', token: 'two-token' }]);
 vi.mock('../stores/servers', () => ({ useServers: Object.assign((select: (s: unknown) => unknown) => select({ servers }), { getState: () => ({ servers }) }) }));
-vi.mock('../ui/Sheet', () => ({ Sheet: ({ children }: { children: import('react').ReactNode }) => createElement('div', null, children) }));
+const nativeSheet = vi.hoisted(() => ({ finishDismiss: null as (() => void) | null }));
+vi.mock('@lodev09/react-native-true-sheet', () => ({ TrueSheet: forwardRef(function NativeSheet({ children, onDidDismiss }: { children: ReactNode; onDidDismiss?: () => void }, ref) {
+  const [visible, setVisible] = useState(false);
+  useImperativeHandle(ref, () => ({ present: async () => { setVisible(true); }, dismiss: async () => { setVisible(false); } }));
+  nativeSheet.finishDismiss = () => { setVisible(false); onDidDismiss?.(); };
+  return visible ? createElement('div', null, children) : null;
+}) }));
+vi.mock('expo-blur', async () => ({ BlurView: (await import('react-native')).View }));
+vi.mock('expo-glass-effect', async () => ({ GlassView: (await import('react-native')).View, isLiquidGlassAvailable: () => false }));
 vi.mock('expo-router', () => ({ useRouter: () => ({ push: vi.fn() }) }));
 vi.mock('./AssistantBubble', () => ({ mkMarkdownStyle: () => ({}) }));
 vi.mock('react-native-enriched-markdown', () => ({
@@ -43,6 +51,7 @@ vi.mock('../ui/Toast', () => ({ toast: { ok: vi.fn(), erro: vi.fn() } }));
 const roots: ReturnType<typeof createRoot>[] = [];
 beforeEach(() => {
   keyboard.height = 0;
+  nativeSheet.finishDismiss = null;
   useMods.setState({ visible: false });
   configureApi({ getBaseUrl: () => 'http://wrong-server', getToken: () => 'wrong-token', onUnauthorized: () => {}, origin: null,
     createEventSource: () => ({ addEventListener: () => {}, removeEventListener: () => {}, close: () => {}, onerror: null, onopen: null, readyState: 1 }),
@@ -108,17 +117,24 @@ function renderUi(readOnly = false) {
 }
 const labeled = (container: HTMLElement, label: string) => container.querySelector<HTMLElement>(`[aria-label="${label}"]`)!;
 
-test('mods começam ocultos, menu mostra e oculta sem fechar painel do agente', () => {
+test('mods começam ocultos, menu mostra e oculta sem fechar painel do agente', async () => {
   const container = renderUi();
   expect(container.textContent).toBe('');
   const menu = document.createElement('div');
   const root = createRoot(menu);
   roots.push(root);
-  act(() => root.render(createElement(MoreSheet, { open: true, onClose: () => {}, serverId: 'srv2', name: 'sess' })));
-  act(() => labeled(menu, m.mods_celular_mostrar_paineis({ n: '2' })).click());
+  const renderMenu = (open: boolean): ReactNode => createElement(MoreSheet, { open,
+    onClose: () => root.render(renderMenu(false)), serverId: 'srv2', name: 'sess' });
+  await act(async () => root.render(renderMenu(true)));
+  await act(async () => labeled(menu, m.mods_celular_mostrar_paineis({ n: '2' })).click());
+  expect(container.textContent).toBe('');
+  await act(async () => nativeSheet.finishDismiss!());
   expect(container.textContent).toContain('band-live');
   expect(container.textContent!.indexOf('run-mod')).toBeLessThan(container.textContent!.indexOf('band-live'));
-  act(() => labeled(menu, m.mods_celular_ocultar()).click());
+  await act(async () => root.render(renderMenu(true)));
+  await act(async () => labeled(menu, m.mods_celular_ocultar()).click());
+  expect(container.textContent).toContain('band-live');
+  await act(async () => nativeSheet.finishDismiss!());
   expect(container.textContent).toBe('');
   expect(fetch).not.toHaveBeenCalled();
 });

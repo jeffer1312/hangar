@@ -18,6 +18,7 @@ import { MessageList } from './MessageList';
 import { pararTts } from './BubbleActions';
 import { Composer } from './Composer';
 import { ComposerDock, ComposerViewport } from './ComposerField';
+import { flightRoute, SendFlightLayer } from './SendFlight';
 import { ComposerStatusLine } from './ComposerStatusLine';
 import { OrqFooter } from './OrqFooter';
 import { TuiPill } from './TuiPill';
@@ -73,14 +74,10 @@ export function ChatBody({ serverId, name, askFallback, onBack, deepStack, onOpe
   const router = useRouter();
   const rota = `${serverId}::${name}`;
   const settingsSequence = useRef(0);
-  const [settingsRequest, setSettingsRequest] = useState<{ route: string; which: 'mode' | 'account'; n: number } | null>(null);
-  const openSettings = useCallback((which: 'mode' | 'account') => {
-    if (which === 'account' && useSessions.getState().rows.find(row => row.serverId === serverId && row.name === name)?.provider === 'claude') {
-      router.push(`/s/${encodeURIComponent(serverId)}/${encodeURIComponent(name)}/account` as never);
-      return;
-    }
+  const [settingsRequest, setSettingsRequest] = useState<{ route: string; which: 'mode' | 'account' | 'usage'; n: number } | null>(null);
+  const openSettings = useCallback((which: 'mode' | 'account' | 'usage') => {
     setSettingsRequest({ route: rota, which, n: ++settingsSequence.current });
-  }, [rota, router, serverId, name]);
+  }, [rota]);
   const consumeSettingsRequest = useCallback((n: number) => {
     setSettingsRequest(current => current?.n === n ? null : current);
   }, []);
@@ -684,6 +681,7 @@ export function ChatBody({ serverId, name, askFallback, onBack, deepStack, onOpe
             )
           : null}
         </ComposerDock>
+        <SendFlightLayer route={flightRoute(serverId, name)} />
         </ComposerViewport>
         {/* Linha de status do app de PC, colada embaixo da caixa e fora da área que a conversa cobre. */}
         {!servidorSumiu && !codexPreThread && fetchedSession !== null && !orq && !soLeitura && !dead

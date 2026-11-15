@@ -1,4 +1,13 @@
 {
+  "native_session_settings_title": "Session settings",
+  "news_session_model_primary": "GPT-6.1-Sol",
+  "news_session_model_primary_hint": "General use and coding",
+  "news_session_model_second": "GPT-6-Astra",
+  "news_session_model_second_hint": "Complex problems",
+  "news_session_model_third": "GPT-6.1 Terra",
+  "news_session_model_third_hint": "Coding and tools",
+  "native_ctl_all_models": "All models",
+  "native_ctl_featured_models": "Featured models",
   "worktree_estado_residual": "Residual folder",
   "worktree_residual_warning": "This folder lost its .git link but is still registered. Deleting removes all remaining files, including sources and ignored files. The branch will be preserved.",
   "worktree_residual_entries": "{n} remaining entries. Examples:",

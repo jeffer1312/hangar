@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act, createElement, useContext, useEffect, useState, type ReactNode } from 'react';
+import { act, createElement, forwardRef, useContext, useEffect, useImperativeHandle, useRef, useState, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { configureApi, estilosDitado, fetchSessionsForServer, implementCodexPlan, interrupt, loadLiveVoiceSettings, recarregarSessao, setPermissionMode, _limparEsfriamentoParaTestes, _resetRotasForTests, type FirstConversationAttempt, type MotivoFim, type QueuePanel, type SessionInfo } from '@hangar/core';
@@ -28,7 +28,7 @@ vi.mock('react-native', async (original) => {
       return { remove: () => { appLifecycle.listeners.delete(listener); } };
     },
   },
-  AccessibilityInfo: { sendAccessibilityEvent: vi.fn() },
+  AccessibilityInfo: { ...native.AccessibilityInfo, sendAccessibilityEvent: vi.fn() },
   Keyboard: { ...native.Keyboard, dismiss: keyboardDismiss, isVisible: () => false },
   Pressable: ({ accessibilityState, accessibilityRole, accessibilityLabel, accessibilityHint, onPress, children, disabled, ref, style }: {
     accessibilityState?: { disabled?: boolean; busy?: boolean; expanded?: boolean; selected?: boolean }; accessibilityRole?: string;
@@ -137,11 +137,25 @@ vi.mock('../features/create/CreateSessionSheet', () => ({ CreateSessionSheet: ({
 vi.mock('../ui/Icon', () => ({ Icon: () => null }));
 vi.mock('../ui/HangarMark', () => ({ HangarMark: () => null }));
 const sheetEvents = vi.hoisted(() => ({ presented: undefined as (() => void) | undefined, dismissed: undefined as (() => void) | undefined }));
-vi.mock('../ui/Sheet', () => ({ Sheet: ({ children, onDidPresent, onDismiss }: { children: ReactNode; onDidPresent?: () => void; onDismiss?: () => void }) => {
-  sheetEvents.presented = onDidPresent;
-  sheetEvents.dismissed = onDismiss;
-  return createElement('div', null, children);
-} }));
+vi.mock('@lodev09/react-native-true-sheet', () => ({ TrueSheet: forwardRef(function NativeSheet({ children, onDidPresent, onDidDismiss }: {
+  children: ReactNode; onDidPresent?: () => void; onDidDismiss?: () => void;
+}, ref) {
+  const [visible, setVisible] = useState(false);
+  const events = useRef({ onDidPresent, onDidDismiss });
+  events.current = { onDidPresent, onDidDismiss };
+  useImperativeHandle(ref, () => ({
+    present: async () => {
+      setVisible(true);
+      sheetEvents.presented = () => events.current.onDidPresent?.();
+      sheetEvents.dismissed = () => { setVisible(false); events.current.onDidDismiss?.(); };
+    },
+    dismiss: async () => { setVisible(false); },
+  }));
+  return visible ? createElement('div', { role: 'dialog' }, children) : null;
+}) }));
+vi.mock('expo-blur', async () => ({ BlurView: (await import('react-native')).View }));
+vi.mock('expo-glass-effect', async () => ({ GlassView: (await import('react-native')).View, isLiquidGlassAvailable: () => false }));
+vi.mock('sonner-native', () => ({ toast: Object.assign(() => {}, { success: () => {}, error: () => {}, dismiss: () => {} }), Toaster: () => null }));
 const panelEvents = vi.hoisted(() => ({ dismissed: undefined as (() => void) | undefined }));
 vi.mock('../ui/AnchoredPanel', () => ({ AnchoredPanel: ({ open, onDismissed, onClose, label, children }: {
   open: boolean; onDismissed?: () => void; onClose?: () => void; label?: string; children: ReactNode;
@@ -162,7 +176,7 @@ vi.mock('../paraglide/messages', async (importOriginal) => ({
   ...Object.fromEntries(
   ('arq_aba askq_sua_resposta bastao_dossie_sub bastao_dossie_titulo chat_ir_inicio chat_voltar_sessoes codex_limites_titulo compartilhar_menu ctx_anexos ctx_atividade ctx_grupo ctx_limites ctx_repositorio ctx_terminal modo_so_ociosa more_fotos_videos_arquivos more_tarefas_agentes mods_celular_mostrar mods_celular_mostrar_um mods_celular_mostrar_paineis mods_celular_ocultar mods_celular_sub plugin_band_label navbar_mais_acoes par_titulo recarregar_sessao recarregar_sessao_detalhe sessao_trocar_de switcher_buscar_conversas term_titulo '
     + 'askq_enviando board_arquivo board_imagem board_remover_anexo codex_orientar composer_anexar_arquivo composer_desfazer_limpeza composer_ditado_limpo composer_enviando_cancelar composer_enviar_mensagem composer_fila_acao composer_fila_aria composer_fila_contagem composer_gravando_audio composer_gravar_audio composer_mandando_grupo composer_mandar_grupo composer_mandar_tambem composer_mensagem composer_parar composer_parar_gravacao composer_pro_grupo composer_pros_dois composer_sessao_trabalhando composer_transcrevendo_audio composer_transcrever_de_novo')
-    .concat(' sessao_git chat_acao_git_detalhe cota_conta_ativa accounts_switch_title native_ctl_model_title native_new_chat_reasoning native_mode_bypassPermissions chat_mode_label')
+    .concat(' sessao_git chat_acao_git_detalhe cota_conta_ativa accounts_switch_title native_ctl_model_title native_new_chat_reasoning native_mode_bypassPermissions chat_mode_label native_usage_card_session live_voice_action_usage_label native_ctl_all_models native_ctl_featured_models')
     .concat(' live_voice_open composer_mic_style_hint composer_dictation_style composer_session_settings composer_session_settings_hint composer_steer_current_text ditado_estilo_titulo uso_aria codex_orientar_ajuda composer_fila_titulo composer_submission_recover_first queue_steer_uncertain')
     .concat(' composer_interromper_claude composer_interromper_msg composer_interromper comum_cancelar')
     .concat(' orq_tab_title orq_row_badge orq_talk_to_arbiter')
@@ -225,7 +239,6 @@ vi.mock('./draftAttachments', () => ({
   retainDraftAttachment: vi.fn(async (attachment: import('../stores/drafts').DraftAttachment) => attachment),
   removeDraftAttachment: vi.fn(),
 }));
-vi.mock('../ui/Glass', () => ({ Glass: ({ children }: { children: ReactNode }) => createElement('div', null, children) }));
 const pasteInput = vi.hoisted(() => ({ onPaste: null as null | ((files: import('@mattermost/react-native-paste-input').PastedFile[], error: string | null) => void) }));
 vi.mock('../ui/MultilineInput', () => ({ MultilineInput: ({ value, onChangeText, accessibilityLabel, ref, onPaste, onSelectionChange }: {
   value: string; onChangeText: (text: string) => void; accessibilityLabel?: string; ref?: import('react').Ref<HTMLTextAreaElement>;
@@ -476,7 +489,7 @@ describe('ações e atualização da conversa na rota', () => {
       routerPush.mockClear(); layouts.clear();
     });
     afterEach(() => { realSettings.enabled = false; layouts.clear(); });
-    const panel = (container: HTMLElement) => container.querySelector('[role="dialog"][aria-label="composer_session_settings"]');
+    const panel = (container: HTMLElement) => container.querySelector('[data-testid="session-settings-sheet"]');
     const measureFooter = async () => {
       await act(async () => {
         for (const [id, onLayout] of layouts) {
@@ -494,22 +507,22 @@ describe('ações e atualização da conversa na rota', () => {
       expect(panel(container)).not.toBeNull();
     };
     const closePanel = async (container: HTMLElement) => {
-      await act(async () => button(container, 'dismiss-settings')!.click());
+      await act(async () => { button(container, 'native_close')!.click(); sheetEvents.dismissed?.(); });
       expect(panel(container)).toBeNull();
     };
 
-    it('modo abre os ajustes e conta abre direto a troca na rota certa', async () => {
+    it('modo e conta abrem Sessão e a troca aguarda o fechamento na rota certa', async () => {
       const { container, root } = await render(createElement(ChatScreen));
       try {
         expect(panel(container)).toBeNull();
         for (const label of ['native_mode_bypassPermissions', 'native_mode_bypassPermissions']) {
           await openFooter(container, label);
-          expect(container.querySelectorAll('[role="dialog"][aria-label="composer_session_settings"]')).toHaveLength(1);
+          expect(container.querySelectorAll('[data-testid="session-settings-sheet"]')).toHaveLength(1);
           expect(panel(container)!.textContent).toContain('cota_conta_ativa');
           expect(panel(container)!.textContent).toContain('route-account');
           expect(panel(container)!.textContent).not.toContain('active-server');
           expect(panel(container)!.textContent).not.toContain('other-session');
-          expect(panel(container)!.textContent).toContain('native_ctl_model_title');
+          expect(button(panel(container)! as HTMLElement, 'native_usage_card_session')?.getAttribute('aria-selected')).toBe('true');
           expect(button(panel(container)! as HTMLElement, 'accounts_switch_title')).toBeDefined();
           await closePanel(container);
         }
@@ -518,6 +531,10 @@ describe('ações e atualização da conversa na rota', () => {
         expect(realSettings.models).toHaveBeenCalledWith('sess', useServers.getState().servers[0]);
         await measureFooter();
         await act(async () => button(container, 'route-account')!.click());
+        expect(panel(container)).not.toBeNull();
+        await act(async () => button(panel(container)! as HTMLElement, 'accounts_switch_title')!.click());
+        expect(routerPush).not.toHaveBeenCalled();
+        await act(async () => sheetEvents.dismissed?.());
         expect(panel(container)).toBeNull();
         expect(routerPush).toHaveBeenLastCalledWith('/s/s1/sess/account');
       } finally { act(() => root.unmount()); }
@@ -530,6 +547,27 @@ describe('ações e atualização da conversa na rota', () => {
         await openFooter(container, 'route-account');
         expect(routerPush).not.toHaveBeenCalled();
         expect(button(panel(container)! as HTMLElement, 'accounts_switch_title')).toBeUndefined();
+      } finally { act(() => root.unmount()); }
+    });
+
+    it('contexto abre Uso na folha única sem perder o rascunho ao trocar abas', async () => {
+      chatStore('s1', 'sess').use.setState({ statusLine: '🤖 Opus5.5 (high) │ 💬 ctx 0/100k │ 📅7d:48%' });
+      const { container, root } = await render(createElement(ChatScreen));
+      try {
+        const field = container.querySelector('textarea')!;
+        await act(async () => { field.value = 'rascunho preservado'; field.dispatchEvent(new Event('input', { bubbles: true })); });
+        await measureFooter();
+        const context = button(container, 'ctx_contexto 0%');
+        expect(context).toBeDefined();
+        await act(async () => context!.click());
+        expect(button(panel(container)! as HTMLElement, 'live_voice_action_usage_label')?.getAttribute('aria-selected')).toBe('true');
+        expect(panel(container)!.textContent).toContain('uso_secao_conversa');
+        await act(async () => button(panel(container)! as HTMLElement, 'native_usage_card_session')!.click());
+        expect(container.querySelector('textarea')?.value).toBe('rascunho preservado');
+        await closePanel(container);
+        expect(container.querySelector('textarea')?.value).toBe('rascunho preservado');
+        expect(routerPush).not.toHaveBeenCalled();
+        expect(realFirstInput.send).not.toHaveBeenCalled();
       } finally { act(() => root.unmount()); }
     });
 
@@ -571,8 +609,7 @@ describe('ações e atualização da conversa na rota', () => {
           expect(suggestion).toBeDefined();
           await act(async () => suggestion!.click());
           expect(panel(container)).not.toBeNull();
-          expect(panel(container)!.textContent).toContain('native_ctl_model_title');
-          expect(panel(container)!.textContent).toContain('native_new_chat_reasoning');
+          expect(panel(container)!.textContent).toContain(command === '/effort' ? 'native_new_chat_reasoning' : 'native_ctl_featured_models');
           expect(field.value).toBe('');
           await closePanel(container);
         }
@@ -807,7 +844,9 @@ describe('ações e atualização da conversa na rota', () => {
       session: 'sess', state: 'idle', headless: true, claude_permission_mode: 'plan', claude_previous_non_plan: 'acceptEdits',
     }, events: [{ id: 'plan:1', kind: 'assistant_msg', text: action === 'codex' ? '<proposed_plan>\n# Plano\n</proposed_plan>' : '# Plano' }] }));
     if (action === 'recarregar') {
+      await act(async () => button(container, 'navbar_mais_acoes')!.click());
       await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="recarregar_sessao"]')!.click());
+      await act(async () => sheetEvents.dismissed?.());
       expect(recarregarSessao).toHaveBeenCalledExactlyOnceWith('sess', target);
     } else {
       if (action === 'claude') realFirstInput.send.mockImplementationOnce(async () => {
