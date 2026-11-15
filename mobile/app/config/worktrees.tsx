@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, Text, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import { basename, fetchWorktreesForServer, getWorktreesForServer, mergedWorktreeBatch, relativeTime,
-         WORKTREE_STALE_DAYS, worktreeAgeDays, worktreeIsAgent, worktreeReady, worktreesSizeTotal, worktreeState,
+         worktreeAgeDays, worktreeIsAgent, worktreeReady, worktreeStaleDays, worktreesSizeTotal, worktreeState,
          type WorktreeRepo, type WorktreeStatus } from '@hangar/core';
 import { Pagina } from '../../src/features/config/Pagina';
 import { PageHeader, Pill } from '../../src/features/config/PageHeader';
@@ -25,7 +25,7 @@ const PENDING_REREAD_MS = 5000;
 const PENDING_MAX_TRIES = 12;
 const DISK_TOP = 5;
 
-const stale = (w: WorktreeStatus) => (worktreeAgeDays(w) ?? 0) > WORKTREE_STALE_DAYS;
+const stale = (w: WorktreeStatus) => worktreeStaleDays(w) !== null;
 const MATCH: Record<Filter, (w: WorktreeStatus) => boolean> = {
   todas: () => true,
   uso: (w) => w.sessions.length > 0,

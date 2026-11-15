@@ -5,7 +5,6 @@ import asyncio
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -27,22 +26,6 @@ def events(monkeypatch):
     seen = []
     monkeypatch.setattr(diag, "registrar", lambda evento, nivel="ok", **campos: seen.append((evento, nivel, campos)))
     return seen
-
-
-@pytest.fixture
-def bridge(monkeypatch):
-    """A ponte trocada por uma lista de chamadas; `reply` responde por op."""
-    calls, replies = [], {}
-
-    def call(op, **args):
-        calls.append((op, args))
-        reply = replies.get(op, {})
-        if isinstance(reply, share_bridge.ShareBridgeError):
-            share_bridge._failed(op, reply.code)
-            raise reply
-        return reply
-    monkeypatch.setattr(share_bridge, "call", call)
-    return SimpleNamespace(calls=calls, replies=replies)
 
 
 class _Rust(BaseHTTPRequestHandler):
@@ -92,41 +75,6 @@ def test_call_refuses_to_block_the_event_loop():
             share_bridge.call("active_sessions")
         return e.value.code
     assert asyncio.run(on_loop()) == "share_wait_on_loop"
-
-
-def _kill_stubs(monkeypatch):
-    # Saída do grupo pela ponte tem teste próprio (`test_groups_bridge.py`); aqui só os convites.
-    monkeypatch.setattr(api, "_rust_leave", lambda name, phases: [])
-    monkeypatch.setattr(api.registry, "kill", lambda n, closed_by_rust=False: [])
-    monkeypatch.setattr(api, "_invalidate_lists", lambda: None)
-    monkeypatch.setattr(api, "_jsonl_of_session", lambda n: None)
-
-
-def test_kill_session_asks_rust_to_revoke_every_invite(monkeypatch, client, bridge):
-    _kill_stubs(monkeypatch)
-    r = client.delete("/api/sessions/a", headers=H)
-    assert r.status_code == 200, r.text
-    assert r.json() == {"ok": True, "warning": None}
-    assert bridge.calls == [("revoke_session", {"name": "a"})]
-
-
-def test_kill_session_with_rust_down_still_closes_and_warns(monkeypatch, client, bridge, events):
-    _kill_stubs(monkeypatch)
-    bridge.replies["revoke_session"] = share_bridge.ShareBridgeError("share_bridge_unavailable", "URLError")
-    r = client.delete("/api/sessions/a", headers=H)
-    assert r.status_code == 200, r.text
-    warning = r.json()["warning"]
-    assert warning["code"] == "erro_convite_nao_acompanhou"
-    assert warning["params"]["codigo"] == "share_bridge_unavailable"
-    assert ("convites.ponte", "aviso", {"operacao_rust": "revoke_session", "motivo": "share_bridge_unavailable"}) in events
-
-
-def test_kill_session_without_rust_leaves_the_invite_to_its_sweep(monkeypatch, client, bridge, events):
-    _kill_stubs(monkeypatch)
-    bridge.replies["revoke_session"] = share_bridge.ShareBridgeError("share_bridge_off")
-    r = client.delete("/api/sessions/a", headers=H)
-    assert r.status_code == 200 and r.json()["warning"] is None
-    assert ("convites.ponte", "aviso", {"operacao_rust": "revoke_session", "motivo": "share_bridge_off"}) in events
 
 
 def test_connect_owner_invite_goes_to_the_explicit_private_route(monkeypatch, client):

@@ -884,42 +884,7 @@ def test_sidecar_codex_usa_a_mesma_regra_de_nome():
         assert codex_sessions._sanitize(n) == sanitize_session_name(n)
 
 
-def test_kill_que_nao_mata_levanta_e_nao_apaga_estado_duravel(tmp_path, monkeypatch):
-    # Sessao sobrevive ao kill -> KillFailed, e NADA de estado duravel some. Antes o retorno do tmux
-    # era descartado: a fila era limpa, o pareamento desfeito e a rota respondia {"ok": true}, com a
-    # sessao reaparecendo na varredura seguinte sem fila e sem par.
-    from app import registry as reg
-    r = reg.SessionRegistry()
-    limpou = []
-    monkeypatch.setattr(reg.codex_sessions, "exists", lambda n: False)
-    monkeypatch.setattr(r, "list", lambda: [])
-    monkeypatch.setattr(reg.tmux, "kill_session", lambda n: False)   # sobreviveu
-    monkeypatch.setattr(r, "_forget", lambda n: limpou.append(("forget", n)))
-    monkeypatch.setattr(reg, "PromptQueue", lambda n: type(
-        "Q", (), {"clear": lambda self: limpou.append(("fila", n))})())
-    with pytest.raises(reg.KillFailed):
-        r.kill("zz")
-    assert limpou == []          # nem cache, nem fila
-
-
-def test_kill_que_mata_de_fato_limpa_tudo(tmp_path, monkeypatch):
-    # O par do teste acima: sessao saiu -> limpeza duravel roda igual a antes (sem regressao).
-    from app import registry as reg
-    r = reg.SessionRegistry()
-    limpou = []
-    monkeypatch.setattr(reg.codex_sessions, "exists", lambda n: False)
-    monkeypatch.setattr(r, "list", lambda: [])
-    monkeypatch.setattr(reg.tmux, "kill_session", lambda n: True)
-    monkeypatch.setattr(r, "_forget", lambda n: limpou.append(("forget", n)))
-    monkeypatch.setattr(reg, "ThenLink", lambda n: type(
-        "T", (), {"clear": lambda self: limpou.append(("then", n))})())
-    monkeypatch.setattr(reg, "PromptQueue", lambda n: type(
-        "Q", (), {"clear": lambda self: limpou.append(("fila", n))})())
-    assert r.kill("zz") == []
-    assert [k for k, _ in limpou] == ["forget", "fila", "then"]
-
-
-# --- recado nativo entre sessoes Claude: name_of_pid / inbox_socket_of -----------------------
+# --- recado nativo entre sessões Claude: name_of_pid -----------------------
 
 @pytest.fixture(autouse=True)
 def _limpa_cache_nome_por_pid():
@@ -975,33 +940,6 @@ def test_name_of_pid_engole_falha_do_tmux_sem_derrubar_o_parse(monkeypatch):
     monkeypatch.setattr(registry.tmux, "list_panes_all", explode)
     assert registry.name_of_pid(5000) is None
     assert 5000 not in registry._NOME_POR_PID          # falha NAO e cacheada: a proxima retenta
-
-
-def test_inbox_socket_of_fora_do_posix_devolve_none_em_vez_de_estourar(monkeypatch):
-    # os.getuid() nao existe no Windows e Path.is_dir() relevanta EACCES: os dois estouravam ANTES
-    # do try e a rota /peer-address dava 500 em toda chamada naquele ambiente.
-    monkeypatch.setattr(os, "name", "nt")
-    assert registry.inbox_socket_of("qualquer") is None
-
-
-# O ramo que este caso exercita e POSIX por construcao: `inbox_socket_of` sai com None fora dele
-# (getuid nao existe no Windows), e e justamente o que o caso IRMAO acima prova. Rodar aqui seria
-# afirmar `None == <caminho>` sem ter chegado perto do codigo que importa.
-@pytest.mark.skipif(os.name != "posix", reason="inbox_socket_of so tem corpo no POSIX (ver o caso irmao)")
-def test_inbox_socket_of_acha_o_socket_do_descendente(monkeypatch, tmp_path):
-    socks = tmp_path / "cc-socks"
-    socks.mkdir()
-    (socks / "4242.sock").touch()
-    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
-    monkeypatch.setattr(registry.tmux, "pane_pid", lambda n: 300)
-    monkeypatch.setattr(registry, "_descendant_pids", lambda pid, children=None: [301, 4242])
-    monkeypatch.setattr(registry, "_proc_children_map", lambda: {})
-    assert registry.inbox_socket_of("alvo") == str(socks / "4242.sock")
-    # Sessao sem socket (Pi, Codex, ou Claude anterior a liberacao) -> None, que NAO e erro.
-    monkeypatch.setattr(registry, "_descendant_pids", lambda pid, children=None: [301])
-    assert registry.inbox_socket_of("alvo") is None
-
-
 
 
 def test_list_preenche_conta_da_sessao(tmp_path):

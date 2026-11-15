@@ -52,6 +52,41 @@ async fn login_guests_public_gate_denies_owner_routes_before_upstream() {
     task.abort();
 }
 
+/// Guarda (achado 3 da revisão da R2): convidado com login em escrita de sessão fora do alcance dele
+/// recebe o 403 e não perde o login; o Python (fora do ar aqui) não é procurado. Já valia antes da R2,
+/// pelo porteiro do login (`login_guests/gate.rs` `check` → `deny`), que a remoção não pode perder.
+#[tokio::test]
+async fn login_guest_write_outside_its_reach_is_the_rust_403() {
+    use hangar_server::login_guests::{Service, Settings};
+    let home = crate::physical_tempdir();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let mut state = AppState::new(Config { listen:address, upstream:crate::refused_address(),
+        internal_secret:"fixture".into(), auth_token:"owner".into(), log_path:None,
+        trusted:TrustedHosts::parse("127.0.0.1") });
+    let service = Service::new(Settings { guests:home.path().join("guests.json"), vault:home.path().join("vault.json"),
+        runtime_config:home.path().join("runtime-config.json"), sync_enabled:false, bootstrap:String::new(),
+        secret:b"fixture".to_vec(), secure:false, rate_max:10.into(), rate_window:300.into() });
+    service.store.create("Ana", home.path().to_str().unwrap(), false, true, "ana".into(), "guest".into()).unwrap();
+    state.share = None;
+    state.login_guests = Arc::new(service);
+    let task=tokio::spawn(async move { axum::serve(listener,hangar_server::routes::router(Arc::new(state))
+        .into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap(); });
+    let client=reqwest::Client::new();
+    for route in ["keys", "term-input", "select", "select/submit", "answer", "interrupt", "steer", "model", "codex/mode", "question/skip", "codex/plan/implement"] {
+        let response=client.post(format!("http://{address}/api/sessions/do-dono/{route}")).bearer_auth("guest")
+            .header("content-type","application/json").body("{}").send().await.unwrap();
+        assert_eq!(response.status().as_u16(),403,"{route}");
+        let body:Value=response.json().await.unwrap();
+        assert_eq!(body["detail"]["code"],"erro_fora_do_convidado","{route}");
+    }
+    for route in ["models", "limits", "commands", "codex-permissions"] {
+        let response=client.get(format!("http://{address}/api/sessions/do-dono/{route}")).bearer_auth("guest").send().await.unwrap();
+        assert_eq!(response.status().as_u16(),403,"{route}");
+    }
+    task.abort();
+}
+
 mod arbitrary_inputs {
     use super::*;
     use proptest::prelude::*;

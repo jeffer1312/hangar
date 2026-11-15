@@ -407,7 +407,10 @@ async fn link_child(st: &Arc<AppState>, link: super::LinkPlan, opened: &Value) -
             let detail = &reply["body"]["detail"];
             detail["code"].as_str().or(detail.as_str()).map_or_else(|| format!("http_{}", reply["status"]), str::to_owned)
         }
-        Err(failed) => failed.code,
+        Err(failed) => {
+            tracing::warn!(code = %failed.code, detail = %failed.detail, session = %child, "a ligação ao grupo falhou");
+            failed.code
+        }
     };
     tracing::warn!(code = "erro_link_grupo", session = %child, parent = %parent, detail = %code, "a sessão abriu sem ligação");
     Some(json!({"code": "erro_link_grupo", "detail": code}))
@@ -511,8 +514,9 @@ pub(crate) fn reply(error: &OpenError) -> Response {
 }
 
 /// `POST /api/sessions`: o dono e o convidado com login abrem Claude com terminal no Rust (o do
-/// convidado na pasta dele, com o dono registrado no `guests.json`); o resto segue ao Python com o
-/// corpo intacto (corpo que não é pedido válido também: o 422 é o dele).
+/// convidado na pasta dele, com o dono registrado no `guests.json`). Corpo que não é pedido válido é o 422
+/// do Rust, e o que não abre aqui recebe a recusa que o Python dava; quem não é dono nem convidado segue
+/// ao `pass`, que o recusa.
 pub async fn create(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
     let (started, diag) = (Instant::now(), crate::routes::diag_req(&req));
     let (fwd, owner) = match crate::routes::gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
@@ -531,10 +535,8 @@ pub async fn create(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
         async move { crate::routes::pass(&st, Request::from_parts(parts, Body::from(bytes)), &fwd).await }
     };
     if !owner && guest.is_none() { return pass(parts, bytes).await; }
-    let Ok(request) = SessionOpenRequest::parse(&bytes) else { return pass(parts, bytes).await };
-    // O passo vale também para a criação que segue ao Python: ele não tem mais o dele.
+    let Ok(request) = SessionOpenRequest::parse(&bytes) else { return crate::session_write::invalid_body(&parts.headers) };
     let _progress = super::open::Progress::track(request.name.as_deref().unwrap_or(""));
-    let name = request.name.clone().unwrap_or_default();
     let caller = guest.as_ref().map_or(OpenCaller::Owner, |g| OpenCaller::Guest { root: g.root.clone() });
     match decide_detached(&st, request, caller, guest, None).await {
         Decision::Opened(opened) => {
@@ -549,9 +551,12 @@ pub async fn create(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
             access_diary("POST /api/sessions", &response, started, &diag);
             response
         }
+        // Só Pi, omp e Kimi sem terminal chegam aqui (`opens_here`): a combinação não existe, o servidor está de pé.
         Decision::NotOurs => {
-            super::open::progress_step(&name, "criando", json!({}));
-            pass(parts, bytes).await
+            let mut response = reply(&OpenError::new(400, "erro_orq_headless_provider", "sem terminal só vale para claude ou codex"));
+            crate::routes::cors(&parts.headers, response.headers_mut());
+            access_diary("POST /api/sessions", &response, started, &diag);
+            response
         }
     }
 }

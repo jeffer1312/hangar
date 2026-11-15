@@ -116,7 +116,9 @@ struct LocalLast { transfers: Option<(Vec<SessionRow>, HashSet<String>)>, shortc
 struct Discovery { at: Instant, wall: f64, epoch: u64,
     /// Mapa de processos relido nesta descoberta, não o do cache de 3 s.
     fresh: bool, rows: Arc<Vec<SessionRow>>, agent_pids: Arc<HashMap<String, u32>>,
-    panes: Arc<Vec<Pane>>, children: Arc<ChildrenMap> }
+    panes: Arc<Vec<Pane>>, children: Arc<ChildrenMap>,
+    /// Algum pane desta rodada ficou de fora da leitura.
+    partial: bool }
 
 struct Snapshot { at: tokio::time::Instant, epoch: u64, produced: Produced,
     /// Entradas da produção, para a rodada parcial; `None` quando nenhuma lista do dono está aberta.
@@ -519,15 +521,28 @@ impl ListBridge {
         Ok(RuntimeContext {row:rows.iter().find(|row|row.name==name).cloned(),agent_pid:pids.get(name).copied(),panes:panes.iter().filter(|pane|name.is_empty() || pane.session==name).cloned().collect(),children,dirs,config_dirs})
     }
 
+    /// Linhas e panes de uma rodada feita agora, e se algum pane da MESMA rodada ficou de fora
+    /// (a linha dele sumiu): a poda dos sidecars lê quem está vivo daqui.
+    pub async fn live_round(&self) -> Result<(Arc<Vec<SessionRow>>, Arc<Vec<Pane>>, bool), ListError> {
+        let (rows, _, panes, _, partial) = self.discovery_partial(Some(wall_now())).await?;
+        Ok((rows, panes, partial))
+    }
+
     async fn discovery(&self, newer_than: Option<f64>)
         -> Result<(Arc<Vec<SessionRow>>, Arc<HashMap<String, u32>>, Arc<Vec<Pane>>, Arc<ChildrenMap>), ListError> {
+        let (rows, pids, panes, children, _) = self.discovery_partial(newer_than).await?;
+        Ok((rows, pids, panes, children))
+    }
+
+    async fn discovery_partial(&self, newer_than: Option<f64>)
+        -> Result<(Arc<Vec<SessionRow>>, Arc<HashMap<String, u32>>, Arc<Vec<Pane>>, Arc<ChildrenMap>, bool), ListError> {
         let mut slot = self.discovery.lock().await;
         let epoch = self.epoch.load(Ordering::SeqCst);
         if let Some(d) = slot.as_ref().filter(|d| d.epoch == epoch && match newer_than {
             Some(t) => d.fresh && d.wall > t,
             None => d.at.elapsed() < DISCOVER_TTL,
         }) {
-            return Ok((d.rows.clone(), d.agent_pids.clone(), d.panes.clone(), d.children.clone()));
+            return Ok((d.rows.clone(), d.agent_pids.clone(), d.panes.clone(), d.children.clone(), d.partial));
         }
         let dirs = self.dirs()?;
         let (at, wall) = (Instant::now(), wall_now());
@@ -554,8 +569,8 @@ impl ListBridge {
         lock(&self.local).panes_partial = partial;
         // A validade conta do fim da descoberta: no psmux lento ela passa do `DISCOVER_TTL`, e quem esperou refaria.
         *slot = Some(Discovery { at: Instant::now(), wall, epoch, fresh: newer_than.is_some(), rows: rows.clone(), agent_pids: agent_pids.clone(),
-            panes: panes.clone(), children: children.clone() });
-        Ok((rows, agent_pids, panes, children))
+            panes: panes.clone(), children: children.clone(), partial });
+        Ok((rows, agent_pids, panes, children, partial))
     }
 
     /// Lista decorada para quem pergunta fora do tique do hub (`GET` do dono, vigia de travada,
@@ -1317,19 +1332,12 @@ enum Operation {
     Discover { #[serde(default)] newer_than: Option<f64> },
     #[serde(rename = "list.snapshot")]
     Snapshot {},
-    #[serde(rename = "list.invalidate")]
-    Invalidate {},
     #[serde(rename = "list.resolve")]
     Resolve { name: String, cwd: String, #[serde(default)] pid: Option<i64> },
     #[serde(rename = "list.seed")]
     Seed { name: String, jsonl: String },
-    #[serde(rename = "list.forget")]
-    Forget { name: String },
     #[serde(rename = "state.facts")]
     StateFacts { name: String, facts: crate::state::facts::StateFacts },
-    /// Painel de terminal real aberto na sessão: o 409 de quem conta linha do pane.
-    #[serde(rename = "term.active")]
-    TermActive { name: String },
 }
 
 async fn execute(bridge: &Arc<ListBridge>, op: Operation) -> Result<Value, ListError> {
@@ -1363,15 +1371,11 @@ async fn execute(bridge: &Arc<ListBridge>, op: Operation) -> Result<Value, ListE
             }
             rows(&produced.rows)
         }
-        Operation::Invalidate {} => { bridge.invalidate(); Ok(Value::Null) }
         Operation::Resolve { name, cwd, pid } => {
             let t = bridge.resolve(&name, &cwd, pid).await?;
             Ok(json!({"jsonl": t.jsonl, "tracked": t.tracked}))
         }
         Operation::Seed { name, jsonl } => cache(Box::new(move |b| b.seed(&name, &jsonl))).await,
-        Operation::Forget { name } => cache(Box::new(move |b| b.forget(&name))).await,
-        // Respondido pelo `private`, que tem os painéis.
-        Operation::TermActive { .. } => Err(fail("list_bridge_invalid_request", "operação fora do private")),
         Operation::StateFacts { name, facts } => {
             use crate::state::facts::Push;
             Ok(match bridge.state_facts.push(&name, facts, Instant::now()) {
@@ -1381,10 +1385,6 @@ async fn execute(bridge: &Arc<ListBridge>, op: Operation) -> Result<Value, ListE
             })
         }
     }
-}
-
-fn term_active(st: &AppState, name: &str) -> Result<Value, ListError> {
-    Ok(json!({"active": st.term.is_active(name)}))
 }
 
 fn reply(value: Value) -> Response {
@@ -1408,11 +1408,7 @@ pub async fn private(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connect
     let Ok(op) = serde_json::from_slice::<Operation>(&bytes) else {
         return refused("list_bridge_invalid_request");
     };
-    let result = match op {
-        Operation::TermActive { name } => term_active(&st, &name),
-        op => execute(&st.list, op).await,
-    };
-    match result {
+    match execute(&st.list, op).await {
         Ok(result) => reply(json!({"ok": true, "result": result})),
         Err(e) => {
             if crate::warn_limit::allow(None, e.code) {
@@ -1450,7 +1446,7 @@ mod tests {
         // A descoberta semeada vale por `DISCOVER_TTL`; no Windows a recusa do endereço dos fatos leva ~2 s
         // por rodada e a seguinte redescobriria pelo multiplexador real. Cada rodada parte da mesma linha.
         let seed = || async { *bridge.discovery.lock().await = Some(Discovery { at: Instant::now(), wall: wall_now(), epoch: 0, fresh: true,
-            rows: Arc::new(vec![row()]), agent_pids: Arc::default(), panes: Arc::default(), children: Arc::default() }); };
+            rows: Arc::new(vec![row()]), agent_pids: Arc::default(), panes: Arc::default(), children: Arc::default(), partial: false }); };
         seed().await;
         let binding = InteractionBinding { key: "k".into(), conversation: "sid".into(), generation: 1 };
         let local = PluginFacts { plugin_state: None, waiter_open: true, heartbeat_age_ms: Some(0), question: None,
@@ -1495,7 +1491,7 @@ mod tests {
         bridge.set_plugin_runtime(Arc::new(crate::runtime::gateway::RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(), "test".into(), "instance".into())));
         let row = serde_json::from_value::<SessionRow>(json!({"name":"s","provider":"claude","headless":true,"lifecycle_id":"k:k"})).unwrap();
         *bridge.discovery.lock().await = Some(Discovery { at: Instant::now(), wall: wall_now(), epoch: 0, fresh: true,
-            rows: Arc::new(vec![row]), agent_pids: Arc::default(), panes: Arc::default(), children: Arc::default() });
+            rows: Arc::new(vec![row]), agent_pids: Arc::default(), panes: Arc::default(), children: Arc::default(), partial: false });
         let local = PluginFacts { plugin_state: None, waiter_open: true, heartbeat_age_ms: Some(0), question: None, questions: vec![], suggestion: "".into() };
         let binding = InteractionBinding { key: "k".into(), conversation: "sid".into(), generation: 1 };
         *lock(&bridge.test_plugins) = Some(BTreeMap::from([("s".into(), Ok(PluginReading { binding, facts: Ok(local) }))]));
@@ -1517,7 +1513,7 @@ mod tests {
             procs: Arc::new(procs::SystemProcs::default()), dirs: Some(dirs) }, FactsClient::new("127.0.0.1:9".parse().unwrap(), "s".into()));
         let row = serde_json::from_value::<SessionRow>(json!({"name":"t","provider":"claude","headless":false,"lifecycle_id":"k"})).unwrap();
         *bridge.discovery.lock().await = Some(Discovery { at: Instant::now(), wall: wall_now(), epoch: 0, fresh: true,
-            rows: Arc::new(vec![row]), agent_pids: Arc::default(), panes: Arc::default(), children: Arc::default() });
+            rows: Arc::new(vec![row]), agent_pids: Arc::default(), panes: Arc::default(), children: Arc::default(), partial: false });
         let binding = InteractionBinding { key: "k".into(), conversation: "sid".into(), generation: 1 };
         let local = PluginFacts { plugin_state: None, waiter_open: true, heartbeat_age_ms: Some(0), question: None,
             questions: vec![json!({"id":"perm:a","interaction_id":"shown-a","questions":[],"tool":"Bash","resumo":"ls"})], suggestion: "".into() };

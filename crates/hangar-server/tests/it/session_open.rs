@@ -6,10 +6,10 @@ use serde_json::Value;
 
 use crate::fake::*;
 
-/// Todo pedido válido é do Rust (a recusa também); o corpo que não é pedido segue ao Python intacto, sem
-/// marca nenhuma (a do cliente não passa): o 422 é o dele.
+/// Todo pedido é do Rust: o válido abre ou recusa, e o corpo que não é pedido leva o 422 dele, sem ir ao
+/// Python, que não tem mais a rota.
 #[tokio::test]
-async fn create_opens_claude_terminal_in_rust_and_forwards_the_rest() {
+async fn create_opens_claude_terminal_in_rust_and_refuses_a_bad_body() {
     let (fake, up) = spawn_fake().await;
     let srv = spawn_server(config(up, "127.0.0.1")).await;
     let post = |body: &'static [u8]| client().post(format!("http://{srv}/api/sessions")).bearer_auth(OWNER)
@@ -26,11 +26,10 @@ async fn create_opens_claude_terminal_in_rust_and_forwards_the_rest() {
     for body in [&br#"{"name":"s1","cwd":"/x","bogus":1}"#[..], b"nem json"] {
         let resp = client().post(format!("http://{srv}/api/sessions")).bearer_auth(OWNER)
             .header("content-type", "application/json").header("x-hangar-open", "python").body(body.to_vec()).send().await.unwrap();
-        assert_eq!(resp.text().await.unwrap(), "from-python");
-        assert_eq!(fake.last_body(), body);
-        assert!(fake.last_hit().1.get("x-hangar-open").is_none(), "a marca do cliente não passa");
+        assert_eq!(resp.status(), 422);
+        assert_eq!(serde_json::from_str::<Value>(&resp.text().await.unwrap()).unwrap()["detail"]["code"], "erro_corpo_invalido");
     }
-    assert_eq!(fake.hits_to("/api/sessions"), 2);
+    assert_eq!(fake.hits_to("/api/sessions"), 0);
 }
 
 /// O que entrou direto no Python (Connect) chega pela ponte privada (`<nome>/open`), só com o segredo, e

@@ -174,25 +174,6 @@ def test_terminal_queue_io_leaves_slot_guard_available(monkeypatch, tmp_path):
     terminal._queue(owner, slot.binding.descriptor(), {'kind': 'set_runtime_state', 'state': {}})
 
 
-def test_native_receipt_resolves_compacted_accepted_attempt_without_root(monkeypatch, tmp_path):
-    import uuid
-    owner, slot, _ = live_owner(monkeypatch, tmp_path)
-    mid = str(uuid.uuid5(uuid.NAMESPACE_URL, f'hangar:{slot.binding.key}:entry'))
-    store = slot.store
-    store.exec(1, 'prepare', CLOCK, intent('attempt', 'entry'))
-    store.exec(1, 'append', CLOCK, {'kind': 'append', 'text': 'fixture-input', 'entry_id': 'entry'})
-    store.exec(1, 'dispatch', CLOCK, {'kind': 'begin_dispatch', 'id': 'attempt', 'wire_id': 'terminal:1:attempt'})
-    store.exec(1, 'finish', CLOCK, {'kind': 'finish', 'id': 'attempt', 'status': 'accepted', 'result': {
-        'operation_id': 'attempt', 'disposition': 'accepted', 'payload': {'native': True, 'message_id': mid, 'code': 'native_write'}}})
-    fill(store, 270)
-    async def flow():
-        assert 'entry' not in store.state['operations']
-        assert await owner.native_receipt(mid, 'refused') is True
-        assert store.state['rows'][0]['desistiu'] is True
-        assert store.state['operations']['attempt']['result']['payload']['native_status'] == 'refused'
-    asyncio.run(flow())
-
-
 @pytest.mark.parametrize('attempt', ['staged', 'dispatching'])
 def test_python_recover_requeues_only_attempts_that_never_started_writing(tmp_path, attempt):
     """O boot recupera a fila no Python antes do Rust: a regra do `staged` vale dos dois lados."""

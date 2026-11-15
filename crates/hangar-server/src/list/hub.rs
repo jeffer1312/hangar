@@ -843,16 +843,20 @@ pub async fn list(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInf
 /// existem" nunca vira "você não tem nenhuma".
 fn unavailable(st: &AppState, req: &HeaderMap, e: ListError) -> Response {
     st.diag.report("rust.list_route_failed", "", e.code, "lista do dono indisponível no GET");
-    let detail = if e.code == "mux_unavailable" {
+    let mut resp = (StatusCode::SERVICE_UNAVAILABLE, [(header::CONTENT_TYPE, "application/json")],
+        json!({"detail": unavailable_detail(&e)}).to_string()).into_response();
+    cors(req, resp.headers_mut());
+    resp
+}
+
+/// O `detail` do 503 da lista, também para as rotas que dependem dela para saber se a sessão existe.
+pub(crate) fn unavailable_detail(e: &ListError) -> Value {
+    if e.code == "mux_unavailable" {
         json!({"code": "erro_mux_indisponivel", "params": {"detalhe": e.detail},
             "msg": "o tmux não respondeu — a lista de sessões está indisponível"})
     } else {
         json!({"code": "erro_lista_indisponivel", "params": {"detalhe": e.code}, "msg": "a lista de sessões está indisponível"})
-    };
-    let mut resp = (StatusCode::SERVICE_UNAVAILABLE, [(header::CONTENT_TYPE, "application/json")],
-        json!({"detail": detail}).to_string()).into_response();
-    cors(req, resp.headers_mut());
-    resp
+    }
 }
 
 #[cfg(test)]

@@ -1,8 +1,7 @@
 """Tela temporária "Migração para Rust" (sai na parte 7): o que só o Python sabe do processo.
 
-Modo, motivo de o Python atender sozinho, versões e consumo dos processos conhecidos. Com o Rust
-na porta, ele pede isto em `/internal/migration/status` e soma a parte dele; sozinho, o Python
-responde `/api/migration/status` com o mesmo bloco.
+Modo, motivo de o Rust ter desistido, versões e consumo dos processos conhecidos. O Rust pede isto
+em `/internal/migration/status` e soma a parte dele.
 """
 from __future__ import annotations
 
@@ -13,16 +12,9 @@ import threading
 import time
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Request
-
-from app.auth import require_auth
-from app.config import settings
-from app.mensagens import erro
-from app.guest_header import guest_of
-
 # Código que o Supervisor registra quando desiste do Rust; `None` com o Rust na porta.
 _reason: str | None = None
-# Porta em que este uvicorn atende: a interna, atrás do Rust, ou a pública.
+# Porta interna em que este uvicorn atende, atrás do Rust.
 _listen_port: int | None = None
 # pid -> (instante, segundos de CPU) da leitura anterior: a CPU é a média entre duas visitas.
 _samples: dict[int, tuple[float, float]] = {}
@@ -43,14 +35,7 @@ def set_listen_port(port: int | None) -> None:
 
 
 def reason() -> str | None:
-    if _reason:
-        return _reason
-    # Estes dois nem chegam ao Supervisor; com --reload o processo que atende é o filho do uvicorn.
-    if settings.reload:
-        return "reload"
-    if not settings.rust_server:
-        return "desligado"
-    return None
+    return _reason
 
 
 def _mode() -> str:
@@ -190,17 +175,3 @@ def facts() -> dict:
             "cano": _canos_usage(),
         },
     }
-
-
-def _require_owner(request: Request) -> None:
-    if guest_of(request) is not None:
-        raise HTTPException(403, detail=erro("migration_status_owner", "Só o dono vê o estado da migração."))
-
-
-router = APIRouter(dependencies=[Depends(require_auth), Depends(_require_owner)])
-
-
-@router.get("/api/migration/status")
-def read_status() -> dict:
-    # Chegou ao Python: é ele que atende a porta pública (o Rust intercepta esta rota).
-    return {"served_by": "python", "python": facts(), "rust": None, "areas": None, "private": None}

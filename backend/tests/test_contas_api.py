@@ -64,14 +64,3 @@ def test_marcador_por_symlink_nao_entra_na_lista(casa):
     assert str(conta) not in {c.path for c in list_config_dirs()}
 
 
-def test_codex_com_config_dir_nao_reconcilia(casa, monkeypatch, hangar_server_bin):
-    """A abertura é do Rust: no modo python o pedido é recusado com código, e a reconciliação
-    (efeito no disco) não roda antes da recusa."""
-    contas.criar("conta2")
-    reconciliou = []
-    monkeypatch.setattr(contas, "reconciliar", lambda nome, projeto=None: reconciliou.append(1) or [])
-    r = TestClient(app).post("/api/sessions", json={
-        "name": "s1", "cwd": str(casa), "config_dir": str(casa / ".claude-conta2"),
-        "provider": "codex"}, headers=AUTH)
-    assert r.status_code == 503 and "session_open_needs_rust_server" in r.text
-    assert reconciliou == []

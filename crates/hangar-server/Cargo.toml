@@ -61,6 +61,7 @@ hangar-workflows.workspace = true
 hangar-http-file.workspace = true
 hangar-desktop-theme.workspace = true
 hangar-shortcut-transfer.workspace = true
+hangar-sidecar-prune.workspace = true
 hangar-opencode-cookie.workspace = true
 hangar-deploy.workspace = true
 hangar-port-preview.workspace = true
@@ -196,6 +197,10 @@ path = "tests/contract_quotas_other.rs"
 [[test]]
 name = "contract_credenciais"   # fixa HANGAR_RUNTIME_INSTANCE
 path = "tests/contract_credenciais.rs"
+
+[[test]]
+name = "auth_unavailable"   # liga HANGAR_AUTH_CONTEXT inválido no processo
+path = "tests/auth_unavailable.rs"
 
 [[test]]
 name = "scope_retry"   # troca o PATH e o logger global

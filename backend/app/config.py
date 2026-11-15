@@ -189,7 +189,6 @@ class Settings(BaseSettings):
     # CP_SCAN_ROOTS: raizes que o fs-scanner pode listar (string crua; resolvida por
     # resolve_scan_roots). Mantida como str pra aceitar o formato "a,b" direto do env.
     scan_roots: str = _DEFAULT_SCAN_ROOTS
-    reload: bool = False     # CP_RELOAD=1: uvicorn auto-reload no dev (NUNCA em prod). Default off.
     # CP_DIAG_TERM_INPUT=1: registra no log privado as RESPOSTAS de terminal que o painel manda pro
     # pty (CPR, DA, XTVERSION) — nunca a digitacao. Existe pro defeito do Windows em que caractere
     # que ninguem digitou aparece no composer da TUI com o painel aberto (`termsock._diag_entrada`).
@@ -270,9 +269,6 @@ class Settings(BaseSettings):
     # IP (rate limiter) and the https scheme (cookie Secure) are seen behind a TLS proxy. "*" trusts any
     # upstream (only safe when nothing untrusted can reach the port directly).
     forwarded_allow_ips: str = "127.0.0.1"
-    # CP_RUST_SERVER: 0 desliga o hangar-server (Rust) na porta pública e o Python atende sozinho.
-    # Campo do Settings, e não os.environ, pra valer também escrito no backend/.env.
-    rust_server: bool = True
     # CP_DEPLOY_SECRET: shared secret do webhook do GitHub (HMAC-SHA256). Vazio = endpoint de auto-deploy
     # desligado (retorna 404). O push na main dispara /api/deploy/github-webhook -> valida a assinatura ->
     # start (nao-bloqueante) da unit systemd 'hangar-deploy.service' (pull + build + restart).
@@ -367,7 +363,6 @@ DESCRICAO_DE_CAMPO: dict[str, str] = {
     "port": "port",
     "auth_token": "auth_token",
     "projects_dir": "projects_dir",
-    "reload": "reload",
     "diag_term_input": "diag_term_input",
     "front_port": "front_port",
     "public_url": "public_url",
@@ -388,7 +383,6 @@ DESCRICAO_DE_CAMPO: dict[str, str] = {
     "sync_rate_window": "sync_rate_window",
     "forwarded_allow_ips": "forwarded_allow_ips",
     "deploy_secret": "deploy_secret",
-    "rust_server": "rust_server",
     "update_branch": "update_branch",
     "update_last_branch": "update_last_branch",
 }

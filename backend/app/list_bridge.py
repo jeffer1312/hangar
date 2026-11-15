@@ -1,6 +1,5 @@
 """Ponte privada da lista: com o Rust de pé, a descoberta e o cache de resolução do transcript são
-dele. Falha levanta, nunca devolve lista vazia: lista vazia é "ninguém vivo" para quem varre pares
-e faz `prune`."""
+dele. Falha levanta, nunca devolve lista vazia: lista vazia é "ninguém vivo" para quem varre pares."""
 import asyncio
 import http.client
 import ipaddress
@@ -133,10 +132,6 @@ def snapshot() -> list[SessionInfo]:
     return _rows(_request("list.snapshot", {}))
 
 
-def invalidate() -> None:
-    _request("list.invalidate", {})
-
-
 def resolve(name: str, cwd: str, pid: int | None = None) -> tuple[str | None, bool]:
     result = _request("list.resolve", {"name": name, "cwd": cwd, "pid": pid})
     if (not isinstance(result, dict) or type(result.get("tracked")) is not bool
@@ -149,21 +144,9 @@ def seed(name: str, jsonl: str) -> None:
     _request("list.seed", {"name": name, "jsonl": str(jsonl)})
 
 
-def forget(name: str) -> None:
-    _request("list.forget", {"name": name})
-
-
 def endpoint() -> tuple[str, str] | None:
     """Endereço e segredo da porta privada do Rust, ou None com a ponte desligada."""
     return _config
-
-
-def term_active(name: str) -> bool:
-    result = _request("term.active", {"name": name}, timeout=5)
-    if not isinstance(result, dict) or type(result.get("active")) is not bool:
-        _failed("term.active", "list_bridge_invalid")
-        raise ListBridgeError("list_bridge_invalid", "term.active")
-    return result["active"]
 
 
 def push_state_facts(name: str, facts: dict) -> None:

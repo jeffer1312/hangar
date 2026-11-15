@@ -68,7 +68,8 @@ case "$1" in
   list-clients) read_state || exit 1; echo 'attached,control-mode,UTF-8'; if [ -f "$S.attached" ]; then echo 'attached,focused,UTF-8'; fi;;
   # `$S.keys`: o pane aceita o que se digita nele (a vida nova entrega a fila).
   load-buffer) [ -f "$S.keys" ] && cat >/dev/null && read_state;;
-  send-keys|paste-buffer) [ -f "$S.keys" ] && read_state;;
+  # `$S.sent`: cada tecla e colagem que chegou ao pane.
+  send-keys|paste-buffer) echo "$@" >> "$S.sent"; [ -f "$S.keys" ] && read_state;;
   list-panes) read_state && printf '%s\t1\t%s\t%s\t%%7\t\tclaude\t%s\t0\t0\n' "$NAME" "$PID" '{c}' "$BORN";;
   show-environment) grep "^$4=" "$S.env" || exit 1;;
   set-environment) echo "$4=$5" >> "$S.env";;
@@ -79,6 +80,8 @@ case "$1" in
       $'#{{session_name}}\t#{{pane_id}}\t#{{session_created}}') printf '%s\t%%7\t%s\n' "$NAME" "$BORN";;
       '#{{session_name}}'*) printf '%s\t%%7\t%s\t%s\t0\t0\t0\n' "$NAME" "$BORN" "$PID";;
       '#{{pane_pid}}'*) printf '%s\t%s\t%%7\t%s\n' "$PID" "$NAME" "$BORN";;
+      # `MODS_FORMATS`: fora do modo de cópia, sem tela alternativa.
+      '#{{mouse_sgr_flag}}'*) echo '0|0|0|160|45';;
       *) exit 1;;
     esac;;
   capture-pane) cat "$S.screen";;
@@ -1063,13 +1066,22 @@ printf '%s\n' "$*" >> '{args}'
 [ -f '{stub}' ] && trap '' TERM
 while IFS= read -r -t 120 line; do
   case "$line" in
+    # `refuse-bypass`: a vida que não subiu em bypass recusa entrar nele pelo pedido de controle.
+    # O JSON do pedido sai com as chaves em ordem alfabética: `mode` vem antes de `subtype`.
+    *'"subtype":"set_permission_mode"'*)
+      rid=$(sed -E 's/^.*"request_id":"([^"]*)".*$/\1/' <<<"$line")
+      if [ -f '{refuse}' ] && [[ "$line" == *'"bypassPermissions"'* ]] && [[ "$*" != *'--permission-mode bypassPermissions'* ]]; then
+        printf '{{"type":"control_response","response":{{"subtype":"error","request_id":"%s","error":"bypass recusado"}}}}\n' "$rid"
+      else
+        printf '{{"type":"control_response","response":{{"subtype":"success","request_id":"%s","response":{{}}}}}}\n' "$rid"
+      fi;;
     *'"type":"control_request"'*)
       rid=$(sed -E 's/^.*"request_id":"([^"]*)".*$/\1/' <<<"$line")
       printf '{{"type":"control_response","response":{{"subtype":"success","request_id":"%s","response":{{"commands":[]}}}}}}\n' "$rid";;
   esac
 done
 [ -f '{stub}' ] && echo $$ > '{stub}.pid' && sleep 30
-"#,args=fx.home.join("claude.args").display(),stub=fx.home.join("stubborn-agent").display()));
+"#,args=fx.home.join("claude.args").display(),stub=fx.home.join("stubborn-agent").display(),refuse=fx.home.join("refuse-bypass").display()));
     crate::write_executable(&bin.join("claude"),format!("#!/bin/bash\nexec -a claude /bin/bash '{}' \"$@\"\n",fake.display()));
     let path = format!("{}:{}",bin.display(),std::env::var("PATH").unwrap());
     let env = AccountEnvironment::from_map([("HOME".to_owned(),fx.home.to_string_lossy().into_owned()),("PATH".to_owned(),path)].into());
@@ -1152,6 +1164,30 @@ async fn delete_r1_3_headless_claude_whose_agent_outlives_the_cano_is_500() {
     assert_eq!(python.hits_to("/api/sessions/s1"),0);
 }
 
+/// R1-01 (decisões 1 e 3): o convidado com conta fecha o Claude sem terminal aberto aqui pelo fechamento
+/// do dono: a sessão sai do registro, sidecar e fila também, e o Python não recebe nada.
+#[tokio::test]
+async fn delete_r1_01_login_guest_closes_a_headless_claude_of_the_rust() {
+    let fx = fixture();
+    fx.transcript();
+    let key = "3b".repeat(16);
+    terminal_with_spec(&fx,&key);
+    let registry = headless_registry(&fx).await;
+    let reopened = registry.reopen_claude_session("s1",mode_switch(false),None).await.expect("é sessão Claude daqui");
+    assert!(reopened.is_ok(),"{:?}",reopened.err().map(|f|f.error.code));
+    let (python,server,token) = crate::runtime_codex_watch::serve_guest(registry.clone(),&fx.home,&fx.home.join(".claude"),&fx.tmux).await;
+    let response = crate::fake::client().delete(format!("http://{server}/api/sessions/s1")).bearer_auth(token).send().await.unwrap();
+    let status = response.status().as_u16();
+    let body:Value = serde_json::from_str(&response.text().await.unwrap()).unwrap_or(Value::Null);
+    assert_eq!((status,body),(200,json!({"ok":true,"warning":null})));
+    assert!(!registry.has_entry(None,"s1").await,"a entrada saiu");
+    assert!(!fx.sidecar_path("s1").exists(),"sidecar apagado");
+    // O fechamento não apaga a fila: esvazia e grava nela o fim da vida, que é o que a encerra.
+    let queue = std::fs::read_to_string(fx.queue.join(format!("runtime/{key}.json"))).expect("fila com o fechamento");
+    assert!(queue.contains(r#""closed":true"#),"fila sem o fechamento gravado: {queue}");
+    assert_eq!(python.hits_to("/api/sessions/s1"),0);
+}
+
 /// Rodapé sem o modo na hora de ir ao sem terminal: o modo sai do spec.
 #[tokio::test]
 async fn an_unreadable_footer_does_not_change_the_mode_of_the_switch_to_headless() {
@@ -1231,6 +1267,55 @@ async fn bypass_reopens_a_headless_session_on_the_same_conversation() {
     let args = std::fs::read_to_string(fx.home.join("claude.args")).unwrap();
     assert!(args.contains(&format!("--resume {SID}")) && args.contains("--permission-mode bypassPermissions"),"{args}");
     registry.close_with_kill(&key,generation(&fx,&key)).await.unwrap();
+}
+
+/// R4-08 (`api.py:3168-3186`): pela rota, o Claude sem terminal que recusa o bypass pelo pedido de controle
+/// (`permission_boot_rejected`) reabre já em bypass na mesma conversa, e a resposta é 200.
+#[tokio::test]
+async fn r4_08_bypass_refused_by_a_headless_claude_reopens_it_in_bypass_through_the_route() {
+    let fx = fixture();
+    fx.transcript();
+    let key = "5d".repeat(16);
+    fx.put_sidecar(json!({"name":"s1","provider":"claude","headless":true,"key":key,"cwd":fx.cwd,"session_id":SID,"permission_mode":"manual","cano":null}));
+    std::fs::write(fx.home.join("refuse-bypass"),"").unwrap();
+    let registry = headless_registry(&fx).await;
+    let (python,server) = crate::runtime_codex_watch::serve_owner(registry.clone()).await;
+    let (status,body) = post(server,"permission-mode",json!({"mode":"bypassPermissions"})).await;
+    assert_eq!(status,200,"{body}");
+    let meta:Value = serde_json::from_slice(&std::fs::read(fx.sidecar_path("s1")).unwrap()).unwrap();
+    assert_eq!((meta["permission_mode"].as_str(),meta["session_id"].as_str()),(Some("bypassPermissions"),Some(SID)));
+    let args = std::fs::read_to_string(fx.home.join("claude.args")).unwrap();
+    assert!(args.lines().last().is_some_and(|line|line.contains(&format!("--resume {SID}")) && line.contains("--permission-mode bypassPermissions")),"{args}");
+    assert_eq!(python.hits_to("/api/sessions/s1/permission-mode"),0);
+    registry.close_with_kill(&key,generation(&fx,&key)).await.unwrap();
+}
+
+/// R4-09 (`api.py:3188,3215-3227`): pela rota, bypass fora do ciclo do Shift+Tab (o processo não tem a flag)
+/// vai à reabertura em bypass sem girar o modo: nenhum Shift+Tab chega ao pane.
+#[tokio::test]
+async fn r4_09_bypass_outside_the_cycle_reopens_through_the_route_without_shift_tab() {
+    let fx = fixture();
+    fx.transcript();
+    let key = "6e".repeat(16);
+    terminal_with_spec(&fx,&key);
+    // A tela do pane que nasce na reabertura já mostra o bypass; a de agora, o modo de antes.
+    std::fs::write(fx.state.with_extension("next-screen"),"\n❯ \n  ⏵⏵ bypass permissions on (shift+tab to cycle)\n").unwrap();
+    // A memória de modos que o servidor liga ao registro (`lib.rs`): sem ela o ator recusa a troca.
+    let memory = Arc::new(std::sync::Mutex::new(hangar_server::state::permission::PermissionMemory::default()));
+    let registry = crate::runtime_open::registry_with(|registry|registry
+        .with_codex_environment(AccountEnvironment::from_map([("HOME".to_owned(),fx.home.to_string_lossy().into_owned()),("PATH".to_owned(),std::env::var("PATH").unwrap())].into()))
+        .with_terms(Arc::new(hangar_server::term::Terms::default())).with_permissions(memory)).await;
+    registry.bind_watcher(fx_watcher(&fx));
+    let (python,server) = crate::runtime_codex_watch::serve_owner(registry.clone()).await;
+    let (status,body) = post(server,"permission-mode",json!({"mode":"bypassPermissions"})).await;
+    assert_eq!((status,body["reopened"].clone(),body["current"].clone()),(200,json!(true),json!("bypassPermissions")),"{body}");
+    let sent = std::fs::read_to_string(fx.state.with_extension("sent")).unwrap_or_default();
+    assert!(!sent.contains("BTab"),"nenhum Shift+Tab: {sent}");
+    assert!(command(&fx.args()).contains("--permission-mode bypassPermissions"),"{:?}",fx.args());
+    assert_eq!(python.hits_to("/api/sessions/s1/permission-mode"),0);
+    let (found,_) = registry.terminal_view("s1").await.unwrap();
+    registry.close(&found,2).await.unwrap();
+    fx.finish();
 }
 
 /// Pergunta aberta na tela: a troca de modo recusa com a frase do app e nada muda.

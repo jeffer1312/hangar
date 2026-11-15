@@ -76,8 +76,13 @@ fn now() -> f64 { std::time::SystemTime::now().duration_since(std::time::UNIX_EP
 async fn requires_secret() {
     let dir = tempfile::tempdir().unwrap();
     let addr = spawn(dir.path(), 0).await;
-    assert_eq!(call(addr, None, "list.invalidate", json!({})).await.0, 404);
-    assert_eq!(call(addr, Some("outro"), "list.invalidate", json!({})).await.0, 404);
+    assert_eq!(call(addr, None, "list.discover", json!({})).await.0, 404);
+    assert_eq!(call(addr, Some("outro"), "list.discover", json!({})).await.0, 404);
+    // R4: `list.invalidate` e `list.forget` saíram com os chamadores do Python; pedi-las é a recusa de
+    // operação desconhecida.
+    for op in ["list.invalidate", "list.forget"] {
+        assert_eq!(call(addr, Some(SECRET), op, json!({"name": "alpha"})).await.0, 400, "{op}");
+    }
     let (status, body) = call(addr, Some(SECRET), "list.discover", json!({})).await;
     assert_eq!(status, 200);
     assert_eq!(names(&body), ["alpha"]);
@@ -106,9 +111,6 @@ async fn newer_than_forces_fresh() {
     let (_, body) = call(addr, Some(SECRET), "list.discover", json!({"newer_than": now()})).await;
     assert_eq!(names(&body), ["alpha"]);
     assert_eq!(calls(dir.path(), "list-panes"), 3, "pedido de sessão recém-criada varre de novo");
-    call(addr, Some(SECRET), "list.invalidate", json!({})).await;
-    call(addr, Some(SECRET), "list.discover", json!({})).await;
-    assert_eq!(calls(dir.path(), "list-panes"), 4, "invalidada não serve a de antes");
 }
 
 #[tokio::test]
@@ -170,16 +172,13 @@ async fn mux_unavailable_is_an_error_never_empty() {
 }
 
 #[tokio::test]
-async fn seed_then_resolve_then_forget() {
+async fn seed_then_resolve() {
     let dir = tempfile::tempdir().unwrap();
     let addr = spawn(dir.path(), 0).await;
     let cwd = dir.path().to_str().unwrap();
     call(addr, Some(SECRET), "list.seed", json!({"name": "alpha", "jsonl": "/x/semeado.jsonl"})).await;
     let (_, body) = call(addr, Some(SECRET), "list.resolve", json!({"name": "alpha", "cwd": cwd})).await;
     assert_eq!(body["result"], json!({"jsonl": "/x/semeado.jsonl", "tracked": true}));
-    call(addr, Some(SECRET), "list.forget", json!({"name": "alpha"})).await;
-    let (_, body) = call(addr, Some(SECRET), "list.resolve", json!({"name": "alpha", "cwd": cwd})).await;
-    assert_eq!(body["result"], json!({"jsonl": null, "tracked": false}));
 }
 
 /// Ponte com `n` sessões Claude paradas num `tmux` de mentira (pane pronto) e fatos de um Python de

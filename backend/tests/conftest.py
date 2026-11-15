@@ -77,20 +77,6 @@ def pytest_runtest_teardown(item, nextitem):
     sse = sys.modules.get("sse_starlette.sse")
     if sse is not None:
         sse.AppStatus.should_exit = False
-    # A confirmação de entrega do app.api é um Timer de segundos: sobrando de um teste, dispara no
-    # seguinte e fala com o tmux no meio dele.
-    api = sys.modules.get("app.api")
-    if api is None:
-        return
-    with api._confirm_lock:
-        pending = [timer for timer, _ in api._confirm_pend.values()]
-        api._confirm_pend.clear()
-    for timer in pending:
-        # Como no _agendar_confirmacao: há testes que trocam o Timer por um falso sem esses métodos.
-        if callable(getattr(timer, "cancel", None)):
-            timer.cancel()
-        if callable(getattr(timer, "join", None)):
-            timer.join(timeout=5)
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -323,18 +309,6 @@ def _reset_sem_agente_avisadas():
     SessionRegistry._SEM_AGENTE_AVISADAS.clear()
     yield
     SessionRegistry._SEM_AGENTE_AVISADAS.clear()
-
-
-@pytest.fixture(autouse=True)
-def _reset_list_snapshot():
-    # Endpoints quentes (history/workflows) resolvem a sessao via snapshot com TTL de
-    # registry.list() (api._list_snap). Os testes patcham app.api.registry.list POR teste (context
-    # manager) -> sem este reset, o snapshot preenchido num teste vazaria pro seguinte dentro do
-    # TTL de 1s (fakes de um teste respondendo no outro).
-    from app import api
-    api._list_snap["snap"] = None
-    yield
-    api._list_snap["snap"] = None
 
 
 @pytest.fixture

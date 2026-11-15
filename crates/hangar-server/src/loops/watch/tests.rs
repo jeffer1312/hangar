@@ -151,6 +151,24 @@ async fn failed_or_switched_off_chain_keeps_the_link() {
     assert!(off.store().chain("s").is_none());
 }
 
+/// R3-23: o Codex, com e sem terminal, dispara o `then` uma vez no fim do turno e apaga o vínculo; o fim de
+/// turno seguinte não entrega de novo.
+#[tokio::test]
+async fn codex_with_and_without_a_terminal_fires_its_chain_once() {
+    for headless in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let w = Watcher::new(Arc::new(host(&dir, vec![row("c", "codex", headless, "idle")])), Duration::from_millis(20));
+        w.host.store().set_chain("c", "t", "x").unwrap();
+        w.on_event(idle("c"));
+        settle().await;
+        w.on_event(idle("c"));
+        settle().await;
+        assert_eq!(*lock(&w.host.delivered), [("t".to_owned(), "x".to_owned())], "headless={headless}");
+        assert!(w.host.store().chain("c").is_none(), "headless={headless}");
+        assert!(lock(&w.host.ticks).is_empty(), "headless={headless}");
+    }
+}
+
 /// O vínculo dos três provedores dispara no fim confirmado; loop ativo conserva a recusa.
 #[tokio::test]
 async fn terminal_providers_fire_their_chain_and_refuse_active_loops() {

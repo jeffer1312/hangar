@@ -76,15 +76,6 @@ def _rust_owner() -> Optional[object]:
     return owner if owner is not None and owner.mode != "python" else None
 
 
-def painel_aberto(name: str) -> bool:
-    """Há painel anexado à sessão? Com o Rust dono, pergunta a ele (falha levanta
-    `ListBridgeError`): o painel do Python não existe nesse modo."""
-    if _rust_owner() is not None:
-        from app import list_bridge
-        return list_bridge.term_active(name)
-    return name in _ativos
-
-
 def painel_disponivel() -> bool:
     """Da pra abrir o painel de terminal NESTA maquina? (o que o /api/config publica)
 

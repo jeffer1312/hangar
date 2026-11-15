@@ -167,20 +167,3 @@ def test_list_nao_faz_fork_por_sessao(tmp_path, monkeypatch):
         matar_servidor(sock)
 
 
-def test_pane_info_resolve_pelo_pane_do_agente_com_split(sessao, tmp_path, monkeypatch):
-    # Task 6, Step 6: com um split (o shell escondido, ou qualquer split manual), o pane ATIVO pode
-    # ser o do shell -- api._pane_info tem que devolver o pane do AGENTE (aqui, um Pi), nao o
-    # ativo, reusando a MESMA resolucao que registry.list() ja usa (_agent_pane).
-    agente = tmux.list_panes_of(sessao)[0]
-    _segunda_janela(sessao, str(tmp_path))     # 2o pane, fica ATIVO -- o agente perde o "ativo"
-
-    monkeypatch.setattr(agentpane, "_pane_do_agente", lambda pid, children: pid == agente["pid"])
-    def _cmd(pid):
-        return "pi --whatever" if pid == agente["pid"] else "bash"
-    monkeypatch.setattr(registry, "_cmdline", _cmd)
-    monkeypatch.setattr(registry, "_argv", lambda pid: _cmd(pid).split())
-
-    provider, pane_id = api_mod._pane_info(sessao)
-
-    assert provider == "pi"
-    assert pane_id == agente["pane_id"]

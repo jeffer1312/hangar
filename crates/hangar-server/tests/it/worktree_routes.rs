@@ -843,6 +843,42 @@ async fn path_outside_the_roots_is_refused_like_python() {
 }
 
 #[tokio::test]
+async fn unreadable_inactivity_settings_keep_the_list_and_drop_only_the_threshold() {
+    let dir = scene();
+    let root = hangar_workspace::real(dir.path());
+    let home = tempfile::tempdir().unwrap();
+    let settings = home.path().join(".hangar/worktree-settings.json");
+    std::fs::create_dir_all(settings.parent().unwrap()).unwrap();
+    std::fs::write(&settings, "inválido").unwrap();
+    let f = workspace_fixture::fixture_with_home(&root, true, Some(home.path())).await;
+    let c = client();
+    let r = c
+        .get(format!("http://{}/api/worktrees?sizes=false", f.addr))
+        .bearer_auth(OWNER)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    let body: Value = r.json().await.unwrap();
+    let wt = &body["repos"][0]["worktrees"][0];
+    assert_eq!(wt["branch"], "wt");
+    assert_eq!(wt["inactive_days"], Value::Null);
+    let detail = c
+        .get(format!("http://{}/api/worktrees/detail?path={}", f.addr, root.join("repo-wt").display()))
+        .bearer_auth(OWNER)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(detail.status(), 200);
+    assert_eq!(detail.json::<Value>().await.unwrap()["inactive_days"], Value::Null);
+    assert_eq!(
+        f.diag("rust.worktrees_failed").await["codigo"],
+        hangar_workspace::UNAVAILABLE
+    );
+    assert_eq!(f.hits(), 0);
+}
+
+#[tokio::test]
 async fn missing_native_context_is_a_503_with_code_never_python() {
     let dir = scene();
     let home = tempfile::tempdir().unwrap();

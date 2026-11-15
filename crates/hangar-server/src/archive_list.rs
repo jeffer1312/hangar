@@ -638,7 +638,7 @@ fn tail_text(path: &Path, provider: AgentProvider) -> String {
 }
 
 /// `int` do FastAPI na query; ausente é `default`.
-fn int_param(query: Option<&str>, name: &str, default: i64) -> Result<i64, Value> {
+pub(crate) fn int_param(query: Option<&str>, name: &str, default: i64) -> Result<i64, Value> {
     let Some(raw) = crate::auth::query_param(query, name) else { return Ok(default) };
     let t = raw.trim();
     crate::search_context::PY_INT.is_match(t).then(|| t.replace('_', "").parse::<f64>().ok()).flatten().map(|n| n as i64)

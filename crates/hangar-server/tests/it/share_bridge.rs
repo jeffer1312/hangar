@@ -218,9 +218,21 @@ async fn owner_invite_routes_on_the_public_port_are_answered_by_rust() {
     assert!(resp.headers().contains_key("access-control-allow-origin"), "o PWA de outra origem lê a resposta");
     assert_eq!(json_of(resp).await["shares"].as_array().unwrap().len(), 1);
     assert_eq!(srv.python.hits_to("/api/sessions/s/share"), 0, "o dono não passa pelo Python");
-    // Quem não é o dono segue ao Python, que recusa como antes.
-    client().get(&url).send().await.unwrap();
-    assert_eq!(srv.python.hits_to("/api/sessions/s/share"), 1);
+    // R5-09: quem não é o dono recebe do Rust o 401 que o Python dava, sem chegar a ele.
+    let refused = client().get(&url).send().await.unwrap();
+    assert_eq!(refused.status().as_u16(), 401);
+    assert_eq!(json_of(refused).await["detail"]["code"], "erro_nao_autorizado");
+    // R5-06: o preflight do CORS também é respondido aqui, inclusive a recusa de rede privada.
+    let preflight = |private: bool| {
+        let request = client().request(reqwest::Method::OPTIONS, &url).header("origin", "http://outro").header("access-control-request-method", "GET");
+        if private { request.header("access-control-request-private-network", "true") } else { request }
+    };
+    let ok = preflight(false).send().await.unwrap();
+    assert_eq!((ok.status().as_u16(), ok.headers()["access-control-allow-origin"].to_str().unwrap().to_owned()), (200, "*".to_owned()));
+    assert_eq!(ok.text().await.unwrap(), "OK");
+    let private = preflight(true).send().await.unwrap();
+    assert_eq!((private.status().as_u16(), private.text().await.unwrap()), (400, "Disallowed CORS private-network".to_owned()));
+    assert_eq!(srv.python.hits_to("/api/sessions/s/share"), 0);
     let pairs = client().get(format!("http://{}/api/external-pairs", srv.public)).bearer_auth(OWNER).send().await.unwrap();
     assert_eq!(json_of(pairs).await, json!([]));
 }

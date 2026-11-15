@@ -104,11 +104,12 @@ async fn refusal_becomes_409_with_code() {
 }
 
 #[tokio::test]
-async fn wrong_token_goes_to_python_which_authenticates() {
+async fn wrong_token_gets_401_from_rust() {
     let (python, server, _mods, link) = setup(FakeLink::default()).await;
-    assert_eq!(post(server, "s", "input", json!({"site": "x", "plugin": "vitrine", "key": "y", "kind": "change", "value": ""}), Some("errado")).await.1, "from-python");
+    let (status, body) = post(server, "s", "input", json!({"site": "x", "plugin": "vitrine", "key": "y", "kind": "change", "value": ""}), Some("errado")).await;
+    assert_eq!((status, body["detail"]["code"].as_str()), (401, Some("erro_nao_autorizado")), "{body}");
     assert!(link.calls.lock().unwrap().is_empty());
-    assert_eq!(python.hits_to("/api/sessions/s/plugin/input"), 1);
+    assert_eq!(python.hits_to("/api/sessions/s/plugin/input"), 0);
 }
 
 /// R1.5-1/2/3 e D8: sessão fora do `Mods` recebe a recusa fixa do Python (contract/r1-mods `*_rust_404`,

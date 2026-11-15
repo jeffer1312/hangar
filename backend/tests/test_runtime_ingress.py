@@ -234,29 +234,6 @@ class RustModeOwner:
         return False
 
 
-def test_headless_without_rust_binding_is_an_error(monkeypatch):
-    monkeypatch.setattr(runtime_coordinator, "_current", RustModeOwner())
-    monkeypatch.setattr(api, "_enviar_nativo", lambda *a: pytest.fail("socket nativo"))
-    result = asyncio.run(api._send_one_headless("s", "oi"))
-    assert result["ok"] is False and result["delivered"] is False
-    assert "vínculo no Rust" in str(result["error"])
-
-
-def test_available_without_rust_binding_is_an_error(monkeypatch):
-    owner = RustModeOwner()
-    async def scenario():
-        owner.loop = asyncio.get_running_loop()
-        monkeypatch.setattr(runtime_coordinator, "_current", owner)
-        monkeypatch.setattr(api, "_pane_info", lambda name: ("claude", "%1"))
-        from app import terminal_input
-        monkeypatch.setattr(terminal_input, "_send_lock", lambda *a, **k: pytest.fail("tmux"))
-        monkeypatch.setattr(api, "_enviar_nativo", lambda *a: pytest.fail("socket nativo"))
-        return await asyncio.to_thread(api._send_one, "s", "oi")
-    result = asyncio.run(scenario())
-    # O texto vai ao Rust pela ponte; sem ela de pé o erro tem o código dela, e nada é digitado aqui.
-    assert result["ok"] is False and result["delivered"] is False
-    assert result["error"]["code"] == "claude_bridge_failed"
-
 
 # --- rodada de correção --------------------------------------------------------------------
 

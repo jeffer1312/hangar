@@ -276,21 +276,20 @@ async fn sessions_marks_the_caller() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn send_goes_through_the_input_route_as_the_caller() {
-    let s = scene().await;
+    // A escrita é do Rust (sem registro ela é o `runtime_unavailable`): o recado chega ao cano de `s0`.
+    let s = scene_owned().await;
     let mut mcp = Mcp::open(s.addr, &[("x-hangar-pane", "%7")]).await;
-    let result = mcp.call("send", json!({"alvo": "fora", "texto": "[de: beta] oi"})).await;
+    let result = mcp.call("send", json!({"alvo": "s0", "texto": "[de: beta] oi"})).await;
     assert!(!failed(&result), "{result}");
-    assert_eq!(result["structuredContent"]["alvo"], "fora");
-    assert_eq!(s.python.hits_to("/api/sessions/fora/input"), 1);
-    assert_eq!(serde_json::from_slice::<Value>(&s.python.last_body()).unwrap(), json!({"text": "[de: beta] oi", "steer": true}),
-        "o prefixo escrito pelo modelo não dobra");
+    assert_eq!(result["structuredContent"]["alvo"], "s0");
+    assert_eq!(s.sink.last("s0").as_deref(), Some("[de: beta] oi"), "o prefixo escrito pelo modelo não dobra");
     for alvo in ["beta"] {
         let refused = mcp.call("send", json!({"alvo": alvo, "texto": "oi", "tmux": true})).await;
         assert!(failed(&refused) && first_text(&refused).contains("é esta sessão"), "{refused}");
     }
     let remote = mcp.call("send", json!({"alvo": "srv2::outra", "texto": "oi"})).await;
     assert!(failed(&remote) && first_text(&remote).contains("CP_SERVER_ID ausente"), "{remote}");
-    assert_eq!(s.python.hits_to("/api/sessions/fora/input"), 1);
+    assert_eq!((s.sink.count("s0"), s.python.hits_to("/api/sessions/s0/input")), (1, 0));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -353,8 +352,10 @@ async fn close_session_refuses_itself_unknown_server_and_unknown() {
         let result = mcp.call("close_session", json!({"alvo": alvo})).await;
         assert!(failed(&result) && first_text(&result).contains(error), "{alvo}: {result}");
     }
-    assert!(!failed(&mcp.call("close_session", json!({"alvo": "outra"})).await));
-    assert_eq!(s.python.hits_to("/api/sessions/outra"), 1);
+    // Sem o registro das sessões (servidor subindo) o fechamento falha com código, nunca vai ao Python.
+    let closed = mcp.call("close_session", json!({"alvo": "outra"})).await;
+    assert!(failed(&closed), "{closed}");
+    assert_eq!(s.python.hits_to("/api/sessions/outra"), 0);
     let voice = hangar_server::voice::machines::voice_signature(SECRET).unwrap();
     let refused = Mcp::open(s.addr, &[("x-hangar-voice", &voice)]).await.call("close_session", json!({"alvo": "outra"})).await;
     assert!(failed(&refused) && first_text(&refused).contains("sim"), "fechar pela voz só com o sim falado");
@@ -433,9 +434,10 @@ async fn interrupt_only_reaches_a_linked_child() {
     assert!(failed(&other) && first_text(&other).starts_with("erro_interromper_nao_ligada"), "filha de outro pai: {other}");
     assert_eq!(s.python.hits_to("/api/sessions/outra/interrupt"), 0);
     write_json(&sidecar, json!({"peers": ["beta"], "task": "", "gid": "g1", "harness": {}, "linked_by": "beta"}));
+    // Ligada, passa a guarda e a rota responde no Rust (cena sem registro: `runtime_unavailable`), nunca o Python.
     let done = mcp.call("interrupt", json!({"alvo": "outra"})).await;
-    assert!(!failed(&done), "{done}");
-    assert_eq!(s.python.hits_to("/api/sessions/outra/interrupt"), 1);
+    assert!(!first_text(&done).starts_with("erro_interromper_nao_ligada"), "{done}");
+    assert_eq!(s.python.hits_to("/api/sessions/outra/interrupt"), 0);
 }
 
 /// O servidor do app desktop (`POST /cmd`): anota cada pedido e responde por verbo.

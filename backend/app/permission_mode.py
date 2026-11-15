@@ -1,52 +1,15 @@
-"""Leitura e troca do modo de permissão do Claude Code via rodapé do pane.
-
-Mecanismo medido em 2026-08-20 (docs/superpowers/specs/2026-08-19-medicao-permissao-viva.md):
-- stdin da statusline NÃO traz o modo; sidecar também não.
-- /permissions não aceita argumento.
-- Shift+Tab (BTab) cicla os modos, com confirmação legível no rodapé.
-- Ciclo tem 4 posições numa sessão comum, 5 se nasceu em bypassPermissions, dontAsk só no arranque.
-
-Este módulo é stdlib + tmux, no padrão de model_picker.py.
-"""
+"""Modo de permissão do Claude Code que o Python ainda lê: o padrão da conta e o modo fora do plano
+da sessão (transcript e registro de abertura). Ler e trocar o modo no pane é do Rust."""
 
 import json
 import logging
-import re
 import threading
-import time
 from collections import OrderedDict
-from contextlib import contextmanager
 from pathlib import Path
-from typing import Callable, TypeVar
 
-from app import atomico, tmux
+from app import atomico
 
 _log = logging.getLogger("hangar.permissao")
-
-# Regex que casa a frase do rodapé, sem depender do glifo. O glifo (⏸/⏵⏵) é usado só pra
-# priorizar linhas de rodapé e evitar falso positivo com texto da conversa que cite o modo.
-_FOOTER_RE = re.compile(
-    r"(plan mode on|auto mode on|manual mode on|accept edits on|bypass permissions on|don['’]t ask on)",
-    re.IGNORECASE,
-)
-
-# Normaliza a frase casada para a chave do dict (minúscula, apóstrofe reto, espaço único).
-def _norm(s: str) -> str:
-    s = s.lower().replace("’", "'")
-    s = re.sub(r"\s+", " ", s).strip()
-    return s
-
-_CANON = {
-    "plan mode on": "plan",
-    "auto mode on": "auto",
-    "manual mode on": "manual",
-    "accept edits on": "acceptEdits",
-    "bypass permissions on": "bypassPermissions",
-    "don't ask on": "dontAsk",
-}
-
-# Ordem canônica dos modos como aparecem no help (não é ordem do ciclo; ciclo é descoberto ao vivo).
-ORDEM_CANONICA = ("plan", "auto", "manual", "acceptEdits", "bypassPermissions", "dontAsk")
 
 # Modo de quem criou a sessão sem escolher um na tela. Sem isto o valor fica nulo, a flag não vai
 # no comando e a sessão nasce no que a máquina tiver — numa sem `defaultMode` isso é pedir
@@ -73,45 +36,10 @@ def modo_da_conta(config_dir: str | None) -> str:
         return "manual"   # o nome que a CLI aceita na flag; "default" só existe no settings.json
     return modo if modo in model_args.MODOS_PERMISSAO_CLAUDE else PADRAO_DO_APP
 
-# Leituras durante uma sequência de BTab preservam o último retrato confirmado da sessão.
+# O último modo fora do plano visto por sessão.
 _ultimos_nao_plan: OrderedDict[str, str] = OrderedDict()
-_modos_confirmados: dict[str, str] = {}
 _operacoes_controladas: dict[str, int] = {}
 _mem_lock = threading.Lock()
-_T = TypeVar("_T")
-
-
-def observar_modo(name: str, modo: str) -> str:
-    """Registra um modo confirmado e devolve o último modo da sessão fora do plano."""
-    _, anterior = observar_ou_confirmado(name, modo)
-    return anterior
-
-
-def observar_ou_confirmado(name: str, modo: str,
-                           sessao: str | None = None) -> tuple[str, str]:
-    """Confirma uma leitura livre ou preserva o retrato durante uma sequência controlada."""
-    with _mem_lock:
-        if sessao is not None and sessao in _operacoes_controladas:
-            return (_modos_confirmados.get(name, modo),
-                    _ultimos_nao_plan.get(name, "manual"))
-        _modos_confirmados[name] = modo
-        if modo != "plan":
-            _ultimos_nao_plan[name] = modo
-            _ultimos_nao_plan.move_to_end(name)
-            if len(_ultimos_nao_plan) > 200:
-                removido, _ = _ultimos_nao_plan.popitem(last=False)
-                _modos_confirmados.pop(removido, None)
-        return modo, _ultimos_nao_plan.get(name, "manual")
-
-
-def ultimo_nao_plan(name: str, padrao: str = "manual") -> str:
-    """Consulta o modo anterior sem registrar a captura como confirmação.
-
-    A memória é do processo: depois de um restart do backend ninguém viu modo nenhum desta sessão,
-    e aí quem pergunta é que sabe o que vale no lugar (o modo da conta, por exemplo).
-    """
-    with _mem_lock:
-        return _ultimos_nao_plan.get(name, padrao)
 
 
 def _launch_mode(session_id: str) -> str | None:
@@ -182,217 +110,6 @@ def session_non_plan_mode(jsonl: str | None) -> str | None:
     return known_non_plan(sid) or transcript_non_plan_mode(jsonl) or _launch_mode(sid)
 
 
-def observar_pane(name: str, pane: str, sessao: str | None = None) -> str | None:
-    """Atualiza a memória a partir de uma captura já feita e devolve o modo confirmado."""
-    modo = parse_permission_mode(pane)
-    if modo is not None:
-        return observar_ou_confirmado(name, modo, sessao)[0]
-    return None
-
-
-@contextmanager
-def operacao_controlada(sessao: str):
-    """Impede que o monitor registre os modos intermediários de uma sequência de BTab."""
-    from app import state_facts
-    with _mem_lock:
-        _operacoes_controladas[sessao] = _operacoes_controladas.get(sessao, 0) + 1
-    state_facts.notify(sessao)
-    try:
-        yield
-    finally:
-        with _mem_lock:
-            restantes = _operacoes_controladas.get(sessao, 1) - 1
-            if restantes:
-                _operacoes_controladas[sessao] = restantes
-            else:
-                _operacoes_controladas.pop(sessao, None)
-        state_facts.notify(sessao)
-
-
 def operacao_em_curso(sessao: str) -> bool:
     with _mem_lock:
         return sessao in _operacoes_controladas
-
-
-def executar_controlado(sessao: str, func: Callable[..., _T], *args) -> _T:
-    with operacao_controlada(sessao):
-        return func(*args)
-
-
-def parse_permission_mode(pane: str) -> str | None:
-    """Devolve o id canônico do modo lido no rodapé, ou None se não achou.
-
-    Casa a ÚLTIMA linha que contém o glifo e a frase (⏸/⏵⏵ + modo). Se nenhuma linha
-    com glifo casar, faz segunda passada sem filtro de glifo (captura truncada).
-    Puro, testável com fixture de texto.
-    """
-    lines = pane.splitlines()
-    # primeira passada: exige glifo (evita casar texto da conversa)
-    for line in reversed(lines):
-        if "⏸" not in line and "⏵" not in line:
-            continue
-        m = _FOOTER_RE.search(line)
-        if m:
-            canon = _CANON.get(_norm(m.group(1)))
-            if canon:
-                return canon
-    # segunda passada: sem filtro de glifo (pane estreito que cortou o glifo)
-    for line in reversed(lines):
-        m = _FOOTER_RE.search(line)
-        if m:
-            canon = _CANON.get(_norm(m.group(1)))
-            if canon:
-                return canon
-    return None
-
-
-def ler_modo(name: str) -> str | None:
-    """Captura o pane e devolve o modo atual, ou None se ilegível."""
-    pane = tmux.capture_pane(name)
-    return parse_permission_mode(pane)
-
-
-# Teto de teclas por troca e espera por tecla (regras do grupo). O rodapé muda logo depois do BTab:
-# a primeira leitura sai em 20 ms, sem pausa antes, e é ela que deixa o Shift+Tab do app tão rápido
-# quanto o do terminal. Pane lento ou morto não merece uma captura a cada 20 ms: o intervalo cresce
-# até o de antes.
-TETO_TECLAS = 6
-ESPERA_POR_TECLA = 2.0
-INTERVALO_POLL = 0.02
-INTERVALO_POLL_MAX = 0.2
-# Teto de tempo da sonda inteira. Ela roda segurando o `_send_lock` da sessão — o MESMO lock de
-# toda entrega de mensagem —, então o pior caso (pane que só confirma a tecla no timeout, 13
-# teclas) deixaria a sessão ~30s sem aceitar nada do usuário. Estourou: para onde estiver e
-# devolve o que ficou; quem chama compara com o modo de antes e avisa.
-TETO_SONDA = 8.0
-
-
-def _espera_modo(name: str, anterior: str | None = None, timeout: float = ESPERA_POR_TECLA) -> str | None:
-    """Espera até o rodapé refletir um modo (diferente do anterior, se dado) ou timeout."""
-    fim = time.monotonic() + timeout
-    ultimo: str | None = None
-    intervalo = INTERVALO_POLL
-    while time.monotonic() < fim:
-        time.sleep(intervalo)
-        intervalo = min(intervalo * 1.5, INTERVALO_POLL_MAX)
-        cur = ler_modo(name)
-        if cur is None:
-            continue
-        # se anterior é None, qualquer modo vale; se anterior dado, espera mudar
-        if anterior is None or cur != anterior:
-            return cur
-        ultimo = cur
-    # timeout: devolve o último lido (pode ser igual ao anterior) ou None
-    if ultimo is not None:
-        return ultimo
-    return ler_modo(name)
-
-
-def trocar_modo(name: str, alvo: str) -> str:
-    """Tenta levar a sessão `name` para `alvo` via BTab, até TETO_TECLAS.
-
-    Devolve SEMPRE o modo que FICOU (nunca o pedido). Quem chama decide o status HTTP:
-    se ficou != alvo, é 409 (teto ou alvo fora do ciclo).
-    Levanta ValueError se alvo fora da lista fechada.
-    """
-    from app import model_args
-
-    if alvo not in model_args.MODOS_PERMISSAO_CLAUDE:
-        raise ValueError(f"permission_mode: use um de {', '.join(model_args.MODOS_PERMISSAO_CLAUDE)}")
-
-    # lock por sessão: ciclo de BTab não pode intercalar com outro ciclo
-    from app.terminal_input import _send_lock
-
-    with _send_lock(name):
-        cur = ler_modo(name)
-        if cur is None:
-            # pane ilegível: não dá pra decidir, devolve None e deixa o caller transformar em 409
-            raise RuntimeError("não consegui ler o modo atual no rodapé")
-        if cur == alvo:
-            return cur
-        # tenta até teto
-        for _ in range(TETO_TECLAS):
-            # manda BTab
-            tmux.send_keys(name, "BTab")
-            # espera o rodapé refletir (até 2s)
-            novo = _espera_modo(name, anterior=cur, timeout=ESPERA_POR_TECLA)
-            if novo is None:
-                # não leu nada: tenta reler uma vez sem comparar com anterior
-                novo = ler_modo(name)
-                if novo is None:
-                    # pane ilegível no meio: para e devolve o que ficou (cur)
-                    break
-            cur = novo
-            if cur == alvo:
-                return cur
-        # estourou ou alvo fora do ciclo: devolve o que ficou
-        return cur
-
-
-def listar_modos(name: str) -> tuple[str, list[str]]:
-    """Descobre o ciclo ao vivo dando a volta completa de BTab.
-
-    Devolve (ficou, modos) onde `ficou` é o modo em que a sessão FICOU após a
-    descoberta (igual ao atual se conseguiu voltar, ou o último do ciclo) e `modos`
-    é a lista de modos que aparecem no ciclo. Volta ao modo original se possível;
-    se original é dontAsk, não sonda — dontAsk não tem volta (spec 5b).
-    Levanta RuntimeError se não conseguir ler o modo inicial.
-    """
-    from app.terminal_input import _send_lock
-
-    with _send_lock(name):
-        orig = ler_modo(name)
-        if orig is None:
-            raise RuntimeError("não consegui ler o modo atual no rodapé")
-        # dontAsk não tem volta: não sondar nunca ali (bloqueador 2)
-        if orig == "dontAsk":
-            return orig, []
-
-        # ciclo começa com o original incluído, para preservar ordem natural
-        vistos: list[str] = [orig]
-        vistos_set: set[str] = {orig}
-        cur = orig
-        prazo = time.monotonic() + TETO_SONDA
-        # até 6 BTab (ciclo máximo 5 + 1 folga)
-        for _ in range(6):
-            if time.monotonic() > prazo:
-                break
-            tmux.send_keys(name, "BTab")
-            novo = _espera_modo(name, anterior=cur, timeout=ESPERA_POR_TECLA)
-            if novo is None:
-                novo = ler_modo(name)
-                if novo is None:
-                    break
-            cur = novo
-            if cur == orig:
-                # voltou ao original: ciclo fechou, sem duplicar
-                break
-            if cur in vistos_set:
-                # sub-ciclo sem voltar ao orig — ciclo de 4 fechou em repetição
-                break
-            vistos.append(cur)
-            vistos_set.add(cur)
-
-        # se cur != orig, tenta voltar ao original (pane ilegível no meio etc.)
-        if cur != orig and orig in vistos_set:
-            # A volta tem prazo próprio: já gastamos o da descoberta, e desistir aqui é pior que
-            # desistir lá — deixa a sessão noutro modo. Mas segurar o lock pra sempre é pior ainda.
-            prazo = time.monotonic() + TETO_SONDA
-            for _ in range(TETO_TECLAS + 1):
-                if time.monotonic() > prazo:
-                    break
-                tmux.send_keys(name, "BTab")
-                novo = _espera_modo(name, anterior=cur, timeout=ESPERA_POR_TECLA)
-                if novo is None:
-                    novo = ler_modo(name)
-                    if novo is None:
-                        break
-                cur = novo
-                if cur == orig:
-                    break
-        # bloqueador 3: devolver o que FICOU, não o de antes
-        return cur, vistos
-
-from app.runtime_terminal import wrap_driver as _wrap_terminal_driver
-trocar_modo = _wrap_terminal_driver(trocar_modo, admin=True)
-listar_modos = _wrap_terminal_driver(listar_modos, admin=True)

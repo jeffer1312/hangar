@@ -151,7 +151,7 @@ async fn unknown_token_is_refused_without_python() {
     assert_eq!(resp.status().as_u16(), 401);
     assert_eq!(resp.json::<Value>().await.unwrap(), refused);
     let resp = client().post(format!("http://{}/api/sessions", srv.addr)).bearer_auth(OWNER).send().await.unwrap();
-    assert_eq!(resp.text().await.unwrap(), "from-python", "criar sessão continua no Python");
+    assert_eq!(resp.status().as_u16(), 422, "criar sessão sem corpo é recusado no Rust");
     assert_eq!(calls(dir.path(), "list-panes"), 0);
 }
 

@@ -14,16 +14,6 @@ _SIGTERM_AT_IMPORT = signal.getsignal(signal.SIGTERM)
 _scheduled = []
 
 
-def test_a_send_schedules_the_delivery_confirmation():
-    api._agendar_confirmacao("isolation-fixture", 60)
-    timer, _ = api._confirm_pend["isolation-fixture"]
-    _scheduled.append(timer)
-
-
-def test_the_previous_test_confirmation_does_not_outlive_it():
-    assert "isolation-fixture" not in api._confirm_pend
-    assert [timer.is_alive() for timer in _scheduled] == [False]
-
 
 def test_a_server_leaves_its_signal_handler_and_sse_exit_flag():
     from sse_starlette.sse import AppStatus

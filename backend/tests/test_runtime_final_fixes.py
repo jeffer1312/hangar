@@ -57,6 +57,7 @@ def test_startup_unresolved_same_terminal_life_recovers_without_second_restart(t
     identity = {'value': None}
     monkeypatch.setattr(terminal, '_collect', lambda name: identity['value'])
     restored = rc.RuntimeCoordinator()
+    restored._owns = set()          # a sessão fica com o Python: o registro durável é o dele
     async def flow():
         await restored.start_sessions({'claude': object(), 'codex': object()})
         waiting = restored.slot('session')
@@ -235,6 +236,7 @@ def test_awaiting_identity_record_retires_when_binding_returns_with_other_key(tm
     identity = {'value': None}
     monkeypatch.setattr(terminal, '_collect', lambda name: identity['value'])
     restored = rc.RuntimeCoordinator()
+    restored._owns = set()          # a sessão fica com o Python: o registro durável é o dele
     async def flow():
         await restored.start_sessions({'claude': object(), 'codex': object()})
         waiting = restored.slot('session')
@@ -321,6 +323,7 @@ def test_waiting_record_of_a_dead_life_never_holds_the_name(tmp_path, monkeypatc
     monkeypatch.setattr(codex_sessions, 'list_all', lambda: [])
     monkeypatch.setattr(terminal, '_collect', lambda name: None)
     restored = rc.RuntimeCoordinator()
+    restored._owns = set()          # a sessão fica com o Python: o registro durável é o dele
     monkeypatch.setattr(rc, '_current', restored)
     async def flow():
         restored.loop = asyncio.get_running_loop()
@@ -353,6 +356,7 @@ def test_waiting_record_only_claims_the_name_in_its_own_tmux_life(tmp_path, monk
     events = []
     monkeypatch.setattr(diag, 'registrar', lambda evento, *a, **k: events.append(evento))
     restored = rc.RuntimeCoordinator()
+    restored._owns = set()          # a sessão fica com o Python: o registro durável é o dele
     monkeypatch.setattr(rc, '_current', restored)
     async def flow():
         restored.loop = asyncio.get_running_loop()
@@ -361,27 +365,6 @@ def test_waiting_record_only_claims_the_name_in_its_own_tmux_life(tmp_path, monk
     assert restored.managed_queue('session') is claims
     assert ('runtime.registration_failed' in events) is claims
     assert ('runtime.stale_terminal_record' in events) is not claims
-
-
-def test_one_session_failing_to_recover_does_not_stop_the_takeover(monkeypatch):
-    from types import SimpleNamespace
-    from app import diag, runtime_coordinator as rc
-    recovered, logged = [], []
-    coordinator = rc.RuntimeCoordinator()
-    coordinator.slots = {k: SimpleNamespace(binding=SimpleNamespace(name=k, key=k), phase=rc.Phase.Rust, awaiting_identity=False)
-                         for k in ('a', 'b')}
-    coordinator.slots['c'] = SimpleNamespace(binding=SimpleNamespace(name='c', key='c'), phase=rc.Phase.RecoveringPython,
-                                             awaiting_identity=True)
-    coordinator.names = {'a': 'a', 'b': 'b', 'c': 'c'}
-    async def recover(name, confirmed_dead, containment=None):
-        if name in ('a', 'c'):
-            raise RuntimeError('vida não volta')
-        recovered.append(name)
-    coordinator.recover = recover
-    monkeypatch.setattr(diag, 'registrar', lambda evento, nivel, **kw: logged.append((evento, kw.get('sessao'))))
-    asyncio.run(coordinator.enter_python())
-    assert recovered == ['b'] and ('runtime.recover_failed', 'a') in logged
-    assert ('runtime.recover_failed', 'c') not in logged and coordinator.mode == "python"
 
 
 def test_failed_recovery_retires_the_record_so_the_name_is_not_stuck(tmp_path, monkeypatch):
@@ -420,44 +403,6 @@ def test_kill_after_the_binding_changed_before_closing_still_kills(tmp_path, mon
     assert killed and not owner.managed_queue('session')
 
 
-def test_select_respects_open_panel(monkeypatch):
-    from app import api, runtime_terminal
-    checked, routed = [], []
-    monkeypatch.setattr(api, '_cached_info_sync', lambda name: None)
-    monkeypatch.setattr(api, '_recusa_se_painel_aberto', lambda name: checked.append(name))
-    monkeypatch.setattr(runtime_terminal, 'route_sync', lambda name, command: routed.append(command) or {'ok': True})
-    assert api.select('s', api.SelectBody(option=1)) == {'ok': True}
-    assert checked == ['s']
-    assert routed[0]['payload'] == {'option': 1}
-
-
-@pytest.mark.parametrize('error,status,code', [
-    (RuntimeError('vínculo gerenciado indisponível; escrita suspensa'), 503, 'erro_opcao_nao_convergiu'),
-    # A tecla pode ter chegado: nunca "NÃO enviada", que convida a repetir.
-    ('outcome_unknown', 409, 'erro_sem_confirmacao_resposta'),
-    ('control_error', None, None), ('transfer', None, None)])
-def test_select_terminal_route_failure_is_a_coded_error_not_a_bare_500(monkeypatch, error, status, code):
-    from fastapi import HTTPException
-    from app import api, runtime_terminal
-    from app.runtime_coordinator import TransferInProgress
-    error = {'outcome_unknown': runtime_terminal.TerminalOutcomeUnknown('resultado terminal incerto'),
-             'control_error': runtime_terminal.TerminalControlError('select', 'deferred', None),
-             'transfer': TransferInProgress('posse em troca')}.get(error, error)
-    monkeypatch.setattr(api, '_cached_info_sync', lambda name: None)
-    monkeypatch.setattr(api, '_recusa_se_painel_aberto', lambda name: None)
-    def failing(name, command):
-        raise error
-    monkeypatch.setattr(runtime_terminal, 'route_sync', failing)
-    if status is None:      # têm handler próprio no app (409): sobem como vieram
-        with pytest.raises(type(error)):
-            api.select('s', api.SelectBody(option=1))
-        return
-    with pytest.raises(HTTPException) as caught:
-        api.select('s', api.SelectBody(option=1))
-    assert caught.value.status_code == status
-    assert caught.value.detail['code'] == code
-
-
 def test_queue_fsync_never_runs_on_the_event_loop(tmp_path, monkeypatch):
     # Com o disco ocupado o fsync leva segundos: no laço de eventos ele parava o backend inteiro.
     import threading
@@ -482,32 +427,3 @@ def test_queue_fsync_never_runs_on_the_event_loop(tmp_path, monkeypatch):
         owner.slot('session').lease.close()
     asyncio.run(flow())
     assert on_loop and not any(on_loop)
-
-
-def test_select_on_headless_codex_answers_the_approval_without_the_claude_terminal_route(monkeypatch):
-    # Codex sem terminal não tem vínculo Claude: a rota do terminal suspendia a escrita e o cartão
-    # de aprovação não se respondia (500).
-    from types import SimpleNamespace
-    from app import api, runtime_coordinator as rc, runtime_terminal
-    owner = rc.RuntimeCoordinator()
-    owner.mode = 'python'
-    owner.legacy = SimpleNamespace(binding=lambda *args: None)
-    monkeypatch.setattr(rc, '_current', owner, raising=False)
-    monkeypatch.setattr(rc, 'current', lambda: owner)
-    monkeypatch.setattr(runtime_terminal, 'being_born', lambda name, after=0: False)
-    monkeypatch.setattr(runtime_terminal, 'outside_scope', lambda name: False)
-    monkeypatch.setattr(api, '_recusa_se_painel_aberto', lambda name: None)
-    monkeypatch.setattr(api, '_session_exists', lambda name: True)
-    monkeypatch.setattr(api, '_headless', lambda name: False)
-    monkeypatch.setattr(api, '_cached_info_sync', lambda name: SimpleNamespace(provider='codex', headless=True))
-    answered = []
-    async def select(name, option):
-        answered.append((name, option))
-        return True
-    monkeypatch.setattr(api, 'get_adapter', lambda provider: SimpleNamespace(select=select))
-    async def scenario():
-        owner.loop = asyncio.get_running_loop()
-        monkeypatch.setattr(api, '_loop_servidor', owner.loop)
-        return await asyncio.to_thread(api.select, 'cx', api.SelectBody(option=1))
-    assert asyncio.run(scenario()) == {'ok': True}
-    assert answered == [('cx', 1)]
