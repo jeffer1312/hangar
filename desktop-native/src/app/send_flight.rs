@@ -56,9 +56,11 @@ pub(super) struct Places {
 enum Target { Bubble(String), Queue }
 
 /// `target`: o destino e desde quando o voo corre; `guess`: o lugar da linha do painel pela conta das medidas fixas,
-/// até ela ser medida; `seen`: só do registro, o que ele já escreveu desta viagem.
+/// até ela ser medida; `seen`: só do registro, o que ele já escreveu desta viagem; `entry`: a entrada do servidor que
+/// tomou o lugar da linha local do painel no meio da viagem, e continua sendo o destino.
 pub(super) struct Flight {
     text: String, from: Point<Pixels>, left: Instant, from_queue: bool, target: Option<(Target, Instant)>, guess: Option<Bounds<Pixels>>, seen: Cell<Seen>,
+    entry: Option<String>,
 }
 
 /// A última fase, se o destino já foi medido e se a linha da bolha está invisível, como o registro os escreveu.
@@ -295,7 +297,7 @@ impl Hangar {
             trace(|| format!("takeoff source=field origin={} idle={idle} chars={} target={target:?} place_by_fixed_sizes={}", xy(input.origin),
                 text.chars().count(), guess.map_or("none".into(), |place| xy(place.origin))));
             self.send_flight = Some(Flight { text: text.to_owned(), from: input.origin, left: Instant::now(), from_queue: false,
-                target: Some((target, Instant::now())), guess, seen: Cell::default() });
+                target: Some((target, Instant::now())), guess, seen: Cell::default(), entry: None });
         }
         if !to_queue {
             self.sync_tail_rows(cx);
@@ -322,7 +324,7 @@ impl Hangar {
         };
         let from = point(queue.origin.x + px(QUEUE_PAD), queue.origin.y);
         trace(|| format!("takeoff source=panel(click) origin={} chars={} target=unset, waits for the bubble", xy(from), text.trim().chars().count()));
-        self.send_flight = Some(Flight { text: text.trim().to_owned(), from, left: Instant::now(), from_queue: true, target: None, guess: None, seen: Cell::default() });
+        self.send_flight = Some(Flight { text: text.trim().to_owned(), from, left: Instant::now(), from_queue: true, target: None, guess: None, seen: Cell::default(), entry: None });
         self.redraw(Area::Bottom, cx);
     }
 
@@ -478,6 +480,8 @@ impl Hangar {
             None => "local queue row dropped: the message went straight to the conversation".into(),
         });
         self.local_queue = None;
+        // A cópia ainda viaja para a linha local: a entrada que tomou o lugar dela passa a ser o destino.
+        if let Some(flight) = self.send_flight.as_mut().filter(|f| matches!(f.target, Some((Target::Queue, _)))) { flight.entry = in_panel; }
         None
     }
 
@@ -494,7 +498,9 @@ impl Hangar {
         if self.idle_sends.is_empty() { return; }
         let Some(key) = self.selected_key() else { return };
         let (working, panel) = (self.chat.state.state == "working", self.chat.queue_panel());
-        let mut handoff = false;
+        // Quanto falta para conferir de novo, o menor entre os envios.
+        let mut handoff: Option<Duration> = None;
+        let mut check = |wait: Duration| handoff = Some(handoff.map_or(wait, |known| known.min(wait)));
         self.idle_sends.retain_mut(|send| {
             if send.key != key { return true; }
             if let Some(id) = &send.entry {
@@ -510,18 +516,18 @@ impl Hangar {
                     None if send.since.elapsed() > LOCAL_MAX => return false,
                     None => {}
                 }
-                // A entrada apareceu com a sessão já trabalhando: a conferência do prazo é marcada agora.
-                handoff |= entry.is_some() && send.working_since.is_some();
+                // A entrada apareceu com a sessão já trabalhando: a conferência é marcada para o que falta do prazo.
+                if let (Some(_), Some(since)) = (&entry, send.working_since) { check(HANDOFF.saturating_sub(since.elapsed())); }
                 send.entry = entry;
             }
-            if working && send.working_since.is_none() { handoff |= send.entry.is_some(); }
+            if working && send.working_since.is_none() && send.entry.is_some() { check(HANDOFF); }
             send.working_since = if working { send.working_since.or_else(|| Some(Instant::now())) } else { None };
             true
         });
         drop(panel);
-        if !handoff { return; }
+        let Some(wait) = handoff else { return };
         cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(HANDOFF).await;
+            cx.background_executor().timer(wait).await;
             if let Some(this) = this.upgrade() {
                 this.update(cx, |this, cx| {
                     // Quem continua na fila com a sessão trabalhando passa da conversa para o painel: as linhas são
@@ -606,7 +612,7 @@ impl Hangar {
             // Outra viagem em curso dá a vez: o que ela escondia aparece.
             self.send_abort("panel flight takes over", cx);
             trace(|| format!("takeoff source=panel(left by itself) origin={} chars={}", xy(from), text.chars().count()));
-            self.send_flight = Some(Flight { text: text.to_owned(), from, left: Instant::now(), from_queue: true, target: None, guess: None, seen: Cell::default() });
+            self.send_flight = Some(Flight { text: text.to_owned(), from, left: Instant::now(), from_queue: true, target: None, guess: None, seen: Cell::default(), entry: None });
         }
         // A linha nasce fechada e sem lugar medido: abre ao longo do voo.
         self.flight_places.bubble.set(None);
@@ -681,11 +687,10 @@ impl Hangar {
         arriving || flight.from_queue && single
     }
 
-    /// A cópia ainda viaja para o painel e esta é a linha da mensagem dela: a entrada do servidor pode tomar o lugar
-    /// da linha local no meio da viagem, e continua sendo o destino.
-    pub(super) fn send_arrives_at_queue_text(&self, text: &str) -> bool {
-        self.send_flight.as_ref().is_some_and(|f| matches!(f.target, Some((Target::Queue, _))) && same_text(&f.text, text))
-            && matches!(self.send_phase(), Some(Phase::Waiting | Phase::Flying(_)))
+    /// A cópia ainda viaja para o painel e `id` é a entrada do servidor que tomou o lugar da linha local no meio da
+    /// viagem: continua sendo o destino, em qualquer posição da fila.
+    pub(super) fn send_arrives_at_queue_row(&self, id: &str) -> bool {
+        self.send_flight.as_ref().is_some_and(|f| f.entry.as_deref() == Some(id)) && matches!(self.send_phase(), Some(Phase::Waiting | Phase::Flying(_)))
     }
 
     /// A cópia saiu do campo e ainda pode estar por cima dele: o texto de exemplo espera.
