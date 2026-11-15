@@ -268,11 +268,18 @@ async fn leave_warnings(st: &AppState, groups: &crate::groups::service::GroupSer
 async fn with_warnings(name: &str, response: Response, mut errs: Vec<Value>, mut cleanup: Vec<Value>) -> Response {
     if errs.is_empty() && cleanup.is_empty() { return response; }
     let (mut parts, body) = response.into_parts();
-    let read = axum::body::to_bytes(body, 1 << 20).await.ok().and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
-    let mut value = read.filter(Value::is_object).unwrap_or_else(|| {
-        tracing::warn!(session = %name, avisos = errs.len(), "corpo do fechamento ilegível; a resposta leva só os avisos de saída");
-        json!({"ok": true})
-    });
+    let read = match axum::body::to_bytes(body, 1 << 20).await {
+        Ok(bytes) => serde_json::from_slice::<Value>(&bytes).map_err(|error| error.to_string()),
+        Err(error) => Err(error.to_string()),
+    };
+    let mut value = match read {
+        Ok(value) if value.is_object() => value,
+        other => {
+            let cause = other.err().unwrap_or_else(|| "não é objeto".to_owned());
+            tracing::warn!(session = %name, avisos = errs.len(), %cause, "corpo do fechamento ilegível; a resposta leva só os avisos de saída");
+            json!({"ok": true})
+        }
+    };
     let current = value.get("warning").filter(|w| !w.is_null()).cloned();
     value["warning"] = if errs.is_empty() && current.is_none() && cleanup.len() == 1 {
         cleanup.remove(0)

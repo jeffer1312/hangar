@@ -329,15 +329,31 @@ async fn admit_codex_as(st: &Arc<AppState>, peer: SocketAddr, req: Request, rout
 /// escrito em pane nenhum. Arquivo de sessão Codex sem dono no Rust (que o `adopt_now` não adota) é
 /// `erro_codex_controle`, e o `/limits` dele a resposta neutra. `/codex/terminate` nunca existiu no Python.
 /// Não conseguir conferir o arquivo não é "não há arquivo": a resposta errada seria a de sessão sem Codex.
-fn sidecar_found(name: &str, checked: Result<std::io::Result<bool>, tokio::task::JoinError>) -> Result<bool, Answer> {
-    let (panic, io) = match checked {
-        Ok(Ok(exists)) => return Ok(exists),
-        Ok(Err(error)) => (false, Some(error.kind())),
-        Err(error) => (error.is_panic(), None),
+/// Modo de um Codex sem dono, lido do arquivo dele: arquivo que não se lê é 503, nunca o modo padrão.
+async fn orphan_permission_modes(st: &AppState, name: &str) -> Answer {
+    let Some(runtime) = st.state.runtime.get() else { return (StatusCode::OK, permission_modes(None)) };
+    let file = crate::runtime::codex_sidecar::path(&crate::runtime::codex_sidecar::dir(&runtime.codex_environment().home), name);
+    let read = tokio::task::spawn_blocking(move || crate::runtime::codex_sidecar::read(&file)).await;
+    let meta = match read {
+        Ok(Ok(meta)) => meta.unwrap_or_default(),
+        Ok(Err(error)) => return sidecar_unread(name, false, Some(error.kind())),
+        Err(error) => return sidecar_unread(name, error.is_panic(), None),
     };
+    (StatusCode::OK, permission_modes(meta.get("permission_mode").and_then(Value::as_str)))
+}
+
+fn sidecar_found(name: &str, checked: Result<std::io::Result<bool>, tokio::task::JoinError>) -> Result<bool, Answer> {
+    match checked {
+        Ok(Ok(exists)) => Ok(exists),
+        Ok(Err(error)) => Err(sidecar_unread(name, false, Some(error.kind()))),
+        Err(error) => Err(sidecar_unread(name, error.is_panic(), None)),
+    }
+}
+
+fn sidecar_unread(name: &str, panic: bool, io: Option<std::io::ErrorKind>) -> Answer {
     tracing::error!(session = %name, code = "codex_sidecar_check_failed", panic, io = ?io, "arquivo da sessão Codex não conferido");
-    Err((StatusCode::SERVICE_UNAVAILABLE, detail_body("codex_sidecar_check_failed",
-        "não deu para conferir o arquivo da sessão Codex; tente de novo", json!({}))))
+    (StatusCode::SERVICE_UNAVAILABLE, detail_body("codex_sidecar_check_failed",
+        "não deu para conferir o arquivo da sessão Codex; tente de novo", json!({})))
 }
 
 async fn not_codex(st: &Arc<AppState>, name: &str, req: Request) -> Response {
@@ -380,10 +396,7 @@ async fn not_codex(st: &Arc<AppState>, name: &str, req: Request) -> Response {
     if orphan {
         if route == "limits" { return reply(limits_answer(&Err(RuntimeError::new("codex_sidecar_invalid", "sem dono no Rust")))); }
         // Ler o modo não digita nada: vem do arquivo, como o `modos_para_tela` do Python.
-        if route == "codex-permissions" && !post {
-            let meta = asleep_sidecar(st, name).await;
-            return reply((StatusCode::OK, permission_modes(meta.get("permission_mode").and_then(Value::as_str))));
-        }
+        if route == "codex-permissions" && !post { return reply(orphan_permission_modes(st, name).await); }
         tracing::warn!(session = %name, route = %route, code = "codex_sidecar_invalid", "rota do Codex num arquivo de sessão sem dono no Rust; nada foi enviado");
         return reply(refused());
     }
