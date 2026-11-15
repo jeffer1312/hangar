@@ -24,8 +24,14 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   conversa para falha ou mudança que a pessoa precisa saber; faixa só para o erro do turno; diário para
   o resto. Nota de configuração (MCP ou plugin que não subiu, aviso `high`/`immediate` da CLI) sai uma
   vez por vida do processo, e a adoção pelo Rust reiniciado não a repete. Nota de ocorrência (recusa
-  do modelo, motivo anormal do fim do turno, falha de hook com as seguidas somadas) sai quando
-  acontece; a falha de hook repetida soma até o fim do turno. O `system/*` sem ramo vai ao diário como
+  do modelo, motivo anormal do fim do turno) sai quando acontece. Falha de hook é uma nota por hook
+  (por processo e conversa sem terminal, por arquivo de transcript com terminal): a repetição regrava
+  a mesma nota com o total, nunca outra. Turno parado por hook de fim de turno não é nota: vai no
+  `turn_note` do estado por 8 s. Todo aviso leva o mapa `notice_meta` no evento, que é o que os
+  clientes desenham como linha de aviso; o `kind` e o `text` ficam como eram, para o cliente antigo. A
+  chave de ignorar (`notice_meta.key`) só vai no aviso que não é bloqueio real nem defeito do Hangar;
+  as chaves ignoradas moram em `~/.hangar/notice-ignores.json` (`/api/notice-ignores`, evento
+  `notice_ignores` da lista do dono). O `system/*` sem ramo vai ao diário como
   `system/{subtype}`. Com terminal, os avisos saem só do transcript ou do plugin, **nunca lendo a
   tela**, e o leitor só monta nota em linha `"entrypoint":"cli"` (a `sdk-cli` já tem a nota do ator);
   só o chat ao vivo e o `/history` do chat ligam as notas (`LineParser::with_notices`,
