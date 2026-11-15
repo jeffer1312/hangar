@@ -14,8 +14,7 @@ use crate::routes::{AppState, cors, who};
 use crate::session_write::{detail_body, json_response, session_name};
 
 /// `lines` do FastAPI (`int`, padrão 200) preso em 50..5000: o espelho pede mais ao rolar, e o teto
-/// segura o tamanho de cada leitura do poll.
-/// Medido no pydantic 2.13.4 da base: `1_000` e `5.00` valem, `5.` não.
+/// segura o tamanho de cada leitura do poll. `1_000` e `5.00` valem; `5.` é recusado, como no Python.
 pub fn lines(query: Option<&str>) -> Result<u32, Value> {
     let parsed = crate::archive_list::int_param(query, "lines", 200);
     let raw = crate::auth::query_param(query, "lines").unwrap_or_default();
