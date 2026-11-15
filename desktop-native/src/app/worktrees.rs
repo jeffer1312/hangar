@@ -57,6 +57,8 @@ pub(super) struct WorktreeStatus {
     #[serde(default)]
     pub created_at: Option<i64>,
     #[serde(default)]
+    pub inactive_days: Option<u16>,
+    #[serde(default)]
     pub size: Option<u64>,
     #[serde(default)]
     pub size_biggest: Option<BiggestDir>,
@@ -140,8 +142,6 @@ impl WtState {
     }
 }
 
-pub(super) const STALE_DAYS: i64 = 14;
-
 /// Instante da última atividade: o último commit; sem commit lido, a criação.
 fn activity_at(w: &WorktreeStatus) -> Option<i64> { w.last_commit.as_ref().map(|c| c.at).or(w.created_at) }
 
@@ -149,7 +149,10 @@ pub(super) fn age_days(w: &WorktreeStatus, now: f64) -> Option<i64> {
     activity_at(w).map(|at| ((now - at as f64) / 86_400.).floor().max(0.) as i64)
 }
 
-pub(super) fn stale_days(w: &WorktreeStatus, now: f64) -> Option<i64> { age_days(w, now).filter(|d| *d > STALE_DAYS) }
+pub(super) fn stale_days(w: &WorktreeStatus, now: f64) -> Option<i64> {
+    let limit = w.inactive_days?;
+    age_days(w, now).filter(|d| *d >= i64::from(limit))
+}
 
 /// Pronta para apagar: mesclada, sem alteração e sem sessão. Arquivo ignorado não segura; a confirmação o lista.
 pub(super) fn ready(w: &WorktreeStatus) -> bool { w.merged && w.dirty == 0 && w.sessions.is_empty() && !w.degraded && !w.residual }
@@ -1849,6 +1852,21 @@ const COL_SIZE: f32 = 76.;
 #[cfg(test)]
 mod tests {
     #[test]
+    fn stale_worktrees_follow_their_server_threshold_including_the_deadline() {
+        let mut w = st(base("/r/a"));
+        w.created_at = Some(20 * 86_400);
+        let now = 30. * 86_400.;
+        assert_eq!(stale_days(&w, now), None);
+        for (limit, expected) in [(8, Some(10)), (30, None), (10, Some(10))] {
+            w.inactive_days = Some(limit);
+            assert_eq!(stale_days(&w, now), expected);
+            assert_eq!(Filter::Stale.matches(&w, now), expected.is_some());
+        }
+        w.created_at = None;
+        assert_eq!(stale_days(&w, now), None);
+    }
+
+    #[test]
     fn residual_without_inventory_warns_and_has_its_own_batch_reason() {
         let mut value = base("/r/residual");
         value["residual"] = json!(true);
@@ -1881,7 +1899,7 @@ mod tests {
         assert!(lost_files(&row).iter().any(|s| s == "source.rs"));
         assert!(lost_files(&row).iter().any(|s| s == "node_modules/cache"));
     }
-    use super::{fmt_size, lost_files, merged_batch, one_path_body, ready, slug, state_of, sum_label, title, tr_shared, is_agent, merge_notice, WorktreeSnapshot, Batch, BatchRun, WorktreeRepo, WorktreeStatus, Worktrees, WtState};
+    use super::{fmt_size, lost_files, merged_batch, one_path_body, ready, slug, stale_days, state_of, sum_label, title, tr_shared, is_agent, merge_notice, WorktreeSnapshot, Batch, BatchRun, Filter, WorktreeRepo, WorktreeStatus, Worktrees, WtState};
     use serde_json::json;
 
     fn st(v: serde_json::Value) -> WorktreeStatus { serde_json::from_value(v).unwrap() }
