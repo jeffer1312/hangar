@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Pressable, ScrollView, Switch, Text, View } from 'react-native';
+import { Pressable, ScrollView, Switch, Text, View, useWindowDimensions } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useRouter } from 'expo-router';
 import { parseStatusLine } from '@hangar/core';
@@ -9,6 +9,9 @@ import { useServers } from '../stores/servers';
 import { sessionAccountLabel } from './sessionAccountLabel';
 import { SessionAccountSummary } from './SessionAccountSummary';
 import { AnchoredPanel } from '../ui/AnchoredPanel';
+import { Sheet } from '../ui/Sheet';
+import { UsagePanel } from './UsagePanel';
+import { SessionSettingsContent, SessionSettingsFrame, SessionSettingsLink } from './SessionSettingsFrame';
 import { SettingsList } from '../ui/SettingsList';
 import { Icon, type IconName } from '../ui/Icon';
 import * as m from '../paraglide/messages';
@@ -25,7 +28,7 @@ interface Props {
   name: string;
   provider: string | null;
   headless: boolean;
-  openRequest?: { which: 'model' | 'effort' | 'mode' | 'account'; n: number } | null;
+  openRequest?: { which: 'model' | 'effort' | 'mode' | 'account' | 'usage'; n: number } | null;
 }
 
 const MODE_ICON: Record<string, IconName> = {
@@ -49,7 +52,15 @@ export function SessionSettingsButton({ serverId, name, provider, headless, open
   const statusModel = useMemo(() => parseStatusLine(statusLine), [statusLine]);
   const [chosen, setChosen] = useState<Chosen>({});
   const [open, setOpen] = useState(false);
+  const [tab, setTab] = useState<'model' | 'session' | 'usage'>('model');
+  const [detail, setDetail] = useState<'models' | 'effort' | 'mode' | 'approval' | null>(null);
+  const afterDismiss = useRef<(() => void) | null>(null);
+  const { height } = useWindowDimensions();
   const close = useCallback(() => setOpen(false), []);
+  const navigateAfterClose = (path: string) => {
+    afterDismiss.current = () => router.push(path as never);
+    close();
+  };
   useEffect(() => {
     setChosen((cur) => {
       const next = reconcileChosen(statusModel, cur);
@@ -60,22 +71,32 @@ export function SessionSettingsButton({ serverId, name, provider, headless, open
   const isClaude = !provider || provider === 'claude';
   const permission = usePermissionControl({ serverId, name, provider: isCodex ? 'codex' : isClaude ? 'claude' : null });
   const approval = useCodexApproval({ serverId, name, headless, enabled: isCodex });
-  const model = useModelControl({ serverId, name, provider, chosen, onChosen: setChosen, close });
-  const effort = useEffortControl({ serverId, name, provider, chosen, onChosen: setChosen, close });
-  const fast = useServiceTierControl({ serverId, name, provider, open });
+  const choose = useCallback((next: Chosen) => { setChosen(next); setTab('model'); setDetail(null); }, []);
+  const model = useModelControl({ serverId, name, provider, chosen, onChosen: choose, close });
+  const effort = useEffortControl({ serverId, name, provider, model: model.model, chosen, onChosen: choose, close });
+  const fast = useServiceTierControl({ serverId, name, provider, model: model.model, open });
+  useEffect(() => {
+    if (effort.hidden) setDetail(current => current === 'effort' ? null : current);
+  }, [effort.hidden]);
   useEffect(() => {
     if (!openRequest?.n || (openRequest.which === 'effort' && effort.hidden)) return;
+    setTab(openRequest.which === 'usage' ? 'usage' : openRequest.which === 'mode' || openRequest.which === 'account' ? 'session' : 'model');
+    setDetail(openRequest.which === 'effort' ? 'effort' : null);
     setOpen(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openRequest?.n]);
   useEffect(() => {
     if (!open) return;
     void model.load();
-    void effort.load();
     if (isCodex && headless) void approval.load();
     // Só ao abrir: recarregar a cada statusline nova piscaria a lista aberta.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
+  useEffect(() => {
+    if (open) void effort.load();
+    // Os níveis acompanham o modelo, sem reler a cada atualização de tokens.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, model.model]);
   const plan = permission.current === 'plan';
   const icon = permission.current
     ? (isCodex && !plan ? (approval.current ? APPROVAL_ICON[approval.current] : undefined) : MODE_ICON[permission.current])
@@ -83,57 +104,103 @@ export function SessionSettingsButton({ serverId, name, provider, headless, open
   const modeText = permission.current
     ? (isCodex ? (plan ? m.chat_mode_plan() : m.chat_mode_normal()) : permissionLabel(permission.current)) : null;
   const pickMode = async (mo: string) => {
-    if (mo === permission.current || await permission.select(mo)) close();
+    if (mo === permission.current || await permission.select(mo)) setDetail(null);
   };
   const pickApproval = async (mo: string) => {
-    if (mo === approval.current || await approval.select(mo)) close();
+    if (mo === approval.current || await approval.select(mo)) setDetail(null);
   };
-  return <SessionSettingsControl open={open} onOpen={() => setOpen(true)} onClose={close}
-    model={model} effort={effort} fast={fast} plan={plan} icon={icon} modeText={modeText}
-    header={<>
+  const accountHeader = <>
       <Title text={m.cota_conta_ativa()} />
       {open && account && session && server && !server.removed && !server.invite && !server.inviteEnded ? <SessionAccountSummary
         key={JSON.stringify([serverId, name, server.baseUrl, server.token, session.conta, session.engine, session.jsonl])}
         server={server} session={session} label={account}
-        onPress={canSwitchAccount ? () => { close(); router.push(`/s/${encodeURIComponent(serverId)}/${encodeURIComponent(name)}/account` as never); } : undefined} />
+        onPress={canSwitchAccount ? () => navigateAfterClose(`/s/${encodeURIComponent(serverId)}/${encodeURIComponent(name)}/account`) : undefined} />
         : account ? <Text style={styles.note}>{account}</Text> : null}
       <Separator />
-    </>}>
-    {permission.enabled ? <>
-      <Separator /><Title text={m.native_ctl_mode_title()} />
-      {permission.options.length ? <ChoiceChips busy={permission.applying}
-        items={permission.options.map((mo) => ({ key: mo, label: isCodex ? (mo === 'plan' ? m.chat_mode_plan() : m.chat_mode_normal()) : permissionLabel(mo), selected: mo === permission.current }))}
+    </>;
+  const modeControls = permission.enabled ? <>
+      {permission.options.length ? <SettingsList comfortable searchable={false}
+        items={permission.options.map((mo) => ({ id: mo, label: isCodex ? (mo === 'plan' ? m.chat_mode_plan() : m.chat_mode_normal()) : permissionLabel(mo), selected: mo === permission.current, disabled: permission.applying }))}
         onPick={(mo) => void pickMode(mo)} /> : null}
       {permission.probing ? <Skeleton rows={1} /> : permission.canProbe ? <Probe hint={m.native_mode_probe_hint()} onPress={() => void permission.probe()} />
         : permission.noCycle ? <Empty text={m.permissao_sem_ciclo()} /> : null}
       <Notice text={permission.notice} />
-    </> : null}
-    {permission.enabled && isCodex ? <>
-      <Separator /><Title text={m.composer_codex_approval()} />
+    </> : null;
+  const approvalControls = permission.enabled && isCodex ? <>
       {approval.loading ? <Skeleton rows={3} /> : approval.error ? <Failure text={approval.error} onRetry={() => void approval.load()} />
-        : approval.modes ? (approval.modes.length ? <ChoiceChips busy={approval.applying}
-          items={approval.modes.map((mo) => ({ key: mo.name, label: approvalShortLabel(mo.name), aria: mo.name, selected: mo.name === approval.current }))}
+        : approval.modes ? (approval.modes.length ? <SettingsList comfortable searchable={false}
+          items={approval.modes.map((mo) => ({ id: mo.name, label: approvalShortLabel(mo.name), hint: mo.desc, selected: mo.name === approval.current, disabled: approval.applying }))}
           onPick={(mo) => void pickApproval(mo)} /> : <Empty text={headless ? m.permissao_codex_headless_sem_lista() : m.permissao_codex_sem_lista()} />)
           : <Probe hint={m.native_codex_permission_probe_hint()} onPress={() => void approval.load()} />}
       <Notice text={approval.notice} />
-    </> : null}
-  </SessionSettingsControl>;
+    </> : null;
+  const featured = model.items.slice(0, 3);
+  const selected = model.items.find(it => it.selected);
+  if (selected && !featured.includes(selected)) featured.splice(2, 1, selected);
+  return <SessionSettingsControl open={open} onOpen={() => { setTab('model'); setDetail(null); setOpen(true); }} onClose={close}
+    model={model} effort={effort} fast={fast} plan={plan} icon={icon} modeText={modeText}
+    panel={<Sheet open={open} onDismiss={() => {
+      const action = afterDismiss.current;
+      afterDismiss.current = null;
+      close();
+      action?.();
+    }} sizes={['auto']} scrollable>
+      <SessionSettingsFrame height={Math.min(600, height * 0.78) - 16}
+        title={detail === 'models' ? m.native_ctl_all_models() : detail === 'effort' ? m.native_new_chat_reasoning()
+          : detail === 'mode' ? m.native_ctl_mode_title() : detail === 'approval' ? m.composer_codex_approval() : m.native_session_settings_title()}
+        subtitle={`${model.display}${effort.value ? ` · ${effortLabel(effort.value)}` : ''}`}
+        tab={detail ? undefined : tab} onTab={next => { setTab(next); setDetail(null); }}
+        onBack={detail ? () => setDetail(null) : undefined} onClose={close}
+        footer={tab === 'model' && !detail && !effort.hidden ? <SessionSettingsLink label={m.native_new_chat_reasoning()}
+          value={effort.value ? effortLabel(effort.value) : '—'} disabled={effort.loading || model.loading} onPress={() => setDetail('effort')} /> : undefined}>
+          {tab === 'model' ? <SessionSettingsContent title={!detail ? m.native_ctl_featured_models() : undefined}>
+            {detail === 'effort' ? <>
+              <Notice text={effort.notice} />
+              {effort.loading ? <Skeleton rows={3} /> : effort.error ? <Failure text={effort.error} onRetry={() => void effort.load()} /> : !effort.items.length ? <Empty text={m.modelo_sem_niveis()} />
+                : <SettingsList comfortable searchable={false} items={effort.items.map(it => ({ id: it.id ?? it.label, label: effortLabel(it.label), hint: it.hint, selected: it.selected, disabled: effort.applying }))}
+                  onPick={id => { const item = effort.items.find(it => (it.id ?? it.label) === id); if (item?.selected) setDetail(null); else void effort.select(id); }} />}
+            </> : <>
+              <Notice text={model.notice} />
+              {model.loading ? <Skeleton rows={3} /> : model.error ? <Failure text={model.error} onRetry={() => void (model.refresh ?? model.load)()} />
+                : <SettingsList comfortable searchable={detail === 'models' ? 'always' : false} items={(detail === 'models' ? model.items : featured).map(it => ({ id: modelItemKey(it), label: it.label, hint: it.hint, selected: it.selected, disabled: !!it.unavailable }))}
+                  onPick={id => pickModel(model, id, () => setDetail(null))} />}
+              {detail ? model.refresh ? <SmallButton label={m.native_voice_models_refresh()} onPress={() => void model.refresh?.()} /> : null
+                : <SessionSettingsLink label={m.native_ctl_all_models()} onPress={() => setDetail('models')} />}
+            </>}
+          </SessionSettingsContent> : tab === 'session' ? <SessionSettingsContent>
+            {detail === 'mode' ? modeControls : detail === 'approval' ? approvalControls : <>
+              {accountHeader}
+              {permission.enabled ? <SessionSettingsLink label={m.native_ctl_mode_title()} value={modeText ?? '—'} onPress={() => setDetail('mode')} /> : null}
+              <FastControl fast={fast} comfortable />
+              {permission.enabled && isCodex ? <SessionSettingsLink label={m.composer_codex_approval()} value={approval.current ? approvalShortLabel(approval.current) : m.native_ctl_probe()} onPress={() => setDetail('approval')} /> : null}
+            </>}
+          </SessionSettingsContent>
+            : <UsagePanel serverId={serverId} name={name} showTitle={false}
+              onOpenLimits={() => navigateAfterClose(`/s/${encodeURIComponent(serverId)}/${encodeURIComponent(name)}/codex-limits`)} />}
+      </SessionSettingsFrame>
+    </Sheet>} />;
 }
 
 type ModelView = Pick<ReturnType<typeof useModelControl>, 'display' | 'items' | 'select'> &
   Partial<Pick<ReturnType<typeof useModelControl>, 'failed' | 'loading' | 'error' | 'notice' | 'load' | 'refresh'>>;
 const modelItemKey = (item: ModelView['items'][number]) => item.id ?? item.hint ?? item.label;
+function pickModel(model: ModelView, id: string, onSelected: () => void) {
+  const item = model.items.find(it => modelItemKey(it) === id);
+  if (!item) return;
+  if (item.selected) onSelected();
+  else void model.select(item);
+}
 type EffortView = Pick<ReturnType<typeof useEffortControl>, 'items' | 'select'> &
   Partial<Pick<ReturnType<typeof useEffortControl>, 'hidden' | 'value' | 'loading' | 'applying' | 'error' | 'notice' | 'load'>>;
 type FastView = Pick<ReturnType<typeof useServiceTierControl>, 'on' | 'available' | 'toggle'> &
   Partial<Pick<ReturnType<typeof useServiceTierControl>, 'hidden' | 'loading' | 'applying' | 'error' | 'notice' | 'load'>>;
 
 // A criação entrega escolhas locais; só o controlador do chat conhece uma sessão viva.
-export function SessionSettingsControl({ open, onOpen, onClose, model, effort, fast, plan = false, icon, glyph, modeText, header, children }: {
+export function SessionSettingsControl({ open, onOpen, onClose, model, effort, fast, plan = false, icon, glyph, modeText, header, children, panel }: {
   open: boolean; onOpen: () => void; onClose: () => void;
   model: ModelView; effort: EffortView; fast: FastView;
   // `glyph`: o chip mostra só ele e a seta; modelo e esforço seguem no valor lido e no painel.
-  plan?: boolean; icon?: IconName; glyph?: ReactNode; modeText?: string | null; header?: ReactNode; children?: ReactNode;
+  plan?: boolean; icon?: IconName; glyph?: ReactNode; modeText?: string | null; header?: ReactNode; children?: ReactNode; panel?: ReactNode;
 }) {
   const { theme } = useUnistyles();
   const anchor = useRef<View>(null);
@@ -153,7 +220,7 @@ export function SessionSettingsControl({ open, onOpen, onClose, model, effort, f
       </Text>}
       <Icon name="ChevronDown" size={13} color={tint} />
     </Pressable>
-    <AnchoredPanel open={open} anchor={anchor.current} onClose={onClose} label={m.composer_session_settings()}
+    {panel ?? <AnchoredPanel open={open} anchor={anchor.current} onClose={onClose} label={m.composer_session_settings()}
       closeLabel={m.native_close()} radius={12} padding={4} maxHeightRatio={1}>
       <ScrollView style={styles.panel} contentContainerStyle={styles.panelContent} keyboardShouldPersistTaps="handled" nestedScrollEnabled>
         {header}
@@ -164,7 +231,7 @@ export function SessionSettingsControl({ open, onOpen, onClose, model, effort, f
         </Pressable> : null}
         {model.loading ? <Skeleton rows={5} /> : model.error ? <Failure text={model.error} onRetry={() => void (model.refresh ?? model.load)?.()} /> :
           <SettingsList items={model.items.map((it) => ({ id: modelItemKey(it), label: it.label, hint: it.hint, selected: it.selected, disabled: !!it.unavailable }))}
-            onPick={(id) => { const it = model.items.find((item) => modelItemKey(item) === id); if (!it) return; if (it.selected) onClose(); else void model.select(it); }} />}
+            onPick={id => pickModel(model, id, onClose)} />}
         {effort.hidden ? null : <>
           <Separator /><Title text={m.native_new_chat_reasoning()} />
           {effort.loading ? <Skeleton rows={1} /> : effort.error ? <Failure text={effort.error} onRetry={() => void effort.load?.()} />
@@ -174,42 +241,38 @@ export function SessionSettingsControl({ open, onOpen, onClose, model, effort, f
                   disabled={effort.applying} hitSlop={{ top: 4, bottom: 4 }}
                   style={({ pressed }) => [styles.effort, effort.items.length <= 5 && styles.share,
                     { backgroundColor: it.selected ? theme.tokens.accent.dim : pressed ? theme.tokens.fillSubtle : 'transparent' }, effort.applying && styles.busy]}
-                  accessibilityRole="radio" accessibilityLabel={effortLabel(it.label)} accessibilityState={{ selected: !!it.selected, disabled: effort.applying }}>
+                  accessibilityRole="radio" accessibilityLabel={effortLabel(it.label)} accessibilityState={{ selected: !!it.selected, checked: !!it.selected, disabled: effort.applying }}>
                   <Text style={[styles.effortText, it.selected && styles.effortOn]} numberOfLines={1}>{effortLabel(it.label)}</Text>
                 </Pressable>)}
               </View>}
           <Notice text={effort.notice} />
         </>}
-        {fast.hidden ? null : <>
-          <Separator /><Title text={m.native_ctl_fast()} />
-          {fast.loading ? <Skeleton rows={1} /> : fast.error ? <Failure text={fast.error} onRetry={() => void fast.load?.()} /> :
-            <View style={styles.fastRow}>
-              <Text style={[styles.note, styles.grow]}>{fast.available ? m.native_ctl_fast_hint() : m.native_ctl_fast_unavailable()}</Text>
-              <Text style={styles.effortText}>{fast.on ? m.native_ctl_fast_on() : m.native_ctl_fast_off()}</Text>
-              <Switch value={fast.on} onValueChange={() => void fast.toggle()} disabled={!fast.available || fast.applying}
-                trackColor={{ true: theme.tokens.accent.base }} accessibilityLabel={m.native_ctl_fast()} accessibilityHint={m.native_ctl_fast_hint()}
-                accessibilityValue={{ text: fast.on ? m.native_ctl_fast_on() : m.native_ctl_fast_off() }}
-                accessibilityState={{ checked: fast.on, disabled: !fast.available || fast.applying, busy: fast.applying }} />
-            </View>}
-          {fast.applying ? <Skeleton rows={1} /> : null}<Notice text={fast.notice} />
-        </>}
+        <FastControl fast={fast} />
         {children}
       </ScrollView>
-    </AnchoredPanel>
+    </AnchoredPanel>}
   </>;
 }
 
-function ChoiceChips({ items, onPick, busy }: {
-  items: { key: string; label: string; selected: boolean; aria?: string }[]; onPick: (key: string) => void; busy?: boolean;
-}) {
+function FastControl({ fast, comfortable = false }: { fast: FastView; comfortable?: boolean }) {
   const { theme } = useUnistyles();
-  return <View style={[styles.efforts, styles.wrap]} accessibilityRole="radiogroup">
-    {items.map((it) => <Pressable key={it.key} onPress={() => { if (!it.selected) onPick(it.key); }} disabled={busy} hitSlop={{ top: 4, bottom: 4 }}
-      style={({ pressed }) => [styles.effort, { backgroundColor: it.selected ? theme.tokens.accent.dim : pressed ? theme.tokens.fillSubtle : 'transparent' }, busy && styles.busy]}
-      accessibilityRole="radio" accessibilityLabel={it.aria ?? it.label} accessibilityState={{ selected: it.selected, disabled: !!busy }}>
-      <Text style={[styles.effortText, it.selected && styles.effortOn]} numberOfLines={1}>{it.label}</Text>
-    </Pressable>)}
-  </View>;
+  if (fast.hidden) return null;
+  return <>
+    {comfortable ? null : <><Separator /><Title text={m.native_ctl_fast()} /></>}
+    {fast.loading ? <Skeleton rows={1} /> : fast.error ? <Failure text={fast.error} onRetry={() => void fast.load?.()} /> :
+      <View style={comfortable ? styles.settingRow : styles.fastRow}>
+        <View style={styles.grow}>
+          {comfortable ? <Text style={styles.settingText}>{m.native_ctl_fast()}</Text> : null}
+          <Text style={styles.note}>{fast.available ? m.native_ctl_fast_hint() : m.native_ctl_fast_unavailable()}</Text>
+        </View>
+        <Text style={styles.effortText}>{fast.on ? m.native_ctl_fast_on() : m.native_ctl_fast_off()}</Text>
+        <Switch value={fast.on} onValueChange={() => void fast.toggle()} disabled={!fast.available || fast.applying}
+          trackColor={{ true: theme.tokens.accent.base }} accessibilityLabel={m.native_ctl_fast()} accessibilityHint={m.native_ctl_fast_hint()}
+          accessibilityValue={{ text: fast.on ? m.native_ctl_fast_on() : m.native_ctl_fast_off() }}
+          accessibilityState={{ checked: fast.on, disabled: !fast.available || fast.applying, busy: fast.applying }} />
+      </View>}
+    {fast.applying ? <Skeleton rows={1} /> : null}<Notice text={fast.notice} />
+  </>;
 }
 function Title({ text }: { text: string }) { return <Text style={styles.title} numberOfLines={1} accessibilityRole="header">{text}</Text>; }
 function Separator() { return <View style={styles.separator} />; }
@@ -233,6 +296,8 @@ function SmallButton({ label, onPress }: { label: string; onPress: () => void })
     style={({ pressed }) => [styles.small, pressed && { backgroundColor: theme.tokens.fillSubtle }]}><Text style={styles.smallText}>{label}</Text></Pressable>;
 }
 const styles = StyleSheet.create((theme) => ({
+  settingRow: { minHeight: 56, flexDirection: 'row', alignItems: 'center', gap: theme.base.space[2], justifyContent: 'space-between' },
+  settingText: { flex: 1, fontSize: theme.base.text.sm, color: theme.tokens.text.primary },
   chip: { flexShrink: 1, minWidth: 0, height: 30, flexDirection: 'row', alignItems: 'center', gap: theme.base.space[1], borderRadius: theme.base.radius.full, paddingHorizontal: theme.base.space[2] },
   chipText: { flexShrink: 1, fontSize: theme.base.text.xs, color: theme.tokens.text.secondary },
   chipStrong: { fontWeight: theme.base.weight.semibold },

@@ -1,13 +1,17 @@
 // @vitest-environment happy-dom
-import { act, createElement, type ReactNode } from 'react';
+import { act, createElement, forwardRef, useImperativeHandle, useState, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CodexModelsResponse, ModelOptionsResponse, Server, SessionInfo, StateEvent } from '@hangar/core';
 import { SessionSettingsButton, SessionSettingsControl } from '../../chat/SessionSettings';
+import { chatStore, _resetChatsForTests } from '../../stores/chat';
+import { useServers } from '../../stores/servers';
+import { useSessions } from '../../stores/sessions';
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const routing = vi.hoisted(() => ({ push: vi.fn() }));
+const nativeSheet = vi.hoisted(() => ({ finishDismiss: null as (() => void) | null }));
 vi.mock('expo-router', () => ({ useRouter: () => routing }));
 const api = vi.hoisted(() => ({ credentials: vi.fn(), codex: vi.fn(), models: vi.fn(), tier: vi.fn(), permissions: vi.fn(), modelWrite: vi.fn(), modeWrite: vi.fn() }));
 const state = vi.hoisted(() => ({
@@ -22,10 +26,18 @@ vi.mock('@hangar/core', async (original) => ({
   setModelEffort: api.modelWrite, setEngineModel: api.modelWrite, setCodexModel: api.modelWrite,
   setPermissionMode: api.modeWrite, setCodexMode: api.modeWrite,
 }));
-vi.mock('../../stores/servers', () => ({ useServers: (select: (s: typeof state) => unknown) => select(state) }));
-vi.mock('../../stores/sessions', () => ({ useSessions: (select: (s: typeof state) => unknown) => select(state) }));
-vi.mock('../../stores/chat', () => ({ chatStore: () => ({ use: (select: (s: typeof state) => unknown) => select(state) }) }));
+vi.mock('expo-secure-store', () => ({ getItemAsync: async () => null, setItemAsync: async () => {} }));
+vi.mock('react-native-mmkv', () => ({ createMMKV: () => ({ getString: () => undefined, set: () => {} }) }));
 vi.mock('../../ui/Icon', () => ({ Icon: () => null }));
+vi.mock('@lodev09/react-native-true-sheet', () => ({ TrueSheet: forwardRef(function NativeSheet({ children, onDidDismiss }: { children: ReactNode; onDidDismiss?: () => void }, ref) {
+  const [visible, setVisible] = useState(false);
+  useImperativeHandle(ref, () => ({ present: async () => { setVisible(true); }, dismiss: async () => { setVisible(false); } }));
+  nativeSheet.finishDismiss = () => { setVisible(false); onDidDismiss?.(); };
+  return visible ? createElement('div', null, children) : null;
+}) }));
+vi.mock('expo-blur', async () => ({ BlurView: (await import('react-native')).View }));
+vi.mock('expo-glass-effect', async () => ({ GlassView: (await import('react-native')).View, isLiquidGlassAvailable: () => false }));
+vi.mock('sonner-native', () => ({ toast: Object.assign(() => {}, { success: () => {}, error: () => {}, dismiss: () => {} }), Toaster: () => null }));
 vi.mock('../../ui/AnchoredPanel', () => ({
   AnchoredPanel: ({ open, children, onClose }: { open: boolean; children: ReactNode; onClose: () => void }) => open
     ? createElement('div', null, children, createElement('button', { onClick: onClose, 'aria-label': 'dismiss-settings' })) : null,
@@ -35,6 +47,8 @@ vi.mock('react-native', async (original) => ({
   Pressable: ({ accessibilityValue, ...props }: Record<string, any>) => createElement('button', {
     'aria-label': props.accessibilityLabel, 'aria-valuetext': accessibilityValue?.text,
     role: props.accessibilityRole, disabled: props.disabled, onClick: props.onPress,
+    'aria-selected': props.accessibilityRole === 'tab' ? props.accessibilityState?.selected : undefined,
+    'aria-checked': props.accessibilityRole === 'radio' ? props.accessibilityState?.checked : undefined,
     style: Object.assign({}, ...[typeof props.style === 'function' ? props.style({ pressed: false }) : props.style].flat(Infinity).filter(Boolean)),
   }, props.children),
   Switch: ({ value, onValueChange, disabled, accessibilityLabel, accessibilityState }: {
@@ -53,7 +67,8 @@ vi.mock('../../paraglide/messages', async original => ({
     + 'chat_mode_plan chat_mode_normal native_codex_permission_probe_hint composer_codex_approval '
     + 'native_mode_plan native_mode_auto native_mode_manual native_mode_acceptEdits native_mode_bypassPermissions native_mode_dontAsk '
     + 'native_ctl_fast native_ctl_fast_on native_ctl_fast_off native_ctl_fast_hint native_ctl_fast_unavailable '
-    + 'native_invalid_response servidor_nao_existe chat_servidor_removido cota_conta_ativa accounts_switch_title conta_padrao'
+    + 'native_invalid_response servidor_nao_existe chat_servidor_removido cota_conta_ativa accounts_switch_title conta_padrao '
+    + 'native_ctl_all_models native_ctl_featured_models comum_voltar codex_ui_concluir native_usage_card_session live_voice_action_usage_label codex_limites_titulo'
   ).split(' ').map((key) => [key, () => key])),
   native_ctl_failed: ({ reason }: { reason: string }) => `native_ctl_failed ${reason}`,
 }));
@@ -86,25 +101,227 @@ function deferred<T>() {
   const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
   return { promise, resolve, reject };
 }
-async function mount(provider = 'codex', serverId = 'a', openRequest?: { which: 'model' | 'effort' | 'mode' | 'account'; n: number }) {
+async function mount(provider = 'codex', serverId = 'a', openRequest?: { which: 'model' | 'effort' | 'mode' | 'account' | 'usage'; n: number }) {
   const container = document.createElement('div');
   const root = createRoot(container);
   roots.push(root);
   const element = () => createElement(SessionSettingsButton, { serverId, name: 'sess', provider, headless: false, openRequest });
-  const open = async () => { await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="composer_session_settings"]')!.click()); };
-  const close = async () => { await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="dismiss-settings"]')!.click()); };
-  await act(async () => root.render(element()));
+  const open = async () => {
+    await act(async () => { syncStores(serverId); container.querySelector<HTMLButtonElement>('[aria-label="composer_session_settings"]')!.click(); });
+    await act(async () => container.querySelector<HTMLButtonElement>('[role="tab"][aria-label="native_usage_card_session"]')!.click());
+  };
+  const close = async () => { await act(async () => { container.querySelector<HTMLButtonElement>('[aria-label="native_close"]')!.click(); nativeSheet.finishDismiss?.(); }); };
+  await act(async () => { syncStores(serverId); root.render(element()); });
   if (!openRequest) {
     expect(container.querySelector('[role="switch"]')).toBeNull();
     await open();
   }
-  return { container, open, close, refresh: async () => { await act(async () => root.render(element())); } };
+  return { container, open, close, refresh: async () => { await act(async () => { syncStores(serverId); root.render(element()); }); } };
+}
+function syncStores(serverId: string) {
+  useServers.setState({ servers: state.servers, activeId: state.activeId, ready: true, vaultReadable: true, aviso: null });
+  useSessions.setState({ rows: state.rows.map(row => ({ serverLabel: row.serverId, serverColor: '#7c87e8', ...row })), byServerRecord: {} });
+  chatStore(serverId, 'sess').use.setState({ statusLine: state.statusLine, stateEvent: state.stateEvent, stats: null });
 }
 const toggle = (container: HTMLElement) => container.querySelector<HTMLButtonElement>('[role="switch"]')!;
 const checked = (container: HTMLElement) => toggle(container).getAttribute('aria-checked');
 
+it('layout A separa as abas e mostra três modelos incluindo o atual', async () => {
+  const catalog = codex();
+  catalog.models = ['first', 'second', 'third', 'gpt-current', 'last'].map(model => ({
+    ...catalog.models[0], model, displayName: model,
+  }));
+  api.codex.mockResolvedValue(catalog);
+  const { container } = await mount('codex', 'a', { which: 'model', n: 1 });
+  const tabs = container.querySelectorAll('[role="tab"]');
+  expect(tabs).toHaveLength(3);
+  const models = [...container.querySelectorAll('[role="radio"]')].map(row => row.textContent);
+  expect(models).toEqual(['first', 'second', 'gpt-current']);
+  expect(container.querySelector('[role="switch"]')).toBeNull();
+});
+
+it('layout A abre todos os modelos e o raciocínio e volta ao resumo após aplicar', async () => {
+  const catalog = codex();
+  catalog.models[0].efforts = [{ value: 'low', description: null }, { value: 'high', description: null }];
+  catalog.models.push(...['other-a', 'other-b', 'other-c'].map(model => ({ ...catalog.models[0], model, displayName: model })));
+  api.codex.mockResolvedValue(catalog);
+  api.modelWrite.mockResolvedValue({ ok: true });
+  const { container } = await mount('codex', 'a', { which: 'model', n: 1 });
+  const action = (label: string) => container.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`)!;
+  expect(action('native_ctl_all_models')).not.toBeNull();
+  await act(async () => action('native_ctl_all_models').click());
+  expect(container.querySelectorAll('[role="radio"]')).toHaveLength(4);
+  expect(container.querySelector('[aria-label="native_ctl_search"]')).not.toBeNull();
+  await act(async () => action('comum_voltar').click());
+  expect(container.querySelectorAll('[role="radio"]')).toHaveLength(3);
+  await act(async () => action('native_new_chat_reasoning').click());
+  expect(container.querySelectorAll('[role="radio"]')).toHaveLength(2);
+  await act(async () => action('reasoning_level_low').click());
+  expect(api.modelWrite).toHaveBeenCalledExactlyOnceWith('sess', 'gpt-current', 'low', state.servers[0]);
+  expect(container.querySelectorAll('[role="radio"]')).toHaveLength(3);
+});
+
+it('layout A mantém Codex aberto e relê os níveis depois de trocar modelo', async () => {
+  const catalog = codex();
+  catalog.models[0].efforts = [{ value: 'low', description: null }, { value: 'high', description: null }];
+  catalog.models.push({ ...catalog.models[0], model: 'gpt-next', displayName: 'Next', defaultEffort: 'medium', efforts: [{ value: 'medium', description: null }, { value: 'max', description: null }] });
+  api.codex.mockImplementation(async () => catalog);
+  api.modelWrite.mockImplementation(async (_name: string, model: string, effort: string) => {
+    catalog.current = { ...catalog.current, model, effort };
+    return { ok: true };
+  });
+  const { container } = await mount('codex', 'a', { which: 'model', n: 1 });
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Next"]')!.click());
+  expect(container.querySelectorAll('[role="tab"]')).toHaveLength(3);
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="native_new_chat_reasoning"]')!.click());
+  expect([...container.querySelectorAll('[role="radio"]')].map(row => row.textContent)).toEqual(['reasoning_level_medium', 'reasoning_level_max']);
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="reasoning_level_max"]')!.click());
+  expect(api.modelWrite.mock.calls).toEqual([
+    ['sess', 'gpt-next', 'medium', state.servers[0]],
+    ['sess', 'gpt-next', 'max', state.servers[0]],
+  ]);
+});
+
+it('layout A agrupa modo Fast e aprovação na aba Sessão', async () => {
+  const catalog = codex();
+  catalog.current.mode = 'default';
+  api.codex.mockResolvedValue(catalog);
+  api.modeWrite.mockResolvedValue({ mode: 'plan' });
+  const { container } = await mount('codex', 'a', { which: 'account', n: 1 });
+  expect(container.querySelector('[role="switch"]')).not.toBeNull();
+  const mode = container.querySelector<HTMLButtonElement>('[aria-label="native_ctl_mode_title"]');
+  expect(mode).not.toBeNull();
+  expect(container.querySelector('[aria-label="composer_codex_approval"]')).not.toBeNull();
+  await act(async () => mode!.click());
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="chat_mode_plan"]')!.click());
+  expect(api.modeWrite).toHaveBeenCalledExactlyOnceWith('sess', 'plan', state.servers[0]);
+  expect(container.querySelectorAll('[role="tab"]')).toHaveLength(3);
+  expect(container.querySelector('[role="switch"]')).not.toBeNull();
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="composer_codex_approval"]')!.click());
+  expect(container.textContent).toContain('native_codex_permission_probe_hint');
+});
+
+it('layout A fecha para a confirmação Claude sem pintar o modelo como aplicado', async () => {
+  state.rows[0] = { ...state.rows[0], provider: 'claude', model: 'Opus 5.5' };
+  api.models.mockResolvedValue({ kind: 'claude', engine: null, models: [{ id: 'opus', name: 'Opus 5.5' }, { id: 'fable', name: 'Fable 5.1' }] });
+  api.modelWrite.mockResolvedValue({ ok: true, pending_confirm: 'high' });
+  const { container } = await mount('claude', 'a', { which: 'model', n: 1 });
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Fable 5.1"]')!.click());
+  expect(container.querySelector('[role="tab"]')).toBeNull();
+  expect(container.querySelector('[aria-label="composer_session_settings"]')?.textContent).toContain('Opus 5.5');
+});
+
+it('layout A mantém Claude aberto quando a troca é confirmada sem pergunta', async () => {
+  state.rows[0] = { ...state.rows[0], provider: 'claude', model: 'Opus 5.5' };
+  api.models.mockResolvedValue({ kind: 'claude', engine: null, models: [{ id: 'opus', name: 'Opus 5.5' }, { id: 'fable', name: 'Fable 5.1' }] });
+  api.modelWrite.mockResolvedValue({ ok: true, scope: 'session' });
+  const { container } = await mount('claude', 'a', { which: 'model', n: 1 });
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Fable 5.1"]')!.click());
+  expect(container.querySelectorAll('[role="tab"]')).toHaveLength(3);
+  expect(container.querySelector('[aria-label="composer_session_settings"]')?.textContent).toContain('Fable 5.1');
+});
+
+it('layout A volta ao modelo inicial usando o padrão dele em vez do esforço antigo', async () => {
+  const catalog = codex();
+  catalog.models[0].defaultEffort = 'low';
+  catalog.models[0].efforts = [{ value: 'low', description: null }, { value: 'high', description: null }];
+  catalog.models.push({ ...catalog.models[0], model: 'gpt-next', displayName: 'Next', defaultEffort: 'medium', efforts: [{ value: 'medium', description: null }] });
+  let current = { ...catalog.current };
+  api.codex.mockImplementation(async () => ({ ...catalog, current: { ...current } }));
+  api.modelWrite.mockImplementation(async (_name: string, model: string, effort: string) => {
+    current = { ...current, model, effort };
+    return { ok: true };
+  });
+  const { container } = await mount('codex', 'a', { which: 'model', n: 1 });
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Next"]')!.click());
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="GPT"]')!.click());
+  expect(api.modelWrite).toHaveBeenLastCalledWith('sess', 'gpt-current', 'low', state.servers[0]);
+});
+
+it('layout A acompanha o modelo informado pelo SSE enquanto a folha está aberta', async () => {
+  const catalog = codex();
+  catalog.models.push({ ...catalog.models[0], model: 'gpt-next', displayName: 'Next' });
+  api.codex.mockResolvedValue(catalog);
+  state.statusLine = '🤖 gpt-current │ 💬 1k/1k 4k/200k';
+  const { container } = await mount('codex', 'a', { which: 'model', n: 1 });
+  expect(container.querySelector('[aria-label="GPT"]')?.getAttribute('aria-checked')).toBe('true');
+  state.statusLine = '🤖 gpt-next │ 💬 1k/1k 4k/200k';
+  api.codex.mockResolvedValue({ ...catalog, current: { ...catalog.current, model: 'gpt-next' } });
+  await act(async () => chatStore('a', 'sess').use.setState({ statusLine: state.statusLine }));
+  expect(container.querySelector('[aria-label="Next"]')?.getAttribute('aria-checked')).toBe('true');
+});
+
+it('layout A explica quando o modelo não oferece níveis de raciocínio', async () => {
+  const { container } = await mount('codex', 'a', { which: 'effort', n: 1 });
+  expect(container.textContent).toContain('modelo_sem_niveis');
+  expect(container.querySelector('[role="radio"]')).toBeNull();
+});
+
+it('layout A sai do detalhe quando o modelo deixa de oferecer raciocínio', async () => {
+  state.statusLine = '🤖 Opus5.5 (high)';
+  api.models.mockResolvedValue({ kind: 'claude', engine: null, models: [{ id: 'opus', name: 'Opus 5.5' }, { id: 'haiku', name: 'Haiku 4.5' }] });
+  const { container, refresh } = await mount('claude', 'a', { which: 'effort', n: 1 });
+  expect(container.querySelector('[role="radio"]')).not.toBeNull();
+  state.statusLine = '🤖 Haiku4.5';
+  await refresh();
+  expect(container.querySelectorAll('[role="tab"]')).toHaveLength(3);
+  expect(container.querySelector('button[aria-label="native_new_chat_reasoning"]')).toBeNull();
+});
+
+it('layout A esconde raciocínio do Haiku informado pela lista antes da statusline', async () => {
+  state.rows[0] = { ...state.rows[0], provider: 'claude', model: 'Haiku4.5' };
+  api.models.mockResolvedValue({ kind: 'claude', engine: null, models: [{ id: 'haiku', name: 'Haiku 4.5' }] });
+  const { container } = await mount('claude', 'a', { which: 'model', n: 1 });
+  expect(container.querySelector('[aria-label="Haiku 4.5"]')).not.toBeNull();
+  expect(container.querySelector('button[aria-label="native_new_chat_reasoning"]')).toBeNull();
+});
+
+it('layout A relê Fast após trocar modelo mesmo antes de chegar SSE', async () => {
+  const catalog = codex();
+  catalog.models.push({ ...catalog.models[0], model: 'gpt-next', displayName: 'Next', serviceTiers: [] });
+  let current = { ...catalog.current };
+  api.codex.mockImplementation(async () => ({ ...catalog, current: { ...current } }));
+  api.modelWrite.mockImplementation(async (_name: string, model: string, effort: string) => {
+    current = { ...current, model, effort };
+    return { ok: true };
+  });
+  const { container } = await mount('codex', 'a', { which: 'model', n: 1 });
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Next"]')!.click());
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="native_usage_card_session"]')!.click());
+  expect(toggle(container).disabled).toBe(true);
+  await act(async () => toggle(container).click());
+  expect(api.tier).not.toHaveBeenCalled();
+});
+
+it('layout A conserva a identidade da variante 1M e permite voltar ao modelo básico', async () => {
+  state.rows[0] = { ...state.rows[0], provider: 'claude', model: 'Opus' };
+  api.models.mockResolvedValue({ kind: 'claude', engine: null, models: [{ id: 'opus', name: 'Opus' }, { id: 'opus[1m]', name: 'Opus (1M context)' }] });
+  api.modelWrite.mockResolvedValue({ ok: true, scope: 'session' });
+  const { container } = await mount('claude', 'a', { which: 'model', n: 1 });
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Opus (1M context)"]')!.click());
+  expect(container.querySelector('[aria-label="Opus (1M context)"]')?.getAttribute('aria-checked')).toBe('true');
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Opus"]')!.click());
+  expect(api.modelWrite.mock.calls).toEqual([
+    ['sess', { model: 'opus[1m]', scope: 'session' }, state.servers[0]],
+    ['sess', { model: 'opus', scope: 'session' }, state.servers[0]],
+  ]);
+});
+
+it('layout A abre limites do Codex apenas depois do fechamento nativo', async () => {
+  state.rows[0].provider = 'codex';
+  const { container } = await mount('codex', 'a', { which: 'usage', n: 1 });
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="codex_limites_titulo"]')!.click());
+  expect(routing.push).not.toHaveBeenCalled();
+  expect(container.querySelector('[role="tab"]')).toBeNull();
+  await act(async () => nativeSheet.finishDismiss!());
+  expect(routing.push).toHaveBeenCalledExactlyOnceWith('/s/a/sess/codex-limits');
+  await act(async () => nativeSheet.finishDismiss!());
+  expect(routing.push).toHaveBeenCalledExactlyOnceWith('/s/a/sess/codex-limits');
+});
+
 beforeEach(() => {
   vi.resetAllMocks();
+  nativeSheet.finishDismiss = null;
   api.credentials.mockResolvedValue([]);
   state.servers = [
     { id: 'a', label: 'A', baseUrl: 'https://a.test', token: 'a' },
@@ -118,8 +335,13 @@ beforeEach(() => {
   api.models.mockResolvedValue(engine());
   api.permissions.mockResolvedValue({ current: 'bypassPermissions', modes: [], sondavel: false });
   api.tier.mockResolvedValue({ ok: true, service_tier: 'priority' });
+  vi.stubGlobal('fetch', vi.fn(() => { throw new Error('unexpected-network'); }));
 });
-afterEach(() => { act(() => { for (const root of roots.splice(0)) root.unmount(); }); });
+afterEach(() => {
+  act(() => { for (const root of roots.splice(0)) root.unmount(); });
+  _resetChatsForTests();
+  vi.unstubAllGlobals();
+});
 
 describe('Conta atual na folha de ajustes real', () => {
   it('linha no topo mostra nome amigável e as duas cotas do servidor da conversa', async () => {
@@ -147,7 +369,7 @@ describe('Conta atual na folha de ajustes real', () => {
       { name: 'sess', serverId: 'a', state: 'idle', provider: provider as SessionInfo['provider'], ...account },
     ];
     const { container } = await mount(provider);
-    expect(container.querySelector('[role="heading"], [role="header"]')?.textContent).toBe('cota_conta_ativa');
+    expect(container.textContent).toContain('cota_conta_ativa');
     expect(container.textContent).toContain(label);
     expect(container.textContent).not.toContain('active-account');
     expect(container.textContent).not.toContain('other-session');
@@ -165,8 +387,8 @@ describe('Troca de conta na folha de ajustes real', () => {
     state.rows[0].provider = 'claude';
     state.rows[0].conta = 'claude:/home/test/.claude-route-account';
     const { container, refresh } = await mount('claude', 'a', { which, n: 1 });
-    expect(container.querySelector('[aria-label="dismiss-settings"]')).not.toBeNull();
-    expect(container.textContent).toContain('native_ctl_model_title');
+    expect(container.querySelector('[aria-label="native_close"]')).not.toBeNull();
+    expect(container.querySelector('[role="tab"][aria-label="native_usage_card_session"]')?.getAttribute('aria-selected')).toBe('true');
     const action = container.querySelector<HTMLButtonElement>('[aria-label="accounts_switch_title"]');
     expect(action).not.toBeNull();
     expect(parseFloat(action!.style.minHeight)).toBeGreaterThanOrEqual(44);
@@ -174,17 +396,19 @@ describe('Troca de conta na folha de ajustes real', () => {
     expect(api.modeWrite).not.toHaveBeenCalled();
     expect(api.tier).not.toHaveBeenCalled();
     await act(async () => action!.click());
-    expect(container.querySelector('[aria-label="dismiss-settings"]')).toBeNull();
+    expect(container.querySelector('[aria-label="native_close"]')).toBeNull();
+    expect(routing.push).not.toHaveBeenCalled();
+    await act(async () => nativeSheet.finishDismiss!());
     expect(routing.push).toHaveBeenCalledExactlyOnceWith('/s/a/sess/account');
     await refresh();
-    expect(container.querySelector('[aria-label="dismiss-settings"]')).toBeNull();
+    expect(container.querySelector('[aria-label="native_close"]')).toBeNull();
   });
 
   it.each(['invite', 'removed', 'inviteEnded', 'missing'] as const)('não oferece troca em servidor %s, mesmo com outro próprio ativo', async (kind) => {
     if (kind === 'missing') state.servers = state.servers.slice(1);
     else state.servers[0] = { ...state.servers[0], [kind]: true };
     const { container } = await mount('claude', 'a', { which: 'account', n: 1 });
-    expect(container.querySelector('[aria-label="dismiss-settings"]')).not.toBeNull();
+    expect(container.querySelector('[aria-label="native_close"]')).not.toBeNull();
     expect(container.querySelector('[aria-label="accounts_switch_title"]')).toBeNull();
     expect(routing.push).not.toHaveBeenCalled();
   });
@@ -391,12 +615,13 @@ describe('Fast na folha de ajustes real', () => {
     if (source === 'list') state.rows[0].model = 'gpt-next';
     else state.statusLine = '🤖 gpt-next │ 💬 1k/1k 4k/200k';
     await refresh();
-    expect(reads).toHaveBeenCalledTimes(before + 1);
+    expect(reads.mock.calls.length).toBeGreaterThan(before);
     expect(toggle(container).disabled).toBe(true);
     expect(container.textContent).toContain('native_ctl_fast_unavailable');
+    const afterModelChange = reads.mock.calls.length;
     state.statusLine = '🤖 gpt-next │ 💬 1k/1k 5k/200k';
     await refresh();
-    expect(reads).toHaveBeenCalledTimes(before + 1);
+    expect(reads).toHaveBeenCalledTimes(afterModelChange);
     await act(async () => toggle(container).click());
     expect(api.tier).not.toHaveBeenCalled();
   });

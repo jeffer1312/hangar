@@ -409,6 +409,12 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   das teclas): outro `claude` na sessão recebe 409 e a entrega não passa por ele.
 - **Steer no Claude é só pelo botão**: `ctrl+x ctrl+s` INTERROMPE o turno em curso. Colado num
   recado (`steer:true`), abortaria o trabalho da sessão que recebe — o automático é só do Kimi.
+- **Orientar do botão no Claude sem terminal vai com `"priority":"now"`; recado com `steer:true`
+  vai sem.** Só as rotas `/steer` e `queue/<id>/steer` marcam `now`, e só a primeira entrada de uma
+  orientação corta o turno. A CLI devolve um `result` do turno cortado antes do orientado: esse
+  `result` não é parada (a vista segue trabalhando e a fila não acorda) até o `command_lifecycle`
+  da orientação dizer `started` (ela vira o turno) ou `cancelled` (o turno acaba). Ver
+  [Orientar corta o turno](#orientar-corta-o-turno-do-claude-sem-terminal-14112026).
 - **Modo de permissão troca COM a sessão trabalhando** — é tecla, não texto. O guard de "está
   trabalhando" existe para o `/model`, que é texto.
 - **Depois do BTab, o rodapé é lido na hora, sem pausa fixa**, e o Shift+Tab do app mostra o modo
@@ -1098,6 +1104,24 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   também recebe `success`. Só o `task_updated` (`killed`) ou o `task_notification` (`stopped`) daquele id
   prova a parada. Matar pelo pid não é caminho: a árvore de processos muda de um sistema para outro e o
   modelo não fica sabendo. Ver [parar tarefa do Claude](#parar-tarefa-do-claude-13112026).
+
+## Orientar corta o turno do Claude sem terminal (14/11/2026)
+
+Sem prioridade, a mensagem escrita no stdin no meio do turno só entra quando a ferramenta em curso
+acaba: um `ssh` de 590 s segurou o Orientar até o fim. Medido com a CLI 2.1.325 em `claude -p
+--input-format stream-json`: com `"priority":"now"` a CLI interrompe o Bash (`tool_result` com
+`Error calling tool (Bash): interrupt`), manda `result` `success` com `terminal_reason=aborted_tools`,
+um `system/init` e então o turno da orientação, com o `result` dele (`completed`).
+
+Esse primeiro `result` zerava o turno no motor: a vista passava por parada, a fila acordava e podia
+entregar uma mensagem no meio do turno orientado, e o `result` final respondia por ela. Por isso o
+motor guarda a orientação que cortou (`steer_now`) e, no `result` do corte, segura o turno sem
+acordar a fila. Quem decide é o `command_lifecycle` da CLI, cujo `command_uuid` é o `uuid` da
+mensagem escrita: `started` faz dela o turno ativo, `cancelled` encerra. Contar `result` prendia a
+vista em "trabalhando" quando o corte não vinha (Parar logo depois, escrita incerta, `result`
+perdido); por isso Parar, escrita sem prova, queda do socket e fim pelo transcript também soltam. Recado entre sessões (`send` do MCP, `hangar-send`, ponte de grupo) chega por
+`/input` com `steer:true` e não corta: abortaria o trabalho de quem recebe. Várias entradas numa
+orientação levavam `now` cada uma, e a segunda cortaria o turno da primeira.
 
 ## Parar tarefa do Claude (13/11/2026)
 

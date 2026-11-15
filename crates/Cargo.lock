@@ -1780,6 +1780,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-dream"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "futures-util",
+ "hangar-api",
+ "hangar-core",
+ "hangar-transcript",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha1_smol",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "hangar-http-file"
 version = "0.1.0"
 dependencies = [
@@ -1945,6 +1962,7 @@ dependencies = [
  "hangar-deploy",
  "hangar-desktop-theme",
  "hangar-docs",
+ "hangar-dream",
  "hangar-http-file",
  "hangar-omp-sync",
  "hangar-opencode-cookie",

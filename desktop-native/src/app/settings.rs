@@ -10,6 +10,7 @@ use gpui_kit::component::{color_picker::{ColorPicker, ColorPickerEvent, ColorPic
     IndexPath, select::{Select, SelectEvent, SelectState}, searchable_list::{SearchableListItem, SearchableVec}};
 
 mod appearance_page;
+pub(crate) mod memory_dream;
 mod guide;
 mod manual_page;
 mod updates_page;
@@ -21,14 +22,14 @@ pub(crate) use guide::{group_heading as news_group_heading, kind_icon as news_ki
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Page {
     General, Appearance, Sessions, Updates, Manual, Diary, About, Migration,
-    Servers, Sync, Connect, Devices, SharedConfig, Accounts, Plugins, Scheduled, Vault, Orchestration, Harnesses, Voice, Jev, Windows, Notifications, Shortcuts, Attachments, Worktrees, Advanced,
+    Servers, Sync, Connect, Devices, SharedConfig, Accounts, Plugins, Scheduled, Memory, Vault, Orchestration, Harnesses, Voice, Jev, Windows, Notifications, Shortcuts, Attachments, Worktrees, Advanced,
 }
 
 impl Page {
     // Sessões fica no geral: a configuração vale para todas as máquinas, sem seletor.
     const DEVICE: [Page; 6] = [Page::General, Page::Appearance, Page::Sessions, Page::Updates, Page::Manual, Page::About];
     // O diário é do servidor escolhido no seletor ("O registro de uso de <servidor>"), não do aparelho.
-    const SERVER: [Page; 20] = [Page::Diary, Page::Servers, Page::Sync, Page::Connect, Page::Devices, Page::SharedConfig, Page::Accounts, Page::Plugins, Page::Scheduled, Page::Vault, Page::Orchestration, Page::Harnesses,
+    const SERVER: [Page; 21] = [Page::Diary, Page::Servers, Page::Sync, Page::Connect, Page::Devices, Page::SharedConfig, Page::Accounts, Page::Plugins, Page::Scheduled, Page::Memory, Page::Vault, Page::Orchestration, Page::Harnesses,
         Page::Voice, Page::Jev, Page::Windows, Page::Notifications, Page::Shortcuts, Page::Attachments, Page::Worktrees, Page::Advanced];
 
     /// As seções da navegação, na ordem dela; a voz abre uma pelo `key`.
@@ -43,7 +44,7 @@ impl Page {
     pub(super) fn key(self) -> &'static str {
         match self {
             Page::General => "general", Page::Appearance => "appearance", Page::Sessions => "sessions", Page::Updates => "updates", Page::Manual => "manual", Page::Diary => "diary", Page::About => "about", Page::Migration => "migration",
-            Page::Servers => "servers", Page::Sync => "sync", Page::Connect => "connect", Page::Devices => "devices", Page::SharedConfig => "shared_config", Page::Accounts => "accounts", Page::Plugins => "plugins", Page::Scheduled => "scheduled", Page::Vault => "vault", Page::Orchestration => "orchestration",
+            Page::Servers => "servers", Page::Sync => "sync", Page::Connect => "connect", Page::Devices => "devices", Page::SharedConfig => "shared_config", Page::Accounts => "accounts", Page::Plugins => "plugins", Page::Scheduled => "scheduled", Page::Memory => "memory", Page::Vault => "vault", Page::Orchestration => "orchestration",
             Page::Harnesses => "harnesses", Page::Voice => "voice", Page::Jev => "jev", Page::Windows => "windows", Page::Notifications => "notifications",
             Page::Shortcuts => "shortcuts", Page::Attachments => "attachments", Page::Worktrees => "worktrees", Page::Advanced => "advanced",
         }
@@ -54,7 +55,7 @@ impl Page {
             Page::General => IconName::Globe, Page::Appearance => IconName::Palette, Page::Sessions => IconName::EyeOff, Page::Diary => IconName::FileText,
             Page::Updates => IconName::Sparkles, Page::Manual => IconName::BookOpen,
             Page::About => IconName::Info, Page::Migration => IconName::Activity, Page::Servers => IconName::Server, Page::Sync => IconName::RefreshCw, Page::Connect => IconName::Globe, Page::Devices => IconName::Smartphone, Page::SharedConfig => IconName::Layers,
-            Page::Accounts => IconName::User, Page::Plugins => IconName::Package, Page::Scheduled => IconName::Clock, Page::Vault => IconName::KeyRound, Page::Orchestration => IconName::Users, Page::Harnesses => IconName::Activity,
+            Page::Accounts => IconName::User, Page::Plugins => IconName::Package, Page::Scheduled => IconName::Clock, Page::Memory => IconName::Moon, Page::Vault => IconName::KeyRound, Page::Orchestration => IconName::Users, Page::Harnesses => IconName::Activity,
             Page::Voice => IconName::Mic, Page::Jev => IconName::Zap, Page::Windows => IconName::Monitor, Page::Notifications => IconName::Bell,
             Page::Shortcuts => IconName::Keyboard, Page::Attachments => IconName::Paperclip, Page::Worktrees => IconName::GitBranch, Page::Advanced => IconName::SlidersHorizontal,
         }
@@ -63,6 +64,7 @@ impl Page {
     pub(super) fn title(self) -> String {
         // O nome é o do web: uma frase, um dicionário.
         if self == Page::Scheduled { return tr_shared("scheduled_title", &[]); }
+        if self == Page::Memory { return tr_shared("dream_title", &[]); }
         if self == Page::Jev { return tr_shared("jev_title", &[]); }
         if self == Page::SharedConfig { return tr_shared("shared_config_title", &[]); }
         if self == Page::Migration { return tr_shared("migration_title", &[]); }
@@ -152,7 +154,17 @@ const PAGE_ROWS: &[(Page, &[(&str, Option<&str>)])] = &[
         ("server_jev_aux_endpoint", Some("server_jev_aux_endpoint_help")), ("server_jev_aux_key", Some("server_jev_aux_key_help")),
         ("server_jev_aux_model", Some("server_jev_aux_model_help")), ("server_jev_aux_effort", Some("server_jev_aux_effort_help")),
         ("server_jev_provider", Some("server_jev_provider_help"))]),
+    (Page::Memory, &[("dream_enabled", Some("dream_enabled_hint")), ("dream_user_memory", Some("dream_user_memory_hint")),("dream_machine", Some("dream_machine_hint")),
+        ("dream_key", Some("dream_key_hint")), ("dream_hour", None), ("dream_project_cap", Some("dream_project_cap_hint")),
+        ("dream_month_cap", Some("dream_month_cap_hint")), ("dream_month_spent", None), ("dream_projects", None),
+        ("dream_suggestions", Some("dream_suggestions_hint"))]),
 ];
+
+/// Texto de uma linha da busca: as chaves sem `native_` são as que o web também usa.
+fn row_text(key: &str) -> String {
+    let text = tr(key);
+    if text == key { tr_shared(key, &[]) } else { text }
+}
 
 /// Um resultado da busca: a linha de uma página, ou a própria página (`row: None`) quando ela ainda não tem linhas.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -160,7 +172,7 @@ struct Found { page: Page, row: Option<&'static str> }
 
 impl Found {
     fn label(self) -> String {
-        match self.row { Some(row) => format!("{} › {}", self.page.title(), tr(row)), None => self.page.title() }
+        match self.row { Some(row) => format!("{} › {}", self.page.title(), row_text(row)), None => self.page.title() }
     }
 }
 
@@ -184,7 +196,7 @@ fn find(query: &str, api: Option<&Api>) -> Vec<Found> {
         // Sem bandeja no sistema a linha não é desenhada.
         .filter(|(title, _)| crate::tray::SUPPORTED || *title != "settings_tray")
         .filter(|(title, _)| cfg!(target_os = "linux") || !matches!(*title, "settings_chrome_autofill" | "settings_full_chrome"))
-        .map(move |&(title, desc)| (Found { page, row: Some(title) }, tr(title), desc.map(tr).unwrap_or_default())));
+        .map(move |&(title, desc)| (Found { page, row: Some(title) }, row_text(title), desc.map(row_text).unwrap_or_default())));
     // Páginas que ainda não têm linhas continuam achadas pelo nome e abrem no aviso delas.
     let pages = Page::shown(api).map(|page| (Found { page, row: None }, page.title(), String::new()));
     let all: Vec<_> = rows.chain(pages).collect();
@@ -900,6 +912,7 @@ impl Hangar {
             Page::Vault => self.render_vault(window, cx),
             Page::Plugins => self.render_plugins(window, cx),
             Page::Scheduled => self.render_scheduled(window, cx),
+            Page::Memory => self.render_memory_dream(window, cx),
             Page::Orchestration => self.render_orchestration(cx),
             Page::Shortcuts => self.render_shortcuts_page(cx),
             Page::Worktrees => self.render_worktree_settings(window, cx),

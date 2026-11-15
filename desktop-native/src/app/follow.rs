@@ -25,9 +25,18 @@ const STICK_BAND: f32 = 70.;
 const JUMP_MIN: f32 = 320.;
 /// Salto maior que isso (em alturas da janela) teleporta até essa distância e desliza o resto.
 const GLIDE_MAX_VIEWPORTS: f32 = 2.5;
-/// Mesmo passo por linha que a lista usa, para a roda andar a mesma distância, só que animada.
-const WHEEL_LINE_PX: f32 = 20.;
-const WHEEL_TAU_MS: f32 = 45.;
+/// Um entalhe da roda (3 linhas no padrão do sistema) anda 100 px, o passo dos navegadores; os 20 px por linha da
+/// lista davam 60 e pediam muitos giros.
+const WHEEL_LINE_PX: f32 = 100. / 3.;
+/// O deslize de um entalhe leva uns 220 ms: emenda no giro seguinte em vez de parar entre um e outro.
+const WHEEL_TAU_MS: f32 = 75.;
+
+/// Só para diagnosticar a roda: `HANGAR_NATIVE_WHEEL_TRACE=1` escreve no stderr cada evento, quem ficou com ele e o
+/// que sobrou para andar. Sem a variável, nada é formatado nem escrito.
+fn wheel_trace(line: impl FnOnce() -> String) {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if *ON.get_or_init(|| std::env::var_os("HANGAR_NATIVE_WHEEL_TRACE").is_some()) { eprintln!("wheel {}", line()); }
+}
 
 /// Passo da roda neste quadro e o que ainda falta andar. Descer zera o resto ao chegar no fim:
 /// sem isso, um entalhe dado já no fim fica pendente e pede um quadro atrás do outro.
@@ -129,6 +138,18 @@ impl Hangar {
     /// Solta do fim e longe dele: a pílula "Ir para o fim" aparece. Perto do fim ela cobriria o próprio texto que falta.
     pub(super) fn follow_detached(&self) -> bool { !self.follow.pinned && self.distance_from_bottom() > JUMP_MIN }
 
+    /// A faixa de baixo cresce `grow` px neste quadro e a janela da conversa encolhe o mesmo tanto. Colada no fim, a
+    /// conversa segura o fim no mesmo quadro; sem isto ele ficaria atrás da faixa até a mola alcançar. Encolhendo
+    /// (`grow` negativo) a lista já alinha pelo fim sozinha.
+    pub(super) fn follow_bottom_grew(&mut self, grow: f32) {
+        if grow <= 0. || !self.follow.pinned || self.follow.wheel != 0. { return; }
+        // Parada no fim, cola nele; deslizando até ele, só desce o que a faixa tomou.
+        if self.distance_from_bottom() <= 1. { self.list_state.scroll_to_end(); } else { self.list_state.scroll_by(px(grow)); }
+    }
+
+    /// Colada no fim: o que entra agora aparece na tela.
+    pub(super) fn follow_pinned(&self) -> bool { self.follow.pinned }
+
     fn visible_top(&self) -> f32 { f32::from(self.list_state.max_offset_for_scrollbar().y) - self.distance_from_bottom() }
 
     /// Troca as linhas `range` de `row_ids` por `new_ids` mantendo o texto da tela parado. Chamar antes de gravar
@@ -201,6 +222,7 @@ impl Hangar {
 
     /// Gesto que a própria lista tratou (trackpad, toque): afastar do fim solta; voltar perto dele cola.
     fn user_scrolled(&mut self, cx: &mut Context<Self>) {
+        wheel_trace(|| format!("list scrolled by itself: pending {} dropped, pinned={}", self.follow.wheel, self.follow.pinned));
         self.follow.wheel = 0.;
         let distance = self.distance_from_bottom();
         let top = self.visible_top();
@@ -229,6 +251,8 @@ impl Hangar {
         if self.follow.wheel != 0. && self.follow.wheel.signum() != down.signum() { self.follow.wheel = 0.; }
         if self.follow.wheel == 0. { self.follow.wheel_tick = None; }
         self.follow.wheel += down;
+        self.pages.wheel_latch.set(Some(Instant::now()));
+        wheel_trace(|| format!("step lines={lines} pending={} pinned={} from_bottom={}", self.follow.wheel, self.follow.pinned, self.distance_from_bottom()));
         self.redraw(Area::Conversation, cx);
     }
 
@@ -284,8 +308,21 @@ impl Hangar {
         let view = cx.weak_entity();
         canvas(|bounds, window, _| window.insert_hitbox(bounds, HitboxBehavior::Normal), move |_, hitbox, window, _| {
             window.on_mouse_event(move |event: &ScrollEvent, phase, window, cx| {
-                let ScrollDelta::Lines(lines) = event.delta else { return };
-                if phase != DispatchPhase::Capture || lines.y == 0. || cx.reduce_motion() || !hitbox.should_handle_scroll(window) { return; }
+                if phase == DispatchPhase::Capture {
+                    wheel_trace(|| format!("event delta={:?} ours={} reduce_motion={} at={:?}", event.delta, hitbox.should_handle_scroll(window), cx.reduce_motion(), window.mouse_position()));
+                }
+                if phase != DispatchPhase::Capture || !hitbox.should_handle_scroll(window) { return; }
+                let ScrollDelta::Lines(lines) = event.delta else {
+                    // Touchpad rola em pixels e a lista anda sozinha, mas o gesto começado na conversa é dela.
+                    view.update(cx, |this, _| this.pages.wheel_latch.set(Some(Instant::now()))).ok();
+                    return;
+                };
+                if lines.y == 0. { return; }
+                if cx.reduce_motion() {
+                    // Sem deslize a lista rola sozinha, mas o gesto começado na conversa continua sendo dela.
+                    view.update(cx, |this, _| this.pages.wheel_latch.set(Some(Instant::now()))).ok();
+                    return;
+                }
                 cx.stop_propagation();
                 view.update(cx, |this, cx| this.wheel_lines(lines.y, cx)).ok();
             });

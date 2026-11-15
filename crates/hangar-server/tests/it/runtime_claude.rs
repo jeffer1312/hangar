@@ -30,6 +30,46 @@ fn line(engine:&mut ClaudeEngine,value:Value,seconds:f64) -> Vec<Effect> { engin
 fn command(kind:OperationKind,payload:Value) -> RuntimeCommand { RuntimeCommand { operation_id:"op-1".into(),kind,payload } }
 fn writes(effects:&[Effect]) -> Vec<Value> { effects.iter().filter_map(|e|match e { Effect::Write { frame,.. } => Some(frame.clone()),_=>None }).collect() }
 
+fn consumed(effects:&[Effect]) -> Vec<String> {
+    effects.iter().filter_map(|e|match e { Effect::Reply { operation_id,payload,.. } if payload["consumed"] == true => Some(operation_id.clone()),_=>None }).collect()
+}
+
+#[test]
+fn button_steer_cuts_the_turn_and_the_cut_is_not_a_stop() {
+    let mut engine = engine(json!({"name":"session","session_id":"sid","initialized":true}));
+    let steer = |engine:&mut ClaudeEngine,id:&str,payload:Value,at:f64| writes(&engine.command(RuntimeCommand { operation_id:id.into(),
+        kind:OperationKind::Steer,payload },clock(at)).unwrap());
+    let input = writes(&engine.command(command(OperationKind::Input,json!({"text":"primeiro"})),clock(11.0)).unwrap());
+    assert!(input[0].get("priority").is_none());
+    assert!(steer(&mut engine,"recado",json!({"text":"[de: outra] oi"}),12.0)[0].get("priority").is_none(),"recado não corta o turno");
+    let button = steer(&mut engine,"botao",json!({"text":"muda de rumo","now":true}),13.0);
+    assert_eq!(button[0]["priority"],"now");
+    assert!(steer(&mut engine,"botao-2",json!({"text":"e mais","now":true}),13.5)[0].get("priority").is_none(),"o mesmo corte não corta duas vezes");
+
+    let cut = line(&mut engine,json!({"type":"result","subtype":"success","terminal_reason":"aborted_tools"}),14.0);
+    assert_eq!(consumed(&cut),vec!["op-1".to_owned()]);
+    assert!(!cut.iter().any(|e|matches!(e,Effect::WakeQueue)),"a fila espera o turno orientado");
+    assert_eq!(engine.view()["in_progress"],true,"o corte não aparece como parada");
+    line(&mut engine,json!({"type":"command_lifecycle","command_uuid":button[0]["uuid"],"state":"started"}),14.1);
+
+    let done = line(&mut engine,json!({"type":"result","subtype":"success","terminal_reason":"completed"}),20.0);
+    assert_eq!(consumed(&done),vec!["botao".to_owned()]);
+    assert!(done.iter().any(|e|matches!(e,Effect::WakeQueue)));
+    assert_eq!(engine.view()["in_progress"],false);
+}
+
+#[test]
+fn cut_steer_the_cli_cancels_frees_the_turn() {
+    let mut engine = engine(json!({"name":"session","session_id":"sid","initialized":true}));
+    engine.command(command(OperationKind::Input,json!({"text":"primeiro"})),clock(11.0)).unwrap();
+    let button = writes(&engine.command(RuntimeCommand { operation_id:"botao".into(),kind:OperationKind::Steer,
+        payload:json!({"text":"muda de rumo","now":true}) },clock(12.0)).unwrap());
+    line(&mut engine,json!({"type":"result","subtype":"success","terminal_reason":"aborted_tools"}),13.0);
+    let cancelled = line(&mut engine,json!({"type":"command_lifecycle","command_uuid":button[0]["uuid"],"state":"cancelled"}),13.1);
+    assert!(cancelled.iter().any(|e|matches!(e,Effect::WakeQueue)));
+    assert_eq!(engine.view()["in_progress"],false,"orientação que não vai rodar não prende o turno");
+}
+
 #[test]
 fn init_timeout_not_deliverable() {
     let mut engine = engine(json!({"name":"session"}));
