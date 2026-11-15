@@ -80,6 +80,8 @@ case "$1" in
       $'#{{session_name}}\t#{{pane_id}}\t#{{session_created}}') printf '%s\t%%7\t%s\n' "$NAME" "$BORN";;
       '#{{session_name}}'*) printf '%s\t%%7\t%s\t%s\t0\t0\t0\n' "$NAME" "$BORN" "$PID";;
       '#{{pane_pid}}'*) printf '%s\t%s\t%%7\t%s\n' "$PID" "$NAME" "$BORN";;
+      # `MODS_FORMATS`: fora do modo de cópia, sem tela alternativa.
+      '#{{mouse_sgr_flag}}'*) echo '0|0|0|160|45';;
       *) exit 1;;
     esac;;
   capture-pane) cat "$S.screen";;
@@ -1180,7 +1182,9 @@ async fn delete_r1_01_login_guest_closes_a_headless_claude_of_the_rust() {
     assert_eq!((status,body),(200,json!({"ok":true,"warning":null})));
     assert!(!registry.has_entry(None,"s1").await,"a entrada saiu");
     assert!(!fx.sidecar_path("s1").exists(),"sidecar apagado");
-    assert!(!fx.queue.join(format!("runtime/{key}.json")).exists(),"fila apagada");
+    // O fechamento não apaga a fila: esvazia e grava nela o fim da vida, que é o que a encerra.
+    let queue = std::fs::read_to_string(fx.queue.join(format!("runtime/{key}.json"))).expect("fila com o fechamento");
+    assert!(queue.contains(r#""closed":true"#),"fila sem o fechamento gravado: {queue}");
     assert_eq!(python.hits_to("/api/sessions/s1"),0);
 }
 
