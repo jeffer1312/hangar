@@ -37,7 +37,8 @@ export function settleQueued(pending: PendingMsg[], listed: readonly { id: strin
   const next = pending.filter((p) => {
     if (p.entry && removed.includes(p.entry)) return false;
     if (!p.queue) return true;
-    if (p.entry && listed.some((e) => `queued-${e.id}` === p.entry)) return false;
+    const bound = p.entry ? listed.find((e) => `queued-${e.id}` === p.entry) : undefined;
+    if (bound) { taken.add(bound.id); return false; }
     const entry = listed.find((e) => !taken.has(e.id) && !p.known?.includes(e.id) && e.text.trim() === p.text.trim());
     if (!entry) return true;
     taken.add(entry.id);

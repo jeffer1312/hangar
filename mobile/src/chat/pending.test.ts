@@ -119,6 +119,12 @@ describe('eco que passa pela fila', () => {
     expect(settleQueued(kept, [{ id: '1', text: 'ok' }, { id: '2', text: 'ok' }], [])).toEqual([]);
   });
 
+  test('a entrada que tira o eco preso a ela não tira também o eco igual que veio depois', () => {
+    const first = { ...p('ok', 'p1'), queue: true, known: [], entry: 'queued-1' };
+    const second = { ...p('ok', 'p2'), queue: true, known: [] };
+    expect(settleQueued([first, second], [{ id: '1', text: 'ok' }], [])).toEqual([second]);
+  });
+
   test('o eco do painel preso a uma bolha sai quando a entrada dela é listada, mesmo com outro texto', () => {
     const bound = { ...p('com  espaço', 'p1'), queue: true, entry: 'queued-5' };
     expect(settleQueued([bound], [{ id: '5', text: 'com espaço' }], [])).toEqual([]);

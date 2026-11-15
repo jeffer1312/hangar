@@ -556,8 +556,8 @@ function criarChatStore(serverId: string, name: string): ChatApi {
   // O eco de envio com a sessão parada fica na conversa enquanto a mensagem passa pela fila. Se ela continuar na
   // fila quando o painel aparece, o lugar dela é o painel; se a mensagem real não vier, a bolha da fila diz por quê.
   function settleEcho(entry: string): void {
+    // Vale também com a tela fechada: o eco que ficasse esconderia a bolha da fila ao reabrir.
     const drop = (onlyListed: boolean) => {
-      if (!alive) return;
       const { pending, queuePanel } = useChatStore.getState();
       // No prazo final sai também o eco do painel: a bolha da fila, escondida por ele, é quem mostra a falha.
       const echo = pending.find((p) => p.entry === entry && (p.solid || !onlyListed));
@@ -1097,7 +1097,8 @@ function criarChatStore(serverId: string, name: string): ChatApi {
           if ((mode === 'steer' || (typeof mode === 'object' && mode.kind === 'direct' && !mode.terminalClaude)) && (err as { status?: number } | null)?.status === 409) {
             throw new Error(m.queue_steer_uncertain(), { cause: err });
           }
-          if (isInputRejected(err)) useChatStore.setState((s) => ({ pending: s.pending.filter((p) => p.id !== id) }));
+          // A linha local do painel sai em qualquer falha: se a mensagem entrou na fila mesmo assim, o servidor a lista.
+          if (queue || isInputRejected(err)) useChatStore.setState((s) => ({ pending: s.pending.filter((p) => p.id !== id) }));
           throw err;
         }
       }, draftRevision).catch((error: unknown) => {
