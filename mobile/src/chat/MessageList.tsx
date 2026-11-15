@@ -10,6 +10,8 @@ import { UserBubble } from './UserBubble';
 import { QueuedBubble } from './QueuedBubble';
 import { AssistantBubble } from './AssistantBubble';
 import { OrqTimelineEntry } from './OrqTimelineEntry';
+import { ClaudeNotice } from './ClaudeNotice';
+import { isNoticeLine } from '../features/notices/notices';
 import { PreviewBubble } from './PreviewBubble';
 import { ToolGroup } from './tools/ToolGroup';
 import { ToolCard } from './tools/ToolCard';
@@ -236,6 +238,7 @@ export function MessageList({
           }
           return <UserBubble text={ev.text ?? ''} sessionName={sessionName} serverId={serverId} ts={ev.ts} eventId={ev.id} imageCount={ev.image_count ?? 0} onQuoteClick={goToQuote} />;
         }
+        if (isNoticeLine(ev) && (ev.kind === 'assistant_msg' || ev.kind === 'notice')) return <ClaudeNotice event={ev} serverId={serverId} />;
         if (ev.kind === 'assistant_msg') {
           return <AssistantBubble text={ev.text ?? ''} sessionName={sessionName} serverId={serverId} ts={ev.ts} eventId={ev.id} canQuote={canQuote} />;
         }
@@ -415,6 +418,8 @@ export function MessageList({
           {ferramentaEv ? <ToolCard use={ferramentaEv} result={null} onPress={abrirDetalhe} look={look} onExpand={preserveExpansion ? pauseForToolGroup : undefined} escrevendo /> : null}
           {visiblePreview ? <PreviewBubble text={visiblePreview} md={previewMd} full={previewFull} streaming={working} /> : null}
           {working && !pensamento && !ferramenta ? <WorkingLine label={stateEvent?.label} since={desde} /> : null}
+          {/* Rótulo passageiro do servidor (some sozinho em segundos): não é mensagem da conversa. */}
+          {!working && stateEvent?.turn_note ? <Text style={styles.turnNote}>{stateEvent.turn_note}</Text> : null}
           {agentesRodando.length || agentSubagents?.error ? <AgentesRodando agentes={agentesRodando} inicio={inicioDoAgente} onAbrir={onAbrirAgentes} serverId={serverId} sessionName={sessionName} events={events} eventsRevision={eventsRevision} subagentSnapshot={agentSubagents} /> : null}
           {/* O eco que o painel da fila já mostra some: a mesma mensagem não aparece duas vezes. O de envio com a
               sessão parada (acima) fica: a passagem dele pela fila não aparece no painel. */}
@@ -485,6 +490,11 @@ const styles = StyleSheet.create((theme) => ({
     fontSize: theme.base.text.xs,
     color: theme.tokens.text.muted,
     textAlign: 'center',
+    paddingVertical: theme.base.space[1],
+  },
+  turnNote: {
+    fontSize: theme.base.text.xs,
+    color: theme.tokens.status.warning,
     paddingVertical: theme.base.space[1],
   },
   pending: {
