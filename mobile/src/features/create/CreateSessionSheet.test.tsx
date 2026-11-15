@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act, createElement, StrictMode, useEffect, useRef, useState, type ReactNode } from 'react';
+import { act, createElement, forwardRef, StrictMode, useEffect, useImperativeHandle, useRef, useState, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -36,6 +36,16 @@ const calls = vi.hoisted(() => ({
   branches: vi.fn(),
 }));
 const server = { id: 'server-b', label: 'Servidor B', baseUrl: 'https://b.local', token: 'token-b' };
+
+vi.mock('@lodev09/react-native-true-sheet', () => ({ TrueSheet: forwardRef(function NativeSheet({ children, onDidDismiss }: {
+  children: ReactNode; onDidDismiss?: () => void;
+}, ref) {
+  const [visible, setVisible] = useState(false);
+  useImperativeHandle(ref, () => ({ present: async () => { setVisible(true); }, dismiss: async () => { setVisible(false); onDidDismiss?.(); } }));
+  return visible ? createElement('div', null, children) : null;
+}) }));
+vi.mock('expo-glass-effect', async () => ({ GlassView: (await import('react-native')).View, isLiquidGlassAvailable: () => false }));
+vi.mock('sonner-native', () => ({ toast: Object.assign(() => {}, { success: () => {}, error: () => {}, dismiss: () => {} }), Toaster: () => null }));
 
 vi.mock('expo-router', () => ({
   useRouter: () => ({ replace: calls.replace }),

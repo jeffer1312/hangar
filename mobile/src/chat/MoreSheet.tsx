@@ -1,3 +1,4 @@
+import { useRef } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useRouter } from 'expo-router';
@@ -39,6 +40,7 @@ type Item = {
 export function MoreSheet({ open, onClose, serverId, name, recarregar, orq, provider, semTerminal, temPergunta }: Props) {
   const { theme } = useUnistyles();
   const router = useRouter();
+  const afterDismiss = useRef<(() => void) | null>(null);
   const canShare = useServers(s => s.servers.some(server => server.id === serverId && !server.invite && !server.removed));
   const chat = chatStore(serverId, name);
   const surface = chat.use(s => s.pluginUi);
@@ -78,13 +80,21 @@ export function MoreSheet({ open, onClose, serverId, name, recarregar, orq, prov
   ];
 
   const go = (it: Item) => {
+    // O iOS precisa concluir o fechamento antes de apresentar outra tela.
+    afterDismiss.current = () => {
+      if (it.onPress) it.onPress();
+      else router.push(`/s/${serverId}/${name}/${it.route}` as never);
+    };
     onClose();
-    if (it.onPress) it.onPress();
-    else router.push(`/s/${serverId}/${name}/${it.route}` as never);
   };
 
   return (
-    <Sheet open={open} sizes={['auto']} onDismiss={onClose}>
+    <Sheet open={open} sizes={['auto']} onDismiss={() => {
+      const action = afterDismiss.current;
+      afterDismiss.current = null;
+      onClose();
+      action?.();
+    }}>
       <View style={styles.inner}>
         <Text style={[styles.title, { color: theme.tokens.text.primary }]}>{m.navbar_mais_acoes()}</Text>
         {items.map((it) => (
