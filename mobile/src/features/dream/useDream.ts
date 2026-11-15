@@ -7,7 +7,8 @@ import { toast } from '../../ui/Toast';
 import { haptic } from '../../ui/haptics';
 import * as m from '../../paraglide/messages';
 
-type Data = { dreamerId: string; status: DreamStatus };
+/** `readAt`: quando a leitura do status começou; o andamento dela só vale se começou depois do último evento ao vivo. */
+type Data = { dreamerId: string; status: DreamStatus; readAt: number };
 
 /**
  * Configuração, estado e ações do sonho valem na máquina que sonha: o servidor ativo só diz qual é.
@@ -54,8 +55,9 @@ export function useDream() {
       // Máquina escolhida que o app não conhece (ou ainda nenhuma): o ativo responde por ela.
       const dreamer = !own.machine || own.machine === own.this_machine ? active
         : (await dreamFirstMatch(reads, (r) => r?.config.this_machine === own.machine))?.server ?? active;
+      const readAt = Date.now();
       const status = await getDreamStatus(dreamer);
-      if (live()) { loaded.current = true; setData({ dreamerId: dreamer.id, status }); }
+      if (live()) { loaded.current = true; setData({ dreamerId: dreamer.id, status, readAt }); }
     } catch (e) {
       if (live()) setError(`${m.dream_load_error()} · ${dreamFailure(e)}`);
     } finally {
@@ -78,25 +80,25 @@ export function useDream() {
   const [progress, setProgress] = useState<DreamProgress | null>(null);
   const [finished, setFinished] = useState<DreamProgress | null>(null);
   const latest = useRef<DreamProgress | null>(null);
-  // O evento ao vivo é mais novo que o status: depois do primeiro, o status só traz rodada que o evento não conhece,
-  // e nunca uma que o evento já deu por acabada (status lido antes do fim a ressuscitaria).
-  const sawEvent = useRef(false);
+  // Vale o mais novo: status lido antes do último evento ao vivo não passa por cima dele, e rodada que o evento
+  // deu por acabada nunca volta pelo status.
+  const eventAt = useRef(0);
   const ended = useRef<string | null>(null);
-  const statusProgress = data?.status.progress ?? null;
   // Outra máquina sonhando: nada da rodada da anterior vale para ela. Vem antes do efeito do status, que roda
   // em seguida no mesmo commit e aplica o andamento da máquina nova.
   const dreamerId = data?.dreamerId;
   useEffect(() => {
-    latest.current = null; ended.current = null; sawEvent.current = false;
+    latest.current = null; ended.current = null; eventAt.current = 0;
     setProgress(null); setFinished(null);
   }, [dreamerId]);
+  // Por leitura, não por valor: dois status seguidos com `null` aplicam os dois.
   useEffect(() => {
-    if (statusProgress?.run_id && statusProgress.run_id === ended.current) return;
-    // Com o canal ao vivo falando, ele é a verdade: um status lido antes não passa por cima dele.
-    if (sawEvent.current) return;
-    latest.current = statusProgress;
-    setProgress(statusProgress);
-  }, [statusProgress]);
+    if (!data || data.readAt < eventAt.current) return;
+    const next = data.status.progress ?? null;
+    if (next?.run_id && next.run_id === ended.current) return;
+    latest.current = next;
+    setProgress(next);
+  }, [data]);
   const dreamerRef = useRef(dreamer);
   dreamerRef.current = dreamer;
   const loadRef = useRef(load);
@@ -104,15 +106,13 @@ export function useDream() {
   useFocusEffect(useCallback(() => {
     const server = dreamerRef.current;
     if (!server) return;
-    // Fora de foco nada chegou: até o primeiro evento desta abertura, vale o status relido.
-    sawEvent.current = false;
     let alive = true;
     let attempt = 0;
     let retry: ReturnType<typeof setTimeout> | null = null;
     let source: EventSourceLike | null = null;
     const onEvent = (next: DreamProgress | null) => {
       attempt = 0;
-      sawEvent.current = true;
+      eventAt.current = Date.now();
       const before = latest.current;
       latest.current = next;
       setProgress(next);
@@ -126,8 +126,6 @@ export function useDream() {
       source.onerror = () => {
         source?.close();
         source = null;
-        // Sem canal, o status relido é o mais novo que há: volta a valer até o próximo evento.
-        sawEvent.current = false;
         if (!alive || retry) return;
         retry = setTimeout(() => {
           retry = null;
