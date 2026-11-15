@@ -243,6 +243,8 @@ export interface ChatEvent {
   desistiu?: boolean | null;     // só em bolhas "queued-" e "held-" (não em evento real): entrega
                                  // dada como perdida — a TUI engoliu as teclas ou o hook barrou o prompt
   hook_error?: string | null;    // só em bolha "held:": o que o hook escreveu ao barrar o prompt
+  /** Só em aviso da CLI do Claude: presente (mesmo vazio) faz do evento um aviso; sem `key` não pode ser ignorado. */
+  notice_meta?: { key?: string; subject?: string; count?: number; level?: 'error' } | null;
   /** Só em notice `skill_loaded`: a skill que o harness injetou como fala do usuário. */
   skill?: { name: string; path?: string | null; body: string } | null;
 }
@@ -283,6 +285,8 @@ export interface StateEvent {
   session: string;
   state: State;
   label?: string | null;
+  /** Nota passageira sobre o turno que acabou ("Um hook parou o turno"), para a linha de fim de turno. */
+  turn_note?: string | null;
   question?: string | null;
   options?: string[] | null;
   status_line?: string | null; // raw bottom chrome from the pane, shown as-is

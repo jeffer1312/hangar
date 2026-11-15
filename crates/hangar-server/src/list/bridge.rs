@@ -292,6 +292,8 @@ pub struct ListBridge {
     pub keyring: Arc<crate::keyring::Keyring>,
     /// Etiquetas de máquina e contas: a lista do dono publica o evento `tags`.
     pub tags: crate::tags::Feed,
+    /// Avisos da CLI ignorados nesta máquina: a lista do dono publica o evento `notice_ignores`.
+    pub notice_ignores: crate::notice_ignores::Feed,
 }
 
 /// Tarefa bloqueante que entrou em pânico: o hook já registrou onde; aqui fica qual operação.
@@ -309,7 +311,7 @@ impl ListBridge {
         let (caches, demoted) = (Arc::<Caches>::default(), Arc::<crate::state::demote::Demoted>::default());
         caches.classify.with(|c| c.hooks.set_demoted(demoted.clone()));
         let nav = Arc::new(crate::nav_requests::NavStore::load(env.dirs.as_ref().map(|d| d.home.as_path())));
-        Self { nav, keyring: Arc::new(crate::keyring::Keyring::system()), tags: Default::default(), env: Arc::new(env), local: Mutex::default(), shortcuts: Default::default(), facts, caches, runtime: std::sync::OnceLock::new(),
+        Self { nav, keyring: Arc::new(crate::keyring::Keyring::system()), tags: Default::default(), notice_ignores: Default::default(), env: Arc::new(env), local: Mutex::default(), shortcuts: Default::default(), facts, caches, runtime: std::sync::OnceLock::new(),
             shares: std::sync::OnceLock::new(), owner_clients: AtomicU32::new(0), seen: Mutex::default(),
             discovery: tokio::sync::Mutex::new(None),
             snapshot: tokio::sync::Mutex::new(None), last_good: Mutex::default(), git_running: Arc::default(),

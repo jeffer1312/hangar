@@ -667,6 +667,11 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   A `conta` da linha e o `id` de `/api/credenciais` saem de `accounts::catalog::resolved`; não crie
   outra canonização de caminho de conta. Cor e ícone são chave, nunca valor de cor. Evidência em
   [plataforma.md](docs/decisoes/plataforma.md#etiquetas-de-máquina-e-conta-moram-no-servidor-da-máquina-28102026).
+- **Aviso da CLI do Claude ignorado mora no servidor da máquina** (`/api/notice-ignores`,
+  `~/.hangar/notice-ignores.json`, crate `hangar-notice-ignores`) e chega aos clientes pelo evento
+  `notice_ignores` da lista do dono. A chave é o `notice_meta.key` do evento; aviso sem chave é
+  bloqueio real e nunca ganha "Ignorar". Cliente ligado a várias máquinas guarda uma lista por
+  máquina. Regra e chaves em [harnesses.md](docs/decisoes/harnesses.md#regras-vigentes).
 - **Logs pertencem ao Hangar, não à conta.** Use `log_paths.base()`; diário exportável registra
   etapas, códigos e origem da falha. Texto de conversa, credenciais e saídas brutas ficam fora
   dele. O shell Electron também escreve lá (`privado/shell.log`): lançado pelo `.desktop`, o

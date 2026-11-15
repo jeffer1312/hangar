@@ -52,6 +52,10 @@ pub struct StateEvent {
     pub claude_previous_non_plan: Option<String>,
     pub claude_plan_pending: Option<Map<String, Value>>,
     pub label: Option<String>,
+    /// Nota passageira sobre o turno que acabou ("Um hook parou o turno"), para a linha de fim de turno. À parte
+    /// do `label`: parada, a sessão ainda manda nele o agente em segundo plano.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_note: Option<String>,
     pub question: Option<String>,
     pub options: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

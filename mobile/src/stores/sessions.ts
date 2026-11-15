@@ -5,6 +5,7 @@ import { sortSessions, definirArmazem, definirProtegido, definirSemPrazo, isServ
 import type { Slot, ServerBucket, Aggregate } from '@hangar/core';
 import { useServers } from './servers';
 import { checkPeer } from '../features/machines/api';
+import { parseNoticeIgnores } from '../features/notices/notices';
 import * as m from '../paraglide/messages';
 
 // Store vivo da lista de sessões — porte de frontend/src/lib/sessionsStore.svelte.ts
@@ -26,6 +27,8 @@ export interface SessionsState {
   vault: Record<string, VaultEvent>;
   /** Etiquetas de máquina e contas de cada servidor (evento `tags`); o valor de cada servidor só muda quando a etiqueta dele muda. */
   tags: Record<string, TagsEvent>;
+  /** Chaves de aviso da CLI do Claude ignoradas em cada servidor (evento `notice_ignores`). */
+  noticeIgnores: Record<string, string[]>;
   loading: boolean;
   servers: Server[];
   retain: () => () => void;
@@ -589,6 +592,13 @@ async function synchronize(attempt: ConnectionAttempt, get: () => SessionsState,
       slots.set(s.id, patchSlot(slots, s.id, { tags, tagsRaw: data }));
       recompute(set);
     });
+    // Avisos ignorados da máquina: chegam na conexão e a cada troca. Torto mantém a última lista.
+    es.addEventListener('notice_ignores', (e) => {
+      if (!active()) return;
+      answered();
+      const keys = parseNoticeIgnores(e.data);
+      if (keys) setNoticeIgnores(s.id, keys);
+    });
     es.onerror = (event) => {
       if (!active()) return;
       const status = (event as { xhrStatus?: number } | null)?.xhrStatus ?? 0;
@@ -724,6 +734,7 @@ export const useSessions = create<SessionsState>((set, get) => ({
   byServerRecord: {},
   vault: {},
   tags: {},
+  noticeIgnores: {},
   loading: false,
   servers: [],
   retain() {
@@ -785,6 +796,13 @@ export const useSessions = create<SessionsState>((set, get) => ({
   },
 }));
 
+/** Guarda a lista de avisos ignorados de um servidor; a mesma lista não troca o objeto. */
+export function setNoticeIgnores(serverId: string, keys: string[]) {
+  const all = useSessions.getState().noticeIgnores;
+  if (all[serverId]?.join('\n') === keys.join('\n')) return;
+  useSessions.setState({ noticeIgnores: { ...all, [serverId]: keys } });
+}
+
 // expõe reset apenas para testes (isso não vai para produção)
 export function _resetSessionsForTests() {
   pause();
@@ -818,5 +836,5 @@ export function _resetSessionsForTests() {
   _limparEsfriamentoParaTestes();
   definirArmazem(null);
   configureCooldown();
-  useSessions.setState({ rows: [], byServer: [], byServerRecord: {}, vault: {}, tags: {}, loading: false, servers: [] });
+  useSessions.setState({ rows: [], byServer: [], byServerRecord: {}, vault: {}, tags: {}, noticeIgnores: {}, loading: false, servers: [] });
 }

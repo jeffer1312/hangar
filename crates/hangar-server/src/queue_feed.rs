@@ -21,8 +21,12 @@ use crate::transcript::{py, pyjson, Provider};
 /// (`_FOLGA_SAIDA_LOCAL_S`); a mais velha já está no `/history`, no lugar do relógio dela.
 pub(crate) const LOCAL_NOTE_GRACE_S: f64 = 30.0;
 
-/// Desistência, entrega, confirmação e consumo: o que, mudando, faz a entrada sair de novo.
-type Signature = (Option<bool>, Option<bool>, bool, Option<bool>);
+/// Nota já existente com texto novo (o total do hook): só substitui a que o cliente tem.
+pub(crate) const NOTICE_UPDATE: &str = "notice_update";
+
+/// Desistência, entrega, confirmação, consumo e o detalhe e o mapa do aviso (a nota de hook é regravada com o
+/// total): o que, mudando, faz a entrada sair de novo.
+type Signature = (Option<bool>, Option<bool>, bool, Option<bool>, Option<String>, Option<serde_json::Map<String, Value>>);
 
 /// Identidade do arquivo entre rodadas: a projeção é trocada inteira, então a marca muda a cada gravação.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -261,13 +265,17 @@ pub(crate) struct QueueFollow {
     start: f64,
     first: bool,
     seen: HashMap<String, Signature>,
+    /// Notas locais que já eram velhas na primeira rodada: estão no `/history`, e a regravação delas sai como
+    /// `notice_update`, que o cliente só aplica sobre a nota que já tem (quem não a carregou ganharia uma nota
+    /// nova no fim da conversa). Cliente antigo ignora o evento.
+    aged: HashSet<String>,
     /// `None`: nunca leu.
     marker: Option<Option<Marker>>,
 }
 
 impl QueueFollow {
     pub(crate) fn new(min_ts: f64, start: f64) -> Self {
-        QueueFollow { min_ts, start, first: true, seen: HashMap::new(), marker: None }
+        QueueFollow { min_ts, start, first: true, seen: HashMap::new(), aged: HashSet::new(), marker: None }
     }
 
     /// Sem corte, o início da conversa é procurado de novo a cada rodada, como no painel: o transcript que
@@ -361,17 +369,24 @@ impl QueueFollow {
         if confirmed {
             event.queued_confirmed = Some(true);
         }
-        let signature = (event.desistiu, event.queued_delivered, confirmed, event.queued_consumed);
+        if self.first && local && cut {
+            self.aged.insert(id.clone());
+        }
+        let signature = (event.desistiu, event.queued_delivered, confirmed, event.queued_consumed, event.hook_error.clone(), event.notice_meta.clone());
         if self.seen.get(&id) == Some(&signature) {
             return Ok(None);
         }
+        // Nota local regravada (o total do hook subiu) troca a que já está na tela: como `message`, o aparelho que
+        // não a tem na janela do histórico a poria no fim da conversa.
+        let update = self.aged.contains(&id) || (local && self.seen.contains_key(&id));
         self.seen.insert(id, signature);
         if cut {
             return Ok(None);
         }
         let data = serde_json::to_string(&event).map_err(|_| "json")?;
         let local_ts = local.then(|| cut_ts.unwrap_or_else(|| py_float(entry.get("ts")).unwrap_or(0.0)));
-        Ok(Some(QueueFrame { event: if confirmed { "queue_confirmed" } else { "message" }, data, id: event.id, local_ts }))
+        let name = if confirmed { "queue_confirmed" } else if update { NOTICE_UPDATE } else { "message" };
+        Ok(Some(QueueFrame { event: name, data, id: event.id, local_ts }))
     }
 }
 
@@ -460,6 +475,48 @@ mod tests {
 
     /// Cada cenário do Python, passo a passo: mesmos eventos e `data` byte a byte. Onde o Python cai com
     /// linha ruim, vale o `.esperado_rust` (a mesma situação sem a linha).
+    #[test]
+    fn rewritten_hook_note_is_published_again_unless_it_was_already_old() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("fila.jsonl");
+        let row = |detail: &str| serde_json::json!({"id":"hookfail:1:0","text":format!("Hook falhou — {detail}"),"ts":100.0,
+            "delivered":true,"confirmed":true,"papel":"assistant","hook_error":detail,"notice":"hook_failed"}).to_string() + "\n";
+        let write = |detail: &str| apply(&serde_json::json!({"write": row(detail)}), &path);
+        let mut follow = QueueFollow::new(0.0, 100.0);
+        write("Stop: x");
+        let first = events(&follow.poll(&path).unwrap().frames);
+        assert_eq!(first.iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), vec!["message"], "a primeira vez é mensagem");
+        write("Stop: x (falhou 2 vezes)");
+        let again = events(&follow.poll(&path).unwrap().frames);
+        assert_eq!(again.len(), 1, "a nota regravada com o total sai de novo");
+        assert_eq!(again[0].0, NOTICE_UPDATE, "a regravação só troca a nota que o aparelho já tem");
+        let event: Value = serde_json::from_str(&again[0].1).unwrap();
+        assert_eq!((event["id"].as_str(), event["hook_error"].as_str()), (Some("local-hookfail:1:0"), Some("Stop: x (falhou 2 vezes)")));
+        // O mesmo detalhe com o total do mapa maior também sai de novo.
+        let counted = |count: u64| {
+            let mut entry: Value = serde_json::from_str(&row("Stop: x (falhou 2 vezes)")).unwrap();
+            entry["notice_meta"] = serde_json::json!({"key":"hook:Stop","subject":"Stop","count":count});
+            apply(&serde_json::json!({"write": format!("{entry}\n")}), &path);
+        };
+        counted(2);
+        assert_eq!(events(&follow.poll(&path).unwrap().frames).len(), 1, "o mapa apareceu");
+        counted(3);
+        let third = events(&follow.poll(&path).unwrap().frames);
+        let event: Value = serde_json::from_str(&third[0].1).unwrap();
+        assert_eq!(event["notice_meta"]["count"], 3);
+
+        // Seguidor que nasce muito depois da nota: ela está no `/history`, e a regravação sai como atualização,
+        // que o cliente só aplica sobre a nota que já tem.
+        let mut late = QueueFollow::new(0.0, 1000.0);
+        write("Stop: x");
+        assert!(events(&late.poll(&path).unwrap().frames).is_empty());
+        write("Stop: x (falhou 2 vezes)");
+        let update = events(&late.poll(&path).unwrap().frames);
+        assert_eq!(update.len(), 1);
+        assert_eq!(update[0].0, NOTICE_UPDATE);
+        assert!(update[0].1.contains("falhou 2 vezes"));
+    }
+
     #[test]
     fn matches_the_python_follow_golden() {
         let golden = golden();

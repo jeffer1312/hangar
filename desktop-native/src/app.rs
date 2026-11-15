@@ -43,6 +43,7 @@ mod vault;
 mod vault_requests;
 mod rename_suggest;
 mod tags;
+mod notice_line;
 mod viewer;
 mod window_tray;
 mod presence;
@@ -85,6 +86,7 @@ pub(crate) use rows::{agent_card, agent_clock};
 pub(crate) use desktop_look::{call_button as desktop_call_button, desktop_summary, group_block as desktop_group_block, summary_button as desktop_summary_button};
 pub(crate) use session_tabs::{PlateMark, PlateSegment, plate, tab_frame, tab_title, with_context_ring};
 pub(crate) use tags::{account_icon, machine_icon};
+pub(crate) use notice_line::{api_error_box, ignore_button, ignored_text, notice_body, notice_head, notice_rule_line, undo_button};
 pub(crate) use voice_ui::{call_actions, call_footer, call_header, call_status, equalizer as voice_equalizer, mute_button, speech_pause_button, stop_button};
 pub(crate) use rename_suggest::{Strip as RenameStrip, rename_strip};
 pub(crate) use vault_requests::{approve_body, approve_title, request_button, request_card, request_command, request_pair};
@@ -492,7 +494,7 @@ fn delivery_is_current(connection: u64, selection: Option<u64>, current_connecti
 }
 /// `offset`: onde a fonte deste pedaço começa na fonte inteira da resposta desenhada em pedaços (`{id}#s0`…).
 struct RichText { source: String, view: Entity<TextViewState>, _observer: Subscription, touched: u64, row: String, offset: Option<usize> }
-enum ChatUpdate { Message(ChatEvent), Preview(Preview), State(SessionState), Question(Option<Ask>), Thinking(String), LiveTool(Option<LiveTool>), CommandOutput(HashMap<String, String>), Reset }
+enum ChatUpdate { Message(ChatEvent), NoticeUpdate(ChatEvent), Preview(Preview), State(SessionState), Question(Option<Ask>), Thinking(String), LiveTool(Option<LiveTool>), CommandOutput(HashMap<String, String>), Reset }
 
 #[derive(Default)]
 struct SystemNotifications {
@@ -687,6 +689,10 @@ pub struct Hangar {
     /// Último evento `tags` da lista de cada máquina (chave `servers::norm`); máquina sem ele é servidor antigo.
     /// Fica na queda do stream: a etiqueta não muda por a máquina estar fora.
     tags: HashMap<String, tags::Event>,
+    /// Avisos da CLI ignorados em cada máquina (chave `servers::norm`), do evento `notice_ignores` da lista.
+    notice_ignores: HashMap<String, std::collections::BTreeSet<String>>,
+    /// Avisos em que a pessoa agiu nesta janela (id do evento): seguem na tela com Desfazer ou com o erro.
+    notice_acted: HashMap<String, notice_line::Acted>,
     /// Cartão da pergunta aberto: (máquina, dono — vazio = No Hangar, terminal) e o diálogo que o mostra.
     question_open: Option<(String, String, String)>,
     question_card: Option<Entity<hangar_live::QuestionCard>>,
@@ -1194,7 +1200,7 @@ impl Hangar {
             history_limit: 400, has_older: false, etag: None, error: None, list_error: None,
             delivery: DeliveryTracker::default(), stopping: HashSet::new(), stop_feedback: HashMap::new(), drafts: HashMap::new(), input_history: HashMap::new(),
             flight: InFlight::default(), action_feedback: HashMap::new(), jev_note_at: HashMap::new(), file_cards: HashMap::new(), queue: Default::default(), send_flight: None, local_send: None, local_queue: None, idle_sends: Vec::new(), send_landed: Vec::new(),
-            note_slide: Default::default(), note_last: None, flight_places: Default::default(), live_terms: Vec::new(), keyring: HashMap::new(), vault: HashMap::new(), vault_page: None, plugins_page: None, guide: Default::default(), rename_suggest: Default::default(), tags: HashMap::new(), question_open: None, question_card: None,
+            note_slide: Default::default(), note_last: None, flight_places: Default::default(), live_terms: Vec::new(), keyring: HashMap::new(), vault: HashMap::new(), vault_page: None, plugins_page: None, guide: Default::default(), rename_suggest: Default::default(), tags: HashMap::new(), notice_ignores: HashMap::new(), notice_acted: HashMap::new(), question_open: None, question_card: None,
             hangar_open: false, hangar_focus: cx.focus_handle(), hangar_error: None, live_clock: None, ask_form: AskForm::default(), ask_drafts: HashMap::new(), plans_dismissed: HashSet::new(), answered_tools: HashSet::new(), answering: HashMap::new(), ask_scroll: Default::default(), plan_scroll: Default::default(), plan_view: None,
             plan_review: Default::default(),
             list_state, rail_hover: None, follow: Default::default(), row_ids: Vec::new(), row_signatures: Vec::new(), conversation: Default::default(), row_assets: Vec::new(), expanded: HashSet::new(), kept_expanded: HashMap::new(), orq_days: HashSet::new(),
@@ -1644,6 +1650,7 @@ impl Hangar {
 
     fn open_session(&mut self, open_api: Option<Api>, session: SessionInfo, window: &mut Window, cx: &mut Context<Self>) {
         api::open_trace_start(&session.name);
+        self.forget_notice_actions();
         // Outra conversa escolhida no meio da criação: a mensagem segue sendo enviada, mas a bolha é da tela que ficou.
         self.opening = None;
         // Vindo da tela sem sessão (nova conversa ou conversa fechada), o texto dela fica guardado com ela.
@@ -2110,6 +2117,13 @@ impl Hangar {
                     if visible { self.redraw(panes::Area::Nav, cx); }
                     stored.is_some()
                 }
+                else if frame.event == "notice_ignores" {
+                    let server = self.active_key();
+                    let stored = notice_line::store(&mut self.notice_ignores, &server, &frame.data);
+                    visible = stored == Some(true);
+                    if visible { self.notice_ignores_changed(&server, cx); }
+                    stored.is_some()
+                }
                 // Celular que ainda não tinha aparecido: a dica do "No PC / Fora", uma vez por aparelho.
                 else if frame.event == "devices" {
                     // O aparelho só vai ao visto quando a dica é respondida (`Tour::choose`).
@@ -2562,6 +2576,7 @@ impl Hangar {
     fn accept_chat_frame(&mut self, event: &str, data: serde_json::Value, window: &mut Window, cx: &mut Context<Self>) -> (bool, Changed) {
         let update = match event {
             "message" | "queue_confirmed" => serde_json::from_value(data).map(ChatUpdate::Message),
+            "notice_update" => serde_json::from_value(data).map(ChatUpdate::NoticeUpdate),
             "preview" => serde_json::from_value(data).map(ChatUpdate::Preview),
             "state" => serde_json::from_value(data).map(ChatUpdate::State),
             "saida" => serde_json::from_value(data).map(ChatUpdate::CommandOutput),
@@ -2675,6 +2690,11 @@ impl Hangar {
 
     fn apply_chat_update(&mut self, update: ChatUpdate, window: &mut Window, cx: &mut Context<Self>) {
         match update {
+            // Nota que já existia com o total novo: sem ela na tela, entraria como nota nova no fim da conversa. Aplicada
+            // depois do histórico (fica em `pending_chat` enquanto ele carrega).
+            ChatUpdate::NoticeUpdate(event) => {
+                if self.chat.events.iter().any(|known| known.id == event.id) { self.chat.apply(event); }
+            }
             ChatUpdate::Message(event) => {
                 self.confirm_chat_message(&event);
                 // O primeiro pedido feito com a conversa aberta também vale para a sugestão de nome.
@@ -4174,6 +4194,14 @@ impl Hangar {
         if id.starts_with("queued-") && self.queue_hides(&id, &self.chat.queue_panel()) {
             return div().id(SharedString::from(id)).into_any_element();
         }
+        // Aviso da CLI: linha própria; o que o dono mandou ignorar nesta máquina fica sem altura.
+        let notice = match self.conversation.items.get(index) {
+            Some(Item::Event(i)) => self.chat.events.get(*i).filter(|event| notice_line::is_notice_line(event)).map(|event| (*i, self.notice_row_hidden(event))),
+            _ => None,
+        };
+        if matches!(notice, Some((_, true))) {
+            return div().id(SharedString::from(id)).into_any_element();
+        }
         self.tree_motion = false;
         let inner = match (id.as_str(), self.conversation.items.get(index).cloned()) {
             (PREVIEW, _) => self.render_message(index, &id, cx),
@@ -4187,7 +4215,10 @@ impl Hangar {
                 Some(call) => self.render_tool(Tool { call, result: None }, &id, cx),
                 None => div().into_any_element(),
             },
-            (_, Some(Item::Event(_))) => self.render_message(index, &id, cx),
+            (_, Some(Item::Event(_))) => match notice {
+                Some((event, _)) => self.render_notice_line(event, &id, cx),
+                None => self.render_message(index, &id, cx),
+            },
             (_, Some(Item::Tool(tool))) => self.render_tool(tool, &id, cx),
             (_, Some(Item::Orphan(result))) => self.render_orphan(result, &id, cx),
             (_, Some(Item::Group { tools, .. })) => self.render_group(&id, &tools, cx),
@@ -4196,7 +4227,8 @@ impl Hangar {
             (_, None) => div().into_any_element(),
         };
         if self.tree_motion { motion::request_frame(window, cx); }
-        let message = id == PREVIEW || id == landing::OPENING || id == send_flight::LOCAL_SEND || matches!(self.conversation.items.get(index), Some(Item::Event(_)));
+        // A linha de aviso tem o ritmo das linhas de ferramenta, não o de uma mensagem.
+        let message = id == PREVIEW || id == landing::OPENING || id == send_flight::LOCAL_SEND || notice.is_none() && matches!(self.conversation.items.get(index), Some(Item::Event(_)));
         let row = row_frame(inner, message).when(after_card(&self.conversation.items, &self.chat.events, index), |el| el.pt(px(8.)));
         // Pede quadro só para a área da conversa, e só enquanto a linha entra; rolar até ela depois não a anima de novo.
         let entering = self.arrived.get(&id).map(|at| motion::FADE_IN.raw(*at)).filter(|raw| *raw < 1. && !cx.reduce_motion());
@@ -4315,6 +4347,9 @@ impl Hangar {
             return working_line_box()
                 .child(div().w(px(14.)).flex_none().flex().justify_center().text_size(px(13.)).text_color(theme::faint()).child("✻"))
                 .child(div().min_w_0().truncate().text_size(px(12.)).text_color(theme::faint()).child(text))
+                // Nota do servidor sobre o turno que acabou ("Um hook parou o turno"); some sozinha.
+                .when_some(self.chat.state.turn_note.clone().filter(|note| !note.is_empty()), |el, note|
+                    el.child(div().flex_shrink_0().text_size(px(12.)).text_color(theme::warning_text()).child(format!("· {note}"))))
                 .into_any_element();
         }
         let verb = if sending { tr("sending") } else { working_verb(self.chat.state.label.as_deref()) };

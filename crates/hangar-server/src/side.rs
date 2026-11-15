@@ -312,7 +312,13 @@ impl SideCache {
         if self.retired.contains(&item.id) {
             return false;
         }
-        let slot = QueueSlot { id: item.id.clone(), frame: frame.clone(), confirmed: item.event == "queue_confirmed" || item.local_ts.is_some(), local_ts: item.local_ts };
+        // O retrato vai a quem conecta depois, que não tem a nota: ali ela fica `message`, já com o total novo.
+        // Nota que nem estava no retrato (mais velha que o hub) fica com o `/history`.
+        let frame = if item.event == crate::queue_feed::NOTICE_UPDATE {
+            if !self.queue.iter().any(|s| s.id == item.id) { return true; }
+            sse_frame("message", &item.data, None)
+        } else { frame.clone() };
+        let slot = QueueSlot { id: item.id.clone(), frame, confirmed: item.event == "queue_confirmed" || item.local_ts.is_some(), local_ts: item.local_ts };
         match self.queue.iter_mut().find(|s| s.id == slot.id) {
             Some(old) => *old = slot,
             None => self.queue.push(slot),
@@ -1132,7 +1138,7 @@ async fn run_side(hub: Arc<Hub>) {
 /// Quadro que o canal privado leva ao Python: o estado, a faixa dos mods, o painel da fila e as bolhas dela,
 /// que o convidado também vê; ao dono pelo Connect, também os avisos de mod, que o Python não guarda mais.
 fn private_frame(frame: &[u8], events: &[&str], guest: bool) -> bool {
-    state_frame(frame, events) || state_frame(frame, &[LATEST[PLUGIN_UI], crate::queue_panel::EVENT, "message", "queue_confirmed"])
+    state_frame(frame, events) || state_frame(frame, &[LATEST[PLUGIN_UI], crate::queue_panel::EVENT, "message", "queue_confirmed", crate::queue_feed::NOTICE_UPDATE])
         || (!guest && state_frame(frame, &["plugin_toast"]))
 }
 
@@ -1638,6 +1644,19 @@ mod tests {
         assert_eq!(c.queue.len(), QUEUE_KEPT);
         assert_eq!(c.queue[0].id, "queued-pending");
         assert_eq!(c.queue.last().unwrap().id, "queued-39");
+    }
+
+    /// O total novo de uma nota chega ao vivo como `notice_update`, mas no retrato ela segue `message`: quem
+    /// conecta depois não tem a nota e ignoraria a atualização.
+    #[test]
+    fn notice_update_keeps_the_snapshot_as_a_message_and_skips_a_note_it_never_had() {
+        let mut c = SideCache::default();
+        queue(&mut c, "message", "local-hookfail:1:0", Some(1.0));
+        assert!(queue(&mut c, crate::queue_feed::NOTICE_UPDATE, "local-hookfail:1:0", Some(1.0)), "ao vivo sai");
+        let frame = String::from_utf8_lossy(&c.queue[0].frame).into_owned();
+        assert!(frame.starts_with("event: message"), "{frame}");
+        assert!(queue(&mut c, crate::queue_feed::NOTICE_UPDATE, "local-old", Some(1.0)));
+        assert!(c.queue.iter().all(|s| s.id != "local-old"), "a nota mais velha que o hub fica com o /history");
     }
 
     /// O teto do retrato só descarta confirmada (ou nota local): pendente nunca sai.

@@ -620,7 +620,8 @@ impl Hangar {
                         next.ask_highlight = if index == 1 { AskHighlight::Amber } else { AskHighlight::Accent };
                         this.apply_appearance(next, true, cx);
                     }, cx),
-                false));
+                false))
+            .when_some(self.render_ignored_notices(cx), |el, list| el.child(list));
 
         const GROUPING: [appearance::SidebarGroup; 3] = [appearance::SidebarGroup::None, appearance::SidebarGroup::Project, appearance::SidebarGroup::Machine];
         const NAVIGATION: [Navigation; 4] = [Navigation::Sidebar, Navigation::Tabs, Navigation::BottomTabs, Navigation::Conversations];

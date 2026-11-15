@@ -263,17 +263,19 @@ pub fn turn_seed_start(path: &Path, before: u64) -> u64 {
 /// Passa `[from, to)` só pelo fold das notas: a janela do `/history` que começa no meio do turno conta as falhas
 /// desde o começo dele, como a cauda ao vivo. O filtro de reescrita é à parte: não muda o que a janela mostra.
 fn seed_notices(path: &Path, fold: &mut claude::NoticeFold, from: u64, to: u64) {
-    if from == 0 {
-        fold.file_start();
-    }
-    if from >= to {
-        return;
-    }
     let failed = |e: io::Error| {
         if hangar_core::warn_limit::allow(None, "transcript_notice_seed") {
             tracing::warn!(code = "transcript_notice_seed", path = %path.display(), "notas: semeadura do turno parou; somas podem sair incompletas: {e}");
         }
     };
+    if from == 0 {
+        fold.file_start();
+    } else if let Err(e) = fold.seed_hooks(path, from) {
+        failed(e);
+    }
+    if from >= to {
+        return;
+    }
     let mut rd = match File::open(path).and_then(|f| { let mut rd = BufReader::new(f); rd.seek(SeekFrom::Start(from)).map(|_| rd) }) {
         Ok(rd) => rd,
         Err(e) => return failed(e),
@@ -427,6 +429,9 @@ fn parse_from(req: &HistoryRequest, offset: u64, start_ts: f64, notices: bool) -
     }
     let clock = p.prev_ts;
     absorb(&mut p, clock, i, pi.flush(), &mut held_ids);
+    if let Some(fold) = &notices {
+        p.items.iter_mut().for_each(|(_, _, ev)| fold.stamp(ev));
+    }
     Ok(p)
 }
 
@@ -535,6 +540,9 @@ pub fn entry_event(entry: &Map<String, Value>) -> ChatEvent {
             ..event(ChatKind::UserMsg, format!("queued-{id}"))
         }
     };
+    if is_local_output(entry) {
+        ev.notice_meta = entry.get("notice_meta").and_then(Value::as_object).cloned();
+    }
     finish(&mut ev);
     ev
 }
@@ -654,6 +662,22 @@ mod tests {
         assert_eq!(event.id, "local-a1");
         let plain = serde_json::json!({"id":"a2","text":"outro aviso","papel":"assistant","confirmed":true});
         assert_eq!(super::entry_event(plain.as_object().unwrap()).kind, hangar_api::chat::ChatKind::AssistantMsg);
+    }
+
+    /// O mapa do aviso é só acréscimo: cliente antigo segue vendo o mesmo tipo e o mesmo texto.
+    #[test]
+    fn local_note_row_keeps_kind_and_text_and_carries_the_map() {
+        let row = serde_json::json!({"id":"a1","text":"⚙️ x","papel":"assistant","confirmed":true,"notice_meta":{"key":"note:retry"}});
+        let event = super::entry_event(row.as_object().unwrap());
+        assert_eq!(event.kind, hangar_api::chat::ChatKind::AssistantMsg);
+        assert_eq!(event.text.as_deref(), Some("⚙️ x"));
+        assert_eq!(serde_json::to_value(&event).unwrap()["notice_meta"], serde_json::json!({"key":"note:retry"}));
+        let plain = serde_json::json!({"id":"a2","text":"saída de /cost","papel":"assistant","confirmed":true});
+        let json = serde_json::to_value(super::entry_event(plain.as_object().unwrap())).unwrap();
+        assert!(json.get("notice_meta").is_none(), "sem mapa, o campo não sai: {json}");
+        // Entrada da pessoa com o campo forjado não vira aviso.
+        let user = serde_json::json!({"id":"q1","text":"oi","delivered":false,"notice_meta":{"key":"x"}});
+        assert!(super::entry_event(user.as_object().unwrap()).notice_meta.is_none());
     }
 
     use super::{chaves_de_commit, merged_history, merged_history_capped, queue_panel_entries, transcript_start_ts, HistoryRequest, Provider, TAIL_WINDOW};

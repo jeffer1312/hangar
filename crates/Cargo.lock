@@ -1855,6 +1855,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-notice-ignores"
+version = "0.1.0"
+dependencies = [
+ "hangar-core",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "hangar-omp-sync"
 version = "0.1.0"
 dependencies = [
@@ -2006,6 +2016,7 @@ dependencies = [
  "hangar-dream",
  "hangar-http-file",
  "hangar-mission",
+ "hangar-notice-ignores",
  "hangar-omp-sync",
  "hangar-opencode-cookie",
  "hangar-package",

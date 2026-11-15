@@ -21,6 +21,7 @@ import { ColorDots } from '../../src/features/config/ColorDots';
 import { Slider } from '../../src/features/config/Slider';
 import { Tiles } from '../../src/features/config/Tiles';
 import { ReadingArt, ToolsArt } from '../../src/features/config/AppearanceArt';
+import { IgnoredNotices } from '../../src/features/notices/IgnoredNotices';
 import { useSettingsColors } from '../../src/features/config/colors';
 import { toast } from '../../src/ui/Toast';
 import {
@@ -492,6 +493,7 @@ export default function Aparencia() {
             label={m.aparencia_organizar_sessoes()}
           />
         </SettingsRow>
+        <IgnoredNotices />
       </SectionCard>
       <SectionCard icon="PanelLeft" title={m.tablet_landscape()} onLayout={at('tablet')}>
         <SettingsRow title={m.tablet_bar_position()}>

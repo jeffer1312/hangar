@@ -161,7 +161,7 @@ fn parse_raw(obj: &Map<String, Value>, resolve: PeerResolver) -> Vec<ChatEvent> 
     }
 }
 
-/// Avisos da CLI que o terminal mostra e o transcript grava, somados por turno como no Claude sem terminal.
+/// Avisos da CLI que o terminal mostra e o transcript grava, como no Claude sem terminal.
 /// Só linhas `"entrypoint":"cli"`: as do sem terminal (`sdk-cli`) já viram nota pelo ator.
 #[derive(Default)]
 pub(crate) struct NoticeFold {
@@ -170,22 +170,73 @@ pub(crate) struct NoticeFold {
     synced: bool,
     /// Turno em curso: a mensagem da fila (`queued_command`) no meio dele é injetada no turno, não abre outro.
     turn_open: bool,
-    /// Falhas do turno por `hookName` → (detalhe da primeira, total). Por nome: o `stderr` muda a cada chamada.
-    hooks: std::collections::BTreeMap<String, (String, u32)>,
+    /// Falhas do arquivo por `hookName`: a primeira vira nota, as outras só somam nela. Por nome: o `stderr`
+    /// muda a cada chamada.
+    hooks: std::collections::BTreeMap<String, HookFails>,
+    /// As falhas de antes desta leitura já foram contadas (ou ela começou no byte 0): sem isso a repetição
+    /// viraria uma "primeira" com outro id.
+    hooks_known: bool,
     /// Maior tentativa do grupo aberto pela `retryAttempt == 1`.
     retries: Option<u64>,
 }
 
+struct HookFails {
+    id: String,
+    detail: String,
+    count: u32,
+}
+
+const HOOK_FAILURE: &str = "hook_non_blocking_error";
 const HOOK_STDERR_PREFIX: &str = "Failed with non-blocking status code: ";
 
 impl NoticeFold {
     /// Leitura que começa no byte 0 sabe onde está: a falha do `SessionStart`, antes do primeiro prompt, também conta.
     pub(crate) fn new(from_file_start: bool) -> Self {
-        Self { synced: from_file_start, ..Self::default() }
+        Self { synced: from_file_start, hooks_known: from_file_start, ..Self::default() }
     }
 
     pub(crate) fn file_start(&mut self) {
         self.synced = true;
+        self.hooks_known = true;
+    }
+
+    /// Conta as falhas de hook de `[0, to)` sem gerar nota, uma vez por leitor. Só a linha com a marca passa pelo
+    /// json: o arquivo inteiro é lido a cada leitura que começa no meio.
+    pub(crate) fn seed_hooks(&mut self, path: &std::path::Path, to: u64) -> std::io::Result<()> {
+        use std::io::BufRead;
+        // Só fica conhecido depois de ler: com a leitura falha, a falha seguinte não vira uma "primeira" duplicada.
+        if self.hooks_known {
+            return Ok(());
+        }
+        let mut rd = std::io::BufReader::new(std::fs::File::open(path)?);
+        let (mut at, mut raw) = (0u64, Vec::new());
+        while at < to {
+            raw.clear();
+            match rd.read_until(b'\n', &mut raw)? {
+                0 => break,
+                n => at += n as u64,
+            }
+            if memchr::memmem::find(&raw, HOOK_FAILURE.as_bytes()).is_none() {
+                continue;
+            }
+            if let Some(Value::Object(obj)) = pyjson::loads_lossless(&String::from_utf8_lossy(&raw)) {
+                if obj.get("entrypoint").and_then(Value::as_str) == Some("cli") && obj.get("type").and_then(Value::as_str) == Some("attachment") {
+                    self.hook_failure(&obj, obj.get("uuid").and_then(Value::as_str).unwrap_or(""), None);
+                }
+            }
+        }
+        self.hooks_known = true;
+        Ok(())
+    }
+
+    /// O total entra na nota da primeira falha, que é a única que a conversa mostra.
+    pub(crate) fn stamp(&self, event: &mut ChatEvent) {
+        if let Some(fails) = self.hooks.values().find(|fails| fails.count > 1 && fails.id == event.id) {
+            event.hook_error = Some(format!("{} (falhou {} vezes)", fails.detail, fails.count));
+            if let Some(meta) = event.notice_meta.as_mut() {
+                meta.insert("count".into(), fails.count.into());
+            }
+        }
     }
 
     /// Notas da linha: o fecho do turno anterior entra antes dos eventos dela (o prompt novo vem depois), o resto depois.
@@ -198,16 +249,14 @@ impl NoticeFold {
         match obj.get("type").and_then(Value::as_str) {
             // Turno interrompido não grava `turn_duration`: o prompt seguinte também fecha, e a marca da CLI
             // ("[Request interrupted by user]") conta como prompt.
-            Some("user") if is_prompt(obj) => self.open_turn(uid, at, events),
+            Some("user") if is_prompt(obj) => self.open_turn(),
             // Recado de outra sessão: `isMeta`, sem prompt; com a sessão parada é ele que abre o turno.
             Some("user") if !self.turn_open && obj.get("origin").and_then(|o| o.get("kind")).and_then(Value::as_str) == Some("peer") => {
-                self.wake(uid, at, events)
+                self.wake()
             }
             Some("user") => self.retries = None,
             Some("system") => match obj.get("subtype").and_then(Value::as_str) {
                 Some("turn_duration") => {
-                    let closed = self.close_turn(uid, at);
-                    events.extend(closed);
                     self.synced = true;
                     self.turn_open = false;
                     self.retries = None;
@@ -217,7 +266,7 @@ impl NoticeFold {
                     if attempt == 1 && self.synced {
                         let why = obj.get("error").and_then(|e| e.get("formatted")).and_then(Value::as_str).unwrap_or("erro");
                         let max = obj.get("maxRetries").and_then(Value::as_u64).unwrap_or(1);
-                        events.push(note(format!("retry:{uid}"), format!("⚙️ A API falhou ({why}); nova tentativa 1 de {max}"), at));
+                        events.push(note(format!("retry:{uid}"), Some("note:retry"), format!("⚙️ A API falhou ({why}); nova tentativa 1 de {max}"), at));
                         self.retries = Some(1);
                     } else if let Some(seen) = self.retries.as_mut() {
                         *seen = (*seen).max(attempt);
@@ -230,12 +279,13 @@ impl NoticeFold {
                 // Só a resposta fecha o grupo: um anexo no meio (mensagem digitada na espera) não.
                 if let Some(failed) = self.retries.take() {
                     if failed > 1 && obj.get("isApiErrorMessage") != Some(&Value::Bool(true)) {
-                        events.push(note(format!("retry-ok:{uid}"), format!("⚙️ A API voltou na {}ª tentativa", failed + 1), at));
+                        events.push(note(format!("retry-ok:{uid}"), Some("note:retry"), format!("⚙️ A API voltou na {}ª tentativa", failed + 1), at));
                     }
                 }
                 let stop = obj.get("message").and_then(|m| m.get("stop_reason")).and_then(Value::as_str);
                 if stop == Some("refusal") {
-                    events.push(note(format!("refusal:{uid}"), "⚙️ O modelo recusou responder".into(), at));
+                    // Bloqueio real: sem chave de ignorar.
+                    events.push(note(format!("refusal:{uid}"), None, "⚙️ O modelo recusou responder".into(), at));
                 }
             }
             _ => {}
@@ -243,47 +293,44 @@ impl NoticeFold {
     }
 
     /// Fila ou recado com a sessão parada. Antes da sincronia não se sabe se ela estava parada (a leitura pode ter
-    /// começado no meio de um turno, onde a fila é injetada): só marca o turno, sem soma nem nota.
-    fn wake(&mut self, uid: &str, at: Option<f64>, events: &mut Vec<ChatEvent>) {
+    /// começado no meio de um turno, onde a fila é injetada): só marca o turno.
+    fn wake(&mut self) {
         if self.synced {
-            self.open_turn(uid, at, events);
+            self.open_turn();
         } else {
             self.turn_open = true;
         }
     }
 
-    /// Prompt novo: fecha as somas do turno anterior antes dele (turno interrompido não grava `turn_duration`).
-    fn open_turn(&mut self, uid: &str, at: Option<f64>, events: &mut Vec<ChatEvent>) {
-        let closed = self.close_turn(uid, at);
-        events.splice(0..0, closed);
+    fn open_turn(&mut self) {
         self.synced = true;
         self.turn_open = true;
         self.retries = None;
     }
 
-    /// Prompt que vem da fila com a sessão parada abre turno; falha de hook (não bloqueio) vira nota, as seguintes somam.
+    /// Prompt que vem da fila com a sessão parada abre turno; falha de hook (não bloqueio) vira nota.
     fn on_attachment(&mut self, obj: &Map<String, Value>, uid: &str, at: Option<f64>, events: &mut Vec<ChatEvent>) {
-        let Some(att) = obj.get("attachment").and_then(Value::as_object) else { return };
-        match att.get("type").and_then(Value::as_str) {
-            Some("queued_command") if !self.turn_open => return self.wake(uid, at, events),
-            Some("hook_non_blocking_error") if self.synced => {}
-            _ => return,
+        match obj.get("attachment").and_then(|att| att.get("type")).and_then(Value::as_str) {
+            Some("queued_command") if !self.turn_open => self.wake(),
+            Some(HOOK_FAILURE) if self.hooks_known => events.extend(self.hook_failure(obj, uid, at)),
+            _ => {}
         }
+    }
+
+    /// A primeira falha de cada hook no arquivo vira nota; as seguintes só somam nela.
+    fn hook_failure(&mut self, obj: &Map<String, Value>, uid: &str, at: Option<f64>) -> Option<ChatEvent> {
+        let att = obj.get("attachment").and_then(Value::as_object).filter(|att| att.get("type").and_then(Value::as_str) == Some(HOOK_FAILURE))?;
         let name = att.get("hookName").or_else(|| att.get("hookEvent")).and_then(Value::as_str).unwrap_or("hook").to_owned();
-        if let Some(streak) = self.hooks.get_mut(&name) {
-            streak.1 += 1;
-            return;
+        if let Some(fails) = self.hooks.get_mut(&name) {
+            fails.count += 1;
+            return None;
         }
         let reason = hook_failure_reason(att.get("stderr").and_then(Value::as_str), att.get("exitCode").and_then(Value::as_i64));
         let detail = format!("{name}: {reason}");
-        events.push(hook_note(format!("hookfail:{uid}"), detail.clone(), at));
-        self.hooks.insert(name, (detail, 1));
-    }
-
-    fn close_turn(&mut self, uid: &str, at: Option<f64>) -> Vec<ChatEvent> {
-        std::mem::take(&mut self.hooks).into_iter().filter(|(_, (_, count))| *count > 1)
-            .map(|(name, (detail, count))| hook_note(format!("hookfail-sum:{uid}:{}", md5_8(&name)), format!("{detail} ({count}× neste turno)"), at))
-            .collect()
+        let id = format!("hookfail:{uid}");
+        let event = hook_note(id.clone(), &name, detail.clone(), at);
+        self.hooks.insert(name, HookFails { id, detail, count: 1 });
+        Some(event)
     }
 }
 
@@ -316,14 +363,17 @@ pub fn is_cli_note(id: &str) -> bool {
     ["retry:", "retry-ok:", "refusal:"].iter().any(|prefix| id.starts_with(prefix))
 }
 
-fn note(id: String, text: String, at: Option<f64>) -> ChatEvent {
-    let mut ev = ChatEvent { ts: at, ..text_event(ChatKind::AssistantMsg, id, text) };
+/// `ignore_key`: a chave de ignorar; sem ela o aviso é bloqueio real e os clientes não oferecem "Ignorar".
+fn note(id: String, ignore_key: Option<&str>, text: String, at: Option<f64>) -> ChatEvent {
+    let meta = ignore_key.map(|key| ("key".to_owned(), Value::from(key))).into_iter().collect();
+    let mut ev = ChatEvent { ts: at, notice_meta: Some(meta), ..text_event(ChatKind::AssistantMsg, id, text) };
     finish(&mut ev);
     ev
 }
 
-fn hook_note(id: String, detail: String, at: Option<f64>) -> ChatEvent {
-    let mut ev = ChatEvent { ts: at, hook_error: Some(detail), ..text_event(ChatKind::Notice, id, "hook_failed".into()) };
+fn hook_note(id: String, name: &str, detail: String, at: Option<f64>) -> ChatEvent {
+    let meta = [("key", format!("hook:{name}")), ("subject", name.to_owned())].into_iter().map(|(k, v)| (k.to_owned(), Value::from(v))).collect();
+    let mut ev = ChatEvent { ts: at, hook_error: Some(detail), notice_meta: Some(meta), ..text_event(ChatKind::Notice, id, "hook_failed".into()) };
     finish(&mut ev);
     ev
 }
@@ -884,6 +934,9 @@ fn cache_info(msg: &Map<String, Value>) -> (Option<u64>, Option<u64>) {
 fn assistant(obj: &Map<String, Value>, msg: &Map<String, Value>, uid: &str, items: &[Value]) -> Vec<ChatEvent> {
     let (cache_read, cache_ttl_s) = cache_info(msg);
     let ts = ts(obj);
+    // O erro da API vem gravado como resposta do modelo; o mapa sem chave diz aos clientes que é bloqueio real.
+    let api_error = (obj.get("isApiErrorMessage") == Some(&Value::Bool(true)))
+        .then(|| Map::from_iter([("level".to_owned(), Value::from("error"))]));
     let mut out = Vec::new();
     for it in items.iter().filter_map(Value::as_object) {
         let id = sub_id(uid, out.len());
@@ -907,6 +960,7 @@ fn assistant(obj: &Map<String, Value>, msg: &Map<String, Value>, uid: &str, item
                 ts,
                 cache_read,
                 cache_ttl_s,
+                notice_meta: api_error.clone(),
                 ..event(ChatKind::AssistantMsg, id)
             }),
             Some("thinking") => {
@@ -946,6 +1000,18 @@ mod tests {
         let [ev] = <[ChatEvent; 1]>::try_from(parse(tool_use_result, vec![], Value::Null)).expect("um evento");
         assert_eq!(ev.kind, ChatKind::ToolResult);
         ev.patch
+    }
+
+    #[test]
+    fn api_error_reply_is_marked_as_a_blocking_error_and_a_plain_reply_is_not() {
+        let line = |flag: bool| json!({"type": "assistant", "uuid": "a1", "timestamp": "2026-11-15T08:56:00.000Z",
+            "isApiErrorMessage": flag, "error": "authentication_failed",
+            "message": {"role": "assistant", "content": [{"type": "text", "text": "Failed to refresh OAuth token"}]}});
+        let meta = |flag: bool| LineParser::new(Provider::Claude).feed(line(flag).to_string().as_bytes(), 0)
+            .into_iter().map(|e| (e.kind, e.notice_meta)).collect::<Vec<_>>();
+        let error = json!({"level": "error"}).as_object().cloned();
+        assert_eq!(meta(true), vec![(ChatKind::AssistantMsg, error)]);
+        assert_eq!(meta(false), vec![(ChatKind::AssistantMsg, None)]);
     }
 
     #[test]

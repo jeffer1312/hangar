@@ -24,8 +24,17 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   conversa para falha ou mudança que a pessoa precisa saber; faixa só para o erro do turno; diário para
   o resto. Nota de configuração (MCP ou plugin que não subiu, aviso `high`/`immediate` da CLI) sai uma
   vez por vida do processo, e a adoção pelo Rust reiniciado não a repete. Nota de ocorrência (recusa
-  do modelo, motivo anormal do fim do turno, falha de hook com as seguidas somadas) sai quando
-  acontece; a falha de hook repetida soma até o fim do turno. O `system/*` sem ramo vai ao diário como
+  do modelo, motivo anormal do fim do turno) sai quando acontece. Falha de hook é uma nota por hook
+  (por processo e conversa sem terminal, por arquivo de transcript com terminal): a repetição regrava
+  a mesma nota com o total, nunca outra. Turno parado por hook de fim de turno não é nota: vai no
+  `turn_note` do estado por 8 s. Todo aviso leva o mapa `notice_meta` no evento, que é o que os
+  clientes desenham como linha de aviso; o `kind` e o `text` ficam como eram, para o cliente antigo. A
+  chave de ignorar (`notice_meta.key`) só vai no aviso que não é bloqueio real nem defeito do Hangar;
+  as chaves ignoradas moram em `~/.hangar/notice-ignores.json` (`/api/notice-ignores`, evento
+  `notice_ignores` da lista do dono). A resposta que a CLI grava no lugar da do modelo quando a API
+  falha (`isApiErrorMessage`) leva `notice_meta.level = "error"` e os clientes a desenham como caixa
+  âmbar de turno parado; sem terminal, essa resposta substitui a nota "Turno parado: erro da API".
+  O `system/*` sem ramo vai ao diário como
   `system/{subtype}`. Com terminal, os avisos saem só do transcript ou do plugin, **nunca lendo a
   tela**, e o leitor só monta nota em linha `"entrypoint":"cli"` (a `sdk-cli` já tem a nota do ator);
   só o chat ao vivo e o `/history` do chat ligam as notas (`LineParser::with_notices`,
@@ -1329,10 +1338,10 @@ CLI, troca de modelo por recusa. O `terminal_reason` do `result` também não ap
 |---|---|
 | `system/api_retry` | rótulo `Nova tentativa N de M em X s · erro S` (ou `· sem resposta da API`), sai na próxima linha de resposta, inclusive de subagente |
 | `init.mcp_servers` `failed`/`needs-auth`, `init.plugin_errors` | **uma** nota por vida do processo, com até 5 nomes por linha ("e mais N"). Na prova ao vivo, a conta com os plugins instalados trazia uns 20 conectores sem login ou que não sobem: uma nota por servidor despejava 20 notas a cada processo |
-| `hook_started`/`hook_response` (flag `--include-hook-events`) | rótulo `Rodando hook {hook_name}…` só depois de 3 s; `outcome: error` com `exit_code` diferente de 2 vira `Hook falhou — …`; as falhas seguintes do mesmo `hook_name` (com qualquer motivo, porque o `stderr` muda a cada chamada) somam e viram `(N× neste turno)` no fim do turno (não no sucesso: vários hooks dividem o mesmo `hook_name`); `exit 2` (bloqueio) só no diário (`claude_hook`) nos eventos em que o motivo vai ao modelo (`PreToolUse`, `PostToolUse`, `Stop`, `SubagentStop`) e no `UserPromptSubmit` (o prompt barrado já é bolha retida); nos outros (`SessionStart`, `Notification`…) a CLI o mostraria só à pessoa, então vira nota; falha fora de turno avisa sem somar; os rótulos de nova tentativa e de hook só valem com turno em curso (chamada de fundo também tenta de novo, e hook assíncrono pode não responder); `terminal_reason` que esta versão não conhece vai só ao diário (`claude_terminal_reason`); sucesso no diário em tipo próprio (`claude_hook_ok`) para não gastar o teto das falhas |
+| `hook_started`/`hook_response` (flag `--include-hook-events`) | rótulo `Rodando hook {hook_name}…` só depois de 3 s; `outcome: error` com `exit_code` diferente de 2 vira `Hook falhou — …`; as falhas seguintes do mesmo `hook_name` (com qualquer motivo, porque o `stderr` muda a cada chamada) nesta vida do processo e nesta conversa não viram outra nota: somam, e a linha da primeira é regravada na fila com `(falhou N vezes)` no fim do turno, ou na hora quando a falha vem fora de turno (o sucesso não zera a conta: vários hooks dividem o mesmo `hook_name`); `exit 2` (bloqueio) só no diário (`claude_hook`) nos eventos em que o motivo vai ao modelo (`PreToolUse`, `PostToolUse`, `Stop`, `SubagentStop`) e no `UserPromptSubmit` (o prompt barrado já é bolha retida); nos outros (`SessionStart`, `Notification`…) a CLI o mostraria só à pessoa, então vira nota; os rótulos de nova tentativa e de hook só valem com turno em curso (chamada de fundo também tenta de novo, e hook assíncrono pode não responder); `terminal_reason` que esta versão não conhece vai só ao diário (`claude_terminal_reason`); sucesso no diário em tipo próprio (`claude_hook_ok`) para não gastar o teto das falhas |
 | `system/notification` | `high`/`immediate`: nota única por `key` + texto; o resto, diário |
 | `model_refusal_fallback`, `model_refusal_no_fallback` | nota a cada ocorrência |
-| `result.terminal_reason` anormal | nota `Turno parado: …` e o mesmo texto no começo do detalhe da faixa de erro; fim normal e parada pela pessoa ficam de fora, e também o turno que bateu no limite de uso ou ficou sem login, que já têm aviso próprio. `blocking_limit` é o limite de **contexto** e `rapid_refill_breaker` a compactação automática em laço (lido no binário 2.1.316): o limite de uso chega como `api_error` com `api_error: "usage_limit_reached"` |
+| `result.terminal_reason` anormal | nota `Turno parado: …` e o mesmo texto no começo do detalhe da faixa de erro; fim normal e parada pela pessoa ficam de fora, e também o turno que bateu no limite de uso ou ficou sem login, que já têm aviso próprio. `stop_hook_prevented` e `hook_stopped` não viram nota: o estado leva `turn_note: "Um hook parou o turno"` por 8 s depois do fim do turno, para a linha de fim de turno dos clientes (fora do `label`, que parado ainda traz o agente em segundo plano). `blocking_limit` é o limite de **contexto** e `rapid_refill_breaker` a compactação automática em laço (lido no binário 2.1.316): o limite de uso chega como `api_error` com `api_error: "usage_limit_reached"` |
 
 Formatos lidos de um `claude -p` 2.1.316 real (fixtures em `crates/hangar-server/tests/fixtures/claude_events/`):
 `hook_name` é `Evento:matcher` ou só o evento; `exit 1` e `exit 2` chegam ambos como `outcome: "error"`,
@@ -1360,7 +1369,16 @@ por transcript ou plugin ficou de fora. Plano: `docs/superpowers/plans/2026-11-0
 
 | Aviso | Fonte no transcript | Nota |
 |---|---|---|
-| Hook que falha | anexo `hook_non_blocking_error` (`hookName`, `stderr` com o prefixo "Failed with non-blocking status code: ") | `hookfail:{uuid}` na primeira do turno; soma `hookfail-sum:{uuid que fechou}:{md5_8(hookName)}` "(N× neste turno)" |
+| Hook que falha | anexo `hook_non_blocking_error` (`hookName`, `stderr` com o prefixo "Failed with non-blocking status code: ") | `hookfail:{uuid}` na primeira do arquivo; as seguintes só somam. O `/history` devolve a primeira com "(falhou N vezes)"; ao vivo a repetição não gera evento. Leitura que começa no meio conta antes as falhas de `[0, início)`, só nas linhas com a marca |
+
+**Uma nota por hook, com o total (14/11/2026).** A soma por turno deixava passar o caso que mais repete: um
+usuário tinha dezenas de cartões iguais de `SessionStart:compact` (pasta do plugin inexistente na conta), um a
+cada compactação, porque a falha fora de turno nunca somava. E o `stop_hook_prevented` saía depois de quase
+toda resposta de quem tem hook de fim de turno que segura a resposta por rotina. Sem terminal a conta vale
+pela vida do processo e zera na troca de conversa; com terminal, pelo arquivo do transcript, que não marca a
+troca de processo. Sem terminal a linha regravada sai de novo no chat ao vivo com o mesmo id (o cliente a troca
+no lugar), menos a nota que já era velha quando o seguidor da fila nasceu: quem não a carregou ganharia uma
+nota nova no fim. Com terminal a repetição não gera evento e o total aparece quando a conversa é recarregada.
 | Nova tentativa da API | `system/api_error` (`retryAttempt`, `maxRetries`, `error.formatted`), uma linha por tentativa em corrente | `retry:{uuid}` na tentativa 1; `retry-ok:{uuid}` na primeira `assistant` depois de mais de uma; terminou em `isApiErrorMessage` = sem fecho |
 | Recusa | `assistant` com `stop_reason: "refusal"` | `refusal:{uuid}` |
 

@@ -66,8 +66,10 @@ pub struct ClaudeEngine {
     retry_label: Option<String>,
     /// Hooks em curso por `hook_id`: o que passa de `HOOK_SLOW_S` vira rótulo.
     hooks_running: BTreeMap<String,RunningHook>,
-    /// Falhas de cada hook no turno (`hook_name` → detalhe da primeira, total): a primeira vai à conversa, as outras só somam.
-    hook_streaks: BTreeMap<String,(String,u32)>,
+    /// Falhas de cada hook nesta vida do processo, por `hook_name`: a primeira vai à conversa, as outras só somam nela.
+    hook_fails: BTreeMap<String,HookFails>,
+    /// Até quando a nota "um hook parou o turno" (`turn_note` do estado) fica depois do fim do turno.
+    stop_label: Option<f64>,
     /// Registros no diário por tipo nesta vida: passado o teto, o motor nem pede a gravação.
     diary_counts: BTreeMap<String,u32>,
     compacting: bool,
@@ -139,6 +141,13 @@ const DIARY_PER_KIND: u32 = 30;
 
 struct RunningHook { name:String, started:f64, shown:bool }
 
+/// `id`: a linha da nota na fila; `shown`: o total que ela já mostra.
+/// `blocking`: `exit 2`, o hook decidindo; bloqueio não ganha chave de ignorar, nem quando a nota é regravada.
+struct HookFails { id:String, detail:String, count:u32, shown:u32, blocking:bool }
+
+const STOP_LABEL: &str = "Um hook parou o turno";
+const STOP_LABEL_S: f64 = 8.0;
+
 /// UUID estável da mensagem de uma operação (formato v5 sobre o SHA-1 do ID): reescrever o mesmo quadro
 /// depois de reiniciar mantém o eco casável.
 fn echo_uuid(operation_id:&str) -> String {
@@ -179,7 +188,7 @@ impl ClaudeEngine {
             waiters:BTreeMap::new(),wires:BTreeMap::new(),retired_writes:BTreeSet::new(),policies:BTreeMap::new(),last_format_request:None,format_gate:FormatGate::default(),reload_deadline:clock.monotonic_s+10.0,
             rate_limit_info:Value::Null,turn_limit:None,turn_error:None,commands:metadata.get("commands").filter(|commands|!commands.is_null()).cloned(),terminal_commands:metadata.get("terminal_commands").cloned().unwrap_or_else(||json!([])),
             preview:LiveBuffer::default(),thinking:LiveBuffer::default(),tool_input:LiveBuffer::default(),tool_name:None,tool_visible:false,
-            label:None,retry_label:None,hooks_running:BTreeMap::new(),hook_streaks:BTreeMap::new(),diary_counts:BTreeMap::new(),compacting:false,turn_start:None,label_deadline:None,tokens_closed:0,tokens_message:None,gen_start:None,
+            label:None,retry_label:None,hooks_running:BTreeMap::new(),hook_fails:BTreeMap::new(),stop_label:None,diary_counts:BTreeMap::new(),compacting:false,turn_start:None,label_deadline:None,tokens_closed:0,tokens_message:None,gen_start:None,
             token_chars:0,thinking_start:None,thought_s:0.0,tasks:Vec::new(),usage:metadata.get("usage").cloned().unwrap_or(Value::Null),
             context_window:metadata["context_window"].as_u64(),cost:metadata["cost"].as_f64(),effort_intent,effort_deadline:None,active_input:None,steer_now:None,slash_input:None,unknown:BTreeSet::new(),replaying:false,surface:None,stderr_tail:Vec::new(),problem_persisted,subagents:BTreeMap::new(),echoes:std::collections::VecDeque::new(),background:BTreeSet::new(),active_at:clock.monotonic_s,deaf:false,idle_compact:IdleCompact::default(),metadata };
         if let Some(controls) = engine.metadata["control_carry"].as_array() {
@@ -263,6 +272,8 @@ impl ClaudeEngine {
         self.waiters.clear(); self.policies.clear(); self.last_format_request = None; self.format_gate.reset();
         self.pending.clear(); self.question = None; self.effort_intent = None; self.subagents.clear();
         self.tasks.clear(); self.background.clear(); self.label = None; self.drop_turn_notices();
+        // A nota ficou na conversa anterior: a nova avisa de novo.
+        self.hook_fails.clear();
         self.effort_deadline = None; self.active_input = None; self.steer_now = None; self.restore_plan = None;
         self.in_progress = false; self.turn_start = None; self.label_deadline = None;
         self.clear_streams(effects);
@@ -303,6 +314,7 @@ impl ClaudeEngine {
             label = Some(format!("Rodando hook {}…",hook.name));
         }
         if let Some(retry) = &self.retry_label { label = Some(retry.clone()); }
+        state.turn_note = (self.stop_label.is_some() && !self.in_progress).then(||STOP_LABEL.into());
         if state.state == "working" {
             if let Some(start) = self.turn_start {
                 let seconds = (self.clock.monotonic_s - start).max(0.0) as u64;
@@ -502,7 +514,7 @@ impl ClaudeEngine {
     }
 
     fn start_turn(&mut self) {
-        self.in_progress = true; self.turn_start = Some(self.clock.monotonic_s);
+        self.in_progress = true; self.turn_start = Some(self.clock.monotonic_s); self.stop_label = None;
         self.label_deadline = Some(self.clock.monotonic_s+1.0); self.tokens_closed = 0; self.tokens_message = None;
         self.token_chars = 0; self.thinking_start = None; self.thought_s = 0.0; self.compacting = false;
         // Hook já lento antes do turno começou com a sessão parada (assíncrono que talvez nunca responda).
@@ -1052,7 +1064,7 @@ impl ClaudeEngine {
                     let subtype = request["subtype"].as_str().unwrap_or("");
                     self.policy("unknown_private",json!({"kind":format!("control_request/{subtype}"),"event":event}),effects);
                     if self.unknown.insert(format!("control_request/{subtype}")) {
-                        self.policy("local_output",json!({"text":format!("⚙️ A CLI pediu `{subtype}`; respondi vazio")}),effects);
+                        self.cli_note(None,format!("⚙️ A CLI pediu `{subtype}`; respondi vazio"),effects);
                     }
                 } else if tool == "AskUserQuestion" {
                     self.question = Some(json!({"provider":"claude","request_id":request_id,"questions":request["input"]["questions"]}));
@@ -1077,7 +1089,7 @@ impl ClaudeEngine {
                     note = Some(format!("⚙️ Pergunta cancelada antes da resposta: {first}").trim_end_matches([':',' ']).to_owned());
                 }
                 self.changed(effects,true);
-                if let Some(text) = note { self.policy("local_output",json!({"text":text}),effects); }
+                if let Some(text) = note { self.cli_note(None,text,effects); }
             }
             "result" => {
                 self.in_progress = false; self.turn_start = None; self.label_deadline = None;
@@ -1113,7 +1125,15 @@ impl ClaudeEngine {
                     self.state.problema_detalhe = Some(format!("{reason}{subtype}: {}",clip(event["result"].as_str().unwrap_or(""),300)));
                     if let Some(limit) = limit { effects.push(Effect::UsageLimit { limit }); }
                 }
-                if let Some(reason) = &stop_reason { self.policy("local_output",json!({"text":format!("⚙️ Turno parado: {reason}")}),effects); }
+                // Hook de fim de turno que segura a resposta é rotina de quem o configurou: nota que passa no estado, não nota na conversa.
+                if matches!(event["terminal_reason"].as_str(),Some("stop_hook_prevented" | "hook_stopped")) {
+                    self.stop_label = Some(self.clock.monotonic_s+STOP_LABEL_S);
+                } else if let Some(reason) = &stop_reason {
+                    // A resposta de erro gravada pela CLI já é o aviso do turno parado (os clientes a desenham como
+                    // bloqueio); a faixa de cima continua com o motivo.
+                    let error_reply = turn_error.is_some() && event["terminal_reason"] == "api_error";
+                    if !error_reply { self.cli_note(None,format!("⚙️ Turno parado: {reason}"),effects); }
+                }
                 if !failed && subtype == "success" && !local {
                     self.state.problema = None; self.state.problema_detalhe = None;
                     if std::mem::take(&mut self.problem_persisted) {
@@ -1149,6 +1169,7 @@ impl ClaudeEngine {
                 self.pending.clear(); self.question = None; self.steer_now = None; self.clear_streams(effects);
                 // O trabalho de fundo morre com o processo.
                 self.tasks.clear(); self.background.clear(); self.label = None; self.drop_turn_notices();
+                self.hook_fails.clear();
                 for agent in self.subagents.values_mut().filter(|agent|agent["state"] == "running") { agent["state"] = json!("stopped"); }
                 // Pedidos dos apps em aberto respondem com código e a interface dos mods some.
                 if let Some(surface) = self.surface.as_mut() { let out = surface.on_exit(); Self::surface_out(effects,out); }
@@ -1193,7 +1214,7 @@ impl ClaudeEngine {
             "keep_alive" | "tool_progress" => {},
             _ => {
                 self.policy("unknown_private",json!({"kind":kind,"event":event}),effects);
-                if self.unknown.insert(kind.into()) { self.policy("local_output",json!({"text":format!("⚙️ Evento desconhecido da CLI: {kind}")}),effects); }
+                if self.unknown.insert(kind.into()) { self.cli_note(None,format!("⚙️ Evento desconhecido da CLI: {kind}"),effects); }
             }
         }
         Ok(())
@@ -1352,7 +1373,10 @@ impl ClaudeEngine {
             "notification" => {
                 let text = event["text"].as_str().unwrap_or("");
                 if matches!(event["priority"].as_str(),Some("high" | "immediate")) && !text.is_empty() {
-                    self.notice_once(&format!("notification:{}:{text}",event["key"].as_str().unwrap_or("")),format!("⚙️ {text}"),effects);
+                    let key = event["key"].as_str().filter(|key|!key.is_empty());
+                    // Sem a chave da CLI não há como ignorar só esta: uma chave vazia esconderia todas as outras.
+                    let ignore = key.map(|key|format!("note:notification:{key}"));
+                    self.notice_once(&format!("notification:{}:{text}",key.unwrap_or("")),ignore.as_deref(),format!("⚙️ {text}"),effects);
                 } else {
                     self.diary("claude_notification",||event.clone(),effects);
                 }
@@ -1372,7 +1396,7 @@ impl ClaudeEngine {
                         format!("⚙️ O {original} recusou responder{why}")
                     }
                 };
-                self.policy("local_output",json!({"text":text}),effects);
+                self.cli_note(None,text,effects);
                 return;
             }
             _ => { self.diary(&format!("system/{subtype}"),||event.clone(),effects); return; }
@@ -1400,11 +1424,19 @@ impl ClaudeEngine {
         let reason = crate::transcript::hook_failure_reason(["stderr","output"].iter().filter_map(|field|event[*field].as_str()),
             event["exit_code"].as_i64());
         // Por nome, não por motivo: o `stderr` muda a cada chamada (arquivo, linha) e viraria uma nota por ferramenta.
-        if let Some(streak) = self.hook_streaks.get_mut(&name) { streak.1 += 1; return; }
+        if let Some(fails) = self.hook_fails.get_mut(&name) {
+            fails.count += 1;
+            // Uma vez bloqueio, a nota fica sem chave de ignorar.
+            fails.blocking |= event["exit_code"].as_i64() == Some(2);
+            // No turno o total sai de uma vez no fim dele; fora (`SessionStart`, compactação) não há fim para esperar.
+            if !self.in_progress { self.flush_hook_fails(effects); }
+            return;
+        }
         let detail = format!("{name}: {reason}");
-        self.hook_notice(&detail,effects);
-        // Fora de turno (`SessionStart`, `Notification` parada) não há turno para somar.
-        if self.in_progress { self.hook_streaks.insert(name,(detail,1)); }
+        let id = format!("hookfail:{}:{}",(self.clock.epoch_s*1000.0) as u64,self.hook_fails.len());
+        let blocking = event["exit_code"].as_i64() == Some(2);
+        self.hook_notice(&id,&name,&detail,1,blocking,effects);
+        self.hook_fails.insert(name,HookFails { id,detail,count:1,shown:1,blocking });
     }
 
     /// O evento só é montado se ainda cabe: passado o teto, hook com saída grande não custa cópia.
@@ -1417,32 +1449,46 @@ impl ClaudeEngine {
         self.policy("unknown_private",json!({"kind":kind,"event":event()}),effects);
     }
 
-    /// Fim do turno: o rótulo de nova tentativa e os hooks abertos saem, e as somas de falha viram aviso.
+    /// Fim do turno: o rótulo de nova tentativa e os hooks abertos saem, e o total das falhas entra na nota de cada hook.
     fn end_turn_notices(&mut self,effects:&mut Vec<Effect>) {
-        self.retry_label = None; self.hooks_running.clear(); self.flush_hook_streaks(effects);
+        self.retry_label = None; self.hooks_running.clear(); self.flush_hook_fails(effects);
     }
 
     /// Processo, conexão ou conversa trocados: o que era do turno some sem aviso.
     fn drop_turn_notices(&mut self) {
-        self.retry_label = None; self.hooks_running.clear(); self.hook_streaks.clear();
+        self.retry_label = None; self.hooks_running.clear(); self.stop_label = None;
     }
 
-    /// Fim do turno: a falha que repetiu ganha um aviso com o total. Vários hooks dividem o mesmo nome
-    /// (`PostToolUse:Bash`), então o sucesso de um não fecha a soma do outro.
-    fn flush_hook_streaks(&mut self,effects:&mut Vec<Effect>) {
-        for (detail,count) in std::mem::take(&mut self.hook_streaks).into_values() {
-            if count > 1 { self.hook_notice(&format!("{detail} ({count}× neste turno)"),effects); }
+    /// A nota de cada hook é uma só: a falha que repetiu regrava a mesma linha com o total. Vários hooks dividem o
+    /// mesmo nome (`PostToolUse:Bash`), então o sucesso de um não zera a conta do outro.
+    fn flush_hook_fails(&mut self,effects:&mut Vec<Effect>) {
+        let mut stale = Vec::new();
+        for (name,fails) in self.hook_fails.iter_mut().filter(|(_,fails)|fails.count != fails.shown) {
+            fails.shown = fails.count;
+            stale.push((fails.id.clone(),name.clone(),format!("{} (falhou {} vezes)",fails.detail,fails.count),fails.count,fails.blocking));
         }
+        for (id,name,detail,count,blocking) in stale { self.hook_notice(&id,&name,&detail,count,blocking,effects); }
     }
 
-    fn hook_notice(&mut self,detail:&str,effects:&mut Vec<Effect>) {
-        self.policy("local_output",json!({"text":format!("Hook falhou — {detail}"),"hook_error":detail,"notice":"hook_failed"}),effects);
+    /// `entry_id` fixo por hook: a fila troca o texto da linha que já existe em vez de empilhar outra.
+    fn hook_notice(&mut self,id:&str,name:&str,detail:&str,count:u32,blocking:bool,effects:&mut Vec<Effect>) {
+        let mut meta = json!({"subject":name});
+        if !blocking { meta["key"] = json!(format!("hook:{name}")); }
+        if count > 1 { meta["count"] = json!(count); }
+        self.policy("local_output",json!({"text":format!("Hook falhou — {detail}"),"hook_error":detail,"notice":"hook_failed","entry_id":id,"meta":meta}),effects);
+    }
+
+    /// Aviso da CLI na conversa. O mapa `meta`, mesmo vazio, é o que o marca como aviso para os clientes; a chave
+    /// só vai no que pode ser ignorado: bloqueio real e defeito do Hangar ficam sem ela.
+    fn cli_note(&mut self,ignore_key:Option<&str>,text:String,effects:&mut Vec<Effect>) {
+        let meta = ignore_key.map_or_else(||json!({}),|key|json!({"key":key}));
+        self.policy("local_output",json!({"text":text,"meta":meta}),effects);
     }
 
     /// Aviso que vale uma vez por vida do processo: o relançamento mostra de novo, a adoção pelo Rust não.
-    fn notice_once(&mut self,key:&str,text:String,effects:&mut Vec<Effect>) -> bool {
+    fn notice_once(&mut self,key:&str,ignore_key:Option<&str>,text:String,effects:&mut Vec<Effect>) -> bool {
         let new = self.unknown.insert(format!("notice:{key}"));
-        if new && !self.replaying { self.policy("local_output",json!({"text":text}),effects); }
+        if new && !self.replaying { self.cli_note(ignore_key,text,effects); }
         new
     }
 
@@ -1458,21 +1504,28 @@ impl ClaudeEngine {
             names
         };
         let mut lines = Vec::new();
+        // Quem está com problema, para a chave de ignorar: servidor novo na lista muda a chave e o aviso volta.
+        let mut broken:Vec<&str> = Vec::new();
         for (status,one,many) in [("failed","Servidor MCP que não subiu","Servidores MCP que não subiram"),
             ("needs-auth","Servidor MCP que precisa de login","Servidores MCP que precisam de login")] {
             let names = servers(status);
             if names.is_empty() { continue; }
+            broken.extend(names.iter().copied());
             let shown:Vec<String> = names.iter().take(5).map(|name|format!("`{name}`")).collect();
             let rest = if names.len() > 5 { format!(" e mais {}",names.len()-5) } else { String::new() };
             lines.push(format!("{}: {}{rest}",if names.len() == 1 { one } else { many },shown.join(", ")));
         }
         for plugin in init["plugin_errors"].as_array().into_iter().flatten() {
-            lines.push(format!("O plugin `{}` não carregou: {}",plugin["plugin"].as_str().unwrap_or("?"),clip(plugin["message"].as_str().unwrap_or(""),300)));
+            let name = plugin["plugin"].as_str().unwrap_or("?");
+            broken.push(name);
+            lines.push(format!("O plugin `{name}` não carregou: {}",clip(plugin["message"].as_str().unwrap_or(""),300)));
         }
         if lines.is_empty() { return; }
         let text = format!("⚙️ {}",lines.join("\n"));
+        broken.sort_unstable();
+        let ignore_key = format!("note:startup:{}",&hangar_core::pycompat::py::md5_hex(&broken.join("\n"))[..8]);
         // O `init` chega a cada turno: o diário só registra o problema novo.
-        if self.notice_once(&text.clone(),text,effects) && !self.replaying {
+        if self.notice_once(&text.clone(),Some(&ignore_key),text,effects) && !self.replaying {
             self.diary("claude_init_problem",||json!({"mcp_servers":init["mcp_servers"],"plugin_errors":init["plugin_errors"]}),effects);
         }
     }
@@ -1595,6 +1648,7 @@ impl ClaudeEngine {
         if self.label_deadline.is_some_and(|deadline|now >= deadline) {
             self.label_deadline = self.turn_start.map(|_|now+1.0); self.changed(effects,false);
         }
+        if self.stop_label.is_some_and(|deadline|now >= deadline) { self.stop_label = None; self.changed(effects,false); }
         let mut slow = false;
         for hook in self.hooks_running.values_mut().filter(|hook|!hook.shown && now >= hook.started+HOOK_SLOW_S) { hook.shown = true; slow = true; }
         if slow { self.changed(effects,false); }
@@ -1627,7 +1681,7 @@ impl ClaudeEngine {
     }
 
     pub fn next_deadline(&self) -> Option<f64> {
-        [self.preview.deadline(),self.thinking.deadline(),self.tool_input.deadline(),self.init_warning,self.label_deadline,self.effort_deadline,Some(self.reload_deadline),
+        [self.preview.deadline(),self.thinking.deadline(),self.tool_input.deadline(),self.init_warning,self.label_deadline,self.stop_label,self.effort_deadline,Some(self.reload_deadline),
             self.surface.as_ref().and_then(Surface::deadline)]
             .into_iter().flatten().chain(self.waiters.values().filter(|w|!w.timed_out).map(|w|w.deadline))
             .chain(self.hooks_running.values().filter(|hook|!hook.shown).map(|hook|hook.started+HOOK_SLOW_S))

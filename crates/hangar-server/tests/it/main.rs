@@ -23,6 +23,7 @@ mod login_guests;
 mod harness_routes;
 mod groups_text;
 mod session_defaults;
+mod notice_ignores;
 mod tags;
 mod machine_peers;
 mod update_process;
