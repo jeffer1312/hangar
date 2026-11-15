@@ -81,10 +81,7 @@ VM_GIT=/c/hangar-verificacao/arvore
 VM_WIN='C:/hangar-verificacao'
 
 # Os mesmos do passo "Contenção e regressões" do server.yml: mudar lá exige mudar aqui.
-RUNTIME_TESTS=(tests/test_runtime_process.py tests/test_runtime_queue_terminal_v2.py
-    tests/test_runtime_terminal_fix.py tests/test_runtime_terminal_fix2.py
-    tests/test_runtime_terminal_failure_policy.py tests/test_runtime_final_fixes.py
-    tests/test_sidecar_coordination.py)
+RUNTIME_TESTS=(tests/test_runtime_process.py tests/test_sidecar_coordination.py)
 
 PROCESSOS_PADRAO=4
 
@@ -115,8 +112,7 @@ classificar() {
         [[ -z "$f" ]] && continue
         case "$f" in
             crates/*|backend/tests/fixtures/*|plugins/hangar/hooks/*|\
-            backend/app/adapters/claude_headless/cano.py|backend/tests/test_claude_headless_cano.py|\
-            backend/app/runtime_process.py|backend/app/runtime_terminal.py|backend/app/runtime_coordinator.py|\
+            backend/tests/test_claude_headless_cano.py|backend/app/runtime_process.py|\
             backend/app/rust_server.py|backend/tests/test_runtime_*.py) rust=1 ;;
         esac
         # A suíte do backend lê quase o repositório inteiro (scripts, skills, plugins, docs, front).
@@ -189,7 +185,7 @@ classificar_rapido() {
         esac
         case "$f" in scripts/*statusline*) status=1 ;; esac
         case "$f" in scripts/pi/*|scripts/test-pi-hangar-state.mjs) pi=1 ;; esac
-        case "$f" in *.ps1|backend/app/procinfo.py|backend/app/atomico.py) winback=1 ;; esac
+        case "$f" in *.ps1|backend/app/atomico.py) winback=1 ;; esac
     done
     (( rust )) && lin+=(rust_rapido)
     (( back )) && lin+=(backend_rapido)

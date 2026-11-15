@@ -15,18 +15,11 @@ on:
     paths:
       - "crates/**"
       - "backend/tests/fixtures/**"
-      # A suíte de contrato do cano roda aqui contra o binário: mudar o cano.py ou ela também testa o Rust.
-      - "backend/app/adapters/claude_headless/cano.py"
+      # A suíte de contrato do cano roda aqui contra o binário.
       - "backend/tests/test_claude_headless_cano.py"
       - "backend/app/runtime_process.py"
-      - "backend/app/runtime_terminal.py"
-      - "backend/app/runtime_coordinator.py"
       - "backend/app/rust_server.py"
       - "backend/tests/test_runtime_process.py"
-      - "backend/tests/test_runtime_queue_terminal_v2.py"
-      - "backend/tests/test_runtime_terminal_fix*.py"
-      - "backend/tests/test_runtime_terminal_failure_policy.py"
-      - "backend/tests/test_runtime_final_fixes.py"
       # Trava e leitura dos sidecars que o Rust também grava: o defeito que elas evitam é do Windows.
       - "backend/app/atomico.py"
       - "backend/app/adapters/claude_headless/sessions.py"
