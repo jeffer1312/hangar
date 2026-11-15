@@ -1,7 +1,7 @@
 import { Pressable, Text } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import { useServers } from '../../stores/servers';
-import { useSessions } from '../../stores/sessions';
+import { setNoticeIgnores, useSessions } from '../../stores/sessions';
 import { SettingsRow } from '../config/SettingsRow';
 import { toast } from '../../ui/Toast';
 import { putNoticeIgnore } from './api';
@@ -14,7 +14,8 @@ export function IgnoredNotices() {
   const keys = useSessions((s) => (serverId ? s.noticeIgnores[serverId] : undefined));
   if (!serverId || !keys) return null;
   const showAgain = (key: string) => {
-    putNoticeIgnore(serverId, key, false).catch(
+    putNoticeIgnore(serverId, key, false).then(
+      (next) => { if (next) setNoticeIgnores(serverId, next); },
       (error: unknown) => toast.erro(`${m.notice_ignore_failed()} · ${error instanceof Error ? error.message : String(error)}`),
     );
   };
@@ -23,7 +24,7 @@ export function IgnoredNotices() {
       <SettingsRow title={m.notice_ignored_title()} description={keys.length ? undefined : m.notice_ignored_empty()} />
       {keys.map((key) => (
         <SettingsRow key={key} title={noticeKeyLabel(key)}>
-          <Pressable onPress={() => showAgain(key)} hitSlop={12} accessibilityRole="button">
+          <Pressable style={styles.action} onPress={() => showAgain(key)} accessibilityRole="button">
             <Text style={styles.link}>{m.notice_show_again()}</Text>
           </Pressable>
         </SettingsRow>
@@ -33,5 +34,6 @@ export function IgnoredNotices() {
 }
 
 const styles = StyleSheet.create((theme) => ({
+  action: { minHeight: 44, justifyContent: 'center' },
   link: { ...theme.type.label, color: theme.tokens.accent.base },
 }));

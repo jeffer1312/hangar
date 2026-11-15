@@ -3,7 +3,7 @@ import { Text, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import type { ChatEvent } from '@hangar/core';
 import { haptic } from '../ui/haptics';
-import { useSessions } from '../stores/sessions';
+import { setNoticeIgnores, useSessions } from '../stores/sessions';
 import { isApiError, noticeCount, noticeDetail, noticeKey, noticeTitle, plainNotice } from '../features/notices/notices';
 import { putNoticeIgnore } from '../features/notices/api';
 import { ApiErrorBox, IgnoredLine, NoticeBody, NoticeLineView } from './NoticeParts';
@@ -26,17 +26,26 @@ export const ClaudeNotice = memo(function ClaudeNotice({ event, serverId }: { ev
   const change = (ignored: boolean) => {
     if (!key || !serverId) return;
     setFailed(null);
-    putNoticeIgnore(serverId, key, ignored).then(() => {
+    putNoticeIgnore(serverId, key, ignored).then((keys) => {
       haptic.success();
+      // Mesmo instante: a lista nova e o "ignorado aqui" mudam juntos, sem a linha sumir no meio.
       setIgnoredHere(ignored);
       setOpen(false);
+      if (keys) setNoticeIgnores(serverId, keys);
     }, (error: unknown) => {
       haptic.error();
       setFailed(`${m.notice_ignore_failed()} · ${error instanceof Error ? error.message : String(error)}`);
     });
   };
 
-  if (ignoredHere && key && ignoredKeys.includes(key)) return <IgnoredLine onUndo={() => change(false)} />;
+  if (ignoredHere && key && ignoredKeys.includes(key)) {
+    return (
+      <View>
+        <IgnoredLine onUndo={() => change(false)} />
+        {failed ? <Text style={styles.failed}>{failed}</Text> : null}
+      </View>
+    );
+  }
 
   const detail = noticeDetail(event);
   const expandable = detail != null || key != null;

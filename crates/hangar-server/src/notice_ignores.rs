@@ -25,6 +25,8 @@ pub struct Feed {
     home: OnceLock<PathBuf>,
     json: Mutex<Option<Arc<str>>>,
     pub(crate) changed: Notify,
+    /// Gravação e publicação juntas: dois PUTs seguidos nunca publicam a lista velha por último.
+    writing: tokio::sync::Mutex<()>,
 }
 
 impl Feed {
@@ -66,6 +68,7 @@ pub async fn handle(State(state): State<Arc<AppState>>, ConnectInfo(peer): Conne
         Some(change)
     } else { None };
     let saving = change.is_some();
+    let _writing = if saving { Some(state.list.notice_ignores.writing.lock().await) } else { None };
     let home = state.accounts.env.home.to_path_buf();
     let done = tokio::task::spawn_blocking(move || match change {
         Some(change) => hangar_notice_ignores::set(&home, &change.key, change.ignored),

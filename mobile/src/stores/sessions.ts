@@ -796,7 +796,6 @@ export const useSessions = create<SessionsState>((set, get) => ({
   },
 }));
 
-// expõe reset apenas para testes (isso não vai para produção)
 /** Guarda a lista de avisos ignorados de um servidor; a mesma lista não troca o objeto. */
 export function setNoticeIgnores(serverId: string, keys: string[]) {
   const all = useSessions.getState().noticeIgnores;
@@ -804,6 +803,7 @@ export function setNoticeIgnores(serverId: string, keys: string[]) {
   useSessions.setState({ noticeIgnores: { ...all, [serverId]: keys } });
 }
 
+// expõe reset apenas para testes (isso não vai para produção)
 export function _resetSessionsForTests() {
   pause();
   connecting.clear();
