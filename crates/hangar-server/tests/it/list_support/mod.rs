@@ -14,6 +14,16 @@ use std::time::Duration;
 
 pub fn now() -> f64 { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64() }
 
+struct FixtureProcesses;
+impl hangar_server::list::procs::ProcessView for FixtureProcesses {
+    fn children(&self,_age: Duration) -> std::io::Result<Arc<hangar_server::list::procs::ChildrenMap>> {Ok(Arc::default())}
+    fn argv(&self,_pid: i64) -> Vec<String> {Vec::new()}
+    fn cwd(&self,_pid: i64) -> Option<std::path::PathBuf> {None}
+    fn env_var(&self,_pid: i64,_name: &str) -> std::io::Result<Option<std::ffi::OsString>> {Ok(None)}
+    fn start_time(&self,_pid: i64) -> Option<f64> {None}
+    fn fds(&self,_pid: i64) -> Vec<std::path::PathBuf> {Vec::new()}
+}
+
 /// `n` sessões Claude paradas (`s0`..), marcador `idle`, pane pronto; `fail` presente = recusa,
 /// `slow` presente = o `list-panes` demora 0,8 s.
 pub fn sessions(root: &Path, n: usize) -> std::path::PathBuf {
@@ -63,7 +73,8 @@ pub async fn server_trusting(root: &Path, n: usize, trusted: &str) -> Server {
     let devices = Arc::new(hangar_server::connect::devices::Store::new(home.join(".hangar/connect"), None));
     state.connect_devices = devices.clone();
     let list = Arc::new(ListBridge::new(ListEnv { mux: Mux::with_program(&script, Duration::from_secs(5)),
-        capture_program: script.into_os_string(), procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs },
+        // Os PIDs dos panes são sintéticos; descendentes do PID 1 real pertencem a outros testes.
+        capture_program: script.into_os_string(), procs: Arc::new(FixtureProcesses), dirs },
         { let facts = FactsClient::new(upstream, SECRET.into()); python.bind_diary(facts.diag.clone()); facts }));
     // Estes testes provam quem produz o problema da linha; o prazo do portão tem teste próprio.
     list.set_problem_hold(Duration::ZERO);

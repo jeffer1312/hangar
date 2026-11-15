@@ -592,6 +592,18 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   versão e no fim do "Atualizar?", e marcam visto ao abrir o modal; não há lista local. Aparelho novo
   recebe só o que chegou nas últimas 24 h. Servidor sem a rota (404) não mostra nada. Evidência em
   [plataforma.md](docs/decisoes/plataforma.md#novidades-da-atualização-automática-gravadas-pelo-servidor-novo-10112026).
+- **Conectores de trabalho (Help, Jira, Linear) são processos externos sob o host `hangar-connectors`.**
+  O host só conhece manifesto, transporte JSON-RPC por linha e o contrato de cada capacidade
+  (`work_tracking/v1`, só leitura); nada de fornecedor entra no core nem no servidor. Processo sob
+  demanda, uma vida por conector, encerrada por ociosidade, desligamento ou remoção, com a árvore
+  inteira; o filho não herda as chaves de `PRIVATE_ENV_KEYS`. Rotas `/api/connectors*` só do dono,
+  nunca repassadas; credencial do fornecedor é do conector, nunca do manifesto. Guia em
+  [`docs/connectors/`](docs/connectors/README.md); evidência em
+  [plataforma.md](docs/decisoes/plataforma.md#conectores-de-trabalho-host-rust-e-processo-externo-por-capacidade-12112026).
+- **Mission Control (`hangar-mission`) guarda etapa, vínculo, portão e evidências; o ticket é do
+  conector, e nada volta ao sistema de origem.** A sessão ligada informa etapa e anexa evidências pela
+  tool `mission` (rota `/api/mission/report`); etapa com portão só é passada com a aprovação do dono,
+  e voltar desfaz as aprovações daí em diante. Guia em [`docs/mission/`](docs/mission/README.md).
 - **Busca, Perguntar e Arquivo são do Rust, com um índice de todos os agentes e contas.** A passada
   é por evento de arquivo; palavra inteira vem antes de pedaço (`whole`); o id do trecho é o do
   histórico. Sem Rust, 503 `erro_busca_precisa_rust`. Evidência em

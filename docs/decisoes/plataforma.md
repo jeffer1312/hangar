@@ -4815,3 +4815,57 @@ recusar); o prompt do cookbook reescrevia o `name:` de cada nota para o nome do 
 identificador do Claude Code e fica); e o Desfazer não voltava o cursor das sessões nem a data do último
 sonho, então o sonho seguinte não relia o que foi desfeito. A passada do usuário nasce desligada
 (`user_memory`): o arquivo global entra em toda sessão e a pessoa liga depois de ler o que ele gera.
+
+## Conectores de trabalho: host Rust e processo externo por capacidade (12/11/2026)
+
+Issue #408. Base do Mission Control do Hangar: ler tickets de sistemas externos sem que o servidor
+conheça o fornecedor.
+
+- **Processo externo, linguagem livre.** O conector é um programa do dono, executado sem shell pelo
+  vetor `command` do manifesto, com JSON-RPC 2.0 por linha no stdin/stdout. A mesma prova passou com
+  o conector Rust do Help e com um conector JavaScript de IDs que não parecem PM
+  (`examples/connectors/`): o host não depende da linguagem nem do formato da chave.
+- **Capacidade explícita.** `work_tracking/v1` é só leitura (`list`, `get`). Manifesto com capacidade
+  desconhecida, versão diferente ou campo extra (token, por exemplo) é recusado; `initialize` com
+  `id` ou capacidades diferentes do manifesto também. Ação, evento ou início de sessão entra como
+  capacidade nova, nunca como método solto.
+- **Vida sob demanda.** Cadastrar e listar não lançam nada. O primeiro pedido lança; 60 s sem pedido
+  encerram. Desligar e remover cancelam o pedido em andamento e terminam a árvore (grupo de processo
+  no Unix, Job no Windows, pelo `CommandTree` do core); remover só apaga o registro depois da parada.
+  IDs de pedido são únicos no servidor, então resposta atrasada de uma vida morta não resolve pedido
+  novo; prazo esgotado mata a vida em vez de reaproveitá-la.
+- **Distribuição separada do host.** O Hangar fornece o protocolo e o host genérico; o dono instala
+  e cadastra cada conector distribuído pelo fornecedor. O host executa o manifesto cadastrado,
+  sem substituir seu programa nem acrescentar capacidades. O conector do Help usado na prova
+  inicial foi retirado do produto em 15/11/2026 para ser distribuído fora do Hangar.
+- **Credencial do fornecedor fica com o conector.** O host não conhece arquivos de login de
+  fornecedores. Falta ou recusa de login é `auth_required`, que a rota devolve
+  como 424, nunca 401, para o cliente não confundir com a senha do Hangar.
+- **Medição.** Conector do Help em release: 6,3 MiB de RSS depois do `initialize`, 10,0 MiB depois de
+  listar 100 PMs reais e abrir uma. Sem pedido, nenhum processo de conector existe: o teste de
+  ociosidade confirma o fim do PID após a janela.
+- **Sem sandbox nesta entrega.** O conector roda com os direitos do dono; só a autoridade do servidor
+  (`PRIVATE_ENV_KEYS`) é tirada do ambiente.
+
+## Mission Control: etapas, portão do dono e evidências no Hangar (13/11/2026)
+
+Issue #408. O painel que usa os conectores.
+
+- **O que é do Hangar e o que é da origem.** Título, status e descrição vêm do conector a cada
+  leitura. Etapa, sessão ligada, aprovações, evidências e histórico ficam em `hangar-mission`
+  (`~/.hangar/mission/`), sem cópia do ticket além de chave, título e link para mostrar. O conector
+  continua só leitura.
+- **Etapas padrão tiradas do fluxo do plugin Promedico** (iniciar-pm e plano, execução, revisão do MR,
+  validação, entrega) e configuráveis por servidor. O plugin não grava em lugar estável a etapa de
+  uma PM: a única marca fora da sessão é o status no Help (Revisão de Código depois do push) e o plano.
+  Por isso a coluna vem, nesta ordem, do relato da sessão, do status de origem mapeado na etapa e do
+  plano da sessão.
+- **Portão do dono.** Como o quality gate do Mission Control da builderz-labs (aprovação antes do
+  done), a etapa com portão só é passada com aprovação. Pedir ajustes desfaz as aprovações a partir da
+  etapa para onde o ticket volta; sem isso, voltar ao portão o deixava aberto (achado da revisão de
+  segurança do commit).
+- **Evidências ficam no Hangar.** O `finalizar_pm` do plugin proíbe subir registros de execução e
+  evidências na PM (caso de 58 anexos), então a validação com prints e vídeos é entregue ao dono no
+  painel, e nada sobe ao Help.
+- **Sessão achada pela chave.** Como o plugin, a sessão da PM é a da branch `PM-XXXXX` ou a de nome que
+  começa pela chave; ligar no painel grava o vínculo e libera a tool. Uma sessão, um ticket.

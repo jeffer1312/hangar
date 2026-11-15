@@ -2,14 +2,15 @@ import { defineConfig } from 'vitest/config';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 
-createRequire(import.meta.url)('./scripts/build-terminal-document.cjs').generateTerminalDocument();
+const require = createRequire(import.meta.url);
+require('./scripts/build-terminal-document.cjs').generateTerminalDocument();
 
 export default defineConfig({
   resolve: {
     alias: {
-      // O app deixou de ser workspace da raiz, então react/react-dom vêm do node_modules daqui.
-      react: path.resolve(__dirname, 'node_modules/react'),
-      'react-dom': path.resolve(__dirname, 'node_modules/react-dom'),
+      // A instalação seletiva da OTA e a instalação local precisam da mesma instância do React.
+      react: path.dirname(require.resolve('react/package.json')),
+      'react-dom': path.dirname(require.resolve('react-dom/package.json')),
       'react-native': path.resolve(__dirname, 'src/__mocks__/react-native.ts'),
       'react-native-unistyles': path.resolve(__dirname, 'src/__mocks__/react-native-unistyles.ts'),
       'react-native-webview': path.resolve(__dirname, 'src/__mocks__/react-native-webview.ts'),

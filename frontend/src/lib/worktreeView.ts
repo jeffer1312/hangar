@@ -29,6 +29,7 @@ export const worktreeStateLabel: Record<WorktreeState, () => string> = {
   residual: m.worktree_estado_residual,
   dirty: m.worktree_estado_nao_commitado,
   merged: m.worktree_estado_mesclada,
+  equivalent: m.worktree_estado_equivalente,
   detached: m.worktree_estado_sem_branch,
   active: m.worktree_estado_andamento,
 };
@@ -39,6 +40,7 @@ export const worktreeStateColor: Record<WorktreeState, string> = {
   residual: 'var(--warning)',
   dirty: 'var(--warning)',
   merged: 'var(--success)',
+  equivalent: 'var(--text-muted)',
   detached: 'var(--border-strong)',
   active: 'var(--text-muted)',
 };

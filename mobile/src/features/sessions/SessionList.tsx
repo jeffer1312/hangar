@@ -489,6 +489,9 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
       <Pressable onPress={openCosts} style={styles.icone} accessibilityRole="button" accessibilityLabel={m.nav_custos()}>
         <Icon name="ChartNoAxesCombined" size={20} color={theme.tokens.text.secondary} />
       </Pressable>
+      <Pressable onPress={() => router.push('/reviews' as never)} style={styles.icone} accessibilityRole="button" accessibilityLabel={m.native_review_title()}>
+        <Icon name="GitPullRequest" size={20} color={theme.tokens.text.secondary} />
+      </Pressable>
       <Pressable onPress={abrirConfig} style={styles.icone} accessibilityRole="button" accessibilityLabel={m.config_modal_titulo()}>
         <Icon name="Settings" size={20} color={theme.tokens.text.secondary} />
       </Pressable>

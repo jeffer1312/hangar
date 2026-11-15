@@ -714,7 +714,7 @@ fn spawn_child(spec: &Spec) -> io::Result<(Child, CommandTree, u64)> {
         command.env_remove(key);
     }
     let mut tree = CommandTree::configure(&mut command)?;
-    die_with_parent(&mut command);
+    hangar_core::terminal_process::die_with_parent(&mut command);
     let mut child = command.spawn()?;
     if let Err(error) = tree.attach(&child) {
         let _ = child.start_kill();
@@ -726,27 +726,6 @@ fn spawn_child(spec: &Spec) -> io::Result<(Child, CommandTree, u64)> {
     Ok((child, tree, offset))
 }
 
-#[cfg(target_os = "linux")]
-fn die_with_parent(command: &mut Command) {
-    let parent = std::process::id() as libc::pid_t;
-    // SAFETY: entre o fork e o exec só há chamadas que o fork permite.
-    unsafe {
-        command.pre_exec(move || {
-            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL as libc::c_ulong) != 0 {
-                return Err(io::Error::last_os_error());
-            }
-            // Pai morto antes do `prctl`: o sinal nunca viria.
-            if libc::getppid() != parent {
-                return Err(io::Error::from_raw_os_error(libc::ESRCH));
-            }
-            Ok(())
-        });
-    }
-}
-
-// No Windows quem leva o filho é o Job do `CommandTree`.
-#[cfg(not(target_os = "linux"))]
-fn die_with_parent(_command: &mut Command) {}
 
 #[derive(Default)]
 struct Seen {

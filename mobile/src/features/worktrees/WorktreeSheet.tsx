@@ -34,6 +34,7 @@ function veredito(k: WorktreeState, st: WorktreeStatus): string {
     case 'residual': return m.worktree_residual_warning();
     case 'dirty': return m.worktree_veredito_nao_commitado({ n: st.dirty });
     case 'merged': return m.worktree_veredito_mesclada();
+    case 'equivalent': return m.worktree_veredito_equivalente();
     case 'detached': return m.worktree_veredito_sem_branch();
     case 'active': return m.worktree_veredito_andamento({ n: st.ahead });
   }

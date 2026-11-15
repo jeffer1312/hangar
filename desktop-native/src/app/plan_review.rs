@@ -17,6 +17,10 @@ struct Feedback { tool_id: String, input: Entity<InputState>, _change: Subscript
 #[derive(Clone)]
 struct ExpandedReview { focus: FocusHandle, origin: Option<WeakFocusHandle>, inline_offset: Point<Pixels> }
 
+impl ReviewState {
+    pub(super) fn is_expanded(&self) -> bool { self.expanded.is_some() }
+}
+
 fn file_content(plan: &interaction::PlanReview, value: &Value) -> Option<String> {
     let path = value.get("path").and_then(Value::as_str)?;
     if let Some(expected) = &plan.path {
@@ -226,10 +230,20 @@ impl Hangar {
         let focus = self.plan_review.expanded.as_ref()?.focus.clone();
         let busy = self.selected_key().as_ref().is_some_and(|key| self.flight.busy(key));
         let card = self.render_plan_review_card(true, busy, window, cx)?;
-        Some(deferred(div().absolute().inset_0().p_4().bg(theme::background()).occlude()
-            .child(div().size_full().child(card).focus_trap("plan-review-focus", &focus)))
+        let overlay=div().absolute().inset_0().p_4().bg(theme::background()).occlude()
+            // O deferred muda a árvore de eventos: o vínculo precisa viajar com a própria camada.
+            .when(self.in_tab_preview,|el|el
+                .capture_any_mouse_down(cx.listener(|this,_,window,cx|this.enter_tab_preview_event(window,cx)))
+                .capture_any_mouse_up(cx.listener(|this,_,window,cx|this.enter_tab_preview_event(window,cx)))
+                .capture_key_down(cx.listener(|this,_,window,cx|this.enter_tab_preview_event(window,cx)))
+                .capture_action(cx.listener(|this,_: &Escape,window,cx| {
+                    this.enter_tab_preview_event(window,cx);this.close_plan_review(window,cx);cx.stop_propagation();
+                })))
+            .child(div().size_full().child(card).focus_trap("plan-review-focus", &focus));
+        Some(deferred(overlay)
             .with_priority(gpui_kit::base::POPUP_PRIORITY).into_any_element())
     }
+
 }
 
 #[cfg(test)]
