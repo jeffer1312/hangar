@@ -321,6 +321,14 @@ test('o eco do envio atravessa a fila sem sumir e sai com a mensagem real, com a
     queue([{ id: '2', text: 'presa' }, { id: '3', text: 'na fila' }]);
     expect(pending()).toEqual([]);
 
+    // Um "ok" antigo já listado: a bolha dele não apaga o eco do "ok" enviado depois.
+    queue([{ id: '5', text: 'ok' }]);
+    chat.use.setState({ pending: [{ id: 'p5', text: 'ok', queue: true, known: ['5'] }] });
+    source.trigger('message', JSON.stringify(ev({ id: 'queued-5', text: 'ok' })));
+    expect(pending()).toHaveLength(1);
+    queue([{ id: '5', text: 'ok' }, { id: '6', text: 'ok' }]);
+    expect(pending()).toEqual([]);
+
     // Entrada apagada noutro aparelho leva o eco junto.
     chat.use.setState({ pending: [{ id: 'p4', text: 'apagada', solid: true }] });
     source.trigger('message', JSON.stringify(ev({ id: 'queued-4', text: 'apagada' })));

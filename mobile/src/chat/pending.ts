@@ -82,10 +82,13 @@ export function reconcilePending(pending: PendingMsg[], incoming: ChatEvent, ord
   committed.add(t);
   if (c) committed.add(c);
   for (const ln of lines) committed.add(ln);
+  // A bolha de uma entrada que o eco já conhecia é de outra mensagem de mesmo texto: não é ela que o confirma.
+  const entry = incoming.id.startsWith('queued-') ? incoming.id.slice('queued-'.length) : null;
 
   // Também casa pela legenda do pending quando o incoming veio sem marcador mas o pending tinha:
   // ex. pending "foto — 📎 imagem: /tmp/x.jpg" vs incoming "foto"
   return pending.filter((p) => {
+    if (entry && p.known?.includes(entry)) return true;
     const pt = p.text.trim();
     if (committed.has(pt)) return false;
     const pc = cap(pt);

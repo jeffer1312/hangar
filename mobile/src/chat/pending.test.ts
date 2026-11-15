@@ -125,6 +125,13 @@ describe('eco que passa pela fila', () => {
     expect(settleQueued(kept, [{ id: '1', text: 'ok' }, { id: '2', text: 'ok' }], [])).toEqual([]);
   });
 
+  test('a bolha de uma entrada já conhecida não confirma o eco igual enviado depois; a mensagem real confirma', () => {
+    const later = [{ ...p('ok', 'p3'), queue: true, known: ['1'] }];
+    expect(reconcilePending(later, incoming('ok', 'queued-1'))).toEqual(later);
+    expect(reconcilePending(later, incoming('ok', 'queued-2'))).toEqual([]);
+    expect(reconcilePending(later, incoming('ok', 'transcript:9'))).toEqual([]);
+  });
+
   test('a entrada que tira o eco preso a ela não tira também o eco igual que veio depois', () => {
     const first = { ...p('ok', 'p1'), queue: true, known: [], entry: 'queued-1' };
     const second = { ...p('ok', 'p2'), queue: true, known: [] };
