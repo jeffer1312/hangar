@@ -624,7 +624,7 @@ fn guest_router_with(state: Arc<AppState>, pair: Option<Arc<PairState>>) -> Rout
     };
     let share = pair.owner.share.clone();
     // Os handlers do dono que também servem o convidado; o resto vai ao Python assinado.
-    session_routes(pass_any).fallback(pass_any).with_state(state.clone())
+    session_routes(pass_registered).fallback(pass_any).with_state(state.clone())
         .merge(crate::share::guest_routes::guest_router(share.clone(), crate::share::guest_routes::owner_name()))
         .merge(crate::share::pair_routes::guest_pair_router(pair))
         .layer(axum::middleware::from_fn_with_state(Arc::new(crate::share::gate::Gate::new(share)), crate::share::gate::guard))
@@ -720,6 +720,12 @@ where H: axum::handler::Handler<T, Arc<AppState>>, T: 'static {
         .route("/api/sessions/{name}/rename", axum::routing::post(crate::session_rename::route).fallback(pass_any))
         .route("/api/sessions/{name}/reopen", axum::routing::post(crate::session_open::fallen::reopen_route).fallback(fallback.clone()))
         .route("/api/sessions/{name}/dismiss", axum::routing::post(crate::session_open::fallen::dismiss_route).fallback(fallback.clone()))
+        // Relançar e trocar de conta: o convidado completo recarrega (decisão 2); modo e conta são só do dono,
+        // e o handler recusa o convidado nas duas portas.
+        .route("/api/sessions/{name}/modo-execucao", axum::routing::post(crate::session_write::relaunch::mode).fallback(fallback.clone()))
+        .route("/api/sessions/{name}/recarregar", axum::routing::post(crate::session_write::relaunch::reload).fallback(fallback.clone()))
+        .route("/api/sessions/{name}/conta", get(crate::session_write::account::targets_route).fallback(fallback.clone()))
+        .route("/api/sessions/{name}/conta", axum::routing::post(crate::session_write::account::switch_route))
         .route("/api/sessions/{name}/btw", axum::routing::post(crate::session_write::btw::ask).get(crate::session_write::btw::list).fallback(fallback.clone()))
         // Painel da fila. `reorder` é caminho fixo: o DELETE e o PATCH dele valem como os de um id de mesmo nome.
         .route("/api/sessions/{name}/queue/reorder", axum::routing::post(crate::session_write::control::queue_reorder)
@@ -856,12 +862,6 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/sessions/{name}/resume", axum::routing::post(crate::session_write::resume::route).fallback(pass_registered))
         // Broadcast do dono: o alvo Codex com terminal do Rust recebe aqui; o resto segue ao Python.
         .route("/api/broadcast", axum::routing::post(crate::session_write::input::broadcast).fallback(pass_registered))
-        // Relançar o Codex do Rust (troca de modo e reinício) é dele do começo ao fim; o resto segue ao Python.
-        .route("/api/sessions/{name}/modo-execucao", axum::routing::post(crate::session_write::relaunch::mode).fallback(pass_registered))
-        .route("/api/sessions/{name}/recarregar", axum::routing::post(crate::session_write::relaunch::reload).fallback(pass_registered))
-        // Trocar de conta (e a conta ChatGPT fixa, o modelo e o esforço dela) reabre o Claude pelo spec no Rust.
-        .route("/api/sessions/{name}/conta", get(crate::session_write::account::targets_route).fallback(pass_registered))
-        .route("/api/sessions/{name}/conta", axum::routing::post(crate::session_write::account::switch_route))
         .route("/api/sessions/{name}/engine/model", axum::routing::post(crate::session_write::engine::model).fallback(pass_registered))
         .route("/api/costs", get(crate::costs_routes::costs).fallback(pass_registered))
         .route("/api/cotacao", get(crate::costs_routes::cotacao).fallback(pass_registered))
@@ -1466,6 +1466,8 @@ async fn dispatch(st: Arc<AppState>, peer: SocketAddr, mut req: Request, registe
         let fwd = forward_for(&st, peer, &req);
         return pass(&st, req, &fwd).await;
     }
+    // Na 8766 o porteiro já admitiu o convidado: o método que a rota não tem é recusa, nunca repasse assinado.
+    if on_guest_port(&req) { return refuse_without_python(&st, peer, req, None).await; }
     // Sem rota no Python: `who` marca o estranho, que o `pass` recusa (401 contado), e o convidado com login
     // leva o 403 dele, em vez do 404/405 cru de lá.
     let (fwd, _) = match who(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };

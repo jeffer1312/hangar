@@ -143,6 +143,12 @@ pub(crate) fn no_runtime(headers: &axum::http::HeaderMap) -> Response {
     response
 }
 
+/// Quem não é o dono numa rota só dele: a recusa do `stranger`, com o convidado que o porteiro pôs.
+pub(crate) async fn not_owner(st: &AppState, peer: SocketAddr, req: Request) -> Response {
+    let who = crate::share::caller::caller(&req).cloned();
+    stranger(st, peer, req, who.as_ref()).await
+}
+
 /// Quem não pode escrever nesta sessão: o Python não tem mais as rotas, a recusa é daqui. Convidado
 /// com login fora do alcance dele é 403 e não perde o login; desconhecido recebe o 401 contado.
 pub(crate) async fn stranger(st: &AppState, peer: SocketAddr, req: Request, who: Option<&Caller>) -> Response {

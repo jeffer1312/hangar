@@ -328,6 +328,18 @@ async fn admit_codex_as(st: &Arc<AppState>, peer: SocketAddr, req: Request, rout
 /// As rotas do Codex numa sessão que não é Codex do Rust, com o status e o código da rota Python; nada é
 /// escrito em pane nenhum. Arquivo de sessão Codex sem dono no Rust (que o `adopt_now` não adota) é
 /// `erro_codex_controle`, e o `/limits` dele a resposta neutra. `/codex/terminate` nunca existiu no Python.
+/// Não conseguir conferir o arquivo não é "não há arquivo": a resposta errada seria a de sessão sem Codex.
+fn sidecar_found(name: &str, checked: Result<std::io::Result<bool>, tokio::task::JoinError>) -> Result<bool, Answer> {
+    let (panic, io) = match checked {
+        Ok(Ok(exists)) => return Ok(exists),
+        Ok(Err(error)) => (false, Some(error.kind())),
+        Err(error) => (error.is_panic(), None),
+    };
+    tracing::error!(session = %name, code = "codex_sidecar_check_failed", panic, io = ?io, "arquivo da sessão Codex não conferido");
+    Err((StatusCode::SERVICE_UNAVAILABLE, detail_body("codex_sidecar_check_failed",
+        "não deu para conferir o arquivo da sessão Codex; tente de novo", json!({}))))
+}
+
 async fn not_codex(st: &Arc<AppState>, name: &str, req: Request) -> Response {
     let (parts, body) = req.into_parts();
     let headers = &parts.headers;
@@ -338,7 +350,12 @@ async fn not_codex(st: &Arc<AppState>, name: &str, req: Request) -> Response {
         response
     };
     if route == "codex/terminate" { return reply((StatusCode::NOT_FOUND, json!({"detail": "Not Found"}))); }
-    let Ok(bytes) = axum::body::to_bytes(body, super::BODY_LIMIT).await else { return super::too_large(headers) };
+    let bytes = match axum::body::to_bytes(body, super::BODY_LIMIT).await {
+        Ok(bytes) => bytes,
+        Err(error) if std::error::Error::source(&error).is_some_and(|s| s.is::<http_body_util::LengthLimitError>()) => return super::too_large(headers),
+        Err(_) => return reply((StatusCode::BAD_REQUEST, detail_body("erro_corpo_interrompido",
+            "o pedido não chegou inteiro; nada foi enviado", json!({})))),
+    };
     let post = parts.method == axum::http::Method::POST;
     let fields = || object(&bytes, headers);
     let shaped = match route.as_str() {
@@ -353,7 +370,13 @@ async fn not_codex(st: &Arc<AppState>, name: &str, req: Request) -> Response {
     let Some(runtime) = st.state.runtime.get() else { return super::no_runtime(headers) };
     let rust_session = runtime.writable(name).await.is_some();
     let sidecar = crate::runtime::codex_sidecar::path(&crate::runtime::codex_sidecar::dir(&runtime.codex_environment().home), name);
-    let orphan = !rust_session && tokio::task::spawn_blocking(move || sidecar.exists()).await.unwrap_or(false);
+    let orphan = !rust_session && match sidecar_found(name, tokio::task::spawn_blocking(move || sidecar.try_exists()).await) {
+        Ok(found) => found,
+        Err(answer) => {
+            st.diag.report("rust.codex_route_failed", name, "codex_sidecar_check_failed", "o arquivo da sessão Codex não foi conferido");
+            return reply(answer);
+        }
+    };
     if orphan {
         if route == "limits" { return reply(limits_answer(&Err(RuntimeError::new("codex_sidecar_invalid", "sem dono no Rust")))); }
         tracing::warn!(session = %name, route = %route, code = "codex_sidecar_invalid", "rota do Codex num arquivo de sessão sem dono no Rust; nada foi enviado");
@@ -608,4 +631,16 @@ async fn terminal_permission(ctx: &Ctx, action: PermissionAction) -> Answer {
         if !matches!(saved, Ok(Ok(true))) { tracing::warn!(session = %ctx.name, code = "codex_permission_unsaved", "o modo trocado no terminal não foi gravado no arquivo da sessão"); }
     }
     terminal_permission_answer(&sent)
+}
+
+#[cfg(test)]
+mod tests {
+    /// O arquivo que não deu para conferir é 503 com código, nunca a resposta de "não há arquivo".
+    #[test]
+    fn an_unchecked_sidecar_is_503_not_absent() {
+        assert_eq!(super::sidecar_found("s", Ok(Ok(true))), Ok(true));
+        assert_eq!(super::sidecar_found("s", Ok(Ok(false))), Ok(false));
+        let (status, body) = super::sidecar_found("s", Ok(Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied)))).unwrap_err();
+        assert_eq!((status, body["detail"]["code"].as_str()), (axum::http::StatusCode::SERVICE_UNAVAILABLE, Some("codex_sidecar_check_failed")));
+    }
 }

@@ -902,3 +902,32 @@ async fn guest_outside_its_session_is_refused_without_reaching_python() {
     let (status, _) = get_json(format!("http://{}/api/sessions/s/cost", srv.guest), &t).await;
     assert_ne!(status, 429, "o token do convidado segue aberto na própria sessão");
 }
+
+/// Na 8766 o método que uma rota do Rust não tem é recusa do Rust, nunca repasse assinado ao Python; troca
+/// de modo e de conta são do dono, e o convidado completo leva a recusa do handler.
+#[tokio::test(flavor = "multi_thread")]
+async fn guest_port_refuses_unserved_methods_and_owner_only_relaunches_in_rust() {
+    let dir = tempfile::tempdir().unwrap();
+    let srv = plain_srv(dir.path(), |_| {}).await;
+    let t = srv.g.token("s", Kind::Share);
+    let url = |route: &str| format!("http://{}/api/sessions/s/{route}", srv.guest);
+    let send = |method: reqwest::Method, route: &'static str, body: Value| {
+        let request = client().request(method, url(route)).bearer_auth(&t).header("content-type", "application/json").body(body.to_string());
+        async move {
+            let r = request.send().await.unwrap();
+            let status = r.status().as_u16();
+            (status, serde_json::from_str::<Value>(&r.text().await.unwrap()).unwrap_or(Value::Null))
+        }
+    };
+    for (method, route) in [(reqwest::Method::PUT, "permission-mode"), (reqwest::Method::GET, "model-effort"), (reqwest::Method::PUT, "pane")] {
+        let (status, body) = send(method, route, json!({})).await;
+        assert_eq!((status, body["detail"]["code"].clone()), (403, json!("erro_fora_do_convite")), "{route}: {body}");
+    }
+    for (route, body) in [("modo-execucao", json!({"terminal": true})), ("conta", json!({"config_dir": "/x"}))] {
+        let (status, refused) = send(reqwest::Method::POST, route, body).await;
+        assert_eq!((status, refused["detail"]["code"].clone()), (403, json!("erro_fora_do_convidado")), "{route}: {refused}");
+    }
+    for route in ["permission-mode", "model-effort", "pane", "modo-execucao", "conta"] {
+        assert_eq!(srv.python.hits_to(&format!("/api/sessions/s/{route}")), 0, "{route}");
+    }
+}

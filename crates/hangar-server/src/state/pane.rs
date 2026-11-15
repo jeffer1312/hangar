@@ -70,7 +70,15 @@ fn failed(st: &AppState, name: &str, code: &str) -> (StatusCode, Value) {
 /// Leitura que falha também é 0, como no Python: só some o "mais histórico", e a falha vai ao log.
 async fn scrollback(mux: &MuxProcess, name: &str, target: &str) -> u64 {
     match mux.run(&["display", "-p", "-t", target, "#{?alternate_on,0,#{history_size}}"]).await {
-        Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).trim().parse().unwrap_or(0),
+        Ok(out) if out.status.success() => match String::from_utf8_lossy(&out.stdout).trim().parse() {
+            Ok(size) => size,
+            Err(_) => {
+                if crate::warn_limit::allow(Some(name), "pane_scrollback_unparsed") {
+                    tracing::warn!(session = name, code = "pane_scrollback_unparsed", bytes = out.stdout.len(), "espelho: histórico do pane ilegível; vale 0");
+                }
+                0
+            }
+        },
         _ => {
             if crate::warn_limit::allow(Some(name), "pane_scrollback_failed") {
                 tracing::warn!(session = name, code = "pane_scrollback_failed", "espelho: histórico do pane não lido; vale 0");
@@ -122,5 +130,30 @@ mod tests {
         for raw in ["", " ", "1e3", "0x10", "1__0", "_1", "1.5", "abc", "5.", " 70. "] {
             assert!(lines(Some(&query(raw))).is_err(), "{raw:?}");
         }
+    }
+
+    /// Histórico que o multiplexador responde sem número: vale 0, e o log diz o porquê.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_unparsed_scrollback_is_zero_and_logged() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::sync::{Arc, Mutex};
+        #[derive(Clone)] struct Capture(Arc<Mutex<Vec<u8>>>);
+        impl std::io::Write for Capture {
+            fn write(&mut self, data: &[u8]) -> std::io::Result<usize> { self.0.lock().unwrap().extend_from_slice(data); Ok(data.len()) }
+            fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+        }
+        let output = Arc::new(Mutex::new(Vec::new()));
+        let capture = Capture(output.clone());
+        let subscriber = tracing_subscriber::fmt().without_time().with_ansi(false).with_writer(move || capture.clone()).finish();
+        let _log = tracing::subscriber::set_default(subscriber);
+        let dir = tempfile::tempdir().unwrap();
+        let program = dir.path().join("mux");
+        std::fs::write(&program, "#!/bin/sh\necho nao-e-numero\n").unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mux = super::MuxProcess::new(program.as_os_str(), super::TIMEOUT);
+        assert_eq!(super::scrollback(&mux, "pane-scrollback-unparsed-test", "=s0:").await, 0);
+        let text = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+        assert!(text.contains("pane_scrollback_unparsed"), "{text}");
     }
 }

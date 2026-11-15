@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 
 use super::input::json_content_type;
 use super::{BODY_LIMIT, busy_body, invalid_body, json_response, session_name, too_large};
-use crate::routes::{AppState, cors, gate, pass, who};
+use crate::routes::{AppState, cors, gate, who};
 use crate::share::caller::Caller;
 use crate::runtime::protocol::RuntimeError;
 use crate::runtime::claude_reopen::{ReopenFailure,Reopened};
@@ -71,8 +71,8 @@ pub fn reload_refusal(error: &RuntimeError) -> (StatusCode, Value) {
 }
 
 pub async fn mode(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    let (fwd, owner) = match gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
-    let (true, Some(name)) = (owner, session_name(req.uri().path())) else { return pass(&st, req, &fwd).await };
+    let (_, owner) = match gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
+    let (true, Some(name)) = (owner, session_name(req.uri().path())) else { return super::not_owner(&st, peer, req).await };
     let Some(runtime) = st.state.runtime.get().cloned() else { return super::no_runtime(req.headers()) };
     let (parts, body) = req.into_parts();
     let Ok(bytes) = to_bytes(body, BODY_LIMIT).await else { return too_large(&parts.headers) };

@@ -131,3 +131,18 @@ async fn r5_owner_routes_refuse_the_stranger_on_the_method_python_had() {
         assert_eq!(python.hits_to(path), 0, "{path}");
     }
 }
+
+/// Troca de modo, retomada e troca de conta são só do dono: o estranho leva o 401 e o convidado com login,
+/// mesmo o que vê a sessão, o 403, sem repasse ao Python.
+#[tokio::test]
+async fn r5_owner_only_relaunch_routes_refuse_everyone_else_in_rust() {
+    let (python, srv, _home) = with_guests().await;
+    let (refused, guest): (Value, Value) = (serde_json::from_str(REFUSED).unwrap(), serde_json::from_str(GUEST_REFUSED).unwrap());
+    let routes = [("POST", "/api/sessions/s0/modo-execucao"), ("POST", "/api/sessions/s0/resume"),
+        ("GET", "/api/sessions/s0/conta"), ("POST", "/api/sessions/s0/conta")];
+    for (i, (method, path)) in routes.iter().enumerate() {
+        assert_eq!(send(srv, method, path, "errado", i as u8 + 1).await, (401, refused.clone()), "estranho: {method} {path}");
+        assert_eq!(send(srv, method, path, SEER, 100).await, (403, guest.clone()), "convidado com a sessão: {method} {path}");
+        assert_eq!(python.hits_to(path), 0, "{path}");
+    }
+}

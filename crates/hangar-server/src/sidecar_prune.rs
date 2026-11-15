@@ -45,8 +45,13 @@ where
 async fn round(state: Arc<AppState>) -> bool {
     // O registro antes da descoberta: sessão retomada entre as duas leituras já está na lista.
     let home = state.accounts.env.home.clone();
-    let recorded = tokio::task::spawn_blocking(move || recorded(&home, SPECS_COUNT_AS_LIVE)).await
-        .unwrap_or_else(|_| Err(io::Error::other("leitura do registro interrompida")));
+    let recorded = match tokio::task::spawn_blocking(move || recorded(&home, SPECS_COUNT_AS_LIVE)).await {
+        Ok(recorded) => recorded,
+        Err(error) => {
+            tracing::error!(code = "sidecar_prune_record_interrupted", panic = error.is_panic(), %error, "leitura do registro da poda interrompida");
+            Err(io::Error::other("leitura do registro interrompida"))
+        }
+    };
     let discovered = state.list.live_round().await;
     let accounts = state.accounts.clone();
     let done = tokio::task::spawn_blocking(move || {
@@ -54,7 +59,10 @@ async fn round(state: Arc<AppState>) -> bool {
         (sweep(discovered, recorded, &bases, SystemTime::now()), catalog)
     }).await;
     let (line, ran) = match done {
-        Err(_) => (json!({"nivel": "erro", "codigo": "sidecar_prune_interrupted"}), false),
+        Err(error) => {
+            tracing::error!(code = "sidecar_prune_interrupted", panic = error.is_panic(), %error, "rodada da poda interrompida");
+            (json!({"nivel": "erro", "codigo": "sidecar_prune_interrupted", "panico": error.is_panic()}), false)
+        }
         Ok((swept, catalog)) => verdict(swept, catalog),
     };
     if ran {
@@ -74,7 +82,10 @@ fn bases(accounts: &AccountService) -> (Vec<PathBuf>, bool) {
     match accounts.claude_catalog() {
         Ok(rows) => (rows.as_array().into_iter().flatten()
             .filter_map(|row| row["path"].as_str().map(PathBuf::from)).chain([base]).collect(), true),
-        Err(_) => (vec![base], false),
+        Err(error) => {
+            tracing::warn!(code = %error.code, detail = %error.message, "catálogo de contas ilegível; a poda fica só com a pasta base");
+            (vec![base], false)
+        }
     }
 }
 
@@ -273,6 +284,31 @@ mod tests {
         assert_eq!((live.stems, live.names, live.panes, live.keys), (None, None, set(&["1"]), None));
         assert_eq!(degraded, Some("session_registry_unreadable"));
         assert!(!verdict(Ok((Report::default(), degraded)), true).1);
+    }
+
+    /// Catálogo ilegível (HOME que é arquivo): a poda fica só com a base e o log diz o código e o detalhe.
+    #[test]
+    fn an_unreadable_catalog_keeps_the_base_and_logs_why() {
+        #[derive(Clone)] struct Capture(Arc<std::sync::Mutex<Vec<u8>>>);
+        impl std::io::Write for Capture {
+            fn write(&mut self, data: &[u8]) -> io::Result<usize> { self.0.lock().unwrap().extend_from_slice(data); Ok(data.len()) }
+            fn flush(&mut self) -> io::Result<()> { Ok(()) }
+        }
+        let output = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let capture = Capture(output.clone());
+        let subscriber = tracing_subscriber::fmt().without_time().with_ansi(false).with_writer(move || capture.clone()).finish();
+        let _log = tracing::subscriber::set_default(subscriber);
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("arquivo");
+        fs::write(&home, "").unwrap();
+        let home = home.to_string_lossy().into_owned();
+        let accounts = AccountService::new(crate::accounts::environment::AccountEnvironment::from_map(
+            [("HOME".into(), home.clone()), ("USERPROFILE".into(), home)].into()));
+        let (found, catalog) = bases(&accounts);
+        assert!(!catalog);
+        assert_eq!(found, vec![accounts.env.claude_base.clone()]);
+        let text = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+        assert!(text.contains("code=account_storage_unavailable") && text.contains("detail="), "{text}");
     }
 
     #[test]

@@ -17,7 +17,7 @@ use serde_json::{Value,json};
 use super::{BODY_LIMIT,busy_refusal,detail_body,session_name,too_large};
 use crate::mods::http::reply;
 use crate::list::discover::real;
-use crate::routes::{AppState,gate,pass};
+use crate::routes::{AppState,gate};
 use crate::runtime::claude_reopen::{Between,ReopenFailure};
 use crate::runtime::protocol::RuntimeError;
 use crate::session_open::{Account,ChangeReason,SessionChange,SessionSpec};
@@ -176,8 +176,8 @@ pub(crate) async fn reopen_in(st:&Arc<AppState>,runtime:&Arc<crate::runtime::gat
 }
 
 pub async fn targets_route(State(st):State<Arc<AppState>>,ConnectInfo(peer):ConnectInfo<SocketAddr>,req:Request) -> Response {
-    let (fwd,owner)=match gate(&st,peer,&req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
-    let (true,Some(name))=(owner,session_name(req.uri().path())) else {return pass(&st,req,&fwd).await};
+    let (_,owner)=match gate(&st,peer,&req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
+    let (true,Some(name))=(owner,session_name(req.uri().path())) else {return super::not_owner(&st,peer,req).await};
     let Some(runtime)=st.state.runtime.get().cloned() else {return super::no_runtime(req.headers())};
     let env=runtime.codex_environment();
     // No motor, mesmo a conta atual é destino: a sessão volta para a conta Claude sem mover nada. Sessão
@@ -198,8 +198,8 @@ pub async fn targets_route(State(st):State<Arc<AppState>>,ConnectInfo(peer):Conn
 }
 
 pub async fn switch_route(State(st):State<Arc<AppState>>,ConnectInfo(peer):ConnectInfo<SocketAddr>,req:Request) -> Response {
-    let (fwd,owner)=match gate(&st,peer,&req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
-    let (true,Some(name))=(owner,session_name(req.uri().path())) else {return pass(&st,req,&fwd).await};
+    let (_,owner)=match gate(&st,peer,&req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
+    let (true,Some(name))=(owner,session_name(req.uri().path())) else {return super::not_owner(&st,peer,req).await};
     let Some(runtime)=st.state.runtime.get().cloned() else {return super::no_runtime(req.headers())};
     let (parts,body)=req.into_parts();
     let Ok(bytes)=to_bytes(body,BODY_LIMIT).await else {return too_large(&parts.headers)};

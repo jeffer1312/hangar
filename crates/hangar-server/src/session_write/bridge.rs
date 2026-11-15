@@ -193,7 +193,7 @@ pub async fn delete(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
         }
     };
     // Ainda com o nome reservado: atalho de uma sessão nova com o mesmo nome não pode ser alcançado.
-    if closed.is_ok() { close_shortcuts(&st, &name).await; }
+    let mut cleanup = if closed.is_ok() { close_shortcuts(&st, &name).await } else { Vec::new() };
     drop(closing);
     let closed = match closed {
         Ok(closed) => closed,
@@ -207,14 +207,21 @@ pub async fn delete(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
     // aqui não passam pela limpeza do nome).
     if let Err(error) = crate::loops::store(&st).clear_chain(&name) {
         tracing::error!(session = %name, code = "close_chain_failed", kind = ?error.kind(), "vínculo then da sessão encerrada não saiu");
-        st.diag.report("rust.close_failed", &name, "close_chain_failed", "o vínculo then da sessão encerrada não saiu");
+        cleanup.push(cleanup_failed(&st, &name, "close_chain_failed", "o vínculo then da sessão encerrada não saiu"));
     }
     record_closed_name(&st, &name, closed["transcript"].as_str()).await;
     let leave = match st.groups.clone() { Some(groups) => leave_warnings(&st, &groups, &name).await, None => Vec::new() };
-    let share = after_close(&st, &name).await;
+    cleanup.extend(after_close(&st, &name).await);
     let mut response = super::json_response(StatusCode::OK, json!({"ok": true, "warning": null}));
     crate::routes::cors(req.headers(), response.headers_mut());
-    with_warnings(&name, response, leave, share).await
+    with_warnings(&name, response, leave, cleanup).await
+}
+
+/// Limpeza que não terminou depois de a sessão fechar: vai ao diário e volta no `warning`, com o código.
+fn cleanup_failed(st: &AppState, name: &str, code: &str, reason: &'static str) -> Value {
+    st.diag.report("rust.close_failed", name, code, reason);
+    json!({"code": "erro_limpeza_fechamento_falhou", "params": {"codigo": code},
+        "msg": format!("a sessão fechou, mas a limpeza não terminou ({code})")})
 }
 
 /// O nome que a conversa tinha, para o Arquivo e o "reabre a X" (o `closed_names.record` do Python, na
@@ -256,10 +263,10 @@ async fn leave_warnings(st: &AppState, groups: &crate::groups::service::GroupSer
     }
 }
 
-/// Os avisos de saída e o do convite (`share`) no `warning` da resposta do fechamento, na ordem do Python;
-/// corpo que não é objeto JSON vira `{"ok": true}`.
-async fn with_warnings(name: &str, response: Response, mut errs: Vec<Value>, share: Option<Value>) -> Response {
-    if errs.is_empty() && share.is_none() { return response; }
+/// Os avisos de saída e os da limpeza (convite, loop, `then`, atalhos) no `warning` da resposta do
+/// fechamento, na ordem do Python; corpo que não é objeto JSON vira `{"ok": true}`.
+async fn with_warnings(name: &str, response: Response, mut errs: Vec<Value>, mut cleanup: Vec<Value>) -> Response {
+    if errs.is_empty() && cleanup.is_empty() { return response; }
     let (mut parts, body) = response.into_parts();
     let read = axum::body::to_bytes(body, 1 << 20).await.ok().and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
     let mut value = read.filter(Value::is_object).unwrap_or_else(|| {
@@ -267,12 +274,11 @@ async fn with_warnings(name: &str, response: Response, mut errs: Vec<Value>, sha
         json!({"ok": true})
     });
     let current = value.get("warning").filter(|w| !w.is_null()).cloned();
-    value["warning"] = match share {
-        Some(share) if errs.is_empty() && current.is_none() => share,
-        share => {
-            errs.extend(share.map(|share| json!({"sessao": name, "erro": share})));
-            with_leave_warning(current, name, errs)
-        }
+    value["warning"] = if errs.is_empty() && current.is_none() && cleanup.len() == 1 {
+        cleanup.remove(0)
+    } else {
+        errs.extend(cleanup.into_iter().map(|warning| json!({"sessao": name, "erro": warning})));
+        with_leave_warning(current, name, errs)
     };
     parts.headers.remove(axum::http::header::CONTENT_LENGTH);
     parts.headers.insert(axum::http::header::CONTENT_TYPE, axum::http::HeaderValue::from_static("application/json"));
@@ -317,16 +323,17 @@ fn close_line_by(name: &str, owner: bool, headers: &axum::http::HeaderMap, peer:
 }
 
 /// Depois de o Rust encerrar a sessão: revoga os convites e some da lista. A saída do grupo é de quem chamou.
-/// Devolve o aviso da revogação que falhou: o fechamento segue, e a pessoa fica sabendo.
-async fn after_close(st: &Arc<AppState>, name: &str) -> Option<Value> {
-    let mut warning = None;
+/// Devolve os avisos do que falhou: o fechamento segue, e a pessoa fica sabendo.
+async fn after_close(st: &Arc<AppState>, name: &str) -> Vec<Value> {
+    let mut warnings = Vec::new();
     if let Some(share) = st.share.clone() {
         match share.store.revoke_session(name, None) {
             Ok(0) => {}
             Ok(_) => crate::share::owner_routes::sync_tunnel(&share).await,
             Err(error) => {
                 tracing::error!(session = %name, code = "share_store_failed", "convites da sessão encerrada não revogados: {error}");
-                warning = Some(json!({"code": "erro_convite_nao_acompanhou", "params": {"codigo": "share_store_failed"},
+                st.diag.report("rust.close_failed", name, "share_store_failed", "os convites da sessão encerrada não foram revogados");
+                warnings.push(json!({"code": "erro_convite_nao_acompanhou", "params": {"codigo": "share_store_failed"},
                     "msg": "o convite desta sessão não acompanhou a mudança (share_store_failed)"}));
             }
         }
@@ -334,18 +341,20 @@ async fn after_close(st: &Arc<AppState>, name: &str) -> Option<Value> {
     // O loop é da vida que acabou: nada de acordar na próxima sessão com o nome.
     if let Err(error) = crate::loops::store(st).forget(name) {
         tracing::error!(session = %name, code = "loop_forget_failed", kind = ?error.kind(), "loop da sessão encerrada não saiu");
+        warnings.push(cleanup_failed(st, name, "loop_forget_failed", "o loop da sessão encerrada não saiu"));
     }
     st.list.forget(name);
     st.list.invalidate();
-    warning
+    warnings
 }
 
-/// Os terminais de atalho da sessão encerrada.
-async fn close_shortcuts(st: &AppState, name: &str) {
-    for warning in crate::shortcuts::close_for_session(st, name, || Box::pin(async { true })).await {
-        let code = warning["code"].as_str().unwrap_or("shortcut_close_failed");
-        st.diag.report("rust.close_failed", name, code, "terminal de atalho da sessão encerrada não fechou");
-    }
+/// Os terminais de atalho da sessão encerrada; cada um que não fechou volta como aviso.
+async fn close_shortcuts(st: &AppState, name: &str) -> Vec<Value> {
+    crate::shortcuts::close_for_session(st, name, || Box::pin(async { true })).await.into_iter().map(|warning| {
+        let code = warning["code"].as_str().unwrap_or("shortcut_close_failed").to_owned();
+        tracing::warn!(session = %name, code = %code, "terminal de atalho da sessão encerrada não fechou");
+        cleanup_failed(st, name, &code, "terminal de atalho da sessão encerrada não fechou")
+    }).collect()
 }
 
 /// As rotas que o Rust atende para o Codex dele; outra cai no Python (421).
@@ -401,6 +410,27 @@ mod close_tests {
         let warning = super::with_leave_warning(Some(share.clone()), "s0", vec![err.clone()]);
         assert_eq!(warning, json!({"code": "erro_pareamento_saida_falhou", "params": {"avisos": [err, {"sessao": "s0", "erro": share}]},
             "msg": "aviso de saída falhou: lab::x: lab inacessível; s0: convite"}));
+    }
+
+    /// A limpeza que falhou depois do fechamento volta no `warning`: sozinha, ela mesma; com outra, no
+    /// aviso composto, na ordem em que aconteceu.
+    #[tokio::test]
+    async fn cleanup_failures_reach_the_close_warning() {
+        use serde_json::{Value, json};
+        let ok = || super::super::json_response(axum::http::StatusCode::OK, json!({"ok": true, "warning": null}));
+        let body = |response: axum::response::Response| async move {
+            serde_json::from_slice::<Value>(&axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap()).unwrap()
+        };
+        let failed = |code: &str| json!({"code": "erro_limpeza_fechamento_falhou", "params": {"codigo": code},
+            "msg": format!("a sessão fechou, mas a limpeza não terminou ({code})")});
+        let (looped, chained) = (failed("loop_forget_failed"), failed("close_chain_failed"));
+        let one = body(super::with_warnings("s0", ok(), vec![], vec![looped.clone()]).await).await;
+        assert_eq!(one, json!({"ok": true, "warning": looped}));
+        let two = body(super::with_warnings("s0", ok(), vec![], vec![chained.clone(), looped.clone()]).await).await;
+        assert_eq!(two["warning"]["code"], "erro_pareamento_saida_falhou");
+        assert_eq!(two["warning"]["params"]["avisos"], json!([{"sessao": "s0", "erro": chained}, {"sessao": "s0", "erro": looped}]));
+        let none = body(super::with_warnings("s0", ok(), vec![], vec![]).await).await;
+        assert_eq!(none["warning"], Value::Null, "nada falhou: sem aviso");
     }
 
     /// O fechamento pelo dono vai ao diário com o cliente e a origem.
