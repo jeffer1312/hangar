@@ -48,13 +48,21 @@ pub fn from_env(dirs: Option<&Dirs>, server_id: String, orq: Arc<dyn OrqFacts>, 
     let home=dirs.home.clone();
     let program=list.env().capture_program.clone();
     let service = GroupService::new(dir.clone(), orq, server_id).with_diary(diary);
+    let turn=Arc::new(std::sync::Mutex::new(()));
     Some(Arc::new(service.with_change_hook(Arc::new(move || {
         list.invalidate();link_return::wake();
-        match dir.sidecars().map_err(|error|error.to_string()).and_then(|sidecars|
-            mission.sync_groups(&crate::mission_notify::ticket_groups(&home,&program,sidecars)).map(|_|()).map_err(|error|error.to_string())) {
-            Ok(())=>{},
-            Err(_)=>tracing::warn!(code="ticket_group_sync_failed","não foi possível gravar os participantes dos tickets"),
-        }
+        // O hook roda sob o lock de grupo; tmux e trava do mission.json vão para fora do runtime, em fila
+        // para que a última leitura do disco seja a gravada.
+        let (dir,mission,home,program,turn)=(dir.clone(),mission.clone(),home.clone(),program.clone(),turn.clone());
+        let sync=move || {
+            let _turn=turn.lock().unwrap_or_else(|e|e.into_inner());
+            match dir.sidecars().map_err(|error|error.to_string()).and_then(|sidecars|
+                mission.sync_groups(&crate::mission_notify::ticket_groups(&home,&program,sidecars)).map(|_|()).map_err(|error|error.to_string())) {
+                Ok(())=>{},
+                Err(_)=>tracing::warn!(code="ticket_group_sync_failed","não foi possível gravar os participantes dos tickets"),
+            }
+        };
+        match tokio::runtime::Handle::try_current() {Ok(runtime)=>{runtime.spawn_blocking(sync);},Err(_)=>sync()}
     }))))
 }
 

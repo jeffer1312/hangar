@@ -189,8 +189,8 @@ impl Engine {
         let entry = self.host.entry(&request.connector).map_err(|e|Failure::new(424,e.code(),e.message.clone()))?;
         let configured=stage.actions.as_ref().and_then(|map|map.get(&request.connector));
         let action_prompt = if entry.capabilities.contains_key(hangar_connectors::work_actions::CAPABILITY) {
-            let actions = self.host.list_actions(&request.connector, hangar_connectors::work_tracking::GetParams::new(&request.ticket_id)
-                .map_err(|e|Failure::new(422,e.code.as_str(),e.message))?).await.map_err(|e|Failure::new(424,e.code(),e.message()))?;
+            let actions = self.host.list_actions_for(&request.connector, hangar_connectors::work_tracking::GetParams::new(&request.ticket_id)
+                .map_err(|e|Failure::new(422,e.code.as_str(),e.message))?,&ticket).await.map_err(|e|Failure::new(424,e.code(),e.message()))?;
             if configured.is_some_and(|ids|ids.iter().any(|id|!actions.iter().any(|action|&action.action.id==id))) {
                 return Err(Failure::new(409,"ticket_action_stale","uma ação configurada não está mais disponível; revise as ações desta etapa"));
             }

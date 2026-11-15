@@ -976,11 +976,12 @@ function criarChatStore(serverId: string, name: string): ChatApi {
     use: useChatStore,
     resetConversation,
     setIdentity(next) {
-      if (identity && (identity.jsonl && next.jsonl !== identity.jsonl
+      if (identity && (identity.jsonl && next.jsonl && next.jsonl !== identity.jsonl
           || identity.lifecycle_id && next.lifecycle_id && next.lifecycle_id !== identity.lifecycle_id
           || identity.provider && next.provider && next.provider !== identity.provider)) resetConversation();
       else if (!identity?.jsonl && next.jsonl && baseLoaded && alive && foreground) void loadHistory();
-      identity = next;
+      // Linha sem um campo não apaga o que já se sabia: o próximo valor diferente ainda reinicia a conversa.
+      identity = { jsonl: next.jsonl || identity?.jsonl, lifecycle_id: next.lifecycle_id || identity?.lifecycle_id, provider: next.provider || identity?.provider };
     },
     historyLoaded: () => baseLoaded,
     startQueueEdit(id: string, draft: string): string {

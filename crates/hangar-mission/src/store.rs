@@ -754,14 +754,17 @@ impl Store {
         Ok(file)
     }
 
-    /// Lê, muda e regrava sob a trava; mudança recusada não grava nada.
+    /// Lê, muda e regrava sob a trava; mudança recusada ou vazia não grava nada.
     fn update<T>(&self, change: impl FnOnce(&mut File) -> Result<T, Error>) -> Result<T, Error> {
         let parent = self.path.parent().ok_or_else(|| Error::new(Kind::Unavailable, "mission_unavailable", "sem pasta"))?;
         std::fs::create_dir_all(parent).map_err(|e| Error::io("pasta dos tickets", &e))?;
         let _lock = hangar_core::fs::lock_file(&self.path.with_extension("lock")).map_err(|e| Error::io("trava dos tickets", &e))?;
         let mut file = self.read()?;
+        let serialize = |file: &File| serde_json::to_vec_pretty(file).map_err(|_| Error::new(Kind::Unavailable, "mission_unavailable", "não serializou"));
+        let before = serialize(&file)?;
         let value = change(&mut file)?;
-        let bytes = serde_json::to_vec_pretty(&file).map_err(|_| Error::new(Kind::Unavailable, "mission_unavailable", "não serializou"))?;
+        let bytes = serialize(&file)?;
+        if bytes == before { return Ok(value); }
         hangar_core::fs::atomic_write(&self.path, &bytes).map_err(|e| Error::io("gravação dos tickets", &e))?;
         Ok(value)
     }

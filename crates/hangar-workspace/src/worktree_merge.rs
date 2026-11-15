@@ -384,10 +384,12 @@ fn equivalent_at(cwd: &Path,base: &str,head: &str) -> Option<Equivalence> {
     let source=read(cwd,&["rev-list","--no-merges",&range])?;
     let mut remaining:std::collections::HashSet<_>=source.lines().collect();
     if remaining.is_empty() || remaining.len()>256 {return None;}
-    let cherry=read(cwd,&["cherry",base,head])?;
-    if cherry.is_empty() || !cherry.lines().all(|line|line.starts_with("- ")) {return None;}
+    // `cherry` e `range-diff` geram o patch de cada commit da base: base que andou demais fica sem prova.
     let target=read(cwd,&["rev-list","--no-merges",&reverse])?;
     let targets:std::collections::HashSet<_>=target.lines().collect();
+    if targets.len()>2048 {return None;}
+    let cherry=read(cwd,&["cherry",base,head])?;
+    if cherry.is_empty() || !cherry.lines().all(|line|line.starts_with("- ")) {return None;}
     let diff=read(cwd,&["-c","diff.external=","range-diff","--no-ext-diff","--no-textconv","--no-color","--abbrev=40",&range,&reverse])?;
     let mut last=0usize;
     let mut source_index=0usize;

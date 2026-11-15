@@ -886,6 +886,7 @@ impl Hangar {
     }
 
     fn close_ticket_detail(&mut self,cx: &mut Context<Self>) {
+        self.cancel_ticket_action();
         if self.embedded_conversation() {self.close_tab_preview(cx);}
         self.mission.conversation=false;
         self.mission.detail_resize=None;

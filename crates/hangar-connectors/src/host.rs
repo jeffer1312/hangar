@@ -133,9 +133,14 @@ impl Host {
     pub async fn list_actions(self: &Arc<Self>, id: &str, params: GetParams) -> Result<Vec<ResolvedAction>, CallError> {
         self.usable(id, work_actions::CAPABILITY)?;
         let ticket = self.get_ticket(id, params.clone()).await?;
+        self.list_actions_for(id, params, &ticket.summary).await
+    }
+
+    /// Para quem já leu o ticket: as ações resolvem contra a mesma leitura, sem outra ida ao conector.
+    pub async fn list_actions_for(self: &Arc<Self>, id: &str, params: GetParams, ticket: &work_tracking::TicketSummary) -> Result<Vec<ResolvedAction>, CallError> {
         self.call(id, work_actions::CAPABILITY, work_actions::LIST, json!(params), |value| {
             Catalog::from_connector(value)?.actions.into_iter()
-                .map(|action| action.resolve(&ticket.summary)).collect()
+                .map(|action| action.resolve(ticket)).collect()
         }).await
     }
 
