@@ -92,7 +92,8 @@ export function useDream() {
   }, [dreamerId]);
   useEffect(() => {
     if (statusProgress?.run_id && statusProgress.run_id === ended.current) return;
-    if (sawEvent.current && (!statusProgress || statusProgress.run_id === latest.current?.run_id)) return;
+    // Com o canal ao vivo falando, ele é a verdade: um status lido antes não passa por cima dele.
+    if (sawEvent.current) return;
     latest.current = statusProgress;
     setProgress(statusProgress);
   }, [statusProgress]);
@@ -103,6 +104,8 @@ export function useDream() {
   useFocusEffect(useCallback(() => {
     const server = dreamerRef.current;
     if (!server) return;
+    // Fora de foco nada chegou: até o primeiro evento desta abertura, vale o status relido.
+    sawEvent.current = false;
     let alive = true;
     let attempt = 0;
     let retry: ReturnType<typeof setTimeout> | null = null;

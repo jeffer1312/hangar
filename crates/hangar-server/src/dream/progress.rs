@@ -81,12 +81,15 @@ pub fn begin(run_id: &str, projects: Vec<(String, String)>) {
         .collect();
     // O Parar pode ter chegado durante o inventário, antes de haver andamento.
     let stopping = stopping();
+    *FINISHED.lock().unwrap_or_else(|e| e.into_inner()) = None;
     PROGRESS.send_replace(Some(Progress { run_id: run_id.into(), started_at: now, last_activity_at: now, spent_usd: 0.0, stopping, current: None, projects }));
 }
 
 pub fn end() {
-    let last = PROGRESS.send_replace(None);
+    // Guardado antes do `None`: o `events` acorda com ele e lê o retrato final em seguida.
+    let last = PROGRESS.borrow().clone();
     *FINISHED.lock().unwrap_or_else(|e| e.into_inner()) = last;
+    PROGRESS.send_replace(None);
 }
 
 /// O último retrato da rodada que acabou: o `events` o manda antes do `null`, senão um projeto que
