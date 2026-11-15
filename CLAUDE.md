@@ -895,14 +895,8 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   tem uma porta de entrada no Rust: o Python a fecha antes de congelar ou transferir a sessão
   (renomear, trocar de conta) e a reabre depois; fechada pela troca de conversa, recusa na hora
   (409), fechada por congelamento curto, a escrita espera. A saúde diz o que o Rust atende em
-  `owns` (`table::owned_modes`). No convidado (8766) o Python autentica e repassa
-  num sentido, corpo, método e query intactos: `input`/`answer`/`select`/`select/submit` e as rotas
-  `queue/*` do Claude a `/__hangar_server/claude/<nome>/<rota>`, tudo do Codex do Rust (`queue/*`
-  incluídas) a
-  `/__hangar_server/codex/<nome>/<rota>` (a mesma ponte recebe o texto de broadcast para Codex
-  com terminal); Pi/omp/Kimi fecham pelos atores Rust; 421 = o Rust não atende e o Python segue, transporte que falha =
-  5xx `<provedor>_bridge_failed`. Texto que nasce no Python para o Claude segue em `_send_one`, coberto
-  só pelo `freeze`. Contrato e motivo em
+  `owns` (`table::owned_modes`). O convidado (8766) é atendido pelos mesmos handlers do Rust; o
+  Python não tem mais `input`, `broadcast`, `history`, `btw` nem as rotas de mod. Contrato e motivo em
   [plataforma.md](docs/decisoes/plataforma.md#escritas-do-claude-no-hangar-server) e
   [fronteira](docs/decisoes/plataforma.md#perguntas-permissões-e-ciclo-de-vida-no-rust-fronteira-com-o-python).
 - **Pergunta, permissão e menu exibidos levam `interaction_id`, e a resposta devolve o do cartão
@@ -929,9 +923,7 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   Sessão que bate o limite de uso troca de conta sozinha pela reabertura (só Claude). Login recusado
   segue o mesmo vigia: com login no disco reabre uma vez na mesma conta; recusou de novo ou o login
   sumiu, vai à conta logada de mais folga; sem nenhuma, avisa `limit_switch_login_lost`. No modo
-  `python`, abrir e reabrir respondem 503 com código, sem lançador Python. Exceções que ainda passam
-  pelo Python: texto que nasce nele (broadcast que entra pelas portas do Python) acorda Claude/Codex sem terminal pedindo
-  ao Rust. Decisões e medições em
+  `python`, abrir e reabrir respondem 503 com código, sem lançador Python. Decisões e medições em
   [plataforma.md](docs/decisoes/plataforma.md#abertura-de-sessão-única-no-rust).
 - **Trocar o nome da sessão é do Rust (`session_rename/`), com desfazer.** Tudo que recusa vem antes
   do primeiro efeito; a troca segura a reserva do nome novo e as portas dos dois nomes; a sessão viva
