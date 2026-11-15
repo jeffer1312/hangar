@@ -3,7 +3,7 @@ import { Text, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import type { ChatEvent } from '@hangar/core';
 import { haptic } from '../ui/haptics';
-import { setNoticeIgnores, useSessions } from '../stores/sessions';
+import { useSessions } from '../stores/sessions';
 import { isApiError, noticeCount, noticeDetail, noticeKey, noticeTitle, plainNotice } from '../features/notices/notices';
 import { putNoticeIgnore } from '../features/notices/api';
 import { ApiErrorBox, IgnoredLine, NoticeBody, NoticeLineView } from './NoticeParts';
@@ -16,29 +16,28 @@ export const ClaudeNotice = memo(function ClaudeNotice({ event, serverId }: { ev
   const key = noticeKey(event);
   const ignoredKeys = useSessions((s) => (serverId ? s.noticeIgnores[serverId] : undefined) ?? NO_KEYS);
   const [open, setOpen] = useState(false);
-  // Ignorado aqui: a linha fica com Desfazer enquanto estiver montada; nas outras vezes some.
-  const [ignoredHere, setIgnoredHere] = useState(false);
+  // O que a pessoa fez nesta linha vale enquanto ela está na tela: `true` ignorou (fica o Desfazer), `false` desfez.
+  // A lista da máquina chega pelo evento e decide as outras linhas.
+  const [local, setLocal] = useState<boolean | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
 
   if (isApiError(event)) return <ApiErrorBox text={plainNotice(event).trim()} />;
-  if (key && ignoredKeys.includes(key) && !ignoredHere) return null;
+  if (key && local === null && ignoredKeys.includes(key)) return null;
 
   const change = (ignored: boolean) => {
     if (!key || !serverId) return;
     setFailed(null);
-    putNoticeIgnore(serverId, key, ignored).then((keys) => {
+    putNoticeIgnore(serverId, key, ignored).then(() => {
       haptic.success();
-      // Mesmo instante: a lista nova e o "ignorado aqui" mudam juntos, sem a linha sumir no meio.
-      setIgnoredHere(ignored);
+      setLocal(ignored);
       setOpen(false);
-      if (keys) setNoticeIgnores(serverId, keys);
     }, (error: unknown) => {
       haptic.error();
       setFailed(`${m.notice_ignore_failed()} · ${error instanceof Error ? error.message : String(error)}`);
     });
   };
 
-  if (ignoredHere && key && ignoredKeys.includes(key)) {
+  if (local === true) {
     return (
       <View>
         <IgnoredLine onUndo={() => change(false)} />

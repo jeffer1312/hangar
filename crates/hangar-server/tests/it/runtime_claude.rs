@@ -1201,8 +1201,9 @@ fn notice_hook_block_reaches_the_person_when_the_model_would_not_see_it() {
     let mut engine = turn_engine();
     let block = |name:&str,id:&str| json!({"type":"system","subtype":"hook_response","hook_id":id,"hook_name":name,
         "hook_event":name.split(':').next().unwrap(),"stderr":"prompt recusado pela regra","outcome":"error","exit_code":2});
-    assert_eq!(notes(&line(&mut engine,block("SessionStart:startup","u"),10.0)),
-        vec!["Hook falhou — SessionStart:startup: prompt recusado pela regra".to_owned()]);
+    let blocked = line(&mut engine,block("SessionStart:startup","u"),10.0);
+    assert_eq!(notes(&blocked),vec!["Hook falhou — SessionStart:startup: prompt recusado pela regra".to_owned()]);
+    assert_eq!(note_meta(&blocked),vec![json!({"subject":"SessionStart:startup"})],"bloqueio não tem chave de ignorar");
     assert!(notes(&line(&mut engine,block("UserPromptSubmit","b"),10.5)).is_empty(),"o prompt barrado já é bolha retida");
     assert!(notes(&line(&mut engine,block("PreToolUse:Bash","p"),11.0)).is_empty(),"o motivo vai ao modelo pelo tool_result");
     assert!(notes(&line(&mut engine,block("Stop","s"),12.0)).is_empty(),"o motivo vai ao modelo, que segue o turno");

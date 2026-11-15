@@ -84,9 +84,22 @@ impl Hangar {
             && self.ignored_here().is_some_and(|ignored| notice_hidden(event, ignored))
     }
 
-    /// A lista de avisos ignorados mudou: as linhas da conversa aberta mudam de altura.
+    /// Chegou a lista da máquina (evento da lista, a fonte em ordem): o "ignorado · Desfazer" de uma chave que outro
+    /// aparelho voltou a mostrar sai, e as linhas da conversa aberta mudam de altura.
     pub(super) fn notice_ignores_changed(&mut self, server: &str, cx: &mut Context<Self>) {
         if server != self.open_server() { return; }
+        if let Some(keys) = self.notice_ignores.get(server).cloned() {
+            self.notice_acted.retain(|_, acted| !matches!(acted, Acted::Ignored(key) if !keys.contains(key)));
+        }
+        self.redraw_notice_lines(cx);
+    }
+
+    /// Ações locais de Ignorar valem até recarregar a conversa; o erro da lista das Configurações fica.
+    pub(super) fn forget_notice_actions(&mut self) {
+        self.notice_acted.retain(|_, acted| !matches!(acted, Acted::Ignored(_)));
+    }
+
+    fn redraw_notice_lines(&mut self, cx: &mut Context<Self>) {
         self.follow_content_changed(cx);
         self.list_state.remeasure();
         self.redraw(panes::Area::Conversation, cx);
@@ -108,20 +121,21 @@ impl Hangar {
         let body = json!({"key": key, "ignored": ignored});
         run(&self.runtime, async move { api.server_send(reqwest::Method::PUT, &["notice-ignores"], Some(body), 15).await }, window, cx,
             move |this, result, _, cx| {
+                // A lista em si chega pelo evento `notice_ignores`, em ordem: a resposta de um PUT antigo que chegasse
+                // depois traria de volta uma lista velha.
                 match result {
-                    Ok(list) => {
+                    Ok(_) => {
                         this.notice_acted.remove(&event_id);
                         if ignored { this.notice_acted.insert(event_id, Acted::Ignored(key)); }
                         // Voltou a mostrar (aqui ou nas Configurações): as linhas "ignorado · Desfazer" dessa chave saem.
                         else { this.notice_acted.retain(|_, acted| *acted != Acted::Ignored(key.clone())); }
-                        store(&mut this.notice_ignores, &server, &list);
                     }
                     Err(error) => {
                         let why = format!("{} · {}", tr_shared("notice_ignore_failed", &[]), Hangar::fetch_failure(&error));
                         this.notice_acted.insert(event_id, Acted::Failed(why));
                     }
                 }
-                this.notice_ignores_changed(&server, cx);
+                if server == this.open_server() { this.redraw_notice_lines(cx); }
             });
     }
 

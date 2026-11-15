@@ -491,7 +491,7 @@ fn delivery_is_current(connection: u64, selection: Option<u64>, current_connecti
 }
 /// `offset`: onde a fonte deste pedaço começa na fonte inteira da resposta desenhada em pedaços (`{id}#s0`…).
 struct RichText { source: String, view: Entity<TextViewState>, _observer: Subscription, touched: u64, row: String, offset: Option<usize> }
-enum ChatUpdate { Message(ChatEvent), Preview(Preview), State(SessionState), Question(Option<Ask>), Thinking(String), LiveTool(Option<LiveTool>), CommandOutput(HashMap<String, String>), Reset }
+enum ChatUpdate { Message(ChatEvent), NoticeUpdate(ChatEvent), Preview(Preview), State(SessionState), Question(Option<Ask>), Thinking(String), LiveTool(Option<LiveTool>), CommandOutput(HashMap<String, String>), Reset }
 
 #[derive(Default)]
 struct SystemNotifications {
@@ -1645,6 +1645,7 @@ impl Hangar {
 
     fn open_session(&mut self, open_api: Option<Api>, session: SessionInfo, window: &mut Window, cx: &mut Context<Self>) {
         api::open_trace_start(&session.name);
+        self.forget_notice_actions();
         // Outra conversa escolhida no meio da criação: a mensagem segue sendo enviada, mas a bolha é da tela que ficou.
         self.opening = None;
         // Vindo da tela sem sessão (nova conversa ou conversa fechada), o texto dela fica guardado com ela.
@@ -2562,12 +2563,7 @@ impl Hangar {
     fn accept_chat_frame(&mut self, event: &str, data: serde_json::Value, window: &mut Window, cx: &mut Context<Self>) -> (bool, Changed) {
         let update = match event {
             "message" | "queue_confirmed" => serde_json::from_value(data).map(ChatUpdate::Message),
-            // Nota que já existia com o total novo: sem ela na tela, entraria como nota nova no fim da conversa.
-            "notice_update" => match serde_json::from_value::<ChatEvent>(data) {
-                Ok(event) if self.chat.events.iter().any(|known| known.id == event.id) => Ok(ChatUpdate::Message(event)),
-                Ok(_) => return (true, Changed::Nothing),
-                Err(error) => Err(error),
-            },
+            "notice_update" => serde_json::from_value(data).map(ChatUpdate::NoticeUpdate),
             "preview" => serde_json::from_value(data).map(ChatUpdate::Preview),
             "state" => serde_json::from_value(data).map(ChatUpdate::State),
             "saida" => serde_json::from_value(data).map(ChatUpdate::CommandOutput),
@@ -2677,6 +2673,11 @@ impl Hangar {
 
     fn apply_chat_update(&mut self, update: ChatUpdate, window: &mut Window, cx: &mut Context<Self>) {
         match update {
+            // Nota que já existia com o total novo: sem ela na tela, entraria como nota nova no fim da conversa. Aplicada
+            // depois do histórico (fica em `pending_chat` enquanto ele carrega).
+            ChatUpdate::NoticeUpdate(event) => {
+                if self.chat.events.iter().any(|known| known.id == event.id) { self.chat.apply(event); }
+            }
             ChatUpdate::Message(event) => {
                 // A bolha da fila já mostra o envio: a de saída seria a segunda cópia até a resposta do POST.
                 if event.kind == "user_msg" {

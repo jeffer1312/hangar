@@ -1,7 +1,7 @@
 import { Pressable, Text } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import { useServers } from '../../stores/servers';
-import { setNoticeIgnores, useSessions } from '../../stores/sessions';
+import { useSessions } from '../../stores/sessions';
 import { SettingsRow } from '../config/SettingsRow';
 import { toast } from '../../ui/Toast';
 import { putNoticeIgnore } from './api';
@@ -14,8 +14,7 @@ export function IgnoredNotices() {
   const keys = useSessions((s) => (serverId ? s.noticeIgnores[serverId] : undefined));
   if (!serverId || !keys) return null;
   const showAgain = (key: string) => {
-    putNoticeIgnore(serverId, key, false).then(
-      (next) => { if (next) setNoticeIgnores(serverId, next); },
+    putNoticeIgnore(serverId, key, false).catch(
       (error: unknown) => toast.erro(`${m.notice_ignore_failed()} · ${error instanceof Error ? error.message : String(error)}`),
     );
   };

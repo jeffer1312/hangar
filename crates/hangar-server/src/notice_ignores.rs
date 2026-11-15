@@ -43,7 +43,11 @@ impl Feed {
         let recent = |at: &Option<std::time::Instant>| at.is_some_and(|at| at.elapsed() < RETRY_UNREADABLE);
         if recent(&self.unreadable_at.lock().unwrap_or_else(|e| e.into_inner())) { return Some(Err("notice_ignores_unreadable")); }
         match tokio::task::spawn_blocking(move || hangar_notice_ignores::load(&home)).await {
-            Ok(Ok(keys)) => Some(Ok(self.store(&keys))),
+            // Um PUT publicado durante a leitura vence: a lista lida aqui pode ser a de antes dele.
+            Ok(Ok(keys)) => {
+                let mut json = self.json.lock().unwrap_or_else(|e| e.into_inner());
+                Some(Ok(json.get_or_insert_with(|| body(&keys).to_string().into()).clone()))
+            }
             _ => {
                 *self.unreadable_at.lock().unwrap_or_else(|e| e.into_inner()) = Some(std::time::Instant::now());
                 Some(Err("notice_ignores_unreadable"))

@@ -235,7 +235,7 @@ Desenho: a linha centralizada de hoje (13 pt, apagada) ganha os fios, o ícone e
 
 - [ ] **Step 1: Mock do celular sobre o print dele, aprovado por letra**
 - [ ] **Step 2: Testes que falham** (`noticeTitle`, `noticeHidden`, `MessageList` desenha a linha para evento com `notice_meta`, esconde o ignorado e não mostra "Ignorar" no aviso sem `key`)
-- [ ] **Step 3: Rodar e ver falhar** — pelo script `test` de cada `package.json` (o do mobile compila o i18n antes, e chave nova exige isso), filtrando o arquivo, sob a trava da máquina: `flock -w 900 /tmp/hangar-verificacao.lock npm --prefix mobile test -- src/chat/MessageList.test.tsx` e o mesmo com `--prefix packages/core` e `src/noticeLine.test.ts`
+- [ ] **Step 3: Rodar e ver falhar** — pelo script `test` de cada `package.json` (o do mobile compila o i18n antes, e chave nova exige isso), filtrando o arquivo (o script já pega a trava da máquina): `npm --prefix mobile test -- src/chat/MessageList.test.tsx` e o mesmo com `--prefix packages/core` e `src/noticeLine.test.ts`
 - [ ] **Step 4: Implementar**
 - [ ] **Step 5: Rodar e ver passar**
 - [ ] **Step 6: Verificação manual no iPhone** (linha fechada, aberta, ignorada, rótulo; tema claro e escuro)

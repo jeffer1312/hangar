@@ -142,7 +142,8 @@ const DIARY_PER_KIND: u32 = 30;
 struct RunningHook { name:String, started:f64, shown:bool }
 
 /// `id`: a linha da nota na fila; `shown`: o total que ela já mostra.
-struct HookFails { id:String, detail:String, count:u32, shown:u32 }
+/// `blocking`: `exit 2`, o hook decidindo; bloqueio não ganha chave de ignorar, nem quando a nota é regravada.
+struct HookFails { id:String, detail:String, count:u32, shown:u32, blocking:bool }
 
 const STOP_LABEL: &str = "Um hook parou o turno";
 const STOP_LABEL_S: f64 = 8.0;
@@ -1431,8 +1432,9 @@ impl ClaudeEngine {
         }
         let detail = format!("{name}: {reason}");
         let id = format!("hookfail:{}:{}",(self.clock.epoch_s*1000.0) as u64,self.hook_fails.len());
-        self.hook_notice(&id,&name,&detail,1,effects);
-        self.hook_fails.insert(name,HookFails { id,detail,count:1,shown:1 });
+        let blocking = event["exit_code"].as_i64() == Some(2);
+        self.hook_notice(&id,&name,&detail,1,blocking,effects);
+        self.hook_fails.insert(name,HookFails { id,detail,count:1,shown:1,blocking });
     }
 
     /// O evento só é montado se ainda cabe: passado o teto, hook com saída grande não custa cópia.
@@ -1458,16 +1460,17 @@ impl ClaudeEngine {
     /// A nota de cada hook é uma só: a falha que repetiu regrava a mesma linha com o total. Vários hooks dividem o
     /// mesmo nome (`PostToolUse:Bash`), então o sucesso de um não zera a conta do outro.
     fn flush_hook_fails(&mut self,effects:&mut Vec<Effect>) {
-        let stale:Vec<(String,String,String,u32)> = self.hook_fails.iter_mut().filter(|(_,fails)|fails.count != fails.shown).map(|(name,fails)|{
+        let stale:Vec<(String,String,String,u32,bool)> = self.hook_fails.iter_mut().filter(|(_,fails)|fails.count != fails.shown).map(|(name,fails)|{
             fails.shown = fails.count;
-            (fails.id.clone(),name.clone(),format!("{} (falhou {} vezes)",fails.detail,fails.count),fails.count)
+            (fails.id.clone(),name.clone(),format!("{} (falhou {} vezes)",fails.detail,fails.count),fails.count,fails.blocking)
         }).collect();
-        for (id,name,detail,count) in stale { self.hook_notice(&id,&name,&detail,count,effects); }
+        for (id,name,detail,count,blocking) in stale { self.hook_notice(&id,&name,&detail,count,blocking,effects); }
     }
 
     /// `entry_id` fixo por hook: a fila troca o texto da linha que já existe em vez de empilhar outra.
-    fn hook_notice(&mut self,id:&str,name:&str,detail:&str,count:u32,effects:&mut Vec<Effect>) {
-        let mut meta = json!({"key":format!("hook:{name}"),"subject":name});
+    fn hook_notice(&mut self,id:&str,name:&str,detail:&str,count:u32,blocking:bool,effects:&mut Vec<Effect>) {
+        let mut meta = json!({"subject":name});
+        if !blocking { meta["key"] = json!(format!("hook:{name}")); }
         if count > 1 { meta["count"] = json!(count); }
         self.policy("local_output",json!({"text":format!("Hook falhou — {detail}"),"hook_error":detail,"notice":"hook_failed","entry_id":id,"meta":meta}),effects);
     }
