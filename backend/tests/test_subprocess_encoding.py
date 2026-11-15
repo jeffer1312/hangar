@@ -25,7 +25,7 @@ APP = Path(__file__).resolve().parent.parent / "app"
 
 # Modulos que rodam CLI e leem a saida. Nao e a lista de TODOS os subprocess do backend: quem so
 # olha returncode (renova_token) ou manda bytes (tts) nao decodifica nada.
-MODULOS = ["loop.py", "tmux.py"]
+MODULOS = ["tmux.py"]
 
 
 def _chamadas_sem_encoding(caminho: Path) -> list[int]:
