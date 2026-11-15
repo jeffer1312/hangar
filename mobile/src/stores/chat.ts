@@ -559,7 +559,8 @@ function criarChatStore(serverId: string, name: string): ChatApi {
     const drop = (onlyListed: boolean) => {
       if (!alive) return;
       const { pending, queuePanel } = useChatStore.getState();
-      const echo = pending.find((p) => p.entry === entry && p.solid);
+      // No prazo final sai também o eco do painel: a bolha da fila, escondida por ele, é quem mostra a falha.
+      const echo = pending.find((p) => p.entry === entry && (p.solid || !onlyListed));
       if (!echo || (onlyListed && !queuePanel?.entries.some((e) => `queued-${e.id}` === entry))) return;
       useChatStore.setState({ pending: pending.filter((p) => p !== echo) });
     };
@@ -749,8 +750,14 @@ function criarChatStore(serverId: string, name: string): ChatApi {
         const removed = queueRemovedBubbleIds(data);
         const events = dropQueuedBubbles(useChatStore.getState().events, removed);
         const queuePanel = parseQueuePanel(data);
-        const pending = settleQueued(useChatStore.getState().pending, queuePanel?.entries.map((entry) => entry.text) ?? [], removed);
+        const before = useChatStore.getState().queuePanel;
+        const pending = settleQueued(useChatStore.getState().pending, queuePanel?.entries ?? [], removed);
         publishEvents(events, 'rebuild', { queuePanel, pending });
+        // A entrada pode aparecer no painel depois do prazo contado na chegada da bolha: o eco da conversa sai com ele.
+        const listed = (panel: typeof queuePanel, entry: string) => !!panel?.entries.some((e) => `queued-${e.id}` === entry);
+        for (const p of pending) {
+          if (p.entry && p.solid && listed(queuePanel, p.entry) && !listed(before, p.entry)) settleEcho(p.entry);
+        }
       } catch {
         quadroFalhou('queue');
       }
@@ -1079,7 +1086,8 @@ function criarChatStore(serverId: string, name: string): ChatApi {
         const queue = state === 'working' && mode !== 'steer' && !(typeof mode === 'object' && mode.kind === 'direct');
         // A bolha `queued-` da fila durável sai depois, e o registro real chega com outro id.
         const afterId = useChatStore.getState().events.findLast((e) => e.kind === 'user_msg' && !e.id.startsWith('queued-'))?.id;
-        useChatStore.setState((s) => ({ pending: [...s.pending, { id, text: trimmed, solid, afterId, ...(queue && { queue }) }] }));
+        useChatStore.setState((s) => ({ pending: [...s.pending, { id, text: trimmed, solid, afterId,
+          ...(queue && { queue, known: s.queuePanel?.entries.map((entry) => entry.id) ?? [] }) }] }));
         try {
           if (mode === 'steer') await steerSession(name, trimmed, target);
           else if (mode) showDeliveryFeedback(await sendWithDelivery(target, name, trimmed, mode));

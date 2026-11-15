@@ -9,6 +9,8 @@ export interface PendingMsg {
   afterId?: string;
   /** Enviada com a sessão trabalhando: o lugar dela é o painel "Na fila", não o fim da conversa. */
   queue?: boolean;
+  /** As entradas que o painel já listava no envio: nenhuma delas é a deste eco. */
+  known?: string[];
   /** A bolha `queued-` do servidor que este eco representa: ela fica escondida enquanto o eco existir. */
   entry?: string;
 }
@@ -27,11 +29,20 @@ export function bindQueued(pending: PendingMsg[], incoming: ChatEvent): PendingM
   return pending.map((p, i) => (i === at ? { ...p, entry: incoming.id } : p));
 }
 
-/** O painel do servidor mudou: o eco de quem ia para a fila sai quando a entrada aparece lá (a linha do servidor
- *  toma o lugar), e o eco de entrada apagada sai junto. */
-export function settleQueued(pending: PendingMsg[], listed: string[], removed: string[]): PendingMsg[] {
-  const texts = new Set(listed.map((text) => text.trim()));
-  const next = pending.filter((p) => !(p.queue && texts.has(p.text.trim())) && !(p.entry && removed.includes(p.entry)));
+/** O painel do servidor mudou: o eco de quem ia para a fila sai quando a entrada dele aparece lá (a linha do
+ *  servidor toma o lugar), e o eco de entrada apagada sai junto. Cada entrada tira um eco só, e nunca uma que já
+ *  estava no painel quando ele foi enviado: duas mensagens iguais são duas linhas. */
+export function settleQueued(pending: PendingMsg[], listed: readonly { id: string; text: string }[], removed: string[]): PendingMsg[] {
+  const taken = new Set<string>();
+  const next = pending.filter((p) => {
+    if (p.entry && removed.includes(p.entry)) return false;
+    if (!p.queue) return true;
+    if (p.entry && listed.some((e) => `queued-${e.id}` === p.entry)) return false;
+    const entry = listed.find((e) => !taken.has(e.id) && !p.known?.includes(e.id) && e.text.trim() === p.text.trim());
+    if (!entry) return true;
+    taken.add(entry.id);
+    return false;
+  });
   return next.length === pending.length ? pending : next;
 }
 

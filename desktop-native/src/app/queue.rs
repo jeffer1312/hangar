@@ -338,7 +338,8 @@ impl Hangar {
         if live != self.queue.open {
             // Inverter no meio parte da fração em que o painel estava.
             let from = self.queue.fraction();
-            (self.queue.open, self.queue.slide) = (live, moving.then(|| (from, live, Instant::now())));
+            // Sem deslize não há movimento para esperar: o painel abre e fecha no mesmo quadro.
+            (self.queue.open, self.queue.slide) = (live, (moving && slides).then(|| (from, live, Instant::now())));
             send_flight::trace(|| format!("queue panel {} from fraction {from:.2} slides={} rows={} local_row={}", if live { "opens" } else { "closes" },
                 moving && slides, entries.len(), entries.iter().any(|e| e.id == send_flight::LOCAL_QUEUE)));
         }

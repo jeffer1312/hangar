@@ -30,7 +30,6 @@ import { SideQuestionSheet } from './SideQuestionSheet';
 import { SlashSuggest } from './SlashSuggest';
 import { QueuePanel } from './QueuePanel';
 import { useReducedMotion } from 'react-native-reanimated';
-import { echoInQueuePanel } from '@hangar/core';
 import { flightRoute } from './SendFlight';
 import { takeoff } from './sendFlight';
 import { queueSendMode, type DeliveryFeedback, type QueueSendMode } from './queueDelivery';
@@ -198,7 +197,7 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
   const pending = chat.use((s) => s.pending);
   const reducedMotion = useReducedMotion();
   // O envio feito com a sessão trabalhando nasce no painel "Na fila", até a entrada do servidor aparecer nele.
-  const queueLocals = useMemo(() => pending.filter((p) => p.queue && !echoInQueuePanel(p.text, queueList)), [pending, queueList]);
+  const queueLocals = useMemo(() => pending.filter((p) => p.queue), [pending]);
   const events = chat.use((s) => s.events);
   const draftUpdate = chat.use((s) => s.draftUpdate);
   const state = chat.use((s) => s.stateEvent?.state ?? 'idle');
@@ -749,8 +748,9 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
     }
     if (blockedRef.current || !persistText(textRef.current)) return;
     const sentRevision = draftRef.current!.revision;
-    // Só o envio de texto puro viaja do campo ao destino; com anexo, citação ou para o grupo o eco nasce depois.
-    if (!hasAttach && !sentRefs.length && !reducedMotion && !firstInputId && !(sendToPair && pairPeers?.length)) {
+    // Só o envio de texto puro viaja do campo ao destino; com anexo, citação ou para o grupo o eco nasce depois,
+    // e comando não vira mensagem.
+    if (!hasAttach && !sentRefs.length && !reducedMotion && !firstInputId && !trimmed.startsWith('/') && !(sendToPair && pairPeers?.length)) {
       takeoff(flightRoute(serverId, name), trimmed, inputRef.current);
     }
     sendingRef.current = true;

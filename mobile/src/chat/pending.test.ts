@@ -103,9 +103,25 @@ describe('eco que passa pela fila', () => {
   test('o eco da fila sai quando o servidor lista a entrada; o da conversa fica', () => {
     const queue = { ...p('na fila', 'p1'), queue: true };
     const solid = { ...p('na conversa', 'p2'), solid: true, entry: 'queued-2' };
-    expect(settleQueued([queue, solid], [' na fila ', 'na conversa'], [])).toEqual([solid]);
+    expect(settleQueued([queue, solid], [{ id: '1', text: ' na fila ' }, { id: '2', text: 'na conversa' }], [])).toEqual([solid]);
     const same = [queue, solid];
-    expect(settleQueued(same, ['outra'], [])).toBe(same);
+    expect(settleQueued(same, [{ id: '9', text: 'outra' }], [])).toBe(same);
+  });
+
+  test('duas mensagens iguais: cada entrada tira um eco só, e a que já estava no painel não tira nenhum', () => {
+    const first = { ...p('ok', 'p1'), queue: true, known: [] };
+    const second = { ...p('ok', 'p2'), queue: true, known: [] };
+    expect(settleQueued([first, second], [{ id: '1', text: 'ok' }], [])).toEqual([second]);
+    // Enviada com um "ok" antigo ainda esperando: a entrada antiga não é a dela.
+    const later = { ...p('ok', 'p3'), queue: true, known: ['1'] };
+    const kept = [later];
+    expect(settleQueued(kept, [{ id: '1', text: 'ok' }], [])).toBe(kept);
+    expect(settleQueued(kept, [{ id: '1', text: 'ok' }, { id: '2', text: 'ok' }], [])).toEqual([]);
+  });
+
+  test('o eco do painel preso a uma bolha sai quando a entrada dela é listada, mesmo com outro texto', () => {
+    const bound = { ...p('com  espaço', 'p1'), queue: true, entry: 'queued-5' };
+    expect(settleQueued([bound], [{ id: '5', text: 'com espaço' }], [])).toEqual([]);
   });
 
   test('entrada apagada leva o eco preso a ela', () => {
