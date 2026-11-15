@@ -155,18 +155,18 @@ async fn r5_09_every_owner_route_the_python_had_refuses_the_stranger_with_the_ex
     let (python, upstream) = spawn_fake().await;
     let srv = spawn_server(config(upstream, "127.0.0.1")).await;
     let refused: Value = serde_json::from_str(REFUSED).unwrap();
-    let session = ["input", "steer", "interrupt", "select", "select/submit", "answer", "keys", "term-input", "rename", "recarregar",
+    // Só as que o Rust atende sozinho: as que ainda têm handler no Python (`@app`/`@router` em
+    // `backend/app`) e o `jev/*`, que o Rust repassa, ficam fora.
+    let session = ["input", "steer", "interrupt", "select", "select/submit", "answer", "keys", "term-input", "recarregar",
         "modo-execucao", "model-effort", "permission-mode", "model", "service-tier", "codex/mode", "codex/plan/implement",
-        "question/skip", "plugin/press", "pair", "pair-remote", "unpair-remote", "group-message", "resume", "pair-invite",
-        "pair-accept", "pair-access", "transcribe"].map(|rest| ("POST", format!("/api/sessions/s0/{rest}")));
-    let reads = ["btw", "conta", "permission-modes", "models", "limits", "codex-permissions", "commands", "history", "subagents",
-        "navegador", "pair/contract", "group", "share", "bash-output", "tool-progress/t1", "transcript-image/u1/0"]
+        "question/skip", "plugin/press", "pair", "pair-remote", "unpair-remote", "group-message", "resume", "transcribe"]
+        .map(|rest| ("POST", format!("/api/sessions/s0/{rest}")));
+    let reads = ["btw", "conta", "permission-modes", "models", "limits", "codex-permissions", "commands", "history",
+        "pair/contract", "group", "bash-output", "tool-progress/t1", "transcript-image/u1/0"]
         .map(|rest| ("GET", format!("/api/sessions/s0/{rest}")));
     let others = [("DELETE", "/api/sessions/s0/queue/e1"), ("DELETE", "/api/sessions/s0/pair"), ("POST", "/api/broadcast"),
-        ("POST", "/api/sessions"), ("PUT", "/api/sessions/prewarm"), ("POST", "/api/archive/p/id/resume"), ("GET", "/api/external-pairs"),
-        ("GET", "/api/share/prereqs"), ("POST", "/api/mermaid"), ("GET", "/api/client-api"), ("GET", "/api/jev/aux/models"),
-        ("GET", "/api/jev/delivery"), ("GET", "/api/claude/customizations"), ("GET", "/api/search"), ("GET", "/api/archive"),
-        ("POST", "/api/ask-history"), ("GET", "/api/migration/status"), ("GET", "/api/session-defaults")]
+        ("POST", "/api/sessions"), ("POST", "/api/archive/p/id/resume"), ("GET", "/api/claude/customizations"), ("GET", "/api/search"),
+        ("GET", "/api/archive"), ("POST", "/api/ask-history")]
         .map(|(method, path)| (method, path.to_owned()));
     let routes: Vec<(&str, String)> = session.into_iter().chain(reads).chain(others).collect();
     assert!(routes.len() < 250, "uma origem por rota");

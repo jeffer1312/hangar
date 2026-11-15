@@ -254,11 +254,11 @@ fn sidecar_absent_by(path:&std::path::Path,read:impl FnOnce(&std::path::Path)->s
 }
 
 /// O arquivo já existe: esta operação nunca cadastra nem prepara uma conta.
-/// O chamador segura a lease do Store e o portão de revisão do ator.
-pub fn delete_sidecar(target:&super::protocol::RuntimeTarget,conversation:&str)->Result<(),RuntimeError> {
+/// O chamador segura a lease do Store e o portão de revisão do ator. `dir`: a pasta em que o registro
+/// abriu a sessão, a mesma que o ator grava.
+pub fn delete_sidecar(dir:&std::path::Path,target:&super::protocol::RuntimeTarget,conversation:&str)->Result<(),RuntimeError> {
     if target.provider!="claude" || target.name.is_empty() || !target.name.bytes().all(|b|b.is_ascii_alphanumeric() || b"._-".contains(&b)) {return Err(failure("lifecycle_sidecar_path"));}
-    let dir=claude_sidecar_dir()?;
-    super::codex_sidecar::locked(&dir,&target.name,|path|Ok(delete_locked(path,target,conversation))).map_err(|_|failure("lifecycle_sidecar_lock"))?
+    super::codex_sidecar::locked(dir,&target.name,|path|Ok(delete_locked(path,target,conversation))).map_err(|_|failure("lifecycle_sidecar_lock"))?
 }
 fn delete_locked(path:&std::path::Path,target:&super::protocol::RuntimeTarget,conversation:&str)->Result<(),RuntimeError> {
     let bytes=match super::queue::read_replaced(path) {Ok(bytes)=>bytes,Err(error) if error.kind()==std::io::ErrorKind::NotFound=>return Ok(()),Err(_)=>return Err(failure("lifecycle_sidecar_read"))};
