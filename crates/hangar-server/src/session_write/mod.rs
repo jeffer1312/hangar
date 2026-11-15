@@ -152,7 +152,10 @@ pub(crate) async fn not_owner(st: &AppState, peer: SocketAddr, req: Request) -> 
 /// Quem não pode escrever nesta sessão: o Python não tem mais as rotas, a recusa é daqui. Convidado
 /// com login fora do alcance dele é 403 e não perde o login; desconhecido recebe o 401 contado.
 pub(crate) async fn stranger(st: &AppState, peer: SocketAddr, req: Request, who: Option<&Caller>) -> Response {
-    if !matches!(who, Some(Caller::Guest(_))) { return crate::routes::refuse_without_python(st, peer, req, None).await; }
+    // Convidado de convite (8766) leva o código do convite; o de login (8765), o do convidado.
+    if !matches!(who, Some(Caller::Guest(_))) || crate::routes::on_guest_port(&req) {
+        return crate::routes::refuse_without_python(st, peer, req, who).await;
+    }
     let mut response = detail(StatusCode::FORBIDDEN, "erro_fora_do_convidado", "fora do acesso do convidado", json!({}));
     cors(req.headers(), response.headers_mut());
     response
