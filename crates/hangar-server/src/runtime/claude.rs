@@ -1462,10 +1462,11 @@ impl ClaudeEngine {
     /// A nota de cada hook é uma só: a falha que repetiu regrava a mesma linha com o total. Vários hooks dividem o
     /// mesmo nome (`PostToolUse:Bash`), então o sucesso de um não zera a conta do outro.
     fn flush_hook_fails(&mut self,effects:&mut Vec<Effect>) {
-        let stale:Vec<(String,String,String,u32,bool)> = self.hook_fails.iter_mut().filter(|(_,fails)|fails.count != fails.shown).map(|(name,fails)|{
+        let mut stale = Vec::new();
+        for (name,fails) in self.hook_fails.iter_mut().filter(|(_,fails)|fails.count != fails.shown) {
             fails.shown = fails.count;
-            (fails.id.clone(),name.clone(),format!("{} (falhou {} vezes)",fails.detail,fails.count),fails.count,fails.blocking)
-        }).collect();
+            stale.push((fails.id.clone(),name.clone(),format!("{} (falhou {} vezes)",fails.detail,fails.count),fails.count,fails.blocking));
+        }
         for (id,name,detail,count,blocking) in stale { self.hook_notice(&id,&name,&detail,count,blocking,effects); }
     }
 
