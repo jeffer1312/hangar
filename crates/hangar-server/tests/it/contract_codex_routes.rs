@@ -94,6 +94,11 @@ async fn open(registry: &RuntimeRegistry, dir: &std::path::Path, case: &Value) {
 }
 
 async fn serve(registry: Arc<RuntimeRegistry>, home: &std::path::Path) -> (Arc<Fake>, std::net::SocketAddr) {
+    serve_list(registry, home, true).await
+}
+
+/// `dirs: false`: a lista sem as pastas das sessões, que responde como fora do ar.
+async fn serve_list(registry: Arc<RuntimeRegistry>, home: &std::path::Path, dirs: bool) -> (Arc<Fake>, std::net::SocketAddr) {
     let (python, upstream) = spawn_fake().await;
     let mut state = AppState::new(config(upstream, "127.0.0.1"));
     state.accounts = hangar_server::accounts::AccountService::new(
@@ -106,7 +111,7 @@ async fn serve(registry: Arc<RuntimeRegistry>, home: &std::path::Path) -> (Arc<F
     let mut list_env = hangar_server::list::bridge::ListEnv::from_env();
     list_env.dirs = hangar_server::list::bridge::parse_dirs(&json!({"home": home, "claude": home.join(".claude"),
         "codex_home": home.join(".codex"), "pi_sessions": home.join(".pi/agent/sessions"), "omp_config": home.join(".omp"),
-        "omp_agent": home.join(".omp/agent"), "kimi_home": home.join(".kimi-code")}).to_string());
+        "omp_agent": home.join(".omp/agent"), "kimi_home": home.join(".kimi-code")}).to_string()).filter(|_| dirs);
     state.list = Arc::new(hangar_server::list::bridge::ListBridge::new(list_env,
         hangar_server::list::facts::FactsClient::new(upstream, SECRET.into())));
     assert!(state.state.runtime.set(registry).is_ok());
@@ -431,7 +436,7 @@ async fn reading_the_permission_mode_of_a_sidecar_rust_does_not_adopt_comes_from
 #[tokio::test]
 async fn reload_with_the_list_unavailable_is_503_list_unavailable() {
     let dir = tempfile::tempdir().unwrap();
-    let (python, server) = serve(Arc::new(registry(dir.path())), dir.path()).await;
+    let (python, server) = serve_list(Arc::new(registry(dir.path())), dir.path(), false).await;
     let (status, body) = raw(server, "POST", "recarregar", Value::Null).await;
     assert_eq!((status, body["detail"]["code"].as_str(), body["detail"]["params"]["detalhe"].as_str()),
         (503, Some("erro_lista_indisponivel"), Some("list_dirs_missing")), "{body}");
