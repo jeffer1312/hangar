@@ -720,8 +720,9 @@ where H: axum::handler::Handler<T, Arc<AppState>>, T: 'static {
         .route("/api/sessions/{name}/rename", axum::routing::post(crate::session_rename::route).fallback(pass_any))
         .route("/api/sessions/{name}/reopen", axum::routing::post(crate::session_open::fallen::reopen_route).fallback(fallback.clone()))
         .route("/api/sessions/{name}/dismiss", axum::routing::post(crate::session_open::fallen::dismiss_route).fallback(fallback.clone()))
-        // Relançar e trocar de conta: o convidado completo recarrega (decisão 2); modo e conta são só do dono,
-        // e o handler recusa o convidado nas duas portas.
+        // Relançar, retomar e trocar de conta: o convidado completo recarrega (decisão 2); modo, retomada e
+        // conta são só do dono, e o handler recusa o convidado nas duas portas.
+        .route("/api/sessions/{name}/resume", axum::routing::post(crate::session_write::resume::route).fallback(fallback.clone()))
         .route("/api/sessions/{name}/modo-execucao", axum::routing::post(crate::session_write::relaunch::mode).fallback(fallback.clone()))
         .route("/api/sessions/{name}/recarregar", axum::routing::post(crate::session_write::relaunch::reload).fallback(fallback.clone()))
         .route("/api/sessions/{name}/conta", get(crate::session_write::account::targets_route).fallback(fallback.clone()))
@@ -859,7 +860,6 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/archive-por-cwd", get(crate::archive_list::by_cwd).fallback(pass_registered))
         .route("/api/archive/{project}/{session_id}/history", get(crate::archive_history::history).fallback(pass_registered))
         .route("/api/archive/{project}/{session_id}/transcript-image/{uuid}/{idx}", get(crate::archive_history::image).fallback(pass_registered))
-        .route("/api/sessions/{name}/resume", axum::routing::post(crate::session_write::resume::route).fallback(pass_registered))
         // Broadcast do dono: o alvo Codex com terminal do Rust recebe aqui; o resto segue ao Python.
         .route("/api/broadcast", axum::routing::post(crate::session_write::input::broadcast).fallback(pass_registered))
         .route("/api/sessions/{name}/engine/model", axum::routing::post(crate::session_write::engine::model).fallback(pass_registered))

@@ -923,11 +923,13 @@ async fn guest_port_refuses_unserved_methods_and_owner_only_relaunches_in_rust()
         let (status, body) = send(method, route, json!({})).await;
         assert_eq!((status, body["detail"]["code"].clone()), (403, json!("erro_fora_do_convite")), "{route}: {body}");
     }
-    for (route, body) in [("modo-execucao", json!({"terminal": true})), ("conta", json!({"config_dir": "/x"}))] {
-        let (status, refused) = send(reqwest::Method::POST, route, body).await;
-        assert_eq!((status, refused["detail"]["code"].clone()), (403, json!("erro_fora_do_convidado")), "{route}: {refused}");
+    // Antes iam assinados ao Python pelo `pass_any` da 8766 (o "from-python" do dublê); agora é a recusa do handler.
+    let refused = json!({"detail": {"code": "erro_fora_do_convidado", "params": {}, "msg": "fora do acesso do convidado"}});
+    for (method, route, body) in [(reqwest::Method::POST, "modo-execucao", json!({"terminal": true})), (reqwest::Method::POST, "resume", json!({})),
+        (reqwest::Method::GET, "conta", json!({})), (reqwest::Method::POST, "conta", json!({"config_dir": "/x"}))] {
+        assert_eq!(send(method, route, body).await, (403, refused.clone()), "{route}");
     }
-    for route in ["permission-mode", "model-effort", "pane", "modo-execucao", "conta"] {
+    for route in ["permission-mode", "model-effort", "pane", "modo-execucao", "resume", "conta"] {
         assert_eq!(srv.python.hits_to(&format!("/api/sessions/s/{route}")), 0, "{route}");
     }
 }

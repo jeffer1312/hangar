@@ -133,7 +133,8 @@ async fn r5_owner_routes_refuse_the_stranger_on_the_method_python_had() {
 }
 
 /// Troca de modo, retomada e troca de conta são só do dono: o estranho leva o 401 e o convidado com login,
-/// mesmo o que vê a sessão, o 403, sem repasse ao Python.
+/// mesmo o que vê a sessão, o 403, sem repasse ao Python. Na 8765 é guarda: a base já recusava pelo
+/// `gate` + `not_owner_refusal`; o caso que mudou é a 8766, em `share_guest_serving.rs`.
 #[tokio::test]
 async fn r5_owner_only_relaunch_routes_refuse_everyone_else_in_rust() {
     let (python, srv, _home) = with_guests().await;
