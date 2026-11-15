@@ -122,11 +122,12 @@ export function useDream() {
     };
     const open = () => {
       source = openDreamEvents(server, onEvent);
-      // Caiu (rede, servidor reiniciando, silêncio): reabre com espera crescente e relê o status. O `sawEvent`
-      // fica ligado, então o status relido não passa por cima do que o evento já disse.
+      // Caiu (rede, servidor reiniciando, silêncio): reabre com espera crescente e relê o status.
       source.onerror = () => {
         source?.close();
         source = null;
+        // Sem canal, o status relido é o mais novo que há: volta a valer até o próximo evento.
+        sawEvent.current = false;
         if (!alive || retry) return;
         retry = setTimeout(() => {
           retry = null;
