@@ -1490,8 +1490,3 @@ class SessionRegistry:
                 f"retomar so vale pra sessao Claude (esta e {prov}); "
                 f"feche o pane e abra de novo pelo wrapper `{prov}`")
         return read_only
-
-
-from app.runtime_adapter import registry_method as _runtime_registry_method
-for _method_name in ("kill",):
-    setattr(SessionRegistry, _method_name, _runtime_registry_method(getattr(SessionRegistry, _method_name)))
