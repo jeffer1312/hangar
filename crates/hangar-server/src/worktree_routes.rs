@@ -160,8 +160,9 @@ pub async fn public(st: Arc<AppState>, req: Request) -> Response {
     // Sem vaga de leitura: quem limita os `git` da lista é o teto global do núcleo, e pedido
     // que espera por ele não vira 503 de "ocupado" como no Python, que também esperava.
     let repo = params.get("repo").cloned();
+    let home = st.origins_home.clone();
     let done = tokio::task::spawn_blocking(move || -> hangar_workspace::Result<Value> {
-        if detail {
+        let value = if detail {
             worktrees::status_allowed(
                 &path.unwrap_or_default(),
                 &ctx.roots,
@@ -183,7 +184,8 @@ pub async fn public(st: Arc<AppState>, req: Request) -> Response {
             );
             let problem=worktrees::discovery_problem(&ctx.roots);
             Ok(json!({"repos": repos,"warning":problem.map(|_|"worktree_discovery_incomplete"),"discovery_partial":problem.is_some(),"discovery_problem":problem}))
-        }
+        }?;
+        with_inactivity_settings(value, &home, detail)
     })
     .await;
     match done {
@@ -200,6 +202,24 @@ pub async fn public(st: Arc<AppState>, req: Request) -> Response {
             )
         }
     }
+}
+
+fn with_inactivity_settings(mut value: Value, home: &Path, detail: bool) -> hangar_workspace::Result<Value> {
+    let settings = hangar_workspace::worktree_settings::WorktreeSettings::load_at(
+        &home.join(".hangar/worktree-settings.json"),
+    )?;
+    if detail {
+        value["inactive_days"] = json!(settings.inactive_days);
+    } else if let Some(repos) = value["repos"].as_array_mut() {
+        for repo in repos {
+            if let Some(worktrees) = repo["worktrees"].as_array_mut() {
+                for worktree in worktrees {
+                    worktree["inactive_days"] = json!(settings.inactive_days);
+                }
+            }
+        }
+    }
+    Ok(value)
 }
 
 async fn body<T: serde::de::DeserializeOwned>(req: Request) -> hangar_workspace::Result<T> {
@@ -588,6 +608,25 @@ async fn mutation(st: Arc<AppState>, req: Request, route: String) -> Response {
 mod tests {
     use super::*;
     use crate::list::mux::Pane;
+
+    #[test]
+    fn inactivity_settings_follow_saved_server_preferences_for_list_and_detail() {
+        use hangar_workspace::worktree_settings::WorktreeSettings;
+        let home = tempfile::tempdir().unwrap();
+        let file = home.path().join(".hangar/worktree-settings.json");
+        let list = json!({"repos":[{"repo":"/r","worktrees":[{"path":"/r/a"},{"path":"/r/b"}]}]});
+        for days in [Some(8), Some(30), None] {
+            WorktreeSettings { inactive_days: days, ..Default::default() }.save_at(&file, home.path()).unwrap();
+            let result = with_inactivity_settings(list.clone(), home.path(), false).unwrap();
+            for worktree in result["repos"][0]["worktrees"].as_array().unwrap() {
+                assert_eq!(worktree["inactive_days"], json!(days));
+            }
+            let detail = with_inactivity_settings(json!({"path":"/r/a"}), home.path(), true).unwrap();
+            assert_eq!(detail["inactive_days"], json!(days));
+        }
+        std::fs::write(&file, "inválido").unwrap();
+        assert!(with_inactivity_settings(list, home.path(), false).is_err());
+    }
 
     fn pane(session: &str, cwd: &str, dead: bool) -> Pane {
         Pane { session: session.into(), cwd: cwd.into(), dead, ..Pane::default() }

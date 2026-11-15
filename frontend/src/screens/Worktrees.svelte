@@ -2,7 +2,7 @@
   import { onMount, untrack } from 'svelte';
   import { basename, deleteWorktreeBatchForServer, fetchWorktreesForServer, getWorktreesForServer,
            mergedWorktreeBatch, relativeTime, worktreeAgeDays, worktreeIsAgent, worktreeReady, worktreeState,
-           worktreeTitle, WORKTREE_STALE_DAYS, type WorktreeBatchProgress, type WorktreeRepo, type WorktreeState,
+           worktreeTitle, worktreeStaleDays, type WorktreeBatchProgress, type WorktreeRepo, type WorktreeState,
            type WorktreeStatus } from '@hangar/core';
   import BottomSheet from '../components/BottomSheet.svelte';
   import Spinner from '../components/Spinner.svelte';
@@ -152,7 +152,7 @@
   // ── Filtros e contadores ──────────────────────────────────────────────────
   type Filtro = 'todas' | 'uso' | 'dirty' | 'prontas' | 'paradas' | 'sem_branch';
   let filtro = $state<Filtro>('todas');
-  const parada = (w: WorktreeStatus) => (worktreeAgeDays(w) ?? 0) > WORKTREE_STALE_DAYS;
+  const parada = (w: WorktreeStatus) => worktreeStaleDays(w) !== null;
   const passa: Record<Filtro, (w: WorktreeStatus) => boolean> = {
     todas: () => true,
     uso: (w) => w.sessions.length > 0,

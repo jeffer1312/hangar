@@ -1,5 +1,30 @@
 import { describe, expect, it } from 'vitest';
-import { runWorktreeBatch, worktreeLabel, worktreesSizeTotal, worktreeState, worktreeReady } from './api';
+import { runWorktreeBatch, worktreeLabel, worktreesSizeTotal, worktreeState, worktreeReady, worktreeStaleDays, type WorktreeStatus } from './api';
+
+describe('worktreeStaleDays', () => {
+  const now = 30 * 86400;
+  const w = (extra: Partial<WorktreeStatus>) => ({
+    path: '/r/wt', repo: '/r', exists: true, branch: 'topic', base: 'main', main_branch: 'main',
+    merged: false, ahead: 1, dirty: 0, ignored: [], sessions: [], closed: 0,
+    created_at: 20 * 86400, ...extra,
+  });
+
+  it('usa o prazo de cada servidor e inclui o dia em que ele vence', () => {
+    expect(worktreeStaleDays(w({ inactive_days: 8 }), now)).toBe(10);
+    expect(worktreeStaleDays(w({ inactive_days: 30 }), now)).toBeNull();
+    expect(worktreeStaleDays(w({ inactive_days: 10 }), now)).toBe(10);
+  });
+
+  it('não inventa prazo quando a opção está desligada ou o servidor não a informa', () => {
+    expect(worktreeStaleDays(w({ inactive_days: null }), now)).toBeNull();
+    expect(worktreeStaleDays(w({}), now)).toBeNull();
+  });
+
+  it('usa o commit quando disponível e não marca atividade desconhecida', () => {
+    expect(worktreeStaleDays(w({ inactive_days: 8, last_commit: { sha: 'abc', subject: '', at: 29 * 86400 } }), now)).toBeNull();
+    expect(worktreeStaleDays(w({ inactive_days: 8, created_at: null }), now)).toBeNull();
+  });
+});
 
 it('resíduo registrado nunca parece limpo ou mesclado', () => {
   const w = { exists: true, residual: true, sessions: [], dirty: 0, merged: true, branch: 'topic' } as never;

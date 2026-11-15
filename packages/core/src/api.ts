@@ -1702,6 +1702,7 @@ export interface WorktreeStatus {
   last_commit?: WorktreeCommit | null;
   commits?: WorktreeCommit[];   // os últimos da branch que não estão na base
   created_at?: number | null;   // epoch em segundos
+  inactive_days?: number | null; // prazo do servidor; null desativa o aviso de inatividade
   size?: number | null;         // bytes ocupados; null enquanto o backend mede
   size_biggest?: { name: string; bytes: number } | null;
   size_pending?: boolean;
@@ -1724,12 +1725,16 @@ export function worktreeState(w: WorktreeStatus): WorktreeState {
   return 'active';
 }
 
-export const WORKTREE_STALE_DAYS = 14;
-
 /** Dias desde o último commit; sem commit lido, desde a criação. */
 export function worktreeAgeDays(w: WorktreeStatus, now = Date.now() / 1000): number | null {
   const at = w.last_commit?.at ?? w.created_at;
   return at ? Math.max(0, Math.floor((now - at) / 86400)) : null;
+}
+
+/** O prazo pertence ao servidor que publicou esta worktree. */
+export function worktreeStaleDays(w: WorktreeStatus, now = Date.now() / 1000): number | null {
+  const days = worktreeAgeDays(w, now);
+  return w.inactive_days != null && days != null && days >= w.inactive_days ? days : null;
 }
 
 /** Pronta para apagar: mesclada, sem alteração e sem sessão. Arquivo ignorado não segura (cópia

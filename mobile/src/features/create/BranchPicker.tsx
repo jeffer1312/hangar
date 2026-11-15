@@ -3,7 +3,7 @@ import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import {
   baseChoices, basename, commitsLeftOut, folderGitActionForServer, freshBase, getFolderBranchesForServer, getFolderGitForServer, getWorktreesForServer, pickFolderRoot,
-  sanitizeSessionName, worktreeAgeDays, worktreeIsAgent, worktreeTitle, WORKTREE_STALE_DAYS,
+  sanitizeSessionName, worktreeAgeDays, worktreeIsAgent, worktreeTitle, worktreeStaleDays,
   type FolderBranches, type FolderGit, type Server, type WorktreeChoice, type WorktreeRepo, type WorktreeStatus,
 } from '@hangar/core';
 import { Icon } from '../../ui/Icon';
@@ -42,7 +42,8 @@ export const samePath = (a: string, b: string) => inside(a, b) && inside(b, a);
 function worktreeHint(w: WorktreeStatus, now: number): string {
   if (w.sessions[0]) return m.worktree_menu_em_uso({ nome: w.sessions[0] });
   const days = worktreeAgeDays(w, now);
-  if (days != null && days > WORKTREE_STALE_DAYS) return m.worktree_parada_dias({ n: days });
+  const stale = worktreeStaleDays(w, now);
+  if (stale != null) return m.worktree_parada_dias({ n: stale });
   return days ? m.worktree_dias_atras({ n: days }) : '';
 }
 
@@ -266,8 +267,7 @@ export function BranchPicker({ server, cwd, worktreePath, sessionName, value, on
     const now = Date.now() / 1000;
     const row = (w: WorktreeStatus) => {
       const hint = worktreeHint(w, now);
-      const days = worktreeAgeDays(w, now);
-      const dot = w.sessions.length ? theme.tokens.accent.base : days != null && days > WORKTREE_STALE_DAYS ? theme.tokens.status.warning : theme.tokens.text.muted;
+      const dot = w.sessions.length ? theme.tokens.accent.base : worktreeStaleDays(w, now) != null ? theme.tokens.status.warning : theme.tokens.text.muted;
       return option(`wt:${w.path}`, worktreeTitle(w), hint, !fresh && !!chosen && samePath(chosen.path, w.path), () => {
         const occupied = !!w.sessions.length;
         setFresh(false);
