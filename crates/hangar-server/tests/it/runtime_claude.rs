@@ -1384,6 +1384,17 @@ fn notice_terminal_reason_in_error_strip() {
 }
 
 #[test]
+fn notice_terminal_reason_api_error_with_the_error_reply_adds_no_second_note() {
+    let mut engine = notice_engine();
+    line(&mut engine,json!({"type":"assistant","error":"authentication_failed","message":{"model":"<synthetic>",
+        "content":[{"type":"text","text":"Failed to refresh OAuth token"}]}}),10.0);
+    let failed = fixture("result.jsonl").into_iter().find(|row|row["terminal_reason"] == "api_error").unwrap();
+    let effects = line(&mut engine,failed,11.0);
+    assert!(notes(&effects).is_empty(),"a resposta de erro já é o aviso: {:?}",notes(&effects));
+    assert_eq!(engine.view()["public_state"]["problema"],"headless_turno_erro");
+}
+
+#[test]
 fn notice_terminal_reason_unknown_value() {
     let effects = line(&mut notice_engine(),turn_end("xyz",false),11.0);
     assert!(notes(&effects).is_empty(),"motivo desconhecido não vira nota: {:?}",notes(&effects));

@@ -1120,6 +1120,8 @@ impl ClaudeEngine {
                     let limit = self.turn_limit.take().or_else(||usage_limit(&event,&self.rate_limit_info,self.clock.epoch_s));
                     // Limite de uso e falta de login já têm aviso próprio: o motivo genérico ("erro da API") só confundiria.
                     if logged_out || limit.is_some() { stop_reason = None; }
+                    // A resposta de erro gravada pela CLI já é o aviso do turno parado (os clientes a desenham como bloqueio).
+                    if turn_error.is_some() && event["terminal_reason"] == "api_error" { stop_reason = None; }
                     let reason = stop_reason.as_ref().map(|reason|format!("{reason} — ")).unwrap_or_default();
                     self.state.problema_detalhe = Some(format!("{reason}{subtype}: {}",clip(event["result"].as_str().unwrap_or(""),300)));
                     if let Some(limit) = limit { effects.push(Effect::UsageLimit { limit }); }

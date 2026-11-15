@@ -21,6 +21,9 @@ fn meta<'a>(event: &'a ChatEvent, field: &str) -> Option<&'a str> {
 /// A chave de ignorar; aviso de bloqueio real não tem.
 pub(super) fn notice_key(event: &ChatEvent) -> Option<&str> { meta(event, "key") }
 
+/// Resposta que a CLI gravou no lugar da do modelo quando a API falhou: o turno parou.
+pub(super) fn is_api_error(event: &ChatEvent) -> bool { meta(event, "level") == Some("error") }
+
 /// O texto do aviso sem o `⚙️` que o servidor põe para o cliente antigo.
 fn plain(event: &ChatEvent) -> &str {
     let text = event.text.as_deref().unwrap_or("");
@@ -144,6 +147,15 @@ impl Hangar {
 
     pub(super) fn render_notice_line(&self, event_index: usize, row: &str, cx: &mut Context<Self>) -> AnyElement {
         let Some(event) = self.chat.events.get(event_index) else { return div().into_any_element(); };
+        if is_api_error(event) {
+            return div().w_full().px(px(12.)).py(px(9.)).rounded(px(8.)).bg(theme::warning().opacity(0.08))
+                .border_1().border_color(theme::warning().opacity(0.4)).flex().flex_col().gap(px(4.))
+                .child(div().flex().items_center().gap(px(7.))
+                    .child(chrome::small_icon(IconName::TriangleAlert, 14., theme::warning()))
+                    .child(div().text_size(px(13.)).text_color(theme::warning_text()).child(tr_shared("notice_api_error_title", &[]))))
+                .child(div().text_size(px(12.5)).text_color(theme::muted()).child(plain(event).trim().to_owned()))
+                .into_any_element();
+        }
         let (id, key) = (event.id.clone(), notice_key(event).map(str::to_owned));
         let rule = || div().flex_1().h(px(1.)).bg(theme::border());
         let line = |content: AnyElement| div().w_full().min_h(px(27.)).flex().items_center().gap(px(8.)).child(rule()).child(content).child(rule());
@@ -224,6 +236,13 @@ mod tests {
         let ignored: BTreeSet<String> = ["hook:Stop".to_owned()].into();
         assert!(notice_hidden(&hook("Stop: x", json!({"key":"hook:Stop","subject":"Stop"})), &ignored));
         assert!(!notice_hidden(&hook("Start: x", json!({"key":"hook:Start","subject":"Start"})), &ignored));
+    }
+
+    #[test]
+    fn api_error_reply_is_a_notice_without_key_and_other_notices_are_not_api_errors() {
+        let error = notice("Failed to refresh OAuth token", json!({"level":"error"}));
+        assert!(is_notice_line(&error) && is_api_error(&error) && notice_key(&error).is_none());
+        assert!(!is_api_error(&notice("⚙️ Servidor MCP que precisa de login: `x`", json!({"key":"note:startup:ab12cd34"}))));
     }
 
     #[test]

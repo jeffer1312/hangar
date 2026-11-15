@@ -1571,6 +1571,7 @@
   "notice_ignore": "Ignore",
   "notice_ignored_line": "Notice ignored on this machine",
   "notice_ignore_failed": "Could not save",
+  "notice_api_error_title": "Turn stopped: API error",
   "notice_ignored_title": "Ignored notices",
   "notice_ignored_empty": "No ignored notices",
   "notice_show_again": "Show again",

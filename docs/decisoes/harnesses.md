@@ -31,7 +31,10 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   clientes desenham como linha de aviso; o `kind` e o `text` ficam como eram, para o cliente antigo. A
   chave de ignorar (`notice_meta.key`) só vai no aviso que não é bloqueio real nem defeito do Hangar;
   as chaves ignoradas moram em `~/.hangar/notice-ignores.json` (`/api/notice-ignores`, evento
-  `notice_ignores` da lista do dono). O `system/*` sem ramo vai ao diário como
+  `notice_ignores` da lista do dono). A resposta que a CLI grava no lugar da do modelo quando a API
+  falha (`isApiErrorMessage`) leva `notice_meta.level = "error"` e os clientes a desenham como caixa
+  âmbar de turno parado; sem terminal, essa resposta substitui a nota "Turno parado: erro da API".
+  O `system/*` sem ramo vai ao diário como
   `system/{subtype}`. Com terminal, os avisos saem só do transcript ou do plugin, **nunca lendo a
   tela**, e o leitor só monta nota em linha `"entrypoint":"cli"` (a `sdk-cli` já tem a nota do ator);
   só o chat ao vivo e o `/history` do chat ligam as notas (`LineParser::with_notices`,

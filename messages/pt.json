@@ -1571,6 +1571,7 @@
   "notice_ignore": "Ignorar",
   "notice_ignored_line": "Aviso ignorado nesta máquina",
   "notice_ignore_failed": "Não foi possível guardar",
+  "notice_api_error_title": "Turno parado: erro da API",
   "notice_ignored_title": "Avisos ignorados",
   "notice_ignored_empty": "Nenhum aviso ignorado",
   "notice_show_again": "Voltar a mostrar",

@@ -932,6 +932,9 @@ fn cache_info(msg: &Map<String, Value>) -> (Option<u64>, Option<u64>) {
 fn assistant(obj: &Map<String, Value>, msg: &Map<String, Value>, uid: &str, items: &[Value]) -> Vec<ChatEvent> {
     let (cache_read, cache_ttl_s) = cache_info(msg);
     let ts = ts(obj);
+    // O erro da API vem gravado como resposta do modelo; o mapa sem chave diz aos clientes que é bloqueio real.
+    let api_error = (obj.get("isApiErrorMessage") == Some(&Value::Bool(true)))
+        .then(|| Map::from_iter([("level".to_owned(), Value::from("error"))]));
     let mut out = Vec::new();
     for it in items.iter().filter_map(Value::as_object) {
         let id = sub_id(uid, out.len());
@@ -955,6 +958,7 @@ fn assistant(obj: &Map<String, Value>, msg: &Map<String, Value>, uid: &str, item
                 ts,
                 cache_read,
                 cache_ttl_s,
+                notice_meta: api_error.clone(),
                 ..event(ChatKind::AssistantMsg, id)
             }),
             Some("thinking") => {
@@ -994,6 +998,18 @@ mod tests {
         let [ev] = <[ChatEvent; 1]>::try_from(parse(tool_use_result, vec![], Value::Null)).expect("um evento");
         assert_eq!(ev.kind, ChatKind::ToolResult);
         ev.patch
+    }
+
+    #[test]
+    fn api_error_reply_is_marked_as_a_blocking_error_and_a_plain_reply_is_not() {
+        let line = |flag: bool| json!({"type": "assistant", "uuid": "a1", "timestamp": "2026-11-15T08:56:00.000Z",
+            "isApiErrorMessage": flag, "error": "authentication_failed",
+            "message": {"role": "assistant", "content": [{"type": "text", "text": "Failed to refresh OAuth token"}]}});
+        let meta = |flag: bool| LineParser::new(Provider::Claude).feed(line(flag).to_string().as_bytes(), 0)
+            .into_iter().map(|e| (e.kind, e.notice_meta)).collect::<Vec<_>>();
+        let error = json!({"level": "error"}).as_object().cloned();
+        assert_eq!(meta(true), vec![(ChatKind::AssistantMsg, error)]);
+        assert_eq!(meta(false), vec![(ChatKind::AssistantMsg, None)]);
     }
 
     #[test]
