@@ -2337,7 +2337,9 @@ impl Hangar {
         if result.is_err() { self.send_failed(&key, &text, cx); }
         // Respondido: o destino local passa a ter prazo para a linha do servidor; mandada ao turno, não passa pela fila.
         if let Ok(delivery) = &result {
-            self.send_settled(&key, &text, matches!(delivery.timing_note.as_deref(), Some("direct" | "delivered")), cx);
+            // Entregue sem fila pelo que o servidor diz, com ou sem o Jev: a nota dele só existe quando ele decidiu.
+            let delivered = delivery.delivered || matches!(delivery.timing_note.as_deref(), Some("direct" | "delivered"));
+            self.send_settled(&key, &text, delivered, cx);
         }
         if !self.delivery.complete(&key, &text, outcome) { return; }
         if let Some(note) = result.as_ref().ok().and_then(|d| d.timing_note.as_deref()) {
@@ -4136,7 +4138,8 @@ impl Hangar {
     fn render_row(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let Some(id) = self.row_ids.get(index).cloned() else { return div().into_any_element(); };
         // A mensagem que espera no painel "Na fila" não é bolha da conversa: a linha fica sem altura.
-        if self.queue_hides(&id, &self.chat.queue_panel()) {
+        // Só a linha da fila consulta o painel: montá-lo para cada linha da conversa custa a cada quadro.
+        if id.starts_with("queued-") && self.queue_hides(&id, &self.chat.queue_panel()) {
             return div().id(SharedString::from(id)).into_any_element();
         }
         self.tree_motion = false;

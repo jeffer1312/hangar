@@ -546,6 +546,8 @@ impl Hangar {
     /// A entrada `id` da fila é de uma mensagem enviada com a sessão parada e ainda por entregar: fica na conversa,
     /// fora do painel "Na fila".
     pub(super) fn send_keeps_in_chat(&self, id: &str) -> bool {
+        // Com a entrega parada a fila não anda: a mensagem espera no painel, que é onde ficam o aviso e o Reabrir.
+        if self.chat.state.problema.as_deref() == Some(super::STALLED) { return false; }
         let Some(key) = self.selected_key() else { return false };
         self.idle_sends.iter().any(|send| send.key == key && send.entry.as_deref() == Some(id) && keeps_in_chat(send.working_since.map(|at| at.elapsed())))
     }

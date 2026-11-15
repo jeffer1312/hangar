@@ -311,8 +311,13 @@ impl Hangar {
                 if phase == DispatchPhase::Capture {
                     wheel_trace(|| format!("event delta={:?} ours={} reduce_motion={} at={:?}", event.delta, hitbox.should_handle_scroll(window), cx.reduce_motion(), window.mouse_position()));
                 }
-                let ScrollDelta::Lines(lines) = event.delta else { return };
-                if phase != DispatchPhase::Capture || lines.y == 0. || !hitbox.should_handle_scroll(window) { return; }
+                if phase != DispatchPhase::Capture || !hitbox.should_handle_scroll(window) { return; }
+                let ScrollDelta::Lines(lines) = event.delta else {
+                    // Touchpad rola em pixels e a lista anda sozinha, mas o gesto começado na conversa é dela.
+                    view.update(cx, |this, _| this.pages.wheel_latch.set(Some(Instant::now()))).ok();
+                    return;
+                };
+                if lines.y == 0. { return; }
                 if cx.reduce_motion() {
                     // Sem deslize a lista rola sozinha, mas o gesto começado na conversa continua sendo dela.
                     view.update(cx, |this, _| this.pages.wheel_latch.set(Some(Instant::now()))).ok();
