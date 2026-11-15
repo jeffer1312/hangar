@@ -106,6 +106,10 @@ pub struct ChatEvent {
     /// Aceita com a sessão parada: não está na fila interna do Claude, falta só o registro real.
     pub queued_consumed: Option<bool>,
     pub image_count: Option<u32>,
+    /// Só em aviso da CLI do Claude: o mapa presente, mesmo vazio, faz do evento um aviso. `key` é a chave de
+    /// ignorar, `subject` o hook e `count` o total de falhas. Não existe no `models.py`: ausente, não sai no JSON.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notice_meta: Option<Map<String, Value>>,
     /// Byte logo após a linha do transcript: vira o `id:` do SSE e nunca vai no JSON (`exclude=True`).
     #[serde(skip)]
     pub offset: Option<u64>,

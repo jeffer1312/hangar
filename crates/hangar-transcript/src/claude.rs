@@ -231,6 +231,9 @@ impl NoticeFold {
     pub(crate) fn stamp(&self, event: &mut ChatEvent) {
         if let Some(fails) = self.hooks.values().find(|fails| fails.count > 1 && fails.id == event.id) {
             event.hook_error = Some(format!("{} (falhou {} vezes)", fails.detail, fails.count));
+            if let Some(meta) = event.notice_meta.as_mut() {
+                meta.insert("count".into(), fails.count.into());
+            }
         }
     }
 
@@ -261,7 +264,7 @@ impl NoticeFold {
                     if attempt == 1 && self.synced {
                         let why = obj.get("error").and_then(|e| e.get("formatted")).and_then(Value::as_str).unwrap_or("erro");
                         let max = obj.get("maxRetries").and_then(Value::as_u64).unwrap_or(1);
-                        events.push(note(format!("retry:{uid}"), format!("⚙️ A API falhou ({why}); nova tentativa 1 de {max}"), at));
+                        events.push(note(format!("retry:{uid}"), Some("note:retry"), format!("⚙️ A API falhou ({why}); nova tentativa 1 de {max}"), at));
                         self.retries = Some(1);
                     } else if let Some(seen) = self.retries.as_mut() {
                         *seen = (*seen).max(attempt);
@@ -274,12 +277,13 @@ impl NoticeFold {
                 // Só a resposta fecha o grupo: um anexo no meio (mensagem digitada na espera) não.
                 if let Some(failed) = self.retries.take() {
                     if failed > 1 && obj.get("isApiErrorMessage") != Some(&Value::Bool(true)) {
-                        events.push(note(format!("retry-ok:{uid}"), format!("⚙️ A API voltou na {}ª tentativa", failed + 1), at));
+                        events.push(note(format!("retry-ok:{uid}"), Some("note:retry"), format!("⚙️ A API voltou na {}ª tentativa", failed + 1), at));
                     }
                 }
                 let stop = obj.get("message").and_then(|m| m.get("stop_reason")).and_then(Value::as_str);
                 if stop == Some("refusal") {
-                    events.push(note(format!("refusal:{uid}"), "⚙️ O modelo recusou responder".into(), at));
+                    // Bloqueio real: sem chave de ignorar.
+                    events.push(note(format!("refusal:{uid}"), None, "⚙️ O modelo recusou responder".into(), at));
                 }
             }
             _ => {}
@@ -322,8 +326,9 @@ impl NoticeFold {
         let reason = hook_failure_reason(att.get("stderr").and_then(Value::as_str), att.get("exitCode").and_then(Value::as_i64));
         let detail = format!("{name}: {reason}");
         let id = format!("hookfail:{uid}");
-        self.hooks.insert(name, HookFails { id: id.clone(), detail: detail.clone(), count: 1 });
-        Some(hook_note(id, detail, at))
+        let event = hook_note(id.clone(), &name, detail.clone(), at);
+        self.hooks.insert(name, HookFails { id, detail, count: 1 });
+        Some(event)
     }
 }
 
@@ -356,14 +361,17 @@ pub fn is_cli_note(id: &str) -> bool {
     ["retry:", "retry-ok:", "refusal:"].iter().any(|prefix| id.starts_with(prefix))
 }
 
-fn note(id: String, text: String, at: Option<f64>) -> ChatEvent {
-    let mut ev = ChatEvent { ts: at, ..text_event(ChatKind::AssistantMsg, id, text) };
+/// `ignore_key`: a chave de ignorar; sem ela o aviso é bloqueio real e os clientes não oferecem "Ignorar".
+fn note(id: String, ignore_key: Option<&str>, text: String, at: Option<f64>) -> ChatEvent {
+    let meta = ignore_key.map(|key| ("key".to_owned(), Value::from(key))).into_iter().collect();
+    let mut ev = ChatEvent { ts: at, notice_meta: Some(meta), ..text_event(ChatKind::AssistantMsg, id, text) };
     finish(&mut ev);
     ev
 }
 
-fn hook_note(id: String, detail: String, at: Option<f64>) -> ChatEvent {
-    let mut ev = ChatEvent { ts: at, hook_error: Some(detail), ..text_event(ChatKind::Notice, id, "hook_failed".into()) };
+fn hook_note(id: String, name: &str, detail: String, at: Option<f64>) -> ChatEvent {
+    let meta = [("key", format!("hook:{name}")), ("subject", name.to_owned())].into_iter().map(|(k, v)| (k.to_owned(), Value::from(v))).collect();
+    let mut ev = ChatEvent { ts: at, hook_error: Some(detail), notice_meta: Some(meta), ..text_event(ChatKind::Notice, id, "hook_failed".into()) };
     finish(&mut ev);
     ev
 }

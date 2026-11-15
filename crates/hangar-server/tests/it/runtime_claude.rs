@@ -395,7 +395,8 @@ fn effort_typed_by_the_user_keeps_its_slash_command_on_the_answer() {
     let out = "Set effort level to high (this session only): Comprehensive implementation";
     let effects = line(&mut engine,json!({"type":"assistant","local_command_source":format!("<local-command-stdout>{out}</local-command-stdout>"),
         "message":{"content":[{"type":"text","text":out}]}}),12.0);
-    assert!(effects.iter().any(|e|matches!(e,Effect::Policy { kind,payload,.. } if kind == "local_output" && payload["source"] == "/effort high")));
+    // Saída de comando não é aviso: sem o mapa que faria os clientes desenhá-la como linha de aviso.
+    assert!(effects.iter().any(|e|matches!(e,Effect::Policy { kind,payload,.. } if kind == "local_output" && payload["source"] == "/effort high" && payload["meta"].is_null())));
 }
 
 /// A CLI põe a SAÍDA no `local_command_source`, não o comando.
@@ -1112,6 +1113,47 @@ fn notice_hook_failure_is_one_note_per_process_with_the_total() {
     assert_eq!(notes(&effects),vec!["Hook falhou — PostToolUse:Bash: falhou-de-proposito (falhou 5 vezes)".to_owned()]);
     assert_eq!(note_rows(&effects),vec![row]);
     assert!(notes(&line(&mut engine,turn_end("completed",false),19.0)).is_empty(),"sem falha nova o total não é regravado");
+}
+
+fn note_meta(effects:&[Effect]) -> Vec<Value> {
+    effects.iter().filter_map(|effect|match effect {
+        Effect::Policy { kind,payload,.. } if kind == "local_output" => Some(payload["meta"].clone()),
+        _ => None,
+    }).collect()
+}
+
+#[test]
+fn notice_meta_on_hook_failure() {
+    let hooks = fixture("hooks.jsonl");
+    let mut engine = turn_engine();
+    line(&mut engine,hooks[4].clone(),10.0);
+    assert_eq!(note_meta(&line(&mut engine,hooks[5].clone(),10.2)),vec![json!({"key":"hook:PostToolUse:Bash","subject":"PostToolUse:Bash"})]);
+    for at in [11.0,12.0,13.0] {
+        line(&mut engine,hooks[4].clone(),at);
+        line(&mut engine,hooks[5].clone(),at+0.2);
+    }
+    let effects = line(&mut engine,turn_end("completed",false),16.0);
+    assert_eq!(note_meta(&effects),vec![json!({"key":"hook:PostToolUse:Bash","subject":"PostToolUse:Bash","count":4})]);
+}
+
+#[test]
+fn notice_meta_on_cli_notes() {
+    let startup_key = |name:&str| {
+        let init = json!({"type":"system","subtype":"init","session_id":FIXTURE_SID,"mcp_servers":[{"name":name,"status":"needs-auth"}]});
+        note_meta(&line(&mut notice_engine(),init,11.0)).remove(0)["key"].as_str().unwrap().to_owned()
+    };
+    let (one,other) = (startup_key("github"),startup_key("slack"));
+    assert!(one.starts_with("note:startup:") && other.starts_with("note:startup:") && one != other,"{one} × {other}");
+    assert_eq!(one,startup_key("github"),"o mesmo conjunto de servidores dá a mesma chave");
+
+    let mut engine = notice_engine();
+    let update = system("notification",json!({"key":"update","text":"Nova versão disponível","priority":"high"}));
+    assert_eq!(note_meta(&line(&mut engine,update,11.0)),vec![json!({"key":"note:notification:update"})]);
+    // Bloqueio real não tem chave: os clientes não oferecem "Ignorar".
+    assert_eq!(note_meta(&line(&mut engine,turn_end("blocking_limit",true),12.0)),vec![json!({})]);
+    let refusal = system("model_refusal_no_fallback",json!({"original_model":"claude-opus-5-5","request_id":null,
+        "api_refusal_explanation":"pedido fora da política","content":"x"}));
+    assert_eq!(note_meta(&line(&mut engine,refusal,13.0)),vec![json!({})]);
 }
 
 fn note_rows(effects:&[Effect]) -> Vec<String> {

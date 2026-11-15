@@ -289,7 +289,9 @@ pub enum Action {
         #[serde(default, skip_serializing_if = "Option::is_none")] confirms:Option<String>,
         /// Aviso de hook: `notice` é o código do aviso (`hook_failed`, `hook_prompt`) e `hook_error` o detalhe.
         #[serde(default, skip_serializing_if = "Option::is_none")] hook_error:Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] notice:Option<String> },
+        #[serde(default, skip_serializing_if = "Option::is_none")] notice:Option<String>,
+        /// O mapa `notice_meta` do evento: chave de ignorar, hook e total.
+        #[serde(default, skip_serializing_if = "Option::is_none")] meta:Option<Value> },
     Claim { min_ts:f64, limit:Option<usize>, entry_id:Option<String> },
     ClaimBatch { min_ts:f64 },
     SetDelivered { entry_id:String, value:bool, steered:bool },
@@ -858,17 +860,23 @@ fn apply(state: &mut State, action: Action, clock: ClockSample, call_id: &str) -
             append_row(state,row)?
         }
         // Aviso com id próprio que volta é o mesmo aviso com o total novo: troca o texto da linha, não empilha outra.
-        Action::AppendLocal { text, entry_id: Some(id), hook_error, .. } if state.rows.iter().any(|r| row_id(r) == id && r["papel"] == "assistant") => {
+        Action::AppendLocal { text, entry_id: Some(id), hook_error, meta, .. } if state.rows.iter().any(|r| row_id(r) == id && r["papel"] == "assistant") => {
             let row = state.rows.iter_mut().find(|r| row_id(r) == id).expect("conferida acima");
-            row["text"] = json!(text);
-            if let Some(hook_error) = hook_error { row["hook_error"] = json!(hook_error); }
+            // Cada nota é gravada por uma tarefa própria: a regravação que chega atrasada, com total menor, não desfaz a maior.
+            let count = |meta: &Value| meta["count"].as_u64().unwrap_or(1);
+            if !meta.as_ref().is_some_and(|meta| count(meta) <= count(&row["notice_meta"])) {
+                row["text"] = json!(text);
+                if let Some(hook_error) = hook_error { row["hook_error"] = json!(hook_error); }
+                if let Some(meta) = meta { row["notice_meta"] = meta; }
+            }
             row.clone()
         }
-        Action::AppendLocal { text, entry_id, confirms, hook_error, notice } => {
+        Action::AppendLocal { text, entry_id, confirms, hook_error, notice, meta } => {
             let mut row = json!({"id":entry_id.unwrap_or_else(||call_id.into()),
                 "text":text,"ts":clock.epoch_s,"delivered":true,"confirmed":true,"papel":"assistant"});
             if let Some(hook_error) = hook_error { row["hook_error"] = json!(hook_error); }
             if let Some(notice) = notice { row["notice"] = json!(notice); }
+            if let Some(meta) = meta { row["notice_meta"] = meta; }
             let row = append_row(state,row)?;
             if let Some(source) = confirms { confirm_local_command(state,&source); }
             row
@@ -1496,7 +1504,7 @@ mod headless_delivery_tests {
         let dir = tempfile::tempdir().unwrap();
         let mut store = store(&dir);
         let note = |text:&str,detail:&str| Action::AppendLocal { text:text.into(),entry_id:Some("hookfail:1:0".into()),confirms:None,
-            hook_error:Some(detail.into()),notice:Some("hook_failed".into()) };
+            hook_error:Some(detail.into()),notice:Some("hook_failed".into()),meta:None };
         store.exec(1,"local:a",clock(10.0),note("Hook falhou — Stop: x","Stop: x")).unwrap();
         store.exec(1,"local:b",clock(20.0),note("Hook falhou — Stop: x (falhou 2 vezes)","Stop: x (falhou 2 vezes)")).unwrap();
         assert_eq!(store.state().rows.len(),1,"a mesma linha, não outra");
@@ -1507,9 +1515,26 @@ mod headless_delivery_tests {
         assert_eq!(rewritten["notice"],"hook_failed");
         // Mensagem da pessoa com o mesmo id não é aviso: a regravação não a toca.
         append(&mut store,"hookfail:9:9",30.0);
-        let clash = Action::AppendLocal { text:"y".into(),entry_id:Some("hookfail:9:9".into()),confirms:None,hook_error:None,notice:None };
+        let clash = Action::AppendLocal { text:"y".into(),entry_id:Some("hookfail:9:9".into()),confirms:None,hook_error:None,notice:None,meta:None };
         assert!(store.exec(1,"local:c",clock(40.0),clash).is_err(),"id de entrada da pessoa não vira nota");
         assert_eq!(row(&store,"hookfail:9:9")["text"],"hookfail:9:9");
+    }
+
+    /// Duas regravações da mesma nota podem chegar fora de ordem: a de total menor não desfaz a maior.
+    #[test]
+    fn hook_note_rewrite_with_a_smaller_count_is_dropped() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = store(&dir);
+        let note = |count:u64| Action::AppendLocal { text:format!("Hook falhou — Stop: x (falhou {count} vezes)"),entry_id:Some("hookfail:1:0".into()),
+            confirms:None,hook_error:Some(format!("Stop: x (falhou {count} vezes)")),notice:Some("hook_failed".into()),
+            meta:Some(json!({"key":"hook:Stop","subject":"Stop","count":count})) };
+        store.exec(1,"local:a",clock(10.0),note(5)).unwrap();
+        store.exec(1,"local:b",clock(11.0),note(3)).unwrap();
+        assert_eq!(row(&store,"hookfail:1:0")["notice_meta"]["count"],5);
+        assert_eq!(row(&store,"hookfail:1:0")["hook_error"],"Stop: x (falhou 5 vezes)");
+        store.exec(1,"local:c",clock(12.0),note(6)).unwrap();
+        assert_eq!(row(&store,"hookfail:1:0")["notice_meta"],json!({"key":"hook:Stop","subject":"Stop","count":6}));
+        assert_eq!(row(&store,"hookfail:1:0")["text"],"Hook falhou — Stop: x (falhou 6 vezes)");
     }
 
     /// A leitura da fila não copia o estado: duas leituras sem escrita entre elas são o mesmo; a escrita troca.

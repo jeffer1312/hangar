@@ -1063,7 +1063,7 @@ impl ClaudeEngine {
                     let subtype = request["subtype"].as_str().unwrap_or("");
                     self.policy("unknown_private",json!({"kind":format!("control_request/{subtype}"),"event":event}),effects);
                     if self.unknown.insert(format!("control_request/{subtype}")) {
-                        self.policy("local_output",json!({"text":format!("⚙️ A CLI pediu `{subtype}`; respondi vazio")}),effects);
+                        self.cli_note(None,format!("⚙️ A CLI pediu `{subtype}`; respondi vazio"),effects);
                     }
                 } else if tool == "AskUserQuestion" {
                     self.question = Some(json!({"provider":"claude","request_id":request_id,"questions":request["input"]["questions"]}));
@@ -1088,7 +1088,7 @@ impl ClaudeEngine {
                     note = Some(format!("⚙️ Pergunta cancelada antes da resposta: {first}").trim_end_matches([':',' ']).to_owned());
                 }
                 self.changed(effects,true);
-                if let Some(text) = note { self.policy("local_output",json!({"text":text}),effects); }
+                if let Some(text) = note { self.cli_note(None,text,effects); }
             }
             "result" => {
                 self.in_progress = false; self.turn_start = None; self.label_deadline = None;
@@ -1128,7 +1128,7 @@ impl ClaudeEngine {
                 if matches!(event["terminal_reason"].as_str(),Some("stop_hook_prevented" | "hook_stopped")) {
                     self.stop_label = Some(self.clock.monotonic_s+STOP_LABEL_S);
                 } else if let Some(reason) = &stop_reason {
-                    self.policy("local_output",json!({"text":format!("⚙️ Turno parado: {reason}")}),effects);
+                    self.cli_note(None,format!("⚙️ Turno parado: {reason}"),effects);
                 }
                 if !failed && subtype == "success" && !local {
                     self.state.problema = None; self.state.problema_detalhe = None;
@@ -1210,7 +1210,7 @@ impl ClaudeEngine {
             "keep_alive" | "tool_progress" => {},
             _ => {
                 self.policy("unknown_private",json!({"kind":kind,"event":event}),effects);
-                if self.unknown.insert(kind.into()) { self.policy("local_output",json!({"text":format!("⚙️ Evento desconhecido da CLI: {kind}")}),effects); }
+                if self.unknown.insert(kind.into()) { self.cli_note(None,format!("⚙️ Evento desconhecido da CLI: {kind}"),effects); }
             }
         }
         Ok(())
@@ -1369,7 +1369,8 @@ impl ClaudeEngine {
             "notification" => {
                 let text = event["text"].as_str().unwrap_or("");
                 if matches!(event["priority"].as_str(),Some("high" | "immediate")) && !text.is_empty() {
-                    self.notice_once(&format!("notification:{}:{text}",event["key"].as_str().unwrap_or("")),format!("⚙️ {text}"),effects);
+                    let key = event["key"].as_str().unwrap_or("");
+                    self.notice_once(&format!("notification:{key}:{text}"),Some(&format!("note:notification:{key}")),format!("⚙️ {text}"),effects);
                 } else {
                     self.diary("claude_notification",||event.clone(),effects);
                 }
@@ -1389,7 +1390,7 @@ impl ClaudeEngine {
                         format!("⚙️ O {original} recusou responder{why}")
                     }
                 };
-                self.policy("local_output",json!({"text":text}),effects);
+                self.cli_note(None,text,effects);
                 return;
             }
             _ => { self.diary(&format!("system/{subtype}"),||event.clone(),effects); return; }
@@ -1425,7 +1426,7 @@ impl ClaudeEngine {
         }
         let detail = format!("{name}: {reason}");
         let id = format!("hookfail:{}:{}",(self.clock.epoch_s*1000.0) as u64,self.hook_fails.len());
-        self.hook_notice(&id,&detail,effects);
+        self.hook_notice(&id,&name,&detail,1,effects);
         self.hook_fails.insert(name,HookFails { id,detail,count:1,shown:1 });
     }
 
@@ -1452,22 +1453,31 @@ impl ClaudeEngine {
     /// A nota de cada hook é uma só: a falha que repetiu regrava a mesma linha com o total. Vários hooks dividem o
     /// mesmo nome (`PostToolUse:Bash`), então o sucesso de um não zera a conta do outro.
     fn flush_hook_fails(&mut self,effects:&mut Vec<Effect>) {
-        let stale:Vec<(String,String)> = self.hook_fails.values_mut().filter(|fails|fails.count != fails.shown).map(|fails|{
+        let stale:Vec<(String,String,String,u32)> = self.hook_fails.iter_mut().filter(|(_,fails)|fails.count != fails.shown).map(|(name,fails)|{
             fails.shown = fails.count;
-            (fails.id.clone(),format!("{} (falhou {} vezes)",fails.detail,fails.count))
+            (fails.id.clone(),name.clone(),format!("{} (falhou {} vezes)",fails.detail,fails.count),fails.count)
         }).collect();
-        for (id,detail) in stale { self.hook_notice(&id,&detail,effects); }
+        for (id,name,detail,count) in stale { self.hook_notice(&id,&name,&detail,count,effects); }
     }
 
     /// `entry_id` fixo por hook: a fila troca o texto da linha que já existe em vez de empilhar outra.
-    fn hook_notice(&mut self,id:&str,detail:&str,effects:&mut Vec<Effect>) {
-        self.policy("local_output",json!({"text":format!("Hook falhou — {detail}"),"hook_error":detail,"notice":"hook_failed","entry_id":id}),effects);
+    fn hook_notice(&mut self,id:&str,name:&str,detail:&str,count:u32,effects:&mut Vec<Effect>) {
+        let mut meta = json!({"key":format!("hook:{name}"),"subject":name});
+        if count > 1 { meta["count"] = json!(count); }
+        self.policy("local_output",json!({"text":format!("Hook falhou — {detail}"),"hook_error":detail,"notice":"hook_failed","entry_id":id,"meta":meta}),effects);
+    }
+
+    /// Aviso da CLI na conversa. O mapa `meta`, mesmo vazio, é o que o marca como aviso para os clientes; a chave
+    /// só vai no que pode ser ignorado: bloqueio real e defeito do Hangar ficam sem ela.
+    fn cli_note(&mut self,ignore_key:Option<&str>,text:String,effects:&mut Vec<Effect>) {
+        let meta = ignore_key.map_or_else(||json!({}),|key|json!({"key":key}));
+        self.policy("local_output",json!({"text":text,"meta":meta}),effects);
     }
 
     /// Aviso que vale uma vez por vida do processo: o relançamento mostra de novo, a adoção pelo Rust não.
-    fn notice_once(&mut self,key:&str,text:String,effects:&mut Vec<Effect>) -> bool {
+    fn notice_once(&mut self,key:&str,ignore_key:Option<&str>,text:String,effects:&mut Vec<Effect>) -> bool {
         let new = self.unknown.insert(format!("notice:{key}"));
-        if new && !self.replaying { self.policy("local_output",json!({"text":text}),effects); }
+        if new && !self.replaying { self.cli_note(ignore_key,text,effects); }
         new
     }
 
@@ -1483,21 +1493,28 @@ impl ClaudeEngine {
             names
         };
         let mut lines = Vec::new();
+        // Quem está com problema, para a chave de ignorar: servidor novo na lista muda a chave e o aviso volta.
+        let mut broken:Vec<&str> = Vec::new();
         for (status,one,many) in [("failed","Servidor MCP que não subiu","Servidores MCP que não subiram"),
             ("needs-auth","Servidor MCP que precisa de login","Servidores MCP que precisam de login")] {
             let names = servers(status);
             if names.is_empty() { continue; }
+            broken.extend(names.iter().copied());
             let shown:Vec<String> = names.iter().take(5).map(|name|format!("`{name}`")).collect();
             let rest = if names.len() > 5 { format!(" e mais {}",names.len()-5) } else { String::new() };
             lines.push(format!("{}: {}{rest}",if names.len() == 1 { one } else { many },shown.join(", ")));
         }
         for plugin in init["plugin_errors"].as_array().into_iter().flatten() {
-            lines.push(format!("O plugin `{}` não carregou: {}",plugin["plugin"].as_str().unwrap_or("?"),clip(plugin["message"].as_str().unwrap_or(""),300)));
+            let name = plugin["plugin"].as_str().unwrap_or("?");
+            broken.push(name);
+            lines.push(format!("O plugin `{name}` não carregou: {}",clip(plugin["message"].as_str().unwrap_or(""),300)));
         }
         if lines.is_empty() { return; }
         let text = format!("⚙️ {}",lines.join("\n"));
+        broken.sort_unstable();
+        let ignore_key = format!("note:startup:{}",&hangar_core::pycompat::py::md5_hex(&broken.join("\n"))[..8]);
         // O `init` chega a cada turno: o diário só registra o problema novo.
-        if self.notice_once(&text.clone(),text,effects) && !self.replaying {
+        if self.notice_once(&text.clone(),Some(&ignore_key),text,effects) && !self.replaying {
             self.diary("claude_init_problem",||json!({"mcp_servers":init["mcp_servers"],"plugin_errors":init["plugin_errors"]}),effects);
         }
     }

@@ -242,6 +242,8 @@ export interface ChatEvent {
   desistiu?: boolean | null;     // só em bolhas "queued-" e "held-" (não em evento real): entrega
                                  // dada como perdida — a TUI engoliu as teclas ou o hook barrou o prompt
   hook_error?: string | null;    // só em bolha "held:": o que o hook escreveu ao barrar o prompt
+  /** Só em aviso da CLI do Claude: presente (mesmo vazio) faz do evento um aviso; sem `key` não pode ser ignorado. */
+  notice_meta?: { key?: string; subject?: string; count?: number } | null;
   /** Só em notice `skill_loaded`: a skill que o harness injetou como fala do usuário. */
   skill?: { name: string; path?: string | null; body: string } | null;
 }

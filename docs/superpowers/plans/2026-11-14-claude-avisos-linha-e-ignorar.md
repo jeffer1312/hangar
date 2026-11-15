@@ -49,27 +49,27 @@ Código já escrito na worktree (sem commit). Falta provar, cobrir os dois casos
 **Interfaces:**
 - Produces: nota de hook com id fixo por hook; sem terminal `payload["entry_id"]` no `local_output`; com terminal `hookfail:{uuid da primeira}`. Detalhe `"{hook}: {motivo}"` e, com repetição, sufixo `" (falhou N vezes)"`. Rótulo de estado `"Um hook parou o turno"` por 8 s (`STOP_LABEL`, `STOP_LABEL_S`).
 
-- [ ] **Step 1: Rodar os testes das notas**
+- [x] **Step 1: Rodar os testes das notas**
 
 Run: `scripts/cargo-pinned test -p hangar-server --test it notice`
 Expected: PASS em `runtime_claude::notice_*` e `transcript_notices::*`. Falha de compilação ou de asserção: corrigir e repetir só o que falhou.
 
-- [ ] **Step 2: Teste da linha perdida da fila**
+- [x] **Step 2: Teste da linha perdida da fila**
 
 Em `crates/hangar-server/src/runtime/queue.rs` (módulo `headless_delivery_tests`), `hook_note_with_known_id_rewrites_and_with_lost_id_appends`: `AppendLocal` com `entry_id: Some("hookfail:1:0")` duas vezes deixa UMA linha com o segundo texto e o `ts` da primeira; id que pertence a uma mensagem da pessoa é recusado. O id que a fila não tem é o próprio primeiro `AppendLocal` (mesmo caminho da linha perdida).
 
 Em `crates/hangar-server/src/queue_feed.rs`, `rewritten_hook_note_is_published_again_unless_it_was_already_old`: a linha regravada sai de novo como `message` com o mesmo id; para um seguidor que nasceu 900 s depois da nota, nem a nota nem a regravação saem.
 
-- [ ] **Step 3: Teste da marca dentro de texto**
+- [x] **Step 3: Teste da marca dentro de texto**
 
 Em `transcript_notices.rs`, `terminal_marker_inside_a_prompt_is_not_a_failure`: arquivo com um prompt cujo texto contém `hook_non_blocking_error`, um `queued_command` com a mesma palavra no `prompt`, e uma falha real `h1` depois; histórico com janela que começa depois do prompt devolve `vec![h1(1)]`.
 
-- [ ] **Step 4: Rodar de novo o filtro `notice` e o teste da fila**
+- [x] **Step 4: Rodar de novo o filtro `notice` e o teste da fila**
 
 Run: `scripts/cargo-pinned test -p hangar-server --test it notice` e `scripts/cargo-pinned test -p hangar-server --lib hook_note` (o filtro pega o teste da fila e o do seguidor)
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 `git add` dos arquivos acima por caminho. Mensagem: `fix(claude): one hook-failure note per process with a running total`.
 
@@ -102,7 +102,7 @@ Status: ready-for-agent
 - O seguidor da fila (`queue_feed.rs`, `Signature`) republica a linha quando o `notice_meta` muda, como já faz com `hook_error`.
 - O `kind` e o `text` de cada aviso ficam como estão hoje.
 
-- [ ] **Step 1: Testes que falham**
+- [x] **Step 1: Testes que falham**
 
 `runtime_claude.rs`:
 - `notice_meta_on_hook_failure`: primeira falha de `PostToolUse:Bash` → `payload["meta"] == {"key":"hook:PostToolUse:Bash","subject":"PostToolUse:Bash"}`; no fim do turno com 4 falhas → `meta["count"] == 4`, mesmo `entry_id`.
@@ -122,16 +122,16 @@ Status: ready-for-agent
 - em `terminal_hook_failure_is_one_note_per_file_with_the_total_in_history`: o evento do histórico tem `notice_meta == {"key":"hook:PostToolUse:Bash","subject":"PostToolUse:Bash","count":5}`; o ao vivo, sem `count`.
 - `terminal_retry_and_refusal_carry_the_map`: `retry:`/`retry-ok:` → `{"key":"note:retry"}`; `refusal:` → `{}`.
 
-- [ ] **Step 2: Rodar e ver falhar**
+- [x] **Step 2: Rodar e ver falhar** (pulado por decisão do Jefferson em 14/11: uma rodada por tarefa, fila de compilação cheia)
 
 Run: `scripts/cargo-pinned test -p hangar-server --test it notice`
 Expected: FAIL nas asserções novas (campo ausente).
 
-- [ ] **Step 3: Implementar**
+- [x] **Step 3: Implementar**
 
 Em `claude.rs` do servidor, `fn cli_note(&mut self, ignore_key: Option<&str>, text: String, effects: &mut Vec<Effect>)` emite `local_output` com `meta` (`{}` ou `{"key": …}`); `notice_once(key, ignore_key, text, effects)` mantém o `key` de hoje como chave de deduplicação e ganha a de ignorar. `hook_notice` manda `meta` com `key`, `subject` e `count` (quando > 1). Em `hangar-transcript`, `note(id, ignore_key: Option<&str>, text, at)` e `hook_note` preenchem `notice_meta`; `stamp` grava também `count`. O espelho Python não muda: `backend/app/models.py:222` não tem `extra="forbid"` e nada no Python valida evento vindo do Rust (conferido na revisão do plano).
 
-- [ ] **Step 4: Rodar e ver passar; commit**
+- [x] **Step 4: Rodar e ver passar; commit**
 
 Run: `scripts/cargo-pinned test -p hangar-server --test it notice` e `scripts/cargo-pinned test -p hangar-transcript local_note_row`
 Expected: PASS. Commit: `feat(claude): tag every CLI notice with a notice map`.

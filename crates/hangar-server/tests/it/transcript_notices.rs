@@ -44,7 +44,14 @@ fn terminal_hook_failure_is_one_note_per_file_with_the_total_in_history() {
     // Cinco falhas em dois turnos: uma nota. A linha `sdk-cli` não conta.
     assert_eq!(history("terminal_hooks.jsonl",None,TAIL_WINDOW),vec![(id.clone(),"hook_failed".to_owned(),Some(format!("{detail} (falhou 5 vezes)")))]);
     // Ao vivo a nota sai na primeira falha, antes de haver total; as repetições não geram evento.
-    assert_eq!(live("terminal_hooks.jsonl",true),vec![(id,"hook_failed".to_owned(),Some(detail))]);
+    assert_eq!(live("terminal_hooks.jsonl",true),vec![(id.clone(),"hook_failed".to_owned(),Some(detail))]);
+    // O mapa do aviso: chave de ignorar e hook sempre; o total só onde ele é conhecido.
+    let meta = |events:Vec<ChatEvent>| events.into_iter().find(|event|event.id == id).unwrap().notice_meta.map(Value::Object);
+    let past = merged_history_with_notices(&request(fixture("terminal_hooks.jsonl"),None,TAIL_WINDOW)).unwrap();
+    assert_eq!(meta(past),Some(json!({"key":"hook:PostToolUse:Bash","subject":"PostToolUse:Bash","count":5})));
+    let mut parser = LineParser::new(Provider::Claude).with_notices();
+    let first = parser.feed(format!("{}\n",lines[0]).as_bytes(),0).into_iter().chain(parser.feed(format!("{}\n",lines[1]).as_bytes(),1)).collect();
+    assert_eq!(meta(first),Some(json!({"key":"hook:PostToolUse:Bash","subject":"PostToolUse:Bash"})));
     assert!(live("terminal_hooks.jsonl",false).is_empty(),"quem não pede as notas (push, última resposta) não as recebe");
     let plain = merged_history(&request(fixture("terminal_hooks.jsonl"),None,TAIL_WINDOW)).unwrap();
     assert!(notes(plain).is_empty(),"lista, retorno da filha e ditado leem o histórico comum, sem notas");
@@ -238,6 +245,18 @@ fn terminal_api_retry_note_and_comeback() {
     ];
     assert_eq!(history("terminal_retry.jsonl",None,TAIL_WINDOW),expected);
     assert_eq!(live("terminal_retry.jsonl",true),expected);
+}
+
+/// A nova tentativa pode ser ignorada; a recusa é bloqueio real e sai sem chave.
+#[test]
+fn terminal_retry_and_refusal_carry_the_map() {
+    let events = |name:&str| merged_history_with_notices(&request(fixture(name),None,TAIL_WINDOW)).unwrap();
+    let metas = |name:&str,prefix:&str| -> Vec<Value> {
+        events(name).into_iter().filter(|event|event.id.starts_with(prefix)).map(|event|Value::Object(event.notice_meta.expect("aviso sem mapa"))).collect()
+    };
+    assert_eq!(metas("terminal_retry.jsonl","retry"),vec![json!({"key":"note:retry"});3],"as duas tentativas e a volta");
+    assert_eq!(metas("terminal_refusal.jsonl","refusal:"),vec![json!({})]);
+    assert!(events("terminal_retry.jsonl").iter().filter(|event|!is_note(event)).all(|event|event.notice_meta.is_none()),"resposta comum não é aviso");
 }
 
 #[test]
