@@ -85,6 +85,8 @@ const FOCUS_STRIP: f32 = 3.;
 pub const REORDER: Spec = Spec::new(320, EASE_OUT_QUINT);
 /// A mensagem enviada indo do campo (ou do painel "Na fila") até o lugar dela; o painel fecha no mesmo tempo.
 pub const FLIGHT: Spec = Spec::new(320, EASE_OUT_EXPO);
+/// A linha que chega na conversa colada no fim abre a altura no começo do fade, em vez de entrar inteira.
+pub const ROW_OPEN: Spec = Spec::new(200, EASE_OUT_EXPO);
 /// O painel "Na fila" abrindo para a mensagem que chega.
 pub const QUEUE_OPEN: Spec = Spec::new(240, EASE_OUT_EXPO);
 /// `zeron-pulse`: período dos esqueletos de carregando.

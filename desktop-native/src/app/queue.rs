@@ -16,6 +16,10 @@ const ROW_GAP: f32 = 1.;
 const LIST_PAD: f32 = 6.;
 const BORDER: f32 = 1.;
 const PANEL_GAP: f32 = 6.;
+/// Recuo dos lados da lista e da linha, e a altura do texto dentro da linha.
+const LIST_SIDE: f32 = 6.;
+const ROW_SIDE: f32 = 4.;
+const ROW_TEXT: f32 = 20.;
 
 /// O que se arrasta pela alça.
 #[derive(Clone)]
@@ -79,6 +83,13 @@ impl QueueUi {
         }
     }
 
+    /// O deslize em curso começa `by` mais tarde, nunca depois de `now`: um quadro que demorou não come a abertura.
+    pub(super) fn delay(&mut self, by: Duration, now: Instant) -> bool {
+        let Some((_, _, at)) = self.slide.as_mut() else { return false };
+        *at = (*at + by).min(now);
+        true
+    }
+
     /// A altura do painel deslizando agora; `None` parado ou sem poder deslizar.
     fn sliding_height(&self) -> Option<f32> {
         let (rows, slides) = self.shape;
@@ -94,6 +105,19 @@ fn slide_spec(opening: bool) -> motion::Spec { if opening { motion::QUEUE_OPEN }
 fn panel_height(rows: usize) -> f32 {
     let list = if rows == 0 { 0. } else { (rows as f32 * ROW_HEIGHT + (rows - 1) as f32 * ROW_GAP + LIST_PAD).min(LIST_MAX) };
     2. * BORDER + HEAD_HEIGHT + list
+}
+
+/// Onde fica o texto da última linha do painel, colado acima do cartão do composer (`card`), pelas medidas com que ele
+/// é desenhado: a linha local de quem acabou de enviar tem lugar antes de o painel ser desenhado.
+fn row_place_above(card: Bounds<Pixels>) -> Bounds<Pixels> {
+    let side = BORDER + LIST_SIDE + ROW_SIDE;
+    let top = PANEL_GAP + BORDER + LIST_PAD + ROW_HEIGHT - (ROW_HEIGHT - ROW_TEXT) / 2.;
+    Bounds::new(point(card.origin.x + px(side), card.origin.y - px(top)), size(card.size.width - px(2. * side), px(ROW_TEXT)))
+}
+
+/// O lugar da linha local do painel agora, pelo cartão do composer do último quadro; `None` sem ele na tela.
+pub(super) fn row_place() -> Option<Bounds<Pixels>> {
+    popup::anchor_peek(crate::tour::anchors::COMPOSER).map(row_place_above)
 }
 
 /// "Mandar direto": só Claude e Codex têm o Orientar por mensagem, e só com o agente trabalhando.
@@ -290,19 +314,21 @@ impl Hangar {
     }
 
     pub(super) fn render_queue_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
-        // A mensagem que saiu do campo com a sessão parada vai direto à conversa: passar pela fila por um instante não
-        // abre o painel.
-        let skip = self.send_skips_queue().map(str::to_owned);
+        self.idle_tick(cx);
         let (planned, _) = (self.queue.planned.take(), self.queue.drawn.take());
         let panel = self.chat.queue_panel();
         let direct = appearance::get().steer_while_working;
         let supports = matches!(self.provider().0, "claude" | "codex");
         let read_only = self.selected.as_ref().is_some_and(|s| s.read_only());
         let stalled = stalled_notice(&panel, self.chat.state.problema.as_deref(), read_only);
-        // Uma cópia por quadro, dividida pelas linhas e pelos handlers de setas e de soltar.
-        let (entries, actions): (Rc<[QueueEntry]>, bool) =
-            (panel.entries.iter().filter(|e| skip.as_deref() != Some(e.text.trim())).cloned().collect(), panel.actions);
+        // A mensagem enviada com a sessão parada fica na conversa até ser entregue: não entra no painel.
+        let (mut entries, actions): (Vec<QueueEntry>, bool) =
+            (panel.entries.iter().filter(|e| !self.send_keeps_in_chat(&e.id)).cloned().collect(), panel.actions);
         drop(panel);
+        // A que saiu do campo com a sessão trabalhando já tem a linha dela, local, até a do servidor tomar o lugar.
+        if let Some(text) = self.local_queue_text(&entries) { entries.push(QueueEntry { id: send_flight::LOCAL_QUEUE.into(), text, ts: None }); }
+        // Uma cópia por quadro, dividida pelas linhas e pelos handlers de setas e de soltar.
+        let entries: Rc<[QueueEntry]> = entries.into();
         let live = !entries.is_empty() || supports && direct && self.chat.state.state == "working";
         // O painel abre e fecha pela altura, para a conversa ganhar e perder o espaço aos poucos.
         let moving = !cx.reduce_motion();
@@ -313,17 +339,22 @@ impl Hangar {
             // Inverter no meio parte da fração em que o painel estava.
             let from = self.queue.fraction();
             (self.queue.open, self.queue.slide) = (live, moving.then(|| (from, live, Instant::now())));
+            send_flight::trace(|| format!("queue panel {} from fraction {from:.2} slides={} rows={} local_row={}", if live { "opens" } else { "closes" },
+                moving && slides, entries.len(), entries.iter().any(|e| e.id == send_flight::LOCAL_QUEUE)));
         }
         if live { self.queue.last = entries.clone(); }
         if self.queue.slide.is_some_and(|(_, opening, at)| slide_spec(opening).raw(at) >= 1.) { self.queue.slide = None; }
         if !live && self.queue.slide.is_none() {
+            // Sem painel na tela não há linha de onde uma mensagem saia em viagem: a medida velha não vale.
             self.queue.shown_text = None;
+            self.flight_places.queue.set(None);
             return None;
         }
         // Fechando, ele mostra o que tinha, sem ações: a fila de verdade já esvaziou.
         let (entries, actions) = if live { (entries, actions) } else { (self.queue.last.clone(), false) };
         self.queue.shown_text = (entries.len() == 1).then(|| entries[0].text.trim().to_owned());
-        if live && entries.len() == 1 { self.send_reaches_queue(&entries[0].text); }
+        // Só a linha única e a linha local gravam o lugar; com outras, a medida anterior não é de ninguém.
+        if entries.len() != 1 && !entries.iter().any(|e| e.id == send_flight::LOCAL_QUEUE) { self.flight_places.queue.set(None); }
         let rows = if self.queue.collapsed { 0 } else { entries.len() };
         self.queue.shape = (rows, slides);
         if supports { self.refresh_queue_jev(cx); }
@@ -351,7 +382,7 @@ impl Hangar {
             .child(chrome::small_icon(if expanded { IconName::ChevronDown } else { IconName::ChevronUp }, 14., theme::faint()));
         let list = (expanded && !entries.is_empty()).then(|| {
             let rows: Vec<AnyElement> = (0..entries.len()).map(|i| self.render_queue_row(&entries, actions, i, window, cx)).collect();
-            div().id("queue-panel-list").max_h(px(LIST_MAX)).overflow_y_scroll().flex().flex_col().gap(px(ROW_GAP)).px(px(6.)).pb(px(LIST_PAD))
+            div().id("queue-panel-list").max_h(px(LIST_MAX)).overflow_y_scroll().flex().flex_col().gap(px(ROW_GAP)).px(px(LIST_SIDE)).pb(px(LIST_PAD))
                 .children(rows)
         });
         // Fora do cabeçalho: clicar na caixinha não abre nem fecha o painel.
@@ -389,12 +420,15 @@ impl Hangar {
     fn render_queue_row(&mut self, entries: &Rc<[QueueEntry]>, actions: bool, i: usize, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let entry = &entries[i];
         let (id, text) = (entry.id.clone(), entry.text.clone());
+        // A linha local ainda não existe no servidor: sem alça nem botões até a entrada dele tomar o lugar.
+        let (local, single) = (id == send_flight::LOCAL_QUEUE, entries.len() == 1);
+        let actions = actions && !local;
         let busy = self.queue_busy();
         let editing = self.editing_entry() == Some(id.as_str());
         let dragging = cx.has_active_drag();
         let drop_line = self.queue.drop.as_ref().filter(|(over, _)| dragging && *over == id).map(|(_, after)| *after);
         let mut row = div().id(SharedString::from(format!("queue-row-{i}"))).relative().flex().items_center().gap(px(4.))
-            .h(px(ROW_HEIGHT)).flex_shrink_0().px(px(4.)).rounded(px(8.)).when(editing, |el| el.bg(theme::accent_dim()));
+            .h(px(ROW_HEIGHT)).flex_shrink_0().px(px(ROW_SIDE)).rounded(px(8.)).when(editing, |el| el.bg(theme::accent_dim()));
         if let Some(after) = drop_line {
             let line = div().absolute().left_0().right_0().h(px(2.)).rounded_full().bg(theme::accent());
             row = row.child(if after { line.bottom_0() } else { line.top_0() });
@@ -446,9 +480,10 @@ impl Hangar {
         let full = super::quotes::summary(&text);
         row = row.child(div().id(SharedString::from(format!("queue-text-{i}"))).flex_1().min_w_0().px(px(4.)).truncate()
             .text_size(px(12.5)).text_color(theme::text()).child(conversation::one_line(&full, 400))
-            // Sozinha na fila, a linha diz onde está: a mensagem enviada pousa nela e sai dela em viagem.
-            .when(entries.len() == 1, |el| el.relative().child(send_flight::record(&self.flight_places, |p| &p.queue))
-                .when(self.send_hides_queue_text(), |el| el.opacity(0.)))
+            // A linha local e a que está sozinha na fila dizem onde estão: a mensagem enviada pousa na primeira, e sai da
+            // segunda em viagem para a conversa.
+            .when(local || single, |el| el.relative().child(send_flight::record(&self.flight_places, |p| &p.queue))
+                .when(self.send_hides_queue_text(&id, single), |el| el.opacity(0.)))
             .tooltip(move |window, cx| gpui_kit::component::tooltip::Tooltip::new(full.clone()).build(window, cx)));
         if !actions { return row.into_any_element(); }
         if editing {
@@ -476,8 +511,16 @@ impl Hangar {
 
 #[cfg(test)]
 mod tests {
-    use super::{panel_height, sends_direct, stalled_notice};
+    use super::{panel_height, row_place_above, sends_direct, stalled_notice};
     use crate::api::dto::ChatEvent;
+    use gpui_kit::{Bounds, point, px, size};
+
+    #[test]
+    fn the_local_row_has_its_place_above_the_composer_before_the_panel_is_drawn() {
+        // O cartão do composer em (22, 735), com 1320 de largura: a linha medida na tela ficou em (33, 699), 1298 x 20.
+        let card = Bounds::new(point(px(22.), px(735.)), size(px(1320.), px(90.)));
+        assert_eq!(row_place_above(card), Bounds::new(point(px(33.), px(699.)), size(px(1298.), px(20.))));
+    }
 
     #[test]
     fn the_panel_height_follows_the_rows_shown_up_to_the_list_ceiling() {
