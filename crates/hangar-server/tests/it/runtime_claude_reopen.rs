@@ -1065,9 +1065,10 @@ printf '%s\n' "$*" >> '{args}'
 while IFS= read -r -t 120 line; do
   case "$line" in
     # `refuse-bypass`: a vida que não subiu em bypass recusa entrar nele pelo pedido de controle.
-    *'"subtype":"set_permission_mode"'*'bypassPermissions'*)
+    # O JSON do pedido sai com as chaves em ordem alfabética: `mode` vem antes de `subtype`.
+    *'"subtype":"set_permission_mode"'*)
       rid=$(sed -E 's/^.*"request_id":"([^"]*)".*$/\1/' <<<"$line")
-      if [ -f '{refuse}' ] && [[ "$*" != *'--permission-mode bypassPermissions'* ]]; then
+      if [ -f '{refuse}' ] && [[ "$line" == *'"bypassPermissions"'* ]] && [[ "$*" != *'--permission-mode bypassPermissions'* ]]; then
         printf '{{"type":"control_response","response":{{"subtype":"error","request_id":"%s","error":"bypass recusado"}}}}\n' "$rid"
       else
         printf '{{"type":"control_response","response":{{"subtype":"success","request_id":"%s","response":{{}}}}}}\n' "$rid"
@@ -1295,7 +1296,12 @@ async fn r4_09_bypass_outside_the_cycle_reopens_through_the_route_without_shift_
     terminal_with_spec(&fx,&key);
     // A tela do pane que nasce na reabertura já mostra o bypass; a de agora, o modo de antes.
     std::fs::write(fx.state.with_extension("next-screen"),"\n❯ \n  ⏵⏵ bypass permissions on (shift+tab to cycle)\n").unwrap();
-    let registry = terminal_registry(&fx).await;
+    // A memória de modos que o servidor liga ao registro (`lib.rs`): sem ela o ator recusa a troca.
+    let memory = Arc::new(std::sync::Mutex::new(hangar_server::state::permission::PermissionMemory::default()));
+    let registry = crate::runtime_open::registry_with(|registry|registry
+        .with_codex_environment(AccountEnvironment::from_map([("HOME".to_owned(),fx.home.to_string_lossy().into_owned()),("PATH".to_owned(),std::env::var("PATH").unwrap())].into()))
+        .with_terms(Arc::new(hangar_server::term::Terms::default())).with_permissions(memory)).await;
+    registry.bind_watcher(fx_watcher(&fx));
     let (python,server) = crate::runtime_codex_watch::serve_owner(registry.clone()).await;
     let (status,body) = post(server,"permission-mode",json!({"mode":"bypassPermissions"})).await;
     assert_eq!((status,body["reopened"].clone(),body["current"].clone()),(200,json!(true),json!("bypassPermissions")),"{body}");
