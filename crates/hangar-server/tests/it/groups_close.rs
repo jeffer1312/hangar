@@ -1,5 +1,5 @@
 //! Fechar pelo dono uma sessão que o próprio Rust encerra: a saída do grupo que falha vai no `warning`
-//! da resposta, como no fechamento que o Python faz.
+//! da resposta, como no fechamento que o Python fazia, sem passar por ele.
 #![cfg(unix)]
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -43,7 +43,7 @@ async fn closing_a_rust_owned_grouped_session_returns_the_leave_warning() {
     assert_eq!(response.status().as_u16(), 200);
     let body: Value = serde_json::from_str(&response.text().await.unwrap()).unwrap_or(Value::Null);
     assert!(!registry.owns_codex_terminal("cx-proof"), "fechada no Rust");
-    assert_eq!(python.hits_to("/api/sessions/cx-proof"), 1);
+    assert_eq!(python.hits_to("/api/sessions/cx-proof"), 0, "o fechamento inteiro é do Rust");
     assert_eq!(body["warning"]["code"], "erro_pareamento_saida_falhou", "{body}");
     assert_eq!(body["warning"]["params"]["avisos"][0]["erro"]["code"], "erro_peer_nao_avisado", "{body}");
     finish(&mut [&mut app, &mut tui]);

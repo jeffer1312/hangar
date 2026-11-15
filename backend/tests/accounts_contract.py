@@ -372,7 +372,7 @@ def _worker() -> None:
     from app import api, account_bridge
     from app.account_lifecycle import AccountKey
     from types import SimpleNamespace
-    from app import internal_api, runtime_coordinator
+    from app import internal_api, runtime_coordinator, tmux
 
     root = Path.home()
     assert root == Path(os.environ["CLAUDE_CONFIG_DIR"]).parent
@@ -415,7 +415,6 @@ def _worker() -> None:
                 and AccountKey.new(key.provider, Path(child.args[child.args.index("--codex-home") + 1])) == key]
 
     app = FastAPI()
-    app.add_exception_handler(api.registry_mod.SessionOpenNeedsRust, api._abrir_precisa_do_rust)
     internal_api.set_secret("contract-internal")
     app.include_router(internal_api.router)
     calls = []
@@ -439,12 +438,6 @@ def _worker() -> None:
         from app import account_bridge
         return account_bridge.request_claude("auth", path=path)
 
-    async def birth(request):
-        return await api.create_session(request)
-    # Com `from __future__ import annotations` a anotação viraria texto lido no módulo, onde
-    # `Request` é o do urllib: a classe vai direto.
-    birth.__annotations__ = {"request": HttpRequest}
-    app.post("/api/sessions")(birth)
 
     @app.post("/__contract__/launcher-options")
     def options(body: dict):
@@ -567,10 +560,9 @@ def _worker() -> None:
         return deny_external()
 
     with patch.object(runtime_coordinator, "current", return_value=instance), \
-            patch.object(api, "_invalidate_lists"), \
-            patch.object(api.tmux, "has_session", side_effect=lambda name: name in mux and any(child.poll() is None for child in children)), \
-            patch.object(api.tmux, "_run", side_effect=mux_command), \
-            patch.object(api.tmux, "is_hidden", return_value=False), \
+            patch.object(tmux, "has_session", side_effect=lambda name: name in mux and any(child.poll() is None for child in children)), \
+            patch.object(tmux, "_run", side_effect=mux_command), \
+            patch.object(tmux, "is_hidden", return_value=False), \
             patch.object(account_bridge, "terminal_instances", side_effect=lambda: dict(mux) if any(
                 child.poll() is None for child in children) else {}), \
             patch.object(account_bridge, "request_process_uses", side_effect=lambda key, pid: pid in launcher_pids(key)), \

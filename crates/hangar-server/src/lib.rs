@@ -62,6 +62,7 @@ pub mod session_rename;
 pub mod session_defaults;
 pub mod session_sleep;
 pub mod session_visibility;
+mod sidecar_prune;
 pub mod tags;
 pub mod tour_progress;
 pub mod update_arrived;
@@ -124,7 +125,7 @@ use hangar_core::warn_limit;
 
 /// Versão do contrato com o Python (rotas `/internal`, canal privado do estado, ambiente). O
 /// Python (`RUST_SERVER_PROTOCOL`) recusa um binário de outra versão e atende sozinho.
-pub const INTERNAL_PROTOCOL: u32 = 109;
+pub const INTERNAL_PROTOCOL: u32 = 111;
 
 pub use hangar_core::net::http_client;
 pub(crate) use hangar_core::net::{AbortOnDrop, nodelay};

@@ -167,12 +167,13 @@ pub async fn route(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     req: Request,
 ) -> Response {
-    let (forward, who) = match crate::routes::who(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
+    let (_, who) = match crate::routes::who(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     let Some(name) = crate::session_write::session_name(req.uri().path()).filter(|name| {
         who.as_ref()
             .is_some_and(|caller| caller.can(name, req.method()))
     }) else {
-        return crate::routes::pass(&st, req, &forward).await;
+        // O Python não tem mais a rota: quem não pode recebe a recusa daqui.
+        return crate::session_write::stranger(&st, peer, req, who.as_ref()).await;
     };
     let codex = st
         .accounts

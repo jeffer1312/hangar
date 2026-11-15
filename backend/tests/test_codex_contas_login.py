@@ -1,18 +1,15 @@
-"""Reserva por conta Codex na criação de sessão, ambiente da conta e o cliente nativo.
+"""Reserva por conta Codex na criação de sessão e ambiente da conta.
 
-Login, logout, preparo e leitura de autenticação são do Rust: sem ele a leitura fica
-indisponível (ver `test_accounts_need_rust.py`).
+Login, logout, preparo e leitura de autenticação são do Rust.
 """
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 
 import pytest
 
 from app import codex_contas as accounts
-from app.codex_importador import CodexNativo
 import codex_contas_apoio
 
 
@@ -40,14 +37,3 @@ def test_ambiente_da_secundaria_remove_identidade_externa_e_padrao_preserva(cont
     assert secondary["CODEX_HOME"] == str(work.home)
     assert "CODEX_CONFIG_HOME" not in secondary
     assert "CODEX_SQLITE_HOME" not in secondary
-
-
-async def test_dispatch_considera_method_antes_de_id():
-    native = CodexNativo(Path("/tmp"), Path("/tmp"))
-    native._pending[7] = asyncio.get_running_loop().create_future()
-    listener = native.subscribe("account/login/completed")
-
-    native._dispatch({"id": 7, "method": "account/login/completed", "params": {"success": True}})
-
-    assert not native._pending[7].done()
-    assert (await listener.get())["method"] == "account/login/completed"

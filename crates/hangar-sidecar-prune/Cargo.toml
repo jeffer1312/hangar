@@ -1,0 +1,19 @@
+[package]
+name = "hangar-sidecar-prune"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+# Mesmas features do hangar-server: sem elas, compilar este crate sozinho guarda outra cópia de cada
+# dependência no target (ver o comentário do serde_json em hangar-server/Cargo.toml).
+[dependencies]
+hangar-core.workspace = true
+serde_json = { workspace = true, features = ["float_roundtrip", "alloc", "unbounded_depth", "arbitrary_precision", "raw_value"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "io-util", "io-std", "process", "sync", "time", "fs", "signal"] }
+
+[dev-dependencies]
+proptest.workspace = true
+# Só o oráculo do teste de nomes: a regra do Python era esta expressão.
+regex.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }

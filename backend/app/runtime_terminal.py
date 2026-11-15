@@ -1033,50 +1033,6 @@ class ClipboardLock:
         self.local.release()
 
 
-def answer_sync(name, answers, request_id, jsonl):
-    from app import runtime_coordinator, api, terminal_input as ti
-    from app.runtime_adapter import run_sync
-    owner = runtime_coordinator.current()
-    if owner is None or owner.legacy is None or _writer.get() is not None:
-        return None
-    payload = {'answers':[{**answer, 'indices':answer.get('indices') or []} for answer in answers]}
-    if request_id:
-        payload['request_id'] = request_id
-    async def perform():
-        if not await owner.prepare_session(name,'claude') or not owner.slot(name).binding.meta.get('terminal'):
-            return None
-        ti._validate(answers)
-        if any(answer.get('kind') == 'chat' for answer in answers):
-            text = await asyncio.to_thread(api._askq_conversar_text, answers, jsonl)
-            if not text:
-                raise ValueError('resposta sem texto para conversar')
-            if owner.slot(name).phase == Phase.Rust:
-                # Teclado emprestado só para fechar a pergunta; o texto entra pela fila do Rust.
-                def close_question():
-                    ti.TerminalInput().interrupt(name)
-                    api._espera_picker_fechar(name)
-                await run_admin(owner, name, 'answer_chat', payload, close_question)
-                # `owner.op` direto: o teclado já voltou ao Rust (o empréstimo acabou em `run_admin`), e `route`
-                # transformaria `unknown`/`rejected` em exceções de tipos diferentes.
-                # Na fila do Rust (`deferred`) a resposta sai quando o terminal ficar livre.
-                reply = await owner.op(name, {'kind':'submit','text':text}, uuid.uuid4().hex)
-                if reply.get('disposition') not in {'accepted', 'deferred'}:
-                    # 502, não 409: o app trata 409 como "nada digitado", e aqui a pergunta já fechou e o texto pode ter entrado.
-                    raise RuntimeError('a pergunta foi fechada, mas a resposta por texto não foi confirmada — confira na sessão antes de responder de novo')
-                return reply
-            def compound():
-                ti.TerminalInput().interrupt(name)
-                api._espera_picker_fechar(name)
-                descriptor = owner.slot(name).binding.descriptor()
-                reply = _reserve_execute(owner, descriptor, {'kind':'submit','text':text}, uuid.uuid4().hex)
-                if reply['disposition'] != 'accepted':
-                    raise RuntimeError('resposta por texto não foi confirmada; pergunta conservada')
-                return reply
-            return await run_admin(owner, name, 'answer_chat', payload, compound)
-        return await route(owner, name, {'kind':'control','control':'answer_questions','payload':payload})
-    return run_sync(perform, owner.loop)
-
-
 def _clipboard_lock_path():
     from app.pqueue import _queue_dir
     return _queue_dir() / 'runtime' / 'clipboard.lock'

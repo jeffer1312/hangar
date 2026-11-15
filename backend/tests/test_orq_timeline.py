@@ -430,9 +430,11 @@ def test_jsonl_com_byte_cortado_nao_zera_o_painel(real):
 
 
 def _row(source, model, i, o, cw, cr, ts="2026-09-30T01:00:00+00:00"):
-    from app.costs_sources import UsageRow
-    return UsageRow(ts=datetime.fromisoformat(ts), source=source, provider="", model=model, project="/r",
-                    session_id="s", input=i, output=o, cache_write=cw, cache_read=cr)
+    # A linha de uso no formato que o leitor Rust recebe.
+    return {"ts": datetime.fromisoformat(ts), "source": source, "provider": "", "model": model, "project": "/r",
+            "session_id": "s", "input": i, "output": o, "cache_write": cw, "cache_read": cr, "subagente": False,
+            "account_id": None, "codex_long_context": False, "cache_write_1h": 0, "fast": False,
+            "regravado": 0, "regravado_1h": 0}
 
 
 LIVE = lambda: [type("S", (), {"name": "hangar-mobile-t5", "provider": "claude", "jsonl": "/p/t5.jsonl"})()]

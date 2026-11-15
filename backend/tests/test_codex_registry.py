@@ -84,23 +84,6 @@ class _FakeClient:
 # --- Teste 1: criar sessao Codex e o caminho NORMAL, com o lancador no pane ------------------
 
 
-def test_kill_codex_falho_nao_derruba_o_app_server_antes(tmp_path):
-    """`kill_session` falhando, a sessao SEGUE viva — entao o app-server dela nao pode ter morrido.
-
-    Na ordem antiga o `close_sync` vinha primeiro: o KillFailed dizia "nao consegui encerrar" com a
-    TUI ja sem servidor, e o que sobrava na tela nao falava mais com ninguem."""
-    codex_sessions.save("cx", "tid-1", "/tmp/rollout.jsonl", "/tmp/a")
-    reg = SessionRegistry(projects_dir=tmp_path)
-    adapter = CodexAdapter()
-    with patch.object(registry.tmux, "kill_session", return_value=False), \
-         patch("app.adapters.get_adapter", return_value=adapter), \
-         patch.object(adapter, "close_sync") as close:
-        with pytest.raises(registry.KillFailed):
-            reg.kill("cx")
-    close.assert_not_called()
-    assert codex_sessions.exists("cx"), "sidecar de sessao viva nao pode ser apagado"
-
-
 # --- Teste 2: list() inclui Codex (sidecar) E Claude (tmux) ---------------------------------
 
 def test_list_includes_codex_sidecar_and_tmux(tmp_path):
@@ -133,71 +116,6 @@ def test_list_does_not_duplicate_codex_tmux_tui_as_claude(tmp_path):
     resolve.assert_not_called()
 
 
-# --- Teste 4: kill de Codex fecha o client (mock) e apaga o sidecar -------------------------
-
-def test_kill_codex_do_rust_encerra_pela_ponte_e_limpa_so_as_lojas_daqui(tmp_path):
-    codex_sessions.save("cx", "tid-1", "/tmp/rollout.jsonl", "/tmp/a")
-    reg = SessionRegistry(projects_dir=tmp_path)
-    adapter = CodexAdapter()
-    with patch("app.runtime_coordinator.rust_codex_terminal", return_value=(200, b'{"closed":true,"killed":true}')) as rust, \
-         patch("app.adapters.get_adapter", return_value=adapter), \
-         patch.object(adapter, "close_sync") as close, \
-         patch.object(adapter, "forget_memory") as forget, \
-         patch.object(registry.tmux, "kill_session", return_value=True) as kill_tmux, \
-         patch.object(registry.tmux, "is_hidden", return_value=False):
-        reg.kill("cx")
-    rust.assert_called_once_with("cx", "kill")
-    close.assert_not_called()                        # pane e app-server são do Rust
-    forget.assert_called_once_with("cx")
-    assert all(c.args != ("cx",) for c in kill_tmux.call_args_list), "o kill-session da sessão foi do Rust"
-    assert codex_sessions.load("cx") is None
-
-
-def test_kill_ja_encerrado_pelo_rust_limpa_so_as_lojas_daqui_e_nao_volta_a_ele(tmp_path):
-    reg = SessionRegistry(projects_dir=tmp_path)
-    with patch("app.runtime_coordinator.rust_codex_terminal") as rust, \
-         patch.object(registry.tmux, "kill_session") as kill_tmux, \
-         patch("app.list_bridge.forget") as forget_in_rust, \
-         patch("app.list_bridge.discover") as list_in_rust:
-        assert reg.kill("cx", closed_by_rust=True) == []
-    for back_to_rust in (rust, kill_tmux, forget_in_rust, list_in_rust):
-        back_to_rust.assert_not_called()
-
-
-def test_kill_codex_do_rust_recusado_nao_apaga_nada(tmp_path):
-    codex_sessions.save("cx", "tid-1", "/tmp/rollout.jsonl", "/tmp/a")
-    reg = SessionRegistry(projects_dir=tmp_path)
-    adapter = CodexAdapter()
-    with patch("app.runtime_coordinator.rust_codex_terminal", return_value=(409, b'{"detail":{"code":"close_kill_survived"}}')), \
-         patch("app.adapters.get_adapter", return_value=adapter), \
-         patch.object(adapter, "close_sync") as close:
-        with pytest.raises(registry.KillFailed) as failed:
-            reg.kill("cx")
-    assert failed.value.detail == {"code": "close_kill_survived"}, "o DELETE responde o código do Rust"
-    close.assert_not_called()
-    assert codex_sessions.exists("cx")
-
-
-def test_kill_codex_closes_client_and_removes_sidecar(tmp_path):
-    codex_sessions.save("cx", "tid-1", "/home/u/.codex/rollout-a.jsonl", "/tmp/a")
-    reg = SessionRegistry(projects_dir=tmp_path)
-    fake = _FakeClient()
-    adapter = CodexAdapter()
-    adapter.attach("cx", fake, "tid-1")
-    # Task 6 (achado da revisao, rodada 2, Quebra 2): o kill do shell escondido agora e GATEADO
-    # por `tmux.is_hidden` -- so mata "term-cx" se a marca confirmar que e nosso, senao uma sessao
-    # de TERCEIRO chamada "term-cx" seria derrubada junto. `is_hidden` mockado True aqui pra
-    # exercitar o caminho em que o shell E nosso (o caso comum).
-    with patch("app.adapters.get_adapter", return_value=adapter), \
-         patch.object(registry.tmux, "kill_session") as kill_tmux, \
-         patch.object(registry.tmux, "is_hidden", return_value=True):
-        reg.kill("cx")
-    assert fake.closed is True                      # client vivo terminado
-    assert "cx" not in adapter._sessions            # esquecido da memoria
-    assert codex_sessions.load("cx") is None        # sidecar duravel apagado
-    kill_tmux.assert_any_call("cx")                  # encerra tambem a TUI Codex
-    kill_tmux.assert_any_call("term-cx")             # e o shell escondido do painel de terminal
-    assert kill_tmux.call_count == 2
 
 
 def test_sidecar_preserva_codex_home_em_update(tmp_path):

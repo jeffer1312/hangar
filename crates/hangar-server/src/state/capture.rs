@@ -39,9 +39,13 @@ impl MuxProcess {
     }
 
     /// Só o `capture-pane`: quem chama decide se confere a sessão.
-    pub async fn capture(&self, target: &str) -> Result<String, &'static str> {
-        if let Some(done) = self.direct_capture(target).await { return done; }
-        let out = self.output(&["capture-pane", "-p", "-t", target, "-S", "-200"]).await?;
+    pub async fn capture(&self, target: &str) -> Result<String, &'static str> { self.capture_lines(target, 200).await }
+
+    /// `capture` com `lines` linhas de histórico acima da tela.
+    pub async fn capture_lines(&self, target: &str, lines: u32) -> Result<String, &'static str> {
+        let start = format!("-{lines}");
+        if let Some(done) = self.direct_capture(target, &start).await { return done; }
+        let out = self.output(&["capture-pane", "-p", "-t", target, "-S", &start]).await?;
         read_output(out.status.success(), &out.stdout)
     }
 
@@ -49,11 +53,11 @@ impl MuxProcess {
     /// que a lista conferiu responde direto. Ele responde OK até para alvo que sumiu (vazio, ou
     /// `ERROR: can't find pane`): esses e as falhas seguem pelo CLI, que separa recusa de pane vazio.
     /// Prazo estourado não segue: o CLI pagaria outro prazo inteiro na mesma máquina carregada.
-    async fn direct_capture(&self, target: &str) -> Option<Result<String, &'static str>> {
+    async fn direct_capture(&self, target: &str, start: &str) -> Option<Result<String, &'static str>> {
         if !cfg!(windows) { return None; }
         let base = target.strip_prefix('=')?.split(':').next()?.to_owned();
         let dir = crate::list::mux::verified_direct(&self.program, &base)?;
-        let args = ["capture-pane", "-p", "-t", target, "-S", "-200"].map(str::to_owned);
+        let args = ["capture-pane", "-p", "-t", target, "-S", start].map(str::to_owned);
         let deadline = std::time::Instant::now() + self.timeout;
         let code = match tokio::task::spawn_blocking(move || hangar_psmux::command(&dir, &base, &args, deadline)).await {
             Ok(Ok(stdout)) => return read_output(true, &stdout).ok()
@@ -102,7 +106,11 @@ impl MuxProcess {
     /// Captura que, recusada ou vazia, separa a sessão que sumiu da que falhou: o psmux aceita
     /// comando que não executa, e o vazio de uma sessão morta não pode virar pane parado.
     pub async fn capture_checked(&self, name: &str, target: &str) -> Result<String, &'static str> {
-        match self.capture(target).await {
+        self.capture_checked_lines(name, target, 200).await
+    }
+
+    pub async fn capture_checked_lines(&self, name: &str, target: &str, lines: u32) -> Result<String, &'static str> {
+        match self.capture_lines(target, lines).await {
             Err("capture_refused") => Err(match self.has_session(name).await {
                 Some(false) => "capture_session_missing",
                 Some(true) => "capture_refused",
@@ -355,6 +363,19 @@ mod psmux_direct_tests {
         assert!(seen.join().unwrap()[1].starts_with("\"capture-pane\""));
     }
 
+    /// R3-10: o espelho do terminal (`state::pane`) lê pelo servidor do psmux com o histórico que pediu,
+    /// sem abrir o `tmux.exe` (um por leitura custava ~350 ms).
+    #[tokio::test]
+    async fn the_mirror_reads_the_requested_history_through_the_psmux_server() {
+        let dir = tempfile::tempdir().unwrap();
+        let seen = server(dir.path(), "main", "quadro\n");
+        verify("missing-capture-mux-5", dir.path());
+        let text = MuxProcess::new("missing-capture-mux-5", TIMEOUT).capture_checked_lines("main", "=main:", 777).await.unwrap();
+        assert_eq!(text, "quadro\n");
+        let capture = &seen.join().unwrap()[1];
+        assert!(capture.starts_with("\"capture-pane\"") && capture.contains("\"-777\""), "{capture}");
+    }
+
     /// O servidor não recusa alvo inexistente: quadro vazio volta ao CLI, que separa recusa de pane vazio.
     #[tokio::test]
     async fn an_empty_direct_frame_falls_back_to_the_cli() {
@@ -401,5 +422,26 @@ mod psmux_direct_tests {
         assert_eq!(failed, "capture_timeout");
         drop(release);
         silent.join().unwrap();
+    }
+}
+
+#[cfg(all(test, windows))]
+mod kill_target_tests {
+    use super::*;
+
+    /// R1-05: no psmux o `=` não vale no `kill-session` e o nome cru já é exato (`tmux.alvo_de_kill`): o
+    /// alvo é `nome`, nunca `=nome`, e a confirmação pergunta pela sessão exata.
+    #[tokio::test]
+    async fn r1_05_psmux_kills_by_the_raw_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let calls = dir.path().join("calls");
+        let program = dir.path().join("fake-psmux.cmd");
+        std::fs::write(&program, format!("@echo off\r\necho %*>>\"{}\"\r\nif \"%1\"==\"has-session\" exit /b 1\r\nexit /b 0\r\n",
+            calls.display())).unwrap();
+        assert_eq!(MuxProcess::new(&program, TIMEOUT).kill_session("nome").await, Some(true), "saiu");
+        let seen = std::fs::read_to_string(&calls).unwrap();
+        // O Rust põe aspas no argumento com `=` ao chamar um `.cmd`; o `%*` as mostra, mas o argv é o mesmo.
+        let seen: Vec<String> = seen.lines().map(|line| line.trim().replace("\"=nome\"", "=nome")).collect();
+        assert_eq!(seen, ["kill-session -t nome", "has-session -t =nome"]);
     }
 }

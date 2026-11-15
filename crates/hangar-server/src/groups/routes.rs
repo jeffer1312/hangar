@@ -1,7 +1,7 @@
 //! Rotas de grupo com as respostas do Python (`api.py`: `pair_session`, `unpair_session`,
 //! `group_message`, `pair_contract`; o grupo entre máquinas mora em `federation.rs` e o par 1:1
-//! antigo em `legacy.rs`). O convidado
-//! segue ao Python; corpo que o Rust não aceita é 422 `erro_corpo_invalido` daqui, sem repasse.
+//! antigo em `legacy.rs`). O convidado é recusado pelo porteiro e quem não é o dono, aqui; sem
+//! pastas de grupo, 503 com código. Corpo que o Rust não aceita é 422 `erro_corpo_invalido`.
 //! Texto do protocolo, avisos e chamadas a outra máquina saem depois de soltar o lock do grupo.
 //!
 //! `/pair` e `DELETE /pair` seguram a porta de entrada da sessão até gravar o grupo (um rename não
@@ -27,7 +27,7 @@ use super::text::{ContractLine, Kind, TextArgs, protocol_text};
 use super::local::{JoinRefusal, Snapshot, is_remote};
 use super::orq::{is_orchestrator, list_unavailable};
 use super::service::{GroupError, GroupService, JoinOutcome, JoinOwned, PromoteError};
-use crate::routes::{AppState, cors, gate, pass, pass_any};
+use crate::routes::{AppState, cors, gate, pass_any};
 use crate::runtime::ingress::IngressPass;
 use crate::session_write::input::{deliver_text, json_content_type};
 use crate::session_write::{BODY_LIMIT, busy_body, detail_body, invalid_body, json_response, session_name, too_large};
@@ -72,9 +72,17 @@ fn relay_refused() -> Response {
 impl Asked {
     pub(super) async fn take(st: Arc<AppState>, peer: SocketAddr, req: Request) -> Result<Asked, Response> {
         let bridged = req.extensions().get::<Bridged>().is_some();
-        let (fwd, owner) = match gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return Err(crate::auth::unavailable(e)) };
-        let (Some(groups), true, Some(name)) = (st.groups.clone(), owner || bridged, session_name(req.uri().path())) else {
-            return Err(if bridged { relay_refused() } else { pass(&st, req, &fwd).await });
+        let (_, owner) = match gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return Err(crate::auth::unavailable(e)) };
+        // O Python não tem mais estas rotas: quem não é o dono recebe a recusa daqui.
+        let Some(name) = session_name(req.uri().path()).filter(|_| owner || bridged) else {
+            return Err(crate::routes::refuse_without_python(&st, peer, req, None).await);
+        };
+        let Some(groups) = st.groups.clone() else {
+            if bridged { return Err(relay_refused()); }
+            let mut response = json_response(StatusCode::SERVICE_UNAVAILABLE, detail_body("erro_grupo_indisponivel",
+                UNAVAILABLE_MSG, json!({"detalhe": "groups_bridge_off"})));
+            cors(req.headers(), response.headers_mut());
+            return Err(response);
         };
         let (parts, body) = req.into_parts();
         let Ok(bytes) = to_bytes(body, BODY_LIMIT).await else { return Err(too_large(&parts.headers)) };

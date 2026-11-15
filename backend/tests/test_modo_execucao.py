@@ -78,13 +78,3 @@ def cliente(monkeypatch):
 _H = {"Authorization": "Bearer secret"}
 
 
-@pytest.mark.parametrize("provider", ["claude", "codex", "pi"])
-def test_mode_switch_is_rust_only(cliente, provider):
-    from app.models import SessionInfo
-    info = SessionInfo(name="s1", cwd="/tmp", provider=provider)
-    with patch("app.api._cached_info", AsyncMock(return_value=info)):
-        r = cliente.post("/api/sessions/s1/modo-execucao", headers=_H, json={"terminal": True})
-    if provider == "pi":
-        assert r.status_code == 409 and r.json()["detail"]["code"] == "erro_modo_so_claude"
-    else:
-        assert r.status_code == 503 and r.json()["detail"]["code"] == "session_open_needs_rust_server"

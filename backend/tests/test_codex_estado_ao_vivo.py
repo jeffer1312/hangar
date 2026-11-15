@@ -21,55 +21,6 @@ from app.state import codex_turno_aberto
 _ID = "01a05077-a46d-7cb3-a0cd-9d850d4baec4"
 
 
-async def test_drenar_no_codex_usa_o_adapter_e_nao_o_teclado(monkeypatch):
-    monkeypatch.setattr(api, "_loop_servidor", asyncio.get_running_loop())
-    chamou = []
-
-    class _Adapter:
-        async def drain(self, name: str, path: str) -> int:
-            chamou.append((name, path))
-            return 3
-
-    monkeypatch.setattr(api, "get_adapter", lambda provider: _Adapter())
-    monkeypatch.setattr(api, "drain", lambda *a, **kw: pytest.fail("digitou no pane do Codex"))
-
-    # `to_thread` porque é assim que os chamadores reais rodam (Timer da confirmação, gatilho do
-    # hook): a ponte tem que funcionar de FORA do loop.
-    assert await asyncio.to_thread(api._drenar, "cx", "/r.jsonl", "codex") == 3
-    assert chamou == [("cx", "/r.jsonl")]
-
-
-async def test_drenar_nos_outros_providers_segue_pelo_teclado(monkeypatch):
-    monkeypatch.setattr(api, "_loop_servidor", asyncio.get_running_loop())
-    monkeypatch.setattr(api, "get_adapter",
-                        lambda provider: pytest.fail("desviou o Claude pro adapter"))
-    monkeypatch.setattr(api, "drain", lambda name, jsonl, provider: 2)
-    assert await asyncio.to_thread(api._drenar, "cc", "/t.jsonl", "claude") == 2
-
-
-async def test_drenar_no_claude_sem_terminal_usa_o_adapter(monkeypatch):
-    # Provider "claude" mas sem pane: pelo teclado a entrada era reivindicada e nunca saía.
-    monkeypatch.setattr(api, "_loop_servidor", asyncio.get_running_loop())
-    chamou = []
-
-    class _Adapter:
-        async def drain(self, name: str, path: str) -> int:
-            chamou.append((name, path))
-            return 1
-
-    monkeypatch.setattr(api, "_headless", lambda name: name == "hl")
-    monkeypatch.setattr(api, "get_adapter", lambda chave: _Adapter() if chave == api.CLAUDE_HEADLESS else pytest.fail(chave))
-    monkeypatch.setattr(api, "drain", lambda *a, **kw: pytest.fail("digitou num pane que não existe"))
-    assert await asyncio.to_thread(api._drenar, "hl", "/h.jsonl", "claude") == 1
-    assert chamou == [("hl", "/h.jsonl")]
-
-
-async def test_drenar_no_codex_sem_loop_deixa_a_fila_pendente(monkeypatch):
-    # Falha VISÍVEL (a bolha "na fila" continua na tela), nunca mensagem duplicada.
-    monkeypatch.setattr(api, "_loop_servidor", None)
-    monkeypatch.setattr(api, "drain", lambda *a, **kw: pytest.fail("digitou no pane do Codex"))
-    assert api._drenar("cx", "/r.jsonl", "codex") == 0
-
 
 # -- O turno preso -------------------------------------------------------------
 

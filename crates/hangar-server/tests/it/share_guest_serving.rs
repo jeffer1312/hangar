@@ -13,7 +13,6 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use axum::http::StatusCode;
 use fake::*;
 use futures_util::future::BoxFuture;
 use futures_util::StreamExt;
@@ -114,6 +113,9 @@ async fn list_srv(root: &Path, n: usize) -> Srv {
     state.list = Arc::new(ListBridge::new(ListEnv { mux: Mux::with_program(&script, Duration::from_secs(5)),
         capture_program: script.into_os_string(), procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs },
         FactsClient::new(upstream, SECRET.into())));
+    // O leitor de estado nasce com a lista de `AppState::new`: sem refazê-lo, o pane do agente seria
+    // procurado no tmux da máquina.
+    state.state = Arc::new(hangar_server::state::live::StateEnv::new(state.terminal.clone(), state.list.clone(), state.diag.clone()));
     let srv = serve(state, python, root).await;
     for i in 0..n {
         srv.g.alive(&format!("s{i}"));
@@ -349,12 +351,54 @@ async fn guest_forward_never_touches_the_owner_backoff() {
     let srv = plain_srv(dir.path(), |_| {}).await;
     let t = srv.g.token("cc", Kind::Share);
     let url = format!("http://{lan}:{}/api/sessions/cc/input", srv.guest.port());
-    for status in [StatusCode::UNAUTHORIZED, StatusCode::TOO_MANY_REQUESTS] {
-        srv.python.set_input_reply(Some((status, json!({}))));
-        assert_eq!(post_json(url.clone(), &t, json!({"text": "oi"})).await.0, status.as_u16());
+    // Decisões 1 e 8: a escrita do convidado é do Rust; sem o registro de sessões, 503 com código e
+    // nada vai ao Python. Recusas seguidas do convidado nunca entram no bloqueio do dono.
+    for _ in 0..9 {
+        let (status, body) = post_json(url.clone(), &t, json!({"text": "oi"})).await;
+        assert_eq!((status, body["detail"]["code"].as_str()), (503, Some("runtime_unavailable")), "{body}");
     }
-    assert_eq!(srv.python.input_calls(), 2);
+    assert_eq!(srv.python.input_calls(), 0);
     assert!(srv.st.auth.is_owner(&lan.to_string(), Some(OWNER.as_bytes())), "o dono nesse IP segue livre");
+}
+
+/// R5-12 (`routes.rs` `pass`): na 8766 um caminho aberto do porteiro, sem convidado decidido, nunca
+/// vai ao Python como dono, nem com a senha do dono: 404 do Rust.
+#[tokio::test(flavor = "multi_thread")]
+async fn r5_12_guest_port_without_a_decided_guest_is_404() {
+    let dir = tempfile::tempdir().unwrap();
+    let srv = plain_srv(dir.path(), |_| {}).await;
+    let response = client().get(format!("http://{}/par/x/nada", srv.guest)).bearer_auth(OWNER).send().await.unwrap();
+    assert_eq!(response.status().as_u16(), 404);
+    assert_eq!(response.text().await.unwrap(), r#"{"detail":"Not Found"}"#);
+    assert_eq!(srv.python.hits_to("/par/x/nada"), 0);
+}
+
+/// Achado 1 da revisão: na 8766 a senha do dono não fecha sessão; o porteiro recusa e nada morre.
+#[tokio::test(flavor = "multi_thread")]
+async fn guest_port_delete_with_the_owner_token_closes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let srv = list_srv(dir.path(), 1).await;
+    let response = client().delete(format!("http://{}/api/sessions/s0", srv.guest)).bearer_auth(OWNER).send().await.unwrap();
+    assert_eq!(response.status().as_u16(), 401);
+    assert_eq!(list_support::calls(dir.path(), "kill-session"), 0, "nada foi encerrado");
+    assert_eq!(srv.python.hits_to("/api/sessions/s0"), 0);
+}
+
+/// R1-01: na 8766 o convidado do convite e o par de leitura (`Kind::Pair`) não fecham a sessão: o
+/// porteiro responde 403 `erro_fora_do_convite`, nada é encerrado e o Python não recebe nada.
+#[tokio::test(flavor = "multi_thread")]
+async fn r1_01_the_invite_and_the_reading_pair_never_close_on_the_guest_port() {
+    let dir = tempfile::tempdir().unwrap();
+    let srv = list_srv(dir.path(), 1).await;
+    for kind in [Kind::Share, Kind::Pair] {
+        let token = srv.g.token("s0", kind);
+        let response = client().delete(format!("http://{}/api/sessions/s0", srv.guest)).bearer_auth(&token).send().await.unwrap();
+        let status = response.status().as_u16();
+        let body: Value = serde_json::from_str(&response.text().await.unwrap()).unwrap_or(Value::Null);
+        assert_eq!((status, body["detail"]["code"].as_str()), (403, Some("erro_fora_do_convite")), "{body}");
+    }
+    assert_eq!(list_support::calls(dir.path(), "kill-session"), 0, "nada foi encerrado");
+    assert_eq!(srv.python.hits_to("/api/sessions/s0"), 0);
 }
 
 /// O proxy genérico precisa encerrar o WebSocket quando o convite é revogado.
@@ -545,6 +589,101 @@ async fn share_guest_writes_its_session_and_nothing_else() {
     assert_eq!(post_json(format!("http://{}/api/sessions/o/input", srv.guest), &t, json!({"text": "x"})).await.0, 403);
     assert_eq!(srv.python.hits_to("/api/sessions/s/input"), 0);
     assert_eq!(srv.python.hits_to("/api/sessions/s/interrupt"), 0);
+}
+
+/// HOME da prova com o sidecar de `s` (chave `k-s`, conversa `sid-1`, cano 42), onde o ator grava e
+/// confere a troca de modo: nunca o HOME da máquina.
+fn proof_home(dir: &Path) -> hangar_server::accounts::environment::AccountEnvironment {
+    let home = dir.join("home");
+    crate::session_write_permissions::headless_sidecar(&home, "s");
+    hangar_server::accounts::environment::AccountEnvironment::from_map([("HOME".to_owned(), home.to_string_lossy().into_owned())].into())
+}
+
+/// R4-19, decisões 1 e 2 (D2): o convidado completo lê e troca o modo de permissão e o modelo da sessão
+/// dele pela rota do dono (antes, o 404 do `pass` na 8766). O par de leitura, outra sessão e as rotas de
+/// grupo (R4-17) seguem recusados no porteiro. Nada vai ao Python.
+#[tokio::test(flavor = "multi_thread")]
+async fn r4_19_share_guest_changes_mode_and_model_through_the_owner_route() {
+    let dir = tempfile::tempdir().unwrap();
+    let registry = Arc::new(RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(), "secret-test".into(), "instance-test".into())
+        .with_processes(Arc::new(crate::runtime_open::RecipeProcesses("sid-1"))).with_codex_environment(proof_home(dir.path())));
+    let sink = Arc::new(Mutex::new(Vec::new()));
+    let d = dir.path();
+    registry.open(RuntimeTarget { key: "k-s".into(), generation: 1, name: "s".into(), provider: "claude".into(),
+        metadata: json!({"name": "s", "headless": true, "session_id": "sid-1", "initialized": true}),
+        binding: CanoBinding { pid: 42, escuta: cano(sink.clone()).await, token: "secret-test".into(), versao: 2 },
+        lease_path: d.join("s.lock"), state_path: d.join("s.queue-state.json"), projection_dir: d.join("s-projection"),
+        transcript: d.join("s.jsonl"), created: 0.0 }).await.unwrap();
+    let srv = plain_srv(dir.path(), |st| {
+        st.write_gate_wait = Duration::from_secs(5);
+        assert!(st.state.runtime.set(registry).is_ok());
+    }).await;
+    let t = srv.g.token("s", Kind::Share);
+    let url = |route: &str| format!("http://{}/api/sessions/{route}", srv.guest);
+    let (status, body) = get_json(url("s/permission-modes"), &t).await;
+    assert_eq!((status, body["sondavel"].clone()), (200, json!(false)), "{body}");
+    assert_eq!(body["modes"].as_array().map(Vec::len), Some(6), "{body}");
+    let (status, body) = post_json(url("s/permission-mode"), &t, json!({"mode": "plan"})).await;
+    assert_eq!((status, body["current"].clone()), (200, json!("plan")), "{body}");
+    let (status, body) = post_json(url("s/model-effort"), &t, json!({"model": "sonnet"})).await;
+    assert_eq!((status, body), (200, json!({"ok": true, "scope": "session", "result": null})));
+    let frames: Vec<Value> = sink.lock().unwrap().iter().filter_map(|e| serde_json::from_str(e["frame"].as_str()?).ok()).collect();
+    for subtype in ["set_permission_mode", "set_model"] {
+        assert!(frames.iter().any(|f| f["request"]["subtype"] == subtype), "{subtype}: {frames:?}");
+    }
+    let p = srv.g.token("s", Kind::Pair);
+    assert_eq!(get_json(url("s/permission-modes"), &p).await.0, 403, "o par de leitura não alcança os modos");
+    assert_eq!(post_json(url("s/permission-mode"), &p, json!({"mode": "plan"})).await.0, 403);
+    assert_eq!(post_json(url("s/model-effort"), &p, json!({"model": "sonnet"})).await.0, 403);
+    srv.g.alive("o");
+    assert_eq!(post_json(url("o/permission-mode"), &t, json!({"mode": "plan"})).await.0, 403, "sessão fora do convite");
+    for (route, body) in [("s/pair", json!({"peer": "o"})), ("s/group-message", json!({"text": "oi"}))] {
+        let (status, refused) = post_json(url(route), &t, body).await;
+        assert_eq!((status, refused["detail"]["code"].clone()), (403, json!("erro_fora_do_convite")), "{route}");
+    }
+    assert_eq!(get_json(url("s/pair/contract"), &t).await.0, 403);
+    for route in ["permission-modes", "permission-mode", "model-effort", "pair", "group-message", "pair/contract"] {
+        assert_eq!(srv.python.hits_to(&format!("/api/sessions/s/{route}")), 0, "{route}");
+    }
+}
+
+/// R4-11 (`_invalidate_lists` depois da troca): a linha da lista do Rust não leva o modo de permissão; quem o
+/// mostra ao vivo é o `state` do chat (`claude_permission_mode`), publicado pelo ator assim que a troca é
+/// confirmada, sem releitura pedida pela rota.
+#[tokio::test(flavor = "multi_thread")]
+async fn r4_11_the_changed_mode_reaches_the_live_state_without_a_refresh() {
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path();
+    let registry = Arc::new(RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(), "secret-test".into(), "instance-test".into())
+        .with_processes(Arc::new(crate::runtime_open::RecipeProcesses("sid-1"))).with_codex_environment(proof_home(d)));
+    let srv = plain_srv(d, |st| {
+        st.write_gate_wait = Duration::from_secs(5);
+        registry.bind_lifecycle();
+        registry.bind_hubs(st.side.hubs.downgrade());
+        let _ = st.state.lifecycle.set(registry.clone());
+        let _ = st.side.runtime.set(registry.clone());
+        assert!(st.state.runtime.set(registry.clone()).is_ok());
+    }).await;
+    let transcript = d.join("s.jsonl");
+    append_lines(&transcript, 0..1);
+    srv.python.set_info(info_json("claude-headless", &transcript));
+    let sink = Arc::new(Mutex::new(Vec::new()));
+    registry.open(RuntimeTarget { key: "k-s".into(), generation: 1, name: "s".into(), provider: "claude".into(),
+        metadata: json!({"name": "s", "headless": true, "session_id": "sid-1", "initialized": true}),
+        binding: CanoBinding { pid: 42, escuta: cano(sink.clone()).await, token: "secret-test".into(), versao: 2 },
+        lease_path: d.join("s.lock"), state_path: d.join("s.queue-state.json"), projection_dir: d.join("s-projection"),
+        transcript: transcript.clone(), created: 0.0 }).await.unwrap();
+    let mut events = sse(open_events(srv.owner, "s", "", &[]).await);
+    next_named(&mut events, "state").await;
+    let (status, body) = post_json(format!("http://{}/api/sessions/s/permission-mode", srv.owner), OWNER, json!({"mode": "plan"})).await;
+    assert_eq!((status, body["current"].clone()), (200, json!("plan")), "{body}");
+    let mut seen = Vec::new();
+    for _ in 0..10 {
+        let state: Value = serde_json::from_str(&next_named(&mut events, "state").await.data).unwrap();
+        if state["claude_permission_mode"] == "plan" { return; }
+        seen.push(state["claude_permission_mode"].clone());
+    }
+    panic!("o modo novo não chegou ao estado ao vivo: {seen:?}");
 }
 
 // ── mods ─────────────────────────────────────────────────────────────────────────────────────
@@ -782,4 +921,98 @@ async fn guest_outside_its_session_is_refused_without_reaching_python() {
     assert_eq!(srv.python.hits_to("/api/sessions/outra/cost"), 0);
     let (status, _) = get_json(format!("http://{}/api/sessions/s/cost", srv.guest), &t).await;
     assert_ne!(status, 429, "o token do convidado segue aberto na própria sessão");
+}
+
+/// Na 8766 o método que uma rota do Rust não tem é recusa do Rust, nunca repasse assinado ao Python; troca
+/// de modo e de conta são do dono, e o convidado completo leva a recusa do handler.
+#[tokio::test(flavor = "multi_thread")]
+async fn guest_port_refuses_unserved_methods_and_owner_only_relaunches_in_rust() {
+    let dir = tempfile::tempdir().unwrap();
+    let srv = plain_srv(dir.path(), |_| {}).await;
+    let t = srv.g.token("s", Kind::Share);
+    let url = |route: &str| format!("http://{}/api/sessions/s/{route}", srv.guest);
+    let send = |method: reqwest::Method, route: &'static str, body: Value| {
+        let request = client().request(method, url(route)).bearer_auth(&t).header("content-type", "application/json").body(body.to_string());
+        async move {
+            let r = request.send().await.unwrap();
+            let status = r.status().as_u16();
+            (status, serde_json::from_str::<Value>(&r.text().await.unwrap()).unwrap_or(Value::Null))
+        }
+    };
+    for (method, route) in [(reqwest::Method::PUT, "permission-mode"), (reqwest::Method::GET, "model-effort"), (reqwest::Method::PUT, "pane")] {
+        let (status, body) = send(method, route, json!({})).await;
+        assert_eq!((status, body["detail"]["code"].clone()), (403, json!("erro_fora_do_convite")), "{route}: {body}");
+    }
+    // Antes iam assinados ao Python pelo `pass_any` da 8766 (o "from-python" do dublê); agora é a recusa do
+    // handler, com o código do convite: o de login (`erro_fora_do_convidado`) é só da 8765 (`owner_refusal`).
+    let refused = json!({"detail": {"code": "erro_fora_do_convite", "params": {}, "msg": "fora da sessão compartilhada"}});
+    for (method, route, body) in [(reqwest::Method::POST, "modo-execucao", json!({"terminal": true})), (reqwest::Method::POST, "resume", json!({})),
+        (reqwest::Method::GET, "conta", json!({})), (reqwest::Method::POST, "conta", json!({"config_dir": "/x"}))] {
+        assert_eq!(send(method, route, body).await, (403, refused.clone()), "{route}");
+    }
+    for route in ["permission-mode", "model-effort", "pane", "modo-execucao", "resume", "conta"] {
+        assert_eq!(srv.python.hits_to(&format!("/api/sessions/s/{route}")), 0, "{route}");
+    }
+}
+
+// R3-11 (`share/caller.rs:23,99`): pela 8766, o porteiro decide quem é o convidado. O convite completo lê o
+// espelho; o par de leitura leva `erro_fora_do_convite`; o terminal escondido `term-X` não é a sessão X.
+#[tokio::test(flavor = "multi_thread")]
+async fn r3_11_guest_port_pane_is_for_the_full_invite_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let srv = list_srv(dir.path(), 1).await;
+    let url = |path: &str| format!("http://{}/api/sessions/{path}", srv.guest);
+    let share = srv.g.token("s0", Kind::Share);
+    let (status, body) = get_json(url("s0/pane"), &share).await;
+    assert_eq!(status, 200, "{body}");
+    assert!(body["text"].as_str().unwrap().contains("pronto"), "{body}");
+    let pair = srv.g.token("s0", Kind::Pair);
+    let (status, body) = get_json(url("s0/pane"), &pair).await;
+    assert_eq!((status, body["detail"]["code"].clone()), (403, json!("erro_fora_do_convite")), "{body}");
+    assert_eq!(get_json(url("term-s0/pane"), &share).await.0, 403);
+    assert_eq!(srv.python.hits_to("/api/sessions/s0/pane") + srv.python.hits_to("/api/sessions/term-s0/pane"), 0);
+}
+
+// R3-31 (`routes.rs:1158-1170`): com a porta da sessão presa pela troca de conversa, o `recarregar` do dono e
+// o do convidado completo são o 409 de sessão ocupada pela rota, e o arquivo da sessão não muda.
+#[tokio::test(flavor = "multi_thread")]
+async fn r3_31_reload_while_a_transfer_holds_the_gate_is_409_busy_for_owner_and_guest() {
+    let dir = tempfile::tempdir().unwrap();
+    let registry = Arc::new(RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(), "secret-test".into(), "instance-test".into())
+        .with_processes(Arc::new(crate::runtime_open::RecipeProcesses("sid-1"))).with_codex_environment(proof_home(dir.path())));
+    let sidecar = dir.path().join("home/.hangar/claude-headless/s.json");
+    let before = std::fs::read(&sidecar).unwrap();
+    registry.ingress().hold("s", Duration::from_secs(1)).await.unwrap();
+    let srv = plain_srv(dir.path(), |st| {
+        // Sem pastas da lista: nada lê as transferências do HOME da máquina.
+        let mut env = ListEnv::from_env();
+        env.dirs = None;
+        st.list = Arc::new(ListBridge::new(env, FactsClient::new(crate::refused_address(), SECRET.into())));
+        assert!(st.state.runtime.set(registry).is_ok());
+    }).await;
+    let t = srv.g.token("s", Kind::Share);
+    let busy = json!({"detail": {"code": "session_transfer_busy", "params": {}, "msg": "A sessão está trocando de agente; tente novamente quando terminar."}});
+    for (base, token) in [(srv.owner, OWNER.to_owned()), (srv.guest, t)] {
+        assert_eq!(post_json(format!("http://{base}/api/sessions/s/recarregar"), &token, json!({})).await, (409, busy.clone()), "{base}");
+    }
+    assert_eq!(std::fs::read(&sidecar).unwrap(), before, "nada mudou");
+    assert_eq!(srv.python.hits_to("/api/sessions/s/recarregar"), 0);
+}
+
+// R4-17 (`caller.rs:20`): o convidado do convite não alcança as rotas de grupo que faltavam provar; o
+// porteiro recusa antes do handler, e nada vai ao Python.
+#[tokio::test(flavor = "multi_thread")]
+async fn r4_17_invite_guest_never_reaches_the_remaining_group_routes() {
+    let dir = tempfile::tempdir().unwrap();
+    let srv = plain_srv(dir.path(), |_| {}).await;
+    let t = srv.g.token("s", Kind::Share);
+    for (method, route, body) in [(reqwest::Method::DELETE, "pair", json!({})), (reqwest::Method::PUT, "pair/contract", json!({"text": "x"})),
+        (reqwest::Method::POST, "pair-remote", json!({"peer": "outra::x"})), (reqwest::Method::POST, "unpair-remote", json!({}))] {
+        let response = client().request(method.clone(), format!("http://{}/api/sessions/s/{route}", srv.guest)).bearer_auth(&t)
+            .header("content-type", "application/json").body(body.to_string()).send().await.unwrap();
+        let status = response.status().as_u16();
+        let reply: Value = serde_json::from_str(&response.text().await.unwrap()).unwrap_or(Value::Null);
+        assert_eq!((status, reply["detail"]["code"].clone()), (403, json!("erro_fora_do_convite")), "{method} {route}: {reply}");
+        assert_eq!(srv.python.hits_to(&format!("/api/sessions/s/{route}")), 0, "{route}");
+    }
 }

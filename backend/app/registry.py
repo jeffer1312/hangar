@@ -12,20 +12,18 @@ from pathlib import Path
 from typing import Optional
 from app import diag, tmux
 from app import agentpane
-from app import permission_mode as modo_permissao
 from app.config import settings
 from app import claude_customizations as session_customizations
 from app import plugin_bridge
 from app import runtime_config
 from app.models import SessionInfo, session_key
-from app.pqueue import PromptQueue, merged_history
+from app.pqueue import merged_history
 from app.archive import _texto_simples, conversation_files
-from app.chain import ThenLink
 from app.pair import PairLink
 from app.adapters.claude_headless import sessions as headless_sessions
 from app.adapters.codex import sessions as codex_sessions
 from app import codex_contas
-from app.askquestion import clear_pending_askq, pergunta_aberta
+from app.askquestion import pergunta_aberta
 from app.state import (classify, _live_spinner, rate_limit_reset,
                        codex_turno_aberto, menu_codex,
                        status_line as _pane_status)
@@ -488,46 +486,6 @@ def name_of_pid(pid: int) -> Optional[str]:
     return achado
 
 
-def inbox_socket_of(name: str) -> Optional[str]:
-    """Socket de inbox do cross-session messaging desta sessao, ou None se ela nao tem.
-
-    O Claude Code (2.1.224+) liga um socket por sessao em `$XDG_RUNTIME_DIR/cc-socks/<pid>.sock`
-    (medido em 07/08/2026; o pid e o do processo `claude`). Ter o socket e o que torna a sessao
-    alcancavel pelo `SendMessage` de outra — e o que o `ListAgents` de la vai listar.
-
-    Serve pro hangar-send decidir, com FATO em vez de suposicao, se o caminho nativo existe pra este
-    alvo: sessao aberta antes da liberacao, sessao Codex/Pi ou sessao de outra maquina nao tem
-    socket nenhum, e mandar o modelo usar `SendMessage` nesses casos seria mandar ele bater numa
-    porta que nao existe.
-    """
-    # Gate de plataforma ANTES de qualquer coisa: `os.getuid()` nao existe no Windows, e e justamente
-    # la que XDG_RUNTIME_DIR costuma faltar — o AttributeError subia direto pra rota /peer-address e
-    # ela dava 500 em TODA chamada naquela plataforma (achado da revisao). O Claude Code tambem nao
-    # oferece a feature no Windows nativo, entao "sem socket" e a resposta certa, nao um erro.
-    if os.name != "posix":
-        return None
-    try:
-        # O `is_dir()` tambem fica DENTRO do try: ele engole ENOENT/ENOTDIR mas RELEVANTA EACCES, e
-        # um XDG_RUNTIME_DIR sem permissao (backend sob outro uid, escopo do systemd mais apertado,
-        # container com namespace proprio) mandava PermissionError direto pra rota /peer-address —
-        # 500 em toda chamada naquele ambiente. Mesma classe do gate de Windows acima, um passo antes
-        # (achado da revisao).
-        run = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
-        socks = Path(run) / "cc-socks"
-        if not socks.is_dir():
-            return None                              # feature ausente/desligada nesta maquina
-        pane = tmux.pane_pid(name)
-        if not pane:
-            return None
-        for p in _descendant_pids(pane, _proc_children_map()):
-            caminho = socks / f"{p}.sock"
-            if caminho.exists():
-                return str(caminho)
-    except Exception:                                # noqa: BLE001
-        _log.warning("inbox_socket_of(%r) falhou; tratando como sem socket", name, exc_info=True)
-    return None
-
-
 def _claude_config_dir(info) -> Optional[str]:
     """Pasta de configuração da conta da sessão Claude (`conta` = "claude:<pasta>")."""
     conta = getattr(info, "conta", None) or ""
@@ -558,15 +516,6 @@ def _claude_reading(info, pid: Optional[int]) -> tuple[Optional[dict], Optional[
 
 _STATUS_TTL = 20.0
 _STATUS_BUDGET = 2
-
-
-class KillFailed(Exception):
-    """A sessao continuou de pe depois do kill. Existe pra a rota DELETE reportar em vez de responder
-    {"ok": true} e a UI sumir com um card de sessao que segue viva (ver SessionRegistry.kill)."""
-
-    def __init__(self, name: str, detail: dict | None = None):
-        super().__init__(f"a sessao '{name}' continua de pe depois do kill-session")
-        self.name, self.detail = name, detail
 
 
 class SessionOpenNeedsRust(Exception):
@@ -833,20 +782,6 @@ class SessionRegistry:
                 if required:
                     raise
 
-    def _forget(self, name: str, required: bool = False) -> None:
-        """Esquece o nome aqui e no Rust. `required`: criação, antes de qualquer efeito; a falha
-        levanta, porque o nome reusado herdaria o cache e abriria a conversa da morta. Nos demais
-        a sessão já morreu ou trocou: a falha fica no diário (`lista.ponte`) e a criação seguinte
-        do mesmo nome esquece de novo."""
-        if _rust_caches():
-            from app import list_bridge
-            try:
-                list_bridge.forget(name)
-            except (list_bridge.ListBridgeError, tmux.MuxIndisponivel):
-                if required:
-                    raise
-        self._forget_local(name)
-
     def _forget_local(self, name: str) -> None:
         self._jsonl_cache.pop(name, None)
         self._fd_locked.discard(name)
@@ -1019,11 +954,9 @@ class SessionRegistry:
                 jsonl, tracked = None, False
             else:
                 jsonl, tracked = self.resolve_tracked(p["name"], p["cwd"], p["pid"], children)
-            link = ThenLink(p["name"]).get()
             pair = PairLink(p["name"]).get()
             info = SessionInfo(name=p["name"], cwd=p["cwd"], jsonl=jsonl, tracked=tracked,
                                lifecycle_id=session_life(p["name"], meta=None, birth=p.get("session_created")),
-                               then_target=link.get("target") if link else None,
                                pair_peers=pair.get("peers") if pair else None,
                                pair_external=_pair_external(p["name"], pair.get("peers") if pair else None),
                                pair_gid=pair.get("gid") if pair else None,
@@ -1071,7 +1004,6 @@ class SessionRegistry:
                 provider="codex", tracked=True, conta=f"codex:{codex_home}",
                 codex_home=codex_home, headless=bool(meta.get("headless")),
                 codex_service_tier=meta.get("service_tier"),
-                then_target=(ThenLink(meta["name"]).get() or {}).get("target"),
                 pair_peers=(PairLink(meta["name"]).get() or {}).get("peers"),
                 pair_external=_pair_external(meta["name"], (PairLink(meta["name"]).get() or {}).get("peers")),
                 pair_gid=(PairLink(meta["name"]).get() or {}).get("gid"),
@@ -1093,7 +1025,6 @@ class SessionRegistry:
                 conta=(meta.get("engine_credential_id") if meta.get("engine_account") else
                        f"chave:{meta['engine']}" if meta.get("engine") else
                        f"claude:{Path(cdir or Path.home() / '.claude').resolve()}"),
-                then_target=(ThenLink(meta["name"]).get() or {}).get("target"),
                 pair_peers=(PairLink(meta["name"]).get() or {}).get("peers"),
                 pair_external=_pair_external(meta["name"], (PairLink(meta["name"]).get() or {}).get("peers")),
                 pair_gid=(PairLink(meta["name"]).get() or {}).get("gid"),
@@ -1527,90 +1458,6 @@ class SessionRegistry:
             cmd = tmux.join_cmd([*prefix, "/bin/sh", "-c", cmd])
         return cmd
 
-
-    @staticmethod
-    def _kill_hidden_shell(name: str) -> None:
-        # Task 6 (achado da revisao, rodada 2): mata `term-<name>` SO se a marca confirmar que a
-        # sessao e NOSSA -- consulta DIRETA ao tmux (`is_hidden`), nao inferida de `self.list()`
-        # (que tambem filtra por sidecar Codex, e "sumir da lista" nao e o mesmo que "estar
-        # marcada"). Sem esta checagem, um "term-<name>" de TERCEIRO (o mesmo cenario alcancavel
-        # que o I1 reconheceu na rota /shell) seria derrubado JUNTO quando o agente `name` fosse
-        # encerrado, com trabalho rodando e sem afordancia nenhuma pro dono perceber -- so um
-        # `_log.debug`. Best-effort: falhar aqui NAO pode derrubar o kill principal, que ja
-        # aconteceu antes desta chamada.
-        alvo = f"term-{name}"
-        if tmux.is_hidden(alvo) and not tmux.kill_session(alvo):
-            _log.debug("kill: shell escondido de %r nao saiu (pode nao existir)", name)
-
-    def kill(self, name: str, *, closed_by_rust: bool = False) -> list[dict]:
-        """Devolve avisos de saída (sempre vazio: a saída do grupo é do Rust, depois do fechamento).
-        `closed_by_rust`: o Rust já encerrou a sessão (pane, app-server, sidecar, fila, grupo) e
-        repassou; só as lojas daqui, sem nenhuma chamada de volta a ele."""
-        if closed_by_rust:
-            self._forget_local(name)
-            ThenLink(name).clear()
-            return []
-
-        # Levanta KillFailed quando a sessao SOBREVIVE. Antes o retorno do tmux era descartado e a
-        # limpeza duravel (cache, fila, then, pareamento) rodava do mesmo jeito: o card sumia da UI, o
-        # pareamento se desfazia, a rota respondia {"ok": true} — e a sessao reaparecia na varredura
-        # seguinte, sem fila e sem par, parecendo um bug sem relacao com o "encerrar" de minutos antes.
-        # Pesa mais no Windows, onde o kill-session do psmux nao derruba a sessao (medido).
-        if headless_sessions.exists(name):
-            # Claude sem terminal: SIGTERM no processo (se vivo), sidecar fora, estado durável limpo.
-            from app.adapters import get_adapter, CLAUDE_HEADLESS
-            # Sidecar PRIMEIRO: sem ele, um drain que chegue no meio não sobe outro processo. O
-            # meta vai junto: é nele que mora o pid do cano, que vive fora do backend.
-            meta = headless_sessions.load(name)
-            headless_sessions.delete(name)
-            try:
-                get_adapter(CLAUDE_HEADLESS).close_sync(name, meta)
-            except Exception:
-                headless_sessions.restaurar(meta, preserve_process=True)
-                raise
-            self._forget(name)
-            PromptQueue(name).clear()
-            ThenLink(name).clear()
-            return []
-        if codex_sessions.exists(name):
-            # Sessao Codex: fecha app-server e TUI tmux, apaga o sidecar e limpa estado duravel.
-            from app.adapters import get_adapter
-            # O tmux PRIMEIRO. Invertido, `close_sync` matava o app-server e so entao o kill era
-            # tentado: falhando ele (o caso que esta funcao existe pra pegar), a excecao dizia "nao
-            # consegui encerrar" com a TUI ja sem servidor — sinal trocado, e a sessao que sobrou na
-            # tela nao fala mais com ninguem. Agora falha antes de qualquer estrago.
-            # Codex com terminal do Rust: quem encerra (pane, app-server, sidecar, fila) é ele; as lojas daqui seguem abaixo.
-            from app.runtime_coordinator import rust_codex_terminal
-            if (rust := rust_codex_terminal(name, "kill")) is not None and rust[0] != 200:
-                raise KillFailed(name, json.loads(rust[1]).get("detail"))
-            if rust is None and not (codex_sessions.load(name) or {}).get("headless") and not tmux.kill_session(name):
-                raise KillFailed(name)
-            get_adapter("codex").close_sync(name) if rust is None else get_adapter("codex").forget_memory(name)
-            self._kill_hidden_shell(name)
-            codex_sessions.delete(name)
-            self._forget(name)
-            PromptQueue(name).clear()
-            ThenLink(name).clear()
-            return []
-        # Limpa o sidecar do AskUserQuestion ANTES de matar (precisa do processo vivo pra resolver o
-        # jsonl), best-effort: cleanup nunca bloqueia/quebra o kill. Senao um stale reabriria o stepper
-        # numa sessao futura de mesmo nome.
-        try:
-            jsonl = next((s.jsonl for s in self.list() if s.name == name), None)
-            if jsonl:
-                clear_pending_askq(jsonl)
-        except Exception:
-            pass
-        if not tmux.kill_session(name):
-            raise KillFailed(name)
-        self._kill_hidden_shell(name)
-        self._forget(name)  # cache invalido: nome pode ser reusado por outra sessao depois
-        # Sessao morta nao deixa fila pra tras: senao acumula orfaos e uma futura sessao de mesmo
-        # nome herdaria essas entradas como bubble-fantasma (mesmo motivo do clear no create()).
-        PromptQueue(name).clear()
-        ThenLink(name).clear()  # mesmo motivo, pro vinculo 'then' (feature #12)
-        return []
-
     # ── Resume de sessao "sem id" ────────────────────────────────────────────────
     # Uma sessao aberta com `claude` cru (sem --session-id) JA tem um transcript <uuid>.jsonl; so nao da
     # pra ligar o pane a ele com seguranca (o uuid nao esta no cmdline). Relançar o pane com
@@ -1643,8 +1490,3 @@ class SessionRegistry:
                 f"retomar so vale pra sessao Claude (esta e {prov}); "
                 f"feche o pane e abra de novo pelo wrapper `{prov}`")
         return read_only
-
-
-from app.runtime_adapter import registry_method as _runtime_registry_method
-for _method_name in ("kill",):
-    setattr(SessionRegistry, _method_name, _runtime_registry_method(getattr(SessionRegistry, _method_name)))

@@ -2168,7 +2168,7 @@ impl RuntimeRegistry {
                 // O ator já parou: erro daqui em diante é o valor de `stopped`, para a entrada sair abaixo em vez
                 // de ficar com o ator morto.
                 let killed:Result<(),RuntimeError>=async {
-                    let dir=super::lifecycle::claude_sidecar_dir()?;
+                    let dir=self.policy.claude_sidecar_dir()?;
                     process::kill(&cano,key,&dir).await.map_err(|e|RuntimeError::new(e.code(),"o cano da sessão não foi encerrado"))?;
                     if let Some(recipe)=&recipe {let (pid,birth)=recipe.agent_identity();super::lifecycle::wait_absent(procs.as_ref(),pid,birth,"lifecycle_agent_still_alive").await?;}
                     Ok(())
@@ -2269,7 +2269,7 @@ impl RuntimeRegistry {
                         None
                     },
                 };
-                if let Some(target)=&runtime_target {super::lifecycle::delete_sidecar(target,&closed.binding.conversation)?;}
+                if let Some(target)=&runtime_target {super::lifecycle::delete_sidecar(&self.policy.claude_sidecar_dir()?,target,&closed.binding.conversation)?;}
                 drop(store);drop(lease);
             }
         } else if let Some(store) = &self.interactions { store.forget(key).map_err(crate::interactions::runtime_error)?; }
@@ -2402,8 +2402,8 @@ impl RuntimeRegistry {
         if state.owner_key!=target.key || state.generation!=target.generation {return Err(failure("runtime_generation"));}
         let mut captured=target.clone();
         if let Some(meta)=state.runtime_state.get("metadata").filter(|meta|meta["key"]==target.key && meta["cano"]["pid"]==target.binding.pid) {captured.metadata=meta.clone();}
-        let lease=queue.lease();let values=patch.clone();let original=captured.clone();
-        let saved=tokio::task::spawn_blocking(move || {let _lease=lease;super::lifecycle::patch_sidecar(&original,&values)}).await.map_err(|_|failure("lifecycle_worker"))??;
+        let lease=queue.lease();let values=patch.clone();let original=captured.clone();let dir=self.policy.claude_sidecar_dir()?;
+        let saved=tokio::task::spawn_blocking(move || {let _lease=lease;super::lifecycle::patch_sidecar_in(&dir,&original,&values)}).await.map_err(|_|failure("lifecycle_worker"))??;
         if saved["updated"]!=true {return Err(failure("lifecycle_sidecar_stale"));}
         let mut next=target.clone();next.generation=target.generation.checked_add(1).ok_or_else(||failure("runtime_generation"))?;
         next.metadata=saved["metadata"].clone();next.metadata["lifecycle_pending"]=json!(false);
@@ -2755,7 +2755,7 @@ impl RuntimeRegistry {
             recipe.preserve_settings(target.state_path.parent().ok_or_else(||failure("relaunch_settings_copy"))?)?;
             Arc::new(recipe)
         };
-        let sidecar_dir=super::lifecycle::claude_sidecar_dir()?;
+        let sidecar_dir=self.policy.claude_sidecar_dir()?;
         reconcile_sidecar_account(&self.policy,&target.metadata).await?;
         // A vida nova sai do spec da sessão com a configuração de agora, nunca da receita do processo que
         // morre: a mesma conversa, o modo pedido e o modelo e o esforço que ela usava.
@@ -2791,7 +2791,7 @@ impl RuntimeRegistry {
         store.exec(current_generation,&format!("{phase}:intent:{attempt}"),ClockSample {monotonic_s:0.0,epoch_s:SystemTime::now().duration_since(UNIX_EPOCH).map_or(0.0,|d|d.as_secs_f64())},Action::AdvanceLifecycle {generation:current_generation,state:json!({"claude_lifecycle_intent":intent})}).map_err(|_|failure("queue_io"))?;
         if let Some(meta)=store.state().runtime_state.get("metadata").filter(|meta|meta["key"]==key) {target.metadata=meta.clone();}
         if target.metadata["session_id"]!=binding.conversation {return Err(failure("lifecycle_conversation"));}
-        let sidecar=super::lifecycle::claude_sidecar_dir()?.join(format!("{name}.json"));
+        let sidecar=self.policy.claude_sidecar_dir()?.join(format!("{name}.json"));
         let persisted:Value=serde_json::from_slice(&super::queue::read_replaced(&sidecar).map_err(|_|failure("lifecycle_sidecar_read"))?).map_err(|_|failure("lifecycle_sidecar_read"))?;
         if persisted["key"]!=key || persisted["session_id"]!=binding.conversation {return Err(failure("lifecycle_conversation"));}
         let sidecar_expected_pid=if persisted["cano"].is_null() {0} else {persisted["cano"]["pid"].as_u64().and_then(|pid|u32::try_from(pid).ok()).ok_or_else(||failure("lifecycle_sidecar_read"))?};
@@ -2810,7 +2810,7 @@ impl RuntimeRegistry {
             Err(error)=> {
                 let clock=ClockSample {monotonic_s:0.0,epoch_s:SystemTime::now().duration_since(UNIX_EPOCH).map_or(0.0,|d|d.as_secs_f64())};
                 let mut failed_target=target.clone();failed_target.binding.pid=sidecar_expected_pid;
-                if super::lifecycle::patch_sidecar(&failed_target,&json!({"cano":null}))?["updated"]!=true {return Err(failure("lifecycle_sidecar_changed"));}
+                if super::lifecycle::patch_sidecar_in(&self.policy.claude_sidecar_dir()?,&failed_target,&json!({"cano":null}))?["updated"]!=true {return Err(failure("lifecycle_sidecar_changed"));}
                 store.exec(current_generation,&format!("{step}:failed"),clock,Action::Finish {id:step.clone(),status:super::queue::Status::Unknown,result:json!({"error_code":error.code(),"alive":false})}).map_err(|_|failure("queue_io"))?;
                 let error=RuntimeError::new(error.code(),"a sessão não reabriu e ficou sem processo; nenhum modo foi confirmado");
                 super::actor::mark_live_error(&self.live_sender(name),&error.code,&error.message);return Err(error);
@@ -2833,7 +2833,7 @@ impl RuntimeRegistry {
         store.exec(current_generation,&format!("{step}:advance"),clock,Action::AdvanceLifecycle {generation:target.generation,state:json!({"metadata":target.metadata})}).map_err(|_|failure("queue_io"))?;
         let mut original_target=target.clone();original_target.generation=generation;original_target.metadata["cano"]=serde_json::to_value(&original).unwrap();
         original_target.binding=CanoBinding {pid:sidecar_expected_pid,escuta:original.escuta.clone(),token:original.token.clone(),versao:original.versao};
-        if super::lifecycle::patch_sidecar(&original_target,&json!({"cano":serde_json::to_value(&cano).unwrap()}))?["updated"]!=true {return Err(failure("lifecycle_sidecar_changed"));}
+        if super::lifecycle::patch_sidecar_in(&self.policy.claude_sidecar_dir()?,&original_target,&json!({"cano":serde_json::to_value(&cano).unwrap()}))?["updated"]!=true {return Err(failure("lifecycle_sidecar_changed"));}
         drop(store);drop(lease);
         let result=async {
             self.open_headless_locked(target.clone(),None,false,false).await?;
@@ -2914,7 +2914,7 @@ impl RuntimeRegistry {
             let closed=closed.ok_or_else(||failure("state_lifecycle_binding_missing"))?;
             if closed.name!=name || !super::lifecycle::matches_life(&closed.binding,key,conversation,generation) {return Ok(Dead::InTransfer);}
             if !super::lifecycle::process_absent(&procs,closed.pid,closed.birth)? {return Ok(Dead::InTransfer);}
-            let sidecar=super::lifecycle::claude_sidecar_dir()?.join(format!("{name}.json"));
+            let sidecar=self.policy.claude_sidecar_dir()?.join(format!("{name}.json"));
             match super::queue::read_replaced(&sidecar) {
                 Ok(bytes)=> {let _:Value=serde_json::from_slice(&bytes).map_err(|_|failure("lifecycle_sidecar_read"))?;return Ok(Dead::InTransfer);},
                 Err(error) if error.kind()==std::io::ErrorKind::NotFound=>{},

@@ -438,6 +438,11 @@ impl RuntimeRegistry {
         }
     }
 
+    /// O último modo fora do plano no registro sem terminal (o da parada e o da adormecida); `None` sem ele.
+    pub async fn claude_previous_non_plan(&self,name:&str) -> Option<String> {
+        self.claude_sidecar(name).await.ok().flatten()?.get("previous_non_plan")?.as_str().map(str::to_owned)
+    }
+
     /// O spec que a sessão Claude `name` roda agora (gravado ⊕ observado), sem conferir se está parada.
     /// `None` = não é sessão Claude daqui.
     pub async fn claude_spec(&self,name:&str) -> Option<Result<SessionSpec,RuntimeError>> {

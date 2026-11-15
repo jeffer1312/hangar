@@ -27,11 +27,6 @@ def _python_routes(path):
     return [r for r in api_mod.app.router.routes if not isinstance(r, Mount) and r.matches(scope)[0] != Match.NONE]
 
 
-def test_release_and_birth_are_all_rust():
-    assert _python_routes("/api/sessions"), "o casador acha uma rota que o Python atende"
-    assert _python_routes("/internal/sessions/s1/release") == [], "soltar o nome é todo do Rust"
-    assert _python_routes("/internal/sessions/s1/born") == [], "o nascimento é todo do Rust"
-
 
 def test_the_guest_claim_is_written_by_the_rust_not_here():
     assert _python_routes("/internal/guests/claim") == []

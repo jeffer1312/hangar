@@ -38,157 +38,6 @@ class Owner:
         return {"operation_id":operation_id, "disposition":self.disposition, "payload":{}}
 
 
-@pytest.mark.parametrize("provider,path", [
-    ("claude", "input"), ("codex", "input"), ("claude", "group"),
-    ("claude", "pair"), ("codex", "peer"), ("claude", "guest"),
-])
-def test_all_send_producers_use_one_operation(monkeypatch, provider, path):
-    owner = Owner()
-    monkeypatch.setattr(runtime_coordinator, "_current", owner)
-    monkeypatch.setattr(api, "_provider_of", lambda name: provider)
-    monkeypatch.setattr(api, "_headless", lambda name: provider == "claude")
-    monkeypatch.setattr(api, "_session_exists", lambda name: True)
-    monkeypatch.setattr(api, "_enviar_nativo", lambda *args: pytest.fail("UDS antes do diário"))
-    monkeypatch.setattr(api.PromptQueue, "append", lambda *args, **kwargs: pytest.fail("append fora do ator"))
-    async def scenario():
-        result = await api._enviar("session", "[de: sender] Olá" if path != "input" else "Olá")
-        assert result["ok"] and result["delivered"]
-    asyncio.run(scenario())
-    assert len(owner.calls) == 1
-    assert owner.calls[0][0]["kind"] == "submit"
-    assert owner.calls[0][1]
-
-
-def test_unknown_send_waits_in_queue_without_error_or_retry(monkeypatch):
-    # Entrega sem prova não é erro na tela (o dono reenviaria e duplicaria): a fila confirma pelo
-    # transcript, uma vez.
-    owner = Owner("unknown")
-    monkeypatch.setattr(runtime_coordinator, "_current", owner)
-    result = asyncio.run(api._send_managed("session", "Olá", "claude", track_entry=True))
-    assert result["ok"] and not result["delivered"] and result["uncertain"] and result["error"] is None
-    assert result["entry_id"] == owner.calls[0][1]
-    assert len(owner.calls) == 1
-
-
-@pytest.mark.parametrize("text,terminal", [("/model", True), ("Olá", False)])
-def test_unknown_without_transcript_proof_stays_an_error(monkeypatch, text, terminal):
-    # Comando `/` não tem linha na fila; sessão sem terminal não reconcilia pelo transcript.
-    owner = Owner("unknown", terminal=terminal)
-    monkeypatch.setattr(runtime_coordinator, "_current", owner)
-    result = asyncio.run(api._send_managed("session", text, "claude"))
-    assert not result["ok"] and len(owner.calls) == 1
-
-
-@pytest.mark.parametrize("text,terminal,ok", [("/clear", True, False), ("Olá", True, True), ("/clear", False, True)])
-def test_deferred_slash_on_terminal_is_an_error_not_queued(monkeypatch, text, terminal, ok):
-    # Item 16: o /clear adiado (pergunta ainda aberta) não tem linha na fila e nunca roda depois; o
-    # 200 "na fila" o fazia sumir calado.
-    owner = Owner("deferred", terminal=terminal)
-    monkeypatch.setattr(runtime_coordinator, "_current", owner)
-    result = asyncio.run(api._send_managed("session", text, "claude"))
-    assert result["ok"] is ok and len(owner.calls) == 1
-    if not ok:
-        assert result["error"]["code"] == "erro_comando_nao_executado" and result["error"]["params"]["comando"] == "/clear"
-
-
-def test_send_without_rust_answer_is_uncertain_not_failed(monkeypatch):
-    owner = Owner("unknown")
-    async def lost(name, command, operation_id):
-        owner.calls.append((command, operation_id))
-        return {"operation_id":operation_id, "disposition":"unknown", "payload":{"transport_lost":True}}
-    owner.op = lost
-    monkeypatch.setattr(runtime_coordinator, "_current", owner)
-    result = asyncio.run(api._send_managed("session", "Olá", "claude", track_entry=True))
-    assert result["ok"] and not result["delivered"] and result["uncertain"]
-    assert result["error"] is None and result["entry_id"] == owner.calls[0][1]
-
-
-@pytest.mark.parametrize("source", ["hook", "drain_session", "turn_end"])
-def test_background_producers_reach_owner(monkeypatch, source):
-    owner = Owner()
-    monkeypatch.setattr(runtime_coordinator, "_current", owner)
-    monkeypatch.setattr(api, "_cached_info_sync", lambda name: SimpleNamespace(jsonl="chat", provider="claude"))
-    monkeypatch.setattr(api.PromptQueue, "load", lambda *args: pytest.fail("confirmação por texto antigo"))
-    async def scenario():
-        owner.loop = asyncio.get_running_loop()
-        if source == "turn_end":
-            await asyncio.to_thread(api._confirm_and_drain, "session")
-        elif source == "drain_session":
-            await asyncio.to_thread(api._drain_session, "session")
-        else:
-            await asyncio.to_thread(api._drenar, "session", "chat", "claude")
-    asyncio.run(scenario())
-    assert [call[0]["kind"] for call in owner.calls] == (["confirm", "drain"] if source == "turn_end" else ["drain"])
-
-
-def test_ownership_moving_never_breaks_stream_worker_or_route(monkeypatch):
-    # Sessão recém-criada passando ao Rust: o SSE e o drain de fundo seguem, a rota responde 409.
-    import json
-    owner = Owner()
-    async def moving(name, command, operation_id):
-        raise runtime_coordinator.TransferInProgress("sessão em transferência; aguarde a posse ser confirmada")
-    owner.op = moving
-    monkeypatch.setattr(runtime_coordinator, "_current", owner)
-    async def scenario():
-        owner.loop = asyncio.get_running_loop()
-        assert await asyncio.to_thread(api._drenar, "session", "chat", "codex") == 0
-    asyncio.run(scenario())
-    response = asyncio.run(api._ownership_moving(None, runtime_coordinator.TransferInProgress("x")))
-    assert response.status_code == 409
-    assert json.loads(response.body)["detail"]["code"] == "session_transfer_busy"
-
-
-def test_terminal_and_other_providers_keep_legacy_route(monkeypatch):
-    monkeypatch.setattr(runtime_coordinator, "_current", Owner())
-    monkeypatch.setattr(api, "_headless", lambda name: False)
-    monkeypatch.setattr(api, "drain", lambda *args: 3)
-    assert api._drenar("terminal", "chat", "pi") == 3
-
-
-def test_native_receipt_updates_registered_operation_only(tmp_path, monkeypatch):
-    import json
-    import uuid
-    from app.runtime_coordinator import Binding, RuntimeCoordinator
-    owner = RuntimeCoordinator()
-    monkeypatch.setattr(runtime_coordinator, "_current", owner)
-    slot = owner.register(Binding("session", "key", "claude", True, {"key":"key"},
-        str(tmp_path / "chat"), tmp_path / "projection", tmp_path / "state", tmp_path / "lease", 1))
-    slot.store.exec(1, "prepare", {"epoch_s":1, "monotonic_s":1},
-        {"kind":"prepare", "id":"entry", "entry_id":None, "payload":{"kind":"input"}})
-    calls = []
-    async def op(name, command, operation_id):
-        calls.append(command)
-    owner.op = op
-    mid = str(uuid.uuid5(uuid.NAMESPACE_URL, "hangar:key:entry"))
-    try:
-        assert asyncio.run(owner.native_receipt(mid, "rejected"))
-        assert calls[0]["action"]["id"] == "entry"
-        assert calls[0]["action"]["status"] == "rejected"
-    finally:
-        owner.close_python_leases()
-
-
-def test_native_receipt_with_rust_up_leaves_the_state_file_alone(tmp_path, monkeypatch):
-    # Com o Rust de pé o recibo volta à caixa dele: o Python não lê o arquivo que o Rust troca.
-    import uuid
-    from pathlib import Path
-    from app.runtime_coordinator import Binding, RuntimeCoordinator
-    owner = RuntimeCoordinator()
-    monkeypatch.setattr(runtime_coordinator, "_current", owner)
-    slot = owner.register(Binding("session", "key", "claude", True, {"key":"key"},
-        str(tmp_path / "chat"), tmp_path / "projection", tmp_path / "state", tmp_path / "lease", 1))
-    slot.store.exec(1, "prepare", {"epoch_s":1, "monotonic_s":1},
-        {"kind":"prepare", "id":"entry", "entry_id":None, "payload":{"kind":"input"}})
-    opened = []
-    real = Path.read_bytes
-    monkeypatch.setattr(Path, "read_bytes", lambda path: opened.append(path) or real(path))
-    owner.mode = "rust"
-    mid = str(uuid.uuid5(uuid.NAMESPACE_URL, "hangar:key:entry"))
-    try:
-        assert asyncio.run(owner.native_receipt(mid, "rejected")) is False
-        assert tmp_path / "state" not in opened
-    finally:
-        owner.close_python_leases()
 
 # --- Sessão sem terminal nasce direto no Rust (dono único, Task 2) ---
 
@@ -282,34 +131,6 @@ def test_new_headless_session_never_opens_python_client(birth):
     assert slot.phase == runtime_coordinator.Phase.Rust and slot.store is None and slot.lease is None
 
 
-def test_first_message_right_after_create_is_delivered_once(birth, monkeypatch):
-    transport = Transport(delay=0.3)
-    owner = birth.build(transport)
-    monkeypatch.setattr(api, "_enviar_nativo", lambda *args: pytest.fail("socket nativo direto"))
-    monkeypatch.setattr(api.PromptQueue, "append", lambda *args, **kwargs: pytest.fail("fila Python"))
-    async def scenario():
-        owner.loop = asyncio.get_running_loop()
-        birth.adapter.acordar("s1")
-        await asyncio.sleep(0.1)
-        return await api._send_one_headless("s1", "Olá")
-    result = asyncio.run(scenario())
-    assert result["ok"] and not result["delivered"]
-    assert transport.kinds() == ["open", "submit"], "abre uma vez; o Rust entrega depois do initialize"
-    assert transport.commands[0]["launch"] is True
-
-
-def test_migrated_send_never_falls_to_legacy_path(birth, monkeypatch):
-    owner = birth.build(Transport(fail="queue_io"))
-    monkeypatch.setattr(api, "_enviar_nativo", lambda *args: pytest.fail("socket nativo direto"))
-    monkeypatch.setattr(api.PromptQueue, "append", lambda *args, **kwargs: pytest.fail("fila Python"))
-    async def scenario():
-        owner.loop = asyncio.get_running_loop()
-        return await api._send_one_headless("s1", "Olá")
-    result = asyncio.run(scenario())
-    assert not result["ok"]
-    assert "queue_io" in str(result["error"])
-    assert birth.kills == [], "recusa que não é de conexão não mata o cano"
-
 
 def test_wait_initialized_reports_cli_refusal(birth):
     view = {"iniciando":False, "public_state":{"session":"s1", "state":"idle", "headless":True,
@@ -332,21 +153,6 @@ def test_reads_and_stop_never_launch_a_process(birth):
     asyncio.run(scenario())
     assert transport.kinds() == []
 
-
-def test_python_registration_without_cano_moves_to_rust_on_send(birth, monkeypatch):
-    transport = Transport()
-    owner = birth.build(transport)
-    monkeypatch.setattr(api, "_enviar_nativo", lambda *args: pytest.fail("socket nativo direto"))
-    async def scenario():
-        owner.loop = asyncio.get_running_loop()
-        await birth.adapter.deliverable("s1")      # leitura registra no Python, sem processo
-        assert owner.slot("s1").phase == runtime_coordinator.Phase.Python
-        return await api._send_one_headless("s1", "Olá")
-    result = asyncio.run(scenario())
-    assert result["ok"]
-    slot = owner.slot("s1")
-    assert slot.phase == runtime_coordinator.Phase.Rust and slot.lease is None
-    assert transport.kinds() == ["open", "submit"]
 
 
 # --- Administração da sessão sem terminal por close/open (dono único, Task 4) ---
@@ -622,100 +428,6 @@ def test_pending_wait_has_ceiling(birth, monkeypatch):
     with pytest.raises(RuntimeError) as caught:
         asyncio.run(scenario())
     assert getattr(caught.value, "code", "") == "runtime_starting"
-
-
-def test_third_crash_recovers_each_session_once(birth, monkeypatch):
-    from app.runtime_adapter import LegacyBridge
-    owner, transport, _ = _opened(birth)
-    reconnected, hooks = [], []
-    async def reconnect(self, descriptor, carry):
-        reconnected.append(descriptor["name"])
-        return {"hydrated":True}
-    monkeypatch.setattr(LegacyBridge, "reconnect", reconnect)
-    async def python_hook():
-        hooks.append("python")
-    owner.mode_hooks["python"] = python_hook
-    transport.alive = False
-    async def scenario():
-        owner.loop = asyncio.get_running_loop()
-        await owner.ensure_open("s1")
-        transport.lease.close()
-        await owner.enter_pending()
-        await owner.enter_python(SimpleNamespace(containment_clean=lambda: True))
-    asyncio.run(scenario())
-    assert reconnected == ["s1"] and hooks == ["python"] and owner.mode == "python"
-    assert owner.slot("s1").phase == runtime_coordinator.Phase.Python
-
-
-def test_rust_back_after_give_up_takes_python_sessions_back(birth, monkeypatch):
-    from app.adapters.claude_headless.adapter import _Sessao
-    from app.runtime_adapter import LegacyBridge
-    owner, transport, _ = _opened(birth)
-    async def reconnect(self, descriptor, carry):
-        return {"hydrated":True}
-    monkeypatch.setattr(LegacyBridge, "reconnect", reconnect)
-    transport.alive = False
-    second = LockingTransport()
-    async def scenario():
-        owner.loop = asyncio.get_running_loop()
-        await owner.ensure_open("s1")
-        transport.lease.close()
-        await owner.enter_pending()
-        await owner.enter_python(SimpleNamespace(containment_clean=lambda: True))
-        assert owner.slot("s1").phase == runtime_coordinator.Phase.Python
-        birth.adapter._sessions["s1"] = _Sessao("s1", birth.sessions.load("s1"))    # cliente da reserva
-        await owner.leave_python()
-        assert owner.mode == "pending"
-        await _enter(owner, second)
-    asyncio.run(scenario())
-    # O Rust novo reabre o Claude sem terminal sozinho: o registro daqui sai, sem `open`.
-    assert second.kinds() == [] and owner.mode == "rust"
-    assert not owner.managed_queue("s1")
-    assert "s1" not in birth.adapter._sessions, "o cliente Python solta o cano antes de o Rust abrir"
-
-
-def test_failed_retry_gives_sessions_back_to_python(birth, monkeypatch):
-    from app.runtime_adapter import LegacyBridge
-    owner, transport, _ = _opened(birth)
-    reconnected, hooks = [], []
-    async def reconnect(self, descriptor, carry):
-        reconnected.append(descriptor["name"])
-        return {"hydrated":True}
-    monkeypatch.setattr(LegacyBridge, "reconnect", reconnect)
-    async def python_hook():
-        hooks.append("python")
-    owner.mode_hooks["python"] = python_hook
-    transport.alive = False
-    contained = SimpleNamespace(containment_clean=lambda: True)
-    async def scenario():
-        owner.loop = asyncio.get_running_loop()
-        await owner.ensure_open("s1")
-        transport.lease.close()
-        await owner.enter_pending()
-        await owner.enter_python(contained)
-        await owner.leave_python()          # a tentativa de religar o Rust não subiu
-        await owner.enter_python(contained)
-    asyncio.run(scenario())
-    assert reconnected == ["s1", "s1"] and hooks == ["python", "python"] and owner.mode == "python"
-    slot = owner.slot("s1")
-    assert slot.phase == runtime_coordinator.Phase.Python and slot.lease is not None
-
-
-def test_transfer_recovery_waits_for_owner(birth):
-    owner = _pending_owner(birth)
-    ran = []
-    async def recovery():
-        ran.append(owner.mode)
-    owner.mode_hooks["rust"] = recovery
-    async def scenario():
-        owner.loop = asyncio.get_running_loop()
-        await owner.start_sessions({"claude":birth.adapter, "codex":SimpleNamespace(_sessions={})})
-        assert ran == []
-        await _enter(owner, LockingTransport())
-        await owner.enter_pending()
-        await _enter(owner, LockingTransport())
-    asyncio.run(scenario())
-    assert ran == ["rust"], "uma vez, depois do Rust de pé"
 
 
 def test_legacy_client_refused_while_rust_owns(birth):
@@ -1001,19 +713,6 @@ def test_codex_close_falls_back_to_python_kill_when_rust_had_no_process(codex_bi
     assert killed == ["cx"], "sem a sessão aberta no Rust, o processo não fica vivo sem dono"
 
 
-def test_codex_sandbox_switch_of_a_stopped_session_goes_to_rust(codex_birth, monkeypatch):
-    # Cano gravado mas morto e a sessão fora do Rust: a troca não pode virar 503 de cliente Python.
-    codex_birth.codex_sessions.update("cx", cano={"pid":999_999_999, "escuta":"unix:/tmp/morto.sock", "token":"t", "ts":1.0})
-    owner, transport = _lifecycle_owner(codex_birth, monkeypatch)
-    async def scenario():
-        owner.loop = asyncio.get_running_loop()
-        return await api.trocar_permissao_do_codex("cx", api.CodexPermissionBody(mode="Ask for approval"))
-    result = asyncio.run(scenario())
-    controls = [(command["control"], command["payload"]) for command in transport.commands if command["kind"] == "control"]
-    assert controls == [("set_permission_mode", {"mode": "Ask for approval"})]
-    assert result == {"current": "Ask for approval"}
-
-
 def test_codex_switch_to_terminal_has_no_python_hand_over(codex_birth, monkeypatch):
     # Relançar é do Rust: sem passagem, nenhum cliente Python religa no cano, e a sessão volta ao Rust.
     owner, transport = _lifecycle_owner(codex_birth, monkeypatch)
@@ -1033,54 +732,6 @@ def test_codex_switch_to_terminal_has_no_python_hand_over(codex_birth, monkeypat
     assert "cx" not in codex_birth.codex._sessions, "nenhum cliente Python fica no cano do Rust"
     assert owner.slot("cx").phase == runtime_coordinator.Phase.Rust
 
-
-@pytest.mark.parametrize("code,status,api_code", [
-    ("erro_permissao_ocupada", 409, "erro_permissao_ocupada"),
-    ("erro_modo_desconhecido", 400, "erro_permissao_picker"),
-])
-def test_codex_permission_refusal_from_rust_keeps_the_python_codes(codex_birth, monkeypatch, code, status, api_code):
-    from fastapi import HTTPException
-    message = "a sessão está trabalhando; mudar o sandbox reiniciaria o Codex — espere ela terminar"
-    owner, transport = _lifecycle_owner(codex_birth, monkeypatch, control_error=(code, message))
-    async def scenario():
-        owner.loop = asyncio.get_running_loop()
-        await owner.ensure_open("cx")
-        await api.trocar_permissao_do_codex("cx", api.CodexPermissionBody(mode="Ask for approval"))
-    with pytest.raises(HTTPException) as caught:
-        asyncio.run(scenario())
-    assert caught.value.status_code == status
-    assert caught.value.detail["code"] == api_code and caught.value.detail["msg"] == message
-
-
-@pytest.mark.parametrize("mode,swept", [("pending", False), ("rust", False), ("python", True)])
-def test_boot_sweeps_orphans_only_when_python_owns(monkeypatch, mode, swept):
-    from app.adapters.claude_headless import adapter as A
-    calls = []
-    monkeypatch.setattr(A, "matar_orfaos", lambda: calls.append(mode) or 0)
-    async def nothing():
-        return None
-    monkeypatch.setattr(api, "_python_owns_headless", nothing)
-    runtime = SimpleNamespace(mode=mode, mode_hooks={})
-    asyncio.run(api._boot_sessions(runtime))
-    assert bool(calls) is swept, "com o Rust de pé a varredura de órfãos é dele"
-
-
-def test_python_never_drains_a_terminal_claude_queue_the_rust_owns(monkeypatch):
-    # A trava da fila é do Rust: o drain do Python bateria nela (BlockingIOError) e a cadeia de
-    # reavaliação desistiria com as mensagens paradas.
-    from app.runtime_coordinator import RuntimeCoordinator
-    owner = RuntimeCoordinator()
-    monkeypatch.setattr(runtime_coordinator, "_current", owner)
-    monkeypatch.setattr(api, "_headless", lambda name: False)
-    def locked(*args):
-        raise BlockingIOError(11, "Resource temporarily unavailable")
-    monkeypatch.setattr(api, "drain", locked)
-    for mode in ("rust", "pending"):
-        owner.mode = mode
-        assert api._drenar("terminal", "chat", "claude") == 0, mode
-    owner.mode = "python"
-    monkeypatch.setattr(api, "drain", lambda *args: 2)
-    assert api._drenar("terminal", "chat", "claude") == 2, "no modo python o Python segue drenando"
 
 
 def test_a_terminal_claude_the_rust_already_adopted_opens_without_taking_its_queue_lock(tmp_path, monkeypatch):

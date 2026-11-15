@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 use super::{BODY_LIMIT, detail_body, session_name, too_large};
 use crate::list::discover::real;
 use crate::mods::http::reply;
-use crate::routes::{AppState, gate, pass};
+use crate::routes::{AppState, gate};
 
 /// Candidatas da pasta: as mais recentes, como a tela de confirmação mostra.
 const CANDIDATES: usize = 6;
@@ -87,8 +87,8 @@ fn choose(found: &[(PathBuf, f64)], in_use: &dyn Fn(&Path) -> Option<String>, si
 
 
 pub async fn route(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    let (fwd, owner) = match gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
-    let (true, Some(name)) = (owner, session_name(req.uri().path())) else { return pass(&st, req, &fwd).await };
+    let (_, owner) = match gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
+    let (true, Some(name)) = (owner, session_name(req.uri().path())) else { return super::not_owner(&st, peer, req).await };
     let headers = req.headers().clone();
     let Ok(bytes) = to_bytes(req.into_body(), BODY_LIMIT).await else { return too_large(&headers) };
     let (status, body) = serve(&st, &name, &bytes).await;

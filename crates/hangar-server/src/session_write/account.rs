@@ -14,10 +14,10 @@ use axum::response::Response;
 use futures_util::future::BoxFuture;
 use serde_json::{Value,json};
 
-use super::{BODY_LIMIT,busy_refusal,detail_body,forward_whole,session_name,too_large};
+use super::{BODY_LIMIT,busy_refusal,detail_body,session_name,too_large};
 use crate::mods::http::reply;
 use crate::list::discover::real;
-use crate::routes::{AppState,gate,pass};
+use crate::routes::{AppState,gate};
 use crate::runtime::claude_reopen::{Between,ReopenFailure};
 use crate::runtime::protocol::RuntimeError;
 use crate::session_open::{Account,ChangeReason,SessionChange,SessionSpec};
@@ -176,9 +176,9 @@ pub(crate) async fn reopen_in(st:&Arc<AppState>,runtime:&Arc<crate::runtime::gat
 }
 
 pub async fn targets_route(State(st):State<Arc<AppState>>,ConnectInfo(peer):ConnectInfo<SocketAddr>,req:Request) -> Response {
-    let (fwd,owner)=match gate(&st,peer,&req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
-    let runtime=st.state.runtime.get().cloned();
-    let (Some(runtime),true,Some(name))=(runtime,owner,session_name(req.uri().path())) else {return pass(&st,req,&fwd).await};
+    let (_,owner)=match gate(&st,peer,&req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
+    let (true,Some(name))=(owner,session_name(req.uri().path())) else {return super::not_owner(&st,peer,req).await};
+    let Some(runtime)=st.state.runtime.get().cloned() else {return super::no_runtime(req.headers())};
     let env=runtime.codex_environment();
     // No motor, mesmo a conta atual é destino: a sessão volta para a conta Claude sem mover nada. Sessão
     // que não é Claude não tem conta Claude atual: todas são destino.
@@ -198,9 +198,9 @@ pub async fn targets_route(State(st):State<Arc<AppState>>,ConnectInfo(peer):Conn
 }
 
 pub async fn switch_route(State(st):State<Arc<AppState>>,ConnectInfo(peer):ConnectInfo<SocketAddr>,req:Request) -> Response {
-    let (fwd,owner)=match gate(&st,peer,&req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
-    let runtime=st.state.runtime.get().cloned();
-    let (Some(runtime),true,Some(name))=(runtime,owner,session_name(req.uri().path())) else {return pass(&st,req,&fwd).await};
+    let (_,owner)=match gate(&st,peer,&req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
+    let (true,Some(name))=(owner,session_name(req.uri().path())) else {return super::not_owner(&st,peer,req).await};
+    let Some(runtime)=st.state.runtime.get().cloned() else {return super::no_runtime(req.headers())};
     let (parts,body)=req.into_parts();
     let Ok(bytes)=to_bytes(body,BODY_LIMIT).await else {return too_large(&parts.headers)};
     let asked=target(&bytes);
@@ -249,10 +249,8 @@ pub async fn switch_route(State(st):State<Arc<AppState>>,ConnectInfo(peer):Conne
     let spec=match runtime.claude_spec(&name).await {
         None=>{
             let provider=st.list.discover(None).await.map(|rows|rows.iter().find(|r|r.name==name).map(|r|r.provider.clone())).map_err(|e|e.code);
-            return match without_claude_spec(provider.as_ref().map(|p|p.as_deref()).map_err(|e|*e)) {
-                Some((status,body))=>reply(Some(&parts.headers),status,body),
-                None=>forward_whole(&st,parts,bytes,&fwd).await,
-            };
+            let (status,body)=without_claude_spec(provider.as_ref().map(|p|p.as_deref()).map_err(|e|*e)).unwrap_or_else(unowned_claude);
+            return reply(Some(&parts.headers),status,body);
         }
         Some(Err(error))=>return reply(Some(&parts.headers),StatusCode::CONFLICT,detail_body("erro_troca_conta",&format!("não troquei de conta: {}",error.message),json!({"erro":error.message,"code":error.code}))),
         Some(Ok(spec))=>spec,
@@ -269,7 +267,7 @@ pub async fn switch_route(State(st):State<Arc<AppState>>,ConnectInfo(peer):Conne
     }
     let outcome=reopen_in(&st,&runtime,&name,&spec,&destination,leave_engine,ChangeReason::AccountSwitch).await;
     let (status,body)=match outcome {
-        None=>return forward_whole(&st,parts,bytes,&fwd).await,
+        None=>unowned_claude(),
         Some(Ok(reopened))=>(StatusCode::OK,reopened.answer(json!({"ok":true,"config_dir":destination}))),
         Some(Err(failure))=>account_refusal(&failure,"não troquei de conta"),
     };
@@ -278,6 +276,12 @@ pub async fn switch_route(State(st):State<Arc<AppState>>,ConnectInfo(peer):Conne
 
 /// Sem spec Claude: sessão inexistente é 404 e de outro provedor é 409, como o `_trocar_conta`; a lista
 /// fora do ar é 503 com o código dela. `None` = Claude, segue.
+/// Claude que o Rust não conduz (sem spec, ou a reabertura não é dele): o Python não troca mais de conta.
+fn unowned_claude() -> (StatusCode, Value) {
+    let reason = "o servidor não conduz esta sessão";
+    (StatusCode::CONFLICT, detail_body("erro_troca_conta", &format!("não troquei de conta: {reason}"), json!({"erro": reason})))
+}
+
 fn without_claude_spec(provider: Result<Option<&str>, &'static str>) -> Option<(StatusCode, Value)> {
     match provider {
         Err(code) => Some((StatusCode::SERVICE_UNAVAILABLE, detail_body(code, "a lista de sessões não respondeu", json!({})))),

@@ -1,9 +1,9 @@
 # backend/app/rust_server.py
 """Sobe e vigia o `hangar-server`, o processo Rust que atende a porta pública na frente do uvicorn.
 
-Com o binário, o uvicorn escuta numa porta interna de loopback e o filho fica com a porta do app.
-Sem binário, sem resposta em 10 s, com outro protocolo ou com 3 quedas em 60 s, o Python atende a porta
-pública no mesmo processo, sem o lifespan de novo, e de tempos em tempos a devolve ao Rust (`RETRY_DELAYS`).
+O uvicorn escuta numa porta interna de loopback e o filho fica com a porta do app. Sem resposta em 10 s,
+com outro protocolo ou com 3 quedas em 60 s, a porta fica sem dono e o filho é religado de tempos em
+tempos (`RETRY_DELAYS`); o Python nunca a atende.
 """
 from __future__ import annotations
 
@@ -26,20 +26,20 @@ from pathlib import Path
 
 import uvicorn
 
-from app import claude_customizations, diag, diag_logging, log_paths, migration_status, rust_bins
+from app import claude_customizations, diag, log_paths, migration_status, rust_bins
 
 _log = logging.getLogger("hangar.rust_server")
 
 HEALTH_PATH = "/__hangar_server/health"
 # Versão do contrato interno (rotas /internal, canal privado do estado, ambiente). Tem de casar com o
-# `protocol` da saúde (hangar_server::INTERNAL_PROTOCOL); outro número = o Python atende sozinho.
-RUST_SERVER_PROTOCOL = 109
+# `protocol` da saúde (hangar_server::INTERNAL_PROTOCOL); outro número = o filho não serve.
+RUST_SERVER_PROTOCOL = 111
 START_TIMEOUT = 10.0
 OP_TIMEOUT_S = 75
 PROTECTED_SHUTDOWN_SECONDS = 120
 CRASH_WINDOW = 60.0
 MAX_CRASHES = 3
-# Depois da desistência, espera antes de cada tentativa de religar o Rust (a última se repete).
+# Depois da desistência, espera antes de cada nova tentativa de subir o Rust (a última se repete).
 RETRY_DELAYS = (30.0, 60.0, 120.0, 300.0, 600.0)
 _POLL = 0.25
 # Capacidade de painel de terminal do Rust, lida da saúde a cada subida (o `/api/config` a publica
@@ -64,13 +64,11 @@ class Server(uvicorn.Server):
             super().handle_exit(sig, frame)     # falha no gancho não pode impedir a parada
 
 
-def wanted_binary(enabled: bool) -> Path | None:
-    """O binário a subir, ou None quando o Python atende a porta pública sozinho."""
-    if not enabled:
-        return None
+def wanted_binary() -> Path | None:
+    """O binário a subir, ou None quando não há um utilizável (o backend então não sobe)."""
     found = rust_bins.find_bin("hangar-server", "CP_RUST_SERVER_BIN")
     if found is None:
-        diag.registrar("hangar_server.reserva", "aviso", codigo="sem_binario")
+        diag.registrar("hangar_server.reserva", "erro", codigo="sem_binario")
     else:
         from app import shared_auth
         from app.config import settings
@@ -78,7 +76,7 @@ def wanted_binary(enabled: bool) -> Path | None:
             shared_auth.activate(found, settings.auth_token, 0)
         except (OSError, ValueError, AttributeError, shared_auth.Unavailable):
             _log.error("hangar-server sem par válido da biblioteca de autenticação")
-            diag.registrar("hangar_server.reserva", "aviso", codigo="auth_pair_invalid")
+            diag.registrar("hangar_server.reserva", "erro", codigo="auth_pair_invalid")
             return None
     return found
 
@@ -321,9 +319,9 @@ class RuntimeTransport:
 
 def _point_bridges(address: str | None, secret: str | None) -> None:
     """Pontes Python → Rust no endereço privado dele, ou em nada; a lista primeiro, que recusa endereço torto."""
-    from app import account_bridge, groups_bridge, list_bridge, transcription_bridge
+    from app import account_bridge, list_bridge, transcription_bridge
     for bridge in (list_bridge, claude_customizations,
-                   groups_bridge, transcription_bridge):
+                   transcription_bridge):
         bridge.configure(address, secret)
     account_bridge.configure_preparation(address, secret)
 
@@ -365,8 +363,6 @@ class Supervisor:
         self.runtime_instance = None
         self.runtime_secret = None
         self.runtime_transport = None
-        self.last_transport = None
-
 
     def _env(self) -> dict[str, str]:
         # Import tardio: internal_api puxa o app, que o uvicorn interno já carregou a esta altura.
@@ -453,8 +449,7 @@ class Supervisor:
                         raise ValueError("missing terminal address")
                     _point_bridges(address, env["HANGAR_INTERNAL_SECRET"])
                 except ValueError:
-                    # Sem o endereço privado o Rust não tem as pontes: é falha de partida, e o Python
-                    # assume a porta inteira em vez de atender metade por trás dele.
+                    # Sem o endereço privado o Rust não tem as pontes: é falha de partida.
                     _point_bridges(None, None)
                     _log.error("hangar-server sem endereço privado válido na saúde")
                     diag.registrar("hangar_server.partida", "erro", codigo="endereco_invalido")
@@ -502,8 +497,7 @@ class Supervisor:
                             diag.registrar("hangar_server.registro_voltou")
                         record_failed = False
                     except OSError as e:
-                        # Disco cheio é transitório e o filho segue vivo: desistir do Rust por isso
-                        # entregaria a porta ao Python até o próximo restart. Grava de novo na volta seguinte.
+                        # Disco cheio é transitório e o filho segue vivo: grava de novo na volta seguinte.
                         if not record_failed:
                             _log.warning("registro de contenção do hangar-server não gravou: %s", e)
                             diag.registrar("hangar_server.registro_falhou", "aviso", **diag.erro_campos(e))
@@ -563,16 +557,14 @@ class Supervisor:
         coordinator.configure_transport(self.runtime_transport, owns)
 
     async def deactivate_runtime(self, confirmed_dead: bool) -> None:
-        """O filho morreu: as sessões ficam sem dono até o próximo subir (modo `pending`). Nada
-        volta ao Python aqui; quem decide isso é a desistência (`hand_to_python`)."""
+        """O filho morreu: as sessões ficam sem dono até o próximo subir (modo `pending`)."""
         if not confirmed_dead:
-            raise RuntimeError("morte do Rust não confirmada; reserva bloqueada")
+            raise RuntimeError("morte do Rust não confirmada")
         from app import runtime_coordinator
         from app.runtime_process import cleanup
         if self.proc is not None:
             await asyncio.to_thread(cleanup, self.proc)
         if self.runtime_transport is not None:
-            self.last_transport = self.runtime_transport      # prova de contenção para a retomada
             await self.runtime_transport.close()
         coordinator = runtime_coordinator.current()
         if coordinator is not None:
@@ -580,20 +572,13 @@ class Supervisor:
         self.runtime_ready = self.runtime_secret = self.runtime_instance = None
         self.runtime_transport = None
 
-    async def hand_to_python(self) -> None:
-        """Desistência: o Python passa a ser dono das sessões, retomando cada uma uma vez."""
-        from app import runtime_coordinator
-        self.announced = False
-        coordinator = runtime_coordinator.current()
-        if coordinator is not None:
-            await coordinator.enter_python(self.last_transport)
 
 
-async def serve(server: uvicorn.Server, sockets: list[socket.socket], binary: Path, kw: dict,
-                token: str, bind_public: Callable[[], socket.socket]) -> bool:
-    """O uvicorn interno e o hangar-server juntos. `False` = a porta pública ficou sem dono.
+async def serve(server: uvicorn.Server, sockets: list[socket.socket], binary: Path, kw: dict, token: str) -> None:
+    """O uvicorn interno e o hangar-server juntos, até a parada. O Rust que desiste fica sem dono
+    da porta até a próxima tentativa (`RETRY_DELAYS`).
 
-    `kw` é o da porta pública: a lista `forwarded_allow_ips` do dono vai ao filho e à reserva."""
+    `kw` é o da porta pública: a lista `forwarded_allow_ips` do dono vai ao filho."""
     from app import shared_auth
     await asyncio.to_thread(shared_auth.activate, binary, token, sockets[0].getsockname()[1])
     serving = asyncio.create_task(server.serve(sockets=sockets))
@@ -602,13 +587,13 @@ async def serve(server: uvicorn.Server, sockets: list[socket.socket], binary: Pa
         await asyncio.sleep(0.05)
     if serving.done():
         await serving
-        return True
+        return
     supervisor = Supervisor(binary, kw["host"], kw["port"], sockets[0].getsockname()[1], token,
                             kw["forwarded_allow_ips"], lambda: server.should_exit)
     global _supervisor
     _supervisor = supervisor
     migration_status.set_listen_port(supervisor.upstream_port)
-    # Parar a porta pública para religar o Rust não pode fechar os SSE do processo (`Server.handle_exit`).
+    # Religar o Rust não pode fechar os SSE do processo: só o sinal fecha (`Server.handle_exit`).
     from sse_starlette.sse import AppStatus
     AppStatus.disable_automatic_graceful_drain()
     while True:
@@ -619,25 +604,26 @@ async def serve(server: uvicorn.Server, sockets: list[socket.socket], binary: Pa
             await asyncio.gather(watch, return_exceptions=True)
             await supervisor.stop()
             await serving
-            return True
+            return
         reason = watch.result()
-        if reason == "parada":                       # o uvicorn já está saindo: nada a assumir
+        if reason == "parada":                       # o uvicorn já está saindo
             await serving
-            return True
-        await _hand_to_python(supervisor)
+            return
+        _log.error("hangar-server desligado (%s); a porta %s fica sem dono até a próxima tentativa", reason, kw["port"])
+        # O nome do evento é o que o relatório de diagnóstico do Rust colhe.
+        diag.registrar("hangar_server.reserva", "erro", codigo=reason)
+        migration_status.set_reason(reason)
+        supervisor.announced = False
         # O mesmo binário falha igual nestes: só se tenta de novo depois de ele mudar no disco.
         stamp = _stamp(binary) if reason in ("sem_resposta", "protocolo", "endereco_privado") else None
-        ended = await _take_over(server, serving, reason, kw, bind_public, supervisor, stamp)
-        if ended is not None:
-            return ended
-
-
-async def _hand_to_python(supervisor: Supervisor) -> None:
-    try:
-        await supervisor.hand_to_python()
-    except Exception as e:                       # noqa: BLE001 — a porta pública não fica sem dono
-        _log.exception("retomada das sessões pelo Python falhou")
-        diag.registrar("hangar_server.retomada_falhou", "erro", **diag.erro_campos(e))
+        retry = asyncio.create_task(_retry_wait(supervisor, stamp))
+        await asyncio.wait({serving, retry}, return_when=asyncio.FIRST_COMPLETED)
+        if serving.done():
+            retry.cancel()
+            await asyncio.gather(retry, return_exceptions=True)
+            await serving
+            return
+        diag.registrar("hangar_server.religar", "aviso", tentativa=supervisor.attempt)
 
 
 def _stamp(binary: Path) -> tuple | None:
@@ -656,78 +642,17 @@ async def _retry_wait(supervisor: Supervisor, stamp: tuple | None) -> None:
             return
 
 
-async def _release_sessions(supervisor: Supervisor) -> bool:
-    """As sessões saem do Python antes da porta; falhou, voltam a ele e o Rust não sobe."""
-    from app import runtime_coordinator
-    diag.registrar("hangar_server.religar", "aviso", tentativa=supervisor.attempt)
-    try:
-        if (coordinator := runtime_coordinator.current()) is not None:
-            await coordinator.leave_python()
-        return True
-    except Exception as e:                       # noqa: BLE001 — a porta segue com o Python
-        diag.registrar("hangar_server.religar_falhou", "erro", **diag.erro_campos(e))
-        await _hand_to_python(supervisor)
-        return False
-
-
-async def _take_over(server: uvicorn.Server, serving: asyncio.Task, reason: str, kw: dict,
-                     bind_public: Callable[[], socket.socket], supervisor: Supervisor,
-                     stamp: tuple | None) -> bool | None:
-    """O Python atende a porta pública. `None` = soltou porta e sessões para religar o Rust."""
-    _log.error("hangar-server desligado (%s); o Python assume a porta %s", reason, kw["port"])
-    diag.registrar("hangar_server.reserva", "erro", codigo=reason)
-    migration_status.set_reason(reason)
-    try:
-        sock = bind_public()
-    except OSError as e:
-        _log.error("a porta %s ficou sem dono: %s", kw["port"], e)
-        diag.registrar("hangar_server.reserva", "erro", codigo="porta_ocupada", **diag.erro_campos(e))
-        server.should_exit = True
-        await serving
-        return False
-    # lifespan="off": ele já rodou no servidor interno, e rodar de novo duplicaria watchers e hooks.
-    public = Server(uvicorn.Config(server.config.app, **{**kw, "lifespan": "off"}))
-    # O Config novo refaz o logging do uvicorn e tira dele os handlers do diário.
-    diag_logging.instalar()
-    migration_status.set_listen_port(kw["port"])
-    public_task = asyncio.create_task(public.serve(sockets=[sock]))
-    while True:
-        retry = asyncio.create_task(_retry_wait(supervisor, stamp))
-        await asyncio.wait({serving, public_task, retry}, return_when=asyncio.FIRST_COMPLETED)
-        if not retry.done() or serving.done() or public_task.done():
-            retry.cancel()
-            break
-        if await _release_sessions(supervisor):
-            # Conexão fechada: os SSE abertos veem a desconexão e terminam, sem esperar o prazo da parada.
-            for connection in tuple(public.server_state.connections):
-                connection.transport.close()
-            public.should_exit = True
-            await public_task
-            if server.should_exit:                   # o sinal de parada chegou enquanto a porta saía
-                await serving
-                return True
-            return None
-    public.should_exit = True
-    server.should_exit = True
-    await asyncio.gather(serving, public_task)
-    return True
-
-
-def run(app: str, kw: dict, binary: Path, token: str, sockets: list[socket.socket],
-        bind_public: Callable[[], socket.socket]) -> int:
-    """Bloqueia até o fim. Devolve o código de saída: 0, 1 (porta sem dono) ou 3 (não subiu)."""
+def run(app: str, kw: dict, binary: Path, token: str, sockets: list[socket.socket]) -> int:
+    """Bloqueia até o fim. Devolve o código de saída: 0 ou 3 (não subiu)."""
     from app import runtime_coordinator
     runtime_coordinator.expect_rust()
     # Só o uvicorn interno confia no 127.0.0.1 (o hangar-server); a porta pública segue com o `kw`.
     config = uvicorn.Config(app, **{**kw, "forwarded_allow_ips": trust_loopback(kw["forwarded_allow_ips"])})
     server = Server(config)
     try:
-        public_ok = asyncio.run(serve(server, sockets, binary, kw, token, bind_public),
-                                loop_factory=config.get_loop_factory())
+        asyncio.run(serve(server, sockets, binary, kw, token), loop_factory=config.get_loop_factory())
     finally:
         runtime_coordinator.expect_rust(False)
         from app import shared_auth
         shared_auth.shutdown()
-    if not server.started:
-        return 3
-    return 0 if public_ok else 1
+    return 0 if server.started else 3

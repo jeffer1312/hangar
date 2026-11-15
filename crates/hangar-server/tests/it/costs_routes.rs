@@ -676,7 +676,8 @@ async fn only_the_owner_reaches_the_login_window_routes() {
         let url = format!("http://{}{path}", h.address);
         assert_eq!(client.request(method.clone(), &url).send().await.unwrap().status(), 401, "{path} sem token");
         assert_eq!(client.request(method.clone(), &url).bearer_auth("convidado").send().await.unwrap().status(), 401, "{path} convidado");
-        assert!(h.forwarded(method.as_str(), path), "{path} tem que ir ao porteiro, sem resposta do Rust");
+        // O Python não tem as rotas da janela de login: a recusa é do Rust.
+        assert!(!h.forwarded(method.as_str(), path), "{path} foi ao Python");
     }
     for (method, path) in [
         (reqwest::Method::GET, "/api/login-browser/view"),

@@ -1113,7 +1113,7 @@ async fn a_parked_headless_codex_is_opened_here_instead_of_going_to_python() {
 }
 
 /// R1.3: o `DELETE` do Codex sem terminal com ator aberto aqui fecha o ator (`close_with_kill`), o cano morre e
-/// sidecar e fila saem; o Python recebe só o pedido marcado.
+/// sidecar e fila saem; o Python não recebe nada.
 #[tokio::test]
 async fn delete_r1_3_codex_headless_with_a_live_actor_closes_in_rust() {
     crate::use_cano_bin();
@@ -1137,17 +1137,46 @@ async fn delete_r1_3_codex_headless_with_a_live_actor_closes_in_rust() {
     assert!(hangar_server::runtime::process::liveness(cano,"k-live")!=hangar_server::runtime::process::Liveness::Ours,"o cano morreu");
     assert!(fx.sidecar("cx-h").is_none());
     assert!(!fx.queue.join("runtime/k-live.json").exists(),"a fila da chave saiu");
-    assert_eq!(python.last_hit().1.get("x-hangar-rust-closed").and_then(|v| v.to_str().ok()), Some(crate::fake::SECRET));
+    assert_eq!(python.hits_to("/api/sessions/cx-h"), 0, "nada segue ao Python");
+}
+
+/// R1-01 (decisões 1 e 3): o convidado com conta fecha o Codex sem terminal com ator vivo aqui pelo
+/// fechamento do dono: o ator sai, o cano morre, sidecar e fila também, e o Python não recebe nada.
+#[tokio::test]
+async fn delete_r1_01_login_guest_closes_a_live_codex_headless() {
+    crate::use_cano_bin();
+    let fx = fixture();
+    let registry = relaunch_registry(&fx).await;
+    let bin = fx.root.join("bin");
+    let log = fx.root.join("codex-methods.jsonl");
+    fake_headless_codex(&bin,&log);
+    let rollout = fx.root.join("rollout.jsonl");
+    std::fs::write(&rollout,"{}\n").unwrap();
+    fx.put_sidecar("cx-h",json!({"name":"cx-h","provider":"codex","headless":true,"key":"k-guest","thread_id":"thread-1",
+        "rollout_path":rollout,"cwd":fx.root,"codex_home":fx.home.join(".codex"),"permission_mode":"Full Access","model":"gpt-test"}));
+    registry.bind_watcher(fx.watcher());
+    assert_eq!(registry.restart_codex("cx-h").await.expect("Codex sem terminal do Rust").unwrap(),json!({"ok":true}));
+    assert!(registry.owns_codex_headless("cx-h").await);
+    let cano = fx.sidecar("cx-h").unwrap()["cano"]["pid"].as_u64().map(|pid|pid as u32).expect("cano gravado");
+    let (python, server, token) = serve_guest(registry.clone(), &fx.home, &fx.root.join("claude"), &fx.tmux).await;
+    let response = crate::fake::client().delete(format!("http://{server}/api/sessions/cx-h")).bearer_auth(token).send().await.unwrap();
+    assert_eq!(response.status().as_u16(), 200);
+    assert!(!registry.owns_codex_headless("cx-h").await,"o ator saiu");
+    assert!(hangar_server::runtime::process::liveness(cano,"k-guest")!=hangar_server::runtime::process::Liveness::Ours,"o cano morreu");
+    assert!(fx.sidecar("cx-h").is_none());
+    assert!(!fx.queue.join("runtime/k-guest.json").exists(),"a fila da chave saiu");
+    assert_eq!(python.hits_to("/api/sessions/cx-h"), 0, "nada segue ao Python");
 }
 
 #[tokio::test]
-async fn relaunch_routes_go_to_python_when_the_session_is_not_a_codex_of_the_rust() {
+async fn relaunch_routes_stay_in_rust_when_the_session_is_not_a_codex_of_the_rust() {
     let (python, server) = serve_owner(registry().await).await;
-    for (route, body) in [("modo-execucao", json!({"terminal": true})), ("recarregar", json!({}))] {
+    // Nenhuma das duas tem mais rota no Python: o que o Rust não atende ele mesmo recusa.
+    for (route, body, hits) in [("modo-execucao", json!({"terminal": true}), 0), ("recarregar", json!({}), 0)] {
         crate::fake::client().post(format!("http://{server}/api/sessions/claude-x/{route}"))
             .header("authorization", format!("Bearer {}", crate::fake::OWNER)).header("content-type", "application/json")
             .body(body.to_string()).send().await.unwrap();
-        assert_eq!(python.hits_to(&format!("/api/sessions/claude-x/{route}")), 1, "{route} sem vigia vai ao Python");
+        assert_eq!(python.hits_to(&format!("/api/sessions/claude-x/{route}")), hits, "{route} sem vigia");
     }
     // Com a vigia ligada: sem sidecar Codex, ou sem terminal que o Rust não abriu, a vez é do Python.
     let fx = fixture();
@@ -1243,8 +1272,11 @@ async fn delete_session(server: std::net::SocketAddr, name: &str) -> (u16, Value
     (status, serde_json::from_str(&response.text().await.unwrap()).unwrap_or(Value::Null))
 }
 
+/// R1-08, R1-10, R1-22, decisão 4: o Codex com terminal do Rust fecha aqui, e o que o Python fazia
+/// depois do pedido marcado (`ThenLink.clear`, `closed_names.record`) também: o `then` sai, o nome fechado
+/// fica pela conversa, e a marca forjada de fora não muda nada. Nada chega ao Python.
 #[tokio::test]
-async fn owner_delete_kills_in_rust_then_forwards_marked_to_python() {
+async fn owner_delete_closes_in_rust_with_then_and_closed_name_and_never_reaches_python() {
     let fx = fixture();
     let server_app = fake_app_server(true).await;
     let (mut app,mut tui) = (app_server_process(&server_app.endpoint),tui());
@@ -1257,30 +1289,92 @@ async fn owner_delete_kills_in_rust_then_forwards_marked_to_python() {
     registry.bind_watcher(watcher.clone());
     watcher.round(&registry).await;
     assert!(registry.owns_codex_terminal("cx-proof"));
-    let (python, server) = serve_owner(registry.clone()).await;
-    let (status, _) = delete_session(server, "cx-proof").await;
-    assert_eq!(status, 200, "a resposta é a do Python, depois do encerramento");
+    let claude = fx.root.join("claude");
+    let chain = claude.join(".hangar-chain/cx-proof.json");
+    std::fs::create_dir_all(chain.parent().unwrap()).unwrap();
+    std::fs::write(&chain, r#"{"target":"outra","text":"oi"}"#).unwrap();
+    let (python, server) = serve_owner_in(registry.clone(), &fx).await;
+    let (status, body) = delete_session(server, "cx-proof").await;
+    assert_eq!((status, body), (200, json!({"ok": true, "warning": null})));
     assert!(!registry.owns_codex_terminal("cx-proof"));
     assert!(std::fs::read_to_string(&fx.panes).unwrap().is_empty(),"pane encerrado pelo Rust");
     assert!(exited(&mut app));
     assert!(fx.sidecar("cx-proof").is_none());
-    assert_eq!(python.hits_to("/api/sessions/cx-proof"), 1, "o mesmo pedido segue ao Python, uma vez");
-    let (_, headers) = python.last_hit();
-    assert_eq!(headers.get("x-hangar-rust-closed").and_then(|v| v.to_str().ok()), Some(crate::fake::SECRET),
-        "a marca é a do Rust, nunca a que veio de fora");
-    let transcript = headers.get("x-hangar-closed-transcript").and_then(|v| v.to_str().ok()).unwrap();
-    assert_eq!(percent_encoding::percent_decode_str(transcript).decode_utf8().unwrap(), "/r/Área de trabalho/rollout-1.jsonl",
-        "a conversa encerrada vai junto, para o nome fechado");
-    // Outra sessão (sem sidecar Codex) também fecha no Rust, pelo nome (R1.3), e a conversa forjada sai.
-    let _ = delete_session(server, "claude-x").await;
-    let (_, headers) = python.last_hit();
-    assert_eq!(headers.get("x-hangar-rust-closed").and_then(|v| v.to_str().ok()), Some(crate::fake::SECRET));
-    assert!(headers.get("x-hangar-closed-transcript").is_none(), "o forjado sai");
+    assert!(!chain.exists(), "o then da vida encerrada saiu");
+    let names: Value = serde_json::from_slice(&std::fs::read(claude.join("closed-sessions.json")).unwrap()).unwrap();
+    assert_eq!(names["/r/Área de trabalho/rollout-1.jsonl"]["name"], "cx-proof", "{names}");
+    // Outra sessão (sem sidecar Codex) também fecha no Rust, pelo nome (R1.3).
+    assert_eq!(delete_session(server, "claude-x").await.0, 200);
+    assert_eq!(python.hits_to("/api/sessions/cx-proof") + python.hits_to("/api/sessions/claude-x"), 0);
     finish(&mut [&mut app,&mut tui]);
 }
 
+/// R1-01 (decisões 1 e 3): o convidado com conta fecha o Codex com terminal adotado aqui pelo mesmo
+/// fechamento do dono: ator, pane e app-server saem, e nada chega ao Python.
 #[tokio::test]
-async fn owner_delete_without_a_header_secret_warns_the_skipped_python_cleanup() {
+async fn delete_r1_01_login_guest_closes_an_adopted_codex_terminal() {
+    let fx = fixture();
+    let server_app = fake_app_server(true).await;
+    let (mut app,mut tui) = (app_server_process(&server_app.endpoint),tui());
+    fx.put_sidecar("cx-proof",fx.meta("cx-proof",&server_app.endpoint,Some(app.id()),&tui));
+    fx.panes(&["cx-proof"]);
+    let registry = registry().await;
+    let watcher = fx.watcher();
+    registry.bind_watcher(watcher.clone());
+    watcher.round(&registry).await;
+    assert!(registry.owns_codex_terminal("cx-proof"));
+    let (python, server, token) = serve_guest(registry.clone(), &fx.home, &fx.root.join("claude"), &fx.tmux).await;
+    let response = crate::fake::client().delete(format!("http://{server}/api/sessions/cx-proof")).bearer_auth(token).send().await.unwrap();
+    let status = response.status().as_u16();
+    let body: Value = serde_json::from_str(&response.text().await.unwrap()).unwrap_or(Value::Null);
+    assert_eq!((status, body), (200, json!({"ok": true, "warning": null})));
+    assert!(!registry.owns_codex_terminal("cx-proof"));
+    assert!(std::fs::read_to_string(&fx.panes).unwrap().is_empty(),"pane encerrado pelo Rust");
+    assert!(exited(&mut app));
+    assert!(fx.sidecar("cx-proof").is_none());
+    assert_eq!(python.hits_to("/api/sessions/cx-proof"), 0);
+    finish(&mut [&mut app,&mut tui]);
+}
+
+/// `serve_owner` com a lista e a conta nas pastas da prova: o `then` e o nome fechado caem nelas.
+async fn serve_owner_in(registry: Arc<RuntimeRegistry>, fx: &Fixture) -> (Arc<crate::fake::Fake>, std::net::SocketAddr) {
+    let (python, server, _) = serve_in(registry, &fx.home, &fx.root.join("claude"), &fx.tmux, false).await;
+    (python, server)
+}
+
+/// `serve_owner_in` com o convidado com conta que vê as sessões sem dono, e sem convites; devolve o
+/// token dele.
+pub(crate) async fn serve_guest(registry: Arc<RuntimeRegistry>, home: &std::path::Path, claude: &std::path::Path, tmux: &std::path::Path)
+    -> (Arc<crate::fake::Fake>, std::net::SocketAddr, &'static str) {
+    serve_in(registry, home, claude, tmux, true).await
+}
+
+async fn serve_in(registry: Arc<RuntimeRegistry>, home: &std::path::Path, claude: &std::path::Path, tmux: &std::path::Path, guest: bool)
+    -> (Arc<crate::fake::Fake>, std::net::SocketAddr, &'static str) {
+    let (python, upstream) = crate::fake::spawn_fake().await;
+    let mut state = hangar_server::routes::AppState::new(crate::fake::config(upstream, "127.0.0.1"));
+    let (home_text, claude) = (home.to_string_lossy().into_owned(), claude.to_string_lossy().into_owned());
+    state.accounts = hangar_server::accounts::AccountService::new(AccountEnvironment::from_map(
+        [("HOME".to_owned(), home_text.clone()), ("USERPROFILE".to_owned(), home_text), ("CLAUDE_CONFIG_DIR".to_owned(), claude.clone())].into()));
+    let dirs = hangar_server::list::bridge::parse_dirs(&json!({"home": home, "claude": claude, "codex_home": home.join(".codex"),
+        "pi_sessions": home.join(".pi/agent/sessions"), "omp_config": home.join(".omp"), "omp_agent": home.join(".omp/agent"),
+        "kimi_home": home.join(".kimi-code")}).to_string());
+    state.list = Arc::new(hangar_server::list::bridge::ListBridge::new(hangar_server::list::bridge::ListEnv {
+        mux: Mux::with_program(tmux, Duration::from_secs(5)), capture_program: tmux.as_os_str().to_owned(),
+        procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs },
+        hangar_server::list::facts::FactsClient::new(upstream, crate::fake::SECRET.into())));
+    let token = if guest {
+        std::fs::create_dir_all(home).unwrap();
+        state.share = None;
+        crate::session_close_by_name::login_guest(&mut state, home)
+    } else { crate::fake::OWNER };
+    assert!(state.state.runtime.set(registry).is_ok());
+    (python, crate::fake::spawn_state(state).await, token)
+}
+
+/// O fechamento não depende mais do segredo interno virar cabeçalho: nada segue ao Python.
+#[tokio::test]
+async fn owner_delete_without_a_header_secret_still_closes_whole_in_rust() {
     let fx = fixture();
     let server_app = fake_app_server(true).await;
     let (mut app,mut tui) = (app_server_process(&server_app.endpoint),tui());
@@ -1297,8 +1391,7 @@ async fn owner_delete_without_a_header_secret_warns_the_skipped_python_cleanup()
     assert!(state.state.runtime.set(registry.clone()).is_ok());
     let server = crate::fake::spawn_state(state).await;
     let (status, body) = delete_session(server, "cx-proof").await;
-    assert_eq!((status, body["warning"]["code"].as_str()), (200, Some("close_python_cleanup_skipped")),
-        "encerrou, e a limpeza do Python que não rodou aparece com código");
+    assert_eq!((status, body), (200, json!({"ok": true, "warning": null})));
     assert!(!registry.owns_codex_terminal("cx-proof"));
     assert_eq!(python.hits_to("/api/sessions/cx-proof"), 0);
     finish(&mut [&mut app,&mut tui]);
@@ -1499,10 +1592,14 @@ async fn owner_broadcast_answers_the_rust_code_for_a_codex_terminal_it_cannot_ad
     registry.bind_watcher(fx.watcher());
     let (python, upstream) = crate::fake::spawn_fake().await;
     let mut state = hangar_server::routes::AppState::new(crate::fake::config(upstream, "127.0.0.1"));
-    // A lista do teste: o multiplexador do fixture (nenhum pane) e nenhuma pasta de sessão.
+    // A lista do teste: o multiplexador do fixture (nenhum pane) e pastas de sessão vazias, que respondem.
+    let home = &fx.home;
+    let dirs = hangar_server::list::bridge::parse_dirs(&serde_json::json!({"home": home, "claude": home.join(".claude"),
+        "codex_home": home.join(".codex"), "pi_sessions": home.join(".pi/agent/sessions"), "omp_config": home.join(".omp"),
+        "omp_agent": home.join(".omp/agent"), "kimi_home": home.join(".kimi-code")}).to_string());
     state.list = Arc::new(hangar_server::list::bridge::ListBridge::new(hangar_server::list::bridge::ListEnv {
         mux: Mux::with_program(&fx.tmux, Duration::from_secs(5)), capture_program: fx.tmux.clone().into_os_string(),
-        procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs: None },
+        procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs },
         hangar_server::list::facts::FactsClient::new(upstream, crate::fake::SECRET.into())));
     assert!(state.state.runtime.set(registry.clone()).is_ok());
     let server = crate::fake::spawn_state(state).await;
@@ -2133,7 +2230,8 @@ async fn codex_terminal_turn_without_time_does_not_sleep() {
     assert!(registry.owns_codex_terminal("cx-proof") && fx.sidecar("cx-proof").unwrap().get("asleep").is_none());
 }
 
-/// Ler por uma rota do Codex uma sessão Claude adormecida não a acorda: segue ao Python, que a conhece.
+/// Ler por uma rota do Codex uma sessão Claude adormecida não a acorda: o Rust responde a recusa da rota
+/// (o 400 "só Codex" que o Python dava, R2-06/10/14), e o catálogo de comandos é o do Claude.
 #[tokio::test]
 async fn reading_a_codex_route_of_an_asleep_claude_wakes_nothing() {
     let fx = fixture();
@@ -2144,11 +2242,14 @@ async fn reading_a_codex_route_of_an_asleep_claude_wakes_nothing() {
     let registry = sleep_registry(&fx).await;
     registry.bind_watcher(fx.watcher());
     let (python,addr) = serve_owner(registry.clone()).await;
-    for route in ["models","commands","limits","codex-permissions"] {
-        let _ = crate::fake::client().get(format!("http://{addr}/api/sessions/cl/{route}"))
+    for (route,code) in [("models",Some("erro_models_so_codex")),("commands",None),("limits",Some("erro_limits_so_codex")),("codex-permissions",Some("erro_permissao_so_codex"))] {
+        let response = crate::fake::client().get(format!("http://{addr}/api/sessions/cl/{route}"))
             .header("authorization",format!("Bearer {}",crate::fake::OWNER)).send().await.unwrap();
-        // O catálogo de comandos do Claude é do Rust: só as outras rotas seguem ao Python.
-        assert_eq!(python.hits_to(&format!("/api/sessions/cl/{route}")),usize::from(route != "commands"),"{route}: segue ao Python");
+        let status = response.status().as_u16();
+        let body:Value = serde_json::from_str(&response.text().await.unwrap()).unwrap_or(Value::Null);
+        // O catálogo do Claude já era do Rust: aqui só importa que não acorda nem vai ao Python.
+        if let Some(code) = code { assert_eq!((status,body["detail"]["code"].as_str()),(400,Some(code)),"{route}: {body}"); }
+        assert_eq!(python.hits_to(&format!("/api/sessions/cl/{route}")),0,"{route}: nada ao Python");
     }
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert!(registry.waking_key("cl").is_none(),"nenhum acordar");

@@ -151,8 +151,12 @@ async fn check(st: &AppState, guest: &Guest, method: &str, path: &str) -> bool {
         .await
         .unwrap_or(false)
 }
+/// O 403 do convidado com login fora do que ele alcança (sem CORS).
+pub(crate) fn refused() -> Response {
+    (StatusCode::FORBIDDEN,[(header::CONTENT_TYPE,"application/json")],serde_json::json!({"detail":{"code":"erro_fora_do_convidado","params":{},"msg":"fora do acesso do convidado"}}).to_string()).into_response()
+}
 fn deny(headers: &axum::http::HeaderMap) -> Response {
-    let mut response=(StatusCode::FORBIDDEN,[(header::CONTENT_TYPE,"application/json")],serde_json::json!({"detail":{"code":"erro_fora_do_convidado","params":{},"msg":"fora do acesso do convidado"}}).to_string()).into_response();
+    let mut response=refused();
     crate::routes::cors(headers, response.headers_mut());
     response
 }
@@ -200,7 +204,8 @@ pub async fn guard(
         }
         https
     } else {
-        let (forward, owner) = match crate::routes::gate(&st, peer, &request).await {
+        // Sem a marca de "não é o dono": aqui só se classifica; quem recusa é o handler.
+        let (forward, owner) = match hangar_core::edge::gate(&st.cfg.trusted, &st.auth, peer, &request).await {
             Ok(value)=>value, Err(error)=>return crate::auth::unavailable(error)
         };
         if owner { return next.run(request).await; }

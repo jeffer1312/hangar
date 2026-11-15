@@ -1,10 +1,11 @@
-"""Login OAuth do ChatGPT feito pelo app e espalhado pros CLIs (app/oauth_codex.py).
+"""Login OAuth do ChatGPT feito pelo app e espalhado pros CLIs.
 
 O fluxo de dispositivo, o cofre (0600) e a escrita nos três stores são do Rust, provados aqui
-contra a referência isolada; o Python só lê e delega, e sem o dono recusa em vez de escrever.
+contra a referência isolada.
 """
 import base64
 import json
+import os
 import sqlite3
 from contextlib import closing
 from pathlib import Path
@@ -12,7 +13,10 @@ import time
 
 import pytest
 
-from app import oauth_codex as o
+
+def _write_private(path, data):
+    path.write_text(json.dumps(data))
+    os.chmod(path, 0o600)
 
 
 def _jwt(account="acc-1", plano="plus", exp=4102444800):
@@ -35,7 +39,7 @@ def _assert_private_file(path):
         assert oct(path.stat().st_mode & 0o777) == "0o600"
         return
     baseline = path.with_name(path.name + ".acl-baseline")
-    o._gravar_json(baseline, {"controle": "acl"})
+    _write_private(baseline, {"controle": "acl"})
     script = r"""
 $ErrorActionPreference = 'Stop'
 $paths = [Console]::In.ReadToEnd() | ConvertFrom-Json
@@ -73,7 +77,7 @@ $items = @(foreach ($path in $paths) {
         base_deny, candidate_deny = rights(base, "Deny"), rights(candidate, "Deny")
         assert all(mask & ~base_allow.get(sid, 0) == 0 for sid, mask in candidate_allow.items()), "A gravação ampliou direitos"
         assert all(mask & ~candidate_deny.get(sid, 0) == 0 for sid, mask in base_deny.items()), "A gravação retirou restrições"
-        proof["writer_sha256"] = hashlib.sha256(inspect.getsource(o._gravar_json).encode()).hexdigest()
+        proof["writer_sha256"] = hashlib.sha256(inspect.getsource(_write_private).encode()).hexdigest()
         proof["method"] = "DACL por SID/máscara; mesmo diretório, identidade e processo"
         print("Prova nativa de ACL: " + json.dumps(proof, sort_keys=True))
     finally:
@@ -84,7 +88,7 @@ def test_private_file_control_rejects_real_permission_expansion(tmp_path):
     import os
     import subprocess
     path = tmp_path / "controle.json"
-    o._gravar_json(path, {"controle": "acl"})
+    _write_private(path, {"controle": "acl"})
     if os.name == "nt":
         script = r"""
 $ErrorActionPreference = 'Stop'
@@ -103,37 +107,6 @@ Set-Acl -LiteralPath $path -AclObject $acl
         path.chmod(0o644)
         with pytest.raises(AssertionError):
             _assert_private_file(path)
-
-
-@pytest.fixture
-def casa(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("PI_CODING_AGENT_DIR", raising=False)
-    monkeypatch.setattr(o, "cofre", lambda: tmp_path / ".hangar" / "auth" / "openai-codex.json")
-    (tmp_path / ".codex").mkdir()
-    (tmp_path / ".pi" / "agent").mkdir(parents=True)
-    (tmp_path / ".omp" / "agent").mkdir(parents=True)
-    con = sqlite3.connect(tmp_path / ".omp" / "agent" / "agent.db")
-    con.execute("create table auth_credentials (id integer primary key autoincrement, provider text not null, "
-                "credential_type text not null, data text not null, identity_key text)")
-    con.commit(); con.close()
-    return tmp_path
-
-
-@pytest.mark.parametrize("mode", ["rust", "pending"])
-def test_managed_propagation_never_falls_back_to_python_codex_writer(casa, monkeypatch, mode):
-    from types import SimpleNamespace
-    from fastapi import HTTPException
-    from app import account_bridge, runtime_coordinator
-    monkeypatch.setattr(runtime_coordinator, "current", lambda: SimpleNamespace(mode=mode))
-    monkeypatch.setattr(account_bridge, "_preparation_transport", None)
-    o.cofre().parent.mkdir(parents=True)
-    o._gravar_json(o.cofre(), {"access": _jwt(), "refresh": "fixture", "id_token": "",
-                               "expires_ms": 1, "account_id": "acc-1"})
-    with pytest.raises(HTTPException) as issue:
-        o.propagar()
-    assert issue.value.status_code == 503
-    assert not (casa / ".codex" / "auth.json").exists(), "Python reintroduziu escritor Codex no modo gerenciado"
 
 
 @pytest.fixture
