@@ -1592,10 +1592,14 @@ async fn owner_broadcast_answers_the_rust_code_for_a_codex_terminal_it_cannot_ad
     registry.bind_watcher(fx.watcher());
     let (python, upstream) = crate::fake::spawn_fake().await;
     let mut state = hangar_server::routes::AppState::new(crate::fake::config(upstream, "127.0.0.1"));
-    // A lista do teste: o multiplexador do fixture (nenhum pane) e nenhuma pasta de sessão.
+    // A lista do teste: o multiplexador do fixture (nenhum pane) e pastas de sessão vazias, que respondem.
+    let home = &fx.home;
+    let dirs = hangar_server::list::bridge::parse_dirs(&serde_json::json!({"home": home, "claude": home.join(".claude"),
+        "codex_home": home.join(".codex"), "pi_sessions": home.join(".pi/agent/sessions"), "omp_config": home.join(".omp"),
+        "omp_agent": home.join(".omp/agent"), "kimi_home": home.join(".kimi-code")}).to_string());
     state.list = Arc::new(hangar_server::list::bridge::ListBridge::new(hangar_server::list::bridge::ListEnv {
         mux: Mux::with_program(&fx.tmux, Duration::from_secs(5)), capture_program: fx.tmux.clone().into_os_string(),
-        procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs: None },
+        procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs },
         hangar_server::list::facts::FactsClient::new(upstream, crate::fake::SECRET.into())));
     assert!(state.state.runtime.set(registry.clone()).is_ok());
     let server = crate::fake::spawn_state(state).await;

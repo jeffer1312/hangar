@@ -102,8 +102,11 @@ async fn serve(registry: Arc<RuntimeRegistry>, home: &std::path::Path) -> (Arc<F
             ("USERPROFILE".to_owned(), home.to_string_lossy().into_owned()),
             ("PATH".to_owned(), String::new()),
         ].into()));
+    // Pastas vazias: a lista responde, sem sessão nenhuma (pasta ausente seria a lista fora do ar).
     let mut list_env = hangar_server::list::bridge::ListEnv::from_env();
-    list_env.dirs = None;
+    list_env.dirs = hangar_server::list::bridge::parse_dirs(&json!({"home": home, "claude": home.join(".claude"),
+        "codex_home": home.join(".codex"), "pi_sessions": home.join(".pi/agent/sessions"), "omp_config": home.join(".omp"),
+        "omp_agent": home.join(".omp/agent"), "kimi_home": home.join(".kimi-code")}).to_string());
     state.list = Arc::new(hangar_server::list::bridge::ListBridge::new(list_env,
         hangar_server::list::facts::FactsClient::new(upstream, SECRET.into())));
     assert!(state.state.runtime.set(registry).is_ok());
