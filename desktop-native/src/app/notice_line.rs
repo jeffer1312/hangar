@@ -113,10 +113,13 @@ impl Hangar {
     /// "Voltar a mostrar" das Configurações, na máquina ativa.
     fn show_notice_again(&mut self, key: String, window: &mut Window, cx: &mut Context<Self>) {
         let Some(api) = self.api.clone() else { return };
-        self.put_notice_ignore(api, self.active_key(), format!("settings:{key}"), key, false, window, cx);
+        let server = self.active_key();
+        // O erro fica com a máquina: em outra, a mesma chave não mostra a falha desta.
+        self.put_notice_ignore(api, server.clone(), format!("settings:{server}:{key}"), key, false, window, cx);
     }
 
-    /// `owner`: quem mostra o resultado, o id do evento na conversa ou `settings:{chave}` na lista das Configurações.
+    /// `owner`: quem mostra o resultado, o id do evento na conversa ou `settings:{máquina}:{chave}` na lista das
+    /// Configurações.
     fn put_notice_ignore(&mut self, api: Api, server: String, event_id: String, key: String, ignored: bool, window: &mut Window, cx: &mut Context<Self>) {
         let body = json!({"key": key, "ignored": ignored});
         run(&self.runtime, async move { api.server_send(reqwest::Method::PUT, &["notice-ignores"], Some(body), 15).await }, window, cx,
@@ -141,9 +144,10 @@ impl Hangar {
 
     /// Avisos ignorados da máquina ativa, para as Configurações. `None` em servidor que não manda a lista.
     pub(super) fn render_ignored_notices(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let keys = self.notice_ignores.get(&self.active_key())?;
+        let server = self.active_key();
+        let keys = self.notice_ignores.get(&server)?;
         let rows: Vec<Div> = keys.iter().map(|key| {
-            let failed = match self.notice_acted.get(&format!("settings:{key}")) { Some(Acted::Failed(why)) => Some(why.clone()), _ => None };
+            let failed = match self.notice_acted.get(&format!("settings:{server}:{key}")) { Some(Acted::Failed(why)) => Some(why.clone()), _ => None };
             let put = key.clone();
             div().flex().flex_col().gap(px(2.))
                 .child(div().min_h(px(30.)).flex().items_center().gap(px(8.))

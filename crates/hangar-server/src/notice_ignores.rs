@@ -26,7 +26,7 @@ pub struct Feed {
     json: Mutex<Option<Arc<str>>>,
     pub(crate) changed: Notify,
     /// Gravação e publicação juntas: dois PUTs seguidos nunca publicam a lista velha por último.
-    writing: tokio::sync::Mutex<()>,
+    writing: Mutex<()>,
     /// Arquivo ilegível: a lista não o relê a cada rodada, só depois de `RETRY_UNREADABLE`.
     unreadable_at: Mutex<Option<std::time::Instant>>,
 }
@@ -80,18 +80,22 @@ pub async fn handle(State(state): State<Arc<AppState>>, ConnectInfo(peer): Conne
         };
         Some(change)
     } else { None };
-    let saving = change.is_some();
-    let _writing = if saving { Some(state.list.notice_ignores.writing.lock().await) } else { None };
     let home = state.accounts.env.home.to_path_buf();
+    let writer = state.clone();
+    // Gravar e publicar dentro da mesma tarefa, sob a trava: se o cliente cair, o futuro do handler some, mas a
+    // tarefa já começada termina com a trava na mão e o PUT seguinte espera.
     let done = tokio::task::spawn_blocking(move || match change {
-        Some(change) => hangar_notice_ignores::set(&home, &change.key, change.ignored),
+        Some(change) => {
+            let feed = &writer.list.notice_ignores;
+            let _writing = feed.writing.lock().unwrap_or_else(|e| e.into_inner());
+            let keys = hangar_notice_ignores::set(&home, &change.key, change.ignored)?;
+            feed.publish(&keys);
+            Ok(keys)
+        }
         None => hangar_notice_ignores::load(&home).map_err(Error::Io),
     }).await;
     match done {
-        Ok(Ok(keys)) => {
-            if saving { state.list.notice_ignores.publish(&keys); }
-            json_response(StatusCode::OK, body(&keys))
-        }
+        Ok(Ok(keys)) => json_response(StatusCode::OK, body(&keys)),
         Ok(Err(Error::Full)) => failure(StatusCode::CONFLICT, "notice_ignores_full", "avisos ignorados demais; volte a mostrar algum antes"),
         Ok(Err(Error::InvalidKey)) => failure(StatusCode::UNPROCESSABLE_ENTITY, "erro_corpo_invalido", "aviso inválido"),
         // Arquivo ilegível nunca vira lista vazia: a gravação seguinte o apagaria.

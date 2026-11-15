@@ -206,6 +206,8 @@ impl Hangar {
     pub(super) fn apply_preview_update(&mut self,update: ChatUpdate,cx: &mut Context<Self>) {
         match update {
             ChatUpdate::Message(event)=>{self.confirm_chat_message(&event);self.chat.apply(event);}
+            // Como na conversa aberta: só troca a nota que a prévia já mostra.
+            ChatUpdate::NoticeUpdate(event)=>{if self.chat.events.iter().any(|known|known.id==event.id) {self.chat.apply(event);}}
             ChatUpdate::Preview(preview)=>{self.chat.update_preview(preview);self.visible_preview=self.chat.preview.clone();}
             ChatUpdate::State(state)=>{self.chat.update_state(state);if self.chat.ask.is_none() {self.ask_form=AskForm::default();}}
             ChatUpdate::Question(ask)=>{if self.chat.update_ask(ask) {self.ask_form=AskForm::default();}}
