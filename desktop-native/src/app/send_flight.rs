@@ -498,9 +498,9 @@ impl Hangar {
         if self.idle_sends.is_empty() { return; }
         let Some(key) = self.selected_key() else { return };
         let (working, panel) = (self.chat.state.state == "working", self.chat.queue_panel());
-        // Quanto falta para conferir de novo, o menor entre os envios.
-        let mut handoff: Option<Duration> = None;
-        let mut check = |wait: Duration| handoff = Some(handoff.map_or(wait, |known| known.min(wait)));
+        // Quanto falta para conferir cada envio de novo: cada prazo tem a conferência dele.
+        let mut handoff: Vec<Duration> = Vec::new();
+        let mut check = |wait: Duration| if !handoff.contains(&wait) { handoff.push(wait) };
         self.idle_sends.retain_mut(|send| {
             if send.key != key { return true; }
             if let Some(id) = &send.entry {
@@ -525,21 +525,22 @@ impl Hangar {
             true
         });
         drop(panel);
-        let Some(wait) = handoff else { return };
-        cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(wait).await;
-            if let Some(this) = this.upgrade() {
-                this.update(cx, |this, cx| {
-                    // Quem continua na fila com a sessão trabalhando passa da conversa para o painel: as linhas são
-                    // refeitas inteiras, porque nenhum evento mudou.
-                    trace(|| "idle send handoff check: what is still queued while the session works goes to the queue panel".into());
-                    this.chat.invalidate();
-                    this.sync_rows(cx);
-                    this.redraw(Area::Bottom, cx);
-                    cx.notify();
-                });
-            }
-        }).detach();
+        for wait in handoff {
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(wait).await;
+                if let Some(this) = this.upgrade() {
+                    this.update(cx, |this, cx| {
+                        // Quem continua na fila com a sessão trabalhando passa da conversa para o painel: as linhas
+                        // são refeitas inteiras, porque nenhum evento mudou.
+                        trace(|| "idle send handoff check: what is still queued while the session works goes to the queue panel".into());
+                        this.chat.invalidate();
+                        this.sync_rows(cx);
+                        this.redraw(Area::Bottom, cx);
+                        cx.notify();
+                    });
+                }
+            }).detach();
+        }
     }
 
     /// A entrada `id` da fila é de uma mensagem enviada com a sessão parada e ainda por entregar: fica na conversa,
