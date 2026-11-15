@@ -28,7 +28,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::body::{Body, Bytes, to_bytes};
+use axum::body::{Bytes, to_bytes};
 use axum::extract::Request;
 use axum::http::request::Parts;
 use axum::http::StatusCode;
@@ -36,8 +36,7 @@ use axum::response::Response;
 use percent_encoding::percent_decode_str;
 use serde_json::{Value, json};
 
-use crate::proxy::Forward;
-use crate::routes::{AppState, cors, pass, who};
+use crate::routes::{AppState, cors, who};
 use crate::share::caller::Caller;
 use crate::runtime::gateway::{RuntimeRegistry, WriteTarget};
 use crate::runtime::ingress::{GateClosed, IngressPass};
@@ -73,10 +72,6 @@ pub async fn enter_then_find(runtime: &RuntimeRegistry, name: &str, wait: Durati
 pub(crate) fn session_name(path: &str) -> Option<String> {
     let raw = path.strip_prefix("/api/sessions/")?.split('/').next().filter(|n| !n.is_empty())?;
     percent_decode_str(raw).decode_utf8().ok().map(|n| n.into_owned())
-}
-
-pub(crate) async fn forward_whole(st: &AppState, parts: Parts, bytes: Bytes, fwd: &Forward) -> Response {
-    pass(st, Request::from_parts(parts, Body::from(bytes)), fwd).await
 }
 
 /// Decide quem atende. `Ok`: o Rust atende, com o passe na mão e o corpo já lido. `Err`: a resposta

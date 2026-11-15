@@ -1,7 +1,7 @@
 //! `POST /modo-execucao` e `/recarregar`: a troca de modo e o reinício rodam no Rust do começo ao fim, o
 //! Codex pela `runtime::codex_relaunch` e o Claude pela reabertura do spec (`runtime::claude_reopen`), com o
-//! corpo e os códigos da rota Python (`api.py`). Na troca de modo, sessão que não é de nenhum dos dois (Pi,
-//! omp, Kimi) segue ao Python como chegou; a recarga a recusa aqui. A recuperação da transferência é do Rust.
+//! corpo e os códigos da rota Python (`api.py`). Sessão que não é de nenhum dos dois (Pi,
+//! omp, Kimi) recebe aqui a recusa que a rota Python dava. A recuperação da transferência é do Rust.
 use std::future::Future;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -13,7 +13,7 @@ use axum::response::Response;
 use serde_json::{Value, json};
 
 use super::input::json_content_type;
-use super::{BODY_LIMIT, busy_body, forward_whole, invalid_body, json_response, session_name, too_large};
+use super::{BODY_LIMIT, busy_body, invalid_body, json_response, session_name, too_large};
 use crate::routes::{AppState, cors, gate, pass, who};
 use crate::share::caller::Caller;
 use crate::runtime::protocol::RuntimeError;
@@ -72,27 +72,22 @@ pub fn reload_refusal(error: &RuntimeError) -> (StatusCode, Value) {
 
 pub async fn mode(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
     let (fwd, owner) = match gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
-    let runtime = st.state.runtime.get().cloned();
-    let (Some(runtime), true, Some(name)) = (runtime, owner, session_name(req.uri().path()))
-        else { return pass(&st, req, &fwd).await };
+    let (true, Some(name)) = (owner, session_name(req.uri().path())) else { return pass(&st, req, &fwd).await };
+    let Some(runtime) = st.state.runtime.get().cloned() else { return super::no_runtime(req.headers()) };
     let (parts, body) = req.into_parts();
     let Ok(bytes) = to_bytes(body, BODY_LIMIT).await else { return too_large(&parts.headers) };
-    let Some(terminal) = terminal_field(&parts.headers, &bytes) else {
-        // Corpo torto de Codex do Rust é recusado aqui; o de outra sessão segue ao Python.
-        if runtime.owns_codex_terminal(&name) || runtime.owns_codex_headless(&name).await { return invalid_body(&parts.headers); }
-        return forward_whole(&st, parts, bytes, &fwd).await;
-    };
+    let Some(terminal) = terminal_field(&parts.headers, &bytes) else { return invalid_body(&parts.headers) };
     let panels = Some(st.term.clone());
-    let st2 = st.clone();
+    let (st2, owned) = (st.clone(), name.clone());
     let outcome = detached_relaunch(async move {
-        if let Some(codex) = during_life_change(&st2, &name, runtime.relaunch_codex(&name, terminal, panels)).await { return Some(Relaunched::Codex(codex)); }
+        if let Some(codex) = during_life_change(&st2, &owned, runtime.relaunch_codex(&owned, terminal, panels)).await { return Some(Relaunched::Codex(codex)); }
         let surface = if terminal { Surface::Terminal } else { Surface::Headless };
         let change = SessionChange { reason: ChangeReason::ModeSwitch, surface: Some(surface), account: None, permission_mode: None,
             model: None, effort: None, service_tier: None };
-        during_life_change(&st2, &name, runtime.reopen_claude_session(&name, change, None)).await.map(|r| Relaunched::Claude(r, !terminal))
+        during_life_change(&st2, &owned, runtime.reopen_claude_session(&owned, change, None)).await.map(|r| Relaunched::Claude(r, !terminal))
     }).await;
     let (status, body) = match outcome {
-        None => return forward_whole(&st, parts, bytes, &fwd).await,
+        None => unowned_mode(&st, &name).await,
         Some(Relaunched::Codex(Ok(value))) => (StatusCode::OK, value),
         Some(Relaunched::Codex(Err(error))) => mode_refusal(&error),
         Some(Relaunched::Claude(Ok(reopened), _)) => (StatusCode::OK, reopened.answer(json!({"ok": true, "terminal": terminal}))),
@@ -171,6 +166,19 @@ async fn unowned_reload(st: &AppState, name: &str) -> (StatusCode, Value) {
         Ok(Presence::Missing) => (StatusCode::NOT_FOUND, super::detail_body("erro_sessao_inexistente", "sessão não encontrada", json!({}))),
         Ok(Presence::Pane) => (StatusCode::CONFLICT, super::detail_body("erro_recarregar_so_sem_terminal",
             "recarregar só vale para sessão Claude sem terminal", json!({}))),
+        Ok(Presence::Sidecar(code)) => (StatusCode::SERVICE_UNAVAILABLE, super::detail_body(code,
+            "o arquivo da sessão não abre no servidor; feche e abra a sessão", json!({}))),
+    }
+}
+
+/// Troca de modo de nome que nem o Codex nem o Claude do Rust atendem: as recusas do `modo_execucao` do Python.
+async fn unowned_mode(st: &AppState, name: &str) -> (StatusCode, Value) {
+    use super::unowned::Presence;
+    match super::unowned::presence(st, name).await {
+        Err(error) => (StatusCode::SERVICE_UNAVAILABLE, json!({"detail": crate::list::hub::unavailable_detail(&error)})),
+        Ok(Presence::Missing) => (StatusCode::NOT_FOUND, super::detail_body("erro_sessao_inexistente", "sessão não encontrada", json!({}))),
+        Ok(Presence::Pane) => (StatusCode::CONFLICT, super::detail_body("erro_modo_so_claude",
+            "a troca de modo só vale para sessões Claude", json!({}))),
         Ok(Presence::Sidecar(code)) => (StatusCode::SERVICE_UNAVAILABLE, super::detail_body(code,
             "o arquivo da sessão não abre no servidor; feche e abra a sessão", json!({}))),
     }

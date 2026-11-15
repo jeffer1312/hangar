@@ -1141,10 +1141,10 @@ async fn delete_r1_3_codex_headless_with_a_live_actor_closes_in_rust() {
 }
 
 #[tokio::test]
-async fn relaunch_routes_go_to_python_when_the_session_is_not_a_codex_of_the_rust() {
+async fn relaunch_routes_stay_in_rust_when_the_session_is_not_a_codex_of_the_rust() {
     let (python, server) = serve_owner(registry().await).await;
-    // A recarga não tem mais rota no Python: o que o Rust não atende ele mesmo recusa.
-    for (route, body, hits) in [("modo-execucao", json!({"terminal": true}), 1), ("recarregar", json!({}), 0)] {
+    // Nenhuma das duas tem mais rota no Python: o que o Rust não atende ele mesmo recusa.
+    for (route, body, hits) in [("modo-execucao", json!({"terminal": true}), 0), ("recarregar", json!({}), 0)] {
         crate::fake::client().post(format!("http://{server}/api/sessions/claude-x/{route}"))
             .header("authorization", format!("Bearer {}", crate::fake::OWNER)).header("content-type", "application/json")
             .body(body.to_string()).send().await.unwrap();

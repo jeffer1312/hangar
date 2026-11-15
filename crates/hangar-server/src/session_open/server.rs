@@ -514,8 +514,9 @@ pub(crate) fn reply(error: &OpenError) -> Response {
 }
 
 /// `POST /api/sessions`: o dono e o convidado com login abrem Claude com terminal no Rust (o do
-/// convidado na pasta dele, com o dono registrado no `guests.json`); o resto segue ao Python com o
-/// corpo intacto (corpo que não é pedido válido também: o 422 é o dele).
+/// convidado na pasta dele, com o dono registrado no `guests.json`). Corpo que não é pedido válido é o 422
+/// do Rust, e o que não abre aqui recebe a recusa que o Python dava; quem não é dono nem convidado segue
+/// ao `pass`, que o recusa.
 pub async fn create(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
     let (started, diag) = (Instant::now(), crate::routes::diag_req(&req));
     let (fwd, owner) = match crate::routes::gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
@@ -534,10 +535,8 @@ pub async fn create(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
         async move { crate::routes::pass(&st, Request::from_parts(parts, Body::from(bytes)), &fwd).await }
     };
     if !owner && guest.is_none() { return pass(parts, bytes).await; }
-    let Ok(request) = SessionOpenRequest::parse(&bytes) else { return pass(parts, bytes).await };
-    // O passo vale também para a criação que segue ao Python: ele não tem mais o dele.
+    let Ok(request) = SessionOpenRequest::parse(&bytes) else { return crate::session_write::invalid_body(&parts.headers) };
     let _progress = super::open::Progress::track(request.name.as_deref().unwrap_or(""));
-    let name = request.name.clone().unwrap_or_default();
     let caller = guest.as_ref().map_or(OpenCaller::Owner, |g| OpenCaller::Guest { root: g.root.clone() });
     match decide_detached(&st, request, caller, guest, None).await {
         Decision::Opened(opened) => {
@@ -552,9 +551,12 @@ pub async fn create(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
             access_diary("POST /api/sessions", &response, started, &diag);
             response
         }
+        // O `create_session` do Python só respondia esta recusa.
         Decision::NotOurs => {
-            super::open::progress_step(&name, "criando", json!({}));
-            pass(parts, bytes).await
+            let mut response = reply(&OpenError::new(503, "session_open_needs_rust_server", "esta sessão não abre pelo servidor Rust"));
+            crate::routes::cors(&parts.headers, response.headers_mut());
+            access_diary("POST /api/sessions", &response, started, &diag);
+            response
         }
     }
 }

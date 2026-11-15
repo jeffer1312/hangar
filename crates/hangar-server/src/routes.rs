@@ -1535,37 +1535,26 @@ pub(crate) async fn history(
         Ok(Path(n)) if req.method() == Method::GET && who.as_ref().is_some_and(|c| c.can(&n, req.method())) => n,
         _ => return pass(&st, req, &fwd).await,
     };
-    let mut selected_info = None;
     let limit = match auth::query_param(req.uri().query(), "limit") {
         None => None,
         Some(v) => match v.parse::<i64>() {
             // Como o Python: `limit <= 0` é o histórico inteiro (api.py:2918), nunca um 400.
             Ok(n) if n > 0 => usize::try_from(n).ok(),
             Ok(_) => None,
-            // Texto ou vazio fica com o FastAPI e o 422 dele.
-            Err(_) => {
-                let info = match st.info(&name).await {
-                    Ok(info) => info,
-                    Err(_) => return route_failed(&st, req.headers(), "rust.history_failed", &name, "internal_info", INFO_REASON),
-                };
-                if info.as_ref().is_some_and(|info| matches!(info.provider.as_str(), "pi" | "omp" | "kimi")) {
-                    let parsed = match native_history_limit(&v) { Ok(limit) => limit, Err(()) => return invalid_history_limit(v, req.headers()) };
-                    selected_info = info;
-                    parsed
-                } else if req.extensions().get::<crate::forwarded::ReadGuest>().is_some() {
-                    return invalid_history_limit(v, req.headers());
-                } else {
-                    return pass(&st, req, &fwd).await;
-                }
-            }
+            // O resto segue a leitura de inteiro do FastAPI, com o 422 dele antes de procurar a sessão.
+            Err(_) => match native_history_limit(&v) { Ok(limit) => limit, Err(()) => return invalid_history_limit(v, req.headers()) },
         },
     };
-    let found = match selected_info { Some(info) => Ok(Some(info)), None => st.info(&name).await };
-    let Ok(info) = found else {
+    let Ok(info) = st.info(&name).await else {
         return route_failed(&st, req.headers(), "rust.history_failed", &name, "internal_info", INFO_REASON);
     };
-    // Sessão inexistente ou provedor fora do Rust: o Python é o dono.
-    let Some(info) = info else { return pass(&st, req, &fwd).await };
+    let missing = |headers: &HeaderMap| {
+        let mut response = hangar_core::http::detail(StatusCode::NOT_FOUND, "erro_sessao_inexistente",
+            "session or transcript not found", serde_json::json!({}));
+        cors(headers, response.headers_mut());
+        response
+    };
+    let Some(info) = info else { return missing(req.headers()) };
     // Antes de qualquer repasse: sessão em erro ainda sem transcript também é reaberta.
     st.request_reopen(&name);
     if matches!(info.provider.as_str(), "pi" | "omp" | "kimi") && info.jsonl.is_none() {
@@ -1573,9 +1562,10 @@ pub(crate) async fn history(
         cors(req.headers(), response.headers_mut());
         return response;
     }
-    let Some(mut hreq) = info.history_request(limit) else {
-        return pass(&st, req, &fwd).await;
-    };
+    if info.jsonl.as_ref().is_none_or(|path| path.as_os_str().is_empty()) { return missing(req.headers()) }
+    // Provedor que o Rust não conhece: o Python lia com o leitor do Claude.
+    let claude = || InternalInfo { provider: "claude".into(), ..info.clone() }.history_request(limit);
+    let Some(mut hreq) = info.history_request(limit).or_else(claude) else { return missing(req.headers()) };
     // Com o chat ao vivo aberto, vale o transcript que o hub já confirmou: uma leitura solta da
     // descoberta não pode mostrar outra conversa que a do canal ao vivo.
     let fresh = Binding::from_info(&info);
