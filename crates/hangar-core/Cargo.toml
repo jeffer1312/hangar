@@ -26,6 +26,7 @@ serde = { workspace = true, features = ["alloc"] }
 serde_json = { workspace = true, features = ["float_roundtrip", "alloc", "unbounded_depth", "arbitrary_precision", "raw_value"] }
 sha1_smol.workspace = true
 subtle = { workspace = true }
+tempfile.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "io-util", "io-std", "process", "sync", "time", "fs", "signal"] }
 tracing = { workspace = true }
 
@@ -40,7 +41,6 @@ windows-sys = { workspace = true, features = ["Wdk_System_SystemInformation", "W
 test-support = []
 
 [dev-dependencies]
-tempfile.workspace = true
 # Relógio pausado nos testes de `terminal_process`.
 tokio = { workspace = true, features = ["test-util"] }
 tracing-subscriber = { workspace = true }

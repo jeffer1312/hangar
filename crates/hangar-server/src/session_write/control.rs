@@ -709,7 +709,7 @@ async fn queue_steer_runtime(handle: &EntryHandle, entry_id: &str) -> Answer {
     let mut returned = false;
     if handle.view().await.is_ok_and(|view| view["in_progress"] == true) {
         let sent = handle.command(RuntimeCommand { operation_id: random_hex(16), kind: OperationKind::SteerQueue,
-            payload: json!({"entry_id": entry_id}) }).await;
+            payload: json!({"entry_id": entry_id, "now": true}) }).await;
         match steer_in_turn(&sent, entry_id) {
             Ok(answer) => return answer,
             Err(back) => returned = back,

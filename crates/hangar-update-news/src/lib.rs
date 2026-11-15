@@ -27,11 +27,33 @@ struct Store {
     devices: BTreeMap<String, Device>,
 }
 
+/// De quem é a chegada. Arquivo anterior ao campo é todo do Hangar.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Kind {
+    #[default]
+    Hangar,
+    ComputerControl,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
-struct Arrival { seq: u64, from: String, to: String, at: String, news: Vec<Value> }
+struct Arrival {
+    seq: u64,
+    from: String,
+    to: String,
+    at: String,
+    news: Vec<Value>,
+    // Ausente na chegada do Hangar: o arquivo dele continua igual ao de antes.
+    #[serde(default, skip_serializing_if = "Kind::is_hangar")]
+    kind: Kind,
+}
 
 #[derive(Debug, Deserialize, Serialize)]
 struct Device { cursor: u64, at: String }
+
+impl Kind {
+    fn is_hangar(&self) -> bool { *self == Kind::Hangar }
+}
 
 /// Guarda `to` como a versão conhecida e, havendo novidade, a chegada dela. Sem novidade não há
 /// chegada e devolve `None`.
@@ -42,12 +64,24 @@ pub fn record(home: &Path, from: &str, to: &str, news: Vec<Value>) -> io::Result
     update(home, |store| {
         store.version = Some(to.to_owned());
         // Volta para a versão de antes (a nova não ficou de pé): o que ela trouxe não está instalado.
-        if store.arrivals.last().is_some_and(|last| last.from == to && last.to == from) { store.arrivals.pop(); }
-        if news.is_empty() { return None; }
-        store.seq += 1;
-        store.arrivals.push(Arrival { seq: store.seq, from: from.to_owned(), to: to.to_owned(), at: now(), news });
-        Some(store.seq)
+        // Chegada de outro componente gravada depois não esconde a última do Hangar.
+        if let Some(at) = store.arrivals.iter().rposition(|arrival| arrival.kind == Kind::Hangar)
+            && store.arrivals[at].from == to
+            && store.arrivals[at].to == from
+        {
+            store.arrivals.remove(at);
+        }
+        push(store, Kind::Hangar, from, to, news)
     })
+}
+
+/// Chegada de um componente que não é o Hangar (o hcu): não toca a versão conhecida e nunca é
+/// desfeita pela volta de versão do Hangar.
+///
+/// # Errors
+/// Falha ao gravar.
+pub fn record_component(home: &Path, kind: Kind, from: &str, to: &str, news: Vec<Value>) -> io::Result<Option<u64>> {
+    update(home, |store| push(store, kind, from, to, news))
 }
 
 /// A última versão com que o servidor gravou; `None` sem arquivo ou em arquivo anterior ao campo.
@@ -122,6 +156,14 @@ pub fn valid_device(device: &str) -> bool {
 
 fn check(device: &str) -> io::Result<()> {
     if valid_device(device) { Ok(()) } else { Err(io::Error::new(io::ErrorKind::InvalidInput, "id de aparelho inválido")) }
+}
+
+/// Sem novidade não há chegada.
+fn push(store: &mut Store, kind: Kind, from: &str, to: &str, news: Vec<Value>) -> Option<u64> {
+    if news.is_empty() { return None; }
+    store.seq += 1;
+    store.arrivals.push(Arrival { seq: store.seq, from: from.to_owned(), to: to.to_owned(), at: now(), news, kind });
+    Some(store.seq)
 }
 
 fn update<T>(home: &Path, change: impl FnOnce(&mut Store) -> T) -> io::Result<T> {

@@ -108,6 +108,7 @@ pub fn rust_route(method: &Method, path: &str) -> bool {
         || crate::session_tools::owns_path(path)
         || crate::costs_routes::usage_path(path) || crate::diag::version_matches(method, path)
         || crate::plugins::matches(path) || workflow || hangar_desktop_theme::owns_path(path)
+        || hangar_shortcut_transfer::owns_path(path)
         || matches!(path, "/api/config-sync/apply" | "/api/update-channel") { return true; }
     if *method == Method::GET && matches!(path, "/api/config-sync/manifest" | "/api/config-sync/bundle") { return true; }
     if crate::ui::matches(method, path) || crate::dictation::http::matches(method, path)
@@ -239,6 +240,8 @@ pub fn rust_route(method: &Method, path: &str) -> bool {
         || crate::plans::routes::matches(method, path) || crate::share_reach::matches(method, path) || share_route(method, path)
         || crate::workspace_routes::matches(method, path) || crate::worktree_routes::matches(method, path)
         || crate::reviews::matches(method, path)
+        || crate::dream::routes::matches(method, path)
+        || crate::computer_control::matches(method, path)
 }
 
 /// Convites e par externo do dono (`share::owner_routes`, `share::pair_routes`).

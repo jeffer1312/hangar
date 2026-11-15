@@ -154,19 +154,6 @@ def main():
     # que lê ou escreve sidecar: os hooks, o endpoint do Pi e o hook_state logo abaixo já são
     # clientes dessas pastas — migrar depois deles seria migrar por cima de arquivo recém-escrito.
     migracao_sidecars.migrar(_state_dirs)
-    # Uma configuração do Jev: a chave antiga do Computer Use vira a dela e o MCP recebe endereço e modelo.
-    # Modelo auxiliar único ANTES do repasse ao MCP: o `sync_jev` reescreve o `LLM_*` com o auxiliar, e
-    # o legado precisa ter sido lido do MCP antes disso.
-    try:
-        from app import runtime_config
-        runtime_config.migrar_jev_aux()
-    except Exception as e:                            # noqa: BLE001 — nunca derruba a subida
-        print(f"[hangar] AVISO: o modelo auxiliar antigo não virou o do Jev ({e})")
-    try:
-        from app import computer_control
-        computer_control.migrate_jev()
-    except Exception as e:                            # noqa: BLE001 — nunca derruba a subida
-        print(f"[hangar] AVISO: configuração do Jev não chegou ao Computer Use ({e})")
     hook_state.load_existing(_state_dirs)
     # Windows: cliente que aborta no meio do accept nao pode fechar o listener (ver o modulo).
     resilient_accept.install()

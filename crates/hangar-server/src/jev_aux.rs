@@ -31,7 +31,7 @@ struct ModelsBody {
 
 /// `access.api-keys` no formato novo, senão `api-keys` na raiz (no novo, a raiz é dos provedores).
 /// Mesma ordem do `computer_control._cliproxy_keys`.
-fn cliproxy_keys(home: &Path) -> Vec<String> {
+pub(crate) fn cliproxy_keys(home: &Path) -> Vec<String> {
     let path = home.join(".cli-proxy-api").join("config.yaml");
     let text = match std::fs::read_to_string(&path) {
         Ok(text) => text,

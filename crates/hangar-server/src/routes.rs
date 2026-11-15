@@ -168,6 +168,16 @@ impl AppState {
             trusted: self.cfg.trusted.clone(), sources: Arc::new(crate::plugin::sources::NativeSources::new(self)) })
     }
 
+    /// A borda que as rotas de crate próprio recebem: proxies confiáveis, autenticação e diário.
+    pub(crate) fn edge(&self) -> hangar_core::edge::Edge {
+        hangar_core::edge::Edge { trusted: self.cfg.trusted.clone(), auth: self.auth.clone(), diag: self.diag.clone() }
+    }
+
+    /// O servidor no papel de `Host` das rotas de atalhos, pelo roteador e pelo caminho com `%2F` ou `//`.
+    pub(crate) fn shortcut_host(self: &Arc<Self>) -> Arc<crate::shortcut_transfer::ServerHost> {
+        Arc::new(crate::shortcut_transfer::ServerHost(self.clone()))
+    }
+
     pub fn new(cfg: Config) -> AppState {
         Self::with_server_id(cfg, String::new())
     }
@@ -407,6 +417,7 @@ pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest:
     let _session_restore = crate::session_open::restore::spawn(state.clone(),restoration.clone()).map(crate::AbortOnDrop);
     if _session_restore.is_none() {restoration.finish();}
     let _scheduled_tasks=crate::AbortOnDrop(crate::scheduled_tasks::spawn(state.clone(),restoration));
+    let _dream_clock = crate::AbortOnDrop(crate::dream::spawn(state.clone()));
     let _group_sweep = crate::groups::sweep::spawn(state.clone()).map(crate::AbortOnDrop);
     let _link_return = crate::groups::link_return::spawn(state.clone()).map(crate::AbortOnDrop);
     let _session_sleep = crate::AbortOnDrop(crate::session_sleep::spawn(state.clone()));
@@ -919,7 +930,9 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .merge(crate::connect::routes::router())
         // Planos e catálogo de plugins e skills: o dono no Rust; o resto segue ao Python.
         .merge(crate::plans::routes::router())
-        .merge(hangar_desktop_theme::router(hangar_core::edge::Edge { trusted: state.cfg.trusted.clone(), auth: state.auth.clone(), diag: state.diag.clone() }, state.desktop_theme.clone()))
+        .merge(hangar_desktop_theme::router(state.edge(), state.desktop_theme.clone()))
+        // Exportar, importar e verificar atalhos: só o dono, nunca repassados (o Python não tem as rotas).
+        .merge(hangar_shortcut_transfer::router(state.edge(), state.shortcut_host()))
         .route("/api/claude/customizations", get(crate::claude_customizations::catalog_route).fallback(pass_any))
         // Senha do chaveiro: só o dono, nunca repassada; só o preflight do CORS vai ao Python.
         .route("/api/keyring/unlock", axum::routing::post(crate::keyring::unlock_route).options(pass_any))
@@ -1221,6 +1234,10 @@ pub(crate) async fn pass_any(
         return crate::auxiliary::handle(State(st), ConnectInfo(peer), req).await;
     }
     let decoded_path=percent_encoding::percent_decode_str(req.uri().path()).decode_utf8_lossy();
+    // `%2F` ou `//` escapam do roteador: os atalhos continuam do Rust, nunca do Python.
+    if hangar_shortcut_transfer::owns_path(req.uri().path()) {
+        return hangar_shortcut_transfer::handle(st.edge(),st.shortcut_host(),Some(peer),req).await;
+    }
     if crate::worktree_fetch::owns(&decoded_path) {
         return crate::worktree_fetch::route(st,peer,req).await;
     }
@@ -1356,6 +1373,12 @@ pub(crate) async fn pass_any(
     }
     if crate::reviews::matches(req.method(), req.uri().path()) {
         return crate::reviews::route(st, peer, req).await;
+    }
+    if crate::dream::routes::matches(req.method(), req.uri().path()) {
+        return crate::dream::routes::route(st, peer, req).await;
+    }
+    if crate::computer_control::matches(req.method(), req.uri().path()) {
+        return crate::computer_control::route(st, peer, req).await;
     }
     if crate::workspace_routes::matches(req.method(), req.uri().path()) {
         return crate::workspace_routes::public(st, peer, req).await;

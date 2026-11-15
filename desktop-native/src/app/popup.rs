@@ -371,7 +371,7 @@ pub(crate) fn dialog(surface: Dialog) -> Dialog {
 }
 
 /// Título de seção do popover, em caixa alta miúda; a tecla, quando há, fica à direita.
-pub(super) fn title(text: String, key: Option<&'static str>) -> Div {
+pub(crate) fn title(text: String, key: Option<&'static str>) -> Div {
     div().px(px(8.)).pt(px(6.)).pb(px(4.)).flex().items_center().gap_2()
         .child(div().flex_1().min_w_0().truncate().text_size(px(10.)).font_weight(FontWeight::MEDIUM).text_color(theme::faint())
             .child(text.to_uppercase()))

@@ -1019,7 +1019,7 @@ impl Caches {
                 .map(|item| expand_home(&labelled_path(item), &dirs.home)).collect(),
             None => match std::fs::read_dir(&dirs.home) {
                 Ok(entries) => entries.flatten()
-                    .filter(|e| e.file_name().to_string_lossy().starts_with(".claude") && e.path().is_dir())
+                    .filter(|e| account_dir_name(&e.file_name().to_string_lossy()) && e.path().is_dir())
                     .map(|e| e.path()).collect(),
                 Err(e) => {
                     // Sem as outras contas os marcadores delas somem: avisa e não guarda, tenta de novo no tique.
@@ -1037,6 +1037,12 @@ impl Caches {
         *lock(&self.config_dirs) = Some((Instant::now(), v.clone()));
         v
     }
+}
+
+/// `~/.claude*` sem as travas do Claude Code (`~/.claude.json.lock`, `~/.claude-x.lock`): quem usa
+/// esta lista grava estado nas pastas, e a trava que ganha arquivo nunca mais é removida.
+fn account_dir_name(name: &str) -> bool {
+    name.starts_with(".claude") && !name.ends_with(".lock")
 }
 
 pub(crate) fn expand_home(path: &str, home: &Path) -> PathBuf {
@@ -1418,6 +1424,16 @@ pub async fn private(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connect
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn claude_lock_dirs_are_not_account_dirs() {
+        for name in [".claude", ".claude-jefferson", ".claude-200-04", ".claude-x.lockado"] {
+            assert!(account_dir_name(name), "{name}");
+        }
+        for name in [".claude.json.lock", ".claude.lock", ".claude-200-01.lock", ".codex", "claude"] {
+            assert!(!account_dir_name(name), "{name}");
+        }
+    }
 
     #[tokio::test]
     async fn real_round_rebuilds_rows_and_keeps_only_same_life_projection_on_error() {

@@ -206,6 +206,9 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   `hangar-backend` com logon `Interactive` é o que mantém o cofre; mudar o principal dela ou lançar o
   servidor por SSH tira o cofre da máquina. Medição em
   [plataforma.md](plataforma.md#cofre-de-senhas-uma-máquina-dona-chave-no-chaveiro-uso-aprovado-por-senha-30102026).
+- **O Supervisor confere se o filho Rust vive por `proc.poll()`, nunca por `psutil` `status()` ou
+  `num_threads()`**: no Windows cada uma lista todos os processos da máquina, e a conferência roda a
+  toda volta do Supervisor. Medição em [Supervisor confere o filho Rust por `poll()`](#supervisor-confere-o-filho-rust-por-poll-14112026).
 
 ## Reinício sem início e porta do front (05/11/2026)
 
@@ -1144,3 +1147,12 @@ cenário): ~7 `tmux.exe` por minuto trabalhando e ~10 parado, contra ~170 da ver
 (0.1.0.10381) parada logo antes; CPU dos servidores do psmux de 2,4% para 1,0–1,3% de um núcleo. O
 "antes" variou entre ~103 e ~170 por minuto em rodadas diferentes da mesma máquina; o "depois" ficou
 estável.
+
+## Supervisor confere o filho Rust por `poll()` (14/11/2026)
+
+Com tudo parado, o Python do backend gastava 3,4% de um núcleo na DELPHI-02. Amostrado por
+`sys.remote_exec` e pelo tempo de CPU por thread: quase tudo era `refresh_members`, que o Supervisor
+chama a cada 250 ms e que começava conferindo o filho com `psutil` `status()` (4,3 ms) e
+`num_threads()` (3,2 ms); no Windows cada uma lista os 278 processos da máquina. O filho é um `Popen`
+nosso com o handle aberto, então `poll()` responde sem a varredura. No backend em uso, com a
+conferência trocada por dentro do processo: 3,41% → 0,51% de um núcleo, 2 min de cada lado.

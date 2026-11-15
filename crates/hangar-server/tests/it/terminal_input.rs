@@ -1118,3 +1118,29 @@ async fn terminal_input_slash_accepts_when_the_prompt_hooks_start_without_a_seco
  assert_eq!((r.disposition,r.code.as_str()),(Disposition::Accepted,"prompt_started"));
  assert_eq!(io.writes().iter().filter(|w|w.args.last().is_some_and(|a|a=="\r")).count(),1);
 }
+/// Conta as leituras de fatos; a partir da leitura `stale_from` a conversa é outra (o pane trocou de vida).
+struct Counted { inner: Services, calls: Mutex<usize>, stale_from: usize }
+impl Counted { fn new(stale_from: usize) -> Self { let inner = Services::new(); { let mut f = inner.facts.lock().unwrap(); f.plugin_live = true; f.plugin_user = true; } *inner.reply.lock().unwrap() = PluginReply::Accepted; Self { inner, calls: Mutex::new(0), stale_from } } }
+impl TerminalServices for Counted {
+ fn facts<'a>(&'a self, _: &'a TerminalBinding) -> ServiceFuture<'a, InputFacts> { Box::pin(async move {
+  let mut calls = self.calls.lock().unwrap(); *calls += 1;
+  let mut facts = self.inner.facts.lock().unwrap().clone();
+  if *calls >= self.stale_from { facts.binding.conversation = "other".into(); }
+  Ok(facts) }) }
+ fn publish<'a>(&'a self, b: &'a TerminalBinding, r: PluginRequest) -> ServiceFuture<'a, PluginReply> { self.inner.publish(b, r) }
+ fn permission_guard<'a>(&'a self, _: &'a TerminalBinding) -> ServiceFuture<'a, ()> { Box::pin(async { Ok(()) }) }
+}
+#[tokio::test]
+async fn terminal_input_composer_is_read_right_after_the_verified_facts() {
+ let io = Arc::new(FakeIo::new(vec![screen("")])); let s = Arc::new(Counted::new(usize::MAX));
+ assert_eq!(driver(io.clone(), s.clone()).prompt("long original message", "id").await.disposition, Disposition::Accepted);
+ assert_eq!(*s.calls.lock().unwrap(), 2, "a leitura do começo e a da entrega");
+}
+#[tokio::test]
+async fn terminal_input_life_changed_after_the_composer_read_publishes_nothing() {
+ // A segunda leitura é a da entrega, depois do composer.
+ let io = Arc::new(FakeIo::new(vec![screen("")])); let s = Arc::new(Counted::new(2));
+ let r = driver(io.clone(), s.clone()).prompt("long original message", "id").await;
+ assert_ne!(r.disposition, Disposition::Accepted);
+ assert!(s.inner.published.lock().unwrap().is_empty()); assert!(io.writes().is_empty());
+}

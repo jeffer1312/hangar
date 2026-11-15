@@ -71,13 +71,3 @@ def test_binario_do_pacote_vence(home, monkeypatch):
     exe.chmod(0o755)
     # Pelo caminho real da versão: processo longo não pode seguir o `current` que a troca move.
     assert rust_bins.find_bin("hangar-cano", "CP_RUST_CANO_BIN") == exe.resolve()
-
-
-def test_marcador_hangar_reconhece_current_e_versao(home):
-    from app.config_sync_paths import Roots, canonicalize
-    current = _pacote(home)
-    roots = Roots.this_machine()
-    assert roots.hangar == str(current)
-    real = home / ".hangar" / "versions" / "X"
-    texto = f'"{current}/backend/hooks/a.py" {real}/scripts/b.py {home}/x'
-    assert canonicalize(texto, roots) == '"⟦HANGAR⟧/backend/hooks/a.py" ⟦HANGAR⟧/scripts/b.py ⟦HOME⟧/x'

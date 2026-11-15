@@ -2121,6 +2121,8 @@ struct TableColumnWidths {
     rem_size: Pixels,
     mono_family: SharedString,
     inline_code: HighlightStyle,
+    /// Modified for Hangar: the view's own code font measures code cells instead of `mono_family`.
+    inline_code_font_family: Option<SharedString>,
     /// Maxima from ordinary text only. Custom cells may shrink after an update.
     widths: Vec<f32>,
     word_widths: Vec<f32>,
@@ -3589,6 +3591,7 @@ fn measure_table_column_widths(
     let rem_size = window.rem_size();
     let mono_family = cx.theme().tokens.typography.mono.clone();
     let inline_code = node_cx.style.inline_code_highlight();
+    let inline_code_font_family = node_cx.style.inline_code_font_family().cloned();
     let cached = table.column_widths_cache.0.lock().ok().and_then(|cache| {
         cache
             .as_ref()
@@ -3598,6 +3601,7 @@ fn measure_table_column_widths(
                     && cached.rem_size == rem_size
                     && cached.mono_family == mono_family
                     && cached.inline_code == inline_code
+                    && cached.inline_code_font_family == inline_code_font_family
                     && cached.text_system == text_system_id(window)
             })
             .cloned()
@@ -3611,6 +3615,7 @@ fn measure_table_column_widths(
             rem_size,
             mono_family,
             inline_code,
+            inline_code_font_family,
             widths,
             word_widths,
             custom_cells,

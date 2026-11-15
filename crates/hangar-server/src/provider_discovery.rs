@@ -23,6 +23,10 @@ static SHARED: LazyLock<Discovery> = LazyLock::new(Discovery::default);
 pub async fn providers(env: &AccountEnvironment) -> Result<Providers, String> {
     SHARED.providers(env).await
 }
+/// PATH do shell de login, guardado por ambiente.
+pub async fn login_path(env: &AccountEnvironment) -> String {
+    SHARED.login_path(env).await
+}
 
 impl Discovery {
     pub async fn login_path(&self, env: &AccountEnvironment) -> String {

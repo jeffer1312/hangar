@@ -658,8 +658,7 @@ impl TerminalDriver {
     /// Driver para as operações de um clique de mod cujo pane já teve a identidade conferida na mesma
     /// reserva (`PaneOp::Hold`): sem a conferência, cada operação é um processo do multiplexador a menos.
     pub fn pane_checked(mut self) -> Self { self.pane_checked = true; self }
-    pub fn footer_kept(mut self) -> Self { self.footer_kept = true; self }
-    pub fn binding(&self) -> &TerminalBinding { &self.binding }
+    pub fn footer_kept(mut self) -> Self { self.footer_kept = true; self }    pub fn binding(&self) -> &TerminalBinding { &self.binding }
     fn request(&self, args: Vec<String>, stdin: Vec<u8>) -> Result<CommandRequest, IoFailure> {
         let (program, prefix) = self.binding.mux_argv.split_first().ok_or(IoFailure { code: "mux_missing", may_have_written: false })?;
         Ok(CommandRequest { program: program.clone(), args: prefix.iter().cloned().chain(args).collect(), stdin })
@@ -1234,7 +1233,9 @@ impl TerminalDriver {
             facts = match self.verify().await { Ok(f) => f, Err(e) => return Self::failed(e, DeliveryStage::Identity) };
         }
         if !facts.ready { return DeliveryResult::new(Disposition::Deferred, DeliveryStage::Ready, "not_ready"); }
-        let draft = match self.snapshot().await {
+        // Os fatos acabaram de ser conferidos, e toda escrita adiante confere de novo antes: essa conferência
+        // fecha a leitura do composer, e uma troca de vida no meio não chega a escrever.
+        let draft = match self.composer_capture_unverified().await.and_then(|(screen, typed)| Self::composer(&screen, &typed)) {
             Err(e) if e.code == "footer_focus" && !self.footer_kept => self.return_footer_focus().await,
             other => other,
         };

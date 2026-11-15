@@ -1036,6 +1036,7 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
                 let queue = queue.clone(); let target = target.clone(); let sender = internal.clone(); let sample = clock(start);
                 let entry_id = pending.command.payload["entry_id"].as_str().map(str::to_owned);
                 let expected_turn = pending.command.payload.get("expected_turn").cloned();
+                let now = pending.command.payload["now"] == true;
                 jobs.spawn(async move {
                     let result = async {
                         let claimed = queue.exec(target.generation,&format!("steer-claim:{id}"),sample,
@@ -1051,8 +1052,11 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
                                 continue;
                             }
                             let mut payload=json!({"text":row["text"],"entry_id":entry,"pre_transcript":row["pre_transcript"].as_bool().unwrap_or(false)});
+                            // Só a primeira corta o turno; as outras entram no turno dela, que já não é o conferido.
+                            let first = replies.is_empty();
+                            if first && now { payload["now"]=json!(true); }
                             if let Some(expected)=&expected_turn {
-                                payload["expected_turn"]=expected.clone();
+                                if first { payload["expected_turn"]=expected.clone(); }
                                 if expected["turn_id"].is_string() {payload["turn_id"]=expected["turn_id"].clone();}
                             }
                             let command = RuntimeCommand { operation_id:format!("{id}:{entry}"),kind:OperationKind::Steer,payload };

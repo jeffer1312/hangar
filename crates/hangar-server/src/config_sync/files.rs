@@ -10,29 +10,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
+pub use hangar_core::fs::chmod;
+
 pub fn mode(path: &Path) -> std::io::Result<u32> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        Ok(path.metadata()?.permissions().mode() & 0o777)
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = path;
-        Ok(0o644)
-    }
-}
-pub fn chmod(path: &Path, mode: u32) -> std::io::Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = (path, mode);
-        Ok(())
-    }
+    if cfg!(unix) { hangar_core::fs::file_mode(path) } else { Ok(0o644) }
 }
 pub fn write_file(path: &Path, blob: &Blob) -> Result<(), Error> {
     let parent = path
@@ -352,25 +333,6 @@ fn replace_checked(
             error => Error::new("config_sync_changed", error.to_string(), json!({})),
         }
     })
-}
-pub(super) fn write_file_checked(
-    path: &Path,
-    blob: &Blob,
-    expected: Option<&[u8]>,
-    link: Option<&Path>,
-) -> Result<(), Error> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| Error::invalid("arquivo sem pasta"))?;
-    std::fs::create_dir_all(parent)?;
-    let mut file = tempfile::Builder::new()
-        .prefix(".hangar-config-")
-        .tempfile_in(parent)?;
-    file.write_all(&blob.data)?;
-    file.as_file().sync_all()?;
-    chmod(file.path(), blob.mode)?;
-    let file = file.into_temp_path();
-    replace_checked(&file, path, expected, link)
 }
 #[cfg(test)]
 thread_local! {

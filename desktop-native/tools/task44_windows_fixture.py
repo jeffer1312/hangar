@@ -1,6 +1,6 @@
 """Servidor sintético da página Controle do Windows. Nenhum pedido chega ao backend real.
 
-GET /control/t44 aceita get=ok|error, save=ok|error, install=ok|error|skipped,
+GET /control/t44 aceita get=ok|error, save=ok|error,
 mode=local|package, agent=present|missing, enabled=0|1 e reset=1.
 """
 import json
@@ -18,7 +18,7 @@ PRESET_URL = "http://127.0.0.1:8317/v1/chat/completions"
 
 
 def initial():
-    return {"get": "ok", "save": "ok", "install": "ok", "mode": "local",
+    return {"get": "ok", "save": "ok", "mode": "local",
             "agent": "present", "enabled": False, "project_dir": "/fixture/project",
             "agent_config": "/fixture/project/delphi-02-agent.json", "installed_tag": ""}
 
@@ -62,7 +62,7 @@ class Handler(T43["Handler"]):
         if url.path == "/control/t44":
             query = parse_qs(url.query)
             allowed = {"get": {"ok", "error"}, "save": {"ok", "error"},
-                       "install": {"ok", "error", "skipped"}, "mode": {"local", "package"},
+                       "mode": {"local", "package"},
                        "agent": {"present", "missing"}, "enabled": {"0", "1"}, "reset": {"1"}}
             if any(key not in allowed or len(values) != 1 or values[0] not in allowed[key] for key, values in query.items()):
                 self.send_json({"detail": "controle inválido"}, 400)
@@ -71,7 +71,7 @@ class Handler(T43["Handler"]):
                 if "reset" in query:
                     STATE.clear()
                     STATE.update(initial())
-                for key in ("get", "save", "install", "mode", "agent"):
+                for key in ("get", "save", "mode", "agent"):
                     if key in query:
                         STATE[key] = query[key][0]
                 if "enabled" in query:
@@ -116,23 +116,6 @@ class Handler(T43["Handler"]):
                 STATE["project_dir"] = body["project_dir"]
                 STATE["agent_config"] = body["agent_config"]
                 reply, status = snapshot(), 200
-        self.send_json(reply, status)
-
-    def do_POST(self):
-        if urlparse(self.path).path != "/api/computer-control/install":
-            return super().do_POST()
-        if not self.authorized():
-            return
-        print("POST /api/computer-control/install", flush=True)
-        with LOCK:
-            if STATE["install"] == "error":
-                reply = error("erro_computer_control_release", "não consegui baixar a versão publicada", error="HTTP 503")
-                status = 502
-            else:
-                skipped = STATE["install"] == "skipped"
-                STATE.update(mode="package", installed_tag="v0.1-sintetica", agent="present", enabled=True,
-                             agent_config="/fixture/computer-control/targets/delphi-02-agent.json")
-                reply, status = snapshot(skipped), 200
         self.send_json(reply, status)
 
 
