@@ -233,6 +233,22 @@ test('bolha que a fila desistiu entra no horário em que foi enviada, não no fi
   chat.release();
 });
 
+test('notice_update troca a nota que está na tela e ignora a que não foi carregada', async () => {
+  const note = (count: number) => ev({ id: 'local-hookfail:1:0', kind: 'notice', text: 'hook_failed',
+    hook_error: `Stop: x (falhou ${count} vezes)`, notice_meta: { key: 'hook:Stop', subject: 'Stop', count } });
+  historyResponses = [[ev({ id: 'a' }), note(3), ev({ id: 'b', kind: 'assistant_msg' })]];
+  const chat = chatStore('srv1', 'sess');
+  chat.retain();
+  await tick();
+  const source = created[0];
+  source.trigger('notice_update', JSON.stringify(note(4)));
+  expect(chat.use.getState().events.map((e) => e.id)).toEqual(['a', 'local-hookfail:1:0', 'b']);
+  expect(chat.use.getState().events[1].hook_error).toBe('Stop: x (falhou 4 vezes)');
+  source.trigger('notice_update', JSON.stringify({ ...note(2), id: 'local-hookfail:9:9' }));
+  expect(chat.use.getState().events.map((e) => e.id)).toEqual(['a', 'local-hookfail:1:0', 'b']);
+  chat.release();
+});
+
 test('eventsRevision só conserva a revisão no append e invalida replace, remoção, histórico e reset', async () => {
   historyResponses = [
     [ev({ id: 'tail:1' })],

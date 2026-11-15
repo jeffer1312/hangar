@@ -21,6 +21,9 @@ use crate::transcript::{py, pyjson, Provider};
 /// (`_FOLGA_SAIDA_LOCAL_S`); a mais velha já está no `/history`, no lugar do relógio dela.
 pub(crate) const LOCAL_NOTE_GRACE_S: f64 = 30.0;
 
+/// Nota já existente com texto novo (o total do hook): só substitui a que o cliente tem.
+pub(crate) const NOTICE_UPDATE: &str = "notice_update";
+
 /// Desistência, entrega, confirmação, consumo e o detalhe e o mapa do aviso (a nota de hook é regravada com o
 /// total): o que, mudando, faz a entrada sair de novo.
 type Signature = (Option<bool>, Option<bool>, bool, Option<bool>, Option<String>, Option<serde_json::Map<String, Value>>);
@@ -262,8 +265,9 @@ pub(crate) struct QueueFollow {
     start: f64,
     first: bool,
     seen: HashMap<String, Signature>,
-    /// Notas locais que já eram velhas na primeira rodada: estão no `/history`, e a regravação delas não sai ao
-    /// vivo (quem não as carregou ganharia uma nota nova no fim da conversa).
+    /// Notas locais que já eram velhas na primeira rodada: estão no `/history`, e a regravação delas sai como
+    /// `notice_update`, que o cliente só aplica sobre a nota que já tem (quem não a carregou ganharia uma nota
+    /// nova no fim da conversa). Cliente antigo ignora o evento.
     aged: HashSet<String>,
     /// `None`: nunca leu.
     marker: Option<Option<Marker>>,
@@ -372,14 +376,15 @@ impl QueueFollow {
         if self.seen.get(&id) == Some(&signature) {
             return Ok(None);
         }
-        let hidden = cut || self.aged.contains(&id);
+        let update = self.aged.contains(&id);
         self.seen.insert(id, signature);
-        if hidden {
+        if cut {
             return Ok(None);
         }
         let data = serde_json::to_string(&event).map_err(|_| "json")?;
         let local_ts = local.then(|| cut_ts.unwrap_or_else(|| py_float(entry.get("ts")).unwrap_or(0.0)));
-        Ok(Some(QueueFrame { event: if confirmed { "queue_confirmed" } else { "message" }, data, id: event.id, local_ts }))
+        let name = if confirmed { "queue_confirmed" } else if update { NOTICE_UPDATE } else { "message" };
+        Ok(Some(QueueFrame { event: name, data, id: event.id, local_ts }))
     }
 }
 
@@ -496,12 +501,16 @@ mod tests {
         let event: Value = serde_json::from_str(&third[0].1).unwrap();
         assert_eq!(event["notice_meta"]["count"], 3);
 
-        // Seguidor que nasce muito depois da nota: ela está no `/history`, e a regravação não a traz para o fim.
+        // Seguidor que nasce muito depois da nota: ela está no `/history`, e a regravação sai como atualização,
+        // que o cliente só aplica sobre a nota que já tem.
         let mut late = QueueFollow::new(0.0, 1000.0);
         write("Stop: x");
         assert!(events(&late.poll(&path).unwrap().frames).is_empty());
         write("Stop: x (falhou 2 vezes)");
-        assert!(events(&late.poll(&path).unwrap().frames).is_empty());
+        let update = events(&late.poll(&path).unwrap().frames);
+        assert_eq!(update.len(), 1);
+        assert_eq!(update[0].0, NOTICE_UPDATE);
+        assert!(update[0].1.contains("falhou 2 vezes"));
     }
 
     #[test]

@@ -601,6 +601,13 @@ function criarChatStore(serverId: string, name: string): ChatApi {
     };
     es.addEventListener('message', onMessage);
     es.addEventListener('queue_confirmed', onMessage);
+    // Nota que já existia com o total novo: só troca a que está na tela; sem ela, entraria no fim da conversa.
+    es.addEventListener('notice_update', (e) => {
+      try {
+        const ev = JSON.parse(e.data as string) as ChatEvent;
+        if (idIndex.has(ev.id)) ingest(ev);
+      } catch { quadroFalhou('notice_update'); }
+    });
 
     es.addEventListener('saida', (e) => {
       try {

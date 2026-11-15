@@ -2510,6 +2510,12 @@ impl Hangar {
     fn accept_chat_frame(&mut self, event: &str, data: serde_json::Value, window: &mut Window, cx: &mut Context<Self>) -> (bool, Changed) {
         let update = match event {
             "message" | "queue_confirmed" => serde_json::from_value(data).map(ChatUpdate::Message),
+            // Nota que já existia com o total novo: sem ela na tela, entraria como nota nova no fim da conversa.
+            "notice_update" => match serde_json::from_value::<ChatEvent>(data) {
+                Ok(event) if self.chat.events.iter().any(|known| known.id == event.id) => Ok(ChatUpdate::Message(event)),
+                Ok(_) => return (true, Changed::Nothing),
+                Err(error) => Err(error),
+            },
             "preview" => serde_json::from_value(data).map(ChatUpdate::Preview),
             "state" => serde_json::from_value(data).map(ChatUpdate::State),
             "saida" => serde_json::from_value(data).map(ChatUpdate::CommandOutput),
