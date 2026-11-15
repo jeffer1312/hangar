@@ -448,14 +448,8 @@ impl ListBridge {
     }
 
     /// Pane do agente da sessão (`agent_pane::resolve`) pela descoberta compartilhada da lista.
-    pub async fn agent_target(&self, name: &str) -> Result<Option<String>, ListError> { self.agent_target_at(name, None).await }
-
-    /// Como `agent_target`, com panes e processos lidos agora: quem guarda a resposta por 60 s
-    /// (`state::agent_pane::AgentPanes`) não pode guardar a rodada de antes da janela nova ou do agente subir.
-    pub async fn agent_target_now(&self, name: &str) -> Result<Option<String>, ListError> { self.agent_target_at(name, Some(wall_now())).await }
-
-    async fn agent_target_at(&self, name: &str, newer_than: Option<f64>) -> Result<Option<String>, ListError> {
-        let (_, _, panes, children) = self.discovery(newer_than).await?;
+    pub async fn agent_target(&self, name: &str) -> Result<Option<String>, ListError> {
+        let (_, _, panes, children) = self.discovery(None).await?;
         let mine: Vec<Pane> = panes.iter().filter(|p| p.session == name).cloned().collect();
         let env = self.env.clone();
         tokio::task::spawn_blocking(move || crate::state::agent_pane::resolve(&mine, &children, &|pid| env.procs.argv(pid)))

@@ -148,7 +148,7 @@ impl StateEnv {
         if let Some(t) = self.agents.cached(name, Instant::now()) {
             return t.unwrap_or_else(fallback);
         }
-        match self.list.agent_target_now(name).await {
+        match self.list.agent_target(name).await {
             Ok(t) => self.agents.target(name, Instant::now(), || t).unwrap_or_else(fallback),
             Err(e) => {
                 if crate::warn_limit::allow(Some(name), "state_agent_pane_failed") {
