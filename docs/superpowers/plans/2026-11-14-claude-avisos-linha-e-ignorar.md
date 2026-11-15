@@ -210,7 +210,7 @@ Expected: FAIL.
 
 - [x] **Step 4: Rodar e ver passar**
 
-- [ ] **Step 5: Verificação manual no app** (pendente: precisa do servidor desta branch no ar e do app compilado)
+- [x] **Step 5: Verificação manual no app** (15/11, janela de teste e servidor da branch; vídeo gravado)
 
 Janela de pré-visualização (sem trocar o app instalado dele) numa sessão `cx-*` sem terminal com um hook que falha de propósito: print da linha fechada, aberta, ignorada e do rótulo de turno parado. Comparar cada print com o mock no mesmo estado e listar o que difere.
 
