@@ -18,6 +18,7 @@ import { MessageList } from './MessageList';
 import { pararTts } from './BubbleActions';
 import { Composer } from './Composer';
 import { ComposerDock, ComposerViewport } from './ComposerField';
+import { flightRoute, SendFlightLayer } from './SendFlight';
 import { ComposerStatusLine } from './ComposerStatusLine';
 import { OrqFooter } from './OrqFooter';
 import { TuiPill } from './TuiPill';
@@ -680,6 +681,7 @@ export function ChatBody({ serverId, name, askFallback, onBack, deepStack, onOpe
             )
           : null}
         </ComposerDock>
+        <SendFlightLayer route={flightRoute(serverId, name)} />
         </ComposerViewport>
         {/* Linha de status do app de PC, colada embaixo da caixa e fora da área que a conversa cobre. */}
         {!servidorSumiu && !codexPreThread && fetchedSession !== null && !orq && !soLeitura && !dead

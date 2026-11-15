@@ -22,6 +22,7 @@ thread_local! {
 }
 
 pub fn set_window_active(active: bool) { WINDOW_ACTIVE.set(active); }
+pub fn window_active() -> bool { WINDOW_ACTIVE.get() }
 pub fn set_software_gpu(software: bool) { SOFTWARE_GPU.set(software); }
 /// Resposta que chega antes disso não mostra esqueleto: o espaço fica vazio e a lista entra direto.
 const SKELETON_DELAY: Duration = Duration::from_millis(150);

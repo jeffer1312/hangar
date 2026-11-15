@@ -7,6 +7,47 @@ export interface PendingMsg {
   solid?: boolean;
   /** Último `user_msg` visto no envio: o trecho de várias linhas só confirma em mensagem que chegou depois dele. */
   afterId?: string;
+  /** Enviada com a sessão trabalhando: o lugar dela é o painel "Na fila", não o fim da conversa. */
+  queue?: boolean;
+  /** As entradas que o painel já listava no envio: nenhuma delas é a deste eco. */
+  known?: string[];
+  /** A bolha `queued-` do servidor que este eco representa: ela fica escondida enquanto o eco existir. */
+  entry?: string;
+}
+
+/** Quanto a fila espera para aparecer: a mensagem que já está indo passa por ela sem piscar. */
+export const QUEUE_APPEAR_MS = 600;
+/** O eco preso a uma entrada da fila sai sozinho depois disto, se a mensagem real não chegou. */
+export const ECHO_SETTLE_MS = 5000;
+
+/** A bolha `queued-` chegou: o eco que já está no destino (fim da conversa ou painel) continua sendo a mensagem
+ *  na tela e só guarda qual bolha é a dele. Sem eco para ela, devolve a mesma lista. */
+export function bindQueued(pending: PendingMsg[], incoming: ChatEvent): PendingMsg[] {
+  if (incoming.kind !== 'user_msg' || !incoming.id.startsWith('queued-') || !incoming.text) return pending;
+  const id = incoming.id.slice('queued-'.length);
+  const at = pending.findIndex((p) => (p.solid || p.queue) && !p.entry && !p.known?.includes(id) && sameMessage(p.text, incoming.text!));
+  if (at < 0) return pending;
+  return pending.map((p, i) => (i === at ? { ...p, entry: incoming.id } : p));
+}
+
+/** O painel do servidor mudou: o eco de quem ia para a fila sai quando a entrada dele aparece lá (a linha do
+ *  servidor toma o lugar), e o eco de entrada apagada sai junto. Cada entrada tira um eco só, e nunca uma que já
+ *  estava no painel quando ele foi enviado: duas mensagens iguais são duas linhas. */
+export function settleQueued(pending: PendingMsg[], listed: readonly { id: string; text: string }[], removed: string[]): PendingMsg[] {
+  const taken = new Set<string>();
+  const next = pending.filter((p) => {
+    if (p.entry && removed.includes(p.entry)) return false;
+    if (!p.queue) return true;
+    const bound = p.entry ? listed.find((e) => `queued-${e.id}` === p.entry) : undefined;
+    if (bound) { taken.add(bound.id); return false; }
+    const entry = listed.find((e) => !taken.has(e.id) && !p.known?.includes(e.id) && e.text.trim() === p.text.trim());
+    if (!entry) return true;
+    taken.add(entry.id);
+    return false;
+  });
+  if (next.length === pending.length) return pending;
+  // O próximo retrato repete a entrada que já tirou um eco: os ecos que ficaram passam a conhecê-la.
+  return taken.size ? next.map((p) => (p.queue ? { ...p, known: [...(p.known ?? []), ...taken] } : p)) : next;
 }
 
 // Legenda canônica: sem o marcador "📎 imagem:/arquivo: `path`" + "—" que liga.
@@ -41,10 +82,13 @@ export function reconcilePending(pending: PendingMsg[], incoming: ChatEvent, ord
   committed.add(t);
   if (c) committed.add(c);
   for (const ln of lines) committed.add(ln);
+  // A bolha de uma entrada que o eco já conhecia é de outra mensagem de mesmo texto: não é ela que o confirma.
+  const entry = incoming.id.startsWith('queued-') ? incoming.id.slice('queued-'.length) : null;
 
   // Também casa pela legenda do pending quando o incoming veio sem marcador mas o pending tinha:
   // ex. pending "foto — 📎 imagem: /tmp/x.jpg" vs incoming "foto"
   return pending.filter((p) => {
+    if (entry && p.known?.includes(entry)) return true;
     const pt = p.text.trim();
     if (committed.has(pt)) return false;
     const pc = cap(pt);

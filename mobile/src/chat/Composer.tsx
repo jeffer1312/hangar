@@ -29,6 +29,9 @@ import { SessionSettingsButton } from './SessionSettings';
 import { SideQuestionSheet } from './SideQuestionSheet';
 import { SlashSuggest } from './SlashSuggest';
 import { QueuePanel } from './QueuePanel';
+import { useReducedMotion } from 'react-native-reanimated';
+import { flightRoute } from './SendFlight';
+import { takeoff } from './sendFlight';
 import { queueSendMode, type DeliveryFeedback, type QueueSendMode } from './queueDelivery';
 import { useDeliveryMode, useQueueDelivery } from './useQueueDelivery';
 import { fromPastedFile, readClipboard, type PickedAttachment } from '../ui/attachmentPicker';
@@ -192,6 +195,9 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
   }, [navigation, cancelVoiceSend]);
   const chat = chatStore(serverId, name);
   const pending = chat.use((s) => s.pending);
+  const reducedMotion = useReducedMotion();
+  // O envio feito com a sessão trabalhando nasce no painel "Na fila", até a entrada do servidor aparecer nele.
+  const queueLocals = useMemo(() => pending.filter((p) => p.queue), [pending]);
   const events = chat.use((s) => s.events);
   const draftUpdate = chat.use((s) => s.draftUpdate);
   const state = chat.use((s) => s.stateEvent?.state ?? 'idle');
@@ -742,6 +748,11 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
     }
     if (blockedRef.current || !persistText(textRef.current)) return;
     const sentRevision = draftRef.current!.revision;
+    // Só o envio de texto puro viaja do campo ao destino; com anexo, citação ou para o grupo o eco nasce depois,
+    // e comando não vira mensagem.
+    if (!hasAttach && !sentRefs.length && !reducedMotion && !firstInputId && !trimmed.startsWith('/') && !(sendToPair && pairPeers?.length)) {
+      takeoff(flightRoute(serverId, name), trimmed, inputRef.current);
+    }
     sendingRef.current = true;
     limparUndo();
     cancelarAuto();
@@ -861,7 +872,7 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
       setSending(false);
       sendingRef.current = false;
     }
-  }, [text, sending, uploading, chat, sendText, limparUndo, cancelarAuto, pendingAttachments, setPendingAttachments, serverId, name, firstInputId, pairPeers, sendToPair, persistText, persistDraft, origin, submissionBlocksSend, isClaude, setBar, queueEdit, navigation, refs, refsKey, deliveryTiming, jevFallback, startUpload, recordUpload]);
+  }, [text, sending, uploading, chat, sendText, limparUndo, cancelarAuto, pendingAttachments, setPendingAttachments, serverId, name, firstInputId, pairPeers, sendToPair, persistText, persistDraft, origin, submissionBlocksSend, isClaude, setBar, queueEdit, navigation, refs, refsKey, deliveryTiming, jevFallback, startUpload, recordUpload, reducedMotion]);
 
   // auto-envio: contagem de 3s
   const iniciarAuto = useCallback(
@@ -1691,7 +1702,8 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
     <>
     <ComposerBox focused={focado} footer={actions}>
         {/* Faixa de cima da caixa: o que espera a vez no Hangar, as ações por mensagem e o modo de envio. */}
-        <QueuePanel panel={queueList} editingId={queueEdit?.entryId ?? null} busy={queueBusy}
+        <QueuePanel panel={queueList} locals={queueLocals} route={flightRoute(serverId, name)}
+          editingId={queueEdit?.entryId ?? null} busy={queueBusy}
           onEdit={handleQueueEdit} onCancelEdit={chat.cancelQueueEdit}
           delivery={supportsDelivery ? delivery : undefined} onModeChange={useDeliveryMode.getState().setMode}
           onSteer={chat.steerQueued} onRemove={chat.removeQueued} onMove={chat.moveQueued}

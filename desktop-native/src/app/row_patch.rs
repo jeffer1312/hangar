@@ -20,6 +20,18 @@ impl RowPatch {
     }
 }
 
+/// Chegada que entra animada: poucas linhas novas numa conversa já na tela, tirando no máximo linhas ao vivo
+/// (`live`). Troca de linha gravada, histórico carregando e páginas antigas aparecem direto.
+pub(super) fn arriving(prefix: usize, removed: &[&str], added: usize, live: &[&str]) -> bool {
+    prefix > 0 && (1..=4).contains(&added) && removed.iter().all(|id| live.contains(id))
+}
+
+/// A resposta gravada continua a prévia que estava na tela: começa pelo mesmo texto e a prévia já mostrava pelo
+/// menos metade dele. Menos que isso, a troca mostraria quase tudo de uma vez no lugar de um começo.
+pub(super) fn continues(preview: &str, recorded: &str) -> bool {
+    recorded.starts_with(preview) && preview.len() * 2 >= recorded.len()
+}
+
 pub(super) fn reset_rows(
     ids: &mut Vec<String>,
     arrived: &mut HashMap<String, std::time::Instant>,
@@ -67,6 +79,23 @@ mod tests {
     use super::RowPatch;
 
     fn strings(values: &[&str]) -> Vec<String> { values.iter().map(|s| (*s).into()).collect() }
+
+    #[test]
+    fn a_recorded_row_replacing_a_live_one_still_arrives() {
+        let live = ["__tool__", "__preview__"];
+        assert!(super::arriving(3, &[], 1, &live));
+        assert!(super::arriving(3, &["__tool__"], 2, &live));
+        assert!(!super::arriving(3, &["pending-1"], 1, &live), "o envio virando a mensagem real aparece direto");
+        assert!(!super::arriving(0, &[], 2, &live), "conversa abrindo não anima");
+        assert!(!super::arriving(3, &[], 5, &live), "lote grande não anima");
+    }
+
+    #[test]
+    fn only_a_preview_that_showed_most_of_the_answer_is_continued() {
+        assert!(super::continues("Olá, tudo", "Olá, tudo bem?"));
+        assert!(!super::continues("Olá", "Olá, tudo bem? Segue a resposta inteira."), "três letras de prévia não são a resposta");
+        assert!(!super::continues("**Olá**", "**Olá, tudo bem?**"), "marcação fechada na prévia não é começo do texto gravado");
+    }
 
     #[test]
     fn reset_releases_folds_and_arrivals_before_old_ids_are_lost() {
