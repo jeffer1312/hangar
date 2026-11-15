@@ -100,7 +100,7 @@ pub enum ModelError {
     Limited,
     /// A chamada passou do prazo e foi morta; conta como gasto o teto que ela tinha.
     Timeout { cost_usd: f64 },
-    /// A pessoa mandou parar; a chamada morta conta o teto dela, como o prazo.
+    /// A pessoa mandou parar; `cost_usd` é o que se sabe do gasto até ali.
     Stopped { cost_usd: f64 },
     Other(String),
 }

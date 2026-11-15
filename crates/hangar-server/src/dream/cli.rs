@@ -22,8 +22,8 @@ impl Model for ClaudeModel {
             let out = match self.run(&call).await {
                 Ok(out) => out,
                 Err(Failure::Timeout) => return Err(ModelError::Timeout { cost_usd: call.budget_usd }),
-                // Sem a linha `result` não há custo: a chamada morta conta o teto, a que nem começou, zero.
-                Err(Failure::Stopped { started }) => return Err(ModelError::Stopped { cost_usd: if started { call.budget_usd } else { 0.0 } }),
+                // Sem a linha `result` o custo não é conhecido; o teto inteiro inventaria gasto de quem parou no começo.
+                Err(Failure::Stopped) => return Err(ModelError::Stopped { cost_usd: 0.0 }),
                 Err(Failure::Start(e)) => return Err(ModelError::Other(e)),
             };
             // A chave só vai no ambiente; se o CLI a ecoar num erro, ela não sai daqui.
@@ -38,14 +38,14 @@ impl Model for ClaudeModel {
 enum Failure {
     Start(String),
     Timeout,
-    Stopped { started: bool },
+    Stopped,
 }
 
 impl ClaudeModel {
     async fn run(&self, call: &Call<'_>) -> Result<crate::claude_p::Output, Failure> {
         use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
         if super::progress::stopping() {
-            return Err(Failure::Stopped { started: false });
+            return Err(Failure::Stopped);
         }
         let Some(mut command) = self.accounts.claude_command() else { return Err(Failure::Start("claude CLI não encontrado".into())) };
         // `stream-json` (que exige `--verbose`) solta cada passo na hora; a última linha é a mesma do `json`.
@@ -123,7 +123,7 @@ impl ClaudeModel {
         crate::terminal_process::finish(&mut tree).await;
         let Some(done) = done else {
             let _ = child.wait().await;
-            return Err(Failure::Stopped { started: true });
+            return Err(Failure::Stopped);
         };
         match done {
             Ok((Ok(status), o, e)) => Ok(crate::claude_p::Output {

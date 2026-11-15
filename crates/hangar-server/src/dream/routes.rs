@@ -242,7 +242,8 @@ async fn status(st: &Arc<AppState>) -> Response {
     };
     let me = this_machine(st);
     let index = st.search.path().to_owned();
-    let since = state.last_round_at;
+    // A mesma janela da rodada; "nova" é a mexida depois do último sonho do projeto, que é o que ela lê.
+    let since = Some(Utc::now() - chrono::Duration::days(hangar_dream::budget::FIRST_DREAM_DAYS));
     let local = tokio::task::spawn_blocking(move || inventory::local_sessions(&index, since)).await.ok().and_then(Result::ok);
     // Índice ilegível não é "nenhuma sessão nova": a contagem sai `null`.
     if local.is_none() {
@@ -252,7 +253,11 @@ async fn status(st: &Arc<AppState>) -> Response {
         let mut counts: BTreeMap<String, usize> = BTreeMap::new();
         for s in &local {
             if let Some(project) = &s.project {
-                *counts.entry(round::project_key(&state, project, &me)).or_default() += 1;
+                let key = round::project_key(&state, project, &me);
+                let last = state.projects.get(&key).and_then(|p| p.last_dream_at);
+                if last.is_none_or(|last| s.mtime > last) {
+                    *counts.entry(key).or_default() += 1;
+                }
             }
         }
         counts

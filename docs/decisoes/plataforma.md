@@ -4824,7 +4824,9 @@ só essa linha e o stderr: as mensagens trazem o texto das conversas lidas, e a 
 casava com elas. O andamento mora em memória (`dream/progress.rs`, um `watch`) e sai em
 `/api/dream/events` (SSE) e em `progress` no status. O Parar é uma marca que fica ligada até o fim da
 rodada, conferida por cada chamada antes de começar (as que esperam na fila de 4 também a veem), mata a
-árvore do CLI como no prazo e conta o teto da chamada morta no gasto do mês; ele nunca interrompe a
+árvore do CLI como no prazo, e a chamada morta entra no gasto do mês com zero: sem a linha `result` o
+custo não é conhecido, e contar o teto inteiro (como o prazo faz) lançou US$ 12 por uma chamada parada
+0,14 s depois de começar, na prova real; ele nunca interrompe a
 gravação da memória, porque gravar metade dos lugares deixaria lugar sem Desfazer. Rodada da noite parada
 não marca `last_round_at`. De cada chamada fica em `runs/<rodada>/calls/` só o que o modelo disse e as
 ferramentas que pediu, com o alvo e o texto escrito (cortado em 4000), passado pelo limpador e em 0600; o
