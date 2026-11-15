@@ -27,7 +27,8 @@ import { flashQuoteSource } from '../stores/quoteFlash';
 import { echoInQueuePanel, hexParaRgb, planDisplayText, type AgentRun, type ChatEvent, type QueuePanel, type SessionInfo, type StateEvent } from '@hangar/core';
 import { useAparencia } from '../stores/aparencia';
 import { TaskList } from './TaskList';
-import type { PendingMsg } from './pending';
+import { sameMessage, type PendingMsg } from './pending';
+import { FlightDestination, flightRoute } from './SendFlight';
 import * as m from '../paraglide/messages';
 
 // Lista de bolhas do chat. A janela de render da PWA (WINDOW=120 eventos montados) aqui é
@@ -119,9 +120,14 @@ export function MessageList({
   const { width } = useWindowDimensions();
   const [boxWidth, setBoxWidth] = useState<number | null>(null);
   const previous = useRef<ConversationProjection | null>(null);
+  // O eco preso a uma entrada da fila é a mensagem na tela: a bolha `queued-` dela fica fora, como a do painel.
+  const hiddenQueue = useMemo(() => {
+    const held = pending.flatMap((p) => (p.entry ? [{ id: p.entry.slice('queued-'.length), text: p.text, ts: null }] : []));
+    return held.length ? { entries: [...(queuePanel?.entries ?? []), ...held], actions: queuePanel?.actions ?? false } : queuePanel;
+  }, [pending, queuePanel]);
   const projection = projectConversation(previous.current, {
     events, eventsRevision, pref, merge: look === 'tree', everyRun, tasksEnabled: tarefasLigadas,
-    pagesEnabled: !!sessionName, running: new Set(agentesRodando.map((a) => a.id)), queuePanel,
+    pagesEnabled: !!sessionName, running: new Set(agentesRodando.map((a) => a.id)), queuePanel: hiddenQueue,
   });
   // Render descartado ou repetido não publica o seu cache nem modifica o snapshot anterior.
   useLayoutEffect(() => { previous.current = projection; }, [projection]);
@@ -130,17 +136,21 @@ export function MessageList({
   // prévia continua o mesmo texto e aparece direto. Quem entrou fica com o invólucro: tirá-lo
   // remontaria a bolha.
   const reducedMotion = useReducedMotion();
-  const arrivals = useRef<{ keys: string[] | null; at: Map<string, number>; preview: number }>({ keys: null, at: new Map(), preview: 0 });
+  const arrivals = useRef<{ keys: string[] | null; at: Map<string, number>; preview: number; sent: string[] }>({ keys: null, at: new Map(), preview: 0, sent: [] });
   const keys = useMemo(() => data.map(keyOf), [data]);
   if (visiblePreview) arrivals.current.preview = Date.now();
   if (arrivals.current.keys !== keys) {
     const now = Date.now();
     for (const row of data.slice(data.length - arrivedCount(arrivals.current.keys, keys))) {
-      const heir = row.type === 'event' && row.ev.kind === 'assistant_msg' && now - arrivals.current.preview < 500;
+      // A mensagem que toma o lugar do eco dela já estava na tela, como a resposta que toma o lugar da prévia.
+      const heir = row.type === 'event' && (row.ev.kind === 'assistant_msg' ? now - arrivals.current.preview < 500
+        : row.ev.kind === 'user_msg' && arrivals.current.sent.some((text) => sameMessage(text, row.ev.text ?? '')));
       if (!heir) arrivals.current.at.set(row.id, now);
     }
     arrivals.current.keys = keys;
   }
+  arrivals.current.sent = pending.flatMap((p) => (p.queue ? [] : [p.text]));
+  const route = sessionName && serverId ? flightRoute(serverId, sessionName) : null;
   const results = projection.results;
   const resultDe = useCallback((t: ChatEvent) => results.get(t.tool_use_id ?? '') ?? null, [results]);
   const starts = projection.starts;
@@ -395,17 +405,21 @@ export function MessageList({
       }
       ListFooterComponent={
         <View style={styles.footer}>
+          {/* A mensagem enviada com a sessão parada é a que abre o turno: fica acima do trabalho dele, onde a
+              mensagem real vai entrar, e não pula quando ela chega. */}
+          {pending.filter((p) => p.solid && !p.queue).map((p) => (
+            <PendingEcho key={p.id} echo={p} route={route} sessionName={sessionName} serverId={serverId} onQuoteClick={goToQuote} />
+          ))}
           {/* Mesma ordem do fim da conversa na PWA: o trabalho em voo, depois o que a pessoa mandou. */}
           {pensamento ? <PensamentoVivo texto={pensamento} /> : null}
           {ferramentaEv ? <ToolCard use={ferramentaEv} result={null} onPress={abrirDetalhe} look={look} onExpand={preserveExpansion ? pauseForToolGroup : undefined} escrevendo /> : null}
           {visiblePreview ? <PreviewBubble text={visiblePreview} md={previewMd} full={previewFull} streaming={working} /> : null}
           {working && !pensamento && !ferramenta ? <WorkingLine label={stateEvent?.label} since={desde} /> : null}
           {agentesRodando.length || agentSubagents?.error ? <AgentesRodando agentes={agentesRodando} inicio={inicioDoAgente} onAbrir={onAbrirAgentes} serverId={serverId} sessionName={sessionName} events={events} eventsRevision={eventsRevision} subagentSnapshot={agentSubagents} /> : null}
-          {/* O eco que o painel da fila já mostra some: a mesma mensagem não aparece duas vezes. */}
-          {pending.filter((p) => !(queuePanel && echoInQueuePanel(p.text, queuePanel))).map((p) => (
-            <View key={p.id} style={[styles.pending, p.solid && styles.pendingSolid]}>
-              <UserBubble text={p.text} sessionName={sessionName} serverId={serverId} onQuoteClick={goToQuote} />
-            </View>
+          {/* O eco que o painel da fila já mostra some: a mesma mensagem não aparece duas vezes. O de envio com a
+              sessão parada (acima) fica: a passagem dele pela fila não aparece no painel. */}
+          {pending.filter((p) => !p.queue && !p.solid && !(queuePanel && echoInQueuePanel(p.text, queuePanel))).map((p) => (
+            <PendingEcho key={p.id} echo={p} route={route} sessionName={sessionName} serverId={serverId} onQuoteClick={goToQuote} />
           ))}
           {optionsSlot ?? null}
           {bottomInset > 0 ? <View style={{ height: bottomInset }} /> : null}
@@ -426,6 +440,19 @@ export function MessageList({
     ) : null}
     <ToolDetailSheet ref={detail} resultOf={resultDe} sessionName={sessionName} serverId={serverId} />
     </View>
+  );
+}
+
+/** O eco de um envio no fim da conversa: é nele que a cópia que saiu do campo pousa. */
+function PendingEcho({ echo, route, sessionName, serverId, onQuoteClick }: {
+  echo: PendingMsg; route: string | null; sessionName?: string; serverId?: string; onQuoteClick?: (ref: QuoteRef) => void;
+}) {
+  const bubble = useRef<View>(null);
+  return (
+    <FlightDestination route={route} text={echo.text} target="chat" dim={!echo.solid} measured={bubble}
+      style={[styles.pending, echo.solid && styles.pendingSolid]}>
+      <UserBubble text={echo.text} sessionName={sessionName} serverId={serverId} onQuoteClick={onQuoteClick} bubbleRef={bubble} />
+    </FlightDestination>
   );
 }
 

@@ -1,4 +1,4 @@
-import { memo, useMemo, useState, type ReactNode } from 'react';
+import { memo, useMemo, useState, type ReactNode, type Ref } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { ImageThumb, type MediaItem } from './ImageThumb';
@@ -13,7 +13,7 @@ import { useServers } from '../stores/servers';
 // Bolha do usuário: pequena, à direita, no fundo superficie(0.8) — o mesmo degrau da bolha do nativo,
 // e por isso acompanha Transparência e Solidez. Se parseImageMessage(text) não nulo → legenda +
 // miniaturas. As ações (copiar, compartilhar) não ficam à mostra: o toque longo abre a linha embaixo.
-export const UserBubble = memo(function UserBubble({ text, sessionName, serverId, ts, eventId, imageCount = 0, onQuoteClick }: {
+export const UserBubble = memo(function UserBubble({ text, sessionName, serverId, ts, eventId, imageCount = 0, onQuoteClick, bubbleRef }: {
   text: string;
   sessionName?: string;
   serverId?: string;
@@ -23,6 +23,8 @@ export const UserBubble = memo(function UserBubble({ text, sessionName, serverId
   imageCount?: number;
   /** Toque numa citação: rola até a resposta de origem. */
   onQuoteClick?: (ref: QuoteRef) => void;
+  /** A caixa da bolha, para quem precisa saber onde ela está na tela. */
+  bubbleRef?: Ref<View>;
 }) {
   const { theme } = useUnistyles();
   const server = useServers((s) => s.servers.find((x) => x.id === serverId) ?? null);
@@ -72,6 +74,7 @@ export const UserBubble = memo(function UserBubble({ text, sessionName, serverId
   const bolha = (conteudo: ReactNode, textoAcoes: string, voz = false, largo = false) => (
     <View style={[styles.col, voz && styles.colVoz, largo && styles.colLarga]}>
       <Pressable
+        ref={bubbleRef}
         onLongPress={alternar}
         delayLongPress={350}
         style={[styles.bubble, voz && styles.voice, largo && styles.bubbleLarga, peer && { borderWidth: 1, borderColor: peerColor }]}

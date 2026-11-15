@@ -42,7 +42,7 @@ import {
 } from '@hangar/core';
 import type { ChatEvent, StateEvent, PreviewEvent, AskQuestionPayload, StatsEvent, EventSourceLike, Server, QueuePanel, QueueEdit } from '@hangar/core';
 import * as m from '../paraglide/messages';
-import { reconcilePending, sameMessage, type PendingMsg } from '../chat/pending';
+import { bindQueued, ECHO_SETTLE_MS, QUEUE_APPEAR_MS, reconcilePending, sameMessage, settleQueued, type PendingMsg } from '../chat/pending';
 import { useServers } from './servers';
 import { clearDraft, deliveredDraft, readDictation, readDraft, writeDraft, type ConversationDraft } from './drafts';
 import { sendWithDelivery, type DeliveryFeedback, type QueueSendMode } from '../chat/queueDelivery';
@@ -540,14 +540,32 @@ function criarChatStore(serverId: string, name: string): ChatApi {
     }
     // Reconcilia pending com o evento que acabou de chegar (se for user_msg real)
     const curPending = useChatStore.getState().pending;
-    const nextPending = curPending.length ? reconcilePending(curPending, ev) : curPending;
-    const pendingPatch = nextPending.length !== curPending.length ? { pending: nextPending } : {};
+    // Só com o painel do servidor: sem ele a bolha `queued-` é a única forma de ver a fila.
+    const bound = curPending.length && useChatStore.getState().queuePanel ? bindQueued(curPending, ev) : curPending;
+    const nextPending = bound !== curPending ? bound : curPending.length ? reconcilePending(curPending, ev) : curPending;
+    const pendingPatch = bound !== curPending || nextPending.length !== curPending.length ? { pending: nextPending } : {};
+    if (bound !== curPending) settleEcho(ev.id);
     publishEvents(next, inside ? 'rebuild' : removedQueued ? 'replace' : 'append', pendingPatch);
     if (ev.kind === 'user_msg') confirmSubmission([ev]);
     if (ev.kind === 'thinking' && useChatStore.getState().pensamento) limparPensamento();
     if (ev.kind === 'tool_use' && useChatStore.getState().ferramenta) limparFerramenta();
     // Swap prévia->bolha: o bloco real chegou, a prévia sai no MESMO flush.
     if (ev.kind === 'assistant_msg' && ev.text && currentPreview()) limparPreview();
+  }
+
+  // O eco de envio com a sessão parada fica na conversa enquanto a mensagem passa pela fila. Se ela continuar na
+  // fila quando o painel aparece, o lugar dela é o painel; se a mensagem real não vier, a bolha da fila diz por quê.
+  function settleEcho(entry: string): void {
+    const drop = (onlyListed: boolean) => {
+      if (!alive) return;
+      const { pending, queuePanel } = useChatStore.getState();
+      const echo = pending.find((p) => p.entry === entry && p.solid);
+      if (!echo || (onlyListed && !queuePanel?.entries.some((e) => `queued-${e.id}` === entry))) return;
+      useChatStore.setState({ pending: pending.filter((p) => p !== echo) });
+    };
+    // Um pouco depois do painel: um instante com a mensagem nos dois lugares, nunca um sem ela.
+    setTimeout(() => drop(true), QUEUE_APPEAR_MS + 60);
+    setTimeout(() => drop(false), ECHO_SETTLE_MS);
   }
 
   function connectSSE(): void {
@@ -728,8 +746,11 @@ function criarChatStore(serverId: string, name: string): ChatApi {
       try {
         const data = JSON.parse(e.data as string);
         // Apagadas noutro aparelho: a bolha delas sai daqui também.
-        const events = dropQueuedBubbles(useChatStore.getState().events, queueRemovedBubbleIds(data));
-        publishEvents(events, 'rebuild', { queuePanel: parseQueuePanel(data) });
+        const removed = queueRemovedBubbleIds(data);
+        const events = dropQueuedBubbles(useChatStore.getState().events, removed);
+        const queuePanel = parseQueuePanel(data);
+        const pending = settleQueued(useChatStore.getState().pending, queuePanel?.entries.map((entry) => entry.text) ?? [], removed);
+        publishEvents(events, 'rebuild', { queuePanel, pending });
       } catch {
         quadroFalhou('queue');
       }
@@ -1052,10 +1073,13 @@ function criarChatStore(serverId: string, name: string): ChatApi {
         showDeliveryFeedback(null);
         const id = `pending-${pendingSeq++}`;
         // Em idle a mensagem é digitada na hora: o eco atenuado parecia mensagem entrando na fila.
-        const solid = useChatStore.getState().stateEvent?.state === 'idle';
+        const state = useChatStore.getState().stateEvent?.state;
+        const solid = state === 'idle';
+        // Trabalhando, tudo que não é Direto espera a vez na fila: o eco nasce no painel.
+        const queue = state === 'working' && mode !== 'steer' && !(typeof mode === 'object' && mode.kind === 'direct');
         // A bolha `queued-` da fila durável sai depois, e o registro real chega com outro id.
         const afterId = useChatStore.getState().events.findLast((e) => e.kind === 'user_msg' && !e.id.startsWith('queued-'))?.id;
-        useChatStore.setState((s) => ({ pending: [...s.pending, { id, text: trimmed, solid, afterId }] }));
+        useChatStore.setState((s) => ({ pending: [...s.pending, { id, text: trimmed, solid, afterId, ...(queue && { queue }) }] }));
         try {
           if (mode === 'steer') await steerSession(name, trimmed, target);
           else if (mode) showDeliveryFeedback(await sendWithDelivery(target, name, trimmed, mode));

@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'vitest';
-import { reconcilePending, type PendingMsg } from './pending';
+import { bindQueued, reconcilePending, settleQueued, type PendingMsg } from './pending';
 import type { ChatEvent } from '@hangar/core';
 
 function p(text: string, id = `pending-${text.slice(0, 5)}`): PendingMsg {
@@ -73,5 +73,43 @@ describe('reconcilePending', () => {
     const real = reconcilePending(queued, incoming('primeiro', 'transcript:1'));
     expect(real).toEqual([p('edição nova', 'p2')]);
     expect(reconcilePending(real, incoming('primeiro', 'transcript:1'))).toEqual(real);
+  });
+});
+
+describe('eco que passa pela fila', () => {
+  test('a bolha queued- prende o eco que já está no destino, sem tirá-lo', () => {
+    const solid = { ...p('oi', 'p1'), solid: true };
+    const bound = bindQueued([solid, p('outra', 'p2')], incoming('oi', 'queued-7'));
+    expect(bound).toEqual([{ ...solid, entry: 'queued-7' }, p('outra', 'p2')]);
+    // A mensagem real continua tirando o eco, preso ou não.
+    expect(reconcilePending(bound, incoming('oi', 'transcript:1'))).toEqual([p('outra', 'p2')]);
+  });
+
+  test('eco esmaecido, eco já preso e evento que não é da fila ficam com a regra de sempre', () => {
+    const dim = [p('oi')];
+    expect(bindQueued(dim, incoming('oi', 'queued-7'))).toBe(dim);
+    const taken = [{ ...p('oi'), solid: true, entry: 'queued-1' }];
+    expect(bindQueued(taken, incoming('oi', 'queued-7'))).toBe(taken);
+    const solid = [{ ...p('oi'), solid: true }];
+    expect(bindQueued(solid, incoming('oi', 'transcript:1'))).toBe(solid);
+  });
+
+  test('duas mensagens iguais: cada bolha da fila prende um eco', () => {
+    const twice = [{ ...p('oi', 'p1'), queue: true }, { ...p('oi', 'p2'), queue: true }];
+    const first = bindQueued(twice, incoming('oi', 'queued-1'));
+    expect(bindQueued(first, incoming('oi', 'queued-2')).map((x) => x.entry)).toEqual(['queued-1', 'queued-2']);
+  });
+
+  test('o eco da fila sai quando o servidor lista a entrada; o da conversa fica', () => {
+    const queue = { ...p('na fila', 'p1'), queue: true };
+    const solid = { ...p('na conversa', 'p2'), solid: true, entry: 'queued-2' };
+    expect(settleQueued([queue, solid], [' na fila ', 'na conversa'], [])).toEqual([solid]);
+    const same = [queue, solid];
+    expect(settleQueued(same, ['outra'], [])).toBe(same);
+  });
+
+  test('entrada apagada leva o eco preso a ela', () => {
+    const solid = { ...p('oi'), solid: true, entry: 'queued-2' };
+    expect(settleQueued([solid], [], ['queued-2'])).toEqual([]);
   });
 });

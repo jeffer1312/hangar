@@ -7,6 +7,32 @@ export interface PendingMsg {
   solid?: boolean;
   /** Último `user_msg` visto no envio: o trecho de várias linhas só confirma em mensagem que chegou depois dele. */
   afterId?: string;
+  /** Enviada com a sessão trabalhando: o lugar dela é o painel "Na fila", não o fim da conversa. */
+  queue?: boolean;
+  /** A bolha `queued-` do servidor que este eco representa: ela fica escondida enquanto o eco existir. */
+  entry?: string;
+}
+
+/** Quanto a fila espera para aparecer: a mensagem que já está indo passa por ela sem piscar. */
+export const QUEUE_APPEAR_MS = 600;
+/** O eco preso a uma entrada da fila sai sozinho depois disto, se a mensagem real não chegou. */
+export const ECHO_SETTLE_MS = 5000;
+
+/** A bolha `queued-` chegou: o eco que já está no destino (fim da conversa ou painel) continua sendo a mensagem
+ *  na tela e só guarda qual bolha é a dele. Sem eco para ela, devolve a mesma lista. */
+export function bindQueued(pending: PendingMsg[], incoming: ChatEvent): PendingMsg[] {
+  if (incoming.kind !== 'user_msg' || !incoming.id.startsWith('queued-') || !incoming.text) return pending;
+  const at = pending.findIndex((p) => (p.solid || p.queue) && !p.entry && sameMessage(p.text, incoming.text!));
+  if (at < 0) return pending;
+  return pending.map((p, i) => (i === at ? { ...p, entry: incoming.id } : p));
+}
+
+/** O painel do servidor mudou: o eco de quem ia para a fila sai quando a entrada aparece lá (a linha do servidor
+ *  toma o lugar), e o eco de entrada apagada sai junto. */
+export function settleQueued(pending: PendingMsg[], listed: string[], removed: string[]): PendingMsg[] {
+  const texts = new Set(listed.map((text) => text.trim()));
+  const next = pending.filter((p) => !(p.queue && texts.has(p.text.trim())) && !(p.entry && removed.includes(p.entry)));
+  return next.length === pending.length ? pending : next;
 }
 
 // Legenda canônica: sem o marcador "📎 imagem:/arquivo: `path`" + "—" que liga.

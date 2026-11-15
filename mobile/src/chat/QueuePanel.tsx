@@ -14,6 +14,8 @@ import { Icon } from '../ui/Icon';
 import { haptic } from '../ui/haptics';
 import { toast } from '../ui/Toast';
 import { deliveryModeLabel, deliveryOptions, type DeliveryControls, type DeliveryMode } from './queueDelivery';
+import { QUEUE_APPEAR_MS, type PendingMsg } from './pending';
+import { FlightDestination } from './SendFlight';
 
 type MenuId = 'up' | 'down' | 'steer' | 'edit' | 'remove';
 interface MenuAction { id: MenuId; title: string; disabled: boolean; destructive?: boolean }
@@ -48,7 +50,13 @@ interface Props {
   onModeChange?: (mode: DeliveryMode) => void;
   /** Só com o aviso `headless_delivery_stalled` da sessão: a fila não anda e só a pessoa reabre. */
   reopen?: { serverId: string; name: string };
+  /** Envios daqui que o servidor ainda não listou: a linha nasce no envio, sem ações, e a do servidor toma o lugar. */
+  locals?: readonly PendingMsg[];
+  /** A conversa, para a cópia que sai do campo pousar na linha local. */
+  route?: string | null;
 }
+
+const NO_LOCALS: readonly PendingMsg[] = [];
 
 // O servidor nunca reabre sozinho a sessão surda: este botão é a única saída, e só existe com o aviso ativo.
 function ReopenStalled({ serverId, name }: { serverId: string; name: string }) {
@@ -84,19 +92,22 @@ function ReopenStalled({ serverId, name }: { serverId: string; name: string }) {
 
 // ponytail: a linha nasce e é despachada em escritas separadas, e entre as duas ela aparece como "esperando"
 // por um instante; o painel só surge se ela continuar esperando, para a mensagem que já está indo não piscar.
-export const QUEUE_PANEL_APPEAR_MS = 600;
+export const QUEUE_PANEL_APPEAR_MS = QUEUE_APPEAR_MS;
 
-export function QueuePanel({ panel, editingId, busy, onEdit, onCancelEdit, onSteer, onRemove, onMove, delivery, onModeChange, reopen }: Props) {
+export function QueuePanel({ panel, editingId, busy, onEdit, onCancelEdit, onSteer, onRemove, onMove, delivery, onModeChange, reopen, locals = NO_LOCALS, route = null }: Props) {
   const { theme } = useUnistyles();
   const [expanded, setExpanded] = useState(true);
   const [full, setFull] = useState<string | null>(null);
-  const waiting = panel.entries.length > 0;
+  const waiting = panel.entries.length + locals.length > 0;
+  // Quem enviou com a sessão trabalhando sabe que a mensagem espera: a linha local abre o painel na hora.
+  const sentHere = locals.length > 0;
   const [shown, setShown] = useState(waiting);
   useEffect(() => {
     if (!waiting) { setShown(false); return; }
+    if (sentHere) { setShown(true); return; }
     const timer = setTimeout(() => setShown(true), QUEUE_PANEL_APPEAR_MS);
     return () => clearTimeout(timer);
-  }, [waiting]);
+  }, [waiting, sentHere]);
   if (!waiting || !shown) return null;
   const pick = (id: string, action: MenuId) => {
     void Haptics.selectionAsync().catch(() => {});
@@ -122,7 +133,7 @@ export function QueuePanel({ panel, editingId, busy, onEdit, onCancelEdit, onSte
         >
           <Icon name="ListOrdered" size={14} color={muted} />
           <Text style={styles.title}>{m.queue_panel_title()}</Text>
-          <Text style={[styles.count, { backgroundColor: theme.tokens.fillSubtle }]}>{panel.entries.length}</Text>
+          <Text style={[styles.count, { backgroundColor: theme.tokens.fillSubtle }]}>{panel.entries.length + locals.length}</Text>
           <Icon name={expanded ? 'ChevronDown' : 'ChevronUp'} size={14} color={muted} />
         </Pressable>
         {delivery ? (
@@ -238,6 +249,11 @@ export function QueuePanel({ panel, editingId, busy, onEdit, onCancelEdit, onSte
               </MenuView>
             );
           })}
+          {locals.map((local) => (
+            <FlightDestination key={local.id} route={route} text={local.text} target="queue" style={styles.row}>
+              <Text style={styles.text} numberOfLines={1} accessibilityLabel={contextRefsPlainText(local.text)}>{contextRefsPlainText(local.text)}</Text>
+            </FlightDestination>
+          ))}
         </ScrollView>
       ) : null}
     </View>
