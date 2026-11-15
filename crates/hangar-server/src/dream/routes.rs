@@ -19,15 +19,19 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::round::{self, Options, USER_MEMORY_PATH};
-use super::{inventory, load_config, load_state, peers, this_machine, Paths, RUNNING, WAKE};
+use super::{inventory, load_config, load_state, peers, progress, this_machine, Paths, RUNNING, WAKE};
 use crate::routes::AppState;
 
 const ROUTES: &[(&str, &str)] = &[
     ("/api/dream/config", "GET"),
     ("/api/dream/config", "PUT"),
     ("/api/dream/status", "GET"),
+    ("/api/dream/events", "GET"),
     ("/api/dream/run", "POST"),
+    ("/api/dream/stop", "POST"),
     ("/api/dream/runs/{id}", "GET"),
+    ("/api/dream/runs/{id}/calls", "GET"),
+    ("/api/dream/runs/{id}/calls/{n}", "GET"),
     ("/api/dream/runs/{id}/undo", "POST"),
     ("/api/dream/project", "PUT"),
     ("/api/dream/suggestions/dismiss", "POST"),
@@ -79,7 +83,9 @@ async fn route_inner(st: Arc<AppState>, peer: std::net::SocketAddr, req: Request
         ("GET", "/api/dream/config") => get_config(&st).await,
         ("PUT", "/api/dream/config") => put_config(&st, req).await,
         ("GET", "/api/dream/status") => status(&st).await,
+        ("GET", "/api/dream/events") => events(),
         ("POST", "/api/dream/run") => start(&st, req).await,
+        ("POST", "/api/dream/stop") => stop(),
         ("PUT", "/api/dream/project") => put_project(&st, &query, req).await,
         ("POST", "/api/dream/suggestions/dismiss") => dismiss(&st, req).await,
         ("GET", "/api/dream/inventory") => serve_inventory(&st, &query).await,
@@ -87,6 +93,7 @@ async fn route_inner(st: Arc<AppState>, peer: std::net::SocketAddr, req: Request
         ("GET", "/api/dream/memory") => serve_memory(&st, &query).await,
         ("PUT", "/api/dream/memory") => receive_memory(&st, req).await,
         ("PUT", "/api/dream/user-memory") => receive_user_memory(&st, req).await,
+        ("GET", p) if p.starts_with("/api/dream/runs/") && p.contains("/calls") => calls(&st, &p["/api/dream/runs/".len()..], &query),
         ("GET", p) if p.starts_with("/api/dream/runs/") => run_detail(&st, &p["/api/dream/runs/".len()..]),
         ("POST", p) if p.starts_with("/api/dream/runs/") && p.ends_with("/undo") => {
             undo(&st, &p["/api/dream/runs/".len()..p.len() - "/undo".len()], query.get("project").map(String::as_str)).await
@@ -235,7 +242,8 @@ async fn status(st: &Arc<AppState>) -> Response {
     };
     let me = this_machine(st);
     let index = st.search.path().to_owned();
-    let since = state.last_round_at;
+    // A mesma janela da rodada; "nova" é a mexida depois do último sonho do projeto, que é o que ela lê.
+    let since = Some(Utc::now() - chrono::Duration::days(hangar_dream::budget::FIRST_DREAM_DAYS));
     let local = tokio::task::spawn_blocking(move || inventory::local_sessions(&index, since)).await.ok().and_then(Result::ok);
     // Índice ilegível não é "nenhuma sessão nova": a contagem sai `null`.
     if local.is_none() {
@@ -245,7 +253,11 @@ async fn status(st: &Arc<AppState>) -> Response {
         let mut counts: BTreeMap<String, usize> = BTreeMap::new();
         for s in &local {
             if let Some(project) = &s.project {
-                *counts.entry(round::project_key(&state, project, &me)).or_default() += 1;
+                let key = round::project_key(&state, project, &me);
+                let last = state.projects.get(&key).and_then(|p| p.last_dream_at);
+                if last.is_none_or(|last| s.mtime > last) {
+                    *counts.entry(key).or_default() += 1;
+                }
             }
         }
         counts
@@ -277,7 +289,92 @@ async fn status(st: &Arc<AppState>) -> Response {
         })
         .collect();
     let running = RUNNING.lock().unwrap_or_else(|e| e.into_inner()).clone();
-    ok(json!({"projects": projects, "month": state.month, "running": running, "suggestions": state.suggestions, "last_round_at": state.last_round_at}))
+    let progress = progress::PROGRESS.borrow().clone();
+    ok(json!({"projects": projects, "month": state.month, "running": running, "progress": progress, "suggestions": state.suggestions, "last_round_at": state.last_round_at}))
+}
+
+/// Cada mudança do andamento vira um `progress`; o primeiro sai na conexão. Mudanças seguidas se
+/// juntam em 300 ms: as linhas dos analisadores chegam várias por segundo.
+fn events() -> Response {
+    use axum::response::sse::{Event, KeepAlive, Sse};
+    use axum::response::IntoResponse;
+    use futures_util::StreamExt;
+    let rx = progress::PROGRESS.subscribe();
+    let event = |value: &Option<progress::Progress>| {
+        let data = serde_json::to_string(value).unwrap_or_else(|_| "null".into());
+        Ok::<_, std::convert::Infallible>(Event::default().event("progress").data(data))
+    };
+    let stream = futures_util::stream::unfold((rx, true), move |(mut rx, first)| async move {
+        if !first {
+            rx.changed().await.ok()?;
+            tokio::time::sleep(Duration::from_millis(300)).await;
+        }
+        let current = rx.borrow_and_update().clone();
+        let mut out = Vec::new();
+        // A rodada acabou: o retrato final vai antes do `null`, que sozinho apagaria o resultado.
+        if !first && current.is_none() {
+            if let Some(last) = progress::FINISHED.lock().unwrap_or_else(|e| e.into_inner()).clone() {
+                out.push(event(&Some(last)));
+            }
+        }
+        out.push(event(&current));
+        Some((futures_util::stream::iter(out), (rx, false)))
+    })
+    .flatten();
+    // Evento com nome: comentário de keep-alive não chega ao app, e o leitor do celular fecha o canal
+    // depois de um tempo sem evento, no meio de uma chamada longa sem mudança.
+    let ping = Event::default().event("ping").data("1");
+    Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(10)).event(ping)).into_response()
+}
+
+fn stop() -> Response {
+    // Com a marca presa, uma rodada nova não começa (e zera o Parar) entre a conferência e o pedido.
+    let running = RUNNING.lock().unwrap_or_else(|e| e.into_inner());
+    if running.is_none() {
+        return error(409, "dream_not_running", "nenhuma rodada em andamento");
+    }
+    progress::stop();
+    drop(running);
+    ok(json!({"stopping": true}))
+}
+
+/// `{run}/calls` (lista) e `{run}/calls/{n}` (detalhe com o pedido e os passos), do projeto `?project=`.
+fn calls(st: &AppState, rest: &str, query: &HashMap<String, String>) -> Response {
+    let mut parts = rest.split('/');
+    let (Some(run_id), Some("calls"), n, None) = (parts.next(), parts.next(), parts.next(), parts.next()) else {
+        return error(404, "not_found", "rota do sonho desconhecida");
+    };
+    if !hangar_dream::run::valid_input_name(run_id) {
+        return failure("dream_run_not_found");
+    }
+    let Some(project) = query.get("project") else { return error(422, "erro_corpo_invalido", "falta o projeto") };
+    let dir = progress::calls_dir(&Paths::of(st).runs(), run_id, project);
+    let live = RUNNING.lock().unwrap_or_else(|e| e.into_inner()).as_deref() == Some(run_id);
+    let Some(n) = n else {
+        return match progress::list_calls(&dir, live) {
+            Ok(calls) => ok(json!({"calls": calls})),
+            Err(e) => failure(&format!("dream_io: {e}")),
+        };
+    };
+    let Ok(n) = n.parse::<usize>() else { return error(404, "dream_call_not_found", "chamada desconhecida") };
+    let mut meta = match progress::read_call(&dir, n) {
+        Ok(meta) => meta,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return error(404, "dream_call_not_found", "chamada desconhecida"),
+        Err(e) => return failure(&format!("dream_io: {e}")),
+    };
+    let steps = match progress::read_steps(&dir, n) {
+        Ok(steps) => steps,
+        Err(e) => return failure(&format!("dream_io: {e}")),
+    };
+    if meta.status == "running" {
+        meta.steps = steps.len();
+        if !live {
+            meta.status = "failed".into();
+            meta.error = Some("dream_interrupted".into());
+        }
+    }
+    let prompt = std::mem::take(&mut meta.prompt);
+    ok(json!({"meta": meta, "prompt": prompt, "steps": steps}))
 }
 
 #[derive(Deserialize)]

@@ -1,9 +1,48 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { configureApi, _resetApiEnvForTests } from './apiEnv';
 import * as m from './paraglide/messages';
-import { dismissDreamSuggestion, dreamErrorText, dreamFactsText, dreamFailure, dreamFileChanges, dreamFirstMatch, dreamLineDiff, dreamMonthText,
-  dreamUndoFailures, getDreamConfig, getDreamRun, getDreamStatus, parseDreamCap, putDreamConfig, putDreamProject, startDream, undoDreamRun,
-  validDreamHour } from './dream';
+import { dismissDreamSuggestion, dreamCallLabel, dreamCallParts, dreamCallTitle, dreamErrorText, dreamFactsText, dreamFailure, dreamFileChanges,
+  dreamFirstMatch, dreamLineDiff, dreamMonthText, dreamProgressLines, dreamRowState, dreamRunWhen, dreamSpan, dreamUndoFailures, getDreamCall, getDreamCalls,
+  getDreamConfig, getDreamRun, getDreamStatus, parseDreamCap, putDreamConfig, putDreamProject, startDream, stopDream, undoDreamRun, validDreamHour,
+  type DreamProgress } from './dream';
+
+it('dá nome às chamadas pela entrada que o analisador leu', () => {
+  const labels = ['s0-p0.txt', 's0-p1.txt', 's1-p0.txt', 'memory-vps-2.txt', 'organizer'];
+  const parts = dreamCallParts(labels);
+  expect(dreamCallLabel('s0-p1.txt', parts)).toEqual({ kind: 'conversation', n: 1, part: 2 });
+  expect(dreamCallLabel('s1-p0.txt', parts)).toEqual({ kind: 'conversation', n: 2, part: null });
+  expect(dreamCallLabel('memory-casa-dev-0.txt')).toEqual({ kind: 'notes', machine: 'casa-dev' });
+  expect(dreamCallTitle(dreamCallLabel('organizer'))).toBe(m.dream_call_organizer());
+  expect(dreamCallTitle(dreamCallLabel('memory-vps-2.txt'), (x) => x.toUpperCase())).toBe(m.dream_call_notes_from({ machine: 'VPS' }));
+  expect(dreamCallLabel('estranho')).toEqual({ kind: 'other', label: 'estranho' });
+});
+
+it('lê o início da rodada do run_id em UTC e mostra no horário local', () => {
+  const at = new Date(Date.UTC(2026, 10, 15, 11, 53, 14));
+  const two = (n: number) => String(n).padStart(2, '0');
+  expect(dreamRunWhen('20261115-115314-5081')).toBe(`${two(at.getDate())}/${two(at.getMonth() + 1)} ${two(at.getHours())}:${two(at.getMinutes())}`);
+  expect(dreamRunWhen('torto')).toBe('torto');
+});
+
+it('mostra o andamento: projeto N de M, conversa X de Y e erro em frase', () => {
+  const row = (id: string, status: DreamProgress['projects'][number]['status'], extra = {}) =>
+    ({ id, name: id, status, calls_total: 0, calls_done: 0, cost_usd: 0, error: null, notes: null, ...extra });
+  const p: DreamProgress = { run_id: 'r', started_at: '', last_activity_at: '', spent_usd: 0, stopping: false, current: 1, projects: [
+    row('app', 'failed', { error: 'dream_peer_failed: jefferson-felizardo' }),
+    row('hangar', 'analyzing', { calls_total: 86, calls_done: 33 }),
+    row('loja', 'queued'),
+    row('vazio', 'skipped'),
+  ] };
+  const lines = dreamProgressLines(p);
+  expect(lines.title).toBe(m.dream_progress_running({ n: 2, total: 3 }));
+  expect(lines.detail).toBe(m.dream_progress_analyzing({ project: 'hangar', done: 34, total: 85 }));
+  expect(dreamRowState(p, 'hangar')).toEqual({ text: m.dream_row_running({ done: 34, total: 85 }), tone: 'active' });
+  expect(dreamRowState(p, 'loja')).toEqual({ text: m.dream_row_queued(), tone: 'muted' });
+  expect(dreamRowState(p, 'app')).toEqual({ text: m.dream_error_dream_peer_failed({ detail: 'jefferson-felizardo' }), tone: 'error' });
+  expect(dreamRowState(p, 'vazio')).toBeNull();
+  expect(dreamRowState(null, 'hangar')).toBeNull();
+  expect([dreamSpan(8000), dreamSpan(11 * 60_000), dreamSpan(65 * 60_000)]).toEqual(['8 s', '11 min', '1 h 05 min']);
+});
 
 const server = { id: 'test', label: 'Servidor', baseUrl: 'https://dream.test', token: 'owner' };
 beforeEach(() => {
@@ -25,6 +64,9 @@ it('chama cada rota no servidor escolhido com o token dele', async () => {
     [() => undoDreamRun(server, 'r/1', 'git:x/y'), 'POST', '/api/dream/runs/r%2F1/undo?project=git%3Ax%2Fy', undefined],
     [() => putDreamProject(server, 'dir:vps/a b', { alias_of: 'git:x' }), 'PUT', '/api/dream/project?id=dir%3Avps%2Fa%20b', { alias_of: 'git:x' }],
     [() => dismissDreamSuggestion(server, 2), 'POST', '/api/dream/suggestions/dismiss', { index: 2 }],
+    [() => stopDream(server), 'POST', '/api/dream/stop', undefined],
+    [() => getDreamCalls(server, 'r1', 'git:x/y'), 'GET', '/api/dream/runs/r1/calls?project=git%3Ax%2Fy', undefined],
+    [() => getDreamCall(server, 'r1', 'git:x/y', 3), 'GET', '/api/dream/runs/r1/calls/3?project=git%3Ax%2Fy', undefined],
   ] as const;
   for (const [call, method, path, body] of calls) {
     fetch.mockResolvedValueOnce(new Response('{}'));

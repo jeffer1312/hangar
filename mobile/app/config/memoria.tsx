@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { RefreshControl } from 'react-native';
 import { Stack, useRouter } from 'expo-router';
-import { dismissDreamSuggestion, dreamErrorText, dreamFactsText, dreamLastText, dreamMonthText, parseDreamCap, putDreamConfig, startDream, validDreamHour,
-  type DreamConfigPatch } from '@hangar/core';
+import { dismissDreamSuggestion, dreamErrorText, dreamFactsText, dreamLastText, dreamMonthText, dreamRowState, parseDreamCap, putDreamConfig, startDream,
+  validDreamHour, type DreamConfigPatch } from '@hangar/core';
+import { ProgressCard } from '../../src/features/dream/ProgressCard';
 import { Pagina } from '../../src/features/config/Pagina';
 import { InfoNotice } from '../../src/features/config/InfoNotice';
 import { SectionCard } from '../../src/features/config/SectionCard';
@@ -65,15 +66,25 @@ export default function Memoria() {
           keyboardType="decimal-pad" disabled={busy} onCommit={(text) => cap(text, 'month_cap_usd')} />
         <MachineRow title={m.dream_month_spent()} description={dreamMonthText(status.month, config.month_cap_usd)} />
       </MachineGroup>
-      <MachineGroup>
+      {d.progress || d.finished ? <ProgressCard live={d.progress} finished={d.finished} busy={busy} onStop={d.stop}
+        nextHour={config.enabled ? config.hour : null}
+        onChanges={(run) => router.push({ pathname: '/config/memoria-run', params: { run } } as never)}
+        onRetry={() => { if (dreamer) void d.act(() => startDream(dreamer)); }} /> : null}
+      {/* Rodada acabada continua oferecendo outra; só some enquanto uma está no ar. */}
+      {d.progress ? null : <MachineGroup>
         <MachineRow title={status.running ? m.dream_running() : m.dream_run_now()} action disabled={busy || !!status.running || !dreamer}
           onPress={() => { if (dreamer) void d.act(() => startDream(dreamer)); }} />
-      </MachineGroup>
+      </MachineGroup>}
       {status.projects.length ? <SectionCard icon="Folder" title={m.dream_projects()}>
-        {status.projects.map((p) => <TapRow key={p.id} title={p.name}
-          description={`${dreamFactsText(p.machines.map(d.labelOf).join(', '), p.new_sessions)}\n${dreamLastText(p.last_dream_at, p.last_cost_usd)}`}
-          error={p.last_error ? dreamErrorText(p.last_error) : undefined}
-          onPress={() => router.push({ pathname: '/config/memoria-project', params: { id: p.id } } as never)} />)}
+        {status.projects.map((p) => {
+          // Com a rodada no ar (ou recém-acabada), a linha diz o que o sonho está fazendo com o projeto.
+          const row = dreamRowState(d.progress ?? d.finished, p.id);
+          return <TapRow key={p.id} title={p.name}
+            description={dreamFactsText(p.machines.map(d.labelOf).join(', '), p.new_sessions)}
+            status={row?.tone === 'error' ? undefined : { text: row?.text ?? dreamLastText(p.last_dream_at, p.last_cost_usd), active: row?.tone === 'active' }}
+            error={row?.tone === 'error' ? row.text : !row && p.last_error ? dreamErrorText(p.last_error) : undefined}
+            onPress={() => router.push({ pathname: '/config/memoria-project', params: { id: p.id } } as never)} />;
+        })}
       </SectionCard> : <InfoNotice text={m.dream_projects_empty()} />}
       {status.suggestions.length ? <SectionCard icon="FileText" title={m.dream_suggestions()} subtitle={m.dream_suggestions_hint()}>
         {status.suggestions.map((s, index) => <ActionRow key={`${index}:${s.text}`} title={s.text}
