@@ -1120,8 +1120,6 @@ impl ClaudeEngine {
                     let limit = self.turn_limit.take().or_else(||usage_limit(&event,&self.rate_limit_info,self.clock.epoch_s));
                     // Limite de uso e falta de login já têm aviso próprio: o motivo genérico ("erro da API") só confundiria.
                     if logged_out || limit.is_some() { stop_reason = None; }
-                    // A resposta de erro gravada pela CLI já é o aviso do turno parado (os clientes a desenham como bloqueio).
-                    if turn_error.is_some() && event["terminal_reason"] == "api_error" { stop_reason = None; }
                     let reason = stop_reason.as_ref().map(|reason|format!("{reason} — ")).unwrap_or_default();
                     self.state.problema_detalhe = Some(format!("{reason}{subtype}: {}",clip(event["result"].as_str().unwrap_or(""),300)));
                     if let Some(limit) = limit { effects.push(Effect::UsageLimit { limit }); }
@@ -1130,7 +1128,10 @@ impl ClaudeEngine {
                 if matches!(event["terminal_reason"].as_str(),Some("stop_hook_prevented" | "hook_stopped")) {
                     self.stop_label = Some(self.clock.monotonic_s+STOP_LABEL_S);
                 } else if let Some(reason) = &stop_reason {
-                    self.cli_note(None,format!("⚙️ Turno parado: {reason}"),effects);
+                    // A resposta de erro gravada pela CLI já é o aviso do turno parado (os clientes a desenham como
+                    // bloqueio); a faixa de cima continua com o motivo.
+                    let error_reply = turn_error.is_some() && event["terminal_reason"] == "api_error";
+                    if !error_reply { self.cli_note(None,format!("⚙️ Turno parado: {reason}"),effects); }
                 }
                 if !failed && subtype == "success" && !local {
                     self.state.problema = None; self.state.problema_detalhe = None;
@@ -1371,8 +1372,10 @@ impl ClaudeEngine {
             "notification" => {
                 let text = event["text"].as_str().unwrap_or("");
                 if matches!(event["priority"].as_str(),Some("high" | "immediate")) && !text.is_empty() {
-                    let key = event["key"].as_str().unwrap_or("");
-                    self.notice_once(&format!("notification:{key}:{text}"),Some(&format!("note:notification:{key}")),format!("⚙️ {text}"),effects);
+                    let key = event["key"].as_str().filter(|key|!key.is_empty());
+                    // Sem a chave da CLI não há como ignorar só esta: uma chave vazia esconderia todas as outras.
+                    let ignore = key.map(|key|format!("note:notification:{key}"));
+                    self.notice_once(&format!("notification:{}:{text}",key.unwrap_or("")),ignore.as_deref(),format!("⚙️ {text}"),effects);
                 } else {
                     self.diary("claude_notification",||event.clone(),effects);
                 }

@@ -376,7 +376,9 @@ impl QueueFollow {
         if self.seen.get(&id) == Some(&signature) {
             return Ok(None);
         }
-        let update = self.aged.contains(&id);
+        // Nota local regravada (o total do hook subiu) troca a que já está na tela: como `message`, o aparelho que
+        // não a tem na janela do histórico a poria no fim da conversa.
+        let update = self.aged.contains(&id) || (local && self.seen.contains_key(&id));
         self.seen.insert(id, signature);
         if cut {
             return Ok(None);
@@ -482,10 +484,12 @@ mod tests {
         let write = |detail: &str| apply(&serde_json::json!({"write": row(detail)}), &path);
         let mut follow = QueueFollow::new(0.0, 100.0);
         write("Stop: x");
-        assert_eq!(events(&follow.poll(&path).unwrap().frames).len(), 1);
+        let first = events(&follow.poll(&path).unwrap().frames);
+        assert_eq!(first.iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), vec!["message"], "a primeira vez é mensagem");
         write("Stop: x (falhou 2 vezes)");
         let again = events(&follow.poll(&path).unwrap().frames);
         assert_eq!(again.len(), 1, "a nota regravada com o total sai de novo");
+        assert_eq!(again[0].0, NOTICE_UPDATE, "a regravação só troca a nota que o aparelho já tem");
         let event: Value = serde_json::from_str(&again[0].1).unwrap();
         assert_eq!((event["id"].as_str(), event["hook_error"].as_str()), (Some("local-hookfail:1:0"), Some("Stop: x (falhou 2 vezes)")));
         // O mesmo detalhe com o total do mapa maior também sai de novo.

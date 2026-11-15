@@ -204,7 +204,8 @@ impl NoticeFold {
     /// json: o arquivo inteiro é lido a cada leitura que começa no meio.
     pub(crate) fn seed_hooks(&mut self, path: &std::path::Path, to: u64) -> std::io::Result<()> {
         use std::io::BufRead;
-        if std::mem::replace(&mut self.hooks_known, true) {
+        // Só fica conhecido depois de ler: com a leitura falha, a falha seguinte não vira uma "primeira" duplicada.
+        if self.hooks_known {
             return Ok(());
         }
         let mut rd = std::io::BufReader::new(std::fs::File::open(path)?);
@@ -224,6 +225,7 @@ impl NoticeFold {
                 }
             }
         }
+        self.hooks_known = true;
         Ok(())
     }
 

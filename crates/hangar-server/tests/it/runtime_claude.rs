@@ -1391,7 +1391,9 @@ fn notice_terminal_reason_api_error_with_the_error_reply_adds_no_second_note() {
     let failed = fixture("result.jsonl").into_iter().find(|row|row["terminal_reason"] == "api_error").unwrap();
     let effects = line(&mut engine,failed,11.0);
     assert!(notes(&effects).is_empty(),"a resposta de erro já é o aviso: {:?}",notes(&effects));
-    assert_eq!(engine.view()["public_state"]["problema"],"headless_turno_erro");
+    let state = engine.view()["public_state"].clone();
+    assert_eq!(state["problema"],"headless_turno_erro");
+    assert!(state["problema_detalhe"].as_str().unwrap().starts_with("erro da API (529) — "),"a faixa guarda o motivo: {state}");
 }
 
 #[test]

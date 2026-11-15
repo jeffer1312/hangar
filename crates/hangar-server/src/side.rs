@@ -1132,7 +1132,7 @@ async fn run_side(hub: Arc<Hub>) {
 /// Quadro que o canal privado leva ao Python: o estado, a faixa dos mods, o painel da fila e as bolhas dela,
 /// que o convidado também vê; ao dono pelo Connect, também os avisos de mod, que o Python não guarda mais.
 fn private_frame(frame: &[u8], events: &[&str], guest: bool) -> bool {
-    state_frame(frame, events) || state_frame(frame, &[LATEST[PLUGIN_UI], crate::queue_panel::EVENT, "message", "queue_confirmed"])
+    state_frame(frame, events) || state_frame(frame, &[LATEST[PLUGIN_UI], crate::queue_panel::EVENT, "message", "queue_confirmed", crate::queue_feed::NOTICE_UPDATE])
         || (!guest && state_frame(frame, &["plugin_toast"]))
 }
 

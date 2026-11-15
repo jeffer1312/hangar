@@ -27,7 +27,11 @@ pub struct Feed {
     pub(crate) changed: Notify,
     /// Gravação e publicação juntas: dois PUTs seguidos nunca publicam a lista velha por último.
     writing: tokio::sync::Mutex<()>,
+    /// Arquivo ilegível: a lista não o relê a cada rodada, só depois de `RETRY_UNREADABLE`.
+    unreadable_at: Mutex<Option<std::time::Instant>>,
 }
+
+const RETRY_UNREADABLE: std::time::Duration = std::time::Duration::from_secs(60);
 
 impl Feed {
     pub fn bind(&self, home: PathBuf) { let _ = self.home.set(home); }
@@ -36,9 +40,14 @@ impl Feed {
     pub(crate) async fn read(&self) -> Option<Result<Arc<str>, &'static str>> {
         if let Some(json) = self.json.lock().unwrap_or_else(|e| e.into_inner()).clone() { return Some(Ok(json)); }
         let home = self.home.get()?.clone();
+        let recent = |at: &Option<std::time::Instant>| at.is_some_and(|at| at.elapsed() < RETRY_UNREADABLE);
+        if recent(&self.unreadable_at.lock().unwrap_or_else(|e| e.into_inner())) { return Some(Err("notice_ignores_unreadable")); }
         match tokio::task::spawn_blocking(move || hangar_notice_ignores::load(&home)).await {
             Ok(Ok(keys)) => Some(Ok(self.store(&keys))),
-            _ => Some(Err("notice_ignores_unreadable")),
+            _ => {
+                *self.unreadable_at.lock().unwrap_or_else(|e| e.into_inner()) = Some(std::time::Instant::now());
+                Some(Err("notice_ignores_unreadable"))
+            }
         }
     }
 
