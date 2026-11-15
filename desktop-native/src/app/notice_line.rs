@@ -147,55 +147,77 @@ impl Hangar {
 
     pub(super) fn render_notice_line(&self, event_index: usize, row: &str, cx: &mut Context<Self>) -> AnyElement {
         let Some(event) = self.chat.events.get(event_index) else { return div().into_any_element(); };
-        if is_api_error(event) {
-            return div().w_full().px(px(12.)).py(px(9.)).rounded(px(8.)).bg(theme::warning().opacity(0.08))
-                .border_1().border_color(theme::warning().opacity(0.4)).flex().flex_col().gap(px(4.))
-                .child(div().flex().items_center().gap(px(7.))
-                    .child(chrome::small_icon(IconName::TriangleAlert, 14., theme::warning()))
-                    .child(div().text_size(px(13.)).text_color(theme::warning_text()).child(tr_shared("notice_api_error_title", &[]))))
-                .child(div().text_size(px(12.5)).text_color(theme::muted()).child(plain(event).trim().to_owned()))
-                .into_any_element();
-        }
+        if is_api_error(event) { return api_error_box(plain(event).trim().to_owned()).into_any_element(); }
         let (id, key) = (event.id.clone(), notice_key(event).map(str::to_owned));
-        let rule = || div().flex_1().h(px(1.)).bg(theme::border());
-        let line = |content: AnyElement| div().w_full().min_h(px(27.)).flex().items_center().gap(px(8.)).child(rule()).child(content).child(rule());
-        let small = |text: String, color: Hsla| div().flex_shrink_0().text_size(px(12.5)).text_color(color).child(text);
         // Acabou de ignorar: a linha fica, com o caminho de volta, até a conversa ser recarregada.
         if matches!(self.notice_acted.get(&id), Some(Acted::Ignored(_))) {
             let undo = key.map(|key| {
                 let event_id = id.clone();
-                Button::new(SharedString::from(format!("notice-undo-{id}"))).ghost().xsmall().label(tr_shared("comum_desfazer", &[]))
+                undo_button(SharedString::from(format!("notice-undo-{id}")))
                     .on_click(cx.listener(move |this, _, window, cx| this.set_notice_ignored(event_id.clone(), key.clone(), false, window, cx)))
             });
-            return line(div().flex().items_center().gap(px(6.)).child(small(tr_shared("notice_ignored_line", &[]), theme::faint())).children(undo)
-                .into_any_element()).into_any_element();
+            return notice_rule_line(ignored_text().children(undo)).into_any_element();
         }
         let (title, count, detail) = (notice_title(event), notice_count(event), notice_detail(event));
         let failed = match self.notice_acted.get(&id) { Some(Acted::Failed(why)) => Some(why.clone()), _ => None };
         let expandable = detail.is_some() || key.is_some();
         let open = expandable && self.expanded.contains(row);
         let toggle_key = row.to_owned();
-        let head = div().id(SharedString::from(format!("notice-{id}"))).flex().items_center().gap(px(7.)).min_w_0()
-            .child(chrome::small_icon(IconName::TriangleAlert, 14., theme::warning()))
-            .child(div().min_w_0().truncate().text_size(px(12.5)).text_color(theme::muted()).child(title))
-            .when_some(count, |el, count| el.child(small(format!("· {count}"), theme::faint())))
-            .when(expandable, |el| el.cursor_pointer()
-                .child(chrome::small_icon(if open { IconName::ChevronDown } else { IconName::ChevronRight }, 14., theme::faint()))
-                .on_click(cx.listener(move |this, _, _, cx| this.toggle(toggle_key.clone(), cx))));
+        let head = notice_head(SharedString::from(format!("notice-{id}")), title, count, expandable.then_some(open))
+            .when(expandable, |el| el.cursor_pointer().on_click(cx.listener(move |this, _, _, cx| this.toggle(toggle_key.clone(), cx))));
         let body = open.then(|| {
             let ignore = key.map(|key| {
                 let event_id = id.clone();
-                Button::new(SharedString::from(format!("notice-ignore-{id}"))).ghost().xsmall().label(tr_shared("notice_ignore", &[]))
+                ignore_button(SharedString::from(format!("notice-ignore-{id}")))
                     .on_click(cx.listener(move |this, _, window, cx| this.set_notice_ignored(event_id.clone(), key.clone(), true, window, cx)))
             });
-            div().w_full().flex().flex_col().items_center().gap(px(7.)).pb(px(6.))
-                .when_some(detail, |el, detail| el.child(div().max_w(px(900.)).px(px(12.)).py(px(9.)).rounded(px(8.)).bg(theme::inset())
-                    .font_family(theme::MONO).text_size(px(12.5)).text_color(theme::muted()).child(detail)))
-                .when_some(failed, |el, why| el.child(small(why, theme::warning())))
-                .children(ignore)
+            notice_body(detail).when_some(failed, |el, why| el.child(small(why, theme::warning()))).children(ignore)
         });
-        div().w_full().flex().flex_col().child(line(head.into_any_element())).children(body).into_any_element()
+        div().w_full().flex().flex_col().child(notice_rule_line(head)).children(body).into_any_element()
     }
+}
+
+fn small(text: String, color: Hsla) -> Div { div().flex_shrink_0().text_size(px(12.5)).text_color(color).child(text) }
+
+/// O conteúdo centrado entre dois fios: a linha de aviso fechada.
+pub(crate) fn notice_rule_line(content: impl IntoElement) -> Div {
+    let rule = || div().flex_1().h(px(1.)).bg(theme::border());
+    div().w_full().min_h(px(27.)).flex().items_center().gap(px(8.)).child(rule()).child(content).child(rule())
+}
+
+/// Ícone, título e total; `open` é `None` quando não há o que abrir.
+pub(crate) fn notice_head(id: SharedString, title: String, count: Option<String>, open: Option<bool>) -> Stateful<Div> {
+    div().id(id).flex().items_center().gap(px(7.)).min_w_0()
+        .child(chrome::small_icon(IconName::TriangleAlert, 14., theme::warning()))
+        .child(div().min_w_0().truncate().text_size(px(12.5)).text_color(theme::muted()).child(title))
+        .when_some(count, |el, count| el.child(small(format!("· {count}"), theme::faint())))
+        .when_some(open, |el, open| el.child(chrome::small_icon(if open { IconName::ChevronDown } else { IconName::ChevronRight }, 14., theme::faint())))
+}
+
+/// O que abre embaixo da linha: o detalhe em fonte fixa; o Ignorar entra depois.
+pub(crate) fn notice_body(detail: Option<String>) -> Div {
+    div().w_full().flex().flex_col().items_center().gap(px(7.)).pb(px(6.))
+        .when_some(detail, |el, detail| el.child(div().max_w(px(900.)).px(px(12.)).py(px(9.)).rounded(px(8.)).bg(theme::inset())
+            .font_family(theme::MONO).text_size(px(12.5)).text_color(theme::muted()).child(detail)))
+}
+
+pub(crate) fn ignore_button(id: SharedString) -> Button { Button::new(id).ghost().xsmall().label(tr_shared("notice_ignore", &[])) }
+
+pub(crate) fn undo_button(id: SharedString) -> Button { Button::new(id).ghost().xsmall().label(tr_shared("comum_desfazer", &[])) }
+
+/// "Aviso ignorado nesta máquina"; o Desfazer entra depois.
+pub(crate) fn ignored_text() -> Div {
+    div().flex().items_center().gap(px(6.)).child(small(tr_shared("notice_ignored_line", &[]), theme::faint()))
+}
+
+/// Erro da API que parou o turno: caixa âmbar, sem Ignorar.
+pub(crate) fn api_error_box(text: String) -> Div {
+    div().w_full().px(px(12.)).py(px(9.)).rounded(px(8.)).bg(theme::warning().opacity(0.08))
+        .border_1().border_color(theme::warning().opacity(0.4)).flex().flex_col().gap(px(4.))
+        .child(div().flex().items_center().gap(px(7.))
+            .child(chrome::small_icon(IconName::TriangleAlert, 14., theme::warning()))
+            .child(div().text_size(px(13.)).text_color(theme::warning_text()).child(tr_shared("notice_api_error_title", &[]))))
+        .child(div().text_size(px(12.5)).text_color(theme::muted()).child(text))
 }
 
 #[cfg(test)]

@@ -256,7 +256,11 @@ fn terminal_retry_and_refusal_carry_the_map() {
     };
     assert_eq!(metas("terminal_retry.jsonl","retry"),vec![json!({"key":"note:retry"});3],"as duas tentativas e a volta");
     assert_eq!(metas("terminal_refusal.jsonl","refusal:"),vec![json!({})]);
-    assert!(events("terminal_retry.jsonl").iter().filter(|event|!is_note(event)).all(|event|event.notice_meta.is_none()),"resposta comum não é aviso");
+    let api_error = rows("terminal_retry.jsonl").iter().filter(|row|row["isApiErrorMessage"] == true).filter_map(|row|row["uuid"].as_str().map(str::to_owned)).collect::<Vec<_>>();
+    let (errors,replies):(Vec<_>,Vec<_>) = events("terminal_retry.jsonl").into_iter().filter(|event|!is_note(event))
+        .partition(|event|api_error.iter().any(|uuid|event.id.starts_with(uuid.as_str())));
+    assert!(!errors.is_empty() && errors.iter().all(|event|event.notice_meta == json!({"level":"error"}).as_object().cloned()),"a resposta de erro da API é bloqueio");
+    assert!(replies.iter().all(|event|event.notice_meta.is_none()),"resposta comum não é aviso");
 }
 
 #[test]

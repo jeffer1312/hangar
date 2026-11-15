@@ -2,6 +2,7 @@
 
 mod account_tags;
 mod auto_report;
+mod claude_notices;
 mod codex_activity;
 mod compact_idle;
 mod composer_history;
@@ -81,6 +82,7 @@ pub fn animation(name: &str) -> Option<NewsAnimation> {
         "atualizacoes-e-manual" => Some(updates_manual::render),
         "estilo-claude-desktop" => Some(desktop_tool_look::render),
         "sonho-da-memoria" => Some(memory_dream::render),
+        "avisos-do-claude" => Some(claude_notices::render),
         _ => None,
     }
 }

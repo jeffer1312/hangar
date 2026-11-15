@@ -1,6 +1,7 @@
 import { ScheduledTasksAnimation } from './ScheduledTasksAnimation';
 import type { ComponentType } from 'react';
 import { AutoReportAnimation } from './AutoReportAnimation';
+import { ClaudeNoticesAnimation } from './ClaudeNoticesAnimation';
 import { CodexActivityAnimation } from './CodexActivityAnimation';
 import { CompactIdleAnimation } from './CompactIdleAnimation';
 import { DesktopToolLookAnimation } from './DesktopToolLookAnimation';
@@ -26,6 +27,7 @@ const animations: Record<string, ComponentType<{ width: number }>> = {
   'ajustes-sessao-abas': SessionSettingsAnimation,
   'scheduled-tasks': ScheduledTasksAnimation,
   'adormecer-ocultas': SleepHiddenAnimation,
+  'avisos-do-claude': ClaudeNoticesAnimation,
   'atualizacoes-e-manual': UpdatesManualAnimation,
   'branch-no-celular': FolderBranchAnimation,
   'cofre-de-senhas': VaultAnimation,

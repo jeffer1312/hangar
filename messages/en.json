@@ -5683,6 +5683,8 @@
   "native_side_diff_empty": "Empty diff.",
   "native_side_diff_truncated": "Diff cut; the file changed more than fits here.",
   "native_git_open": "Open the session's git",
+  "native_news_notice_sample_detail": "PostToolUse:Bash: ~/.claude/hooks/format.sh: file not found",
+  "native_news_notice_sample_api_error": "Could not refresh the login. Try again in a minute.",
   "native_news_review_sample_title": "Batch invoice export",
   "native_news_review_sample_comment": "The upload runs one at a time; with many invoices the request times out. Send them in parallel, with a limit.",
   "native_review_title": "Reviews",
