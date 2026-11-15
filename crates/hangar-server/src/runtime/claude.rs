@@ -68,7 +68,7 @@ pub struct ClaudeEngine {
     hooks_running: BTreeMap<String,RunningHook>,
     /// Falhas de cada hook nesta vida do processo, por `hook_name`: a primeira vai à conversa, as outras só somam nela.
     hook_fails: BTreeMap<String,HookFails>,
-    /// Até quando o rótulo "um hook parou o turno" fica depois do fim do turno.
+    /// Até quando a nota "um hook parou o turno" (`turn_note` do estado) fica depois do fim do turno.
     stop_label: Option<f64>,
     /// Registros no diário por tipo nesta vida: passado o teto, o motor nem pede a gravação.
     diary_counts: BTreeMap<String,u32>,
@@ -313,7 +313,7 @@ impl ClaudeEngine {
             label = Some(format!("Rodando hook {}…",hook.name));
         }
         if let Some(retry) = &self.retry_label { label = Some(retry.clone()); }
-        if self.stop_label.is_some() && !self.in_progress { label = Some(STOP_LABEL.into()); }
+        state.turn_note = (self.stop_label.is_some() && !self.in_progress).then(||STOP_LABEL.into());
         if state.state == "working" {
             if let Some(start) = self.turn_start {
                 let seconds = (self.clock.monotonic_s - start).max(0.0) as u64;
@@ -1124,7 +1124,7 @@ impl ClaudeEngine {
                     self.state.problema_detalhe = Some(format!("{reason}{subtype}: {}",clip(event["result"].as_str().unwrap_or(""),300)));
                     if let Some(limit) = limit { effects.push(Effect::UsageLimit { limit }); }
                 }
-                // Hook de fim de turno que segura a resposta é rotina de quem o configurou: rótulo que passa, não nota.
+                // Hook de fim de turno que segura a resposta é rotina de quem o configurou: nota que passa no estado, não nota na conversa.
                 if matches!(event["terminal_reason"].as_str(),Some("stop_hook_prevented" | "hook_stopped")) {
                     self.stop_label = Some(self.clock.monotonic_s+STOP_LABEL_S);
                 } else if let Some(reason) = &stop_reason {

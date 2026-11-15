@@ -195,7 +195,7 @@ Desenho (medidas do mock, em px da tela dele):
 - "Ignorar": `PUT` com `ignored: true`; a linha vira "Aviso ignorado nesta máquina · Desfazer" até a conversa ser recarregada; "Desfazer" manda `ignored: false`. Erro do `PUT` aparece na própria linha.
 - Evento de chave ignorada não é desenhado, em nenhuma sessão daquele servidor, assim que o evento `notice_ignores` chega.
 - O aviso de hook do Codex (`hook_failed`/`hook_prompt` sem `notice_meta`) segue no desenho de hoje.
-- Linha de fim de turno: com a sessão parada e `state.label` não vazio, `✻ Trabalhou por 48s · {label}`, o trecho do rótulo em `warning_text`. Some quando o servidor tira o rótulo.
+- Linha de fim de turno: com `state.turn_note` presente, `✻ Trabalhou por 48s · {turn_note}`, o trecho da nota em `warning_text`. Some quando o servidor tira a nota (8 s). Campo próprio, e não o `label`: parada, a sessão ainda manda no `label` o agente em segundo plano.
 
 - [ ] **Step 1: Testes que falham**
 
@@ -231,7 +231,7 @@ Status: needs-info (falta o print do chat no celular para o mock)
 - Consumes: `ChatEvent.notice_meta`, rota e evento `notice_ignores`, chaves da Task 4.
 - Produces: `noticeTitle(ev: ChatEvent): string | null`, `noticeHidden(ev: ChatEvent, ignored: ReadonlySet<string>): boolean` em `packages/core`.
 
-Desenho: a linha centralizada de hoje (13 pt, apagada) ganha os fios, o ícone e o chevron; toque abre o detalhe (padrão do `ThinkingBlock`), com alvo de 44 pt e `accessibilityState.expanded`. "Ignorar" no detalhe, vibração por `ui/haptics.ts`. O rótulo de turno parado entra numa linha de rodapé no lugar da `WorkingLine` enquanto `state.label` vier com a sessão parada. O lugar exato sai do mock sobre o print do celular.
+Desenho: a linha centralizada de hoje (13 pt, apagada) ganha os fios, o ícone e o chevron; toque abre o detalhe (padrão do `ThinkingBlock`), com alvo de 44 pt e `accessibilityState.expanded`. "Ignorar" no detalhe, vibração por `ui/haptics.ts`. O rótulo de turno parado entra numa linha de rodapé no lugar da `WorkingLine` enquanto `state.turn_note` vier. O lugar exato sai do mock sobre o print do celular.
 
 - [ ] **Step 1: Mock do celular sobre o print dele, aprovado por letra**
 - [ ] **Step 2: Testes que falham** (`noticeTitle`, `noticeHidden`, `MessageList` desenha a linha para evento com `notice_meta`, esconde o ignorado e não mostra "Ignorar" no aviso sem `key`)

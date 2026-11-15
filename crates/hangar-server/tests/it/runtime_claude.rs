@@ -1310,18 +1310,24 @@ fn notice_terminal_reason_hook_stop() {
         let effects = line(&mut engine,turn_end(reason,false),at);
         assert!(notes(&effects).is_empty(),"hook que segura o turno é rotina, não nota: {:?}",notes(&effects));
         assert!(effects.iter().any(|effect|matches!(effect,Effect::StateChanged)));
-        assert_eq!(shown_label(&engine),"Um hook parou o turno");
+        assert_eq!(turn_note(&engine),json!("Um hook parou o turno"));
+        // Fora do `label`: parada, a sessão ainda manda nele o agente em segundo plano.
+        assert_eq!(shown_label(&engine),"");
         assert!(engine.view()["public_state"]["problema"].is_null(),"turno sem erro não abre faixa");
         tick(&mut engine,at+7.9);
-        assert_eq!(shown_label(&engine),"Um hook parou o turno");
+        assert_eq!(turn_note(&engine),json!("Um hook parou o turno"));
         let effects = tick(&mut engine,at+8.1);
-        assert!(effects.iter().any(|effect|matches!(effect,Effect::StateChanged)),"o rótulo sai sozinho");
-        assert_eq!(shown_label(&engine),"");
+        assert!(effects.iter().any(|effect|matches!(effect,Effect::StateChanged)),"a nota sai sozinha");
+        assert!(turn_note(&engine).is_null());
     }
     line(&mut engine,turn_end("stop_hook_prevented",false),50.0);
     line(&mut engine,json!({"type":"command_lifecycle","state":"started"}),51.0);
-    assert!(!shown_label(&engine).contains("hook parou"),"o turno seguinte não herda: {}",shown_label(&engine));
+    assert!(turn_note(&engine).is_null(),"o turno seguinte não herda: {}",turn_note(&engine));
+    line(&mut engine,turn_end("completed",false),52.0);
+    assert!(turn_note(&engine).is_null(),"fim normal não tem nota");
 }
+
+fn turn_note(engine:&ClaudeEngine) -> Value { engine.view()["public_state"]["turn_note"].clone() }
 
 #[test]
 fn notice_terminal_reason_normal_is_silent() {

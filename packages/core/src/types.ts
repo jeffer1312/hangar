@@ -284,6 +284,8 @@ export interface StateEvent {
   session: string;
   state: State;
   label?: string | null;
+  /** Nota passageira sobre o turno que acabou ("Um hook parou o turno"), para a linha de fim de turno. */
+  turn_note?: string | null;
   question?: string | null;
   options?: string[] | null;
   status_line?: string | null; // raw bottom chrome from the pane, shown as-is
