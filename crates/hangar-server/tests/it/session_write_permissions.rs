@@ -14,6 +14,8 @@ use serde_json::{Value, json};
 
 use crate::fake::{self, Fake, SECRET};
 use crate::session_write_control::{open_headless, policy, send};
+#[cfg(unix)]
+use crate::session_write_control::{keys_sent, open_terminal, serve_with_interactions};
 
 /// `model_args.MODOS_PERMISSAO_CLAUDE`, na ordem do Python.
 const MODES: [&str; 6] = ["acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan"];
@@ -206,6 +208,47 @@ async fn r4_19_login_guest_reaches_mode_and_model_in_rust() {
         let (status, body) = send(method, route, GUEST).await;
         assert_ne!(body["detail"]["code"].as_str(), Some("erro_fora_do_convidado"), "{route}: a sessão é visível para ela");
         assert_eq!(status, 200, "{route}: a rota do dono atende o convidado: {body}");
+        assert_eq!(python.hits_to(&format!("/api/sessions/h/{route}")), 0, "{route}");
+    }
+}
+
+/// R4-05 (`api.py:2971-2983`): Claude com terminal cujo pane sumiu (a captura é recusada) é 409 com código;
+/// nenhum Shift+Tab sai e nada vai ao Python.
+#[cfg(unix)]
+#[tokio::test]
+async fn permissions_r4_05_claude_whose_pane_is_gone_is_409_with_a_code_and_no_key() {
+    let dir = tempfile::tempdir().unwrap();
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let registry = Arc::new(RuntimeRegistry::new(policy(calls).await, "secret-test".into(), "instance-test".into())
+        .with_processes(Arc::new(crate::runtime_open::RecipeProcesses("sid-1"))));
+    let log = open_terminal(&registry, dir.path(), "t").await;
+    let tmux = dir.path().join("tmux");
+    let script = std::fs::read_to_string(&tmux).unwrap();
+    crate::write_executable(&tmux, script.replacen("= capture-pane ]; then", "= capture-pane ]; then echo 'no such pane: %1' >&2; exit 1;", 1));
+    let (python, server) = serve_with_interactions(registry, Arc::default()).await;
+    let before = keys_sent(&log);
+    let (status, reply) = send(server, "POST", "t/permission-mode", r#"{"mode":"plan"}"#).await;
+    assert_eq!(status, 409, "{reply}");
+    assert!(reply["detail"]["code"].as_str().is_some_and(|code| !code.is_empty()), "recusa com código: {reply}");
+    assert_eq!(keys_sent(&log), before, "nenhum Shift+Tab");
+    assert_eq!(python_hits(&python, "t"), 0);
+}
+
+/// R4-17 (`login_guests/gate.rs:24`): o convidado com conta que vê a sessão não alcança nenhuma rota de
+/// grupo; a recusa é o 403 dele (não desloga), e nada vai ao Python.
+#[tokio::test(flavor = "multi_thread")]
+async fn r4_17_login_guest_never_reaches_the_group_routes() {
+    let dir = tempfile::tempdir().unwrap();
+    let (python, server) = serve(dir.path(), true).await;
+    for (method, route, body) in [(reqwest::Method::POST, "pair", json!({"peer": "s0"})), (reqwest::Method::DELETE, "pair", json!({})),
+        (reqwest::Method::POST, "group-message", json!({"text": "oi"})), (reqwest::Method::GET, "pair/contract", Value::Null),
+        (reqwest::Method::PUT, "pair/contract", json!({"text": "x"})), (reqwest::Method::POST, "pair-remote", json!({"peer": "outra::x"})),
+        (reqwest::Method::POST, "unpair-remote", json!({}))] {
+        let response = fake::client().request(method.clone(), format!("http://{server}/api/sessions/h/{route}")).bearer_auth(GUEST)
+            .header("content-type", "application/json").body(body.to_string()).send().await.unwrap();
+        let status = response.status().as_u16();
+        let reply: Value = serde_json::from_str(&response.text().await.unwrap()).unwrap_or(Value::Null);
+        assert_eq!((status, reply["detail"]["code"].as_str()), (403, Some("erro_fora_do_convidado")), "{method} {route}: {reply}");
         assert_eq!(python.hits_to(&format!("/api/sessions/h/{route}")), 0, "{route}");
     }
 }

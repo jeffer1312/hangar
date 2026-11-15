@@ -113,6 +113,9 @@ async fn list_srv(root: &Path, n: usize) -> Srv {
     state.list = Arc::new(ListBridge::new(ListEnv { mux: Mux::with_program(&script, Duration::from_secs(5)),
         capture_program: script.into_os_string(), procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs },
         FactsClient::new(upstream, SECRET.into())));
+    // O leitor de estado nasce com a lista de `AppState::new`: sem refazê-lo, o pane do agente seria
+    // procurado no tmux da máquina.
+    state.state = Arc::new(hangar_server::state::live::StateEnv::new(state.terminal.clone(), state.list.clone(), state.diag.clone()));
     let srv = serve(state, python, root).await;
     for i in 0..n {
         srv.g.alive(&format!("s{i}"));
@@ -930,6 +933,68 @@ async fn guest_port_refuses_unserved_methods_and_owner_only_relaunches_in_rust()
         assert_eq!(send(method, route, body).await, (403, refused.clone()), "{route}");
     }
     for route in ["permission-mode", "model-effort", "pane", "modo-execucao", "resume", "conta"] {
+        assert_eq!(srv.python.hits_to(&format!("/api/sessions/s/{route}")), 0, "{route}");
+    }
+}
+
+// R3-11 (`share/caller.rs:23,99`): pela 8766, o porteiro decide quem é o convidado. O convite completo lê o
+// espelho; o par de leitura leva `erro_fora_do_convite`; o terminal escondido `term-X` não é a sessão X.
+#[tokio::test(flavor = "multi_thread")]
+async fn r3_11_guest_port_pane_is_for_the_full_invite_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let srv = list_srv(dir.path(), 1).await;
+    let url = |path: &str| format!("http://{}/api/sessions/{path}", srv.guest);
+    let share = srv.g.token("s0", Kind::Share);
+    let (status, body) = get_json(url("s0/pane"), &share).await;
+    assert_eq!(status, 200, "{body}");
+    assert!(body["text"].as_str().unwrap().contains("pronto"), "{body}");
+    let pair = srv.g.token("s0", Kind::Pair);
+    let (status, body) = get_json(url("s0/pane"), &pair).await;
+    assert_eq!((status, body["detail"]["code"].clone()), (403, json!("erro_fora_do_convite")), "{body}");
+    assert_eq!(get_json(url("term-s0/pane"), &share).await.0, 403);
+    assert_eq!(srv.python.hits_to("/api/sessions/s0/pane") + srv.python.hits_to("/api/sessions/term-s0/pane"), 0);
+}
+
+// R3-31 (`routes.rs:1158-1170`): com a porta da sessão presa pela troca de conversa, o `recarregar` do dono e
+// o do convidado completo são o 409 de sessão ocupada pela rota, e o arquivo da sessão não muda.
+#[tokio::test(flavor = "multi_thread")]
+async fn r3_31_reload_while_a_transfer_holds_the_gate_is_409_busy_for_owner_and_guest() {
+    let dir = tempfile::tempdir().unwrap();
+    let registry = Arc::new(RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(), "secret-test".into(), "instance-test".into())
+        .with_processes(Arc::new(crate::runtime_open::RecipeProcesses("sid-1"))).with_codex_environment(proof_home(dir.path())));
+    let sidecar = dir.path().join("home/.hangar/claude-headless/s.json");
+    let before = std::fs::read(&sidecar).unwrap();
+    registry.ingress().hold("s", Duration::from_secs(1)).await.unwrap();
+    let srv = plain_srv(dir.path(), |st| {
+        // Sem pastas da lista: nada lê as transferências do HOME da máquina.
+        let mut env = ListEnv::from_env();
+        env.dirs = None;
+        st.list = Arc::new(ListBridge::new(env, FactsClient::new(crate::refused_address(), SECRET.into())));
+        assert!(st.state.runtime.set(registry).is_ok());
+    }).await;
+    let t = srv.g.token("s", Kind::Share);
+    let busy = json!({"detail": {"code": "session_transfer_busy", "params": {}, "msg": "A sessão está trocando de agente; tente novamente quando terminar."}});
+    for (base, token) in [(srv.owner, OWNER.to_owned()), (srv.guest, t)] {
+        assert_eq!(post_json(format!("http://{base}/api/sessions/s/recarregar"), &token, json!({})).await, (409, busy.clone()), "{base}");
+    }
+    assert_eq!(std::fs::read(&sidecar).unwrap(), before, "nada mudou");
+    assert_eq!(srv.python.hits_to("/api/sessions/s/recarregar"), 0);
+}
+
+// R4-17 (`caller.rs:20`): o convidado do convite não alcança as rotas de grupo que faltavam provar; o
+// porteiro recusa antes do handler, e nada vai ao Python.
+#[tokio::test(flavor = "multi_thread")]
+async fn r4_17_invite_guest_never_reaches_the_remaining_group_routes() {
+    let dir = tempfile::tempdir().unwrap();
+    let srv = plain_srv(dir.path(), |_| {}).await;
+    let t = srv.g.token("s", Kind::Share);
+    for (method, route, body) in [(reqwest::Method::DELETE, "pair", json!({})), (reqwest::Method::PUT, "pair/contract", json!({"text": "x"})),
+        (reqwest::Method::POST, "pair-remote", json!({"peer": "outra::x"})), (reqwest::Method::POST, "unpair-remote", json!({}))] {
+        let response = client().request(method.clone(), format!("http://{}/api/sessions/s/{route}", srv.guest)).bearer_auth(&t)
+            .header("content-type", "application/json").body(body.to_string()).send().await.unwrap();
+        let status = response.status().as_u16();
+        let reply: Value = serde_json::from_str(&response.text().await.unwrap()).unwrap_or(Value::Null);
+        assert_eq!((status, reply["detail"]["code"].clone()), (403, json!("erro_fora_do_convite")), "{method} {route}: {reply}");
         assert_eq!(srv.python.hits_to(&format!("/api/sessions/s/{route}")), 0, "{route}");
     }
 }

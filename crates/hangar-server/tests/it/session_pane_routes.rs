@@ -118,6 +118,34 @@ async fn pane_r3_08_a_failed_capture_is_an_error_with_a_code() {
     assert_eq!(rig.python.hits_to("/api/sessions/p1/pane"), 0);
 }
 
+// R3-08 (`tmux.py:1086-1090`): o `display` do histórico que falha não derruba a leitura: 200 com o texto,
+// `scrollback` 0, e o log diz `pane_scrollback_failed`.
+#[tokio::test]
+async fn pane_r3_08_a_failed_scrollback_read_is_zero_and_logged() {
+    #[derive(Clone, Default)]
+    struct Log(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+    impl std::io::Write for Log {
+        fn write(&mut self, data: &[u8]) -> std::io::Result<usize> { self.0.lock().unwrap().extend_from_slice(data); Ok(data.len()) }
+        fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+    }
+    let log = Log::default();
+    let writer = log.clone();
+    // O servidor do teste roda nesta mesma thread (`current_thread`): o assinante vale para a rota.
+    let _logs = tracing::subscriber::set_default(tracing_subscriber::fmt().without_time().with_ansi(false).with_writer(move || writer.clone()).finish());
+    let rig = Rig::new().await;
+    rig.pane("sb-r308", "bash --norc --noprofile -c 'echo HISTORICO-FALHOU; exec sleep 100000'");
+    rig.screen_shows("sb-r308", "HISTORICO-FALHOU").await;
+    let wrapper = rig.dir.path().join("tmux");
+    let script = std::fs::read_to_string(&wrapper).unwrap();
+    crate::write_executable(&wrapper, script.replacen("exec tmux", "[ \"$1\" = display ] && exit 1\nexec tmux", 1));
+    let (status, reply) = get(&rig, "sb-r308/pane").await;
+    assert_eq!((status, reply["scrollback"].clone()), (200, json!(0)), "{reply}");
+    assert!(reply["text"].as_str().unwrap().contains("HISTORICO-FALHOU"), "{reply}");
+    let text = String::from_utf8(log.0.lock().unwrap().clone()).unwrap();
+    assert!(text.contains("pane_scrollback_failed"), "{text}");
+    assert_eq!(rig.python.hits_to("/api/sessions/sb-r308/pane"), 0);
+}
+
 // R3-09 (bug 2 do inventário; decisão 9): multiplexador que não responde é 503 com código, não "sessão não encontrada".
 #[tokio::test]
 async fn pane_r3_09_a_silent_multiplexer_is_503_not_404() {
@@ -200,6 +228,16 @@ async fn limits_r3_19_20_not_codex_is_400_and_a_missing_name_is_404() {
     assert_eq!(rig.python.hits_to("/api/sessions/sh1/limits") + rig.python.hits_to("/api/sessions/ghost/limits"), 0);
 }
 
+// R2-06, R2-10 (golden `models_unknown_session`; `limits` de nome inexistente pela decisão 9): num nome sem
+// sessão, `models` é o 400 "só Codex" da rota; `limits` é o 404 de sessão inexistente. Nada ao Python.
+#[tokio::test]
+async fn models_and_limits_of_a_missing_name_answer_in_rust() {
+    let rig = Rig::new().await;
+    assert_eq!(get(&rig, "ghost/models").await, (400, detail("erro_models_so_codex", "models so existe pra sessoes Codex")));
+    assert_eq!(get(&rig, "ghost/limits").await, (404, detail("erro_sessao_inexistente", "sessão não encontrada")));
+    assert_eq!(rig.python.hits_to("/api/sessions/ghost/models") + rig.python.hits_to("/api/sessions/ghost/limits"), 0);
+}
+
 // R3-24: o convidado nunca arma nem limpa o `then` (alcança outra sessão do dono).
 #[tokio::test]
 async fn then_r3_24_the_guest_never_sets_nor_clears_the_link() {
@@ -226,6 +264,20 @@ async fn reload_r3_27_28_30_what_no_rust_agent_serves_is_answered_in_rust() {
     mute(&rig, false);
     assert_eq!((status, reply["detail"]["code"].as_str()), (503, Some("erro_mux_indisponivel")), "{reply}");
     assert_eq!(rig.python.hits_to("/api/sessions/ghost/recarregar") + rig.python.hits_to("/api/sessions/sh1/recarregar"), 0);
+}
+
+// R3-28 (`api.py:1298-1300`): pane de Pi, omp e Kimi não recarrega: o 409 que o nativo traduz.
+#[tokio::test]
+async fn reload_r3_28_pi_omp_and_kimi_panes_are_the_reload_409() {
+    let rig = Rig::new().await;
+    for program in ["pi", "omp", "kimi"] {
+        let name = format!("{program}1");
+        rig.pane(&name, &format!("bash --norc --noprofile -c '( exec -a {program} sleep 100000 ); exec sleep 100000'"));
+        rig.agent_runs(&name, program).await;
+        assert_eq!(call(&rig, reqwest::Method::POST, &format!("{name}/recarregar"), OWNER).await,
+            (409, detail("erro_recarregar_so_sem_terminal", "recarregar só vale para sessão Claude sem terminal")), "{program}");
+        assert_eq!(rig.python.hits_to(&format!("/api/sessions/{name}/recarregar")), 0, "{program}");
+    }
 }
 
 // R3-29 (`api.py:286-292`, decisão 9): Claude no pane que o Rust não prova não cai mais no 503

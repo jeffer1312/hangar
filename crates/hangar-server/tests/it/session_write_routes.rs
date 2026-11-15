@@ -166,6 +166,32 @@ async fn while_starting_every_write_is_server_starting_and_never_python() {
     }
 }
 
+// R2-27 (`commands/service.rs:175`): a lista de comandos do Codex (arquivo de sessão Codex no disco) é 503
+// com código na subida e sem o registro de sessões, nunca o Python.
+#[tokio::test]
+async fn codex_commands_while_starting_and_without_a_runtime_are_503_with_a_code() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join(".hangar/codex-sessions")).unwrap();
+    std::fs::write(dir.path().join(".hangar/codex-sessions/s.json"), r#"{"name":"s","provider":"codex","headless":true}"#).unwrap();
+    for starting in [true, false] {
+        let (python, upstream) = spawn_fake().await;
+        let mut state = AppState::new(config(upstream, "127.0.0.1"));
+        state.accounts = hangar_server::accounts::AccountService::new(hangar_server::accounts::environment::AccountEnvironment::from_map(
+            [("HOME".to_owned(), dir.path().to_string_lossy().into_owned()), ("PATH".to_owned(), String::new())].into()));
+        if starting {
+            state.startup = hangar_server::startup::Readiness::pending();
+            assert!(state.state.runtime.set(registry().await).is_ok());
+        }
+        let server = spawn_state(state).await;
+        let response = client().get(format!("http://{server}/api/sessions/s/commands")).header("authorization", format!("Bearer {OWNER}")).send().await.unwrap();
+        let status = response.status().as_u16();
+        let body: Value = serde_json::from_str(&response.text().await.unwrap()).unwrap();
+        let code = if starting { body["detail"].as_str() } else { body["detail"]["code"].as_str() };
+        assert_eq!((status, code), (503, Some(if starting { "server_starting" } else { "runtime_unavailable" })), "{body}");
+        assert_eq!(python.hits_to("/api/sessions/s/commands"), 0);
+    }
+}
+
 #[tokio::test]
 async fn open_entry_with_a_body_the_route_refuses_is_a_rust_422_never_python() {
     let (dir, registry) = (tempfile::tempdir().unwrap(), registry().await);
