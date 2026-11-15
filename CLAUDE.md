@@ -750,7 +750,7 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   [Medição](docs/decisoes/plataforma.md#sonho-da-memória-13112026).
 - **Computer Use e transferência de atalhos são do Rust.** `/api/computer-control*` mora no crate
   `hangar-computer-control-setup` e `/api/shortcuts/*` no `hangar-shortcut-transfer`, sem reserva
-  Python (modo `python` = 404). O hcu se instala sozinho da release e se atualiza só por tag
+  Python. O hcu se instala sozinho da release e se atualiza só por tag
   semver mais nova, trocando mesmo com sessão aberta; `/install` responde 410
   `erro_computer_control_update_app`. Com máquina-alvo, o MCP se registra sozinho em todas as
   contas; desligado à mão (tela ou fora do Hangar) fica desligado. A entrada do MCP tem um escritor
@@ -808,8 +808,7 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   e a linha. Conferir antes de afirmar que algo "é do Rust" ou "ainda é do Python".
   - Chat dos cinco provedores do dono: nada. `/history`, `/events`, mensagens, estado, prévia, fila, faixa
     `stats` (`stats.rs`), faixa e avisos de mod (`mods`) e pedido de navegador (`nav_requests.rs`)
-    são do hub do Rust, sem conexão ao Python. O Python não tem `/events`, `/cost` nem `/nav`: no
-    modo `python` respondem 404. O consumo da orquestração é calculado no Rust.
+    são do hub do Rust, sem conexão ao Python. O Python não tem `/events`, `/cost` nem `/nav`. O consumo da orquestração é calculado no Rust.
   - Lista do dono: montada pelo Rust; Pi/omp/Kimi publicam o estado pelos atores em processo,
     e a última resposta vem dos leitores nativos. Não existe `/internal/list/facts`.
   - Outras perguntas do Rust ao Python (`/internal/*`): `migration/status` e `ping`.
@@ -820,8 +819,8 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
     rotas conservam os clientes existentes; sem Rust, não há lançador Python de reserva. O shell
     continua no multiplexador, com `@cp_hidden`, e usa os fechamentos e renomeações existentes.
     Evidência em [plataforma.md](docs/decisoes/plataforma.md#editor-shell-e-terminal-externo-no-rust-11112026).
-  - Confirmação de entregas Codex: somente Rust; a reserva Python não confirma mensagens pelo
-    texto do rollout, que pode conter histórico importado. O SSE Rust aplica a mesma fronteira
+  - Confirmação de entregas Codex: somente Rust, nunca pelo texto do rollout, que pode conter
+    histórico importado. O SSE Rust aplica a mesma fronteira
     e os mesmos identificadores compostos do histórico transferido.
   - Mods (`press`/`close`/`show`/`input`), `~/.hangar/plugin.json` e `plugin-dir` publicados na
     subida e o download dos preços do models.dev: nada; são do Rust (`mods/`,
@@ -849,9 +848,8 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
     O `rust_bins.py` lança o Rust pelo caminho real da versão.
   - Tarefas próprias do Python em modo `rust`: os leitores legados de Claude/Codex não observam
     Pi/omp/Kimi. `watch_sessions` do Codex a cada 2 s fica desligada quando todo Codex é do Rust. Travada, limite e queda são avisados
-    pelo Rust (`push/watch.rs`); o vigia Python foi apagado e, no modo `python`, esses avisos não
-    saem. A retomada dos loops ativos na subida também é só do Rust (`loops/watch.rs`): no modo
-    `python` eles não voltam depois do reinício.
+    pelo Rust (`push/watch.rs`); o vigia Python foi apagado. A retomada dos loops ativos na subida
+    também é só do Rust (`loops/watch.rs`).
 - **Qual conversa é a da sessão é o Rust que decide** (`locate.rs`, a descoberta da lista), e a
   troca de transcript só vale lida duas vezes seguidas; provider, modo do Codex ou outra vida da
   sessão trocam na hora. Com o chat ao vivo aberto, o `/history` segue o transcript que o hub
@@ -929,8 +927,8 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   comando no `new-session`, nunca digitado no shell); o tmux-resurrect pula as sessões do Hangar.
   Sessão que bate o limite de uso troca de conta sozinha pela reabertura (só Claude). Login recusado
   segue o mesmo vigia: com login no disco reabre uma vez na mesma conta; recusou de novo ou o login
-  sumiu, vai à conta logada de mais folga; sem nenhuma, avisa `limit_switch_login_lost`. No modo
-  `python`, abrir e reabrir respondem 503 com código, sem lançador Python. Decisões e medições em
+  sumiu, vai à conta logada de mais folga; sem nenhuma, avisa `limit_switch_login_lost`. Não há lançador
+  Python. Decisões e medições em
   [plataforma.md](docs/decisoes/plataforma.md#abertura-de-sessão-única-no-rust).
 - **Trocar o nome da sessão é do Rust (`session_rename/`), com desfazer.** Tudo que recusa vem antes
   do primeiro efeito; a troca segura a reserva do nome novo e as portas dos dois nomes; a sessão viva
@@ -1027,7 +1025,7 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   não vem é `problema=state_facts_unavailable`, nunca estado inventado, e esse código vai ao diário
   e ao log, não à tela (portão de saída, regra "Aviso na tela só para ação que falhou"). O `Sources` não tem método com corpo
   padrão: fonte que esquece um não compila. A lista lê o último `state` do `Monitor` vivo
-  (`state/published.rs`) e não captura o pane dessa sessão. No modo `python` não há estado ao vivo.
+  (`state/published.rs`) e não captura o pane dessa sessão.
   Codex (`info.headless`), Claude (provider `ClaudeHeadless`) sem terminal e Codex com terminal
   cujo ator é do Rust (`codex_terminal_owned` em `side.rs`) têm no lugar do `Monitor` o feed do runtime
   (`state/runtime_feed.rs`): o ator escreve vista, erro e prévia num canal em processo
@@ -1040,8 +1038,7 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
 - **A fila durável ao vivo do chat é do hub do Rust no modo `rust`/`pending`, em qualquer porta.**
   Um produtor por hub e por geração (`queue_feed.rs`) lê a projeção da fila e publica
   `message`/`queue_confirmed` pelo retrato; o login de convidado lê o mesmo hub no Rust. A
-  baixa da fila do Codex sem terminal é pedida pelo hub ao ator, em processo. O `follow` do Python
-  fica com a reserva de Claude/Codex no modo `python`. Contrato e diferenças em
+  baixa da fila do Codex sem terminal é pedida pelo hub ao ator, em processo. Contrato e diferenças em
   [plataforma.md](docs/decisoes/plataforma.md#fila-durável-ao-vivo-no-hub-do-rust).
 - **Com o Rust de pé, o Python não lê o arquivo de estado da fila (`runtime/<chave>.json`).** No
   Windows a leitura no meio da troca do Rust falha e faz a troca falhar. O que precisava dele é do
