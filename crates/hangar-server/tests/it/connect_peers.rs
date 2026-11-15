@@ -540,6 +540,11 @@ async fn hangar_send_reaches_a_peer_through_connect() {
         assert_eq!(to.python.hits_to("/api/diag"), 1, "{peer}");
         assert_eq!(serde_json::from_slice::<Value>(&to.python.last_body()).unwrap(), body);
         assert_eq!(to.python.last_hit().1["authorization"], format!("Bearer {OWNER}").as_str());
+        // O `/input` do `hangar-send` chega ao Rust do outro lado: sem registro de sessões lá, a recusa é dele.
+        let input = peers.call(peer, reqwest::Method::POST, "/api/sessions/recado/input", Some(&body)).await;
+        let refused = format!("{input:?}");
+        assert!(input.is_err() && refused.contains("503") && refused.contains("runtime_unavailable"), "{peer}: {refused}");
+        assert_eq!(to.python.hits_to("/api/sessions/recado/input"), 0, "{peer}");
     }
 }
 
