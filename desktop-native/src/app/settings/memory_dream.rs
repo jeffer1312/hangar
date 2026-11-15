@@ -1688,7 +1688,7 @@ fn status_mark(status: &str, id: &str) -> AnyElement {
     match status {
         "running" => pulse_dot(id, 7.),
         "done" => chrome::small_icon(IconName::Check, 13., theme::success()).into_any_element(),
-        "failed" => chrome::small_icon(IconName::X, 13., theme::danger()).into_any_element(),
+        "failed" => chrome::small_icon(IconName::CircleX, 13., theme::danger()).into_any_element(),
         _ => chrome::small_icon(IconName::Circle, 11., theme::muted()).into_any_element(),
     }
 }
