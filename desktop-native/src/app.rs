@@ -2708,8 +2708,16 @@ impl Hangar {
                     self.action_feedback.remove(&key);
                 }
                 let native_changed = self.chat.state.codex_subagents != state.codex_subagents;
+                // Com a entrega parada a mensagem espera no painel, não na conversa: a linha dela muda sem evento novo.
+                let stalled_changed = (self.chat.state.problema.as_deref() == Some(STALLED)) != (state.problema.as_deref() == Some(STALLED));
                 self.chat.update_state(state);
                 if native_changed { self.sync_codex_subagents(cx); self.sync_rows(cx); }
+                if stalled_changed {
+                    self.chat.invalidate();
+                    self.sync_rows(cx);
+                    self.redraw(panes::Area::Conversation, cx);
+                    self.redraw(panes::Area::Bottom, cx);
+                }
                 self.sync_working_row(cx);
                 if turned { self.restart_subagent_count(cx); }
                 self.sync_activity(cx);
@@ -3096,7 +3104,9 @@ impl Hangar {
         // Texto longo fica no caminho de sempre: a bolha local o mostraria inteiro, sem o corte da mensagem gravada.
         let flies = refs.is_empty() && !command && group.is_none() && send_flight::flies(&field);
         let idle = self.chat.state.state != "working";
-        let to_queue = !idle && steer != SendTiming::Direct;
+        // Com a entrega parada a mensagem fica no painel mesmo com a sessão parada: é para lá que ela viaja.
+        let stalled = self.chat.state.problema.as_deref() == Some(STALLED);
+        let to_queue = (!idle || stalled) && steer != SendTiming::Direct;
         let known_before = if flies { known.clone() } else { HashSet::new() };
         if self.deliver(key.clone(), message, field.clone(), steer, known, group, cx) {
             if flies { self.send_takeoff(&field, idle, to_queue, known_before, window, cx); }
