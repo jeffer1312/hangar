@@ -77,6 +77,9 @@ struct Published {
     /// Etiquetas de máquina e contas; só o dono recebe.
     tags: Option<Bytes>,
     tags_seq: u64,
+    /// Avisos da CLI ignorados nesta máquina; só o dono recebe.
+    notice_ignores: Option<Bytes>,
+    notice_ignores_seq: u64,
     /// Aparelhos que já abriram a lista; só o dono recebe.
     devices: Option<Bytes>,
     devices_seq: u64,
@@ -152,7 +155,8 @@ impl InternalSubscription {
 #[derive(Default)]
 struct Last { sig: Option<String>, nav: Vec<(String, crate::nav_requests::Marker)>, shortcuts: Option<String>,
     keyring: Option<crate::keyring::KeyringState>, tags: Option<Arc<str>>, tags_error: Option<&'static str>,
-    devices: Option<Arc<str>>, vault: Option<Arc<crate::vault::requests::Feed>> }
+    devices: Option<Arc<str>>, vault: Option<Arc<crate::vault::requests::Feed>>,
+    notice_ignores: Option<Arc<str>>, notice_ignores_failed: bool }
 
 /// Pânico fora da produção (assinatura, publicação) não deixa o hub sem produtor: as listas abertas
 /// ficariam só com `ping`, e nenhuma nova religaria.
@@ -221,6 +225,7 @@ async fn produce(hub: Arc<ListHub>, list: Arc<ListBridge>, devices: Arc<Registry
         // Só a lista do dono recebe: sem ela (convidado, assinatura interna) nada é lido.
         if clients > 0 {
             publish_tags(&hub.tx, &mut last, list.tags.read().await, &diag);
+            publish_notice_ignores(&hub.tx, &mut last, list.notice_ignores.read().await, &diag);
             // Aparelho novo acorda pelo `changed`; aqui a primeira publicação e o aviso lido com a trava ocupada (o
             // retrato igual não sai de novo).
             if let Some(json) = devices.current() { publish_devices(&hub.tx, &mut last, json); }
@@ -244,6 +249,10 @@ async fn produce(hub: Arc<ListHub>, list: Arc<ListBridge>, devices: Arc<Registry
                 }
                 () = list.tags.changed.notified(), if clients > 0 => {
                     publish_tags(&hub.tx, &mut last, list.tags.read().await, &diag);
+                    continue;
+                }
+                () = list.notice_ignores.changed.notified(), if clients > 0 => {
+                    publish_notice_ignores(&hub.tx, &mut last, list.notice_ignores.read().await, &diag);
                     continue;
                 }
                 () = devices.changed.notified(), if clients > 0 => {
@@ -539,6 +548,27 @@ fn publish_tags(tx: &watch::Sender<Arc<Published>>, last: &mut Last, read: Optio
     }
 }
 
+/// Fora da rodada, como `tags`: sai quando a rota grava. Leitura com falha mantém o último publicado.
+fn publish_notice_ignores(tx: &watch::Sender<Arc<Published>>, last: &mut Last, read: Option<Result<Arc<str>, &'static str>>, diag: &DiagClient) {
+    match read {
+        None => {}
+        Some(Err(code)) => {
+            if !std::mem::replace(&mut last.notice_ignores_failed, true) {
+                diag.report("rust.list_notice_ignores", "", code, "avisos ignorados sem leitura; vale a última lista publicada");
+            }
+        }
+        Some(Ok(json)) => {
+            last.notice_ignores_failed = false;
+            if last.notice_ignores.as_ref() == Some(&json) { return; }
+            let mut next = (**tx.borrow()).clone();
+            next.notice_ignores = Some(sse_frame("notice_ignores", &json, None));
+            next.notice_ignores_seq += 1;
+            last.notice_ignores = Some(json);
+            tx.send_replace(Arc::new(next));
+        }
+    }
+}
+
 /// Fora da rodada, como `tags`: sai só quando um aparelho entra (o registro troca o `Arc`).
 fn publish_devices(tx: &watch::Sender<Arc<Published>>, last: &mut Last, json: Arc<str>) {
     if last.devices.as_ref().is_some_and(|prev| Arc::ptr_eq(prev, &json)) { return; }
@@ -566,7 +596,7 @@ fn nav_entries(nav: &[(String, crate::nav_requests::Marker)]) -> Vec<(String, f6
 
 /// O que uma conexão já entregou.
 #[derive(Default)]
-struct Sent { sessions: u64, error: u64, shortcuts: u64, keyring: u64, tags: u64, devices: u64, vault: u64, nav: HashMap<String, f64> }
+struct Sent { sessions: u64, error: u64, shortcuts: u64, keyring: u64, tags: u64, notice_ignores: u64, devices: u64, vault: u64, nav: HashMap<String, f64> }
 
 /// Quadros que esta conexão ainda não mandou do que está publicado.
 fn frames(p: &Published, sent: &mut Sent) -> Vec<Bytes> {
@@ -591,6 +621,10 @@ fn frames(p: &Published, sent: &mut Sent) -> Vec<Bytes> {
     if let Some(t) = p.tags.as_ref().filter(|_| sent.tags != p.tags_seq) {
         sent.tags = p.tags_seq;
         out.push(t.clone());
+    }
+    if let Some(n) = p.notice_ignores.as_ref().filter(|_| sent.notice_ignores != p.notice_ignores_seq) {
+        sent.notice_ignores = p.notice_ignores_seq;
+        out.push(n.clone());
     }
     if let Some(d) = p.devices.as_ref().filter(|_| sent.devices != p.devices_seq) {
         sent.devices = p.devices_seq;
@@ -841,6 +875,25 @@ mod tests {
         assert!(frames(&err, &mut sent).is_empty(), "erro uma vez só");
         let back = Published { sessions_seq: 2, error: None, ..err.clone() };
         assert!(frames(&back, &mut sent)[0].starts_with(b"event: sessions"));
+    }
+
+    /// A lista de avisos ignorados sai quando a rota grava, e de novo só com outra gravação.
+    #[tokio::test]
+    async fn notice_ignores_event_follows_what_the_route_published() {
+        let (tx, _rx) = watch::channel(Arc::new(Published::default()));
+        let (mut last, mut sent, diag) = (Last::default(), Sent::default(), DiagClient::new("127.0.0.1:9".parse().unwrap(), String::new()));
+        let read = |json: &str| Some(Ok(Arc::<str>::from(json)));
+        publish_notice_ignores(&tx, &mut last, read(r#"{"keys":[]}"#), &diag);
+        let first = frames(&tx.borrow(), &mut sent);
+        assert!(first.len() == 1 && first[0].starts_with(b"event: notice_ignores"), "{first:?}");
+        publish_notice_ignores(&tx, &mut last, read(r#"{"keys":[]}"#), &diag);
+        assert!(frames(&tx.borrow(), &mut sent).is_empty(), "a mesma lista não sai de novo");
+        // Leitura com falha não apaga o que os clientes já têm.
+        publish_notice_ignores(&tx, &mut last, Some(Err("notice_ignores_unreadable")), &diag);
+        assert!(frames(&tx.borrow(), &mut sent).is_empty());
+        publish_notice_ignores(&tx, &mut last, read(r#"{"keys":["hook:Stop"]}"#), &diag);
+        let changed = frames(&tx.borrow(), &mut sent);
+        assert!(changed.len() == 1 && std::str::from_utf8(&changed[0]).unwrap().contains("hook:Stop"));
     }
 
     #[test]

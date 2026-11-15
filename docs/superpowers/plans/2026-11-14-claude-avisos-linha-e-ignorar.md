@@ -153,21 +153,21 @@ Status: ready-for-agent
 - Evento `notice_ignores` na lista do dono (`/api/sessions/events`), com `{"keys":[…]}`, emitido na abertura e a cada mudança. O arquivo tem um escritor só, a rota: ela avisa o hub por um canal `tokio::sync::watch` com a lista nova. Sem vigia de arquivo (o `tags.rs` vigia pastas de conta; aqui não há o que vigiar). O quadro sai como o de `tags` (`list/hub.rs:522-540`, `publish_tags`).
 - A lista é do servidor: cliente ligado a várias máquinas guarda um conjunto por servidor. Convidado não recebe a lista e vê todos os avisos.
 
-- [ ] **Step 1: Testes que falham**
+- [x] **Step 1: Testes que falham**
 
 No crate: `missing_file_is_empty`, `unreadable_file_is_an_error_and_set_does_not_overwrite_it`, `set_adds_and_removes`, `invalid_key_is_refused` (`""`, `"x:y"`, 201 caracteres, `"hook:a\nb"`), `full_list_refuses_the_201st`.
 No servidor: `notice_ignores_put_then_get_and_event` (PUT de `hook:Stop` → GET traz a chave → o SSE da lista publica `notice_ignores`), `notice_ignores_refuses_guest_token`.
 
-- [ ] **Step 2: Rodar e ver falhar**
+- [x] **Step 2: Rodar e ver falhar** (pulado: uma rodada por tarefa)
 
 Run: `scripts/cargo-pinned test -p hangar-notice-ignores` e `scripts/cargo-pinned test -p hangar-server --test it notice_ignores`
 Expected: FAIL (crate e rota não existem: criar o esqueleto até falhar na asserção).
 
-- [ ] **Step 3: Implementar o crate, a rota e o evento**
+- [x] **Step 3: Implementar o crate, a rota e o evento**
 
 Crate no molde do `crates/hangar-update-news` (pequeno, sobre o `hangar-core`); o servidor só liga a rota e o evento. Da `tags.rs` aproveitar só o porteiro do dono e os códigos 422 e 409.
 
-- [ ] **Step 4: Rodar e ver passar; commit**
+- [x] **Step 4: Rodar e ver passar; commit**
 
 Commit: `feat(server): per-machine ignored notices`.
 

@@ -190,6 +190,7 @@ impl AppState {
     pub fn set_server_id(&self, id: String) {
         if let Some(groups) = &self.groups { groups.set_server_id(id.clone()); }
         self.list.tags.bind(self.accounts.clone(), id.clone());
+        self.list.notice_ignores.bind(self.accounts.env.home.to_path_buf());
         *self.machine_identity.write().unwrap_or_else(|e| e.into_inner()) = Some(id);
     }
 
@@ -392,6 +393,7 @@ pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest:
             let _maintenance = main_startup.then(|| crate::AbortOnDrop(tokio::spawn(crate::startup::maintenance(state.clone()))));
     // Ligado com o estado final: o evento lê as mesmas contas que a rota `/api/tags`.
     state.list.tags.bind(state.accounts.clone(), state.server_id.clone());
+    state.list.notice_ignores.bind(state.accounts.env.home.to_path_buf());
     if crate::config::Config::runtime_instance().ok().flatten().is_some() {
         let omp_sync = crate::omp_sync::start(state.clone());
         let _ = state.omp_sync.set(omp_sync.clone());
@@ -902,6 +904,7 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/sessions/{name}/hidden", axum::routing::put(crate::session_visibility::route).delete(crate::session_visibility::route))
         .route("/api/session-auto-hide", axum::routing::get(crate::session_visibility::auto::route).put(crate::session_visibility::auto::route))
         .route("/api/tags", axum::routing::get(crate::tags::handle).put(crate::tags::handle))
+        .route("/api/notice-ignores", axum::routing::get(crate::notice_ignores::handle).put(crate::notice_ignores::handle))
         .route("/api/config-sync/manifest", axum::routing::get(crate::config_sync::http::handle))
         .route("/api/config-sync/bundle", axum::routing::get(crate::config_sync::http::handle))
         .route("/api/config-sync/apply", axum::routing::any(crate::config_sync::apply_http::handle))
