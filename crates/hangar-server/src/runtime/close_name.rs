@@ -193,3 +193,24 @@ async fn forget(queue_dir:&Path,name:&str) -> Result<(),RuntimeError> {
     tracing::warn!(session=%name,code=QUEUE_CLEAR_FAILED,"fila do nome encerrado não foi apagada");
     Err(queue_failed())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// R1-19: a abertura e o fechamento do mesmo nome se excluem: com a abertura em curso o fechamento é
+    /// `erro_nome_em_uso`, e com o fechamento em curso a abertura recusa; acabado um, o outro passa.
+    #[tokio::test]
+    async fn r1_19_an_opening_and_a_close_of_one_name_exclude_each_other() {
+        let home = tempfile::tempdir().unwrap();
+        let registry = RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(),"s".into(),"i".into());
+        let opening = NameClaim::take(home.path(),"s1").unwrap();
+        let refused = registry.begin_close(Some(home.path().to_owned()),"s1").await.err().map(|error|error.code);
+        assert_eq!(refused.as_deref(),Some(NAME_BUSY));
+        drop(opening);
+        let closing = registry.begin_close(Some(home.path().to_owned()),"s1").await.ok().expect("nome livre");
+        assert!(NameClaim::take(home.path(),"s1").is_err(),"a abertura recusa com o fechamento em curso");
+        drop(closing);
+        assert!(NameClaim::take(home.path(),"s1").is_ok(),"livre de novo depois");
+    }
+}

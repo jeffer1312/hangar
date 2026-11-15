@@ -424,3 +424,23 @@ mod psmux_direct_tests {
         silent.join().unwrap();
     }
 }
+
+#[cfg(all(test, windows))]
+mod kill_target_tests {
+    use super::*;
+
+    /// R1-05: no psmux o `=` não vale no `kill-session` e o nome cru já é exato (`tmux.alvo_de_kill`): o
+    /// alvo é `nome`, nunca `=nome`, e a confirmação pergunta pela sessão exata.
+    #[tokio::test]
+    async fn r1_05_psmux_kills_by_the_raw_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let calls = dir.path().join("calls");
+        let program = dir.path().join("fake-psmux.cmd");
+        std::fs::write(&program, format!("@echo off\r\necho %*>>\"{}\"\r\nif \"%1\"==\"has-session\" exit /b 1\r\nexit /b 0\r\n",
+            calls.display())).unwrap();
+        assert_eq!(MuxProcess::new(&program, TIMEOUT).kill_session("nome").await, Some(true), "saiu");
+        let seen = std::fs::read_to_string(&calls).unwrap();
+        let seen: Vec<&str> = seen.lines().map(str::trim).collect();
+        assert_eq!(seen, ["kill-session -t nome", "has-session -t =nome"]);
+    }
+}

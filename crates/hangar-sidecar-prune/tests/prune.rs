@@ -254,6 +254,24 @@ fn r6_13_an_unreadable_folder_counts_as_a_failure_and_the_others_are_still_swept
     }
 }
 
+/// R6-13 no Windows: o arquivo aberto sem `FILE_SHARE_DELETE` (como o leitor de outro processo) não sai
+/// e conta uma falha; os outros da mesma pasta saem.
+#[cfg(windows)]
+#[test]
+fn r6_13_a_file_held_open_only_skips_itself_on_windows() {
+    use std::os::windows::fs::OpenOptionsExt;
+    const FILE_SHARE_READ: u32 = 0x1;
+    let dir = tempfile::tempdir().unwrap();
+    let base = base(&dir);
+    let held = write(&base, ".hangar-status", "aberto.json", days(30.0));
+    let gone = write(&base, ".hangar-status", "morto.json", days(30.0));
+    let handle = fs::OpenOptions::new().read(true).share_mode(FILE_SHARE_READ).open(&held).unwrap();
+    let report = prune(&bases(&base), &live(&["outra-viva"], &["outra-sessao"], &["1"]), now());
+    drop(handle);
+    assert_eq!(report, Report { removed: removed(&[(".hangar-status", 1)]), failed: 1, ..Report::default() });
+    assert!(held.exists() && !gone.exists());
+}
+
 #[cfg(unix)]
 #[test]
 fn r6_14_links_inside_the_bases_are_swept_once_and_links_leaving_them_are_not_followed() {

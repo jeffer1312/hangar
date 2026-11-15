@@ -384,6 +384,23 @@ async fn guest_port_delete_with_the_owner_token_closes_nothing() {
     assert_eq!(srv.python.hits_to("/api/sessions/s0"), 0);
 }
 
+/// R1-01: na 8766 o convidado do convite e o par de leitura (`Kind::Pair`) não fecham a sessão: o
+/// porteiro responde 403 `erro_fora_do_convite`, nada é encerrado e o Python não recebe nada.
+#[tokio::test(flavor = "multi_thread")]
+async fn r1_01_the_invite_and_the_reading_pair_never_close_on_the_guest_port() {
+    let dir = tempfile::tempdir().unwrap();
+    let srv = list_srv(dir.path(), 1).await;
+    for kind in [Kind::Share, Kind::Pair] {
+        let token = srv.g.token("s0", kind);
+        let response = client().delete(format!("http://{}/api/sessions/s0", srv.guest)).bearer_auth(&token).send().await.unwrap();
+        let status = response.status().as_u16();
+        let body: Value = serde_json::from_str(&response.text().await.unwrap()).unwrap_or(Value::Null);
+        assert_eq!((status, body["detail"]["code"].as_str()), (403, Some("erro_fora_do_convite")), "{body}");
+    }
+    assert_eq!(list_support::calls(dir.path(), "kill-session"), 0, "nada foi encerrado");
+    assert_eq!(srv.python.hits_to("/api/sessions/s0"), 0);
+}
+
 /// O proxy genérico precisa encerrar o WebSocket quando o convite é revogado.
 #[tokio::test(flavor = "multi_thread")]
 async fn forwarded_guest_websocket_closes_4410_when_revoked() {

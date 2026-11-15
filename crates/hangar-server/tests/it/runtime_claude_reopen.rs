@@ -1161,6 +1161,28 @@ async fn delete_r1_3_headless_claude_whose_agent_outlives_the_cano_is_500() {
     assert_eq!(python.hits_to("/api/sessions/s1"),0);
 }
 
+/// R1-01 (decisões 1 e 3): o convidado com conta fecha o Claude sem terminal aberto aqui pelo fechamento
+/// do dono: a sessão sai do registro, sidecar e fila também, e o Python não recebe nada.
+#[tokio::test]
+async fn delete_r1_01_login_guest_closes_a_headless_claude_of_the_rust() {
+    let fx = fixture();
+    fx.transcript();
+    let key = "3b".repeat(16);
+    terminal_with_spec(&fx,&key);
+    let registry = headless_registry(&fx).await;
+    let reopened = registry.reopen_claude_session("s1",mode_switch(false),None).await.expect("é sessão Claude daqui");
+    assert!(reopened.is_ok(),"{:?}",reopened.err().map(|f|f.error.code));
+    let (python,server,token) = crate::runtime_codex_watch::serve_guest(registry.clone(),&fx.home,&fx.home.join(".claude"),&fx.tmux).await;
+    let response = crate::fake::client().delete(format!("http://{server}/api/sessions/s1")).bearer_auth(token).send().await.unwrap();
+    let status = response.status().as_u16();
+    let body:Value = serde_json::from_str(&response.text().await.unwrap()).unwrap_or(Value::Null);
+    assert_eq!((status,body),(200,json!({"ok":true,"warning":null})));
+    assert!(!registry.has_entry(None,"s1").await,"a entrada saiu");
+    assert!(!fx.sidecar_path("s1").exists(),"sidecar apagado");
+    assert!(!fx.queue.join(format!("runtime/{key}.json")).exists(),"fila apagada");
+    assert_eq!(python.hits_to("/api/sessions/s1"),0);
+}
+
 /// Rodapé sem o modo na hora de ir ao sem terminal: o modo sai do spec.
 #[tokio::test]
 async fn an_unreadable_footer_does_not_change_the_mode_of_the_switch_to_headless() {

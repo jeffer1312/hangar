@@ -323,4 +323,98 @@ mod tests {
         assert_eq!(line["pulados"], "stems, names, tickets");
         assert!(!verdict(Err("list_bridge_unavailable"), true).1);
     }
+
+    /// R6-02: com o catálogo bom, as bases são as pastas de conta com login e a base do servidor; uma
+    /// `~/.claude-*` sem login (`~/.claude-pocket-uploads`) fica de fora.
+    #[test]
+    fn r6_02_the_bases_are_the_logged_in_accounts_and_the_base() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = fs::canonicalize(dir.path()).unwrap();
+        let account = home.join(".claude-conta");
+        fs::create_dir_all(account.join("projects")).unwrap();
+        fs::write(account.join(".credentials.json"), "{}").unwrap();
+        fs::create_dir_all(home.join(".claude-pocket-uploads")).unwrap();
+        fs::create_dir_all(home.join(".claude")).unwrap();
+        let text = home.to_string_lossy().into_owned();
+        let accounts = AccountService::new(crate::accounts::environment::AccountEnvironment::from_map(
+            [("HOME".into(), text.clone()), ("USERPROFILE".into(), text)].into()));
+        let (found, catalog) = bases(&accounts);
+        assert!(catalog);
+        let found: HashSet<PathBuf> = found.iter().map(|path| fs::canonicalize(path).unwrap()).collect();
+        assert_eq!(found, HashSet::from([account, home.join(".claude")]), "sem a pasta sem login");
+    }
+
+    /// Estado do servidor com a conta em `home`, a lista pelo multiplexador `mux` e o diário em `diary`.
+    fn state_for(home: &Path, mux: &std::ffi::OsStr, diary: &Path) -> AppState {
+        use crate::list::bridge::{ListBridge, ListEnv, parse_dirs};
+        let cfg = crate::config::Config { listen: "127.0.0.1:0".parse().unwrap(), upstream: "127.0.0.1:9".parse().unwrap(),
+            internal_secret: "s".into(), auth_token: "dono".into(), log_path: None, trusted: crate::auth::TrustedHosts::parse("127.0.0.1") };
+        let mut state = AppState::new(cfg);
+        let text = home.to_string_lossy().into_owned();
+        state.accounts = AccountService::new(crate::accounts::environment::AccountEnvironment::from_map(
+            [("HOME".into(), text.clone()), ("USERPROFILE".into(), text)].into()));
+        let dirs = parse_dirs(&json!({"home": home, "claude": home.join(".claude"), "codex_home": home.join(".codex"),
+            "pi_sessions": home.join(".pi/agent/sessions"), "omp_config": home.join(".omp"), "omp_agent": home.join(".omp/agent"),
+            "kimi_home": home.join(".kimi-code")}).to_string());
+        state.list = Arc::new(ListBridge::new(ListEnv { mux: crate::list::mux::Mux::with_program(mux, Duration::from_secs(5)),
+            capture_program: mux.to_owned(), procs: Arc::new(crate::list::procs::SystemProcs::default()), dirs },
+            crate::list::facts::FactsClient::new("127.0.0.1:9".parse().unwrap(), "s".into())));
+        state.diag = state.diag.clone().with_diary(Some(diary.to_owned()));
+        state
+    }
+
+    /// As linhas da poda que a rodada gravou no diário.
+    async fn prune_lines(diag: &crate::diag::DiagClient, diary: &Path) -> Vec<serde_json::Value> {
+        diag.flush().await;
+        crate::diag::test_support::rows(diary).into_iter().filter(|line| line["evento"] == "rust.sidecar_prune").collect()
+    }
+
+    /// R6-10 (decisão da rodada 3): o multiplexador que não responde pula a rodada inteira: nada é
+    /// apagado (nem a sobra de tmp), a rodada diz que não aconteceu (nova tentativa em `RETRY`, não em
+    /// um dia) e o diário leva `mux_unavailable`.
+    #[tokio::test]
+    async fn r6_10_a_mux_that_does_not_answer_skips_the_whole_round_and_retries_soon() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let dead = old_file(&home.join(".claude/.hangar-status"), "morta.json");
+        let tmp = home.join(".claude/.hangar-status/a.json.tmp");
+        fs::write(&tmp, "x").unwrap();
+        fs::File::options().write(true).open(&tmp).unwrap().set_modified(SystemTime::now() - Duration::from_secs(2 * 3_600)).unwrap();
+        let diary = dir.path().join("diario");
+        let state = state_for(&home, dir.path().join("nao-existe").as_os_str(), &diary);
+        let diag = state.diag.clone();
+        assert!(!round(Arc::new(state)).await, "rodada pulada: tenta de novo em breve");
+        assert!(dead.exists() && tmp.exists(), "nada apagado");
+        let lines = prune_lines(&diag, &diary).await;
+        assert_eq!(lines.iter().map(|line| (line["nivel"].clone(), line["codigo"].clone())).collect::<Vec<_>>(),
+            [(json!("erro"), json!("mux_unavailable"))], "{lines:?}");
+    }
+
+    /// R6-15: cada rodada grava no diário `evento: "rust.sidecar_prune"` com `total`, `apagados`, `pulados`
+    /// e `nivel`; a que não rodou leva também o `codigo`.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn r6_15_each_round_writes_its_counts_to_the_diary() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let tmp = home.join(".claude/.hangar-status/a.json.tmp");
+        fs::create_dir_all(tmp.parent().unwrap()).unwrap();
+        fs::write(&tmp, "x").unwrap();
+        fs::File::options().write(true).open(&tmp).unwrap().set_modified(SystemTime::now() - Duration::from_secs(2 * 3_600)).unwrap();
+        let diary = dir.path().join("diario");
+        // `true` responde ao `list-panes` com zero panes: a rodada acontece sem sessão viva.
+        let state = state_for(&home, std::ffi::OsStr::new("true"), &diary);
+        let diag = state.diag.clone();
+        assert!(round(Arc::new(state)).await);
+        assert!(!tmp.exists(), "a sobra de tmp saiu");
+        let lines = prune_lines(&diag, &diary).await;
+        let [line] = lines.as_slice() else { panic!("uma linha por rodada: {lines:?}") };
+        assert_eq!((&line["nivel"], &line["total"], &line["pulados"]), (&json!("aviso"), &json!(1), &json!("stems, names, tickets")), "{line}");
+        assert!(line["apagados"].as_str().is_some_and(|text| text.contains(".tmp") && text.ends_with("=1")), "{line}");
+        let failed = dir.path().join("diario-falha");
+        let state = state_for(&home, dir.path().join("nao-existe").as_os_str(), &failed);
+        let diag = state.diag.clone();
+        assert!(!round(Arc::new(state)).await);
+        assert_eq!(prune_lines(&diag, &failed).await[0]["codigo"], "mux_unavailable");
+    }
 }

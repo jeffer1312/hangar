@@ -545,6 +545,36 @@ async fn delete_r1_18_live_orchestrator_is_refused() {
     assert_eq!(srv.python.hits_to("/api/sessions/g1-orq"), 0);
 }
 
+/// R1-11 (`test_close_with_an_unreadable_sidecar_still_leaves_and_journals`,
+/// `test_close_of_a_session_without_group_never_asks_the_bridge`): o sidecar de grupo que existe e não se
+/// lê não segura o fechamento (a saída roda e o trata como sem grupo) e vai ao diário
+/// (`grupos.sidecar_ilegivel`); a sessão sem grupo fecha sem aviso, sem linha de grupo no diário e sem
+/// arquivo de grupo novo.
+#[tokio::test(flavor = "multi_thread")]
+async fn delete_r1_11_an_unreadable_group_sidecar_still_closes_and_goes_to_the_diary() {
+    let dir = tempfile::tempdir().unwrap();
+    let srv = server_unowned(dir.path(), 2).await;
+    std::fs::create_dir_all(&srv.pair).unwrap();
+    std::fs::write(srv.pair.join("s0.json"), "{torto").unwrap();
+    let (status, body) = call(srv.addr, "DELETE", "s0", None, OWNER).await;
+    assert_eq!((status, body), (200, json!({"ok": true, "warning": null})));
+    let journaled = |name: &str| srv.python.diag().iter().any(|l| l["evento"] == "rust.grupos_sidecar_ilegivel" && l["sessao"] == name);
+    for _ in 0..200 {
+        if journaled("s0") { break; }
+        // estavel: intervalo da espera pela linha do diário (gravada em segundo plano); a condição encerra antes do teto de 10 s.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(journaled("s0"), "{:?}", srv.python.diag());
+    let (status, body) = call(srv.addr, "DELETE", "s1", None, OWNER).await;
+    assert_eq!((status, body), (200, json!({"ok": true, "warning": null})));
+    // estavel: a linha indevida, se houvesse, seria gravada nesta janela, como a de `s0` acima.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(!journaled("s1"), "sem grupo, nada de grupo no diário");
+    assert!(!srv.pair.join("s1.json").exists(), "nenhum arquivo de grupo nasce");
+    assert_eq!(list_support::calls(dir.path(), "kill-session"), 2, "as duas fecharam");
+    assert_eq!(srv.python.hits_to("/api/sessions/s0") + srv.python.hits_to("/api/sessions/s1"), 0);
+}
+
 /// BRG-25, R1.3-7/8/10, R1-09/R1-10/R1-11: sessão sem entrada aqui (pane Claude que o Rust não adotou)
 /// fecha no Rust pelo nome, sai do grupo daqui e guarda o nome fechado pela conversa da lista, sem passar
 /// pelo Python; a pergunta aberta dela não fica para uma sessão futura com a mesma conversa.

@@ -36,6 +36,7 @@ struct Env {
     registry: Arc<RuntimeRegistry>,
     share: Arc<hangar_server::share::ShareState>,
     upstream: std::net::SocketAddr,
+    guests: Arc<hangar_server::login_guests::Service>,
 }
 
 impl Env {
@@ -131,19 +132,35 @@ fn fake_tmux(root: &Path, display: &str) -> PathBuf {
         "  has-session) grep -qx -- \"${{3#=}}\" \"$S\" || {{ echo \"can't find session: ${{3#=}}\" >&2; exit 1; }};;\n",
         // Terminais de atalho: as linhas do `list-sessions -F` ficam num arquivo.
         "  list-sessions) cat '{shortcuts}' 2>/dev/null;;\n",
-        "  kill-session) [ -e '{survive}' ] && exit 0; grep -vx -- \"${{3#=}}\" \"$S\" > \"$S.new\"; mv \"$S.new\" \"$S\";;\n",
+        // `slow`: o `kill-session` demora, e o fechamento fica em curso com o nome seguro.
+        "  kill-session) [ -e '{slow}' ] && sleep 2; [ -e '{survive}' ] && exit 0; grep -vx -- \"${{3#=}}\" \"$S\" > \"$S.new\"; mv \"$S.new\" \"$S\";;\n",
         "  show-options) n=\"${{4#=}}\"; grep -qx -- \"${{n%:}}\" '{hidden}' && echo 1;;\n",
         "  list-panes) exit 0;;\n",
         "  *) exit 0;;\nesac\n"),
         calls = calls.display(), sessions = sessions.display(), hidden = hidden.display(), survive = survive.display(), display = display,
-        shortcuts = root.join("shortcuts").display()));
+        shortcuts = root.join("shortcuts").display(), slow = root.join("slow").display()));
     std::fs::write(&sessions, "").unwrap();
     std::fs::write(&hidden, "").unwrap();
     script
 }
 
+/// Convidado com conta que vê as sessões sem dono (`GUEST`), no cadastro da pasta `root`.
+pub(crate) fn login_guest(state: &mut AppState, root: &Path) -> &'static str {
+    let guests = hangar_server::login_guests::Service::new(hangar_server::login_guests::Settings { guests: root.join("guests.json"),
+        vault: root.join("vault.json"), runtime_config: root.join("runtime-config.json"), sync_enabled: false, bootstrap: String::new(),
+        secret: vec![1], secure: false, rate_max: 10.into(), rate_window: 300.into() });
+    guests.store.create("Ana", &root.to_string_lossy(), true, true, "ana".into(), GUEST.into()).unwrap();
+    state.login_guests = Arc::new(guests);
+    GUEST
+}
+
 /// Servidor do dono com a vigia ligada no multiplexador falso e a lista nas pastas do teste.
 async fn env_with(adjust: impl FnOnce(&Arc<RuntimeRegistry>), display: &str) -> Env {
+    env_full(adjust, display, |_| {}).await
+}
+
+/// `env_with` com o estado ajustado antes de o servidor subir.
+async fn env_full(adjust: impl FnOnce(&Arc<RuntimeRegistry>), display: &str, state_adjust: impl FnOnce(&mut AppState)) -> Env {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().to_owned();
     let home = root.join("home");
@@ -165,7 +182,8 @@ async fn env_with(adjust: impl FnOnce(&Arc<RuntimeRegistry>), display: &str) -> 
         secret: vec![1], secure: false, rate_max: 10.into(), rate_window: 300.into() });
     guests.store.create("Ana", &text(&root), true, true, "ana".into(), GUEST.into()).unwrap();
     guests.store.create("Bia", &text(&root), false, true, "bia".into(), BLIND.into()).unwrap();
-    state.login_guests = Arc::new(guests);
+    let guests = Arc::new(guests);
+    state.login_guests = guests.clone();
     let dirs = parse_dirs(&json!({"home": home, "claude": home.join(".claude"), "codex_home": home.join(".codex"),
         "pi_sessions": home.join(".pi/agent/sessions"), "omp_config": home.join(".omp"), "omp_agent": home.join(".omp/agent"),
         "kimi_home": home.join(".kimi-code")}).to_string());
@@ -175,8 +193,9 @@ async fn env_with(adjust: impl FnOnce(&Arc<RuntimeRegistry>), display: &str) -> 
     state.share = Some(share.clone());
     state.write_gate_wait = Duration::from_secs(5);
     assert!(state.state.runtime.set(registry.clone()).is_ok());
+    state_adjust(&mut state);
     let server = fake::spawn_state(state).await;
-    Env { _dir: dir, root, home, queue, tmux, python, server, registry, share, upstream }
+    Env { _dir: dir, root, home, queue, tmux, python, server, registry, share, upstream, guests }
 }
 
 async fn env() -> Env { env_with(|_| {}, "x").await }
@@ -718,6 +737,188 @@ async fn delete_r1_other_terminal_close_runs_the_owner_cleanups() {
     let names: Value = serde_json::from_slice(&std::fs::read(root.join("conta/closed-sessions.json")).unwrap()).unwrap();
     assert_eq!(names[&*transcript.to_string_lossy()]["name"], "pi-a", "{names}");
     assert!(!root.join(".claude/closed-sessions.json").exists(), "nunca na pasta da lista");
+}
+
+/// R1-01: o convidado sem `sees_owner` fecha a sessão que ele criou (200); a de outro convidado leva o 403
+/// do porteiro e nada morre. Nada passa pelo Python.
+#[tokio::test]
+async fn delete_r1_01_a_guest_closes_its_own_session_and_never_another_guests() {
+    let e = env().await;
+    e.sessions(&["da-ana", "da-bia"]);
+    assert!(e.guests.store.claim("da-ana", "ana", None).is_ok());
+    assert!(e.guests.store.claim("da-bia", "bia", None).is_ok());
+    // Ana vê as sessões sem dono, mas a da Bia é da Bia.
+    let (status, body) = e.delete_as("da-bia", GUEST).await;
+    assert_eq!((status, body["detail"]["code"].as_str()), (403, Some("erro_fora_do_convidado")), "{body}");
+    assert_eq!(e.alive(), ["da-ana", "da-bia"], "nada morreu");
+    // Bia não vê as sem dono e fecha a que criou.
+    let (status, body) = e.delete_as("da-bia", BLIND).await;
+    assert_eq!((status, body), (200, json!({"ok": true, "warning": null})));
+    assert_eq!(e.alive(), ["da-ana"]);
+    assert_eq!(e.calls("kill-session"), ["kill-session -t =da-bia"]);
+    assert_eq!(e.python.hits_to("/api/sessions/da-bia"), 0);
+}
+
+/// R1-02 e decisão 4: o convidado com conta fecha o Pi vivo pela rota `DELETE`; a limpeza do ator
+/// (`other_cleanup`) roda: o `then` sai, o nome fechado vai à pasta que o Arquivo lê (`claude_base`), e
+/// o Python não recebe nada.
+#[tokio::test]
+async fn delete_r1_02_a_guest_closes_a_live_pi_through_the_route_with_the_owner_cleanups() {
+    use hangar_server::runtime::other_terminal::{OtherDiscovery, OtherDiscoveryState, OtherOptions, OtherTarget};
+    let dir = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(dir.path()).unwrap();
+    let tmux = fake_tmux(&root, "pi-a");
+    std::fs::write(root.join("sessions"), "pi-a\n").unwrap();
+    let dirs = hangar_server::list::discover_other::Dirs { home: root.join("home"), claude: root.join(".claude"), codex_home: root.join(".codex"),
+        pi_sessions: root.join(".pi/agent/sessions"), omp_config: root.join(".omp"), omp_agent: root.join(".omp/agent"), kimi_home: root.join(".kimi-code") };
+    std::fs::create_dir_all(&dirs.home).unwrap();
+    let transcript = root.join("c.jsonl");
+    std::fs::write(&transcript, "").unwrap();
+    let chain = root.join(".claude/.hangar-chain/pi-a.json");
+    std::fs::create_dir_all(chain.parent().unwrap()).unwrap();
+    std::fs::write(&chain, r#"{"target":"outra","text":"oi"}"#).unwrap();
+    let target = OtherTarget { key: "life-a".into(), generation: 1, name: "pi-a".into(), provider: hangar_transcript::Provider::Pi,
+        binding: hangar_server::terminal_input::TerminalBinding { name: "pi-a".into(), pane: "%1".into(), conversation: "c".into(), generation: 1,
+            created: 100, mux_argv: vec![tmux.to_string_lossy().into_owned()], windows: false, clipboard_lock_path: None },
+        pane_address: "%1".into(), dirs: dirs.clone(), cwd: root.to_string_lossy().into_owned(), pane_pid: 1, agent_pid: i64::from(exited_pid()), agent_birth: 1.0,
+        transcript: transcript.clone(), state_path: root.join("runtime/life-a.json"), lease_path: root.join("runtime/life-a.lock"),
+        projection_dir: root.join("queue"), config_dirs: vec![root.clone()], created: 100.0 };
+    let (python, upstream) = fake::spawn_fake().await;
+    let mut state = AppState::new(fake::config(upstream, "127.0.0.1"));
+    let (home, base) = (root.join("home").to_string_lossy().into_owned(), root.join("conta").to_string_lossy().into_owned());
+    state.accounts = hangar_server::accounts::AccountService::new(hangar_server::accounts::environment::AccountEnvironment::from_map(
+        [("HOME".to_owned(), home.clone()), ("USERPROFILE".to_owned(), home), ("CLAUDE_CONFIG_DIR".to_owned(), base)].into()));
+    let list_dirs = parse_dirs(&json!({"home": dirs.home, "claude": dirs.claude, "codex_home": dirs.codex_home, "pi_sessions": dirs.pi_sessions,
+        "omp_config": dirs.omp_config, "omp_agent": dirs.omp_agent, "kimi_home": dirs.kimi_home}).to_string());
+    state.list = Arc::new(ListBridge::new(ListEnv { mux: Mux::with_program(&tmux, Duration::from_secs(5)), capture_program: tmux.clone().into_os_string(),
+        procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs: list_dirs }, FactsClient::new(upstream, SECRET.into())));
+    state.share = None;
+    let token = login_guest(&mut state, &root);
+    let registry = crate::runtime_open::registry().await;
+    assert!(state.state.runtime.set(registry.clone()).is_ok());
+    let st = Arc::new(state);
+    let mut options = OtherOptions::new(hangar_server::terminal_control::TerminalPool::new(), hangar_server::provider_models::inbox::Store::new(),
+        Arc::new(hangar_server::list::procs::SystemProcs::default()), Arc::new(hangar_server::interactions::InteractionStore::default()));
+    options.after_closed = Some(hangar_server::session_write::bridge::other_cleanup(Arc::downgrade(&st)));
+    let found = target.clone();
+    registry.bind_other(options, OtherDiscovery {
+        find: Arc::new(move |_| { let found = found.clone(); Box::pin(async move { Some(Ok(OtherDiscoveryState::Ready(found))) }) }),
+        names: Arc::new(|| Box::pin(async { Ok(vec![]) })),
+    }).unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let server = listener.local_addr().unwrap();
+    let router = hangar_server::routes::router(st.clone());
+    tokio::spawn(async move { axum::serve(listener, router.into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap() });
+    let response = fake::client().delete(format!("http://{server}/api/sessions/pi-a")).bearer_auth(token).send().await.unwrap();
+    let status = response.status().as_u16();
+    let text = response.text().await.unwrap();
+    assert_eq!(status, 200, "{text}");
+    assert_eq!(std::fs::read_to_string(root.join("sessions")).unwrap(), "", "o pane fechou");
+    assert!(!chain.exists(), "o then da vida encerrada saiu");
+    let names: Value = serde_json::from_slice(&std::fs::read(root.join("conta/closed-sessions.json")).unwrap()).unwrap();
+    assert_eq!(names[&*transcript.to_string_lossy()]["name"], "pi-a", "{names}");
+    assert_eq!(python.hits_to("/api/sessions/pi-a"), 0);
+}
+
+/// R1-05 (`tmux.alvo_de_kill`): fechar `cat` mata só ela, pelo alvo exato `=cat`; a irmã `cat-2` fica. No
+/// Windows o alvo é o nome cru: `state::capture` tem o teste de lá.
+#[tokio::test]
+async fn delete_r1_05_the_sibling_with_a_longer_name_survives() {
+    let e = env().await;
+    e.sessions(&["cat", "cat-2"]);
+    let (status, body) = e.delete("cat").await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(e.calls("kill-session"), ["kill-session -t =cat"]);
+    assert_eq!(e.alive(), ["cat-2"]);
+}
+
+/// R1-10 (`closed_names.record`): fechar sem conversa conhecida dá 200 e não grava nada; acima de 500 nomes
+/// saem os mais antigos por `closed_at`.
+#[tokio::test]
+async fn delete_r1_10_no_transcript_writes_nothing_and_the_names_keep_the_newest_500() {
+    let e = env().await;
+    e.sessions(&["sem-conversa"]);
+    let (status, body) = e.delete("sem-conversa").await;
+    assert_eq!((status, body), (200, json!({"ok": true, "warning": null})));
+    assert_eq!(e.closed_names(), Value::Null, "sem conversa, nada gravado");
+    let old: serde_json::Map<String, Value> = (0..500)
+        .map(|i| (format!("/velho/{i}.jsonl"), json!({"name": format!("v{i}"), "closed_at": f64::from(i + 1)}))).collect();
+    std::fs::create_dir_all(e.home.join(".claude")).unwrap();
+    std::fs::write(e.home.join(".claude/closed-sessions.json"), Value::Object(old).to_string()).unwrap();
+    e.put_sidecar("codex", "cxn", json!({"name": "cxn", "provider": "codex", "headless": true, "key": "kkkkkkkk00000012",
+        "cano": null, "rollout_path": "/r/novo.jsonl"}));
+    let (status, body) = e.delete("cxn").await;
+    assert_eq!(status, 200, "{body}");
+    let names = e.closed_names();
+    let names = names.as_object().expect("objeto");
+    assert_eq!(names.len(), 500);
+    assert!(!names.contains_key("/velho/0.jsonl"), "o mais antigo saiu");
+    assert!(names.contains_key("/velho/1.jsonl") && names.contains_key("/velho/499.jsonl"));
+    assert_eq!(names["/r/novo.jsonl"]["name"], "cxn");
+}
+
+/// R1-12 (`share_bridge.revoke_session` com a ponte desligada): sem convites no servidor, fechar dá 200
+/// sem aviso.
+#[tokio::test]
+async fn delete_r1_12_without_invites_the_close_has_no_warning() {
+    let e = env_full(|_| {}, "x", |state| state.share = None).await;
+    e.sessions(&["cat1"]);
+    let (status, body) = e.delete("cat1").await;
+    assert_eq!((status, body), (200, json!({"ok": true, "warning": null})));
+    assert_eq!(e.alive(), Vec::<String>::new());
+}
+
+/// R1-18: a leitura das execuções falha (a pasta `orq` é um arquivo): o `DELETE` do `-orq` é 503
+/// `orq_runs_unavailable` para o dono e para o convidado, nada é morto e o Python não recebe nada.
+#[tokio::test]
+async fn delete_r1_18_unreadable_runs_refuse_the_orchestrator_close() {
+    let e = env().await;
+    e.sessions(&["g1-orq"]);
+    let runs = hangar_server::orchestration::runs::root(&e.home);
+    std::fs::create_dir_all(runs.parent().unwrap()).unwrap();
+    std::fs::write(&runs, "não é pasta").unwrap();
+    for token in [OWNER, GUEST] {
+        let (status, body) = e.delete_as("g1-orq", token).await;
+        assert_eq!((status, body["detail"]["code"].as_str()), (503, Some("orq_runs_unavailable")), "{token}: {body}");
+    }
+    assert!(e.calls("kill-session").is_empty());
+    assert_eq!(e.alive(), ["g1-orq"]);
+    assert_eq!(e.python.hits_to("/api/sessions/g1-orq"), 0);
+}
+
+/// R1-19: com o fechamento de `cat1` em curso (o nome seguro até o fim), outro `DELETE` do mesmo nome é
+/// 409 `erro_nome_em_uso` e não mata nada; o primeiro termina normalmente. A abertura contra o fechamento
+/// em curso está em `runtime::close_name` (a reserva do nome não é pública).
+#[tokio::test(flavor = "multi_thread")]
+async fn delete_r1_19_a_close_in_progress_holds_the_name() {
+    let e = env().await;
+    e.sessions(&["cat1"]);
+    std::fs::write(e.root.join("slow"), "").unwrap();
+    let second = async {
+        for _ in 0..400 {
+            if !e.calls("kill-session").is_empty() { break; }
+            // estavel: intervalo da espera pelo primeiro fechamento chegar ao `kill-session`; a condição encerra antes do teto de 4 s.
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        e.delete("cat1").await
+    };
+    let ((first_status, first_body), (status, body)) = tokio::join!(e.delete("cat1"), second);
+    assert_eq!((status, body["detail"]["code"].as_str()), (409, Some("erro_nome_em_uso")), "{body}");
+    assert_eq!((first_status, first_body), (200, json!({"ok": true, "warning": null})));
+    assert_eq!(e.calls("kill-session"), ["kill-session -t =cat1"], "o recusado não matou nada");
+    assert_eq!(e.alive(), Vec::<String>::new());
+}
+
+/// R1-20 (decisão 3): o fechamento pedido pelo convidado, de ponta a ponta pela rota, vai ao diário com
+/// `session_close_requested_by_guest`; o do dono, com o código dele.
+#[tokio::test]
+async fn delete_r1_20_the_guest_close_reaches_the_diary_with_its_code() {
+    let e = env().await;
+    e.sessions(&["cat1", "cat2"]);
+    assert_eq!(e.delete_as("cat1", GUEST).await.0, 200);
+    assert!(e.diary_has("cat1", "session_close_requested_by_guest").await, "{:?}", e.python.diag());
+    assert_eq!(e.delete("cat2").await.0, 200);
+    assert!(e.diary_has("cat2", "session_close_requested_by_owner").await, "{:?}", e.python.diag());
 }
 
 /// Pid de um processo que já saiu.

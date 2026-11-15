@@ -147,3 +147,83 @@ async fn r5_owner_only_relaunch_routes_refuse_everyone_else_in_rust() {
         assert_eq!(python.hits_to(path), 0, "{path}");
     }
 }
+
+/// R5-09: toda rota do Rust que o Python também tinha (com `require_auth`) recusa o estranho com o 401
+/// do Rust, corpo exato, e nada chega ao Python. Cada pedido de uma origem: o bloqueio não entra na conta.
+#[tokio::test]
+async fn r5_09_every_owner_route_the_python_had_refuses_the_stranger_with_the_exact_401() {
+    let (python, upstream) = spawn_fake().await;
+    let srv = spawn_server(config(upstream, "127.0.0.1")).await;
+    let refused: Value = serde_json::from_str(REFUSED).unwrap();
+    let session = ["input", "steer", "interrupt", "select", "select/submit", "answer", "keys", "term-input", "rename", "recarregar",
+        "modo-execucao", "model-effort", "permission-mode", "model", "service-tier", "codex/mode", "codex/plan/implement",
+        "question/skip", "plugin/press", "pair", "pair-remote", "unpair-remote", "group-message", "resume", "pair-invite",
+        "pair-accept", "pair-access", "transcribe"].map(|rest| ("POST", format!("/api/sessions/s0/{rest}")));
+    let reads = ["btw", "conta", "permission-modes", "models", "limits", "codex-permissions", "commands", "history", "subagents",
+        "navegador", "pair/contract", "group", "share", "bash-output", "tool-progress/t1", "transcript-image/u1/0"]
+        .map(|rest| ("GET", format!("/api/sessions/s0/{rest}")));
+    let others = [("DELETE", "/api/sessions/s0/queue/e1"), ("DELETE", "/api/sessions/s0/pair"), ("POST", "/api/broadcast"),
+        ("POST", "/api/sessions"), ("PUT", "/api/sessions/prewarm"), ("POST", "/api/archive/p/id/resume"), ("GET", "/api/external-pairs"),
+        ("GET", "/api/share/prereqs"), ("POST", "/api/mermaid"), ("GET", "/api/client-api"), ("GET", "/api/jev/aux/models"),
+        ("GET", "/api/jev/delivery"), ("GET", "/api/claude/customizations"), ("GET", "/api/search"), ("GET", "/api/archive"),
+        ("POST", "/api/ask-history"), ("GET", "/api/migration/status"), ("GET", "/api/session-defaults")]
+        .map(|(method, path)| (method, path.to_owned()));
+    let routes: Vec<(&str, String)> = session.into_iter().chain(reads).chain(others).collect();
+    assert!(routes.len() < 250, "uma origem por rota");
+    for (i, (method, path)) in routes.iter().enumerate() {
+        assert_eq!(send(srv, method, path, "errado", i as u8 + 1).await, (401, refused.clone()), "{method} {path}");
+        assert_eq!(python.hits_to(path), 0, "{method} {path}");
+    }
+}
+
+/// R5-10 (decisão da rodada 3): o convidado com login em `/api/session-defaults`, veja ele as sessões do
+/// dono ou não, leva o 403 uniforme `erro_fora_do_convidado` (sem perder o login); o estranho, o 401.
+#[tokio::test]
+async fn r5_10_a_login_guest_on_the_session_defaults_is_the_uniform_403() {
+    let (python, srv, _home) = with_guests().await;
+    let (refused, guest): (Value, Value) = (serde_json::from_str(REFUSED).unwrap(), serde_json::from_str(GUEST_REFUSED).unwrap());
+    let path = "/api/session-defaults?provider=claude";
+    for method in ["GET", "PUT"] {
+        assert_eq!(send(srv, method, path, SEER, 100).await, (403, guest.clone()), "convidado que vê: {method}");
+        assert_eq!(send(srv, method, path, BLIND, 101).await, (403, guest.clone()), "convidado cego: {method}");
+        assert_eq!(send(srv, method, path, "errado", if method == "GET" { 1 } else { 2 }).await, (401, refused.clone()), "estranho: {method}");
+    }
+    assert_eq!(python.hits_to("/api/session-defaults"), 0);
+}
+
+/// R5-05: o terminal da 8765 com token errado é recusado no aperto de mão com 403 vazio (o `termsock`,
+/// aqui um Python falso), e cada recusa conta para a origem: depois de 8, nem a senha certa abre nada
+/// dela (o terminal segue recusado e o HTTP dá 429), e outra origem segue normal.
+#[tokio::test]
+async fn r5_05_the_terminal_with_a_wrong_token_is_403_empty_counted_and_the_ninth_is_blocked() {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    let terms = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let seen = terms.clone();
+    let app = axum::Router::new().route("/api/sessions/{name}/term", axum::routing::any(move || {
+        let seen = seen.clone();
+        async move { seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst); axum::http::StatusCode::FORBIDDEN }
+    }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let upstream = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let srv = spawn_server(config(upstream, "127.0.0.1")).await;
+    let handshake = |token: &'static str, origin: &'static str| async move {
+        let mut request = format!("ws://{srv}/api/sessions/s0/term?token={token}").into_client_request().unwrap();
+        request.headers_mut().insert("x-forwarded-for", origin.parse().unwrap());
+        match tokio_tungstenite::connect_async(request).await {
+            Err(tokio_tungstenite::tungstenite::Error::Http(response)) => (response.status().as_u16(), response.body().clone().unwrap_or_default()),
+            other => panic!("o aperto de mão não foi recusado: {:?}", other.map(|_| ())),
+        }
+    };
+    const BLOCKED: &str = "198.51.100.200";
+    for _ in 0..8 {
+        assert_eq!(handshake("errado", BLOCKED).await, (403, Vec::new()), "403 vazio no aperto de mão");
+    }
+    assert_eq!(handshake("errado", BLOCKED).await.0, 403, "a nona também");
+    assert_eq!(handshake(OWNER, BLOCKED).await.0, 403, "nem a senha certa abre o terminal da origem bloqueada");
+    let blocked = client().get(format!("http://{srv}/api/presence")).bearer_auth(OWNER).header("x-forwarded-for", BLOCKED).send().await.unwrap();
+    assert_eq!(blocked.status().as_u16(), 429, "a origem está bloqueada");
+    let other = client().get(format!("http://{srv}/api/presence")).bearer_auth(OWNER).header("x-forwarded-for", "198.51.100.201").send().await.unwrap();
+    assert!(!matches!(other.status().as_u16(), 401 | 429), "outra origem segue normal: {}", other.status());
+    assert_eq!(terms.load(std::sync::atomic::Ordering::SeqCst), 10, "quem recusa o terminal é o porteiro dele");
+}
