@@ -531,12 +531,13 @@ async fn hangar_send_reaches_a_peer_through_connect() {
     // `https://pc-…` só existe com o túnel: aqui a entrada de cada máquina é uma porta local.
     point_at(&w.a, "pc-b", &format!("http://{}", w.b.connect));
     point_at(&w.b, "pc-a", &format!("http://{}", w.a.connect));
+    // O `/input` é do Rust (aqui sem registro de sessões): o salto se prova numa rota que o Python ainda atende.
     for (from, to, peer) in [(&w.a, &w.b, "pc-b"), (&w.b, &w.a, "pc-a")] {
         to.python.set_input_reply(Some((StatusCode::OK, json!({"ok": true}))));
         let body = json!({"text": format!("[de: {}::s] oi", from.id), "steer": true});
         let peers = PeerClient::new(PeerBook::new(Some(peers_path(from))));
-        peers.call(peer, reqwest::Method::POST, "/api/sessions/recado/input", Some(&body)).await.unwrap();
-        assert_eq!(to.python.hits_to("/api/sessions/recado/input"), 1, "{peer}");
+        peers.call(peer, reqwest::Method::POST, "/api/diag", Some(&body)).await.unwrap();
+        assert_eq!(to.python.hits_to("/api/diag"), 1, "{peer}");
         assert_eq!(serde_json::from_slice::<Value>(&to.python.last_body()).unwrap(), body);
         assert_eq!(to.python.last_hit().1["authorization"], format!("Bearer {OWNER}").as_str());
     }
@@ -548,7 +549,7 @@ impl OutboxSend for Through {
     fn send<'a>(&'a self, item: &'a OutboxItem) -> BoxFuture<'a, Result<(), PeerError>> {
         Box::pin(async move {
             let body = json!({"text": "da fila"});
-            self.0.call(item.destination(), reqwest::Method::POST, "/api/sessions/fila/input", Some(&body)).await.map(drop)
+            self.0.call(item.destination(), reqwest::Method::POST, "/api/diag", Some(&body)).await.map(drop)
         })
     }
 
@@ -570,14 +571,14 @@ async fn group_outbox_retries_when_peer_is_offline() {
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(outbox.pending(), vec![item], "máquina fora: o item fica");
     assert!(std::fs::read_to_string(groups.join("outbox.json")).unwrap().contains("g1"), "e fica no disco");
-    assert_eq!(w.b.python.hits_to("/api/sessions/fila/input"), 0);
+    assert_eq!(w.b.python.hits_to("/api/diag"), 0);
     point_at(&w.a, "pc-b", &reachable);
     let deadline = Instant::now() + Duration::from_secs(10);
     while !outbox.pending().is_empty() {
         assert!(Instant::now() < deadline, "a fila não andou com a máquina de volta");
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    assert_eq!(w.b.python.hits_to("/api/sessions/fila/input"), 1);
+    assert_eq!(w.b.python.hits_to("/api/diag"), 1);
 }
 
 #[tokio::test]

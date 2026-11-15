@@ -440,7 +440,8 @@ mod kill_target_tests {
             calls.display())).unwrap();
         assert_eq!(MuxProcess::new(&program, TIMEOUT).kill_session("nome").await, Some(true), "saiu");
         let seen = std::fs::read_to_string(&calls).unwrap();
-        let seen: Vec<&str> = seen.lines().map(str::trim).collect();
+        // O Rust põe aspas no argumento com `=` ao chamar um `.cmd`; o `%*` as mostra, mas o argv é o mesmo.
+        let seen: Vec<String> = seen.lines().map(|line| line.trim().replace('"', "")).collect();
         assert_eq!(seen, ["kill-session -t nome", "has-session -t =nome"]);
     }
 }

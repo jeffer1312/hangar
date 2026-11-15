@@ -112,6 +112,13 @@ async fn serve_list(registry: Arc<RuntimeRegistry>, home: &std::path::Path, dirs
     list_env.dirs = hangar_server::list::bridge::parse_dirs(&json!({"home": home, "claude": home.join(".claude"),
         "codex_home": home.join(".codex"), "pi_sessions": home.join(".pi/agent/sessions"), "omp_config": home.join(".omp"),
         "omp_agent": home.join(".omp/agent"), "kimi_home": home.join(".kimi-code")}).to_string()).filter(|_| dirs);
+    // Multiplexador falso sem sessão: sem ele, a máquina sem tmux (o Windows do CI) dá a lista fora do ar.
+    let mux = home.join(if cfg!(windows) { "empty-mux.cmd" } else { "empty-mux" });
+    #[cfg(windows)]
+    std::fs::write(&mux, "@echo off\r\nexit /b 0\r\n").unwrap();
+    #[cfg(unix)]
+    crate::write_executable(&mux, "#!/bin/sh\nexit 0\n");
+    list_env.mux = hangar_server::list::mux::Mux::with_program(&mux, Duration::from_secs(5));
     state.list = Arc::new(hangar_server::list::bridge::ListBridge::new(list_env,
         hangar_server::list::facts::FactsClient::new(upstream, SECRET.into())));
     assert!(state.state.runtime.set(registry).is_ok());
