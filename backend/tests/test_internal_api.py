@@ -6,16 +6,15 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app.api as api_mod
-from app import internal_api, pqueue
+from app import internal_api
 
 SECRET = "ab" * 32
 ROUTE = "/internal/ping"
 
 
 @pytest.fixture(autouse=True)
-def _env(monkeypatch, tmp_path):
+def _env():
     internal_api.set_secret(SECRET)
-    monkeypatch.setattr(pqueue, "_queue_dir", lambda: tmp_path)
     yield
     internal_api.set_secret(None)
 

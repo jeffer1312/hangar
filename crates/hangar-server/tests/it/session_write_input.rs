@@ -1,5 +1,5 @@
 //! `/input` e `/steer` de sessão Claude servidos pelo Rust: o corpo e o código de cada resposta do ator
-//! vêm do golden que o Python gera (`gen_golden.py`), e o resto prova a rota inteira com um cano falso.
+//! vêm do golden congelado (sem gerador), e o resto prova a rota inteira com um cano falso.
 use crate::fake;
 
 use std::path::Path;

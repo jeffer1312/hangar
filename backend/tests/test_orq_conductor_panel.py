@@ -13,7 +13,6 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from app.config import settings
 from orq_contract_client import call
 from orq_http_native import NativeClient
 
@@ -36,7 +35,6 @@ orq_conductor = NativeConductor()
 
 ORQ_PY = Path(__file__).resolve().parents[2] / "skills" / "orquestrar" / "scripts" / "orq.py"
 AGORA = datetime.now().astimezone()
-H = {"Authorization": "Bearer secret"}
 
 
 def _iso(dt: datetime) -> str:
@@ -172,18 +170,6 @@ def test_limiar_do_veto_e_o_mesmo_do_orq():
 
 # ── rotas ───────────────────────────────────────────────────────────────────
 
-@pytest.fixture
-def cli(monkeypatch, tmp_path):
-    monkeypatch.setattr(settings, "auth_token", "secret")
-    from app.api import app
-    return TestClient(app)
-
-
-
-def test_rota_do_condutor_exige_autenticacao(cli):
-    assert cli.get("/api/orq/x/conductor").status_code == 401
-
-
 def test_condutor_valida_caminho_sem_exigir_eventos(monkeypatch, tmp_path):
     client = NativeClient(tmp_path, monkeypatch)
     _systemd(monkeypatch, tmp_path)
@@ -207,20 +193,3 @@ def test_fato_interno_recusa_sem_segredo():
     app = FastAPI()
     app.include_router(internal_api.router)
     assert TestClient(app).get("/internal/orq/x/conductor-facts").status_code == 404
-
-
-def test_rota_do_condutor_connect_repassa_pedido(cli, monkeypatch):
-    from app import account_bridge
-    from fastapi.responses import JSONResponse
-    monkeypatch.setattr(account_bridge, "owner_mode", lambda: "rust")
-    calls = []
-
-    async def forward(request, target, **kwargs):
-        calls.append((request.method, request.url.path, request.url.query, target))
-        assert kwargs == {"limit": None}
-        return JSONResponse({"fixture": True})
-
-    monkeypatch.setattr(account_bridge, "forward_public", forward)
-    answer = cli.get("/api/orq/execução/conductor?limit=3", headers=H)
-    assert answer.status_code == 200 and answer.json() == {"fixture": True}
-    assert calls == [("GET", "/api/orq/execução/conductor", "limit=3", "/__hangar_server/forwarded")]

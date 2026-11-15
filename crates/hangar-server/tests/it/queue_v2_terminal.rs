@@ -97,57 +97,6 @@ fn terminal_v1_prepare_receipt_becomes_durable_generation_proof() {
 }
 
 #[test]
-#[ignore = "exige HANGAR_TEST_PYTHON apontando ao Python do backend"]
-fn terminal_v2_metadata_and_migration_roundtrip_rust_python_rust() {
-    let python=std::env::var_os("HANGAR_TEST_PYTHON").expect("HANGAR_TEST_PYTHON ausente");
-    let dir=tempfile::tempdir().unwrap();let path=dir.path().join("state");let projection=dir.path().join("projection");let lease_path=dir.path().join("lease");
-    std::fs::write(&path,serde_json::to_vec(&legacy("finish_bump")).unwrap()).unwrap();
-    let lease=acquire_lease(&lease_path).unwrap();
-    let mut store=Store::open(&path,&projection,State::new("key",1,"session",vec![])).unwrap();
-    store.exec(1,"rust-recover",clock(),Action::Recover).unwrap();
-    store.exec(1,"native-prepare",clock(),Action::Prepare {id:"native".into(),payload:intent(),entry_id:Some("native-entry".into())}).unwrap();
-    store.exec(1,"native-append",clock(),Action::Append {text:"fixture-input".into(),delivered:false,ts:None,pre_transcript:false,entry_id:Some("native-entry".into())}).unwrap();
-    store.exec(1,"native-dispatch",clock(),Action::BeginDispatch {id:"native".into(),wire_id:"terminal:1:native".into(),staged:false}).unwrap();
-    store.exec(1,"native-finish",clock(),Action::Finish {id:"native".into(),status:Status::Accepted,
-        result:json!({"operation_id":"native","disposition":"accepted","payload":payload()})}).unwrap();
-    drop(store);drop(lease);
-    let script=r#"import sys
-from pathlib import Path
-from app.runtime_queue import QueueStore,initial_state
-from app.runtime_coordinator import WriterLease
-lease=WriterLease(Path(sys.argv[3]))
-try:
- s=QueueStore(Path(sys.argv[1]),Path(sys.argv[2]),initial_state('key',1,'session',[]))
- c={'monotonic_s':10.0,'epoch_s':1800000000.0}
- assert s.state['version']==2
- assert s.state['operations']['root']['entry_materialized'] is True
- assert s.state['operations']['root']['terminal_finalized'] is True
- assert s.state['operations']['native']['result']['payload']['message_id']=='native-id'
- assert 'tool_result' not in s.state['operations']['native']['result']['payload']
- s.exec(1,'python-recover',c,{'kind':'recover'})
- assert s.state['rows'][0]['attempts']==1
- for i in range(270):s.exec(1,f'fill:{i}',c,{'kind':'set_runtime_state','state':{}})
- s.exec(1,'abandon',c,{'kind':'abandon','entry_id':'entry'})
- assert s.exec(1,'remove',c,{'kind':'remove','entry_id':'entry'}) is True
- s.exec(1,'python-recover-again',c,{'kind':'recover'})
- assert [r['id'] for r in s.state['rows']]==['native-entry']
- assert len([k for k in s.state['operations'] if k.startswith('call::')])==256
-finally:lease.close()
-"#;
-    let backend=std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../backend");
-    let output=std::process::Command::new(python).current_dir(backend).args(["-c",script])
-        .args([&path,&projection,&lease_path]).output().unwrap();
-    assert!(output.status.success(),"{}",String::from_utf8_lossy(&output.stderr));
-    let _lease=acquire_lease(&lease_path).unwrap();
-    let mut store=Store::open(&path,&projection,State::new("key",1,"session",vec![])).unwrap();
-    store.exec(1,"rust-recover-again",clock(),Action::Recover).unwrap();
-    assert!(store.state().operations["root"].terminal_finalized && store.state().operations["root"].entry_materialized);
-    assert_eq!(store.state().rows.len(),1);assert_eq!(store.state().rows[0]["id"],"native-entry");
-    assert_eq!(store.state().operations["native"].result["payload"]["message_id"],"native-id");
-    assert!(store.state().next_seq>270);
-}
-
-#[test]
 fn absent_transcript_one_echo_cannot_confirm_two_equal_inputs_after_compact_reopen() {
     use hangar_server::runtime::receipt::ReceiptIndex;
     let dir=tempfile::tempdir().unwrap();let path=dir.path().join("state");let transcript=dir.path().join("absent.jsonl");

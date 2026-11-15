@@ -1,5 +1,5 @@
 //! `/interrupt`, `/keys`, `/term-input`, `/select`, `/select/submit` e as rotas da fila servidos pelo
-//! Rust: o corpo e o código de cada resposta vêm do golden que o Python gera (`gen_golden.py`), e o
+//! Rust: o corpo e o código de cada resposta vêm do golden congelado (sem gerador), e o
 //! resto prova a rota inteira com um cano falso e o plugin falso do Python.
 use crate::fake;
 

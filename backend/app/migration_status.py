@@ -39,9 +39,8 @@ def reason() -> str | None:
 
 
 def _mode() -> str:
-    from app import runtime_coordinator
-    current = runtime_coordinator.current()
-    return current.mode if current is not None else runtime_coordinator._initial_mode
+    # Com a porta pública só do Rust, quem pergunta já o encontrou de pé.
+    return "rust"
 
 
 def _status_memory(text: str) -> tuple[int, int]:

@@ -16,7 +16,7 @@ fn samples_dir() -> PathBuf {
 
 fn samples(prefix: &str) -> Vec<(String, Value)> {
     let mut out: Vec<(String, Value)> = fs::read_dir(samples_dir())
-        .expect("sem amostras: rode backend/tests/fixtures/contract/gen_api_samples.py")
+        .expect("sem amostras congeladas em backend/tests/fixtures/contract/api_samples")
         .map(|entry| entry.unwrap().path())
         .filter(|path| path.file_name().unwrap().to_string_lossy().starts_with(prefix))
         .map(|path| {

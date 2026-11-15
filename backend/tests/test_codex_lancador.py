@@ -27,7 +27,7 @@ from pathlib import Path
 
 import pytest
 
-from app.procinfo import pid_vivo
+from psutil import pid_exists as pid_vivo
 
 _LANCADOR = Path(__file__).resolve().parents[2] / "scripts" / "hangar-codex-tui"
 

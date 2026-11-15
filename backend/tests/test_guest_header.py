@@ -53,17 +53,6 @@ def test_valid_from_loopback_gives_view():
     assert view.kind_of("b") == "pair" and view.kind_of("c") is None
 
 
-def test_guest_row_drops_every_field_that_names_another_session():
-    """BRG-30: grupo e encadeamento citam outras sessões do dono; o convidado não vê nenhum."""
-    from app.models import SessionInfo
-    named = {"pair_peers": ["b", "ana::y"], "pair_gid": "ab12cd34", "pair_task": "T-1",
-             "pair_external": {"alias": "ana", "owner": "Ana", "session": "y"}, "then_target": "c"}
-    row = guest_header.guest_safe(SessionInfo(name="a", cwd="/r", **named))
-    assert all(getattr(row, k) is None for k in named) and (row.name, row.cwd) == ("a", "/r")
-    as_dict = guest_header.guest_safe({"name": "a", "cwd": "/r", **named})
-    assert all(as_dict[k] is None for k in named) and as_dict["cwd"] == "/r"
-
-
 def test_rust_vector_verifies():
     view = guest_header.guest_of(_scope(RUST_VECTOR))
     assert view is not None and view.sessions == {"a": "share", "b": "pair"}

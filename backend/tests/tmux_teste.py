@@ -16,16 +16,21 @@ cp-test-<hash>` orfaos nesta maquina, e no `test_termsock` a sessao sobrevivente
 
 Duas regras, e as duas importam:
 
-1. o alvo sai de `tmux.alvo_de_kill`, a MESMA funcao que o codigo de producao usa — no POSIX
-   continua `=<nome>` (match exato, que e o certo la e defende dos nomes que colidem por prefixo);
+1. o alvo sai de `alvo_de_kill` — no POSIX `=<nome>` (match exato, que e o certo la e defende
+   dos nomes que colidem por prefixo);
 2. o teardown **falha alto** quando a sessao sobrevive. Limpeza silenciosa que nao limpa e como
    teste verde que nao testa: o estrago aparece longe, noutro caso, com outra cara.
 """
+import os
 import subprocess
 import time
 import uuid
 
-from app import tmux
+
+def alvo_de_kill(name: str) -> str:
+    # No Windows o psmux 3.3.7 recusa `-t "=nome"` no kill-session (rc=1 após 5 s) e o nome cru já
+    # é exato lá; no POSIX o `=` evita derrubar a irmã por prefixo.
+    return f"={name}" if os.name == "posix" else name
 
 
 def _base(sock: str | None) -> list[str]:
@@ -41,7 +46,7 @@ def matar_sessao(nome: str, sock: str | None = None) -> None:
     """Mata a sessao e CONFERE que ela saiu. Nao existir ja e sucesso (idempotente, como o
     `tmux.kill_session`); sobreviver e AssertionError, porque a partir dai o proximo caso deste
     arquivo vai falhar por um motivo que nao e o dele."""
-    cp = subprocess.run([*_base(sock), "kill-session", "-t", tmux.alvo_de_kill(nome)],
+    cp = subprocess.run([*_base(sock), "kill-session", "-t", alvo_de_kill(nome)],
                         capture_output=True, text=True, errors="replace")
     if existe_sessao(nome, sock):
         raise AssertionError(

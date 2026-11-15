@@ -4,7 +4,6 @@ import pytest
 
 from app import pair
 from orq_contract_client import roles as op
-from app.models import SessionInfo
 
 
 @pytest.fixture(autouse=True)
@@ -144,7 +143,7 @@ def test_regras_path():
 
 
 def _s(name, ts):
-    return SessionInfo(name=name, last_activity=ts)
+    return {"name": name, "last_activity": ts}
 
 
 def test_casar_viva_exato_e_glob():

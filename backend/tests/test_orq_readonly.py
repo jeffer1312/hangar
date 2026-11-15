@@ -135,36 +135,6 @@ def test_tilde_runtime_inside_code_is_refused_before_the_probe(tmp_path, hangar_
     assert not marker.exists()
 
 
-_SID = "33333333-3333-3333-3333-333333333333"
-_PREFIX = ["/usr/bin/bwrap", "--bind", "/", "/", "--setenv", "HANGAR_ORQ_READ_ONLY", "1", "--"]
-
-
-def _protected_pane(monkeypatch, tmp_path, order):
-    """Pane Claude dentro do bwrap, na conta A, pronto para a troca de conta."""
-    from app import pqueue, registry
-    from app.adapters.claude_headless import sessions
-
-    monkeypatch.setattr(pqueue.settings, "projects_dir", tmp_path / "projects")
-    monkeypatch.setattr(sessions, "_dir", lambda: tmp_path / "hl")
-    monkeypatch.setattr(sessions, "_trocando", {})
-    monkeypatch.setattr(registry.procinfo, "pid_vivo", lambda pid: False)
-    monkeypatch.setattr(registry.tmux, "has_session", lambda _: False)
-    reg = registry.SessionRegistry(str(tmp_path / "projects"))
-    jsonl = tmp_path / "projects" / "x" / f"{_SID}.jsonl"
-    monkeypatch.setattr(reg, "_pane_of", lambda n: {"name": n, "cwd": str(tmp_path), "pid": 999})
-    monkeypatch.setattr(reg, "resolve_tracked", lambda n, c: (str(jsonl), True))
-    monkeypatch.setattr(registry, "_descendant_pids", lambda pid: [999, 1000])
-    monkeypatch.setattr(registry, "_cmdline", lambda pid: " ".join(_PREFIX) if pid == 999 else "claude")
-    monkeypatch.setattr(registry, "agente_do_pane", lambda pid, children=None: ("claude", 1000))
-    monkeypatch.setattr(registry, "_config_dir_of", lambda pid: tmp_path / ".claude-a")
-    monkeypatch.setattr(registry, "_engine_of", lambda pid: None)
-    monkeypatch.setattr(registry.procinfo, "_model_of", lambda pid: ("sonnet", "high"))
-    monkeypatch.setattr(registry.procinfo, "_env_var_of", lambda pid, key: None)
-    monkeypatch.setattr(registry, "_escolhas_status", lambda sid: (None, None))
-    monkeypatch.setattr(registry.tmux, "kill_session", lambda n: order.append("kill") or True)
-    return reg
-
-
 @pytest.mark.skipif(sys.platform != "linux" or not shutil.which("bash"),
                     reason="stub de curl usa executável POSIX")
 @pytest.mark.parametrize("status", [200, 422])

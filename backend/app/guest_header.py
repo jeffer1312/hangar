@@ -58,19 +58,3 @@ def _verify(scope: dict) -> GuestView | None:
     if not isinstance(sessions, dict) or not isinstance(exp, int) or exp < time.time():
         return None
     return GuestView({str(n): str(k) for n, k in sessions.items()})
-
-
-# Campos da lista que citam OUTRAS sessões do dono (pareamento e encadeamento).
-_OTHER_SESSIONS = {"pair_peers": None, "pair_external": None, "pair_task": None, "pair_gid": None,
-                   "then_target": None}
-
-
-def guest_safe(info, guest=None):
-    """Cópia da linha da lista sem os nomes de outras sessões; aceita SessionInfo ou dict do SSE.
-
-    Com `guest`, a linha também diz de que tipo é o acesso a ela (`guest_kind`)."""
-    if isinstance(info, dict):
-        extra = {} if guest is None else {"guest_kind": guest.kind_of(info.get("name"))}
-        return {**info, **_OTHER_SESSIONS, **extra}
-    extra = {} if guest is None else {"guest_kind": guest.kind_of(info.name)}
-    return info.model_copy(update=_OTHER_SESSIONS | extra)

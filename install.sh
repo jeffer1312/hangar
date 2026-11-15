@@ -748,7 +748,6 @@ mark_item backend ok "servidor do Hangar"
 # Sem o par VAPID o push para o celular sai calado e o celular nem se inscreve.
 py_backend -m app.vapid_setup \
   || anota_problema "chaves do push para o celular não geradas — rode: cd backend && uv run python -m app.vapid_setup" push
-nota "psutil NÃO entra aqui: no Linux existe /proc e ele é mais rápido (ver app/procinfo.py)"
 
 # ── Binários Rust (hangar-server e hangar-cano, release server-latest) ───────
 # Sem eles o Python atende a API, mas a tela web e o ditado não: a falta fica como pendência.
@@ -1203,20 +1202,9 @@ fi
 mark_step instalar ok
 mark_step final fazendo
 say "8/8 Checagem de fumaça"
-py_backend -c "from app import api, registry, procinfo" \
+py_backend -c "from app import api" \
   && { ok "o backend importa"; mark_item backend-importa ok "o servidor abre"; } \
   || fail "o backend não importa nesta máquina"
-
-if [ "$(uname -s)" = Linux ]; then
-  py_backend -c "from app import procinfo; assert procinfo._TEM_PROC, 'sem /proc'" \
-    && ok "leitura de processo via /proc funcionando" \
-    || nota "sem /proc — a leitura de processo do backend não vai funcionar"
-else
-  # Sem /proc (macOS) o backend lê processo pelo psutil: a prova é ele ler o próprio.
-  py_backend -c "import os, psutil; psutil.Process(os.getpid()).cmdline()" \
-    && ok "leitura de processo via psutil funcionando" \
-    || nota "o psutil não lê processo nesta máquina — rode: cd backend && uv sync"
-fi
 
 S="cp-fumaca-$$"
 if tmux new-session -d -s "$S" -c /tmp 'sh' 2>/dev/null; then

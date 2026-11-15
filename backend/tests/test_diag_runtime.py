@@ -3,12 +3,12 @@ import asyncio
 import json
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
-from threading import Event, local
+from threading import Event
 from types import SimpleNamespace
 
 import pytest
 
-from app import diag, terminal_input, tmux
+from app import diag, tmux
 
 VERSION_PROBE = diag._versao_mux
 
@@ -17,7 +17,6 @@ VERSION_PROBE = diag._versao_mux
 def isolated_diary(tmp_path, monkeypatch):
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
     monkeypatch.setattr(diag, "_versao_mux", lambda: "psmux 3.3.7", raising=False)
-    monkeypatch.setattr(terminal_input, "_ULTIMA_LIMPEZA", local())
 
 
 def events():
@@ -92,22 +91,6 @@ def test_other_list_failure_is_not_hidden_as_absence(monkeypatch):
     assert "segredo" not in diag.ler_tudo()
 
 
-def test_partial_exports_stage_and_cleanup_without_composer(monkeypatch):
-    pane = "\n".join(["─" * 30, "❯ segredo [Pasted text #3 +2 lines]", "─" * 30, "? for shortcuts"])
-    monkeypatch.setattr(terminal_input, "_capture", lambda name: pane)
-    monkeypatch.setattr(terminal_input, "_limpar_composer", lambda *args: False)
-    text = "segredo\nsegunda linha"
-    assert terminal_input._partial("sessao", "sem prova de colagem", text, {"1"},
-                                   etapa="clipboard.prova", provider="claude") == "partial"
-    row = next(r for r in events() if r["evento"] == "envio.parcial")
-    assert row["etapa"] == "clipboard.prova" and row["provider"] == "claude"
-    assert row["caracteres"] == len(text) and row["linhas"] == 2
-    assert row["composer_legivel"] is True and row["limpou"] is False
-    assert row["pastes_antes"] == 1 and row["pastes_depois"] == 1
-    assert "segredo" not in diag.ler_tudo() and "segunda linha" not in diag.ler_tudo()
-
-
-
 def test_export_identifies_current_environment():
     header = events()[0]
     assert header["mux"] == "psmux 3.3.7"
@@ -149,28 +132,6 @@ def test_slow_success_is_reported_without_output(monkeypatch):
     assert tmux._run(["tmux", "capture-pane"]).stdout == "segredo"
     row = next(r for r in events() if r["evento"] == "mux.comando")
     assert row["nivel"] == "aviso" and row["retorno"] == 0 and row["ms"] >= 1000
-    assert "segredo" not in diag.ler_tudo()
-
-
-@pytest.mark.parametrize("stage", ["sessao_windows", "escrita", "tecla_colar"])
-def test_clipboard_exports_real_failure_stage(monkeypatch, stage):
-    monkeypatch.setattr(tmux, "pane_pid", lambda name: 999)
-    ids = iter([0, 2 if stage == "sessao_windows" else 0])
-    monkeypatch.setattr(tmux, "_sessao_windows_de", lambda pid: next(ids))
-    monkeypatch.setattr(tmux, "RUN", lambda args, **kw: subprocess.CompletedProcess(args, 7 if stage == "escrita" else 0, b"", b"segredo"))
-    monkeypatch.setattr(tmux, "send_keys", lambda *args: False)
-    # os.name altera também pathlib; a pasta do diário já é um Path do host real.
-    base = diag._base()
-    monkeypatch.setattr(diag, "_base", lambda: base)
-    # A trava do clipboard também mora numa pasta do host: resolvida antes de fingir Windows.
-    from app import runtime_terminal
-    lock = runtime_terminal._clipboard_lock_path()
-    monkeypatch.setattr(runtime_terminal, "_clipboard_lock_path", lambda: lock)
-    with monkeypatch.context() as win:
-        win.setattr(tmux.os, "name", "nt")
-        assert tmux.paste_via_clipboard("sessao", "segredo") is False
-    row = next(r for r in events() if r["evento"] == "envio.clipboard")
-    assert row["etapa"] == stage
     assert "segredo" not in diag.ler_tudo()
 
 

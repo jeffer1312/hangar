@@ -87,14 +87,12 @@ server.serve_forever()
 
 @pytest.fixture(autouse=True)
 def isolated_runtime(monkeypatch, tmp_path):
-    from app import runtime_coordinator, runtime_queue, runtime_process
+    from app import runtime_process
     from app import shared_auth
     # Esta suíte mede o Supervisor com executável falso; a DLL real roda em test_shared_auth.
     monkeypatch.setattr(shared_auth, "activate", lambda *args: None)
     monkeypatch.setattr(shared_auth, "current", lambda: None)
     monkeypatch.setattr(shared_auth, "shutdown", lambda: None)
-    monkeypatch.setattr(runtime_coordinator, "_current", None)
-    monkeypatch.setattr(runtime_queue, "_coordinator", None)
     monkeypatch.setattr(runtime_process, "record_path", lambda: tmp_path / "runtime-process.json")
 
 
@@ -552,7 +550,6 @@ def test_main_without_binary_exits_with_an_error(monkeypatch, capsys):
     for name in ("startup_guard", "_setup_diag_logging", "_saida_utf8"):
         monkeypatch.setattr(main, name, lambda *a: None)
     monkeypatch.setattr(main.migracao_sidecars, "migrar", lambda dirs: None)
-    monkeypatch.setattr(main.hook_state, "load_existing", lambda dirs: None)
     monkeypatch.setattr(main.resilient_accept, "install", lambda: None)
     monkeypatch.setattr(main, "_tcp_socket", lambda *a: pytest.fail("sem binário a porta nem é aberta"))
     with pytest.raises(SystemExit) as exit:
@@ -730,12 +727,10 @@ def test_invalid_private_address_is_startup_failure(monkeypatch):
         "protocol":rust_server.RUST_SERVER_PROTOCOL, "instance":instance, "port":1})
     monkeypatch.setattr(rust_server, "_health", lambda host, port: {"protocol":rust_server.RUST_SERVER_PROTOCOL})
     configured = []
-    monkeypatch.setattr(supervisor, "configure_runtime", lambda *args: configured.append(args))
     try:
         assert asyncio.run(supervisor._start()) == "address"
     finally:
         internal_api.set_secret(None)
-    assert configured == [], "endereço privado inválido não liga o Rust com as pontes desligadas"
     async def address():
         return "address"
     async def stop():
@@ -743,36 +738,6 @@ def test_invalid_private_address_is_startup_failure(monkeypatch):
     monkeypatch.setattr(supervisor, "_start", address)
     monkeypatch.setattr(supervisor, "stop", stop)
     assert asyncio.run(supervisor.run()) == "endereco_privado" and configured == ["stop"]
-
-
-def test_terminal_panel_from_rust_health(monkeypatch):
-    from types import SimpleNamespace
-    from app import list_bridge, runtime_coordinator, termsock
-    supervisor = _supervisor(lambda: False)
-    monkeypatch.setattr(rust_server, "_spawn", lambda binary, env: SimpleNamespace(poll=lambda: None, pid=1))
-    monkeypatch.setattr(rust_server, "_runtime_ready", lambda proc, instance: {"type":"runtime_ready",
-        "protocol":rust_server.RUST_SERVER_PROTOCOL, "instance":instance, "port":1})
-    monkeypatch.setattr(supervisor, "configure_runtime", lambda *args: None)
-    health = {"protocol": rust_server.RUST_SERVER_PROTOCOL, "terminal_address": "127.0.0.1:9",
-              "owns": [{"provider": "claude", "headless": True}]}
-    monkeypatch.setattr(rust_server, "_health", lambda host, port: health)
-    try:
-        for panel in (False, True):
-            health["terminal_panel"] = panel
-            supervisor.proc = None
-            assert asyncio.run(supervisor._start()) == "up"
-            monkeypatch.setattr(runtime_coordinator, "_current", SimpleNamespace(mode="rust"))
-            assert termsock.painel_disponivel() is panel, "no modo rust a capacidade é a do Rust"
-            monkeypatch.setattr(runtime_coordinator, "_current", SimpleNamespace(mode="python"))
-            assert termsock.painel_disponivel() is termsock._PTY_POSIX, "na reserva é a do Python"
-        # Sem o campo (ou fora do tipo) a saúde não diz a capacidade: falha de partida, não "sem painel".
-        for bad in (None, "sim"):
-            health["terminal_panel"] = bad
-            supervisor.proc = None
-            assert asyncio.run(supervisor._start()) == "address"
-    finally:
-        internal_api.set_secret(None)
-        list_bridge.configure(None, None)
 
 
 def test_crash_output_keeps_codes_and_drops_the_message(tmp_path):

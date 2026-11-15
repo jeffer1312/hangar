@@ -1,8 +1,4 @@
-"""Checks dos fixes: middleware de body-size, cache no rename, prefixo do _open_jsonl."""
-import os
-from pathlib import Path
-
-import pytest
+"""Checks do middleware de body-size."""
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 from app.api import _BodySizeLimitMiddleware
@@ -37,37 +33,3 @@ def test_body_limit_chunked_sem_content_length():
             yield b"x"
 
     assert c.post("/echo", content=gen()).status_code == 413
-
-
-def test_read_from_nao_consome_linha_parcial(tmp_path):
-    # awatch pode disparar no meio de um append -> a ultima linha vem sem \n. _read_from nao pode
-    # consumi-la (senao a versao completa nunca seria relida). Deve ler so as completas e rebobinar.
-    from app.transcript import TranscriptTailer
-    f = tmp_path / "t.jsonl"
-    completa = '{"type":"user","uuid":"u1","message":{"role":"user","content":"oi"}}\n'
-    parcial = '{"type":"user","uuid":"u2","message":{"role":"user","content":"incompl'
-    f.write_text(completa + parcial, encoding="utf-8")
-    t = TranscriptTailer(f)
-    evs, pos = t._read_from(0)
-    assert [e.id for e in evs] == ["u1"]  # so a completa; a parcial ficou de fora
-    # quando a 2a linha completa, a releitura a partir de `pos` a pega (nao foi consumida pela metade)
-    f.write_text(completa + parcial + 'eto"}}\n', encoding="utf-8")
-    evs2, _ = t._read_from(pos)
-    assert [e.id for e in evs2] == ["u2"]
-
-
-# O duble aqui e o /proc/<pid>/fd (listdir + readlink), que so existe no Linux: fora dele o
-# `_open_jsonl` cai na implementacao psutil e o monkeypatch nao alcanca nada — o caso afirmaria
-# `None == <caminho>` sem ter exercitado a regra. O contrato dos dois ramos vive em procinfo.py,
-# e o irmao via psutil e testado la.
-@pytest.mark.skipif(os.name != "posix", reason="fabrica /proc/<pid>/fd; fora do Linux quem responde e o psutil")
-def test_open_jsonl_rejeita_dir_irmao_com_mesmo_prefixo(monkeypatch):
-    # _open_jsonl nao pode casar um fd que aponta pra dir IRMAO de mesmo prefixo de string
-    # (projects-evil/ vs projects/) -> senao serviria o transcript de outra sessao.
-    import app.registry as reg
-    base = Path("/home/u/.claude/projects")
-    evil = "/home/u/.claude/projects-evil/x.jsonl"  # prefixo de string casa, mas NAO e filho
-    good = "/home/u/.claude/projects/sess/y.jsonl"
-    monkeypatch.setattr(reg.os, "listdir", lambda p: ["0", "1"])
-    monkeypatch.setattr(reg.os, "readlink", lambda p: evil if p.endswith("/0") else good)
-    assert reg._open_jsonl(123, base) == good  # pula o irmao, acha o filho real
