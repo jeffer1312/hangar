@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useFocusEffect } from 'expo-router';
 import { dreamFailure, dreamFirstMatch, getDreamConfig, getDreamStatus, openDreamEvents, stopDream, type DreamConfig, type DreamProgress,
-  type DreamStatus, type Server } from '@hangar/core';
+  type DreamStatus, type EventSourceLike, type Server } from '@hangar/core';
 import { ownServers, useServers } from '../../stores/servers';
 import { toast } from '../../ui/Toast';
 import { haptic } from '../../ui/haptics';
@@ -83,6 +83,13 @@ export function useDream() {
   const sawEvent = useRef(false);
   const ended = useRef<string | null>(null);
   const statusProgress = data?.status.progress ?? null;
+  // Outra máquina sonhando: nada da rodada da anterior vale para ela. Vem antes do efeito do status, que roda
+  // em seguida no mesmo commit e aplica o andamento da máquina nova.
+  const dreamerId = data?.dreamerId;
+  useEffect(() => {
+    latest.current = null; ended.current = null; sawEvent.current = false;
+    setProgress(null); setFinished(null);
+  }, [dreamerId]);
   useEffect(() => {
     if (statusProgress?.run_id && statusProgress.run_id === ended.current) return;
     if (sawEvent.current && (!statusProgress || statusProgress.run_id === latest.current?.run_id)) return;
@@ -96,8 +103,12 @@ export function useDream() {
   useFocusEffect(useCallback(() => {
     const server = dreamerRef.current;
     if (!server) return;
-    sawEvent.current = false;
-    const source = openDreamEvents(server, (next) => {
+    let alive = true;
+    let attempt = 0;
+    let retry: ReturnType<typeof setTimeout> | null = null;
+    let source: EventSourceLike | null = null;
+    const onEvent = (next: DreamProgress | null) => {
+      attempt = 0;
       sawEvent.current = true;
       const before = latest.current;
       latest.current = next;
@@ -105,9 +116,26 @@ export function useDream() {
       if (next) { if (before?.run_id !== next.run_id) setFinished(null); return; }
       // A rodada acabou: o retrato final fica na tela e a lista relê os últimos sonhos.
       if (before) { ended.current = before.run_id; setFinished(before); void loadRef.current(); }
-    });
-    return () => source.close();
-  }, [data?.dreamerId]));
+    };
+    const open = () => {
+      source = openDreamEvents(server, onEvent);
+      // Caiu (rede, servidor reiniciando, silêncio): reabre com espera crescente e relê o status. O `sawEvent`
+      // fica ligado, então o status relido não passa por cima do que o evento já disse.
+      source.onerror = () => {
+        source?.close();
+        source = null;
+        if (!alive || retry) return;
+        retry = setTimeout(() => {
+          retry = null;
+          if (!alive) return;
+          void loadRef.current();
+          open();
+        }, [1000, 2000, 5000, 10000][Math.min(attempt++, 3)]);
+      };
+    };
+    open();
+    return () => { alive = false; if (retry) clearTimeout(retry); source?.close(); };
+  }, [dreamerId]));
   const labelOf = useCallback((machine: string) =>
     servers.find((s) => configs[s.id]?.this_machine === machine)?.label ?? machine, [servers, configs]);
 

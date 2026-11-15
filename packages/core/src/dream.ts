@@ -85,6 +85,9 @@ export function openDreamEvents(server: Server, onProgress: (progress: DreamProg
   const sameOrigin = !!origin && (!base || base === origin);
   const url = `${base}/api/dream/events${sameOrigin ? '' : `?token=${encodeURIComponent(server.token)}`}`;
   const source = apiEnv().createEventSource(url, { withCredentials: sameOrigin });
+  // O servidor manda `ping` a cada 10 s; ouvir o evento é o que rearma o vigia de silêncio do app durante
+  // uma chamada longa do modelo, sem mudança de andamento.
+  source.addEventListener('ping', () => {});
   source.addEventListener('progress', (ev) => {
     // `null` quer dizer "acabou"; só dado vazio ou torto é ignorado.
     if (!ev.data) return;

@@ -69,11 +69,12 @@ export default function Memoria() {
       {d.progress || d.finished ? <ProgressCard live={d.progress} finished={d.finished} busy={busy} onStop={d.stop}
         nextHour={config.enabled ? config.hour : null}
         onChanges={(run) => router.push({ pathname: '/config/memoria-run', params: { run } } as never)}
-        onRetry={() => { if (dreamer) void d.act(() => startDream(dreamer)); }} />
-        : <MachineGroup>
-          <MachineRow title={status.running ? m.dream_running() : m.dream_run_now()} action disabled={busy || !!status.running || !dreamer}
-            onPress={() => { if (dreamer) void d.act(() => startDream(dreamer)); }} />
-        </MachineGroup>}
+        onRetry={() => { if (dreamer) void d.act(() => startDream(dreamer)); }} /> : null}
+      {/* Rodada acabada continua oferecendo outra; só some enquanto uma está no ar. */}
+      {d.progress ? null : <MachineGroup>
+        <MachineRow title={status.running ? m.dream_running() : m.dream_run_now()} action disabled={busy || !!status.running || !dreamer}
+          onPress={() => { if (dreamer) void d.act(() => startDream(dreamer)); }} />
+      </MachineGroup>}
       {status.projects.length ? <SectionCard icon="Folder" title={m.dream_projects()}>
         {status.projects.map((p) => {
           // Com a rodada no ar (ou recém-acabada), a linha diz o que o sonho está fazendo com o projeto.

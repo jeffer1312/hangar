@@ -85,8 +85,13 @@ pub fn begin(run_id: &str, projects: Vec<(String, String)>) {
 }
 
 pub fn end() {
-    PROGRESS.send_replace(None);
+    let last = PROGRESS.send_replace(None);
+    *FINISHED.lock().unwrap_or_else(|e| e.into_inner()) = last;
 }
+
+/// O último retrato da rodada que acabou: o `events` o manda antes do `null`, senão um projeto que
+/// terminou dentro da janela de 300 ms some e a tela nunca vê o resultado.
+pub(crate) static FINISHED: LazyLock<Mutex<Option<Progress>>> = LazyLock::new(Default::default);
 
 pub fn stopping() -> bool {
     *STOP.borrow()
@@ -197,7 +202,7 @@ fn scrub(step: Step) -> Step {
     let clean = |t: String| hangar_dream::secrets::scrub(&t).into_owned();
     match step {
         Step::Text { text } => Step::Text { text: clean(text) },
-        Step::Tool { tool, target, detail } => Step::Tool { tool, target, detail: detail.map(clean) },
+        Step::Tool { tool, target, detail } => Step::Tool { tool, target: target.map(clean), detail: detail.map(clean) },
     }
 }
 
@@ -269,7 +274,8 @@ pub(crate) fn list_calls(dir: &Path, live: bool) -> std::io::Result<Vec<CallMeta
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(out),
         Err(e) => return Err(e),
     };
-    for entry in entries.flatten() {
+    for entry in entries {
+        let entry = entry?;
         let name = entry.file_name().to_string_lossy().into_owned();
         if name.ends_with(".steps.jsonl") || !name.ends_with(".json") {
             continue;

@@ -72,9 +72,12 @@ struct Running;
 
 impl Drop for Running {
     fn drop(&mut self) {
-        *RUNNING.lock().unwrap_or_else(|e| e.into_inner()) = None;
-        // Depois de soltar a marca: quem vê o fim e manda Desfazer na hora não leva `dream_running`.
+        // Marca e andamento caem juntos, com a marca presa: entre os dois, uma rodada nova começaria e
+        // este `end` apagaria o andamento dela. Quem vê o fim já não leva `dream_running`.
+        let mut running = RUNNING.lock().unwrap_or_else(|e| e.into_inner());
+        *running = None;
         progress::end();
+        drop(running);
     }
 }
 

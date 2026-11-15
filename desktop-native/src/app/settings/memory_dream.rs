@@ -259,6 +259,10 @@ struct Calls {
     /// Fase e chamadas feitas do projeto na última releitura da lista: só relê quando mudam.
     seen: Option<(String, usize)>,
     detail_at: Option<std::time::Instant>,
+    /// Detalhe pedido e ainda sem resposta; `detail_dirty` = andou de novo nesse meio tempo, relê quando ela chegar.
+    /// Sem isso, um detalhe mais lento que a cadência seria sempre descartado.
+    detail_pending: bool,
+    detail_dirty: bool,
 }
 
 struct Changes {
@@ -451,8 +455,9 @@ impl DreamPage {
         self.stream_gen += 1;
         let generation = self.stream_gen;
         self.watching = Some(api.clone());
-        // A conexão anterior era de outra máquina: o andamento dela não vale aqui.
+        // A conexão anterior era de outra máquina: o andamento e a rodada terminada dela não valem aqui.
         self.progress = None;
+        self.finished = None;
         let (tx, rx) = async_channel::unbounded::<StreamEvent>();
         self.stream = Some(self.runtime.spawn(progress_stream(api, tx)));
         // A tarefa abortada solta o `tx`: o `recv` falha e este laço acaba junto.
@@ -1435,6 +1440,8 @@ impl Calls {
             detail_seq: 0,
             seen: None,
             detail_at: None,
+            detail_pending: false,
+            detail_dirty: false,
         };
         calls.load_list(window, cx);
         calls
@@ -1468,6 +1475,7 @@ impl Calls {
         let Some(n) = self.pick else { return };
         self.detail_seq += 1;
         self.detail_at = Some(std::time::Instant::now());
+        (self.detail_pending, self.detail_dirty) = (true, false);
         let seq = self.detail_seq;
         let (api, run_id, project) = (self.api.clone(), self.run_id.clone(), self.project.clone());
         run(
@@ -1478,9 +1486,15 @@ impl Calls {
             },
             window,
             cx,
-            move |this, result, _, _| {
-                if seq == this.detail_seq && this.pick == Some(n) {
-                    this.detail = Some(result.map_err(|e| failure_text(&e)));
+            move |this, result, window, cx| {
+                // Resposta de um pedido já trocado (outra chamada escolhida) não vale nem solta o pendente.
+                if seq != this.detail_seq || this.pick != Some(n) {
+                    return;
+                }
+                this.detail = Some(result.map_err(|e| failure_text(&e)));
+                this.detail_pending = false;
+                if this.detail_dirty {
+                    this.load_detail(window, cx);
                 }
             },
         );
@@ -1501,7 +1515,11 @@ impl Calls {
         let picked_running = self.detail.as_ref().and_then(|d| d.as_ref().ok()).is_none_or(|d| d.meta.status == "running");
         let due = self.detail_at.is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(2));
         if picked_running && (ended || due) {
-            self.load_detail(window, cx);
+            if self.detail_pending {
+                self.detail_dirty = true;
+            } else {
+                self.load_detail(window, cx);
+            }
         }
     }
 

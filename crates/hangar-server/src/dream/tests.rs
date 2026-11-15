@@ -266,7 +266,8 @@ async fn recorded_calls_show_steps_without_secrets_and_a_dead_round_reads_as_int
     let key = format!("sk-ant-api03-{}", "x".repeat(40));
     let write = json!({"type":"assistant","message":{"content":[
         {"type":"text","text":"Há um fato novo."},
-        {"type":"tool_use","name":"Write","input":{"file_path": work.join("memory/deploy.md"), "content": format!("token {key}")}}]}});
+        {"type":"tool_use","name":"Write","input":{"file_path": work.join("memory/deploy.md"), "content": format!("token {key}")}},
+        {"type":"tool_use","name":"Grep","input":{"pattern": key.clone()}}]}});
     let read_result = json!({"type":"user","message":{"content":[{"type":"tool_result","content":"USER: conversa inteira"}]}});
     let done = recorder.started(CallKind::Analyzer, "s0-p0.txt", "claude-haiku-5-5", "PEDIDO");
     recorder.line(done, &write.to_string());
@@ -279,7 +280,7 @@ async fn recorded_calls_show_steps_without_secrets_and_a_dead_round_reads_as_int
     assert_eq!(status, 200, "{body}");
     let calls = body["calls"].as_array().unwrap();
     assert_eq!(calls.len(), 2);
-    assert_eq!((calls[0]["status"].as_str(), calls[0]["steps"].as_u64(), calls[0]["cost_usd"].as_f64()), (Some("done"), Some(2), Some(0.04)));
+    assert_eq!((calls[0]["status"].as_str(), calls[0]["steps"].as_u64(), calls[0]["cost_usd"].as_f64()), (Some("done"), Some(3), Some(0.04)));
     assert!(calls[0].get("prompt").is_none(), "{body}");
     assert_eq!((calls[1]["status"].as_str(), calls[1]["error"].as_str()), (Some("failed"), Some("dream_interrupted")));
 

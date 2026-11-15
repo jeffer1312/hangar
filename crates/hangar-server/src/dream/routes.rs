@@ -298,16 +298,33 @@ async fn status(st: &Arc<AppState>) -> Response {
 fn events() -> Response {
     use axum::response::sse::{Event, KeepAlive, Sse};
     use axum::response::IntoResponse;
+    use futures_util::StreamExt;
     let rx = progress::PROGRESS.subscribe();
-    let stream = futures_util::stream::unfold((rx, true), |(mut rx, first)| async move {
+    let event = |value: &Option<progress::Progress>| {
+        let data = serde_json::to_string(value).unwrap_or_else(|_| "null".into());
+        Ok::<_, std::convert::Infallible>(Event::default().event("progress").data(data))
+    };
+    let stream = futures_util::stream::unfold((rx, true), move |(mut rx, first)| async move {
         if !first {
             rx.changed().await.ok()?;
             tokio::time::sleep(Duration::from_millis(300)).await;
         }
-        let data = serde_json::to_string(&*rx.borrow_and_update()).unwrap_or_else(|_| "null".into());
-        Some((Ok::<_, std::convert::Infallible>(Event::default().event("progress").data(data)), (rx, false)))
-    });
-    Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(10))).into_response()
+        let current = rx.borrow_and_update().clone();
+        let mut out = Vec::new();
+        // A rodada acabou: o retrato final vai antes do `null`, que sozinho apagaria o resultado.
+        if !first && current.is_none() {
+            if let Some(last) = progress::FINISHED.lock().unwrap_or_else(|e| e.into_inner()).clone() {
+                out.push(event(&Some(last)));
+            }
+        }
+        out.push(event(&current));
+        Some((futures_util::stream::iter(out), (rx, false)))
+    })
+    .flatten();
+    // Evento com nome: comentário de keep-alive não chega ao app, e o leitor do celular fecha o canal
+    // depois de um tempo sem evento, no meio de uma chamada longa sem mudança.
+    let ping = Event::default().event("ping").data("1");
+    Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(10)).event(ping)).into_response()
 }
 
 fn stop() -> Response {

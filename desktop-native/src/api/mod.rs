@@ -775,7 +775,8 @@ impl Api {
         let req = self.client.get(self.server_url(path, &[])).header(header::ACCEPT, "text/event-stream");
         let r = tokio::time::timeout(Duration::from_secs(15), req.send()).await
             .map_err(|_| Failure::transport(false))?.map_err(|_| Failure::transport(false))?;
-        let r = self.checked(r, false).await?;
+        // Sucesso volta sem ler o corpo; o prazo só pega o corpo de erro que nunca termina, e o fluxo segue sem prazo.
+        let r = tokio::time::timeout(Duration::from_secs(15), self.checked(r, false)).await.map_err(|_| Failure::transport(false))??;
         if !r.headers().get(header::CONTENT_TYPE).and_then(|h| h.to_str().ok()).unwrap_or("").starts_with("text/event-stream") {
             return Err(Failure::local("invalid_response"));
         }
