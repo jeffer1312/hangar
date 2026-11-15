@@ -200,7 +200,6 @@ async def _contas_pelo_rust(request: Request, call_next):
 @app.middleware("http")
 async def _worktrees_pelo_rust(request: Request, call_next):
     """Nas portas do Python, worktrees seguem ao mesmo dono das políticas e da classificação."""
-    from app import account_bridge
     path, method = request.url.path, request.method
     owned = (method == "GET" and path in {"/api/worktrees", "/api/worktrees/detail", "/api/worktrees/settings"}
              or method == "PUT" and path == "/api/worktrees/settings"
