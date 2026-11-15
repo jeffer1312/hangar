@@ -488,6 +488,7 @@ fn write_executable(path: &Path, content: impl AsRef<[u8]>) {
     std::fs::remove_file(&source).unwrap();
 }
 
+#[cfg(unix)]
 fn raw_list(root: &Path, agent: bool) -> Arc<hangar_server::list::bridge::ListBridge> {
     std::fs::write(root.join("alive"), b"1").unwrap();
     if agent {
