@@ -770,6 +770,18 @@ impl Api {
         self.checked(r, false).await?.json().await.map_err(|_| Failure::local("invalid_response"))
     }
 
+    /// SSE avulso do servidor (o andamento do sonho), já conferido; quem chama lê os eventos.
+    pub async fn server_events(&self, path: &[&str]) -> Result<Response, Failure> {
+        let req = self.client.get(self.server_url(path, &[])).header(header::ACCEPT, "text/event-stream");
+        let r = tokio::time::timeout(Duration::from_secs(15), req.send()).await
+            .map_err(|_| Failure::transport(false))?.map_err(|_| Failure::transport(false))?;
+        let r = self.checked(r, false).await?;
+        if !r.headers().get(header::CONTENT_TYPE).and_then(|h| h.to_str().ok()).unwrap_or("").starts_with("text/event-stream") {
+            return Err(Failure::local("invalid_response"));
+        }
+        Ok(r)
+    }
+
     /// Como `server_read`, com o valor de um cabeçalho da resposta (o total de conversas da busca).
     pub async fn server_read_header(&self, path: &[&str], query: &[(&str, &str)], seconds: u64, header: &str)
         -> Result<(Value, Option<String>), Failure> {

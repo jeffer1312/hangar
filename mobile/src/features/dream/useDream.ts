@@ -1,6 +1,7 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useFocusEffect } from 'expo-router';
-import { dreamFailure, dreamFirstMatch, getDreamConfig, getDreamStatus, type DreamConfig, type DreamStatus, type Server } from '@hangar/core';
+import { dreamFailure, dreamFirstMatch, getDreamConfig, getDreamStatus, openDreamEvents, stopDream, type DreamConfig, type DreamProgress,
+  type DreamStatus, type Server } from '@hangar/core';
 import { ownServers, useServers } from '../../stores/servers';
 import { toast } from '../../ui/Toast';
 import { haptic } from '../../ui/haptics';
@@ -71,6 +72,29 @@ export function useDream() {
   }, [load]);
 
   const dreamer: Server | null = data ? servers.find((s) => s.id === data.dreamerId) ?? null : null;
+
+  // Andamento ao vivo da máquina que sonha, só com a tela em foco. `finished` guarda o retrato da rodada
+  // que acabou enquanto a tela estava aberta: é ele que mostra "Sonhou há…" ou "O sonho parou".
+  const [progress, setProgress] = useState<DreamProgress | null>(null);
+  const [finished, setFinished] = useState<DreamProgress | null>(null);
+  const latest = useRef<DreamProgress | null>(null);
+  const statusProgress = data?.status.progress ?? null;
+  useEffect(() => { latest.current = statusProgress; setProgress(statusProgress); }, [statusProgress]);
+  const dreamerRef = useRef(dreamer);
+  dreamerRef.current = dreamer;
+  useFocusEffect(useCallback(() => {
+    const server = dreamerRef.current;
+    if (!server) return;
+    const source = openDreamEvents(server, (next) => {
+      const before = latest.current;
+      latest.current = next;
+      setProgress(next);
+      if (next) { if (before?.run_id !== next.run_id) setFinished(null); return; }
+      // A rodada acabou: o retrato final fica na tela e a lista relê os últimos sonhos.
+      if (before) { setFinished(before); void load(); }
+    });
+    return () => source.close();
+  }, [data?.dreamerId, load]));
   const labelOf = useCallback((machine: string) =>
     servers.find((s) => configs[s.id]?.this_machine === machine)?.label ?? machine, [servers, configs]);
 
@@ -95,8 +119,14 @@ export function useDream() {
     }
   }, [load]);
 
+  const stop = useCallback(() => {
+    const server = dreamerRef.current;
+    if (server) void act(() => stopDream(server));
+  }, [act]);
+
   return {
     servers, dreamer, labelOf, act, busy, loading, refreshing, refresh, error, reload: load, failures,
     configs, config: dreamer ? configs[dreamer.id] ?? null : null, status: data?.status ?? null,
+    progress, finished, stop,
   };
 }

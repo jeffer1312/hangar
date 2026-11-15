@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use super::inventory::{self, SessionRef};
+use super::progress::{self, NoteCounts, Recorder, Status};
 use super::{load_config, load_state, peers, this_machine, Paths, RUNNING};
 use crate::routes::AppState;
 
@@ -72,6 +73,8 @@ struct Running;
 impl Drop for Running {
     fn drop(&mut self) {
         *RUNNING.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        // Depois de soltar a marca: quem vê o fim e manda Desfazer na hora não leva `dream_running`.
+        progress::end();
     }
 }
 
@@ -80,6 +83,7 @@ fn begin() -> Result<(String, Running), String> {
     if running.is_some() {
         return Err("dream_running".into());
     }
+    progress::STOP.send_replace(false);
     let suffix: u16 = rand_u16();
     let run_id = format!("{}-{suffix:04x}", Utc::now().format("%Y%m%d-%H%M%S"));
     *running = Some(run_id.clone());
@@ -135,32 +139,73 @@ async fn execute(st: &Arc<AppState>, opts: &Options, run_id: &str) -> Result<(),
     let accounts = weekly(st).await;
     let account_dirs = claude_account_dirs(st);
 
+    let groups: Vec<(String, Vec<(String, SessionRef)>)> = groups
+        .into_iter()
+        .filter(|(pid, _)| opts.project.as_ref().is_none_or(|p| p == pid))
+        .filter(|(pid, _)| state.projects.get(pid).is_none_or(|p| p.enabled))
+        .collect();
+    let mut listed: Vec<(String, String)> = groups.iter().map(|(pid, _)| (pid.clone(), project_name(pid).to_string())).collect();
+    let user_listed = config.user_memory;
+    if user_listed {
+        listed.push((progress::USER_PROJECT.into(), progress::USER_PROJECT.into()));
+    }
+    progress::begin(run_id, listed);
+
     let mut dreamt = false;
-    for (pid, list) in groups {
-        if opts.project.as_ref().is_some_and(|p| p != &pid) {
+    for (idx, (pid, list)) in groups.into_iter().enumerate() {
+        if progress::stopping() {
+            progress::project(idx, |p| p.status = Status::Stopped);
             continue;
         }
         let ps = state.projects.entry(pid.clone()).or_default().clone();
-        if !ps.enabled {
-            continue;
-        }
         let ctx = Ctx { st, config: &config, me: &me, run_id, now, accounts: &accounts, account_dirs: &account_dirs, scrub: &scrub, paths: &paths };
-        match dream_one(&ctx, &mut state, &pid, &ps, list, opts.forced).await {
-            Ok(done) => dreamt |= done,
+        progress::project(idx, |p| p.status = Status::Reading);
+        match dream_one(&ctx, &mut state, &pid, &ps, list, opts.forced, idx).await {
+            Ok(Some(notes)) => {
+                dreamt = true;
+                let error = state.projects.get(&pid).and_then(|p| p.last_error.clone());
+                progress::project(idx, |p| {
+                    p.status = if error.is_some() { Status::Failed } else { Status::Done };
+                    p.error = error;
+                    p.notes = Some(notes);
+                });
+            }
+            Ok(None) => progress::project(idx, |p| p.status = Status::Skipped),
             Err(e) => {
-                st.diag.record_line(json!({"evento": "dream.project_failed", "nivel": "aviso", "projeto": pid, "codigo": super::code_of(&e)}));
-                state.projects.entry(pid.clone()).or_default().last_error = Some(super::code_of(&e));
+                let code = super::code_of(&e);
+                st.diag.record_line(json!({"evento": "dream.project_failed", "nivel": "aviso", "projeto": pid, "codigo": code}));
+                state.projects.entry(pid.clone()).or_default().last_error = Some(code.clone());
+                progress::project(idx, |p| {
+                    p.status = if code == "dream_stopped" { Status::Stopped } else { Status::Failed };
+                    p.error = Some(code);
+                });
             }
         }
         state.save(&paths.state()).map_err(|e| format!("dream_state_unwritable: {e}"))?;
     }
-    if config.user_memory && (dreamt || (opts.forced && opts.project.is_none())) {
+    let user_idx = user_listed.then(|| progress::PROGRESS.borrow().as_ref().map_or(0, |p| p.projects.len() - 1));
+    if let Some(idx) = user_idx {
         let ctx = Ctx { st, config: &config, me: &me, run_id, now, accounts: &accounts, account_dirs: &account_dirs, scrub: &scrub, paths: &paths };
-        if let Err(e) = user_pass(&ctx, &mut state).await {
-            st.diag.record_line(json!({"evento": "dream.user_failed", "nivel": "aviso", "codigo": super::code_of(&e)}));
+        if progress::stopping() {
+            progress::project(idx, |p| p.status = Status::Stopped);
+        } else if dreamt || (opts.forced && opts.project.is_none()) {
+            match user_pass(&ctx, &mut state, idx).await {
+                Ok(()) => progress::project(idx, |p| p.status = Status::Done),
+                Err(e) => {
+                    let code = super::code_of(&e);
+                    st.diag.record_line(json!({"evento": "dream.user_failed", "nivel": "aviso", "codigo": code}));
+                    progress::project(idx, |p| {
+                        p.status = if code == "dream_stopped" { Status::Stopped } else { Status::Failed };
+                        p.error = Some(code);
+                    });
+                }
+            }
+        } else {
+            progress::project(idx, |p| p.status = Status::Skipped);
         }
     }
-    if !opts.forced {
+    // Rodada da noite parada não conta como sonhada: o que ficou volta no próximo horário.
+    if !opts.forced && !progress::stopping() {
         state.last_round_at = Some(now);
     }
     state.save(&paths.state()).map_err(|e| format!("dream_state_unwritable: {e}"))
@@ -262,8 +307,16 @@ struct Piece {
     end: usize,
 }
 
-/// Sonha um projeto. `Ok(false)` = nada a fazer (menos de 3 sessões novas).
-async fn dream_one(ctx: &Ctx<'_>, state: &mut State, pid: &str, ps: &ProjectState, list: Vec<(String, SessionRef)>, forced: bool) -> Result<bool, String> {
+/// Sonha um projeto. `Ok(None)` = nada a fazer (menos de 3 sessões novas); senão, as notas que mudaram.
+async fn dream_one(
+    ctx: &Ctx<'_>,
+    state: &mut State,
+    pid: &str,
+    ps: &ProjectState,
+    list: Vec<(String, SessionRef)>,
+    forced: bool,
+    idx: usize,
+) -> Result<Option<NoteCounts>, String> {
     let st = ctx.st;
     let mut pieces = Vec::new();
     let mut places: BTreeSet<(String, String)> = BTreeSet::new();
@@ -296,7 +349,7 @@ async fn dream_one(ctx: &Ctx<'_>, state: &mut State, pid: &str, ps: &ProjectStat
         }
     }
     if pieces.is_empty() || (pieces.len() < 3 && !forced) {
-        return Ok(false);
+        return Ok(None);
     }
 
     let limits = Limits { project_cap_usd: ctx.config.project_cap_usd, month_cap_usd: ctx.config.month_cap_usd };
@@ -364,7 +417,9 @@ async fn dream_one(ctx: &Ctx<'_>, state: &mut State, pid: &str, ps: &ProjectStat
         Plan::Account { dir, .. } => Some(Auth::Account(dir)),
         _ => None,
     };
-    let payer = run::Payer::new(auth, &on_no_credit);
+    progress::project(idx, |p| p.calls_total = inputs.len() + 1);
+    let recorder = Recorder::new(progress::calls_dir(&ctx.paths.runs(), ctx.run_id, pid), workdir.path(), idx);
+    let payer = run::Payer::new(auth, &on_no_credit).observed(&recorder);
     let job = run::Job { workdir: workdir.path(), base: &base, inputs: &inputs, cap_usd: cap, scrub: ctx.scrub };
     let outcome = run::dream_project(&job, &payer, &model).await;
     let spent = payer.spent();
@@ -374,6 +429,8 @@ async fn dream_one(ctx: &Ctx<'_>, state: &mut State, pid: &str, ps: &ProjectStat
         month.account_usd += spent.account_usd;
     }
     let outcome = outcome.map_err(|e| e.to_string())?;
+    // Daqui em diante o Parar não interrompe: gravar pela metade deixaria lugares sem Desfazer.
+    progress::project(idx, |p| p.status = Status::Writing);
 
     let mut changes = Vec::new();
     for (mut change, digest) in snapshots {
@@ -424,7 +481,7 @@ async fn dream_one(ctx: &Ctx<'_>, state: &mut State, pid: &str, ps: &ProjectStat
     entry.last_error = failure;
     st.diag.record_line(json!({"evento": "dream.project_done", "nivel": "info", "projeto": pid, "custo_usd": cost,
         "notas": outcome.files.len(), "aposentadas": outcome.retired, "sessoes": picked.len()}));
-    Ok(true)
+    Ok(Some(NoteCounts::between(&base, &outcome.files)))
 }
 
 /// `None` com todas as pastas gravadas; senão o primeiro código e as máquinas que falharam
@@ -465,8 +522,16 @@ pub(super) fn save_record(paths: &Paths, record: &RunRecord) -> Result<(), Strin
 
 /// `git:a/b-c` e `git:a/b/c` dão o mesmo nome limpo: o hash do id separa os dois registros.
 fn record_file(project: &str) -> String {
+    format!("{}.json", project_stem(project))
+}
+
+pub(crate) fn project_stem(project: &str) -> String {
     let hash = sha1_smol::Sha1::from(project).digest().to_string();
-    format!("{}-{}.json", sanitize(project), &hash[..12])
+    format!("{}-{}", sanitize(project), &hash[..12])
+}
+
+pub(crate) fn project_name(id: &str) -> &str {
+    id.rsplit(['/', ':']).next().unwrap_or(id)
 }
 
 pub(crate) fn load_records(paths: &Paths, run_id: &str) -> Result<Vec<RunRecord>, String> {
@@ -521,7 +586,7 @@ pub(crate) fn write_user_memory(target: &Path, content: &str, expect: Option<&st
 }
 
 /// Notas `user`/`feedback` de todos os projetos desta máquina viram o arquivo global.
-async fn user_pass(ctx: &Ctx<'_>, state: &mut State) -> Result<(), String> {
+async fn user_pass(ctx: &Ctx<'_>, state: &mut State, idx: usize) -> Result<(), String> {
     let st = ctx.st;
     let base = st.accounts.env.claude_base.clone();
     let scan = base.clone();
@@ -557,7 +622,9 @@ async fn user_pass(ctx: &Ctx<'_>, state: &mut State) -> Result<(), String> {
     let workdir = tempfile::Builder::new().prefix("user-").tempdir_in(ctx.paths.work()).map_err(|e| format!("dream_io: {e}"))?;
     let model = super::cli::ClaudeModel { accounts: st.accounts.clone(), api_key: ctx.config.api_key.clone() };
     let none = || None;
-    let payer = run::Payer::new(auth, &none);
+    progress::project(idx, |p| p.calls_total = 1);
+    let recorder = Recorder::new(progress::calls_dir(&ctx.paths.runs(), ctx.run_id, progress::USER_PROJECT), workdir.path(), idx);
+    let payer = run::Payer::new(auth, &none).observed(&recorder);
     let job = run::UserJob { workdir: workdir.path(), notes: &notes, claude_md: &claude_md, current: &current, cap_usd: cap, scrub: ctx.scrub };
     let outcome = run::dream_user(&job, &payer, &model).await;
     let spent = payer.spent();

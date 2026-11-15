@@ -20,6 +20,9 @@ export default function MemoriaProject() {
   // Juntado a outro, o projeto sai da lista do servidor: a tela dele não tem mais o que mostrar.
   const pair = (alias_of: string) => void patch({ alias_of }).then((ok) => { if (ok) router.back(); });
   const modes = [{ id: 'key', title: m.dream_mode_key() }, { id: 'account', title: m.dream_mode_account() }] as const;
+  // A rodada no ar, quando o projeto está nela; senão a última que o sonhou.
+  const live = d.progress?.projects.some((p) => p.id === id) ? d.progress.run_id : null;
+  const callsRun = live ?? project?.last_run_id ?? null;
 
   return <Pagina refreshControl={<RefreshControl refreshing={d.refreshing} onRefresh={() => void d.refresh()} />}>
     <Stack.Screen options={{ title: project?.name ?? m.dream_projects() }} />
@@ -44,6 +47,8 @@ export default function MemoriaProject() {
           onPress={() => { if (dreamer) void d.act(() => startDream(dreamer, project.id)); }} />
         {project.last_run_id ? <TapRow title={m.dream_changes()}
           onPress={() => router.push({ pathname: '/config/memoria-run', params: { run: project.last_run_id, project: project.id } } as never)} /> : null}
+        {callsRun ? <TapRow title={m.dream_calls_open()}
+          onPress={() => router.push({ pathname: '/config/memoria-calls', params: { run: callsRun, project: project.id } } as never)} /> : null}
       </MachineGroup>
     </> : null}
   </Pagina>;

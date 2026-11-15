@@ -243,3 +243,60 @@ async fn run_now_is_refused_off_the_dreamer() {
     let (status, body) = call(&st, "POST", "/api/dream/run", json!({})).await;
     assert_eq!(status, 409, "{body}");
 }
+
+#[tokio::test]
+async fn stop_without_a_round_is_refused() {
+    let _t = TESTS.lock().await;
+    let home = tempfile::tempdir().unwrap();
+    let st = state(home.path());
+    let (status, body) = call(&st, "POST", "/api/dream/stop", json!({})).await;
+    assert_eq!(status, 409, "{body}");
+    assert_eq!(body["detail"]["code"], "dream_not_running", "{body}");
+}
+
+#[tokio::test]
+async fn recorded_calls_show_steps_without_secrets_and_a_dead_round_reads_as_interrupted() {
+    use hangar_dream::run::{CallKind, Observer};
+    let _t = TESTS.lock().await;
+    let home = tempfile::tempdir().unwrap();
+    let st = state(home.path());
+    let (run_id, project) = ("20261115-090000-abcd", "git:github.com/a/b");
+    let work = home.path().join("work");
+    let recorder = super::progress::Recorder::new(super::progress::calls_dir(&super::Paths::of(&st).runs(), run_id, project), &work, 0);
+    let key = format!("sk-ant-api03-{}", "x".repeat(40));
+    let write = json!({"type":"assistant","message":{"content":[
+        {"type":"text","text":"Há um fato novo."},
+        {"type":"tool_use","name":"Write","input":{"file_path": work.join("memory/deploy.md"), "content": format!("token {key}")}}]}});
+    let read_result = json!({"type":"user","message":{"content":[{"type":"tool_result","content":"USER: conversa inteira"}]}});
+    let done = recorder.started(CallKind::Analyzer, "s0-p0.txt", "claude-haiku-5-5", "PEDIDO");
+    recorder.line(done, &write.to_string());
+    recorder.line(done, &read_result.to_string());
+    recorder.finished(done, Some(0.04), None);
+    let open = recorder.started(CallKind::Organizer, "organizer", "claude-sonnet-5-5", "ORGANIZAR");
+
+    let q = form_urlencoded::byte_serialize(project.as_bytes()).collect::<String>();
+    let (status, body) = call(&st, "GET", &format!("/api/dream/runs/{run_id}/calls?project={q}"), Value::Null).await;
+    assert_eq!(status, 200, "{body}");
+    let calls = body["calls"].as_array().unwrap();
+    assert_eq!(calls.len(), 2);
+    assert_eq!((calls[0]["status"].as_str(), calls[0]["steps"].as_u64(), calls[0]["cost_usd"].as_f64()), (Some("done"), Some(2), Some(0.04)));
+    assert!(calls[0].get("prompt").is_none(), "{body}");
+    assert_eq!((calls[1]["status"].as_str(), calls[1]["error"].as_str()), (Some("failed"), Some("dream_interrupted")));
+
+    let (status, body) = call(&st, "GET", &format!("/api/dream/runs/{run_id}/calls/{done}?project={q}"), Value::Null).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["prompt"], "PEDIDO");
+    assert_eq!(body["steps"][0], json!({"kind": "text", "text": "Há um fato novo."}));
+    assert_eq!(body["steps"][1]["target"], "memory/deploy.md");
+    let text = body.to_string();
+    assert!(!text.contains(&key) && !text.contains("conversa inteira"), "{text}");
+    let (status, _) = call(&st, "GET", &format!("/api/dream/runs/{run_id}/calls/{}?project={q}", open + 7), Value::Null).await;
+    assert_eq!(status, 404);
+}
+
+#[test]
+fn note_counts_compare_before_and_after() {
+    let before = std::collections::BTreeMap::from([("a.md".to_string(), "1".to_string()), ("b.md".to_string(), "2".to_string())]);
+    let after = std::collections::BTreeMap::from([("a.md".to_string(), "1".to_string()), ("b.md".to_string(), "3".to_string()), ("c.md".to_string(), "4".to_string())]);
+    assert_eq!(super::progress::NoteCounts::between(&before, &after), super::progress::NoteCounts { new: 1, changed: 1, removed: 0 });
+}
