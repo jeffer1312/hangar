@@ -379,6 +379,11 @@ async fn not_codex(st: &Arc<AppState>, name: &str, req: Request) -> Response {
     };
     if orphan {
         if route == "limits" { return reply(limits_answer(&Err(RuntimeError::new("codex_sidecar_invalid", "sem dono no Rust")))); }
+        // Ler o modo não digita nada: vem do arquivo, como o `modos_para_tela` do Python.
+        if route == "codex-permissions" && !post {
+            let meta = asleep_sidecar(st, name).await;
+            return reply((StatusCode::OK, permission_modes(meta.get("permission_mode").and_then(Value::as_str))));
+        }
         tracing::warn!(session = %name, route = %route, code = "codex_sidecar_invalid", "rota do Codex num arquivo de sessão sem dono no Rust; nada foi enviado");
         return reply(refused());
     }

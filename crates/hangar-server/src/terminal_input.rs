@@ -1853,7 +1853,7 @@ pub(crate) fn native_envelope(descriptor: &NativeMessage, text: &str, id: &str) 
     let mut bytes = serde_json::to_vec(&serde_json::json!({"msgV":1,"msg_id":id,"type":"user","message":{"role":"user","content":content},"priority":"next","from":descriptor.origin})).unwrap();
     bytes.push(b'\n'); bytes
 }
-fn allowed_key(key: &str, interactive: bool) -> Option<&str> {
+pub(crate) fn allowed_key(key: &str, interactive: bool) -> Option<&str> {
     match key {
         "Up"|"Down"|"Left"|"Right"|"Enter"|"Escape"|"Tab"|"BTab"|"Space" => Some(key),
         "PageUp" => Some("PPage"), "PageDown" => Some("NPage"),

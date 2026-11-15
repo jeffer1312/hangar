@@ -71,6 +71,10 @@ pub(crate) async fn refusal(st: &AppState, name: &str, route: WriteRoute, body: 
             let missing = InteractionError::Missing;
             return (missing.status(), detail_body(missing.code(), missing.message(), json!({})));
         }
+        Keys | TermInput => {
+            let key = serde_json::from_slice::<Value>(body).ok().and_then(|value| value["key"].as_str().map(str::to_owned));
+            if let Some(refused) = super::control::key_refused(key.as_deref(), route == TermInput) { return refused; }
+        }
         _ => {}
     }
     let deps = Deps::of(st);

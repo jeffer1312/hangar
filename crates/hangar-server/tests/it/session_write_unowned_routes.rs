@@ -121,7 +121,9 @@ async fn writes_to_claude_login_or_raw_codex_never_type_into_the_pane() {
     let login = rig.tmux(&["capture-pane", "-p", "-t", "=lg1:"]);
     for name in ["cx", "lg1"] {
         assert_eq!(post(&rig, &format!("{name}/steer"), "").await, unbound(), "{name} steer");
-        assert_eq!(post(&rig, &format!("{name}/select"), r#"{"option":1,"interaction_id":"i-1"}"#).await.0, 503, "{name} select");
+        // R2-20: o código e o detalhe da opção não enviada, não só o status.
+        assert_eq!(post(&rig, &format!("{name}/select"), r#"{"option":1,"interaction_id":"i-1"}"#).await,
+            (503, detail("erro_opcao_nao_convergiu", "não consegui responder pelo terminal — opção NÃO enviada", json!({"detalhe": MSG_UNBOUND}))), "{name} select");
         for (route, body) in PANE_ROUTES {
             assert_eq!(post(&rig, &format!("{name}/{route}"), body).await, unbound(), "{name} {route}");
         }
@@ -129,4 +131,46 @@ async fn writes_to_claude_login_or_raw_codex_never_type_into_the_pane() {
     assert_eq!(rig.tui("cx", "keys.jsonl"), Vec::<Value>::new(), "a TUI do Codex cru não leu nada");
     assert_eq!(rig.tmux(&["capture-pane", "-p", "-t", "=lg1:"]), login, "nada digitado no login");
     assert_eq!(rig.queue("cx"), None, "nenhuma linha na fila");
+}
+
+// R2-23, R2-24 (`api.py:2746,2760`, `key not allowed`): num nome sem dono no Rust (sem sessão, shell, Codex
+// cru), tecla fora da lista é o 400 da validação antes da recusa do vínculo, e nada é digitado.
+#[tokio::test]
+async fn a_key_outside_the_list_on_a_name_without_owner_is_400_and_nothing_is_typed() {
+    let rig = Rig::new().await;
+    rig.pane("sh1", "bash --norc --noprofile");
+    rig.codex("cx", "pane_codex_idle.txt", "echo").await;
+    rig.screen_shows("sh1", "$").await;
+    let shell = rig.tmux(&["capture-pane", "-p", "-t", "=sh1:"]);
+    let refused = (400, json!({"detail": "tecla não permitida"}));
+    for name in ["ghost", "sh1", "cx"] {
+        assert_eq!(post(&rig, &format!("{name}/keys"), r#"{"key":"Nope"}"#).await, refused, "{name} keys");
+        assert_eq!(post(&rig, &format!("{name}/term-input"), r#"{"text":"ls","key":"Nope"}"#).await, refused, "{name} term-input");
+        // Tecla da lista segue na recusa do vínculo.
+        assert_eq!(post(&rig, &format!("{name}/keys"), r#"{"key":"Escape"}"#).await, unbound(), "{name}");
+        assert_eq!(rig.python.hits_to(&format!("/api/sessions/{name}/keys")) + rig.python.hits_to(&format!("/api/sessions/{name}/term-input")), 0, "{name}");
+    }
+    assert_eq!(rig.tui("cx", "keys.jsonl"), Vec::<Value>::new(), "a TUI do Codex cru não leu nada");
+    assert_eq!(rig.tmux(&["capture-pane", "-p", "-t", "=sh1:"]), shell, "nada digitado no shell");
+}
+
+// R2-17 (decisão da rodada 3): Codex com terminal cujo arquivo de sessão o Rust não adota. Ler o modo de
+// permissão vem do arquivo (200); trocar o modo e implementar o plano seguem recusados, e a TUI não lê tecla.
+#[tokio::test]
+async fn a_terminal_codex_rust_does_not_adopt_reads_its_mode_from_the_file_and_types_nothing() {
+    let rig = Rig::build_with(true, false, &[]).await;
+    rig.codex("cx", "pane_codex_idle.txt", "echo").await;
+    let sidecars = rig.home.join(".hangar/codex-sessions");
+    std::fs::create_dir_all(&sidecars).unwrap();
+    std::fs::write(sidecars.join("cx.json"), json!({"name": "cx", "provider": "codex", "headless": false, "key": "k-cx",
+        "permission_mode": "Approve for me"}).to_string()).unwrap();
+    let (status, modes) = request(&rig, reqwest::Method::GET, "cx/codex-permissions", "").await;
+    assert_eq!((status, modes["current"].as_str()), (200, Some("Approve for me")), "{modes}");
+    let marked: Vec<_> = modes["modes"].as_array().unwrap().iter().filter(|m| m["atual"] == true).map(|m| m["nome"].clone()).collect();
+    assert_eq!(marked, [json!("Approve for me")]);
+    let control = (409, detail("erro_codex_controle", "O Codex não aceitou a alteração; atualize a sessão e tente novamente.", json!({})));
+    assert_eq!(post(&rig, "cx/codex-permissions", r#"{"mode":"Full Access"}"#).await, control);
+    assert_eq!(post(&rig, "cx/codex/plan/implement", "").await, control);
+    assert_eq!(rig.tui("cx", "keys.jsonl"), Vec::<Value>::new(), "a TUI do Codex não leu nada");
+    assert_eq!(rig.python.hits_to("/api/sessions/cx/codex-permissions") + rig.python.hits_to("/api/sessions/cx/codex/plan/implement"), 0);
 }

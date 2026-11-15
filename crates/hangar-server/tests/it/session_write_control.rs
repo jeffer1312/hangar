@@ -677,6 +677,42 @@ async fn term_input_without_a_terminal_is_ok_when_empty_and_a_502_otherwise() {
     nothing_sent(&sink, &methods);
 }
 
+// R2-01: com a porta presa pela troca de conversa, tecla e texto de terminal da sessão sem terminal são o
+// 409 de sessão ocupada, na hora, e nada chega aos canos.
+#[tokio::test]
+async fn keys_and_term_input_without_a_terminal_while_a_transfer_holds_the_gate_are_409_busy() {
+    let (dir, registry) = (tempfile::tempdir().unwrap(), registry().await);
+    let sink = open_headless(&registry, dir.path(), "s").await;
+    let methods: Arc<std::sync::Mutex<Vec<String>>> = Arc::default();
+    crate::groups_deliver::open_codex_headless(&registry, dir.path(), "c", methods.clone()).await;
+    for name in ["s", "c"] { registry.ingress().hold(name, Duration::from_secs(1)).await.unwrap(); }
+    let (python, server) = serve(registry).await;
+    for name in ["s", "c"] {
+        for (route, body) in [("keys", r#"{"key":"Down"}"#), ("term-input", r#"{"text":"ls","key":"Enter"}"#)] {
+            let (status, reply) = send(server, "POST", &format!("{name}/{route}"), body).await;
+            assert_eq!((status, reply["detail"]["code"].as_str()), (409, Some("session_transfer_busy")), "{name} {route}: {reply}");
+            assert_eq!(python.hits_to(&format!("/api/sessions/{name}/{route}")), 0, "{name} {route}");
+        }
+    }
+    nothing_sent(&sink, &methods);
+}
+
+// R2-03 (`api.py:2746,2760`, `key not allowed`): tecla fora da lista é o 400 da validação antes da recusa
+// por falta de terminal, em `keys` e em `term-input`; o Backspace do `term-input` está na lista dele.
+#[tokio::test]
+async fn a_key_outside_the_list_without_a_terminal_is_400_before_the_missing_terminal() {
+    let (_dir, sink, methods, python, server) = headless_pair().await;
+    let refused = (400, json!({"detail": "tecla não permitida"}));
+    for name in ["s", "c"] {
+        assert_eq!(send(server, "POST", &format!("{name}/keys"), r#"{"key":"Nope"}"#).await, refused, "{name} keys");
+        assert_eq!(send(server, "POST", &format!("{name}/keys"), r#"{"key":"Backspace"}"#).await, refused, "{name}: Backspace só no term-input");
+        assert_eq!(send(server, "POST", &format!("{name}/term-input"), r#"{"text":"ls","key":"Nope"}"#).await, refused, "{name} term-input");
+        assert_eq!(send(server, "POST", &format!("{name}/term-input"), r#"{"key":"Backspace"}"#).await, no_terminal(), "{name}");
+        assert_eq!(python.hits_to(&format!("/api/sessions/{name}/keys")) + python.hits_to(&format!("/api/sessions/{name}/term-input")), 0, "{name}");
+    }
+    nothing_sent(&sink, &methods);
+}
+
 // R2-04 (`api.py:2408`, Python 409 `erro_opcao_nao_convergiu` com o detalhe do picker ausente) e R2-05
 // (Codex, Python 502 `erro_envio_falhou`); decisão 7: sem `interaction_id`, 409 sem identidade antes.
 #[tokio::test]

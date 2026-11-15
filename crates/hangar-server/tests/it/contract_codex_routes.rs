@@ -384,7 +384,7 @@ async fn codex_routes_on_a_name_without_codex_answer_like_the_python_routes() {
 
 // R2-13, R2-17 (`adapter.py:917-932`): arquivo de sessão Codex que o Rust não adota. As rotas que o Python
 // respondia com `erro_codex_controle` ficam; `/limits` é a resposta neutra; as que digitavam no pane
-// (`codex-permissions`, `plan/implement`) passam a recusar com o mesmo código (decisão 6).
+// (a troca em `codex-permissions`, `plan/implement`) passam a recusar com o mesmo código (decisão 6).
 #[tokio::test]
 async fn codex_routes_on_a_sidecar_rust_does_not_adopt_never_type_and_answer_with_a_code() {
     let dir = tempfile::tempdir().unwrap();
@@ -394,11 +394,43 @@ async fn codex_routes_on_a_sidecar_rust_does_not_adopt_never_type_and_answer_wit
     let (python, server) = serve(Arc::new(registry(dir.path())), dir.path()).await;
     let control = (409, refusal("erro_codex_controle", "O Codex não aceitou a alteração; atualize a sessão e tente novamente."));
     for (method, route, body) in [("GET", "models", Value::Null), ("POST", "model", json!({"model": "gpt-5"})), ("POST", "service-tier", json!({"service_tier": "priority"})),
-        ("POST", "codex/mode", json!({"mode": "plan"})), ("GET", "commands", Value::Null), ("GET", "codex-permissions", Value::Null),
+        ("POST", "codex/mode", json!({"mode": "plan"})), ("GET", "commands", Value::Null),
         ("POST", "codex-permissions", json!({"mode": "Full Access"})), ("POST", "codex/plan/implement", Value::Null)] {
         assert_eq!(raw(server, method, route, body).await, control, "{method} {route}");
         assert_eq!(python.hits_to(&format!("/api/sessions/s/{route}")), 0, "{route}");
     }
     assert_eq!(raw(server, "GET", "limits", Value::Null).await, (200, json!({"primary": null, "secondary": null, "planType": null})));
     assert_eq!(python.hits_to("/api/sessions/s/limits"), 0);
+}
+
+// R2-17 (decisão da rodada 3): `GET codex-permissions` do arquivo de sessão Codex que o Rust não adota lê
+// os modos do próprio arquivo (o `modos_para_tela` do Python), 200 e só leitura; sem modo gravado, o padrão.
+#[tokio::test]
+async fn reading_the_permission_mode_of_a_sidecar_rust_does_not_adopt_comes_from_the_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let sidecars = dir.path().join(".hangar/codex-sessions");
+    std::fs::create_dir_all(&sidecars).unwrap();
+    std::fs::write(sidecars.join("s.json"), json!({"permission_mode": "Approve for me"}).to_string()).unwrap();
+    let (python, server) = serve(Arc::new(registry(dir.path())), dir.path()).await;
+    let modes = |current: &str| json!({"current": current, "modes": [
+        {"numero": 1, "nome": "Ask for approval", "desc": "Codex só lê o workspace; editar ou rodar comando pede aprovação.", "cursor": current == "Ask for approval", "atual": current == "Ask for approval"},
+        {"numero": 2, "nome": "Approve for me", "desc": "Codex edita o workspace sozinho; fora dele ou com rede, pede aprovação.", "cursor": current == "Approve for me", "atual": current == "Approve for me"},
+        {"numero": 3, "nome": "Full Access", "desc": "Codex faz tudo sem perguntar.", "cursor": current == "Full Access", "atual": current == "Full Access"}]});
+    assert_eq!(raw(server, "GET", "codex-permissions", Value::Null).await, (200, modes("Approve for me")));
+    std::fs::write(sidecars.join("s.json"), "{}").unwrap();
+    assert_eq!(raw(server, "GET", "codex-permissions", Value::Null).await, (200, modes("Full Access")));
+    assert_eq!(std::fs::read_to_string(sidecars.join("s.json")).unwrap(), "{}", "ler não grava o arquivo");
+    assert_eq!(python.hits_to("/api/sessions/s/codex-permissions"), 0);
+}
+
+// R3-30 (`api.py:259-302`): a lista que não responde no meio do `recarregar` é o 503 com o código da lista,
+// nunca "não existe" nem o Python.
+#[tokio::test]
+async fn reload_with_the_list_unavailable_is_503_list_unavailable() {
+    let dir = tempfile::tempdir().unwrap();
+    let (python, server) = serve(Arc::new(registry(dir.path())), dir.path()).await;
+    let (status, body) = raw(server, "POST", "recarregar", Value::Null).await;
+    assert_eq!((status, body["detail"]["code"].as_str(), body["detail"]["params"]["detalhe"].as_str()),
+        (503, Some("erro_lista_indisponivel"), Some("list_dirs_missing")), "{body}");
+    assert_eq!(python.hits_to("/api/sessions/s/recarregar"), 0);
 }
