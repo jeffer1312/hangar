@@ -22,6 +22,8 @@ impl Model for ClaudeModel {
             let out = match self.run(&call).await {
                 Ok(out) => out,
                 Err(Failure::Timeout) => return Err(ModelError::Timeout { cost_usd: call.budget_usd }),
+                // Sem a linha `result` o custo não é conhecido; o teto inteiro inventaria gasto de quem parou no começo.
+                Err(Failure::Stopped) => return Err(ModelError::Stopped { cost_usd: 0.0 }),
                 Err(Failure::Start(e)) => return Err(ModelError::Other(e)),
             };
             // A chave só vai no ambiente; se o CLI a ecoar num erro, ela não sai daqui.
@@ -36,14 +38,19 @@ impl Model for ClaudeModel {
 enum Failure {
     Start(String),
     Timeout,
+    Stopped,
 }
 
 impl ClaudeModel {
     async fn run(&self, call: &Call<'_>) -> Result<crate::claude_p::Output, Failure> {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
+        if super::progress::stopping() {
+            return Err(Failure::Stopped);
+        }
         let Some(mut command) = self.accounts.claude_command() else { return Err(Failure::Start("claude CLI não encontrado".into())) };
+        // `stream-json` (que exige `--verbose`) solta cada passo na hora; a última linha é a mesma do `json`.
         command
-            .args(["-p", "--model", call.model, "--output-format", "json", "--max-budget-usd"])
+            .args(["-p", "--model", call.model, "--output-format", "stream-json", "--verbose", "--max-budget-usd"])
             .arg(format!("{:.4}", call.budget_usd))
             .args(["--safe-mode", "--setting-sources", "", "--strict-mcp-config", "--mcp-config", r#"{"mcpServers":{}}"#])
             .args(["--no-session-persistence", "--tools", "Read,Write,Edit,Glob,Grep", "--permission-mode", "acceptEdits"])
@@ -82,19 +89,46 @@ impl ClaudeModel {
             return Err(failed(e));
         }
         let (mut stdin, mut out, mut err) = (child.stdin.take().unwrap(), child.stdout.take().unwrap(), child.stderr.take().unwrap());
-        let done = tokio::time::timeout(CALL_TIMEOUT, async {
+        let mut stop = super::progress::STOP.subscribe();
+        let work = tokio::time::timeout(CALL_TIMEOUT, async {
             let write = async {
                 let r = stdin.write_all(call.prompt.as_bytes()).await;
                 drop(stdin);
                 r
             };
-            let (mut o, mut e) = (Vec::new(), Vec::new());
-            let (_, ro, re) = tokio::join!(write, out.read_to_end(&mut o), err.read_to_end(&mut e));
+            let mut o = Vec::new();
+            let read_out = async {
+                let mut reader = tokio::io::BufReader::new(&mut out);
+                let mut raw = Vec::new();
+                // Em bytes: um UTF-8 quebrado no meio de uma conversa lida não derruba a chamada.
+                while reader.read_until(b'\n', &mut raw).await? > 0 {
+                    let line = String::from_utf8_lossy(&raw).trim_end_matches(['\n', '\r']).to_string();
+                    raw.clear();
+                    (call.on_line)(&line);
+                    // As mensagens trazem o texto das conversas lidas; na classificação ele faria qualquer
+                    // falha parecer "limite da conta". Fica só o resto, onde está a linha `result`.
+                    if !["{\"type\":\"assistant\"", "{\"type\":\"user\"", "{\"type\":\"system\""].iter().any(|p| line.starts_with(p)) {
+                        o.extend_from_slice(line.as_bytes());
+                        o.push(b'\n');
+                    }
+                }
+                Ok::<(), std::io::Error>(())
+            };
+            let mut e = Vec::new();
+            let (_, ro, re) = tokio::join!(write, read_out, err.read_to_end(&mut e));
             let status = child.wait().await;
-            (ro.and(re).and(status), o, e)
-        })
-        .await;
+            (ro.and(re.map(|_| ())).and(status), o, e)
+        });
+        let done = tokio::select! {
+            done = work => Some(done),
+            _ = stop.wait_for(|stop| *stop) => None,
+        };
+        // Mata a árvore inteira, como no prazo: só o `kill_on_drop` deixaria os filhos do CLI.
         crate::terminal_process::finish(&mut tree).await;
+        let Some(done) = done else {
+            let _ = child.wait().await;
+            return Err(Failure::Stopped);
+        };
         match done {
             Ok((Ok(status), o, e)) => Ok(crate::claude_p::Output {
                 code: status.code().map_or(-1, i64::from),

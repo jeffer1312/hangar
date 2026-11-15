@@ -12,7 +12,7 @@ const LIST_ROWS: usize = 4;
 const LIST_MAX: f32 = LIST_ROWS as f32 * 46. + 8.;
 
 /// O que não é pergunta, pronto nem encerrado conta como trabalhando (carregando, sem estado).
-fn tone(state: &str) -> &'static str {
+pub(super) fn tone(state: &str) -> &'static str {
     match state { "awaiting_input" => "awaiting_input", "idle" => "idle", "dead" => "dead", _ => "working" }
 }
 
@@ -21,7 +21,7 @@ fn rank(tone: &str) -> u8 {
 }
 
 /// As palavras do `rotuloEstado` do web, pelo tom.
-fn state_label(tone: &str) -> String {
+pub(super) fn state_label(tone: &str) -> String {
     tr_shared(match tone { "awaiting_input" => "estado_aguardando", "idle" => "estado_pronto", "dead" => "estado_encerrado", _ => "estado_em_execucao" }, &[])
 }
 

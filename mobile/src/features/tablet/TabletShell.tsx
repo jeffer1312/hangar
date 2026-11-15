@@ -59,6 +59,9 @@ export function TabletShell({ selected, children, active = true }: Props) {
         <Pressable onPress={() => router.push('/costs')} accessibilityRole="button" accessibilityLabel={m.nav_custos()} style={styles.button}>
           <Icon name="ChartNoAxesCombined" size={20} color={theme.tokens.text.secondary} />
         </Pressable>
+        <Pressable onPress={() => router.push('/reviews' as never)} accessibilityRole="button" accessibilityLabel={m.native_review_title()} style={styles.button}>
+          <Icon name="GitPullRequest" size={20} color={theme.tokens.text.secondary} />
+        </Pressable>
         <Pressable onPress={() => router.push('/config')} accessibilityRole="button" accessibilityLabel={m.config_modal_titulo()} style={styles.button}>
           <Icon name="Settings" size={20} color={theme.tokens.text.secondary} />
         </Pressable>

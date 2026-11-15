@@ -1690,6 +1690,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-connectors"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "chrono",
+ "form_urlencoded",
+ "futures-util",
+ "hangar-core",
+ "hangar-mission",
+ "hangar-ticket-actions",
+ "percent-encoding",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha1_smol",
+ "tempfile",
+ "tokio",
+ "tower",
+ "tracing",
+]
+
+[[package]]
 name = "hangar-conversation-transfer"
 version = "0.1.0"
 dependencies = [
@@ -1812,6 +1834,24 @@ dependencies = [
  "ring",
  "tempfile",
  "tokio",
+]
+
+[[package]]
+name = "hangar-mission"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "chrono",
+ "form_urlencoded",
+ "hangar-core",
+ "hangar-http-file",
+ "percent-encoding",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tower",
+ "tracing",
 ]
 
 [[package]]
@@ -1967,6 +2007,7 @@ dependencies = [
  "hangar-codex-transfer",
  "hangar-computer-control-setup",
  "hangar-connect",
+ "hangar-connectors",
  "hangar-conversation-transfer",
  "hangar-core",
  "hangar-deploy",
@@ -1974,6 +2015,7 @@ dependencies = [
  "hangar-docs",
  "hangar-dream",
  "hangar-http-file",
+ "hangar-mission",
  "hangar-notice-ignores",
  "hangar-omp-sync",
  "hangar-opencode-cookie",
@@ -1987,6 +2029,7 @@ dependencies = [
  "hangar-session-tools",
  "hangar-shortcut-transfer",
  "hangar-sidecar-prune",
+ "hangar-ticket-actions",
  "hangar-transcript",
  "hangar-update-news",
  "hangar-workflows",
@@ -2083,6 +2126,23 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+]
+
+[[package]]
+name = "hangar-ticket-actions"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "form_urlencoded",
+ "hangar-connectors",
+ "hangar-core",
+ "hangar-mission",
+ "percent-encoding",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tower",
 ]
 
 [[package]]

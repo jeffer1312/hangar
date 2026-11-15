@@ -437,6 +437,13 @@ impl Api {
         self.checked(r, false).await?.json().await.map_err(|_| Failure::local("invalid_response"))
     }
 
+    /// POST com corpo cru numa rota do servidor (evidência do Mission Control). Queda depois de mandar é incerteza.
+    pub async fn server_upload(&self, path: &[&str], query: &[(&str, &str)], bytes: Vec<u8>) -> Result<Value, Failure> {
+        let r = self.client.post(self.server_url(path, query)).header(header::CONTENT_TYPE, "application/octet-stream")
+            .body(bytes).timeout(Duration::from_secs(UPLOAD_SECONDS)).send().await.map_err(|_| Failure::transport(true))?;
+        self.checked(r, true).await?.json().await.map_err(|_| Failure::transport(true))
+    }
+
     // Corpo cru, sem multipart. Queda depois de mandar é incerteza: o arquivo pode ter sido salvo.
     pub async fn upload(&self, name: &str, filename: &str, mime: &str, bytes: Vec<u8>) -> Result<Uploaded, Failure> {
         let r = self.client.post(self.endpoint(Some(name), Some("upload")))
@@ -768,6 +775,19 @@ impl Api {
         let r = self.client.get(self.server_url(path, query)).timeout(Duration::from_secs(seconds)).send().await
             .map_err(|e| Failure::lost("GET", &e, false))?;
         self.checked(r, false).await?.json().await.map_err(|_| Failure::local("invalid_response"))
+    }
+
+    /// SSE avulso do servidor (o andamento do sonho), já conferido; quem chama lê os eventos.
+    pub async fn server_events(&self, path: &[&str]) -> Result<Response, Failure> {
+        let req = self.client.get(self.server_url(path, &[])).header(header::ACCEPT, "text/event-stream");
+        let r = tokio::time::timeout(Duration::from_secs(15), req.send()).await
+            .map_err(|_| Failure::transport(false))?.map_err(|_| Failure::transport(false))?;
+        // Sucesso volta sem ler o corpo; o prazo só pega o corpo de erro que nunca termina, e o fluxo segue sem prazo.
+        let r = tokio::time::timeout(Duration::from_secs(15), self.checked(r, false)).await.map_err(|_| Failure::transport(false))??;
+        if !r.headers().get(header::CONTENT_TYPE).and_then(|h| h.to_str().ok()).unwrap_or("").starts_with("text/event-stream") {
+            return Err(Failure::local("invalid_response"));
+        }
+        Ok(r)
     }
 
     /// Como `server_read`, com o valor de um cabeçalho da resposta (o total de conversas da busca).

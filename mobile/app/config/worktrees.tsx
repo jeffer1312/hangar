@@ -306,6 +306,7 @@ function Disco({ todas, onPick, demorando, onRetry }: { todas: WorktreeStatus[];
   const resto = medidas.slice(DISK_TOP);
   const legenda = [
     { k: 'merged', label: m.worktrees_filtro_prontas() },
+    { k: 'equivalent', label: m.worktree_estado_equivalente() },
     { k: 'dirty', label: m.worktrees_filtro_nao_commitado() },
     { k: 'session', label: m.worktrees_filtro_em_uso() },
     { k: 'active', label: m.worktree_estado_andamento() },

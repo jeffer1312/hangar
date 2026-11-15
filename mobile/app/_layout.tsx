@@ -10,7 +10,7 @@ import { KeyboardProvider } from 'react-native-keyboard-controller';
 import { configureCore } from '../src/net/configureCore';
 import { useServers } from '../src/stores/servers';
 import { discoverSavedMachines } from '../src/features/machines/importMachines';
-import { setChatsForeground } from '../src/stores/chat';
+import { setChatsForeground, syncChatTranscripts } from '../src/stores/chat';
 import { setQueueDeliveryForeground } from '../src/chat/useQueueDelivery';
 import { setMachineDiscovery, useSessions } from '../src/stores/sessions';
 import { aplicarTemaSalvo, setTabletTextScale, useAparencia } from '../src/stores/aparencia';
@@ -98,6 +98,11 @@ export default function Layout() {
 
   // Único dono do primeiro plano: os stores conservam transcript, pergunta e rascunho ao sair
   // e ignoram repetição do mesmo estado, então voltar não duplica REST/SSE.
+  useEffect(() => {
+    syncChatTranscripts(useSessions.getState().rows);
+    return useSessions.subscribe(state => syncChatTranscripts(state.rows));
+  }, []);
+
   useEffect(() => {
     const initial = AppState.currentState ?? 'active';
     const apply = (state: AppStateStatus) => {

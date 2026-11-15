@@ -52,7 +52,7 @@ pub(super) fn render(started: Instant, width: Pixels, window: &mut Window, cx: &
         .child(dream::row_bar(picker, None, run, done.then(|| dream::changes_button(ID).tab_stop(false)),
             done.then(|| dream::undo_button(ID, false).tab_stop(false))));
     let head = dream::projects_head(dream::refresh_button(false).tab_stop(false),
-        dream::run_button("news-dream-run-all", running).primary().disabled(running).tab_stop(false));
+        Some(dream::run_button("news-dream-run-all", running).primary().disabled(running).tab_stop(false)));
     // A lista abre num diálogo na página; aqui fica embaixo da linha, com a altura já reservada.
     let changes = div().flex().flex_col().gap(px(4.)).opacity(if done { 1. } else { 0. })
         .child(div().text_sm().font_weight(FontWeight::MEDIUM).child(tr_shared("dream_changes", &[])))

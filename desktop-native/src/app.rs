@@ -123,6 +123,8 @@ mod shared_config;
 mod tree;
 mod find;
 mod costs;
+mod mission;
+pub(crate) use mission::ticket_card_view;
 mod worktrees;
 mod reviews;
 mod artifacts;
@@ -137,7 +139,7 @@ pub(crate) mod setup;
 /// Variável do ambiente do script com o código de uso único do askpass (`setup::askpass`).
 pub(crate) const ASKPASS_CODE_ENV: &str = "HANGAR_ASKPASS_CODE";
 
-actions!(hangar, [FocusComposer, OpenSettings, CopyLastReply, FocusSettingsSearch, FindProjectFile, FindProjectText, NextSession, PreviousSession, ToggleDictation, NewChat, NewChatNoProject, OpenNewSession, CloseSession, RenameSession, OpenCosts, OpenSearch,
+actions!(hangar, [FocusComposer, OpenSettings, CopyLastReply, FocusSettingsSearch, FindProjectFile, FindProjectText, NextSession, PreviousSession, ToggleDictation, NewChat, NewChatNoProject, OpenNewSession, CloseSession, RenameSession, OpenCosts, OpenMission, OpenSearch,
     ToggleSidebar, CyclePermission, OpenWorktrees, OpenReviews, CycleToolLook, CycleNavigation]);
 
 const LIVE_THINKING: &str = "__thinking__";
@@ -384,6 +386,7 @@ enum Payload {
     // Notificações e Anexos: rascunho do servidor e horas silenciosas da conexão atual.
     ServerConfig(server_config::ServerConfigReply),
     Scheduled(scheduled::Reply),
+    Tickets(mission::Reply),
     WorktreeSettings(worktree_settings::WorktreeSettingsReply),
     Sync(sync::SyncReply),
     Connect(connect::ConnectReply),
@@ -881,6 +884,7 @@ pub struct Hangar {
     costs: costs::Costs,
     worktrees: worktrees::Worktrees,
     reviews: reviews::Reviews,
+    mission: mission::Mission,
     artifacts: artifacts::Artifacts,
     usage_stats: stats::UsageStats,
     // Paleta "Buscar conversas" (Ctrl+K).
@@ -1219,7 +1223,7 @@ impl Hangar {
             device: device::Device::new(window, cx), accounts: accounts::Accounts::default(), orchestration: orchestration::Orchestration::default(), orq_history: None, orq_history_serial: 0, home_usage: Default::default(), recents: Default::default(), reopen: None, shortcuts: shortcuts::Shortcuts::default(),
             worktree_settings: worktree_settings::WorktreeSettings::default(), auto_hide: Default::default(),
             server_config: server_config::ServerConfig::default(), scheduled: scheduled::Scheduled::default(), harness: harness::Harnesses::default(), sync: sync::Sync::default(), connect: connect::Connect::default(), connect_notices: connect::Notices::default(), devices: devices::Devices::default(), shared: shared_config::SharedConfig::default(), machines: machines::Machines::default(),
-            costs: Default::default(), worktrees: Default::default(), reviews: Default::default(), artifacts: Default::default(), usage_stats: Default::default(), search: Default::default(), topbar: Default::default(), computer: computer::Computer::default(), new_session: None, sidebar, machines_tray,
+            costs: Default::default(), worktrees: Default::default(), reviews: Default::default(), mission: Default::default(), artifacts: Default::default(), usage_stats: Default::default(), search: Default::default(), topbar: Default::default(), computer: computer::Computer::default(), new_session: None, sidebar, machines_tray,
             terminal: None, terminal_serial: 0,
             system_notifications: SystemNotifications::default(),
             window_tray: window_tray::WindowTray::new(tray_tx), presence: Default::default(),
@@ -1411,9 +1415,10 @@ impl Hangar {
     }
 
     /// Conexão da máquina da sessão aberta; sem sessão de outra máquina, a do servidor ativo.
-    /// Alguma página ocupa a janela (Configurações fora do modo ao vivo, Custos, Worktrees, Revisões).
+    /// Alguma página ocupa a janela (Configurações fora do modo ao vivo, Custos, Worktrees, Revisões, Mission Control).
     pub(super) fn page_open(&self) -> bool {
         self.settings.is_some() && !self.settings_live() || self.costs.view.is_some() || self.worktrees.view.is_some() || self.reviews.view.is_some()
+            || self.mission.open
     }
 
     pub(super) fn session_api(&self) -> Option<Api> { self.open_api.clone().or_else(|| self.api.clone()) }
@@ -1858,7 +1863,8 @@ impl Hangar {
         let payload = match envelope.payload {
             Payload::QueueJev(server, seq, result) => { self.receive_queue_jev(server, seq, result); cx.notify(); return; }
             Payload::Sent(key, text, draft, result) => {
-                self.receive_sent(key, text, draft, result, window, cx);
+                let owner=key.clone();
+                self.with_bound_conversation(&owner,cx,move |this,cx|this.receive_sent(key,text,draft,result,window,cx));
                 cx.notify();
                 return;
             }
@@ -1913,8 +1919,8 @@ impl Hangar {
                 return;
             }
             Payload::Acted(key, action, snapshot, result) => {
-                self.receive_acted(key, action, snapshot, result, window, cx);
-                self.sync_rows(cx);
+                let owner=key.clone();
+                self.with_bound_conversation(&owner,cx,move |this,cx| {this.receive_acted(key,action,snapshot,result,window,cx);this.sync_rows(cx);});
                 cx.notify();
                 return;
             }
@@ -1922,11 +1928,15 @@ impl Hangar {
                 let lost = self.selected_key().as_ref() == Some(&key) && result.as_ref().err().is_some_and(|e| self.chat_auth_lost(e));
                 if lost
                     && !matches!(reply, Reply::Diff(_)) { self.open_connection(window, cx); }
-                self.receive_reply(key, reply, result, window, cx);
+                let owner=key.clone();
+                self.with_bound_conversation(&owner,cx,move |this,cx|this.receive_reply(key,reply,result,window,cx));
                 cx.notify();
                 return;
             }
-            Payload::HeadlessPlan(key, outcome) => { self.receive_headless_plan(key, outcome); cx.notify(); return; }
+            Payload::HeadlessPlan(key, outcome) => {
+                let owner=key.clone();self.with_bound_conversation(&owner,cx,move |this,_|this.receive_headless_plan(key,outcome));
+                cx.notify();return;
+            }
             // O fundo é deste computador: o número do pedido decide, não a conexão.
             Payload::Backdrop(seq, result) => { self.receive_backdrop(seq, result, window, cx); return; }
             Payload::BackdropPicked(result) => { self.receive_picked_backdrop(result, window, cx); return; }
@@ -2144,6 +2154,7 @@ impl Hangar {
                         self.etag = history.etag;
                         if let Some(events) = history.events {
                             self.has_older = limit > 0 && events.len() >= limit;
+                            if let Some(key) = self.selected_key() { self.delivery.confirm_history(&key, &events); }
                             self.chat.merge_history(events);
                             api::open_trace(|| "history merged".into());
                             if self.chat.preview.text.is_empty() {
@@ -2267,6 +2278,7 @@ impl Hangar {
             Payload::Harness(reply) => { self.receive_harness(reply, cx); return; }
             Payload::WorktreeSettings(reply) => { self.receive_worktree_settings(reply, window, cx); return; }
             Payload::Scheduled(reply) => { self.receive_scheduled(reply, window, cx); return; }
+            Payload::Tickets(reply) => { self.receive_tickets(reply, window, cx); return; }
             Payload::ServerConfig(reply) => {
                 // A configuração gravada é da ativa: só vale para os avisos quando a conversa aberta é dela.
                 if matches!(&reply, server_config::ServerConfigReply::QuietSaved(..) | server_config::ServerConfigReply::Saved(..))
@@ -2302,7 +2314,7 @@ impl Hangar {
                 self.receive_sidebar(reply, window, cx); return;
             }
             Payload::Activity(reply) => { self.receive_activity(reply, cx); return; }
-            Payload::TabPreview(reply) => { self.receive_tab_preview(reply, cx); return; }
+            Payload::TabPreview(reply) => { self.receive_tab_preview(reply, window, cx); return; }
             Payload::Dictation(seq, path, result) => {
                 // Ditado da prévia da aba: a transcrição entra no compositor dela, com a conversa dela no lugar.
                 if self.dictation_in_tab_preview(cx) {
@@ -2419,7 +2431,7 @@ impl Hangar {
             self.sent_context_refs(&key, &text);
             // Quem esperava este envio sai agora, na ordem em que foi mandado.
             if let Some((next, field, steer, group)) = self.delivery.next_held(&key) {
-                let known = if current { self.known_user_ids() } else { HashSet::new() };
+                let known = if current { self.known_event_ids() } else { HashSet::new() };
                 if self.post(key.clone(), next, field.clone(), steer, known, group, cx) {
                     self.delivery.mark_typed(&key, field);
                     self.sync_working_row(cx);
@@ -2449,6 +2461,7 @@ impl Hangar {
     }
 
     fn replace_sessions(&mut self, sessions: Vec<SessionInfo>, window: &mut Window, cx: &mut Context<Self>) {
+        self.mission_sessions_changed(&sessions,window,cx);
         let old = self.selected.clone();
         // Aba com o foco, pela posição na lista antiga: se a sessão dela sumir, o foco não pode ficar numa alça morta.
         let focused_tab = self.visible_order(cx).into_iter().enumerate().find(|(_, target)| self.is_active_key(&target.server)
@@ -2658,6 +2671,10 @@ impl Hangar {
             self.pending_chat.push(update);
             return (true, Changed::Nothing);
         }
+        if self.in_tab_preview {
+            self.apply_preview_update(update,cx);
+            return (true,Changed::Rows);
+        }
         // Estado não mexe nos eventos: redesenha (chip, "em execução") sem refazer a conversa.
         let changed = match &update {
             // O mesmo estado repetido não redesenha: a conversa guardada sairia do cache à toa.
@@ -2679,12 +2696,7 @@ impl Hangar {
                 if self.chat.events.iter().any(|known| known.id == event.id) { self.chat.apply(event); }
             }
             ChatUpdate::Message(event) => {
-                // A bolha da fila já mostra o envio: a de saída seria a segunda cópia até a resposta do POST.
-                if event.kind == "user_msg" {
-                    if let (Some(key), Some(text)) = (self.selected_key(), event.text.as_deref()) {
-                        self.delivery.confirm_real(&key, &event.id, text);
-                    }
-                }
+                self.confirm_chat_message(&event);
                 // O primeiro pedido feito com a conversa aberta também vale para a sugestão de nome.
                 let asked = event.kind == "user_msg" && !event.queued();
                 self.chat.apply(event);
@@ -2992,9 +3004,14 @@ impl Hangar {
         else { (self.preview_last_tick, self.preview_carry) = (None, 0.); }
     }
 
-    fn known_user_ids(&self) -> HashSet<String> {
-        // Bolha da fila que já existia antes do envio não confirma o envio novo, mesmo com o mesmo texto.
-        self.chat.events.iter().filter(|event| event.kind == "user_msg").map(|event| event.id.clone()).collect()
+    fn known_event_ids(&self) -> HashSet<String> {
+        self.chat.events.iter().map(|event| event.id.clone()).collect()
+    }
+
+    fn confirm_chat_message(&mut self, event: &ChatEvent) {
+        if event.kind == "user_msg" && let (Some(key), Some(text)) = (self.selected_key(), event.text.as_deref()) {
+            self.delivery.confirm_real(&key, &event.id, text);
+        }
     }
 
     fn commands_key(&self) -> Option<String> {
@@ -3109,7 +3126,7 @@ impl Hangar {
             self.clear_sent_field(&key, window, cx);
             return;
         }
-        let known = self.known_user_ids();
+        let known = self.known_event_ids();
         // O campo esvazia no Enter, sem esperar o backend: o que for digitado depois é outra mensagem. Com anexo também;
         // a legenda viaja com os uploads e volta ao campo se o envio não sair.
         if attached {
@@ -3599,7 +3616,7 @@ impl Hangar {
         let Some(key) = self.selected_key() else { return; };
         if !self.can_send() || self.delivery.pending(&key) || self.uploading.contains_key(&key) { return; }
         let draft = if from_panel { String::new() } else { self.composer.read(cx).value().to_string() };
-        let known = self.known_user_ids();
+        let known = self.known_event_ids();
         let text = format!("/{}", command.name);
         if self.deliver(key.clone(), text.clone(), draft, false, known, None, cx) {
             self.delivery.mark_history(&key, text);
@@ -3819,6 +3836,7 @@ impl Hangar {
     }
 
     fn sync_rows(&mut self, cx: &mut Context<Self>) {
+        if self.in_tab_preview {self.sync_tab_preview_rows(cx);return;}
         let a = appearance::get();
         let stable = self.chat.take_unsynced();
         self.conversation.require_agent_states(self.provider().0 == "codex");
@@ -3830,6 +3848,10 @@ impl Hangar {
         self.sync_row_ids(Some(delta), cx);
         api::open_trace(|| format!("sync_rows prepared {} rows", self.row_ids.len()));
         self.check_cites(delta.stable_events, cx);
+        self.sync_transcript_question();
+    }
+
+    fn sync_transcript_question(&mut self) {
         let provider = self.provider().0.to_owned();
         if matches!(provider.as_str(), "pi" | "omp" | "kimi") {
             let derived = interaction::ask_from_events(&self.chat.events, &provider)
@@ -7326,6 +7348,10 @@ fn image_markdown(rest: &str) -> Option<(String, usize)> {
 }
 
 async fn forward_stream(api: Api, name: Option<String>, connection: u64, selection: Option<u64>, target: async_channel::Sender<Envelope>) {
+    forward_stream_to(api,name,connection,selection,target,Payload::Stream).await;
+}
+
+async fn forward_stream_to(api: Api,name: Option<String>,connection: u64,selection: Option<u64>,target: async_channel::Sender<Envelope>,payload: impl Fn(Update)->Payload+Send+Sync) {
     let (tx, rx) = async_channel::bounded(128);
     let producer = async {
         api::sse::run(api, name, tx.clone()).await;
@@ -7333,7 +7359,7 @@ async fn forward_stream(api: Api, name: Option<String>, connection: u64, selecti
     };
     let consumer = async {
         while let Ok(update) = rx.recv().await {
-            if target.send(Envelope { connection, selection, payload: Payload::Stream(update) }).await.is_err() { break; }
+            if target.send(Envelope { connection, selection, payload: payload(update) }).await.is_err() { break; }
         }
     };
     tokio::pin!(producer, consumer);
@@ -8199,8 +8225,8 @@ impl Render for Hangar {
         // Página de Configurações ocupa a janela; a caixa ao vivo deixa a janela da conversa por baixo.
         let page = self.settings.filter(|_| !self.settings_ui.live);
         let costs_page = self.costs.view.is_some();
-        // Worktrees e Revisões: páginas por cima da conversa, sem a lista ao lado.
-        let tool_page = self.worktrees.view.is_some() || self.reviews.view.is_some();
+        // Worktrees, Revisões e Mission Control: páginas por cima da conversa, sem a lista ao lado.
+        let tool_page = self.worktrees.view.is_some() || self.reviews.view.is_some() || self.mission.open;
         let navigation = appearance::get().navigation;
         let (tabs, bottom_tabs) = (navigation.tabs(), navigation == appearance::Navigation::BottomTabs);
         let cutout = chat_background && page.is_none() && !costs_page && !tool_page && (desktop_window || floating);
@@ -8426,6 +8452,7 @@ impl Render for Hangar {
                 if !this.connection_dialog { this.open_settings(settings::Page::Appearance, window, cx); }
             }))
             .on_action(cx.listener(|this, _: &OpenCosts, window, cx| this.toggle_costs(window, cx)))
+            .on_action(cx.listener(|this, _: &OpenMission, window, cx| this.toggle_mission(window, cx)))
             .on_action(cx.listener(|this, _: &OpenWorktrees, window, cx| this.toggle_worktrees(window, cx)))
             .on_action(cx.listener(|this, _: &OpenReviews, window, cx| this.toggle_reviews(window, cx)))
             .on_action(cx.listener(|this, _: &OpenSearch, window, cx| this.toggle_search(window, cx)))
@@ -8502,6 +8529,7 @@ impl Render for Hangar {
                 if this.costs_escape(window, cx) { cx.stop_propagation(); return; }
                 if this.worktrees.view.is_some() { this.close_worktrees(window, cx); cx.stop_propagation(); return; }
                 if this.reviews.view.is_some() { this.close_reviews(window, cx); cx.stop_propagation(); return; }
+                if this.mission.open { this.close_mission(window, cx); cx.stop_propagation(); return; }
                 // O painel preso a um botão é a camada de cima: fecha antes de arquivos e terminal, e o foco volta ao campo.
                 // Com a página de configurações aberta nenhum painel está na tela; a flag das pastas fica para quando ela fechar.
                 if (this.settings.is_none() || this.settings_live()) && this.close_popups() {
@@ -8551,6 +8579,10 @@ impl Render for Hangar {
                     this.drag_nav(f32::from(event.position.x), event.pressed_button == Some(MouseButton::Left), cx);
                 }))
                 .on_mouse_up(MouseButton::Left, cx.listener(|this, event: &MouseUpEvent, _, cx| this.drag_nav(f32::from(event.position.x), false, cx))))
+            .when(self.ticket_detail_resizing(),|el|el.cursor_col_resize()
+                .on_mouse_move(cx.listener(|this,event: &MouseMoveEvent,window,cx|this.drag_ticket_detail(f32::from(event.position.x),event.pressed_button==Some(MouseButton::Left),window,cx)))
+                .on_mouse_up(MouseButton::Left,cx.listener(|this,event: &MouseUpEvent,window,cx|this.drag_ticket_detail(f32::from(event.position.x),false,window,cx))))
+            .when(self.ticket_drag_scrolling(),|el|el.on_mouse_up(MouseButton::Left,cx.listener(|this,_,_,_|this.end_ticket_drag())))
             .when(self.terminal_dragging(), |el| el.cursor_row_resize()
                 .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
                     this.drag_terminal(f32::from(event.position.y), event.pressed_button == Some(MouseButton::Left), window, cx);
@@ -8572,6 +8604,7 @@ impl Render for Hangar {
                 _ if self.reviews.view.is_some() => el.child(self.render_reviews(cx)),
                 _ if self.worktrees.view.is_some() => el.child(self.render_worktrees(window, cx)),
                 _ if costs_page => el.child(self.render_costs(window, cx)),
+                _ if self.mission.open => el.child(self.render_mission(window, cx)),
                 (Some(page), _) => el.child(self.render_settings(page, window, cx)),
                 // Abas: a faixa em cima (ou embaixo), a conversa e o painel do outro lado, sem barra lateral.
                 (None, Some(bar)) if tabs => {
@@ -8596,7 +8629,7 @@ impl Render for Hangar {
             .children(if preview_popup { self.render_tab_preview_popup(window, cx) } else { None })
             .children(self.render_dictation_overlay())
             .children(self.render_search(window, cx))
-            .children(self.render_plan_review_overlay(window, cx))
+            .children(self.render_owned_plan_review_overlay(window, cx))
             .children(self.render_tour(window, cx))
             .child(ticker)
             // Uma autenticação recusada pode abrir a conexão sobre um formulário já aberto: adiada, fica acima dos diálogos do kit.

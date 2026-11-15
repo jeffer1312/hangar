@@ -40,6 +40,7 @@ export interface SessionInfo {
   name: string;
   cwd?: string;
   jsonl?: string | null;
+  lifecycle_id?: string | null;
   provider?: Provider;
   // Claude ou Codex sem terminal: processo gerenciado pelo Hangar, sem pane. Painel de terminal,
   // espelho e shell não existem nessa sessão.

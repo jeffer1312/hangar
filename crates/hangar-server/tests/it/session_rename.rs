@@ -66,6 +66,8 @@ async fn server() -> Srv {
         "omp_agent": home.join(".omp/agent"), "kimi_home": home.join(".kimi-code")}).to_string());
     let (_python, upstream) = fake::spawn_fake().await;
     let mut state = AppState::new(fake::config(upstream, ""));
+    state.hangar_dir=home.join(".hangar");
+    state.mission=Arc::new(hangar_mission::Store::new(state.hangar_dir.join("mission")));
     state.list = Arc::new(ListBridge::new(ListEnv { mux: Mux::with_program(&script, Duration::from_secs(5)),
         capture_program: script.into_os_string(), procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs },
         FactsClient::new(upstream, SECRET.into())));
@@ -115,12 +117,15 @@ impl Srv {
 async fn terminal_session_takes_the_new_name_with_queue_then_and_bastao() {
     let srv = server().await;
     srv.sessions(&["velho\t\t"]);
+    let mission=hangar_mission::Store::new(srv.home.join(".hangar/mission"));
+    mission.link("help","T-1",hangar_mission::store::Link {key:"T-1".into(),title:"Exemplo".into(),url:"https://example.invalid/T-1".into(),session:"velho".into()}).unwrap();
     srv.write(srv.claude.join(".hangar-queue/velho.jsonl"), json!({"id": "e1"}));
     srv.write(srv.claude.join(".hangar-chain/velho.json"), json!({"target": "outra"}));
     std::fs::create_dir_all(srv.claude.join(".hangar-bastao")).unwrap();
     std::fs::write(srv.claude.join(".hangar-bastao/velho.md"), "dossiê").unwrap();
     assert_eq!(srv.rename("velho", json!({"new": "novo"})).await, (200, json!({"ok": true, "name": "novo"})));
     assert_eq!(srv.names(), ["novo"]);
+    assert_eq!(mission.snapshot().unwrap().items[0].session.as_deref(),Some("novo"));
     for (gone, there) in [(".hangar-queue/velho.jsonl", ".hangar-queue/novo.jsonl"), (".hangar-chain/velho.json", ".hangar-chain/novo.json"),
         (".hangar-bastao/velho.md", ".hangar-bastao/novo.md")] {
         assert!(!srv.claude.join(gone).exists() && srv.claude.join(there).exists(), "{there}");

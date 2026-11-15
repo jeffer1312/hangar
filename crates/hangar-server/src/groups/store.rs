@@ -23,6 +23,7 @@ pub fn file_stem(name: &str) -> String {
 /// Contratos de grupo: `grupo-` é o registro do árbitro, `regras-` o que o time lê.
 const CONTRACT_PREFIXES: [&str; 2] = ["grupo", "regras"];
 
+#[derive(Clone)]
 pub struct PairDir { root: PathBuf, archive: PathBuf }
 
 impl PairDir {

@@ -1,4 +1,6 @@
 import { apiFetchForServer } from './api';
+import { apiEnv, type EventSourceLike } from './apiEnv';
+import { baseOf } from './rota';
 import type { Server } from './servers';
 import { fmtWhen } from './format';
 import * as m from './paraglide/messages';
@@ -26,7 +28,28 @@ export interface DreamProject {
 }
 export interface DreamMonth { month: string; key_usd: number; account_usd: number }
 export interface DreamSuggestion { text: string; conflicts_with: string }
-export interface DreamStatus { projects: DreamProject[]; month: DreamMonth; running: string | null; suggestions: DreamSuggestion[]; last_round_at: string | null }
+export interface DreamStatus {
+  projects: DreamProject[]; month: DreamMonth; running: string | null; progress?: DreamProgress | null; suggestions: DreamSuggestion[]; last_round_at: string | null;
+}
+export type DreamProjectStage = 'queued' | 'reading' | 'analyzing' | 'organizing' | 'writing' | 'done' | 'failed' | 'skipped' | 'stopped';
+export interface DreamProjectProgress {
+  /** `user` = a passada da memória do usuário. */
+  id: string; name: string; status: DreamProjectStage; calls_total: number; calls_done: number; cost_usd: number;
+  error: string | null; notes: { new: number; changed: number; removed: number } | null;
+}
+export interface DreamProgress {
+  run_id: string; started_at: string; last_activity_at: string; spent_usd: number; stopping: boolean;
+  current: number | null; projects: DreamProjectProgress[];
+}
+export interface DreamCallMeta {
+  n: number; kind: 'analyzer' | 'organizer' | 'user'; label: string; model: string; status: 'running' | 'done' | 'failed';
+  started_at: string; ended_at: string | null; cost_usd: number | null; error: string | null; steps: number;
+}
+export type DreamStep =
+  | { kind: 'text'; text: string }
+  | { kind: 'tool'; tool: string; target: string | null; detail: string | null };
+export interface DreamCall { meta: DreamCallMeta; prompt: string; steps: DreamStep[] }
+export const DREAM_USER_PROJECT = 'user';
 export interface DreamPlace {
   machine: string; root: string; dir: string | null;
   before: Record<string, string>; after: Record<string, string>; written: boolean; error: string | null;
@@ -47,6 +70,139 @@ export const undoDreamRun = (server: Server, runId: string, project?: string) =>
   `/api/dream/runs/${encodeURIComponent(runId)}/undo${project ? `?project=${encodeURIComponent(project)}` : ''}`, { method: 'POST' });
 export const putDreamProject = (server: Server, id: string, patch: DreamProjectPatch) => apiFetchForServer<{ ok: true }>(server, `/api/dream/project?id=${encodeURIComponent(id)}`, json('PUT', patch));
 export const dismissDreamSuggestion = (server: Server, index: number) => apiFetchForServer<{ ok: true }>(server, '/api/dream/suggestions/dismiss', json('POST', { index }));
+export const stopDream = (server: Server) => apiFetchForServer<{ stopping: true }>(server, '/api/dream/stop', { method: 'POST' });
+const callsPath = (runId: string, project: string, n?: number) =>
+  `/api/dream/runs/${encodeURIComponent(runId)}/calls${n === undefined ? '' : `/${n}`}?project=${encodeURIComponent(project)}`;
+export const getDreamCalls = (server: Server, runId: string, project: string) =>
+  apiFetchForServer<{ calls: DreamCallMeta[] }>(server, callsPath(runId, project));
+export const getDreamCall = (server: Server, runId: string, project: string, n: number) =>
+  apiFetchForServer<DreamCall>(server, callsPath(runId, project, n));
+
+/** Andamento ao vivo da máquina que sonha: um `progress` na abertura e a cada mudança (`null` = parada). */
+export function openDreamEvents(server: Server, onProgress: (progress: DreamProgress | null) => void): EventSourceLike {
+  const origin = apiEnv().origin;
+  const base = baseOf(server);
+  const sameOrigin = !!origin && (!base || base === origin);
+  const url = `${base}/api/dream/events${sameOrigin ? '' : `?token=${encodeURIComponent(server.token)}`}`;
+  const source = apiEnv().createEventSource(url, { withCredentials: sameOrigin });
+  // O servidor manda `ping` a cada 10 s; ouvir o evento é o que rearma o vigia de silêncio do app durante
+  // uma chamada longa do modelo, sem mudança de andamento.
+  source.addEventListener('ping', () => {});
+  source.addEventListener('progress', (ev) => {
+    // `null` quer dizer "acabou"; só dado vazio ou torto é ignorado.
+    if (!ev.data) return;
+    let next: DreamProgress | null;
+    try { next = JSON.parse(ev.data) as DreamProgress | null; } catch { return; }
+    onProgress(next);
+  });
+  return source;
+}
+
+export type DreamCallLabel =
+  | { kind: 'conversation'; n: number; part: number | null }
+  | { kind: 'notes'; machine: string }
+  | { kind: 'organizer' } | { kind: 'user' } | { kind: 'other'; label: string };
+/**
+ * Nome da entrada que o servidor dá a cada analisador: `s{sessão}-p{parte}.txt` ou `memory-{máquina}-{n}.txt`.
+ * `parts` = quantas partes cada sessão tem na lista; a parte só aparece quando a sessão tem mais de uma.
+ */
+export function dreamCallLabel(label: string, parts: Record<number, number> = {}): DreamCallLabel {
+  if (label === 'organizer') return { kind: 'organizer' };
+  if (label === 'user') return { kind: 'user' };
+  const s = /^s(\d+)-p(\d+)\.txt$/.exec(label);
+  if (s) { const n = Number(s[1]); return { kind: 'conversation', n: n + 1, part: (parts[n] ?? 1) > 1 ? Number(s[2]) + 1 : null }; }
+  const notes = /^memory-(.+)-\d+\.txt$/.exec(label);
+  return notes ? { kind: 'notes', machine: notes[1] } : { kind: 'other', label };
+}
+/** Partes por sessão, contadas nos rótulos da lista de chamadas. */
+export function dreamCallParts(labels: string[]): Record<number, number> {
+  const out: Record<number, number> = {};
+  for (const l of labels) { const s = /^s(\d+)-p\d+\.txt$/.exec(l); if (s) out[Number(s[1])] = (out[Number(s[1])] ?? 0) + 1; }
+  return out;
+}
+export function dreamCallTitle(label: DreamCallLabel, labelOf: (machine: string) => string = (x) => x): string {
+  switch (label.kind) {
+    case 'conversation': return label.part ? m.dream_call_conversation_part({ n: label.n, part: label.part }) : m.dream_call_conversation({ n: label.n });
+    case 'notes': return m.dream_call_notes_from({ machine: labelOf(label.machine) });
+    case 'organizer': return m.dream_call_organizer();
+    case 'user': return m.dream_progress_user();
+    default: return label.label;
+  }
+}
+
+/** Início da rodada no horário local, `dd/MM HH:mm`, tirado do `run_id` (`YYYYMMDD-HHMMSS-xxxx`, em UTC). */
+export function dreamRunWhen(runId: string): string {
+  const p = /^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})/.exec(runId);
+  if (!p) return runId;
+  const at = new Date(Date.UTC(+p[1], +p[2] - 1, +p[3], +p[4], +p[5], +p[6]));
+  const two = (n: number) => String(n).padStart(2, '0');
+  return `${two(at.getDate())}/${two(at.getMonth() + 1)} ${two(at.getHours())}:${two(at.getMinutes())}`;
+}
+
+/** `claude-haiku-5-5` → `Haiku`. */
+export const dreamModelName = (model: string) => {
+  const family = /^claude-([a-z]+)/.exec(model)?.[1];
+  return family ? family[0].toUpperCase() + family.slice(1) : model;
+};
+
+/** Duração curta (`8 s`, `11 min`, `1 h 05 min`) para o andamento. */
+export function dreamSpan(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return `${s} s`;
+  const min = Math.floor(s / 60);
+  if (min < 60) return `${min} min`;
+  return `${Math.floor(min / 60)} h ${String(min % 60).padStart(2, '0')} min`;
+}
+export const dreamSince = (iso: string, now = Date.now()) => dreamSpan(now - Date.parse(iso));
+
+/** O que mudou nas notas de um projeto, numa frase curta. */
+export function dreamNotesText(notes: DreamProjectProgress['notes']): string {
+  if (!notes) return '';
+  const parts = [
+    notes.new ? m.dream_notes_new({ n: notes.new }) : '',
+    notes.changed ? m.dream_notes_changed({ n: notes.changed }) : '',
+    notes.removed ? m.dream_notes_removed({ n: notes.removed }) : '',
+  ].filter(Boolean);
+  return parts.length ? parts.join(', ') : m.dream_notes_none();
+}
+const isActive = (s: DreamProjectStage) => s === 'reading' || s === 'analyzing' || s === 'organizing' || s === 'writing';
+/** Projetos que contam na rodada (o pulado por falta de conversa nova sai do "N de M"). */
+const counted = (p: DreamProgress) => p.projects.filter((x) => x.status !== 'skipped');
+/** Linha de cima do bloco enquanto sonha: "projeto N de M" e o que o projeto atual está fazendo. */
+export function dreamProgressLines(p: DreamProgress): { title: string; detail: string; fraction: number } {
+  const list = counted(p);
+  const current = p.current === null ? null : p.projects[p.current] ?? null;
+  const at = current ? list.indexOf(current) : -1;
+  const done = list.filter((x) => !isActive(x.status) && x.status !== 'queued').length;
+  const name = current ? (current.id === DREAM_USER_PROJECT ? m.dream_progress_user() : current.name) : '';
+  const detail = !current ? ''
+    : current.status === 'reading' ? m.dream_progress_reading({ project: name })
+    : current.status === 'organizing' ? m.dream_progress_organizing({ project: name })
+    : current.status === 'writing' ? m.dream_progress_writing({ project: name })
+    : m.dream_progress_analyzing({ project: name, done: Math.min(current.calls_done + 1, Math.max(current.calls_total - 1, 1)), total: Math.max(current.calls_total - 1, 1) });
+  // Barra: projetos acabados mais a fração das chamadas do atual.
+  const share = current && current.calls_total ? current.calls_done / current.calls_total : 0;
+  return {
+    title: m.dream_progress_running({ n: at < 0 ? Math.min(done + 1, Math.max(list.length, 1)) : at + 1, total: Math.max(list.length, 1) }),
+    detail,
+    fraction: list.length ? Math.min(1, (done + (current && isActive(current.status) ? share : 0)) / list.length) : 0,
+  };
+}
+/** Linha de estado de um projeto na lista, enquanto a rodada está no ar; `null` = não está na rodada. */
+export function dreamRowState(p: DreamProgress | null | undefined, id: string): { text: string; tone: 'muted' | 'active' | 'error' } | null {
+  const row = p?.projects.find((x) => x.id === id);
+  if (!row) return null;
+  switch (row.status) {
+    case 'queued': return { text: m.dream_row_queued(), tone: 'muted' };
+    case 'reading': case 'organizing': case 'writing': case 'analyzing': {
+      const total = Math.max(row.calls_total - 1, 1);
+      return { text: m.dream_row_running({ done: Math.min(row.calls_done + 1, total), total }), tone: 'active' };
+    }
+    case 'done': return { text: m.dream_row_done({ notes: dreamNotesText(row.notes), cost: dreamUsd(row.cost_usd) }), tone: 'muted' };
+    case 'failed': case 'stopped': return row.error ? { text: dreamErrorText(row.error), tone: 'error' } : null;
+    default: return null;
+  }
+}
 
 // Mapa explícito: acesso dinâmico a `m` perde o tipo gerado pelo Paraglide.
 const KNOWN: Record<string, (detail: string) => string> = {
@@ -58,6 +214,12 @@ const KNOWN: Record<string, (detail: string) => string> = {
   dream_rejected: () => m.dream_error_dream_rejected(),
   dream_no_credit: () => m.dream_error_dream_no_credit(),
   dream_account_limited: () => m.dream_error_dream_account_limited(),
+  dream_peer_failed: (detail) => m.dream_error_dream_peer_failed({ detail }),
+  dream_stopped: () => m.dream_error_dream_stopped(),
+  dream_timeout: () => m.dream_error_dream_timeout(),
+  dream_budget_exhausted: () => m.dream_error_dream_budget_exhausted(),
+  dream_locked: (detail) => m.dream_error_dream_locked({ detail }),
+  dream_interrupted: () => m.dream_error_dream_interrupted(),
 };
 
 /** Texto de um `last_error` ou mensagem do servidor no formato `código: detalhe`. */
