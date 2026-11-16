@@ -57,7 +57,7 @@ vi.mock('../../theme/unistyles', () => ({}));
 vi.mock('../../theme/aplicarMaterial', () => ({ aplicarMaterial: () => {} }));
 vi.mock('../../net/configureCore', () => ({ configureCore: () => {} }));
 vi.mock('../machines/importMachines', () => ({ discoverSavedMachines: () => {} }));
-vi.mock('../../stores/chat', () => ({ setChatsForeground: () => {} }));
+vi.mock('../../stores/chat', () => ({ setChatsForeground: () => {}, syncChatTranscripts: () => {} }));
 vi.mock('../../chat/useQueueDelivery', () => ({ setQueueDeliveryForeground: () => {} }));
 vi.mock('../../net/fatalErrors', () => ({ setFatalErrorRoute: () => {}, takeFatalErrorNotice: () => false }));
 vi.mock('../push/expoPush', () => ({ installNotificationHandler: () => {}, pushRegistrationKey: () => '',
