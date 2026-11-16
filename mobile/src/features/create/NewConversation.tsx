@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AccessibilityInfo, ActivityIndicator, AppState, Keyboard, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import Animated, {
   Easing, useAnimatedStyle, useReducedMotion, useSharedValue, withDelay, withSpring, withTiming,
@@ -8,7 +8,9 @@ import { useRouter } from 'expo-router';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { SettingsList } from '../../ui/SettingsList';
 import { ComposerActions, ComposerBox, ComposerInput } from '../../chat/ComposerField';
-import { formataErro, type PrewarmTicket, type Server } from '@hangar/core';
+import { formataErro, replaceSlashToken, slashMatches, slashTokenAt, type CommandInfo, type PrewarmTicket, type Server } from '@hangar/core';
+import { useNewChatCommands, type NewChatCommandSource } from '../../chat/newChatCommands';
+import { SlashSuggest } from '../../chat/SlashSuggest';
 import { AnchoredPanel } from '../../ui/AnchoredPanel';
 import { Icon } from '../../ui/Icon';
 import { Glass } from '../../ui/Glass';
@@ -63,6 +65,8 @@ type Props = {
   // A criação falhou e a tela continua: volta a reservar.
   resumePrewarm?: () => void;
   blocked: boolean;
+  // De onde vem a lista do `/` (conta e pasta escolhidas); null quando o agente não tem a lista sem sessão.
+  commandSource?: NewChatCommandSource | null;
   // Distância fixa do topo da janela até a tela; sem ela o recuo do teclado é medido na janela.
   keyboardOffset?: number;
 };
@@ -104,6 +108,7 @@ function HistoryButton({ onPress, disabled, busy }: { onPress: () => void; disab
 export function NewConversation({
   server, destination, destinationPending, providerLabel, folderPanel,
   topPills, optionPills, providerChip, resume, notices, body, takePrewarm, resumePrewarm, blocked, keyboardOffset, home,
+  commandSource = null,
 }: Props) {
   const collapsed = home?.mode === 'sessions';
   const input = useRef<TextInput>(null);
@@ -262,6 +267,24 @@ export function NewConversation({
   };
 
   const recording = dictation.gravando || dictation.transcribing;
+
+  // ── Comandos: as sugestões do `/` da conversa aberta, com a lista da conta e pasta escolhidas ──
+  // Cursor movido pelo app (`selection`) vale até o campo devolver o dele, como no Composer.
+  const [selection, setSelection] = useState<{ start: number; end: number } | undefined>();
+  const [caret, setCaret] = useState<{ start: number; end: number } | null>(null);
+  const sel = selection ?? caret;
+  const caretPos = !sel ? text.length : sel.start === sel.end ? Math.min(sel.end, text.length) : -1;
+  const slashToken = useMemo(() => slashTokenAt(text, caretPos), [text, caretPos]);
+  const slashQuery = commandSource ? slashToken?.query ?? null : null;
+  const { commands, error: commandsError, retry: retryCommands } = useNewChatCommands(server, commandSource, slashQuery !== null);
+  const suggestions = useMemo(() => slashMatches(commands ?? [], slashQuery), [commands, slashQuery]);
+  // Sem sessão ainda não há para onde enviar: a escolha só vira o texto do campo, e o Enviar cria a conversa com ele.
+  const pickSlash = (c: CommandInfo) => {
+    if (!slashToken) return;
+    const next = replaceSlashToken(text, slashToken, c.name);
+    setText(next.text);
+    setSelection({ start: next.cursor, end: next.cursor });
+  };
 
   const handleSend = async () => {
     if (!body || blocked || busy || !restored || recording || (!text.trim() && !attachment) || submitting.current) return;
@@ -453,8 +476,12 @@ export function NewConversation({
           send={{ label: m.nova_conversa_enviar(), disabled: !canSend, busy, showBusy: true, onPress: () => void handleSend() }} />
       )}>
         {attachment ? <AttachmentPreview attachment={attachment} onRemove={removeAttachment} disabled={busy} /> : null}
+        <SlashSuggest matches={suggestions} onPick={pickSlash}
+          error={slashQuery !== null ? commandsError : ''} onRetry={retryCommands} />
         {/* Cinco linhas e rola: o título ocupa o alto, e mais que isso entrava embaixo do teclado. */}
         <ComposerInput ref={input} value={text} onChangeText={setText} onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
+          selection={selection}
+          onSelectionChange={(e) => { setSelection(undefined); setCaret(e.nativeEvent.selection); }}
           maxHeight={FIELD_MAX_HEIGHT}
           placeholder={m.composer_mensagem_para({ nome: providerLabel })} accessibilityLabel={m.nova_conversa_placeholder()}
           editable={!collapsed} autoFocus={!home && (router.canGoBack?.() ?? true)} recording={dictation.gravando} rms={dictation.rms} onCancelRecording={dictation.cancel}

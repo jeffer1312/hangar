@@ -2171,7 +2171,7 @@ impl Hangar {
                         for update in std::mem::take(&mut self.pending_chat) { self.apply_chat_update(update, window, cx); }
                         api::open_trace(|| "pending applied".into());
                         self.error = None;
-                        self.ensure_commands(false);
+                        self.ensure_commands(false, cx);
                         self.discover_plan();
                         // A primeira conta de subagentes espera a conversa chegar, como o `aoAquecer` do web.
                         if first { self.restart_subagent_count(cx); }
@@ -2865,7 +2865,14 @@ impl Hangar {
     fn composer_event(&mut self, event: &InputEvent, window: &mut Window, cx: &mut Context<Self>) {
         match event {
             InputEvent::PressEnter { secondary: false, shift: false } if !self.connection_dialog => {
-                if !self.accept_mention(window, cx) { self.submit(false, false, window, cx); }
+                if self.accept_mention(window, cx) { return; }
+                // Lista do `/` aberta: o Enter é o clique no item marcado, como no Claude Desktop.
+                let suggestions = self.visible_suggestions(cx);
+                if let Some(command) = suggestions.get(self.suggest_pick.min(suggestions.len().saturating_sub(1))) {
+                    self.pick_command(command.clone(), false, window, cx);
+                    return;
+                }
+                self.submit(false, false, window, cx);
             }
             // A lista de comandos acompanha o que se digita.
             // Texto e sugestões só aparecem na faixa de baixo.
@@ -2875,7 +2882,7 @@ impl Hangar {
                 // Abertas = há `/nome` sob o cursor e o Esc não as fechou neste texto.
                 let open = self.composer_cursor(cx).is_some_and(|(text, cursor)| composer::slash_token(&text, cursor).is_some()
                     && self.suggest_dismissed.as_deref() != Some(text.as_str()));
-                if open && !self.slash_open { self.ensure_commands(true); }
+                if open && !self.slash_open { self.ensure_commands(true, cx); }
                 self.slash_open = open;
                 // A prévia é desenhada na raiz, fora da área de baixo.
                 if self.in_tab_preview { cx.notify(); } else { self.redraw(panes::Area::Bottom, cx); }
@@ -3014,19 +3021,39 @@ impl Hangar {
         }
     }
 
-    fn commands_key(&self) -> Option<String> {
+    fn commands_key(&self, cx: &App) -> Option<String> {
+        if self.selected.is_none() { return self.new_chat_commands(cx).map(|source| source.key); }
         let (server, session) = (self.session_server()?, self.selected.as_ref()?);
         Some(format!("{server}|{}|{}", session.provider, session.name))
     }
 
-    fn command_list(&self) -> &[CommandInfo] {
-        self.commands_key().and_then(|key| self.commands.get(&key)).and_then(|r| r.as_ref().ok()).map(Vec::as_slice).unwrap_or(&[])
+    /// A tela sem sessão (nem conversa fechada aberta, nem criação em voo) busca a lista da conversa que vai nascer.
+    fn new_chat_commands(&self, cx: &App) -> Option<create::NewChatCommands> {
+        if !self.new_chat_screen() || self.reopen.is_some() || self.opening.is_some() { return None; }
+        self.new_chat.as_ref()?.read(cx).command_source()
+    }
+
+    fn command_list(&self, cx: &App) -> &[CommandInfo] {
+        self.commands_key(cx).and_then(|key| self.commands.get(&key)).and_then(|r| r.as_ref().ok()).map(Vec::as_slice).unwrap_or(&[])
     }
 
     // Codex muda a lista conforme o modo: sempre relê. Os demais usam a lista já buscada, salvo `force`
     // (abrir o `/` ou o painel), que mantém a guardada na tela enquanto a nova chega.
-    fn ensure_commands(&mut self, force: bool) {
-        let (Some(api), Some(session), Some(cache)) = (self.session_api(), self.selected.clone(), self.commands_key()) else { return; };
+    fn ensure_commands(&mut self, force: bool, cx: &App) {
+        if self.selected.is_none() {
+            let Some(source) = self.new_chat_commands(cx) else { return; };
+            if !force && self.commands.get(&source.key).is_some_and(|r| r.is_ok()) { return; }
+            self.commands_seq += 1;
+            let seq = self.commands_seq;
+            self.commands_latest.insert(source.key.clone(), seq);
+            let (connection, tx) = (self.connection, self.tx.clone());
+            self.runtime.spawn(async move {
+                let result = source.api.new_chat_commands(source.cwd.as_deref(), source.config.as_deref(), source.headless).await;
+                let _ = tx.send(Envelope { connection, selection: None, payload: Payload::Commands(source.key, seq, result) }).await;
+            });
+            return;
+        }
+        let (Some(api), Some(session), Some(cache)) = (self.session_api(), self.selected.clone(), self.commands_key(cx)) else { return; };
         if !force && session.provider != "codex" && self.commands.get(&cache).is_some_and(|r| r.is_ok()) { return; }
         self.commands_seq += 1;
         let seq = self.commands_seq;
@@ -3075,7 +3102,7 @@ impl Hangar {
         let attached = self.attachments.get(&key).is_some_and(|list| !list.is_empty());
         // Comando digitado (`/compact`, `/btw …`) vai sozinho: blocos na frente o desfariam, e a bandeja fica para a
         // próxima mensagem.
-        let command = composer::typed_command(self.command_list(), &text).is_some() || composer::side_question(&text);
+        let command = composer::typed_command(self.command_list(cx), &text).is_some() || composer::side_question(&text);
         let referenced = !command && self.has_context_refs(&key);
         if text.trim().is_empty() && !attached && !referenced { return; }
         let flying = self.delivery.pending(&key);
@@ -3089,7 +3116,7 @@ impl Hangar {
         let refs = if referenced { self.context_refs_snapshot(&key) } else { Vec::new() };
         // Com anexo a legenda vai na frente do prompt: o comando do campo continua sendo o da mensagem.
         let provider = self.provider().0.to_owned();
-        if let Some(command) = composer::typed_command(self.command_list(), &text).cloned() {
+        if let Some(command) = composer::typed_command(self.command_list(cx), &text).cloned() {
             if let Some(warning) = composer::blocked_command(&provider, &command, self.btw_ready()) {
                 self.action_feedback.insert(key, (tr(warning).replace("{cmd}", &format!("/{}", command.name)), true));
                 cx.notify();
@@ -3602,6 +3629,8 @@ impl Hangar {
             let whole = self.composer_cursor(cx).and_then(|(text, cursor)| composer::slash_token(&text, cursor).map(|t| t.whole));
             if whole == Some(false) { self.complete_slash(&command.name, window, cx); return; }
         }
+        // Sem sessão ainda não há para onde enviar: a escolha vira o texto do campo, e o Enviar cria a conversa com ele.
+        if self.selected.is_none() { self.fill_command(&command.name, from_panel, window, cx); return; }
         if let Some(warning) = composer::blocked_command(&provider, &command, self.btw_ready()) {
             if let Some(key) = self.selected_key() {
                 self.action_feedback.insert(key, (tr(warning).replace("{cmd}", &format!("/{}", command.name)), true));
@@ -3628,7 +3657,7 @@ impl Hangar {
         let Some((text, cursor)) = self.composer_cursor(cx) else { return Vec::new(); };
         if self.suggest_dismissed.as_deref() == Some(text.as_str()) { return Vec::new(); }
         let Some(token) = composer::slash_token(&text, cursor) else { return Vec::new(); };
-        composer::suggestions(self.command_list(), token.query).into_iter().cloned().collect()
+        composer::suggestions(self.command_list(cx), token.query).into_iter().cloned().collect()
     }
 
     /// Texto do campo e posição do cursor; com trecho selecionado não há cursor.
@@ -5165,12 +5194,12 @@ impl Hangar {
 
     fn render_command_panel(&self, cx: &mut Context<Self>) -> AnyElement {
         let query = self.command_search.read(cx).value().to_lowercase();
-        let cache = self.commands_key().and_then(|key| self.commands.get(&key));
+        let cache = self.commands_key(cx).and_then(|key| self.commands.get(&key));
         let body = match cache {
             None => popup::skeleton("commands-loading", 4).into_any_element(),
             Some(Err(reason)) => div().px(px(8.)).flex().items_center().gap_2().text_sm().text_color(theme::warning())
                 .child(div().flex_1().min_w_0().child(tr("commands_failed").replace("{reason}", reason)))
-                .child(Button::new("commands-retry").ghost().xsmall().flex_shrink_0().label(tr("retry")).on_click(cx.listener(|this, _, _, cx| { this.ensure_commands(true); cx.notify(); })))
+                .child(Button::new("commands-retry").ghost().xsmall().flex_shrink_0().label(tr("retry")).on_click(cx.listener(|this, _, _, cx| { this.ensure_commands(true, cx); cx.notify(); })))
                 .into_any_element(),
             Some(Ok(list)) => {
                 let matches: Vec<&CommandInfo> = list.iter().filter(|c| query.is_empty() || c.name.to_lowercase().contains(&query)
@@ -5266,11 +5295,15 @@ impl Hangar {
         div().flex().flex_col().rounded_md().bg(theme::popup_content_fill()).p_1()
             .children(suggestions.iter().enumerate().map(|(n, command)| {
                 let picked = command.clone();
-                Button::new(SharedString::from(format!("suggest-{}", command.name))).ghost().small().w_full().selected(n == active)
-                    .child(div().flex_shrink_0().font_family(crate::theme::MONO).child(format!("/{}", command.name)))
-                    .when_some(command.argument_hint.clone(), |el, hint| el.child(div().flex_shrink_0().text_xs().text_color(theme::muted()).child(hint)))
-                    .child(div().flex_1().min_w_0().truncate().text_xs().text_color(theme::muted()).child(command.description.clone().unwrap_or_default()))
-                    .on_click(cx.listener(move |this, _, window, cx| this.pick_command(picked.clone(), false, window, cx)))
+                let marked = n == active;
+                // O "selecionado" do botão fantasma some no vidro: o marcado leva o tom de destaque e o traço.
+                div().relative().w_full().rounded_md().when(marked, |el| el.bg(theme::accent_dim()))
+                    .child(Button::new(SharedString::from(format!("suggest-{}", command.name))).ghost().small().w_full()
+                        .child(div().flex_shrink_0().font_family(crate::theme::MONO).child(format!("/{}", command.name)))
+                        .when_some(command.argument_hint.clone(), |el, hint| el.child(div().flex_shrink_0().text_xs().text_color(theme::muted()).child(hint)))
+                        .child(div().flex_1().min_w_0().truncate().text_xs().text_color(theme::muted()).child(command.description.clone().unwrap_or_default()))
+                        .on_click(cx.listener(move |this, _, window, cx| this.pick_command(picked.clone(), false, window, cx))))
+                    .when(marked, |el| el.child(div().absolute().left_0().top(px(4.)).bottom(px(4.)).w(px(3.)).rounded(px(2.)).bg(theme::accent())))
             }))
             .into_any_element()
     }
@@ -5296,7 +5329,7 @@ impl Hangar {
         let referenced = key.as_ref().is_some_and(|key| self.has_context_refs(key));
         let dictated = self.dictation_here(cx) && (self.dictation.recording() || self.dictation.processing());
         let has_input = !text.trim().is_empty() || attached || referenced || dictated;
-        let suggestions = if readable { self.visible_suggestions(cx) } else { Vec::new() };
+        let suggestions = if readable || new_chat { self.visible_suggestions(cx) } else { Vec::new() };
         if self.suggest_pick >= suggestions.len() { self.suggest_pick = 0; }
         let tray = key.as_ref().and_then(|key| self.render_attachments(key, cx));
         let refs_tray = key.as_ref().and_then(|key| self.render_context_tray(key, cx));
@@ -5470,7 +5503,7 @@ impl Hangar {
                 if this.command_panel {
                     this.close_controls();
                     this.close_recent();
-                    this.ensure_commands(true);
+                    this.ensure_commands(true, cx);
                     this.command_search.update(cx, |input, cx| { input.set_value("", window, cx); input.focus(window, cx); });
                 }
                 cx.notify();

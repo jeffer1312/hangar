@@ -437,6 +437,17 @@ impl Api {
         self.checked(r, false).await?.json().await.map_err(|_| Failure::local("invalid_response"))
     }
 
+    /// A lista do `/` da conversa que ainda vai nascer: Claude, na pasta e conta escolhidas (sem elas, as da conta padrão).
+    pub async fn new_chat_commands(&self, cwd: Option<&str>, config_dir: Option<&str>, headless: bool) -> Result<Vec<CommandInfo>, Failure> {
+        let mut query = Vec::new();
+        if let Some(cwd) = cwd { query.push(("cwd", cwd)); }
+        if let Some(config) = config_dir { query.push(("config_dir", config)); }
+        if headless { query.push(("headless", "1")); }
+        let r = self.client.get(self.server_url(&["claude", "commands"], &query)).timeout(Duration::from_secs(30))
+            .send().await.map_err(|_| Failure::transport(false))?;
+        self.checked(r, false).await?.json().await.map_err(|_| Failure::local("invalid_response"))
+    }
+
     /// POST com corpo cru numa rota do servidor (evidência do Mission Control). Queda depois de mandar é incerteza.
     pub async fn server_upload(&self, path: &[&str], query: &[(&str, &str)], bytes: Vec<u8>) -> Result<Value, Failure> {
         let r = self.client.post(self.server_url(path, query)).header(header::CONTENT_TYPE, "application/octet-stream")

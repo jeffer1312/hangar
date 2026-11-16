@@ -508,6 +508,115 @@ async fn commands_http_is_owned_by_rust_and_reads_the_headless_project() {
     assert!(commands.iter().any(|c| c.name == "reload-plugins"));
 }
 
+#[tokio::test]
+async fn commands_new_chat_route_needs_no_session_and_validates_folder_and_account() {
+    use hangar_server::{
+        accounts::{AccountService, environment::AccountEnvironment},
+        auth::TrustedHosts,
+        config::Config,
+        routes::AppState,
+    };
+    let root = tempfile::tempdir().unwrap();
+    let project = root.path().join("project");
+    fs::create_dir_all(project.join(".claude/commands")).unwrap();
+    fs::write(
+        project.join(".claude/commands/local.md"),
+        "---\ndescription: Comando do projeto\nargument-hint: <alvo>\n---\n",
+    )
+    .unwrap();
+    let skill = root.path().join(".claude/skills/global-skill");
+    fs::create_dir_all(&skill).unwrap();
+    fs::write(
+        skill.join("SKILL.md"),
+        "---\nname: global-skill\ndescription: Skill da conta\n---\n",
+    )
+    .unwrap();
+    let cfg = Config {
+        listen: "127.0.0.1:0".parse().unwrap(),
+        upstream: super::refused_address(),
+        auth_token: "commands-owner".into(),
+        internal_secret: "commands-private".into(),
+        trusted: TrustedHosts::parse("127.0.0.1"),
+        log_path: None,
+    };
+    let mut state = AppState::new(cfg);
+    state.accounts = AccountService::new(AccountEnvironment::from_map(
+        std::collections::BTreeMap::from([
+            ("HOME".into(), root.path().to_string_lossy().into_owned()),
+            (
+                "USERPROFILE".into(),
+                root.path().to_string_lossy().into_owned(),
+            ),
+            // Sem CLI: a resposta não pode esperar a sondagem, sai com a lista do disco.
+            ("PATH".into(), String::new()),
+        ]),
+    ));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    state.groups = None;
+    state.share = None;
+    let task = tokio::spawn(async move {
+        hangar_server::routes::serve_with_state(listener, state)
+            .await
+            .unwrap();
+    });
+    let url = format!("http://{address}/api/claude/commands");
+    let get = |query: Vec<(&'static str, String)>, token: bool| {
+        let query = form_urlencoded::Serializer::new(String::new()).extend_pairs(&query).finish();
+        let mut request = super::fake::client().get(format!("{url}?{query}"));
+        if token {
+            request = request.bearer_auth("commands-owner");
+        }
+        async move {
+            let response = request.send().await?;
+            let status = response.status();
+            let body: Value = serde_json::from_slice(&response.bytes().await?).unwrap_or(Value::Null);
+            Ok::<_, reqwest::Error>((status, body))
+        }
+    };
+    let result = async {
+        let names = |body: &Value| -> Vec<String> {
+            body.as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|c| c["name"].as_str().map(str::to_owned))
+                .collect()
+        };
+        let (status, global) = get(vec![], true).await?;
+        assert_eq!(status, reqwest::StatusCode::OK, "sem pasta nem sessão: {global}");
+        let global = names(&global);
+        assert!(global.iter().any(|n| n == "global-skill"), "skill da conta sem pasta escolhida: {global:?}");
+        assert!(!global.iter().any(|n| n == "local"));
+        assert!(global.iter().any(|n| n == "doctor"), "com terminal, o catálogo inteiro");
+
+        let (status, body) = get(vec![("cwd", project.to_string_lossy().into_owned())], true).await?;
+        assert_eq!(status, reqwest::StatusCode::OK);
+        let commands: Vec<CommandInfo> = serde_json::from_value(body).unwrap();
+        let local = commands.iter().find(|c| c.name == "local").expect("comando da pasta escolhida");
+        assert_eq!(local.argument_hint.as_deref(), Some("<alvo>"));
+        assert!(commands.iter().any(|c| c.name == "global-skill"));
+
+        let (_, headless) = get(vec![("headless", "1".into())], true).await?;
+        assert!(!names(&headless).iter().any(|n| n == "doctor"), "sem terminal some o que só a TUI atende");
+
+        let (status, body) = get(vec![("cwd", root.path().join("missing").to_string_lossy().into_owned())], true).await?;
+        assert_eq!(status, reqwest::StatusCode::BAD_REQUEST);
+        assert_eq!(body["detail"]["code"], "erro_cwd_inexistente");
+
+        let (status, body) = get(vec![("config_dir", root.path().join(".claude-unknown").to_string_lossy().into_owned())], true).await?;
+        assert_eq!(status, reqwest::StatusCode::BAD_REQUEST);
+        assert_eq!(body["detail"]["code"], "erro_config_dir_invalido");
+
+        let (status, _) = get(vec![], false).await?;
+        assert_eq!(status, reqwest::StatusCode::UNAUTHORIZED);
+        Ok::<_, reqwest::Error>(())
+    }
+    .await;
+    task.abort();
+    let _ = task.await;
+    result.unwrap();
+}
+
 #[test]
 fn commands_frontmatter_updates_and_directory_changes_are_visible() {
     let root = tempfile::tempdir().unwrap();

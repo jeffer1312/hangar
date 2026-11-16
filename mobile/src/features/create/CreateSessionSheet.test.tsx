@@ -34,6 +34,7 @@ const calls = vi.hoisted(() => ({
   cotas: [] as unknown[],
   worktrees: vi.fn(),
   branches: vi.fn(),
+  commands: vi.fn(),
 }));
 const server = { id: 'server-b', label: 'Servidor B', baseUrl: 'https://b.local', token: 'token-b' };
 
@@ -84,6 +85,9 @@ vi.mock('react-native-keyboard-controller', () => ({ KeyboardAvoidingView: ({ ch
 vi.mock('expo-image-picker', () => ({}));
 vi.mock('expo-document-picker', () => ({}));
 vi.mock('../../chat/draftAttachments', () => ({ retainDraftAttachment: vi.fn(async (a: unknown) => a), removeDraftAttachment: vi.fn() }));
+// A lista real lê as descrições traduzidas ao carregar; aqui basta um botão por comando sugerido.
+vi.mock('../../chat/SlashSuggest', () => ({ SlashSuggest: ({ matches, onPick }: { matches: { name: string }[]; onPick: (c: { name: string }) => void }) =>
+  createElement('div', { 'data-testid': 'slash-suggest' }, matches.map((c) => createElement('button', { key: c.name, 'aria-label': `/${c.name}`, onClick: () => onPick(c) }, c.name))) }));
 vi.mock('../ditado/EstiloPill', () => ({
   DictationStyleMenu: ({ open }: { open: boolean }) => open ? createElement('div', { role: 'dialog', 'aria-label': 'ditado_estilo_titulo' }) : null,
   useDictationStyleLabel: () => 'estilo',
@@ -172,6 +176,7 @@ vi.mock('@hangar/core', async (original) => ({
   releasePrewarmForServer: calls.releasePrewarm,
   getWorktreesForServer: calls.worktrees,
   getFolderBranchesForServer: calls.branches,
+  getNewChatCommandsForServer: calls.commands,
   sendInputForServer: calls.send,
   getHistory: calls.history,
   getArchivePorCwd: calls.archives,
@@ -337,6 +342,7 @@ describe('CreateSessionSheet Codex', () => {
     calls.releasePrewarm.mockReset().mockResolvedValue(undefined);
     calls.worktrees.mockReset().mockResolvedValue([]);
     calls.branches.mockReset().mockResolvedValue({ current: 'main', branches: ['main'], remotes: [], dirty: false });
+    calls.commands.mockReset().mockResolvedValue([]);
     calls.send.mockReset().mockResolvedValue(undefined);
     calls.history.mockReset().mockResolvedValue([]);
     calls.archives.mockReset().mockResolvedValue([]);
@@ -417,6 +423,27 @@ describe('CreateSessionSheet Codex', () => {
     await act(async () => Promise.resolve());
     return { container, root };
   }
+
+  it('o `/` sem sessão sugere a lista da conta e pasta escolhidas, e a escolha só entra no campo', async () => {
+    calls.commands.mockResolvedValue([
+      { name: 'global-skill', display: '/global-skill', description: null, argumentHint: null, source: 'skill', destructive: false },
+      { name: 'help', display: '/help', description: null, argumentHint: null, source: 'builtin', destructive: false },
+    ]);
+    const { container, root } = await renderSheet(false, false);
+    try {
+      expect(calls.commands).not.toHaveBeenCalled();
+      await act(async () => type(container, '/glo'));
+      for (let i = 0; i < 3; i++) await act(async () => Promise.resolve());
+      expect(calls.commands).toHaveBeenCalledWith(expect.objectContaining({ id: server.id }), expect.anything(), null, expect.any(Boolean));
+      const suggest = container.querySelector('[data-testid="slash-suggest"]') as HTMLElement;
+      expect([...suggest.querySelectorAll('button')].map((b) => b.textContent)).toEqual(['global-skill']);
+      await act(async () => button(suggest, '/global-skill')!.click());
+      const field = container.querySelector('textarea[aria-label="nova_conversa_placeholder"]') as HTMLTextAreaElement;
+      expect(field.value).toBe('/global-skill ');
+      expect(calls.create).not.toHaveBeenCalled();
+      expect(calls.send).not.toHaveBeenCalled();
+    } finally { act(() => root.unmount()); }
+  });
 
   it('APK usa modelo, esforço e Bypass salvos no servidor pelo desktop', async () => {
     calls.configs.mockResolvedValue([{ path: '/account', label: 'Conta', active: true }]);

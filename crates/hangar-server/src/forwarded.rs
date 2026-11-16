@@ -67,6 +67,8 @@ pub async fn private(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connect
         Owned::Conductor
     } else if method == Method::GET && crate::commands::matches(&path) {
         Owned::Commands
+    } else if method == Method::GET && path == crate::commands::NEW_CHAT_PATH && !guest {
+        Owned::NewChatCommands
     } else if method == Method::POST && path == crate::mermaid::PATH {
         Owned::Mermaid
     } else if crate::prewarm::http::matches(&method, &path) {
@@ -126,6 +128,7 @@ pub async fn private(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connect
         Owned::PushExpo => crate::push_expo::serve(&st, req).await,
         Owned::Conductor => crate::orq_conductor::serve(&st, req).await,
         Owned::Commands => crate::commands::serve(&st, req).await,
+        Owned::NewChatCommands => crate::commands::serve_new_chat(&st, req).await,
         Owned::Mermaid => crate::mermaid::serve(&st, req).await,
         Owned::Prewarm => crate::prewarm::http::serve(&st, req).await,
         Owned::BrowserUrl(guest) => crate::remote_browser::url::serve_forwarded(&st, req, guest).await,
@@ -165,4 +168,4 @@ fn live_resume(method: &Method, path: &str) -> Option<String> {
 }
 
 /// As rotas do Rust que aceitam o repasse.
-enum Owned { Read(String, bool, bool), OrchestrationGuard(String), Models, Orchestration, OmpSync, Groups(bool), Conductor, Catalog, SessionDefaults, PushExpo, Commands, Mermaid, Prewarm, Nav, BrowserUrl(bool), Plans, Worktrees, Reviews, JevDelivery, ClientApi, ArchiveResume(String, String), Resume(String), Media(String, bool) }
+enum Owned { Read(String, bool, bool), OrchestrationGuard(String), Models, Orchestration, OmpSync, Groups(bool), Conductor, Catalog, SessionDefaults, PushExpo, Commands, NewChatCommands, Mermaid, Prewarm, Nav, BrowserUrl(bool), Plans, Worktrees, Reviews, JevDelivery, ClientApi, ArchiveResume(String, String), Resume(String), Media(String, bool) }

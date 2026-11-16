@@ -5,8 +5,8 @@ pub mod probe;
 mod service;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-pub(crate) use service::matches;
-pub use service::{Context, Service, route, serve};
+pub(crate) use service::{NEW_CHAT_PATH, matches};
+pub use service::{Context, Service, new_chat_route, route, serve, serve_new_chat};
 use std::{
     collections::{HashMap, HashSet},
     fs,
