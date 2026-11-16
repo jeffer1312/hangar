@@ -219,10 +219,13 @@ pub(crate) fn read_html(path: &std::path::Path) -> Result<String, FilePageRefusa
     use std::io::Read;
     let unreadable = refusal(StatusCode::NOT_FOUND, "file_page_unreadable", "o arquivo não pôde ser lido");
     let too_large = refusal(StatusCode::PAYLOAD_TOO_LARGE, "file_page_too_large", "o html passa de 512000 caracteres");
-    let file = std::fs::File::open(path).map_err(|_| unreadable)?;
-    if !file.metadata().is_ok_and(|m| m.is_file()) {
+    // Antes de abrir: abrir um pipe com nome `.html` bloqueia até alguém escrever nele.
+    let meta = std::fs::metadata(path)
+        .map_err(|_| refusal(StatusCode::NOT_FOUND, "file_page_unreadable", "o arquivo não pôde ser lido"))?;
+    if !meta.is_file() {
         return Err(refusal(StatusCode::BAD_REQUEST, "file_page_not_file", "não é um arquivo comum"));
     }
+    let file = std::fs::File::open(path).map_err(|_| unreadable)?;
     // Um caractere UTF-8 ocupa até 4 bytes: além disso nem vale ler o resto.
     let limit = HTML_MAX_CHARS * 4;
     let mut bytes = Vec::new();

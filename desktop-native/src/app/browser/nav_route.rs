@@ -27,13 +27,19 @@ pub(super) fn nav_target(server: &str, owner_loopback: Option<bool>, data: &serd
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub(super) fn cdp_owner(name: &str, machines: impl IntoIterator<Item = (String, bool, bool)>) -> Result<String, (u16, String)> {
     let mut local = false;
+    let mut owners = Vec::new();
     for (key, loopback, listed) in machines {
         if !loopback { continue; }
         local = true;
-        if listed { return Ok(format!("{key}::{name}")); }
+        if listed { owners.push(key); }
     }
-    if local { Err((404, format!("erro: session_not_found: a sessao {name} nao existe no servidor desta maquina"))) }
-    else { Err((503, "erro: no_local_server: nenhum servidor desta maquina esta ligado no app".into())) }
+    // Dois servidores desta máquina com o mesmo nome de sessão: escolher um abriria o navegador errado calado.
+    match owners.as_slice() {
+        [key] => Ok(format!("{key}::{name}")),
+        [_, _, ..] => Err((409, format!("erro: ambiguous_session: a sessao {name} existe em mais de um servidor desta maquina"))),
+        [] if local => Err((404, format!("erro: session_not_found: a sessao {name} nao existe no servidor desta maquina"))),
+        [] => Err((503, "erro: no_local_server: nenhum servidor desta maquina esta ligado no app".into())),
+    }
 }
 
 #[cfg(test)]
@@ -71,5 +77,7 @@ mod tests {
         assert_eq!(cdp_owner("api", vec![(LOCAL.to_owned(), true, false)]).unwrap_err().0, 404);
         assert_eq!(cdp_owner("api", vec![("https://casa.ts.net".to_owned(), false, true)]).unwrap_err().0, 503);
         assert_eq!(cdp_owner("api", Vec::new()).unwrap_err().0, 503);
+        let twice = vec![(LOCAL.to_owned(), true, true), ("http://127.0.0.1:9765".to_owned(), true, true)];
+        assert_eq!(cdp_owner("api", twice).unwrap_err().0, 409, "dois servidores locais com a sessão: nenhum é escolhido calado");
     }
 }
