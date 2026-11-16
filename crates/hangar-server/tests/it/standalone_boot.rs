@@ -72,8 +72,14 @@ fn wait_exit(server: &mut Server, limit: Duration) -> std::process::ExitStatus {
     }
 }
 
+/// Pela regra do servidor, com o ambiente que o `command` monta: no Windows os logs ficam em
+/// `AppData\Local`, não em `.hangar`.
 fn diary(home: &Path) -> Vec<Value> {
-    let Ok(dir) = std::fs::read_dir(home.join(".hangar/logs/diario/servidor-rust")) else { return Vec::new() };
+    let text = home.to_string_lossy().into_owned();
+    let env = hangar_server::accounts::environment::AccountEnvironment::from_map(
+        [("HOME".to_owned(), text.clone()), ("USERPROFILE".to_owned(), text)].into());
+    let Some(base) = hangar_core::paths::log_base_in(&env) else { return Vec::new() };
+    let Ok(dir) = std::fs::read_dir(base.join("diario").join("servidor-rust")) else { return Vec::new() };
     let mut files: Vec<_> = dir.flatten().map(|entry| entry.path()).collect();
     files.sort();
     files.iter().flat_map(|file| std::fs::read_to_string(file).unwrap().lines()
