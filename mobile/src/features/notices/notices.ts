@@ -50,21 +50,48 @@ export const isFixRunningNote = (ev: ChatEvent) => isFixNote(ev) && ev.notice_me
 
 export type FixState = { state: 'running'; child: string } | { state: 'done' | 'failed' };
 
+type Latest = Map<string, { attempt: number; state: FixState }>;
+const RANK = { running: 0, failed: 1, done: 2 } as const;
+
+/** Soma uma nota de conserto ao estado; `true` quando ela mudou alguma coisa. */
+function absorb(latest: Latest, ev: ChatEvent): boolean {
+  const meta = ev.notice_meta;
+  const of = meta?.fix_of;
+  const kind = meta?.state;
+  if (!meta || !of || (kind !== 'running' && kind !== 'done' && kind !== 'failed')) return false;
+  const attempt = meta.attempt ?? 0;
+  const now = latest.get(of);
+  if (now && !(attempt > now.attempt || (attempt === now.attempt && RANK[kind] > RANK[now.state.state]))) return false;
+  latest.set(of, { attempt, state: kind === 'running' ? { state: 'running', child: meta.child ?? '' } : { state: kind } });
+  return true;
+}
+
 /** Por aviso, a tentativa de maior `attempt`; nela, o resultado vence o andamento. */
 export function fixStates(events: readonly ChatEvent[]): Map<string, FixState> {
-  const latest = new Map<string, { attempt: number; state: FixState }>();
-  const rank = { running: 0, failed: 1, done: 2 } as const;
-  for (const ev of events) {
-    const meta = ev.notice_meta;
-    const of = meta?.fix_of;
-    const kind = meta?.state;
-    if (!of || (kind !== 'running' && kind !== 'done' && kind !== 'failed')) continue;
-    const attempt = meta.attempt ?? 0;
-    const state: FixState = kind === 'running' ? { state: 'running', child: meta.child ?? '' } : { state: kind };
-    const now = latest.get(of);
-    if (!now || attempt > now.attempt || (attempt === now.attempt && rank[kind] > rank[now.state.state])) latest.set(of, { attempt, state });
-  }
-  return new Map([...latest].map(([of, { state }]) => [of, state]));
+  return fixTracker()(events);
+}
+
+/**
+ * O mesmo cálculo para uma lista que cresce: com os eventos de antes iguais, lê só os novos. Devolve o mesmo mapa
+ * enquanto nenhum conserto muda, para a lista não redesenhar as linhas.
+ */
+export function fixTracker(): (events: readonly ChatEvent[]) => Map<string, FixState> {
+  let seen: readonly ChatEvent[] = [];
+  let latest: Latest = new Map();
+  let out = new Map<string, FixState>();
+  return (events) => {
+    const last = seen.length - 1;
+    const grew = last >= 0 && events.length > last && events[last] === seen[last];
+    if (!grew) latest = new Map();
+    let changed = !grew;
+    for (let i = grew ? seen.length : 0; i < events.length; i++) changed = absorb(latest, events[i]) || changed;
+    seen = events;
+    if (changed) {
+      const next = new Map([...latest].map(([of, { state }]) => [of, state]));
+      if (!sameFixStates(out, next)) out = next;
+    }
+    return out;
+  };
 }
 
 /** Mesmo estado para os mesmos avisos: a lista guarda o mapa anterior e só redesenha as linhas quando um conserto muda. */

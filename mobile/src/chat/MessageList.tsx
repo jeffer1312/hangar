@@ -11,7 +11,7 @@ import { QueuedBubble } from './QueuedBubble';
 import { AssistantBubble } from './AssistantBubble';
 import { OrqTimelineEntry } from './OrqTimelineEntry';
 import { ClaudeNotice } from './ClaudeNotice';
-import { fixStates, isFixRunningNote, isNoticeLine, sameFixStates, type FixState } from '../features/notices/notices';
+import { fixTracker, isFixRunningNote, isNoticeLine } from '../features/notices/notices';
 import { PreviewBubble } from './PreviewBubble';
 import { ToolGroup } from './tools/ToolGroup';
 import { ToolCard } from './tools/ToolCard';
@@ -128,12 +128,8 @@ export function MessageList({
     return held.length ? { entries: [...(queuePanel?.entries ?? []), ...held], actions: queuePanel?.actions ?? false } : queuePanel;
   }, [pending, queuePanel]);
   // O mapa só troca quando um conserto muda: evento comum não redesenha as outras linhas.
-  const fixesRef = useRef<Map<string, FixState>>(new Map());
-  const fixes = useMemo(() => {
-    const next = fixStates(events);
-    if (!sameFixStates(fixesRef.current, next)) fixesRef.current = next;
-    return fixesRef.current;
-  }, [events, eventsRevision]);
+  const fixTrack = useRef(fixTracker());
+  const fixes = useMemo(() => fixTrack.current(events), [events, eventsRevision]);
   const projection = projectConversation(previous.current, {
     events, eventsRevision, pref, merge: look === 'tree', everyRun, tasksEnabled: tarefasLigadas,
     pagesEnabled: !!sessionName, running: new Set(agentesRodando.map((a) => a.id)), queuePanel: hiddenQueue,

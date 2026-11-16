@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import type { ChatEvent } from '@hangar/core';
-import { fixStates, isApiError, isFixRunningNote, noticeAction, sameFixStates, noticeCount, noticeDetail, noticeKey, noticeKeyLabel, noticeTitle, parseNoticeIgnores } from './notices';
+import { fixStates, fixTracker, isApiError, isFixRunningNote, noticeAction, sameFixStates, noticeCount, noticeDetail, noticeKey, noticeKeyLabel, noticeTitle, parseNoticeIgnores } from './notices';
 
 const ev = (text: string, notice_meta: ChatEvent['notice_meta'], extra: Partial<ChatEvent> = {}): ChatEvent =>
   ({ kind: 'assistant_msg', id: 'local-1', text, notice_meta, ...extra }) as ChatEvent;
@@ -48,6 +48,17 @@ describe('aviso da CLI do Claude', () => {
     expect(fixStates([done]).get('hookfail:b')).toBeUndefined();
     expect(sameFixStates(fixStates([running]), fixStates([running]))).toBe(true);
     expect(sameFixStates(fixStates([running]), fixStates([running, done]))).toBe(false);
+  });
+
+  test('acompanhamento lê só o que chegou e guarda o mesmo mapa sem conserto novo', () => {
+    const fix = (id: string, attempt: number, state: string) => ev('x', { fix_of: 'hookfail:a', attempt, state, child: 'c' }, { id });
+    const track = fixTracker();
+    const first = [fix('f1', 1, 'running')];
+    const a = track(first);
+    const b = track([...first, ev('oi', null, { id: 'm1' })]);
+    expect(b).toBe(a);
+    expect(track([...first, ev('oi', null, { id: 'm1' }), fix('d1', 1, 'done')]).get('hookfail:a')).toEqual({ state: 'done' });
+    expect(track([ev('outra', null, { id: 'z' })]).size).toBe(0);
   });
 
   test('lista ignorada: aceita a rota e o evento, recusa o torto', () => {

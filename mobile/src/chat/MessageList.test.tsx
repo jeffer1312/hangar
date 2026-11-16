@@ -37,6 +37,7 @@ vi.mock('./UserBubble', () => ({ UserBubble: ({ text }: { text: string }) => cre
 vi.mock('./AssistantBubble', () => ({ AssistantBubble: () => null, mkMarkdownStyle: () => ({}) }));
 vi.mock('react-native-enriched-markdown', () => ({ EnrichedMarkdownText: ({ markdown }: { markdown: string }) => createElement('article', null, markdown) }));
 vi.mock('../ui/Sheet', () => ({ Sheet: ({ children }: { children: ReactNode }) => createElement('section', null, children) }));
+vi.mock('expo-router', () => ({ useRouter: () => ({ push: vi.fn() }) }));
 vi.mock('../ui/Toast', () => ({ toast: { erro: vi.fn() } }));
 vi.mock('./PreviewBubble', () => ({ PreviewBubble: () => null }));
 vi.mock('./LiveWork', () => ({ AgentesRodando: () => null, PensamentoVivo: () => null, WorkingLine: () => null }));
