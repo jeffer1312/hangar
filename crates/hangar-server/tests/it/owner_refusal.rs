@@ -255,34 +255,8 @@ async fn term_handshake(srv: std::net::SocketAddr, query_token: &str, origin: &s
     }
 }
 
-/// T-06: a recusa do terminal que bloqueia a origem deixa um aviso no log com a origem (o Python:
-/// "<ip> errou o token 8 vezes em 30s — bloqueado por 30s"); as sete anteriores não avisam.
-#[tokio::test]
-async fn t06_the_terminal_refusal_that_blocks_an_origin_logs_a_warning_with_it() {
-    #[derive(Clone, Default)]
-    struct Log(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
-    impl std::io::Write for Log {
-        fn write(&mut self, data: &[u8]) -> std::io::Result<usize> { self.0.lock().unwrap().extend_from_slice(data); Ok(data.len()) }
-        fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
-    }
-    let log = Log::default();
-    let writer = log.clone();
-    // O servidor do teste roda nesta mesma thread (`current_thread`): o assinante vale para a rota.
-    let _logs = tracing::subscriber::set_default(tracing_subscriber::fmt().without_time().with_ansi(false).with_writer(move || writer.clone()).finish());
-    let srv = spawn_server(config("127.0.0.1")).await;
-    const ORIGIN: &str = "198.51.100.230";
-    const WARNING: &str = "token errado 8 vezes em 30 s; origem bloqueada";
-    let text = || String::from_utf8(log.0.lock().unwrap().clone()).unwrap();
-    for _ in 0..7 {
-        assert_eq!(term_handshake(srv, "errado", ORIGIN).await, (403, Vec::new()));
-    }
-    assert!(!text().contains(WARNING), "aviso antes do bloqueio: {}", text());
-    assert_eq!(term_handshake(srv, "errado", ORIGIN).await, (403, Vec::new()), "a oitava recusa");
-    let text = text();
-    let warnings: Vec<&str> = text.lines().filter(|line| line.contains(WARNING)).collect();
-    assert_eq!(warnings.len(), 1, "{text}");
-    assert!(warnings[0].contains("WARN") && warnings[0].contains(&format!("ip={ORIGIN}")), "{text}");
-}
+// T-06 (o aviso no log quando a origem é bloqueada) mora em `tests/terminal_refusal_log.rs`: o
+// assinante de log precisa de um processo só dele.
 
 /// T-10: `?token=` com texto não-ASCII (UTF-8 válido ou bytes soltos) é só um token errado: 403 vazio,
 /// sem derrubar nada; o servidor segue atendendo.

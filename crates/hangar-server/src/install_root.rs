@@ -6,7 +6,7 @@
 //!                                         que ainda sobe pelo Python, `-m app.main ARGS`
 //!
 //! Sem o `current` vale o checkout do lançador; sem nenhum dos dois sai com 3 e `launch_no_current`;
-//! uso errado, 2.
+//! uso errado, 2. No Windows o lançador fica de pé e religa o `hangar-server` que cai (decisão 38).
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -23,17 +23,16 @@ pub fn launch(args: &[String]) -> ExitCode {
     // A versão vai em toda linha do lançador: na troca, o log recebe a saída da anterior e da nova.
     let version = std::fs::canonicalize(current(&home)).ok()
         .and_then(|real| real.file_name().map(|n| n.to_string_lossy().into_owned())).unwrap_or_else(|| "?".to_owned());
-    report(log.as_deref(), &format!("launch_start: versão {version}, lançador pid {}", std::process::id()));
     let explicit = std::env::var_os("CP_RUST_SERVER_BIN");
-    let mut notes = Vec::new();
-    let chosen = backend_noted(&home, &args[1..], cfg!(windows), explicit.as_deref(), &mut notes);
-    for note in notes {
-        report(log.as_deref(), &note);
-    }
+    let mut lines = vec![format!("launch_start: versão {version}, lançador pid {}", std::process::id())];
+    let chosen = backend_noted(&home, &args[1..], cfg!(windows), explicit.as_deref(), &mut lines);
+    // O direto no Windows gira o log antes de escrever: estas linhas abrem o arquivo da vida nova.
+    let tell = |lines: &[String]| { for line in lines { report(log.as_deref(), line); } };
     match chosen {
-        Ok(Backend::Python(command)) => run(command, log.as_deref(), &version),
-        Ok(Backend::Direct(command)) => run_direct(command, log.as_deref(), &version),
+        Ok(Backend::Direct(command)) => run_direct(command, log.as_deref(), &version, lines),
+        Ok(Backend::Python(command)) => { tell(&lines); run(command, log.as_deref(), &version) }
         Err((code, path)) => {
+            tell(&lines);
             report(log.as_deref(), &format!("{code}: {}", path.display()));
             failed(log.as_deref(), "erro", code, &path.display().to_string());
             ExitCode::from(3)
@@ -45,13 +44,17 @@ pub fn launch(args: &[String]) -> ExitCode {
 /// relatório leva. `nivel` aviso quando o servidor sobe mesmo assim. O lançador não tem log
 /// próprio: a falha de gravar vai ao log da tarefa e ao stderr.
 fn failed(log: Option<&Path>, level: &str, code: &str, detail: &str) {
-    let line = serde_json::json!({"evento": "lancador.falhou", "nivel": level, "codigo": code, "detalhe": detail});
+    record(log, code, serde_json::json!({"evento": "lancador.falhou", "nivel": level, "codigo": code, "detalhe": detail}));
+}
+
+/// Uma linha do lançador no diário; a falha de gravar vai ao log da tarefa e ao stderr, com `what`.
+fn record(log: Option<&Path>, what: &str, line: serde_json::Value) {
     let written = match hangar_core::diag::diary_dir() {
         Some(dir) => hangar_core::diag::write_diary(&dir, &[line], chrono::Local::now()).map_err(|error| format!("{:?}", error.kind())),
         None => Err("sem pasta de logs".to_owned()),
     };
     if let Err(cause) = written {
-        report(log, &format!("launch_diary_unwritable: {code} não gravado no diário ({cause})"));
+        report(log, &format!("launch_diary_unwritable: {what} não gravado no diário ({cause})"));
     }
 }
 
@@ -84,10 +87,12 @@ fn run(mut command: std::process::Command, log: Option<&Path>, version: &str) ->
     ExitCode::from(126)
 }
 
-/// O lançador vira o `hangar-server`: mesmo pid, então o `sd_notify` dele vale para a unit.
+/// O lançador vira o `hangar-server`: mesmo pid, então o `sd_notify` dele vale para a unit. Quem
+/// religa a queda é o systemd/launchd.
 #[cfg(unix)]
-fn run_direct(mut command: std::process::Command, log: Option<&Path>, version: &str) -> ExitCode {
+fn run_direct(mut command: std::process::Command, log: Option<&Path>, version: &str, lines: Vec<String>) -> ExitCode {
     use std::os::unix::process::CommandExt;
+    for line in &lines { report(log, line); }
     let error = command.exec();
     report(log, &format!("launch_exec_failed: versão {version}: {error}"));
     failed(log, "erro", "launch_exec_failed", &Path::new(command.get_program()).display().to_string());
@@ -101,58 +106,92 @@ fn notify_from_env(state: &str) -> std::io::Result<()> {
 }
 
 /// No Windows: o servidor no Job do lançador, com o log da tarefa como saída (o Python o abria sozinho).
+/// O Agendador não religa quem cai depois de subir (decisão 38): o servidor que sai sem parada pedida
+/// (`exit_is_requested_stop`) volta depois da espera de `Relaunch`, sem desistir. O lançador só sai com a
+/// parada pedida ou morto, e aí o Job leva o servidor.
 #[cfg(windows)]
-fn run_direct(mut command: std::process::Command, log: Option<&Path>, version: &str) -> ExitCode {
-    // Um handle só, em modo de acréscimo: o lançador escreve antes de abrir o servidor e depois que
-    // ele sai, nunca junto com ele.
-    let file = log.and_then(|target| match open_log(target) {
-        Ok((file, used)) => {
-            if used != target {
-                say(Some(&file), log, &format!("AVISO: {} está preso por outro processo; a saída vai para {}", target.display(), used.display()));
+fn run_direct(mut command: std::process::Command, log: Option<&Path>, version: &str, lines: Vec<String>) -> ExitCode {
+    let launcher = std::process::id();
+    let mut relaunch = Relaunch::new(relaunch_first());
+    let (mut pending, mut previous_fall) = (lines, None::<u32>);
+    loop {
+        // Cada vida gira e abre o log de novo, num handle só e em acréscimo: o lançador escreve antes
+        // de abrir o servidor e depois que ele sai, nunca junto com ele.
+        let (file, held) = match log.map(|target| (target, open_log(target))) {
+            None => (None, None),
+            Some((target, Ok((file, used)))) => {
+                let held = (used != target).then(|| format!("AVISO: {} está preso por outro processo; a saída vai para {}", target.display(), used.display()));
+                (Some(file), held)
             }
-            Some(file)
-        }
-        Err(error) => {
-            report(log, &format!("launch_log_unavailable: {}: {error}", target.display()));
-            failed(log, "aviso", "launch_log_unavailable", &format!("{:?}", error.kind()));
-            None
-        }
-    });
-    say(file.as_ref(), log, &format!("launch_backend_starting: versão {version}, lançador pid {}", std::process::id()));
-    if let Err(error) = die_with_the_launcher() {
-        say(file.as_ref(), log, &format!("launch_job_failed: {error}"));
-        failed(log, "aviso", "launch_job_failed", &format!("{:?}", error.kind()));
-    }
-    if let Some(file) = &file {
-        match (file.try_clone(), file.try_clone()) {
-            (Ok(out), Ok(err)) => { command.stdout(out).stderr(err); }
-            (Err(error), _) | (_, Err(error)) => {
-                say(Some(file), log, &format!("launch_log_unavailable: {error}"));
+            Some((target, Err(error))) => {
+                report(log, &format!("launch_log_unavailable: {}: {error}", target.display()));
                 failed(log, "aviso", "launch_log_unavailable", &format!("{:?}", error.kind()));
+                (None, None)
             }
+        };
+        // `launch_start` e as notas da escolha abrem o arquivo da primeira vida.
+        for line in pending.drain(..).chain(held) { say(file.as_ref(), log, &line); }
+        let after = previous_fall.map(|fall| format!(", depois da queda {fall}")).unwrap_or_default();
+        say(file.as_ref(), log, &format!("launch_backend_starting: versão {version}, lançador pid {launcher}{after}"));
+        if previous_fall.is_none() && let Err(error) = die_with_the_launcher() {
+            say(file.as_ref(), log, &format!("launch_job_failed: {error}"));
+            failed(log, "aviso", "launch_job_failed", &format!("{:?}", error.kind()));
         }
-    }
-    let mut child = match command.spawn() {
-        Ok(child) => child,
-        Err(error) => {
-            say(file.as_ref(), log, &format!("launch_exec_failed: versão {version}: {error}"));
-            failed(log, "erro", "launch_exec_failed", &Path::new(command.get_program()).display().to_string());
-            return ExitCode::from(126);
-        }
-    };
-    let (pid, started) = (child.id(), std::time::Instant::now());
-    match child.wait() {
-        Ok(status) => {
-            if !status.success() {
-                say(file.as_ref(), log, &format!("launch_backend_exited: versão {version}, hangar-server pid {pid}, {status}, depois de {} s", started.elapsed().as_secs()));
+        match file.as_ref().map(|file| (file.try_clone(), file.try_clone())) {
+            Some((Ok(out), Ok(err))) => { command.stdout(out).stderr(err); }
+            Some((Err(error), _) | (_, Err(error))) => {
+                say(file.as_ref(), log, &format!("launch_log_unavailable: {error}"));
+                failed(log, "aviso", "launch_log_unavailable", &format!("{:?}", error.kind()));
+                command.stdout(std::process::Stdio::inherit()).stderr(std::process::Stdio::inherit());
             }
-            std::process::exit(status.code().unwrap_or(1))
+            None => { command.stdout(std::process::Stdio::inherit()).stderr(std::process::Stdio::inherit()); }
         }
-        Err(error) => {
-            say(file.as_ref(), log, &format!("launch_wait_failed: versão {version}, hangar-server pid {pid}: {error}"));
-            ExitCode::from(126)
+        let started = std::time::Instant::now();
+        let (ended, exit) = match command.spawn() {
+            Err(error) => {
+                failed(log, "erro", "launch_exec_failed", &Path::new(command.get_program()).display().to_string());
+                (format!("launch_exec_failed: versão {version}: {error}"), None)
+            }
+            Ok(mut child) => {
+                let pid = child.id();
+                let status = match child.wait() {
+                    Ok(status) => status,
+                    Err(error) => {
+                        say(file.as_ref(), log, &format!("launch_wait_failed: versão {version}, hangar-server pid {pid}: {error}"));
+                        return ExitCode::from(126);
+                    }
+                };
+                let exited = format!("launch_backend_exited: versão {version}, hangar-server pid {pid}, {status}, depois de {} s", started.elapsed().as_secs());
+                if exit_is_requested_stop(status.code()) {
+                    if !status.success() { say(file.as_ref(), log, &exited); }
+                    std::process::exit(status.code().unwrap_or(1));
+                }
+                (exited, status.code())
+            }
+        };
+        // O `Command` guarda as cópias do handle: soltas aqui, o log gira sem arquivo aberto.
+        command.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+        let lived = started.elapsed();
+        let (fall, wait) = relaunch.fall(lived);
+        say(file.as_ref(), log, &format!("{ended}; religa em {} ms (queda {fall})", wait.as_millis()));
+        // A queda vai ao diário que o relatório leva: o servidor só anota a vida que não parou limpa
+        // na subida seguinte, sem o código de saída.
+        if let Some(code) = exit {
+            record(log, "lancador.queda", serde_json::json!({"evento": "lancador.queda", "nivel": "erro", "codigo": "server_exited",
+                "saida": format!("0x{:08X}", code as u32), "vida_s": lived.as_secs(), "queda": fall, "espera_ms": wait.as_millis() as u64}));
         }
+        drop(file);
+        std::thread::sleep(wait);
+        previous_fall = Some(fall);
     }
+}
+
+/// A primeira espera da religada. `HANGAR_LAUNCH_RELAUNCH_FIRST_MS` só existe para os testes, que
+/// não esperam segundos por queda.
+#[cfg(windows)]
+fn relaunch_first() -> std::time::Duration {
+    std::env::var("HANGAR_LAUNCH_RELAUNCH_FIRST_MS").ok().and_then(|ms| ms.parse().ok())
+        .map(std::time::Duration::from_millis).unwrap_or(RELAUNCH_FIRST)
 }
 
 /// Linha do lançador pelo handle do log; sem ele, pelo `report` de sempre.

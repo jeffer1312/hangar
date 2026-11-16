@@ -133,6 +133,38 @@ pub fn server_binary(home: &Path, real: &Path, explicit: Option<&std::ffi::OsStr
         .ok_or(("launch_no_server", packaged))
 }
 
+/// Primeira espera antes de religar o servidor que caiu (decisão 38); dobra a cada queda seguida.
+pub const RELAUNCH_FIRST: std::time::Duration = std::time::Duration::from_secs(2);
+/// Teto da espera: a partir dele o lançador tenta a cada 10 min, sem desistir.
+pub const RELAUNCH_CEILING: std::time::Duration = std::time::Duration::from_secs(600);
+/// Vida que durou isto não é queda seguida: a espera volta ao começo. A janela do antigo
+/// Supervisor do Python (`CRASH_WINDOW`).
+pub const RELAUNCH_STABLE: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// As quedas seguidas do servidor que o lançador religa, e quanto esperar antes de cada religada.
+#[derive(Debug, Clone)]
+pub struct Relaunch {
+    first: std::time::Duration,
+    falls: u32,
+}
+
+impl Relaunch {
+    pub fn new(first: std::time::Duration) -> Self { Self { first, falls: 0 } }
+
+    /// A queda de uma vida que durou `lived`: o número dela entre as seguidas e a espera.
+    pub fn fall(&mut self, lived: std::time::Duration) -> (u32, std::time::Duration) {
+        if lived >= RELAUNCH_STABLE { self.falls = 0; }
+        self.falls = self.falls.saturating_add(1);
+        let wait = self.first.saturating_mul(2u32.saturating_pow(self.falls - 1)).min(RELAUNCH_CEILING);
+        (self.falls, wait)
+    }
+}
+
+/// Saída do servidor que é parada pedida, e não queda: 0 é a parada limpa dele (eventos de console
+/// no Windows, sinal no Unix); `0xFFFFFFFF` é o `Stop-Process -Force` (`TerminateProcess` com -1) do
+/// `Restart-HangarTask`, o reinício normal no Windows. `taskkill /F` encerra com 1: é queda.
+pub fn exit_is_requested_stop(code: Option<i32>) -> bool { matches!(code, Some(0 | -1)) }
+
 fn runnable(path: &Path) -> bool {
     #[cfg(unix)]
     { use std::os::unix::fs::PermissionsExt; std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0) }
@@ -295,6 +327,35 @@ mod tests {
         assert_eq!(program(&home), installed, "o de ~/.hangar/bin é mais novo");
         std::fs::File::options().write(true).open(&installed).unwrap().set_modified(older - std::time::Duration::from_secs(60)).unwrap();
         assert_eq!(program(&home), checkout.canonicalize().unwrap().join("crates/target/release/hangar-server"));
+    }
+
+    /// Decisão 38: 2 s dobrando até o teto de 10 min, sem desistir; uma vida de 60 s ou mais volta
+    /// a espera ao começo.
+    #[test]
+    fn the_relaunch_wait_doubles_up_to_ten_minutes_and_resets_after_a_stable_life() {
+        use std::time::Duration;
+        let mut relaunch = super::Relaunch::new(super::RELAUNCH_FIRST);
+        let waits: Vec<_> = (0..12).map(|_| relaunch.fall(Duration::from_secs(1))).collect();
+        let secs: Vec<_> = waits.iter().map(|(_, wait)| wait.as_secs()).collect();
+        assert_eq!(secs, [2, 4, 8, 16, 32, 64, 128, 256, 512, 600, 600, 600]);
+        assert_eq!(waits.last().unwrap().0, 12, "conta as quedas seguidas");
+        for _ in 0..100 { relaunch.fall(Duration::ZERO); }
+        assert_eq!(relaunch.fall(Duration::ZERO).1, super::RELAUNCH_CEILING, "sem estouro depois de muitas quedas");
+        assert_eq!(relaunch.fall(Duration::from_secs(59)).1, super::RELAUNCH_CEILING, "59 s ainda é queda seguida");
+        assert_eq!(relaunch.fall(super::RELAUNCH_STABLE), (1, Duration::from_secs(2)), "vida estável recomeça a conta");
+        assert_eq!(relaunch.fall(Duration::ZERO), (2, Duration::from_secs(4)));
+        let mut quick = super::Relaunch::new(Duration::from_millis(200));
+        assert_eq!([quick.fall(Duration::ZERO).1, quick.fall(Duration::ZERO).1].map(|w| w.as_millis()), [200, 400]);
+    }
+
+    /// Parada pedida não se religa: a limpa (0) e o `Stop-Process` do reinício (`0xFFFFFFFF`).
+    #[test]
+    fn only_a_clean_exit_or_the_restart_stop_process_is_a_requested_stop() {
+        assert!(super::exit_is_requested_stop(Some(0)));
+        assert!(super::exit_is_requested_stop(Some(0xFFFF_FFFFu32 as i32)));
+        for fall in [Some(1), Some(2), Some(5), Some(101), Some(0xC000_0409u32 as i32), None] {
+            assert!(!super::exit_is_requested_stop(fall), "{fall:?}");
+        }
     }
 
     #[test]

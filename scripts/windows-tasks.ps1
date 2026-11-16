@@ -51,6 +51,26 @@ function Get-HangarTaskProcesses($rows, [string]$name, [string]$directory) {
     }
 }
 
+# Decisao 38: o lancador do pacote fica de pe e religa o hangar-server que cai; entre a queda e a
+# religada ele e o unico processo da tarefa. Entra na parada o lancador pai de um candidato ou o
+# filho do wscript desta tarefa; o de outra instalacao, nao.
+function Get-HangarBackendLaunchers($rows, $candidates, [string]$name) {
+    if ($name -ne 'hangar-backend') { return }
+    $byId = @{}
+    foreach ($row in $rows) { $byId[[int]$row.ProcessId] = $row }
+    $vbs = [regex]::Escape((Join-Path $env:LOCALAPPDATA "hangar\$name.vbs"))
+    $taken = @($candidates | ForEach-Object { [int]$_.ProcessId })
+    $parents = @($candidates | ForEach-Object { [int]$_.ParentProcessId })
+    foreach ($row in $rows) {
+        if ($row.Name -notmatch '^hangar-(?:server|launcher)\.exe$' -or
+            $row.CommandLine -notmatch '(?:^|\s)launch\s+backend(?:\s|$)' -or [int]$row.ProcessId -in $taken) { continue }
+        $parent = $byId[[int]$row.ParentProcessId]
+        $fromTask = $parent -and $parent.Name -eq 'wscript.exe' -and $parent.CommandLine -match $vbs -and
+                    $parent.CreationDate -le $row.CreationDate
+        if ([int]$row.ProcessId -in $parents -or $fromTask) { $row }
+    }
+}
+
 function Test-HangarHttp([int]$port) {
     $response = $null
     try {
@@ -179,6 +199,8 @@ function Restart-HangarTask([string]$name, [int]$port, [string]$directory, [swit
         $candidates = @($candidates) + @($rows | Where-Object {
             $_.Name -eq 'hangar-server.exe' -and [int]$_.ParentProcessId -in @($candidates.ProcessId)
         })
+        # Por ultimo: parado o servidor, o lancador sai sozinho; parado o lancador, o Job leva o resto.
+        $candidates = @($candidates) + @(Get-HangarBackendLaunchers $rows $candidates $name)
         $listeners = @(Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue)
         foreach ($listener in $listeners) {
             if ($listener.OwningProcess -notin @($candidates.ProcessId)) {

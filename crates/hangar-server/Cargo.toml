@@ -188,6 +188,10 @@ name = "runtime_diagnostics"   # logger global do tracing e contagem exata de av
 path = "tests/runtime_diagnostics.rs"
 
 [[test]]
+name = "terminal_refusal_log"   # assinante global do tracing para o aviso do bloqueio (T-06)
+path = "tests/terminal_refusal_log.rs"
+
+[[test]]
 name = "contract_local_policy"   # troca HOME, USERPROFILE e TZ
 path = "tests/contract_local_policy.rs"
 

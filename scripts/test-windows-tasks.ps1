@@ -35,6 +35,16 @@ $direto = @(
     (Row 73 71 'hangar-server.exe' '"C:\Users\u\.hangar\versions\0.1.0.7\bin\hangar-server.exe" open claude')
 )
 Assert (((Get-HangarTaskProcesses $direto 'hangar-backend' 'C:\Users\u\.hangar\versions\0.1.0.8\backend').ProcessId -join ',') -eq '71') 'hangar-server do lancador nao identificado (ou outro hangar-server entrou junto)'
+# Decisao 38: o lancador religa o servidor que cai e entra na parada; o de outra instalacao, nao.
+Assert (((Get-HangarBackendLaunchers $direto @($direto[1]) 'hangar-backend').ProcessId -join ',') -eq '70') 'Lancador pai do hangar-server fora da parada'
+$vbs = Join-Path $env:LOCALAPPDATA 'hangar\hangar-backend.vbs'
+$espera = @(
+    (Row 80 1 'wscript.exe' "wscript.exe `"$vbs`""),
+    (Row 81 80 'hangar-launcher.exe' '"C:\Users\u\.hangar\bin\hangar-launcher.exe" launch backend --log "C:\l.log"'),
+    (Row 82 1 'hangar-launcher.exe' '"C:\outro\hangar-launcher.exe" launch backend --log "C:\outro.log"')
+)
+Assert (((Get-HangarBackendLaunchers $espera @() 'hangar-backend').ProcessId -join ',') -eq '81') 'Lancador na espera da religada nao identificado (ou o de outra instalacao entrou junto)'
+Assert (-not (Get-HangarBackendLaunchers $espera @() 'hangar-frontend')) 'Lancador do backend tomado pelo front'
 
 $script:events = @()
 function Reset-State {
@@ -123,6 +133,15 @@ try {
     # comentario no windows-tasks.ps1 e o scripts/test-windows-tasks-reais.ps1).
     Assert (($script:events -join ',') -eq 'stop:10,stop:11,start') 'Parada/reinicio fora de ordem'
     Assert ('settings:0' -notin $script:events) 'Voltou a pausar a recuperacao por Set-ScheduledTask (o Agendador recusa)'
+    # Decisao 38: entre a queda e a religada so o lancador esta de pe; o reinicio o para e sobe outro.
+    Reset-State
+    $script:processRows = $espera
+    $waiting = [pscustomobject]@{ Id = 81; StartTime = $old }
+    $waiting | Add-Member ScriptMethod WaitForExit { param($timeout) return $true }
+    $script:live = @{ 81 = $waiting }
+    $script:owner = $null
+    Restart-HangarTask 'hangar-backend' 8765 'C:\Users\u\.hangar\versions\0.1.0.8\backend' | Out-Null
+    Assert (($script:events -join ',') -eq 'stop:81,start') "Lancador na espera da religada nao foi parado: $($script:events -join ',')"
     # O Agendador pode aceitar o pedido sem abrir instancia: nao vale como reinicio feito.
     Reset-State
     $script:ignoredStarts = 1

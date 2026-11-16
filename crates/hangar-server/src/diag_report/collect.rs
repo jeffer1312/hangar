@@ -26,9 +26,10 @@ pub(crate) const PROBE_WAIT: Duration = Duration::from_secs(5);
 const TARGET_WAIT: Duration = Duration::from_secs(2);
 
 /// Subidas e quedas do backend e do `hangar-server`, conferidas no diário real. O lançador que não
-/// achou o servidor é religado sem fim pelo gerenciador: a causa só aparece por esta linha.
-const RESTARTS: [&str; 7] = ["backend.inicio", "backend.encerrando", "hangar_server.de_pe", "hangar_server.caiu",
-    "hangar_server.partida", "hangar_server.reserva", "lancador.falhou"];
+/// achou o servidor é religado sem fim pelo gerenciador: a causa só aparece por esta linha. No
+/// Windows quem religa o servidor que cai é o lançador (`lancador.queda`, com o código de saída).
+const RESTARTS: [&str; 8] = ["backend.inicio", "backend.encerrando", "hangar_server.de_pe", "hangar_server.caiu",
+    "hangar_server.partida", "hangar_server.reserva", "lancador.falhou", "lancador.queda"];
 /// Campos do `hangar-server.log` que podem sair: os que dizem o que caiu e onde. Valores passam pelo
 /// `scrub`, caminho vira o último segmento e cada um é cortado em `VALUE_MAX`.
 const LOG_FIELDS: [&str; 21] = ["code", "session", "account", "reason", "stage", "step", "kind", "io_kind", "os_error", "error",
