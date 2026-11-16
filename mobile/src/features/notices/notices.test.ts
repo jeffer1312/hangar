@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import type { ChatEvent } from '@hangar/core';
-import { isApiError, noticeCount, noticeDetail, noticeKey, noticeTitle, parseNoticeIgnores } from './notices';
+import { fixStates, isApiError, isFixRunningNote, noticeAction, noticeCount, noticeDetail, noticeKey, noticeKeyLabel, noticeTitle, parseNoticeIgnores } from './notices';
 
 const ev = (text: string, notice_meta: ChatEvent['notice_meta'], extra: Partial<ChatEvent> = {}): ChatEvent =>
   ({ kind: 'assistant_msg', id: 'local-1', text, notice_meta, ...extra }) as ChatEvent;
@@ -25,6 +25,27 @@ describe('aviso da CLI do Claude', () => {
     const error = ev('Failed to refresh OAuth token', { level: 'error' });
     expect(isApiError(error)).toBe(true);
     expect(noticeKey(error)).toBeNull();
+  });
+
+  test('ação do aviso vem do servidor; reinstalar sem plugin não tem botão', () => {
+    expect(noticeAction(ev('x', { action: 'reinstall_plugin', plugin: 'pl@mk' }))).toEqual({ kind: 'reinstall', plugin: 'pl@mk' });
+    expect(noticeAction(ev('x', { action: 'fix_hook' }))).toEqual({ kind: 'fix' });
+    expect(noticeAction(ev('x', { action: 'reinstall_plugin' }))).toBeNull();
+    expect(noticeAction(ev('x', {}))).toBeNull();
+    expect(noticeKeyLabel('note:plugin:pl@mk')).toContain('pl@mk');
+  });
+
+  test('conserto: a tentativa mais nova decide; o andamento não tem linha própria', () => {
+    const fix = (id: string, attempt: number, state: string) => ev('x', { fix_of: 'hookfail:a', attempt, state, child: 'conserto-s' }, { id });
+    const running = fix('f1', 1, 'running');
+    expect(isFixRunningNote(running)).toBe(true);
+    expect(fixStates([running]).get('hookfail:a')).toEqual({ state: 'running', child: 'conserto-s' });
+    const done = fix('d1', 1, 'done');
+    expect(isFixRunningNote(done)).toBe(false);
+    expect(fixStates([running, done]).get('hookfail:a')).toEqual({ state: 'done' });
+    expect(fixStates([running, done, fix('f2', 2, 'running')]).get('hookfail:a')?.state).toBe('running');
+    expect(fixStates([fix('x', 1, 'failed')]).get('hookfail:a')).toEqual({ state: 'failed' });
+    expect(fixStates([done]).get('hookfail:b')).toBeUndefined();
   });
 
   test('lista ignorada: aceita a rota e o evento, recusa o torto', () => {

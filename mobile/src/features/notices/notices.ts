@@ -35,9 +35,42 @@ export function noticeDetail(ev: ChatEvent): string | null {
   return detail && (ev.hook_error != null || detail !== noticeTitle(ev)) ? detail : null;
 }
 
+export type NoticeAction = { kind: 'reinstall'; plugin: string } | { kind: 'fix' };
+
+/** O botão que o servidor deu ao aviso. */
+export function noticeAction(ev: ChatEvent): NoticeAction | null {
+  const meta = ev.notice_meta;
+  if (meta?.action === 'reinstall_plugin') return meta.plugin ? { kind: 'reinstall', plugin: meta.plugin } : null;
+  return meta?.action === 'fix_hook' ? { kind: 'fix' } : null;
+}
+
+/** Nota de conserto: a de andamento muda a linha do aviso e não tem linha própria; a do resultado tem. */
+export const isFixNote = (ev: ChatEvent) => ev.notice_meta?.fix_of != null;
+export const isFixRunningNote = (ev: ChatEvent) => isFixNote(ev) && ev.notice_meta?.state === 'running';
+
+export type FixState = { state: 'running'; child: string } | { state: 'done' | 'failed' };
+
+/** Por aviso, a tentativa de maior `attempt`; nela, o resultado vence o andamento. */
+export function fixStates(events: readonly ChatEvent[]): Map<string, FixState> {
+  const latest = new Map<string, { attempt: number; state: FixState }>();
+  const rank = { running: 0, failed: 1, done: 2 } as const;
+  for (const ev of events) {
+    const meta = ev.notice_meta;
+    const of = meta?.fix_of;
+    const kind = meta?.state;
+    if (!of || (kind !== 'running' && kind !== 'done' && kind !== 'failed')) continue;
+    const attempt = meta.attempt ?? 0;
+    const state: FixState = kind === 'running' ? { state: 'running', child: meta.child ?? '' } : { state: kind };
+    const now = latest.get(of);
+    if (!now || attempt > now.attempt || (attempt === now.attempt && rank[kind] > rank[now.state.state])) latest.set(of, { attempt, state });
+  }
+  return new Map([...latest].map(([of, { state }]) => [of, state]));
+}
+
 /** Como uma chave ignorada aparece nas Configurações; a que este app não conhece aparece crua. */
 export function noticeKeyLabel(key: string): string {
   if (key.startsWith('hook:')) return m.notice_key_hook({ name: key.slice('hook:'.length) });
+  if (key.startsWith('note:plugin:')) return m.notice_key_plugin({ name: key.slice('note:plugin:'.length) });
   if (key.startsWith('note:notification:')) return m.notice_key_notification({ name: key.slice('note:notification:'.length) });
   if (key.startsWith('note:startup:')) return m.notice_key_startup();
   if (key === 'note:retry') return m.notice_key_retry();

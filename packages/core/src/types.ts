@@ -244,7 +244,13 @@ export interface ChatEvent {
                                  // dada como perdida — a TUI engoliu as teclas ou o hook barrou o prompt
   hook_error?: string | null;    // só em bolha "held:": o que o hook escreveu ao barrar o prompt
   /** Só em aviso da CLI do Claude: presente (mesmo vazio) faz do evento um aviso; sem `key` não pode ser ignorado. */
-  notice_meta?: { key?: string; subject?: string; count?: number; level?: 'error' } | null;
+  notice_meta?: {
+    key?: string; subject?: string; count?: number; level?: 'error';
+    /** O botão do aviso: reinstalar o plugin `plugin` ou consertar o hook. */
+    action?: string; plugin?: string;
+    /** Nota de conserto de hook: de qual aviso, de qual tentativa, em que estado e em qual sessão. */
+    fix_of?: string; attempt?: number; state?: string; child?: string;
+  } | null;
   /** Só em notice `skill_loaded`: a skill que o harness injetou como fala do usuário. */
   skill?: { name: string; path?: string | null; body: string } | null;
 }
