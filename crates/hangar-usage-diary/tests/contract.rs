@@ -333,6 +333,37 @@ fn d17_download_stops_when_the_receiver_fails() {
     assert_eq!(parts, 3);
 }
 
+/// Dia que não abre não some calado do download: no lugar dele sai uma linha `diag.arquivo_ilegivel`
+/// com o nome dentro do diário e o tipo do erro, e os outros dias continuam.
+#[cfg(unix)]
+#[test]
+fn d17_an_unreadable_day_leaves_a_marker_in_the_download() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    seed(dir.path());
+    let locked = dir.path().join("uso-2026-11-15.jsonl");
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let root = std::fs::File::open(&locked).is_ok();
+    let body = String::from_utf8(download(dir.path(), "h", 64)).unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o600)).unwrap();
+    if root { return; } // root lê tudo: o caso não se monta
+    let lines: Vec<&str> = body.lines().collect();
+    assert_eq!(lines[1], r#"{"evento": "diag.arquivo_ilegivel", "nivel": "aviso", "origem": "servidor", "arquivo": "uso-2026-11-15.jsonl", "erro": "PermissionDenied"}"#);
+    assert!(body.contains(r#""evento": "rust1""#) && body.contains(r#""evento": "a""#), "{body}");
+}
+
+/// O disco recusando o append não é erro para a tela (`gravadas: 0`, ela reenvia), mas o tipo
+/// da falha fica no erro devolvido por quem escreve.
+#[test]
+fn d01_a_refused_append_answers_zero() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join(DAY)).unwrap();
+    assert_eq!(post(dir.path(), json!([{"evento": "a"}])), Ok(0));
+    let file = tempfile::NamedTempFile::new().unwrap();
+    let blocked = file.path().join("diario");
+    assert!(matches!(post(&blocked, json!([{"evento": "a"}])), Err(WriteError::Directory(_))));
+}
+
 proptest::proptest! {
     /// Corpo qualquer, de qualquer cliente: nunca pânico, e o que for gravado é uma linha JSON por evento.
     #[test]

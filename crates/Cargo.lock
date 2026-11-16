@@ -2195,6 +2195,7 @@ dependencies = [
  "proptest",
  "serde_json",
  "tempfile",
+ "tracing",
 ]
 
 [[package]]
