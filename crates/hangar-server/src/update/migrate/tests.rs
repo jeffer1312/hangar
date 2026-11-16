@@ -65,7 +65,7 @@ impl Fetcher for FakeFetcher {
             std::fs::create_dir_all(dir.join("backend/hooks")).unwrap();
             std::fs::create_dir_all(dir.join("scripts")).unwrap();
             let manifest = Manifest { version: VERSION.into(), commit: format!("commit-{VERSION}"), channel: "latest".into(), protocol: 7,
-                api: 1, os: "test".into(), dist_key: None, files: BTreeMap::new() };
+                api: 1, os: "test".into(), dist_key: None, boot: None, files: BTreeMap::new() };
             std::fs::write(dir.join("manifest.json"), serde_json::to_vec(&manifest).unwrap()).unwrap();
             Ok(Fetched::Version { dir, manifest, notes: Vec::new() })
         })
@@ -648,4 +648,27 @@ fn migrate_pending_mode_comes_back_until_the_machine_migrates() {
     assert_eq!(pending_mode(home.path()), Some(Some(Mode::Developer)), "migrada sem ver o aviso");
     record("package", "");
     assert_eq!(pending_mode(home.path()), None, "instalação nova pelo pacote");
+}
+
+/// Decisão 1: o lançador estável não fica congelado — cada versão com `bin/` o renova; máquina sem
+/// o lançador e versão sem `bin/` (modo desenvolvedor) ficam como estão.
+#[test]
+fn every_version_refreshes_the_stable_launcher() {
+    let dir = tempfile::tempdir().unwrap();
+    let (home, version) = (dir.path().join("home"), dir.path().join("versions/0.1.0.6"));
+    let exe = if cfg!(windows) { "hangar-server.exe" } else { "hangar-server" };
+    std::fs::create_dir_all(version.join("bin")).unwrap();
+    std::fs::write(version.join("bin").join(exe), b"novo").unwrap();
+    let launcher = launcher_path(&home, cfg!(windows));
+    assert_eq!(refresh_launcher(&home, &version, cfg!(windows)), Ok(false), "sem lançador não cria um");
+    assert!(!launcher.exists());
+    std::fs::create_dir_all(launcher.parent().unwrap()).unwrap();
+    std::fs::write(&launcher, b"velho").unwrap();
+    assert_eq!(refresh_launcher(&home, &version, cfg!(windows)), Ok(true));
+    assert_eq!(std::fs::read(&launcher).unwrap(), b"novo");
+    assert_eq!(refresh_launcher(&home, &version, cfg!(windows)), Ok(false), "igual não regrava");
+    let checkout = dir.path().join("checkout");
+    std::fs::create_dir_all(&checkout).unwrap();
+    assert_eq!(refresh_launcher(&home, &checkout, cfg!(windows)), Ok(false));
+    assert_eq!(std::fs::read(&launcher).unwrap(), b"novo");
 }

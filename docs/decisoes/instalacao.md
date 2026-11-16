@@ -287,7 +287,12 @@ desenvolvedor e para a máquina ainda não migrada. Evidência em
   quem grava grava no caminho que leu. Instaladores e `services-setup.sh` seguem a mesma regra.
 - **Serviço e processo longo rodam do caminho real da versão; o que é gravado fora do Hangar
   aponta para o `current`.** Unit e tarefa chamam o lançador estável
-  (`~/.hangar/bin/hangar-launcher launch backend`), que lê o `current` uma vez; o `rust_bins` e todo
+  (`~/.hangar/bin/hangar-launcher launch backend`), que lê o `current` uma vez e abre o
+  `hangar-server` da versão quando o manifesto diz `boot: direct` (versão sem o campo, inclusive na
+  volta, sobe pelo Python). O lançador é cópia do `hangar-server` e a atualização o renova a cada
+  versão. A unit é `Type=notify` com `WatchdogSec`, nunca desiste (`StartLimitIntervalSec=0`, espera
+  crescente até 10 min) e espera 120 s na parada; o lançador avisa pronto e desliga o watchdog quando
+  sobe o Python. A tarefa do Windows religa até 999 vezes; o `rust_bins` e todo
   `sys.executable` gravado usam o caminho real. Hooks, atalhos, `plugin-dir`, skills e `⟦HANGAR⟧`
   gravam `~/.hangar/current` sem resolver o link, e toleram a pasta ausente por um instante.
 - **Script do Hangar roda o Python pelo atalho `hangar-python`**: o embutido do pacote, senão o venv

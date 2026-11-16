@@ -2,9 +2,11 @@
 //! `backend/app/install_root.py`.
 //!
 //!   hangar-server launch backend [ARGS]   lê o `~/.hangar/current` uma vez, resolve a versão real e
-//!                                         executa o Python dela com `-m app.main ARGS`
+//!                                         abre o `hangar-server` dela (`boot: direct`) ou, na versão
+//!                                         que ainda sobe pelo Python, `-m app.main ARGS`
 //!
-//! Sem o `current` (máquina sem o pacote) o lançador sai com 3 e `launch_no_current`; uso errado, 2.
+//! Sem o `current` vale o checkout do lançador; sem nenhum dos dois sai com 3 e `launch_no_current`;
+//! uso errado, 2.
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -22,8 +24,10 @@ pub fn launch(args: &[String]) -> ExitCode {
     let version = std::fs::canonicalize(current(&home)).ok()
         .and_then(|real| real.file_name().map(|n| n.to_string_lossy().into_owned())).unwrap_or_else(|| "?".to_owned());
     report(log.as_deref(), &format!("launch_start: versão {version}, lançador pid {}", std::process::id()));
-    match backend_command(&home, &args[1..], cfg!(windows)) {
-        Ok(command) => run(command, log.as_deref(), &version),
+    let explicit = std::env::var_os("CP_RUST_SERVER_BIN");
+    match backend(&home, &args[1..], cfg!(windows), explicit.as_deref()) {
+        Ok(Backend::Python(command)) => run(command, log.as_deref(), &version),
+        Ok(Backend::Direct(command)) => run_direct(command, log.as_deref(), &version),
         Err((code, path)) => {
             report(log.as_deref(), &format!("{code}: {}", path.display()));
             ExitCode::from(3)
@@ -48,9 +52,106 @@ fn run(mut command: std::process::Command, log: Option<&Path>, version: &str) ->
     if let Err(error) = crate::boot_version::PythonLaunch::capture(&command).and_then(|launch| launch.record_exec()) {
         report(log, &format!("launch_python_version_unavailable: {error}"));
     }
+    // A unit é `Type=notify` com `WatchdogSec` para o `hangar-server`; a versão que sobe pelo Python
+    // não avisa: o lançador diz pronto e desliga o watchdog antes de virar o Python.
+    #[cfg(target_os = "linux")]
+    if let Err(error) = notify("READY=1\nWATCHDOG_USEC=0") {
+        report(log, &format!("launch_notify_failed: {error}"));
+    }
     let error = command.exec();
     report(log, &format!("launch_exec_failed: versão {version}: {error}"));
     ExitCode::from(126)
+}
+
+/// O lançador vira o `hangar-server`: mesmo pid, então o `sd_notify` dele vale para a unit.
+#[cfg(unix)]
+fn run_direct(mut command: std::process::Command, log: Option<&Path>, version: &str) -> ExitCode {
+    use std::os::unix::process::CommandExt;
+    let error = command.exec();
+    report(log, &format!("launch_exec_failed: versão {version}: {error}"));
+    ExitCode::from(126)
+}
+
+/// `sd_notify` sem dependência: um datagrama para o `NOTIFY_SOCKET` (`@` = endereço abstrato).
+/// Sem a variável (unit `Type=simple`, rodando na mão) não há a quem avisar.
+#[cfg(target_os = "linux")]
+fn notify(state: &str) -> std::io::Result<()> {
+    notify_to(std::env::var_os("NOTIFY_SOCKET").as_deref(), state)
+}
+
+#[cfg(target_os = "linux")]
+fn notify_to(socket: Option<&std::ffi::OsStr>, state: &str) -> std::io::Result<()> {
+    use std::os::linux::net::SocketAddrExt;
+    use std::os::unix::net::{SocketAddr, UnixDatagram};
+    let Some(socket) = socket.filter(|s| !s.is_empty()) else { return Ok(()) };
+    let address = match socket.as_encoded_bytes().strip_prefix(b"@") {
+        Some(name) => SocketAddr::from_abstract_name(name)?,
+        None => SocketAddr::from_pathname(Path::new(socket))?,
+    };
+    UnixDatagram::unbound()?.send_to_addr(state.as_bytes(), &address).map(drop)
+}
+
+/// No Windows: o servidor no Job do lançador, com o log da tarefa como saída (o Python o abria sozinho).
+#[cfg(windows)]
+fn run_direct(mut command: std::process::Command, log: Option<&Path>, version: &str) -> ExitCode {
+    if let Err(error) = die_with_the_launcher() {
+        report(log, &format!("launch_job_failed: {error}"));
+    }
+    if let Some(target) = log {
+        match open_log(target) {
+            Ok((file, used)) => {
+                use std::io::Write;
+                if used != target {
+                    let mut warn = &file;
+                    let _ = writeln!(warn, "[hangar] AVISO: {} está preso por outro processo; a saída vai para {}", target.display(), used.display());
+                }
+                match file.try_clone() {
+                    Ok(copy) => { command.stdout(copy).stderr(file); }
+                    Err(error) => report(log, &format!("launch_log_unavailable: {}: {error}", used.display())),
+                }
+            }
+            Err(error) => report(log, &format!("launch_log_unavailable: {}: {error}", target.display())),
+        }
+    }
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            report(log, &format!("launch_exec_failed: versão {version}: {error}"));
+            return ExitCode::from(126);
+        }
+    };
+    let (pid, started) = (child.id(), std::time::Instant::now());
+    report(log, &format!("launch_backend_started: versão {version}, hangar-server pid {pid}"));
+    match child.wait() {
+        Ok(status) => {
+            if !status.success() {
+                report(log, &format!("launch_backend_exited: versão {version}, hangar-server pid {pid}, {status}, depois de {} s", started.elapsed().as_secs()));
+            }
+            std::process::exit(status.code().unwrap_or(1))
+        }
+        Err(error) => {
+            report(log, &format!("launch_wait_failed: versão {version}, hangar-server pid {pid}: {error}"));
+            ExitCode::from(126)
+        }
+    }
+}
+
+/// Aberto pelo lançador, com escrita compartilhada (o padrão do `std` no Windows): um neto que
+/// sobreviveu ao backend com a cópia herdada não impede a próxima subida. Preso mesmo assim, vai
+/// para `<nome>.1` … `<nome>.5`; nunca deixa de subir.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn open_log(target: &Path) -> std::io::Result<(std::fs::File, std::path::PathBuf)> {
+    if let Some(parent) = target.parent() { let _ = std::fs::create_dir_all(parent); }
+    let (stem, ext) = (target.file_stem().unwrap_or_default().to_string_lossy(), target.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default());
+    let candidates = std::iter::once(target.to_path_buf()).chain((1..=5).map(|n| target.with_file_name(format!("{stem}.{n}{ext}"))));
+    let mut last = std::io::Error::other("sem candidato");
+    for candidate in candidates {
+        match std::fs::OpenOptions::new().write(true).create(true).truncate(true).open(&candidate) {
+            Ok(file) => return Ok((file, candidate)),
+            Err(error) => last = error,
+        }
+    }
+    Err(last)
 }
 
 /// No Windows não há `exec`: espera o backend e sai com o código dele, os dois no mesmo Job.
@@ -138,6 +239,44 @@ fn die_with_the_launcher() -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{current, root};
+
+    /// B-36: o log da tarefa que não abre vai para o nome seguinte, e cada subida começa do zero.
+    #[test]
+    fn the_task_log_falls_to_the_next_name_when_the_first_cannot_open() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("logs").join("hangar-backend.log");
+        // Uma pasta no lugar do arquivo não abre, como o arquivo preso por outro processo.
+        std::fs::create_dir_all(&target).unwrap();
+        let (_, used) = super::open_log(&target).unwrap();
+        assert_eq!(used, dir.path().join("logs").join("hangar-backend.1.log"));
+        std::fs::write(&used, "subida anterior").unwrap();
+        let (mut file, again) = super::open_log(&target).unwrap();
+        assert_eq!(again, used);
+        file.write_all(b"nova").unwrap();
+        assert_eq!(std::fs::read_to_string(&used).unwrap(), "nova");
+    }
+
+    /// P2: a versão que sobe pelo Python avisa pronto e desliga o watchdog; sem socket, nada a fazer.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_launcher_tells_systemd_ready_and_turns_the_watchdog_off_for_the_python() {
+        use std::os::linux::net::SocketAddrExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notify");
+        let listener = std::os::unix::net::UnixDatagram::bind(&path).unwrap();
+        super::notify_to(Some(path.as_os_str()), "READY=1\nWATCHDOG_USEC=0").unwrap();
+        let mut buf = [0u8; 64];
+        let n = listener.recv(&mut buf).unwrap();
+        assert_eq!(&buf[..n], b"READY=1\nWATCHDOG_USEC=0");
+        let name = format!("hangar-notify-{}", std::process::id());
+        let address = std::os::unix::net::SocketAddr::from_abstract_name(name.as_bytes()).unwrap();
+        let abstract_listener = std::os::unix::net::UnixDatagram::bind_addr(&address).unwrap();
+        super::notify_to(Some(std::ffi::OsStr::new(&format!("@{name}"))), "READY=1").unwrap();
+        let n = abstract_listener.recv(&mut buf).unwrap();
+        assert_eq!(&buf[..n], b"READY=1");
+        super::notify_to(None, "READY=1").unwrap();
+    }
 
     #[test]
     fn install_root_is_the_unresolved_current_when_it_exists() {

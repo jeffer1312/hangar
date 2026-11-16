@@ -52,8 +52,15 @@ PACOTE=0
 ENV_FILE="$REPO/backend/.env"
 if [[ -f "$HOME/.hangar/config/.env" ]]; then ENV_FILE="$HOME/.hangar/config/.env"; fi
 BACK_DIR="$REPO/backend"
-BACK_EXEC="$UV_BIN run python -m app.main"
-if [[ -n "$LAUNCHER" ]]; then BACK_DIR="$HOME/.hangar"; BACK_EXEC="\"$LAUNCHER\" launch backend"; fi
+# O hangar-server sobe sozinho e avisa o systemd (Type=notify + watchdog). Checkout que ainda tem o
+# app/main.py sobe pelo Python, que não avisa: Type=simple. No pacote o lançador decide pela versão
+# e, quando sobe o Python, avisa por ele.
+BACK_EXEC="\"$REPO/scripts/hangar-server-command\""
+BACK_TYPE=notify
+if [[ -f "$REPO/backend/app/main.py" ]]; then BACK_EXEC="$UV_BIN run python -m app.main"; BACK_TYPE=simple; fi
+if [[ -n "$LAUNCHER" ]]; then BACK_DIR="$HOME/.hangar"; BACK_EXEC="\"$LAUNCHER\" launch backend"; BACK_TYPE=notify; fi
+BACK_WATCHDOG=""
+[[ "$BACK_TYPE" == notify ]] && BACK_WATCHDOG=$'NotifyAccess=main\nWatchdogSec=60\n'
 
 log() { printf '\033[36m==>\033[0m %s\n' "$*"; }
 
@@ -97,7 +104,23 @@ case "${1:-}" in
 esac
 
 [[ "$PACOTE" == 0 || -n "$LAUNCHER" ]] || { echo "pacote sem o lançador em $HOME/.hangar/bin/hangar-launcher (ou sem ~/.hangar/current): rode o hangar-server install-package" >&2; exit 1; }
-[[ -n "$UV_BIN" || -n "$LAUNCHER" ]] || { echo "uv not found in PATH" >&2; exit 1; }
+[[ -n "$UV_BIN" || "$BACK_TYPE" == notify ]] || { echo "uv not found in PATH" >&2; exit 1; }
+# O lançador é cópia do hangar-server da versão em uso: renovado aqui, ele sabe subir a versão sem o
+# Python. Troca por nome temporário e `mv`, nunca um lançador pela metade.
+if [[ -n "$LAUNCHER" && -x "$HOME/.hangar/current/bin/hangar-server" ]] && ! cmp -s "$HOME/.hangar/current/bin/hangar-server" "$LAUNCHER"; then
+  if cp "$HOME/.hangar/current/bin/hangar-server" "$LAUNCHER.new" && chmod 755 "$LAUNCHER.new" && mv -f "$LAUNCHER.new" "$LAUNCHER"; then
+    log "Lançador renovado com o hangar-server da versão em uso"
+  else
+    rm -f "$LAUNCHER.new"
+    echo "AVISO: o lançador $LAUNCHER não foi renovado; ele segue subindo só versões que usam o Python" >&2
+  fi
+fi
+# Só o lançador igual ao hangar-server da versão sabe avisar o systemd. O que não deu para conferir
+# (modo desenvolvedor, sem bin/; renovação que falhou) fica em Type=simple, sem watchdog: com
+# Type=notify, ninguém avisaria e a subida morreria no prazo.
+if [[ -n "$LAUNCHER" ]] && ! cmp -s "$HOME/.hangar/current/bin/hangar-server" "$LAUNCHER" 2>/dev/null; then
+  BACK_TYPE=simple; BACK_WATCHDOG=""
+fi
 [[ "$BACKEND_ONLY" == 1 || "$PACOTE" == 1 ]] || [[ -x "$NODE_BIN/npm" ]] || { echo "npm nao encontrado em $NODE_BIN — instale Node 20+ (ou, se usa fnm, rode: fnm default <ver>)" >&2; exit 1; }
 [[ "$PACOTE" == 1 || -d "$REPO/node_modules" ]] || log "WARNING: node_modules missing — run 'npm install' at the repo root first (frontend is a workspace)"
 [[ "$PACOTE" == 1 ]] && SERVE=backend
@@ -140,11 +163,14 @@ escreve_unit() { # escreve_unit <nome> <conteudo>
 
 escreve_unit "$BACK" "$(cat <<EOF
 [Unit]
-Description=hangar backend (FastAPI/uvicorn)
+Description=hangar backend
 After=network.target
+# Nunca desiste de religar: a espera cresce até 10 min (RestartSteps/RestartMaxDelaySec).
+StartLimitIntervalSec=0
 
 [Service]
-WorkingDirectory=$BACK_DIR
+Type=$BACK_TYPE
+${BACK_WATCHDOG}WorkingDirectory=$BACK_DIR
 # Explicit PATH: the backend spawns \`claude\` (~/.local/bin) and \`tmux\` — the user manager's
 # PATH may lack ~/.local/bin on a lingering boot with no login session.
 Environment=PATH=$NODE_BIN:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin
@@ -154,6 +180,11 @@ Environment=MALLOC_ARENA_MAX=2
 ExecStart=$BACK_EXEC
 Restart=on-failure
 RestartSec=2
+RestartSteps=8
+RestartMaxDelaySec=10min
+# A parada protegida do navegador leva até 120 s; o cgroup inteiro sai junto.
+TimeoutStopSec=120
+KillMode=control-group
 
 [Install]
 WantedBy=default.target

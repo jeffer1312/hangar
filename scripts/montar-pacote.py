@@ -340,6 +340,8 @@ def main(argv=None) -> int:
         "protocol": protocol,
         "api": const("crates/hangar-api/src/lib.rs", r"^pub const CLIENT_API: u32 = (\d+);"),
         "os": a.os,
+        # O lançador abre o hangar-server direto; versão sem o campo sobe pelo Python.
+        "boot": "direct",
         # Chave da tela na release `dist-commits`: a mesma conta do ci.yml.
         "dist_key": hashlib.sha256(git("rev-parse", "HEAD:frontend", "HEAD:packages", "HEAD:messages",
                                        "HEAD:project.inlang", "HEAD:package.json",

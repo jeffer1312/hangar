@@ -82,6 +82,8 @@ Passos marcados:
 | `2026-11-07-firewall-portas-windows` | regras `hangar 8765` e `hangar 8766` no Firewall do Windows (Private e Public) |
 | `2026-11-12-atalhos-windows-current` | atalhos do `~/.local/bin` no Windows que apontavam para a pasta da versão voltam ao `current` |
 | `2026-11-12-painel-quickshell-removido` | units do systemd, atalhos e blocos do Hyprland do painel do Quickshell |
+| `2026-11-16-servidor-sobe-sem-python-linux` | unit do systemd (`Type=notify`, watchdog, nunca desiste) e lançador estável renovado |
+| `2026-11-16-servidor-sobe-sem-python-windows` | tarefa agendada (reinícios) e lançador estável renovado |
 
 Ficam sem o campo, mesmo com comando: os que rodam `install-hangar-send.sh`,
 `install-claude-wrapper.sh`/`setup-windows-wrappers.ps1` ou `registrar-mcp.py` (conteúdo e

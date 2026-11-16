@@ -25,8 +25,14 @@ function Get-HangarTaskProcesses($rows, [string]$name, [string]$directory) {
     $packagePattern = '(?:^|\s)launch\s+backend(?:\s|$)'
     foreach ($row in $rows) {
         if ($name -eq 'hangar-backend') {
-            if ($row.Name -notmatch '^(python(?:\d+(?:\.\d+)*)?|uv)\.exe$' -or
-                $row.CommandLine -notmatch '(?:^|\s)-m\s+app\.main(?:\s|$)') { continue }
+            $python = $row.Name -match '^(python(?:\d+(?:\.\d+)*)?|uv)\.exe$' -and
+                      $row.CommandLine -match '(?:^|\s)-m\s+app\.main(?:\s|$)'
+            # Versao que sobe sem o Python: o hangar-server filho direto do lancador `launch backend`.
+            $launcher = $byId[[int]$row.ParentProcessId]
+            $direct = $row.Name -eq 'hangar-server.exe' -and $row.CommandLine -notmatch $packagePattern -and
+                      $launcher -and $launcher.Name -match '^hangar-(?:server|launcher)\.exe$' -and
+                      $launcher.CommandLine -match $packagePattern -and $launcher.CreationDate -le $row.CreationDate
+            if (-not ($python -or $direct)) { continue }
         } elseif ($row.Name -notmatch '^(node|npm|vite)\.exe$') { continue }
         $current = $row
         $seen = New-Object 'System.Collections.Generic.HashSet[int]'
@@ -188,7 +194,7 @@ function Restart-HangarTask([string]$name, [int]$port, [string]$directory, [swit
         # 1) Nao da: zerar o RestartCount por Set-ScheduledTask produz um <RestartOnFailure> com
         #    <Interval> e sem <Count>, e o Agendador recusa o XML INTEIRO - HRESULT 0x80041319,
         #    "Um elemento ou atributo necessario esta faltando no XML da tarefa. (43,8):Count:".
-        #    Como as duas tarefas nascem com -RestartCount 3, isto falhava em 100% das chamadas:
+        #    Como as duas tarefas nascem com -RestartCount 999, isto falhava em 100% das chamadas:
         #    o Restart-HangarTask morria ANTES de parar qualquer coisa, o passo 7/8 do instalador
         #    virava pendencia ("nenhuma tarefa chegou a ser iniciada") e a vigia nunca recuperou
         #    travamento nenhum. Set-ScheduledTask tambem nao consegue REMOVER o bloco (ele funde

@@ -2084,6 +2084,35 @@ if (-not ((Test-Path -LiteralPath (Join-Path $HOME '.hangar\current')) -and (Tes
 if ($pacote -and -not $lancadorPacote) {
     Falha 'tarefas agendadas' "pacote sem o lancador $(Join-Path $HOME '.hangar\bin\hangar-launcher.exe') (ou sem ~\.hangar\current): rode o hangar-server install-package"
 }
+# O lancador e copia do hangar-server da versao em uso: renovado aqui, ele sabe subir a versao sem o
+# Python. O que esta rodando nao pode ser substituido, mas pode mudar de nome.
+$servidorDaVersao = Join-Path $HOME '.hangar\current\bin\hangar-server.exe'
+if ($lancadorPacote -and (Test-Path -LiteralPath $servidorDaVersao -PathType Leaf) -and
+    (Get-FileHash -LiteralPath $servidorDaVersao).Hash -ne (Get-FileHash -LiteralPath $lancadorPacote).Hash) {
+    try {
+        $novo = "$lancadorPacote.new"
+        Copy-Item -LiteralPath $servidorDaVersao -Destination $novo -Force
+        $antigo = [IO.Path]::ChangeExtension($lancadorPacote, 'old')
+        Remove-Item -LiteralPath $antigo -Force -ErrorAction SilentlyContinue
+        Move-Item -LiteralPath $lancadorPacote -Destination $antigo -Force
+        Move-Item -LiteralPath $novo -Destination $lancadorPacote -Force
+        Ok 'lancador renovado com o hangar-server da versao em uso'
+    } catch {
+        Falta "o lancador $lancadorPacote nao foi renovado ($_); ele segue subindo so versoes que usam o Python"
+    }
+}
+# Checkout sem o app\main.py: o hangar-server sobe pelo `launch backend`, com a escolha de binario
+# do CLI (CP_RUST_SERVER_BIN; senao o mais novo entre o build do checkout e ~\.hangar\bin).
+$servidorCheckout = $null
+if (-not $lancadorPacote -and -not (Test-Path -LiteralPath "$raiz\backend\app\main.py")) {
+    if ($env:CP_RUST_SERVER_BIN) { $servidorCheckout = $env:CP_RUST_SERVER_BIN }
+    else {
+        $servidorCheckout = @("$raiz\crates\target\release\hangar-server.exe", (Join-Path $HOME '.hangar\bin\hangar-server.exe')) |
+            Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Get-Item | Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1 | ForEach-Object { $_.FullName }
+    }
+    if (-not $servidorCheckout) { Falha 'tarefas agendadas' 'hangar-server nao encontrado; compile-o ou configure CP_RUST_SERVER_BIN' }
+}
 $tarefas = @(
     # Padrao ANCORADO no caminho deste checkout. 'app\.main' cru casava com QUALQUER processo cuja
     # linha de comando contivesse app.main - e este repo tem worktrees em .claude/worktrees/ com
@@ -2097,14 +2126,14 @@ $tarefas = @(
     # e um lock mudado por `git pull` sem rede o fazia falhar antes de o backend nascer) e punha
     # dois processos a mais na cadeia (uv.exe -> python trampolim -> python). O venv ja existe
     # aqui (passo 2/8, `uv sync`); sem ele cai no uv como antes.
-    @{ Nome = 'hangar-backend';  Exe = $(if ($lancadorPacote) { $lancadorPacote } elseif (Test-Path "$raiz\backend\.venv\Scripts\python.exe") { "$raiz\backend\.venv\Scripts\python.exe" } else { 'uv' })
-       Args = $(if ($lancadorPacote) { 'launch backend' } elseif (Test-Path "$raiz\backend\.venv\Scripts\python.exe") { '-m app.main' } else { 'run python -m app.main' })
+    @{ Nome = 'hangar-backend';  Exe = $(if ($lancadorPacote) { $lancadorPacote } elseif ($servidorCheckout) { $servidorCheckout } elseif (Test-Path "$raiz\backend\.venv\Scripts\python.exe") { "$raiz\backend\.venv\Scripts\python.exe" } else { 'uv' })
+       Args = $(if ($lancadorPacote -or $servidorCheckout) { 'launch backend' } elseif (Test-Path "$raiz\backend\.venv\Scripts\python.exe") { '-m app.main' } else { 'run python -m app.main' })
        Dir = "$raiz\backend"
        Porta = $portaBack
        # No pacote o Python roda de ~\.hangar\versions\<v> sob o lancador, fora deste checkout.
        Padrao = $(if ($lancadorPacote) { [regex]::Escape((Join-Path (Split-Path (Split-Path $lancadorPacote)) 'versions')) + '\\|' +
-                                         '(?:^|\s)launch\s+backend(?:\s|$)' } else { [regex]::Escape("$raiz\backend") })
-       ExeProc = $(if ($lancadorPacote) { 'python|hangar-launcher|hangar-server' } else { 'uv|python' }) }
+                                         '(?:^|\s)launch\s+backend(?:\s|$)' } elseif ($servidorCheckout) { [regex]::Escape("$raiz\backend") + '|(?:^|\s)launch\s+backend(?:\s|$)' } else { [regex]::Escape("$raiz\backend") })
+       ExeProc = $(if ($lancadorPacote) { 'python|hangar-launcher|hangar-server' } elseif ($servidorCheckout) { 'hangar-server' } else { 'uv|python' }) }
 )
 if ($temTarefaFront) {
     # `run preview`, NAO `run dev`: o dist ja esta pronto e subir o dev server aqui serviria
@@ -2167,7 +2196,7 @@ if ($registrou) {
             # filhos: com a CPU cheia o backend demora mais que o limite da vigia e ela o derruba.
             $cfg = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries `
                         -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) `
-                        -MultipleInstances IgnoreNew -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) `
+                        -MultipleInstances IgnoreNew -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) `
                         -Priority 4
             # Instalacoes comuns antigas podem ter tarefas com dono Administradores.
             # So elas admitem reparo/reuso; no modo elevado, falha de registro interrompe.
@@ -2214,7 +2243,7 @@ if ($registrou) {
                 if ($registered.Principal.RunLevel -ne $script:installRunLevel -or $registered.Principal.LogonType -ne 'Interactive') {
                     throw "A tarefa $($t.Nome) nao manteve a permissao $script:installRunLevel e o logon interativo"
                 }
-                if ($registered.Settings.MultipleInstances -ne 'IgnoreNew' -or $registered.Settings.RestartCount -ne 3) {
+                if ($registered.Settings.MultipleInstances -ne 'IgnoreNew' -or $registered.Settings.RestartCount -ne 999) {
                     throw "A tarefa $($t.Nome) nao manteve a protecao contra duplicacao e os reinicios automaticos"
                 }
             }

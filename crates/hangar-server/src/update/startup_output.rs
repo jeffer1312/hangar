@@ -21,7 +21,7 @@ const READ_MAX: u64 = 256 * 1024;
 
 /// Onde a saída do backend estava antes do reinício.
 pub enum Mark {
-    /// Windows: a tarefa grava em `hangar-backend*.log` (`app.main --log`); o mais novo e o tamanho dele.
+    /// Windows: a tarefa grava em `hangar-backend*.log` (`launch backend --log`); o mais novo e o tamanho dele.
     File { dir: PathBuf, newest: Option<(PathBuf, u64)>, at: SystemTime },
     /// systemd do usuário: a unit roda sem `--log`, a saída fica no journal.
     Journal { since: SystemTime },
@@ -198,7 +198,6 @@ impl<'a, H> Trail<'a, H> {
 fn describe(reading: &Reading) -> String {
     match reading {
         Reading::Down(d) => format!("não respondeu: {d}"),
-        Reading::NotRust(d) => format!("só o Python respondeu: {d}"),
         Reading::Rust { protocol, pid, commit } => format!("hangar-server respondeu: pid {}, commit {}, contrato {protocol}",
             pid.map_or("?".into(), |p| p.to_string()), commit.as_deref().unwrap_or("?")),
     }
@@ -227,16 +226,18 @@ impl<H: HealthProbe> HealthProbe for Trail<'_, H> {
 /// `new`/`old`: as versões da rodada, para dizer de qual cada processo é.
 pub fn snapshot(home: &Path, port: u16, new: Option<&Path>, old: Option<&Path>) -> Vec<String> {
     let mut out = Vec::new();
-    out.push(match crate::install_root::backend_command(home, &[], cfg!(windows)) {
-        Ok(command) => format!("lançador: python {}", Path::new(command.get_program()).display()),
+    let explicit = std::env::var_os("CP_RUST_SERVER_BIN");
+    out.push(match crate::install_root::backend(home, &[], cfg!(windows), explicit.as_deref()) {
+        Ok(crate::install_root::Backend::Direct(command)) => format!("lançador: hangar-server {}", Path::new(command.get_program()).display()),
+        Ok(crate::install_root::Backend::Python(command)) => format!("lançador: python {}", Path::new(command.get_program()).display()),
         Err((code, path)) => format!("lançador: {code}: {}", path.display()),
     });
     if let Some(new) = new {
         let bin = new.join("bin").join(if cfg!(windows) { "hangar-server.exe" } else { "hangar-server" });
         let has = |p: &Path| if p.exists() { "ok" } else { "FALTA" };
-        out.push(format!("pacote novo: manifest {}, python {}, backend/app/main.py {}, bin/hangar-server {}",
-            has(&new.join("manifest.json")), has(&crate::install_root::python_exe(new, cfg!(windows))),
-            has(&new.join("backend").join("app").join("main.py")), has(&bin)));
+        let boot = read_boot(new).unwrap_or_else(|| "python".to_owned());
+        out.push(format!("pacote novo: manifest {}, boot {boot}, bin/hangar-server {}",
+            has(&new.join("manifest.json")), has(&bin)));
     }
     out.extend(processes(new, old));
     out.extend(service(home, port));
@@ -248,6 +249,12 @@ pub fn snapshot(home: &Path, port: u16, new: Option<&Path>, old: Option<&Path>) 
         Err(e) => format!("porta {port} por conexão em 127.0.0.1: sem resposta ({e})"),
     });
     out
+}
+
+/// O `boot` do manifesto da versão; ausente quando ela ainda sobe pelo Python.
+fn read_boot(version: &Path) -> Option<String> {
+    let manifest: serde_json::Value = serde_json::from_slice(&std::fs::read(version.join("manifest.json")).ok()?).ok()?;
+    manifest.get("boot")?.as_str().map(str::to_owned)
 }
 
 fn same_root(path: &str, root: &Path) -> bool {
@@ -387,13 +394,13 @@ mod tests {
             async fn read(&self) -> Reading { self.0.lock().unwrap().remove(0) }
         }
         let probe = Seq(Mutex::new(vec![Reading::Down("recusada".into()), Reading::Down("recusada".into()),
-            Reading::NotRust("503".into()), Reading::Rust { protocol: 7, pid: Some(9), commit: Some("abc".into()) }]));
+            Reading::Down("503 em /__hangar_server/health sem o hangar-server".into()), Reading::Rust { protocol: 7, pid: Some(9), commit: Some("abc".into()) }]));
         let trail = Trail::new(&probe);
         for _ in 0..4 { trail.read().await; }
         let out = trail.lines("prova");
         assert_eq!(out.len(), 3);
         assert!(out[0].ends_with("não respondeu: recusada (×2)"), "{out:?}");
-        assert!(out[1].ends_with("só o Python respondeu: 503 (×1)"));
+        assert!(out[1].ends_with("não respondeu: 503 em /__hangar_server/health sem o hangar-server (×1)"));
         assert!(out[2].ends_with("hangar-server respondeu: pid 9, commit abc, contrato 7 (×1)"));
     }
 }

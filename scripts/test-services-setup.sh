@@ -25,11 +25,13 @@ sandbox() {
   local nome=$1 migrada=$2; shift 2
   [ $# -gt 0 ] || [ "${SEM_OPCOES:-0}" = 1 ] || set -- --backend-only
   S="$ROOT/$nome"; R="$S/repo"; B="$S/bin"; H="$S/home"
-  mkdir -p "$R/scripts" "$R/backend" "$B" "$H/.config/systemd/user" "$S/sys"
+  mkdir -p "$R/scripts" "$R/backend/app" "$B" "$H/.config/systemd/user" "$S/sys"
   [ "${PACOTE_REPO:-0}" = 1 ] && echo '{}' > "$R/manifest.json"
+  # Checkout que ainda sobe pelo Python; COM_PYTHON=0 é o checkout depois que ele saiu.
+  [ "${COM_PYTHON:-1}" = 1 ] && : > "$R/backend/app/main.py"
   cp "$SCRIPT" "$R/scripts/services-setup.sh"
   printf 'CP_AUTH_TOKEN=velho\n' > "$R/backend/.env"
-  for t in bash sh env cat grep sed tr cut tail head dirname readlink printf mkdir rm; do
+  for t in bash sh env cat grep sed tr cut tail head dirname readlink printf mkdir rm cmp cp chmod mv; do
     p=$(command -v "$t") && ln -sf "$p" "$S/sys/$t"
   done
   local fakes="systemctl loginctl uv"
@@ -39,6 +41,10 @@ sandbox() {
     mkdir -p "$H/.hangar/config" "$H/.hangar/bin" "$H/.hangar/versions/0.1.0.5"
     ln -s "$H/.hangar/versions/0.1.0.5" "$H/.hangar/current"
     printf '#!/bin/sh\n' > "$H/.hangar/bin/hangar-launcher"; chmod +x "$H/.hangar/bin/hangar-launcher"
+    if [ "${VERSAO_COM_BIN:-0}" = 1 ]; then
+      mkdir -p "$H/.hangar/versions/0.1.0.5/bin"
+      printf '#!/bin/sh\n# novo\n' > "$H/.hangar/versions/0.1.0.5/bin/hangar-server"; chmod +x "$H/.hangar/versions/0.1.0.5/bin/hangar-server"
+    fi
     printf 'CP_AUTH_TOKEN=novo\nCP_FRONT_PORT=5173\n' > "$H/.hangar/config/.env"
   fi
   RC=0
@@ -51,12 +57,36 @@ sandbox migrada 1
 expect_line "migrada: unit chama o lançador" "$UNIT" "ExecStart=\"$H/.hangar/bin/hangar-launcher\" launch backend"
 expect_line "migrada: fora do checkout" "$UNIT" "WorkingDirectory=$H/.hangar"
 expect_no "migrada: sem uv run" "$UNIT" 'uv run'
+# P1, decisão 2: o systemd nunca desiste e espera a parada protegida. Lançador que não dá para
+# conferir com a versão (aqui, versão sem bin/) não avisa o systemd: Type=simple, sem watchdog.
+expect_line "migrada: lançador não conferido fica simple" "$UNIT" "Type=simple"
+expect_no "migrada: sem watchdog" "$UNIT" 'WatchdogSec'
+expect_line "migrada: nunca desiste" "$UNIT" "StartLimitIntervalSec=0"
+expect_line "migrada: espera crescente até 10 min" "$UNIT" "RestartMaxDelaySec=10min"
+expect_line "migrada: parada protegida" "$UNIT" "TimeoutStopSec=120"
+expect_line "migrada: o cgroup sai junto" "$UNIT" "KillMode=control-group"
+expect_line "migrada: lançador velho fica sem versão com bin/" "$H/.hangar/bin/hangar-launcher" '#!/bin/sh'
 expect_no "migrada: CP_FRONT_PORT saiu do .env novo" "$H/.hangar/config/.env" 'CP_FRONT_PORT'
 expect_line "migrada: o .env velho não foi tocado" "$R/backend/.env" 'CP_AUTH_TOKEN=velho'
 
 sandbox antiga 0
 expect_line "antiga: unit no uv do checkout" "$UNIT" "ExecStart=$B/uv run python -m app.main"
 expect_line "antiga: no backend do checkout" "$UNIT" "WorkingDirectory=$R/backend"
+expect_line "antiga: o Python não avisa o systemd" "$UNIT" "Type=simple"
+expect_no "antiga: sem watchdog" "$UNIT" 'WatchdogSec'
+
+# Decisão 7: checkout sem o app/main.py sobe o hangar-server pela mesma escolha de binário do CLI.
+COM_PYTHON=0 sandbox checkout-rust 0
+expect_line "checkout-rust: unit no hangar-server" "$UNIT" "ExecStart=\"$R/scripts/hangar-server-command\""
+expect_line "checkout-rust: Type=notify" "$UNIT" "Type=notify"
+
+# Decisão 1: o lançador estável é renovado com o hangar-server da versão em uso.
+VERSAO_COM_BIN=1 sandbox renova 1
+expect_line "renova: lançador é o da versão" "$H/.hangar/bin/hangar-launcher" '# novo'
+# P2: lançador igual ao da versão avisa o systemd, que vigia o laço.
+expect_line "renova: Type=notify" "$UNIT" "Type=notify"
+expect_line "renova: só o processo principal avisa" "$UNIT" "NotifyAccess=main"
+expect_line "renova: watchdog" "$UNIT" "WatchdogSec=60"
 
 # Instalação nova pelo pacote: sem npm, sem --backend-only, sem pergunta; o backend serve a tela.
 PACOTE_REPO=1 SEM_OPCOES=1 sandbox pacote 1 </dev/null

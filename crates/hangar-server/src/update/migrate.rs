@@ -444,8 +444,29 @@ pub(super) fn write_launcher(source: &Path, launcher: &Path) -> Result<(), Strin
     std::fs::write(&tmp, &bytes).and_then(|()| {
         #[cfg(unix)]
         { use std::os::unix::fs::PermissionsExt; std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755))?; }
-        std::fs::rename(&tmp, launcher)
+        std::fs::rename(&tmp, launcher).or_else(|error| {
+            // No Windows o lançador em execução não pode ser substituído, mas pode mudar de nome.
+            if !cfg!(windows) || !launcher.exists() { return Err(error); }
+            let aside = launcher.with_extension("old");
+            let _ = std::fs::remove_file(&aside);
+            std::fs::rename(launcher, &aside)?;
+            std::fs::rename(&tmp, launcher)
+        })
     }).map_err(|e| { let _ = std::fs::remove_file(&tmp); format!("não consegui gravar o lançador {}: {e}", launcher.display()) })
+}
+
+/// Renova o lançador estável com o `hangar-server` da versão `version`. Máquina sem o lançador
+/// (checkout, Windows sem pacote) ou versão sem `bin/` (modo desenvolvedor) fica como está.
+/// Devolve se trocou.
+pub fn refresh_launcher(home: &Path, version: &Path, windows: bool) -> Result<bool, String> {
+    let launcher = launcher_path(home, windows);
+    let source = version.join("bin").join(if windows { "hangar-server.exe" } else { "hangar-server" });
+    if !launcher.exists() || !source.is_file() { return Ok(false); }
+    let len = |p: &Path| std::fs::metadata(p).map(|m| m.len()).ok();
+    let same = len(&launcher) == len(&source)
+        && std::fs::read(&launcher).ok().zip(std::fs::read(&source).ok()).is_some_and(|(a, b)| a == b);
+    if same { return Ok(false); }
+    write_launcher(&source, &launcher).map(|()| true)
 }
 
 /// Os efeitos, na ordem; cada um entra no registro assim que feito.
