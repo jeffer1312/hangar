@@ -64,7 +64,6 @@ if __name__ == "__main__":
 
 from app.config import settings, resolve_bind_ip, list_config_dirs, _backend_config_base
 from app import migracao_sidecars, resilient_accept, rust_server
-from app.hook_state import hook_state
 
 LOOPBACK = {"127.0.0.1", "localhost", "::1"}
 
@@ -149,15 +148,11 @@ def main():
     _state_dirs = list({Path(c.path) for c in list_config_dirs(ordered=False)}
                        | {_backend_config_base().resolve(), Path.home() / ".claude"})
     # Renomeia os sidecars .hangar-* pra .hangar-* (link no caminho antigo). ANTES de tudo
-    # que lê ou escreve sidecar: os hooks, o endpoint do Pi e o hook_state logo abaixo já são
-    # clientes dessas pastas — migrar depois deles seria migrar por cima de arquivo recém-escrito.
+    # que lê ou escreve sidecar: os hooks e o endpoint do Pi já são clientes dessas pastas —
+    # migrar depois deles seria migrar por cima de arquivo recém-escrito.
     migracao_sidecars.migrar(_state_dirs)
-    hook_state.load_existing(_state_dirs)
     # Windows: cliente que aborta no meio do accept nao pode fechar o listener (ver o modulo).
     resilient_accept.install()
-    # workers=1 explicito: o cache de classe SessionRegistry._jsonl_cache e compartilhado SO dentro de
-    # um processo. Multi-worker daria cache frio por worker -> transcript errado em requests roteados
-    # pra outro worker. Multi-worker exigiria mover o cache pra um backend compartilhado.
     # proxy_headers + forwarded_allow_ips: atras de um TLS proxy (Caddy/Tailscale), faz o uvicorn ler
     # X-Forwarded-For/-Proto SO do proxy confiavel -> request.client.host vira o IP real do cliente
     # (rate limiter por-cliente, nao um balde global) e request.url.scheme vira https (cookie Secure).

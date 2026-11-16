@@ -7,7 +7,6 @@ from pathlib import Path
 import pytest
 
 from orq_contract_client import timeline as ot, adapter, call
-from app import pqueue
 
 FIX = Path(__file__).parent / "fixtures" / "orq"
 PARECER = "/home/jefferson/.hangar/orq/2026-09-29-cad3e6fe/pareceres/task-4-r1-revisor.md"

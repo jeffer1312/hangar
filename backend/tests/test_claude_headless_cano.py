@@ -3,7 +3,7 @@
 aberto. O `claude` é um script falso que fala stream-json: responde initialize, e a cada prompt
 pede uma permissão e só fecha o turno quando ela é respondida.
 
-Cada teste que sobe um cano roda duas vezes: contra o `cano.py` e contra o `hangar-cano` (Rust).
+Contrato do `hangar-cano` (Rust), o cano que o servidor lança.
 """
 import json
 import os
@@ -18,11 +18,8 @@ from pathlib import Path
 import pytest
 
 from app import rust_bins
-from app.adapters.claude_headless import cano as cano_mod
 
 _TOKEN = "synthetic-cano-token"
-
-CANO = Path(__file__).resolve().parents[1] / "app" / "adapters" / "claude_headless" / "cano.py"
 
 _CLAUDE_FALSO = r'''
 import json, sys
@@ -52,11 +49,8 @@ sys.stderr.write("tchau\n")
 '''
 
 
-@pytest.fixture(params=["cano.py", "hangar-cano"])
-def cano_cmd(request) -> list[str]:
-    """Lançador do cano. Os mesmos testes provam as duas implementações do mesmo contrato."""
-    if request.param == "cano.py":
-        return [sys.executable, str(CANO)]
+@pytest.fixture
+def cano_cmd() -> list[str]:
     exe = rust_bins.find_bin("hangar-cano", "CP_RUST_CANO_BIN")
     if exe is None:
         pytest.skip("hangar-cano não compilado: rode `cargo build --release -p hangar-cano` em crates/ "
@@ -112,15 +106,14 @@ class _Cliente:
         self.s.close()
 
 
-def test_snapshot_tem_os_campos_e_a_versao_do_cano_py(cano):
-    # O adapter compara `versao` com `cano_mod.VERSAO` para decidir se reabre: as duas
-    # implementações precisam falar a mesma.
+def test_snapshot_tem_os_campos_e_a_versao(cano):
+    # O servidor só religa um cano de `versao` 2 (runtime/cano.rs).
     sock, proc, log = cano
     a = _Cliente(sock)
     snap = a.le()
     assert set(snap) == {"type", "versao", "pid", "init", "aberto", "pendentes", "ultimo_result",
                          "rate_limit", "stderr_tail", "saiu", "inflight"}
-    assert snap["versao"] == cano_mod.VERSAO and isinstance(snap["pid"], int)
+    assert snap["versao"] == 2 and isinstance(snap["pid"], int)
     assert snap["pendentes"] == [] and snap["stderr_tail"] == [] and snap["saiu"] is None
     a.fecha()
 
@@ -377,16 +370,6 @@ def test_cliente_novo_substitui_o_ligado_em_tcp(tmp_path, cano_cmd):
     finally:
         p.kill()
         p.wait()
-
-
-def test_stderr_na_codepage_do_windows_nao_vira_caractere_quebrado():
-    import importlib.util
-    spec = importlib.util.spec_from_file_location("cano_mod", CANO)
-    cano_mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(cano_mod)
-    assert cano_mod._texto_do_stderr("não existe".encode("utf-8")) == "não existe"
-    cp = cano_mod._texto_do_stderr("não existe".encode("cp1252"))
-    assert "�" not in cp and cp.startswith("n") and cp.endswith("o existe")
 
 
 def test_suite_nunca_le_os_sidecars_reais():

@@ -1,78 +1,10 @@
-"""Autoria HTTP e exclusão durante o nascimento real entre Python e Rust."""
+"""Leitores Python de contas: conta pendente fora da lista e ambiente igual ao golden do Rust."""
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
-import queue
-import subprocess
-import threading
 
-from accounts_contract import PythonReference, HttpTransport, isolated_environment, normalize, assert_rust_ownership, FIXTURES, rust_integration_binary
-
-
-class RustCatalog(HttpTransport):
-    def __init__(self, reference: PythonReference, *, instance="contract-instance", native_fixture=False):
-        binary = rust_integration_binary()
-        environment = isolated_environment(reference.root)
-        if native_fixture:
-            fixture_root = reference.root / "native-fixture"
-            script = fixture_root / "node_modules/@openai/codex/bin/codex.js"
-            script.parent.mkdir(parents=True, exist_ok=True)
-            source = Path(__file__).parent / "fixtures/disconnected-codex.cjs"
-            script.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
-            if os.name != "nt":
-                executable = fixture_root / "codex"
-                executable.write_text("#!/usr/bin/env node\n" + source.read_text(encoding="utf-8"), encoding="utf-8")
-                executable.chmod(0o700)
-            environment["PATH"] = str(fixture_root) + os.pathsep + environment["PATH"]
-        environment.update(ACCOUNT_HTTP_UPSTREAM=reference.base_url.removeprefix("http://"),
-                           HANGAR_RUNTIME_INSTANCE=instance)
-        self.process = subprocess.Popen([str(binary), "--exact", "accounts_catalog::http_probe_process", "--nocapture"],
-                                        env=environment, cwd=reference.root, stdout=subprocess.PIPE,
-                                        stderr=subprocess.PIPE, text=True, encoding="utf-8")
-        ready = queue.Queue()
-        def read():
-            for line in self.process.stdout:
-                if line.startswith("ACCOUNT_HTTP:"):
-                    ready.put(line.strip().removeprefix("ACCOUNT_HTTP:"))
-                    return
-            ready.put(None)
-        threading.Thread(target=read, daemon=True).start()
-        address = ready.get(timeout=30)
-        assert address, "servidor de prova não anunciou HTTP"
-        super().__init__("http://" + address, "contract-only")
-
-    def close(self):
-        self.process.terminate()
-        self.process.wait(timeout=15)
-        self.process.stdout.close()
-        self.process.stderr.close()
-
-
-def test_claimed_http_routes_match_goldens_without_python_handlers(tmp_path):
-    reference = PythonReference(tmp_path / "home")
-    server = RustCatalog(reference)
-    golden = json.loads((FIXTURES / "python-reference.json").read_text(encoding="utf-8"))
-    try:
-        for case, payload in [
-            ("claude_catalog", None), ("codex_missing", None), ("codex_protected", None),
-            ("codex_invalid_name", {"name": "conta\n"}),
-            ("codex_extra_field", {"name": "fresh", "extra": True}),
-            ("codex_create", {"name": "fresh"}), ("codex_duplicate", {"name": "fresh"}),
-            ("codex_delete", None),
-        ]:
-            expected = golden[case]
-            response = server.request(expected["method"], expected["path"], payload)
-            assert response.status_code == expected["status"], (case, response.json())
-            assert normalize(response.json(), root=reference.root) == expected["body"], case
-            if "tree" in expected:
-                assert reference.tree("fresh") == expected["tree"]
-        assert_rust_ownership(reference.calls())
-        assert reference.calls() == []
-    finally:
-        server.close()
-        reference.close()
+FIXTURES = Path(__file__).parent / "fixtures" / "accounts_contract"
 
 
 def test_python_readers_do_not_select_pending_accounts(tmp_path, monkeypatch):
@@ -91,23 +23,6 @@ def test_python_readers_do_not_select_pending_accounts(tmp_path, monkeypatch):
     monkeypatch.setenv("CP_CLAUDE_CONFIG_DIRS", "Parcial:" + str(tmp_path / ".claude-partial"))
     assert config.list_config_dirs() == []
 
-def test_claimed_validation_matches_real_python_envelopes(tmp_path):
-    golden = json.loads((FIXTURES / "python-reference.json").read_text(encoding="utf-8"))
-    reference = PythonReference(tmp_path / "native")
-    server = RustCatalog(reference)
-    try:
-        differences = []
-        for expected in golden["catalog_validation_envelopes"]:
-            actual = server.request(expected["method"], expected["path"], expected["body"])
-            left = (actual.status_code, normalize(actual.json(), root=reference.root))
-            right = (expected["status"], expected["response"])
-            if left != right:
-                differences.append((expected["method"], expected["path"], expected["body"], left, right))
-        assert not differences, differences
-        assert reference.calls() == []
-    finally:
-        server.close()
-        reference.close()
 
 def test_environment_matches_shared_golden(tmp_path, monkeypatch):
     from app.codex_contas import Account, environment

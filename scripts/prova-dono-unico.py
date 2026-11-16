@@ -277,8 +277,6 @@ class Prova:
             f"config.GUEST_PORT = {self.porta_convite}\n"
             # A conta real não é reconciliada por este backend.
             "contas.e_conta = lambda p: False\n"
-            "from app.adapters.claude_headless import adapter\n"
-            "adapter.matar_orfaos = lambda: 0\n"
             + self.lancador_extra() +
             "from app import main; main.main()\n")
         env = {

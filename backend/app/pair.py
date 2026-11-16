@@ -8,10 +8,14 @@ peers = os OUTROS membros do grupo. gid = id estável do grupo — nomeia o arqu
 Formato legado {"peer": "x"} (1:1) é lido como {"peers": ["x"]}."""
 import hashlib
 import json
+import re
 from pathlib import Path
 
 from app.config import settings
-from app.pqueue import _sanitize
+
+
+def _sanitize(name: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.-]", "-", name)
 
 
 def _pair_dir() -> Path:

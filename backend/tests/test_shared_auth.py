@@ -122,7 +122,7 @@ async def _worker(binary):
             os.environ[name] = str(home)
         os.environ["CLAUDE_CONFIG_DIR"] = str(home / ".claude")
         os.environ["CODEX_HOME"] = str(home / ".codex")
-        from app import auth, shared_auth, navsock, termsock
+        from app import auth, shared_auth, termsock
         auth.settings.auth_token = OWNER
         (home / ".claude").mkdir()
         guest_token = "isolated-guest-token"
@@ -167,12 +167,9 @@ async def _worker(binary):
         async def ws(websocket: WebSocket, profile: str):
             nonlocal upgrade_calls
             upgrade_calls += 1
-            if profile == "browser":
-                allowed = await navsock._autorizado(websocket)
-            else:
-                # Só o verificador de existência externo é substituído; nenhum PTY nasce.
-                termsock.tmux.has_session = lambda _: True
-                allowed = await termsock._porta_de_entrada(websocket, "isolated-session") is not None
+            # Só o verificador de existência externo é substituído; nenhum PTY nasce.
+            termsock.tmux.has_session = lambda _: True
+            allowed = await termsock._porta_de_entrada(websocket, "isolated-session") is not None
             if allowed:
                 await websocket.accept()
                 await websocket.close(code=1000)
@@ -314,7 +311,7 @@ async def _worker(binary):
                 for i in range(7):
                     response = await request(root, browser if i % 2 else "/api/me")
                     assert response.status_code == 401, (i, response.status_code, response.text[:300])
-                assert await ws_status(direct, "/api/auth-ws/browser", "wrong", "198.51.100.10") == 403
+                assert await ws_status(direct, "/api/auth-ws/terminal", "wrong", "198.51.100.10") == 403
                 assert len(hits("198.51.100.10")) == 8
                 for path in (browser, "/api/me"):
                     assert (await request(root, path, OWNER)).status_code == 429
@@ -329,14 +326,12 @@ async def _worker(binary):
                 ip = "198.51.100.12"
                 for _ in range(7):
                     assert (await request(root, browser, ip=ip)).status_code == 401
-                assert await ws_status(direct, "/api/auth-ws/browser", OWNER, ip) == 1000
-                assert len(hits(ip)) == 7, "browser Python alterou falhas anteriores"
                 assert await ws_status(root, "/api/voice", OWNER, ip) == 101
                 assert len(hits(ip)) == 7, "voz Rust alterou falhas anteriores"
                 assert await ws_status(direct, "/api/auth-ws/terminal", OWNER, ip) == 1000
                 assert len(hits(ip)) == 7, "terminal Python alterou falhas anteriores"
                 before_upgrade = upgrade_calls
-                assert await ws_status(root, "/api/auth-ws/browser", OWNER, ip) == 1000
+                assert await ws_status(root, "/api/auth-ws/terminal", OWNER, ip) == 1000
                 assert len(hits(ip)) == 7, "WebSocket encaminhado alterou falhas anteriores"
                 assert upgrade_calls == before_upgrade + 1
                 assert len(hits(ip)) == 7
@@ -454,7 +449,7 @@ async def _worker(binary):
                 Path(context.config["state_path"]).write_bytes(b"invalid")
                 broken = [(await request(root, browser, OWNER, "198.51.100.20")).status_code,
                           (await request(root, "/api/me", OWNER, "198.51.100.20")).status_code,
-                          await ws_status(direct, "/api/auth-ws/browser", OWNER, "198.51.100.20"),
+                          await ws_status(direct, "/api/auth-ws/terminal", OWNER, "198.51.100.20"),
                           await ws_status(root, "/api/sessions/isolated-session/nav-remoto", OWNER, "198.51.100.20")]
                 assert broken == [503, 503, 503, 503] and auth._fails == {}
                 return {"root_and_python_real": True, "child_restart_kept_eight": True,

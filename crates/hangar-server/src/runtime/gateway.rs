@@ -76,7 +76,7 @@ async fn probe_within(handle:&EntryHandle,limit:Duration) -> Option<bool> {
 /// `busy`: o ator não respondeu em 1 s; quem escreve decide se espera por ele (`settle_busy`).
 pub struct WriteTarget { pub key:String,pub generation:u64,pub provider:String,pub terminal:bool,pub healthy:bool,pub busy:bool,pub(crate) handle:EntryHandle }
 
-/// Prazo do fechamento da porta: abaixo do `OP_TIMEOUT_S` (75 s) do transporte no Python.
+/// Prazo do fechamento da porta.
 const INGRESS_CLOSE_WAIT:Duration = Duration::from_secs(60);
 /// Teto da espera pela vigia do Codex na janela da subida (`wait_watcher`).
 const WATCHER_WAIT:Duration = Duration::from_secs(10);

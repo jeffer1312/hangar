@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
-import http.client
 import json
 import logging
 import os
@@ -17,16 +16,14 @@ import re
 import secrets
 import socket
 import subprocess
-import sys
 import time
-import threading
 import urllib.request
 from collections.abc import Callable
 from pathlib import Path
 
 import uvicorn
 
-from app import claude_customizations, diag, log_paths, migration_status, rust_bins
+from app import diag, log_paths, migration_status, rust_bins
 
 _log = logging.getLogger("hangar.rust_server")
 
@@ -35,16 +32,12 @@ HEALTH_PATH = "/__hangar_server/health"
 # `protocol` da saúde (hangar_server::INTERNAL_PROTOCOL); outro número = o filho não serve.
 RUST_SERVER_PROTOCOL = 111
 START_TIMEOUT = 10.0
-OP_TIMEOUT_S = 75
 PROTECTED_SHUTDOWN_SECONDS = 120
 CRASH_WINDOW = 60.0
 MAX_CRASHES = 3
 # Depois da desistência, espera antes de cada nova tentativa de subir o Rust (a última se repete).
 RETRY_DELAYS = (30.0, 60.0, 120.0, 300.0, 600.0)
 _POLL = 0.25
-# Capacidade de painel de terminal do Rust, lida da saúde a cada subida (o `/api/config` a publica
-# no modo `rust`).
-terminal_panel: bool | None = None
 
 # Literal, e não `subprocess.CREATE_NO_WINDOW`: o atributo só existe no Windows.
 _CREATE_NO_WINDOW = 0x08000000
@@ -153,17 +146,6 @@ def _health(host: str, port: int) -> dict | None:
     return body if isinstance(body, dict) and body.get("ok") is True else None
 
 
-def parse_owns(value) -> list[dict] | None:
-    """`owns` da saúde: provedor+modo que o Rust atende. Forma inválida = None (falha de partida)."""
-    if not isinstance(value, list):
-        return None
-    for item in value:
-        if not (isinstance(item, dict) and isinstance(item.get("provider"), str)
-                and type(item.get("headless")) is bool):
-            return None
-    return [{"provider": item["provider"], "headless": item["headless"]} for item in value]
-
-
 def _spawn(binary: Path, env: dict[str, str]) -> subprocess.Popen:
     from app.runtime_process import spawn_contained, record_path
     return spawn_contained([str(binary)], env=env, record_path=record_path())
@@ -194,136 +176,10 @@ def _runtime_ready(proc, instance: str) -> dict:
     return ready
 
 
-class RustOpError(RuntimeError):
-    """Recusa do Rust com status HTTP e código da falha, para quem decide repetir ou trocar de dono."""
-
-    def __init__(self, text: str, status: int, code: str = "", message: str = ""):
-        super().__init__(text)
-        # `message`: a frase do Rust, para a rota que devolve o mesmo corpo do Python.
-        self.status, self.code, self.message = status, code, message
-
-
-class RuntimeTransport:
-    """Um transporte privado por filho, sem retry de operação mutável."""
-
-    def __init__(self, port: int, secret: str, instance: str, alive, containment_clean=None):
-        self.instance, self.alive = instance, alive
-        self.containment_clean = containment_clean or (lambda: False)
-        self._port = port
-        self._headers = {"x-hangar-internal": secret, "x-hangar-runtime-instance": instance,
-                         "content-type": "application/json"}
-        self._connections = set()
-        self._guard = threading.Lock()
-        self._closed = False
-        self._workers = set()
-
-    async def _blocking(self, function, *args):
-        task = asyncio.create_task(asyncio.to_thread(function, *args))
-        self._workers.add(task)
-        def finished(done):
-            self._workers.discard(done)
-            if not done.cancelled():
-                done.exception()
-        task.add_done_callback(finished)
-        return await asyncio.shield(task)
-
-    def _connection(self, timeout=35):
-        connection = http.client.HTTPConnection("127.0.0.1", self._port, timeout=timeout)
-        with self._guard:
-            if self._closed:
-                raise RuntimeError("transporte privado encerrado")
-            self._connections.add(connection)
-        return connection
-
-    def _release(self, connection):
-        with self._guard:
-            self._connections.discard(connection)
-        connection.close()
-
-    async def op(self, descriptor: dict, command: dict, operation_id: str, clock: dict):
-        body = {"protocol": RUST_SERVER_PROTOCOL, "instance": self.instance,
-                "key": descriptor["key"], "generation": descriptor["generation"],
-                "operation_id": operation_id, "clock": clock, "command": command}
-        def send():
-            # Uma entrada no terminal soma os tetos das políticas no Rust: fatos (15 s) e
-            # publicação no plugin (40 s), mais os passos da fila.
-            connection = self._connection(timeout=OP_TIMEOUT_S)
-            try:
-                connection.request("POST", "/runtime/op", body=json.dumps(body).encode(), headers=self._headers)
-                response = connection.getresponse()
-                if response.status != 200:
-                    # O motivo do Rust (código e frase fixa, sem conversa) é o que diz onde falhou.
-                    motivo, code, message = "", "", ""
-                    try:
-                        erro = json.loads(response.read(4096) or b"{}")
-                        if isinstance(erro, dict):
-                            code = str(erro.get("error_code") or "")
-                            message = str(erro.get("message") or "")
-                            motivo = f": {code} {message}".rstrip()
-                    except (ValueError, OSError, http.client.HTTPException):
-                        pass
-                    if response.status == 409:
-                        motivo = ": protocolo ou instância do Rust diferente"
-                    raise RustOpError(f"IPC recusou a operação ({response.status}{motivo}); "
-                                      "não houve troca para outro transporte", response.status, code, message)
-                raw = response.read((32 << 20) + 1025)
-                if len(raw) > (32 << 20) + 1024:
-                    raise ValueError("resposta privada acima do teto")
-                return json.loads(raw)
-            finally:
-                self._release(connection)
-        result = await self._blocking(send)
-        if not isinstance(result, dict) or result.get("ok") is not True or "result" not in result:
-            raise RuntimeError("resposta do IPC inválida")
-        return result["result"]
-
-    async def events(self):
-        connection = self._connection()
-        try:
-            def opening():
-                connection.request("GET", "/runtime/events", headers=self._headers)
-                response = connection.getresponse()
-                if response.status != 200:
-                    raise RuntimeError("stream privado recusado")
-                return response
-            response = await self._blocking(opening)
-            while True:
-                raw = await self._blocking(response.readline, (32 << 20) + 1026)
-                if not raw:
-                    raise RuntimeError("stream privado encerrado")
-                if len(raw) > (32 << 20) + 1025 or not raw.endswith(b"\n"):
-                    raise ValueError("evento privado incompleto ou acima do teto")
-                if raw.startswith(b"data:"):
-                    yield json.loads(raw[5:].lstrip())
-        finally:
-            self._shutdown(connection)
-            self._release(connection)
-
-    @staticmethod
-    def _shutdown(connection):
-        if connection.sock is not None:
-            try:
-                connection.sock.shutdown(socket.SHUT_RDWR)
-            except OSError:
-                pass
-
-    async def close(self):
-        with self._guard:
-            self._closed = True
-            connections = tuple(self._connections)
-        for connection in connections:
-            self._shutdown(connection)
-            connection.close()
-        await asyncio.gather(*tuple(self._workers), return_exceptions=True)
-
-
 def _point_bridges(address: str | None, secret: str | None) -> None:
-    """Pontes Python → Rust no endereço privado dele, ou em nada; a lista primeiro, que recusa endereço torto."""
-    from app import account_bridge, list_bridge, transcription_bridge
-    for bridge in (list_bridge, claude_customizations,
-                   transcription_bridge):
-        bridge.configure(address, secret)
-    account_bridge.configure_preparation(address, secret)
+    """Ponte Python → Rust no endereço privado dele, ou em nada; ela recusa endereço torto."""
+    from app import list_bridge
+    list_bridge.configure(address, secret)
 
 
 def _close_stdin(proc: subprocess.Popen) -> None:
@@ -359,10 +215,6 @@ class Supervisor:
         self.proc: subprocess.Popen | None = None
         self.announced = False
         self.attempt = 0        # tentativas de religar depois da desistência; 0 = o Rust nunca desistiu
-        self.runtime_ready = None
-        self.runtime_instance = None
-        self.runtime_secret = None
-        self.runtime_transport = None
 
     def _env(self) -> dict[str, str]:
         # Import tardio: internal_api puxa o app, que o uvicorn interno já carregou a esta altura.
@@ -400,8 +252,6 @@ class Supervisor:
     async def _start(self) -> str:
         """`up`, `died` (morreu subindo), `silent` (vivo e calado até o prazo), `protocol` ou
         `address` (endereço privado ausente ou inválido na saúde)."""
-        global terminal_panel
-        terminal_panel = None
         _point_bridges(None, None)
         if self.proc is not None:
             from app.runtime_process import cleanup
@@ -415,7 +265,7 @@ class Supervisor:
             return "protocol"
         self.proc = _spawn(self.binary, env)
         try:
-            ready = await asyncio.wait_for(asyncio.to_thread(_runtime_ready, self.proc,
+            await asyncio.wait_for(asyncio.to_thread(_runtime_ready, self.proc,
                                             env["HANGAR_RUNTIME_INSTANCE"]), START_TIMEOUT)
         except ProtocolMismatch as e:
             _log.error("hangar-server fala o protocolo %r; este backend fala %d", e.args[0], RUST_SERVER_PROTOCOL)
@@ -437,12 +287,6 @@ class Supervisor:
                     return "protocol"
                 if self.proc.poll() is not None:
                     return "died"
-                panel = health.get("terminal_panel")
-                if type(panel) is not bool:
-                    _log.error("hangar-server sem terminal_panel válido na saúde")
-                    diag.registrar("hangar_server.partida", "erro", codigo="capacidade_invalida")
-                    return "address"
-                terminal_panel = panel
                 address = health.get("terminal_address")
                 try:
                     if address is None:
@@ -454,12 +298,6 @@ class Supervisor:
                     _log.error("hangar-server sem endereço privado válido na saúde")
                     diag.registrar("hangar_server.partida", "erro", codigo="endereco_invalido")
                     return "address"
-                owns = parse_owns(health.get("owns"))
-                if owns is None:
-                    _log.error("hangar-server sem owns válido na saúde")
-                    diag.registrar("hangar_server.partida", "erro", codigo="capacidade_invalida")
-                    return "address"
-                self.configure_runtime(ready, env["HANGAR_INTERNAL_SECRET"], env["HANGAR_RUNTIME_INSTANCE"], owns)
                 return "up"
             await asyncio.sleep(_POLL)
         return "silent"
@@ -545,32 +383,13 @@ class Supervisor:
         _close_stdin(proc)
         await self.deactivate_runtime(confirmed_dead=proc.poll() is not None)
 
-    def configure_runtime(self, ready: dict, secret: str, instance: str, owns: list[dict]) -> None:
-        from app import runtime_coordinator
-        self.runtime_ready = dict(ready)
-        self.runtime_secret, self.runtime_instance = secret, instance
-        self.runtime_transport = RuntimeTransport(ready["port"], secret, instance,
-            lambda: self.proc is not None and self.proc.poll() is None,
-            lambda: bool(self.proc is not None and getattr(self.proc, "runtime_containment", None)
-                and self.proc.runtime_containment.cleaned))
-        coordinator = runtime_coordinator.ensure()
-        coordinator.configure_transport(self.runtime_transport, owns)
-
     async def deactivate_runtime(self, confirmed_dead: bool) -> None:
-        """O filho morreu: as sessões ficam sem dono até o próximo subir (modo `pending`)."""
+        """O filho morreu: as sessões ficam sem dono até o próximo subir."""
         if not confirmed_dead:
             raise RuntimeError("morte do Rust não confirmada")
-        from app import runtime_coordinator
         from app.runtime_process import cleanup
         if self.proc is not None:
             await asyncio.to_thread(cleanup, self.proc)
-        if self.runtime_transport is not None:
-            await self.runtime_transport.close()
-        coordinator = runtime_coordinator.current()
-        if coordinator is not None:
-            await coordinator.enter_pending()
-        self.runtime_ready = self.runtime_secret = self.runtime_instance = None
-        self.runtime_transport = None
 
 
 
@@ -644,15 +463,12 @@ async def _retry_wait(supervisor: Supervisor, stamp: tuple | None) -> None:
 
 def run(app: str, kw: dict, binary: Path, token: str, sockets: list[socket.socket]) -> int:
     """Bloqueia até o fim. Devolve o código de saída: 0 ou 3 (não subiu)."""
-    from app import runtime_coordinator
-    runtime_coordinator.expect_rust()
     # Só o uvicorn interno confia no 127.0.0.1 (o hangar-server); a porta pública segue com o `kw`.
     config = uvicorn.Config(app, **{**kw, "forwarded_allow_ips": trust_loopback(kw["forwarded_allow_ips"])})
     server = Server(config)
     try:
         asyncio.run(serve(server, sockets, binary, kw, token), loop_factory=config.get_loop_factory())
     finally:
-        runtime_coordinator.expect_rust(False)
         from app import shared_auth
         shared_auth.shutdown()
     return 0 if server.started else 3

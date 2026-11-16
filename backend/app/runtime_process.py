@@ -15,6 +15,8 @@ from pathlib import Path
 from dataclasses import dataclass
 
 import psutil
+
+from app.writer_lease import WriterLease
 _record_guard = threading.RLock()
 _FULL_SWEEP = 5.0
 _tree_warned = False
@@ -115,7 +117,6 @@ class Containment:
 
 
 def spawn_contained(args, *, env, record_path=None):
-    from app.runtime_coordinator import WriterLease
     record = (record_path if isinstance(record_path, Path) else Path(record_path)) if record_path is not None else None
     lease = WriterLease(record.with_suffix('.lock')) if record is not None else None
     if record is not None:
@@ -384,7 +385,6 @@ def refresh_members(proc):
 
 
 def reconcile_startup(path=None, *, allow_current=False, lease=None):
-    from app.runtime_coordinator import WriterLease
     path = path or record_path()
     path = path if isinstance(path, Path) else Path(path)
     with _record_guard:

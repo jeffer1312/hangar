@@ -2,7 +2,6 @@
 import asyncio
 import threading
 import time
-from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI, WebSocket
@@ -11,7 +10,7 @@ from starlette.websockets import WebSocketDisconnect
 from websockets.asyncio.server import serve
 from websockets.exceptions import ConnectionClosed
 
-from app import diag, list_bridge, runtime_coordinator, termsock, tmux
+from app import diag, list_bridge, termsock, tmux
 from app.config import settings
 
 # Convidado de convite não passa mais por aqui: a 8766 e o terminal dele são do Rust.
@@ -80,25 +79,10 @@ def _until(cond, timeout=3.0):
 
 
 @pytest.fixture
-def no_pty(monkeypatch):
-    opened = []
-
-    async def motor(ws, name, cols, rows):
-        opened.append(name)
-        await ws.accept()
-        await ws.send_bytes(b"python-pty")
-        await ws.close()
-    monkeypatch.setattr(termsock, "_motor_posix", motor)
-    monkeypatch.setattr(termsock, "_motor_windows", motor)
-    return opened
-
-
-@pytest.fixture
-def rust(monkeypatch, no_pty):
+def rust(monkeypatch):
     monkeypatch.setattr(settings, "auth_token", "secret")
     monkeypatch.setattr(settings, "port", 8765)
     monkeypatch.setattr(tmux, "has_session", lambda name: True)
-    monkeypatch.setattr(runtime_coordinator, "_current", SimpleNamespace(mode="rust"))
     fake = FakeRust()
     list_bridge.configure(f"127.0.0.1:{fake.port}", "sek")
     yield fake
@@ -120,7 +104,7 @@ def _owner():
     return TestClient(_app(), base_url="http://127.0.0.1:8765", client=("127.0.0.1", 5))
 
 
-def test_terminal_pipes_to_rust_no_pty(rust, no_pty):
+def test_terminal_pipes_to_rust_no_pty(rust):
     with _owner().websocket_connect(f"{OWNER_WS}/api/sessions/cc/term?token=secret&cols=100&rows=30") as ws:
         assert ws.receive_bytes() == b"hello-from-rust"
         ws.send_bytes(b"abc")
@@ -132,7 +116,6 @@ def test_terminal_pipes_to_rust_no_pty(rust, no_pty):
     assert path == "/__hangar_server/term?target=cc&cols=100&rows=30"
     assert headers["x-hangar-internal"] == "sek"
     _until(rust.closed.is_set)
-    assert no_pty == []
 
 
 class _SlowCleanup:
@@ -169,29 +152,16 @@ def test_rust_close_code_reaches_the_client(rust, monkeypatch):
         taken.stop()
 
 
-@pytest.mark.parametrize("broken", ["bridge_off", "starting"])
-def test_bridge_failure_closes_1013_with_code_and_no_pty(rust, no_pty, monkeypatch, broken):
+def test_bridge_off_closes_1013_with_code(rust, monkeypatch):
     events = []
     monkeypatch.setattr(diag, "registrar", lambda evento, nivel="info", **campos: events.append((evento, campos)))
-    if broken == "bridge_off":
-        list_bridge.configure(None, None)
-    else:
-        async def starting():
-            raise runtime_coordinator.RuntimeStarting("subindo")
-        monkeypatch.setattr(runtime_coordinator, "_current", SimpleNamespace(mode="pending", await_mode=starting))
+    list_bridge.configure(None, None)
     with _owner().websocket_connect(f"{OWNER_WS}/api/sessions/cc/term?token=secret") as ws:
         with pytest.raises(WebSocketDisconnect) as e:
             ws.receive_bytes()
     assert e.value.code == 1013
     assert any(evento == "terminal.ponte" and campos.get("codigo") for evento, campos in events), events
-    assert no_pty == [] and rust.requests == []
-
-
-def test_python_mode_keeps_the_python_pty(rust, no_pty, monkeypatch):
-    monkeypatch.setattr(runtime_coordinator, "_current", SimpleNamespace(mode="python"))
-    with _owner().websocket_connect(f"{OWNER_WS}/api/sessions/cc/term?token=secret") as ws:
-        assert ws.receive_bytes() == b"python-pty"
-    assert no_pty == ["cc"] and rust.requests == []
+    assert rust.requests == []
 
 
 @pytest.mark.parametrize("status, code", [(403, 1008), (404, 1013), (500, 1013)])

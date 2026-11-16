@@ -117,24 +117,16 @@ def _sem_integracao_codex_real():
 
 @pytest.fixture(scope="session", autouse=True)
 def _sem_sessoes_sem_terminal_reais(tmp_path_factory):
-    # O lifespan (`with TestClient(app)`) religa todo cano listado nos sidecars. Lendo os REAIS,
-    # a suíte virava um segundo cliente dos canos das sessões vivas desta máquina e o backend de
-    # verdade perdia a conexão. Session-scoped: os testes que trocam `_dir` pelo monkeypatch
-    # voltam pra este diretório, nunca pro real.
-    # A varredura de órfãos lê os processos REAIS em /proc: com os sidecars apontando pra pasta
-    # vazia, todo cano vivo da máquina parecia órfão e levava SIGTERM — derrubava as sessões sem
-    # terminal, inclusive a que roda a suíte.
-    from app.adapters.claude_headless import adapter, sessions
+    # Os sidecars REAIS são das sessões vivas desta máquina. Session-scoped: os testes que trocam
+    # `_dir` pelo monkeypatch voltam pra este diretório, nunca pro real.
+    from app.adapters.claude_headless import sessions
     original = sessions._dir
-    varredura = adapter.matar_orfaos
     pasta = tmp_path_factory.mktemp("claude-headless")
     sessions._dir = lambda: pasta
-    adapter.matar_orfaos = lambda: 0
     try:
         yield
     finally:
         sessions._dir = original
-        adapter.matar_orfaos = varredura
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -186,39 +178,6 @@ def _sem_git_dir_no_ambiente_de_teste():
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _sem_plugin_de_function_hooks_da_maquina():
-    # O interruptor `claude_function_hooks` é config da MÁQUINA (~/.claude/runtime-config.json) e a
-    # capacidade vem de `claude --help`: ligado aqui, todo teste que confere o comando ou o env de
-    # uma sessão Claude ganhava `--plugin-dir` e `HANGAR_PLUGIN_*`, e a suíte passava no CI e
-    # falhava na máquina de quem usa o recurso. Session-scoped e sem monkeypatch pelo motivo do
-    # topo do arquivo. Quem testa o portão ligado troca `plugin_bridge.ligado` no próprio teste.
-    from app import plugin_bridge
-    original = plugin_bridge.ligado
-    plugin_bridge.ligado = lambda: False
-    try:
-        yield
-    finally:
-        plugin_bridge.ligado = original
-
-
-@pytest.fixture(scope="session", autouse=True)
-def _sem_padrao_do_jev_da_maquina():
-    # Mesmo defeito do fixture acima, outro interruptor: `jev_padrao` é config da MÁQUINA, e com ele
-    # ligado todo teste que confere os argumentos do `registry.create` ganhava um `jev=True` que a
-    # asserção não espera. Passava no CI (sem config gravada) e falhava em quem usa o recurso.
-    # `headless_default` (nasce true) entra junto: o create passaria `headless=True` aos mocks.
-    # Só estas chaves são forçadas — o resto do `get` continua o de verdade, e quem testa o padrão ligado
-    # troca o `get` inteiro no próprio teste.
-    from app import runtime_config
-    original = runtime_config.get
-    runtime_config.get = lambda campo: False if campo in ("jev_padrao", "headless_default") else original(campo)
-    try:
-        yield
-    finally:
-        runtime_config.get = original
-
-
-@pytest.fixture(scope="session", autouse=True)
 def _sem_servidor_de_teste_vazado():
     """No fim da suite, nenhum socket de teste pode ter processo vivo.
 
@@ -250,16 +209,6 @@ def _reset_auth_backoff():
     auth.reset_backoff()
     yield
     auth.reset_backoff()
-
-
-@pytest.fixture(autouse=True)
-def _reset_agentpane_cache():
-    # _cache do agentpane e dict de MODULO com TTL de 60s: sem reset, a resolucao de uma sessao de
-    # teste vazaria pro teste seguinte que reusa o mesmo nome (padrao do _reset_list_snapshot).
-    from app import agentpane
-    agentpane.invalidate()
-    yield
-    agentpane.invalidate()
 
 
 _DIARIO_DE_TESTE = Path(tempfile.mkdtemp(prefix="hangar-diag-")) / ".hangar-diag"
@@ -297,18 +246,6 @@ def _diario_isolado():
     log_paths.base = original
     diag._pastas_legadas = old_sources
     diag._logs_legados = old_logs
-
-
-@pytest.fixture(autouse=True)
-def _reset_sem_agente_avisadas():
-    # _SEM_AGENTE_AVISADAS (Task 5.5) e set de CLASSE (SessionRegistry) com dedup de log por nome
-    # que nunca expira: sem reset, um teste que aciona o aviso pra um nome (ex: SESS reusado entre
-    # arquivos) envenena o proximo teste que espera o log de novo -- mesmo padrao do
-    # _reset_agentpane_cache acima.
-    from app.registry import SessionRegistry
-    SessionRegistry._SEM_AGENTE_AVISADAS.clear()
-    yield
-    SessionRegistry._SEM_AGENTE_AVISADAS.clear()
 
 
 @pytest.fixture

@@ -2815,14 +2815,10 @@ Push-Location "$raiz\backend"
 # Atribuicao direta pelo mesmo motivo do $quieto do npm: o `if` desembrulharia o array de um item.
 $pyFumaca = @('uv', 'run', 'python')
 if ($pacote) { $pyFumaca = @($pyBackend) }
-$rc = Nativo @pyFumaca -c "from app import api, registry, procinfo"
+$rc = Nativo @pyFumaca -c "from app import api"
 if ($rc -ne 0) { Erro 'o backend nao importa neste Windows'; Pop-Location; exit 1 }
 Ok 'o backend importa'
 Mark-Item 'backend-importa' 'ok' 'o servidor abre'
-
-$rc = Nativo @pyFumaca -c "from app import procinfo; assert not procinfo._TEM_PROC; import psutil; assert psutil.Process().cwd()"
-if ($rc -ne 0) { Erro 'leitura de processo via psutil falhou'; Pop-Location; exit 1 }
-Ok 'leitura de processo (psutil) funcionando'
 Pop-Location
 
 # Sobra de rodada anterior: o kill pode demorar, entao limpa antes de contar de novo.

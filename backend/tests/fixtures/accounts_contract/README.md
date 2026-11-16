@@ -69,63 +69,17 @@ status lê a cota no módulo de contas do Rust (`AccountService::claude_windows`
 sem ida ao Python; custos precisam usar o retrato de contas/cotas Rust sem chamada
 pública recursiva.
 
-## Referência e prova de autoria
+## Fixtures
 
-`python-reference.json` contém 26 pedidos executados pelas rotas Python reais da
-revisão acima, mais os envelopes de validação e o catálogo Codex com configuração
-compartilhada, capturados das mesmas rotas antes de a reserva Python sair (09/10/2026):
-catálogos deslogados, apelido com acento, filtro de backup na aba de contas,
-ordenação, nulos/omissões, validação, conta padrão protegida, cadastro Codex,
-duplicata, preparo idle, cancelamento antigo, UUID inválido, device flow idle,
-cotas deslogadas e exclusão. A árvore do cadastro inclui o marcador e o
-`config.toml`; nenhum arquivo de autenticação nasce nesse cadastro. A árvore
-compara o conjunto exato de arquivos, o marcador como JSON e a configuração como
-TOML: CRLF no Windows e LF no POSIX não mudam seus valores. Respostas HTTP mantêm
-seu conteúdo completo e não recebem essa decodificação adicional.
-
-`tests/accounts_contract.py` inicia um filho Python com HOME, USERPROFILE,
-HOMEDRIVE/HOMEPATH, XDG, APPDATA, config e cache temporários **antes dos imports**.
-O ambiente é uma lista permitida; não herda identidade, CP de contas, TMUX ou
-proxies. O filho monta os handlers reais numa FastAPI isolada, sem o lifespan que
-recupera sessões da máquina. Desde 09/10/2026 as rotas de conta e cota não têm
-mais corpo Python: o filho serve as rotas `/internal` que o Rust consome, a criação
-de sessão e `/api/credenciais`; o golden congela o contrato público que o Rust
-cumpre. Autenticação externa é sintética e deslogada; CLI e
-conexões externas inesperadas são recusadas. O teardown recolhe o filho criado.
-
-`HttpTransport.request(method, path, json=None)` funciona contra a porta de teste
-Python ou uma instância Rust isolada. Não segue redirect nem usa proxy. A
-normalização muda somente a raiz temporária declarada e seus separadores: não
-remove horários, UUIDs, mensagens, campos desconhecidos ou listas fora de ordem.
-Dados temporais novos deverão declarar sua normalização na Task consumidora.
-
-`PythonReference` recusa operações de conta com 503 e
-`contract_python_handler_blocked`, guardando um diário separado. Uma resposta
-200 entregue por proxy Python falha em `assert_rust_ownership`. Só
-`bridge.other_quotas` é permitida nessa conferência; o preparo não usa mais ponte Python.
-As quatro rotas da ponte Pi/omp aposentada
-(`device-propagate`, `/ack`, `/close` e `device-propagate-state`) entram no diário
-como `bridge.propagate_device_login` e reprovam a conferência;
-`/__contract__/secondary-native-only` as recusa antes do handler. Na integração, a instância Rust deve apontar para
-essa referência bloqueada e produzir o contrato esperado sem chamar handlers de
-contas; outros provedores têm seu próprio diário, e o preparo roda em processo no Rust. A Task 1 prova
-a sonda, não declara que o Rust já atende contas.
+O processo de referência Python (`tests/accounts_contract.py`) e o golden capturado dele
+(`python-reference.json`) foram apagados junto com os motores Python: o contrato das rotas de
+conta é provado só pelos testes do Rust.
 
 `account-keys.json` fixa a chave de existência nos dois runtimes: SHA-256 de
 provedor, byte NUL e caminho canônico em UTF-8. No Windows, a normalização remove
 o prefixo estendido, uniformiza barras e converte cada caractere para minúsculas.
 Conta inexistente resolve pelo ancestral existente; os descritores ficam fora da
 pasta da conta e seus arquivos nunca são apagados.
-
-`test_account_lifecycle.py` disputa descritores com um processo Rust real e usa
-`start_session_async`, `account_exists` e barreiras do harness para provar o
-nascimento pela rota real, cancelamento repetido e reinício apenas do Rust.
-Sidecars sem PID ainda podem representar nascimento pendente; inspeção incompleta
-recusa a exclusão. `test_accounts_catalog.py` comprova o DELETE HTTP depois do retorno
-do criador e antes da publicação do lançador, incluindo dois cancelamentos e reinício
-somente do Rust. Os handlers públicos Python ficam bloqueados; fatos internos seguem
-pela rota real com segredo e instância. Goldens completos conferem cadastro, exclusão,
-catálogo Claude e envelopes de validação.
 
 `environment.json` é compartilhado pelos testes Python e Rust: a conta padrão mantém
 a identidade original e a adicional remove autenticação, provedor e diretórios herdados.
@@ -148,13 +102,5 @@ consumidores concretos. Login com identidade conectada, CLI travada, preparo
 ready/partial, 429 e redefinição idempotente ainda precisam das Tasks consumidoras.
 `forcar=true` jamais serve para criar golden do desvio conhecido que burla 429.
 
-Executar somente em VM Windows de teste ou CI descartável, a partir de `backend/`:
-
-```bash
-uv run pytest tests/test_accounts_contract.py -q
-```
-
-Sem rotas Python de conta, o golden não se regenera: mudança de contrato público
-entra à mão no JSON, junto da mudança no Rust. Golden não é atualizado automaticamente por falha de teste. A prova real de
-cadastro/login continua nas interfaces existentes e em contas descartáveis; esta
-referência não usa nem altera contas da máquina principal.
+Os goldens não se regeneram: mudança de contrato público entra à mão no JSON, junto da
+mudança no Rust.

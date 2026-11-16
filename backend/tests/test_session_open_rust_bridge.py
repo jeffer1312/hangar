@@ -1,22 +1,16 @@
 """A abertura de Claude com terminal é do Rust: só o que entrou direto no Python (Connect, MCP) vai à
 ponte dele, e as rotas internas guardam aqui só o que é daqui (registro em espera, `then`); o dono da sessão do convidado o Rust grava."""
-import json
-from unittest.mock import patch
-
 import pytest
 
 import app.api as api_mod
-from app import internal_api, pqueue
+from app import internal_api
 
 SECRET = "cd" * 32
-INFO = {"name": "s1", "cwd": "/p", "jsonl": "/p/x.jsonl", "provider": "claude", "headless": False,
-        "config_dir": None, "account_source": None}
 
 
 @pytest.fixture(autouse=True)
-def _env(monkeypatch, tmp_path):
+def _env():
     internal_api.set_secret(SECRET)
-    monkeypatch.setattr(pqueue, "_queue_dir", lambda: tmp_path)
     yield
     internal_api.set_secret(None)
 

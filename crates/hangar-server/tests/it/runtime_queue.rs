@@ -650,46 +650,6 @@ fn terminal_runtime_rejected_before_dispatch_abandons_existing_pending_entry() {
 }
 
 #[test]
-#[ignore = "exige HANGAR_TEST_PYTHON apontando ao Python do backend"]
-fn terminal_runtime_store_python_rust_interop_preserves_finalization_marker() {
-    let python=std::env::var_os("HANGAR_TEST_PYTHON").expect("HANGAR_TEST_PYTHON ausente");
-    let dir=tempfile::tempdir().unwrap();let path=dir.path().join("state");let projection=dir.path().join("projection");
-    let mut store=Store::open(&path,&projection,State::new("key",1,"session",vec![])).unwrap();let clock=ClockSample {monotonic_s:0.0,epoch_s:1800000000.0};
-    store.exec(1,"append",clock,Action::Append {text:"Olá 🌎".into(),delivered:false,ts:None,pre_transcript:true,entry_id:Some("entry".into())}).unwrap();
-    let payload=json!({"operation_id":"attempt","kind":"input","payload":{"text":"Olá 🌎","pre_transcript":true,"_terminal_generation":1}});
-    store.exec(1,"prepare",clock,Action::Prepare {id:"attempt".into(),entry_id:Some("entry".into()),payload:payload.clone()}).unwrap();
-    store.exec(1,"dispatch",clock,Action::BeginDispatch {id:"attempt".into(),wire_id:"terminal:1:attempt".into(),staged:false}).unwrap();
-    let result=json!({"operation_id":"attempt","disposition":"deferred","payload":{"cleanup":"proved"}});
-    store.exec(1,"finish",clock,Action::Finish {id:"attempt".into(),status:Status::Deferred,result:result.clone()}).unwrap();drop(store);
-    let script=r#"import sys
-from pathlib import Path
-from app.runtime_queue import QueueStore,initial_state
-s=QueueStore(Path(sys.argv[1]),Path(sys.argv[2]),initial_state('key',1,'session',[]))
-c={'monotonic_s':0.0,'epoch_s':1800000000.0}
-assert s.state['operations']['attempt']['terminal_finalized'] is True
-assert s.state['operations']['attempt']['entry_materialized'] is True
-s.exec(1,'python-recover',c,{'kind':'recover'})
-s.exec(1,'python-finish',c,{'kind':'finish','id':'attempt','status':'deferred','result':{'operation_id':'attempt','disposition':'deferred','payload':{'cleanup':'proved'}}})
-assert s.state['rows'][0]['attempts']==1
-s.exec(1,'python-missing-prepare',c,{'kind':'prepare','id':'missing','entry_id':'missing','payload':{'operation_id':'missing','kind':'input','payload':{'text':'Unicode 🌎','pre_transcript':True,'_terminal_generation':1}}})
-s.exec(1,'python-missing-recover',c,{'kind':'recover'})
-assert len(s.state['rows'])==2
-assert s.state['operations']['missing']['entry_materialized'] is True
-assert s.state['rows'][1]['text']=='Unicode 🌎'
-s.exec(1,'python-failed-prepare',c,{'kind':'prepare','id':'failed','entry_id':'missing','payload':{'operation_id':'failed','kind':'input','payload':{'text':'Unicode 🌎','_terminal_generation':1}}})
-s.exec(1,'python-failed-dispatch',c,{'kind':'begin_dispatch','id':'failed','wire_id':'terminal:1:failed'})
-s.exec(1,'python-failed-finish',c,{'kind':'finish','id':'failed','status':'rejected','result':{'operation_id':'failed','disposition':'rejected','payload':{'code':'refused'}}})
-assert s.exec(1,'python-remove',c,{'kind':'remove','entry_id':'missing'}) is True
-"#;
-    let backend=std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../backend");
-    let output=std::process::Command::new(python).args(["-c",script]).arg(&path).arg(&projection).env("PYTHONPATH",backend).output().unwrap();assert!(output.status.success(),"{}",String::from_utf8_lossy(&output.stderr));
-    let mut store=Store::open(&path,&projection,State::new("key",1,"session",vec![])).unwrap();store.exec(1,"rust-recover",clock,Action::Recover).unwrap();
-    assert!(store.state().operations["attempt"].terminal_finalized);assert!(store.state().operations["attempt"].entry_materialized);
-    assert!(store.state().operations["missing"].entry_materialized);assert_eq!(store.state().rows.len(),1);assert_eq!(store.state().rows[0]["attempts"],1);
-    store.exec(1,"rust-recover-again",clock,Action::Recover).unwrap();assert_eq!(store.state().rows.len(),1);
-}
-
-#[test]
 fn terminal_runtime_recovered_entry_removed_after_failure_is_not_materialized_again() {
     for exhausted in [false,true] {
         let dir=tempfile::tempdir().unwrap();let path=dir.path().join("state");let projection=dir.path().join("projection");
