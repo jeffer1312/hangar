@@ -327,9 +327,9 @@ async fn query_token_only() {
 async fn auth_comes_before_the_session_check() {
     let tmux = Tmux::new();
     tmux.session("s11");
-    let srv = server(&tmux, |_| {}).await;
+    let addr = server(&tmux, |_| {}).await.addr;
     let refusal = |path: String| async move {
-        match tokio_tungstenite::connect_async(format!("ws://{}{path}", srv.addr)).await {
+        match tokio_tungstenite::connect_async(format!("ws://{addr}{path}")).await {
             Err(tungstenite::Error::Http(r)) => (r.status().as_u16(), String::from_utf8(r.body().clone().unwrap_or_default()).unwrap()),
             other => panic!("esperava recusa: {:?}", other.map(|_| ())),
         }
