@@ -104,6 +104,19 @@ pub fn candidate_files(config_dir: &Path, main: &Path, cwd: &Path) -> Vec<PathBu
     files
 }
 
+/// O `settings.json` de uma conta do Hangar é cópia do principal, chave de topo por chave de topo: com `hooks` no
+/// principal, a cópia do da conta é sobrescrita na próxima reconciliação e não pode ser o lugar do conserto.
+pub fn without_mirrored_copy(read: Vec<(PathBuf, String)>, config_dir: &Path, main: &Path) -> Vec<(PathBuf, String)> {
+    if config_dir == main { return read; }
+    let main_settings = main.join("settings.json");
+    let main_has_hooks = read.iter().find(|(path, _)| *path == main_settings)
+        .and_then(|(_, text)| serde_json::from_str::<Value>(text).ok())
+        .is_some_and(|doc| doc.get("hooks").is_some());
+    if !main_has_hooks { return read; }
+    let copy = config_dir.join("settings.json");
+    read.into_iter().filter(|(path, _)| *path != copy).collect()
+}
+
 /// As pastas das versões instaladas, pelo registro do Claude (`plugins.<id>[].installPath`).
 fn installed_paths(registry: &Path) -> Option<Vec<PathBuf>> {
     let doc: Value = serde_json::from_slice(&std::fs::read(registry).ok()?).ok()?;
@@ -127,6 +140,9 @@ pub fn fix_prompt(subject: &str, detail: &str, files: &[PathBuf]) -> String {
     );
     prompt.push_str("\nArquivos de configuração onde o hook pode estar:\n");
     for file in files { prompt.push_str(&format!("- {}\n", file.display())); }
+    prompt.push_str(
+        "\nArquivo dentro de `plugins/cache` é de plugin instalado: não o edite, a próxima atualização o regrava. \
+         Se o hook com defeito for de plugin, diga isso no resultado.\n");
     prompt.push_str(&format!(
         "\nDepois de consertar, rode o comando do hook para provar que ele passa. \
          Termine a resposta com uma única linha `{RESULT_PREFIX} <uma frase dizendo o que foi feito>`; \
@@ -259,6 +275,17 @@ mod tests {
         std::fs::remove_dir_all(&root).unwrap();
         assert!(files.contains(&new.join("hooks/hooks.json")));
         assert!(!files.contains(&old.join("hooks/hooks.json")), "versão antiga no cache não é a instalada");
+    }
+
+    #[test]
+    fn account_copy_of_the_main_hooks_is_not_a_place_to_fix() {
+        let hooks = json!({"hooks": {"Stop": []}}).to_string();
+        let (main, account) = (Path::new("/h/.claude"), Path::new("/h/.claude-x"));
+        let read = vec![(account.join("settings.json"), hooks.clone()), (main.join("settings.json"), hooks.clone())];
+        assert_eq!(without_mirrored_copy(read.clone(), account, main), vec![(main.join("settings.json"), hooks.clone())]);
+        let own = vec![(account.join("settings.json"), hooks.clone()), (main.join("settings.json"), "{}".to_owned())];
+        assert_eq!(without_mirrored_copy(own.clone(), account, main), own, "hooks só na conta: a cópia é dela");
+        assert_eq!(without_mirrored_copy(read.clone(), main, main), read);
     }
 
     #[test]

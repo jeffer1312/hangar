@@ -69,12 +69,13 @@ fn claude_row(rows: &[SessionRow], name: &str) -> Result<SessionRow, Response> {
 /// Os arquivos que definem o hook (ou, sem nenhum, todos os que existem) e o pedido à sessão de conserto.
 async fn plan(home: PathBuf, row: &SessionRow, body: &FixBody) -> (Vec<PathBuf>, String) {
     let main = home.join(".claude");
-    let config = row.conta.as_deref().filter(|c| !c.is_empty()).map_or_else(|| main.clone(), PathBuf::from);
+    let config = crate::list::context::config_dir_of(row.conta.as_deref()).unwrap_or_else(|| main.clone());
     let cwd = PathBuf::from(row.cwd.clone().unwrap_or_default());
     let (subject, detail) = (body.subject.clone(), body.detail.clone());
     tokio::task::spawn_blocking(move || {
         let read: Vec<(PathBuf, String)> = hangar_notice_actions::candidate_files(&config, &main, &cwd).into_iter()
             .filter_map(|path| std::fs::read_to_string(&path).ok().map(|text| (path, text))).collect();
+        let read = hangar_notice_actions::without_mirrored_copy(read, &config, &main);
         let mut files = hangar_notice_actions::hook_sources(&subject, &read);
         if files.is_empty() { files = read.into_iter().map(|(path, _)| path).collect(); }
         let prompt = hangar_notice_actions::fix_prompt(&subject, &detail, &files);
@@ -116,7 +117,8 @@ pub async fn start(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
     all.insert(child.clone(), Fix { parent: name.clone(), notice_id: body.notice_id.clone(), attempt, subject: body.subject.clone() });
     if let Err(response) = save(&dir, &all).await { return response; }
     let open = SessionOpenRequest {
-        name: Some(child.clone()), cwd: row.cwd.clone().unwrap_or_default(), config_dir: row.conta.clone().filter(|c| !c.is_empty()),
+        name: Some(child.clone()), cwd: row.cwd.clone().unwrap_or_default(),
+        config_dir: crate::list::context::config_dir_of(row.conta.as_deref()).map(|dir| dir.display().to_string()),
         provider: Some("claude".into()), headless: Some(true), model: Some("sonnet".into()), initial_prompt: Some(prompt),
         creator: Some(name.clone()), disable_hooks: body.blocking, ..SessionOpenRequest::default()
     };
