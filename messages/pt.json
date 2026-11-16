@@ -1590,7 +1590,7 @@
   "notice_retry": "Tentar de novo",
   "notice_fix": "Consertar…",
   "notice_fix_title": "Consertar o hook {name}",
-  "notice_fix_intro": "Abre uma sessão nova e pequena, ligada a esta. Ela recebe só o erro e onde o hook está configurado — nada desta conversa. Quando terminar, o resultado aparece aqui numa linha, sem interromper o Claude.",
+  "notice_fix_intro": "Abre uma sessão nova e pequena, à parte desta. Ela recebe só o erro e onde o hook está configurado — nada desta conversa. Quando terminar, o resultado aparece aqui numa linha, sem interromper o Claude.",
   "notice_fix_error_label": "O erro",
   "notice_fix_files_label": "Onde o hook pode estar",
   "notice_fix_no_files": "Nenhum arquivo de configuração encontrado",

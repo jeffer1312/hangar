@@ -1579,7 +1579,7 @@
   "notice_retry": "Try again",
   "notice_fix": "Fix…",
   "notice_fix_title": "Fix the {name} hook",
-  "notice_fix_intro": "Opens a small new session linked to this one. It gets only the error and where the hook is configured — nothing from this conversation. When it finishes, the result shows up here as one line, without interrupting Claude.",
+  "notice_fix_intro": "Opens a small new session apart from this one. It gets only the error and where the hook is configured — nothing from this conversation. When it finishes, the result shows up here as one line, without interrupting Claude.",
   "notice_fix_error_label": "The error",
   "notice_fix_files_label": "Where the hook may be",
   "notice_fix_no_files": "No configuration file found",

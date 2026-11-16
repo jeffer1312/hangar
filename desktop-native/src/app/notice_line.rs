@@ -371,7 +371,8 @@ impl Hangar {
         let toggle_key = row.to_owned();
         let action = self.notice_action_part(event, cx);
         // Com ação, a seta sai do título: o botão fica entre os dois e o clique nele não abre o detalhe.
-        let head = notice_head(SharedString::from(format!("notice-{id}")), title, count, expandable.then_some(open).filter(|_| action.is_none()))
+        let fixed = notice_action(event) == Some(NoticeAction::Fix) && fix_state(&self.chat.events, &id) == Some(FixState::Done);
+        let head = notice_head_marked(SharedString::from(format!("notice-{id}")), title, count, expandable.then_some(open).filter(|_| action.is_none()), fixed)
             .when(expandable, |el| el.cursor_pointer().on_click(cx.listener({ let key = toggle_key.clone(); move |this, _, _, cx| this.toggle(key.clone(), cx) })));
         let head = match action {
             None => head.into_any_element(),
@@ -403,8 +404,14 @@ pub(crate) fn notice_rule_line(content: impl IntoElement) -> Div {
 
 /// Ícone, título e total; `open` é `None` quando não há o que abrir.
 pub(crate) fn notice_head(id: SharedString, title: String, count: Option<String>, open: Option<bool>) -> Stateful<Div> {
+    notice_head_marked(id, title, count, open, false)
+}
+
+/// `done`: o problema foi consertado, o ícone vira o de feito.
+fn notice_head_marked(id: SharedString, title: String, count: Option<String>, open: Option<bool>, done: bool) -> Stateful<Div> {
+    let icon = if done { chrome::small_icon(IconName::Check, 14., theme::success()) } else { chrome::small_icon(IconName::TriangleAlert, 14., theme::warning()) };
     div().id(id).flex().items_center().gap(px(7.)).min_w_0()
-        .child(chrome::small_icon(IconName::TriangleAlert, 14., theme::warning()))
+        .child(icon)
         .child(div().min_w_0().truncate().text_size(px(12.5)).text_color(theme::muted()).child(title))
         .when_some(count, |el, count| el.child(small(format!("· {count}"), theme::faint())))
         .when_some(open, |el, open| el.child(chrome::small_icon(if open { IconName::ChevronDown } else { IconName::ChevronRight }, 14., theme::faint())))
