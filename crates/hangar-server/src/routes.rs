@@ -644,7 +644,8 @@ fn guest_router_with(state: Arc<AppState>, pair: Option<Arc<PairState>>) -> Rout
         .merge(crate::share::guest_routes::guest_router(share.clone(), crate::share::guest_routes::owner_name()))
         .merge(crate::share::pair_routes::guest_pair_router(pair))
         .layer(axum::middleware::from_fn_with_state(Arc::new(crate::share::gate::Gate::new(share)), crate::share::gate::guard))
-        .layer(axum::middleware::from_fn_with_state(state, crate::startup::guard))
+        .layer(axum::middleware::from_fn_with_state(state.clone(), crate::startup::guard))
+        .layer(axum::middleware::from_fn_with_state(state, guest_edge_rules))
 }
 
 /// Lojas, porta do dono e conferência pela internet que convite e par compartilham; `None` sem
@@ -827,6 +828,15 @@ fn router_with(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router {
 /// linha `api.servidor` do pedido que falhou no servidor ou demorou.
 async fn edge_rules(State(st): State<Arc<AppState>>, req: Request, next: axum::middleware::Next) -> Response {
     if let Some(response) = crate::http_cors::preflight(req.method(), req.headers()) { return response; }
+    body_cap_and_access_line(&st, req, next).await
+}
+
+/// A 8766 tem o preflight do porteiro dela (`share::gate::preflight`); o teto e a linha são os mesmos.
+async fn guest_edge_rules(State(st): State<Arc<AppState>>, req: Request, next: axum::middleware::Next) -> Response {
+    body_cap_and_access_line(&st, req, next).await
+}
+
+async fn body_cap_and_access_line(st: &AppState, req: Request, next: axum::middleware::Next) -> Response {
     if let Some(mut response) = crate::http_body_limit::precheck(req.headers()) {
         crate::http_cors::apply(req.headers(), &mut response);
         return response;
@@ -836,7 +846,7 @@ async fn edge_rules(State(st): State<Arc<AppState>>, req: Request, next: axum::m
     let req = req.map(|body| Body::new(http_body_util::Limited::new(body, crate::http_body_limit::MAX_BYTES)));
     let started = Instant::now();
     let response = next.run(req).await;
-    access_line(&st, &method, &path, &correlation, response, started.elapsed()).await
+    access_line(st, &method, &path, &correlation, response, started.elapsed()).await
 }
 
 /// A linha `api.servidor` do Python, agora para todo pedido do Rust: só 5xx ou 1 s até os cabeçalhos.
@@ -866,8 +876,16 @@ async fn error_code(response: Response) -> (Response, Option<String>) {
     use axum::body::HttpBody;
     let json = response.headers().get(header::CONTENT_TYPE).is_some_and(|v| v.as_bytes().starts_with(b"application/json"));
     if !json || !response.body().size_hint().exact().is_some_and(|n| n <= 8192) { return (response, None); }
-    let (parts, body) = response.into_parts();
-    let Ok(bytes) = axum::body::to_bytes(body, 8192).await else { return (Response::from_parts(parts, Body::empty()), None) };
+    let (mut parts, body) = response.into_parts();
+    let bytes = match axum::body::to_bytes(body, 8192).await {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            // O corpo se perdeu na leitura: a resposta segue com o status e sem corpo, nunca com o tamanho antigo.
+            tracing::warn!(code = "access_line_body_unreadable", "o corpo do erro não pôde ser lido para o diário: {error}");
+            parts.headers.remove(header::CONTENT_LENGTH);
+            return (Response::from_parts(parts, Body::empty()), None);
+        }
+    };
     let code = serde_json::from_slice::<serde_json::Value>(&bytes).ok().and_then(|value| {
         let code = match value.get("detail") { Some(detail) if detail.is_object() => detail.get("code"), _ => value.get("code") };
         code.and_then(serde_json::Value::as_str).map(|code| code.chars().take(64).collect())
@@ -875,16 +893,39 @@ async fn error_code(response: Response) -> (Response, Option<String>) {
     (Response::from_parts(parts, Body::from(bytes)), code)
 }
 
-/// O caminho no diário sem nome de sessão nem id: só palavras de rota (minúsculas, sem dígito) ficam.
-// shortcut: um nome todo em minúsculas fora de `/api/sessions/` (convidado, atalho) fica visível; trocar pelo
-// modelo de rota do roteador se isso pesar.
+/// Famílias do roteador cujo segmento seguinte é nome ou id escolhido por alguém: (família, segmentos
+/// fixos depois dela, segmentos de nome). A mais longa que casa vale.
+const NAMED_SEGMENTS: &[(&[&str], usize, usize)] = &[
+    (&["api", "sessions"], 0, 1), (&["api", "archive"], 0, 2), (&["api", "credenciais"], 1, 1),
+    (&["api", "engines"], 0, 1), (&["api", "plugins", "marketplaces"], 0, 1), (&["api", "plugins"], 0, 1),
+    (&["api", "codex-contas"], 0, 1), (&["api", "claude-configs"], 0, 1), (&["api", "guests"], 0, 1),
+    (&["api", "external-pairs"], 0, 1), (&["api", "peers"], 0, 1), (&["api", "groups"], 0, 1),
+    (&["api", "connect", "devices"], 0, 1), (&["api", "connect", "peers"], 0, 1), (&["api", "hangar-terminals"], 0, 1),
+    (&["api", "scheduled-tasks"], 0, 1), (&["api", "dream", "runs"], 0, 1), (&["api", "mission", "actions"], 0, 1),
+    (&["api", "orq"], 0, 1), (&["api", "harness", "conserto"], 0, 1),
+];
+/// Coleções dentro da sessão cujo segmento seguinte é id (`queue/{entry_id}`, `workflows/{run}/agents/{id}`).
+const SESSION_IDS: &[&str] = &["queue", "pages", "share", "subagents", "tasks", "tool-progress", "transcript-image",
+    "workflows", "agents", "shortcut-terminals", "uploads"];
+
+/// O caminho no diário sem nome nem id: some o segmento de nome das famílias acima e todo segmento que
+/// não é palavra de rota (minúscula, sem dígito).
 fn masked_route(path: &str) -> String {
-    let session = path.starts_with("/api/sessions/");
-    let parts: Vec<&str> = path.split('/').enumerate().map(|(i, part)| {
+    let parts: Vec<&str> = path.trim_start_matches('/').split('/').collect();
+    let mut named = vec![false; parts.len()];
+    if let Some((family, skip, count)) = NAMED_SEGMENTS.iter().filter(|(family, ..)| parts.starts_with(family))
+        .max_by_key(|(family, ..)| family.len()) {
+        let start = family.len() + skip;
+        for flag in named.iter_mut().skip(start).take(*count) { *flag = true; }
+        if **family == ["api", "sessions"] {
+            for i in start + 2..parts.len() { named[i] |= SESSION_IDS.contains(&parts[i - 1]); }
+        }
+    }
+    let masked: Vec<&str> = parts.iter().zip(named).map(|(part, named)| {
         let word = part.len() <= 24 && part.bytes().all(|b| b.is_ascii_lowercase() || b == b'-' || b == b'_');
-        if part.is_empty() || (word && !(session && i == 3)) { part } else { "*" }
+        if part.is_empty() || (word && !named) { part } else { "*" }
     }).collect();
-    parts.join("/").chars().take(120).collect()
+    format!("/{}", masked.join("/")).chars().take(120).collect()
 }
 
 fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router {
@@ -1305,6 +1346,11 @@ pub(crate) fn on_connect_port(req: &Request) -> bool {
 
 pub(crate) async fn pass(st: &AppState, mut req: Request, fwd: &Forward) -> Response {
     if !on_guest_port(&req) && let Some(response) = not_owner_refusal(st, &req, fwd).await { return response; }
+    let bridged = req.extensions().get::<crate::session_write::bridge::BridgedOwner>().is_some();
+    // Caminho que ninguém atende não espera a porta da sessão: a transferência não faz dele um 409.
+    if !python_answers(req.uri().path()) {
+        return if bridged { StatusCode::MISDIRECTED_REQUEST.into_response() } else { without_python(st, req, fwd).await };
+    }
     let _transfer_pass=if !matches!(*req.method(),Method::GET|Method::HEAD|Method::OPTIONS) {
         if let (Some(runtime),Some(name))=(st.state.runtime.get(),crate::session_write::session_name(req.uri().path())) {
             if runtime.transfer_blocked(&name).await {
@@ -1316,8 +1362,7 @@ pub(crate) async fn pass(st: &AppState, mut req: Request, fwd: &Forward) -> Resp
         } else {None}
     } else {None};
     // Pedido da ponte do Codex com terminal nunca volta ao Python: ele trata o que o Rust não atende.
-    if req.extensions().get::<crate::session_write::bridge::BridgedOwner>().is_some() { return StatusCode::MISDIRECTED_REQUEST.into_response(); }
-    if !python_answers(req.uri().path()) { return without_python(st, req, fwd).await; }
+    if bridged { return StatusCode::MISDIRECTED_REQUEST.into_response(); }
     if let Some(grant) = &fwd.guest {
         // Assinado aqui, não no porteiro: a escrita pode esperar a porta da sessão mais que a validade.
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
@@ -1872,6 +1917,32 @@ async fn push(out: &mpsc::Sender<Queued>, item: impl Into<Queued>) -> bool {
 mod tests {
     use super::*;
     use std::io::Read;
+
+    /// A linha `api.servidor` nunca leva nome ou id escolhido por alguém (I-14).
+    #[test]
+    fn masked_route_hides_every_user_chosen_segment() {
+        for (path, expected) in [
+            ("/api/sessions/minha-sessao/input", "/api/sessions/*/input"),
+            ("/api/sessions/minha-sessao/queue/entrada/steer", "/api/sessions/*/queue/*/steer"),
+            ("/api/sessions/minha-sessao/workflows/rodada/agents/agente", "/api/sessions/*/workflows/*/agents/*"),
+            ("/api/credenciais/claude/trabalho", "/api/credenciais/claude/*"),
+            ("/api/credenciais/kimi/pessoal/login", "/api/credenciais/kimi/*/login"),
+            ("/api/engines/meu-motor", "/api/engines/*"),
+            ("/api/plugins/marketplaces/meu-mercado/update", "/api/plugins/marketplaces/*/update"),
+            ("/api/plugins/marketplaces", "/api/plugins/marketplaces"),
+            ("/api/plugins/algum-plugin/enable", "/api/plugins/*/enable"),
+            ("/api/archive/projeto/sessao/resume", "/api/archive/*/*/resume"),
+            ("/api/codex-contas/pessoal/login", "/api/codex-contas/*/login"),
+            ("/api/guests/ana/delete", "/api/guests/*/delete"),
+            ("/api/external-pairs/amigo", "/api/external-pairs/*"),
+            ("/api/peers/casa/enabled", "/api/peers/*/enabled"),
+            ("/api/connect/devices/celular/approve", "/api/connect/devices/*/approve"),
+            ("/api/scheduled-tasks/backup/run", "/api/scheduled-tasks/*/run"),
+            ("/api/nada/12345/xyz", "/api/nada/*/xyz"),
+        ] {
+            assert_eq!(masked_route(path), expected, "{path}");
+        }
+    }
 
     #[tokio::test]
     async fn migrated_provider_routes_authenticate_before_validation_and_never_fall_back() {

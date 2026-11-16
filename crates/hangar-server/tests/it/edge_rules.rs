@@ -76,6 +76,22 @@ async fn path_without_handler_is_404_for_the_owner_and_refused_for_the_stranger(
     assert_eq!(python.hits_to("/api/nada/12345/xyz") + python.hits_to("/api/sessions/minha-sessao/coisa"), 0);
 }
 
+/// Decisão 19: caminho sem handler sob uma sessão é 404 antes da porta da sessão; sessão sem entrada
+/// no registro não vira o 409 de "ocupada".
+#[tokio::test]
+async fn path_without_handler_is_404_before_the_session_gate() {
+    let (python, upstream) = spawn_fake().await;
+    let state = hangar_server::routes::AppState::new(config(upstream, "127.0.0.1"));
+    let registry = std::sync::Arc::new(hangar_server::runtime::gateway::RuntimeRegistry::new(
+        upstream, "secret-test".into(), "instance-test".into()));
+    assert!(state.state.runtime.set(registry).is_ok());
+    let server = spawn_state(state).await;
+    let r = client().post(format!("http://{server}/api/sessions/sem-entrada/coisa")).bearer_auth(OWNER)
+        .json(&serde_json::json!({"a": 1})).send().await.unwrap();
+    assert_eq!(r.status(), 404);
+    assert_eq!(python.hits_to("/api/sessions/sem-entrada/coisa"), 0);
+}
+
 /// I-14 e decisão 18: o pedido do Rust que falha no servidor ganha a linha `api.servidor` com a rota
 /// mascarada e a causa do corpo; o 404 de caminho desconhecido, que o Python também registrava, não.
 #[tokio::test]

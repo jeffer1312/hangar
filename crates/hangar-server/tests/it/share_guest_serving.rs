@@ -326,6 +326,44 @@ async fn guest_path_without_handler_is_404_from_the_rust() {
     assert_eq!(srv.python.hits_to("/api/sessions/cc/plan-preview") + srv.python.hits_to("/api/sessions/cc/proxy-ws-test"), 0);
 }
 
+/// Decisão 17 na 8766: corpo declarado acima de 100 MiB é 413 antes do porteiro, sem token nenhum.
+#[tokio::test(flavor = "multi_thread")]
+async fn guest_port_refuses_a_declared_body_over_100_mib_before_the_gate() {
+    use tokio::io::AsyncReadExt;
+    let dir = tempfile::tempdir().unwrap();
+    let srv = plain_srv(dir.path(), |_| {}).await;
+    let mut s = tokio::net::TcpStream::connect(srv.guest).await.unwrap();
+    s.write_all(b"POST /api/sessions/cc/input HTTP/1.1\r\nHost: h\r\nContent-Length: 104857601\r\n\r\nx").await.unwrap();
+    let mut seen = Vec::new();
+    let mut chunk = [0u8; 1024];
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !String::from_utf8_lossy(&seen).contains("request body too large") {
+            let n = s.read(&mut chunk).await.unwrap();
+            assert!(n > 0, "a conexão fechou antes da resposta: {}", String::from_utf8_lossy(&seen));
+            seen.extend_from_slice(&chunk[..n]);
+        }
+    }).await.expect("a recusa não chegou");
+    assert!(seen.starts_with(b"HTTP/1.1 413"), "{}", String::from_utf8_lossy(&seen));
+    assert_eq!(srv.python.input_calls(), 0);
+}
+
+/// Decisão 18 na 8766: a falha do servidor para o convidado ganha a linha `api.servidor` mascarada.
+#[tokio::test(flavor = "multi_thread")]
+async fn guest_server_failure_writes_the_masked_access_line() {
+    let dir = tempfile::tempdir().unwrap();
+    let diary = tempfile::tempdir().unwrap();
+    let path = diary.path().to_owned();
+    let srv = plain_srv(dir.path(), move |state| state.diag = state.diag.clone().with_diary(Some(path))).await;
+    let t = srv.g.token("cc", Kind::Share);
+    let (status, body) = post_json(format!("http://{}/api/sessions/cc/input", srv.guest), &t, json!({"text": "oi"})).await;
+    assert_eq!((status, body["detail"]["code"].as_str()), (503, Some("runtime_unavailable")), "{body}");
+    let is_line = |row: &Value| row["evento"] == "api.servidor" && row["codigo"] == "503";
+    let rows = wait_diary(diary.path(), is_line).await;
+    let line = rows.iter().find(|row| is_line(row)).unwrap();
+    assert_eq!(line["detalhe"], "POST /api/sessions/*/input");
+    assert_eq!(line["causa"], "runtime_unavailable");
+}
+
 /// IP desta máquina na rede da casa; `None` sem rede (o teste que precisa dele não roda).
 fn lan_ip() -> Option<std::net::IpAddr> {
     let s = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;

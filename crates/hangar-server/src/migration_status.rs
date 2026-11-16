@@ -357,7 +357,7 @@ fn areas_json(counts: &[[u64; 2]; AREAS.len()]) -> Value {
     }).collect()
 }
 
-/// `GET /api/migration/status` do dono. Convidado e outro método seguem ao Python, que recusa.
+/// `GET /api/migration/status` do dono. Quem não é o dono e outro método levam a recusa ou o 404 do `pass`.
 pub async fn status(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
     let (fwd, owner) = match gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     if !owner || req.method() != Method::GET {
