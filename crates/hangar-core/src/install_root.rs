@@ -69,9 +69,19 @@ pub enum Backend {
 /// O backend da versão em uso: pelo `current` (caminho real) ou, sem ele, pelo checkout do lançador.
 /// O manifesto decide (`boot: direct`); checkout sem manifesto sobe pelo Python só enquanto ele existe.
 pub fn backend(home: &Path, args: &[String], windows: bool, explicit: Option<&std::ffi::OsStr>) -> Result<Backend, (&'static str, PathBuf)> {
+    backend_noted(home, args, windows, explicit, &mut Vec::new())
+}
+
+/// `backend`, anotando em `notes` (código, causa e o caminho escolhido) cada desvio que ele decide
+/// sozinho: o lançador as põe no log da tarefa e no stderr, onde o serviço as guarda.
+pub fn backend_noted(home: &Path, args: &[String], windows: bool, explicit: Option<&std::ffi::OsStr>, notes: &mut Vec<String>) -> Result<Backend, (&'static str, PathBuf)> {
     let real = match std::fs::canonicalize(current(home)) {
         Ok(real) => crate::fs::without_verbatim(real),
-        Err(_) => checkout(home).ok_or(("launch_no_current", current(home)))?,
+        Err(error) => {
+            let found = checkout(home).ok_or(("launch_no_current", current(home)))?;
+            notes.push(format!("launch_checkout: {} indisponível ({:?}); usando o checkout {}", current(home).display(), error.kind(), found.display()));
+            found
+        }
     };
     let manifest = real.join("manifest.json");
     let direct = match std::fs::read(&manifest).map(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes)) {
@@ -80,7 +90,11 @@ pub fn backend(home: &Path, args: &[String], windows: bool, explicit: Option<&st
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => !real.join("backend").join("app").join("main.py").is_file(),
         // Manifesto ilegível: versão sem o Python embutido só pode subir direto; com ele, não dá para
         // saber qual dos dois, e escolher às cegas viraria um laço de quedas.
-        Ok(Err(_)) | Err(_) if !real.join("python").exists() => true,
+        unreadable if !real.join("python").exists() => {
+            let cause = match unreadable { Err(e) => format!("{:?}", e.kind()), Ok(_) => "json".to_owned() };
+            notes.push(format!("launch_manifest_unreadable_direct: {} ilegível ({cause}); sem o Python embutido, sobe direto", manifest.display()));
+            true
+        }
         Ok(Err(_)) | Err(_) => return Err(("launch_manifest_unreadable", manifest)),
     };
     if !direct {
@@ -227,7 +241,15 @@ mod tests {
         let real = version(home, "1.0.0.9", "{ quebrado");
         assert_eq!(super::backend(home, &[], false, None).err(), Some(("launch_manifest_unreadable", real.join("manifest.json"))));
         std::fs::remove_dir_all(real.join("python")).unwrap();
-        assert!(matches!(super::backend(home, &[], false, None), Ok(super::Backend::Direct(_))));
+        let mut notes = Vec::new();
+        assert!(matches!(super::backend_noted(home, &[], false, None, &mut notes), Ok(super::Backend::Direct(_))));
+        // A escolha às cegas fica dita, com o caminho e a causa.
+        assert_eq!(notes, [format!("launch_manifest_unreadable_direct: {} ilegível (json); sem o Python embutido, sobe direto",
+            real.join("manifest.json").display())]);
+        let mut clean = Vec::new();
+        std::fs::write(real.join("manifest.json"), r#"{"boot":"direct"}"#).unwrap();
+        assert!(matches!(super::backend_noted(home, &[], false, None, &mut clean), Ok(super::Backend::Direct(_))));
+        assert!(clean.is_empty(), "{clean:?}");
     }
 
     /// B-18, decisão 7: o explícito vence e, errado, não cai para o binário da versão.

@@ -7,57 +7,8 @@ pub const GUEST_PORT: u16 = 8766;
 const DEFAULT_TOKEN: &str = "change-me";
 const LOOPBACK: [&str; 3] = ["127.0.0.1", "localhost", "::1"];
 
-/// O `.env` no que o Hangar grava: `CHAVE=valor`, a última linha vale, aspas fecham o valor e `#`
-/// depois de espaço é comentário. Sem `export` nem `${VAR}`; a chave volta em minúsculas.
-pub fn parse_env_file(text: &str) -> Vec<(String, String)> {
-    text.lines().filter_map(|line| {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') { return None; }
-        let (key, value) = line.split_once('=')?;
-        Some((key.trim().to_ascii_lowercase(), unquote(value.trim())))
-    }).collect()
-}
-
-fn unquote(value: &str) -> String {
-    for quote in ['"', '\''] {
-        if let Some(rest) = value.strip_prefix(quote) {
-            return quoted(rest, quote);
-        }
-    }
-    let cut = value.char_indices().find(|&(at, c)| c == '#' && value[..at].ends_with(char::is_whitespace))
-        .map_or(value.len(), |(at, _)| at);
-    value[..cut].trim_end().to_owned()
-}
-
-/// Até a aspa que fecha, sem escape antes dela. Os escapes são os do python-dotenv: entre aspas duplas
-/// `\\ \' \" \a \b \f \n \r \t \v`; entre simples, só `\\` e `\'`. Escape desconhecido fica como está.
-fn quoted(rest: &str, quote: char) -> String {
-    let mut out = String::new();
-    let mut chars = rest.chars();
-    while let Some(c) = chars.next() {
-        if c == quote { break; }
-        if c != '\\' { out.push(c); continue; }
-        let Some(next) = chars.next() else { out.push('\\'); break };
-        let decoded = match (quote, next) {
-            (_, '\\') => Some('\\'),
-            (_, '\'') => Some('\''),
-            ('"', '"') => Some('"'),
-            ('"', 'a') => Some('\u{7}'),
-            ('"', 'b') => Some('\u{8}'),
-            ('"', 'f') => Some('\u{c}'),
-            ('"', 'n') => Some('\n'),
-            ('"', 'r') => Some('\r'),
-            ('"', 't') => Some('\t'),
-            ('"', 'v') => Some('\u{b}'),
-            _ => None,
-        };
-        match decoded {
-            Some(decoded) => out.push(decoded),
-            None => { out.push('\\'); out.push(next); }
-        }
-    }
-    out
-}
+/// O leitor do `.env` é um só, no `hangar-core`: a subida e quem consulta uma chave depois leem igual.
+pub use hangar_core::user_data::parse_env_file;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Settings {
@@ -90,6 +41,8 @@ impl Settings {
 pub struct Boot {
     pub vars: Vec<(&'static str, String)>,
     pub warning: Option<String>,
+    /// O que a subida resolveu diferente do pedido, com código, para o stderr: o log ainda não abriu.
+    pub notes: Vec<String>,
 }
 
 pub struct Places<'a> {
@@ -102,7 +55,15 @@ pub struct Places<'a> {
 /// `present`: a variável já está no ambiente do processo, e ele vence.
 pub fn standalone_env(settings: &Settings, places: &Places, present: impl Fn(&str) -> bool) -> Result<Boot, String> {
     let warning = guard(settings)?;
-    let ip = bind_ip(&settings.bind)?;
+    let mut notes = Vec::new();
+    let ip = if settings.bind == "auto" {
+        lan_ip().unwrap_or_else(|error| {
+            notes.push(format!("bind_auto_fallback: CP_LAN_BIND_IP=auto sem interface de rede ({:?}); escutando só em 127.0.0.1", error.kind()));
+            IpAddr::V4(Ipv4Addr::LOCALHOST)
+        })
+    } else {
+        bind_ip(&settings.bind)?
+    };
     let mut vars = vec![
         ("CP_AUTH_TOKEN", settings.token.clone()),
         ("CP_FORWARDED_ALLOW_IPS", settings.forwarded.clone()),
@@ -124,7 +85,7 @@ pub fn standalone_env(settings: &Settings, places: &Places, present: impl Fn(&st
         vars.push(("HANGAR_SERVER_LOG", folder.join("hangar-server.log").to_string_lossy().into_owned()));
     }
     vars.retain(|(key, _)| key.starts_with("CP_") || !present(key));
-    Ok(Boot { vars, warning })
+    Ok(Boot { vars, warning, notes })
 }
 
 fn guard(settings: &Settings) -> Result<Option<String>, String> {
@@ -144,19 +105,22 @@ fn guard(settings: &Settings) -> Result<Option<String>, String> {
 pub fn bind_ip(bind: &str) -> Result<IpAddr, String> {
     if bind == "auto" { return Ok(detect_lan_ip()); }
     if let Ok(ip) = bind.parse::<IpAddr>() { return Ok(ip); }
-    let found: Vec<SocketAddr> = (bind, 0).to_socket_addrs().map(Iterator::collect).unwrap_or_default();
+    let found: Vec<SocketAddr> = (bind, 0).to_socket_addrs().map(Iterator::collect)
+        .map_err(|error| format!("CP_LAN_BIND_IP sem endereço: {bind} ({error})"))?;
     found.iter().find(|addr| addr.is_ipv4()).or(found.first()).map(SocketAddr::ip)
         .ok_or_else(|| format!("CP_LAN_BIND_IP sem endereço: {bind}"))
 }
 
-/// A interface por onde sairia o tráfego para fora; nenhum pacote é enviado.
+/// A interface por onde sairia o tráfego para fora; nenhum pacote é enviado. Sem rede, loopback:
+/// quem precisa dizer que caiu nele usa `lan_ip`.
 pub fn detect_lan_ip() -> IpAddr {
-    let probe = || -> std::io::Result<IpAddr> {
-        let socket = UdpSocket::bind("0.0.0.0:0")?;
-        socket.connect("8.8.8.8:80")?;
-        Ok(socket.local_addr()?.ip())
-    };
-    probe().unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST))
+    lan_ip().unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST))
+}
+
+pub fn lan_ip() -> std::io::Result<IpAddr> {
+    let socket = UdpSocket::bind("0.0.0.0:0")?;
+    socket.connect("8.8.8.8:80")?;
+    Ok(socket.local_addr()?.ip())
 }
 
 fn create_private_dir(dir: &Path) -> std::io::Result<()> {

@@ -102,9 +102,10 @@ fn main() -> std::process::ExitCode {
 /// O servidor monta o próprio ambiente: `.env` + processo, instância e segredo novos, porta do
 /// convidado e log. O resto do servidor lê o ambiente como sempre.
 fn standalone() -> Result<(), std::process::ExitCode> {
+    // Antes do log desta vida: a falha de gravar no diário só aparece pelo stderr.
     let refuse = |code: &'static str, exit: u8, message: String| {
         eprintln!("hangar-server: {message}");
-        hangar_server::diag::record_blocking(hangar_server::diag::diary_dir().as_deref(),
+        hangar_server::diag::record_before_log(
             &[serde_json::json!({"evento": "hangar_server.partida", "nivel": "erro", "codigo": code})], "subida");
         std::process::ExitCode::from(exit)
     };
@@ -113,8 +114,20 @@ fn standalone() -> Result<(), std::process::ExitCode> {
         .or_else(hangar_server::session_open::cli::backend_dir);
     let env_file = hangar_core::user_data::read_env_raw(&home, backend.as_deref())
         .map_err(|e| refuse("env_unreadable", 2, format!(".env ilegível: {e}")))?;
-    let environ: Vec<(String, String)> = std::env::vars_os()
-        .filter_map(|(key, value)| Some((key.into_string().ok()?, value.into_string().ok()?))).collect();
+    // Só o número da linha: o valor pode ser o token.
+    for issue in env_file.as_deref().map(hangar_core::user_data::env_file_issues).unwrap_or_default() {
+        eprintln!("hangar-server: env_line_ignored: .env {issue}");
+    }
+    let mut environ: Vec<(String, String)> = Vec::new();
+    for (key, value) in std::env::vars_os() {
+        match (key.into_string(), value.into_string()) {
+            (Ok(key), Ok(value)) => environ.push((key, value)),
+            // Só as `CP_*` são configuração: as outras fora de UTF-8 não mudam nada aqui.
+            (Ok(key), Err(_)) if key.to_ascii_uppercase().starts_with("CP_") =>
+                eprintln!("hangar-server: env_not_utf8: {key} fora de UTF-8 ignorada; vale o .env ou o padrão"),
+            _ => {}
+        }
+    }
     let settings = hangar_boot::settings::Settings::resolve(env_file.as_deref(), &environ)
         .map_err(|e| refuse("config_invalid", 2, format!("configuração inválida: {e}")))?;
     let claude = std::env::var_os("CLAUDE_CONFIG_DIR").map(std::path::PathBuf::from);
@@ -123,6 +136,7 @@ fn standalone() -> Result<(), std::process::ExitCode> {
     let boot = hangar_boot::settings::standalone_env(&settings, &places, |key| std::env::var_os(key).is_some())
         .map_err(|message| refuse("startup_refused", 1, message))?;
     if let Some(warning) = boot.warning { println!("{warning}"); }
+    for note in boot.notes { eprintln!("hangar-server: {note}"); }
     for (key, value) in boot.vars { unsafe { std::env::set_var(key, value) } }
     Ok(())
 }
@@ -192,6 +206,9 @@ async fn run(notifier: hangar_boot::notify::Notifier) {
     hangar_server::diag::record_boot(&hangar_dir, cfg.log_path.as_deref());
     hangar_server::init_log(cfg.log_path.as_deref());
     hangar_server::install_panic_hook();
+    if let Some(code) = notifier.rejected {
+        tracing::warn!(code, "variável do watchdog do systemd recusada; o servidor segue sem watchdog");
+    }
     // A atualização apenas agenda: a poda precisa do binário novo, depois do download.
     tokio::spawn(async {
         let home = hangar_server::accounts::environment::AccountEnvironment::capture().home;
@@ -236,12 +253,22 @@ async fn run(notifier: hangar_boot::notify::Notifier) {
     let stopped = std::sync::Arc::new(std::sync::OnceLock::new());
     // A marca de pé e a parada sob a mesma trava: parada que chega antes do "pronto" impede a marca.
     let stop_recorded = std::sync::Arc::new(std::sync::Mutex::new(false));
-    let stop = { let (stopped, recorded, dir) = (stopped.clone(), stop_recorded.clone(), hangar_dir.clone()); async move {
-        let cause = hangar_server::stop_requested().await;
-        let _ = stopped.set(cause);
-        // A parada limpa antes do desligamento lento: o fechamento do console no Windows dá ~5 s até o kill.
-        let _ = tokio::task::spawn_blocking(move || record_stop_once(&recorded, &dir, cause, false)).await;
-    } };
+    let stop = {
+        let stopped = stopped.clone();
+        #[cfg(windows)]
+        let (recorded, dir) = (stop_recorded.clone(), hangar_dir.clone());
+        async move {
+            let cause = hangar_server::stop_requested().await;
+            let _ = stopped.set(cause);
+            // No Windows a parada limpa vem antes do desligamento lento: o fechamento do console dá
+            // ~5 s até o kill. No resto ela espera o servidor terminar (abaixo): um desligamento que
+            // trava e leva o SIGKILL do `TimeoutStopSec` tem de contar como queda.
+            #[cfg(windows)]
+            if let Err(error) = tokio::task::spawn_blocking(move || record_stop_once(&recorded, &dir, cause, false)).await {
+                tracing::warn!(code = "server_stop_record_failed", %error, "tarefa que grava a parada limpa falhou");
+            }
+        }
+    };
     #[allow(unused_mut)]
     let home = hangar_server::accounts::environment::AccountEnvironment::capture().home;
     let server_id = match hangar_server::machine_peers::startup_identity(&home, hangar_server::session_open::cli::backend_dir().as_deref()) {
@@ -273,10 +300,17 @@ async fn run(notifier: hangar_boot::notify::Notifier) {
     let startup_accounts = state.accounts.clone();
     let (alive_state, listen) = (state.state.clone(), state.cfg.listen);
     let (ready_recorded, ready_dir, ready_notifier) = (stop_recorded.clone(), hangar_dir.clone(), notifier.clone());
+    let ready_stopped = stopped.clone();
     let _preparation = tokio::spawn(async move {
         match service {
             Ok(service) => match tokio::task::spawn_blocking(move || service.startup_outcome()).await {
-                Ok(outcome) => if let Some(message) = outcome.message() { eprintln!("{message}"); },
+                Ok(outcome) => {
+                    // A saúde vem antes: o servidor segue subindo, mas a falha fica no log com código.
+                    if let hangar_server::update::git_engine::periodic::StartupOutcome::Failed(error) = &outcome {
+                        tracing::warn!(code = "startup_steps_failed", %error, "passo de atualização da subida falhou; o servidor segue subindo");
+                    }
+                    if let Some(message) = outcome.message() { eprintln!("{message}"); }
+                }
                 Err(error) => tracing::warn!(code="startup_steps_failed", %error, "preparação inicial interrompida"),
             },
             Err(error) => tracing::warn!(code="startup_config_failed", %error, "preparação inicial sem configuração"),
@@ -291,12 +325,21 @@ async fn run(notifier: hangar_boot::notify::Notifier) {
         hangar_server::startup::prepare_sessions(startup_environment).await;
         startup.finish();
         // Só agora a vida está pronta: daqui em diante sair sem a parada gravada é queda.
+        // Parada pedida antes de pronto não marca de pé: fora do Windows a parada só é gravada
+        // depois que o servidor termina, e a marca ficaria até lá.
         let marked = tokio::task::spawn_blocking(move || {
             let recorded = ready_recorded.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            if *recorded { return false; }
+            if *recorded || ready_stopped.get().is_some() { return false; }
             hangar_server::diag::record_running(&ready_dir);
             true
-        }).await.unwrap_or(false);
+        }).await;
+        let marked = match marked {
+            Ok(marked) => marked,
+            Err(error) => {
+                tracing::error!(code = "server_ready_failed", %error, "tarefa da marca de pé falhou: sem READY=1 nem watchdog, o systemd encerra pelo prazo de subida");
+                false
+            }
+        };
         if !marked { return; }
         if let Err(error) = ready_notifier.send("READY=1") {
             tracing::warn!(code = "systemd_notify_failed", kind = ?error.kind(), "aviso de pronto ao systemd não saiu");
@@ -320,6 +363,9 @@ async fn run(notifier: hangar_boot::notify::Notifier) {
         Ok(()) => {
             let cause = stopped.get().copied().unwrap_or("desconhecida");
             tracing::info!(cause, "parada pedida: hangar-server sai");
+            // Fora do Windows a parada limpa só depois do desligamento inteiro (ver `stop`).
+            #[cfg(not(windows))]
+            record_stop_once(&stop_recorded, &hangar_dir, cause, false);
             std::process::exit(0);
         }
         Err(e) => {

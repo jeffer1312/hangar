@@ -25,16 +25,33 @@ pub fn launch(args: &[String]) -> ExitCode {
         .and_then(|real| real.file_name().map(|n| n.to_string_lossy().into_owned())).unwrap_or_else(|| "?".to_owned());
     report(log.as_deref(), &format!("launch_start: versão {version}, lançador pid {}", std::process::id()));
     let explicit = std::env::var_os("CP_RUST_SERVER_BIN");
-    match backend(&home, &args[1..], cfg!(windows), explicit.as_deref()) {
+    let mut notes = Vec::new();
+    let chosen = backend_noted(&home, &args[1..], cfg!(windows), explicit.as_deref(), &mut notes);
+    for note in notes {
+        report(log.as_deref(), &note);
+    }
+    match chosen {
         Ok(Backend::Python(command)) => run(command, log.as_deref(), &version),
         Ok(Backend::Direct(command)) => run_direct(command, log.as_deref(), &version),
         Err((code, path)) => {
             report(log.as_deref(), &format!("{code}: {}", path.display()));
-            // O gerenciador religa sem fim: a causa fica no diário que o relatório leva.
-            hangar_core::diag::record_blocking(hangar_core::diag::diary_dir().as_deref(),
-                &[serde_json::json!({"evento": "lancador.falhou", "nivel": "erro", "codigo": code, "detalhe": path.display().to_string()})], "launch");
+            failed(log.as_deref(), "erro", code, &path.display().to_string());
             ExitCode::from(3)
         }
+    }
+}
+
+/// `lancador.falhou` no diário: o gerenciador religa sem fim, e a causa fica no diário que o
+/// relatório leva. `nivel` aviso quando o servidor sobe mesmo assim. O lançador não tem log
+/// próprio: a falha de gravar vai ao log da tarefa e ao stderr.
+fn failed(log: Option<&Path>, level: &str, code: &str, detail: &str) {
+    let line = serde_json::json!({"evento": "lancador.falhou", "nivel": level, "codigo": code, "detalhe": detail});
+    let written = match hangar_core::diag::diary_dir() {
+        Some(dir) => hangar_core::diag::write_diary(&dir, &[line], chrono::Local::now()).map_err(|error| format!("{:?}", error.kind())),
+        None => Err("sem pasta de logs".to_owned()),
+    };
+    if let Err(cause) = written {
+        report(log, &format!("launch_diary_unwritable: {code} não gravado no diário ({cause})"));
     }
 }
 
@@ -63,6 +80,7 @@ fn run(mut command: std::process::Command, log: Option<&Path>, version: &str) ->
     }
     let error = command.exec();
     report(log, &format!("launch_exec_failed: versão {version}: {error}"));
+    failed(log, "erro", "launch_exec_failed", &Path::new(command.get_program()).display().to_string());
     ExitCode::from(126)
 }
 
@@ -72,6 +90,7 @@ fn run_direct(mut command: std::process::Command, log: Option<&Path>, version: &
     use std::os::unix::process::CommandExt;
     let error = command.exec();
     report(log, &format!("launch_exec_failed: versão {version}: {error}"));
+    failed(log, "erro", "launch_exec_failed", &Path::new(command.get_program()).display().to_string());
     ExitCode::from(126)
 }
 
@@ -93,22 +112,31 @@ fn run_direct(mut command: std::process::Command, log: Option<&Path>, version: &
             }
             Some(file)
         }
-        Err(error) => { report(log, &format!("launch_log_unavailable: {}: {error}", target.display())); None }
+        Err(error) => {
+            report(log, &format!("launch_log_unavailable: {}: {error}", target.display()));
+            failed(log, "aviso", "launch_log_unavailable", &format!("{:?}", error.kind()));
+            None
+        }
     });
     say(file.as_ref(), log, &format!("launch_backend_starting: versão {version}, lançador pid {}", std::process::id()));
     if let Err(error) = die_with_the_launcher() {
         say(file.as_ref(), log, &format!("launch_job_failed: {error}"));
+        failed(log, "aviso", "launch_job_failed", &format!("{:?}", error.kind()));
     }
     if let Some(file) = &file {
         match (file.try_clone(), file.try_clone()) {
             (Ok(out), Ok(err)) => { command.stdout(out).stderr(err); }
-            (Err(error), _) | (_, Err(error)) => say(Some(file), log, &format!("launch_log_unavailable: {error}")),
+            (Err(error), _) | (_, Err(error)) => {
+                say(Some(file), log, &format!("launch_log_unavailable: {error}"));
+                failed(log, "aviso", "launch_log_unavailable", &format!("{:?}", error.kind()));
+            }
         }
     }
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => {
             say(file.as_ref(), log, &format!("launch_exec_failed: versão {version}: {error}"));
+            failed(log, "erro", "launch_exec_failed", &Path::new(command.get_program()).display().to_string());
             return ExitCode::from(126);
         }
     };
@@ -165,6 +193,7 @@ fn run(mut command: std::process::Command, log: Option<&Path>, version: &str) ->
     // Sem o Job o backend sobe como antes, só sem a proteção: a falha vai ao log da tarefa.
     if let Err(error) = die_with_the_launcher() {
         report(log, &format!("launch_job_failed: {error}"));
+        failed(log, "aviso", "launch_job_failed", &format!("{:?}", error.kind()));
     }
     let snapshot = match crate::boot_version::PythonLaunch::capture(&command) {
         Ok(snapshot) => Some(snapshot),
@@ -174,6 +203,7 @@ fn run(mut command: std::process::Command, log: Option<&Path>, version: &str) ->
         Ok(child) => child,
         Err(error) => {
             report(log, &format!("launch_exec_failed: versão {version}: {error}"));
+            failed(log, "erro", "launch_exec_failed", &Path::new(command.get_program()).display().to_string());
             return ExitCode::from(126);
         }
     };

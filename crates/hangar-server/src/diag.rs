@@ -90,7 +90,14 @@ async fn record_screen_events(base: Option<PathBuf>, req: Request) -> Response {
     }).await;
     match written {
         Ok(Ok(count)) => hangar_core::http_cors::json_guarded(StatusCode::OK, json!({"gravadas": count})),
-        _ => hangar_core::http_cors::internal_error(),
+        Ok(Err(error)) => {
+            tracing::warn!(code = "diag_write_failed", ?error, "lote da tela não gravado: pasta do diário indisponível");
+            hangar_core::http_cors::internal_error()
+        }
+        Err(error) => {
+            tracing::warn!(code = "diag_task_failed", %error, "tarefa que grava o lote da tela falhou");
+            hangar_core::http_cors::internal_error()
+        }
     }
 }
 
@@ -108,7 +115,13 @@ async fn summary(base: Option<PathBuf>, query: Option<&str>, headers: &HeaderMap
         value["ultimas"] = Value::Array(hangar_usage_diary::latest(&base, count));
         value
     }).await;
-    let Ok(value) = value else { return hangar_core::http_cors::internal_error() };
+    let value = match value {
+        Ok(value) => value,
+        Err(error) => {
+            tracing::warn!(code = "diag_task_failed", %error, "tarefa do resumo do diário falhou");
+            return hangar_core::http_cors::internal_error();
+        }
+    };
     gzipped(headers, hangar_core::http_cors::json_guarded(StatusCode::OK, value)).await
 }
 
@@ -120,16 +133,16 @@ async fn download(st: &AppState, base: Option<PathBuf>, headers: &HeaderMap) -> 
     let (decided, decision) = tokio::sync::oneshot::channel();
     let (sender, receiver) = tokio::sync::mpsc::channel(8);
     tokio::task::spawn_blocking(move || {
-        let mut sink = DownloadSink { start: Vec::new(), decided: Some(decided), wants_gzip, encoder: None, sender };
-        let result = hangar_usage_diary::download_to(&base, &header, &mut |part| sink.write(part));
-        // Cliente que desistiu: nada mais a entregar.
-        if result.is_ok() {
-            let _ = sink.finish();
-        }
+        let sink = DownloadSink { start: Vec::new(), decided: Some(decided), wants_gzip, encoder: None, sender };
+        deliver(sink, |write| hangar_usage_diary::download_to(&base, &header, write));
     });
-    let Ok(gzip) = decision.await else { return hangar_core::http_cors::internal_error() };
+    let gzip = match decision.await {
+        Ok(gzip) => gzip,
+        // A falha antes do primeiro 1 KB já foi registrada pela tarefa: aqui só resta o 500.
+        Err(_) => return hangar_core::http_cors::internal_error(),
+    };
     let body = Body::from_stream(futures_util::stream::unfold(receiver, |mut receiver| async move {
-        receiver.recv().await.map(|part: bytes::Bytes| (Ok::<_, std::io::Error>(part), receiver))
+        receiver.recv().await.map(|part: std::io::Result<bytes::Bytes>| (part, receiver))
     }));
     let mut response = Response::builder().status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "application/x-ndjson")
@@ -140,6 +153,22 @@ async fn download(st: &AppState, base: Option<PathBuf>, headers: &HeaderMap) -> 
     response.body(body).expect("cabeçalhos estáticos válidos")
 }
 
+/// Escreve o corpo pelo `sink` e fecha. Bloqueante.
+fn deliver(mut sink: DownloadSink, download: impl FnOnce(&mut dyn FnMut(&[u8]) -> std::io::Result<()>) -> std::io::Result<()>) {
+    let abort = sink.sender.clone();
+    let written = download(&mut |part| sink.write(part));
+    let Err(error) = written.and_then(|()| sink.finish()) else { return };
+    let kind = error.kind();
+    tracing::warn!(code = "diag_download_failed", ?kind, "download do diário interrompido");
+    // Cliente que desistiu: nada mais a entregar. Outra falha corta a conexão em vez de fechar o
+    // corpo como se estivesse inteiro: um gzip ou ndjson truncado passaria por completo. Antes do
+    // primeiro 1 KB a decisão do gzip cai junto com o `sink`, e a rota responde 500.
+    if !matches!(kind, std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::ConnectionReset) {
+        // Recusado só se o cliente já foi embora: aí não há a quem avisar.
+        let _ = abort.blocking_send(Err(error));
+    }
+}
+
 /// Segura o primeiro 1 KB para decidir o gzip como a rota antiga (só com 1 KB ou mais), e depois
 /// entrega cada pedaço, comprimido se for o caso. A compressão sem descarga intermediária dá os
 /// mesmos bytes de comprimir o corpo inteiro de uma vez.
@@ -148,7 +177,8 @@ struct DownloadSink {
     decided: Option<tokio::sync::oneshot::Sender<bool>>,
     wants_gzip: bool,
     encoder: Option<flate2::write::GzEncoder<Vec<u8>>>,
-    sender: tokio::sync::mpsc::Sender<bytes::Bytes>,
+    /// `Err` no canal corta a conexão: o corpo não fecha como se estivesse inteiro.
+    sender: tokio::sync::mpsc::Sender<std::io::Result<bytes::Bytes>>,
 }
 
 impl DownloadSink {
@@ -190,7 +220,7 @@ impl DownloadSink {
         if out.is_empty() {
             return Ok(());
         }
-        self.sender.blocking_send(bytes::Bytes::from(out)).map_err(|_| std::io::ErrorKind::BrokenPipe.into())
+        self.sender.blocking_send(Ok(bytes::Bytes::from(out))).map_err(|_| std::io::ErrorKind::BrokenPipe.into())
     }
 
     fn finish(mut self) -> std::io::Result<()> {
@@ -224,7 +254,10 @@ async fn header_line(st: &AppState) -> String {
     // Logo depois de subir o cache ainda está frio: espera a versão em vez de mandar "indisponivel".
     let backend = match crate::boot_version::ensure(root, st.accounts.env.base.clone()).await {
         Ok(version) => version.describe,
-        Err(_) => "indisponivel".to_owned(),
+        Err(error) => {
+            tracing::warn!(code = "boot_version_failed", %error, "versão em execução indisponível no cabeçalho do diário");
+            "indisponivel".to_owned()
+        }
     };
     let started = crate::terminal_facts::agent_birth(std::process::id())
         .and_then(|at| chrono::DateTime::from_timestamp(at.floor() as i64, (at.fract() * 1e9) as u32))
@@ -321,8 +354,12 @@ fn platform() -> (String, String) {
 pub fn record_boot(hangar_dir: &std::path::Path, log: Option<&std::path::Path>) {
     let pid = std::process::id();
     let mut lines = Vec::new();
-    match hangar_boot::life::begin(hangar_dir, &iso(chrono::Local::now())) {
+    match hangar_boot::life::begin(hangar_dir, &iso(chrono::Local::now()), life_alive) {
         Ok(begin) => {
+            if let Some(holder) = begin.held_by {
+                eprintln!("hangar-server: server_life_held: o hangar-server pid {holder} segue de pé neste HOME; esta vida não conta queda nem marca a dela");
+                lines.push(json!({"evento": "hangar_server.vida_ocupada", "nivel": "aviso", "codigo": "server_life_held", "pid_de_pe": holder}));
+            }
             if begin.reset {
                 lines.push(json!({"evento": "hangar_server.vida_ilegivel", "nivel": "aviso", "codigo": "server_life_reset"}));
             }
@@ -337,15 +374,41 @@ pub fn record_boot(hangar_dir: &std::path::Path, log: Option<&std::path::Path>) 
     let mut start = json!({"evento": "backend.inicio", "nivel": "ok", "pid": pid});
     if let (Some(start), Value::Object(found)) = (start.as_object_mut(), resources()) { start.extend(found); }
     lines.push(start);
-    record_blocking(diary_dir().as_deref(), &lines, "subida");
+    record_before_log(&lines, "subida");
+}
+
+/// Linhas do diário antes de o log desta vida existir: sem assinante do `tracing`, a falha de
+/// gravação vai ao stderr (journal no Linux, log da tarefa no Windows).
+pub fn record_before_log(lines: &[Value], what: &str) {
+    let Some(dir) = diary_dir() else {
+        eprintln!("hangar-server: diag_directory_unavailable: diário sem pasta de logs; linhas da {what} não gravadas");
+        return;
+    };
+    if let Err(error) = write_diary(&dir, lines, chrono::Local::now()) {
+        eprintln!("hangar-server: diag_write_failed: linhas da {what} não gravadas no diário ({:?})", error.kind());
+    }
+}
+
+/// O processo da marca de pé ainda é o mesmo, de pé: pid e nascimento iguais.
+fn life_alive(pid: u32, birth: f64) -> bool {
+    pid != std::process::id()
+        && crate::terminal_facts::agent_birth(pid).is_some_and(|now| crate::terminal_facts::same_birth(now, birth))
 }
 
 /// Pronto para atender: a marca de pé desta vida. Sem ela gravada, a queda desta vida não é contada.
 pub fn record_running(hangar_dir: &std::path::Path) {
-    if let Err(error) = hangar_boot::life::mark_running(hangar_dir, std::process::id(), &iso(chrono::Local::now())) {
-        record_blocking(diary_dir().as_deref(), &[json!({"evento": "hangar_server.vida_ilegivel", "nivel": "aviso",
-            "codigo": "server_life_unwritable", "tipo": format!("{:?}", error.kind())})], "subida");
-    }
+    let pid = std::process::id();
+    let birth = crate::terminal_facts::agent_birth(pid);
+    let line = match hangar_boot::life::mark_running(hangar_dir, pid, birth, &iso(chrono::Local::now()), life_alive) {
+        Ok(hangar_boot::life::Mark::Marked) => return,
+        Ok(hangar_boot::life::Mark::Held(holder)) => {
+            tracing::warn!(code = "server_life_held", holder, "outro hangar-server de pé neste HOME segura a marca de pé; a queda desta vida não será contada");
+            json!({"evento": "hangar_server.vida_ocupada", "nivel": "aviso", "codigo": "server_life_held", "pid_de_pe": holder})
+        }
+        Err(error) => json!({"evento": "hangar_server.vida_ilegivel", "nivel": "aviso",
+            "codigo": "server_life_unwritable", "tipo": format!("{:?}", error.kind())}),
+    };
+    record_blocking(diary_dir().as_deref(), &[line], "subida");
 }
 
 /// Saída deliberada (sinal, falha do servidor): a marca de pé desta vida sai, e a próxima subida
@@ -407,6 +470,52 @@ fn memory() -> Result<(u64, u64), &'static str> {
     let mut system = sysinfo::System::new();
     system.refresh_memory();
     Ok((system.total_memory() / (1024 * 1024), system.available_memory() / (1024 * 1024)))
+}
+
+#[cfg(test)]
+mod download_tests {
+    use super::{DownloadSink, deliver};
+
+    fn sink() -> (DownloadSink, tokio::sync::oneshot::Receiver<bool>, tokio::sync::mpsc::Receiver<std::io::Result<bytes::Bytes>>) {
+        let (decided, decision) = tokio::sync::oneshot::channel();
+        let (sender, receiver) = tokio::sync::mpsc::channel(8);
+        (DownloadSink { start: Vec::new(), decided: Some(decided), wants_gzip: false, encoder: None, sender }, decision, receiver)
+    }
+
+    /// Falha que não é o cliente indo embora corta a conexão: o corpo truncado nunca fecha como inteiro.
+    #[test]
+    fn a_failure_after_the_headers_ends_the_body_with_an_error() {
+        let (sink, decision, mut receiver) = sink();
+        deliver(sink, |write| {
+            write(&[b'x'; 2048])?;
+            Err(std::io::Error::other("disco"))
+        });
+        assert_eq!(decision.blocking_recv(), Ok(false));
+        assert_eq!(receiver.blocking_recv().unwrap().unwrap().len(), 2048);
+        assert_eq!(receiver.blocking_recv().unwrap().unwrap_err().kind(), std::io::ErrorKind::Other);
+        assert!(receiver.blocking_recv().is_none());
+    }
+
+    /// Antes do primeiro 1 KB a decisão cai e a rota responde 500; o cliente que desistiu não recebe erro.
+    #[test]
+    fn a_failure_before_the_decision_drops_it_and_the_client_leaving_sends_nothing() {
+        let (sink, decision, mut receiver) = sink();
+        deliver(sink, |write| {
+            write(b"pouco")?;
+            Err(std::io::ErrorKind::BrokenPipe.into())
+        });
+        assert!(decision.blocking_recv().is_err());
+        assert!(receiver.blocking_recv().is_none());
+    }
+
+    #[test]
+    fn a_complete_download_ends_cleanly() {
+        let (sink, decision, mut receiver) = sink();
+        deliver(sink, |write| write(b"tudo\n"));
+        assert_eq!(decision.blocking_recv(), Ok(false));
+        assert_eq!(&receiver.blocking_recv().unwrap().unwrap()[..], b"tudo\n");
+        assert!(receiver.blocking_recv().is_none());
+    }
 }
 
 #[cfg(test)]

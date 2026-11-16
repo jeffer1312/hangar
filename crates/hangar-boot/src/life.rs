@@ -16,31 +16,64 @@ pub struct Begin {
     pub unclean_exits: u64,
     /// O arquivo estava ilegível e recomeçou do zero (a contagem anterior se perdeu).
     pub reset: bool,
+    /// A marca de pé é de outro servidor ainda vivo no mesmo HOME (binário de branch em teste):
+    /// nada foi contado nem regravado.
+    pub held_by: Option<u32>,
 }
 
 /// Na subida, antes de qualquer outra coisa: a marca de pé que ficou é a vida anterior que não saiu
 /// limpa. Ela é contada e apagada aqui; esta vida só se marca de pé quando estiver pronta.
-pub fn begin(dir: &Path, now: &str) -> std::io::Result<Begin> {
+/// `alive(pid, nascimento)`: o processo da marca ainda é o mesmo, de pé.
+pub fn begin(dir: &Path, now: &str, alive: impl Fn(u32, f64) -> bool) -> std::io::Result<Begin> {
     let (previous, reset) = read_or_reset(dir)?;
-    let unclean = previous.get("running").and_then(Value::as_bool).unwrap_or(false);
+    let running = previous.get("running").and_then(Value::as_bool).unwrap_or(false);
+    if running && let Some(pid) = holder(&previous, &alive) {
+        return Ok(Begin { unclean: false, unclean_exits: count_of(&previous), reset: false, held_by: Some(pid) });
+    }
+    let unclean = running;
     let count = count_of(&previous) + u64::from(unclean);
     if unclean || reset {
         let last = if unclean { json!(now) } else { previous.get("last_unclean").cloned().unwrap_or(Value::Null) };
         write(dir, &json!({"running": false, "unclean_exits": count, "last_unclean": last}))?;
     }
-    Ok(Begin { unclean, unclean_exits: count, reset })
+    Ok(Begin { unclean, unclean_exits: count, reset, held_by: None })
 }
 
-/// Pronta para atender: daqui em diante, sair sem `end` é uma saída não limpa.
-pub fn mark_running(dir: &Path, pid: u32, now: &str) -> std::io::Result<()> {
+/// O pid da marca, quando o mesmo processo (pid e nascimento) ainda está de pé. Marca sem
+/// nascimento não prova nada: o pid pode ter sido reusado.
+fn holder(life: &Value, alive: &impl Fn(u32, f64) -> bool) -> Option<u32> {
+    let pid = u32::try_from(life.get("pid")?.as_u64()?).ok()?;
+    let birth = life.get("birth")?.as_f64()?;
+    alive(pid, birth).then_some(pid)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mark {
+    Marked,
+    /// Outro servidor vivo segura a marca: ela fica com ele.
+    Held(u32),
+}
+
+/// Pronta para atender: daqui em diante, sair sem `end` é uma saída não limpa. `birth` é o
+/// nascimento deste processo, que a subida seguinte confere antes de contar a queda.
+pub fn mark_running(dir: &Path, pid: u32, birth: Option<f64>, now: &str, alive: impl Fn(u32, f64) -> bool) -> std::io::Result<Mark> {
     let (mut life, _) = read_or_reset(dir)?;
+    let running = life.get("running").and_then(Value::as_bool).unwrap_or(false);
+    let ours = life.get("pid").and_then(Value::as_u64) == Some(u64::from(pid));
+    if running && !ours && let Some(other) = holder(&life, &alive) {
+        return Ok(Mark::Held(other));
+    }
     let map = life.as_object_mut().expect("read_or_reset devolve objeto");
     map.insert("running".into(), json!(true));
     // A contagem fica sempre no arquivo, também antes da primeira saída não limpa.
     map.entry("unclean_exits").or_insert(json!(0));
     map.insert("pid".into(), json!(pid));
+    match birth {
+        Some(birth) => map.insert("birth".into(), json!(birth)),
+        None => map.shift_remove("birth"),
+    };
     map.insert("started".into(), json!(now));
-    write(dir, &life)
+    write(dir, &life).map(|()| Mark::Marked)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
