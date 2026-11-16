@@ -192,21 +192,14 @@ async fn r5_10_a_login_guest_on_the_session_defaults_is_the_uniform_403() {
 }
 
 /// R5-05 / T-02, T-03, T-05: o terminal da 8765 com token errado é recusado pelo Rust no aperto de mão
-/// com 403 vazio, e cada recusa conta uma vez para a origem: depois de 8, nem a senha certa abre nada
-/// dela (o terminal segue recusado sem nova falha e o HTTP dá 429), e outra origem segue normal.
+/// com 403 vazio, e cada recusa conta exatamente uma vez para a origem: depois de 7 recusas a origem
+/// ainda não está bloqueada (o HTTP errado seguinte é 401, a oitava falha); depois dela, nem a senha
+/// certa abre nada (o terminal segue recusado sem nova falha e o HTTP dá 429), e outra origem segue
+/// normal. Sem Python no caminho: quem conta é o contador do Rust.
 #[tokio::test]
-async fn r5_05_the_terminal_with_a_wrong_token_is_403_empty_counted_and_the_ninth_is_blocked() {
+async fn r5_05_the_terminal_with_a_wrong_token_is_403_empty_counted_once_and_the_eighth_blocks() {
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-    let terms = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let seen = terms.clone();
-    let app = axum::Router::new().route("/api/sessions/{name}/term", axum::routing::any(move || {
-        let seen = seen.clone();
-        async move { seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst); axum::http::StatusCode::FORBIDDEN }
-    }));
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let upstream = listener.local_addr().unwrap();
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    let srv = spawn_server(config(upstream, "127.0.0.1")).await;
+    let srv = spawn_server(config(crate::refused_address(), "127.0.0.1")).await;
     let handshake = |token: &'static str, origin: &'static str| async move {
         let mut request = format!("ws://{srv}/api/sessions/s0/term?token={token}").into_client_request().unwrap();
         request.headers_mut().insert("x-forwarded-for", origin.parse().unwrap());
@@ -216,20 +209,20 @@ async fn r5_05_the_terminal_with_a_wrong_token_is_403_empty_counted_and_the_nint
         }
     };
     const BLOCKED: &str = "198.51.100.200";
-    for _ in 0..8 {
+    let presence = |token: &'static str| client().get(format!("http://{srv}/api/presence")).bearer_auth(token).header("x-forwarded-for", BLOCKED).send();
+    for _ in 0..7 {
         assert_eq!(handshake("errado", BLOCKED).await, (403, Vec::new()), "403 vazio no aperto de mão");
     }
-    assert_eq!(handshake("errado", BLOCKED).await.0, 403, "a nona também");
+    assert_eq!(presence("errado").await.unwrap().status().as_u16(), 401, "7 recusas contaram 7: a oitava falha ainda é 401");
+    assert_eq!(handshake("errado", BLOCKED).await.0, 403, "depois da oitava, a nona também");
     assert_eq!(handshake(OWNER, BLOCKED).await.0, 403, "nem a senha certa abre o terminal da origem bloqueada");
-    let blocked = client().get(format!("http://{srv}/api/presence")).bearer_auth(OWNER).header("x-forwarded-for", BLOCKED).send().await.unwrap();
-    assert_eq!(blocked.status().as_u16(), 429, "a origem está bloqueada");
+    assert_eq!(presence(OWNER).await.unwrap().status().as_u16(), 429, "a oitava falha bloqueou a origem");
     let other = client().get(format!("http://{srv}/api/presence")).bearer_auth(OWNER).header("x-forwarded-for", "198.51.100.201").send().await.unwrap();
     assert!(!matches!(other.status().as_u16(), 401 | 429), "outra origem segue normal: {}", other.status());
-    assert_eq!(terms.load(std::sync::atomic::Ordering::SeqCst), 0, "quem recusa o terminal é o Rust");
 }
 
 /// T-08 / T-04: no terminal só o `?token=` vale. Bearer e cookie do dono são recusados e contados como
-/// falha; a origem loopback nunca conta. Sete recusas de outra origem não bloqueiam: a oitava bloqueia.
+/// falha, uma vez cada; a origem loopback nunca conta. Sete recusas não bloqueiam: a oitava bloqueia.
 #[tokio::test]
 async fn t08_the_terminal_takes_only_the_query_token_and_counts_each_refusal_once() {
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
@@ -244,15 +237,17 @@ async fn t08_the_terminal_takes_only_the_query_token_and_counts_each_refusal_onc
         }
     };
     const ORIGIN: &str = "198.51.100.210";
-    for _ in 0..4 {
+    for _ in 0..3 {
         assert_eq!(handshake(Some(("authorization", format!("Bearer {OWNER}"))), ORIGIN).await, (403, Vec::new()), "Bearer não abre");
         assert_eq!(handshake(Some(("cookie", format!("cp_token={OWNER}"))), ORIGIN).await, (403, Vec::new()), "cookie não abre");
     }
+    assert_eq!(handshake(Some(("authorization", format!("Bearer {OWNER}"))), ORIGIN).await, (403, Vec::new()), "sétima recusa");
     for _ in 0..12 {
         assert_eq!(handshake(None, "127.0.0.1").await.0, 403, "loopback recusado sem contar");
     }
-    let blocked = client().get(format!("http://{srv}/api/presence")).bearer_auth(OWNER).header("x-forwarded-for", ORIGIN).send().await.unwrap();
-    assert_eq!(blocked.status().as_u16(), 429, "oito recusas da mesma origem bloqueiam");
+    let presence = |token: &'static str| client().get(format!("http://{srv}/api/presence")).bearer_auth(token).header("x-forwarded-for", ORIGIN).send();
+    assert_eq!(presence("errado").await.unwrap().status().as_u16(), 401, "7 recusas contaram 7: a oitava falha ainda é 401");
+    assert_eq!(presence(OWNER).await.unwrap().status().as_u16(), 429, "a oitava falha bloqueou a origem");
     let local = client().get(format!("http://{srv}/api/presence")).bearer_auth(OWNER).send().await.unwrap();
     assert!(!matches!(local.status().as_u16(), 401 | 429), "loopback segue normal: {}", local.status());
 }
