@@ -208,6 +208,21 @@ fn diary_keeps_problems_and_restarts_of_the_last_day_only() {
     assert!(restarts[0].restart_line().contains("backend.inicio ok - 0.1.0.8380"));
 }
 
+/// B-19: o lançador sem servidor sai com 3 e o gerenciador o religa sem fim; a linha `lancador.falhou`
+/// que ele grava entra nos reinícios do relatório, não só nos problemas.
+#[test]
+fn launcher_failure_is_listed_among_the_restarts() {
+    let dir = tempfile::tempdir().unwrap();
+    let now = Local::now();
+    let ts = |h: i64| (now - TimeDelta::hours(h)).to_rfc3339();
+    write(&dir.path().join(format!("diario/servidor-rust/uso-{}.jsonl", day(now))), &format!("{}\n", json!({"ts": ts(1),
+        "evento": "lancador.falhou", "nivel": "erro", "codigo": "launch_no_server", "detalhe": "/home/fulano/.hangar/versions/v1/bin/hangar-server"})));
+    let Diary { problems, restarts } = collect::read_diary(&collect::diary_files(dir.path()), now, &scrubber());
+    assert_eq!(restarts.len(), 1, "{:?}", restarts.iter().map(DiaryEntry::restart_line).collect::<Vec<_>>());
+    assert!(restarts[0].restart_line().contains("lancador.falhou erro launch_no_server"), "{}", restarts[0].restart_line());
+    assert_eq!(problems.len(), 1, "nível erro segue também entre os problemas");
+}
+
 #[test]
 fn python_log_is_only_counted() {
     let dir = tempfile::tempdir().unwrap();

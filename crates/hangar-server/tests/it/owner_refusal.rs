@@ -243,3 +243,56 @@ async fn t08_the_terminal_takes_only_the_query_token_and_counts_each_refusal_onc
     let local = client().get(format!("http://{srv}/api/presence")).bearer_auth(OWNER).send().await.unwrap();
     assert!(!matches!(local.status().as_u16(), 401 | 429), "loopback segue normal: {}", local.status());
 }
+
+/// Aperto de mão do terminal com `?token=` cru na query, a partir de `origin`: status e corpo da recusa.
+async fn term_handshake(srv: std::net::SocketAddr, query_token: &str, origin: &str) -> (u16, Vec<u8>) {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    let mut request = format!("ws://{srv}/api/sessions/s0/term?token={query_token}").into_client_request().unwrap();
+    request.headers_mut().insert("x-forwarded-for", origin.parse().unwrap());
+    match tokio_tungstenite::connect_async(request).await {
+        Err(tokio_tungstenite::tungstenite::Error::Http(response)) => (response.status().as_u16(), response.body().clone().unwrap_or_default()),
+        other => panic!("o aperto de mão não foi recusado: {:?}", other.map(|_| ())),
+    }
+}
+
+/// T-06: a recusa do terminal que bloqueia a origem deixa um aviso no log com a origem (o Python:
+/// "<ip> errou o token 8 vezes em 30s — bloqueado por 30s"); as sete anteriores não avisam.
+#[tokio::test]
+async fn t06_the_terminal_refusal_that_blocks_an_origin_logs_a_warning_with_it() {
+    #[derive(Clone, Default)]
+    struct Log(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+    impl std::io::Write for Log {
+        fn write(&mut self, data: &[u8]) -> std::io::Result<usize> { self.0.lock().unwrap().extend_from_slice(data); Ok(data.len()) }
+        fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+    }
+    let log = Log::default();
+    let writer = log.clone();
+    // O servidor do teste roda nesta mesma thread (`current_thread`): o assinante vale para a rota.
+    let _logs = tracing::subscriber::set_default(tracing_subscriber::fmt().without_time().with_ansi(false).with_writer(move || writer.clone()).finish());
+    let srv = spawn_server(config("127.0.0.1")).await;
+    const ORIGIN: &str = "198.51.100.230";
+    const WARNING: &str = "token errado 8 vezes em 30 s; origem bloqueada";
+    let text = || String::from_utf8(log.0.lock().unwrap().clone()).unwrap();
+    for _ in 0..7 {
+        assert_eq!(term_handshake(srv, "errado", ORIGIN).await, (403, Vec::new()));
+    }
+    assert!(!text().contains(WARNING), "aviso antes do bloqueio: {}", text());
+    assert_eq!(term_handshake(srv, "errado", ORIGIN).await, (403, Vec::new()), "a oitava recusa");
+    let text = text();
+    let warnings: Vec<&str> = text.lines().filter(|line| line.contains(WARNING)).collect();
+    assert_eq!(warnings.len(), 1, "{text}");
+    assert!(warnings[0].contains("WARN") && warnings[0].contains(&format!("ip={ORIGIN}")), "{text}");
+}
+
+/// T-10: `?token=` com texto não-ASCII (UTF-8 válido ou bytes soltos) é só um token errado: 403 vazio,
+/// sem derrubar nada; o servidor segue atendendo.
+#[tokio::test]
+async fn t10_a_non_ascii_terminal_token_is_refused_without_panic() {
+    let srv = spawn_server(config("127.0.0.1")).await;
+    const ORIGIN: &str = "198.51.100.240";
+    for token in ["%C3%A9rr%C3%A3o-%E2%9C%93", "%FF%FE%00", "d%C3%B4no"] {
+        assert_eq!(term_handshake(srv, token, ORIGIN).await, (403, Vec::new()), "{token}");
+    }
+    let alive = client().get(format!("http://{srv}/api/presence")).bearer_auth(OWNER).header("x-forwarded-for", "198.51.100.241").send().await.unwrap();
+    assert!(!matches!(alive.status().as_u16(), 401 | 429 | 500..=599), "o servidor segue de pé: {}", alive.status());
+}
