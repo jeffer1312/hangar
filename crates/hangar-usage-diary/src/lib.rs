@@ -61,8 +61,6 @@ pub enum WriteError {
     Disk,
     /// A pasta do diário não pôde ser criada.
     Directory,
-    /// Texto com surrogate solto não vira UTF-8.
-    Unencodable,
 }
 
 /// Duas telas (celular e desktop) mandam lote ao mesmo tempo e o arquivo do dia é um só.
@@ -109,10 +107,12 @@ fn clean(raw: &Value, now: DateTime<FixedOffset>) -> Option<Map<String, Value>> 
         let Some(value) = raw.get(name) else { continue };
         let kept = match (kind, value) {
             (Text, Value::String(text)) => {
-                let text: String = py::strip(text).chars().take(TEXT_MAX).collect();
+                let mut text: String = py::strip(text).chars().take(TEXT_MAX).collect();
                 if text.is_empty() {
                     continue;
                 }
+                // Surrogate solto não vira UTF-8: troca por U+FFFD em vez de perder o lote inteiro.
+                py::scrub_str(&mut text);
                 Value::String(text)
             }
             (Int, Value::Number(number)) if integer(number) => value.clone(),
@@ -246,9 +246,6 @@ fn write(base: &Path, lines: Vec<Map<String, Value>>, now: DateTime<FixedOffset>
         row.extend(line);
         text += &pyjson::dumps_unicode(&Value::Object(row), false);
         text.push('\n');
-    }
-    if text.chars().any(py::is_marker) {
-        return Err(WriteError::Unencodable);
     }
     for (cap, what) in [(DAY_CAP, "sucesso"), (HARD_CAP, "tudo")] {
         if size < cap && cap <= size + text.len() as u64 {

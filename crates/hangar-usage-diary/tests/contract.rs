@@ -132,12 +132,13 @@ fn unicode_is_written_raw() {
     assert_eq!(written(dir.path()), format!("{{\"ts\": \"{STAMP}\", \"evento\": \"ação.😀\", \"detalhe\": \"olá\\nmundo\", \"nivel\": \"ok\", \"origem\": \"tela\"}}\n"));
 }
 
-/// Surrogate solto num campo guardado: a rota antiga respondia 500 e não gravava nada.
+/// Surrogate solto num campo guardado: a rota antiga respondia 500 e perdia o lote; agora o
+/// caractere vira U+FFFD e a linha é gravada (correção decidida em 2026-11-16).
 #[test]
-fn lone_surrogate_fails_without_writing() {
+fn lone_surrogate_is_replaced_and_written() {
     let dir = tempfile::tempdir().unwrap();
-    assert_eq!(record_screen(dir.path(), br#"[{"evento": "x\ud800"}]"#, now()), Err(WriteError::Unencodable));
-    assert!(!dir.path().join(DAY).exists());
+    assert_eq!(record_screen(dir.path(), br#"[{"evento": "x\ud800", "detalhe": "a\udc00b"}]"#, now()), Ok(1));
+    assert_eq!(written(dir.path()), format!("{{\"ts\": \"{STAMP}\", \"evento\": \"x\u{FFFD}\", \"detalhe\": \"a\u{FFFD}b\", \"nivel\": \"ok\", \"origem\": \"tela\"}}\n"));
 }
 
 fn prefill(base: &Path, name: &str, size: usize) {
