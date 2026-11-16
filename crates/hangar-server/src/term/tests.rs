@@ -396,6 +396,21 @@ async fn a_guest_without_share_on_the_session_is_refused() {
     assert!(tmux.clients("g1").is_empty());
 }
 
+/// Convidado com `Share` em `foo` pede `term-foo/term`: só abre se `term-foo` for o shell escondido de
+/// `foo`; uma sessão comum chamada `term-foo`, sem convite, é recusada.
+#[tokio::test]
+async fn a_guest_opens_only_the_hidden_shell_of_its_session() {
+    let tmux = Tmux::new();
+    tmux.session("term-foo");
+    let addr = guest_server(&tmux, &[("foo", Kind::Share)]).await;
+    assert_eq!(connect(addr, "/api/sessions/term-foo/term").await.err(), Some(403), "sessão comum de nome term-foo");
+    assert_eq!(connect(addr, "/api/sessions/term-foo/term?shortcut=abc123").await.err(), Some(403), "atalho pelo nome do shell");
+    assert!(tmux.clients("term-foo").is_empty());
+    tmux.run(&["set-option", "-t", "=term-foo:", "@cp_hidden", "1"]);
+    let _ws = connect(addr, "/api/sessions/term-foo/term").await.expect("o shell escondido de foo abre");
+    until("anexado", || tmux.clients("term-foo").len() == 1).await;
+}
+
 /// T-26: convidado nos terminais do Hangar leva o 404 do caminho sem rota, como o Python dava.
 #[tokio::test]
 async fn a_guest_on_the_hangar_terminals_is_the_rust_404() {

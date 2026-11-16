@@ -180,9 +180,11 @@ fn close_after_accept(ws: WebSocketUpgrade, code: u16, reason: &'static str) -> 
 
 async fn serve(st: Arc<AppState>, peer: SocketAddr, req: Request, want: Want) -> Response {
     let fwd = crate::routes::forward_for(&st, peer, &req);
-    // Convidado da 8766: o porteiro já conferiu o token e a sessão; terminal só para o convite.
-    // A sessão é a que o porteiro partiu da rota, a mesma que o `Path` do terminal abre.
+    // Convidado: o porteiro conferiu o token e a sessão que partiu da rota. Em `term-X/term` essa
+    // sessão é X e o alvo aberto é `term-X`: só vale se `term-X` for o shell escondido de X.
     let session = req.extensions().get::<SessionPath>().map(|p| p.session.as_str());
+    let guest_shell = caller(&req).and_then(Caller::grant).is_some()
+        && matches!(&want, Want::Session { name, .. } if session != Some(name.as_str()));
     let guest = caller(&req).and_then(Caller::grant).map(|g| match &want {
         Want::Session { .. } => session.is_some_and(|s| g.sessions.get(s) == Some(&Kind::Share)),
         Want::Hangar(_) => false,
@@ -238,6 +240,14 @@ async fn serve(st: Arc<AppState>, peer: SocketAddr, req: Request, want: Want) ->
         Ok(None) => return refuse("terminal nao existe"),
         Err(resolve::MuxDown) => return mux_down(&st, ws, &label),
     };
+    if guest_shell {
+        let shortcut = matches!(&want, Want::Session { shortcut: Some(_), .. });
+        match resolve::hidden_shell(cfg, &target).await {
+            Ok(true) if !shortcut => {}
+            Ok(_) => return StatusCode::FORBIDDEN.into_response(),
+            Err(resolve::MuxDown) => return mux_down(&st, ws, &label),
+        }
+    }
     match resolve::has_session(cfg, &target).await {
         Ok(true) => {}
         Ok(false) => return refuse("sessao nao existe"),
