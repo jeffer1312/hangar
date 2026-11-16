@@ -531,15 +531,13 @@ async fn hangar_send_reaches_a_peer_through_connect() {
     // `https://pc-…` só existe com o túnel: aqui a entrada de cada máquina é uma porta local.
     point_at(&w.a, "pc-b", &format!("http://{}", w.b.connect));
     point_at(&w.b, "pc-a", &format!("http://{}", w.a.connect));
-    // O `/input` é do Rust (aqui sem registro de sessões): o salto se prova numa rota que o Python ainda atende.
+    // O diário da tela é do Rust do outro lado e só aceita o dono: a resposta dele prova o salto com o token.
     for (from, to, peer) in [(&w.a, &w.b, "pc-b"), (&w.b, &w.a, "pc-a")] {
-        to.python.set_input_reply(Some((StatusCode::OK, json!({"ok": true}))));
         let body = json!({"text": format!("[de: {}::s] oi", from.id), "steer": true});
         let peers = PeerClient::new(PeerBook::new(Some(peers_path(from))));
-        peers.call(peer, reqwest::Method::POST, "/api/diag", Some(&body)).await.unwrap();
-        assert_eq!(to.python.hits_to("/api/diag"), 1, "{peer}");
-        assert_eq!(serde_json::from_slice::<Value>(&to.python.last_body()).unwrap(), body);
-        assert_eq!(to.python.last_hit().1["authorization"], format!("Bearer {OWNER}").as_str());
+        let reply = peers.call(peer, reqwest::Method::POST, "/api/diag", Some(&body)).await.unwrap();
+        assert_eq!(reply, Some(json!({"gravadas": 0})), "{peer}");
+        assert_eq!(to.python.hits_to("/api/diag"), 0, "{peer}");
         // O `/input` do `hangar-send` chega ao Rust do outro lado: sem registro de sessões lá, a recusa é dele.
         let input = peers.call(peer, reqwest::Method::POST, "/api/sessions/recado/input", Some(&body)).await;
         let refused = format!("{input:?}");
@@ -564,7 +562,6 @@ impl OutboxSend for Through {
 #[tokio::test]
 async fn group_outbox_retries_when_peer_is_offline() {
     let w = linked_pair().await;
-    w.b.python.set_input_reply(Some((StatusCode::OK, json!({"ok": true}))));
     let reachable = format!("http://{}", w.b.connect);
     point_at(&w.a, "pc-b", &format!("http://{}", free_port()));
     let groups = w.a.dir.path().join("groups");
@@ -576,14 +573,13 @@ async fn group_outbox_retries_when_peer_is_offline() {
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(outbox.pending(), vec![item], "máquina fora: o item fica");
     assert!(std::fs::read_to_string(groups.join("outbox.json")).unwrap().contains("g1"), "e fica no disco");
-    assert_eq!(w.b.python.hits_to("/api/diag"), 0);
     point_at(&w.a, "pc-b", &reachable);
     let deadline = Instant::now() + Duration::from_secs(10);
     while !outbox.pending().is_empty() {
         assert!(Instant::now() < deadline, "a fila não andou com a máquina de volta");
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    assert_eq!(w.b.python.hits_to("/api/diag"), 1);
+    assert_eq!(w.b.python.hits_to("/api/diag"), 0, "o diário respondeu no Rust do outro lado");
 }
 
 #[tokio::test]

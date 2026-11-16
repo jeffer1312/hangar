@@ -53,6 +53,7 @@ mod device_install;
 #[cfg(unix)]
 mod devices;
 mod diag_report;
+mod diag_routes;
 mod auto_report;
 mod install_root;
 mod web_ui;

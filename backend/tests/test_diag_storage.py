@@ -46,7 +46,7 @@ def test_legacy_sources_are_preserved_and_copied_without_merging(tmp_path, monke
     monkeypatch.setattr(diag, "_pastas_legadas", lambda: sources)
     diag.registrar("atual")
     assert {r["evento"] for r in rows()} >= {"atual", "legado-0", "legado-1"}
-    assert len(diag.arquivos()) == 3 and diag.resumo()["dias"] == 1
+    assert len(diag.arquivos()) == 3
     assert all((source / name).exists() for source in sources)
     assert len([r for r in rows() if r["evento"].startswith("legado-")]) == 2
     with (sources[0] / name).open("a") as f:

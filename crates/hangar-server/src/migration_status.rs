@@ -106,7 +106,7 @@ pub fn rust_route(method: &Method, path: &str) -> bool {
         || crate::session_open::baton::matches(path) || crate::shortcuts::http::matches(path)
         || crate::projects_routes::matches(path)
         || crate::session_tools::owns_path(path)
-        || crate::costs_routes::usage_path(path) || crate::diag::version_matches(method, path)
+        || crate::costs_routes::usage_path(path) || crate::diag::owns_path(path)
         || crate::plugins::matches(path) || workflow || hangar_desktop_theme::owns_path(path)
         || hangar_shortcut_transfer::owns_path(path)
         || matches!(path, "/api/config-sync/apply" | "/api/update-channel") { return true; }

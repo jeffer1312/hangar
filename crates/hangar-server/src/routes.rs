@@ -1323,6 +1323,9 @@ pub(crate) async fn pass_registered(
 }
 
 async fn dispatch(st: Arc<AppState>, peer: SocketAddr, mut req: Request, registered: bool) -> Response {
+    if crate::diag::owns_path(req.uri().path()) {
+        return crate::diag::route(st, peer, req).await;
+    }
     if crate::speech::http::matches(req.method(), req.uri().path()) {
         return crate::speech::http::public(st, peer, req).await;
     }
@@ -1487,9 +1490,6 @@ async fn dispatch(st: Arc<AppState>, peer: SocketAddr, mut req: Request, registe
     }
     if crate::costs_routes::usage_path(req.uri().path()) {
         return crate::costs_routes::usage(State(st), ConnectInfo(peer), req).await;
-    }
-    if crate::diag::version_matches(req.method(), req.uri().path()) {
-        return crate::diag::version_route(st, peer, req).await;
     }
     if !registered {
         let fwd = forward_for(&st, peer, &req);
