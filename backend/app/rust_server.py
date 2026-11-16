@@ -30,7 +30,7 @@ _log = logging.getLogger("hangar.rust_server")
 HEALTH_PATH = "/__hangar_server/health"
 # Versão do contrato interno (rotas /internal, canal privado do estado, ambiente). Tem de casar com o
 # `protocol` da saúde (hangar_server::INTERNAL_PROTOCOL); outro número = o filho não serve.
-RUST_SERVER_PROTOCOL = 112
+RUST_SERVER_PROTOCOL = 113
 START_TIMEOUT = 10.0
 PROTECTED_SHUTDOWN_SECONDS = 120
 CRASH_WINDOW = 60.0
