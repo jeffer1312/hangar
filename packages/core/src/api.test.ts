@@ -14,7 +14,7 @@ import { configureApi } from './apiEnv';
 import { getConfig, getConfigForServer, patchConfig, patchConfigForServer, createSession, getHistory, getHistoryDesde, isAbortError, transcribeFile, transcribeFileForServer, transcribeUploaded, transcribeUploadedForServer, uploadFile, uploadFileForServer, getModelOptions, setEngineModel, rotaGenerica, pairSession } from './api';
 import { createSessionForServer, getSessionDefaultsForServer, getFolderGitForServer, folderGitActionForServer, defaultBase, freshBase, baseChoices, commitsLeftOut, resumeArchivedConversation } from './api';
 import { mensagemDeErro, formataErro } from './errosApi';
-import { passarBastao, getSyncSetupForServer, setupSyncForServer, disableSyncForServer } from './api';
+import { passarBastao, getSyncSetupForServer, setupSyncForServer, disableSyncForServer, getNewChatCommandsForServer } from './api';
 import { fetchSessionsForServer, getSessions, openSessionsStream, probeServerResponse } from './api';
 import { scanDir, scanDirForServer, listClaudeConfigs, listClaudeConfigsForServer } from './api';
 import { answerQuestions, closePluginPane, inputPluginField, interrupt, openEventStreamForServer, pressPluginButton, selectOption, selectOptionForServer, sendInputForServer, showPluginPane, skipQuestion, submitSelected, submitSelectedForServer } from './api';
@@ -161,6 +161,17 @@ it('configura sincronização no servidor escolhido sem trocar nem apagar o serv
   fetchMock.mockResolvedValue(new Response('{}', { status: 401 }));
   await expect(disableSyncForServer(b)).rejects.toThrow();
   expect(onUnauthorizedSpy).not.toHaveBeenCalled();
+});
+it('lista do `/` da conversa por nascer vai à máquina escolhida, só com as escolhas feitas', async () => {
+  const b = { id: 'b', label: 'B', baseUrl: 'https://b.test', token: 'token-b' };
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response('[{"name":"help"}]'));
+  await expect(getNewChatCommandsForServer(b)).resolves.toEqual([{ name: 'help' }]);
+  await getNewChatCommandsForServer(b, '/p/a b', '/home/u/.claude-x', true);
+  expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+    'https://b.test/api/claude/commands',
+    'https://b.test/api/claude/commands?cwd=%2Fp%2Fa+b&config_dir=%2Fhome%2Fu%2F.claude-x&headless=1',
+  ]);
+  expect(fetchMock.mock.calls[0][1]?.headers).toEqual(expect.objectContaining({ Authorization: 'Bearer token-b' }));
 });
 it('bastão captura servidor B e preserva a chamada antiga em A', async () => {
   const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response('{}', { status: 200 }));
