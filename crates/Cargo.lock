@@ -1855,6 +1855,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-notice-actions"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "hangar-notice-ignores"
 version = "0.1.0"
 dependencies = [
