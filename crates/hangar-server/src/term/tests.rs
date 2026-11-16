@@ -321,6 +321,24 @@ async fn query_token_only() {
     assert_eq!(srv.py.term_hits.load(Ordering::SeqCst), 0, "toda recusa sai do Rust");
 }
 
+/// T-14/T-16: sessão inexistente é 403 "sessao nao existe" antes do aceite; com token errado a recusa
+/// de autenticação vem primeiro e não revela a sessão (capturas t04 e t05).
+#[tokio::test]
+async fn auth_comes_before_the_session_check() {
+    let tmux = Tmux::new();
+    tmux.session("s11");
+    let srv = server(&tmux, |_| {}).await;
+    let refusal = |path: String| async move {
+        match tokio_tungstenite::connect_async(format!("ws://{}{path}", srv.addr)).await {
+            Err(tungstenite::Error::Http(r)) => (r.status().as_u16(), String::from_utf8(r.body().clone().unwrap_or_default()).unwrap()),
+            other => panic!("esperava recusa: {:?}", other.map(|_| ())),
+        }
+    };
+    assert_eq!(refusal("/api/sessions/nenhuma/term?token=dono".into()).await, (403, "sessao nao existe".into()));
+    assert_eq!(refusal("/api/sessions/nenhuma/term?token=errado".into()).await, (403, String::new()));
+    assert_eq!(refusal("/api/sessions/s11/term?token=dono&cols=abc".into()).await, (403, "cols/rows invalidos".into()));
+}
+
 /// T-24/T-25: GET sem aperto de mão e outro método são o caminho sem rota: 404 do Rust, nada ao Python.
 #[tokio::test]
 async fn plain_get_and_other_methods_are_the_rust_404() {
