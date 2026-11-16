@@ -44,7 +44,7 @@ vi.mock('../../stores/servers', () => {
 });
 vi.mock('../../stores/sessions', () => {
   const state = { rows: [], retain: () => () => {}, setForeground: () => {} };
-  return { setMachineDiscovery: () => {}, useSessions: Object.assign((select: (s: typeof state) => unknown) => select(state), { getState: () => state }) };
+  return { setMachineDiscovery: () => {}, useSessions: Object.assign((select: (s: typeof state) => unknown) => select(state), { getState: () => state, subscribe: () => () => {} }) };
 });
 vi.mock('../../stores/aparencia', () => {
   const state = { homeScreen: 'sessions', idioma: 'pt' };
