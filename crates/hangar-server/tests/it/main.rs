@@ -316,6 +316,7 @@ mod share_tunnel;
 mod share_life;
 mod share_gate;
 mod share_listen;
+mod standalone_boot;
 mod share_owner_routes;
 mod share_guest_routes;
 mod share_guest_serving;

@@ -1,4 +1,5 @@
-//! Configuração vinda do ambiente que o Python monta ao subir o filho.
+//! Configuração vinda do ambiente: o que o Python monta ao subir o filho, ou o que a própria subida
+//! do servidor monta a partir do `.env` (`hangar-boot`).
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
@@ -59,7 +60,11 @@ impl Config {
         };
         Ok(Config {
             listen: addr("HANGAR_SERVER_LISTEN")?,
-            upstream: addr("HANGAR_SERVER_UPSTREAM")?,
+            // shortcut: sem o Python atrás nada é repassado, e a porta 0 nunca atende; sai com o Python de partida.
+            upstream: match get("HANGAR_SERVER_UPSTREAM").filter(|v| !v.is_empty()) {
+                Some(_) => addr("HANGAR_SERVER_UPSTREAM")?,
+                None => SocketAddr::from(([127, 0, 0, 1], 0)),
+            },
             internal_secret: required("HANGAR_INTERNAL_SECRET")?,
             auth_token: required("CP_AUTH_TOKEN")?,
             log_path: get("HANGAR_SERVER_LOG").filter(|v| !v.is_empty()).map(PathBuf::from),
@@ -137,5 +142,14 @@ mod tests {
         let mut torto = BASE.to_vec();
         torto[0] = ("HANGAR_SERVER_LISTEN", "nao-e-endereco");
         assert!(Config::from_lookup(env(&torto)).unwrap_err().contains("HANGAR_SERVER_LISTEN"));
+    }
+
+    #[test]
+    fn b15_upstream_is_optional_without_the_python_parent() {
+        let sem_python: Vec<_> = BASE.iter().copied().filter(|(k, _)| *k != "HANGAR_SERVER_UPSTREAM").collect();
+        assert_eq!(Config::from_lookup(env(&sem_python)).unwrap().upstream.port(), 0);
+        let mut torto = BASE.to_vec();
+        torto[1] = ("HANGAR_SERVER_UPSTREAM", "nao-e-endereco");
+        assert!(Config::from_lookup(env(&torto)).unwrap_err().contains("HANGAR_SERVER_UPSTREAM"));
     }
 }

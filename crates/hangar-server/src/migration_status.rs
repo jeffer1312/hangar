@@ -364,6 +364,8 @@ pub async fn status(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
     if !owner || req.method() != Method::GET {
         return pass(&st, req, &fwd).await;
     }
+    let dir = st.hangar_dir.clone();
+    let unclean_exits = tokio::task::spawn_blocking(move || hangar_boot::life::unclean_exits(&dir).ok()).await.ok().flatten();
     let body = json!({
         "served_by": "rust",
         "rust": {
@@ -372,6 +374,8 @@ pub async fn status(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
             "commit": option_env!("GITHUB_SHA"),
             "protocol": crate::INTERNAL_PROTOCOL,
             "pid": std::process::id(),
+            // Vidas que acabaram sem parada limpa (queda, kill, energia), contadas na subida seguinte.
+            "unclean_exits": unclean_exits,
         },
         "window_minutes": WINDOW_MINUTES,
         "areas": areas_json(&totals()),
