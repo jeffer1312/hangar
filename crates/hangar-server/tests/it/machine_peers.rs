@@ -390,7 +390,7 @@ async fn child_identity(home: &std::path::Path, inherited: Option<&str>) -> Valu
     let mut command=Command::new(env!("CARGO_BIN_EXE_hangar-server"));
     command.env_clear().env("HOME",home).env("USERPROFILE",home).env("PATH",home)
         .env("HANGAR_SERVER_ID","before").env("HANGAR_SERVER_LISTEN",address.to_string())
-        .env("HANGAR_SERVER_UPSTREAM",crate::refused_address().to_string()).env("HANGAR_INTERNAL_SECRET","proof").env("CP_AUTH_TOKEN","proof")
+        .env("HANGAR_INTERNAL_SECRET","proof").env("CP_AUTH_TOKEN","proof")
         .current_dir(home).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null());
     if cfg!(windows) {
         for key in ["SystemRoot", "WINDIR"] {

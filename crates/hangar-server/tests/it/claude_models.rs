@@ -107,3 +107,31 @@ async fn claude_catalog_detects_cli_upgrade_before_cache_expires() {
     let (updated, _) = models.get(&scene.service, &slots, "claude", &scene.home, false).await.unwrap();
     assert_eq!(updated[0]["id"], "after-upgrade");
 }
+
+/// O catálogo do ditado consulta a conta pedida, e o filho nunca herda o token do dono nem o pane.
+#[tokio::test]
+async fn dictation_catalog_uses_the_requested_account_and_keeps_session_authority_out_of_child() {
+    let root = tempfile::tempdir().unwrap();
+    let bin = root.path().join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    let fixture = std::path::Path::new(env!("CARGO_BIN_EXE_hangar-dictation-fixture"));
+    for name in ["claude", "codex"] {
+        crate::copy_executable(fixture, &bin.join(if cfg!(windows) { format!("{name}.exe") } else { name.into() }));
+    }
+    let service = AccountService::new(AccountEnvironment::from_map([
+        ("HOME".into(), root.path().to_string_lossy().into_owned()),
+        ("PATH".into(), bin.to_string_lossy().into_owned()),
+        ("CP_AUTH_TOKEN".into(), "não-deve-entrar".into()),
+        ("TMUX_PANE".into(), "não-deve-entrar".into()),
+    ].into()));
+    let (models, slots) = (Models::default(), tokio::sync::Semaphore::new(4));
+    for provider in ["claude", "codex"] {
+        for account in ["account-a", "account-b"] {
+            let home = root.path().join(account);
+            std::fs::create_dir_all(&home).unwrap();
+            let (found, _) = models.get(&service, &slots, provider, &home, true).await
+                .unwrap_or_else(|code| panic!("{provider} {account}: catálogo da conta recusado: {code}"));
+            assert_eq!(found[0]["id"], format!("model-{account}"), "{provider}");
+        }
+    }
+}

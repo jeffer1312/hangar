@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use fake::{OWNER, client};
 use hangar_server::groups::federation::{self, Timing};
-use hangar_server::groups::orq::PythonOrq;
+use hangar_server::groups::orq::OrqVault;
 use hangar_server::groups::peers::{PeerBook, PeerClient};
 use hangar_server::groups::service::GroupService;
 use hangar_server::groups::store::PairDir;
@@ -72,7 +72,7 @@ pub async fn machine(root: &Path, id: &str) -> Machine {
     federation::configure(&pair, fast());
     let changes = Arc::new(AtomicUsize::new(0));
     let counter = changes.clone();
-    state.groups = Some(Arc::new(GroupService::new(PairDir::new(pair.clone(), root.join("arquivo")), Arc::new(PythonOrq::from_state(&state).with_paths(home.clone(),pair.clone())), id.into())
+    state.groups = Some(Arc::new(GroupService::new(PairDir::new(pair.clone(), root.join("arquivo")), Arc::new(OrqVault::from_state(&state).with_paths(home.clone(),pair.clone())), id.into())
         .with_change_hook(Arc::new(move || { counter.fetch_add(1, Ordering::SeqCst); }))));
     state.peers = Arc::new(PeerClient::new(PeerBook::new(Some(root.join("peers.json")))));
     let share = crate::share_pair_routes::share_state(&root.join("shares.json"), &pair, Arc::new(Mutex::new(1_000.0)));

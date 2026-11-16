@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use fake::{OWNER, client};
-use hangar_server::groups::orq::PythonOrq;
+use hangar_server::groups::orq::OrqVault;
 use hangar_server::groups::service::GroupService;
 use hangar_server::groups::store::PairDir;
 use hangar_server::list::bridge::{ListBridge, ListEnv, parse_dirs};
@@ -67,7 +67,7 @@ async fn server_built(root: &Path, n: usize, orq: Option<Arc<dyn hangar_server::
     state.login_guests = Arc::new(guests);
     let pair = home.join(".claude/.hangar-pair");
     let groups = Arc::new(GroupService::new(PairDir::new(pair.clone(), root.join("arquivo")),
-        orq.unwrap_or_else(|| Arc::new(PythonOrq::from_state(&state).with_paths(home.clone(), pair.clone()))), "casa".into()).with_diary(state.diag.clone()));
+        orq.unwrap_or_else(|| Arc::new(OrqVault::from_state(&state).with_paths(home.clone(), pair.clone()))), "casa".into()).with_diary(state.diag.clone()));
     state.groups = Some(groups.clone());
     let share = crate::share_pair_routes::share_state(&root.join("shares.json"), &pair, Arc::new(std::sync::Mutex::new(1_000.0)));
     state.share = Some(share.clone());

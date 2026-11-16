@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use hangar_server::groups::orq::PythonOrq;
+use hangar_server::groups::orq::OrqVault;
 use hangar_server::groups::service::{GroupService, JoinOwned};
 use hangar_server::groups::store::PairDir;
 use serde_json::Value;
@@ -30,7 +30,7 @@ async fn closing_a_rust_owned_grouped_session_returns_the_leave_warning() {
     let mut state = hangar_server::routes::AppState::new(fake::config("127.0.0.1"));
     assert!(state.state.runtime.set(registry.clone()).is_ok());
     let groups = Arc::new(GroupService::new(PairDir::new(dir.path().join("pair"), dir.path().join("arquivo")),
-        Arc::new(PythonOrq::from_state(&state)), "casa".into()));
+        Arc::new(OrqVault::from_state(&state)), "casa".into()));
     // Par em outra máquina que não está entre os peers: o aviso de saída não sai.
     let harness: BTreeMap<String, String> = [("cx-proof", "codex"), ("longe::x", "claude")].into_iter().map(|(n, h)| (n.into(), h.into())).collect();
     groups.join(JoinOwned { name: "cx-proof".into(), others: vec!["longe::x".into()], task: String::new(), replace_task: false,

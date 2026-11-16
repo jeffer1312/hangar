@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use fake::*;
 use hangar_server::groups::text::{ContractLine, Kind, TextArgs, protocol_text};
-use hangar_server::groups::orq::{PythonOrq, is_orchestrator};
+use hangar_server::groups::orq::{OrqVault, is_orchestrator};
 use hangar_server::groups::service::{OrqFacts, OrqPhase, PromoteError};
 use hangar_server::routes::AppState;
 use hangar_server::runtime::gateway::RuntimeRegistry;
@@ -210,7 +210,7 @@ async fn orq_phase_maps_every_answer_and_failure_is_unknown() {
     let home = dir.path().join("home");
     let mut st = state(None, Duration::from_secs(5)).await;
     isolated_accounts(&mut st,&home);
-    let orq = PythonOrq::from_state(&st).with_paths(home.clone(),dir.path().join("pair"));
+    let orq = OrqVault::from_state(&st).with_paths(home.clone(),dir.path().join("pair"));
     assert_eq!(orq.phase("g1").await,OrqPhase::NotStarted);
     native_run(&home,false);
     assert_eq!(orq.phase("g1").await,OrqPhase::Live);
@@ -240,7 +240,7 @@ async fn orq_promote_ok_and_conflict_text() {
     std::fs::create_dir_all(&root).unwrap();
     std::fs::create_dir_all(&pair).unwrap();
     std::fs::write(root.join("a.json"),"{\"key\":\"life-a\"}").unwrap();
-    let orq = PythonOrq::from_state(&st).with_paths(home.clone(),pair.clone());
+    let orq = OrqVault::from_state(&st).with_paths(home.clone(),pair.clone());
     assert_eq!(orq.promote("a","g1").await,Ok(()));
     let gid = hangar_server::orchestration::context::draft(&home,"a","unused").unwrap();
     let source = pair.join(format!("regras-{gid}.md"));

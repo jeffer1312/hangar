@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use hangar_server::groups::exit::leave_and_notify;
-use hangar_server::groups::orq::PythonOrq;
+use hangar_server::groups::orq::OrqVault;
 use hangar_server::groups::service::{BoxFuture, GroupError, GroupService, JoinOwned, OrqFacts, OrqPhase, PromoteError};
 use hangar_server::groups::store::PairDir;
 use hangar_server::groups::sweep::{FAILED_EVENT, PANICKED_EVENT, RECOVERED_EVENT, SweepEnv, Sweeper, live_names_of};
@@ -265,7 +265,7 @@ async fn dead_session_with_sanitized_name_ends_its_external_pair_by_the_raw_name
     let mut state = hangar_server::routes::AppState::new(fake::config(""));
     state.diag = python.bind_diary(state.diag.clone());
     let groups = Arc::new(GroupService::new(PairDir::new(root.clone(), tmp.path().join("arquivo")),
-        Arc::new(PythonOrq::from_state(&state)), "casa".into()));
+        Arc::new(OrqVault::from_state(&state)), "casa".into()));
     state.groups = Some(groups.clone());
     let share = crate::share_pair_routes::share_state(&tmp.path().join("shares.json"), &root, Arc::new(Mutex::new(1_000.0)));
     state.share = Some(share.clone());

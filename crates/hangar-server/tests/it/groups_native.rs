@@ -27,7 +27,7 @@ fn run(home: &Path, id: &str, gid: &str, end: bool) {
 async fn phase_uses_actual_runs_and_never_a_python_callback() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().join("home");
-    let facts = PythonOrq::new()
+    let facts = OrqVault::new()
         .with_paths(home.clone(), dir.path().join("pair"));
     assert_eq!(facts.phase("g1").await, OrqPhase::NotStarted);
     run(&home, "one", "g1", false);
@@ -81,7 +81,7 @@ async fn promotion_moves_the_exact_draft_and_marks_its_source() {
         std::fs::read_to_string(srv.pair.join(format!("regras-{gid}.md"))).unwrap(),
         content
     );
-    let facts = PythonOrq::new()
+    let facts = OrqVault::new()
         .with_paths(home, srv.pair.clone());
     assert!(
         matches!(facts.promote("s0","draft-x").await,Err(PromoteError::Conflict(s)) if s == "grupo de destino inválido")
@@ -239,7 +239,7 @@ async fn promotion_uses_the_configured_mux_to_resolve_the_live_identity() {
     std::fs::create_dir_all(&pair).unwrap();
     let draft = context::draft(&home, "fixture-mux", mux.to_str().unwrap()).unwrap();
     std::fs::write(pair.join(format!("regras-{draft}.md")), "time local\n").unwrap();
-    let facts = PythonOrq::new()
+    let facts = OrqVault::new()
         .with_paths(home, pair.clone())
         .with_mux(mux.to_string_lossy().into_owned());
     assert_eq!(facts.promote("fixture-mux", "g1").await, Ok(()));

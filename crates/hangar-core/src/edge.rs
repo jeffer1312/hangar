@@ -1,5 +1,4 @@
 //! Portão do dono: quem pede, se é o dono, e as marcas que o servidor põe no pedido.
-//! O repasse ao Python fica no servidor.
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -22,13 +21,12 @@ impl RequestAuth {
     }
 }
 
-/// Cliente já resolvido pelo `TrustedHosts`. Vai ao Python como valor único do X-Forwarded-For:
-/// o uvicorn confia em 127.0.0.1 (o Rust) e chega ao mesmo cliente que chegaria sem o Rust.
+/// Cliente já resolvido pelo `TrustedHosts`: é a origem que conta as tentativas de senha.
 #[derive(Clone)]
 pub struct Forward {
     pub client_ip: String,
     pub https: bool,
-    /// Convidado da 8766 decidido pelo porteiro; o `pass` do servidor assina o cabeçalho na hora do repasse.
+    /// Convidado da 8766 decidido pelo porteiro.
     pub guest: Option<Arc<GuestGrant>>,
     /// Só uma admissão deste pedido, assinada pelo contexto privado do pai.
     pub auth_receipt: Option<String>,
@@ -105,7 +103,7 @@ pub fn gate(trusted: &TrustedHosts, auth: &Auth, peer: SocketAddr, req: &Request
     }
 }
 
-/// Porta exclusiva do dono: conta a recusa aqui, pois ela não passa pelo Python.
+/// Porta exclusiva do dono: quem não é o dono leva a recusa contada aqui.
 pub fn owner_gate(trusted: &TrustedHosts, auth: &Auth, peer: SocketAddr, req: &Request)
     -> impl Future<Output = Result<Forward, Response>> + Send + use<> {
     let admission = gate(trusted, auth, peer, req);
@@ -120,7 +118,7 @@ pub fn owner_gate(trusted: &TrustedHosts, auth: &Auth, peer: SocketAddr, req: &R
     }
 }
 
-/// O `require_auth` do Python: aceita, ou recusa com 401/429 (503 sem contador), contando a tentativa.
+/// Aceita, ou recusa com 401/429 (503 sem contador), contando a tentativa.
 pub async fn require_auth(auth: &Auth, origin: String, token: Option<Vec<u8>>) -> Result<(), Response> {
     let decision = auth.evaluate(auth::AuthAttempt {
         profile: auth::Profile::RequireAuthHttp, origin,
@@ -156,8 +154,7 @@ pub fn who(trusted: &TrustedHosts, auth: &Auth, peer: SocketAddr, req: &Request)
     }
 }
 
-/// O repasse de quem pede, sem decidir se é o dono. Convidado vai como loopback para o Python
-/// aceitar o cabeçalho assinado.
+/// Origem de quem pede, sem decidir se é o dono. Convidado com convite fica como loopback.
 pub fn forward_for(trusted: &TrustedHosts, peer: SocketAddr, req: &Request) -> Forward {
     if guest_side(req) {
         let guest = caller(req).and_then(Caller::grant).cloned();

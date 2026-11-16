@@ -9,7 +9,7 @@ use tower::ServiceExt;
 
 #[tokio::test]
 async fn ticket_group_is_projected_from_real_sidecars_and_members_can_report() {
-    use hangar_server::groups::{service::{GroupService,JoinOwned},store::PairDir,orq::PythonOrq};
+    use hangar_server::groups::{service::{GroupService,JoinOwned},store::PairDir,orq::OrqVault};
     let temp=tempfile::tempdir().unwrap();
     let cfg=Config {listen:"127.0.0.1:0".parse().unwrap(),internal_secret:"test".into(),auth_token:"owner-ticket".into(),log_path:None,trusted:hangar_server::auth::TrustedHosts::parse("127.0.0.1")};
     let mut state=AppState::new(cfg);
@@ -17,7 +17,7 @@ async fn ticket_group_is_projected_from_real_sidecars_and_members_can_report() {
     state.origins_home=temp.path().to_owned();
     state.mission=Arc::new(hangar_mission::Store::new(temp.path().join("mission")));
     let groups=Arc::new(GroupService::new(PairDir::new(temp.path().join("pair"),temp.path().join("archive")),
-        Arc::new(PythonOrq::from_state(&state)),"test".into()));
+        Arc::new(OrqVault::from_state(&state)),"test".into()));
     state.groups=Some(groups.clone());
     for (name,key) in [("coordinator","a".repeat(32)),("backend","b".repeat(32))] {
         let folder=temp.path().join(".hangar/claude-headless");std::fs::create_dir_all(&folder).unwrap();

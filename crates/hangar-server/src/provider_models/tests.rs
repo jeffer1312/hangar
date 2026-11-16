@@ -468,7 +468,6 @@ async fn inbox_access_warns_once_per_cause_and_host_and_success_rearms_the_warni
     let _trace = tracing::subscriber::set_default(subscriber);
     let config = crate::config::Config::from_lookup(|key| match key {
         "HANGAR_SERVER_LISTEN" => Some("192.0.2.50:18765".into()),
-        "HANGAR_SERVER_UPSTREAM" => Some("127.0.0.1:1".into()),
         "HANGAR_INTERNAL_SECRET" => Some("fixture-internal".into()),
         "CP_AUTH_TOKEN" => Some("fixture-owner".into()),
         _ => None,

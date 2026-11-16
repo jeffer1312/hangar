@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use fake::{OWNER, client};
-use hangar_server::groups::orq::PythonOrq;
+use hangar_server::groups::orq::OrqVault;
 use hangar_server::groups::service::{GroupService, JoinOwned};
 use hangar_server::groups::store::PairDir;
 use hangar_server::list::bridge::{ListBridge, ListEnv, parse_dirs};
@@ -71,7 +71,7 @@ async fn server() -> Srv {
         capture_program: script.into_os_string(), procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs },
         FactsClient::new()));
     let pair = claude.join(".hangar-pair");
-    let groups = Arc::new(GroupService::new(PairDir::new(pair.clone(), root.join("arquivo")), Arc::new(PythonOrq::from_state(&state)), "casa".into()));
+    let groups = Arc::new(GroupService::new(PairDir::new(pair.clone(), root.join("arquivo")), Arc::new(OrqVault::from_state(&state)), "casa".into()));
     state.groups = Some(groups.clone());
     let runtime = Arc::new(RuntimeRegistry::new("i".into()));
     assert!(state.state.runtime.set(runtime).is_ok());

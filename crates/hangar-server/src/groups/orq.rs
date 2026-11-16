@@ -5,13 +5,13 @@ use super::service::{BoxFuture, OrqFacts, OrqPhase, PromoteError};
 use crate::routes::AppState;
 
 #[derive(Clone)]
-pub struct PythonOrq {
+pub struct OrqVault {
     home: std::path::PathBuf,
     pair: std::path::PathBuf,
     mux: String,
 }
 
-impl PythonOrq {
+impl OrqVault {
     pub fn new() -> Self {
         let env = crate::accounts::environment::AccountEnvironment::capture();
         Self {
@@ -44,7 +44,7 @@ impl PythonOrq {
     }
 }
 
-impl OrqFacts for PythonOrq {
+impl OrqFacts for OrqVault {
     fn phase<'a>(&'a self, gid: &'a str) -> BoxFuture<'a, OrqPhase> {
         Box::pin(async move {
             let home = self.home.clone();

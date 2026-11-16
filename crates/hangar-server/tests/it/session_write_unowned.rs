@@ -163,7 +163,7 @@ exec tmux -L '{label}' -f /dev/null "$@"
         state.side.locate = python.locate();
         let pair = home.join(".claude/.hangar-pair");
         state.groups = Some(Arc::new(hangar_server::groups::service::GroupService::new(hangar_server::groups::store::PairDir::new(pair.clone(), root.join("arquivo")),
-            Arc::new(hangar_server::groups::orq::PythonOrq::from_state(&state).with_paths(home.clone(), pair)), "rig".into())));
+            Arc::new(hangar_server::groups::orq::OrqVault::from_state(&state).with_paths(home.clone(), pair)), "rig".into())));
         let state = Arc::new(state);
         let serve = |app: axum::Router| async move {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

@@ -18,7 +18,7 @@ use axum::response::IntoResponse;
 use axum::routing::get;
 use futures_util::future::BoxFuture;
 use hangar_server::groups::exit::leave_and_notify;
-use hangar_server::groups::orq::PythonOrq;
+use hangar_server::groups::orq::OrqVault;
 use hangar_server::groups::peers::{PeerBook, PeerClient};
 use hangar_server::groups::service::GroupService;
 use hangar_server::groups::store::PairDir;
@@ -218,7 +218,7 @@ async fn env_with(o: Opts) -> Env {
         FactsClient::new()));
     let pair_dir = home.join(".claude/.hangar-pair");
     state.groups = Some(Arc::new(GroupService::new(PairDir::new(pair_dir.clone(), root.join("arquivo")),
-        Arc::new(PythonOrq::from_state(&state)), o.server_id.into())));
+        Arc::new(OrqVault::from_state(&state)), o.server_id.into())));
     state.peers = Arc::new(PeerClient::new(PeerBook::new(Some(root.join("peers.json")))));
     let clock = Arc::new(Mutex::new(1_000.0));
     let share = share_state(&root.join("shares.json"), &pair_dir, clock.clone());

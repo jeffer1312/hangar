@@ -1,6 +1,7 @@
 // crates/hangar-server/src/routes.rs
 //! Rotas do hangar-server: saúde, custos, lista de sessões, histórico e chat ao vivo do Claude e do
-//! Codex para o dono; todo o resto é repasse ao Python. Falha do Rust nessas rotas é 503 com código, nunca repasse.
+//! Codex para o dono, e o resto das rotas do servidor. Caminho sem handler é 404 do dono e recusa de
+//! quem não é; falha numa rota é 503 com código.
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::sync::atomic::Ordering;
@@ -117,7 +118,7 @@ pub struct AppState {
     pub write_gate_wait: std::time::Duration,
     /// O `claude` e o `hangar-engine` do fork do `/btw` (os testes trocam por falsos).
     pub btw_programs: crate::session_write::btw::Programs,
-    /// Grupos de sessões em `.hangar-pair`; `None` sem as pastas da lista (as rotas seguem ao Python).
+    /// Grupos de sessões em `.hangar-pair`; `None` sem as pastas da lista (as rotas respondem 503).
     pub groups: Option<Arc<crate::groups::service::GroupService>>,
     /// Outras máquinas do dono (`peers.json`), para os grupos entre máquinas.
     pub peers: Arc<crate::groups::peers::PeerClient>,
@@ -129,7 +130,7 @@ pub struct AppState {
     /// Voz ao vivo; o teste troca por um hub com pastas temporárias.
     pub voice: Arc<crate::voice::hub::VoiceHub>,
     pub speech: Arc<crate::speech::Service>,
-    /// Convites e par externo; `None` sem `HANGAR_SHARES_FILE` (o Python segue dono).
+    /// Convites e par externo; `None` sem `HANGAR_SHARES_FILE` (sem convites nem par).
     pub share: Option<Arc<crate::share::ShareState>>,
     /// A porta do convidado já está escutando; a saúde anuncia.
     pub guest_bound: std::sync::atomic::AtomicBool,
@@ -273,7 +274,7 @@ impl AppState {
         };
         let mission=Arc::new(hangar_mission::Store::new(hangar_dir.join("mission")));
         let groups = crate::groups::from_env(list.env().dirs.as_ref(), server_id.clone(),
-            Arc::new(crate::groups::orq::PythonOrq::new()
+            Arc::new(crate::groups::orq::OrqVault::new()
                 .with_paths(list.env().dirs.as_ref().map(|d| d.home.clone()).unwrap_or_default(),
                     list.env().dirs.as_ref().map(|d| d.claude.join(".hangar-pair")).unwrap_or_default())
                 .with_mux(list.env().capture_program.to_string_lossy().into_owned())), list.clone(), diag.clone(), mission.clone());
@@ -438,7 +439,7 @@ pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest:
     // Assina as transições depois do vigia de avisos, que as publica.
     let _loop_watch: Vec<crate::AbortOnDrop> = crate::loops::watch::start(state.clone()).into_iter().map(crate::AbortOnDrop).collect();
     let _limit_switch = crate::session_write::limit_switch::spawn(state.clone()).map(crate::AbortOnDrop);
-    // Sem a fotografia do Python a varredura não revoga nada (ver `life::sweep`); o túnel religa já.
+    // A varredura só revoga com ausência confirmada (ver `life::sweep`); o túnel religa já.
     let _share_sweep = state.share.clone().map(|share| crate::AbortOnDrop(tokio::spawn(
         crate::share::owner_routes::sweep_loop(share, crate::share::owner_routes::SWEEP_EVERY))));
             std::future::pending::<()>().await;
@@ -634,7 +635,7 @@ fn guest_router_with(state: Arc<AppState>, pair: Option<Arc<PairState>>) -> Rout
         return Router::new().fallback(|headers: HeaderMap| async move { not_found(&headers) }).with_state(state);
     };
     let share = pair.owner.share.clone();
-    // Os handlers do dono que também servem o convidado; o resto vai ao Python assinado.
+    // Os handlers do dono que também servem o convidado; o resto leva a recusa do caminho sem rota.
     session_routes(pass_registered).fallback(pass_any).with_state(state.clone())
         .merge(crate::share::guest_routes::guest_router(share.clone(), crate::share::guest_routes::owner_name()))
         .merge(crate::share::pair_routes::guest_pair_router(pair))
@@ -664,7 +665,7 @@ fn owner_share_router(state: &Arc<AppState>, pair: Option<&Arc<PairState>>) -> R
 async fn owner_only(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request,
                     next: axum::middleware::Next) -> Response {
     let (fwd, owner) = match gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
-    // Quem não é o dono recebe a recusa do `pass`, sem chegar ao Python; o preflight o porteiro do login já respondeu.
+    // Quem não é o dono recebe a recusa do `pass`; o preflight o porteiro do login já respondeu.
     if !owner || req.method() == Method::OPTIONS {
         return pass(&st, req, &fwd).await;
     }
@@ -681,7 +682,7 @@ where H: axum::handler::Handler<T, Arc<AppState>>, T: 'static {
     Router::new()
         .route("/api/sessions/{name}/term", get(crate::term::session_ws).fallback(pass_any))
         .route("/api/sessions/{name}/nav-remoto", get(crate::remote_browser::ws::public).head(pass_any).fallback(pass_any))
-        // Outro método nessas rotas (preflight OPTIONS, HEAD) segue ao Python.
+        // Outro método nessas rotas (preflight OPTIONS, HEAD) vai ao `fallback` da porta.
         .route("/api/whoami", get(crate::mcp::identity::route).fallback(fallback.clone()))
         .route("/api/sessions", get(crate::list::hub::list).post(crate::session_open::create).fallback(fallback.clone()))
         .route("/api/sessions/events", get(crate::list::hub::events).fallback(fallback.clone()))
@@ -696,7 +697,7 @@ where H: axum::handler::Handler<T, Arc<AppState>>, T: 'static {
         .route("/api/sessions/{name}/workflows", axum::routing::any(workflows))
         .route("/api/sessions/{name}/workflows/", axum::routing::any(workflows))
         .route("/api/sessions/{name}/workflows/{*rest}", axum::routing::any(workflows))
-        // Interface dos mods: o Rust atende a sessão sem terminal dele; o resto segue ao Python.
+        // Interface dos mods: o Rust atende a sessão sem terminal dele; outro método vai ao `fallback`.
         .route("/api/sessions/{name}/plugin/press", axum::routing::post(crate::mods::routes::press).fallback(fallback.clone()))
         .route("/api/sessions/{name}/plugin/close", axum::routing::post(crate::mods::routes::close).fallback(fallback.clone()))
         .route("/api/sessions/{name}/plugin/show", axum::routing::post(crate::mods::routes::show).fallback(fallback.clone()))
@@ -739,7 +740,7 @@ where H: axum::handler::Handler<T, Arc<AppState>>, T: 'static {
         .route("/api/sessions/{name}/queue/{entry_id}", axum::routing::delete(crate::session_write::control::queue_remove)
             .patch(crate::session_write::control::queue_edit).fallback(fallback.clone()))
         .route("/api/sessions/{name}/queue/{entry_id}/steer", axum::routing::post(crate::session_write::control::queue_steer).fallback(fallback.clone()))
-        // Rotas só do Codex: o Rust atende a sessão sem terminal dele; o resto segue ao Python.
+        // Rotas só do Codex: o Rust atende a sessão sem terminal dele; outro método vai ao `fallback`.
         .route("/api/sessions/{name}/models", get(crate::session_write::codex::models).fallback(fallback.clone()))
         .route("/api/sessions/{name}/model", axum::routing::post(crate::session_write::codex::model).fallback(fallback.clone()))
         .route("/api/sessions/{name}/service-tier", axum::routing::post(crate::session_write::engine::service_tier).fallback(fallback.clone()))
@@ -911,16 +912,15 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         // Páginas HTML da conversa: só o dono; o convidado recebe o 404 de hoje.
         .route("/api/sessions/{name}/pages/{id}", get(crate::pages::routes::page).fallback(pass_registered))
         .route("/api/sessions/{name}/pages/{id}/shot", get(crate::pages::routes::shot).fallback(pass_registered))
-        // Diagramas Mermaid desenhados no Chromium do servidor: só o dono; o resto segue ao Python, que repassa
-        // o dono do Connect pela ponte (`forwarded`) e recusa os demais.
+        // Diagramas Mermaid desenhados no Chromium do servidor: só o dono; os demais levam a recusa.
         .route("/api/mermaid", axum::routing::post(crate::mermaid::route).fallback(pass_any))
-        // Encerrar: o Codex com terminal do Rust encerra aqui e só então segue ao Python, marcado.
+        // Encerrar a sessão: toda vida fecha aqui, pelo ator ou pelo nome.
         .route("/api/sessions/{name}", axum::routing::delete(crate::session_write::bridge::delete).fallback(pass_registered))
         .route("/api/sessions/creation-progress", get(crate::session_open::server::creation_progress).fallback(pass_registered))
-        // Reserva pré-aquecida do Claude sem terminal: só o dono; outro método segue ao Python.
+        // Reserva pré-aquecida do Claude sem terminal: só o dono; outro método leva a recusa do caminho sem rota.
         .route("/api/sessions/prewarm", axum::routing::put(crate::prewarm::http::put).fallback(pass_any))
         .route("/api/sessions/prewarm/{id}", axum::routing::delete(crate::prewarm::http::delete).fallback(pass_any))
-        // Pedido de navegador do agente: só o dono; o Connect chega pela ponte (`forwarded`).
+        // Pedido de navegador do agente: só o dono.
         .route("/api/sessions/{name}/nav", axum::routing::post(crate::nav_requests::open).delete(crate::nav_requests::confirm).fallback(pass_registered))
         // Loop e `then`: a guarda delimita a sessão e a política permite cada operação.
         .route("/api/sessions/{name}/then", axum::routing::any(crate::loops::http::route))
@@ -931,7 +931,7 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/sessions/{name}/bastao/dossie", axum::routing::any(crate::session_open::baton::serve))
         // Retomar do Arquivo e o `/resume` ao vivo: a abertura e a reabertura do Rust, com a conversa que já existe.
         .route("/api/archive/{project}/{session_id}/resume", axum::routing::post(crate::session_open::server::archive_resume).fallback(pass_registered))
-        // Ler a conversa do Arquivo e a imagem dela: só o dono; o resto segue ao Python, que recusa.
+        // Ler a conversa do Arquivo e a imagem dela: só o dono; os demais levam a recusa.
         // O Arquivo (pastas, recentes, uma pasta, um cwd): só o dono; `recent` antes da pasta.
         .route("/api/archive", get(crate::archive_list::folders).fallback(pass_registered))
         .route("/api/archive/recent", get(crate::archive_list::recent).fallback(pass_registered))
@@ -939,7 +939,7 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/archive-por-cwd", get(crate::archive_list::by_cwd).fallback(pass_registered))
         .route("/api/archive/{project}/{session_id}/history", get(crate::archive_history::history).fallback(pass_registered))
         .route("/api/archive/{project}/{session_id}/transcript-image/{uuid}/{idx}", get(crate::archive_history::image).fallback(pass_registered))
-        // Broadcast do dono: o alvo Codex com terminal do Rust recebe aqui; o resto segue ao Python.
+        // Broadcast do dono para as sessões escolhidas.
         .route("/api/broadcast", axum::routing::post(crate::session_write::input::broadcast).fallback(pass_registered))
         .route("/api/sessions/{name}/engine/model", axum::routing::post(crate::session_write::engine::model).fallback(pass_registered))
         .route("/api/costs", get(crate::costs_routes::costs).fallback(pass_registered))
@@ -1013,7 +1013,7 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         // Grupos (`/pair`, `/group-message`, `/pair/contract`, `/pair-remote`, `/unpair-remote`).
         .merge(crate::groups::routes::router())
         .merge(crate::connect::routes::router())
-        // Planos e catálogo de plugins e skills: o dono no Rust; o resto segue ao Python.
+        // Planos e catálogo de plugins e skills: só o dono.
         .merge(crate::plans::routes::router())
         .merge(hangar_desktop_theme::router(state.edge(), state.desktop_theme.clone()))
         // Exportar, importar e verificar atalhos: só o dono, nunca repassados (o Python não tem as rotas).
@@ -1025,9 +1025,9 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
             state.ticket_actions.get_or_init(|| hangar_ticket_actions::Engine::new(hangar_ticket_actions::Ledger::new(state.hangar_dir.join("ticket-actions")),
                 state.mission.clone(),state.connectors.clone(),state.mission_notify.clone())).clone()))
         .route("/api/claude/customizations", get(crate::claude_customizations::catalog_route).fallback(pass_registered))
-        // Senha do chaveiro: só o dono, nunca repassada; só o preflight do CORS vai ao Python.
+        // Senha do chaveiro: só o dono; o preflight do CORS cai no caminho sem rota.
         .route("/api/keyring/unlock", axum::routing::post(crate::keyring::unlock_route).options(pass_any))
-        // Cofre de senhas: só o dono, nunca repassado; só o preflight do CORS vai ao Python.
+        // Cofre de senhas: só o dono; o preflight do CORS cai no caminho sem rota.
         .route("/api/vault/status", get(crate::vault::http::status).options(pass_any))
         .route("/api/vault/config", axum::routing::put(crate::vault::http::config).options(pass_any))
         .route("/api/vault/entries", get(crate::vault::http::entries).post(crate::vault::http::entries).options(pass_any))
@@ -1040,7 +1040,7 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/vault/recovery", axum::routing::post(crate::vault::http::recovery).options(pass_any))
         .route("/api/vault/restore", axum::routing::post(crate::vault::http::restore).options(pass_any))
         .route("/api/vault/backup/{server_id}", get(crate::vault::http::backup_copy).put(crate::vault::http::backup_copy).options(pass_any))
-        // Relatório de diagnóstico: só o dono, nunca repassado; só o preflight do CORS vai ao Python.
+        // Relatório de diagnóstico: só o dono; o preflight do CORS cai no caminho sem rota.
         .route("/api/diag/report", axum::routing::post(crate::diag_report::report_route).options(pass_any))
         // SideStore no iPhone/iPad do cabo: só o dono, nunca repassado (a senha da Apple ID não vai ao Python).
         .route("/api/device-install/devices", get(crate::device_install::routes::devices))
@@ -1062,7 +1062,7 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/update/accept", axum::routing::post(crate::update::http::accept))
         // Canal de testes: canal publicado no pacote ou branch do checkout.
         .route("/api/update-channel", axum::routing::any(crate::update::git_engine::http::channel))
-        // A tela web é servida aqui; o que não é dela segue ao Python.
+        // A tela web é servida aqui; o que não é dela leva o 404 ou a recusa do caminho sem rota.
         .fallback(crate::ui::fallback)
         .layer(axum::middleware::from_fn(crate::migration_status::count_public))
         .with_state(state.clone())
@@ -1074,7 +1074,7 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
 /// A ponte do plugin do Claude (`plugin::routes`) é do Rust inteira; a interface dos mods também.
 fn plugin_routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
     Router::new()
-        // Estas seis o Python ainda tem: outro método segue a ele.
+        // Outro método nestas seis leva a recusa do caminho sem rota.
         .route("/api/plugin/press-start", axum::routing::post(crate::mods::bridge::press_start).fallback(pass_any))
         .route("/api/plugin/opened", axum::routing::post(crate::mods::bridge::opened).fallback(pass_any))
         .route("/api/plugin/ui", axum::routing::post(crate::mods::bridge::ui).fallback(pass_any))
@@ -1106,7 +1106,7 @@ async fn health(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Response
         "owns": owns,
         // O painel de terminal real é do Rust em todas as plataformas.
         "terminal_panel": true,
-        // Sem as pastas da lista não há serviço de grupos: as rotas seguem ao Python, que fica dono.
+        // Sem as pastas da lista não há serviço de grupos: as rotas dele respondem 503.
         "groups": st.groups.is_some(),
         "guest_port_bound": st.guest_bound.load(Ordering::Relaxed)});
     // Versão e commit do pacote de onde este processo subiu; ausentes no modo desenvolvedor.

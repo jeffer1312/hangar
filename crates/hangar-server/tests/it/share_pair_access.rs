@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use axum::http::Method;
 use fake::{OWNER, client};
-use hangar_server::groups::orq::PythonOrq;
+use hangar_server::groups::orq::OrqVault;
 use hangar_server::groups::service::GroupService;
 use hangar_server::groups::store::PairDir;
 use hangar_server::list::bridge::{ListBridge, ListEnv, parse_dirs};
@@ -59,7 +59,7 @@ async fn server() -> Srv {
         FactsClient::new()));
     let pair = home.join(".claude/.hangar-pair");
     state.groups = Some(Arc::new(GroupService::new(PairDir::new(pair.clone(), root.join("arquivo")),
-        Arc::new(PythonOrq::from_state(&state)), "casa".into())));
+        Arc::new(OrqVault::from_state(&state)), "casa".into())));
     let share = share_state(&root.join("shares.json"), &pair, Arc::new(Mutex::new(1_000.0)));
     state.share = Some(share.clone());
     let app = Arc::new(state);

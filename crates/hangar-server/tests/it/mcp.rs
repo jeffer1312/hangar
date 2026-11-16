@@ -70,9 +70,9 @@ async fn scene_named(groups: bool, peers: Option<hangar_server::groups::peers::P
     state.origins_home = home.clone();
     if let Some(peers) = peers { state.peers = Arc::new(peers); }
     if groups {
-        use hangar_server::groups::{orq::PythonOrq, service::GroupService, store::PairDir};
+        use hangar_server::groups::{orq::OrqVault, service::GroupService, store::PairDir};
         let pair = PairDir::new(home.join(".claude/.hangar-pair"), root.join("arquivo"));
-        state.groups = Some(Arc::new(GroupService::new(pair, Arc::new(PythonOrq::from_state(&state)), if server.is_empty() {"casa"} else {server}.into())));
+        state.groups = Some(Arc::new(GroupService::new(pair, Arc::new(OrqVault::from_state(&state)), if server.is_empty() {"casa"} else {server}.into())));
     }
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
