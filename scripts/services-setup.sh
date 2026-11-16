@@ -52,8 +52,11 @@ PACOTE=0
 ENV_FILE="$REPO/backend/.env"
 if [[ -f "$HOME/.hangar/config/.env" ]]; then ENV_FILE="$HOME/.hangar/config/.env"; fi
 BACK_DIR="$REPO/backend"
-BACK_EXEC="$UV_BIN run python -m app.main"
-if [[ -n "$LAUNCHER" ]]; then BACK_DIR="$HOME/.hangar"; BACK_EXEC="\"$LAUNCHER\" launch backend"; fi
+# Checkout sem o app/main.py: o hangar-server sobe sozinho, com a escolha de binário do CLI.
+BACK_EXEC="\"$REPO/scripts/hangar-server-command\""
+NEEDS_UV=0
+if [[ -f "$REPO/backend/app/main.py" ]]; then BACK_EXEC="$UV_BIN run python -m app.main"; NEEDS_UV=1; fi
+if [[ -n "$LAUNCHER" ]]; then BACK_DIR="$HOME/.hangar"; BACK_EXEC="\"$LAUNCHER\" launch backend"; NEEDS_UV=0; fi
 
 log() { printf '\033[36m==>\033[0m %s\n' "$*"; }
 
@@ -97,7 +100,39 @@ case "${1:-}" in
 esac
 
 [[ "$PACOTE" == 0 || -n "$LAUNCHER" ]] || { echo "pacote sem o lançador em $HOME/.hangar/bin/hangar-launcher (ou sem ~/.hangar/current): rode o hangar-server install-package" >&2; exit 1; }
-[[ -n "$UV_BIN" || -n "$LAUNCHER" ]] || { echo "uv not found in PATH" >&2; exit 1; }
+[[ -n "$UV_BIN" || "$NEEDS_UV" == 0 ]] || { echo "uv not found in PATH" >&2; exit 1; }
+# O lançador é cópia do hangar-server da versão em uso: renovado aqui, ele sabe subir a versão sem o
+# Python. Troca por nome temporário e `mv`, nunca um lançador pela metade.
+if [[ -n "$LAUNCHER" && -x "$HOME/.hangar/current/bin/hangar-server" ]] && ! cmp -s "$HOME/.hangar/current/bin/hangar-server" "$LAUNCHER"; then
+  if cp "$HOME/.hangar/current/bin/hangar-server" "$LAUNCHER.new" && chmod 755 "$LAUNCHER.new" && mv -f "$LAUNCHER.new" "$LAUNCHER"; then
+    log "Lançador renovado com o hangar-server da versão em uso"
+  else
+    rm -f "$LAUNCHER.new"
+    echo "AVISO: o lançador $LAUNCHER não foi renovado; ele segue subindo só versões que usam o Python" >&2
+  fi
+fi
+# Type=notify + watchdog só para a versão cujo manifesto diz `boot: direct` (o hangar-server dela avisa
+# pronto e vivo) e com o lançador igual ao dela. O resto (checkout, modo desenvolvedor, versão que sobe
+# pelo Python, renovação que falhou) fica em Type=simple: com notify, ninguém avisaria e a subida
+# morreria no prazo.
+BACK_TYPE=simple
+BACK_WATCHDOG=""
+if [[ -n "$LAUNCHER" ]] && grep -Eqs '"boot"[[:space:]]*:[[:space:]]*"direct"' "$HOME/.hangar/current/manifest.json" \
+   && cmp -s "$HOME/.hangar/current/bin/hangar-server" "$LAUNCHER"; then
+  BACK_TYPE=notify
+  # O servidor só avisa pronto depois de preparar as sessões, que demora numa máquina cheia.
+  BACK_WATCHDOG=$'NotifyAccess=main\nWatchdogSec=60\nTimeoutStartSec=300\n'
+fi
+# A espera crescente (RestartSteps/RestartMaxDelaySec) só existe no systemd 254+; o mais velho ignora as
+# chaves e religaria a cada 2 s para sempre. Lá a espera fica fixa em 10 s.
+SYSTEMD_VER="$(systemctl --version 2>/dev/null || true)"
+SYSTEMD_VER="${SYSTEMD_VER#systemd }"
+SYSTEMD_VER="${SYSTEMD_VER%%[!0-9]*}"
+if [[ -n "$SYSTEMD_VER" ]] && (( SYSTEMD_VER >= 254 )); then
+  BACK_RESTART=$'RestartSec=2\nRestartSteps=8\nRestartMaxDelaySec=10min'
+else
+  BACK_RESTART='RestartSec=10'
+fi
 [[ "$BACKEND_ONLY" == 1 || "$PACOTE" == 1 ]] || [[ -x "$NODE_BIN/npm" ]] || { echo "npm nao encontrado em $NODE_BIN — instale Node 20+ (ou, se usa fnm, rode: fnm default <ver>)" >&2; exit 1; }
 [[ "$PACOTE" == 1 || -d "$REPO/node_modules" ]] || log "WARNING: node_modules missing — run 'npm install' at the repo root first (frontend is a workspace)"
 [[ "$PACOTE" == 1 ]] && SERVE=backend
@@ -140,11 +175,14 @@ escreve_unit() { # escreve_unit <nome> <conteudo>
 
 escreve_unit "$BACK" "$(cat <<EOF
 [Unit]
-Description=hangar backend (FastAPI/uvicorn)
+Description=hangar backend
 After=network.target
+# Nunca desiste de religar.
+StartLimitIntervalSec=0
 
 [Service]
-WorkingDirectory=$BACK_DIR
+Type=$BACK_TYPE
+${BACK_WATCHDOG}WorkingDirectory=$BACK_DIR
 # Explicit PATH: the backend spawns \`claude\` (~/.local/bin) and \`tmux\` — the user manager's
 # PATH may lack ~/.local/bin on a lingering boot with no login session.
 Environment=PATH=$NODE_BIN:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin
@@ -153,7 +191,10 @@ Environment=PATH=$NODE_BIN:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin
 Environment=MALLOC_ARENA_MAX=2
 ExecStart=$BACK_EXEC
 Restart=on-failure
-RestartSec=2
+$BACK_RESTART
+# A parada protegida do navegador leva até 120 s; o cgroup inteiro sai junto.
+TimeoutStopSec=120
+KillMode=control-group
 
 [Install]
 WantedBy=default.target

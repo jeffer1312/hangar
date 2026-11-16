@@ -27,6 +27,14 @@ $pacote = @(
 )
 Assert (((Get-HangarTaskProcesses $pacote 'hangar-backend' 'C:\Users\u\.hangar\versions\0.1.0.6\backend').ProcessId -join ',') -eq '61') 'Backend do lancador nao identificado (ou o atualizador entrou junto)'
 Assert (-not (Get-HangarTaskProcesses $pacote 'hangar-frontend' 'C:\repo\frontend')) 'Lancador do backend tomado pelo front'
+# Decisao 9: versao sem o Python, o hangar-server filho do lancador e o backend; o de outro pai, nao.
+$direto = @(
+    (Row 70 1 'hangar-launcher.exe' '"C:\Users\u\.hangar\bin\hangar-launcher.exe" launch backend --log "C:\l.log"'),
+    (Row 71 70 'hangar-server.exe' '"C:\Users\u\.hangar\versions\0.1.0.7\bin\hangar-server.exe"'),
+    (Row 72 1 'hangar-server.exe' '"C:\Users\u\.hangar\versions\0.1.0.7\bin\hangar-server.exe" update --run'),
+    (Row 73 71 'hangar-server.exe' '"C:\Users\u\.hangar\versions\0.1.0.7\bin\hangar-server.exe" open claude')
+)
+Assert (((Get-HangarTaskProcesses $direto 'hangar-backend' 'C:\Users\u\.hangar\versions\0.1.0.8\backend').ProcessId -join ',') -eq '71') 'hangar-server do lancador nao identificado (ou outro hangar-server entrou junto)'
 
 $script:events = @()
 function Reset-State {
@@ -350,7 +358,7 @@ try {
         $node -is [Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -eq '$cfg'
     }, $true)
     . ([scriptblock]::Create($assignment.Extent.Text))
-    Assert ($cfg.MultipleInstances -eq 'IgnoreNew' -and $cfg.RestartCount -eq 3 -and $cfg.RestartInterval.TotalMinutes -eq 1) 'Agendador perdeu protecao de instancia ou recuperacao'
+    Assert ($cfg.MultipleInstances -eq 'IgnoreNew' -and $cfg.RestartCount -eq 999 -and $cfg.RestartInterval.TotalMinutes -eq 1) 'Agendador perdeu protecao de instancia ou recuperacao'
     Assert ($cfg.Priority -eq 4) 'Tarefa voltou a prioridade padrao do Agendador (7, abaixo do normal)'
     # Tarefa do backend: na maquina migrada, o lancador e o padrao que acha o Python do pacote.
     $assignment = $ast.Find({ param($node)
@@ -364,11 +372,20 @@ try {
     $python = '"C:\Users\u\.hangar\versions\0.1.0.5\python\python.exe" -m app.main'
     Assert ($python -match $b.Padrao -and 'python.exe' -match $b.ExeProc) 'Pare-Servico nao acha o Python do pacote'
     Assert ('"C:\Users\u\.hangar\bin\hangar-launcher.exe" launch backend --log x' -match $b.Padrao -and 'hangar-launcher.exe' -match $b.ExeProc) 'Pare-Servico nao acha o lancador'
+    Assert (-not ('"D:\outra\hangar-launcher.exe" launch backend --log x' -match $b.Padrao)) 'Pare-Servico pegou o lancador de outra instalacao'
     Assert (-not ('C:\repo\backend\.venv\Scripts\python.exe -m app.atualizar' -match $b.Padrao)) 'Padrao do pacote pegou o checkout'
     $lancadorPacote = $null
     . ([scriptblock]::Create($assignment.Extent.Text))
     $b = $tarefas[0]
     Assert ($b.Padrao -eq [regex]::Escape('C:\repo\backend') -and $b.ExeProc -eq 'uv|python') 'Maquina nao migrada mudou de padrao'
+    # Decisao 7: checkout sem o app\main.py, a tarefa sobe o hangar-server pelo `launch backend`.
+    $servidorCheckout = 'C:\repo\crates\target\release\hangar-server.exe'
+    . ([scriptblock]::Create($assignment.Extent.Text))
+    $b = $tarefas[0]
+    Assert ($b.Exe -eq $servidorCheckout -and $b.Args -eq 'launch backend' -and $b.ExeProc -eq 'hangar-server') "Checkout sem Python fora do hangar-server: $($b.Exe) $($b.Args)"
+    Assert ('"C:\repo\crates\target\release\hangar-server.exe" launch backend --log x' -match $b.Padrao) 'Pare-Servico nao acha o hangar-server do checkout'
+    Assert (-not ('"D:\outra\crates\target\release\hangar-server.exe" launch backend --log x' -match $b.Padrao)) 'Pare-Servico pegou o hangar-server de outra worktree'
+    $servidorCheckout = $null
     $releaseFunction = $ast.Find({ param($node)
         $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Liberar-Instalacao'
     }, $true)

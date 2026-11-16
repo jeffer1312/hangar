@@ -517,7 +517,7 @@ mod tests {
 
     fn manifest(version: &str, channel: &str) -> Manifest {
         Manifest { version: version.into(), commit: "abc123".into(), channel: channel.into(), protocol: 89, api: 4, os: "linux-x86_64".into(),
-            dist_key: None, files: BTreeMap::new() }
+            dist_key: None, boot: None, files: BTreeMap::new() }
     }
 
     fn entry(version: &str, api: u32) -> PlatformEntry {

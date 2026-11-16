@@ -114,6 +114,7 @@ def test_pacote_tem_exatamente_os_arquivos_do_manifesto(tmp_path, monkeypatch, o
     assert manifest["version"] == version
     assert manifest["os"] == os_name
     assert manifest["channel"] == "latest"
+    assert manifest["boot"] == "direct"
     assert manifest["commit"] == _git("rev-parse", "HEAD")
     rust_protocol = re.search(r"^pub const INTERNAL_PROTOCOL: u32 = (\d+);",
                               (REPO / "crates/hangar-server/src/lib.rs").read_text(), re.M).group(1)

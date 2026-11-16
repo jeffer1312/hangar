@@ -22,6 +22,9 @@ pub struct Manifest {
     pub api: u32,
     pub os: String,
     pub dist_key: Option<String>,
+    /// `"direct"`: o lançador abre o `hangar-server` sem o Python. Ausente = versão que sobe pelo Python.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boot: Option<String>,
     /// Caminho relativo com `/` → sha256 em hexadecimal minúsculo.
     pub files: BTreeMap<String, String>,
 }

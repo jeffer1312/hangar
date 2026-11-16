@@ -25,7 +25,7 @@ fn package(channel: &str) -> Vec<u8> {
         ("docs/atualizacoes/2026-01-03-torto.md", broken), ("install.sh", "#!/bin/sh\n")];
     let manifest = Manifest {
         version: VERSION.into(), commit: "c0ffee".into(), channel: channel.into(), protocol: 7, api: 1,
-        os: hangar_server::update::platform(), dist_key: None,
+        os: hangar_server::update::platform(), dist_key: None, boot: None,
         files: files.iter().map(|(p, c)| (p.to_string(), sha(c.as_bytes()))).collect(),
     };
     let manifest = serde_json::to_vec(&manifest).unwrap();

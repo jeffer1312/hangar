@@ -57,10 +57,16 @@ case "${1:-}" in
   *) echo "uso: $0 [--restart|--status|--ativo|--uninstall]" >&2; exit 2 ;;
 esac
 
-# O Python do venv direto, sem `uv run` no meio: o sinal de parar do launchd chega ao próprio
-# backend, que encerra o hangar-server filho. Com o uv no meio, matar o uv deixava o backend órfão.
-PY_BIN="$REPO/backend/.venv/bin/python"
-[ -x "$PY_BIN" ] || { echo "venv do backend não encontrado — rode: cd backend && uv sync" >&2; exit 1; }
+xml() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
+# Checkout sem o app/main.py: o hangar-server sobe sozinho, com a mesma escolha de binário do CLI.
+PROGRAMA="<string>$(xml "$REPO/scripts/hangar-server-command")</string>"
+if [ -f "$REPO/backend/app/main.py" ]; then
+  # O Python do venv direto, sem `uv run` no meio: o sinal de parar do launchd chega ao próprio
+  # backend, que encerra o hangar-server filho. Com o uv no meio, matar o uv deixava o backend órfão.
+  PY_BIN="$REPO/backend/.venv/bin/python"
+  [ -x "$PY_BIN" ] || { echo "venv do backend não encontrado — rode: cd backend && uv sync" >&2; exit 1; }
+  PROGRAMA="<string>$(xml "$PY_BIN")</string><string>-m</string><string>app.main</string>"
+fi
 # O agente nasce sem o PATH do shell: o backend abre `claude`, `tmux`, `node` e `tailscale`.
 PATH_SERVICO="$HOME/.local/bin"
 if command -v node >/dev/null; then PATH_SERVICO="$PATH_SERVICO:$(dirname "$(command -v node)")"; fi
@@ -68,7 +74,6 @@ PATH_SERVICO="$PATH_SERVICO:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/
 # Sem locale o tmux e o Claude desenham acento e símbolo como `_`.
 LOCALE="${LC_ALL:-${LANG:-en_US.UTF-8}}"
 
-xml() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
 
 plist() {
   cat <<EOF
@@ -79,7 +84,7 @@ plist() {
   <key>Label</key><string>$LABEL</string>
   <key>ProgramArguments</key>
   <array>
-    <string>$(xml "$PY_BIN")</string><string>-m</string><string>app.main</string>
+    $PROGRAMA
   </array>
   <key>WorkingDirectory</key><string>$(xml "$REPO/backend")</string>
   <key>EnvironmentVariables</key>

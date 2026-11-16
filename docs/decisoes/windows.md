@@ -94,12 +94,15 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   máquina migrada, porta do front com o `hangar-server` é tela servida, nunca conflito:
   `hangar-frontend` sai sem subir. A migração e o `atualizar.py` seguem com o início direto. Medição em
   [Reinício sem início e porta do front](#reinício-sem-início-e-porta-do-front-05112026).
-- **O backend abre o próprio log (`python -m app.main --log <arquivo>`), nunca pelo `>` do cmd.**
+- **O lançador abre o log do backend (`launch backend --log <arquivo>`), nunca pelo `>` do cmd.**
   O `>` abre sem escrita compartilhada, e qualquer neto que sobreviva ao backend com a cópia
   herdada (jest, `kubectl port-forward`, navegador de teste de uma sessão) fazia a subida seguinte
-  da tarefa morrer antes do Python, sem uma linha no log. O `open` do Python compartilha escrita;
-  preso mesmo assim, o log vai para `hangar-backend.N.log` e o backend sobe. O front segue no
-  `cmd`. Evidência em [Log do backend preso por neto](#log-do-backend-preso-por-neto-20102026).
+  da tarefa morrer antes do servidor, sem uma linha no log. O lançador roda o log da subida
+  anterior para `hangar-backend.1.log` (até `.5`, a saída de uma queda fica para ler), abre o novo
+  em acréscimo com escrita compartilhada e o entrega como saída do `hangar-server`; preso mesmo
+  assim, a saída vai para o primeiro `.N` que abrir. As linhas do lançador saem pelo mesmo handle,
+  só antes de abrir o servidor e depois que ele sai. Versão que ainda sobe pelo Python abre o log
+  no `app.main --log`, como antes. O front segue no `cmd`. Evidência em [Log do backend preso por neto](#log-do-backend-preso-por-neto-20102026).
 - **Tarefa do backend/front nasce com `-Priority 4` (normal).** O padrão do Agendador é 7
   (abaixo do normal) e passa para os filhos: backend e sessões perdiam a CPU para qualquer
   programa, passavam dos 3 s da vigia e eram derrubados.

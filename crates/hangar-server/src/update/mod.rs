@@ -519,8 +519,6 @@ pub fn prune(layout: &Layout, previous: Option<&Path>, in_use: &dyn InUse) -> Pr
 pub enum Reading {
     /// Ninguém respondeu.
     Down(String),
-    /// Respondeu, mas não é o Rust (o Python sozinho na porta).
-    NotRust(String),
     /// O `hangar-server` respondeu, com o contrato e o pid dele.
     Rust { protocol: u32, pid: Option<u32>, commit: Option<String> },
 }
@@ -564,8 +562,7 @@ impl UiFetcher for ReleaseUi {
     }
 }
 
-/// A prova de vida real: `GET <base>/__hangar_server/health`, que só o Rust atende (no modo
-/// `python` a porta é do Python, que responde 404 ali).
+/// A prova de vida real: `GET <base>/__hangar_server/health`, que só o `hangar-server` atende.
 pub struct HttpHealth {
     pub client: reqwest::Client,
     pub url: String,
@@ -590,7 +587,8 @@ impl HealthProbe for HttpHealth {
         match body["protocol"].as_u64().and_then(|p| u32::try_from(p).ok()) {
             Some(protocol) if status.is_success() => Reading::Rust { protocol, pid: body["pid"].as_u64().and_then(|p| u32::try_from(p).ok()),
                 commit: body["package_commit"].as_str().map(str::to_owned) },
-            _ => Reading::NotRust(format!("{status} em {}", self.url)),
+            // Outro programa na porta: para a prova de vida, o servidor não respondeu.
+            _ => Reading::Down(format!("{status} em {} sem o hangar-server", self.url)),
         }
     }
 }
@@ -681,7 +679,6 @@ async fn wait_version<H: HealthProbe>(health: &H, manifest: &Manifest, before: O
             Reading::Rust { commit: Some(c), .. } if c != commit => format!("o servidor de pé é do commit {c}, e {what} é {commit}"),
             Reading::Rust { pid: Some(pid), .. } if Some(pid) == before => format!("o processo na porta é o mesmo de antes (pid {pid})"),
             Reading::Rust { .. } => return Ok(()),
-            Reading::NotRust(d) => format!("só o Python respondeu ({d}); o servidor não está no modo rust"),
             Reading::Down(d) => format!("o servidor não respondeu ({d})"),
         };
         if Instant::now() >= deadline { return Err(format!("o servidor não voltou depois de reiniciar: {why}")); }
@@ -697,7 +694,6 @@ pub(crate) async fn wait_new<H: HealthProbe>(health: &H, before: Option<u32>, se
         let why = match health.read().await {
             Reading::Rust { pid: Some(pid), .. } if Some(pid) == before => format!("o processo na porta é o mesmo de antes (pid {pid})"),
             Reading::Rust { .. } => return Ok(()),
-            Reading::NotRust(d) => format!("só o Python respondeu ({d}); o servidor não está no modo rust"),
             Reading::Down(d) => format!("o servidor não respondeu ({d})"),
         };
         if Instant::now() >= deadline { return Err(format!("o servidor não voltou depois de reiniciar: {why}")); }
@@ -1002,8 +998,6 @@ pub async fn run<R: Restarter, H: HealthProbe>(job: &Job<'_>, steps: std::sync::
                         (new_commit && commit.as_deref() == Some(manifest.commit.as_str())) || (pid_before.is_some() && pid != pid_before),
                     // Saúde fora com o processo de antes vivo é tropeço da leitura, não reinício.
                     Reading::Down(_) => pid_before.is_some_and(|pid| !pid_alive(pid)),
-                    // O Python só fica sozinho na porta depois que o Rust de antes caiu.
-                    Reading::NotRust(_) => pid_before.is_some(),
                 };
                 if restarted && !restarter.manual() {
                     let applied_now: Vec<String> = self::steps::applied(job.state_dir).unwrap_or_default().difference(&applied_before).cloned().collect();
@@ -1017,6 +1011,15 @@ pub async fn run<R: Restarter, H: HealthProbe>(job: &Job<'_>, steps: std::sync::
             }
         }
     };
+
+    // O lançador estável é cópia do `hangar-server`: renovado a cada versão, ele sabe subir a nova.
+    // Falha é aviso: o de antes ainda sobe a versão anterior, e a prova devolve o `current` se a nova não subir.
+    {
+        let (home, source) = (job.home.to_path_buf(), dir.clone());
+        if let Err(e) = blocking(move || migrate::refresh_launcher(&home, &source, cfg!(windows)).map_err(UpdateError::Io)).await {
+            state.warn(&format!("o lançador do serviço não foi renovado: {e}"));
+        }
+    }
 
     // Na mão não há reinício nem prova: o servidor de antes segue no ar até alguém reiniciá-lo.
     if restarter.manual() {
