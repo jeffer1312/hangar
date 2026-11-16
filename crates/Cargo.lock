@@ -1858,7 +1858,9 @@ dependencies = [
 name = "hangar-notice-actions"
 version = "0.1.0"
 dependencies = [
+ "hangar-core",
  "hangar-plugins",
+ "serde",
  "serde_json",
 ]
 

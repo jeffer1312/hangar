@@ -437,6 +437,7 @@ pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest:
     let _dream_clock = crate::AbortOnDrop(crate::dream::spawn(state.clone()));
     let _group_sweep = crate::groups::sweep::spawn(state.clone()).map(crate::AbortOnDrop);
     let _link_return = crate::groups::link_return::spawn(state.clone()).map(crate::AbortOnDrop);
+    let _notice_fixes = crate::AbortOnDrop(crate::notice_actions::spawn(state.clone()));
     let _session_sleep = crate::AbortOnDrop(crate::session_sleep::spawn(state.clone()));
     let _federation = crate::groups::federation::spawn(state.clone()).map(crate::AbortOnDrop);
     // O aviso no celular é decidido aqui, com ou sem lista aberta.
@@ -743,6 +744,8 @@ where H: axum::handler::Handler<T, Arc<AppState>>, T: 'static {
         .route("/api/sessions/{name}/resume", axum::routing::post(crate::session_write::resume::route).fallback(fallback.clone()))
         .route("/api/sessions/{name}/modo-execucao", axum::routing::post(crate::session_write::relaunch::mode).fallback(fallback.clone()))
         .route("/api/sessions/{name}/recarregar", axum::routing::post(crate::session_write::relaunch::reload).fallback(fallback.clone()))
+        .route("/api/sessions/{name}/notice/fix/preview", axum::routing::post(crate::notice_actions::preview))
+        .route("/api/sessions/{name}/notice/fix", axum::routing::post(crate::notice_actions::start))
         .route("/api/sessions/{name}/conta", get(crate::session_write::account::targets_route).fallback(fallback.clone()))
         .route("/api/sessions/{name}/conta", axum::routing::post(crate::session_write::account::switch_route))
         .route("/api/sessions/{name}/btw", axum::routing::post(crate::session_write::btw::ask).get(crate::session_write::btw::list).fallback(fallback.clone()))

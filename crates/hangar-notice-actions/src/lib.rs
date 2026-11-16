@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value};
 
+pub mod fixes;
+
 pub const ACTION_REINSTALL: &str = "reinstall_plugin";
 pub const ACTION_FIX: &str = "fix_hook";
 const RESULT_PREFIX: &str = "RESULTADO:";

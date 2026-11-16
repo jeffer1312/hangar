@@ -353,6 +353,11 @@ impl OpenHost for ServerHost {
 
 pub enum Decision { Opened(super::open::Opened), Refused(OpenError), NotOurs }
 
+/// Abertura pedida pelo próprio servidor, como dono (a sessão de conserto de um aviso).
+pub(crate) async fn open_owned(st: &Arc<AppState>, request: SessionOpenRequest) -> Decision {
+    decide_detached(st, request, OpenCaller::Owner, None, None).await
+}
+
 /// `decide` numa tarefa própria: cliente que desconecta no meio não interrompe a criação (a worktree
 /// criada sem o pane ficaria para trás) nem o registro do convidado (`claim`), como o
 /// `complete_on_cancel` do Python.
