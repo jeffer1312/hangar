@@ -1776,9 +1776,9 @@ async fn layout_wait_only_overwrites_live_dimensions_after_confirmed_size() {
 }
 
 #[tokio::test]
-async fn plain_http_get_and_head_keep_the_previous_forwarding_without_discovery() {
+async fn plain_http_get_and_head_are_the_path_without_handler_without_discovery() {
     if support::isolated(
-        "remote_browser::transport::plain_http_get_and_head_keep_the_previous_forwarding_without_discovery",
+        "remote_browser::transport::plain_http_get_and_head_are_the_path_without_handler_without_discovery",
         |root| assert!(!root.join("git.calls").exists()),
     ).await {
         return;
@@ -1791,19 +1791,20 @@ async fn plain_http_get_and_head_keep_the_previous_forwarding_without_discovery(
     std::fs::write(&program, format!("#!/bin/sh\n: > '{}'\nexit 2\n", probe.display())).unwrap();
     let client = reqwest::Client::builder().no_proxy().build().unwrap();
     let path = format!("/api/sessions/headless/nav-remoto?token={OWNER}&w=390");
+    // Decisão 19: o Python, que recebia o HTTP comum, não tinha a rota e dava o 404 do FastAPI.
     for method in [axum::http::Method::GET, axum::http::Method::HEAD] {
         let response = client.request(method.clone(), format!("http://{}{path}", scene.owner.address))
             .send().await.unwrap();
-        assert_eq!(response.status(), 503, "o status deve vir do upstream anterior");
+        assert_eq!(response.status(), 404, "{method}");
         let body = response.bytes().await.unwrap();
         if method == axum::http::Method::GET {
-            assert_eq!(body.as_ref(), b"remote_browser_test_upstream_refused");
+            assert_eq!(body.as_ref(), br#"{"detail":"Not Found"}"#);
         } else {
             assert!(body.is_empty());
         }
     }
     assert!(!probe.exists(), "HTTP comum entrou na descoberta do navegador");
-    assert_eq!(scene.upstream.paths(), vec![path.clone(), path]);
+    assert!(scene.upstream.paths().is_empty(), "{:?}", scene.upstream.paths());
     std::fs::write(program, original).unwrap();
     scene.close().await;
 }

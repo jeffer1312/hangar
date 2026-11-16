@@ -5,8 +5,10 @@ use serde_json::json;
 
 #[tokio::test]
 async fn history_projection_error_not_304() {
-    // Sem descoberta (a do `AppState::new` está indisponível): 503, nunca 304.
-    let server = spawn_server(config("127.0.0.1")).await;
+    // Descoberta que falha (o papel do `/info` do Python que respondia 503): 503, nunca 304.
+    let mut state = hangar_server::routes::AppState::new(config("127.0.0.1"));
+    state.side.locate = std::sync::Arc::new(hangar_server::locate::Unavailable);
+    let server = spawn_state(state).await;
     let response = client().get(format!("http://{server}/api/sessions/s/history?token={OWNER}"))
         .header("if-none-match", "old").send().await.unwrap();
     assert_eq!(response.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);

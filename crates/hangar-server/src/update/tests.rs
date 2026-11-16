@@ -517,7 +517,7 @@ fn update_running_package_comes_from_the_root_above_the_binary() {
 }
 
 #[tokio::test]
-async fn update_python_only_health_is_a_failure() {
+async fn update_health_404_after_restart_is_a_failure() {
     let fake = FakeRelease::new().await;
     let machine = Machine::new();
     let old = machine.current();
@@ -534,7 +534,7 @@ async fn update_python_only_health_is_a_failure() {
 
     let Outcome::Failed { voltou, erro, .. } = outcome else { panic!("{outcome:?}") };
     assert!(voltou, "{erro}");
-    assert!(erro.contains("rust"), "{erro}");
+    assert!(erro.contains("404 em /__hangar_server/health"), "{erro}");
     assert_eq!(machine.current(), old);
 }
 

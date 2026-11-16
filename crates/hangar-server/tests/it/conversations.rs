@@ -452,8 +452,10 @@ async fn route_failure_is_sent_to_diary() {
     fake.fail_info(axum::http::StatusCode::INTERNAL_SERVER_ERROR);
     client().get(format!("http://{srv}/api/sessions/diario-h/history")).bearer_auth(OWNER).send().await.unwrap();
     drop(open_events(srv, "diario-e", "", &[]).await);
-    wait_until(|| fake.diag().len() == 2).await;
-    let mut got = fake.diag();
+    // Decisão 18: cada 503 ganha também a linha geral `api.servidor`, além da falha da rota.
+    let lines = |access: bool| fake.diag().into_iter().filter(|v| (v["evento"] == "api.servidor") == access).collect::<Vec<_>>();
+    wait_until(|| lines(false).len() == 2 && lines(true).len() == 2).await;
+    let mut got = lines(false);
     got.sort_by_key(|v| v["evento"].as_str().unwrap().to_owned());
     assert_eq!(got[0]["evento"], "rust.events_failed");
     assert_eq!(got[0]["sessao"], "diario-e");
@@ -461,4 +463,10 @@ async fn route_failure_is_sent_to_diary() {
     assert_eq!(got[1]["evento"], "rust.history_failed");
     assert_eq!(got[1]["sessao"], "diario-h");
     assert_eq!(got[1]["codigo"], "internal_info");
+    let mut access = lines(true);
+    access.sort_by_key(|v| v["detalhe"].as_str().unwrap().to_owned());
+    for (line, route) in access.iter().zip(["GET /api/sessions/*/events", "GET /api/sessions/*/history"]) {
+        assert_eq!((&line["codigo"], &line["detalhe"], &line["causa"]), (&serde_json::json!("503"), &serde_json::json!(route), &serde_json::json!("internal_info")));
+        assert!(!line.to_string().contains("diario-"), "nome de sessão no diário: {line}");
+    }
 }

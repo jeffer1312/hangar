@@ -685,18 +685,19 @@ async fn unwritable_index_fails_with_code_instead_of_using_memory() {
 }
 
 #[tokio::test]
-async fn cotacao_get_only_returns_fx_and_post_is_forwarded() {
+async fn cotacao_get_only_returns_fx_and_other_methods_are_not_found() {
     let h = Harness::new(true, false).await;
     let response = h.request(reqwest::Method::GET, "/api/cotacao").send().await.unwrap();
     assert_eq!(response.status(), 200);
     assert_eq!(serde_json::from_slice::<Value>(&response.bytes().await.unwrap()).unwrap(), json!({"usd_brl":5.25}));
     assert_eq!(h.upstream.scope_reads.load(Ordering::SeqCst), 0);
+    // Decisão 19: o Python, que recebia os outros métodos, não tinha `/api/cotacao` e dava o 404 do FastAPI.
     let response = h.request(reqwest::Method::POST, "/api/cotacao").send().await.unwrap();
-    assert_eq!(response.status(), 200);
-    assert!(h.forwarded("POST", "/api/cotacao"));
+    assert_eq!(response.status(), 404);
+    assert_eq!(serde_json::from_slice::<Value>(&response.bytes().await.unwrap()).unwrap(), json!({"detail":"Not Found"}));
     let response = h.request(reqwest::Method::HEAD, "/api/cotacao").send().await.unwrap();
-    assert_eq!(response.status(), 200);
-    assert!(h.forwarded("HEAD", "/api/cotacao"));
+    assert_eq!(response.status(), 404);
+    assert!(response.bytes().await.unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -985,12 +986,12 @@ async fn session_cost_owner_gate_methods_and_query_token_preserve_contract() {
         assert_eq!(body["detail"]["code"], "erro_nao_autorizado");
     }
     assert!(!h.forwarded("GET", "/internal/sessions/session/info"));
+    // Decisão 19: o Python, que recebia os outros métodos, não tinha a rota e dava o 404 do FastAPI.
     for method in [reqwest::Method::POST, reqwest::Method::HEAD, reqwest::Method::OPTIONS] {
         let response = h.request(method.clone(), "/api/sessions/session/cost").send().await.unwrap();
-        assert_eq!(response.status(), 200);
+        assert_eq!(response.status(), 404, "{method}");
         if method == reqwest::Method::HEAD { assert_eq!(response.bytes().await.unwrap().len(), 0); }
-        else { assert_eq!(serde_json::from_slice::<Value>(&response.bytes().await.unwrap()).unwrap(), json!({"from_python":true})); }
-        assert!(h.forwarded(method.as_str(), "/api/sessions/session/cost"));
+        else { assert_eq!(serde_json::from_slice::<Value>(&response.bytes().await.unwrap()).unwrap(), json!({"detail":"Not Found"})); }
     }
     assert!(!h.forwarded("GET", "/internal/sessions/session/info"));
     let response = hangar_server::http_client().build().unwrap().get(format!("http://{}/api/sessions/session/cost?token={OWNER}", h.address)).send().await.unwrap();

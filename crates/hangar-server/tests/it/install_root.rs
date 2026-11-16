@@ -44,6 +44,8 @@ fn launch_backend_runs_the_real_version_python() {
     let real = home.join(".hangar/versions/0.1.0.8207");
     std::fs::create_dir_all(real.join("python/bin")).unwrap();
     std::fs::create_dir_all(real.join("backend")).unwrap();
+    // Decisões 1 e 35: versão do pacote sem `boot: direct` sobe pelo Python; sem manifesto seria checkout.
+    std::fs::write(real.join("manifest.json"), r#"{"version":"0.1.0.8207"}"#).unwrap();
     crate::write_executable(&real.join("python/bin/python3"),
         "#!/bin/sh\nprintf '%s\\n' \"$*\" \"$(pwd -P)\" \"$PYTHONPYCACHEPREFIX\" > \"$HOME/record\"\nexit 7\n");
     link_current(&real, &home);
@@ -66,6 +68,7 @@ fn launch_without_the_version_python_refuses() {
     let home = dir.path();
     let real = home.join(".hangar").join("versions").join("v1");
     std::fs::create_dir_all(real.join("backend")).unwrap();
+    std::fs::write(real.join("manifest.json"), r#"{"version":"v1"}"#).unwrap();
     link_current(&real, home);
     let out = launch(home, &["backend"]);
     assert_eq!(out.status.code(), Some(3));

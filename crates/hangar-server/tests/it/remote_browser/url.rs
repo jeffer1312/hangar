@@ -77,17 +77,21 @@ fn owner_headers() -> HeaderMap {
 }
 
 #[tokio::test]
-async fn head_keeps_the_method_refusal() {
-    if support::isolated("remote_browser::url::head_keeps_the_method_refusal", |root| {
+async fn head_is_the_path_without_handler() {
+    if support::isolated("remote_browser::url::head_is_the_path_without_handler", |root| {
         assert!(!root.join("git.calls").exists());
     }).await { return; }
     let scene = Scene::new().await;
     std::fs::write(scene.nav_dir().join("native.json"),json!({"chave":"session","url":"https://example.invalid/"}).to_string()).unwrap();
     let before = snapshot(&scene.nav_dir());
-    let want = json!({"status": 405, "body": "", "headers": {"allow": "GET", "content-type": "application/json", "content-length": "31"}});
+    // Decisão 19: o Python, que recebia o HEAD, não tinha a rota; sem ele o dono leva o 404 e o
+    // estranho a recusa contada.
+    let refused = json!({"status": 401, "body": "", "headers": {"content-type": "application/json", "content-length": "74"}});
+    let missing = json!({"status": 404, "body": "", "headers": {"content-type": "application/json", "content-length": "22"}});
     let client = reqwest::Client::new();
     let mut differences = Vec::new();
     for token in [None,Some(OWNER)] {
+        let want = if token.is_some() { &missing } else { &refused };
         let request = client.head(format!("http://{}/api/sessions/session/navegador",scene.owner.address));
         let response = if let Some(token) = token { request.bearer_auth(token) } else { request }.send().await.unwrap();
         let status = response.status().as_u16();
@@ -101,11 +105,14 @@ async fn head_keeps_the_method_refusal() {
                 differences.push(format!("HEAD com credencial={}: header {key}: {:?} != {value}",token.is_some(),headers.get(key)));
             }
         }
+        if headers.contains_key("allow") {
+            differences.push(format!("HEAD com credencial={}: allow inesperado",token.is_some()));
+        }
     }
     assert_eq!(snapshot(&scene.nav_dir()),before);
-    let paths: Vec<_> = scene.upstream.paths().into_iter().filter(|path|path.ends_with("/navegador")).collect();
-    if paths != ["/api/sessions/session/navegador","/api/sessions/session/navegador"] {
-        differences.push(format!("HEAD não seguiu ao encaminhamento existente: {paths:?}"));
+    let paths = scene.upstream.paths();
+    if !paths.is_empty() {
+        differences.push(format!("HEAD saiu do Rust: {paths:?}"));
     }
     scene.close().await;
     assert!(differences.is_empty(),"{}",differences.join("\n"));
