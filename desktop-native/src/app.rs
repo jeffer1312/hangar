@@ -1576,6 +1576,8 @@ impl Hangar {
         self.mention.close();
         self.active_token.clear();
         self.connection += 1;
+        // A resposta em voo da conexão anterior é descartada: com o `/` aberto, a próxima pintura busca de novo.
+        self.new_chat_commands_seen = None;
         self.files_connection_dropped(cx);
         self.selection += 1;
         self.revision += 1;
