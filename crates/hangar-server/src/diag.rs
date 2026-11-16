@@ -55,7 +55,7 @@ async fn reply(st: &AppState, peer: SocketAddr, req: Request) -> Response {
     }
     let base = diary_base(st);
     if req.method() == Method::POST {
-        return record(base, req).await;
+        return record_screen_events(base, req).await;
     }
     // O pedido não atravessa a espera: `&Request` tiraria o `Send` do handler.
     let (headers, query) = (req.headers().clone(), req.uri().query().map(str::to_owned));
@@ -76,7 +76,7 @@ fn diary_base(st: &AppState) -> Option<PathBuf> {
     Some(base.join("diario"))
 }
 
-async fn record(base: Option<PathBuf>, req: Request) -> Response {
+async fn record_screen_events(base: Option<PathBuf>, req: Request) -> Response {
     let body = match hangar_core::http_body_limit::read(req.into_body()).await {
         Ok(body) => body,
         Err(error) if hangar_core::http_body_limit::is_limit(&error) => return hangar_core::http_body_limit::rejected(),
