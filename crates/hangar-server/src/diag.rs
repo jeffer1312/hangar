@@ -316,6 +316,40 @@ fn platform() -> (String, String) {
     (format!("Windows {release} {build}"), std::env::var("PROCESSOR_ARCHITECTURE").unwrap_or_default())
 }
 
+/// Subida sem o Python: a queda da vida anterior (marca de pé que ficou) e o `backend.inicio`, os
+/// nomes que o relatório já colhe. Bloqueante; roda antes do log desta vida.
+pub fn record_boot(hangar_dir: &std::path::Path, log: Option<&std::path::Path>) {
+    let pid = std::process::id();
+    let mut lines = Vec::new();
+    match hangar_boot::life::begin(hangar_dir, pid, &iso(chrono::Local::now())) {
+        Ok(begin) => {
+            if begin.reset {
+                lines.push(json!({"evento": "hangar_server.vida_ilegivel", "nivel": "aviso", "codigo": "server_life_reset"}));
+            }
+            if begin.unclean {
+                let saida = log.map(|log| hangar_boot::life::last_errors(log, 3)).unwrap_or_default();
+                lines.push(json!({"evento": "hangar_server.caiu", "nivel": "aviso", "saidas_nao_limpas": begin.unclean_exits, "saida": saida}));
+            }
+        }
+        Err(error) => lines.push(json!({"evento": "hangar_server.vida_ilegivel", "nivel": "aviso",
+            "codigo": "server_life_unwritable", "tipo": format!("{:?}", error.kind())})),
+    }
+    let mut start = json!({"evento": "backend.inicio", "nivel": "ok", "pid": pid});
+    if let (Some(start), Value::Object(found)) = (start.as_object_mut(), resources()) { start.extend(found); }
+    lines.push(start);
+    record_blocking(diary_dir().as_deref(), &lines, "subida");
+}
+
+/// Parada ordenada: a marca de pé sai, e a próxima subida não conta queda.
+pub fn record_stop(hangar_dir: &std::path::Path, cause: &str) {
+    let mut line = json!({"evento": "backend.encerrando", "nivel": "ok", "causa": cause});
+    if let Err(error) = hangar_boot::life::end(hangar_dir) {
+        line["codigo"] = json!("server_life_unwritable");
+        line["tipo"] = json!(format!("{:?}", error.kind()));
+    }
+    record_blocking(diary_dir().as_deref(), &[line], "parada");
+}
+
 /// Foto barata no download; não espera amostra de CPU.
 fn resources() -> Value {
     let mut out = serde_json::Map::new();

@@ -144,6 +144,51 @@ pub async fn parent_gone<R: tokio::io::AsyncRead + Unpin>(mut pipe: R) {
     }
 }
 
+/// O que pede a parada ordenada: sinal do sistema (systemd, Ctrl+C, fechamento no Windows) e, com o
+/// Python na frente, o cano do stdin fechado. Sem o Python o stdin não diz nada: sob o systemd é
+/// `/dev/null` e acabaria na hora.
+pub async fn stop_requested(python_parent: bool) -> &'static str {
+    let stdin = async {
+        if python_parent { parent_gone(tokio::io::stdin()).await } else { std::future::pending::<()>().await }
+    };
+    tokio::select! {
+        () = stdin => "stdin",
+        cause = shutdown_signal() => cause,
+    }
+}
+
+#[cfg(unix)]
+async fn shutdown_signal() -> &'static str {
+    use tokio::signal::unix::{signal, SignalKind};
+    match (signal(SignalKind::terminate()), signal(SignalKind::interrupt())) {
+        (Ok(mut term), Ok(mut interrupt)) => tokio::select! {
+            _ = term.recv() => "SIGTERM",
+            _ = interrupt.recv() => "SIGINT",
+        },
+        _ => {
+            tracing::error!(code = "stop_signal_unavailable", "sem os sinais de parada: só o stdin ou o kill encerram o servidor");
+            std::future::pending().await
+        }
+    }
+}
+
+#[cfg(windows)]
+async fn shutdown_signal() -> &'static str {
+    use tokio::signal::windows::{ctrl_break, ctrl_c, ctrl_close, ctrl_shutdown};
+    match (ctrl_c(), ctrl_break(), ctrl_close(), ctrl_shutdown()) {
+        (Ok(mut c), Ok(mut brk), Ok(mut close), Ok(mut shutdown)) => tokio::select! {
+            _ = c.recv() => "ctrl_c",
+            _ = brk.recv() => "ctrl_break",
+            _ = close.recv() => "ctrl_close",
+            _ = shutdown.recv() => "ctrl_shutdown",
+        },
+        _ => {
+            tracing::error!(code = "stop_signal_unavailable", "sem os eventos de parada do console: só o stdin ou o kill encerram o servidor");
+            std::future::pending().await
+        }
+    }
+}
+
 /// `routes::serve` até `stop` terminar. Sem esperar as conexões abertas: SSE nunca fecha sozinho.
 /// `Ok(())` só quando parou por `stop`.
 pub async fn serve_until(
@@ -244,7 +289,8 @@ pub async fn serve_until_with_guest(
             tracing::warn!(code = "claude_login_recovery_failed", reason = error.code, "catálogo de contas ilegível na subida");
         }
         *refresh_loop.lock().unwrap() = Some(accounts::claude_refresh::start(accounts, registry.clone()));
-        let _watchdog = std::env::home_dir().map(|home| AbortOnDrop(tokio::spawn(
+        // Só com o Python atrás: sem ele não há quem pingar, e o systemd vigia pelo `WatchdogSec`.
+        let _watchdog = std::env::home_dir().filter(|_| hangar_boot::python_parent()).map(|home| AbortOnDrop(tokio::spawn(
             watchdog::run(http.clone(), runtime_cfg.upstream, runtime_cfg.internal_secret.clone(), home))));
 
         if !readiness.prepares() {

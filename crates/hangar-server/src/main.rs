@@ -89,8 +89,43 @@ fn main() -> std::process::ExitCode {
     }
     // O glibc exige a configuração antes de o runtime criar threads.
     unsafe { hangar_server::tune_allocator(); }
-    run();
+    let python_parent = hangar_boot::python_parent();
+    // Ainda sem threads: mexer no ambiente aqui é seguro, e as sessões não herdam o canal do systemd.
+    let notifier = hangar_boot::notify::Notifier::from_lookup(|key| std::env::var(key).ok(), std::process::id());
+    for key in ["NOTIFY_SOCKET", "WATCHDOG_USEC", "WATCHDOG_PID"] { unsafe { std::env::remove_var(key) } }
+    if args.is_empty() && !python_parent && let Err(code) = standalone() {
+        return code;
+    }
+    run(python_parent, notifier);
     std::process::ExitCode::SUCCESS
+}
+
+/// Sem o Python na frente o servidor monta o ambiente que ele montava: `.env` + processo, instância e
+/// segredo novos, porta do convidado e log. O resto do servidor lê o ambiente como sempre.
+fn standalone() -> Result<(), std::process::ExitCode> {
+    let refuse = |code: &'static str, exit: u8, message: String| {
+        eprintln!("hangar-server: {message}");
+        hangar_server::diag::record_blocking(hangar_server::diag::diary_dir().as_deref(),
+            &[serde_json::json!({"evento": "hangar_server.partida", "nivel": "erro", "codigo": code})], "subida");
+        std::process::ExitCode::from(exit)
+    };
+    let home = hangar_server::accounts::environment::AccountEnvironment::capture().home;
+    let backend = std::env::current_dir().ok().filter(|dir| hangar_server::session_open::cli::is_backend(dir))
+        .or_else(hangar_server::session_open::cli::backend_dir);
+    let env_file = hangar_core::user_data::read_env_raw(&home, backend.as_deref())
+        .map_err(|e| refuse("env_unreadable", 2, format!(".env ilegível: {e}")))?;
+    let environ: Vec<(String, String)> = std::env::vars_os()
+        .filter_map(|(key, value)| Some((key.into_string().ok()?, value.into_string().ok()?))).collect();
+    let settings = hangar_boot::settings::Settings::resolve(env_file.as_deref(), &environ)
+        .map_err(|e| refuse("config_invalid", 2, format!("configuração inválida: {e}")))?;
+    let claude = std::env::var_os("CLAUDE_CONFIG_DIR").map(std::path::PathBuf::from);
+    let log_base = hangar_core::paths::log_base();
+    let places = hangar_boot::settings::Places { home: &home, claude_config: claude.as_deref(), log_base: log_base.as_deref() };
+    let boot = hangar_boot::settings::standalone_env(&settings, &places, |key| std::env::var_os(key).is_some())
+        .map_err(|message| refuse("startup_refused", 1, message))?;
+    if let Some(warning) = boot.warning { println!("{warning}"); }
+    for (key, value) in boot.vars { unsafe { std::env::set_var(key, value) } }
+    Ok(())
 }
 
 /// No Windows `0.0.0.0` não impede outro programa de abrir a mesma porta em `[::]` dual-stack (Node,
@@ -128,7 +163,7 @@ mod tests {
 }
 
 #[tokio::main]
-async fn run() {
+async fn run(python_parent: bool, notifier: hangar_boot::notify::Notifier) {
     let args:Vec<_>=std::env::args_os().collect();
     match hangar_server::runtime::claude_relaunch::helper_args(&args) {
         // Só o `kind`: a mensagem pode trazer caminho ou ambiente do relançamento.
@@ -153,6 +188,9 @@ async fn run() {
             std::process::exit(2);
         }
     };
+    // Antes do log desta vida: a queda da anterior sai das últimas linhas dele.
+    let hangar_dir = hangar_server::accounts::environment::AccountEnvironment::capture().home.join(".hangar");
+    if !python_parent { hangar_server::diag::record_boot(&hangar_dir, cfg.log_path.as_deref()); }
     hangar_server::init_log(cfg.log_path.as_deref());
     hangar_server::install_panic_hook();
     // A atualização apenas agenda: a poda precisa do binário novo, depois do download.
@@ -204,9 +242,18 @@ async fn run() {
             std::process::exit(1);
         }
     };
-    tracing::info!(listen = %cfg.listen, upstream = %cfg.upstream, version = env!("CARGO_PKG_VERSION"), "hangar-server de pé");
-    // O Python segura o cano do stdin; fechou = pai morreu. Vale igual em Linux, Windows e macOS.
-    let stop = hangar_server::parent_gone(tokio::io::stdin());
+    tracing::info!(listen = %cfg.listen, upstream = %cfg.upstream, python_parent, version = env!("CARGO_PKG_VERSION"), "hangar-server de pé");
+    let stopped = std::sync::Arc::new(std::sync::OnceLock::new());
+    let stop = { let stopped = stopped.clone(); async move {
+        let cause = hangar_server::stop_requested(python_parent).await;
+        let _ = stopped.set(cause);
+    } };
+    if let Err(error) = notifier.send("READY=1") {
+        tracing::warn!(code = "systemd_notify_failed", kind = ?error.kind(), "aviso de pronto ao systemd não saiu");
+    }
+    if let Some(every) = notifier.watchdog {
+        tokio::spawn(hangar_server::watchdog::notify_alive(notifier.clone(), cfg.listen, every));
+    }
     #[allow(unused_mut)]
     let home = hangar_server::accounts::environment::AccountEnvironment::capture().home;
     let server_id = match hangar_server::machine_peers::startup_identity(&home, hangar_server::session_open::cli::backend_dir().as_deref()) {
@@ -257,11 +304,14 @@ async fn run() {
     tokio::spawn(async move { resuming.resume().await });
     // A porta do convidado não entra no bind fatal acima: o filho anterior pode ainda segurá-la.
     let served = hangar_server::serve_until_with_guest(listener, state, guest.listen, stop).await;
+    let _ = notifier.send("STOPPING=1");
     connect.stop().await;
     prewarm.discard_all("saida_do_servidor").await;
     match served {
         Ok(()) => {
-            tracing::info!("stdin fechou: o backend saiu, hangar-server sai junto");
+            let cause = stopped.get().copied().unwrap_or("desconhecida");
+            tracing::info!(cause, "parada pedida: hangar-server sai");
+            if !python_parent { hangar_server::diag::record_stop(&hangar_dir, cause); }
             std::process::exit(0);
         }
         Err(e) => {

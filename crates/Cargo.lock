@@ -1593,6 +1593,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-boot"
+version = "0.1.0"
+dependencies = [
+ "hangar-core",
+ "proptest",
+ "regex",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "hangar-cano"
 version = "0.1.0"
 dependencies = [
@@ -2002,6 +2013,7 @@ dependencies = [
  "futures-util",
  "hangar-api",
  "hangar-auth",
+ "hangar-boot",
  "hangar-codex",
  "hangar-codex-account-sync",
  "hangar-codex-transfer",

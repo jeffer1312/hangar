@@ -1,5 +1,6 @@
 //! Vigia do Python: com o laço dele parado o processo segue vivo, e o systemd (Restart=on-failure)
 //! só religa quem morre. Sem resposta por ~1 min, o Rust pede ao systemd que religue o serviço.
+//! Sem o Python, quem vigia é o próprio systemd pelo `WatchdogSec` (`notify_alive`).
 use crate::proxy::HttpClient;
 use axum::body::Body;
 use std::net::SocketAddr;
@@ -70,9 +71,73 @@ pub async fn run(http: HttpClient, upstream: SocketAddr, secret: String, home: P
     }
 }
 
+/// Com `WatchdogSec`, o systemd religa quem parar de avisar. O aviso só sai quando a própria saúde
+/// respondeu pela porta pública: um relógio solto seguiria avisando com o servidor travado.
+pub async fn notify_alive(notifier: hangar_boot::notify::Notifier, listen: SocketAddr, every: Duration) {
+    let probe = probe_address(listen);
+    loop {
+        if health_answers(probe, TIMEOUT.min(every)).await {
+            if let Err(error) = notifier.send("WATCHDOG=1") {
+                tracing::warn!(code = "systemd_watchdog_send_failed", kind = ?error.kind(), "aviso de vida ao systemd não saiu");
+            }
+        } else {
+            tracing::warn!(code = "systemd_watchdog_health_failed", "a saúde não respondeu; o aviso de vida ao systemd não sai");
+        }
+        tokio::time::sleep(every).await;
+    }
+}
+
+/// Quem escuta em todas as interfaces responde no loopback da mesma família.
+pub fn probe_address(listen: SocketAddr) -> SocketAddr {
+    match listen.ip() {
+        std::net::IpAddr::V4(ip) if ip.is_unspecified() => SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, listen.port())),
+        std::net::IpAddr::V6(ip) if ip.is_unspecified() => SocketAddr::from((std::net::Ipv6Addr::LOCALHOST, listen.port())),
+        _ => listen,
+    }
+}
+
+async fn health_answers(addr: SocketAddr, limit: Duration) -> bool {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let exchange = async {
+        let mut stream = tokio::net::TcpStream::connect(addr).await.ok()?;
+        stream.write_all(b"GET /__hangar_server/health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n").await.ok()?;
+        let mut head = [0u8; 12];
+        stream.read_exact(&mut head).await.ok()?;
+        Some(head.starts_with(b"HTTP/1.1 200"))
+    };
+    matches!(tokio::time::timeout(limit, exchange).await, Ok(Some(true)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn probe_goes_to_loopback_of_the_same_family() {
+        assert_eq!(probe_address("0.0.0.0:8765".parse().unwrap()), "127.0.0.1:8765".parse().unwrap());
+        assert_eq!(probe_address("[::]:8765".parse().unwrap()), "[::1]:8765".parse().unwrap());
+        assert_eq!(probe_address("192.168.0.10:8765".parse().unwrap()), "192.168.0.10:8765".parse().unwrap());
+    }
+
+    #[tokio::test]
+    async fn health_probe_needs_a_200() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            for answer in [&b"HTTP/1.1 200 OK\r\n\r\n"[..], &b"HTTP/1.1 503 Service Unavailable\r\n\r\n"[..]] {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0u8; 256];
+                let _ = socket.read(&mut request).await;
+                socket.write_all(answer).await.unwrap();
+            }
+        });
+        assert!(health_answers(addr, Duration::from_secs(5)).await);
+        assert!(!health_answers(addr, Duration::from_secs(5)).await);
+        server.await.unwrap();
+        // Ninguém escutando: não há aviso.
+        assert!(!health_answers(addr, Duration::from_secs(5)).await);
+    }
 
     #[test]
     fn unit_comes_from_the_service_cgroup_only() {
