@@ -87,6 +87,32 @@ async fn login_guest_write_outside_its_reach_is_the_rust_403() {
     task.abort();
 }
 
+/// W-09 do convidado com login: o porteiro dele não deixa o `whoami` passar (fora do alcance), antes da rota.
+#[tokio::test]
+async fn login_guest_whoami_is_the_rust_403() {
+    use hangar_server::login_guests::{Service, Settings};
+    let home = crate::physical_tempdir();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let mut state = AppState::new(Config { listen:address, upstream:crate::refused_address(),
+        internal_secret:"fixture".into(), auth_token:"owner".into(), log_path:None,
+        trusted:TrustedHosts::parse("127.0.0.1") });
+    let service = Service::new(Settings { guests:home.path().join("guests.json"), vault:home.path().join("vault.json"),
+        runtime_config:home.path().join("runtime-config.json"), sync_enabled:false, bootstrap:String::new(),
+        secret:b"fixture".to_vec(), secure:false, rate_max:10.into(), rate_window:300.into() });
+    service.store.create("Ana", home.path().to_str().unwrap(), false, true, "ana".into(), "guest".into()).unwrap();
+    state.share = None;
+    state.login_guests = Arc::new(service);
+    let task=tokio::spawn(async move { axum::serve(listener,hangar_server::routes::router(Arc::new(state))
+        .into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap(); });
+    let response=reqwest::Client::new().get(format!("http://{address}/api/whoami")).bearer_auth("guest")
+        .header("x-hangar-session","ana").send().await.unwrap();
+    assert_eq!(response.status().as_u16(),403);
+    let body:Value=response.json().await.unwrap();
+    assert_eq!(body,serde_json::json!({"detail":{"code":"erro_fora_do_convidado","params":{},"msg":"fora do acesso do convidado"}}));
+    task.abort();
+}
+
 mod arbitrary_inputs {
     use super::*;
     use proptest::prelude::*;

@@ -784,8 +784,7 @@ async fn whoami_w09_only_who_has_access_and_never_forwarded() {
     let s = scene().await;
     let refused = json!({"detail": {"code": "erro_nao_autorizado", "params": {}, "msg": "unauthorized"}});
     for token in [None, Some("outro")] {
-        let (status, body) = whoami(&s, token, &[("x-hangar-session", "s0")]).await;
-        assert_eq!((status, &body["detail"]["code"]), (401, &refused["detail"]["code"]), "{token:?}: {body}");
+        assert_eq!(whoami(&s, token, &[("x-hangar-session", "s0")]).await, (401, refused.clone()), "{token:?}");
     }
     // Cabeçalho de convidado forjado por quem não é loopback não vale como convidado.
     let (status, _) = whoami(&s, None, &[("x-hangar-guest", "eyJzIjoge319.00"), ("x-hangar-session", "s0")]).await;
@@ -804,4 +803,26 @@ async fn whoami_w10_a_mux_that_does_not_answer_is_no_pane_not_a_500() {
     crate::write_executable(&s._dir.path().join("tmux"), "#!/bin/sh\nexit 1\n");
     assert_eq!(whoami(&s, Some(OWNER), &[("x-hangar-pane", "%7")]).await, unknown(hangar_server::mcp::identity::HINT));
     assert_eq!(whoami(&s, Some(OWNER), &[("x-hangar-pane", "%7"), ("x-hangar-session", "sem-term")]).await, found("sem-term", "nome"));
+}
+
+/// W-09, convidado pelo cabeçalho assinado: na captura o Python aceitava `x-hangar-guest` vindo do
+/// loopback (era o Rust repassando). O Rust não honra o cabeçalho na 8765: quem chega com ele e sem
+/// token é recusado como estranho, assinado com o segredo certo (w24), errado (w25) ou de fora (w27).
+#[tokio::test(flavor = "multi_thread")]
+async fn whoami_w09_a_signed_guest_header_alone_is_refused() {
+    use hangar_core::guest::{GuestGrant, Kind};
+    let s = scene().await;
+    let grant = GuestGrant { token: "convite".into(), token_hash: String::new(), pair_roots: vec![], invite: true,
+        sessions: std::collections::HashMap::from([("s0".into(), Kind::Share)]) };
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+    let signed = hangar_server::share::forward::sign(SECRET, "GET", "/api/whoami", &grant, now);
+    let forged = hangar_server::share::forward::sign("outro", "GET", "/api/whoami", &grant, now);
+    let refused = json!({"detail": {"code": "erro_nao_autorizado", "params": {}, "msg": "unauthorized"}});
+    for header in [signed.to_str().unwrap(), forged.to_str().unwrap()] {
+        assert_eq!(whoami(&s, None, &[("x-hangar-guest", header), ("x-hangar-session", "s0")]).await, (401, refused.clone()));
+    }
+    let (status, _) = whoami(&s, None, &[("x-hangar-guest", signed.to_str().unwrap()), ("x-forwarded-for", "203.0.113.5"),
+        ("x-hangar-session", "s0")]).await;
+    assert_eq!(status, 401);
+    assert_eq!(s.python.hits_to("/api/whoami"), 0);
 }

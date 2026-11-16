@@ -561,3 +561,13 @@ async fn proxy_strips_inbound_guest_header() {
     let (_, headers) = fake.last_hit();
     assert!(!headers.contains_key("x-hangar-guest"));
 }
+
+/// W-09 na 8766: o convidado de convite não pergunta quem é a sessão; o porteiro recusa antes da rota.
+#[tokio::test]
+async fn invite_guest_whoami_is_refused_by_the_gate() {
+    let h = harness().await;
+    let t = h.token("cc", Kind::Share);
+    let r = client().get(h.url("/api/whoami")).bearer_auth(&t).header("x-hangar-session", "cc").send().await.unwrap();
+    assert_eq!(r.status(), 403);
+    assert_eq!(json_of(r).await["detail"], json!({"code": "erro_fora_do_convite", "params": {}, "msg": "fora da sessao compartilhada"}));
+}
