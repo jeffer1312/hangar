@@ -197,14 +197,13 @@ async fn login_guest_cannot_probe_the_owner_password_through_the_terminal() {
     assert_eq!(right, wrong);
 }
 
+/// T-24: GET sem aperto de mão do convidado com login no terminal é o caminho sem rota: 404 do Rust.
 #[tokio::test]
-async fn login_guest_reaches_python_as_https() {
+async fn login_guest_plain_get_on_the_terminal_is_the_rust_404() {
     let (_home, python, connect) = guest_server().await;
     let passed = get(connect, "/api/sessions/conexao-teste/term").bearer_auth(GUEST);
-    assert_eq!(passed.send().await.unwrap().status(), 200);
-    let (path, headers) = python.last_hit();
-    assert!(path.ends_with("/term"), "{path}");
-    assert_eq!(headers["x-forwarded-proto"], "https");
+    assert_eq!(passed.send().await.unwrap().status(), 404);
+    assert_eq!(python.hits_to("/api/sessions/conexao-teste/term"), 0);
 }
 
 #[test]

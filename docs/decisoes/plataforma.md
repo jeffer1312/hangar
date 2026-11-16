@@ -1944,7 +1944,7 @@ Anotar valor e unidade, a sessão de cada `/history`, e o que não deu para medi
 | Threads e inotify do Python com 4 chats abertos, contra 0 abertos | |
 
 **Terminal real do dono (parte 4, Task 8, 06/10/2026).** Fora do Windows, o `WS .../term` do
-dono (`?token=` só; Bearer e cookie seguem ao Python, como no `termsock`) abre o PTY no Rust
+dono (`?token=` só; Bearer e cookie são recusados) abre o PTY no Rust
 (`term/`, `portable-pty`). A Origin era perguntada ao Python em `/internal/term/origin`; desde
 17/10/2026 o dono com token não a confere mais (entrada "WebSocket do dono com token não confere
 Origin").
@@ -1956,18 +1956,15 @@ sessões que um Rust anterior deixou no tamanho do painel. Medidas em
 no Rust (ConPTY do `portable-pty`); as regras de lá estão em `windows.md`, "Terminal real do
 dono no Windows é do Rust".
 
-**Porteiro do terminal (parte 4, Task 9, contrato 30).** Com o modo `rust` (ou `pending`, que
-espera o desfecho), o `termsock` não abre PTY em nenhuma plataforma: depois da porta de entrada
-de hoje (convidado de convite, convidado com login, dono pelo Connect) ele liga os bytes a
-`/__hangar_server/term` na porta privada (segredo e loopback; alvo conferido de novo lá, `cols`/`rows`).
-O painel é o mesmo `Terms` da 8765, então dono e convidado se derrubam com 1000 "outra conexao
-assumiu" como dois donos. Revogação pelo `share_gate` cancela o repasse, que fecha o lado do
-Rust; o código de fechamento do Rust chega igual ao cliente, queda sem fechamento vira 1011.
-Ponte desligada, Rust subindo ou recusa do aperto de mão: 1013 (sessão morta: 1008) e
-`terminal.ponte` no diário com o código. O 409 (`_recusa_se_painel_aberto`) pergunta
-`term.active` pela ponte da lista, fora do laço de eventos; erro é 503
-`erro_terminal_indisponivel`. `/api/config.terminal_panel` e `/run-code` leem o `terminal_panel`
-da saúde no modo `rust`; saúde sem o campo booleano é falha de partida.
+**Porteiro do terminal (parte 4, Task 9, contrato 30; 16/11/2026 sem o Python).** A porta de
+entrada é só do Rust (`term/mod.rs`), em todas as portas: convidado de convite (8766), convidado
+com login e aparelho do Connect chegam já decididos pelos porteiros, e o painel é o mesmo `Terms`,
+então dono e convidado se derrubam com 1000 "outra conexao assumiu" como dois donos. Quem não é
+dono nem convidado leva 403 vazio no aperto de mão, com a falha contada uma vez pelo perfil
+`TerminalWebSocket` do contador (só o `?token=` vale; origem bloqueada recusa sem nova falha;
+loopback nunca conta); convidado sem `Share` na sessão leva 403. GET sem aperto de mão, outro
+método e o convidado nos terminais do Hangar são o caminho sem rota (404 do Rust). Saíram a porta
+de entrada `termsock.py`, a ponte `list_bridge.py` e a rota privada `/__hangar_server/term`.
 
 ## Lista do dono no hangar-server
 
@@ -3438,16 +3435,15 @@ defeitos achados nele (todos consertados no Rust, decisão do usuário) estão n
 ## WebSocket do dono com token não confere Origin (17/10/2026)
 
 - Regra: a conexão WebSocket autenticada pelo token do dono na query (`?token=`) não consulta a
-  Origin. Vale para o terminal (`term/mod.rs` no Rust, `termsock._porta_de_entrada` no Python), a
-  voz (`voice/routes.rs`, `voicesock._owner_only`) e o navegador remoto (`navsock._autorizado`).
+  Origin. Vale para o terminal (`term/mod.rs`), a voz (`voice/routes.rs`) e o navegador remoto.
 - Motivo: WebSocket não passa por CORS, e a Origin existe para impedir que uma página qualquer
   aberta no navegador use uma credencial AMBIENTE (cookie, login guardado) que o navegador manda
   sozinho. O token na query não é ambiente: uma página estranha não o tem. Conferir a Origin nesse
   caso não acrescenta proteção e só barra quem entrou de verdade.
 - Caso real: o app iOS pelo Hangar Connect (`https://app.hangar.dev.br/casa`) levava
   `voice origin refused` e precisou de `CP_TERM_ORIGINS` declarado em cada máquina.
-- O que continua: o login de convidado do `termsock` (`guest_users.current`, sessão por cookie)
-  segue com a Origin conferida por `_origem_aceita`, e `CP_TERM_ORIGINS`/`term_origins` seguem
+- O que continua: o convidado com login no terminal segue com a Origin conferida no Rust
+  (`login_guests::gate::terminal_origin_allowed`), e `CP_TERM_ORIGINS`/`term_origins` seguem
   valendo para ele. Convidado da 8766 continua decidido pelo porteiro, sem Origin, como antes.
 - Removidos por ficarem sem chamador: `crates/hangar-server/src/term/origin.rs` e a rota interna
   `POST /internal/term/origin`; contrato interno 74 → 75.

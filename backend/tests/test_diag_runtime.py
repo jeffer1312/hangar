@@ -2,13 +2,11 @@
 import asyncio
 import json
 import subprocess
-from concurrent.futures import ThreadPoolExecutor
-from threading import Event
 from types import SimpleNamespace
 
 import pytest
 
-from app import diag, tmux
+from app import diag
 
 VERSION_PROBE = diag._versao_mux
 
@@ -21,74 +19,6 @@ def isolated_diary(tmp_path, monkeypatch):
 
 def events():
     return [json.loads(line) for line in diag.ler_tudo().splitlines()]
-
-
-@pytest.mark.parametrize("failure,kind,code", [
-    (subprocess.TimeoutExpired(["tmux", "segredo"], 5, output="segredo"), "TimeoutExpired", 240),
-    (FileNotFoundError(2, "segredo"), "FileNotFoundError", 240),
-    (PermissionError(13, "segredo"), "PermissionError", 240),
-    (None, "retorno", 7),
-])
-def test_command_failure_exports_safe_cause(monkeypatch, failure, kind, code):
-    def run(*args, **kwargs):
-        if failure:
-            raise failure
-        return subprocess.CompletedProcess(args, 7, b"segredo", b"segredo")
-
-    monkeypatch.setattr(tmux, "RUN", run)
-    token = diag.req_atual.set("aba-123")
-    try:
-        result = tmux._run(["tmux", "send-keys", "-t", "=sessao:", "segredo"], input=b"segredo")
-    finally:
-        diag.req_atual.reset(token)
-    assert result.returncode == code
-    row = next(r for r in events() if r["evento"] == "mux.comando")
-    assert row["comando"] == "send-keys"
-    assert row["erro_tipo"] == kind and row["retorno"] == code
-    assert row["limite_ms"] == 5000 and row["ms"] >= 0
-    assert row["simultaneos"] == 1 and row["req"] == "aba-123"
-    if failure and isinstance(failure, OSError):
-        assert row["errno"] == failure.errno
-    assert "segredo" not in diag.ler_tudo()
-
-
-def test_command_concurrency_and_counter_cleanup(monkeypatch):
-    started, release = Event(), Event()
-
-    def run(args, **kwargs):
-        if args[1] == "list-panes":
-            started.set()
-            assert release.wait(3)
-            return subprocess.CompletedProcess(args, 0, "", "")
-        raise subprocess.TimeoutExpired(args, 5)
-
-    monkeypatch.setattr(tmux, "RUN", run)
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        pending = pool.submit(tmux._run, ["tmux", "list-panes"])
-        try:
-            assert started.wait(3)
-            tmux._run(["tmux", "capture-pane"])
-        finally:
-            release.set()
-        pending.result()
-    tmux._run(["tmux", "capture-pane"])
-    failures = [r for r in events() if r.get("erro_tipo") == "TimeoutExpired"]
-    assert [r["simultaneos"] for r in failures] == [2, 1]
-
-
-def test_normal_absence_does_not_fill_diary(monkeypatch):
-    monkeypatch.setattr(tmux, "RUN", lambda args, **kw: subprocess.CompletedProcess(args, 1, "", "no server"))
-    assert tmux.list_panes_all() == {}
-    assert tmux.has_session("gone") is False
-    assert not any(r["evento"] == "mux.comando" for r in events())
-
-
-def test_other_list_failure_is_not_hidden_as_absence(monkeypatch):
-    monkeypatch.setattr(tmux, "RUN", lambda args, **kw: subprocess.CompletedProcess(args, 1, "", "permission denied: segredo"))
-    tmux.list_panes_all()
-    row = next(r for r in events() if r["evento"] == "mux.comando")
-    assert row["retorno"] == 1 and row["erro_tipo"] == "retorno" and row["nivel"] == "erro"
-    assert "segredo" not in diag.ler_tudo()
 
 
 def test_export_identifies_current_environment():
@@ -123,16 +53,6 @@ def test_windows_memory_snapshot_and_failure(monkeypatch):
 
     monkeypatch.setattr(psutil, "virtual_memory", denied)
     assert diag.recursos()["recursos_erro"] == "AccessDenied"
-
-
-def test_slow_success_is_reported_without_output(monkeypatch):
-    clock = iter([10.0, 11.2])
-    monkeypatch.setattr(tmux.time, "monotonic", lambda: next(clock))
-    monkeypatch.setattr(tmux, "RUN", lambda args, **kw: subprocess.CompletedProcess(args, 0, "segredo", ""))
-    assert tmux._run(["tmux", "capture-pane"]).stdout == "segredo"
-    row = next(r for r in events() if r["evento"] == "mux.comando")
-    assert row["nivel"] == "aviso" and row["retorno"] == 0 and row["ms"] >= 1000
-    assert "segredo" not in diag.ler_tudo()
 
 
 def test_http_failure_exports_server_duration_and_safe_route():

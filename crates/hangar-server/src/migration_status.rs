@@ -147,7 +147,7 @@ pub fn rust_route(method: &Method, path: &str) -> bool {
             return true;
         }
         let tail = path.strip_prefix("/api/sessions/").and_then(|r| r.split_once('/')).map(|(_, t)| t);
-        // `term`: o painel abre no Rust; login de convidado e Connect passam pelo Python e voltam ao mesmo PTY.
+        // `term`: o painel e toda recusa do aperto de mão são do Rust, em todas as portas.
         if matches!(tail, Some("history" | "events" | "artifacts" | "cost" | "term" | "nav-remoto" | "models" | "limits" | "commands" | "codex-permissions" | "conta" | "pane" | "permission-modes")) || tail.is_some_and(|t| t.starts_with("pages/")) {
             return true;
         }

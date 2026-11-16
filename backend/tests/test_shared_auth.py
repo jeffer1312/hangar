@@ -12,7 +12,7 @@ import tempfile
 import time
 
 import pytest
-from fastapi import Request, WebSocket
+from fastapi import Request
 
 ROOT = Path(__file__).resolve().parents[2]
 OWNER = "shared-auth-integration-owner-fake"
@@ -47,11 +47,11 @@ def test_root_browser_python_me_and_websocket_share_one_parent_authority(tmp_pat
     report = json.loads(result.stdout.splitlines()[-1])
     assert report["root_and_python_real"] and report["child_restart_kept_eight"]
     assert report["concurrent_statuses"] == [401, 429]
-    assert report["body_calls"] == 1 and report["sse_calls"] == 1 and report["upgrade_once"]
+    assert report["body_calls"] == 1 and report["sse_calls"] == 1
     assert report["receipt_kept_interleaved_failure"] and report["public_receipt_was_not_reused"]
     assert report["login_guest_did_not_count"]
     assert report["empty_query_kept_one_admission"]
-    assert report["corrupt_store_statuses"] == [503, 503, 503, 503]
+    assert report["corrupt_store_statuses"] == [503, 503, 503]
 
 
 def test_loaded_library_stays_immutable_when_a_new_pair_is_published(tmp_path):
@@ -111,7 +111,7 @@ def _pinning_worker(binary):
 async def _worker(binary):
     import httpx2 as httpx
     import uvicorn
-    from fastapi import Depends, FastAPI, Request, WebSocket
+    from fastapi import Depends, FastAPI, Request
     from fastapi.responses import StreamingResponse
     from websockets.asyncio.client import connect
     from websockets.exceptions import InvalidStatus
@@ -122,7 +122,7 @@ async def _worker(binary):
             os.environ[name] = str(home)
         os.environ["CLAUDE_CONFIG_DIR"] = str(home / ".claude")
         os.environ["CODEX_HOME"] = str(home / ".codex")
-        from app import auth, shared_auth, termsock
+        from app import auth, shared_auth
         auth.settings.auth_token = OWNER
         (home / ".claude").mkdir()
         guest_token = "isolated-guest-token"
@@ -130,7 +130,7 @@ async def _worker(binary):
         app = FastAPI()
         admitted, release, sse_release = asyncio.Event(), asyncio.Event(), asyncio.Event()
         captured = {}
-        body_calls = sse_calls = upgrade_calls = 0
+        body_calls = sse_calls = 0
 
         @app.get("/api/me", dependencies=[Depends(auth.require_auth)])
         async def me():
@@ -162,17 +162,6 @@ async def _worker(binary):
                 await sse_release.wait()
                 yield b"event: message\ndata: last\n\n"
             return StreamingResponse(chunks(), media_type="text/event-stream")
-
-        @app.websocket("/api/auth-ws/{profile}")
-        async def ws(websocket: WebSocket, profile: str):
-            nonlocal upgrade_calls
-            upgrade_calls += 1
-            # Só o verificador de existência externo é substituído; nenhum PTY nasce.
-            termsock.tmux.has_session = lambda _: True
-            allowed = await termsock._porta_de_entrada(websocket, "isolated-session") is not None
-            if allowed:
-                await websocket.accept()
-                await websocket.close(code=1000)
 
         def listener():
             sock = socket.socket()
@@ -307,15 +296,6 @@ async def _worker(binary):
 
             try:
                 child = await start()
-                # As falhas atravessam as duas implementações e duas portas de verdade.
-                for i in range(7):
-                    response = await request(root, browser if i % 2 else "/api/me")
-                    assert response.status_code == 401, (i, response.status_code, response.text[:300])
-                assert await ws_status(direct, "/api/auth-ws/terminal", "wrong", "198.51.100.10") == 403
-                assert len(hits("198.51.100.10")) == 8
-                for path in (browser, "/api/me"):
-                    assert (await request(root, path, OWNER)).status_code == 429
-
                 ip = "198.51.100.11"
                 for _ in range(7):
                     assert (await request(direct, "/api/me", ip=ip)).status_code == 401
@@ -328,13 +308,6 @@ async def _worker(binary):
                     assert (await request(root, browser, ip=ip)).status_code == 401
                 assert await ws_status(root, "/api/voice", OWNER, ip) == 101
                 assert len(hits(ip)) == 7, "voz Rust alterou falhas anteriores"
-                assert await ws_status(direct, "/api/auth-ws/terminal", OWNER, ip) == 1000
-                assert len(hits(ip)) == 7, "terminal Python alterou falhas anteriores"
-                before_upgrade = upgrade_calls
-                assert await ws_status(root, "/api/auth-ws/terminal", OWNER, ip) == 1000
-                assert len(hits(ip)) == 7, "WebSocket encaminhado alterou falhas anteriores"
-                assert upgrade_calls == before_upgrade + 1
-                assert len(hits(ip)) == 7
                 assert (await request(direct, "/api/me", OWNER, ip)).status_code == 200 and not hits(ip)
                 for _ in range(7):
                     assert (await request(direct, "/api/me", ip=ip)).status_code == 401
@@ -449,11 +422,10 @@ async def _worker(binary):
                 Path(context.config["state_path"]).write_bytes(b"invalid")
                 broken = [(await request(root, browser, OWNER, "198.51.100.20")).status_code,
                           (await request(root, "/api/me", OWNER, "198.51.100.20")).status_code,
-                          await ws_status(direct, "/api/auth-ws/terminal", OWNER, "198.51.100.20"),
                           await ws_status(root, "/api/sessions/isolated-session/nav-remoto", OWNER, "198.51.100.20")]
-                assert broken == [503, 503, 503, 503] and auth._fails == {}
+                assert broken == [503, 503, 503] and auth._fails == {}
                 return {"root_and_python_real": True, "child_restart_kept_eight": True,
-                        "concurrent_statuses": statuses, "body_calls": body_calls, "sse_calls": sse_calls, "upgrade_once": True,
+                        "concurrent_statuses": statuses, "body_calls": body_calls, "sse_calls": sse_calls,
                         "receipt_kept_interleaved_failure": True, "public_receipt_was_not_reused": True,
                         "login_guest_did_not_count": True,
                         "empty_query_kept_one_admission": True,

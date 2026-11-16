@@ -473,7 +473,6 @@ async def test_protected_stop_uses_120_seconds_and_kills_only_after_the_deadline
     async def deactivated(*, confirmed_dead):
         confirmed.append(confirmed_dead)
     monkeypatch.setattr(supervisor, "deactivate_runtime", deactivated)
-    monkeypatch.setattr(rust_server, "_point_bridges", lambda *args: None)
     assert rust_server.PROTECTED_SHUTDOWN_SECONDS == 120
     await supervisor.stop()
     assert process.waits == ([120, None] if expires else [120])
@@ -717,27 +716,6 @@ def test_stop_is_decided_before_any_action(monkeypatch):
     monkeypatch.setattr(rust_server, "_POLL", 0.01)
     assert asyncio.run(supervisor.run()) == "parada"
     assert calls == [], "parada não desativa nem recupera nada"
-
-
-def test_invalid_private_address_is_startup_failure(monkeypatch):
-    from types import SimpleNamespace
-    supervisor = _supervisor(lambda: False)
-    monkeypatch.setattr(rust_server, "_spawn", lambda binary, env: SimpleNamespace(poll=lambda: None, pid=1))
-    monkeypatch.setattr(rust_server, "_runtime_ready", lambda proc, instance: {"type":"runtime_ready",
-        "protocol":rust_server.RUST_SERVER_PROTOCOL, "instance":instance, "port":1})
-    monkeypatch.setattr(rust_server, "_health", lambda host, port: {"protocol":rust_server.RUST_SERVER_PROTOCOL})
-    configured = []
-    try:
-        assert asyncio.run(supervisor._start()) == "address"
-    finally:
-        internal_api.set_secret(None)
-    async def address():
-        return "address"
-    async def stop():
-        configured.append("stop")
-    monkeypatch.setattr(supervisor, "_start", address)
-    monkeypatch.setattr(supervisor, "stop", stop)
-    assert asyncio.run(supervisor.run()) == "endereco_privado" and configured == ["stop"]
 
 
 def test_crash_output_keeps_codes_and_drops_the_message(tmp_path):
