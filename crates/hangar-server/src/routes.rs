@@ -784,9 +784,10 @@ fn router_with(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router {
 }
 
 /// Regras de toda porta pública, antes do login: preflight de qualquer caminho, teto do corpo e a
-/// linha `api.servidor` do pedido que falhou no servidor ou demorou.
+/// linha `api.servidor` do pedido que falhou no servidor ou demorou. O preflight é o que as rotas
+/// `/api/*` já davam (`share::gate::preflight`): recusa rede privada e aceita qualquer método pedido.
 async fn edge_rules(State(st): State<Arc<AppState>>, req: Request, next: axum::middleware::Next) -> Response {
-    if let Some(response) = crate::http_cors::preflight(req.method(), req.headers()) { return response; }
+    if let Some(response) = crate::share::gate::preflight(&req) { return response; }
     body_cap_and_access_line(&st, req, next).await
 }
 
@@ -796,9 +797,8 @@ async fn guest_edge_rules(State(st): State<Arc<AppState>>, req: Request, next: a
 }
 
 async fn body_cap_and_access_line(st: &AppState, req: Request, next: axum::middleware::Next) -> Response {
-    if let Some(mut response) = crate::http_body_limit::precheck(req.headers()) {
-        crate::http_cors::apply(req.headers(), &mut response);
-        return response;
+    if crate::http_body_limit::precheck(req.headers()).is_some() {
+        return declared_too_large(req);
     }
     let (method, path, correlation) = (req.method().clone(), req.uri().path().to_owned(), diag_req(&req));
     // Corpo em partes acima do teto: o leitor recebe o erro de limite, que vira 413.
@@ -806,6 +806,26 @@ async fn body_cap_and_access_line(st: &AppState, req: Request, next: axum::middl
     let started = Instant::now();
     let response = next.run(req).await;
     access_line(st, &method, &path, &correlation, response, started.elapsed()).await
+}
+
+/// Corpo declarado acima do teto: a recusa tem o formato que a rota dava (anexo e transcrição em JSON,
+/// o resto em texto), com tamanho fixo. O resto do corpo é lido e descartado por até 2 s: fechar com
+/// dados ainda chegando vira RST, e o cliente perde a resposta.
+fn declared_too_large(req: Request) -> Response {
+    let file = *req.method() == Method::POST
+        && crate::uploads::http::tail(req.uri().path()).is_some_and(|(_, tail)| matches!(tail, "upload" | "transcribe"));
+    let mut response = if file {
+        crate::uploads::http::failure(413, "erro_arquivo_grande", "arquivo maior que 100 MiB")
+    } else {
+        hangar_core::http::too_large(req.headers())
+    };
+    crate::http_cors::apply(req.headers(), &mut response);
+    let mut body = req.into_body();
+    tokio::spawn(tokio::time::timeout(Duration::from_secs(2), async move {
+        use http_body_util::BodyExt;
+        while let Some(Ok(_)) = body.frame().await {}
+    }));
+    response
 }
 
 /// A linha `api.servidor` de todo pedido: só 5xx ou 1 s até os cabeçalhos. O diário da tela fica de

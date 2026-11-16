@@ -36,6 +36,8 @@ pub fn mark_running(dir: &Path, pid: u32, now: &str) -> std::io::Result<()> {
     let (mut life, _) = read_or_reset(dir)?;
     let map = life.as_object_mut().expect("read_or_reset devolve objeto");
     map.insert("running".into(), json!(true));
+    // A contagem fica sempre no arquivo, também antes da primeira saída não limpa.
+    map.entry("unclean_exits").or_insert(json!(0));
     map.insert("pid".into(), json!(pid));
     map.insert("started".into(), json!(now));
     write(dir, &life)

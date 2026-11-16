@@ -24,7 +24,7 @@ pub struct Facts {
 fn response(value: Value, status: u16) -> Response {
     crate::session_write::json_response(StatusCode::from_u16(status).unwrap(), value)
 }
-pub(super) fn failure(status: u16, code: &'static str, message: &str) -> Response {
+pub(crate) fn failure(status: u16, code: &'static str, message: &str) -> Response {
     crate::diag::coded(
         crate::session_write::detail(
             StatusCode::from_u16(status).unwrap(),
