@@ -297,28 +297,21 @@ impl Hangar {
     fn render_fix_result(&self, event: &ChatEvent, cx: &mut Context<Self>) -> AnyElement {
         let done = meta(event, "state") == Some("done");
         let child = meta(event, "child").unwrap_or_default().to_owned();
-        let icon = if done { chrome::small_icon(IconName::Check, 14., theme::success()) } else { chrome::small_icon(IconName::TriangleAlert, 14., theme::warning()) };
-        let open = Button::new(SharedString::from(format!("notice-fix-open-{}", event.id))).ghost().xsmall().label(tr_shared("notice_fix_open", &[]))
+        let open = fix_open_button(&event.id)
             .on_click(cx.listener(move |this, _, window, cx| this.open_fix_child(child.clone(), window, cx)));
-        notice_rule_line(div().flex().items_center().gap(px(7.)).min_w_0().child(icon)
-            .child(div().min_w_0().truncate().text_size(px(12.5)).text_color(theme::muted()).child(plain(event).trim().to_owned()))
-            .child(open)).into_any_element()
+        notice_rule_line(fix_result_row(done, plain(event).trim().to_owned(), open)).into_any_element()
     }
 
     /// O que vai entre o título e a seta: o andamento (reinstalando, consertando…) ou o botão da ação.
     fn notice_action_part(&self, event: &ChatEvent, cx: &mut Context<Self>) -> Option<AnyElement> {
         let id = event.id.clone();
-        let spin = |label: String| div().flex().items_center().gap(px(6.))
-            .child(chrome::Spinner::new(SharedString::from(format!("notice-spin-{id}")), IconName::LoaderCircle, px(13.), theme::accent()))
-            .child(small(label, theme::muted())).into_any_element();
-        let button = |label: String| Button::new(SharedString::from(format!("notice-act-{id}"))).outline().xsmall().label(label);
+        let spin = |label: String| notice_spin(&id, small(label, theme::muted())).into_any_element();
+        let button = |label: String| notice_action_button(&id, label);
         match (notice_action(event)?, self.notice_acted.get(&id)) {
             (NoticeAction::Reinstall(plugin), acted) => Some(match acted {
                 Some(Acted::Reinstalling) => spin(tr_shared("notice_reinstalling", &[("name", &plugin)])),
                 Some(Acted::Reloading) => spin(tr_shared("notice_reloading", &[])),
-                Some(Acted::Reinstalled) => div().flex().items_center().gap(px(7.))
-                    .child(chrome::small_icon(IconName::Check, 14., theme::success()))
-                    .child(small(format!("{} · {}", tr_shared("notice_reinstalled", &[("name", &plugin)]), tr_shared("notice_reinstalled_hint", &[])), theme::muted()))
+                Some(Acted::Reinstalled) => notice_reinstalled(&plugin, true)
                     .child(button(tr_shared("notice_reload", &[])).on_click(cx.listener({ let id = id.clone(); move |this, _, _, cx| this.reload_after_reinstall(id.clone(), cx) })))
                     .into_any_element(),
                 failed => div().flex().items_center().gap(px(7.))
@@ -331,13 +324,10 @@ impl Hangar {
             (NoticeAction::Fix, acted) => {
                 if matches!(acted, Some(Acted::FixStarting)) { return Some(spin(tr_shared("notice_fix", &[]))); }
                 match fix_state(&self.chat.events, &id) {
-                    Some(FixState::Running { child }) => Some(div().flex().items_center().gap(px(6.))
-                        .child(chrome::Spinner::new(SharedString::from(format!("notice-spin-{id}")), IconName::LoaderCircle, px(13.), theme::accent()))
-                        .child(div().id(SharedString::from(format!("notice-child-{id}"))).cursor_pointer().text_size(px(12.5)).text_color(theme::accent())
-                            .child(tr_shared("notice_fixing", &[("name", &child)]))
+                    Some(FixState::Running { child }) => Some(notice_spin(&id, notice_fixing(&id, &child).cursor_pointer()
                             .on_click(cx.listener(move |this, _, window, cx| this.open_fix_child(child.clone(), window, cx))))
                         .into_any_element()),
-                    Some(FixState::Done) => Some(small(format!("· {}", tr_shared("notice_fixed", &[])), theme::faint()).into_any_element()),
+                    Some(FixState::Done) => Some(notice_fixed().into_any_element()),
                     state => Some(div().flex().items_center().gap(px(7.))
                         .when(state == Some(FixState::Failed), |el| el.child(small(format!("· {}", tr_shared("notice_fix_failed", &[])), theme::warning())))
                         .when_some(match acted { Some(Acted::FixFailed(why)) => Some(why.clone()), _ => None },
@@ -377,8 +367,7 @@ impl Hangar {
         let head = match action {
             None => head.into_any_element(),
             Some(action) => div().flex().items_center().gap(px(7.)).min_w_0().child(head).child(action)
-                .when(expandable, |el| el.child(div().id(SharedString::from(format!("notice-chevron-{id}"))).cursor_pointer()
-                    .child(chrome::small_icon(if open { IconName::ChevronDown } else { IconName::ChevronRight }, 14., theme::faint()))
+                .when(expandable, |el| el.child(notice_chevron(&id, open).cursor_pointer()
                     .on_click(cx.listener(move |this, _, _, cx| this.toggle(toggle_key.clone(), cx)))))
                 .into_any_element(),
         };
@@ -407,8 +396,54 @@ pub(crate) fn notice_head(id: SharedString, title: String, count: Option<String>
     notice_head_marked(id, title, count, open, false)
 }
 
+/// Peças da ação na linha, sem estado: a conversa e a animação da novidade usam as mesmas.
+pub(crate) fn notice_action_button(id: &str, label: String) -> Button {
+    Button::new(SharedString::from(format!("notice-act-{id}"))).outline().xsmall().label(label)
+}
+
+/// Andamento: o indicador girando e o texto.
+pub(crate) fn notice_spin(id: &str, label: impl IntoElement) -> Div {
+    div().flex().items_center().gap(px(6.))
+        .child(chrome::Spinner::new(SharedString::from(format!("notice-spin-{id}")), IconName::LoaderCircle, px(13.), theme::accent()))
+        .child(label)
+}
+
+/// "consertando em <sessão>", no tom de link.
+pub(crate) fn notice_fixing(id: &str, child: &str) -> Stateful<Div> {
+    div().id(SharedString::from(format!("notice-child-{id}"))).text_size(px(12.5)).text_color(theme::accent())
+        .child(tr_shared("notice_fixing", &[("name", child)]))
+}
+
+pub(crate) fn notice_fixed() -> Div { small(format!("· {}", tr_shared("notice_fixed", &[])), theme::faint()) }
+
+/// "Plugin x reinstalado"; `hint` acrescenta que a conversa só usa depois de recarregar. O Recarregar entra depois.
+pub(crate) fn notice_reinstalled(plugin: &str, hint: bool) -> Div {
+    let text = tr_shared("notice_reinstalled", &[("name", plugin)]);
+    let text = if hint { format!("{text} · {}", tr_shared("notice_reinstalled_hint", &[])) } else { text };
+    div().flex().items_center().gap(px(7.))
+        .child(chrome::small_icon(IconName::Check, 14., theme::success()))
+        .child(small(text, theme::muted()))
+}
+
+pub(crate) fn notice_chevron(id: &str, open: bool) -> Stateful<Div> {
+    div().id(SharedString::from(format!("notice-chevron-{id}")))
+        .child(chrome::small_icon(if open { IconName::ChevronDown } else { IconName::ChevronRight }, 14., theme::faint()))
+}
+
+pub(crate) fn fix_open_button(id: &str) -> Button {
+    Button::new(SharedString::from(format!("notice-fix-open-{id}"))).ghost().xsmall().label(tr_shared("notice_fix_open", &[]))
+}
+
+/// A linha do resultado do conserto: feito (✓) ou falha (âmbar), o texto e o Abrir.
+pub(crate) fn fix_result_row(done: bool, text: String, open: Button) -> Div {
+    let icon = if done { chrome::small_icon(IconName::Check, 14., theme::success()) } else { chrome::small_icon(IconName::TriangleAlert, 14., theme::warning()) };
+    div().flex().items_center().gap(px(7.)).min_w_0().child(icon)
+        .child(div().min_w_0().truncate().text_size(px(12.5)).text_color(theme::muted()).child(text))
+        .child(open)
+}
+
 /// `done`: o problema foi consertado, o ícone vira o de feito.
-fn notice_head_marked(id: SharedString, title: String, count: Option<String>, open: Option<bool>, done: bool) -> Stateful<Div> {
+pub(crate) fn notice_head_marked(id: SharedString, title: String, count: Option<String>, open: Option<bool>, done: bool) -> Stateful<Div> {
     let icon = if done { chrome::small_icon(IconName::Check, 14., theme::success()) } else { chrome::small_icon(IconName::TriangleAlert, 14., theme::warning()) };
     div().id(id).flex().items_center().gap(px(7.)).min_w_0()
         .child(icon)

@@ -3,6 +3,7 @@ import { ReviewsAnimation } from './reviews-animation';
 import type { ComponentType } from 'react';
 import { AutoReportAnimation } from './AutoReportAnimation';
 import { ClaudeNoticesAnimation } from './ClaudeNoticesAnimation';
+import { NoticeActionsAnimation } from './NoticeActionsAnimation';
 import { CodexActivityAnimation } from './CodexActivityAnimation';
 import { CompactIdleAnimation } from './CompactIdleAnimation';
 import { DesktopToolLookAnimation } from './DesktopToolLookAnimation';
@@ -30,6 +31,7 @@ const animations: Record<string, ComponentType<{ width: number }>> = {
   'scheduled-tasks': ScheduledTasksAnimation,
   'adormecer-ocultas': SleepHiddenAnimation,
   'avisos-do-claude': ClaudeNoticesAnimation,
+  'acoes-dos-avisos': NoticeActionsAnimation,
   'atualizacoes-e-manual': UpdatesManualAnimation,
   'branch-no-celular': FolderBranchAnimation,
   'cofre-de-senhas': VaultAnimation,

@@ -5715,6 +5715,7 @@
   "native_git_open": "Abrir o git da sessão",
   "native_news_notice_sample_detail": "PostToolUse:Bash: ~/.claude/hooks/formatar.sh: arquivo não encontrado",
   "native_news_notice_sample_api_error": "Não foi possível renovar o login. Tente de novo em um minuto.",
+  "native_news_notice_actions_sample_result": "criei o arquivo de configuração que faltava; o hook passou",
   "native_news_review_sample_title": "Exportação de faturas em lote",
   "native_news_review_sample_comment": "O upload roda em série; com muitas faturas o pedido passa do tempo limite. Envie em paralelo, com um limite.",
   "native_review_title": "Revisões",
