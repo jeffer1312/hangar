@@ -91,7 +91,7 @@ async fn proxy_sets_forwarded_headers_and_drops_internal_secret() {
     let (fake, up) = spawn_fake().await;
     let srv = spawn_server(config(up, "127.0.0.1")).await;
     let r = client()
-        .get(format!("http://{srv}/api/whoami?x=1"))
+        .get(format!("http://{srv}/api/diag/arquivo?x=1"))
         .header("x-forwarded-for", "203.0.113.9")
         .header("x-forwarded-proto", "https")
         .header("x-hangar-internal", SECRET)
@@ -100,7 +100,7 @@ async fn proxy_sets_forwarded_headers_and_drops_internal_secret() {
         .unwrap();
     assert_eq!(r.text().await.unwrap(), "from-python");
     let (path, h) = fake.last_hit();
-    assert_eq!(path, "/api/whoami?x=1");
+    assert_eq!(path, "/api/diag/arquivo?x=1");
     assert_eq!(h["x-forwarded-for"], "203.0.113.9");
     assert_eq!(h["x-forwarded-proto"], "https");
     assert!(!h.contains_key("x-hangar-internal"));
@@ -111,7 +111,7 @@ async fn untrusted_peer_cannot_rewrite_client_or_scheme() {
     let (fake, up) = spawn_fake().await;
     let srv = spawn_server(config(up, "10.9.9.9")).await;
     client()
-        .get(format!("http://{srv}/api/whoami"))
+        .get(format!("http://{srv}/api/diag/arquivo"))
         .header("x-forwarded-for", "203.0.113.9")
         .header("x-forwarded-proto", "https")
         .send()
@@ -127,7 +127,7 @@ async fn unparseable_forwarded_for_from_trusted_peer_uses_the_tcp_peer() {
     let (fake, up) = spawn_fake().await;
     let srv = spawn_server(config(up, "127.0.0.1")).await;
     client()
-        .get(format!("http://{srv}/api/whoami"))
+        .get(format!("http://{srv}/api/diag/arquivo"))
         .header("x-forwarded-for", "nao-e-ip")
         .send()
         .await
@@ -361,7 +361,7 @@ async fn spawn_chunked_upstream(
                     head.push(byte[0]);
                 }
                 // As tarefas auxiliares do servidor podem consultar fatos antes da prova.
-                if !head.starts_with(b"GET /api/whoami ") {
+                if !head.starts_with(b"GET /api/diag/arquivo ") {
                     let _=stream.write_all(b"HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n").await;
                     return;
                 }
@@ -442,7 +442,7 @@ async fn large_chunked_body_is_not_held_by_nagle() {
         stream.set_nodelay(true).unwrap();
         #[cfg(target_os="linux")]
         let client=stream.local_addr().unwrap();
-        stream.write_all(format!("GET /api/whoami HTTP/1.1\r\nHost: h\r\nAuthorization: Bearer {OWNER}\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
+        stream.write_all(format!("GET /api/diag/arquivo HTTP/1.1\r\nHost: h\r\nAuthorization: Bearer {OWNER}\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
         let mut reader=tokio::io::BufReader::new(stream);
         let mut head=String::new();
         loop {

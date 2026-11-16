@@ -4,15 +4,14 @@ import json
 import re
 import time
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Depends, HTTPException, Request, WebSocket
+from fastapi import FastAPI, Depends, Request, WebSocket
 from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.requests import ClientDisconnect
-from app import diag, loop_monitor, quem_chama
+from app import diag, loop_monitor
 from app import internal_api
 from app.auth import require_auth
-from app.mensagens import erro
 from app.uploads import MAX_BYTES
 
 
@@ -198,17 +197,6 @@ async def term_ws_route(ws: WebSocket, name: str):
     from app import termsock
     resolve = None
     await termsock.term_ws(ws, name, resolve)
-
-
-@app.get("/api/whoami", dependencies=[Depends(require_auth)])
-async def whoami(request: Request):
-    """Qual sessão está chamando, pelos cabeçalhos X-Hangar-* (ver quem_chama). Diagnóstico e
-    teste da resolução que o MCP usa; o CLI continua resolvendo localmente."""
-    try:
-        nome, origem = await asyncio.to_thread(quem_chama.resolver, request.headers)
-    except quem_chama.SessaoDesconhecida as e:
-        raise HTTPException(404, detail=erro("erro_sessao_desconhecida", str(e)))
-    return {"name": nome, "origem": origem}
 
 
 @app.post("/api/diag", dependencies=[Depends(require_auth)])

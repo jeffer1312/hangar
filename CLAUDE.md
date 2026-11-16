@@ -33,7 +33,7 @@ Only terminal sessions use the tmux pane for live **state** and input. Backend p
   estado, prévia, perguntas, fila, entrada, fechamento e troca de nome. Os leitores estruturados
   ficam em `hangar-transcript`; hooks e guarda do Kimi/Pi são comandos Rust em `provider_hooks/`.
 - O SSE do chat (`/events`) é do hub do Rust (`crates/hangar-server/src/side.rs`, uma fonte por
-  chave, não uma por conexão). `api.py` — o que sobrou no FastAPI (`/api/whoami`, POST `/api/diag`,
+  chave, não uma por conexão). `api.py` — o que sobrou no FastAPI (POST `/api/diag`,
   `/internal/*`, porta de entrada do terminal em `termsock.py`). `auth.py` — bearer token / `cp_token` cookie.
 - Also: `rust_server.py` (Supervisor que sobe e religa o `hangar-server`), `config.py`.
 - `crates/hangar-server/src/commands/` — catálogo de comandos do Claude, sonda compartilhada e

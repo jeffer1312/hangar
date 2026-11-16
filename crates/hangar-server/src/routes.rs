@@ -695,6 +695,7 @@ where H: axum::handler::Handler<T, Arc<AppState>>, T: 'static {
         .route("/api/sessions/{name}/term", get(crate::term::session_ws).fallback(pass_any))
         .route("/api/sessions/{name}/nav-remoto", get(crate::remote_browser::ws::public).head(pass_any).fallback(pass_any))
         // Outro método nessas rotas (preflight OPTIONS, HEAD) segue ao Python.
+        .route("/api/whoami", get(crate::mcp::identity::route).fallback(fallback.clone()))
         .route("/api/sessions", get(crate::list::hub::list).post(crate::session_open::create).fallback(fallback.clone()))
         .route("/api/sessions/events", get(crate::list::hub::events).fallback(fallback.clone()))
         .route("/api/sessions/{name}/history", get(history).fallback(fallback.clone()))
@@ -1398,7 +1399,7 @@ pub(crate) async fn pass(st: &AppState, mut req: Request, fwd: &Forward) -> Resp
 /// Os caminhos que o Python ainda atende; o resto não sai do Rust. Cada rota migrada sai daqui.
 fn python_answers(path: &str) -> bool {
     let path = hangar_core::http::uvicorn_path(path);
-    matches!(path.as_str(), "/api/whoami" | "/api/diag" | "/api/diag/arquivo")
+    matches!(path.as_str(), "/api/diag" | "/api/diag/arquivo")
         || path.strip_prefix("/api/sessions/").and_then(|rest| rest.strip_suffix("/term"))
             .is_some_and(|name| !name.is_empty() && !name.contains('/'))
 }
