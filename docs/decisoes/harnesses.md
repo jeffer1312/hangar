@@ -30,6 +30,9 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   `turn_note` do estado por 8 s. Todo aviso leva o mapa `notice_meta` no evento, que é o que os
   clientes desenham como linha de aviso; o `kind` e o `text` ficam como eram, para o cliente antigo. A
   chave de ignorar (`notice_meta.key`) só vai no aviso que não é bloqueio real nem defeito do Hangar;
+  o botão do aviso também é do servidor (`notice_meta.action`: reinstalar plugin ou consertar hook), e o
+  resultado do conserto volta como nota na fila, nunca pelo `/input` (ver
+  [ações dos avisos](#ações-dos-avisos-reinstalar-plugin-e-consertar-hook-16112026));
   as chaves ignoradas moram em `~/.hangar/notice-ignores.json` (`/api/notice-ignores`, evento
   `notice_ignores` da lista do dono). A resposta que a CLI grava no lugar da do modelo quando a API
   falha (`isApiErrorMessage`) leva `notice_meta.level = "error"` e os clientes a desenham como caixa
@@ -1404,6 +1407,40 @@ nota nova no fim. Com terminal a repetição não gera evento e o total aparece 
 - **Ficou de fora:** MCP ou plugin que não subiu, hook lento, notificação da CLI e o modelo de troca na
   recusa: nem transcript nem evento de plugin no 2.1.316. O `reason` do `turn.complete` do plugin só tem
   `aborted`, `refusal`, `error` e `answer` (lido no binário), sem o motivo da parada.
+
+## Ações dos avisos: reinstalar plugin e consertar hook (16/11/2026)
+
+Segunda parte do redesenho dos avisos. Decisões do usuário: ação principal na própria linha (2B);
+"Reinstalar plugin" pela reinstalação que já existe (8A); "Consertar…" abre uma sessão pequena só com o
+erro e os arquivos de configuração, e o resultado volta em uma linha sem acordar o turno (3A); hook cujo
+script mora na pasta de um plugin que sumiu ganha "Reinstalar plugin" no lugar de "Consertar…" (1A);
+depois de reinstalar, "Recarregar conversa" (2B); confirmação antes de abrir (3A); a pessoa fica na
+conversa de origem (4A); no celular o botão fica na linha e o título corta.
+
+- **Quem decide o botão é o servidor**: `notice_meta.action` = `reinstall_plugin` (com `plugin` =
+  `nome@marketplace`, válido por `PluginId::parse`) ou `fix_hook`. O caso real que motivou o pedido
+  (pasta do plugin `SessionStart:compact` sumida na conta) chega como hook que falha, não como erro de
+  plugin; com terminal a CLI nem grava erro de plugin. Por isso a ação de hook olha o caminho do script:
+  `…/plugins/cache/<marketplace>/<nome>/<versão>/` com a pasta da versão ausente vira reinstalar. Com
+  terminal o caminho vem do `command` do anexo, que **não** entra no aviso (pode ter segredo e o aviso
+  chega a convidados); sem terminal o CLI não manda o comando, e só o erro que cita o caminho vale. A
+  existência da pasta é lida quando o aviso é lido: o reparo automático (`spawn_repair`) pode trazê-la
+  de volta, e o aviso antigo relido passa a mostrar "Consertar…".
+- **Reinstalar** é a rota de plugins (`POST /api/plugins/{id}/install`); refazer a conta fica com a
+  reabertura, que reconcilia a conta em toda subida do Claude.
+- **Consertar…**: `POST /api/sessions/{name}/notice/fix/preview` e `/notice/fix`, só do dono, com
+  `{notice_id, subject, detail, blocking}` vindos do app (quem pode abrir sessão com qualquer pedido;
+  a saída do hook vai cercada no pedido como dado). A sessão nasce **solta**, sem `link`: a filha ligada
+  pareava a origem (selo, sem adormecer, e entrava no grupo dela). Ela nasce no Sonnet, sem terminal, na
+  conta e pasta da origem, e **sem hooks (`disableAllHooks`) só quando o hook bloqueia**: o laço só
+  acontece com hook que bloqueia, e `disableAllHooks` desliga também as travas do Hangar (cofre). A
+  flag (`disable_hooks` no pedido, `hooks_off` no spec) não vem do fio.
+- **Volta por nota**: `~/.hangar/notice-fixes.json` diz de qual aviso e conversa é cada sessão de
+  conserto, gravado antes de abrir. O vigia (`notice_actions::spawn`) acompanha a lista enquanto houver
+  conserto: sessão parada 20 s com resposta posterior à abertura grava `fixdone:<aviso>:<tentativa>` na
+  fila da origem pelo `AppendLocal` (com `asleep_queue_action` na adormecida), nunca pelo `/input`. Duas
+  horas sem resposta gravam `failed`. A nota de andamento `fix:<aviso>:<tentativa>` sai na abertura; os
+  clientes a usam para a linha do aviso e não a desenham.
 
 ## Plugin reinstalado com a sessão aberta (28/10/2026)
 
