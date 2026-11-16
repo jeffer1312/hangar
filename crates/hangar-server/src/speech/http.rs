@@ -534,7 +534,6 @@ mod tests {
         .unwrap();
         let mut state = AppState::new(Config {
             listen: "127.0.0.1:0".parse().unwrap(),
-            upstream: "127.0.0.1:1".parse().unwrap(),
             internal_secret: "private".into(),
             auth_token: "owner".into(),
             log_path: None,

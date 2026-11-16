@@ -112,7 +112,7 @@ async fn list_srv(root: &Path, n: usize) -> Srv {
     state.devices = Arc::new(hangar_server::devices::Registry::new(home.join(".hangar/devices.json")));
     state.list = Arc::new(ListBridge::new(ListEnv { mux: Mux::with_program(&script, Duration::from_secs(5)),
         capture_program: script.into_os_string(), procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs },
-        FactsClient::new(upstream, SECRET.into())));
+        FactsClient::new()));
     // O leitor de estado nasce com a lista de `AppState::new`: sem refazê-lo, o pane do agente seria
     // procurado no tmux da máquina.
     state.state = Arc::new(hangar_server::state::live::StateEnv::new(state.terminal.clone(), state.list.clone(), state.diag.clone()));
@@ -566,7 +566,7 @@ async fn cano(sink: Arc<Mutex<Vec<Value>>>) -> String {
 #[tokio::test(flavor = "multi_thread")]
 async fn share_guest_writes_its_session_and_nothing_else() {
     let dir = tempfile::tempdir().unwrap();
-    let registry = Arc::new(RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(), "secret-test".into(), "instance-test".into())
+    let registry = Arc::new(RuntimeRegistry::new("instance-test".into())
         .with_processes(Arc::new(crate::runtime_open::RecipeProcesses("sid-1"))));
     let sink = Arc::new(Mutex::new(Vec::new()));
     let d = dir.path();
@@ -603,7 +603,7 @@ fn proof_home(dir: &Path) -> hangar_server::accounts::environment::AccountEnviro
 #[tokio::test(flavor = "multi_thread")]
 async fn r4_19_share_guest_changes_mode_and_model_through_the_owner_route() {
     let dir = tempfile::tempdir().unwrap();
-    let registry = Arc::new(RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(), "secret-test".into(), "instance-test".into())
+    let registry = Arc::new(RuntimeRegistry::new("instance-test".into())
         .with_processes(Arc::new(crate::runtime_open::RecipeProcesses("sid-1"))).with_codex_environment(proof_home(dir.path())));
     let sink = Arc::new(Mutex::new(Vec::new()));
     let d = dir.path();
@@ -652,7 +652,7 @@ async fn r4_19_share_guest_changes_mode_and_model_through_the_owner_route() {
 async fn r4_11_the_changed_mode_reaches_the_live_state_without_a_refresh() {
     let dir = tempfile::tempdir().unwrap();
     let d = dir.path();
-    let registry = Arc::new(RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(), "secret-test".into(), "instance-test".into())
+    let registry = Arc::new(RuntimeRegistry::new("instance-test".into())
         .with_processes(Arc::new(crate::runtime_open::RecipeProcesses("sid-1"))).with_codex_environment(proof_home(d)));
     let srv = plain_srv(d, |st| {
         st.write_gate_wait = Duration::from_secs(5);
@@ -701,7 +701,7 @@ fn terminal_target(dir: &Path, name: &str) -> TerminalTarget {
 #[tokio::test(flavor = "multi_thread")]
 async fn guest_mod_click_on_a_rust_terminal_without_surface_is_503() {
     let dir = tempfile::tempdir().unwrap();
-    let registry = Arc::new(RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(), "secret-test".into(), "instance-test".into()));
+    let registry = Arc::new(RuntimeRegistry::new("instance-test".into()));
     registry.open_terminal(terminal_target(dir.path(), "t")).await.unwrap();
     let srv = plain_srv(dir.path(), |st| assert!(st.state.runtime.set(registry).is_ok())).await;
     let t = srv.g.token("t", Kind::Share);
@@ -721,7 +721,7 @@ async fn guest_mod_click_on_a_rust_terminal_without_surface_is_503() {
 async fn guest_mod_on_a_session_outside_the_rust_gets_the_fixed_answer() {
     let dir = tempfile::tempdir().unwrap();
     let srv = plain_srv(dir.path(), |st| {
-        let _ = st.state.runtime.set(Arc::new(RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(), "secret-test".into(), "instance-test".into())));
+        let _ = st.state.runtime.set(Arc::new(RuntimeRegistry::new("instance-test".into())));
     }).await;
     let t = srv.g.token("o", Kind::Share);
     let url = |op: &str| format!("http://{}/api/sessions/o/plugin/{op}", srv.guest);
@@ -742,7 +742,7 @@ async fn guest_reaches_the_mods_the_rust_serves() {
     let dir = tempfile::tempdir().unwrap();
     let mut mods = None;
     let srv = plain_srv(dir.path(), |st| {
-        let registry = RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(), "secret-test".into(), "instance-test".into())
+        let registry = RuntimeRegistry::new("instance-test".into())
             .with_mods(st.mods.clone());
         let _ = st.state.runtime.set(Arc::new(registry));
         mods = Some(st.mods.clone());
@@ -1008,7 +1008,7 @@ async fn r3_11_guest_port_pane_is_for_the_full_invite_only() {
 #[tokio::test(flavor = "multi_thread")]
 async fn r3_31_reload_while_a_transfer_holds_the_gate_is_409_busy_for_owner_and_guest() {
     let dir = tempfile::tempdir().unwrap();
-    let registry = Arc::new(RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(), "secret-test".into(), "instance-test".into())
+    let registry = Arc::new(RuntimeRegistry::new("instance-test".into())
         .with_processes(Arc::new(crate::runtime_open::RecipeProcesses("sid-1"))).with_codex_environment(proof_home(dir.path())));
     let sidecar = dir.path().join("home/.hangar/claude-headless/s.json");
     let before = std::fs::read(&sidecar).unwrap();
@@ -1017,7 +1017,7 @@ async fn r3_31_reload_while_a_transfer_holds_the_gate_is_409_busy_for_owner_and_
         // Sem pastas da lista: nada lê as transferências do HOME da máquina.
         let mut env = ListEnv::from_env();
         env.dirs = None;
-        st.list = Arc::new(ListBridge::new(env, FactsClient::new(crate::refused_address(), SECRET.into())));
+        st.list = Arc::new(ListBridge::new(env, FactsClient::new()));
         assert!(st.state.runtime.set(registry).is_ok());
     }).await;
     let t = srv.g.token("s", Kind::Share);

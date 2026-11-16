@@ -408,7 +408,6 @@ struct Server {
     main: SocketAddr,
     connect: SocketAddr,
     preview: SocketAddr,
-    upstream: SocketAddr,
     device: String,
 }
 
@@ -456,7 +455,7 @@ async fn server_with(found: bool) -> Server {
     let main = spawn_state(app).await;
     wait_open(connect).await;
     wait_open(preview).await;
-    Server { _tmp: tmp, _python: python, dir, supervisor, main, connect, preview, upstream, device }
+    Server { _tmp: tmp, _python: python, dir, supervisor, main, connect, preview, device }
 }
 
 fn open_request(addr: SocketAddr, token: &str, port: u16) -> reqwest::RequestBuilder {
@@ -473,7 +472,7 @@ async fn replied(request: reqwest::RequestBuilder) -> (u16, Value) {
 #[tokio::test]
 async fn preview_never_reaches_hangar_ports() {
     let s = server().await;
-    for port in [8765, 8766, 8768, 8769, 18080, 18443, 8317, 0, s.main.port(), s.connect.port(), s.preview.port(), s.upstream.port()] {
+    for port in [8765, 8766, 8768, 8769, 18080, 18443, 8317, 0, s.main.port(), s.connect.port(), s.preview.port()] {
         let (status, body) = replied(open_request(s.main, OWNER, port)).await;
         assert_eq!(status, 422, "{port}: {body}");
         assert_eq!(body["detail"]["code"], "connect_preview_port_refused");

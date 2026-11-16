@@ -20,7 +20,7 @@ async fn terminal_error_statuses_preserve_static_cause_without_private_data() {
     let subscriber = tracing_subscriber::fmt().without_time().with_ansi(false)
         .with_writer(move || Buffer(capture.clone())).finish();
     tracing::subscriber::set_global_default(subscriber).unwrap();
-    let cfg = Config { listen: "127.0.0.1:0".parse().unwrap(), upstream: "127.0.0.1:1".parse().unwrap(),
+    let cfg = Config { listen: "127.0.0.1:0".parse().unwrap(),
         internal_secret: "private-secret".into(), auth_token: "owner".into(), log_path: None,
         trusted: TrustedHosts::parse("127.0.0.1") };
     let state = Arc::new(AppState::with_terminal_pool(cfg,

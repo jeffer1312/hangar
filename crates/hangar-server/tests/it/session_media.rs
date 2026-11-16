@@ -50,7 +50,6 @@ impl Scene {
         let (python, upstream) = spawn_fake().await;
         let cfg = Config {
             listen: "127.0.0.1:0".parse().unwrap(),
-            upstream,
             auth_token: OWNER.into(),
             internal_secret: "isolated".into(),
             log_path: None,
@@ -65,7 +64,7 @@ impl Scene {
             state.accounts = hangar_server::accounts::AccountService::new(hangar_server::accounts::environment::AccountEnvironment::from_map(
                 [("HOME".into(), home.clone()), ("USERPROFILE".into(), home)].into()));
         }
-        let runtime = Arc::new(RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(), "s".into(), "i".into()));
+        let runtime = Arc::new(RuntimeRegistry::new("i".into()));
         assert!(state.state.runtime.set(runtime.clone()).is_ok());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -357,7 +356,7 @@ fn upload_retention_follows_runtime_config_then_environment_then_thirty_days() {
 #[tokio::test]
 async fn video_transcription_never_goes_through_python() {
     let (python, upstream) = spawn_fake().await;
-    let state = AppState::new(Config { listen: "127.0.0.1:0".parse().unwrap(), upstream, auth_token: OWNER.into(),
+    let state = AppState::new(Config { listen: "127.0.0.1:0".parse().unwrap(), auth_token: OWNER.into(),
         internal_secret: "isolated".into(), log_path: None, trusted: TrustedHosts::parse("127.0.0.1") });
     let text = hangar_server::uploads::media::transcribe(&state, b"audio".to_vec()).await;
     assert_eq!(text, "");
@@ -401,7 +400,7 @@ impl Speech {
             })).await;
         let mut scene = Scene::new().await;
         scene.task.abort();
-        let cfg = Config { listen: "127.0.0.1:0".parse().unwrap(), upstream, auth_token: OWNER.into(), internal_secret: "isolated".into(),
+        let cfg = Config { listen: "127.0.0.1:0".parse().unwrap(), auth_token: OWNER.into(), internal_secret: "isolated".into(),
             log_path: None, trusted: TrustedHosts::parse("127.0.0.1") };
         let mut state = AppState::new(cfg);
         state.side.locate = scene.sessions.clone();

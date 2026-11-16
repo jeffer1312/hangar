@@ -216,7 +216,7 @@ exit {code}
     async fn a_terminal_session_answers_through_the_fork_without_touching_the_pane() {
         let dir = tempfile::tempdir().unwrap();
         let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let registry = Arc::new(hangar_server::runtime::gateway::RuntimeRegistry::new(crate::session_write_control::policy(calls).await, "secret-test".into(), "instance-test".into()));
+        let registry = Arc::new(hangar_server::runtime::gateway::RuntimeRegistry::new("instance-test".into()));
         let log = crate::session_write_control::open_terminal(&registry, dir.path(), "t").await;
         std::fs::create_dir_all(dir.path().join("projects/p")).unwrap();
         std::fs::write(dir.path().join("projects/p/sid.jsonl"), "{}\n").unwrap();

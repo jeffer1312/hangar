@@ -1480,8 +1480,7 @@ async fn workspace_slow_diff_keeps_session_operation_input_and_interrupt_availab
         state.accounts = hangar_server::accounts::AccountService::new(hangar_server::accounts::environment::AccountEnvironment::from_map([
             ("HOME".into(),home.to_string_lossy().into_owned()),("USERPROFILE".into(),home.to_string_lossy().into_owned()),
             ("CLAUDE_CONFIG_DIR".into(),home.join(".claude").to_string_lossy().into_owned()),("CP_SCAN_ROOTS".into(),repo.to_string_lossy().into_owned())].into()));
-        let runtime = crate::runtime_open::with_hubs(hangar_server::runtime::gateway::RuntimeRegistry::new(
-            "127.0.0.1:9".parse().unwrap(), "secret-test".into(), "slow-diff-test".into())
+        let runtime = crate::runtime_open::with_hubs(hangar_server::runtime::gateway::RuntimeRegistry::new("slow-diff-test".into())
             .with_codex_environment(state.accounts.env.clone())
             .with_processes(Arc::new(crate::runtime_open::RecipeProcesses("sid-1"))));
         crate::session_write_routes::open_entry_with(&runtime, &root, "slow-diff", "fixture", 1,

@@ -91,7 +91,7 @@ async fn server(tmux: &Tmux, tune: impl FnOnce(&mut TermConfig)) -> Server {
     let (upstream, py) = python().await;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let cfg = Config { listen: addr, upstream, internal_secret: "s".into(), auth_token: "dono".into(),
+    let cfg = Config { listen: addr, internal_secret: "s".into(), auth_token: "dono".into(),
                        log_path: None, trusted: TrustedHosts::parse("127.0.0.1") };
     let mut state = AppState::new(cfg);
     let mut tc = TermConfig { socket: Some(tmux.socket.clone()), ..TermConfig::default() };
@@ -359,7 +359,7 @@ async fn plain_get_and_other_methods_are_the_rust_404() {
 async fn guest_server(tmux: &Tmux, sessions: &[(&str, Kind)]) -> SocketAddr {
     use crate::share::caller::SessionPath;
     let (upstream, _) = python().await;
-    let cfg = Config { listen: "127.0.0.1:0".parse().unwrap(), upstream, internal_secret: "s".into(), auth_token: "dono".into(),
+    let cfg = Config { listen: "127.0.0.1:0".parse().unwrap(), internal_secret: "s".into(), auth_token: "dono".into(),
                        log_path: None, trusted: TrustedHosts::parse("127.0.0.1") };
     let mut state = AppState::new(cfg);
     state.term = Arc::new(Terms::new(TermConfig { socket: Some(tmux.socket.clone()), ..TermConfig::default() }));

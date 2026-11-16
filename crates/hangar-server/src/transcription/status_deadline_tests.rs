@@ -56,7 +56,6 @@ async fn public_status_deadline_includes_waiting_for_shared_configuration() {
     let temporary = tempfile::tempdir().unwrap();
     let mut state = AppState::new(Config {
         listen: public,
-        upstream: "127.0.0.1:1".parse().unwrap(),
         auth_token: "owner".into(),
         internal_secret: "private".into(),
         log_path: None,

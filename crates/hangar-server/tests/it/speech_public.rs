@@ -73,7 +73,6 @@ impl Server {
         let upstream = crate::refused_address();
         let mut state = AppState::new(Config {
             listen: address,
-            upstream,
             internal_secret: "fixture-private".into(),
             auth_token: "fixture-owner".into(),
             log_path: None,
@@ -87,7 +86,7 @@ impl Server {
         state.list = Arc::new(ListBridge::new(ListEnv { mux:Mux::with_program(&mux,Duration::from_secs(2)), capture_program:mux.into_os_string(),
             procs:Arc::new(SystemProcs::default()), dirs:parse_dirs(&json!({"home":home,"claude":claude,"codex_home":home.join(".codex"),
                 "pi_sessions":home.join(".pi/agent/sessions"),"omp_config":home.join(".omp"),"omp_agent":home.join(".omp/agent"),"kimi_home":home.join(".kimi-code")}).to_string()) },
-            FactsClient::new(upstream,"fixture-private".into())));
+            FactsClient::new()));
         let state = Arc::new(state);
         let serving = state.clone();
         let task = tokio::spawn(async move {

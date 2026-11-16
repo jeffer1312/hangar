@@ -58,7 +58,7 @@ async fn server() -> Srv {
     assert!(state.state.runtime.set(runtime).is_ok());
     state.list = Arc::new(ListBridge::new(ListEnv { mux: Mux::with_program(&script, Duration::from_secs(5)),
         capture_program: script.into_os_string(), procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs },
-        FactsClient::new(upstream, SECRET.into())));
+        FactsClient::new()));
     let pair = home.join(".claude/.hangar-pair");
     state.groups = Some(Arc::new(GroupService::new(PairDir::new(pair.clone(), root.join("arquivo")),
         Arc::new(PythonOrq::from_state(&state)), "casa".into())));

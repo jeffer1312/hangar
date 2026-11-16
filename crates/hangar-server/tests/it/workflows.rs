@@ -44,7 +44,7 @@ async fn scene() -> (tempfile::TempDir, axum::Router, PathBuf) {
             procs: Arc::new(hangar_server::list::procs::SystemProcs::default()),
             dirs,
         },
-        FactsClient::new(state.cfg.upstream, SECRET.into()),
+        FactsClient::new(),
     ));
     let row = list.find_row("s0").await.unwrap().unwrap();
     let empty = list.find_row("s1").await.unwrap().unwrap();

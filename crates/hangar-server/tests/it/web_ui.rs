@@ -28,7 +28,7 @@ impl Fixture {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let mut state = AppState::new(Config {
-            listen: address, upstream, internal_secret: "fixture-internal".into(),
+            listen: address, internal_secret: "fixture-internal".into(),
             auth_token: "fixture-owner".into(), log_path: None, trusted: TrustedHosts::parse("127.0.0.1"),
         });
         state.accounts = AccountService::new(AccountEnvironment::from_map([

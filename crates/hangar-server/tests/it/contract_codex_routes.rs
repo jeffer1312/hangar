@@ -68,7 +68,7 @@ async fn cano(rpc: Value, busy: bool) -> String {
 /// Registro como o do servidor, sem Python atrás (nada do Codex vai a ele) e sem `codex` no PATH: uma
 /// subida pedida falha no processo, nunca abre um app-server de verdade.
 fn registry(dir: &std::path::Path) -> RuntimeRegistry {
-    RuntimeRegistry::new(crate::refused_address(), "secret-test".into(), "instance-test".into())
+    RuntimeRegistry::new("instance-test".into())
         .with_codex_environment(hangar_server::accounts::environment::AccountEnvironment::from_map(
             [("HOME".to_owned(), dir.to_string_lossy().into_owned()), ("PATH".to_owned(), dir.join("sem-bin").to_string_lossy().into_owned())].into()))
 }
@@ -120,7 +120,7 @@ async fn serve_list(registry: Arc<RuntimeRegistry>, home: &std::path::Path, dirs
     crate::write_executable(&mux, "#!/bin/sh\nexit 0\n");
     list_env.mux = hangar_server::list::mux::Mux::with_program(&mux, Duration::from_secs(5));
     state.list = Arc::new(hangar_server::list::bridge::ListBridge::new(list_env,
-        hangar_server::list::facts::FactsClient::new(upstream, SECRET.into())));
+        hangar_server::list::facts::FactsClient::new()));
     assert!(state.state.runtime.set(registry).is_ok());
     (python, spawn_state(state).await)
 }

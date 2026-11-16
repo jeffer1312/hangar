@@ -73,7 +73,7 @@ impl Harness {
         let up_task = tokio::spawn(async move { axum::serve(up, Router::new().fallback(python)).await.unwrap() });
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
-        let mut state = AppState::new(Config { listen: address, upstream, internal_secret: SECRET.into(), auth_token: OWNER.into(),
+        let mut state = AppState::new(Config { listen: address, internal_secret: SECRET.into(), auth_token: OWNER.into(),
             log_path: None, trusted: TrustedHosts::parse("127.0.0.1") });
         hangar_server::accounts::quotas::disable_open_network_read();
         let env = [("HOME", home.to_string_lossy().into_owned()), ("USERPROFILE", home.to_string_lossy().into_owned()),

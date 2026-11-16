@@ -48,7 +48,7 @@ async fn serve(root: &Path, headless: bool) -> (Arc<Fake>, std::net::SocketAddr)
     let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     // A pasta da prova: os sidecars e specs que o registro lê são os dela, nunca os da máquina.
     let env = hangar_server::accounts::environment::AccountEnvironment::from_map([("HOME".to_owned(), home.to_string_lossy().into_owned())].into());
-    let registry = Arc::new(RuntimeRegistry::new(policy(calls).await, "secret-test".into(), "instance-test".into())
+    let registry = Arc::new(RuntimeRegistry::new("instance-test".into())
         .with_processes(Arc::new(crate::runtime_open::RecipeProcesses("sid-1"))).with_codex_environment(env));
     if headless {
         headless_sidecar(&home, "h");
@@ -66,7 +66,7 @@ async fn serve(root: &Path, headless: bool) -> (Arc<Fake>, std::net::SocketAddr)
     state.login_guests = Arc::new(guests);
     state.list = Arc::new(ListBridge::new(ListEnv { mux: Mux::with_program(&script, Duration::from_secs(5)),
         capture_program: script.into_os_string(), procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs },
-        FactsClient::new(upstream, SECRET.into())));
+        FactsClient::new()));
     state.write_gate_wait = Duration::from_secs(5);
     assert!(state.state.runtime.set(registry).is_ok());
     (python, fake::spawn_state(state).await)
@@ -219,7 +219,7 @@ async fn r4_19_login_guest_reaches_mode_and_model_in_rust() {
 async fn permissions_r4_05_claude_whose_pane_is_gone_is_409_with_a_code_and_no_key() {
     let dir = tempfile::tempdir().unwrap();
     let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let registry = Arc::new(RuntimeRegistry::new(policy(calls).await, "secret-test".into(), "instance-test".into())
+    let registry = Arc::new(RuntimeRegistry::new("instance-test".into())
         .with_processes(Arc::new(crate::runtime_open::RecipeProcesses("sid-1"))));
     let log = open_terminal(&registry, dir.path(), "t").await;
     let tmux = dir.path().join("tmux");

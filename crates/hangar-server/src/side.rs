@@ -1453,7 +1453,7 @@ pub(crate) fn test_ctx() -> SideCtx {
         queue_dir: None,
         problem_hold: std::time::Duration::ZERO,
         shown_problems: Arc::default(),
-        diag: crate::diag::DiagClient::new("127.0.0.1:9".parse().unwrap(), "s".into()),
+        diag: crate::diag::DiagClient::new(),
     }
 }
 
@@ -1892,7 +1892,7 @@ mod tests {
         }
         let (spawn, count) = fake_feeds();
         let ctx = SideCtx { monitors: Some(spawn), ..idle_ctx() };
-        let registry = Arc::new(RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(), "s".into(), "i".into()));
+        let registry = Arc::new(RuntimeRegistry::new("i".into()));
         registry.bind_hubs(ctx.hubs.downgrade());
         let _ = ctx.runtime.set(registry.clone());
         let binding = Binding { provider: Provider::Codex, jsonl: dir.path().join("rollout.jsonl"), key: "thread-1".into(), headless: false, life: None };
@@ -1983,7 +1983,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let jsonl = dir.path().join("k.jsonl");
         std::fs::write(&jsonl, "").unwrap();
-        let cfg = crate::config::Config { listen: "127.0.0.1:0".parse().unwrap(), upstream: "127.0.0.1:9".parse().unwrap(), internal_secret: "s".into(),
+        let cfg = crate::config::Config { listen: "127.0.0.1:0".parse().unwrap(), internal_secret: "s".into(),
             auth_token: "dono".into(), log_path: None, trusted: crate::auth::TrustedHosts::parse("127.0.0.1") };
         let mut st = crate::routes::AppState::new(cfg);
         st.side.locate = Arc::new(crate::locate::Fixed(Some(serde_json::from_value(serde_json::json!(
@@ -2121,7 +2121,7 @@ mod tests {
         std::fs::write(sidecars.join("s.json"), serde_json::json!({"name":"s","key":"k","asleep":{"wake_surface":"terminal","since":1.0}}).to_string()).unwrap();
         let home = dir.path().to_string_lossy().into_owned();
         let env = crate::accounts::environment::AccountEnvironment::from_map([("HOME".to_owned(), home.clone()), ("USERPROFILE".to_owned(), home)].into());
-        let registry = crate::runtime::gateway::RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(), "s".into(), "i".into()).with_codex_environment(env);
+        let registry = crate::runtime::gateway::RuntimeRegistry::new("i".into()).with_codex_environment(env);
         let ctx = SideCtx { locate: Arc::new(crate::locate::Unavailable), ..idle_ctx() };
         assert!(ctx.runtime.set(Arc::new(registry)).is_ok());
         let binding = Binding { provider: Provider::Claude, jsonl: jsonl.clone(), key: "k".into(), headless: false, life: None };
@@ -2450,7 +2450,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
-        let registry = Arc::new(RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(), "secret-test".into(), "instance-test".into()));
+        let registry = Arc::new(RuntimeRegistry::new("instance-test".into()));
         let ctx = test_ctx();
         registry.bind_hubs(ctx.hubs.downgrade());
         assert!(ctx.runtime.set(registry.clone()).is_ok());

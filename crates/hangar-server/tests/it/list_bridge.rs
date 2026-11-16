@@ -47,7 +47,7 @@ async fn spawn_with(dir: &Path, exit: i32, facts: SocketAddr) -> SocketAddr {
         capture_program: script.into_os_string(),
         procs: Arc::new(hangar_server::list::procs::SystemProcs::default()),
         dirs,
-    }, FactsClient::new(facts, SECRET.into())));
+    }, FactsClient::new()));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let app = terminal_router(Arc::new(state)).into_make_service_with_connect_info::<SocketAddr>();
@@ -208,7 +208,7 @@ async fn bridge_with_sessions(root: &Path, n: usize, marker: (&str, f64)) -> (Li
     let (python, upstream) = fake::spawn_fake().await;
     let bridge = ListBridge::new(ListEnv { mux: Mux::with_program(&script, Duration::from_secs(5)),
         capture_program: script.clone().into_os_string(), procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs },
-        FactsClient::new(upstream, SECRET.into()));
+        FactsClient::new());
     (bridge, python)
 }
 

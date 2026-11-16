@@ -1534,7 +1534,7 @@ async fn sleep_terminal_gives_up_when_busy() {
     awake.refused(Duration::ZERO,"fila pendente").await;
     awake_terminal(&"b4".repeat(16),true).await.refused(Duration::ZERO,"comando no shell").await;
     let awake = awake_terminal(&"b5".repeat(16),false).await;
-    awake.terms.mark_open_for_test("s1",&hangar_server::diag::DiagClient::new("127.0.0.1:9".parse().unwrap(),"teste".into())).await;
+    awake.terms.mark_open_for_test("s1",&hangar_server::diag::DiagClient::new()).await;
     awake.refused(Duration::ZERO,"terminal do rodapé").await;
     let awake = awake_terminal(&"b6".repeat(16),false).await;
     std::fs::write(awake.fx.state.with_extension("attached"),"").unwrap();

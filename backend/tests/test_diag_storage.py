@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app import diag, diag_logging, log_paths
+from app import diag, log_paths
 
 BASE = log_paths.base
 
@@ -98,55 +98,6 @@ def test_diary_symlink_cannot_export_another_file(tmp_path, monkeypatch):
     exported = rows()
     assert any(r.get("codigo") == "link_ignorado" for r in exported)
     assert "segredo" not in json.dumps(exported)
-
-
-@pytest.mark.parametrize("logger_name", ["hangar.contas", "app.conpty", "uvicorn.error", "asyncio"])
-def test_python_log_exports_location_and_exception_without_message(logger_name, logs):
-    diag_logging.instalar()
-    try:
-        raise PermissionError(13, "segredo-token")
-    except PermissionError:
-        logging.getLogger(logger_name).exception("segredo-prompt %s", "segredo-url")
-    event = next(r for r in rows() if r["evento"] == "backend.erro")
-    assert event["codigo"] == logger_name and event["erro_tipo"] == "PermissionError"
-    assert event["errno"] == 13 and "test_diag_storage.py:" in event["pilha"]
-    assert "segredo" not in diag.ler_tudo()
-    assert "segredo-token" in (logs / "privado" / "backend.log").read_text()
-
-
-def test_private_log_rotation_and_idempotent_installation(logs):
-    diag_logging.instalar()
-    diag_logging.instalar()
-    logger = logging.getLogger("hangar")
-    handlers = [h for h in logger.handlers if isinstance(h, diag_logging.PrivateLog)]
-    assert len(handlers) == 1
-    assert handlers[0] in logging.getLogger("uvicorn.error").handlers
-    handlers[0].maxBytes = 150
-    for _ in range(20):
-        logger.info("mensagem interna com tamanho suficiente para rodar o arquivo")
-    files = list((logs / "privado").glob("backend.log*"))
-    assert len(files) == 4
-    if os.name != "nt":
-        assert all(p.stat().st_mode & 0o777 == 0o600 for p in files)
-
-
-def test_uvicorn_reconfiguration_is_repaired_on_lifespan_install(logs):
-    script = '''
-import json, logging, sys
-from pathlib import Path
-import uvicorn
-from app import diag, diag_logging, log_paths
-log_paths.base = lambda: Path(sys.argv[1])
-diag_logging.instalar()
-uvicorn.Config('app.api:app')
-diag_logging.instalar()
-logging.getLogger('uvicorn.error').error('segredo')
-assert 'segredo' not in diag.caminho_do_dia().read_text()
-assert 'backend.erro' in diag.caminho_do_dia().read_text()
-assert 'segredo' in (log_paths.base() / 'privado' / 'backend.log').read_text()
-'''
-    result = subprocess.run([sys.executable, "-c", script, str(logs)], capture_output=True, text=True, timeout=15)
-    assert result.returncode == 0, result.stderr
 
 
 def test_operation_carries_safe_context_across_sync_and_async_steps():

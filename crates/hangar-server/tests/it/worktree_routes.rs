@@ -220,7 +220,7 @@ async fn cleanup_known_repo_is_safe_when_another_discovery_root_is_missing() {
         "omp_agent":home.join(".omp/agent"),"kimi_home":home.join(".kimi-code")
     }).to_string());
     env.mux = Mux::with_program(&mux, Duration::from_secs(5));
-    state.list = Arc::new(ListBridge::new(env, FactsClient::new(upstream, fake::SECRET.into())));
+    state.list = Arc::new(ListBridge::new(env, FactsClient::new()));
     let settings=hangar_workspace::worktree_settings::WorktreeSettings { delete_unchanged: true, ..Default::default() };
     settings.save_at(&home.join(".hangar/worktree-settings.json"), &home).unwrap();
     let wt=root.join("repo-wt");
@@ -620,7 +620,7 @@ async fn t4_private_forwarding_keeps_method_and_guest_refusals_native() {
     env.dirs = parse_dirs(&serde_json::json!({"home":home,"claude":home.join(".claude"),"codex_home":home.join(".codex"),
         "pi_sessions":home.join(".pi/agent/sessions"),"omp_config":home.join(".omp"),"omp_agent":home.join(".omp/agent"),"kimi_home":home.join(".kimi-code")}).to_string());
     env.mux = Mux::with_program(mux, std::time::Duration::from_secs(5));
-    state.list = std::sync::Arc::new(ListBridge::new(env, FactsClient::new(upstream, fake::SECRET.into())));
+    state.list = std::sync::Arc::new(ListBridge::new(env, FactsClient::new()));
     let app = hangar_server::routes::terminal_router(std::sync::Arc::new(state));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

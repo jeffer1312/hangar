@@ -112,7 +112,7 @@ impl Sink {
 
 /// Registro do runtime com a política falsa que as aberturas pedem e o processo do cano conhecido.
 pub async fn registry() -> RuntimeRegistry {
-    RuntimeRegistry::new(policy().await, "secret-test".into(), "instance-test".into())
+    RuntimeRegistry::new("instance-test".into())
         .with_processes(Arc::new(RecipeProcesses("sid-1")))
 }
 

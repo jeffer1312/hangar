@@ -270,7 +270,7 @@ async fn owner_with_mux(registry: Arc<RuntimeRegistry>, home: &std::path::Path) 
     assert!(dirs.is_some());
     state.list = Arc::new(ListBridge::new(ListEnv { mux: hangar_server::list::mux::Mux::with_program(&mux, Duration::from_secs(5)),
         capture_program: mux.clone().into_os_string(), procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs },
-        hangar_server::list::facts::FactsClient::new(upstream, SECRET.into())));
+        hangar_server::list::facts::FactsClient::new()));
     assert!(state.state.runtime.set(registry).is_ok());
     (python, fake::spawn_state(state).await)
 }
@@ -357,7 +357,7 @@ async fn reload_of_a_claude_answers_with_the_rust_code() {
     std::fs::write(dir.join("s.json"), "não é json").unwrap();
     let env = hangar_server::accounts::environment::AccountEnvironment::from_map([("HOME".to_owned(), home.path().to_string_lossy().into_owned())].into());
     let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let registry = Arc::new(RuntimeRegistry::new(crate::session_write_control::policy(calls).await, "secret-test".into(), "instance-test".into())
+    let registry = Arc::new(RuntimeRegistry::new("instance-test".into())
         .with_codex_environment(env));
     let (python, upstream) = fake::spawn_fake().await;
     let state = hangar_server::routes::AppState::new(fake::config(upstream, "127.0.0.1"));

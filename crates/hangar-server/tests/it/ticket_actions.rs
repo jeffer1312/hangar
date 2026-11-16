@@ -11,7 +11,7 @@ use tower::ServiceExt;
 async fn ticket_group_is_projected_from_real_sidecars_and_members_can_report() {
     use hangar_server::groups::{service::{GroupService,JoinOwned},store::PairDir,orq::PythonOrq};
     let temp=tempfile::tempdir().unwrap();
-    let cfg=Config {listen:"127.0.0.1:0".parse().unwrap(),upstream:"127.0.0.1:9".parse().unwrap(),internal_secret:"test".into(),auth_token:"owner-ticket".into(),log_path:None,trusted:hangar_server::auth::TrustedHosts::parse("127.0.0.1")};
+    let cfg=Config {listen:"127.0.0.1:0".parse().unwrap(),internal_secret:"test".into(),auth_token:"owner-ticket".into(),log_path:None,trusted:hangar_server::auth::TrustedHosts::parse("127.0.0.1")};
     let mut state=AppState::new(cfg);
     state.hangar_dir=temp.path().join(".hangar");
     state.origins_home=temp.path().to_owned();
@@ -75,7 +75,7 @@ async fn board_action_uses_the_bound_runtime_input_and_reports_an_uncertain_ack(
         reader.get_mut().write_all(format!("{ack}\n").as_bytes()).await.unwrap();
         raw.clear();while reader.read_line(&mut raw).await.unwrap_or(0)>0 {raw.clear();}
     });
-    let registry=Arc::new(RuntimeRegistry::new(upstream,"secret-test".into(),"ticket-test".into())
+    let registry=Arc::new(RuntimeRegistry::new("ticket-test".into())
         // estavel: somente a leitura do SO é substituída pelos PIDs do processo externo da prova.
         .with_processes(Arc::new(crate::sink::RecipeProcesses("sid-1"))));
     registry.bind_lifecycle();
@@ -84,7 +84,7 @@ async fn board_action_uses_the_bound_runtime_input_and_reports_an_uncertain_ack(
         binding:CanoBinding {pid:42,escuta:format!("tcp:{address}"),token:"secret-test".into(),versao:2},
         lease_path:temp.path().join("session.lock"),state_path:temp.path().join("state.json"),projection_dir:temp.path().join("projection"),
         transcript:temp.path().join("history.jsonl"),created:0.0}).await.unwrap();
-    let cfg=Config {listen:"127.0.0.1:0".parse().unwrap(),upstream,internal_secret:"secret-test".into(),auth_token:"owner-ticket".into(),
+    let cfg=Config {listen:"127.0.0.1:0".parse().unwrap(),internal_secret:"secret-test".into(),auth_token:"owner-ticket".into(),
         log_path:None,trusted:hangar_server::auth::TrustedHosts::parse("127.0.0.1")};
     let mut state=AppState::new(cfg);
     state.hangar_dir=temp.path().join(".hangar");state.origins_home=temp.path().to_owned();

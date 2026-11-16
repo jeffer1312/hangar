@@ -60,7 +60,6 @@ impl Scene {
         let (python, upstream) = spawn_fake().await;
         let cfg = Config {
             listen: "127.0.0.1:0".parse().unwrap(),
-            upstream,
             auth_token: OWNER.into(),
             internal_secret: "isolated".into(),
             log_path: None,

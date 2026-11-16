@@ -99,7 +99,7 @@ pub(crate) async fn open_entry_with(registry: &RuntimeRegistry, dir: &std::path:
 }
 
 async fn registry() -> Arc<RuntimeRegistry> {
-    crate::runtime_open::with_hubs(RuntimeRegistry::new(policy().await, "secret-test".into(), "instance-test".into()).with_processes(Arc::new(crate::runtime_open::RecipeProcesses("sid-1"))))
+    crate::runtime_open::with_hubs(RuntimeRegistry::new("instance-test".into()).with_processes(Arc::new(crate::runtime_open::RecipeProcesses("sid-1"))))
 }
 
 /// Servidor com o runtime ligado (como `serve_until_with_state` faz) e o Python falso.
@@ -389,8 +389,8 @@ async fn unhealthy_write_reopens_the_session_in_rust() {
     let home = tempfile::tempdir().unwrap();
     let diary = dir.path().join("diário");
     std::fs::create_dir_all(&diary).unwrap();
-    let registry = crate::runtime_open::with_hubs(RuntimeRegistry::new(policy_seen(seen.clone()).await, "secret-test".into(), "instance-test".into())
-        .with_diagnostics(hangar_server::diag::DiagClient::new("127.0.0.1:9".parse().unwrap(),String::new()).with_diary(Some(diary.clone())))
+    let registry = crate::runtime_open::with_hubs(RuntimeRegistry::new("instance-test".into())
+        .with_diagnostics(hangar_server::diag::DiagClient::new().with_diary(Some(diary.clone())))
         .with_processes(Arc::new(crate::runtime_open::RecipeProcesses("sid-1")))
         .with_codex_environment(hangar_server::accounts::environment::AccountEnvironment::from_map(
             [("HOME".to_owned(), home.path().to_string_lossy().into_owned())].into())));

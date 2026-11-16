@@ -78,7 +78,6 @@ impl Fixture {
         let address = listener.local_addr().unwrap();
         let mut state = AppState::new(Config {
             listen: address,
-            upstream: upstream_address,
             internal_secret: "fixture-internal".into(),
             auth_token: "fixture-owner".into(),
             log_path: None,

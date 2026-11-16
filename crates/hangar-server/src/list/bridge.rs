@@ -1441,7 +1441,7 @@ mod tests {
         let dirs = Dirs { home: tmp.path().into(), claude: tmp.path().join(".claude"), codex_home: tmp.path().join(".codex"),
             pi_sessions: tmp.path().join("pi"), omp_config: tmp.path().join("omp"), omp_agent: tmp.path().join("omp/agent"), kimi_home: tmp.path().join("kimi") };
         let bridge = ListBridge::new(ListEnv { mux: Mux::default(), capture_program: "missing-test-mux".into(),
-            procs: Arc::new(procs::SystemProcs::default()), dirs: Some(dirs) }, FactsClient::new("127.0.0.1:9".parse().unwrap(), "s".into()));
+            procs: Arc::new(procs::SystemProcs::default()), dirs: Some(dirs) }, FactsClient::new());
         let row = || serde_json::from_value::<SessionRow>(json!({"name":"s","provider":"claude","headless":true,"lifecycle_id":"k"})).unwrap();
         // A descoberta semeada vale por `DISCOVER_TTL`; no Windows a recusa do endereço dos fatos leva ~2 s
         // por rodada e a seguinte redescobriria pelo multiplexador real. Cada rodada parte da mesma linha.
@@ -1486,9 +1486,9 @@ mod tests {
         let dirs = Dirs { home: tmp.path().into(), claude: tmp.path().join(".claude"), codex_home: tmp.path().join(".codex"),
             pi_sessions: tmp.path().join("pi"), omp_config: tmp.path().join("omp"), omp_agent: tmp.path().join("omp/agent"), kimi_home: tmp.path().join("kimi") };
         let bridge = ListBridge::new(ListEnv { mux: Mux::default(), capture_program: "missing-test-mux".into(),
-            procs: Arc::new(procs::SystemProcs::default()), dirs: Some(dirs) }, FactsClient::new("127.0.0.1:9".parse().unwrap(), "s".into()));
+            procs: Arc::new(procs::SystemProcs::default()), dirs: Some(dirs) }, FactsClient::new());
         bridge.set_runtime(Arc::new(Snapshot));
-        bridge.set_plugin_runtime(Arc::new(crate::runtime::gateway::RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(), "test".into(), "instance".into())));
+        bridge.set_plugin_runtime(Arc::new(crate::runtime::gateway::RuntimeRegistry::new("instance".into())));
         let row = serde_json::from_value::<SessionRow>(json!({"name":"s","provider":"claude","headless":true,"lifecycle_id":"k:k"})).unwrap();
         *bridge.discovery.lock().await = Some(Discovery { at: Instant::now(), wall: wall_now(), epoch: 0, fresh: true,
             rows: Arc::new(vec![row]), agent_pids: Arc::default(), panes: Arc::default(), children: Arc::default(), partial: false });
@@ -1510,7 +1510,7 @@ mod tests {
         let dirs = Dirs { home: tmp.path().into(), claude: tmp.path().join(".claude"), codex_home: tmp.path().join(".codex"),
             pi_sessions: tmp.path().join("pi"), omp_config: tmp.path().join("omp"), omp_agent: tmp.path().join("omp/agent"), kimi_home: tmp.path().join("kimi") };
         let bridge = ListBridge::new(ListEnv { mux: Mux::default(), capture_program: "missing-test-mux".into(),
-            procs: Arc::new(procs::SystemProcs::default()), dirs: Some(dirs) }, FactsClient::new("127.0.0.1:9".parse().unwrap(), "s".into()));
+            procs: Arc::new(procs::SystemProcs::default()), dirs: Some(dirs) }, FactsClient::new());
         let row = serde_json::from_value::<SessionRow>(json!({"name":"t","provider":"claude","headless":false,"lifecycle_id":"k"})).unwrap();
         *bridge.discovery.lock().await = Some(Discovery { at: Instant::now(), wall: wall_now(), epoch: 0, fresh: true,
             rows: Arc::new(vec![row]), agent_pids: Arc::default(), panes: Arc::default(), children: Arc::default(), partial: false });
@@ -1532,7 +1532,7 @@ mod tests {
         use crate::interactions::InteractionBinding;
         use crate::state::facts::{PluginFacts, PluginReading};
         let bridge = ListBridge::new(ListEnv { mux: Mux::default(), capture_program: "missing-test-mux".into(),
-            procs: Arc::new(procs::SystemProcs::default()), dirs: None }, FactsClient::new("127.0.0.1:9".parse().unwrap(), "s".into()));
+            procs: Arc::new(procs::SystemProcs::default()), dirs: None }, FactsClient::new());
         let mut rows = vec![serde_json::from_value::<SessionRow>(json!({"name":"s","provider":"claude","state":"working","stalled":true})).unwrap()];
         let local = PluginFacts { plugin_state: None, waiter_open: true, heartbeat_age_ms: Some(0), question: None,
             questions: vec![json!({"id":"perm:a","interaction_id":"a","questions":[],"tool":"Bash","resumo":"cmd"})], suggestion: "".into() };
@@ -1546,7 +1546,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn a_row_problem_shows_only_after_it_held() {
         let bridge = ListBridge::new(ListEnv { mux: Mux::default(), capture_program: "missing-test-mux".into(),
-            procs: Arc::new(procs::SystemProcs::default()), dirs: None }, FactsClient::new("127.0.0.1:9".parse().unwrap(), "s".into()));
+            procs: Arc::new(procs::SystemProcs::default()), dirs: None }, FactsClient::new());
         bridge.set_problem_hold(crate::problem_gate::HOLD);
         let round = |problema: Option<&str>| {
             let mut rows = vec![serde_json::from_value::<SessionRow>(json!({"name":"s","provider":"claude","state":"dead","problema":problema})).unwrap()];
@@ -1566,7 +1566,7 @@ mod tests {
     #[tokio::test]
     async fn a_diagnostic_row_problem_never_shows() {
         let bridge = ListBridge::new(ListEnv { mux: Mux::default(), capture_program: "missing-test-mux".into(),
-            procs: Arc::new(procs::SystemProcs::default()), dirs: None }, FactsClient::new("127.0.0.1:9".parse().unwrap(), "s".into()));
+            procs: Arc::new(procs::SystemProcs::default()), dirs: None }, FactsClient::new());
         bridge.set_problem_hold(std::time::Duration::ZERO);
         let round = |state: &str, problema: &str| {
             let mut rows = vec![serde_json::from_value::<SessionRow>(json!({"name":"diag-row","provider":"claude","state":state,"problema":problema})).unwrap()];
@@ -1588,7 +1588,7 @@ mod tests {
         use crate::interactions::InteractionBinding;
         use crate::state::facts::PluginReading;
         let bridge = ListBridge::new(ListEnv { mux: Mux::default(), capture_program: "missing-test-mux".into(),
-            procs: Arc::new(procs::SystemProcs::default()), dirs: None }, FactsClient::new("127.0.0.1:9".parse().unwrap(), "s".into()));
+            procs: Arc::new(procs::SystemProcs::default()), dirs: None }, FactsClient::new());
         let stuck = || vec![serde_json::from_value::<SessionRow>(json!({"name":"stuck-wins","provider":"claude","state":"working","problema":"terminal_input_stalled"})).unwrap()];
         let mut rows = stuck();
         bridge.project_plugins(&mut rows, &BTreeMap::from([("stuck-wins".into(), Err("plugin_store_unavailable".into()))]));
@@ -1608,7 +1608,7 @@ mod tests {
         use crate::interactions::InteractionBinding;
         use crate::state::facts::{PluginFacts, PluginReading};
         let bridge = ListBridge::new(ListEnv { mux: Mux::default(), capture_program: "missing-test-mux".into(),
-            procs: Arc::new(procs::SystemProcs::default()), dirs: None }, FactsClient::new("127.0.0.1:9".parse().unwrap(), "s".into()));
+            procs: Arc::new(procs::SystemProcs::default()), dirs: None }, FactsClient::new());
         let mut rows = vec![serde_json::from_value::<SessionRow>(json!({"name":"s","provider":"claude","state":"working"})).unwrap()];
         let form = json!({"id":"ask:t1","interaction_id":"form-a","questions":[{"header":"H","question":"Qual?","multiSelect":false,"options":[{"label":"A","description":""}]}]});
         let local = PluginFacts { plugin_state: None, waiter_open: true, heartbeat_age_ms: Some(0), question: None, questions: vec![form], suggestion: "".into() };
@@ -1693,7 +1693,7 @@ mod tests {
     #[test]
     fn session_gone_for_a_while_leaves_the_caches() {
         let bridge = ListBridge::new(ListEnv { mux: Mux::default(), capture_program: "tmux".into(),
-            procs: Arc::new(procs::SystemProcs::default()), dirs: None }, FactsClient::new("127.0.0.1:9".parse().unwrap(), "s".into()));
+            procs: Arc::new(procs::SystemProcs::default()), dirs: None }, FactsClient::new());
         let row = |n: &str| serde_json::from_value::<SessionRow>(json!({"name": n})).unwrap();
         let t0 = Instant::now();
         bridge.prune_gone(&[row("a"), row("b")], t0);
@@ -1709,7 +1709,7 @@ mod tests {
     #[test]
     fn live_jsonl_is_certain_only_when_every_page_publisher_has_a_transcript() {
         let bridge = ListBridge::new(ListEnv { mux: Mux::default(), capture_program: "tmux".into(),
-            procs: Arc::new(procs::SystemProcs::default()), dirs: None }, FactsClient::new("127.0.0.1:9".parse().unwrap(), "s".into()));
+            procs: Arc::new(procs::SystemProcs::default()), dirs: None }, FactsClient::new());
         let row = |name: &str, provider: &str, jsonl: Option<&str>|
             serde_json::from_value::<SessionRow>(json!({"name": name, "provider": provider, "jsonl": jsonl})).unwrap();
         assert!(bridge.live_jsonl().is_none(), "lista nunca aberta");
@@ -1731,7 +1731,7 @@ mod tests {
     #[tokio::test]
     async fn state_facts_op_reaches_the_store_and_drops_old_sequences() {
         let bridge = Arc::new(ListBridge::new(ListEnv { mux: Mux::default(), capture_program: "tmux".into(),
-            procs: Arc::new(procs::SystemProcs::default()), dirs: None }, FactsClient::new("127.0.0.1:9".parse().unwrap(), "s".into())));
+            procs: Arc::new(procs::SystemProcs::default()), dirs: None }, FactsClient::new()));
         let op = |seq: u64| serde_json::from_value::<Operation>(json!({"op": "state.facts", "args": {"name": "s1", "facts": {
             "seq": seq, "plugin_state": {"state": "idle", "reason": null, "age_ms": 0}, "waiter_open": true,
             "heartbeat_age_ms": 0, "question": null, "suggestion": "", "body_columns": null, "band_anchor": null,
@@ -1750,7 +1750,7 @@ mod tests {
     /// Rodada falsa que conta as vezes e só termina quando o teste solta uma licença.
     fn gated_bridge(names: &[&str]) -> (Arc<ListBridge>, Arc<AtomicU32>, Arc<tokio::sync::Semaphore>) {
         let bridge = Arc::new(ListBridge::new(ListEnv { mux: Mux::default(), capture_program: "missing-test-mux".into(),
-            procs: Arc::new(procs::SystemProcs::default()), dirs: None }, FactsClient::new("127.0.0.1:9".parse().unwrap(), "s".into())));
+            procs: Arc::new(procs::SystemProcs::default()), dirs: None }, FactsClient::new()));
         let (rounds, gate) = (Arc::new(AtomicU32::new(0)), Arc::new(tokio::sync::Semaphore::new(0)));
         let rows: Vec<SessionRow> = names.iter().map(|n| serde_json::from_value(json!({"name": n, "provider": "claude"})).unwrap()).collect();
         let (r, g) = (rounds.clone(), gate.clone());

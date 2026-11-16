@@ -70,11 +70,11 @@ async fn server() -> Srv {
     state.mission=Arc::new(hangar_mission::Store::new(state.hangar_dir.join("mission")));
     state.list = Arc::new(ListBridge::new(ListEnv { mux: Mux::with_program(&script, Duration::from_secs(5)),
         capture_program: script.into_os_string(), procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs },
-        FactsClient::new(upstream, SECRET.into())));
+        FactsClient::new()));
     let pair = claude.join(".hangar-pair");
     let groups = Arc::new(GroupService::new(PairDir::new(pair.clone(), root.join("arquivo")), Arc::new(PythonOrq::from_state(&state)), "casa".into()));
     state.groups = Some(groups.clone());
-    let runtime = Arc::new(RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(), "s".into(), "i".into()));
+    let runtime = Arc::new(RuntimeRegistry::new("i".into()));
     assert!(state.state.runtime.set(runtime).is_ok());
     let state = Arc::new(state);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

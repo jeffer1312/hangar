@@ -15,7 +15,7 @@ use crate::session_write_control::{keys_sent, open_terminal};
 
 async fn registry(terms: &Arc<Terms>) -> Arc<RuntimeRegistry> {
     let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    Arc::new(RuntimeRegistry::new(policy(calls).await, "secret-test".into(), "instance-test".into())
+    Arc::new(RuntimeRegistry::new("instance-test".into())
         .with_processes(Arc::new(crate::runtime_open::RecipeProcesses("sid-1"))).with_terms(terms.clone()))
 }
 
@@ -45,7 +45,7 @@ async fn serve_listed(root: &std::path::Path, n: usize, panel: Option<&str>) -> 
     let mut state = AppState::new(fake::config(upstream, "127.0.0.1"));
     state.list = Arc::new(ListBridge::new(ListEnv { mux: hangar_server::list::mux::Mux::with_program(&script, Duration::from_secs(5)),
         capture_program: script.into_os_string(), procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs },
-        hangar_server::list::facts::FactsClient::new(upstream, SECRET.into())));
+        hangar_server::list::facts::FactsClient::new()));
     state.term = terms.clone();
     if let Some(name) = panel { state.term.mark_open_for_test(name, &state.diag).await; }
     assert!(state.state.runtime.set(registry(&terms).await).is_ok());
@@ -144,14 +144,14 @@ async fn model_effort_r4_13_codex_omp_and_kimi_are_refused_like_pi() {
     let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     // Os sidecars que o registro lê são os da pasta da prova, nunca os da máquina.
     let env = hangar_server::accounts::environment::AccountEnvironment::from_map([("HOME".to_owned(), home.to_string_lossy().into_owned())].into());
-    let registry = Arc::new(RuntimeRegistry::new(policy(calls).await, "secret-test".into(), "instance-test".into())
+    let registry = Arc::new(RuntimeRegistry::new("instance-test".into())
         .with_processes(Arc::new(crate::runtime_open::RecipeProcesses("sid-1"))).with_terms(terms.clone()).with_codex_environment(env));
     crate::groups_deliver::open_codex_headless(&registry, root, "c", Default::default()).await;
     let (python, upstream) = fake::spawn_fake().await;
     let mut state = AppState::new(fake::config(upstream, "127.0.0.1"));
     state.list = Arc::new(ListBridge::new(ListEnv { mux: hangar_server::list::mux::Mux::with_program(&script, Duration::from_secs(5)),
         capture_program: script.into_os_string(), procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs },
-        hangar_server::list::facts::FactsClient::new(upstream, SECRET.into())));
+        hangar_server::list::facts::FactsClient::new()));
     state.term = terms;
     assert!(state.state.runtime.set(registry).is_ok());
     let server = fake::spawn_state(state).await;

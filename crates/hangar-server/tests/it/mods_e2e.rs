@@ -41,7 +41,7 @@ async fn world(swallow: &'static [&'static str]) -> World {
     let state = AppState::new(config(upstream, "127.0.0.1"));
     let mods = state.mods.clone();
     // Como o `lib.rs`: o registro é o ciclo de vida e o runtime do estado ao vivo, ligado aos hubs do chat.
-    let registry = Arc::new(RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(), "secret-test".into(), "instance-test".into())
+    let registry = Arc::new(RuntimeRegistry::new("instance-test".into())
         .with_mods(mods.clone()).with_processes(Arc::new(crate::runtime_open::RecipeProcesses("sid-1"))));
     registry.bind_lifecycle();
     registry.bind_hubs(state.side.hubs.downgrade());

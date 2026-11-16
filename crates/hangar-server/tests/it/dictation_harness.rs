@@ -123,7 +123,6 @@ async fn attempt_with_budget(
     let address = listener.local_addr().unwrap();
     let mut state = AppState::new(Config {
         listen: address,
-        upstream,
         internal_secret: "harness-secret".into(),
         auth_token: "owner".into(),
         log_path: None,
@@ -164,7 +163,7 @@ async fn attempt_with_budget(
             procs: Arc::new(hangar_server::list::procs::SystemProcs::default()),
             dirs,
         },
-        FactsClient::new(upstream, "harness-secret".into()),
+        FactsClient::new(),
     ));
     let state = Arc::new(state);
     if catalog_deadline {

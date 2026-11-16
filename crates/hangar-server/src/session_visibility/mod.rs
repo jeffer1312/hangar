@@ -145,7 +145,7 @@ esac
             "CP_AUTH_TOKEN" => Some("fixture-owner".into()),
             _ => None,
         }).unwrap();
-        let facts = FactsClient::new(cfg.upstream, cfg.internal_secret.clone());
+        let facts = FactsClient::new();
         let mut state = AppState::new(cfg);
         state.origins_home = root.to_owned();
         state.list = Arc::new(ListBridge::new(ListEnv { mux: Mux::with_program(shim.as_os_str(), Duration::from_secs(2)),

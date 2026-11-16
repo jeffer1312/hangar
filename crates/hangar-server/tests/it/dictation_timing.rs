@@ -84,7 +84,6 @@ impl Server {
         let addr = listener.local_addr().unwrap();
         let mut state = AppState::new(Config {
             listen: addr,
-            upstream: upstream_addr,
             internal_secret: "private".into(),
             auth_token: "owner".into(),
             log_path: None,

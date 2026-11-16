@@ -331,8 +331,6 @@ def main(argv=None) -> int:
     if not re.fullmatch(r"\d+\.\d+\.\d+\.\d+", version):
         die(f"versão {version!r} fora do formato VERSION.commits")
     protocol = const("crates/hangar-server/src/lib.rs", r"^pub const INTERNAL_PROTOCOL: u32 = (\d+);")
-    if protocol != const("backend/app/rust_server.py", r"^RUST_SERVER_PROTOCOL = (\d+)"):
-        die("INTERNAL_PROTOCOL (Rust) e RUST_SERVER_PROTOCOL (Python) diferentes")
     manifest = {
         "version": version,
         "commit": git("rev-parse", "HEAD").decode().strip(),

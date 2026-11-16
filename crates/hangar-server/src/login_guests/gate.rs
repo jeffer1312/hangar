@@ -309,7 +309,7 @@ mod tests {
     #[tokio::test]
     async fn a_watcher_born_after_the_revocation_ends_at_once() {
         let home = tempfile::tempdir().unwrap();
-        let cfg = crate::config::Config { listen: "127.0.0.1:0".parse().unwrap(), upstream: "127.0.0.1:9".parse().unwrap(),
+        let cfg = crate::config::Config { listen: "127.0.0.1:0".parse().unwrap(),
             internal_secret: "s".into(), auth_token: "dono".into(), log_path: None, trusted: crate::auth::TrustedHosts::parse("127.0.0.1") };
         let mut state = AppState::new(cfg);
         state.login_guests = Arc::new(crate::login_guests::Service::new(crate::login_guests::Settings {

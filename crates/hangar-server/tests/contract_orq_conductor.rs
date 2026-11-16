@@ -120,7 +120,6 @@ async fn servers(root: &std::path::Path) -> Servers {
     .await;
     let cfg = hangar_server::config::Config {
         listen: "127.0.0.1:0".parse().unwrap(),
-        upstream,
         internal_secret: "fixture-secret".into(),
         auth_token: "fixture-owner".into(),
         log_path: None,

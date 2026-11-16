@@ -158,7 +158,7 @@ async fn launch_full(caps: &[&str], peers: Option<Value>, audio_grace: Duration,
         command_limit: crate::voice::call::COMMAND_LIMIT, result_silence: crate::voice::organizer::RESULT_SILENCE, style: Default::default() };
     let voice = Voice::start(options, spawn, tx);
     let (link, device) = DeviceLink::channel(caps, Some(Screen { server: String::new(), name: "hangar".into() }));
-    let diag = DiagClient::new("127.0.0.1:9".parse().unwrap(), "x".into());
+    let diag = DiagClient::new();
     let (to_ctl, from_device) = mpsc::unbounded_channel();
     let jev = jev::Config { key: "k".into(), url: format!("http://{addr}/jev"), model: "jev-test".into() };
     let mut controller = Controller::new(voice, machines, Some(jev), link.clone(), diag);

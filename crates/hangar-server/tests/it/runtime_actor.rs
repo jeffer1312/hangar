@@ -545,7 +545,7 @@ async fn setup_claude_unreachable_policy(initialized:bool) -> (RuntimeHandle,tok
     let queue = QueueActor::start(store,lease);
     let connection = cano::connect(&target.binding).await.unwrap();
     let engine = test_engine("claude",target.metadata.clone(),1,ClockSample { monotonic_s:0.0,epoch_s:1_800_000_000.0 }).unwrap()
-        .with_policy(PolicyClient::new(closed,"secret".into()));
+        .with_policy(PolicyClient::new());
     (RuntimeActor::spawn(target,queue,connection,engine),server,dir,booted)
 }
 
@@ -732,7 +732,7 @@ async fn status_turn(bad_rate:bool) -> Vec<Value> {
     let queue = QueueActor::start(store,lease);
     let connection = cano::connect(&target.binding).await.unwrap();
     let engine = test_engine("claude",target.metadata.clone(),1,ClockSample { monotonic_s:0.0,epoch_s:1_800_000_000.0 }).unwrap()
-        .with_policy(PolicyClient::new(crate::refused_address(),"secret".into()));
+        .with_policy(PolicyClient::new());
     let handle = RuntimeActor::spawn(target,queue,connection,engine);
     let mut events = handle.subscribe();
     let input = RuntimeCommand { operation_id:"msg".into(),kind:OperationKind::Input,payload:json!({"text":"Olá","entry_id":"msg"}) };
@@ -1170,7 +1170,7 @@ async fn claude_actor_with(dir:&std::path::Path,cano:std::net::SocketAddr,metada
     let queue = QueueActor::start(store,lease);
     let connection = cano::connect(&target.binding).await.unwrap();
     let engine = test_engine("claude",target.metadata.clone(),1,ClockSample { monotonic_s:0.0,epoch_s:1_800_000_000.0 }).unwrap()
-        .with_policy(PolicyClient::new(crate::refused_address(),"secret".into()));
+        .with_policy(PolicyClient::new());
     RuntimeActor::spawn(target,queue,connection,engine)
 }
 
@@ -1536,7 +1536,7 @@ for line in sys.stdin:
         let owner = dir.path().to_string_lossy().into_owned();
         fake_codex(dir.path());
         write_sidecar(dir.path(),&key,json!({}));
-        let registry = RuntimeRegistry::new(crate::refused_address(),"secret".into(),"instance".into()).with_codex_environment(codex_env(dir.path()));
+        let registry = RuntimeRegistry::new("instance".into()).with_codex_environment(codex_env(dir.path()));
         let opened = registry.open_with_launch(target(dir.path(),&key,no_cano()),dir.path().into()).await.unwrap();
         assert_eq!(opened["opened"],true);
         until_ready(&registry,&key).await;
@@ -1564,7 +1564,7 @@ for line in sys.stdin:
         let live = process::spawn(&process::LaunchSpec { provider:process::Provider::Codex,key:key.clone(),cwd:dir.path().into(),
             program:vec![codex.to_string_lossy().into_owned(),"app-server".into(),"--stdio".into()],env,sidecar_dir:dir.path().into() }).await.unwrap();
         write_sidecar(dir.path(),&key,json!({"cano":serde_json::to_value(&live).unwrap()}));
-        let registry = RuntimeRegistry::new(crate::refused_address(),"secret".into(),"instance".into()).with_codex_environment(codex_env(dir.path()));
+        let registry = RuntimeRegistry::new("instance".into()).with_codex_environment(codex_env(dir.path()));
         let binding = CanoBinding { pid:live.pid,escuta:live.escuta.clone(),token:live.token.clone(),versao:2 };
         registry.open_with_launch(target(dir.path(),&key,binding),dir.path().into()).await.unwrap();
         until_ready(&registry,&key).await;
@@ -1586,7 +1586,7 @@ for line in sys.stdin:
         let live = process::spawn(&process::LaunchSpec { provider:process::Provider::Codex,key:key.clone(),cwd:dir.path().into(),
             program:vec![codex.to_string_lossy().into_owned(),"app-server".into(),"--stdio".into()],env,sidecar_dir:dir.path().into() }).await.unwrap();
         write_sidecar(dir.path(),&key,json!({"cano":serde_json::to_value(&live).unwrap()}));
-        let registry = RuntimeRegistry::new(crate::refused_address(),"secret".into(),"instance".into()).with_codex_environment(codex_env(dir.path()));
+        let registry = RuntimeRegistry::new("instance".into()).with_codex_environment(codex_env(dir.path()));
         let binding = CanoBinding { pid:live.pid,escuta:live.escuta.clone(),token:live.token.clone(),versao:2 };
         // Reaberta sem subir (a administração do Python): encerrar ainda mata o processo.
         registry.open_managed(target(dir.path(),&key,binding),dir.path().into()).await.unwrap();
@@ -1671,7 +1671,7 @@ for line in sys.stdin:
         lifecycle_codex(dir);
         // Sem modo no sidecar: vale o da abertura, e o patch do modo fica visível no arquivo.
         write_sidecar(dir,key,json!({}));
-        let registry = Arc::new(RuntimeRegistry::new(crate::refused_address(),"secret".into(),"instance".into()).with_respawn_base(base).with_codex_environment(codex_env(dir)));
+        let registry = Arc::new(RuntimeRegistry::new("instance".into()).with_respawn_base(base).with_codex_environment(codex_env(dir)));
         let mut target = target(dir,key,no_cano());
         target.metadata["permission_mode"] = json!(mode);
         registry.open_with_launch(target,dir.into()).await.unwrap();
@@ -1729,7 +1729,7 @@ for line in sys.stdin:
             let key = unique_key();
             fake_codex(dir.path());
             write_sidecar(dir.path(),&key,json!({"thread_id":"thread-old"}));
-            let registry = RuntimeRegistry::new(crate::refused_address(),"secret".into(),"instance".into()).with_codex_environment(codex_env(dir.path()));
+            let registry = RuntimeRegistry::new("instance".into()).with_codex_environment(codex_env(dir.path()));
             registry.open_with_launch(target(dir.path(),&key,no_cano()),dir.path().into()).await.unwrap();
             until_ready(&registry,&key).await;
             until("thread gravada no arquivo da sessão",||sidecar(dir.path())["thread_id"] == "thread-new").await;
@@ -1941,7 +1941,7 @@ for line in sys.stdin:
         let hour = std::time::Duration::from_secs(3600);
         lifecycle_codex(dir.path());
         write_sidecar(dir.path(),&key,json!({}));
-        let registry = Arc::new(RuntimeRegistry::new(crate::refused_address(),"secret".into(),"instance".into()).with_respawn_base(base)
+        let registry = Arc::new(RuntimeRegistry::new("instance".into()).with_respawn_base(base)
             .with_reconnect_waits(vec![hour],vec![hour],hour).with_codex_environment(codex_env(dir.path())));
         registry.open_with_launch(target(dir.path(),&key,no_cano()),dir.path().into()).await.unwrap();
         until_ready(&registry,&key).await;
@@ -1975,7 +1975,7 @@ for line in sys.stdin:
         let hour = std::time::Duration::from_secs(3600);
         lifecycle_codex(dir.path());
         write_sidecar(dir.path(),&key,json!({}));
-        let registry = Arc::new(RuntimeRegistry::new(crate::refused_address(),"secret".into(),"instance".into())
+        let registry = Arc::new(RuntimeRegistry::new("instance".into())
             .with_reconnect_waits(vec![hour],vec![hour],std::time::Duration::from_millis(300)).with_codex_environment(codex_env(dir.path())));
         let mut opening = target(dir.path(),&key,no_cano());
         opening.metadata["permission_mode"] = json!("Full Access");
@@ -2630,7 +2630,7 @@ mod cano_reconnect {
     impl From<hangar_server::diag::DiagClient> for DiaryTarget { fn from(client:hangar_server::diag::DiagClient)->Self { Self::Local(client) } }
     impl DiaryTarget {
         fn client(self)->hangar_server::diag::DiagClient { match self {
-            Self::Address(address)=>hangar_server::diag::DiagClient::new(address,String::new()).with_diary(None),
+            Self::Address(address)=>hangar_server::diag::DiagClient::new().with_diary(None),
             Self::Local(client)=>client,
         } }
     }
@@ -2654,7 +2654,7 @@ mod cano_reconnect {
         let store = Store::open(&target.state_path,&target.projection_dir,State::new("key",1,"session",vec![])).unwrap();
         let (events,rx) = tokio::sync::broadcast::channel(256);
         let engine = test_engine("claude",target.metadata.clone(),1,ClockSample { monotonic_s:0.0,epoch_s:1_800_000_000.0 }).unwrap()
-            .with_policy(PolicyClient::new(crate::refused_address(),crate::fake::SECRET.into()).with_diagnostics(diag.client())).with_publisher(events)
+            .with_policy(PolicyClient::new().with_diagnostics(diag.client())).with_publisher(events)
             .with_reconnect_waits(waits.normal,waits.pending,waits.stall).with_cano_check(ms(100)).with_cano_birth(birth).with_output_lost(waits.output_lost);
         let engine = if cards { engine.with_interactions("key".into(),Arc::new(hangar_server::interactions::InteractionStore::default())).unwrap() } else { engine };
         let connection = cano::connect(&target.binding).await.unwrap();
@@ -3232,7 +3232,7 @@ mod cano_reconnect {
         let cano = live_cano(|n|if n == 1 { Answer::Serve } else { Answer::Hang }).await;
         let env = hangar_server::accounts::environment::AccountEnvironment::from_map(
             [("PATH".to_owned(),dir.path().to_string_lossy().into_owned()),("HOME".to_owned(),dir.path().to_string_lossy().into_owned())].into_iter().collect());
-        let policy = PolicyClient::new(crate::refused_address(),crate::fake::SECRET.into()).with_codex_environment(env);
+        let policy = PolicyClient::new().with_codex_environment(env);
         let handle = codex_actor_with(dir.path(),&cano,proc.0.id(),waits(&[0,3_600_000],&[0,3_600_000],60_000),false,Some(policy)).await;
         wait_for("abertura",||cano.accepts() == 1).await;
         cano.cut.notify_one();

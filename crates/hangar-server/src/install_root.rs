@@ -58,7 +58,7 @@ fn run(mut command: std::process::Command, log: Option<&Path>, version: &str) ->
     // A unit é `Type=notify` com `WatchdogSec` para o `hangar-server`; a versão que sobe pelo Python
     // não avisa: o lançador diz pronto e desliga o watchdog antes de virar o Python.
     #[cfg(target_os = "linux")]
-    if let Err(error) = notify("READY=1\nWATCHDOG_USEC=0") {
+    if let Err(error) = notify_from_env("READY=1\nWATCHDOG_USEC=0") {
         report(log, &format!("launch_notify_failed: {error}"));
     }
     let error = command.exec();
@@ -75,23 +75,10 @@ fn run_direct(mut command: std::process::Command, log: Option<&Path>, version: &
     ExitCode::from(126)
 }
 
-/// `sd_notify` sem dependência: um datagrama para o `NOTIFY_SOCKET` (`@` = endereço abstrato).
-/// Sem a variável (unit `Type=simple`, rodando na mão) não há a quem avisar.
+/// Sem `NOTIFY_SOCKET` (unit `Type=simple`, rodando na mão) não há a quem avisar.
 #[cfg(target_os = "linux")]
-fn notify(state: &str) -> std::io::Result<()> {
-    notify_to(std::env::var_os("NOTIFY_SOCKET").as_deref(), state)
-}
-
-#[cfg(target_os = "linux")]
-fn notify_to(socket: Option<&std::ffi::OsStr>, state: &str) -> std::io::Result<()> {
-    use std::os::linux::net::SocketAddrExt;
-    use std::os::unix::net::{SocketAddr, UnixDatagram};
-    let Some(socket) = socket.filter(|s| !s.is_empty()) else { return Ok(()) };
-    let address = match socket.as_encoded_bytes().strip_prefix(b"@") {
-        Some(name) => SocketAddr::from_abstract_name(name)?,
-        None => SocketAddr::from_pathname(Path::new(socket))?,
-    };
-    UnixDatagram::unbound()?.send_to_addr(state.as_bytes(), &address).map(drop)
+fn notify_from_env(state: &str) -> std::io::Result<()> {
+    hangar_boot::notify::Notifier::from_lookup(|key| std::env::var(key).ok(), std::process::id()).send(state)
 }
 
 /// No Windows: o servidor no Job do lançador, com o log da tarefa como saída (o Python o abria sozinho).
@@ -287,17 +274,18 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("notify");
         let listener = std::os::unix::net::UnixDatagram::bind(&path).unwrap();
-        super::notify_to(Some(path.as_os_str()), "READY=1\nWATCHDOG_USEC=0").unwrap();
+        let to = |socket: Option<String>| hangar_boot::notify::Notifier::from_lookup(move |key| (key == "NOTIFY_SOCKET").then(|| socket.clone()).flatten(), 1);
+        to(Some(path.to_string_lossy().into_owned())).send("READY=1\nWATCHDOG_USEC=0").unwrap();
         let mut buf = [0u8; 64];
         let n = listener.recv(&mut buf).unwrap();
         assert_eq!(&buf[..n], b"READY=1\nWATCHDOG_USEC=0");
         let name = format!("hangar-notify-{}", std::process::id());
         let address = std::os::unix::net::SocketAddr::from_abstract_name(name.as_bytes()).unwrap();
         let abstract_listener = std::os::unix::net::UnixDatagram::bind_addr(&address).unwrap();
-        super::notify_to(Some(std::ffi::OsStr::new(&format!("@{name}"))), "READY=1").unwrap();
+        to(Some(format!("@{name}"))).send("READY=1").unwrap();
         let n = abstract_listener.recv(&mut buf).unwrap();
         assert_eq!(&buf[..n], b"READY=1");
-        super::notify_to(None, "READY=1").unwrap();
+        to(None).send("READY=1").unwrap();
     }
 
     #[test]

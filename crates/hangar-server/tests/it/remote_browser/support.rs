@@ -289,12 +289,12 @@ exec '{discovery}' "$@"
         std::fs::rename(source.join(".hangar-state"), home.join(".claude/.hangar-state")).unwrap();
         let dirs = parse_dirs(&dirs_json(&home));
         let upstream = RefusingServer::new().await;
-        let cfg = Config { listen: "127.0.0.1:0".parse().unwrap(), upstream: upstream.server.address,
+        let cfg = Config { listen: "127.0.0.1:0".parse().unwrap(),
             internal_secret: SECRET.into(), auth_token: OWNER.into(), log_path: None, trusted: TrustedHosts::parse("127.0.0.1") };
         let mut state = AppState::new(cfg.clone());
         let list = Arc::new(ListBridge::new(ListEnv { mux: Mux::with_program(&script, Duration::from_secs(2)),
             capture_program: script.clone().into_os_string(), procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs },
-            FactsClient::new(cfg.upstream, SECRET.into())));
+            FactsClient::new()));
         state.hangar_dir = home.join(".hangar");
         std::fs::create_dir_all(state.hangar_dir.join("nav")).unwrap();
         Self::write_headless(&home, "headless", "headless-key", root.path());

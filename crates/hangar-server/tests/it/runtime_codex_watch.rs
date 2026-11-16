@@ -1362,7 +1362,7 @@ async fn serve_in(registry: Arc<RuntimeRegistry>, home: &std::path::Path, claude
     state.list = Arc::new(hangar_server::list::bridge::ListBridge::new(hangar_server::list::bridge::ListEnv {
         mux: Mux::with_program(tmux, Duration::from_secs(5)), capture_program: tmux.as_os_str().to_owned(),
         procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs },
-        hangar_server::list::facts::FactsClient::new(upstream, crate::fake::SECRET.into())));
+        hangar_server::list::facts::FactsClient::new()));
     let token = if guest {
         std::fs::create_dir_all(home).unwrap();
         state.share = None;
@@ -1600,7 +1600,7 @@ async fn owner_broadcast_answers_the_rust_code_for_a_codex_terminal_it_cannot_ad
     state.list = Arc::new(hangar_server::list::bridge::ListBridge::new(hangar_server::list::bridge::ListEnv {
         mux: Mux::with_program(&fx.tmux, Duration::from_secs(5)), capture_program: fx.tmux.clone().into_os_string(),
         procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs },
-        hangar_server::list::facts::FactsClient::new(upstream, crate::fake::SECRET.into())));
+        hangar_server::list::facts::FactsClient::new()));
     assert!(state.state.runtime.set(registry.clone()).is_ok());
     let server = crate::fake::spawn_state(state).await;
     let response = crate::fake::client().post(format!("http://{server}/api/broadcast"))

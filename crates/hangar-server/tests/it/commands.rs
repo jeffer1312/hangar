@@ -419,7 +419,6 @@ async fn commands_http_is_owned_by_rust_and_reads_the_headless_project() {
     .unwrap();
     let cfg = Config {
         listen: "127.0.0.1:0".parse().unwrap(),
-        upstream: super::refused_address(),
         auth_token: "commands-owner".into(),
         internal_secret: "commands-private".into(),
         trusted: TrustedHosts::parse("127.0.0.1"),

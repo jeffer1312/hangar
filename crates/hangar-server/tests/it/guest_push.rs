@@ -19,7 +19,6 @@ async fn guest_push_projects_dir_selects_original_storage_parent() {
     let projects = home.path().join("custom/projects");
     let mut st = AppState::new(Config {
         listen: "127.0.0.1:1".parse().unwrap(),
-        upstream: crate::refused_address(),
         internal_secret: "fixture".into(),
         auth_token: "owner".into(),
         log_path: None,

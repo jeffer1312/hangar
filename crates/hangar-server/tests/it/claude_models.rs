@@ -51,7 +51,7 @@ async fn claude_creation_catalog_ignores_legacy_cache_and_refreshes_explicitly()
     }).to_string()).unwrap();
     let address: SocketAddr = "127.0.0.1:0".parse().unwrap();
     let mut state = AppState::new(Config {
-        listen: address, upstream: address, internal_secret: "internal".into(),
+        listen: address, internal_secret: "internal".into(),
         auth_token: "owner".into(), log_path: None, trusted: TrustedHosts::parse("127.0.0.1"),
     });
     state.accounts = AccountService::new(scene.service.env.clone());

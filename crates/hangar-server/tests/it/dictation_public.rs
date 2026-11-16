@@ -41,7 +41,6 @@ async fn dictation_public_characterized_contract() {
     let addr = listener.local_addr().unwrap();
     let mut state = AppState::new(Config {
         listen: addr,
-        upstream: address,
         internal_secret: "fixture-private".into(),
         auth_token: "fixture-owner".into(),
         log_path: None,
@@ -117,6 +116,8 @@ struct PublicServer {
     state: Arc<AppState>,
     heard: Arc<Mutex<Vec<(String, String)>>>,
     base: String,
+    /// Provedor falso de transcrição e organização.
+    provider: SocketAddr,
     tasks: Vec<tokio::task::JoinHandle<()>>,
 }
 impl Drop for PublicServer {
@@ -148,7 +149,6 @@ impl PublicServer {
         let addr = listener.local_addr().unwrap();
         let mut state = AppState::new(Config {
             listen: addr,
-            upstream: upstream_addr,
             internal_secret: "private".into(),
             auth_token: "owner".into(),
             log_path: None,
@@ -182,6 +182,7 @@ impl PublicServer {
             state,
             heard,
             base: format!("http://{addr}"),
+            provider: upstream_addr,
             tasks: vec![task, server],
         }
     }
@@ -342,7 +343,7 @@ async fn dictation_public_audio_edges_answer_each_case() {
     let server = PublicServer::start().await;
     let table: Vec<Value> = serde_json::from_str(cases::EDGES).unwrap();
     assert_eq!(table.len(), 12);
-    let endpoint = format!("http://{}", server.state.cfg.upstream);
+    let endpoint = format!("http://{}", server.provider);
     let before = directory_snapshot(server._directory.path());
     let mut differences = Vec::new();
     for case in table.iter().filter(|c| {
@@ -457,7 +458,7 @@ async fn read_too_large(reader: &mut tokio::net::tcp::OwnedReadHalf) -> String {
 #[tokio::test]
 async fn dictation_public_provider_test_selects_only_requested_provider() {
     let server = PublicServer::start().await;
-    let endpoint = format!("http://{}", server.state.cfg.upstream);
+    let endpoint = format!("http://{}", server.provider);
     super::dictation_timing::configure(&server.state, &json!({"providers":[{"id":"first","name":"primeiro","kind":"openai","base_url":format!("{endpoint}/first")},{"id":"second","name":"segundo","kind":"openai","base_url":endpoint}]}));
     let client = reqwest::Client::new();
     let response = client
@@ -505,7 +506,7 @@ async fn dictation_public_provider_test_selects_only_requested_provider() {
 #[tokio::test]
 async fn dictation_public_without_cleanup_keeps_dictation_deadline() {
     let server = PublicServer::start().await;
-    super::dictation_timing::configure(&server.state, &json!({"dictation_max_minutes":2,"providers":[{"id":"stall","name":"stall","kind":"openai","base_url":format!("http://{}/stall",server.state.cfg.upstream)}]}));
+    super::dictation_timing::configure(&server.state, &json!({"dictation_max_minutes":2,"providers":[{"id":"stall","name":"stall","kind":"openai","base_url":format!("http://{}/stall",server.provider)}]}));
     let url = format!("{}/api/dictation/transcribe?limpar=0", server.base);
     let response = tokio::spawn(async move {
         reqwest::Client::new()
@@ -556,7 +557,7 @@ fn directory_snapshot(root: &std::path::Path) -> Vec<std::path::PathBuf> {
 #[tokio::test]
 async fn dictation_public_global_does_not_inherit_a_session_from_query() {
     let server = PublicServer::start().await;
-    let endpoint = format!("http://{}", server.state.cfg.upstream);
+    let endpoint = format!("http://{}", server.provider);
     super::dictation_timing::configure(&server.state, &json!({"providers":[{"id":"p","kind":"openai","name":"fixture","base_url":endpoint}],"organization":{"dictation_organization_mode":"external_api","llm_base_url":endpoint,"llm_api_key":"fixture","llm_model":"organization-model"}}));
     let response=reqwest::Client::new().post(format!("{}/api/dictation/transcribe?organization_mode=external_api&include_recent_messages=true&session=inexistente&generation=outra&organization_account=outra",server.base)).bearer_auth("owner").body("audio").send().await.unwrap();
     assert_eq!(response.status(), 200);
@@ -607,7 +608,7 @@ async fn dictation_public_180_second_deadline_cancels_both_audio_routes() {
     let table: Vec<Value> = serde_json::from_str(cases::EDGES).unwrap();
     for case in table.iter().filter(|case| case["timeout_seconds"] == 180) {
         let server = PublicServer::start().await;
-        let endpoint = format!("http://{}", server.state.cfg.upstream);
+        let endpoint = format!("http://{}", server.provider);
         super::dictation_timing::configure(&server.state, &json!({"dictation_max_minutes":10,"providers":[{"id":"fixture","kind":"openai","base_url":format!("{endpoint}/stall")}],"organization":{"dictation_organization_mode":"none"}}));
         let url = format!("{}{}", server.base, case["path"].as_str().unwrap());
         let response = tokio::spawn(async move {

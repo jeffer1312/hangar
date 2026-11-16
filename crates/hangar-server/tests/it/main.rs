@@ -320,7 +320,6 @@ mod standalone_boot;
 mod share_owner_routes;
 mod share_guest_routes;
 mod share_guest_serving;
-mod share_forward;
 mod share_pair_routes;
 mod share_pair_access;
 mod share_bridge;

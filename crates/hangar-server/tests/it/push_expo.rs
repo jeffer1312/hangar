@@ -86,7 +86,6 @@ impl Fixture {
         let home = tempfile::tempdir().unwrap();
         let mut state = AppState::new(Config {
             listen: "127.0.0.1:0".parse().unwrap(),
-            upstream: crate::refused_address(),
             internal_secret: "fixture-internal".into(),
             auth_token: "fixture-owner".into(),
             log_path: None,

@@ -329,7 +329,7 @@ async fn transcribe_here_uses_server_configuration() {
     // Impede que o .env do checkout entre na fixture.
     std::fs::create_dir_all(temporary.path().join(".hangar/current")).unwrap();
     let mut state = crate::routes::AppState::new(crate::config::Config {
-        listen: "127.0.0.1:0".parse().unwrap(), upstream: "127.0.0.1:1".parse().unwrap(),
+        listen: "127.0.0.1:0".parse().unwrap(),
         internal_secret: "fixture-internal".into(), auth_token: "fixture-owner".into(), log_path: None,
         trusted: crate::auth::TrustedHosts::parse("127.0.0.1"),
     });

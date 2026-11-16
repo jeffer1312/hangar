@@ -152,13 +152,13 @@ exec tmux -L '{label}' -f /dev/null "$@"
         state.login_guests = Arc::new(guests);
         state.list = Arc::new(ListBridge::new(ListEnv { mux: Mux::with_program(&wrapper, Duration::from_secs(5)),
             capture_program: wrapper.clone().into_os_string(), procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs },
-            FactsClient::new(upstream, SECRET.into())));
+            FactsClient::new()));
         state.terminal = hangar_server::terminal_control::TerminalPool::with_program("tmux", Some(socket), hangar_server::terminal_control::Limits::default());
         // O leitor de estado nasce com a lista e o terminal de `AppState::new`: sem refazê-lo, o pane do
         // agente seria procurado no tmux da máquina, não no deste teste.
         state.state = Arc::new(hangar_server::state::live::StateEnv::new(state.terminal.clone(), state.list.clone(), state.diag.clone()));
         let env =hangar_server::accounts::environment::AccountEnvironment::from_map([("HOME".into(), home.to_string_lossy().into_owned())].into());
-        let runtime = Arc::new(RuntimeRegistry::new(upstream, SECRET.into(), "instance-test".into()).with_codex_environment(env).with_diagnostics(python.diagnostics()));
+        let runtime = Arc::new(RuntimeRegistry::new("instance-test".into()).with_codex_environment(env).with_diagnostics(python.diagnostics()));
         if with_watcher { runtime.bind_watcher(watcher(&home, &wrapper)); }
         if with_runtime { assert!(state.state.runtime.set(runtime.clone()).is_ok()); }
         state.side.locate = fake::fake_locate(upstream);

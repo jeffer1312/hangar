@@ -208,8 +208,8 @@ exit 1
         env.dirs=old.dirs.clone();
         env.capture_program=mux.as_os_str().into();
         env.mux=hangar_server::list::mux::Mux::with_program(&mux,std::time::Duration::from_secs(5));
-        state.list=std::sync::Arc::new(hangar_server::list::bridge::ListBridge::new(env,hangar_server::list::facts::FactsClient::new(upstream,crate::fake::SECRET.into())));
-        let runtime=std::sync::Arc::new(hangar_server::runtime::gateway::RuntimeRegistry::new(upstream,crate::fake::SECRET.into(),"s01-execution".into()).with_codex_environment(state.accounts.env.clone()));
+        state.list=std::sync::Arc::new(hangar_server::list::bridge::ListBridge::new(env,hangar_server::list::facts::FactsClient::new()));
+        let runtime=std::sync::Arc::new(hangar_server::runtime::gateway::RuntimeRegistry::new("s01-execution".into()).with_codex_environment(state.accounts.env.clone()));
         assert!(state.state.runtime.set(runtime.clone()).is_ok());
         let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr=listener.local_addr().unwrap();

@@ -77,7 +77,7 @@ impl Fake {
     pub fn diag(&self) -> Vec<Value> { read_diary(self.diary.path()) }
     pub fn diary_dir(&self) -> &Path { self.diary.path() }
     pub fn diagnostics(&self) -> hangar_server::diag::DiagClient {
-        hangar_server::diag::DiagClient::new("127.0.0.1:0".parse().unwrap(), String::new())
+        hangar_server::diag::DiagClient::new()
             .with_diary(Some(self.diary.path().to_owned()))
     }
     pub fn bind_diary(&self, client: hangar_server::diag::DiagClient) -> hangar_server::diag::DiagClient {
@@ -176,7 +176,14 @@ pub async fn spawn_fake() -> (Arc<Fake>, SocketAddr) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    LAST_FAKE.with(|last| last.set(Some(addr)));
     (fake, addr)
+}
+
+thread_local! {
+    // shortcut: a descoberta do servidor de teste usa o último Python falso desta thread; teste com dois
+    // falsos e um servidor ligado ao primeiro precisa pôr `state.side.locate` à mão.
+    static LAST_FAKE: std::cell::Cell<Option<SocketAddr>> = const { std::cell::Cell::new(None) };
 }
 
 fn internal_ok(h: &HeaderMap) -> bool {
@@ -311,13 +318,12 @@ async fn fake_python(State(f): State<Arc<Fake>>, mut req: Request) -> Response {
     }
 }
 
-pub fn config(upstream: SocketAddr, trusted: &str) -> Config {
+pub fn config(_fake: SocketAddr, trusted: &str) -> Config {
     // A abertura leria a cota pela rede com o token falso das contas de teste.
     hangar_server::accounts::quotas::disable_open_network_read();
     hangar_server::diag::disable_diary();
     Config {
         listen: "127.0.0.1:0".parse().unwrap(),
-        upstream,
         internal_secret: SECRET.into(),
         auth_token: OWNER.into(),
         log_path: None,
@@ -404,7 +410,7 @@ pub async fn spawn_server(cfg: Config) -> SocketAddr {
 pub async fn spawn_state(mut state: hangar_server::routes::AppState) -> SocketAddr {
     hangar_server::accounts::quotas::disable_open_network_read();
     hangar_server::diag::disable_diary();
-    state.side.locate = fake_locate(state.cfg.upstream);
+    if let Some(fake) = LAST_FAKE.with(|last| last.take()) { state.side.locate = fake_locate(fake); }
     // Teste que não escolheu pasta: sem isto, a limpeza de worktrees do servidor lê as configurações do HOME real.
     if std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).is_some_and(|home| state.origins_home.as_os_str() == home) {
         state.origins_home = std::env::temp_dir().join("hangar-test-empty-home");
@@ -431,7 +437,7 @@ pub async fn serve_mods_gated(name: &str, link: Arc<dyn hangar_server::mods::sta
     let mut state = hangar_server::routes::AppState::new(config(upstream, "127.0.0.1"));
     state.diag = python.bind_diary(state.diag.clone());
     let mods = state.mods.clone();
-    let registry = Arc::new(hangar_server::runtime::gateway::RuntimeRegistry::new(upstream, "secret-test".into(), "instance-test".into())
+    let registry = Arc::new(hangar_server::runtime::gateway::RuntimeRegistry::new("instance-test".into())
         .with_mods(mods.clone()).with_diagnostics(python.diagnostics()));
     let _ = state.state.runtime.set(registry.clone());
     let server = spawn_state(state).await;

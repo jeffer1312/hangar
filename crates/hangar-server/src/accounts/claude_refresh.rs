@@ -636,7 +636,7 @@ mod tests {
         let service = AccountService::new(env);
         let account = service.claude_by_label("test").unwrap();
         let windows = WindowClient::with(Arc::new(super::super::claude_window::Refused));
-        let runtime = Arc::new(crate::runtime::gateway::RuntimeRegistry::new(address, "synthetic".into(), "synthetic".into()));
+        let runtime = Arc::new(crate::runtime::gateway::RuntimeRegistry::new("synthetic".into()));
         let key = AccountKey::new(Provider::Claude, &account_home).unwrap();
         let locks = service.locks.clone();
         let renewing = {
@@ -693,11 +693,7 @@ mod tests {
         let service = AccountService::new(env);
         let account = service.claude_by_label("test").unwrap();
         let windows = WindowClient::with(Arc::new(super::super::claude_window::Refused));
-        let runtime = Arc::new(crate::runtime::gateway::RuntimeRegistry::new(
-            address,
-            "synthetic".into(),
-            "synthetic".into(),
-        ));
+        let runtime = Arc::new(crate::runtime::gateway::RuntimeRegistry::new("synthetic".into()));
         assert_eq!(
             service
                 .refresh_claude(&account, windows.clone(), Some(runtime.clone()), true)

@@ -1847,7 +1847,7 @@ async fn the_owner_bridge_refuses_every_guest_identity_without_launching() {
     use axum::{extract::{State,ConnectInfo},body::{Body,to_bytes},http::Request};
     let address="127.0.0.1:0".parse().unwrap();
     let state=std::sync::Arc::new(crate::routes::AppState::new(crate::config::Config {
-        listen:address,upstream:address,internal_secret:"fixture".into(),auth_token:"owner".into(),log_path:None,
+        listen:address,internal_secret:"fixture".into(),auth_token:"owner".into(),log_path:None,
         trusted:crate::auth::TrustedHosts::parse("127.0.0.1"),
     }));
     for envelope in [json!({"guest":"g1"}),json!({"guest":""}),json!({"guest":1}),json!({"guest":false}),json!({"guest":{"id":"g1"}}),json!({"guest_root":"/fixture"})] {

@@ -57,7 +57,6 @@ async fn login_routes_reach_the_window_with_the_decoded_label() {
     let addr = listener.local_addr().unwrap();
     let mut state = AppState::new(Config {
         listen: addr,
-        upstream: "127.0.0.1:9".parse().unwrap(),
         internal_secret: "contract-internal".into(),
         auth_token: "contract-only".into(),
         log_path: None,
@@ -107,7 +106,6 @@ async fn http_probe_process() {
     let addr = listener.local_addr().unwrap();
     let state = AppState::new(Config {
         listen: addr,
-        upstream: upstream.parse().unwrap(),
         internal_secret: "contract-internal".into(),
         auth_token: "contract-only".into(),
         log_path: None,

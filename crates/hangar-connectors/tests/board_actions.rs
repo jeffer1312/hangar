@@ -98,7 +98,7 @@ impl Bench {
         let engine=Engine::new(Ledger::new(dir.path().join("actions")),Arc::new(Store::new(dir.path().join("mission"))),host,
             Arc::new(Agent {root:dir.path().to_owned()}));
         let edge=Edge { trusted:TrustedHosts::parse("127.0.0.1"),auth:Auth::configured("owner"),
-            diag:DiagClient::new("127.0.0.1:9".parse().unwrap(),String::new()).with_diary(Some(dir.path().join("diary"))) };
+            diag:DiagClient::new().with_diary(Some(dir.path().join("diary"))) };
         let app=hangar_ticket_actions::http::router::<()>(edge,engine.clone());
         Self {dir,engine,app}
     }

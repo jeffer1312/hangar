@@ -108,7 +108,6 @@ async fn run(case: &Case, python: std::net::SocketAddr) -> (Answer, Answer) {
     let state = |listen| {
         let mut state = AppState::new(Config {
             listen,
-            upstream: python,
             internal_secret: "contract-internal".into(),
             auth_token: "contract-only".into(),
             log_path: None,
@@ -254,7 +253,6 @@ async fn quota_routes_answer_from_cache_while_a_read_is_slow() {
     let addr = listener.local_addr().unwrap();
     let mut state = AppState::new(Config {
         listen: addr,
-        upstream: python_addr,
         internal_secret: "contract-internal".into(),
         auth_token: "contract-only".into(),
         log_path: None,

@@ -52,7 +52,7 @@ fn request(input: &Value, public: bool) -> Result<Value, String> {
         let upstream_addr = listener.local_addr().map_err(|e| e.to_string())?;
         let server = tokio::spawn(async move { axum::serve(listener, upstream).await });
         let mut state = AppState::new(hangar_server::config::Config {
-            listen: "127.0.0.1:0".parse().unwrap(), upstream: upstream_addr,
+            listen: "127.0.0.1:0".parse().unwrap(),
             internal_secret: "fixture-internal".into(), auth_token: "fixture-owner".into(),
             log_path: None, trusted: hangar_server::auth::TrustedHosts::parse("127.0.0.1"),
         });
@@ -64,7 +64,7 @@ fn request(input: &Value, public: bool) -> Result<Value, String> {
             mux: Mux::with_program(mux, Duration::from_secs(2)), capture_program: mux.into(),
             procs: Arc::new(SystemProcs::default()), dirs: parse_dirs(&input["dirs"].to_string()),
         };
-        state.list = Arc::new(ListBridge::new(list_env, FactsClient::new(upstream_addr, "fixture-internal".into())));
+        state.list = Arc::new(ListBridge::new(list_env, FactsClient::new()));
         state.side.locate = Arc::new(hangar_server::locate::ListLocate { list: state.list.clone() });
         // O kick-off é entregue pelo Rust: no "Começar", cada sessão da prova é um Claude sem terminal
         // dele, e o que chega ao cano falso sai em `deliveries` na forma do `/input`.

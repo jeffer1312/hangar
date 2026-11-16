@@ -22,12 +22,12 @@ fn state(home: &Path, extra: &[(&str,String)]) -> AppState {
     ]);
     env.extend(extra.iter().map(|(key,value)|(key.to_string(),value.clone())));
     let upstream="127.0.0.1:9".parse().unwrap();
-    let mut st=AppState::new(Config {listen:"127.0.0.1:0".parse().unwrap(),upstream,internal_secret:"context-test".into(),auth_token:"context-owner".into(),log_path:None,trusted:crate::auth::TrustedHosts::parse("127.0.0.1")});
+    let mut st=AppState::new(Config {listen:"127.0.0.1:0".parse().unwrap(),internal_secret:"context-test".into(),auth_token:"context-owner".into(),log_path:None,trusted:crate::auth::TrustedHosts::parse("127.0.0.1")});
     st.origins_home=home.into();
     st.accounts=AccountService::new(AccountEnvironment::from_map(env));
     st.search=crate::search::Index::server(st.accounts.clone());
     let dirs=parse_dirs(&json!({"home":home,"claude":home.join(".claude"),"codex_home":home.join(".codex"),"pi_sessions":home.join(".pi/agent/sessions"),"omp_config":home.join(".omp"),"omp_agent":home.join(".omp/agent"),"kimi_home":home.join(".kimi-code")}).to_string());
-    st.list=Arc::new(ListBridge::new(ListEnv {mux:Mux::default(),capture_program:"unused".into(),procs:Arc::new(crate::list::procs::SystemProcs::default()),dirs},FactsClient::new(upstream,"context-test".into())));
+    st.list=Arc::new(ListBridge::new(ListEnv {mux:Mux::default(),capture_program:"unused".into(),procs:Arc::new(crate::list::procs::SystemProcs::default()),dirs},FactsClient::new()));
     st
 }
 

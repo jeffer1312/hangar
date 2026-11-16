@@ -98,7 +98,7 @@ fn target(dir: &std::path::Path, mux: &str) -> TerminalTarget {
 
 // Ligado aos hubs como o servidor monta: abrir o terminal exige o ciclo de vida.
 fn registry(mods: &Mods) -> Arc<RuntimeRegistry> {
-    crate::runtime_open::with_hubs(RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(), "secret-test".into(), "instance-test".into()).with_mods(mods.clone()))
+    crate::runtime_open::with_hubs(RuntimeRegistry::new("instance-test".into()).with_mods(mods.clone()))
 }
 
 #[tokio::test]

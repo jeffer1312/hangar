@@ -42,7 +42,6 @@ async fn owner_catalog_is_not_a_python_proxy() {
     let root = tempfile::tempdir().unwrap();
     let mut state = AppState::new(Config {
         listen: addr,
-        upstream: upstream_addr,
         internal_secret: "contract-internal".into(),
         auth_token: "contract-only".into(),
         log_path: None,
@@ -104,12 +103,11 @@ async fn synced_hooks_refresh_reaches_the_account_runtime_through_the_private_br
     let private = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = private.local_addr().unwrap();
     let mut state = AppState::new(Config {
-        listen:addr,upstream:"127.0.0.1:9".parse().unwrap(),internal_secret:"contract-internal".into(),
+        listen:addr,internal_secret:"contract-internal".into(),
         auth_token:"contract-only".into(),log_path:None,trusted:TrustedHosts::parse("127.0.0.1"),
     });
     state.accounts = isolated_service(root.path());
-    assert!(state.state.runtime.set(Arc::new(hangar_server::runtime::gateway::RuntimeRegistry::new(
-        "127.0.0.1:9".parse().unwrap(),"contract-internal".into(),"fixture".into()))).is_ok());
+    assert!(state.state.runtime.set(Arc::new(hangar_server::runtime::gateway::RuntimeRegistry::new("fixture".into()))).is_ok());
     let app = hangar_server::routes::terminal_router(Arc::new(state));
     let server = tokio::spawn(async move {
         axum::serve(private,app.into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap();
@@ -573,7 +571,6 @@ async fn http_probe_process() {
     let addr = listener.local_addr().unwrap();
     let mut state = AppState::new(Config {
         listen: addr,
-        upstream: upstream.parse().unwrap(),
         internal_secret: "contract-internal".into(),
         auth_token: "contract-only".into(),
         log_path: None,
@@ -782,7 +779,6 @@ async fn accounts_named_like_subroutes_reach_deletion() {
     let root = tempfile::tempdir().unwrap();
     let mut state = AppState::new(Config {
         listen: addr,
-        upstream: upstream_addr,
         internal_secret: "contract-internal".into(),
         auth_token: "contract-only".into(),
         log_path: None,
@@ -839,7 +835,6 @@ async fn account_failure_reaches_the_exportable_journal() {
     let root = tempfile::tempdir().unwrap();
     let mut state = AppState::new(Config {
         listen: addr,
-        upstream: upstream_addr,
         internal_secret: "contract-internal".into(),
         auth_token: "contract-only".into(),
         log_path: None,
@@ -884,7 +879,6 @@ async fn python_ports_reach_the_account_owner_through_the_private_bridge() {
     let addr = private.local_addr().unwrap();
     let mut state = AppState::new(Config {
         listen: addr,
-        upstream: upstream_addr,
         internal_secret: "contract-internal".into(),
         auth_token: "contract-only".into(),
         log_path: None,

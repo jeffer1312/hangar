@@ -23,7 +23,7 @@ impl Bench {
         let edge = Edge {
             trusted: TrustedHosts::parse("127.0.0.1"),
             auth: Auth::configured(TOKEN),
-            diag: DiagClient::new("127.0.0.1:9".parse().unwrap(), String::new()).with_diary(Some(dir.path().join("diary"))),
+            diag: DiagClient::new().with_diary(Some(dir.path().join("diary"))),
         };
         let app = hangar_connectors::http::router::<()>(edge, host.clone());
         Self { dir, host, app }

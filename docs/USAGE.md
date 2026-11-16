@@ -187,11 +187,10 @@ npm run build -w frontend          # gera frontend/dist, servido pelo próprio b
 **c) Backend** (porta 8765):
 ```bash
 cd backend
-CP_AUTH_TOKEN=$(openssl rand -hex 24) CP_LAN_BIND_IP=auto uv run python -m app.main
+CP_AUTH_TOKEN=$(openssl rand -hex 24) CP_LAN_BIND_IP=auto ../scripts/hangar-server-command
 ```
-A porta 8765 é do `hangar-server` (Rust), que o backend Python sobe e deixa na frente; o Python
-escuta atrás, numa porta de loopback. Sem o binário do `hangar-server` (o instalador baixa da
-release `server-latest`), o Python atende a 8765 sozinho. A tela vem do `frontend/dist`; quem
+A porta 8765 é do `hangar-server` (Rust), que lê o `backend/.env` sozinho. Sem o binário (o
+instalador baixa da release `server-latest`; no checkout, `crates/target/release`), nada sobe. A tela vem do `frontend/dist`; quem
 mexe no front pode usar `npm --prefix frontend run dev` (Vite) no lugar do build.
 
 No boot ele imprime um **QR** (URL + token) pra parear o celular. Variáveis (prefixo `CP_`,
@@ -1259,7 +1258,7 @@ o instalador ajusta também os logs dos lançadores e da vigia para essa pasta.
 | 401 / "lost input" no celular | token velho/rotacionado. Re-pareie (QR) ou limpe credenciais e logue de novo. |
 | App "congelou" no último estado | conexão SSE morreu calada (mobile/background). O watchdog reconecta; senão recarregue (pull-to-refresh). |
 | Não vejo código novo após mudar | PWA com service worker servindo JS velho → **hard reload** / limpar dados do site / re-adicionar o PWA. |
-| Backend reiniciar | precisa do cwd=`backend` (`python -m app.main` acha `app`). Sem `--reload` (trava SSE no SIGTERM). |
+| Backend reiniciar | `systemctl --user restart hangar-backend.service` (no Windows, a tarefa `hangar-backend`). |
 | Pane de sessão de motor morre na hora, sem chat nenhum | `hangar-engine` não está no PATH do **servidor tmux** (a sessão nasce via `hangar-engine --exec`). Garanta que o PATH usado pelo tmux enxerga `hangar-engine` (mesmo instalado pelo `install-claude-wrapper.sh`). |
 | Contas e provedores avisa que não conseguiu ler o `engines.json` | `~/.claude/engines.json` foi editado à mão e ficou com JSON inválido — corrija-o (ou restaure um backup) antes de adicionar um motor novo; o app se recusa a gravar por cima de um arquivo que não conseguiu ler, pra não apagar os motores que já estavam lá. |
 

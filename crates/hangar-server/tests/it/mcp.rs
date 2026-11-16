@@ -61,7 +61,7 @@ async fn scene_named(groups: bool, peers: Option<hangar_server::groups::peers::P
     }
     let list = Arc::new(ListBridge::new(ListEnv { mux: Mux::with_program(&script, Duration::from_secs(5)),
         capture_program: script.into_os_string(), procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs },
-        FactsClient::new(upstream, SECRET.into())));
+        FactsClient::new()));
     state.list = list.clone();
     if let Some(runtime)=state.state.runtime.get() {list.set_runtime(runtime.clone());list.set_plugin_runtime(runtime.clone());}
     state.side.locate = Arc::new(hangar_server::locate::ListLocate { list });
@@ -805,24 +805,15 @@ async fn whoami_w10_a_mux_that_does_not_answer_is_no_pane_not_a_500() {
     assert_eq!(whoami(&s, Some(OWNER), &[("x-hangar-pane", "%7"), ("x-hangar-session", "sem-term")]).await, found("sem-term", "nome"));
 }
 
-/// W-09, convidado pelo cabeçalho assinado: na captura o Python aceitava `x-hangar-guest` vindo do
-/// loopback (era o Rust repassando). O Rust não honra o cabeçalho na 8765: quem chega com ele e sem
-/// token é recusado como estranho, assinado com o segredo certo (w24), errado (w25) ou de fora (w27).
+/// W-09: `x-hangar-guest` não vale nada na 8765; quem chega com ele e sem token é recusado como estranho.
 #[tokio::test(flavor = "multi_thread")]
 async fn whoami_w09_a_signed_guest_header_alone_is_refused() {
-    use hangar_core::guest::{GuestGrant, Kind};
     let s = scene().await;
-    let grant = GuestGrant { token: "convite".into(), token_hash: String::new(), pair_roots: vec![], invite: true,
-        sessions: std::collections::HashMap::from([("s0".into(), Kind::Share)]) };
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
-    let signed = hangar_server::share::forward::sign(SECRET, "GET", "/api/whoami", &grant, now);
-    let forged = hangar_server::share::forward::sign("outro", "GET", "/api/whoami", &grant, now);
+    // O formato que o Rust assinava para o Python (`<payload>.<hmac>`): ninguém mais o honra.
+    let header = "eyJzIjp7InMwIjoic2hhcmUifSwiZXhwIjo0MTAyNDQ0ODAwfQ.00";
     let refused = json!({"detail": {"code": "erro_nao_autorizado", "params": {}, "msg": "unauthorized"}});
-    for header in [signed.to_str().unwrap(), forged.to_str().unwrap()] {
-        assert_eq!(whoami(&s, None, &[("x-hangar-guest", header), ("x-hangar-session", "s0")]).await, (401, refused.clone()));
-    }
-    let (status, _) = whoami(&s, None, &[("x-hangar-guest", signed.to_str().unwrap()), ("x-forwarded-for", "203.0.113.5"),
+    assert_eq!(whoami(&s, None, &[("x-hangar-guest", header), ("x-hangar-session", "s0")]).await, (401, refused));
+    let (status, _) = whoami(&s, None, &[("x-hangar-guest", header), ("x-forwarded-for", "203.0.113.5"),
         ("x-hangar-session", "s0")]).await;
     assert_eq!(status, 401);
-    assert_eq!(s.python.hits_to("/api/whoami"), 0);
 }

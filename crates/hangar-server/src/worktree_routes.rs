@@ -703,7 +703,7 @@ mod tests {
         let mut ready = std::fs::OpenOptions::new().read(true).write(true).open(&ready).unwrap();
         let (state, epoch) = runtime.block_on(async {
             let upstream = "127.0.0.1:9".parse().unwrap();
-            let mut state = AppState::new(Config { listen:"127.0.0.1:0".parse().unwrap(),upstream,
+            let mut state = AppState::new(Config { listen:"127.0.0.1:0".parse().unwrap(),
                 internal_secret:"t4-private".into(),auth_token:"t4-owner".into(),log_path:None,
                 trusted:crate::auth::TrustedHosts::parse("127.0.0.1") });
             state.origins_home = home.clone();
@@ -715,7 +715,7 @@ mod tests {
             env.dirs = parse_dirs(&json!({"home":home,"claude":home.join(".claude"),"codex_home":home.join(".codex"),
                 "pi_sessions":home.join(".pi/agent/sessions"),"omp_config":home.join(".omp"),"omp_agent":home.join(".omp/agent"),"kimi_home":home.join(".kimi-code")}).to_string());
             env.mux = Mux::with_program(mux,Duration::from_secs(5));
-            state.list = Arc::new(ListBridge::new(env,FactsClient::new(upstream,"t4-private".into())));
+            state.list = Arc::new(ListBridge::new(env,FactsClient::new()));
             let state = Arc::new(state);
             state.list.discover(None).await.unwrap();
             let request = Request::builder().method("POST").uri("/api/worktrees/create")

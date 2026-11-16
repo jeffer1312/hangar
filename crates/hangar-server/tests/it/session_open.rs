@@ -232,7 +232,7 @@ async fn the_env_file_in_the_user_data_folder_wins() {
     // `app/main.py` é comum a qualquer projeto Python: só ele não faz da pasta a do Hangar.
     std::fs::write(dir.path().join("inst/backend/app/main.py"), "").unwrap();
     assert!(!hangar_server::session_open::cli::is_backend(&dir.path().join("inst/backend")));
-    std::fs::write(dir.path().join("inst/backend/app/rust_server.py"), "").unwrap();
+    std::fs::write(dir.path().join("inst/backend/app/pricing_data.json"), "").unwrap();
     assert!(hangar_server::session_open::cli::is_backend(&dir.path().join("inst/backend")));
     assert!(!hangar_server::session_open::cli::is_backend(&dir.path().join("inst/bin")));
     let (code, _, stderr) = hangar_open(&bin, dir.path(), &["open", body], &[]).await;

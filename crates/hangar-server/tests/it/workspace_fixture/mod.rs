@@ -151,10 +151,10 @@ async fn build(root: &std::path::Path, context_ok: bool, home: Option<&std::path
         script
     };
     env.mux=hangar_server::list::mux::Mux::with_program(mux.unwrap_or(&default_mux),std::time::Duration::from_secs(5));
-    state.list=Arc::new(hangar_server::list::bridge::ListBridge::new(env,hangar_server::list::facts::FactsClient::new(upstream,SECRET.into())));
+    state.list=Arc::new(hangar_server::list::bridge::ListBridge::new(env,hangar_server::list::facts::FactsClient::new()));
     let workspace_slots=state.workspace_slots.clone();
     let list=state.list.clone();
-    let runtime=Arc::new(hangar_server::runtime::gateway::RuntimeRegistry::new(upstream, SECRET.into(), "workspace-fixture".into())
+    let runtime=Arc::new(hangar_server::runtime::gateway::RuntimeRegistry::new("workspace-fixture".into())
         .with_codex_environment(state.accounts.env.clone()));
     assert!(state.state.runtime.set(runtime.clone()).is_ok());
     let (addr, policy) = if policy {
@@ -211,9 +211,8 @@ pub async fn real_terminal_fixture(
     env.mux = hangar_server::list::mux::Mux::with_program(metadata_mux, std::time::Duration::from_secs(5));
     env.capture_program = terminal_mux.as_os_str().into();
     state.list = Arc::new(hangar_server::list::bridge::ListBridge::new(env,
-        hangar_server::list::facts::FactsClient::new(upstream, SECRET.into())));
-    let runtime = Arc::new(hangar_server::runtime::gateway::RuntimeRegistry::new(
-        upstream, SECRET.into(), "s01-real-terminal".into()).with_codex_environment(state.accounts.env.clone()));
+        hangar_server::list::facts::FactsClient::new()));
+    let runtime = Arc::new(hangar_server::runtime::gateway::RuntimeRegistry::new("s01-real-terminal".into()).with_codex_environment(state.accounts.env.clone()));
     assert!(state.state.runtime.set(runtime.clone()).is_ok());
     state.side.locate = Arc::new(hangar_server::locate::ListLocate { list:state.list.clone() });
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

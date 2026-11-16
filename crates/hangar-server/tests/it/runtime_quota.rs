@@ -41,7 +41,7 @@ fn home_with_cached_quota(expires_ms:f64) -> (tempfile::TempDir,AccountService,s
 async fn status_line_windows_come_from_the_accounts_module_without_python() {
     let (_home,service,claude) = home_with_cached_quota((now() + 3600.0) * 1000.0);
     let (address,calls) = counting_upstream().await;
-    let client = PolicyClient::new(address,"secret".into()).with_accounts(service);
+    let client = PolicyClient::new().with_accounts(service);
     for config_dir in ["",claude.to_str().unwrap()] {
         let quota = client.quota_windows("key",config_dir).await.unwrap();
         assert_eq!(quota,json!({"windows":[{"rotulo":"5h","pct":42,"reset_ts":null,"por_modelo":false}]}),"{config_dir:?}");
@@ -65,7 +65,7 @@ async fn changed_credential_drops_the_old_quota_and_an_expired_token_does_not_re
 #[tokio::test]
 async fn without_the_accounts_module_the_line_has_no_windows() {
     let (address,calls) = counting_upstream().await;
-    let client = PolicyClient::new(address,"secret".into());
+    let client = PolicyClient::new();
     assert!(client.quota_windows("key","").await.is_none());
     assert_eq!(calls.load(Ordering::SeqCst),0);
 }

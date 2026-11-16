@@ -75,7 +75,6 @@ async fn http_probe_process() {
     let addr = listener.local_addr().unwrap();
     let mut state = AppState::new(Config {
         listen: addr,
-        upstream: upstream.parse().unwrap(),
         internal_secret: "contract-internal".into(),
         auth_token: "contract-only".into(),
         log_path: None,
@@ -150,11 +149,7 @@ process.stdout.write(JSON.stringify({id:m.id,result})+'\n');});"#;
     let key = AccountKey::new(Provider::Codex, &account.home).unwrap();
     let address = "127.0.0.1:9".parse().unwrap();
     let invalidator = CodexInvalidator::new(Arc::default());
-    let runtime = Arc::new(hangar_server::runtime::gateway::RuntimeRegistry::new(
-        address,
-        "synthetic".into(),
-        "test".into(),
-    ));
+    let runtime = Arc::new(hangar_server::runtime::gateway::RuntimeRegistry::new("test".into()));
     let attempt = service
         .start_codex_login(
             &account,
@@ -262,7 +257,7 @@ async fn native_secondary_writer_retains_ownership(start: bool) {
         }
     }));
     let key = AccountKey::new(Provider::Codex, &root.path().join(".codex")).unwrap();
-    let runtime = Arc::new(hangar_server::runtime::gateway::RuntimeRegistry::new(address,"synthetic".into(),"fixture".into()));
+    let runtime = Arc::new(hangar_server::runtime::gateway::RuntimeRegistry::new("fixture".into()));
     let invalidator = CodexInvalidator::new(Arc::default());
     let operation = |service: AccountService| { let (runtime, invalidator) = (runtime.clone(), invalidator.clone());
         async move {
@@ -374,7 +369,7 @@ process.stdout.write(JSON.stringify({id:m.id,result})+'\n');});"#;
     let address = "127.0.0.1:9".parse().unwrap();
     let models = Arc::new(hangar_server::dictation::catalog::Models::default());
     let invalidator = CodexInvalidator::new(models.clone());
-    let runtime = Arc::new(hangar_server::runtime::gateway::RuntimeRegistry::new(address, "synthetic".into(), "test".into()));
+    let runtime = Arc::new(hangar_server::runtime::gateway::RuntimeRegistry::new("test".into()));
 
     let account = service.create(Provider::Codex, "work", |_| Ok(())).unwrap();
     let slots = tokio::sync::Semaphore::new(1);

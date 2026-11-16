@@ -101,7 +101,7 @@ pub(crate) fn with_hubs(registry:RuntimeRegistry)->Arc<RuntimeRegistry> {
 pub(crate) async fn registry() -> Arc<RuntimeRegistry> { registry_with(|registry|registry).await }
 /// O ajuste entra antes do `Arc`: depois de ligado aos hubs o registro não muda mais.
 pub(crate) async fn registry_with(adjust:impl FnOnce(RuntimeRegistry)->RuntimeRegistry) -> Arc<RuntimeRegistry> {
-    with_hubs(adjust(RuntimeRegistry::new(policy().await,"secret-test".into(),"instance-test".into()).with_processes(Arc::new(RecipeProcesses("sid-1")))))
+    with_hubs(adjust(RuntimeRegistry::new("instance-test".into()).with_processes(Arc::new(RecipeProcesses("sid-1")))))
 }
 
 /// App-server do Codex falso, em WebSocket de loopback: conta as conexões, guarda os quadros de cada

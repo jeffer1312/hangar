@@ -127,7 +127,7 @@ impl Harness {
         let up_task = tokio::spawn(async move { axum::serve(up, Router::new().fallback(python)).await.unwrap() });
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
-        let mut state = AppState::new(Config { listen: address, upstream, internal_secret: SECRET.into(), auth_token: OWNER.into(),
+        let mut state = AppState::new(Config { listen: address, internal_secret: SECRET.into(), auth_token: OWNER.into(),
             log_path: None, trusted: TrustedHosts::parse("127.0.0.1") });
         hangar_server::accounts::quotas::disable_open_network_read();
         let claude = home.join(".claude-a");
@@ -185,7 +185,7 @@ fn live_list(root: &Path, home: &Path, upstream: SocketAddr) -> hangar_server::l
         "omp_agent": home.join(".omp/agent"), "kimi_home": home.join(".kimi-code")}).to_string());
     ListBridge::new(ListEnv { mux: hangar_server::list::mux::Mux::with_program(&script, Duration::from_secs(5)),
         capture_program: script.into_os_string(), procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs },
-        hangar_server::list::facts::FactsClient::new(upstream, SECRET.into()))
+        hangar_server::list::facts::FactsClient::new())
 }
 
 /// F8 (só com o índice: fora dele a conversa interna entra, como no Python) e F9 numa lista de

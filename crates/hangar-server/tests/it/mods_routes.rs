@@ -353,7 +353,7 @@ async fn copy_during_the_click_goes_back_to_the_app() {
     let (_python, upstream) = spawn_fake().await;
     let state = AppState::new(config(upstream, "127.0.0.1"));
     let mods = state.mods.clone();
-    let _ = state.state.runtime.set(Arc::new(RuntimeRegistry::new(upstream, "secret-test".into(), "instance-test".into())));
+    let _ = state.state.runtime.set(Arc::new(RuntimeRegistry::new("instance-test".into())));
     let server = spawn_state(state).await;
     let link = FakeLink::with(FakeInner { copy: Some((mods.clone(), "Texto copiado pela vitrine (V44)".into())), ..Default::default() });
     mods.attach("s", 1, Arc::new(link.clone()));
@@ -371,7 +371,7 @@ async fn private_mods_bridge_no_longer_exists() {
     let link = FakeLink::default();
     let (_python, upstream) = spawn_fake().await;
     let state = AppState::new(config(upstream, "127.0.0.1"));
-    let _ = state.state.runtime.set(Arc::new(RuntimeRegistry::new(upstream, "secret-test".into(), "instance-test".into())));
+    let _ = state.state.runtime.set(Arc::new(RuntimeRegistry::new("instance-test".into())));
     state.mods.attach("s", 1, Arc::new(link.clone()));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let private = listener.local_addr().unwrap();

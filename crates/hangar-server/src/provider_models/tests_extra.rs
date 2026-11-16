@@ -472,7 +472,7 @@ esac
         }
     }
     let cfg = config();
-    let facts = FactsClient::new(cfg.upstream, cfg.internal_secret.clone());
+    let facts = FactsClient::new();
     let mut state = crate::routes::AppState::new(cfg);
     state.origins_home = root.to_owned();
     state.list = Arc::new(ListBridge::new(

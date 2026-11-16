@@ -188,7 +188,7 @@ async fn env_full(adjust: impl FnOnce(&Arc<RuntimeRegistry>), display: &str, sta
         "pi_sessions": home.join(".pi/agent/sessions"), "omp_config": home.join(".omp"), "omp_agent": home.join(".omp/agent"),
         "kimi_home": home.join(".kimi-code")}).to_string());
     state.list = Arc::new(ListBridge::new(ListEnv { mux: Mux::with_program(&tmux, Duration::from_secs(5)), capture_program: tmux.clone().into_os_string(),
-        procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs }, FactsClient::new(upstream, SECRET.into())));
+        procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs }, FactsClient::new()));
     let share = crate::share_pair_routes::share_state(&root.join("shares").join("shares.json"), &root.join("pair"), Arc::new(std::sync::Mutex::new(1_000.0)));
     state.share = Some(share.clone());
     state.write_gate_wait = Duration::from_secs(5);
@@ -719,7 +719,7 @@ async fn delete_r1_other_terminal_close_runs_the_owner_cleanups() {
     let list_dirs = parse_dirs(&json!({"home": dirs.home, "claude": dirs.claude, "codex_home": dirs.codex_home, "pi_sessions": dirs.pi_sessions,
         "omp_config": dirs.omp_config, "omp_agent": dirs.omp_agent, "kimi_home": dirs.kimi_home}).to_string());
     state.list = Arc::new(ListBridge::new(ListEnv { mux: Mux::with_program(&tmux, Duration::from_secs(5)), capture_program: tmux.clone().into_os_string(),
-        procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs: list_dirs }, FactsClient::new(upstream, SECRET.into())));
+        procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs: list_dirs }, FactsClient::new()));
     let registry = crate::runtime_open::registry().await;
     assert!(state.state.runtime.set(registry.clone()).is_ok());
     let st = Arc::new(state);
@@ -791,7 +791,7 @@ async fn delete_r1_02_a_guest_closes_a_live_pi_through_the_route_with_the_owner_
     let list_dirs = parse_dirs(&json!({"home": dirs.home, "claude": dirs.claude, "codex_home": dirs.codex_home, "pi_sessions": dirs.pi_sessions,
         "omp_config": dirs.omp_config, "omp_agent": dirs.omp_agent, "kimi_home": dirs.kimi_home}).to_string());
     state.list = Arc::new(ListBridge::new(ListEnv { mux: Mux::with_program(&tmux, Duration::from_secs(5)), capture_program: tmux.clone().into_os_string(),
-        procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs: list_dirs }, FactsClient::new(upstream, SECRET.into())));
+        procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs: list_dirs }, FactsClient::new()));
     state.share = None;
     let token = login_guest(&mut state, &root);
     let registry = crate::runtime_open::registry().await;

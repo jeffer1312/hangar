@@ -258,7 +258,7 @@ async fn registry() -> Arc<RuntimeRegistry> { registry_counting().await.0 }
 
 async fn registry_counting() -> (Arc<RuntimeRegistry>, Arc<std::sync::atomic::AtomicUsize>) {
     let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    (Arc::new(RuntimeRegistry::new(policy(calls.clone()).await, "secret-test".into(), "instance-test".into()).with_processes(Arc::new(crate::runtime_open::RecipeProcesses("sid-1")))), calls)
+    (Arc::new(RuntimeRegistry::new("instance-test".into()).with_processes(Arc::new(crate::runtime_open::RecipeProcesses("sid-1")))), calls)
 }
 
 pub(crate) async fn open_headless(registry: &RuntimeRegistry, dir: &Path, name: &str) -> Arc<std::sync::Mutex<Vec<Value>>> {
@@ -527,7 +527,7 @@ async fn submit_and_select_reject_stale_ids_without_any_writer_command() {
 pub(crate) async fn registry_with_plugin(interactions: &Arc<InteractionStore>) -> (Arc<RuntimeRegistry>, Arc<hangar_server::plugin::Store>) {
     let plugin = Arc::new(hangar_server::plugin::Store::new(interactions.clone()));
     let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let registry = RuntimeRegistry::new(policy(calls).await, "secret-test".into(), "instance-test".into()).with_processes(Arc::new(crate::runtime_open::RecipeProcesses("sid-1")))
+    let registry = RuntimeRegistry::new("instance-test".into()).with_processes(Arc::new(crate::runtime_open::RecipeProcesses("sid-1")))
         .with_interactions(interactions.clone()).with_plugin(plugin.clone());
     (Arc::new(registry), plugin)
 }

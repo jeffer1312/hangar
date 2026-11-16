@@ -52,7 +52,7 @@ async fn local_client_records_the_failure_without_any_upstream_request() {
     watcher
         .watch(dir.path(), notify::RecursiveMode::NonRecursive)
         .unwrap();
-    let client = DiagClient::new(address, "segredo-nunca-usado".into())
+    let client = DiagClient::new()
         .with_diary(Some(dir.path().to_owned()));
     client.report(
         "rust.history_failed",
@@ -95,7 +95,7 @@ fn fixed_client(dir: &std::path::Path) -> DiagClient {
     let now = chrono::Local
         .with_ymd_and_hms(2026, 10, 15, 9, 30, 0)
         .unwrap();
-    DiagClient::new("127.0.0.1:9".parse().unwrap(), "segredo-descartado".into())
+    DiagClient::new()
         .with_diary(Some(dir.to_owned()))
         .with_clock(move || now)
 }
@@ -103,7 +103,7 @@ fn fixed_client(dir: &std::path::Path) -> DiagClient {
 #[tokio::test]
 async fn local_client_without_directory_never_opens_the_old_transport() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let client = DiagClient::new(listener.local_addr().unwrap(), "segredo-descartado".into())
+    let client = DiagClient::new()
         .with_diary(None);
     client.report("rust.without_diary", "ausente", "plain", "motivo fixo");
     client.report_with(
@@ -128,7 +128,7 @@ async fn local_client_explicit_directory_and_clock_are_shared_with_existing_clon
     hangar_server::diag::disable_diary();
     assert!(hangar_server::diag::diary_dir().is_none());
     let dir = tempfile::tempdir().unwrap();
-    let client = DiagClient::new("127.0.0.1:9".parse().unwrap(), "segredo-descartado".into());
+    let client = DiagClient::new();
     let source = client.clone();
     let now = chrono::Local
         .with_ymd_and_hms(2026, 10, 15, 9, 30, 0)
@@ -156,7 +156,7 @@ async fn local_client_limits_by_diary_session_event_and_code() {
     let a = tempfile::tempdir().unwrap();
     let b = tempfile::tempdir().unwrap();
     let first = fixed_client(a.path());
-    let other_address = DiagClient::new("127.0.0.1:18".parse().unwrap(), "outro-segredo".into())
+    let other_address = DiagClient::new()
         .with_diary(Some(a.path().to_owned()));
     first.report("rust.history_failed", "sessão", "io", "motivo fixo");
     other_address.report("rust.history_failed", "sessão", "io", "motivo fixo");

@@ -235,7 +235,7 @@ impl AppState {
         let mods = crate::mods::state::Mods::default();
         let interactions = Arc::new(crate::interactions::InteractionStore::default());
         let plugin = Arc::new(crate::plugin::Store::new(interactions.clone()));
-        let facts = crate::list::facts::FactsClient::new(cfg.upstream, cfg.internal_secret.clone());
+        let facts = crate::list::facts::FactsClient::new();
         let list = Arc::new(crate::list::bridge::ListBridge::new(list_env, facts));
         let mut side = SideCtx {
             watchers: Watchers::default(),
@@ -247,7 +247,7 @@ impl AppState {
             queue_dir: list.env().dirs.as_ref().map(|dirs| dirs.claude.join(".hangar-queue")),
             problem_hold: crate::problem_gate::HOLD,
             shown_problems: list.shown_problems(),
-            diag: crate::diag::DiagClient::new(cfg.upstream, cfg.internal_secret.clone()),
+            diag: crate::diag::DiagClient::new(),
         };
         mods.bind_hubs(side.hubs.downgrade());
         let diag = side.diag.clone();
@@ -385,7 +385,7 @@ pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest:
     let private = TcpListener::bind("127.0.0.1:0").await?;
     state.terminal_address = Some(private.local_addr()?);
     state.voice.set_self(listener.local_addr()?, &state.cfg.auth_token);
-    state.connect_previews.reserve([listener.local_addr()?.port(), private.local_addr()?.port(), state.cfg.upstream.port()].into_iter()
+    state.connect_previews.reserve([listener.local_addr()?.port(), private.local_addr()?.port()].into_iter()
         .chain(plugin.as_ref().and_then(|plugin| plugin.local_addr().ok()).map(|addr| addr.port()))
         .chain([guest, state.front, state.connect, state.preview].into_iter().flatten().map(|addr| addr.port())));
     let public_v6 = state.public_v6.take();
@@ -849,15 +849,15 @@ async fn body_cap_and_access_line(st: &AppState, req: Request, next: axum::middl
     access_line(st, &method, &path, &correlation, response, started.elapsed()).await
 }
 
-/// A linha `api.servidor` do Python, agora para todo pedido do Rust: só 5xx ou 1 s até os cabeçalhos.
-/// O diário da tela e o que segue ao Python ficam de fora; quem já grava a própria linha também.
+/// A linha `api.servidor` de todo pedido: só 5xx ou 1 s até os cabeçalhos. O diário da tela fica de
+/// fora; quem já grava a própria linha também.
 async fn access_line(st: &AppState, method: &Method, path: &str, correlation: &str, response: Response, elapsed: Duration) -> Response {
     let status = response.status();
     let logs_itself = (*method == Method::POST && path == "/api/sessions")
         || (*method == Method::POST && path.starts_with("/api/archive/") && path.ends_with("/resume"))
         || path.strip_prefix("/api/sessions/").and_then(|rest| rest.split_once('/')).is_some_and(|(_, tail)| tail.starts_with("plugin/"));
     if !(status.is_server_error() || elapsed >= Duration::from_secs(1)) || path.starts_with("/api/diag")
-        || logs_itself || response.extensions().get::<crate::migration_status::Forwarded>().is_some() {
+        || logs_itself {
         return response;
     }
     let (response, cause) = error_code(response).await;
@@ -1244,7 +1244,6 @@ async fn request_auth(mut req: Request, next: axum::middleware::Next) -> Respons
     }
     // Cliente nenhum escolhe uma admissão anterior.
     req.headers_mut().remove("x-hangar-auth-receipt");
-    req.headers_mut().remove(crate::proxy::AUTH_EMPTY_QUERY);
     next.run(req).await
 }
 
@@ -1344,56 +1343,13 @@ pub(crate) fn on_connect_port(req: &Request) -> bool {
 }
 
 
-pub(crate) async fn pass(st: &AppState, mut req: Request, fwd: &Forward) -> Response {
+pub(crate) async fn pass(st: &AppState, req: Request, fwd: &Forward) -> Response {
     if !on_guest_port(&req) && let Some(response) = not_owner_refusal(st, &req, fwd).await { return response; }
-    let bridged = req.extensions().get::<crate::session_write::bridge::BridgedOwner>().is_some();
-    // Caminho que ninguém atende não espera a porta da sessão: a transferência não faz dele um 409.
-    if !python_answers(req.uri().path()) {
-        return if bridged { StatusCode::MISDIRECTED_REQUEST.into_response() } else { without_python(st, req, fwd).await };
+    // Pedido da ponte do Codex com terminal: 421 diz ao Python que o Rust não o atende.
+    if req.extensions().get::<crate::session_write::bridge::BridgedOwner>().is_some() {
+        return StatusCode::MISDIRECTED_REQUEST.into_response();
     }
-    let _transfer_pass=if !matches!(*req.method(),Method::GET|Method::HEAD|Method::OPTIONS) {
-        if let (Some(runtime),Some(name))=(st.state.runtime.get(),crate::session_write::session_name(req.uri().path())) {
-            if runtime.transfer_blocked(&name).await {
-                return crate::session_write::json_response(StatusCode::CONFLICT,crate::session_write::busy_body());
-            }
-            match runtime.ingress().enter_forwarded(&name) {
-                Ok(pass)=>Some(pass),Err(_)=>return crate::session_write::json_response(StatusCode::CONFLICT,crate::session_write::busy_body()),
-            }
-        } else {None}
-    } else {None};
-    // Pedido da ponte do Codex com terminal nunca volta ao Python: ele trata o que o Rust não atende.
-    if bridged { return StatusCode::MISDIRECTED_REQUEST.into_response(); }
-    if let Some(grant) = &fwd.guest {
-        // Assinado aqui, não no porteiro: a escrita pode esperar a porta da sessão mais que a validade.
-        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
-        crate::share::forward::prepare_guest_request(&mut req, &st.cfg.internal_secret, grant, now);
-        // Recusa de lá não entra no bloqueio do dono, que é por IP e o convidado do Funnel nem tem um.
-        return proxy::forward(&st.http, st.cfg.upstream, req, fwd).await;
-    }
-    // Sem convidado decidido (rota aberta sem handler) nada da 8766 vai ao Python: nunca como dono.
-    if on_guest_port(&req) {
-        return not_found(req.headers());
-    }
-    let cached = req.extensions().get::<RequestAuth>().cloned();
-    let mut admitted_forward = fwd.clone();
-    if admitted_forward.auth_receipt.is_none() {
-        if let Some(cached) = cached {
-            admitted_forward.auth_receipt = cached.receipt().await;
-        }
-    }
-    let mut resp = proxy::forward(&st.http, st.cfg.upstream, req, &admitted_forward).await;
-    resp.extensions_mut().insert(crate::migration_status::Forwarded);
-    if !st.auth.shared() { match resp.status() {
-        StatusCode::UNAUTHORIZED => if let Err(e) = st.auth.record_failure(&fwd.client_ip).await { return auth::unavailable(e); },
-        StatusCode::TOO_MANY_REQUESTS => if let Err(e) = st.auth.mark_blocked_async(&fwd.client_ip).await { return auth::unavailable(e); },
-        _ => {}
-    } }
-    resp
-}
-
-/// Os caminhos que o Python ainda atende: nenhum. O repasse que sobra no `pass` sai com o upstream (R5).
-fn python_answers(_path: &str) -> bool {
-    false
+    without_python(st, req, fwd).await
 }
 
 /// Caminho sem handler e sem Python: o dono leva 404, quem não é o dono a recusa de sempre (401
@@ -1939,7 +1895,7 @@ mod tests {
 
     #[tokio::test]
     async fn migrated_provider_routes_authenticate_before_validation_and_never_fall_back() {
-        let state = state_with_upstream().await;
+        let state = test_state().await;
         let peer = "127.0.0.1:5000".parse().unwrap();
         for path in ["/api/sessions/demo/pi/model", "/api/sessions/demo/kimi/model", "/api/sessions/demo/orq/papeis"] {
             for (token, expected) in [("errado", StatusCode::UNAUTHORIZED), ("dono", StatusCode::UNPROCESSABLE_ENTITY)] {
@@ -1965,7 +1921,7 @@ mod tests {
 
     #[tokio::test]
     async fn migrated_provider_forwarding_checks_the_private_secret_and_preserves_guest_limits() {
-        let state = state_with_upstream().await;
+        let state = test_state().await;
         let peer = "127.0.0.1:5000".parse().unwrap();
         for (path, guest, secret, expected) in [
             ("/api/sessions/demo/pi/model", false, "errado", StatusCode::NOT_FOUND),
@@ -1998,7 +1954,7 @@ mod tests {
         let timeline = dir.path().join("timeline.jsonl");
         let lines = crate::orchestration::orq_cases::CASES.iter().map(|(input, _)| format!("{input}\n")).collect::<String>();
         std::fs::write(&timeline, lines).unwrap();
-        let mut state = Arc::try_unwrap(state_with_upstream().await).ok().unwrap();
+        let mut state = Arc::try_unwrap(test_state().await).ok().unwrap();
         state.side.locate = Arc::new(crate::locate::Fixed(Some(InternalInfo {
             provider: "orq".into(), jsonl: Some(timeline), session_key: "run".into(),
             history: serde_json::Value::Null, headless: false, lifecycle_id: Some("life".into()), cwd: None,
@@ -2026,18 +1982,9 @@ mod tests {
         assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
     }
 
-    /// Estado com um Python mínimo: `/ws` recusa com 403, `/limited` responde 429.
-    async fn state_with_upstream() -> Arc<AppState> {
-        use axum::routing::any;
-        let app = Router::new()
-            .route("/ws", any(|| async { StatusCode::FORBIDDEN }))
-            .route("/limited", any(|| async { StatusCode::TOO_MANY_REQUESTS }));
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let upstream = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    async fn test_state() -> Arc<AppState> {
         let cfg = Config {
             listen: "127.0.0.1:0".parse().unwrap(),
-            upstream,
             internal_secret: "s".into(),
             auth_token: "dono".into(),
             log_path: None,
@@ -2057,42 +2004,6 @@ mod tests {
         b.body(axum::body::Body::empty()).unwrap()
     }
 
-    fn is_owner(st: &AppState, ip: &str) -> bool {
-        st.auth.is_owner(ip, Some(b"dono"))
-    }
-
-    #[tokio::test]
-    async fn websocket_403_and_429_from_python_lock_the_shortcut() {
-        let st = state_with_upstream().await;
-        let peer: SocketAddr = "127.0.0.1:5000".parse().unwrap();
-        let fwd = |ip: &str| forward_for(&st, peer, &request("/x", ip, false, "x"));
-
-        // 8 palpites errados em WebSocket: o Python conta e fecha com 403.
-        for _ in 0..8 {
-            let r = pass(&st, request("/ws", "198.51.100.7", true, "errado"), &fwd("198.51.100.7")).await;
-            assert_eq!(r.status(), StatusCode::FORBIDDEN);
-        }
-        assert!(!is_owner(&st, "198.51.100.7"), "o token certo não abre o atalho nessa origem");
-        assert!(is_owner(&st, "198.51.100.8"), "outra origem segue normal");
-
-        // Um 429 do Python satura a origem de uma vez.
-        let r = pass(&st, request("/limited", "198.51.100.9", false, "errado"), &fwd("198.51.100.9")).await;
-        assert_eq!(r.status(), StatusCode::TOO_MANY_REQUESTS);
-        assert!(!is_owner(&st, "198.51.100.9"));
-
-        // 403 sem Upgrade não é falha de token.
-        let st2 = state_with_upstream().await;
-        for _ in 0..8 {
-            pass(&st2, request("/ws", "198.51.100.10", false, "x"), &fwd("198.51.100.10")).await;
-        }
-        assert!(is_owner(&st2, "198.51.100.10"));
-
-        // Loopback é isento.
-        let r = pass(&st, request("/limited", "127.0.0.1", false, "x"), &fwd("127.0.0.1")).await;
-        assert_eq!(r.status(), StatusCode::TOO_MANY_REQUESTS);
-        assert!(is_owner(&st, "127.0.0.1"));
-    }
-
     /// Aparelho ligado a um hub sem fontes do estado: só o que o teste entrega chega.
     async fn device(dir: &std::path::Path) -> (SideCtx, std::pin::Pin<Box<dyn futures_util::Stream<Item = Bytes> + Send>>) {
         device_with(dir, false).await
@@ -2109,7 +2020,7 @@ mod tests {
             queue_dir: None,
             problem_hold: std::time::Duration::ZERO,
             shown_problems: Default::default(),
-            diag: crate::diag::DiagClient::new("127.0.0.1:9".parse().unwrap(), "s".into()),
+            diag: crate::diag::DiagClient::new(),
         };
         let jsonl = dir.join("t.jsonl");
         std::fs::write(&jsonl, "").unwrap();

@@ -67,7 +67,7 @@ pub async fn machine(root: &Path, id: &str) -> Machine {
              ("USERPROFILE".into(),home.to_string_lossy().into_owned())].into()));
     state.list = Arc::new(ListBridge::new(ListEnv { mux: Mux::with_program(&script, Duration::from_secs(5)),
         capture_program: script.into_os_string(), procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs },
-        FactsClient::new(upstream, SECRET.into())));
+        FactsClient::new()));
     let pair = home.join(".claude/.hangar-pair");
     federation::configure(&pair, fast());
     let changes = Arc::new(AtomicUsize::new(0));

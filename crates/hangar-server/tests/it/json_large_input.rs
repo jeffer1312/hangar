@@ -42,7 +42,7 @@ async fn json_deep_typed_http_child() {
         auth::TrustedHosts, config::Config, routes::AppState};
     let home = tempfile::tempdir().unwrap();
     let mut state = AppState::new(Config {
-        listen: "127.0.0.1:0".parse().unwrap(), upstream: crate::refused_address(),
+        listen: "127.0.0.1:0".parse().unwrap(),
         internal_secret: "fixture-internal".into(), auth_token: "fixture-owner".into(),
         log_path: None, trusted: TrustedHosts::parse("127.0.0.1"),
     });

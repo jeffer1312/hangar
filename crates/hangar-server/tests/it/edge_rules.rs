@@ -82,8 +82,7 @@ async fn path_without_handler_is_404_for_the_owner_and_refused_for_the_stranger(
 async fn path_without_handler_is_404_before_the_session_gate() {
     let (python, upstream) = spawn_fake().await;
     let state = hangar_server::routes::AppState::new(config(upstream, "127.0.0.1"));
-    let registry = std::sync::Arc::new(hangar_server::runtime::gateway::RuntimeRegistry::new(
-        upstream, "secret-test".into(), "instance-test".into()));
+    let registry = std::sync::Arc::new(hangar_server::runtime::gateway::RuntimeRegistry::new("instance-test".into()));
     assert!(state.state.runtime.set(registry).is_ok());
     let server = spawn_state(state).await;
     let r = client().post(format!("http://{server}/api/sessions/sem-entrada/coisa")).bearer_auth(OWNER)

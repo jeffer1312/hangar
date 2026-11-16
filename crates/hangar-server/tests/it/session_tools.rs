@@ -145,11 +145,11 @@ esac
             dirs:parse_dirs(&json!({"home":home,"claude":home.join(".claude"),"codex_home":home.join(".codex"),
                 "pi_sessions":home.join(".pi/agent/sessions"),"omp_config":home.join(".omp"),
                 "omp_agent":home.join(".omp/agent"),"kimi_home":home.join(".kimi-code")}).to_string()),
-        },FactsClient::new(upstream_addr,SECRET.into())));
+        },FactsClient::new()));
         state.list = list.clone();
         state.side.locate = Arc::new(hangar_server::locate::ListLocate { list });
         let runtime = Arc::new(
-            RuntimeRegistry::new(upstream_addr, SECRET.into(), "session-tools-test".into())
+            RuntimeRegistry::new("session-tools-test".into())
                 .with_codex_environment(state.accounts.env.clone()),
         );
         assert!(state.state.runtime.set(runtime).is_ok());

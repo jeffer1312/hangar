@@ -158,7 +158,7 @@ async fn policy() -> std::net::SocketAddr {
 }
 
 pub(crate) async fn registry() -> Arc<RuntimeRegistry> {
-    Arc::new(RuntimeRegistry::new(policy().await, "secret-test".into(), "instance-test".into()).with_processes(Arc::new(crate::runtime_open::RecipeProcesses("sid-1"))))
+    Arc::new(RuntimeRegistry::new("instance-test".into()).with_processes(Arc::new(crate::runtime_open::RecipeProcesses("sid-1"))))
 }
 
 pub(crate) async fn open_headless(registry: &RuntimeRegistry, dir: &Path, name: &str, outcome: &'static str) {
@@ -233,7 +233,7 @@ async fn headless_native_message_goes_to_the_claude_socket_without_python() {
     let memory = Arc::new(std::sync::Mutex::new(hangar_server::state::permission::PermissionMemory::default()));
     memory.lock().unwrap().observe("sid-1", "bypassPermissions");
     let dir = tempfile::tempdir().unwrap();
-    let registry = Arc::new(RuntimeRegistry::new(policy().await, "secret-test".into(), "instance-test".into())
+    let registry = Arc::new(RuntimeRegistry::new("instance-test".into())
         .with_processes(Arc::new(crate::runtime_open::RecipeProcesses("sid-1"))).with_permissions(memory)
         .with_native_inbox_dir(dir.path().into()));
     registry.bind_lifecycle();

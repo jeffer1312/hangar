@@ -18,7 +18,6 @@ async fn peers_route_is_owned_without_python() {
     let address = listener.local_addr().unwrap();
     let mut state = AppState::new(Config {
         listen: address,
-        upstream: crate::refused_address(),
         internal_secret: "contract-internal".into(),
         auth_token: "contract-owner".into(),
         log_path: None,
@@ -372,7 +371,7 @@ async fn owner_routes_keep_failed_attempts_and_block_correct_token() {
     std::fs::write(home.path().join(".hangar/config/.env"), "").unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
-    let mut state = AppState::new(Config { listen: address, upstream: crate::refused_address(), internal_secret: "fixture".into(), auth_token: "owner".into(), log_path: None, trusted: TrustedHosts::parse("127.0.0.1") });
+    let mut state = AppState::new(Config { listen: address, internal_secret: "fixture".into(), auth_token: "owner".into(), log_path: None, trusted: TrustedHosts::parse("127.0.0.1") });
     state.accounts = AccountService::new(AccountEnvironment::from_map([("HOME".into(),home.path().display().to_string()),("USERPROFILE".into(),home.path().display().to_string())].into()));
     let router=hangar_server::routes::router(Arc::new(state));
     let task=tokio::spawn(async move { axum::serve(listener,router.into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap(); });
@@ -434,7 +433,7 @@ fn peer_settings_snapshot_are_frozen_before_later_dotenv_edits() {
     let home=tempfile::tempdir().unwrap();let config=home.path().join(".hangar/config");std::fs::create_dir_all(&config).unwrap();
     std::fs::write(config.join("peers.json"),"{}").unwrap();
     std::fs::write(config.join(".env"),"CP_PUBLIC_URL=https://before.invalid\n").unwrap();
-    let mut state=AppState::new(Config{listen:"127.0.0.1:0".parse().unwrap(),upstream:crate::refused_address(),internal_secret:"contract-internal".into(),auth_token:"contract-owner".into(),log_path:None,trusted:TrustedHosts::parse("127.0.0.1")});
+    let mut state=AppState::new(Config{listen:"127.0.0.1:0".parse().unwrap(),internal_secret:"contract-internal".into(),auth_token:"contract-owner".into(),log_path:None,trusted:TrustedHosts::parse("127.0.0.1")});
     state.accounts=AccountService::new(AccountEnvironment::from_pairs([("HOME",home.path().to_str().unwrap()),("USERPROFILE",home.path().to_str().unwrap())]));
     let state=Arc::new(state);
     assert_eq!(hangar_server::machine_peers::Service::from_state(&state).unwrap().value("CP_PUBLIC_URL"),"https://before.invalid");

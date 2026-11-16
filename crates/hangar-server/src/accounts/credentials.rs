@@ -348,7 +348,7 @@ mod tests {
         write(home.join(".codex-y").join(storage::CODEX_MARKER), &json!({"version": 1, "id": "y"}).to_string());
         // `torto` tem `base_url` que não é texto: fora das duas listas.
         write(home.join(".claude/engines.json"), &json!({"motor": {"label": "Motor"}, "torto": {"base_url": 7}}).to_string());
-        let mut state = AppState::new(Config { listen: "127.0.0.1:0".parse().unwrap(), upstream: "127.0.0.1:1".parse().unwrap(),
+        let mut state = AppState::new(Config { listen: "127.0.0.1:0".parse().unwrap(),
             internal_secret: "s".into(), auth_token: "owner".into(), log_path: None, trusted: TrustedHosts::parse("127.0.0.1") });
         state.accounts = AccountService::new(AccountEnvironment::from_map([
             ("HOME".into(), home.to_string_lossy().into_owned()),

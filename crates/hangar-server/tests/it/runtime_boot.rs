@@ -115,7 +115,7 @@ async fn startup_barrier_child() {
     state.startup = readiness.clone();
     let private = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let private_address = private.local_addr().unwrap();
-    let registry = Arc::new(RuntimeRegistry::new(crate::refused_address(), "fixture".into(), "fixture".into()).with_startup(readiness.clone()));
+    let registry = Arc::new(RuntimeRegistry::new("fixture".into()).with_startup(readiness.clone()));
     let adoption = tokio::spawn(registry.clone().register_claude_headless());
     let gateway = tokio::spawn(gateway::serve(private, registry, "fixture".into(), "fixture".into(), hangar_server::INTERNAL_PROTOCOL));
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();

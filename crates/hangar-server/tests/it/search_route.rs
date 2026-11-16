@@ -106,7 +106,6 @@ impl Scene {
         let (python, upstream) = spawn_fake().await;
         let cfg = Config {
             listen: "127.0.0.1:0".parse().unwrap(),
-            upstream,
             auth_token: OWNER.into(),
             internal_secret: "isolated".into(),
             log_path: None,
@@ -139,7 +138,7 @@ impl Scene {
             "kimi_home": home.join(".kimi-code")}).to_string());
         let list = Arc::new(ListBridge::new(ListEnv { mux: Mux::with_program(&script, Duration::from_secs(5)),
             capture_program: script.into_os_string(), procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs },
-            FactsClient::new(upstream, "isolated".into())));
+            FactsClient::new()));
         if let Some(live) = &opts.live { list.seed(LIVE_NAME, &text(&home.join(live))); }
         state.list = list;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

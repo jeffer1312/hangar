@@ -241,25 +241,6 @@ fn b01_bad_port_refuses_with_a_code() {
     assert_eq!(events(&diary(home.path()), "hangar_server.partida")[0]["codigo"], "config_invalid");
 }
 
-/// Com o Python na frente nada muda: o cano do stdin fechado para o servidor, e a vida não é contada.
-#[test]
-fn b29_with_the_python_parent_closing_stdin_still_stops_it() {
-    let home = tempfile::tempdir().unwrap();
-    let port = free_port();
-    let mut child = command(home.path());
-    child.env("HANGAR_SERVER_LISTEN", format!("127.0.0.1:{port}")).env("HANGAR_SERVER_UPSTREAM", "127.0.0.1:9")
-        .env("HANGAR_INTERNAL_SECRET", "proof").env("CP_AUTH_TOKEN", "proof").stdin(Stdio::piped());
-    let mut server = Server(child.spawn().unwrap());
-    let deadline = Instant::now() + Duration::from_secs(60);
-    while !health(port) {
-        assert!(server.0.try_wait().unwrap().is_none() && Instant::now() < deadline, "o filho não subiu");
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    drop(server.0.stdin.take());
-    assert!(wait_exit(&mut server, Duration::from_secs(120)).success());
-    assert!(!home.path().join(".hangar").join(hangar_boot::life::FILE).exists(), "o Python ainda conta as quedas");
-}
-
 #[cfg(target_os = "linux")]
 #[test]
 fn p2_ready_watchdog_and_stopping_reach_the_systemd_socket() {

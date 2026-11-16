@@ -57,7 +57,7 @@ async fn server_built(root: &Path, n: usize, orq: Option<Arc<dyn hangar_server::
              ("USERPROFILE".into(), home.to_string_lossy().into_owned())].into()));
     state.list = Arc::new(ListBridge::new(ListEnv { mux: Mux::with_program(&script, Duration::from_secs(5)),
         capture_program: script.into_os_string(), procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs },
-        FactsClient::new(upstream, SECRET.into())));
+        FactsClient::new()));
     let list = state.list.clone();
     // Convidado com conta que vê as sessões sem dono: o fechamento dele é o mesmo do dono.
     let guests = hangar_server::login_guests::Service::new(hangar_server::login_guests::Settings { guests: root.join("guests.json"),
@@ -73,7 +73,7 @@ async fn server_built(root: &Path, n: usize, orq: Option<Arc<dyn hangar_server::
     state.share = Some(share.clone());
     // Cada sessão é um Claude sem terminal do Rust: o recado chega ao cano falso dela. Sem `owned`, só a
     // porta de entrada de cada nome conta (a política nunca é chamada).
-    let runtime = Arc::new(if owned { crate::sink::registry().await } else { RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(), "s".into(), "i".into()) });
+    let runtime = Arc::new(if owned { crate::sink::registry().await } else { RuntimeRegistry::new("i".into()) });
     let sink = crate::sink::Sink::default();
     std::fs::create_dir_all(root.join("rt")).unwrap();
     if owned { for i in 0..n { sink.open(&runtime, &root.join("rt"), &format!("s{i}")).await; } }

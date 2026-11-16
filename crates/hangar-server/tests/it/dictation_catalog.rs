@@ -16,7 +16,6 @@ async fn call_with_environment(
     let address = listener.local_addr().unwrap();
     let mut state = AppState::new(Config {
         listen: address,
-        upstream: crate::refused_address(),
         internal_secret: "catalog-secret".into(),
         auth_token: "owner".into(),
         log_path: None,

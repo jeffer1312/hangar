@@ -164,7 +164,7 @@ async fn missing_old_and_wrong_native_answers_write_nothing_and_never_relay() {
     let (python, upstream) = spawn_fake().await;
     let state = AppState::new(config(upstream,"127.0.0.1"));
     let store = state.interactions.clone();
-    let registry = crate::runtime_open::with_hubs(RuntimeRegistry::new(upstream,"secret-test".into(),"instance-test".into()).with_interactions(store.clone())
+    let registry = crate::runtime_open::with_hubs(RuntimeRegistry::new("instance-test".into()).with_interactions(store.clone())
         .with_processes(Arc::new(crate::runtime_open::RecipeProcesses("sid"))));
     registry.open(RuntimeTarget { key:"k-s".into(),generation:1,name:"s".into(),provider:"claude".into(),
         metadata:json!({"name":"s","headless":true,"session_id":"sid","initialized":true}),

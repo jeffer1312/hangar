@@ -57,7 +57,7 @@ impl Fixture {
             .route("/api/relatorio/diario", put(diary)).with_state(worker.clone())).await;
         let (upstream, python) = serve(Router::new().fallback(|| async { "python" })).await;
         let mut state = AppState::new(Config {
-            listen: "127.0.0.1:0".parse().unwrap(), upstream, internal_secret: "diag-internal".into(),
+            listen: "127.0.0.1:0".parse().unwrap(), internal_secret: "diag-internal".into(),
             auth_token: OWNER.into(), log_path: None, trusted: TrustedHosts::parse("127.0.0.1"),
         });
         state.accounts = AccountService::new(AccountEnvironment::from_map([

@@ -498,7 +498,7 @@ mod tests {
         let external = Arc::new(FactsStore::default());
         let interactions = Arc::new(crate::interactions::InteractionStore::default());
         let plugin = Arc::new(crate::plugin::Store::new(interactions.clone()));
-        let registry = Arc::new(crate::runtime::gateway::RuntimeRegistry::new(py.addr,"test".into(),"feed-error".into())
+        let registry = Arc::new(crate::runtime::gateway::RuntimeRegistry::new("feed-error".into())
             .with_interactions(interactions).with_plugin(plugin));
         let endpoint = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = endpoint.local_addr().unwrap();
@@ -532,7 +532,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         write_sidecar(home.path(),json!({"cwd":"/w","session_id":"sid","model":"claude-opus-5","effort":"high"}));
         let py = fake_python().await;
-        let registry = Arc::new(crate::runtime::gateway::RuntimeRegistry::new(py.addr,"test".into(),"feed-parked-quiet".into()));
+        let registry = Arc::new(crate::runtime::gateway::RuntimeRegistry::new("feed-parked-quiet".into()));
         let external = Arc::new(FactsStore::default());
         let mut feed = RuntimeFeed::new(&f.lease.hub,Some(registry.live("s")),f.published.clone(),Some(feed_facts(&py,&external)))
             .with_registry(Some(registry.clone())).with_home(home.path());
@@ -552,7 +552,7 @@ mod tests {
         write_sidecar(home.path(),json!({"cwd":"/w","session_id":"sid-b","model":"claude-opus-5","effort":"high",
             "permission_mode":"plan","previous_non_plan":"acceptEdits","problema":["limite_de_uso","volta às 14:00"]}));
         let py = fake_python().await;
-        let registry = Arc::new(crate::runtime::gateway::RuntimeRegistry::new(py.addr,"test".into(),"feed-parked".into()));
+        let registry = Arc::new(crate::runtime::gateway::RuntimeRegistry::new("feed-parked".into()));
         let external = Arc::new(FactsStore::default());
         let mut feed = RuntimeFeed::new(&f.lease.hub,Some(registry.live("s")),f.published.clone(),Some(feed_facts(&py,&external)))
             .with_registry(Some(registry.clone())).with_home(home.path());
@@ -603,7 +603,7 @@ mod tests {
             while socket.read_line(&mut line).await.unwrap_or(0) > 0 { line.clear(); }
         });
         let processes = Arc::new(RecipeProcesses {sid:std::sync::Mutex::new("sid".into()),config:dir.path().into()});
-        let registry = Arc::new(crate::runtime::gateway::RuntimeRegistry::new(python, "test".into(), "feed-info".into()).with_processes(processes));
+        let registry = Arc::new(crate::runtime::gateway::RuntimeRegistry::new("feed-info".into()).with_processes(processes));
         let ctx = test_ctx();
         registry.bind_hubs(ctx.hubs.downgrade());
         assert!(ctx.runtime.set(registry.clone()).is_ok());
@@ -653,7 +653,7 @@ mod tests {
         let interactions = Arc::new(crate::interactions::InteractionStore::default());
         let plugin = Arc::new(crate::plugin::Store::new(interactions.clone()));
         let processes=Arc::new(RecipeProcesses {sid:std::sync::Mutex::new("sid".into()),config:f._dir.path().into()});
-        let registry = Arc::new(crate::runtime::gateway::RuntimeRegistry::new(py.addr, "test".into(), "feed-race".into())
+        let registry = Arc::new(crate::runtime::gateway::RuntimeRegistry::new("feed-race".into())
             .with_interactions(interactions).with_plugin(plugin.clone()).with_processes(processes.clone()));
         registry.bind_hubs(f.ctx.hubs.downgrade());
         let queues = tempfile::tempdir().unwrap();
@@ -815,7 +815,7 @@ mod tests {
         for (conversation, shown) in [("sid", true), ("outra", false)] {
             let f = claude_fixture();
             let py = fake_python().await;
-            let registry = Arc::new(crate::runtime::gateway::RuntimeRegistry::new(py.addr, "test".into(), format!("feed-own-{conversation}")));
+            let registry = Arc::new(crate::runtime::gateway::RuntimeRegistry::new(format!("feed-own-{conversation}")));
             let binding = crate::interactions::InteractionBinding { key: "k".into(), conversation: conversation.into(), generation: 1 };
             let (_tx, live_rx) = channel(Some(LiveState { binding: Some(binding), public_state: json!({"session": "s"}),
                 error: Some(("queue_io".into(), "fila recusou".into())), ..Default::default() }));
@@ -1048,7 +1048,7 @@ mod tests {
     fn feed_facts(py: &FakePython, store: &Arc<crate::state::facts::FactsStore>) -> FeedFacts {
         FeedFacts {
             store: store.clone(),
-            diag: crate::diag::DiagClient::new(py.addr, "s".into()),
+            diag: crate::diag::DiagClient::new(),
         }
     }
 

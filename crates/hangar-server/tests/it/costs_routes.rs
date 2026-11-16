@@ -73,6 +73,7 @@ struct Harness {
     _dir: tempfile::TempDir,
     base: PathBuf,
     address: SocketAddr,
+    up_address: SocketAddr,
     upstream: Arc<Upstream>,
     collector: Arc<Collector>,
     state: Arc<AppState>,
@@ -125,7 +126,7 @@ impl Harness {
             }
         } else { dir.path().join("idx") };
         let collector = Arc::new(Collector::new(index, base.join("pricing"), dir.path().join("areas.json"), upstream.clone()));
-        let cfg = Config { listen: "127.0.0.1:0".parse().unwrap(), upstream: up_address,
+        let cfg = Config { listen: "127.0.0.1:0".parse().unwrap(),
             internal_secret: SECRET.into(), auth_token: OWNER.into(), log_path: None, trusted: TrustedHosts::parse("127.0.0.1") };
         let mut state = AppState::with_parts(cfg, hangar_server::terminal_control::TerminalPool::new(), collector.clone(), fx, String::new());
         state.diag = state.diag.clone().with_diary(Some(upstream.journal.path().to_owned()));
@@ -139,7 +140,7 @@ impl Harness {
         let address = listener.local_addr().unwrap();
         let app = router(state.clone());
         let server = tokio::spawn(async move { axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await.unwrap() });
-        Self { _dir: dir, base, address, upstream, collector, state, tasks: vec![up_task, server], client: hangar_server::http_client().redirect(reqwest::redirect::Policy::none()).build().unwrap() }
+        Self { _dir: dir, base, address, up_address, upstream, collector, state, tasks: vec![up_task, server], client: hangar_server::http_client().redirect(reqwest::redirect::Policy::none()).build().unwrap() }
     }
 
     fn request(&self, method: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
@@ -198,7 +199,7 @@ impl Harness {
         for task in &self.tasks { task.abort(); }
         for task in self.tasks.drain(..) { assert!(task.await.unwrap_err().is_cancelled()); }
         crate::assert_closed(self.address, "servidor de custos").await;
-        crate::assert_closed(self.state.cfg.upstream, "upstream de custos").await;
+        crate::assert_closed(self.up_address, "upstream de custos").await;
     }
 }
 

@@ -1679,7 +1679,7 @@ async fn app(home: &Path) -> App {
         });
         axum::serve(upstream, router).await.unwrap();
     });
-    let mut state = AppState::new(Config { listen: "127.0.0.1:9".parse().unwrap(), upstream: upstream_addr,
+    let mut state = AppState::new(Config { listen: "127.0.0.1:9".parse().unwrap(),
         internal_secret: "contract-internal".into(), auth_token: "contract-only".into(), log_path: None,
         trusted: TrustedHosts::parse("127.0.0.1") });
     state.accounts = hangar_server::accounts::AccountService::new(env_of(home));

@@ -8,7 +8,7 @@ async fn server() -> (String, tokio::task::JoinHandle<()>) {
 }
 
 async fn server_with_pool(pool: TerminalPool) -> (String, tokio::task::JoinHandle<()>) {
-    let cfg = Config { listen: "127.0.0.1:0".parse().unwrap(), upstream: "127.0.0.1:1".parse().unwrap(),
+    let cfg = Config { listen: "127.0.0.1:0".parse().unwrap(),
         internal_secret: "internal".into(), auth_token: "owner".into(), log_path: None,
         trusted: TrustedHosts::parse("127.0.0.1") };
     // Nenhum pedido válido pode alcançar o tmux do usuário.
@@ -139,7 +139,7 @@ async fn specific_public_bind_advertises_private_loopback_and_stop_closes_both()
         result=>result.unwrap(),
     };
     let public_addr = public.local_addr().unwrap();
-    let cfg = Config { listen: public_addr, upstream: "127.0.0.1:1".parse().unwrap(),
+    let cfg = Config { listen: public_addr,
         internal_secret: "internal".into(), auth_token: "owner".into(), log_path: None,
         trusted: TrustedHosts::parse("127.0.0.1") };
     let pool = TerminalPool::with_program("/does-not-exist/hangar-test-tmux", None, Limits::default());
@@ -175,7 +175,7 @@ async fn specific_public_bind_advertises_private_loopback_and_stop_closes_both()
 #[tokio::test]
 async fn unauthorized_tcp_origin_never_polls_request_body() {
     use std::sync::atomic::{AtomicUsize, Ordering};
-    let cfg = Config { listen: "127.0.0.1:0".parse().unwrap(), upstream: "127.0.0.1:1".parse().unwrap(),
+    let cfg = Config { listen: "127.0.0.1:0".parse().unwrap(),
         internal_secret: "internal".into(), auth_token: "owner".into(), log_path: None,
         trusted: TrustedHosts::parse("127.0.0.1") };
     let state = Arc::new(AppState::with_terminal_pool(cfg, TerminalPool::with_program("/does-not-exist/hangar-test-tmux", None, Limits::default())));
@@ -196,7 +196,7 @@ async fn unauthorized_tcp_origin_never_polls_request_body() {
 
 #[tokio::test]
 async fn forwarded_external_origin_in_any_header_cannot_authorize() {
-    let cfg = Config { listen: "127.0.0.1:0".parse().unwrap(), upstream: "127.0.0.1:1".parse().unwrap(),
+    let cfg = Config { listen: "127.0.0.1:0".parse().unwrap(),
         internal_secret: "internal".into(), auth_token: "owner".into(), log_path: None,
         trusted: TrustedHosts::parse("127.0.0.1") };
     let state = Arc::new(AppState::with_terminal_pool(cfg, TerminalPool::with_program("/does-not-exist/hangar-test-tmux", None, Limits::default())));
