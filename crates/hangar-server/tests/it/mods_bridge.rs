@@ -96,6 +96,9 @@ async fn bridge_checks_token_and_url_and_passes_other_sessions() {
 #[tokio::test]
 async fn opened_checks_token_case_size_and_passes_invalid_bodies() {
     let (_python, server, mods, _plugin) = setup().await;
+    // Tempo parado: a janela do clique não vence entre os pedidos com a máquina carregada.
+    let frozen = std::time::Instant::now();
+    mods.set_clock(Arc::new(move || frozen));
     let base = format!("http://{server}/api/plugin");
     let token = mint(OWNER, "mods-s");
     let attempt = mods.begin_click("mods-s", "a", "vitrine", "b");

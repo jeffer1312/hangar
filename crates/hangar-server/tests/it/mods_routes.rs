@@ -23,6 +23,8 @@ struct FakeInner {
     peak: AtomicUsize,
     delay: Duration,
     copy: Option<(Mods, String)>,
+    /// Por chamada: quando o mod foi chamado e o prazo que recebeu.
+    deadlines: Mutex<Vec<(Instant, Instant)>>,
 }
 
 /// Tipo local (A2): `impl SurfaceLink for Arc<…>` seria trait de fora em tipo de fora (E0117).
@@ -39,8 +41,9 @@ impl std::ops::Deref for FakeLink {
 }
 
 impl SurfaceLink for FakeLink {
-    fn call(&self, call: ModsCall, _: Instant) -> CallFuture {
+    fn call(&self, call: ModsCall, deadline: Instant) -> CallFuture {
         let link = self.0.clone();
+        link.deadlines.lock().unwrap().push((Instant::now(), deadline));
         Box::pin(async move {
             let now = link.active.fetch_add(1, SeqCst) + 1;
             link.peak.fetch_max(now, SeqCst);
@@ -277,9 +280,16 @@ async fn stuck_mod_is_cut_before_the_app_gives_up_and_frees_the_turn() {
     // O que sobra do prazo limita a chamada ao mod: preso, ele não segura o app nem a vez da sessão.
     let (_python, server, mods, link) = setup(FakeLink::with(FakeInner { delay: Duration::from_secs(30), ..Default::default() })).await;
     let ((status, body), took) = timed_post(server, "s", "press", json!({"site": "above-prompt", "plugin": "vitrine", "key": "abrir"}), Some(OWNER)).await;
+    let answered = Instant::now();
     assert_eq!((status, body["detail"]["code"].as_str()), (409, Some("erro_mod_clique_sem_resposta")));
-    assert!(took < APP_GIVES_UP, "{took:?}");
     assert_eq!(link.calls.lock().unwrap().len(), 1);
+    // Medido no servidor, não na volta pela rede, que sob carga come a folga entre o orçamento e o app: o mod
+    // recebe menos que a paciência do app, a resposta sai no fim desse prazo, e o mod preso não a segura (o
+    // teto do atraso do mod só pega a espera por ele).
+    let (called, deadline) = link.deadlines.lock().unwrap()[0];
+    assert!(deadline.saturating_duration_since(called) < APP_GIVES_UP, "{:?}", deadline.saturating_duration_since(called));
+    assert!(answered >= deadline, "a resposta veio antes do prazo, sem o corte");
+    assert!(took < link.delay, "{took:?}");
     let turn = mods.link("s").unwrap().lock;
     assert!(turn.try_lock().is_ok(), "a vez da sessão ficou livre");
 }

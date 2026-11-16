@@ -1320,6 +1320,11 @@ async fn an_open_question_holds_the_mode_switch_of_a_terminal() {
     let key = "bc".repeat(16);
     terminal_with_spec(&fx,&key);
     let old_agent = fx.agent().unwrap();
+    // A chamada da pergunta está no transcript, como na vida real: sem ela o sidecar vira órfão passada a
+    // carência (`ASK_GRACE`), e sob carga a troca chegava depois dela, já sem pergunta aberta.
+    let transcript = fx.home.join(".claude/projects").join(hangar_workspace::worktrees::sanitize_cwd(&fx.cwd.to_string_lossy())).join(format!("{SID}.jsonl"));
+    let call = json!({"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"AskUserQuestion","input":{}}]}});
+    std::fs::write(&transcript,format!("{}{call}\n",std::fs::read_to_string(&transcript).unwrap())).unwrap();
     let asks = fx.home.join(".claude/.hangar-askq");
     std::fs::create_dir_all(&asks).unwrap();
     std::fs::write(asks.join(format!("{SID}.json")),json!({"tool_use_id":"t1","tool_input":{"questions":[

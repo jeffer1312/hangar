@@ -76,6 +76,9 @@ async fn a_renamed_session_is_found_by_the_key_its_process_was_launched_with() {
 #[tokio::test]
 async fn a_hand_opened_session_band_and_toasts_match_python() {
     let (_python, server, mods, _probe) = setup().await;
+    // Tempo parado: o aviso de prazo curto não vence entre os passos com a máquina carregada, e o prazo lido é o gravado.
+    let frozen = Instant::now();
+    mods.set_clock(Arc::new(move || frozen));
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../backend/tests/fixtures/contract/plugin_band/cases.json");
     let golden: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
     let name = golden["session"].as_str().unwrap();
