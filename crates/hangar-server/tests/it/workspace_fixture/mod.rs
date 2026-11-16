@@ -152,6 +152,9 @@ async fn build(root: &std::path::Path, context_ok: bool, home: Option<&std::path
     };
     env.mux=hangar_server::list::mux::Mux::with_program(mux.unwrap_or(&default_mux),std::time::Duration::from_secs(5));
     state.list=Arc::new(hangar_server::list::bridge::ListBridge::new(env,hangar_server::list::facts::FactsClient::new(upstream,SECRET.into())));
+    // Páginas e sessão da própria fixture: o padrão gravaria no HOME real e procuraria a sessão na lista da máquina.
+    state.pages=Arc::new(hangar_server::pages::store::Store::new(home.join(".hangar").join("paginas")));
+    state.side.locate=Arc::new(hangar_server::locate::ListLocate { list:state.list.clone() });
     let workspace_slots=state.workspace_slots.clone();
     let list=state.list.clone();
     let runtime=Arc::new(hangar_server::runtime::gateway::RuntimeRegistry::new(upstream, SECRET.into(), "workspace-fixture".into())
