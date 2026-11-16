@@ -13,7 +13,7 @@ use hangar_api::session::SessionRow;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::classify::{Classifier, Effect, Facts, MuxCapture};
+use super::classify::{CaptureSource, Classifier, Effect, Facts, MuxCapture};
 use super::context::{self, ContextCache, ReadingInputs};
 use super::discover::{self, Resolver};
 use super::discover_other::{self, Dirs};
