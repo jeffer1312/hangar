@@ -3,7 +3,7 @@
 //! ao último é descartada. O que a tela mostra é preparado na chegada da resposta, nunca no desenho.
 use super::*;
 use super::settings::{Page, segments, settings_box};
-use crate::appearance::{self, Currency, Language};
+use crate::appearance::{self, Currency, DeliveryMode, Language};
 use gpui_kit::component::progress::Progress;
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::checkbox::Checkbox;
@@ -900,6 +900,7 @@ impl Hangar {
             settings_box().child(self.row(IconName::Key, "settings_chrome_autofill", Some(tr("settings_chrome_autofill_desc")), true, toggle.into_any_element()))
                 .child(self.row(IconName::Globe, "settings_full_chrome", Some(tr("settings_full_chrome_desc")), true, full.into_any_element()))
         });
+        let delivery = self.render_delivery_mode(cx);
         let lead = tr(if crate::tray::SUPPORTED { "settings_general_lead_window" } else { "settings_general_lead" });
         div().flex().flex_col()
             .child(self.page_top("settings_page_general", lead))
@@ -907,9 +908,31 @@ impl Hangar {
             .child(settings_box()
                 .child(self.row(IconName::Languages, "settings_language", Some(tr("settings_language_desc")), true, language))
                 .child(self.row(IconName::Banknote, "settings_currency", Some(rate_note), true, currency)))
+            .child(self.heading("settings_conversation_group"))
+            .child(settings_box().child(delivery))
             .when_some(tray, |el, tray| el.child(self.heading("settings_window_group")).child(tray))
             .when_some(autofill, |el, autofill| el.child(self.heading("settings_browser_group")).child(autofill))
             .into_any_element()
+    }
+
+    /// "Mensagem enviada com a sessão trabalhando": as quatro escolhas, com a explicação da que vale.
+    fn render_delivery_mode(&mut self, cx: &mut Context<Self>) -> Div {
+        const MODES: [DeliveryMode; 4] = [DeliveryMode::Queue, DeliveryMode::Direct, DeliveryMode::Jev, DeliveryMode::Conversation];
+        self.refresh_queue_jev(cx);
+        let mode = appearance::get().delivery_mode();
+        let jev_help = self.queue_jev_help();
+        let labels = ["delivery_mode_queue", "delivery_mode_direct", "delivery_mode_jev", "delivery_mode_conversation"]
+            .map(|key| tr_shared(key, &[]));
+        let desc = tr_shared(match mode {
+            DeliveryMode::Queue => "delivery_mode_queue_desc",
+            DeliveryMode::Direct => "delivery_mode_direct_desc",
+            DeliveryMode::Jev => "delivery_mode_jev_desc",
+            DeliveryMode::Conversation => "delivery_mode_conversation_desc",
+        }, &[]);
+        let enabled = MODES.map(|m| m != DeliveryMode::Jev || self.queue_jev_ready());
+        let control = super::settings::segments_where("delivery-mode", &labels, &[], MODES.iter().position(|m| *m == mode).unwrap_or(0),
+            &enabled, false, jev_help, |this: &mut Hangar, index, _: &mut Window, cx| this.set_delivery_mode(MODES[index], cx), cx);
+        self.row(IconName::MessageSquare, "settings_delivery_mode", Some(desc), true, control)
     }
 
     pub(super) fn render_diary(&mut self, cx: &mut Context<Self>) -> AnyElement {

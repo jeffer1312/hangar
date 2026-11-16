@@ -418,6 +418,14 @@ impl Api {
         Ok(Delivery { ok: true, delivered: true, ..Default::default() })
     }
 
+    /// "Na conversa". Servidor anterior recusa o campo com 422 antes de gravar: a mensagem vai pela fila comum.
+    pub async fn send_conversation(&self, name: &str, text: &str) -> Result<Delivery, Failure> {
+        match self.send_input(name, json!({"text": text, "delivery": "conversation"})).await {
+            Err(error) if error.status == Some(422) => self.send(name, text).await,
+            other => other,
+        }
+    }
+
     pub async fn send_decided(&self, name: &str, text: &str, task: &str, message: &str) -> Result<Delivery, Failure> {
         self.send_input(name, json!({"text": text, "jev_task": task, "jev_message": message})).await
     }

@@ -13,7 +13,13 @@ export function waitsInQueue(e: ChatEvent, provider?: string | null, headless = 
   // Codex e Claude sem terminal: a fila é do processo, entregue não conta mais como espera.
   const filaDoProcesso = provider === 'codex' || headless;
   return e.kind === 'user_msg' && e.id.startsWith('queued-') && !e.desistiu && !e.queued_consumed
-    && (!filaDoProcesso || !e.queued_delivered);
+    && !e.queued_conversation && (!filaDoProcesso || !e.queued_delivered);
+}
+
+/** Mandada "Na conversa" e ainda não lida pelo agente: bolha inteira na conversa, com "Em espera". */
+export function waitsInConversation(e: ChatEvent): boolean {
+  return e.kind === 'user_msg' && e.id.startsWith('queued-') && e.queued_conversation === true
+    && !e.queued_confirmed && !e.queued_consumed && !e.desistiu;
 }
 
 /** A fila republica ao vivo a entrega que desistiu, mesmo antiga: ela vai para o horário do envio, não para o fim. */

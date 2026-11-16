@@ -520,6 +520,11 @@ pub fn from_current_session(entry: &Map<String, Value>, min_ts: f64, ts: f64) ->
     ts >= min_ts - grace
 }
 
+/// Mandada "Na conversa": a bolha fica na conversa, nunca no painel da fila.
+fn is_conversation(entry: &Map<String, Value>) -> bool {
+    entry.get("conversation") == Some(&Value::Bool(true))
+}
+
 /// `_entry_event` (pqueue.py:210).
 pub fn entry_event(entry: &Map<String, Value>) -> ChatEvent {
     let id = entry.get("id").map_or_else(|| "None".to_string(), py::py_str);
@@ -537,6 +542,7 @@ pub fn entry_event(entry: &Map<String, Value>) -> ChatEvent {
             desistiu: py::truthy(entry.get("desistiu")).then_some(true),
             queued_consumed: (entry.get("consumed") == Some(&Value::Bool(true))).then_some(true),
             queued_ts: entry.get("ts").and_then(py::number),
+            queued_conversation: is_conversation(entry).then_some(true),
             ..event(ChatKind::UserMsg, format!("queued-{id}"))
         }
     };
@@ -595,6 +601,7 @@ pub fn queue_panel_entries(queue: &Path, start_ts: f64) -> io::Result<QueuePanel
         .filter(|entry| {
             let ts = entry.get("ts").and_then(py::number).unwrap_or(0.0);
             entry.get("text").and_then(Value::as_str).is_some_and(|text| !strip(text).is_empty())
+                && !is_conversation(entry)
                 && (start_ts == 0.0 || from_current_session(entry, start_ts, ts))
         })
         .map(Value::Object)
@@ -678,6 +685,32 @@ mod tests {
         // Entrada da pessoa com o campo forjado não vira aviso.
         let user = serde_json::json!({"id":"q1","text":"oi","delivered":false,"notice_meta":{"key":"x"}});
         assert!(super::entry_event(user.as_object().unwrap()).notice_meta.is_none());
+    }
+
+    /// "Na conversa": a bolha leva a marca; a entrada comum fica como era, sem o campo no JSON.
+    #[test]
+    fn conversation_row_carries_its_mark_and_plain_rows_do_not() {
+        let row = serde_json::json!({"id":"c1","text":"olha isso","delivered":true,"steered":true,"conversation":true});
+        let event = super::entry_event(row.as_object().unwrap());
+        assert_eq!((event.id.as_str(), event.queued_conversation, event.queued_delivered), ("queued-c1", Some(true), Some(true)));
+        let plain = serde_json::json!({"id":"p1","text":"comum","delivered":false});
+        let json = serde_json::to_value(super::entry_event(plain.as_object().unwrap())).unwrap();
+        assert!(json.get("queued_conversation").is_none(), "sem marca, o campo não sai: {json}");
+    }
+
+    #[test]
+    fn queue_panel_leaves_out_conversation_rows_even_while_they_wait() {
+        let dir = tempfile::tempdir().unwrap();
+        let queue = dir.path().join("q.jsonl");
+        let rows = [
+            serde_json::json!({"id":"conv","text":"na conversa","ts":10.0,"delivered":false,"conversation":true}),
+            serde_json::json!({"id":"fila","text":"na fila","ts":11.0,"delivered":false}),
+        ];
+        std::fs::write(&queue, rows.iter().map(|r| format!("{r}\n")).collect::<String>()).unwrap();
+        let panel = queue_panel_entries(&queue, 0.0).unwrap();
+        let ids: Vec<&str> = panel.entries.iter().map(|e| e["id"].as_str().unwrap()).collect();
+        assert_eq!(ids, vec!["fila"]);
+        assert!(panel.present.contains("conv"), "segue na projeção: os aparelhos não tiram a bolha dela");
     }
 
     use super::{chaves_de_commit, merged_history, merged_history_capped, queue_panel_entries, transcript_start_ts, HistoryRequest, Provider, TAIL_WINDOW};

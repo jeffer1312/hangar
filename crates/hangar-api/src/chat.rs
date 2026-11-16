@@ -110,6 +110,10 @@ pub struct ChatEvent {
     /// ignorar, `subject` o hook e `count` o total de falhas. Não existe no `models.py`: ausente, não sai no JSON.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notice_meta: Option<Map<String, Value>>,
+    /// Só em `queued-<id>` mandada "Na conversa": a bolha fica na conversa, fora do painel da fila. Ausente
+    /// no JSON quando não vale, para cliente e goldens antigos.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queued_conversation: Option<bool>,
     /// Byte logo após a linha do transcript: vira o `id:` do SSE e nunca vai no JSON (`exclude=True`).
     #[serde(skip)]
     pub offset: Option<u64>,

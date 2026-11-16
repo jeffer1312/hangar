@@ -284,6 +284,9 @@ impl State {
 pub enum Action {
     Load,
     Append { text:String, delivered:bool, ts:Option<f64>, pre_transcript:bool, entry_id:Option<String> },
+    /// Mensagem mandada "Na conversa": espera como a do `Append`, mas a marca a tira do painel da fila e a
+    /// deixa como bolha na conversa.
+    AppendConversation { text:String, pre_transcript:bool, entry_id:Option<String> },
     /// `confirms`: o comando que a CLI respondeu sozinha, sem linha no transcript.
     AppendLocal { text:String, entry_id:Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")] confirms:Option<String>,
@@ -856,6 +859,11 @@ fn apply(state: &mut State, action: Action, clock: ClockSample, call_id: &str) -
         Action::EnsureProjection => Value::Null,
         Action::Append { text, delivered, ts, pre_transcript, entry_id } => {
             let mut row = json!({"id":entry_id.unwrap_or_else(||call_id.into()),"text":text,"ts":ts.unwrap_or(clock.epoch_s),"delivered":delivered});
+            if pre_transcript { row["pre_transcript"] = json!(true); }
+            append_row(state,row)?
+        }
+        Action::AppendConversation { text, pre_transcript, entry_id } => {
+            let mut row = json!({"id":entry_id.unwrap_or_else(||call_id.into()),"text":text,"ts":clock.epoch_s,"delivered":false,"conversation":true});
             if pre_transcript { row["pre_transcript"] = json!(true); }
             append_row(state,row)?
         }
@@ -1496,6 +1504,21 @@ mod headless_delivery_tests {
         store.exec(1,&format!("append:{id}"),clock(ts),Action::Append { text:id.into(),delivered:false,ts:Some(ts),pre_transcript:false,entry_id:Some(id.into()) }).unwrap();
     }
     fn row(store:&Store,id:&str) -> Value { store.state().rows.iter().find(|r|r["id"] == id).unwrap().clone() }
+
+    /// A mesma chamada repetida (retomada do ator) não duplica a linha nem perde a marca; a orientação a mantém.
+    #[test]
+    fn conversation_append_is_idempotent_and_keeps_its_mark() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = store(&dir);
+        let action = || Action::AppendConversation { text:"olha".into(),pre_transcript:false,entry_id:Some("c".into()) };
+        let first = store.exec(1,"append:c",clock(10.0),action()).unwrap();
+        assert_eq!(store.exec(1,"append:c",clock(11.0),action()).unwrap(),first);
+        assert_eq!(store.state().rows.iter().filter(|r|r["id"] == "c").count(),1);
+        assert_eq!((row(&store,"c")["conversation"].clone(),row(&store,"c")["delivered"].clone()),(json!(true),json!(false)));
+        store.exec(1,"claim",clock(12.0),Action::Claim { min_ts:0.0,limit:None,entry_id:Some("c".into()) }).unwrap();
+        store.exec(1,"steered",clock(12.0),Action::SetDelivered { entry_id:"c".into(),value:true,steered:true }).unwrap();
+        assert_eq!((row(&store,"c")["conversation"].clone(),row(&store,"c")["steered"].clone()),(json!(true),json!(true)));
+    }
 
     /// A nota de hook tem id fixo: voltar com o total troca o texto da linha; id que a fila não tem (linha
     /// cortada pelo teto) nasce como linha nova, uma só.

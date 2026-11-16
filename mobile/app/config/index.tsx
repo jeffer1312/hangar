@@ -22,7 +22,7 @@ const MANUAL = '/config/manual';
 // títulos de linha que a busca acha, que só abre a página.
 const DEVICE: Page[] = [
   { route: '/config/geral', icon: 'Globe', title: m.native_settings_page_general,
-    rows: [m.config_idioma_rotulo, m.lista_agrupar] },
+    rows: [m.config_idioma_rotulo, m.lista_agrupar, m.delivery_mode_title] },
   { route: '/config/aparencia', icon: 'Palette', title: m.native_settings_page_appearance,
     rows: [m.config_tema_curto, m.native_settings_accent, m.config_fundo_curto, m.config_fundo_escolher,
       m.config_fundo_transparencia, m.config_fundo_solidez, m.config_aparencia_pensamento_tools] },

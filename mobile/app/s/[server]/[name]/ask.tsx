@@ -142,7 +142,8 @@ export default function AskSheet() {
     const requestId = displayed.request_id;
     try {
       const routed = displayed.is_async && displayed.provider === 'codex';
-      const steer = routed && (delivery.mode === 'direct' || (delivery.mode === 'jev' && delivery.status === 'ready'));
+      // No Codex "Na conversa" é o `turn/steer`, que não corta o turno: a resposta entra na hora, como no Direto.
+      const steer = routed && (delivery.mode === 'direct' || delivery.mode === 'conversation' || (delivery.mode === 'jev' && delivery.status === 'ready'));
       // Como no composer: Jev escolhido e indisponível responde pela fila, e quem escolheu precisa saber.
       const fallbackNotice = routed && delivery.mode === 'jev' && !steer && delivery.status !== 'loading'
         ? { text: m.mobile_queue_jev_fallback({ reason: delivery.help.replace(/[\s.…]+$/, '') }), warning: true } : null;

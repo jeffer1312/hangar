@@ -454,8 +454,8 @@ function PendingEcho({ echo, route, sessionName, serverId, onQuoteClick }: {
 }) {
   const bubble = useRef<View>(null);
   return (
-    <FlightDestination route={route} text={echo.text} target="chat" dim={!echo.solid} measured={bubble}
-      style={[styles.pending, echo.solid && styles.pendingSolid]}>
+    <FlightDestination route={route} text={echo.text} target="chat" dim={!echo.solid && !echo.conversation} measured={bubble}
+      style={[styles.pending, (echo.solid || echo.conversation) && styles.pendingSolid]}>
       <UserBubble text={echo.text} sessionName={sessionName} serverId={serverId} onQuoteClick={onQuoteClick} bubbleRef={bubble} />
     </FlightDestination>
   );

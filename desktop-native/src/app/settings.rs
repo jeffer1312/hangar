@@ -106,6 +106,7 @@ const PAGE_ROWS: &[(Page, &[(&str, Option<&str>)])] = &[
         ("connect_preview_title", Some("connect_preview_help"))]),
     (Page::Appearance, &APPEARANCE_ROWS),
     (Page::General, &[("settings_language", Some("settings_language_desc")), ("settings_currency", Some("settings_currency_search")),
+        ("settings_delivery_mode", Some("settings_delivery_mode_search")),
         ("settings_tray", Some("settings_tray_desc")), ("settings_chrome_autofill", Some("settings_chrome_autofill_desc")),
         ("settings_full_chrome", Some("settings_full_chrome_desc"))]),
     (Page::Sessions, &[("settings_auto_hide_label", None), ("settings_sleep_title", Some("settings_sleep_hint"))]),
@@ -1155,13 +1156,23 @@ pub(super) fn segments(id: &'static str, labels: &[String], selected: usize, ava
 pub(super) fn segments_with_hints(id: &'static str, labels: &[String], hints: &[String], selected: usize, available: usize, locked: bool,
     off_note: String, pick: impl Fn(&mut Hangar, usize, &mut Window, &mut Context<Hangar>) + Clone + 'static, cx: &mut Context<Hangar>)
     -> AnyElement {
+    let enabled: Vec<bool> = (0..labels.len()).map(|n| n < available).collect();
+    segments_where(id, labels, hints, selected, &enabled, locked, off_note, pick, cx)
+}
+
+/// `enabled`: quais opções valem, uma a uma, quando a desligada não é a do fim (o Jev entre Direto e Na conversa).
+#[allow(clippy::too_many_arguments)]
+pub(super) fn segments_where(id: &'static str, labels: &[String], hints: &[String], selected: usize, enabled: &[bool], locked: bool,
+    off_note: String, pick: impl Fn(&mut Hangar, usize, &mut Window, &mut Context<Hangar>) + Clone + 'static, cx: &mut Context<Hangar>)
+    -> AnyElement {
     let count = labels.len();
+    let any = enabled.iter().any(|on| *on);
     div().flex().rounded(px(6.)).border_1().border_color(theme::border_strong()).overflow_hidden()
         .when(locked, |el| el.opacity(0.6))
         .children(labels.iter().enumerate().map(|(n, label)| {
             // Opção que ainda não chegou não mostra escolha nenhuma: o padrão do web pareceria o estado do app.
-            let on = n == selected && (available > 0 || locked);
-            let enabled = n < available;
+            let on = n == selected && (any || locked);
+            let enabled = enabled.get(n).copied().unwrap_or(false);
             let pick = pick.clone();
             Button::new(SharedString::from(format!("{id}-{n}")))
                 .custom(ButtonCustomVariant::new(cx).color(if on { theme::accent_dim() } else { transparent_black() })
@@ -1173,7 +1184,7 @@ pub(super) fn segments_with_hints(id: &'static str, labels: &[String], hints: &[
                 .when(on, |el| el.bg(theme::accent_dim()))
                 .when(n + 1 < count, |el| el.border_r_1().border_color(theme::border_strong()))
                 .disabled(!enabled).label(label.clone())
-                .when(!enabled && available > 0, |el| el.tooltip(off_note.clone()))
+                .when(!enabled && any, |el| el.tooltip(off_note.clone()))
                 .when_some(hints.get(n).filter(|_| enabled), |el, hint| el.tooltip(hint.clone()).accessibility_label(hint.clone()))
                 .on_click(cx.listener(move |this, _, window, cx| if enabled && !on { pick(this, n, window, cx) }))
         }))

@@ -424,6 +424,20 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   `result` não é parada (a vista segue trabalhando e a fila não acorda) até o `command_lifecycle`
   da orientação dizer `started` (ela vira o turno) ou `cancelled` (o turno acaba). Ver
   [Orientar corta o turno](#orientar-corta-o-turno-do-claude-sem-terminal-14112026).
+- **"Na conversa" entra no turno sem cortá-lo, só onde o turno é do processo.** O `/input` com
+  `"delivery":"conversation"` (nunca junto de `steer:true` nem do Jev: 422) grava a linha com a marca
+  `conversation` (`AppendConversation`) e, com turno, a orienta sem `now`: no Claude sem terminal a CLI
+  a guarda até a pausa entre ferramentas; no Codex, com e sem terminal, vai pelo `turn/steer`. No
+  Claude com terminal (o Orientar ali é `ctrl+x ctrl+s`, que corta), em Pi, omp e Kimi e em comando
+  de barra, o pedido vira a fila comum, sem marca, e a resposta diz `conversation: false`. O eco
+  `isReplay` não confirma linha marcada: ele sai quando a CLI recebe, não quando lê; quem confirma
+  é o recibo do transcript (`queued_command`, `dequeue`/`remove`), relido a cada resultado de
+  ferramenta enquanto houver mensagem guardada. A linha marcada não entra no painel da fila e vai
+  aos aparelhos com `queued_conversation`. "Enviar agora" é o `queue/<id>/steer` de sempre: linha
+  ainda esperando segue o Orientar; já escrita no Claude sem terminal, vira `SteerWritten`, que
+  manda o `interrupt` e guarda a escrita em `steer_now`, sem reescrever o texto. Codex não tem
+  "Enviar agora". Servidor antigo recusa a chave com 422 antes de gravar; os aparelhos reenviam
+  como fila. Ver [mensagem na conversa](#mensagem-na-conversa-sem-cortar-o-turno-16112026).
 - **Modo de permissão troca COM a sessão trabalhando** — é tecla, não texto. O guard de "está
   trabalhando" existe para o `/model`, que é texto.
 - **Depois do BTab, o rodapé é lido na hora, sem pausa fixa**, e o Shift+Tab do app mostra o modo
@@ -1113,6 +1127,28 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   também recebe `success`. Só o `task_updated` (`killed`) ou o `task_notification` (`stopped`) daquele id
   prova a parada. Matar pelo pid não é caminho: a árvore de processos muda de um sistema para outro e o
   modelo não fica sabendo. Ver [parar tarefa do Claude](#parar-tarefa-do-claude-13112026).
+
+## Mensagem na conversa sem cortar o turno (16/11/2026)
+
+O pedido foi o comportamento do Claude Desktop: a mensagem mandada com a sessão trabalhando aparece
+na conversa na hora e o Claude a lê na próxima pausa entre ferramentas, sem parar o que faz. A
+configuração "Mensagem enviada com a sessão trabalhando" (nativo em Geral, Expo em Configurações)
+junta os modos que já existiam (Fila, Direto, Jev decide) e acrescenta "Na conversa".
+
+O caminho sem corte já existia para o recado entre sessões: a escrita sem `"priority":"now"` só
+entra quando a ferramenta em curso acaba (medido na entrada de 14/11 com um `ssh` de 590 s). "Na
+conversa" reusa esse caminho, com uma marca própria na linha da fila para a bolha não ir ao painel.
+Não reusa `steer:true` porque no Claude com terminal ele vira o `steer_entry`, que aperta
+`ctrl+x ctrl+s` e corta o turno. A decisão do usuário foi não levar a mensagem à fila interna do
+Claude Code com terminal: ali "Na conversa" se comporta como Fila.
+
+Não medido ainda, e por isso fora das regras como fato: se a CLI 2.1.x, depois do `interrupt` do
+"Enviar agora", roda a mensagem guardada como turno seguinte (como faz com a orientação de
+`priority:"now"`) ou a descarta. O motor trata como o Orientar: o `result` do corte não é parada e o
+`command_lifecycle` `started` da mensagem guardada vira o turno; `cancelled` solta. Também não
+medido: em que momento sai o eco `isReplay` de uma mensagem guardada; por isso ele não confirma a
+linha marcada em nenhum caso. Medir com `claude -p --input-format stream-json` num turno com um
+`sleep` longo antes de dar a regra por provada.
 
 ## Orientar corta o turno do Claude sem terminal (14/11/2026)
 

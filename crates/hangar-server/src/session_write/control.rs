@@ -722,13 +722,41 @@ pub async fn queue_steer(State(st): State<Arc<AppState>>, ConnectInfo(peer): Con
     if !bytes.is_empty() && serde_json::from_slice::<Value>(&bytes).ok().and_then(|v| v.as_object().map(|o| o.is_empty())) != Some(true) {
         return invalid_body(ctx.headers());
     }
+    // Só o Claude sem terminal guarda a mensagem escrita; no Codex o `turn/steer` já entrou no turno.
+    let written = ctx.target.provider == "claude" && matches!(ctx.target.handle, EntryHandle::Headless(_))
+        && written_conversation(&ctx.target.handle, &entry_id).await;
     let result = match &ctx.target.handle {
         // Serial com a drenagem dentro do ator: subir e entregar acontecem sem outra mensagem no meio.
         EntryHandle::Terminal { handle, .. } =>
             queue_steer_terminal(&handle.control(random_hex(16), "steer_entry".into(), json!({"entry_id": entry_id})).await),
+        handle if written =>
+            steer_written_answer(&handle.command(RuntimeCommand { operation_id: random_hex(16), kind: OperationKind::SteerWritten,
+                payload: json!({"entry_id": entry_id}) }).await),
         handle => queue_steer_runtime(handle, &entry_id).await,
     };
     answer(&ctx, result)
+}
+
+/// A "Na conversa" já escrita na CLI do Claude sem terminal, que a guarda até a pausa entre ferramentas.
+async fn written_conversation(handle: &EntryHandle, entry_id: &str) -> bool {
+    let Ok(rows) = handle.queue(random_hex(16), Action::Load).await else { return false };
+    rows.as_array().is_some_and(|rows| rows.iter().any(|row| row["id"] == entry_id && row["conversation"] == true
+        && row["delivered"] == true && row["confirmed"] != true && row["desistiu"] != true))
+}
+
+/// "Enviar agora" da mensagem já escrita: o corte por ela, sem reescrevê-la. O que já saiu da espera (começou,
+/// acabou o turno) é `queue_entry_gone`, como a entrada que a fila já levou.
+pub fn steer_written_answer(sent: &Result<RuntimeReply, RuntimeError>) -> Answer {
+    match sent {
+        Ok(reply) if reply.disposition == Disposition::Accepted => steered(true),
+        Ok(reply) => match payload_code(reply) {
+            Some("steer_question_open") => queue_refused("queue_steer_question_open", MSG_STEER_QUESTION),
+            Some("steer_not_pending" | "steer_no_turn") => queue_gone(),
+            _ if reply.disposition == Disposition::Unknown => queue_refused("queue_steer_uncertain", MSG_STEER_UNCERTAIN),
+            _ => queue_refused("queue_steer_not_delivered", MSG_STEER_NOT_DELIVERED),
+        },
+        Err(error) => runtime_failed(error),
+    }
 }
 
 /// Claude e Codex sem terminal, e Codex com terminal: o turno é do processo. Com turno, `SteerQueue` só desta

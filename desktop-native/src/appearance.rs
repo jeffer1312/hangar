@@ -154,6 +154,11 @@ pub enum Language { System, Pt, En }
 #[serde(rename_all = "snake_case")]
 pub enum Currency { Usd, Brl }
 
+/// O que acontece com a mensagem enviada enquanto a sessão trabalha.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeliveryMode { Queue, Direct, Jev, Conversation }
+
 /// Amostra escolhida: índice numa lista fixa ou cor livre, gravada como "#rrggbb".
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -261,7 +266,10 @@ pub struct Appearance {
     pub hands_free: bool,
     /// Dispensa os avisos antes de enviar comandos destrutivos ou interromper a resposta.
     pub skip_chat_confirmations: bool,
-    /// Com o agente trabalhando, a mensagem enviada sai como Orientar em vez de esperar no painel "Na fila".
+    /// Escolha do Geral; ausente no arquivo de versão anterior, vale o que os dois booleanos diziam.
+    /// Leia e grave por `delivery_mode`/`set_delivery_mode`.
+    pub delivery: Option<DeliveryMode>,
+    /// Gravados junto para o app anterior: ele lê Direto e Jev por eles, e Na conversa como Fila.
     pub steer_while_working: bool,
     #[serde(default)]
     pub jev_delivery: bool,
@@ -293,7 +301,7 @@ const DEFAULT: Appearance = Appearance { panels: Panels::Attached, theme: ThemeM
     navigation: Navigation::Sidebar, show_remote_tabs: true, sidebar_width: None, ticket_detail_width: None, sidebar_compact: false, tabs_full: false, tab_preview: false, tabs_working_first: false, tabs_recent_first: false, live_corner: [16., 16.],
     side_width: 300., side_browser_width: None, terminal_height: 260.,
     tool_look: ToolLook::Classic, task_list: false, thinking_tools: ThinkingTools::Search, thinking_collapsed: false, table_chart: false, ask_highlight: AskHighlight::Accent,
-    language: Language::System, currency: Currency::Usd, hands_free: false, skip_chat_confirmations: false, steer_while_working: false, jev_delivery: false, accounts_compact: false, machines_tray_compact: false, sidebar_group: SidebarGroup::None, side_tab: SideTab::Context,
+    language: Language::System, currency: Currency::Usd, hands_free: false, skip_chat_confirmations: false, delivery: None, steer_while_working: false, jev_delivery: false, accounts_compact: false, machines_tray_compact: false, sidebar_group: SidebarGroup::None, side_tab: SideTab::Context,
     terminal_font: CodeFont::JetBrainsMono, terminal_size: 12, code_font: CodeFont::JetBrainsMono, code_size: 25, keep_in_tray: false, chrome_autofill: false, full_chrome: false };
 
 impl Default for Appearance {
@@ -316,9 +324,23 @@ impl Appearance {
             thinking_tools: self.thinking_tools, table_chart: self.table_chart, navigation: self.navigation, show_remote_tabs: self.show_remote_tabs, sidebar_width: self.sidebar_width, ticket_detail_width: self.ticket_detail_width, sidebar_compact: self.sidebar_compact, live_corner: self.live_corner,
             side_width: self.side_width, side_browser_width: self.side_browser_width, terminal_height: self.terminal_height,
             language: self.language, currency: self.currency, hands_free: self.hands_free, skip_chat_confirmations: self.skip_chat_confirmations,
-            steer_while_working: self.steer_while_working, jev_delivery: self.jev_delivery, accounts_compact: self.accounts_compact, machines_tray_compact: self.machines_tray_compact, sidebar_group: self.sidebar_group, side_tab: self.side_tab,
+            delivery: self.delivery, steer_while_working: self.steer_while_working, jev_delivery: self.jev_delivery, accounts_compact: self.accounts_compact, machines_tray_compact: self.machines_tray_compact, sidebar_group: self.sidebar_group, side_tab: self.side_tab,
             code_font: self.code_font, terminal_font: self.terminal_font, keep_in_tray: self.keep_in_tray, chrome_autofill: self.chrome_autofill, full_chrome: self.full_chrome,
             ..Self::default() }
+    }
+
+    pub fn delivery_mode(&self) -> DeliveryMode {
+        self.delivery.unwrap_or(match (self.steer_while_working, self.jev_delivery) {
+            (true, _) => DeliveryMode::Direct,
+            (false, true) => DeliveryMode::Jev,
+            (false, false) => DeliveryMode::Queue,
+        })
+    }
+
+    pub fn set_delivery_mode(&mut self, mode: DeliveryMode) {
+        self.delivery = Some(mode);
+        self.steer_while_working = mode == DeliveryMode::Direct;
+        self.jev_delivery = mode == DeliveryMode::Jev;
     }
 
     /// Imagem ou área de trabalho atrás do texto: é o que a Leitura Automática resolve.
@@ -584,6 +606,25 @@ pub fn changed_on_disk() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn delivery_mode_migrates_from_the_old_booleans_and_writes_them_back() {
+        let read = |json: &str| serde_json::from_str::<Appearance>(json).unwrap().delivery_mode();
+        assert_eq!(read("{}"), DeliveryMode::Queue);
+        assert_eq!(read(r#"{"steer_while_working":true}"#), DeliveryMode::Direct);
+        assert_eq!(read(r#"{"jev_delivery":true}"#), DeliveryMode::Jev);
+        assert_eq!(read(r#"{"delivery":"conversation","steer_while_working":true}"#), DeliveryMode::Conversation, "a chave nova vence");
+        for (mode, steer, jev) in [(DeliveryMode::Queue, false, false), (DeliveryMode::Direct, true, false),
+            (DeliveryMode::Jev, false, true), (DeliveryMode::Conversation, false, false)] {
+            let mut appearance = Appearance::default();
+            appearance.set_delivery_mode(mode);
+            let saved = serde_json::to_value(appearance).unwrap();
+            assert_eq!((saved["steer_while_working"].as_bool(), saved["jev_delivery"].as_bool()), (Some(steer), Some(jev)), "{mode:?}");
+            let loaded: Appearance = serde_json::from_value(saved).unwrap();
+            assert_eq!(loaded.delivery_mode(), mode);
+            assert_eq!(loaded.reset_keeping_choices().delivery_mode(), mode);
+        }
+    }
 
     #[test]
     fn remote_tabs_default_on_and_hidden_choice_survives_reload_and_reset() {

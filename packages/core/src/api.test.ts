@@ -659,6 +659,26 @@ describe('contratos de conversa com servidor explícito', () => {
     expect(onUnauthorizedSpy).not.toHaveBeenCalled();
   });
 
+  it('"Na conversa" manda delivery e, no 422 do servidor antigo, reenvia como fila comum', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response('{"detail":"corpo"}', { status: 422 }))
+      .mockResolvedValueOnce(new Response('{"ok":true}', { status: 200 }));
+    await sendInputForServer(target, 'sessao', 'texto', 'conversation');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({ text: 'texto', delivery: 'conversation' });
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({ text: 'texto' });
+  });
+
+  it('"Na conversa" aceita de primeira não repete, e outro erro não vira fila', async () => {
+    const ok = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('{"ok":true}', { status: 200 }));
+    await sendInputForServer(target, 'sessao', 'texto', 'conversation');
+    expect(ok).toHaveBeenCalledTimes(1);
+    ok.mockRestore();
+    const refused = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('{"detail":"recusado"}', { status: 409 }));
+    await expect(sendInputForServer(target, 'sessao', 'texto', 'conversation')).rejects.toMatchObject({ status: 409 });
+    expect(refused).toHaveBeenCalledTimes(1);
+  });
+
   it.each([400, 408, 409, 502])('criação em B preserva status %i numérico e não repete o POST', async (status) => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('{"detail":"recusado"}', { status }));
     await expect(createSessionForServer(target, { name: 'repo', cwd: '/repo', provider: 'codex' }))

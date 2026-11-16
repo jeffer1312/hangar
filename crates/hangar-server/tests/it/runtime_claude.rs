@@ -58,6 +58,52 @@ fn button_steer_cuts_the_turn_and_the_cut_is_not_a_stop() {
     assert_eq!(engine.view()["in_progress"],false);
 }
 
+/// "Na conversa": sem `priority`, a CLI a guarda até a pausa entre ferramentas. "Enviar agora" corta o turno pelo
+/// `interrupt` e não escreve o texto de novo; a mensagem guardada vira o turno seguinte, como a do Orientar.
+#[test]
+fn conversation_waits_for_the_pause_and_send_now_cuts_without_rewriting() {
+    let mut engine = engine(json!({"name":"session","session_id":"sid","initialized":true}));
+    engine.command(command(OperationKind::Input,json!({"text":"primeiro"})),clock(11.0)).unwrap();
+    let gentle = writes(&engine.command(RuntimeCommand { operation_id:"conversa".into(),kind:OperationKind::Steer,
+        payload:json!({"text":"olha isso","entry_id":"c1"}) },clock(12.0)).unwrap());
+    assert_eq!(gentle.len(),1);
+    assert!(gentle[0].get("priority").is_none(),"na conversa não corta: {}",gentle[0]);
+
+    let tool = line(&mut engine,json!({"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}),12.5);
+    assert!(tool.iter().any(|e|matches!(e,Effect::RecheckInputs)),"a pausa relê o recibo da guardada");
+
+    let now = writes(&engine.command(RuntimeCommand { operation_id:"agora".into(),kind:OperationKind::SteerWritten,
+        payload:json!({"entry_id":"c1"}) },clock(13.0)).unwrap());
+    assert_eq!(now.len(),1,"{now:?}");
+    assert_eq!(now[0]["request"]["subtype"],"interrupt");
+    assert!(now.iter().all(|frame|frame["type"] != "user"),"o texto não é reescrito");
+
+    let cut = line(&mut engine,json!({"type":"result","subtype":"success","terminal_reason":"aborted_tools"}),14.0);
+    assert!(!cut.iter().any(|e|matches!(e,Effect::WakeQueue)),"o corte não é parada");
+    assert_eq!(engine.view()["in_progress"],true);
+    line(&mut engine,json!({"type":"command_lifecycle","command_uuid":gentle[0]["uuid"],"state":"started"}),14.1);
+    let done = line(&mut engine,json!({"type":"result","subtype":"success","terminal_reason":"completed"}),20.0);
+    assert_eq!(consumed(&done),vec!["conversa".to_owned()]);
+    assert!(done.iter().any(|e|matches!(e,Effect::WakeQueue)));
+}
+
+#[test]
+fn send_now_without_a_held_message_is_refused_with_a_code() {
+    let mut engine = engine(json!({"name":"session","session_id":"sid","initialized":true}));
+    let refused = |engine:&mut ClaudeEngine| engine.command(RuntimeCommand { operation_id:"agora".into(),kind:OperationKind::SteerWritten,
+        payload:json!({"entry_id":"c1"}) },clock(13.0)).unwrap();
+    let code = |effects:Vec<Effect>| effects.into_iter().find_map(|e|match e { Effect::Reply { disposition:Disposition::Rejected,payload,.. } => payload["code"].as_str().map(str::to_owned),_=>None });
+    assert_eq!(code(refused(&mut engine)).as_deref(),Some("steer_not_pending"));
+    // Guardada que já começou também não tem o que adiantar.
+    engine.command(command(OperationKind::Input,json!({"text":"primeiro"})),clock(11.0)).unwrap();
+    let gentle = writes(&engine.command(RuntimeCommand { operation_id:"conversa".into(),kind:OperationKind::Steer,
+        payload:json!({"text":"olha isso","entry_id":"c1"}) },clock(12.0)).unwrap());
+    line(&mut engine,json!({"type":"command_lifecycle","command_uuid":gentle[0]["uuid"],"state":"started"}),12.5);
+    assert_eq!(code(refused(&mut engine)).as_deref(),Some("steer_not_pending"));
+    assert!(!line(&mut engine,json!({"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}),12.6)
+        .iter().any(|e|matches!(e,Effect::RecheckInputs)),"sem guardada, nada a reler");
+}
+
 #[test]
 fn cut_steer_the_cli_cancels_frees_the_turn() {
     let mut engine = engine(json!({"name":"session","session_id":"sid","initialized":true}));

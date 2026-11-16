@@ -4,6 +4,7 @@ import {
   beginQueueEdit, canUpdateQueueEdit, currentQueuePanel, derivedQueuePanel, dropTarget, echoInQueuePanel, hiddenByQueuePanel,
   moveTarget, parseQueuePanel, queueEditExitText, queueEditLeft, queueEditPayload, queueRemovedBubbleIds, type QueuePanel,
 } from './queuePanel';
+import { waitsInConversation, waitsInQueue } from './history';
 
 const q = (id: string, extra: Partial<ChatEvent> = {}): ChatEvent =>
   ({ kind: 'user_msg', id: `queued-${id}`, text: `t ${id}`, queued_delivered: false, queued_ts: 1, ...extra });
@@ -21,6 +22,17 @@ describe('queuePanel', () => {
     expect(derivedQueuePanel(events)).toEqual({ actions: false, entries: [{ id: 'a', text: 't a', ts: 1 }] });
     expect(currentQueuePanel(null, events).actions).toBe(false);
     expect(currentQueuePanel(panel('z'), events).entries[0].id).toBe('z');
+  });
+  it('a mandada "Na conversa" fica na conversa: fora do painel, sem atenuar e com "Em espera" até ser lida', () => {
+    const conversa = q('c', { queued_conversation: true });
+    expect(derivedQueuePanel([q('a'), conversa]).entries.map((e) => e.id)).toEqual(['a']);
+    expect(waitsInQueue(conversa)).toBe(false);
+    expect(waitsInConversation(conversa)).toBe(true);
+    expect(waitsInConversation(q('c', { queued_conversation: true, queued_delivered: true }))).toBe(true);
+    expect(waitsInConversation(q('c', { queued_conversation: true, queued_consumed: true }))).toBe(false);
+    expect(waitsInConversation(q('c', { queued_conversation: true, queued_confirmed: true }))).toBe(false);
+    expect(waitsInConversation(q('c', { queued_conversation: true, desistiu: true }))).toBe(false);
+    expect(waitsInConversation(q('a'))).toBe(false);
   });
   it('as apagadas noutro aparelho viram ids de bolha a retirar', () => {
     expect(queueRemovedBubbleIds({ entries: [], actions: true, removed: ['a', '', 3, 'b'] })).toEqual(['queued-a', 'queued-b']);
