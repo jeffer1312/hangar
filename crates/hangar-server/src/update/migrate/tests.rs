@@ -672,3 +672,34 @@ fn every_version_refreshes_the_stable_launcher() {
     assert_eq!(refresh_launcher(&home, &checkout, cfg!(windows)), Ok(false));
     assert_eq!(std::fs::read(&launcher).unwrap(), b"novo");
 }
+
+/// O lançador que não entra no lugar do antigo devolve o antigo ao nome; a tarefa nunca aponta para o nada.
+#[test]
+fn a_launcher_that_fails_to_enter_puts_the_old_one_back() {
+    let dir = tempfile::tempdir().unwrap();
+    let (tmp, target) = (dir.path().join("hangar-launcher.new"), dir.path().join("hangar-launcher.exe"));
+    std::fs::write(&tmp, b"novo").unwrap();
+    std::fs::write(&target, b"velho").unwrap();
+    let mut calls = 0;
+    let error = replace_aside(&tmp, &target, &mut |from, to| {
+        calls += 1;
+        if calls == 2 { Err(std::io::Error::other("em uso")) } else { std::fs::rename(from, to) }
+    }).unwrap_err();
+    assert!(error.to_string().contains("em uso"), "{error}");
+    assert_eq!(std::fs::read(&target).unwrap(), b"velho", "o antigo voltou ao nome");
+    assert!(!target.with_extension("old").exists());
+
+    // Nem o antigo volta: o erro diz onde ele ficou.
+    let mut calls = 0;
+    let error = replace_aside(&tmp, &target, &mut |from, to| {
+        calls += 1;
+        if calls >= 2 { Err(std::io::Error::other("em uso")) } else { std::fs::rename(from, to) }
+    }).unwrap_err();
+    assert!(error.to_string().contains("não voltou"), "{error}");
+    assert_eq!(std::fs::read(target.with_extension("old")).unwrap(), b"velho");
+
+    // O caminho bom: o novo entra e o antigo fica em `.old`.
+    std::fs::rename(target.with_extension("old"), &target).unwrap();
+    replace_aside(&tmp, &target, &mut |from, to| std::fs::rename(from, to)).unwrap();
+    assert_eq!(std::fs::read(&target).unwrap(), b"novo");
+}

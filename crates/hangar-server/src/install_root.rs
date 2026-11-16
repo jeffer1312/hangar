@@ -30,6 +30,9 @@ pub fn launch(args: &[String]) -> ExitCode {
         Ok(Backend::Direct(command)) => run_direct(command, log.as_deref(), &version),
         Err((code, path)) => {
             report(log.as_deref(), &format!("{code}: {}", path.display()));
+            // O gerenciador religa sem fim: a causa fica no diário que o relatório leva.
+            hangar_core::diag::record_blocking(hangar_core::diag::diary_dir().as_deref(),
+                &[serde_json::json!({"evento": "lancador.falhou", "nivel": "erro", "codigo": code, "detalhe": path.display().to_string()})], "launch");
             ExitCode::from(3)
         }
     }
@@ -94,59 +97,74 @@ fn notify_to(socket: Option<&std::ffi::OsStr>, state: &str) -> std::io::Result<(
 /// No Windows: o servidor no Job do lançador, com o log da tarefa como saída (o Python o abria sozinho).
 #[cfg(windows)]
 fn run_direct(mut command: std::process::Command, log: Option<&Path>, version: &str) -> ExitCode {
-    if let Err(error) = die_with_the_launcher() {
-        report(log, &format!("launch_job_failed: {error}"));
-    }
-    if let Some(target) = log {
-        match open_log(target) {
-            Ok((file, used)) => {
-                use std::io::Write;
-                if used != target {
-                    let mut warn = &file;
-                    let _ = writeln!(warn, "[hangar] AVISO: {} está preso por outro processo; a saída vai para {}", target.display(), used.display());
-                }
-                match file.try_clone() {
-                    Ok(copy) => { command.stdout(copy).stderr(file); }
-                    Err(error) => report(log, &format!("launch_log_unavailable: {}: {error}", used.display())),
-                }
+    // Um handle só, em modo de acréscimo: o lançador escreve antes de abrir o servidor e depois que
+    // ele sai, nunca junto com ele.
+    let file = log.and_then(|target| match open_log(target) {
+        Ok((file, used)) => {
+            if used != target {
+                say(Some(&file), log, &format!("AVISO: {} está preso por outro processo; a saída vai para {}", target.display(), used.display()));
             }
-            Err(error) => report(log, &format!("launch_log_unavailable: {}: {error}", target.display())),
+            Some(file)
+        }
+        Err(error) => { report(log, &format!("launch_log_unavailable: {}: {error}", target.display())); None }
+    });
+    say(file.as_ref(), log, &format!("launch_backend_starting: versão {version}, lançador pid {}", std::process::id()));
+    if let Err(error) = die_with_the_launcher() {
+        say(file.as_ref(), log, &format!("launch_job_failed: {error}"));
+    }
+    if let Some(file) = &file {
+        match (file.try_clone(), file.try_clone()) {
+            (Ok(out), Ok(err)) => { command.stdout(out).stderr(err); }
+            (Err(error), _) | (_, Err(error)) => say(Some(file), log, &format!("launch_log_unavailable: {error}")),
         }
     }
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => {
-            report(log, &format!("launch_exec_failed: versão {version}: {error}"));
+            say(file.as_ref(), log, &format!("launch_exec_failed: versão {version}: {error}"));
             return ExitCode::from(126);
         }
     };
     let (pid, started) = (child.id(), std::time::Instant::now());
-    report(log, &format!("launch_backend_started: versão {version}, hangar-server pid {pid}"));
     match child.wait() {
         Ok(status) => {
             if !status.success() {
-                report(log, &format!("launch_backend_exited: versão {version}, hangar-server pid {pid}, {status}, depois de {} s", started.elapsed().as_secs()));
+                say(file.as_ref(), log, &format!("launch_backend_exited: versão {version}, hangar-server pid {pid}, {status}, depois de {} s", started.elapsed().as_secs()));
             }
             std::process::exit(status.code().unwrap_or(1))
         }
         Err(error) => {
-            report(log, &format!("launch_wait_failed: versão {version}, hangar-server pid {pid}: {error}"));
+            say(file.as_ref(), log, &format!("launch_wait_failed: versão {version}, hangar-server pid {pid}: {error}"));
             ExitCode::from(126)
         }
     }
 }
 
-/// Aberto pelo lançador, com escrita compartilhada (o padrão do `std` no Windows): um neto que
-/// sobreviveu ao backend com a cópia herdada não impede a próxima subida. Preso mesmo assim, vai
-/// para `<nome>.1` … `<nome>.5`; nunca deixa de subir.
+/// Linha do lançador pelo handle do log; sem ele, pelo `report` de sempre.
+#[cfg(windows)]
+fn say(file: Option<&std::fs::File>, log: Option<&Path>, line: &str) {
+    use std::io::Write;
+    match file {
+        Some(mut file) => { eprintln!("hangar-server launch: {line}"); let _ = writeln!(file, "[hangar] hangar-server launch: {line}"); }
+        None => report(log, line),
+    }
+}
+
+/// O log da tarefa da subida anterior vai para `<nome>.1` (e os outros andam uma casa, até `.5`): a
+/// saída de uma queda fica para ler. Aberto em acréscimo e com escrita compartilhada (o padrão do
+/// `std` no Windows), um neto que sobreviveu com a cópia herdada não impede a subida; preso mesmo
+/// assim, a saída vai para o primeiro `.N` que abrir.
 #[cfg_attr(not(windows), allow(dead_code))]
 fn open_log(target: &Path) -> std::io::Result<(std::fs::File, std::path::PathBuf)> {
     if let Some(parent) = target.parent() { let _ = std::fs::create_dir_all(parent); }
     let (stem, ext) = (target.file_stem().unwrap_or_default().to_string_lossy(), target.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default());
-    let candidates = std::iter::once(target.to_path_buf()).chain((1..=5).map(|n| target.with_file_name(format!("{stem}.{n}{ext}"))));
+    let numbered = |n: u32| target.with_file_name(format!("{stem}.{n}{ext}"));
+    let _ = std::fs::remove_file(numbered(5));
+    for n in (1..5).rev() { let _ = std::fs::rename(numbered(n), numbered(n + 1)); }
+    let _ = std::fs::rename(target, numbered(1));
     let mut last = std::io::Error::other("sem candidato");
-    for candidate in candidates {
-        match std::fs::OpenOptions::new().write(true).create(true).truncate(true).open(&candidate) {
+    for candidate in std::iter::once(target.to_path_buf()).chain((1..=5).map(numbered)) {
+        match std::fs::OpenOptions::new().append(true).create(true).open(&candidate) {
             Ok(file) => return Ok((file, candidate)),
             Err(error) => last = error,
         }
@@ -240,21 +258,25 @@ fn die_with_the_launcher() -> std::io::Result<()> {
 mod tests {
     use super::{current, root};
 
-    /// B-36: o log da tarefa que não abre vai para o nome seguinte, e cada subida começa do zero.
+    /// B-36: cada subida começa um log novo e a saída da anterior (a de uma queda) fica em `.1`; as
+    /// mais velhas andam uma casa até `.5`.
     #[test]
-    fn the_task_log_falls_to_the_next_name_when_the_first_cannot_open() {
+    fn the_task_log_keeps_the_previous_start_in_the_numbered_files() {
         use std::io::Write;
         let dir = tempfile::tempdir().unwrap();
-        let target = dir.path().join("logs").join("hangar-backend.log");
-        // Uma pasta no lugar do arquivo não abre, como o arquivo preso por outro processo.
-        std::fs::create_dir_all(&target).unwrap();
-        let (_, used) = super::open_log(&target).unwrap();
-        assert_eq!(used, dir.path().join("logs").join("hangar-backend.1.log"));
-        std::fs::write(&used, "subida anterior").unwrap();
-        let (mut file, again) = super::open_log(&target).unwrap();
-        assert_eq!(again, used);
+        let logs = dir.path().join("logs");
+        let target = logs.join("hangar-backend.log");
+        std::fs::create_dir_all(&logs).unwrap();
+        std::fs::write(&target, "queda").unwrap();
+        for n in 1..=5 { std::fs::write(logs.join(format!("hangar-backend.{n}.log")), format!("velho {n}")).unwrap(); }
+        let (mut file, used) = super::open_log(&target).unwrap();
+        assert_eq!(used, target);
         file.write_all(b"nova").unwrap();
-        assert_eq!(std::fs::read_to_string(&used).unwrap(), "nova");
+        file.write_all(b" subida").unwrap();
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "nova subida");
+        assert_eq!(std::fs::read_to_string(logs.join("hangar-backend.1.log")).unwrap(), "queda");
+        assert_eq!(std::fs::read_to_string(logs.join("hangar-backend.2.log")).unwrap(), "velho 1");
+        assert_eq!(std::fs::read_to_string(logs.join("hangar-backend.5.log")).unwrap(), "velho 4", "o mais velho sai");
     }
 
     /// P2: a versão que sobe pelo Python avisa pronto e desliga o watchdog; sem socket, nada a fazer.

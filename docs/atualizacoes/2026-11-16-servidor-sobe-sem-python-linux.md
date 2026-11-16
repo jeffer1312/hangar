@@ -1,8 +1,8 @@
 ---
 id: 2026-11-16-servidor-sobe-sem-python-linux
 titulo: No Linux, o servidor do Hangar sobe sem o Python e o serviço nunca desiste de religar
-comando_posix: ! test -f ~/.config/systemd/user/hangar-backend.service || ./install.sh --update
-prova: scripts/services-setup.sh
+comando_posix: { ! test -f ~/.config/systemd/user/hangar-backend.service || { ./install.sh --update && grep -qx 'StartLimitIntervalSec=0' ~/.config/systemd/user/hangar-backend.service && grep -qx 'KillMode=control-group' ~/.config/systemd/user/hangar-backend.service && grep -qx 'TimeoutStopSec=120' ~/.config/systemd/user/hangar-backend.service; }; } && mkdir -p ~/.hangar/passos && touch ~/.hangar/passos/2026-11-16-servidor-sobe-sem-python-linux
+prova: ~/.hangar/passos/2026-11-16-servidor-sobe-sem-python-linux
 destrutivo: true
 tipo: maquina
 ---

@@ -445,14 +445,22 @@ pub(super) fn write_launcher(source: &Path, launcher: &Path) -> Result<(), Strin
         #[cfg(unix)]
         { use std::os::unix::fs::PermissionsExt; std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755))?; }
         std::fs::rename(&tmp, launcher).or_else(|error| {
-            // No Windows o lançador em execução não pode ser substituído, mas pode mudar de nome.
             if !cfg!(windows) || !launcher.exists() { return Err(error); }
-            let aside = launcher.with_extension("old");
-            let _ = std::fs::remove_file(&aside);
-            std::fs::rename(launcher, &aside)?;
-            std::fs::rename(&tmp, launcher)
+            replace_aside(&tmp, launcher, &mut |from, to| std::fs::rename(from, to))
         })
     }).map_err(|e| { let _ = std::fs::remove_file(&tmp); format!("não consegui gravar o lançador {}: {e}", launcher.display()) })
+}
+
+/// No Windows o lançador em execução não pode ser substituído, mas pode mudar de nome: ele vai para
+/// `.old` e o novo entra. Se o novo não entra, o de antes volta ao nome: a tarefa nunca fica sem lançador.
+pub(super) fn replace_aside(tmp: &Path, target: &Path, rename: &mut dyn FnMut(&Path, &Path) -> std::io::Result<()>) -> std::io::Result<()> {
+    let aside = target.with_extension("old");
+    let _ = std::fs::remove_file(&aside);
+    rename(target, &aside)?;
+    rename(tmp, target).map_err(|error| match rename(&aside, target) {
+        Ok(()) => error,
+        Err(back) => std::io::Error::other(format!("{error}; e o lançador anterior não voltou de {}: {back}", aside.display())),
+    })
 }
 
 /// Renova o lançador estável com o `hangar-server` da versão `version`. Máquina sem o lançador

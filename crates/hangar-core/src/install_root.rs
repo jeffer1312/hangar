@@ -73,10 +73,15 @@ pub fn backend(home: &Path, args: &[String], windows: bool, explicit: Option<&st
         Ok(real) => crate::fs::without_verbatim(real),
         Err(_) => checkout(home).ok_or(("launch_no_current", current(home)))?,
     };
-    let direct = match std::fs::read(real.join("manifest.json")) {
-        Ok(bytes) => serde_json::from_slice::<serde_json::Value>(&bytes).ok()
-            .is_some_and(|m| m.get("boot").and_then(serde_json::Value::as_str) == Some("direct")),
-        Err(_) => !real.join("backend").join("app").join("main.py").is_file(),
+    let manifest = real.join("manifest.json");
+    let direct = match std::fs::read(&manifest).map(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes)) {
+        Ok(Ok(m)) => m.get("boot").and_then(serde_json::Value::as_str) == Some("direct"),
+        // Checkout (modo desenvolvedor) não tem manifesto: sobe pelo Python só enquanto ele existe.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => !real.join("backend").join("app").join("main.py").is_file(),
+        // Manifesto ilegível: versão sem o Python embutido só pode subir direto; com ele, não dá para
+        // saber qual dos dois, e escolher às cegas viraria um laço de quedas.
+        Ok(Err(_)) | Err(_) if !real.join("python").exists() => true,
+        Ok(Err(_)) | Err(_) => return Err(("launch_manifest_unreadable", manifest)),
     };
     if !direct {
         let python = python_exe(&real, windows);
@@ -210,6 +215,19 @@ mod tests {
         assert_eq!(command.get_program(), real.join("python/bin/python3"));
         let got: Vec<_> = command.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
         assert_eq!(got, ["-m", "app.main", "--log", "/tmp/x.log"], "o Python abre o próprio log");
+    }
+
+    /// Manifesto ilegível: sem o Python embutido, só pode ser direto; com ele, recusa com código
+    /// em vez de escolher às cegas.
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_manifest_never_guesses_the_python() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        let real = version(home, "1.0.0.9", "{ quebrado");
+        assert_eq!(super::backend(home, &[], false, None).err(), Some(("launch_manifest_unreadable", real.join("manifest.json"))));
+        std::fs::remove_dir_all(real.join("python")).unwrap();
+        assert!(matches!(super::backend(home, &[], false, None), Ok(super::Backend::Direct(_))));
     }
 
     /// B-18, decisão 7: o explícito vence e, errado, não cai para o binário da versão.

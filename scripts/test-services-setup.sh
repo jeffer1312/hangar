@@ -37,6 +37,9 @@ sandbox() {
   local fakes="systemctl loginctl uv"
   [ "${PACOTE_REPO:-0}" = 1 ] && fakes="systemctl loginctl"   # o pacote não tem uv, npm nem node
   for t in $fakes; do printf '#!/bin/sh\necho "%s $*" >> "%s/calls"\nexit 0\n' "$t" "$S" > "$B/$t"; chmod +x "$B/$t"; done
+  # FAKE_SYSTEMD: a versão que o `systemctl --version` falso diz (padrão 255).
+  printf '#!/bin/sh\necho "systemctl $*" >> "%s/calls"\n[ "$1" = --version ] && echo "systemd %s (%s.1-1)"\nexit 0\n' \
+    "$S" "${FAKE_SYSTEMD:-255}" "${FAKE_SYSTEMD:-255}" > "$B/systemctl"; chmod +x "$B/systemctl"
   if [ "$migrada" = 1 ]; then
     mkdir -p "$H/.hangar/config" "$H/.hangar/bin" "$H/.hangar/versions/0.1.0.5"
     ln -s "$H/.hangar/versions/0.1.0.5" "$H/.hangar/current"
@@ -45,6 +48,8 @@ sandbox() {
       mkdir -p "$H/.hangar/versions/0.1.0.5/bin"
       printf '#!/bin/sh\n# novo\n' > "$H/.hangar/versions/0.1.0.5/bin/hangar-server"; chmod +x "$H/.hangar/versions/0.1.0.5/bin/hangar-server"
     fi
+    # BOOT_DIRECT=1: a versão que sobe o hangar-server sem o Python (manifesto com `boot: direct`).
+    [ "${BOOT_DIRECT:-0}" = 1 ] && printf '{\n  "boot": "direct",\n  "version": "0.1.0.5"\n}\n' > "$H/.hangar/versions/0.1.0.5/manifest.json"
     printf 'CP_AUTH_TOKEN=novo\nCP_FRONT_PORT=5173\n' > "$H/.hangar/config/.env"
   fi
   RC=0
@@ -78,15 +83,17 @@ expect_no "antiga: sem watchdog" "$UNIT" 'WatchdogSec'
 # Decisão 7: checkout sem o app/main.py sobe o hangar-server pela mesma escolha de binário do CLI.
 COM_PYTHON=0 sandbox checkout-rust 0
 expect_line "checkout-rust: unit no hangar-server" "$UNIT" "ExecStart=\"$R/scripts/hangar-server-command\""
-expect_line "checkout-rust: Type=notify" "$UNIT" "Type=notify"
+# Checkout: o binário pode ser de antes do aviso ao systemd; fica simple.
+expect_line "checkout-rust: Type=simple" "$UNIT" "Type=simple"
 
 # Decisão 1: o lançador estável é renovado com o hangar-server da versão em uso.
-VERSAO_COM_BIN=1 sandbox renova 1
+VERSAO_COM_BIN=1 BOOT_DIRECT=1 sandbox renova 1
 expect_line "renova: lançador é o da versão" "$H/.hangar/bin/hangar-launcher" '# novo'
-# P2: lançador igual ao da versão avisa o systemd, que vigia o laço.
+# P2: versão com `boot: direct` e lançador igual ao dela avisa o systemd, que vigia o laço.
 expect_line "renova: Type=notify" "$UNIT" "Type=notify"
 expect_line "renova: só o processo principal avisa" "$UNIT" "NotifyAccess=main"
 expect_line "renova: watchdog" "$UNIT" "WatchdogSec=60"
+expect_line "renova: subida lenta mas viva não é morta" "$UNIT" "TimeoutStartSec=300"
 
 # Instalação nova pelo pacote: sem npm, sem --backend-only, sem pergunta; o backend serve a tela.
 PACOTE_REPO=1 SEM_OPCOES=1 sandbox pacote 1 </dev/null
@@ -103,6 +110,17 @@ PACOTE_REPO=1 SEM_OPCOES=1 ESPERA_FALHA=1 sandbox pacote-sem-lancador 0
 [ "$RC" != 0 ] && pass "pacote-sem-lancador: falha" || flunk "pacote-sem-lancador: falha"
 expect_no "pacote-sem-lancador: nenhuma unit" "$UNIT" '.'
 grep -q 'install-package' "$S/out" && pass "pacote-sem-lancador: diz o que rodar" || flunk "pacote-sem-lancador: diz o que rodar"
+
+# Versão que ainda sobe pelo Python (sem `boot: direct`): lançador renovado, mas Type=simple.
+VERSAO_COM_BIN=1 sandbox renova-python 1
+expect_line "renova-python: Type=simple" "$UNIT" "Type=simple"
+expect_no "renova-python: sem watchdog" "$UNIT" 'WatchdogSec|TimeoutStartSec'
+
+# systemd < 254 ignora RestartSteps/RestartMaxDelaySec: espera fixa de 10 s, nunca o laço de 2 s.
+FAKE_SYSTEMD=252 sandbox systemd-velho 1
+expect_line "systemd-velho: espera fixa de 10 s" "$UNIT" "RestartSec=10"
+expect_no "systemd-velho: sem RestartSteps" "$UNIT" 'RestartSteps|RestartMaxDelaySec|RestartSec=2$'
+expect_line "systemd-novo: espera crescente" "$ROOT/migrada/home/.config/systemd/user/hangar-backend.service" "RestartSteps=8"
 
 if [ "$fail" = 0 ]; then echo "tudo ok"; else echo "houve falha"; fi
 exit "$fail"

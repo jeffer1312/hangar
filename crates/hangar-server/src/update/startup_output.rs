@@ -21,8 +21,9 @@ const READ_MAX: u64 = 256 * 1024;
 
 /// Onde a saída do backend estava antes do reinício.
 pub enum Mark {
-    /// Windows: a tarefa grava em `hangar-backend*.log` (`launch backend --log`); o mais novo e o tamanho dele.
-    File { dir: PathBuf, newest: Option<(PathBuf, u64)>, at: SystemTime },
+    /// Windows: a tarefa grava em `hangar-backend*.log` (`launch backend --log`); o mais novo, o tamanho
+    /// e a criação dele (a subida seguinte roda o arquivo: o mesmo nome passa a ser outro).
+    File { dir: PathBuf, newest: Option<(PathBuf, u64, Option<SystemTime>)>, at: SystemTime },
     /// systemd do usuário: a unit roda sem `--log`, a saída fica no journal.
     Journal { since: SystemTime },
     /// Reinício na mão: ninguém sobe a versão nova, não há o que ler.
@@ -48,7 +49,10 @@ impl Mark {
         if cfg!(windows) {
             let Some(base) = crate::runtime::local_policy::log_base() else { return Mark::Nothing };
             let dir = base.join("privado");
-            let newest = backend_logs(&dir).pop().map(|(path, _, len)| (path, len));
+            let newest = backend_logs(&dir).pop().map(|(path, _, len)| {
+                let created = std::fs::metadata(&path).and_then(|m| m.created()).ok();
+                (path, len, created)
+            });
             return Mark::File { dir, newest, at: SystemTime::now() };
         }
         Mark::Journal { since: SystemTime::now() }
@@ -71,7 +75,8 @@ impl Mark {
                 if logs.is_empty() { return Err(format!("nenhum hangar-backend*.log em {}", dir.display())); }
                 let mut out = String::new();
                 for (path, modified, _) in logs {
-                    let offset = match newest { Some((marked, len)) if *marked == path => *len, _ if modified > *at => 0, _ => continue };
+                    let same = |created: &Option<SystemTime>| *created == std::fs::metadata(&path).and_then(|m| m.created()).ok();
+                    let offset = match newest { Some((marked, len, created)) if *marked == path && same(created) => *len, _ if modified > *at => 0, _ => continue };
                     out += &tail_from(&path, offset);
                     out.push('\n');
                 }
@@ -382,7 +387,8 @@ mod tests {
         let log = dir.path().join("hangar-backend.log");
         std::fs::write(&log, "ERROR:    [x] velho\n").unwrap();
         // O arquivo marcado lê pelo deslocamento; a hora só decide arquivos novos, e aqui não há outro.
-        let mark = Mark::File { dir: dir.path().into(), newest: Some((log.clone(), 20)), at: SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000) };
+        let created = std::fs::metadata(&log).and_then(|m| m.created()).ok();
+        let mark = Mark::File { dir: dir.path().into(), newest: Some((log.clone(), 20, created)), at: SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000) };
         std::fs::write(&log, "ERROR:    [x] velho\nERROR:    [x] novo\n").unwrap();
         assert_eq!(mark.lines(&scrubber()), vec!["ERROR:    [x] novo".to_owned()]);
     }

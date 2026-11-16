@@ -372,6 +372,7 @@ try {
     $python = '"C:\Users\u\.hangar\versions\0.1.0.5\python\python.exe" -m app.main'
     Assert ($python -match $b.Padrao -and 'python.exe' -match $b.ExeProc) 'Pare-Servico nao acha o Python do pacote'
     Assert ('"C:\Users\u\.hangar\bin\hangar-launcher.exe" launch backend --log x' -match $b.Padrao -and 'hangar-launcher.exe' -match $b.ExeProc) 'Pare-Servico nao acha o lancador'
+    Assert (-not ('"D:\outra\hangar-launcher.exe" launch backend --log x' -match $b.Padrao)) 'Pare-Servico pegou o lancador de outra instalacao'
     Assert (-not ('C:\repo\backend\.venv\Scripts\python.exe -m app.atualizar' -match $b.Padrao)) 'Padrao do pacote pegou o checkout'
     $lancadorPacote = $null
     . ([scriptblock]::Create($assignment.Extent.Text))
@@ -382,7 +383,8 @@ try {
     . ([scriptblock]::Create($assignment.Extent.Text))
     $b = $tarefas[0]
     Assert ($b.Exe -eq $servidorCheckout -and $b.Args -eq 'launch backend' -and $b.ExeProc -eq 'hangar-server') "Checkout sem Python fora do hangar-server: $($b.Exe) $($b.Args)"
-    Assert ('"C:\Users\u\.hangar\bin\hangar-server.exe" launch backend --log x' -match $b.Padrao) 'Pare-Servico nao acha o hangar-server do checkout'
+    Assert ('"C:\repo\crates\target\release\hangar-server.exe" launch backend --log x' -match $b.Padrao) 'Pare-Servico nao acha o hangar-server do checkout'
+    Assert (-not ('"D:\outra\crates\target\release\hangar-server.exe" launch backend --log x' -match $b.Padrao)) 'Pare-Servico pegou o hangar-server de outra worktree'
     $servidorCheckout = $null
     $releaseFunction = $ast.Find({ param($node)
         $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Liberar-Instalacao'

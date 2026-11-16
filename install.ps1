@@ -2095,9 +2095,15 @@ if ($lancadorPacote -and (Test-Path -LiteralPath $servidorDaVersao -PathType Lea
         $antigo = [IO.Path]::ChangeExtension($lancadorPacote, 'old')
         Remove-Item -LiteralPath $antigo -Force -ErrorAction SilentlyContinue
         Move-Item -LiteralPath $lancadorPacote -Destination $antigo -Force
-        Move-Item -LiteralPath $novo -Destination $lancadorPacote -Force
+        try { Move-Item -LiteralPath $novo -Destination $lancadorPacote -Force }
+        catch {
+            # O novo nao entrou: o de antes volta ao nome, e a tarefa nunca aponta para o nada.
+            Move-Item -LiteralPath $antigo -Destination $lancadorPacote -Force
+            throw
+        }
         Ok 'lancador renovado com o hangar-server da versao em uso'
     } catch {
+        Remove-Item -LiteralPath "$lancadorPacote.new" -Force -ErrorAction SilentlyContinue
         Falta "o lancador $lancadorPacote nao foi renovado ($_); ele segue subindo so versoes que usam o Python"
     }
 }
@@ -2131,8 +2137,11 @@ $tarefas = @(
        Dir = "$raiz\backend"
        Porta = $portaBack
        # No pacote o Python roda de ~\.hangar\versions\<v> sob o lancador, fora deste checkout.
+       # O `launch backend` ancorado no lancador DESTA instalacao: o de outra worktree nunca vira alvo.
        Padrao = $(if ($lancadorPacote) { [regex]::Escape((Join-Path (Split-Path (Split-Path $lancadorPacote)) 'versions')) + '\\|' +
-                                         '(?:^|\s)launch\s+backend(?:\s|$)' } elseif ($servidorCheckout) { [regex]::Escape("$raiz\backend") + '|(?:^|\s)launch\s+backend(?:\s|$)' } else { [regex]::Escape("$raiz\backend") })
+                                         [regex]::Escape($lancadorPacote) + '"?\s+launch\s+backend(?:\s|$)' }
+                  elseif ($servidorCheckout) { [regex]::Escape("$raiz\backend") + '|' + [regex]::Escape($servidorCheckout) + '"?\s+launch\s+backend(?:\s|$)' }
+                  else { [regex]::Escape("$raiz\backend") })
        ExeProc = $(if ($lancadorPacote) { 'python|hangar-launcher|hangar-server' } elseif ($servidorCheckout) { 'hangar-server' } else { 'uv|python' }) }
 )
 if ($temTarefaFront) {
