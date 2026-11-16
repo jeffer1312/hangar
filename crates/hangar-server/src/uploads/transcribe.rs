@@ -108,7 +108,8 @@ async fn transcribe(st: &AppState, name: &str, req: Request, guest: bool) -> Res
             let filename = req.headers().get("x-filename").and_then(|v| v.to_str().ok()).map(str::to_owned).or_else(|| text("name"));
             let data = match timed(Step::Read, axum::body::to_bytes(req.into_body(), MAX_UPLOAD_BYTES as usize)).await {
                 Ok(data) => data,
-                Err(e) if std::error::Error::source(&e).is_some_and(|s| s.is::<http_body_util::LengthLimitError>()) => {
+                // O teto da borda chega embrulhado num nível a mais: a cadeia inteira decide.
+                Err(e) if crate::http_body_limit::is_limit(&e) => {
                     return http::failure(413, "erro_arquivo_grande", "arquivo maior que 100 MiB");
                 }
                 Err(_) => return http::failure(400, "erro_upload_interrompido", "o envio do áudio foi interrompido"),

@@ -128,7 +128,7 @@ use hangar_core::warn_limit;
 
 /// Versão do contrato com o Python (rotas `/internal`, canal privado do estado, ambiente). O
 /// Python (`RUST_SERVER_PROTOCOL`) recusa um binário de outra versão e atende sozinho.
-pub const INTERNAL_PROTOCOL: u32 = 111;
+pub const INTERNAL_PROTOCOL: u32 = 112;
 
 pub use hangar_core::net::http_client;
 pub(crate) use hangar_core::net::{AbortOnDrop, nodelay};
@@ -461,7 +461,6 @@ pub use hangar_core::http_cors;
 pub use hangar_core::http_body_limit;
 pub use hangar_core::http_route_response;
 pub mod boot_version;
-pub mod migration_branch;
 pub mod login_guests;
 
 pub mod shortcuts;

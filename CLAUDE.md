@@ -33,9 +33,9 @@ Only terminal sessions use the tmux pane for live **state** and input. Backend p
   estado, prévia, perguntas, fila, entrada, fechamento e troca de nome. Os leitores estruturados
   ficam em `hangar-transcript`; hooks e guarda do Kimi/Pi são comandos Rust em `provider_hooks/`.
 - O SSE do chat (`/events`) é do hub do Rust (`crates/hangar-server/src/side.rs`, uma fonte por
-  chave, não uma por conexão). `api.py` — o que sobrou no FastAPI (`/api/whoami`,
-  `/internal/*`, porta de entrada do terminal em `termsock.py`). O diário de uso (`/api/diag`,
-  `/api/diag/arquivo`) é do Rust (`crates/hangar-usage-diary`). `auth.py` — bearer token / `cp_token` cookie.
+  chave, não uma por conexão). `api.py` — o que sobrou no FastAPI (`/internal/*`, porta de
+  entrada do terminal em `termsock.py`). O diário de uso (`/api/diag`, `/api/diag/arquivo`) é do
+  Rust (`crates/hangar-usage-diary`). `auth.py` — bearer token / `cp_token` cookie.
 - Also: `rust_server.py` (Supervisor que sobe e religa o `hangar-server`), `config.py`.
 - `crates/hangar-server/src/commands/` — catálogo de comandos do Claude, sonda compartilhada e
   filtro em processo; o Python não atende essas rotas.
@@ -822,7 +822,8 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
     são do hub do Rust, sem conexão ao Python. O Python não tem `/events`, `/cost` nem `/nav`. O consumo da orquestração é calculado no Rust.
   - Lista do dono: montada pelo Rust; Pi/omp/Kimi publicam o estado pelos atores em processo,
     e a última resposta vem dos leitores nativos. Não existe `/internal/list/facts`.
-  - Outras perguntas do Rust ao Python (`/internal/*`): `migration/status` e `ping`.
+  - Outras perguntas do Rust ao Python (`/internal/*`): só `ping`. Caminho sem handler no Rust
+    não vai ao Python: só `whoami`, `diag` e `term`, que ele ainda atende (`routes::python_answers`).
     A preparação de contas Codex usa `hangar-codex-account-sync` em processo; a invalidação após
     login atua diretamente no catálogo Rust. A reconciliação Claude segue em `accounts/claude_config.rs`.
     Transcrição e organização do ditado leem a configuração efetiva diretamente no Rust.

@@ -92,35 +92,12 @@ impl PythonLife {
         #[cfg(unix)] { use std::os::unix::fs::PermissionsExt; std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?; }
         crate::runtime::queue::atomic_write(&python_path(base, self.pid, self.birth), &serde_json::to_vec(self)?)
     }
-
-    fn confirmed(&self, procs: &dyn crate::list::procs::ProcessView) -> bool {
-        let Ok(recipe) = procs.recipe(i64::from(self.pid)) else { return false };
-        crate::terminal_facts::same_birth(recipe.birth, self.birth)
-            && recipe.executable == self.executable && recipe.cwd == self.root.join("backend")
-            && backend_module(&recipe)
-            && (!cfg!(windows) || python_runtime(self.pid))
-            && crate::terminal_facts::agent_birth(self.pid).is_some_and(|birth| crate::terminal_facts::same_birth(birth, self.birth))
-    }
 }
 
+#[cfg(any(windows, test))]
 fn backend_module(recipe: &crate::list::procs::ProcessRecipe) -> bool {
     recipe.argv.get(1).is_some_and(|arg| arg == "-m") && recipe.argv.get(2).is_some_and(|arg| arg == "app.main")
 }
-
-fn current_python(base: &Path, pid: u32) -> Option<PythonLife> {
-    let birth = crate::terminal_facts::agent_birth(pid)?;
-    let life: PythonLife = serde_json::from_slice(&crate::runtime::queue::read_replaced(&python_path(base, pid, birth)).ok()?).ok()?;
-    (life.pid == pid && crate::terminal_facts::same_birth(life.birth, birth)
-        && life.confirmed(&crate::list::procs::SystemProcs::default())).then_some(life)
-}
-
-/// Não guarda ausência: o Python do Windows pode publicar depois do primeiro pedido.
-pub(crate) fn python_version(env: &crate::accounts::environment::AccountEnvironment, pid: u32) -> Option<Snapshot> {
-    current_python(&crate::runtime::local_policy::log_base_in(env)?, pid).map(|life| life.version)
-}
-
-#[cfg(not(windows))]
-fn python_runtime(_: u32) -> bool { true }
 
 /// O redirector do venv tem nome e argv de Python, mas não carrega o interpretador.
 #[cfg(windows)]
