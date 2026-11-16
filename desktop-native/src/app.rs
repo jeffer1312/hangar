@@ -5329,6 +5329,10 @@ impl Hangar {
         let referenced = key.as_ref().is_some_and(|key| self.has_context_refs(key));
         let dictated = self.dictation_here(cx) && (self.dictation.recording() || self.dictation.processing());
         let has_input = !text.trim().is_empty() || attached || referenced || dictated;
+        // Pasta ou conta trocada com o `/` aberto: a chave nova ainda não foi buscada.
+        if new_chat && self.slash_open && self.commands_key(cx).is_some_and(|key| !self.commands.contains_key(&key) && !self.commands_latest.contains_key(&key)) {
+            self.ensure_commands(true, cx);
+        }
         let suggestions = if readable || new_chat { self.visible_suggestions(cx) } else { Vec::new() };
         if self.suggest_pick >= suggestions.len() { self.suggest_pick = 0; }
         let tray = key.as_ref().and_then(|key| self.render_attachments(key, cx));
