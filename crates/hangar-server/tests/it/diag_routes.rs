@@ -121,6 +121,19 @@ async fn download_has_the_machine_header_and_gzip() {
     assert_eq!(unzipped.lines().skip(1).collect::<Vec<_>>(), text.lines().skip(1).collect::<Vec<_>>());
 }
 
+/// D-17: logo depois de subir, com a versão ainda não lida, o cabeçalho espera a leitura em vez de
+/// dizer "indisponivel". A versão vem do manifesto do pacote em `~/.hangar/current`.
+#[tokio::test(flavor = "multi_thread")]
+async fn download_header_reads_the_version_on_a_cold_cache() {
+    let f = Fixture::start().await;
+    let current = f.home.path().join(".hangar/current");
+    std::fs::create_dir_all(&current).unwrap();
+    std::fs::write(current.join("manifest.json"), json!({"version": "0.1.0.8207", "commit": "abc1234def567890", "channel": "latest"}).to_string()).unwrap();
+    let text = f.request(reqwest::Method::GET, "/api/diag/arquivo", true).send().await.unwrap().text().await.unwrap();
+    let header: Value = serde_json::from_str(text.lines().next().unwrap()).unwrap();
+    assert_eq!(header["backend"], "0.1.0.8207-gabc1234def56");
+}
+
 /// Sem o token do dono as três rotas recusam com 401 e nada é gravado (rota antiga: `require_auth`).
 #[tokio::test(flavor = "multi_thread")]
 async fn without_the_owner_token_every_route_refuses() {

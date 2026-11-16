@@ -112,17 +112,96 @@ async fn summary(base: Option<PathBuf>, query: Option<&str>, headers: &HeaderMap
     gzipped(headers, hangar_core::http_cors::json_guarded(StatusCode::OK, value)).await
 }
 
+/// O diário sai em fluxo: lido arquivo a arquivo e comprimido enquanto sai, sem montar a semana em memória.
 async fn download(st: &AppState, base: Option<PathBuf>, headers: &HeaderMap) -> Response {
     let header = header_line(st).await;
     let base = base.unwrap_or_default();
-    let Ok(text) = tokio::task::spawn_blocking(move || hangar_usage_diary::download(&base, &header)).await else {
-        return hangar_core::http_cors::internal_error();
-    };
-    let response = Response::builder().status(StatusCode::OK)
+    let wants_gzip = headers.get(header::ACCEPT_ENCODING).and_then(|value| value.to_str().ok()).is_some_and(|value| value.contains("gzip"));
+    let (decided, decision) = tokio::sync::oneshot::channel();
+    let (sender, receiver) = tokio::sync::mpsc::channel(8);
+    tokio::task::spawn_blocking(move || {
+        let mut sink = DownloadSink { start: Vec::new(), decided: Some(decided), wants_gzip, encoder: None, sender };
+        let result = hangar_usage_diary::download_to(&base, &header, &mut |part| sink.write(part));
+        // Cliente que desistiu: nada mais a entregar.
+        if result.is_ok() {
+            let _ = sink.finish();
+        }
+    });
+    let Ok(gzip) = decision.await else { return hangar_core::http_cors::internal_error() };
+    let body = Body::from_stream(futures_util::stream::unfold(receiver, |mut receiver| async move {
+        receiver.recv().await.map(|part: bytes::Bytes| (Ok::<_, std::io::Error>(part), receiver))
+    }));
+    let mut response = Response::builder().status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "application/x-ndjson")
-        .header(header::CONTENT_DISPOSITION, "attachment; filename=\"hangar-uso.jsonl\"")
-        .body(Body::from(text)).expect("cabeçalhos estáticos válidos");
-    gzipped(headers, response).await
+        .header(header::CONTENT_DISPOSITION, "attachment; filename=\"hangar-uso.jsonl\"");
+    if gzip {
+        response = response.header(header::CONTENT_ENCODING, "gzip").header(header::VARY, "Accept-Encoding");
+    }
+    response.body(body).expect("cabeçalhos estáticos válidos")
+}
+
+/// Segura o primeiro 1 KB para decidir o gzip como a rota antiga (só com 1 KB ou mais), e depois
+/// entrega cada pedaço, comprimido se for o caso. A compressão sem descarga intermediária dá os
+/// mesmos bytes de comprimir o corpo inteiro de uma vez.
+struct DownloadSink {
+    start: Vec<u8>,
+    decided: Option<tokio::sync::oneshot::Sender<bool>>,
+    wants_gzip: bool,
+    encoder: Option<flate2::write::GzEncoder<Vec<u8>>>,
+    sender: tokio::sync::mpsc::Sender<bytes::Bytes>,
+}
+
+impl DownloadSink {
+    const GZIP_MINIMUM: usize = 1024;
+
+    fn write(&mut self, part: &[u8]) -> std::io::Result<()> {
+        if self.decided.is_none() {
+            return self.emit(part);
+        }
+        self.start.extend_from_slice(part);
+        if self.start.len() < Self::GZIP_MINIMUM { Ok(()) } else { self.decide() }
+    }
+
+    fn decide(&mut self) -> std::io::Result<()> {
+        let gzip = self.wants_gzip && self.start.len() >= Self::GZIP_MINIMUM;
+        if let Some(decided) = self.decided.take() {
+            decided.send(gzip).map_err(|_| std::io::ErrorKind::BrokenPipe)?;
+        }
+        if gzip {
+            self.encoder = Some(flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::new(5)));
+        }
+        let start = std::mem::take(&mut self.start);
+        self.emit(&start)
+    }
+
+    fn emit(&mut self, part: &[u8]) -> std::io::Result<()> {
+        use std::io::Write;
+        let out = match &mut self.encoder {
+            Some(encoder) => {
+                encoder.write_all(part)?;
+                std::mem::take(encoder.get_mut())
+            }
+            None => part.to_vec(),
+        };
+        self.send(out)
+    }
+
+    fn send(&self, out: Vec<u8>) -> std::io::Result<()> {
+        if out.is_empty() {
+            return Ok(());
+        }
+        self.sender.blocking_send(bytes::Bytes::from(out)).map_err(|_| std::io::ErrorKind::BrokenPipe.into())
+    }
+
+    fn finish(mut self) -> std::io::Result<()> {
+        if self.decided.is_some() {
+            self.decide()?;
+        }
+        match self.encoder.take() {
+            Some(encoder) => self.send(encoder.finish()?),
+            None => Ok(()),
+        }
+    }
 }
 
 /// O gzip da rota antiga: só com `Accept-Encoding: gzip` e corpo de 1 KB ou mais.
@@ -142,7 +221,11 @@ async fn header_line(st: &AppState) -> String {
     let now = chrono::Local::now();
     let mux = mux_version(&st.list.env().capture_program).await;
     let root = crate::install_root::root(&st.accounts.env.home).unwrap_or_else(|| st.accounts.env.home.join(".hangar/current"));
-    let backend = crate::boot_version::get(&root).map_or_else(|| "indisponivel".to_owned(), |version| version.describe);
+    // Logo depois de subir o cache ainda está frio: espera a versão em vez de mandar "indisponivel".
+    let backend = match crate::boot_version::ensure(root, st.accounts.env.base.clone()).await {
+        Ok(version) => version.describe,
+        Err(_) => "indisponivel".to_owned(),
+    };
     let started = crate::terminal_facts::agent_birth(std::process::id())
         .and_then(|at| chrono::DateTime::from_timestamp(at.floor() as i64, (at.fract() * 1e9) as u32))
         .map_or(now, |at| at.with_timezone(&chrono::Local));
@@ -217,6 +300,8 @@ fn platform() -> (String, String) {
     if unsafe { libc::uname(&mut name) } != 0 {
         return (String::new(), String::new());
     }
+    // SAFETY: depois do `uname` bem-sucedido cada campo é uma string C terminada em zero dentro do
+    // próprio arranjo, que vive até o fim desta função.
     let text = |field: &[libc::c_char]| unsafe { std::ffi::CStr::from_ptr(field.as_ptr()) }.to_string_lossy().into_owned();
     (format!("{} {} {}", text(&name.sysname), text(&name.release), text(&name.version)), text(&name.machine))
 }

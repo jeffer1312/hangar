@@ -303,12 +303,6 @@ fn day_of(name: &str) -> Option<&str> {
     iso_date(day).then_some(day)
 }
 
-/// O texto do arquivo como o `read_text` do Python o via: UTF-8 trocando o inválido, fim de linha `\n`.
-fn read_text(path: &Path) -> Option<String> {
-    let bytes = std::fs::read(path).ok()?;
-    Some(String::from_utf8_lossy(&bytes).replace("\r\n", "\n").replace('\r', "\n"))
-}
-
 /// Quantas linhas o resumo mostra: `?ultimas=` (padrão 60) entre 1 e 200. `Err` traz o valor
 /// recusado, como a validação de inteiro da rota antiga.
 pub fn latest_count(query: Option<&str>) -> Result<usize, String> {
@@ -384,7 +378,9 @@ pub fn latest(base: &Path, count: usize) -> Vec<Value> {
     for day_files in reversed.chunk_by(|a, b| a.file_name() == b.file_name()) {
         let mut day = Vec::new();
         for path in day_files {
-            let Some(text) = read_text(path) else { continue };
+            // Um arquivo por vez, até o teto de 8 MiB do dia; o `splitlines` já quebra em `\r` e `\r\n`.
+            let Ok(bytes) = std::fs::read(path) else { continue };
+            let text = String::from_utf8_lossy(&bytes);
             let mut collected = 0;
             for raw in py::splitlines(&text).into_iter().rev() {
                 let Some(value) = pyjson::loads_lossless(raw.trim_matches([' ', '\t', '\n', '\r'])) else { continue };
@@ -434,13 +430,96 @@ pub fn summary(base: &Path) -> Value {
     json!({"dias": days, "bytes": bytes, "arquivos": names, "dias_guardados": DAYS_KEPT})
 }
 
-/// O corpo do download: a linha de cabeçalho e os dias concatenados, o mais antigo primeiro.
-pub fn download(base: &Path, header: &str) -> String {
-    let mut out = format!("{header}\n");
+/// Pedaço lido de cada arquivo no download: o diário inteiro nunca fica em memória.
+const DOWNLOAD_CHUNK: usize = 64 * 1024;
+
+/// O corpo do download, entregue em pedaços a `sink`: a linha de cabeçalho e os dias concatenados,
+/// o mais antigo primeiro, cada arquivo como o `read_text` do Python o via (UTF-8 trocando o
+/// inválido, fim de linha `\n`). Arquivo que não abre fica de fora; só o `sink` devolve erro.
+pub fn download_to(base: &Path, header: &str, sink: &mut dyn FnMut(&[u8]) -> std::io::Result<()>) -> std::io::Result<()> {
+    download_chunked(base, header, DOWNLOAD_CHUNK, sink)
+}
+
+/// `download_to` com o tamanho do pedaço escolhido: as provas cortam no meio de caractere e de `\r\n`.
+pub fn download_chunked(base: &Path, header: &str, chunk: usize, sink: &mut dyn FnMut(&[u8]) -> std::io::Result<()>) -> std::io::Result<()> {
+    sink(format!("{header}\n").as_bytes())?;
     for path in files(base) {
-        if let Some(text) = read_text(&path) {
-            out.push_str(&text);
+        if let Ok(file) = std::fs::File::open(&path) {
+            normalize(file, chunk.max(1), sink)?;
         }
     }
-    out
+    Ok(())
+}
+
+// shortcut: falha de leitura no meio de um arquivo encerra só ele, com o que já saiu; o Python pulava o
+// arquivo inteiro. Só acontece com o disco falhando durante o download.
+fn normalize(mut reader: impl std::io::Read, chunk: usize, sink: &mut dyn FnMut(&[u8]) -> std::io::Result<()>) -> std::io::Result<()> {
+    let mut buffer = vec![0; chunk];
+    let (mut carry, mut pending_cr) = (Vec::new(), false);
+    loop {
+        let read = match reader.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(read) => read,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => break,
+        };
+        carry.extend_from_slice(&buffer[..read]);
+        let (text, rest) = decode_lossy(&carry, false);
+        carry = rest;
+        emit_lines(&text, &mut pending_cr, sink)?;
+    }
+    let (text, _) = decode_lossy(&carry, true);
+    emit_lines(&text, &mut pending_cr, sink)?;
+    if pending_cr {
+        sink(b"\n")?;
+    }
+    Ok(())
+}
+
+/// `String::from_utf8_lossy` em pedaços: sequência incompleta no fim fica para o próximo pedaço,
+/// e só no fim do arquivo vira U+FFFD.
+fn decode_lossy(bytes: &[u8], end: bool) -> (String, Vec<u8>) {
+    let mut out = String::with_capacity(bytes.len());
+    let mut rest = bytes;
+    loop {
+        match std::str::from_utf8(rest) {
+            Ok(text) => {
+                out.push_str(text);
+                return (out, Vec::new());
+            }
+            Err(error) => {
+                let (valid, after) = rest.split_at(error.valid_up_to());
+                out.push_str(std::str::from_utf8(valid).unwrap_or_default());
+                match error.error_len() {
+                    Some(length) => {
+                        out.push('\u{FFFD}');
+                        rest = &after[length..];
+                    }
+                    None if end => {
+                        out.push('\u{FFFD}');
+                        return (out, Vec::new());
+                    }
+                    None => return (out, after.to_vec()),
+                }
+            }
+        }
+    }
+}
+
+/// `\r\n` e `\r` viram `\n`; um `\r` no fim do pedaço espera o próximo caractere.
+fn emit_lines(text: &str, pending_cr: &mut bool, sink: &mut dyn FnMut(&[u8]) -> std::io::Result<()>) -> std::io::Result<()> {
+    if text.is_empty() {
+        return Ok(());
+    }
+    let mut out = String::with_capacity(text.len() + 1);
+    for c in text.chars() {
+        if std::mem::take(pending_cr) {
+            out.push('\n');
+            if c == '\n' {
+                continue;
+            }
+        }
+        if c == '\r' { *pending_cr = true } else { out.push(c) }
+    }
+    sink(out.as_bytes())
 }

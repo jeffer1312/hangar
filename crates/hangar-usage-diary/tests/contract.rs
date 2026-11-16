@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use chrono::{DateTime, FixedOffset};
-use hangar_usage_diary::{WriteError, download, files, latest, latest_count, record_screen, summary};
+use hangar_usage_diary::{WriteError, download_chunked, download_to, files, latest, latest_count, record_screen, summary};
 use serde_json::{Value, json};
 
 const DAY: &str = "uso-2026-11-16.jsonl";
@@ -270,25 +270,67 @@ fn d15_latest_count_parsing() {
     assert_eq!(latest_count(Some("ultimas=")), Err(String::new()));
 }
 
+fn download(base: &Path, header: &str, chunk: usize) -> Vec<u8> {
+    let mut body = Vec::new();
+    download_chunked(base, header, chunk, &mut |part| {
+        body.extend_from_slice(part);
+        Ok(())
+    }).unwrap();
+    body
+}
+
 /// D-14, D-17: o download junta todos os dias (subpastas incluídas) depois do cabeçalho, do mais
-/// antigo ao mais novo, e ignora quem não é `uso-AAAA-MM-DD.jsonl`.
+/// antigo ao mais novo, e ignora quem não é `uso-AAAA-MM-DD.jsonl`. O corpo inteiro é o da captura,
+/// em pedaços de qualquer tamanho.
 #[test]
 fn d17_download_concatenates_days_oldest_first() {
     let dir = tempfile::tempdir().unwrap();
     seed(dir.path());
-    let body = download(dir.path(), "{\"evento\": \"diag.formato\"}");
-    let lines: Vec<&str> = body.lines().collect();
-    assert_eq!(lines[0], "{\"evento\": \"diag.formato\"}");
-    assert_eq!(&lines[1..], [
-        r#"{"ts": "2026-11-15T10:00:00.000-03:00", "evento": "y1", "seq": 1}"#,
-        r#"{"ts": "2026-11-15T11:00:00.000-03:00", "evento": "y2"}"#, "nao json", "[1,2]",
-        r#"{"ts": "2026-11-16T09:30:00.000-03:00", "evento": "rust1"}"#,
-        r#"{"ts": "2026-11-16T09:00:00.000-03:00", "evento": "a", "seq": 2}"#,
-        r#"{"ts": "2026-11-16T09:00:00.000-03:00", "evento": "b", "seq": 1}"#,
-        r#"{"ts": "2026-11-16T08:00:00.000-03:00", "evento": "c"}"#, "nao json", "[1,2]",
-    ]);
+    let expected = concat!("{\"evento\": \"diag.formato\"}\n",
+        r#"{"ts": "2026-11-15T10:00:00.000-03:00", "evento": "y1", "seq": 1}"#, "\n",
+        r#"{"ts": "2026-11-15T11:00:00.000-03:00", "evento": "y2"}"#, "\n", "nao json\n[1,2]\n",
+        r#"{"ts": "2026-11-16T09:30:00.000-03:00", "evento": "rust1"}"#, "\n",
+        r#"{"ts": "2026-11-16T09:00:00.000-03:00", "evento": "a", "seq": 2}"#, "\n",
+        r#"{"ts": "2026-11-16T09:00:00.000-03:00", "evento": "b", "seq": 1}"#, "\n",
+        r#"{"ts": "2026-11-16T08:00:00.000-03:00", "evento": "c"}"#, "\n", "nao json\n[1,2]\n");
+    for chunk in [1, 2, 7, 64 * 1024] {
+        assert_eq!(String::from_utf8(download(dir.path(), "{\"evento\": \"diag.formato\"}", chunk)).unwrap(), expected, "pedaço {chunk}");
+    }
+    let mut streamed = Vec::new();
+    download_to(dir.path(), "{\"evento\": \"diag.formato\"}", &mut |part| {
+        streamed.extend_from_slice(part);
+        Ok(())
+    }).unwrap();
+    assert_eq!(String::from_utf8(streamed).unwrap(), expected);
     let empty = tempfile::tempdir().unwrap();
-    assert_eq!(download(empty.path(), "h"), "h\n");
+    assert_eq!(download(empty.path(), "h", 64), b"h\n");
+}
+
+/// D-17: o arquivo sai como o `read_text` do Python o lia: `\r\n` e `\r` viram `\n`, byte inválido
+/// vira U+FFFD, e nada disso muda quando o corte do pedaço cai no meio de um caractere ou de `\r\n`.
+#[test]
+fn d17_download_normalizes_like_read_text_across_chunk_cuts() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join(DAY), b"a\r\nb\rc\xc3\xa9\xff\r\r\nd\xe2\x82").unwrap();
+    for chunk in 1..=8 {
+        assert_eq!(String::from_utf8(download(dir.path(), "h", chunk)).unwrap(), "h\na\nb\nc\u{e9}\u{FFFD}\n\nd\u{FFFD}", "pedaço {chunk}");
+    }
+    std::fs::write(dir.path().join(DAY), b"fim\r").unwrap();
+    assert_eq!(download(dir.path(), "h", 2), b"h\nfim\n");
+}
+
+/// O erro de quem recebe (cliente que desistiu) interrompe o download e chega a quem chamou.
+#[test]
+fn d17_download_stops_when_the_receiver_fails() {
+    let dir = tempfile::tempdir().unwrap();
+    seed(dir.path());
+    let mut parts = 0;
+    let result = download_chunked(dir.path(), "h", 4, &mut |_| {
+        parts += 1;
+        if parts == 3 { Err(std::io::ErrorKind::BrokenPipe.into()) } else { Ok(()) }
+    });
+    assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::BrokenPipe);
+    assert_eq!(parts, 3);
 }
 
 proptest::proptest! {
