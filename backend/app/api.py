@@ -4,7 +4,7 @@ import json
 import re
 import time
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request, WebSocket
+from fastapi import FastAPI, Request
 from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.gzip import GZipMiddleware
@@ -191,8 +191,3 @@ app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=5)
 app.include_router(internal_api.router)
 
 
-@app.websocket("/api/sessions/{name}/term")
-async def term_ws_route(ws: WebSocket, name: str):
-    from app import termsock
-    resolve = None
-    await termsock.term_ws(ws, name, resolve)

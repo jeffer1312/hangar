@@ -33,9 +33,9 @@ Only terminal sessions use the tmux pane for live **state** and input. Backend p
   estado, prévia, perguntas, fila, entrada, fechamento e troca de nome. Os leitores estruturados
   ficam em `hangar-transcript`; hooks e guarda do Kimi/Pi são comandos Rust em `provider_hooks/`.
 - O SSE do chat (`/events`) é do hub do Rust (`crates/hangar-server/src/side.rs`, uma fonte por
-  chave, não uma por conexão). `api.py` — o que sobrou no FastAPI (`/internal/*`, porta de
-  entrada do terminal em `termsock.py`). O diário de uso (`/api/diag`, `/api/diag/arquivo`) é do
-  Rust (`crates/hangar-usage-diary`). `auth.py` — bearer token / `cp_token` cookie.
+  chave, não uma por conexão). `api.py` — o que sobrou no FastAPI (`/internal/*`). O diário de
+  uso (`/api/diag`, `/api/diag/arquivo`) é do Rust (`crates/hangar-usage-diary`). `auth.py` —
+  bearer token / `cp_token` cookie.
 - Also: `rust_server.py` (Supervisor que sobe e religa o `hangar-server`), `config.py`.
 - `crates/hangar-server/src/commands/` — catálogo de comandos do Claude, sonda compartilhada e
   filtro em processo; o Python não atende essas rotas.
@@ -314,12 +314,12 @@ registrado, fora do caminho de leitura, para não competir com o que vale hoje.
 - **Terminal real no rodapé e no celular**: um PTY por WebSocket, backend não interpreta nada.
   Um painel por sessão em todas as portas; xterm com fundo `rgba(0,0,0,0)`, nunca `'transparent'`.
   Com o painel aberto, quem conta linha de pane responde 409 — e o app tem que MOSTRAR esse texto.
-  O PTY é só do Rust (Windows incluído): o `termsock` faz a porta de entrada de quem
-  chega ao Python (convidado) e liga os bytes a `/__hangar_server/term`; o 409 do painel aberto é
-  do Rust e erro da ponte é 503 (fechamento 1013 no socket), nunca PTY no Python.
-- **WebSocket do dono com `?token=` não confere Origin** (terminal, voz e navegador, Rust e
-  Python). A Origin (`_origem_aceita`, `CP_TERM_ORIGINS`) só barra credencial que o navegador manda
-  sozinho: hoje, o login de convidado no `termsock`. [Motivo](docs/decisoes/plataforma.md#websocket-do-dono-com-token-não-confere-origin-17102026).
+  O PTY e a porta de entrada são só do Rust (Windows incluído), em todas as portas: toda recusa
+  do aperto de mão (sem token, token errado, Bearer/cookie, origem bloqueada) é 403 vazio do Rust,
+  contado uma vez; o 409 do painel aberto é do Rust.
+- **WebSocket do dono com `?token=` não confere Origin** (terminal, voz e navegador). A Origin
+  (`terminal_origin_allowed`, `CP_TERM_ORIGINS`) só barra credencial que o navegador manda
+  sozinho: hoje, o login de convidado no terminal. [Motivo](docs/decisoes/plataforma.md#websocket-do-dono-com-token-não-confere-origin-17102026).
 - **Aba ativa do navegador embutido é UMA só, compartilhada entre painel e CLI**; `--aba` age em
   outra sem trocar o que está na tela. O sidecar do navegador é ADITIVO: `url`/`targetId` no topo
   são os da aba ativa, e é só isso que o backend lê.

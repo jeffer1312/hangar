@@ -315,10 +315,148 @@ async fn query_token_only() {
     assert_eq!(connect_with(srv.addr, path, &[("authorization", "Bearer dono")]).await.err(), Some(403));
     assert_eq!(connect_with(srv.addr, path, &[("cookie", "cp_token=dono")]).await.err(), Some(403));
     assert_eq!(connect(srv.addr, &format!("{path}?token=errado")).await.err(), Some(403));
-    assert_eq!(srv.py.term_hits.load(Ordering::SeqCst), 3, "os três foram decididos pelo Python");
+    assert_eq!(connect(srv.addr, &format!("{path}?token=")).await.err(), Some(403), "token vazio");
     assert!(tmux.clients("s8").is_empty());
     let _ws = connect(srv.addr, &format!("{path}?token=dono")).await.expect("só o ?token= abre");
-    assert_eq!(srv.py.term_hits.load(Ordering::SeqCst), 3);
+    assert_eq!(srv.py.term_hits.load(Ordering::SeqCst), 0, "toda recusa sai do Rust");
+}
+
+/// T-14/T-16: sessão inexistente é 403 "sessao nao existe" antes do aceite; com token errado a recusa
+/// de autenticação vem primeiro e não revela a sessão (capturas t04 e t05).
+#[tokio::test]
+async fn auth_comes_before_the_session_check() {
+    let tmux = Tmux::new();
+    tmux.session("s11");
+    let addr = server(&tmux, |_| {}).await.addr;
+    let refusal = |path: String| async move {
+        match tokio_tungstenite::connect_async(format!("ws://{addr}{path}")).await {
+            Err(tungstenite::Error::Http(r)) => (r.status().as_u16(), String::from_utf8(r.body().clone().unwrap_or_default()).unwrap()),
+            other => panic!("esperava recusa: {:?}", other.map(|_| ())),
+        }
+    };
+    assert_eq!(refusal("/api/sessions/nenhuma/term?token=dono".into()).await, (403, "sessao nao existe".into()));
+    assert_eq!(refusal("/api/sessions/nenhuma/term?token=errado".into()).await, (403, String::new()));
+    assert_eq!(refusal("/api/sessions/s11/term?token=dono&cols=abc".into()).await, (403, "cols/rows invalidos".into()));
+}
+
+/// T-24/T-25: GET sem aperto de mão e outro método são o caminho sem rota: 404 do Rust, nada ao Python.
+#[tokio::test]
+async fn plain_get_and_other_methods_are_the_rust_404() {
+    let tmux = Tmux::new();
+    tmux.session("s10");
+    let srv = server(&tmux, |_| {}).await;
+    let http = reqwest::Client::new();
+    let url = format!("http://{}/api/sessions/s10/term?token=dono", srv.addr);
+    for method in [reqwest::Method::GET, reqwest::Method::POST, reqwest::Method::HEAD] {
+        let resp = http.request(method.clone(), &url).send().await.unwrap();
+        assert_eq!(resp.status(), 404, "{method}");
+    }
+    assert_eq!(srv.py.term_hits.load(Ordering::SeqCst), 0);
+    assert!(tmux.clients("s10").is_empty());
+}
+
+/// Servidor só com as duas rotas do terminal, com um convidado já decidido pelo porteiro em cada pedido.
+async fn guest_server(tmux: &Tmux, sessions: &[(&str, Kind)]) -> SocketAddr {
+    use crate::share::caller::SessionPath;
+    let (upstream, _) = python().await;
+    let cfg = Config { listen: "127.0.0.1:0".parse().unwrap(), upstream, internal_secret: "s".into(), auth_token: "dono".into(),
+                       log_path: None, trusted: TrustedHosts::parse("127.0.0.1") };
+    let mut state = AppState::new(cfg);
+    state.term = Arc::new(Terms::new(TermConfig { socket: Some(tmux.socket.clone()), ..TermConfig::default() }));
+    let grant = Arc::new(hangar_core::guest::GuestGrant { token: "g".into(), token_hash: "h".into(),
+        sessions: sessions.iter().map(|(s, k)| (s.to_string(), *k)).collect(), pair_roots: vec![], invite: true });
+    let app = Router::new()
+        .route("/api/sessions/{name}/term", axum::routing::get(session_ws))
+        .route("/api/hangar-terminals/{ident}/term", axum::routing::get(hangar_ws))
+        .layer(axum::middleware::from_fn(move |mut req: Request, next: axum::middleware::Next| {
+            let grant = grant.clone();
+            async move {
+                if let Some(path) = SessionPath::parse(req.uri().path()) { req.extensions_mut().insert(path); }
+                req.extensions_mut().insert(Caller::Guest(grant));
+                next.run(req).await
+            }
+        }))
+        .with_state(Arc::new(state));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await.unwrap() });
+    addr
+}
+
+/// T-11 (decisão 21): convidado verificado sem `Share` na sessão leva 403; o Python abria para qualquer
+/// convidado verificado.
+#[tokio::test]
+async fn a_guest_without_share_on_the_session_is_refused() {
+    let tmux = Tmux::new();
+    tmux.session("g1");
+    let addr = guest_server(&tmux, &[("outra", Kind::Share), ("g1", Kind::Pair)]).await;
+    assert_eq!(connect(addr, "/api/sessions/g1/term").await.err(), Some(403), "par de leitura não abre o terminal");
+    let other = guest_server(&tmux, &[("outra", Kind::Share)]).await;
+    assert_eq!(connect(other, "/api/sessions/g1/term").await.err(), Some(403), "sessão fora do convite");
+    assert!(tmux.clients("g1").is_empty());
+}
+
+/// Convidado com `Share` em `foo` pede `term-foo/term`: só abre se `term-foo` for o shell escondido de
+/// `foo`; uma sessão comum chamada `term-foo`, sem convite, é recusada.
+#[tokio::test]
+async fn a_guest_opens_only_the_hidden_shell_of_its_session() {
+    let tmux = Tmux::new();
+    tmux.session("term-foo");
+    let addr = guest_server(&tmux, &[("foo", Kind::Share)]).await;
+    assert_eq!(connect(addr, "/api/sessions/term-foo/term").await.err(), Some(403), "sessão comum de nome term-foo");
+    assert_eq!(connect(addr, "/api/sessions/term-foo/term?shortcut=abc123").await.err(), Some(403), "atalho pelo nome do shell");
+    assert!(tmux.clients("term-foo").is_empty());
+    tmux.run(&["set-option", "-t", "=term-foo:", "@cp_hidden", "1"]);
+    let _ws = connect(addr, "/api/sessions/term-foo/term").await.expect("o shell escondido de foo abre");
+    until("anexado", || tmux.clients("term-foo").len() == 1).await;
+}
+
+/// T-26: convidado nos terminais do Hangar leva o 404 do caminho sem rota, como o Python dava.
+#[tokio::test]
+async fn a_guest_on_the_hangar_terminals_is_the_rust_404() {
+    let tmux = Tmux::new();
+    let addr = guest_server(&tmux, &[("g2", Kind::Share)]).await;
+    assert_eq!(connect(addr, "/api/hangar-terminals/abc123/term").await.err(), Some(404));
+}
+
+/// O convidado com `Share` na sessão abre o painel sem token do dono.
+#[tokio::test]
+async fn a_guest_with_share_on_the_session_opens() {
+    let tmux = Tmux::new();
+    tmux.session("g3");
+    let addr = guest_server(&tmux, &[("g3", Kind::Share)]).await;
+    let _ws = connect(addr, "/api/sessions/g3/term").await.expect("convidado do convite abre");
+    until("anexado", || tmux.clients("g3").len() == 1).await;
+}
+
+proptest::proptest! {
+    /// T-15: qualquer query vira 80x24, um tamanho dentro do clamp, ou recusa; nunca pânico.
+    #[test]
+    fn size_of_any_query_is_clamped_or_refused(query in ".{0,64}") {
+        if let Some((c, r)) = size_of(Some(&query)) {
+            proptest::prop_assert!((20..=500).contains(&c) && (5..=200).contains(&r));
+        }
+    }
+
+    #[test]
+    fn size_of_numbers_follow_the_clamp(cols in proptest::num::i64::ANY, rows in proptest::num::i64::ANY) {
+        let got = size_of(Some(&format!("cols={cols}&rows={rows}")));
+        proptest::prop_assert_eq!(got, Some(pty::clamp(cols, rows)));
+    }
+}
+
+#[test]
+fn size_of_follows_the_captures() {
+    // Capturas do termsock (contract/term t06–t13): padrão, clamp e inválido; `1_0` é recusado (decisão 24).
+    assert_eq!(size_of(None), Some((80, 24)));
+    assert_eq!(size_of(Some("cols=abc")), None);
+    assert_eq!(size_of(Some("cols=")), None);
+    assert_eq!(size_of(Some("cols=12.5")), None);
+    assert_eq!(size_of(Some("cols=-5&rows=-5")), Some((20, 5)));
+    assert_eq!(size_of(Some("cols=1&rows=1")), Some((20, 5)));
+    assert_eq!(size_of(Some("cols=9999&rows=9999")), Some((500, 200)));
+    assert_eq!(size_of(Some("cols=%20%2B12%20")), Some((20, 24)));
+    assert_eq!(size_of(Some("cols=1_0")), None);
 }
 
 /// O `?token=` do dono não é credencial ambiente: página estranha não o tem, então a Origin não é conferida.
@@ -334,8 +472,8 @@ async fn owner_token_opens_from_any_origin() {
     req.headers_mut().insert("origin", axum::http::HeaderValue::from_bytes(b"https://\xe9vil.com").unwrap());
     tokio_tungstenite::connect_async(req).await.expect("Origin ilegível com token abre");
     assert_eq!(connect_with(srv.addr, "/api/sessions/s9/term", &[("origin", "https://evil.com")]).await.err(), Some(403),
-               "sem token segue ao Python");
-    assert_eq!(srv.py.term_hits.load(Ordering::SeqCst), 1);
+               "sem token, a recusa do Rust");
+    assert_eq!(srv.py.term_hits.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]
@@ -375,7 +513,7 @@ async fn panel_cap_refuses_1013() {
     assert_eq!(close_of(&mut c).await, (1013, "multiplexador indisponivel".to_string()));
 }
 
-/// Porta privada do servidor, lida da saúde como o Python lê.
+/// Porta privada do servidor, lida da saúde.
 async fn private_addr(addr: SocketAddr) -> SocketAddr {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
@@ -385,49 +523,6 @@ async fn private_addr(addr: SocketAddr) -> SocketAddr {
     let v: serde_json::Value = serde_json::from_str(out.split("\r\n\r\n").nth(1).unwrap()).unwrap();
     assert_eq!(v["terminal_panel"], true, "a saúde diz que o painel é do Rust");
     v["terminal_address"].as_str().unwrap().parse().unwrap()
-}
-
-#[tokio::test]
-async fn private_route_requires_secret() {
-    let tmux = Tmux::new();
-    tmux.session("p1");
-    let srv = server(&tmux, |_| {}).await;
-    let private = private_addr(srv.addr).await;
-    let path = "/__hangar_server/term?target=p1&cols=9999&rows=30";
-    assert_eq!(connect(private, path).await.err(), Some(404), "sem segredo");
-    assert_eq!(connect_with(private, path, &[("x-hangar-internal", "outro")]).await.err(), Some(404));
-    assert_eq!(connect_with(private, path, &[("x-hangar-internal", "s"), ("x-forwarded-for", "203.0.113.9")]).await.err(), Some(404),
-               "repasse de fora não é o Python");
-    assert_eq!(connect_with(srv.addr, path, &[("x-hangar-internal", "s")]).await.err(), Some(404), "nunca na porta pública");
-    assert_eq!(connect_with(private, "/__hangar_server/term?cols=90", &[("x-hangar-internal", "s")]).await.err(), Some(400));
-    assert_eq!(connect_with(private, "/__hangar_server/term?target=p1&cols=abc", &[("x-hangar-internal", "s")]).await.err(), Some(400));
-    assert_eq!(connect_with(private, "/__hangar_server/term?target=morta", &[("x-hangar-internal", "s")]).await.err(), Some(403),
-               "sessão que morreu depois da porta do Python não vira painel");
-    assert!(srv.terms.active().is_empty());
-    assert!(tmux.clients("p1").is_empty());
-    let mut ws = connect_with(private, path, &[("x-hangar-internal", "s")]).await.expect("o Python liga com o segredo");
-    until("anexado em 500x30, com o clamp", || tmux.clients("p1").iter().any(|c| c.ends_with(" 500x30"))).await;
-    ws.send(Ws::Binary("priv-4410\r".into())).await.unwrap();
-    read_until(&mut ws, b"priv-4410").await;
-    assert_eq!(srv.py.term_hits.load(Ordering::SeqCst), 0);
-}
-
-#[tokio::test]
-async fn one_panel_across_owner_and_guest() {
-    let tmux = Tmux::new();
-    tmux.session("p2");
-    let srv = server(&tmux, |_| {}).await;
-    let private = private_addr(srv.addr).await;
-    let guest_path = "/__hangar_server/term?target=p2";
-    let mut owner = connect(srv.addr, "/api/sessions/p2/term?token=dono").await.expect("dono");
-    until("dono anexado", || tmux.clients("p2").len() == 1).await;
-    let mut guest = connect_with(private, guest_path, &[("x-hangar-internal", "s")]).await.expect("convidado");
-    assert_eq!(close_of(&mut owner).await, (1000, TAKEN_OVER.to_string()));
-    until("só o convidado", || tmux.clients("p2").len() == 1).await;
-    assert_eq!(srv.terms.active(), vec!["p2".to_string()]);
-    let _owner = connect(srv.addr, "/api/sessions/p2/term?token=dono").await.expect("dono de volta");
-    assert_eq!(close_of(&mut guest).await, (1000, TAKEN_OVER.to_string()));
-    until("só o dono", || tmux.clients("p2").len() == 1).await;
 }
 
 /// R4: `term.active` saiu da ponte da lista com o último chamador do Python (o 409 do painel aberto):

@@ -798,6 +798,38 @@ async fn guest_terminal_closes_with_4410_when_revoked() {
     assert_eq!(srv.python.hits_to("/api/sessions/t/term"), 0);
 }
 
+/// T-28: um painel por sessão entre a porta do dono e a do convidado; quem chega derruba o outro com 1000.
+#[tokio::test(flavor = "multi_thread")]
+async fn owner_and_invite_guest_share_one_panel() {
+    let tmux = { let d = tempfile::tempdir().unwrap(); let socket = d.path().join("t.sock"); Tmux { _dir: d, socket } };
+    let out = std::process::Command::new("tmux").arg("-S").arg(&tmux.socket).args(["-f", "/dev/null", "new-session", "-d", "-s", "t", "-x", "80", "-y", "24", "cat"])
+        .env_remove("TMUX").output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let dir = tempfile::tempdir().unwrap();
+    let socket = tmux.socket.clone();
+    let srv = plain_srv(dir.path(), move |st| {
+        st.term = Arc::new(hangar_server::term::Terms::new(hangar_server::term::TermConfig { socket: Some(socket), ..Default::default() }));
+    }).await;
+    let t = srv.g.token("t", Kind::Share);
+    let close_of = |mut ws: tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>| async move {
+        tokio::time::timeout(Duration::from_secs(12), async {
+            while let Some(Ok(m)) = ws.next().await {
+                if let tungstenite::Message::Close(frame) = m { return frame.map(|f| (u16::from(f.code), f.reason.to_string())); }
+            }
+            None
+        }).await.expect("o painel anterior fecha")
+    };
+    let (owner, _) = tokio_tungstenite::connect_async(format!("ws://{}/api/sessions/t/term?token={OWNER}", srv.owner)).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async { while !srv.st.term.is_active("t") { tokio::time::sleep(Duration::from_millis(20)).await; } })
+        .await.expect("dono anexado");
+    let (guest, _) = tokio_tungstenite::connect_async(format!("ws://{}/api/sessions/t/term?token={t}", srv.guest)).await.unwrap();
+    assert_eq!(close_of(owner).await, Some((1000, "outra conexao assumiu".to_string())));
+    let (_owner, _) = tokio_tungstenite::connect_async(format!("ws://{}/api/sessions/t/term?token={OWNER}", srv.owner)).await.unwrap();
+    assert_eq!(close_of(guest).await, Some((1000, "outra conexao assumiu".to_string())));
+    assert_eq!(srv.st.term.active(), vec!["t".to_string()]);
+    assert_eq!(srv.python.hits_to("/api/sessions/t/term"), 0);
+}
+
 /// O preflight é o do `CORSMiddleware` do Starlette com `*` em tudo e sem credenciais: sem ele o
 /// convidado do PWA (outra origem) não resgata, não manda recado nem escreve.
 #[tokio::test(flavor = "multi_thread")]

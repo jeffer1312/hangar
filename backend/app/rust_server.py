@@ -176,12 +176,6 @@ def _runtime_ready(proc, instance: str) -> dict:
     return ready
 
 
-def _point_bridges(address: str | None, secret: str | None) -> None:
-    """Ponte Python → Rust no endereço privado dele, ou em nada; ela recusa endereço torto."""
-    from app import list_bridge
-    list_bridge.configure(address, secret)
-
-
 def _close_stdin(proc: subprocess.Popen) -> None:
     # Nada é escrito no cano, então fechar não tem o que despejar e não falha.
     if proc.stdin is not None:
@@ -250,9 +244,7 @@ class Supervisor:
                 "HANGAR_SERVER_LOG": str(server_log_path())}
 
     async def _start(self) -> str:
-        """`up`, `died` (morreu subindo), `silent` (vivo e calado até o prazo), `protocol` ou
-        `address` (endereço privado ausente ou inválido na saúde)."""
-        _point_bridges(None, None)
+        """`up`, `died` (morreu subindo), `silent` (vivo e calado até o prazo) ou `protocol`."""
         if self.proc is not None:
             from app.runtime_process import cleanup
             await asyncio.to_thread(cleanup, self.proc)
@@ -287,17 +279,6 @@ class Supervisor:
                     return "protocol"
                 if self.proc.poll() is not None:
                     return "died"
-                address = health.get("terminal_address")
-                try:
-                    if address is None:
-                        raise ValueError("missing terminal address")
-                    _point_bridges(address, env["HANGAR_INTERNAL_SECRET"])
-                except ValueError:
-                    # Sem o endereço privado o Rust não tem as pontes: é falha de partida.
-                    _point_bridges(None, None)
-                    _log.error("hangar-server sem endereço privado válido na saúde")
-                    diag.registrar("hangar_server.partida", "erro", codigo="endereco_invalido")
-                    return "address"
                 return "up"
             await asyncio.sleep(_POLL)
         return "silent"
@@ -308,13 +289,13 @@ class Supervisor:
         try:
             while True:
                 state = await self._start()
-                if state in ("silent", "protocol", "address") and self.stopping():
+                if state in ("silent", "protocol") and self.stopping():
                     await self.stop()
                     return "parada"
-                if state in ("silent", "protocol", "address"):
-                    # Religar não adianta: o mesmo binário volta calado, com o mesmo protocolo ou sem o endereço.
+                if state in ("silent", "protocol"):
+                    # Religar não adianta: o mesmo binário volta calado ou com o mesmo protocolo.
                     await self.stop()
-                    return {"silent":"sem_resposta", "protocol":"protocolo", "address":"endereco_privado"}[state]
+                    return {"silent":"sem_resposta", "protocol":"protocolo"}[state]
                 if state == "up" and not self.announced:
                     print(f"[hangar] hangar-server de pé em {listen_addr(self.host, self.port)}; "
                           f"o Python atende atrás dele em 127.0.0.1:{self.upstream_port}", flush=True)
@@ -338,7 +319,6 @@ class Supervisor:
                             _log.warning("registro de contenção do hangar-server não gravou: %s", e)
                             diag.registrar("hangar_server.registro_falhou", "aviso", **diag.erro_campos(e))
                         record_failed = True
-                _point_bridges(None, None)
                 # Parada normal (systemctl, Ctrl+C) leva o filho junto, no mesmo instante em que o uvicorn
                 # recebe o sinal: dá um respiro para a flag dele subir e decide ANTES de qualquer ação.
                 await asyncio.sleep(_POLL)
@@ -366,7 +346,6 @@ class Supervisor:
             return "erro"
 
     async def stop(self) -> None:
-        _point_bridges(None, None)
         proc = self.proc
         if proc is None:
             return
@@ -430,7 +409,7 @@ async def serve(server: uvicorn.Server, sockets: list[socket.socket], binary: Pa
         diag.registrar("hangar_server.reserva", "erro", codigo=reason)
         supervisor.announced = False
         # O mesmo binário falha igual nestes: só se tenta de novo depois de ele mudar no disco.
-        stamp = _stamp(binary) if reason in ("sem_resposta", "protocolo", "endereco_privado") else None
+        stamp = _stamp(binary) if reason in ("sem_resposta", "protocolo") else None
         retry = asyncio.create_task(_retry_wait(supervisor, stamp))
         await asyncio.wait({serving, retry}, return_when=asyncio.FIRST_COMPLETED)
         if serving.done():

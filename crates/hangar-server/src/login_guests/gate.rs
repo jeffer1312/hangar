@@ -95,9 +95,13 @@ impl Watcher {
             None => std::future::pending().await,
         }
     }
+    /// Confere antes da primeira espera: login revogado entre o porteiro e a abertura fecha na hora.
     pub async fn until_ended(&self) {
+        let mut first = true;
         loop {
-            tokio::time::sleep(Duration::from_secs(5)).await;
+            if !std::mem::take(&mut first) {
+                tokio::time::sleep(Duration::from_secs(5)).await;
+            }
             let service = self.st.login_guests.clone();
             let token = self.token.clone();
             let guest = tokio::task::spawn_blocking(move || service.store.lookup(token.as_bytes()))
@@ -295,4 +299,26 @@ pub(crate) async fn terminal_origin_allowed(st: &Arc<AppState>, headers: &axum::
         let extras:Vec<String> = configured.split(',').chain(saved.split(',')).map(str::trim).filter(|v|!v.is_empty()).map(str::to_owned).collect();
         crate::machine_peers::origin_allowed(&home, backend.as_deref(), &origin, host.as_deref(), &public, &extras)
     }).await.unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Login que já não existe quando o vigia nasce fecha na hora, sem esperar os 5 s.
+    #[tokio::test]
+    async fn a_watcher_born_after_the_revocation_ends_at_once() {
+        let home = tempfile::tempdir().unwrap();
+        let cfg = crate::config::Config { listen: "127.0.0.1:0".parse().unwrap(), upstream: "127.0.0.1:9".parse().unwrap(),
+            internal_secret: "s".into(), auth_token: "dono".into(), log_path: None, trusted: crate::auth::TrustedHosts::parse("127.0.0.1") };
+        let mut state = AppState::new(cfg);
+        state.login_guests = Arc::new(crate::login_guests::Service::new(crate::login_guests::Settings {
+            guests: home.path().join("guests.json"), vault: home.path().join("vault.json"),
+            runtime_config: home.path().join("config.json"), sync_enabled: false, bootstrap: String::new(),
+            secret: b"fixture".to_vec(), secure: false, rate_max: 10.into(), rate_window: 300.into() }));
+        let watcher = Watcher { st: Arc::new(state), token: "login-revogado".into(), method: "GET".into(),
+            path: "/api/sessions/s0/term".into() };
+        tokio::time::timeout(Duration::from_secs(1), watcher.until_ended()).await
+            .expect("o vigia confere antes da primeira espera");
+    }
 }

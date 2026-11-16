@@ -25,6 +25,12 @@ pub(crate) async fn has_session(cfg: &TermConfig, name: &str) -> Result<bool, Mu
     Ok(tmux(cfg, &["has-session", "-t", &format!("={name}")]).await?.status.success())
 }
 
+/// O shell separado de uma sessão (`term-X`) nasce com `@cp_hidden` = 1; sessão comum com esse nome, não.
+pub(crate) async fn hidden_shell(cfg: &TermConfig, name: &str) -> Result<bool, MuxDown> {
+    let out = tmux(cfg, &["show-options", "-v", "-t", &format!("={name}:"), "@cp_hidden"]).await?;
+    Ok(out.status.success() && String::from_utf8_lossy(&out.stdout).trim() == "1")
+}
+
 fn valid_ident(ident: &str) -> bool {
     ident.len() == 6 && ident.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }

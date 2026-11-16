@@ -687,8 +687,8 @@ async fn owner_only(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
     resp
 }
 
-/// Rotas cujo handler sabe atender o dono e o convidado; `fallback` é o repasse de cada porta. As que o
-/// Python ainda tem (`term`, `nav-remoto`, `rename`, `navegador`) seguem a ele em outro método, pelo `pass_any`.
+/// Rotas cujo handler sabe atender o dono e o convidado; `fallback` é o repasse de cada porta. Outro
+/// método no `term` e no `nav-remoto` vai ao `pass_any`, que dá a recusa do caminho sem rota.
 fn session_routes<H, T>(fallback: H) -> Router<Arc<AppState>>
 where H: axum::handler::Handler<T, Arc<AppState>>, T: 'static {
     Router::new()
@@ -797,8 +797,7 @@ fn terminal_router_with(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> 
         .route("/__hangar_server/subagents", get(crate::subagents::private))
         .route("/__hangar_server/share", axum::routing::post(crate::share::bridge::private));
     let share = private_share_router(&state, pair);
-    router.route("/__hangar_server/term", get(crate::term::private_ws))
-        .route("/__hangar_server/state/{name}/events", get(crate::side::private_events))
+    router.route("/__hangar_server/state/{name}/events", get(crate::side::private_events))
         .route("/__hangar_server/remote-browser", get(crate::remote_browser::ws::private))
         .with_state(state.clone())
         .merge(share)
@@ -1382,24 +1381,19 @@ pub(crate) async fn pass(st: &AppState, mut req: Request, fwd: &Forward) -> Resp
             admitted_forward.auth_receipt = cached.receipt().await;
         }
     }
-    let upgrade = req.headers().contains_key(header::UPGRADE);
     let mut resp = proxy::forward(&st.http, st.cfg.upstream, req, &admitted_forward).await;
     resp.extensions_mut().insert(crate::migration_status::Forwarded);
     if !st.auth.shared() { match resp.status() {
         StatusCode::UNAUTHORIZED => if let Err(e) = st.auth.record_failure(&fwd.client_ip).await { return auth::unavailable(e); },
-        // WebSocket recusado antes do aceite chega como 403 e o Python já contou a falha.
-        // Um 403 de origem também conta: só desliga o atalho, o lado seguro.
-        StatusCode::FORBIDDEN if upgrade => if let Err(e) = st.auth.record_failure(&fwd.client_ip).await { return auth::unavailable(e); },
         StatusCode::TOO_MANY_REQUESTS => if let Err(e) = st.auth.mark_blocked_async(&fwd.client_ip).await { return auth::unavailable(e); },
         _ => {}
     } }
     resp
 }
 
-/// Os caminhos que o Python ainda atende; o resto não sai do Rust. Cada rota migrada sai daqui.
-fn python_answers(path: &str) -> bool {
-    hangar_core::http::uvicorn_path(path).strip_prefix("/api/sessions/").and_then(|rest| rest.strip_suffix("/term"))
-        .is_some_and(|name| !name.is_empty() && !name.contains('/'))
+/// Os caminhos que o Python ainda atende: nenhum. O repasse que sobra no `pass` sai com o upstream (R5).
+fn python_answers(_path: &str) -> bool {
+    false
 }
 
 /// Caminho sem handler e sem Python: o dono leva 404, quem não é o dono a recusa de sempre (401
