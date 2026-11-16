@@ -39,7 +39,6 @@ pub struct AppState {
     pub startup: crate::startup::Readiness,
     pub startup_producers: Arc<crate::startup::Producers>,
     pub config_sync_context: Option<crate::config_sync::export::Context>,
-    pub migration_branch: Arc<crate::migration_branch::Service>,
     settings_snapshot: std::sync::OnceLock<Result<Arc<crate::machine_peers::dotenv::SettingsSnapshot>,String>>,
     pub login_guests: Arc<crate::login_guests::Service>,
     pub omp_sync: Arc<std::sync::OnceLock<Arc<crate::omp_sync::Service>>>,
@@ -275,7 +274,7 @@ impl AppState {
         };
         let mission=Arc::new(hangar_mission::Store::new(hangar_dir.join("mission")));
         let groups = crate::groups::from_env(list.env().dirs.as_ref(), server_id.clone(),
-            Arc::new(crate::groups::orq::PythonOrq::new(cfg.upstream, cfg.internal_secret.clone(), http.clone())
+            Arc::new(crate::groups::orq::PythonOrq::new()
                 .with_paths(list.env().dirs.as_ref().map(|d| d.home.clone()).unwrap_or_default(),
                     list.env().dirs.as_ref().map(|d| d.claude.join(".hangar-pair")).unwrap_or_default())
                 .with_mux(list.env().capture_program.to_string_lossy().into_owned())), list.clone(), diag.clone(), mission.clone());
@@ -283,7 +282,6 @@ impl AppState {
         let accounts = crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::capture());
         let search = crate::search::Index::server(accounts.clone());
         AppState { scheduled_tasks: Arc::default(), desktop_theme: Arc::new(hangar_desktop_theme::DesktopTheme::system()), local_commands: Arc::new(crate::auxiliary::NativeCommands(accounts.env.clone())), startup: Default::default(), startup_producers: Arc::default(), settings_snapshot: std::sync::OnceLock::new(), login_guests: Arc::new(crate::login_guests::Service::uninitialized(&accounts.env.home,&accounts.env.claude_base)), accounts, search, claude_p: None, command_catalog: Arc::default(), groups, server_id, machine_identity: std::sync::RwLock::new(None), peers: Arc::new(crate::groups::peers_from_env().with_connect_route()), auth: Auth::configured(&cfg.auth_token), http, side, cfg, terminal, terminal_address: None, public_v6: None, front: None, connect: None, preview: None, connect_previews: Arc::default(), connect_preview_reach: Arc::new(crate::share::owner_routes::Reach::preview()), diag,
-            migration_branch: Arc::default(),
             workspace_slots: Arc::new(tokio::sync::Semaphore::new(4)),
             login_browser: Arc::default(),
             interactions, plugin,
@@ -795,9 +793,7 @@ fn terminal_router_with(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> 
         .route("/__hangar_server/claude/{*rest}", axum::routing::any(crate::session_write::bridge::claude))
         .route("/__hangar_server/jev/aux", axum::routing::any(crate::jev_aux::private))
         .route("/__hangar_server/subagents", get(crate::subagents::private))
-        .route("/__hangar_server/share", axum::routing::post(crate::share::bridge::private))
-        .layer(axum::middleware::from_fn(crate::migration_status::count_bridge));
-    // Painel e canal do estado ficam fora da contagem: conexões longas, não chamadas da ponte.
+        .route("/__hangar_server/share", axum::routing::post(crate::share::bridge::private));
     let share = private_share_router(&state, pair);
     router.route("/__hangar_server/term", get(crate::term::private_ws))
         .route("/__hangar_server/state/{name}/events", get(crate::side::private_events))
@@ -823,7 +819,72 @@ fn router_with(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router {
         .layer(axum::middleware::from_fn(crate::login_guests::public_contract))
         .layer(axum::middleware::from_fn(crate::config_sync::runtime_http::cors_layer))
         .layer(axum::middleware::from_fn_with_state(state.clone(), crate::connect::gate::device_token_layer))
-        .layer(axum::middleware::from_fn_with_state(state, crate::startup::guard))
+        .layer(axum::middleware::from_fn_with_state(state.clone(), crate::startup::guard))
+        .layer(axum::middleware::from_fn_with_state(state, edge_rules))
+}
+
+/// Regras de toda porta pública, antes do login: preflight de qualquer caminho, teto do corpo e a
+/// linha `api.servidor` do pedido que falhou no servidor ou demorou.
+async fn edge_rules(State(st): State<Arc<AppState>>, req: Request, next: axum::middleware::Next) -> Response {
+    if let Some(response) = crate::http_cors::preflight(req.method(), req.headers()) { return response; }
+    if let Some(mut response) = crate::http_body_limit::precheck(req.headers()) {
+        crate::http_cors::apply(req.headers(), &mut response);
+        return response;
+    }
+    let (method, path, correlation) = (req.method().clone(), req.uri().path().to_owned(), diag_req(&req));
+    // Corpo em partes acima do teto: o leitor recebe o erro de limite, que vira 413.
+    let req = req.map(|body| Body::new(http_body_util::Limited::new(body, crate::http_body_limit::MAX_BYTES)));
+    let started = Instant::now();
+    let response = next.run(req).await;
+    access_line(&st, &method, &path, &correlation, response, started.elapsed()).await
+}
+
+/// A linha `api.servidor` do Python, agora para todo pedido do Rust: só 5xx ou 1 s até os cabeçalhos.
+/// O diário da tela e o que segue ao Python ficam de fora; quem já grava a própria linha também.
+async fn access_line(st: &AppState, method: &Method, path: &str, correlation: &str, response: Response, elapsed: Duration) -> Response {
+    let status = response.status();
+    let logs_itself = (*method == Method::POST && path == "/api/sessions")
+        || (*method == Method::POST && path.starts_with("/api/archive/") && path.ends_with("/resume"))
+        || path.strip_prefix("/api/sessions/").and_then(|rest| rest.split_once('/')).is_some_and(|(_, tail)| tail.starts_with("plugin/"));
+    if !(status.is_server_error() || elapsed >= Duration::from_secs(1)) || path.starts_with("/api/diag")
+        || logs_itself || response.extensions().get::<crate::migration_status::Forwarded>().is_some() {
+        return response;
+    }
+    let (response, cause) = error_code(response).await;
+    let mut line = serde_json::json!({"evento": "api.servidor",
+        "nivel": if status.is_server_error() { "erro" } else if status.is_client_error() { "aviso" } else { "ok" },
+        "codigo": status.as_u16().to_string(), "detalhe": format!("{method} {}", masked_route(path)),
+        "ms": u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX), "etapa": "cabecalhos"});
+    if !correlation.is_empty() { line["req"] = serde_json::json!(correlation); }
+    if let Some(cause) = cause { line["causa"] = serde_json::json!(cause); }
+    st.diag.record_line(line);
+    response
+}
+
+/// `detail.code` ou `code` do corpo de erro JSON pequeno; o corpo segue igual e nunca vai ao diário.
+async fn error_code(response: Response) -> (Response, Option<String>) {
+    use axum::body::HttpBody;
+    let json = response.headers().get(header::CONTENT_TYPE).is_some_and(|v| v.as_bytes().starts_with(b"application/json"));
+    if !json || !response.body().size_hint().exact().is_some_and(|n| n <= 8192) { return (response, None); }
+    let (parts, body) = response.into_parts();
+    let Ok(bytes) = axum::body::to_bytes(body, 8192).await else { return (Response::from_parts(parts, Body::empty()), None) };
+    let code = serde_json::from_slice::<serde_json::Value>(&bytes).ok().and_then(|value| {
+        let code = match value.get("detail") { Some(detail) if detail.is_object() => detail.get("code"), _ => value.get("code") };
+        code.and_then(serde_json::Value::as_str).map(|code| code.chars().take(64).collect())
+    });
+    (Response::from_parts(parts, Body::from(bytes)), code)
+}
+
+/// O caminho no diário sem nome de sessão nem id: só palavras de rota (minúsculas, sem dígito) ficam.
+// shortcut: um nome todo em minúsculas fora de `/api/sessions/` (convidado, atalho) fica visível; trocar pelo
+// modelo de rota do roteador se isso pesar.
+fn masked_route(path: &str) -> String {
+    let session = path.starts_with("/api/sessions/");
+    let parts: Vec<&str> = path.split('/').enumerate().map(|(i, part)| {
+        let word = part.len() <= 24 && part.bytes().all(|b| b.is_ascii_lowercase() || b == b'-' || b == b'_');
+        if part.is_empty() || (word && !(session && i == 3)) { part } else { "*" }
+    }).collect();
+    parts.join("/").chars().take(120).collect()
 }
 
 fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router {
@@ -1256,6 +1317,7 @@ pub(crate) async fn pass(st: &AppState, mut req: Request, fwd: &Forward) -> Resp
     } else {None};
     // Pedido da ponte do Codex com terminal nunca volta ao Python: ele trata o que o Rust não atende.
     if req.extensions().get::<crate::session_write::bridge::BridgedOwner>().is_some() { return StatusCode::MISDIRECTED_REQUEST.into_response(); }
+    if !python_answers(req.uri().path()) { return without_python(st, req, fwd).await; }
     if let Some(grant) = &fwd.guest {
         // Assinado aqui, não no porteiro: a escrita pode esperar a porta da sessão mais que a validade.
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
@@ -1275,11 +1337,7 @@ pub(crate) async fn pass(st: &AppState, mut req: Request, fwd: &Forward) -> Resp
         }
     }
     let upgrade = req.headers().contains_key(header::UPGRADE);
-    let configuration = req.uri().path() == "/api/config"
-        && matches!(*req.method(), Method::GET | Method::POST | Method::PATCH);
-    if configuration { req.headers_mut().remove(header::ACCEPT_ENCODING); }
     let mut resp = proxy::forward(&st.http, st.cfg.upstream, req, &admitted_forward).await;
-    if configuration { resp = crate::speech::configuration_reply(st, resp).await; }
     resp.extensions_mut().insert(crate::migration_status::Forwarded);
     if !st.auth.shared() { match resp.status() {
         StatusCode::UNAUTHORIZED => if let Err(e) = st.auth.record_failure(&fwd.client_ip).await { return auth::unavailable(e); },
@@ -1290,6 +1348,36 @@ pub(crate) async fn pass(st: &AppState, mut req: Request, fwd: &Forward) -> Resp
         _ => {}
     } }
     resp
+}
+
+/// Os caminhos que o Python ainda atende; o resto não sai do Rust. Cada rota migrada sai daqui.
+fn python_answers(path: &str) -> bool {
+    let path = hangar_core::http::uvicorn_path(path);
+    matches!(path.as_str(), "/api/whoami" | "/api/diag" | "/api/diag/arquivo")
+        || path.strip_prefix("/api/sessions/").and_then(|rest| rest.strip_suffix("/term"))
+            .is_some_and(|name| !name.is_empty() && !name.contains('/'))
+}
+
+/// Caminho sem handler e sem Python: o dono leva 404, quem não é o dono a recusa de sempre (401
+/// contado, 429, 403 do convidado com login), e o convidado de convite o 404 que o Python dava.
+async fn without_python(st: &AppState, req: Request, fwd: &Forward) -> Response {
+    let headers = req.headers().clone();
+    let guest = fwd.guest.is_some() || on_guest_port(&req);
+    let login = req.extensions().get::<crate::login_guests::gate::Login>().is_some()
+        || matches!(crate::share::caller::caller(&req), Some(Caller::Guest(_)));
+    let token = auth::presented_token(req.headers(), req.uri().query(), req.method(), fwd.https);
+    let mut response = if guest {
+        not_found(&headers)
+    } else if login {
+        crate::login_guests::gate::refused()
+    } else {
+        match hangar_core::edge::require_auth(&st.auth, fwd.client_ip.clone(), token).await {
+            Ok(()) => not_found(&headers),
+            Err(refusal) => refusal,
+        }
+    };
+    crate::http_cors::apply(&headers, &mut response);
+    response
 }
 
 // O porteiro concede os catálogos globais só a convite, nunca a um par de leitura.

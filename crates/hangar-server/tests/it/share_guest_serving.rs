@@ -302,39 +302,28 @@ async fn guest_does_not_reach_the_hangar_terminal_routes() {
     assert_eq!(srv.python.hits_to("/api/hangar-terminals"), 0);
 }
 
-// ── repasse assinado ao Python ───────────────────────────────────────────────────────────────
+// ── caminho que o Python não atende ──────────────────────────────────────────────────────────
 
-/// Confere o `x-hangar-guest` como o `guest_header.verify` do Python: HMAC sobre método, caminho
-/// cru e payload; devolve o payload.
-fn verified(h: &axum::http::HeaderMap, method: &str, raw_path: &str) -> Value {
-    use base64::Engine;
-    let value = h["x-hangar-guest"].to_str().unwrap();
-    let (payload, mac) = value.split_once('.').unwrap();
-    let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, SECRET.as_bytes());
-    let expected: String = ring::hmac::sign(&key, format!("{method}\n{raw_path}\n{payload}").as_bytes())
-        .as_ref().iter().map(|b| format!("{b:02x}")).collect();
-    assert_eq!(mac, expected, "HMAC do cabeçalho");
-    let body: Value = serde_json::from_slice(&base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(payload).unwrap()).unwrap();
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
-    let exp = body["exp"].as_u64().unwrap();
-    assert!(exp > now && exp <= now + 31, "validade curta: {exp} vs {now}");
-    body
-}
-
+/// Convidado em caminho sem handler: o 404 que o Python dava sai do Rust, e nada é repassado (I-19).
 #[tokio::test(flavor = "multi_thread")]
-async fn guest_forward_is_signed_and_carries_no_invite_token() {
+async fn guest_path_without_handler_is_404_from_the_rust() {
+    use tokio::io::AsyncReadExt;
     let dir = tempfile::tempdir().unwrap();
     let srv = plain_srv(dir.path(), |_| {}).await;
     let t = srv.g.token("cc", Kind::Share);
-    let r = client().get(format!("http://{}/api/sessions/cc/plan-preview?token={t}&x=1%202&y=a+b", srv.guest))
-        .header("x-hangar-guest", "forjado").send().await.unwrap();
-    assert_eq!((r.status().as_u16(), r.text().await.unwrap()), (200, "from-python".into()));
-    let (path, h) = srv.python.last_hit();
-    assert_eq!(path, "/api/sessions/cc/plan-preview?x=1%202&y=a+b");
-    assert!(!h.contains_key("authorization"));
-    assert_eq!(h["x-forwarded-for"], "127.0.0.1");
-    assert_eq!(verified(&h, "GET", "/api/sessions/cc/plan-preview")["s"], json!({"cc": "share"}));
-
+    let r = client().get(format!("http://{}/api/sessions/cc/plan-preview?token={t}", srv.guest)).send().await.unwrap();
+    assert_eq!(r.status().as_u16(), 404);
+    let mut s = tokio::net::TcpStream::connect(srv.guest).await.unwrap();
+    s.write_all(format!("GET /api/sessions/cc/proxy-ws-test?token={t} HTTP/1.1\r\nHost: h\r\n\
+        Connection: Upgrade\r\nUpgrade: websocket\r\n\r\n").as_bytes()).await.unwrap();
+    let mut head = Vec::new();
+    let mut byte = [0u8; 1];
+    while !head.ends_with(b"\r\n\r\n") {
+        tokio::time::timeout(Duration::from_secs(5), s.read_exact(&mut byte)).await.unwrap().unwrap();
+        head.push(byte[0]);
+    }
+    assert!(head.starts_with(b"HTTP/1.1 404"), "{}", String::from_utf8_lossy(&head));
+    assert_eq!(srv.python.hits_to("/api/sessions/cc/plan-preview") + srv.python.hits_to("/api/sessions/cc/proxy-ws-test"), 0);
 }
 
 /// IP desta máquina na rede da casa; `None` sem rede (o teste que precisa dele não roda).
@@ -399,35 +388,6 @@ async fn r1_01_the_invite_and_the_reading_pair_never_close_on_the_guest_port() {
     }
     assert_eq!(list_support::calls(dir.path(), "kill-session"), 0, "nada foi encerrado");
     assert_eq!(srv.python.hits_to("/api/sessions/s0"), 0);
-}
-
-/// O proxy genérico precisa encerrar o WebSocket quando o convite é revogado.
-#[tokio::test(flavor = "multi_thread")]
-async fn forwarded_guest_websocket_closes_4410_when_revoked() {
-    use tokio::io::AsyncReadExt;
-    let dir = tempfile::tempdir().unwrap();
-    let srv = plain_srv(dir.path(), |_| {}).await;
-    let t = srv.g.token("cc", Kind::Share);
-    let mut s = tokio::net::TcpStream::connect(srv.guest).await.unwrap();
-    s.write_all(format!("GET /api/sessions/cc/proxy-ws-test?token={t} HTTP/1.1\r\nHost: h\r\n\
-        Connection: Upgrade\r\nUpgrade: websocket\r\n\r\n").as_bytes()).await.unwrap();
-    let mut head = Vec::new();
-    let mut byte = [0u8; 1];
-    while !head.ends_with(b"\r\n\r\n") {
-        tokio::time::timeout(Duration::from_secs(5), s.read_exact(&mut byte)).await.unwrap().unwrap();
-        head.push(byte[0]);
-    }
-    assert!(head.starts_with(b"HTTP/1.1 101"), "{}", String::from_utf8_lossy(&head));
-    s.write_all(b"ola").await.unwrap();
-    let mut got = [0u8; 3];
-    tokio::time::timeout(Duration::from_secs(5), s.read_exact(&mut got)).await.unwrap().unwrap();
-    assert_eq!(&got, b"ola");
-    let (_, h) = srv.python.last_hit();
-    verified(&h, "GET", "/api/sessions/cc/proxy-ws-test");
-    srv.g.revoke_all();
-    let mut rest = Vec::new();
-    tokio::time::timeout(Duration::from_secs(12), s.read_to_end(&mut rest)).await.expect("o vigia fecha em até 5 s").unwrap();
-    assert_eq!(rest, [0x88, 0x02, 0x11, 0x3A]);
 }
 
 // ── stream da sessão ─────────────────────────────────────────────────────────────────────────

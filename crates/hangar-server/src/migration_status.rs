@@ -4,14 +4,12 @@
 use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::sync::{Arc, LazyLock, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
-use axum::body::Body;
 use axum::extract::{ConnectInfo, Request, State};
 use axum::http::{Method, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
-use http_body_util::BodyExt;
 use serde_json::{Value, json};
 
 use crate::routes::{AppState, cors, gate, pass};
@@ -26,12 +24,7 @@ pub const AREAS: [&str; 22] = [
     "dictation", "mods", "static", "other",
 ];
 
-/// Trabalho que o Python pede ao Rust por trás (porta privada e canal do runtime).
-pub const PRIVATE: [&str; 6] = ["send_headless", "send_terminal", "terminal_observe", "workspace_bridge", "list_bridge", "dictation_bridge"];
-
 const WINDOW_MINUTES: u64 = 10;
-const FACTS_TIMEOUT: Duration = Duration::from_secs(5);
-const MAX_FACTS: usize = 64 * 1024;
 
 fn area(key: &str) -> usize {
     AREAS.iter().position(|a| *a == key).expect("área conhecida")
@@ -308,7 +301,6 @@ const PROBES: &[(&str, &str)] = &[
 struct Bucket {
     minute: u64,
     public: [[u32; 2]; AREAS.len()],
-    private: [u32; PRIVATE.len()],
 }
 
 static START: LazyLock<Instant> = LazyLock::new(Instant::now);
@@ -322,14 +314,9 @@ fn with_bucket(f: impl FnOnce(&mut Bucket)) {
         counts.pop_front();
     }
     if counts.back().is_none_or(|b| b.minute != minute) {
-        counts.push_back(Bucket { minute, public: [[0; 2]; AREAS.len()], private: [0; PRIVATE.len()] });
+        counts.push_back(Bucket { minute, public: [[0; 2]; AREAS.len()] });
     }
     f(counts.back_mut().unwrap());
-}
-
-pub fn count_private(key: &str) {
-    let Some(i) = PRIVATE.iter().position(|k| *k == key) else { return };
-    with_bucket(|b| b.private[i] += 1);
 }
 
 /// Camada da porta pública: conta cada pedido na área dele, pelo Rust ou repassado.
@@ -345,32 +332,16 @@ pub async fn count_public(req: Request, next: Next) -> Response {
     resp
 }
 
-/// Camada da porta privada: o que o Python pediu ao Rust por trás.
-pub async fn count_bridge(req: Request, next: Next) -> Response {
-    let key = match req.uri().path() {
-        "/__hangar_server/terminal" => "terminal_observe",
-        "/__hangar_server/list" => "list_bridge",
-        path if path.starts_with("/__hangar_server/dictation/") => "dictation_bridge",
-        _ => "",
-    };
-    count_private(key);
-    next.run(req).await
-}
-
-fn totals() -> ([[u64; 2]; AREAS.len()], [u64; PRIVATE.len()]) {
+fn totals() -> [[u64; 2]; AREAS.len()] {
     let mut public = [[0u64; 2]; AREAS.len()];
-    let mut private = [0u64; PRIVATE.len()];
     with_bucket(|_| {});
     for b in COUNTS.lock().unwrap().iter() {
         for (sum, n) in public.iter_mut().zip(b.public) {
             sum[0] += u64::from(n[0]);
             sum[1] += u64::from(n[1]);
         }
-        for (sum, n) in private.iter_mut().zip(b.private) {
-            *sum += u64::from(n);
-        }
     }
-    (public, private)
+    public
 }
 
 fn areas_json(counts: &[[u64; 2]; AREAS.len()]) -> Value {
@@ -386,91 +357,12 @@ fn areas_json(counts: &[[u64; 2]; AREAS.len()]) -> Value {
     }).collect()
 }
 
-const FACTS_TTL: Duration = Duration::from_secs(2);
-// Várias telas abertas (nativo, web, script) viram uma leitura do Python a cada 2 s, uma por vez.
-// O erro também fica guardado: com o Python travado, a fila de telas recebe o código em vez de
-// esperar o prazo uma atrás da outra.
-static FACTS: LazyLock<tokio::sync::Mutex<Option<(Instant, Result<Value, &'static str>)>>> = LazyLock::new(Default::default);
-
-async fn cached_python_facts(st: &AppState) -> Result<Value, &'static str> {
-    let mut cache = FACTS.lock().await;
-    if let Some((at, result)) = cache.as_ref() {
-        if at.elapsed() < FACTS_TTL {
-            return result.clone();
-        }
-    }
-    let result = python_facts(st).await;
-    if let Err(code) = result {
-        st.diag.report("migration_status.python", "", code, "o backend não devolveu os fatos da migração");
-    }
-    *cache = Some((Instant::now(), result.clone()));
-    result
-}
-
-async fn python_facts(st: &AppState) -> Result<Value, &'static str> {
-    let req = axum::http::Request::get(format!("http://{}/internal/migration/status", st.cfg.upstream))
-        .header("x-hangar-internal", &st.cfg.internal_secret)
-        .body(Body::empty())
-        .map_err(|_| "pedido")?;
-    let resp = tokio::time::timeout(FACTS_TIMEOUT, st.http.request(req)).await
-        .map_err(|_| "prazo")?
-        .map_err(|_| "conexao")?;
-    if !resp.status().is_success() {
-        return Err("status");
-    }
-    let body = http_body_util::Limited::new(resp.into_body(), MAX_FACTS);
-    let bytes = tokio::time::timeout(FACTS_TIMEOUT, body.collect()).await
-        .map_err(|_| "prazo")?
-        .map_err(|_| "tamanho")?
-        .to_bytes();
-    serde_json::from_slice(&bytes).map_err(|_| "json")
-}
-
-async fn owned_branch_fields(st: Arc<AppState>) -> Result<(Option<String>, Option<String>), String> {
-    static CLOCK: LazyLock<Instant> = LazyLock::new(Instant::now);
-    tokio::task::spawn_blocking(move || {
-        let home = &st.accounts.env.home;
-        let root = crate::install_root::root(home);
-        let branch = root.as_deref().and_then(|root| st.migration_branch.get(root, &st.accounts.env.base, CLOCK.elapsed()));
-        let update_branch = if matches!(crate::update::http::mode(home), crate::update::http::Mode::Package(_)) {
-            let channel = crate::update::channel(&crate::update::Layout::new(home));
-            if channel == "latest" { String::new() } else { channel }
-        } else {
-            let snapshot = st.settings_snapshot()?;
-            crate::machine_peers::live_config::update_channel(home, root.as_deref().map(|root|root.join("backend")).as_deref(), snapshot.environment(), "CP_UPDATE_BRANCH")?
-        };
-        Ok((branch, (!update_branch.is_empty()).then_some(update_branch)))
-    }).await.map_err(|error|error.to_string())?
-}
-
 /// `GET /api/migration/status` do dono. Convidado e outro método seguem ao Python, que recusa.
 pub async fn status(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
     let (fwd, owner) = match gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     if !owner || req.method() != Method::GET {
         return pass(&st, req, &fwd).await;
     }
-    let (mut python, python_error) = match cached_python_facts(&st).await {
-        Ok(v) => (v, Value::Null),
-        Err(code) => (Value::Null, json!(code)),
-    };
-    if python.is_object() {
-        let env = st.accounts.env.clone();
-        let pid = python["processes"]["python"]["pid"].as_u64().and_then(|pid| u32::try_from(pid).ok());
-        let version = tokio::task::spawn_blocking(move || pid.and_then(|pid| crate::boot_version::python_version(&env, pid))).await.ok().flatten();
-        python["version"] = json!(version.map(|version| version.describe).unwrap_or_else(|| "indisponivel".into()));
-        let (branch, update_branch) = match owned_branch_fields(st.clone()).await {
-            Ok(fields) => fields,
-            Err(_) => {
-                st.diag.report("migration_status.config", "", "migration_status_config_unavailable", "não foi possível ler a configuração do canal");
-                let mut response = crate::session_write::detail(axum::http::StatusCode::SERVICE_UNAVAILABLE, "migration_status_config_unavailable", "não foi possível ler a configuração do canal", json!({}));
-                cors(req.headers(), response.headers_mut());
-                return response;
-            }
-        };
-        python["branch"] = json!(branch);
-        python["update_branch"] = json!(update_branch);
-    }
-    let (public, private) = totals();
     let body = json!({
         "served_by": "rust",
         "rust": {
@@ -480,11 +372,8 @@ pub async fn status(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
             "protocol": crate::INTERNAL_PROTOCOL,
             "pid": std::process::id(),
         },
-        "python": python,
-        "python_error": python_error,
         "window_minutes": WINDOW_MINUTES,
-        "areas": areas_json(&public),
-        "private": PRIVATE.iter().zip(private).map(|(k, n)| json!({"key": k, "rust": n})).collect::<Vec<_>>(),
+        "areas": areas_json(&totals()),
     });
     let mut resp = ([(header::CONTENT_TYPE, "application/json"), (header::CACHE_CONTROL, "no-store")], body.to_string()).into_response();
     cors(req.headers(), resp.headers_mut());
@@ -494,6 +383,7 @@ pub async fn status(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::body::Body;
 
     #[test]
     fn every_area_has_a_probe_and_the_table_follows_the_router() {
@@ -653,22 +543,22 @@ mod tests {
             trusted: crate::auth::TrustedHosts::parse("127.0.0.1"),
         }));
         let mut router = crate::mcp::router(state, axum::Router::new());
-        let before = totals().0[area("mcp")];
+        let before = totals()[area("mcp")];
         let request = Request::builder().method(Method::POST).uri("/mcp")
             .extension(ConnectInfo("127.0.0.1:45000".parse::<SocketAddr>().unwrap()))
             .body(Body::empty()).unwrap();
         let response = router.call(request).await.unwrap();
         assert_eq!(response.status(), axum::http::StatusCode::UNAUTHORIZED);
-        let after = totals().0[area("mcp")];
+        let after = totals()[area("mcp")];
         assert_eq!([after[0] - before[0], after[1] - before[1]], [1, 0]);
         std::fs::write(std::env::var_os("HANGAR_MCP_COUNTER_PROOF").unwrap(), b"ok").unwrap();
     }
 
     #[test]
     fn counts_split_rust_and_python_by_area() {
-        let before = totals().0[area("dictation")];
+        let before = totals()[area("dictation")];
         with_bucket(|b| { b.public[area("dictation")][0] += 2; b.public[area("dictation")][1] += 1; });
-        let after = totals().0[area("dictation")];
+        let after = totals()[area("dictation")];
         assert_eq!([after[0] - before[0], after[1] - before[1]], [2, 1]);
     }
 }

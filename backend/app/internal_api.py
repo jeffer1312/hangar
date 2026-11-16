@@ -5,7 +5,6 @@ import secrets
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app import diag
-from app.internal_pool import internal_thread
 
 _LOOPBACK = {"127.0.0.1", "::1"}
 
@@ -42,9 +41,3 @@ router = APIRouter(prefix="/internal", dependencies=[Depends(require_internal)],
 async def ping() -> dict:
     """Sem resposta, o laço do Python está parado (vigia do Rust)."""
     return {"ok": True}
-
-
-@router.get("/migration/status")
-async def migration_status() -> dict:
-    from app import migration_status
-    return await internal_thread(migration_status.facts)

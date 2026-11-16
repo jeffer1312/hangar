@@ -114,11 +114,6 @@ fn current_python(base: &Path, pid: u32) -> Option<PythonLife> {
         && life.confirmed(&crate::list::procs::SystemProcs::default())).then_some(life)
 }
 
-/// Não guarda ausência: o Python do Windows pode publicar depois do primeiro pedido.
-pub(crate) fn python_version(env: &crate::accounts::environment::AccountEnvironment, pid: u32) -> Option<Snapshot> {
-    current_python(&crate::runtime::local_policy::log_base_in(env)?, pid).map(|life| life.version)
-}
-
 /// As associações já confirmadas sobrevivem ao processo. Sem associação, histórico não herda a vida atual.
 pub(crate) struct PythonDiary { base: Option<PathBuf>, lives: HashMap<(u32, String), Snapshot> }
 impl PythonDiary {
