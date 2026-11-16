@@ -685,3 +685,123 @@ async fn the_router_does_not_keep_the_state_alive() {
     drop(app);
     assert_eq!(Arc::strong_count(&state), before);
 }
+
+// `GET /api/whoami`: a mesma identidade do `who_am_i`, pela rota HTTP do dono. O esperado vem da
+// captura do Python (`quem_chama.py`, commit 1504c6c53).
+const UNKNOWN_KEY: &str = "chave de sessão sem terminal não corresponde a nenhum sidecar";
+const BAD_VOICE: &str = "assinatura da voz inválida (o hangar-server reiniciou ou não é a voz)";
+
+async fn whoami(s: &Scene, token: Option<&str>, headers: &[(&str, &str)]) -> (u16, Value) {
+    let mut req = client().get(format!("http://{}/api/whoami", s.addr));
+    if let Some(token) = token { req = req.bearer_auth(token); }
+    for (k, v) in headers { req = req.header(*k, *v); }
+    let resp = req.send().await.unwrap();
+    let status = resp.status().as_u16();
+    (status, resp.json().await.unwrap_or(Value::Null))
+}
+
+fn found(name: &str, origin: &str) -> (u16, Value) { (200, json!({"name": name, "origem": origin})) }
+
+fn unknown(msg: &str) -> (u16, Value) {
+    (404, json!({"detail": {"code": "erro_sessao_desconhecida", "params": {}, "msg": msg}}))
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn whoami_w01_voice_signature_wins_and_a_bad_one_never_falls_through() {
+    let s = scene().await;
+    let voice = hangar_server::voice::machines::voice_signature(SECRET).unwrap();
+    assert_eq!(whoami(&s, Some(OWNER), &[("x-hangar-voice", &voice), ("x-hangar-session", "s0")]).await, found("voz", "voz"));
+    let forged = hangar_server::voice::machines::voice_signature("outro").unwrap();
+    for bad in [forged.as_str(), "n1.dead", "semponto"] {
+        assert_eq!(whoami(&s, Some(OWNER), &[("x-hangar-voice", bad), ("x-hangar-session", "s0")]).await, unknown(BAD_VOICE), "{bad}");
+    }
+    assert_eq!(s.python.hits_to("/api/whoami"), 0, "o whoami não segue ao Python");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn whoami_w02_key_of_a_sidecar_beats_the_inherited_pane() {
+    let s = scene().await;
+    write_json(&s.home.join(".hangar/codex-sessions/cx-1.json"), json!({"name": "cx-1", "key": "cccccccccccccccccccccccccccccccc"}));
+    assert_eq!(whoami(&s, Some(OWNER), &[("x-hangar-key", "k123"), ("x-hangar-pane", "%7")]).await, found("sem-term", "chave"));
+    assert_eq!(whoami(&s, Some(OWNER), &[("x-hangar-key", "cccccccccccccccccccccccccccccccc")]).await, found("cx-1", "chave"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn whoami_w03_key_without_sidecar_or_record_is_404_and_never_the_pane() {
+    let s = scene().await;
+    assert_eq!(whoami(&s, Some(OWNER), &[("x-hangar-key", "nada"), ("x-hangar-pane", "%7")]).await, unknown(UNKNOWN_KEY));
+    // O registro existe em minúsculas; a chave em maiúsculas não o acha (a captura do Python).
+    let key = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+    write_json(&s.home.join(format!(".hangar/session-specs/{key}.json")), json!({}));
+    assert_eq!(whoami(&s, Some(OWNER), &[("x-hangar-key", &key.to_uppercase()), ("x-hangar-pane", "%7")]).await, unknown(UNKNOWN_KEY));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn whoami_w04_key_of_a_terminal_session_goes_on_to_the_pane() {
+    let s = scene().await;
+    let key = "0123456789abcdef0123456789abcdef";
+    write_json(&s.home.join(format!(".hangar/session-specs/{key}.json")), json!({}));
+    assert_eq!(whoami(&s, Some(OWNER), &[("x-hangar-key", key), ("x-hangar-pane", "%7")]).await, found("beta", "pane"));
+    // Diferença aceita (decisão 14): a chave no ambiente da sessão resolve antes do pane repetido.
+    let renamed = "fedcba9876543210fedcba9876543210";
+    write_json(&s.home.join(format!(".hangar/session-specs/{renamed}.json")), json!({}));
+    assert_eq!(whoami(&s, Some(OWNER), &[("x-hangar-key", renamed), ("x-hangar-pane", "%1")]).await, found("s1", "chave"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn whoami_w05_only_a_unique_pane_resolves() {
+    let s = scene().await;
+    assert_eq!(whoami(&s, Some(OWNER), &[("x-hangar-pane", "%7")]).await, found("beta", "pane"));
+    assert_eq!(whoami(&s, Some(OWNER), &[("x-hangar-pane", "%1"), ("x-hangar-session", "s0")]).await, found("s0", "nome"));
+    assert_eq!(whoami(&s, Some(OWNER), &[("x-hangar-pane", "%1")]).await, unknown(hangar_server::mcp::identity::HINT));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn whoami_w06_name_only_of_a_live_session() {
+    let s = scene().await;
+    assert_eq!(whoami(&s, Some(OWNER), &[("x-hangar-session", "sem-term")]).await, found("sem-term", "nome"));
+    assert_eq!(whoami(&s, Some(OWNER), &[("x-hangar-session", "s1")]).await, found("s1", "nome"));
+    for dead in ["zeta", "ção"] {
+        assert_eq!(whoami(&s, Some(OWNER), &[("x-hangar-session", dead)]).await, unknown(hangar_server::mcp::identity::HINT), "{dead}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn whoami_w07_nothing_resolved_is_the_404_with_the_hint() {
+    let s = scene().await;
+    assert_eq!(whoami(&s, Some(OWNER), &[]).await, unknown(hangar_server::mcp::identity::HINT));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn whoami_w08_blank_headers_are_absent_and_values_are_trimmed() {
+    let s = scene().await;
+    assert_eq!(whoami(&s, Some(OWNER), &[("x-hangar-key", "   "), ("x-hangar-session", "s0")]).await, found("s0", "nome"));
+    assert_eq!(whoami(&s, Some(OWNER), &[("X-Hangar-Session", "  s0  ")]).await, found("s0", "nome"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn whoami_w09_only_who_has_access_and_never_forwarded() {
+    let s = scene().await;
+    let refused = json!({"detail": {"code": "erro_nao_autorizado", "params": {}, "msg": "unauthorized"}});
+    for token in [None, Some("outro")] {
+        let (status, body) = whoami(&s, token, &[("x-hangar-session", "s0")]).await;
+        assert_eq!((status, &body["detail"]["code"]), (401, &refused["detail"]["code"]), "{token:?}: {body}");
+    }
+    // Cabeçalho de convidado forjado por quem não é loopback não vale como convidado.
+    let (status, _) = whoami(&s, None, &[("x-hangar-guest", "eyJzIjoge319.00"), ("x-hangar-session", "s0")]).await;
+    assert_eq!(status, 401);
+    let by_query = client().get(format!("http://{}/api/whoami?token={OWNER}", s.addr)).header("x-hangar-session", "s0").send().await.unwrap();
+    assert_eq!(by_query.status(), 200);
+    let by_cookie = client().get(format!("http://{}/api/whoami", s.addr)).header("cookie", format!("cp_token={OWNER}"))
+        .header("x-hangar-session", "s0").send().await.unwrap();
+    assert_eq!(by_cookie.status(), 200);
+    assert_eq!(s.python.hits_to("/api/whoami"), 0);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn whoami_w10_a_mux_that_does_not_answer_is_no_pane_not_a_500() {
+    let s = scene().await;
+    crate::write_executable(&s._dir.path().join("tmux"), "#!/bin/sh\nexit 1\n");
+    assert_eq!(whoami(&s, Some(OWNER), &[("x-hangar-pane", "%7")]).await, unknown(hangar_server::mcp::identity::HINT));
+    assert_eq!(whoami(&s, Some(OWNER), &[("x-hangar-pane", "%7"), ("x-hangar-session", "sem-term")]).await, found("sem-term", "nome"));
+}
