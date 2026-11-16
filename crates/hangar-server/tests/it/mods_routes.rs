@@ -202,20 +202,25 @@ async fn input_outside_the_surface_is_refused_in_rust() {
     assert_eq!(body["detail"]["msg"], "Nesta sessão, o campo do mod só aceita digitação no terminal ou não está ligado ao app.");
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn transfer_in_progress_is_refused_before_the_mod() {
     // A troca retém a porta da sessão: toda operação, inclusive cada `change` do campo, é recusada na hora.
-    let (server, registry, link) = setup_gated(FakeLink::default()).await;
+    // A rota chamada direto, no relógio parado: qualquer espera dela avança o tempo medido, e a volta pela
+    // rede, que sob carga passa de 1 s sem a rota esperar nada, fica de fora.
+    let link = FakeLink::default();
+    let (st, registry) = unserved_mods("s", Arc::new(link.clone()));
     registry.ingress().hold("s", Duration::from_secs(1)).await.unwrap();
     for (route, body) in [("press", abrir()), ("show", json!({"site": "painel"})),
                           ("input", json!({"site": "painel", "plugin": "vitrine", "key": "V18-campo", "kind": "change", "value": "o"}))] {
-        let ((status, answer), took) = timed_post(server, "s", route, body, Some(OWNER)).await;
+        let start = tokio::time::Instant::now();
+        let (status, answer) = mods_route(st.clone(), "s", route, body).await;
+        let took = start.elapsed();
         assert_eq!((status, answer["detail"]["code"].as_str()), (409, Some("session_transfer_busy")), "{route}");
         assert!(took < Duration::from_secs(1), "{route}: {took:?}");
     }
     assert!(link.calls.lock().unwrap().is_empty(), "nada chega ao mod durante a troca");
     registry.ingress().release("s");
-    assert_eq!(post(server, "s", "press", abrir(), Some(OWNER)).await.0, 200);
+    assert_eq!(mods_route(st, "s", "press", abrir()).await.0, 200);
 }
 
 #[tokio::test]
@@ -260,19 +265,24 @@ async fn server_without_runtime_refuses_with_code() {
     assert!(link.calls.lock().unwrap().is_empty());
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn busy_turn_answers_before_the_app_gives_up_without_the_mod() {
     // Um pedido preso segura a vez da sessão: o seguinte não passa do prazo do app e não chega ao mod.
-    let (_python, server, mods, link) = setup(FakeLink::default()).await;
-    let turn = mods.link("s").unwrap().lock;
+    // Medido no servidor, como no mod preso: a rota chamada direto, no relógio parado, leva exatamente o
+    // orçamento dela, sem a volta pela rede que sob carga come a folga até o app.
+    let link = FakeLink::default();
+    let (st, _registry) = unserved_mods("s", Arc::new(link.clone()));
+    let turn = st.mods.link("s").unwrap().lock;
     let held = turn.lock().await;
-    let ((status, body), took) = timed_post(server, "s", "press", json!({"site": "above-prompt", "plugin": "vitrine", "key": "abrir"}), Some(OWNER)).await;
+    let start = tokio::time::Instant::now();
+    let (status, body) = mods_route(st.clone(), "s", "press", json!({"site": "above-prompt", "plugin": "vitrine", "key": "abrir"})).await;
+    let took = start.elapsed();
     assert_eq!((status, body["detail"]["code"].as_str()), (409, Some("erro_mod_clique_sem_resposta")));
     assert!(took < APP_GIVES_UP, "{took:?}");
     assert!(link.calls.lock().unwrap().is_empty());
     // Solta a vez: o pedido seguinte passa.
     drop(held);
-    assert_eq!(post(server, "s", "press", json!({"site": "above-prompt", "plugin": "vitrine", "key": "abrir"}), Some(OWNER)).await.0, 200);
+    assert_eq!(mods_route(st, "s", "press", json!({"site": "above-prompt", "plugin": "vitrine", "key": "abrir"})).await.0, 200);
 }
 
 #[tokio::test]

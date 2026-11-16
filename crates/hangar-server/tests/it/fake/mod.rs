@@ -238,6 +238,45 @@ pub async fn serve_mods_gated(name: &str, link: Arc<dyn hangar_server::mods::sta
     (python, server, mods, registry)
 }
 
+/// O estado de `serve_mods_gated` sem servidor, para chamar a rota direto (`mods_route`).
+pub fn unserved_mods(name: &str, link: Arc<dyn hangar_server::mods::state::SurfaceLink>)
+    -> (Arc<hangar_server::routes::AppState>, Arc<hangar_server::runtime::gateway::RuntimeRegistry>) {
+    hangar_server::accounts::quotas::disable_open_network_read();
+    hangar_server::diag::disable_diary();
+    let state = hangar_server::routes::AppState::new(config("127.0.0.1"));
+    let registry = Arc::new(hangar_server::runtime::gateway::RuntimeRegistry::new("instance-test".into())
+        .with_mods(state.mods.clone()));
+    let _ = state.state.runtime.set(registry.clone());
+    state.mods.attach(name, 1, link);
+    (Arc::new(state), registry)
+}
+
+/// A rota dos mods chamada direto, como o roteador a chama para o dono em loopback, sem socket: o tempo
+/// medido é o do servidor (no relógio parado do tokio, exato), e o primeiro `poll` já marcou o começo
+/// do orçamento da rota.
+pub fn mods_route(st: Arc<hangar_server::routes::AppState>, name: &str, route: &str, body: Value)
+    -> impl std::future::Future<Output = (u16, Value)> + Send + 'static {
+    use axum::extract::{ConnectInfo, Path};
+    use hangar_server::mods::routes;
+    let request = axum::http::Request::builder().method("POST").uri(format!("/api/sessions/{name}/plugin/{route}"))
+        .header("content-type", "application/json").header("authorization", format!("Bearer {OWNER}"))
+        .body(Body::from(body.to_string())).unwrap();
+    let (name, route) = (name.to_owned(), route.to_owned());
+    async move {
+        let peer = ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 50000)));
+        let response = match route.as_str() {
+            "press" => routes::press(State(st), peer, Ok(Path(name)), request).await,
+            "close" => routes::close(State(st), peer, Ok(Path(name)), request).await,
+            "show" => routes::show(State(st), peer, Ok(Path(name)), request).await,
+            "input" => routes::input(State(st), peer, Ok(Path(name)), request).await,
+            other => panic!("rota de mod desconhecida: {other}"),
+        };
+        let status = response.status().as_u16();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        (status, serde_json::from_slice(&bytes).unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&bytes).into_owned())))
+    }
+}
+
 pub fn client() -> reqwest::Client {
     hangar_server::http_client().redirect(reqwest::redirect::Policy::none()).build().unwrap()
 }
