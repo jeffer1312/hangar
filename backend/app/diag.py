@@ -41,7 +41,6 @@ import time
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from functools import wraps
-from itertools import groupby
 from pathlib import Path
 from typing import Any
 
@@ -202,7 +201,6 @@ INICIO_EM_EXECUCAO = datetime.now().astimezone().isoformat(timespec="millisecond
 
 _NIVEIS = ("ok", "aviso", "erro")
 _TETO_DETALHE = 300
-_TETO_LOTE = 50        # linhas por POST: acima disso é ruído ou cliente com defeito
 # Quanto o relógio do aparelho pode estar à frente do servidor e o horário dele ainda valer. Não é
 # tolerância a relógio errado — é o trânsito do POST mais a diferença de arredondamento. Ver
 # `_ts_da_tela`.
@@ -424,19 +422,6 @@ def _escrever(linhas: list[dict[str, Any]]) -> bool:
     return True
 
 
-def anotar_da_tela(lote: Any) -> int:
-    """Grava um lote vindo do navegador. Devolve quantas linhas foram tratadas: a tela reenvia o
-    lote quando o número não bate, então linha descartada (teto, evento inválido) conta como
-    tratada; só o disco recusando devolve 0."""
-    if not isinstance(lote, list):
-        return 0
-    recebidas = lote[:_TETO_LOTE]
-    limpas = [d for d in (_limpar(x) for x in recebidas) if d]
-    for d in limpas:
-        d["origem"] = "tela"
-    return len(recebidas) if _escrever(limpas) else 0
-
-
 def _versao_mux() -> str:
     try:
         cp = subprocess.run(["tmux", "-V"], capture_output=True, text=True,
@@ -506,50 +491,3 @@ def ler_tudo() -> str:
         except OSError:
             continue
     return "".join(partes)
-
-
-def ultimas(n: int = 60) -> list[dict[str, Any]]:
-    """As N linhas mais RECENTES, já parseadas, mais novas primeiro.
-
-    É o que a tela mostra pra pessoa conferir que o diário está mesmo gravando — sem isso o botão
-    de baixar é fé: ela envia o arquivo e só quem recebe descobre que veio vazio. Lê de trás pra
-    frente, arquivo por arquivo, e para assim que junta N: numa semana movimentada, parsear os sete
-    dias inteiros pra mostrar sessenta linhas é trabalho jogado fora.
-    """
-    fora: list[dict[str, Any]] = []
-    for _, day_files in groupby(reversed(arquivos()), key=lambda p: p.name):
-        day: list[dict[str, Any]] = []
-        for p in day_files:
-            try:
-                linhas = p.read_text(encoding="utf-8", errors="replace").splitlines()
-            except OSError:
-                continue
-            collected = 0
-            for bruto in reversed(linhas):
-                try:
-                    obj = json.loads(bruto)
-                except (json.JSONDecodeError, ValueError):
-                    continue
-                if isinstance(obj, dict):
-                    day.append(obj)
-                    collected += 1
-                if collected >= n:
-                    break
-        day.sort(key=lambda row: (str(row.get("ts", "")), row.get("seq", 0)), reverse=True)
-        fora.extend(day)
-        if len(fora) >= n:
-            return fora[:n]
-    return fora
-
-
-def resumo() -> dict[str, Any]:
-    """Números pra tela decidir o que mostrar no botão (sem baixar o arquivo inteiro)."""
-    total = 0
-    for p in arquivos():
-        try:
-            total += p.stat().st_size
-        except OSError:
-            continue
-    nomes = [p.name for p in arquivos()]
-    return {"dias": len(set(nomes)), "bytes": total, "arquivos": nomes,
-            "dias_guardados": DIAS_GUARDADOS}
