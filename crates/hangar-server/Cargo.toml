@@ -212,6 +212,14 @@ name = "costs_hook"   # gancho de pânico global (install_panic_hook)
 path = "tests/costs_hook/main.rs"
 
 [[test]]
+name = "pair_archive_default"   # tira HANGAR_PAIR_ARCHIVE do processo
+path = "tests/pair_archive_default.rs"
+
+[[test]]
+name = "mux_breakaway"   # põe o processo num Job do Windows
+path = "tests/mux_breakaway.rs"
+
+[[test]]
 name = "contract_orq_conductor"
 path = "tests/contract_orq_conductor.rs"
 

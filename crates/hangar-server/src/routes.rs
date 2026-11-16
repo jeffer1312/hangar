@@ -1840,6 +1840,14 @@ mod tests {
     use super::*;
     use std::io::Read;
 
+    /// B-08: a porta do convidado (e as do Connect) abre com `SO_REUSEADDR` só fora do Windows; lá a
+    /// opção deixaria uma segunda escuta pegar a mesma porta.
+    #[tokio::test]
+    async fn guest_socket_reuses_the_address_only_outside_windows() {
+        let listener = guest_socket("127.0.0.1:0".parse().unwrap()).unwrap();
+        assert_eq!(socket2::SockRef::from(&listener).reuse_address().unwrap(), cfg!(unix));
+    }
+
     /// A linha `api.servidor` nunca leva nome ou id escolhido por alguém (I-14).
     #[test]
     fn masked_route_hides_every_user_chosen_segment() {

@@ -403,6 +403,7 @@ mod update_git;
 
 mod update_launch;
 mod update_launch_gate;
+mod update_startup_steps;
 
 mod update_state_contract;
 

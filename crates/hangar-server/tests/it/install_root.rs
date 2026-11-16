@@ -3,9 +3,42 @@
 use std::path::Path;
 
 fn launch(home: &Path, args: &[&str]) -> std::process::Output {
-    std::process::Command::new(env!("CARGO_BIN_EXE_hangar-server"))
-        .arg("launch").args(args).env_clear().env("HOME", home).env("USERPROFILE", home)
-        .env("PATH", std::env::var_os("PATH").unwrap_or_default()).output().unwrap()
+    launch_command(home, args).output().unwrap()
+}
+
+fn launch_command(home: &Path, args: &[&str]) -> std::process::Command {
+    let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_hangar-server"));
+    command.arg("launch").args(args).env_clear().env("HOME", home).env("USERPROFILE", home)
+        .env("PATH", std::env::var_os("PATH").unwrap_or_default());
+    if cfg!(windows) {
+        for key in ["SystemRoot", "WINDIR"] {
+            if let Some(value) = std::env::var_os(key) { command.env(key, value); }
+        }
+    }
+    command
+}
+
+/// O diário do Rust pela pasta de logs do HOME de teste (`LOCALAPPDATA` fica de fora no `env_clear`).
+fn diary(home: &Path) -> Vec<serde_json::Value> {
+    let base = if cfg!(windows) { home.join("AppData").join("Local").join("hangar").join("logs") } else { home.join(".hangar").join("logs") };
+    let Ok(dir) = std::fs::read_dir(base.join("diario").join("servidor-rust")) else { return Vec::new() };
+    dir.flatten().flat_map(|entry| std::fs::read_to_string(entry.path()).unwrap().lines()
+        .filter_map(|line| serde_json::from_str(line).ok()).collect::<Vec<_>>()).collect()
+}
+
+/// Versão do pacote que sobe direto (`boot: direct`) e sem o `bin/hangar-server`.
+fn direct_version(home: &Path) -> std::path::PathBuf {
+    let real = home.join(".hangar").join("versions").join("v1");
+    std::fs::create_dir_all(real.join("backend")).unwrap();
+    std::fs::write(real.join("manifest.json"), r#"{"version":"v1","boot":"direct"}"#).unwrap();
+    link_current(&real, home);
+    real
+}
+
+/// As linhas do lançador no log da tarefa, sem o prefixo.
+fn launcher_lines(log: &Path) -> Vec<String> {
+    std::fs::read_to_string(log).unwrap().lines()
+        .filter_map(|line| line.strip_prefix("[hangar] hangar-server launch: ")).map(str::to_owned).collect()
 }
 
 /// `current` como a instalação grava: symlink no Unix, junction no Windows.
@@ -115,6 +148,104 @@ fn launch_killed_takes_the_backend_along() {
     let deadline = Instant::now() + Duration::from_secs(30);
     while alive() {
         assert!(Instant::now() < deadline, "o backend {pid} sobreviveu ao lançador");
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
+/// B-19: sem um `hangar-server` utilizável o lançador não sobe nada, sai com 3, diz por quê no stderr e
+/// grava `lancador.falhou` no diário (o gerenciador religa sem fim; o relatório leva a causa).
+#[test]
+fn b19_launch_without_a_server_binary_exits_3_and_records_the_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    let real = direct_version(home);
+    let out = launch(home, &["backend"]);
+    assert_eq!(out.status.code(), Some(3), "{out:?}");
+    let exe = if cfg!(windows) { "hangar-server.exe" } else { "hangar-server" };
+    let missing = real.canonicalize().unwrap().join("bin").join(exe).display().to_string();
+    let missing = missing.trim_start_matches(r"\\?\");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains(&format!("hangar-server launch: launch_no_server: {missing}")), "{stderr}");
+    let lines = diary(home);
+    let failed: Vec<_> = lines.iter().filter(|line| line["evento"] == "lancador.falhou").collect();
+    assert_eq!(failed.len(), 1, "{lines:?}");
+    assert_eq!(failed[0]["nivel"], "erro");
+    assert_eq!(failed[0]["codigo"], "launch_no_server");
+    assert_eq!(failed[0]["detalhe"], missing);
+}
+
+/// B-37: a tarefa do Windows roda o lançador sem console; a subida e a recusa vão ao log da tarefa
+/// (`--log`), além do stderr.
+#[test]
+fn b37_launch_start_and_refusal_reach_the_task_log() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    let log = home.join("logs").join("hangar-backend.log");
+    std::fs::create_dir_all(log.parent().unwrap()).unwrap();
+    let out = launch(home, &["backend", "--log", log.to_str().unwrap()]);
+    assert_eq!(out.status.code(), Some(3), "{out:?}");
+    let lines = launcher_lines(&log);
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert!(lines[0].starts_with("launch_start: versão ?, lançador pid "), "{lines:?}");
+    assert!(lines[1].starts_with("launch_no_current: "), "{lines:?}");
+}
+
+/// B-37 (Windows): o lançador abre o servidor e, quando ele sai com erro, diz no log da tarefa quando
+/// começou e como saiu; o código de saída é o do servidor.
+#[cfg(windows)]
+#[test]
+fn b37_windows_direct_launch_writes_starting_and_exited_to_the_task_log() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    direct_version(home);
+    let log = home.join("logs").join("hangar-backend.log");
+    let cmd = Path::new(&std::env::var_os("SystemRoot").expect("SystemRoot")).join("System32").join("cmd.exe");
+    let out = launch_command(home, &["backend", "--log", log.to_str().unwrap(), "/c", "exit", "5"])
+        .env("CP_RUST_SERVER_BIN", &cmd).output().unwrap();
+    assert_eq!(out.status.code(), Some(5), "{out:?}");
+    let lines = launcher_lines(&log);
+    assert!(lines.iter().any(|line| line.starts_with("launch_start: versão v1, lançador pid ")), "{lines:?}");
+    assert!(lines.iter().any(|line| line.starts_with("launch_backend_starting: versão v1, lançador pid ")), "{lines:?}");
+    let exited = lines.iter().find(|line| line.starts_with("launch_backend_exited: versão v1, hangar-server pid ")).unwrap_or_else(|| panic!("{lines:?}"));
+    assert!(exited.contains("depois de ") && exited.ends_with(" s"), "{exited}");
+}
+
+/// B-35 (Windows): o lançador põe o `hangar-server` no Job dele (`KILL_ON_JOB_CLOSE`): matar o
+/// lançador, como o `Stop-ScheduledTask`/`Stop-Process`, leva o servidor junto e solta a porta.
+#[cfg(windows)]
+#[test]
+fn b35_killing_the_launcher_takes_the_server_along_and_frees_the_port() {
+    use std::io::{Read, Write};
+    use std::time::{Duration, Instant};
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    direct_version(home);
+    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let config = home.join(".hangar").join("config");
+    std::fs::create_dir_all(&config).unwrap();
+    std::fs::write(config.join(".env"), format!("CP_PORT={port}\nCP_AUTH_TOKEN=proof\n")).unwrap();
+    let health = || {
+        let Ok(mut stream) = std::net::TcpStream::connect(("127.0.0.1", port)) else { return false };
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+        if stream.write_all(b"GET /__hangar_server/health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n").is_err() { return false; }
+        let mut head = [0u8; 12];
+        stream.read_exact(&mut head).is_ok() && head.starts_with(b"HTTP/1.1 200")
+    };
+    let mut launcher = launch_command(home, &["backend"]).env("PATH", home)
+        .env("CP_RUST_SERVER_BIN", env!("CARGO_BIN_EXE_hangar-server"))
+        .env("CP_RUST_NO_ORPHAN_SWEEP", "1").env("HANGAR_SERVER_GUEST_LISTEN", "127.0.0.1:0")
+        .stdin(std::process::Stdio::null()).spawn().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !health() {
+        assert!(launcher.try_wait().unwrap().is_none(), "o lançador saiu antes de o servidor subir");
+        assert!(Instant::now() < deadline, "o servidor não abriu a porta {port}");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    launcher.kill().unwrap();
+    launcher.wait().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() || std::net::TcpListener::bind(("127.0.0.1", port)).is_err() {
+        assert!(Instant::now() < deadline, "o hangar-server sobreviveu ao lançador e segura a porta {port}");
         std::thread::sleep(Duration::from_millis(200));
     }
 }

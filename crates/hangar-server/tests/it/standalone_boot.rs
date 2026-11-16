@@ -46,8 +46,10 @@ fn health(port: u16) -> bool {
     stream.read_exact(&mut head).is_ok() && head.starts_with(b"HTTP/1.1 200")
 }
 
-fn start(home: &Path, port: u16) -> Server {
-    let mut server = Server(command(home).spawn().unwrap());
+fn start(home: &Path, port: u16) -> Server { start_with(command(home), port) }
+
+fn start_with(mut command: Command, port: u16) -> Server {
+    let mut server = Server(command.spawn().unwrap());
     let deadline = Instant::now() + Duration::from_secs(60);
     while !health(port) {
         if let Some(status) = server.0.try_wait().unwrap() {
@@ -264,4 +266,86 @@ fn p2_ready_watchdog_and_stopping_reach_the_systemd_socket() {
         if &buffer[..read] == b"STOPPING=1" { break; }
     }
     assert!(wait_exit(&mut server, Duration::from_secs(120)).success());
+}
+
+/// Pedido com `Connection: close` lido até o fim: quem fecha primeiro é o servidor, e a conexão fica
+/// em TIME_WAIT do lado dele, presa à porta pública.
+#[cfg(unix)]
+fn answered_and_closed_by_the_server(port: u16) -> bool {
+    let Ok(mut stream) = std::net::TcpStream::connect(("127.0.0.1", port)) else { return false };
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+    if stream.write_all(b"GET /__hangar_server/health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n").is_err() { return false; }
+    let mut reply = Vec::new();
+    stream.read_to_end(&mut reply).is_ok() && reply.starts_with(b"HTTP/1.1 ")
+}
+
+/// B-08: fora do Windows as duas portas públicas (dono e convidado) abrem com `SO_REUSEADDR`: a vida
+/// seguinte sobe na mesma porta com as conexões da anterior ainda em TIME_WAIT. Sem a opção, a porta do
+/// dono recusaria a subida (`port_unavailable`) e a do convidado só voltaria depois do TIME_WAIT.
+/// No Windows a opção abriria uma segunda escuta na mesma porta: lá vale `b07_port_taken_retries_are_not_falls`.
+#[cfg(unix)]
+#[test]
+fn b08_the_next_life_binds_both_public_ports_over_time_wait() {
+    let home = tempfile::tempdir().unwrap();
+    let (port, guest) = (free_port(), free_port());
+    write_env(home.path(), &format!("CP_PORT={port}\nCP_AUTH_TOKEN=proof\n"));
+    let boot = || {
+        let mut command = command(home.path());
+        command.env("HANGAR_SERVER_GUEST_LISTEN", format!("127.0.0.1:{guest}"));
+        start_with(command, port)
+    };
+    let mut server = boot();
+    wait_running(home.path());
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !answered_and_closed_by_the_server(guest) {
+        assert!(Instant::now() < deadline, "a porta do convidado {guest} não abriu");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(answered_and_closed_by_the_server(port));
+    terminate(&server);
+    assert!(wait_exit(&mut server, Duration::from_secs(120)).success());
+    drop(server);
+    let _again = boot();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !answered_and_closed_by_the_server(guest) {
+        assert!(Instant::now() < deadline, "a porta do convidado {guest} não voltou sobre o TIME_WAIT");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// B-28: a parada por SIGTERM não espera a conversa ao vivo aberta (SSE da lista do dono): o processo
+/// sai limpo dentro do prazo. O Python parava o uvicorn em até 5 s; o teto aqui é o do systemd de então, 10 s.
+#[cfg(unix)]
+#[tokio::test]
+async fn b28_sigterm_with_an_open_sse_stops_within_the_deadline() {
+    let home = tempfile::tempdir().unwrap();
+    let port = free_port();
+    write_env(home.path(), &format!("CP_PORT={port}\nCP_AUTH_TOKEN=proof\n"));
+    let mut server = start(home.path(), port);
+    wait_running(home.path());
+    let stream = reqwest::Client::new().get(format!("http://127.0.0.1:{port}/api/sessions/events")).bearer_auth("proof")
+        .send().await.unwrap();
+    assert_eq!(stream.status(), 200);
+    assert!(stream.headers()["content-type"].to_str().unwrap().starts_with("text/event-stream"), "{:?}", stream.headers());
+    terminate(&server);
+    assert!(wait_exit(&mut server, Duration::from_secs(10)).success());
+    drop(stream);
+}
+
+/// B-39: cliente que desiste no meio do aceite (conecta e manda RST na hora) não derruba a escuta: a
+/// conexão seguinte é atendida. O risco era do Windows (o Python precisou do `resilient_accept`); o
+/// teste roda em todo sistema.
+#[test]
+fn b39_clients_aborting_during_accept_do_not_stop_the_listener() {
+    let home = tempfile::tempdir().unwrap();
+    let port = free_port();
+    write_env(home.path(), &format!("CP_PORT={port}\nCP_AUTH_TOKEN=proof\n"));
+    let mut server = start(home.path(), port);
+    for _ in 0..50 {
+        let stream = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+        socket2::SockRef::from(&stream).set_linger(Some(Duration::ZERO)).unwrap();
+        drop(stream);
+    }
+    assert!(health(port), "a escuta parou depois dos abortos");
+    assert!(server.0.try_wait().unwrap().is_none(), "o servidor saiu");
 }

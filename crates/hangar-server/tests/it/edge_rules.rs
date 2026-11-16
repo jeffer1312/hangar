@@ -129,3 +129,33 @@ async fn migration_status_is_rust_only() {
     let stranger = client().get(format!("http://{server}/api/migration/status")).send().await.unwrap();
     assert_eq!(stranger.status(), 401);
 }
+
+/// D-22: o pedido a `/api/diag*` que falha no servidor não ganha a linha `api.servidor` (o diário se
+/// alimentaria do próprio envio; o Python cortava pelo `startswith("/api/diag")`). A falha de outra rota,
+/// feita depois, ganha a dela: a ausência não é atraso de gravação.
+#[tokio::test(flavor = "multi_thread")]
+async fn diag_failure_writes_no_access_line() {
+    let (python, _) = spawn_fake().await;
+    let mut state = hangar_server::routes::AppState::new(config("127.0.0.1"));
+    state.diag = python.bind_diary(state.diag.clone());
+    state.side.locate = python.locate();
+    let home = tempfile::tempdir().unwrap();
+    state.accounts = hangar_server::accounts::AccountService::new(hangar_server::accounts::environment::AccountEnvironment::from_map([
+        ("HOME".into(), home.path().to_string_lossy().into_owned()),
+        ("USERPROFILE".into(), home.path().to_string_lossy().into_owned()),
+    ].into()));
+    // Porta fechada: o worker dos relatórios fora do ar é 502 `diag_report_unreachable`.
+    state.diag_report_base = "http://127.0.0.1:9".into();
+    let server = spawn_state(state).await;
+    let report = client().post(format!("http://{server}/api/diag/report")).bearer_auth(OWNER)
+        .json(&serde_json::json!({"text": "a fila travou", "client": "native 0.1.0 linux-x86_64",
+            "failures": [{"ts": 1793130757.2, "route": "GET /api/sessions", "status": 0, "code": null}]})).send().await.unwrap();
+    assert_eq!(report.status(), 502);
+    let failed = client().post(format!("http://{server}/api/sessions/minha-sessao/input")).bearer_auth(OWNER)
+        .header("content-type", "application/json").body(r#"{"text":"oi"}"#).send().await.unwrap();
+    assert_eq!(failed.status(), 503);
+    let rows = wait_diary(python.diary_dir(), |row| row["evento"] == "api.servidor" && row["codigo"] == "503").await;
+    let diag: Vec<_> = rows.iter().filter(|row| row["evento"] == "api.servidor"
+        && row["detalhe"].as_str().is_some_and(|detail| detail.contains("/api/diag"))).collect();
+    assert!(diag.is_empty(), "{diag:?}");
+}
