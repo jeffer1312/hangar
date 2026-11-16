@@ -5,6 +5,9 @@ import { getNewChatCommandsForServer, type CommandInfo, type Server } from '@han
 export type NewChatCommandSource = { cwd: string | null; configDir: string | null; headless: boolean };
 
 const cache = new Map<string, CommandInfo[]>();
+// Pedido mais recente por chave, entre montagens: resposta atrasada não sobrescreve a mais nova.
+const latestRequest = new Map<string, number>();
+let requestSeq = 0;
 
 // O mesmo guardar e revalidar de useSessionCommands, para a conversa que ainda vai nascer. Cada
 // abertura do `/` relê: a primeira resposta é a lista do disco, e a seguinte já traz a da CLI.
@@ -27,13 +30,19 @@ export function useNewChatCommands(server: Server, source: NewChatCommandSource 
     // Revalidação que falha não troca a lista que está na tela pelo erro.
     const revalidating = shown.current;
     setError('');
+    const seq = ++requestSeq;
+    latestRequest.set(key, seq);
     getNewChatCommandsForServer(target, chosen.cwd, chosen.configDir, chosen.headless)
       .then((c) => {
+        if (latestRequest.get(key) !== seq) return;
         cache.set(key, c);
         if (alive) setLoaded({ key, commands: c });
       })
       .catch((e: unknown) => {
-        if (alive && !revalidating) setError(e instanceof Error ? e.message : String(e));
+        if (latestRequest.get(key) !== seq || !alive || revalidating) return;
+        // Servidor antigo não tem a rota: a tela nova fica sem lista, como antes, e não em erro.
+        if ((e as { status?: unknown } | null)?.status === 404) setLoaded({ key, commands: [] });
+        else setError(e instanceof Error ? e.message : String(e));
       });
     return () => { alive = false; };
   }, [wanted, key, attempt]);

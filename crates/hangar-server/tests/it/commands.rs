@@ -596,8 +596,11 @@ async fn commands_new_chat_route_needs_no_session_and_validates_folder_and_accou
         assert_eq!(local.argument_hint.as_deref(), Some("<alvo>"));
         assert!(commands.iter().any(|c| c.name == "global-skill"));
 
-        let (_, headless) = get(vec![("headless", "1".into())], true).await?;
-        assert!(!names(&headless).iter().any(|n| n == "doctor"), "sem terminal some o que só a TUI atende");
+        let (status, body) = get(vec![("headless", "1".into())], true).await?;
+        assert_eq!(status, reqwest::StatusCode::OK, "sem terminal: {body}");
+        let headless: Vec<CommandInfo> = serde_json::from_value(body).unwrap();
+        assert!(headless.iter().any(|c| c.name == "global-skill"), "sem terminal, o catálogo da conta continua");
+        assert!(!headless.iter().any(|c| c.name == "doctor"), "sem terminal some o que só a TUI atende");
 
         let (status, body) = get(vec![("cwd", root.path().join("missing").to_string_lossy().into_owned())], true).await?;
         assert_eq!(status, reqwest::StatusCode::BAD_REQUEST);

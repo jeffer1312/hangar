@@ -763,6 +763,8 @@ pub struct Hangar {
     commands_latest: HashMap<String, u64>,
     commands_seq: u64,
     suggest_pick: usize,
+    /// Origem da lista do `/` da tela sem sessão buscada por último; outra (ou a volta a uma já vista) busca de novo.
+    new_chat_commands_seen: Option<String>,
     /// O campo já mostrava sugestões do `/`: a lista é revalidada só quando elas abrem.
     slash_open: bool,
     suggest_dismissed: Option<String>,
@@ -1210,7 +1212,7 @@ impl Hangar {
             preview_last_tick: None, preview_carry: 0., preview_deadline: None,
             attachments: HashMap::new(), quotes: Default::default(), mermaid: Default::default(), attach_seq: 0, uploading: HashMap::new(), commands: HashMap::new(), commands_latest: HashMap::new(), commands_seq: 0,
             plugin_question_seen: None,
-            suggest_pick: 0, slash_open: false, suggest_dismissed: None, command_panel: false, context_card: false, command_search, confirm: None, confirm_no_ask: false,
+            suggest_pick: 0, new_chat_commands_seen: None, slash_open: false, suggest_dismissed: None, command_panel: false, context_card: false, command_search, confirm: None, confirm_no_ask: false,
             mention: Default::default(),
             terminal_suggestion: String::new(), plugin_band: Value::Null, plugin_panes: Vec::new(), plugin_shown: None, plugin_columns: None, plugin_source: None, plugin_caps: Vec::new(), plugin_local_tab: None, plugin_presentations: HashMap::new(), linked_children_open: HashSet::new(), plugin_body_scrolls: HashMap::new(), plugin_question_focus: cx.focus_handle(), plugin_tabs_scroll: ScrollHandle::new(), plugin_tabs_seen: None, plugin_tabs_waits: 0, plugin_hovered: HashSet::new(), plugin_fields: HashMap::new(), plugin_draws: 0, plugin_toasts_seen: Default::default(), plugin_toasts_shown: Default::default(), recent: None, media: MediaCache::new(), media_reveal: HashMap::new(), pages: page_card::Pages::new(window.window_handle()), full_images: viewer::full_images(), stats: None,
             side: side::Side::default(), controls: controls::Controls::default(),
@@ -3043,6 +3045,7 @@ impl Hangar {
         if self.selected.is_none() {
             let Some(source) = self.new_chat_commands(cx) else { return; };
             if !force && self.commands.get(&source.key).is_some_and(|r| r.is_ok()) { return; }
+            self.new_chat_commands_seen = Some(source.key.clone());
             self.commands_seq += 1;
             let seq = self.commands_seq;
             self.commands_latest.insert(source.key.clone(), seq);
@@ -5329,8 +5332,8 @@ impl Hangar {
         let referenced = key.as_ref().is_some_and(|key| self.has_context_refs(key));
         let dictated = self.dictation_here(cx) && (self.dictation.recording() || self.dictation.processing());
         let has_input = !text.trim().is_empty() || attached || referenced || dictated;
-        // Pasta ou conta trocada com o `/` aberto: a chave nova ainda não foi buscada.
-        if new_chat && self.slash_open && self.commands_key(cx).is_some_and(|key| !self.commands.contains_key(&key) && !self.commands_latest.contains_key(&key)) {
+        // Pasta ou conta trocada com o `/` aberto: busca a origem nova, e a guardada fica na tela até a resposta.
+        if new_chat && self.slash_open && self.commands_key(cx).is_some_and(|key| self.new_chat_commands_seen.as_deref() != Some(key.as_str())) {
             self.ensure_commands(true, cx);
         }
         let suggestions = if readable || new_chat { self.visible_suggestions(cx) } else { Vec::new() };
