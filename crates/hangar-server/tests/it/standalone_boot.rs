@@ -182,6 +182,17 @@ fn b04_change_me_off_loopback_refuses_to_start() {
     assert_eq!(events(&lines, "hangar_server.partida")[0]["codigo"], "startup_refused");
 }
 
+/// Decisão 27: o Python subia com `CP_AUTH_TOKEN=` vazio; o Rust recusa e diz por quê.
+#[test]
+fn d27_empty_token_refuses_to_start() {
+    let home = tempfile::tempdir().unwrap();
+    write_env(home.path(), &format!("CP_AUTH_TOKEN=\nCP_PORT={}\n", free_port()));
+    let out = command(home.path()).output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("Refusing to start: CP_AUTH_TOKEN is empty."));
+    assert_eq!(events(&diary(home.path()), "hangar_server.partida")[0]["codigo"], "startup_refused");
+}
+
 #[test]
 fn b04_change_me_on_loopback_warns_and_serves() {
     let home = tempfile::tempdir().unwrap();

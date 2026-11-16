@@ -82,6 +82,15 @@ fn b04_change_me_refuses_off_loopback() {
 }
 
 #[test]
+fn d27_empty_token_refuses_on_any_bind() {
+    let home = tempfile::tempdir().unwrap();
+    for bind in ["127.0.0.1", "0.0.0.0"] {
+        let error = standalone_env(&s(bind, 8765, ""), &places(home.path()), |_| false).unwrap_err();
+        assert_eq!(error, "Refusing to start: CP_AUTH_TOKEN is empty. Set CP_AUTH_TOKEN to a strong secret.");
+    }
+}
+
+#[test]
 fn b04_change_me_on_loopback_only_warns() {
     let home = tempfile::tempdir().unwrap();
     for bind in ["127.0.0.1", "localhost", "::1"] {

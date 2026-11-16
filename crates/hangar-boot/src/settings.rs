@@ -98,6 +98,10 @@ pub fn standalone_env(settings: &Settings, places: &Places, present: impl Fn(&st
 }
 
 fn guard(settings: &Settings) -> Result<Option<String>, String> {
+    // Token vazio abriria a API a quem não manda token nenhum.
+    if settings.token.is_empty() {
+        return Err("Refusing to start: CP_AUTH_TOKEN is empty. Set CP_AUTH_TOKEN to a strong secret.".into());
+    }
     if settings.token != DEFAULT_TOKEN { return Ok(None); }
     if !LOOPBACK.contains(&settings.bind.as_str()) {
         return Err(format!("Refusing to start: CP_AUTH_TOKEN is still the default 'change-me' while binding {}. \
