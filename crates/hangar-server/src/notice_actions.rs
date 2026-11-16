@@ -101,7 +101,7 @@ pub async fn start(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
     let body = match owner_body(&st, peer, request).await { Ok(body) => body, Err(response) => return response };
     let all_rows = match rows(&st).await { Ok(rows) => rows, Err(response) => return response };
     let row = match claude_row(&all_rows, &name) { Ok(row) => row, Err(response) => return response };
-    let _registry = REGISTRY.lock().await;
+    let registry = REGISTRY.lock().await;
     let dir = st.hangar_dir.clone();
     let mut all = match load(&dir).await { Ok(all) => all, Err(response) => return response };
     if fixes::running(&all, &name, &body.notice_id).is_some() {
@@ -116,32 +116,39 @@ pub async fn start(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
     // Gravado antes de abrir: a volta nunca acha a sessão sem saber de quem ela é.
     all.insert(child.clone(), Fix { parent: name.clone(), notice_id: body.notice_id.clone(), attempt, subject: body.subject.clone() });
     if let Err(response) = save(&dir, &all).await { return response; }
+    // O vigia acorda já: se a abertura terminar sem quem pediu, a volta não depende do fim deste pedido.
+    WAKE.notify_one();
     let open = SessionOpenRequest {
         name: Some(child.clone()), cwd: row.cwd.clone().unwrap_or_default(),
         config_dir: crate::list::context::config_dir_of(row.conta.as_deref()).map(|dir| dir.display().to_string()),
         provider: Some("claude".into()), headless: Some(true), model: Some("sonnet".into()), initial_prompt: Some(prompt),
         creator: Some(name.clone()), disable_hooks: body.blocking, ..SessionOpenRequest::default()
     };
-    match open_owned(&st, open).await {
-        Decision::Opened(_) => {
-            let fix = &all[&child];
-            let text = format!("Consertando em {child}");
-            if let Err(code) = note(&st, &name, &format!("fix:{}:{attempt}", fix.notice_id), &text, fix_meta(fix, &child, "running")).await {
-                // A sessão já abriu: a volta ainda grava o resultado; só a linha de andamento falta.
-                report(&st, &name, &code, "nota de andamento do conserto não gravada");
+    // Tarefa própria: o celular que vai para o fundo cancela o pedido, e a sessão aberta ficaria sem a nota
+    // de andamento ou com o registro de uma abertura recusada.
+    let task = tokio::spawn(async move {
+        let _registry = registry;
+        match open_owned(&st, open).await {
+            Decision::Opened(_) => {
+                let fix = &all[&child];
+                let text = format!("Consertando em {child}");
+                if let Err(code) = note(&st, &name, &format!("fix:{}:{attempt}", fix.notice_id), &text, fix_meta(fix, &child, "running")).await {
+                    // A sessão já abriu: a volta ainda grava o resultado; só a linha de andamento falta.
+                    report(&st, &name, &code, "nota de andamento do conserto não gravada");
+                }
+                json_response(StatusCode::OK, json!({"child": child, "attempt": attempt}))
             }
-            WAKE.notify_one();
-            json_response(StatusCode::OK, json!({"child": child, "attempt": attempt}))
-        }
-        decision => {
-            all.remove(&child);
-            if let Err(response) = save(&dir, &all).await { return response; }
-            match decision {
-                Decision::Refused(error) => reply(&error),
-                _ => failure(StatusCode::MISDIRECTED_REQUEST, "erro_criacao_sessao", "a sessão de conserto não abriu"),
+            decision => {
+                all.remove(&child);
+                if let Err(response) = save(&dir, &all).await { return response; }
+                match decision {
+                    Decision::Refused(error) => reply(&error),
+                    _ => failure(StatusCode::MISDIRECTED_REQUEST, "erro_criacao_sessao", "a sessão de conserto não abriu"),
+                }
             }
         }
-    }
+    });
+    task.await.unwrap_or_else(|_| failure(StatusCode::INTERNAL_SERVER_ERROR, "erro_criacao_sessao", "a abertura do conserto não terminou"))
 }
 
 async fn load(dir: &Path) -> Result<Fixes, Response> {
@@ -248,8 +255,8 @@ async fn round(st: &AppState, rows: &[SessionRow], settled: &mut std::collection
         };
         match note(st, &fix.parent, &format!("fixdone:{}:{}", fix.notice_id, fix.attempt), &text, fix_meta(&fix, &child, state)).await {
             Ok(()) => { all.remove(&child); settled.remove(&child); changed = true; }
-            // A origem fechou: o resultado não tem onde ficar.
-            Err(code) if code == "runtime_binding" && !rows.iter().any(|r| r.name == fix.parent) => {
+            // A origem fechou ou morreu (a lista guarda a linha `dead`): o resultado não tem onde ficar.
+            Err(_) if origin_gone(rows, &fix, now) => {
                 report(st, &child, "notice_fix_parent_gone", "conversa de origem do conserto fechada; resultado descartado");
                 all.remove(&child); settled.remove(&child); changed = true;
             }
@@ -260,6 +267,12 @@ async fn round(st: &AppState, rows: &[SessionRow], settled: &mut std::collection
         report(st, "", "notice_fixes_write_failed", "registro de consertos não gravado");
     }
     !all.is_empty()
+}
+
+/// A nota não tem onde entrar: origem fora da lista ou morta, ou o dobro do prazo sem conseguir gravar.
+fn origin_gone(rows: &[SessionRow], fix: &Fix, now_ms: u64) -> bool {
+    let origin = rows.iter().find(|r| r.name == fix.parent);
+    origin.is_none_or(|r| r.state == "dead") || now_ms.saturating_sub(fix.attempt) > 2 * MAX_AGE_MS
 }
 
 /// A última resposta em texto da sessão de conserto (não aviso).
@@ -289,6 +302,16 @@ mod tests {
         assert_eq!(step(&f, Some(&row("idle", Some(1100.0))), Some(90.0), 100.0, now_ms), Step::Wait, "parada há menos de 20 s");
         assert_eq!(step(&f, Some(&row("idle", Some(1100.0))), Some(70.0), 100.0, now_ms), Step::Answered);
         assert!(matches!(step(&f, None, None, 100.0, 1_000_000 + MAX_AGE_MS + 1), Step::Failed(_)), "não fica consertando para sempre");
+    }
+
+    #[test]
+    fn a_dead_or_gone_origin_releases_the_fix() {
+        let origin = |state: &str| -> SessionRow { serde_json::from_value(json!({"name": "origem", "state": state})).unwrap() };
+        let f = fix();
+        assert!(!origin_gone(&[origin("idle")], &f, f.attempt + 1000));
+        assert!(origin_gone(&[origin("dead")], &f, f.attempt + 1000));
+        assert!(origin_gone(&[], &f, f.attempt + 1000));
+        assert!(origin_gone(&[origin("idle")], &f, f.attempt + 2 * MAX_AGE_MS + 1), "não tenta para sempre");
     }
 
     #[test]
