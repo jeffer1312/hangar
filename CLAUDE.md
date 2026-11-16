@@ -821,7 +821,8 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
     são do hub do Rust, sem conexão ao Python. O Python não tem `/events`, `/cost` nem `/nav`. O consumo da orquestração é calculado no Rust.
   - Lista do dono: montada pelo Rust; Pi/omp/Kimi publicam o estado pelos atores em processo,
     e a última resposta vem dos leitores nativos. Não existe `/internal/list/facts`.
-  - Outras perguntas do Rust ao Python (`/internal/*`): `migration/status` e `ping`.
+  - Outras perguntas do Rust ao Python (`/internal/*`): só `ping`. Caminho sem handler no Rust
+    não vai ao Python: só `whoami`, `diag` e `term`, que ele ainda atende (`routes::python_answers`).
     A preparação de contas Codex usa `hangar-codex-account-sync` em processo; a invalidação após
     login atua diretamente no catálogo Rust. A reconciliação Claude segue em `accounts/claude_config.rs`.
     Transcrição e organização do ditado leem a configuração efetiva diretamente no Rust.

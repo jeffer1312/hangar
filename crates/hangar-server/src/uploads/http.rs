@@ -246,7 +246,12 @@ async fn execute(
         let stream = req
             .into_body()
             .into_data_stream()
-            .map(|item| item.map_err(std::io::Error::other));
+            // O teto do corpo da borda (`edge_rules`) é o mesmo do arquivo: estourar é 413, não falha do disco.
+            .map(|item| item.map_err(|error| if crate::http_body_limit::is_limit(&error) {
+                std::io::ErrorKind::FileTooLarge.into()
+            } else {
+                std::io::Error::other(error)
+            }));
         let path = match publish(st, &store, &project, &facts, filename, length, stream).await {
             Ok(path) => path,
             Err(r) => return r,
@@ -404,6 +409,19 @@ mod tests {
                 .to_string_lossy()
                 .starts_with(".upload-")
         }));
+    }
+    /// Corpo em partes acima do teto, com o mesmo `Limited` que a borda (`routes::edge_rules`) põe em todo
+    /// pedido: 413 `erro_arquivo_grande`, nunca o 503 de disco. O corpo é gerado aos poucos, sem alocar 101 MiB.
+    #[tokio::test]
+    async fn chunked_upload_over_the_edge_cap_is_413() {
+        let tmp = tempfile::tempdir().unwrap();
+        let st = state();
+        let chunks = futures_util::stream::iter((0..101).map(|_| Ok::<_, std::io::Error>(bytes::Bytes::from(vec![0u8; 1 << 20]))));
+        let body = Body::new(http_body_util::Limited::new(Body::from_stream(chunks), crate::http_body_limit::MAX_BYTES));
+        let response = execute(&st, "upload", Request::new(body), facts(tmp.path()), "grande.bin", Default::default()).await;
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        let body: Value = serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
+        assert_eq!(body["detail"]["code"], "erro_arquivo_grande", "{body}");
     }
     #[tokio::test]
     async fn file_response_keeps_range_download_and_html_isolation() {

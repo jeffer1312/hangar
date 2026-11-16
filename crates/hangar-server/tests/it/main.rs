@@ -30,6 +30,7 @@ mod update_process;
 mod tour_progress;
 mod update_arrived;
 mod docs_routes;
+mod edge_rules;
 mod auxiliary_routes;
 #[cfg(unix)]
 mod plugins;
@@ -353,7 +354,6 @@ mod boot_version;
 
 mod engine_aliases;
 mod runtime_boot;
-mod migration_branch;
 
 mod live_config;
 
