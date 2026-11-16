@@ -44,7 +44,7 @@ vi.mock('../../stores/servers', () => {
 });
 vi.mock('../../stores/sessions', () => {
   const state = { rows: [], retain: () => () => {}, setForeground: () => {} };
-  return { setMachineDiscovery: () => {}, useSessions: Object.assign((select: (s: typeof state) => unknown) => select(state), { getState: () => state }) };
+  return { setMachineDiscovery: () => {}, useSessions: Object.assign((select: (s: typeof state) => unknown) => select(state), { getState: () => state, subscribe: () => () => {} }) };
 });
 vi.mock('../../stores/aparencia', () => {
   const state = { homeScreen: 'sessions', idioma: 'pt' };
@@ -57,7 +57,7 @@ vi.mock('../../theme/unistyles', () => ({}));
 vi.mock('../../theme/aplicarMaterial', () => ({ aplicarMaterial: () => {} }));
 vi.mock('../../net/configureCore', () => ({ configureCore: () => {} }));
 vi.mock('../machines/importMachines', () => ({ discoverSavedMachines: () => {} }));
-vi.mock('../../stores/chat', () => ({ setChatsForeground: () => {} }));
+vi.mock('../../stores/chat', () => ({ setChatsForeground: () => {}, syncChatTranscripts: () => {} }));
 vi.mock('../../chat/useQueueDelivery', () => ({ setQueueDeliveryForeground: () => {} }));
 vi.mock('../../net/fatalErrors', () => ({ setFatalErrorRoute: () => {}, takeFatalErrorNotice: () => false }));
 vi.mock('../push/expoPush', () => ({ installNotificationHandler: () => {}, pushRegistrationKey: () => '',

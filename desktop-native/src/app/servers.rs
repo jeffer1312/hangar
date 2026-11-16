@@ -468,6 +468,19 @@ mod tests {
     }
 
     #[test]
+    fn new_chat_commands_are_keyed_by_choice_and_never_taken_for_a_closed_session() {
+        use crate::app::create::new_chat_commands_key as key;
+        let (server, gone) = (norm("http://127.0.0.1:8765"), vec!["api".to_owned()]);
+        let tricky = key("http://127.0.0.1:8765/", None, Some("/p/a|claude|api"), false);
+        assert!(!commands_of_closed(&tricky, &server, &gone, None), "pasta com `|` não vira sessão fechada");
+        let base = key("m", Some("/home/u/.claude"), Some("/p"), false);
+        assert_ne!(base, key("m", Some("/home/u/.claude-b"), Some("/p"), false), "outra conta, outra lista");
+        assert_ne!(base, key("m", Some("/home/u/.claude"), None, false), "sem pasta, a lista da conta");
+        assert_ne!(base, key("m", Some("/home/u/.claude"), Some("/p"), true), "sem terminal some o que é da TUI");
+        assert_ne!(base, key("n", Some("/home/u/.claude"), Some("/p"), false), "outra máquina");
+    }
+
+    #[test]
     fn upsert_matches_same_machine_and_keeps_label() {
         let entry = |label: &str, address: &str, token: &str| ServerEntry { id: "x".into(), label: label.into(), address: address.into(), token: token.into(), disabled: false, invite: false, lan: None, ephemeral: false, ..Default::default() };
         let mut list = vec![entry("PC", "http://127.0.0.1:8765", "a")];

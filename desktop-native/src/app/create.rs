@@ -28,6 +28,34 @@ pub(super) type FirstFile = (String, Arc<Vec<u8>>, bool);
 /// Chave dos anexos da tela sem sessão (`composer_key`); nenhuma sessão real tem nome vazio.
 pub(super) fn new_chat_key() -> SessionKey { SessionKey { server: String::new(), name: String::new(), jsonl: String::new() } }
 
+/// De onde vem a lista do `/` da tela sem sessão: a máquina, a conta e a pasta que a conversa vai usar.
+pub(super) struct NewChatCommands {
+    pub(super) api: Api,
+    pub(super) key: String,
+    pub(super) cwd: Option<String>,
+    pub(super) config: Option<String>,
+    pub(super) headless: bool,
+}
+
+/// Chave da lista em `Hangar::commands`. O separador de controle a mantém fora do formato `servidor|provider|nome`
+/// das sessões, que `forget_closed` apaga quando a sessão some da lista.
+pub(super) fn new_chat_commands_key(machine: &str, config: Option<&str>, cwd: Option<&str>, headless: bool) -> String {
+    format!("\u{1f}new\u{1f}{machine}\u{1f}{}\u{1f}{}\u{1f}{headless}", config.unwrap_or(""), cwd.unwrap_or(""))
+}
+
+impl NewSession {
+    /// Só o Claude tem a lista sem sessão; sem pasta escolhida, ela traz o que é da conta.
+    pub(super) fn command_source(&self) -> Option<NewChatCommands> {
+        (self.provider == "claude" && !self.is_transfer()).then(|| NewChatCommands {
+            key: new_chat_commands_key(&self.link.api.identity(), self.config.as_deref(), self.picked.as_deref(), self.headless),
+            api: self.link.api.clone(),
+            cwd: self.picked.clone(),
+            config: self.config.clone(),
+            headless: self.headless,
+        })
+    }
+}
+
 /// Os providers do web, na ordem dele.
 const PROVIDERS: [&str; 5] = ["claude", "codex", "pi", "kimi", "omp"];
 /// O web pergunta o passo da criação a cada 800 ms.
