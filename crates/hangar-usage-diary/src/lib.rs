@@ -54,13 +54,14 @@ const FIELDS: &[(&str, Kind)] = &[
     ("preservadas", Int), ("api", Int), ("requires_api", Int), ("rota", Text), ("saida", Text),
 ];
 
-/// Por que um lote não chegou ao disco. `Disk` vira `gravadas: 0`, os outros um 500.
+/// Por que um lote não chegou ao disco. `Disk` vira `gravadas: 0`, os outros um 500. O tipo do
+/// erro de E/S fica junto: é ele que diz ao suporte se foi disco cheio, permissão ou outra coisa.
 #[derive(Debug, PartialEq, Eq)]
 pub enum WriteError {
     /// O disco recusou o append: a tela reenvia o lote.
-    Disk,
+    Disk(std::io::ErrorKind),
     /// A pasta do diário não pôde ser criada.
-    Directory,
+    Directory(std::io::ErrorKind),
 }
 
 /// Duas telas (celular e desktop) mandam lote ao mesmo tempo e o arquivo do dia é um só.
@@ -83,7 +84,10 @@ pub fn record_screen(base: &Path, body: &[u8], now: DateTime<FixedOffset>) -> Re
     }).collect();
     match write(base, lines, now) {
         Ok(()) => Ok(received.len()),
-        Err(WriteError::Disk) => Ok(0),
+        Err(WriteError::Disk(kind)) => {
+            tracing::warn!(code = "diag_write_failed", ?kind, "lote da tela não gravado no diário; a tela reenvia");
+            Ok(0)
+        }
         Err(error) => Err(error),
     }
 }
@@ -224,7 +228,7 @@ fn write(base: &Path, lines: Vec<Map<String, Value>>, now: DateTime<FixedOffset>
         return Ok(());
     }
     let day = base.join(format!("uso-{}.jsonl", now.format("%Y-%m-%d")));
-    std::fs::create_dir_all(base).map_err(|_| WriteError::Directory)?;
+    std::fs::create_dir_all(base).map_err(|error| WriteError::Directory(error.kind()))?;
     let stamp = now.to_rfc3339_opts(SecondsFormat::Millis, false);
     let _one = ONE_WRITER.lock().unwrap_or_else(PoisonError::into_inner);
     let size = std::fs::metadata(&day).map_or(0, |metadata| metadata.len());
@@ -258,7 +262,7 @@ fn write(base: &Path, lines: Vec<Map<String, Value>>, now: DateTime<FixedOffset>
     use std::io::Write;
     std::fs::OpenOptions::new().create(true).append(true).open(&day)
         .and_then(|mut file| file.write_all(text.as_bytes()))
-        .map_err(|_| WriteError::Disk)?;
+        .map_err(|error| WriteError::Disk(error.kind()))?;
     prune(base, now.date_naive());
     Ok(())
 }
@@ -269,7 +273,13 @@ fn prune(base: &Path, today: NaiveDate) {
     let cutoff = cutoff.format("%Y-%m-%d").to_string();
     for (day, path) in dated_files(base) {
         if day < cutoff {
-            let _ = std::fs::remove_file(path);
+            match std::fs::remove_file(&path) {
+                // Duas telas gravando juntas podam o mesmo dia: o segundo não acha mais o arquivo.
+                Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                    tracing::warn!(code = "diag_prune_failed", kind = ?error.kind(), day, "dia velho do diário não apagado");
+                }
+                _ => {}
+            }
         }
     }
 }
@@ -379,7 +389,14 @@ pub fn latest(base: &Path, count: usize) -> Vec<Value> {
         let mut day = Vec::new();
         for path in day_files {
             // Um arquivo por vez, até o teto de 8 MiB do dia; o `splitlines` já quebra em `\r` e `\r\n`.
-            let Ok(bytes) = std::fs::read(path) else { continue };
+            let bytes = match std::fs::read(path) {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    tracing::warn!(code = "diag_read_failed", kind = ?error.kind(), file = %relative(base, path),
+                        "dia do diário ilegível; o resumo sai sem ele");
+                    continue;
+                }
+            };
             let text = String::from_utf8_lossy(&bytes);
             let mut collected = 0;
             for raw in py::splitlines(&text).into_iter().rev() {
@@ -435,7 +452,8 @@ const DOWNLOAD_CHUNK: usize = 64 * 1024;
 
 /// O corpo do download, entregue em pedaços a `sink`: a linha de cabeçalho e os dias concatenados,
 /// o mais antigo primeiro, cada arquivo como o `read_text` do Python o via (UTF-8 trocando o
-/// inválido, fim de linha `\n`). Arquivo que não abre fica de fora; só o `sink` devolve erro.
+/// inválido, fim de linha `\n`). Arquivo que não abre, ou que falha no meio, ganha uma linha
+/// `diag.arquivo_ilegivel` no lugar do que faltou; só o `sink` devolve erro.
 pub fn download_to(base: &Path, header: &str, sink: &mut dyn FnMut(&[u8]) -> std::io::Result<()>) -> std::io::Result<()> {
     download_chunked(base, header, DOWNLOAD_CHUNK, sink)
 }
@@ -443,25 +461,53 @@ pub fn download_to(base: &Path, header: &str, sink: &mut dyn FnMut(&[u8]) -> std
 /// `download_to` com o tamanho do pedaço escolhido: as provas cortam no meio de caractere e de `\r\n`.
 pub fn download_chunked(base: &Path, header: &str, chunk: usize, sink: &mut dyn FnMut(&[u8]) -> std::io::Result<()>) -> std::io::Result<()> {
     sink(format!("{header}\n").as_bytes())?;
+    // O último byte entregue: a marca de falha no meio de um arquivo começa numa linha própria.
+    let last = std::cell::Cell::new(b'\n');
+    let mut tracked = |part: &[u8]| {
+        if let Some(&byte) = part.last() {
+            last.set(byte);
+        }
+        sink(part)
+    };
     for path in files(base) {
-        if let Ok(file) = std::fs::File::open(&path) {
-            normalize(file, chunk.max(1), sink)?;
+        let failed = match std::fs::File::open(&path) {
+            Ok(file) => normalize(file, chunk.max(1), &mut tracked)?,
+            Err(error) => Some(error.kind()),
+        };
+        if let Some(kind) = failed {
+            let name = relative(base, &path);
+            tracing::warn!(code = "diag_read_failed", ?kind, file = %name, "dia do diário ilegível no download");
+            let mut marker = if last.get() == b'\n' { String::new() } else { "\n".to_owned() };
+            marker += &pyjson::dumps_unicode(&json!({"evento": "diag.arquivo_ilegivel", "nivel": "aviso",
+                "origem": "servidor", "arquivo": name, "erro": format!("{kind:?}")}), false);
+            marker.push('\n');
+            tracked(marker.as_bytes())?;
         }
     }
     Ok(())
 }
 
-// shortcut: falha de leitura no meio de um arquivo encerra só ele, com o que já saiu; o Python pulava o
-// arquivo inteiro. Só acontece com o disco falhando durante o download.
-fn normalize(mut reader: impl std::io::Read, chunk: usize, sink: &mut dyn FnMut(&[u8]) -> std::io::Result<()>) -> std::io::Result<()> {
+/// O caminho do arquivo dentro do diário, com `/`: nunca a pasta pessoal de quem baixou.
+fn relative(base: &Path, path: &Path) -> String {
+    let inside = path.strip_prefix(base).unwrap_or(path);
+    let parts: Vec<String> = inside.components().map(|part| part.as_os_str().to_string_lossy().into_owned()).collect();
+    parts.join("/")
+}
+
+/// Normaliza um arquivo para o `sink`. `Ok(Some(kind))`: a leitura falhou no meio e o que já saiu
+/// fica (o Python pulava o arquivo inteiro); quem chama marca a falha. `Err`: o `sink` recusou.
+fn normalize(mut reader: impl std::io::Read, chunk: usize, sink: &mut dyn FnMut(&[u8]) -> std::io::Result<()>) -> std::io::Result<Option<std::io::ErrorKind>> {
     let mut buffer = vec![0; chunk];
-    let (mut carry, mut pending_cr) = (Vec::new(), false);
+    let (mut carry, mut pending_cr, mut failed) = (Vec::new(), false, None);
     loop {
         let read = match reader.read(&mut buffer) {
             Ok(0) => break,
             Ok(read) => read,
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(_) => break,
+            Err(error) => {
+                failed = Some(error.kind());
+                break;
+            }
         };
         carry.extend_from_slice(&buffer[..read]);
         let (text, rest) = decode_lossy(&carry, false);
@@ -473,7 +519,7 @@ fn normalize(mut reader: impl std::io::Read, chunk: usize, sink: &mut dyn FnMut(
     if pending_cr {
         sink(b"\n")?;
     }
-    Ok(())
+    Ok(failed)
 }
 
 /// `String::from_utf8_lossy` em pedaços: sequência incompleta no fim fica para o próximo pedaço,
@@ -522,4 +568,33 @@ fn emit_lines(text: &str, pending_cr: &mut bool, sink: &mut dyn FnMut(&[u8]) -> 
         if c == '\r' { *pending_cr = true } else { out.push(c) }
     }
     sink(out.as_bytes())
+}
+
+#[cfg(test)]
+mod tests {
+    /// Leitor que entrega um pedaço e depois falha, como um disco que cai no meio do download.
+    struct FailsAfter(Option<&'static [u8]>);
+
+    impl std::io::Read for FailsAfter {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            match self.0.take() {
+                Some(part) => {
+                    buffer[..part.len()].copy_from_slice(part);
+                    Ok(part.len())
+                }
+                None => Err(std::io::ErrorKind::PermissionDenied.into()),
+            }
+        }
+    }
+
+    #[test]
+    fn a_read_failure_in_the_middle_keeps_what_came_out_and_reports_the_kind() {
+        let mut out = Vec::new();
+        let failed = super::normalize(FailsAfter(Some(b"a\r\nmeia")), 64, &mut |part| {
+            out.extend_from_slice(part);
+            Ok(())
+        }).unwrap();
+        assert_eq!(failed, Some(std::io::ErrorKind::PermissionDenied));
+        assert_eq!(out, b"a\nmeia");
+    }
 }

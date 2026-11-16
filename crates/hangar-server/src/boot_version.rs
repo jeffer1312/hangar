@@ -25,21 +25,33 @@ pub fn capture(root:&Path,environment:&BTreeMap<String,String>)->Snapshot{
     })
 }
 /// A fonte injetada conserva os argumentos e prazos do subprocesso, sem exigir git nas provas.
+/// Falha do `git describe` ou do `rev-list` não fica guardada: um engasgo do disco na subida
+/// congelaria "indisponivel" até o próximo reinício. A próxima chamada tenta de novo.
 #[doc(hidden)]
 pub fn capture_with(root:&Path,mut git:impl FnMut(&[&str],Duration)->Result<String,()>)->Snapshot{
-    slot(root).get_or_init(||{
-        let manifest=crate::update::package_manifest(root);
-        if let Some(manifest)=manifest{return Snapshot{describe:format!("{}-g{}",manifest["version"].as_str().unwrap(),manifest["commit"].as_str().unwrap().chars().take(12).collect::<String>()),readable:Some(manifest["version"].as_str().unwrap().into())};}
-        let describe=git(&["describe","--tags","--match","dist-latest","--long","--always","--dirty"],Duration::from_secs(5)).ok().map(|s|crate::transcript::py::strip(&s).to_owned()).filter(|s|!s.is_empty()).unwrap_or_else(||"indisponivel".into());
-        let readable=(||{
-            let count=git(&["rev-list","--count","HEAD"],Duration::from_secs(5)).ok().map(|s|crate::transcript::py::strip(&s).to_owned())?;
-            if count.is_empty()||!count.chars().all(crate::accounts::claude_config::py_isdigit){return None;}
-            let mut version=git(&["show","HEAD:VERSION"],Duration::from_secs(5)).ok().map(|s|crate::transcript::py::strip(&s).to_owned())?;
-            if version.is_empty(){version=std::fs::read_to_string(root.join("VERSION")).ok().map(|s|crate::transcript::py::strip(&s).to_owned())?;}
-            (!version.is_empty()).then(||format!("{version}.{count}"))
-        })();
-        Snapshot{describe,readable}
-    }).clone()
+    let slot=slot(root);
+    if let Some(snapshot)=slot.get(){return snapshot.clone();}
+    let manifest=crate::update::package_manifest(root);
+    if let Some(manifest)=manifest{return slot.get_or_init(||Snapshot{describe:format!("{}-g{}",manifest["version"].as_str().unwrap(),manifest["commit"].as_str().unwrap().chars().take(12).collect::<String>()),readable:Some(manifest["version"].as_str().unwrap().into())}).clone();}
+    let described=git(&["describe","--tags","--match","dist-latest","--long","--always","--dirty"],Duration::from_secs(5));
+    let mut failed=described.is_err();
+    let describe=described.ok().map(|s|crate::transcript::py::strip(&s).to_owned()).filter(|s|!s.is_empty()).unwrap_or_else(||"indisponivel".into());
+    let readable=(||{
+        let counted=git(&["rev-list","--count","HEAD"],Duration::from_secs(5));
+        failed|=counted.is_err();
+        let count=counted.ok().map(|s|crate::transcript::py::strip(&s).to_owned())?;
+        if count.is_empty()||!count.chars().all(crate::accounts::claude_config::py_isdigit){return None;}
+        // `show` falha de verdade quando o commit não tem VERSION: não conta como falha passageira.
+        let mut version=git(&["show","HEAD:VERSION"],Duration::from_secs(5)).ok().map(|s|crate::transcript::py::strip(&s).to_owned())?;
+        if version.is_empty(){version=std::fs::read_to_string(root.join("VERSION")).ok().map(|s|crate::transcript::py::strip(&s).to_owned())?;}
+        (!version.is_empty()).then(||format!("{version}.{count}"))
+    })();
+    let snapshot=Snapshot{describe,readable};
+    if failed{
+        tracing::warn!(code="boot_version_git_failed",root=%root.display(),"git não respondeu ao ler a versão em execução; tenta de novo na próxima leitura");
+        return snapshot;
+    }
+    slot.get_or_init(||snapshot).clone()
 }
 
 /// Só identidade e versão: a receita com argv/ambiente nunca sai da memória.

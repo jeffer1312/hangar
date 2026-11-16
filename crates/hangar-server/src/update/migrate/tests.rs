@@ -671,6 +671,13 @@ fn every_version_refreshes_the_stable_launcher() {
     std::fs::create_dir_all(&checkout).unwrap();
     assert_eq!(refresh_launcher(&home, &checkout, cfg!(windows)), Ok(false));
     assert_eq!(std::fs::read(&launcher).unwrap(), b"novo");
+    // Versão que sobe direto sem o binário: o lançador fica, mas a falha aparece.
+    let broken = dir.path().join("versions/0.1.0.7");
+    std::fs::create_dir_all(&broken).unwrap();
+    std::fs::write(broken.join("manifest.json"), r#"{"version":"0.1.0.7","boot":"direct"}"#).unwrap();
+    let error = refresh_launcher(&home, &broken, cfg!(windows)).unwrap_err();
+    assert!(error.starts_with("launcher_source_missing: "), "{error}");
+    assert_eq!(std::fs::read(&launcher).unwrap(), b"novo");
 }
 
 /// O lançador que não entra no lugar do antigo devolve o antigo ao nome; a tarefa nunca aponta para o nada.

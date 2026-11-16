@@ -23,8 +23,84 @@ pub fn env_file(backend: Option<&Path>) -> io::Result<Option<PathBuf>> {
     path(&AccountEnvironment::capture().home, backend, ".env")
 }
 
-/// O valor de `key` no `.env` dos dados do usuário: a última linha vale; aspas, comentário (` #`) e
-/// espaço saem. `None` sem o arquivo ou sem a chave; arquivo que não se lê é erro.
+/// O `.env` no que o Hangar grava: `CHAVE=valor`, a última linha vale, aspas fecham o valor e `#`
+/// depois de espaço é comentário. Sem `export` nem `${VAR}`; a chave volta em minúsculas. A mesma
+/// leitura para a subida do servidor e para quem consulta uma chave depois.
+pub fn parse_env_file(text: &str) -> Vec<(String, String)> {
+    text.lines().filter_map(|line| {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') { return None; }
+        let (key, value) = line.split_once('=')?;
+        Some((key.trim().to_ascii_lowercase(), unquote(value.trim())))
+    }).collect()
+}
+
+/// As linhas do `.env` que a leitura acima deixa de fora ou lê ao pé da letra, pelo número da linha
+/// e nunca pelo valor (pode ser o token).
+pub fn env_file_issues(text: &str) -> Vec<String> {
+    let mut issues = Vec::new();
+    for (index, line) in text.lines().enumerate() {
+        let (number, line) = (index + 1, line.trim());
+        if line.is_empty() || line.starts_with('#') { continue; }
+        let Some((key, value)) = line.split_once('=') else {
+            issues.push(format!("linha {number} sem '=' ignorada"));
+            continue;
+        };
+        let key = key.trim();
+        if key.starts_with("export ") || key.starts_with("export\t") {
+            issues.push(format!("linha {number} com `export` ignorada; escreva só CHAVE=valor"));
+        } else if key.is_empty() || !key.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
+            issues.push(format!("linha {number} com chave fora do formato ignorada"));
+        } else if value.contains("${") {
+            issues.push(format!("linha {number} ({key}) usa ${{...}}, que não é expandido"));
+        }
+    }
+    issues
+}
+
+fn unquote(value: &str) -> String {
+    for quote in ['"', '\''] {
+        if let Some(rest) = value.strip_prefix(quote) {
+            return quoted(rest, quote);
+        }
+    }
+    let cut = value.char_indices().find(|&(at, c)| c == '#' && value[..at].ends_with(char::is_whitespace))
+        .map_or(value.len(), |(at, _)| at);
+    value[..cut].trim_end().to_owned()
+}
+
+/// Até a aspa que fecha, sem escape antes dela. Os escapes são os do python-dotenv: entre aspas duplas
+/// `\\ \' \" \a \b \f \n \r \t \v`; entre simples, só `\\` e `\'`. Escape desconhecido fica como está.
+fn quoted(rest: &str, quote: char) -> String {
+    let mut out = String::new();
+    let mut chars = rest.chars();
+    while let Some(c) = chars.next() {
+        if c == quote { break; }
+        if c != '\\' { out.push(c); continue; }
+        let Some(next) = chars.next() else { out.push('\\'); break };
+        let decoded = match (quote, next) {
+            (_, '\\') => Some('\\'),
+            (_, '\'') => Some('\''),
+            ('"', '"') => Some('"'),
+            ('"', 'a') => Some('\u{7}'),
+            ('"', 'b') => Some('\u{8}'),
+            ('"', 'f') => Some('\u{c}'),
+            ('"', 'n') => Some('\n'),
+            ('"', 'r') => Some('\r'),
+            ('"', 't') => Some('\t'),
+            ('"', 'v') => Some('\u{b}'),
+            _ => None,
+        };
+        match decoded {
+            Some(decoded) => out.push(decoded),
+            None => { out.push('\\'); out.push(next); }
+        }
+    }
+    out
+}
+
+/// O valor de `key` no `.env` dos dados do usuário, lido por [`parse_env_file`] (chave sem caixa, a
+/// última linha vale). `None` sem o arquivo ou sem a chave; arquivo que não se lê é erro.
 pub fn env_value(home: &Path, backend: Option<&Path>, key: &str) -> Result<Option<String>, String> {
     let env = path(home, backend, ".env").map_err(|e| format!("não consegui conferir o .env dos dados do usuário: {e}"))?;
     let Some(env) = env else { return Ok(None) };
@@ -33,8 +109,7 @@ pub fn env_value(home: &Path, backend: Option<&Path>, key: &str) -> Result<Optio
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(format!("{}: {e}", env.display())),
     };
-    Ok(text.lines().filter_map(|l| l.trim().strip_prefix(key)?.trim_start().strip_prefix('='))
-        .map(|v| v.split(" #").next().unwrap_or(v).trim().trim_matches(['"', '\'']).to_owned()).last())
+    Ok(parse_env_file(&text).into_iter().rev().find(|(name, _)| name.eq_ignore_ascii_case(key)).map(|(_, value)| value))
 }
 
 /// O `.env` cru dos dados do usuário; ausente vale vazio e `None` é a falta da pasta de dados.
@@ -52,11 +127,13 @@ pub fn read_env_at(env: &Path) -> Result<String, String> {
     }
 }
 
-/// Uma porta (`CP_PORT`, `CP_FRONT_PORT`) do `.env`; vazia é ausente, e valor que não é porta é erro.
+/// Uma porta (`CP_PORT`, `CP_FRONT_PORT`) do `.env`, como a subida a lê: valor que não é porta é
+/// erro, vazio incluído (o servidor recusa subir com `CP_PORT=`). Só `CP_FRONT_PORT` vazia vale
+/// ausente: é o jeito de desligá-la à mão.
 pub fn env_port(home: &Path, backend: Option<&Path>, key: &str) -> Result<Option<u16>, String> {
-    env_value(home, backend, key)?.filter(|v| !v.is_empty())
-        .map(|v| v.parse::<u16>().map_err(|_| format!("{key}={v:?} no .env não é uma porta")))
-        .transpose()
+    let Some(value) = env_value(home, backend, key)? else { return Ok(None) };
+    if value.trim().is_empty() && key.eq_ignore_ascii_case("CP_FRONT_PORT") { return Ok(None); }
+    value.trim().parse::<u16>().map(Some).map_err(|_| format!("{key}={value:?} no .env não é uma porta"))
 }
 
 #[cfg(test)]
@@ -137,12 +214,30 @@ mod tests {
         let (home, backend) = (dir.path().join("home"), dir.path().join("backend"));
         std::fs::create_dir_all(&backend).unwrap();
         assert_eq!(env_port(&home, Some(&backend), "CP_PORT").unwrap(), None, "sem .env");
-        std::fs::write(backend.join(".env"), "CP_PORT=1\n  CP_PORT = 2\nCP_PORT=\"9100\"  # a porta\nCP_FRONT_PORT='abc'\nCP_EMPTY=\nCP_X=a #b\n").unwrap();
+        std::fs::write(backend.join(".env"), "CP_PORT=1\n  CP_PORT = 2\nCP_PORT=\"9100\"  # a porta\nCP_FRONT_PORT='abc'\nCP_EMPTY=\nCP_X=a #b\nCP_Y=a#b\nexport CP_Z=1\ncp_low=9\n").unwrap();
         assert_eq!(env_port(&home, Some(&backend), "CP_PORT").unwrap(), Some(9100), "a última vale, sem aspas nem comentário");
         assert_eq!(env_value(&home, Some(&backend), "CP_X").unwrap().as_deref(), Some("a"));
-        assert_eq!(env_port(&home, Some(&backend), "CP_EMPTY").unwrap(), None, "vazio é ausente");
+        assert_eq!(env_value(&home, Some(&backend), "CP_Y").unwrap().as_deref(), Some("a#b"), "# sem espaço antes é valor");
+        assert_eq!(env_value(&home, Some(&backend), "CP_Z").unwrap(), None, "export não é lido (decisão 10)");
+        assert_eq!(env_value(&home, Some(&backend), "CP_LOW").unwrap().as_deref(), Some("9"), "chave sem caixa");
+        assert!(env_port(&home, Some(&backend), "CP_EMPTY").is_err(), "porta vazia é recusada, como na subida");
         assert_eq!(env_port(&home, Some(&backend), "CP_NADA").unwrap(), None);
         let error = env_port(&home, Some(&backend), "CP_FRONT_PORT").unwrap_err();
         assert!(error.contains("CP_FRONT_PORT") && error.contains("abc"), "{error}");
+        std::fs::write(backend.join(".env"), "CP_FRONT_PORT=\n").unwrap();
+        assert_eq!(env_port(&home, Some(&backend), "CP_FRONT_PORT").unwrap(), None, "CP_FRONT_PORT vazia desliga");
+    }
+
+    /// O aviso diz a linha e nunca o valor, que pode ser o token.
+    #[test]
+    fn env_file_issues_name_the_line_never_the_value() {
+        let text = "# comentário\nCP_AUTH_TOKEN=segredo\nsolto segredo\nexport CP_PORT=9000\n\u{feff}CP_X=segredo\nCP_Y=${BASE}-segredo\n\n";
+        let issues = env_file_issues(text);
+        assert_eq!(issues.len(), 4, "{issues:?}");
+        for (issue, line) in issues.iter().zip([3, 4, 5, 6]) {
+            assert!(issue.starts_with(&format!("linha {line} ")), "{issue}");
+            assert!(!issue.contains("segredo"), "{issue}");
+        }
+        assert!(env_file_issues("CP_PORT=9000\nCP_AUTH_TOKEN=\"a b\" # x\n").is_empty());
     }
 }

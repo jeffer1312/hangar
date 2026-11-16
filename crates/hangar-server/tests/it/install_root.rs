@@ -174,6 +174,28 @@ fn b19_launch_without_a_server_binary_exits_3_and_records_the_failure() {
     assert_eq!(failed[0]["detalhe"], missing);
 }
 
+/// O servidor que não executa sai com 126 e também fica no diário como `lancador.falhou`, com o
+/// caminho do binário: o gerenciador religa sem fim e o relatório leva a causa.
+#[cfg(unix)]
+#[test]
+fn launch_exec_failure_exits_126_and_records_the_failure() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    direct_version(home);
+    // Interpretador que não existe: o `exec` falha com ENOENT, sem o `/bin/sh` que o `execvp` tenta no ENOEXEC.
+    let broken = home.join("hangar-server-quebrado");
+    std::fs::write(&broken, "#!/nao/existe/interpretador\n").unwrap();
+    std::fs::set_permissions(&broken, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let out = launch_command(home, &["backend"]).env("CP_RUST_SERVER_BIN", &broken).output().unwrap();
+    assert_eq!(out.status.code(), Some(126), "{out:?}");
+    let lines = diary(home);
+    let failed: Vec<_> = lines.iter().filter(|line| line["evento"] == "lancador.falhou").collect();
+    assert_eq!(failed.len(), 1, "{lines:?}");
+    assert_eq!((failed[0]["nivel"].as_str(), failed[0]["codigo"].as_str()), (Some("erro"), Some("launch_exec_failed")));
+    assert_eq!(failed[0]["detalhe"], broken.display().to_string());
+}
+
 /// B-37: a tarefa do Windows roda o lançador sem console; a subida e a recusa vão ao log da tarefa
 /// (`--log`), além do stderr.
 #[test]

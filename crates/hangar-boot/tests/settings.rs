@@ -178,6 +178,28 @@ fn process_env_keeps_what_it_already_has() {
     assert!(boot.vars.iter().any(|(key, _)| *key == "CP_AUTH_TOKEN"), "o token resolvido sempre vai");
 }
 
+/// A subida e quem consulta a porta depois (atualização, modo desenvolvedor) leem o mesmo `.env` do
+/// mesmo jeito: a mesma porta, ou os dois recusam.
+#[test]
+fn d12_the_server_and_the_port_readers_agree_on_the_env_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let (home, backend) = (dir.path().join("home"), dir.path().join("backend"));
+    std::fs::create_dir_all(&backend).unwrap();
+    for file in ["CP_PORT=9000 # x\n", "CP_PORT=\"9001\"\n", "cp_port=9002\n", "export CP_PORT=9003\n", "CP_PORT=\n",
+        "CP_PORT=abc\n", "CP_PORT=1\nCP_PORT=9004\n", "CP_PORT=9005#x\n", "\u{feff}CP_PORT=9006\n", ""] {
+        std::fs::write(backend.join(".env"), file).unwrap();
+        let server = resolve(file, &[]).map(|settings| settings.port).ok();
+        let reader = hangar_core::user_data::env_port(&home, Some(&backend), "CP_PORT").map(|port| port.unwrap_or(8765)).ok();
+        assert_eq!(server, reader, "{file:?}");
+    }
+}
+
+#[test]
+fn b03_an_unresolvable_host_says_why() {
+    let error = bind_ip("nao-existe.invalid").unwrap_err();
+    assert!(error.starts_with("CP_LAN_BIND_IP sem endereço: nao-existe.invalid ("), "{error}");
+}
+
 proptest! {
     #[test]
     fn any_env_file_parses_without_panic(text in "\\PC*") {
