@@ -21,12 +21,42 @@ pub fn parse_env_file(text: &str) -> Vec<(String, String)> {
 fn unquote(value: &str) -> String {
     for quote in ['"', '\''] {
         if let Some(rest) = value.strip_prefix(quote) {
-            return rest.find(quote).map_or(rest, |end| &rest[..end]).to_owned();
+            return quoted(rest, quote);
         }
     }
     let cut = value.char_indices().find(|&(at, c)| c == '#' && value[..at].ends_with(char::is_whitespace))
         .map_or(value.len(), |(at, _)| at);
     value[..cut].trim_end().to_owned()
+}
+
+/// Até a aspa que fecha, sem escape antes dela. Os escapes são os do python-dotenv: entre aspas duplas
+/// `\\ \' \" \a \b \f \n \r \t \v`; entre simples, só `\\` e `\'`. Escape desconhecido fica como está.
+fn quoted(rest: &str, quote: char) -> String {
+    let mut out = String::new();
+    let mut chars = rest.chars();
+    while let Some(c) = chars.next() {
+        if c == quote { break; }
+        if c != '\\' { out.push(c); continue; }
+        let Some(next) = chars.next() else { out.push('\\'); break };
+        let decoded = match (quote, next) {
+            (_, '\\') => Some('\\'),
+            (_, '\'') => Some('\''),
+            ('"', '"') => Some('"'),
+            ('"', 'a') => Some('\u{7}'),
+            ('"', 'b') => Some('\u{8}'),
+            ('"', 'f') => Some('\u{c}'),
+            ('"', 'n') => Some('\n'),
+            ('"', 'r') => Some('\r'),
+            ('"', 't') => Some('\t'),
+            ('"', 'v') => Some('\u{b}'),
+            _ => None,
+        };
+        match decoded {
+            Some(decoded) => out.push(decoded),
+            None => { out.push('\\'); out.push(next); }
+        }
+    }
+    out
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

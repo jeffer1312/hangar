@@ -321,7 +321,7 @@ fn platform() -> (String, String) {
 pub fn record_boot(hangar_dir: &std::path::Path, log: Option<&std::path::Path>) {
     let pid = std::process::id();
     let mut lines = Vec::new();
-    match hangar_boot::life::begin(hangar_dir, pid, &iso(chrono::Local::now())) {
+    match hangar_boot::life::begin(hangar_dir, &iso(chrono::Local::now())) {
         Ok(begin) => {
             if begin.reset {
                 lines.push(json!({"evento": "hangar_server.vida_ilegivel", "nivel": "aviso", "codigo": "server_life_reset"}));
@@ -340,12 +340,25 @@ pub fn record_boot(hangar_dir: &std::path::Path, log: Option<&std::path::Path>) 
     record_blocking(diary_dir().as_deref(), &lines, "subida");
 }
 
-/// Parada ordenada: a marca de pé sai, e a próxima subida não conta queda.
-pub fn record_stop(hangar_dir: &std::path::Path, cause: &str) {
-    let mut line = json!({"evento": "backend.encerrando", "nivel": "ok", "causa": cause});
-    if let Err(error) = hangar_boot::life::end(hangar_dir) {
-        line["codigo"] = json!("server_life_unwritable");
-        line["tipo"] = json!(format!("{:?}", error.kind()));
+/// Pronto para atender: a marca de pé desta vida. Sem ela gravada, a queda desta vida não é contada.
+pub fn record_running(hangar_dir: &std::path::Path) {
+    if let Err(error) = hangar_boot::life::mark_running(hangar_dir, std::process::id(), &iso(chrono::Local::now())) {
+        record_blocking(diary_dir().as_deref(), &[json!({"evento": "hangar_server.vida_ilegivel", "nivel": "aviso",
+            "codigo": "server_life_unwritable", "tipo": format!("{:?}", error.kind())})], "subida");
+    }
+}
+
+/// Saída deliberada (sinal, falha do servidor): a marca de pé desta vida sai, e a próxima subida
+/// não conta queda. `nivel` erro quando a saída foi por falha.
+pub fn record_stop(hangar_dir: &std::path::Path, cause: &str, failed: bool) {
+    let mut line = json!({"evento": "backend.encerrando", "nivel": if failed { "erro" } else { "ok" }, "causa": cause});
+    match hangar_boot::life::end(hangar_dir, std::process::id()) {
+        Ok(hangar_boot::life::Ended::Reset) => line["codigo"] = json!("server_life_reset"),
+        Ok(_) => {},
+        Err(error) => {
+            line["codigo"] = json!("server_life_unwritable");
+            line["tipo"] = json!(format!("{:?}", error.kind()));
+        }
     }
     record_blocking(diary_dir().as_deref(), &[line], "parada");
 }

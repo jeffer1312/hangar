@@ -39,6 +39,13 @@ fn b01_quotes_and_comments() {
 }
 
 #[test]
+fn b01_escapes_inside_quotes_follow_python_dotenv() {
+    assert_eq!(resolve(r#"CP_AUTH_TOKEN="a\"b\\c\nd\q""#, &[]).unwrap().token, "a\"b\\c\nd\\q");
+    assert_eq!(resolve(r"CP_AUTH_TOKEN='a\'b\\c\nd'", &[]).unwrap().token, "a'b\\c\\nd");
+    assert_eq!(resolve(r#"CP_AUTH_TOKEN="a" # fora"#, &[]).unwrap().token, "a");
+}
+
+#[test]
 fn b01_bom_on_the_first_line_loses_that_key() {
     assert_eq!(resolve("\u{feff}CP_AUTH_TOKEN=abc\nCP_PORT=9001\n", &[]).unwrap(), s("127.0.0.1", 9001, "change-me"));
 }

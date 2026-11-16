@@ -437,6 +437,10 @@ impl RuntimeRegistry {
             respawn_base:Duration::from_secs(5),reconnect_waits:Default::default(),permissions:None,processes:Arc::new(crate::list::procs::SystemProcs::default()),live:Default::default(),codex_owned:Default::default(),hubs:std::sync::OnceLock::new(),self_ref:std::sync::OnceLock::new(),
             watcher:std::sync::OnceLock::new(),watcher_pending:tokio::sync::watch::channel(false).0,codex_wake:Arc::new(tokio::sync::Notify::new()),native:Default::default(),limits:std::sync::OnceLock::new(),auth_refusals:std::sync::OnceLock::new(),limit_holds:Default::default(),waking:Default::default(),rewake:Default::default() }
     }
+    /// Prova de vida para o watchdog do systemd: o mapa das entradas não está preso por ninguém.
+    pub async fn responsive(&self) {
+        drop(self.entries.lock().await);
+    }
     pub fn with_diagnostics(mut self, diag: crate::diag::DiagClient) -> Self {
         self.diag = diag.clone();
         self.policy = self.policy.with_diagnostics(diag);

@@ -239,26 +239,31 @@ async fn run(python_parent: bool, notifier: hangar_boot::notify::Notifier) {
         Err(e) => {
             tracing::error!(listen = %cfg.listen, "porta pública indisponível: {e}");
             eprintln!("hangar-server: porta {} indisponível: {e}", cfg.listen);
+            if !python_parent { refused_boot("port_unavailable"); }
             std::process::exit(1);
         }
     };
     tracing::info!(listen = %cfg.listen, upstream = %cfg.upstream, python_parent, version = env!("CARGO_PKG_VERSION"), "hangar-server de pé");
     let stopped = std::sync::Arc::new(std::sync::OnceLock::new());
-    let stop = { let stopped = stopped.clone(); async move {
+    // A marca de pé e a parada sob a mesma trava: parada que chega antes do "pronto" impede a marca.
+    let stop_recorded = std::sync::Arc::new(std::sync::Mutex::new(false));
+    let stop = { let (stopped, recorded, dir) = (stopped.clone(), stop_recorded.clone(), hangar_dir.clone()); async move {
         let cause = hangar_server::stop_requested(python_parent).await;
         let _ = stopped.set(cause);
+        // A parada limpa antes do desligamento lento: o fechamento do console no Windows dá ~5 s até o kill.
+        if !python_parent {
+            let _ = tokio::task::spawn_blocking(move || record_stop_once(&recorded, &dir, cause, false)).await;
+        }
     } };
-    if let Err(error) = notifier.send("READY=1") {
-        tracing::warn!(code = "systemd_notify_failed", kind = ?error.kind(), "aviso de pronto ao systemd não saiu");
-    }
-    if let Some(every) = notifier.watchdog {
-        tokio::spawn(hangar_server::watchdog::notify_alive(notifier.clone(), cfg.listen, every));
-    }
     #[allow(unused_mut)]
     let home = hangar_server::accounts::environment::AccountEnvironment::capture().home;
     let server_id = match hangar_server::machine_peers::startup_identity(&home, hangar_server::session_open::cli::backend_dir().as_deref()) {
         Ok(value) => value,
-        Err(error) => { eprintln!("hangar-server: identidade indisponível: {error}"); std::process::exit(1); }
+        Err(error) => {
+            eprintln!("hangar-server: identidade indisponível: {error}");
+            if !python_parent { refused_boot("identity_unavailable"); }
+            std::process::exit(1);
+        }
     };
     #[allow(unused_mut)]
     let mut state = hangar_server::routes::AppState::with_server_id(cfg, server_id);
@@ -279,6 +284,8 @@ async fn run(python_parent: bool, notifier: hangar_boot::notify::Notifier) {
     let startup_environment = state.accounts.env.clone();
     let startup_prewarm = state.prewarm.clone();
     let startup_accounts = state.accounts.clone();
+    let (alive_state, listen) = (state.state.clone(), state.cfg.listen);
+    let (ready_recorded, ready_dir, ready_notifier) = (stop_recorded.clone(), hangar_dir.clone(), notifier.clone());
     let _preparation = tokio::spawn(async move {
         match service {
             Ok(service) => match tokio::task::spawn_blocking(move || service.startup_outcome()).await {
@@ -296,6 +303,23 @@ async fn run(python_parent: bool, notifier: hangar_boot::notify::Notifier) {
         startup_prewarm.clean_receipts().await;
         hangar_server::startup::prepare_sessions(startup_environment).await;
         startup.finish();
+        // Só agora a vida está pronta: daqui em diante sair sem a parada gravada é queda.
+        if !python_parent {
+            let marked = tokio::task::spawn_blocking(move || {
+                let recorded = ready_recorded.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                if *recorded { return false; }
+                hangar_server::diag::record_running(&ready_dir);
+                true
+            }).await.unwrap_or(false);
+            if !marked { return; }
+        }
+        if let Err(error) = ready_notifier.send("READY=1") {
+            tracing::warn!(code = "systemd_notify_failed", kind = ?error.kind(), "aviso de pronto ao systemd não saiu");
+        }
+        if let Some(every) = ready_notifier.watchdog {
+            tokio::spawn(hangar_server::watchdog::notify_alive(ready_notifier, every,
+                hangar_server::watchdog::server_probes(listen, alive_state)));
+        }
     });
     let prewarm = state.prewarm.clone();
     let connect = state.connect_supervisor.clone();
@@ -311,12 +335,26 @@ async fn run(python_parent: bool, notifier: hangar_boot::notify::Notifier) {
         Ok(()) => {
             let cause = stopped.get().copied().unwrap_or("desconhecida");
             tracing::info!(cause, "parada pedida: hangar-server sai");
-            if !python_parent { hangar_server::diag::record_stop(&hangar_dir, cause); }
             std::process::exit(0);
         }
         Err(e) => {
             tracing::error!("hangar-server parou: {e}");
+            if !python_parent { record_stop_once(&stop_recorded, &hangar_dir, "serve_failed", true); }
             std::process::exit(1);
         }
     }
+}
+
+/// A parada desta vida, uma vez só (sinal e falha do servidor podem chegar os dois).
+fn record_stop_once(recorded: &std::sync::Mutex<bool>, dir: &std::path::Path, cause: &str, failed: bool) {
+    let mut recorded = recorded.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if *recorded { return; }
+    *recorded = true;
+    hangar_server::diag::record_stop(dir, cause, failed);
+}
+
+/// Saída antes de a vida ficar pronta (porta tomada, identidade): não é queda, e o diário diz por quê.
+fn refused_boot(code: &'static str) {
+    hangar_server::diag::record_blocking(hangar_server::diag::diary_dir().as_deref(),
+        &[serde_json::json!({"evento": "hangar_server.partida", "nivel": "erro", "codigo": code})], "subida");
 }

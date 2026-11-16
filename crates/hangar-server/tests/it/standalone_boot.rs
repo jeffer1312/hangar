@@ -86,6 +86,16 @@ fn life(home: &Path) -> Value {
     serde_json::from_slice(&std::fs::read(home.join(".hangar").join(hangar_boot::life::FILE)).unwrap()).unwrap()
 }
 
+/// A marca de pé só sai com a subida pronta, depois da porta aberta.
+fn wait_running(home: &Path) {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while std::fs::read(home.join(".hangar").join(hangar_boot::life::FILE)).ok()
+        .and_then(|raw| serde_json::from_slice::<Value>(&raw).ok()).is_none_or(|life| life["running"] != true) {
+        assert!(Instant::now() < deadline, "a vida não se marcou de pé");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 #[cfg(unix)]
 fn terminate(server: &Server) {
     assert!(Command::new("kill").args(["-TERM", &server.0.id().to_string()]).status().unwrap().success());
@@ -130,7 +140,7 @@ fn b25_b26_sigterm_stops_in_order_and_the_next_boot_counts_nothing() {
     let port = free_port();
     write_env(home.path(), &format!("CP_PORT={port}\nCP_AUTH_TOKEN=proof\n"));
     let mut server = start(home.path(), port);
-    assert_eq!(life(home.path())["running"], true);
+    wait_running(home.path());
     terminate(&server);
     assert!(wait_exit(&mut server, Duration::from_secs(120)).success());
     assert_eq!(life(home.path())["running"], false);
@@ -140,6 +150,7 @@ fn b25_b26_sigterm_stops_in_order_and_the_next_boot_counts_nothing() {
     drop(server);
     let mut again = start(home.path(), port);
     assert!(events(&diary(home.path()), "hangar_server.caiu").is_empty(), "parada limpa não é queda");
+    wait_running(home.path());
     terminate(&again);
     assert!(wait_exit(&mut again, Duration::from_secs(120)).success());
     assert_eq!(life(home.path())["unclean_exits"], 0);
@@ -151,6 +162,7 @@ async fn b24_a_killed_life_is_counted_on_the_next_boot() {
     let port = free_port();
     write_env(home.path(), &format!("CP_PORT={port}\nCP_AUTH_TOKEN=proof\n"));
     let mut server = start(home.path(), port);
+    wait_running(home.path());
     server.0.kill().unwrap();
     server.0.wait().unwrap();
     drop(server);
@@ -169,6 +181,20 @@ async fn b24_a_killed_life_is_counted_on_the_next_boot() {
         tokio::time::sleep(Duration::from_millis(100)).await;
     };
     assert_eq!(status["rust"]["unclean_exits"], 1);
+}
+
+/// O systemd religa quem sai com a porta tomada: cada tentativa diz por quê no diário e nenhuma conta queda.
+#[test]
+fn b07_port_taken_retries_are_not_falls() {
+    let home = tempfile::tempdir().unwrap();
+    let taken = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    write_env(home.path(), &format!("CP_PORT={}\nCP_AUTH_TOKEN=proof\n", taken.local_addr().unwrap().port()));
+    for _ in 0..3 {
+        assert_eq!(command(home.path()).output().unwrap().status.code(), Some(1));
+    }
+    let lines = diary(home.path());
+    assert_eq!(events(&lines, "hangar_server.partida").iter().filter(|line| line["codigo"] == "port_unavailable").count(), 3);
+    assert!(events(&lines, "hangar_server.caiu").is_empty(), "{lines:?}");
 }
 
 #[test]

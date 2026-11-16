@@ -1,40 +1,73 @@
-use hangar_boot::life::{begin, end, last_errors, reduce_error, unclean_exits, FILE};
+use hangar_boot::life::{begin, end, last_errors, mark_running, reduce_error, unclean_exits, Ended, FILE};
 use hangar_boot::notify::Notifier;
 use proptest::prelude::*;
+
+const T: &str = "2026-11-16T10:00:00-03:00";
+
+/// Uma vida inteira: a conferência da subida e a marca de pé quando pronta.
+fn boot(dir: &std::path::Path, pid: u32, now: &str) -> hangar_boot::life::Begin {
+    let begin = begin(dir, now).unwrap();
+    mark_running(dir, pid, now).unwrap();
+    begin
+}
+
+fn life(dir: &std::path::Path) -> serde_json::Value {
+    serde_json::from_slice(&std::fs::read(dir.join(FILE)).unwrap()).unwrap()
+}
 
 #[test]
 fn b24_clean_stop_is_not_counted() {
     let dir = tempfile::tempdir().unwrap();
-    let first = begin(dir.path(), 1, "2026-11-16T10:00:00-03:00").unwrap();
+    let first = boot(dir.path(), 1, T);
     assert!(!first.unclean && first.unclean_exits == 0 && !first.reset);
-    end(dir.path()).unwrap();
-    assert!(!begin(dir.path(), 2, "2026-11-16T10:01:00-03:00").unwrap().unclean);
+    assert_eq!(end(dir.path(), 1).unwrap(), Ended::Cleared);
+    assert!(!boot(dir.path(), 2, T).unclean);
     assert_eq!(unclean_exits(dir.path()).unwrap(), 0);
 }
 
 #[test]
 fn b24_life_without_clean_stop_counts_on_the_next_boot() {
     let dir = tempfile::tempdir().unwrap();
-    begin(dir.path(), 1, "2026-11-16T10:00:00-03:00").unwrap();
-    let second = begin(dir.path(), 2, "2026-11-16T10:05:00-03:00").unwrap();
+    boot(dir.path(), 1, T);
+    let second = boot(dir.path(), 2, "2026-11-16T10:05:00-03:00");
     assert!(second.unclean);
     assert_eq!(second.unclean_exits, 1);
-    let third = begin(dir.path(), 3, "2026-11-16T10:06:00-03:00").unwrap();
+    let third = boot(dir.path(), 3, "2026-11-16T10:06:00-03:00");
     assert_eq!(third.unclean_exits, 2);
-    end(dir.path()).unwrap();
+    assert_eq!(end(dir.path(), 3).unwrap(), Ended::Cleared);
     // A contagem sobrevive à parada limpa: é o histórico para a tela de status.
     assert_eq!(unclean_exits(dir.path()).unwrap(), 2);
-    let life: serde_json::Value = serde_json::from_slice(&std::fs::read(dir.path().join(FILE)).unwrap()).unwrap();
-    assert_eq!(life["last_unclean"], "2026-11-16T10:06:00-03:00");
-    assert_eq!(life["running"], false);
+    assert_eq!(life(dir.path())["last_unclean"], "2026-11-16T10:06:00-03:00");
+    assert_eq!(life(dir.path())["running"], false);
+}
+
+#[test]
+fn b24_a_boot_that_never_got_ready_is_not_a_fall() {
+    // Porta tomada, identidade indisponível: a vida sai antes de se marcar de pé, e o systemd tenta de novo.
+    let dir = tempfile::tempdir().unwrap();
+    for _ in 0..3 { assert!(!begin(dir.path(), T).unwrap().unclean); }
+    assert_eq!(unclean_exits(dir.path()).unwrap(), 0);
+}
+
+#[test]
+fn b24_end_only_clears_its_own_life() {
+    let dir = tempfile::tempdir().unwrap();
+    boot(dir.path(), 1, T);
+    // Outra vida parando não apaga a marca de pé desta.
+    assert_eq!(end(dir.path(), 2).unwrap(), Ended::OtherLife);
+    assert_eq!(life(dir.path())["running"], true);
+    assert!(boot(dir.path(), 3, T).unclean);
 }
 
 #[test]
 fn b24_unreadable_life_file_restarts_and_says_so() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join(FILE), b"{torto").unwrap();
-    let got = begin(dir.path(), 1, "2026-11-16T10:00:00-03:00").unwrap();
+    let got = begin(dir.path(), T).unwrap();
     assert!(got.reset && !got.unclean && got.unclean_exits == 0);
+    std::fs::write(dir.path().join(FILE), b"{torto").unwrap();
+    assert_eq!(end(dir.path(), 1).unwrap(), Ended::Reset);
+    assert_eq!(life(dir.path())["running"], false, "arquivo ilegível na parada vira parado, nunca fica de pé");
 }
 
 #[test]
@@ -81,4 +114,11 @@ fn p2_notify_reaches_the_systemd_socket() {
     let mut buffer = [0u8; 64];
     let read = socket.recv(&mut buffer).unwrap();
     assert_eq!(&buffer[..read], b"READY=1");
+}
+
+#[test]
+fn d9_empty_upstream_is_no_python_parent() {
+    assert!(!hangar_boot::parent_from(None));
+    assert!(!hangar_boot::parent_from(Some(String::new())));
+    assert!(hangar_boot::parent_from(Some("127.0.0.1:41234".into())));
 }

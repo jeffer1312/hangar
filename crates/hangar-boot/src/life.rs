@@ -18,30 +18,57 @@ pub struct Begin {
     pub reset: bool,
 }
 
-pub fn begin(dir: &Path, pid: u32, now: &str) -> std::io::Result<Begin> {
-    let (previous, reset) = match read(dir) {
-        Ok(value) => (value, false),
-        Err(error) if error.kind() == std::io::ErrorKind::InvalidData => (json!({}), true),
-        Err(error) => return Err(error),
-    };
+/// Na subida, antes de qualquer outra coisa: a marca de pé que ficou é a vida anterior que não saiu
+/// limpa. Ela é contada e apagada aqui; esta vida só se marca de pé quando estiver pronta.
+pub fn begin(dir: &Path, now: &str) -> std::io::Result<Begin> {
+    let (previous, reset) = read_or_reset(dir)?;
     let unclean = previous.get("running").and_then(Value::as_bool).unwrap_or(false);
-    let mut count = count_of(&previous);
-    let mut last = previous.get("last_unclean").cloned().unwrap_or(Value::Null);
-    if unclean {
-        count += 1;
-        last = json!(now);
+    let count = count_of(&previous) + u64::from(unclean);
+    if unclean || reset {
+        let last = if unclean { json!(now) } else { previous.get("last_unclean").cloned().unwrap_or(Value::Null) };
+        write(dir, &json!({"running": false, "unclean_exits": count, "last_unclean": last}))?;
     }
-    write(dir, &json!({"running": true, "pid": pid, "started": now, "unclean_exits": count, "last_unclean": last}))?;
     Ok(Begin { unclean, unclean_exits: count, reset })
 }
 
-pub fn end(dir: &Path) -> std::io::Result<()> {
-    let mut life = read(dir)?;
-    match life.as_object_mut() {
-        Some(map) => { map.insert("running".into(), json!(false)); }
-        None => life = json!({"running": false}),
-    }
+/// Pronta para atender: daqui em diante, sair sem `end` é uma saída não limpa.
+pub fn mark_running(dir: &Path, pid: u32, now: &str) -> std::io::Result<()> {
+    let (mut life, _) = read_or_reset(dir)?;
+    let map = life.as_object_mut().expect("read_or_reset devolve objeto");
+    map.insert("running".into(), json!(true));
+    map.insert("pid".into(), json!(pid));
+    map.insert("started".into(), json!(now));
     write(dir, &life)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ended {
+    Cleared,
+    /// A marca é de outra vida (ou esta nunca se marcou): fica como está.
+    OtherLife,
+    /// O arquivo estava ilegível: regravado parado, e a contagem anterior se perdeu.
+    Reset,
+}
+
+/// Parada limpa desta vida: só apaga a marca de pé se ela for deste `pid`.
+pub fn end(dir: &Path, pid: u32) -> std::io::Result<Ended> {
+    let (mut life, reset) = read_or_reset(dir)?;
+    if reset {
+        write(dir, &json!({"running": false, "unclean_exits": 0, "last_unclean": null}))?;
+        return Ok(Ended::Reset);
+    }
+    if life.get("pid").and_then(Value::as_u64) != Some(u64::from(pid)) { return Ok(Ended::OtherLife); }
+    life.as_object_mut().expect("read_or_reset devolve objeto").insert("running".into(), json!(false));
+    write(dir, &life)?;
+    Ok(Ended::Cleared)
+}
+
+fn read_or_reset(dir: &Path) -> std::io::Result<(Value, bool)> {
+    match read(dir) {
+        Ok(value) => Ok((value, false)),
+        Err(error) if error.kind() == std::io::ErrorKind::InvalidData => Ok((json!({}), true)),
+        Err(error) => Err(error),
+    }
 }
 
 pub fn unclean_exits(dir: &Path) -> std::io::Result<u64> {
@@ -65,7 +92,12 @@ fn write(dir: &Path, life: &Value) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
     let mut file = tempfile::NamedTempFile::new_in(dir)?;
     file.write_all(life.to_string().as_bytes())?;
-    file.persist(dir.join(FILE)).map(|_| ()).map_err(|e| e.error)
+    // Falta de energia logo depois não pode deixar o arquivo vazio: é justamente o caso que ele conta.
+    file.as_file().sync_all()?;
+    file.persist(dir.join(FILE)).map_err(|e| e.error)?;
+    #[cfg(unix)]
+    if let Ok(folder) = std::fs::File::open(dir) { let _ = folder.sync_all(); }
+    Ok(())
 }
 
 /// As últimas `count` linhas ERROR/WARN do log, só com a hora e os campos `code=`/`panic=`: a
