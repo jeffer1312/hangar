@@ -365,14 +365,17 @@ async fn guest_server(tmux: &Tmux, sessions: &[(&str, Kind)]) -> SocketAddr {
     addr
 }
 
-/// T-11: convidado verificado sem `Share` na sessão. O Python abria para qualquer convidado verificado.
+/// T-11 (decisão 21): convidado verificado sem `Share` na sessão leva 403; o Python abria para qualquer
+/// convidado verificado.
 #[tokio::test]
-async fn a_guest_without_share_on_the_session_opens_like_the_python() {
+async fn a_guest_without_share_on_the_session_is_refused() {
     let tmux = Tmux::new();
     tmux.session("g1");
-    let addr = guest_server(&tmux, &[("outra", Kind::Pair)]).await;
-    let _ws = connect(addr, "/api/sessions/g1/term").await.expect("o Python abria");
-    until("anexado", || tmux.clients("g1").len() == 1).await;
+    let addr = guest_server(&tmux, &[("outra", Kind::Share), ("g1", Kind::Pair)]).await;
+    assert_eq!(connect(addr, "/api/sessions/g1/term").await.err(), Some(403), "par de leitura não abre o terminal");
+    let other = guest_server(&tmux, &[("outra", Kind::Share)]).await;
+    assert_eq!(connect(other, "/api/sessions/g1/term").await.err(), Some(403), "sessão fora do convite");
+    assert!(tmux.clients("g1").is_empty());
 }
 
 /// T-26: convidado nos terminais do Hangar leva o 404 do caminho sem rota, como o Python dava.

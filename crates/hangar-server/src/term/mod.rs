@@ -207,6 +207,10 @@ async fn serve(st: Arc<AppState>, peer: SocketAddr, req: Request, want: Want) ->
         Ok(ws) => ws,
         Err(_) => return pass(&st, Request::from_parts(parts, body), &fwd).await,
     };
+    // Convidado verificado sem `Share` nesta sessão: o porteiro já o recusaria; aqui a recusa é explícita.
+    if guest == Some(false) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
     if !owner && guest.is_none() {
         // Só o `?token=` vale aqui (Bearer e cookie não); a falha conta uma vez e a origem bloqueada
         // segue recusada sem nova falha, até com a senha certa.
