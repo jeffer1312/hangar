@@ -555,7 +555,7 @@ async fn proxy_strips_inbound_guest_header() {
     use crate::fake::*;
     let (fake, up) = spawn_fake().await;
     let srv = spawn_server(config(up, "127.0.0.1")).await;
-    let r = client().get(format!("http://{srv}/api/whoami")).header("x-hangar-guest", "forjado")
+    let r = client().get(format!("http://{srv}/api/diag/arquivo")).header("x-hangar-guest", "forjado")
         .send().await.unwrap();
     assert_eq!(r.text().await.unwrap(), "from-python");
     let (_, headers) = fake.last_hit();
