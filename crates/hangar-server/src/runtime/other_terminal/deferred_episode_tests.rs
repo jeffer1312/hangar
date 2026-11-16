@@ -107,7 +107,7 @@ fn other_deferred_episode_identity_failure_does_not_prove_composer_recovery() {
 #[tokio::test]
 async fn other_deferred_episode_diary_keeps_escalation_and_new_episode() {
     let reports = tempfile::tempdir().unwrap();
-    let diag = crate::diag::DiagClient::new("127.0.0.1:9".parse().unwrap(), String::new())
+    let diag = crate::diag::DiagClient::new()
         .with_diary(Some(reports.path().to_owned()));
     let mut episode = DeferredEpisode::default();
     for _ in 0..10 {

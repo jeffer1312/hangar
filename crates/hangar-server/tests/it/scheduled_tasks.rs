@@ -29,7 +29,6 @@ impl Fixture {
         let address = listener.local_addr().unwrap();
         let mut state = AppState::new(Config {
             listen: address,
-            upstream: crate::refused_address(),
             internal_secret: "fixture-internal".into(),
             auth_token: "fixture-owner".into(),
             log_path: None,
@@ -203,7 +202,6 @@ async fn scheduled_routes_bound_writer_refuses_another_life_before_queueing() {
         .await;
     let state = AppState::new(Config {
         listen: "127.0.0.1:0".parse().unwrap(),
-        upstream: crate::refused_address(),
         internal_secret: "fixture-internal".into(),
         auth_token: "fixture-owner".into(),
         log_path: None,
@@ -258,7 +256,6 @@ async fn scheduled_routes_bound_writer_refuses_the_conversation_after_clear_in_t
         .await;
     let mut state = AppState::new(Config {
         listen: "127.0.0.1:0".parse().unwrap(),
-        upstream: crate::refused_address(),
         internal_secret: "fixture-internal".into(),
         auth_token: "fixture-owner".into(),
         log_path: None,
@@ -321,7 +318,6 @@ async fn scheduled_routes_verified_guest_never_lists_even_with_forwarded_owner_b
     use hangar_server::share::caller::{Caller, GuestGrant};
     let state = AppState::new(Config {
         listen: "127.0.0.1:0".parse().unwrap(),
-        upstream: crate::refused_address(),
         internal_secret: "fixture-internal".into(),
         auth_token: "fixture-owner".into(),
         log_path: None,
@@ -456,11 +452,7 @@ async fn scheduled_regression_bound_sleep_queue_cannot_bypass_a_closed_ingress()
     std::fs::create_dir_all(&directory).unwrap();
     std::fs::write(directory.join("sleeping.json"),json!({"name":"sleeping","key":"old-life","headless":true,"asleep":{"wake_surface":"headless","since":1.0}}).to_string()).unwrap();
     let registry = Arc::new(
-        RuntimeRegistry::new(
-            crate::refused_address(),
-            "fixture-secret".into(),
-            "fixture-instance".into(),
-        )
+        RuntimeRegistry::new("fixture-instance".into())
         .with_codex_environment(env),
     );
     registry.bind_lifecycle();
@@ -472,7 +464,6 @@ async fn scheduled_regression_bound_sleep_queue_cannot_bypass_a_closed_ingress()
     registry.wake("sleeping", "old-life");
     let mut state = AppState::new(Config {
         listen: "127.0.0.1:0".parse().unwrap(),
-        upstream: crate::refused_address(),
         internal_secret: "fixture-internal".into(),
         auth_token: "fixture-owner".into(),
         log_path: None,
@@ -559,7 +550,6 @@ async fn scheduled_regression_due_task_waits_for_the_actual_restore_barrier() {
     *clock.0.lock().unwrap() = now + chrono::Duration::hours(2);
     let mut state = AppState::new(Config {
         listen: "127.0.0.1:0".parse().unwrap(),
-        upstream: crate::refused_address(),
         internal_secret: "fixture-internal".into(),
         auth_token: "fixture-owner".into(),
         log_path: None,

@@ -30,7 +30,6 @@ async fn one_producer_for_many_clients() {
     tokio::time::sleep(Duration::from_millis(3200)).await;
     let scans = calls(dir.path(), "list-panes");
     assert!((1..=5).contains(&scans), "uma varredura por tique, não por cliente: {scans}");
-    assert_eq!(srv.python.list_facts_calls.load(std::sync::atomic::Ordering::SeqCst), 0, "lista só de Claude não pergunta fatos ao Python");
     drop(streams);
     tokio::time::sleep(Duration::from_millis(3500)).await;
     let after = calls(dir.path(), "list-panes");
@@ -75,7 +74,6 @@ async fn nav_without_owner_token_is_refused_by_rust() {
         assert_eq!(r.status(), 401, "{method}");
         assert_eq!(r.json::<Value>().await.unwrap()["detail"]["code"], "erro_nao_autorizado", "{method}");
     }
-    assert_eq!(srv.python.hits_to("/api/sessions/s0/nav"), 0);
 }
 
 /// O navegador pedido sai uma vez em cada lista aberta, nunca de novo no tique seguinte.
@@ -88,7 +86,6 @@ async fn nav_once_per_client() {
     let r = client().post(format!("http://{}/api/sessions/s0/nav", srv.addr)).bearer_auth(OWNER)
         .json(&json!({"url": "127.0.0.1:5173/"})).send().await.unwrap();
     assert_eq!(r.status(), 200);
-    assert_eq!(srv.python.hits_to("/api/sessions/s0/nav"), 0);
     let nav = next_named(&mut a, "nav").await;
     assert_eq!(serde_json::from_str::<Value>(&nav.data).unwrap(), json!({"name": "s0", "url": "http://127.0.0.1:5173/"}));
     let mut b = open(srv.addr).await;
@@ -109,7 +106,6 @@ async fn get_after_invalidate_is_fresh() {
     srv.list.invalidate();
     get(srv.addr, OWNER).await;
     assert_eq!(calls(dir.path(), "list-panes"), 2, "invalidado não serve o de antes");
-    assert_eq!(srv.python.hits_to("/api/sessions"), 0, "a lista do dono nunca vai ao Python");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -168,19 +164,17 @@ async fn hidden_from_owner_not_listed() {
     assert_eq!(names(&serde_json::from_str(&ev.data).unwrap()), ["s0"]);
 }
 
-/// Python dos fatos fora do ar não toca a lista de Claude: servida, sem aviso, sem pergunta.
+/// A lista de Claude sai servida e sem aviso na linha.
 #[tokio::test(flavor = "multi_thread")]
 async fn facts_down_keeps_the_list_without_a_row_warning() {
     let dir = tempfile::tempdir().unwrap();
     let srv = server(dir.path(), 1).await;
-    *srv.python.list_facts.lock().unwrap() = (json!({"quebrado": true}), Duration::ZERO);
     let mut es = open(srv.addr).await;
     let ok: Value = serde_json::from_str(&next_named(&mut es, "sessions").await.data).unwrap();
     assert_eq!(ok[0]["problema"], Value::Null);
     let (status, body) = get(srv.addr, OWNER).await;
     assert_eq!((status, names(&body)), (200, vec!["s0"]));
     assert_eq!(body[0]["problema"], Value::Null, "sem aviso na linha");
-    assert_eq!(srv.python.list_facts_calls.load(std::sync::atomic::Ordering::SeqCst), 0);
 }
 
 struct Runtime(BTreeMap<String, Value>);
@@ -352,7 +346,6 @@ async fn history_comes_from_the_rust_discovery() {
     assert_eq!(r.status(), 200);
     let evs: Vec<Value> = serde_json::from_str(&r.text().await.unwrap()).unwrap();
     assert_eq!(evs.iter().map(|e| e["text"].as_str().unwrap_or_default()).collect::<Vec<_>>(), ["linha 0"]);
-    assert_eq!(srv.python.hits_to("/internal/sessions/s0/reopen"), 0);
     assert_eq!(srv.python.info_calls(), 0);
 }
 

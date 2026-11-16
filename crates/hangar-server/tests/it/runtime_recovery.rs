@@ -154,21 +154,6 @@ fn projection_failure_preserves_definitive_reply() {
 }
 
 #[test]
-#[ignore = "exige HANGAR_TEST_PYTHON apontando ao Python do backend; conferir também no Windows"]
-fn python_and_rust_share_the_lease() {
-    let python = std::env::var_os("HANGAR_TEST_PYTHON").expect("HANGAR_TEST_PYTHON ausente");
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("lease-á.lock");
-    let lease = acquire_lease(&path).unwrap();
-    let script = "import sys\nfrom app.writer_lease import WriterLease\ntry:\n WriterLease(sys.argv[1])\nexcept BlockingIOError:\n sys.exit(0)\nsys.exit(1)";
-    let backend = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../backend");
-    let result = std::process::Command::new(python).args(["-c",script]).arg(&path)
-        .env("PYTHONPATH",backend).output().unwrap();
-    assert!(result.status.success());
-    drop(lease);
-}
-
-#[test]
 fn recover_leaves_the_attempt_of_a_confirmed_operation_alone() {
     let dir = tempfile::tempdir().unwrap();
     let (path, projection) = (dir.path().join("key.json"), dir.path().join("projection"));

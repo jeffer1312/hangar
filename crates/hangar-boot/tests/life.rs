@@ -115,10 +115,3 @@ fn p2_notify_reaches_the_systemd_socket() {
     let read = socket.recv(&mut buffer).unwrap();
     assert_eq!(&buffer[..read], b"READY=1");
 }
-
-#[test]
-fn d9_empty_upstream_is_no_python_parent() {
-    assert!(!hangar_boot::parent_from(None));
-    assert!(!hangar_boot::parent_from(Some(String::new())));
-    assert!(hangar_boot::parent_from(Some("127.0.0.1:41234".into())));
-}

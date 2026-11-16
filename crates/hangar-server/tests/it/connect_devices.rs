@@ -2,7 +2,7 @@
 //! Connect e o fim do acesso. Listener de verdade contra o Python falso.
 #![cfg(unix)]
 use crate::connect_port::{GUEST, free_port, get, guest_server, wait_up};
-use crate::fake::{Fake, OWNER, client, config, spawn_fake, spawn_state};
+use crate::fake::{OWNER, client, config, spawn_fake, spawn_state_for};
 use crate::voice_support;
 
 use std::net::SocketAddr;
@@ -62,7 +62,6 @@ fn ticket(machine: &str, account: &str, nonce: &str, secret: &str) -> (String, S
 }
 
 struct Entrance {
-    python: Arc<Fake>,
     main: SocketAddr,
     connect: SocketAddr,
     store: Arc<Store>,
@@ -72,17 +71,17 @@ struct Entrance {
 
 async fn entrance(tune: impl FnOnce(&mut AppState, &Path)) -> Entrance {
     let dir = crate::physical_tempdir();
-    let (python, upstream) = spawn_fake().await;
-    let mut state = AppState::new(config(upstream, "127.0.0.1"));
+    let (python, _) = spawn_fake().await;
+    let mut state = AppState::new(config("127.0.0.1"));
     let store = Arc::new(Store::new(dir.path().join("connect"), Some(identity())));
     state.connect_devices = store.clone();
     let connect = free_port();
     state.connect = Some(connect);
     tune(&mut state, dir.path());
     let auth = state.auth.clone();
-    let main = spawn_state(state).await;
+    let main = spawn_state_for(&python, state).await;
     wait_up(connect).await;
-    Entrance { python, main, connect, store, auth, dir }
+    Entrance { main, connect, store, auth, dir }
 }
 
 async fn plain() -> Entrance {
@@ -448,7 +447,6 @@ async fn device_token_works_on_every_owner_route() {
     // A credencial do aparelho vale como a do dono numa rota do Rust, por cabeçalho e por `?token=`.
     assert_eq!(get(e.connect, "/api/diag/arquivo").bearer_auth(&token).send().await.unwrap().status(), 200);
     assert_eq!(get(e.connect, &format!("/api/diag/arquivo?token={token}&x=1")).send().await.unwrap().status(), 200);
-    assert_eq!(e.python.hits_to("/api/diag/arquivo"), 0);
     let terminal = open_terminal(e.connect, &token).await;
     drop(terminal);
     let (voice, _) = connect_async(format!("ws://{}/api/voice?token={token}", e.connect)).await.expect("voz pelo Connect");
@@ -468,7 +466,6 @@ async fn device_token_works_on_8765_too() {
     let cookie = get(e.main, "/api/client-api").header("cookie", format!("cp_token={token}"));
     assert_eq!(cookie.send().await.unwrap().status(), 200);
     assert_eq!(get(e.main, "/api/diag/arquivo").bearer_auth(&token).send().await.unwrap().status(), 200);
-    assert_eq!(e.python.hits_to("/api/diag/arquivo"), 0);
 }
 
 #[tokio::test]
@@ -498,7 +495,6 @@ async fn owner_password_is_refused_through_connect() {
         assert_eq!(request.send().await.unwrap().status(), 401);
     }
     assert_eq!(get(e.connect, "/api/diag/arquivo").bearer_auth(OWNER).send().await.unwrap().status(), 401);
-    assert_eq!(e.python.hits_to("/api/diag/arquivo"), 0);
     let socket = connect_async(format!("ws://{}/api/sessions/t/term?token={OWNER}", e.connect)).await;
     assert!(matches!(socket, Err(tungstenite::Error::Http(ref r)) if r.status() == 401));
     // Recusa sem ler o corpo: o que foi anunciado nunca chega.
@@ -519,14 +515,12 @@ async fn everything_else_is_denied_by_default() {
     for path in ["/api/sync/register", "/api/sync/logout", "/api/sync/guests/ana/delete"] {
         assert_eq!(post(e.connect, path, json!({})).send().await.unwrap().status(), 401, "{path}");
     }
-    assert_eq!(e.python.hits_to("/docs"), 0);
     assert_eq!(get(e.connect, "/api/peers/ping").send().await.unwrap().status(), 200);
     assert_ne!(get(e.connect, "/api/sync/prelogin?user=ana").send().await.unwrap().status(), 401, "o login precisa do sal");
     assert_ne!(post(e.connect, "/api/sync/login", json!({})).send().await.unwrap().status(), 401);
     let preflight = client().request(reqwest::Method::OPTIONS, format!("http://{}/api/sessions", e.connect))
         .header("origin", "https://app.example").header("access-control-request-method", "GET");
     assert_eq!(preflight.send().await.unwrap().status(), 200);
-    assert_eq!(e.python.hits_to("/api/sessions"), 0);
 }
 
 #[tokio::test]
@@ -568,7 +562,6 @@ async fn sync_vault_and_logout_need_a_valid_session_through_connect() {
         .header("content-type", "application/json").body(r#"{"enc_blob":{},"base_rev":0}"#);
     assert_eq!(write.send().await.unwrap().status(), 401, "pela entrada o cofre só se lê");
     assert_eq!(logout(&cookie).send().await.unwrap().status(), 200);
-    assert_eq!(e.python.hits_to("/api/sync/vault"), 0);
 }
 
 #[tokio::test]
@@ -598,17 +591,6 @@ async fn revoking_a_device_closes_open_streams() {
     assert_eq!(sse.status(), 200);
     let mut sse = Box::pin(sse.bytes_stream());
     let mut terminal = open_terminal(e.connect, &token).await;
-    // Repasse ao Python: o eco prova que o cano está de pé.
-    let mut piped = TcpStream::connect(e.connect).await.unwrap();
-    piped.write_all(format!("GET /api/sessions/cc/proxy-ws-test?token={token} HTTP/1.1\r\nHost: h\r\n\
-        Connection: Upgrade\r\nUpgrade: websocket\r\n\r\n").as_bytes()).await.unwrap();
-    let mut head = Vec::new();
-    let mut byte = [0u8; 1];
-    while !head.ends_with(b"\r\n\r\n") {
-        tokio::time::timeout(Duration::from_secs(5), piped.read_exact(&mut byte)).await.unwrap().unwrap();
-        head.push(byte[0]);
-    }
-    assert!(head.starts_with(b"HTTP/1.1 101"), "{}", String::from_utf8_lossy(&head));
     let call = voice_support::voice_server_with_long_grace().await;
     let (call_id, call_token) = call.devices.enroll("celular").unwrap();
     let mut voice = open_call(call.addr, &call_token).await;
@@ -622,9 +604,6 @@ async fn revoking_a_device_closes_open_streams() {
         }
     }).await.expect("o SSE cai com o vigia");
     assert_eq!(closed(&mut terminal).await, Some(4410));
-    let mut rest = Vec::new();
-    tokio::time::timeout(Duration::from_secs(12), piped.read_to_end(&mut rest)).await.expect("o vigia fecha em até 5 s").unwrap();
-    assert_eq!(rest, [0x88, 0x02, 0x11, 0x3A]);
     closed(&mut voice).await;
     // Com prazo sem dono de dois minutos, só o `Stop` derruba o app-server aqui.
     assert!(call.app_server_sees("<eof>").await, "a chamada acaba junto com o aparelho");
@@ -774,8 +753,8 @@ async fn owner_secret_routes_are_refused_to_a_device() {
             assert_eq!(refused.status(), 403, "{addr} {path}");
             assert!(!refused.text().await.unwrap().contains(OWNER));
         }
-        // Redirecionamento do Rust e do Python: a query trocada não sai no `Location`.
-        for path in ["/api/peers/", "/api/me/", "/api/redirect-query"] {
+        // Redirecionamento: a query trocada não sai no `Location`.
+        for path in ["/api/peers/", "/api/me/"] {
             let redirected = get(addr, &format!("{path}?token={token}&x=1")).send().await.unwrap();
             assert_eq!(redirected.status(), 307, "{addr} {path}");
             let location = redirected.headers()["location"].to_str().unwrap();
@@ -801,7 +780,7 @@ async fn owner_password_with_reserved_characters_stays_in_the_process() {
         state.auth = Auth::new(PASSWORD);
     }).await;
     let (_, token) = e.store.enroll("celular").unwrap();
-    for path in ["/api/peers/", "/api/redirect-query"] {
+    for path in ["/api/peers/"] {
         let redirected = get(e.connect, &format!("{path}?token={token}")).send().await.unwrap();
         assert_eq!(redirected.status(), 307, "{path}");
         let location = redirected.headers()["location"].to_str().unwrap();

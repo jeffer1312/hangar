@@ -1841,26 +1841,6 @@ fn the_guest_claim_writes_guests_json_under_the_shared_lock() {
     assert_eq!(written["sessions"]["s4"], json!({"guest": "g1", "life": null}));
 }
 
-/// O transporte do dono não converte a identidade de uma ponte de login retirada.
-#[tokio::test]
-async fn the_owner_bridge_refuses_every_guest_identity_without_launching() {
-    use axum::{extract::{State,ConnectInfo},body::{Body,to_bytes},http::Request};
-    let address="127.0.0.1:0".parse().unwrap();
-    let state=std::sync::Arc::new(crate::routes::AppState::new(crate::config::Config {
-        listen:address,upstream:address,internal_secret:"fixture".into(),auth_token:"owner".into(),log_path:None,
-        trusted:crate::auth::TrustedHosts::parse("127.0.0.1"),
-    }));
-    for envelope in [json!({"guest":"g1"}),json!({"guest":""}),json!({"guest":1}),json!({"guest":false}),json!({"guest":{"id":"g1"}}),json!({"guest_root":"/fixture"})] {
-        let request=Request::post("/__hangar_server/claude/s/open").header("x-hangar-internal","fixture").body(Body::from(envelope.to_string())).unwrap();
-        let response=server::bridge(State(state.clone()),ConnectInfo(address),request).await;
-        assert_eq!(response.status(),400,"{envelope}");
-        let bytes=to_bytes(response.into_body(),4096).await.unwrap();
-        let body:Value=serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(body["detail"]["code"],"erro_corpo_invalido");
-        assert_eq!(body["detail"]["msg"],"a ponte de abertura não aceita identidade de convidado");
-    }
-}
-
 /// O Rust espera a trava que o próprio `atomico.locked` do Python segura no `guests.lock`.
 #[cfg(unix)]
 #[test]

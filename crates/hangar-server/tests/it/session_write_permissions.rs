@@ -12,8 +12,8 @@ use hangar_server::routes::AppState;
 use hangar_server::runtime::gateway::RuntimeRegistry;
 use serde_json::{Value, json};
 
-use crate::fake::{self, Fake, SECRET};
-use crate::session_write_control::{open_headless, policy, send};
+use crate::fake;
+use crate::session_write_control::{open_headless, send};
 #[cfg(unix)]
 use crate::session_write_control::{keys_sent, open_terminal, serve_with_interactions};
 
@@ -34,7 +34,7 @@ pub(crate) fn headless_sidecar(home: &Path, name: &str) {
 
 /// Lista no tmux falso com `s0` (Claude com terminal) e `p0` (Pi, pela escolha da criação). O registro
 /// não tem vigia: não adota ninguém. `headless`: um Claude sem terminal `h` aberto no Rust.
-async fn serve(root: &Path, headless: bool) -> (Arc<Fake>, std::net::SocketAddr) {
+async fn serve(root: &Path, headless: bool) -> std::net::SocketAddr {
     let script = crate::list_support::sessions(root, 1);
     let pi = root.join("wp");
     std::fs::create_dir_all(&pi).unwrap();
@@ -45,17 +45,15 @@ async fn serve(root: &Path, headless: bool) -> (Arc<Fake>, std::net::SocketAddr)
     let dirs = parse_dirs(&json!({"home": home, "claude": home.join(".claude"), "codex_home": home.join(".codex"),
         "pi_sessions": home.join(".pi/agent/sessions"), "omp_config": home.join(".omp"), "omp_agent": home.join(".omp/agent"),
         "kimi_home": home.join(".kimi-code")}).to_string());
-    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     // A pasta da prova: os sidecars e specs que o registro lê são os dela, nunca os da máquina.
     let env = hangar_server::accounts::environment::AccountEnvironment::from_map([("HOME".to_owned(), home.to_string_lossy().into_owned())].into());
-    let registry = Arc::new(RuntimeRegistry::new(policy(calls).await, "secret-test".into(), "instance-test".into())
+    let registry = Arc::new(RuntimeRegistry::new("instance-test".into())
         .with_processes(Arc::new(crate::runtime_open::RecipeProcesses("sid-1"))).with_codex_environment(env));
     if headless {
         headless_sidecar(&home, "h");
         open_headless(&registry, root, "h").await;
     }
-    let (python, upstream) = fake::spawn_fake().await;
-    let mut state = AppState::new(fake::config(upstream, "127.0.0.1"));
+    let mut state = AppState::new(fake::config("127.0.0.1"));
     // Convidados com conta: a Ana vê as sessões do dono, a Bia não.
     let guests = hangar_server::login_guests::Service::new(hangar_server::login_guests::Settings { guests: root.join("guests.json"),
         vault: root.join("vault.json"), runtime_config: root.join("runtime-config.json"), sync_enabled: false, bootstrap: String::new(),
@@ -66,10 +64,10 @@ async fn serve(root: &Path, headless: bool) -> (Arc<Fake>, std::net::SocketAddr)
     state.login_guests = Arc::new(guests);
     state.list = Arc::new(ListBridge::new(ListEnv { mux: Mux::with_program(&script, Duration::from_secs(5)),
         capture_program: script.into_os_string(), procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs },
-        FactsClient::new(upstream, SECRET.into())));
+        FactsClient::new()));
     state.write_gate_wait = Duration::from_secs(5);
     assert!(state.state.runtime.set(registry).is_ok());
-    (python, fake::spawn_state(state).await)
+    fake::spawn_state(state).await
 }
 
 async fn code(server: std::net::SocketAddr, method: &str, path: &str, body: &str) -> (u16, Value) {
@@ -77,21 +75,16 @@ async fn code(server: std::net::SocketAddr, method: &str, path: &str, body: &str
     (status, reply["detail"]["code"].clone())
 }
 
-fn python_hits(python: &Fake, name: &str) -> usize {
-    python.hits_to(&format!("/api/sessions/{name}/permission-modes")) + python.hits_to(&format!("/api/sessions/{name}/permission-mode"))
-}
-
 /// R4-01 (`_cached_info` → 404): sessão que ninguém tem é 404 `erro_sessao_inexistente`, lida e trocada.
 /// Decisão 11: a sessão é conferida antes do modo, e o modo torto numa sessão inexistente também é 404.
 #[tokio::test(flavor = "multi_thread")]
 async fn permissions_r4_01_session_nobody_has_is_404_from_rust() {
     let dir = tempfile::tempdir().unwrap();
-    let (python, server) = serve(dir.path(), false).await;
+    let server = serve(dir.path(), false).await;
     let missing = json!("erro_sessao_inexistente");
     assert_eq!(code(server, "GET", "nada/permission-modes", "").await, (404, missing.clone()));
     assert_eq!(code(server, "POST", "nada/permission-mode", r#"{"mode":"plan"}"#).await, (404, missing.clone()));
     assert_eq!(code(server, "POST", "nada/permission-mode", r#"{"mode":"wrong"}"#).await, (404, missing));
-    assert_eq!(python_hits(&python, "nada"), 0);
 }
 
 /// R4-02 (`test_perm_get_nao_claude_409`, `test_perm_post_nao_claude_409`): sessão de outro agente é 409
@@ -99,11 +92,10 @@ async fn permissions_r4_01_session_nobody_has_is_404_from_rust() {
 #[tokio::test(flavor = "multi_thread")]
 async fn permissions_r4_02_session_of_another_agent_is_409_only_claude() {
     let dir = tempfile::tempdir().unwrap();
-    let (python, server) = serve(dir.path(), false).await;
+    let server = serve(dir.path(), false).await;
     let only = json!("erro_permissao_so_claude");
     assert_eq!(code(server, "GET", "p0/permission-modes", "").await, (409, only.clone()));
     assert_eq!(code(server, "POST", "p0/permission-mode", r#"{"mode":"plan"}"#).await, (409, only));
-    assert_eq!(python_hits(&python, "p0"), 0);
 }
 
 /// D4 e contrato (c): Claude com terminal que o Rust não conduz nem adota é 503 `runtime_unhealthy`;
@@ -111,12 +103,11 @@ async fn permissions_r4_02_session_of_another_agent_is_409_only_claude() {
 #[tokio::test(flavor = "multi_thread")]
 async fn permissions_d4_claude_without_actor_is_503_never_the_python() {
     let dir = tempfile::tempdir().unwrap();
-    let (python, server) = serve(dir.path(), false).await;
+    let server = serve(dir.path(), false).await;
     let unhealthy = json!("runtime_unhealthy");
     assert_eq!(code(server, "GET", "s0/permission-modes", "").await, (503, unhealthy.clone()));
     assert_eq!(code(server, "GET", "s0/permission-modes?sondar=1", "").await, (503, unhealthy.clone()));
     assert_eq!(code(server, "POST", "s0/permission-mode", r#"{"mode":"plan"}"#).await, (503, unhealthy));
-    assert_eq!(python_hits(&python, "s0"), 0);
     assert_eq!(crate::list_support::calls(dir.path(), "send-keys"), 0, "nenhuma tecla no pane");
 }
 
@@ -135,11 +126,10 @@ async fn permissions_r4_08_parked_headless_claude_is_read_from_its_record() {
         if let Some(previous) = previous { meta["previous_non_plan"] = json!(previous); }
         std::fs::write(sidecars.join(format!("{name}.json")), meta.to_string()).unwrap();
     }
-    let (python, server) = serve(dir.path(), false).await;
+    let server = serve(dir.path(), false).await;
     for (name, previous) in [("q0", json!("auto")), ("q1", Value::Null)] {
         let (status, reply) = send(server, "GET", &format!("{name}/permission-modes"), "").await;
         assert_eq!((status, reply), (200, json!({"current": "plan", "modes": MODES, "sondavel": false, "previous_non_plan": previous})), "{name}");
-        assert_eq!(python_hits(&python, name), 0);
     }
     assert_eq!(crate::list_support::calls(dir.path(), "new-session"), 0, "ler não sobe o processo");
 }
@@ -155,10 +145,9 @@ async fn permissions_parked_headless_that_cannot_relaunch_is_409_stopped() {
     std::fs::create_dir_all(&sidecars).unwrap();
     std::fs::write(sidecars.join("q2.json"), json!({"name": "q2", "provider": "claude", "headless": true, "cwd": cwd,
         "session_id": "00000000-0000-0000-0000-0000000000cc", "permission_mode": "plan", "cano": null}).to_string()).unwrap();
-    let (python, server) = serve(dir.path(), false).await;
+    let server = serve(dir.path(), false).await;
     let (status, reply) = send(server, "POST", "q2/permission-mode", r#"{"mode":"auto"}"#).await;
     assert_eq!((status, reply["detail"]["code"].as_str()), (409, Some("erro_permissao_sessao_parada")), "{reply}");
-    assert_eq!(python_hits(&python, "q2"), 0);
     assert_eq!(crate::list_support::calls(dir.path(), "new-session"), 0, "ler não sobe o processo");
 }
 
@@ -168,7 +157,7 @@ async fn permissions_parked_headless_that_cannot_relaunch_is_409_stopped() {
 #[tokio::test(flavor = "multi_thread")]
 async fn permissions_r4_08_headless_claude_reads_and_sets_through_the_actor() {
     let dir = tempfile::tempdir().unwrap();
-    let (python, server) = serve(dir.path(), true).await;
+    let server = serve(dir.path(), true).await;
     for query in ["", "?sondar=xyz"] {
         let (status, reply) = send(server, "GET", &format!("h/permission-modes{query}"), "").await;
         assert_eq!((status, reply["modes"].clone(), reply["sondavel"].clone()), (200, json!(MODES), json!(false)), "{query}: {reply}");
@@ -182,7 +171,6 @@ async fn permissions_r4_08_headless_claude_reads_and_sets_through_the_actor() {
     let (status, reply) = send(server, "POST", "h/permission-mode", r#"{"permission_mode":"plan"}"#).await;
     assert_eq!((status, reply["mode"].clone(), reply["current"].clone()), (200, json!("plan"), json!("plan")), "{reply}");
     assert!(reply.as_object().unwrap().contains_key("previous_non_plan"), "{reply}");
-    assert_eq!(python_hits(&python, "h"), 0);
 }
 
 /// R4-19, decisões 1 e 2 (D2): o convidado com conta chega a modos e modelo da sessão que vê pela rota do
@@ -191,7 +179,7 @@ async fn permissions_r4_08_headless_claude_reads_and_sets_through_the_actor() {
 #[tokio::test(flavor = "multi_thread")]
 async fn r4_19_login_guest_reaches_mode_and_model_in_rust() {
     let dir = tempfile::tempdir().unwrap();
-    let (python, server) = serve(dir.path(), true).await;
+    let server = serve(dir.path(), true).await;
     let send = |method: reqwest::Method, route: &'static str, token: &'static str| {
         let request = fake::client().request(method, format!("http://{server}/api/sessions/h/{route}")).bearer_auth(token)
             .header("content-type", "application/json");
@@ -208,7 +196,6 @@ async fn r4_19_login_guest_reaches_mode_and_model_in_rust() {
         let (status, body) = send(method, route, GUEST).await;
         assert_ne!(body["detail"]["code"].as_str(), Some("erro_fora_do_convidado"), "{route}: a sessão é visível para ela");
         assert_eq!(status, 200, "{route}: a rota do dono atende o convidado: {body}");
-        assert_eq!(python.hits_to(&format!("/api/sessions/h/{route}")), 0, "{route}");
     }
 }
 
@@ -218,20 +205,18 @@ async fn r4_19_login_guest_reaches_mode_and_model_in_rust() {
 #[tokio::test]
 async fn permissions_r4_05_claude_whose_pane_is_gone_is_409_with_a_code_and_no_key() {
     let dir = tempfile::tempdir().unwrap();
-    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let registry = Arc::new(RuntimeRegistry::new(policy(calls).await, "secret-test".into(), "instance-test".into())
+    let registry = Arc::new(RuntimeRegistry::new("instance-test".into())
         .with_processes(Arc::new(crate::runtime_open::RecipeProcesses("sid-1"))));
     let log = open_terminal(&registry, dir.path(), "t").await;
     let tmux = dir.path().join("tmux");
     let script = std::fs::read_to_string(&tmux).unwrap();
     crate::write_executable(&tmux, script.replacen("= capture-pane ]; then", "= capture-pane ]; then echo 'no such pane: %1' >&2; exit 1;", 1));
-    let (python, server) = serve_with_interactions(registry, Arc::default()).await;
+    let (_, server) = serve_with_interactions(registry, Arc::default()).await;
     let before = keys_sent(&log);
     let (status, reply) = send(server, "POST", "t/permission-mode", r#"{"mode":"plan"}"#).await;
     assert_eq!(status, 409, "{reply}");
     assert!(reply["detail"]["code"].as_str().is_some_and(|code| !code.is_empty()), "recusa com código: {reply}");
     assert_eq!(keys_sent(&log), before, "nenhum Shift+Tab");
-    assert_eq!(python_hits(&python, "t"), 0);
 }
 
 /// R4-17 (`login_guests/gate.rs:24`): o convidado com conta que vê a sessão não alcança nenhuma rota de
@@ -239,7 +224,7 @@ async fn permissions_r4_05_claude_whose_pane_is_gone_is_409_with_a_code_and_no_k
 #[tokio::test(flavor = "multi_thread")]
 async fn r4_17_login_guest_never_reaches_the_group_routes() {
     let dir = tempfile::tempdir().unwrap();
-    let (python, server) = serve(dir.path(), true).await;
+    let server = serve(dir.path(), true).await;
     for (method, route, body) in [(reqwest::Method::POST, "pair", json!({"peer": "s0"})), (reqwest::Method::DELETE, "pair", json!({})),
         (reqwest::Method::POST, "group-message", json!({"text": "oi"})), (reqwest::Method::GET, "pair/contract", Value::Null),
         (reqwest::Method::PUT, "pair/contract", json!({"text": "x"})), (reqwest::Method::POST, "pair-remote", json!({"peer": "outra::x"})),
@@ -249,6 +234,5 @@ async fn r4_17_login_guest_never_reaches_the_group_routes() {
         let status = response.status().as_u16();
         let reply: Value = serde_json::from_str(&response.text().await.unwrap()).unwrap_or(Value::Null);
         assert_eq!((status, reply["detail"]["code"].as_str()), (403, Some("erro_fora_do_convidado")), "{method} {route}: {reply}");
-        assert_eq!(python.hits_to(&format!("/api/sessions/h/{route}")), 0, "{route}");
     }
 }

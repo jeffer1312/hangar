@@ -121,19 +121,6 @@ pub async fn public(
     }
     serve(st, name, req, false).await
 }
-pub async fn private(
-    State(st): State<Arc<AppState>>,
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
-    req: Request,
-) -> Response {
-    if !crate::workspace_routes::private_ok(&st, peer, req.headers()) {
-        return StatusCode::NOT_FOUND.into_response();
-    }
-    let Some(name) = crate::auth::query_param(req.uri().query(), "name") else {
-        return StatusCode::BAD_REQUEST.into_response();
-    };
-    serve(st, name, req, true).await
-}
 fn refuse(reason: &'static str, forwarded: bool) -> Response {
     if forwarded {
         (StatusCode::FORBIDDEN, reason).into_response()

@@ -26,7 +26,7 @@ async fn fetch_process_contract() {
             return;
         }
         let dir=tempfile::tempdir().unwrap();
-        let f=workspace_fixture::fixture(dir.path(),false).await;
+        let f=workspace_fixture::fixture(dir.path()).await;
         let response=client().post(format!("http://{}/api/worktrees/fetch",f.addr)).bearer_auth(OWNER)
             .json(&serde_json::json!({"repo":dir.path()})).send().await.unwrap();
         assert_eq!(response.status(),500);
@@ -38,7 +38,6 @@ async fn fetch_process_contract() {
             #[cfg(windows)] assert!(text.starts_with("git falhou: [WinError 193] ")||text.starts_with("git falhou: [WinError 216] "),"{text}");
             assert!(!text.contains("(os error"));
         }
-        assert_eq!(f.hits(),0);
         return;
     }
     let dir=tempfile::tempdir().unwrap();

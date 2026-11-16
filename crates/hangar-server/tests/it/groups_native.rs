@@ -27,8 +27,7 @@ fn run(home: &Path, id: &str, gid: &str, end: bool) {
 async fn phase_uses_actual_runs_and_never_a_python_callback() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().join("home");
-    let (python, _) = fake::spawn_fake().await;
-    let facts = PythonOrq::new()
+    let facts = OrqVault::new()
         .with_paths(home.clone(), dir.path().join("pair"));
     assert_eq!(facts.phase("g1").await, OrqPhase::NotStarted);
     run(&home, "one", "g1", false);
@@ -42,7 +41,6 @@ async fn phase_uses_actual_runs_and_never_a_python_callback() {
     std::fs::remove_file(&events).unwrap();
     std::fs::create_dir(events).unwrap();
     assert_eq!(facts.phase("g1").await, OrqPhase::Unknown);
-    assert!(python.internal_bodies("orq/group-phase").is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -83,8 +81,7 @@ async fn promotion_moves_the_exact_draft_and_marks_its_source() {
         std::fs::read_to_string(srv.pair.join(format!("regras-{gid}.md"))).unwrap(),
         content
     );
-    assert!(srv.python.internal_bodies("orq/promote").is_empty());
-    let facts = PythonOrq::new()
+    let facts = OrqVault::new()
         .with_paths(home, srv.pair.clone());
     assert!(
         matches!(facts.promote("s0","draft-x").await,Err(PromoteError::Conflict(s)) if s == "grupo de destino inválido")
@@ -125,7 +122,6 @@ async fn conflict_and_actual_disk_failure_restore_the_new_group() {
         assert!(srv.groups.link("s0").await.unwrap().is_none());
         assert!(srv.groups.link("s1").await.unwrap().is_none());
         assert!(source.exists());
-        assert!(srv.python.internal_bodies("orq/promote").is_empty());
     }
 }
 
@@ -186,8 +182,8 @@ async fn promotion_rollback_names_each_unrestored_member_in_409_and_diary() {
 async fn orchestrator_identity_comes_from_a_live_run_not_the_suffix() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().join("home");
-    let (python, address) = fake::spawn_fake().await;
-    let mut state = AppState::new(fake::config(address, ""));
+    let (python, _) = fake::spawn_fake().await;
+    let mut state = AppState::new(fake::config(""));
     state.diag = python.bind_diary(state.diag.clone());
     state.accounts = hangar_server::accounts::AccountService::new(
         hangar_server::accounts::environment::AccountEnvironment::from_map(
@@ -224,7 +220,6 @@ async fn orchestrator_identity_comes_from_a_live_run_not_the_suffix() {
             .unwrap()
             .is_empty()
     );
-    assert!(python.internal_bodies("orq/is-orchestrator").is_empty());
 }
 
 #[cfg(target_os = "linux")]
@@ -244,8 +239,7 @@ async fn promotion_uses_the_configured_mux_to_resolve_the_live_identity() {
     std::fs::create_dir_all(&pair).unwrap();
     let draft = context::draft(&home, "fixture-mux", mux.to_str().unwrap()).unwrap();
     std::fs::write(pair.join(format!("regras-{draft}.md")), "time local\n").unwrap();
-    let (python, _) = fake::spawn_fake().await;
-    let facts = PythonOrq::new()
+    let facts = OrqVault::new()
         .with_paths(home, pair.clone())
         .with_mux(mux.to_string_lossy().into_owned());
     assert_eq!(facts.promote("fixture-mux", "g1").await, Ok(()));
@@ -253,5 +247,4 @@ async fn promotion_uses_the_configured_mux_to_resolve_the_live_identity() {
         std::fs::read_to_string(pair.join("regras-g1.md")).unwrap(),
         "time local\n"
     );
-    assert!(python.internal_bodies("orq/promote").is_empty());
 }

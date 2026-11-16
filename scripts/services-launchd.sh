@@ -11,7 +11,7 @@
 #   ./scripts/services-launchd.sh --ativo     # sai 0 só com o backend de pé (prova do instalador)
 #   ./scripts/services-launchd.sh --uninstall # para e remove o serviço
 #
-# A configuração continua no backend/.env, como no `uv run python -m app.main` na mão.
+# A configuração continua no backend/.env, lida pelo próprio hangar-server.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -58,15 +58,8 @@ case "${1:-}" in
 esac
 
 xml() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
-# Checkout sem o app/main.py: o hangar-server sobe sozinho, com a mesma escolha de binário do CLI.
+# O hangar-server sobe sozinho, com a mesma escolha de binário do CLI.
 PROGRAMA="<string>$(xml "$REPO/scripts/hangar-server-command")</string>"
-if [ -f "$REPO/backend/app/main.py" ]; then
-  # O Python do venv direto, sem `uv run` no meio: o sinal de parar do launchd chega ao próprio
-  # backend, que encerra o hangar-server filho. Com o uv no meio, matar o uv deixava o backend órfão.
-  PY_BIN="$REPO/backend/.venv/bin/python"
-  [ -x "$PY_BIN" ] || { echo "venv do backend não encontrado — rode: cd backend && uv sync" >&2; exit 1; }
-  PROGRAMA="<string>$(xml "$PY_BIN")</string><string>-m</string><string>app.main</string>"
-fi
 # O agente nasce sem o PATH do shell: o backend abre `claude`, `tmux`, `node` e `tailscale`.
 PATH_SERVICO="$HOME/.local/bin"
 if command -v node >/dev/null; then PATH_SERVICO="$PATH_SERVICO:$(dirname "$(command -v node)")"; fi

@@ -1,22 +1,10 @@
-use std::{
-    collections::VecDeque,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicUsize, Ordering},
-    },
-    time::Duration,
-};
+use std::{collections::VecDeque, sync::{Arc, Mutex}, time::Duration};
 
-use axum::{Router, http::StatusCode};
+use axum::Router;
 use serde_json::{Value, json};
 
 use hangar_core::process::{CommandError, CommandOutput, Commands};
-use hangar_server::{
-    accounts::{AccountService, environment::AccountEnvironment},
-    auth::TrustedHosts,
-    config::Config,
-    routes::AppState,
-};
+use hangar_server::{accounts::{AccountService, environment::AccountEnvironment}, auth::TrustedHosts, config::Config, routes::AppState};
 
 #[derive(Default)]
 struct ScriptedCommands {
@@ -48,7 +36,6 @@ impl Commands for ScriptedCommands {
 struct Fixture {
     home: tempfile::TempDir,
     base: String,
-    upstream_calls: Arc<AtomicUsize>,
     quota_path: std::path::PathBuf,
     native_commands: Arc<dyn Commands>,
     #[cfg(target_os = "linux")]
@@ -63,22 +50,10 @@ impl Fixture {
 
     async fn with_commands(commands: Arc<dyn Commands>) -> Self {
         let home = tempfile::tempdir().unwrap();
-        let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let upstream_address = upstream.local_addr().unwrap();
-        let upstream_calls = Arc::new(AtomicUsize::new(0));
-        let calls = upstream_calls.clone();
-        let upstream_task = tokio::spawn(async move {
-            let router = Router::new().fallback(move || {
-                calls.fetch_add(1, Ordering::SeqCst);
-                async { StatusCode::SERVICE_UNAVAILABLE }
-            });
-            axum::serve(upstream, router).await.unwrap();
-        });
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let mut state = AppState::new(Config {
             listen: address,
-            upstream: upstream_address,
             internal_secret: "fixture-internal".into(),
             auth_token: "fixture-owner".into(),
             log_path: None,
@@ -113,12 +88,11 @@ impl Fixture {
         Self {
             home,
             base: format!("http://{address}"),
-            upstream_calls,
             quota_path,
             native_commands,
             #[cfg(target_os = "linux")]
             router: handler_router,
-            tasks: vec![task, upstream_task],
+            tasks: vec![task],
         }
     }
 
@@ -301,7 +275,6 @@ async fn encoded_paths_and_invalid_subpaths_never_reach_python() {
             404
         );
     }
-    assert_eq!(fixture.upstream_calls.load(Ordering::SeqCst), 0);
     fixture.stop().await;
 }
 
@@ -465,7 +438,6 @@ async fn cookie_is_saved_without_python() {
         serde_json::from_slice(&std::fs::read(&fixture.quota_path).unwrap()).unwrap();
     assert!(quotas.get("engine:oc").is_none());
     assert_eq!(quotas["engine:other"]["cota"]["estado"], "lida");
-    assert_eq!(fixture.upstream_calls.load(Ordering::SeqCst), 0);
     fixture.stop().await;
 }
 
@@ -498,7 +470,6 @@ async fn cookie_saved_stays_successful_when_quota_cache_cannot_be_written() {
     }
     let saved = hangar_opencode_cookie::read(fixture.home.path()).unwrap();
     assert!(!saved.contains_key("a"));
-    assert_eq!(fixture.upstream_calls.load(Ordering::SeqCst), 0);
     fixture.stop().await;
 }
 
@@ -586,7 +557,6 @@ async fn owner_forms_authenticate_validate_and_keep_method_contract_without_pyth
             .unwrap()
             .ends_with("/api/preview")
     );
-    assert_eq!(fixture.upstream_calls.load(Ordering::SeqCst), 0);
     fixture.stop().await;
 }
 
@@ -659,6 +629,5 @@ async fn webhook_is_public_by_signature_and_preview_keeps_port_coercion_without_
         assert_eq!(response.json::<Value>().await.unwrap()["port"], expected);
     }
     assert_eq!(commands.calls.lock().unwrap()[0].0, "systemctl");
-    assert_eq!(fixture.upstream_calls.load(Ordering::SeqCst), 0);
     fixture.stop().await;
 }

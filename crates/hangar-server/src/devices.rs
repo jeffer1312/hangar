@@ -171,7 +171,7 @@ mod tests {
     use super::*;
     use chrono::TimeZone;
 
-    fn diag() -> DiagClient { DiagClient::new("127.0.0.1:1".parse().unwrap(), String::new()) }
+    fn diag() -> DiagClient { DiagClient::new() }
 
     fn at(second: u32) -> DateTime<Utc> { Utc.with_ymd_and_hms(2026, 10, 30, 12, 0, second).unwrap() }
 

@@ -322,7 +322,6 @@ mod tests {
     fn state() -> AppState {
         AppState::new(crate::config::Config {
             listen: "127.0.0.1:0".parse().unwrap(),
-            upstream: "127.0.0.1:9".parse().unwrap(),
             internal_secret: "synthetic".into(),
             auth_token: "synthetic".into(),
             log_path: None,

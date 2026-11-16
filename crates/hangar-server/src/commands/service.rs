@@ -211,12 +211,6 @@ pub async fn serve(st: &Arc<AppState>, req: Request) -> Response {
     }
 }
 
-pub(crate) fn matches(path: &str) -> bool {
-    path.strip_prefix("/api/sessions/")
-        .and_then(|tail| tail.split_once('/'))
-        .is_some_and(|(name, route)| !name.is_empty() && route == "commands")
-}
-
 fn failed(st: &AppState, name: &str, code: &'static str) -> Response {
     st.diag.report(
         "rust.commands_failed",

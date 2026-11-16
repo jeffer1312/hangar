@@ -15,9 +15,9 @@ async fn setup(lines: std::ops::Range<usize>, stem: &str) -> (tempfile::TempDir,
     let dir = tempfile::tempdir().unwrap();
     let jsonl = dir.path().join(format!("{stem}.jsonl"));
     let offs = append_lines(&jsonl, lines);
-    let (fake, up) = spawn_fake().await;
+    let (fake, _) = spawn_fake().await;
     fake.set_info(info_json("claude", &jsonl));
-    let srv = spawn_server_with_diary(config(up, "127.0.0.1"), &fake).await;
+    let srv = spawn_server_with_diary(config("127.0.0.1"), &fake).await;
     (dir, jsonl, offs, fake, srv)
 }
 
@@ -97,7 +97,7 @@ async fn partial_line_is_delivered_once_when_completed() {
 
 #[tokio::test]
 async fn devices_share_one_hub_and_late_one_gets_snapshot() {
-    let (_dir, _jsonl, _offs, fake, srv) = setup(0..1, "sess-d").await;
+    let (_dir, _jsonl, _offs, _, srv) = setup(0..1, "sess-d").await;
     let mut a = sse(open_events(srv, "s", "", &[]).await);
     messages(&mut a, 1).await;
 
@@ -111,7 +111,6 @@ async fn devices_share_one_hub_and_late_one_gets_snapshot() {
     let mut b = sse(open_events(srv, "s", "", &[]).await);
     assert_eq!(id_of(&messages(&mut b, 1).await[0]), "u0");
     assert_eq!(next_named(&mut b, "stats").await.data, stats);
-    assert_eq!(fake.hits_to("/internal/sessions/s/side-events"), 0, "a conversa não abre conexão ao Python");
 }
 
 /// Lê até a mensagem marcadora (linha `id` do transcript) e falha se no caminho vier outro `reset`.
@@ -161,9 +160,9 @@ async fn codex_clear_resets_history_before_the_new_rollout_exists() {
     let message = |text:&str|format!("{}\n",json!({"type":"response_item","payload":{"type":"message","role":"user",
         "content":[{"type":"input_text","text":text}]}}));
     std::fs::write(&old,message("mensagem anterior")).unwrap();
-    let (fake,up) = spawn_fake().await;
+    let (fake,_) = spawn_fake().await;
     fake.set_info(info_json("codex",&old));
-    let srv = spawn_server(config(up,"127.0.0.1")).await;
+    let srv = spawn_server_for(&fake, config("127.0.0.1")).await;
     let mut events = sse(open_events(srv,"s","",&[]).await);
     assert!(messages(&mut events,1).await[0].data.contains("mensagem anterior"));
     fake.set_info(info_json("codex",&new));
@@ -231,7 +230,6 @@ async fn provider_outside_rust_resets_and_next_connection_is_not_found() {
     let r = open_events(srv, "s", "", &[]).await;
     assert_eq!(r.status(), 404);
     assert_eq!(r.json::<Value>().await.unwrap()["detail"]["code"], "erro_sessao_inexistente");
-    assert_eq!(fake.hits_to("/api/sessions/s/events"), 0);
 }
 
 #[tokio::test]
@@ -291,7 +289,6 @@ async fn events_without_owner_token_is_refused_by_rust() {
     // O Python não tem `/events`: o 401 com código, e a falha contada, saem do Rust.
     assert_eq!(r.status(), 401);
     assert_eq!(r.json::<Value>().await.unwrap()["detail"]["code"], "erro_nao_autorizado");
-    assert_eq!(fake.hits_to("/api/sessions/s/events"), 0);
     assert_eq!(fake.info_calls(), 0);
 
     // Controle: o token do dono abre o stream no Rust, que consulta a rota interna.
@@ -302,7 +299,7 @@ async fn events_without_owner_token_is_refused_by_rust() {
 
 #[tokio::test]
 async fn history_is_served_by_rust_with_etag_limit_gzip_and_cors() {
-    let (_dir, jsonl, _offs, fake, srv) = setup(0..40, "sess-i").await;
+    let (_dir, jsonl, _offs, _, srv) = setup(0..40, "sess-i").await;
     let info: InternalInfo = serde_json::from_value(info_json("claude", &jsonl)).unwrap();
     let req = info.history_request(None).expect("history_field tem de casar com o formato da Task 9");
     let expected = serde_json::to_value(merged_history(&req).unwrap()).unwrap();
@@ -316,7 +313,6 @@ async fn history_is_served_by_rust_with_etag_limit_gzip_and_cors() {
     let etag = r.headers().get("etag").expect("etag").to_str().unwrap().to_owned();
     let got: Value = serde_json::from_str(&r.text().await.unwrap()).unwrap();
     assert_eq!(got, expected);
-    assert_eq!(fake.hits_to("/api/sessions/s/history"), 0, "não passou pelo Python");
 
     let r304 = client().get(&url).bearer_auth(OWNER).header("if-none-match", &etag).send().await.unwrap();
     assert_eq!(r304.status(), 304);
@@ -333,7 +329,7 @@ async fn history_is_served_by_rust_with_etag_limit_gzip_and_cors() {
 
 #[tokio::test]
 async fn history_negative_limit_is_the_whole_history_like_python() {
-    let (_dir, jsonl, _offs, fake, srv) = setup(0..40, "sess-k").await;
+    let (_dir, jsonl, _offs, _, srv) = setup(0..40, "sess-k").await;
     let info: InternalInfo = serde_json::from_value(info_json("claude", &jsonl)).unwrap();
     let expected = serde_json::to_value(merged_history(&info.history_request(None).unwrap()).unwrap()).unwrap();
     let r = client()
@@ -345,7 +341,6 @@ async fn history_negative_limit_is_the_whole_history_like_python() {
     assert_eq!(r.status(), 200);
     let got: Value = serde_json::from_str(&r.text().await.unwrap()).unwrap();
     assert_eq!(got, expected);
-    assert_eq!(fake.hits_to("/api/sessions/s/history"), 0, "não passou pelo Python");
 }
 
 #[tokio::test]
@@ -372,7 +367,6 @@ async fn history_without_owner_is_401_and_bad_limit_and_unknown_provider_stay_in
     let r = client().get(&url).bearer_auth(OWNER).send().await.unwrap();
     assert_eq!(r.status().as_u16(), 200);
     assert_eq!(r.json::<Value>().await.unwrap(), expected);
-    assert_eq!(fake.hits_to("/api/sessions/s/history"), 0, "nada chega ao Python");
 }
 
 #[tokio::test]
@@ -418,7 +412,6 @@ async fn history_io_error_answers_503_with_code() {
     let r = client().get(format!("http://{srv}/api/sessions/s-io/history")).bearer_auth(OWNER)
         .header("origin", "http://outra").send().await.unwrap();
     assert_503(r, "history_io").await;
-    assert_eq!(fake.hits_to("/api/sessions/s-io/history"), 0, "o Python não recebe o pedido");
     wait_until(|| !fake.diag().is_empty()).await;
     let line = fake.diag().into_iter().find(|line| line["evento"] == "rust.history_failed").unwrap();
     assert_eq!(line["sessao"], "s-io");
@@ -426,7 +419,6 @@ async fn history_io_error_answers_503_with_code() {
     assert_eq!(line["detalhe"], "a leitura do histórico falhou");
     assert_eq!(line["nivel"], "erro");
     assert_eq!(line["origem"], "servidor");
-    assert_eq!(fake.hits_to("/internal/diag"), 0);
 }
 
 #[tokio::test]
@@ -437,8 +429,6 @@ async fn events_without_info_answers_503() {
     let r = client().get(format!("http://{srv}/api/sessions/s/history")).bearer_auth(OWNER)
         .header("origin", "http://outra").send().await.unwrap();
     assert_503(r, "internal_info").await;
-    assert_eq!(fake.hits_to("/api/sessions/s/events"), 0);
-    assert_eq!(fake.hits_to("/api/sessions/s/history"), 0);
 }
 
 #[tokio::test]
@@ -453,8 +443,6 @@ async fn missing_session_is_the_rust_404() {
     let r = open_events(srv, "s", "", &[]).await;
     assert_eq!(r.status(), 404);
     assert_eq!(r.json::<Value>().await.unwrap()["detail"]["code"], "erro_sessao_inexistente");
-    assert_eq!(fake.hits_to("/api/sessions/s/history"), 0);
-    assert_eq!(fake.hits_to("/api/sessions/s/events"), 0);
     assert!(fake.diag().is_empty(), "sessão inexistente não é falha");
 }
 

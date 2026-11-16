@@ -1,7 +1,7 @@
 //! Máquinas da mesma conta: descoberta pelo serviço, ligação com credencial por direção e o que passa
 //! por ela. Serviço falso e duas máquinas de verdade em portas livres; nada toca o serviço real.
 use crate::connect_port::{free_port, wait_up};
-use crate::fake::{Fake, OWNER, client, config, spawn_fake, spawn_state};
+use crate::fake::{OWNER, client, config, spawn_fake, spawn_state_for};
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -89,7 +89,6 @@ struct Machine {
     id: &'static str,
     main: SocketAddr,
     connect: SocketAddr,
-    python: Arc<Fake>,
     store: Arc<Store>,
     dir: tempfile::TempDir,
 }
@@ -110,8 +109,8 @@ async fn machine(id: &'static str, server_id: &str, service: SocketAddr) -> Mach
     std::fs::create_dir_all(&settings).unwrap();
     std::fs::write(settings.join("peers.json"), "{}").unwrap();
     std::fs::write(settings.join(".env"), "").unwrap();
-    let (python, upstream) = spawn_fake().await;
-    let mut app = AppState::with_server_id(config(upstream, "127.0.0.1"), server_id.to_owned());
+    let (python, _) = spawn_fake().await;
+    let mut app = AppState::with_server_id(config("127.0.0.1"), server_id.to_owned());
     let root = dir.path().to_str().unwrap();
     app.accounts = AccountService::new(AccountEnvironment::from_pairs([("HOME", root), ("USERPROFILE", root)]));
     let store = Arc::new(Store::new(connect_dir.clone(), Some(linked.identity().unwrap())));
@@ -119,9 +118,9 @@ async fn machine(id: &'static str, server_id: &str, service: SocketAddr) -> Mach
     app.connect_supervisor = Arc::new(Supervisor::new(connect_dir, dir.path().join("logs"), store.clone(), 1));
     let connect = free_port();
     app.connect = Some(connect);
-    let main = spawn_state(app).await;
+    let main = spawn_state_for(&python, app).await;
     wait_up(connect).await;
-    Machine { id, main, connect, python, store, dir }
+    Machine { id, main, connect, store, dir }
 }
 
 struct World {
@@ -532,17 +531,15 @@ async fn hangar_send_reaches_a_peer_through_connect() {
     point_at(&w.a, "pc-b", &format!("http://{}", w.b.connect));
     point_at(&w.b, "pc-a", &format!("http://{}", w.a.connect));
     // O diário da tela é do Rust do outro lado e só aceita o dono: a resposta dele prova o salto com o token.
-    for (from, to, peer) in [(&w.a, &w.b, "pc-b"), (&w.b, &w.a, "pc-a")] {
+    for (from, peer) in [(&w.a, "pc-b"), (&w.b, "pc-a")] {
         let body = json!({"text": format!("[de: {}::s] oi", from.id), "steer": true});
         let peers = PeerClient::new(PeerBook::new(Some(peers_path(from))));
         let reply = peers.call(peer, reqwest::Method::POST, "/api/diag", Some(&body)).await.unwrap();
         assert_eq!(reply, Some(json!({"gravadas": 0})), "{peer}");
-        assert_eq!(to.python.hits_to("/api/diag"), 0, "{peer}");
         // O `/input` do `hangar-send` chega ao Rust do outro lado: sem registro de sessões lá, a recusa é dele.
         let input = peers.call(peer, reqwest::Method::POST, "/api/sessions/recado/input", Some(&body)).await;
         let refused = format!("{input:?}");
         assert!(input.is_err() && refused.contains("503") && refused.contains("runtime_unavailable"), "{peer}: {refused}");
-        assert_eq!(to.python.hits_to("/api/sessions/recado/input"), 0, "{peer}");
     }
 }
 
@@ -579,7 +576,6 @@ async fn group_outbox_retries_when_peer_is_offline() {
         assert!(Instant::now() < deadline, "a fila não andou com a máquina de volta");
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    assert_eq!(w.b.python.hits_to("/api/diag"), 0, "o diário respondeu no Rust do outro lado");
 }
 
 #[tokio::test]

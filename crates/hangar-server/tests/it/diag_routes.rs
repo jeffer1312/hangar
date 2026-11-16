@@ -18,7 +18,7 @@ impl Fixture {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let mut state = AppState::new(Config {
-            listen: address, upstream: crate::refused_address(), internal_secret: "diario-interno".into(),
+            listen: address, internal_secret: "diario-interno".into(),
             auth_token: OWNER.into(), log_path: None, trusted: TrustedHosts::parse("127.0.0.1"),
         });
         state.accounts = AccountService::new(AccountEnvironment::from_map([
@@ -151,7 +151,7 @@ async fn without_the_owner_token_every_route_refuses() {
 /// D-23: o convidado com login grava no diário do dono, pelo Rust; o resumo segue fora do alcance dele.
 #[tokio::test]
 async fn login_guest_posts_to_the_owner_diary() {
-    let (home, python, connect) = crate::connect_port::guest_server().await;
+    let (home, _python, connect) = crate::connect_port::guest_server().await;
     let posted = crate::fake::client().post(format!("http://{connect}/api/diag")).bearer_auth(crate::connect_port::GUEST)
         .json(&json!([{"evento": "g"}])).send().await.unwrap();
     assert_eq!(json_of(posted).await, (200, json!({"gravadas": 1})));
@@ -160,5 +160,4 @@ async fn login_guest_posts_to_the_owner_diary() {
     assert!(written.contains("\"evento\": \"g\"") && written.contains("\"origem\": \"tela\""), "{written}");
     let summary = crate::connect_port::get(connect, "/api/diag").bearer_auth(crate::connect_port::GUEST).send().await.unwrap();
     assert_eq!(summary.status(), 403);
-    assert_eq!(python.hits_to("/api/diag"), 0);
 }

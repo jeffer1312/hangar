@@ -88,7 +88,7 @@ caso() {   # $1 = arquivos (um por linha), $2 = linux esperado, $3 = windows esp
 caso "crates/hangar-server/src/main.rs" "rust backend" "rust"
 caso "crates/hangar-api/src/lib.rs" "rust backend nativo" "rust"
 caso "backend/app/config.py" "backend" "runtime"
-caso "backend/app/runtime_process.py" "rust backend" "rust"
+caso "backend/tests/test_claude_headless_cano.py" "rust backend" "rust"
 caso "frontend/src/App.svelte" "backend front" ""
 caso "packages/core/src/api.ts" "backend front" ""
 caso "messages/pt.json" "backend front nativo" ""

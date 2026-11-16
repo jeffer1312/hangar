@@ -201,7 +201,7 @@ mod tests {
         // Sem a ponte as cotas não são lidas e tudo vai para a conta padrão: isso não pode ser calado.
         if crate::config::Config::runtime_instance().is_ok_and(|i| i.is_some()) { return; }
         let dir = tempfile::tempdir().unwrap();
-        let mut st = AppState::new(crate::config::Config { listen: "127.0.0.1:0".parse().unwrap(), upstream: "127.0.0.1:9".parse().unwrap(),
+        let mut st = AppState::new(crate::config::Config { listen: "127.0.0.1:0".parse().unwrap(),
             auth_token: "dono".into(), internal_secret: "interno".into(), log_path: None, trusted: crate::auth::TrustedHosts::parse("127.0.0.1") });
         let reports = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let diary = reports.clone();

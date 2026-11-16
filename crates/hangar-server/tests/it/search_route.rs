@@ -4,7 +4,7 @@
 //! aplicadas as diferenças aprovadas (F1, F2, F3, F4, M3, N1).
 // O multiplexador falso é um script de shell (`write_executable`).
 #![cfg(unix)]
-use super::fake::{Fake, OWNER, client, spawn_fake};
+use super::fake::{OWNER, client};
 use axum::http::StatusCode;
 use hangar_server::{
     accounts::{AccountService, environment::AccountEnvironment},
@@ -61,7 +61,6 @@ impl Default for Opts {
 pub(super) struct Scene {
     _dir: tempfile::TempDir,
     pub(super) home: PathBuf,
-    pub(super) python: Arc<Fake>,
     index: Index,
     reports: Arc<Mutex<Vec<(String, String)>>>,
     pub(super) address: SocketAddr,
@@ -103,10 +102,8 @@ impl Scene {
         } else {
             std::fs::create_dir_all(&home).unwrap();
         }
-        let (python, upstream) = spawn_fake().await;
         let cfg = Config {
             listen: "127.0.0.1:0".parse().unwrap(),
-            upstream,
             auth_token: OWNER.into(),
             internal_secret: "isolated".into(),
             log_path: None,
@@ -139,7 +136,7 @@ impl Scene {
             "kimi_home": home.join(".kimi-code")}).to_string());
         let list = Arc::new(ListBridge::new(ListEnv { mux: Mux::with_program(&script, Duration::from_secs(5)),
             capture_program: script.into_os_string(), procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs },
-            FactsClient::new(upstream, "isolated".into())));
+            FactsClient::new()));
         if let Some(live) = &opts.live { list.seed(LIVE_NAME, &text(&home.join(live))); }
         state.list = list;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -147,7 +144,7 @@ impl Scene {
         let task = tokio::spawn(async move {
             axum::serve(listener, router(Arc::new(state)).into_make_service_with_connect_info::<SocketAddr>()).await.unwrap();
         });
-        Self { _dir: dir, home, python, index, reports, address, task }
+        Self { _dir: dir, home, index, reports, address, task }
     }
 
     async fn raw(&self, query: &str) -> (StatusCode, Value) {
@@ -437,11 +434,9 @@ async fn search_route_is_answered_by_rust_only_for_the_owner() {
     let scene = Scene::new(Opts::default()).await;
     assert_eq!(scene.raw("").await, (StatusCode::OK, json!([])));
     assert_eq!(scene.raw("?q=%20%20").await, (StatusCode::OK, json!([])));
-    assert_eq!(scene.python.hits_to("/api/search"), 0);
-    // R5 (decisão 5): sem o token do dono, o 401 sai do Rust e nada vai ao Python.
+    // R5 (decisão 5): sem o token do dono, o 401 sai do Rust.
     let response = client().get(format!("http://{}/api/search?q=clippy", scene.address)).send().await.unwrap();
     assert_eq!(response.status().as_u16(), 401);
-    assert_eq!(scene.python.hits_to("/api/search"), 0);
     assert!(hangar_server::migration_status::rust_route(&axum::http::Method::GET, "/api/search"));
 }
 

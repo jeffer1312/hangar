@@ -293,10 +293,9 @@ async fn the_mode_route_answers_like_python_and_never_reaches_it() {
     fx.transcript();
     fx.put_sidecar(json!({"name":"s1","provider":"claude","headless":true,"key":key,"cwd":fx.cwd,"session_id":SID,"permission_mode":"acceptEdits","cano":null}));
     let registry = fx.registry().await;
-    let (python, server) = crate::runtime_codex_watch::serve_owner(registry.clone()).await;
+    let (_, server) = crate::runtime_codex_watch::serve_owner(registry.clone()).await;
     assert_eq!(post(server,"modo-execucao",json!({"terminal":false})).await,(200,json!({"ok":true,"terminal":false})),"o modo em que já está");
     assert_eq!(post(server,"modo-execucao",json!({"terminal":true})).await,(200,json!({"ok":true,"terminal":true})));
-    assert_eq!(python.hits_to("/api/sessions/s1/modo-execucao"),0,"o Python não troca o modo do Claude");
     registry.close(&key,2).await.unwrap();
     fx.finish();
 }
@@ -337,8 +336,7 @@ async fn the_queue_held_by_the_usage_limit_goes_along_with_the_reopen() {
 
 /// O servidor com as contas desta casa de teste (nunca as do HOME de quem roda os testes).
 async fn serve_with_accounts(fx:&Fixture,registry:Arc<RuntimeRegistry>) -> std::net::SocketAddr {
-    let (_python, upstream) = crate::fake::spawn_fake().await;
-    let mut state = hangar_server::routes::AppState::new(crate::fake::config(upstream, "127.0.0.1"));
+    let mut state = hangar_server::routes::AppState::new(crate::fake::config("127.0.0.1"));
     let map = [("HOME",fx.home.to_string_lossy().into_owned())].into_iter().map(|(k,v)|(k.to_owned(),v)).collect();
     state.accounts = hangar_server::accounts::AccountService::new(AccountEnvironment::from_map(map));
     assert!(state.state.runtime.set(registry).is_ok());
@@ -1148,7 +1146,7 @@ async fn delete_r1_3_headless_claude_whose_agent_outlives_the_cano_is_500() {
     let registry = headless_registry(&fx).await;
     let reopened = registry.reopen_claude_session("s1",mode_switch(false),None).await.expect("é sessão Claude daqui");
     assert!(reopened.is_ok(),"{:?}",reopened.err().map(|f|f.error.code));
-    let (python,server) = crate::runtime_codex_watch::serve_owner(registry.clone()).await;
+    let (_,server) = crate::runtime_codex_watch::serve_owner(registry.clone()).await;
     let response = crate::fake::client().delete(format!("http://{server}/api/sessions/s1")).bearer_auth(crate::fake::OWNER).send().await.unwrap();
     let status = response.status().as_u16();
     let body:Value = serde_json::from_str(&response.text().await.unwrap()).unwrap_or(Value::Null);
@@ -1161,7 +1159,6 @@ async fn delete_r1_3_headless_claude_whose_agent_outlives_the_cano_is_500() {
     assert_eq!((status,body["detail"]["code"].as_str()),(500,Some("session_kill_unconfirmed")),"{body}");
     assert!(fx.sidecar_path("s1").exists(),"sidecar conservado");
     assert!(fx.queue.join(format!("runtime/{key}.json")).exists(),"fila conservada");
-    assert_eq!(python.hits_to("/api/sessions/s1"),0);
 }
 
 /// R1-01 (decisões 1 e 3): o convidado com conta fecha o Claude sem terminal aberto aqui pelo fechamento
@@ -1175,7 +1172,7 @@ async fn delete_r1_01_login_guest_closes_a_headless_claude_of_the_rust() {
     let registry = headless_registry(&fx).await;
     let reopened = registry.reopen_claude_session("s1",mode_switch(false),None).await.expect("é sessão Claude daqui");
     assert!(reopened.is_ok(),"{:?}",reopened.err().map(|f|f.error.code));
-    let (python,server,token) = crate::runtime_codex_watch::serve_guest(registry.clone(),&fx.home,&fx.home.join(".claude"),&fx.tmux).await;
+    let (_,server,token) = crate::runtime_codex_watch::serve_guest(registry.clone(),&fx.home,&fx.home.join(".claude"),&fx.tmux).await;
     let response = crate::fake::client().delete(format!("http://{server}/api/sessions/s1")).bearer_auth(token).send().await.unwrap();
     let status = response.status().as_u16();
     let body:Value = serde_json::from_str(&response.text().await.unwrap()).unwrap_or(Value::Null);
@@ -1185,7 +1182,6 @@ async fn delete_r1_01_login_guest_closes_a_headless_claude_of_the_rust() {
     // O fechamento não apaga a fila: esvazia e grava nela o fim da vida, que é o que a encerra.
     let queue = std::fs::read_to_string(fx.queue.join(format!("runtime/{key}.json"))).expect("fila com o fechamento");
     assert!(queue.contains(r#""closed":true"#),"fila sem o fechamento gravado: {queue}");
-    assert_eq!(python.hits_to("/api/sessions/s1"),0);
 }
 
 /// Rodapé sem o modo na hora de ir ao sem terminal: o modo sai do spec.
@@ -1279,14 +1275,13 @@ async fn r4_08_bypass_refused_by_a_headless_claude_reopens_it_in_bypass_through_
     fx.put_sidecar(json!({"name":"s1","provider":"claude","headless":true,"key":key,"cwd":fx.cwd,"session_id":SID,"permission_mode":"manual","cano":null}));
     std::fs::write(fx.home.join("refuse-bypass"),"").unwrap();
     let registry = headless_registry(&fx).await;
-    let (python,server) = crate::runtime_codex_watch::serve_owner(registry.clone()).await;
+    let (_,server) = crate::runtime_codex_watch::serve_owner(registry.clone()).await;
     let (status,body) = post(server,"permission-mode",json!({"mode":"bypassPermissions"})).await;
     assert_eq!(status,200,"{body}");
     let meta:Value = serde_json::from_slice(&std::fs::read(fx.sidecar_path("s1")).unwrap()).unwrap();
     assert_eq!((meta["permission_mode"].as_str(),meta["session_id"].as_str()),(Some("bypassPermissions"),Some(SID)));
     let args = std::fs::read_to_string(fx.home.join("claude.args")).unwrap();
     assert!(args.lines().last().is_some_and(|line|line.contains(&format!("--resume {SID}")) && line.contains("--permission-mode bypassPermissions")),"{args}");
-    assert_eq!(python.hits_to("/api/sessions/s1/permission-mode"),0);
     registry.close_with_kill(&key,generation(&fx,&key)).await.unwrap();
 }
 
@@ -1306,13 +1301,12 @@ async fn r4_09_bypass_outside_the_cycle_reopens_through_the_route_without_shift_
         .with_codex_environment(AccountEnvironment::from_map([("HOME".to_owned(),fx.home.to_string_lossy().into_owned()),("PATH".to_owned(),std::env::var("PATH").unwrap())].into()))
         .with_terms(Arc::new(hangar_server::term::Terms::default())).with_permissions(memory)).await;
     registry.bind_watcher(fx_watcher(&fx));
-    let (python,server) = crate::runtime_codex_watch::serve_owner(registry.clone()).await;
+    let (_,server) = crate::runtime_codex_watch::serve_owner(registry.clone()).await;
     let (status,body) = post(server,"permission-mode",json!({"mode":"bypassPermissions"})).await;
     assert_eq!((status,body["reopened"].clone(),body["current"].clone()),(200,json!(true),json!("bypassPermissions")),"{body}");
     let sent = std::fs::read_to_string(fx.state.with_extension("sent")).unwrap_or_default();
     assert!(!sent.contains("BTab"),"nenhum Shift+Tab: {sent}");
     assert!(command(&fx.args()).contains("--permission-mode bypassPermissions"),"{:?}",fx.args());
-    assert_eq!(python.hits_to("/api/sessions/s1/permission-mode"),0);
     let (found,_) = registry.terminal_view("s1").await.unwrap();
     registry.close(&found,2).await.unwrap();
     fx.finish();
@@ -1534,7 +1528,7 @@ async fn sleep_terminal_gives_up_when_busy() {
     awake.refused(Duration::ZERO,"fila pendente").await;
     awake_terminal(&"b4".repeat(16),true).await.refused(Duration::ZERO,"comando no shell").await;
     let awake = awake_terminal(&"b5".repeat(16),false).await;
-    awake.terms.mark_open_for_test("s1",&hangar_server::diag::DiagClient::new("127.0.0.1:9".parse().unwrap(),"teste".into())).await;
+    awake.terms.mark_open_for_test("s1",&hangar_server::diag::DiagClient::new()).await;
     awake.refused(Duration::ZERO,"terminal do rodapé").await;
     let awake = awake_terminal(&"b6".repeat(16),false).await;
     std::fs::write(awake.fx.state.with_extension("attached"),"").unwrap();
@@ -1554,7 +1548,7 @@ async fn write_to_asleep_queues_text_and_wakes_once() {
     // A vida nova digita a fila no pane: sem isso a entrega falharia e a linha ficaria incerta.
     std::fs::write(fx.state.with_extension("keys"),"").unwrap();
     let registry = fx.registry().await;
-    let (python,server) = crate::runtime_codex_watch::serve_owner(registry.clone()).await;
+    let (_,server) = crate::runtime_codex_watch::serve_owner(registry.clone()).await;
     let stored = (200,json!({"ok":true,"delivered":false,"steered":false,"native":false}));
     assert_eq!(post(server,"input",json!({"text":"um"})).await,stored,"a primeira guarda e acorda");
     until("o acordar chegou à subida do terminal",||{let held=fx.state.with_extension("held");async move {held.exists()}}).await;
@@ -1574,7 +1568,6 @@ async fn write_to_asleep_queues_text_and_wakes_once() {
     assert_eq!(fx.spawns(),1,"um terminal só");
     assert!(command(&fx.args()).contains(&format!("claude --resume {SID}")),"a mesma conversa");
     assert!(!fx.sidecar_path("s1").exists(),"a marca saiu com o sidecar");
-    assert_eq!(python.hits_to("/api/sessions/s1/input"),0,"o Python não recebe nada");
     let raw = std::fs::read(fx.queue.join(format!("runtime/{key}.json"))).unwrap();
     let state:Value = serde_json::from_slice(&raw).unwrap();
     assert_eq!(state["generation"],2,"a vida nova é a geração seguinte");
@@ -1668,7 +1661,7 @@ async fn queue_panel_on_asleep_changes_the_queue_and_wakes_nothing() {
     let key = "d1".repeat(16);
     asleep_terminal(&fx,&key);
     let registry = fx.registry().await;
-    let (python,server) = crate::runtime_codex_watch::serve_owner(registry.clone()).await;
+    let (_,server) = crate::runtime_codex_watch::serve_owner(registry.clone()).await;
     for text in ["um","dois"] { registry.queue_asleep("s1",&key,text).await.map_err(|e|e.code).unwrap(); }
     assert_eq!(registry.write_health("s1").await,Some(true),"o painel da adormecida tem botões");
     let rows = || -> Vec<Value> {
@@ -1692,7 +1685,6 @@ async fn queue_panel_on_asleep_changes_the_queue_and_wakes_nothing() {
     assert_eq!(fx.spawns(),0,"nenhum terminal nasce");
     let meta:Value = serde_json::from_slice(&std::fs::read(fx.sidecar_path("s1")).unwrap()).unwrap();
     assert_eq!(meta["asleep"]["wake_surface"],"terminal","segue adormecida");
-    assert_eq!(python.hits_to(&format!("/api/sessions/s1/queue/{}",ids[0])),0,"o Python não recebe nada");
 }
 
 /// Outra reabertura da adormecida tem a vaga de acordar (aqui a troca de modo) e falha: ela volta a dormir.
@@ -1822,10 +1814,9 @@ async fn account_switch_on_asleep_reopens_with_terminal() {
 async fn transfer_on_asleep_is_refused() {
     let fx = fixture();
     asleep_terminal(&fx,&"c5".repeat(16));
-    let (python,server) = crate::runtime_codex_watch::serve_owner(fx.registry().await).await;
+    let (_,server) = crate::runtime_codex_watch::serve_owner(fx.registry().await).await;
     let (status,body) = post(server,"conta",json!({"credential_id":"codex:x"})).await;
     assert_eq!((status,body["detail"]["code"].as_str()),(409,Some("erro_sessao_adormecida")),"{body}");
-    assert_eq!(python.hits_to("/api/sessions/s1/conta"),0,"nada foi ao Python");
     assert!(fx.sidecar_path("s1").exists(),"segue adormecida");
 }
 

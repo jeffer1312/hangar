@@ -140,12 +140,11 @@ esac
         write(&root.join("life.jsonl"), "{}");
         let cfg = crate::config::Config::from_lookup(|key| match key {
             "HANGAR_SERVER_LISTEN" => Some("192.0.2.50:18765".into()),
-            "HANGAR_SERVER_UPSTREAM" => Some("127.0.0.1:1".into()),
             "HANGAR_INTERNAL_SECRET" => Some("fixture-internal".into()),
             "CP_AUTH_TOKEN" => Some("fixture-owner".into()),
             _ => None,
         }).unwrap();
-        let facts = FactsClient::new(cfg.upstream, cfg.internal_secret.clone());
+        let facts = FactsClient::new();
         let mut state = AppState::new(cfg);
         state.origins_home = root.to_owned();
         state.list = Arc::new(ListBridge::new(ListEnv { mux: Mux::with_program(shim.as_os_str(), Duration::from_secs(2)),

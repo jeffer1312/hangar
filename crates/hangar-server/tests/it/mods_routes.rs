@@ -84,13 +84,12 @@ async fn timed_post(server: std::net::SocketAddr, name: &str, route: &str, body:
 
 #[tokio::test]
 async fn press_and_close_go_to_the_surface() {
-    let (python, server, _mods, link) = setup(FakeLink::default()).await;
+    let (_python, server, _mods, link) = setup(FakeLink::default()).await;
     assert_eq!(post(server, "s", "press", json!({"site": "above-prompt", "plugin": "vitrine", "key": "abrir"}), Some(OWNER)).await, (200, json!({"ok": true})));
     assert_eq!(post(server, "s", "close", json!({"site": "painel"}), Some(OWNER)).await.0, 200);
     assert_eq!(*link.calls.lock().unwrap(), vec![
         ModsCall::Press { site: "above-prompt".into(), plugin: "vitrine".into(), key: "abrir".into() },
         ModsCall::Close { site: "painel".into() }]);
-    assert!(python.hits_to("/internal/sessions/s/transfer") == 0, "a guarda da troca de agente não pergunta ao Python");
 }
 
 #[tokio::test]
@@ -105,19 +104,18 @@ async fn refusal_becomes_409_with_code() {
 
 #[tokio::test]
 async fn wrong_token_gets_401_from_rust() {
-    let (python, server, _mods, link) = setup(FakeLink::default()).await;
+    let (_python, server, _mods, link) = setup(FakeLink::default()).await;
     let (status, body) = post(server, "s", "input", json!({"site": "x", "plugin": "vitrine", "key": "y", "kind": "change", "value": ""}), Some("errado")).await;
     assert_eq!((status, body["detail"]["code"].as_str()), (401, Some("erro_nao_autorizado")), "{body}");
     assert!(link.calls.lock().unwrap().is_empty());
-    assert_eq!(python.hits_to("/api/sessions/s/plugin/input"), 0);
 }
 
 /// R1.5-1/2/3 e D8: sessão fora do `Mods` recebe a recusa fixa do Python (contract/r1-mods `*_rust_404`,
 /// `*_rust_mode_no_endpoint`) sem validar o corpo nem perguntar a ninguém.
 #[tokio::test]
 async fn session_outside_the_mods_gets_the_fixed_answer_without_python() {
-    let (python, server, _mods, link) = setup(FakeLink::default()).await;
-    let need_rust = json!({"detail": {"code": "mods_need_rust_server", "params": {},
+    let (_python, server, _mods, link) = setup(FakeLink::default()).await;
+    let need_rust =json!({"detail": {"code": "mods_need_rust_server", "params": {},
         "msg": "O clique do mod precisa do servidor Rust de pé e da sessão aberta nele."}});
     let tab_in_app = json!({"detail": {"code": "erro_mod_aba_no_app", "params": {}, "msg": "Nesta sessão a troca de aba do mod fica no app."}});
     let cases = [
@@ -136,16 +134,13 @@ async fn session_outside_the_mods_gets_the_fixed_answer_without_python() {
         assert_eq!(post(server, "outra", route, body.clone(), Some(OWNER)).await, (status, expected), "{route} {body}");
     }
     assert!(link.calls.lock().unwrap().is_empty());
-    for route in ["press", "close", "show", "input"] {
-        assert_eq!(python.hits_to(&format!("/api/sessions/outra/plugin/{route}")), 0, "{route}");
-    }
 }
 
 /// D8: os corpos que o Python recusava com 422 antes da ponte (contract/r1-mods `press_422_*`,
 /// `close_422_*`) recebem a mesma recusa fixa, um por um.
 #[tokio::test]
 async fn bodies_the_python_refused_with_422_get_the_fixed_answer() {
-    let (python, server, _mods, _link) = setup(FakeLink::default()).await;
+    let (_python, server, _mods, _link) = setup(FakeLink::default()).await;
     let cases = [
         ("press", r#"{"site": "above-prompt", "key": "mr-a", "plugin": ""}"#),
         ("press", r#"{"site": "above-prompt", "key": "mr-a", "plugin": "pm-mock", "x": 1}"#),
@@ -162,7 +157,6 @@ async fn bodies_the_python_refused_with_422_get_the_fixed_answer() {
         let body: Value = serde_json::from_str(&response.text().await.unwrap()).unwrap();
         assert_eq!(body["detail"]["code"], "mods_need_rust_server", "{route} {raw}");
     }
-    assert_eq!(python.hits_to("/api/sessions/outra/plugin/press") + python.hits_to("/api/sessions/outra/plugin/close"), 0);
 }
 
 /// D21: cada recusa fixa grava no diário a linha `api.servidor` que o Python gravava (contract/r1-mods
@@ -188,23 +182,21 @@ async fn refusal_outside_the_mods_leaves_the_python_access_line() {
 
 #[tokio::test]
 async fn session_outside_the_mods_without_runtime_gets_the_fixed_answer() {
-    let (python, upstream) = spawn_fake().await;
-    let server = spawn_state(AppState::new(config(upstream, "127.0.0.1"))).await;
+    let (python, _) = spawn_fake().await;
+    let server = spawn_state_for(&python, AppState::new(config("127.0.0.1"))).await;
     assert_eq!(post(server, "outra", "press", abrir(), Some(OWNER)).await.1["detail"]["code"], "mods_need_rust_server");
     assert_eq!(post(server, "outra", "show", json!({"site": "p"}), Some(OWNER)).await.0, 404);
-    assert_eq!(python.hits_to("/api/sessions/outra/plugin/press"), 0);
 }
 
 #[tokio::test]
 async fn input_outside_the_surface_is_refused_in_rust() {
     // Sem superfície no Rust não há por onde digitar no campo do mod, e o Python não tem a rota: a recusa
     // sai do Rust, com o código que o app traduz.
-    let (python, server, _mods, _link) = setup(FakeLink::default()).await;
+    let (_python, server, _mods, _link) = setup(FakeLink::default()).await;
     let (status, body) = post(server, "outra", "input", json!({"site": "p", "plugin": "vitrine", "key": "k", "kind": "submit", "value": "olá"}), Some(OWNER)).await;
     assert_eq!((status, body["detail"]["code"].as_str()), (409, Some("erro_mod_sem_digitacao")));
     // B4: a `msg` é a frase nova, que vale para a sessão com terminal e para a sem terminal fora da superfície.
     assert_eq!(body["detail"]["msg"], "Nesta sessão, o campo do mod só aceita digitação no terminal ou não está ligado ao app.");
-    assert_eq!(python.hits_to("/api/sessions/outra/plugin/input"), 0);
 }
 
 #[tokio::test]
@@ -256,14 +248,13 @@ async fn short_freeze_is_waited_inside_the_budget() {
 async fn server_without_runtime_refuses_with_code() {
     // Sem o registro do runtime não há porta para conferir: recusa com código, sem chamar o mod.
     let link = FakeLink::default();
-    let (python, upstream) = spawn_fake().await;
-    let state = AppState::new(config(upstream, "127.0.0.1"));
+    let (python, _) = spawn_fake().await;
+    let state = AppState::new(config("127.0.0.1"));
     state.mods.attach("s", 1, Arc::new(link.clone()));
-    let server = spawn_state(state).await;
+    let server = spawn_state_for(&python, state).await;
     let (status, body) = post(server, "s", "press", abrir(), Some(OWNER)).await;
     assert_eq!((status, body["detail"]["code"].as_str()), (503, Some("erro_mod_guarda_indisponivel")));
     assert!(link.calls.lock().unwrap().is_empty());
-    assert_eq!(python.hits_to("/api/sessions/s/plugin/press"), 0);
 }
 
 #[tokio::test]
@@ -350,11 +341,11 @@ async fn concurrent_presses_run_one_at_a_time() {
 
 #[tokio::test]
 async fn copy_during_the_click_goes_back_to_the_app() {
-    let (_python, upstream) = spawn_fake().await;
-    let state = AppState::new(config(upstream, "127.0.0.1"));
+    let (_python, _) = spawn_fake().await;
+    let state = AppState::new(config("127.0.0.1"));
     let mods = state.mods.clone();
-    let _ = state.state.runtime.set(Arc::new(RuntimeRegistry::new(upstream, "secret-test".into(), "instance-test".into())));
-    let server = spawn_state(state).await;
+    let _ = state.state.runtime.set(Arc::new(RuntimeRegistry::new("instance-test".into())));
+    let server = spawn_state_for(&_python, state).await;
     let link = FakeLink::with(FakeInner { copy: Some((mods.clone(), "Texto copiado pela vitrine (V44)".into())), ..Default::default() });
     mods.attach("s", 1, Arc::new(link.clone()));
     // A cópia só é do clique quando vem do mod do botão (A11): o botão tem de estar no último `plugin_ui`.
@@ -365,23 +356,3 @@ async fn copy_during_the_click_goes_back_to_the_app() {
     assert_eq!((status, body["copied"].as_str()), (200, Some("Texto copiado pela vitrine (V44)")));
 }
 
-#[tokio::test]
-async fn private_mods_bridge_no_longer_exists() {
-    // O Python não devolve mais pedido de mod ao Rust: a rota privada saiu, e nada aciona o mod por ela.
-    let link = FakeLink::default();
-    let (_python, upstream) = spawn_fake().await;
-    let state = AppState::new(config(upstream, "127.0.0.1"));
-    let _ = state.state.runtime.set(Arc::new(RuntimeRegistry::new(upstream, "secret-test".into(), "instance-test".into())));
-    state.mods.attach("s", 1, Arc::new(link.clone()));
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let private = listener.local_addr().unwrap();
-    let app = hangar_server::routes::terminal_router(Arc::new(state));
-    tokio::spawn(async move { axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap() });
-    for op in ["press", "close", "show", "input"] {
-        let response = client().post(format!("http://{private}/__hangar_server/mods/s/{op}"))
-            .header("content-type", "application/json").header("x-hangar-internal", SECRET)
-            .body(json!({"site": "above-prompt", "plugin": "vitrine", "key": "abrir"}).to_string()).send().await.unwrap();
-        assert_eq!(response.status().as_u16(), 404, "{op}");
-    }
-    assert!(link.calls.lock().unwrap().is_empty());
-}

@@ -18,17 +18,13 @@ struct Fixture {
 
 impl Fixture {
     async fn start() -> Self {
-        Self::start_with(crate::refused_address()).await
-    }
-
-    async fn start_with(upstream: std::net::SocketAddr) -> Self {
         let home = tempfile::tempdir().unwrap();
         // Sem a raiz temporária, a descoberta cairia no checkout real e no dist dele.
         std::fs::create_dir_all(home.path().join(".hangar/current")).unwrap();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let mut state = AppState::new(Config {
-            listen: address, upstream, internal_secret: "fixture-internal".into(),
+            listen: address, internal_secret: "fixture-internal".into(),
             auth_token: "fixture-owner".into(), log_path: None, trusted: TrustedHosts::parse("127.0.0.1"),
         });
         state.accounts = AccountService::new(AccountEnvironment::from_map([
@@ -149,16 +145,11 @@ async fn the_setting_is_owner_only_and_validated() {
 
 #[tokio::test]
 async fn a_missing_ui_folder_is_a_rust_404() {
-    let python = axum::Router::new().fallback(|| async { "python" });
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let upstream = listener.local_addr().unwrap();
-    let task = tokio::spawn(async move { axum::serve(listener, python).await.unwrap(); });
-    let fixture = Fixture::start_with(upstream).await;
+    let fixture = Fixture::start().await;
     write(&fixture.root().join("manifest.json"), &json!({"version": "0.1.0.1", "commit": "c", "channel": "main", "dist_key": KEY}).to_string());
     let index = fixture.get("/").await;
     assert_eq!(index.status(), 404);
     assert_eq!(index.json::<Value>().await.unwrap()["detail"], "Not Found");
-    task.abort();
 }
 
 #[tokio::test]

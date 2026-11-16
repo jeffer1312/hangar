@@ -29,7 +29,7 @@ impl KeyStore for Keys {
 
 async fn owner_state() -> (Arc<AppState>, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
-    let mut state = AppState::new(Config { listen: "127.0.0.1:9".parse().unwrap(), upstream: "127.0.0.1:9".parse().unwrap(),
+    let mut state = AppState::new(Config { listen: "127.0.0.1:9".parse().unwrap(),
         auth_token: "dono".into(), internal_secret: "privado".into(), log_path: None, trusted: TrustedHosts::parse("127.0.0.1") });
     state.hangar_dir = dir.path().join("hangar");
     std::fs::create_dir_all(&state.hangar_dir).unwrap();

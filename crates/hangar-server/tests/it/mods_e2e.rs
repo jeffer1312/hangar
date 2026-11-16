@@ -15,7 +15,6 @@ use mods_support::*;
 use serde_json::Value;
 
 struct World {
-    python: Arc<Fake>,
     server: SocketAddr,
     mods: Mods,
     registry: Arc<RuntimeRegistry>,
@@ -36,23 +35,23 @@ async fn world(swallow: &'static [&'static str]) -> World {
     let dir = tempfile::tempdir().unwrap();
     let transcript = dir.path().join("chat.jsonl");
     append_lines(&transcript, 0..1);
-    let (python, upstream) = spawn_fake().await;
+    let (python, _) = spawn_fake().await;
     python.set_info(info_json("claude-headless", &transcript));
-    let state = AppState::new(config(upstream, "127.0.0.1"));
+    let state = AppState::new(config("127.0.0.1"));
     let mods = state.mods.clone();
     // Como o `lib.rs`: o registro é o ciclo de vida e o runtime do estado ao vivo, ligado aos hubs do chat.
-    let registry = Arc::new(RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(), "secret-test".into(), "instance-test".into())
+    let registry = Arc::new(RuntimeRegistry::new("instance-test".into())
         .with_mods(mods.clone()).with_processes(Arc::new(crate::runtime_open::RecipeProcesses("sid-1"))));
     registry.bind_lifecycle();
     registry.bind_hubs(state.side.hubs.downgrade());
     let _ = state.state.lifecycle.set(registry.clone());
     let _ = state.side.runtime.set(registry.clone());
     let _ = state.state.runtime.set(registry.clone());
-    let server = spawn_state(state).await;
+    let server = spawn_state_for(&python, state).await;
     let (escuta, seen, cano) = vitrine_cano(swallow).await;
     registry.open(claude_target(dir.path(), escuta, true)).await.unwrap();
     wait_ui(&mods, |ui| ui["above"].to_string().contains("superfície desktop")).await;
-    World { python, server, mods, registry, seen, cano, _dir: dir }
+    World { server, mods, registry, seen, cano, _dir: dir }
 }
 
 async fn press(server: SocketAddr, key: &'static str) -> (u16, Value) {
@@ -133,6 +132,5 @@ async fn session_leaving_rust_mid_press_answers_and_the_next_press_gets_the_fixe
     assert!(cleared["above"].is_null() && cleared["panes"] == serde_json::json!([]), "a faixa sai dos aparelhos");
     let (status, body) = press(world.server, "abrir-vitrine-botoes").await;
     assert_eq!((status, body["detail"]["code"].as_str()), (503, Some("mods_need_rust_server")));
-    assert_eq!(world.python.hits_to("/api/sessions/session/plugin/press"), 0);
     assert_eq!(pressed(&world.seen), 1, "o segundo pedido não chegou ao cano pelo Rust");
 }

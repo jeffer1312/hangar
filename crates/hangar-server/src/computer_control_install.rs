@@ -156,7 +156,7 @@ mod tests {
 
     fn state(home: &std::path::Path) -> Arc<AppState> {
         let address = "127.0.0.1:0".parse().unwrap();
-        let mut state = AppState::new(Config { listen: address, upstream: address, internal_secret: "s".into(),
+        let mut state = AppState::new(Config { listen: address, internal_secret: "s".into(),
             auth_token: "owner".into(), log_path: None, trusted: TrustedHosts::parse("127.0.0.1") });
         state.accounts = AccountService::new(AccountEnvironment::from_map(BTreeMap::from([
             ("HOME".into(), home.to_string_lossy().into_owned()),

@@ -303,13 +303,12 @@ async fn stopped_server(name: &str, entry: &str) {
     let log = scene.root.path().join("owned-server.log");
     let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_hangar-server"));
     command.env_clear().current_dir(&isolated_root).kill_on_drop(true)
-        .stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::piped());
+        .stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::piped());
     for key in ["HOME", "USERPROFILE", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME",
         "CLAUDE_CONFIG_DIR", "CODEX_HOME", "CP_CLAUDE_CONFIG_DIRS", "HANGAR_LIST_DIRS", "PATH"] {
         command.env(key,std::env::var_os(key).expect("ambiente isolado ausente"));
     }
     command.env("HANGAR_SERVER_LISTEN",public.to_string())
-        .env("HANGAR_SERVER_UPSTREAM",scene.upstream.server.address.to_string())
         .env("HANGAR_SERVER_GUEST_LISTEN",guest.to_string())
         .env("HANGAR_SHARES_FILE",scene.home.join("shares.json"))
         .env("HANGAR_INTERNAL_SECRET",SECRET).env("CP_AUTH_TOKEN",OWNER)
@@ -318,13 +317,13 @@ async fn stopped_server(name: &str, entry: &str) {
     let mut serving = command.spawn().unwrap();
     let pid = serving.id().unwrap();
     let http = reqwest::Client::builder().no_proxy().build().unwrap();
-    let health = tokio::time::timeout(Duration::from_secs(4), async {
+    tokio::time::timeout(Duration::from_secs(4), async {
         loop {
             if let Ok(response) = http.get(format!("http://{public}/__hangar_server/health")).send().await {
                 if response.status()==200 {
                     let health = response.json::<Value>().await.unwrap();
                     assert_eq!(health["pid"],pid,"a porta foi ocupada por outro processo; não abrir espectador");
-                    if health["guest_port_bound"]==true { break health; }
+                    if health["guest_port_bound"]==true { break; }
                 }
             }
             assert!(serving.try_wait().unwrap().is_none(),"servidor saiu antes da abertura: {}",std::fs::read_to_string(&log).unwrap_or_default());
@@ -332,12 +331,6 @@ async fn stopped_server(name: &str, entry: &str) {
         }
     }).await.unwrap();
     let request = match entry {
-        "private" => {
-            let private = health["terminal_address"].as_str().expect("porta privada não anunciada");
-            let mut request = format!("ws://{private}/__hangar_server/remote-browser?name=nav-contract").into_client_request().unwrap();
-            request.headers_mut().insert("x-hangar-internal", SECRET.parse().unwrap());
-            request
-        }
         "guest" => {
             format!("ws://{guest}/api/sessions/nav-contract/nav-remoto?token={share_token}").into_client_request().unwrap()
         }
@@ -363,10 +356,10 @@ async fn stopped_server(name: &str, entry: &str) {
     barrier(&mut client,&mut events).await;
     assert_eq!(desktop.current_layout(),"900x700");
     assert!(events.iter().any(|event|event["t"]=="layout" && event["resposta"]=="layout: 900x700"));
-    // O espectador permanece aberto: a queda do cano do pai deve iniciar a devolução.
-    drop(serving.stdin.take());
+    // O espectador permanece aberto: a parada pelo sistema deve iniciar a devolução.
+    assert_eq!(unsafe { libc::kill(pid as i32, libc::SIGTERM) }, 0);
     let output = tokio::time::timeout(Duration::from_secs(5), serving.wait_with_output()).await
-        .expect("a parada não respeitou o prazo do Supervisor").unwrap();
+        .expect("a parada não respeitou o prazo").unwrap();
     assert!(output.status.success(),"servidor saiu em falha: {}",String::from_utf8_lossy(&output.stderr));
     assert_eq!(desktop.current_layout(),"mobile");
     let command = |args: Value| json!({"authorization":"Bearer remote-browser-contract-desktop","receiver_pid":123,
@@ -385,11 +378,9 @@ async fn stopped_server(name: &str, entry: &str) {
     scene.close().await;
 }
 #[tokio::test]
-async fn parent_eof_restores_active_public_viewer() { stopped_server("parent_eof_restores_active_public_viewer","public").await; }
+async fn sigterm_restores_active_public_viewer() { stopped_server("sigterm_restores_active_public_viewer","public").await; }
 #[tokio::test]
-async fn parent_eof_restores_active_private_viewer() { stopped_server("parent_eof_restores_active_private_viewer","private").await; }
-#[tokio::test]
-async fn parent_eof_restores_active_share_viewer() { stopped_server("parent_eof_restores_active_share_viewer","guest").await; }
+async fn sigterm_restores_active_share_viewer() { stopped_server("sigterm_restores_active_share_viewer","guest").await; }
 
 #[tokio::test]
 async fn arbitrary_login_headers_and_query_do_not_panic_or_consult_python() {

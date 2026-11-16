@@ -14,10 +14,6 @@ use serde_json::{Value, json};
 
 use crate::routes::{AppState, cors, gate, pass};
 
-/// Marca da resposta que veio do Python: posta por `routes::pass`, lida pelo contador.
-#[derive(Clone, Copy)]
-pub(crate) struct Forwarded;
-
 pub const AREAS: [&str; 22] = [
     "history", "list", "send", "session", "terminal", "workspace", "worktrees", "costs", "quotas",
     "codex", "providers", "accounts", "guests", "pairing", "mcp", "push", "update", "uploads",
@@ -327,8 +323,7 @@ pub async fn count_public(req: Request, next: Next) -> Response {
     let area = area_of(path);
     let resp = next.run(req).await;
     if !skip {
-        let python = usize::from(resp.extensions().get::<Forwarded>().is_some());
-        with_bucket(|b| b.public[area][python] += 1);
+        with_bucket(|b| b.public[area][0] += 1);
     }
     resp
 }
@@ -541,7 +536,6 @@ mod tests {
         use tower_service::Service;
         let state = Arc::new(AppState::new(crate::config::Config {
             listen: "127.0.0.1:0".parse().unwrap(),
-            upstream: "127.0.0.1:1".parse().unwrap(),
             internal_secret: "test-secret".into(),
             auth_token: "test-owner".into(),
             log_path: None,

@@ -144,7 +144,7 @@ async fn serve(keys: Arc<FakeKeys>) -> Server {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let dir = tempfile::tempdir().unwrap();
-    let mut state = AppState::new(Config { listen: addr, upstream: "127.0.0.1:9".parse().unwrap(), auth_token: OWNER.into(),
+    let mut state = AppState::new(Config { listen: addr, auth_token: OWNER.into(),
         internal_secret: "privado".into(), log_path: None, trusted: TrustedHosts::parse("127.0.0.1") });
     state.hangar_dir = dir.path().to_owned();
     state.vault = Arc::new(Vault::new(keys));

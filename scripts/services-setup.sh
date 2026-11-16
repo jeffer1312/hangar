@@ -17,8 +17,8 @@
 #   ./scripts/services-setup.sh --restart    # restart both
 #   ./scripts/services-setup.sh --uninstall  # stop + remove the units
 #
-# Backend config comes from backend/.env (CP_AUTH_TOKEN, CP_LAN_BIND_IP, ...) — same as
-# the manual `uv run python -m app.main`. Safe to re-run.
+# Backend config comes from backend/.env (CP_AUTH_TOKEN, CP_LAN_BIND_IP, ...), read by the
+# hangar-server itself. Safe to re-run.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -41,7 +41,6 @@ NODE_BIN="$HOME/.local/share/fnm/aliases/default/bin"
 if [[ ! -x "$NODE_BIN/npm" ]] && command -v node >/dev/null; then
   NODE_BIN="$(dirname "$(readlink -f "$(command -v node)")")"
 fi
-UV_BIN="$(command -v uv || true)"
 # Máquina migrada para o pacote (ou modo desenvolvedor): a unit chama o lançador estável, que acha a
 # versão em uso pelo ~/.hangar/current, e os dados do usuário moram em ~/.hangar/config.
 LAUNCHER="$HOME/.hangar/bin/hangar-launcher"
@@ -52,11 +51,9 @@ PACOTE=0
 ENV_FILE="$REPO/backend/.env"
 if [[ -f "$HOME/.hangar/config/.env" ]]; then ENV_FILE="$HOME/.hangar/config/.env"; fi
 BACK_DIR="$REPO/backend"
-# Checkout sem o app/main.py: o hangar-server sobe sozinho, com a escolha de binário do CLI.
+# Checkout: o hangar-server sobe sozinho, com a escolha de binário do CLI.
 BACK_EXEC="\"$REPO/scripts/hangar-server-command\""
-NEEDS_UV=0
-if [[ -f "$REPO/backend/app/main.py" ]]; then BACK_EXEC="$UV_BIN run python -m app.main"; NEEDS_UV=1; fi
-if [[ -n "$LAUNCHER" ]]; then BACK_DIR="$HOME/.hangar"; BACK_EXEC="\"$LAUNCHER\" launch backend"; NEEDS_UV=0; fi
+if [[ -n "$LAUNCHER" ]]; then BACK_DIR="$HOME/.hangar"; BACK_EXEC="\"$LAUNCHER\" launch backend"; fi
 
 log() { printf '\033[36m==>\033[0m %s\n' "$*"; }
 
@@ -100,7 +97,6 @@ case "${1:-}" in
 esac
 
 [[ "$PACOTE" == 0 || -n "$LAUNCHER" ]] || { echo "pacote sem o lançador em $HOME/.hangar/bin/hangar-launcher (ou sem ~/.hangar/current): rode o hangar-server install-package" >&2; exit 1; }
-[[ -n "$UV_BIN" || "$NEEDS_UV" == 0 ]] || { echo "uv not found in PATH" >&2; exit 1; }
 # O lançador é cópia do hangar-server da versão em uso: renovado aqui, ele sabe subir a versão sem o
 # Python. Troca por nome temporário e `mv`, nunca um lançador pela metade.
 if [[ -n "$LAUNCHER" && -x "$HOME/.hangar/current/bin/hangar-server" ]] && ! cmp -s "$HOME/.hangar/current/bin/hangar-server" "$LAUNCHER"; then

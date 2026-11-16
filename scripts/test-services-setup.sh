@@ -27,8 +27,6 @@ sandbox() {
   S="$ROOT/$nome"; R="$S/repo"; B="$S/bin"; H="$S/home"
   mkdir -p "$R/scripts" "$R/backend/app" "$B" "$H/.config/systemd/user" "$S/sys"
   [ "${PACOTE_REPO:-0}" = 1 ] && echo '{}' > "$R/manifest.json"
-  # Checkout que ainda sobe pelo Python; COM_PYTHON=0 é o checkout depois que ele saiu.
-  [ "${COM_PYTHON:-1}" = 1 ] && : > "$R/backend/app/main.py"
   cp "$SCRIPT" "$R/scripts/services-setup.sh"
   printf 'CP_AUTH_TOKEN=velho\n' > "$R/backend/.env"
   for t in bash sh env cat grep sed tr cut tail head dirname readlink printf mkdir rm cmp cp chmod mv; do
@@ -74,14 +72,9 @@ expect_line "migrada: lançador velho fica sem versão com bin/" "$H/.hangar/bin
 expect_no "migrada: CP_FRONT_PORT saiu do .env novo" "$H/.hangar/config/.env" 'CP_FRONT_PORT'
 expect_line "migrada: o .env velho não foi tocado" "$R/backend/.env" 'CP_AUTH_TOKEN=velho'
 
-sandbox antiga 0
-expect_line "antiga: unit no uv do checkout" "$UNIT" "ExecStart=$B/uv run python -m app.main"
-expect_line "antiga: no backend do checkout" "$UNIT" "WorkingDirectory=$R/backend"
-expect_line "antiga: o Python não avisa o systemd" "$UNIT" "Type=simple"
-expect_no "antiga: sem watchdog" "$UNIT" 'WatchdogSec'
-
-# Decisão 7: checkout sem o app/main.py sobe o hangar-server pela mesma escolha de binário do CLI.
-COM_PYTHON=0 sandbox checkout-rust 0
+# Decisão 7: o checkout sobe o hangar-server pela mesma escolha de binário do CLI.
+sandbox checkout-rust 0
+expect_line "checkout-rust: no backend do checkout" "$UNIT" "WorkingDirectory=$R/backend"
 expect_line "checkout-rust: unit no hangar-server" "$UNIT" "ExecStart=\"$R/scripts/hangar-server-command\""
 # Checkout: o binário pode ser de antes do aviso ao systemd; fica simple.
 expect_line "checkout-rust: Type=simple" "$UNIT" "Type=simple"

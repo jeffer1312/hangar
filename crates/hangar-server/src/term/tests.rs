@@ -1,4 +1,4 @@
-//! Painel contra um tmux de soquete próprio (`-S` numa pasta temporária) e um Python falso.
+//! Painel contra um tmux de soquete próprio (`-S` numa pasta temporária).
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::{Command, Output};
@@ -7,8 +7,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::Router;
-use axum::http::StatusCode;
-use axum::routing::any;
 use futures_util::{SinkExt, StreamExt};
 use tokio_tungstenite::tungstenite::{self, Message as Ws};
 
@@ -61,37 +59,12 @@ async fn until(what: &str, mut ok: impl FnMut() -> bool) {
     }
 }
 
-/// Python falso: conta os terminais que chegaram a ele.
-#[derive(Default)]
-struct Python {
-    term_hits: AtomicUsize,
-}
-
-async fn python() -> (SocketAddr, Arc<Python>) {
-    let py = Arc::new(Python::default());
-    let p2 = py.clone();
-    let app = Router::new()
-        .route("/api/sessions/{name}/term", any(move || {
-            let p2 = p2.clone();
-            async move {
-                p2.term_hits.fetch_add(1, Ordering::SeqCst);
-                StatusCode::FORBIDDEN
-            }
-        }))
-        .route("/api/hangar-terminals/{ident}/term", any(|| async { StatusCode::FORBIDDEN }));
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    (addr, py)
-}
-
-struct Server { addr: SocketAddr, terms: Arc<Terms>, py: Arc<Python> }
+struct Server { addr: SocketAddr, terms: Arc<Terms> }
 
 async fn server(tmux: &Tmux, tune: impl FnOnce(&mut TermConfig)) -> Server {
-    let (upstream, py) = python().await;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let cfg = Config { listen: addr, upstream, internal_secret: "s".into(), auth_token: "dono".into(),
+    let cfg = Config { listen: addr, internal_secret: "s".into(), auth_token: "dono".into(),
                        log_path: None, trusted: TrustedHosts::parse("127.0.0.1") };
     let mut state = AppState::new(cfg);
     let mut tc = TermConfig { socket: Some(tmux.socket.clone()), ..TermConfig::default() };
@@ -99,7 +72,7 @@ async fn server(tmux: &Tmux, tune: impl FnOnce(&mut TermConfig)) -> Server {
     let terms = Arc::new(Terms::new(tc));
     state.term = terms.clone();
     tokio::spawn(crate::routes::serve_with_state(listener, state));
-    Server { addr, terms, py }
+    Server { addr, terms }
 }
 
 type Client = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
@@ -161,7 +134,6 @@ async fn echo_roundtrip() {
     until("texto no pane", || tmux.run(&["capture-pane", "-p", "-t", "=s1:"]).contains("eco-7391")).await;
     assert_eq!(tmux.clients("s1").len(), 1);
     assert_eq!(srv.terms.active(), vec!["s1".to_string()]);
-    assert_eq!(srv.py.term_hits.load(Ordering::SeqCst), 0, "o dono não passa pelo Python");
 }
 
 #[tokio::test]
@@ -318,7 +290,6 @@ async fn query_token_only() {
     assert_eq!(connect(srv.addr, &format!("{path}?token=")).await.err(), Some(403), "token vazio");
     assert!(tmux.clients("s8").is_empty());
     let _ws = connect(srv.addr, &format!("{path}?token=dono")).await.expect("só o ?token= abre");
-    assert_eq!(srv.py.term_hits.load(Ordering::SeqCst), 0, "toda recusa sai do Rust");
 }
 
 /// T-14/T-16: sessão inexistente é 403 "sessao nao existe" antes do aceite; com token errado a recusa
@@ -351,15 +322,13 @@ async fn plain_get_and_other_methods_are_the_rust_404() {
         let resp = http.request(method.clone(), &url).send().await.unwrap();
         assert_eq!(resp.status(), 404, "{method}");
     }
-    assert_eq!(srv.py.term_hits.load(Ordering::SeqCst), 0);
     assert!(tmux.clients("s10").is_empty());
 }
 
 /// Servidor só com as duas rotas do terminal, com um convidado já decidido pelo porteiro em cada pedido.
 async fn guest_server(tmux: &Tmux, sessions: &[(&str, Kind)]) -> SocketAddr {
     use crate::share::caller::SessionPath;
-    let (upstream, _) = python().await;
-    let cfg = Config { listen: "127.0.0.1:0".parse().unwrap(), upstream, internal_secret: "s".into(), auth_token: "dono".into(),
+    let cfg = Config { listen: "127.0.0.1:0".parse().unwrap(), internal_secret: "s".into(), auth_token: "dono".into(),
                        log_path: None, trusted: TrustedHosts::parse("127.0.0.1") };
     let mut state = AppState::new(cfg);
     state.term = Arc::new(Terms::new(TermConfig { socket: Some(tmux.socket.clone()), ..TermConfig::default() }));
@@ -473,7 +442,6 @@ async fn owner_token_opens_from_any_origin() {
     tokio_tungstenite::connect_async(req).await.expect("Origin ilegível com token abre");
     assert_eq!(connect_with(srv.addr, "/api/sessions/s9/term", &[("origin", "https://evil.com")]).await.err(), Some(403),
                "sem token, a recusa do Rust");
-    assert_eq!(srv.py.term_hits.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]
@@ -513,32 +481,3 @@ async fn panel_cap_refuses_1013() {
     assert_eq!(close_of(&mut c).await, (1013, "multiplexador indisponivel".to_string()));
 }
 
-/// Porta privada do servidor, lida da saúde.
-async fn private_addr(addr: SocketAddr) -> SocketAddr {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
-    s.write_all(b"GET /__hangar_server/health HTTP/1.0\r\nHost: x\r\n\r\n").await.unwrap();
-    let mut out = String::new();
-    s.read_to_string(&mut out).await.unwrap();
-    let v: serde_json::Value = serde_json::from_str(out.split("\r\n\r\n").nth(1).unwrap()).unwrap();
-    assert_eq!(v["terminal_panel"], true, "a saúde diz que o painel é do Rust");
-    v["terminal_address"].as_str().unwrap().parse().unwrap()
-}
-
-/// R4: `term.active` saiu da ponte da lista com o último chamador do Python (o 409 do painel aberto):
-/// a operação é a recusa de operação desconhecida.
-#[tokio::test]
-async fn term_active_is_gone_from_the_list_bridge() {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    let tmux = Tmux::new();
-    tmux.session("p3");
-    let srv = server(&tmux, |_| {}).await;
-    let private = private_addr(srv.addr).await;
-    let body = serde_json::json!({"op": "term.active", "args": {"name": "p3"}}).to_string();
-    let mut s = tokio::net::TcpStream::connect(private).await.unwrap();
-    s.write_all(format!("POST /__hangar_server/list HTTP/1.0\r\nHost: x\r\nx-hangar-internal: s\r\n\
-        content-type: application/json\r\ncontent-length: {}\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
-    let mut out = String::new();
-    s.read_to_string(&mut out).await.unwrap();
-    assert!(out.starts_with("HTTP/1.0 400") || out.starts_with("HTTP/1.1 400"), "{out}");
-}

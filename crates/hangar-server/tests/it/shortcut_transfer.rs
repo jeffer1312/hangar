@@ -67,7 +67,7 @@ impl Scene {
             env.insert((*key).to_owned(), value.clone());
         }
         // Upstream recusado: qualquer repasse ao Python apareceria como falha de rede, nunca 200.
-        let mut state = AppState::new(crate::fake::config(crate::refused_address(), "127.0.0.1"));
+        let mut state = AppState::new(crate::fake::config("127.0.0.1"));
         state.accounts = AccountService::new(AccountEnvironment::from_map(env));
         let state = Arc::new(state);
         let app = hangar_server::routes::router(state.clone());

@@ -9,7 +9,6 @@ pub mod owner_routes;
 pub mod guest_routes;
 pub mod pair_routes;
 pub mod forward;
-pub mod bridge;
 
 use std::sync::Arc;
 

@@ -2,7 +2,6 @@
 use super::{Execution, isolated, value};
 use crate::fake::{OWNER, client};
 use serde_json::json;
-use std::sync::atomic::Ordering;
 
 #[tokio::test]
 async fn auxiliary_consumers_preserve_ownership_and_close_without_python() {
@@ -26,7 +25,6 @@ async fn auxiliary_consumers_preserve_ownership_and_close_without_python() {
     value(execution.run("main",&format!("shortcut-terminals/{id}/close"),json!({})).await,200).await;
     let closed=value(execution.run("main",&format!("shortcut-terminals/{id}/close"),json!({})).await,404).await;
     assert_eq!(closed["detail"]["code"],"erro_shortcut_terminal_inexistente");
-    assert_eq!(execution.hits.load(Ordering::Relaxed),0);
 }
 
 #[tokio::test]
@@ -58,5 +56,4 @@ async fn hangar_consumers_answer_focus_and_keep_global_terminal_outside_session(
     value(client().post(format!("{base}/{id}/close")).bearer_auth(OWNER).send().await.unwrap(),200).await;
     let gone=value(client().get(&base).bearer_auth(OWNER).send().await.unwrap(),200).await;
     assert_eq!(gone["terminals"],json!([]));
-    assert_eq!(execution.hits.load(Ordering::Relaxed),0);
 }

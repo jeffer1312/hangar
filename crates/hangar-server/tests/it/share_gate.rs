@@ -555,13 +555,12 @@ async fn inbound_guest_header_never_reaches_the_handler() {
 #[tokio::test]
 async fn inbound_guest_header_grants_nothing() {
     use crate::fake::*;
-    let (fake, up) = spawn_fake().await;
-    let srv = spawn_server(config(up, "127.0.0.1")).await;
+    let (fake, _) = spawn_fake().await;
+    let srv = spawn_server_for(&fake, config("127.0.0.1")).await;
     let r = client().get(format!("http://{srv}/api/diag/arquivo")).header("x-hangar-guest", "forjado")
         .send().await.unwrap();
     assert_eq!(r.status(), 401);
     assert_eq!(json_of(r).await["detail"]["code"], "erro_nao_autorizado");
-    assert_eq!(fake.hits_to("/api/diag/arquivo"), 0);
 }
 
 /// W-09 na 8766: o convidado de convite não pergunta quem é a sessão; o porteiro recusa antes da rota.

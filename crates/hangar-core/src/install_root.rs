@@ -138,7 +138,7 @@ mod tests {
         let (home, worktree, main) = (dir.path().join("home"), dir.path().join("wt"), dir.path().join("main"));
         let exe = worktree.join("crates/target/release/hangar-server");
         std::fs::create_dir_all(worktree.join("backend/app")).unwrap();
-        std::fs::write(worktree.join("backend/app/rust_server.py"), "").unwrap();
+        std::fs::write(worktree.join("backend/app/pricing_data.json"), "").unwrap();
         std::fs::create_dir_all(main.join("backend")).unwrap();
         std::fs::write(main.join("backend/.env"), "CP_AUTH_TOKEN=t\n").unwrap();
         std::fs::create_dir_all(home.join(".hangar")).unwrap();

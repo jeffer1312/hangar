@@ -151,9 +151,8 @@ async fn transfer_route_publishes_imported_thread_and_restores_source_on_import_
                 .map_err(|error| error.code)
                 .unwrap();
         }
-        let (python, upstream) = crate::fake::spawn_fake().await;
         let mut state =
-            hangar_server::routes::AppState::new(crate::fake::config(upstream, "127.0.0.1"));
+            hangar_server::routes::AppState::new(crate::fake::config("127.0.0.1"));
         state.accounts = hangar_server::accounts::AccountService::new(env);
         assert!(state.state.runtime.set(registry.clone()).is_ok());
         let server = crate::fake::spawn_state(state).await;
@@ -178,7 +177,6 @@ async fn transfer_route_publishes_imported_thread_and_restores_source_on_import_
         assert_eq!(records.len(), 1, "status={status} body={body}");
         let record = &records[0];
         assert_eq!(std::fs::read_to_string(&source).unwrap(), original);
-        assert_eq!(python.hits_to("/api/sessions/s1/conta"), 0);
         if fail {
             assert_eq!(status, 409, "{body}");
             assert_eq!(

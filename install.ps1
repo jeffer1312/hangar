@@ -2107,10 +2107,10 @@ if ($lancadorPacote -and (Test-Path -LiteralPath $servidorDaVersao -PathType Lea
         Falta "o lancador $lancadorPacote nao foi renovado ($_); ele segue subindo so versoes que usam o Python"
     }
 }
-# Checkout sem o app\main.py: o hangar-server sobe pelo `launch backend`, com a escolha de binario
-# do CLI (CP_RUST_SERVER_BIN; senao o mais novo entre o build do checkout e ~\.hangar\bin).
+# Checkout: o hangar-server sobe pelo `launch backend`, com a escolha de binario do CLI
+# (CP_RUST_SERVER_BIN; senao o mais novo entre o build do checkout e ~\.hangar\bin).
 $servidorCheckout = $null
-if (-not $lancadorPacote -and -not (Test-Path -LiteralPath "$raiz\backend\app\main.py")) {
+if (-not $lancadorPacote) {
     if ($env:CP_RUST_SERVER_BIN) { $servidorCheckout = $env:CP_RUST_SERVER_BIN }
     else {
         $servidorCheckout = @("$raiz\crates\target\release\hangar-server.exe", (Join-Path $HOME '.hangar\bin\hangar-server.exe')) |
@@ -2124,16 +2124,11 @@ $tarefas = @(
     # linha de comando contivesse app.main - e este repo tem worktrees em .claude/worktrees/ com
     # checkout completo, entao o instalador do checkout principal matava o backend de uma worktree
     # rodando em outra porta. O ramo do frontend ja fazia certo; o do backend nao.
-    # ExeProc e o nome do processo VIVO, diferente de Exe (o lancador): o backend nasce `uv` e quem
-    # fica segurando a porta e o `python` neto. Serve pro filtro por PADRAO do Pare-Servico — sem ele,
-    # o casamento e substring pura da linha de comando, e QUALQUER processo que so MENCIONE este
-    # caminho vira alvo (um editor, um grep, o terminal de onde se chamou o instalador).
-    # O python do venv DIRETO, nao `uv run`: o uv reconferia o lock a cada subida (lento no boot,
-    # e um lock mudado por `git pull` sem rede o fazia falhar antes de o backend nascer) e punha
-    # dois processos a mais na cadeia (uv.exe -> python trampolim -> python). O venv ja existe
-    # aqui (passo 2/8, `uv sync`); sem ele cai no uv como antes.
-    @{ Nome = 'hangar-backend';  Exe = $(if ($lancadorPacote) { $lancadorPacote } elseif ($servidorCheckout) { $servidorCheckout } elseif (Test-Path "$raiz\backend\.venv\Scripts\python.exe") { "$raiz\backend\.venv\Scripts\python.exe" } else { 'uv' })
-       Args = $(if ($lancadorPacote -or $servidorCheckout) { 'launch backend' } elseif (Test-Path "$raiz\backend\.venv\Scripts\python.exe") { '-m app.main' } else { 'run python -m app.main' })
+    # ExeProc e o nome do processo VIVO, diferente de Exe (o lancador). Serve pro filtro por PADRAO do
+    # Pare-Servico — sem ele, o casamento e substring pura da linha de comando, e QUALQUER processo que
+    # so MENCIONE este caminho vira alvo (um editor, um grep, o terminal de onde se chamou o instalador).
+    @{ Nome = 'hangar-backend';  Exe = $(if ($lancadorPacote) { $lancadorPacote } else { $servidorCheckout })
+       Args = 'launch backend'
        Dir = "$raiz\backend"
        Porta = $portaBack
        # No pacote o Python roda de ~\.hangar\versions\<v> sob o lancador, fora deste checkout.
@@ -2853,10 +2848,10 @@ Push-Location "$raiz\backend"
 # Atribuicao direta pelo mesmo motivo do $quieto do npm: o `if` desembrulharia o array de um item.
 $pyFumaca = @('uv', 'run', 'python')
 if ($pacote) { $pyFumaca = @($pyBackend) }
-$rc = Nativo @pyFumaca -c "from app import api"
-if ($rc -ne 0) { Erro 'o backend nao importa neste Windows'; Pop-Location; exit 1 }
-Ok 'o backend importa'
-Mark-Item 'backend-importa' 'ok' 'o servidor abre'
+$rc = Nativo @pyFumaca -c "import app.codex_contas, app.adapters.codex.lancador, app.vapid_setup"
+if ($rc -ne 0) { Erro 'as ferramentas Python nao importam neste Windows'; Pop-Location; exit 1 }
+Ok 'as ferramentas Python importam'
+Mark-Item 'backend-importa' 'ok' 'as ferramentas abrem'
 Pop-Location
 
 # Sobra de rodada anterior: o kill pode demorar, entao limpa antes de contar de novo.

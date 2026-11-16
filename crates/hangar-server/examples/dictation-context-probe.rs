@@ -48,7 +48,6 @@ async fn main() {
     environment.insert("PATH".into(), std::env::var("PATH").unwrap());
     let mut state = AppState::new(Config {
         listen: "127.0.0.1:0".parse().unwrap(),
-        upstream: "127.0.0.1:1".parse().unwrap(),
         internal_secret: "fixture-internal".into(),
         auth_token: "fixture-owner".into(),
         log_path: None,

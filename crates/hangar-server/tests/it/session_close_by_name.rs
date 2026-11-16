@@ -17,7 +17,7 @@ use hangar_server::runtime::codex_terminal::{WatchConfig, Watcher};
 use hangar_server::runtime::gateway::RuntimeRegistry;
 use serde_json::{Value, json};
 
-use crate::fake::{self, Fake, OWNER, SECRET};
+use crate::fake::{self, Fake, OWNER};
 
 /// Convidado com conta que vê as sessões sem dono, e um que não as vê.
 const GUEST: &str = "convidado-ana";
@@ -35,22 +35,10 @@ struct Env {
     server: std::net::SocketAddr,
     registry: Arc<RuntimeRegistry>,
     share: Arc<hangar_server::share::ShareState>,
-    upstream: std::net::SocketAddr,
     guests: Arc<hangar_server::login_guests::Service>,
 }
 
 impl Env {
-    /// A porta privada das pontes que o Python chama, sobre o mesmo registro.
-    async fn private(&self) -> std::net::SocketAddr {
-        let mut state = AppState::new(fake::config(self.upstream, "127.0.0.1"));
-        assert!(state.state.runtime.set(self.registry.clone()).is_ok());
-        state.share = Some(self.share.clone());
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let router = hangar_server::routes::terminal_router(Arc::new(state));
-        tokio::spawn(async move { axum::serve(listener, router.into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap() });
-        address
-    }
     fn sessions(&self, names: &[&str]) {
         std::fs::write(self.root.join("sessions"), names.iter().map(|n| format!("{n}\n")).collect::<String>()).unwrap();
     }
@@ -170,8 +158,8 @@ async fn env_full(adjust: impl FnOnce(&Arc<RuntimeRegistry>), display: &str, sta
     registry.bind_watcher(Arc::new(Watcher::new(WatchConfig { home: home.clone(), queue_dir: queue.clone(),
         mux: Mux::with_program(&tmux, Duration::from_secs(5)), mux_program: tmux.clone().into_os_string() })));
     adjust(&registry);
-    let (python, upstream) = fake::spawn_fake().await;
-    let mut state = AppState::new(fake::config(upstream, "127.0.0.1"));
+    let (python, _) = fake::spawn_fake().await;
+    let mut state = AppState::new(fake::config("127.0.0.1"));
     state.diag = python.bind_diary(state.diag.clone());
     // O nome fechado vai à pasta que o Arquivo lê: a conta desta prova, nunca a da máquina.
     let text = |path: &Path| path.to_string_lossy().into_owned();
@@ -188,14 +176,14 @@ async fn env_full(adjust: impl FnOnce(&Arc<RuntimeRegistry>), display: &str, sta
         "pi_sessions": home.join(".pi/agent/sessions"), "omp_config": home.join(".omp"), "omp_agent": home.join(".omp/agent"),
         "kimi_home": home.join(".kimi-code")}).to_string());
     state.list = Arc::new(ListBridge::new(ListEnv { mux: Mux::with_program(&tmux, Duration::from_secs(5)), capture_program: tmux.clone().into_os_string(),
-        procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs }, FactsClient::new(upstream, SECRET.into())));
+        procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs }, FactsClient::new()));
     let share = crate::share_pair_routes::share_state(&root.join("shares").join("shares.json"), &root.join("pair"), Arc::new(std::sync::Mutex::new(1_000.0)));
     state.share = Some(share.clone());
     state.write_gate_wait = Duration::from_secs(5);
     assert!(state.state.runtime.set(registry.clone()).is_ok());
     state_adjust(&mut state);
     let server = fake::spawn_state(state).await;
-    Env { _dir: dir, root, home, queue, tmux, python, server, registry, share, upstream, guests }
+    Env { _dir: dir, root, home, queue, tmux, python, server, registry, share, guests }
 }
 
 async fn env() -> Env { env_with(|_| {}, "x").await }
@@ -251,7 +239,6 @@ async fn delete_r1_04_already_dead_session_is_a_success_without_kill() {
     assert!(e.calls("kill-session").is_empty(), "nada a matar: {:?}", e.calls(""));
     let (status, body) = e.delete("ghost?by=arbitro").await;
     assert_eq!((status, body), (200, json!({"ok": true, "warning": null})), "o `by` não muda nada");
-    assert_eq!(e.python.hits_to("/api/sessions/ghost"), 0, "o fechamento inteiro é do Rust");
 }
 
 /// R1-01, decisões 1 e 3: o convidado com conta fecha a sessão que alcança pelo fechamento do dono, sem
@@ -267,7 +254,6 @@ async fn delete_r1_01_login_guest_closes_through_the_owner_close() {
     assert_eq!((status, body), (200, json!({"ok": true, "warning": null})));
     assert_eq!(e.alive(), ["cat2"], "só a do convidado fechou");
     assert!(!e.projection("cat1").exists() && !e.chain("cat1").exists(), "fila e then saem como no fechamento do dono");
-    assert_eq!(e.python.hits_to("/api/sessions/cat1") + e.python.hits_to("/api/sessions/cat2"), 0);
 }
 
 /// R5 (decisão 5): o convidado com conta numa rota só do dono que o porteiro deixa passar (a reserva
@@ -280,7 +266,6 @@ async fn r5_login_guest_on_an_owner_route_is_403_from_rust() {
     let status = response.status().as_u16();
     let body: Value = response.json().await.unwrap();
     assert_eq!((status, body), (403, json!({"detail": {"code": "erro_fora_do_convidado", "params": {}, "msg": "fora do acesso do convidado"}})));
-    assert_eq!(e.python.hits_to("/api/sessions/prewarm"), 0);
 }
 
 /// R1.3-1 no caminho Pi/omp/Kimi: o spec diz Pi e a sessão sumiu (`other_terminal_dead`); fechar é sucesso
@@ -306,7 +291,6 @@ async fn delete_r1_3_dead_pi_session_is_a_success() {
     let (status, body) = e.delete_as("pi-dead", GUEST).await;
     assert_eq!(status, 200, "{body}");
     assert!(!e.projection("pi-dead").exists());
-    assert_eq!(e.python.hits_to("/api/sessions/pi-dead"), 0);
 }
 
 /// R1.3-3/4/5: pane de outro programa fecha pelo nome; o shell `term-<nome>` só com a nossa marca; a fila
@@ -327,7 +311,6 @@ async fn delete_r1_3_unknown_program_pane_closes_by_name() {
     assert!(!e.chain("cat1").exists(), "vínculo then apagado");
     // R1-14: o loop da vida que acabou também sai.
     assert!(!e.loop_file("cat1").exists(), "loop esquecido");
-    assert_eq!(e.python.hits_to("/api/sessions/cat1"), 0);
     // Sem a marca o `term-` é de outro: fica.
     let (status, _) = e.delete("cat2").await;
     assert_eq!(status, 200);
@@ -351,7 +334,6 @@ async fn delete_r1_3_pane_that_survives_is_500_and_keeps_everything() {
     assert_eq!(e.calls("kill-session"), ["kill-session -t =s-cat1"], "o shell não é tocado");
     assert!(e.projection("s-cat1").exists() && e.chain("s-cat1").exists());
     assert!(e.share.store.all().iter().any(|s| s.id == invite.id && s.revoked_at.is_none()), "convite intacto");
-    assert_eq!(e.python.hits_to("/api/sessions/s-cat1"), 0);
     assert_eq!(e.restore_names(), ["s-cat1"], "segue viva: volta no próximo reboot");
     // A falha vai ao diário com o código.
     assert!(e.diary_has("s-cat1", "session_kill_unconfirmed").await, "{:?}", e.python.diag());
@@ -392,7 +374,6 @@ async fn delete_r1_3_transfer_in_progress_refuses() {
     let (status, body) = e.delete("cat1").await;
     assert_eq!((status, body["detail"]["code"].as_str()), (409, Some("session_transfer_busy")), "{body}");
     assert!(e.calls("kill-session").is_empty());
-    assert_eq!(e.python.hits_to("/api/sessions/cat1"), 0);
 }
 
 /// Codex sem terminal parado, com cano vivo, morto ou sem cano: o Rust mata o cano e apaga sidecar, rastros
@@ -429,7 +410,6 @@ async fn delete_r1_3_parked_codex_headless_closes_in_rust() {
         assert!(!sidecar.exists() && !e.projection(name).exists(), "{name}");
     }
     assert_eq!(e.alive(), ["term-cxn"], "sem a marca o shell é de outro: fica");
-    assert_eq!(e.python.hits_to("/api/sessions/cxh"), 0);
 }
 
 /// R1-15: fechada pelo convidado com conta (antes ia ao Python), a sessão sai e os terminais de atalho
@@ -443,7 +423,6 @@ async fn delete_r1_15_shortcut_terminals_of_the_session_close_with_it() {
     let (status, body) = e.delete_as("cat1", GUEST).await;
     assert_eq!((status, body), (200, json!({"ok": true, "warning": null})));
     assert_eq!(e.alive(), ["shortcut-d4e5f6"], "a sessão e o atalho dela fecharam, o da outra ficou");
-    assert_eq!(e.python.hits_to("/api/sessions/cat1"), 0);
     assert!(e.calls("kill-session").contains(&"kill-session -t =shortcut-a1b2c3".to_owned()), "{:?}", e.calls(""));
 }
 
@@ -509,19 +488,6 @@ async fn delete_r1_10_unreadable_closed_names_are_set_aside() {
     assert_eq!((names.as_object().map(|m| m.len()), &names["/r/a.jsonl"]["name"]), (Some(1), &json!("cxa")), "{names}");
 }
 
-/// O `kill` da ponte do Codex (o `DELETE` que entrou pelo Python, Connect e convidado) fecha aqui o Codex
-/// sem terminal parado: 200, nunca o 421 que devolvia ao Python.
-#[tokio::test]
-async fn delete_r1_3_codex_bridge_kill_closes_a_parked_headless() {
-    let e = env().await;
-    let sidecar = e.put_sidecar("codex", "cxb", json!({"name": "cxb", "provider": "codex", "headless": true, "key": "kkkkkkkk0000000e", "cano": null}));
-    e.put_queue("cxb");
-    let private = e.private().await;
-    let response = fake::client().post(format!("http://{private}/__hangar_server/codex/cxb/kill")).header("x-hangar-internal", SECRET).send().await.unwrap();
-    assert_eq!(response.status().as_u16(), 200);
-    assert!(!sidecar.exists() && !e.projection("cxb").exists());
-}
-
 /// D16: o cano do Codex sem terminal que ignora o SIGTERM segura o fechamento: 500 com código, e sidecar e
 /// fila ficam. Captura `codex_headless_cano_ignores_term`.
 #[cfg(target_os = "linux")]
@@ -537,7 +503,6 @@ async fn delete_r1_3_codex_headless_cano_that_survives_is_500() {
     assert!(alive(process.0), "o cano seguia vivo");
     assert_eq!((status, body["detail"]["code"].as_str()), (500, Some("session_kill_unconfirmed")), "{body}");
     assert!(sidecar.exists() && e.projection("cxh").exists(), "sidecar e fila conservados");
-    assert_eq!(e.python.hits_to("/api/sessions/cxh"), 0);
 }
 
 /// Claude sem terminal parado (sem ator aqui): o cano morre, e sidecar, rastros e fila saem. Capturas
@@ -555,7 +520,6 @@ async fn delete_r1_3_parked_claude_headless_closes_in_rust() {
     assert_eq!(status, 200, "{body}");
     assert!(!alive(process.0));
     assert_eq!((sidecar.exists(), dir.join(format!("cano-{KEY}.log")).exists(), e.projection("hl1").exists()), (false, false, false));
-    assert_eq!(e.python.hits_to("/api/sessions/hl1"), 0);
     const STUBBORN: &str = "kkkkkkkk0000000d";
     let stubborn = fake_cano(&dir, STUBBORN, Cano::Stubborn);
     let sidecar = e.put_sidecar("claude", "hl2", json!({"name": "hl2", "provider": "claude", "headless": true, "key": STUBBORN, "cano": cano(stubborn.0)}));
@@ -608,7 +572,6 @@ async fn delete_r1_3_a_queue_that_cannot_be_cleared_is_500() {
     let (status, body) = e.delete("cat9").await;
     std::fs::set_permissions(&e.queue, std::fs::Permissions::from_mode(0o755)).unwrap();
     assert_eq!((status, body["detail"]["code"].as_str()), (500, Some("session_queue_clear_failed")), "{body}");
-    assert_eq!(e.python.hits_to("/api/sessions/cat9"), 0);
 }
 
 /// Claude com terminal cujo agente morreu (o pane ficou com o shell): a entrada sai sem matar processo, o
@@ -646,7 +609,6 @@ async fn delete_r1_3_claude_with_dead_agent_closes_by_name() {
     // R1-10: a conversa da vida guardada dá o nome fechado, pelo caminho real (`os.path.realpath`).
     let real = std::fs::canonicalize(&transcript).unwrap().to_string_lossy().into_owned();
     assert_eq!(e.closed_names()[real.as_str()]["name"], "cc1", "{}", e.closed_names());
-    assert_eq!(e.python.hits_to("/api/sessions/cc1"), 0);
 }
 
 /// Pi/omp/Kimi fechado pelo ator: o shell `term-<nome>` com a nossa marca fecha junto.
@@ -711,15 +673,14 @@ async fn delete_r1_other_terminal_close_runs_the_owner_cleanups() {
         pane_address: "%1".into(), dirs: dirs.clone(), cwd: root.to_string_lossy().into_owned(), pane_pid: 1, agent_pid: i64::from(exited_pid()), agent_birth: 1.0,
         transcript: transcript.clone(), state_path: root.join("runtime/life-a.json"), lease_path: root.join("runtime/life-a.lock"),
         projection_dir: root.join("queue"), config_dirs: vec![root.clone()], created: 100.0 };
-    let upstream = crate::refused_address();
-    let mut state = AppState::new(fake::config(upstream, "127.0.0.1"));
+    let mut state = AppState::new(fake::config("127.0.0.1"));
     let (home, base) = (root.join("home").to_string_lossy().into_owned(), root.join("conta").to_string_lossy().into_owned());
     state.accounts = hangar_server::accounts::AccountService::new(hangar_server::accounts::environment::AccountEnvironment::from_map(
         [("HOME".to_owned(), home.clone()), ("USERPROFILE".to_owned(), home), ("CLAUDE_CONFIG_DIR".to_owned(), base)].into()));
     let list_dirs = parse_dirs(&json!({"home": dirs.home, "claude": dirs.claude, "codex_home": dirs.codex_home, "pi_sessions": dirs.pi_sessions,
         "omp_config": dirs.omp_config, "omp_agent": dirs.omp_agent, "kimi_home": dirs.kimi_home}).to_string());
     state.list = Arc::new(ListBridge::new(ListEnv { mux: Mux::with_program(&tmux, Duration::from_secs(5)), capture_program: tmux.clone().into_os_string(),
-        procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs: list_dirs }, FactsClient::new(upstream, SECRET.into())));
+        procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs: list_dirs }, FactsClient::new()));
     let registry = crate::runtime_open::registry().await;
     assert!(state.state.runtime.set(registry.clone()).is_ok());
     let st = Arc::new(state);
@@ -756,7 +717,6 @@ async fn delete_r1_01_a_guest_closes_its_own_session_and_never_another_guests() 
     assert_eq!((status, body), (200, json!({"ok": true, "warning": null})));
     assert_eq!(e.alive(), ["da-ana"]);
     assert_eq!(e.calls("kill-session"), ["kill-session -t =da-bia"]);
-    assert_eq!(e.python.hits_to("/api/sessions/da-bia"), 0);
 }
 
 /// R1-02 e decisão 4: o convidado com conta fecha o Pi vivo pela rota `DELETE`; a limpeza do ator
@@ -783,15 +743,14 @@ async fn delete_r1_02_a_guest_closes_a_live_pi_through_the_route_with_the_owner_
         pane_address: "%1".into(), dirs: dirs.clone(), cwd: root.to_string_lossy().into_owned(), pane_pid: 1, agent_pid: i64::from(exited_pid()), agent_birth: 1.0,
         transcript: transcript.clone(), state_path: root.join("runtime/life-a.json"), lease_path: root.join("runtime/life-a.lock"),
         projection_dir: root.join("queue"), config_dirs: vec![root.clone()], created: 100.0 };
-    let (python, upstream) = fake::spawn_fake().await;
-    let mut state = AppState::new(fake::config(upstream, "127.0.0.1"));
+    let mut state = AppState::new(fake::config("127.0.0.1"));
     let (home, base) = (root.join("home").to_string_lossy().into_owned(), root.join("conta").to_string_lossy().into_owned());
     state.accounts = hangar_server::accounts::AccountService::new(hangar_server::accounts::environment::AccountEnvironment::from_map(
         [("HOME".to_owned(), home.clone()), ("USERPROFILE".to_owned(), home), ("CLAUDE_CONFIG_DIR".to_owned(), base)].into()));
     let list_dirs = parse_dirs(&json!({"home": dirs.home, "claude": dirs.claude, "codex_home": dirs.codex_home, "pi_sessions": dirs.pi_sessions,
         "omp_config": dirs.omp_config, "omp_agent": dirs.omp_agent, "kimi_home": dirs.kimi_home}).to_string());
     state.list = Arc::new(ListBridge::new(ListEnv { mux: Mux::with_program(&tmux, Duration::from_secs(5)), capture_program: tmux.clone().into_os_string(),
-        procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs: list_dirs }, FactsClient::new(upstream, SECRET.into())));
+        procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs: list_dirs }, FactsClient::new()));
     state.share = None;
     let token = login_guest(&mut state, &root);
     let registry = crate::runtime_open::registry().await;
@@ -817,7 +776,6 @@ async fn delete_r1_02_a_guest_closes_a_live_pi_through_the_route_with_the_owner_
     assert!(!chain.exists(), "o then da vida encerrada saiu");
     let names: Value = serde_json::from_slice(&std::fs::read(root.join("conta/closed-sessions.json")).unwrap()).unwrap();
     assert_eq!(names[&*transcript.to_string_lossy()]["name"], "pi-a", "{names}");
-    assert_eq!(python.hits_to("/api/sessions/pi-a"), 0);
 }
 
 /// R1-05 (`tmux.alvo_de_kill`): fechar `cat` mata só ela, pelo alvo exato `=cat`; a irmã `cat-2` fica. No
@@ -883,7 +841,6 @@ async fn delete_r1_18_unreadable_runs_refuse_the_orchestrator_close() {
     }
     assert!(e.calls("kill-session").is_empty());
     assert_eq!(e.alive(), ["g1-orq"]);
-    assert_eq!(e.python.hits_to("/api/sessions/g1-orq"), 0);
 }
 
 /// R1-19: com o fechamento de `cat1` em curso (o nome seguro até o fim), outro `DELETE` do mesmo nome é

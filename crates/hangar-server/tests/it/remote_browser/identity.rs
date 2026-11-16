@@ -335,7 +335,7 @@ async fn rebuild_owner(scene: &mut Scene) {
         mux: hangar_server::list::mux::Mux::with_program(source.capture_program.clone(), Duration::from_secs(2)),
         capture_program: source.capture_program.clone(),
         procs: source.procs.clone(), dirs: source.dirs.clone(),
-    }, FactsClient::new(cfg.upstream, support::SECRET.into())));
+    }, FactsClient::new()));
     let mut state = AppState::new(cfg);
     state.hangar_dir = scene.nav_dir().parent().unwrap().to_owned();
     state.list = list.clone();

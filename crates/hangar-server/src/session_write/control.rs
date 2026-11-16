@@ -323,17 +323,6 @@ pub(crate) fn queue_route<'a>(method: &Method, tail: &'a str) -> Option<QueueRou
     }
 }
 
-/// O handler da rota da fila, para as pontes que já a reconheceram.
-pub(crate) async fn queue_dispatch(route: QueueRoute<'_>, st: Arc<AppState>, peer: SocketAddr, req: Request) -> Response {
-    let (s, c) = (State(st), ConnectInfo(peer));
-    match route {
-        QueueRoute::Remove(_) => queue_remove(s, c, req).await,
-        QueueRoute::Edit(_) => queue_edit(s, c, req).await,
-        QueueRoute::Reorder => queue_reorder(s, c, req).await,
-        QueueRoute::Steer(_) => queue_steer(s, c, req).await,
-    }
-}
-
 /// Id da entrada no caminho do pedido (`…/queue/{id}` ou `…/queue/{id}/steer`), sem o escape.
 fn queue_entry(parts: &Parts) -> Option<String> {
     let tail = parts.uri.path().strip_prefix("/api/sessions/")?.split_once('/')?.1;

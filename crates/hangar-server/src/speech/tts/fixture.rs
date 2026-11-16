@@ -32,7 +32,6 @@ fn main() {
             "HANGAR_RUNTIME_INSTANCE",
             "HANGAR_PLUGIN_TOKEN",
             "HANGAR_SERVER_LISTEN",
-            "HANGAR_SERVER_UPSTREAM",
         ]
         .into_iter()
         .map(|key| {

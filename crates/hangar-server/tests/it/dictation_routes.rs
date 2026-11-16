@@ -53,7 +53,6 @@ pub(crate) async fn organize_text(
     let addr = listener.local_addr().unwrap();
     let mut state = AppState::new(Config {
         listen: addr,
-        upstream: "127.0.0.1:1".parse().unwrap(),
         internal_secret: "dictation-secret".into(),
         auth_token: "fixture-owner".into(),
         log_path: None,
@@ -157,7 +156,6 @@ async fn post_organize(config: Value, body: Value) -> Value {
     let addr = listener.local_addr().unwrap();
     let mut state = AppState::new(Config {
         listen: addr,
-        upstream: "127.0.0.1:1".parse().unwrap(),
         internal_secret: "dictation-secret".into(),
         auth_token: "fixture-owner".into(),
         log_path: None,

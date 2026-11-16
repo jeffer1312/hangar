@@ -11,8 +11,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use fake::{OWNER, SECRET, client};
-use hangar_server::groups::orq::PythonOrq;
+use fake::{OWNER, client};
+use hangar_server::groups::orq::OrqVault;
 use hangar_server::groups::service::GroupService;
 use hangar_server::groups::store::PairDir;
 use hangar_server::list::bridge::{ListBridge, ListEnv, parse_dirs};
@@ -48,8 +48,8 @@ async fn server_built(root: &Path, n: usize, orq: Option<Arc<dyn hangar_server::
     let dirs = parse_dirs(&json!({"home": home, "claude": home.join(".claude"), "codex_home": home.join(".codex"),
         "pi_sessions": home.join(".pi/agent/sessions"), "omp_config": home.join(".omp"),
         "omp_agent": home.join(".omp/agent"), "kimi_home": home.join(".kimi-code")}).to_string());
-    let (python, upstream) = fake::spawn_fake().await;
-    let mut state = AppState::new(fake::config(upstream, ""));
+    let (python, _) = fake::spawn_fake().await;
+    let mut state = AppState::new(fake::config(""));
     state.diag = python.bind_diary(state.diag.clone());
     state.accounts = hangar_server::accounts::AccountService::new(
         hangar_server::accounts::environment::AccountEnvironment::from_map(
@@ -57,7 +57,7 @@ async fn server_built(root: &Path, n: usize, orq: Option<Arc<dyn hangar_server::
              ("USERPROFILE".into(), home.to_string_lossy().into_owned())].into()));
     state.list = Arc::new(ListBridge::new(ListEnv { mux: Mux::with_program(&script, Duration::from_secs(5)),
         capture_program: script.into_os_string(), procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs },
-        FactsClient::new(upstream, SECRET.into())));
+        FactsClient::new()));
     let list = state.list.clone();
     // Convidado com conta que vê as sessões sem dono: o fechamento dele é o mesmo do dono.
     let guests = hangar_server::login_guests::Service::new(hangar_server::login_guests::Settings { guests: root.join("guests.json"),
@@ -67,13 +67,13 @@ async fn server_built(root: &Path, n: usize, orq: Option<Arc<dyn hangar_server::
     state.login_guests = Arc::new(guests);
     let pair = home.join(".claude/.hangar-pair");
     let groups = Arc::new(GroupService::new(PairDir::new(pair.clone(), root.join("arquivo")),
-        orq.unwrap_or_else(|| Arc::new(PythonOrq::from_state(&state).with_paths(home.clone(), pair.clone()))), "casa".into()).with_diary(state.diag.clone()));
+        orq.unwrap_or_else(|| Arc::new(OrqVault::from_state(&state).with_paths(home.clone(), pair.clone()))), "casa".into()).with_diary(state.diag.clone()));
     state.groups = Some(groups.clone());
     let share = crate::share_pair_routes::share_state(&root.join("shares.json"), &pair, Arc::new(std::sync::Mutex::new(1_000.0)));
     state.share = Some(share.clone());
     // Cada sessão é um Claude sem terminal do Rust: o recado chega ao cano falso dela. Sem `owned`, só a
     // porta de entrada de cada nome conta (a política nunca é chamada).
-    let runtime = Arc::new(if owned { crate::sink::registry().await } else { RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(), "s".into(), "i".into()) });
+    let runtime = Arc::new(if owned { crate::sink::registry().await } else { RuntimeRegistry::new("i".into()) });
     let sink = crate::sink::Sink::default();
     std::fs::create_dir_all(root.join("rt")).unwrap();
     if owned { for i in 0..n { sink.open(&runtime, &root.join("rt"), &format!("s{i}")).await; } }
@@ -132,9 +132,6 @@ async fn native_promotion_without_identity_keeps_the_group_and_warns() {
     assert_eq!(body["warning"]["params"]["sessao"], "s0");
     assert_eq!(body["warning"]["params"]["grupo"], body["gid"]);
     assert!(srv.groups.link("s0").await.unwrap().unwrap().orq);
-    for path in ["orq/promote", "orq/is-orchestrator", "orq/group-phase"] {
-        assert!(srv.python.internal_bodies(path).is_empty(), "{path}");
-    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -155,9 +152,8 @@ async fn routes_sequence() {
         let before = input_hits(&srv.sink,&names);
         let (status, body) = call(srv.addr, step["method"].as_str().unwrap(), step["path"].as_str().unwrap(), step.get("body"), OWNER).await;
         if step["body_refused"] == true {
-            // O 422 é do Rust, com código; o Python nunca recebe o corpo.
+            // O 422 é do Rust, com código.
             assert_eq!((status, body["detail"]["code"].clone()), (422, json!("erro_corpo_invalido")), "{name}");
-            assert_eq!(srv.python.hits_to(&format!("/api/sessions/{}", step["path"].as_str().unwrap())), 0, "{name}");
             continue;
         }
         if gid.is_empty() && let Some(g) = body["gid"].as_str() {
@@ -193,7 +189,6 @@ async fn pair_delivers_protocol_only_to_newcomers() {
     let text = sent.as_str();
     assert!(text.starts_with("[painel: grupo de trabalho] Você, 's1', está num grupo de trabalho na tarefa: t."), "{text}");
     assert!(text.contains(&format!("vão em {contract} ")) && text.contains("hangar-send s0 \"msg\""), "{text}");
-    assert!(srv.python.internal_bodies("pair/text").is_empty());
     let (status, _) = call(srv.addr, "POST", "s2/pair", Some(&json!({"peer": "s0"})), OWNER).await;
     assert_eq!(status, 200);
     assert_eq!(input_hits(&srv.sink,&["s0", "s1", "s2"]), [1, 1, 1], "veterano não é acordado");
@@ -206,7 +201,6 @@ async fn linked_pair_marks_the_child_records_linked_at_and_sends_no_protocol() {
     let (status, body) = call(srv.addr, "POST", "s0/pair", Some(&json!({"peer": "s1", "link": true})), OWNER).await;
     assert_eq!(status, 200, "{body}");
     assert_eq!(input_hits(&srv.sink,&["s0", "s1", "s2"]), [0, 0, 0], "ninguém recebe o protocolo");
-    assert!(srv.python.internal_bodies("pair/text").is_empty());
     let child: Value = serde_json::from_str(&std::fs::read_to_string(srv.pair.join("s1.json")).unwrap()).unwrap();
     assert_eq!(child["linked_by"], "s0");
     let parent: Value = serde_json::from_str(&std::fs::read_to_string(srv.pair.join("s0.json")).unwrap()).unwrap();
@@ -329,7 +323,6 @@ async fn stranger_gets_401_from_rust_and_cross_machine_stays_in_rust() {
     // Decisão 5: token que ninguém reconhece leva o 401 do Rust, e nada vai ao Python.
     let (status, body) = call(srv.addr, "POST", "s0/pair", Some(&json!({"peers": ["s1"]})), "outro").await;
     assert_eq!((status, body), (401, json!({"detail": {"code": "erro_nao_autorizado", "params": {}, "msg": "unauthorized"}})));
-    assert_eq!(srv.python.hits_to("/api/sessions/s0/pair"), 0);
     // Sem `peers.json`, a máquina `lab` é desconhecida: recusa limpa, nada gravado.
     let (status, body) = call(srv.addr, "POST", "s0/pair", Some(&json!({"peers": ["lab::x"]})), OWNER).await;
     assert_eq!((status, body["detail"]["code"].clone()), (409, json!("erro_grupo_peer_nao_registrado")));
@@ -341,8 +334,7 @@ async fn stranger_gets_401_from_rust_and_cross_machine_stays_in_rust() {
 /// groups_bridge_off`, em todas as rotas de grupo; quem não é o dono leva o 401 do Rust. Nada vai ao Python.
 #[tokio::test(flavor = "multi_thread")]
 async fn r4_15_without_group_folders_every_group_route_is_503_from_rust() {
-    let (python, upstream) = fake::spawn_fake().await;
-    let mut state = AppState::new(fake::config(upstream, ""));
+    let mut state = AppState::new(fake::config(""));
     state.groups = None;
     let addr = fake::spawn_state(state).await;
     let off = json!({"detail": {"code": "erro_grupo_indisponivel", "params": {"detalhe": "groups_bridge_off"}, "msg": "os grupos estão indisponíveis agora"}});
@@ -356,9 +348,6 @@ async fn r4_15_without_group_folders_every_group_route_is_503_from_rust() {
     for (method, path, body) in &routes[..2] {
         let (status, refused) = call(addr, method, path, body.as_ref(), "outro").await;
         assert_eq!((status, refused["detail"]["code"].clone()), (401, json!("erro_nao_autorizado")), "{method} {path}");
-    }
-    for path in ["pair", "group-message", "pair/contract", "pair-remote", "unpair-remote"] {
-        assert_eq!(python.hits_to(&format!("/api/sessions/a/{path}")), 0, "{path}");
     }
 }
 
@@ -490,7 +479,6 @@ async fn unknown_field_is_422_without_python() {
         ("s0/pair-remote", json!({"initiator": 1})), ("s0/unpair-remote", json!({}))] {
         let (status, body) = call(srv.addr, "POST", path, Some(&body), OWNER).await;
         assert_eq!((status, body["detail"]["code"].clone()), (422, json!("erro_corpo_invalido")), "{path}");
-        assert_eq!(srv.python.hits_to(&format!("/api/sessions/{path}")), 0, "{path}");
     }
     assert!(!srv.pair.join("s0.json").exists());
 }
@@ -504,7 +492,6 @@ async fn surrogate_task_is_422() {
     let status = resp.status().as_u16();
     let body: Value = serde_json::from_str(&resp.text().await.unwrap()).unwrap();
     assert_eq!((status, body["detail"]["code"].clone()), (422, json!("erro_corpo_invalido")));
-    assert_eq!(srv.python.hits_to("/api/sessions/s0/pair"), 0);
     assert!(!srv.pair.join("s0.json").exists());
 }
 
@@ -523,7 +510,6 @@ async fn delete_r1_13_the_list_forgets_the_closed_name() {
     assert_eq!(jsonl(srv.list.discovered_session("s0").await.ok().flatten()).as_deref(), Some(old.as_str()));
     let (status, body) = call(srv.addr, "DELETE", "s0", None, GUEST).await;
     assert_eq!((status, body), (200, json!({"ok": true, "warning": null})));
-    assert_eq!(srv.python.hits_to("/api/sessions/s0"), 0);
     let after = jsonl(srv.list.discovered_session("s0").await.ok().flatten());
     assert!(after.is_some_and(|path| path != old), "a sessão nova com o nome não herda a conversa da fechada");
 }
@@ -542,7 +528,6 @@ async fn delete_r1_18_live_orchestrator_is_refused() {
             "msg": "o orquestrador não recebe mensagens; fale com o árbitro"}})), "{token}");
     }
     assert_eq!(list_support::calls(dir.path(), "kill-session"), 0);
-    assert_eq!(srv.python.hits_to("/api/sessions/g1-orq"), 0);
 }
 
 /// R1-11 (`test_close_with_an_unreadable_sidecar_still_leaves_and_journals`,
@@ -572,7 +557,6 @@ async fn delete_r1_11_an_unreadable_group_sidecar_still_closes_and_goes_to_the_d
     assert!(!journaled("s1"), "sem grupo, nada de grupo no diário");
     assert!(!srv.pair.join("s1.json").exists(), "nenhum arquivo de grupo nasce");
     assert_eq!(list_support::calls(dir.path(), "kill-session"), 2, "as duas fecharam");
-    assert_eq!(srv.python.hits_to("/api/sessions/s0") + srv.python.hits_to("/api/sessions/s1"), 0);
 }
 
 /// BRG-25, R1.3-7/8/10, R1-09/R1-10/R1-11: sessão sem entrada aqui (pane Claude que o Rust não adotou)
@@ -595,7 +579,6 @@ async fn repassed_close_leaves_the_group_r1_3() {
     let (status, _) = call(srv.addr, "DELETE", "s0", None, OWNER).await;
     assert_eq!(status, 200);
     assert_eq!(list_support::calls(dir.path(), "kill-session"), 1, "o Rust fecha o pane");
-    assert_eq!(srv.python.hits_to("/api/sessions/s0"), 0, "nada segue ao Python");
     let names = std::fs::read(claude.join("closed-sessions.json")).ok()
         .and_then(|raw| serde_json::from_slice::<Value>(&raw).ok()).unwrap_or(Value::Null);
     let real = std::fs::canonicalize(&jsonl).map_or_else(|_| jsonl.to_string_lossy().into_owned(), |p| p.to_string_lossy().into_owned());

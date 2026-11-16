@@ -1,4 +1,4 @@
-//! Contratos de convidados, com upstream indisponível.
+//! Contratos de convidados.
 use hangar_server::{auth::TrustedHosts, config::Config, routes::AppState};
 use serde_json::Value;
 use std::sync::Arc;
@@ -31,7 +31,7 @@ async fn login_guests_public_gate_denies_owner_routes_before_upstream() {
     let home = crate::physical_tempdir();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
-    let mut state = AppState::new(Config { listen:address, upstream:crate::refused_address(),
+    let mut state = AppState::new(Config { listen:address,
         internal_secret:"fixture".into(), auth_token:"owner".into(), log_path:None,
         trusted:TrustedHosts::parse("127.0.0.1") });
     let service = Service::new(Settings { guests:home.path().join("guests.json"), vault:home.path().join("vault.json"),
@@ -61,7 +61,7 @@ async fn login_guest_write_outside_its_reach_is_the_rust_403() {
     let home = crate::physical_tempdir();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
-    let mut state = AppState::new(Config { listen:address, upstream:crate::refused_address(),
+    let mut state = AppState::new(Config { listen:address,
         internal_secret:"fixture".into(), auth_token:"owner".into(), log_path:None,
         trusted:TrustedHosts::parse("127.0.0.1") });
     let service = Service::new(Settings { guests:home.path().join("guests.json"), vault:home.path().join("vault.json"),
@@ -94,7 +94,7 @@ async fn login_guest_whoami_is_the_rust_403() {
     let home = crate::physical_tempdir();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
-    let mut state = AppState::new(Config { listen:address, upstream:crate::refused_address(),
+    let mut state = AppState::new(Config { listen:address,
         internal_secret:"fixture".into(), auth_token:"owner".into(), log_path:None,
         trusted:TrustedHosts::parse("127.0.0.1") });
     let service = Service::new(Settings { guests:home.path().join("guests.json"), vault:home.path().join("vault.json"),
@@ -160,10 +160,10 @@ async fn login_guests_terminal_closes_after_login_revocation() {
     std::fs::create_dir_all(home.join(".hangar/current")).unwrap();std::fs::create_dir_all(home.join(".hangar/config")).unwrap();
     std::fs::write(home.join(".hangar/config/.env"),"CP_PUBLIC_URL=https://public.example:8443\nCP_TERM_ORIGINS=https://extra.example\n").unwrap();
     std::fs::write(home.join(".hangar/config/peers.json"),r#"{"peers":{"peer":{"base_url":"https://peer.example:8443","enabled":false}}}"#).unwrap();
-    let upstream=crate::refused_address();let mut state=AppState::new(crate::fake::config(upstream,""));
+    let mut state=AppState::new(crate::fake::config(""));
     state.accounts=AccountService::new(AccountEnvironment::from_map([("HOME".into(),home.to_string_lossy().into_owned()),("USERPROFILE".into(),home.to_string_lossy().into_owned())].into()));
     state.term=Arc::new(Terms::new(TermConfig{program:program.clone().into_os_string(),..TermConfig::default()}));
-    state.list=Arc::new(ListBridge::new(ListEnv{mux:Mux::with_program(&program,Duration::from_secs(5)),capture_program:program.into_os_string(),procs:Arc::new(hangar_server::list::procs::SystemProcs::default()),dirs:parse_dirs(&json!({"home":home,"claude":claude,"codex_home":home.join(".codex"),"pi_sessions":home.join(".pi/agent/sessions"),"omp_config":home.join(".omp"),"omp_agent":home.join(".omp/agent"),"kimi_home":home.join(".kimi-code")}).to_string())},FactsClient::new(upstream,crate::fake::SECRET.into())));
+    state.list=Arc::new(ListBridge::new(ListEnv{mux:Mux::with_program(&program,Duration::from_secs(5)),capture_program:program.into_os_string(),procs:Arc::new(hangar_server::list::procs::SystemProcs::default()),dirs:parse_dirs(&json!({"home":home,"claude":claude,"codex_home":home.join(".codex"),"pi_sessions":home.join(".pi/agent/sessions"),"omp_config":home.join(".omp"),"omp_agent":home.join(".omp/agent"),"kimi_home":home.join(".kimi-code")}).to_string())},FactsClient::new()));
     let service=Service::new(Settings{guests:claude.join("guests.json"),vault:home.join("vault.json"),runtime_config:claude.join("runtime-config.json"),sync_enabled:false,bootstrap:String::new(),secret:vec![1],secure:false,rate_max:10.into(),rate_window:300.into()});
     service.store.create("Ana",home.to_str().unwrap(),true,true,"fixture".into(),"guest-token".into()).unwrap();state.share = None;
     state.login_guests=Arc::new(service);
@@ -201,7 +201,7 @@ async fn sync_request(service: &Arc<hangar_server::login_guests::Service>, metho
 async fn cookie_context_child_helper() {
     let Ok(mode)=std::env::var("HANGAR_GUEST_COOKIE_PROBE") else{return;};
     let root=std::path::PathBuf::from(std::env::var_os("HOME").unwrap());
-    let state=AppState::new(crate::fake::config(crate::refused_address(),""));
+    let state=AppState::new(crate::fake::config(""));
     let mut service=hangar_server::login_guests::Service::from_state(&state).await;
     service.now=||2000000000;service.entropy=|n|vec![b'x';n];let service=Arc::new(service);
     let result=if mode=="issue" {

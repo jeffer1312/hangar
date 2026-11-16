@@ -11,8 +11,8 @@ const EXPOSE: &str = "ETag, x-hangar-css-width, x-hangar-css-height";
 /// I-12 (r01, r02, r03): o preflight de qualquer caminho sai antes do login, sem chegar ao Python.
 #[tokio::test]
 async fn preflight_of_any_path_is_answered_before_login() {
-    let (python, upstream) = spawn_fake().await;
-    let server = spawn_server(config(upstream, "127.0.0.1")).await;
+    let (python, _) = spawn_fake().await;
+    let server = spawn_server_for(&python, config("127.0.0.1")).await;
     for path in ["/api/nada/aqui", "/api/whoami", "/internal/ping"] {
         let r = client().request(reqwest::Method::OPTIONS, format!("http://{server}{path}"))
             .header("origin", ORIGIN).header("access-control-request-method", "POST")
@@ -25,15 +25,14 @@ async fn preflight_of_any_path_is_answered_before_login() {
         assert_eq!(h["access-control-allow-headers"], "authorization,content-type,x-hangar-req", "{path}");
         assert_eq!(h["content-type"], "text/plain; charset=utf-8", "{path}");
         assert_eq!(r.text().await.unwrap(), "OK", "{path}");
-        assert_eq!(python.hits_to(path), 0, "{path}");
     }
 }
 
 /// I-13 (r13): `Content-Length` acima de 100 MiB é 413 antes do login, com CORS, sem ler o corpo.
 #[tokio::test]
 async fn declared_body_over_100_mib_is_413_before_login() {
-    let (python, upstream) = spawn_fake().await;
-    let server = spawn_server(config(upstream, "127.0.0.1")).await;
+    let (python, _) = spawn_fake().await;
+    let server = spawn_server_for(&python, config("127.0.0.1")).await;
     let mut s = tokio::net::TcpStream::connect(server).await.unwrap();
     s.write_all(format!("POST /api/diag HTTP/1.1\r\nHost: h\r\nOrigin: {ORIGIN}\r\nContent-Length: 104857601\r\n\r\nx").as_bytes())
         .await.unwrap();
@@ -51,15 +50,14 @@ async fn declared_body_over_100_mib_is_413_before_login() {
     assert!(text.contains("access-control-allow-origin: *"), "{text}");
     assert!(text.contains(&format!("access-control-expose-headers: {}", EXPOSE.to_lowercase())), "{text}");
     assert!(text.contains("content-type: text/plain; charset=utf-8"), "{text}");
-    assert_eq!(python.hits_to("/api/diag"), 0);
 }
 
 /// I-18 (r09, r11) e decisão 19: caminho sem handler é 404 do Rust para o dono, com CORS; quem não é
 /// o dono leva a recusa de sempre (r08: 401 `erro_nao_autorizado`), e nada vai ao Python.
 #[tokio::test]
 async fn path_without_handler_is_404_for_the_owner_and_refused_for_the_stranger() {
-    let (python, upstream) = spawn_fake().await;
-    let server = spawn_server(config(upstream, "127.0.0.1")).await;
+    let (python, _) = spawn_fake().await;
+    let server = spawn_server_for(&python, config("127.0.0.1")).await;
     let r = client().get(format!("http://{server}/api/nada/12345/xyz")).bearer_auth(OWNER).header("origin", ORIGIN)
         .send().await.unwrap();
     assert_eq!(r.status(), 404);
@@ -73,31 +71,28 @@ async fn path_without_handler_is_404_for_the_owner_and_refused_for_the_stranger(
     assert_eq!(r.headers()["access-control-allow-origin"], "*");
     let body: Value = r.json().await.unwrap();
     assert_eq!(body["detail"]["code"], "erro_nao_autorizado");
-    assert_eq!(python.hits_to("/api/nada/12345/xyz") + python.hits_to("/api/sessions/minha-sessao/coisa"), 0);
 }
 
 /// Decisão 19: caminho sem handler sob uma sessão é 404 antes da porta da sessão; sessão sem entrada
 /// no registro não vira o 409 de "ocupada".
 #[tokio::test]
 async fn path_without_handler_is_404_before_the_session_gate() {
-    let (python, upstream) = spawn_fake().await;
-    let state = hangar_server::routes::AppState::new(config(upstream, "127.0.0.1"));
-    let registry = std::sync::Arc::new(hangar_server::runtime::gateway::RuntimeRegistry::new(
-        upstream, "secret-test".into(), "instance-test".into()));
+    let (python, _) = spawn_fake().await;
+    let state = hangar_server::routes::AppState::new(config("127.0.0.1"));
+    let registry = std::sync::Arc::new(hangar_server::runtime::gateway::RuntimeRegistry::new("instance-test".into()));
     assert!(state.state.runtime.set(registry).is_ok());
-    let server = spawn_state(state).await;
+    let server = spawn_state_for(&python, state).await;
     let r = client().post(format!("http://{server}/api/sessions/sem-entrada/coisa")).bearer_auth(OWNER)
         .json(&serde_json::json!({"a": 1})).send().await.unwrap();
     assert_eq!(r.status(), 404);
-    assert_eq!(python.hits_to("/api/sessions/sem-entrada/coisa"), 0);
 }
 
 /// I-14 e decisão 18: o pedido do Rust que falha no servidor ganha a linha `api.servidor` com a rota
 /// mascarada e a causa do corpo; o 404 de caminho desconhecido, que o Python também registrava, não.
 #[tokio::test]
 async fn server_failure_writes_the_access_line_with_masked_route_and_cause() {
-    let (python, upstream) = spawn_fake().await;
-    let server = spawn_server_with_diary(config(upstream, "127.0.0.1"), &python).await;
+    let (python, _) = spawn_fake().await;
+    let server = spawn_server_with_diary(config("127.0.0.1"), &python).await;
     let unknown = client().get(format!("http://{server}/api/nada/12345/xyz")).bearer_auth(OWNER).send().await.unwrap();
     assert_eq!(unknown.status(), 404);
     // Sem o registro de sessões, a escrita é 503 `runtime_unavailable` (session_write_routes).
@@ -119,8 +114,8 @@ async fn server_failure_writes_the_access_line_with_masked_route_and_cause() {
 /// não é o dono leva a recusa do Rust.
 #[tokio::test]
 async fn migration_status_is_rust_only() {
-    let (python, upstream) = spawn_fake().await;
-    let server = spawn_server(config(upstream, "127.0.0.1")).await;
+    let (python, _) = spawn_fake().await;
+    let server = spawn_server_for(&python, config("127.0.0.1")).await;
     let r = client().get(format!("http://{server}/api/migration/status")).bearer_auth(OWNER).send().await.unwrap();
     assert_eq!(r.status(), 200);
     assert_eq!(r.headers()["cache-control"], "no-store");
@@ -131,8 +126,6 @@ async fn migration_status_is_rust_only() {
     for gone in ["python", "python_error", "private"] {
         assert!(body.get(gone).is_none(), "{gone}: {body}");
     }
-    assert_eq!(python.hits_to("/internal/migration/status"), 0);
     let stranger = client().get(format!("http://{server}/api/migration/status")).send().await.unwrap();
     assert_eq!(stranger.status(), 401);
-    assert_eq!(python.hits_to("/api/migration/status"), 0);
 }

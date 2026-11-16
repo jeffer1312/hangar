@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use axum::Router;
 use axum::http::Method;
-use fake::{SECRET, client};
+use fake::client;
 use hangar_server::groups::federation;
 use hangar_server::groups::outbox::OutboxItem;
 use hangar_server::share::caller::{GuestGrant, guest_allowed};
@@ -416,26 +416,6 @@ async fn groups_routes_without_owner_token_have_a_code() {
     assert_eq!((status, body["detail"]["code"].clone(), body["server_id"].clone()), (404, json!("erro_grupo_inexistente"), json!("casa")));
 }
 
-/// Porta do Connect: o Python autentica o dono e repassa pela ponte privada; a resposta leva código
-/// e `server_id`. Convidado repassado é recusado com código.
-#[tokio::test(flavor = "multi_thread")]
-async fn connect_forwarded_groups_routes_answer_with_code() {
-    let n = net().await;
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let private = listener.local_addr().unwrap();
-    let app = hangar_server::routes::terminal_router(n.casa.state.clone()).into_make_service_with_connect_info::<SocketAddr>();
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    let bridged = |method: reqwest::Method, path: &str| client().request(method, format!("http://{private}/__hangar_server/forwarded"))
-        .header("x-hangar-path", path).header("x-hangar-internal", SECRET);
-    let body = |r: reqwest::Response| async move { (r.status().as_u16(), serde_json::from_str::<Value>(&r.text().await.unwrap()).unwrap()) };
-    let (status, got) = body(bridged(reqwest::Method::GET, "/api/groups/nada").send().await.unwrap()).await;
-    assert_eq!((status, got["detail"]["code"].clone(), got["server_id"].clone()), (404, json!("erro_grupo_inexistente"), json!("casa")));
-    let (status, got) = body(bridged(reqwest::Method::GET, "/api/sessions/s0/group").send().await.unwrap()).await;
-    assert_eq!((status, got["detail"]["code"].clone()), (404, json!("erro_sessao_sem_grupo")));
-    let (status, got) = body(bridged(reqwest::Method::GET, "/api/groups/nada").header("x-hangar-forwarded-guest", "1").send().await.unwrap()).await;
-    assert_eq!((status, got["detail"]["code"].clone()), (403, json!("erro_fora_do_convite")));
-}
-
 /// Renomear pendente nesta máquina vence o envio da dona com o nome velho.
 #[tokio::test(flavor = "multi_thread")]
 async fn pending_rename_wins_over_old_push() {
@@ -716,31 +696,6 @@ async fn startup_with_changed_id_does_not_open_the_queue() {
     let renamed = machine(&n.casa.root, "casa2").await;
     federation::spawn(renamed.state.clone()).expect("máquina com id").await.unwrap();
     assert!(federation::existing(&n.casa.pair).is_none(), "a fila não abriu com o id trocado");
-}
-
-/// `/deliver` pela porta do Connect: a sessão do Rust recebe dentro da rota e nada volta ao Python
-/// (a sessão sem dono: `session_write_unowned`).
-#[tokio::test(flavor = "multi_thread")]
-async fn connect_forwarded_deliver_never_returns_work_to_python() {
-    let n = net().await;
-    let (status, body) = pair(&n.casa, "s0", json!({"peers": ["lab::s1"]})).await;
-    assert_eq!(status, 200, "{body}");
-    let gid = body["gid"].as_str().unwrap().to_owned();
-    let sink = n.lab.sink.clone();
-    fake::wait_until(move || sink.count("s1") == 1).await;
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let private = listener.local_addr().unwrap();
-    let app = hangar_server::routes::terminal_router(n.lab.state.clone()).into_make_service_with_connect_info::<SocketAddr>();
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    let ask = json!({"protocol": 1, "origin": "casa", "sender": "s0", "text": "oi", "notice": "n1"});
-    let resp = client().post(format!("http://{private}/__hangar_server/forwarded")).header("x-hangar-path", format!("/api/groups/{gid}/deliver"))
-        .header("x-hangar-internal", SECRET).header("content-type", "application/json").body(ask.to_string()).send().await.unwrap();
-    assert_eq!(resp.status().as_u16(), 200);
-    let got: Value = serde_json::from_str(&resp.text().await.unwrap()).unwrap();
-    assert!(got.get("hangar_deliveries").is_none(), "{got}");
-    assert_eq!(got["failed"], json!([]));
-    assert_eq!(n.lab.sink.last("s1").as_deref(), Some("[grupo: casa::s0] oi"));
-    assert_eq!(n.lab.python.input_calls(), 0, "o Rust não chamou o Python");
 }
 
 /// Fusão entre máquinas cujo contrato do grupo absorvido não pôde ser herdado: o grupo fica, mas a

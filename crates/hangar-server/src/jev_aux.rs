@@ -120,17 +120,6 @@ pub async fn models(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
     resp
 }
 
-/// Ponte do Python (Connect): o pedido do dono que entrou pela porta dele, já autenticado lá.
-pub async fn private(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    if !crate::workspace_routes::private_ok(&st, peer, req.headers()) { return StatusCode::NOT_FOUND.into_response(); }
-    let path = req.headers().get("x-hangar-path").and_then(|v| v.to_str().ok()).unwrap_or_default().to_string();
-    match (req.method().clone(), path.as_str()) {
-        (Method::GET, "/api/jev/aux/cliproxy") => cliproxy_reply(st.accounts.env.home.clone()).await,
-        (_, "/api/jev/aux/models") => models_reply(&st, req).await,
-        _ => StatusCode::NOT_FOUND.into_response(),
-    }
-}
-
 async fn list(body: ModelsBody, home: std::path::PathBuf, claude_dir: std::path::PathBuf) -> Response {
     let Some(base) = normalized(&body.base_url) else {
         return failure(StatusCode::BAD_REQUEST, "erro_jev_aux_url", "o endereço precisa começar com http:// ou https://", json!({}));

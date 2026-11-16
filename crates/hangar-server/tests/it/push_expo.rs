@@ -53,7 +53,6 @@ async fn expo_receipts(State(expo): State<Arc<Expo>>, raw: Bytes) -> String {
 struct Fixture {
     home: tempfile::TempDir,
     public: String,
-    private: String,
     state: Arc<AppState>,
     expo: Arc<Expo>,
     tasks: Vec<tokio::task::JoinHandle<()>>,
@@ -86,7 +85,6 @@ impl Fixture {
         let home = tempfile::tempdir().unwrap();
         let mut state = AppState::new(Config {
             listen: "127.0.0.1:0".parse().unwrap(),
-            upstream: crate::refused_address(),
             internal_secret: "fixture-internal".into(),
             auth_token: "fixture-owner".into(),
             log_path: None,
@@ -105,15 +103,12 @@ impl Fixture {
         ));
         let state = Arc::new(state);
         let (public, public_task) = serve(hangar_server::routes::router(state.clone())).await;
-        let (private, private_task) =
-            serve(hangar_server::routes::terminal_router(state.clone())).await;
         Self {
             home,
             public,
-            private,
             state,
             expo,
-            tasks: vec![expo_task, public_task, private_task],
+            tasks: vec![expo_task, public_task],
         }
     }
 
@@ -128,7 +123,6 @@ impl Fixture {
             .await
     }
 
-    /// `FORWARDED` entra pela porta privada, como o dono pelo Connect.
     async fn subscribe_via(
         &self,
         path: &str,
@@ -139,14 +133,7 @@ impl Fixture {
         owner: bool,
     ) -> reqwest::Response {
         let client = reqwest::Client::new();
-        let mut request = if path == FORWARDED {
-            client
-                .post(format!("{}{path}", self.private))
-                .header("x-hangar-internal", "fixture-internal")
-                .header("x-hangar-path", SUBSCRIBE)
-        } else {
-            client.post(format!("{}{path}", self.public))
-        };
+        let mut request = client.post(format!("{}{path}", self.public));
         if owner {
             request = request.bearer_auth("fixture-owner");
         }
@@ -229,7 +216,6 @@ async fn body(response: reqwest::Response) -> Value {
 
 const TOKEN: &str = "ExponentPushToken[aaa]";
 const SUBSCRIBE: &str = "/api/push/expo/subscribe";
-const FORWARDED: &str = "/__hangar_server/forwarded";
 
 #[tokio::test]
 async fn resubscribing_the_same_token_keeps_one_entry() {
@@ -408,28 +394,6 @@ async fn unregistered_ticket_prunes_right_away() {
 }
 
 #[tokio::test]
-async fn retired_python_push_bridge_is_absent_even_with_internal_secret() {
-    let fixture = Fixture::start().await;
-    for (method, path) in [
-        (reqwest::Method::POST, "/__hangar_server/push/expo"),
-        (reqwest::Method::GET, "/__hangar_server/presence"),
-    ] {
-        let response = reqwest::Client::new()
-            .request(method, format!("{}{path}", fixture.private))
-            .header("x-hangar-internal", "fixture-internal")
-            .header("content-type", "application/json")
-            .body(
-                json!({"session":"s1","title":{"pt":"a","en":"a"},"body":{"pt":"b","en":"b"}})
-                    .to_string(),
-            )
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(response.status(), 404, "ponte retirada: {path}");
-    }
-}
-
-#[tokio::test]
 async fn empty_server_or_label_is_refused() {
     let fixture = Fixture::start().await;
     assert_eq!(
@@ -443,12 +407,3 @@ async fn empty_server_or_label_is_refused() {
     assert_eq!(body(response).await["detail"]["code"], "push_expo_invalid");
 }
 
-#[tokio::test]
-async fn connect_owner_subscribes_through_the_forwarder() {
-    let fixture = Fixture::start().await;
-    let response = fixture
-        .subscribe_via(FORWARDED, "casa", TOKEN, "Casa", "pt", false)
-        .await;
-    assert_eq!(response.status(), 200);
-    assert_eq!(fixture.registry()["tokens"][0]["token"], TOKEN);
-}

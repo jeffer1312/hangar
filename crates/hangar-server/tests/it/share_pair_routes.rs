@@ -18,7 +18,7 @@ use axum::response::IntoResponse;
 use axum::routing::get;
 use futures_util::future::BoxFuture;
 use hangar_server::groups::exit::leave_and_notify;
-use hangar_server::groups::orq::PythonOrq;
+use hangar_server::groups::orq::OrqVault;
 use hangar_server::groups::peers::{PeerBook, PeerClient};
 use hangar_server::groups::service::GroupService;
 use hangar_server::groups::store::PairDir;
@@ -180,7 +180,6 @@ struct Env {
     _dir: tempfile::TempDir,
     root: PathBuf,
     pair_dir: PathBuf,
-    python: Arc<fake::Fake>,
     app: Arc<AppState>,
     share: Arc<ShareState>,
     other: Arc<Other>,
@@ -208,8 +207,7 @@ async fn env_with(o: Opts) -> Env {
     let dirs = parse_dirs(&json!({"home": home, "claude": home.join(".claude"), "codex_home": home.join(".codex"),
         "pi_sessions": home.join(".pi/agent/sessions"), "omp_config": home.join(".omp"),
         "omp_agent": home.join(".omp/agent"), "kimi_home": home.join(".kimi-code")}).to_string());
-    let (python, upstream) = fake::spawn_fake().await;
-    let mut state = AppState::new(fake::config(upstream, ""));
+    let mut state = AppState::new(fake::config(""));
     let runtime = Arc::new(crate::sink::registry().await);
     let sink = crate::sink::Sink::default();
     std::fs::create_dir_all(root.join("rt")).unwrap();
@@ -217,10 +215,10 @@ async fn env_with(o: Opts) -> Env {
     assert!(state.state.runtime.set(runtime).is_ok());
     state.list = Arc::new(ListBridge::new(ListEnv { mux: Mux::with_program(&script, Duration::from_secs(5)),
         capture_program: script.into_os_string(), procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs },
-        FactsClient::new(upstream, fake::SECRET.into())));
+        FactsClient::new()));
     let pair_dir = home.join(".claude/.hangar-pair");
     state.groups = Some(Arc::new(GroupService::new(PairDir::new(pair_dir.clone(), root.join("arquivo")),
-        Arc::new(PythonOrq::from_state(&state)), o.server_id.into())));
+        Arc::new(OrqVault::from_state(&state)), o.server_id.into())));
     state.peers = Arc::new(PeerClient::new(PeerBook::new(Some(root.join("peers.json")))));
     let clock = Arc::new(Mutex::new(1_000.0));
     let share = share_state(&root.join("shares.json"), &pair_dir, clock.clone());
@@ -238,7 +236,7 @@ async fn env_with(o: Opts) -> Env {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let guest = format!("http://{}", listener.local_addr().unwrap());
     tokio::spawn(async move { axum::serve(listener, guarded.into_make_service_with_connect_info::<GuestConn>()).await.unwrap() });
-    Env { _dir: dir, root, pair_dir, python, app, share, other, other_base, remote, owner, guest, clock, http: fake::client(), sink }
+    Env { _dir: dir, root, pair_dir, app, share, other, other_base, remote, owner, guest, clock, http: fake::client(), sink }
 }
 
 async fn env() -> Env { env_with(Opts::default()).await }
@@ -935,7 +933,6 @@ async fn owner_exit_tells_the_other_side_and_cleans_without_python() {
     assert_eq!((&call["method"], &call["path"], &call["query"], &call["auth"]),
         (&json!("DELETE"), &json!("/api/pair"), &json!("session=Y"), &json!(format!("Bearer {}", tok_y()))));
     assert!(e.share.pairs.all().is_empty() && e.revoked(&id));
-    assert!(e.python.internal_bodies("external-pairs/end").is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread")]

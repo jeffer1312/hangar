@@ -494,11 +494,10 @@ mod tests {
     async fn real_runtime_live_error_is_published_without_authorizing_old_plugin_questions() {
         use crate::runtime::protocol::{CanoBinding, RuntimeTarget};
         let f = claude_fixture();
-        let py = fake_python().await;
         let external = Arc::new(FactsStore::default());
         let interactions = Arc::new(crate::interactions::InteractionStore::default());
         let plugin = Arc::new(crate::plugin::Store::new(interactions.clone()));
-        let registry = Arc::new(crate::runtime::gateway::RuntimeRegistry::new(py.addr,"test".into(),"feed-error".into())
+        let registry = Arc::new(crate::runtime::gateway::RuntimeRegistry::new("feed-error".into())
             .with_interactions(interactions).with_plugin(plugin));
         let endpoint = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = endpoint.local_addr().unwrap();
@@ -513,7 +512,7 @@ mod tests {
         assert!(live.borrow().as_ref().unwrap().error.is_some(), "erro vem do produtor real do runtime");
         assert!(registry.interaction_binding_readonly("s").await.is_err(), "erro não autoriza interação");
         let mut rx = f.lease.hub.tx.subscribe();
-        let mut feed = RuntimeFeed::new(&f.lease.hub,Some(live),f.published.clone(),Some(feed_facts(&py,&external)))
+        let mut feed = RuntimeFeed::new(&f.lease.hub,Some(live),f.published.clone(),Some(feed_facts(&external)))
             .with_registry(Some(registry));
         feed.refresh_facts().await;
         assert!(feed.round().await);
@@ -531,10 +530,9 @@ mod tests {
         let f = claude_fixture();
         let home = tempfile::tempdir().unwrap();
         write_sidecar(home.path(),json!({"cwd":"/w","session_id":"sid","model":"claude-opus-5","effort":"high"}));
-        let py = fake_python().await;
-        let registry = Arc::new(crate::runtime::gateway::RuntimeRegistry::new(py.addr,"test".into(),"feed-parked-quiet".into()));
+        let registry = Arc::new(crate::runtime::gateway::RuntimeRegistry::new("feed-parked-quiet".into()));
         let external = Arc::new(FactsStore::default());
-        let mut feed = RuntimeFeed::new(&f.lease.hub,Some(registry.live("s")),f.published.clone(),Some(feed_facts(&py,&external)))
+        let mut feed = RuntimeFeed::new(&f.lease.hub,Some(registry.live("s")),f.published.clone(),Some(feed_facts(&external)))
             .with_registry(Some(registry.clone())).with_home(home.path());
         feed.refresh_facts().await;
         feed.parked = feed.load_parked().await;
@@ -551,10 +549,9 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         write_sidecar(home.path(),json!({"cwd":"/w","session_id":"sid-b","model":"claude-opus-5","effort":"high",
             "permission_mode":"plan","previous_non_plan":"acceptEdits","problema":["limite_de_uso","volta às 14:00"]}));
-        let py = fake_python().await;
-        let registry = Arc::new(crate::runtime::gateway::RuntimeRegistry::new(py.addr,"test".into(),"feed-parked".into()));
+        let registry = Arc::new(crate::runtime::gateway::RuntimeRegistry::new("feed-parked".into()));
         let external = Arc::new(FactsStore::default());
-        let mut feed = RuntimeFeed::new(&f.lease.hub,Some(registry.live("s")),f.published.clone(),Some(feed_facts(&py,&external)))
+        let mut feed = RuntimeFeed::new(&f.lease.hub,Some(registry.live("s")),f.published.clone(),Some(feed_facts(&external)))
             .with_registry(Some(registry.clone())).with_home(home.path());
         feed.refresh_facts().await;
         let b = Binding {provider:Provider::ClaudeHeadless,jsonl:f._dir.path().join("sid-b.jsonl"),key:"sid-b".into(),headless:true,life:None};
@@ -584,11 +581,6 @@ mod tests {
         use crate::runtime::protocol::{CanoBinding, RuntimeTarget};
         use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
         let dir = tempfile::tempdir().unwrap();
-        let boot = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let python = boot.local_addr().unwrap();
-        let boot_server = tokio::spawn(async move {
-            axum::serve(boot, axum::Router::new().fallback(|| async { crate::session_write::json_response(axum::http::StatusCode::OK, json!({"ok":true,"data":{}})) })).await.unwrap();
-        });
         let cano = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = cano.local_addr().unwrap();
         let cano_server = tokio::spawn(async move {
@@ -603,7 +595,7 @@ mod tests {
             while socket.read_line(&mut line).await.unwrap_or(0) > 0 { line.clear(); }
         });
         let processes = Arc::new(RecipeProcesses {sid:std::sync::Mutex::new("sid".into()),config:dir.path().into()});
-        let registry = Arc::new(crate::runtime::gateway::RuntimeRegistry::new(python, "test".into(), "feed-info".into()).with_processes(processes));
+        let registry = Arc::new(crate::runtime::gateway::RuntimeRegistry::new("feed-info".into()).with_processes(processes));
         let ctx = test_ctx();
         registry.bind_hubs(ctx.hubs.downgrade());
         assert!(ctx.runtime.set(registry.clone()).is_ok());
@@ -622,7 +614,6 @@ mod tests {
         assert!(state["problema"].is_null(), "rodada sem prova da conversa: {state}");
         registry.close("runtime-key", 1).await.unwrap();
         cano_server.abort();
-        boot_server.abort();
     }
 
     struct RecipeProcesses {sid:std::sync::Mutex<String>,config:std::path::PathBuf}
@@ -644,20 +635,15 @@ mod tests {
         use crate::runtime::protocol::{CanoBinding, RuntimeTarget};
         use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
         let f = claude_fixture();
-        let boot = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let py = FakePython { addr:boot.local_addr().unwrap(), hits:Arc::default(), snapshots:Arc::default() };
-        let boot_server = tokio::spawn(async move {
-            axum::serve(boot, axum::Router::new().fallback(|| async { crate::session_write::json_response(axum::http::StatusCode::OK, json!({"ok":true,"data":{}})) })).await.unwrap();
-        });
         let external = Arc::new(crate::state::facts::FactsStore::default());
         let interactions = Arc::new(crate::interactions::InteractionStore::default());
         let plugin = Arc::new(crate::plugin::Store::new(interactions.clone()));
         let processes=Arc::new(RecipeProcesses {sid:std::sync::Mutex::new("sid".into()),config:f._dir.path().into()});
-        let registry = Arc::new(crate::runtime::gateway::RuntimeRegistry::new(py.addr, "test".into(), "feed-race".into())
+        let registry = Arc::new(crate::runtime::gateway::RuntimeRegistry::new("feed-race".into())
             .with_interactions(interactions).with_plugin(plugin.clone()).with_processes(processes.clone()));
         registry.bind_hubs(f.ctx.hubs.downgrade());
         let queues = tempfile::tempdir().unwrap();
-        let mut feed = RuntimeFeed::new(&f.lease.hub, Some(registry.live("s")), f.published.clone(), Some(feed_facts(&py,&external))).with_registry(Some(registry.clone()));
+        let mut feed = RuntimeFeed::new(&f.lease.hub, Some(registry.live("s")), f.published.clone(), Some(feed_facts(&external))).with_registry(Some(registry.clone()));
         let mut servers = Vec::new();
         for (conversation, generation) in [("sid", 1), ("sid-b", 2)] {
             if generation == 2 {
@@ -720,7 +706,7 @@ mod tests {
             public_state:json!({"session":"s","state":"awaiting_input","headless":true,"status_line":"metadata-a",
                 "codex_question":{"request_id":"ask:a","interaction_id":"a","questions":[{"question":"A?"}]}}),
             error:Some(("old-a-error".into(),"old-a-detail".into())), ..Default::default() }));
-        let mut stale = RuntimeFeed::new(&f.lease.hub,Some(old_view),Arc::default(),Some(feed_facts(&py,&external))).with_registry(Some(registry.clone()));
+        let mut stale = RuntimeFeed::new(&f.lease.hub,Some(old_view),Arc::default(),Some(feed_facts(&external))).with_registry(Some(registry.clone()));
         let mut stale_rx = f.lease.hub.tx.subscribe();
         stale.refresh_facts().await;
         assert!(stale.round().await);
@@ -748,7 +734,6 @@ mod tests {
         assert!(!failed.iter().any(|(_,_,data)| data.to_string().contains("ask:a") || data.to_string().contains("suggest-a")));
         registry.close("feed-key", 2).await.unwrap();
         for server in servers { server.abort(); }
-        boot_server.abort();
     }
 
     #[tokio::test(start_paused = true)]
@@ -814,8 +799,7 @@ mod tests {
     async fn own_conversation_actor_error_shows_and_another_conversations_does_not() {
         for (conversation, shown) in [("sid", true), ("outra", false)] {
             let f = claude_fixture();
-            let py = fake_python().await;
-            let registry = Arc::new(crate::runtime::gateway::RuntimeRegistry::new(py.addr, "test".into(), format!("feed-own-{conversation}")));
+            let registry = Arc::new(crate::runtime::gateway::RuntimeRegistry::new(format!("feed-own-{conversation}")));
             let binding = crate::interactions::InteractionBinding { key: "k".into(), conversation: conversation.into(), generation: 1 };
             let (_tx, live_rx) = channel(Some(LiveState { binding: Some(binding), public_state: json!({"session": "s"}),
                 error: Some(("queue_io".into(), "fila recusou".into())), ..Default::default() }));
@@ -991,50 +975,6 @@ mod tests {
         assert!(f.published.get("s", Some("rollout-abc")).is_none(), "feed que acaba sai da lista");
     }
 
-    /// Python de mentira: responde o retrato de fatos e conta os pedidos.
-    struct FakePython { addr: std::net::SocketAddr, hits: Arc<std::sync::atomic::AtomicUsize>, snapshots: Arc<std::sync::atomic::AtomicUsize> }
-
-    async fn fake_python() -> FakePython { fake_python_with(0, "").await }
-
-    /// Os primeiros `fail_first` pedidos levam 503; depois responde o retrato com `suggestion`.
-    async fn fake_python_with(fail_first: usize, suggestion: &'static str) -> FakePython { fake_python_full(fail_first, suggestion, false).await }
-
-    /// Como `fake_python_with`, com a janela de troca de modo aberta ou não nos fatos.
-    async fn fake_python_full(fail_first: usize, suggestion: &'static str, transfer: bool) -> FakePython {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let hits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let snapshots = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let (counted, snapped) = (hits.clone(), snapshots.clone());
-        tokio::spawn(async move {
-            while let Ok((mut s, _)) = listener.accept().await {
-                let mut buf = [0u8; 4096];
-                let read = s.read(&mut buf).await.unwrap_or(0);
-                // Qualquer processo da máquina pode sondar a porta nova (`HEAD /`): só rota do app conta.
-                let path = std::str::from_utf8(&buf[..read]).ok().and_then(|r| r.split(' ').nth(1)).unwrap_or("");
-                if !(path.starts_with("/internal/") || path.starts_with("/api/")) {
-                    let _ = s.write_all(b"HTTP/1.1 404 X\r\ncontent-length: 0\r\n\r\n").await;
-                    continue;
-                }
-                let n = counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                // Retrato é GET; o relatório de diagnóstico é POST.
-                if buf[..read].starts_with(b"GET") {
-                    snapped.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                }
-                if n < fail_first {
-                    let _ = s.write_all(b"HTTP/1.1 503 X\r\ncontent-length: 0\r\n\r\n").await;
-                    continue;
-                }
-                let mut facts = facts_json(1, suggestion);
-                facts["transfer_active"] = json!(transfer);
-                let body = serde_json::to_string(&facts).unwrap();
-                let _ = s.write_all(format!("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{body}", body.len()).as_bytes()).await;
-            }
-        });
-        FakePython { addr, hits, snapshots }
-    }
-
     fn facts_json(seq: u64, suggestion: &str) -> Value {
         json!({"seq": seq, "plugin_state": null, "waiter_open": false, "heartbeat_age_ms": null, "question": null,
                "suggestion": suggestion, "body_columns": null, "band_anchor": null, "in_transfer_ms": 0,
@@ -1045,14 +985,12 @@ mod tests {
         serde_json::from_value(facts_json(seq, suggestion)).unwrap()
     }
 
-    fn feed_facts(py: &FakePython, store: &Arc<crate::state::facts::FactsStore>) -> FeedFacts {
+    fn feed_facts(store: &Arc<crate::state::facts::FactsStore>) -> FeedFacts {
         FeedFacts {
             store: store.clone(),
-            diag: crate::diag::DiagClient::new(py.addr, "s".into()),
+            diag: crate::diag::DiagClient::new(),
         }
     }
-
-    fn hits(py: &FakePython) -> usize { py.hits.load(std::sync::atomic::Ordering::SeqCst) }
 
     fn texts(got: &[(Instant, String, Value)]) -> Vec<Value> {
         of(got, "suggest").into_iter().map(|e| e.2.clone()).collect()
@@ -1062,13 +1000,11 @@ mod tests {
     #[tokio::test]
     async fn claude_does_not_request_migrated_http_facts() {
         let f = claude_fixture();
-        let py = fake_python().await;
         let store = Arc::new(crate::state::facts::FactsStore::default());
         let mut rx = f.lease.hub.tx.subscribe();
         let (_tx, live_rx) = channel(Some(live("idle")));
-        let _feed = tokio::spawn(RuntimeFeed::new(&f.lease.hub, Some(live_rx), f.published.clone(), Some(feed_facts(&py, &store))).run());
+        let _feed = tokio::spawn(RuntimeFeed::new(&f.lease.hub, Some(live_rx), f.published.clone(), Some(feed_facts(&store))).run());
         let first = collect(&mut rx, Duration::from_millis(400)).await;
-        assert_eq!(hits(&py), 0, "a fonte migrada não consulta HTTP");
         assert!(of(&first, "suggest").is_empty(), "vazia desde o início não é mudança");
         let now = std::time::Instant::now();
         store.push("s", facts(2, "roda os testes"), now);
@@ -1077,72 +1013,15 @@ mod tests {
         assert!(texts(&collect(&mut rx, Duration::from_millis(400)).await).is_empty(), "igual não repete");
         store.push("s", facts(4, ""), now);
         assert!(texts(&collect(&mut rx, Duration::from_millis(400)).await).is_empty());
-        assert_eq!(hits(&py), 0);
-    }
-
-    #[tokio::test]
-    async fn failed_snapshot_is_retried() {
-        let f = claude_fixture();
-        let py = fake_python_with(1, "depois da falha").await;
-        let store = Arc::new(crate::state::facts::FactsStore::default());
-        let mut rx = f.lease.hub.tx.subscribe();
-        let (_tx, live_rx) = channel(Some(live("idle")));
-        let _feed = tokio::spawn(RuntimeFeed::new(&f.lease.hub, Some(live_rx), f.published.clone(), Some(feed_facts(&py, &store))).run());
-        let got = collect(&mut rx, RETRY + Duration::from_millis(800)).await;
-        assert_eq!(py.snapshots.load(std::sync::atomic::Ordering::SeqCst), 0, "não há reserva HTTP");
-        assert!(texts(&got).is_empty());
-    }
-
-    #[tokio::test]
-    async fn failing_snapshot_is_not_polled_on_every_wake() {
-        let f = claude_fixture();
-        let py = fake_python_with(usize::MAX, "").await;
-        let store = Arc::new(crate::state::facts::FactsStore::default());
-        let (tx, live_rx) = channel(Some(live("working")));
-        let _feed = tokio::spawn(RuntimeFeed::new(&f.lease.hub, Some(live_rx), f.published.clone(), Some(feed_facts(&py, &store))).run());
-        // Turno em streaming: o ator acorda o feed várias vezes por janela de retentativa.
-        for i in 0..40 {
-            tx.send_replace(Some(Arc::new(LiveState { preview: format!("parte {i}"), ..live("working") })));
-            tokio::time::sleep(Duration::from_millis(25)).await;
-        }
-        let windows = (Duration::from_millis(1000).as_millis() / RETRY.as_millis()) as usize + 1;
-        let attempts = py.snapshots.load(std::sync::atomic::Ordering::SeqCst);
-        let _ = windows;
-        assert_eq!(attempts, 0, "nenhuma leitura de fatos migrados via HTTP");
-    }
-
-    #[tokio::test]
-    async fn failing_snapshot_with_a_gap_is_not_polled_on_every_wake() {
-        let f = claude_fixture();
-        let py = fake_python_with(usize::MAX, "").await;
-        let store = Arc::new(crate::state::facts::FactsStore::default());
-        let (tx, live_rx) = channel(Some(live("working")));
-        let _feed = tokio::spawn(RuntimeFeed::new(&f.lease.hub, Some(live_rx), f.published.clone(), Some(feed_facts(&py, &store))).run());
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        let now = std::time::Instant::now();
-        store.push("s", facts(1, ""), now);
-        assert_eq!(store.push("s", facts(3, ""), now), crate::state::facts::Push::Accepted { gap: true });
-        for i in 0..40 {
-            tx.send_replace(Some(Arc::new(LiveState { preview: format!("parte {i}"), ..live("working") })));
-            tokio::time::sleep(Duration::from_millis(25)).await;
-        }
-        assert!(store.needs_snapshot("s"), "o retrato segue falhando: o pulo continua aberto");
-        // Pelo tempo que passou de fato: num runner lento as 40 esperas de 25 ms passam de 1 s, e cada
-        // janela de retentativa a mais é uma tentativa legítima, não um pedido por acordada.
-        let windows = ((now.elapsed() + Duration::from_millis(50)).as_millis() / RETRY.as_millis()) as usize + 1;
-        let attempts = py.snapshots.load(std::sync::atomic::Ordering::SeqCst);
-        let _ = windows;
-        assert_eq!(attempts, 0, "nenhuma leitura de fatos migrados via HTTP");
     }
 
     #[tokio::test]
     async fn failing_snapshot_stays_off_the_state() {
         let f = claude_fixture();
-        let py = fake_python_with(usize::MAX, "").await;
         let store = Arc::new(crate::state::facts::FactsStore::default());
         let mut rx = f.lease.hub.tx.subscribe();
         let (_tx, live_rx) = channel(Some(live("working")));
-        let _feed = tokio::spawn(RuntimeFeed::new(&f.lease.hub, Some(live_rx), f.published.clone(), Some(feed_facts(&py, &store))).run());
+        let _feed = tokio::spawn(RuntimeFeed::new(&f.lease.hub, Some(live_rx), f.published.clone(), Some(feed_facts(&store))).run());
         let got = collect(&mut rx, Duration::from_millis(500)).await;
         let state = &of(&got, "state")[0].2;
         // O feed marca os fatos velhos (`state_facts_unavailable`); o portão do hub os tira da saída: é diagnóstico.
@@ -1153,7 +1032,6 @@ mod tests {
     async fn stale_transfer_fact_does_not_hold_a_stopped_claude() {
         let f = claude_fixture();
         let home = tempfile::tempdir().unwrap();
-        let py = fake_python_with(usize::MAX, "").await;
         let store = Arc::new(crate::state::facts::FactsStore::default());
         let _watching = store.watch("s");
         let mut stale = facts(1, "");
@@ -1161,33 +1039,18 @@ mod tests {
         store.snapshot("s", stale, std::time::Instant::now());
         let mut rx = f.lease.hub.tx.subscribe();
         let (_tx, live_rx) = channel(None);
-        let _feed = tokio::spawn(RuntimeFeed::new(&f.lease.hub, Some(live_rx), f.published.clone(), Some(feed_facts(&py, &store))).with_home(home.path()).run());
+        let _feed = tokio::spawn(RuntimeFeed::new(&f.lease.hub, Some(live_rx), f.published.clone(), Some(feed_facts(&store))).with_home(home.path()).run());
         let got = collect(&mut rx, Duration::from_millis(500)).await;
         let state = &of(&got, "state")[0].2;
         assert_eq!((state["state"].as_str(), state["problema"].as_str()), (Some("idle"), Some("runtime_falhou")), "{got:?}");
     }
 
     #[tokio::test]
-    async fn skipped_sequence_rereads_the_snapshot() {
-        let f = claude_fixture();
-        let py = fake_python().await;
-        let store = Arc::new(crate::state::facts::FactsStore::default());
-        let mut rx = f.lease.hub.tx.subscribe();
-        let (_tx, live_rx) = channel(Some(live("idle")));
-        let _feed = tokio::spawn(RuntimeFeed::new(&f.lease.hub, Some(live_rx), f.published.clone(), Some(feed_facts(&py, &store))).run());
-        collect(&mut rx, Duration::from_millis(400)).await;
-        store.push("s", facts(5, "x"), std::time::Instant::now());
-        collect(&mut rx, Duration::from_millis(400)).await;
-        assert_eq!(hits(&py), 0, "sequência externa não aciona fatos migrados");
-    }
-
-    #[tokio::test]
     async fn dropping_the_feed_stops_watching() {
         let f = claude_fixture();
-        let py = fake_python().await;
         let store = Arc::new(crate::state::facts::FactsStore::default());
         let (_tx, live_rx) = channel(Some(live("idle")));
-        let feed = tokio::spawn(RuntimeFeed::new(&f.lease.hub, Some(live_rx), f.published.clone(), Some(feed_facts(&py, &store))).run());
+        let feed = tokio::spawn(RuntimeFeed::new(&f.lease.hub, Some(live_rx), f.published.clone(), Some(feed_facts(&store))).run());
         tokio::time::sleep(Duration::from_millis(300)).await;
         assert!(store.get("s").is_none(), "o feed não hidrata a memória do plugin com HTTP");
         feed.abort();
@@ -1198,12 +1061,10 @@ mod tests {
     #[tokio::test]
     async fn codex_feed_asks_no_facts() {
         let f = fixture();
-        let py = fake_python().await;
         let store = Arc::new(crate::state::facts::FactsStore::default());
         let (_tx, live_rx) = channel(Some(live("idle")));
-        let _feed = tokio::spawn(RuntimeFeed::new(&f.lease.hub, Some(live_rx), f.published.clone(), Some(feed_facts(&py, &store))).run());
+        let _feed = tokio::spawn(RuntimeFeed::new(&f.lease.hub, Some(live_rx), f.published.clone(), Some(feed_facts(&store))).run());
         tokio::time::sleep(Duration::from_millis(400)).await;
-        assert_eq!(hits(&py), 0, "Codex não tem plugin");
         assert_eq!(store.push("s", facts(1, "x"), std::time::Instant::now()), crate::state::facts::Push::Unwatched);
     }
 
@@ -1248,28 +1109,15 @@ mod tests {
         assert!(state["problema_detalhe"].as_str().is_some_and(|d| d.starts_with("state_lifecycle_unbound")), "{state}");
     }
 
-    /// Claude parado sem sidecar, com os fatos do Python dizendo se há troca de modo em curso.
-    async fn stopped_without_sidecar(transfer: bool) -> Vec<(Instant, String, Value)> {
+    #[tokio::test]
+    async fn stopped_claude_without_sidecar_requires_lifecycle_controller() {
         let f = claude_fixture();
         let home = tempfile::tempdir().unwrap();
-        let py = fake_python_full(0, "", transfer).await;
         let store = Arc::new(crate::state::facts::FactsStore::default());
         let mut rx = f.lease.hub.tx.subscribe();
         let (_tx, live_rx) = channel(None);
-        let _feed = tokio::spawn(RuntimeFeed::new(&f.lease.hub, Some(live_rx), f.published.clone(), Some(feed_facts(&py, &store))).with_home(home.path()).run());
-        collect(&mut rx, Duration::from_millis(500)).await
-    }
-
-    #[tokio::test]
-    async fn stopped_claude_without_sidecar_requires_lifecycle_controller() {
-        let got = stopped_without_sidecar(false).await;
-        assert_eq!(of(&got, "state")[0].2["problema"], "runtime_falhou", "{got:?}");
-        assert!(of(&got, "state")[0].2["problema_detalhe"].as_str().unwrap().starts_with("state_lifecycle_unbound"));
-    }
-
-    #[tokio::test]
-    async fn external_transfer_flag_cannot_decide_rust_lifecycle() {
-        let got = stopped_without_sidecar(true).await;
+        let _feed = tokio::spawn(RuntimeFeed::new(&f.lease.hub, Some(live_rx), f.published.clone(), Some(feed_facts(&store))).with_home(home.path()).run());
+        let got = collect(&mut rx, Duration::from_millis(500)).await;
         assert_eq!(of(&got, "state")[0].2["problema"], "runtime_falhou", "{got:?}");
         assert!(of(&got, "state")[0].2["problema_detalhe"].as_str().unwrap().starts_with("state_lifecycle_unbound"));
     }

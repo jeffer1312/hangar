@@ -1110,3 +1110,41 @@ mod concurrency_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod parse_tests {
+    use super::*;
+
+    #[test]
+    fn parse_keeps_model_identity_and_capabilities_and_hides_unavailable_models() {
+        let models = parse("codex", &json!({"data":[
+            {"model":"modelo-real","displayName":"Nome visível","description":"Descrição",
+             "supportedReasoningEfforts":[{"reasoningEffort":"low"},{"reasoningEffort":"high"}],
+             "defaultReasoningEffort":"low","serviceTiers":[{"id":"priority"},{"id":"oculto","hidden":true}],
+             "additionalSpeedTiers":[]},
+            {"model":"não-oferecer","hidden":true}]}), None).unwrap();
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0]["id"], "modelo-real");
+        assert_eq!(models[0]["name"], "Nome visível");
+        assert_eq!(models[0]["efforts"], json!(["low", "high"]));
+        assert_eq!(models[0]["service_tiers"], json!([{"id":"priority"}]));
+    }
+
+    #[test]
+    fn empty_catalog_is_refused_without_inventing_model_aliases() {
+        assert!(parse("codex", &json!({"data":[]}), None).is_err());
+        assert!(parse("claude", &json!({"models":[]}), Some("default")).is_err());
+        assert!(parse("codex", &json!({"data":[{"model":"só-oculto","hidden":true}]}), None).is_err());
+        assert!(parse("codex", &json!({}), None).is_err(), "sem a lista não há catálogo");
+    }
+
+    #[test]
+    fn effort_and_service_tier_are_validated_against_the_chosen_model() {
+        let models = [json!({"id":"modelo-real","efforts":["low"],"service_tiers":[]})];
+        assert!(validate(&models, Some("modelo-real"), Some("high"), None).is_err());
+        assert!(validate(&models, Some("modelo-real"), None, Some("priority")).is_err());
+        assert!(validate(&models, Some("fora"), Some("low"), None).is_err());
+        assert!(validate(&models, Some("modelo-real"), Some("low"), None).is_ok());
+        assert!(validate(&models, None, None, Some("priority")).is_err(), "priority exige modelo explícito");
+    }
+}

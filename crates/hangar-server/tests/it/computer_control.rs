@@ -6,7 +6,6 @@ use std::collections::{BTreeMap, HashMap};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant, SystemTime};
 
 use axum::body::{Body, to_bytes};
@@ -54,15 +53,6 @@ struct Scene {
     home: PathBuf,
     bin: PathBuf,
     app: axum::Router,
-    /// Pedidos que chegaram ao Python dublê (responde 418 "from-python").
-    hits: Arc<AtomicUsize>,
-    upstream: tokio::task::JoinHandle<()>,
-}
-
-impl Drop for Scene {
-    fn drop(&mut self) {
-        self.upstream.abort();
-    }
 }
 
 impl Scene {
@@ -72,19 +62,7 @@ impl Scene {
         let bin = root.path().join("bin");
         std::fs::create_dir_all(home.join(".claude")).unwrap();
         std::fs::create_dir_all(&bin).unwrap();
-        let hits = Arc::new(AtomicUsize::new(0));
-        let seen = hits.clone();
-        let python = axum::Router::new().fallback(move || {
-            let seen = seen.clone();
-            async move {
-                seen.fetch_add(1, Ordering::SeqCst);
-                (StatusCode::IM_A_TEAPOT, "from-python")
-            }
-        });
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let upstream_address = listener.local_addr().unwrap();
-        let upstream = tokio::spawn(async move { axum::serve(listener, python).await.unwrap() });
-        let mut state = AppState::new(config(upstream_address, ""));
+        let mut state = AppState::new(config(""));
         state.accounts = AccountService::new(AccountEnvironment::from_map(BTreeMap::from([
             ("HOME".into(), home.to_string_lossy().into_owned()),
             ("USERPROFILE".into(), home.to_string_lossy().into_owned()),
@@ -94,12 +72,9 @@ impl Scene {
             ("HANGAR_INTERNAL_SECRET".into(), "nao-pode-vazar".into()),
         ])));
         let app = router(Arc::new(state));
-        Self { root, home, bin, app, hits, upstream }
+        Self { root, home, bin, app }
     }
 
-    fn hits(&self) -> usize {
-        self.hits.load(Ordering::SeqCst)
-    }
 
     fn pid_file(&self, name: &str) -> PathBuf {
         self.root.path().join(name)
@@ -345,7 +320,6 @@ impl Scene {
 async fn rot06_get_empty_home() {
     let s = Scene::new().await;
     assert_eq!(s.get().await, (StatusCode::OK, s.h(empty_state())));
-    assert_eq!(s.hits(), 0, "o GET não pode ir ao Python");
 }
 
 /// Surrogate solto que o Claude Code grava (`\ud800`) é lido como no Python e sai como U+FFFD.
@@ -371,7 +345,6 @@ async fn rot08_install_is_gone_and_touches_nothing() {
     assert_eq!((guest.0, guest.1["detail"]["code"].as_str()), (StatusCode::FORBIDDEN, Some("erro_fora_do_convite")));
     let nobody = s.call_as("POST", "/api/computer-control/install", None, Who::Nobody).await;
     assert_eq!(nobody.0, StatusCode::UNAUTHORIZED);
-    assert_eq!(s.hits(), 0);
     assert!(!s.home.join(".hangar/computer-control").exists(), "nada criado");
 }
 
@@ -402,7 +375,6 @@ async fn guest_cannot_reach_python_by_encoding_the_path() {
         assert_eq!(got.0, StatusCode::FORBIDDEN, "{uri}");
         assert_eq!(got.1["detail"]["code"], "erro_fora_do_convite", "{uri}");
     }
-    assert_eq!(s.hits(), 0);
     assert!(s.read(".hangar/computer-control/targets/vm-agent.json").is_none());
 }
 
@@ -779,7 +751,6 @@ async fn rot32_create_ssh_target() {
         "{\n  \"transport\": \"ssh\",\n  \"host\": \"delphi-03\",\n  \"agent_path\": \"«HOME»/.hangar/computer-control/windows-agent.exe\",\n  \"proxy_command\": \"ssh -W %h:%p salto\",\n  \"request_timeout\": 40\n}\n");
     // ROT-37: a resposta é o estado inteiro, o mesmo do GET.
     assert_eq!(s.get().await.1, got.1);
-    assert_eq!(s.hits(), 0, "criar alvo não pode ir ao Python");
 }
 
 /// ROT-38, D4.1: o alvo criado pela rota liga o MCP com o binário do pacote e o alvo como padrão;
@@ -1063,7 +1034,6 @@ async fn rot53_test_host_ok() {
     assert_eq!(s.test_host(json!({"host": "delphi-02"})).await, (StatusCode::OK, json!({"ok": true, "detail": ""})));
     assert_eq!(s.ssh_argv(), [s.ssh_path().as_str(), "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", "-o",
         "StrictHostKeyChecking=accept-new", "--", "delphi-02", "echo", "ok"]);
-    assert_eq!(s.hits(), 0, "o teste SSH não pode ir ao Python");
 }
 
 /// ROT-53, ROT-58 (r1-teste-proxy-e-espacos): host e proxy aparados no argv.
@@ -1163,7 +1133,6 @@ async fn rot64_windows_setup_prompt() {
     s.ssh(RESOLVED);
     assert_eq!(s.windows("?host=").await, (StatusCode::OK, json!({"prompt": PROMPT_ADMINISTRATOR, "user": "administrator"})));
     assert_eq!(s.ssh_argv(), [s.ssh_path().as_str(), "-G", "--", "novo-windows"]);
-    assert_eq!(s.hits(), 0, "preparar o Windows não pode ir ao Python");
 }
 
 /// ROT-11, ROT-59 (r1-windows-sem-query): sem `host` também vira `novo-windows`.

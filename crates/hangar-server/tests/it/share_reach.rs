@@ -184,8 +184,7 @@ async fn route_reports_stage_on_failure_and_ok_on_success() {
 #[tokio::test]
 async fn route_answers_401_to_non_owner_in_rust() {
     // O Python não tem esta rota: repassar daria 404, que o cliente lê como "precisa do Rust".
-    let (_fake, up) = crate::fake::spawn_fake().await;
-    let srv = crate::fake::spawn_server(crate::fake::config(up, "127.0.0.1")).await;
+    let srv = crate::fake::spawn_server(crate::fake::config("127.0.0.1")).await;
     let r = crate::fake::client().post(format!("http://{srv}/api/share/reachability"))
         .bearer_auth("errado").body(r#"{"link":"https://maq.tail1.ts.net:8443/par/abc"}"#).send().await.unwrap();
     assert_eq!(r.status(), 401);
@@ -193,27 +192,3 @@ async fn route_answers_401_to_non_owner_in_rust() {
     assert_eq!(v, serde_json::json!({"detail": {"code": "erro_nao_autorizado", "params": {}, "msg": "unauthorized"}}));
 }
 
-#[tokio::test]
-async fn retired_connect_bridge_is_not_available_with_any_secret() {
-    use std::net::SocketAddr;
-    let (_fake, up) = crate::fake::spawn_fake().await;
-    let state = std::sync::Arc::new(hangar_server::routes::AppState::new(crate::fake::config(up, "")));
-    let serve_app = |app: Router| async move {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await.unwrap() });
-        addr
-    };
-    let private = serve_app(hangar_server::routes::terminal_router(state.clone())).await;
-    let public = serve_app(hangar_server::routes::router(state)).await;
-    let post = |addr: SocketAddr, secret: Option<&'static str>| {
-        let mut req = crate::fake::client().post(format!("http://{addr}/__hangar_server/share/reachability")).body("não é json");
-        if let Some(s) = secret { req = req.header("x-hangar-internal", s); }
-        req.send()
-    };
-    assert_eq!(post(private, None).await.unwrap().status(), 404);
-    assert_eq!(post(private, Some("outro")).await.unwrap().status(), 404);
-    assert_eq!(post(public, Some(crate::fake::SECRET)).await.unwrap().status(), 404, "a porta pública não tem a ponte");
-    let r = post(private, Some(crate::fake::SECRET)).await.unwrap();
-    assert_eq!(r.status(), 404);
-}

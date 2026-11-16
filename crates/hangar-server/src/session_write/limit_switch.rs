@@ -891,7 +891,7 @@ mod tests {
 
     #[tokio::test]
     async fn the_runtime_hands_the_stopped_session_to_the_switcher() {
-        let runtime = crate::runtime::gateway::RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(),"s".into(),"i".into());
+        let runtime = crate::runtime::gateway::RuntimeRegistry::new("i".into());
         let limit = UsageLimit { window:"seven_day".into(),resets_at:None };
         let make = |name:&str|LimitHit { name:name.into(),provider:"codex".into(),account:None,limit:limit.clone() };
         runtime.usage_limit(make("lost"));
@@ -1227,7 +1227,7 @@ mod tests {
     /// SF5: sem o vigia para receber o aviso, a fila não fica segurada para sempre.
     #[tokio::test]
     async fn a_limit_the_switcher_never_receives_does_not_hold_the_queue() {
-        let runtime = crate::runtime::gateway::RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(),"s".into(),"i".into());
+        let runtime = crate::runtime::gateway::RuntimeRegistry::new("i".into());
         let (sink,hits) = tokio::sync::mpsc::unbounded_channel();
         runtime.set_limit_sink(sink);
         drop(hits);

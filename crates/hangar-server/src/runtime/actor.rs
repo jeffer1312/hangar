@@ -35,8 +35,8 @@ pub struct PolicyClient {
 }
 
 impl PolicyClient {
-    pub fn new(upstream:std::net::SocketAddr,secret:String) -> Self {
-        Self { diag:crate::diag::DiagClient::new(upstream,secret),accounts:None,preparation:None,codex_env:None,plugin_bridge:None }
+    pub fn new() -> Self {
+        Self { diag:crate::diag::DiagClient::new(),accounts:None,preparation:None,codex_env:None,plugin_bridge:None }
     }
     pub fn with_diagnostics(mut self, diag: crate::diag::DiagClient) -> Self { self.diag = diag; self }
     pub(super) fn with_preparation(mut self,bridge:Option<crate::accounts::bridge::AccountsBridge>) -> Self { self.preparation=bridge; self }

@@ -1,6 +1,6 @@
 //! Convite e par externo pelo Connect, sem Tailscale. Programas, DNS e "internet" são falsos.
 use crate::connect_supervisor::{alone, gate, linked, pid_of, read_pid, until};
-use crate::fake::{OWNER, client, config, spawn_fake};
+use crate::fake::{OWNER, client, config};
 
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
@@ -217,8 +217,7 @@ async fn invite_is_checked_from_outside_before_showing() {
 #[tokio::test]
 async fn guest_entrance_still_refuses_owner_token() {
     let e = env(false);
-    let (_python, up) = spawn_fake().await;
-    let mut server = AppState::new(config(up, "127.0.0.1"));
+    let mut server = AppState::new(config("127.0.0.1"));
     server.share = Some(e.share.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let guest = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap().local_addr().unwrap();

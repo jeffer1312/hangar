@@ -27,7 +27,7 @@ pub fn log_base_in(env: &AccountEnvironment) -> Option<PathBuf> {
 /// Pasta `backend/` de uma cópia do Hangar. O `.env` pode já estar em `~/.hangar/config/`, então um
 /// arquivo que só o Hangar tem também a identifica (`app/main.py` casaria com qualquer projeto).
 pub fn is_backend(dir: &Path) -> bool {
-    dir.join(".env").is_file() || dir.join("app").join("rust_server.py").is_file()
+    dir.join(".env").is_file() || dir.join("app").join("pricing_data.json").is_file()
 }
 
 /// `~/.hangar/current`: link (symlink no Linux, junction no Windows) para `versions/<v>` ou, no modo

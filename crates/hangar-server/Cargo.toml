@@ -188,10 +188,6 @@ name = "runtime_diagnostics"   # logger global do tracing e contagem exata de av
 path = "tests/runtime_diagnostics.rs"
 
 [[test]]
-name = "terminal_diagnostics"   # idem
-path = "tests/terminal_diagnostics.rs"
-
-[[test]]
 name = "contract_local_policy"   # troca HOME, USERPROFILE e TZ
 path = "tests/contract_local_policy.rs"
 

@@ -1,7 +1,7 @@
 //! B01: corpos integrais do produtor original 08db6bc92 e asserts de test_bastao.py.
 use crate::{fake::{OWNER, client}, workspace_fixture};
 use serde_json::{Value, json};
-use std::{path::{Path, PathBuf}, sync::atomic::Ordering};
+use std::path::{Path, PathBuf};
 
 const CLAUDE_ID: &str = "2751096f-84dc-4986-b0a8-a40d641ee43d";
 const LIVE_ID: &str = "00000000-0000-4000-8000-000000000101";
@@ -100,10 +100,10 @@ impl Origin {
         }).unwrap();
         let opening_mux = isolated.as_ref().map(|root|root.join("bin/tmux"));
         let fixture = if let Some(opening_mux)=opening_mux.as_deref() {
-            workspace_fixture::fixture_with_account_env(&root,false,&home,opening_mux,hangar_server::accounts::environment::AccountEnvironment::capture(),router_only).await
+            workspace_fixture::fixture_with_account_env(&root,&home,opening_mux,hangar_server::accounts::environment::AccountEnvironment::capture(),router_only).await
         } else if router_only {
             workspace_fixture::policy_fixture(&root,&home,&mux).await
-        } else {workspace_fixture::fixture_with_mux(&root,false,Some(&home),Some(&mux)).await};
+        } else {workspace_fixture::fixture_with_mux(&root,Some(&home),Some(&mux)).await};
         if live { fixture.list.seed("fixture", path.to_str().unwrap()); }
         Self { _dir:dir, root, home, path, fixture }
     }
@@ -126,10 +126,6 @@ impl Origin {
         if !codex { url.query_pairs_mut().append_pair("config_dir", self.home.join(".claude").to_str().unwrap()); }
         url.to_string()
     }
-    fn no_python(&self) {
-        assert_eq!(self.fixture.hits.load(Ordering::Relaxed), 0, "B01 não repassa preparo ou recusa");
-        assert_eq!(self.fixture.context_hits.load(Ordering::Relaxed), 0);
-    }
 }
 
 #[tokio::test]
@@ -149,7 +145,6 @@ async fn b01_get_live_origin_without_a_transcript_is_404() {
     let status=response.status();let body=response.text().await.unwrap();
     h.fixture.runtime.shutdown().await.unwrap();
     assert_eq!(status,404,"{body}");assert!(!h.home.join(".claude/.hangar-bastao").exists());
-    h.no_python();
 }
 
 #[tokio::test]
@@ -174,7 +169,6 @@ async fn b01_post_live_origin_without_a_transcript_is_404_without_a_successor() 
     assert!(!h.home.parent().unwrap().join("new-session-argv").exists());
     assert!(!h.home.join(".hangar/claude-headless/cc2.json").exists());
     assert!(!h.home.join(".claude/.hangar-bastao").exists() && !h.home.join(".claude/.hangar-queue/cc2.jsonl").exists());
-    h.no_python();
 }
 
 #[tokio::test]
@@ -190,7 +184,6 @@ async fn b01_get_existing_archive_in_an_unknown_config_is_rejected() {
     h.fixture.runtime.shutdown().await.unwrap();
     assert_eq!(status,400,"{body}");assert_eq!(body["detail"]["code"],"erro_config_dir_invalido");
     assert!(transcript.is_file());assert!(!h.home.join(".claude/.hangar-bastao").exists());
-    h.no_python();
 }
 
 #[tokio::test]
@@ -201,7 +194,6 @@ async fn b01_get_without_live_or_archived_origin_is_404() {
     let status=response.status();let body=response.text().await.unwrap();
     h.fixture.runtime.shutdown().await.unwrap();
     assert_eq!(status,404,"{body}");assert!(!h.home.join(".claude/.hangar-bastao").exists());
-    h.no_python();
 }
 
 #[tokio::test]
@@ -215,7 +207,6 @@ async fn b01_get_known_archive_with_an_unknown_provider_is_rejected() {
     h.fixture.runtime.shutdown().await.unwrap();
     assert_eq!(status,400,"{body}");assert_eq!(body["detail"]["code"],"erro_provider_invalido");
     assert!(h.path.is_file());assert!(!h.home.join(".claude/.hangar-bastao").exists());
-    h.no_python();
 }
 
 #[tokio::test]
@@ -250,7 +241,6 @@ async fn b01_group_contract_points_to_local_or_remote_owner_without_moving_links
             assert!(group.contains("`parceira`") && group.contains("ABC-1234") && group.contains("grupo-g1.md"),"{group}");
         }
     }
-    h.no_python();
 }
 
 #[tokio::test]
@@ -262,7 +252,6 @@ async fn b01_first_get_live_claude_full_markdown_and_headers() {
     let expected = h.expected(false, "fixture");
     assert_eq!(r.headers()["content-length"], expected.len().to_string());
     assert_eq!(r.text().await.unwrap(), expected);
-    h.no_python();
 }
 
 #[tokio::test]
@@ -272,7 +261,6 @@ async fn b01_first_get_archived_claude_full_markdown() {
     assert_eq!(r.status(), 200);
     assert_eq!(r.headers()["content-type"], "text/markdown; charset=utf-8");
     assert_eq!(r.text().await.unwrap(), h.expected(false, "morta"));
-    h.no_python();
 }
 
 #[tokio::test]
@@ -287,7 +275,6 @@ async fn b01_first_get_archived_codex_full_markdown_and_mismatch() {
     assert_eq!(r.status(), 409);
     assert_eq!(r.json::<Value>().await.unwrap(), json!({"detail":{"code":"codex_account_archive_mismatch",
         "params":{"account_id":"default","origin_account":"work"},"msg":"a conversa é de outra conta Codex"}}));
-    h.no_python();
 }
 
 #[tokio::test]
@@ -315,7 +302,6 @@ async fn b01_preview_and_received_keep_gzip_identity_and_final_content_length() 
             assert_eq!(text, expected);
         }
     }
-    h.no_python();
 }
 
 #[tokio::test]
@@ -328,7 +314,6 @@ async fn b01_live_codex_uses_its_own_account_and_same_full_dossier() {
     let r = client().get(h.url("fixture/bastao")).bearer_auth(OWNER).send().await.unwrap();
     assert_eq!(r.status(), 200);
     assert_eq!(r.text().await.unwrap(), h.expected(true, "fixture"));
-    h.no_python();
 }
 
 #[tokio::test]
@@ -346,7 +331,6 @@ async fn b01_completed_plan_and_running_loop_suppress_unanswered_requests() {
     let remaining=md.split("## O que falta").nth(1).expect("seção O que falta").split("\n## ").next().unwrap();
     assert!(remaining.contains("concluído") && remaining.contains("60/60"),"{remaining}");
     assert!(remaining.contains("Loop `running`"),"{remaining}; loop_before={loop_before:?}; loop_after={loop_after:?}");assert!(!remaining.contains("AINDA SEM resposta"),"{remaining}");
-    h.no_python();
 }
 
 #[tokio::test]
@@ -365,7 +349,6 @@ async fn b01_remaining_steps_show_exact_next_step_per_task() {
     assert!(remaining.contains("58/60"),"{remaining}");
     assert!(remaining.contains("Task 9: Tarefa 9: 5/6 — próximo: Step 3: passo 9.3"),"{remaining}");
     assert!(remaining.contains("Task 10: Tarefa 10: 5/6 — próximo: Step 1: passo 10.1"),"{remaining}");
-    h.no_python();
 }
 
 #[tokio::test]
@@ -387,7 +370,6 @@ async fn b01_running_loop_disappears_when_done_on_the_same_url() {
     let done=done_md.split("## O que falta").nth(1).expect("seção O que falta").split("\n## ").next().unwrap();
     assert!(running.contains("Loop `running`") && running.contains("2/5") && running.contains("passar a suíte"),"{running}");
     assert!(!done.contains("Loop"),"{done}");
-    h.no_python();
 }
 
 #[tokio::test]
@@ -410,7 +392,6 @@ async fn b01_no_plan_or_loop_lists_only_unanswered_user_requests() {
     assert!(remaining.contains("AINDA SEM resposta"),"{remaining}");
     for pending in ["então commita","commit do README","avisa o par"] {assert!(remaining.contains(pending),"{remaining}");}
     assert!(!remaining.contains("agora roda os testes"),"pedido já respondido: {remaining}");
-    h.no_python();
 }
 
 #[tokio::test]
@@ -435,7 +416,7 @@ async fn b01_work_section_lists_real_commits_since_the_transcript_without_ahead_
     assert!(work.contains("Commits desde"),"{work}");
     assert!(work.contains(&format!("`{}` refactor(pair): textos",first.trim())),"{work}");
     assert!(work.contains(&format!("`{}` fix(pair): varredura",second.trim())),"{work}");
-    assert!(!work.contains("à frente"),"{work}");h.no_python();
+    assert!(!work.contains("à frente"),"{work}");
 }
 
 #[tokio::test]
@@ -463,7 +444,7 @@ async fn b01_work_section_keeps_three_behind_when_real_commits_are_listed() {
     assert_eq!(status,200,"{md}");
     let work=md.split("## Onde está o trabalho").nth(1).expect("seção Onde está o trabalho").split("\n## ").next().unwrap();
     assert!(work.contains("Commits desde") && work.contains(&format!("`{}` local: segundo",last.trim())),"{work}");
-    assert!(work.contains("3 atrás") && !work.contains("à frente"),"{work}");h.no_python();
+    assert!(work.contains("3 atrás") && !work.contains("à frente"),"{work}");
 }
 
 #[tokio::test]
@@ -485,7 +466,7 @@ async fn b01_work_section_keeps_ahead_count_when_no_commits_follow_the_transcrip
     assert_eq!(status,200,"{md}");
     let work=md.split("## Onde está o trabalho").nth(1).expect("seção Onde está o trabalho").split("\n## ").next().unwrap();
     assert!(work.contains("2 commit(s) à frente"),"{work}");
-    assert!(!work.contains("Commits desde") && !work.contains("agora roda os testes"),"{work}");h.no_python();
+    assert!(!work.contains("Commits desde") && !work.contains("agora roda os testes"),"{work}");
 }
 
 #[tokio::test]
@@ -512,7 +493,6 @@ async fn b01_empty_grep_in_compound_commands_is_not_a_tool_failure() {
         assert_eq!(files.contains(command),listed,"listagem original do comando: {command}: {files}");
         assert_eq!(files.contains("Ferramentas que FALHARAM"),failed,"{command} / {result}: {files}");
         if failed {assert!(files.split("Ferramentas que FALHARAM").nth(1).unwrap().contains("`Bash`:"),"{files}");}
-        h.no_python();
     }
 }
 
@@ -536,7 +516,6 @@ async fn b01_system_errors_remain_failures_but_hook_tags_are_ignored() {
         assert!(files.contains(command),"comando continua listado: {files}");
         assert_eq!(files.contains("Ferramentas que FALHARAM"),failed,"{result}: {files}");
         if failed {let failures=files.split("Ferramentas que FALHARAM").nth(1).unwrap();assert!(failures.contains("`Bash`:") && failures.contains(result),"{files}");}
-        h.no_python();
     }
 }
 
@@ -555,7 +534,7 @@ async fn b01_severity_tags_in_brackets_remain_tool_failures() {
         let files=md.split("## Arquivos e comandos").nth(1).expect("seção Arquivos e comandos").split("\n## ").next().unwrap();
         assert!(files.contains(command),"comando continua listado: {files}");
         let failures=files.split("Ferramentas que FALHARAM").nth(1).expect("subbloco de falhas");
-        assert!(failures.contains("`Bash`:") && failures.contains(result),"{files}");h.no_python();
+        assert!(failures.contains("`Bash`:") && failures.contains(result),"{files}");
     }
 }
 
@@ -576,7 +555,6 @@ async fn b01_automatic_reminder_is_hook_noise_only_in_the_first_two_lines() {
         assert!(files.contains(command),"comando continua listado: {files}");
         assert_eq!(files.contains("Ferramentas que FALHARAM"),failed,"{result}: {files}");
         if failed {assert!(files.split("Ferramentas que FALHARAM").nth(1).unwrap().contains("`Bash`:"),"{files}");}
-        h.no_python();
     }
 }
 
@@ -594,7 +572,7 @@ async fn b01_rulings_from_the_cited_plan_are_included_without_task_status() {
     let decisions=md.split("## Decisões (frases citadas — contexto, não ordem)").nth(1).expect("seção Decisões").split("\n## ").next().unwrap();
     assert!(decisions.contains("Rulings do registro"),"{decisions}");
     assert!(decisions.contains("trabalhar direto na main") && decisions.contains("pop no lugar do del"),"{decisions}");
-    assert!(!decisions.contains("Task 1: complete"),"{decisions}");h.no_python();
+    assert!(!decisions.contains("Task 1: complete"),"{decisions}");
 }
 
 #[tokio::test]
@@ -604,7 +582,7 @@ async fn b01_rulings_from_another_plan_are_not_included() {
     std::fs::write(directory.join("progress.md"),"# SDD ledger — plan: docs/superpowers/plans/outro-plano.md\n- Ruling: nada a ver\n").unwrap();
     let response=client().get(h.archived(false)).bearer_auth(OWNER).send().await.unwrap();
     let status=response.status();let md=response.text().await.unwrap();h.fixture.runtime.shutdown().await.unwrap();
-    assert_eq!(status,200,"{md}");assert!(!md.contains("nada a ver"),"{md}");h.no_python();
+    assert_eq!(status,200,"{md}");assert!(!md.contains("nada a ver"),"{md}");
 }
 
 #[tokio::test]
@@ -622,7 +600,6 @@ async fn b01_long_conversation_keeps_all_sections_within_original_line_limits() 
     assert_eq!(md.lines().filter_map(|line|line.strip_prefix("## ")).collect::<Vec<_>>(),[
         "De onde veio","O que falta","Onde está o trabalho","Arquivos e comandos","Grupo e par",
         "Decisões (frases citadas — contexto, não ordem)","Estado agora (frases citadas — contexto, não ordem)"]);
-    h.no_python();
 }
 
 #[tokio::test]
@@ -647,7 +624,6 @@ async fn b01_same_window_keeps_fifteen_modified_twelve_displayed_and_explicit_cu
     assert_eq!(section.matches("`app/f").count(), 12);
     assert!(section.contains("_(+3 arquivo(s) tocado(s))_"));
     assert!(!md.contains("Plano `grupo-pareamento-fim-sessao`"), "plano do repositório não é da conversa");
-    h.no_python();
 }
 
 #[tokio::test]
@@ -671,7 +647,6 @@ async fn b01_decision_with_negation_survives_the_cut_without_short_agreements() 
     let decisions=md.split("## Decisões").nth(1).expect("seção Decisões").split("## ").next().unwrap();
     assert!(decisions.contains(decision),"{decisions}");assert!(decisions.contains(proposal),"{decisions}");
     assert!(!decisions.contains("pode seguir"),"{decisions}");assert!(!decisions.contains("Terminei o passo"),"{decisions}");
-    h.no_python();
 }
 
 #[tokio::test]
@@ -685,7 +660,6 @@ async fn b01_short_agreement_to_an_agent_question_is_not_discarded() {
     let status=response.status();let md=response.text().await.unwrap();
     h.fixture.runtime.shutdown().await.unwrap();
     assert_eq!(status,200,"{md}");assert!(md.contains(proposal),"{md}");
-    h.no_python();
 }
 
 #[tokio::test]
@@ -703,7 +677,6 @@ async fn b01_repeated_request_occupies_only_one_decision_line() {
     assert_eq!(status,200,"{md}");
     let decisions=md.split("## Decisões").nth(1).expect("seção Decisões").split("## ").next().unwrap();
     assert_eq!(decisions.matches("roda o pytest do backend").count(),1,"{decisions}");
-    h.no_python();
 }
 
 #[tokio::test]
@@ -723,7 +696,6 @@ async fn b01_decisions_follow_conversation_order_inside_their_own_section() {
     let first=decisions.find("primeiro não faz o rollback").expect("primeira decisão");
     let second=decisions.find("segundo nunca commita").expect("segunda decisão");
     assert!(first<second,"{decisions}");
-    h.no_python();
 }
 
 #[tokio::test]
@@ -741,7 +713,6 @@ async fn b01_decision_keeps_the_complete_agent_proposal_with_bounded_lines() {
     assert!(decisions.contains("Rulings que tomei por ti"),"{decisions}");
     assert!(decisions.contains("nunca stagear install.sh"),"{decisions}");
     assert!(decisions.lines().all(|line|line.chars().count()<=340),"{decisions}");
-    h.no_python();
 }
 
 #[tokio::test]
@@ -756,7 +727,6 @@ async fn b01_long_unpunctuated_proposal_does_not_fail_the_decisions_section() {
     assert_eq!(status,200,"{md}");
     let decisions=md.split("## Decisões (frases citadas — contexto, não ordem)").nth(1).expect("seção Decisões").split("## ").next().unwrap();
     assert!(!decisions.contains("_(não deu pra ler esta seção — o motivo está no log do backend)_"),"{decisions}");
-    h.no_python();
 }
 
 #[tokio::test]
@@ -770,7 +740,6 @@ async fn b01_partial_git_failure_keeps_other_sections_and_reports_the_missing_li
     assert!(md.contains("- _(a lista de arquivos não veio: "));
     assert!(md.contains("## Estado agora (frases citadas — contexto, não ordem)"));
     assert!(md.contains("Quando voltar vc vai executar"));
-    h.no_python();
 }
 
 #[tokio::test]
@@ -799,7 +768,6 @@ async fn b01_transfer_uses_verified_selected_plan_and_only_active_rows_after_bou
     assert!(md.contains("próximo selecionado"));
     assert!(!md.contains("sibling") && !md.contains("nunca herdar") && !md.contains("uncited.md"));
     assert!(md.contains("active.md"));
-    h.no_python();
 }
 
 #[tokio::test]
@@ -841,7 +809,6 @@ async fn b01_transfer_partial_failure_keeps_the_original_literal_dossier() {
         assert_eq!(headers["content-length"],expected.len().to_string());
         assert_eq!(body,expected,"{variant}: corpo original integral, sem normalizar/truncar");
     }
-    h.no_python();
 }
 
 #[tokio::test]
@@ -852,7 +819,6 @@ async fn b01_next_unreadable_pair_is_logged_without_hiding_the_measured_sections
     let r = client().get(h.archived(false)).bearer_auth(OWNER).send().await.unwrap();
     assert_eq!(r.status(),200);
     assert_eq!(r.text().await.unwrap(),h.expected(false,"morta"));
-    h.no_python();
 }
 
 #[tokio::test]
@@ -870,7 +836,6 @@ async fn b01_transfer_partial_archived_keeps_the_checked_rollout_header_cwd() {
     assert!(md.contains(&format!("- Diretório de trabalho: `{}`",h.born.display())),"{md}");
     assert_eq!(std::fs::read_to_string(&h.rollout).unwrap(),rollout,"não mudar prefixo/rollout para fabricar equivalência");
     assert!(md.contains("active.md") && !md.contains("uncited.md"));
-    h.no_python();
 }
 
 #[tokio::test]
@@ -890,7 +855,6 @@ async fn b01_next_pi_omp_keep_full_tools_failures_and_stream_hook_context() {
         assert!(md.contains(&format!("`{}/summary.txt`",h.root.display())));
         assert!(md.contains("- Ferramentas que FALHARAM (as mais recentes):\n  - `write`: permission denied"),"{provider}: {md}");
         assert!(md.contains("pedido sem prefixo") && !md.contains("contexto do hook"));
-        h.no_python();
     }
 }
 
@@ -911,7 +875,6 @@ async fn b01_next_kimi_archive_reads_the_index_cwd_and_removed_worktree_redirect
     let md = r.text().await.unwrap();
     assert!(md.contains(&format!("- Diretório de trabalho: `{}`",h.root.display())),"{md}");
     assert!(md.contains("Olá!") && md.contains("- Branch: `main`"));
-    h.no_python();
 }
 
 #[tokio::test]
@@ -931,7 +894,6 @@ async fn b01_clear_never_inherits_the_frozen_origin_or_imported_plan() {
     let md = r.text().await.unwrap();
     assert!(md.contains("pedido depois do clear"));
     assert!(!md.contains("mais recente") && !md.contains("historical-report.md") && !md.contains("active.md"));
-    h.no_python();
 }
 
 #[cfg(unix)]
@@ -958,7 +920,6 @@ async fn b01_next_untransferred_transcript_io_error_is_partial_for_claude_and_co
         let md = r.text().await.unwrap();
         assert!(md.contains("- Branch: `main`") && md.contains("## Grupo e par"));
         assert!(md.contains("## Estado agora (frases citadas — contexto, não ordem)\n\n_(nada aqui)_"));
-        h.no_python();
     }
 }
 
@@ -999,7 +960,6 @@ async fn b01_http_origin_head_and_options_keep_the_original_read_contract() {
     assert_eq!(r.headers()["access-control-allow-methods"],"DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT");
     assert_eq!(r.headers()["access-control-allow-headers"],"authorization");
     assert_eq!(r.text().await.unwrap(),"OK");
-    h.no_python();
 }
 
 #[tokio::test]
@@ -1020,7 +980,6 @@ async fn b01_guard_global_unrelated_corrupt_transfer_does_not_block_a_healthy_or
     assert_eq!(body,json!({"detail":{"code":"erro_bastao_para_si_mesma","params":{},"msg":"a sessão não passa o bastão pra si mesma"}}));
     assert_eq!(std::fs::read(&h.path).unwrap(),before);
     assert!(!h.home.join(".claude/.hangar-bastao").exists());
-    h.no_python();
 }
 
 #[tokio::test]
@@ -1045,7 +1004,6 @@ async fn b01_guard_parked_origin_uses_own_index_but_not_a_new_sidecar_life() {
     assert_eq!(first_status,409);assert_eq!(first_body["detail"]["code"],"session_transfer_busy");
     assert_eq!(second_status,422,"sidecar de outra vida não é parked: {second_body}");
     assert_eq!(second_body,json!({"detail":[{"type":"missing","loc":["body","name"],"msg":"Field required","input":{"provider":"claude"}}]}));
-    h.no_python();
 }
 
 #[tokio::test]
@@ -1072,7 +1030,6 @@ async fn b01_guard_source_busy_unreadable_and_recreated_life_are_separate() {
     assert_eq!(r.status(),422,"a nova vida chega à validação DTO sem herdar a transferência antiga");
     assert_eq!(r.json::<Value>().await.unwrap(),json!({"detail":[{"type":"missing","loc":["body","name"],"msg":"Field required","input":{"provider":"claude"}}]}));
     assert!(!h.home.join(".claude/.hangar-bastao").exists());
-    h.no_python();
 }
 
 #[tokio::test]
@@ -1090,7 +1047,6 @@ async fn b01_post_guards_precede_saving_and_never_reach_python() {
         assert_eq!(r.json::<Value>().await.unwrap()["detail"]["code"], code);
         assert!(!h.home.join(".claude/.hangar-bastao").exists(), "nenhuma gravação antes da guarda");
     }
-    h.no_python();
 }
 
 #[tokio::test]
@@ -1121,7 +1077,6 @@ async fn b01_external_http_keeps_methods_redirects_mime_and_validation_local() {
         assert_eq!(r.json::<Value>().await.unwrap(), json!({"detail":[expected]}));
     }
     h.fixture.runtime.shutdown().await.unwrap();
-    h.no_python();
 }
 
 #[tokio::test]
@@ -1139,7 +1094,6 @@ async fn b01_seeded_external_payloads_never_panic_or_forward() {
         assert!(r.json::<Value>().await.unwrap()["detail"].is_array());
     }
     assert!(!h.home.join(".claude/.hangar-bastao").exists());
-    h.no_python();
 }
 
 #[tokio::test]
@@ -1154,7 +1108,6 @@ async fn b01_disk_refusal_is_500_without_opening_a_successor() {
     assert!(body["detail"]["params"]["motivo"].as_str().is_some_and(|s| !s.is_empty()));
     assert_eq!(std::fs::read_to_string(blocked).unwrap(), "não sobrescrever");
     assert!(std::fs::read_dir(h.home.join(".hangar/session-specs")).is_err());
-    h.no_python();
 }
 
 #[cfg(unix)]
@@ -1258,7 +1211,6 @@ fn b01_next_post_public_dossier_open_kickoff_and_occupied_name() {
         let r = c.post(h.url("morta/bastao")).bearer_auth(OWNER).json(&request).send().await.unwrap();
         assert_eq!(r.status(),409);assert_eq!(r.json::<Value>().await.unwrap()["detail"]["code"],"erro_nome_em_uso");
         assert_eq!(std::fs::read(&file).unwrap(),before);
-        h.no_python();
     });
 }
 
@@ -1319,7 +1271,7 @@ esac
         assert_eq!(args.matches(body["kickoff"].as_str().unwrap()).count(),1,"kickoff único no comando do lançador");
         assert!(!root.join("launcher-executed").exists(),
             "launcher-executed={:?}",std::fs::read(root.join("launcher-executed")));
-        assert!(!h.home.join(".claude/.hangar-queue/cx2.jsonl").exists());h.no_python();
+        assert!(!h.home.join(".claude/.hangar-queue/cx2.jsonl").exists());
     });
 }
 
@@ -1364,7 +1316,7 @@ fn b01_codex_post_rejects_a_different_known_successor_account_before_effects() {
             Err(error) if error.kind()==std::io::ErrorKind::NotFound=>Vec::new(),
             Err(error)=>panic!("não foi possível conferir os specs privados: {error}"),
         };
-        assert!(specs.iter().all(|spec|spec["name"]!="cx2"),"nenhuma abertura efetiva: {specs:?}");h.no_python();
+        assert!(specs.iter().all(|spec|spec["name"]!="cx2"),"nenhuma abertura efetiva: {specs:?}");
     });
 }
 
@@ -1401,7 +1353,6 @@ fn b01_manual_kickoff_preserves_six_lines_and_explicit_origin_metadata() {
         assert!(lines[5].contains("`trabalho`") && lines[5].contains("`Opus 5 (high✦)`"));
         let args=std::fs::read_to_string(root.join("new-session-argv")).unwrap();assert_eq!(args.matches(kickoff).count(),1,"kickoff único no CMD do terminal");
         assert!(!h.home.join(".claude/.hangar-queue/cc2.jsonl").exists());assert!(!root.join("rewrite-calls").exists());
-        h.no_python();
     });
 }
 
@@ -1428,7 +1379,6 @@ fn b01_manual_kickoff_without_origin_account_or_model_keeps_the_fallback_line() 
         assert!(!kickoff.contains("``") && !kickoff.contains("None"),"{kickoff}");assert!(kickoff.contains("primeira seção do resumo"));
         let args=std::fs::read_to_string(root.join("new-session-argv")).unwrap();assert_eq!(args.matches(kickoff).count(),1,"kickoff único no CMD do terminal");
         assert!(!h.home.join(".claude/.hangar-queue/cc2.jsonl").exists());assert!(!root.join("rewrite-calls").exists());
-        h.no_python();
     });
 }
 
@@ -1549,7 +1499,6 @@ esac
         assert_eq!(state.rows.len(),1,"uma única entrada no estado runtime");
         assert!(projection[0]["id"].as_str().is_some_and(|id|!id.is_empty()));
         assert_eq!(state.rows[0]["id"],projection[0]["id"],"projeção e runtime são a mesma entrada, não dois kickoffs");
-        h.no_python();
     });
 }
 
@@ -1595,7 +1544,6 @@ fn b01_effective_projects_directory_controls_saved_received_and_archived_dossier
         assert_eq!(received_status,200);assert_eq!(received_body,expected);
         assert!(body["kickoff"].as_str().unwrap().contains("conta `default` · modelo `Opus5·1M (high✦)`"));
         assert!(!source.join(".hangar-bastao").exists() && !target.join(".hangar-bastao").exists(),"contas não substituem a pasta efetiva do servidor");
-        h.no_python();
     });
 }
 
@@ -1644,7 +1592,7 @@ fn b01_rewrite_public_uses_explicit_origin_and_keeps_original_on_failure() {
         assert_eq!(body["aviso"],"só dá pra usar o modelo quando a sessão de origem é Claude nesta máquina");
         assert_eq!(std::fs::read(root.join("rewrite-calls")).unwrap(),calls,"origem Codex não executa/cobra Claude");
         assert!(body["texto"].as_str().unwrap().starts_with("# Continuação da sessão `morta`"));
-        h.fixture.runtime.shutdown().await.unwrap();h.no_python();
+        h.fixture.runtime.shutdown().await.unwrap();
     });
 }
 
@@ -1680,7 +1628,7 @@ fn b01_cancel_opening_keeps_ingress_until_the_detached_last_effect() {
             }
         }).unwrap();
         watcher.watch(root,notify::RecursiveMode::Recursive).unwrap();
-        let mut state=hangar_server::routes::AppState::new(crate::fake::config(crate::refused_address(),"127.0.0.1"));
+        let mut state=hangar_server::routes::AppState::new(crate::fake::config("127.0.0.1"));
         state.accounts=hangar_server::accounts::AccountService::new(hangar_server::accounts::environment::AccountEnvironment::capture());
         state.origins_home=h.home.clone();state.list=h.fixture.list.clone();
         assert!(state.state.runtime.set(h.fixture.runtime.clone()).is_ok());
@@ -1715,7 +1663,6 @@ fn b01_cancel_opening_keeps_ingress_until_the_detached_last_effect() {
         assert!(completed && root.join("new-session-done").exists(),"a abertura destacada deve terminar e publicar o spec antes da limpeza");
         assert!(closed);
         assert!(!released_early,"cancelar o HTTP liberou a entrada antes do último efeito da abertura destacada");
-        h.no_python();
     });
 }
 
@@ -1738,7 +1685,6 @@ async fn b01_received_missing_directory_newlines_and_invalid_utf8_keep_original_
     assert_eq!(read_status,200);assert_eq!(read_body,"# recebido\nlinha\nfim\n");
     assert_eq!(invalid_status,500);assert_eq!(invalid_headers["content-type"],"text/plain; charset=utf-8");assert_eq!(invalid_body,"Internal Server Error");
     assert_eq!([created,!invalid_headers.contains_key("access-control-allow-origin"),!invalid_headers.contains_key("access-control-expose-headers")],[true,true,true],"caminho() cria a pasta antes deexists/read e erro UTF8 fica fora do CORSMiddleware original");
-    h.no_python();
 }
 
 #[tokio::test]
@@ -1755,5 +1701,4 @@ async fn b01_first_received_dossier_is_exactly_the_saved_file_not_a_rebuild() {
     let r = client().get(h.url("ausente/bastao/dossie")).bearer_auth(OWNER).send().await.unwrap();
     assert_eq!(r.status(), 404);
     assert_eq!(r.json::<Value>().await.unwrap(), json!({"detail":{"code":"erro_bastao_sem_dossie","params":{},"msg":"no handover dossier for this session"}}));
-    h.no_python();
 }

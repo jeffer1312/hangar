@@ -147,7 +147,6 @@ async fn rot07_turn_on_writes_every_claude_json() {
     let text = s.read(".claude.json").unwrap();
     assert!(text.starts_with("{\n  \"numStartups\": 3,\n"), "{text}");
     assert!(text.ends_with('}'), "{text}");
-    assert_eq!(s.hits(), 0);
 }
 
 /// ROT-07, ROT-78 (r2-modo-nulo): `mode` nulo é o pacote.
@@ -176,7 +175,6 @@ async fn rot07_strict_body() {
         assert_eq!(got.1["detail"]["code"], "erro_corpo_invalido", "{body}");
     }
     assert_eq!(s.snapshot(), before);
-    assert_eq!(s.hits(), 0);
 }
 
 /// ROT-01 (r2-sem-token), D1.1: sem token 401; convidado 403 dado pela rota; nada chega ao Python.
@@ -192,7 +190,6 @@ async fn rot01_owner_only() {
     assert_eq!(got.0, StatusCode::FORBIDDEN);
     assert_eq!(got.1["detail"]["code"], "erro_fora_do_convite");
     assert_eq!(s.snapshot(), before);
-    assert_eq!(s.hits(), 0);
 }
 
 /// ROT-66 (r2-jev-key, r2-jev-key-espacos, r2-jev-key-nula): chave digitada recusa antes de tudo;

@@ -198,15 +198,13 @@ tmux pane is used only for live state and input of sessions that have a terminal
 and Codex run as managed processes with durable sidecars. The CLIs and providers you configure may
 still send data according to their own policies.
 
-O backend migra para Rust por responsabilidade. O servidor Rust atende as sessões dos cinco
-agentes, a lista, contas e cotas, anexos, MCP, convidados, transcrição, workflows e compartilhamento
-(porta 8766, convites e pares externos). Pi, omp e Kimi têm estado, prévia, entrada, perguntas,
-fila, histórico e ciclo de vida inteiros no Rust. O Python conserva a transferência do Claude
-para o Codex, runners e a reserva reduzida de Claude/Codex quando o Supervisor
-desliga o Rust. Sem Rust, a porta de convidados fica fechada. Contratos e limites:
+O servidor é o `hangar-server` (Rust): sessões dos cinco agentes, lista, contas e cotas, anexos,
+MCP, convidados, transcrição, workflows e compartilhamento (porta 8766, convites e pares externos).
+Ele sobe sozinho pelo serviço do sistema; o Python que sobra em `backend/` são ferramentas (lançador
+do Codex no terminal, scripts do orquestrar, chaves do push). Contratos e limites:
 [contas e anexos](docs/decisoes/accounts-uploads-rust.md).
 
-Repository map: `crates/` (Rust server), `backend/` (Python, FastAPI), `desktop-native/` (Rust
+Repository map: `crates/` (Rust server), `backend/` (Python tools and `.env`), `desktop-native/` (Rust
 desktop app), `frontend/` (Svelte PWA), `mobile/` (Expo app, in development), `packages/core`
 (shared TypeScript), `site/` (hangar.dev.br), `skills/` (agent skills shipped with Hangar).
 
@@ -238,8 +236,8 @@ permissions.
 ## Development
 
 ```bash
-# Backend on loopback
-cd backend && CP_AUTH_TOKEN="$(openssl rand -hex 24)" CP_LAN_BIND_IP=127.0.0.1 uv run python -m app.main
+# Server on loopback (reads backend/.env; binary from CP_RUST_SERVER_BIN, the install or crates/target/release)
+cd backend && CP_AUTH_TOKEN="$(openssl rand -hex 24)" CP_LAN_BIND_IP=127.0.0.1 ../scripts/hangar-server-command
 
 # Web app (PWA)
 npm ci --workspace=@hangar/core --workspace=frontend

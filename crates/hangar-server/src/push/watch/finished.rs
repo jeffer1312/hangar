@@ -155,7 +155,7 @@ mod tests {
         for provider in ["pi", "omp", "kimi"] {
             let home = tempfile::tempdir().unwrap();
             let mut state = crate::routes::AppState::new(crate::config::Config {
-                listen: "127.0.0.1:0".parse().unwrap(), upstream: "127.0.0.1:1".parse().unwrap(),
+                listen: "127.0.0.1:0".parse().unwrap(),
                 internal_secret: "fixture-secret".into(), auth_token: "fixture-owner".into(),
                 log_path: None, trusted: crate::auth::TrustedHosts::parse("127.0.0.1"),
             });

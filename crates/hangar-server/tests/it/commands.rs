@@ -419,7 +419,6 @@ async fn commands_http_is_owned_by_rust_and_reads_the_headless_project() {
     .unwrap();
     let cfg = Config {
         listen: "127.0.0.1:0".parse().unwrap(),
-        upstream: super::refused_address(),
         auth_token: "commands-owner".into(),
         internal_secret: "commands-private".into(),
         trusted: TrustedHosts::parse("127.0.0.1"),
@@ -453,41 +452,6 @@ async fn commands_http_is_owned_by_rust_and_reads_the_headless_project() {
             .await?;
         let status = response.status();
         let bytes = response.bytes().await?;
-        let health: Value = serde_json::from_slice(
-            &super::fake::client()
-                .get(format!("http://{address}/__hangar_server/health"))
-                .send()
-                .await?
-                .bytes()
-                .await?,
-        )
-        .unwrap();
-        let private = health["terminal_address"].as_str().unwrap();
-        let bridge = format!("http://{private}/__hangar_server/forwarded");
-        let denied = super::fake::client()
-            .get(&bridge)
-            .header("x-hangar-path", "/api/sessions/s/commands")
-            .send()
-            .await?;
-        assert_eq!(denied.status(), 404);
-        let forwarded = super::fake::client()
-            .get(&bridge)
-            .header("x-hangar-path", "/api/sessions/s/commands")
-            .header("x-hangar-internal", "commands-private")
-            .send()
-            .await?;
-        assert_eq!(forwarded.status(), 200);
-        assert_eq!(
-            serde_json::from_slice::<Value>(&forwarded.bytes().await?).unwrap(),
-            serde_json::from_slice::<Value>(&bytes).unwrap()
-        );
-        let outside = super::fake::client()
-            .get(&bridge)
-            .header("x-hangar-path", "/api/sessions/s/extra/commands")
-            .header("x-hangar-internal", "commands-private")
-            .send()
-            .await?;
-        assert_eq!(outside.status(), 404);
         Ok::<_, reqwest::Error>((status, bytes))
     }
     .await;
