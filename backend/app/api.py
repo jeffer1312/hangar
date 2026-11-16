@@ -4,14 +4,13 @@ import json
 import re
 import time
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Depends, Request
+from fastapi import FastAPI, Request
 from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.requests import ClientDisconnect
 from app import diag, loop_monitor
 from app import internal_api
-from app.auth import require_auth
 from app.uploads import MAX_BYTES
 
 
@@ -192,35 +191,3 @@ app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=5)
 app.include_router(internal_api.router)
 
 
-@app.post("/api/diag", dependencies=[Depends(require_auth)])
-async def diag_anotar(request: Request):
-    """Lote de eventos da TELA pro diário de uso (backend/app/diag.py).
-
-    Aceita o que reconhece e descarta o resto em silêncio — de propósito. Este endpoint não pode ser
-    um caminho que falha: ele descreve o uso, e um 400 aqui viraria um erro na tela causado pelo
-    próprio mecanismo de registrar erros.
-    """
-    try:
-        corpo = await request.json()
-    except Exception:                                # noqa: BLE001 — ver docstring
-        return {"gravadas": 0}
-    lote = corpo.get("eventos") if isinstance(corpo, dict) else corpo
-    return {"gravadas": await asyncio.to_thread(diag.anotar_da_tela, lote)}
-
-
-@app.get("/api/diag", dependencies=[Depends(require_auth)])
-async def diag_resumo(ultimas: int = 60):
-    resumo = await asyncio.to_thread(diag.resumo)
-    # As últimas linhas junto: a tela precisa PROVAR que está gravando, e um segundo pedido só pra
-    # isso seria mais latência pra mostrar a mesma coisa.
-    resumo["ultimas"] = await asyncio.to_thread(diag.ultimas, max(1, min(ultimas, 200)))
-    return resumo
-
-
-@app.get("/api/diag/arquivo", dependencies=[Depends(require_auth)])
-async def diag_arquivo():
-    # Baixa como anexo pra pessoa mandar no chat — é o único caminho do diário até quem analisa.
-    texto = await asyncio.to_thread(diag.ler_tudo)
-    return Response(
-        content=texto, media_type="application/x-ndjson",
-        headers={"Content-Disposition": 'attachment; filename="hangar-uso.jsonl"'})

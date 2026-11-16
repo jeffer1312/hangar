@@ -116,8 +116,9 @@ async fn occupied_guest_port_is_retried_without_blocking_the_main_port() {
 
     tokio::time::sleep(Duration::from_millis(600)).await;
     assert_eq!(bound(main).await, json!(false));
-    let r = client().get(format!("http://{main}/api/diag/arquivo")).bearer_auth(OWNER).send().await.unwrap();
-    assert_eq!(r.text().await.unwrap(), "from-python", "a porta principal atende enquanto a do convidado espera");
+    let r = client().get(format!("http://{main}/api/diag")).bearer_auth(OWNER).send().await.unwrap();
+    assert_eq!(r.status(), 200, "a porta principal atende enquanto a do convidado espera");
+    assert_eq!(r.json::<Value>().await.unwrap()["dias_guardados"], 7);
 
     drop(holder);
     wait_bound(main).await;

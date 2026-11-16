@@ -440,16 +440,15 @@ async fn device_token_works_on_every_owner_route() {
     assert_eq!(api_status(e.connect, &token).await, 200);
     let cookie = get(e.connect, "/api/client-api").header("cookie", format!("__Host-cp_token={token}"));
     assert_eq!(cookie.send().await.unwrap().status(), 200);
-    let write = post(e.connect, "/api/diag/arquivo", json!({})).header("cookie", format!("__Host-cp_token={token}"));
+    let write = post(e.connect, "/api/diag", json!([])).header("cookie", format!("__Host-cp_token={token}"));
     assert_eq!(write.send().await.unwrap().status(), 401, "cookie só lê");
     let sse = get(e.connect, "/api/sessions/events").bearer_auth(&token).send().await.unwrap();
     assert_eq!(sse.status(), 200);
     assert!(sse.headers()["content-type"].to_str().unwrap().starts_with("text/event-stream"));
-    // Ao Python vai a senha, dentro do processo; a credencial do aparelho não sai da camada.
+    // A credencial do aparelho vale como a do dono numa rota do Rust, por cabeçalho e por `?token=`.
     assert_eq!(get(e.connect, "/api/diag/arquivo").bearer_auth(&token).send().await.unwrap().status(), 200);
-    assert_eq!(e.python.last_hit().1["authorization"], format!("Bearer {OWNER}"));
     assert_eq!(get(e.connect, &format!("/api/diag/arquivo?token={token}&x=1")).send().await.unwrap().status(), 200);
-    assert_eq!(e.python.last_hit().0, format!("/api/diag/arquivo?token={OWNER}&x=1"));
+    assert_eq!(e.python.hits_to("/api/diag/arquivo"), 0);
     let terminal = open_terminal(e.connect, &token).await;
     drop(terminal);
     let (voice, _) = connect_async(format!("ws://{}/api/voice?token={token}", e.connect)).await.expect("voz pelo Connect");
@@ -469,9 +468,7 @@ async fn device_token_works_on_8765_too() {
     let cookie = get(e.main, "/api/client-api").header("cookie", format!("cp_token={token}"));
     assert_eq!(cookie.send().await.unwrap().status(), 200);
     assert_eq!(get(e.main, "/api/diag/arquivo").bearer_auth(&token).send().await.unwrap().status(), 200);
-    let (_, headers) = e.python.last_hit();
-    assert_eq!(headers["authorization"], format!("Bearer {OWNER}"));
-    assert_eq!(headers["x-forwarded-for"], "127.0.0.1");
+    assert_eq!(e.python.hits_to("/api/diag/arquivo"), 0);
 }
 
 #[tokio::test]

@@ -2032,6 +2032,7 @@ dependencies = [
  "hangar-ticket-actions",
  "hangar-transcript",
  "hangar-update-news",
+ "hangar-usage-diary",
  "hangar-workflows",
  "hangar-workspace",
  "http-body-util",
@@ -2171,6 +2172,17 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tracing",
+]
+
+[[package]]
+name = "hangar-usage-diary"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "hangar-core",
+ "proptest",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
