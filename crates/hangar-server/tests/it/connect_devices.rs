@@ -858,3 +858,14 @@ async fn owner_proof_is_not_public_through_connect() {
     let tricked = get(e.connect, &format!("/api/peers/prova?desafio={challenge}&device=x&device=")).send().await.unwrap();
     assert_eq!(tricked.status(), 404);
 }
+
+/// Acesso que já tinha acabado quando o vigia nasce (revogado entre o porteiro e a abertura do
+/// terminal) fecha na hora, sem esperar o primeiro intervalo de 5 s.
+#[tokio::test]
+async fn a_watcher_born_after_the_revocation_ends_at_once() {
+    let dir = crate::physical_tempdir();
+    let store = Arc::new(Store::new(dir.path().join("connect"), Some(identity())));
+    let watcher = hangar_server::share::gate::Watcher::device(store, "aparelho-revogado".into());
+    tokio::time::timeout(Duration::from_secs(1), watcher.until_ended()).await
+        .expect("o vigia confere antes da primeira espera");
+}
