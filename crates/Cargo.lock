@@ -1858,6 +1858,7 @@ dependencies = [
 name = "hangar-notice-actions"
 version = "0.1.0"
 dependencies = [
+ "hangar-plugins",
  "serde_json",
 ]
 
@@ -2023,6 +2024,7 @@ dependencies = [
  "hangar-dream",
  "hangar-http-file",
  "hangar-mission",
+ "hangar-notice-actions",
  "hangar-notice-ignores",
  "hangar-omp-sync",
  "hangar-opencode-cookie",
@@ -2158,6 +2160,7 @@ version = "0.1.0"
 dependencies = [
  "hangar-api",
  "hangar-core",
+ "hangar-notice-actions",
  "memchr",
  "proptest",
  "regex",

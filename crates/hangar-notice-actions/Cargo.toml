@@ -7,6 +7,7 @@ publish = false
 # Mesmas features do hangar-server: sem elas, compilar este crate sozinho guarda outra cópia de cada
 # dependência no target (ver o comentário do serde_json em hangar-server/Cargo.toml).
 [dependencies]
+hangar-plugins.workspace = true
 serde_json = { workspace = true, features = ["float_roundtrip", "alloc", "unbounded_depth", "arbitrary_precision", "raw_value"] }
 
 [dev-dependencies]

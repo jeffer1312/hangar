@@ -60,6 +60,7 @@ hangar-psmux = { path = "hangar-psmux" }
 hangar-core = { path = "hangar-core" }
 hangar-auth = { path = "hangar-auth" }
 hangar-transcript = { path = "hangar-transcript" }
+hangar-notice-actions = { path = "hangar-notice-actions" }
 hangar-omp-sync = { path = "hangar-omp-sync" }
 hangar-connect = { path = "hangar-connect" }
 hangar-plugins = { path = "hangar-plugins" }

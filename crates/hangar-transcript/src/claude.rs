@@ -328,7 +328,8 @@ impl NoticeFold {
         let reason = hook_failure_reason(att.get("stderr").and_then(Value::as_str), att.get("exitCode").and_then(Value::as_i64));
         let detail = format!("{name}: {reason}");
         let id = format!("hookfail:{uid}");
-        let event = hook_note(id.clone(), &name, detail.clone(), at);
+        let command = att.get("command").and_then(Value::as_str);
+        let event = hook_note(id.clone(), &name, detail.clone(), command, at);
         self.hooks.insert(name, HookFails { id, detail, count: 1 });
         Some(event)
     }
@@ -371,8 +372,10 @@ fn note(id: String, ignore_key: Option<&str>, text: String, at: Option<f64>) -> 
     ev
 }
 
-fn hook_note(id: String, name: &str, detail: String, at: Option<f64>) -> ChatEvent {
-    let meta = [("key", format!("hook:{name}")), ("subject", name.to_owned())].into_iter().map(|(k, v)| (k.to_owned(), Value::from(v))).collect();
+/// O comando só decide a ação: ele pode carregar segredo, e o aviso chega a convidados.
+fn hook_note(id: String, name: &str, detail: String, command: Option<&str>, at: Option<f64>) -> ChatEvent {
+    let mut meta: Map<String, Value> = [("key", format!("hook:{name}")), ("subject", name.to_owned())].into_iter().map(|(k, v)| (k.to_owned(), Value::from(v))).collect();
+    meta.extend(hangar_notice_actions::hook_action(&detail, command, hangar_notice_actions::exists_on_disk));
     let mut ev = ChatEvent { ts: at, hook_error: Some(detail), notice_meta: Some(meta), ..text_event(ChatKind::Notice, id, "hook_failed".into()) };
     finish(&mut ev);
     ev

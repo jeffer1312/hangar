@@ -9,6 +9,7 @@ publish = false
 [dependencies]
 hangar-api.workspace = true
 hangar-core.workspace = true
+hangar-notice-actions.workspace = true
 memchr.workspace = true
 regex.workspace = true
 serde = { workspace = true, features = ["alloc"] }

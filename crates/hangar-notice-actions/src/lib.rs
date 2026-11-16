@@ -32,9 +32,11 @@ pub fn plugin_of_path(text: &str) -> Option<PluginPath> {
             if parts.next().is_none() || [market, name, version].iter().any(|part| part.is_empty() || part.contains(char::is_whitespace)) {
                 continue;
             }
+            // O id vai à rota de plugins: só o que ela aceitaria.
+            let Ok(id) = hangar_plugins::PluginId::parse(&format!("{name}@{market}")) else { continue };
             let start = text[..at].rfind(|c: char| c.is_whitespace() || c == '"' || c == '\'').map_or(0, |i| i + 1);
             let end = from + market.len() + name.len() + version.len() + 2;
-            return Some(PluginPath { id: format!("{name}@{market}"), root: PathBuf::from(&text[start..end]) });
+            return Some(PluginPath { id: id.as_str().to_owned(), root: PathBuf::from(&text[start..end]) });
         }
     }
     None
@@ -173,6 +175,7 @@ mod tests {
     fn no_plugin_path_outside_the_cache() {
         assert_eq!(plugin_of_path("echo 'lint: arquivo de configuração não encontrado' >&2; exit 1"), None);
         assert_eq!(plugin_of_path("/home/ana/.claude/plugins/cache/m/p"), None, "sem a pasta da versão não há o que reinstalar");
+        assert_eq!(plugin_of_path("/h/plugins/cache/m/$(rm)/1.0/x.sh"), None, "id que a rota de plugins recusaria");
     }
 
     #[test]
