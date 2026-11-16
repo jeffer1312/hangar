@@ -208,8 +208,8 @@ async fn env_with(o: Opts) -> Env {
     let dirs = parse_dirs(&json!({"home": home, "claude": home.join(".claude"), "codex_home": home.join(".codex"),
         "pi_sessions": home.join(".pi/agent/sessions"), "omp_config": home.join(".omp"),
         "omp_agent": home.join(".omp/agent"), "kimi_home": home.join(".kimi-code")}).to_string());
-    let (python, upstream) = fake::spawn_fake().await;
-    let mut state = AppState::new(fake::config(upstream, ""));
+    let (python, _) = fake::spawn_fake().await;
+    let mut state = AppState::new(fake::config(""));
     let runtime = Arc::new(crate::sink::registry().await);
     let sink = crate::sink::Sink::default();
     std::fs::create_dir_all(root.join("rt")).unwrap();

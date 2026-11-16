@@ -127,36 +127,6 @@ async fn cano(outcome: &'static str) -> String {
     format!("tcp:{address}")
 }
 
-async fn policy() -> std::net::SocketAddr {
-    hangar_server::diag::disable_diary();
-    use tokio::io::AsyncReadExt;
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    tokio::spawn(async move {
-        loop {
-            let Ok((stream, _)) = listener.accept().await else { return };
-            tokio::spawn(async move {
-                let mut reader = BufReader::new(stream);
-                loop {
-                    let mut length = 0usize;
-                    loop {
-                        let mut line = String::new();
-                        if reader.read_line(&mut line).await.unwrap_or(0) == 0 { return; }
-                        if line == "\r\n" { break; }
-                        if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") { length = value.trim().parse().unwrap(); }
-                    }
-                    let mut body = vec![0; length];
-                    reader.read_exact(&mut body).await.unwrap();
-                    let reply = json!({"ok":true,"data":{}}).to_string();
-                    let response = format!("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{reply}", reply.len());
-                    reader.get_mut().write_all(response.as_bytes()).await.unwrap();
-                }
-            });
-        }
-    });
-    address
-}
-
 pub(crate) async fn registry() -> Arc<RuntimeRegistry> {
     Arc::new(RuntimeRegistry::new("instance-test".into()).with_processes(Arc::new(crate::runtime_open::RecipeProcesses("sid-1"))))
 }
@@ -192,12 +162,12 @@ pub(crate) async fn open_sick_terminal(registry: &RuntimeRegistry, dir: &Path, n
 }
 
 async fn serve(registry: Arc<RuntimeRegistry>, wait: Duration) -> (Arc<Fake>, std::net::SocketAddr) {
-    let (python, upstream) = spawn_fake().await;
-    let mut state = AppState::new(config(upstream, "127.0.0.1"));
+    let (python, _) = spawn_fake().await;
+    let mut state = AppState::new(config("127.0.0.1"));
     state.diag = python.bind_diary(state.diag.clone());
     state.write_gate_wait = wait;
     assert!(state.state.runtime.set(registry).is_ok());
-    (python, spawn_state(state).await)
+    (python, spawn_state_for(&python, state).await)
 }
 
 async fn post(server: std::net::SocketAddr, name: &str, route: &str, body: &str) -> (u16, Value) {

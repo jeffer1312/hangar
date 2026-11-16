@@ -49,8 +49,8 @@ async fn scene_named(groups: bool, peers: Option<hangar_server::groups::peers::P
     let dirs = parse_dirs(&json!({"home": home, "claude": home.join(".claude"), "codex_home": home.join(".codex"),
         "pi_sessions": home.join(".pi/agent/sessions"), "omp_config": home.join(".omp"),
         "omp_agent": home.join(".omp/agent"), "kimi_home": home.join(".kimi-code")}).to_string());
-    let (python, upstream) = fake::spawn_fake().await;
-    let mut state = AppState::new(fake::config(upstream, "127.0.0.1"));
+    let (python, _) = fake::spawn_fake().await;
+    let mut state = AppState::new(fake::config("127.0.0.1"));
     state.server_id=server.to_owned();
     let sink = crate::sink::Sink::default();
     if owned {

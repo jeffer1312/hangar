@@ -1,8 +1,6 @@
 //! Matriz do corte de posse (Task 12): Claude e Codex, com e sem terminal, são do Rust. Seleção e
 //! resposta com ID atual, antigo e ausente, corpo torto e dono doente recebem a resposta do Rust e nunca
-//! chegam ao Python. A ponte privada do Claude (`/__hangar_server/claude/<nome>/<rota>`) faz o mesmo
-//! para o que entra pelas portas do Python, e o `DELETE` do Codex com terminal fecha no Rust antes da
-//! limpeza do Python.
+//! chegam ao Python; o `DELETE` do Codex com terminal fecha no Rust.
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -11,7 +9,7 @@ use hangar_server::runtime::gateway::RuntimeRegistry;
 use hangar_server::runtime::protocol::{CanoBinding, RuntimeTarget};
 use serde_json::{Value, json};
 
-use crate::fake::{self, Fake, OWNER, SECRET};
+use crate::fake::{self, Fake, OWNER};
 use crate::session_write_control::{open_headless, registry_with_plugin, send, serve_with_interactions};
 
 const MISSING: &str = "erro_interacao_sem_identidade";
@@ -179,79 +177,6 @@ async fn codex_terminal_answers_and_refuses_in_rust() {
     finish(&mut [&mut app, &mut tui]);
 }
 
-/// A ponte privada do Claude: corpo intacto (o `interaction_id` chega à conferência do Rust), resposta e
-/// código do Rust, 421 para o que ele não atende, e a rota de personalizações intacta.
-#[tokio::test]
-async fn claude_bridge_serves_input_answers_and_queue_of_a_rust_claude() {
-    let (dir, store) = (tempfile::tempdir().unwrap(), Arc::new(InteractionStore::default()));
-    let (registry, _plugin) = registry_with_plugin(&store).await;
-    open_headless(&registry, dir.path(), "s").await;
-    let binding = registry.interaction_binding("s").await.unwrap();
-    let (old_s, _) = shown(&store, &binding, InteractionKind::Approval);
-    let (python, upstream) = fake::spawn_fake().await;
-    let mut state = hangar_server::routes::AppState::new(fake::config(upstream, "127.0.0.1"));
-    state.interactions = store.clone();
-    assert!(state.state.runtime.set(registry).is_ok());
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let private = listener.local_addr().unwrap();
-    let router = hangar_server::routes::terminal_router(Arc::new(state));
-    tokio::spawn(async move { axum::serve(listener, router.into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap() });
-    let call = |method: reqwest::Method, path: &str, body: &str, secret: bool| {
-        let request = fake::client().request(method, format!("http://{private}/__hangar_server/claude/{path}"))
-            .header("content-type", "application/json").body(body.to_owned());
-        let request = if secret { request.header("x-hangar-internal", SECRET) } else { request };
-        async move {
-            let response = request.send().await.unwrap();
-            let status = response.status().as_u16();
-            (status, serde_json::from_str::<Value>(&response.text().await.unwrap()).unwrap_or(Value::Null))
-        }
-    };
-    let post = |path: &'static str, body: String| call(reqwest::Method::POST, path, &body, true);
-    let (status, reply) = post("s/answer", json!({"answers": [option()]}).to_string()).await;
-    assert_eq!((status, reply["detail"]["code"].as_str()), (409, Some(MISSING)));
-    let (status, reply) = post("s/select", json!({"option": 1, "interaction_id": old_s}).to_string()).await;
-    assert_eq!((status, reply["detail"]["code"].as_str()), (409, Some(STALE)), "o ID do corpo chegou intacto");
-    let (status, reply) = post("s/answer", r#"{"answers":"x"}"#.into()).await;
-    assert_eq!((status, reply["detail"]["code"].as_str()), (422, Some("erro_corpo_invalido")));
-    let (status, reply) = post("s/input", json!({"text":"oi","jev_task":"","jev_message":"oi"}).to_string()).await;
-    assert_eq!((status, reply["ok"].as_bool(), reply["timing_note"].as_str()), (200, Some(true), Some("delivered")), "{reply}");
-    assert_eq!(reply["steered"], false, "sem contexto não há orientação automática");
-    let (status, reply) = post("s/input", json!({"text":"oi","jev_task":"t"}).to_string()).await;
-    assert_eq!((status, reply["detail"]["code"].as_str()), (422, Some("erro_corpo_invalido")));
-    assert_eq!(call(reqwest::Method::POST, "s/input", r#"{"text":"oi"}"#, false).await.0, 404);
-    // Sessão que o Rust não tem não entra pela ponte.
-    assert_eq!(post("nada/input", json!({"text": "oi"}).to_string()).await.0, 421);
-    // Aba Submit sem pane: o Python não tem mais a rota, e a recusa é do Rust (decisões 6 e 7), sem
-    // `interaction_id` primeiro e, com ele, a do picker ausente.
-    let (status, reply) = post("s/select/submit", "{}".into()).await;
-    assert_eq!((status, reply["detail"]["code"].as_str()), (409, Some(MISSING)), "{reply}");
-    let (status, reply) = post("s/select/submit", json!({"interaction_id": "i-1"}).to_string()).await;
-    assert_eq!((status, reply["detail"]["code"].as_str()), (409, Some("erro_opcao_nao_convergiu")), "{reply}");
-    // Fora do recorte: outra rota, outro método, sessão desconhecida.
-    assert_eq!(post("s/not-a-route", "{}".into()).await.0, 421);
-    assert_eq!(call(reqwest::Method::GET, "s/answer", "", true).await.0, 421);
-    assert_eq!(post("nada/answer", json!({"answers": [option()]}).to_string()).await.0, 421);
-    // O painel da fila: corpo fora de forma é do Rust (422); id com barra e leitura não são rotas dele.
-    let (status, reply) = call(reqwest::Method::PATCH, "s/queue/a", r#"{"text":1}"#, true).await;
-    assert_eq!((status, reply["detail"]["code"].as_str()), (422, Some("erro_corpo_invalido")), "{reply}");
-    assert_eq!(post("s/queue/a/b/steer", String::new()).await.0, 421);
-    assert_eq!(call(reqwest::Method::GET, "s/queue/a", "", true).await.0, 421);
-    assert_eq!(call(reqwest::Method::POST, "s/answer", "{}", false).await.0, 404, "sem o segredo a ponte não existe");
-    // O modo de permissão do convidado é atendido na rota do dono (decisão 1): a ponte não o tem mais.
-    assert_eq!(call(reqwest::Method::GET, "s/permission-modes", "", true).await.0, 421);
-    assert_eq!(post("s/permission-mode", json!({"mode": "plan"}).to_string()).await.0, 421);
-    assert_eq!(python.hits_to("/api/sessions/s/permission-modes"), 0);
-    // Btw: a pergunta lateral do Connect chega à rota do Rust, que responde até o corpo errado.
-    let (status, reply) = post("s/btw", r#"{"question":"q","x":1}"#.into()).await;
-    assert_eq!((status, reply["detail"][0]["type"].as_str()), (422, Some("extra_forbidden")), "{reply}");
-    assert_eq!(python.hits_to("/api/sessions/s/btw"), 0);
-    // A rota irmã das personalizações não é engolida pela ponte.
-    assert_ne!(post("customizations", "{}".into()).await.0, 421);
-    for route in ["answer", "select", "select/submit", "input"] {
-        assert_eq!(python.hits_to(&format!("/api/sessions/s/{route}")), 0, "{route}: nunca volta ao Python");
-    }
-}
-
 /// Servidor do dono com a lista, o multiplexador e a conta numa pasta da prova: é o mesmo `DELETE` que o
 /// Connect usa (o aparelho troca a credencial pela do dono), sem a ponte `POST close`, que saiu.
 #[cfg(unix)]
@@ -260,8 +185,8 @@ async fn owner_with_mux(registry: Arc<RuntimeRegistry>, home: &std::path::Path) 
     let mux = home.join("tmux");
     // Nenhuma sessão no multiplexador: o `has-session` diz que ela não existe.
     crate::write_executable(&mux, "#!/bin/sh\n[ \"$1\" = has-session ] && { echo \"can't find session: x\" >&2; exit 1; }\nexit 0\n".to_owned());
-    let (python, upstream) = fake::spawn_fake().await;
-    let mut state = hangar_server::routes::AppState::new(fake::config(upstream, "127.0.0.1"));
+    let (python, _) = fake::spawn_fake().await;
+    let mut state = hangar_server::routes::AppState::new(fake::config("127.0.0.1"));
     let text = home.to_string_lossy().into_owned();
     state.accounts = hangar_server::accounts::AccountService::new(hangar_server::accounts::environment::AccountEnvironment::from_map(
         [("HOME".to_owned(), text.clone()), ("USERPROFILE".to_owned(), text)].into()));
@@ -324,28 +249,6 @@ async fn refused_connect_close_keeps_the_session_in_the_restore_snapshot() {
     assert!(!names().contains(&"nada".to_owned()), "fechada de fato, ela não volta no reboot");
 }
 
-/// Achado 4 da revisão: a ponte `POST /__hangar_server/claude/<n>/close` não tem chamador (o Connect saiu
-/// do Python em 6bdd33994) e saiu. Antes ela tirava a entrada da vida do Claude do Rust; agora é 421 e
-/// nada fecha: o fechamento é só o `DELETE`.
-#[tokio::test]
-async fn the_claude_close_bridge_is_gone() {
-    let (dir, store) = (tempfile::tempdir().unwrap(), Arc::new(InteractionStore::default()));
-    let (registry, _plugin) = registry_with_plugin(&store).await;
-    open_headless(&registry, dir.path(), "s").await;
-    let (python, upstream) = fake::spawn_fake().await;
-    let state = hangar_server::routes::AppState::new(fake::config(upstream, "127.0.0.1"));
-    assert!(state.state.runtime.set(registry.clone()).is_ok());
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let private = listener.local_addr().unwrap();
-    let router = hangar_server::routes::terminal_router(Arc::new(state));
-    tokio::spawn(async move { axum::serve(listener, router.into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap() });
-    let response = fake::client().post(format!("http://{private}/__hangar_server/claude/s/close"))
-        .header("x-hangar-internal", SECRET).send().await.unwrap();
-    assert_eq!(response.status().as_u16(), 421);
-    assert!(registry.has_entry(None, "s").await, "nada foi encerrado: a entrada desta vida segue");
-    assert_eq!(python.hits_to("/api/sessions/s"), 0);
-}
-
 /// O Reabrir (`/recarregar`) do Claude é atendido pela rota da 8765, que o Connect também usa: a recusa da
 /// reabertura (aqui o arquivo da sessão ilegível) volta com o código do Rust, sem nunca ir ao Python. A
 /// ponte privada não tem mais a recarga: quem a chamava era a rota Python que saiu.
@@ -356,11 +259,10 @@ async fn reload_of_a_claude_answers_with_the_rust_code() {
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("s.json"), "não é json").unwrap();
     let env = hangar_server::accounts::environment::AccountEnvironment::from_map([("HOME".to_owned(), home.path().to_string_lossy().into_owned())].into());
-    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let registry = Arc::new(RuntimeRegistry::new("instance-test".into())
         .with_codex_environment(env));
-    let (python, upstream) = fake::spawn_fake().await;
-    let state = hangar_server::routes::AppState::new(fake::config(upstream, "127.0.0.1"));
+    let (python, _) = fake::spawn_fake().await;
+    let state = hangar_server::routes::AppState::new(fake::config("127.0.0.1"));
     assert!(state.state.runtime.set(registry).is_ok());
     let server = fake::spawn_state(state).await;
     let response = fake::client().post(format!("http://{server}/api/sessions/s/recarregar")).bearer_auth(fake::OWNER).send().await.unwrap();

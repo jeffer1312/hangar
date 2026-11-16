@@ -1,4 +1,4 @@
-//! A mesma borda HTTP dos handlers Python, com o upstream recusando todas as chamadas.
+//! A borda HTTP pública da leitura em voz alta.
 use std::{
     collections::BTreeMap,
     net::SocketAddr,
@@ -70,7 +70,6 @@ impl Server {
         std::fs::write(&mux, "@echo off\r\nexit /b 0\r\n").unwrap();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
-        let upstream = crate::refused_address();
         let mut state = AppState::new(Config {
             listen: address,
             internal_secret: "fixture-private".into(),

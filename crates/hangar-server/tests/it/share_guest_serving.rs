@@ -107,8 +107,8 @@ async fn list_srv(root: &Path, n: usize) -> Srv {
     let dirs = parse_dirs(&json!({"home": home, "claude": home.join(".claude"), "codex_home": home.join(".codex"),
         "pi_sessions": home.join(".pi/agent/sessions"), "omp_config": home.join(".omp"),
         "omp_agent": home.join(".omp/agent"), "kimi_home": home.join(".kimi-code")}).to_string());
-    let (python, upstream) = spawn_fake().await;
-    let mut state = AppState::new(config(upstream, ""));
+    let (python, _) = spawn_fake().await;
+    let mut state = AppState::new(config(""));
     state.devices = Arc::new(hangar_server::devices::Registry::new(home.join(".hangar/devices.json")));
     state.list = Arc::new(ListBridge::new(ListEnv { mux: Mux::with_program(&script, Duration::from_secs(5)),
         capture_program: script.into_os_string(), procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs },
@@ -124,9 +124,9 @@ async fn list_srv(root: &Path, n: usize) -> Srv {
 }
 
 async fn plain_srv(dir: &Path, tune: impl FnOnce(&mut AppState)) -> Srv {
-    let (python, upstream) = spawn_fake().await;
-    let mut state = AppState::new(config(upstream, "127.0.0.1"));
-    state.side.locate = fake::fake_locate(upstream);
+    let (python, _) = spawn_fake().await;
+    let mut state = AppState::new(config("127.0.0.1"));
+    state.side.locate = python.locate();
     tune(&mut state);
     serve(state, python, dir).await
 }

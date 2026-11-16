@@ -39,9 +39,6 @@ impl Drop for Scene {
 }
 impl Scene {
     async fn new(lines: &[Value]) -> Self {
-        Self::with_upstream(lines, "127.0.0.1:9".parse().unwrap()).await
-    }
-    async fn with_upstream(lines: &[Value], upstream: SocketAddr) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("session-a.jsonl");
         write_lines(&path, lines);
@@ -491,43 +488,7 @@ async fn artifacts_same_size_rewrite_in_the_middle_with_restored_mtime_invalidat
 
 #[tokio::test]
 async fn artifacts_preflight_uses_native_cors_without_bypassing_get_auth() {
-    use axum::{extract::Request, response::IntoResponse};
-    struct Stop(tokio::task::JoinHandle<()>);
-    impl Drop for Stop {
-        fn drop(&mut self) {
-            self.0.abort();
-        }
-    }
-    let upstream_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let upstream = upstream_listener.local_addr().unwrap();
-    let cors = axum::Router::new()
-        .route(
-            "/api/sessions/{name}/artifacts",
-            axum::routing::options(|req: Request| async move {
-                assert_eq!(req.headers()["origin"], "https://app.example.invalid");
-                assert_eq!(req.headers()["access-control-request-method"], "GET");
-                assert_eq!(
-                    req.headers()["access-control-request-headers"],
-                    "authorization"
-                );
-                assert!(req.headers().get("authorization").is_none());
-                (
-                    StatusCode::OK,
-                    [
-                        ("access-control-allow-origin", "https://app.example.invalid"),
-                        ("access-control-allow-methods", "GET"),
-                        ("access-control-allow-headers", "authorization"),
-                    ],
-                    "",
-                )
-                    .into_response()
-            }),
-        )
-        .fallback(|| async { StatusCode::UNAUTHORIZED });
-    let _stop = Stop(tokio::spawn(async move {
-        axum::serve(upstream_listener, cors).await.unwrap();
-    }));
-    let scene = Scene::with_upstream(&[frame("a", "Privado")], upstream).await;
+    let scene = Scene::new(&[frame("a", "Privado")]).await;
     let response = client()
         .request(
             reqwest::Method::OPTIONS,

@@ -60,7 +60,6 @@ pub struct AppState {
     pub http: HttpClient,
     pub side: SideCtx,
     pub terminal: crate::terminal_control::TerminalPool,
-    pub terminal_address: Option<SocketAddr>,
     /// Segundo socket da porta pública, em `[::]` dual-stack; atende como o primeiro.
     pub public_v6: Option<TcpListener>,
     /// A porta do front (`front_address`), decidida só na subida real (`main.rs`).
@@ -281,7 +280,7 @@ impl AppState {
         let vault_requests = Arc::new(crate::vault::requests::Requests::default());
         let accounts = crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::capture());
         let search = crate::search::Index::server(accounts.clone());
-        AppState { scheduled_tasks: Arc::default(), desktop_theme: Arc::new(hangar_desktop_theme::DesktopTheme::system()), local_commands: Arc::new(crate::auxiliary::NativeCommands(accounts.env.clone())), startup: Default::default(), startup_producers: Arc::default(), settings_snapshot: std::sync::OnceLock::new(), login_guests: Arc::new(crate::login_guests::Service::uninitialized(&accounts.env.home,&accounts.env.claude_base)), accounts, search, claude_p: None, command_catalog: Arc::default(), groups, server_id, machine_identity: std::sync::RwLock::new(None), peers: Arc::new(crate::groups::peers_from_env().with_connect_route()), auth: Auth::configured(&cfg.auth_token), http, side, cfg, terminal, terminal_address: None, public_v6: None, front: None, connect: None, preview: None, connect_previews: Arc::default(), connect_preview_reach: Arc::new(crate::share::owner_routes::Reach::preview()), diag,
+        AppState { scheduled_tasks: Arc::default(), desktop_theme: Arc::new(hangar_desktop_theme::DesktopTheme::system()), local_commands: Arc::new(crate::auxiliary::NativeCommands(accounts.env.clone())), startup: Default::default(), startup_producers: Arc::default(), settings_snapshot: std::sync::OnceLock::new(), login_guests: Arc::new(crate::login_guests::Service::uninitialized(&accounts.env.home,&accounts.env.claude_base)), accounts, search, claude_p: None, command_catalog: Arc::default(), groups, server_id, machine_identity: std::sync::RwLock::new(None), peers: Arc::new(crate::groups::peers_from_env().with_connect_route()), auth: Auth::configured(&cfg.auth_token), http, side, cfg, terminal, public_v6: None, front: None, connect: None, preview: None, connect_previews: Arc::default(), connect_preview_reach: Arc::new(crate::share::owner_routes::Reach::preview()), diag,
             workspace_slots: Arc::new(tokio::sync::Semaphore::new(4)),
             login_browser: Arc::default(),
             interactions, plugin,
@@ -381,11 +380,8 @@ pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest:
         false
     });
     let plugin = crate::plugin_listener::bind(&listener).await?;
-    // Bind LAN específico não recebe tráfego de loopback: a observação tem uma porta própria.
-    let private = TcpListener::bind("127.0.0.1:0").await?;
-    state.terminal_address = Some(private.local_addr()?);
     state.voice.set_self(listener.local_addr()?, &state.cfg.auth_token);
-    state.connect_previews.reserve([listener.local_addr()?.port(), private.local_addr()?.port()].into_iter()
+    state.connect_previews.reserve([listener.local_addr()?.port()].into_iter()
         .chain(plugin.as_ref().and_then(|plugin| plugin.local_addr().ok()).map(|addr| addr.port()))
         .chain([guest, state.front, state.connect, state.preview].into_iter().flatten().map(|addr| addr.port())));
     let public_v6 = state.public_v6.take();
@@ -485,7 +481,6 @@ pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest:
             }
         } => result,
         result = axum::serve(listener.tap_io(crate::nodelay), router_with(state.clone(), pair.as_ref()).into_make_service_with_connect_info::<SocketAddr>()) => result,
-        result = axum::serve(private.tap_io(crate::nodelay), terminal_router_with(state, pair.as_ref()).into_make_service_with_connect_info::<SocketAddr>()) => result,
         result = async {
             match public_v6 {
                 Some(v6) => axum::serve(v6.tap_io(crate::nodelay), router_with(v6_state, pair.as_ref()).layer(axum::middleware::map_request(ipv4_peer))
@@ -666,14 +661,6 @@ fn owner_share_router(state: &Arc<AppState>, pair: Option<&Arc<PairState>>) -> R
         .layer(axum::middleware::from_fn_with_state(state.clone(), owner_only))
 }
 
-/// Os mesmos handlers pelo caminho privado, para o dono que chega pelo Connect.
-fn private_share_router(state: &Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router {
-    let Some(pair) = pair else { return Router::new() };
-    crate::share::owner_routes::private_router(pair.owner.clone())
-        .merge(crate::share::pair_routes::private_pair_router(pair.clone()))
-        .layer(axum::middleware::from_fn_with_state(state.clone(), crate::share::bridge::private_only))
-}
-
 async fn owner_only(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request,
                     next: axum::middleware::Next) -> Response {
     let (fwd, owner) = match gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
@@ -773,35 +760,6 @@ where H: axum::handler::Handler<T, Arc<AppState>>, T: 'static {
         .route("/api/sessions/{name}/tool-progress/{id}", get(crate::session_media::tool_progress).fallback(fallback.clone()))
         .route("/api/sessions/{name}/transcript-image/{uuid}/{idx}", get(crate::session_media::transcript_image).fallback(fallback.clone()))
         .route("/api/sessions/{name}/cost", get(crate::costs_routes::session_cost).fallback(fallback))
-}
-
-pub fn terminal_router(state: Arc<AppState>) -> Router {
-    let pair = pair_state(&state);
-    terminal_router_with(state, pair.as_ref())
-}
-
-fn terminal_router_with(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router {
-    let router = Router::new()
-        .route("/__hangar_server/terminal", axum::routing::post(crate::terminal_routes::terminal))
-        .route("/__hangar_server/dictation/{operation}", axum::routing::post(crate::dictation::routes::private))
-        .route("/__hangar_server/claude/customizations", axum::routing::post(crate::claude_customizations::private))
-        .route("/__hangar_server/forwarded", axum::routing::any(crate::forwarded::private))
-        .route("/__hangar_server/list", axum::routing::post(crate::list::bridge::private))
-        .route("/__hangar_server/accounts", axum::routing::post(crate::accounts::http::private))
-        .route("/__hangar_server/quotas", axum::routing::post(crate::accounts::quotas::private))
-        .route("/__hangar_server/accounts/claude", axum::routing::post(crate::accounts::http::private_claude))
-        .route("/__hangar_server/accounts/public", axum::routing::any(crate::accounts::http::private_public))
-        .route("/__hangar_server/codex/{*rest}", axum::routing::any(crate::session_write::bridge::codex))
-        .route("/__hangar_server/claude/{*rest}", axum::routing::any(crate::session_write::bridge::claude))
-        .route("/__hangar_server/jev/aux", axum::routing::any(crate::jev_aux::private))
-        .route("/__hangar_server/subagents", get(crate::subagents::private))
-        .route("/__hangar_server/share", axum::routing::post(crate::share::bridge::private));
-    let share = private_share_router(&state, pair);
-    router.route("/__hangar_server/state/{name}/events", get(crate::side::private_events))
-        .route("/__hangar_server/remote-browser", get(crate::remote_browser::ws::private))
-        .with_state(state.clone())
-        .merge(share)
-        .layer(axum::middleware::from_fn_with_state(state, crate::startup::guard))
 }
 
 pub fn router(state: Arc<AppState>) -> Router {
@@ -1150,8 +1108,7 @@ async fn health(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Response
         "terminal_panel": true,
         // Sem as pastas da lista não há serviço de grupos: as rotas seguem ao Python, que fica dono.
         "groups": st.groups.is_some(),
-        "guest_port_bound": st.guest_bound.load(Ordering::Relaxed),
-        "terminal_address": st.terminal_address.map(|a| a.to_string())});
+        "guest_port_bound": st.guest_bound.load(Ordering::Relaxed)});
     // Versão e commit do pacote de onde este processo subiu; ausentes no modo desenvolvedor.
     if let Some(package) = crate::update::running_package() {
         body["package_version"] = package.version.clone().into();
@@ -1742,7 +1699,7 @@ pub(crate) async fn events(
         _ => return pass(&st, req, &fwd).await,
     };
     // Convidado não recebe aviso de mod nem pedido de navegador, e não conta como app do dono.
-    let guest = matches!(who, Some(Caller::Guest(_))) || req.extensions().get::<crate::forwarded::ReadGuest>().is_some_and(|guest| guest.0);
+    let guest = matches!(who, Some(Caller::Guest(_)));
     let started = std::time::Instant::now();
     let info = match st.info(&name).await {
         Ok(info) => info,
@@ -1920,28 +1877,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn migrated_provider_forwarding_checks_the_private_secret_and_preserves_guest_limits() {
-        let state = test_state().await;
-        let peer = "127.0.0.1:5000".parse().unwrap();
-        for (path, guest, secret, expected) in [
-            ("/api/sessions/demo/pi/model", false, "errado", StatusCode::NOT_FOUND),
-            ("/api/sessions/demo/pi/model", true, "s", StatusCode::UNPROCESSABLE_ENTITY),
-            ("/api/sessions/demo/orq/papeis", true, "s", StatusCode::NOT_FOUND),
-            ("/api/sessions/demo/orq/papeis", false, "s", StatusCode::UNPROCESSABLE_ENTITY),
-        ] {
-            let req = Request::builder().method(Method::POST).uri("/__hangar_server/forwarded")
-                .header("x-hangar-internal", secret).header("x-hangar-path", path)
-                .header("x-hangar-forwarded-guest", if guest { "1" } else { "0" })
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(axum::body::Body::from("[]")).unwrap();
-            let response = crate::forwarded::private(State(state.clone()), ConnectInfo(peer), req).await;
-            assert_eq!(response.status(), expected, "{path}, convidado {guest}, segredo {secret}");
-        }
-    }
-
-    #[tokio::test]
-    async fn orchestration_history_uses_the_same_parser_on_public_and_forwarded_ports() {
-        const NAME: &str = "routes::tests::orchestration_history_uses_the_same_parser_on_public_and_forwarded_ports";
+    async fn orchestration_history_uses_the_orq_parser() {
+        const NAME: &str = "routes::tests::orchestration_history_uses_the_orq_parser";
         if std::env::var_os("ORQ_REGISTRY_PROBE").is_none() {
             // O leitor do orq é global ao processo: num filho, só o AppState pode tê-lo registrado.
             let out = std::process::Command::new(std::env::current_exe().unwrap())
@@ -1966,20 +1903,6 @@ mod tests {
         assert_eq!(public.status(), StatusCode::OK);
         let expected = axum::body::to_bytes(public.into_body(), 1024 * 1024).await.unwrap();
         assert!(!serde_json::from_slice::<Vec<serde_json::Value>>(&expected).unwrap().is_empty());
-        for guest in [false, true] {
-            let req = Request::builder().uri("/__hangar_server/forwarded")
-                .header("x-hangar-internal", "s").header("x-hangar-path", "/api/sessions/run-orq/history")
-                .header("x-hangar-forwarded-guest", if guest { "1" } else { "0" })
-                .body(axum::body::Body::empty()).unwrap();
-            let response = crate::forwarded::private(State(state.clone()), ConnectInfo(peer), req).await;
-            assert_eq!(response.status(), StatusCode::OK);
-            assert_eq!(axum::body::to_bytes(response.into_body(), 1024 * 1024).await.unwrap(), expected);
-        }
-        let req = Request::builder().uri("/__hangar_server/forwarded?limit=invalido")
-            .header("x-hangar-internal", "s").header("x-hangar-path", "/api/sessions/run-orq/history")
-            .body(axum::body::Body::empty()).unwrap();
-        let response = crate::forwarded::private(State(state), ConnectInfo(peer), req).await;
-        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
     }
 
     async fn test_state() -> Arc<AppState> {

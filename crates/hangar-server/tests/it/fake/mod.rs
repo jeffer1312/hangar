@@ -165,7 +165,6 @@ pub async fn spawn_fake() -> (Arc<Fake>, SocketAddr) {
         internal_delay: Mutex::default(),
     });
     let app = Router::new()
-        .route("/internal/sessions/{name}/info", get(fake_info))
         .route("/internal/list/facts", axum::routing::post(fake_list_facts))
         .route("/internal/sessions/{name}/plugin", get(fake_plugin_get).post(fake_plugin_post))
         .route("/internal/pair/{op}", axum::routing::post(fake_internal_json))
@@ -176,14 +175,7 @@ pub async fn spawn_fake() -> (Arc<Fake>, SocketAddr) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    LAST_FAKE.with(|last| last.set(Some(addr)));
     (fake, addr)
-}
-
-thread_local! {
-    // shortcut: a descoberta do servidor de teste usa o último Python falso desta thread; teste com dois
-    // falsos e um servidor ligado ao primeiro precisa pôr `state.side.locate` à mão.
-    static LAST_FAKE: std::cell::Cell<Option<SocketAddr>> = const { std::cell::Cell::new(None) };
 }
 
 fn internal_ok(h: &HeaderMap) -> bool {
@@ -192,23 +184,6 @@ fn internal_ok(h: &HeaderMap) -> bool {
 
 fn status(s: StatusCode) -> Response {
     Response::builder().status(s).body(Body::empty()).unwrap()
-}
-
-async fn fake_info(State(f): State<Arc<Fake>>, headers: HeaderMap) -> Response {
-    f.info_calls.fetch_add(1, SeqCst);
-    let delay = *f.info_delay.lock().unwrap();
-    tokio::time::sleep(delay).await;
-    if let Some(s) = *f.info_status.lock().unwrap() {
-        return status(s);
-    }
-    let info = f.info.lock().unwrap().clone();
-    if !internal_ok(&headers) || info.is_null() {
-        return status(StatusCode::NOT_FOUND);
-    }
-    Response::builder()
-        .header("content-type", "application/json")
-        .body(Body::from(info.to_string()))
-        .unwrap()
 }
 
 async fn fake_list_facts(State(f): State<Arc<Fake>>, headers: HeaderMap, body: Bytes) -> Response {
@@ -318,7 +293,7 @@ async fn fake_python(State(f): State<Arc<Fake>>, mut req: Request) -> Response {
     }
 }
 
-pub fn config(_fake: SocketAddr, trusted: &str) -> Config {
+pub fn config(trusted: &str) -> Config {
     // A abertura leria a cota pela rede com o token falso das contas de teste.
     hangar_server::accounts::quotas::disable_open_network_read();
     hangar_server::diag::disable_diary();
@@ -331,38 +306,36 @@ pub fn config(_fake: SocketAddr, trusted: &str) -> Config {
     }
 }
 
-/// Descoberta dos testes: a sessão é o que o Python falso tem em `set_info` (`Value::Null` =
-/// inexistente, `fail_info` = descoberta fora do ar), lida pela rota `info` dele, que conta e demora.
-pub struct FakeLocate {
-    pub upstream: SocketAddr,
-    pub http: hangar_server::proxy::HttpClient,
-    pub secret: String,
-}
+/// Descoberta dos testes: a sessão é o que `set_info` guardou (`Value::Null` = inexistente,
+/// `fail_info` = descoberta fora do ar), contada e com a demora de `set_info_delay`.
+struct FakeLocate(Arc<Fake>);
 
 impl hangar_server::locate::Locate for FakeLocate {
-    fn info<'a>(&'a self, name: &'a str) -> hangar_server::locate::BoxFuture<'a,
+    fn info<'a>(&'a self, _name: &'a str) -> hangar_server::locate::BoxFuture<'a,
         Result<Option<hangar_server::transcript::InternalInfo>, hangar_server::locate::InfoFailed>> {
         use hangar_server::locate::InfoFailed;
-        use http_body_util::BodyExt;
         const FAIL: InfoFailed = InfoFailed("fake_info");
         Box::pin(async move {
-            let name = percent_encoding::utf8_percent_encode(name, percent_encoding::NON_ALPHANUMERIC);
-            let url = format!("http://{}/internal/sessions/{name}/info", self.upstream);
-            let req = axum::http::Request::get(url).header("x-hangar-internal", &self.secret).body(Body::empty()).map_err(|_| FAIL)?;
-            let resp = self.http.request(req).await.map_err(|_| FAIL)?;
-            match resp.status() {
-                StatusCode::NOT_FOUND => return Ok(None),
-                s if !s.is_success() => return Err(FAIL),
-                _ => {}
+            let f = &self.0;
+            f.info_calls.fetch_add(1, SeqCst);
+            let delay = *f.info_delay.lock().unwrap();
+            tokio::time::sleep(delay).await;
+            match *f.info_status.lock().unwrap() {
+                Some(StatusCode::NOT_FOUND) => return Ok(None),
+                Some(_) => return Err(FAIL),
+                None => {}
             }
-            let body = resp.into_body().collect().await.map_err(|_| FAIL)?.to_bytes();
-            serde_json::from_slice(&body).map(Some).map_err(|_| FAIL)
+            let info = f.info.lock().unwrap().clone();
+            if info.is_null() { return Ok(None); }
+            serde_json::from_value(info).map(Some).map_err(|_| FAIL)
         })
     }
 }
 
-pub fn fake_locate(upstream: SocketAddr) -> Arc<dyn hangar_server::locate::Locate> {
-    Arc::new(FakeLocate { upstream, http: hangar_server::proxy::client(), secret: SECRET.into() })
+impl Fake {
+    pub fn locate(self: &Arc<Self>) -> Arc<dyn hangar_server::locate::Locate> {
+        Arc::new(FakeLocate(self.clone()))
+    }
 }
 
 pub fn read_diary(dir: &Path) -> Vec<Value> {
@@ -396,9 +369,20 @@ pub async fn wait_diary(dir: &Path, matches: impl Fn(&Value) -> bool) -> Vec<Val
     }
 }
 
-pub async fn spawn_server_with_diary(cfg: Config, diary: &Fake) -> SocketAddr {
+pub async fn spawn_server_with_diary(cfg: Config, fake: &Arc<Fake>) -> SocketAddr {
     let mut state = hangar_server::routes::AppState::new(cfg);
-    state.diag = diary.bind_diary(state.diag.clone());
+    state.diag = fake.bind_diary(state.diag.clone());
+    state.side.locate = fake.locate();
+    spawn_state(state).await
+}
+
+/// Servidor que acha a sessão no que `fake.set_info` guardou.
+pub async fn spawn_server_for(fake: &Arc<Fake>, cfg: Config) -> SocketAddr {
+    spawn_state_for(fake, hangar_server::routes::AppState::new(cfg)).await
+}
+
+pub async fn spawn_state_for(fake: &Arc<Fake>, mut state: hangar_server::routes::AppState) -> SocketAddr {
+    state.side.locate = fake.locate();
     spawn_state(state).await
 }
 
@@ -410,7 +394,6 @@ pub async fn spawn_server(cfg: Config) -> SocketAddr {
 pub async fn spawn_state(mut state: hangar_server::routes::AppState) -> SocketAddr {
     hangar_server::accounts::quotas::disable_open_network_read();
     hangar_server::diag::disable_diary();
-    if let Some(fake) = LAST_FAKE.with(|last| last.take()) { state.side.locate = fake_locate(fake); }
     // Teste que não escolheu pasta: sem isto, a limpeza de worktrees do servidor lê as configurações do HOME real.
     if std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).is_some_and(|home| state.origins_home.as_os_str() == home) {
         state.origins_home = std::env::temp_dir().join("hangar-test-empty-home");
@@ -433,9 +416,10 @@ pub async fn serve_mods(name: &str, link: Arc<dyn hangar_server::mods::state::Su
 /// troca de agente fecha.
 pub async fn serve_mods_gated(name: &str, link: Arc<dyn hangar_server::mods::state::SurfaceLink>)
     -> (Arc<Fake>, SocketAddr, hangar_server::mods::state::Mods, Arc<hangar_server::runtime::gateway::RuntimeRegistry>) {
-    let (python, upstream) = spawn_fake().await;
-    let mut state = hangar_server::routes::AppState::new(config(upstream, "127.0.0.1"));
+    let (python, _) = spawn_fake().await;
+    let mut state = hangar_server::routes::AppState::new(config("127.0.0.1"));
     state.diag = python.bind_diary(state.diag.clone());
+    state.side.locate = python.locate();
     let mods = state.mods.clone();
     let registry = Arc::new(hangar_server::runtime::gateway::RuntimeRegistry::new("instance-test".into())
         .with_mods(mods.clone()).with_diagnostics(python.diagnostics()));

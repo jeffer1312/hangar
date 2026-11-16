@@ -99,8 +99,8 @@ async fn serve(registry: Arc<RuntimeRegistry>, home: &std::path::Path) -> (Arc<F
 
 /// `dirs: false`: a lista sem as pastas das sessões, que responde como fora do ar.
 async fn serve_list(registry: Arc<RuntimeRegistry>, home: &std::path::Path, dirs: bool) -> (Arc<Fake>, std::net::SocketAddr) {
-    let (python, upstream) = spawn_fake().await;
-    let mut state = AppState::new(config(upstream, "127.0.0.1"));
+    let (python, _) = spawn_fake().await;
+    let mut state = AppState::new(config("127.0.0.1"));
     state.accounts = hangar_server::accounts::AccountService::new(
         hangar_server::accounts::environment::AccountEnvironment::from_map([
             ("HOME".to_owned(), home.to_string_lossy().into_owned()),
@@ -122,7 +122,7 @@ async fn serve_list(registry: Arc<RuntimeRegistry>, home: &std::path::Path, dirs
     state.list = Arc::new(hangar_server::list::bridge::ListBridge::new(list_env,
         hangar_server::list::facts::FactsClient::new()));
     assert!(state.state.runtime.set(registry).is_ok());
-    (python, spawn_state(state).await)
+    (python, spawn_state_for(&python, state).await)
 }
 
 async fn call(server: std::net::SocketAddr, case: &Value, token: &str) -> (u16, Value) {

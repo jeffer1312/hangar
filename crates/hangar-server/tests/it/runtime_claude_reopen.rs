@@ -337,8 +337,7 @@ async fn the_queue_held_by_the_usage_limit_goes_along_with_the_reopen() {
 
 /// O servidor com as contas desta casa de teste (nunca as do HOME de quem roda os testes).
 async fn serve_with_accounts(fx:&Fixture,registry:Arc<RuntimeRegistry>) -> std::net::SocketAddr {
-    let (_python, upstream) = crate::fake::spawn_fake().await;
-    let mut state = hangar_server::routes::AppState::new(crate::fake::config(upstream, "127.0.0.1"));
+    let mut state = hangar_server::routes::AppState::new(crate::fake::config("127.0.0.1"));
     let map = [("HOME",fx.home.to_string_lossy().into_owned())].into_iter().map(|(k,v)|(k.to_owned(),v)).collect();
     state.accounts = hangar_server::accounts::AccountService::new(AccountEnvironment::from_map(map));
     assert!(state.state.runtime.set(registry).is_ok());

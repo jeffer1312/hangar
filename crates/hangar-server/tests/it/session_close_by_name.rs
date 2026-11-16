@@ -17,7 +17,7 @@ use hangar_server::runtime::codex_terminal::{WatchConfig, Watcher};
 use hangar_server::runtime::gateway::RuntimeRegistry;
 use serde_json::{Value, json};
 
-use crate::fake::{self, Fake, OWNER, SECRET};
+use crate::fake::{self, Fake, OWNER};
 
 /// Convidado com conta que vê as sessões sem dono, e um que não as vê.
 const GUEST: &str = "convidado-ana";
@@ -35,22 +35,10 @@ struct Env {
     server: std::net::SocketAddr,
     registry: Arc<RuntimeRegistry>,
     share: Arc<hangar_server::share::ShareState>,
-    upstream: std::net::SocketAddr,
     guests: Arc<hangar_server::login_guests::Service>,
 }
 
 impl Env {
-    /// A porta privada das pontes que o Python chama, sobre o mesmo registro.
-    async fn private(&self) -> std::net::SocketAddr {
-        let mut state = AppState::new(fake::config(self.upstream, "127.0.0.1"));
-        assert!(state.state.runtime.set(self.registry.clone()).is_ok());
-        state.share = Some(self.share.clone());
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let router = hangar_server::routes::terminal_router(Arc::new(state));
-        tokio::spawn(async move { axum::serve(listener, router.into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap() });
-        address
-    }
     fn sessions(&self, names: &[&str]) {
         std::fs::write(self.root.join("sessions"), names.iter().map(|n| format!("{n}\n")).collect::<String>()).unwrap();
     }
@@ -170,8 +158,8 @@ async fn env_full(adjust: impl FnOnce(&Arc<RuntimeRegistry>), display: &str, sta
     registry.bind_watcher(Arc::new(Watcher::new(WatchConfig { home: home.clone(), queue_dir: queue.clone(),
         mux: Mux::with_program(&tmux, Duration::from_secs(5)), mux_program: tmux.clone().into_os_string() })));
     adjust(&registry);
-    let (python, upstream) = fake::spawn_fake().await;
-    let mut state = AppState::new(fake::config(upstream, "127.0.0.1"));
+    let (python, _) = fake::spawn_fake().await;
+    let mut state = AppState::new(fake::config("127.0.0.1"));
     state.diag = python.bind_diary(state.diag.clone());
     // O nome fechado vai à pasta que o Arquivo lê: a conta desta prova, nunca a da máquina.
     let text = |path: &Path| path.to_string_lossy().into_owned();
@@ -195,7 +183,7 @@ async fn env_full(adjust: impl FnOnce(&Arc<RuntimeRegistry>), display: &str, sta
     assert!(state.state.runtime.set(registry.clone()).is_ok());
     state_adjust(&mut state);
     let server = fake::spawn_state(state).await;
-    Env { _dir: dir, root, home, queue, tmux, python, server, registry, share, upstream, guests }
+    Env { _dir: dir, root, home, queue, tmux, python, server, registry, share, guests }
 }
 
 async fn env() -> Env { env_with(|_| {}, "x").await }
@@ -509,19 +497,6 @@ async fn delete_r1_10_unreadable_closed_names_are_set_aside() {
     assert_eq!((names.as_object().map(|m| m.len()), &names["/r/a.jsonl"]["name"]), (Some(1), &json!("cxa")), "{names}");
 }
 
-/// O `kill` da ponte do Codex (o `DELETE` que entrou pelo Python, Connect e convidado) fecha aqui o Codex
-/// sem terminal parado: 200, nunca o 421 que devolvia ao Python.
-#[tokio::test]
-async fn delete_r1_3_codex_bridge_kill_closes_a_parked_headless() {
-    let e = env().await;
-    let sidecar = e.put_sidecar("codex", "cxb", json!({"name": "cxb", "provider": "codex", "headless": true, "key": "kkkkkkkk0000000e", "cano": null}));
-    e.put_queue("cxb");
-    let private = e.private().await;
-    let response = fake::client().post(format!("http://{private}/__hangar_server/codex/cxb/kill")).header("x-hangar-internal", SECRET).send().await.unwrap();
-    assert_eq!(response.status().as_u16(), 200);
-    assert!(!sidecar.exists() && !e.projection("cxb").exists());
-}
-
 /// D16: o cano do Codex sem terminal que ignora o SIGTERM segura o fechamento: 500 com código, e sidecar e
 /// fila ficam. Captura `codex_headless_cano_ignores_term`.
 #[cfg(target_os = "linux")]
@@ -711,8 +686,7 @@ async fn delete_r1_other_terminal_close_runs_the_owner_cleanups() {
         pane_address: "%1".into(), dirs: dirs.clone(), cwd: root.to_string_lossy().into_owned(), pane_pid: 1, agent_pid: i64::from(exited_pid()), agent_birth: 1.0,
         transcript: transcript.clone(), state_path: root.join("runtime/life-a.json"), lease_path: root.join("runtime/life-a.lock"),
         projection_dir: root.join("queue"), config_dirs: vec![root.clone()], created: 100.0 };
-    let upstream = crate::refused_address();
-    let mut state = AppState::new(fake::config(upstream, "127.0.0.1"));
+    let mut state = AppState::new(fake::config("127.0.0.1"));
     let (home, base) = (root.join("home").to_string_lossy().into_owned(), root.join("conta").to_string_lossy().into_owned());
     state.accounts = hangar_server::accounts::AccountService::new(hangar_server::accounts::environment::AccountEnvironment::from_map(
         [("HOME".to_owned(), home.clone()), ("USERPROFILE".to_owned(), home), ("CLAUDE_CONFIG_DIR".to_owned(), base)].into()));
@@ -783,8 +757,8 @@ async fn delete_r1_02_a_guest_closes_a_live_pi_through_the_route_with_the_owner_
         pane_address: "%1".into(), dirs: dirs.clone(), cwd: root.to_string_lossy().into_owned(), pane_pid: 1, agent_pid: i64::from(exited_pid()), agent_birth: 1.0,
         transcript: transcript.clone(), state_path: root.join("runtime/life-a.json"), lease_path: root.join("runtime/life-a.lock"),
         projection_dir: root.join("queue"), config_dirs: vec![root.clone()], created: 100.0 };
-    let (python, upstream) = fake::spawn_fake().await;
-    let mut state = AppState::new(fake::config(upstream, "127.0.0.1"));
+    let (python, _) = fake::spawn_fake().await;
+    let mut state = AppState::new(fake::config("127.0.0.1"));
     let (home, base) = (root.join("home").to_string_lossy().into_owned(), root.join("conta").to_string_lossy().into_owned());
     state.accounts = hangar_server::accounts::AccountService::new(hangar_server::accounts::environment::AccountEnvironment::from_map(
         [("HOME".to_owned(), home.clone()), ("USERPROFILE".to_owned(), home), ("CLAUDE_CONFIG_DIR".to_owned(), base)].into()));

@@ -29,11 +29,11 @@ async fn post_as(server: std::net::SocketAddr, route: &str, body: Value, token: 
 }
 
 async fn terminal_app() -> (Arc<Fake>, std::net::SocketAddr, Mods, Arc<FakePane>) {
-    let (python, upstream) = spawn_fake().await;
-    let state = AppState::new(config(upstream, "127.0.0.1"));
+    let (python, _) = spawn_fake().await;
+    let state = AppState::new(config("127.0.0.1"));
     let mods = state.mods.clone();
     let _ = state.state.runtime.set(registry(&mods));
-    let server = spawn_state(state).await;
+    let server = spawn_state_for(&python, state).await;
     let pane = Arc::new(FakePane::new(&mods, "t", "tmux-01-tres-paineis-150"));
     let life = mods.new_life();
     mods.attach_terminal("t", "proc-t", life, TerminalLink::new("t".into(), life, pane.clone(), mods.clone(), Limits::quick()));

@@ -54,22 +54,18 @@ struct Server {
 }
 
 async fn serve_with(link: FakeLink, signer: FakeSigner, pinned: Pinned, config: Value, code_wait: Duration) -> Server {
-    let (python, upstream) = spawn_fake().await;
+    let (python, _) = spawn_fake().await;
     let dir = tempfile::tempdir().unwrap();
     let (link, signer) = (Arc::new(link), Arc::new(signer));
-    let mut state = hangar_server::routes::AppState::new(config_for(upstream));
+    let mut state = hangar_server::routes::AppState::new(config("127.0.0.1"));
     state.device_install = Arc::new(
         DeviceInstall::new(link.clone(), signer.clone(), dir.path())
             .with_pinned(pinned)
             .with_config(Arc::new(move || config.clone()))
             .with_code_wait(code_wait),
     );
-    let addr = spawn_state(state).await;
+    let addr = spawn_state_for(&python, state).await;
     Server { url: format!("http://{addr}/api/device-install"), link, signer, dir, python }
-}
-
-fn config_for(upstream: std::net::SocketAddr) -> hangar_server::config::Config {
-    config(upstream, "127.0.0.1")
 }
 
 async fn serve(link: FakeLink, signer: FakeSigner) -> Server {

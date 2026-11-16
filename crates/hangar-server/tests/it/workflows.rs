@@ -17,7 +17,7 @@ use hangar_server::list::mux::Mux;
 use hangar_server::locate::ListLocate;
 use hangar_server::routes::{AppState, router};
 
-use super::fake::{OWNER, SECRET, config};
+use super::fake::{OWNER, config};
 
 async fn scene() -> (tempfile::TempDir, axum::Router, PathBuf) {
     let root = tempfile::tempdir().unwrap();

@@ -12,8 +12,8 @@ use hangar_server::routes::AppState;
 use hangar_server::runtime::gateway::RuntimeRegistry;
 use serde_json::{Value, json};
 
-use crate::fake::{self, Fake, SECRET};
-use crate::session_write_control::{open_headless, policy, send};
+use crate::fake::{self, Fake};
+use crate::session_write_control::{open_headless, send};
 #[cfg(unix)]
 use crate::session_write_control::{keys_sent, open_terminal, serve_with_interactions};
 
@@ -45,7 +45,6 @@ async fn serve(root: &Path, headless: bool) -> (Arc<Fake>, std::net::SocketAddr)
     let dirs = parse_dirs(&json!({"home": home, "claude": home.join(".claude"), "codex_home": home.join(".codex"),
         "pi_sessions": home.join(".pi/agent/sessions"), "omp_config": home.join(".omp"), "omp_agent": home.join(".omp/agent"),
         "kimi_home": home.join(".kimi-code")}).to_string());
-    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     // A pasta da prova: os sidecars e specs que o registro lê são os dela, nunca os da máquina.
     let env = hangar_server::accounts::environment::AccountEnvironment::from_map([("HOME".to_owned(), home.to_string_lossy().into_owned())].into());
     let registry = Arc::new(RuntimeRegistry::new("instance-test".into())
@@ -54,8 +53,8 @@ async fn serve(root: &Path, headless: bool) -> (Arc<Fake>, std::net::SocketAddr)
         headless_sidecar(&home, "h");
         open_headless(&registry, root, "h").await;
     }
-    let (python, upstream) = fake::spawn_fake().await;
-    let mut state = AppState::new(fake::config(upstream, "127.0.0.1"));
+    let (python, _) = fake::spawn_fake().await;
+    let mut state = AppState::new(fake::config("127.0.0.1"));
     // Convidados com conta: a Ana vê as sessões do dono, a Bia não.
     let guests = hangar_server::login_guests::Service::new(hangar_server::login_guests::Settings { guests: root.join("guests.json"),
         vault: root.join("vault.json"), runtime_config: root.join("runtime-config.json"), sync_enabled: false, bootstrap: String::new(),
@@ -218,7 +217,6 @@ async fn r4_19_login_guest_reaches_mode_and_model_in_rust() {
 #[tokio::test]
 async fn permissions_r4_05_claude_whose_pane_is_gone_is_409_with_a_code_and_no_key() {
     let dir = tempfile::tempdir().unwrap();
-    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let registry = Arc::new(RuntimeRegistry::new("instance-test".into())
         .with_processes(Arc::new(crate::runtime_open::RecipeProcesses("sid-1"))));
     let log = open_terminal(&registry, dir.path(), "t").await;

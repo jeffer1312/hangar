@@ -187,23 +187,6 @@ async fn g02_invalid_external_write_body_is_rejected_before_any_mutation() {
 }
 
 #[tokio::test]
-async fn retired_private_workspace_route_stays_absent() {
-    let dir = tempfile::tempdir().unwrap();
-    let (addr, _, _fixture) = fixture(dir.path()).await;
-    let c = client();
-    let health: Value = serde_json::from_str(&c.get(format!("http://{addr}/__hangar_server/health")).send().await.unwrap().text().await.unwrap()).unwrap();
-    let private = health["terminal_address"].as_str().unwrap();
-    for (secret, forwarded) in [("errado", "127.0.0.1"), (SECRET, "203.0.113.9")] {
-        let r = c.post(format!("http://{private}/__hangar_server/workspace")).header("x-hangar-internal", secret)
-            .header("x-forwarded-for", forwarded).body("corpo inválido").send().await.unwrap();
-        assert_eq!(r.status(), 404);
-    }
-    let r = c.post(format!("http://{private}/__hangar_server/workspace")).header("x-hangar-internal", SECRET)
-        .body(json!({"op":"head_info","args":{"cwd":dir.path()}}).to_string()).send().await.unwrap();
-    assert_eq!(r.status(), 404);
-}
-
-#[tokio::test]
 async fn workspace_responses_keep_cors_for_other_servers() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("ação.txt"), "original").unwrap();

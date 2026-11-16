@@ -2,7 +2,7 @@
 //! Connect e o fim do acesso. Listener de verdade contra o Python falso.
 #![cfg(unix)]
 use crate::connect_port::{GUEST, free_port, get, guest_server, wait_up};
-use crate::fake::{Fake, OWNER, client, config, spawn_fake, spawn_state};
+use crate::fake::{Fake, OWNER, client, config, spawn_fake, spawn_state_for};
 use crate::voice_support;
 
 use std::net::SocketAddr;
@@ -72,15 +72,15 @@ struct Entrance {
 
 async fn entrance(tune: impl FnOnce(&mut AppState, &Path)) -> Entrance {
     let dir = crate::physical_tempdir();
-    let (python, upstream) = spawn_fake().await;
-    let mut state = AppState::new(config(upstream, "127.0.0.1"));
+    let (python, _) = spawn_fake().await;
+    let mut state = AppState::new(config("127.0.0.1"));
     let store = Arc::new(Store::new(dir.path().join("connect"), Some(identity())));
     state.connect_devices = store.clone();
     let connect = free_port();
     state.connect = Some(connect);
     tune(&mut state, dir.path());
     let auth = state.auth.clone();
-    let main = spawn_state(state).await;
+    let main = spawn_state_for(&python, state).await;
     wait_up(connect).await;
     Entrance { python, main, connect, store, auth, dir }
 }

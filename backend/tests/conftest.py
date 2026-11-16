@@ -201,8 +201,6 @@ def _diario_isolado():
     import logging
     from app import diag, log_paths
     original = log_paths.base
-    old_sources = diag._pastas_legadas
-    old_logs = diag._logs_legados
     loggers = [logging.getLogger(name) for name in ("hangar", "app", "uvicorn.error", "asyncio")]
     handlers = {logger: set(logger.handlers) for logger in loggers}
     levels = {logger: logger.level for logger in loggers}
@@ -210,8 +208,6 @@ def _diario_isolado():
         v = os.environ.get("CLAUDE_CONFIG_DIR")
         return Path(v) / "logs" if v and v != _CONFIG_DIR_HERDADO else _DIARIO_DE_TESTE
     log_paths.base = _base_de_teste
-    diag._pastas_legadas = lambda: []
-    diag._logs_legados = lambda: set()
     yield
     for logger in loggers:
         logger.setLevel(levels[logger])
@@ -219,8 +215,6 @@ def _diario_isolado():
             logger.removeHandler(handler)
             handler.close()
     log_paths.base = original
-    diag._pastas_legadas = old_sources
-    diag._logs_legados = old_logs
 
 
 @pytest.fixture

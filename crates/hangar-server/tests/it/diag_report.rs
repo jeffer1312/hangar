@@ -55,7 +55,6 @@ impl Fixture {
         let worker = Arc::new(Worker { status: Mutex::new(status), refusal: Mutex::new("x"), reports: Mutex::default(), diaries: Mutex::default() });
         let (worker_addr, worker_task) = serve(Router::new().route("/api/relatorio", post(report))
             .route("/api/relatorio/diario", put(diary)).with_state(worker.clone())).await;
-        let (upstream, python) = serve(Router::new().fallback(|| async { "python" })).await;
         let mut state = AppState::new(Config {
             listen: "127.0.0.1:0".parse().unwrap(), internal_secret: "diag-internal".into(),
             auth_token: OWNER.into(), log_path: None, trusted: TrustedHosts::parse("127.0.0.1"),
@@ -66,7 +65,7 @@ impl Fixture {
         ].into()));
         state.diag_report_base = base.unwrap_or_else(|| format!("http://{worker_addr}"));
         let (addr, server) = serve(hangar_server::routes::router(Arc::new(state))).await;
-        Fixture { base: format!("http://{addr}"), worker, _home: home, tasks: vec![worker_task, python, server] }
+        Fixture { base: format!("http://{addr}"), worker, _home: home, tasks: vec![worker_task, server] }
     }
 
     async fn post(&self, owner: bool, headers: &[(&str, &str)], body: Value) -> (u16, Value) {

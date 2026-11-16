@@ -15,9 +15,9 @@ async fn setup(lines: std::ops::Range<usize>, stem: &str) -> (tempfile::TempDir,
     let dir = tempfile::tempdir().unwrap();
     let jsonl = dir.path().join(format!("{stem}.jsonl"));
     let offs = append_lines(&jsonl, lines);
-    let (fake, up) = spawn_fake().await;
+    let (fake, _) = spawn_fake().await;
     fake.set_info(info_json("claude", &jsonl));
-    let srv = spawn_server_with_diary(config(up, "127.0.0.1"), &fake).await;
+    let srv = spawn_server_with_diary(config("127.0.0.1"), &fake).await;
     (dir, jsonl, offs, fake, srv)
 }
 
@@ -161,9 +161,9 @@ async fn codex_clear_resets_history_before_the_new_rollout_exists() {
     let message = |text:&str|format!("{}\n",json!({"type":"response_item","payload":{"type":"message","role":"user",
         "content":[{"type":"input_text","text":text}]}}));
     std::fs::write(&old,message("mensagem anterior")).unwrap();
-    let (fake,up) = spawn_fake().await;
+    let (fake,_) = spawn_fake().await;
     fake.set_info(info_json("codex",&old));
-    let srv = spawn_server(config(up,"127.0.0.1")).await;
+    let srv = spawn_server_for(&fake, config("127.0.0.1")).await;
     let mut events = sse(open_events(srv,"s","",&[]).await);
     assert!(messages(&mut events,1).await[0].data.contains("mensagem anterior"));
     fake.set_info(info_json("codex",&new));

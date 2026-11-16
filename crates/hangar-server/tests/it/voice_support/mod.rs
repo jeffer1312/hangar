@@ -26,8 +26,8 @@ pub async fn server_with_accounts(home: &Path, accounts: Vec<String>) -> SocketA
 
 /// Também devolve o Python falso para provar que a borda da voz não encaminhou o pedido.
 pub async fn server_with_accounts_and_python(home: &Path, accounts: Vec<String>) -> (SocketAddr, Arc<Fake>) {
-    let (python, upstream) = fake::spawn_fake().await;
-    let mut state = hangar_server::routes::AppState::new(fake::config(upstream, ""));
+    let (python, _) = fake::spawn_fake().await;
+    let mut state = hangar_server::routes::AppState::new(fake::config(""));
     state.voice = hub(home, home.join(".claude"), None, accounts, GRACE);
     (fake::spawn_state(state).await, python)
 }
@@ -123,8 +123,8 @@ async fn build_with(account: Option<&str>, own_api: bool, failing: bool, grace: 
             "organizer": {"direct": {"effort": "low"}, "plan": {"effort": "low"}}}).to_string()).unwrap();
     }
     let (seen, push): (Seen, Push) = (Arc::default(), Arc::default());
-    let (python, upstream) = fake::spawn_fake().await;
-    let mut state = hangar_server::routes::AppState::new(fake::config(upstream, ""));
+    let (python, _) = fake::spawn_fake().await;
+    let mut state = hangar_server::routes::AppState::new(fake::config(""));
     let spawn = if failing { failing_app_server() } else { fake_app_servers(seen.clone(), push.clone()) };
     state.voice = hub(home.path(), claude_dir, Some(spawn), vec!["default".into()], grace);
     // Nunca os peers reais da máquina.

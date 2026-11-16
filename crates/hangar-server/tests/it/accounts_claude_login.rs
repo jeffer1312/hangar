@@ -97,28 +97,6 @@ async fn login_routes_reach_the_window_with_the_decoded_label() {
     server.abort();
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn http_probe_process() {
-    let Ok(upstream) = std::env::var("ACCOUNT_HTTP_UPSTREAM") else {
-        return;
-    };
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let state = AppState::new(Config {
-        listen: addr,
-        internal_secret: "contract-internal".into(),
-        auth_token: "contract-only".into(),
-        log_path: None,
-        trusted: TrustedHosts::parse("127.0.0.1"),
-    });
-    println!("ACCOUNT_HTTP:{addr}");
-    use std::io::Write;
-    std::io::stdout().flush().unwrap();
-    hangar_server::serve_until_with_state(listener, state, std::future::pending::<()>())
-        .await
-        .unwrap();
-}
-
 #[tokio::test]
 async fn open_attempt_keeps_its_window_and_guard_after_300_seconds() {
     use hangar_server::accounts::{AccountService, GuardMode, Provider, environment::AccountEnvironment};

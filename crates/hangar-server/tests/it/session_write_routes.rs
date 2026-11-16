@@ -104,10 +104,10 @@ async fn registry() -> Arc<RuntimeRegistry> {
 
 /// Servidor com o runtime ligado (como `serve_until_with_state` faz) e o Python falso.
 async fn serve_with(registry: Option<Arc<RuntimeRegistry>>) -> (Arc<Fake>, std::net::SocketAddr) {
-    let (python, upstream) = spawn_fake().await;
-    let state = AppState::new(config(upstream, "127.0.0.1"));
+    let (python, _) = spawn_fake().await;
+    let state = AppState::new(config("127.0.0.1"));
     if let Some(registry) = registry { assert!(state.state.runtime.set(registry).is_ok()); }
-    (python, spawn_state(state).await)
+    (python, spawn_state_for(&python, state).await)
 }
 
 async fn post(server: std::net::SocketAddr, route: &str, body: &str, token: &str) -> (u16, String) {
@@ -156,11 +156,11 @@ async fn without_a_runtime_every_write_is_runtime_unavailable_and_never_python()
 /// antes da R2; separa a subida do servidor sem registro (`runtime_unavailable`, o teste acima).
 #[tokio::test]
 async fn while_starting_every_write_is_server_starting_and_never_python() {
-    let (python, upstream) = spawn_fake().await;
-    let mut state = AppState::new(config(upstream, "127.0.0.1"));
+    let (python, _) = spawn_fake().await;
+    let mut state = AppState::new(config("127.0.0.1"));
     state.startup = hangar_server::startup::Readiness::pending();
     assert!(state.state.runtime.set(registry().await).is_ok());
-    let server = spawn_state(state).await;
+    let server = spawn_state_for(&python, state).await;
     for (route, answer) in every_write(&python, server).await {
         assert_eq!(answer, (503, json!({"detail": "server_starting"})), "{route}");
     }
@@ -174,15 +174,15 @@ async fn codex_commands_while_starting_and_without_a_runtime_are_503_with_a_code
     std::fs::create_dir_all(dir.path().join(".hangar/codex-sessions")).unwrap();
     std::fs::write(dir.path().join(".hangar/codex-sessions/s.json"), r#"{"name":"s","provider":"codex","headless":true}"#).unwrap();
     for starting in [true, false] {
-        let (python, upstream) = spawn_fake().await;
-        let mut state = AppState::new(config(upstream, "127.0.0.1"));
+        let (python, _) = spawn_fake().await;
+        let mut state = AppState::new(config("127.0.0.1"));
         state.accounts = hangar_server::accounts::AccountService::new(hangar_server::accounts::environment::AccountEnvironment::from_map(
             [("HOME".to_owned(), dir.path().to_string_lossy().into_owned()), ("PATH".to_owned(), String::new())].into()));
         if starting {
             state.startup = hangar_server::startup::Readiness::pending();
             assert!(state.state.runtime.set(registry().await).is_ok());
         }
-        let server = spawn_state(state).await;
+        let server = spawn_state_for(&python, state).await;
         let response = client().get(format!("http://{server}/api/sessions/s/commands")).header("authorization", format!("Bearer {OWNER}")).send().await.unwrap();
         let status = response.status().as_u16();
         let body: Value = serde_json::from_str(&response.text().await.unwrap()).unwrap();
@@ -264,11 +264,11 @@ async fn gate_closed_past_the_wait_answers_409_busy() {
     let (dir, registry) = (tempfile::tempdir().unwrap(), registry().await);
     open_entry(&registry, dir.path(), "k", "s").await;
     registry.ingress().close("s", Duration::from_secs(1)).await.unwrap();
-    let (python, upstream) = spawn_fake().await;
-    let mut state = AppState::new(config(upstream, "127.0.0.1"));
+    let (python, _) = spawn_fake().await;
+    let mut state = AppState::new(config("127.0.0.1"));
     state.write_gate_wait = Duration::from_millis(100);
     assert!(state.state.runtime.set(registry).is_ok());
-    let server = spawn_state(state).await;
+    let server = spawn_state_for(&python, state).await;
     let (status, text) = post(server, "input", r#"{"text":"oi"}"#, OWNER).await;
     assert_eq!(status, 409);
     let body: Value = serde_json::from_str(&text).unwrap();
@@ -284,11 +284,11 @@ async fn btw_with_the_gate_closed_is_409_busy_before_the_body() {
     let (dir, registry) = (tempfile::tempdir().unwrap(), registry().await);
     open_entry(&registry, dir.path(), "k", "s").await;
     registry.ingress().close("s", Duration::from_secs(1)).await.unwrap();
-    let (python, upstream) = spawn_fake().await;
-    let mut state = AppState::new(config(upstream, "127.0.0.1"));
+    let (python, _) = spawn_fake().await;
+    let mut state = AppState::new(config("127.0.0.1"));
     state.write_gate_wait = Duration::from_millis(100);
     assert!(state.state.runtime.set(registry).is_ok());
-    let server = spawn_state(state).await;
+    let server = spawn_state_for(&python, state).await;
     let (status, text) = post(server, "btw", "não é json", OWNER).await;
     let body: Value = serde_json::from_str(&text).unwrap();
     assert_eq!((status, body["detail"]["code"].as_str()), (409, Some("session_transfer_busy")));

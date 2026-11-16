@@ -68,45 +68,6 @@ pub async fn public(state: Arc<crate::routes::AppState>, request: Request) -> Re
     response(result)
 }
 
-pub async fn private(
-    axum::extract::State(state): axum::extract::State<Arc<crate::routes::AppState>>,
-    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    request: Request,
-) -> Response {
-    if !crate::workspace_routes::private_ok(&state, peer, request.headers()) {
-        return StatusCode::NOT_FOUND.into_response();
-    }
-    #[derive(serde::Deserialize)]
-    #[serde(deny_unknown_fields)]
-    struct Input {
-        force: bool,
-        cached_only: bool,
-        invalidate: Option<String>,
-    }
-    let Ok(bytes) = axum::body::to_bytes(request.into_body(), 16384).await else {
-        return StatusCode::BAD_REQUEST.into_response();
-    };
-    let Ok(body) = serde_json::from_slice::<Input>(&bytes) else {
-        return StatusCode::BAD_REQUEST.into_response();
-    };
-    if let Some(id) = body.invalidate {
-        return match state.accounts.invalidate_quota(&id).await {
-            Ok(()) => Json(json!({"ok":true})).into_response(),
-            Err(_) => response(Err(AccountError::io())),
-        };
-    }
-    let bridge = match super::http::bridge(&state) {
-        Ok(bridge) => bridge,
-        Err(error) => return response(Err(error)),
-    };
-    response(
-        state
-            .accounts
-            .quotas(Some(bridge), body.force, body.cached_only)
-            .await,
-    )
-}
-
 #[derive(Clone, Default)]
 pub struct Quotas {
     pub cache: Arc<Mutex<Option<cache::QuotaCache>>>,

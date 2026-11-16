@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use fake::{OWNER, SECRET, client};
+use fake::{OWNER, client};
 use hangar_server::groups::orq::PythonOrq;
 use hangar_server::groups::service::GroupService;
 use hangar_server::groups::store::PairDir;
@@ -48,8 +48,8 @@ async fn server_built(root: &Path, n: usize, orq: Option<Arc<dyn hangar_server::
     let dirs = parse_dirs(&json!({"home": home, "claude": home.join(".claude"), "codex_home": home.join(".codex"),
         "pi_sessions": home.join(".pi/agent/sessions"), "omp_config": home.join(".omp"),
         "omp_agent": home.join(".omp/agent"), "kimi_home": home.join(".kimi-code")}).to_string());
-    let (python, upstream) = fake::spawn_fake().await;
-    let mut state = AppState::new(fake::config(upstream, ""));
+    let (python, _) = fake::spawn_fake().await;
+    let mut state = AppState::new(fake::config(""));
     state.diag = python.bind_diary(state.diag.clone());
     state.accounts = hangar_server::accounts::AccountService::new(
         hangar_server::accounts::environment::AccountEnvironment::from_map(
@@ -341,8 +341,8 @@ async fn stranger_gets_401_from_rust_and_cross_machine_stays_in_rust() {
 /// groups_bridge_off`, em todas as rotas de grupo; quem não é o dono leva o 401 do Rust. Nada vai ao Python.
 #[tokio::test(flavor = "multi_thread")]
 async fn r4_15_without_group_folders_every_group_route_is_503_from_rust() {
-    let (python, upstream) = fake::spawn_fake().await;
-    let mut state = AppState::new(fake::config(upstream, ""));
+    let (python, _) = fake::spawn_fake().await;
+    let mut state = AppState::new(fake::config(""));
     state.groups = None;
     let addr = fake::spawn_state(state).await;
     let off = json!({"detail": {"code": "erro_grupo_indisponivel", "params": {"detalhe": "groups_bridge_off"}, "msg": "os grupos estão indisponíveis agora"}});

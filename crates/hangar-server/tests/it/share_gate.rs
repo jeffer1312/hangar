@@ -555,8 +555,8 @@ async fn inbound_guest_header_never_reaches_the_handler() {
 #[tokio::test]
 async fn inbound_guest_header_grants_nothing() {
     use crate::fake::*;
-    let (fake, up) = spawn_fake().await;
-    let srv = spawn_server(config(up, "127.0.0.1")).await;
+    let (fake, _) = spawn_fake().await;
+    let srv = spawn_server_for(&fake, config("127.0.0.1")).await;
     let r = client().get(format!("http://{srv}/api/diag/arquivo")).header("x-hangar-guest", "forjado")
         .send().await.unwrap();
     assert_eq!(r.status(), 401);

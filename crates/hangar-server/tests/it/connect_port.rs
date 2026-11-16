@@ -35,8 +35,8 @@ pub(crate) fn device(state: &mut AppState) -> String {
 }
 
 async fn start(addr: SocketAddr, trusted: &str) -> (Arc<Fake>, SocketAddr, String) {
-    let (python, upstream) = spawn_fake().await;
-    let mut state = AppState::new(config(upstream, trusted));
+    let (python, _) = spawn_fake().await;
+    let mut state = AppState::new(config(trusted));
     let home = Arc::new(tempfile::tempdir().unwrap());
     let generated = home.path().join(".local/state/quickshell/user/generated");
     std::fs::create_dir_all(&generated).unwrap();
@@ -48,7 +48,7 @@ async fn start(addr: SocketAddr, trusted: &str) -> (Arc<Fake>, SocketAddr, Strin
     ));
     state.connect = Some(addr);
     let token = device(&mut state);
-    (python, spawn_state(state).await, token)
+    (python, spawn_state_for(&python, state).await, token)
 }
 
 /// Python falso, porta principal, entrada do Connect já aberta, servidas pelo `select!` do `serve`, e uma credencial de aparelho.
@@ -140,8 +140,8 @@ async fn device_install_is_refused_through_connect() {
 /// Entrada do Connect com um convidado de login (`GUEST`) que vê as sessões sem dono.
 pub(crate) async fn guest_server() -> (tempfile::TempDir, Arc<Fake>, SocketAddr) {
     let home = crate::physical_tempdir();
-    let (python, upstream) = spawn_fake().await;
-    let mut state = AppState::new(config(upstream, "127.0.0.1"));
+    let (python, _) = spawn_fake().await;
+    let mut state = AppState::new(config("127.0.0.1"));
     let root = home.path().to_str().unwrap();
     state.accounts = AccountService::new(AccountEnvironment::from_pairs([("HOME", root), ("USERPROFILE", root)]));
     let service = Service::new(Settings { guests: home.path().join("guests.json"), vault: home.path().join("vault.json"),
@@ -152,7 +152,7 @@ pub(crate) async fn guest_server() -> (tempfile::TempDir, Arc<Fake>, SocketAddr)
     state.login_guests = Arc::new(service);
     let connect = free_port();
     state.connect = Some(connect);
-    spawn_state(state).await;
+    spawn_state_for(&python, state).await;
     wait_up(connect).await;
     (home, python, connect)
 }
@@ -229,8 +229,7 @@ async fn busy_connect_port_keeps_the_owner_listeners_up() {
 
 #[tokio::test]
 async fn connect_entrance_opens_only_on_loopback() {
-    let (_python, upstream) = spawn_fake().await;
-    let state = Arc::new(AppState::new(config(upstream, "127.0.0.1")));
+    let state = Arc::new(AppState::new(config("127.0.0.1")));
     let refused = serve_connect("0.0.0.0:0".parse().unwrap(), state, None).await.unwrap_err();
     assert_eq!(refused.kind(), std::io::ErrorKind::PermissionDenied);
     assert_eq!(connect_listen("0.0.0.0:8765".parse().unwrap()), Some("127.0.0.1:8768".parse().unwrap()));

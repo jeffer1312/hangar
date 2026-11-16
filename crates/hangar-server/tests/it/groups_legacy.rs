@@ -15,7 +15,7 @@ use std::time::Duration;
 use axum::Router;
 use axum::extract::Request;
 use axum::response::Response;
-use fake::{OWNER, SECRET, client};
+use fake::{OWNER, client};
 use hangar_server::groups::orq::PythonOrq;
 use hangar_server::groups::peers::{PeerBook, PeerClient};
 use hangar_server::groups::service::GroupService;
@@ -40,8 +40,8 @@ async fn machine(root: &Path, id: &str) -> Machine {
     let dirs = parse_dirs(&json!({"home": home, "claude": home.join(".claude"), "codex_home": home.join(".codex"),
         "pi_sessions": home.join(".pi/agent/sessions"), "omp_config": home.join(".omp"),
         "omp_agent": home.join(".omp/agent"), "kimi_home": home.join(".kimi-code")}).to_string());
-    let (python, upstream) = fake::spawn_fake().await;
-    let mut state = AppState::new(fake::config(upstream, ""));
+    let (python, _) = fake::spawn_fake().await;
+    let mut state = AppState::new(fake::config(""));
     state.diag = python.bind_diary(state.diag.clone());
     state.accounts = hangar_server::accounts::AccountService::new(
         hangar_server::accounts::environment::AccountEnvironment::from_map(

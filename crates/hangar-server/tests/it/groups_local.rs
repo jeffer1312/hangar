@@ -448,7 +448,7 @@ async fn rename_failure_restores_the_group() {
 #[tokio::test]
 async fn fusion_with_unreadable_loser_contract_still_joins() {
     let tmp = tempfile::tempdir().unwrap();
-    let (python, _upstream) = crate::fake::spawn_fake().await;
+    let (python, _) = crate::fake::spawn_fake().await;
     let (svc, dir) = service(&tmp, FakeOrq::new(OrqPhase::Ended, None));
     let svc = svc.with_diary(python.diagnostics());
     let first = svc.join(owned("a", &["b"], false)).await.unwrap();

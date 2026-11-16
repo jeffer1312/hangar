@@ -14,7 +14,7 @@ async fn runtime_boot_child() {
     std::fs::write(&dotenv,"CP_EDITOR=vim\nCP_SCAN_ROOTS=\n").unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
-    let mut config = crate::fake::config(crate::refused_address(), "");
+    let mut config = crate::fake::config("");
     config.listen = address;
     let mut state = AppState::new(config);
     state.accounts = AccountService::new(AccountEnvironment::from_map([
@@ -102,7 +102,7 @@ async fn startup_barrier_child() {
     let home = std::path::PathBuf::from(std::env::var_os("HOME").unwrap());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
-    let mut config = crate::fake::config(crate::refused_address(), "");
+    let mut config = crate::fake::config("");
     config.listen = address;
     let mut state = AppState::new(config);
     state.accounts = AccountService::new(AccountEnvironment::from_map([
@@ -123,9 +123,7 @@ async fn startup_barrier_child() {
     let client = reqwest::Client::builder().timeout(Duration::from_secs(2)).build().unwrap();
     let health = client.get(format!("http://{address}/__hangar_server/health")).send().await.unwrap();
     assert_eq!(health.status(),200,"saúde disponível durante preparação bloqueada");
-    let health: Value = health.json().await.unwrap();
-    let terminal = health["terminal_address"].as_str().unwrap();
-    for url in [format!("http://{address}/api/config"), format!("http://{terminal}/__hangar_server/accounts"), format!("http://{private_address}/runtime/op")] {
+    for url in [format!("http://{address}/api/config"), format!("http://{private_address}/runtime/op")] {
         let response = client.post(url).header("x-hangar-internal","fixture").header("x-hangar-runtime-instance","fixture").send().await.unwrap();
         assert_eq!(response.status(),503);
         assert_eq!(response.json::<Value>().await.unwrap(),serde_json::json!({"detail":"server_starting"}));

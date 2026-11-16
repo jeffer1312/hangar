@@ -507,13 +507,12 @@ async fn late_wire_reply_resolves_parent() {
     assert_eq!(server.await.unwrap(),0);
 }
 
-/// Cano Claude falso que só conta o que chega ao fio; a política aponta para uma porta fechada.
+/// Cano Claude falso que só conta o que chega ao fio, sem política alcançável.
 /// Conta as escritas da conversa; o `initialize` que a subida pede sozinha só avisa o `Notify`.
 async fn setup_claude_unreachable_policy(initialized:bool) -> (RuntimeHandle,tokio::task::JoinHandle<usize>,tempfile::TempDir,std::sync::Arc<tokio::sync::Notify>) {
     let dir = tempfile::tempdir().unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
-    let closed = crate::refused_address();
     let booted = std::sync::Arc::new(tokio::sync::Notify::new());
     let boot_signal = booted.clone();
     let server = tokio::spawn(async move {
@@ -2625,26 +2624,17 @@ mod cano_reconnect {
         Waits { normal:normal.iter().copied().map(ms).collect(),pending:pending.iter().copied().map(ms).collect(),stall:ms(stall),output_lost:Duration::from_secs(60) }
     }
 
-    enum DiaryTarget { Address(std::net::SocketAddr), Local(hangar_server::diag::DiagClient) }
-    impl From<std::net::SocketAddr> for DiaryTarget { fn from(address:std::net::SocketAddr)->Self { Self::Address(address) } }
-    impl From<hangar_server::diag::DiagClient> for DiaryTarget { fn from(client:hangar_server::diag::DiagClient)->Self { Self::Local(client) } }
-    impl DiaryTarget {
-        fn client(self)->hangar_server::diag::DiagClient { match self {
-            Self::Address(address)=>hangar_server::diag::DiagClient::new().with_diary(None),
-            Self::Local(client)=>client,
-        } }
-    }
+    fn no_diary()->hangar_server::diag::DiagClient { hangar_server::diag::DiagClient::new().with_diary(None) }
 
-    async fn actor(dir:&std::path::Path,cano:&LiveCano,pid:u32,birth:Option<f64>,diag:impl Into<DiaryTarget>,waits:Waits)
+    async fn actor(dir:&std::path::Path,cano:&LiveCano,pid:u32,birth:Option<f64>,diag:hangar_server::diag::DiagClient,waits:Waits)
         -> (RuntimeHandle,tokio::sync::broadcast::Receiver<RuntimeEvent>) {
         actor_with(dir,cano,pid,birth,diag,waits,false,true).await
     }
 
     /// `cards`: com a loja de interações, os cartões publicados levam o ID que os responde.
     /// `initialized: false`: o ator manda o `initialize` na abertura.
-    async fn actor_with(dir:&std::path::Path,cano:&LiveCano,pid:u32,birth:Option<f64>,diag:impl Into<DiaryTarget>,waits:Waits,cards:bool,initialized:bool)
+    async fn actor_with(dir:&std::path::Path,cano:&LiveCano,pid:u32,birth:Option<f64>,diag:hangar_server::diag::DiagClient,waits:Waits,cards:bool,initialized:bool)
         -> (RuntimeHandle,tokio::sync::broadcast::Receiver<RuntimeEvent>) {
-        let diag: DiaryTarget = diag.into();
         let target = RuntimeTarget { key:"key".into(),generation:1,name:"session".into(),provider:"claude".into(),
             metadata:json!({"name":"session","headless":true,"session_id":"sid-1","initialized":initialized}),
             binding:CanoBinding { pid,escuta:cano.escuta.clone(),token:CANO_TOKEN.into(),versao:2 },
@@ -2654,7 +2644,7 @@ mod cano_reconnect {
         let store = Store::open(&target.state_path,&target.projection_dir,State::new("key",1,"session",vec![])).unwrap();
         let (events,rx) = tokio::sync::broadcast::channel(256);
         let engine = test_engine("claude",target.metadata.clone(),1,ClockSample { monotonic_s:0.0,epoch_s:1_800_000_000.0 }).unwrap()
-            .with_policy(PolicyClient::new().with_diagnostics(diag.client())).with_publisher(events)
+            .with_policy(PolicyClient::new().with_diagnostics(diag)).with_publisher(events)
             .with_reconnect_waits(waits.normal,waits.pending,waits.stall).with_cano_check(ms(100)).with_cano_birth(birth).with_output_lost(waits.output_lost);
         let engine = if cards { engine.with_interactions("key".into(),Arc::new(hangar_server::interactions::InteractionStore::default())).unwrap() } else { engine };
         let connection = cano::connect(&target.binding).await.unwrap();
@@ -2694,7 +2684,7 @@ mod cano_reconnect {
         let dir = tempfile::tempdir().unwrap();
         let proc = sleeper(dir.path());
         let cano = live_cano(|_|Answer::Serve).await;
-        let (handle,mut rx) = actor(dir.path(),&cano,proc.0.id(),birth(&proc),crate::refused_address(),waits(&[0,50],&[0,50],60_000)).await;
+        let (handle,mut rx) = actor(dir.path(),&cano,proc.0.id(),birth(&proc),no_diary(),waits(&[0,50],&[0,50],60_000)).await;
         wait_for("abertura",||cano.accepts() == 1).await;
         cano.aberto.store(true,Ordering::Release);
         cano.cut.notify_one();
@@ -2711,7 +2701,7 @@ mod cano_reconnect {
         let dir = tempfile::tempdir().unwrap();
         let proc = sleeper(dir.path());
         let cano = live_cano(|n|if [2,3].contains(&n) { Answer::Refuse } else { Answer::Serve }).await;
-        let (handle,_rx) = actor(dir.path(),&cano,proc.0.id(),birth(&proc),crate::refused_address(),waits(&[0,300,600],&[0,300,600],60_000)).await;
+        let (handle,_rx) = actor(dir.path(),&cano,proc.0.id(),birth(&proc),no_diary(),waits(&[0,300,600],&[0,300,600],60_000)).await;
         wait_for("abertura",||cano.accepts() == 1).await;
         cano.cut.notify_one();
         tokio::time::timeout(Duration::from_secs(5),async { while cano.accepts() < 4 { tokio::time::sleep(ms(10)).await; } }).await.expect("o cano aceita na terceira tentativa");
@@ -2728,7 +2718,7 @@ mod cano_reconnect {
         let dir = tempfile::tempdir().unwrap();
         let proc = sleeper(dir.path());
         let cano = live_cano(|n|if n == 2 { Answer::Refuse } else { Answer::Serve }).await;
-        let (handle,_rx) = actor(dir.path(),&cano,proc.0.id(),birth(&proc),crate::refused_address(),waits(&[0,500],&[0,500],60_000)).await;
+        let (handle,_rx) = actor(dir.path(),&cano,proc.0.id(),birth(&proc),no_diary(),waits(&[0,500],&[0,500],60_000)).await;
         wait_for("abertura",||cano.accepts() == 1).await;
         cano.cut.notify_one();
         wait_for("primeira tentativa recusada",||cano.accepts() == 2).await;
@@ -2747,7 +2737,7 @@ mod cano_reconnect {
         let dir = tempfile::tempdir().unwrap();
         let proc = sleeper(dir.path());
         let cano = live_cano(|n|if n == 2 { Answer::Refuse } else { Answer::Serve }).await;
-        let (handle,_rx) = actor(dir.path(),&cano,proc.0.id(),birth(&proc),crate::refused_address(),waits(&[0,30_000],&[0,30_000],60_000)).await;
+        let (handle,_rx) = actor(dir.path(),&cano,proc.0.id(),birth(&proc),no_diary(),waits(&[0,30_000],&[0,30_000],60_000)).await;
         wait_for("abertura",||cano.accepts() == 1).await;
         cano.cut.notify_one();
         wait_for("primeira tentativa recusada",||cano.accepts() == 2).await;
@@ -2764,7 +2754,7 @@ mod cano_reconnect {
         let dir = tempfile::tempdir().unwrap();
         let proc = sleeper(dir.path());
         let cano = live_cano(|n|if n == 1 { Answer::Serve } else { Answer::Refuse }).await;
-        let (handle,mut rx) = actor(dir.path(),&cano,proc.0.id(),birth(&proc),crate::refused_address(),waits(&[0,30_000],&[0,30_000],60_000)).await;
+        let (handle,mut rx) = actor(dir.path(),&cano,proc.0.id(),birth(&proc),no_diary(),waits(&[0,30_000],&[0,30_000],60_000)).await;
         wait_for("abertura",||cano.accepts() == 1).await;
         cano.cut.notify_one();
         wait_for("primeira tentativa recusada",||cano.accepts() == 2).await;
@@ -2827,7 +2817,7 @@ mod cano_reconnect {
         let dir = tempfile::tempdir().unwrap();
         let proc = sleeper(dir.path());
         let cano = live_cano(|n|if [2,3,5].contains(&n) { Answer::Refuse } else { Answer::Serve }).await;
-        let (handle,_rx) = actor(dir.path(),&cano,proc.0.id(),birth(&proc),crate::refused_address(),waits(&[0,5_000],&[0,100],60_000)).await;
+        let (handle,_rx) = actor(dir.path(),&cano,proc.0.id(),birth(&proc),no_diary(),waits(&[0,5_000],&[0,100],60_000)).await;
         wait_for("abertura",||cano.accepts() == 1).await;
         cano.cut.notify_one();
         wait_for("primeira tentativa recusada",||cano.accepts() == 2).await;
@@ -2848,7 +2838,7 @@ mod cano_reconnect {
         let dir = tempfile::tempdir().unwrap();
         let proc = sleeper(dir.path());
         let cano = live_cano(|n|if [2,3].contains(&n) { Answer::Refuse } else { Answer::Serve }).await;
-        let (handle,_rx) = actor(dir.path(),&cano,proc.0.id(),birth(&proc),crate::refused_address(),waits(&[0,3_600_000],&[0,2_000],300)).await;
+        let (handle,_rx) = actor(dir.path(),&cano,proc.0.id(),birth(&proc),no_diary(),waits(&[0,3_600_000],&[0,2_000],300)).await;
         wait_for("abertura",||cano.accepts() == 1).await;
         cano.cut.notify_one();
         wait_for("primeira tentativa recusada",||cano.accepts() == 2).await;
@@ -2867,7 +2857,7 @@ mod cano_reconnect {
         let dir = tempfile::tempdir().unwrap();
         let proc = sleeper(dir.path());
         let cano = live_cano(|_|Answer::Serve).await;
-        let (handle,_rx) = actor_with(dir.path(),&cano,proc.0.id(),birth(&proc),crate::refused_address(),waits(&[0,50],&[0,50],60_000),false,false).await;
+        let (handle,_rx) = actor_with(dir.path(),&cano,proc.0.id(),birth(&proc),no_diary(),waits(&[0,50],&[0,50],60_000),false,false).await;
         let initializes = ||cano.frames.lock().unwrap().iter().filter(|frame|frame["request"]["subtype"] == "initialize").count();
         wait_for("o initialize da abertura sai",||initializes() == 1).await;
         cano.cut.notify_one();
@@ -2907,7 +2897,7 @@ mod cano_reconnect {
         let proc = sleeper(dir.path());
         let request = json!({"type":"control_request","request_id":7,"request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"ls"}}});
         let cano = live_cano_with(|_|Answer::Serve,vec![request]).await;
-        let (handle,_rx) = actor_with(dir.path(),&cano,proc.0.id(),birth(&proc),crate::refused_address(),waits(&[0,50],&[0,50],60_000),true,true).await;
+        let (handle,_rx) = actor_with(dir.path(),&cano,proc.0.id(),birth(&proc),no_diary(),waits(&[0,50],&[0,50],60_000),true,true).await;
         let before = state_until(&handle,"cartão da permissão",|state|state["interaction_id"].is_string()).await["interaction_id"].clone();
         cano.cut.notify_one();
         wait_for("religação",||cano.accepts() == 2).await;
@@ -2926,7 +2916,7 @@ mod cano_reconnect {
         let dir = tempfile::tempdir().unwrap();
         let proc = sleeper(dir.path());
         let cano = live_cano(|n|if n == 2 { Answer::Refuse } else { Answer::Serve }).await;
-        let (handle,_rx) = actor(dir.path(),&cano,proc.0.id(),birth(&proc),crate::refused_address(),waits(&[0,30_000],&[0,30_000],60_000)).await;
+        let (handle,_rx) = actor(dir.path(),&cano,proc.0.id(),birth(&proc),no_diary(),waits(&[0,30_000],&[0,30_000],60_000)).await;
         wait_for("abertura",||cano.accepts() == 1).await;
         cano.cut.notify_one();
         wait_for("primeira tentativa recusada",||cano.accepts() == 2).await;

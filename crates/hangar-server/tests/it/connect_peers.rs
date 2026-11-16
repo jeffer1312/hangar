@@ -1,7 +1,7 @@
 //! Máquinas da mesma conta: descoberta pelo serviço, ligação com credencial por direção e o que passa
 //! por ela. Serviço falso e duas máquinas de verdade em portas livres; nada toca o serviço real.
 use crate::connect_port::{free_port, wait_up};
-use crate::fake::{Fake, OWNER, client, config, spawn_fake, spawn_state};
+use crate::fake::{Fake, OWNER, client, config, spawn_fake, spawn_state_for};
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -110,8 +110,8 @@ async fn machine(id: &'static str, server_id: &str, service: SocketAddr) -> Mach
     std::fs::create_dir_all(&settings).unwrap();
     std::fs::write(settings.join("peers.json"), "{}").unwrap();
     std::fs::write(settings.join(".env"), "").unwrap();
-    let (python, upstream) = spawn_fake().await;
-    let mut app = AppState::with_server_id(config(upstream, "127.0.0.1"), server_id.to_owned());
+    let (python, _) = spawn_fake().await;
+    let mut app = AppState::with_server_id(config("127.0.0.1"), server_id.to_owned());
     let root = dir.path().to_str().unwrap();
     app.accounts = AccountService::new(AccountEnvironment::from_pairs([("HOME", root), ("USERPROFILE", root)]));
     let store = Arc::new(Store::new(connect_dir.clone(), Some(linked.identity().unwrap())));
@@ -119,7 +119,7 @@ async fn machine(id: &'static str, server_id: &str, service: SocketAddr) -> Mach
     app.connect_supervisor = Arc::new(Supervisor::new(connect_dir, dir.path().join("logs"), store.clone(), 1));
     let connect = free_port();
     app.connect = Some(connect);
-    let main = spawn_state(app).await;
+    let main = spawn_state_for(&python, app).await;
     wait_up(connect).await;
     Machine { id, main, connect, python, store, dir }
 }

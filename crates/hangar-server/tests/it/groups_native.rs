@@ -186,8 +186,8 @@ async fn promotion_rollback_names_each_unrestored_member_in_409_and_diary() {
 async fn orchestrator_identity_comes_from_a_live_run_not_the_suffix() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().join("home");
-    let (python, address) = fake::spawn_fake().await;
-    let mut state = AppState::new(fake::config(address, ""));
+    let (python, _) = fake::spawn_fake().await;
+    let mut state = AppState::new(fake::config(""));
     state.diag = python.bind_diary(state.diag.clone());
     state.accounts = hangar_server::accounts::AccountService::new(
         hangar_server::accounts::environment::AccountEnvironment::from_map(

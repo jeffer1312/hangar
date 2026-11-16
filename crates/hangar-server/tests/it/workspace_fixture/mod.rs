@@ -113,13 +113,12 @@ async fn build(root: &std::path::Path, context_ok: bool, home: Option<&std::path
         )
         .with_state((hits.clone(), diags.clone()));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let upstream = listener.local_addr().unwrap();
     tokio::spawn(async move {
         axum::serve(listener, app).await.unwrap();
     });
     let isolated_home=home.is_none().then(||tempfile::tempdir().unwrap());
     let home=home.unwrap_or_else(||isolated_home.as_ref().unwrap().path());
-    let mut state=hangar_server::routes::AppState::new(config(upstream,"127.0.0.1"));
+    let mut state=hangar_server::routes::AppState::new(config("127.0.0.1"));
     state.diag = state.diag.clone().with_diary(Some(diags.path().to_owned()));
     state.origins_home=home.into();
     state.accounts=hangar_server::accounts::AccountService::new(
@@ -195,10 +194,9 @@ pub async fn real_terminal_fixture(
     home: &std::path::Path,
     metadata_mux: &std::path::Path,
     terminal_mux: &std::path::Path,
-    upstream: std::net::SocketAddr,
     environment: std::collections::BTreeMap<String, String>,
 ) -> (Fixture, Arc<hangar_server::routes::AppState>, tokio::task::JoinHandle<()>) {
-    let mut state = hangar_server::routes::AppState::new(config(upstream, "127.0.0.1"));
+    let mut state = hangar_server::routes::AppState::new(config("127.0.0.1"));
     state.accounts = hangar_server::accounts::AccountService::new(
         hangar_server::accounts::environment::AccountEnvironment::from_map(environment));
     state.origins_home = home.into();

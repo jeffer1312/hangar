@@ -13,10 +13,10 @@ use mods_support::Probe;
 use serde_json::{Value, json};
 
 async fn setup() -> (Arc<Fake>, std::net::SocketAddr, Mods, Arc<Probe>) {
-    let (python, upstream) = spawn_fake().await;
-    let state = AppState::new(config(upstream, "127.0.0.1"));
+    let (python, _) = spawn_fake().await;
+    let state = AppState::new(config("127.0.0.1"));
     let mods = state.mods.clone();
-    let server = spawn_state(state).await;
+    let server = spawn_state_for(&python, state).await;
     let probe = Arc::new(Probe::default());
     mods.attach_terminal("t", "proc-t", 1, probe.clone());
     (python, server, mods, probe)

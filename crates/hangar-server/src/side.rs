@@ -2,14 +2,11 @@
 //! O hub de cada sessão: reparte, entre os aparelhos daquele chat, o que o leitor do transcript e
 //! as fontes do Rust (estado, mods, fila, faixa) produzem.
 use std::collections::{HashMap, VecDeque};
-use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
-use axum::body::Body;
-use axum::http::StatusCode;
 use bytes::Bytes;
 use tokio::sync::{Notify, broadcast};
 
@@ -734,15 +731,6 @@ impl Hub {
 
     pub(crate) fn plugin_rates(&self) -> Arc<crate::plugin::sources::RateStore> { self.ctx.hubs.plugin_rates() }
 
-    /// Assina o canal e copia o retrato dos eventos do estado (canal privado).
-    fn subscribe_state(&self, guest: bool) -> Option<(broadcast::Receiver<Out>, Vec<Bytes>, &'static [&'static str])> {
-        self.bound.lock().unwrap().as_ref()?;
-        let events = self.state_events();
-        let rx = self.tx.subscribe();
-        let cached = self.cache.lock().unwrap().replay().into_iter().filter(|f| private_frame(f, events, guest)).collect();
-        Some((rx, cached, events))
-    }
-
     /// Aparelho novo cuja leitura da descoberta difere da ligação. Provider trocado religa já; outro
     /// transcript fica com a vigia do hub (`watch_binding`), que só troca lido duas vezes: uma
     /// leitura solta apagaria a conversa na tela de todos.
@@ -1135,13 +1123,6 @@ async fn run_side(hub: Arc<Hub>) {
     hub.watch_binding().await;
 }
 
-/// Quadro que o canal privado leva ao Python: o estado, a faixa dos mods, o painel da fila e as bolhas dela,
-/// que o convidado também vê; ao dono pelo Connect, também os avisos de mod, que o Python não guarda mais.
-fn private_frame(frame: &[u8], events: &[&str], guest: bool) -> bool {
-    state_frame(frame, events) || state_frame(frame, &[LATEST[PLUGIN_UI], crate::queue_panel::EVENT, "message", "queue_confirmed", crate::queue_feed::NOTICE_UPDATE])
-        || (!guest && state_frame(frame, &["plugin_toast"]))
-}
-
 /// Quadro que só o dono recebe: aviso de mod (texto dele), pedido de navegador (url com o token) e
 /// pedido do cofre.
 pub(crate) fn owner_only(frame: &[u8]) -> bool {
@@ -1215,89 +1196,6 @@ async fn seed_committed(hub: &Weak<Hub>, only_if_empty: bool) {
     }
     // Com ou sem texto: a prévia só esperava esta leitura terminar.
     h.mark_seeded(generation);
-}
-
-/// `GET /__hangar_server/state/{name}/events` na porta privada: o Python lê daqui `state`,
-/// `preview`, `ask_question` e `suggest` (sem terminal, Claude ou Codex, também `pensamento` e `ferramenta`),
-/// mais o `plugin_ui` e as bolhas da fila (`message`/`queue_confirmed`), de
-/// quem entrou pelas portas dele (convite, Connect). Conta
-/// como assinante do hub, então liga o `Monitor` e o produtor da fila igual a um aparelho do dono.
-pub async fn private_events(
-    axum::extract::State(st): axum::extract::State<Arc<crate::routes::AppState>>,
-    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<SocketAddr>,
-    axum::extract::Path(name): axum::extract::Path<String>,
-    req: axum::extract::Request,
-) -> axum::response::Response {
-    use axum::response::IntoResponse;
-    if !crate::workspace_routes::private_ok(&st, peer, req.headers()) {
-        return StatusCode::NOT_FOUND.into_response();
-    }
-    let Ok(info) = st.info(&name).await else {
-        st.diag.report("rust.state_channel_failed", &name, "internal_info", crate::routes::INFO_REASON);
-        return StatusCode::SERVICE_UNAVAILABLE.into_response();
-    };
-    // Convidado abrindo a conversa também reabre a sessão em erro, como o dono.
-    if info.is_some() { st.request_reopen(&name); }
-    // Só Claude (com ou sem terminal), Codex sem terminal e Codex com terminal de ator no Rust têm o estado
-    // aqui; o resto o Python observa.
-    let owned = |b: &Binding| b.provider == Provider::Codex && st.side.runtime.get().is_some_and(|r| r.owns_codex_terminal(&name));
-    let Some(binding) = info.as_ref().and_then(Binding::from_info).filter(|b| b.state_events().is_some() || owned(b)) else {
-        return StatusCode::NOT_FOUND.into_response();
-    };
-    // O Python diz se quem entrou é convidado (`x-hangar-app: 0`); sem o cabeçalho, conta como app do dono.
-    let guest = req.headers().get("x-hangar-app").is_some_and(|value| value == "0");
-    let lease = st.side.hubs.acquire_as(&name, binding, &st.side, guest);
-    if let Some(info) = &info { lease.hub.learn_queue(info); }
-    let (tx, rx) = tokio::sync::mpsc::channel::<Bytes>(64);
-    tokio::spawn(private_loop(lease, tx));
-    let stream = futures_util::stream::unfold(rx, |mut rx| async move {
-        rx.recv().await.map(|b| (Ok::<Bytes, std::convert::Infallible>(b), rx))
-    });
-    let mut resp = axum::response::Response::new(Body::from_stream(stream));
-    let h = resp.headers_mut();
-    h.insert(axum::http::header::CONTENT_TYPE, axum::http::HeaderValue::from_static("text/event-stream; charset=utf-8"));
-    h.insert(axum::http::header::CACHE_CONTROL, axum::http::HeaderValue::from_static("no-store"));
-    resp
-}
-
-/// Ping a cada 10 s, como o `/events`: o leitor do Python dá a conexão por morta depois de 30 s calada.
-const PRIVATE_PING: Duration = Duration::from_secs(10);
-
-async fn private_loop(lease: Lease, out: tokio::sync::mpsc::Sender<Bytes>) {
-    let (hub, guest) = (lease.hub.clone(), lease.guest);
-    let send = |f: Bytes| {
-        let out = out.clone();
-        async move { matches!(tokio::time::timeout(Duration::from_secs(30), out.send(f)).await, Ok(Ok(()))) }
-    };
-    if !send(tail::ping_frame()).await {
-        return;
-    }
-    let mut ping = tokio::time::interval_at(tokio::time::Instant::now() + PRIVATE_PING, PRIVATE_PING);
-    loop {
-        let Some((mut rx, cached, events)) = hub.subscribe_state(guest) else { return };
-        for f in cached {
-            if !send(f).await {
-                return;
-            }
-        }
-        loop {
-            tokio::select! {
-                _ = out.closed() => return,
-                _ = ping.tick() => if !send(tail::ping_frame()).await { return },
-                msg = rx.recv() => match msg {
-                    Ok(Out::Side(f)) if private_frame(&f, events, guest) => if !send(f).await { return },
-                    // O `/events` do Python repassa a vista inteira ao convidado: sem diferença aqui.
-                    Ok(Out::Ui(version)) => if let Some(f) = hub.resolve(Queued::Ui(version), &mut None, false) {
-                        if !send(f).await { return }
-                    },
-                    Ok(Out::Side(_) | Out::Tail(..) | Out::Rebind) => {}
-                    Ok(Out::Close) | Err(broadcast::error::RecvError::Closed) => return,
-                    // Atrasado: o retrato de agora repõe o que se perdeu.
-                    Err(broadcast::error::RecvError::Lagged(_)) => break,
-                },
-            }
-        }
-    }
 }
 
 /// O hub de cada sessão, com a contagem de aparelhos.
@@ -1979,91 +1877,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn private_channel_counts_as_subscriber() {
-        let dir = tempfile::tempdir().unwrap();
-        let jsonl = dir.path().join("k.jsonl");
-        std::fs::write(&jsonl, "").unwrap();
-        let cfg = crate::config::Config { listen: "127.0.0.1:0".parse().unwrap(), internal_secret: "s".into(),
-            auth_token: "dono".into(), log_path: None, trusted: crate::auth::TrustedHosts::parse("127.0.0.1") };
-        let mut st = crate::routes::AppState::new(cfg);
-        st.side.locate = Arc::new(crate::locate::Fixed(Some(serde_json::from_value(serde_json::json!(
-            {"provider": "claude", "jsonl": jsonl, "session_key": "k", "history": {}})).unwrap())));
-        let (spawn, count) = fake_monitors(IDLE_PANE);
-        st.side.monitors = Some(spawn);
-        let st = Arc::new(st);
-        let private = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = private.local_addr().unwrap();
-        let app = crate::routes::terminal_router(st.clone()).into_make_service_with_connect_info::<SocketAddr>();
-        tokio::spawn(async move { axum::serve(private, app).await.unwrap() });
-
-        let get_events = |secret: &'static str| async move {
-            let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
-            let req = format!("GET /__hangar_server/state/s1/events HTTP/1.0\r\nx-hangar-internal: {secret}\r\n\r\n");
-            tokio::io::AsyncWriteExt::write_all(&mut s, req.as_bytes()).await.unwrap();
-            s
-        };
-        let mut refused = get_events("errado").await;
-        let mut buf = vec![0u8; 256];
-        let n = tokio::io::AsyncReadExt::read(&mut refused, &mut buf).await.unwrap();
-        assert!(String::from_utf8_lossy(&buf[..n]).starts_with("HTTP/1.0 404"), "segredo errado é 404 mudo");
-
-        let mut s = get_events("s").await;
-        let mut got = Vec::new();
-        let _ = tokio::time::timeout(Duration::from_millis(500), async {
-            loop {
-                let n = tokio::io::AsyncReadExt::read(&mut s, &mut buf).await.unwrap();
-                if n == 0 { return }
-                got.extend_from_slice(&buf[..n]);
-                if String::from_utf8_lossy(&got).contains("event: state") { return }
-            }
-        }).await;
-        let text = String::from_utf8_lossy(&got).into_owned();
-        assert!(text.starts_with("HTTP/1.0 200") && text.contains("event: state"), "{text}");
-        assert!(!text.contains("transfer-encoding: chunked"), "HTTP/1.0: corpo até o fim, sem chunk");
-        {
-            let hubs = st.side.hubs.0.lock().unwrap();
-            let (hub, n) = hubs.get("s1").expect("o canal abre o hub");
-            assert_eq!(*n, 1, "o canal é um assinante");
-            assert!(hub.monitor.lock().unwrap().is_some(), "e liga o Monitor");
-        }
-        assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 1);
-        // A faixa dos mods sai pelo marcador da versão e chega ao Python como quadro: o convidado a vê.
-        st.side.hubs.deliver("s1", "plugin_ui", "{\"band\":1}");
-        got.clear();
-        let _ = tokio::time::timeout(Duration::from_millis(500), async {
-            loop {
-                let n = tokio::io::AsyncReadExt::read(&mut s, &mut buf).await.unwrap();
-                if n == 0 { return }
-                got.extend_from_slice(&buf[..n]);
-                if String::from_utf8_lossy(&got).contains("event: plugin_ui") { return }
-            }
-        }).await;
-        assert!(String::from_utf8_lossy(&got).contains("event: plugin_ui\r\ndata: {\"band\":1}"), "{}", String::from_utf8_lossy(&got));
-        drop(s);
-        let gone = tokio::time::timeout(Duration::from_secs(2), async {
-            while st.side.hubs.0.lock().unwrap().contains_key("s1") { tokio::time::sleep(Duration::from_millis(20)).await }
-        }).await;
-        assert!(gone.is_ok(), "fechou o canal, o último assinante saiu e o hub para");
-    }
-
-    #[tokio::test]
-    async fn own_pane_question_not_replayed_after_answer() {
-        // A pergunta do `Monitor` sai uma vez por pergunta: quem chega depois da resposta não a recebe.
-        let dir = tempfile::tempdir().unwrap();
-        let binding = Binding { provider: Provider::Claude, jsonl: dir.path().join("a.jsonl"), key: "a".into(), headless: false, life: None };
-        let ctx = idle_ctx();
-        let lease = ctx.hubs.acquire("s", binding, &ctx);
-        let late = |hub: &Hub| hub.subscribe_state(true).unwrap().1.iter().any(|f| f.starts_with(b"event: ask_question"));
-        assert!(lease.hub.publish_own("state", r#"{"state":"awaiting_input"}"#));
-        assert!(lease.hub.publish_own("ask_question", r#"{"questions":[]}"#));
-        assert!(late(&lease.hub), "chegou durante a pergunta: recebe");
-        assert!(lease.hub.publish_own("state", r#"{"state":"idle"}"#));
-        assert!(!late(&lease.hub), "respondida: quem chega depois não recebe");
-        lease.hub.close();
-        assert!(!lease.hub.publish_own("state", "{}"), "hub fechado: o Monitor acaba");
-    }
-
-    #[tokio::test]
     async fn finished_monitor_returns_with_next_subscriber() {
         let dir = tempfile::tempdir().unwrap();
         let binding = Binding { provider: Provider::Claude, jsonl: dir.path().join("a.jsonl"), key: "a".into(), headless: false, life: None };
@@ -2083,30 +1896,11 @@ mod tests {
     }
 
     #[test]
-    fn private_channel_forwards_state_band_and_queue() {
-        for (event, pass) in [("state", true), ("preview", true), ("ask_question", true), ("suggest", true), ("plugin_ui", true),
-                              ("queue", true), ("message", true), ("queue_confirmed", true),
-                              ("stats", false), ("plugin_toast", false), ("nav", false)] {
-            assert_eq!(private_frame(&sse_frame(event, "{}", None), &STATE_EVENTS, true), pass, "{event}");
-        }
-    }
-
-    /// O dono que entra pela porta do Connect recebe os avisos de mod pelo canal privado: o Python não os
-    /// guarda mais. O convidado continua sem eles.
-    #[test]
-    fn private_channel_carries_mod_toasts_only_to_the_owner() {
-        let toast = sse_frame("plugin_toast", r#"{"id":"rs-1","text":"x","timeoutMs":4000}"#, None);
-        assert!(private_frame(&toast, &STATE_EVENTS, false), "dono pelo Connect");
-        assert!(!private_frame(&toast, &STATE_EVENTS, true), "convidado");
-    }
-
-    #[test]
     fn queue_snapshot_is_replayed_to_late_devices() {
         let mut c = SideCache::default();
         let frame = sse_frame("queue", r#"{"entries":[],"actions":true}"#, None);
         c.record("queue", r#"{"entries":[],"actions":true}"#, &frame, false);
         assert!(c.replay().iter().any(|f| f.starts_with(b"event: queue\r\n")));
-        assert!(private_frame(&frame, &STATE_EVENTS, true), "o canal privado leva a fila a quem entrou pelo Python");
     }
 
     /// A adormecida não tem ator, e o painel age no arquivo da fila dela: a lista sai com os botões.

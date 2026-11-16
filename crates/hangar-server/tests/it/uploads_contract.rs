@@ -2,28 +2,11 @@
 //! árvore do cofre são comparados depois de normalizar raiz (`<root>`) e chave de projeto (`<project>`,
 //! `<other-project>`). Fora disso, o corpo JSON é comparado byte a byte; a tabela foi medida no Python,
 //! e o que o Rust faz diferente são as exceções nomeadas abaixo.
-use super::fake::{OWNER, spawn_fake};
+use super::fake::OWNER;
 use base64::Engine;
-use hangar_server::{
-    accounts::{AccountService, environment::AccountEnvironment},
-    auth::TrustedHosts,
-    config::Config,
-    locate::{BoxFuture, InfoFailed, Locate},
-    routes::{AppState, router},
-    transcript::InternalInfo,
-    uploads::store::{Naming, UploadStore, project_key},
-};
+use hangar_server::{accounts::{AccountService, environment::AccountEnvironment}, auth::TrustedHosts, config::Config, locate::{BoxFuture, InfoFailed, Locate}, routes::{AppState, router}, transcript::InternalInfo, uploads::store::{Naming, UploadStore, project_key}};
 use serde_json::{Map, Value, json};
-use std::{
-    collections::HashMap,
-    net::SocketAddr,
-    path::{Path, PathBuf},
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
-    },
-    time::{Duration, UNIX_EPOCH},
-};
+use std::{collections::HashMap, net::SocketAddr, path::{Path, PathBuf}, sync::{Arc, Mutex, atomic::{AtomicU64, Ordering}}, time::{Duration, UNIX_EPOCH}};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[path = "uploads_contract_cases.rs"]
@@ -105,7 +88,6 @@ impl Replay {
         ] {
             sessions.0.lock().unwrap().insert(name.into(), info(&root, key, cwd));
         }
-        let (_python, upstream) = spawn_fake().await;
         let mut state = AppState::new(Config {
             listen: "127.0.0.1:0".parse().unwrap(),
             auth_token: OWNER.into(),

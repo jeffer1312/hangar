@@ -14,7 +14,6 @@ use axum::response::{IntoResponse, Response};
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
 
-use super::claude::PluginBridge;
 use super::open::{Born, OpenHost};
 use super::terminal::{Mux, MuxOutput, ProcessMux, TerminalEnv};
 use super::{OpenCaller, OpenError, SessionOpenRequest};
@@ -233,7 +232,6 @@ impl OpenHost for ServerHost {
     fn env(&self) -> &BTreeMap<String, String> { &self.env.base }
     fn terminal(&self) -> &TerminalEnv { &self.terminal }
     fn mux(&self) -> &dyn Mux { &self.mux }
-    fn bridge(&self) -> Option<PluginBridge> { Some(PluginBridge { port: self.st.cfg.listen.port(), secret: self.st.cfg.auth_token.clone() }) }
     fn server_projects(&self) -> PathBuf { self.env.claude_base.join("projects") }
     /// O servidor roda na `backend/` (é de lá que ele lê o `.env`).
     fn backend_dir(&self) -> Option<PathBuf> { std::env::current_dir().ok() }

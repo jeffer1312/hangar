@@ -57,7 +57,7 @@ impl Scene {
         // Escapado como texto JSON: o `\` do caminho do Windows quebrava a linha do índice do Kimi.
         let escaped = serde_json::to_string(&*home.to_string_lossy()).unwrap();
         std::fs::write(&kimi, std::fs::read_to_string(&kimi).unwrap().replace("{HOME}", escaped.trim_matches('"'))).unwrap();
-        let (python, upstream) = spawn_fake().await;
+        let (python, _) = spawn_fake().await;
         let cfg = Config {
             listen: "127.0.0.1:0".parse().unwrap(),
             auth_token: OWNER.into(),

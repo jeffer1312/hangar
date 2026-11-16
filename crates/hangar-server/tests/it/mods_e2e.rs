@@ -36,9 +36,9 @@ async fn world(swallow: &'static [&'static str]) -> World {
     let dir = tempfile::tempdir().unwrap();
     let transcript = dir.path().join("chat.jsonl");
     append_lines(&transcript, 0..1);
-    let (python, upstream) = spawn_fake().await;
+    let (python, _) = spawn_fake().await;
     python.set_info(info_json("claude-headless", &transcript));
-    let state = AppState::new(config(upstream, "127.0.0.1"));
+    let state = AppState::new(config("127.0.0.1"));
     let mods = state.mods.clone();
     // Como o `lib.rs`: o registro é o ciclo de vida e o runtime do estado ao vivo, ligado aos hubs do chat.
     let registry = Arc::new(RuntimeRegistry::new("instance-test".into())
@@ -48,7 +48,7 @@ async fn world(swallow: &'static [&'static str]) -> World {
     let _ = state.state.lifecycle.set(registry.clone());
     let _ = state.side.runtime.set(registry.clone());
     let _ = state.state.runtime.set(registry.clone());
-    let server = spawn_state(state).await;
+    let server = spawn_state_for(&python, state).await;
     let (escuta, seen, cano) = vitrine_cano(swallow).await;
     registry.open(claude_target(dir.path(), escuta, true)).await.unwrap();
     wait_ui(&mods, |ui| ui["above"].to_string().contains("superfície desktop")).await;

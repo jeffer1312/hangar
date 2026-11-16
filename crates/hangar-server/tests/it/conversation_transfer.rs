@@ -151,9 +151,9 @@ async fn transfer_route_publishes_imported_thread_and_restores_source_on_import_
                 .map_err(|error| error.code)
                 .unwrap();
         }
-        let (python, upstream) = crate::fake::spawn_fake().await;
+        let (python, _) = crate::fake::spawn_fake().await;
         let mut state =
-            hangar_server::routes::AppState::new(crate::fake::config(upstream, "127.0.0.1"));
+            hangar_server::routes::AppState::new(crate::fake::config("127.0.0.1"));
         state.accounts = hangar_server::accounts::AccountService::new(env);
         assert!(state.state.runtime.set(registry.clone()).is_ok());
         let server = crate::fake::spawn_state(state).await;

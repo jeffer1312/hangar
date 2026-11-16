@@ -17,8 +17,8 @@ fn with_client(body: &str) -> String {
 /// CORS, e o Python não recebe nada.
 #[tokio::test]
 async fn r5_01_not_the_owner_is_401_from_rust() {
-    let (python, upstream) = spawn_fake().await;
-    let srv = spawn_server(config(upstream, "127.0.0.1")).await;
+    let (python, _) = spawn_fake().await;
+    let srv = spawn_server_for(&python, config("127.0.0.1")).await;
     let refused = json!({"detail": {"code": "erro_nao_autorizado", "params": {}, "msg": "unauthorized"}});
     for token in [None, Some("convidado")] {
         let put = client().put(format!("http://{srv}/api/sessions/prewarm")).header("origin", "http://outro")
@@ -40,8 +40,8 @@ async fn r5_01_not_the_owner_is_401_from_rust() {
 /// `Retry-After: 30`, sem avaliar a senha, nem a certa; outra origem segue livre. Tudo no Rust.
 #[tokio::test]
 async fn r5_02_eight_wrong_tokens_block_the_origin_in_rust() {
-    let (python, upstream) = spawn_fake().await;
-    let srv = spawn_server(config(upstream, "127.0.0.1")).await;
+    let (python, _) = spawn_fake().await;
+    let srv = spawn_server_for(&python, config("127.0.0.1")).await;
     let put = |token: &str, origin: &str| client().put(format!("http://{srv}/api/sessions/prewarm")).bearer_auth(token)
         .header("x-forwarded-for", origin).header("content-type", "application/json").body(with_client(REFUSED)).send();
     for attempt in 0..8 { assert_eq!(put("errado", "203.0.113.9").await.unwrap().status().as_u16(), 401, "tentativa {attempt}"); }
@@ -57,8 +57,8 @@ async fn r5_02_eight_wrong_tokens_block_the_origin_in_rust() {
 /// R5-11: o cookie só autentica `GET`/`HEAD`; num `PUT` ele não vale, e a recusa é do Rust.
 #[tokio::test]
 async fn r5_11_cookie_on_a_write_is_401_from_rust() {
-    let (python, upstream) = spawn_fake().await;
-    let srv = spawn_server(config(upstream, "127.0.0.1")).await;
+    let (python, _) = spawn_fake().await;
+    let srv = spawn_server_for(&python, config("127.0.0.1")).await;
     let response = client().put(format!("http://{srv}/api/sessions/prewarm")).header("cookie", format!("cp_token={OWNER}"))
         .header("content-type", "application/json").body(with_client(REFUSED)).send().await.unwrap();
     assert_eq!(response.status().as_u16(), 401);
@@ -68,8 +68,8 @@ async fn r5_11_cookie_on_a_write_is_401_from_rust() {
 /// A recusa é a da abertura: mesmo status e mesmo corpo do `POST /api/sessions` para o mesmo pedido.
 #[tokio::test]
 async fn a_refused_reserve_answers_like_the_open() {
-    let (python, upstream) = spawn_fake().await;
-    let srv = spawn_server(config(upstream, "127.0.0.1")).await;
+    let (python, _) = spawn_fake().await;
+    let srv = spawn_server_for(&python, config("127.0.0.1")).await;
     let send = |method: reqwest::Method, path: &'static str, body: String| client().request(method, format!("http://{srv}{path}"))
         .bearer_auth(OWNER).header("content-type", "application/json").body(body).send();
     let open = send(reqwest::Method::POST, "/api/sessions", REFUSED.into()).await.unwrap();
@@ -97,23 +97,3 @@ async fn a_refused_reserve_answers_like_the_open() {
     assert_eq!(python.hits_to("/api/sessions/prewarm"), 0);
 }
 
-/// O dono do Connect chega ao Python, que o autentica e repassa pela ponte privada.
-#[tokio::test]
-async fn connect_owner_comes_through_the_private_bridge() {
-    let (_python, upstream) = spawn_fake().await;
-    let state = std::sync::Arc::new(hangar_server::routes::AppState::new(config(upstream, "127.0.0.1")));
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let private = listener.local_addr().unwrap();
-    let app = hangar_server::routes::terminal_router(state).into_make_service_with_connect_info::<std::net::SocketAddr>();
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    let bridged = |method: reqwest::Method, path: &'static str| client().request(method, format!("http://{private}/__hangar_server/forwarded"))
-        .header("x-hangar-path", path).header("content-type", "application/json");
-
-    let refused = bridged(reqwest::Method::PUT, "/api/sessions/prewarm").header("x-hangar-internal", SECRET)
-        .body(with_client(REFUSED)).send().await.unwrap();
-    assert_eq!(refused.status(), 400);
-    assert_eq!(body(refused).await["detail"]["code"], "erro_cwd_inexistente");
-    let gone = bridged(reqwest::Method::DELETE, "/api/sessions/prewarm/nao-existe").header("x-hangar-internal", SECRET).send().await.unwrap();
-    assert_eq!(gone.status(), 204);
-    assert_eq!(bridged(reqwest::Method::DELETE, "/api/sessions/prewarm/x").send().await.unwrap().status(), 404, "sem o segredo a ponte não existe");
-}

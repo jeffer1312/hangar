@@ -26,7 +26,7 @@ use std::path::Path;
 use axum::body::{Body, to_bytes};
 use axum::extract::ConnectInfo;
 use axum::http::{Request, HeaderMap, HeaderName, HeaderValue};
-use hangar_server::routes::{router, terminal_router};
+use hangar_server::routes::router;
 use serde_json::Value;
 use tower_service::Service;
 
@@ -177,25 +177,6 @@ async fn frozen_get_cases_match_status_json_headers_and_files() {
     }
     scene.close().await;
     assert!(differences.is_empty(),"{} divergências nos {count} casos:\n{}",differences.len(), differences.join("\n"));
-}
-
-#[tokio::test]
-async fn forwarded_matches_public_without_auth_or_python_and_decodes_once() {
-    if support::isolated("remote_browser::url::forwarded_matches_public_without_auth_or_python_and_decodes_once", |_| {}).await { return; }
-    let scene = Scene::new().await;
-    for name in ["session", "sessão %20 🚀"] {
-        std::fs::write(scene.nav_dir().join("native.json"),json!({"chave":name,"url":"https://example.invalid/página?q=ação#parte"}).to_string()).unwrap();
-        let (_,_,public) = get(&scene,name,owner_headers(),"","127.0.0.1",false).await;
-        let escaped = form_urlencoded::byte_serialize(name.as_bytes()).collect::<String>().replace('+',"%20");
-        let request = Request::builder().uri("/__hangar_server/forwarded")
-            .header("x-hangar-internal",support::SECRET).header("x-hangar-path",format!("/api/sessions/{escaped}/navegador"))
-            .extension(ConnectInfo("127.0.0.1:12345".parse::<SocketAddr>().unwrap())).body(Body::empty()).unwrap();
-        let response = terminal_router(scene.state.clone()).call(request).await.unwrap();
-        assert_eq!(response.status().as_u16(),200);
-        assert_eq!(to_bytes(response.into_body(),1024*1024).await.unwrap(), public);
-    }
-    scene.upstream.assert_no_browser_or_discovery_calls();
-    scene.close().await;
 }
 
 #[derive(Clone)]

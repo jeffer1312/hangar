@@ -11,10 +11,6 @@ struct Fixture {
 
 impl Fixture {
     async fn start() -> Self {
-        Self::start_port(false).await
-    }
-
-    async fn start_port(private: bool) -> Self {
         let home = tempfile::tempdir().unwrap();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -27,7 +23,7 @@ impl Fixture {
             ("USERPROFILE".into(), home.path().to_string_lossy().into_owned()),
         ].into()));
         let state = Arc::new(state);
-        let router = if private { hangar_server::routes::terminal_router(state) } else { hangar_server::routes::router(state) };
+        let router = hangar_server::routes::router(state);
         let task = tokio::spawn(async move {
             axum::serve(listener, router.into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap();
         });
@@ -45,20 +41,6 @@ impl Fixture {
 }
 
 impl Drop for Fixture { fn drop(&mut self) { self.task.abort(); } }
-
-#[tokio::test]
-async fn connect_uses_the_same_defaults_through_the_private_forwarder() {
-    let mut fixture = Fixture::start_port(true).await;
-    let url = fixture.base.replace("/api/session-defaults", "/__hangar_server/forwarded?provider=claude");
-    let response = reqwest::Client::new().put(url).header("x-hangar-internal", "fixture-internal")
-        .header("x-hangar-path", "/api/session-defaults").header("content-type", "application/json")
-        .body(r#"{"defaults":{"model":"opus","effort":"high","permission":"bypassPermissions"}}"#)
-        .send().await.unwrap();
-    assert_eq!(response.status(), 200);
-    let value: Value = serde_json::from_slice(&response.bytes().await.unwrap()).unwrap();
-    assert_eq!(value["defaults"]["permission"], "bypassPermissions");
-    fixture.stop().await;
-}
 
 #[tokio::test]
 async fn clearing_a_default_prevents_stale_desktop_import_and_engines_are_separate() {

@@ -42,12 +42,12 @@ impl Tailscale for NoTunnel {
 }
 
 /// Sobe o servidor com a porta do convidado em `guest`; devolve a porta principal.
-async fn spawn(up: SocketAddr, dir: &std::path::Path, guest: Option<SocketAddr>) -> SocketAddr {
-    spawn_share(up, share(dir), guest).await
+async fn spawn(dir: &std::path::Path, guest: Option<SocketAddr>) -> SocketAddr {
+    spawn_share(share(dir), guest).await
 }
 
-async fn spawn_share(up: SocketAddr, share: Arc<ShareState>, guest: Option<SocketAddr>) -> SocketAddr {
-    let mut state = AppState::new(config(up, "127.0.0.1"));
+async fn spawn_share(share: Arc<ShareState>, guest: Option<SocketAddr>) -> SocketAddr {
+    let mut state = AppState::new(config("127.0.0.1"));
     state.share = Some(share);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -78,10 +78,9 @@ async fn free_addr() -> SocketAddr {
 
 #[tokio::test]
 async fn guest_port_answers_through_the_gate() {
-    let (_fake, up) = spawn_fake().await;
     let dir = tempfile::tempdir().unwrap();
     let guest = free_addr().await;
-    let main = spawn(up, dir.path(), Some(guest)).await;
+    let main = spawn(dir.path(), Some(guest)).await;
     wait_bound(main).await;
 
     let r = client().get(format!("http://{guest}/api/sessions")).send().await.unwrap();
@@ -108,11 +107,10 @@ async fn guest_port_answers_through_the_gate() {
 
 #[tokio::test]
 async fn occupied_guest_port_is_retried_without_blocking_the_main_port() {
-    let (_fake, up) = spawn_fake().await;
     let dir = tempfile::tempdir().unwrap();
     let holder = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let guest = holder.local_addr().unwrap();
-    let main = spawn(up, dir.path(), Some(guest)).await;
+    let main = spawn(dir.path(), Some(guest)).await;
 
     tokio::time::sleep(Duration::from_millis(600)).await;
     assert_eq!(bound(main).await, json!(false));
@@ -138,11 +136,10 @@ fn lan_ip() -> Option<std::net::IpAddr> {
 #[tokio::test]
 async fn redeem_picks_lan_or_funnel_by_the_connection_local_address() {
     let Some(lan) = lan_ip() else { eprintln!("sem rede local: teste pulado"); return };
-    let (_fake, up) = spawn_fake().await;
     let dir = tempfile::tempdir().unwrap();
     let share = share_with(dir.path(), Arc::new(NoTunnel));
     let port = free_addr().await.port();
-    let main = spawn_share(up, share.clone(), Some(SocketAddr::from(([0, 0, 0, 0], port)))).await;
+    let main = spawn_share(share.clone(), Some(SocketAddr::from(([0, 0, 0, 0], port)))).await;
     wait_bound(main).await;
 
     let code = share.store.create("proj", None, Kind::Share, false).unwrap().1;
@@ -158,8 +155,8 @@ async fn redeem_picks_lan_or_funnel_by_the_connection_local_address() {
 
 #[tokio::test]
 async fn without_guest_address_nothing_listens() {
-    let (_fake, up) = spawn_fake().await;
-    let srv = spawn_server(config(up, "127.0.0.1")).await;
+    let (_fake, _) = spawn_fake().await;
+    let srv = spawn_server_for(&_fake, config("127.0.0.1")).await;
     let r = client().get(format!("http://{srv}/__hangar_server/health")).send().await.unwrap();
     let v: Value = serde_json::from_str(&r.text().await.unwrap()).unwrap();
     assert_eq!(v["guest_port_bound"], json!(false));

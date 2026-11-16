@@ -49,13 +49,6 @@ async fn ticket_group_is_projected_from_real_sidecars_and_members_can_report() {
 #[tokio::test(flavor="multi_thread")]
 async fn board_action_uses_the_bound_runtime_input_and_reports_an_uncertain_ack() {
     let temp=tempfile::tempdir().unwrap();
-    let policy=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let upstream=policy.local_addr().unwrap();
-    let (stop,stopped)=tokio::sync::oneshot::channel();
-    let policy_task=tokio::spawn(async move {
-        axum::serve(policy,axum::Router::new().fallback(||async {([(axum::http::header::CONTENT_TYPE,"application/json")],json!({"ok":true,"data":{}}).to_string())}))
-            .with_graceful_shutdown(async {let _=stopped.await;}).await.unwrap();
-    });
     let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address=listener.local_addr().unwrap();
     let (sent,text)=tokio::sync::oneshot::channel();
@@ -119,7 +112,7 @@ async fn board_action_uses_the_bound_runtime_input_and_reports_an_uncertain_ack(
     registry.close("11111111111111111111111111111111",1).await.unwrap();
     state.connectors.shutdown().await;
     tokio::time::timeout(std::time::Duration::from_secs(30),cano).await.unwrap().unwrap();
-    stop.send(()).unwrap();policy_task.await.unwrap();
+    
     assert!(delivered.contains("Planeje este ticket."));
     assert_eq!(item.session_key.as_deref(),Some("11111111111111111111111111111111"));
     assert!(item.stage.is_none(),"o resultado incerto não confirma a mudança de etapa");

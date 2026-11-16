@@ -50,7 +50,7 @@ impl Scene {
         if let Some(shell) = shell {
             env.insert("SHELL".to_owned(), shell.to_owned());
         }
-        let mut state = AppState::new(crate::fake::config(crate::refused_address(), "127.0.0.1"));
+        let mut state = AppState::new(crate::fake::config("127.0.0.1"));
         state.accounts = AccountService::new(AccountEnvironment::from_map(env));
         let state = Arc::new(state);
         let app = hangar_server::routes::router(state.clone());
@@ -659,7 +659,7 @@ fn machine_roots_follow_the_package_and_the_agent_homes() {
     let current = home.join(".hangar/current");
     std::os::unix::fs::symlink(&real, &current).unwrap();
     let text = |path: &std::path::Path| path.to_string_lossy().into_owned();
-    let mut state = AppState::new(crate::fake::config(crate::refused_address(), "127.0.0.1"));
+    let mut state = AppState::new(crate::fake::config("127.0.0.1"));
     state.accounts = AccountService::new(AccountEnvironment::from_map(BTreeMap::from([
         ("HOME".to_owned(), text(&home)),
         ("USERPROFILE".to_owned(), text(&home)),

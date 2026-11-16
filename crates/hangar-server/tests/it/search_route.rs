@@ -103,7 +103,7 @@ impl Scene {
         } else {
             std::fs::create_dir_all(&home).unwrap();
         }
-        let (python, upstream) = spawn_fake().await;
+        let (python, _) = spawn_fake().await;
         let cfg = Config {
             listen: "127.0.0.1:0".parse().unwrap(),
             auth_token: OWNER.into(),

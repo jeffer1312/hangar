@@ -118,7 +118,6 @@ async fn attempt_with_budget(
         .map(str::to_owned)
         .unwrap_or_else(|| format!("model-{provider}-a"));
     let config = json!({"organization":{"dictation_organization_mode":"harness","dictation_claude_model":selected,"dictation_codex_model":selected,"ditado_estilo":"limpar"}});
-    let upstream = "127.0.0.1:1".parse().unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let mut state = AppState::new(Config {

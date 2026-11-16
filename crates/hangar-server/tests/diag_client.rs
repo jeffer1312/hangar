@@ -2,10 +2,7 @@
 
 use hangar_server::diag::DiagClient;
 use notify::Watcher;
-use std::sync::{
-    Arc,
-    atomic::{AtomicUsize, Ordering},
-};
+use std::sync::Arc;
 
 fn rows(dir: &std::path::Path) -> Vec<serde_json::Value> {
     std::fs::read_dir(dir)
@@ -24,24 +21,8 @@ fn rows(dir: &std::path::Path) -> Vec<serde_json::Value> {
 }
 
 #[tokio::test]
-async fn local_client_records_the_failure_without_any_upstream_request() {
+async fn local_client_records_the_failure_in_the_diary() {
     let dir = tempfile::tempdir().unwrap();
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    let hits = Arc::new(AtomicUsize::new(0));
-    let requested = Arc::new(tokio::sync::Notify::new());
-    let (seen, called) = (hits.clone(), requested.clone());
-    let upstream = tokio::spawn(async move {
-        let router = axum::Router::new().fallback(move || {
-            let (seen, called) = (seen.clone(), called.clone());
-            async move {
-                seen.fetch_add(1, Ordering::SeqCst);
-                called.notify_one();
-                axum::http::StatusCode::SERVICE_UNAVAILABLE
-            }
-        });
-        axum::serve(listener, router).await.unwrap();
-    });
     let (tx, mut changes) = tokio::sync::mpsc::unbounded_channel();
     let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
         if event.is_ok() {
@@ -63,21 +44,10 @@ async fn local_client_records_the_failure_without_any_upstream_request() {
     client.flush().await;
     let observed = tokio::time::timeout(std::time::Duration::from_secs(10), async {
         loop {
-            tokio::select! {
-                _ = requested.notified() => break false,
-                change = changes.recv() => {
-                    assert!(change.is_some());
-                    if rows(dir.path()).iter().any(|row| row["evento"] == "rust.history_failed") { break true; }
-                }
-            }
+            assert!(changes.recv().await.is_some());
+            if rows(dir.path()).iter().any(|row| row["evento"] == "rust.history_failed") { break true; }
         }
     }).await.unwrap_or(false);
-    upstream.abort();
-    assert_eq!(
-        hits.load(Ordering::SeqCst),
-        0,
-        "o diário é local, inclusive em falha do destino HTTP antigo"
-    );
     assert!(observed, "o evento precisa estar no arquivo local");
     let line = rows(dir.path())
         .into_iter()

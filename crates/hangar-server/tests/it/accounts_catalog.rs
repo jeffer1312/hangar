@@ -1,42 +1,8 @@
-//! Contrato HTTP do catálogo; o backend de reserva não pode produzir a resposta.
-use axum::{Router, http::StatusCode};
+//! Contrato HTTP do catálogo.
 use hangar_server::{auth::TrustedHosts, config::Config, routes::AppState};
-use std::sync::Arc;
-
-/// O multiplexador das sondas é o falso da referência Python (`GET /__contract__/mux`), nunca o
-/// tmux real da máquina. Resposta diferente de 200 é multiplexador sem resposta.
-pub(crate) fn reference_mux(upstream: String) -> hangar_server::accounts::environment::TerminalFixture {
-    Arc::new(move || {
-        use std::io::{Read, Write};
-        let mut stream = std::net::TcpStream::connect(&upstream).map_err(|_| ())?;
-        stream.write_all(b"GET /__contract__/mux HTTP/1.0\r\nHost: reference\r\n\r\n").map_err(|_| ())?;
-        let mut raw = String::new();
-        stream.read_to_string(&mut raw).map_err(|_| ())?;
-        let (head, body) = raw.split_once("\r\n\r\n").ok_or(())?;
-        if head.split(' ').nth(1) != Some("200") {
-            return Err(());
-        }
-        serde_json::from_str::<String>(body).map_err(|_| ())
-    })
-}
 
 #[tokio::test]
-async fn owner_catalog_is_not_a_python_proxy() {
-    let paths = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
-    let recorded = paths.clone();
-    let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let upstream_addr = upstream.local_addr().unwrap();
-    let python = tokio::spawn(async move {
-        axum::serve(
-            upstream,
-            Router::new().fallback(move |uri: axum::http::Uri| {
-                recorded.lock().unwrap().push(uri.path().to_owned());
-                async { (StatusCode::SERVICE_UNAVAILABLE, "handler Python bloqueado") }
-            }),
-        )
-        .await
-        .unwrap();
-    });
+async fn owner_catalog_answers() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let root = tempfile::tempdir().unwrap();
@@ -48,7 +14,7 @@ async fn owner_catalog_is_not_a_python_proxy() {
         trusted: TrustedHosts::parse("127.0.0.1"),
     });
     state.accounts = isolated_service(root.path());
-    // A limpeza de worktrees lê a config da HOME real e, ligada lá, pede o contexto ao Python na subida.
+    // A limpeza de worktrees leria a config da HOME real na subida.
     state.origins_home = root.path().to_path_buf();
     let server = tokio::spawn(hangar_server::routes::serve_with_state(listener, state));
     let response = reqwest::Client::new()
@@ -59,14 +25,7 @@ async fn owner_catalog_is_not_a_python_proxy() {
         .unwrap();
     let status = response.status();
     server.abort();
-    python.abort();
-    assert_eq!(
-        status, 200,
-        "o catálogo do dono ainda depende do handler Python"
-    );
-    // A sonda chega direto ao Python falso e também pelo servidor, que a repassa.
-    let reached: Vec<String> = paths.lock().unwrap().iter().filter(|p| crate::app_route(p)).cloned().collect();
-    assert!(reached.is_empty(), "o catálogo chegou ao Python: {reached:?}");
+    assert_eq!(status, 200);
 }
 
 #[test]
@@ -95,34 +54,6 @@ fn isolated_service(home: &std::path::Path) -> hangar_server::accounts::AccountS
         ]
         .into(),
     ))
-}
-
-#[tokio::test]
-async fn synced_hooks_refresh_reaches_the_account_runtime_through_the_private_bridge() {
-    let root = tempfile::tempdir().unwrap();
-    let private = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = private.local_addr().unwrap();
-    let mut state = AppState::new(Config {
-        listen:addr,internal_secret:"contract-internal".into(),
-        auth_token:"contract-only".into(),log_path:None,trusted:TrustedHosts::parse("127.0.0.1"),
-    });
-    state.accounts = isolated_service(root.path());
-    assert!(state.state.runtime.set(Arc::new(hangar_server::runtime::gateway::RuntimeRegistry::new("fixture".into()))).is_ok());
-    let app = hangar_server::routes::terminal_router(Arc::new(state));
-    let server = tokio::spawn(async move {
-        axum::serve(private,app.into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap();
-    });
-    let response = reqwest::Client::new().post(format!("http://{addr}/__hangar_server/accounts"))
-        .header("x-hangar-internal","contract-internal")
-        .json(&serde_json::json!({"action":"refresh_hooks","account_id":"default","attempt_id":null,"refresh":false}))
-        .send().await.unwrap();
-    let status = response.status();
-    let body:serde_json::Value = response.json().await.unwrap();
-    server.abort();
-    assert!(server.await.unwrap_err().is_cancelled());
-    assert_eq!(status,StatusCode::OK,"{body}");
-    assert_eq!(body["ok"],true);
-    assert_eq!(body["approval_required"],false);
 }
 
 #[test]
@@ -562,29 +493,6 @@ async fn account_read_uses_existing_client_and_exposes_only_public_identity() {
     server.await.unwrap();
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn http_probe_process() {
-    let Ok(upstream) = std::env::var("ACCOUNT_HTTP_UPSTREAM") else {
-        return;
-    };
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let mut state = AppState::new(Config {
-        listen: addr,
-        internal_secret: "contract-internal".into(),
-        auth_token: "contract-only".into(),
-        log_path: None,
-        trusted: TrustedHosts::parse("127.0.0.1"),
-    });
-    state.accounts.env.terminal_fixture = Some(reference_mux(upstream));
-    println!("ACCOUNT_HTTP:{addr}");
-    use std::io::Write;
-    std::io::stdout().flush().unwrap();
-    hangar_server::serve_until_with_state(listener, state, std::future::pending::<()>())
-        .await
-        .unwrap();
-}
-
 #[test]
 fn account_guard_remains_held_until_parent_ownership_ends() {
     use hangar_server::accounts::{AccountKey, AccountLocks, GuardMode, LockError, Provider};
@@ -764,16 +672,6 @@ fn account_guard_child_close_preserves_live_parent_ownership() {
 
 #[tokio::test]
 async fn accounts_named_like_subroutes_reach_deletion() {
-    let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let upstream_addr = upstream.local_addr().unwrap();
-    let python = tokio::spawn(async move {
-        axum::serve(
-            upstream,
-            Router::new().fallback(|| async { (StatusCode::SERVICE_UNAVAILABLE, "sem fatos") }),
-        )
-        .await
-        .unwrap();
-    });
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let root = tempfile::tempdir().unwrap();
@@ -814,22 +712,10 @@ async fn accounts_named_like_subroutes_reach_deletion() {
         assert!(root.path().join(format!(".codex-{name}")).exists());
     }
     server.abort();
-    python.abort();
 }
 
 #[tokio::test]
 async fn account_failure_reaches_the_exportable_journal() {
-    let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let upstream_addr = upstream.local_addr().unwrap();
-    let python = tokio::spawn(async move {
-        axum::serve(
-            upstream,
-            Router::new()
-                .fallback(|| async { (StatusCode::SERVICE_UNAVAILABLE, "sem fatos") }),
-        )
-        .await
-        .unwrap();
-    });
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let root = tempfile::tempdir().unwrap();
@@ -861,61 +747,5 @@ async fn account_failure_reaches_the_exportable_journal() {
     assert_eq!(entry["sessao"], "codex:journal");
     assert_eq!(entry["codigo"], "account_usage_unknown");
     server.abort();
-    python.abort();
 }
 
-/// Connect e convidado chegam ao Python; contas ainda têm um escritor só, o Rust, pela ponte.
-#[tokio::test]
-async fn python_ports_reach_the_account_owner_through_the_private_bridge() {
-    let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let upstream_addr = upstream.local_addr().unwrap();
-    let python = tokio::spawn(async move {
-        axum::serve(upstream, Router::new().fallback(|| async { StatusCode::SERVICE_UNAVAILABLE }))
-            .await
-            .unwrap();
-    });
-    let root = tempfile::tempdir().unwrap();
-    let private = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = private.local_addr().unwrap();
-    let mut state = AppState::new(Config {
-        listen: addr,
-        internal_secret: "contract-internal".into(),
-        auth_token: "contract-only".into(),
-        log_path: None,
-        trusted: TrustedHosts::parse("127.0.0.1"),
-    });
-    state.accounts = isolated_service(root.path());
-    let app = hangar_server::routes::terminal_router(Arc::new(state));
-    let server = tokio::spawn(async move {
-        axum::serve(private, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
-            .await
-            .unwrap()
-    });
-    let send = |path: &'static str, secret: Option<&'static str>| {
-        let mut request = reqwest::Client::new()
-            .post(format!("http://{addr}/__hangar_server/accounts/public"))
-            .header("x-hangar-path", path)
-            .header("content-type", "application/json")
-            .body(r#"{"name":"via-connect"}"#);
-        if let Some(secret) = secret {
-            request = request.header("x-hangar-internal", secret);
-        }
-        async move {
-            let response = request.send().await.unwrap();
-            let status = response.status().as_u16();
-            let body: serde_json::Value =
-                serde_json::from_slice(&response.bytes().await.unwrap()).unwrap_or_default();
-            (status, body)
-        }
-    };
-    let (status, body) = send("/api/codex-contas", Some("contract-internal")).await;
-    assert_eq!(status, 201, "{body}");
-    assert_eq!(body["id"], "via-connect");
-    assert!(root.path().join(".codex-via-connect").is_dir());
-    let (status, body) = send("/api/credenciais", Some("contract-internal")).await;
-    assert_eq!((status, body["code"].as_str()), (404, Some("account_route_not_owned")));
-    let (status, _) = send("/api/codex-contas", None).await;
-    assert_eq!(status, 404);
-    server.abort();
-    python.abort();
-}

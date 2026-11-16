@@ -1,6 +1,6 @@
 use crate::common;
 
-use axum::{Router, extract::{Path, Request, State}, http::StatusCode, response::{IntoResponse, Response}, routing::get};
+use axum::http::StatusCode;
 use common::costs::fixtures_copy;
 use hangar_server::{auth::TrustedHosts, config::Config, costs::collect::{Collector, ScopeSource, CollectError, Scopes, ClaudeScope, CodexScope, PiScope, KimiScope}, costs::fx::Fx, routes::{AppState, router}};
 use serde_json::{Value, json};
@@ -37,18 +37,25 @@ struct Upstream {
     journal: tempfile::TempDir,
 }
 
-async fn session_info(State(up): State<Arc<Upstream>>, Path(name): Path<String>, request: Request) -> Response {
-    up.hits.lock().unwrap().push((request.method().to_string(), request.uri().to_string()));
-    assert_eq!(request.headers()["x-hangar-internal"], SECRET);
-    if let Some(status) = up.info_failures.lock().unwrap().pop_front() { return status.into_response(); }
-    match up.infos.lock().unwrap().get(&name) {
-        Some(info) => ([("content-type", "application/json")], info.to_string()).into_response(),
-        None => StatusCode::NOT_FOUND.into_response(),
-    }
-}
-
 impl Upstream {
     fn journal(&self) -> Vec<Value> { crate::fake::read_diary(self.journal.path()) }
+}
+
+/// A descoberta das sessões destes testes: `infos` diz o que existe e `info_failures` faz a próxima falhar.
+struct UpstreamLocate(Arc<Upstream>);
+
+impl hangar_server::locate::Locate for UpstreamLocate {
+    fn info<'a>(&'a self, name: &'a str) -> hangar_server::locate::BoxFuture<'a,
+        Result<Option<hangar_server::transcript::InternalInfo>, hangar_server::locate::InfoFailed>> {
+        Box::pin(async move {
+            let encoded = percent_encoding::utf8_percent_encode(name, percent_encoding::NON_ALPHANUMERIC);
+            self.0.hits.lock().unwrap().push(("GET".into(), format!("/internal/sessions/{encoded}/info")));
+            let failure = self.0.info_failures.lock().unwrap().pop_front();
+            if failure.is_some() { return Err(hangar_server::locate::InfoFailed("fake_info")); }
+            let info = self.0.infos.lock().unwrap().get(name).cloned();
+            info.map(serde_json::from_value).transpose().map_err(|_| hangar_server::locate::InfoFailed("fake_info"))
+        })
+    }
 }
 
 impl ScopeSource for Upstream {
@@ -58,22 +65,10 @@ impl ScopeSource for Upstream {
     }
 }
 
-async fn python(State(up): State<Arc<Upstream>>, request: Request) -> Response {
-    up.hits.lock().unwrap().push((request.method().to_string(), request.uri().to_string()));
-    if request.headers().get("authorization").is_none_or(|token| token != &format!("Bearer {OWNER}")) {
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
-    if request.uri().query().is_some_and(|query| query.contains("fresco=inválido") || query.contains("fresco=invalid")) {
-        return (StatusCode::UNPROCESSABLE_ENTITY, "bool inválido").into_response();
-    }
-    (StatusCode::OK, [("content-type", "application/json")], json!({"from_python":true}).to_string()).into_response()
-}
-
 struct Harness {
     _dir: tempfile::TempDir,
     base: PathBuf,
     address: SocketAddr,
-    up_address: SocketAddr,
     upstream: Arc<Upstream>,
     collector: Arc<Collector>,
     state: Arc<AppState>,
@@ -103,10 +98,6 @@ impl Harness {
         };
         let upstream = Arc::new(Upstream { scopes: Mutex::new(has_scopes.then_some(scopes)), scope_reads: AtomicUsize::new(0), infos: Mutex::new(indexmap::IndexMap::new()), hits: Mutex::new(Vec::new()),
             info_failures: Mutex::new(Default::default()), journal: tempfile::tempdir().unwrap() });
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let up_address = listener.local_addr().unwrap();
-        let app = Router::new().route("/internal/sessions/{name}/info", get(session_info)).fallback(python).with_state(upstream.clone());
-        let up_task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         let index = if bad_disk {
             let blocked = dir.path().join("blocked");
             std::fs::create_dir(&blocked).unwrap();
@@ -131,7 +122,7 @@ impl Harness {
         let mut state = AppState::with_parts(cfg, hangar_server::terminal_control::TerminalPool::new(), collector.clone(), fx, String::new());
         state.diag = state.diag.clone().with_diary(Some(upstream.journal.path().to_owned()));
         state.origins_home = dir.path().join("home");
-        state.side.locate = Arc::new(crate::fake::FakeLocate { upstream: up_address, http: hangar_server::proxy::client(), secret: SECRET.into() });
+        state.side.locate = Arc::new(UpstreamLocate(upstream.clone()));
         for path in [state.origins_home.join(".claude/skills/minha-skill"), state.origins_home.join(".claude/plugins/cache/market/superpowers/1/skills/brainstorming")] {
             std::fs::create_dir_all(&path).unwrap(); std::fs::write(path.join("SKILL.md"), "# Skill sintética").unwrap();
         }
@@ -140,7 +131,7 @@ impl Harness {
         let address = listener.local_addr().unwrap();
         let app = router(state.clone());
         let server = tokio::spawn(async move { axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await.unwrap() });
-        Self { _dir: dir, base, address, up_address, upstream, collector, state, tasks: vec![up_task, server], client: hangar_server::http_client().redirect(reqwest::redirect::Policy::none()).build().unwrap() }
+        Self { _dir: dir, base, address, upstream, collector, state, tasks: vec![server], client: hangar_server::http_client().redirect(reqwest::redirect::Policy::none()).build().unwrap() }
     }
 
     fn request(&self, method: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
@@ -199,7 +190,6 @@ impl Harness {
         for task in &self.tasks { task.abort(); }
         for task in self.tasks.drain(..) { assert!(task.await.unwrap_err().is_cancelled()); }
         crate::assert_closed(self.address, "servidor de custos").await;
-        crate::assert_closed(self.up_address, "upstream de custos").await;
     }
 }
 

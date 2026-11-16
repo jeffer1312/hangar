@@ -1,5 +1,3 @@
-use hangar_server::{auth::TrustedHosts, config::Config, routes::AppState};
-
 #[test]
 fn native_storage_parses_quoted_keys_tables_and_duplicates() {
     use hangar_server::accounts::{catalog::Account, codex_login::validate_storage};
@@ -66,37 +64,6 @@ fn legacy_device_routes_are_owned() {
     assert!(hangar_server::migration_status::rust_route(&Method::GET, "/api/credenciais/codex"));
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn http_probe_process() {
-    let Ok(upstream) = std::env::var("ACCOUNT_HTTP_UPSTREAM") else {
-        return;
-    };
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let mut state = AppState::new(Config {
-        listen: addr,
-        internal_secret: "contract-internal".into(),
-        auth_token: "contract-only".into(),
-        log_path: None,
-        trusted: TrustedHosts::parse("127.0.0.1"),
-    });
-    state.accounts.env.terminal_fixture = Some(super::accounts_catalog::reference_mux(upstream));
-    if let Ok(base) = std::env::var("ACCOUNT_DEVICE_UPSTREAM") {
-        use hangar_server::accounts::codex_device_login::{DeviceOAuth,DeviceLogins};
-        state.accounts.device_logins=DeviceLogins::new(DeviceOAuth::new(&base).unwrap());
-    }
-    println!("ACCOUNT_HTTP:{addr}");
-    use std::io::Write;
-    std::io::stdout().flush().unwrap();
-    hangar_server::serve_until_with_state(
-        listener,
-        state,
-        hangar_server::parent_gone(tokio::io::stdin()),
-    )
-    .await
-    .unwrap();
-}
-
 #[tokio::test]
 async fn login_deadline_keeps_guard_until_helper_cleanup() {
     use hangar_server::accounts::{
@@ -147,7 +114,6 @@ process.stdout.write(JSON.stringify({id:m.id,result})+'\n');});"#;
     )
     .unwrap();
     let key = AccountKey::new(Provider::Codex, &account.home).unwrap();
-    let address = "127.0.0.1:9".parse().unwrap();
     let invalidator = CodexInvalidator::new(Arc::default());
     let runtime = Arc::new(hangar_server::runtime::gateway::RuntimeRegistry::new("test".into()));
     let attempt = service
@@ -366,7 +332,6 @@ process.stdout.write(JSON.stringify({id:m.id,result})+'\n');});"#;
     }
     environment.remove("CODEX_HOME");
     let service = AccountService::new(AccountEnvironment::from_map(environment));
-    let address = "127.0.0.1:9".parse().unwrap();
     let models = Arc::new(hangar_server::dictation::catalog::Models::default());
     let invalidator = CodexInvalidator::new(models.clone());
     let runtime = Arc::new(hangar_server::runtime::gateway::RuntimeRegistry::new("test".into()));

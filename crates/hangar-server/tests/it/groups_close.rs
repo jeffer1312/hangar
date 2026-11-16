@@ -27,8 +27,8 @@ async fn closing_a_rust_owned_grouped_session_returns_the_leave_warning() {
     assert!(registry.owns_codex_terminal("cx-proof"));
 
     let dir = tempfile::Builder::new().prefix("grp-sf-close-").tempdir().unwrap();
-    let (python, upstream) = fake::spawn_fake().await;
-    let mut state = hangar_server::routes::AppState::new(fake::config(upstream, "127.0.0.1"));
+    let (python, _) = fake::spawn_fake().await;
+    let mut state = hangar_server::routes::AppState::new(fake::config("127.0.0.1"));
     assert!(state.state.runtime.set(registry.clone()).is_ok());
     let groups = Arc::new(GroupService::new(PairDir::new(dir.path().join("pair"), dir.path().join("arquivo")),
         Arc::new(PythonOrq::from_state(&state)), "casa".into()));

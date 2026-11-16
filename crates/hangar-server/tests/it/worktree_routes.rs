@@ -194,11 +194,7 @@ async fn cleanup_known_repo_is_safe_when_another_discovery_root_is_missing() {
         std::fs::write(path.join("work.txt"), "trabalho local").unwrap();
     }
     std::fs::remove_file(residual.join(".git")).unwrap();
-    let app = axum::Router::new().fallback(|| async { axum::http::StatusCode::NOT_FOUND });
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let upstream = listener.local_addr().unwrap();
-    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    let mut state = hangar_server::routes::AppState::new(fake::config(upstream, "127.0.0.1"));
+    let mut state = hangar_server::routes::AppState::new(fake::config("127.0.0.1"));
     state.origins_home = home.clone();
     state.accounts = hangar_server::accounts::AccountService::new(
         hangar_server::accounts::environment::AccountEnvironment::from_map([
@@ -247,8 +243,6 @@ async fn cleanup_known_repo_is_safe_when_another_discovery_root_is_missing() {
         Some(&[root.to_string_lossy().into(), root.join("unavailable").to_string_lossy().into()]), None, false, &[]);
     assert_eq!(rows[0]["discovery_partial"], true);
     let result = worktree_policy::cleanup_once(Arc::new(state)).await;
-    server.abort();
-    assert!(server.await.unwrap_err().is_cancelled());
     assert_eq!(result.unwrap(), [root.join("repo-wt").to_string_lossy().into_owned()]);
     assert_eq!(std::fs::read_to_string(dirty.join("work.txt")).unwrap(), "trabalho local");
     assert_eq!(std::fs::read_to_string(residual.join("work.txt")).unwrap(), "trabalho local");
@@ -596,60 +590,6 @@ async fn t4_delete_keeps_conversations_until_resume_and_preserves_uuid_collision
         assert_eq!(std::path::Path::new(&resumed.request.cwd), repo);
     }).await.unwrap();
     assert_eq!(f.hits(), 0);
-}
-
-#[tokio::test]
-async fn t4_private_forwarding_keeps_method_and_guest_refusals_native() {
-    use hangar_server::{accounts::{AccountService, environment::AccountEnvironment}, list::{bridge::{ListBridge, ListEnv, parse_dirs}, facts::FactsClient, mux::Mux}};
-    let dir = scene();
-    let root = hangar_workspace::real(dir.path());
-    let home = root.join("home");
-    std::fs::create_dir(&home).unwrap();
-    #[cfg(unix)]
-    let mux = { let path = home.join("t4-private-mux"); crate::write_executable(&path, "#!/bin/sh\nexit 0\n"); path };
-    #[cfg(windows)]
-    let mux = { let path = home.join("t4-private-mux.cmd"); std::fs::write(&path, "@echo off\r\nexit /b 0\r\n").unwrap(); path };
-    let upstream = "127.0.0.1:9".parse().unwrap();
-    let mut state = hangar_server::routes::AppState::new(fake::config(upstream, "127.0.0.1"));
-    state.origins_home = home.clone();
-    state.accounts = AccountService::new(AccountEnvironment::from_map([
-        ("HOME".into(),home.to_string_lossy().into_owned()), ("USERPROFILE".into(),home.to_string_lossy().into_owned()),
-        ("CLAUDE_CONFIG_DIR".into(),home.join(".claude").to_string_lossy().into_owned()), ("CP_SCAN_ROOTS".into(),root.to_string_lossy().into_owned()),
-    ].into()));
-    let mut env = ListEnv::from_env();
-    env.dirs = parse_dirs(&serde_json::json!({"home":home,"claude":home.join(".claude"),"codex_home":home.join(".codex"),
-        "pi_sessions":home.join(".pi/agent/sessions"),"omp_config":home.join(".omp"),"omp_agent":home.join(".omp/agent"),"kimi_home":home.join(".kimi-code")}).to_string());
-    env.mux = Mux::with_program(mux, std::time::Duration::from_secs(5));
-    state.list = std::sync::Arc::new(ListBridge::new(env, FactsClient::new()));
-    let app = hangar_server::routes::terminal_router(std::sync::Arc::new(state));
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let server = tokio::spawn(async move { axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap() });
-    let url = format!("http://{addr}/__hangar_server/forwarded");
-    let unauthorized = client().get(&url).header("x-hangar-path", "/api/worktrees/settings").send().await.unwrap();
-    assert_eq!(unauthorized.status(), 404);
-    for (secret, forwarded) in [("wrong-secret", "127.0.0.1"), (fake::SECRET, "198.51.100.21")] {
-        let response = client().put(&url).header("x-hangar-internal", secret).header("x-forwarded-for", forwarded)
-            .header("x-hangar-path", "/api/worktrees/settings").json(&serde_json::json!({"location":"/should-not-exist"})).send().await.unwrap();
-        assert_eq!(response.status(), 404);
-    }
-    let redirects = reqwest::Client::builder().no_proxy().redirect(reqwest::redirect::Policy::none()).build().unwrap();
-    let slash = redirects.get(format!("{url}?keep=1")).header("x-hangar-internal", fake::SECRET)
-        .header("x-hangar-path", "/api/worktrees/create/").send().await.unwrap();
-    assert_eq!(slash.status(), 307);
-    assert_eq!(slash.headers()["location"], format!("http://{addr}/api/worktrees/create?keep=1"));
-    let mut seen = Vec::new();
-    for (path, guest) in [("/api/worktrees/create", false), ("/api/worktrees/settings", true)] {
-        let mut request = client().get(&url).header("x-hangar-internal", fake::SECRET).header("x-hangar-path", path);
-        if guest { request = request.header("x-hangar-forwarded-guest", "1"); }
-        let response = request.send().await.unwrap();
-        seen.push((response.status().as_u16(), response.json::<Value>().await.unwrap()));
-    }
-    server.abort();
-    assert!(server.await.unwrap_err().is_cancelled());
-    assert_eq!(seen, vec![(405, serde_json::json!({"detail":"Method Not Allowed"})),
-        (403, serde_json::json!({"detail":"convidado não acessa worktrees"}))]);
-    assert!(!home.join(".hangar/worktree-settings.json").exists());
 }
 
 #[tokio::test]
@@ -1191,16 +1131,9 @@ async fn merged_batch_accepts_a_repository_subdirectory() {
 
 #[tokio::test]
 async fn anonymous_worktree_requests_reach_auth_and_record_failures() {
-    use std::sync::{Arc,atomic::{AtomicUsize,Ordering}};
-    use axum::{Router,http::StatusCode};
-    let hits=Arc::new(AtomicUsize::new(0)); let seen=hits.clone();
-    let upstream=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap(); let address=upstream.local_addr().unwrap();
-    tokio::spawn(async move { axum::serve(upstream,Router::new().fallback(move |uri: axum::http::Uri| {let seen=seen.clone();async move {
-        if uri.path().starts_with("/api/worktrees") { seen.fetch_add(1,Ordering::SeqCst); }
-        StatusCode::UNAUTHORIZED
-    }})).await.unwrap(); });
+    use std::sync::Arc;
     let home=tempfile::tempdir().unwrap();
-    let mut state=hangar_server::routes::AppState::new(fake::config(address,"127.0.0.1")); state.origins_home=home.path().into();
+    let mut state=hangar_server::routes::AppState::new(fake::config("127.0.0.1")); state.origins_home=home.path().into();
     let state=Arc::new(state); let app=hangar_server::routes::router(state.clone());
     let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap(); let addr=listener.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(listener,app.into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap(); });
@@ -1212,7 +1145,6 @@ async fn anonymous_worktree_requests_reach_auth_and_record_failures() {
         if n%2==1 {req=req.bearer_auth("token-errado");}
         assert_eq!(req.send().await.unwrap().status(),401);
     }
-    assert_eq!(hits.load(Ordering::SeqCst),0);
     assert!(!state.auth.is_owner(ip,Some(OWNER.as_bytes())),"as recusas entram no bloqueio de autenticação");
 }
 

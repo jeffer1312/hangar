@@ -188,8 +188,8 @@ async fn refusal_outside_the_mods_leaves_the_python_access_line() {
 
 #[tokio::test]
 async fn session_outside_the_mods_without_runtime_gets_the_fixed_answer() {
-    let (python, upstream) = spawn_fake().await;
-    let server = spawn_state(AppState::new(config(upstream, "127.0.0.1"))).await;
+    let (python, _) = spawn_fake().await;
+    let server = spawn_state_for(&python, AppState::new(config("127.0.0.1"))).await;
     assert_eq!(post(server, "outra", "press", abrir(), Some(OWNER)).await.1["detail"]["code"], "mods_need_rust_server");
     assert_eq!(post(server, "outra", "show", json!({"site": "p"}), Some(OWNER)).await.0, 404);
     assert_eq!(python.hits_to("/api/sessions/outra/plugin/press"), 0);
@@ -256,10 +256,10 @@ async fn short_freeze_is_waited_inside_the_budget() {
 async fn server_without_runtime_refuses_with_code() {
     // Sem o registro do runtime não há porta para conferir: recusa com código, sem chamar o mod.
     let link = FakeLink::default();
-    let (python, upstream) = spawn_fake().await;
-    let state = AppState::new(config(upstream, "127.0.0.1"));
+    let (python, _) = spawn_fake().await;
+    let state = AppState::new(config("127.0.0.1"));
     state.mods.attach("s", 1, Arc::new(link.clone()));
-    let server = spawn_state(state).await;
+    let server = spawn_state_for(&python, state).await;
     let (status, body) = post(server, "s", "press", abrir(), Some(OWNER)).await;
     assert_eq!((status, body["detail"]["code"].as_str()), (503, Some("erro_mod_guarda_indisponivel")));
     assert!(link.calls.lock().unwrap().is_empty());
@@ -350,11 +350,11 @@ async fn concurrent_presses_run_one_at_a_time() {
 
 #[tokio::test]
 async fn copy_during_the_click_goes_back_to_the_app() {
-    let (_python, upstream) = spawn_fake().await;
-    let state = AppState::new(config(upstream, "127.0.0.1"));
+    let (_python, _) = spawn_fake().await;
+    let state = AppState::new(config("127.0.0.1"));
     let mods = state.mods.clone();
     let _ = state.state.runtime.set(Arc::new(RuntimeRegistry::new("instance-test".into())));
-    let server = spawn_state(state).await;
+    let server = spawn_state_for(&_python, state).await;
     let link = FakeLink::with(FakeInner { copy: Some((mods.clone(), "Texto copiado pela vitrine (V44)".into())), ..Default::default() });
     mods.attach("s", 1, Arc::new(link.clone()));
     // A cópia só é do clique quando vem do mod do botão (A11): o botão tem de estar no último `plugin_ui`.
@@ -365,23 +365,3 @@ async fn copy_during_the_click_goes_back_to_the_app() {
     assert_eq!((status, body["copied"].as_str()), (200, Some("Texto copiado pela vitrine (V44)")));
 }
 
-#[tokio::test]
-async fn private_mods_bridge_no_longer_exists() {
-    // O Python não devolve mais pedido de mod ao Rust: a rota privada saiu, e nada aciona o mod por ela.
-    let link = FakeLink::default();
-    let (_python, upstream) = spawn_fake().await;
-    let state = AppState::new(config(upstream, "127.0.0.1"));
-    let _ = state.state.runtime.set(Arc::new(RuntimeRegistry::new("instance-test".into())));
-    state.mods.attach("s", 1, Arc::new(link.clone()));
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let private = listener.local_addr().unwrap();
-    let app = hangar_server::routes::terminal_router(Arc::new(state));
-    tokio::spawn(async move { axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap() });
-    for op in ["press", "close", "show", "input"] {
-        let response = client().post(format!("http://{private}/__hangar_server/mods/s/{op}"))
-            .header("content-type", "application/json").header("x-hangar-internal", SECRET)
-            .body(json!({"site": "above-prompt", "plugin": "vitrine", "key": "abrir"}).to_string()).send().await.unwrap();
-        assert_eq!(response.status().as_u16(), 404, "{op}");
-    }
-    assert!(link.calls.lock().unwrap().is_empty());
-}

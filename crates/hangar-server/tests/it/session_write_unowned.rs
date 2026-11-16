@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
-use fake::{OWNER, SECRET, client};
+use fake::{OWNER, client};
 use hangar_server::list::bridge::{ListBridge, ListEnv, parse_dirs};
 use hangar_server::list::facts::FactsClient;
 use hangar_server::list::mux::Mux;
@@ -33,7 +33,6 @@ pub(crate) struct Rig {
     pub python: Arc<fake::Fake>,
     pub server: SocketAddr,
     /// A porta privada (as pontes que o Python chama).
-    pub private: SocketAddr,
     pub runtime: Arc<RuntimeRegistry>,
     pub state: Arc<AppState>,
     /// Solto no fim do teste; enquanto vivo, o vigia derruba o processo de testes no teto.
@@ -139,8 +138,8 @@ exec tmux -L '{label}' -f /dev/null "$@"
         let dirs = parse_dirs(&json!({"home": home, "claude": home.join(".claude"), "codex_home": home.join(".codex"),
             "pi_sessions": home.join(".pi/agent/sessions"), "omp_config": home.join(".omp"),
             "omp_agent": home.join(".omp/agent"), "kimi_home": home.join(".kimi-code")}).to_string());
-        let (python, upstream) = fake::spawn_fake().await;
-        let mut state = AppState::new(fake::config(upstream, "127.0.0.1"));
+        let (python, _) = fake::spawn_fake().await;
+        let mut state = AppState::new(fake::config("127.0.0.1"));
         state.diag = python.bind_diary(state.diag.clone());
         // Convidados com conta: `GUEST` vê as sessões do dono, `BLIND` não.
         let guests = hangar_server::login_guests::Service::new(hangar_server::login_guests::Settings { guests: root.join("guests.json"),
@@ -161,7 +160,7 @@ exec tmux -L '{label}' -f /dev/null "$@"
         let runtime = Arc::new(RuntimeRegistry::new("instance-test".into()).with_codex_environment(env).with_diagnostics(python.diagnostics()));
         if with_watcher { runtime.bind_watcher(watcher(&home, &wrapper)); }
         if with_runtime { assert!(state.state.runtime.set(runtime.clone()).is_ok()); }
-        state.side.locate = fake::fake_locate(upstream);
+        state.side.locate = python.locate();
         let pair = home.join(".claude/.hangar-pair");
         state.groups = Some(Arc::new(hangar_server::groups::service::GroupService::new(hangar_server::groups::store::PairDir::new(pair.clone(), root.join("arquivo")),
             Arc::new(hangar_server::groups::orq::PythonOrq::from_state(&state).with_paths(home.clone(), pair)), "rig".into())));
@@ -173,8 +172,7 @@ exec tmux -L '{label}' -f /dev/null "$@"
             addr
         };
         let server = serve(hangar_server::routes::router(state.clone())).await;
-        let private = serve(hangar_server::routes::terminal_router(state.clone())).await;
-        Rig { dir, label, home, python, server, private, runtime, state, _watchdog }
+        Rig { dir, label, home, python, server, runtime, state, _watchdog }
     }
 
     pub(crate) async fn new() -> Rig { Rig::build(true).await }
@@ -717,47 +715,6 @@ async fn internal_delivery_to_an_unowned_session_is_served_in_rust() {
     // D26: o aviso de grupo ao Codex com menu aberto volta como falha com o código (vai a `failed`/`pulados`).
     rig.codex("menu", "pane_codex_model_menu.txt", "static").await;
     assert_eq!(deliver_text(&rig.state, "menu", "aviso").await.unwrap_err()["code"], "codex_menu_open");
-    assert_eq!(rig.python_inputs(), 0);
-}
-
-// R1.1-10: aviso que entra pela porta do Connect (o Python repassa e segura o pedido). O recado a
-// sessão sem dono sai depois da rota, em processo, cada sessão no máximo 3 s; quem não recebeu (recusa ou
-// prazo) entra em `failed` como `srv::nome`, e o diário registra. A entrega lenta termina sozinha depois.
-// O Codex com menu aberto (D26) entra em `failed` pelo 409 dele.
-#[tokio::test(flavor = "multi_thread")]
-async fn connect_forwarded_notice_delivers_unowned_sessions_after_the_route_within_three_seconds() {
-    let rig = Rig::new().await;
-    rig.codex("lenta", "pane_codex_idle.txt", "echo").await;
-    rig.codex("menu", "pane_codex_model_menu.txt", "static").await;
-    rig.slow("lenta");
-    let pair = rig.home.join(".claude/.hangar-pair");
-    std::fs::create_dir_all(&pair).unwrap();
-    for name in ["lenta", "ghost", "menu"] {
-        std::fs::write(pair.join(format!("{name}.json")), json!({"peers": ["casa::s0"], "task": "t", "gid": "g1", "harness": {},
-            "fed": {"owner": "casa", "local": false, "version": 1}}).to_string()).unwrap();
-    }
-    let ask = json!({"protocol": 1, "origin": "casa", "sender": "s0", "text": "oi", "notice": "n1"});
-    let start = Instant::now();
-    let resp = client().post(format!("http://{}/__hangar_server/forwarded", rig.private)).header("x-hangar-path", "/api/groups/g1/deliver")
-        .header("x-hangar-internal", SECRET).header("content-type", "application/json").body(ask.to_string()).timeout(Duration::from_secs(60)).send().await.unwrap();
-    let elapsed = start.elapsed();
-    assert_eq!(resp.status().as_u16(), 200);
-    let got: Value = serde_json::from_str(&resp.text().await.unwrap()).unwrap();
-    let mut failed: Vec<String> = got["failed"].as_array().unwrap().iter().map(|f| f.as_str().unwrap().to_owned()).collect();
-    failed.sort();
-    assert_eq!(failed, ["rig::ghost", "rig::lenta", "rig::menu"], "{got}");
-    assert!(got.get("hangar_deliveries").is_none(), "{got}");
-    assert!(elapsed >= Duration::from_secs(3) && elapsed < Duration::from_secs(8), "prazo de 3 s por sessão: {elapsed:?}");
-    assert_eq!(rig.tui("menu", "keys.jsonl"), Vec::<Value>::new(), "nada digitado no menu");
-    // Teto próprio: o `wait_diary` não desiste enquanto a pasta do diário recebe outras linhas.
-    let diary = tokio::time::timeout(Duration::from_secs(15), fake::wait_diary(rig.python.diary_dir(), |row| row["evento"] == "rust.groups_deferred_failed"))
-        .await.expect("o diário registra a entrega adiada que falhou");
-    assert!(diary.iter().any(|row| row["evento"] == "rust.groups_deferred_failed"), "{diary:?}");
-    for _ in 0..200 {
-        if !submitted(&rig, "lenta").is_empty() { break; }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    assert_eq!(submitted(&rig, "lenta"), vec![json!({"text": "[grupo: casa::s0] oi"})], "a entrega largada pelo prazo termina");
     assert_eq!(rig.python_inputs(), 0);
 }
 

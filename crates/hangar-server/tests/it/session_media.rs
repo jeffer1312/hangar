@@ -1,20 +1,8 @@
-use super::fake::{Fake, OWNER, client, spawn_fake};
+use super::fake::{OWNER, client};
 use axum::http::StatusCode;
-use hangar_server::{
-    auth::TrustedHosts,
-    config::Config,
-    locate::{BoxFuture, InfoFailed, Locate},
-    routes::{AppState, router},
-    runtime::gateway::RuntimeRegistry,
-    transcript::InternalInfo,
-};
+use hangar_server::{auth::TrustedHosts, config::Config, locate::{BoxFuture, InfoFailed, Locate}, routes::{AppState, router}, runtime::gateway::RuntimeRegistry, transcript::InternalInfo};
 use serde_json::{Value, json};
-use std::{
-    collections::HashMap,
-    net::SocketAddr,
-    path::{Path, PathBuf},
-    sync::{Arc, Mutex},
-};
+use std::{collections::HashMap, net::SocketAddr, path::{Path, PathBuf}, sync::{Arc, Mutex}};
 
 #[derive(Default)]
 struct Sessions(Mutex<HashMap<String, InternalInfo>>);
@@ -27,7 +15,6 @@ impl Locate for Sessions {
 struct Scene {
     dir: tempfile::TempDir,
     sessions: Arc<Sessions>,
-    python: Arc<Fake>,
     runtime: Arc<RuntimeRegistry>,
     address: SocketAddr,
     task: tokio::task::JoinHandle<()>,
@@ -47,7 +34,6 @@ impl Scene {
     }
     async fn build(isolated: bool) -> Self {
         let dir = tempfile::tempdir().unwrap();
-        let (python, upstream) = spawn_fake().await;
         let cfg = Config {
             listen: "127.0.0.1:0".parse().unwrap(),
             auth_token: OWNER.into(),
@@ -73,7 +59,7 @@ impl Scene {
                 .await
                 .unwrap();
         });
-        Self { dir, sessions, python, runtime, address, task }
+        Self { dir, sessions, runtime, address, task }
     }
     async fn post(&self, path: &str, body: &str) -> (StatusCode, Value) {
         let response = client().post(format!("http://{}{path}", self.address)).bearer_auth(OWNER)
@@ -241,9 +227,7 @@ async fn transcript_image_of_an_invalid_transfer_is_refused_without_python() {
     let path = "/api/sessions/s/transcript-image/transfer:rec:claude:u/0";
     let response = scene.get_raw(path).await;
     assert!(!response.status().is_success());
-    assert_eq!(scene.python.hits_to(path), 0);
     let _ = scene.get_raw("/api/sessions/s/transcript-image/u/0").await;
-    assert_eq!(scene.python.hits_to("/api/sessions/s/transcript-image/u/0"), 0);
 }
 
 #[tokio::test]
@@ -277,7 +261,6 @@ async fn transcript_image_of_a_complete_transfer_comes_from_the_frozen_source_wi
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(response.headers()["content-type"], "image/png");
     assert_eq!(response.bytes().await.unwrap().as_ref(), b"\x89PNG\r\n\x1a\n");
-    assert_eq!(scene.python.hits_to(&path), 0);
 }
 
 // --- anexos ---
@@ -289,13 +272,10 @@ impl Scene {
         let status = response.status();
         (status, serde_json::from_str(&response.text().await.unwrap()).unwrap_or(Value::Null))
     }
-    fn facts_asked(&self, name: &str) -> usize {
-        self.python.hits_to(&format!("/internal/sessions/{name}/uploads-facts"))
-    }
 }
 
 #[tokio::test]
-async fn uploads_never_ask_python_for_the_session_facts() {
+async fn uploads_are_saved_listed_and_served() {
     let scene = Scene::new().await;
     scene.claude("s", &[]);
     let (status, saved) = scene.upload("s", b"abc", "nota%20final.TXT").await;
@@ -314,7 +294,6 @@ async fn uploads_never_ask_python_for_the_session_facts() {
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(response.headers()["content-type"].to_str().unwrap().split(';').next(), Some("text/plain"));
     assert_eq!(response.bytes().await.unwrap().as_ref(), b"abc");
-    assert_eq!(scene.facts_asked("s"), 0);
 }
 
 #[tokio::test]
@@ -354,24 +333,19 @@ fn upload_retention_follows_runtime_config_then_environment_then_thirty_days() {
 }
 
 #[tokio::test]
-async fn video_transcription_never_goes_through_python() {
-    let (python, upstream) = spawn_fake().await;
+async fn video_transcription_without_provider_is_empty() {
     let state = AppState::new(Config { listen: "127.0.0.1:0".parse().unwrap(), auth_token: OWNER.into(),
         internal_secret: "isolated".into(), log_path: None, trusted: TrustedHosts::parse("127.0.0.1") });
     let text = hangar_server::uploads::media::transcribe(&state, b"audio".to_vec()).await;
     assert_eq!(text, "");
-    assert_eq!(python.hits_to("/internal/sessions/s/upload-transcript"), 0);
 }
 
 // --- transcribe ---
 
-/// Servidor com um provedor de transcrição de mentira (devolve "ola mundo" e guarda o corpo) e a
-/// configuração servida pelo Python falso; qualquer outra chamada ao Python fica registrada.
+/// Servidor com um provedor de transcrição de mentira (devolve "ola mundo" e guarda o corpo).
 struct Speech {
     scene: Scene,
     heard: Arc<Mutex<Vec<Vec<u8>>>>,
-    python_paths: Arc<Mutex<Vec<String>>>,
-    private: SocketAddr,
     _tasks: Vec<tokio::task::JoinHandle<()>>,
 }
 async fn serve_router(router: axum::Router) -> (SocketAddr, tokio::task::JoinHandle<()>) {
@@ -391,13 +365,6 @@ impl Speech {
             json!([{"id": "p", "kind": "openai", "model": "m", "base_url": format!("http://{provider}")}])
         } else { providers };
         let config = json!({"providers": providers, "organization": {"dictation_organization_mode": "none"}});
-        let python_paths: Arc<Mutex<Vec<String>>> = Arc::default();
-        let seen = python_paths.clone();
-        let (upstream, upstream_task) = serve_router(axum::Router::new()
-            .fallback(move |uri: axum::http::Uri| {
-                if crate::app_route(uri.path()) { seen.lock().unwrap().push(uri.path().to_owned()); }
-                async { StatusCode::NOT_FOUND }
-            })).await;
         let mut scene = Scene::new().await;
         scene.task.abort();
         let cfg = Config { listen: "127.0.0.1:0".parse().unwrap(), auth_token: OWNER.into(), internal_secret: "isolated".into(),
@@ -412,27 +379,10 @@ impl Speech {
         let state = Arc::new(state);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         scene.address = listener.local_addr().unwrap();
-        let public = state.clone();
         scene.task = tokio::spawn(async move {
-            axum::serve(listener, router(public).into_make_service_with_connect_info::<SocketAddr>()).await.unwrap();
+            axum::serve(listener, router(state).into_make_service_with_connect_info::<SocketAddr>()).await.unwrap();
         });
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let private = listener.local_addr().unwrap();
-        let private_task = tokio::spawn(async move {
-            axum::serve(listener, hangar_server::routes::terminal_router(state).into_make_service_with_connect_info::<SocketAddr>()).await.unwrap();
-        });
-        Self { scene, heard, python_paths, private, _tasks: vec![provider_task, upstream_task, private_task] }
-    }
-    /// O pedido que o Python repassa de uma porta dele, já autenticado lá.
-    async fn forwarded(&self, path: &str, query: &str, body: &'static [u8], guest: bool) -> (StatusCode, Value) {
-        let mut req = client().post(format!("http://{}/__hangar_server/forwarded{query}", self.private))
-            .header("x-hangar-internal", "isolated").header("x-hangar-path", path).header("x-filename", "a.webm").body(body);
-        if guest {
-            req = req.header("x-hangar-forwarded-guest", "1");
-        }
-        let response = req.send().await.unwrap();
-        let status = response.status();
-        (status, serde_json::from_str(&response.text().await.unwrap()).unwrap_or(Value::Null))
+        Self { scene, heard, _tasks: vec![provider_task] }
     }
     async fn transcribe(&self, query: &str, body: &'static [u8], filename: Option<&str>) -> (StatusCode, Value) {
         let mut req = client().post(format!("http://{}/api/sessions/s/transcribe{query}", self.scene.address)).bearer_auth(OWNER).body(body);
@@ -460,7 +410,6 @@ async fn transcribe_saves_the_audio_and_answers_without_cleaning() {
     assert_eq!(body, json!({"path": path, "text": "ola mundo", "provider": body["provider"].clone()}));
     assert!(body["provider"].is_string());
     assert!(speech.heard_contains(b"\x00audio-bytes"));
-    assert_eq!(*speech.python_paths.lock().unwrap(), Vec::<String>::new(), "nada além da configuração vai ao Python");
 }
 
 #[tokio::test]
@@ -553,23 +502,6 @@ async fn transcribe_checks_session_transfer_and_query_types() {
     speech.scene.runtime.ingress().hold("s", std::time::Duration::from_millis(10)).await.unwrap();
     let (status, body) = speech.transcribe("?limpar=talvez", b"audio", Some("a.wav")).await;
     assert_eq!((status, body["detail"]["code"].clone()), (StatusCode::CONFLICT, json!("session_transfer_busy")));
-}
-
-#[tokio::test]
-async fn forwarded_from_python_ports_is_served_here_and_keeps_the_guest_limits() {
-    let speech = Speech::new(Value::Null).await;
-    speech.scene.claude("s", &[]);
-    let (status, saved) = speech.forwarded("/api/sessions/s/upload", "?audio_only=1", b"audio-antigo", false).await;
-    assert_eq!(status, StatusCode::OK, "{saved}");
-    let absolute = saved["path"].as_str().unwrap().to_owned();
-    let query = format!("?arquivo={}", percent_encoding::utf8_percent_encode(&absolute, percent_encoding::NON_ALPHANUMERIC));
-    let (status, body) = speech.forwarded("/api/sessions/s/transcribe", &query, b"", true).await;
-    assert_eq!((status, body["detail"]["code"].clone()), (StatusCode::FORBIDDEN, json!("erro_arquivo_caminho_convidado")), "{body}");
-    let (status, body) = speech.forwarded("/api/sessions/s/transcribe", &query, b"", false).await;
-    assert_eq!((status, body["path"].clone()), (StatusCode::OK, json!(absolute)), "{body}");
-    let (status, body) = speech.forwarded("/api/sessions/nenhuma/bash-output", "", br#"{"command": "ls"}"#, true).await;
-    assert_eq!((status, body), (StatusCode::OK, json!({"text": null})));
-    assert_eq!(*speech.python_paths.lock().unwrap(), Vec::<String>::new());
 }
 
 #[test]
@@ -686,7 +618,6 @@ async fn bash_output_of_unknown_session_is_null() {
     let scene = Scene::new().await;
     let (status, body) = scene.post("/api/sessions/nenhuma/bash-output", r#"{"command": "sleep 30"}"#).await;
     assert_eq!((status, body), (StatusCode::OK, json!({"text": null})));
-    assert_eq!(scene.python.hits_to("/api/sessions/nenhuma/bash-output"), 0);
 }
 
 #[test]

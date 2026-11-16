@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use fake::{OWNER, SECRET, client};
+use fake::{OWNER, client};
 use hangar_server::groups::orq::PythonOrq;
 use hangar_server::groups::service::{GroupService, JoinOwned};
 use hangar_server::groups::store::PairDir;
@@ -64,8 +64,7 @@ async fn server() -> Srv {
     let dirs = parse_dirs(&json!({"home": home, "claude": claude, "codex_home": home.join(".codex"),
         "pi_sessions": home.join(".pi/agent/sessions"), "omp_config": home.join(".omp"),
         "omp_agent": home.join(".omp/agent"), "kimi_home": home.join(".kimi-code")}).to_string());
-    let (_python, upstream) = fake::spawn_fake().await;
-    let mut state = AppState::new(fake::config(upstream, ""));
+    let mut state = AppState::new(fake::config(""));
     state.hangar_dir=home.join(".hangar");
     state.mission=Arc::new(hangar_mission::Store::new(state.hangar_dir.join("mission")));
     state.list = Arc::new(ListBridge::new(ListEnv { mux: Mux::with_program(&script, Duration::from_secs(5)),

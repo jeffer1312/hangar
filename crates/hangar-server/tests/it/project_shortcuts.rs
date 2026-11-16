@@ -91,7 +91,6 @@ struct Execution {
     scene: Scene,
     addr: std::net::SocketAddr,
     tasks: Vec<tokio::task::JoinHandle<()>>,
-    hits: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     runtime: std::sync::Arc<hangar_server::runtime::gateway::RuntimeRegistry>,
     state: std::sync::Arc<hangar_server::routes::AppState>,
 }
@@ -188,13 +187,7 @@ capture-pane) target=${{6#=}}; target=${{target%:}}; cat "$base/$target/output";
 esac
 exit 1
 "#,terms.display(),scene.panes.display()));
-        let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let hit = hits.clone();
-        let trap = axum::Router::new().fallback(move || { let hit=hit.clone(); async move { hit.fetch_add(1,Ordering::Relaxed); "upstream" } });
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let upstream = listener.local_addr().unwrap();
-        let trap_task = tokio::spawn(async move { axum::serve(listener,trap).await.unwrap(); });
-        let mut state = hangar_server::routes::AppState::new(crate::fake::config(upstream,"127.0.0.1"));
+        let mut state = hangar_server::routes::AppState::new(crate::fake::config("127.0.0.1"));
         state.accounts = hangar_server::accounts::AccountService::new(hangar_server::accounts::environment::AccountEnvironment::from_map([
             ("HOME".into(),scene.home.to_string_lossy().into_owned()),("USERPROFILE".into(),scene.home.to_string_lossy().into_owned()),
             ("CLAUDE_CONFIG_DIR".into(),scene.home.join(".claude").to_string_lossy().into_owned()),("SHELL".into(),shell.into()),
@@ -216,7 +209,7 @@ exit 1
         let state=std::sync::Arc::new(state);
         let app=hangar_server::routes::router(state.clone()).into_make_service_with_connect_info::<std::net::SocketAddr>();
         let task=tokio::spawn(async move { axum::serve(listener,app).await.unwrap(); });
-        Self {scene,addr,tasks:vec![trap_task,task],hits,runtime,state}
+        Self {scene,addr,tasks:vec![task],runtime,state}
     }
     async fn run(&self, name:&str, operation:&str, body:Value) -> reqwest::Response {
         client().post(format!("http://{}/api/sessions/fixture-{name}/{operation}",self.addr)).bearer_auth(OWNER).json(&body).send().await.unwrap()
@@ -281,7 +274,6 @@ async fn s01_waiting_execution_rechecks_the_life_before_effects() {
     assert_eq!(std::fs::read_dir(execution.scene.home.join("terms")).unwrap().count(),0);
     value(execution.run("main","shortcut-shell",json!({"command":command})).await,202).await;
     assert_eq!(std::fs::read_to_string(output).unwrap().trim_end(),execution.scene.wt.to_str().unwrap());
-    assert_eq!(execution.hits.load(Ordering::Relaxed),0);
 }
 
 #[cfg(unix)]
@@ -307,7 +299,6 @@ async fn s01_execution_holds_ingress_until_terminal_effects_finish() {
     closing.await.unwrap();
     execution.runtime.ingress().open("fixture-main");
     assert_eq!(std::fs::read_to_string(output).unwrap(),"effect");
-    assert_eq!(execution.hits.load(Ordering::Relaxed),0);
 }
 
 #[cfg(unix)]
@@ -331,7 +322,6 @@ async fn s01_shell_and_code_execute_in_the_requested_copy_folder() {
     assert_eq!(response["terminal"]["label"],"Terminal");
     assert_eq!(std::fs::read_to_string(marker).unwrap(),"BASH");
     assert_eq!(std::fs::read_to_string(output).unwrap().trim_end(),declared.scene.repo.join("sub").to_str().unwrap());
-    assert_eq!(declared.hits.load(Ordering::Relaxed),0);
     let response=value(execution.run("sub","shortcut-shell",json!({"command":"true","pasta":"missing"})).await,400).await;
     assert_eq!(response["detail"]["code"],"erro_shortcut_pasta");
     let response=value(execution.run("sub","run-code",json!({"command":"Write-Output 1","language":"powershell"})).await,409).await;
@@ -347,7 +337,6 @@ async fn s01_shell_and_code_execute_in_the_requested_copy_folder() {
         let response=value(execution.run("sub",operation,json!({"command":"⟦SEGREDO:PASS⟧"})).await,status).await;
         assert_eq!(response,json!({"detail":{"code":"erro_shortcut_segredo","msg":"preencha a credencial PASS antes de usar","params":{"nome":"PASS"}}}));
     }
-    assert_eq!(execution.hits.load(Ordering::Relaxed),0);
 }
 
 
@@ -402,7 +391,6 @@ async fn s01_hangar_reuses_one_ownerless_terminal_for_concurrent_clicks() {
     assert_ne!(replaced["terminal"]["id"],home_off["terminal"]["id"]);
     let response=value(execution.run("main","shortcut-shell",json!({"command":"true","runs_in":"hangar"})).await,400).await;
     assert_eq!(response["detail"]["code"],"erro_shortcut_sem_chave");
-    assert_eq!(execution.hits.load(Ordering::Relaxed),0);
 }
 
 #[cfg(unix)]
@@ -461,7 +449,6 @@ async fn s01_r1_restart_and_click_share_one_copy_and_preserve_original_spec() {
     assert!(!live[0].join("@cp_shortcut_owner").exists());
     assert_eq!(std::fs::read_to_string(live[0].join("@cp_shortcut_ask")).unwrap(),"0");
     assert!(["fixture-main","fixture-wt"].contains(&std::fs::read_to_string(live[0].join("@cp_shortcut_origin")).unwrap().as_str()));
-    assert_eq!(execution.hits.load(Ordering::Relaxed),0);
 }
 
 #[cfg(unix)]
@@ -522,7 +509,6 @@ async fn s01_login_folder_boundary_precedes_effects_and_valid_shell_still_runs()
     let response=client().post(&url).bearer_auth("s01-root-token").json(&json!({"command":format!("pwd > '{}'",output.display()),"pasta":"sub"})).send().await.unwrap();
     value(response,202).await;
     assert_eq!(std::fs::read_to_string(output).unwrap().trim_end(),execution.scene.repo.join("sub").to_str().unwrap());
-    assert_eq!(execution.hits.load(Ordering::Relaxed),0);
 }
 
 #[tokio::test]
@@ -964,18 +950,12 @@ else printf '%s' "$3" > '{}'; printf 'ok\n'; fi
         }
     }
     let _processes=Processes { mux:mux.clone(),socket };
-    let hits=std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let hit=hits.clone();
-    let trap=axum::Router::new().fallback(move || { let hit=hit.clone(); async move { hit.fetch_add(1,Ordering::Relaxed); axum::http::StatusCode::BAD_GATEWAY } });
-    let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let unavailable=listener.local_addr().unwrap();
-    let trap_task=tokio::spawn(async move { axum::serve(listener,trap).await.unwrap(); });
-    let (f, state, task) = workspace_fixture::real_terminal_fixture(&home, &metadata_mux, &mux, unavailable, environment).await;
+    let (f, state, task) = workspace_fixture::real_terminal_fixture(&home, &metadata_mux, &mux, environment).await;
     let runtime = f.runtime.clone();
     let addr = f.addr;
     let upstream=addr;
     let scene = Scene { _dir:dir, root, repo, wt, home, panes, f };
-    let execution = Execution { scene, addr, tasks:vec![task,trap_task], hits, runtime, state };
+    let execution = Execution { scene, addr, tasks:vec![task], runtime, state };
     let response = client().get(format!("http://{upstream}/api/hangar-terminals"))
         .bearer_auth(OWNER).send().await.expect("GET inicial do Rust real falhou");
     assert_eq!(value(response, 200).await, json!({"terminals":[]}));
@@ -1215,7 +1195,6 @@ wait"#;
         .bearer_auth(OWNER).send().await.unwrap(), 200).await;
     assert_eq!(value(client().get(format!("http://{upstream}/api/hangar-terminals"))
         .bearer_auth(OWNER).send().await.unwrap(), 200).await, json!({"terminals":[]}));
-    assert_eq!(execution.hits.load(Ordering::Relaxed),0,"consumidor não pode recorrer ao Python");
     println!("{}", json!({"rust_created":[first,global,code],"rust_get":observed,"other_owner":other}));
 }
 

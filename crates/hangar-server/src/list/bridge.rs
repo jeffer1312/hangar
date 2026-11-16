@@ -3,23 +3,17 @@
 //! privada, com o mesmo segredo da ponte de Git/arquivos. Falha volta com código, nunca lista vazia.
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::OsString;
-use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use axum::{
-    body::to_bytes,
-    extract::{ConnectInfo, Request, State},
-    http::{StatusCode, header},
-    response::{IntoResponse, Response},
-};
+use axum::{http::{StatusCode, header}, response::{IntoResponse, Response}};
 use hangar_api::session::SessionRow;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::classify::{CaptureSource, Classifier, Effect, Facts, MuxCapture};
+use super::classify::{Classifier, Effect, Facts, MuxCapture};
 use super::context::{self, ContextCache, ReadingInputs};
 use super::discover::{self, Resolver};
 use super::discover_other::{self, Dirs};
@@ -32,7 +26,6 @@ use super::mux::{Mux, Pane};
 use super::plan::PlanTracker;
 use super::procs::{self, ChildrenMap, ProcessView};
 use super::reply::ReplyCache;
-use crate::routes::AppState;
 
 /// Descoberta reaproveitada por quem pede dentro deste prazo (`_LIST_TTL` do `api.py`).
 pub const DISCOVER_TTL: Duration = Duration::from_secs(1);
@@ -1389,34 +1382,6 @@ async fn execute(bridge: &Arc<ListBridge>, op: Operation) -> Result<Value, ListE
 
 fn reply(value: Value) -> Response {
     (StatusCode::OK, [(header::CONTENT_TYPE, "application/json")], value.to_string()).into_response()
-}
-
-pub async fn private(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    if !crate::workspace_routes::private_ok(&st, peer, req.headers()) {
-        return StatusCode::NOT_FOUND.into_response();
-    }
-    let refused = |code: &'static str| {
-        if crate::warn_limit::allow(None, code) {
-            tracing::warn!(code, "ponte da lista recusou o pedido");
-        }
-        StatusCode::BAD_REQUEST.into_response()
-    };
-    let Ok(Ok(bytes)) = tokio::time::timeout(Duration::from_secs(6), to_bytes(req.into_body(), MAX_BODY)).await else {
-        return refused("list_bridge_body");
-    };
-    // Operação desconhecida aqui costuma ser Python e Rust de versões diferentes.
-    let Ok(op) = serde_json::from_slice::<Operation>(&bytes) else {
-        return refused("list_bridge_invalid_request");
-    };
-    match execute(&st.list, op).await {
-        Ok(result) => reply(json!({"ok": true, "result": result})),
-        Err(e) => {
-            if crate::warn_limit::allow(None, e.code) {
-                tracing::warn!(code = e.code, detail = e.detail, "ponte da lista falhou");
-            }
-            reply(json!({"ok": false, "error": {"code": e.code, "detail": e.detail}}))
-        }
-    }
 }
 
 #[cfg(test)]

@@ -8,8 +8,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[tokio::test]
 async fn health_answers_without_token_and_with_cors() {
-    let (_fake, up) = spawn_fake().await;
-    let srv = spawn_server(config(up, "127.0.0.1")).await;
+    let (_fake, _) = spawn_fake().await;
+    let srv = spawn_server_for(&_fake, config("127.0.0.1")).await;
     let r = client()
         .get(format!("http://{srv}/__hangar_server/health"))
         .header("origin", "http://outra.maquina")
@@ -29,15 +29,12 @@ async fn health_answers_without_token_and_with_cors() {
         {"provider": "codex", "headless": true}, {"provider": "codex", "headless": false},
         {"provider": "pi", "headless": false}, {"provider": "omp", "headless": false},
         {"provider": "kimi", "headless": false}]));
-    // O endereço da ponte de terminal é anunciado aqui, mas só pode ser de loopback.
-    let terminal = v["terminal_address"].as_str().expect("terminal_address");
-    assert!(terminal.starts_with("127.0.0.1:"), "{terminal}");
+    assert!(v.get("terminal_address").is_none(), "{v}");
     assert!(v["groups"].is_boolean(), "{v}");
 }
 
 #[tokio::test]
 async fn closed_stdin_stops_the_server() {
-    let (_fake, up) = spawn_fake().await;
     // Porta pública nova a cada tentativa: em paralelo, outro teste pode estar na porta da ponte do
     // plugin (127.0.0.1 na mesma porta), e aí o servidor sai com `AddrInUse` antes de atender.
     let mut started = None;
@@ -48,7 +45,7 @@ async fn closed_stdin_stops_the_server() {
         let (parent, child_stdin) = tokio::io::duplex(64);
         let server = tokio::spawn(hangar_server::serve_until(
             listener,
-            config(up, "127.0.0.1"),
+            config("127.0.0.1"),
             hangar_server::parent_gone(child_stdin),
         ));
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
@@ -86,8 +83,8 @@ async fn closed_stdin_stops_the_server() {
 
 #[tokio::test]
 async fn unknown_token_gets_401_from_rust() {
-    let (fake, up) = spawn_fake().await;
-    let srv = spawn_server(config(up, "127.0.0.1")).await;
+    let (fake, _) = spawn_fake().await;
+    let srv = spawn_server_for(&fake, config("127.0.0.1")).await;
     let r = client()
         .get(format!("http://{srv}/api/sessions/s/history"))
         .bearer_auth("token-de-convidado")
@@ -106,8 +103,8 @@ async fn unknown_token_gets_401_from_rust() {
 
 #[tokio::test]
 async fn blocked_origin_never_gets_the_owner_shortcut() {
-    let (fake, up) = spawn_fake().await;
-    let srv = spawn_server(config(up, "127.0.0.1")).await;
+    let (fake, _) = spawn_fake().await;
+    let srv = spawn_server_for(&fake, config("127.0.0.1")).await;
     let ip = "198.51.100.7";
     for _ in 0..8 {
         let r = client()

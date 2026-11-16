@@ -1,17 +1,6 @@
 use hangar_server::accounts::{AccountService, environment::AccountEnvironment};
 use hangar_server::runtime::actor::PolicyClient;
 use serde_json::json;
-use std::sync::{Arc,atomic::{AtomicUsize,Ordering}};
-
-/// Python falso: só conta conexões. A linha de status não pode abrir nenhuma.
-async fn counting_upstream() -> (std::net::SocketAddr,Arc<AtomicUsize>) {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    let calls = Arc::new(AtomicUsize::new(0));
-    let counter = calls.clone();
-    tokio::spawn(async move { while listener.accept().await.is_ok() { counter.fetch_add(1,Ordering::SeqCst); } });
-    (address,calls)
-}
 
 fn now() -> f64 { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64() }
 
@@ -38,17 +27,14 @@ fn home_with_cached_quota(expires_ms:f64) -> (tempfile::TempDir,AccountService,s
 }
 
 #[tokio::test]
-async fn status_line_windows_come_from_the_accounts_module_without_python() {
+async fn status_line_windows_come_from_the_accounts_module() {
     let (_home,service,claude) = home_with_cached_quota((now() + 3600.0) * 1000.0);
-    let (address,calls) = counting_upstream().await;
     let client = PolicyClient::new().with_accounts(service);
     for config_dir in ["",claude.to_str().unwrap()] {
         let quota = client.quota_windows("key",config_dir).await.unwrap();
         assert_eq!(quota,json!({"windows":[{"rotulo":"5h","pct":42,"reset_ts":null,"por_modelo":false}]}),"{config_dir:?}");
     }
     assert!(client.quota_windows("key","/conta/inexistente").await.is_none());
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    assert_eq!(calls.load(Ordering::SeqCst),0,"nenhuma ida ao Python no caminho da cota");
 }
 
 #[tokio::test]
@@ -64,8 +50,6 @@ async fn changed_credential_drops_the_old_quota_and_an_expired_token_does_not_re
 
 #[tokio::test]
 async fn without_the_accounts_module_the_line_has_no_windows() {
-    let (address,calls) = counting_upstream().await;
     let client = PolicyClient::new();
     assert!(client.quota_windows("key","").await.is_none());
-    assert_eq!(calls.load(Ordering::SeqCst),0);
 }

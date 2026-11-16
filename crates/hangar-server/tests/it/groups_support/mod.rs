@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use fake::{OWNER, SECRET, client};
+use fake::{OWNER, client};
 use hangar_server::groups::federation::{self, Timing};
 use hangar_server::groups::orq::PythonOrq;
 use hangar_server::groups::peers::{PeerBook, PeerClient};
@@ -18,7 +18,7 @@ use hangar_server::groups::store::PairDir;
 use hangar_server::list::bridge::{ListBridge, ListEnv, parse_dirs};
 use hangar_server::list::facts::FactsClient;
 use hangar_server::list::mux::Mux;
-use hangar_server::routes::{AppState, router, terminal_router};
+use hangar_server::routes::{AppState, router};
 use hangar_server::runtime::gateway::RuntimeRegistry;
 use hangar_server::share::store::Kind;
 use serde_json::{Value, json};
@@ -27,7 +27,7 @@ pub const NAMES: [&str; 4] = ["s0", "s1", "s2", "s3"];
 
 /// `addr` = porta do dono; `private` = a porta privada (ponte do Python); `changes` conta os avisos
 /// de mudança à lista.
-pub struct Machine { pub addr: SocketAddr, pub private: SocketAddr, pub python: Arc<fake::Fake>, pub pair: PathBuf, pub root: PathBuf,
+pub struct Machine { pub addr: SocketAddr, pub python: Arc<fake::Fake>, pub pair: PathBuf, pub root: PathBuf,
     pub state: Arc<AppState>, pub share: Arc<hangar_server::share::ShareState>, pub changes: Arc<AtomicUsize>, pub runtime: Arc<RuntimeRegistry>,
     pub sink: crate::sink::Sink }
 
@@ -58,8 +58,8 @@ pub async fn machine(root: &Path, id: &str) -> Machine {
     let dirs = parse_dirs(&json!({"home": home, "claude": home.join(".claude"), "codex_home": home.join(".codex"),
         "pi_sessions": home.join(".pi/agent/sessions"), "omp_config": home.join(".omp"),
         "omp_agent": home.join(".omp/agent"), "kimi_home": home.join(".kimi-code")}).to_string());
-    let (python, upstream) = fake::spawn_fake().await;
-    let mut state = AppState::new(fake::config(upstream, ""));
+    let (python, _) = fake::spawn_fake().await;
+    let mut state = AppState::new(fake::config(""));
     state.diag = python.bind_diary(state.diag.clone());
     state.accounts = hangar_server::accounts::AccountService::new(
         hangar_server::accounts::environment::AccountEnvironment::from_map(
@@ -88,8 +88,7 @@ pub async fn machine(root: &Path, id: &str) -> Machine {
     assert!(state.state.runtime.set(runtime.clone()).is_ok());
     let state = Arc::new(state);
     let addr = serve(router(state.clone())).await;
-    let private = serve(terminal_router(state.clone())).await;
-    Machine { addr, private, python, pair, root: root.to_path_buf(), state, share, changes, runtime, sink }
+    Machine { addr, python, pair, root: root.to_path_buf(), state, share, changes, runtime, sink }
 }
 
 /// Endereço que recusa conexão: a máquina fora do ar. A porta fica presa por um socket sem

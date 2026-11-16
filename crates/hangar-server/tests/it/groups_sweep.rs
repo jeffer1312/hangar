@@ -216,7 +216,7 @@ async fn dead_owner_of_a_cross_machine_pair_leaves() {
 async fn lone_orq_clear_failure_does_not_stop_the_others() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("pair");
-    let (python, _upstream) = fake::spawn_fake().await;
+    let (python, _) = fake::spawn_fake().await;
     let groups = GroupService::new(PairDir::new(root.clone(), tmp.path().join("arquivo")), Arc::new(Phase(Mutex::default())), "casa".into())
         .with_diary(python.diagnostics());
     for name in ["a1", "b2"] { join(&groups, name, &[], true).await; }
@@ -261,8 +261,8 @@ async fn dead_session_with_sanitized_name_ends_its_external_pair_by_the_raw_name
     std::fs::write(root.join("nome-com-espa-o.json"), serde_json::json!({"peers": ["pc-ana::Y"], "task": "", "gid": "abababab", "harness": {}}).to_string()).unwrap();
     std::fs::write(root.join("external_pairs.json"), serde_json::json!([{"share_id": "sh1", "local_session": "nome com espaço", "alias": "pc-ana",
         "peer_owner": "Ana", "peer_session": "Y", "peer_address": format!("http://{other_addr}"), "peer_token": "tok", "created_at": 1.0}]).to_string()).unwrap();
-    let (python, upstream) = fake::spawn_fake().await;
-    let mut state = hangar_server::routes::AppState::new(fake::config(upstream, ""));
+    let (python, _) = fake::spawn_fake().await;
+    let mut state = hangar_server::routes::AppState::new(fake::config(""));
     state.diag = python.bind_diary(state.diag.clone());
     let groups = Arc::new(GroupService::new(PairDir::new(root.clone(), tmp.path().join("arquivo")),
         Arc::new(PythonOrq::from_state(&state)), "casa".into()));

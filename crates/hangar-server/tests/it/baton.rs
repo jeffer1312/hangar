@@ -1680,7 +1680,7 @@ fn b01_cancel_opening_keeps_ingress_until_the_detached_last_effect() {
             }
         }).unwrap();
         watcher.watch(root,notify::RecursiveMode::Recursive).unwrap();
-        let mut state=hangar_server::routes::AppState::new(crate::fake::config(crate::refused_address(),"127.0.0.1"));
+        let mut state=hangar_server::routes::AppState::new(crate::fake::config("127.0.0.1"));
         state.accounts=hangar_server::accounts::AccountService::new(hangar_server::accounts::environment::AccountEnvironment::capture());
         state.origins_home=h.home.clone();state.list=h.fixture.list.clone();
         assert!(state.state.runtime.set(h.fixture.runtime.clone()).is_ok());

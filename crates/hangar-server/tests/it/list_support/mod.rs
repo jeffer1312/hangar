@@ -1,11 +1,11 @@
 //! Servidor da lista do dono com sessões Claude de mentira, para os testes das rotas e do acordar
 //! por arquivo. O multiplexador é um script que conta as chamadas e recusa enquanto existir `fail`.
 #![allow(dead_code)]
-use crate::fake::{self, OWNER, SECRET, client, config, next_named, sse, Events};
+use crate::fake::{self, OWNER, client, config, next_named, sse, Events};
 use hangar_server::list::bridge::{ListBridge, ListEnv, parse_dirs};
 use hangar_server::list::facts::FactsClient;
 use hangar_server::list::mux::Mux;
-use hangar_server::routes::{AppState, router, terminal_router};
+use hangar_server::routes::{AppState, router};
 use serde_json::{Value, json};
 use std::net::SocketAddr;
 use std::path::Path;
@@ -53,7 +53,7 @@ pub fn calls(root: &Path, sub: &str) -> usize {
 }
 
 /// `private`: a porta privada do mesmo estado, a das pontes que o Python chama.
-pub struct Server { pub addr: SocketAddr, pub private: SocketAddr, pub python: Arc<fake::Fake>, pub list: Arc<ListBridge>,
+pub struct Server { pub addr: SocketAddr, pub python: Arc<fake::Fake>, pub list: Arc<ListBridge>,
     pub devices: Arc<hangar_server::connect::devices::Store> }
 
 pub async fn server(root: &Path, n: usize) -> Server { server_trusting(root, n, "").await }
@@ -65,8 +65,8 @@ pub async fn server_trusting(root: &Path, n: usize, trusted: &str) -> Server {
     let dirs = parse_dirs(&json!({"home": home, "claude": home.join(".claude"), "codex_home": home.join(".codex"),
         "pi_sessions": home.join(".pi/agent/sessions"), "omp_config": home.join(".omp"),
         "omp_agent": home.join(".omp/agent"), "kimi_home": home.join(".kimi-code")}).to_string());
-    let (python, upstream) = fake::spawn_fake().await;
-    let mut state = AppState::new(config(upstream, trusted));
+    let (python, _) = fake::spawn_fake().await;
+    let mut state = AppState::new(config(trusted));
     state.diag = python.bind_diary(state.diag.clone());
     // Nunca o `~/.hangar` de quem roda os testes.
     state.devices = Arc::new(hangar_server::devices::Registry::new(home.join(".hangar/devices.json")));
@@ -86,13 +86,9 @@ pub async fn server_trusting(root: &Path, n: usize, trusted: &str) -> Server {
     let state = Arc::new(state);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let app = router(state.clone()).into_make_service_with_connect_info::<SocketAddr>();
+    let app = router(state).into_make_service_with_connect_info::<SocketAddr>();
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let private = listener.local_addr().unwrap();
-    let app = terminal_router(state).into_make_service_with_connect_info::<SocketAddr>();
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    Server { addr, private, python, list, devices }
+    Server { addr, python, list, devices }
 }
 
 pub async fn get(addr: SocketAddr, token: &str) -> (u16, Value) {

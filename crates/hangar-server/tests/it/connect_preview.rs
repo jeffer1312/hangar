@@ -2,7 +2,7 @@
 //! conferir o byte que passou. Programas e "internet" são falsos.
 use crate::connect_port::{device, free_port};
 use crate::connect_supervisor::{alone, gate, linked, pid_of, read_pid, until};
-use crate::fake::{Fake, OWNER, client, config, spawn_fake, spawn_state};
+use crate::fake::{Fake, OWNER, client, config, spawn_fake, spawn_state_for};
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -444,15 +444,15 @@ async fn server_with(found: bool) -> Server {
     let supervisor = Arc::new(alone(&dir));
     state::write(&dir, &linked()).unwrap();
     std::fs::write(gate(&dir), "").unwrap();
-    let (python, upstream) = spawn_fake().await;
-    let mut app = AppState::new(config(upstream, "127.0.0.1"));
+    let (python, _) = spawn_fake().await;
+    let mut app = AppState::new(config("127.0.0.1"));
     let (connect, preview) = (free_port(), free_port());
     app.connect = Some(connect);
     app.preview = Some(preview);
     app.connect_supervisor = supervisor.clone();
     app.connect_preview_reach = Arc::new(reach(preview.port(), found).await);
     let device = device(&mut app);
-    let main = spawn_state(app).await;
+    let main = spawn_state_for(&python, app).await;
     wait_open(connect).await;
     wait_open(preview).await;
     Server { _tmp: tmp, _python: python, dir, supervisor, main, connect, preview, device }

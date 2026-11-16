@@ -1653,37 +1653,19 @@ proptest::proptest! {
 
 // ── a criação pelo app: `POST /api/claude-configs` ──────────────────────────────────────────
 
-/// O handler das contas com elas no HOME dado e um Python falso que anota todo caminho pedido (a ponte
-/// `/internal/accounts/prepare` inclusive). Chamado direto, sem `serve_with_state`: as tarefas de
+/// O handler das contas com elas no HOME dado. Chamado direto, sem `serve_with_state`: as tarefas de
 /// fundo do servidor leriam o HOME real do processo de teste.
 struct App {
     state: std::sync::Arc<hangar_server::routes::AppState>,
-    python_paths: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
-    python: tokio::task::JoinHandle<()>,
-}
-
-impl Drop for App {
-    fn drop(&mut self) { self.python.abort(); }
 }
 
 async fn app(home: &Path) -> App {
     use hangar_server::{auth::TrustedHosts, config::Config, routes::AppState};
-    let python_paths = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-    let seen = python_paths.clone();
-    let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let upstream_addr = upstream.local_addr().unwrap();
-    let python = tokio::spawn(async move {
-        let router = axum::Router::new().fallback(move |uri: axum::http::Uri| {
-            seen.lock().unwrap().push(uri.path().to_owned());
-            async { (axum::http::StatusCode::SERVICE_UNAVAILABLE, "handler Python bloqueado") }
-        });
-        axum::serve(upstream, router).await.unwrap();
-    });
     let mut state = AppState::new(Config { listen: "127.0.0.1:9".parse().unwrap(),
         internal_secret: "contract-internal".into(), auth_token: "contract-only".into(), log_path: None,
         trusted: TrustedHosts::parse("127.0.0.1") });
     state.accounts = hangar_server::accounts::AccountService::new(env_of(home));
-    App { state: std::sync::Arc::new(state), python_paths, python }
+    App { state: std::sync::Arc::new(state) }
 }
 
 /// `POST /api/claude-configs`; com `timeout` estourado, o future do handler é largado no meio (o
@@ -1706,7 +1688,7 @@ fn umask_022() {
 }
 
 /// A criação pelo app chega ao mesmo estado final do comando (o marcador só no fim e o modo da pasta são
-/// D8 e D16) sem chamar o Python: nenhuma ida à ponte `/internal/accounts/prepare`.
+/// D8 e D16).
 async fn check_http(name: &str) {
     umask_022();
     let expected = fixture(name);
@@ -1739,8 +1721,6 @@ async fn check_http(name: &str) {
             }
         }
     }
-    let python: Vec<String> = app.python_paths.lock().unwrap().iter().filter(|p| crate::app_route(p)).cloned().collect();
-    assert!(python.is_empty(), "{name}: a criação chamou o Python: {python:?}");
     let tree = tree(&home);
     let (diary, _) = diary(&home, &accounts);
     unlock(&home);

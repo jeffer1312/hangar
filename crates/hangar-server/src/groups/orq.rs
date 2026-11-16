@@ -44,16 +44,6 @@ impl PythonOrq {
     }
 }
 
-/// `runs.group_phase` em JSON: `null` = não começou; ausente ou outro valor = não se sabe.
-pub(crate) fn phase_of(phase: Option<&Value>) -> OrqPhase {
-    match phase {
-        Some(Value::Null) => OrqPhase::NotStarted,
-        Some(phase) if phase == "live" => OrqPhase::Live,
-        Some(phase) if phase == "ended" => OrqPhase::Ended,
-        _ => OrqPhase::Unknown,
-    }
-}
-
 impl OrqFacts for PythonOrq {
     fn phase<'a>(&'a self, gid: &'a str) -> BoxFuture<'a, OrqPhase> {
         Box::pin(async move {

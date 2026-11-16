@@ -57,15 +57,6 @@ impl IngressGates {
             tokio::time::timeout_at(deadline, closes.changed()).await.map_err(|_| GateClosed)?.map_err(|_| GateClosed)?;
         }
     }
-    /// O repasse ao Python passa por fechamentos e retenções comuns; só a transferência o recusa.
-    /// Contado à parte, sob a mesma trava: só a transferência espera o seu término.
-    pub(crate) fn enter_forwarded(&self,name:&str)->Result<IngressPass,GateClosed> {
-        self.with_gate(name,|g| {
-            if g.transfers>0 {return Err(GateClosed);}
-            g.forwarded.send_modify(|n|*n+=1);
-            Ok(IngressPass {gates:self.clone(),name:name.into(),forwarded:true})
-        })
-    }
     pub async fn close(&self, name: &str, wait: Duration) -> Result<(), IngressBusy> { self.close_as(name, wait, false, false, false, false).await.map_err(|_| IngressBusy) }
     /// Fechamento que não passa por cima de um retido: com a troca de conversa em curso, `Held` na hora.
     pub async fn close_unless_held(&self, name: &str, wait: Duration) -> Result<(), CloseRefused> { self.close_as(name, wait, false, false, true, false).await }
@@ -139,27 +130,6 @@ impl Drop for IngressPass {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[tokio::test]
-    async fn forwarded_requests_ignore_normal_close_but_hold_waits_and_refuses_new_requests() {
-        let gates=IngressGates::default();
-        gates.close("session",Duration::from_secs(1)).await.unwrap();
-        let pass=gates.enter_forwarded("session").unwrap();
-        gates.hold("session",Duration::from_millis(10)).await.expect("a retenção comum não espera o repasse");
-        assert!(gates.enter_forwarded("session").is_ok(),"a retenção comum não recusa o repasse");
-        gates.release("session");
-        let held=gates.hold_transfer("session",Duration::from_secs(1));
-        tokio::pin!(held);
-        assert!(futures_util::poll!(&mut held).is_pending(),"a transferência espera o repasse já aceito");
-        assert!(gates.enter_forwarded("session").is_err(),"a retenção recusa novos repasses");
-        drop(pass);
-        held.await.unwrap();
-        assert!(gates.enter_forwarded("session").is_err());
-        gates.release_transfer("session");
-        assert!(gates.enter_forwarded("session").is_ok(),"o fechamento comum não prende o proxy");
-        gates.open("session");
-        assert!(gates.inner.lock().unwrap().is_empty());
-    }
 
     #[tokio::test]
     async fn rename_and_conversation_transfer_refuse_each_other() {

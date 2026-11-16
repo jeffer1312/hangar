@@ -513,32 +513,3 @@ async fn panel_cap_refuses_1013() {
     assert_eq!(close_of(&mut c).await, (1013, "multiplexador indisponivel".to_string()));
 }
 
-/// Porta privada do servidor, lida da saúde.
-async fn private_addr(addr: SocketAddr) -> SocketAddr {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
-    s.write_all(b"GET /__hangar_server/health HTTP/1.0\r\nHost: x\r\n\r\n").await.unwrap();
-    let mut out = String::new();
-    s.read_to_string(&mut out).await.unwrap();
-    let v: serde_json::Value = serde_json::from_str(out.split("\r\n\r\n").nth(1).unwrap()).unwrap();
-    assert_eq!(v["terminal_panel"], true, "a saúde diz que o painel é do Rust");
-    v["terminal_address"].as_str().unwrap().parse().unwrap()
-}
-
-/// R4: `term.active` saiu da ponte da lista com o último chamador do Python (o 409 do painel aberto):
-/// a operação é a recusa de operação desconhecida.
-#[tokio::test]
-async fn term_active_is_gone_from_the_list_bridge() {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    let tmux = Tmux::new();
-    tmux.session("p3");
-    let srv = server(&tmux, |_| {}).await;
-    let private = private_addr(srv.addr).await;
-    let body = serde_json::json!({"op": "term.active", "args": {"name": "p3"}}).to_string();
-    let mut s = tokio::net::TcpStream::connect(private).await.unwrap();
-    s.write_all(format!("POST /__hangar_server/list HTTP/1.0\r\nHost: x\r\nx-hangar-internal: s\r\n\
-        content-type: application/json\r\ncontent-length: {}\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
-    let mut out = String::new();
-    s.read_to_string(&mut out).await.unwrap();
-    assert!(out.starts_with("HTTP/1.0 400") || out.starts_with("HTTP/1.1 400"), "{out}");
-}

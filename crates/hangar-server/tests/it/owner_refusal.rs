@@ -14,8 +14,8 @@ async fn status_and_body(response: reqwest::Response) -> (u16, Value) {
 /// R5-07: `/api/presence` só existe no Rust; sem o dono, 401 em vez do 404 do FastAPI.
 #[tokio::test]
 async fn r5_07_rust_only_route_refuses_the_stranger_with_401() {
-    let (python, upstream) = spawn_fake().await;
-    let srv = spawn_server(config(upstream, "127.0.0.1")).await;
+    let (python, _) = spawn_fake().await;
+    let srv = spawn_server_for(&python, config("127.0.0.1")).await;
     let refused: Value = serde_json::from_str(REFUSED).unwrap();
     let get = client().get(format!("http://{srv}/api/presence")).bearer_auth("errado").send().await.unwrap();
     assert_eq!(status_and_body(get).await, (401, refused.clone()));
@@ -28,8 +28,8 @@ async fn r5_07_rust_only_route_refuses_the_stranger_with_401() {
 /// R5-08: `POST /api/sessions/{n}/conta` (o Python só tinha o `GET`): sem o dono, 401 em vez do 405.
 #[tokio::test]
 async fn r5_08_method_the_python_never_had_is_401_for_the_stranger() {
-    let (python, upstream) = spawn_fake().await;
-    let srv = spawn_server(config(upstream, "127.0.0.1")).await;
+    let (python, _) = spawn_fake().await;
+    let srv = spawn_server_for(&python, config("127.0.0.1")).await;
     let post = client().post(format!("http://{srv}/api/sessions/s0/conta")).header("content-type", "application/json")
         .body("{}").send().await.unwrap();
     assert_eq!(status_and_body(post).await, (401, serde_json::from_str::<Value>(REFUSED).unwrap()));
@@ -46,7 +46,7 @@ const GUEST_REFUSED: &str = r#"{"detail":{"code":"erro_fora_do_convidado","param
 /// Python falso e servidor com os dois convidados com login; a pasta segura o cadastro deles.
 async fn with_guests() -> (std::sync::Arc<Fake>, std::net::SocketAddr, tempfile::TempDir) {
     use hangar_server::login_guests::{Service, Settings};
-    let (python, upstream) = spawn_fake().await;
+    let (python, _) = spawn_fake().await;
     let home = crate::physical_tempdir();
     let service = Service::new(Settings { guests: home.path().join("guests.json"), vault: home.path().join("vault.json"),
         runtime_config: home.path().join("runtime-config.json"), sync_enabled: false, bootstrap: String::new(),
@@ -54,10 +54,10 @@ async fn with_guests() -> (std::sync::Arc<Fake>, std::net::SocketAddr, tempfile:
     let root = home.path().to_str().unwrap();
     service.store.create("Ana", root, false, true, "ana".into(), BLIND.into()).unwrap();
     service.store.create("Bia", root, true, true, "bia".into(), SEER.into()).unwrap();
-    let mut state = hangar_server::routes::AppState::new(config(upstream, "127.0.0.1"));
+    let mut state = hangar_server::routes::AppState::new(config("127.0.0.1"));
     state.share = None;
     state.login_guests = std::sync::Arc::new(service);
-    (python, spawn_state(state).await, home)
+    (python, spawn_state_for(&python, state).await, home)
 }
 
 /// Cada pedido de uma origem própria: as recusas contadas não somam o bloqueio de uma só.
@@ -122,8 +122,8 @@ async fn r5_other_session_routes_refuse_strangers_and_guests_in_rust() {
 /// R5, rotas do dono fora da sessão: o estranho leva o 401 do Rust no método que só o Python tinha.
 #[tokio::test]
 async fn r5_owner_routes_refuse_the_stranger_on_the_method_python_had() {
-    let (python, upstream) = spawn_fake().await;
-    let srv = spawn_server(config(upstream, "127.0.0.1")).await;
+    let (python, _) = spawn_fake().await;
+    let srv = spawn_server_for(&python, config("127.0.0.1")).await;
     let refused: Value = serde_json::from_str(REFUSED).unwrap();
     for (i, (method, path)) in [("POST", "/api/costs"), ("POST", "/api/search"), ("POST", "/api/archive"), ("PUT", "/api/broadcast")]
         .iter().enumerate() {
@@ -152,8 +152,8 @@ async fn r5_owner_only_relaunch_routes_refuse_everyone_else_in_rust() {
 /// do Rust, corpo exato, e nada chega ao Python. Cada pedido de uma origem: o bloqueio não entra na conta.
 #[tokio::test]
 async fn r5_09_every_owner_route_the_python_had_refuses_the_stranger_with_the_exact_401() {
-    let (python, upstream) = spawn_fake().await;
-    let srv = spawn_server(config(upstream, "127.0.0.1")).await;
+    let (python, _) = spawn_fake().await;
+    let srv = spawn_server_for(&python, config("127.0.0.1")).await;
     let refused: Value = serde_json::from_str(REFUSED).unwrap();
     // Só as que o Rust atende sozinho: as que ainda têm handler no Python (`@app`/`@router` em
     // `backend/app`) e o `jev/*`, que o Rust repassa, ficam fora.
@@ -199,7 +199,7 @@ async fn r5_10_a_login_guest_on_the_session_defaults_is_the_uniform_403() {
 #[tokio::test]
 async fn r5_05_the_terminal_with_a_wrong_token_is_403_empty_counted_once_and_the_eighth_blocks() {
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-    let srv = spawn_server(config(crate::refused_address(), "127.0.0.1")).await;
+    let srv = spawn_server(config("127.0.0.1")).await;
     let handshake = |token: &'static str, origin: &'static str| async move {
         let mut request = format!("ws://{srv}/api/sessions/s0/term?token={token}").into_client_request().unwrap();
         request.headers_mut().insert("x-forwarded-for", origin.parse().unwrap());
@@ -226,7 +226,7 @@ async fn r5_05_the_terminal_with_a_wrong_token_is_403_empty_counted_once_and_the
 #[tokio::test]
 async fn t08_the_terminal_takes_only_the_query_token_and_counts_each_refusal_once() {
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-    let srv = spawn_server(config(crate::refused_address(), "127.0.0.1")).await;
+    let srv = spawn_server(config("127.0.0.1")).await;
     let handshake = |header: Option<(&'static str, String)>, origin: &'static str| async move {
         let mut request = format!("ws://{srv}/api/sessions/s0/term").into_client_request().unwrap();
         request.headers_mut().insert("x-forwarded-for", origin.parse().unwrap());

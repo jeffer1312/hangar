@@ -1,5 +1,5 @@
 #![cfg(unix)]
-use super::support::{self, OWNER, Scene, Server};
+use super::support::{self, Scene};
 use super::transport::{Desktop, KEY, seed_session, until};
 use futures_util::StreamExt;
 use serde_json::{Value, json};
@@ -35,40 +35,6 @@ async fn connect_devices_revocation_closes_the_remote_browser() {
     let _ = socket.close(None).await;
     while socket.next().await.is_some() {}
     desktop.server.close().await;
-    scene.close().await;
-}
-
-#[tokio::test]
-async fn private_url_bridge_never_promotes_login_guest_to_owner() {
-    if support::isolated(
-        "remote_browser::guest::private_url_bridge_never_promotes_login_guest_to_owner",
-        |root| assert!(!root.join("git.calls").exists()),
-    ).await { return; }
-    let scene = Scene::new().await;
-    let corpus = support::contract("url-commands");
-    let case = corpus["cases"].as_array().unwrap().iter()
-        .find(|case| case["name"] == "get_login_guest_is_blocked").unwrap();
-    let name = case["inputs"]["session"].as_str().unwrap();
-    let sidecar = case["inputs"]["files"]["native.json"]["content"].to_string();
-    std::fs::write(scene.nav_dir().join("native.json"), &sidecar).unwrap();
-    let private = Server::owner(hangar_server::routes::terminal_router(scene.state.clone())).await;
-    let response = reqwest::Client::new()
-        .get(format!("http://{}/__hangar_server/forwarded?token={OWNER}", private.address))
-        .bearer_auth(OWNER)
-        .header("x-hangar-internal", support::SECRET)
-        .header("x-hangar-path", format!("/api/sessions/{name}/navegador"))
-        .header("x-hangar-forwarded-guest", "1")
-        .send().await.unwrap();
-    let expected = &case["expected"]["responses"][0];
-    assert_eq!(json!(response.status().as_u16()), expected["status"]);
-    for (key, value) in expected["headers"].as_object().unwrap() {
-        assert_eq!(response.headers().get(key).and_then(|value| value.to_str().ok()), value.as_str());
-    }
-    assert_eq!(response.json::<Value>().await.unwrap(), expected["body"]);
-    assert_eq!(std::fs::read_to_string(scene.nav_dir().join("native.json")).unwrap(), sidecar);
-    assert!(!scene.root.path().join("calls.log").exists(), "recusa consultou a descoberta");
-    scene.upstream.assert_no_browser_or_discovery_calls();
-    private.close().await;
     scene.close().await;
 }
 

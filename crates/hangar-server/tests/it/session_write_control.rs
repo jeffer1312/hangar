@@ -211,54 +211,8 @@ async fn cano(sink: Arc<std::sync::Mutex<Vec<Value>>>) -> String {
     format!("tcp:{address}")
 }
 
-/// `calls` conta quantas vezes o ator pediu o serviço de plugin ao Python (a permissão segurada vai
-/// por ele); um contador por política, para os testes em paralelo não se contarem.
-pub(crate) async fn policy(calls: Arc<std::sync::atomic::AtomicUsize>) -> std::net::SocketAddr {
-    use tokio::io::AsyncReadExt;
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    tokio::spawn(async move {
-        loop {
-            let Ok((stream, _)) = listener.accept().await else { return };
-            let calls = calls.clone();
-            tokio::spawn(async move {
-                let mut reader = BufReader::new(stream);
-                loop {
-                    let mut length = 0usize;
-                    loop {
-                        let mut line = String::new();
-                        if reader.read_line(&mut line).await.unwrap_or(0) == 0 { return; }
-                        if line == "\r\n" { break; }
-                        if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") { length = value.trim().parse().unwrap(); }
-                    }
-                    let mut body = vec![0; length];
-                    reader.read_exact(&mut body).await.unwrap();
-                    let request: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
-                    let data = match request["kind"].as_str() {
-                        // O pane confere com o vínculo da própria entrada: devolve o que veio.
-                        Some("terminal_facts") => json!({"binding": request["payload"]["binding"], "ready": true, "idle": true,
-                            "open_question": false, "plugin_live": false, "plugin_user": false, "native": null}),
-                        Some("terminal_plugin_control") => {
-                            calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                            json!({"disposition": "accepted"})
-                        }
-                        _ => json!({}),
-                    };
-                    let reply = json!({"ok":true,"data":data}).to_string();
-                    let response = format!("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{reply}", reply.len());
-                    reader.get_mut().write_all(response.as_bytes()).await.unwrap();
-                }
-            });
-        }
-    });
-    address
-}
-
-async fn registry() -> Arc<RuntimeRegistry> { registry_counting().await.0 }
-
-async fn registry_counting() -> (Arc<RuntimeRegistry>, Arc<std::sync::atomic::AtomicUsize>) {
-    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    (Arc::new(RuntimeRegistry::new("instance-test".into()).with_processes(Arc::new(crate::runtime_open::RecipeProcesses("sid-1")))), calls)
+async fn registry() -> Arc<RuntimeRegistry> {
+    Arc::new(RuntimeRegistry::new("instance-test".into()).with_processes(Arc::new(crate::runtime_open::RecipeProcesses("sid-1"))))
 }
 
 pub(crate) async fn open_headless(registry: &RuntimeRegistry, dir: &Path, name: &str) -> Arc<std::sync::Mutex<Vec<Value>>> {
@@ -321,12 +275,12 @@ async fn serve(registry: Arc<RuntimeRegistry>) -> (Arc<Fake>, std::net::SocketAd
 }
 
 pub(crate) async fn serve_with_interactions(registry: Arc<RuntimeRegistry>, interactions: Arc<InteractionStore>) -> (Arc<Fake>, std::net::SocketAddr) {
-    let (python, upstream) = spawn_fake().await;
-    let mut state = AppState::new(config(upstream, "127.0.0.1"));
+    let (python, _) = spawn_fake().await;
+    let mut state = AppState::new(config("127.0.0.1"));
     state.interactions = interactions;
     state.write_gate_wait = Duration::from_secs(5);
     assert!(state.state.runtime.set(registry).is_ok());
-    (python, spawn_state(state).await)
+    (python, spawn_state_for(&python, state).await)
 }
 
 pub(crate) async fn send(server: std::net::SocketAddr, method: &str, path: &str, body: &str) -> (u16, Value) {
@@ -471,24 +425,23 @@ async fn terminal_steer_while_the_actor_reads_a_slow_screen_is_not_unhealthy() {
 #[cfg(unix)]
 #[tokio::test]
 async fn permission_held_by_the_plugin_refuses_option_3_and_the_actor_receives_nothing() {
-    let (dir, (registry, counter)) = (tempfile::tempdir().unwrap(), registry_counting().await);
+    let (dir, registry) = (tempfile::tempdir().unwrap(), registry().await);
     let log = open_terminal(&registry, dir.path(), "t").await;
     let store = Arc::new(InteractionStore::default());
     let binding = registry.interaction_binding("t").await.unwrap();
     store.bind(&binding).unwrap();
     let id = store.observe(&binding,&plugin_target(InteractionKind::Approval,"perm:1"),Some(json!({}))).unwrap().unwrap();
     let (python, server) = serve_with_interactions(registry,store).await;
-    let calls = || counter.load(std::sync::atomic::Ordering::SeqCst);
-    let (keys_before, policy_before) = (keys_sent(&log), calls());
+    let keys_before = keys_sent(&log);
     let (status, body) = send(server, "POST", "t/select", &json!({"option":3,"interaction_id":id}).to_string()).await;
     assert_eq!((status, body["detail"]["code"].as_str(), body["detail"]["msg"].as_str()),
         (409, Some("erro_opcao_nao_convergiu"), Some("opção fora do pedido de permissão")), "{body}");
     tokio::time::sleep(Duration::from_millis(200)).await;
-    assert_eq!((keys_sent(&log), calls()), (keys_before, policy_before), "nenhum controle chegou ao ator");
+    assert_eq!(keys_sent(&log), keys_before, "nenhum controle chegou ao ator");
     // Sem a ligação do dono plugin não há reserva por tecla nem resposta fingida.
     let (status, body) = send(server, "POST", "t/select", &json!({"option":1,"interaction_id":id}).to_string()).await;
     assert_eq!((status,body["detail"]["code"].as_str()),(503,Some("erro_interacao_indisponivel")));
-    assert_eq!((keys_sent(&log),calls()),(keys_before,policy_before));
+    assert_eq!(keys_sent(&log), keys_before);
     assert_eq!(python.hits_to("/api/sessions/t/select"), 0);
 }
 
@@ -526,7 +479,6 @@ async fn submit_and_select_reject_stale_ids_without_any_writer_command() {
 /// Registro com o `plugin::Store` do Rust ligado, como o servidor monta: a pergunta segurada é dele.
 pub(crate) async fn registry_with_plugin(interactions: &Arc<InteractionStore>) -> (Arc<RuntimeRegistry>, Arc<hangar_server::plugin::Store>) {
     let plugin = Arc::new(hangar_server::plugin::Store::new(interactions.clone()));
-    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let registry = RuntimeRegistry::new("instance-test".into()).with_processes(Arc::new(crate::runtime_open::RecipeProcesses("sid-1")))
         .with_interactions(interactions.clone()).with_plugin(plugin.clone());
     (Arc::new(registry), plugin)

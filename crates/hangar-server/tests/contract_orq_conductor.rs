@@ -43,7 +43,7 @@ proptest::proptest! {
  }
 }
 
-use axum::{extract::Request, http::StatusCode, response::IntoResponse};
+use axum::http::StatusCode;
 use serde_json::json;
 use std::{net::SocketAddr, sync::Arc};
 fn watchdog() -> Value {
@@ -51,10 +51,7 @@ fn watchdog() -> Value {
 }
 struct Servers {
     public: SocketAddr,
-    private: SocketAddr,
-    upstream: SocketAddr,
     tasks: Vec<tokio::task::JoinHandle<()>>,
-    calls: Arc<std::sync::Mutex<Vec<String>>>,
     _home: tempfile::TempDir,
     fixture: std::path::PathBuf,
     expected_watchdog: Value,
@@ -82,42 +79,6 @@ async fn bind(router: axum::Router) -> (SocketAddr, tokio::task::JoinHandle<()>)
     )
 }
 async fn servers(root: &std::path::Path) -> Servers {
-    let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
-    let path = root.to_owned();
-    let seen = calls.clone();
-    let (upstream, t1) = bind(axum::Router::new().fallback(move |req: Request| {
-        let path = path.clone();
-        let seen = seen.clone();
-        async move {
-            seen.lock().unwrap().push(req.uri().to_string());
-            if req.uri().path().starts_with("/internal/orq/") {
-                assert_eq!(req.headers()["x-hangar-internal"], "fixture-secret");
-                match req.uri().path().split('/').nth(3).unwrap() {
-                    "missing" => StatusCode::NOT_FOUND.into_response(),
-                    "broken" => StatusCode::BAD_GATEWAY.into_response(),
-                    "incomplete" => reply(json!({"path":path,"watchdog":{"alive":true}})),
-                    "array" => reply(json!({"path":path,"watchdog":[]})),
-                    "null" => reply(json!({"path":path,"watchdog":null})),
-                    "invalid" => reply(json!({"path":"relative","watchdog":{}})),
-                    "malformed" => (StatusCode::OK, "{invalid").into_response(),
-                    "large-watchdog" => {
-                        let mut watch = watchdog();
-                        watch["watching"] = json!(["x".repeat(100_000)]);
-                        reply(json!({"path":path,"watchdog":watch}))
-                    }
-                    "oversized" => (StatusCode::OK, " ".repeat(65537)).into_response(),
-                    "slow" => {
-                        tokio::time::sleep(std::time::Duration::from_secs(6)).await;
-                        StatusCode::OK.into_response()
-                    }
-                    _ => reply(json!({"path":path,"watchdog":watchdog()})),
-                }
-            } else {
-                (StatusCode::UNAUTHORIZED, "python-auth").into_response()
-            }
-        }
-    }))
-    .await;
     let cfg = hangar_server::config::Config {
         listen: "127.0.0.1:0".parse().unwrap(),
         internal_secret: "fixture-secret".into(),
@@ -175,21 +136,17 @@ async fn servers(root: &std::path::Path) -> Servers {
         ]),
     );
     let state = Arc::new(state);
-    let (public, t2) = bind(hangar_server::routes::router(state.clone())).await;
-    let (private, t3) = bind(hangar_server::routes::terminal_router(state)).await;
+    let (public, task) = bind(hangar_server::routes::router(state)).await;
     Servers {
         public,
-        private,
-        upstream,
-        tasks: vec![t1, t2, t3],
-        calls,
+        tasks: vec![task],
         _home: home,
         fixture,
         expected_watchdog,
     }
 }
 #[tokio::test]
-async fn conductor_http_owner_auth_forwarded_and_readonly() {
+async fn conductor_http_owner_auth_and_readonly() {
     let root = tempfile::tempdir().unwrap();
     std::fs::write(
         root.path().join("registro.md"),
@@ -228,40 +185,6 @@ async fn conductor_http_owner_auth_forwarded_and_readonly() {
             assert_eq!(response.headers()["allow"], "GET");
         }
     }
-    assert_eq!(
-        client
-            .get(format!(
-                "http://{}/__hangar_server/forwarded",
-                servers.public
-            ))
-            .send()
-            .await
-            .unwrap()
-            .status(),
-        StatusCode::NOT_FOUND
-    );
-    let forwarded = client
-        .get(format!(
-            "http://{}/__hangar_server/forwarded?ignored=2",
-            servers.private
-        ))
-        .header("x-hangar-internal", "fixture-secret")
-        .header("x-hangar-path", "/api/orq/empty/conductor")
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(forwarded.status(), StatusCode::OK);
-    assert_eq!(decoded(forwarded).await, answer);
-    let refused = client
-        .get(format!(
-            "http://{}/__hangar_server/forwarded",
-            servers.private
-        ))
-        .header("x-hangar-path", "/api/orq/empty/conductor")
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(refused.status(), StatusCode::NOT_FOUND);
     for id in ["a:b", "a%5Cb", "a%00b", "missing"] {
         let answer = client
             .get(format!("http://{}/api/orq/{id}/conductor", servers.public))
@@ -293,17 +216,6 @@ async fn conductor_http_owner_auth_forwarded_and_readonly() {
         100_000
     );
     assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 1);
-    let calls = servers.calls.lock().unwrap();
-    assert!(
-        calls.iter().all(|path| !path.starts_with("/internal/orq/")),
-        "o Rust nunca pergunta ao Python pelos fatos que já possui"
-    );
-    assert!(
-        calls
-            .iter()
-            .all(|path| !path.starts_with("/internal/orq/a"))
-    );
-    assert_ne!(servers.upstream, servers.public);
 }
 #[tokio::test]
 async fn conductor_http_factual_errors_are_visible() {
@@ -332,19 +244,8 @@ async fn conductor_http_factual_errors_are_visible() {
         assert_eq!(body["watchdog"], servers.expected_watchdog, "{id}");
         assert!(body["feed"].as_array().unwrap().is_empty());
     }
-    assert!(
-        servers.calls.lock().unwrap().is_empty(),
-        "nenhuma fonte da área volta ao Python"
-    );
 }
 
-fn reply(value: Value) -> axum::response::Response {
-    (
-        [(axum::http::header::CONTENT_TYPE, "application/json")],
-        value.to_string(),
-    )
-        .into_response()
-}
 async fn decoded(response: reqwest::Response) -> Value {
     serde_json::from_slice(&response.bytes().await.unwrap()).unwrap()
 }

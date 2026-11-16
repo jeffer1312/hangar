@@ -1,6 +1,6 @@
 //! Binários, configuração, ligação e filhos do Connect. Serviço, programas e pasta são falsos: nada
 //! daqui chega ao serviço de verdade nem baixa o `frp` ou o Caddy.
-use crate::fake::{OWNER, client, config, spawn_fake, spawn_state};
+use crate::fake::{OWNER, client, config, spawn_fake, spawn_state_for};
 
 use std::io::Write;
 use std::net::SocketAddr;
@@ -188,8 +188,8 @@ struct Machine {
 async fn machine_on(main_port: u16, connect: Option<SocketAddr>) -> Machine {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(gate(dir.path()), "").unwrap();
-    let (_python, upstream) = spawn_fake().await;
-    let mut state = AppState::new(config(upstream, "127.0.0.1"));
+    let (_python, _) = spawn_fake().await;
+    let mut state = AppState::new(config("127.0.0.1"));
     let devices = Arc::new(Store::new(dir.path().to_path_buf(), None));
     let supervisor = Arc::new(supervisor(dir.path(), devices.clone(), main_port));
     if connect.is_none() && main_port != CONNECT_PORT {
@@ -198,7 +198,7 @@ async fn machine_on(main_port: u16, connect: Option<SocketAddr>) -> Machine {
     state.connect_devices = devices.clone();
     state.connect_supervisor = supervisor.clone();
     state.connect = connect;
-    Machine { addr: spawn_state(state).await, dir, devices, supervisor }
+    Machine { addr: spawn_state_for(&_python, state).await, dir, devices, supervisor }
 }
 
 async fn machine() -> Machine {

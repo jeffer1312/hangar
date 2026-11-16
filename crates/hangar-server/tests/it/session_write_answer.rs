@@ -161,8 +161,8 @@ async fn cano(sink: Arc<Mutex<Vec<Value>>>) -> String {
 async fn missing_old_and_wrong_native_answers_write_nothing_and_never_relay() {
     let dir = tempfile::tempdir().unwrap();
     let sink = Arc::new(Mutex::new(Vec::new()));
-    let (python, upstream) = spawn_fake().await;
-    let state = AppState::new(config(upstream,"127.0.0.1"));
+    let (python, _) = spawn_fake().await;
+    let state = AppState::new(config("127.0.0.1"));
     let store = state.interactions.clone();
     let registry = crate::runtime_open::with_hubs(RuntimeRegistry::new("instance-test".into()).with_interactions(store.clone())
         .with_processes(Arc::new(crate::runtime_open::RecipeProcesses("sid"))));
@@ -174,7 +174,7 @@ async fn missing_old_and_wrong_native_answers_write_nothing_and_never_relay() {
     state.state.runtime.set(registry.clone()).ok().unwrap();
     let old = store.observe(&binding(),&native_target(InteractionKind::Question,"sid",&json!(0)),Some(json!({"question":"A"}))).unwrap().unwrap();
     store.observe(&binding(),&native_target(InteractionKind::Question,"sid",&json!(0)),Some(json!({"question":"B"}))).unwrap();
-    let server = spawn_state(state).await;
+    let server = spawn_state_for(&python, state).await;
     for (payload,code) in [(json!({"answers":[option()]}),"erro_interacao_sem_identidade"),
         (json!({"answers":[option()],"request_id":0,"interaction_id":old}),"erro_interacao_desatualizada")] {
         let response = client().post(format!("http://{server}/api/sessions/s/answer"))

@@ -1,23 +1,9 @@
 //! Catálogo e escolhas por conversa; nenhuma escrita nas configurações do Claude.
-use crate::{routes::AppState, workspace_routes::private_ok};
-use axum::{
-    body::to_bytes,
-    extract::{ConnectInfo, Request, State},
-    http::{StatusCode, header},
-    response::{IntoResponse, Response},
-};
+use crate::routes::AppState;
+use axum::{extract::{ConnectInfo, Request, State}, http::{StatusCode, header}, response::{IntoResponse, Response}};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::{
-    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
-    fs,
-    io::{self, Read, Write},
-    net::SocketAddr,
-    path::{Component, Path, PathBuf},
-    process::Stdio,
-    sync::Arc,
-    time::Duration,
-};
+use std::{collections::{BTreeMap, BTreeSet, HashMap, HashSet}, fs, io::{self, Read, Write}, net::SocketAddr, path::{Component, Path, PathBuf}, process::Stdio, sync::Arc, time::Duration};
 use tokio::io::AsyncReadExt;
 
 const MAX_BODY: usize = 256 * 1024;
@@ -104,25 +90,6 @@ struct Hidden {
     commands: Vec<String>,
     /// Os de plugin seguem a regra do catálogo: o plugin desligado e a negação, sem `skillOverrides`.
     plugins: Vec<String>,
-}
-
-pub async fn private(
-    State(st): State<Arc<AppState>>,
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
-    req: Request,
-) -> Response {
-    if !private_ok(&st, peer, req.headers()) {
-        return StatusCode::NOT_FOUND.into_response();
-    }
-    let bytes = match tokio::time::timeout(Duration::from_secs(6), to_bytes(req.into_body(), MAX_BODY)).await {
-        Ok(Ok(bytes)) => bytes,
-        _ => return envelope(Err(invalid())),
-    };
-    let op = match serde_json::from_slice::<Operation>(&bytes) {
-        Ok(op) => op,
-        Err(_) => return envelope(Err(invalid())),
-    };
-    envelope(run(&st, op).await)
 }
 
 /// A operação `prepare` da ponte, para a abertura de sessão do próprio Rust: `{"settings": …}`.

@@ -1,7 +1,6 @@
 //! R8: `GET /api/archive/{project}/{session_id}/history` e `.../transcript-image/{uuid}/{idx}` no Rust,
 //! comparados com a captura do Python (`tests/fixtures/search/contract/archive/`) sobre o HOME real de
 //! `tests/fixtures/search/home/`.
-use axum::{Router, extract::Request, http::StatusCode, response::IntoResponse};
 use hangar_server::{auth::TrustedHosts, config::Config, routes::{AppState, router}};
 use serde_json::{Value, json};
 use std::{net::SocketAddr, path::{Path, PathBuf}, sync::{Arc, Mutex}};
@@ -33,7 +32,6 @@ struct Harness {
     _dir: tempfile::TempDir,
     home: PathBuf,
     address: SocketAddr,
-    hits: Arc<Mutex<Vec<String>>>,
     client: reqwest::Client,
     /// O diário do índice da busca, que o Arquivo também usa: (código, detalhe).
     reports: Arc<Mutex<Vec<(&'static str, String)>>>,
@@ -55,22 +53,6 @@ impl Harness {
         let resolved = hangar_server::accounts::catalog::resolved(&home);
         let escaped = serde_json::to_string(&*resolved.to_string_lossy()).unwrap();
         std::fs::write(&index, std::fs::read_to_string(&index).unwrap().replace("{HOME}", escaped.trim_matches('"'))).unwrap();
-        let hits = Arc::new(Mutex::new(Vec::new()));
-        let seen = hits.clone();
-        // O Python de mentira: recusa sem o token do dono e marca o que recebeu.
-        let python = move |request: Request| {
-            let seen = seen.clone();
-            async move {
-                seen.lock().unwrap().push(request.uri().to_string());
-                if request.headers().get("authorization").is_none_or(|t| t != &format!("Bearer {OWNER}")) {
-                    return StatusCode::UNAUTHORIZED.into_response();
-                }
-                (StatusCode::OK, [("content-type", "application/json")], json!({"from_python": true}).to_string()).into_response()
-            }
-        };
-        let up = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let upstream = up.local_addr().unwrap();
-        let up_task = tokio::spawn(async move { axum::serve(up, Router::new().fallback(python)).await.unwrap() });
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let mut state = AppState::new(Config { listen: address, internal_secret: SECRET.into(), auth_token: OWNER.into(),
@@ -86,7 +68,7 @@ impl Harness {
             Arc::new(move |code, detail| diary.lock().unwrap().push((code, detail))), Default::default());
         let app = router(Arc::new(state));
         let server = tokio::spawn(async move { axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await.unwrap() });
-        Self { _dir: dir, home, address, hits, client: reqwest::Client::new(), reports, tasks: vec![up_task, server] }
+        Self { _dir: dir, home, address, client: reqwest::Client::new(), reports, tasks: vec![server] }
     }
 
     /// Os detalhes registrados sob `code`.
@@ -104,8 +86,6 @@ impl Harness {
         (status, serde_json::from_str(&text).unwrap_or(Value::String(text)))
     }
 
-    fn forwarded(&self, needle: &str) -> bool { self.hits.lock().unwrap().iter().any(|hit| hit.contains(needle)) }
-
     fn dir(&self, name: &str) -> String { self.home.join(name).to_string_lossy().into_owned() }
 }
 
@@ -122,10 +102,9 @@ async fn assert_case(h: &Harness, case: &str, path: &str) {
     let (status, body) = h.get(path).await;
     assert_eq!(status, want["status"].as_u64().unwrap() as u16, "{case}: {body}");
     assert_eq!(without_account_msg(body), without_account_msg(want["body"].clone()), "{case}");
-    assert!(h.hits.lock().unwrap().is_empty(), "{case} foi repassado ao Python");
 }
 
-/// ARQ-01: sem token o Rust recusa com 401, sem ir ao Python; com `?token=` atende as duas rotas.
+/// ARQ-01: sem token o Rust recusa com 401; com `?token=` atende as duas rotas.
 #[tokio::test]
 async fn arq01_owner_only_and_query_token_is_accepted() {
     let h = Harness::new().await;
@@ -134,14 +113,11 @@ async fn arq01_owner_only_and_query_token_is_accepted() {
     assert_eq!(response.status(), 401);
     let body: Value = response.json().await.unwrap();
     assert_eq!(body["detail"]["code"], "erro_nao_autorizado");
-    assert!(!h.forwarded(&path), "a recusa é do Rust");
-    h.hits.lock().unwrap().clear();
     let response = h.client.get(h.url(&format!("{path}?token={OWNER}"))).send().await.unwrap();
     assert_eq!(response.status(), 200);
     let image = format!("/api/archive/{}/{}/transcript-image/{IMAGE_UUID}/0?token={OWNER}", LONG.0, LONG.1);
     let response = h.client.get(h.url(&image)).send().await.unwrap();
     assert_eq!(response.status(), 200);
-    assert!(h.hits.lock().unwrap().is_empty(), "o dono foi repassado ao Python");
 }
 
 /// ARQ-38: conta e agente validados antes; `tail` limitado a 200, `<= 0` é o histórico inteiro, texto é 422.
@@ -259,7 +235,6 @@ async fn assert_image(h: &Harness, case: &str, path: &str) {
         let body: Value = response.json().await.unwrap();
         assert_eq!(body, want["body"], "{case}");
     }
-    assert!(h.hits.lock().unwrap().is_empty(), "{case} foi repassado ao Python");
 }
 
 /// ARQ-46: bytes, tipo e cache imutável; 404 de conversa e de imagem; 422 para `idx` que não é inteiro.
@@ -386,7 +361,6 @@ async fn arq40_transferred_rollout_history_is_the_composition() {
     let (status, tail) = h.get(&history("x", THREAD, "?provider=codex&tail=2")).await;
     assert_eq!(status, 200);
     assert_eq!(tail, Value::Array(vec![events[3].clone(), events[4].clone()]));
-    assert!(h.hits.lock().unwrap().is_empty(), "foi repassado ao Python");
 }
 
 /// PRV-21 (`test_archive_uses_account_thread...` e `test_invalid_boundary_is_never_reinterpreted...`):

@@ -13,13 +13,13 @@ struct Scene { python: Arc<Fake>, public: SocketAddr, state: Arc<AppState>, _dir
 
 /// Servidor com a sessão `s1` (chave `k`), páginas numa pasta temporária e sem Chromium.
 async fn scene() -> Scene {
-    let (python, upstream) = spawn_fake().await;
+    let (python, _) = spawn_fake().await;
     python.set_info(json!({"provider": "claude", "jsonl": "/t/k.jsonl", "session_key": "k", "history": {}}));
     let dir = tempfile::tempdir().unwrap();
-    let mut state = AppState::new(config(upstream, "127.0.0.1"));
+    let mut state = AppState::new(config("127.0.0.1"));
     state.pages = Arc::new(Store::new(dir.path().into()));
     state.chromium = || None;
-    state.side.locate = fake_locate(upstream);
+    state.side.locate = python.locate();
     let state = Arc::new(state);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let public = listener.local_addr().unwrap();

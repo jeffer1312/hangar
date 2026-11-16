@@ -375,31 +375,6 @@ async fn text_to_an_opening_codex_whose_queue_belongs_to_an_old_life_is_a_coded_
     assert!(fx.queue_json("k-old")["rows"].as_array().unwrap().is_empty(),"nada gravado na fila da vida antiga");
 }
 
-/// Texto que nasce no Python (grupo, broadcast, recibo) entra pela ponte do Claude, porque sem sidecar o
-/// Python não sabe que é Codex: o Rust o guarda igual, sem repasse de volta (421).
-#[tokio::test]
-async fn text_from_python_to_a_codex_terminal_still_opening_is_queued_by_the_bridge() {
-    let fx = fixture();
-    fx.panes_born(&[("cx-new","%7",now_s())]);
-    fx.pane_key("k-new");
-    let registry = registry().await;
-    registry.bind_watcher(fx.watcher());
-    let (_python,upstream) = crate::fake::spawn_fake().await;
-    let state = hangar_server::routes::AppState::new(crate::fake::config(upstream,"127.0.0.1"));
-    assert!(state.state.runtime.set(registry).is_ok());
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let private = listener.local_addr().unwrap();
-    let router = hangar_server::routes::terminal_router(Arc::new(state));
-    tokio::spawn(async move { axum::serve(listener,router.into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap() });
-    let response = crate::fake::client().post(format!("http://{private}/__hangar_server/claude/cx-new/input"))
-        .header("content-type","application/json").header("x-hangar-internal",crate::fake::SECRET)
-        .body(r#"{"text":"aviso do grupo","steer":false}"#).send().await.unwrap();
-    let status = response.status().as_u16();
-    let body:Value = serde_json::from_str(&response.text().await.unwrap()).unwrap_or(Value::Null);
-    assert_eq!((status,body["delivered"].clone()),(200,json!(false)),"{body}");
-    assert!(queued(&fx,"k-new","aviso do grupo"),"{}",fx.queue_json("k-new"));
-}
-
 /// Trocar de modo logo depois de criar com terminal (a TUI ainda abrindo a conversa, com ou sem
 /// sidecar) é recusa do Rust com código próprio, nunca o Python dizendo que o Rust não está rodando.
 #[tokio::test]
@@ -1191,32 +1166,6 @@ async fn relaunch_routes_stay_in_rust_when_the_session_is_not_a_codex_of_the_rus
 }
 
 #[tokio::test]
-async fn the_hand_over_route_is_gone() {
-    let fx = fixture();
-    let server_app = fake_app_server(true).await;
-    let (mut app,mut tui) = (app_server_process(&server_app.endpoint),tui());
-    fx.put_sidecar("cx-proof",fx.meta("cx-proof",&server_app.endpoint,Some(app.id()),&tui));
-    fx.panes(&["cx-proof"]);
-    let registry = registry().await;
-    let watcher = fx.watcher();
-    registry.bind_watcher(watcher.clone());
-    watcher.round(&registry).await;
-    let (python, upstream) = crate::fake::spawn_fake().await;
-    let state = hangar_server::routes::AppState::new(crate::fake::config(upstream, "127.0.0.1"));
-    assert!(state.state.runtime.set(registry.clone()).is_ok());
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let private = listener.local_addr().unwrap();
-    let app_router = hangar_server::routes::terminal_router(Arc::new(state));
-    tokio::spawn(async move { axum::serve(listener, app_router.into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap() });
-    let response = crate::fake::client().post(format!("http://{private}/__hangar_server/codex/cx-proof/hand-over"))
-        .header("x-hangar-internal", crate::fake::SECRET).send().await.unwrap();
-    assert_eq!(response.status().as_u16(), 421, "o Rust não solta a sessão para o Python relançar");
-    assert!(registry.owns_codex_terminal("cx-proof"), "nada foi solto");
-    assert_eq!(python.hits_to("/api/sessions/cx-proof/hand-over"), 0);
-    finish(&mut [&mut app,&mut tui]);
-}
-
-#[tokio::test]
 async fn kill_by_name_closes_a_life_the_rust_has_not_adopted_yet() {
     let fx = fixture();
     let server = fake_app_server(true).await;
@@ -1258,8 +1207,8 @@ async fn unreadable_sidecar_refuses_the_close_and_never_reaches_python() {
 
 /// Servidor com o registro (e a vigia ligada nele), diante de um Python falso.
 pub(crate) async fn serve_owner(registry: Arc<hangar_server::runtime::gateway::RuntimeRegistry>) -> (Arc<crate::fake::Fake>, std::net::SocketAddr) {
-    let (python, upstream) = crate::fake::spawn_fake().await;
-    let state = hangar_server::routes::AppState::new(crate::fake::config(upstream, "127.0.0.1"));
+    let (python, _) = crate::fake::spawn_fake().await;
+    let state = hangar_server::routes::AppState::new(crate::fake::config("127.0.0.1"));
     assert!(state.state.runtime.set(registry).is_ok());
     (python, crate::fake::spawn_state(state).await)
 }
@@ -1351,8 +1300,8 @@ pub(crate) async fn serve_guest(registry: Arc<RuntimeRegistry>, home: &std::path
 
 async fn serve_in(registry: Arc<RuntimeRegistry>, home: &std::path::Path, claude: &std::path::Path, tmux: &std::path::Path, guest: bool)
     -> (Arc<crate::fake::Fake>, std::net::SocketAddr, &'static str) {
-    let (python, upstream) = crate::fake::spawn_fake().await;
-    let mut state = hangar_server::routes::AppState::new(crate::fake::config(upstream, "127.0.0.1"));
+    let (python, _) = crate::fake::spawn_fake().await;
+    let mut state = hangar_server::routes::AppState::new(crate::fake::config("127.0.0.1"));
     let (home_text, claude) = (home.to_string_lossy().into_owned(), claude.to_string_lossy().into_owned());
     state.accounts = hangar_server::accounts::AccountService::new(AccountEnvironment::from_map(
         [("HOME".to_owned(), home_text.clone()), ("USERPROFILE".to_owned(), home_text), ("CLAUDE_CONFIG_DIR".to_owned(), claude.clone())].into()));
@@ -1384,8 +1333,8 @@ async fn owner_delete_without_a_header_secret_still_closes_whole_in_rust() {
     let watcher = fx.watcher();
     registry.bind_watcher(watcher.clone());
     watcher.round(&registry).await;
-    let (python, upstream) = crate::fake::spawn_fake().await;
-    let mut cfg = crate::fake::config(upstream, "127.0.0.1");
+    let (python, _) = crate::fake::spawn_fake().await;
+    let mut cfg = crate::fake::config("127.0.0.1");
     cfg.internal_secret = "quebra\nlinha".into();
     let state = hangar_server::routes::AppState::new(cfg);
     assert!(state.state.runtime.set(registry.clone()).is_ok());
@@ -1590,8 +1539,8 @@ async fn owner_broadcast_answers_the_rust_code_for_a_codex_terminal_it_cannot_ad
     fx.put_sidecar("cx-proof",fx.meta("cx-proof",&server_app.endpoint,Some(app.id()),&tui));
     let registry = registry().await;
     registry.bind_watcher(fx.watcher());
-    let (python, upstream) = crate::fake::spawn_fake().await;
-    let mut state = hangar_server::routes::AppState::new(crate::fake::config(upstream, "127.0.0.1"));
+    let (python, _) = crate::fake::spawn_fake().await;
+    let mut state = hangar_server::routes::AppState::new(crate::fake::config("127.0.0.1"));
     // A lista do teste: o multiplexador do fixture (nenhum pane) e pastas de sessão vazias, que respondem.
     let home = &fx.home;
     let dirs = hangar_server::list::bridge::parse_dirs(&serde_json::json!({"home": home, "claude": home.join(".claude"),
@@ -1682,8 +1631,7 @@ async fn the_codex_mode_switch_carries_the_invite_to_the_new_life() {
         pairs:PairStore::open(fx.root.join("external_pairs.json")),lives:Lives::new(probe.clone(),facts),
         tailscale:Arc::new(hangar_server::share::tunnel::Real),tunnel:Default::default(),connect:None });
     share.store.create_redeemed("cx-h",Some("k:k-old".into()),Kind::Share).unwrap();
-    let (_python, upstream) = crate::fake::spawn_fake().await;
-    let mut state = hangar_server::routes::AppState::new(crate::fake::config(upstream, "127.0.0.1"));
+    let mut state = hangar_server::routes::AppState::new(crate::fake::config("127.0.0.1"));
     state.share = Some(share.clone());
     assert!(state.state.runtime.set(registry).is_ok());
     let server = crate::fake::spawn_state(state).await;

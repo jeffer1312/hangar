@@ -14,12 +14,12 @@ struct Scene { python: Arc<Fake>, public: SocketAddr, dir: tempfile::TempDir }
 
 /// Servidor com o cache numa pasta temporária e sem Chromium.
 async fn scene() -> Scene {
-    let (python, upstream) = spawn_fake().await;
+    let (python, _) = spawn_fake().await;
     let dir = tempfile::tempdir().unwrap();
-    let mut state = hangar_server::routes::AppState::new(config(upstream, "127.0.0.1"));
+    let mut state = hangar_server::routes::AppState::new(config("127.0.0.1"));
     state.mermaid = Arc::new(Cache::new(dir.path().into()));
     state.chromium = || None;
-    let public = spawn_state(state).await;
+    let public = spawn_state_for(&python, state).await;
     Scene { python, public, dir }
 }
 
@@ -95,38 +95,3 @@ async fn not_the_owner_gets_401_from_rust() {
     assert_eq!(s.python.hits_to("/api/mermaid"), 0);
 }
 
-/// O dono do Connect chega ao Python, que o autentica e repassa pela ponte privada com o caminho original.
-#[tokio::test]
-async fn connect_owner_comes_through_the_private_bridge() {
-    let (python, upstream) = spawn_fake().await;
-    let dir = tempfile::tempdir().unwrap();
-    let mut state = hangar_server::routes::AppState::new(config(upstream, "127.0.0.1"));
-    state.mermaid = Arc::new(Cache::new(dir.path().into()));
-    state.chromium = || None;
-    Cache::new(dir.path().into()).put(&key(MERMAID_VERSION, Theme::Dark, WIDTH_MAX, "graph TD; A-->B"),
-        &Entry::Png { png: png(1000, 300), width: 500, height: 150 }).unwrap();
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let private = listener.local_addr().unwrap();
-    let app = hangar_server::routes::terminal_router(Arc::new(state)).into_make_service_with_connect_info::<SocketAddr>();
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    let url = format!("http://{private}/__hangar_server/forwarded");
-    let body = json!({"source": "graph TD; A-->B", "theme": "dark", "width": 600}).to_string();
-    let bridged = || client().post(&url).header("x-hangar-path", "/api/mermaid").body(body.clone());
-
-    let r = bridged().header("x-hangar-internal", SECRET).send().await.unwrap();
-    assert_eq!(r.status(), 200);
-    let h = r.headers();
-    assert_eq!(h["content-type"], "image/png");
-    assert_eq!((h["x-hangar-css-width"].to_str().unwrap(), h["x-hangar-css-height"].to_str().unwrap()), ("500", "150"));
-    assert_eq!(h["cache-control"], "private, max-age=31536000, immutable");
-    assert_eq!(r.bytes().await.unwrap().to_vec(), png(1000, 300));
-
-    let r = client().post(&url).header("x-hangar-path", "/api/mermaid").header("x-hangar-internal", SECRET)
-        .body(json!({"source": "outra", "theme": "dark", "width": 600}).to_string()).send().await.unwrap();
-    assert_eq!(r.status(), 503, "sem Chromium, pela ponte também");
-    assert_eq!(json_of(r).await["code"], "mermaid_indisponivel");
-    assert_eq!(bridged().send().await.unwrap().status(), 404, "sem o segredo");
-    let r = client().get(&url).header("x-hangar-path", "/api/mermaid").header("x-hangar-internal", SECRET).send().await.unwrap();
-    assert_eq!(r.status(), 404, "só o POST");
-    assert_eq!(python.hits_to("/api/mermaid"), 0, "a ponte nunca volta ao Python");
-}

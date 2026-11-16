@@ -8,21 +8,20 @@ use hangar_server::runtime::gateway::RuntimeRegistry;
 use hangar_server::term::{TermConfig, Terms};
 use serde_json::{Value, json};
 
-use crate::fake::{self, Fake, SECRET};
-use crate::session_write_control::{open_headless, policy, send};
+use crate::fake::{self, Fake};
+use crate::session_write_control::{open_headless, send};
 #[cfg(unix)]
 use crate::session_write_control::{keys_sent, open_terminal};
 
 async fn registry(terms: &Arc<Terms>) -> Arc<RuntimeRegistry> {
-    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     Arc::new(RuntimeRegistry::new("instance-test".into())
         .with_processes(Arc::new(crate::runtime_open::RecipeProcesses("sid-1"))).with_terms(terms.clone()))
 }
 
 /// O servidor do dono; `panel`: a sessão com o painel de terminal aberto.
 async fn serve(registry: Arc<RuntimeRegistry>, terms: Arc<Terms>, panel: Option<&str>, gate_wait: Duration) -> (Arc<Fake>, std::net::SocketAddr) {
-    let (python, upstream) = fake::spawn_fake().await;
-    let mut state = AppState::new(fake::config(upstream, "127.0.0.1"));
+    let (python, _) = fake::spawn_fake().await;
+    let mut state = AppState::new(fake::config("127.0.0.1"));
     state.term = terms;
     state.write_gate_wait = gate_wait;
     if let Some(name) = panel { state.term.mark_open_for_test(name, &state.diag).await; }
@@ -41,8 +40,8 @@ async fn serve_listed(root: &std::path::Path, n: usize, panel: Option<&str>) -> 
         "pi_sessions": home.join(".pi/agent/sessions"), "omp_config": home.join(".omp"), "omp_agent": home.join(".omp/agent"),
         "kimi_home": home.join(".kimi-code")}).to_string());
     let terms = Arc::new(Terms::new(TermConfig::default()));
-    let (python, upstream) = fake::spawn_fake().await;
-    let mut state = AppState::new(fake::config(upstream, "127.0.0.1"));
+    let (python, _) = fake::spawn_fake().await;
+    let mut state = AppState::new(fake::config("127.0.0.1"));
     state.list = Arc::new(ListBridge::new(ListEnv { mux: hangar_server::list::mux::Mux::with_program(&script, Duration::from_secs(5)),
         capture_program: script.into_os_string(), procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs },
         hangar_server::list::facts::FactsClient::new()));
@@ -141,14 +140,13 @@ async fn model_effort_r4_13_codex_omp_and_kimi_are_refused_like_pi() {
         "pi_sessions": home.join(".pi/agent/sessions"), "omp_config": home.join(".omp"), "omp_agent": home.join(".omp/agent"),
         "kimi_home": home.join(".kimi-code")}).to_string());
     let terms = Arc::new(Terms::new(TermConfig::default()));
-    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     // Os sidecars que o registro lê são os da pasta da prova, nunca os da máquina.
     let env = hangar_server::accounts::environment::AccountEnvironment::from_map([("HOME".to_owned(), home.to_string_lossy().into_owned())].into());
     let registry = Arc::new(RuntimeRegistry::new("instance-test".into())
         .with_processes(Arc::new(crate::runtime_open::RecipeProcesses("sid-1"))).with_terms(terms.clone()).with_codex_environment(env));
     crate::groups_deliver::open_codex_headless(&registry, root, "c", Default::default()).await;
-    let (python, upstream) = fake::spawn_fake().await;
-    let mut state = AppState::new(fake::config(upstream, "127.0.0.1"));
+    let (python, _) = fake::spawn_fake().await;
+    let mut state = AppState::new(fake::config("127.0.0.1"));
     state.list = Arc::new(ListBridge::new(ListEnv { mux: hangar_server::list::mux::Mux::with_program(&script, Duration::from_secs(5)),
         capture_program: script.into_os_string(), procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs },
         hangar_server::list::facts::FactsClient::new()));
@@ -219,8 +217,8 @@ async fn model_effort_b3_transfer_in_progress_is_busy() {
 /// R4-12 (contrato c): sem o registro de sessões, o dono recebe 503 com código, nunca o Python.
 #[tokio::test]
 async fn model_effort_r4_12_without_runtime_is_503_with_a_code() {
-    let (python, upstream) = fake::spawn_fake().await;
-    let server = fake::spawn_state(AppState::new(fake::config(upstream, "127.0.0.1"))).await;
+    let (python, _) = fake::spawn_fake().await;
+    let server = fake::spawn_state(AppState::new(fake::config("127.0.0.1"))).await;
     let (status, reply) = post(server, "s", r#"{"model":"sonnet"}"#).await;
     assert_eq!((status, reply["detail"]["code"].as_str()), (503, Some("runtime_unavailable")), "{reply}");
     assert_eq!(python.hits_to("/api/sessions/s/model-effort"), 0);
