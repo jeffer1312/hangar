@@ -167,7 +167,8 @@ async fn serve(registry: Arc<RuntimeRegistry>, wait: Duration) -> (Arc<Fake>, st
     state.diag = python.bind_diary(state.diag.clone());
     state.write_gate_wait = wait;
     assert!(state.state.runtime.set(registry).is_ok());
-    (python, spawn_state_for(&python, state).await)
+    let addr = spawn_state_for(&python, state).await;
+    (python, addr)
 }
 
 async fn post(server: std::net::SocketAddr, name: &str, route: &str, body: &str) -> (u16, Value) {

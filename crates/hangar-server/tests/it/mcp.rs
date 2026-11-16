@@ -679,7 +679,7 @@ async fn mission_follows_a_federated_group_and_copies_remote_evidence_to_its_own
 async fn the_router_does_not_keep_the_state_alive() {
     // O entregador de avisos do Mission Control mora no estado; prender o roteador nele seguraria o estado (e os
     // arquivos abertos) depois do fim do servidor.
-    let state = Arc::new(AppState::new(fake::config("127.0.0.1:9".parse().unwrap(), "127.0.0.1")));
+    let state = Arc::new(AppState::new(fake::config("127.0.0.1")));
     let before = Arc::strong_count(&state);
     let app = router(state.clone());
     drop(app);

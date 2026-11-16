@@ -884,10 +884,7 @@ async fn malformed_query_is_422_without_returning_to_python() {
 #[tokio::test]
 async fn settings_are_owner_only_strict_and_persist_in_explicit_home() {
     let home = tempfile::tempdir().unwrap();
-    let mut state = hangar_server::routes::AppState::new(fake::config(
-        "127.0.0.1:9".parse().unwrap(),
-        "127.0.0.1",
-    ));
+    let mut state = hangar_server::routes::AppState::new(fake::config("127.0.0.1"));
     state.origins_home = home.path().into();
     let addr = fake::spawn_state(state).await;
     let url = format!("http://{addr}/api/worktrees/settings");

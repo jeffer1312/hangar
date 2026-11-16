@@ -48,7 +48,8 @@ async fn start(addr: SocketAddr, trusted: &str) -> (Arc<Fake>, SocketAddr, Strin
     ));
     state.connect = Some(addr);
     let token = device(&mut state);
-    (python, spawn_state_for(&python, state).await, token)
+    let addr = spawn_state_for(&python, state).await;
+    (python, addr, token)
 }
 
 /// Python falso, porta principal, entrada do Connect já aberta, servidas pelo `select!` do `serve`, e uma credencial de aparelho.

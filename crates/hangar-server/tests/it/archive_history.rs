@@ -401,7 +401,6 @@ async fn arq45_transferred_rollout_image_comes_from_the_frozen_source() {
         let (status, body) = h.get(&image("x", THREAD, uuid, idx, "?provider=codex")).await;
         assert_eq!((status, body["detail"]["code"].clone()), (404, json!("erro_imagem_nao_encontrada")), "{uuid}");
     }
-    assert!(h.hits.lock().unwrap().is_empty());
 }
 
 /// ARQ-44 (`archived_image` e os três `test_archive_image_legacy_url_*`): a imagem `transfer:` vai pelo
@@ -440,7 +439,6 @@ async fn arq44_transfer_image_by_record() {
     std::fs::write(&j.record, "{}").unwrap();
     let (status, body) = h.get(&url).await;
     assert_eq!((status, body["detail"]["code"].clone()), (404, json!("erro_nao_encontrado")));
-    assert!(h.hits.lock().unwrap().is_empty());
 }
 
 /// O status de cada falha fica como era, mas a causa real vai ao diário, uma vez por arquivo.

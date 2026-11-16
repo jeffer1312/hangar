@@ -122,7 +122,8 @@ async fn serve_list(registry: Arc<RuntimeRegistry>, home: &std::path::Path, dirs
     state.list = Arc::new(hangar_server::list::bridge::ListBridge::new(list_env,
         hangar_server::list::facts::FactsClient::new()));
     assert!(state.state.runtime.set(registry).is_ok());
-    (python, spawn_state_for(&python, state).await)
+    let addr = spawn_state_for(&python, state).await;
+    (python, addr)
 }
 
 async fn call(server: std::net::SocketAddr, case: &Value, token: &str) -> (u16, Value) {

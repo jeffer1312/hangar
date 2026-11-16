@@ -309,7 +309,6 @@ async fn uploads_answer_missing_session_and_cwd_with_python_codes() {
     assert_eq!((status, body["detail"]["code"].clone()), (StatusCode::CONFLICT, json!("erro_cwd_indisponivel")));
     let (status, body) = scene.get("/api/sessions/semcwd/uploads").await;
     assert_eq!((status, body["detail"]["code"].clone()), (StatusCode::NOT_FOUND, json!("erro_cwd_indisponivel")));
-    assert_eq!(scene.facts_asked("nenhuma") + scene.facts_asked("semcwd"), 0);
 }
 
 #[tokio::test]

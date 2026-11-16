@@ -107,7 +107,8 @@ async fn serve_with(registry: Option<Arc<RuntimeRegistry>>) -> (Arc<Fake>, std::
     let (python, _) = spawn_fake().await;
     let state = AppState::new(config("127.0.0.1"));
     if let Some(registry) = registry { assert!(state.state.runtime.set(registry).is_ok()); }
-    (python, spawn_state_for(&python, state).await)
+    let addr = spawn_state_for(&python, state).await;
+    (python, addr)
 }
 
 async fn post(server: std::net::SocketAddr, route: &str, body: &str, token: &str) -> (u16, String) {

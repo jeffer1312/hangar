@@ -21,7 +21,6 @@ fn state(home: &Path, extra: &[(&str,String)]) -> AppState {
         ("CP_SCAN_ROOTS".into(),home.join("roots").to_string_lossy().into_owned()),
     ]);
     env.extend(extra.iter().map(|(key,value)|(key.to_string(),value.clone())));
-    let upstream="127.0.0.1:9".parse().unwrap();
     let mut st=AppState::new(Config {listen:"127.0.0.1:0".parse().unwrap(),internal_secret:"context-test".into(),auth_token:"context-owner".into(),log_path:None,trusted:crate::auth::TrustedHosts::parse("127.0.0.1")});
     st.origins_home=home.into();
     st.accounts=AccountService::new(AccountEnvironment::from_map(env));

@@ -35,7 +35,7 @@ async fn scene() -> (tempfile::TempDir, axum::Router, PathBuf) {
         "omp_agent": home.join(".omp/agent"), "kimi_home": home.join(".kimi-code")})
         .to_string(),
     );
-    let mut state = AppState::new(config("127.0.0.1:9".parse().unwrap(), ""));
+    let mut state = AppState::new(config(""));
     state.origins_home = home.clone();
     let list = Arc::new(ListBridge::new(
         ListEnv {

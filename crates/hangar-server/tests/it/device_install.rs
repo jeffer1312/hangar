@@ -57,7 +57,7 @@ async fn serve_with(link: FakeLink, signer: FakeSigner, pinned: Pinned, config: 
     let (python, _) = spawn_fake().await;
     let dir = tempfile::tempdir().unwrap();
     let (link, signer) = (Arc::new(link), Arc::new(signer));
-    let mut state = hangar_server::routes::AppState::new(config("127.0.0.1"));
+    let mut state = hangar_server::routes::AppState::new(crate::fake::config("127.0.0.1"));
     state.device_install = Arc::new(
         DeviceInstall::new(link.clone(), signer.clone(), dir.path())
             .with_pinned(pinned)

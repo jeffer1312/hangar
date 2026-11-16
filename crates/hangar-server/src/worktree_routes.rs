@@ -702,7 +702,6 @@ mod tests {
         let mut release = Release(std::fs::OpenOptions::new().read(true).write(true).open(&release).unwrap());
         let mut ready = std::fs::OpenOptions::new().read(true).write(true).open(&ready).unwrap();
         let (state, epoch) = runtime.block_on(async {
-            let upstream = "127.0.0.1:9".parse().unwrap();
             let mut state = AppState::new(Config { listen:"127.0.0.1:0".parse().unwrap(),
                 internal_secret:"t4-private".into(),auth_token:"t4-owner".into(),log_path:None,
                 trusted:crate::auth::TrustedHosts::parse("127.0.0.1") });

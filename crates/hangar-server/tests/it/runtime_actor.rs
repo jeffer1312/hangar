@@ -3038,7 +3038,7 @@ mod cano_reconnect {
         let dir = tempfile::tempdir().unwrap();
         append(dir.path(),&[said_by_user("antes")]);
         let proc = sleeper(dir.path());
-        let (_fake,diag) = crate::fake::spawn_fake().await;
+        let diag = no_diary();
         let cano = live_cano(|_|Answer::Serve).await;
         cano.aberto.store(true,Ordering::Release);
         let (handle,_rx) = actor(dir.path(),&cano,proc.0.id(),birth(&proc),diag,Waits { output_lost:ms(300),..waits(&[0,50],&[0,50],60_000) }).await;

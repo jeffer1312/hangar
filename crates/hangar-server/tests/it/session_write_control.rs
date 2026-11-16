@@ -280,7 +280,8 @@ pub(crate) async fn serve_with_interactions(registry: Arc<RuntimeRegistry>, inte
     state.interactions = interactions;
     state.write_gate_wait = Duration::from_secs(5);
     assert!(state.state.runtime.set(registry).is_ok());
-    (python, spawn_state_for(&python, state).await)
+    let addr = spawn_state_for(&python, state).await;
+    (python, addr)
 }
 
 pub(crate) async fn send(server: std::net::SocketAddr, method: &str, path: &str, body: &str) -> (u16, Value) {

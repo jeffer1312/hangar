@@ -57,7 +57,8 @@ async fn with_guests() -> (std::sync::Arc<Fake>, std::net::SocketAddr, tempfile:
     let mut state = hangar_server::routes::AppState::new(config("127.0.0.1"));
     state.share = None;
     state.login_guests = std::sync::Arc::new(service);
-    (python, spawn_state_for(&python, state).await, home)
+    let addr = spawn_state_for(&python, state).await;
+    (python, addr, home)
 }
 
 /// Cada pedido de uma origem própria: as recusas contadas não somam o bloqueio de uma só.
