@@ -11,6 +11,16 @@ proptest::proptest!{
         proptest::prop_assert_eq!(boot_version::publish(root.path(),Snapshot{describe:"later".into(),readable:None}),snapshot);
     }
 }
+/// Um engasgo do git na subida não congela "indisponivel" até o próximo reinício: a leitura seguinte tenta de novo.
+#[test]
+fn a_git_failure_is_not_kept_and_the_next_read_tries_again(){
+    let root=tempfile::tempdir().unwrap();
+    assert_eq!(boot_version::capture_with(root.path(),|_,_|Err(())).describe,"indisponivel");
+    assert_eq!(boot_version::get(root.path()),None);
+    let ok=boot_version::capture_with(root.path(),|args,_|Ok(match args[0]{"rev-list"=>"3","show"=>"1.0",_=>"v-g1"}.into()));
+    assert_eq!(ok,Snapshot{describe:"v-g1".into(),readable:Some("1.0.3".into())});
+    assert_eq!(boot_version::get(root.path()),Some(ok));
+}
 #[test]
 fn boot_version_get_does_not_wait_for_capture_or_block_other_roots(){
     use std::{sync::mpsc,time::Duration};

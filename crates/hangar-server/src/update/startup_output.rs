@@ -240,7 +240,7 @@ pub fn snapshot(home: &Path, port: u16, new: Option<&Path>, old: Option<&Path>) 
     if let Some(new) = new {
         let bin = new.join("bin").join(if cfg!(windows) { "hangar-server.exe" } else { "hangar-server" });
         let has = |p: &Path| if p.exists() { "ok" } else { "FALTA" };
-        let boot = read_boot(new).unwrap_or_else(|| "python".to_owned());
+        let boot = read_boot(new);
         out.push(format!("pacote novo: manifest {}, boot {boot}, bin/hangar-server {}",
             has(&new.join("manifest.json")), has(&bin)));
     }
@@ -256,10 +256,19 @@ pub fn snapshot(home: &Path, port: u16, new: Option<&Path>, old: Option<&Path>) 
     out
 }
 
-/// O `boot` do manifesto da versão; ausente quando ela ainda sobe pelo Python.
-fn read_boot(version: &Path) -> Option<String> {
-    let manifest: serde_json::Value = serde_json::from_slice(&std::fs::read(version.join("manifest.json")).ok()?).ok()?;
-    manifest.get("boot")?.as_str().map(str::to_owned)
+/// O `boot` do manifesto da versão; `python` quando o campo falta (a versão ainda sobe pelo
+/// Python) e `ilegível` quando o manifesto não se lê: aí não dá para dizer como ela sobe.
+fn read_boot(version: &Path) -> String {
+    let bytes = match std::fs::read(version.join("manifest.json")) {
+        Ok(bytes) => bytes,
+        Err(error) => return format!("ilegível ({:?})", error.kind()),
+    };
+    let Ok(manifest) = serde_json::from_slice::<serde_json::Value>(&bytes) else { return "ilegível (json)".to_owned() };
+    match manifest.get("boot") {
+        None => "python".to_owned(),
+        Some(serde_json::Value::String(boot)) => boot.clone(),
+        Some(_) => "ilegível (boot não é texto)".to_owned(),
+    }
 }
 
 fn same_root(path: &str, root: &Path) -> bool {
@@ -391,6 +400,19 @@ mod tests {
         let mark = Mark::File { dir: dir.path().into(), newest: Some((log.clone(), 20, created)), at: SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000) };
         std::fs::write(&log, "ERROR:    [x] velho\nERROR:    [x] novo\n").unwrap();
         assert_eq!(mark.lines(&scrubber()), vec!["ERROR:    [x] novo".to_owned()]);
+    }
+
+    /// Manifesto que não se lê não vira "python" no retrato: diria que a versão sobe pelo Python.
+    #[test]
+    fn boot_of_an_unreadable_manifest_is_not_python() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(read_boot(dir.path()), "ilegível (NotFound)");
+        std::fs::write(dir.path().join("manifest.json"), "{ quebrado").unwrap();
+        assert_eq!(read_boot(dir.path()), "ilegível (json)");
+        std::fs::write(dir.path().join("manifest.json"), r#"{"version":"1"}"#).unwrap();
+        assert_eq!(read_boot(dir.path()), "python");
+        std::fs::write(dir.path().join("manifest.json"), r#"{"boot":"direct"}"#).unwrap();
+        assert_eq!(read_boot(dir.path()), "direct");
     }
 
     #[tokio::test]

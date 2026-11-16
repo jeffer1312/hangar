@@ -465,11 +465,20 @@ pub(super) fn replace_aside(tmp: &Path, target: &Path, rename: &mut dyn FnMut(&P
 
 /// Renova o lançador estável com o `hangar-server` da versão `version`. Máquina sem o lançador
 /// (checkout, Windows sem pacote) ou versão sem `bin/` (modo desenvolvedor) fica como está.
-/// Devolve se trocou.
+/// Devolve se trocou. Versão que sobe direto (`boot: direct`) sem o binário é erro: o lançador
+/// antigo ficaria sem saber subi-la.
 pub fn refresh_launcher(home: &Path, version: &Path, windows: bool) -> Result<bool, String> {
     let launcher = launcher_path(home, windows);
     let source = version.join("bin").join(if windows { "hangar-server.exe" } else { "hangar-server" });
-    if !launcher.exists() || !source.is_file() { return Ok(false); }
+    if !launcher.exists() { return Ok(false); }
+    if !source.is_file() {
+        let manifest = std::fs::read(version.join("manifest.json")).ok().and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
+        if manifest.as_ref().and_then(|manifest| manifest.get("boot")).and_then(Value::as_str) == Some("direct") {
+            tracing::warn!(code = "launcher_source_missing", version = %version.display(), "versão que sobe direto sem bin/hangar-server: lançador não renovado");
+            return Err(format!("launcher_source_missing: a versão sobe direto (boot: direct) e não tem {}", source.display()));
+        }
+        return Ok(false);
+    }
     let len = |p: &Path| std::fs::metadata(p).map(|m| m.len()).ok();
     let same = len(&launcher) == len(&source)
         && std::fs::read(&launcher).ok().zip(std::fs::read(&source).ok()).is_some_and(|(a, b)| a == b);
