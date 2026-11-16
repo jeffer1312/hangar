@@ -218,6 +218,10 @@ pub struct SessionOpenRequest {
     /// a regra dos 95% não a troca.
     #[serde(skip)]
     pub account_bound: bool,
+    /// Fora do fio: a sessão nasce com `disableAllHooks`, que desliga também as travas do Hangar (cofre).
+    /// Só a sessão de conserto de hook que bloqueia liga; cliente nenhum pede.
+    #[serde(skip)]
+    pub disable_hooks: bool,
 }
 
 fn is_false(value: &bool) -> bool { !value }
@@ -362,6 +366,9 @@ pub struct SessionSpec {
     /// "Agora não" do dono: a sugestão não volta nesta sessão.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub rename_dismissed: bool,
+    /// Nasceu sem hooks (`SessionOpenRequest::disable_hooks`): a reabertura mantém.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hooks_off: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
