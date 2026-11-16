@@ -23,7 +23,7 @@ from pathlib import Path
 
 import uvicorn
 
-from app import diag, log_paths, migration_status, rust_bins
+from app import diag, log_paths, rust_bins
 
 _log = logging.getLogger("hangar.rust_server")
 
@@ -320,8 +320,6 @@ class Supervisor:
                           f"o Python atende atrás dele em 127.0.0.1:{self.upstream_port}", flush=True)
                     diag.registrar("hangar_server.voltou" if self.attempt else "hangar_server.de_pe")
                     self.announced = True
-                    migration_status.set_reason(None)
-                    migration_status.set_listen_port(self.upstream_port)
                 record_failed, up_at = False, time.monotonic()
                 while state == "up" and self.proc.poll() is None:
                     await asyncio.sleep(_POLL)
@@ -411,7 +409,6 @@ async def serve(server: uvicorn.Server, sockets: list[socket.socket], binary: Pa
                             kw["forwarded_allow_ips"], lambda: server.should_exit)
     global _supervisor
     _supervisor = supervisor
-    migration_status.set_listen_port(supervisor.upstream_port)
     # Religar o Rust não pode fechar os SSE do processo: só o sinal fecha (`Server.handle_exit`).
     from sse_starlette.sse import AppStatus
     AppStatus.disable_automatic_graceful_drain()
@@ -431,7 +428,6 @@ async def serve(server: uvicorn.Server, sockets: list[socket.socket], binary: Pa
         _log.error("hangar-server desligado (%s); a porta %s fica sem dono até a próxima tentativa", reason, kw["port"])
         # O nome do evento é o que o relatório de diagnóstico do Rust colhe.
         diag.registrar("hangar_server.reserva", "erro", codigo=reason)
-        migration_status.set_reason(reason)
         supervisor.announced = False
         # O mesmo binário falha igual nestes: só se tenta de novo depois de ele mudar no disco.
         stamp = _stamp(binary) if reason in ("sem_resposta", "protocolo", "endereco_privado") else None

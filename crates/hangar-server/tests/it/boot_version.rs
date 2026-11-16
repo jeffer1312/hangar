@@ -29,22 +29,6 @@ mod v01 {
 
     fn fifo(path: &Path) { assert!(Command::new("mkfifo").arg(path).status().unwrap().success()); }
 
-    fn advance_checkout(root: &Path, version: &str) -> String {
-        let git = |args: &[&str]| {
-            let output = Command::new("git").arg("-C").arg(root)
-                .args(["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgSign=false"])
-                .args(args).env("GIT_CONFIG_GLOBAL", "/dev/null").env("GIT_CONFIG_NOSYSTEM", "1")
-                .env("GIT_AUTHOR_DATE", "2026-11-06T10:00:00+00:00").env("GIT_COMMITTER_DATE", "2026-11-06T10:00:00+00:00")
-                .output().unwrap();
-            assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
-            String::from_utf8(output.stdout).unwrap()
-        };
-        if !root.join(".git").exists() { git(&["init", "--initial-branch=main"]); }
-        std::fs::write(root.join("VERSION"), version).unwrap();
-        git(&["add", "VERSION"]); git(&["commit", "-m", "Fixture version"]);
-        git(&["rev-parse", "HEAD"])
-    }
-
     fn start_backend(home: &Path) -> Backend {
         fifo(&home.join("ready")); fifo(&home.join("release"));
         use std::os::{fd::AsRawFd, unix::fs::OpenOptionsExt};
@@ -80,17 +64,6 @@ mod v01 {
         let path = std::env::var("V01_PATH").unwrap_or_else(|_| "/api/migration/status".into());
         let compressed = std::env::var_os("V01_GZIP").is_some();
         let client = reqwest::Client::builder().no_gzip().build().unwrap();
-        if std::env::var_os("V01_LATE_PUBLICATION").is_some() {
-            let directory = home.join(".hangar/logs/privado/python-versions");
-            let snapshot = std::fs::read_dir(directory).unwrap().next().unwrap().unwrap().path();
-            let bytes = std::fs::read(&snapshot).unwrap();
-            std::fs::remove_file(&snapshot).unwrap();
-            let missing: Value = client.get(format!("http://{address}{path}")).bearer_auth(crate::fake::OWNER)
-                .send().await.unwrap().json().await.unwrap();
-            assert_eq!(missing["python"]["version"], "indisponivel");
-            use std::os::unix::fs::OpenOptionsExt;
-            std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(snapshot).unwrap().write_all(&bytes).unwrap();
-        }
         let mut request = client.get(format!("http://{address}{path}")).bearer_auth(crate::fake::OWNER);
         if std::env::var_os("V01_NO_ACCEPT_ENCODING").is_none() {
             request = request.header("accept-encoding", if compressed { "gzip" } else { "identity" });
@@ -124,16 +97,6 @@ mod v01 {
         assert_eq!(encoded, std::env::var_os("V01_EXPECT_GZIP").is_some(), "gzip considera o corpo final");
         std::fs::write(home.join("status.json"), bytes).unwrap();
         server.abort();
-    }
-
-    async fn status(home: &Path, upstream: std::net::SocketAddr, late_publication: bool) -> Value {
-        let mut command = child("status_child", home);
-        command.env("V01_UPSTREAM", upstream.to_string());
-        if late_publication { command.env("V01_LATE_PUBLICATION", "1"); }
-        let output = tokio::task::spawn_blocking(move || command.output().unwrap()).await.unwrap();
-        assert!(output.status.success(), "{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
-        crate::assert_ran_one(&output.stdout);
-        serde_json::from_slice(&std::fs::read(home.join("status.json")).unwrap()).unwrap()
     }
 
     async fn download(home: &Path, upstream: std::net::SocketAddr, compressed: bool, path: &str) -> String {
@@ -294,59 +257,6 @@ mod v01 {
         }
         server.abort();
         assert!(failures.is_empty(), "{}", failures.join("\n"));
-    }
-
-    #[tokio::test]
-    async fn python_version_survives_checkout_advance_and_actual_rust_restart() {
-        let temp = tempfile::tempdir().unwrap();
-        let home = temp.path();
-        let root = home.join(".hangar/versions/original");
-        package(&root, "0.1.0.8207", "abc1234def567890");
-        std::os::unix::fs::symlink(&root, install_root::current(home)).unwrap();
-        let first_head = advance_checkout(&root, "0.1.0\n");
-        let backend = start_backend(home);
-        let pid = backend.0.id();
-        let birth = hangar_server::terminal_facts::agent_birth(pid).unwrap();
-        let facts = json!({"mode":"rust", "version":"must-not-trust-python-git", "processes":{"python":{"pid":pid}}});
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let upstream = listener.local_addr().unwrap();
-        let server = tokio::spawn(axum::serve(listener, axum::Router::new()
-            .route("/internal/migration/status", axum::routing::get(move || { let facts = facts.clone(); async move { axum::http::Response::builder().header("content-type", "application/json").body(axum::body::Body::from(facts.to_string())).unwrap() } }))
-            .fallback(|| async { (axum::http::StatusCode::BAD_GATEWAY, "V01 upstream trap") })).into_future());
-        let first = status(home, upstream, true).await;
-        // Literal da captura original V01-manifest-priority, não calculado pelo candidato.
-        assert_eq!(first["python"]["version"], "0.1.0.8207-gabc1234def56");
-        std::fs::write(root.join("manifest.json"), json!({"version":"0.1.0.9999","commit":"ffffffffffffffff","channel":"latest"}).to_string()).unwrap();
-        assert_ne!(advance_checkout(&root, "0.2.0\n"), first_head);
-        let after = status(home, upstream, false).await;
-        assert_eq!(after["python"]["version"], "0.1.0.8207-gabc1234def56");
-        assert_eq!(hangar_server::terminal_facts::agent_birth(pid), Some(birth));
-        assert_eq!(after["python"]["processes"]["python"]["pid"], pid);
-        let dir = home.join(".hangar/logs/privado/python-versions");
-        let path = std::fs::read_dir(&dir).unwrap().next().unwrap().unwrap().path();
-        let bytes = std::fs::read(&path).unwrap();
-        let snapshot: Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(snapshot["root"], root.to_string_lossy().as_ref());
-        assert_eq!(snapshot["version"]["readable"], "0.1.0.8207");
-        assert!(snapshot.get("argv").is_none() && snapshot.get("environ").is_none());
-        use std::os::unix::fs::PermissionsExt;
-        assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
-        assert_eq!(std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777, 0o700);
-        for field in ["pid", "birth", "root", "executable"] {
-            let mut corrupt = snapshot.clone();
-            corrupt[field] = match field {
-                "pid" => json!(pid + 1), "birth" => json!(birth + 1.0), _ => json!("/not-this-python-life"),
-            };
-            std::fs::write(&path, corrupt.to_string()).unwrap();
-            assert_eq!(status(home, upstream, false).await["python"]["version"], "indisponivel", "{field}");
-        }
-        // Entrada direta ou publicação ainda ausente: sem versão emprestada, nem cache negativo.
-        std::fs::remove_file(&path).unwrap();
-        assert_eq!(status(home, upstream, false).await["python"]["version"], "indisponivel");
-        use std::os::unix::fs::OpenOptionsExt;
-        std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&path).unwrap().write_all(&bytes).unwrap();
-        assert_eq!(status(home, upstream, false).await["python"]["version"], "0.1.0.8207-gabc1234def56");
-        server.abort();
     }
 }
 

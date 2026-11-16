@@ -461,7 +461,6 @@ pub use hangar_core::http_cors;
 pub use hangar_core::http_body_limit;
 pub use hangar_core::http_route_response;
 pub mod boot_version;
-pub mod migration_branch;
 pub mod login_guests;
 
 pub mod shortcuts;

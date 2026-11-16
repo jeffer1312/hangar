@@ -388,7 +388,9 @@ async fn limited_body(mut body: axum::body::Body) -> Result<bytes::Bytes, BodyEr
     use http_body_util::BodyExt;
     let mut data = bytes::BytesMut::new();
     while let Some(frame) = body.frame().await {
-        let Ok(chunk) = frame.map_err(|_| BodyError::Read)?.into_data() else { continue };
+        // O teto da borda (`edge_rules`) é o mesmo: chegar a ele é corpo grande, não leitura que falhou.
+        let frame = frame.map_err(|error| if crate::http_body_limit::is_limit(&error) { BodyError::TooLarge } else { BodyError::Read })?;
+        let Ok(chunk) = frame.into_data() else { continue };
         if data.len() + chunk.len() > AUDIO_LIMIT {
             drain_later(body);
             return Err(BodyError::TooLarge);
