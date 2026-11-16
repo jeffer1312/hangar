@@ -40,9 +40,9 @@ pub fn save(hangar_dir: &Path, fixes: &Fixes) -> io::Result<()> {
     hangar_core::fs::atomic_write(&path(hangar_dir), &serde_json::to_vec_pretty(fixes).map_err(io::Error::other)?)
 }
 
-/// O conserto vivo desse aviso, se houver.
-pub fn running<'a>(fixes: &'a Fixes, parent: &str, notice_id: &str) -> Option<&'a str> {
-    fixes.iter().find(|(_, fix)| fix.parent == parent && fix.notice_id == notice_id).map(|(child, _)| child.as_str())
+/// Esse aviso já tem um conserto vivo.
+pub fn running(fixes: &Fixes, parent: &str, notice_id: &str) -> bool {
+    fixes.values().any(|fix| fix.parent == parent && fix.notice_id == notice_id)
 }
 
 /// O id vem do cliente e vira parte de id de nota na fila.
@@ -84,9 +84,9 @@ mod tests {
     #[test]
     fn running_is_per_parent_and_notice() {
         let fixes = Fixes::from([("c".to_owned(), fix("origem", "hookfail:a"))]);
-        assert_eq!(running(&fixes, "origem", "hookfail:a"), Some("c"));
-        assert_eq!(running(&fixes, "outra", "hookfail:a"), None);
-        assert_eq!(running(&fixes, "origem", "hookfail:b"), None);
+        assert!(running(&fixes, "origem", "hookfail:a"));
+        assert!(!running(&fixes, "outra", "hookfail:a"));
+        assert!(!running(&fixes, "origem", "hookfail:b"));
     }
 
     #[test]

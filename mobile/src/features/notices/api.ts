@@ -1,7 +1,7 @@
-import { comTeto, errorDetail, probeServerResponse } from '@hangar/core';
+import { comTeto, errorDetail, pluginActionForServer, probeServerResponse } from '@hangar/core';
 import { useServers } from '../../stores/servers';
 
-function serverOf(serverId: string) {
+export function serverOf(serverId: string) {
   const server = useServers.getState().servers.find((s) => s.id === serverId);
   if (!server) throw new Error(`servidor ${serverId} não está na lista`);
   return server;
@@ -15,11 +15,10 @@ async function post(serverId: string, path: string, body: unknown, seconds: numb
   return response.json();
 }
 
-/** Reinstala pela rota de plugins da máquina; a CLI pode demorar. Falha da CLI vem com `result.outcome = "failed"`. */
+/** Reinstala pela rota de plugins da máquina. Falha da CLI vem com `result.outcome = "failed"`. */
 export async function reinstallPlugin(serverId: string, plugin: string): Promise<void> {
-  const body = await post(serverId, `/api/plugins/${encodeURIComponent(plugin)}/install`, undefined, 240) as
-    { result?: { outcome?: string; message?: string } };
-  if (body.result?.outcome === 'failed') throw new Error(body.result.message ?? 'falhou');
+  const change = await pluginActionForServer(serverOf(serverId), plugin, 'install');
+  if (change.result?.outcome === 'failed') throw new Error(change.result.message ?? 'falhou');
 }
 
 export type FixRequest = { notice_id: string; subject: string; detail: string; blocking: boolean };
@@ -39,9 +38,7 @@ export const startFix = (serverId: string, session: string, request: FixRequest)
  * de um PUT anterior que chegasse depois traria de volta uma lista velha.
  */
 export async function putNoticeIgnore(serverId: string, key: string, ignored: boolean): Promise<void> {
-  const server = useServers.getState().servers.find((s) => s.id === serverId);
-  if (!server) throw new Error(`servidor ${serverId} não está na lista`);
-  const response = await probeServerResponse(server, '/api/notice-ignores', {
+  const response = await probeServerResponse(serverOf(serverId), '/api/notice-ignores', {
     method: 'PUT', signal: comTeto(undefined, 15_000), body: JSON.stringify({ key, ignored }),
   });
   if (!response.ok) throw new Error(`${response.status}: ${await errorDetail(response)}`);

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import type { ChatEvent } from '@hangar/core';
-import { fixStates, isApiError, isFixRunningNote, noticeAction, noticeCount, noticeDetail, noticeKey, noticeKeyLabel, noticeTitle, parseNoticeIgnores } from './notices';
+import { fixStates, isApiError, isFixRunningNote, noticeAction, sameFixStates, noticeCount, noticeDetail, noticeKey, noticeKeyLabel, noticeTitle, parseNoticeIgnores } from './notices';
 
 const ev = (text: string, notice_meta: ChatEvent['notice_meta'], extra: Partial<ChatEvent> = {}): ChatEvent =>
   ({ kind: 'assistant_msg', id: 'local-1', text, notice_meta, ...extra }) as ChatEvent;
@@ -46,6 +46,8 @@ describe('aviso da CLI do Claude', () => {
     expect(fixStates([running, done, fix('f2', 2, 'running')]).get('hookfail:a')?.state).toBe('running');
     expect(fixStates([fix('x', 1, 'failed')]).get('hookfail:a')).toEqual({ state: 'failed' });
     expect(fixStates([done]).get('hookfail:b')).toBeUndefined();
+    expect(sameFixStates(fixStates([running]), fixStates([running]))).toBe(true);
+    expect(sameFixStates(fixStates([running]), fixStates([running, done]))).toBe(false);
   });
 
   test('lista ignorada: aceita a rota e o evento, recusa o torto', () => {

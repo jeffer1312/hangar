@@ -303,7 +303,8 @@ impl Hangar {
     }
 
     /// O que vai entre o título e a seta: o andamento (reinstalando, consertando…) ou o botão da ação.
-    fn notice_action_part(&self, event: &ChatEvent, cx: &mut Context<Self>) -> Option<AnyElement> {
+    /// `fix`: o estado do conserto deste aviso, lido uma vez por linha.
+    fn notice_action_part(&self, event: &ChatEvent, fix: Option<FixState>, cx: &mut Context<Self>) -> Option<AnyElement> {
         let id = event.id.clone();
         let spin = |label: String| notice_spin(&id, small(label, theme::muted())).into_any_element();
         let button = |label: String| notice_action_button(&id, label);
@@ -323,7 +324,7 @@ impl Hangar {
             }),
             (NoticeAction::Fix, acted) => {
                 if matches!(acted, Some(Acted::FixStarting)) { return Some(spin(tr_shared("notice_fix", &[]))); }
-                match fix_state(&self.chat.events, &id) {
+                match fix {
                     Some(FixState::Running { child }) => Some(notice_spin(&id, notice_fixing(&id, &child).cursor_pointer()
                             .on_click(cx.listener(move |this, _, window, cx| this.open_fix_child(child.clone(), window, cx))))
                         .into_any_element()),
@@ -359,9 +360,10 @@ impl Hangar {
         let expandable = detail.is_some() || key.is_some();
         let open = expandable && self.expanded.contains(row);
         let toggle_key = row.to_owned();
-        let action = self.notice_action_part(event, cx);
+        let fix = (notice_action(event) == Some(NoticeAction::Fix)).then(|| fix_state(&self.chat.events, &id)).flatten();
+        let fixed = fix == Some(FixState::Done);
+        let action = self.notice_action_part(event, fix, cx);
         // Com ação, a seta sai do título: o botão fica entre os dois e o clique nele não abre o detalhe.
-        let fixed = notice_action(event) == Some(NoticeAction::Fix) && fix_state(&self.chat.events, &id) == Some(FixState::Done);
         let head = notice_head_marked(SharedString::from(format!("notice-{id}")), title, count, expandable.then_some(open).filter(|_| action.is_none()), fixed)
             .when(expandable, |el| el.cursor_pointer().on_click(cx.listener({ let key = toggle_key.clone(); move |this, _, _, cx| this.toggle(key.clone(), cx) })));
         let head = match action {
@@ -434,19 +436,22 @@ pub(crate) fn fix_open_button(id: &str) -> Button {
     Button::new(SharedString::from(format!("notice-fix-open-{id}"))).ghost().xsmall().label(tr_shared("notice_fix_open", &[]))
 }
 
+/// ✓ do resolvido ou o triângulo âmbar do aviso.
+fn mark_icon(done: bool) -> impl IntoElement {
+    if done { chrome::small_icon(IconName::Check, 14., theme::success()) } else { chrome::small_icon(IconName::TriangleAlert, 14., theme::warning()) }
+}
+
 /// A linha do resultado do conserto: feito (✓) ou falha (âmbar), o texto e o Abrir.
 pub(crate) fn fix_result_row(done: bool, text: String, open: Button) -> Div {
-    let icon = if done { chrome::small_icon(IconName::Check, 14., theme::success()) } else { chrome::small_icon(IconName::TriangleAlert, 14., theme::warning()) };
-    div().flex().items_center().gap(px(7.)).min_w_0().child(icon)
+    div().flex().items_center().gap(px(7.)).min_w_0().child(mark_icon(done))
         .child(div().min_w_0().truncate().text_size(px(12.5)).text_color(theme::muted()).child(text))
         .child(open)
 }
 
 /// `done`: o problema foi consertado, o ícone vira o de feito.
 pub(crate) fn notice_head_marked(id: SharedString, title: String, count: Option<String>, open: Option<bool>, done: bool) -> Stateful<Div> {
-    let icon = if done { chrome::small_icon(IconName::Check, 14., theme::success()) } else { chrome::small_icon(IconName::TriangleAlert, 14., theme::warning()) };
     div().id(id).flex().items_center().gap(px(7.)).min_w_0()
-        .child(icon)
+        .child(mark_icon(done))
         .child(div().min_w_0().truncate().text_size(px(12.5)).text_color(theme::muted()).child(title))
         .when_some(count, |el, count| el.child(small(format!("· {count}"), theme::faint())))
         .when_some(open, |el, open| el.child(chrome::small_icon(if open { IconName::ChevronDown } else { IconName::ChevronRight }, 14., theme::faint())))

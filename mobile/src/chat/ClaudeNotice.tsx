@@ -5,9 +5,8 @@ import { useRouter } from 'expo-router';
 import { recarregarSessao, type ChatEvent } from '@hangar/core';
 import { haptic } from '../ui/haptics';
 import { useSessions } from '../stores/sessions';
-import { useServers } from '../stores/servers';
 import { isApiError, isFixNote, noticeAction, noticeCount, noticeDetail, noticeKey, noticeTitle, plainNotice, type FixState } from '../features/notices/notices';
-import { fixPreview, putNoticeIgnore, reinstallPlugin, startFix, type FixPreview, type FixRequest } from '../features/notices/api';
+import { fixPreview, putNoticeIgnore, reinstallPlugin, serverOf, startFix, type FixPreview, type FixRequest } from '../features/notices/api';
 import { ApiErrorBox, IgnoredLine, NoticeBody, NoticeBusy, NoticeLineView, NoticeMark, NoticePill } from './NoticeParts';
 import { NoticeFixSheet } from './NoticeFixSheet';
 import * as m from '../paraglide/messages';
@@ -89,10 +88,9 @@ export const ClaudeNotice = memo(function ClaudeNotice({ event, serverId, sessio
       (error: unknown) => { haptic.error(); setReinstall({ failed: why(error) }); });
   };
   const reload = () => {
-    const server = useServers.getState().servers.find((s) => s.id === serverId);
-    if (!server || !sessionName) return;
+    if (!serverId || !sessionName) return;
     setReinstall('reloading');
-    recarregarSessao(sessionName, server).catch((error: unknown) => { haptic.error(); setReinstall({ failed: why(error) }); });
+    Promise.resolve().then(() => recarregarSessao(sessionName, serverOf(serverId))).catch((error: unknown) => { haptic.error(); setReinstall({ failed: why(error) }); });
   };
   const request = (): FixRequest | null => {
     const subject = event.notice_meta?.subject;

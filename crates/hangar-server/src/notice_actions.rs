@@ -1,7 +1,7 @@
 //! Ações dos avisos da CLI do Claude: a prévia e a abertura da sessão de conserto de um hook, e o vigia que traz
 //! o resultado dela para a conversa de origem como nota. A nota vai pela fila, nunca pelo `/input`: não acorda o
 //! turno. A sessão de conserto nasce solta (sem grupo); o registro de consertos diz de quem ela é.
-use std::{collections::HashSet, net::SocketAddr, path::{Path, PathBuf}, sync::{Arc, LazyLock}, time::Duration};
+use std::{collections::{HashMap, HashSet}, io, net::SocketAddr, path::{Path, PathBuf}, sync::{Arc, LazyLock}, time::Duration};
 
 use axum::{body::to_bytes, extract::{ConnectInfo, Path as RoutePath, Request, State}, http::StatusCode, response::Response};
 use hangar_api::{chat::ChatKind, session::SessionRow};
@@ -10,7 +10,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::sync::{Mutex, Notify};
 
-use crate::{routes::{AppState, gate}, runtime::queue::Action, session_open::{SessionOpenRequest, server::{Decision, open_owned, reply}},
+use crate::{routes::AppState, runtime::queue::Action, session_open::{SessionOpenRequest, server::{Decision, open_owned, reply}},
     session_write::{detail_body, json_response}};
 
 const TICK: Duration = Duration::from_secs(2);
@@ -22,6 +22,8 @@ const MAX_DETAIL: usize = 4000;
 const MAX_SUBJECT: usize = 200;
 const MAX_READ: u64 = 8 * 1024 * 1024;
 const EVENT: &str = "rust.notice_fix_failed";
+const PANIC_PAUSE: Duration = Duration::from_secs(2);
+const PANIC_PAUSE_MAX: Duration = Duration::from_secs(60);
 
 static WAKE: LazyLock<Notify> = LazyLock::new(Notify::new);
 /// Ler, mudar e gravar o registro é uma coisa só: dois cliques não abrem duas sessões.
@@ -43,43 +45,40 @@ fn failure(status: StatusCode, code: &str, message: &str) -> Response {
     json_response(status, detail_body(code, message, json!({})))
 }
 
-fn valid_subject(subject: &str) -> bool {
-    !subject.is_empty() && subject.len() <= MAX_SUBJECT && subject.bytes().all(|b| b.is_ascii_alphanumeric() || b":_-.|*".contains(&b))
+fn not_owner() -> Response { failure(StatusCode::FORBIDDEN, "notice_fix_owner_only", "só o dono conserta hooks") }
+
+fn valid(body: &FixBody) -> bool {
+    let subject = !body.subject.is_empty() && body.subject.len() <= MAX_SUBJECT
+        && body.subject.bytes().all(|b| b.is_ascii_alphanumeric() || b":_-.|*".contains(&b));
+    subject && fixes::valid_notice_id(&body.notice_id) && body.detail.chars().count() <= MAX_DETAIL
 }
 
 async fn owner_body(st: &AppState, peer: SocketAddr, request: Request) -> Result<FixBody, Response> {
-    let owner = gate(st, peer, &request).await.map_err(crate::auth::unavailable)?.1;
-    if !owner { return Err(failure(StatusCode::FORBIDDEN, "notice_fix_owner_only", "só o dono conserta hooks")); }
+    crate::update_arrived::owner_gate(st, peer, &request, not_owner).await?;
     to_bytes(request.into_body(), 16 * 1024).await.ok()
-        .and_then(|raw| serde_json::from_slice::<FixBody>(&raw).ok())
-        .filter(|body| fixes::valid_notice_id(&body.notice_id) && valid_subject(&body.subject) && body.detail.chars().count() <= MAX_DETAIL)
+        .and_then(|raw| serde_json::from_slice::<FixBody>(&raw).ok()).filter(valid)
         .ok_or_else(|| failure(StatusCode::UNPROCESSABLE_ENTITY, "erro_aviso_invalido", "aviso inválido"))
 }
 
-async fn rows(st: &AppState) -> Result<Arc<Vec<SessionRow>>, Response> {
-    st.list.snapshot().await.map(|produced| produced.rows)
-        .map_err(|_| failure(StatusCode::SERVICE_UNAVAILABLE, "erro_lista_indisponivel", "a lista de sessões não respondeu"))
-}
+fn list_unavailable() -> Response { failure(StatusCode::SERVICE_UNAVAILABLE, "erro_lista_indisponivel", "a lista de sessões não respondeu") }
 
-fn claude_row(rows: &[SessionRow], name: &str) -> Result<SessionRow, Response> {
-    rows.iter().find(|row| row.name == name && row.provider == "claude").cloned()
+fn claude_only(row: Option<SessionRow>) -> Result<SessionRow, Response> {
+    row.filter(|row| row.provider == "claude")
         .ok_or_else(|| failure(StatusCode::NOT_FOUND, "erro_sessao_nao_encontrada", "sessão Claude não encontrada"))
 }
 
-/// Os arquivos que definem o hook (ou, sem nenhum, todos os que existem) e o pedido à sessão de conserto.
-async fn plan(home: PathBuf, row: &SessionRow, body: &FixBody) -> (Vec<PathBuf>, String) {
-    let main = home.join(".claude");
+/// Os arquivos que definem o hook ou, sem nenhum, todos os que existem.
+async fn hook_files(row: &SessionRow, subject: &str) -> Vec<PathBuf> {
+    let main = home().join(".claude");
     let config = crate::list::context::config_dir_of(row.conta.as_deref()).unwrap_or_else(|| main.clone());
     let cwd = PathBuf::from(row.cwd.clone().unwrap_or_default());
-    let (subject, detail) = (body.subject.clone(), body.detail.clone());
+    let subject = subject.to_owned();
     tokio::task::spawn_blocking(move || {
         let read: Vec<(PathBuf, String)> = hangar_notice_actions::candidate_files(&config, &main, &cwd).into_iter()
             .filter_map(|path| std::fs::read_to_string(&path).ok().map(|text| (path, text))).collect();
         let read = hangar_notice_actions::without_mirrored_copy(read, &config, &main);
-        let mut files = hangar_notice_actions::hook_sources(&subject, &read);
-        if files.is_empty() { files = read.into_iter().map(|(path, _)| path).collect(); }
-        let prompt = hangar_notice_actions::fix_prompt(&subject, &detail, &files);
-        (files, prompt)
+        let files = hangar_notice_actions::hook_sources(&subject, &read);
+        if files.is_empty() { read.into_iter().map(|(path, _)| path).collect() } else { files }
     }).await.unwrap_or_default()
 }
 
@@ -89,33 +88,38 @@ fn home() -> PathBuf { std::env::home_dir().unwrap_or_default() }
 pub async fn preview(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, RoutePath(name): RoutePath<String>,
     request: Request) -> Response {
     let body = match owner_body(&st, peer, request).await { Ok(body) => body, Err(response) => return response };
-    let row = match rows(&st).await.and_then(|rows| claude_row(&rows, &name)) { Ok(row) => row, Err(response) => return response };
-    let (files, prompt) = plan(home(), &row, &body).await;
+    let row = match st.list.find_row(&name).await.map_err(|_| list_unavailable()).and_then(claude_only) {
+        Ok(row) => row, Err(response) => return response,
+    };
+    let files = hook_files(&row, &body.subject).await;
     json_response(StatusCode::OK, json!({"subject": body.subject, "detail": body.detail, "no_hooks": body.blocking,
-        "files": files.iter().map(|f| f.display().to_string()).collect::<Vec<_>>(), "prompt": prompt}))
+        "files": files.iter().map(|f| f.display().to_string()).collect::<Vec<_>>()}))
 }
 
 /// `POST /api/sessions/{name}/notice/fix`: abre a sessão de conserto e grava a nota "consertando" na origem.
 pub async fn start(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, RoutePath(name): RoutePath<String>,
     request: Request) -> Response {
     let body = match owner_body(&st, peer, request).await { Ok(body) => body, Err(response) => return response };
-    let all_rows = match rows(&st).await { Ok(rows) => rows, Err(response) => return response };
-    let row = match claude_row(&all_rows, &name) { Ok(row) => row, Err(response) => return response };
-    let registry = REGISTRY.lock().await;
-    let dir = st.hangar_dir.clone();
-    let mut all = match load(&dir).await { Ok(all) => all, Err(response) => return response };
-    if fixes::running(&all, &name, &body.notice_id).is_some() {
-        return failure(StatusCode::CONFLICT, "erro_conserto_em_andamento", "este aviso já tem um conserto em andamento");
-    }
-    let taken: HashSet<&str> = all_rows.iter().map(|r| r.name.as_str()).chain(all.keys().map(String::as_str)).collect();
-    let Some(child) = fixes::child_name(&body.subject, |candidate| taken.contains(candidate)) else {
-        return failure(StatusCode::CONFLICT, "erro_nome_em_uso", "sem nome livre para a sessão de conserto");
-    };
-    let (_, prompt) = plan(home(), &row, &body).await;
+    let rows = match st.list.snapshot().await { Ok(produced) => produced.rows, Err(_) => return list_unavailable() };
+    let row = match claude_only(rows.iter().find(|row| row.name == name).cloned()) { Ok(row) => row, Err(response) => return response };
+    let files = hook_files(&row, &body.subject).await;
+    let prompt = hangar_notice_actions::fix_prompt(&body.subject, &body.detail, &files);
     let attempt = now_ms();
-    // Gravado antes de abrir: a volta nunca acha a sessão sem saber de quem ela é.
-    all.insert(child.clone(), Fix { parent: name.clone(), notice_id: body.notice_id.clone(), attempt, subject: body.subject.clone() });
-    if let Err(response) = save(&dir, &all).await { return response; }
+    // Gravado antes de abrir: a volta nunca acha a sessão sem saber de quem ela é. O nome fica reservado no registro.
+    let taken: HashSet<String> = rows.iter().map(|r| r.name.clone()).collect();
+    let (parent, notice_id, subject) = (name.clone(), body.notice_id.clone(), body.subject.clone());
+    let reserved = registry(&st, move |all| {
+        if fixes::running(all, &parent, &notice_id) { return Err(("erro_conserto_em_andamento", "este aviso já tem um conserto em andamento")); }
+        let child = fixes::child_name(&subject, |candidate| taken.contains(candidate) || all.contains_key(candidate))
+            .ok_or(("erro_nome_em_uso", "sem nome livre para a sessão de conserto"))?;
+        all.insert(child.clone(), Fix { parent, notice_id, attempt, subject });
+        Ok(child)
+    }).await;
+    let child = match reserved {
+        Ok(Ok(child)) => child,
+        Ok(Err((code, message))) => return failure(StatusCode::CONFLICT, code, message),
+        Err(_) => return failure(StatusCode::SERVICE_UNAVAILABLE, "erro_consertos_gravacao", "o registro de consertos não pôde ser gravado"),
+    };
     // O vigia acorda já: se a abertura terminar sem quem pediu, a volta não depende do fim deste pedido.
     WAKE.notify_one();
     let open = SessionOpenRequest {
@@ -124,23 +128,24 @@ pub async fn start(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
         provider: Some("claude".into()), headless: Some(true), model: Some("sonnet".into()), initial_prompt: Some(prompt),
         creator: Some(name.clone()), disable_hooks: body.blocking, ..SessionOpenRequest::default()
     };
+    let fix = Fix { parent: name.clone(), notice_id: body.notice_id, attempt, subject: body.subject };
     // Tarefa própria: o celular que vai para o fundo cancela o pedido, e a sessão aberta ficaria sem a nota
     // de andamento ou com o registro de uma abertura recusada.
     let task = tokio::spawn(async move {
-        let _registry = registry;
         match open_owned(&st, open).await {
             Decision::Opened(_) => {
-                let fix = &all[&child];
                 let text = format!("Consertando em {child}");
-                if let Err(code) = note(&st, &name, &format!("fix:{}:{attempt}", fix.notice_id), &text, fix_meta(fix, &child, "running")).await {
+                if let Err(code) = note(&st, &name, &format!("fix:{}:{attempt}", fix.notice_id), &text, fix_meta(&fix, &child, "running")).await {
                     // A sessão já abriu: a volta ainda grava o resultado; só a linha de andamento falta.
                     report(&st, &name, &code, "nota de andamento do conserto não gravada");
                 }
                 json_response(StatusCode::OK, json!({"child": child, "attempt": attempt}))
             }
             decision => {
-                all.remove(&child);
-                if let Err(response) = save(&dir, &all).await { return response; }
+                let removed = child.clone();
+                if registry(&st, move |all| { all.remove(&removed); }).await.is_err() {
+                    report(&st, &name, "notice_fixes_write_failed", "abertura recusada ficou no registro de consertos");
+                }
                 match decision {
                     Decision::Refused(error) => reply(&error),
                     _ => failure(StatusCode::MISDIRECTED_REQUEST, "erro_criacao_sessao", "a sessão de conserto não abriu"),
@@ -151,16 +156,17 @@ pub async fn start(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
     task.await.unwrap_or_else(|_| failure(StatusCode::INTERNAL_SERVER_ERROR, "erro_criacao_sessao", "a abertura do conserto não terminou"))
 }
 
-async fn load(dir: &Path) -> Result<Fixes, Response> {
-    let dir = dir.to_owned();
-    tokio::task::spawn_blocking(move || fixes::load(&dir)).await.ok().and_then(Result::ok)
-        .ok_or_else(|| failure(StatusCode::SERVICE_UNAVAILABLE, "erro_consertos_ilegivel", "o registro de consertos não pôde ser lido"))
-}
-
-async fn save(dir: &Path, all: &Fixes) -> Result<(), Response> {
-    let (dir, all) = (dir.to_owned(), all.clone());
-    tokio::task::spawn_blocking(move || fixes::save(&dir, &all)).await.ok().and_then(Result::ok)
-        .ok_or_else(|| failure(StatusCode::SERVICE_UNAVAILABLE, "erro_consertos_gravacao", "o registro de consertos não pôde ser gravado"))
+/// Lê o registro, aplica `change` e grava, sob a trava e fora das threads do servidor. Ilegível é erro.
+async fn registry<T: Send + 'static>(st: &AppState, change: impl FnOnce(&mut Fixes) -> T + Send + 'static) -> io::Result<T> {
+    let _registry = REGISTRY.lock().await;
+    let dir = st.hangar_dir.clone();
+    tokio::task::spawn_blocking(move || {
+        let mut all = fixes::load(&dir)?;
+        let before = all.clone();
+        let out = change(&mut all);
+        if all != before { fixes::save(&dir, &all)?; }
+        Ok(out)
+    }).await.map_err(io::Error::other)?
 }
 
 fn now_ms() -> u64 {
@@ -196,25 +202,40 @@ fn report(st: &AppState, session: &str, code: &str, reason: &'static str) {
     st.diag.report(EVENT, session, code, reason);
 }
 
+/// O vigia; uma pane recomeça o laço (com espera crescente), nunca o para de vez e calado.
 pub fn spawn(st: Arc<AppState>) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        let mut settled: std::collections::HashMap<String, (f64, f64)> = Default::default();
+        let mut pause = PANIC_PAUSE;
         loop {
-            let pending = { let _registry = REGISTRY.lock().await; fixes::load(&st.hangar_dir) };
-            match pending {
-                Ok(all) if all.is_empty() => { settled.clear(); WAKE.notified().await; continue }
-                Ok(_) => {}
-                Err(_) => { report(&st, "", "notice_fixes_unreadable", "notice-fixes.json ilegível; consertos parados");
-                    let _ = tokio::time::timeout(Duration::from_secs(60), WAKE.notified()).await; continue }
-            }
-            let sub = st.hub.subscribe_internal(&st.list, &st.devices, &st.diag);
-            loop {
-                tokio::time::sleep(TICK).await;
-                let Some(rows) = sub.rows() else { settled.clear(); continue };
-                if !round(&st, &rows, &mut settled).await { break; }
+            let mut inner = crate::AbortOnDrop(tokio::spawn(watch(st.clone())));
+            match (&mut inner.0).await {
+                Err(e) if e.is_panic() => {
+                    report(&st, "", "notice_fixes_panicked", "vigia dos consertos caiu; recomeça");
+                    tokio::time::sleep(pause).await;
+                    pause = (pause * 2).min(PANIC_PAUSE_MAX);
+                }
+                _ => return,
             }
         }
     })
+}
+
+async fn watch(st: Arc<AppState>) {
+    let mut settled: HashMap<String, (f64, f64)> = HashMap::new();
+    loop {
+        match registry(&st, |all| all.is_empty()).await {
+            Ok(true) => { settled.clear(); WAKE.notified().await; continue }
+            Ok(false) => {}
+            Err(_) => { report(&st, "", "notice_fixes_unreadable", "notice-fixes.json ilegível; consertos parados");
+                let _ = tokio::time::timeout(Duration::from_secs(60), WAKE.notified()).await; continue }
+        }
+        let sub = st.hub.subscribe_internal(&st.list, &st.devices, &st.diag);
+        loop {
+            tokio::time::sleep(TICK).await;
+            let Some(rows) = sub.rows() else { settled.clear(); continue };
+            if !round(&st, &rows, &mut settled).await { break; }
+        }
+    }
 }
 
 /// O que fazer com um conserto nesta rodada.
@@ -229,13 +250,13 @@ fn step(fix: &Fix, row: Option<&SessionRow>, since: Option<f64>, now_s: f64, now
     if answered && since.is_some_and(|since| now_s - since >= SETTLE_S) { Step::Answered } else { Step::Wait }
 }
 
-/// Uma rodada; `false` quando não sobrou conserto.
-async fn round(st: &AppState, rows: &[SessionRow], settled: &mut std::collections::HashMap<String, (f64, f64)>) -> bool {
-    let _registry = REGISTRY.lock().await;
-    let Ok(mut all) = fixes::load(&st.hangar_dir) else { return true };
+/// Uma rodada: lê o registro, grava as notas sem a trava (a origem pode demorar) e tira os entregues. `false`
+/// quando não sobrou conserto.
+async fn round(st: &AppState, rows: &[SessionRow], settled: &mut HashMap<String, (f64, f64)>) -> bool {
+    let Ok(all) = registry(st, |all| all.clone()).await else { return true };
     let (now_s, now) = (crate::state::monitor::wall_now(), now_ms());
-    let mut changed = false;
-    for (child, fix) in all.clone() {
+    let mut finished = Vec::new();
+    for (child, fix) in all {
         let row = rows.iter().find(|r| r.name == child);
         let reply_at = row.and_then(|r| r.last_reply_at).unwrap_or_default();
         let since = match settled.get(&child) {
@@ -254,19 +275,20 @@ async fn round(st: &AppState, rows: &[SessionRow], settled: &mut std::collection
             },
         };
         match note(st, &fix.parent, &format!("fixdone:{}:{}", fix.notice_id, fix.attempt), &text, fix_meta(&fix, &child, state)).await {
-            Ok(()) => { all.remove(&child); settled.remove(&child); changed = true; }
+            Ok(()) => finished.push(child),
             // A origem fechou ou morreu (a lista guarda a linha `dead`): o resultado não tem onde ficar.
             Err(_) if origin_gone(rows, &fix, now) => {
                 report(st, &child, "notice_fix_parent_gone", "conversa de origem do conserto fechada; resultado descartado");
-                all.remove(&child); settled.remove(&child); changed = true;
+                finished.push(child);
             }
             Err(code) => report(st, &child, &code, "resultado do conserto não gravado; tenta de novo"),
         }
     }
-    if changed && fixes::save(&st.hangar_dir, &all).is_err() {
-        report(st, "", "notice_fixes_write_failed", "registro de consertos não gravado");
+    for child in &finished { settled.remove(child); }
+    match registry(st, move |all| { for child in &finished { all.remove(child); } all.is_empty() }).await {
+        Ok(empty) => !empty,
+        Err(_) => { report(st, "", "notice_fixes_write_failed", "registro de consertos não gravado"); true }
     }
-    !all.is_empty()
 }
 
 /// A nota não tem onde entrar: origem fora da lista ou morta, ou o dobro do prazo sem conseguir gravar.
@@ -316,8 +338,7 @@ mod tests {
 
     #[test]
     fn fix_body_is_validated() {
-        let parse = |value: Value| serde_json::from_value::<FixBody>(value).ok()
-            .filter(|b| fixes::valid_notice_id(&b.notice_id) && valid_subject(&b.subject) && b.detail.chars().count() <= MAX_DETAIL);
+        let parse = |value: Value| serde_json::from_value::<FixBody>(value).ok().filter(valid);
         assert!(parse(json!({"notice_id": "hookfail:a", "subject": "PostToolUse:Edit|Write", "detail": "x"})).is_some());
         assert!(parse(json!({"notice_id": "a b", "subject": "Stop", "detail": "x"})).is_none());
         assert!(parse(json!({"notice_id": "a", "subject": "Stop; rm", "detail": "x"})).is_none());

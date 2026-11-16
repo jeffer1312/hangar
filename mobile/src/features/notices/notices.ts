@@ -67,6 +67,16 @@ export function fixStates(events: readonly ChatEvent[]): Map<string, FixState> {
   return new Map([...latest].map(([of, { state }]) => [of, state]));
 }
 
+/** Mesmo estado para os mesmos avisos: a lista guarda o mapa anterior e só redesenha as linhas quando um conserto muda. */
+export function sameFixStates(a: ReadonlyMap<string, FixState>, b: ReadonlyMap<string, FixState>): boolean {
+  if (a.size !== b.size) return false;
+  for (const [of, state] of b) {
+    const before = a.get(of);
+    if (!before || before.state !== state.state || (state.state === 'running' && before.state === 'running' && before.child !== state.child)) return false;
+  }
+  return true;
+}
+
 /** Como uma chave ignorada aparece nas Configurações; a que este app não conhece aparece crua. */
 export function noticeKeyLabel(key: string): string {
   if (key.startsWith('hook:')) return m.notice_key_hook({ name: key.slice('hook:'.length) });

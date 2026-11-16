@@ -135,7 +135,9 @@ pub fn claude_from_meta(meta: &Value, name: &str, created_at: f64) -> io::Result
         subagent_model: text(meta, "subagent_model"), customizations: None, jev: meta["jev"] == true,
         read_only: meta["read_only"] == true, worktree: None, creator: None, created_at,
         conversation: text(meta, "session_id"),
-        name_auto: None, rename_suggestion: None, rename_weak_at: None, rename_dismissed: false, hooks_off: false,
+        name_auto: None, rename_suggestion: None, rename_weak_at: None, rename_dismissed: false,
+        // O sidecar guarda o settings da conversa: a sessão sem hooks continua sem hooks reconstruída por ele.
+        hooks_off: meta["claude_settings"]["disableAllHooks"] == true,
     })
 }
 
