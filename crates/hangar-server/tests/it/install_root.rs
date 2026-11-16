@@ -212,8 +212,14 @@ fn b37_launch_start_and_refusal_reach_the_task_log() {
     assert!(lines[1].starts_with("launch_no_current: "), "{lines:?}");
 }
 
-/// B-37 (Windows): o lançador abre o servidor e, quando ele sai com erro, diz no log da tarefa quando
-/// começou e como saiu; o código de saída é o do servidor.
+#[cfg(windows)]
+fn cmd_exe() -> std::path::PathBuf {
+    Path::new(&std::env::var_os("SystemRoot").expect("SystemRoot")).join("System32").join("cmd.exe")
+}
+
+/// B-37 (Windows): o lançador abre o servidor e, quando ele é parado pelo `Stop-Process` do reinício
+/// (saída `0xFFFFFFFF`), diz no log da tarefa quando começou e como saiu, sem religar; o código de
+/// saída é o do servidor. `launch_start` fica no arquivo desta subida, não no `.1` da anterior.
 #[cfg(windows)]
 #[test]
 fn b37_windows_direct_launch_writes_starting_and_exited_to_the_task_log() {
@@ -221,15 +227,73 @@ fn b37_windows_direct_launch_writes_starting_and_exited_to_the_task_log() {
     let home = dir.path();
     direct_version(home);
     let log = home.join("logs").join("hangar-backend.log");
-    let cmd = Path::new(&std::env::var_os("SystemRoot").expect("SystemRoot")).join("System32").join("cmd.exe");
-    let out = launch_command(home, &["backend", "--log", log.to_str().unwrap(), "/c", "exit", "5"])
-        .env("CP_RUST_SERVER_BIN", &cmd).output().unwrap();
-    assert_eq!(out.status.code(), Some(5), "{out:?}");
+    std::fs::create_dir_all(log.parent().unwrap()).unwrap();
+    std::fs::write(&log, "[hangar] hangar-server launch: subida anterior\n").unwrap();
+    let out = launch_command(home, &["backend", "--log", log.to_str().unwrap(), "/c", "exit", "-1"])
+        .env("CP_RUST_SERVER_BIN", cmd_exe()).output().unwrap();
+    assert_eq!(out.status.code(), Some(-1), "{out:?}");
     let lines = launcher_lines(&log);
-    assert!(lines.iter().any(|line| line.starts_with("launch_start: versão v1, lançador pid ")), "{lines:?}");
+    assert!(lines[0].starts_with("launch_start: versão v1, lançador pid "), "{lines:?}");
     assert!(lines.iter().any(|line| line.starts_with("launch_backend_starting: versão v1, lançador pid ")), "{lines:?}");
     let exited = lines.iter().find(|line| line.starts_with("launch_backend_exited: versão v1, hangar-server pid ")).unwrap_or_else(|| panic!("{lines:?}"));
-    assert!(exited.contains("depois de ") && exited.ends_with(" s"), "{exited}");
+    assert!(exited.contains("depois de ") && exited.ends_with(" s"), "parada pedida não religa: {exited}");
+    assert_eq!(launcher_lines(&home.join("logs").join("hangar-backend.1.log")), ["subida anterior"], "nada desta subida no .1");
+}
+
+/// Decisão 38 (Windows): o servidor que cai é religado pelo lançador com espera crescente (2 s
+/// dobrando; aqui 200 ms pela variável dos testes), cada vida num log novo e cada queda no log e no
+/// diário; a saída limpa (0) encerra o lançador.
+#[cfg(windows)]
+#[test]
+fn b38_windows_launcher_relaunches_a_fallen_server_with_growing_waits() {
+    use std::time::{Duration, Instant};
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    direct_version(home);
+    let log = home.join("logs").join("hangar-backend.log");
+    // Servidor falso: cai com 5 três vezes e na quarta vida para limpo.
+    let fake = home.join("fake-server.cmd");
+    std::fs::write(&fake, "@echo off\r\nset n=0\r\nif exist \"%~dp0count.txt\" set /p n=<\"%~dp0count.txt\"\r\nset /a n+=1\r\n\
+        >\"%~dp0count.txt\" echo %n%\r\nif %n% geq 4 exit 0\r\nexit 5\r\n").unwrap();
+    let started = Instant::now();
+    let mut launcher = launch_command(home, &["backend", "--log", log.to_str().unwrap(), "/c", fake.to_str().unwrap()])
+        .env("CP_RUST_SERVER_BIN", cmd_exe()).env("HANGAR_LAUNCH_RELAUNCH_FIRST_MS", "200")
+        .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn().unwrap();
+    let status = loop {
+        if let Some(status) = launcher.try_wait().unwrap() { break status; }
+        if started.elapsed() > Duration::from_secs(60) {
+            let _ = launcher.kill();
+            panic!("o lançador não saiu depois da parada limpa; vidas: {:?}", std::fs::read_to_string(home.join("count.txt")));
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert_eq!(status.code(), Some(0), "a parada limpa encerra o lançador");
+    assert_eq!(std::fs::read_to_string(home.join("count.txt")).unwrap().trim(), "4");
+    assert!(started.elapsed() >= Duration::from_millis(200 + 400 + 800), "as esperas não foram cumpridas: {:?}", started.elapsed());
+    // Uma vida por arquivo: a mais velha em `.3`, a da parada no log da tarefa.
+    let files = ["hangar-backend.3.log", "hangar-backend.2.log", "hangar-backend.1.log", "hangar-backend.log"]
+        .map(|name| launcher_lines(&home.join("logs").join(name)));
+    assert!(files[0][0].starts_with("launch_start: versão v1, lançador pid "), "{files:?}");
+    let pid = files[0][0].rsplit(' ').next().unwrap().to_owned();
+    for (life, lines) in files.iter().enumerate() {
+        let after = if life == 0 { String::new() } else { format!(", depois da queda {life}") };
+        let starting = format!("launch_backend_starting: versão v1, lançador pid {pid}{after}");
+        assert!(lines.contains(&starting), "vida {}: {lines:?}", life + 1);
+        let exited: Vec<_> = lines.iter().filter(|line| line.starts_with("launch_backend_exited: ")).collect();
+        if life == 3 {
+            assert!(exited.is_empty(), "a parada limpa não é queda: {lines:?}");
+        } else {
+            let wait = 200u64 << life;
+            assert_eq!(exited.len(), 1, "{lines:?}");
+            assert!(exited[0].contains("exit code: 5") && exited[0].ends_with(&format!("; religa em {wait} ms (queda {})", life + 1)), "{}", exited[0]);
+        }
+    }
+    let falls: Vec<_> = diary(home).into_iter().filter(|line| line["evento"] == "lancador.queda").collect();
+    assert_eq!(falls.len(), 3, "{falls:?}");
+    for (n, fall) in falls.iter().enumerate() {
+        assert_eq!((fall["nivel"].as_str(), fall["codigo"].as_str(), fall["saida"].as_str()), (Some("erro"), Some("server_exited"), Some("0x00000005")), "{fall}");
+        assert_eq!((fall["queda"].as_u64(), fall["espera_ms"].as_u64()), (Some(n as u64 + 1), Some(200u64 << n)), "{fall}");
+    }
 }
 
 /// B-35 (Windows): o lançador põe o `hangar-server` no Job dele (`KILL_ON_JOB_CLOSE`): matar o

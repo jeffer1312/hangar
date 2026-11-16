@@ -223,6 +223,22 @@ fn launcher_failure_is_listed_among_the_restarts() {
     assert_eq!(problems.len(), 1, "nível erro segue também entre os problemas");
 }
 
+/// Decisão 38: no Windows o lançador religa o servidor que cai; cada queda entra nos reinícios do
+/// relatório com o código de saída, a vida e a espera.
+#[test]
+fn launcher_relaunch_is_listed_among_the_restarts() {
+    let dir = tempfile::tempdir().unwrap();
+    let now = Local::now();
+    let ts = |h: i64| (now - TimeDelta::hours(h)).to_rfc3339();
+    write(&dir.path().join(format!("diario/servidor-rust/uso-{}.jsonl", day(now))), &format!("{}\n", json!({"ts": ts(1),
+        "evento": "lancador.queda", "nivel": "erro", "codigo": "server_exited", "saida": "0xC0000409", "vida_s": 3, "queda": 2, "espera_ms": 4000})));
+    let Diary { restarts, .. } = collect::read_diary(&collect::diary_files(dir.path()), now, &scrubber());
+    assert_eq!(restarts.len(), 1, "{:?}", restarts.iter().map(DiaryEntry::restart_line).collect::<Vec<_>>());
+    let line = restarts[0].restart_line();
+    assert!(line.contains("lancador.queda erro server_exited"), "{line}");
+    assert!(line.contains("saida=0xC0000409") && line.contains("queda=2") && line.contains("espera_ms=4000"), "{line}");
+}
+
 #[test]
 fn python_log_is_only_counted() {
     let dir = tempfile::tempdir().unwrap();
