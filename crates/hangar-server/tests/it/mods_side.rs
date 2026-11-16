@@ -100,5 +100,4 @@ async fn the_band_of_a_session_rust_does_not_own_comes_from_the_rust_bridge_not_
     assert_eq!(ui, json!({"above": null, "panes": []}));
     let toast: Value = serde_json::from_str(&next_named(&mut events, "plugin_toast").await.data).unwrap();
     assert_eq!(toast["text"], "do rust");
-    assert_eq!(python.hits_to("/api/plugin/ui") + python.hits_to("/api/plugin/toast"), 0);
 }

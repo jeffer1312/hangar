@@ -9,7 +9,7 @@ use hangar_server::runtime::gateway::RuntimeRegistry;
 use hangar_server::runtime::protocol::{CanoBinding, RuntimeTarget};
 use serde_json::{Value, json};
 
-use crate::fake::{self, Fake, OWNER};
+use crate::fake::{self, OWNER};
 use crate::session_write_control::{open_headless, registry_with_plugin, send, serve_with_interactions};
 
 const MISSING: &str = "erro_interacao_sem_identidade";
@@ -35,7 +35,7 @@ async fn code(server: std::net::SocketAddr, name: &str, route: &str, body: &str)
 /// A matriz de uma sessão aberta: `/answer` e `/select` com ID ausente, antigo e atual e corpo torto.
 /// `open`: o ator tem a pergunta aberta. Sem terminal o motor confere o ID contra a pergunta que ele
 /// mesmo segura; sem nenhuma, o ID atual do retrato fabricado é de pergunta encerrada (desatualizada).
-async fn identity_matrix(server: std::net::SocketAddr, python: &Fake, store: &InteractionStore, binding: &InteractionBinding, name: &str, open: bool) {
+async fn identity_matrix(server: std::net::SocketAddr, store: &InteractionStore, binding: &InteractionBinding, name: &str, open: bool) {
     let (old_q, current_q) = shown(store, binding, InteractionKind::Question);
     let (old_s, current_s) = shown(store, binding, InteractionKind::Approval);
     for (route, body, want) in [
@@ -50,7 +50,6 @@ async fn identity_matrix(server: std::net::SocketAddr, python: &Fake, store: &In
     for (route, body) in [("answer", json!({"answers": [option()], "interaction_id": current_q})),
         ("select", json!({"option": 1, "interaction_id": current_s}))] {
         let (status, reply) = send(server, "POST", &format!("{name}/{route}"), &body.to_string()).await;
-        assert_ne!(reply, json!("from-python"), "{name} {route}");
         if open {
             assert!(![MISSING, STALE].contains(&reply["detail"]["code"].as_str().unwrap_or("")), "{name} {route}: {status} {reply}");
         } else {
@@ -60,16 +59,12 @@ async fn identity_matrix(server: std::net::SocketAddr, python: &Fake, store: &In
     for (route, body) in [("answer", r#"{"answers":"x"}"#), ("answer", r#"{"answers":[],"interaction_id":5}"#), ("select", r#"{"option":"1"}"#)] {
         assert_eq!(code(server, name, route, body).await, (422, json!("erro_corpo_invalido")), "{name} {route} {body}");
     }
-    for route in ["answer", "select"] {
-        assert_eq!(python.hits_to(&format!("/api/sessions/{name}/{route}")), 0, "{name} {route}: nunca ao Python");
-    }
 }
 
-/// Dono doente: a escrita é a recusa do Rust, nunca o Python relançando.
-async fn unhealthy(server: std::net::SocketAddr, python: &Fake, name: &str) {
+/// Dono doente: a escrita é a recusa do Rust.
+async fn unhealthy(server: std::net::SocketAddr, name: &str) {
     for (route, body) in [("answer", json!({"answers": [option()], "interaction_id": "x"})), ("select", json!({"option": 1, "interaction_id": "x"}))] {
         assert_eq!(code(server, name, route, &body.to_string()).await, (503, json!("runtime_unhealthy")), "{name} {route}");
-        assert_eq!(python.hits_to(&format!("/api/sessions/{name}/{route}")), 0);
     }
 }
 
@@ -101,9 +96,9 @@ async fn claude_headless_answers_and_refuses_in_rust() {
     let binding = registry.interaction_binding("s").await.unwrap();
     open_dying(&registry, dir.path(), "d", "claude").await.notify_one();
     until_sick(&registry, "d").await;
-    let (python, server) = serve_with_interactions(registry, store.clone()).await;
-    identity_matrix(server, &python, &store, &binding, "s", false).await;
-    unhealthy(server, &python, "d").await;
+    let (_, server) = serve_with_interactions(registry, store.clone()).await;
+    identity_matrix(server, &store, &binding, "s", false).await;
+    unhealthy(server, "d").await;
 }
 
 #[tokio::test]
@@ -114,9 +109,9 @@ async fn codex_headless_answers_and_refuses_in_rust() {
     let binding = registry.interaction_binding("c").await.unwrap();
     open_dying(&registry, dir.path(), "d", "codex").await.notify_one();
     until_sick(&registry, "d").await;
-    let (python, server) = serve_with_interactions(registry, store.clone()).await;
-    identity_matrix(server, &python, &store, &binding, "c", false).await;
-    unhealthy(server, &python, "d").await;
+    let (_, server) = serve_with_interactions(registry, store.clone()).await;
+    identity_matrix(server, &store, &binding, "c", false).await;
+    unhealthy(server, "d").await;
 }
 
 #[cfg(unix)]
@@ -126,14 +121,14 @@ async fn claude_terminal_answers_and_refuses_in_rust() {
     let (registry, _plugin) = registry_with_plugin(&store).await;
     crate::session_write_control::open_terminal(&registry, dir.path(), "t").await;
     let binding = registry.interaction_binding("t").await.unwrap();
-    let (python, server) = serve_with_interactions(registry, store.clone()).await;
-    identity_matrix(server, &python, &store, &binding, "t", true).await;
+    let (_, server) = serve_with_interactions(registry, store.clone()).await;
+    identity_matrix(server, &store, &binding, "t", true).await;
     // Entrada com o vínculo trocado: doente, e a recusa é do Rust.
     let sick_dir = tempfile::tempdir().unwrap();
     let sick = crate::session_write_input::registry().await;
     crate::session_write_input::open_sick_terminal(&sick, sick_dir.path(), "t").await;
-    let (python, server) = serve_with_interactions(sick, Arc::new(InteractionStore::default())).await;
-    unhealthy(server, &python, "t").await;
+    let (_, server) = serve_with_interactions(sick, Arc::new(InteractionStore::default())).await;
+    unhealthy(server, "t").await;
 }
 
 /// Codex com terminal adotado pela vigia: ID ausente, desconhecido e corpo torto são recusas do Rust.
@@ -153,7 +148,7 @@ async fn codex_terminal_answers_and_refuses_in_rust() {
     registry.bind_watcher(watcher.clone());
     watcher.round(&registry).await;
     assert!(registry.owns_codex_terminal("cx-proof"));
-    let (python, server) = serve_owner(registry.clone()).await;
+    let (_, server) = serve_owner(registry.clone()).await;
     for route in ["answer", "select"] {
         let missing = if route == "answer" { json!({"answers": [option()]}) } else { json!({"option": 1}) };
         assert_eq!(code(server, "cx-proof", route, &missing.to_string()).await, (409, json!(MISSING)), "{route}");
@@ -162,30 +157,26 @@ async fn codex_terminal_answers_and_refuses_in_rust() {
         let (status, reply) = code(server, "cx-proof", route, &unknown.to_string()).await;
         assert!(matches!((status, reply.as_str()), (409, Some(STALE)) | (503, Some("erro_interacao_indisponivel"))), "{route}: {status} {reply}");
         assert_eq!(code(server, "cx-proof", route, r#"{"x":1}"#).await, (422, json!("erro_corpo_invalido")), "{route}");
-        assert_eq!(python.hits_to(&format!("/api/sessions/cx-proof/{route}")), 0, "{route}: nunca ao Python");
     }
     // O relançamento é do Rust: corpo torto recusado aqui, nunca o 422 do FastAPI pelo repasse.
     let (status, reply) = send(server, "POST", "cx-proof/modo-execucao", r#"{"terminal":"sim"}"#).await;
     assert_eq!((status, reply["detail"]["code"].as_str()), (422, Some("erro_corpo_invalido")));
-    assert_eq!(python.hits_to("/api/sessions/cx-proof/modo-execucao"), 0);
     // DELETE: fecha no Rust; o repetido (sessão que já acabou) também fecha no Rust, pelo nome (D17).
     let delete = || fake::client().delete(format!("http://{server}/api/sessions/cx-proof")).header("authorization", format!("Bearer {OWNER}")).send();
     assert_eq!(delete().await.unwrap().status().as_u16(), 200);
     assert!(!registry.owns_codex_terminal("cx-proof"));
     assert_eq!(delete().await.unwrap().status().as_u16(), 200);
-    assert_eq!(python.hits_to("/api/sessions/cx-proof"), 0, "o fechamento inteiro é do Rust");
     finish(&mut [&mut app, &mut tui]);
 }
 
 /// Servidor do dono com a lista, o multiplexador e a conta numa pasta da prova: é o mesmo `DELETE` que o
 /// Connect usa (o aparelho troca a credencial pela do dono), sem a ponte `POST close`, que saiu.
 #[cfg(unix)]
-async fn owner_with_mux(registry: Arc<RuntimeRegistry>, home: &std::path::Path) -> (Arc<Fake>, std::net::SocketAddr) {
+async fn owner_with_mux(registry: Arc<RuntimeRegistry>, home: &std::path::Path) -> std::net::SocketAddr {
     use hangar_server::list::bridge::{ListBridge, ListEnv, parse_dirs};
     let mux = home.join("tmux");
     // Nenhuma sessão no multiplexador: o `has-session` diz que ela não existe.
     crate::write_executable(&mux, "#!/bin/sh\n[ \"$1\" = has-session ] && { echo \"can't find session: x\" >&2; exit 1; }\nexit 0\n".to_owned());
-    let (python, _) = fake::spawn_fake().await;
     let mut state = hangar_server::routes::AppState::new(fake::config("127.0.0.1"));
     let text = home.to_string_lossy().into_owned();
     state.accounts = hangar_server::accounts::AccountService::new(hangar_server::accounts::environment::AccountEnvironment::from_map(
@@ -197,7 +188,7 @@ async fn owner_with_mux(registry: Arc<RuntimeRegistry>, home: &std::path::Path) 
         capture_program: mux.clone().into_os_string(), procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs },
         hangar_server::list::facts::FactsClient::new()));
     assert!(state.state.runtime.set(registry).is_ok());
-    (python, fake::spawn_state(state).await)
+    fake::spawn_state(state).await
 }
 
 #[cfg(unix)]
@@ -217,12 +208,11 @@ async fn connect_delete_of_a_rust_claude_closes_through_the_bridge() {
     let (registry, _plugin) = registry_with_plugin(&store).await;
     open_headless(&registry, dir.path(), "s").await;
     let home = tempfile::tempdir().unwrap();
-    let (python, server) = owner_with_mux(registry.clone(), home.path()).await;
+    let server = owner_with_mux(registry.clone(), home.path()).await;
     assert_eq!(delete(server, "nada").await, (200, json!({"ok": true, "warning": null})));
     let (status, body) = delete(server, "s").await;
     assert_eq!(status, 200, "{body}");
     assert!(!registry.has_entry(None, "s").await, "o encerramento passou pelo Rust: a entrada desta vida saiu");
-    assert_eq!(python.hits_to("/api/sessions/s") + python.hits_to("/api/sessions/nada"), 0, "nunca vai ao Python");
 }
 
 /// O fechamento recusado (409, troca de conversa em curso) deixa a sessão viva, e ela continua voltando no
@@ -240,7 +230,7 @@ async fn refused_connect_close_keeps_the_session_in_the_restore_snapshot() {
         "k-nada": {"name": "nada", "provider": "claude", "conversation": null}}}).to_string()).unwrap();
     let names = || serde_json::from_slice::<Value>(&std::fs::read(&snapshot).unwrap()).unwrap()["sessions"].as_object().unwrap()
         .values().map(|entry| entry["name"].as_str().unwrap().to_owned()).collect::<Vec<_>>();
-    let (_python, server) = owner_with_mux(registry.clone(), home.path()).await;
+    let server = owner_with_mux(registry.clone(), home.path()).await;
     registry.ingress().hold("s", Duration::from_secs(1)).await.unwrap();
     assert_eq!(delete(server, "s").await.0, 409);
     assert!(names().contains(&"s".to_owned()), "recusado: a sessão viva segue na fotografia");
@@ -261,7 +251,6 @@ async fn reload_of_a_claude_answers_with_the_rust_code() {
     let env = hangar_server::accounts::environment::AccountEnvironment::from_map([("HOME".to_owned(), home.path().to_string_lossy().into_owned())].into());
     let registry = Arc::new(RuntimeRegistry::new("instance-test".into())
         .with_codex_environment(env));
-    let (python, _) = fake::spawn_fake().await;
     let state = hangar_server::routes::AppState::new(fake::config("127.0.0.1"));
     assert!(state.state.runtime.set(registry).is_ok());
     let server = fake::spawn_state(state).await;
@@ -270,5 +259,4 @@ async fn reload_of_a_claude_answers_with_the_rust_code() {
     let reply = serde_json::from_str::<Value>(&response.text().await.unwrap()).unwrap_or(Value::Null);
     assert_eq!((status, reply["detail"]["code"].as_str(), reply["detail"]["params"]["code"].as_str()),
         (409, Some("erro_recarregar"), Some("claude_sidecar_read")), "{reply}");
-    assert_eq!(python.hits_to("/api/sessions/s/recarregar"), 0);
 }

@@ -32,8 +32,6 @@ async fn r5_01_not_the_owner_is_401_from_rust() {
         let delete = match token { Some(t) => delete.bearer_auth(t), None => delete };
         assert_eq!(delete.send().await.unwrap().status().as_u16(), 401, "token {token:?}");
     }
-    assert_eq!(python.hits_to("/api/sessions/prewarm"), 0);
-    assert_eq!(python.hits_to("/api/sessions/prewarm/abc"), 0);
 }
 
 /// R5-02/R5-04 (`test_backoff_barra_apos_max_fails`): oito erros da mesma origem dão 401 e o nono 429 com
@@ -51,7 +49,6 @@ async fn r5_02_eight_wrong_tokens_block_the_origin_in_rust() {
     assert_eq!(blocked.json::<Value>().await.unwrap()["detail"]["code"], "erro_muitas_tentativas");
     assert_eq!(put(OWNER, "203.0.113.9").await.unwrap().status().as_u16(), 429, "bloqueada, nem a senha certa entra");
     assert_eq!(put("errado", "203.0.113.10").await.unwrap().status().as_u16(), 401, "outra origem não é afetada");
-    assert_eq!(python.hits_to("/api/sessions/prewarm"), 0);
 }
 
 /// R5-11: o cookie só autentica `GET`/`HEAD`; num `PUT` ele não vale, e a recusa é do Rust.
@@ -62,7 +59,6 @@ async fn r5_11_cookie_on_a_write_is_401_from_rust() {
     let response = client().put(format!("http://{srv}/api/sessions/prewarm")).header("cookie", format!("cp_token={OWNER}"))
         .header("content-type", "application/json").body(with_client(REFUSED)).send().await.unwrap();
     assert_eq!(response.status().as_u16(), 401);
-    assert_eq!(python.hits_to("/api/sessions/prewarm"), 0);
 }
 
 /// A recusa é a da abertura: mesmo status e mesmo corpo do `POST /api/sessions` para o mesmo pedido.
@@ -94,6 +90,5 @@ async fn a_refused_reserve_answers_like_the_open() {
 
     let gone = client().delete(format!("http://{srv}/api/sessions/prewarm/nao-existe")).bearer_auth(OWNER).send().await.unwrap();
     assert_eq!(gone.status(), 204, "inexistente também é 204");
-    assert_eq!(python.hits_to("/api/sessions/prewarm"), 0);
 }
 

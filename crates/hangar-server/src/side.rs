@@ -544,11 +544,6 @@ impl Hub {
     #[cfg(test)]
     fn has_monitor(&self) -> bool { !self.owned_events().is_empty() }
 
-    /// Os eventos do estado que esta ligação tem no Rust, para o canal privado.
-    fn state_events(&self) -> &'static [&'static str] {
-        self.bound.lock().unwrap().as_ref().and_then(|b| self.owner_events(&b.binding)).unwrap_or(&STATE_EVENTS)
-    }
-
     /// Eventos que o Rust publica nesta ligação: os do `Binding`, ou os do feed quando o ator do Codex com
     /// terminal é do Rust (o registro avisa o hub na abertura e no fechamento).
     fn owner_events(&self, binding: &Binding) -> Option<&'static [&'static str]> {

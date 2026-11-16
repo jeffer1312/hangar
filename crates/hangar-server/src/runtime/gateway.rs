@@ -4556,10 +4556,6 @@ pub(crate) mod tests {
     /// Registro de teste sobre os processos falsos do cano, com a espera da reabertura automática curta.
     #[cfg(target_os="linux")]
     fn park_registry(home:&std::path::Path,processes:Arc<ParkProcesses>,configure:impl FnOnce(RuntimeRegistry)->RuntimeRegistry) -> (Arc<RuntimeRegistry>,crate::side::Hubs) {
-        park_registry_at("127.0.0.1:9".parse().unwrap(),home,processes,configure)
-    }
-    #[cfg(target_os="linux")]
-    fn park_registry_at(upstream:SocketAddr,home:&std::path::Path,processes:Arc<ParkProcesses>,configure:impl FnOnce(RuntimeRegistry)->RuntimeRegistry) -> (Arc<RuntimeRegistry>,crate::side::Hubs) {
         let env=crate::accounts::environment::AccountEnvironment::from_map([("HOME".to_owned(),home.to_string_lossy().into_owned())].into());
         let registry=Arc::new(configure(RuntimeRegistry::new("instance".into()).with_processes(processes).with_codex_environment(env)));
         registry.bind_lifecycle();
@@ -4583,7 +4579,7 @@ pub(crate) mod tests {
         });
         let processes=Arc::new(ParkProcesses {canos:std::sync::Mutex::new(vec![i64::from(cano.0.id())]),dir:home.path().into(),agent:Default::default()});
         let (diag,reports)=diag_sink().await;
-        let (registry,_hubs)=park_registry_at("127.0.0.1:9".parse().unwrap(),home.path(),processes,|registry|registry.with_diagnostics(diag).with_respawn_base(Duration::from_millis(20)));
+        let (registry,_hubs)=park_registry(home.path(),processes,|registry|registry.with_diagnostics(diag).with_respawn_base(Duration::from_millis(20)));
         registry.open_claude_headless(name,false).await.unwrap().unwrap();
 
         for file in &files { std::fs::remove_file(file).unwrap(); }

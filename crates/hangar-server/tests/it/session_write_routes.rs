@@ -49,43 +49,6 @@ pub(crate) async fn cano_with(kill: Option<Arc<tokio::sync::Notify>>) -> String 
     format!("tcp:{address}")
 }
 
-/// Python falso da política: responde `ok` a tudo.
-async fn policy() -> std::net::SocketAddr { policy_seen(Arc::default()).await }
-
-/// O mesmo, guardando a linha de cada pedido (método e caminho).
-async fn policy_seen(seen: Arc<std::sync::Mutex<Vec<String>>>) -> std::net::SocketAddr {
-    hangar_server::diag::disable_diary();
-    use tokio::io::AsyncReadExt;
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    tokio::spawn(async move {
-        loop {
-            let Ok((stream, _)) = listener.accept().await else { return };
-            let seen = seen.clone();
-            tokio::spawn(async move {
-                let mut reader = BufReader::new(stream);
-                loop {
-                    let mut length = 0usize;
-                    let mut first = true;
-                    loop {
-                        let mut line = String::new();
-                        if reader.read_line(&mut line).await.unwrap_or(0) == 0 { return; }
-                        if std::mem::take(&mut first) { seen.lock().unwrap().push(line.trim_end().to_owned()); }
-                        if line == "\r\n" { break; }
-                        if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") { length = value.trim().parse().unwrap(); }
-                    }
-                    let mut body = vec![0; length];
-                    reader.read_exact(&mut body).await.unwrap();
-                    let reply = json!({"ok":true,"data":{}}).to_string();
-                    let response = format!("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{reply}", reply.len());
-                    reader.get_mut().write_all(response.as_bytes()).await.unwrap();
-                }
-            });
-        }
-    });
-    address
-}
-
 async fn open_entry(registry: &RuntimeRegistry, dir: &std::path::Path, key: &str, name: &str) {
     open_entry_with(registry, dir, key, name, 1, cano().await).await
 }
@@ -99,16 +62,16 @@ pub(crate) async fn open_entry_with(registry: &RuntimeRegistry, dir: &std::path:
 }
 
 async fn registry() -> Arc<RuntimeRegistry> {
+    hangar_server::diag::disable_diary();
     crate::runtime_open::with_hubs(RuntimeRegistry::new("instance-test".into()).with_processes(Arc::new(crate::runtime_open::RecipeProcesses("sid-1"))))
 }
 
-/// Servidor com o runtime ligado (como `serve_until_with_state` faz) e o Python falso.
-async fn serve_with(registry: Option<Arc<RuntimeRegistry>>) -> (Arc<Fake>, std::net::SocketAddr) {
+/// Servidor com o runtime ligado (como `serve_until_with_state` faz).
+async fn serve_with(registry: Option<Arc<RuntimeRegistry>>) -> std::net::SocketAddr {
     let (python, _) = spawn_fake().await;
     let state = AppState::new(config("127.0.0.1"));
     if let Some(registry) = registry { assert!(state.state.runtime.set(registry).is_ok()); }
-    let addr = spawn_state_for(&python, state).await;
-    (python, addr)
+    spawn_state_for(&python, state).await
 }
 
 async fn post(server: std::net::SocketAddr, route: &str, body: &str, token: &str) -> (u16, String) {
@@ -124,8 +87,8 @@ const ROUTES: &[&str] = &["input", "steer", "interrupt", "select", "select/submi
 const CODEX_ROUTES: [&str; 7] = ["model", "codex/mode", "service-tier", "question/skip", "codex-permissions", "codex/plan/implement", "codex/terminate"];
 
 /// Cada escrita do dono (POST das rotas de escrita e do Codex, mais fila e leituras do Codex), com a
-/// resposta que voltou; depois confere que nada chegou ao Python.
-async fn every_write(python: &Fake, server: std::net::SocketAddr) -> Vec<(String, (u16, Value))> {
+/// resposta que voltou.
+async fn every_write(server: std::net::SocketAddr) -> Vec<(String, (u16, Value))> {
     let mut answers = Vec::new();
     let parse = |(status, text): (u16, String)| (status, serde_json::from_str(&text).unwrap_or(Value::String(text)));
     for route in ROUTES.iter().chain(&CODEX_ROUTES) {
@@ -136,9 +99,6 @@ async fn every_write(python: &Fake, server: std::net::SocketAddr) -> Vec<(String
             .header("content-type", "application/json").header("authorization", format!("Bearer {OWNER}")).body(r#"{"text":"oi"}"#).send().await.unwrap();
         answers.push((format!("{method} {route}"), parse((response.status().as_u16(), response.text().await.unwrap()))));
     }
-    for route in ROUTES.iter().chain(&CODEX_ROUTES).chain(&["queue/e1", "limits", "models"]) {
-        assert_eq!(python.hits_to(&format!("/api/sessions/s/{route}")), 0, "{route}: nada chega ao Python");
-    }
     answers
 }
 
@@ -146,8 +106,8 @@ async fn every_write(python: &Fake, server: std::net::SocketAddr) -> Vec<(String
 /// nunca o terá; a escrita é 503 `runtime_unavailable`, código que não pede repetição.
 #[tokio::test]
 async fn without_a_runtime_every_write_is_runtime_unavailable_and_never_python() {
-    let (python, server) = serve_with(None).await;
-    for (route, (status, body)) in every_write(&python, server).await {
+    let server = serve_with(None).await;
+    for (route, (status, body)) in every_write(server).await {
         assert_eq!((status, body["detail"]["code"].as_str()), (503, Some("runtime_unavailable")), "{route}: {body}");
     }
 }
@@ -162,7 +122,7 @@ async fn while_starting_every_write_is_server_starting_and_never_python() {
     state.startup = hangar_server::startup::Readiness::pending();
     assert!(state.state.runtime.set(registry().await).is_ok());
     let server = spawn_state_for(&python, state).await;
-    for (route, answer) in every_write(&python, server).await {
+    for (route, answer) in every_write(server).await {
         assert_eq!(answer, (503, json!({"detail": "server_starting"})), "{route}");
     }
 }
@@ -189,7 +149,6 @@ async fn codex_commands_while_starting_and_without_a_runtime_are_503_with_a_code
         let body: Value = serde_json::from_str(&response.text().await.unwrap()).unwrap();
         let code = if starting { body["detail"].as_str() } else { body["detail"]["code"].as_str() };
         assert_eq!((status, code), (503, Some(if starting { "server_starting" } else { "runtime_unavailable" })), "{body}");
-        assert_eq!(python.hits_to("/api/sessions/s/commands"), 0);
     }
 }
 
@@ -197,14 +156,13 @@ async fn codex_commands_while_starting_and_without_a_runtime_are_503_with_a_code
 async fn open_entry_with_a_body_the_route_refuses_is_a_rust_422_never_python() {
     let (dir, registry) = (tempfile::tempdir().unwrap(), registry().await);
     open_entry(&registry, dir.path(), "k", "s").await;
-    let (python, server) = serve_with(Some(registry)).await;
+    let server = serve_with(Some(registry)).await;
     // Campo a mais e corpo que não é JSON de objeto: a recusa é do Rust, com código.
     for body in [r#"{"text":"oi","x":1}"#, "não é json"] {
         let (status, text) = post(server, "input", body, OWNER).await;
         let reply: Value = serde_json::from_str(&text).unwrap();
         assert_eq!((status, reply["detail"]["code"].as_str()), (422, Some("erro_corpo_invalido")), "{body}");
     }
-    assert_eq!(python.hits_to("/api/sessions/s/input"), 0);
 }
 
 /// Decisão 5: quem não pode na sessão recebe o 401 do Rust na hora, sem esperar a porta e sem chegar
@@ -214,12 +172,11 @@ async fn stranger_gets_the_rust_401_at_once_even_with_the_gate_closed() {
     let (dir, registry) = (tempfile::tempdir().unwrap(), registry().await);
     open_entry(&registry, dir.path(), "k", "s").await;
     registry.ingress().close("s", Duration::from_secs(1)).await.unwrap();
-    let (python, server) = serve_with(Some(registry)).await;
-    let unauthorized = (401, r#"{"detail":{"code":"erro_nao_autorizado","params":{},"msg":"unauthorized"}}"#.to_owned());
+    let server = serve_with(Some(registry)).await;
+    let unauthorized =(401, r#"{"detail":{"code":"erro_nao_autorizado","params":{},"msg":"unauthorized"}}"#.to_owned());
     for route in ROUTES {
         let answer = tokio::time::timeout(Duration::from_secs(2), post(server, route, r#"{"text":"oi"}"#, "token-errado")).await;
         assert_eq!(answer.unwrap(), unauthorized, "{route}");
-        assert_eq!(python.hits_to(&format!("/api/sessions/s/{route}")), 0, "{route}");
     }
 }
 
@@ -228,13 +185,12 @@ async fn gate_reopened_in_time_lets_the_request_through() {
     let (dir, registry) = (tempfile::tempdir().unwrap(), registry().await);
     open_entry(&registry, dir.path(), "k", "s").await;
     registry.ingress().close("s", Duration::from_secs(1)).await.unwrap();
-    let (python, server) = serve_with(Some(registry.clone())).await;
+    let server = serve_with(Some(registry.clone())).await;
     let reopen = registry.clone();
     tokio::spawn(async move { tokio::time::sleep(Duration::from_millis(50)).await; reopen.ingress().open("s"); });
     // A porta reabriu e o Rust atendeu: corpo sem `answers` é a recusa dele, não o Python.
     let (status, text) = post(server, "answer", "{}", OWNER).await;
     assert_eq!(status, 422, "{text}");
-    assert_eq!(python.hits_to("/api/sessions/s/answer"), 0);
 }
 
 #[tokio::test]
@@ -276,7 +232,6 @@ async fn gate_closed_past_the_wait_answers_409_busy() {
     assert_eq!(body["detail"]["code"], "session_transfer_busy");
     assert_eq!(body["detail"]["msg"], "A sessão está trocando de agente; tente novamente quando terminar.");
     assert_eq!(body["detail"]["params"], json!({}));
-    assert_eq!(python.hits_to("/api/sessions/s/input"), 0);
 }
 
 /// Btw B2 (`api.py:404`): troca de conta em curso é 409 antes do corpo, e nada chega ao Python.
@@ -293,7 +248,6 @@ async fn btw_with_the_gate_closed_is_409_busy_before_the_body() {
     let (status, text) = post(server, "btw", "não é json", OWNER).await;
     let body: Value = serde_json::from_str(&text).unwrap();
     assert_eq!((status, body["detail"]["code"].as_str()), (409, Some("session_transfer_busy")));
-    assert_eq!(python.hits_to("/api/sessions/s/btw"), 0);
 }
 
 /// Btw B6: com a porta aberta, o corpo fora do modelo é o 422 do Rust, sem o Python.
@@ -301,11 +255,10 @@ async fn btw_with_the_gate_closed_is_409_busy_before_the_body() {
 async fn btw_body_outside_the_model_is_a_rust_422() {
     let (dir, registry) = (tempfile::tempdir().unwrap(), registry().await);
     open_entry(&registry, dir.path(), "k", "s").await;
-    let (python, server) = serve_with(Some(registry)).await;
+    let server = serve_with(Some(registry)).await;
     let (status, text) = post(server, "btw", r#"{"question":"q","x":1}"#, OWNER).await;
     let body: Value = serde_json::from_str(&text).unwrap();
     assert_eq!((status, body["detail"][0]["type"].as_str()), (422, Some("extra_forbidden")));
-    assert_eq!(python.hits_to("/api/sessions/s/btw"), 0);
 }
 
 #[tokio::test]
@@ -314,21 +267,20 @@ async fn gate_held_by_a_transfer_answers_409_without_waiting() {
     open_entry(&registry, dir.path(), "k", "s").await;
     registry.ingress().hold("s", Duration::from_secs(1)).await.unwrap();
     // Espera padrão da porta (30 s): a retenção não pode gastá-la.
-    let (python, server) = serve_with(Some(registry)).await;
+    let server = serve_with(Some(registry)).await;
     let start = std::time::Instant::now();
     let (status, text) = tokio::time::timeout(Duration::from_secs(5), post(server, "input", r#"{"text":"oi"}"#, OWNER)).await.unwrap();
     assert!(start.elapsed() < Duration::from_secs(1), "{:?}", start.elapsed());
     assert_eq!(status, 409);
     let body: Value = serde_json::from_str(&text).unwrap();
     assert_eq!(body["detail"]["code"], "session_transfer_busy");
-    assert_eq!(python.hits_to("/api/sessions/s/input"), 0);
 }
 
 #[tokio::test]
 async fn oversized_body_answers_python_413_text() {
     let (dir, registry) = (tempfile::tempdir().unwrap(), registry().await);
     open_entry(&registry, dir.path(), "k", "s").await;
-    let (_python, server) = serve_with(Some(registry)).await;
+    let server = serve_with(Some(registry)).await;
     let big = vec![b' '; 100 * 1024 * 1024 + 1];
     let response = client().post(format!("http://{server}/api/sessions/s/input"))
         .header("authorization", format!("Bearer {OWNER}")).header("origin", "http://app").body(big).send().await.unwrap();
@@ -361,14 +313,13 @@ async fn forwarding_never_holds_the_ingress_pass() {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     assert!(!registry.writable("doente").await.unwrap().healthy, "a entrada ficou doente");
-    let (python, server) = serve_with(Some(registry.clone())).await;
+    let server = serve_with(Some(registry.clone())).await;
     // Sem entrada: o envio a sessão sem dono não segura o passe (`session_write_unowned`).
     // Doente e corpo que a rota recusa: o Rust responde com código, nunca repassa, e solta o passe.
     for (name, body, status, code) in [("doente", r#"{"text":"oi"}"#, 503, "runtime_unhealthy"), ("s", r#"{"text":"oi","x":1}"#, 422, "erro_corpo_invalido")] {
         let (got, text) = post_to(server, name, "input", body).await;
         let reply: Value = serde_json::from_str(&text).unwrap();
         assert_eq!((got, reply["detail"]["code"].as_str()), (status, Some(code)), "{name}");
-        assert_eq!(python.hits_to(&format!("/api/sessions/{name}/input")), 0, "{name}: nunca ao Python");
         assert!(registry.ingress().close(name, Duration::from_millis(300)).await.is_ok(), "{name}: passe solto");
         registry.ingress().open(name);
     }
@@ -385,7 +336,7 @@ async fn post_to(server: std::net::SocketAddr, name: &str, route: &str, body: &s
 /// sidecar dela na casa do teste, a reabertura falha visível no diário e a vida doente sai.
 #[tokio::test]
 async fn unhealthy_write_reopens_the_session_in_rust() {
-    let seen: Arc<std::sync::Mutex<Vec<String>>> = Arc::default();
+    hangar_server::diag::disable_diary();
     let dir = tempfile::tempdir().unwrap();
     let home = tempfile::tempdir().unwrap();
     let diary = dir.path().join("diário");
@@ -402,7 +353,7 @@ async fn unhealthy_write_reopens_the_session_in_rust() {
         if !registry.writable("doente").await.unwrap().healthy { break; }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    let (_python, server) = serve_with(Some(registry.clone())).await;
+    let server = serve_with(Some(registry.clone())).await;
     let (status, _) = post_to(server, "doente", "input", r#"{"text":"oi"}"#).await;
     assert_eq!(status, 503);
     let recorded = crate::fake::wait_diary(&diary, |row| row["sessao"] == "doente" && row["evento"] == "rust.runtime_reopen_failed").await;
@@ -410,9 +361,6 @@ async fn unhealthy_write_reopens_the_session_in_rust() {
     let line = recorded.iter().find(|row| row["sessao"] == "doente" && row["evento"] == "rust.runtime_reopen_failed").unwrap();
     assert!(line["codigo"].as_str().is_some_and(|code| !code.is_empty()));
     assert_eq!(line["nivel"], "erro");
-    let seen = seen.lock().unwrap();
-    assert!(!seen.iter().any(|line| line == "POST /internal/diag HTTP/1.1"));
-    assert!(!seen.iter().any(|line| line.contains("/reopen")), "nada vai ao coordenador do Python: {seen:?}");
 }
 
 /// R2-28: as combinações que a tabela entregava ao Python e que nenhuma sessão alcança (Pi/omp/Kimi sem

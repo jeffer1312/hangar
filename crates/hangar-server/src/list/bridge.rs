@@ -1,6 +1,5 @@
-//! Ponte privada `list.*` (Python → Rust): com o Rust de pé, a descoberta, o cache de resolução do
-//! transcript e o retrato da lista são dele; o Python pergunta por aqui (`list_bridge.py`), na porta
-//! privada, com o mesmo segredo da ponte de Git/arquivos. Falha volta com código, nunca lista vazia.
+//! Descoberta, cache de resolução do transcript e retrato da lista. Falha volta com código, nunca
+//! lista vazia.
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -8,10 +7,8 @@ use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use axum::{http::{StatusCode, header}, response::{IntoResponse, Response}};
 use hangar_api::session::SessionRow;
-use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use super::classify::{CaptureSource, Classifier, Effect, Facts, MuxCapture};
 use super::context::{self, ContextCache, ReadingInputs};
@@ -39,7 +36,6 @@ const FORGET_AFTER: Duration = Duration::from_secs(10);
 const LIVE_FRESH: Duration = Duration::from_secs(15);
 const CAPTURE_TIMEOUT: Duration = Duration::from_secs(5);
 const CONFIG_DIRS_TTL: Duration = Duration::from_secs(30);
-const MAX_BODY: usize = 64 * 1024;
 /// `git status` simultâneos da lista (`_git_pool`).
 const GIT_SLOTS: usize = 4;
 
@@ -915,21 +911,6 @@ impl ListBridge {
         }
     }
 
-    pub async fn resolve(&self, name: &str, cwd: &str, pid: Option<i64>) -> Result<discover::Transcript, ListError> {
-        let dirs = self.dirs()?;
-        let (panes, dropped) = self.env.mux.list_panes_checked().await.map_err(|e| fail("mux_unavailable", e.code))?;
-        if let Some(p) = dropped {
-            self.facts.diag.report("rust.list_discovery", &p.key, p.code, p.reason);
-        }
-        let (env, caches, name, cwd) = (self.env.clone(), self.caches.clone(), name.to_owned(), cwd.to_owned());
-        let out = tokio::task::spawn_blocking(move || {
-            let children = env.procs.children(procs::CHILDREN_TTL).map_err(|_| fail("list_procs_unreadable", "mapa de processos ilegível"))?;
-            Ok(caches.resolver.with(|r| discover::resolve_one(&panes, &*env.procs, &children, &dirs.claude.join("projects"), r, &name, &cwd, pid)))
-        }).await.map_err(|e| joined(e, "resolução interrompida"))?;
-        self.flush_notes();
-        out
-    }
-
     /// Falhas vistas pela leitura síncrona da rodada, ao diário.
     fn flush_notes(&self) {
         for n in list_facts::take_notes() {
@@ -1318,75 +1299,10 @@ fn headless_meta(path: &Path, session: &str) -> Value {
     Value::Null
 }
 
-#[derive(Deserialize)]
-#[serde(tag = "op", content = "args")]
-enum Operation {
-    #[serde(rename = "list.discover")]
-    Discover { #[serde(default)] newer_than: Option<f64> },
-    #[serde(rename = "list.snapshot")]
-    Snapshot {},
-    #[serde(rename = "list.resolve")]
-    Resolve { name: String, cwd: String, #[serde(default)] pid: Option<i64> },
-    #[serde(rename = "list.seed")]
-    Seed { name: String, jsonl: String },
-    #[serde(rename = "state.facts")]
-    StateFacts { name: String, facts: crate::state::facts::StateFacts },
-}
-
-async fn execute(bridge: &Arc<ListBridge>, op: Operation) -> Result<Value, ListError> {
-    let rows = |r: &[SessionRow]| serde_json::to_value(r).map_err(|_| fail("list_task_failed", "linha sem serializar"));
-    let cache = |f: Box<dyn FnOnce(&ListBridge) + Send>| {
-        let bridge = bridge.clone();
-        async move {
-            tokio::task::spawn_blocking(move || f(&bridge)).await
-                .map(|()| Value::Null).map_err(|e| joined(e, "cache interrompido"))
-        }
-    };
-    match op {
-        Operation::Discover { newer_than } => {
-            let mut found = bridge.discover(newer_than).await?.as_ref().clone();
-            let home = bridge.dirs()?.home;
-            let (orq, failed) = tokio::task::spawn_blocking(move || local_facts::orq_rows(&home, wall_now())).await
-                .map_err(|e| joined(e, "orquestrações interrompidas"))?;
-            if let Some(why) = failed {
-                bridge.facts.diag.report_with("rust.list_orq_unavailable", "", "list_orq_unavailable", "orquestração ilegível; fica a última linha boa",
-                    serde_json::json!({"detalhe": why}));
-            }
-            found.extend(orq);
-            rows(&found)
-        },
-        Operation::Snapshot {} => {
-            let produced = bridge.snapshot().await?;
-            // Sem nenhuma resposta boa do Python, acesso, escondidas e transferências são
-            // desconhecidos, não vazios: o convidado veria o que não é dele.
-            if produced.facts.unknown {
-                return Err(fail("list_facts_unknown", "fatos da lista ainda sem resposta"));
-            }
-            rows(&produced.rows)
-        }
-        Operation::Resolve { name, cwd, pid } => {
-            let t = bridge.resolve(&name, &cwd, pid).await?;
-            Ok(json!({"jsonl": t.jsonl, "tracked": t.tracked}))
-        }
-        Operation::Seed { name, jsonl } => cache(Box::new(move |b| b.seed(&name, &jsonl))).await,
-        Operation::StateFacts { name, facts } => {
-            use crate::state::facts::Push;
-            Ok(match bridge.state_facts.push(&name, facts, Instant::now()) {
-                Push::Accepted { gap } => json!({"accepted": true, "watched": true, "gap": gap}),
-                Push::Dropped => json!({"accepted": false, "watched": true, "gap": false}),
-                Push::Unwatched => json!({"accepted": false, "watched": false, "gap": false}),
-            })
-        }
-    }
-}
-
-fn reply(value: Value) -> Response {
-    (StatusCode::OK, [(header::CONTENT_TYPE, "application/json")], value.to_string()).into_response()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn claude_lock_dirs_are_not_account_dirs() {
@@ -1691,25 +1607,6 @@ mod tests {
             lock(&bridge.live_jsonl).as_mut().unwrap().0 = old;
             assert!(bridge.live_jsonl().is_none(), "rodada velha não vale");
         }
-    }
-
-    #[tokio::test]
-    async fn state_facts_op_reaches_the_store_and_drops_old_sequences() {
-        let bridge = Arc::new(ListBridge::new(ListEnv { mux: Mux::default(), capture_program: "tmux".into(),
-            procs: Arc::new(procs::SystemProcs::default()), dirs: None }, FactsClient::new()));
-        let op = |seq: u64| serde_json::from_value::<Operation>(json!({"op": "state.facts", "args": {"name": "s1", "facts": {
-            "seq": seq, "plugin_state": {"state": "idle", "reason": null, "age_ms": 0}, "waiter_open": true,
-            "heartbeat_age_ms": 0, "question": null, "suggestion": "", "body_columns": null, "band_anchor": null,
-            "in_transfer_ms": 0, "transfer_active": false, "permission_op": false}}})).unwrap();
-        assert_eq!(execute(&bridge, op(1)).await.unwrap()["watched"], false, "sem Monitor não guarda nada");
-        assert!(bridge.state_facts.get("s1").is_none());
-        bridge.state_facts.watch("s1");
-        assert_eq!(execute(&bridge, op(2)).await.unwrap(), json!({"accepted": true, "watched": true, "gap": false}));
-        assert_eq!(execute(&bridge, op(1)).await.unwrap(), json!({"accepted": false, "watched": true, "gap": false}));
-        assert_eq!(execute(&bridge, op(4)).await.unwrap()["gap"], true);
-        assert_eq!(bridge.state_facts.get("s1").unwrap().facts.seq, 4);
-        assert!(serde_json::from_value::<Operation>(json!({"op": "state.facts", "args": {"name": "s1", "facts": {"seq": 3}}})).is_err(),
-            "fato incompleto é recusado, nunca vazio");
     }
 
     /// Rodada falsa que conta as vezes e só termina quando o teste solta uma licença.

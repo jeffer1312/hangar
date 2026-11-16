@@ -27,7 +27,6 @@ async fn closing_a_rust_owned_grouped_session_returns_the_leave_warning() {
     assert!(registry.owns_codex_terminal("cx-proof"));
 
     let dir = tempfile::Builder::new().prefix("grp-sf-close-").tempdir().unwrap();
-    let (python, _) = fake::spawn_fake().await;
     let mut state = hangar_server::routes::AppState::new(fake::config("127.0.0.1"));
     assert!(state.state.runtime.set(registry.clone()).is_ok());
     let groups = Arc::new(GroupService::new(PairDir::new(dir.path().join("pair"), dir.path().join("arquivo")),
@@ -43,7 +42,6 @@ async fn closing_a_rust_owned_grouped_session_returns_the_leave_warning() {
     assert_eq!(response.status().as_u16(), 200);
     let body: Value = serde_json::from_str(&response.text().await.unwrap()).unwrap_or(Value::Null);
     assert!(!registry.owns_codex_terminal("cx-proof"), "fechada no Rust");
-    assert_eq!(python.hits_to("/api/sessions/cx-proof"), 0, "o fechamento inteiro é do Rust");
     assert_eq!(body["warning"]["code"], "erro_pareamento_saida_falhou", "{body}");
     assert_eq!(body["warning"]["params"]["avisos"][0]["erro"]["code"], "erro_peer_nao_avisado", "{body}");
     finish(&mut [&mut app, &mut tui]);

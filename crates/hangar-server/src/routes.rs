@@ -1302,10 +1302,6 @@ pub(crate) fn on_connect_port(req: &Request) -> bool {
 
 pub(crate) async fn pass(st: &AppState, req: Request, fwd: &Forward) -> Response {
     if !on_guest_port(&req) && let Some(response) = not_owner_refusal(st, &req, fwd).await { return response; }
-    // Pedido da ponte do Codex com terminal: 421 diz ao Python que o Rust não o atende.
-    if req.extensions().get::<crate::session_write::bridge::BridgedOwner>().is_some() {
-        return StatusCode::MISDIRECTED_REQUEST.into_response();
-    }
     without_python(st, req, fwd).await
 }
 

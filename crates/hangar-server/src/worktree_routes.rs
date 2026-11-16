@@ -40,12 +40,6 @@ pub fn matches(_method: &Method, path: &str) -> bool {
     path == "/api/worktrees" || path.starts_with("/api/worktrees/")
 }
 
-pub(crate) async fn serve_forwarded(st: Arc<AppState>, peer: std::net::SocketAddr, mut req: Request, guest: bool) -> Response {
-    if guest { return response(json!({"detail":"convidado não acessa worktrees"}), 403); }
-    req.extensions_mut().insert(crate::session_write::bridge::BridgedOwner);
-    route(st, peer, req).await
-}
-
 pub async fn route(st: Arc<AppState>, peer: std::net::SocketAddr, req: Request) -> Response {
     let headers = req.headers().clone();
     let method = req.method().clone();

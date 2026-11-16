@@ -93,12 +93,12 @@ async fn open(registry: &RuntimeRegistry, dir: &std::path::Path, case: &Value) {
         transcript: dir.join("k.jsonl"), created: 0.0 }, dir.into()).await.unwrap();
 }
 
-async fn serve(registry: Arc<RuntimeRegistry>, home: &std::path::Path) -> (Arc<Fake>, std::net::SocketAddr) {
+async fn serve(registry: Arc<RuntimeRegistry>, home: &std::path::Path) -> std::net::SocketAddr {
     serve_list(registry, home, true).await
 }
 
 /// `dirs: false`: a lista sem as pastas das sessões, que responde como fora do ar.
-async fn serve_list(registry: Arc<RuntimeRegistry>, home: &std::path::Path, dirs: bool) -> (Arc<Fake>, std::net::SocketAddr) {
+async fn serve_list(registry: Arc<RuntimeRegistry>, home: &std::path::Path, dirs: bool) -> std::net::SocketAddr {
     let (python, _) = spawn_fake().await;
     let mut state = AppState::new(config("127.0.0.1"));
     state.accounts = hangar_server::accounts::AccountService::new(
@@ -122,8 +122,7 @@ async fn serve_list(registry: Arc<RuntimeRegistry>, home: &std::path::Path, dirs
     state.list = Arc::new(hangar_server::list::bridge::ListBridge::new(list_env,
         hangar_server::list::facts::FactsClient::new()));
     assert!(state.state.runtime.set(registry).is_ok());
-    let addr = spawn_state_for(&python, state).await;
-    (python, addr)
+    spawn_state_for(&python, state).await
 }
 
 async fn call(server: std::net::SocketAddr, case: &Value, token: &str) -> (u16, Value) {
@@ -139,10 +138,9 @@ async fn call(server: std::net::SocketAddr, case: &Value, token: &str) -> (u16, 
 }
 
 /// Nome sem sessão Codex do Rust: o Rust responde com o código da rota Python (`expect` do golden quando
-/// ele existe), e nada vai ao Python.
-async fn check_unowned_route(server: std::net::SocketAddr, python: &Fake, case: &Value) {
+/// ele existe).
+async fn check_unowned_route(server: std::net::SocketAddr, case: &Value) {
     let (status, body) = call(server, case, OWNER).await;
-    let path = format!("/api/sessions/s/{}", case["route"].as_str().unwrap());
     if case["route"] == "commands" {
         assert_eq!(status, 200, "{}", case["name"]);
         let commands = body.as_array().expect("catálogo Claude no Rust");
@@ -152,7 +150,6 @@ async fn check_unowned_route(server: std::net::SocketAddr, python: &Fake, case: 
     } else {
         assert_eq!((status, &body), (case["expect"]["status"].as_u64().unwrap() as u16, &case["expect"]["body"]), "{}", case["name"]);
     }
-    assert_eq!(python.hits_to(&path), 0, "{}: nunca ao Python", case["name"]);
 }
 
 /// ID que a pergunta assíncrona da sessão recebe ao ser exibida (o `<shown>` do golden).
@@ -171,11 +168,10 @@ async fn headless_codex_routes_match_the_python_golden() {
         let registry = registry(dir.path());
         let registry = Arc::new(if case["route"] == "question/skip" { registry.with_interactions(store.clone()) } else { registry });
         open(&registry, dir.path(), case).await;
-        let (python, server) = serve(registry.clone(), dir.path()).await;
+        let server = serve(registry.clone(), dir.path()).await;
         let mut sent = case.clone();
         if sent["body"]["interaction_id"] == "<shown>" { sent["body"]["interaction_id"] = show(&store, case); }
         let (status, body) = call(server, &sent, OWNER).await;
-        assert_eq!(python.hits_to(&format!("/api/sessions/s/{}", case["route"].as_str().unwrap())), 0, "{}: foi ao Python", case["name"]);
         let mut expected = case["expect"]["body"].clone();
         // O modo Python conserva seu catálogo antigo; a conversa nova é controle exclusivo do Rust.
         if case["route"] == "commands" && case["expect"]["status"] == 200 {
@@ -197,7 +193,7 @@ async fn skip_route_accepts_and_forwards_the_displayed_interaction_id() {
     let store = Arc::new(InteractionStore::default());
     let registry = Arc::new(registry(dir.path()).with_interactions(store.clone()));
     open(&registry, dir.path(), &case).await;
-    let (python, server) = serve(registry, dir.path()).await;
+    let server = serve(registry, dir.path()).await;
     let mut bare = case.clone();
     bare["body"] = json!({"request_id": request});
     let missing = call(server, &bare, OWNER).await;
@@ -208,16 +204,15 @@ async fn skip_route_accepts_and_forwards_the_displayed_interaction_id() {
     let mut identified = case.clone();
     identified["body"] = json!({"request_id": request, "interaction_id": token});
     assert_eq!(call(server, &identified, OWNER).await, (200, json!({"ok": true})));
-    assert_eq!(python.hits_to("/api/sessions/s/question/skip"), 0);
 }
 
 #[tokio::test]
 async fn unowned_controls_answer_in_rust_with_the_python_codes() {
     let dir = tempfile::tempdir().unwrap();
     let registry = Arc::new(registry(dir.path()));
-    let (python, server) = serve(registry, dir.path()).await;
+    let server = serve(registry, dir.path()).await;
     for case in golden().iter().filter(|c| !c["relay"].is_null()) {
-        check_unowned_route(server, &python, case).await;
+        check_unowned_route(server, case).await;
     }
 }
 
@@ -227,7 +222,7 @@ async fn stranger_gets_the_rust_401_and_bodies_the_route_refuses_are_a_rust_422(
     let registry = Arc::new(registry(dir.path()));
     let case = golden().into_iter().find(|c| c["name"] == "model_ok").unwrap();
     open(&registry, dir.path(), &case).await;
-    let (python, server) = serve(registry, dir.path()).await;
+    let server = serve(registry, dir.path()).await;
     // Decisão 5: quem não pode na sessão leva o 401 do Rust; o Python não tem mais a rota.
     assert_eq!(call(server, &case, "token-errado").await, (401, json!({"detail": {"code": "erro_nao_autorizado", "params": {}, "msg": "unauthorized"}})));
     for (method, route) in [("GET", "models"), ("GET", "limits"), ("GET", "commands"), ("POST", "codex/plan/implement")] {
@@ -239,9 +234,6 @@ async fn stranger_gets_the_rust_401_and_bodies_the_route_refuses_are_a_rust_422(
         let refused = json!({"name": "corpo", "method": "POST", "route": route, "body": body});
         let (status, reply) = call(server, &refused, OWNER).await;
         assert_eq!((status, reply["detail"]["code"].as_str()), (422, Some("erro_corpo_invalido")), "{body}");
-    }
-    for route in ["model", "service-tier", "models", "limits", "commands", "codex/plan/implement"] {
-        assert_eq!(python.hits_to(&format!("/api/sessions/s/{route}")), 0, "{route}: nada ao Python");
     }
 }
 
@@ -267,11 +259,10 @@ async fn limits_never_errors_nor_waits_with_the_gate_closed() {
     let case = golden().into_iter().find(|c| c["name"] == "limits_ok").unwrap();
     open(&registry, dir.path(), &case).await;
     registry.ingress().close("s", Duration::from_secs(1)).await.unwrap();
-    let (python, server) = serve(registry, dir.path()).await;
+    let server = serve(registry, dir.path()).await;
     let started = std::time::Instant::now();
     assert_eq!(call(server, &case, OWNER).await, (200, json!({"primary": null, "secondary": null, "planType": null})));
     assert!(started.elapsed() < Duration::from_secs(1), "esperou a porta: {:?}", started.elapsed());
-    assert_eq!(python.hits_to("/api/sessions/s/limits"), 0);
 }
 
 #[tokio::test]
@@ -290,9 +281,9 @@ async fn codex_controls_on_a_claude_terminal_and_its_commands_skip_the_write_gat
     assert!(registry.writable("s").await.unwrap().terminal);
     // A porta fechada prova que a recusa vem antes dela: responde sem esperar.
     registry.ingress().close("s", Duration::from_secs(1)).await.unwrap();
-    let (python, server) = serve(registry, dir.path()).await;
+    let server = serve(registry, dir.path()).await;
     for case in golden().iter().filter(|c| c["relay"] == "terminal") {
-        check_unowned_route(server, &python, case).await;
+        check_unowned_route(server, case).await;
     }
 }
 
@@ -342,8 +333,8 @@ async fn permissions_of_a_dead_headless_codex_answer_from_the_session_file_not_5
     let handle = registry.handle("k", 1).await.unwrap();
     tokio::time::timeout(Duration::from_secs(5), async { while handle.view().await.unwrap()["alive"] != false { tokio::time::sleep(Duration::from_millis(20)).await; } })
         .await.expect("o cano caiu");
-    let (python, server) = serve(registry.clone(), dir.path()).await;
-    let get = |server| async move { client().get(format!("http://{server}/api/sessions/s/codex-permissions"))
+    let server = serve(registry.clone(), dir.path()).await;
+    let get =|server| async move { client().get(format!("http://{server}/api/sessions/s/codex-permissions"))
         .header("authorization", format!("Bearer {OWNER}")).send().await.unwrap() };
     let post = |server, mode: &'static str| async move { client().post(format!("http://{server}/api/sessions/s/codex-permissions"))
         .header("authorization", format!("Bearer {OWNER}")).header("content-type", "application/json")
@@ -356,7 +347,6 @@ async fn permissions_of_a_dead_headless_codex_answer_from_the_session_file_not_5
     assert_eq!(serde_json::from_str::<Value>(&get(server).await.text().await.unwrap()).unwrap()["current"], "Approve for me");
     let unknown = post(server, "Read Only").await;
     assert_eq!(unknown.status().as_u16(), 400, "modo desconhecido continua recusado");
-    assert_eq!(python.hits_to("/api/sessions/s/codex-permissions"), 0);
     // Outra rota da mesma sessão doente continua 503 com o código.
     let models = client().get(format!("http://{server}/api/sessions/s/models")).header("authorization", format!("Bearer {OWNER}")).send().await.unwrap();
     assert_eq!(models.status().as_u16(), 503);
@@ -375,8 +365,8 @@ fn refusal(code: &str, msg: &str) -> Value { json!({"detail": {"code": code, "pa
 #[tokio::test]
 async fn codex_routes_on_a_name_without_codex_answer_like_the_python_routes() {
     let dir = tempfile::tempdir().unwrap();
-    let (python, server) = serve(Arc::new(registry(dir.path())), dir.path()).await;
-    let invalid = |(status, body): (u16, Value)| (status, body["detail"]["code"].clone());
+    let server = serve(Arc::new(registry(dir.path())), dir.path()).await;
+    let invalid =|(status, body): (u16, Value)| (status, body["detail"]["code"].clone());
     for (route, body) in [("model", json!({"model": 5})), ("service-tier", json!({"service_tier": "turbo"})), ("codex/mode", json!({"mode": "bypassPermissions"})),
         ("question/skip", json!({"interaction_id": "i"})), ("codex-permissions", json!({}))] {
         assert_eq!(invalid(raw(server, "POST", route, body.clone()).await), (422, json!("erro_corpo_invalido")), "{route} {body}");
@@ -393,9 +383,6 @@ async fn codex_routes_on_a_name_without_codex_answer_like_the_python_routes() {
     assert_eq!(raw(server, "POST", "codex-permissions", json!({"mode": "Full Access"})).await, (400, permission));
     assert_eq!(raw(server, "POST", "codex/plan/implement", Value::Null).await,
         (404, refusal("erro_sessao_opcao_nao_enviada", "sessão não encontrada — plano NÃO iniciado")));
-    for route in ["model", "service-tier", "codex/mode", "question/skip", "codex/terminate", "codex-permissions", "codex/plan/implement"] {
-        assert_eq!(python.hits_to(&format!("/api/sessions/s/{route}")), 0, "{route}");
-    }
 }
 
 // R2-13, R2-17 (`adapter.py:917-932`): arquivo de sessão Codex que o Rust não adota. As rotas que o Python
@@ -407,16 +394,14 @@ async fn codex_routes_on_a_sidecar_rust_does_not_adopt_never_type_and_answer_wit
     let sidecars = dir.path().join(".hangar/codex-sessions");
     std::fs::create_dir_all(&sidecars).unwrap();
     std::fs::write(sidecars.join("s.json"), "{}").unwrap();
-    let (python, server) = serve(Arc::new(registry(dir.path())), dir.path()).await;
-    let control = (409, refusal("erro_codex_controle", "O Codex não aceitou a alteração; atualize a sessão e tente novamente."));
+    let server = serve(Arc::new(registry(dir.path())), dir.path()).await;
+    let control =(409, refusal("erro_codex_controle", "O Codex não aceitou a alteração; atualize a sessão e tente novamente."));
     for (method, route, body) in [("GET", "models", Value::Null), ("POST", "model", json!({"model": "gpt-5"})), ("POST", "service-tier", json!({"service_tier": "priority"})),
         ("POST", "codex/mode", json!({"mode": "plan"})), ("GET", "commands", Value::Null),
         ("POST", "codex-permissions", json!({"mode": "Full Access"})), ("POST", "codex/plan/implement", Value::Null)] {
         assert_eq!(raw(server, method, route, body).await, control, "{method} {route}");
-        assert_eq!(python.hits_to(&format!("/api/sessions/s/{route}")), 0, "{route}");
     }
     assert_eq!(raw(server, "GET", "limits", Value::Null).await, (200, json!({"primary": null, "secondary": null, "planType": null})));
-    assert_eq!(python.hits_to("/api/sessions/s/limits"), 0);
 }
 
 // R2-17 (decisão da rodada 3): `GET codex-permissions` do arquivo de sessão Codex que o Rust não adota lê
@@ -427,8 +412,8 @@ async fn reading_the_permission_mode_of_a_sidecar_rust_does_not_adopt_comes_from
     let sidecars = dir.path().join(".hangar/codex-sessions");
     std::fs::create_dir_all(&sidecars).unwrap();
     std::fs::write(sidecars.join("s.json"), json!({"permission_mode": "Approve for me"}).to_string()).unwrap();
-    let (python, server) = serve(Arc::new(registry(dir.path())), dir.path()).await;
-    let modes = |current: &str| json!({"current": current, "modes": [
+    let server = serve(Arc::new(registry(dir.path())), dir.path()).await;
+    let modes =|current: &str| json!({"current": current, "modes": [
         {"numero": 1, "nome": "Ask for approval", "desc": "Codex só lê o workspace; editar ou rodar comando pede aprovação.", "cursor": current == "Ask for approval", "atual": current == "Ask for approval"},
         {"numero": 2, "nome": "Approve for me", "desc": "Codex edita o workspace sozinho; fora dele ou com rede, pede aprovação.", "cursor": current == "Approve for me", "atual": current == "Approve for me"},
         {"numero": 3, "nome": "Full Access", "desc": "Codex faz tudo sem perguntar.", "cursor": current == "Full Access", "atual": current == "Full Access"}]});
@@ -436,7 +421,6 @@ async fn reading_the_permission_mode_of_a_sidecar_rust_does_not_adopt_comes_from
     std::fs::write(sidecars.join("s.json"), "{}").unwrap();
     assert_eq!(raw(server, "GET", "codex-permissions", Value::Null).await, (200, modes("Full Access")));
     assert_eq!(std::fs::read_to_string(sidecars.join("s.json")).unwrap(), "{}", "ler não grava o arquivo");
-    assert_eq!(python.hits_to("/api/sessions/s/codex-permissions"), 0);
 }
 
 // R3-30 (`api.py:259-302`): a lista que não responde no meio do `recarregar` é o 503 com o código da lista,
@@ -444,9 +428,8 @@ async fn reading_the_permission_mode_of_a_sidecar_rust_does_not_adopt_comes_from
 #[tokio::test]
 async fn reload_with_the_list_unavailable_is_503_list_unavailable() {
     let dir = tempfile::tempdir().unwrap();
-    let (python, server) = serve_list(Arc::new(registry(dir.path())), dir.path(), false).await;
+    let server = serve_list(Arc::new(registry(dir.path())), dir.path(), false).await;
     let (status, body) = raw(server, "POST", "recarregar", Value::Null).await;
     assert_eq!((status, body["detail"]["code"].as_str(), body["detail"]["params"]["detalhe"].as_str()),
         (503, Some("erro_lista_indisponivel"), Some("list_dirs_missing")), "{body}");
-    assert_eq!(python.hits_to("/api/sessions/s/recarregar"), 0);
 }

@@ -93,7 +93,6 @@ async fn unknown_token_gets_401_from_rust() {
         .unwrap();
     // R5 (decisão 5): token que nenhum porteiro reconhece leva o 401 do Rust, sem chegar ao Python.
     assert_eq!(r.status().as_u16(), 401);
-    assert_eq!(fake.hits_to("/api/sessions/s/history"), 0);
     assert_eq!(fake.info_calls(), 0, "convidado nunca chega às rotas internas");
 
     // Controle: o mesmo pedido com o token do dono passa pelo atalho e consulta a rota interna.
@@ -126,7 +125,6 @@ async fn blocked_origin_never_gets_the_owner_shortcut() {
         .unwrap();
     assert_eq!(r.status(), 429);
     assert_eq!(r.headers()["retry-after"], "30");
-    assert_eq!(fake.hits_to("/api/sessions/s/history"), 0);
     assert_eq!(fake.info_calls(), 0, "bloqueado: o token do dono nem é avaliado");
 
     // Controle: outra origem com o mesmo token segue pelo atalho.

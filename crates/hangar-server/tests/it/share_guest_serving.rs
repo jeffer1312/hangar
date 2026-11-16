@@ -299,7 +299,6 @@ async fn guest_does_not_reach_the_hangar_terminal_routes() {
         Err(tungstenite::Error::Http(r)) => assert_eq!(r.status(), 403),
         other => panic!("esperava recusa no aperto de mão: {:?}", other.map(|_| ())),
     }
-    assert_eq!(srv.python.hits_to("/api/hangar-terminals"), 0);
 }
 
 // ── caminho que o Python não atende ──────────────────────────────────────────────────────────
@@ -323,7 +322,6 @@ async fn guest_path_without_handler_is_404_from_the_rust() {
         head.push(byte[0]);
     }
     assert!(head.starts_with(b"HTTP/1.1 404"), "{}", String::from_utf8_lossy(&head));
-    assert_eq!(srv.python.hits_to("/api/sessions/cc/plan-preview") + srv.python.hits_to("/api/sessions/cc/proxy-ws-test"), 0);
 }
 
 /// Decisão 17 na 8766: corpo declarado acima de 100 MiB é 413 antes do porteiro, sem token nenhum.
@@ -344,7 +342,6 @@ async fn guest_port_refuses_a_declared_body_over_100_mib_before_the_gate() {
         }
     }).await.expect("a recusa não chegou");
     assert!(seen.starts_with(b"HTTP/1.1 413"), "{}", String::from_utf8_lossy(&seen));
-    assert_eq!(srv.python.input_calls(), 0);
 }
 
 /// Decisão 18 na 8766: a falha do servidor para o convidado ganha a linha `api.servidor` mascarada.
@@ -384,7 +381,6 @@ async fn guest_forward_never_touches_the_owner_backoff() {
         let (status, body) = post_json(url.clone(), &t, json!({"text": "oi"})).await;
         assert_eq!((status, body["detail"]["code"].as_str()), (503, Some("runtime_unavailable")), "{body}");
     }
-    assert_eq!(srv.python.input_calls(), 0);
     assert!(srv.st.auth.is_owner(&lan.to_string(), Some(OWNER.as_bytes())), "o dono nesse IP segue livre");
 }
 
@@ -397,7 +393,6 @@ async fn r5_12_guest_port_without_a_decided_guest_is_404() {
     let response = client().get(format!("http://{}/par/x/nada", srv.guest)).bearer_auth(OWNER).send().await.unwrap();
     assert_eq!(response.status().as_u16(), 404);
     assert_eq!(response.text().await.unwrap(), r#"{"detail":"Not Found"}"#);
-    assert_eq!(srv.python.hits_to("/par/x/nada"), 0);
 }
 
 /// Achado 1 da revisão: na 8766 a senha do dono não fecha sessão; o porteiro recusa e nada morre.
@@ -408,7 +403,6 @@ async fn guest_port_delete_with_the_owner_token_closes_nothing() {
     let response = client().delete(format!("http://{}/api/sessions/s0", srv.guest)).bearer_auth(OWNER).send().await.unwrap();
     assert_eq!(response.status().as_u16(), 401);
     assert_eq!(list_support::calls(dir.path(), "kill-session"), 0, "nada foi encerrado");
-    assert_eq!(srv.python.hits_to("/api/sessions/s0"), 0);
 }
 
 /// R1-01: na 8766 o convidado do convite e o par de leitura (`Kind::Pair`) não fecham a sessão: o
@@ -425,7 +419,6 @@ async fn r1_01_the_invite_and_the_reading_pair_never_close_on_the_guest_port() {
         assert_eq!((status, body["detail"]["code"].as_str()), (403, Some("erro_fora_do_convite")), "{body}");
     }
     assert_eq!(list_support::calls(dir.path(), "kill-session"), 0, "nada foi encerrado");
-    assert_eq!(srv.python.hits_to("/api/sessions/s0"), 0);
 }
 
 // ── stream da sessão ─────────────────────────────────────────────────────────────────────────
@@ -526,7 +519,6 @@ async fn pair_guest_only_reads() {
     assert_eq!(status, 200);
     assert_eq!(body, get_json(format!("http://{}/api/sessions/s/history", srv.owner), OWNER).await.1);
     assert_eq!(post_json(format!("http://{}/api/sessions/s/interrupt", srv.guest), &p, json!({})).await.0, 403);
-    assert_eq!(srv.python.hits_to("/api/sessions/s/history"), 0);
 }
 
 /// Cano falso que confirma cada envelope e responde sucesso aos pedidos de controle.
@@ -585,8 +577,6 @@ async fn share_guest_writes_its_session_and_nothing_else() {
     assert_eq!(status, 200, "{body}");
     assert!(sink.lock().unwrap().iter().any(|e| e.to_string().contains("recado-do-convidado")), "o cano recebeu o texto");
     assert_eq!(post_json(format!("http://{}/api/sessions/o/input", srv.guest), &t, json!({"text": "x"})).await.0, 403);
-    assert_eq!(srv.python.hits_to("/api/sessions/s/input"), 0);
-    assert_eq!(srv.python.hits_to("/api/sessions/s/interrupt"), 0);
 }
 
 /// HOME da prova com o sidecar de `s` (chave `k-s`, conversa `sid-1`, cano 42), onde o ator grava e
@@ -641,7 +631,6 @@ async fn r4_19_share_guest_changes_mode_and_model_through_the_owner_route() {
     }
     assert_eq!(get_json(url("s/pair/contract"), &t).await.0, 403);
     for route in ["permission-modes", "permission-mode", "model-effort", "pair", "group-message", "pair/contract"] {
-        assert_eq!(srv.python.hits_to(&format!("/api/sessions/s/{route}")), 0, "{route}");
     }
 }
 
@@ -708,12 +697,10 @@ async fn guest_mod_click_on_a_rust_terminal_without_surface_is_503() {
     let (status, body) = post_json(format!("http://{}/api/sessions/t/plugin/press", srv.guest), &t,
         json!({"site": "x", "plugin": "p", "key": "k"})).await;
     assert_eq!((status, body["detail"]["code"].as_str()), (503, Some("erro_mod_clique_sem_resposta")));
-    assert_eq!(srv.python.hits_to("/api/sessions/t/plugin/press"), 0);
     // A digitação também: o Python respondia o mesmo 503 a convidado em terminal do Rust.
     let (status, body) = post_json(format!("http://{}/api/sessions/t/plugin/input", srv.guest), &t,
         json!({"site": "x", "plugin": "p", "key": "k", "kind": "change", "value": "o"})).await;
     assert_eq!((status, body["detail"]["code"].as_str()), (503, Some("erro_mod_clique_sem_resposta")));
-    assert_eq!(srv.python.hits_to("/api/sessions/t/plugin/input"), 0);
 }
 
 /// R1.5-6: o convidado numa sessão sem mods no Rust recebe a mesma recusa fixa do dono, sem o Python.
@@ -730,7 +717,6 @@ async fn guest_mod_on_a_session_outside_the_rust_gets_the_fixed_answer() {
     assert_eq!(post_json(url("show"), &t, json!({"site": "x"})).await.0, 404);
     assert_eq!(post_json(url("input"), &t, json!({"site": "x", "plugin": "p", "key": "k", "kind": "change", "value": "o"})).await.0, 409);
     for op in ["press", "close", "show", "input"] {
-        assert_eq!(srv.python.hits_to(&format!("/api/sessions/o/plugin/{op}")), 0, "{op}");
     }
 }
 
@@ -757,7 +743,6 @@ async fn guest_reaches_the_mods_the_rust_serves() {
     let t = srv.g.token("t", Kind::Share);
     assert_eq!(post_json(format!("http://{}/api/sessions/t/plugin/show", srv.guest), &t, json!({"site": "pm-mock-mr"})).await,
         (200, json!({"ok": true, "shown_id": "pm-mock-mr"})));
-    assert_eq!(srv.python.hits_to("/api/sessions/t/plugin/show"), 0);
 }
 
 // ── terminal ─────────────────────────────────────────────────────────────────────────────────
@@ -795,7 +780,6 @@ async fn guest_terminal_closes_with_4410_when_revoked() {
     }).await.expect("o vigia fecha em até 5 s");
     assert_eq!(code, Some(4410));
     let _ = ws.close(None).await;
-    assert_eq!(srv.python.hits_to("/api/sessions/t/term"), 0);
 }
 
 /// T-28: um painel por sessão entre a porta do dono e a do convidado; quem chega derruba o outro com 1000.
@@ -827,7 +811,6 @@ async fn owner_and_invite_guest_share_one_panel() {
     let (_owner, _) = tokio_tungstenite::connect_async(format!("ws://{}/api/sessions/t/term?token={OWNER}", srv.owner)).await.unwrap();
     assert_eq!(close_of(guest).await, Some((1000, "outra conexao assumiu".to_string())));
     assert_eq!(srv.st.term.active(), vec!["t".to_string()]);
-    assert_eq!(srv.python.hits_to("/api/sessions/t/term"), 0);
 }
 
 /// O preflight é o do `CORSMiddleware` do Starlette com `*` em tudo e sem credenciais: sem ele o
@@ -858,7 +841,6 @@ async fn guest_port_answers_the_cors_preflight_like_starlette() {
     assert_eq!(r.status(), 400);
     assert_eq!(r.headers()["access-control-allow-origin"], "*");
     assert_eq!(r.text().await.unwrap(), "Disallowed CORS private-network");
-    assert_eq!(srv.python.hits_to("/api/sessions/x/input"), 0);
 }
 
 /// O Starlette nunca casava `/` dentro de `{name}`; aqui o `%2F` faria o porteiro conferir `proj` e o
@@ -890,7 +872,6 @@ async fn encoded_slash_in_the_session_name_is_refused() {
         let (status, body) = get_json(format!("http://{}/api/sessions/{seg}/uploads/a.png", srv.guest), &a).await;
         assert_eq!((status, body["detail"]["code"].as_str()), (404, Some("erro_sessao_inexistente")), "{name}");
     }
-    assert_eq!(srv.python.input_calls(), 0);
 }
 
 /// Grupo `s0`+`s1`+`s2` com tarefa: o convidado vê o grupo, mas só os membros a que tem acesso.
@@ -947,8 +928,6 @@ async fn guest_outside_its_session_is_refused_without_reaching_python() {
             assert_eq!(status, 403, "{path}");
         }
     }
-    assert_eq!(srv.python.hits_to("/api/sessions/outra/events"), 0);
-    assert_eq!(srv.python.hits_to("/api/sessions/outra/cost"), 0);
     let (status, _) = get_json(format!("http://{}/api/sessions/s/cost", srv.guest), &t).await;
     assert_ne!(status, 429, "o token do convidado segue aberto na própria sessão");
 }
@@ -981,7 +960,6 @@ async fn guest_port_refuses_unserved_methods_and_owner_only_relaunches_in_rust()
         assert_eq!(send(method, route, body).await, (403, refused.clone()), "{route}");
     }
     for route in ["permission-mode", "model-effort", "pane", "modo-execucao", "resume", "conta"] {
-        assert_eq!(srv.python.hits_to(&format!("/api/sessions/s/{route}")), 0, "{route}");
     }
 }
 
@@ -1000,7 +978,6 @@ async fn r3_11_guest_port_pane_is_for_the_full_invite_only() {
     let (status, body) = get_json(url("s0/pane"), &pair).await;
     assert_eq!((status, body["detail"]["code"].clone()), (403, json!("erro_fora_do_convite")), "{body}");
     assert_eq!(get_json(url("term-s0/pane"), &share).await.0, 403);
-    assert_eq!(srv.python.hits_to("/api/sessions/s0/pane") + srv.python.hits_to("/api/sessions/term-s0/pane"), 0);
 }
 
 // R3-31 (`routes.rs:1158-1170`): com a porta da sessão presa pela troca de conversa, o `recarregar` do dono e
@@ -1026,7 +1003,6 @@ async fn r3_31_reload_while_a_transfer_holds_the_gate_is_409_busy_for_owner_and_
         assert_eq!(post_json(format!("http://{base}/api/sessions/s/recarregar"), &token, json!({})).await, (409, busy.clone()), "{base}");
     }
     assert_eq!(std::fs::read(&sidecar).unwrap(), before, "nada mudou");
-    assert_eq!(srv.python.hits_to("/api/sessions/s/recarregar"), 0);
 }
 
 // R4-17 (`caller.rs:20`): o convidado do convite não alcança as rotas de grupo que faltavam provar; o
@@ -1043,6 +1019,5 @@ async fn r4_17_invite_guest_never_reaches_the_remaining_group_routes() {
         let status = response.status().as_u16();
         let reply: Value = serde_json::from_str(&response.text().await.unwrap()).unwrap_or(Value::Null);
         assert_eq!((status, reply["detail"]["code"].clone()), (403, json!("erro_fora_do_convite")), "{method} {route}: {reply}");
-        assert_eq!(srv.python.hits_to(&format!("/api/sessions/s/{route}")), 0, "{route}");
     }
 }

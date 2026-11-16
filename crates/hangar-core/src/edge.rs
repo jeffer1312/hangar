@@ -11,10 +11,6 @@ use crate::auth::{self, Auth, AuthError, ReceiptContext, TrustedHosts};
 use crate::diag::DiagClient;
 use crate::guest::{Caller, GuestConn, GuestGrant, caller};
 
-/// Marca do pedido repassado pela ponte: o `gate` o trata como do dono e o `pass` nunca o devolve ao Python.
-#[derive(Clone, Copy, Debug)]
-pub struct BridgedOwner;
-
 /// Quem pede e se é o dono, resolvidos uma vez por pedido.
 #[derive(Clone, Default)]
 pub struct RequestAuth(Arc<tokio::sync::Mutex<Option<(ReceiptContext, Option<String>)>>>);
@@ -87,8 +83,6 @@ impl Edge {
 pub fn gate(trusted: &TrustedHosts, auth: &Auth, peer: SocketAddr, req: &Request)
     -> impl Future<Output = Result<(Forward, bool), AuthError>> + Send + use<> {
     let (client_ip, https) = trusted.resolve(peer.ip(), req.headers());
-    // A ponte privada do Codex com terminal recebe o pedido já autenticado pela porta do Python.
-    let bridged = req.extensions().get::<BridgedOwner>().is_some();
     let token = auth::presented_token(req.headers(), req.uri().query(), req.method(), https);
     let source = if req.headers().get(header::AUTHORIZATION).is_some_and(|v| v.as_bytes().starts_with(b"Bearer ")) { "bearer" }
         else if auth::query_param(req.uri().query(), "token").is_some_and(|t| !t.is_empty()) { "query" }
@@ -100,7 +94,6 @@ pub fn gate(trusted: &TrustedHosts, auth: &Auth, peer: SocketAddr, req: &Request
     let request_auth = req.extensions().get::<RequestAuth>().cloned().unwrap_or_default();
     let auth = auth.clone();
     async move {
-    if bridged { return Ok((Forward { client_ip, https, guest: None, auth_receipt: None }, true)); }
     let mut admitted = request_auth.0.lock().await;
     if let Some((_, receipt)) = admitted.as_ref().filter(|(previous, _)| *previous == context) {
         return Ok((Forward { client_ip, https, guest: None, auth_receipt: receipt.clone() }, true));

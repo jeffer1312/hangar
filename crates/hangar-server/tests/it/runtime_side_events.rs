@@ -51,5 +51,4 @@ async fn provider_switch_resets_at_once_without_python() {
     readings(&python, 1).await;
     // Provider trocado vale na hora.
     next_named(&mut events, "reset").await;
-    assert_eq!(python.hits_to("/internal/sessions/s/side-events"), 0);
 }

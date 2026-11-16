@@ -280,7 +280,6 @@ async fn delete_pair_ends_external_pair() {
     assert_eq!(status, 200, "{body}");
     assert_eq!(body["warning"]["params"]["avisos"][0]["erro"]["code"], "erro_peer_nao_avisado");
     assert!(!casa.pair.join("s1.json").exists());
-    assert!(casa.python.internal_bodies("external-pairs/end").is_empty(), "o Python não é chamado");
 }
 
 /// O temporário da sessão vira pasta: a volta atrás do vínculo não consegue apagá-lo. Cada teste usa
@@ -322,6 +321,5 @@ async fn pair_remote_refuses_the_orchestrator() {
     let (status, body) = call(casa.addr, "POST", "g1-orq/pair-remote", Some(&json!({"initiator": "lab::s1"}))).await;
     assert_eq!((status, body["detail"]["code"].clone()), (409, json!("erro_sessao_orq")));
     assert!(!casa.pair.join("g1-orq.json").exists());
-    assert!(casa.python.internal_bodies("orq/is-orchestrator").is_empty());
     assert_eq!(inputs(&casa), [0, 0, 0, 0]);
 }

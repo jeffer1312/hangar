@@ -6,7 +6,7 @@ use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::{Router, extract::{Path, RawQuery, State}, http::StatusCode, response::{IntoResponse, Response}, routing::{any, delete, get}};
+use axum::{Router, extract::{Path, RawQuery, State}, http::StatusCode, response::{IntoResponse, Response}, routing::{delete, get}};
 use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};

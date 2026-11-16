@@ -170,7 +170,6 @@ impl Harness {
             assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
             let body: Value = serde_json::from_slice(&response.bytes().await.unwrap()).unwrap();
             assert_eq!(body["detail"]["code"], body["error_code"]);
-            assert!(!self.forwarded("GET", path), "{path} foi repassado ao Python");
             return body["error_code"].as_str().unwrap().to_owned();
         }
     }
@@ -210,7 +209,6 @@ async fn cold_index_returns_warming_then_owner_report_with_fx() {
     assert_eq!(report["applied"], json!({"period":"all"}));
     assert_eq!(report["usd_brl"], 5.25);
     assert_eq!(report["totals"]["sessions"], 11);
-    assert!(!h.forwarded("GET", "/api/costs"));
 }
 
 #[tokio::test]
@@ -240,7 +238,6 @@ async fn session_info_failure_is_503_with_code_once_and_other_sessions_keep_work
     assert_eq!(serde_json::from_slice::<Value>(&response.bytes().await.unwrap()).unwrap()["has_usage"], true);
     let response = h.request(reqwest::Method::GET, "/api/sessions/healthy/cost").send().await.unwrap();
     assert_eq!(serde_json::from_slice::<Value>(&response.bytes().await.unwrap()).unwrap()["has_usage"], true);
-    assert!(!h.forwarded("GET", "/api/sessions/healthy/cost"));
 }
 
 #[tokio::test]
@@ -260,7 +257,6 @@ async fn missing_scopes_fail_with_code_and_next_request_rescans() {
         assert!(Instant::now() < deadline, "coleta nova não aconteceu: {}", response.status());
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    assert!(!h.forwarded("GET", "/api/costs"));
 }
 
 #[tokio::test]
@@ -278,7 +274,6 @@ async fn blocked_index_fails_with_code_and_recovers_after_the_block_goes() {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     assert!(index_path.is_dir());
-    assert!(!h.forwarded("GET", "/api/costs"));
 }
 
 #[tokio::test]
@@ -312,7 +307,7 @@ async fn cold_usage_index_returns_warming_before_owner_report() {
     assert_eq!(response.status(), 200);
     let report: Value = serde_json::from_slice(&response.bytes().await.unwrap()).unwrap();
     assert_eq!(report["applied"], json!({"period":"all"})); assert_eq!(report["usd_brl"], 5.25);
-    assert!(report["by_skill"].is_array()); assert!(!h.forwarded("GET", "/api/uso"));
+    assert!(report["by_skill"].is_array());
 }
 
 #[tokio::test]
@@ -327,7 +322,6 @@ async fn usage_repeated_filters_discard_empty_values_and_scalar_uses_last() {
     assert_eq!(report["modelo"], json!(["x", "y"])); assert_eq!(report["plugin"], json!([]));
     assert!(report["foco"].is_null()); assert_eq!(report["applied"]["period"], "all");
     assert_eq!(report["totals"]["chamadas"], 0); assert!(!report["by_conta"].as_array().unwrap().is_empty());
-    assert!(!h.forwarded("GET", path));
 }
 
 #[tokio::test]
@@ -343,7 +337,6 @@ async fn served_usage_matches_python_golden_for_all_and_each_filter() {
         }
         want["usd_brl"] = json!(5.25);
         common::costs::assert_close(&got, &want, key);
-        assert!(!h.forwarded("GET", path));
     }
 }
 
@@ -645,8 +638,6 @@ async fn missing_or_guest_token_is_refused_by_rust_without_starting_scopes() {
             let body: Value = serde_json::from_slice(&response.bytes().await.unwrap()).unwrap();
             assert_eq!(body["detail"]["code"], "erro_nao_autorizado", "{path} {token:?}");
         }
-        // O Python não tem mais a rota: a recusa não pode depender dele.
-        assert!(!h.forwarded("GET", path));
     }
     assert_eq!(h.upstream.scope_reads.load(Ordering::SeqCst), 0);
 }
@@ -667,8 +658,6 @@ async fn only_the_owner_reaches_the_login_window_routes() {
         let url = format!("http://{}{path}", h.address);
         assert_eq!(client.request(method.clone(), &url).send().await.unwrap().status(), 401, "{path} sem token");
         assert_eq!(client.request(method.clone(), &url).bearer_auth("convidado").send().await.unwrap().status(), 401, "{path} convidado");
-        // O Python não tem as rotas da janela de login: a recusa é do Rust.
-        assert!(!h.forwarded(method.as_str(), path), "{path} foi ao Python");
     }
     for (method, path) in [
         (reqwest::Method::GET, "/api/login-browser/view"),
@@ -735,14 +724,12 @@ async fn fresh_accepts_fastapi_bool_spellings_and_last_value_without_forwarding(
             let path = format!("{route}?fresco={value}");
             let response = h.request(reqwest::Method::GET, &path).send().await.unwrap();
             assert_eq!(response.status(), 200, "{path}");
-            assert!(!h.forwarded("GET", &path));
         }
         for query in ["fresco=invalid&fresco=false", "fresco=&fresco=%6Fn", "fresco=invalid&%66resco=FALSE"] {
             let path = format!("{route}?{query}");
             let response = h.request(reqwest::Method::GET, &path).send().await.unwrap();
             assert_eq!(response.status(), 200, "{path}");
             assert_eq!(serde_json::from_slice::<Value>(&response.bytes().await.unwrap()).unwrap()["applied"], json!({"period":"all"}));
-            assert!(!h.forwarded("GET", &path));
         }
     }
     h.shutdown().await;
@@ -784,7 +771,6 @@ async fn cached_report_is_invalidated_by_single_session_index_write() {
     assert!(h.collector.data_version() > version);
     let after = h.ready().await;
     assert!(after["totals"]["input"].as_i64().unwrap() > before["totals"]["input"].as_i64().unwrap());
-    assert!(!h.forwarded("GET", "/api/costs"));
     assert!(h.state.costs.data_version() > version);
 }
 
@@ -853,7 +839,6 @@ async fn partial_commit_reader_panic_cannot_reuse_a_cached_success() {
     assert!(matches!(tokio::task::spawn_blocking(move || collector.prepare_blocking(true)).await.unwrap().unwrap(), Ready::Go));
     let recovered = h.ready().await;
     assert!(recovered["totals"].is_object());
-    assert!(!h.forwarded("GET", "/api/costs"));
 }
 
 #[tokio::test]
@@ -884,7 +869,6 @@ async fn session_cost_reads_fixture_without_scopes_or_warming_scan() {
     assert_eq!(response.headers()["content-type"], "application/json");
     let body: Value = serde_json::from_slice(&response.bytes().await.unwrap()).unwrap();
     common::costs::assert_close(&body, &json!({"cost_usd":0.0049875, "missing_models":[], "has_usage":true}), "custo da sessão");
-    assert!(!h.forwarded("GET", "/api/sessions/codex-session/cost"));
     assert!(h.forwarded("GET", "/internal/sessions/codex%2Dsession/info"));
     assert_eq!(h.upstream.scope_reads.load(Ordering::SeqCst), 0);
 }
@@ -898,7 +882,6 @@ async fn session_cost_other_provider_has_python_404_body() {
         assert_eq!(response.status(), 404, "{provider}");
         assert_eq!(serde_json::from_slice::<Value>(&response.bytes().await.unwrap()).unwrap(), session_error("Codex session not found"));
     }
-    assert!(!h.forwarded("GET", "/api/sessions/session/cost"));
 }
 
 #[tokio::test]
@@ -908,7 +891,6 @@ async fn session_cost_missing_internal_info_has_python_404_body() {
     assert_eq!(response.status(), 404);
     assert_eq!(serde_json::from_slice::<Value>(&response.bytes().await.unwrap()).unwrap(), session_error("Codex session not found"));
     assert!(h.forwarded("GET", "/internal/sessions/absent/info"));
-    assert!(!h.forwarded("GET", "/api/sessions/absent/cost"));
 }
 
 #[tokio::test]
@@ -930,7 +912,6 @@ async fn session_cost_deleted_rollout_has_python_404_body_and_cors() {
     assert_eq!(response.status(), 404);
     assert_eq!(response.headers()["access-control-allow-origin"], "*");
     assert_eq!(serde_json::from_slice::<Value>(&response.bytes().await.unwrap()).unwrap(), session_error("Codex rollout not found"));
-    assert!(!h.forwarded("GET", "/api/sessions/session/cost"));
 }
 
 #[tokio::test]
@@ -1003,7 +984,6 @@ async fn session_cost_owner_gate_methods_and_query_token_preserve_contract() {
         let body: Value = serde_json::from_slice(&response.bytes().await.unwrap()).unwrap();
         assert_eq!(body["detail"]["code"], "erro_nao_autorizado");
     }
-    assert!(!h.forwarded("GET", "/api/sessions/session/cost"));
     assert!(!h.forwarded("GET", "/internal/sessions/session/info"));
     for method in [reqwest::Method::POST, reqwest::Method::HEAD, reqwest::Method::OPTIONS] {
         let response = h.request(method.clone(), "/api/sessions/session/cost").send().await.unwrap();
@@ -1017,7 +997,6 @@ async fn session_cost_owner_gate_methods_and_query_token_preserve_contract() {
     assert_eq!(response.status(), 200);
     assert_eq!(serde_json::from_slice::<Value>(&response.bytes().await.unwrap()).unwrap()["has_usage"], true);
     assert!(h.forwarded("GET", "/internal/sessions/session/info"));
-    assert!(!h.forwarded("GET", &format!("/api/sessions/session/cost?token={OWNER}")));
 }
 
 #[tokio::test]
@@ -1125,7 +1104,6 @@ async fn summary_view_serves_only_home_fields_equal_to_the_full_report() {
         let other: Value = serde_json::from_slice(&get(format!("/api/costs?period={period}&view=outro")).await).unwrap();
         assert_eq!(other, full);
     }
-    assert!(!h.forwarded("GET", "/api/costs?period=all&view=summary"));
 }
 
 #[cfg(unix)]

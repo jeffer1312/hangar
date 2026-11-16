@@ -69,7 +69,7 @@ async fn typing_is_refused_without_waiting_the_turn_or_the_transfer_guard() {
 
 #[tokio::test]
 async fn requests_not_from_the_owner_get_401_from_rust() {
-    let (python, server, _mods, pane) = terminal_app().await;
+    let (_python, server, _mods, pane) = terminal_app().await;
     // Nenhum token tem tratamento pelo formato: o com cara de convidado (`secrets.token_urlsafe(32)`, 43
     // caracteres de base64url) e o errado recebem do Rust o 401 que o Python dava, contando a falha.
     let guest = format!("{}-_", "g".repeat(41));
@@ -81,8 +81,6 @@ async fn requests_not_from_the_owner_get_401_from_rust() {
             assert_eq!((status, body["detail"]["code"].as_str()), (401, Some("erro_nao_autorizado")), "{route} {token}");
         }
     }
-    assert_eq!(python.hits_to("/api/sessions/t/plugin/press") + python.hits_to("/api/sessions/t/plugin/show")
-        + python.hits_to("/api/sessions/t/plugin/close") + python.hits_to("/api/sessions/t/plugin/input"), 0);
     assert!(pane.actions().is_empty());
 }
 

@@ -19,6 +19,5 @@ async fn owner_gets_the_client_api_and_others_get_401_without_python() {
         if let Some(token) = token { req = req.bearer_auth(token); }
         assert_eq!(req.send().await.unwrap().status(), 401, "token {token:?}");
     }
-    assert_eq!(python.hits_to("/api/client-api"), 0, "a rota nunca chama o Python");
 }
 

@@ -257,8 +257,6 @@ exec tmux -L '{label}' -f /dev/null "$@"
     }
 
     pub(crate) async fn input(&self, name: &str, body: Value) -> (u16, Value) { self.post(&format!("/api/sessions/{name}/input"), &body.to_string()).await }
-
-    fn python_inputs(&self) -> usize { self.python.input_calls() + self.python.hits_to("/api/broadcast") }
 }
 
 fn submitted(rig: &Rig, name: &str) -> Vec<Value> { rig.tui(name, "submitted.jsonl") }
@@ -270,7 +268,6 @@ async fn name_without_pane_or_sidecar_is_404_and_nothing_is_queued() {
     let (status, body) = rig.input("ghost", json!({"text": "oi"})).await;
     assert_eq!((status, body), (404, json!({"detail": {"code": "erro_sessao_recado_nao_enfileirado", "params": {}, "msg": "sessão não encontrada — recado NÃO enfileirado"}})));
     assert_eq!(rig.queue("ghost"), None);
-    assert_eq!(rig.python_inputs(), 0);
 }
 
 // R1.1-2 + D15: shell e programa qualquer recusam na hora, mesmo com o pane recém-criado.
@@ -287,7 +284,6 @@ async fn shell_or_unknown_program_pane_is_400_at_once_and_nothing_is_typed() {
         assert!(!rig.tmux(&["capture-pane", "-p", "-t", &format!("={name}:")]).contains("oi"), "{name}: nada digitado");
         assert_eq!(rig.queue(name), None);
     }
-    assert_eq!(rig.python_inputs(), 0);
 }
 
 // R1.1-3
@@ -302,7 +298,6 @@ async fn claude_login_pane_is_400_without_rust_binding() {
     rig.agent_runs("lg1", "claude").await;
     let (status, body) = rig.input("lg1", json!({"text": "oi"})).await;
     assert_eq!((status, body), (400, json!({"detail": {"code": "erro_envio_falhou", "params": {}, "msg": "sessão Claude sem vínculo no Rust"}})));
-    assert_eq!(rig.python_inputs(), 0);
 }
 
 // R1.1-4, R1.1-5, R1.1-12: texto digitado com prova, Enter cru, linha `delivered` na fila com o `ts` de antes.
@@ -323,7 +318,6 @@ async fn raw_codex_idle_types_the_text_and_queues_it_delivered() {
     let (status, body) = rig.input("cx", json!({"text": "de novo", "steer": true})).await;
     assert_eq!((status, body), (200, json!({"ok": true, "delivered": true, "steered": false, "native": false})));
     assert_eq!(rig.queue("cx").unwrap().len(), 2);
-    assert_eq!(rig.python_inputs(), 0);
 }
 
 // R1.1-6: sem confirmação nem redreno depois da resposta (o Codex cru não tem transcript).
@@ -339,7 +333,6 @@ async fn raw_codex_nothing_more_happens_after_the_answer() {
     // estavel: janela em que nada pode acontecer; não há sinal a esperar, só a ausência dele.
     tokio::time::sleep(Duration::from_secs(2)).await;
     assert_eq!((rig.tui("cx", "keys.jsonl"), rig.queue("cx")), (keys, rows));
-    assert_eq!(rig.python_inputs(), 0);
 }
 
 // R1.1-4 slash, R1.1-7: barra sem linha na fila; `/clear` apaga a fila. No Codex um Enter roda o comando:
@@ -455,7 +448,6 @@ async fn raw_codex_send_never_holds_the_ingress_pass() {
     rig.runtime.ingress().open("cx");
     assert_eq!(sending.await.unwrap().unwrap().status().as_u16(), 200);
     assert_eq!(submitted(&rig, "cx"), vec![json!({"text": "oi"})]);
-    assert_eq!(rig.python_inputs(), 0);
 }
 
 // Dois recados para a mesma sessão: quem não pega a vez espera no máximo 2 s (abaixo do prazo de 3 s de
@@ -502,7 +494,6 @@ async fn invalid_body_for_an_unowned_name_is_rust_422() {
         let (status, reply) = rig.post("/api/sessions/cx/input", body).await;
         assert_eq!((status, reply["detail"]["code"].clone()), (422, json!("erro_corpo_invalido")), "{body}");
     }
-    assert_eq!(rig.python_inputs(), 0);
 }
 
 // R1.1-11, R1.2: um nome por vez, falha de um não para os outros, formato do Python por tipo.
@@ -521,7 +512,6 @@ async fn broadcast_answers_each_unowned_name_in_order() {
     let (_, body) = rig.post("/api/broadcast", &json!({"names": ["cx"], "text": "a\u{7}b"}).to_string()).await;
     assert_eq!(body["results"]["cx"], json!({"ok": false, "error": {"code": "erro_envio_falhou", "params": {"erro": "control characters not allowed in prompt"},
         "msg": "falha ao enviar: control characters not allowed in prompt"}}));
-    assert_eq!(rig.python_inputs(), 0);
 }
 
 // D26: menu, diálogo de confiança, popup de barra ou texto de alguém na caixa: 409 com código na hora,
@@ -543,7 +533,6 @@ async fn raw_codex_menu_dialog_popup_or_busy_composer_is_409_without_keys_or_que
         assert_eq!(rig.tui(name, "keys.jsonl"), Vec::<Value>::new(), "{screen}: nada digitado");
         assert_eq!(rig.queue(name), None, "{screen}: nada na fila");
     }
-    assert_eq!(rig.python_inputs(), 0);
 }
 
 // Barra recusada não mexe na fila: só o `/clear` que rodou a apaga.
@@ -715,7 +704,6 @@ async fn internal_delivery_to_an_unowned_session_is_served_in_rust() {
     // D26: o aviso de grupo ao Codex com menu aberto volta como falha com o código (vai a `failed`/`pulados`).
     rig.codex("menu", "pane_codex_model_menu.txt", "static").await;
     assert_eq!(deliver_text(&rig.state, "menu", "aviso").await.unwrap_err()["code"], "codex_menu_open");
-    assert_eq!(rig.python_inputs(), 0);
 }
 
 // `input.rs:448`: sem o registro do runtime, o envio também é do Rust.
@@ -727,5 +715,4 @@ async fn internal_delivery_without_runtime_is_served_in_rust() {
     assert_eq!(submitted(&rig, "cx"), vec![json!({"text": "aviso"})]);
     let err = hangar_server::session_write::input::deliver_text(&rig.state, "ghost", "aviso").await.unwrap_err();
     assert_eq!(err["code"], "erro_sessao_recado_nao_enfileirado");
-    assert_eq!(rig.python_inputs(), 0);
 }

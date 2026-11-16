@@ -43,7 +43,7 @@ fn last_ui(mods: &Mods, name: &str) -> Value {
 
 #[tokio::test]
 async fn ui_is_mirrored_and_the_screen_decides_the_shown_pane() {
-    let (python, server, mods, probe) = setup().await;
+    let (_python, server, mods, probe) = setup().await;
     *probe.shown.lock().unwrap() = Some("a".into());
     let panes = json!([{"id": "a", "title": "A", "placement": "dock", "columns": 58, "tree": {"type": "engine", "ref": 0}},
                        {"id": "b", "title": "B", "placement": "dock", "columns": 58, "tree": {"type": "Box"}}]);
@@ -51,7 +51,6 @@ async fn ui_is_mirrored_and_the_screen_decides_the_shown_pane() {
     assert_eq!(status, 200);
     let ui = last_ui(&mods, "t");
     assert_eq!((ui["shown_id"].as_str(), ui["columns"].as_u64(), ui["source"].as_str()), (Some("b"), Some(82), Some("terminal")));
-    assert_eq!(python.hits_to("/api/plugin/ui"), 0, "a faixa da sessão do Rust não vai ao Python");
     // A leitura da tela vem ao fim da janela; sob carga, depois dela. Espera o efeito, não o relógio.
     fake::wait_until(|| last_ui(&mods, "t")["shown_id"] == "a").await;
     assert_eq!(probe.reads.load(SeqCst), 1, "a linha de abas da tela vence o último desenho");
@@ -59,7 +58,7 @@ async fn ui_is_mirrored_and_the_screen_decides_the_shown_pane() {
 
 #[tokio::test]
 async fn a_renamed_session_is_found_by_the_key_its_process_was_launched_with() {
-    let (python, server, mods, _probe) = setup().await;
+    let (_python, server, mods, _probe) = setup().await;
     // Renomear sem relançar: o Rust fecha e reabre no mesmo processo, e o plugin segue mandando o nome de
     // nascimento, com a chave que recebeu no lançamento (`plugin_key` do vínculo).
     mods.forget("t", 1);
@@ -69,7 +68,6 @@ async fn a_renamed_session_is_found_by_the_key_its_process_was_launched_with() {
     let (status, _) = post(server, "ui", body).await;
     assert_eq!(status, 200);
     assert_eq!(last_ui(&mods, "novo")["source"], "terminal");
-    assert!(python.plugin_ui_bodies().is_empty(), "a faixa da sessão do Rust não vai ao Python");
 }
 
 /// O `/ui` e o `/toast` da sessão Claude sem entrada no Rust (aberta à mão), passo a passo como o Python
@@ -77,7 +75,7 @@ async fn a_renamed_session_is_found_by_the_key_its_process_was_launched_with() {
 /// guardados no Rust e nada ao Python.
 #[tokio::test]
 async fn a_hand_opened_session_band_and_toasts_match_python() {
-    let (python, server, mods, _probe) = setup().await;
+    let (_python, server, mods, _probe) = setup().await;
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../backend/tests/fixtures/contract/plugin_band/cases.json");
     let golden: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
     let name = golden["session"].as_str().unwrap();
@@ -107,7 +105,6 @@ async fn a_hand_opened_session_band_and_toasts_match_python() {
         }
     }
     assert!(mods.band_present(name));
-    assert_eq!(python.hits_to("/api/plugin/ui") + python.hits_to("/api/plugin/toast"), 0, "nada vai ao Python");
 }
 
 /// Quando a sessão aberta à mão entra no Rust, a faixa guardada sem dono sai: a do processo dela vem do
@@ -160,9 +157,8 @@ async fn a_long_toast_is_cut_not_refused() {
 
 #[tokio::test]
 async fn other_sessions_bad_tokens_and_bad_bodies() {
-    let (python, server, _mods, _probe) = setup().await;
+    let (_python, server, _mods, _probe) = setup().await;
     assert_eq!(post(server, "ui", signed("aberta-a-mao", json!({"above": null, "panes": []}))).await.1, json!({"ok": true}));
-    assert_eq!(python.hits_to("/api/plugin/ui"), 0, "a faixa de sessão sem entrada no Rust fica no Rust");
     let mut wrong = signed("t", json!({"requestId": "a", "element": "k"}));
     wrong["token"] = json!("x");
     assert_eq!(post(server, "pressed", wrong).await, (403, json!({"detail": "token do plugin invalido"})));
@@ -186,7 +182,4 @@ async fn other_sessions_bad_tokens_and_bad_bodies() {
     }
     let big = "x".repeat(310 * 1024);
     assert_eq!(post(server, "ui", signed("t", json!({"above": {"type": "Text", "children": [big]}, "panes": []}))).await.0, 413);
-    assert_eq!(python.hits_to("/api/plugin/pressed") + python.hits_to("/api/plugin/scroll")
-        + python.hits_to("/api/plugin/press-start") + python.hits_to("/api/plugin/opened"), 0,
-        "nada da sessão do Rust vai ao Python");
 }

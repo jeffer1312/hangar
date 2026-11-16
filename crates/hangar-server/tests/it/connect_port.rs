@@ -71,25 +71,23 @@ fn mcp(addr: SocketAddr, token: &str) -> reqwest::RequestBuilder {
 
 #[tokio::test]
 async fn local_only_route_is_refused_through_connect() {
-    let (python, main, connect, device) = server("127.0.0.1").await;
+    let (_python, main, connect, device) = server("127.0.0.1").await;
     let path = "/api/desktop/palette";
     assert_eq!(get(main, path).bearer_auth(OWNER).send().await.unwrap().status(), 200, "na máquina a rota responde");
     let refused = get(connect, path).bearer_auth(&device).send().await.unwrap();
     assert_eq!(refused.status(), 403);
     assert!(refused.text().await.unwrap().contains("erro_so_loopback"));
-    assert_eq!(python.hits_to(path), 0);
 }
 
 #[tokio::test]
 async fn forged_forwarded_for_does_not_become_local() {
     // `*` é o pior caso: com ele o vizinho de qualquer endereço reescreve o cliente.
     for trusted in ["127.0.0.1", "*"] {
-        let (python, _main, connect, device) = server(trusted).await;
+        let (_python, _main, connect, device) = server(trusted).await;
         let forged = get(connect, "/api/desktop/palette").bearer_auth(&device).header("x-forwarded-for", "127.0.0.1");
         let refused = forged.send().await.unwrap();
         assert_eq!(refused.status(), 403, "{trusted}");
         assert_eq!(refused.json::<serde_json::Value>().await.unwrap()["detail"]["code"], "erro_so_loopback", "{trusted}");
-        assert_eq!(python.hits_to("/api/desktop/palette"), 0, "{trusted}");
         assert_eq!(mcp(connect, &device).header("x-forwarded-for", "127.0.0.1").send().await.unwrap().status(), 403, "{trusted}");
     }
 }
@@ -119,7 +117,7 @@ async fn mcp_is_refused_through_connect() {
 /// A camada apaga o `X-Forwarded-For` que esta guarda lê; quem recusa aqui é a entrada, não o cabeçalho.
 #[tokio::test]
 async fn device_install_is_refused_through_connect() {
-    let (python, main, connect, device) = server("127.0.0.1").await;
+    let (_python, main, connect, device) = server("127.0.0.1").await;
     let path = "/api/device-install/progress";
     assert_eq!(get(main, path).bearer_auth(OWNER).send().await.unwrap().status(), 404, "na porta principal passa da guarda");
     let plain = format!("cp_token={device}");
@@ -135,7 +133,6 @@ async fn device_install_is_refused_through_connect() {
         assert!(body.contains("device_install_forbidden") && !body.contains("segredo"), "{body}");
     }
     assert_eq!(get(connect, path).header("cookie", plain).send().await.unwrap().status(), 401, "em https o cookie sem prefixo não vale");
-    assert_eq!(python.hits_to(path), 0);
 }
 
 /// Entrada do Connect com um convidado de login (`GUEST`) que vê as sessões sem dono.
@@ -177,10 +174,9 @@ async fn login_guest_cannot_probe_the_owner_password_through_the_terminal() {
 /// T-24: GET sem aperto de mão do convidado com login no terminal é o caminho sem rota: 404 do Rust.
 #[tokio::test]
 async fn login_guest_plain_get_on_the_terminal_is_the_rust_404() {
-    let (_home, python, connect) = guest_server().await;
+    let (_home, _python, connect) = guest_server().await;
     let passed = get(connect, "/api/sessions/conexao-teste/term").bearer_auth(GUEST);
     assert_eq!(passed.send().await.unwrap().status(), 404);
-    assert_eq!(python.hits_to("/api/sessions/conexao-teste/term"), 0);
 }
 
 #[test]

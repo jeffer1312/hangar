@@ -2,7 +2,7 @@
 //! Connect e o fim do acesso. Listener de verdade contra o Python falso.
 #![cfg(unix)]
 use crate::connect_port::{GUEST, free_port, get, guest_server, wait_up};
-use crate::fake::{Fake, OWNER, client, config, spawn_fake, spawn_state_for};
+use crate::fake::{OWNER, client, config, spawn_fake, spawn_state_for};
 use crate::voice_support;
 
 use std::net::SocketAddr;
@@ -62,7 +62,6 @@ fn ticket(machine: &str, account: &str, nonce: &str, secret: &str) -> (String, S
 }
 
 struct Entrance {
-    python: Arc<Fake>,
     main: SocketAddr,
     connect: SocketAddr,
     store: Arc<Store>,
@@ -82,7 +81,7 @@ async fn entrance(tune: impl FnOnce(&mut AppState, &Path)) -> Entrance {
     let auth = state.auth.clone();
     let main = spawn_state_for(&python, state).await;
     wait_up(connect).await;
-    Entrance { python, main, connect, store, auth, dir }
+    Entrance { main, connect, store, auth, dir }
 }
 
 async fn plain() -> Entrance {
@@ -448,7 +447,6 @@ async fn device_token_works_on_every_owner_route() {
     // A credencial do aparelho vale como a do dono numa rota do Rust, por cabeçalho e por `?token=`.
     assert_eq!(get(e.connect, "/api/diag/arquivo").bearer_auth(&token).send().await.unwrap().status(), 200);
     assert_eq!(get(e.connect, &format!("/api/diag/arquivo?token={token}&x=1")).send().await.unwrap().status(), 200);
-    assert_eq!(e.python.hits_to("/api/diag/arquivo"), 0);
     let terminal = open_terminal(e.connect, &token).await;
     drop(terminal);
     let (voice, _) = connect_async(format!("ws://{}/api/voice?token={token}", e.connect)).await.expect("voz pelo Connect");
@@ -468,7 +466,6 @@ async fn device_token_works_on_8765_too() {
     let cookie = get(e.main, "/api/client-api").header("cookie", format!("cp_token={token}"));
     assert_eq!(cookie.send().await.unwrap().status(), 200);
     assert_eq!(get(e.main, "/api/diag/arquivo").bearer_auth(&token).send().await.unwrap().status(), 200);
-    assert_eq!(e.python.hits_to("/api/diag/arquivo"), 0);
 }
 
 #[tokio::test]
@@ -498,7 +495,6 @@ async fn owner_password_is_refused_through_connect() {
         assert_eq!(request.send().await.unwrap().status(), 401);
     }
     assert_eq!(get(e.connect, "/api/diag/arquivo").bearer_auth(OWNER).send().await.unwrap().status(), 401);
-    assert_eq!(e.python.hits_to("/api/diag/arquivo"), 0);
     let socket = connect_async(format!("ws://{}/api/sessions/t/term?token={OWNER}", e.connect)).await;
     assert!(matches!(socket, Err(tungstenite::Error::Http(ref r)) if r.status() == 401));
     // Recusa sem ler o corpo: o que foi anunciado nunca chega.
@@ -519,14 +515,12 @@ async fn everything_else_is_denied_by_default() {
     for path in ["/api/sync/register", "/api/sync/logout", "/api/sync/guests/ana/delete"] {
         assert_eq!(post(e.connect, path, json!({})).send().await.unwrap().status(), 401, "{path}");
     }
-    assert_eq!(e.python.hits_to("/docs"), 0);
     assert_eq!(get(e.connect, "/api/peers/ping").send().await.unwrap().status(), 200);
     assert_ne!(get(e.connect, "/api/sync/prelogin?user=ana").send().await.unwrap().status(), 401, "o login precisa do sal");
     assert_ne!(post(e.connect, "/api/sync/login", json!({})).send().await.unwrap().status(), 401);
     let preflight = client().request(reqwest::Method::OPTIONS, format!("http://{}/api/sessions", e.connect))
         .header("origin", "https://app.example").header("access-control-request-method", "GET");
     assert_eq!(preflight.send().await.unwrap().status(), 200);
-    assert_eq!(e.python.hits_to("/api/sessions"), 0);
 }
 
 #[tokio::test]
@@ -568,7 +562,6 @@ async fn sync_vault_and_logout_need_a_valid_session_through_connect() {
         .header("content-type", "application/json").body(r#"{"enc_blob":{},"base_rev":0}"#);
     assert_eq!(write.send().await.unwrap().status(), 401, "pela entrada o cofre só se lê");
     assert_eq!(logout(&cookie).send().await.unwrap().status(), 200);
-    assert_eq!(e.python.hits_to("/api/sync/vault"), 0);
 }
 
 #[tokio::test]

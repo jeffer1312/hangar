@@ -15,7 +15,6 @@ use mods_support::*;
 use serde_json::Value;
 
 struct World {
-    python: Arc<Fake>,
     server: SocketAddr,
     mods: Mods,
     registry: Arc<RuntimeRegistry>,
@@ -52,7 +51,7 @@ async fn world(swallow: &'static [&'static str]) -> World {
     let (escuta, seen, cano) = vitrine_cano(swallow).await;
     registry.open(claude_target(dir.path(), escuta, true)).await.unwrap();
     wait_ui(&mods, |ui| ui["above"].to_string().contains("superfície desktop")).await;
-    World { python, server, mods, registry, seen, cano, _dir: dir }
+    World { server, mods, registry, seen, cano, _dir: dir }
 }
 
 async fn press(server: SocketAddr, key: &'static str) -> (u16, Value) {
@@ -133,6 +132,5 @@ async fn session_leaving_rust_mid_press_answers_and_the_next_press_gets_the_fixe
     assert!(cleared["above"].is_null() && cleared["panes"] == serde_json::json!([]), "a faixa sai dos aparelhos");
     let (status, body) = press(world.server, "abrir-vitrine-botoes").await;
     assert_eq!((status, body["detail"]["code"].as_str()), (503, Some("mods_need_rust_server")));
-    assert_eq!(world.python.hits_to("/api/sessions/session/plugin/press"), 0);
     assert_eq!(pressed(&world.seen), 1, "o segundo pedido não chegou ao cano pelo Rust");
 }

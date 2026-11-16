@@ -1,4 +1,4 @@
-//! Rota do Mermaid: o dono é atendido no Rust (cache, 400, 503 sem Chromium); quem não é dono segue ao Python.
+//! Rota do Mermaid: o dono é atendido no Rust (cache, 400, 503 sem Chromium); quem não é dono leva 401.
 use crate::fake;
 
 use std::net::SocketAddr;
@@ -10,7 +10,7 @@ use hangar_server::mermaid::{MERMAID_VERSION, WIDTH_MAX};
 use hangar_server::pages::Theme;
 use serde_json::{Value, json};
 
-struct Scene { python: Arc<Fake>, public: SocketAddr, dir: tempfile::TempDir }
+struct Scene { public: SocketAddr, dir: tempfile::TempDir }
 
 /// Servidor com o cache numa pasta temporária e sem Chromium.
 async fn scene() -> Scene {
@@ -20,7 +20,7 @@ async fn scene() -> Scene {
     state.mermaid = Arc::new(Cache::new(dir.path().into()));
     state.chromium = || None;
     let public = spawn_state_for(&python, state).await;
-    Scene { python, public, dir }
+    Scene { public, dir }
 }
 
 async fn post(s: &Scene, body: &str, owner: bool) -> reqwest::Response {
@@ -49,7 +49,6 @@ async fn without_chromium_is_503_and_not_cached() {
     let v = json_of(r).await;
     assert_eq!(v, json!({"code": "mermaid_indisponivel", "message": "sem Chromium no servidor"}));
     assert_eq!(std::fs::read_dir(s.dir.path()).unwrap().count(), 0);
-    assert_eq!(s.python.hits_to("/api/mermaid"), 0, "o dono é atendido no Rust");
 }
 
 #[tokio::test]
@@ -92,6 +91,5 @@ async fn not_the_owner_gets_401_from_rust() {
     assert_eq!(r.status().as_u16(), 401);
     assert!(r.headers().contains_key("access-control-allow-origin"), "o PWA de outra origem lê a recusa");
     assert_eq!(json_of(r).await, json!({"detail": {"code": "erro_nao_autorizado", "params": {}, "msg": "unauthorized"}}));
-    assert_eq!(s.python.hits_to("/api/mermaid"), 0);
 }
 

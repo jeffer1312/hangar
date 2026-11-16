@@ -1,6 +1,6 @@
 //! Catálogo e escolhas por conversa; nenhuma escrita nas configurações do Claude.
 use crate::routes::AppState;
-use axum::{extract::{ConnectInfo, Request, State}, http::{StatusCode, header}, response::{IntoResponse, Response}};
+use axum::{extract::{ConnectInfo, Request, State}, http::StatusCode, response::Response};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{collections::{BTreeMap, BTreeSet, HashMap, HashSet}, fs, io::{self, Read, Write}, net::SocketAddr, path::{Component, Path, PathBuf}, process::Stdio, sync::Arc, time::Duration};
@@ -23,13 +23,6 @@ fn error(status: u16, code: &'static str, detail: &'static str) -> Customization
 }
 fn invalid() -> CustomizationError {
     error(400, "claude_customizations_invalid", "Escolha de plugins ou skills inválida.")
-}
-fn envelope(result: Result<Value>) -> Response {
-    let value = match result {
-        Ok(result) => json!({"ok":true,"result":result}),
-        Err(error) => json!({"ok":false,"error":error}),
-    };
-    (StatusCode::OK, [(header::CONTENT_TYPE, "application/json")], value.to_string()).into_response()
 }
 
 #[derive(Deserialize)]

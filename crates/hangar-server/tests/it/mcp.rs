@@ -17,7 +17,7 @@ use serde_json::{Value, json};
 const PYTHON_CATALOG: &str = include_str!("fixtures/mcp_catalog_python.json");
 const PYTHON_INSTRUCTIONS: &str = "Hangar: sessões vizinhas e o navegador embutido desta sessão. Mostrar algo que você montou ao usuário (desenho, mock de tela, comparação, gráfico, tabela, diagrama): html_render, sem esperar pedido; imagem por caminho só para print real de tela. Ver ou testar uma página: browser_open e depois browser (um verbo) ou browser_batch (vários já conhecidos); tela desconhecida com várias ações: browser_goal, quando a sessão tem o Jev. Falar com outra sessão: sessions, send, group, pair; abrir ou fechar: new_session, close_session.";
 
-struct Scene { addr: SocketAddr, python: Arc<fake::Fake>, home: PathBuf, sink: crate::sink::Sink, state: Arc<AppState>, _dir: tempfile::TempDir }
+struct Scene { addr: SocketAddr, home: PathBuf, sink: crate::sink::Sink, state: Arc<AppState>, _dir: tempfile::TempDir }
 
 /// Sessões `s0` (pane `%0`) e `s1` (`%1`) com conversa; `beta` com os panes `%1` (repetido, como no
 /// psmux) e `%7`; `sem-term` sem terminal, de chave `k123`; o Python falso atrás.
@@ -49,7 +49,6 @@ async fn scene_named(groups: bool, peers: Option<hangar_server::groups::peers::P
     let dirs = parse_dirs(&json!({"home": home, "claude": home.join(".claude"), "codex_home": home.join(".codex"),
         "pi_sessions": home.join(".pi/agent/sessions"), "omp_config": home.join(".omp"),
         "omp_agent": home.join(".omp/agent"), "kimi_home": home.join(".kimi-code")}).to_string());
-    let (python, _) = fake::spawn_fake().await;
     let mut state = AppState::new(fake::config("127.0.0.1"));
     state.server_id=server.to_owned();
     let sink = crate::sink::Sink::default();
@@ -80,7 +79,7 @@ async fn scene_named(groups: bool, peers: Option<hangar_server::groups::peers::P
     let state=Arc::new(state);
     let app = router(state.clone()).into_make_service_with_connect_info::<SocketAddr>();
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    Scene { addr, python, home, sink, state, _dir: dir }
+    Scene { addr, home, sink, state, _dir: dir }
 }
 
 fn write_json(path: &Path, value: Value) {
@@ -161,7 +160,6 @@ async fn stateless_lists_include_required_cache_metadata() {
             assert!(items.is_empty(), "{method}: {reply}");
         }
     }
-    assert_eq!(s.python.hits_to("/mcp/"), 0);
 }
 
 fn failed(result: &Value) -> bool { result["isError"] == true }
@@ -180,7 +178,6 @@ async fn bearer_and_this_machine_only() {
     assert_eq!(post().send().await.unwrap().status(), 401);
     assert_eq!(post().bearer_auth("outro").send().await.unwrap().status(), 401);
     assert_eq!(post().bearer_auth(OWNER).header("x-forwarded-for", "10.0.0.5").send().await.unwrap().status(), 403);
-    assert_eq!(s.python.hits_to("/mcp/"), 0, "o /mcp não segue ao Python");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -298,7 +295,7 @@ async fn send_goes_through_the_input_route_as_the_caller() {
     }
     let remote = mcp.call("send", json!({"alvo": "srv2::outra", "texto": "oi"})).await;
     assert!(failed(&remote) && first_text(&remote).contains("CP_SERVER_ID ausente"), "{remote}");
-    assert_eq!((s.sink.count("s0"), s.python.hits_to("/api/sessions/s0/input")), (1, 0));
+    assert_eq!(s.sink.count("s0"), 1);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -314,9 +311,6 @@ async fn group_pair_unpair_call_the_routes_as_the_caller() {
     assert!(!failed(&notice) && notice["structuredContent"]["peers"] == json!(["s0"]), "{notice}");
     assert!(!failed(&mcp.call("desparear", json!({})).await));
     assert!(!pair.join("beta.json").exists());
-    for path in ["/api/sessions/beta/group-message", "/api/sessions/beta/pair"] {
-        assert_eq!(s.python.hits_to(path), 0, "{path}");
-    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -334,7 +328,6 @@ async fn new_session_opens_with_the_caller_as_creator_and_the_whole_request() {
     let mut voz = Mcp::open(s.addr, &[("x-hangar-voice", &voice)]).await;
     let voiced = voz.call("new_session", json!({"nome": "n3", "cwd": "/nao/existe", "provider": "codex"})).await;
     assert!(failed(&voiced) && first_text(&voiced).contains("não existe"), "{voiced}");
-    assert_eq!(s.python.hits_to("/api/sessions"), 0, "a abertura não passa pelo Python");
 }
 
 /// `resume` retoma uma conversa que existe no disco pela rota do Arquivo: a pasta vem da conversa;
@@ -349,7 +342,6 @@ async fn new_session_with_resume_goes_through_the_archive_resume() {
     let mixed = mcp.call("new_session", json!({"nome": "volta", "cwd": "", "resume": "11111111-1111-4111-8111-111111111111",
         "permissao": "plan"})).await;
     assert!(failed(&mixed) && first_text(&mixed).contains("permissao"), "{mixed}");
-    assert_eq!(s.python.hits_to("/api/sessions"), 0);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -364,7 +356,6 @@ async fn close_session_refuses_itself_unknown_server_and_unknown() {
     // Sem o registro das sessões (servidor subindo) o fechamento falha com código, nunca vai ao Python.
     let closed = mcp.call("close_session", json!({"alvo": "outra"})).await;
     assert!(failed(&closed), "{closed}");
-    assert_eq!(s.python.hits_to("/api/sessions/outra"), 0);
     let voice = hangar_server::voice::machines::voice_signature(SECRET).unwrap();
     let refused = Mcp::open(s.addr, &[("x-hangar-voice", &voice)]).await.call("close_session", json!({"alvo": "outra"})).await;
     assert!(failed(&refused) && first_text(&refused).contains("sim"), "fechar pela voz só com o sim falado");
@@ -402,7 +393,6 @@ async fn close_session_reaches_the_peer() {
     let (auth, agent, path) = seen.lock().unwrap().pop().expect("DELETE lá");
     assert_eq!((auth.as_str(), path.as_str()), ("Bearer tok-lab", "/api/sessions/filha"));
     assert!(agent.contains("beta"), "{agent}");
-    assert_eq!(s.python.hits_to("/api/sessions/filha"), 0, "nada fecha aqui");
 }
 
 /// `contract` lê e grava pela rota `/pair/contract` da sessão que chama; gravar exige o `mtime` lido.
@@ -441,12 +431,10 @@ async fn interrupt_only_reaches_a_linked_child() {
     write_json(&sidecar, json!({"peers": ["s0"], "task": "", "gid": "g1", "harness": {}, "linked_by": "s0"}));
     let other = mcp.call("interrupt", json!({"alvo": "outra"})).await;
     assert!(failed(&other) && first_text(&other).starts_with("erro_interromper_nao_ligada"), "filha de outro pai: {other}");
-    assert_eq!(s.python.hits_to("/api/sessions/outra/interrupt"), 0);
     write_json(&sidecar, json!({"peers": ["beta"], "task": "", "gid": "g1", "harness": {}, "linked_by": "beta"}));
     // Ligada, passa a guarda e a rota responde no Rust (cena sem registro: `runtime_unavailable`), nunca o Python.
     let done = mcp.call("interrupt", json!({"alvo": "outra"})).await;
     assert!(!first_text(&done).starts_with("erro_interromper_nao_ligada"), "{done}");
-    assert_eq!(s.python.hits_to("/api/sessions/outra/interrupt"), 0);
 }
 
 /// O servidor do app desktop (`POST /cmd`): anota cada pedido e responde por verbo.
@@ -529,8 +517,7 @@ async fn browser_open_records_the_request_in_rust_and_waits_for_the_page() {
     let mut mcp = Mcp::open(s.addr, &[("x-hangar-pane", "%7")]).await;
     let result = mcp.call("browser_open", json!({"url": "http://x"})).await;
     assert_eq!(result["structuredContent"], json!({"ok": true, "url": "http://x/"}), "{result}");
-    // O pedido é do Rust: nada vai ao Python, e o arquivo dos pendentes leva a url.
-    assert_eq!(s.python.hits_to("/api/sessions/beta/nav"), 0);
+    // O arquivo dos pendentes leva a url.
     let file = s.home.join(".hangar/nav/_pendentes.json");
     fake::wait_until(move || std::fs::read(&file).ok()
         .and_then(|raw| serde_json::from_slice::<Value>(&raw).ok())
@@ -622,7 +609,6 @@ async fn mission_reads_and_reports_as_the_linked_caller() {
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
     assert_eq!(s.sink.count("beta"),1,"a vida associada recebe o aviso pela entrada real");
-    assert_eq!(s.python.hits_to("/api/sessions/beta/input"),0);
     let read = mcp.call("mission", json!({})).await;
     assert!(!failed(&read), "{read}");
     assert_eq!(read["structuredContent"]["item"]["key"], "PM-7");
@@ -637,7 +623,6 @@ async fn mission_reads_and_reports_as_the_linked_caller() {
     assert_eq!(reported["structuredContent"]["item"]["evidence"][0]["by"], "beta");
     let gated = mcp.call("mission", json!({"etapa": "entrega"})).await;
     assert!(failed(&gated) && first_text(&gated).starts_with("mission_gate_pending"), "{gated}");
-    assert_eq!(s.python.hits_to("/api/mission/report"), 0, "o Mission Control não vai ao Python");
 }
 
 #[tokio::test(flavor="multi_thread")]
@@ -715,7 +700,6 @@ async fn whoami_w01_voice_signature_wins_and_a_bad_one_never_falls_through() {
     for bad in [forged.as_str(), "n1.dead", "semponto"] {
         assert_eq!(whoami(&s, Some(OWNER), &[("x-hangar-voice", bad), ("x-hangar-session", "s0")]).await, unknown(BAD_VOICE), "{bad}");
     }
-    assert_eq!(s.python.hits_to("/api/whoami"), 0, "o whoami não segue ao Python");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -794,7 +778,6 @@ async fn whoami_w09_only_who_has_access_and_never_forwarded() {
     let by_cookie = client().get(format!("http://{}/api/whoami", s.addr)).header("cookie", format!("cp_token={OWNER}"))
         .header("x-hangar-session", "s0").send().await.unwrap();
     assert_eq!(by_cookie.status(), 200);
-    assert_eq!(s.python.hits_to("/api/whoami"), 0);
 }
 
 #[tokio::test(flavor = "multi_thread")]

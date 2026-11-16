@@ -271,7 +271,6 @@ async fn dead_session_with_sanitized_name_ends_its_external_pair_by_the_raw_name
     state.share = Some(share.clone());
     let (ex, warnings) = leave_and_notify(&state, &groups, "nome-com-espa-o").await.unwrap();
     assert_eq!(ex, ["pc-ana::Y"]);
-    assert!(python.internal_bodies("external-pairs/end").is_empty(), "o Python não é chamado");
     assert_eq!(*asked.lock().unwrap(), ["DELETE /api/pair"]);
     assert!(share.pairs.all().is_empty());
     // Tratado como máquina própria, o aviso falharia (nenhuma máquina cadastrada).

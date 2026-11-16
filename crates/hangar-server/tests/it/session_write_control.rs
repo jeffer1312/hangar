@@ -298,11 +298,10 @@ pub(crate) async fn send(server: std::net::SocketAddr, method: &str, path: &str,
 async fn headless_interrupt_is_served_in_rust() {
     let (dir, registry) = (tempfile::tempdir().unwrap(), registry().await);
     let sink = open_headless(&registry, dir.path(), "s").await;
-    let (python, server) = serve(registry).await;
+    let (_, server) = serve(registry).await;
     // Sessão parada: não há turno a interromper, e dizer "ok" seria fingir (como o Python).
     let (status, body) = send(server, "POST", "s/interrupt", "").await;
     assert_eq!((status, body["detail"]["code"].as_str()), (409, Some("erro_sem_turno")), "{body}");
-    assert_eq!(python.hits_to("/api/sessions/s/interrupt"), 0);
     assert!(!sink.lock().unwrap().iter().any(|e| e.to_string().contains("interrupt")), "sem turno nada vai ao cano");
 }
 
@@ -310,11 +309,10 @@ async fn headless_interrupt_is_served_in_rust() {
 async fn headless_select_without_identity_is_409_and_never_reaches_the_writer() {
     let (dir, registry) = (tempfile::tempdir().unwrap(), registry().await);
     let sink = open_headless(&registry, dir.path(), "s").await;
-    let (python, server) = serve(registry).await;
+    let (_, server) = serve(registry).await;
     let (status, body) = send(server, "POST", "s/select", r#"{"option":1}"#).await;
     assert_eq!((status, body["detail"]["code"].as_str(), body["detail"]["msg"].as_str()),
         (409, Some("erro_interacao_sem_identidade"), Some("Atualize o app ou recarregue a página antes de responder.")), "{body}");
-    assert_eq!(python.hits_to("/api/sessions/s/select"), 0);
     assert!(!sink.lock().unwrap().iter().any(|event|event.to_string().contains("control_response")));
 }
 
@@ -322,7 +320,7 @@ async fn headless_select_without_identity_is_409_and_never_reaches_the_writer() 
 async fn select_with_a_body_the_route_refuses_is_a_rust_422() {
     let (dir, registry) = (tempfile::tempdir().unwrap(), registry().await);
     let sink = open_headless(&registry, dir.path(), "s").await;
-    let (python, server) = serve(registry).await;
+    let (_, server) = serve(registry).await;
     for body in [r#"{"option":"1","interaction_id":"old"}"#, r#"{"option":0}"#, r#"{"option":51}"#,
         r#"{"option":1,"interaction_id":"old","x":1}"#, r#"{"option":1.5}"#] {
         let (status, reply) = send(server, "POST", "s/select", body).await;
@@ -330,7 +328,6 @@ async fn select_with_a_body_the_route_refuses_is_a_rust_422() {
     }
     let (status,body) = send(server,"POST","s/select",r#"{"option":1,"interaction_id":"old"}"#).await;
     assert_eq!((status,body["detail"]["code"].as_str()),(409,Some("erro_interacao_desatualizada")));
-    assert_eq!(python.hits_to("/api/sessions/s/select"), 0, "nunca ao Python normalizar");
     assert!(!sink.lock().unwrap().iter().any(|event|event.to_string().contains("control_response")));
 }
 
@@ -338,36 +335,31 @@ async fn select_with_a_body_the_route_refuses_is_a_rust_422() {
 async fn interrupt_with_a_clear_the_route_cannot_parse_is_a_rust_422() {
     let (dir, registry) = (tempfile::tempdir().unwrap(), registry().await);
     open_headless(&registry, dir.path(), "s").await;
-    let (python, server) = serve(registry).await;
+    let (_, server) = serve(registry).await;
     let (status, body) = send(server, "POST", "s/interrupt?clear=talvez", "").await;
     assert_eq!((status, body["detail"]["code"].as_str()), (422, Some("erro_corpo_invalido")));
-    assert_ne!(send(server, "POST", "s/interrupt?clear=1", "").await.1, json!("from-python"));
-    assert_eq!(python.hits_to("/api/sessions/s/interrupt"), 0);
 }
 
 #[tokio::test]
 async fn queue_discard_of_an_entry_that_is_not_there_is_404() {
     let (dir, registry) = (tempfile::tempdir().unwrap(), registry().await);
     open_headless(&registry, dir.path(), "s").await;
-    let (python, server) = serve(registry).await;
+    let (_, server) = serve(registry).await;
     let (status, body) = send(server, "DELETE", "s/queue/nao-existe", "").await;
     assert_eq!((status, body["detail"]["code"].as_str(), body["detail"]["msg"].as_str()),
         (404, Some("erro_fila_entrada_nao_encontrada"), Some("entrada não está na fila")));
-    assert_eq!(python.hits_to("/api/sessions/s/queue/nao-existe"), 0);
 }
 
 #[tokio::test]
 async fn queue_panel_routes_are_served_in_rust_and_an_absent_entry_is_409_gone() {
     let (dir, registry) = (tempfile::tempdir().unwrap(), registry().await);
     open_headless(&registry, dir.path(), "s").await;
-    let (python, server) = serve(registry).await;
+    let (_, server) = serve(registry).await;
     for (method, path, body) in [("PATCH", "s/queue/nada", r#"{"text":"x"}"#), ("DELETE", "s/queue/nada?only_waiting=true", ""),
         ("POST", "s/queue/reorder", r#"{"id":"nada","before_id":null}"#), ("POST", "s/queue/nada/steer", "")] {
         let (status, reply) = send(server, method, path, body).await;
         assert_eq!((status, reply["detail"]["code"].as_str()), (409, Some("queue_entry_gone")), "{method} {path}: {reply}");
     }
-    assert_eq!(python.hits_to("/api/sessions/s/queue/nada") + python.hits_to("/api/sessions/s/queue/reorder")
-        + python.hits_to("/api/sessions/s/queue/nada/steer"), 0);
 }
 
 #[tokio::test]
@@ -432,7 +424,7 @@ async fn permission_held_by_the_plugin_refuses_option_3_and_the_actor_receives_n
     let binding = registry.interaction_binding("t").await.unwrap();
     store.bind(&binding).unwrap();
     let id = store.observe(&binding,&plugin_target(InteractionKind::Approval,"perm:1"),Some(json!({}))).unwrap().unwrap();
-    let (python, server) = serve_with_interactions(registry,store).await;
+    let (_, server) = serve_with_interactions(registry,store).await;
     let keys_before = keys_sent(&log);
     let (status, body) = send(server, "POST", "t/select", &json!({"option":3,"interaction_id":id}).to_string()).await;
     assert_eq!((status, body["detail"]["code"].as_str(), body["detail"]["msg"].as_str()),
@@ -443,7 +435,6 @@ async fn permission_held_by_the_plugin_refuses_option_3_and_the_actor_receives_n
     let (status, body) = send(server, "POST", "t/select", &json!({"option":1,"interaction_id":id}).to_string()).await;
     assert_eq!((status,body["detail"]["code"].as_str()),(503,Some("erro_interacao_indisponivel")));
     assert_eq!(keys_sent(&log), keys_before);
-    assert_eq!(python.hits_to("/api/sessions/t/select"), 0);
 }
 
 #[cfg(unix)]
@@ -451,13 +442,10 @@ async fn permission_held_by_the_plugin_refuses_option_3_and_the_actor_receives_n
 async fn missing_identity_is_rejected_before_any_plugin_lookup() {
     let (dir, registry) = (tempfile::tempdir().unwrap(), registry().await);
     let log = open_terminal(&registry, dir.path(), "t").await;
-    let (python, server) = serve(registry).await;
-    python.fail_plugin(Some(StatusCode::INTERNAL_SERVER_ERROR));
+    let (_, server) = serve(registry).await;
     let before = keys_sent(&log);
     let (status, body) = send(server, "POST", "t/select", r#"{"option":1}"#).await;
     assert_eq!((status, body["detail"]["code"].as_str()), (409, Some("erro_interacao_sem_identidade")), "{body}");
-    assert_eq!(python.plugin_gets(),0);
-    assert_eq!(python.hits_to("/api/sessions/t/select"), 0);
     assert_eq!(keys_sent(&log), before);
 }
 
@@ -466,14 +454,13 @@ async fn missing_identity_is_rejected_before_any_plugin_lookup() {
 async fn submit_and_select_reject_stale_ids_without_any_writer_command() {
     let (dir, registry) = (tempfile::tempdir().unwrap(), registry().await);
     let log = open_terminal(&registry, dir.path(), "t").await;
-    let (python, server) = serve(registry).await;
+    let (_, server) = serve(registry).await;
     let before = keys_sent(&log);
     for (route,payload) in [("select",json!({"option":1,"interaction_id":"old"})),
         ("select/submit",json!({"interaction_id":"old"}))] {
         let (status, body) = send(server,"POST",&format!("t/{route}"),&payload.to_string()).await;
         assert_eq!((status,body["detail"]["code"].as_str()),(409,Some("erro_interacao_desatualizada")),"{body}");
     }
-    assert_eq!(python.plugin_gets(),0);
     assert_eq!(keys_sent(&log), before);
 }
 
@@ -497,9 +484,7 @@ async fn an_accepted_escape_closes_the_question_in_the_rust_store_without_asking
     let (registry, plugin) = registry_with_plugin(&interactions).await;
     let log = open_terminal(&registry, dir.path(), "t").await;
     let binding = registry.interaction_binding("t").await.unwrap();
-    let (python, server) = serve_with_interactions(registry, interactions).await;
-    // O Python que ainda soubesse de uma pergunta seria ignorado: a consulta a ele saiu.
-    python.fail_plugin(Some(StatusCode::INTERNAL_SERVER_ERROR));
+    let (_, server) = serve_with_interactions(registry, interactions).await;
     let gate = hangar_server::plugin::PermissionGate { app_present: true, terminal_attached: false, mode_without_dialog: false };
     let poll = plugin.begin_ask(&binding, held_question(), gate, std::time::Instant::now()).unwrap();
     let before = keys_sent(&log);
@@ -508,8 +493,6 @@ async fn an_accepted_escape_closes_the_question_in_the_rust_store_without_asking
     assert!(keys_sent(&log) > before, "o Esc chegou ao pane");
     assert_eq!(hook, json!({"answers": null}), "o hook do plugin soube pelo Store do Rust");
     assert!(plugin.pending_all(&binding, std::time::Instant::now()).unwrap().is_empty());
-    assert_eq!((python.plugin_gets(), python.plugin_posts().len()), (0, 0), "nada pergunta ao Python");
-    assert_eq!(python.hits_to("/api/sessions/t/interrupt"), 0);
 }
 
 /// Sem ler a pergunta segurada no Store, nenhum Esc: o erro aparece na resposta, e o Python não é a reserva.
@@ -522,13 +505,12 @@ async fn interrupt_whose_store_read_fails_never_presses_escape() {
     let binding = registry.interaction_binding("t").await.unwrap();
     // A sessão sai do Store: `pending_all` recusa a leitura antes do Esc.
     plugin.forget(&binding.key).unwrap();
-    let (python, server) = serve_with_interactions(registry, interactions).await;
+    let (_, server) = serve_with_interactions(registry, interactions).await;
     let before = keys_sent(&log);
     let (status, body) = send(server, "POST", "t/interrupt", "").await;
     assert_ne!(status, 200, "{body}");
     assert!(body["detail"]["code"].as_str().is_some_and(|code| !code.is_empty()), "erro com código: {body}");
     assert_eq!(keys_sent(&log), before, "sem ler a pergunta, nenhum Esc");
-    assert_eq!((python.plugin_gets(), python.hits_to("/api/sessions/t/interrupt")), (0, 0));
 }
 
 #[tokio::test]
@@ -537,13 +519,12 @@ async fn interrupt_the_terminal_refused_keeps_the_question_open() {
     let (registry, plugin) = registry_with_plugin(&interactions).await;
     open_terminal_without_tmux(&registry, dir.path(), "t").await;
     let binding = registry.interaction_binding("t").await.unwrap();
-    let (python, server) = serve_with_interactions(registry, interactions).await;
+    let (_, server) = serve_with_interactions(registry, interactions).await;
     let gate = hangar_server::plugin::PermissionGate { app_present: true, terminal_attached: false, mode_without_dialog: false };
     let _poll = plugin.begin_ask(&binding, held_question(), gate, std::time::Instant::now()).unwrap();
     let (status, _) = send(server, "POST", "t/interrupt", "").await;
     assert_ne!(status, 200, "sem tmux o Esc não sai");
     assert_eq!(plugin.pending_all(&binding, std::time::Instant::now()).unwrap().len(), 1, "pergunta não interrompida segue valendo");
-    assert_eq!(python.plugin_gets(), 0);
 }
 
 #[cfg(unix)]
@@ -551,13 +532,12 @@ async fn interrupt_the_terminal_refused_keeps_the_question_open() {
 async fn terminal_keys_and_term_input_with_bodies_the_route_refuses_are_a_rust_422() {
     let (dir, registry) = (tempfile::tempdir().unwrap(), registry().await);
     let log = open_terminal(&registry, dir.path(), "t").await;
-    let (python, server) = serve(registry).await;
+    let (_, server) = serve(registry).await;
     let before = keys_sent(&log);
     for (route, body) in [("keys", r#"{"key":5}"#), ("keys", r#"{}"#), ("term-input", r#"{"text":5}"#), ("term-input", r#"{"x":1}"#)] {
         let (status, reply) = send(server, "POST", &format!("t/{route}"), body).await;
         assert_eq!((status, reply["detail"]["code"].as_str()), (422, Some("erro_corpo_invalido")), "{route} {body}");
     }
-    assert_eq!(python.hits_to("/api/sessions/t/keys") + python.hits_to("/api/sessions/t/term-input"), 0);
     assert_eq!(keys_sent(&log), before);
 }
 
@@ -566,14 +546,13 @@ async fn terminal_keys_and_term_input_with_bodies_the_route_refuses_are_a_rust_4
 async fn keys_reach_the_pane_through_the_actor() {
     let (dir, registry) = (tempfile::tempdir().unwrap(), registry().await);
     let log = open_terminal(&registry, dir.path(), "t").await;
-    let (python, server) = serve(registry).await;
+    let (_, server) = serve(registry).await;
     let before = keys_sent(&log);
     assert_eq!(send(server, "POST", "t/keys", r#"{"key":"Down"}"#).await, (200, json!({"ok": true})));
     assert_eq!(keys_sent(&log), before + 1);
     let (status, body) = send(server, "POST", "t/keys", r#"{"key":"Nope"}"#).await;
     assert_eq!((status, body), (400, json!({"detail": "tecla não permitida"})));
     assert_eq!(keys_sent(&log), before + 1, "tecla fora da lista não chega ao pane");
-    assert_eq!(python.hits_to("/api/sessions/t/keys"), 0);
 }
 
 const MSG_NO_TERMINAL: &str = "esta sessão não tem terminal; nada foi enviado";
@@ -583,13 +562,13 @@ fn no_terminal() -> (u16, Value) {
 }
 
 /// Claude (`s`, cano que anota cada envelope) e Codex (`c`) sem terminal no mesmo servidor.
-async fn headless_pair() -> (tempfile::TempDir, Arc<std::sync::Mutex<Vec<Value>>>, Arc<std::sync::Mutex<Vec<String>>>, Arc<Fake>, std::net::SocketAddr) {
+async fn headless_pair() -> (tempfile::TempDir, Arc<std::sync::Mutex<Vec<Value>>>, Arc<std::sync::Mutex<Vec<String>>>, std::net::SocketAddr) {
     let (dir, registry) = (tempfile::tempdir().unwrap(), registry().await);
     let sink = open_headless(&registry, dir.path(), "s").await;
     let methods: Arc<std::sync::Mutex<Vec<String>>> = Arc::default();
     crate::groups_deliver::open_codex_headless(&registry, dir.path(), "c", methods.clone()).await;
-    let (python, server) = serve(registry).await;
-    (dir, sink, methods, python, server)
+    let (_, server) = serve(registry).await;
+    (dir, sink, methods, server)
 }
 
 /// Nenhuma mensagem chegou aos canos: nem frame `user` no Claude, nem turno pedido ao Codex. A conversa
@@ -605,11 +584,10 @@ fn nothing_sent(sink: &std::sync::Mutex<Vec<Value>>, methods: &std::sync::Mutex<
 // nenhum nem ao Python; a recusa é do Rust, igual para Claude e Codex.
 #[tokio::test]
 async fn keys_without_a_terminal_are_a_rust_502_and_nothing_is_sent() {
-    let (_dir, sink, methods, python, server) = headless_pair().await;
+    let (_dir, sink, methods, server) = headless_pair().await;
     for name in ["s", "c"] {
         assert_eq!(send(server, "POST", &format!("{name}/keys"), r#"{"key":"Down"}"#).await, no_terminal(), "{name}");
         assert_eq!(send(server, "POST", &format!("{name}/keys"), r#"{"key":5}"#).await.1["detail"]["code"], "erro_corpo_invalido", "{name}");
-        assert_eq!(python.hits_to(&format!("/api/sessions/{name}/keys")), 0, "{name}");
     }
     nothing_sent(&sink, &methods);
 }
@@ -617,7 +595,7 @@ async fn keys_without_a_terminal_are_a_rust_502_and_nothing_is_sent() {
 // R2-03 (`api.py:2760`): corpo sem texto nem tecla é 200 sem tocar em nada; com texto ou tecla, a recusa de R2-01.
 #[tokio::test]
 async fn term_input_without_a_terminal_is_ok_when_empty_and_a_502_otherwise() {
-    let (_dir, sink, methods, python, server) = headless_pair().await;
+    let (_dir, sink, methods, server) = headless_pair().await;
     for name in ["s", "c"] {
         for body in ["{}", r#"{"text":null,"key":null}"#, r#"{"text":"","key":""}"#] {
             assert_eq!(send(server, "POST", &format!("{name}/term-input"), body).await, (200, json!({"ok": true})), "{name} {body}");
@@ -625,7 +603,6 @@ async fn term_input_without_a_terminal_is_ok_when_empty_and_a_502_otherwise() {
         for body in [r#"{"text":"ls"}"#, r#"{"key":"Enter"}"#, r#"{"text":"ls","key":"Enter"}"#] {
             assert_eq!(send(server, "POST", &format!("{name}/term-input"), body).await, no_terminal(), "{name} {body}");
         }
-        assert_eq!(python.hits_to(&format!("/api/sessions/{name}/term-input")), 0, "{name}");
     }
     nothing_sent(&sink, &methods);
 }
@@ -639,12 +616,11 @@ async fn keys_and_term_input_without_a_terminal_while_a_transfer_holds_the_gate_
     let methods: Arc<std::sync::Mutex<Vec<String>>> = Arc::default();
     crate::groups_deliver::open_codex_headless(&registry, dir.path(), "c", methods.clone()).await;
     for name in ["s", "c"] { registry.ingress().hold(name, Duration::from_secs(1)).await.unwrap(); }
-    let (python, server) = serve(registry).await;
+    let (_, server) = serve(registry).await;
     for name in ["s", "c"] {
         for (route, body) in [("keys", r#"{"key":"Down"}"#), ("term-input", r#"{"text":"ls","key":"Enter"}"#)] {
             let (status, reply) = send(server, "POST", &format!("{name}/{route}"), body).await;
             assert_eq!((status, reply["detail"]["code"].as_str()), (409, Some("session_transfer_busy")), "{name} {route}: {reply}");
-            assert_eq!(python.hits_to(&format!("/api/sessions/{name}/{route}")), 0, "{name} {route}");
         }
     }
     nothing_sent(&sink, &methods);
@@ -654,14 +630,13 @@ async fn keys_and_term_input_without_a_terminal_while_a_transfer_holds_the_gate_
 // por falta de terminal, em `keys` e em `term-input`; o Backspace do `term-input` está na lista dele.
 #[tokio::test]
 async fn a_key_outside_the_list_without_a_terminal_is_400_before_the_missing_terminal() {
-    let (_dir, sink, methods, python, server) = headless_pair().await;
+    let (_dir, sink, methods, server) = headless_pair().await;
     let refused = (400, json!({"detail": "tecla não permitida"}));
     for name in ["s", "c"] {
         assert_eq!(send(server, "POST", &format!("{name}/keys"), r#"{"key":"Nope"}"#).await, refused, "{name} keys");
         assert_eq!(send(server, "POST", &format!("{name}/keys"), r#"{"key":"Backspace"}"#).await, refused, "{name}: Backspace só no term-input");
         assert_eq!(send(server, "POST", &format!("{name}/term-input"), r#"{"text":"ls","key":"Nope"}"#).await, refused, "{name} term-input");
         assert_eq!(send(server, "POST", &format!("{name}/term-input"), r#"{"key":"Backspace"}"#).await, no_terminal(), "{name}");
-        assert_eq!(python.hits_to(&format!("/api/sessions/{name}/keys")) + python.hits_to(&format!("/api/sessions/{name}/term-input")), 0, "{name}");
     }
     nothing_sent(&sink, &methods);
 }
@@ -670,13 +645,12 @@ async fn a_key_outside_the_list_without_a_terminal_is_400_before_the_missing_ter
 // (Codex, Python 502 `erro_envio_falhou`); decisão 7: sem `interaction_id`, 409 sem identidade antes.
 #[tokio::test]
 async fn select_submit_without_a_terminal_is_refused_in_rust() {
-    let (_dir, sink, methods, python, server) = headless_pair().await;
+    let (_dir, sink, methods, server) = headless_pair().await;
     for name in ["s", "c"] {
         for body in ["", "{}", r#"{"interaction_id":null}"#, r#"{"interaction_id":""}"#] {
             let (status, reply) = send(server, "POST", &format!("{name}/select/submit"), body).await;
             assert_eq!((status, reply["detail"]["code"].as_str()), (409, Some("erro_interacao_sem_identidade")), "{name} {body:?}");
         }
-        assert_eq!(python.hits_to(&format!("/api/sessions/{name}/select/submit")), 0, "{name}");
     }
     assert_eq!(send(server, "POST", "s/select/submit", r#"{"interaction_id":"i-1"}"#).await, (409, json!({"detail": {"code": "erro_opcao_nao_convergiu",
         "params": {"detalhe": "nao ha picker de multipla escolha na tela — nada enviado"}, "msg": "não consegui enviar as opções marcadas — tente de novo"}})));
@@ -688,12 +662,11 @@ async fn select_submit_without_a_terminal_is_refused_in_rust() {
 // `api.py:2692`): sessão Claude do Rust nas rotas do Codex recebe o 400 da rota, sem ir ao Python.
 #[tokio::test]
 async fn codex_routes_on_a_rust_claude_session_are_the_python_400s() {
-    let (_dir, sink, methods, python, server) = headless_pair().await;
+    let (_dir, sink, methods, server) = headless_pair().await;
     assert_eq!(send(server, "GET", "s/models", "").await, (400, json!({"detail": {"code": "erro_models_so_codex", "params": {}, "msg": "models so existe pra sessoes Codex"}})));
     assert_eq!(send(server, "GET", "s/limits", "").await, (400, json!({"detail": {"code": "erro_limits_so_codex", "params": {}, "msg": "limits so existe pra sessoes Codex"}})));
     assert_eq!(send(server, "POST", "s/codex/plan/implement", "").await,
         (400, json!({"detail": {"code": "erro_model_so_codex", "params": {}, "msg": "esta ação só existe para sessões Codex"}})));
-    for route in ["models", "limits", "codex/plan/implement"] { assert_eq!(python.hits_to(&format!("/api/sessions/s/{route}")), 0, "{route}"); }
     nothing_sent(&sink, &methods);
 }
 
@@ -734,13 +707,12 @@ fn invalid_codex_option_is_a_bad_answer_not_a_failure_to_answer() {
 async fn headless_stop_task_writes_the_stop_task_control_to_the_cano() {
     let (dir, registry) = (tempfile::tempdir().unwrap(), registry().await);
     let sink = open_headless(&registry, dir.path(), "s").await;
-    let (python, server) = serve(registry).await;
+    let (_, server) = serve(registry).await;
     let (status, body) = send(server, "POST", "s/tasks/a85258e41e374c2ea/stop", "").await;
     assert_eq!((status, &body), (202, &json!({"pending": true})));
     let frames: Vec<Value> = sink.lock().unwrap().iter().filter_map(|e| serde_json::from_str(e["frame"].as_str()?).ok()).collect();
     let stop = frames.iter().find(|frame| frame["request"]["subtype"] == "stop_task").expect("stop_task no cano");
     assert_eq!((&stop["type"], &stop["request"]["task_id"]), (&json!("control_request"), &json!("a85258e41e374c2ea")));
-    assert_eq!(python.hits_to("/api/sessions/s/tasks/a85258e41e374c2ea/stop"), 0);
 }
 
 #[tokio::test]
@@ -759,16 +731,14 @@ async fn stop_task_with_an_invalid_id_is_422_and_reaches_nothing() {
 async fn stop_task_on_codex_is_409_only_claude() {
     let (dir, registry) = (tempfile::tempdir().unwrap(), registry().await);
     crate::groups_deliver::open_codex_headless(&registry, dir.path(), "c", Default::default()).await;
-    let (python, server) = serve(registry).await;
+    let (_, server) = serve(registry).await;
     let (status, body) = send(server, "POST", "c/tasks/bserqfwvd/stop", "").await;
     assert_eq!((status, body["detail"]["code"].as_str()), (409, Some("erro_parar_so_claude")), "{body}");
-    assert_eq!(python.hits_to("/api/sessions/c/tasks/bserqfwvd/stop"), 0);
 }
 
 #[tokio::test]
 async fn stop_task_on_a_name_without_rust_owner_is_409_only_claude_not_python() {
-    let (python, server) = serve(registry().await).await;
+    let (_, server) = serve(registry().await).await;
     let (status, body) = send(server, "POST", "shell-cru/tasks/bserqfwvd/stop", "").await;
     assert_eq!((status, body["detail"]["code"].as_str()), (409, Some("erro_parar_so_claude")), "{body}");
-    assert_eq!(python.hits_to("/api/sessions/shell-cru/tasks/bserqfwvd/stop"), 0);
 }

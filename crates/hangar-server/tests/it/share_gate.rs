@@ -561,7 +561,6 @@ async fn inbound_guest_header_grants_nothing() {
         .send().await.unwrap();
     assert_eq!(r.status(), 401);
     assert_eq!(json_of(r).await["detail"]["code"], "erro_nao_autorizado");
-    assert_eq!(fake.hits_to("/api/diag/arquivo"), 0);
 }
 
 /// W-09 na 8766: o convidado de convite não pergunta quem é a sessão; o porteiro recusa antes da rota.

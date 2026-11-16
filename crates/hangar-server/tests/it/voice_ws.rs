@@ -135,8 +135,7 @@ async fn missing_account_is_refused_without_falling_back() {
 
 #[tokio::test]
 async fn session_tool_goes_through_own_api_to_the_rust_input() {
-    // `set_self` aponta para o próprio servidor de teste: o envio passa pela rota `/input` real, que é do Rust;
-    // o Python não tem mais a rota e não pode receber nada.
+    // `set_self` aponta para o próprio servidor de teste: o envio passa pela rota `/input` real, que é do Rust.
     let t = voice_support::voice_server_self_api().await;
     let mut a = open(t.addr, fake::OWNER).await.unwrap();
     hello(&mut a, "pwa", json!(["switch_session"])).await;
@@ -145,5 +144,4 @@ async fn session_tool_goes_through_own_api_to_the_rust_input() {
     t.tool(42, "send_to_session", json!({"request": "roda os testes"}), "turn-1");
     let reply = t.reply_to(42).await;
     assert!(reply["contentItems"][0]["text"].is_string(), "a ferramenta respondeu: {reply}");
-    assert_eq!(t.python.input_calls(), 0, "o /input não foi ao Python");
 }

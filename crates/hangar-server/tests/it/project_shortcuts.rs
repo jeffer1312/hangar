@@ -1,7 +1,7 @@
 //! S01: esperado dos asserts originais de test_project_shortcuts.py e capturas S01.
 use crate::{fake::{OWNER, client}, workspace_fixture};
 use serde_json::{Value, json};
-use std::{path::{Path, PathBuf}, sync::atomic::Ordering};
+use std::path::{Path, PathBuf};
 
 fn git(root: &Path, args: &[&str]) {
     let output = std::process::Command::new("git").arg("-C").arg(root).args(args)
@@ -63,10 +63,6 @@ impl Scene {
     fn request(&self, method: &str, name: &str, body: Value) -> reqwest::RequestBuilder {
         client().request(method.parse::<reqwest::Method>().unwrap(), format!("http://{}/api/sessions/fixture-{name}/project-shortcuts", self.f.addr))
             .bearer_auth(OWNER).json(&body)
-    }
-    fn no_upstream(&self) {
-        assert_eq!(self.f.context_hits.load(Ordering::Relaxed), 0);
-        assert_eq!(self.f.hits(), 0);
     }
 }
 
@@ -486,7 +482,6 @@ async fn s01_plain_alias_and_missing_folder_keep_physical_identity() {
     let message=format!("pasta da sessao nao existe: {}",scene.root.join("sumiu").display());
     assert_eq!(value(scene.request("GET","missing",Value::Null).send().await.unwrap(),409).await,
         json!({"detail":{"code":"erro_project_shortcuts_projeto","msg":message,"params":{"detalhe":message}}}));
-    scene.no_upstream();
 }
 
 #[cfg(unix)]
@@ -529,7 +524,6 @@ async fn s01_guest_hangar_denial_precedes_command_and_does_not_reach_python() {
         assert_eq!(value(response,403).await["detail"]["code"],expected);
     }
     assert!(!scene.home.join("terms").exists());
-    scene.no_upstream();
 }
 
 #[test]
@@ -574,7 +568,6 @@ async fn s01_shared_persistence_through_public_routes_keeps_whole_json() {
     let stored: Value = serde_json::from_slice(&std::fs::read(scene.store()).unwrap()).unwrap();
     assert_eq!(stored, json!({"existing":{"items":[{"id":"keep"}],"extra":true},"metadata":[1,"kept"],
         project_key(&scene.root):{"items":[{"id":"x","type":"send_text","label":"X","text":"/x"}]}}));
-    scene.no_upstream();
 }
 
 #[tokio::test]
@@ -587,7 +580,6 @@ async fn s01_store_uses_the_original_effective_projects_directory() {
     assert!(store.is_file(),"o caminho original é settings.projects_dir.parent, incluindo CP_PROJECTS_DIR do .env");
     assert_eq!(serde_json::from_slice::<Value>(&std::fs::read(store).unwrap()).unwrap(),json!({project_key(&scene.repo):{"items":[item()]}}));
     assert!(!scene.store().exists());
-    scene.no_upstream();
 }
 
 #[tokio::test]
@@ -613,7 +605,6 @@ async fn s01_concurrent_twenty_projects_do_not_lose_updates() {
     for task in tasks { assert_eq!(task.await.unwrap()["items"],json!([item()])); }
     assert_eq!(serde_json::from_slice::<Value>(&std::fs::read(scene.store()).unwrap()).unwrap(),Value::Object(expected));
     for i in 0..20 { assert_eq!(value(scene.request("GET",&format!("p{i}"),Value::Null).send().await.unwrap(),200).await["items"],json!([item()])); }
-    scene.no_upstream();
 }
 
 #[tokio::test]
@@ -633,7 +624,6 @@ async fn s01_unreadable_store_is_500_and_put_preserves_exact_bytes() {
             assert_eq!(std::fs::read(scene.store()).unwrap(),bytes);
         }
     }
-    scene.no_upstream();
 }
 
 #[tokio::test]
@@ -704,7 +694,6 @@ async fn s01_r2_gzip_identity_threshold_cors_and_errors_match_starlette() {
     assert_eq!(response.status(),200);assert_eq!(response.headers()["content-length"],"2");
     assert!(!response.headers().contains_key("content-encoding"));assert!(!response.headers().contains_key("vary"));
     assert_eq!(response.text().await.unwrap(),"OK");
-    scene.no_upstream();
     assert!(failures.is_empty(),"{}",failures.join("\n"));
 }
 
@@ -747,7 +736,6 @@ async fn s01_http_headers_syntax_and_cookie_precedence_do_not_need_fastapi() {
     let response=value(scene.request("PUT","main",json!({"items":items})).send().await.unwrap(),422).await;
     assert_eq!(response["detail"][0]["type"],"too_long");
     assert_eq!(response["detail"][0]["ctx"],json!({"field_type":"List","max_length":500,"actual_length":501}));
-    scene.no_upstream();
 }
 
 #[tokio::test]
@@ -767,12 +755,12 @@ async fn s01_target_guard_ignores_corrupt_other_transfer_and_refuses_own_corrupt
     assert_eq!(value(scene.request("GET","main",Value::Null).send().await.unwrap(),200).await,expected);
     let body=json!({"items":[{"id":"i","type":"internal","action":"terminal"}]});
     let response=scene.request("PUT","main",body.clone()).send().await.unwrap();
-    assert!(!scene.store().exists());scene.no_upstream();
+    assert!(!scene.store().exists());
     assert_eq!(value(response,400).await,json!({"detail":{"code":"erro_project_shortcuts","msg":"item 1: atalho interno nao vale por projeto","params":{"detalhe":"item 1: atalho interno nao vale por projeto"}}}));
     std::fs::write(index("fixture-main"),json!([id]).to_string()).unwrap();
     assert_eq!(value(scene.request("PUT","main",body).send().await.unwrap(),503).await,
         json!({"detail":{"code":"shortcut_context_unavailable","msg":"contexto do terminal indisponível","params":{}}}));
-    assert!(!scene.store().exists());scene.no_upstream();
+    assert!(!scene.store().exists());
 }
 
 #[tokio::test]
@@ -814,7 +802,6 @@ async fn s01_validation_methods_auth_and_lifecycle_are_native() {
     std::fs::write(&scene.panes,rows).unwrap();
     assert_eq!(value(scene.request("PUT","main",json!({"items":[]})).send().await.unwrap(),200).await,
         json!({"key":project_key(&scene.repo),"name":"meu-repo","root":scene.repo,"items":[]}));
-    scene.no_upstream();
 }
 
 #[cfg(target_os = "linux")]

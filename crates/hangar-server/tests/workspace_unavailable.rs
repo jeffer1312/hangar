@@ -12,7 +12,7 @@ async fn unavailable_answers_503_with_reason() {
     let empty = tempfile::tempdir().unwrap();
     // SAFETY: único teste deste binário; nenhuma outra thread lê o ambiente ainda.
     unsafe { std::env::set_var("PATH", empty.path()) };
-    let f = workspace_fixture::fixture(dir.path(), true).await;
+    let f = workspace_fixture::fixture(dir.path()).await;
     let response = client()
         .get(format!("http://{}/api/sessions/fixture/branches", f.addr))
         .bearer_auth(OWNER)
@@ -21,6 +21,5 @@ async fn unavailable_answers_503_with_reason() {
         .unwrap();
     let body = refusal(response, "workspace_unavailable").await;
     assert!(body["detail"]["params"]["motivo"].as_str().is_some_and(|m| m.contains("git")), "{body}");
-    assert_eq!(f.hits(), 0, "o Python não pode atender");
     assert_eq!(f.diag("rust.workspace_failed").await["codigo"], "workspace_unavailable");
 }

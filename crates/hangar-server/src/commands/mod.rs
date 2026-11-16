@@ -5,7 +5,6 @@ pub mod probe;
 mod service;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-pub(crate) use service::matches;
 pub use service::{Context, Service, route, serve};
 use std::{
     collections::{HashMap, HashSet},
