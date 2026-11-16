@@ -7,7 +7,7 @@ fn two_processes_one_lease() {
     let backend = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../backend");
     let mut child = std::process::Command::new("python3")
         .env("PYTHONPATH",backend)
-        .args(["-u","-c","from app.runtime_process import WriterLease\nimport sys\nlease=WriterLease(sys.argv[1])\nprint('locked',flush=True)\nsys.stdin.read(1)\nlease.close()"])
+        .args(["-u","-c","from app.writer_lease import WriterLease\nimport sys\nlease=WriterLease(sys.argv[1])\nprint('locked',flush=True)\nsys.stdin.read(1)\nlease.close()"])
         .arg(&path).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).spawn().unwrap();
     let mut line = String::new();
     std::io::BufReader::new(child.stdout.take().unwrap()).read_line(&mut line).unwrap();

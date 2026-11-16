@@ -160,7 +160,7 @@ fn python_and_rust_share_the_lease() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("lease-á.lock");
     let lease = acquire_lease(&path).unwrap();
-    let script = "import sys\nfrom app.runtime_process import WriterLease\ntry:\n WriterLease(sys.argv[1])\nexcept BlockingIOError:\n sys.exit(0)\nsys.exit(1)";
+    let script = "import sys\nfrom app.writer_lease import WriterLease\ntry:\n WriterLease(sys.argv[1])\nexcept BlockingIOError:\n sys.exit(0)\nsys.exit(1)";
     let backend = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../backend");
     let result = std::process::Command::new(python).args(["-c",script]).arg(&path)
         .env("PYTHONPATH",backend).output().unwrap();
