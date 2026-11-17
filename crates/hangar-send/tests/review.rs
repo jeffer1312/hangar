@@ -59,7 +59,10 @@ fn api_timeout_from_the_environment_cuts_the_request() {
     let done = home.run(&["alvo", "oi"], &[("API_TIMEOUT", "0.3")], &plain_host());
     assert!(started.elapsed() < Duration::from_secs(2), "{:?}", started.elapsed());
     assert_eq!(done.code, 2);
-    assert_eq!(done.stderr, format!("erro: backend inacessível em http://127.0.0.1:{} (hangar rodando?)\n", server.port));
+    assert_eq!(
+        done.stderr,
+        format!("erro: sem resposta de http://127.0.0.1:{} no prazo — o recado pode ter chegado; confira com hangar-send --list antes de reenviar\n", server.port)
+    );
 }
 
 /// `API_CONNECT_TIMEOUT` vale para a conexão: um endereço que não responde desiste no prazo.
