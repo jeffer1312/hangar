@@ -288,6 +288,11 @@ fn failure_detail(body: Option<Value>, status: u16) -> String {
                 let params = std::collections::HashMap::from([("message".to_owned(), message.unwrap_or("").to_owned())]);
                 if let Some(text) = crate::i18n::tr_web(key, &params) { return Some(text); }
             }
+            // HTML citado aberto como página: a frase do código, no idioma do app.
+            if let Some(message) = fields.get("code").and_then(Value::as_str).filter(|code| code.starts_with("file_page_"))
+                .and_then(|code| crate::i18n::tr_web(code, &std::collections::HashMap::new())) {
+                return Some(message);
+            }
             if let Some(code) = fields.get("code").and_then(Value::as_str).filter(|code| code.starts_with("erro_run_code_")) {
                 let params = fields.get("params").and_then(Value::as_object).map(|p| p.iter()
                     .map(|(k, v)| (k.clone(), v.as_str().map_or_else(|| v.to_string(), str::to_owned))).collect()).unwrap_or_default();
@@ -1231,6 +1236,15 @@ mod tests {
         assert!(message.contains("test/channel"), "{message}");
         assert!(!message.contains("{branch}"));
         assert_ne!(message, "server fallback");
+    }
+
+    #[test]
+    fn file_page_refusals_use_the_app_sentence() {
+        for code in ["file_page_too_large", "file_page_not_utf8", "file_page_not_html", "file_page_empty"] {
+            let message = failure_detail(Some(json!({"detail": {"code": code, "params": {}, "msg": "pt cru"}})), 413);
+            assert_eq!(message, crate::i18n::tr_shared(code, &[]), "{code}");
+            assert_ne!(message, code, "{code} sem frase em messages/*.json");
+        }
     }
 
     #[test]

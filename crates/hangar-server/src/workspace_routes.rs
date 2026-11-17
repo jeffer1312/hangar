@@ -112,7 +112,7 @@ pub fn matches(_method: &Method, path: &str) -> bool {
 }
 /// Leituras que dependem da conversa da sessão: durante a transferência ela está trocando.
 fn transfer_guarded_read(method: &Method, tail: &str) -> bool {
-    method == Method::POST && matches!(tail, "files/resolver" | "git/diff" | "git/path-diff")
+    method == Method::POST && matches!(tail, "files/resolver" | "file/page" | "git/diff" | "git/path-diff")
 }
 /// `Err(None)`: sessão inexistente. `Err(Some(motivo))`: leitura indisponível. Com `transfer`, a
 /// transferência é conferida pelas mesmas linhas, antes de procurar a sessão: no meio da troca ela
@@ -321,7 +321,15 @@ async fn public_inner(st: Arc<AppState>, peer: SocketAddr, req: Request) -> Resp
     let login = auth_request.extensions().get::<crate::login_guests::gate::Login>().is_some();
     let share = caller.as_ref().and_then(crate::share::caller::Caller::grant).zip(name.as_ref())
         .is_some_and(|(grant,name)|grant.sessions.get(name) == Some(&crate::share::store::Kind::Share));
-    if !matches!(caller, Some(crate::share::caller::Caller::Owner)) && !login && !share {
+    let owner = matches!(caller, Some(crate::share::caller::Caller::Owner));
+    // A rota grava uma página da conversa, e página só o dono lê.
+    if !owner && tail == "file/page" {
+        return match crate::routes::owner_gate(&st, peer, &auth_request).await {
+            Err(response) => response,
+            Ok(_) => response(json!({"detail":{"code":"file_page_owner_only","params":{},"msg":"só o dono abre arquivo como página"}}), 403),
+        };
+    }
+    if !owner && !login && !share {
         return match crate::routes::owner_gate(&st, peer, &auth_request).await {
             Err(response) => response,
             Ok(_) => response(json!({"detail":{"code":"erro_fora_do_convite","params":{},"msg":"fora da sessao compartilhada"}}), 403),
@@ -417,13 +425,19 @@ async fn run(
         return Ok(crate::thumbnail::serve(tokio::fs::File::from_std(opened.file), &opened.path, &parts.headers,
             bool_param(params.get("download"), false).unwrap_or(false), None, width).await);
     }
-    let mut rows = if matches!(tail, "file" | "file/text" | "files/resolver") {
+    let mut rows = if matches!(tail, "file" | "file/text" | "file/page" | "files/resolver") {
         citation_rows(st, &ctx, ingress).await?
     } else { None };
     let Some(mut op) = map_operation(tail, &method, &params, &payload, &ctx) else {
         return Err(hangar_workspace::error(422, "operação de workspace inválida"));
     };
     if let Operation::ResolveCited { rows: selected, .. } = &mut op { *selected = rows.take(); }
+    if tail == "file/page" {
+        let target = execute(st, op, ingress).await?;
+        let name = ctx["session"]["name"].as_str().unwrap_or("");
+        let resolved_for = ctx["session"]["jsonl"].as_str();
+        return Ok(crate::pages::routes::publish_file(st, name, target.as_str().unwrap_or("").into(), resolved_for).await);
+    }
     if tail == "file" {
         let width = match crate::thumbnail::parse_width(params.get("w")) {
             Ok(w) => w,
@@ -621,7 +635,7 @@ fn map_operation(
             "search"
         }
         "files/resolver" => "resolver",
-        "file" | "file/text" => {
+        "file" | "file/text" | "file/page" => {
             if tail == "file" {
                 bool_param(q.get("download"), false)?;
             }
@@ -630,9 +644,11 @@ fn map_operation(
             } else {
                 q.get("path")?
             };
+            // `file/page` só lê o arquivo: a autorização é a mesma da leitura do `/file`.
+            let write = *method == Method::POST && tail == "file/text";
             return operation(
                 "resolve_cited",
-                json!({"cwd":cwd,"jsonl":ctx["session"]["jsonl"].as_str()?,"path":path,"write":*method==Method::POST}),
+                json!({"cwd":cwd,"jsonl":ctx["session"]["jsonl"].as_str()?,"path":path,"write":write}),
             );
         }
         _ if tail.starts_with("git/commit/") => {
@@ -848,5 +864,16 @@ mod tests {
         assert!(op("git/files").contains("\"/repo-x\""));
         assert!(op("branches").contains("\"/repo-x\""));
         assert!(op("files/list").contains("cwd: \"/repo\""));
+    }
+
+    #[test]
+    fn file_page_resolves_the_citation_only_for_reading() {
+        let ctx = json!({"session":{"name":"s","cwd":"/repo","jsonl":"/repo/s.jsonl","git_cwd":"/repo"}});
+        let q = HashMap::new();
+        let page = map_operation("file/page", &Method::POST, &q, &json!({"path":"mock.html"}), &ctx).unwrap();
+        assert!(matches!(&page, Operation::ResolveCited { write: false, path, .. } if path == "mock.html"), "{page:?}");
+        let text = map_operation("file/text", &Method::POST, &q, &json!({"path":"a.txt","text":"x"}), &ctx).unwrap();
+        assert!(matches!(text, Operation::ResolveCited { write: true, .. }), "a escrita do editor continua pedindo escrita");
+        assert!(transfer_guarded_read(&Method::POST, "file/page"), "lê a conversa: espera a transferência");
     }
 }

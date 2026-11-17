@@ -358,6 +358,8 @@ enum Payload {
     Media(SessionKey, Source, Result<Option<(Arc<RenderImage>, Vec<Arc<RenderImage>>)>, Failure>),
     /// Resultado de Abrir/Salvar: o arquivo gravado e se veio vazio, ou a falha e se ele não existe no servidor.
     Saved(SessionKey, Source, bool, Result<(PathBuf, bool), (String, bool)>),
+    /// "Abrir no navegador" do HTML citado: o endereço da página com o bilhete dela, ou a falha já em frase.
+    PageOpened(SessionKey, Source, Result<String, String>),
     ConnectionNotSaved(String),
     // Rede local ou Connect aprendidos para a máquina deste endereço salvo.
     Route(String, api::route::Learned),
@@ -558,7 +560,7 @@ struct CiteCheck { owner: Option<SessionKey>, scanned: HashSet<String>, checked:
 
 /// Cartão de um arquivo citado depois de Abrir ou Baixar: baixando, baixado, vazio, inexistente ou a falha.
 #[derive(Clone)]
-enum FileCard { Busy, Saved, Empty, Missing, Failed(String) }
+enum FileCard { Busy, Saved, Empty, Missing, Failed(String), PageFailed(String) }
 
 /// Texto preparado de uma linha: a mensagem pronta para o `TextView`, as linhas do resultado de uma chamada ou o
 /// detalhe aberto (entrada/saída) de uma chamada.
@@ -1905,6 +1907,23 @@ impl Hangar {
                 cx.notify();
                 return;
             }
+            Payload::PageOpened(key, source, result) => {
+                match result {
+                    Ok(url) => {
+                        self.file_cards.remove(&(key.clone(), source));
+                        #[cfg(any(target_os = "linux", target_os = "windows"))]
+                        self.open_page_for(&key, url, window, cx);
+                        #[cfg(target_os = "macos")]
+                        let _ = url;
+                    }
+                    Err(error) => {
+                        self.file_cards.insert((key.clone(), source), FileCard::PageFailed(error.clone()));
+                        self.action_feedback.insert(key, (error, true));
+                    }
+                }
+                cx.notify();
+                return;
+            }
             Payload::AppearanceSaved(result) => {
                 // O arquivo é deste computador, não da conexão: vale mesmo depois de trocar de servidor.
                 self.appearance_note = result.err().map(|error| tr("settings_not_saved").replace("{error}", &error));
@@ -1977,11 +1996,18 @@ impl Hangar {
                         servers::RemoteUpdate::Stream(Update::Frame(frame)) if frame.event == "vault" => Some(Some(frame.data.clone())),
                         _ => None,
                     };
+                    // Pedido de navegador de uma sessão desta máquina chega pela lista dela, seja ela a ativa ou não.
+                    let nav = match &update {
+                        servers::RemoteUpdate::Stream(Update::Frame(frame)) if frame.event == "nav" => Some(frame.data.clone()),
+                        _ => None,
+                    };
                     // Menu, renomear, fechar e grupo das linhas desta máquina acompanham a lista dela como os da ativa.
                     let (changed, gone) = self.receive_remote(generation, key.clone(), update, cx);
                     if changed {
                         self.tour_dirty = true;
                         self.sidebar_sessions_changed(window, cx);
+                        // Servidor desta máquina fora do ativo: as pastas das sessões dele também vão direto ao disco.
+                        self.resolve_local_dirs(cx);
                     }
                     self.remote_changed(&key, window, cx);
                     // Depois do `follow_open`: a aberta que fechou de vez já saiu da seleção.
@@ -1995,6 +2021,7 @@ impl Hangar {
                         self.redraw(panes::Area::Nav, cx);
                         cx.notify();
                     }
+                    if let Some(data) = nav { self.receive_nav(&key, data, window, cx); }
                 }
                 return;
             }
@@ -2100,7 +2127,7 @@ impl Hangar {
                     visible = apply_list_error(!self.sessions.is_empty(), &mut self.list_error, &frame.data, crate::log_line);
                     true
                 }
-                else if frame.event == "nav" { self.receive_nav(frame.data, window, cx); true }
+                else if frame.event == "nav" { let server = self.active_key(); self.receive_nav(&server, frame.data, window, cx); true }
                 else if frame.event == "keyring" {
                     let server = self.active_key();
                     let state = keyring::locked(&frame.data);
@@ -2337,7 +2364,7 @@ impl Hangar {
             Payload::Dossier(key, seq, result) => { self.receive_dossier(key, seq, result, cx); return; }
             Payload::DesktopPalette(seq, result) => { self.receive_desktop_palette(seq, result, window, cx); return; }
             Payload::Sent(..) | Payload::Interrupted(..) | Payload::Acted(..) | Payload::Files(..) | Payload::UploadStep(..)
-                | Payload::UploadsDone(..) | Payload::Saved(..) | Payload::ConnectionNotSaved(..) | Payload::Reply(..) | Payload::HeadlessPlan(..)
+                | Payload::UploadsDone(..) | Payload::Saved(..) | Payload::PageOpened(..) | Payload::ConnectionNotSaved(..) | Payload::Reply(..) | Payload::HeadlessPlan(..)
                 | Payload::AppearanceSaved(..) | Payload::Backdrop(..) | Payload::BackdropPicked(..) | Payload::BackdropRemoved(..)
                 | Payload::Remote(..) | Payload::Route(..) | Payload::Keyring(..) | Payload::ConnectNotice(..) | Payload::Presence(..) | Payload::Voice(..) | Payload::VoiceGate(..) | Payload::VoiceMemory(..) | Payload::VoiceModels(..) | Payload::QueueJev(..)
                 | Payload::Mermaid(..) | Payload::TourProgress(..) => unreachable!(),
@@ -3529,6 +3556,34 @@ impl Hangar {
             media::trace(format_args!("thumb ready {source:?} in {:.1} ms", started.elapsed().as_secs_f64() * 1000.));
             let _ = tx.send(Envelope { connection, selection: None, payload: Payload::Media(key, source, result) }).await;
         });
+    }
+
+    /// "Abrir no navegador" aparece só no HTML citado de sessão desta máquina: o endereço da página é o 127.0.0.1 do
+    /// servidor dela, e só o navegador da sessão (Linux e Windows) o abre.
+    fn page_openable(&self, key: Option<&SessionKey>, source: &Source, name: &str) -> bool {
+        cfg!(any(target_os = "linux", target_os = "windows"))
+            && matches!(source, Source::Cited(_))
+            && matches!(composer::extension(name).as_str(), "html" | "htm")
+            && key.and_then(|key| self.api_for(&key.server)).is_some_and(|api| api.is_loopback())
+    }
+
+    /// O servidor guarda o HTML citado como página isolada da conversa (`file/page`, mesma autorização do `/file`) e
+    /// devolve o endereço com o bilhete dela, que só abre essa página; o token do dono nunca entra na URL.
+    // A sessão é a do cartão: na prévia de outra aba ela não é a selecionada.
+    fn open_html_page(&mut self, key: SessionKey, source: Source, cx: &mut Context<Self>) {
+        let Source::Cited(path) = &source else { return };
+        let Some(api) = self.api_for(&key.server) else { return };
+        if !api.is_loopback() { return; }
+        let (connection, tx, path) = (self.connection, self.tx.clone(), path.clone());
+        self.file_cards.insert((key.clone(), source.clone()), FileCard::Busy);
+        self.runtime.spawn(async move {
+            let result = match api.server_send(reqwest::Method::POST, &["sessions", &key.name, "file", "page"], Some(json!({"path": path})), 30).await {
+                Ok(body) => body["open_url"].as_str().map(str::to_owned).ok_or_else(|| tr("invalid_response")),
+                Err(error) => Err(Self::fetch_failure(&error)),
+            };
+            let _ = tx.send(Envelope { connection, selection: None, payload: Payload::PageOpened(key, source, result) }).await;
+        });
+        cx.notify();
     }
 
     // Abrir grava uma cópia privada e entrega ao programa do sistema; salvar pergunta o destino. Nunca há token em URL.
@@ -5056,8 +5111,12 @@ impl Hangar {
             let (save_source, save_name) = (source.clone(), name.clone());
             let openable = composer::openable(&composer::safe_name(&name));
             if !image && player.is_none() {
-                let state = key.as_ref().and_then(|key| self.file_cards.get(&(key.clone(), source))).cloned();
-                list = list.child(file_card(row, n, &name, state, openable,
+                let state = key.as_ref().and_then(|key| self.file_cards.get(&(key.clone(), source.clone()))).cloned();
+                let page = key.clone().filter(|key| self.page_openable(Some(key), &source, &name)).map(|page_key| {
+                    let page_source = source.clone();
+                    Box::new(cx.listener(move |this, _, _, cx| this.open_html_page(page_key.clone(), page_source.clone(), cx))) as Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>
+                });
+                list = list.child(file_card(row, n, &name, state, openable, page,
                     cx.listener(move |this, _, _, cx| this.keep_file(open_source.clone(), open_name.clone(), true, cx)),
                     cx.listener(move |this, _, _, cx| this.keep_file(save_source.clone(), save_name.clone(), false, cx))));
                 continue;
@@ -6192,8 +6251,10 @@ pub(crate) fn loading_thumb(id: &str, still: bool) -> AnyElement {
 }
 
 /// Cartão de um arquivo que não tem prévia (pdf, planilha, zip, texto): ícone, nome, extensão ou o estado do último
-/// Abrir/Baixar, e os dois botões. Enquanto baixa, os botões param; na falha, Baixar vira Tentar de novo.
+/// Abrir/Baixar, e os dois botões. Enquanto baixa, os botões param; na falha, Baixar vira Tentar de novo. `page`: o
+/// "Abrir no navegador" do HTML citado, que vai ao navegador da sessão, nunca ao do sistema.
 fn file_card(row: &str, n: usize, name: &str, state: Option<FileCard>, openable: bool,
+    page: Option<Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>>,
     open: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static, save: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> AnyElement {
     let web = activity::web;
     let busy = matches!(state, Some(FileCard::Busy));
@@ -6206,6 +6267,7 @@ fn file_card(row: &str, n: usize, name: &str, state: Option<FileCard>, openable:
         Some(FileCard::Empty) => (web("file_card_empty"), theme::warning_text(), Some(Role::Status)),
         Some(FileCard::Missing) => (web("file_card_missing"), theme::warning_text(), Some(Role::Alert)),
         Some(FileCard::Failed(error)) => (format!("{} · {error}", web("file_card_failed")), theme::warning_text(), Some(Role::Alert)),
+        Some(FileCard::PageFailed(error)) => (format!("{} · {error}", tr("file_card_page_failed")), theme::warning_text(), Some(Role::Alert)),
     };
     let save_label = web(if failed { "file_card_retry" } else { "file_card_download" });
     // Largura do pai, com teto: na bolha do usuário o nome trunca em vez de empurrar o botão para fora.
@@ -6218,6 +6280,8 @@ fn file_card(row: &str, n: usize, name: &str, state: Option<FileCard>, openable:
                 .when_some(role, |el, role| el.role(role)).child(detail)))
         .when(openable, |el| el.child(Button::new(SharedString::from(format!("open-{row}-{n}"))).ghost().xsmall()
             .label(web("file_card_open")).disabled(busy).on_click(open)))
+        .when_some(page, |el, page| el.child(Button::new(SharedString::from(format!("page-{row}-{n}"))).ghost().xsmall()
+            .label(tr("file_card_open_browser")).disabled(busy).on_click(page)))
         .child(Button::new(SharedString::from(format!("save-{row}-{n}"))).outline().xsmall().icon(IconName::Download)
             .label(save_label).disabled(busy).on_click(save))
         .into_any_element()
