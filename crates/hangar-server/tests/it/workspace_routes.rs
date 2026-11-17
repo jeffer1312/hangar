@@ -166,6 +166,52 @@ async fn cited_video_range_and_cache_still_require_authorization() {
     assert_eq!(blocked.status(), 403);
 }
 
+/// "Abrir no navegador" do HTML citado: a mesma autorização do `/file`, a página isolada e o endereço com bilhete,
+/// sem o token do dono.
+#[tokio::test]
+async fn cited_html_becomes_an_isolated_page_opened_by_ticket() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("mock.html"), "<!doctype html><p>marca-da-pagina</p>").unwrap();
+    std::fs::write(dir.path().join("grande.html"), "a".repeat(512_001)).unwrap();
+    std::fs::write(dir.path().join("latin.html"), b"<p>ol\xe1</p>").unwrap();
+    std::fs::write(dir.path().join("nota.txt"), "texto").unwrap();
+    std::fs::write(dir.path().join("solto.html"), "<p>nunca citado</p>").unwrap();
+    let lines: Vec<String> = ["mock.html", "grande.html", "latin.html", "nota.txt"].iter()
+        .map(|name| json!({"cwd":dir.path(),"text":name}).to_string()).collect();
+    std::fs::write(dir.path().join("fixture.jsonl"), lines.join("\n")).unwrap();
+    let (addr, hits, _fixture) = fixture(dir.path()).await;
+    let c = client();
+    let post = |path: &str, token: &str| c.post(format!("http://{addr}/api/sessions/fixture/file/page"))
+        .bearer_auth(token).header("content-type", "application/json").body(json!({"path":path}).to_string()).send();
+
+    let created = post("mock.html", OWNER).await.unwrap();
+    let status = created.status();
+    let body: Value = created.json().await.unwrap();
+    assert_eq!(status, 200, "{body}");
+    let id = body["id"].as_str().unwrap();
+    assert_eq!(body["url"], format!("/api/sessions/fixture/pages/{id}"));
+    let open = reqwest::Url::parse(body["open_url"].as_str().unwrap()).unwrap();
+    assert!(open.host().is_some_and(|h| h.to_string() == "127.0.0.1"), "{open}");
+    assert_eq!(open.path(), format!("/api/sessions/fixture/pages/{id}"));
+    assert!(open.query_pairs().any(|(k, _)| k == "page_ticket"), "{open}");
+    assert!(!open.as_str().contains(OWNER) && !open.query_pairs().any(|(k, _)| k == "token"), "nunca o token do dono");
+
+    // Abrir pelo bilhete (casca isolada) é coberto em pages_routes.rs: esta fixture não descobre a sessão como a
+    // leitura da página exige.
+    assert_eq!(c.get(format!("http://{addr}{}", open.path())).send().await.unwrap().status(), 401, "sem bilhete nem token não abre");
+
+    // Fora da conversa, a recusa é a mesma do `/file`.
+    assert_eq!(post("solto.html", OWNER).await.unwrap().status(), 403);
+    assert_eq!(post("ausente.html", OWNER).await.unwrap().status(), 403);
+    let code = |r: reqwest::Response| async move { let status = r.status(); (status, r.json::<Value>().await.unwrap()["detail"]["code"].clone()) };
+    assert_eq!(code(post("grande.html", OWNER).await.unwrap()).await, (reqwest::StatusCode::PAYLOAD_TOO_LARGE, json!("file_page_too_large")));
+    assert_eq!(code(post("latin.html", OWNER).await.unwrap()).await, (reqwest::StatusCode::UNSUPPORTED_MEDIA_TYPE, json!("file_page_not_utf8")));
+    assert_eq!(code(post("nota.txt", OWNER).await.unwrap()).await, (reqwest::StatusCode::UNSUPPORTED_MEDIA_TYPE, json!("file_page_not_html")));
+    let refused = post("mock.html", "convidado").await.unwrap();
+    assert_eq!(refused.status(), 401);
+    assert_eq!(hits.load(Ordering::Relaxed), 0, "nada vai ao Python");
+}
+
 #[tokio::test]
 async fn g02_invalid_external_write_body_is_rejected_before_any_mutation() {
     let dir = tempfile::tempdir().unwrap();
