@@ -435,7 +435,8 @@ async fn run(
     if tail == "file/page" {
         let target = execute(st, op, ingress).await?;
         let name = ctx["session"]["name"].as_str().unwrap_or("");
-        return Ok(crate::pages::routes::publish_file(st, name, target.as_str().unwrap_or("").into()).await);
+        let resolved_for = ctx["session"]["jsonl"].as_str();
+        return Ok(crate::pages::routes::publish_file(st, name, target.as_str().unwrap_or("").into(), resolved_for).await);
     }
     if tail == "file" {
         let width = match crate::thumbnail::parse_width(params.get("w")) {

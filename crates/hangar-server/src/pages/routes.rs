@@ -219,13 +219,15 @@ pub(crate) fn read_html(path: &std::path::Path) -> Result<String, FilePageRefusa
     use std::io::Read;
     let unreadable = refusal(StatusCode::NOT_FOUND, "file_page_unreadable", "o arquivo não pôde ser lido");
     let too_large = refusal(StatusCode::PAYLOAD_TOO_LARGE, "file_page_too_large", "o html passa de 512000 caracteres");
-    // Antes de abrir: abrir um pipe com nome `.html` bloqueia até alguém escrever nele.
-    let meta = std::fs::metadata(path)
-        .map_err(|_| refusal(StatusCode::NOT_FOUND, "file_page_unreadable", "o arquivo não pôde ser lido"))?;
-    if !meta.is_file() {
+    // Sem bloqueio: abrir um pipe com nome `.html` esperaria alguém escrever nele. O tipo é conferido no descritor
+    // aberto, não no caminho, que pode ser trocado entre as duas leituras.
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)] { use std::os::unix::fs::OpenOptionsExt; options.custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW); }
+    let file = options.open(path).map_err(|_| unreadable)?;
+    if !file.metadata().is_ok_and(|m| m.is_file()) {
         return Err(refusal(StatusCode::BAD_REQUEST, "file_page_not_file", "não é um arquivo comum"));
     }
-    let file = std::fs::File::open(path).map_err(|_| unreadable)?;
     // Um caractere UTF-8 ocupa até 4 bytes: além disso nem vale ler o resto.
     let limit = HTML_MAX_CHARS * 4;
     let mut bytes = Vec::new();
@@ -252,23 +254,16 @@ fn file_title(path: &std::path::Path) -> String {
 /// sessão. `target` já passou pela mesma autorização do `/file`. O arquivo vai como está: sem embutir imagens
 /// (o caminho delas no disco é arbitrário) e sem o Chromium do servidor. A resposta traz o caminho da página e o
 /// endereço local com o bilhete dela, que só abre essa página e nunca leva o token do dono.
-pub(crate) async fn publish_file(st: &AppState, name: &str, target: PathBuf) -> Response {
+pub(crate) async fn publish_file(st: &AppState, name: &str, target: PathBuf, cited_in: Option<&str>) -> Response {
     if !is_html(&target) {
         return refusal(StatusCode::UNSUPPORTED_MEDIA_TYPE, "file_page_not_html", "só arquivo .html ou .htm abre no navegador").reply();
     }
-    let info = match st.info(name).await {
-        Ok(Some(i)) => i,
-        Ok(None) => return hangar_core::http::detail(StatusCode::NOT_FOUND, "erro_sessao_inexistente", "sessao nao encontrada", json!({})),
-        Err(_) => {
-            st.diag.report("rust.file_page_failed", name, "file_page_no_info", INFO_REASON);
-            return hangar_core::http::detail(StatusCode::SERVICE_UNAVAILABLE, "file_page_no_info", INFO_REASON, json!({}));
-        }
-    };
+    // A página vai para a conversa contra a qual a citação foi conferida, nunca para uma que a troque no meio.
     // Dono vazio nunca casaria com a lista: a limpeza apagaria a página no minuto seguinte.
-    let Some(jsonl) = info.jsonl.as_deref().map(|p| p.to_string_lossy().into_owned()) else {
+    let Some(jsonl) = cited_in.filter(|j| !j.is_empty()).map(str::to_owned) else {
         return refusal(StatusCode::CONFLICT, "file_page_no_transcript", "a sessão ainda não tem transcript").reply();
     };
-    let (pages, key) = (st.pages.clone(), info.session_key);
+    let (pages, key) = (st.pages.clone(), crate::locate::session_key(&jsonl));
     let saved = tokio::task::spawn_blocking(move || -> Result<String, Response> {
         let html = read_html(&target).map_err(|r| r.reply())?;
         let page = NewPage { html, title: file_title(&target), height: None, heights: BTreeMap::new(), draft: true, own_theme: true, url: None };

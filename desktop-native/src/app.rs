@@ -3547,18 +3547,19 @@ impl Hangar {
 
     /// "Abrir no navegador" aparece só no HTML citado de sessão desta máquina: o endereço da página é o 127.0.0.1 do
     /// servidor dela, e só o navegador da sessão (Linux e Windows) o abre.
-    fn page_openable(&self, source: &Source, name: &str) -> bool {
+    fn page_openable(&self, key: Option<&SessionKey>, source: &Source, name: &str) -> bool {
         cfg!(any(target_os = "linux", target_os = "windows"))
             && matches!(source, Source::Cited(_))
             && matches!(composer::extension(name).as_str(), "html" | "htm")
-            && self.session_api().is_some_and(|api| api.is_loopback())
+            && key.and_then(|key| self.api_for(&key.server)).is_some_and(|api| api.is_loopback())
     }
 
     /// O servidor guarda o HTML citado como página isolada da conversa (`file/page`, mesma autorização do `/file`) e
     /// devolve o endereço com o bilhete dela, que só abre essa página; o token do dono nunca entra na URL.
-    fn open_html_page(&mut self, source: Source, cx: &mut Context<Self>) {
+    // A sessão é a do cartão: na prévia de outra aba ela não é a selecionada.
+    fn open_html_page(&mut self, key: SessionKey, source: Source, cx: &mut Context<Self>) {
         let Source::Cited(path) = &source else { return };
-        let (Some(api), Some(key)) = (self.session_api(), self.selected_key()) else { return };
+        let Some(api) = self.api_for(&key.server) else { return };
         if !api.is_loopback() { return; }
         let (connection, tx, path) = (self.connection, self.tx.clone(), path.clone());
         self.file_cards.insert((key.clone(), source.clone()), FileCard::Busy);
@@ -5091,9 +5092,9 @@ impl Hangar {
             let openable = composer::openable(&composer::safe_name(&name));
             if !image && player.is_none() {
                 let state = key.as_ref().and_then(|key| self.file_cards.get(&(key.clone(), source.clone()))).cloned();
-                let page = self.page_openable(&source, &name).then(|| {
+                let page = key.clone().filter(|key| self.page_openable(Some(key), &source, &name)).map(|page_key| {
                     let page_source = source.clone();
-                    Box::new(cx.listener(move |this, _, _, cx| this.open_html_page(page_source.clone(), cx))) as Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>
+                    Box::new(cx.listener(move |this, _, _, cx| this.open_html_page(page_key.clone(), page_source.clone(), cx))) as Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>
                 });
                 list = list.child(file_card(row, n, &name, state, openable, page,
                     cx.listener(move |this, _, _, cx| this.keep_file(open_source.clone(), open_name.clone(), true, cx)),
