@@ -433,7 +433,7 @@ fn rewrite(m: &Machine<'_>, record: &mut Record, path: &Path, new: &[u8]) -> Res
 }
 
 /// `~/.hangar/bin/hangar-launcher`: o lançador estável que a unit e as tarefas chamam.
-pub(super) fn launcher_path(home: &Path, windows: bool) -> PathBuf {
+pub(crate) fn launcher_path(home: &Path, windows: bool) -> PathBuf {
     home.join(".hangar").join("bin").join(if windows { "hangar-launcher.exe" } else { "hangar-launcher" })
 }
 

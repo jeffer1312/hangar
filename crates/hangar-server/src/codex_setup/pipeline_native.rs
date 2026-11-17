@@ -53,7 +53,7 @@ impl pipeline_round::Actions for Actions<'_>{
      });if let Err(e)=result{return Err(failure.unwrap_or_else(||e.into()));}
     }
     let wrapper=super::hook_command::allow_wrapper().map_err(|message|error("RuntimeError",message))?;let context=super::pipeline_hooks::Context{account:self.account,backups:self.backups,wrapper:&wrapper,windows:cfg!(windows)};
-    super::pipeline_hooks::legacy(&context,state,&mut |account|crate::harness_setup::codex_hooks::sync_checked(account,self.repo,cfg!(windows)).map(|_|()).map_err(|message|error("RuntimeError",message)))?;
+    super::pipeline_hooks::legacy(&context,state,&mut |account|crate::harness_setup::codex_hooks::sync_checked(account,&self.accounts.env.home,cfg!(windows)).map(|_|()).map_err(|message|error("RuntimeError",message)))?;
     super::pipeline_hooks::sync(&context,&json!({}),registry,state)?;
    },
    "plugins"=>{

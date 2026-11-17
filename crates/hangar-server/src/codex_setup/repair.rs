@@ -62,18 +62,18 @@ pub async fn repair_locked(home: &Path, account: &Path, id: &str, actions: &mut 
 pub struct NativeActions {
     env: AccountEnvironment,
     account: PathBuf,
-    repo: PathBuf,
     native: Option<Native>,
 }
 impl NativeActions {
-    pub fn new(env:AccountEnvironment,account:PathBuf,repo:PathBuf)->Self {
-        Self{env,account,repo,native:None}
+    /// `_repo`: os hooks do Codex não saem mais da raiz da instalação, e sim do lançador estável.
+    pub fn new(env:AccountEnvironment,account:PathBuf,_repo:PathBuf)->Self {
+        Self{env,account,native:None}
     }
 }
 impl Actions for NativeActions {
     async fn install(&mut self,account:&Path)->Result<(),String> {
-        let account=account.to_owned();let repo=self.repo.clone();
-        tokio::task::spawn_blocking(move || crate::harness_setup::codex_hooks::sync_checked(&account,&repo,cfg!(windows)))
+        let account=account.to_owned();let home=self.env.home.clone();
+        tokio::task::spawn_blocking(move || crate::harness_setup::codex_hooks::sync_checked(&account,&home,cfg!(windows)))
             .await.map_err(|_|"instalação dos hooks interrompida".to_owned())??;
         Ok(())
     }

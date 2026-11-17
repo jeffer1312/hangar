@@ -90,6 +90,24 @@ pub fn sync_hook(
     matcher: Option<&str>,
     script: &str,
 ) -> bool {
+    sync_hook_any(data, event, command, matcher, &[script], cfg!(windows))
+}
+
+fn refers_any(command: &Value, names: &[&str], windows: bool) -> bool {
+    names.iter().any(|name| refers_platform(command, name, true, windows))
+}
+
+/// Uma entrada nossa por evento: a primeira que cita algum dos `names` (o script Python antigo ou o
+/// subcomando) vira `command` NO LUGAR, as repetidas saem, bloco esvaziado sai, filtro trocado move o
+/// hook para um bloco próprio, e a ausente entra num bloco novo no fim. `command` nulo só tira.
+pub fn sync_hook_any(
+    data: &mut Value,
+    event: &str,
+    command: Option<&str>,
+    matcher: Option<&str>,
+    names: &[&str],
+    windows: bool,
+) -> bool {
     let Some(root) = data.as_object_mut() else {
         return false;
     };
@@ -113,7 +131,7 @@ pub fn sync_hook(
         };
         let before = entries.len();
         entries.retain_mut(|hook| {
-            if !hook.is_object() || !refers(&hook["command"], script, true) {
+            if !hook.is_object() || !refers_any(&hook["command"], names, windows) {
                 return true;
             }
             if kept || moved {
@@ -143,15 +161,51 @@ pub fn sync_hook(
     }
     changed
 }
-fn safe_command(python: &Path, script: &Path, event: &str, telemetry: bool) -> String {
-    let command = format!("\"{}\" \"{}\"", python.display(), script.display());
-    if !telemetry {
-        return command;
+
+/// Tira as entradas que citam `names` sem criar o evento; evento esvaziado por isso sai inteiro.
+pub fn remove_hook(data: &mut Value, event: &str, names: &[&str], windows: bool) -> bool {
+    let Some(hooks) = data.get_mut("hooks").and_then(Value::as_object_mut) else {
+        return false;
+    };
+    let Some(blocks) = hooks.get_mut(event).and_then(Value::as_array_mut) else {
+        return false;
+    };
+    let mut changed = false;
+    blocks.retain_mut(|block| {
+        let Some(entries) = block.get_mut("hooks").and_then(Value::as_array_mut) else {
+            return true;
+        };
+        let before = entries.len();
+        entries.retain(|hook| !(hook.is_object() && refers_any(&hook["command"], names, windows)));
+        changed |= entries.len() != before;
+        before == entries.len() || !entries.is_empty()
+    });
+    if changed && blocks.is_empty() {
+        hooks.shift_remove(event);
     }
+    changed
+}
+
+/// Os hooks de marcador do Claude: chave do instalador, subcomando, nomes reconhecidos (o script
+/// Python de antes e o subcomando), eventos e filtro.
+pub const MARKER_HOOKS: &[(&str, &str, &[&str], &[&str], Option<&str>)] = &[
+    ("state_hook.py", "state-hook", &["state_hook.py", "state-hook"],
+     &["UserPromptSubmit", "PreToolUse", "PostToolUse", "Notification", "Stop", "SessionStart"], None),
+    ("preview_hook.py", "preview-hook", &["preview_hook.py", "preview-hook"], &["MessageDisplay", "Stop"], None),
+    ("nav_hook.py", "nav-hook", &["nav_hook.py", "nav-hook"], &["UserPromptSubmit"], None),
+    ("askq_capture.py", "askq-capture", &["askq_capture.py", "askq-capture"],
+     &["PreToolUse", "PostToolUse", "PostToolUseFailure"], Some("AskUserQuestion")),
+];
+const GUARD_MATCHER: &str = "Bash|PowerShell|Read|Grep";
+
+/// `"<programa>" <subcomando>` com o sufixo que impede o hook de barrar o agente: em `SessionStart` e
+/// `UserPromptSubmit`, onde o stdout chega ao modelo, a falha vira um aviso para ele contar ao usuário.
+/// O aviso não pode ter token terminado no subcomando (seria reconhecido como o hook).
+pub fn safe_command(program: &Path, mode: &str, event: &str) -> String {
+    let command = format!("\"{}\" {mode}", program.display());
     if ["SessionStart", "UserPromptSubmit"].contains(&event) {
-        let name = script.file_stem().unwrap_or_default().to_string_lossy();
         format!(
-            "{command} || echo \"[hangar] O hook {name} do Hangar falhou em {event} e foi ignorado. AVISE O USUARIO agora: parte do app pode estar sem estado, pareamento ou navegador. Para ver o erro, rode o comando do hook a mao.\""
+            "{command} || echo \"[hangar] O hook {mode} do Hangar falhou em {event} e foi ignorado. AVISE O USUARIO agora: parte do app pode estar sem estado, pareamento ou navegador. Para ver o erro, rode o comando do hook a mao.\""
         )
     } else {
         format!("{command} || exit 0")
@@ -166,6 +220,7 @@ fn installer_script(name: &str) -> Option<&'static str> {
         "ensure_askq_hook_installed" => "askq_capture.py",
         "ensure_state_hooks_installed" => "state_hook.py",
         "ensure_preview_hook_installed" => "preview_hook.py",
+        // O hook de subagentes saiu (nada lia o arquivo dele): o instalador agora só o tira.
         "ensure_subagent_hook_installed" => "subagent_hook.py",
         "ensure_pair_hook_installed" => "pair-context",
         "ensure_nav_hook_installed" => "nav_hook.py",
@@ -204,15 +259,58 @@ pub(super) fn sync_report(service: &AccountService, repo: &Path) -> (Value, Vec<
     sync_report_selected(service, repo, None)
 }
 
+/// Os hooks do Hangar num `settings.json` já lido. `program` é o binário dos hooks; `pair_dir`, a pasta
+/// dos grupos. O guarda entra quando pedido ou quando o arquivo já tem um (o Python antigo ou o
+/// subcomando com outro programa): a subida conserta o que existe, mas não instala o que não havia.
+pub fn reconcile(data: &mut Value, program: &Path, pair_dir: &Path, enabled: &dyn Fn(&str) -> bool, windows: bool) -> bool {
+    let mut changed = false;
+    for &(key, mode, names, events, matcher) in MARKER_HOOKS {
+        if !enabled(key) {
+            continue;
+        }
+        for event in events {
+            let command = safe_command(program, mode, event);
+            changed |= sync_hook_any(data, event, Some(&command), matcher, names, windows);
+        }
+    }
+    if enabled("subagent_hook.py") {
+        for event in ["SubagentStart", "SubagentStop"] {
+            changed |= remove_hook(data, event, &["subagent_hook.py"], windows);
+        }
+    }
+    let guards = ["guard_tmux.py", "guard-tmux"];
+    let has_guard = data["hooks"]["PreToolUse"].as_array().into_iter().flatten()
+        .flat_map(|block| block["hooks"].as_array().into_iter().flatten())
+        .any(|hook| refers_any(&hook["command"], &guards, windows));
+    if enabled("guard_tmux.py") || has_guard {
+        // Read, Grep e PowerShell: o guarda também barra a leitura do arquivo do `vault_file`.
+        let command = format!("\"{}\" guard-tmux", program.display());
+        changed |= sync_hook_any(data, "PreToolUse", Some(&command), Some(GUARD_MATCHER), &guards, windows);
+    }
+    if enabled("pair-context") {
+        changed |= sync_hook_any(data, "SessionStart", None, None, &["pair_hook.py"], windows);
+        let command = format!("\"{}\" pair-context \"{}\" || exit 0", program.display(), pair_dir.display());
+        changed |= sync_hook_any(data, "SessionStart", Some(&command), Some("startup|resume|clear|compact"), &["pair-context"], windows);
+    }
+    changed
+}
+
 fn sync_report_selected(
     service: &AccountService,
     repo: &Path,
     selected: Option<&[&str]>,
 ) -> (Value, Vec<String>) {
+    let _ = repo;
     let enabled = |script: &str| selected.is_none_or(|selected| selected.contains(&script));
     let mut errors = Vec::new();
     let _lock = LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let python = crate::install_root::python_exe(repo, cfg!(windows));
+    // O lançador estável: o comando não muda a cada versão (nem acende o Recarregar) e continua
+    // existindo na volta de versão.
+    let program = match crate::codex_setup::hook_command::hook_server(&service.env.home) {
+        Ok(program) => program,
+        Err(error) => return (json!({"claude": []}), vec![format!("programa dos hooks: {error}")]),
+    };
+    let pair_dir = service.env.claude_base.join(".hangar-pair");
     // Catálogo e contas marcadas juntos: conta antiga com login e `CP_CLAUDE_CONFIG_DIRS` (que no
     // catálogo substitui a varredura) só vêm dele; as `.claude-<id>` do Hangar, do `snapshot`.
     let catalog: Vec<std::path::PathBuf> = service
@@ -274,75 +372,7 @@ fn sync_report_selected(
             if data["hooks"].is_null() {
                 data["hooks"] = json!({});
             }
-            let mut changed = false;
-            for (script, events, matcher) in [
-                (
-                    "state_hook.py",
-                    vec![
-                        "UserPromptSubmit",
-                        "PreToolUse",
-                        "PostToolUse",
-                        "Notification",
-                        "Stop",
-                        "SessionStart",
-                    ],
-                    None,
-                ),
-                ("preview_hook.py", vec!["MessageDisplay", "Stop"], None),
-                (
-                    "subagent_hook.py",
-                    vec!["SubagentStart", "SubagentStop"],
-                    None,
-                ),
-                ("nav_hook.py", vec!["UserPromptSubmit"], None),
-                (
-                    "askq_capture.py",
-                    vec!["PreToolUse", "PostToolUse", "PostToolUseFailure"],
-                    Some("AskUserQuestion"),
-                ),
-            ] {
-                if !enabled(script) {
-                    continue;
-                }
-                for event in events {
-                    let command = safe_command(
-                        &python,
-                        &repo.join("backend/hooks").join(script),
-                        event,
-                        true,
-                    );
-                    changed |= sync_hook(&mut data, event, Some(&command), matcher, script);
-                }
-            }
-            if enabled("guard_tmux.py") {
-                let command = crate::provider_hooks::command("guard-tmux")?;
-                changed |= sync_hook(&mut data, "PreToolUse", None, Some("Bash"), "guard_tmux.py");
-                // Read, Grep e PowerShell: o guarda também barra a leitura do arquivo do `vault_file`.
-                changed |= sync_hook(
-                    &mut data,
-                    "PreToolUse",
-                    Some(&command),
-                    Some("Bash|PowerShell|Read|Grep"),
-                    "guard-tmux",
-                );
-            }
-            if enabled("pair-context") {
-                changed |= sync_hook(&mut data, "SessionStart", None, None, "pair_hook.py");
-                // Caminho da versão mudaria o settings.json a cada atualização e acenderia o Recarregar.
-                let exe = crate::codex_setup::hook_command::persistent_server()?;
-                let command = format!(
-                    "\"{}\" pair-context \"{}\" || exit 0",
-                    exe.display(),
-                    service.env.claude_base.join(".hangar-pair").display()
-                );
-                changed |= sync_hook(
-                    &mut data,
-                    "SessionStart",
-                    Some(&command),
-                    Some("startup|resume|clear|compact"),
-                    "pair-context",
-                );
-            }
+            let changed = reconcile(&mut data, &program, &pair_dir, &enabled, cfg!(windows));
             if changed {
                 super::files::write_preserving(
                     &path,

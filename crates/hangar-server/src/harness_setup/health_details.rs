@@ -225,7 +225,7 @@ pub fn kimi_hooks(env: &AccountEnvironment, _repo: &Path) -> Result<Value, Strin
         !hooks.into_iter().flatten().any(|entry| {
             entry.get("event").and_then(toml::Value::as_str) == Some(event)
                 && entry.get("matcher").and_then(toml::Value::as_str) == matcher
-                && entry.get("command").and_then(toml::Value::as_str).is_some_and(|c| super::kimi_hooks::installed(c, mode))
+                && entry.get("command").and_then(toml::Value::as_str).is_some_and(|c| super::kimi_hooks::installed(&env.home, c, mode))
         })
     }).count();
     Ok(if missing == 0 {

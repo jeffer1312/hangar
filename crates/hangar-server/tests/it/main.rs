@@ -341,6 +341,7 @@ mod codex_setup;
 
 mod harness_setup;
 mod harness_startup;
+mod agent_hooks_install;
 mod dotenv_config;
 mod value_coercion;
 mod codec_values;

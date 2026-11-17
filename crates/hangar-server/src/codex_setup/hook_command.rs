@@ -8,6 +8,25 @@ pub fn allow_wrapper() -> Result<(String, String), String> {
     Ok((executable, "codex-hook-allow".into()))
 }
 
+/// O programa dos hooks gravados nos agentes: `~/.hangar/bin/hangar-launcher`, o mesmo binário renovado
+/// a cada versão e preservado na volta de versão, então o comando novo não falha na versão antiga.
+/// Sem ele (checkout, modo desenvolvedor) vale o `persistent_server`.
+pub fn hook_server(home: &Path) -> Result<PathBuf, String> {
+    hook_server_with(home, cfg!(windows), persistent_server)
+}
+
+pub fn hook_server_with(home: &Path, windows: bool, fallback: impl FnOnce() -> Result<PathBuf, String>) -> Result<PathBuf, String> {
+    let launcher = crate::update::migrate::launcher_path(home, windows);
+    if launcher.is_file() { Ok(launcher) } else { fallback() }
+}
+
+/// `"<programa dos hooks>" <subcomando>`, sem sufixo.
+pub fn hook_command(home: &Path, mode: &str) -> Result<String, String> {
+    let program = hook_server(home)?;
+    let program = program.to_str().ok_or("O caminho do servidor não está em UTF-8")?;
+    Ok(format!("\"{program}\" {mode}"))
+}
+
 /// Este `hangar-server` por um caminho que sobrevive à troca de versão, para gravar em config de fora.
 pub fn persistent_server() -> Result<PathBuf, String> {
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
