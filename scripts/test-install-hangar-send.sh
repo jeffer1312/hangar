@@ -64,6 +64,10 @@ else
   flunk "o bloco chega inteiro pela entrada" "$ROOT/block"
 fi
 if [ -e "$ROOT/python-calls" ]; then flunk "nenhum Python chamado" "$ROOT/python-calls"; else pass "nenhum Python chamado"; fi
+# L-27: o texto que as sessões leem segue citando o hangar-conta pelo nome.
+grep -qF 'hangar-conta --list' "$ROOT/block" && pass "o bloco cita hangar-conta --list" || flunk "o bloco cita hangar-conta --list" "$ROOT/block"
+# S-55: o nome antigo cp-send não é mais criado.
+[ -e "$H/.local/bin/cp-send" ] || [ -L "$H/.local/bin/cp-send" ] && flunk "cp-send não é criado" || pass "cp-send não é criado"
 
 # Máquina já migrada e os instaladores rodando do checkout de antes, como o motor git faz com os
 # passos que vêm depois da migração na mesma rodada: os links continuam no `current`.
@@ -82,8 +86,30 @@ expect_eq "checkout: registro com a raiz pelo current" "$(head -1 "$ROOT/calls")
 expect_eq "checkout: wrapper sai 0" "$rc" 0 "$ROOT/out"
 expect_eq "checkout: hangar-codex pelo current" "$(readlink "$H/.local/bin/hangar-codex")" "$C/scripts/hangar-codex" "$ROOT/out"
 expect_eq "checkout: hangar-open pelo current" "$(readlink "$H/.local/bin/hangar-open")" "$C/scripts/hangar-open"
+# L-26: hangar-conta e o nome antigo permanente cp-conta, que rc antigos chamam.
+expect_eq "checkout: hangar-conta pelo current" "$(readlink "$H/.local/bin/hangar-conta")" "$C/scripts/hangar-conta"
+expect_eq "checkout: cp-conta pelo current" "$(readlink "$H/.local/bin/cp-conta")" "$C/scripts/hangar-conta"
 grep -q "source \"$C/scripts/shell/" "$H/.bashrc" 2>/dev/null && pass "checkout: bloco do shell pelo current" \
     || flunk "checkout: bloco do shell pelo current" "$H/.bashrc"
+grep -qx "source \"$C/scripts/shell/claude-conta.posix.sh\"" "$H/.bashrc" 2>/dev/null && pass "checkout: claude-conta no bash" \
+    || flunk "checkout: claude-conta no bash" "$H/.bashrc"
+
+# L-102: no fish as funções são cópias; a anterior diferente vai para o .bak, e a cópia chama os
+# atalhos pelo nome (hangar-open/hangar-conta), que não mudam.
+mkdir -p "$H/.config/fish/functions"
+echo "function claude-conta; end" > "$H/.config/fish/functions/claude-conta.fish"
+( env -i HOME="$H" SHELL=/usr/bin/fish CP_RUST_SERVER_BIN="$SERVER" PATH="$ROOT/stubs:/usr/bin:/bin" \
+    bash "$K/scripts/install-claude-wrapper.sh" fish --no-tmux --no-statusline > "$ROOT/out" 2>&1 ); rc=$?
+expect_eq "fish: wrapper sai 0" "$rc" 0 "$ROOT/out"
+for f in claude codex claude-engine claude-conta pi omp kimi; do
+  cmp -s "$H/.config/fish/functions/$f.fish" "$C/scripts/shell/$f.fish" && pass "fish: $f copiada do current" \
+      || flunk "fish: $f copiada do current" "$ROOT/out"
+done
+expect_eq "fish: anterior no .bak" "$(cat "$H/.config/fish/functions/claude-conta.fish.bak" 2>/dev/null)" "function claude-conta; end"
+grep -q "hangar-conta" "$H/.config/fish/functions/claude-conta.fish" && pass "fish: claude-conta chama o hangar-conta" \
+    || flunk "fish: claude-conta chama o hangar-conta"
+grep -q "hangar-open" "$H/.config/fish/functions/claude.fish" && pass "fish: claude chama o hangar-open" \
+    || flunk "fish: claude chama o hangar-open"
 
 # Um passo que falha para o instalador (set -e): depois do registro que falhou, nada roda calado.
 cat > "$SERVER" <<STUB
