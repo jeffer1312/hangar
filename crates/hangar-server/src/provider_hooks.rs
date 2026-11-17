@@ -297,7 +297,7 @@ fn windows_paths_slashed(command: &str) -> String {
             continue;
         }
         if word_start {
-            let rest = command[index..].as_bytes();
+            let rest = command[index..].trim_start_matches(['"', '\'', '&', '(']).as_bytes();
             in_path = matches!(rest, [drive, b':', b'\\', ..] if drive.is_ascii_alphabetic())
                 || rest.starts_with(b"\\\\")
                 || rest.starts_with(b".\\")

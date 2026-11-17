@@ -908,6 +908,27 @@ fn provider_hooks_review_python_character_classes_keep_literals_and_ranges() {
     }
 }
 
+/// Decisão 17: o caminho do Windows é conferido com `/` também entre aspas e depois do `&` do
+/// PowerShell; escape de padrão do `pkill -f` não vira caminho.
+#[test]
+fn guard_reads_quoted_windows_paths_but_leaves_pattern_escapes() {
+    let root = tempfile::tempdir().unwrap();
+    for (script, expected) in [
+        (r#""C:\Program Files\psmux\tmux.exe" kill-server"#, 2),
+        (r#"& 'C:\tools\tmux.exe' kill-server"#, 2),
+        (r"C:\tools\tmux.exe kill-server", 2),
+        (r"pkill -f '[\d-t]mux'", 0),
+    ] {
+        let result = run(
+            root.path(),
+            "guard-tmux",
+            &serde_json::to_vec(&json!({"tool_name":"Bash","tool_input":{"command":script}})).unwrap(),
+            &[],
+        );
+        assert_eq!(result.status.code(), Some(expected), "{script}");
+    }
+}
+
 proptest::proptest! {
     #![proptest_config(proptest::test_runner::Config::with_cases(24))]
     #[test]
