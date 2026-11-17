@@ -149,24 +149,30 @@ fn run_direct(mut command: std::process::Command, log: Option<&Path>, version: &
         let started = std::time::Instant::now();
         let (ended, exit) = match command.spawn() {
             Err(error) => {
-                failed(log, "erro", "launch_exec_failed", &Path::new(command.get_program()).display().to_string());
+                failed(log, "erro", "launch_exec_failed", &format!("{}: {:?}", Path::new(command.get_program()).display(), error.kind()));
                 (format!("launch_exec_failed: versão {version}: {error}"), None)
             }
             Ok(mut child) => {
                 let pid = child.id();
-                let status = match child.wait() {
-                    Ok(status) => status,
+                match child.wait() {
+                    // Sem saber se o servidor saiu, ele é encerrado antes da religada: dois na mesma porta não sobem.
                     Err(error) => {
-                        say(file.as_ref(), log, &format!("launch_wait_failed: versão {version}, hangar-server pid {pid}: {error}"));
-                        return ExitCode::from(126);
+                        failed(log, "erro", "launch_wait_failed", &format!("{:?}", error.kind()));
+                        let killed = child.kill().and_then(|()| child.wait().map(drop));
+                        let killed = killed.err().map(|e| format!("; encerrar falhou: {e}")).unwrap_or_default();
+                        (format!("launch_wait_failed: versão {version}, hangar-server pid {pid}: {error}{killed}"), None)
                     }
-                };
-                let exited = format!("launch_backend_exited: versão {version}, hangar-server pid {pid}, {status}, depois de {} s", started.elapsed().as_secs());
-                if exit_is_requested_stop(status.code()) {
-                    if !status.success() { say(file.as_ref(), log, &exited); }
-                    std::process::exit(status.code().unwrap_or(1));
+                    Ok(status) => {
+                        let exited = format!("launch_backend_exited: versão {version}, hangar-server pid {pid}, {status}, depois de {} s", started.elapsed().as_secs());
+                        if exit_is_requested_stop(status.code()) {
+                            if !status.success() { say(file.as_ref(), log, &exited); }
+                            record(log, "lancador.parada", serde_json::json!({"evento": "lancador.parada", "nivel": "ok",
+                                "saida": format!("0x{:08X}", status.code().unwrap_or(0) as u32), "vida_s": started.elapsed().as_secs()}));
+                            std::process::exit(status.code().unwrap_or(1));
+                        }
+                        (exited, status.code())
+                    }
                 }
-                (exited, status.code())
             }
         };
         // O `Command` guarda as cópias do handle: soltas aqui, o log gira sem arquivo aberto.
@@ -199,7 +205,10 @@ fn relaunch_first() -> std::time::Duration {
 fn say(file: Option<&std::fs::File>, log: Option<&Path>, line: &str) {
     use std::io::Write;
     match file {
-        Some(mut file) => { eprintln!("hangar-server launch: {line}"); let _ = writeln!(file, "[hangar] hangar-server launch: {line}"); }
+        Some(mut file) => {
+            eprintln!("hangar-server launch: {line}");
+            if writeln!(file, "[hangar] hangar-server launch: {line}").is_err() { report(log, line); }
+        }
         None => report(log, line),
     }
 }
