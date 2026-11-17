@@ -461,7 +461,7 @@ mod tests {
             #[cfg(unix)]
             { let _ = std::fs::remove_file(&link); std::os::unix::fs::symlink(target, &link).unwrap(); }
             #[cfg(windows)]
-            { let _ = std::fs::remove_dir(&link); crate::update::make_link(target, &link).unwrap(); }
+            { let _ = std::fs::remove_dir(&link); hangar_local_server::link::make_link(target, &link).unwrap(); }
         };
         let (v1, v2) = (version("v1", r#"{"boot":"direct"}"#), version("v2", r#"{"boot":"direct"}"#));
         let v3 = version("v3", r#"{"version":"v3"}"#);
@@ -489,7 +489,7 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(&real, current(home)).unwrap();
         #[cfg(windows)]
-        crate::update::make_link(&real, &current(home)).unwrap();
+        hangar_local_server::link::make_link(&real, &current(home)).unwrap();
         assert_eq!(root(home), Some(home.join(".hangar").join("current")));
     }
 }

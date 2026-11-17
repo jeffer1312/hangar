@@ -1,0 +1,16 @@
+[package]
+name = "hangar-local-server"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+# Sem hangar-core: o app nativo depende deste crate. `serde_json` sem as features do servidor, como
+# o hangar-api: o `arbitrary_precision` mudaria os números do JSON do nativo.
+[dependencies]
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sysinfo = { version = "=0.39.6", default-features = false, features = ["system"] }
+
+[dev-dependencies]
+tempfile.workspace = true
