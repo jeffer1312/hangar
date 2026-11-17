@@ -6,6 +6,7 @@ use super::device::{DeviceReply, Remote};
 use super::settings::Page;
 use hangar_api::status::{AttentionTarget, StatusSnapshot};
 
+mod down;
 mod model;
 mod view;
 
@@ -18,6 +19,8 @@ pub(super) enum Feed {
     /// Não abriu (ou mandou um retrato que este app não lê). Recusa que não muda sozinha (rota ausente, sem
     /// permissão) encerra a tarefa; o resto ela tenta de novo.
     Failed(Failure),
+    /// Do servidor desta máquina parado (`down.rs`), com a geração da leitura dele: não depende da conexão do retrato.
+    Local(u64, down::LocalReply),
 }
 
 #[derive(Default)]
@@ -33,6 +36,8 @@ pub(super) struct StatusPage {
     flash_task: Option<Task<()>>,
     generation: u64,
     stream: Option<JoinHandle<()>>,
+    /// O servidor selecionado fora do ar; com ele nesta máquina, a leitura do serviço e as ações.
+    down: Option<down::Down>,
 }
 
 impl Drop for StatusPage {
@@ -163,6 +168,11 @@ impl Hangar {
     }
 
     pub(super) fn receive_status(&mut self, generation: u64, feed: Feed, cx: &mut Context<Self>) {
+        // O ponto da navegação também lê o servidor parado: vale com a página fechada.
+        let feed = match feed {
+            Feed::Local(generation, reply) => return self.receive_local(generation, reply, cx),
+            feed => feed,
+        };
         if generation != self.device.status.generation { return; }
         // Fechada ou na bandeja: a conexão só volta com a página à vista (o `ping` de 10 s traz a notícia).
         if self.settings != Some(Page::Status) || self.window_tray.hidden { self.status_left(); return; }
@@ -173,8 +183,8 @@ impl Hangar {
                 page.view.set(Ok(blocks));
                 (page.detail, page.live) = (None, true);
             }
-            // Só prova que a conexão vive: nada a redesenhar.
-            Feed::Ping => return,
+            // Só prova que a conexão vive: nada a redesenhar. A leitura local já saiu acima.
+            Feed::Ping | Feed::Local(..) => return,
             Feed::Lost => self.device.status.live = false,
             Feed::Failed(error) => {
                 let (text, detail) = failure_text(&self.server_label(cx), &error);
@@ -190,8 +200,11 @@ impl Hangar {
         cx.notify();
     }
 
-    /// O ponto na linha "Status" da navegação: só o estado do servidor selecionado, vermelho quando ele não responde.
-    pub(super) fn status_nav_dot(&self) -> Option<(Hsla, String)> {
-        (self.api.is_some() && !self.list_online && self.list_error.is_some()).then(|| (theme::danger(), tr("status_nav_down")))
+    /// O ponto na linha "Status" da navegação: só o estado do servidor selecionado. Vermelho quando ele não responde,
+    /// âmbar subindo, nada de pé; nesta máquina quem diz é a leitura do serviço.
+    pub(super) fn status_nav_dot(&mut self) -> Option<(Hsla, String)> {
+        self.status_down_sync();
+        self.device.status.down.as_ref()?;
+        self.local_dot().unwrap_or_else(|| Some((theme::danger(), tr("status_nav_down"))))
     }
 }

@@ -18,6 +18,8 @@ reqwest = { version = "=0.13.4", default-features = false, features = ["rustls",
 # Formatos da conversa compartilhados com o hangar-server: um tipo só dos dois lados.
 hangar-api = { path = "../crates/hangar-api" }
 hangar-workspace = { path = "../crates/hangar-workspace" }
+# O servidor desta máquina sem a API dele: a página Status sobe e conserta o servidor parado.
+hangar-local-server = { path = "../crates/hangar-local-server" }
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.151"
 futures = "=0.3.34"

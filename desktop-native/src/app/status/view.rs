@@ -111,6 +111,8 @@ fn spark_chart(id: &'static str, spark: &Spark) -> Div {
 impl Hangar {
     pub(in crate::app) fn render_status(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         self.status_ensure();
+        // Servidor fora do ar: o painel dele no lugar dos blocos (o retrato não chega de um servidor parado).
+        let down = if self.api.is_some() && !self.active_invite() { self.status_down_body(cx) } else { None };
         let page = &self.device.status;
         let note = |text: String| settings_box().px_4().py(px(18.)).text_size(px(13.)).text_color(theme::muted()).whitespace_normal().child(text);
         let ready = matches!(page.view.value, Some(Ok(_)));
@@ -121,6 +123,7 @@ impl Hangar {
         let body: Vec<AnyElement> = match (&self.api, &page.view.value) {
             (None, _) => vec![note(tr("settings_offline")).into_any_element()],
             _ if self.active_invite() => vec![note(tr("status_owner_only")).into_any_element()],
+            _ if down.is_some() => down.unwrap_or_default(),
             (_, Some(Ok(blocks))) => blocks.iter().map(|block| self.status_block(block, cx)).collect(),
             (_, Some(Err(text))) => vec![self.status_error(text.clone(), page.detail.clone(), cx)],
             (_, None) => self.status_loading(),
