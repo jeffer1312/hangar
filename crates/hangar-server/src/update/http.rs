@@ -15,7 +15,7 @@ use axum::extract::{ConnectInfo, Request, State};
 use axum::http::StatusCode;
 use axum::response::Response;
 use hangar_package::{Manifest, PlatformEntry, Version};
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 
 use super::dev::Checkout;
 use super::executor::{Args, StartError, Started, Task};
@@ -505,6 +505,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use hangar_package::MANIFEST_FILE;
+    use serde_json::Map;
 
     use super::*;
 
