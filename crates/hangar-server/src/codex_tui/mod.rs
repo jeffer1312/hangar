@@ -97,7 +97,11 @@ async fn run(raw: &[String]) -> i32 {
     };
     life.finish(&Pane).await;
     if exit.opening && exit.code != 0 {
-        wait_enter().await;
+        // O pane fechado (SIGHUP) ou o `kill-session` não esperam o Enter.
+        tokio::select! {
+            () = wait_enter() => {}
+            code = signals() => return code,
+        }
     }
     exit.code
 }
@@ -215,6 +219,9 @@ async fn flow(raw: &[String], env: &[(String, String)], life: &mut session::Life
     if let Err(error) = life.spawn_server(&plan).await {
         screen.say(&format!("não deu para subir o app-server do Codex ({:?})", error.kind()));
         return Exit::opening(1);
+    }
+    if let Some(pid) = life.server_pid() {
+        shared.set_app_pid(pid);
     }
     if let Some(resume) = plan.resume.as_deref() {
         // Retomando, a identidade já é conhecida e o `thread/started` não vem: grava agora.

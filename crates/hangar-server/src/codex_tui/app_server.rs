@@ -364,7 +364,15 @@ mod tests {
         assert_eq!(lines.0.lock().unwrap().as_slice(), [format!("app-server nao respondeu em {endpoint}")]);
         server.stop().await;
         assert!(server.exited());
-        let codes: Vec<Value> = diary_lines(base.path()).iter().map(|line| line["codigo"].clone()).collect();
-        assert_eq!(codes, [json!("processo_encerrou"), json!("timeout")]);
+        // Morto por sinal: o código negativo, como o `returncode` do Python, na tela e no diário.
+        let argv: Vec<String> = ["/bin/sh", "-c", "kill -9 $$"].map(str::to_owned).to_vec();
+        let mut server = Server::spawn(&argv, "/", &env, &tail).unwrap();
+        let lines = Lines(Default::default());
+        assert!(!wait_port(&mut server, &endpoint, Duration::from_secs(10), &mut tail, &diary, &lines).await);
+        assert!(lines.0.lock().unwrap()[0].starts_with(&format!("o app-server saiu com codigo -9 antes de abrir {endpoint}")));
+        let lines = diary_lines(base.path());
+        let codes: Vec<Value> = lines.iter().map(|line| line["codigo"].clone()).collect();
+        assert_eq!(codes, [json!("processo_encerrou"), json!("timeout"), json!("processo_encerrou")]);
+        assert_eq!(lines[2]["retorno"], -9);
     }
 }

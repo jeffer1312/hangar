@@ -132,6 +132,26 @@ fn the_additional_account_environment_has_no_identity_of_the_main_one() {
     }
 }
 
+/// O ambiente inteiro do app-server igual ao do Python, nas três contas (padrão, adicional e
+/// importada). Diferenças aceitas: o `LC_CTYPE` que a captura ganhou do Python sem `LANG`, e as
+/// identidades da principal que o Python deixava vazar para a adicional.
+#[cfg(unix)]
+#[test]
+fn the_whole_app_server_environment_matches_the_capture() {
+    const LEAKED: [&str; 4] = ["CHATGPT_ACCOUNT_ID", "OPENAI_ACCOUNT_ID", "CODEX_ACCOUNT_ID", "CODEX_PROJECT_ID"];
+    for name in ["prepare-secondary-ready", "new-session-sync-off-full-args", "resume-imported-ok", "resume-non-imported"] {
+        let case = fixture(&format!("launcher__{name}"));
+        let dir = sidecars(&case);
+        let plan = decide(&case, dir.path()).unwrap();
+        let child = super::child_environment(&env(&case), &plan);
+        let [server] = spawned(&case, "codex app-server")[..] else { panic!("{name}") };
+        let python: BTreeMap<String, String> = server["env"].as_object().unwrap().iter()
+            .filter(|(key, _)| key.as_str() != "LC_CTYPE" && !(plan.account != "default" && LEAKED.contains(&key.as_str())))
+            .map(|(k, v)| (k.clone(), placed(v.as_str().unwrap()))).collect();
+        assert_eq!(child, python, "{name}");
+    }
+}
+
 /// A retomada importada troca a identidade: o app-server nasce sem o pane e a chave de quem abriu.
 #[cfg(unix)]
 #[test]

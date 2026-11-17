@@ -90,7 +90,7 @@ async fn app_server(args: &[String], config: &Value) -> i32 {
         let (stream, _) = listener.accept().await.unwrap();
         let Ok(mut ws) = tokio_tungstenite::accept_async(stream).await else { continue };
         let (sender, mut seen) = (tui_seen.clone(), tui_seen.subscribe());
-        let (threads, server) = (threads.clone(), server.clone());
+        let (threads, server, announce) = (threads.clone(), server.clone(), this["announce"].clone());
         tokio::spawn(async move {
             loop {
                 tokio::select! {
@@ -109,6 +109,13 @@ async fn app_server(args: &[String], config: &Value) -> i32 {
                         reply["id"] = request["id"].clone();
                         if ws.send(Message::Text(reply.to_string().into())).await.is_err() { return; }
                         if request["params"]["clientInfo"]["name"] == "fake-tui" { let _ = sender.send(()); }
+                        // Conversa que esta subida anuncia a quem conecta (a `/new` depois de uma queda).
+                        if request["method"] == "initialize" {
+                            for thread in announce.as_array().into_iter().flatten() {
+                                let started = json!({"method": "thread/started", "params": {"thread": thread}});
+                                if ws.send(Message::Text(started.to_string().into())).await.is_err() { return; }
+                            }
+                        }
                     }
                     Ok(()) = seen.recv() => {
                         for thread in threads.as_array().into_iter().flatten() {
@@ -169,5 +176,6 @@ async fn tui(args: &[String], config: &Value) -> i32 {
     if Path::new(&dir()).join("tui-hang").exists() {
         tokio::time::sleep(Duration::from_secs(60)).await;
     }
+    log(json!({"role": "tui-sidecar-final", "sidecar": sidecar()}));
     config["tui"]["rc"].as_i64().unwrap_or(0) as i32
 }

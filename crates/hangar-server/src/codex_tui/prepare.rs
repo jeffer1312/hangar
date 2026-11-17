@@ -18,7 +18,7 @@ const POLL: Duration = Duration::from_millis(250);
 /// Prazo de cada pedido.
 const REQUEST: Duration = Duration::from_secs(5);
 /// O `quote(..., safe='')`: só letras, números e `-._~` ficam.
-const QUOTE: &AsciiSet = &NON_ALPHANUMERIC.remove(b'-').remove(b'.').remove(b'_').remove(b'~');
+pub(crate) const QUOTE: &AsciiSet = &NON_ALPHANUMERIC.remove(b'-').remove(b'.').remove(b'_').remove(b'~');
 
 /// Onde o servidor atende e com que token. O token não chega ao pane (é segredo do servidor): sem ele
 /// no ambiente, vem do `.env`.

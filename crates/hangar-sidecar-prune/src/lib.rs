@@ -251,7 +251,26 @@ fn recorded_pid_dead(path: &Path) -> Verdict {
 /// As travas `<nome>.lock` de `~/.hangar/codex-sessions` sem o `<nome>.json` ao lado, com mais de
 /// `MIN_AGE` e sem dono agora: o lançador e o servidor nunca as apagam, e quem grava cria de novo.
 /// Devolve (apagadas, falhas).
-pub fn prune_codex_locks(dir: &Path, now: SystemTime) -> (usize, usize) {
+pub fn prune_codex_locks(dir: &Path, now: SystemTime) -> (usize, usize) { prune_codex_locks_with(dir, now, |_| {}) }
+
+/// O arquivo no caminho ainda é o que foi aberto (outro escritor pode ter apagado e recriado a trava).
+fn same_file(path: &Path, opened: &fs::File) -> bool {
+    let (Ok(now), Ok(held)) = (fs::symlink_metadata(path), opened.metadata()) else { return false };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        now.dev() == held.dev() && now.ino() == held.ino()
+    }
+    #[cfg(windows)]
+    {
+        // O índice do arquivo ainda não é estável no std; a criação e o tamanho distinguem o recriado.
+        use std::os::windows::fs::MetadataExt;
+        now.creation_time() == held.creation_time() && now.file_size() == held.file_size()
+    }
+}
+
+/// `checked` roda com a trava na mão, antes das conferências finais: os testes simulam ali a corrida.
+fn prune_codex_locks_with(dir: &Path, now: SystemTime, checked: impl Fn(&Path)) -> (usize, usize) {
     let Ok(entries) = fs::read_dir(dir) else { return (0, 0) };
     let (mut removed, mut failed) = (0, 0);
     for entry in entries.flatten() {
@@ -265,6 +284,9 @@ pub fn prune_codex_locks(dir: &Path, now: SystemTime) -> (usize, usize) {
         let Ok(lock) = fs::OpenOptions::new().read(true).append(true).open(&path) else { failed += 1; continue };
         // Com dono agora, fica: alguém está gravando esse sidecar.
         if lock.try_lock().is_err() { continue; }
+        checked(&path);
+        // Entre a listagem e a trava a sessão pode ter gravado o sidecar, ou trocado a trava por outra.
+        if dir.join(format!("{stem}.json")).exists() || !same_file(&path, &lock) { continue; }
         // No Windows o arquivo aberto não sai; a trava é solta antes, e quem a pegar depois cria outra.
         #[cfg(windows)]
         drop(lock);
@@ -299,5 +321,28 @@ mod codex_lock_tests {
         drop(held);
         assert_eq!(prune_codex_locks(dir.path(), SystemTime::now()), (0, 0), "nada é velho hoje");
         assert_eq!(prune_codex_locks(&dir.path().join("sem-pasta"), later), (0, 0));
+    }
+
+    /// A corrida: com a trava já na mão, a sessão grava o sidecar, ou outro processo apaga e recria a
+    /// trava. Nos dois casos ela fica.
+    #[test]
+    fn a_lock_that_changed_while_being_taken_stays() {
+        let dir = tempfile::tempdir().unwrap();
+        let later = SystemTime::now() + MIN_AGE + Duration::from_secs(60);
+        fs::write(dir.path().join("a.lock"), "").unwrap();
+        let sidecar = dir.path().join("a.json");
+        assert_eq!(prune_codex_locks_with(dir.path(), later, |_| fs::write(&sidecar, "{}").unwrap()), (0, 0));
+        assert!(dir.path().join("a.lock").exists(), "o sidecar apareceu: a trava é dele");
+        fs::remove_file(&sidecar).unwrap();
+        #[cfg(unix)]
+        {
+            let replaced = |path: &Path| {
+                fs::remove_file(path).unwrap();
+                fs::write(path, "").unwrap();
+            };
+            assert_eq!(prune_codex_locks_with(dir.path(), later, replaced), (0, 0));
+            assert!(dir.path().join("a.lock").exists(), "a trava recriada é de outro dono");
+        }
+        assert_eq!(prune_codex_locks(dir.path(), later), (1, 0), "sem corrida, a órfã sai");
     }
 }

@@ -110,7 +110,12 @@ pub(crate) fn decide(mut args: Args, existing: Option<&Map<String, Value>>, fact
     }
     if let Some(meta) = existing.filter(|meta| same_conversation(meta, args.resume.as_deref())) {
         if args.limit.is_none() {
-            args.limit = meta.get("tool_output_token_limit").and_then(Value::as_u64).filter(|limit| *limit > 0);
+            // Inteiro positivo, como o Python aceitava; outro valor gravado o derrubava ao subir o app-server.
+            args.limit = match meta.get("tool_output_token_limit") {
+                None | Some(Value::Null) => None,
+                Some(value) => Some(value.as_u64().filter(|limit| *limit > 0)
+                    .ok_or_else(|| usage("limite de resultado de ferramenta inválido no arquivo da sessão; nenhuma sessão foi aberta"))?),
+            };
         }
         // Relançar a própria sessão (o servidor manda só a pasta, a conversa e a chave): o resto vem do arquivo.
         let key = imported_key.as_deref().or(facts.session_key);
@@ -277,6 +282,13 @@ mod tests {
         // Outra chave não é a própria sessão: só o limite da mesma conversa vem do arquivo.
         let other = decide(relaunch.clone(), Some(&saved), &facts(Path::new("/h"), Some("k2"))).unwrap();
         assert_eq!((other.model, other.account.as_str(), other.approval, other.limit), (None, "default", "never", Some(144000)));
+        // Limite gravado fora de forma recusa com frase, em vez de derrubar o lançador ao subir o app-server.
+        for limit in [json!(0), json!(-1), json!(1.5), json!("9"), json!(true)] {
+            let mut broken = saved.clone();
+            broken.insert("tool_output_token_limit".into(), limit.clone());
+            assert_eq!(decide(relaunch.clone(), Some(&broken), &facts(Path::new("/h"), Some("k1"))),
+                Err(Refusal::Usage("limite de resultado de ferramenta inválido no arquivo da sessão; nenhuma sessão foi aberta".into())), "{limit}");
+        }
         for mode in [json!(null), json!("turbo"), json!(" full access")] {
             let mut broken = saved.clone();
             broken.insert("permission_mode".into(), mode.clone());

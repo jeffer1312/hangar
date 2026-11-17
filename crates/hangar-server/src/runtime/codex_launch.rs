@@ -191,8 +191,30 @@ pub fn context_overrides(codex_home:&Path,runtime_config:&Value) -> Vec<String> 
 pub(crate) fn identity(env:&BTreeMap<String,String>) -> Vec<String> {
     ["CP_SESSION_NAME","CP_SESSION_KEY","HANGAR_CANO_KEY","TMUX","TMUX_PANE"].into_iter()
         .filter_map(|name|env.get(name).filter(|v|!v.is_empty()).map(|value|(name,value)))
-        // O `json.dumps` do Python (não-ASCII escapado): o mesmo valor TOML, e o mesmo argv de antes.
-        .flat_map(|(name,value)|["-c".to_owned(),format!("shell_environment_policy.set.{name}={}",crate::orchestration::codec::dumps(&Value::from(value.as_str()),false))]).collect()
+        .flat_map(|(name,value)|["-c".to_owned(),format!("shell_environment_policy.set.{name}={}",toml_string(value))]).collect()
+}
+
+/// String básica de TOML só em ASCII, como o `json.dumps` do Python a escrevia (`\uXXXX` no BMP), mas
+/// válida também fora dele: o par de surrogates do JSON não é TOML, e o `-c` cairia no texto cru.
+pub(crate) fn toml_string(value:&str) -> String {
+    use std::fmt::Write;
+    let mut out = String::from("\"");
+    for c in value.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\u{8}' => out.push_str("\\b"),
+            '\u{c}' => out.push_str("\\f"),
+            c if (c as u32) < 0x20 || (0x7f..=0xffff).contains(&(c as u32)) => { let _ = write!(out,"\\u{:04x}",c as u32); }
+            c if (c as u32) > 0xffff => { let _ = write!(out,"\\U{:08x}",c as u32); }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 #[cfg(test)]
@@ -232,6 +254,23 @@ mod tests {
         let tail:Vec<&str> = launch.program.iter().map(String::as_str).skip(7).take(6).collect();
         assert_eq!(tail,["-c","shell_environment_policy.set.CP_SESSION_NAME=\"cx \\\"a\\\"\"","-c","shell_environment_policy.set.CP_SESSION_KEY=\"k1\"",
             "-c","shell_environment_policy.set.HANGAR_CANO_KEY=\"k1\""],"TMUX e TMUX_PANE saem do ambiente do cano: nada a repassar");
+    }
+
+    /// A identidade vai como string TOML só em ASCII: ç como `ç` (o argv do lançador Python), emoji
+    /// como `\U0001f600` (o par de surrogates do JSON não é TOML). Vale para o sem terminal e o com terminal.
+    #[test]
+    fn the_identity_is_a_valid_ascii_toml_string_for_any_name() {
+        let name = "Sessão ç 😀 \"x\"\\\t\u{7f}";
+        let quoted = toml_string(name);
+        assert_eq!(quoted, "\"Sess\\u00e3o \\u00e7 \\U0001f600 \\\"x\\\"\\\\\\t\\u007f\"");
+        assert!(quoted.is_ascii());
+        let parsed:toml::Table = toml::from_str(&format!("v = {quoted}")).unwrap();
+        assert_eq!(parsed["v"].as_str(),Some(name),"o Codex lê o nome de volta");
+        let home = tempfile::tempdir().unwrap();
+        let launch = launch_env(&base(home.path()),&home.path().join("sidecars"),&json!({"name":name,"key":"k1"})).unwrap();
+        assert!(launch.program.contains(&format!("shell_environment_policy.set.CP_SESSION_NAME={quoted}")),"sem terminal: {:?}",launch.program);
+        let env:BTreeMap<String,String> = [("CP_SESSION_NAME".to_owned(),name.to_owned())].into_iter().collect();
+        assert_eq!(identity(&env),["-c".to_owned(),format!("shell_environment_policy.set.CP_SESSION_NAME={quoted}")],"com terminal (o lançador usa esta mesma)");
     }
 
     /// Sem nada salvo, 1M; o desligado gravado no Hangar e o valor escrito no `config.toml` mandam.

@@ -81,11 +81,41 @@ fn choice(flag: &str, value: &str, allowed: &[&'static str]) -> Result<&'static 
     })
 }
 
+/// O `int()` do Python: espaço nas pontas, sinal e `_` entre dígitos (`1_000`).
+fn python_int(text: &str) -> Option<i128> {
+    let text = text.trim();
+    let (negative, digits) = match text.as_bytes().first() {
+        Some(b'-') => (true, &text[1..]),
+        Some(b'+') => (false, &text[1..]),
+        _ => (false, text),
+    };
+    let groups: Vec<&str> = digits.split('_').collect();
+    if groups.iter().any(|group| group.is_empty() || !group.bytes().all(|b| b.is_ascii_digit())) {
+        return None;
+    }
+    let number: i128 = groups.concat().parse().ok()?;
+    Some(if negative { -number } else { number })
+}
+
+/// Como o `argparse` decide que o próximo item é outra opção e não o valor: começa com `-`, não é só
+/// `-`, não é número negativo e não tem espaço (`--prompt "- lista"` é valor; `--prompt -x`, não).
+fn looks_like_option(token: &str) -> bool {
+    let negative = token.strip_prefix('-').is_some_and(|rest| {
+        let (whole, fraction) = rest.split_once('.').map_or((rest, None), |(w, f)| (w, Some(f)));
+        let digits = |s: &str| s.bytes().all(|b| b.is_ascii_digit());
+        match fraction {
+            None => !whole.is_empty() && digits(whole),
+            Some(fraction) => !fraction.is_empty() && digits(whole) && digits(fraction),
+        }
+    });
+    token.starts_with('-') && token != "-" && !negative && !token.contains(' ')
+}
+
 /// `raw` sem o subcomando; `env_name` é o `CP_SESSION_NAME` que o tmux carimbou no pane.
 pub(crate) fn parse(raw: &[String], env_name: Option<&str>) -> Result<Parsed, Refusal> {
     let mut args = Args::default();
     let mut name: Option<String> = env_name.map(str::to_owned);
-    let mut limit: Option<i64> = None;
+    let mut limit: Option<(i128, String)> = None;
     let mut unknown: Vec<&str> = Vec::new();
     let mut at = 0;
     while at < raw.len() {
@@ -106,7 +136,7 @@ pub(crate) fn parse(raw: &[String], env_name: Option<&str>) -> Result<Parsed, Re
         }
         let value = match inline {
             Some(value) => value,
-            None if at < raw.len() => {
+            None if at < raw.len() && !looks_like_option(&raw[at]) => {
                 at += 1;
                 raw[at - 1].clone()
             }
@@ -125,9 +155,8 @@ pub(crate) fn parse(raw: &[String], env_name: Option<&str>) -> Result<Parsed, Re
             "--approval-policy" => args.approval = Some(choice(flag, &value, &APPROVALS)?),
             "--sandbox" => args.sandbox = Some(choice(flag, &value, &SANDBOXES)?),
             "--tool-output-token-limit" => {
-                let number = value.trim().parse::<i64>()
-                    .map_err(|_| Refusal::Usage(format!("argument {flag}: invalid int value: '{value}'")))?;
-                limit = Some(number);
+                let number = python_int(&value).ok_or_else(|| Refusal::Usage(format!("argument {flag}: invalid int value: '{value}'")))?;
+                limit = Some((number, value));
             }
             _ => args.config.push(value),
         }
@@ -136,8 +165,9 @@ pub(crate) fn parse(raw: &[String], env_name: Option<&str>) -> Result<Parsed, Re
         return Err(Refusal::Usage(format!("unrecognized arguments: {}", unknown.join(" "))));
     }
     match limit {
-        Some(number) if number <= 0 => return Err(Refusal::Usage("--tool-output-token-limit precisa ser positivo".into())),
-        Some(number) => args.limit = Some(number as u64),
+        Some((number, _)) if number <= 0 => return Err(Refusal::Usage("--tool-output-token-limit precisa ser positivo".into())),
+        Some((number, text)) => args.limit = Some(u64::try_from(number)
+            .map_err(|_| Refusal::Usage(format!("argument --tool-output-token-limit: invalid int value: '{text}'")))?),
         None => {}
     }
     // Retomar sem id é abrir conversa nova, como o `if args.resume` da TUI.
@@ -166,9 +196,14 @@ mod tests {
             model: Some("gpt-6".into()), effort: Some("high".into()), service_tier: Some("priority".into()), codex_home: Some("/h/.codex".into()),
             codex_account: Some("b".into()), approval: Some("on-request"), sandbox: Some("read-only"), limit: Some(9000),
             config: vec!["a=1".into(), "b=2".into()] });
-        // `--name` vence o do pane; o prompt pode começar com hífen.
-        let Ok(Parsed::Run(args)) = run(&["--name", "outra", "--prompt", "-x"], Some("cx")) else { panic!() };
-        assert_eq!((args.name.as_str(), args.prompt.as_deref()), ("outra", Some("-x")));
+        // `--name` vence o do pane; prompt com hífen só como o argparse aceitava (espaço, número, `=`).
+        for prompt in ["- lista", "-5", "-1.5", "-"] {
+            let Ok(Parsed::Run(args)) = run(&["--name", "outra", "--prompt", prompt], Some("cx")) else { panic!("{prompt}") };
+            assert_eq!((args.name.as_str(), args.prompt.as_deref()), ("outra", Some(prompt)));
+        }
+        let Ok(Parsed::Run(args)) = run(&["--prompt=-x"], Some("cx")) else { panic!() };
+        assert_eq!(args.prompt.as_deref(), Some("-x"));
+        assert_eq!(run(&["--prompt", "-x"], Some("cx")), Err(Refusal::Usage("argument --prompt: expected one argument".into())));
         assert_eq!(run(&["--help"], None), Ok(Parsed::Help));
     }
 
@@ -179,6 +214,14 @@ mod tests {
         // O limite vem antes do nome, como no Python.
         assert_eq!(run(&["--tool-output-token-limit", "0"], None), Err(Refusal::Usage("--tool-output-token-limit precisa ser positivo".into())));
         assert_eq!(run(&["--resume", ""], Some("cx")).map(|p| matches!(p, Parsed::Run(Args { resume: None, .. }))), Ok(true));
+        // O `int()` do Python: espaço, sinal e `_` entre dígitos.
+        for (text, wanted) in [(" 9000 ", 9000), ("+5", 5), ("1_000", 1000)] {
+            assert_eq!(run(&["--tool-output-token-limit", text], Some("cx")).map(|p| matches!(p, Parsed::Run(Args { limit: Some(n), .. }) if n == wanted)), Ok(true), "{text}");
+        }
+        for text in ["1__0", "_1", "1.5", "x"] {
+            assert_eq!(run(&["--tool-output-token-limit", text], Some("cx")),
+                Err(Refusal::Usage(format!("argument --tool-output-token-limit: invalid int value: '{text}'"))));
+        }
     }
 
     proptest::proptest! {

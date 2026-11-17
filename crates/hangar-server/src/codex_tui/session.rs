@@ -226,7 +226,9 @@ impl Life {
         self.tail = Some(Tail::new().unwrap_or_else(|_| Tail::none()));
     }
 
-    /// Sobe o app-server com as flags da sessão; o Fast é relido a cada subida.
+    /// Sobe o app-server com as flags da sessão; o Fast é relido a cada subida. O pid da vida não muda
+    /// aqui: na primeira subida quem o grava é o `flow`; na ressubida, só depois de o novo abrir a porta
+    /// (`server_restarted`), que confere o arquivo pelo pid anterior.
     pub async fn spawn_server(&mut self, plan: &Plan) -> std::io::Result<()> {
         let (Some(session), Some(tail), Some(diary)) = (self.session.clone(), self.tail.as_mut(), self.diary.as_ref()) else {
             return Err(std::io::Error::other("lançador sem sessão"));
@@ -235,7 +237,6 @@ impl Life {
         let argv = super::plan::server_argv(&self.codex.to_string_lossy(), plan, &session.endpoint, tier.as_deref(), &self.env);
         match Server::spawn(&argv, &plan.cwd, &self.env, tail) {
             Ok(server) => {
-                session.set_app_pid(server.pid);
                 self.server = Some(server);
                 Ok(())
             }
@@ -245,6 +246,9 @@ impl Life {
             }
         }
     }
+
+    /// O pid do app-server de agora.
+    pub fn server_pid(&self) -> Option<u32> { self.server.as_ref().map(|server| server.pid) }
 
     /// Escuta as threads principais que a TUI abre, enquanto este app-server viver.
     pub fn listen(&mut self, cwd: &str) {
@@ -436,6 +440,25 @@ mod tests {
         assert_eq!(session.selected_tier().as_deref(), Some("default"), "o Fast trocado depois de abrir fica");
         session.server_restarted(42, &lines);
         assert_eq!(read(dir.path(), "cx")["app_pid"], 42);
+    }
+
+    /// Queda depois da primeira gravação: o arquivo passa ao pid novo, a `/new` seguinte troca a conversa
+    /// por ele, e a saída apaga o arquivo. Antes, o pid novo era anotado antes de conferir o arquivo, e
+    /// nada disso acontecia (arquivo órfão apontando para o app-server morto).
+    #[test]
+    fn after_a_fall_the_file_follows_the_new_app_server() {
+        let dir = tempfile::tempdir().unwrap();
+        let session = Session::new(dir.path().to_path_buf(), &plan("cx"), "ws://127.0.0.1:9".into(), Some("k"));
+        session.set_app_pid(40);
+        let lines = Lines(Default::default());
+        session.save_thread("t1", "/r/t1", Some(&thread("t1", json!({}))), &lines);
+        session.server_restarted(41, &lines);
+        assert_eq!(read(dir.path(), "cx")["app_pid"], 41);
+        session.save_thread("t2", "/h/.codex/sessions/t2.jsonl", Some(&thread("t2", json!({}))), &lines);
+        assert_eq!(read(dir.path(), "cx")["thread_id"], "t2", "a `/new` depois da queda");
+        session.remove(&lines);
+        assert!(!codex_sidecar::path(dir.path(), "cx").exists());
+        assert!(lines.0.lock().unwrap().is_empty());
     }
 
     /// `~/.hangar` sem escrita não derruba o lançador depois da TUI: a linha diz o código e a sessão segue.

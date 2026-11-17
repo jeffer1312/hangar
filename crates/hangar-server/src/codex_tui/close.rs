@@ -6,7 +6,7 @@ use std::path::Path;
 use std::process::ExitCode;
 use std::time::Duration;
 
-use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
+use percent_encoding::utf8_percent_encode;
 use serde_json::Value;
 
 use crate::accounts::environment::AccountEnvironment;
@@ -45,7 +45,7 @@ pub fn cli(args: &[String]) -> ExitCode {
 async fn delete(server: &super::prepare::Server, name: &str) -> bool {
     let (Some(token), Ok(port)) = (server.token.as_deref(), server.port.trim().parse::<u16>()) else { return false };
     let Ok(client) = crate::http_client().timeout(DELETE_TIMEOUT).build() else { return false };
-    let url = format!("http://127.0.0.1:{port}/api/sessions/{}", utf8_percent_encode(name, NON_ALPHANUMERIC));
+    let url = format!("http://127.0.0.1:{port}/api/sessions/{}", utf8_percent_encode(name, super::prepare::QUOTE));
     client.delete(url).bearer_auth(token).send().await.is_ok_and(|response| response.status().is_success())
 }
 

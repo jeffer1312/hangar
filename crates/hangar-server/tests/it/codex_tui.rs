@@ -154,10 +154,18 @@ fn an_app_server_that_dies_at_start_shows_why_and_opens_no_tui() {
     assert!(std::fs::read_dir(case.home.join(".hangar/logs/privado")).unwrap().count() == 1);
 }
 
-/// Queda com a TUI viva: outro app-server na mesma porta, aviso no pane (`launcher__app-server-crash-resubido`).
+/// Queda com a TUI viva depois da primeira gravação do arquivo: outro app-server na mesma porta, aviso
+/// no pane, o arquivo passa ao pid novo, a `/new` anunciada pelo novo troca a conversa e a saída apaga o
+/// arquivo (`launcher__app-server-crash-resubido`).
 #[test]
 fn an_app_server_that_falls_with_the_tui_alive_comes_back_on_the_same_port() {
-    let case = Case::new(json!({"app_server": {"launches": [{"crash_after_tui_ms": 300}, {}]}, "tui": {"hold_ms": 5000}}));
+    let case = Case::new(json!({}));
+    let second = json!({"id": "thread-2", "path": case.home.join(".codex/sessions/rollout-thread-2.jsonl"), "cwd": case.work,
+        "source": "cli", "threadSource": "user"});
+    let mut config: Value = serde_json::from_slice(&std::fs::read(case.fake.join("config.json")).unwrap()).unwrap();
+    config["app_server"]["launches"] = json!([{"crash_after_tui_ms": 300}, {"announce": [second]}]);
+    config["tui"] = json!({"hold_ms": 5000});
+    std::fs::write(case.fake.join("config.json"), config.to_string()).unwrap();
     let output = case.run(&["--cwd", case.work.to_str().unwrap()]);
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
     let servers = case.role("codex app-server");
@@ -168,7 +176,12 @@ fn an_app_server_that_falls_with_the_tui_alive_comes_back_on_the_same_port() {
     assert!(text.contains(&format!("hangar-codex-tui: o app-server saiu com codigo 9 antes de abrir {endpoint}:\nfake app-server crashed\n")), "{text}");
     assert!(text.ends_with(&format!("hangar-codex-tui: app-server ressubido em {endpoint}\n")), "{text}");
     assert_eq!(case.role("codex tui").len(), 1, "a TUI não é relançada");
-    assert!(!case.sidecar().exists());
+    let [first] = case.role("tui-sidecar-snapshot").try_into().unwrap();
+    assert_eq!((&first["sidecar"]["thread_id"], &first["sidecar"]["app_pid"]), (&json!("thread-1"), &servers[0]["pid"]), "gravado antes da queda");
+    let [last] = case.role("tui-sidecar-final").try_into().unwrap();
+    assert_eq!(last["sidecar"]["app_pid"], servers[1]["pid"], "o servidor se religa pelo pid novo");
+    assert_eq!(last["sidecar"]["thread_id"], "thread-2", "a `/new` depois da queda");
+    assert!(!case.sidecar().exists(), "a saída apaga o arquivo pelo pid novo");
 }
 
 /// `SIGTERM` vira 143, derruba o app-server e apaga o arquivo (`launcher__sigterm`).
@@ -187,6 +200,31 @@ fn sigterm_exits_143_and_takes_the_app_server_down() {
     assert!(!case.sidecar().exists());
     let [tui] = case.role("codex tui").try_into().unwrap();
     unsafe { libc::kill(tui["pid"].as_u64().unwrap() as libc::pid_t, libc::SIGKILL); }
+}
+
+/// Com o pane esperando o Enter, `SIGTERM` (o `kill-session`) sai na hora com 143.
+#[test]
+fn sigterm_while_waiting_for_enter_exits_143() {
+    let case = Case::new(json!({}));
+    std::fs::remove_file(case.stubs.join("codex")).unwrap();
+    let mut command = case.command(&["--cwd", case.work.to_str().unwrap()]);
+    let mut child = command.stdin(Stdio::piped()).spawn().unwrap();
+    let diary = case.home.join(".hangar/logs/diario/codex-tui");
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while std::fs::read_dir(&diary).map_or(true, |mut entries| entries.next().is_none()) {
+        assert!(Instant::now() < deadline, "a falha não chegou ao diário");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(child.try_wait().unwrap().is_none(), "esperando o Enter");
+    unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM); }
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() { break status; }
+        assert!(Instant::now() < deadline, "o SIGTERM não encerrou a espera do Enter");
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert_eq!(status.code(), Some(143));
 }
 
 /// Conta sem a marca do Hangar não abre (o servidor recusaria igual); antes o lançador abria.
