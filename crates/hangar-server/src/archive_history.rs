@@ -28,7 +28,7 @@ use crate::{
 /// O teto do `tail` (api.py: `min(tail, 200)`).
 const TAIL_MAX: i64 = 200;
 
-/// As duas rotas, para o `migration_status`.
+/// As duas rotas, para o `owned_routes`.
 pub fn matches(method: &Method, path: &str) -> bool {
     if *method != Method::GET { return false; }
     let Some(rest) = path.strip_prefix("/api/archive/") else { return false };

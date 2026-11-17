@@ -321,7 +321,7 @@ async fn search_context_is_answered_by_rust_only_for_the_owner() {
         .send().await.unwrap();
     assert_eq!(response.status().as_u16(), 401);
     scene.ctx(NORMAL_P, NORMAL_S, MID, None).await;
-    assert!(hangar_server::migration_status::rust_route(&axum::http::Method::GET, "/api/search/context"));
+    assert!(hangar_server::owned_routes::rust_route(&axum::http::Method::GET, "/api/search/context"));
 }
 
 #[tokio::test]

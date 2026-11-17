@@ -437,7 +437,7 @@ async fn search_route_is_answered_by_rust_only_for_the_owner() {
     // R5 (decisão 5): sem o token do dono, o 401 sai do Rust.
     let response = client().get(format!("http://{}/api/search?q=clippy", scene.address)).send().await.unwrap();
     assert_eq!(response.status().as_u16(), 401);
-    assert!(hangar_server::migration_status::rust_route(&axum::http::Method::GET, "/api/search"));
+    assert!(hangar_server::owned_routes::rust_route(&axum::http::Method::GET, "/api/search"));
 }
 
 /// Conversa do Claude na conta `a`, só pedidos do usuário, com o mtime dado; devolve o caminho. O

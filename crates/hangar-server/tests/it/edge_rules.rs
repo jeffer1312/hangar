@@ -110,24 +110,14 @@ async fn server_failure_writes_the_access_line_with_masked_route_and_cause() {
     assert!(!rows.iter().any(|row| row["evento"] == "api.servidor" && row["codigo"] == "404"), "{rows:?}");
 }
 
-/// I-05..I-09 e P3: o status da migração só leva o lado Rust e não pergunta nada ao Python; I-23: quem
-/// não é o dono leva a recusa do Rust.
+/// A tela da migração saiu: o dono pedindo o status leva o 404 de rota inexistente, como qualquer
+/// caminho que o servidor não tem.
 #[tokio::test]
-async fn migration_status_is_rust_only() {
+async fn migration_status_is_gone() {
     let (python, _) = spawn_fake().await;
     let server = spawn_server_for(&python, config("127.0.0.1")).await;
     let r = client().get(format!("http://{server}/api/migration/status")).bearer_auth(OWNER).send().await.unwrap();
-    assert_eq!(r.status(), 200);
-    assert_eq!(r.headers()["cache-control"], "no-store");
-    let body: Value = r.json().await.unwrap();
-    assert_eq!(body["served_by"], "rust");
-    assert_eq!(body["rust"]["protocol"], hangar_server::INTERNAL_PROTOCOL);
-    assert!(body["areas"].as_array().is_some_and(|areas| !areas.is_empty()), "{body}");
-    for gone in ["python", "python_error", "private"] {
-        assert!(body.get(gone).is_none(), "{gone}: {body}");
-    }
-    let stranger = client().get(format!("http://{server}/api/migration/status")).send().await.unwrap();
-    assert_eq!(stranger.status(), 401);
+    assert_eq!(r.status(), 404);
 }
 
 /// D-22: o pedido a `/api/diag*` que falha no servidor não ganha a linha `api.servidor` (o diário se

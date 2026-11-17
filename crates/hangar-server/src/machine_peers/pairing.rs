@@ -27,13 +27,18 @@ impl Settings {
         })
     }
     pub fn urls(&self, lan_ip: &str) -> (String,String) {
+        let (front, api) = self.addresses(lan_ip);
+        let pwa = format!("{front}/?token={}",token_query(&self.token));
+        let native = if self.public_url.is_empty() {format!("{api}/?token={}",token_query(&self.token))} else {format!("{pwa}&api={api}")};
+        (pwa,native)
+    }
+    /// Os endereços do front e da API, sem o token: é o que pode ir ao journal e ao log.
+    pub fn addresses(&self, lan_ip: &str) -> (String,String) {
         let host = if ["127.0.0.1","localhost","::1","0.0.0.0","auto"].contains(&self.bind.as_str()) {lan_ip} else {&self.bind};
         let api = format!("http://{host}:{}",self.port);
         let front_port = if self.front_port == "0" {&self.port} else {&self.front_port};
         let front = if self.public_url.is_empty() {format!("http://{host}:{front_port}")} else {self.public_url.trim_end_matches('/').into()};
-        let pwa = format!("{front}/?token={}",token_query(&self.token));
-        let native = if self.public_url.is_empty() {format!("{api}/?token={}",token_query(&self.token))} else {format!("{pwa}&api={api}")};
-        (pwa,native)
+        (front,api)
     }
 }
 
@@ -55,18 +60,21 @@ pub(crate) fn qr_text(url:&str)->Result<String,String> {
     }
     Ok(result)
 }
+/// No terminal, os QR e as URLs com o token. Fora dele a saída vai ao journal ou ao log, que não
+/// podem guardar o token: só os endereços, e o caminho para ver o QR.
 pub fn print(settings:&Settings,lan_ip:&str,tty:bool,writer:&mut impl Write)->Result<(),String> {
-    let (pwa,api)=settings.urls(lan_ip);
     let mut emit=|text:String| -> Result<(),String> {
         writer.write_all(text.as_bytes()).and_then(|_|writer.flush()).map_err(|e|e.to_string())
     };
-    if tty {
-        emit(format!("{}\n",qr_text(&pwa)?))?;
-        emit(format!("  Scan to pair, or open: {pwa}\n\n"))?;
-        emit(format!("{}\n",qr_text(&api)?))?;
-    } else {
-        emit(format!("  Pareamento (abra no celular): {pwa}\n\n"))?;
+    if !tty {
+        let (front,api)=settings.addresses(lan_ip);
+        emit(format!("  Pareamento (abra no celular): {front}/ (o QR com a senha: scripts/show-qr.sh num terminal)\n\n"))?;
+        return emit(format!("  App nativo: {api}/\n\n"));
     }
+    let (pwa,api)=settings.urls(lan_ip);
+    emit(format!("{}\n",qr_text(&pwa)?))?;
+    emit(format!("  Scan to pair, or open: {pwa}\n\n"))?;
+    emit(format!("{}\n",qr_text(&api)?))?;
     emit(format!("  App nativo: {api}\n\n"))
 }
 pub fn cli(args:&[String])->std::process::ExitCode {
