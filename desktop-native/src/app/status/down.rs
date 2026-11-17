@@ -825,7 +825,7 @@ mod tests {
         let codes = ["local_server_unsupported", "local_server_dev_mode", "local_server_not_installed", "local_server_service_unreadable",
             "update_locked", "local_server_running", "local_server_unknown_version", "local_server_no_binary", "local_server_holder_changed",
             "local_server_other_user", "local_server_terminate_refused", "local_server_port_still_held", "local_server_current_changed",
-            "local_server_version_mismatch", "local_server_command_failed", "local_server_io"];
+            "local_server_version_mismatch", "local_server_command_failed", "local_server_io", "local_server_current_left_on"];
         for code in codes {
             assert!(dicts.iter().all(|d| d.contains_key(&format!("native_status_down_error_{code}"))), "{code}");
         }

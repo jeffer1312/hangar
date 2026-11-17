@@ -6770,6 +6770,7 @@
   "native_status_down_error_local_server_version_mismatch": "Subiu a versão {detail}, não a escolhida.",
   "native_status_down_error_local_server_command_failed": "O gerenciador de serviços recusou: {detail}",
   "native_status_down_error_local_server_io": "Falha ao ler ou gravar no disco: {detail}",
+  "native_status_down_error_local_server_current_left_on": "A troca não terminou e não deu para voltar: a versão em uso ficou em {detail}",
   "native_status_down_error_other": "A ação falhou ({code}): {detail}",
   "native_status_down_silent_moment": "Não responde há menos de 1 min",
   "native_status_down_silent_minutes": "Não responde há {n} min",

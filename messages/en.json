@@ -6770,6 +6770,7 @@
   "native_status_down_error_local_server_version_mismatch": "Version {detail} started instead of the chosen one.",
   "native_status_down_error_local_server_command_failed": "The service manager refused: {detail}",
   "native_status_down_error_local_server_io": "Disk read or write failed: {detail}",
+  "native_status_down_error_local_server_current_left_on": "The switch did not finish and could not be undone: the current version is now {detail}",
   "native_status_down_error_other": "The action failed ({code}): {detail}",
   "native_status_down_silent_moment": "Not answering for less than a minute",
   "native_status_down_silent_minutes": "Not answering for {n} min",
