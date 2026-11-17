@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
+use hangar_codex::proto::{self as wire, ClientRequest};
 use serde_json::{Value, json};
 use tokio::time::Instant;
 use tokio_tungstenite::tungstenite::{Message, protocol::WebSocketConfig};
@@ -27,9 +28,110 @@ pub(crate) fn primary(message: &Value, cwd: &str) -> Option<(String, String, Val
     Some((thread["id"].as_str()?.to_owned(), thread["path"].as_str()?.to_owned(), thread.clone()))
 }
 
+const FIRST_RESUME_ID: &str = "hangar-tui:first-resume";
+const FIRST_TURN_ID: &str = "hangar-tui:first";
+
+/// O que a entrega da primeira mensagem pede: um quadro ao app-server ou uma linha no pane.
+#[derive(Debug, PartialEq)]
+pub(crate) enum Out {
+    Send(Value),
+    Say(String),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Stage {
+    Waiting,
+    Resuming,
+    Sent,
+    Done,
+}
+
+/// A primeira mensagem que não pôde ir no argv da TUI (`codex.cmd` recusa quebra de linha): vai inteira
+/// pelo app-server, uma vez, como o turno que o servidor abre numa sessão Codex com terminal.
+pub(crate) struct FirstPrompt {
+    text: String,
+    resume: Option<String>,
+    stage: Stage,
+}
+
+impl FirstPrompt {
+    pub(crate) fn new(text: String, resume: Option<String>) -> Self { Self { text, resume, stage: Stage::Waiting } }
+
+    fn turn(&self, thread: &str) -> Out {
+        let (method, params) = ClientRequest::TurnStart(wire::TurnStartParams {
+            thread_id: thread.into(),
+            input: vec![json!({"type": "text", "text": self.text})],
+            ..Default::default()
+        })
+        .into_parts();
+        Out::Send(json!({"jsonrpc": "2.0", "id": FIRST_TURN_ID, "method": method, "params": params}))
+    }
+
+    fn refused(message: &Value) -> Option<String> {
+        message.get("error").map(|error| error.get("message").and_then(Value::as_str).map_or_else(|| error.to_string(), str::to_owned))
+    }
+
+    /// Cada mensagem do app-server; `primary` é a thread principal que ela anunciou, se anunciou.
+    pub(crate) fn message(&mut self, message: &Value, primary: Option<&str>) -> Vec<Out> {
+        let id = message.get("id").filter(|_| message.get("method").is_none());
+        match self.stage {
+            // Retomando, o `thread/started` não vem: assina a thread logo depois do `initialize`.
+            Stage::Waiting if self.resume.is_some() && id == Some(&json!(1)) => {
+                self.stage = Stage::Resuming;
+                let (method, params) = ClientRequest::ThreadResume(wire::ThreadResumeParams {
+                    thread_id: self.resume.clone().unwrap_or_default(),
+                    ..Default::default()
+                })
+                .into_parts();
+                vec![Out::Send(json!({"jsonrpc": "2.0", "id": FIRST_RESUME_ID, "method": method, "params": params}))]
+            }
+            Stage::Waiting if self.resume.is_none() => match primary {
+                Some(thread) => {
+                    self.stage = Stage::Sent;
+                    vec![self.turn(thread)]
+                }
+                None => vec![],
+            },
+            Stage::Resuming if id == Some(&json!(FIRST_RESUME_ID)) => match Self::refused(message) {
+                Some(reason) => {
+                    self.stage = Stage::Done;
+                    vec![Out::Say(format!("erro: a primeira mensagem não chegou ao Codex (a conversa não abriu: {reason}); ela não foi cortada, mande de novo pela conversa"))]
+                }
+                None => {
+                    self.stage = Stage::Sent;
+                    vec![self.turn(&self.resume.clone().unwrap_or_default())]
+                }
+            },
+            Stage::Sent if id == Some(&json!(FIRST_TURN_ID)) => {
+                self.stage = Stage::Done;
+                vec![Out::Say(match Self::refused(message) {
+                    Some(reason) => format!("erro: a primeira mensagem não chegou ao Codex ({reason}); ela não foi cortada, mande de novo pela conversa"),
+                    None => "primeira mensagem entregue pelo app-server".into(),
+                })]
+            }
+            _ => vec![],
+        }
+    }
+
+    /// O socket fechou ou a escuta desistiu: o que não foi confirmado aparece no pane.
+    pub(crate) fn closed(&self) -> Option<String> {
+        (self.stage != Stage::Done).then(|| "erro: a primeira mensagem não chegou ao Codex (o app-server saiu antes da confirmação); mande de novo pela conversa".into())
+    }
+}
+
 /// `ready` é avisado quando a resposta do `initialize` chega (ou a escuta desiste): a TUI só sobe
 /// depois, senão o `thread/started` da conversa nova sai antes de haver quem o escute.
-pub(crate) async fn listen(session: Arc<Session>, cwd: String, gone: Arc<AtomicBool>, ready: Option<tokio::sync::oneshot::Sender<()>>) {
+pub(crate) async fn listen(session: Arc<Session>, cwd: String, gone: Arc<AtomicBool>, ready: Option<tokio::sync::oneshot::Sender<()>>,
+    first: Option<FirstPrompt>) {
+    let mut first = first;
+    follow(&session, &cwd, &gone, ready, &mut first).await;
+    if let Some(line) = first.as_ref().and_then(FirstPrompt::closed) {
+        Pane.say(&line);
+    }
+}
+
+async fn follow(session: &Session, cwd: &str, gone: &AtomicBool, ready: Option<tokio::sync::oneshot::Sender<()>>,
+    first: &mut Option<FirstPrompt>) {
     let mut ready = ready;
     let config = WebSocketConfig::default().max_message_size(None).max_frame_size(None);
     let deadline = Instant::now() + WAIT;
@@ -62,8 +164,20 @@ pub(crate) async fn listen(session: Arc<Session>, cwd: String, gone: Arc<AtomicB
             continue;
         }
         let Ok(value) = serde_json::from_slice::<Value>(&message.into_data()) else { continue };
-        if let Some((id, path, thread)) = primary(&value, &cwd) {
-            session.save_thread(&id, &path, Some(&thread), &Pane);
+        let started = primary(&value, cwd);
+        if let Some((id, path, thread)) = &started {
+            session.save_thread(id, path, Some(thread), &Pane);
+        }
+        let Some(prompt) = first.as_mut() else { continue };
+        for out in prompt.message(&value, started.as_ref().map(|(id, _, _)| id.as_str())) {
+            match out {
+                Out::Say(line) => Pane.say(&line),
+                Out::Send(frame) => {
+                    if ws.send(Message::Text(frame.to_string().into())).await.is_err() {
+                        return;
+                    }
+                }
+            }
         }
     }
 }
@@ -71,6 +185,58 @@ pub(crate) async fn listen(session: Arc<Session>, cwd: String, gone: Arc<AtomicB
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const TEXT: &str = "linha 1\r\nlinha 2\nlinha 3";
+
+    fn sent(outs: &[Out]) -> Vec<&Value> {
+        outs.iter().filter_map(|out| match out { Out::Send(frame) => Some(frame), Out::Say(_) => None }).collect()
+    }
+
+    /// PR-13 (decisão 26): conversa nova, a mensagem vai uma vez só, inteira, como `turn/start` na thread
+    /// que a TUI anunciou; antes disso nada sai, e a confirmação aparece no pane.
+    #[test]
+    fn a_new_conversation_gets_the_whole_first_prompt_once_after_its_thread_starts() {
+        let mut first = FirstPrompt::new(TEXT.into(), None);
+        assert!(first.message(&json!({"id": 1, "result": {}}), None).is_empty());
+        let outs = first.message(&json!({"method": "thread/started"}), Some("t1"));
+        let frames = sent(&outs);
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0]["method"], "turn/start");
+        assert_eq!(frames[0]["params"]["threadId"], "t1");
+        assert_eq!(frames[0]["params"]["input"], json!([{"type": "text", "text": TEXT}]));
+        assert!(first.message(&json!({"method": "thread/started"}), Some("t2")).is_empty(), "uma vez só");
+        assert!(first.closed().is_some(), "sem confirmação ainda é falha");
+        assert_eq!(first.message(&json!({"id": FIRST_TURN_ID, "result": {"turn": {"id": "u1"}}}), None),
+            vec![Out::Say("primeira mensagem entregue pelo app-server".into())]);
+        assert_eq!(first.closed(), None);
+    }
+
+    /// Retomando, assina a thread depois do `initialize` e só então abre o turno.
+    #[test]
+    fn a_resumed_conversation_subscribes_before_the_first_prompt() {
+        let mut first = FirstPrompt::new(TEXT.into(), Some("t-9".into()));
+        let outs = first.message(&json!({"id": 1, "result": {}}), None);
+        assert_eq!(sent(&outs)[0]["method"], "thread/resume");
+        assert_eq!(sent(&outs)[0]["params"]["threadId"], "t-9");
+        let outs = first.message(&json!({"id": FIRST_RESUME_ID, "result": {}}), None);
+        assert_eq!(sent(&outs)[0]["method"], "turn/start");
+        assert_eq!(sent(&outs)[0]["params"]["threadId"], "t-9");
+    }
+
+    /// Recusa do app-server, ou o socket fechando antes da confirmação, viram linha de erro no pane.
+    #[test]
+    fn a_refused_or_unconfirmed_first_prompt_is_an_error_line() {
+        let mut first = FirstPrompt::new(TEXT.into(), None);
+        first.message(&json!({"method": "thread/started"}), Some("t1"));
+        let outs = first.message(&json!({"id": FIRST_TURN_ID, "error": {"code": -32600, "message": "thread not loaded"}}), None);
+        assert!(matches!(&outs[..], [Out::Say(line)] if line.starts_with("erro:") && line.contains("thread not loaded")), "{outs:?}");
+        assert_eq!(first.closed(), None, "a recusa já foi dita");
+        let mut resumed = FirstPrompt::new(TEXT.into(), Some("t-9".into()));
+        resumed.message(&json!({"id": 1, "result": {}}), None);
+        let outs = resumed.message(&json!({"id": FIRST_RESUME_ID, "error": {"message": "no rollout found"}}), None);
+        assert!(matches!(&outs[..], [Out::Say(line)] if line.starts_with("erro:") && line.contains("no rollout found")), "{outs:?}");
+        assert!(FirstPrompt::new(TEXT.into(), None).closed().is_some_and(|line| line.starts_with("erro:")));
+    }
 
     #[test]
     fn only_the_primary_thread_of_this_folder_is_taken() {

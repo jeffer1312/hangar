@@ -192,7 +192,7 @@ async fn flow(raw: &[String], env: &[(String, String)], life: &mut session::Life
         inherited_codex_home: value_of(env, "CODEX_HOME"),
         home: &home,
     };
-    let plan = match plan::decide(args, existing.as_ref(), &facts) {
+    let mut plan = match plan::decide(args, existing.as_ref(), &facts) {
         Ok(plan) => plan,
         Err(refusal) => {
             eprint!("{}", refusal.render());
@@ -236,6 +236,10 @@ async fn flow(raw: &[String], env: &[(String, String)], life: &mut session::Life
         eprintln!("{PREFIX}nao achei o executavel `codex` no PATH deste processo. Instale o Codex CLI (npm install -g @openai/codex) e reabra a sessao.");
         return Exit::opening(1);
     };
+    let first = plan::prompt_through_app_server(&codex, &plan);
+    if first.is_some() {
+        plan.prompt = None;
+    }
     // A chave do spec que o Rust pôs no pane (na importada, a da conversa): o registro é por ela.
     let key = plan.imported_key.as_deref().or(value_of(env, "CP_SESSION_KEY")).filter(|key| !key.is_empty());
     let shared = Arc::new(session::Session::new(sidecars, &plan, endpoint.clone(), key));
@@ -254,7 +258,7 @@ async fn flow(raw: &[String], env: &[(String, String)], life: &mut session::Life
             None => screen.say(&format!("nao achei o rollout da conversa {resume}")),
         }
     }
-    let listening = life.listen(&plan.cwd);
+    let listening = life.listen_with(&plan.cwd, first.map(|text| threads::FirstPrompt::new(text, plan.resume.clone())));
     screen.say("subindo o app-server do Codex…");
     if !life.wait_port(app_server::PORT_WAIT, &screen).await {
         return Exit::opening(1);

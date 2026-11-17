@@ -117,3 +117,27 @@ fn ctrl_break_exits_130_and_cleans_up() {
         let _ = Command::new("taskkill").args(["/F", "/PID", &spawn["pid"].to_string()]).output();
     }
 }
+
+/// PR-13 (decisão 26): com o `codex.cmd` do npm, a primeira mensagem de várias linhas não vai no argv
+/// (o std recusa quebra de linha em `.cmd`): a TUI abre sem ela, e ela chega inteira, uma vez, como
+/// `turn/start` na thread que a TUI anunciou.
+#[test]
+fn a_multiline_first_prompt_reaches_a_cmd_codex_through_the_app_server() {
+    let case = Case::new(json!({}));
+    let real = case.fake.join("bin");
+    std::fs::create_dir_all(&real).unwrap();
+    std::fs::rename(case.stubs.join("codex.exe"), real.join("codex-real.exe")).unwrap();
+    std::fs::write(case.stubs.join("codex.cmd"), format!("@\"{}\" %*\r\n", real.join("codex-real.exe").display())).unwrap();
+    let text = "linha 1\r\nlinha 2\nlinha 3";
+    let output = case.command().arg("--prompt").arg(text).stderr(Stdio::piped()).output().unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    let spawns = spawns(&case.fake);
+    let tui = spawns.iter().find(|spawn| spawn["role"] == "codex tui").expect("a TUI abriu");
+    assert!(!tui["argv"].as_array().unwrap().iter().any(|arg| arg.as_str().is_some_and(|arg| arg.contains("linha"))), "{tui}");
+    let turns: Vec<&Value> = spawns.iter().filter(|spawn| spawn["role"] == "app-server-rpc" && spawn["msg"]["method"] == "turn/start").collect();
+    assert_eq!(turns.len(), 1, "{spawns:?}");
+    assert_eq!(turns[0]["msg"]["params"]["threadId"], "thread-1");
+    assert_eq!(turns[0]["msg"]["params"]["input"], json!([{"type": "text", "text": text}]));
+    assert!(stderr.contains("primeira mensagem entregue pelo app-server"), "{stderr}");
+}

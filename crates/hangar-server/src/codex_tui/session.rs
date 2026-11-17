@@ -252,10 +252,18 @@ impl Life {
 
     /// Escuta as threads principais que a TUI abre, enquanto este app-server viver. O recibo responde
     /// quando a escuta já recebe (ou desistiu).
-    pub fn listen(&mut self, cwd: &str) -> tokio::sync::oneshot::Receiver<()> {
+    pub fn listen(&mut self, cwd: &str) -> tokio::sync::oneshot::Receiver<()> { self.listen_with(cwd, None) }
+
+    /// A escuta da primeira subida, que também entrega a primeira mensagem que não coube no argv.
+    pub fn listen_with(&mut self, cwd: &str, first: Option<threads::FirstPrompt>) -> tokio::sync::oneshot::Receiver<()> {
         let (sender, receiver) = tokio::sync::oneshot::channel();
-        let (Some(session), Some(server)) = (self.session.clone(), self.server.as_ref()) else { return receiver };
-        self.listeners.push(tokio::spawn(threads::listen(session, cwd.to_owned(), server.gone.clone(), Some(sender))));
+        let (Some(session), Some(server)) = (self.session.clone(), self.server.as_ref()) else {
+            if let Some(line) = first.as_ref().and_then(threads::FirstPrompt::closed) {
+                super::Pane.say(&line);
+            }
+            return receiver;
+        };
+        self.listeners.push(tokio::spawn(threads::listen(session, cwd.to_owned(), server.gone.clone(), Some(sender), first)));
         receiver
     }
 

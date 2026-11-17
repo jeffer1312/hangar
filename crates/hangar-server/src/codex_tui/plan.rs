@@ -194,6 +194,14 @@ pub(crate) fn server_argv(codex: &str, plan: &Plan, endpoint: &str, tier: Option
     argv
 }
 
+/// O std do Rust recusa argumento de `.cmd`/`.bat` com quebra de linha (o `codex.cmd` do npm no Windows):
+/// aí a primeira mensagem sai do argv e vai inteira pelo app-server, nunca cortada.
+pub(crate) fn prompt_through_app_server(codex: &Path, plan: &Plan) -> Option<String> {
+    let name = codex.file_name()?.to_string_lossy().to_ascii_lowercase();
+    let batch = name.ends_with(".cmd") || name.ends_with(".bat");
+    some(&plan.prompt).filter(|prompt| batch && prompt.contains(['\r', '\n'])).map(str::to_owned)
+}
+
 /// A TUI: o modelo é `-m`; o esforço é `-c` (o `--effort` matava o Codex no arranque), entre aspas
 /// porque o `-c` é TOML. Retomando, sem `-C` nem política: o `resume --remote` as recusa.
 pub(crate) fn tui_argv(codex: &str, plan: &Plan, endpoint: &str, tier: Option<&str>) -> Vec<String> {
@@ -323,6 +331,24 @@ mod tests {
             assert_eq!(decide(resume.clone(), Some(&broken), &facts(Path::new("/h"), None)),
                 Err(Refusal::Usage("metadados da conversa importada inválidos; nenhuma sessão foi aberta".into())), "{field}");
         }
+    }
+
+    /// PR-13 (decisão 26): só prompt com quebra de linha num `.cmd`/`.bat` sai do argv; o resto fica como era.
+    #[test]
+    fn only_a_multiline_prompt_for_a_batch_codex_leaves_the_argv() {
+        let mut plan = decide(args("cx"), None, &facts(Path::new("/h"), None)).unwrap();
+        plan.prompt = Some("linha 1\r\nlinha 2".into());
+        for (codex, moved) in [("C:/npm/codex.cmd", true), ("C:/npm/CODEX.CMD", true), ("C:/npm/codex.bat", true),
+            ("C:/npm/codex.exe", false), ("/usr/bin/codex", false)] {
+            assert_eq!(prompt_through_app_server(Path::new(codex), &plan).is_some(), moved, "{codex}");
+        }
+        assert_eq!(prompt_through_app_server(Path::new("C:/npm/codex.cmd"), &plan).as_deref(), Some("linha 1\r\nlinha 2"));
+        for single in [Some("uma linha"), Some(""), None] {
+            plan.prompt = single.map(Into::into);
+            assert_eq!(prompt_through_app_server(Path::new("C:/npm/codex.cmd"), &plan), None, "{single:?}");
+        }
+        plan.prompt = None;
+        assert!(!tui_argv("C:/npm/codex.cmd", &plan, "ws://127.0.0.1:9", None).iter().any(|arg| arg.contains("linha")));
     }
 
     #[test]
