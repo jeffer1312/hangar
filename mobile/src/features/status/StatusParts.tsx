@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { memo, useState, type ReactNode } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import Svg, { Circle, Line, Polygon, Polyline, Rect } from 'react-native-svg';
 import { useUnistyles } from 'react-native-unistyles';
@@ -6,7 +6,7 @@ import { Icon, type IconName } from '../../ui/Icon';
 import { haptic } from '../../ui/haptics';
 import { GrowFill, Panel } from '../usage/CostsVisuals';
 import { useSettingsColors, withAlpha } from '../config/colors';
-import { hexParaRgb } from '@hangar/core';
+import { hexParaRgb, type StatusPoint } from '@hangar/core';
 import { INK, MONO, RADIUS, SPACE } from '../../theme/scale';
 
 /** Cartão de um bloco: título, a linha de resumo embaixo dele (como no celular do mock) e o realce de quem veio da lista de atenção. */
@@ -54,14 +54,33 @@ export function Legend({ items }: { items: { label: string; color: string; extra
   </View>;
 }
 
-/** Curva da última hora: área, linha da média e o ponto de agora; o toque mostra o minuto escolhido. */
-export function Sparkline({ values, color, format, label }: { values: number[]; color: string; format: (v: number, ago: number) => string; label: string }) {
+/** Índice tocado pela posição; toque sem posição (leitor de tela, teste) fica no último. */
+function touched(locationX: number | undefined, toIndex: (x: number) => number, last: number): number {
+  return typeof locationX === 'number' && Number.isFinite(locationX) ? Math.max(0, Math.min(last, toIndex(locationX))) : last;
+}
+
+/** Deslizar para cima ou para baixo no leitor de tela anda um ponto; começa no último. */
+const STEP_ACTIONS = [{ name: 'increment' }, { name: 'decrement' }];
+function stepped(action: string, current: number, last: number): number | null {
+  if (action === 'increment') return Math.min(last, current + 1);
+  if (action === 'decrement') return Math.max(0, current - 1);
+  return null;
+}
+
+/**
+ * Curva da última hora: área, linha da média e o ponto de agora; o toque mostra o minuto escolhido.
+ * A escolha guarda o `ts` do ponto: o retrato seguinte desloca a série e o índice apontaria outro minuto.
+ */
+export const Sparkline = memo(function Sparkline({ points, color, format, label }: { points: StatusPoint[]; color: string; format: (v: number, ago: number) => string; label: string }) {
   const c = useSettingsColors();
   const { theme } = useUnistyles();
   const [width, setWidth] = useState(140);
-  const [picked, setPicked] = useState<number | null>(null);
+  const [pickedTs, setPickedTs] = useState<string | null>(null);
   const height = 46;
-  if (values.length < 2) return <View style={{ height }} />;
+  if (points.length < 2) return <View style={{ height }} />;
+  const values = points.map((p) => p.v);
+  const found = pickedTs === null ? -1 : points.findIndex((p) => p.ts === pickedTs);
+  const picked = found >= 0 ? found : null;
   const min = Math.min(...values) * 0.92;
   const max = Math.max(...values) * 1.05 || 1;
   const x = (i: number) => i / (values.length - 1) * width;
@@ -69,13 +88,18 @@ export function Sparkline({ values, color, format, label }: { values: number[]; 
   const line = values.map((v, i) => `${x(i)},${y(v)}`).join(' ');
   const avg = values.reduce((a, b) => a + b, 0) / values.length;
   const last = values.length - 1;
+  const current = picked ?? last;
+  const pick = (i: number | null) => setPickedTs(i === null ? null : points[i].ts);
   return <View style={{ gap: SPACE[1] }}>
-    <Pressable accessibilityRole="image" accessibilityLabel={label} hitSlop={SPACE[1]}
+    <Pressable accessibilityRole="adjustable" accessibilityLabel={label} hitSlop={SPACE[1]}
+      accessibilityValue={{ text: format(values[current], last - current) }}
+      accessibilityActions={STEP_ACTIONS}
+      onAccessibilityAction={(e) => { const i = stepped(e.nativeEvent.actionName, current, last); if (i !== null) pick(i); }}
       onLayout={(e) => setWidth(Math.max(1, e.nativeEvent.layout.width))}
       onPress={(e) => {
-        const i = Math.max(0, Math.min(last, Math.round(e.nativeEvent.locationX / width * last)));
+        const i = touched(e.nativeEvent?.locationX, (px) => Math.round(px / width * last), last);
         haptic.selection();
-        setPicked(picked === i ? null : i);
+        pick(picked === i ? null : i);
       }}
       style={{ height }}>
       <Svg width={width} height={height}>
@@ -83,36 +107,45 @@ export function Sparkline({ values, color, format, label }: { values: number[]; 
         <Polygon points={`0,${height} ${line} ${width},${height}`} fill={color} fillOpacity={0.12} />
         <Polyline points={line} fill="none" stroke={color} strokeWidth={2} strokeLinejoin="round" />
         {picked !== null ? <Line x1={x(picked)} x2={x(picked)} y1={0} y2={height} stroke={c.faint} strokeWidth={1} /> : null}
-        <Circle cx={x(picked ?? last)} cy={y(values[picked ?? last])} r={4} fill={color} />
+        <Circle cx={x(current)} cy={y(values[current])} r={4} fill={color} />
       </Svg>
     </Pressable>
     <Text numberOfLines={1} style={{ color: c.faint, fontSize: theme.base.text.xxxs }}>
       {picked !== null ? format(values[picked], last - picked) : ' '}
     </Text>
   </View>;
-}
+});
 
-export interface HourColumn { hour: string; slow: number; errors: number }
+/** `key` identifica a hora entre retratos (o início dela); `hour` é o rótulo. */
+export interface HourColumn { key: string; hour: string; slow: number; errors: number }
 
 /** 24 colunas por hora: lentas embaixo, erros em cima; o toque mostra a hora. */
-export function HourColumns({ hours, label, describe }: { hours: HourColumn[]; label: string; describe: (h: HourColumn) => string }) {
+export const HourColumns = memo(function HourColumns({ hours, label, describe }: { hours: HourColumn[]; label: string; describe: (h: HourColumn) => string }) {
   const c = useSettingsColors();
   const { theme } = useUnistyles();
   const [width, setWidth] = useState(300);
-  const [picked, setPicked] = useState<number | null>(null);
+  const [pickedKey, setPickedKey] = useState<string | null>(null);
   const height = 70;
   const n = Math.max(1, hours.length);
   const max = Math.max(3, ...hours.map((h) => h.slow + h.errors));
   const step = width / n;
   const bar = Math.min(step * 0.6, 14);
   const ticks = hours.map((h, i) => ({ h, i })).filter(({ i }) => i % 6 === 0);
+  const found = pickedKey === null ? -1 : hours.findIndex((h) => h.key === pickedKey);
+  const picked = found >= 0 ? found : null;
+  const last = n - 1;
+  const current = picked ?? last;
+  const pick = (i: number | null) => setPickedKey(i === null ? null : hours[i]?.key ?? null);
   return <View style={{ gap: SPACE[1] }}>
-    <Pressable accessibilityRole="image" accessibilityLabel={label}
+    <Pressable accessibilityRole="adjustable" accessibilityLabel={label}
+      accessibilityValue={hours[current] ? { text: describe(hours[current]) } : undefined}
+      accessibilityActions={STEP_ACTIONS}
+      onAccessibilityAction={(e) => { const i = stepped(e.nativeEvent.actionName, current, last); if (i !== null) pick(i); }}
       onLayout={(e) => setWidth(Math.max(1, e.nativeEvent.layout.width))}
       onPress={(e) => {
-        const i = Math.max(0, Math.min(n - 1, Math.floor(e.nativeEvent.locationX / step)));
+        const i = touched(e.nativeEvent?.locationX, (px) => Math.floor(px / step), last);
         haptic.selection();
-        setPicked(picked === i ? null : i);
+        pick(picked === i ? null : i);
       }}
       style={{ height }}>
       <Svg width={width} height={height}>
@@ -135,7 +168,7 @@ export function HourColumns({ hours, label, describe }: { hours: HourColumn[]; l
     </View>
     {picked !== null && hours[picked] ? <Text style={{ color: c.muted, fontSize: theme.base.text.xxs }}>{describe(hours[picked])}</Text> : null}
   </View>;
-}
+});
 
 /** Medidor de uso: nome, trilho com a parte usada e "usado / total". */
 export function Meter({ name, used, total, text, label }: { name: string; used: number; total: number; text: string; label: string }) {
@@ -143,12 +176,13 @@ export function Meter({ name, used, total, text, label }: { name: string; used: 
   const { theme } = useUnistyles();
   const ratio = total > 0 ? used / total : 0;
   const color = ratio >= 0.9 ? theme.tokens.status.error : ratio >= 0.75 ? theme.tokens.status.warning : c.accent;
+  // Com fonte grande os dois textos crescem e quebram linha; o trilho fica com o que sobra, sem sumir.
   return <View accessible accessibilityLabel={label} style={{ minHeight: 32, flexDirection: 'row', alignItems: 'center', gap: SPACE[2] }}>
-    <Text numberOfLines={1} style={{ width: 72, color: c.muted, fontSize: theme.base.text.xs }}>{name}</Text>
-    <View style={{ flex: 1, height: 8, borderRadius: RADIUS.full, overflow: 'hidden', backgroundColor: withAlpha(color, 0.18) }}>
+    <Text style={{ minWidth: 72, flexShrink: 1, color: c.muted, fontSize: theme.base.text.xs }}>{name}</Text>
+    <View style={{ flex: 1, minWidth: 48, height: 8, borderRadius: RADIUS.full, overflow: 'hidden', backgroundColor: withAlpha(color, 0.18) }}>
       <GrowFill percent={ratio * 100} color={color} height={8} />
     </View>
-    <Text numberOfLines={1} style={{ minWidth: 92, textAlign: 'right', color: c.text, fontSize: theme.base.text.xxs, fontVariant: ['tabular-nums'] }}>{text}</Text>
+    <Text style={{ minWidth: 92, flexShrink: 1, textAlign: 'right', color: c.text, fontSize: theme.base.text.xxs, fontVariant: ['tabular-nums'] }}>{text}</Text>
   </View>;
 }
 

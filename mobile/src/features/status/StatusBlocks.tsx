@@ -1,22 +1,22 @@
-import { useState } from 'react';
+import { memo, useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 import { intlLocale, type StatusAttention, type StatusAttentionTarget, type StatusExit, type StatusExitsBlock, type StatusHostBlock,
-  type StatusLeftoversBlock, type StatusMachine, type StatusOutsideBlock, type StatusServerBlock, type StatusSessionsBlock,
+  type StatusLeftoversBlock, type StatusMachine, type StatusOutsideBlock, type StatusPoint, type StatusServerBlock, type StatusSessionsBlock,
   type StatusSlowBlock, type StatusUpdateBlock, type StatusUsage } from '@hangar/core';
 import { Icon, type IconName } from '../../ui/Icon';
 import { haptic } from '../../ui/haptics';
 import { Segmented } from '../usage/CostsVisuals';
 import { Composition, useChartColors } from '../usage/ReportUI';
 import { useSettingsColors, withAlpha } from '../config/colors';
-import { RADIUS, SPACE } from '../../theme/scale';
+import { INK, RADIUS, SPACE } from '../../theme/scale';
 import { Block, Chip, Chips, HourColumns, Legend, Meter, Mono, SegBar, Signal, Sparkline, type HourColumn } from './StatusParts';
 import { attentionText, bytes, duration, exitDetail, exitKindText, num, pct, platformName, processName, providerLabel, since, updateLines, when } from './format';
 import * as m from '../../paraglide/messages';
 
 type Place = { flash?: boolean; onLayout?: (y: number) => void };
 
-export function HealthCard({ attention, server, onJump }: { attention: StatusAttention[]; server?: StatusServerBlock; onJump: (target: StatusAttentionTarget) => void }) {
+export const HealthCard = memo(function HealthCard({ attention, server, onJump }: { attention: StatusAttention[]; server?: StatusServerBlock; onJump: (target: StatusAttentionTarget) => void }) {
   const c = useSettingsColors();
   const { theme } = useUnistyles();
   const ok = attention.length === 0;
@@ -49,16 +49,16 @@ export function HealthCard({ attention, server, onJump }: { attention: StatusAtt
       })}
     </View>}
   </View>;
-}
+});
 
-function StatTile({ label, value, sub, values, color, format, a11y }: { label: string; value: string; sub?: string; values: number[]; color: string; format: (v: number, ago: number) => string; a11y: string }) {
+function StatTile({ label, value, sub, points, color, format, a11y }: { label: string; value: string; sub?: string; points: StatusPoint[]; color: string; format: (v: number, ago: number) => string; a11y: string }) {
   const c = useSettingsColors();
   const { theme } = useUnistyles();
   return <View style={{ flex: 1, minWidth: 0, padding: SPACE[3], gap: SPACE[1], backgroundColor: c.inset, borderRadius: RADIUS.lg }}>
     <Text style={{ color: c.muted, fontSize: theme.base.text.xxs }}>{label}</Text>
     <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7} style={{ color: c.text, fontSize: theme.base.text.xl, fontWeight: theme.base.weight.semibold, fontVariant: ['tabular-nums'] }}>{value}</Text>
     {sub ? <Text style={{ color: c.faint, fontSize: theme.base.text.xxs }}>{sub}</Text> : null}
-    <Sparkline values={values} color={color} format={format} label={a11y} />
+    <Sparkline points={points} color={color} format={format} label={a11y} />
     <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
       <Text style={{ color: c.faint, fontSize: theme.base.text.xxxs }}>{m.status_axis_hour_ago()}</Text>
       <Text style={{ color: c.faint, fontSize: theme.base.text.xxxs }}>{m.status_axis_now()}</Text>
@@ -66,34 +66,52 @@ function StatTile({ label, value, sub, values, color, format, a11y }: { label: s
   </View>;
 }
 
-export function ServerTiles({ server, onLayout }: { server: StatusServerBlock } & Place) {
+export const ServerTiles = memo(function ServerTiles({ server, onLayout }: { server: StatusServerBlock } & Place) {
   const colors = useChartColors();
-  const mem = server.rss_series.map((p) => p.v);
-  const cpu = server.cpu_series.map((p) => p.v);
   const memAvg = server.rss_avg_bytes !== undefined ? m.status_server_avg({ value: bytes(server.rss_avg_bytes) }) : undefined;
   const cpuAvg = server.cpu_avg_pct !== undefined ? m.status_server_avg({ value: pct(server.cpu_avg_pct) }) : undefined;
   return <View onLayout={(e) => onLayout?.(e.nativeEvent.layout.y)} style={{ flexDirection: 'row', gap: SPACE[2] }}>
-    <StatTile label={m.status_server_memory()} value={bytes(server.rss_bytes)} sub={memAvg} values={mem} color={colors[0]}
+    <StatTile label={m.status_server_memory()} value={bytes(server.rss_bytes)} sub={memAvg} points={server.rss_series} color={colors[0]}
       a11y={[m.status_server_memory(), bytes(server.rss_bytes), memAvg].filter(Boolean).join(', ')}
       format={(v, ago) => m.status_point_ago({ value: bytes(v), n: String(ago) })} />
-    <StatTile label={m.status_server_cpu()} value={pct(server.cpu_pct)} sub={cpuAvg} values={cpu} color={colors[2]}
+    <StatTile label={m.status_server_cpu()} value={pct(server.cpu_pct)} sub={cpuAvg} points={server.cpu_series} color={colors[2]}
       a11y={[m.status_server_cpu(), pct(server.cpu_pct), cpuAvg].filter(Boolean).join(', ')}
       format={(v, ago) => m.status_point_ago({ value: pct(v), n: String(ago) })} />
   </View>;
-}
+});
 
 const DAY = 86_400_000;
 
-export function DaysCard({ exits, update, flash, onLayout }: { exits?: StatusExitsBlock; update?: StatusUpdateBlock } & Place) {
+const MARK = 14;
+const KIND_WEIGHT: Record<StatusExit['kind'], number> = { crash: 2, update: 1, requested: 0 };
+
+/** Marcadores do mesmo dia que cairiam um sobre o outro viram um alvo só, na ordem do tempo. */
+function groupExits(items: StatusExit[], from: number, at: (ts: number) => number): StatusExit[][] {
+  const sorted = [...items].sort((p, q) => Date.parse(p.ts) - Date.parse(q.ts));
+  const groups: { day: number; x: number; items: StatusExit[] }[] = [];
+  for (const e of sorted) {
+    const ts = Date.parse(e.ts);
+    const day = Math.max(0, Math.min(6, Math.floor((ts - from) / DAY)));
+    const x = at(ts);
+    const prev = groups[groups.length - 1];
+    if (prev && prev.day === day && x - prev.x < MARK) prev.items.push(e);
+    else groups.push({ day, x, items: [e] });
+  }
+  return groups.map((g) => g.items);
+}
+
+export const DaysCard = memo(function DaysCard({ exits, update, flash, onLayout }: { exits?: StatusExitsBlock; update?: StatusUpdateBlock } & Place) {
   const c = useSettingsColors();
   const { theme } = useUnistyles();
   const [width, setWidth] = useState(300);
-  const [picked, setPicked] = useState<number | null>(null);
+  // O `ts` de uma saída do alvo escolhido: o retrato seguinte pode trazer outra lista e o índice mudaria de dono.
+  const [picked, setPicked] = useState<string | null>(null);
   const items = exits?.items ?? [];
   const start = new Date(); start.setHours(0, 0, 0, 0);
   const from = start.getTime() - 6 * DAY;
   const days = Array.from({ length: 7 }, (_, i) => new Date(from + i * DAY));
   const at = (ts: number) => Math.max(0, Math.min(1, (ts - from) / (7 * DAY))) * width;
+  const groups = groupExits(items, from, at);
   const crashes = items.filter((e) => e.kind === 'crash').length;
   const updates = items.filter((e) => e.kind === 'update').length;
   const hint = !exits ? undefined : [
@@ -101,7 +119,8 @@ export function DaysCard({ exits, update, flash, onLayout }: { exits?: StatusExi
     ...(updates === 0 ? [] : [updates === 1 ? m.status_days_updates_one() : m.status_days_updates({ count: String(updates) })]),
   ].join(' · ');
   const colorOf = (e: StatusExit) => e.kind === 'crash' ? theme.tokens.status.error : e.kind === 'update' ? c.accent : c.faint;
-  const sel = picked !== null ? items[picked] : undefined;
+  const labelOf = (e: StatusExit) => `${exitKindText(e.kind)} · ${when(e.ts)}${exitDetail(e) ? ` · ${exitDetail(e)}` : ''}`;
+  const sel = picked !== null ? groups.find((g) => g.some((e) => e.ts === picked)) : undefined;
   const upd = update ? updateLines(update) : null;
   const kinds = new Set(items.map((e) => e.kind));
   return <Block title={m.status_days_title()} hint={hint} flash={flash} onLayout={onLayout}>
@@ -114,15 +133,27 @@ export function DaysCard({ exits, update, flash, onLayout }: { exits?: StatusExi
           </Text>
         </View>)}
         {days.slice(1).map((_, i) => <View key={`t${i}`} style={{ position: 'absolute', left: (i + 1) / 7 * width, top: 10, width: 1, height: 10, backgroundColor: c.border }} />)}
-        {items.map((e, i) => {
-          const color = colorOf(e);
-          const label = `${exitKindText(e.kind)} · ${when(e.ts)}${exitDetail(e) ? ` · ${exitDetail(e)}` : ''}`;
-          return <Pressable key={`${e.ts}:${i}`} accessibilityRole="button" accessibilityLabel={label} accessibilityState={{ selected: picked === i }}
-            hitSlop={SPACE[4]} onPress={() => { haptic.selection(); setPicked(picked === i ? null : i); }}
-            style={{ position: 'absolute', left: at(Date.parse(e.ts)) - 7, top: 8, width: 14, height: 14, alignItems: 'center', justifyContent: 'center' }}>
-            <View style={{ width: e.kind === 'update' ? 10 : 12, height: e.kind === 'update' ? 10 : 12, backgroundColor: color,
-              borderRadius: e.kind === 'update' ? 2 : RADIUS.full, borderWidth: picked === i ? 2 : 0, borderColor: c.text,
-              transform: e.kind === 'update' ? [{ rotate: '45deg' }] : undefined }} />
+        {groups.map((g) => {
+          const head = g[0];
+          const chosen = sel === g;
+          if (g.length === 1) {
+            return <Pressable key={head.ts} accessibilityRole="button" accessibilityLabel={labelOf(head)} accessibilityState={{ selected: chosen }}
+              hitSlop={SPACE[4]} onPress={() => { haptic.selection(); setPicked(chosen ? null : head.ts); }}
+              style={{ position: 'absolute', left: at(Date.parse(head.ts)) - MARK / 2, top: 8, width: MARK, height: MARK, alignItems: 'center', justifyContent: 'center' }}>
+              <View style={{ width: head.kind === 'update' ? 10 : 12, height: head.kind === 'update' ? 10 : 12, backgroundColor: colorOf(head),
+                borderRadius: head.kind === 'update' ? 2 : RADIUS.full, borderWidth: chosen ? 2 : 0, borderColor: c.text,
+                transform: head.kind === 'update' ? [{ rotate: '45deg' }] : undefined }} />
+            </Pressable>;
+          }
+          // Vários no mesmo ponto: o alvo leva a cor do mais grave e a contagem, e abre a lista do dia.
+          const worst = g.reduce((w, e) => KIND_WEIGHT[e.kind] > KIND_WEIGHT[w.kind] ? e : w, head);
+          const size = MARK + 6;
+          return <Pressable key={head.ts} accessibilityRole="button" accessibilityLabel={g.map(labelOf).join('; ')} accessibilityState={{ selected: chosen }}
+            hitSlop={SPACE[4]} onPress={() => { haptic.selection(); setPicked(chosen ? null : head.ts); }}
+            style={{ position: 'absolute', left: at(Date.parse(head.ts)) - size / 2, top: 15 - size / 2, width: size, height: size,
+              borderRadius: RADIUS.full, alignItems: 'center', justifyContent: 'center', backgroundColor: colorOf(worst),
+              borderWidth: chosen ? 2 : 0, borderColor: c.text }}>
+            <Text style={{ color: INK.onAccent, fontSize: theme.base.text.xxxs, fontWeight: theme.base.weight.semibold }}>{String(g.length)}</Text>
           </Pressable>;
         })}
       </View>
@@ -131,10 +162,12 @@ export function DaysCard({ exits, update, flash, onLayout }: { exits?: StatusExi
         { label: m.status_exit_update(), color: c.accent, shape: 'diamond' },
         ...(kinds.has('requested') ? [{ label: m.status_exit_requested(), color: c.faint, shape: 'dot' as const }] : []),
       ]} />
-      {sel ? <View style={{ gap: SPACE[1], padding: SPACE[3], borderRadius: RADIUS.sm, backgroundColor: c.hover }}>
-        <Text style={{ color: c.text, fontSize: theme.base.text.xs, fontWeight: theme.base.weight.semibold }}>{`${exitKindText(sel.kind)} · ${when(sel.ts)}`}</Text>
-        {exitDetail(sel) ? <Text style={{ color: c.muted, fontSize: theme.base.text.xxs }}>{exitDetail(sel)}</Text> : null}
-        {sel.error_lines.map((line, i) => <Mono key={i} color={c.muted}>{line}</Mono>)}
+      {sel ? <View style={{ gap: SPACE[3], padding: SPACE[3], borderRadius: RADIUS.sm, backgroundColor: c.hover }}>
+        {sel.map((e, n) => <View key={`${e.ts}:${n}`} style={{ gap: SPACE[1] }}>
+          <Text style={{ color: c.text, fontSize: theme.base.text.xs, fontWeight: theme.base.weight.semibold }}>{`${exitKindText(e.kind)} · ${when(e.ts)}`}</Text>
+          {exitDetail(e) ? <Text style={{ color: c.muted, fontSize: theme.base.text.xxs }}>{exitDetail(e)}</Text> : null}
+          {e.error_lines.map((line, i) => <Mono key={i} color={c.muted}>{line}</Mono>)}
+        </View>)}
       </View> : null}
     </> : null}
     {upd ? <View style={{ flexDirection: 'row', alignItems: 'center', gap: SPACE[2], paddingTop: SPACE[2], borderTopWidth: exits ? 1 : 0, borderTopColor: c.border }}>
@@ -147,7 +180,7 @@ export function DaysCard({ exits, update, flash, onLayout }: { exits?: StatusExi
       </View>
     </View> : null}
   </Block>;
-}
+});
 
 function machineTag(mc: StatusMachine): string {
   if (mc.this_machine) return m.status_machines_this();
@@ -186,16 +219,16 @@ function MachineCard({ mc }: { mc: StatusMachine }) {
   </View>;
 }
 
-export function MachinesCard({ machines, flash, onLayout }: { machines: StatusMachine[] } & Place) {
+export const MachinesCard = memo(function MachinesCard({ machines, flash, onLayout }: { machines: StatusMachine[] } & Place) {
   const c = useSettingsColors();
   const { theme } = useUnistyles();
   return <Block title={m.status_machines_title()} hint={m.status_machines_hint()} flash={flash} onLayout={onLayout}>
     <View style={{ gap: SPACE[2] }}>{machines.map((mc) => <MachineCard key={mc.id} mc={mc} />)}</View>
     {machines.every((mc) => mc.this_machine) ? <Text style={{ color: c.faint, fontSize: theme.base.text.xxs }}>{m.status_machines_only_this()}</Text> : null}
   </Block>;
-}
+});
 
-export function SessionsCard({ sessions, flash, onLayout }: { sessions: StatusSessionsBlock } & Place) {
+export const SessionsCard = memo(function SessionsCard({ sessions, flash, onLayout }: { sessions: StatusSessionsBlock } & Place) {
   const c = useSettingsColors();
   const { theme } = useUnistyles();
   const colors = useChartColors();
@@ -228,18 +261,18 @@ export function SessionsCard({ sessions, flash, onLayout }: { sessions: StatusSe
         : m.status_sessions_queued({ count: String(sessions.queued) })} /> : null}
     </Chips> : null}
   </Block>;
-}
+});
 
 function hourOf(iso: string) {
   return `${String(new Date(iso).getHours()).padStart(2, '0')}h`;
 }
 
-export function SlowCard({ slow, flash, onLayout }: { slow: StatusSlowBlock } & Place) {
+export const SlowCard = memo(function SlowCard({ slow, flash, onLayout }: { slow: StatusSlowBlock } & Place) {
   const c = useSettingsColors();
   const { theme } = useUnistyles();
   const nSlow = slow.hours.reduce((sum, h) => sum + h.slow, 0);
   const nErr = slow.hours.reduce((sum, h) => sum + h.errors, 0);
-  const hours: HourColumn[] = slow.hours.map((h) => ({ hour: hourOf(h.hour_start), slow: h.slow, errors: h.errors }));
+  const hours: HourColumn[] = slow.hours.map((h) => ({ key: h.hour_start, hour: hourOf(h.hour_start), slow: h.slow, errors: h.errors }));
   const top = Math.max(1, ...slow.top_routes.map((r) => r.count));
   return <Block title={m.status_slow_title()} hint={m.status_slow_hint({ slow: String(nSlow), errors: String(nErr) })} flash={flash} onLayout={onLayout}>
     <HourColumns hours={hours} label={m.status_slow_chart()}
@@ -260,14 +293,14 @@ export function SlowCard({ slow, flash, onLayout }: { slow: StatusSlowBlock } & 
         return <View key={r.route} accessible accessibilityLabel={`${r.route}: ${r.count} · ${value}`} style={{ flexDirection: 'row', alignItems: 'center', gap: SPACE[2] }}>
           <View style={{ flex: 1, minWidth: 0 }}><Mono>{r.route}</Mono></View>
           <View style={{ width: 4 + r.count / top * 72, height: 6, borderRadius: RADIUS.full, backgroundColor: failed ? theme.tokens.status.error : theme.tokens.status.warning }} />
-          <Text style={{ width: 44, textAlign: 'right', color: c.muted, fontSize: theme.base.text.xxs, fontVariant: ['tabular-nums'] }}>{value}</Text>
+          <Text style={{ minWidth: 44, flexShrink: 0, textAlign: 'right', color: c.muted, fontSize: theme.base.text.xxs, fontVariant: ['tabular-nums'] }}>{value}</Text>
         </View>;
       })}
     </View> : null}
   </Block>;
-}
+});
 
-export function HostCard({ host, flash, onLayout }: { host: StatusHostBlock } & Place) {
+export const HostCard = memo(function HostCard({ host, flash, onLayout }: { host: StatusHostBlock } & Place) {
   const { theme } = useUnistyles();
   const c = useSettingsColors();
   const colors = useChartColors();
@@ -301,7 +334,7 @@ export function HostCard({ host, flash, onLayout }: { host: StatusHostBlock } & 
     <Composition label={m.status_host_disk_use()} items={disk} />
     <Legend items={disk.map((d) => ({ label: d.label, color: d.color, extra: d.detail }))} />
   </Block>;
-}
+});
 
 function Tile({ icon, color, title, value }: { icon: IconName; color: string; title: string; value: string }) {
   const c = useSettingsColors();
@@ -317,7 +350,7 @@ function Tile({ icon, color, title, value }: { icon: IconName; color: string; ti
   </View>;
 }
 
-export function OutsideCard({ outside, leftovers, flash, onLayout }: { outside?: StatusOutsideBlock; leftovers?: StatusLeftoversBlock } & Place) {
+export const OutsideCard = memo(function OutsideCard({ outside, leftovers, flash, onLayout }: { outside?: StatusOutsideBlock; leftovers?: StatusLeftoversBlock } & Place) {
   const c = useSettingsColors();
   const { theme } = useUnistyles();
   const good = theme.tokens.status.success;
@@ -342,4 +375,4 @@ export function OutsideCard({ outside, leftovers, flash, onLayout }: { outside?:
         : <Chip icon="Check" tone="ok" text={m.status_leftover_cano_none()} /> : null}
     </Chips> : null}
   </Block>;
-}
+});

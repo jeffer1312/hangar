@@ -38,7 +38,9 @@ function Body({ snap, scroll }: { snap: StatusSnapshot; scroll: RefObject<Scroll
   const [flash, setFlash] = useState<StatusAttentionTarget | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
-  const place = (target: StatusAttentionTarget) => (y: number) => { places.current[target] = y; };
+  // Uma função por alvo, a mesma em todo retrato: os cartões em `memo` não redesenham por ela.
+  const placers = useRef<Partial<Record<StatusAttentionTarget, (y: number) => void>>>({});
+  const place = (target: StatusAttentionTarget) => (placers.current[target] ??= (y: number) => { places.current[target] = y; });
   const jump = useCallback((target: StatusAttentionTarget) => {
     const y = places.current[target];
     if (y === undefined) return;
@@ -97,7 +99,9 @@ function StateCard({ tone, icon, title, body, children }: { tone: string; icon: 
 
 function Failed({ label, failure, onRetry }: { label: string; failure: StatusFailure; onRetry: () => void }) {
   const { theme } = useUnistyles();
-  const body = failure.code === 404 ? m.status_error_outdated({ server: label })
+  // O 409 de identidade vem depois de a rota ser decidida: é o endereço que não provou ser a máquina, não um HTTP do servidor.
+  const body = failure.reason === 'server_identity_unconfirmed' ? m.mobile_machines_identity_unconfirmed()
+    : failure.code === 404 ? m.status_error_outdated({ server: label })
     : failure.code ? m.status_error_http({ server: label, code: String(failure.code) }) : m.status_error_other({ server: label });
   const copy = () => { void Clipboard.setStringAsync(`${label} /api/status: ${failure.detail}`).then(() => toast.ok(m.status_copied())); };
   return <StateCard tone={theme.tokens.status.warning} icon="TriangleAlert" title={m.status_error_title()} body={body}>

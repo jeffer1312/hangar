@@ -56,6 +56,7 @@ vi.mock('../usage/ReportUI', () => ({
 
 import StatusScreen from './StatusScreen';
 import { bytes } from './format';
+import { STATUS_WATCHDOG_MS, keepUnchanged } from './useStatus';
 
 function fakeSource() {
   const listeners = new Map<string, (ev: { data: string }) => void>();
@@ -184,5 +185,116 @@ describe('tela Status', () => {
     expect(c.textContent).toContain(m.status_down_title({ server: 'Casa' }));
     expect(calls.getStatus).not.toHaveBeenCalled();
     expect(calls.openStream).not.toHaveBeenCalled();
+  });
+
+  it('endereço que não provou a identidade: frase própria, não "HTTP 409"', async () => {
+    calls.getStatus.mockRejectedValue(Object.assign(new Error(m.mobile_machines_identity_unconfirmed()), { status: 409, code: 'server_identity_unconfirmed' }));
+    const c = await mount();
+    expect(c.textContent).toContain(m.mobile_machines_identity_unconfirmed());
+    expect(c.textContent).not.toContain(m.status_error_http({ server: 'Casa', code: '409' }));
+  });
+
+  it('marcadores do mesmo dia que se sobrepõem viram um alvo que abre a lista do dia', async () => {
+    const day = new Date(); day.setHours(12, 0, 0, 0);
+    const base = day.getTime() - 86_400_000;
+    const crash = (ms: number, cause: string) => ({ ts: new Date(ms).toISOString(), kind: 'crash' as const, cause, error_lines: [] });
+    calls.getStatus.mockResolvedValue({ ...FIXTURE, exits: { items: [crash(base, 'out_of_memory'), crash(base + 600_000, 'watchdog')] } });
+    calls.openStream.mockReturnValue(fakeSource());
+    const c = await mount();
+    const marks = [...c.querySelectorAll<HTMLButtonElement>('button[aria-label]')]
+      .filter((b) => b.getAttribute('aria-label')!.startsWith(`${m.status_exit_crash()} · `));
+    expect(marks).toHaveLength(1);
+    expect(marks[0].textContent).toBe('2');
+    await act(async () => marks[0].click());
+    expect(c.textContent).toContain(m.status_exit_cause_out_of_memory());
+    expect(c.textContent).toContain(m.status_exit_cause_watchdog());
+  });
+
+  it('a saída escolhida segue a mesma quando o retrato seguinte muda a lista', async () => {
+    const day = new Date(); day.setHours(12, 0, 0, 0);
+    const ago = (n: number) => new Date(day.getTime() - n * 86_400_000).toISOString();
+    const oom = { ts: ago(1), kind: 'crash' as const, cause: 'out_of_memory', error_lines: [] };
+    const upd = (n: number) => ({ ts: ago(n), kind: 'update' as const, from: 'a', to: 'b', error_lines: [] });
+    const source = fakeSource();
+    calls.getStatus.mockResolvedValue({ ...FIXTURE, exits: { items: [upd(3), oom] } });
+    calls.openStream.mockReturnValue(source);
+    const c = await mount();
+    const mark = c.querySelector<HTMLButtonElement>(`button[aria-label^="${m.status_exit_crash()} · "]`)!;
+    await act(async () => mark.click());
+    expect(c.textContent).toContain(m.status_exit_cause_out_of_memory());
+    await act(async () => source.emit('status', JSON.stringify({ ...FIXTURE, exits: { items: [upd(5), upd(3), oom] } })));
+    expect(c.textContent).toContain(m.status_exit_cause_out_of_memory());
+    expect(c.textContent).not.toContain(m.status_exit_versions({ from: 'a', to: 'b' }));
+  });
+
+  it('curva e colunas: controle ajustável que diz o valor, e o ponto escolhido segue o minuto', async () => {
+    const source = fakeSource();
+    calls.getStatus.mockResolvedValue(FIXTURE);
+    calls.openStream.mockReturnValue(source);
+    const c = await mount();
+    const series = FIXTURE.server!.rss_series;
+    const lastV = series[series.length - 1].v;
+    const curve = () => c.querySelector<HTMLElement>(`[role="adjustable"][aria-label^="${m.status_server_memory()},"]`)!;
+    expect(curve().getAttribute('aria-valuetext')).toBe(m.status_point_ago({ value: bytes(lastV), n: '0' }));
+    await act(async () => curve().click());
+    expect(c.textContent).toContain(m.status_point_ago({ value: bytes(lastV), n: '0' }));
+    // Um minuto depois a série anda: o ponto escolhido é o mesmo, agora "há 1 min".
+    const next = [...series.slice(1), { ts: '2026-11-17T14:24:00Z', v: lastV * 2 }];
+    await act(async () => source.emit('status', JSON.stringify({ ...FIXTURE, server: { ...FIXTURE.server!, rss_series: next } })));
+    expect(c.textContent).toContain(m.status_point_ago({ value: bytes(lastV), n: '1' }));
+
+    const hours = FIXTURE.slow!.hours;
+    const lastHour = hours[hours.length - 1];
+    const columns = c.querySelector<HTMLElement>(`[role="adjustable"][aria-label="${m.status_slow_chart()}"]`)!;
+    expect(columns.getAttribute('aria-valuetext')).toBe(m.status_slow_hour({
+      hour: `${String(new Date(lastHour.hour_start).getHours()).padStart(2, '0')}h`, slow: String(lastHour.slow), errors: String(lastHour.errors) }));
+  });
+
+  it('retrato igual bloco a bloco mantém a referência do bloco', () => {
+    const next: StatusSnapshot = { ...JSON.parse(JSON.stringify(FIXTURE)), generated_at: 'depois', sessions: { ...FIXTURE.sessions!, queued: 99 } };
+    const out = keepUnchanged(FIXTURE, next);
+    expect(out.host).toBe(FIXTURE.host);
+    expect(out.attention).toBe(FIXTURE.attention);
+    expect(out.sessions).toBe(next.sessions);
+    expect(out.generated_at).toBe('depois');
+  });
+
+  describe('com relógio falso', () => {
+    beforeEach(() => { vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] }); });
+    afterEach(() => { vi.useRealTimers(); });
+    const tick = (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync(ms); });
+
+    it('SSE mudo: o vigia fecha e relê; ping zera o vigia', async () => {
+      const first = fakeSource();
+      calls.getStatus.mockResolvedValue(FIXTURE);
+      calls.openStream.mockReturnValueOnce(first).mockReturnValue(fakeSource());
+      await mount();
+      await tick(STATUS_WATCHDOG_MS - 1000);
+      await act(async () => first.emit('ping', ''));
+      await tick(STATUS_WATCHDOG_MS - 1000);
+      expect(first.close).not.toHaveBeenCalled();
+      await tick(1000);
+      expect(first.close).toHaveBeenCalled();
+      expect(calls.getStatus).toHaveBeenCalledTimes(1);
+      await tick(1000);
+      expect(calls.getStatus).toHaveBeenCalledTimes(2);
+      expect(calls.openStream).toHaveBeenCalledTimes(2);
+    });
+
+    for (const how of ['ping', 'queda'] as const) {
+      it(`estacionado com a tela aberta (${how}): fecha o SSE, mostra parado e não tenta de novo`, async () => {
+        const source = fakeSource();
+        calls.getStatus.mockResolvedValue(FIXTURE);
+        calls.openStream.mockReturnValue(source);
+        const c = await mount();
+        calls.parked.mockReturnValue(true);
+        await act(async () => { if (how === 'ping') source.emit('ping', ''); else source.onerror?.(new Event('error')); });
+        expect(source.close).toHaveBeenCalled();
+        expect(c.textContent).toContain(m.status_down_title({ server: 'Casa' }));
+        await tick(60_000);
+        expect(calls.getStatus).toHaveBeenCalledTimes(1);
+        expect(calls.openStream).toHaveBeenCalledTimes(1);
+      });
+    }
   });
 });

@@ -6,7 +6,8 @@ import { STATUS_EVENT, getStatus, isServerParked, openStatusStream, parseStatusE
 import { useServers } from '../../stores/servers';
 import { useSessions } from '../../stores/sessions';
 
-export type StatusFailure = { code?: number; detail: string };
+/** `reason` é o `code` do erro (ex.: `server_identity_unconfirmed`), quando ele vem. */
+export type StatusFailure = { code?: number; reason?: string; detail: string };
 
 export type StatusView =
   | { kind: 'none' }
@@ -16,11 +17,27 @@ export type StatusView =
   | { kind: 'ok'; label: string; snap: StatusSnapshot };
 
 const RETRY_MS = [1000, 2000, 5000, 10000];
-const noop = () => {};
+// O servidor manda `ping` a cada 10 s: dois perdidos e mais folga é conexão meio morta.
+export const STATUS_WATCHDOG_MS = 25_000;
 
 function failureOf(e: unknown): StatusFailure {
   const code = (e as { status?: unknown })?.status;
-  return { code: typeof code === 'number' ? code : undefined, detail: e instanceof Error ? e.message : String(e) };
+  const reason = (e as { code?: unknown })?.code;
+  return {
+    code: typeof code === 'number' ? code : undefined,
+    reason: typeof reason === 'string' ? reason : undefined,
+    detail: e instanceof Error ? e.message : String(e),
+  };
+}
+
+/** Retrato novo com cada bloco igual ao anterior na mesma referência: os cartões em `memo` não redesenham. */
+export function keepUnchanged(prev: StatusSnapshot | undefined, next: StatusSnapshot): StatusSnapshot {
+  if (!prev) return next;
+  const out: Record<string, unknown> = { ...next };
+  for (const key of Object.keys(next) as (keyof StatusSnapshot)[]) {
+    if (JSON.stringify(prev[key]) === JSON.stringify(next[key])) out[key] = prev[key];
+  }
+  return out as unknown as StatusSnapshot;
 }
 
 /**
@@ -31,6 +48,8 @@ export function useStatus(): { view: StatusView; retry: () => void } {
   const server = useServers((s) => s.servers.find((x) => x.id === s.activeId) ?? null);
   const bucket = useSessions((s) => s.byServer.find((b) => b.server.id === server?.id));
   const offline = bucket?.error === 'offline';
+  // `parked` só força o redesenho: o estacionamento não avisa, quem o descobre é o laço abaixo.
+  const [, setParked] = useState(0);
   const down = !!server && (offline || isServerParked(server.id));
   const [foreground, setForeground] = useState(AppState.currentState === 'active');
   const [attempt, setAttempt] = useState(0);
@@ -48,42 +67,64 @@ export function useStatus(): { view: StatusView; retry: () => void } {
     let alive = true;
     let source: EventSourceLike | null = null;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    let watchdog: ReturnType<typeof setTimeout> | null = null;
     let tries = 0;
     let had = false;
+    const unwatch = () => { if (watchdog) clearTimeout(watchdog); watchdog = null; };
+    const close = () => { unwatch(); source?.close(); source = null; };
+    // Estacionado com a tela aberta: para tudo e redesenha, e o render passa a mostrar "parado".
+    const stopIfParked = () => {
+      if (!isServerParked(server.id)) return false;
+      close();
+      if (timer) clearTimeout(timer);
+      timer = null;
+      alive = false;
+      setParked((n) => n + 1);
+      return true;
+    };
     const later = () => {
-      if (!alive || timer) return;
-      timer = setTimeout(() => { timer = null; if (alive) void load(); }, RETRY_MS[Math.min(tries++, RETRY_MS.length - 1)]);
+      if (!alive || timer || stopIfParked()) return;
+      timer = setTimeout(() => { timer = null; if (alive && !stopIfParked()) void load(); }, RETRY_MS[Math.min(tries++, RETRY_MS.length - 1)]);
+    };
+    // Caiu ou ficou mudo (rede, servidor reiniciando): relê o retrato e reabre com espera crescente.
+    const drop = () => { close(); later(); };
+    const arm = () => {
+      unwatch();
+      watchdog = setTimeout(() => { watchdog = null; drop(); }, STATUS_WATCHDOG_MS);
     };
     const open = () => {
+      if (stopIfParked()) return;
       source = openStatusStream(server);
-      source.addEventListener('ping', noop);
+      arm();
+      source.addEventListener('ping', () => { if (alive && !stopIfParked()) arm(); });
       source.addEventListener(STATUS_EVENT, (ev) => {
+        if (!alive || stopIfParked()) return;
+        arm();
         const snap = parseStatusEvent(ev.data);
-        if (!snap || !alive) return;
+        if (!snap) return;
         tries = 0;
-        setData({ id: server.id, snap });
+        setData((d) => ({ id: server.id, snap: keepUnchanged(d?.id === server.id ? d.snap : undefined, snap) }));
       });
-      // Caiu (rede, servidor reiniciando): relê o retrato e reabre com espera crescente.
-      source.onerror = () => { source?.close(); source = null; later(); };
+      source.onerror = drop;
     };
     const load = async () => {
       try {
         const snap = await getStatus(server);
         if (!alive) return;
         had = true;
-        setData({ id: server.id, snap });
+        setData((d) => ({ id: server.id, snap: keepUnchanged(d?.id === server.id ? d.snap : undefined, snap) }));
         open();
       } catch (e) {
         if (!alive) return;
         const failure = failureOf(e);
-        registrarDiag({ evento: 'status.leitura_falhou', nivel: 'aviso', codigo: failure.code ? String(failure.code) : 'rede' });
+        registrarDiag({ evento: 'status.leitura_falhou', nivel: 'aviso', codigo: failure.reason ?? (failure.code ? String(failure.code) : 'rede') });
         // Releitura depois de uma queda do SSE: o último retrato fica e tenta de novo; só a primeira vira erro.
         if (had) later();
         else setData({ id: server.id, failure });
       }
     };
     void load();
-    return () => { alive = false; if (timer) clearTimeout(timer); source?.close(); };
+    return () => { alive = false; if (timer) clearTimeout(timer); close(); };
   }, [server, down, foreground, attempt]));
 
   const retry = useCallback(() => {
