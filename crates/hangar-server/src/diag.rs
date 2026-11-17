@@ -370,7 +370,7 @@ pub fn record_boot(hangar_dir: &std::path::Path, log: Option<&std::path::Path>) 
             }
             // A marca de intenção é da vida que o outro servidor de pé ainda vive: fica para ela.
             if begin.held_by.is_none() {
-                lines.extend(crate::update::stop_intent::record_previous(hangar_dir, begin.previous.as_ref(), errors));
+                lines.extend(crate::update::stop_intent::record_previous(hangar_dir, begin.previous.as_ref(), begin.pid, errors));
             }
         }
         Err(error) => lines.push(json!({"evento": "hangar_server.vida_ilegivel", "nivel": "aviso",
@@ -421,7 +421,7 @@ pub fn record_running(hangar_dir: &std::path::Path) {
 /// quando a saída foi por falha.
 pub fn record_stop(hangar_dir: &std::path::Path, cause: &str, failed: bool) {
     let mut line = json!({"evento": "backend.encerrando", "nivel": if failed { "erro" } else { "ok" }, "causa": cause});
-    match hangar_boot::life::end_with(hangar_dir, std::process::id(), Some(cause), failed) {
+    match hangar_boot::life::end_with(hangar_dir, std::process::id(), Some(cause), failed, hangar_boot::life::now_secs()) {
         Ok(hangar_boot::life::Ended::Reset) => line["codigo"] = json!("server_life_reset"),
         Ok(_) => {},
         Err(error) => {

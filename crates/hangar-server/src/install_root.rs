@@ -250,7 +250,7 @@ fn run_direct(mut command: std::process::Command, log: Option<&Path>, version: &
 /// handle do filho ainda aberto, o pid dele não foi reusado.
 #[cfg(windows)]
 fn close_life(hangar_dir: &Path, pid: u32, file: Option<&std::fs::File>, log: Option<&Path>) -> &'static str {
-    match hangar_boot::life::end(hangar_dir, pid) {
+    match hangar_boot::life::end(hangar_dir, pid, hangar_boot::life::now_secs()) {
         Ok(hangar_boot::life::Ended::Cleared) => "limpa",
         Ok(hangar_boot::life::Ended::OtherLife) => "outra",
         Ok(hangar_boot::life::Ended::Reset) => "ilegivel",

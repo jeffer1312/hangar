@@ -84,7 +84,7 @@ impl DiaryReader {
         Self { source: Source::At(dir), cache: Mutex::default() }
     }
 
-    /// Saídas do servidor com `ts` nos 7 dias até `now`, da mais antiga à mais nova.
+    /// Saídas do servidor com a hora da saída nos 7 dias até `now`, da mais antiga à mais nova.
     pub fn exits(&self, now: DateTime<Utc>) -> Option<ExitsBlock> {
         let since = now - TimeDelta::days(EXITS_DAYS);
         let cache = self.refresh()?;
@@ -208,9 +208,11 @@ impl Facts {
     }
 }
 
-/// C2: `{tipo, causa?, de?, para?, erro?}`; `erro` traz as últimas linhas de erro numa string só.
+/// C2: `{tipo, causa?, de?, para?, quando?, erro?}`; `erro` traz as últimas linhas de erro numa
+/// string só. A hora é o `quando` (a saída), não o `ts` (a subida seguinte, que gravou a linha);
+/// linha sem ele, de versão anterior, fica com o `ts`.
 fn exit(line: &Map<String, Value>) -> Option<(DateTime<Utc>, Exit)> {
-    let at = at(line)?;
+    let at = text(line, "quando").and_then(parse).or_else(|| at(line))?;
     let kind = match text(line, "tipo")? {
         "crash" => ExitKind::Crash,
         "update" => ExitKind::Update,
@@ -243,7 +245,11 @@ fn watchdog(line: &Map<String, Value>) -> Option<(DateTime<Utc>, WatchdogEvent)>
 }
 
 fn at(line: &Map<String, Value>) -> Option<DateTime<Utc>> {
-    DateTime::parse_from_rfc3339(text(line, "ts")?).ok().map(|at| at.with_timezone(&Utc))
+    parse(text(line, "ts")?)
+}
+
+fn parse(text: &str) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(text).ok().map(|at| at.with_timezone(&Utc))
 }
 
 fn text<'a>(line: &'a Map<String, Value>, key: &str) -> Option<&'a str> {
@@ -352,6 +358,22 @@ mod tests {
                 from: None, to: None, error_lines: vec!["06:11:58 code=a".into(), "06:11:59 code=b".into()] },
         ]);
         assert_eq!(reader.skipped(), Skipped { lines: 1, files: 0 }, "tipo desconhecido é linha ilegível");
+    }
+
+    /// A linha gravada na subida de hoje fala de uma saída de dias atrás: vale o `quando`.
+    #[test]
+    fn exit_time_is_quando_not_the_boot_ts() {
+        let dir = tempfile::tempdir().unwrap();
+        append(dir.path(), "2026-11-17", &[
+            saida("2026-11-17T09:00:00.000-03:00", json!({"tipo": "crash", "quando": "2026-11-09T10:00:00Z"})),
+            saida("2026-11-17T09:00:01.000-03:00", json!({"tipo": "requested", "causa": "sigterm", "quando": "2026-11-15T10:00:00Z"})),
+            saida("2026-11-17T09:00:02.000-03:00", json!({"tipo": "update", "quando": "2026-11-14T10:00:00Z"})),
+            saida("2026-11-17T09:00:03.000-03:00", json!({"tipo": "crash", "quando": "torto"})),
+        ]);
+        let exits = DiaryReader::at(dir.path().to_owned()).exits(utc("2026-11-17T13:00:00Z")).unwrap();
+        let got: Vec<_> = exits.items.iter().map(|exit| (exit.ts.as_str(), exit.kind)).collect();
+        assert_eq!(got, [("2026-11-14T10:00:00Z", ExitKind::Update), ("2026-11-15T10:00:00Z", ExitKind::Requested),
+            ("2026-11-17T12:00:03Z", ExitKind::Crash)], "fora da janela pelo quando sai; quando ilegível fica com o ts");
     }
 
     #[test]

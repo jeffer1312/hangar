@@ -22,6 +22,9 @@ pub struct Begin {
     /// A vida anterior ainda não classificada: saiu sem `end` ou gravou a parada. Lida uma vez só,
     /// porque esta subida tira a parada do arquivo.
     pub previous: Option<Previous>,
+    /// O pid da vida que o arquivo descreve, também sem `previous` (parada de versão que não gravava
+    /// a causa): a marca de intenção o confere.
+    pub pid: Option<u32>,
 }
 
 /// A vida anterior, para a subida dizer por que ela saiu.
@@ -41,6 +44,8 @@ pub struct Stop {
     pub cause: Option<String>,
     /// A saída foi por falha do servidor (`serve_failed`), não um pedido.
     pub failed: bool,
+    /// Segundos desde a época em que a parada foi gravada; ausente na gravada por versão antiga.
+    pub at: Option<u64>,
 }
 
 /// Na subida, antes de qualquer outra coisa: a marca de pé que ficou é a vida anterior que não saiu
@@ -50,12 +55,13 @@ pub fn begin(dir: &Path, now: &str, alive: impl Fn(u32, f64) -> bool) -> std::io
     let (previous, reset) = read_or_reset(dir)?;
     let running = previous.get("running").and_then(Value::as_bool).unwrap_or(false);
     if running && let Some(pid) = holder(&previous, &alive) {
-        return Ok(Begin { unclean: false, unclean_exits: count_of(&previous), reset: false, held_by: Some(pid), previous: None });
+        return Ok(Begin { unclean: false, unclean_exits: count_of(&previous), reset: false, held_by: Some(pid), previous: None, pid: Some(pid) });
     }
     let unclean = running;
+    let pid = pid_of(&previous);
     let stop = if running { None } else { stop_of(&previous) };
     let prior = (unclean || stop.is_some()).then(|| Previous {
-        pid: pid_of(&previous),
+        pid,
         started: previous.get("started").and_then(Value::as_str).map(str::to_owned),
         unclean,
         stop,
@@ -69,10 +75,10 @@ pub fn begin(dir: &Path, now: &str, alive: impl Fn(u32, f64) -> bool) -> std::io
         consumed.as_object_mut().expect("read_or_reset devolve objeto").shift_remove(STOP);
         write(dir, &consumed)?;
     }
-    Ok(Begin { unclean, unclean_exits: count, reset, held_by: None, previous: prior })
+    Ok(Begin { unclean, unclean_exits: count, reset, held_by: None, previous: prior, pid })
 }
 
-/// A chave da parada gravada por `end_with`: `{pid, cause, failed}`.
+/// A chave da parada gravada por `end_with`: `{pid, cause, failed, at}`.
 const STOP: &str = "stop";
 
 fn pid_of(life: &Value) -> Option<u32> {
@@ -87,6 +93,7 @@ fn stop_of(life: &Value) -> Option<Stop> {
     Some(Stop {
         cause: stop.get("cause").and_then(Value::as_str).map(str::to_owned),
         failed: stop.get("failed").and_then(Value::as_bool).unwrap_or(false),
+        at: stop.get("at").and_then(Value::as_u64),
     })
 }
 
@@ -143,15 +150,23 @@ pub enum Ended {
     Reset,
 }
 
-/// Parada desta vida sem causa conhecida (o lançador fechando a de um filho que não a gravou).
-pub fn end(dir: &Path, pid: u32) -> std::io::Result<Ended> {
-    end_with(dir, pid, None, false)
+/// O agora em segundos desde a época, para o `at` de `end`/`end_with`.
+pub fn now_secs() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |elapsed| elapsed.as_secs())
 }
 
-/// Parada desta vida: só apaga a marca de pé se ela for deste `pid`, e grava a causa e se a saída
-/// foi por falha. Parada já gravada desta vida fica: quem fecha depois (o lançador) não sabe a causa.
-pub fn end_with(dir: &Path, pid: u32, cause: Option<&str>, failed: bool) -> std::io::Result<Ended> {
-    let stop = json!({"pid": pid, "cause": cause, "failed": failed});
+/// Parada desta vida sem causa conhecida (o lançador fechando a de um filho que não a gravou).
+/// `at`: segundos desde a época.
+pub fn end(dir: &Path, pid: u32, at: u64) -> std::io::Result<Ended> {
+    end_with(dir, pid, None, false, at)
+}
+
+/// Parada desta vida: só apaga a marca de pé se ela for deste `pid`, e grava a causa, se a saída
+/// foi por falha e o instante dela, porque o diário só a registra na subida seguinte, que pode vir
+/// dias depois. Parada já gravada desta vida fica: quem fecha depois (o lançador) não sabe a causa.
+/// `at`: segundos desde a época.
+pub fn end_with(dir: &Path, pid: u32, cause: Option<&str>, failed: bool, at: u64) -> std::io::Result<Ended> {
+    let stop = json!({"pid": pid, "cause": cause, "failed": failed, "at": at});
     let (mut life, reset) = read_or_reset(dir)?;
     if reset {
         write(dir, &json!({"running": false, "unclean_exits": 0, "last_unclean": null, "pid": pid, "stop": stop}))?;

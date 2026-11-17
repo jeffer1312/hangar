@@ -612,7 +612,8 @@ impl Live {
             let server_version = probe.as_ref().and_then(|probe| probe.version.clone());
             let outdated = server_version.as_deref().zip(ours).is_some_and(|(theirs, ours)| hangar_status::attention::older(theirs, ours));
             machines.push(Machine { id: peer.id.clone(), label: peer.label.clone(), this_machine: false, state, down_since,
-                latency_ms: probe.as_ref().filter(|probe| probe.up).and_then(|probe| probe.ms), server_version, outdated, lan: false,
+                latency_ms: probe.as_ref().filter(|probe| probe.up).and_then(|probe| probe.ms), server_version, outdated,
+                lan: probe.as_ref().is_some_and(|probe| probe.up && lan_address(&peer.base_url)),
                 app: take_app(peer.id.as_str()) });
         }
         // Máquina que saiu do `peers.json` não guarda hora de queda.
@@ -677,6 +678,17 @@ fn peer_entries(book: &serde_json::Map<String, Value>) -> Vec<PeerEntry> {
 }
 
 struct Probe { up: bool, ms: Option<u32>, version: Option<String> }
+
+/// O endereço que o `check` sondou é da rede local: IP privado ou de enlace, ou nome `.local`. O
+/// Tailscale (100.64.0.0/10, `*.ts.net`) e o Connect não são.
+fn lan_address(url: &str) -> bool {
+    let Some(host) = reqwest::Url::parse(url).ok().and_then(|url| url.host_str().map(str::to_ascii_lowercase)) else { return false };
+    match host.trim_start_matches('[').trim_end_matches(']').parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V4(ip)) => ip.is_private() || ip.is_link_local(),
+        Ok(std::net::IpAddr::V6(ip)) => ip.is_unique_local() || ip.is_unicast_link_local(),
+        Err(_) => host.trim_end_matches('.').ends_with(".local"),
+    }
+}
 
 /// O mesmo `check` de `/api/peers/check` (tempo e identidade, também pelo Connect); de pé, a versão
 /// sai da saúde dele. Recusa de credencial ainda é máquina de pé.
@@ -904,6 +916,18 @@ mod tests {
         let snapshot = parts.snapshot(Utc::now());
         assert!(snapshot.host.is_none() && snapshot.attention.is_empty(), "bloco que falha sai ausente, sem ponto inventado");
         assert!(snapshot.server.is_some());
+    }
+
+    #[test]
+    fn lan_comes_from_the_probed_address() {
+        for url in ["http://192.168.1.20:8765", "http://10.0.0.5:8765", "http://172.20.1.1", "http://169.254.3.4:8765",
+            "http://[fd12::1]:8765", "http://notebook.local:8765"] {
+            assert!(lan_address(url), "{url}");
+        }
+        for url in ["http://100.64.0.2:8765", "https://maquina.exemplo.ts.net", "https://casa.exemplo.hangar.dev.br",
+            "http://127.0.0.1:8765", "http://8.8.8.8", "não é url"] {
+            assert!(!lan_address(url), "{url}");
+        }
     }
 
     #[test]

@@ -5,6 +5,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use chrono::{DateTime, SecondsFormat, Utc};
 use hangar_api::status::ExitKind;
 use hangar_boot::life::Previous;
 use serde_json::{Map, Value, json};
@@ -141,37 +142,67 @@ pub struct ExitRecord {
     pub cause: Option<String>,
     pub from: Option<String>,
     pub to: Option<String>,
+    /// Quando ela saiu (RFC 3339 UTC). O `ts` da linha é o da subida seguinte, que pode vir dias depois.
+    pub when: Option<String>,
 }
 
 impl ExitRecord {
+    fn from_intent(intent: &Intent, when: Option<String>) -> Self {
+        ExitRecord { kind: intent.kind, cause: Some(intent.cause.clone()), from: intent.from.clone(), to: intent.to.clone(), when }
+    }
+
     /// A linha do diário. Só campos texto: o gravador descarta lista e booleano.
     pub fn line(&self, erro: Option<&str>) -> Value {
         let mut line = Map::new();
         line.insert("evento".into(), json!("hangar_server.saida"));
         line.insert("nivel".into(), json!("aviso"));
         line.insert("tipo".into(), json!(kind_code(self.kind)));
-        for (key, value) in [("causa", self.cause.as_deref()), ("de", self.from.as_deref()), ("para", self.to.as_deref()), ("erro", erro)] {
+        let fields = [("causa", self.cause.as_deref()), ("de", self.from.as_deref()), ("para", self.to.as_deref()),
+            ("quando", self.when.as_deref()), ("erro", erro)];
+        for (key, value) in fields {
             if let Some(value) = value.filter(|value| !value.trim().is_empty()) { line.insert(key.into(), json!(value)); }
         }
         Value::Object(line)
     }
 }
 
-/// A marca vale só para o pid da vida anterior e por `VALID_FOR`; ela vence a parada gravada, porque
-/// um reinício que o systemd teve de matar pelo prazo ainda é o reinício pedido. Sem marca: parada
-/// gravada sem falha é pedida (causa = o sinal); o resto é queda, com a causa do journal quando há.
+/// A marca vale só para o pid da vida anterior e por `VALID_FOR`.
+fn valid_for(intent: &Intent, pid: Option<u32>, now: u64) -> bool {
+    pid == Some(intent.pid) && intent.ts.abs_diff(now) < VALID_FOR.as_secs()
+}
+
+fn stamp(at: DateTime<Utc>) -> String {
+    at.to_rfc3339_opts(SecondsFormat::Secs, true)
+}
+
+fn utc_secs(secs: u64) -> Option<String> {
+    DateTime::from_timestamp(i64::try_from(secs).ok()?, 0).map(stamp)
+}
+
+fn utc_text(text: &str) -> Option<String> {
+    DateTime::parse_from_rfc3339(text).ok().map(|at| stamp(at.with_timezone(&Utc)))
+}
+
+/// A marca vence a parada gravada, porque um reinício que o systemd teve de matar pelo prazo ainda é
+/// o reinício pedido. Sem marca: parada gravada sem falha é pedida (causa = o sinal); o resto é
+/// queda, com a causa do journal quando há. O instante é o da parada gravada; sem ela, o da marca;
+/// sem as duas (queda), o começo da vida, o único que o `server-life.json` guarda dela.
 pub fn classify(previous: &Previous, intent: Option<&Intent>, journal: Option<&str>, now: u64) -> ExitRecord {
-    let valid = intent.filter(|intent| previous.pid == Some(intent.pid) && intent.ts.abs_diff(now) < VALID_FOR.as_secs());
+    let valid = intent.filter(|intent| valid_for(intent, previous.pid, now));
+    let when = previous.stop.as_ref().and_then(|stop| stop.at).and_then(utc_secs)
+        .or_else(|| valid.and_then(|intent| utc_secs(intent.ts)))
+        .or_else(|| previous.started.as_deref().and_then(utc_text));
     if let Some(intent) = valid {
-        return ExitRecord { kind: intent.kind, cause: Some(intent.cause.clone()), from: intent.from.clone(), to: intent.to.clone() };
+        return ExitRecord::from_intent(intent, when);
     }
     match &previous.stop {
-        Some(stop) if !stop.failed => ExitRecord { kind: ExitKind::Requested, cause: stop.cause.clone(), from: None, to: None },
+        Some(stop) if !stop.failed => ExitRecord { kind: ExitKind::Requested, cause: stop.cause.clone(), from: None, to: None, when },
         stop => ExitRecord {
             kind: ExitKind::Crash,
             cause: journal.map(journal_cause).or_else(|| stop.as_ref().and_then(|stop| stop.cause.clone())),
             from: None,
             to: None,
+            when,
         },
     }
 }
@@ -238,8 +269,9 @@ pub fn last_failed_result(journal: &str) -> Option<String> {
 }
 
 /// As linhas da subida sobre a vida anterior: o C2 e, com a marca ilegível, o aviso dela. Consome a
-/// marca. `errors`: as últimas linhas de erro do log, lidas só na queda.
-pub fn previous_exit(hangar_dir: &Path, previous: Option<&Previous>, errors: impl FnOnce() -> String, journal: &dyn Journal, now: u64) -> Vec<Value> {
+/// marca. `pid`: o da vida descrita no `server-life.json`, que confere a marca também sem `previous`.
+/// `errors`: as últimas linhas de erro do log, lidas só na queda.
+pub fn previous_exit(hangar_dir: &Path, previous: Option<&Previous>, pid: Option<u32>, errors: impl FnOnce() -> String, journal: &dyn Journal, now: u64) -> Vec<Value> {
     let mut lines = Vec::new();
     let intent = match take(hangar_dir) {
         Ok(intent) => intent,
@@ -248,7 +280,14 @@ pub fn previous_exit(hangar_dir: &Path, previous: Option<&Previous>, errors: imp
             None
         }
     };
-    let Some(previous) = previous else { return lines };
+    let Some(previous) = previous else {
+        // A vida anterior parou sem gravar a causa (versão de antes da marca, na primeira atualização
+        // para esta): a marca dela ainda explica a saída.
+        if let Some(intent) = intent.as_ref().filter(|intent| valid_for(intent, pid, now)) {
+            lines.push(ExitRecord::from_intent(intent, utc_secs(intent.ts)).line(None));
+        }
+        return lines;
+    };
     let mut record = classify(previous, intent.as_ref(), None, now);
     if record.kind == ExitKind::Crash {
         record = classify(previous, intent.as_ref(), journal.failed_result(previous.started.as_deref()).as_deref(), now);
@@ -259,8 +298,8 @@ pub fn previous_exit(hangar_dir: &Path, previous: Option<&Previous>, errors: imp
 }
 
 /// Subida: a vida anterior vira a linha `hangar_server.saida`, com o journal desta máquina.
-pub fn record_previous(hangar_dir: &Path, previous: Option<&Previous>, errors: impl FnOnce() -> String) -> Vec<Value> {
-    previous_exit(hangar_dir, previous, errors, &SystemdJournal, now_secs())
+pub fn record_previous(hangar_dir: &Path, previous: Option<&Previous>, pid: Option<u32>, errors: impl FnOnce() -> String) -> Vec<Value> {
+    previous_exit(hangar_dir, previous, pid, errors, &SystemdJournal, now_secs())
 }
 
 #[cfg(test)]
@@ -269,20 +308,27 @@ mod tests {
     use hangar_boot::life::Stop;
 
     const NOW: u64 = 1_800_000_000;
+    /// O `started` de `life` em UTC.
+    const STARTED: &str = "2026-11-17T13:00:00Z";
 
     fn life(pid: u32, unclean: bool, stop: Option<(&str, bool)>) -> Previous {
         Previous { pid: Some(pid), started: Some("2026-11-17T10:00:00-03:00".into()), unclean,
-            stop: stop.map(|(cause, failed)| Stop { cause: Some(cause.into()), failed }) }
+            stop: stop.map(|(cause, failed)| Stop { cause: Some(cause.into()), failed, at: None }) }
     }
 
     fn intent(kind: ExitKind, cause: &str, pid: u32, ts: u64) -> Intent {
         Intent { kind, cause: cause.into(), from: Some("0.1.0.9000".into()), to: Some("0.1.0.9010".into()), pid, ts }
     }
 
+    fn started() -> Option<String> {
+        Some(STARTED.into())
+    }
+
     #[test]
     fn exit_update_comes_from_the_intent() {
         let record = classify(&life(41, false, Some(("sigterm", false))), Some(&intent(ExitKind::Update, "package", 41, NOW - 30)), None, NOW);
-        assert_eq!(record, ExitRecord { kind: ExitKind::Update, cause: Some("package".into()), from: Some("0.1.0.9000".into()), to: Some("0.1.0.9010".into()) });
+        assert_eq!(record, ExitRecord { kind: ExitKind::Update, cause: Some("package".into()), from: Some("0.1.0.9000".into()),
+            to: Some("0.1.0.9010".into()), when: utc_secs(NOW - 30) });
         // Reinício que o systemd teve de matar pelo prazo continua sendo o pedido.
         assert_eq!(classify(&life(41, true, None), Some(&intent(ExitKind::Update, "package", 41, NOW)), Some("timeout"), NOW).kind, ExitKind::Update);
     }
@@ -290,7 +336,20 @@ mod tests {
     #[test]
     fn exit_intent_of_another_pid_is_ignored() {
         let record = classify(&life(41, false, Some(("sigterm", false))), Some(&intent(ExitKind::Update, "package", 40, NOW)), None, NOW);
-        assert_eq!(record, ExitRecord { kind: ExitKind::Requested, cause: Some("sigterm".into()), from: None, to: None });
+        assert_eq!(record, ExitRecord { kind: ExitKind::Requested, cause: Some("sigterm".into()), from: None, to: None, when: started() });
+    }
+
+    /// O instante é o da parada gravada; sem ela, o da marca; sem as duas, o começo da vida.
+    #[test]
+    fn exit_when_prefers_the_recorded_stop() {
+        let mut stopped = life(41, false, Some(("sigterm", false)));
+        stopped.stop.as_mut().unwrap().at = Some(NOW - 5);
+        assert_eq!(classify(&stopped, Some(&intent(ExitKind::Update, "package", 41, NOW - 30)), None, NOW).when, utc_secs(NOW - 5));
+        assert_eq!(classify(&stopped, None, None, NOW).when, utc_secs(NOW - 5));
+        assert_eq!(classify(&life(41, true, None), Some(&intent(ExitKind::Update, "package", 41, NOW - 30)), None, NOW).when, utc_secs(NOW - 30));
+        assert_eq!(classify(&life(41, true, None), None, None, NOW).when, started(), "queda sem parada gravada: o começo da vida");
+        assert_eq!(classify(&Previous { started: None, ..life(41, true, None) }, None, None, NOW).when, None);
+        assert_eq!(utc_secs(1_800_000_000).as_deref(), Some("2027-01-15T08:00:00Z"));
     }
 
     #[test]
@@ -304,23 +363,23 @@ mod tests {
     #[test]
     fn exit_requested_stop_keeps_the_signal() {
         let record = classify(&life(41, false, Some(("sigint", false))), None, Some("signal"), NOW);
-        assert_eq!(record, ExitRecord { kind: ExitKind::Requested, cause: Some("sigint".into()), from: None, to: None });
+        assert_eq!(record, ExitRecord { kind: ExitKind::Requested, cause: Some("sigint".into()), from: None, to: None, when: started() });
         // Parada do lançador sem causa conhecida.
-        let launcher = Previous { stop: Some(Stop { cause: None, failed: false }), ..life(41, false, None) };
-        assert_eq!(classify(&launcher, None, None, NOW), ExitRecord { kind: ExitKind::Requested, cause: None, from: None, to: None });
+        let launcher = Previous { stop: Some(Stop { cause: None, failed: false, at: Some(NOW - 1) }), ..life(41, false, None) };
+        assert_eq!(classify(&launcher, None, None, NOW), ExitRecord { kind: ExitKind::Requested, cause: None, from: None, to: None, when: utc_secs(NOW - 1) });
     }
 
     #[test]
     fn exit_serve_failed_is_a_crash() {
         let failed = life(41, false, Some(("serve_failed", true)));
-        assert_eq!(classify(&failed, None, None, NOW), ExitRecord { kind: ExitKind::Crash, cause: Some("serve_failed".into()), from: None, to: None });
+        assert_eq!(classify(&failed, None, None, NOW), ExitRecord { kind: ExitKind::Crash, cause: Some("serve_failed".into()), from: None, to: None, when: started() });
         assert_eq!(classify(&failed, None, Some("exit-code"), NOW).cause.as_deref(), Some("exit_code"));
     }
 
     #[test]
     fn exit_oom_kill_is_out_of_memory() {
         let record = classify(&life(41, true, None), None, Some("oom-kill"), NOW);
-        assert_eq!(record, ExitRecord { kind: ExitKind::Crash, cause: Some("out_of_memory".into()), from: None, to: None });
+        assert_eq!(record, ExitRecord { kind: ExitKind::Crash, cause: Some("out_of_memory".into()), from: None, to: None, when: started() });
         assert_eq!(classify(&life(41, true, None), None, None, NOW).cause, None, "Windows e macOS: sem causa");
     }
 
@@ -339,10 +398,33 @@ mod tests {
 
     #[test]
     fn exit_line_has_only_text_fields() {
-        let record = ExitRecord { kind: ExitKind::Update, cause: Some("package".into()), from: Some("a".into()), to: None };
+        let record = ExitRecord { kind: ExitKind::Update, cause: Some("package".into()), from: Some("a".into()), to: None, when: None };
         assert_eq!(record.line(Some(" ")), json!({"evento": "hangar_server.saida", "nivel": "aviso", "tipo": "update", "causa": "package", "de": "a"}));
-        let crash = ExitRecord { kind: ExitKind::Crash, cause: None, from: None, to: None };
-        assert_eq!(crash.line(Some("10:55:02 panic=true")), json!({"evento": "hangar_server.saida", "nivel": "aviso", "tipo": "crash", "erro": "10:55:02 panic=true"}));
+        let crash = ExitRecord { kind: ExitKind::Crash, cause: None, from: None, to: None, when: started() };
+        assert_eq!(crash.line(Some("10:55:02 panic=true")), json!({"evento": "hangar_server.saida", "nivel": "aviso", "tipo": "crash",
+            "quando": STARTED, "erro": "10:55:02 panic=true"}));
+    }
+
+    /// C2 de ponta a ponta: a linha passa pelo gravador real do diário e volta pelo leitor da tela.
+    /// A hora da saída é o `quando`, não o `ts` da subida que gravou a linha.
+    #[test]
+    fn exit_line_round_trips_through_the_diary() {
+        let dir = tempfile::tempdir().unwrap();
+        let now = DateTime::from_timestamp(i64::try_from(NOW).unwrap(), 0).unwrap();
+        let secs = |days: u64| NOW - days * 86_400;
+        let update = ExitRecord { kind: ExitKind::Update, cause: Some("package".into()), from: Some("0.1.0.9000".into()),
+            to: Some("0.1.0.9010".into()), when: utc_secs(secs(2)) };
+        let crash = ExitRecord { kind: ExitKind::Crash, cause: Some("out_of_memory".into()), from: None, to: None, when: utc_secs(secs(1)) };
+        let old = ExitRecord { kind: ExitKind::Crash, cause: None, from: None, to: None, when: utc_secs(secs(8)) };
+        let lines = [update.line(None), crash.line(Some("06:11:58 code=a | 06:11:59 code=b")), old.line(None)];
+        hangar_core::diag::write_diary(dir.path(), &lines, now.with_timezone(&chrono::Local)).unwrap();
+        let exits = hangar_status::diary::DiaryReader::at(dir.path().to_owned()).exits(now).unwrap();
+        assert_eq!(exits.items, [
+            hangar_api::status::Exit { ts: update.when.clone().unwrap(), kind: ExitKind::Update, cause: Some("package".into()),
+                from: Some("0.1.0.9000".into()), to: Some("0.1.0.9010".into()), error_lines: vec![] },
+            hangar_api::status::Exit { ts: crash.when.clone().unwrap(), kind: ExitKind::Crash, cause: Some("out_of_memory".into()),
+                from: None, to: None, error_lines: vec!["06:11:58 code=a".into(), "06:11:59 code=b".into()] },
+        ], "a saída de 8 dias atrás fica fora da janela mesmo gravada hoje");
     }
 
     struct Fixed(Option<&'static str>);
@@ -365,10 +447,11 @@ mod tests {
         assert_eq!((written["tipo"].as_str(), written["causa"].as_str(), written["pid"].as_u64()), (Some("requested"), Some("restart_only"), Some(41)));
         assert!(written.get("de").is_none());
         marked.settle(&Ok::<(), ()>(()));
-        hangar_boot::life::end_with(hangar, 41, Some("sigterm"), false).unwrap();
-        let previous = hangar_boot::life::begin(hangar, "2026-11-17T10:01:00-03:00", |_, _| false).unwrap().previous;
-        let lines = previous_exit(hangar, previous.as_ref(), || panic!("erro só na queda"), &Fixed(None), now_secs());
-        assert_eq!(lines, [json!({"evento": "hangar_server.saida", "nivel": "aviso", "tipo": "requested", "causa": "restart_only"})]);
+        hangar_boot::life::end_with(hangar, 41, Some("sigterm"), false, NOW).unwrap();
+        let begin = hangar_boot::life::begin(hangar, "2026-11-17T10:01:00-03:00", |_, _| false).unwrap();
+        let lines = previous_exit(hangar, begin.previous.as_ref(), begin.pid, || panic!("erro só na queda"), &Fixed(None), now_secs());
+        assert_eq!(lines, [json!({"evento": "hangar_server.saida", "nivel": "aviso", "tipo": "requested", "causa": "restart_only",
+            "quando": "2027-01-15T08:00:00Z"})], "o quando é o instante da parada gravada");
         assert!(!hangar.join(FILE).exists(), "a subida consome a marca");
     }
 
@@ -394,12 +477,33 @@ mod tests {
         hangar_boot::life::begin(hangar, "2026-11-17T10:00:00-03:00", |_, _| false).unwrap();
         hangar_boot::life::mark_running(hangar, 41, Some(41.0), "2026-11-17T10:00:00-03:00", |_, _| false).unwrap();
         let marked = before_restart(hangar, ExitKind::Update, "package", Some("1"), Some("2"));
-        hangar_boot::life::end_with(hangar, 41, Some("sigterm"), false).unwrap();
+        hangar_boot::life::end_with(hangar, 41, Some("sigterm"), false, NOW).unwrap();
         marked.settle(&Err::<(), _>("a unit nova não subiu"));
         assert!(hangar.join(FILE).exists());
-        let previous = hangar_boot::life::begin(hangar, "2026-11-17T10:02:00-03:00", |_, _| false).unwrap().previous;
-        let lines = previous_exit(hangar, previous.as_ref(), String::new, &Fixed(None), now_secs());
-        assert_eq!(lines, [json!({"evento": "hangar_server.saida", "nivel": "aviso", "tipo": "update", "causa": "package", "de": "1", "para": "2"})]);
+        let begin = hangar_boot::life::begin(hangar, "2026-11-17T10:02:00-03:00", |_, _| false).unwrap();
+        let lines = previous_exit(hangar, begin.previous.as_ref(), begin.pid, String::new, &Fixed(None), now_secs());
+        assert_eq!(lines, [json!({"evento": "hangar_server.saida", "nivel": "aviso", "tipo": "update", "causa": "package", "de": "1", "para": "2",
+            "quando": "2027-01-15T08:00:00Z"})]);
+    }
+
+    /// Primeira atualização para esta versão: a vida anterior (versão sem a parada gravada) não deixa
+    /// `previous`, mas a marca dela ainda vira a linha, com a hora da marca. Marca de outro pid sai sem linha.
+    #[test]
+    fn stop_intent_explains_a_life_that_left_without_stop_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let hangar = dir.path();
+        let write_intent = |pid: u32| std::fs::write(hangar.join(FILE), json!({"tipo": "update", "causa": "package",
+            "de": "0.1.0.9000", "para": "0.1.0.9010", "pid": pid, "ts": NOW - 10}).to_string()).unwrap();
+        write_intent(41);
+        let lines = previous_exit(hangar, None, Some(41), || panic!("erro só na queda"), &Fixed(None), NOW);
+        assert_eq!(lines, [json!({"evento": "hangar_server.saida", "nivel": "aviso", "tipo": "update", "causa": "package",
+            "de": "0.1.0.9000", "para": "0.1.0.9010", "quando": utc_secs(NOW - 10)})]);
+        assert!(!hangar.join(FILE).exists(), "a subida consome a marca");
+        write_intent(40);
+        assert!(previous_exit(hangar, None, Some(41), String::new, &Fixed(None), NOW).is_empty());
+        write_intent(41);
+        assert!(previous_exit(hangar, None, Some(41), String::new, &Fixed(None), NOW + VALID_FOR.as_secs()).is_empty(), "marca vencida");
+        assert!(!hangar.join(FILE).exists());
     }
 
     /// Queda sem marca: a causa vem do journal e o erro, das últimas linhas do log.
@@ -408,9 +512,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join(FILE), "{torto").unwrap();
         let previous = life(41, true, None);
-        let lines = previous_exit(dir.path(), Some(&previous), || "10:55:02 panic=true".into(), &Fixed(Some("oom-kill")), NOW);
+        let lines = previous_exit(dir.path(), Some(&previous), previous.pid, || "10:55:02 panic=true".into(), &Fixed(Some("oom-kill")), NOW);
         assert_eq!(lines[0]["codigo"], "stop_intent_unreadable");
-        assert_eq!(lines[1], json!({"evento": "hangar_server.saida", "nivel": "aviso", "tipo": "crash", "causa": "out_of_memory", "erro": "10:55:02 panic=true"}));
+        assert_eq!(lines[1], json!({"evento": "hangar_server.saida", "nivel": "aviso", "tipo": "crash", "causa": "out_of_memory",
+            "quando": STARTED, "erro": "10:55:02 panic=true"}));
         assert!(!dir.path().join(FILE).exists(), "marca ilegível também sai");
     }
 
