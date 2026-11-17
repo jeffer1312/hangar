@@ -6,8 +6,21 @@ fn launch(home: &Path, args: &[&str]) -> std::process::Output {
     launch_command(home, args).output().unwrap()
 }
 
+/// Sem `current` o lançador cai no checkout acima do próprio binário (modo desenvolvedor). No CI o
+/// target fica dentro do repositório: a recusa sem `current` só se prova com uma cópia fora dele.
+fn launch_outside_checkout(home: &Path, args: &[&str]) -> std::process::Output {
+    let copy = home.join("launcher-copy").join(Path::new(env!("CARGO_BIN_EXE_hangar-server")).file_name().unwrap());
+    std::fs::create_dir_all(copy.parent().unwrap()).unwrap();
+    std::fs::copy(env!("CARGO_BIN_EXE_hangar-server"), &copy).unwrap();
+    launch_program(&copy, home, args).output().unwrap()
+}
+
 fn launch_command(home: &Path, args: &[&str]) -> std::process::Command {
-    let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_hangar-server"));
+    launch_program(Path::new(env!("CARGO_BIN_EXE_hangar-server")), home, args)
+}
+
+fn launch_program(program: &Path, home: &Path, args: &[&str]) -> std::process::Command {
+    let mut command = std::process::Command::new(program);
     command.arg("launch").args(args).env_clear().env("HOME", home).env("USERPROFILE", home)
         .env("PATH", std::env::var_os("PATH").unwrap_or_default());
     if cfg!(windows) {
@@ -62,7 +75,7 @@ fn link_dir(link: &Path, target: &Path) {
 #[test]
 fn launch_without_current_refuses_with_a_code() {
     let dir = tempfile::tempdir().unwrap();
-    let out = launch(dir.path(), &["backend"]);
+    let out = launch_outside_checkout(dir.path(), &["backend"]);
     assert_eq!(out.status.code(), Some(3));
     assert!(String::from_utf8_lossy(&out.stderr).contains("launch_no_current"), "{out:?}");
     assert_eq!(launch(dir.path(), &[]).status.code(), Some(2), "sem o alvo é uso errado");
@@ -204,7 +217,7 @@ fn b37_launch_start_and_refusal_reach_the_task_log() {
     let home = dir.path();
     let log = home.join("logs").join("hangar-backend.log");
     std::fs::create_dir_all(log.parent().unwrap()).unwrap();
-    let out = launch(home, &["backend", "--log", log.to_str().unwrap()]);
+    let out = launch_outside_checkout(home, &["backend", "--log", log.to_str().unwrap()]);
     assert_eq!(out.status.code(), Some(3), "{out:?}");
     let lines = launcher_lines(&log);
     assert_eq!(lines.len(), 2, "{lines:?}");

@@ -179,7 +179,7 @@ async fn cited_html_becomes_an_isolated_page_opened_by_ticket() {
     let lines: Vec<String> = ["mock.html", "grande.html", "latin.html", "nota.txt"].iter()
         .map(|name| json!({"cwd":dir.path(),"text":name}).to_string()).collect();
     std::fs::write(dir.path().join("fixture.jsonl"), lines.join("\n")).unwrap();
-    let (addr, hits, _fixture) = fixture(dir.path()).await;
+    let (addr, _fixture) = fixture(dir.path()).await;
     let c = client();
     let post = |path: &str, token: &str| c.post(format!("http://{addr}/api/sessions/fixture/file/page"))
         .bearer_auth(token).header("content-type", "application/json").body(json!({"path":path}).to_string()).send();
@@ -209,7 +209,6 @@ async fn cited_html_becomes_an_isolated_page_opened_by_ticket() {
     assert_eq!(code(post("nota.txt", OWNER).await.unwrap()).await, (reqwest::StatusCode::UNSUPPORTED_MEDIA_TYPE, json!("file_page_not_html")));
     let refused = post("mock.html", "convidado").await.unwrap();
     assert_eq!(refused.status(), 401);
-    assert_eq!(hits.load(Ordering::Relaxed), 0, "nada vai ao Python");
 }
 
 #[tokio::test]

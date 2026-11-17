@@ -142,39 +142,46 @@ pub async fn parent_gone<R: tokio::io::AsyncRead + Unpin>(mut pipe: R) {
 }
 
 /// O que pede a parada ordenada: sinal do sistema (systemd, Ctrl+C, fechamento no Windows). O stdin
-/// não diz nada: sob o systemd é `/dev/null` e acabaria na hora.
-pub async fn stop_requested() -> &'static str {
-    shutdown_signal().await
+/// não diz nada: sob o systemd é `/dev/null` e acabaria na hora. Os tratadores entram na chamada,
+/// não no primeiro `await`: sinal que chega antes de o servidor atender ainda é parada pedida.
+pub fn stop_requested() -> impl std::future::Future<Output = &'static str> + Send + 'static {
+    shutdown_signal()
 }
 
 #[cfg(unix)]
-async fn shutdown_signal() -> &'static str {
+fn shutdown_signal() -> impl std::future::Future<Output = &'static str> + Send + 'static {
     use tokio::signal::unix::{signal, SignalKind};
-    match (signal(SignalKind::terminate()), signal(SignalKind::interrupt())) {
-        (Ok(mut term), Ok(mut interrupt)) => tokio::select! {
-            _ = term.recv() => "SIGTERM",
-            _ = interrupt.recv() => "SIGINT",
-        },
-        _ => {
-            tracing::error!(code = "stop_signal_unavailable", "sem os sinais de parada: só o kill encerra o servidor");
-            std::future::pending().await
+    let streams = (signal(SignalKind::terminate()), signal(SignalKind::interrupt()));
+    async move {
+        match streams {
+            (Ok(mut term), Ok(mut interrupt)) => tokio::select! {
+                _ = term.recv() => "SIGTERM",
+                _ = interrupt.recv() => "SIGINT",
+            },
+            _ => {
+                tracing::error!(code = "stop_signal_unavailable", "sem os sinais de parada: só o kill encerra o servidor");
+                std::future::pending().await
+            }
         }
     }
 }
 
 #[cfg(windows)]
-async fn shutdown_signal() -> &'static str {
+fn shutdown_signal() -> impl std::future::Future<Output = &'static str> + Send + 'static {
     use tokio::signal::windows::{ctrl_break, ctrl_c, ctrl_close, ctrl_shutdown};
-    match (ctrl_c(), ctrl_break(), ctrl_close(), ctrl_shutdown()) {
-        (Ok(mut c), Ok(mut brk), Ok(mut close), Ok(mut shutdown)) => tokio::select! {
-            _ = c.recv() => "ctrl_c",
-            _ = brk.recv() => "ctrl_break",
-            _ = close.recv() => "ctrl_close",
-            _ = shutdown.recv() => "ctrl_shutdown",
-        },
-        _ => {
-            tracing::error!(code = "stop_signal_unavailable", "sem os eventos de parada do console: só o kill encerra o servidor");
-            std::future::pending().await
+    let streams = (ctrl_c(), ctrl_break(), ctrl_close(), ctrl_shutdown());
+    async move {
+        match streams {
+            (Ok(mut c), Ok(mut brk), Ok(mut close), Ok(mut shutdown)) => tokio::select! {
+                _ = c.recv() => "ctrl_c",
+                _ = brk.recv() => "ctrl_break",
+                _ = close.recv() => "ctrl_close",
+                _ = shutdown.recv() => "ctrl_shutdown",
+            },
+            _ => {
+                tracing::error!(code = "stop_signal_unavailable", "sem os eventos de parada do console: só o kill encerra o servidor");
+                std::future::pending().await
+            }
         }
     }
 }

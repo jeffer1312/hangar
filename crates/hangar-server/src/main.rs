@@ -253,12 +253,13 @@ async fn run(notifier: hangar_boot::notify::Notifier) {
     let stopped = std::sync::Arc::new(std::sync::OnceLock::new());
     // A marca de pé e a parada sob a mesma trava: parada que chega antes do "pronto" impede a marca.
     let stop_recorded = std::sync::Arc::new(std::sync::Mutex::new(false));
+    let requested = hangar_server::stop_requested();
     let stop = {
         let stopped = stopped.clone();
         #[cfg(windows)]
         let (recorded, dir) = (stop_recorded.clone(), hangar_dir.clone());
         async move {
-            let cause = hangar_server::stop_requested().await;
+            let cause = requested.await;
             let _ = stopped.set(cause);
             // No Windows a parada limpa vem antes do desligamento lento: o fechamento do console dá
             // ~5 s até o kill. No resto ela espera o servidor terminar (abaixo): um desligamento que
