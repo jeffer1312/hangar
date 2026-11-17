@@ -36,6 +36,8 @@ pub(super) fn claim(state: &mut State, min_ts: f64, clock: ClockSample, call_id:
     row["delivered"] = json!(true);
     row["claimed_ts"] = json!(clock.epoch_s);
     row["pre_transcript"] = json!(entries.iter().any(|entry| entry["pre_transcript"] == true));
+    // O lote é fila comum: a marca "Na conversa" do primeiro não vale para as outras.
+    if indices.len() > 1 && let Some(fields) = row.as_object_mut() { fields.remove("conversation"); }
     // As intenções originais continuam ligadas ao lote; o Recover não as rematerializa.
     for op in state.operations.values_mut().filter(|op| op.entry_id.as_deref().is_some_and(|entry|entry != id && members.contains(entry))) {
         op.status = Status::Accepted;

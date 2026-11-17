@@ -1194,8 +1194,10 @@ impl Executor {
             return Ok(result);
         }
         // Mensagem nova não passa à frente de outra que ficou adiada: espera na fila e a drenagem entrega na ordem.
-        // A "Na conversa" entra no turno como o Orientar; as comuns seguem esperando o fim dele.
-        if fresh && !conversation && state.pending_ahead(self.target.created) {
+        // A "Na conversa" entra no turno como o Orientar, à frente das comuns, mas nunca de outra "Na conversa".
+        let marked_ahead=conversation && super::queue::waiting_ids(&state,self.target.created).iter()
+            .any(|w|state.rows.iter().any(|r|r["id"]==w.as_str() && r["conversation"]==true));
+        if fresh && (!conversation || marked_ahead) && state.pending_ahead(self.target.created) {
             return self.defer(id,json!({"code":"queue_ahead","queued":true,"cleanup":"not_needed"})).await;
         }
         let root=row_id.as_deref().unwrap_or(id);
@@ -1216,6 +1218,10 @@ impl Executor {
         let busy=ok.is_some_and(|f|self.turn_busy(f.idle));
         let started_turn=ok.is_some_and(|f|f.idle);
         let held=prompt && !slash && !steer && !conversation && busy && ok.is_some_and(|f|!input::native_message(f,text));
+        // Parado, não há turno para entrar: a "Na conversa" respeita a ordem da fila como as comuns.
+        if fresh && conversation && current && ok.is_some() && !busy && state.pending_ahead(self.target.created) {
+            return self.defer(id,json!({"code":"queue_ahead","queued":true,"cleanup":"not_needed"})).await;
+        }
         let mut result=if !current {reply(id,Disposition::Deferred,json!({"code":"terminal_facts","cleanup":"not_needed"}))}
             else if held {reply(id,Disposition::Deferred,json!({"code":"terminal_turn_hold","queued":true,"cleanup":"not_needed"}))}
             else if prompt && !slash && !ok.is_some_and(|f|f.ready && !f.open_question || f.native.is_some()) {reply(id,Disposition::Deferred,json!({"queued":true,"cleanup":"not_needed"}))}
@@ -1517,14 +1523,15 @@ impl Executor {
             let marked=waiting.iter().find(|id|entry.as_deref().is_none_or(|e|e==id.as_str())
                 && state.rows.iter().any(|r|r["id"]==id.as_str() && r["conversation"]==true)).cloned();
             // Os fatos da manutenção não sabem do socket (ele depende do texto): o recado candidato relê com o dele.
-            let candidate=if marked.is_some() {None} else {state.rows.iter().filter_map(|r|Some((r["id"].as_str()?,r["text"].as_str()?)))
+            // Um recado pelo socket vai antes: a marcada presa (composer ilegível, espera crescente) não o segura.
+            let candidate=state.rows.iter().filter_map(|r|Some((r["id"].as_str()?,r["text"].as_str()?)))
                 .find(|(id,text)|waiting.iter().any(|w|w==id) && entry.as_deref().is_none_or(|e|e==*id) && input::message_prefix(text).is_some())
-                .map(|(id,text)|(id.to_owned(),text.to_owned()))};
+                .map(|(id,text)|(id.to_owned(),text.to_owned()));
             let native=match candidate {
                 Some((id,text))=>self.services(&id,&id,&text).facts(&self.target.binding).await.ok()
                     .filter(|f|f.binding==self.target.binding && input::native_message(f,&text)).map(|_|id),
-                None=>marked,
-            };
+                None=>None,
+            }.or(marked);
             let Some(native)=native else {
                 if self.stall.take().is_some_and(|s|s.surfaced) {self.publish().await?;}
                 return Ok(json!({"drained":0,"held_for_turn":true}));
@@ -1572,7 +1579,8 @@ impl Executor {
         if let Some(sender)=&self.options.status {terminal_status::publish_limit(sender,None);}
         let attempt=format!("queue:{}:{}",row_id,self.sequence.fetch_add(1,Ordering::Relaxed));
         let mut payload=json!({"text":row["text"],"pre_transcript":row["pre_transcript"]==true});
-        if row["conversation"]==true {payload["conversation"]=json!(true);}
+        // Só a escolhida a dedo leva a marca; o lote é fila comum.
+        if directed && row["conversation"]==true {payload["conversation"]=json!(true);}
         let outcome=self.execute(&attempt,"input",payload,Some(row_id),steer).await?;
         if directed && self.batch_blocked {self.batch_blocked=false;self.publish().await?;}
         Ok(json!({"drained":1,"reply":outcome}))
@@ -1604,7 +1612,13 @@ impl Executor {
             if facts.binding!=self.target.binding {return Ok(reply(id,Disposition::Deferred,json!({"code":"queue_steer_not_delivered","cleanup":"not_needed"})));}
             if facts.open_question {return Ok(reply(id,Disposition::Rejected,json!({"code":"queue_steer_question_open","cleanup":"not_needed"})));}
             let driver=TerminalDriver::new(self.target.binding.clone(),services,self.options.io.clone(),self.options.limits.clone());
-            let steered=driver.steer().await;
+            // A dica só aparece depois dos hooks de envio da conta: espera como o Orientar, enquanto o turno é o mesmo.
+            let deadline=tokio::time::Instant::now()+STEER_HINT_WAIT;
+            let mut steered=driver.steer().await;
+            while steered.disposition==input::Disposition::Deferred && tokio::time::Instant::now()<deadline && self.expected_work(payload) {
+                tokio::time::sleep(self.options.limits.settle).await;
+                steered=driver.steer().await;
+            }
             return Ok(match steered.disposition {
                 input::Disposition::Accepted=>reply(id,Disposition::Accepted,json!({"steered":true,"drained":0})),
                 input::Disposition::Unknown=>{

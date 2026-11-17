@@ -2396,6 +2396,8 @@ impl Hangar {
         if let Ok(delivery) = &result {
             // Entregue sem fila pelo que o servidor diz, com ou sem o Jev: a nota dele só existe quando ele decidiu.
             let delivered = delivery.delivered || matches!(delivery.timing_note.as_deref(), Some("direct" | "delivered"));
+            // "Na conversa" que o servidor pôs na fila comum: o destino local passa do fim da conversa ao painel.
+            if delivery.conversation == Some(false) { self.send_queued_instead(&key, &text); }
             self.send_settled(&key, &text, delivered, cx);
         }
         if !self.delivery.complete(&key, &text, outcome) { return; }

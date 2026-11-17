@@ -429,7 +429,9 @@ impl Api {
         let r = self.post_input(name, &json!({"text": text, "delivery": "conversation"})).await?;
         if r.status() == StatusCode::UNPROCESSABLE_ENTITY {
             let (body, failure) = failed_response(r, true, "POST", Some(self.base.as_str())).await;
-            return if rejects_delivery_field(body.as_ref()) { self.send(name, text).await } else { Err(failure) };
+            return if rejects_delivery_field(body.as_ref()) {
+                self.send(name, text).await.map(|delivery| Delivery { conversation: Some(false), ..delivery })
+            } else { Err(failure) };
         }
         self.delivery(r).await
     }
@@ -1229,6 +1231,14 @@ mod tests {
             assert!(!rejects_delivery_field(Some(&other)), "{other}");
         }
         assert!(!rejects_delivery_field(None));
+    }
+
+    #[test]
+    fn delivery_reads_whether_the_server_took_it_into_the_conversation() {
+        let queued: Delivery = serde_json::from_value(json!({"ok": true, "delivered": true, "conversation": false})).unwrap();
+        assert_eq!(queued.conversation, Some(false));
+        let plain: Delivery = serde_json::from_value(json!({"ok": true})).unwrap();
+        assert_eq!(plain.conversation, None);
     }
 
     #[test]

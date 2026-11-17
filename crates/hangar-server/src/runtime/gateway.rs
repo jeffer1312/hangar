@@ -696,8 +696,10 @@ impl RuntimeRegistry {
                 if old.is_empty() || text.is_empty() { continue; }
                 // A nova entra antes de a antiga sair: falha no meio deixa o texto em dobro, nunca sem ele.
                 let id = crate::mods::state::random_hex(16);
-                store.exec(generation,&format!("restamp:{id}"),clock(),Action::Append { text,delivered:false,ts:None,
-                    pre_transcript:row["pre_transcript"]==true,entry_id:Some(id.clone()) }).map_err(|_|failure("queue_io"))?;
+                let pre_transcript = row["pre_transcript"]==true;
+                let action = if row["conversation"]==true { Action::AppendConversation { text,pre_transcript,entry_id:Some(id.clone()) } }
+                    else { Action::Append { text,delivered:false,ts:None,pre_transcript,entry_id:Some(id.clone()) } };
+                store.exec(generation,&format!("restamp:{id}"),clock(),action).map_err(|_|failure("queue_io"))?;
                 let cancelled = store.exec(generation,&format!("restamp-cancel:{id}"),clock(),Action::Cancel { entry_id:old }).map_err(|_|failure("queue_io"))?;
                 // A antiga em voo fica onde está: a cópia sai, para não entregar duas vezes.
                 if cancelled != json!("cancelled") {

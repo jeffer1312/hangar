@@ -328,6 +328,14 @@ impl Hangar {
         self.redraw(Area::Bottom, cx);
     }
 
+    /// "Na conversa" que o servidor mandou para a fila comum: o destino local do fim da conversa vira a linha do painel.
+    pub(super) fn send_queued_instead(&mut self, key: &SessionKey, text: &str) {
+        if self.local_send.as_ref().is_some_and(|l| l.key == *key && same_text(&l.text, text)) {
+            trace(|| "the server queued the conversation send: local destination moves to the queue panel".to_owned());
+            self.local_queue = self.local_send.take();
+        }
+    }
+
     /// O servidor respondeu ao envio. `delivered`: a mensagem foi entregue direto, sem passar pela fila, e a linha
     /// local do painel sai na hora. Senão o destino local ganha o prazo para a linha do servidor chegar, e a tela
     /// confere de novo quando ele vence.
