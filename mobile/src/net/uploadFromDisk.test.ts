@@ -51,6 +51,18 @@ describe('sendFromDisk', () => {
     await expect(reply).rejects.toBe(reason);
   });
 
+  it('prazo que estoura antes do envio começar rejeita com o motivo do sinal', async () => {
+    const controller = new AbortController();
+    const reason = new DOMException('prazo', 'TimeoutError');
+    native.upload.mockImplementation(async (_url: string, options: { signal?: AbortSignal }) => {
+      if (options.signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+      return { status: 200, body: '{}', headers: {} };
+    });
+    const reply = sendFromDisk('file:///docs/pacote.zip')(URL_UPLOAD, { method: 'POST', headers: {}, signal: controller.signal });
+    controller.abort(reason);
+    await expect(reply).rejects.toBe(reason);
+  });
+
   it('falha de rede do envio nativo chega como está', async () => {
     const failure = new Error('The network connection was lost.');
     native.upload.mockRejectedValue(failure);
