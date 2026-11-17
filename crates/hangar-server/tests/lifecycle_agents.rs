@@ -14,14 +14,12 @@ fn opening_state(provider: &str, root: &std::path::Path) -> (hangar_server::rout
     use hangar_server::{auth::TrustedHosts, config::Config, routes::AppState};
     hangar_server::diag::disable_diary();
     hangar_server::accounts::quotas::disable_open_network_read();
-    let cfg = Config { listen: "127.0.0.1:0".parse().unwrap(), upstream: "127.0.0.1:9".parse().unwrap(),
+    let cfg = Config { listen: "127.0.0.1:0".parse().unwrap(),
         internal_secret: "test-internal".into(), auth_token: "owner-test".into(), log_path: None, trusted: TrustedHosts::parse("") };
     let mut state = AppState::new(cfg);
     state.origins_home = root.to_owned();
     state.side.queue_dir = Some(root.join("queue"));
-    state.side.runtime.set(Arc::new(hangar_server::runtime::gateway::RuntimeRegistry::new(
-        "127.0.0.1:9".parse().unwrap(), "test-internal".into(), "opening-proof".into(),
-    ))).ok().expect("um registro por servidor");
+    state.side.runtime.set(Arc::new(hangar_server::runtime::gateway::RuntimeRegistry::new("opening-proof".into()))).ok().expect("um registro por servidor");
     let info = Arc::new(std::sync::Mutex::new(hangar_server::transcript::InternalInfo {
         provider: provider.into(), jsonl: None, session_key: String::new(),
         history: serde_json::json!({"queue":root.join("queue/session.json")}), headless: false,

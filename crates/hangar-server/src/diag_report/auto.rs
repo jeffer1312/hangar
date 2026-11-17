@@ -252,7 +252,7 @@ mod tests {
             let address = listener.local_addr().unwrap();
             let router = axum::Router::new().route("/api/relatorio", axum::routing::post(reply)).with_state(worker.clone());
             let task = tokio::spawn(async move { axum::serve(listener, router).await.unwrap(); });
-            let mut st = AppState::new(Config { listen: "127.0.0.1:0".parse().unwrap(), upstream: "127.0.0.1:1".parse().unwrap(),
+            let mut st = AppState::new(Config { listen: "127.0.0.1:0".parse().unwrap(),
                 internal_secret: "s".into(), auth_token: "owner".into(), log_path: None, trusted: TrustedHosts::parse("127.0.0.1") });
             st.accounts = AccountService::new(AccountEnvironment::from_map([
                 ("HOME".into(), home.path().to_string_lossy().into_owned()),

@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
-use fake::{OWNER, SECRET, client};
+use fake::{OWNER, client};
 use hangar_server::list::bridge::{ListBridge, ListEnv, parse_dirs};
 use hangar_server::list::facts::FactsClient;
 use hangar_server::list::mux::Mux;
@@ -33,7 +33,6 @@ pub(crate) struct Rig {
     pub python: Arc<fake::Fake>,
     pub server: SocketAddr,
     /// A porta privada (as pontes que o Python chama).
-    pub private: SocketAddr,
     pub runtime: Arc<RuntimeRegistry>,
     pub state: Arc<AppState>,
     /// Solto no fim do teste; enquanto vivo, o vigia derruba o processo de testes no teto.
@@ -139,8 +138,8 @@ exec tmux -L '{label}' -f /dev/null "$@"
         let dirs = parse_dirs(&json!({"home": home, "claude": home.join(".claude"), "codex_home": home.join(".codex"),
             "pi_sessions": home.join(".pi/agent/sessions"), "omp_config": home.join(".omp"),
             "omp_agent": home.join(".omp/agent"), "kimi_home": home.join(".kimi-code")}).to_string());
-        let (python, upstream) = fake::spawn_fake().await;
-        let mut state = AppState::new(fake::config(upstream, "127.0.0.1"));
+        let (python, _) = fake::spawn_fake().await;
+        let mut state = AppState::new(fake::config("127.0.0.1"));
         state.diag = python.bind_diary(state.diag.clone());
         // Convidados com conta: `GUEST` vê as sessões do dono, `BLIND` não.
         let guests = hangar_server::login_guests::Service::new(hangar_server::login_guests::Settings { guests: root.join("guests.json"),
@@ -152,19 +151,19 @@ exec tmux -L '{label}' -f /dev/null "$@"
         state.login_guests = Arc::new(guests);
         state.list = Arc::new(ListBridge::new(ListEnv { mux: Mux::with_program(&wrapper, Duration::from_secs(5)),
             capture_program: wrapper.clone().into_os_string(), procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs },
-            FactsClient::new(upstream, SECRET.into())));
+            FactsClient::new()));
         state.terminal = hangar_server::terminal_control::TerminalPool::with_program("tmux", Some(socket), hangar_server::terminal_control::Limits::default());
         // O leitor de estado nasce com a lista e o terminal de `AppState::new`: sem refazê-lo, o pane do
         // agente seria procurado no tmux da máquina, não no deste teste.
         state.state = Arc::new(hangar_server::state::live::StateEnv::new(state.terminal.clone(), state.list.clone(), state.diag.clone()));
         let env =hangar_server::accounts::environment::AccountEnvironment::from_map([("HOME".into(), home.to_string_lossy().into_owned())].into());
-        let runtime = Arc::new(RuntimeRegistry::new(upstream, SECRET.into(), "instance-test".into()).with_codex_environment(env).with_diagnostics(python.diagnostics()));
+        let runtime = Arc::new(RuntimeRegistry::new("instance-test".into()).with_codex_environment(env).with_diagnostics(python.diagnostics()));
         if with_watcher { runtime.bind_watcher(watcher(&home, &wrapper)); }
         if with_runtime { assert!(state.state.runtime.set(runtime.clone()).is_ok()); }
-        state.side.locate = fake::fake_locate(upstream);
+        state.side.locate = python.locate();
         let pair = home.join(".claude/.hangar-pair");
         state.groups = Some(Arc::new(hangar_server::groups::service::GroupService::new(hangar_server::groups::store::PairDir::new(pair.clone(), root.join("arquivo")),
-            Arc::new(hangar_server::groups::orq::PythonOrq::from_state(&state).with_paths(home.clone(), pair)), "rig".into())));
+            Arc::new(hangar_server::groups::orq::OrqVault::from_state(&state).with_paths(home.clone(), pair)), "rig".into())));
         let state = Arc::new(state);
         let serve = |app: axum::Router| async move {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -173,8 +172,7 @@ exec tmux -L '{label}' -f /dev/null "$@"
             addr
         };
         let server = serve(hangar_server::routes::router(state.clone())).await;
-        let private = serve(hangar_server::routes::terminal_router(state.clone())).await;
-        Rig { dir, label, home, python, server, private, runtime, state, _watchdog }
+        Rig { dir, label, home, python, server, runtime, state, _watchdog }
     }
 
     pub(crate) async fn new() -> Rig { Rig::build(true).await }
@@ -259,8 +257,6 @@ exec tmux -L '{label}' -f /dev/null "$@"
     }
 
     pub(crate) async fn input(&self, name: &str, body: Value) -> (u16, Value) { self.post(&format!("/api/sessions/{name}/input"), &body.to_string()).await }
-
-    fn python_inputs(&self) -> usize { self.python.input_calls() + self.python.hits_to("/api/broadcast") }
 }
 
 fn submitted(rig: &Rig, name: &str) -> Vec<Value> { rig.tui(name, "submitted.jsonl") }
@@ -272,7 +268,6 @@ async fn name_without_pane_or_sidecar_is_404_and_nothing_is_queued() {
     let (status, body) = rig.input("ghost", json!({"text": "oi"})).await;
     assert_eq!((status, body), (404, json!({"detail": {"code": "erro_sessao_recado_nao_enfileirado", "params": {}, "msg": "sessão não encontrada — recado NÃO enfileirado"}})));
     assert_eq!(rig.queue("ghost"), None);
-    assert_eq!(rig.python_inputs(), 0);
 }
 
 // R1.1-2 + D15: shell e programa qualquer recusam na hora, mesmo com o pane recém-criado.
@@ -289,7 +284,6 @@ async fn shell_or_unknown_program_pane_is_400_at_once_and_nothing_is_typed() {
         assert!(!rig.tmux(&["capture-pane", "-p", "-t", &format!("={name}:")]).contains("oi"), "{name}: nada digitado");
         assert_eq!(rig.queue(name), None);
     }
-    assert_eq!(rig.python_inputs(), 0);
 }
 
 // R1.1-3
@@ -304,7 +298,6 @@ async fn claude_login_pane_is_400_without_rust_binding() {
     rig.agent_runs("lg1", "claude").await;
     let (status, body) = rig.input("lg1", json!({"text": "oi"})).await;
     assert_eq!((status, body), (400, json!({"detail": {"code": "erro_envio_falhou", "params": {}, "msg": "sessão Claude sem vínculo no Rust"}})));
-    assert_eq!(rig.python_inputs(), 0);
 }
 
 // R1.1-4, R1.1-5, R1.1-12: texto digitado com prova, Enter cru, linha `delivered` na fila com o `ts` de antes.
@@ -325,7 +318,6 @@ async fn raw_codex_idle_types_the_text_and_queues_it_delivered() {
     let (status, body) = rig.input("cx", json!({"text": "de novo", "steer": true})).await;
     assert_eq!((status, body), (200, json!({"ok": true, "delivered": true, "steered": false, "native": false})));
     assert_eq!(rig.queue("cx").unwrap().len(), 2);
-    assert_eq!(rig.python_inputs(), 0);
 }
 
 // R1.1-6: sem confirmação nem redreno depois da resposta (o Codex cru não tem transcript).
@@ -341,7 +333,6 @@ async fn raw_codex_nothing_more_happens_after_the_answer() {
     // estavel: janela em que nada pode acontecer; não há sinal a esperar, só a ausência dele.
     tokio::time::sleep(Duration::from_secs(2)).await;
     assert_eq!((rig.tui("cx", "keys.jsonl"), rig.queue("cx")), (keys, rows));
-    assert_eq!(rig.python_inputs(), 0);
 }
 
 // R1.1-4 slash, R1.1-7: barra sem linha na fila; `/clear` apaga a fila. No Codex um Enter roda o comando:
@@ -457,7 +448,6 @@ async fn raw_codex_send_never_holds_the_ingress_pass() {
     rig.runtime.ingress().open("cx");
     assert_eq!(sending.await.unwrap().unwrap().status().as_u16(), 200);
     assert_eq!(submitted(&rig, "cx"), vec![json!({"text": "oi"})]);
-    assert_eq!(rig.python_inputs(), 0);
 }
 
 // Dois recados para a mesma sessão: quem não pega a vez espera no máximo 2 s (abaixo do prazo de 3 s de
@@ -504,7 +494,6 @@ async fn invalid_body_for_an_unowned_name_is_rust_422() {
         let (status, reply) = rig.post("/api/sessions/cx/input", body).await;
         assert_eq!((status, reply["detail"]["code"].clone()), (422, json!("erro_corpo_invalido")), "{body}");
     }
-    assert_eq!(rig.python_inputs(), 0);
 }
 
 // R1.1-11, R1.2: um nome por vez, falha de um não para os outros, formato do Python por tipo.
@@ -523,7 +512,6 @@ async fn broadcast_answers_each_unowned_name_in_order() {
     let (_, body) = rig.post("/api/broadcast", &json!({"names": ["cx"], "text": "a\u{7}b"}).to_string()).await;
     assert_eq!(body["results"]["cx"], json!({"ok": false, "error": {"code": "erro_envio_falhou", "params": {"erro": "control characters not allowed in prompt"},
         "msg": "falha ao enviar: control characters not allowed in prompt"}}));
-    assert_eq!(rig.python_inputs(), 0);
 }
 
 // D26: menu, diálogo de confiança, popup de barra ou texto de alguém na caixa: 409 com código na hora,
@@ -545,7 +533,6 @@ async fn raw_codex_menu_dialog_popup_or_busy_composer_is_409_without_keys_or_que
         assert_eq!(rig.tui(name, "keys.jsonl"), Vec::<Value>::new(), "{screen}: nada digitado");
         assert_eq!(rig.queue(name), None, "{screen}: nada na fila");
     }
-    assert_eq!(rig.python_inputs(), 0);
 }
 
 // Barra recusada não mexe na fila: só o `/clear` que rodou a apaga.
@@ -717,48 +704,6 @@ async fn internal_delivery_to_an_unowned_session_is_served_in_rust() {
     // D26: o aviso de grupo ao Codex com menu aberto volta como falha com o código (vai a `failed`/`pulados`).
     rig.codex("menu", "pane_codex_model_menu.txt", "static").await;
     assert_eq!(deliver_text(&rig.state, "menu", "aviso").await.unwrap_err()["code"], "codex_menu_open");
-    assert_eq!(rig.python_inputs(), 0);
-}
-
-// R1.1-10: aviso que entra pela porta do Connect (o Python repassa e segura o pedido). O recado a
-// sessão sem dono sai depois da rota, em processo, cada sessão no máximo 3 s; quem não recebeu (recusa ou
-// prazo) entra em `failed` como `srv::nome`, e o diário registra. A entrega lenta termina sozinha depois.
-// O Codex com menu aberto (D26) entra em `failed` pelo 409 dele.
-#[tokio::test(flavor = "multi_thread")]
-async fn connect_forwarded_notice_delivers_unowned_sessions_after_the_route_within_three_seconds() {
-    let rig = Rig::new().await;
-    rig.codex("lenta", "pane_codex_idle.txt", "echo").await;
-    rig.codex("menu", "pane_codex_model_menu.txt", "static").await;
-    rig.slow("lenta");
-    let pair = rig.home.join(".claude/.hangar-pair");
-    std::fs::create_dir_all(&pair).unwrap();
-    for name in ["lenta", "ghost", "menu"] {
-        std::fs::write(pair.join(format!("{name}.json")), json!({"peers": ["casa::s0"], "task": "t", "gid": "g1", "harness": {},
-            "fed": {"owner": "casa", "local": false, "version": 1}}).to_string()).unwrap();
-    }
-    let ask = json!({"protocol": 1, "origin": "casa", "sender": "s0", "text": "oi", "notice": "n1"});
-    let start = Instant::now();
-    let resp = client().post(format!("http://{}/__hangar_server/forwarded", rig.private)).header("x-hangar-path", "/api/groups/g1/deliver")
-        .header("x-hangar-internal", SECRET).header("content-type", "application/json").body(ask.to_string()).timeout(Duration::from_secs(60)).send().await.unwrap();
-    let elapsed = start.elapsed();
-    assert_eq!(resp.status().as_u16(), 200);
-    let got: Value = serde_json::from_str(&resp.text().await.unwrap()).unwrap();
-    let mut failed: Vec<String> = got["failed"].as_array().unwrap().iter().map(|f| f.as_str().unwrap().to_owned()).collect();
-    failed.sort();
-    assert_eq!(failed, ["rig::ghost", "rig::lenta", "rig::menu"], "{got}");
-    assert!(got.get("hangar_deliveries").is_none(), "{got}");
-    assert!(elapsed >= Duration::from_secs(3) && elapsed < Duration::from_secs(8), "prazo de 3 s por sessão: {elapsed:?}");
-    assert_eq!(rig.tui("menu", "keys.jsonl"), Vec::<Value>::new(), "nada digitado no menu");
-    // Teto próprio: o `wait_diary` não desiste enquanto a pasta do diário recebe outras linhas.
-    let diary = tokio::time::timeout(Duration::from_secs(15), fake::wait_diary(rig.python.diary_dir(), |row| row["evento"] == "rust.groups_deferred_failed"))
-        .await.expect("o diário registra a entrega adiada que falhou");
-    assert!(diary.iter().any(|row| row["evento"] == "rust.groups_deferred_failed"), "{diary:?}");
-    for _ in 0..200 {
-        if !submitted(&rig, "lenta").is_empty() { break; }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    assert_eq!(submitted(&rig, "lenta"), vec![json!({"text": "[grupo: casa::s0] oi"})], "a entrega largada pelo prazo termina");
-    assert_eq!(rig.python_inputs(), 0);
 }
 
 // `input.rs:448`: sem o registro do runtime, o envio também é do Rust.
@@ -770,5 +715,4 @@ async fn internal_delivery_without_runtime_is_served_in_rust() {
     assert_eq!(submitted(&rig, "cx"), vec![json!({"text": "aviso"})]);
     let err = hangar_server::session_write::input::deliver_text(&rig.state, "ghost", "aviso").await.unwrap_err();
     assert_eq!(err["code"], "erro_sessao_recado_nao_enfileirado");
-    assert_eq!(rig.python_inputs(), 0);
 }

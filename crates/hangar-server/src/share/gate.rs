@@ -51,10 +51,10 @@ impl Watcher {
         Self { source: Source::Device { store, id }, every: WATCH_EVERY }
     }
 
-    /// Resolve só num fim de verdade: "não sei" (troca de modo, tmux mudo) mantém aberto.
+    /// Resolve só num fim de verdade: "não sei" (troca de modo, tmux mudo) mantém aberto. Confere antes
+    /// da primeira espera: acesso revogado entre o porteiro e a abertura fecha na hora.
     pub async fn until_ended(&self) {
         loop {
-            tokio::time::sleep(self.every).await;
             let ended = match &self.source {
                 Source::Guest { share, token, session } => match share.store.lookup_token(token) {
                     None => true,
@@ -65,6 +65,7 @@ impl Watcher {
             if ended {
                 return;
             }
+            tokio::time::sleep(self.every).await;
         }
     }
 

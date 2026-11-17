@@ -2,10 +2,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::sync::{
-    Arc,
-    atomic::{AtomicUsize, Ordering},
-};
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::body::{Body, to_bytes};
@@ -21,7 +18,7 @@ use hangar_server::list::mux::Mux;
 use hangar_server::routes::{AppState, router};
 use hangar_server::runtime::gateway::RuntimeRegistry;
 
-use crate::fake::{OWNER, SECRET, config};
+use crate::fake::{OWNER, config};
 
 struct Scene {
     _root: tempfile::TempDir,
@@ -29,14 +26,11 @@ struct Scene {
     cwd: PathBuf,
     state: Arc<AppState>,
     app: axum::Router,
-    hits: Arc<AtomicUsize>,
-    upstream: tokio::task::JoinHandle<()>,
 }
 impl Drop for Scene {
     fn drop(&mut self) {
         reap_fake(&self.home.join("editor-pid"), false);
         reap_fake(&self.home.join("terminal-pid"), true);
-        self.upstream.abort();
     }
 }
 fn reap_fake(path: &Path, group: bool) {
@@ -104,21 +98,7 @@ esac
                 cwd.display()
             ),
         );
-        let hits = Arc::new(AtomicUsize::new(0));
-        let seen = hits.clone();
-        let upstream = axum::Router::new().fallback(move || {
-            let seen = seen.clone();
-            async move {
-                seen.fetch_add(1, Ordering::Relaxed);
-                (StatusCode::BAD_GATEWAY, "unexpected-python")
-            }
-        });
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let upstream_addr = listener.local_addr().unwrap();
-        let upstream = tokio::spawn(async move {
-            axum::serve(listener, upstream).await.unwrap();
-        });
-        let mut state = AppState::new(config(upstream_addr, ""));
+        let mut state = AppState::new(config(""));
         state.origins_home = home.clone();
         state.accounts = hangar_server::accounts::AccountService::new(
             hangar_server::accounts::environment::AccountEnvironment::from_map(BTreeMap::from([
@@ -145,11 +125,11 @@ esac
             dirs:parse_dirs(&json!({"home":home,"claude":home.join(".claude"),"codex_home":home.join(".codex"),
                 "pi_sessions":home.join(".pi/agent/sessions"),"omp_config":home.join(".omp"),
                 "omp_agent":home.join(".omp/agent"),"kimi_home":home.join(".kimi-code")}).to_string()),
-        },FactsClient::new(upstream_addr,SECRET.into())));
+        },FactsClient::new()));
         state.list = list.clone();
         state.side.locate = Arc::new(hangar_server::locate::ListLocate { list });
         let runtime = Arc::new(
-            RuntimeRegistry::new(upstream_addr, SECRET.into(), "session-tools-test".into())
+            RuntimeRegistry::new("session-tools-test".into())
                 .with_codex_environment(state.accounts.env.clone()),
         );
         assert!(state.state.runtime.set(runtime).is_ok());
@@ -161,8 +141,6 @@ esac
             cwd,
             state,
             app,
-            hits,
-            upstream,
         }
     }
     async fn request(
@@ -198,9 +176,6 @@ esac
         let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
         (status, serde_json::from_slice(&body).unwrap_or(Value::Null))
     }
-    fn no_python(&self) {
-        assert_eq!(self.hits.load(Ordering::Relaxed), 0);
-    }
     async fn finish(&self) {
         self.state
             .state
@@ -210,7 +185,6 @@ esac
             .shutdown()
             .await
             .unwrap();
-        self.no_python();
     }
 }
 

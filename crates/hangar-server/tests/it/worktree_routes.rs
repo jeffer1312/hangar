@@ -75,7 +75,7 @@ async fn initialized_submodule_and_ignored_directories_require_visible_confirmat
         std::fs::create_dir_all(path.join(name)).unwrap();
         std::fs::write(path.join(name).join("local.txt"), "conteúdo local").unwrap();
     }
-    let f = fixture(&root, true).await;
+    let f = fixture(&root).await;
     let c = client();
     let mut url = reqwest::Url::parse(&format!("http://{}/api/worktrees/detail", f.addr)).unwrap();
     url.query_pairs_mut().append_pair("path", path.to_str().unwrap());
@@ -118,7 +118,7 @@ async fn initialized_submodule_alone_is_listed_as_loss() {
     git(&repo, &["-c", "user.name=T", "-c", "user.email=t@example.invalid", "commit", "-am", "Submódulo"]);
     git(&repo, &["worktree", "add", "-b", "only-submodule", path.to_str().unwrap()]);
     git(&path, &["-c", "protocol.file.allow=always", "submodule", "update", "--init", "Hooks"]);
-    let f = fixture(&root, true).await;
+    let f = fixture(&root).await;
     let c = client();
     let mut url = reqwest::Url::parse(&format!("http://{}/api/worktrees/detail", f.addr)).unwrap();
     url.query_pairs_mut().append_pair("path", path.to_str().unwrap());
@@ -147,7 +147,7 @@ async fn residual_detail_and_manual_delete_keep_identity_files_and_branch_until_
     std::fs::create_dir(path.join("node_modules")).unwrap();
     std::fs::write(path.join("node_modules/cache"), "cache").unwrap();
     std::fs::remove_file(path.join(".git")).unwrap();
-    let f = fixture(&root, true).await;
+    let f = fixture(&root).await;
     let c = client();
     let mut url = reqwest::Url::parse(&format!("http://{}/api/worktrees/detail", f.addr)).unwrap();
     url.query_pairs_mut().append_pair("path", path.to_str().unwrap());
@@ -175,7 +175,6 @@ async fn residual_detail_and_manual_delete_keep_identity_files_and_branch_until_
     assert!(!path.exists());
     assert!(!hangar_workspace::worktrees::worktree_paths(repo.to_str().unwrap()).contains(&path.to_string_lossy().into_owned()));
     git(&repo, &["show-ref", "--verify", "refs/heads/residual"]);
-    assert_eq!(f.hits(), 0);
 }
 
 #[tokio::test]
@@ -194,11 +193,7 @@ async fn cleanup_known_repo_is_safe_when_another_discovery_root_is_missing() {
         std::fs::write(path.join("work.txt"), "trabalho local").unwrap();
     }
     std::fs::remove_file(residual.join(".git")).unwrap();
-    let app = axum::Router::new().fallback(|| async { axum::http::StatusCode::NOT_FOUND });
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let upstream = listener.local_addr().unwrap();
-    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    let mut state = hangar_server::routes::AppState::new(fake::config(upstream, "127.0.0.1"));
+    let mut state = hangar_server::routes::AppState::new(fake::config("127.0.0.1"));
     state.origins_home = home.clone();
     state.accounts = hangar_server::accounts::AccountService::new(
         hangar_server::accounts::environment::AccountEnvironment::from_map([
@@ -220,7 +215,7 @@ async fn cleanup_known_repo_is_safe_when_another_discovery_root_is_missing() {
         "omp_agent":home.join(".omp/agent"),"kimi_home":home.join(".kimi-code")
     }).to_string());
     env.mux = Mux::with_program(&mux, Duration::from_secs(5));
-    state.list = Arc::new(ListBridge::new(env, FactsClient::new(upstream, fake::SECRET.into())));
+    state.list = Arc::new(ListBridge::new(env, FactsClient::new()));
     let settings=hangar_workspace::worktree_settings::WorktreeSettings { delete_unchanged: true, ..Default::default() };
     settings.save_at(&home.join(".hangar/worktree-settings.json"), &home).unwrap();
     let wt=root.join("repo-wt");
@@ -247,8 +242,6 @@ async fn cleanup_known_repo_is_safe_when_another_discovery_root_is_missing() {
         Some(&[root.to_string_lossy().into(), root.join("unavailable").to_string_lossy().into()]), None, false, &[]);
     assert_eq!(rows[0]["discovery_partial"], true);
     let result = worktree_policy::cleanup_once(Arc::new(state)).await;
-    server.abort();
-    assert!(server.await.unwrap_err().is_cancelled());
     assert_eq!(result.unwrap(), [root.join("repo-wt").to_string_lossy().into_owned()]);
     assert_eq!(std::fs::read_to_string(dirty.join("work.txt")).unwrap(), "trabalho local");
     assert_eq!(std::fs::read_to_string(residual.join("work.txt")).unwrap(), "trabalho local");
@@ -269,7 +262,7 @@ async fn ready_only_batch_keeps_new_local_work_even_when_ignored_loss_was_confir
     git(&repo, &["-c", "user.name=T", "-c", "user.email=t@example.invalid", "commit", "--allow-empty", "-m", "next"]);
     std::fs::write(path.join("cache"), "descartável confirmado").unwrap();
     std::fs::write(path.join("new.txt"), "trabalho novo").unwrap();
-    let f = fixture(&root, true).await;
+    let f = fixture(&root).await;
     let response = client().post(format!("http://{}/api/worktrees/delete-merged", f.addr))
         .bearer_auth(OWNER).header("content-type", "application/json")
         .body(serde_json::json!({"repo":repo, "paths":[path], "lossy":[path], "confirm":true, "ready_only":true}).to_string())
@@ -296,7 +289,7 @@ async fn t4_context_unreadable_orchestration_preserves_worktree() {
         std::fs::write(run.join("eventos.jsonl"), format!("{}\n", serde_json::json!({"tipo":"execucao_inicio","gid":"t4-group","ts":stamp}))).unwrap();
         std::fs::write(run.join("timeline-t4-run.jsonl"), "").unwrap();
         std::fs::write(run.join("vigia.json"), serde_json::json!({"pid":std::process::id(),"interval_s":3600,"ts":stamp,"arbiter":"a"}).to_string()).unwrap();
-        let f = workspace_fixture::fixture_with_home(&root, false, Some(&home)).await;
+        let f = workspace_fixture::fixture_with_home(&root, Some(&home)).await;
         if warm {
             let response = client().get(format!("http://{}/api/worktrees?sizes=false", f.addr)).bearer_auth(OWNER).send().await.unwrap();
             assert_eq!(response.status(), 200);
@@ -309,8 +302,7 @@ async fn t4_context_unreadable_orchestration_preserves_worktree() {
             .json(&serde_json::json!({"repo":root.join("repo"),"path":path,"keep_branch":true})).send().await.unwrap();
         assert_eq!(response.status(), 503, "warm={warm}");
         assert!(path.join(".git").exists());
-        assert_eq!(f.hits(), 0);
-    }
+        }
 }
 
 #[tokio::test]
@@ -334,20 +326,19 @@ async fn t4_context_first_request_after_session_recreation_uses_current_checkout
         std::fs::write(&mux, format!("@echo off\r\nif not \"%~1\"==\"list-panes\" exit /b 0\r\ntype \"{}\"\r\n", panes.display())).unwrap();
         mux
     };
-    let f = workspace_fixture::fixture_with_mux(&root, false, Some(&home), Some(&mux)).await;
+    let f = workspace_fixture::fixture_with_mux(&root, Some(&home), Some(&mux)).await;
     let url = format!("http://{}/api/worktrees/detail?path={}", f.addr, root.join("repo-wt").display());
     let first = client().get(&url).bearer_auth(OWNER).send().await.unwrap().json::<Value>().await.unwrap();
     assert_eq!(first["sessions"], serde_json::json!([]));
     std::fs::write(&panes, pane(&root.join("repo-wt"), 1700000001)).unwrap();
     let second = client().get(&url).bearer_auth(OWNER).send().await.unwrap().json::<Value>().await.unwrap();
     assert_eq!(second["sessions"], serde_json::json!(["fixture"]));
-    assert_eq!(f.hits(), 0);
 }
 
 #[tokio::test]
 async fn t4_http_family_methods_and_slashes_never_reach_python() {
     let dir = scene();
-    let f = fixture(dir.path(), false).await;
+    let f = fixture(dir.path()).await;
     let c = reqwest::Client::builder().no_proxy().redirect(reqwest::redirect::Policy::none()).build().unwrap();
     for (path, method, allow) in [
         ("/api/worktrees", "POST", "GET"),
@@ -365,8 +356,6 @@ async fn t4_http_family_methods_and_slashes_never_reach_python() {
         assert_eq!(response.status(), 307, "{path}");
         assert_eq!(response.headers()["location"], format!("http://{}{path}?keep=1", f.addr));
     }
-    assert_eq!(f.hits(), 0);
-    assert_eq!(f.context_hits.load(std::sync::atomic::Ordering::Relaxed), 0);
 }
 
 #[tokio::test]
@@ -385,7 +374,7 @@ async fn t4_delete_batch_limits_confirmation_and_preserves_degraded_worktrees() 
     }
     git(&repo, &["-c","user.name=T","-c","user.email=t@example.invalid","commit","--allow-empty","-m","next"]);
     std::fs::write(b.join("new-work.txt"), "preservar").unwrap();
-    let f = workspace_fixture::session_fixture(&root, false).await;
+    let f = workspace_fixture::session_fixture(&root).await;
     let url = format!("http://{}/api/worktrees/delete-merged", f.addr);
     let invalid = client().post(&url).bearer_auth(OWNER).json(&serde_json::json!({"repo":repo,"confirm":true})).send().await.unwrap();
     assert_eq!(invalid.status(), 422);
@@ -410,7 +399,6 @@ async fn t4_delete_batch_limits_confirmation_and_preserves_degraded_worktrees() 
     std::fs::write(path.join(".git"), original).unwrap();
     assert_eq!(status, 409);
     assert!(path.exists());
-    assert_eq!(f.hits(), 0);
 }
 
 #[test]
@@ -533,7 +521,7 @@ async fn t4_delete_keeps_conversations_until_resume_and_preserves_uuid_collision
     let mux = { let path = home.join("t4-resume-mux"); crate::write_executable(&path, "#!/bin/sh\nexit 0\n"); path };
     #[cfg(windows)]
     let mux = { let path = home.join("t4-resume-mux.cmd"); std::fs::write(&path, "@echo off\r\nexit /b 0\r\n").unwrap(); path };
-    let f = workspace_fixture::fixture_with_mux(&root, false, Some(&home), Some(&mux)).await;
+    let f = workspace_fixture::fixture_with_mux(&root, Some(&home), Some(&mux)).await;
     let repo = root.join("repo");
     let path = root.join("repo-wt");
     let projects = home.join(".claude/projects");
@@ -595,68 +583,13 @@ async fn t4_delete_keeps_conversations_until_resume_and_preserves_uuid_collision
         assert_eq!(resumed.found.transcript, to.join(format!("{sid}.jsonl")));
         assert_eq!(std::path::Path::new(&resumed.request.cwd), repo);
     }).await.unwrap();
-    assert_eq!(f.hits(), 0);
-}
-
-#[tokio::test]
-async fn t4_private_forwarding_keeps_method_and_guest_refusals_native() {
-    use hangar_server::{accounts::{AccountService, environment::AccountEnvironment}, list::{bridge::{ListBridge, ListEnv, parse_dirs}, facts::FactsClient, mux::Mux}};
-    let dir = scene();
-    let root = hangar_workspace::real(dir.path());
-    let home = root.join("home");
-    std::fs::create_dir(&home).unwrap();
-    #[cfg(unix)]
-    let mux = { let path = home.join("t4-private-mux"); crate::write_executable(&path, "#!/bin/sh\nexit 0\n"); path };
-    #[cfg(windows)]
-    let mux = { let path = home.join("t4-private-mux.cmd"); std::fs::write(&path, "@echo off\r\nexit /b 0\r\n").unwrap(); path };
-    let upstream = "127.0.0.1:9".parse().unwrap();
-    let mut state = hangar_server::routes::AppState::new(fake::config(upstream, "127.0.0.1"));
-    state.origins_home = home.clone();
-    state.accounts = AccountService::new(AccountEnvironment::from_map([
-        ("HOME".into(),home.to_string_lossy().into_owned()), ("USERPROFILE".into(),home.to_string_lossy().into_owned()),
-        ("CLAUDE_CONFIG_DIR".into(),home.join(".claude").to_string_lossy().into_owned()), ("CP_SCAN_ROOTS".into(),root.to_string_lossy().into_owned()),
-    ].into()));
-    let mut env = ListEnv::from_env();
-    env.dirs = parse_dirs(&serde_json::json!({"home":home,"claude":home.join(".claude"),"codex_home":home.join(".codex"),
-        "pi_sessions":home.join(".pi/agent/sessions"),"omp_config":home.join(".omp"),"omp_agent":home.join(".omp/agent"),"kimi_home":home.join(".kimi-code")}).to_string());
-    env.mux = Mux::with_program(mux, std::time::Duration::from_secs(5));
-    state.list = std::sync::Arc::new(ListBridge::new(env, FactsClient::new(upstream, fake::SECRET.into())));
-    let app = hangar_server::routes::terminal_router(std::sync::Arc::new(state));
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let server = tokio::spawn(async move { axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap() });
-    let url = format!("http://{addr}/__hangar_server/forwarded");
-    let unauthorized = client().get(&url).header("x-hangar-path", "/api/worktrees/settings").send().await.unwrap();
-    assert_eq!(unauthorized.status(), 404);
-    for (secret, forwarded) in [("wrong-secret", "127.0.0.1"), (fake::SECRET, "198.51.100.21")] {
-        let response = client().put(&url).header("x-hangar-internal", secret).header("x-forwarded-for", forwarded)
-            .header("x-hangar-path", "/api/worktrees/settings").json(&serde_json::json!({"location":"/should-not-exist"})).send().await.unwrap();
-        assert_eq!(response.status(), 404);
-    }
-    let redirects = reqwest::Client::builder().no_proxy().redirect(reqwest::redirect::Policy::none()).build().unwrap();
-    let slash = redirects.get(format!("{url}?keep=1")).header("x-hangar-internal", fake::SECRET)
-        .header("x-hangar-path", "/api/worktrees/create/").send().await.unwrap();
-    assert_eq!(slash.status(), 307);
-    assert_eq!(slash.headers()["location"], format!("http://{addr}/api/worktrees/create?keep=1"));
-    let mut seen = Vec::new();
-    for (path, guest) in [("/api/worktrees/create", false), ("/api/worktrees/settings", true)] {
-        let mut request = client().get(&url).header("x-hangar-internal", fake::SECRET).header("x-hangar-path", path);
-        if guest { request = request.header("x-hangar-forwarded-guest", "1"); }
-        let response = request.send().await.unwrap();
-        seen.push((response.status().as_u16(), response.json::<Value>().await.unwrap()));
-    }
-    server.abort();
-    assert!(server.await.unwrap_err().is_cancelled());
-    assert_eq!(seen, vec![(405, serde_json::json!({"detail":"Method Not Allowed"})),
-        (403, serde_json::json!({"detail":"convidado não acessa worktrees"}))]);
-    assert!(!home.join(".hangar/worktree-settings.json").exists());
 }
 
 #[tokio::test]
 async fn t4_http_encoded_detail_keeps_its_operation() {
     let dir = scene();
     let root = hangar_workspace::real(dir.path());
-    let f = fixture(&root, false).await;
+    let f = fixture(&root).await;
     let response = client().get(format!("http://{}/api/worktrees/%64etail?path={}", f.addr, root.join("repo-wt").display()))
         .bearer_auth(OWNER).send().await.unwrap();
     assert_eq!(response.status(), 200);
@@ -684,13 +617,12 @@ async fn t4_http_encoded_detail_keeps_its_operation() {
     assert_eq!(response.json::<Value>().await.unwrap(), serde_json::json!({"ok":true}));
     let response = client().get(format!("http://{}/api/worktrees/%2564etail", f.addr)).bearer_auth(OWNER).send().await.unwrap();
     assert_eq!(response.status(), 404);
-    assert_eq!(f.hits(), 0);
 }
 
 #[tokio::test]
 async fn t4_http_native_payload_and_query_refusals_preserve_their_published_format() {
     let dir = scene();
-    let f = fixture(dir.path(), false).await;
+    let f = fixture(dir.path()).await;
     for (method, path, body) in [
         ("POST", "create", "{"), ("POST", "create", "{}"),
         ("POST", "delete", "null"), ("POST", "delete", r#"{"repo":"x","path":"x","confirm":"true"}"#),
@@ -713,7 +645,6 @@ async fn t4_http_native_payload_and_query_refusals_preserve_their_published_form
         .body(" ".repeat(64 * 1024 + 1)).send().await.unwrap();
     assert_eq!(response.status(), 422);
     assert_eq!(response.json::<Value>().await.unwrap(), serde_json::json!({"detail":"corpo de worktrees inválido"}));
-    assert_eq!(f.hits(), 0);
 }
 
 #[tokio::test]
@@ -756,7 +687,6 @@ async fn t4_http_owner_cookie_login_and_invites_keep_global_boundaries() {
             assert_eq!(response.json::<Value>().await.unwrap(), serde_json::json!({"detail":{"code":code,"params":{},"msg":message}}));
         }
     }
-    assert_eq!(f.hits(), 0);
 }
 
 #[test]
@@ -776,7 +706,7 @@ fn t4_external_route_paths_and_methods_do_not_panic() {
 #[tokio::test]
 async fn t4_http_auth_refusals_never_reach_python() {
     let dir = scene();
-    let f = fixture(dir.path(), false).await;
+    let f = fixture(dir.path()).await;
     for (index, (method, path)) in [
         ("GET", "/api/worktrees"), ("GET", "/api/worktrees/detail"),
         ("GET", "/api/worktrees/settings"), ("PUT", "/api/worktrees/settings"),
@@ -788,15 +718,13 @@ async fn t4_http_auth_refusals_never_reach_python() {
         assert_eq!(response.status(), 401, "{method} {path}");
         assert_eq!(response.json::<Value>().await.unwrap(), serde_json::json!({"detail":{"code":"erro_nao_autorizado","params":{},"msg":"unauthorized"}}));
     }
-    assert_eq!(f.hits(), 0);
-    assert_eq!(f.context_hits.load(std::sync::atomic::Ordering::Relaxed), 0);
 }
 
 #[tokio::test]
 async fn owner_lists_in_rust_and_invalid_token_is_refused_locally() {
     let dir = scene();
     let root = hangar_workspace::real(dir.path());
-    let f = fixture(&root, true).await;
+    let f = fixture(&root).await;
     let c = client();
     let url = format!("http://{}/api/worktrees?sizes=false", f.addr);
     let r = c.get(&url).bearer_auth(OWNER).send().await.unwrap();
@@ -818,18 +746,16 @@ async fn owner_lists_in_rust_and_invalid_token_is_refused_locally() {
     );
     let r = c.get(&detail).bearer_auth(OWNER).send().await.unwrap();
     assert_eq!(r.status(), 200);
-    assert_eq!(f.hits(), 0);
     let guest = c.get(&url).bearer_auth("convidado").send().await.unwrap();
     assert_eq!(guest.status(), 401);
     assert_eq!(guest.json::<Value>().await.unwrap(), serde_json::json!({"detail":{"code":"erro_nao_autorizado","params":{},"msg":"unauthorized"}}));
-    assert_eq!(f.hits(), 0);
 }
 
 #[tokio::test]
 async fn path_outside_the_roots_is_refused_like_python() {
     let dir = scene();
     let root = hangar_workspace::real(dir.path());
-    let f = fixture(&root.join("repo"), true).await;
+    let f = fixture(&root.join("repo")).await;
     let c = client();
     for url in [
         format!(
@@ -849,7 +775,7 @@ async fn path_outside_the_roots_is_refused_like_python() {
         assert_eq!(body["detail"], "root not allowed");
     }
     // A worktree fora da raiz liberada vale pelo repositório que a registra, que está nela.
-    let f = fixture(&root.join("repo"), true).await;
+    let f = fixture(&root.join("repo")).await;
     let wt = format!(
         "http://{}/api/worktrees/detail?path={}",
         f.addr,
@@ -859,7 +785,6 @@ async fn path_outside_the_roots_is_refused_like_python() {
         c.get(&wt).bearer_auth(OWNER).send().await.unwrap().status(),
         200
     );
-    assert_eq!(f.hits(), 0);
 }
 
 #[tokio::test]
@@ -870,7 +795,7 @@ async fn unreadable_inactivity_settings_keep_the_list_and_drop_only_the_threshol
     let settings = home.path().join(".hangar/worktree-settings.json");
     std::fs::create_dir_all(settings.parent().unwrap()).unwrap();
     std::fs::write(&settings, "inválido").unwrap();
-    let f = workspace_fixture::fixture_with_home(&root, true, Some(home.path())).await;
+    let f = workspace_fixture::fixture_with_home(&root, Some(home.path())).await;
     let c = client();
     let r = c
         .get(format!("http://{}/api/worktrees?sizes=false", f.addr))
@@ -895,7 +820,6 @@ async fn unreadable_inactivity_settings_keep_the_list_and_drop_only_the_threshol
         f.diag("rust.worktrees_failed").await["codigo"],
         hangar_workspace::UNAVAILABLE
     );
-    assert_eq!(f.hits(), 0);
 }
 
 #[tokio::test]
@@ -903,7 +827,7 @@ async fn missing_native_context_is_a_503_with_code_never_python() {
     let dir = scene();
     let home = tempfile::tempdir().unwrap();
     let missing = home.path().join("missing-multiplexer");
-    let f = workspace_fixture::fixture_with_mux(dir.path(), true, Some(home.path()), Some(&missing)).await;
+    let f = workspace_fixture::fixture_with_mux(dir.path(), Some(home.path()), Some(&missing)).await;
     let r = client()
         .get(format!("http://{}/api/worktrees", f.addr))
         .bearer_auth(OWNER)
@@ -916,13 +840,12 @@ async fn missing_native_context_is_a_503_with_code_never_python() {
         f.diag("rust.worktrees_failed").await["codigo"],
         "worktrees_context"
     );
-    assert_eq!(f.hits(), 0);
 }
 
 #[tokio::test]
 async fn malformed_query_is_422_without_returning_to_python() {
     let dir = scene();
-    let f = fixture(dir.path(), true).await;
+    let f = fixture(dir.path()).await;
     let c = client();
     for url in [
         format!("http://{}/api/worktrees?sizes=talvez", f.addr),
@@ -938,16 +861,12 @@ async fn malformed_query_is_422_without_returning_to_python() {
             422
         );
     }
-    assert_eq!(f.hits(), 0);
 }
 
 #[tokio::test]
 async fn settings_are_owner_only_strict_and_persist_in_explicit_home() {
     let home = tempfile::tempdir().unwrap();
-    let mut state = hangar_server::routes::AppState::new(fake::config(
-        "127.0.0.1:9".parse().unwrap(),
-        "127.0.0.1",
-    ));
+    let mut state = hangar_server::routes::AppState::new(fake::config("127.0.0.1"));
     state.origins_home = home.path().into();
     let addr = fake::spawn_state(state).await;
     let url = format!("http://{addr}/api/worktrees/settings");
@@ -1023,7 +942,7 @@ async fn configured_location_is_used_by_public_creation_and_manual_delete_stays_
     let dir = scene();
     let home = tempfile::tempdir().unwrap();
     let root = hangar_workspace::real(dir.path());
-    let f = workspace_fixture::fixture_with_home(&root, true, Some(home.path())).await;
+    let f = workspace_fixture::fixture_with_home(&root, Some(home.path())).await;
     let c = client();
     let settings = serde_json::json!({"location":home.path().join("chosen"),"inactive_days":null,"delete_merged":false,"delete_unchanged":false,"keep_when":"uncommitted-changes"});
     let put = c
@@ -1077,14 +996,13 @@ async fn configured_location_is_used_by_public_creation_and_manual_delete_stays_
         &root.join("repo"),
         &["show-ref", "--verify", "refs/heads/created-in-rust"],
     );
-    assert_eq!(f.hits(), 0);
 }
 
 #[tokio::test]
 async fn missing_configured_root_is_ignored_like_python() {
     let dir = tempfile::tempdir().unwrap();
     let missing = dir.path().join("missing");
-    let f = fixture(&missing, true).await;
+    let f = fixture(&missing).await;
     let r = client()
         .get(format!("http://{}/api/worktrees?sizes=false", f.addr))
         .bearer_auth(OWNER)
@@ -1115,7 +1033,7 @@ async fn owner_cleans_a_missing_registration_even_after_its_branch_was_deleted()
     git(&repo, &["worktree", "add", "-b", "orphan", path.to_str().unwrap()]);
     std::fs::remove_dir_all(&path).unwrap();
     git(&repo, &["update-ref", "-d", "refs/heads/orphan"]);
-    let f = fixture(&root, true).await;
+    let f = fixture(&root).await;
     let r = client().post(format!("http://{}/api/worktrees/delete", f.addr))
         .bearer_auth(OWNER).header("content-type", "application/json")
         .body(serde_json::json!({"repo": repo, "path": path, "keep_branch": true}).to_string())
@@ -1127,7 +1045,6 @@ async fn owner_cleans_a_missing_registration_even_after_its_branch_was_deleted()
     assert_eq!(body["branch_deleted"], false);
     assert!(!hangar_workspace::worktrees::worktree_paths(repo.to_str().unwrap()).iter().any(|p| std::path::Path::new(p) == path));
     assert!(root.join("repo-wt/.git").is_file());
-    assert_eq!(f.hits(), 0);
 }
 #[tokio::test]
 async fn merged_batch_accepts_a_repository_subdirectory() {
@@ -1168,7 +1085,7 @@ async fn merged_batch_accepts_a_repository_subdirectory() {
     );
     std::fs::create_dir(repo.join("subdir")).unwrap();
     let home = tempfile::tempdir().unwrap();
-    let f = workspace_fixture::fixture_with_home(&root, true, Some(home.path())).await;
+    let f = workspace_fixture::fixture_with_home(&root, Some(home.path())).await;
     let expected=std::fs::canonicalize(&wt).unwrap();
     let body = serde_json::json!({"repo":repo.join("subdir"),"paths":[wt]});
     let r = client()
@@ -1191,16 +1108,9 @@ async fn merged_batch_accepts_a_repository_subdirectory() {
 
 #[tokio::test]
 async fn anonymous_worktree_requests_reach_auth_and_record_failures() {
-    use std::sync::{Arc,atomic::{AtomicUsize,Ordering}};
-    use axum::{Router,http::StatusCode};
-    let hits=Arc::new(AtomicUsize::new(0)); let seen=hits.clone();
-    let upstream=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap(); let address=upstream.local_addr().unwrap();
-    tokio::spawn(async move { axum::serve(upstream,Router::new().fallback(move |uri: axum::http::Uri| {let seen=seen.clone();async move {
-        if uri.path().starts_with("/api/worktrees") { seen.fetch_add(1,Ordering::SeqCst); }
-        StatusCode::UNAUTHORIZED
-    }})).await.unwrap(); });
+    use std::sync::Arc;
     let home=tempfile::tempdir().unwrap();
-    let mut state=hangar_server::routes::AppState::new(fake::config(address,"127.0.0.1")); state.origins_home=home.path().into();
+    let mut state=hangar_server::routes::AppState::new(fake::config("127.0.0.1")); state.origins_home=home.path().into();
     let state=Arc::new(state); let app=hangar_server::routes::router(state.clone());
     let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap(); let addr=listener.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(listener,app.into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap(); });
@@ -1212,7 +1122,6 @@ async fn anonymous_worktree_requests_reach_auth_and_record_failures() {
         if n%2==1 {req=req.bearer_auth("token-errado");}
         assert_eq!(req.send().await.unwrap().status(),401);
     }
-    assert_eq!(hits.load(Ordering::SeqCst),0);
     assert!(!state.auth.is_owner(ip,Some(OWNER.as_bytes())),"as recusas entram no bloqueio de autenticação");
 }
 
@@ -1220,7 +1129,7 @@ async fn anonymous_worktree_requests_reach_auth_and_record_failures() {
 async fn list_uses_native_sources_when_python_context_is_unavailable() {
     let dir=scene();
     let root=hangar_workspace::real(dir.path());
-    let f=workspace_fixture::fixture(&root,false).await;
+    let f=workspace_fixture::fixture(&root).await;
     let response=client().get(format!("http://{}/api/worktrees?sizes=false",f.addr))
         .bearer_auth(OWNER).send().await.unwrap();
     let status=response.status();
@@ -1228,49 +1137,45 @@ async fn list_uses_native_sources_when_python_context_is_unavailable() {
     assert_eq!(status,200,"{text}");
     let body:Value=serde_json::from_str(&text).unwrap();
     assert!(body["repos"].as_array().unwrap().iter().any(|repo|repo["repo"]==root.join("repo").to_string_lossy().as_ref()),"{body}");
-    assert_eq!(f.hits(),0);
 }
 
 #[tokio::test]
 async fn fetch_http_wrong_method_is_local_and_does_not_require_auth() {
     let dir=scene(); let root=hangar_workspace::real(dir.path());
-    let f=workspace_fixture::fixture(&root,false).await;
+    let f=workspace_fixture::fixture(&root).await;
     let response=client().get(format!("http://{}/api/worktrees/fetch",f.addr))
         .header("origin","https://example.test").send().await.unwrap();
     assert_eq!(response.status(),405);
     assert_eq!(response.headers()["allow"],"POST");
     assert_eq!(response.headers()["access-control-allow-origin"],"*");
     assert_eq!(response.json::<Value>().await.unwrap(),serde_json::json!({"detail":"Method Not Allowed"}));
-    assert_eq!(f.hits(),0);
 }
 
 #[tokio::test]
 async fn fetch_http_trailing_slash_redirects_before_auth() {
     let dir=scene(); let root=hangar_workspace::real(dir.path());
-    let f=workspace_fixture::fixture(&root,false).await;
+    let f=workspace_fixture::fixture(&root).await;
     let c=reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).build().unwrap();
     let response=c.post(format!("http://{}/api/worktrees/fetch/",f.addr)).send().await.unwrap();
     assert_eq!(response.status(),307);
     assert_eq!(response.headers()["location"],format!("http://{}/api/worktrees/fetch",f.addr));
-    assert_eq!(f.hits(),0);
 }
 
 #[tokio::test]
 async fn fetch_http_preflight_is_local_without_credentials() {
     let dir=scene(); let root=hangar_workspace::real(dir.path());
-    let f=workspace_fixture::fixture(&root,false).await;
+    let f=workspace_fixture::fixture(&root).await;
     let response=client().request(reqwest::Method::OPTIONS,format!("http://{}/api/worktrees/fetch",f.addr))
         .header("origin","https://example.test").header("access-control-request-method","POST").send().await.unwrap();
     assert_eq!(response.status(),200);
     assert_eq!(response.headers()["access-control-allow-origin"],"*");
     assert_eq!(response.text().await.unwrap(),"OK");
-    assert_eq!(f.hits(),0);
 }
 
 #[tokio::test]
 async fn fetch_auth_failures_keep_the_shared_block_and_retry_header() {
     let dir=scene(); let root=hangar_workspace::real(dir.path());
-    let f=workspace_fixture::fixture(&root,false).await;
+    let f=workspace_fixture::fixture(&root).await;
     for _ in 0..8 {
         let response=client().post(format!("http://{}/api/worktrees/fetch",f.addr))
             .header("x-forwarded-for","198.51.100.213").bearer_auth("wrong-owner")
@@ -1283,14 +1188,13 @@ async fn fetch_auth_failures_keep_the_shared_block_and_retry_header() {
     assert_eq!(blocked.status(),429);
     assert_eq!(blocked.headers()["retry-after"],"30");
     assert_eq!(blocked.json::<Value>().await.unwrap()["detail"]["code"],"erro_muitas_tentativas");
-    assert_eq!(f.hits(),0);
 }
 
 #[tokio::test]
 async fn fetch_rejects_a_body_over_100_mib_before_reading_it_or_contacting_python() {
     use tokio::io::{AsyncReadExt,AsyncWriteExt};
     let dir=scene(); let root=hangar_workspace::real(dir.path());
-    let f=workspace_fixture::fixture(&root,false).await;
+    let f=workspace_fixture::fixture(&root).await;
     let mut connection=tokio::net::TcpStream::connect(f.addr).await.unwrap();
     connection.write_all(format!("POST /api/worktrees/fetch HTTP/1.1\r\nHost: {}\r\nAuthorization: Bearer {}\r\nOrigin: https://example.test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",f.addr,OWNER,100*1024*1024+1).as_bytes()).await.unwrap();
     let mut bytes=Vec::new();
@@ -1299,13 +1203,12 @@ async fn fetch_rejects_a_body_over_100_mib_before_reading_it_or_contacting_pytho
     assert!(response.starts_with("HTTP/1.1 413"),"{response}");
     assert!(response.to_ascii_lowercase().contains("access-control-allow-origin: *"),"{response}");
     assert!(response.contains("request body too large"));
-    assert_eq!(f.hits(),0);
 }
 
 #[tokio::test]
 async fn fetch_final_review_does_not_wait_for_shared_write_slots() {
     let dir=scene(); let root=hangar_workspace::real(dir.path());
-    let f=workspace_fixture::fixture(&root,false).await;
+    let f=workspace_fixture::fixture(&root).await;
     let capacity=f.workspace_slots.available_permits() as u32;
     let held=f.workspace_slots.clone().acquire_many_owned(capacity).await.unwrap();
     let response=tokio::time::timeout(std::time::Duration::from_secs(5),
@@ -1315,14 +1218,13 @@ async fn fetch_final_review_does_not_wait_for_shared_write_slots() {
     let response=response.expect("o fetch esperou na fila das escritas que já estavam ocupadas").unwrap();
     assert_eq!(response.status(),200);
     assert_eq!(response.json::<Value>().await.unwrap(),serde_json::json!({"ok":true}));
-    assert_eq!(f.hits(),0);
 }
 
 #[tokio::test]
 async fn fetch_final_review_declared_size_is_refused_before_auth_without_counting_failures() {
     use tokio::io::{AsyncReadExt,AsyncWriteExt};
     let dir=scene(); let root=hangar_workspace::real(dir.path());
-    let f=workspace_fixture::fixture(&root,false).await;
+    let f=workspace_fixture::fixture(&root).await;
     for _ in 0..8 {
         let mut connection=tokio::net::TcpStream::connect(f.addr).await.unwrap();
         connection.write_all(format!("POST /api/worktrees/fetch HTTP/1.1\r\nHost: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",f.addr,100*1024*1024+1).as_bytes()).await.unwrap();
@@ -1334,26 +1236,24 @@ async fn fetch_final_review_declared_size_is_refused_before_auth_without_countin
     let response=client().post(format!("http://{}/api/worktrees/fetch",f.addr)).bearer_auth(OWNER)
         .json(&serde_json::json!({"repo":root.join("repo")})).send().await.unwrap();
     assert_eq!(response.status(),200);
-    assert_eq!(f.hits(),0);
 }
 
 #[tokio::test]
 async fn fetch_compression_identity_keeps_the_original_vary_header() {
     let dir=scene(); let root=hangar_workspace::real(dir.path());
-    let f=workspace_fixture::fixture(&root,false).await;
+    let f=workspace_fixture::fixture(&root).await;
     let response=client().post(format!("http://{}/api/worktrees/fetch",f.addr)).bearer_auth(OWNER)
         .header("accept-encoding","identity").json(&serde_json::json!({"repo":root.join("repo")})).send().await.unwrap();
     assert_eq!(response.status(),200);
     assert_eq!(response.headers().get("vary").and_then(|v|v.to_str().ok()),Some("Accept-Encoding"));
     assert_eq!(response.json::<Value>().await.unwrap(),serde_json::json!({"ok":true}));
-    assert_eq!(f.hits(),0);
 }
 
 #[tokio::test]
 async fn fetch_compression_small_success_keeps_original_gzip_behavior() {
     use std::io::Read;
     let dir=scene(); let root=hangar_workspace::real(dir.path());
-    let f=workspace_fixture::fixture(&root,false).await;
+    let f=workspace_fixture::fixture(&root).await;
     let c=reqwest::Client::builder().no_gzip().no_proxy().build().unwrap();
     let response=c.post(format!("http://{}/api/worktrees/fetch",f.addr)).bearer_auth(OWNER)
         .header("accept-encoding","gzip").json(&serde_json::json!({"repo":root.join("repo")})).send().await.unwrap();
@@ -1364,34 +1264,31 @@ async fn fetch_compression_small_success_keeps_original_gzip_behavior() {
     let mut decoded=String::new();
     flate2::read::GzDecoder::new(bytes.as_ref()).read_to_string(&mut decoded).unwrap();
     assert_eq!(decoded,"{\"ok\":true}");
-    assert_eq!(f.hits(),0);
 }
 
 #[tokio::test]
 async fn fetch_is_native_even_when_python_context_is_unavailable() {
     let dir=scene();
     let root=hangar_workspace::real(dir.path());
-    let f=workspace_fixture::fixture(&root,false).await;
+    let f=workspace_fixture::fixture(&root).await;
     let response=client().post(format!("http://{}/api/worktrees/fetch",f.addr))
         .bearer_auth(OWNER).json(&serde_json::json!({"repo":root.join("repo")})).send().await.unwrap();
     let status=response.status();
     let text=response.text().await.unwrap();
     assert_eq!(status,200,"{text}");
     assert_eq!(serde_json::from_str::<Value>(&text).unwrap_or(Value::Null),serde_json::json!({"ok":true}),"{text}");
-    assert_eq!(f.hits(),0);
 }
 
 #[tokio::test]
 async fn fetch_refuses_invalid_body_before_git_or_python() {
     let dir=scene();
     let root=hangar_workspace::real(dir.path());
-    let f=workspace_fixture::fixture(&root,false).await;
+    let f=workspace_fixture::fixture(&root).await;
     for body in [serde_json::json!({}),serde_json::json!({"repo":""}),serde_json::json!({"repo":3}),serde_json::json!({"repo":root.join("repo"),"extra":true})] {
         let response=client().post(format!("http://{}/api/worktrees/fetch",f.addr))
             .bearer_auth(OWNER).json(&body).send().await.unwrap();
         assert_eq!(response.status(),422,"{body}");
     }
-    assert_eq!(f.hits(),0);
 }
 
 #[tokio::test]
@@ -1411,7 +1308,7 @@ async fn native_fetch_updates_and_prunes_only_remote_references() {
     git(&repo,&["update-ref","refs/remotes/origin/obsolete","refs/heads/main"]);
     git(&repo,&["show-ref","--verify","refs/remotes/origin/obsolete"]);
     std::fs::create_dir(repo.join("subdir")).unwrap();
-    let f=workspace_fixture::fixture(&root,false).await;
+    let f=workspace_fixture::fixture(&root).await;
     let response=client().post(format!("http://{}/api/worktrees/fetch",f.addr))
         .bearer_auth(OWNER).json(&serde_json::json!({"repo":repo.join("subdir")})).send().await.unwrap();
     let status=response.status();
@@ -1423,14 +1320,13 @@ async fn native_fetch_updates_and_prunes_only_remote_references() {
     assert!(!pruned.status.success());
     git(&repo,&["show-ref","--verify","refs/heads/obsolete"]);
     git(&repo,&["show-ref","--verify","refs/heads/main"]);
-    assert_eq!(f.hits(),0);
 }
 
 #[tokio::test]
 async fn native_fetch_preserves_large_validation_errors() {
     let dir=scene();
     let root=hangar_workspace::real(dir.path());
-    let f=workspace_fixture::fixture(&root,false).await;
+    let f=workspace_fixture::fixture(&root).await;
     let extra="x".repeat(8*1024*1024+1024);
     let response=client().post(format!("http://{}/api/worktrees/fetch",f.addr))
         .bearer_auth(OWNER).json(&serde_json::json!({"repo":root.join("repo"),"extra":extra})).send().await.unwrap();
@@ -1439,18 +1335,16 @@ async fn native_fetch_preserves_large_validation_errors() {
     assert_eq!(body["detail"][0]["type"],"extra_forbidden");
     assert_eq!(body["detail"][0]["loc"],serde_json::json!(["body","extra"]));
     assert_eq!(body["detail"][0]["input"].as_str().unwrap(),extra);
-    assert_eq!(f.hits(),0);
 }
 
 #[tokio::test]
 async fn anonymous_fetch_is_refused_without_python_handler() {
     let dir=scene();
     let root=hangar_workspace::real(dir.path());
-    let f=workspace_fixture::fixture(&root,false).await;
+    let f=workspace_fixture::fixture(&root).await;
     let response=client().post(format!("http://{}/api/worktrees/fetch",f.addr))
         .json(&serde_json::json!({"repo":root.join("repo")})).send().await.unwrap();
     assert_eq!(response.status(),401);
-    assert_eq!(f.hits(),0);
 }
 
 #[tokio::test]
@@ -1465,7 +1359,7 @@ async fn manual_delete_refuses_unknown_terminal_inventory() {
     };
     std::fs::write(&missing,script).unwrap();
     #[cfg(unix)] { use std::os::unix::fs::PermissionsExt; std::fs::set_permissions(&missing,std::fs::Permissions::from_mode(0o700)).unwrap(); }
-    let f=workspace_fixture::fixture_with_mux(&root,true,Some(home.path()),Some(&missing)).await;
+    let f=workspace_fixture::fixture_with_mux(&root,Some(home.path()),Some(&missing)).await;
     let path=root.join("repo-wt");
     let body=serde_json::json!({"repo":root.join("repo"),"path":path,"confirm":true});
     let r=client().post(format!("http://{}/api/worktrees/delete",f.addr)).bearer_auth(OWNER).header("content-type","application/json").body(body.to_string()).send().await.unwrap();

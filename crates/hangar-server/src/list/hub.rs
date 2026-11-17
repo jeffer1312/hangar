@@ -885,7 +885,7 @@ mod tests {
     #[tokio::test]
     async fn notice_ignores_event_follows_what_the_route_published() {
         let (tx, _rx) = watch::channel(Arc::new(Published::default()));
-        let (mut last, mut sent, diag) = (Last::default(), Sent::default(), DiagClient::new("127.0.0.1:9".parse().unwrap(), String::new()));
+        let (mut last, mut sent, diag) = (Last::default(), Sent::default(), DiagClient::new());
         let read = |json: &str| Some(Ok(Arc::<str>::from(json)));
         publish_notice_ignores(&tx, &mut last, read(r#"{"keys":[]}"#), &diag);
         let first = frames(&tx.borrow(), &mut sent);

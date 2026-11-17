@@ -65,6 +65,8 @@ hangar-http-file.workspace = true
 hangar-desktop-theme.workspace = true
 hangar-shortcut-transfer.workspace = true
 hangar-sidecar-prune.workspace = true
+hangar-usage-diary.workspace = true
+hangar-boot.workspace = true
 hangar-opencode-cookie.workspace = true
 hangar-deploy.workspace = true
 hangar-port-preview.workspace = true
@@ -186,8 +188,8 @@ name = "runtime_diagnostics"   # logger global do tracing e contagem exata de av
 path = "tests/runtime_diagnostics.rs"
 
 [[test]]
-name = "terminal_diagnostics"   # idem
-path = "tests/terminal_diagnostics.rs"
+name = "terminal_refusal_log"   # assinante global do tracing para o aviso do bloqueio (T-06)
+path = "tests/terminal_refusal_log.rs"
 
 [[test]]
 name = "contract_local_policy"   # troca HOME, USERPROFILE e TZ
@@ -212,6 +214,14 @@ path = "tests/scope_retry.rs"
 [[test]]
 name = "costs_hook"   # gancho de pânico global (install_panic_hook)
 path = "tests/costs_hook/main.rs"
+
+[[test]]
+name = "pair_archive_default"   # tira HANGAR_PAIR_ARCHIVE do processo
+path = "tests/pair_archive_default.rs"
+
+[[test]]
+name = "mux_breakaway"   # põe o processo num Job do Windows
+path = "tests/mux_breakaway.rs"
 
 [[test]]
 name = "contract_orq_conductor"

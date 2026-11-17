@@ -1,6 +1,5 @@
 //! Falhas do servidor vão ao diário local exportável, limitado por diário, sessão e código.
 use serde_json::json;
-use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
 /// Código da falha que uma rota do Rust devolveu, para o diário sem reler o corpo da resposta.
@@ -97,7 +96,7 @@ impl Drop for PendingWrite {
 }
 
 impl DiagClient {
-    pub fn new(_upstream: SocketAddr, _secret: String) -> Self {
+    pub fn new() -> Self {
         Self {
             settings: Arc::new(Mutex::new(DiarySettings {
                 directory: if cfg!(test) { None } else { diary_dir() },

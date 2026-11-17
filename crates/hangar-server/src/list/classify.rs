@@ -707,7 +707,7 @@ mod tests {
         let facts = Facts { hooks: &hooks, alive: &|_| false, config_dirs: &dirs, headless: Some(&BTreeMap::new()),
                             problems: &BTreeMap::new(), stall_seconds: 300.0, monitors: &Published::default() };
         let mut classifier = Classifier::default();
-        classifier.set_plugin_runtime(std::sync::Arc::new(crate::runtime::gateway::RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(), "t".into(), "i".into())));
+        classifier.set_plugin_runtime(std::sync::Arc::new(crate::runtime::gateway::RuntimeRegistry::new("i".into())));
         classifier.classify(std::slice::from_mut(&mut row), &facts, &io).await;
         assert_eq!(row.problema, None);
     }

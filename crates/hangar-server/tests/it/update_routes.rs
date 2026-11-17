@@ -1,5 +1,5 @@
 //! `/api/atualizacao` no Rust: pacote, modo desenvolvedor e checkout têm resposta nativa;
-//! quem não é dono é recusado, sem encaminhamento ao Python.
+//! quem não é dono é recusado.
 use hangar_server::{accounts::{AccountService, environment::AccountEnvironment}, auth::TrustedHosts, config::Config, routes::AppState};
 use serde_json::{Value, json};
 use std::path::Path;
@@ -9,7 +9,6 @@ struct Fixture {
     home: tempfile::TempDir,
     base: String,
     tasks: Vec<tokio::task::JoinHandle<()>>,
-    python_calls: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl Drop for Fixture { fn drop(&mut self) { for task in &self.tasks { task.abort(); } } }
@@ -21,18 +20,12 @@ async fn serve(router: axum::Router) -> (std::net::SocketAddr, tokio::task::Join
 }
 
 impl Fixture {
-    /// O Python falso responde `python` a tudo; o índice falso publica `remote` para este sistema.
+    /// O índice falso publica `remote` para este sistema.
     async fn start(remote: &str) -> Self { Self::with_entry(Some(entry(remote))).await }
 
     /// `entry` é a entrada deste sistema no índice falso; `None` = o índice responde 503.
     async fn with_entry(entry: Option<Value>) -> Self {
         let home = tempfile::tempdir().unwrap();
-        let python_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let calls = python_calls.clone();
-        let (upstream, python) = serve(axum::Router::new().fallback(move || {
-            calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            async { "python" }
-        })).await;
         let index = entry.map(|entry| json!({"platforms": {hangar_server::update::platform(): entry}}).to_string());
         let (release, index_task) = serve(axum::Router::new().fallback(move || {
             let index = index.clone();
@@ -41,7 +34,7 @@ impl Fixture {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let mut state = AppState::new(Config {
-            listen: address, upstream, internal_secret: "fixture-internal".into(),
+            listen: address, internal_secret: "fixture-internal".into(),
             auth_token: "fixture-owner".into(), log_path: None, trusted: TrustedHosts::parse("127.0.0.1"),
         });
         state.accounts = AccountService::new(AccountEnvironment::from_map([
@@ -54,7 +47,7 @@ impl Fixture {
         let server = tokio::spawn(async move {
             axum::serve(listener, router.into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap();
         });
-        Self { home, base: format!("http://{address}"), tasks: vec![python, index_task, server], python_calls }
+        Self { home, base: format!("http://{address}"), tasks: vec![index_task, server] }
     }
 
     /// `~/.hangar/current` → `target`.
@@ -136,7 +129,6 @@ async fn update_routes_unmigrated_and_unauthorized_never_return_to_python() {
     for (method,path) in [(reqwest::Method::GET,"/api/atualizacao"),(reqwest::Method::POST,"/api/atualizacao/iniciar"),(reqwest::Method::POST,"/api/atualizacao/reiniciar")] {
         assert_eq!(fixture.call(method,path,false).await.status(),401);
     }
-    assert_eq!(fixture.python_calls.load(std::sync::atomic::Ordering::Relaxed), 0);
 }
 
 fn sh(dir: &Path, script: &str) {
@@ -248,7 +240,7 @@ async fn update_routes_dev_mode_refuses_with_a_code_and_launches_nothing() {
     assert_eq!((value["ok"].clone(), value["nada_a_fazer"].clone()), (json!(true), json!(true)), "{value}");
     assert!(!fixture.state().exists(), "nada lançado");
 
-    // Sem o token do dono: o Python decide, nunca o Rust.
+    // Sem o token do dono: recusado.
     assert_eq!(fixture.dev_mode(on, false).await.status(),401);
 }
 
@@ -365,9 +357,8 @@ async fn update_routes_front_port_answers_like_the_public_one_on_a_migrated_mach
     assert_eq!(hangar_server::routes::front_address(home.path(), std::net::SocketAddr::new(address.ip(), front_port)), None,
         "a porta do front igual à principal não abre duas vezes");
 
-    let (upstream, python) = serve(axum::Router::new().fallback(|| async { "python" })).await;
     let mut state = AppState::new(Config {
-        listen: address, upstream, internal_secret: "fixture-internal".into(),
+        listen: address, internal_secret: "fixture-internal".into(),
         auth_token: "fixture-owner".into(), log_path: None, trusted: TrustedHosts::parse("127.0.0.1"),
     });
     state.accounts = AccountService::new(AccountEnvironment::from_map([
@@ -391,7 +382,6 @@ async fn update_routes_front_port_answers_like_the_public_one_on_a_migrated_mach
     assert_eq!(status.status(), 200);
     assert_eq!(body(status).await["modo"], "pacote", "o dono pela porta do front é atendido pelo mesmo servidor");
     server.abort();
-    python.abort();
 }
 
 /// A máquina que migrou sem ver o aviso (antes da trava do aceite) o recebe de novo, com a escolha do

@@ -22,7 +22,7 @@ async fn refusals_leave_their_reason_in_the_log() {
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
-    let registry = Arc::new(RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(), "secret-test".into(), "instance-test".into()));
+    let registry = Arc::new(RuntimeRegistry::new("instance-test".into()));
     let server = tokio::spawn(gateway::serve(listener, registry, "secret-test".into(), "instance-test".into(), hangar_server::INTERNAL_PROTOCOL));
     let client = reqwest::Client::new();
     let envelope = |protocol: u32, key: &str, command: serde_json::Value| serde_json::json!({"protocol":protocol,"instance":"instance-test",
@@ -49,7 +49,7 @@ async fn refusals_leave_their_reason_in_the_log() {
     let watcher = hangar_server::runtime::codex_terminal::Watcher::new(hangar_server::runtime::codex_terminal::WatchConfig {
         home: home.path().into(), queue_dir: home.path().join("queue"),
         mux: hangar_server::list::mux::Mux::with_program(&missing, std::time::Duration::from_secs(5)), mux_program: missing.clone().into_os_string() });
-    let watched = Arc::new(RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(), "secret-test".into(), "instance-test".into()));
+    let watched = Arc::new(RuntimeRegistry::new("instance-test".into()));
     // Sem sessão para adotar a rodada nem abre o multiplexador: não há o que avisar.
     watcher.round(&watched).await;
     let idle = String::from_utf8(output.lock().unwrap().clone()).unwrap();

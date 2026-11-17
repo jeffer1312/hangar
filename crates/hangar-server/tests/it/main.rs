@@ -30,6 +30,7 @@ mod update_process;
 mod tour_progress;
 mod update_arrived;
 mod docs_routes;
+mod edge_rules;
 mod auxiliary_routes;
 #[cfg(unix)]
 mod plugins;
@@ -53,6 +54,7 @@ mod device_install;
 #[cfg(unix)]
 mod devices;
 mod diag_report;
+mod diag_routes;
 mod auto_report;
 mod install_root;
 mod web_ui;
@@ -64,7 +66,6 @@ mod dictation_public_cases;
 mod dictation_timing;
 mod session_open_cases;
 mod baton;
-mod dictation_catalog;
 mod claude_models;
 mod dictation_harness;
 mod dictation_process;
@@ -223,7 +224,6 @@ mod costs_report_unit;
 mod costs_routes;
 mod costs_session_unit;
 mod costs_uso_unit;
-mod groups_bridge;
 mod groups_close;
 mod groups_context_cmd;
 mod groups_convert;
@@ -314,19 +314,17 @@ mod share_tunnel;
 mod share_life;
 mod share_gate;
 mod share_listen;
+mod standalone_boot;
 mod share_owner_routes;
 mod share_guest_routes;
 mod share_guest_serving;
-mod share_forward;
 mod share_pair_routes;
 mod share_pair_access;
-mod share_bridge;
 mod state_monitor_round;
 mod terminal_control;
 mod terminal_input;
 mod terminal_input_process;
 mod terminal_input_tmux;
-mod terminal_routes;
 mod terminal_runtime;
 mod terminal_runtime_tmux;
 mod uploads_contract;
@@ -353,7 +351,6 @@ mod boot_version;
 
 mod engine_aliases;
 mod runtime_boot;
-mod migration_branch;
 
 mod live_config;
 
@@ -406,6 +403,7 @@ mod update_git;
 
 mod update_launch;
 mod update_launch_gate;
+mod update_startup_steps;
 
 mod update_state_contract;
 

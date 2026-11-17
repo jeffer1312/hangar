@@ -60,37 +60,6 @@ fn target(dir:&std::path::Path,escuta:String,initialized:bool) -> RuntimeTarget 
         transcript:dir.join("chat.jsonl"),created:0.0 }
 }
 
-/// Python falso da política: responde `ok` a tudo; `prepare_prompt` devolve o texto como está.
-async fn policy() -> std::net::SocketAddr {
-    use tokio::io::AsyncReadExt;
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    tokio::spawn(async move {
-        loop {
-            let Ok((stream,_)) = listener.accept().await else { return };
-            tokio::spawn(async move {
-                let mut reader = BufReader::new(stream);
-                loop {
-                    let mut length = 0usize;
-                    loop {
-                        let mut line = String::new();
-                        if reader.read_line(&mut line).await.unwrap_or(0) == 0 { return; }
-                        if line == "\r\n" { break; }
-                        if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") { length = value.trim().parse().unwrap(); }
-                    }
-                    let mut body = vec![0;length]; reader.read_exact(&mut body).await.unwrap();
-                    let kind = serde_json::from_slice::<Value>(&body).unwrap()["kind"].clone();
-                    let data = if kind == "prepare_prompt" { json!({"content":"Olá","notices":[],"native_candidate":false}) } else { json!({}) };
-                    let reply = json!({"ok":true,"data":data}).to_string();
-                    let response = format!("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{reply}",reply.len());
-                    reader.get_mut().write_all(response.as_bytes()).await.unwrap();
-                }
-            });
-        }
-    });
-    address
-}
-
 pub(crate) use crate::sink::RecipeProcesses;
 pub(crate) fn with_hubs(registry:RuntimeRegistry)->Arc<RuntimeRegistry> {
     let registry=Arc::new(registry);let hubs=hangar_server::side::Hubs::default();registry.bind_lifecycle();registry.bind_hubs(hubs.downgrade());
@@ -101,7 +70,7 @@ pub(crate) fn with_hubs(registry:RuntimeRegistry)->Arc<RuntimeRegistry> {
 pub(crate) async fn registry() -> Arc<RuntimeRegistry> { registry_with(|registry|registry).await }
 /// O ajuste entra antes do `Arc`: depois de ligado aos hubs o registro não muda mais.
 pub(crate) async fn registry_with(adjust:impl FnOnce(RuntimeRegistry)->RuntimeRegistry) -> Arc<RuntimeRegistry> {
-    with_hubs(adjust(RuntimeRegistry::new(policy().await,"secret-test".into(),"instance-test".into()).with_processes(Arc::new(RecipeProcesses("sid-1")))))
+    with_hubs(adjust(RuntimeRegistry::new("instance-test".into()).with_processes(Arc::new(RecipeProcesses("sid-1")))))
 }
 
 /// App-server do Codex falso, em WebSocket de loopback: conta as conexões, guarda os quadros de cada

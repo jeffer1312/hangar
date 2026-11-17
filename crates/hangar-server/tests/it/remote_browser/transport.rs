@@ -1253,80 +1253,6 @@ async fn electron_target_precedes_native_and_queries_live_url() {
 }
 
 #[tokio::test]
-async fn private_bridge_requires_secret_and_keeps_trusted_target_after_opaque_query() {
-    if support::isolated("remote_browser::transport::private_bridge_requires_secret_and_keeps_trusted_target_after_opaque_query",|root|assert!(!root.join("git.calls").exists())).await{return;}
-    let scene = Scene::new().await;
-    seed_session(&scene);
-    let desktop = Desktop::new(&json!({})).await;
-    desktop.publish(&scene, KEY);
-    let private = Server::owner(hangar_server::routes::terminal_router(scene.state.clone())).await;
-    for secret in [None, Some("wrong")] {
-        let mut req = format!(
-            "ws://{}/__hangar_server/remote-browser?name=nav-contract",
-            private.address
-        )
-        .into_client_request()
-        .unwrap();
-        if let Some(secret) = secret {
-            req.headers_mut()
-                .insert("x-hangar-internal", secret.parse().unwrap());
-        }
-        let result = tokio_tungstenite::connect_async(req).await;
-        assert!(
-            matches!(result,Err(tokio_tungstenite::tungstenite::Error::Http(ref r)) if r.status()==404)
-        );
-    }
-    let mut request=format!("ws://{}/__hangar_server/remote-browser?name=other&w=390&q=80&token=opaque&name=nav-contract",private.address).into_client_request().unwrap();
-    request
-        .headers_mut()
-        .insert("x-hangar-internal", support::SECRET.parse().unwrap());
-    let result = tokio_tungstenite::connect_async(request).await;
-    assert!(
-        result.is_ok(),
-        "ponte privada deve abrir sem credencial do dono"
-    );
-    let (mut client, _) = result.unwrap();
-    let mut events = vec![];
-    until(&mut client, &mut events, |v| {
-        v["url"] == "http://contract.test/ready"
-    })
-    .await;
-    client.close(None).await.unwrap();
-    while client.next().await.is_some() {}
-    {
-        let d = desktop.state.lock().unwrap();
-        let start = d
-            .commands
-            .iter()
-            .find(|v| v["message"]["method"] == "Page.startScreencast")
-            .unwrap();
-        assert_eq!(start["message"]["params"]["quality"], 80);
-        assert_eq!(start["message"]["params"]["maxWidth"], 390);
-        assert_eq!(d.keys, vec![KEY]);
-    }
-    let mut external = format!(
-        "ws://{}/__hangar_server/remote-browser?name=nav-contract",
-        private.address
-    )
-    .into_client_request()
-    .unwrap();
-    external
-        .headers_mut()
-        .insert("x-hangar-internal", support::SECRET.parse().unwrap());
-    external
-        .headers_mut()
-        .insert("x-forwarded-for", "198.51.100.2".parse().unwrap());
-    let denied = tokio_tungstenite::connect_async(external).await;
-    assert!(
-        matches!(denied,Err(tokio_tungstenite::tungstenite::Error::Http(ref r)) if r.status()==404)
-    );
-    scene.upstream.assert_no_browser_or_discovery_calls();
-    private.close().await;
-    desktop.server.close().await;
-    scene.close().await;
-}
-
-#[tokio::test]
 async fn python_numeric_query_preserves_unbounded_integers_and_underscores() {
     if support::isolated(
         "remote_browser::transport::python_numeric_query_preserves_unbounded_integers_and_underscores",
@@ -1850,9 +1776,9 @@ async fn layout_wait_only_overwrites_live_dimensions_after_confirmed_size() {
 }
 
 #[tokio::test]
-async fn plain_http_get_and_head_keep_the_previous_forwarding_without_discovery() {
+async fn plain_http_get_and_head_are_the_path_without_handler_without_discovery() {
     if support::isolated(
-        "remote_browser::transport::plain_http_get_and_head_keep_the_previous_forwarding_without_discovery",
+        "remote_browser::transport::plain_http_get_and_head_are_the_path_without_handler_without_discovery",
         |root| assert!(!root.join("git.calls").exists()),
     ).await {
         return;
@@ -1865,19 +1791,20 @@ async fn plain_http_get_and_head_keep_the_previous_forwarding_without_discovery(
     std::fs::write(&program, format!("#!/bin/sh\n: > '{}'\nexit 2\n", probe.display())).unwrap();
     let client = reqwest::Client::builder().no_proxy().build().unwrap();
     let path = format!("/api/sessions/headless/nav-remoto?token={OWNER}&w=390");
+    // Decisão 19: o Python, que recebia o HTTP comum, não tinha a rota e dava o 404 do FastAPI.
     for method in [axum::http::Method::GET, axum::http::Method::HEAD] {
         let response = client.request(method.clone(), format!("http://{}{path}", scene.owner.address))
             .send().await.unwrap();
-        assert_eq!(response.status(), 503, "o status deve vir do upstream anterior");
+        assert_eq!(response.status(), 404, "{method}");
         let body = response.bytes().await.unwrap();
         if method == axum::http::Method::GET {
-            assert_eq!(body.as_ref(), b"remote_browser_test_upstream_refused");
+            assert_eq!(body.as_ref(), br#"{"detail":"Not Found"}"#);
         } else {
             assert!(body.is_empty());
         }
     }
     assert!(!probe.exists(), "HTTP comum entrou na descoberta do navegador");
-    assert_eq!(scene.upstream.paths(), vec![path.clone(), path]);
+    assert!(scene.upstream.paths().is_empty(), "{:?}", scene.upstream.paths());
     std::fs::write(program, original).unwrap();
     scene.close().await;
 }

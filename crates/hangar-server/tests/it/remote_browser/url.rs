@@ -26,7 +26,7 @@ use std::path::Path;
 use axum::body::{Body, to_bytes};
 use axum::extract::ConnectInfo;
 use axum::http::{Request, HeaderMap, HeaderName, HeaderValue};
-use hangar_server::routes::{router, terminal_router};
+use hangar_server::routes::router;
 use serde_json::Value;
 use tower_service::Service;
 
@@ -77,17 +77,21 @@ fn owner_headers() -> HeaderMap {
 }
 
 #[tokio::test]
-async fn head_keeps_the_method_refusal() {
-    if support::isolated("remote_browser::url::head_keeps_the_method_refusal", |root| {
+async fn head_is_the_path_without_handler() {
+    if support::isolated("remote_browser::url::head_is_the_path_without_handler", |root| {
         assert!(!root.join("git.calls").exists());
     }).await { return; }
     let scene = Scene::new().await;
     std::fs::write(scene.nav_dir().join("native.json"),json!({"chave":"session","url":"https://example.invalid/"}).to_string()).unwrap();
     let before = snapshot(&scene.nav_dir());
-    let want = json!({"status": 405, "body": "", "headers": {"allow": "GET", "content-type": "application/json", "content-length": "31"}});
+    // Decisão 19: o Python, que recebia o HEAD, não tinha a rota; sem ele o dono leva o 404 e o
+    // estranho a recusa contada.
+    let refused = json!({"status": 401, "body": "", "headers": {"content-type": "application/json", "content-length": "74"}});
+    let missing = json!({"status": 404, "body": "", "headers": {"content-type": "application/json", "content-length": "22"}});
     let client = reqwest::Client::new();
     let mut differences = Vec::new();
     for token in [None,Some(OWNER)] {
+        let want = if token.is_some() { &missing } else { &refused };
         let request = client.head(format!("http://{}/api/sessions/session/navegador",scene.owner.address));
         let response = if let Some(token) = token { request.bearer_auth(token) } else { request }.send().await.unwrap();
         let status = response.status().as_u16();
@@ -101,11 +105,14 @@ async fn head_keeps_the_method_refusal() {
                 differences.push(format!("HEAD com credencial={}: header {key}: {:?} != {value}",token.is_some(),headers.get(key)));
             }
         }
+        if headers.contains_key("allow") {
+            differences.push(format!("HEAD com credencial={}: allow inesperado",token.is_some()));
+        }
     }
     assert_eq!(snapshot(&scene.nav_dir()),before);
-    let paths: Vec<_> = scene.upstream.paths().into_iter().filter(|path|path.ends_with("/navegador")).collect();
-    if paths != ["/api/sessions/session/navegador","/api/sessions/session/navegador"] {
-        differences.push(format!("HEAD não seguiu ao encaminhamento existente: {paths:?}"));
+    let paths = scene.upstream.paths();
+    if !paths.is_empty() {
+        differences.push(format!("HEAD saiu do Rust: {paths:?}"));
     }
     scene.close().await;
     assert!(differences.is_empty(),"{}",differences.join("\n"));
@@ -177,25 +184,6 @@ async fn frozen_get_cases_match_status_json_headers_and_files() {
     }
     scene.close().await;
     assert!(differences.is_empty(),"{} divergências nos {count} casos:\n{}",differences.len(), differences.join("\n"));
-}
-
-#[tokio::test]
-async fn forwarded_matches_public_without_auth_or_python_and_decodes_once() {
-    if support::isolated("remote_browser::url::forwarded_matches_public_without_auth_or_python_and_decodes_once", |_| {}).await { return; }
-    let scene = Scene::new().await;
-    for name in ["session", "sessão %20 🚀"] {
-        std::fs::write(scene.nav_dir().join("native.json"),json!({"chave":name,"url":"https://example.invalid/página?q=ação#parte"}).to_string()).unwrap();
-        let (_,_,public) = get(&scene,name,owner_headers(),"","127.0.0.1",false).await;
-        let escaped = form_urlencoded::byte_serialize(name.as_bytes()).collect::<String>().replace('+',"%20");
-        let request = Request::builder().uri("/__hangar_server/forwarded")
-            .header("x-hangar-internal",support::SECRET).header("x-hangar-path",format!("/api/sessions/{escaped}/navegador"))
-            .extension(ConnectInfo("127.0.0.1:12345".parse::<SocketAddr>().unwrap())).body(Body::empty()).unwrap();
-        let response = terminal_router(scene.state.clone()).call(request).await.unwrap();
-        assert_eq!(response.status().as_u16(),200);
-        assert_eq!(to_bytes(response.into_body(),1024*1024).await.unwrap(), public);
-    }
-    scene.upstream.assert_no_browser_or_discovery_calls();
-    scene.close().await;
 }
 
 #[derive(Clone)]

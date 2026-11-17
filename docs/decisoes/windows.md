@@ -94,12 +94,15 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   máquina migrada, porta do front com o `hangar-server` é tela servida, nunca conflito:
   `hangar-frontend` sai sem subir. A migração e o `atualizar.py` seguem com o início direto. Medição em
   [Reinício sem início e porta do front](#reinício-sem-início-e-porta-do-front-05112026).
-- **O backend abre o próprio log (`python -m app.main --log <arquivo>`), nunca pelo `>` do cmd.**
+- **O lançador abre o log do backend (`launch backend --log <arquivo>`), nunca pelo `>` do cmd.**
   O `>` abre sem escrita compartilhada, e qualquer neto que sobreviva ao backend com a cópia
   herdada (jest, `kubectl port-forward`, navegador de teste de uma sessão) fazia a subida seguinte
-  da tarefa morrer antes do Python, sem uma linha no log. O `open` do Python compartilha escrita;
-  preso mesmo assim, o log vai para `hangar-backend.N.log` e o backend sobe. O front segue no
-  `cmd`. Evidência em [Log do backend preso por neto](#log-do-backend-preso-por-neto-20102026).
+  da tarefa morrer antes do servidor, sem uma linha no log. O lançador roda o log da subida
+  anterior para `hangar-backend.1.log` (até `.5`, a saída de uma queda fica para ler), abre o novo
+  em acréscimo com escrita compartilhada e o entrega como saída do `hangar-server`; preso mesmo
+  assim, a saída vai para o primeiro `.N` que abrir. As linhas do lançador saem pelo mesmo handle,
+  só antes de abrir o servidor e depois que ele sai. Versão que ainda sobe pelo Python abre o log
+  no `app.main --log`, como antes. O front segue no `cmd`. Evidência em [Log do backend preso por neto](#log-do-backend-preso-por-neto-20102026).
 - **Tarefa do backend/front nasce com `-Priority 4` (normal).** O padrão do Agendador é 7
   (abaixo do normal) e passa para os filhos: backend e sessões perdiam a CPU para qualquer
   programa, passavam dos 3 s da vigia e eram derrubados.
@@ -178,6 +181,14 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   do Job ele morre no reinício que ele mesmo pede. Sem `DETACHED_PROCESS`: o PowerShell do reinício
   abriria um console visível. Job que recusa a saída (acesso negado) faz o executor subir dentro
   dele, com aviso no estado.
+- **No Windows quem religa o `hangar-server` que cai é o lançador, nunca o Agendador.** O
+  `RestartCount` da tarefa só vale para falha ao iniciar a ação. O lançador (`run_direct`) religa
+  com espera de 2 s dobrando até 10 min, sem desistir; uma vida de 60 s zera a conta. Cada vida gira
+  o log, e cada queda vai ao log da tarefa e ao diário (`lancador.queda`, com a saída). Parada
+  pedida não religa: saída 0 (parada limpa do servidor) e `0xFFFFFFFF`, o `Stop-Process -Force` do
+  `Restart-HangarTask`. `taskkill /F` sai com 1 e é queda. Entre a queda e a religada só o lançador
+  está de pé, e o `Restart-HangarTask` o para também (`Get-HangarBackendLaunchers`). Medição em
+  [Queda do servidor sem religada no Windows](#queda-do-servidor-sem-religada-no-windows-16112026).
 - **Atalho `.cmd` em máquina migrada aponta para `%USERPROFILE%\.hangar\current\scripts\…`, nunca
   para o caminho real da versão**, que a poda apaga. `hangar-python.cmd` escolhe o Python do
   pacote, senão o venv, senão o real; `hangar-conta.cmd` e `hangar-engine.cmd` passam por ele.
@@ -209,6 +220,21 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
 - **O Supervisor confere se o filho Rust vive por `proc.poll()`, nunca por `psutil` `status()` ou
   `num_threads()`**: no Windows cada uma lista todos os processos da máquina, e a conferência roda a
   toda volta do Supervisor. Medição em [Supervisor confere o filho Rust por `poll()`](#supervisor-confere-o-filho-rust-por-poll-14112026).
+
+## Queda do servidor sem religada no Windows (16/11/2026)
+
+Na DELPHI-02, com a tarefa registrada como no `install.ps1` (`RestartCount 999`, `RestartInterval
+PT1M`), o lançador foi morto por `Stop-Process -Force`: o Job levou o `hangar-server` em 198 ms e
+soltou a porta, mas em 200 s nada religou. A tarefa ficou `Ready` com `LastTaskResult=0xFFFFFFFF`:
+o `RestartOnFailure` não reage ao código de saída da ação. Antes, o Supervisor do Python religava o
+Rust com `RETRY_DELAYS` e zerava a conta depois de `CRASH_WINDOW` (60 s); sem o Python, a
+religada passou ao lançador (decisão 38), com a mesma janela de 60 s.
+
+A parada normal no Windows é o `Restart-HangarTask`, que mata o `hangar-server` com
+`Stop-Process -Force` (`TerminateProcess` com -1, saída `0xFFFFFFFF`) e espera a tarefa sair de
+`Running`. Por isso essa saída não religa: o lançador sai junto e a tarefa sobe de novo. A parada
+limpa do servidor (eventos de console) sai com 0. O `Stop-ScheduledTask` encerra só o `wscript`:
+lançador e servidor ficam de pé, como já era na `origin/main`.
 
 ## Reinício sem início e porta do front (05/11/2026)
 

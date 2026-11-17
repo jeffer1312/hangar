@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["hangar-scheduled-tasks", "hangar-conversation-transfer", "hangar-codex-transfer", "hangar-auth", "hangar-api", "hangar-core", "hangar-transcript", "hangar-omp-sync", "hangar-server", "hangar-cano", "hangar-workspace", "hangar-codex", "hangar-package", "hangar-psmux", "hangar-connect", "hangar-plugins", "hangar-update-news", "hangar-notice-ignores", "hangar-workflows", "hangar-http-file", "hangar-desktop-theme", "hangar-opencode-cookie", "hangar-deploy", "hangar-port-preview", "hangar-session-tools", "hangar-codex-account-sync", "hangar-projects", "hangar-reviews", "hangar-docs", "hangar-computer-control-setup", "hangar-shortcut-transfer", "hangar-sidecar-prune", "hangar-dream", "hangar-connectors", "hangar-mission", "hangar-ticket-actions"]
+members = ["hangar-scheduled-tasks", "hangar-conversation-transfer", "hangar-codex-transfer", "hangar-auth", "hangar-api", "hangar-core", "hangar-transcript", "hangar-omp-sync", "hangar-server", "hangar-cano", "hangar-workspace", "hangar-codex", "hangar-package", "hangar-psmux", "hangar-connect", "hangar-plugins", "hangar-update-news", "hangar-notice-ignores", "hangar-workflows", "hangar-http-file", "hangar-desktop-theme", "hangar-opencode-cookie", "hangar-deploy", "hangar-port-preview", "hangar-session-tools", "hangar-codex-account-sync", "hangar-projects", "hangar-reviews", "hangar-docs", "hangar-computer-control-setup", "hangar-shortcut-transfer", "hangar-sidecar-prune", "hangar-usage-diary", "hangar-boot", "hangar-dream", "hangar-connectors", "hangar-mission", "hangar-ticket-actions"]
 
 [workspace.package]
 version = "0.1.0"
@@ -68,6 +68,8 @@ hangar-http-file = { path = "hangar-http-file" }
 hangar-desktop-theme = { path = "hangar-desktop-theme" }
 hangar-shortcut-transfer = { path = "hangar-shortcut-transfer" }
 hangar-sidecar-prune = { path = "hangar-sidecar-prune" }
+hangar-usage-diary = { path = "hangar-usage-diary" }
+hangar-boot = { path = "hangar-boot" }
 hangar-opencode-cookie = { path = "hangar-opencode-cookie" }
 hangar-deploy = { path = "hangar-deploy" }
 hangar-port-preview = { path = "hangar-port-preview" }

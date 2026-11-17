@@ -15,8 +15,8 @@ use std::time::Duration;
 use axum::Router;
 use axum::extract::Request;
 use axum::response::Response;
-use fake::{OWNER, SECRET, client};
-use hangar_server::groups::orq::PythonOrq;
+use fake::{OWNER, client};
+use hangar_server::groups::orq::OrqVault;
 use hangar_server::groups::peers::{PeerBook, PeerClient};
 use hangar_server::groups::service::GroupService;
 use hangar_server::groups::store::PairDir;
@@ -40,8 +40,8 @@ async fn machine(root: &Path, id: &str) -> Machine {
     let dirs = parse_dirs(&json!({"home": home, "claude": home.join(".claude"), "codex_home": home.join(".codex"),
         "pi_sessions": home.join(".pi/agent/sessions"), "omp_config": home.join(".omp"),
         "omp_agent": home.join(".omp/agent"), "kimi_home": home.join(".kimi-code")}).to_string());
-    let (python, upstream) = fake::spawn_fake().await;
-    let mut state = AppState::new(fake::config(upstream, ""));
+    let (python, _) = fake::spawn_fake().await;
+    let mut state = AppState::new(fake::config(""));
     state.diag = python.bind_diary(state.diag.clone());
     state.accounts = hangar_server::accounts::AccountService::new(
         hangar_server::accounts::environment::AccountEnvironment::from_map(
@@ -49,9 +49,9 @@ async fn machine(root: &Path, id: &str) -> Machine {
              ("USERPROFILE".into(),home.to_string_lossy().into_owned())].into()));
     state.list = Arc::new(ListBridge::new(ListEnv { mux: Mux::with_program(&script, Duration::from_secs(5)),
         capture_program: script.into_os_string(), procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs },
-        FactsClient::new(upstream, SECRET.into())));
+        FactsClient::new()));
     let pair = home.join(".claude/.hangar-pair");
-    state.groups = Some(Arc::new(GroupService::new(PairDir::new(pair.clone(), root.join("arquivo")), Arc::new(PythonOrq::from_state(&state).with_paths(home.clone(),pair.clone())), id.into())));
+    state.groups = Some(Arc::new(GroupService::new(PairDir::new(pair.clone(), root.join("arquivo")), Arc::new(OrqVault::from_state(&state).with_paths(home.clone(),pair.clone())), id.into())));
     state.peers = Arc::new(PeerClient::new(PeerBook::new(Some(root.join("peers.json")))));
     let share = crate::share_pair_routes::share_state(&root.join("shares.json"), &pair, Arc::new(Mutex::new(1_000.0)));
     state.share = Some(share.clone());
@@ -280,7 +280,6 @@ async fn delete_pair_ends_external_pair() {
     assert_eq!(status, 200, "{body}");
     assert_eq!(body["warning"]["params"]["avisos"][0]["erro"]["code"], "erro_peer_nao_avisado");
     assert!(!casa.pair.join("s1.json").exists());
-    assert!(casa.python.internal_bodies("external-pairs/end").is_empty(), "o Python não é chamado");
 }
 
 /// O temporário da sessão vira pasta: a volta atrás do vínculo não consegue apagá-lo. Cada teste usa
@@ -322,6 +321,5 @@ async fn pair_remote_refuses_the_orchestrator() {
     let (status, body) = call(casa.addr, "POST", "g1-orq/pair-remote", Some(&json!({"initiator": "lab::s1"}))).await;
     assert_eq!((status, body["detail"]["code"].clone()), (409, json!("erro_sessao_orq")));
     assert!(!casa.pair.join("g1-orq.json").exists());
-    assert!(casa.python.internal_bodies("orq/is-orchestrator").is_empty());
     assert_eq!(inputs(&casa), [0, 0, 0, 0]);
 }

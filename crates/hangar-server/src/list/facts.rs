@@ -1,6 +1,5 @@
 //! Projeções locais do estado da lista e diagnósticos compartilhados.
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::net::SocketAddr;
 use std::sync::{Arc, LazyLock, Mutex};
 
 use hangar_api::session::SessionRow;
@@ -81,8 +80,8 @@ pub struct Fetched {
 pub struct FactsClient { pub diag: crate::diag::DiagClient }
 
 impl FactsClient {
-    pub fn new(upstream: SocketAddr, secret: String) -> Self {
-        Self { diag: crate::diag::DiagClient::new(upstream, secret) }
+    pub fn new() -> Self {
+        Self { diag: crate::diag::DiagClient::new() }
     }
 }
 

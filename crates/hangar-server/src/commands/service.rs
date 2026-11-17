@@ -220,7 +220,7 @@ pub async fn serve(st: &Arc<AppState>, req: Request) -> Response {
 pub(crate) const NEW_CHAT_PATH: &str = "/api/claude/commands";
 
 /// `GET /api/claude/commands`: a lista do `/` da conversa que ainda vai nascer, na pasta e conta
-/// escolhidas. Só o dono; Connect chega pela ponte `crate::forwarded`.
+/// escolhidas. Só o dono.
 pub async fn new_chat_route(
     State(st): State<Arc<AppState>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
@@ -321,12 +321,6 @@ pub async fn serve_new_chat(st: &Arc<AppState>, req: Request) -> Response {
         Ok(commands) => crate::session_write::json_response(StatusCode::OK, json!(commands)),
         Err(code) => failed(st, "", code),
     }
-}
-
-pub(crate) fn matches(path: &str) -> bool {
-    path.strip_prefix("/api/sessions/")
-        .and_then(|tail| tail.split_once('/'))
-        .is_some_and(|(name, route)| !name.is_empty() && route == "commands")
 }
 
 fn failed(st: &AppState, name: &str, code: &'static str) -> Response {

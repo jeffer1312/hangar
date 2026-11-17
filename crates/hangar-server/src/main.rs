@@ -1,4 +1,4 @@
-//! hangar-server: sobe como filho do Python (app/main.py), na porta pública.
+//! hangar-server: o servidor do Hangar, na porta pública.
 
 fn main() -> std::process::ExitCode {
     let hook_args: Vec<_> = std::env::args_os().skip(1).collect();
@@ -89,8 +89,58 @@ fn main() -> std::process::ExitCode {
     }
     // O glibc exige a configuração antes de o runtime criar threads.
     unsafe { hangar_server::tune_allocator(); }
-    run();
+    // Ainda sem threads: mexer no ambiente aqui é seguro, e as sessões não herdam o canal do systemd.
+    let notifier = hangar_boot::notify::Notifier::from_lookup(|key| std::env::var(key).ok(), std::process::id());
+    for key in ["NOTIFY_SOCKET", "WATCHDOG_USEC", "WATCHDOG_PID"] { unsafe { std::env::remove_var(key) } }
+    if args.is_empty() && let Err(code) = standalone() {
+        return code;
+    }
+    run(notifier);
     std::process::ExitCode::SUCCESS
+}
+
+/// O servidor monta o próprio ambiente: `.env` + processo, instância e segredo novos, porta do
+/// convidado e log. O resto do servidor lê o ambiente como sempre.
+fn standalone() -> Result<(), std::process::ExitCode> {
+    // Antes do log desta vida: a falha de gravar no diário só aparece pelo stderr.
+    let refuse = |code: &'static str, exit: u8, message: String| {
+        eprintln!("hangar-server: {message}");
+        hangar_server::diag::record_before_log(
+            &[serde_json::json!({"evento": "hangar_server.partida", "nivel": "erro", "codigo": code})], "subida");
+        std::process::ExitCode::from(exit)
+    };
+    let home = hangar_server::accounts::environment::AccountEnvironment::capture().home;
+    let backend = std::env::current_dir().ok().filter(|dir| hangar_server::session_open::cli::is_backend(dir))
+        .or_else(hangar_server::session_open::cli::backend_dir);
+    let env_file = hangar_core::user_data::read_env_raw(&home, backend.as_deref())
+        .map_err(|e| refuse("env_unreadable", 2, format!(".env ilegível: {e}")))?;
+    // Só o número da linha: o valor pode ser o token.
+    for issue in env_file.as_deref().map(hangar_core::user_data::env_file_issues).unwrap_or_default() {
+        eprintln!("hangar-server: env_line_ignored: .env {issue}");
+    }
+    let mut environ: Vec<(String, String)> = Vec::new();
+    for (key, value) in std::env::vars_os() {
+        match (key.into_string(), value.into_string()) {
+            (Ok(key), Ok(value)) => environ.push((key, value)),
+            // Só as `CP_*` são configuração: as outras fora de UTF-8 não mudam nada aqui.
+            (Ok(key), Err(_)) if key.to_ascii_uppercase().starts_with("CP_") =>
+                eprintln!("hangar-server: env_not_utf8: {key} fora de UTF-8 ignorada; vale o .env ou o padrão"),
+            _ => {}
+        }
+    }
+    let settings = hangar_boot::settings::Settings::resolve(env_file.as_deref(), &environ)
+        .map_err(|e| refuse("config_invalid", 2, format!("configuração inválida: {e}")))?;
+    let claude = std::env::var_os("CLAUDE_CONFIG_DIR").map(std::path::PathBuf::from);
+    let log_base = hangar_core::paths::log_base();
+    let places = hangar_boot::settings::Places { home: &home, claude_config: claude.as_deref(), log_base: log_base.as_deref() };
+    let keep = std::env::var_os(hangar_boot::settings::KEEP_INHERITED).is_some_and(|value| value == "1");
+    let boot = hangar_boot::settings::standalone_env(&settings, &places, |key| keep && std::env::var_os(key).is_some())
+        .map_err(|message| refuse("startup_refused", 1, message))?;
+    if let Some(warning) = boot.warning { println!("{warning}"); }
+    for note in boot.notes { eprintln!("hangar-server: {note}"); }
+    for key in boot.remove { unsafe { std::env::remove_var(key) } }
+    for (key, value) in boot.vars { unsafe { std::env::set_var(key, value) } }
+    Ok(())
 }
 
 /// No Windows `0.0.0.0` não impede outro programa de abrir a mesma porta em `[::]` dual-stack (Node,
@@ -128,7 +178,7 @@ mod tests {
 }
 
 #[tokio::main]
-async fn run() {
+async fn run(notifier: hangar_boot::notify::Notifier) {
     let args:Vec<_>=std::env::args_os().collect();
     match hangar_server::runtime::claude_relaunch::helper_args(&args) {
         // Só o `kind`: a mensagem pode trazer caminho ou ambiente do relançamento.
@@ -153,8 +203,14 @@ async fn run() {
             std::process::exit(2);
         }
     };
+    // Antes do log desta vida: a queda da anterior sai das últimas linhas dele.
+    let hangar_dir = hangar_server::accounts::environment::AccountEnvironment::capture().home.join(".hangar");
+    hangar_server::diag::record_boot(&hangar_dir, cfg.log_path.as_deref());
     hangar_server::init_log(cfg.log_path.as_deref());
     hangar_server::install_panic_hook();
+    if let Some(code) = notifier.rejected {
+        tracing::warn!(code, "variável do watchdog do systemd recusada; o servidor segue sem watchdog");
+    }
     // A atualização apenas agenda: a poda precisa do binário novo, depois do download.
     tokio::spawn(async {
         let home = hangar_server::accounts::environment::AccountEnvironment::capture().home;
@@ -170,17 +226,7 @@ async fn run() {
         // O servidor de ensaio não varre a máquina, como em `startup.rs`.
         if std::env::var_os("CP_RUST_NO_ORPHAN_SWEEP").is_some_and(|value| value == "1") { return; }
         let root = hangar_server::accounts::environment::AccountEnvironment::capture().home.join(".hangar");
-        let context = std::env::var("HANGAR_AUTH_CONTEXT").ok();
-        // Contexto que não se lê não diz qual pasta é a nossa: nessa dúvida nada é varrido.
-        let current = match context.as_deref().map(serde_json::from_str::<hangar_auth::AuthConfig>) {
-            Some(Ok(config)) => config.state_path.parent().map(std::path::Path::to_path_buf),
-            Some(Err(_)) => {
-                tracing::warn!(code = "auth_orphans_context_unreadable", "contexto do contador de login ilegível; varredura das pastas órfãs não rodou");
-                return;
-            }
-            None => None,
-        };
-        match tokio::task::spawn_blocking(move || hangar_auth::sweep_orphans(&root, current.as_deref(), std::time::SystemTime::now())).await {
+        match tokio::task::spawn_blocking(move || hangar_auth::sweep_orphans(&root, None, std::time::SystemTime::now())).await {
             Ok(Ok(outcome)) if outcome.failed > 0 || outcome.skipped > 0 => tracing::warn!(code = "auth_orphans_kept", removed = outcome.removed, failed = outcome.failed,
                 skipped = outcome.skipped, first = ?outcome.first_failure, "pastas do contador de login que a varredura não tirou ou não conferiu"),
             Ok(Ok(outcome)) if outcome.removed > 0 => tracing::info!(code = "auth_orphans_removed", removed = outcome.removed, "pastas órfãs do contador de login apagadas"),
@@ -201,17 +247,40 @@ async fn run() {
         Err(e) => {
             tracing::error!(listen = %cfg.listen, "porta pública indisponível: {e}");
             eprintln!("hangar-server: porta {} indisponível: {e}", cfg.listen);
+            refused_boot("port_unavailable");
             std::process::exit(1);
         }
     };
-    tracing::info!(listen = %cfg.listen, upstream = %cfg.upstream, version = env!("CARGO_PKG_VERSION"), "hangar-server de pé");
-    // O Python segura o cano do stdin; fechou = pai morreu. Vale igual em Linux, Windows e macOS.
-    let stop = hangar_server::parent_gone(tokio::io::stdin());
+    tracing::info!(listen = %cfg.listen, version = env!("CARGO_PKG_VERSION"), "hangar-server de pé");
+    let stopped = std::sync::Arc::new(std::sync::OnceLock::new());
+    // A marca de pé e a parada sob a mesma trava: parada que chega antes do "pronto" impede a marca.
+    let stop_recorded = std::sync::Arc::new(std::sync::Mutex::new(false));
+    let requested = hangar_server::stop_requested();
+    let stop = {
+        let stopped = stopped.clone();
+        #[cfg(windows)]
+        let (recorded, dir) = (stop_recorded.clone(), hangar_dir.clone());
+        async move {
+            let cause = requested.await;
+            let _ = stopped.set(cause);
+            // No Windows a parada limpa vem antes do desligamento lento: o fechamento do console dá
+            // ~5 s até o kill. No resto ela espera o servidor terminar (abaixo): um desligamento que
+            // trava e leva o SIGKILL do `TimeoutStopSec` tem de contar como queda.
+            #[cfg(windows)]
+            if let Err(error) = tokio::task::spawn_blocking(move || record_stop_once(&recorded, &dir, cause, false)).await {
+                tracing::warn!(code = "server_stop_record_failed", %error, "tarefa que grava a parada limpa falhou");
+            }
+        }
+    };
     #[allow(unused_mut)]
     let home = hangar_server::accounts::environment::AccountEnvironment::capture().home;
     let server_id = match hangar_server::machine_peers::startup_identity(&home, hangar_server::session_open::cli::backend_dir().as_deref()) {
         Ok(value) => value,
-        Err(error) => { eprintln!("hangar-server: identidade indisponível: {error}"); std::process::exit(1); }
+        Err(error) => {
+            eprintln!("hangar-server: identidade indisponível: {error}");
+            refused_boot("identity_unavailable");
+            std::process::exit(1);
+        }
     };
     #[allow(unused_mut)]
     let mut state = hangar_server::routes::AppState::with_server_id(cfg, server_id);
@@ -232,10 +301,47 @@ async fn run() {
     let startup_environment = state.accounts.env.clone();
     let startup_prewarm = state.prewarm.clone();
     let startup_accounts = state.accounts.clone();
+    let (alive_state, listen) = (state.state.clone(), state.cfg.listen);
+    let (ready_recorded, ready_dir, ready_notifier) = (stop_recorded.clone(), hangar_dir.clone(), notifier.clone());
+    let ready_stopped = stopped.clone();
+    // Pronto quando a porta pública atende, antes da preparação demorada (hooks, sessões): uma máquina
+    // cheia não estoura o `TimeoutStartSec` e vira um laço de religadas sem queda contada.
+    let _ready = tokio::spawn(async move {
+        hangar_server::watchdog::wait_serving(listen).await;
+        // Daqui em diante sair sem a parada gravada é queda. Parada pedida antes de pronto não marca
+        // de pé: fora do Windows a parada só é gravada depois que o servidor termina, e a marca ficaria até lá.
+        let marked = tokio::task::spawn_blocking(move || {
+            let recorded = ready_recorded.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if *recorded || ready_stopped.get().is_some() { return false; }
+            hangar_server::diag::record_running(&ready_dir);
+            true
+        }).await;
+        let marked = match marked {
+            Ok(marked) => marked,
+            Err(error) => {
+                tracing::error!(code = "server_ready_failed", %error, "tarefa da marca de pé falhou: sem READY=1 nem watchdog, o systemd encerra pelo prazo de subida");
+                false
+            }
+        };
+        if !marked { return; }
+        if let Err(error) = ready_notifier.send("READY=1") {
+            tracing::warn!(code = "systemd_notify_failed", kind = ?error.kind(), "aviso de pronto ao systemd não saiu");
+        }
+        if let Some(every) = ready_notifier.watchdog {
+            tokio::spawn(hangar_server::watchdog::notify_alive(ready_notifier, every,
+                hangar_server::watchdog::server_probes(listen, alive_state), hangar_server::watchdog::Policy::SERVER));
+        }
+    });
     let _preparation = tokio::spawn(async move {
         match service {
             Ok(service) => match tokio::task::spawn_blocking(move || service.startup_outcome()).await {
-                Ok(outcome) => if let Some(message) = outcome.message() { eprintln!("{message}"); },
+                Ok(outcome) => {
+                    // A saúde vem antes: o servidor segue subindo, mas a falha fica no log com código.
+                    if let hangar_server::update::git_engine::periodic::StartupOutcome::Failed(error) = &outcome {
+                        tracing::warn!(code = "startup_steps_failed", %error, "passo de atualização da subida falhou; o servidor segue subindo");
+                    }
+                    if let Some(message) = outcome.message() { eprintln!("{message}"); }
+                }
                 Err(error) => tracing::warn!(code="startup_steps_failed", %error, "preparação inicial interrompida"),
             },
             Err(error) => tracing::warn!(code="startup_config_failed", %error, "preparação inicial sem configuração"),
@@ -257,16 +363,36 @@ async fn run() {
     tokio::spawn(async move { resuming.resume().await });
     // A porta do convidado não entra no bind fatal acima: o filho anterior pode ainda segurá-la.
     let served = hangar_server::serve_until_with_guest(listener, state, guest.listen, stop).await;
+    let _ = notifier.send("STOPPING=1");
     connect.stop().await;
     prewarm.discard_all("saida_do_servidor").await;
     match served {
         Ok(()) => {
-            tracing::info!("stdin fechou: o backend saiu, hangar-server sai junto");
+            let cause = stopped.get().copied().unwrap_or("desconhecida");
+            tracing::info!(cause, "parada pedida: hangar-server sai");
+            // Fora do Windows a parada limpa só depois do desligamento inteiro (ver `stop`).
+            #[cfg(not(windows))]
+            record_stop_once(&stop_recorded, &hangar_dir, cause, false);
             std::process::exit(0);
         }
         Err(e) => {
             tracing::error!("hangar-server parou: {e}");
+            record_stop_once(&stop_recorded, &hangar_dir, "serve_failed", true);
             std::process::exit(1);
         }
     }
+}
+
+/// A parada desta vida, uma vez só (sinal e falha do servidor podem chegar os dois).
+fn record_stop_once(recorded: &std::sync::Mutex<bool>, dir: &std::path::Path, cause: &str, failed: bool) {
+    let mut recorded = recorded.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if *recorded { return; }
+    *recorded = true;
+    hangar_server::diag::record_stop(dir, cause, failed);
+}
+
+/// Saída antes de a vida ficar pronta (porta tomada, identidade): não é queda, e o diário diz por quê.
+fn refused_boot(code: &'static str) {
+    hangar_server::diag::record_blocking(hangar_server::diag::diary_dir().as_deref(),
+        &[serde_json::json!({"evento": "hangar_server.partida", "nivel": "erro", "codigo": code})], "subida");
 }

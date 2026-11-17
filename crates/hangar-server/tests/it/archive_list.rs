@@ -6,7 +6,6 @@
 //! só a que o índice já marcou) e F9 (conversa que mudou de pasta só na pasta do caminho mais novo).
 // O multiplexador falso é um script de shell (`write_executable`).
 #![cfg(unix)]
-use axum::{Router, extract::Request, http::StatusCode, response::IntoResponse};
 use hangar_server::{auth::TrustedHosts, config::Config, routes::{AppState, router}};
 use serde_json::{Value, json};
 use std::{net::SocketAddr, path::{Path, PathBuf}, sync::{Arc, Mutex}, time::{Duration, SystemTime, UNIX_EPOCH}};
@@ -67,7 +66,6 @@ struct Harness {
     _dir: tempfile::TempDir,
     home: PathBuf,
     address: SocketAddr,
-    hits: Arc<Mutex<Vec<String>>>,
     client: reqwest::Client,
     search: hangar_server::search::Index,
     /// O diário do índice: (código, detalhe).
@@ -109,25 +107,9 @@ impl Harness {
         let home = dir.path().canonicalize().unwrap().join("home");
         prepare_home(&home);
         edit(&home);
-        let hits = Arc::new(Mutex::new(Vec::new()));
-        let seen = hits.clone();
-        // O Python de mentira: recusa sem o token do dono e marca o que recebeu.
-        let python = move |request: Request| {
-            let seen = seen.clone();
-            async move {
-                seen.lock().unwrap().push(request.uri().to_string());
-                if request.headers().get("authorization").is_none_or(|t| t != &format!("Bearer {OWNER}")) {
-                    return StatusCode::UNAUTHORIZED.into_response();
-                }
-                (StatusCode::OK, [("content-type", "application/json")], json!({"from_python": true}).to_string()).into_response()
-            }
-        };
-        let up = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let upstream = up.local_addr().unwrap();
-        let up_task = tokio::spawn(async move { axum::serve(up, Router::new().fallback(python)).await.unwrap() });
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
-        let mut state = AppState::new(Config { listen: address, upstream, internal_secret: SECRET.into(), auth_token: OWNER.into(),
+        let mut state = AppState::new(Config { listen: address, internal_secret: SECRET.into(), auth_token: OWNER.into(),
             log_path: None, trusted: TrustedHosts::parse("127.0.0.1") });
         hangar_server::accounts::quotas::disable_open_network_read();
         let claude = home.join(".claude-a");
@@ -147,11 +129,11 @@ impl Harness {
             .with_agents(state.accounts.env.clone());
         if mode == Mode::Index { search.update().unwrap(); }
         state.search = search.clone();
-        let list = Arc::new(live_list(dir.path(), &home, upstream));
+        let list = Arc::new(live_list(dir.path(), &home));
         state.list = list.clone();
         let app = router(Arc::new(state));
         let server = tokio::spawn(async move { axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await.unwrap() });
-        Self { _dir: dir, home, address, hits, client: reqwest::Client::new(), search, reports, list, tasks: vec![up_task, server] }
+        Self { _dir: dir, home, address, client: reqwest::Client::new(), search, reports, list, tasks: vec![server] }
     }
 
     fn reported(&self, code: &str) -> usize { self.reports.lock().unwrap().iter().filter(|(c, _)| *c == code).count() }
@@ -166,16 +148,11 @@ impl Harness {
         (status, serde_json::from_str(&text).unwrap_or(Value::String(text)))
     }
 
-    fn assert_not_forwarded(&self) {
-        let hits = self.hits.lock().unwrap();
-        assert!(!hits.iter().any(|h| h.starts_with("/api/archive")), "foi repassado ao Python: {hits:?}");
-    }
-
     fn dir(&self, name: &str) -> String { self.home.join(name).to_string_lossy().into_owned() }
 }
 
 /// A lista do dono com uma sessão Claude viva (`sessao-viva`) no transcript normal da captura.
-fn live_list(root: &Path, home: &Path, upstream: SocketAddr) -> hangar_server::list::bridge::ListBridge {
+fn live_list(root: &Path, home: &Path) -> hangar_server::list::bridge::ListBridge {
     use hangar_server::list::bridge::{ListBridge, ListEnv, parse_dirs};
     let script = root.join("tmux");
     crate::write_executable(&script, format!(
@@ -185,7 +162,7 @@ fn live_list(root: &Path, home: &Path, upstream: SocketAddr) -> hangar_server::l
         "omp_agent": home.join(".omp/agent"), "kimi_home": home.join(".kimi-code")}).to_string());
     ListBridge::new(ListEnv { mux: hangar_server::list::mux::Mux::with_program(&script, Duration::from_secs(5)),
         capture_program: script.into_os_string(), procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs },
-        hangar_server::list::facts::FactsClient::new(upstream, SECRET.into()))
+        hangar_server::list::facts::FactsClient::new())
 }
 
 /// F8 (só com o índice: fora dele a conversa interna entra, como no Python) e F9 numa lista de
@@ -207,7 +184,7 @@ fn enc(text: &str) -> String { form_urlencoded::byte_serialize(text.as_bytes()).
 
 fn sids(v: &Value) -> Vec<&str> { v.as_array().unwrap().iter().map(|e| &e["session_id"].as_str().unwrap()[..8]).collect() }
 
-/// ARQ-01: as quatro rotas são só do dono; sem token o Rust recusa com 401, sem ir ao Python.
+/// ARQ-01: as quatro rotas são só do dono; sem token o Rust recusa com 401.
 #[tokio::test]
 async fn arq01_owner_only() {
     let h = Harness::new(Mode::NoIndex).await;
@@ -217,11 +194,8 @@ async fn arq01_owner_only() {
         let body: Value = response.json().await.unwrap();
         assert_eq!(body["detail"]["code"], "erro_nao_autorizado", "{path}");
     }
-    h.assert_not_forwarded();
-    h.hits.lock().unwrap().clear();
     let response = h.client.get(h.url(&format!("/api/archive?token={OWNER}"))).send().await.unwrap();
     assert_eq!(response.status(), 200);
-    h.assert_not_forwarded();
 }
 
 /// O esperado da lista de pastas: F8 (com o índice) tira `a5a5a5a5` da contagem e F9 tira a pasta
@@ -243,7 +217,6 @@ async fn arq02_folders_match_the_python() {
         let (status, body) = h.get("/api/archive").await;
         assert_eq!(status, 200, "{body}");
         assert_eq!(body, folders_expected(mode));
-        h.assert_not_forwarded();
     }
 }
 
@@ -259,7 +232,6 @@ async fn arq22_folder_conversations_match_the_python() {
             let want = if want["body"].is_array() { accepted(&want["body"], mode) } else { want["body"].clone() };
             assert_eq!(body, want, "{project}");
         }
-        h.assert_not_forwarded();
     }
 }
 
@@ -279,7 +251,6 @@ async fn arq29_folder_codex_account() {
     assert_eq!(body["detail"]["msg"], "conta Codex não encontrada");
     let (_, body) = h.get(&format!("/api/archive/{HANGAR}?codex_account=BAD%20NAME")).await;
     assert_eq!(body["detail"]["msg"], "nome de conta Codex inválido");
-    h.assert_not_forwarded();
 }
 
 /// ARQ-34, 35, F7, F8, F9: as mais novas de tudo, `cap` limitado a 1..100; a reserva sem usuário
@@ -302,7 +273,6 @@ async fn arq34_recent() {
         let (status, body) = h.get("/api/archive/recent?cap=abc").await;
         assert_eq!(status, 422, "{body}");
         assert_eq!(body["detail"][0]["loc"], json!(["query", "cap"]));
-        h.assert_not_forwarded();
     }
 }
 
@@ -339,7 +309,6 @@ async fn arq31_by_cwd() {
         let (status, body) = h.get("/api/archive-por-cwd").await;
         assert_eq!(status, 422, "{body}");
         assert_eq!(body["detail"][0]["loc"], json!(["query", "cwd"]));
-        h.assert_not_forwarded();
     }
 }
 
@@ -426,7 +395,6 @@ async fn m4_agents_listing_with_the_index_opens_no_agent_transcript() {
             Mode::Index => assert!(read.is_empty(), "abriu transcript de agente com o índice pronto: {read:?}"),
             Mode::NoIndex => assert_eq!(read.len(), 5, "sem índice o disco é lido: {opened:?}"),
         }
-        h.assert_not_forwarded();
     }
 }
 

@@ -2,7 +2,7 @@
 //! conferir o byte que passou. Programas e "internet" são falsos.
 use crate::connect_port::{device, free_port};
 use crate::connect_supervisor::{alone, gate, linked, pid_of, read_pid, until};
-use crate::fake::{Fake, OWNER, client, config, spawn_fake, spawn_state};
+use crate::fake::{Fake, OWNER, client, config, spawn_fake, spawn_state_for};
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -408,7 +408,6 @@ struct Server {
     main: SocketAddr,
     connect: SocketAddr,
     preview: SocketAddr,
-    upstream: SocketAddr,
     device: String,
 }
 
@@ -445,18 +444,18 @@ async fn server_with(found: bool) -> Server {
     let supervisor = Arc::new(alone(&dir));
     state::write(&dir, &linked()).unwrap();
     std::fs::write(gate(&dir), "").unwrap();
-    let (python, upstream) = spawn_fake().await;
-    let mut app = AppState::new(config(upstream, "127.0.0.1"));
+    let (python, _) = spawn_fake().await;
+    let mut app = AppState::new(config("127.0.0.1"));
     let (connect, preview) = (free_port(), free_port());
     app.connect = Some(connect);
     app.preview = Some(preview);
     app.connect_supervisor = supervisor.clone();
     app.connect_preview_reach = Arc::new(reach(preview.port(), found).await);
     let device = device(&mut app);
-    let main = spawn_state(app).await;
+    let main = spawn_state_for(&python, app).await;
     wait_open(connect).await;
     wait_open(preview).await;
-    Server { _tmp: tmp, _python: python, dir, supervisor, main, connect, preview, upstream, device }
+    Server { _tmp: tmp, _python: python, dir, supervisor, main, connect, preview, device }
 }
 
 fn open_request(addr: SocketAddr, token: &str, port: u16) -> reqwest::RequestBuilder {
@@ -473,7 +472,7 @@ async fn replied(request: reqwest::RequestBuilder) -> (u16, Value) {
 #[tokio::test]
 async fn preview_never_reaches_hangar_ports() {
     let s = server().await;
-    for port in [8765, 8766, 8768, 8769, 18080, 18443, 8317, 0, s.main.port(), s.connect.port(), s.preview.port(), s.upstream.port()] {
+    for port in [8765, 8766, 8768, 8769, 18080, 18443, 8317, 0, s.main.port(), s.connect.port(), s.preview.port()] {
         let (status, body) = replied(open_request(s.main, OWNER, port)).await;
         assert_eq!(status, 422, "{port}: {body}");
         assert_eq!(body["detail"]["code"], "connect_preview_port_refused");

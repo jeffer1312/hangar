@@ -1,7 +1,7 @@
-//! Contratos públicos de validação, acesso e transferência, com upstream-armadilha.
+//! Contratos públicos de validação, acesso e transferência.
 use crate::{fake::{OWNER, client}, workspace_fixture};
 use serde_json::{Value, json};
-use std::{path::{Path, PathBuf}, sync::atomic::Ordering};
+use std::path::{Path, PathBuf};
 
 const READ: &str = r#"{"path":"sub/ação.txt","text":"primeira\nlinha mudada\n","size":22,"truncated":false,"digest":"0fe20587a6b919286e72d57b501eec339f1afdeeef022141171485dbac529e26"}"#;
 const MISSING_MESSAGE: &str = r#"{"detail":[{"type":"missing","loc":["body","message"],"msg":"Field required","input":{}}]}"#;
@@ -91,11 +91,6 @@ impl Scene {
             .bearer_auth(OWNER).header("content-type", "application/json").body(input.to_owned())
     }
 
-    fn no_upstream(&self) {
-        assert_eq!(self.f.context_hits.load(Ordering::Relaxed), 0, "callback de contexto");
-        assert_eq!(self.f.hits(), 0, "repasse ao handler antigo");
-    }
-
     fn transfer(&self) {
         let id = "11111111-2222-4333-8444-555555555555";
         let base = self.home.join(".hangar/conversation-transfers");
@@ -130,7 +125,6 @@ macro_rules! decoder {
             let response = scene.request($method, $path, $input).send().await.unwrap();
             assert_eq!(scene.effects(), before, "o decoder não pode alterar arquivo, índice ou HEAD");
             wire(response, 422, $expected).await;
-            scene.no_upstream();
         }
     };
 }
@@ -185,7 +179,6 @@ async fn g02_methods_keep_allow_and_head_body_without_upstream() {
     }
     assert_eq!(scene.effects(), before);
     assert!(failures.is_empty(), "{}", failures.join("\n"));
-    scene.no_upstream();
 }
 
 #[tokio::test]
@@ -205,7 +198,6 @@ async fn g02_trailing_slashes_preserve_method_and_query_without_upstream() {
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
-    scene.no_upstream();
 }
 
 #[tokio::test]
@@ -213,7 +205,6 @@ async fn g02_missing_session_is_local_404() {
     let scene = Scene::new().await;
     let response = scene.request("GET", "/api/sessions/missing/files/list", "").send().await.unwrap();
     wire(response, 404, r#"{"detail":{"code":"erro_sessao_inexistente","params":{},"msg":"sessao nao encontrada"}}"#).await;
-    scene.no_upstream();
 }
 
 #[tokio::test]
@@ -222,7 +213,6 @@ async fn g02_session_without_cwd_is_local_404() {
     std::fs::write(&scene.panes, Scene::pane_rows(Path::new(""), 1700000000)).unwrap();
     let response = scene.request("GET", "/api/sessions/fixture/files/list", "").send().await.unwrap();
     wire(response, 404, r#"{"detail":{"code":"erro_sessao_inexistente","params":{},"msg":"sessao nao encontrada"}}"#).await;
-    scene.no_upstream();
 }
 
 #[tokio::test]
@@ -231,7 +221,6 @@ async fn g02_malformed_json_precedes_auth_dependency() {
     let response = client().post(format!("http://{}/api/sessions/fixture/git/commit", scene.f.addr))
         .header("content-type", "application/json").body("{").send().await.unwrap();
     wire(response, 422, INVALID_JSON).await;
-    scene.no_upstream();
 }
 
 #[tokio::test]
@@ -247,7 +236,6 @@ async fn g02_nan_keeps_plain_500_and_workspace_cors() {
     assert_eq!(headers["content-type"], "text/plain; charset=utf-8");
     assert_eq!(headers["access-control-allow-origin"], "*");
     assert_eq!(headers["access-control-expose-headers"], "ETag");
-    scene.no_upstream();
 }
 
 #[tokio::test]
@@ -262,7 +250,6 @@ async fn g02_cors_wraps_native_validation_and_preflight() {
         assert_eq!(response.headers()["access-control-expose-headers"], "ETag");
         wire(response, status, expected).await;
     }
-    scene.no_upstream();
 }
 
 #[tokio::test]
@@ -278,7 +265,6 @@ async fn g02_preflight_keeps_all_captured_headers_without_auth() {
             ("access-control-allow-headers", "authorization,content-type")] { assert_eq!(response.headers()[name], value); }
         assert_eq!(response.text().await.unwrap(), "OK");
     }
-    scene.no_upstream();
 }
 
 #[tokio::test]
@@ -289,7 +275,6 @@ async fn g02_branch_string_boolean_has_the_captured_effect() {
     wire(response, 200, r#"{"ok":true,"output":"Switched to a new branch 'coerced'"}"#).await;
     assert_eq!(git(&scene.repo, &["branch", "--show-current"]), "coerced");
     assert_eq!(std::fs::read(scene.repo.join("sub/ação.txt")).unwrap(), file);
-    scene.no_upstream();
 }
 
 fn four_dirty_paths(scene: &Scene) {
@@ -306,7 +291,6 @@ async fn g02_folder_switch_string_boolean_preserves_dirty_refusal() {
         "branch":"feature","confirm_sessions":"false"}).to_string()).send().await.unwrap();
     assert_eq!(scene.effects(), before);
     wire(response, 409, r#"{"detail":{"code":"erro_git_folder_dirty","msg":"4 arquivo(s) com alteração não commitada: nada foi feito. Commite ou guarde essas alterações antes; o Hangar não descarta trabalho.","params":{"n":4}}}"#).await;
-    scene.no_upstream();
 }
 
 #[tokio::test]
@@ -319,7 +303,6 @@ async fn g02_folder_branch_string_booleans_create_without_checkout() {
         "toplevel":scene.repo,"last_fetch":null,"sessions":["fixture","fixture-login"]}).to_string()).await;
     assert_eq!(git(&scene.repo, &["branch", "--show-current"]), "main");
     assert_eq!(git(&scene.repo, &["rev-parse", "refs/heads/folder-coerced"]), git(&scene.repo, &["rev-parse", "HEAD"]));
-    scene.no_upstream();
 }
 
 #[tokio::test]
@@ -339,7 +322,6 @@ async fn g02_mkdir_ignores_extra_fields_without_losing_its_effect() {
     assert!((body["mtime"].as_f64().unwrap() - mtime).abs() <= 0.000001);
     assert_eq!(body, json!({"name":"mkdir-extra","path":scene.root.join("mkdir-extra"),"is_git":false,
         "has_claude_md":false,"mtime":mtime}));
-    scene.no_upstream();
 }
 
 #[tokio::test]
@@ -361,7 +343,6 @@ async fn g02_body_limits_remain_specific_to_workspace_and_worktrees() {
         if size == 65536 { wire(response, 200, r#"{"location":"","inactive_days":null,"delete_merged":false,"delete_unchanged":false,"keep_when":"uncommitted-changes"}"#).await; }
         else { wire(response, 422, r#"{"detail":"corpo de worktrees inválido"}"#).await; }
     }
-    scene.no_upstream();
 }
 
 async fn fixed_clock_child(name: &str) -> bool {
@@ -388,7 +369,6 @@ async fn g02_commit_amend_string_boolean_matches_the_captured_commit() {
     assert_eq!(git(&scene.repo, &["rev-list", "--count", "HEAD"]), "1");
     assert_eq!(git(&scene.repo, &["show", "HEAD:sub/ação.txt"]), "primeira\nlinha");
     assert_eq!(std::fs::read_to_string(scene.repo.join("sub/ação.txt")).unwrap(), "primeira\nlinha mudada\n");
-    scene.no_upstream();
 }
 
 #[tokio::test]
@@ -402,13 +382,11 @@ async fn g02_mime_keeps_typed_native_json_but_fallback_uses_the_mime() {
         wire(request.send().await.unwrap(), 200, r#"{"ok":true,"output":"[main a332a7e] Selecionado\n 1 file changed, 1 insertion(+), 1 deletion(-)"}"#).await;
         assert_eq!(git(&scene.repo, &["log", "-1", "--format=%s"]), "Selecionado");
         assert_eq!(git(&scene.repo, &["status", "--porcelain=v1"]), "");
-        scene.no_upstream();
     }
     let scene = Scene::new().await;
     let response = client().post(format!("http://{}/api/sessions/fixture/git/commit", scene.f.addr))
         .bearer_auth(OWNER).header("content-type", "text/plain").body("{}").send().await.unwrap();
     wire(response, 422, r#"{"detail":[{"type":"model_attributes_type","loc":["body"],"msg":"Input should be a valid dictionary or object to extract fields from","input":"{}"}]}"#).await;
-    scene.no_upstream();
 }
 
 async fn mismatch(response: reqwest::Response, expected_status: u16, expected_body: &str) -> Option<String> {
@@ -469,9 +447,6 @@ async fn p01_owner_cookie_invite_pair_and_login_keep_their_own_access() {
             let response = client().get(format!("http://{}/api/sessions/fixture/history?limit=5", policy.guest)).bearer_auth(&view).send().await.unwrap();
             if let Some(why) = mismatch(response, 200, "[]").await { failures.push(format!("view history: {why}")); }
         }
-        if scene.f.hits() != 0 || scene.f.context_hits.load(Ordering::Relaxed) != 0 {
-            failures.push(format!("{role}: repasse={}, contexto={}", scene.f.hits(), scene.f.context_hits.load(Ordering::Relaxed)));
-        }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
@@ -487,7 +462,6 @@ async fn p01_login_roots_are_private_and_invite_does_not_gain_global_access() {
     wire(response, 200, &json!([{"name":"repo","path":scene.repo}]).to_string()).await;
     let response = client().get(format!("http://{}/api/fs/roots", policy.guest)).bearer_auth(&full).send().await.unwrap();
     wire(response, 403, FORBIDDEN_SHARE).await;
-    scene.no_upstream();
 }
 
 async fn prove_transfer_fixture(scene: &Scene, expected_blocked: bool) {
@@ -508,7 +482,6 @@ macro_rules! during_transfer {
             let response = scene.request("POST", $route, $input).send().await.unwrap();
             assert_eq!(scene.effects(), before, "mutações durante transferência não podem alterar arquivo, índice ou HEAD");
             wire(response, $status, $expected).await;
-            scene.no_upstream();
         }
     };
 }
@@ -535,7 +508,6 @@ async fn x02_recreated_name_does_not_inherit_the_previous_transfer() {
     prove_transfer_fixture(&scene, false).await;
     assert_eq!(scene.effects(), before);
     wire(response, 422, MISSING_MESSAGE).await;
-    scene.no_upstream();
 }
 
 #[cfg(unix)]
@@ -594,7 +566,6 @@ async fn x02_ingress_hold_waits_for_the_last_effect_and_receipt() {
     let expected = json!({"ok":true,"output":format!("[main {}] Ingress\n 1 file changed, 1 insertion(+), 1 deletion(-)", &after.0[..7])});
     wire(response, 200, &expected.to_string()).await;
     wire(following.unwrap().unwrap(), 409, BUSY).await;
-    scene.no_upstream();
 }
 
 #[cfg(unix)]
@@ -624,7 +595,6 @@ async fn x02_ingress_wait_rechecks_life_before_the_first_effect() {
     assert!(discovered, "a primeira identidade deve vir do Mux antes da recriação");
     assert_eq!(scene.effects(), before, "o pedido da vida anterior não pode escrever depois da espera");
     wire(response, 409, BUSY).await;
-    scene.no_upstream();
 }
 
 #[tokio::test]
@@ -641,7 +611,6 @@ async fn x02_unreadable_transfer_record_refuses_before_effects() {
     assert_eq!(scene.effects(), before, "registro ilegível não autoriza escrita");
     let body = workspace_fixture::refusal(response, "workspace_context").await;
     assert_eq!(body["detail"]["params"]["motivo"], "transferencia");
-    scene.no_upstream();
 }
 
 #[tokio::test]
@@ -658,7 +627,6 @@ async fn g02_review_query_cited_write_takes_path_only_from_the_body() {
     wire(read, 200, r#"{"path":"sub/ação.txt","text":"original","size":8,"truncated":false,"digest":"0682c5f2076f099c34cfdd15a9e063849ed437a49677e6fcc5b4198c76575be5"}"#).await;
     let missing = scene.request("GET", "/api/sessions/fixture/file/text", "").send().await.unwrap();
     wire(missing, 422, r#"{"detail":[{"type":"missing","loc":["query","path"],"msg":"Field required","input":null}]}"#).await;
-    scene.no_upstream();
 }
 
 #[tokio::test]
@@ -679,7 +647,6 @@ async fn g02_review_query_cited_raw_file_ignores_unknown_root_flag() {
         ("accept-ranges", "bytes"), ("last-modified", "Tue, 14 Nov 2023 22:13:20 GMT")] {
         assert_eq!(headers[name], expected, "{name}");
     }
-    scene.no_upstream();
 }
 
 #[tokio::test]
@@ -689,7 +656,6 @@ async fn g02_review_query_uncited_file_does_not_gain_root_access() {
     let response = scene.request("GET", "/api/sessions/fixture/file?path=private.txt&root=evil", "").send().await.unwrap();
     wire(response, 403, r#"{"detail":{"code":"erro_arquivo_nao_citado","params":{},"msg":"file not referenced in this conversation"}}"#).await;
     assert_eq!(std::fs::read_to_string(scene.repo.join("private.txt")).unwrap(), "segredo");
-    scene.no_upstream();
 }
 
 #[test]
@@ -707,8 +673,6 @@ fn g02_public_external_inputs_never_panic_or_reach_python() {
             let status = response.status().as_u16();
             let body = response.text().await.unwrap();
             prop_assert!(status < 500, "status={status}, corpo={body}");
-            prop_assert_eq!(scene.f.hits(), 0, "entrada externa foi ao handler antigo");
-            prop_assert_eq!(scene.f.context_hits.load(Ordering::Relaxed), 0);
             Ok(())
         })
     }).unwrap();

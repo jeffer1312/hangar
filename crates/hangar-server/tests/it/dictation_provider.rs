@@ -29,7 +29,6 @@ fn dictation_codex_keeps_the_effective_provider_without_putting_credentials_in_a
     );
     let mut state = AppState::new(Config {
         listen: "127.0.0.1:0".parse().unwrap(),
-        upstream: "127.0.0.1:1".parse().unwrap(),
         internal_secret: "fixture".into(),
         auth_token: "fixture".into(),
         log_path: None,
@@ -88,7 +87,6 @@ fn dictation_codex_default_account_preserves_its_keyring_authentication() {
     );
     let mut state = AppState::new(Config {
         listen: "127.0.0.1:0".parse().unwrap(),
-        upstream: "127.0.0.1:1".parse().unwrap(),
         internal_secret: "fixture".into(),
         auth_token: "fixture".into(),
         log_path: None,

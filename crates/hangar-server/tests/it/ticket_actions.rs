@@ -9,15 +9,15 @@ use tower::ServiceExt;
 
 #[tokio::test]
 async fn ticket_group_is_projected_from_real_sidecars_and_members_can_report() {
-    use hangar_server::groups::{service::{GroupService,JoinOwned},store::PairDir,orq::PythonOrq};
+    use hangar_server::groups::{service::{GroupService,JoinOwned},store::PairDir,orq::OrqVault};
     let temp=tempfile::tempdir().unwrap();
-    let cfg=Config {listen:"127.0.0.1:0".parse().unwrap(),upstream:"127.0.0.1:9".parse().unwrap(),internal_secret:"test".into(),auth_token:"owner-ticket".into(),log_path:None,trusted:hangar_server::auth::TrustedHosts::parse("127.0.0.1")};
+    let cfg=Config {listen:"127.0.0.1:0".parse().unwrap(),internal_secret:"test".into(),auth_token:"owner-ticket".into(),log_path:None,trusted:hangar_server::auth::TrustedHosts::parse("127.0.0.1")};
     let mut state=AppState::new(cfg);
     state.hangar_dir=temp.path().join(".hangar");
     state.origins_home=temp.path().to_owned();
     state.mission=Arc::new(hangar_mission::Store::new(temp.path().join("mission")));
     let groups=Arc::new(GroupService::new(PairDir::new(temp.path().join("pair"),temp.path().join("archive")),
-        Arc::new(PythonOrq::from_state(&state)),"test".into()));
+        Arc::new(OrqVault::from_state(&state)),"test".into()));
     state.groups=Some(groups.clone());
     for (name,key) in [("coordinator","a".repeat(32)),("backend","b".repeat(32))] {
         let folder=temp.path().join(".hangar/claude-headless");std::fs::create_dir_all(&folder).unwrap();
@@ -49,13 +49,6 @@ async fn ticket_group_is_projected_from_real_sidecars_and_members_can_report() {
 #[tokio::test(flavor="multi_thread")]
 async fn board_action_uses_the_bound_runtime_input_and_reports_an_uncertain_ack() {
     let temp=tempfile::tempdir().unwrap();
-    let policy=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let upstream=policy.local_addr().unwrap();
-    let (stop,stopped)=tokio::sync::oneshot::channel();
-    let policy_task=tokio::spawn(async move {
-        axum::serve(policy,axum::Router::new().fallback(||async {([(axum::http::header::CONTENT_TYPE,"application/json")],json!({"ok":true,"data":{}}).to_string())}))
-            .with_graceful_shutdown(async {let _=stopped.await;}).await.unwrap();
-    });
     let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address=listener.local_addr().unwrap();
     let (sent,text)=tokio::sync::oneshot::channel();
@@ -75,7 +68,7 @@ async fn board_action_uses_the_bound_runtime_input_and_reports_an_uncertain_ack(
         reader.get_mut().write_all(format!("{ack}\n").as_bytes()).await.unwrap();
         raw.clear();while reader.read_line(&mut raw).await.unwrap_or(0)>0 {raw.clear();}
     });
-    let registry=Arc::new(RuntimeRegistry::new(upstream,"secret-test".into(),"ticket-test".into())
+    let registry=Arc::new(RuntimeRegistry::new("ticket-test".into())
         // estavel: somente a leitura do SO é substituída pelos PIDs do processo externo da prova.
         .with_processes(Arc::new(crate::sink::RecipeProcesses("sid-1"))));
     registry.bind_lifecycle();
@@ -84,7 +77,7 @@ async fn board_action_uses_the_bound_runtime_input_and_reports_an_uncertain_ack(
         binding:CanoBinding {pid:42,escuta:format!("tcp:{address}"),token:"secret-test".into(),versao:2},
         lease_path:temp.path().join("session.lock"),state_path:temp.path().join("state.json"),projection_dir:temp.path().join("projection"),
         transcript:temp.path().join("history.jsonl"),created:0.0}).await.unwrap();
-    let cfg=Config {listen:"127.0.0.1:0".parse().unwrap(),upstream,internal_secret:"secret-test".into(),auth_token:"owner-ticket".into(),
+    let cfg=Config {listen:"127.0.0.1:0".parse().unwrap(),internal_secret:"secret-test".into(),auth_token:"owner-ticket".into(),
         log_path:None,trusted:hangar_server::auth::TrustedHosts::parse("127.0.0.1")};
     let mut state=AppState::new(cfg);
     state.hangar_dir=temp.path().join(".hangar");state.origins_home=temp.path().to_owned();
@@ -119,7 +112,7 @@ async fn board_action_uses_the_bound_runtime_input_and_reports_an_uncertain_ack(
     registry.close("11111111111111111111111111111111",1).await.unwrap();
     state.connectors.shutdown().await;
     tokio::time::timeout(std::time::Duration::from_secs(30),cano).await.unwrap().unwrap();
-    stop.send(()).unwrap();policy_task.await.unwrap();
+    
     assert!(delivered.contains("Planeje este ticket."));
     assert_eq!(item.session_key.as_deref(),Some("11111111111111111111111111111111"));
     assert!(item.stage.is_none(),"o resultado incerto não confirma a mudança de etapa");

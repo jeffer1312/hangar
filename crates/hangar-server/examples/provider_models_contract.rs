@@ -33,7 +33,6 @@ async fn main() {
     );
     let config = Config::from_lookup(|key| match key {
         "HANGAR_SERVER_LISTEN" => Some("127.0.0.1:18765".into()),
-        "HANGAR_SERVER_UPSTREAM" => Some("127.0.0.1:1".into()),
         "HANGAR_INTERNAL_SECRET" => Some("fixture-internal".into()),
         "CP_AUTH_TOKEN" => Some("fixture-owner".into()),
         _ => None,

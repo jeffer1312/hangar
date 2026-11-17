@@ -1106,7 +1106,7 @@ mod tests {
     async fn abort_transfer_after_restart_cleans_a_sidecar_without_an_adopted_actor() {
         let home=tempfile::tempdir().unwrap();
         let env=crate::accounts::environment::AccountEnvironment::from_map([("HOME".into(),home.path().to_string_lossy().into_owned())].into());
-        let runtime=RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(),"fixture".into(),"fixture".into()).with_codex_environment(env);
+        let runtime=RuntimeRegistry::new("fixture".into()).with_codex_environment(env);
         let watcher=Watcher::new(super::super::codex_terminal::WatchConfig {home:home.path().into(),queue_dir:home.path().join("queue"),mux:crate::list::mux::Mux::default(),mux_program:"no-mux-needed".into()});
         let id="41234567-89ab-4cde-8fab-0123456789ab";
         let meta=json!({"name":"restoring","key":"33333333333333333333333333333333","headless":true,"transfer_id":id,"cano":null});

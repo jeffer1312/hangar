@@ -1,20 +1,9 @@
 //! O porteiro autoriza antes do disco; identidade e raízes vêm das fontes locais.
 use crate::routes::AppState;
-use axum::{
-    body::{Body, Bytes, to_bytes},
-    extract::Request,
-    http::{HeaderMap, Method, StatusCode, header},
-    response::{IntoResponse, Response},
-};
+use axum::{body::{Body, Bytes, to_bytes}, extract::Request, http::{HeaderMap, Method, StatusCode, header}, response::{IntoResponse, Response}};
 use hangar_workspace::{Operation, WorkspaceError};
 use serde_json::{Value, json};
-use std::{
-    collections::HashMap,
-    net::SocketAddr,
-    path::Path,
-    sync::Arc,
-};
-use subtle::ConstantTimeEq;
+use std::{collections::HashMap, net::SocketAddr, path::Path, sync::Arc};
 const MAX_BODY: usize = 4 * 1024 * 1024;
 const CONTEXT: &str = "workspace_context";
 
@@ -41,25 +30,6 @@ fn failure(e: WorkspaceError, route: &str) -> Response {
         e.detail
     };
     response(json!({"detail":detail}), e.status)
-}
-pub(crate) fn private_ok(st: &AppState, peer: SocketAddr, headers: &HeaderMap) -> bool {
-    let token = headers
-        .get("x-hangar-internal")
-        .map(|h| h.as_bytes())
-        .unwrap_or_default();
-    let external = headers.get_all("x-forwarded-for").iter().any(|h| {
-        h.to_str().map_or(true, |s| {
-            s.split(',').any(|p| {
-                p.trim()
-                    .parse::<std::net::IpAddr>()
-                    .map_or(true, |p| !p.is_loopback())
-            })
-        })
-    });
-    peer.ip().is_loopback()
-        && !external
-        && !st.cfg.internal_secret.is_empty()
-        && bool::from(token.ct_eq(st.cfg.internal_secret.as_bytes()))
 }
 /// Vaga cheia recusa na hora em vez de enfileirar atrás de um fetch lento. Escrita só volta como
 /// `unavailable` antes de rodar; depois, nunca se repete.

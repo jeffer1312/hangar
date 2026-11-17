@@ -169,7 +169,7 @@ async fn local_api_wrappers_keep_provider_credentials_but_never_hangar_authority
     local::isolate(&mut process);
     let output = process.output().await.unwrap();
     assert!(output.status.success());
-    assert_eq!(output.stdout, b"ID3providers:11111;authority:000000");
+    assert_eq!(output.stdout, b"ID3providers:11111;authority:00000");
     assert!(output.stderr.is_empty());
 }
 

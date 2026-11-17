@@ -108,7 +108,7 @@ jobs:
       # A suíte das regressões da entrega terminal não depende do binário de release.
       - name: Contenção e regressões da entrega terminal
         working-directory: backend
-        run: uv run pytest tests/test_runtime_process.py tests/test_sidecar_coordination.py -q
+        run: uv run pytest tests/test_sidecar_coordination.py -q
       # Só chega aqui com todos os passos acima verdes: é a marca que o `publish` deste sistema exige.
       - if: inputs.branch == 'main' || inputs.branch == 'beta'
         run: echo ok > "$RUNNER_TEMP/testes-ok"

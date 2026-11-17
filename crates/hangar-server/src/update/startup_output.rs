@@ -21,8 +21,9 @@ const READ_MAX: u64 = 256 * 1024;
 
 /// Onde a saída do backend estava antes do reinício.
 pub enum Mark {
-    /// Windows: a tarefa grava em `hangar-backend*.log` (`app.main --log`); o mais novo e o tamanho dele.
-    File { dir: PathBuf, newest: Option<(PathBuf, u64)>, at: SystemTime },
+    /// Windows: a tarefa grava em `hangar-backend*.log` (`launch backend --log`); o mais novo, o tamanho
+    /// e a criação dele (a subida seguinte roda o arquivo: o mesmo nome passa a ser outro).
+    File { dir: PathBuf, newest: Option<(PathBuf, u64, Option<SystemTime>)>, at: SystemTime },
     /// systemd do usuário: a unit roda sem `--log`, a saída fica no journal.
     Journal { since: SystemTime },
     /// Reinício na mão: ninguém sobe a versão nova, não há o que ler.
@@ -48,7 +49,10 @@ impl Mark {
         if cfg!(windows) {
             let Some(base) = crate::runtime::local_policy::log_base() else { return Mark::Nothing };
             let dir = base.join("privado");
-            let newest = backend_logs(&dir).pop().map(|(path, _, len)| (path, len));
+            let newest = backend_logs(&dir).pop().map(|(path, _, len)| {
+                let created = std::fs::metadata(&path).and_then(|m| m.created()).ok();
+                (path, len, created)
+            });
             return Mark::File { dir, newest, at: SystemTime::now() };
         }
         Mark::Journal { since: SystemTime::now() }
@@ -71,7 +75,8 @@ impl Mark {
                 if logs.is_empty() { return Err(format!("nenhum hangar-backend*.log em {}", dir.display())); }
                 let mut out = String::new();
                 for (path, modified, _) in logs {
-                    let offset = match newest { Some((marked, len)) if *marked == path => *len, _ if modified > *at => 0, _ => continue };
+                    let same = |created: &Option<SystemTime>| *created == std::fs::metadata(&path).and_then(|m| m.created()).ok();
+                    let offset = match newest { Some((marked, len, created)) if *marked == path && same(created) => *len, _ if modified > *at => 0, _ => continue };
                     out += &tail_from(&path, offset);
                     out.push('\n');
                 }
@@ -198,7 +203,6 @@ impl<'a, H> Trail<'a, H> {
 fn describe(reading: &Reading) -> String {
     match reading {
         Reading::Down(d) => format!("não respondeu: {d}"),
-        Reading::NotRust(d) => format!("só o Python respondeu: {d}"),
         Reading::Rust { protocol, pid, commit } => format!("hangar-server respondeu: pid {}, commit {}, contrato {protocol}",
             pid.map_or("?".into(), |p| p.to_string()), commit.as_deref().unwrap_or("?")),
     }
@@ -227,16 +231,18 @@ impl<H: HealthProbe> HealthProbe for Trail<'_, H> {
 /// `new`/`old`: as versões da rodada, para dizer de qual cada processo é.
 pub fn snapshot(home: &Path, port: u16, new: Option<&Path>, old: Option<&Path>) -> Vec<String> {
     let mut out = Vec::new();
-    out.push(match crate::install_root::backend_command(home, &[], cfg!(windows)) {
-        Ok(command) => format!("lançador: python {}", Path::new(command.get_program()).display()),
+    let explicit = std::env::var_os("CP_RUST_SERVER_BIN");
+    out.push(match crate::install_root::backend(home, &[], cfg!(windows), explicit.as_deref()) {
+        Ok(crate::install_root::Backend::Direct(command)) => format!("lançador: hangar-server {}", Path::new(command.get_program()).display()),
+        Ok(crate::install_root::Backend::Python(command)) => format!("lançador: python {}", Path::new(command.get_program()).display()),
         Err((code, path)) => format!("lançador: {code}: {}", path.display()),
     });
     if let Some(new) = new {
         let bin = new.join("bin").join(if cfg!(windows) { "hangar-server.exe" } else { "hangar-server" });
         let has = |p: &Path| if p.exists() { "ok" } else { "FALTA" };
-        out.push(format!("pacote novo: manifest {}, python {}, backend/app/main.py {}, bin/hangar-server {}",
-            has(&new.join("manifest.json")), has(&crate::install_root::python_exe(new, cfg!(windows))),
-            has(&new.join("backend").join("app").join("main.py")), has(&bin)));
+        let boot = read_boot(new);
+        out.push(format!("pacote novo: manifest {}, boot {boot}, bin/hangar-server {}",
+            has(&new.join("manifest.json")), has(&bin)));
     }
     out.extend(processes(new, old));
     out.extend(service(home, port));
@@ -248,6 +254,21 @@ pub fn snapshot(home: &Path, port: u16, new: Option<&Path>, old: Option<&Path>) 
         Err(e) => format!("porta {port} por conexão em 127.0.0.1: sem resposta ({e})"),
     });
     out
+}
+
+/// O `boot` do manifesto da versão; `python` quando o campo falta (a versão ainda sobe pelo
+/// Python) e `ilegível` quando o manifesto não se lê: aí não dá para dizer como ela sobe.
+fn read_boot(version: &Path) -> String {
+    let bytes = match std::fs::read(version.join("manifest.json")) {
+        Ok(bytes) => bytes,
+        Err(error) => return format!("ilegível ({:?})", error.kind()),
+    };
+    let Ok(manifest) = serde_json::from_slice::<serde_json::Value>(&bytes) else { return "ilegível (json)".to_owned() };
+    match manifest.get("boot") {
+        None => "python".to_owned(),
+        Some(serde_json::Value::String(boot)) => boot.clone(),
+        Some(_) => "ilegível (boot não é texto)".to_owned(),
+    }
 }
 
 fn same_root(path: &str, root: &Path) -> bool {
@@ -375,9 +396,23 @@ mod tests {
         let log = dir.path().join("hangar-backend.log");
         std::fs::write(&log, "ERROR:    [x] velho\n").unwrap();
         // O arquivo marcado lê pelo deslocamento; a hora só decide arquivos novos, e aqui não há outro.
-        let mark = Mark::File { dir: dir.path().into(), newest: Some((log.clone(), 20)), at: SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000) };
+        let created = std::fs::metadata(&log).and_then(|m| m.created()).ok();
+        let mark = Mark::File { dir: dir.path().into(), newest: Some((log.clone(), 20, created)), at: SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000) };
         std::fs::write(&log, "ERROR:    [x] velho\nERROR:    [x] novo\n").unwrap();
         assert_eq!(mark.lines(&scrubber()), vec!["ERROR:    [x] novo".to_owned()]);
+    }
+
+    /// Manifesto que não se lê não vira "python" no retrato: diria que a versão sobe pelo Python.
+    #[test]
+    fn boot_of_an_unreadable_manifest_is_not_python() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(read_boot(dir.path()), "ilegível (NotFound)");
+        std::fs::write(dir.path().join("manifest.json"), "{ quebrado").unwrap();
+        assert_eq!(read_boot(dir.path()), "ilegível (json)");
+        std::fs::write(dir.path().join("manifest.json"), r#"{"version":"1"}"#).unwrap();
+        assert_eq!(read_boot(dir.path()), "python");
+        std::fs::write(dir.path().join("manifest.json"), r#"{"boot":"direct"}"#).unwrap();
+        assert_eq!(read_boot(dir.path()), "direct");
     }
 
     #[tokio::test]
@@ -387,13 +422,13 @@ mod tests {
             async fn read(&self) -> Reading { self.0.lock().unwrap().remove(0) }
         }
         let probe = Seq(Mutex::new(vec![Reading::Down("recusada".into()), Reading::Down("recusada".into()),
-            Reading::NotRust("503".into()), Reading::Rust { protocol: 7, pid: Some(9), commit: Some("abc".into()) }]));
+            Reading::Down("503 em /__hangar_server/health sem o hangar-server".into()), Reading::Rust { protocol: 7, pid: Some(9), commit: Some("abc".into()) }]));
         let trail = Trail::new(&probe);
         for _ in 0..4 { trail.read().await; }
         let out = trail.lines("prova");
         assert_eq!(out.len(), 3);
         assert!(out[0].ends_with("não respondeu: recusada (×2)"), "{out:?}");
-        assert!(out[1].ends_with("só o Python respondeu: 503 (×1)"));
+        assert!(out[1].ends_with("não respondeu: 503 em /__hangar_server/health sem o hangar-server (×1)"));
         assert!(out[2].ends_with("hangar-server respondeu: pid 9, commit abc, contrato 7 (×1)"));
     }
 }

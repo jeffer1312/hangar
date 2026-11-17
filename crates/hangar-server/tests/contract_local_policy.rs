@@ -59,7 +59,9 @@ fn local_policies_match_the_python_golden() {
             materialize(&case["files"], dir.path());
             // SAFETY: idem.
             unsafe {
-                std::env::remove_var("CLAUDE_CODE_EFFORT_LEVEL");
+                // O golden saiu sem conta escolhida: rodar de dentro de uma conta (`CLAUDE_CONFIG_DIR`)
+                // trocaria a pasta que a marca de configuração lê.
+                for key in ["CLAUDE_CODE_EFFORT_LEVEL", "CLAUDE_CONFIG_DIR", "CP_PROJECTS_DIR"] { std::env::remove_var(key); }
                 std::env::set_var("HOME", dir.path().join("home"));
                 // No Windows `home_dir` (e o `Path.home()` do Python) leem o USERPROFILE.
                 std::env::set_var("USERPROFILE", dir.path().join("home"));

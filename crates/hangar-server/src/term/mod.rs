@@ -1,9 +1,8 @@
 //! Terminal real do dono: `WS /api/sessions/{name}/term` (`?shortcut=`) e
 //! `WS /api/hangar-terminals/{ident}/term`. Um cano de bytes para o `tmux attach` da sessão; o
 //! servidor não interpreta nada. O convidado de convite da 8766 entra pelo porteiro (sem token do
-//! dono nem Origin) e cai com 4410 quando o acesso acaba. Quem não é dono nem convidado de convite
-//! segue ao Python (login de convidado, token errado, bloqueio, Connect), que volta por
-//! `/__hangar_server/term`.
+//! dono nem Origin) e cai com 4410 quando o acesso acaba. Toda recusa sai daqui: aperto de mão
+//! recusado é 403 vazio, contado uma vez no contador das origens.
 mod pty;
 mod resolve;
 #[cfg(all(test, unix))]
@@ -158,38 +157,6 @@ pub async fn hangar_ws(State(st): State<Arc<AppState>>, ConnectInfo(peer): Conne
     serve(st, peer, req, Want::Hangar(ident)).await
 }
 
-/// `/__hangar_server/term` na porta privada: o Python liga aqui quem ele autenticou (login de
-/// convidado, Connect na 8768) depois da porta de entrada dele. O alvo já vem conferido; o painel é
-/// o mesmo da 8765 e da 8766, então um dono e um convidado nunca anexam juntos.
-pub async fn private_ws(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    if !crate::workspace_routes::private_ok(&st, peer, req.headers()) {
-        return StatusCode::NOT_FOUND.into_response();
-    }
-    let query = req.uri().query();
-    let Some(target) = auth::query_param(query, "target").filter(|t| !t.is_empty()) else {
-        return StatusCode::BAD_REQUEST.into_response();
-    };
-    let Some((cols, rows)) = size_of(query) else {
-        return StatusCode::BAD_REQUEST.into_response();
-    };
-    let (mut parts, _) = req.into_parts();
-    let Ok(ws) = WebSocketUpgrade::from_request_parts(&mut parts, &()).await else {
-        return StatusCode::BAD_REQUEST.into_response();
-    };
-    // Conferido de novo aqui: a sessão pode ter morrido entre a porta do Python e esta conexão,
-    // e um painel nela registraria um painel fantasma no `term.active`.
-    match resolve::has_session(&st.term.cfg, &target).await {
-        Ok(true) => {}
-        Ok(false) => return refuse("sessao nao existe"),
-        Err(resolve::MuxDown) => return mux_down(&st, ws, &target),
-    }
-    let Some(slot) = st.term.slot() else {
-        st.diag.report("rust.term_failed", &target, "panel_cap", "teto de painéis de terminal atingido");
-        return close_after_accept(ws, 1013, "limite de paineis");
-    };
-    ws.on_upgrade(move |socket| run(st, socket, target, cols, rows, slot, None, None))
-}
-
 /// `cols`/`rows` da query com o clamp; ausente vale 80x24, inválido é `None`.
 fn size_of(query: Option<&str>) -> Option<(u16, u16)> {
     let number = |key, default: i64| match auth::query_param(query, key) {
@@ -199,7 +166,7 @@ fn size_of(query: Option<&str>) -> Option<(u16, u16)> {
     Some(pty::clamp(number("cols", 80)?, number("rows", 24)?))
 }
 
-/// Recusa antes do aceite: o que o `ws.close` antes do `accept` do Python vira, um 403.
+/// Recusa antes do aceite: 403 com o motivo, que o cliente lê.
 fn refuse(reason: &'static str) -> Response {
     (StatusCode::FORBIDDEN, reason).into_response()
 }
@@ -213,9 +180,11 @@ fn close_after_accept(ws: WebSocketUpgrade, code: u16, reason: &'static str) -> 
 
 async fn serve(st: Arc<AppState>, peer: SocketAddr, req: Request, want: Want) -> Response {
     let fwd = crate::routes::forward_for(&st, peer, &req);
-    // Convidado da 8766: o porteiro já conferiu o token e a sessão; terminal só para o convite.
-    // A sessão é a que o porteiro partiu da rota, a mesma que o `Path` do terminal abre.
+    // Convidado: o porteiro conferiu o token e a sessão que partiu da rota. Em `term-X/term` essa
+    // sessão é X e o alvo aberto é `term-X`: só vale se `term-X` for o shell escondido de X.
     let session = req.extensions().get::<SessionPath>().map(|p| p.session.as_str());
+    let guest_shell = caller(&req).and_then(Caller::grant).is_some()
+        && matches!(&want, Want::Session { name, .. } if session != Some(name.as_str()));
     let guest = caller(&req).and_then(Caller::grant).map(|g| match &want {
         Want::Session { .. } => session.is_some_and(|s| g.sessions.get(s) == Some(&Kind::Share)),
         Want::Hangar(_) => false,
@@ -228,15 +197,11 @@ async fn serve(st: Arc<AppState>, peer: SocketAddr, req: Request, want: Want) ->
             Ok(owner) => owner, Err(e) => return crate::auth::unavailable(e),
         }
     } else { false };
-    if !(owner || guest == Some(true)) || req.method() != Method::GET || (guest.is_some() && matches!(want, Want::Hangar(_))) {
+    // Outro método, aperto de mão torto e o convidado nos terminais do Hangar: a recusa do caminho sem rota.
+    if req.method() != Method::GET || (guest.is_some() && matches!(want, Want::Hangar(_))) {
         return pass(&st, req, &fwd).await;
     }
-    if req.extensions().get::<crate::login_guests::gate::Login>().is_some()
-        && !owner
-        && !crate::login_guests::gate::terminal_origin_allowed(&st, req.headers()).await
-    {
-        return refuse("origem não autorizada");
-    }
+    let login = req.extensions().get::<crate::login_guests::gate::Login>().is_some();
     let login_watcher = req.extensions().get::<crate::login_guests::gate::Watcher>().cloned();
     let watcher = req.extensions().get::<Watcher>().cloned();
     let (mut parts, body) = req.into_parts();
@@ -244,6 +209,25 @@ async fn serve(st: Arc<AppState>, peer: SocketAddr, req: Request, want: Want) ->
         Ok(ws) => ws,
         Err(_) => return pass(&st, Request::from_parts(parts, body), &fwd).await,
     };
+    // Convidado verificado sem `Share` nesta sessão: o porteiro já o recusaria; aqui a recusa é explícita.
+    if guest == Some(false) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    if !owner && guest.is_none() {
+        // Só o `?token=` vale aqui (Bearer e cookie não); a falha conta uma vez e a origem bloqueada
+        // segue recusada sem nova falha, até com a senha certa.
+        let attempt = auth::AuthAttempt { profile: auth::Profile::TerminalWebSocket, origin: fwd.client_ip.clone(),
+            presented_token: auth::query_param(parts.uri.query(), "token").map(String::into_bytes),
+            verified_guest: false, login_guest: false };
+        match st.auth.evaluate(attempt).await {
+            Err(e) => return auth::unavailable(e),
+            Ok(decision) if decision.status != 0 => return StatusCode::FORBIDDEN.into_response(),
+            Ok(_) => {}
+        }
+    }
+    if login && !owner && !crate::login_guests::gate::terminal_origin_allowed(&st, &parts.headers).await {
+        return refuse("origem não autorizada");
+    }
     let label = match &want { Want::Session { name, .. } => name.clone(), Want::Hangar(_) => "hangar".into() };
     let cfg = &st.term.cfg;
     let resolved = match &want {
@@ -256,6 +240,14 @@ async fn serve(st: Arc<AppState>, peer: SocketAddr, req: Request, want: Want) ->
         Ok(None) => return refuse("terminal nao existe"),
         Err(resolve::MuxDown) => return mux_down(&st, ws, &label),
     };
+    if guest_shell {
+        let shortcut = matches!(&want, Want::Session { shortcut: Some(_), .. });
+        match resolve::hidden_shell(cfg, &target).await {
+            Ok(true) if !shortcut => {}
+            Ok(_) => return StatusCode::FORBIDDEN.into_response(),
+            Err(resolve::MuxDown) => return mux_down(&st, ws, &label),
+        }
+    }
     match resolve::has_session(cfg, &target).await {
         Ok(true) => {}
         Ok(false) => return refuse("sessao nao existe"),

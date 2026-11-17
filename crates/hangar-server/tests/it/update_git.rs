@@ -49,7 +49,6 @@ async fn unmigrated_git_update_is_owned_without_python() {
     let address = listener.local_addr().unwrap();
     let mut state = AppState::new(Config {
         listen: address,
-        upstream: crate::refused_address(),
         internal_secret: "fixture".into(),
         auth_token: "owner".into(),
         log_path: None,

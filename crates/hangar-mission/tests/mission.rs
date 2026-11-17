@@ -185,7 +185,7 @@ impl Bench {
         let edge = Edge {
             trusted: TrustedHosts::parse("127.0.0.1"),
             auth: Auth::configured(TOKEN),
-            diag: DiagClient::new("127.0.0.1:9".parse().unwrap(), String::new()).with_diary(Some(dir.path().join("diary"))),
+            diag: DiagClient::new().with_diary(Some(dir.path().join("diary"))),
         };
         let notices = Arc::new(Notices::default());
         let app = hangar_mission::http::router::<()>(edge, Arc::new(Store::new(dir.path().join("mission"))), notices.clone());

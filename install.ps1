@@ -2084,27 +2084,60 @@ if (-not ((Test-Path -LiteralPath (Join-Path $HOME '.hangar\current')) -and (Tes
 if ($pacote -and -not $lancadorPacote) {
     Falha 'tarefas agendadas' "pacote sem o lancador $(Join-Path $HOME '.hangar\bin\hangar-launcher.exe') (ou sem ~\.hangar\current): rode o hangar-server install-package"
 }
+# O lancador e copia do hangar-server da versao em uso: renovado aqui, ele sabe subir a versao sem o
+# Python. O que esta rodando nao pode ser substituido, mas pode mudar de nome.
+$servidorDaVersao = Join-Path $HOME '.hangar\current\bin\hangar-server.exe'
+if ($lancadorPacote -and (Test-Path -LiteralPath $servidorDaVersao -PathType Leaf) -and
+    (Get-FileHash -LiteralPath $servidorDaVersao).Hash -ne (Get-FileHash -LiteralPath $lancadorPacote).Hash) {
+    try {
+        $novo = "$lancadorPacote.new"
+        Copy-Item -LiteralPath $servidorDaVersao -Destination $novo -Force
+        $antigo = [IO.Path]::ChangeExtension($lancadorPacote, 'old')
+        Remove-Item -LiteralPath $antigo -Force -ErrorAction SilentlyContinue
+        Move-Item -LiteralPath $lancadorPacote -Destination $antigo -Force
+        try { Move-Item -LiteralPath $novo -Destination $lancadorPacote -Force }
+        catch {
+            # O novo nao entrou: o de antes volta ao nome, e a tarefa nunca aponta para o nada.
+            Move-Item -LiteralPath $antigo -Destination $lancadorPacote -Force
+            throw
+        }
+        Ok 'lancador renovado com o hangar-server da versao em uso'
+    } catch {
+        Remove-Item -LiteralPath "$lancadorPacote.new" -Force -ErrorAction SilentlyContinue
+        Falta "o lancador $lancadorPacote nao foi renovado ($_); ele segue subindo so versoes que usam o Python"
+    }
+}
+# Checkout: o hangar-server sobe pelo `launch backend`, com a escolha de binario do CLI
+# (CP_RUST_SERVER_BIN; senao o mais novo entre o build do checkout e ~\.hangar\bin).
+$servidorCheckout = $null
+if (-not $lancadorPacote) {
+    if ($env:CP_RUST_SERVER_BIN) { $servidorCheckout = $env:CP_RUST_SERVER_BIN }
+    else {
+        $servidorCheckout = @("$raiz\crates\target\release\hangar-server.exe", (Join-Path $HOME '.hangar\bin\hangar-server.exe')) |
+            Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Get-Item | Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1 | ForEach-Object { $_.FullName }
+    }
+    if (-not $servidorCheckout) { Falha 'tarefas agendadas' 'hangar-server nao encontrado; compile-o ou configure CP_RUST_SERVER_BIN' }
+}
 $tarefas = @(
     # Padrao ANCORADO no caminho deste checkout. 'app\.main' cru casava com QUALQUER processo cuja
     # linha de comando contivesse app.main - e este repo tem worktrees em .claude/worktrees/ com
     # checkout completo, entao o instalador do checkout principal matava o backend de uma worktree
     # rodando em outra porta. O ramo do frontend ja fazia certo; o do backend nao.
-    # ExeProc e o nome do processo VIVO, diferente de Exe (o lancador): o backend nasce `uv` e quem
-    # fica segurando a porta e o `python` neto. Serve pro filtro por PADRAO do Pare-Servico — sem ele,
-    # o casamento e substring pura da linha de comando, e QUALQUER processo que so MENCIONE este
-    # caminho vira alvo (um editor, um grep, o terminal de onde se chamou o instalador).
-    # O python do venv DIRETO, nao `uv run`: o uv reconferia o lock a cada subida (lento no boot,
-    # e um lock mudado por `git pull` sem rede o fazia falhar antes de o backend nascer) e punha
-    # dois processos a mais na cadeia (uv.exe -> python trampolim -> python). O venv ja existe
-    # aqui (passo 2/8, `uv sync`); sem ele cai no uv como antes.
-    @{ Nome = 'hangar-backend';  Exe = $(if ($lancadorPacote) { $lancadorPacote } elseif (Test-Path "$raiz\backend\.venv\Scripts\python.exe") { "$raiz\backend\.venv\Scripts\python.exe" } else { 'uv' })
-       Args = $(if ($lancadorPacote) { 'launch backend' } elseif (Test-Path "$raiz\backend\.venv\Scripts\python.exe") { '-m app.main' } else { 'run python -m app.main' })
+    # ExeProc e o nome do processo VIVO, diferente de Exe (o lancador). Serve pro filtro por PADRAO do
+    # Pare-Servico — sem ele, o casamento e substring pura da linha de comando, e QUALQUER processo que
+    # so MENCIONE este caminho vira alvo (um editor, um grep, o terminal de onde se chamou o instalador).
+    @{ Nome = 'hangar-backend';  Exe = $(if ($lancadorPacote) { $lancadorPacote } else { $servidorCheckout })
+       Args = 'launch backend'
        Dir = "$raiz\backend"
        Porta = $portaBack
        # No pacote o Python roda de ~\.hangar\versions\<v> sob o lancador, fora deste checkout.
+       # O `launch backend` ancorado no lancador DESTA instalacao: o de outra worktree nunca vira alvo.
        Padrao = $(if ($lancadorPacote) { [regex]::Escape((Join-Path (Split-Path (Split-Path $lancadorPacote)) 'versions')) + '\\|' +
-                                         '(?:^|\s)launch\s+backend(?:\s|$)' } else { [regex]::Escape("$raiz\backend") })
-       ExeProc = $(if ($lancadorPacote) { 'python|hangar-launcher|hangar-server' } else { 'uv|python' }) }
+                                         [regex]::Escape($lancadorPacote) + '"?\s+launch\s+backend(?:\s|$)' }
+                  elseif ($servidorCheckout) { [regex]::Escape("$raiz\backend") + '|' + [regex]::Escape($servidorCheckout) + '"?\s+launch\s+backend(?:\s|$)' }
+                  else { [regex]::Escape("$raiz\backend") })
+       ExeProc = $(if ($lancadorPacote) { 'python|hangar-launcher|hangar-server' } elseif ($servidorCheckout) { 'hangar-server' } else { 'uv|python' }) }
 )
 if ($temTarefaFront) {
     # `run preview`, NAO `run dev`: o dist ja esta pronto e subir o dev server aqui serviria
@@ -2167,7 +2200,7 @@ if ($registrou) {
             # filhos: com a CPU cheia o backend demora mais que o limite da vigia e ela o derruba.
             $cfg = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries `
                         -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) `
-                        -MultipleInstances IgnoreNew -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) `
+                        -MultipleInstances IgnoreNew -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) `
                         -Priority 4
             # Instalacoes comuns antigas podem ter tarefas com dono Administradores.
             # So elas admitem reparo/reuso; no modo elevado, falha de registro interrompe.
@@ -2214,7 +2247,7 @@ if ($registrou) {
                 if ($registered.Principal.RunLevel -ne $script:installRunLevel -or $registered.Principal.LogonType -ne 'Interactive') {
                     throw "A tarefa $($t.Nome) nao manteve a permissao $script:installRunLevel e o logon interativo"
                 }
-                if ($registered.Settings.MultipleInstances -ne 'IgnoreNew' -or $registered.Settings.RestartCount -ne 3) {
+                if ($registered.Settings.MultipleInstances -ne 'IgnoreNew' -or $registered.Settings.RestartCount -ne 999) {
                     throw "A tarefa $($t.Nome) nao manteve a protecao contra duplicacao e os reinicios automaticos"
                 }
             }
@@ -2815,10 +2848,10 @@ Push-Location "$raiz\backend"
 # Atribuicao direta pelo mesmo motivo do $quieto do npm: o `if` desembrulharia o array de um item.
 $pyFumaca = @('uv', 'run', 'python')
 if ($pacote) { $pyFumaca = @($pyBackend) }
-$rc = Nativo @pyFumaca -c "from app import api"
-if ($rc -ne 0) { Erro 'o backend nao importa neste Windows'; Pop-Location; exit 1 }
-Ok 'o backend importa'
-Mark-Item 'backend-importa' 'ok' 'o servidor abre'
+$rc = Nativo @pyFumaca -c "import app.codex_contas, app.adapters.codex.lancador, app.vapid_setup"
+if ($rc -ne 0) { Erro 'as ferramentas Python nao importam neste Windows'; Pop-Location; exit 1 }
+Ok 'as ferramentas Python importam'
+Mark-Item 'backend-importa' 'ok' 'as ferramentas abrem'
 Pop-Location
 
 # Sobra de rodada anterior: o kill pode demorar, entao limpa antes de contar de novo.

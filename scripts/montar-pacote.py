@@ -331,8 +331,6 @@ def main(argv=None) -> int:
     if not re.fullmatch(r"\d+\.\d+\.\d+\.\d+", version):
         die(f"versão {version!r} fora do formato VERSION.commits")
     protocol = const("crates/hangar-server/src/lib.rs", r"^pub const INTERNAL_PROTOCOL: u32 = (\d+);")
-    if protocol != const("backend/app/rust_server.py", r"^RUST_SERVER_PROTOCOL = (\d+)"):
-        die("INTERNAL_PROTOCOL (Rust) e RUST_SERVER_PROTOCOL (Python) diferentes")
     manifest = {
         "version": version,
         "commit": git("rev-parse", "HEAD").decode().strip(),
@@ -340,6 +338,8 @@ def main(argv=None) -> int:
         "protocol": protocol,
         "api": const("crates/hangar-api/src/lib.rs", r"^pub const CLIENT_API: u32 = (\d+);"),
         "os": a.os,
+        # O lançador abre o hangar-server direto; versão sem o campo sobe pelo Python.
+        "boot": "direct",
         # Chave da tela na release `dist-commits`: a mesma conta do ci.yml.
         "dist_key": hashlib.sha256(git("rev-parse", "HEAD:frontend", "HEAD:packages", "HEAD:messages",
                                        "HEAD:project.inlang", "HEAD:package.json",

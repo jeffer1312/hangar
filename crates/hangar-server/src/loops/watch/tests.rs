@@ -338,7 +338,7 @@ async fn guest_loop_life_guard_checks_the_snapshot_after_acquiring_ingress_and_c
 #[tokio::test]
 async fn guest_loop_runtime_uses_the_existing_pass_while_close_waits() {
     use crate::runtime::{gateway::RuntimeRegistry, ingress::IngressGates};
-    let runtime = Arc::new(RuntimeRegistry::new("127.0.0.1:1".parse().unwrap(), "fixture".into(), "fixture".into()));
+    let runtime = Arc::new(RuntimeRegistry::new("fixture".into()));
     let gates = runtime.ingress().clone();
     let expected = selected_life();
     let mut fresh = expected.clone(); fresh.cwd = Some("pasta-atual".into());

@@ -24,7 +24,7 @@ fn package(version: &str, commit: &str, files: &[(&str, &str)]) -> Vec<u8> { pac
 fn package_keyed(version: &str, commit: &str, dist_key: Option<&str>, files: &[(&str, &str)]) -> Vec<u8> {
     let manifest = Manifest {
         version: version.into(), commit: commit.into(), channel: "latest".into(), protocol: PROTOCOL, api: 1,
-        os: PLATFORM.into(), dist_key: dist_key.map(str::to_owned),
+        os: PLATFORM.into(), dist_key: dist_key.map(str::to_owned), boot: None,
         files: files.iter().map(|(p, c)| (p.to_string(), sha(c.as_bytes()))).collect(),
     };
     let mut builder = tar::Builder::new(flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast()));
@@ -91,7 +91,7 @@ fn version_dir(layout: &Layout, version: &str) -> PathBuf {
     let dir = layout.versions().join(version);
     std::fs::create_dir_all(&dir).unwrap();
     let manifest = Manifest { version: version.into(), commit: format!("commit-{version}"), channel: "latest".into(), protocol: PROTOCOL,
-        api: 1, os: PLATFORM.into(), dist_key: None, files: BTreeMap::new() };
+        api: 1, os: PLATFORM.into(), dist_key: None, boot: None, files: BTreeMap::new() };
     std::fs::write(dir.join("manifest.json"), serde_json::to_vec(&manifest).unwrap()).unwrap();
     dir
 }
@@ -449,7 +449,7 @@ async fn update_old_server_answering_after_restart_fails_even_without_a_known_pi
     let restart = FakeRestart::default();
     // Antes do reinício ninguém diz o pid; depois, um processo novo, mas da versão de antes.
     let health = FakeHealth { restarts: restart.count.clone(), reading: Box::new(|n| match n {
-        0 => Reading::NotRust("sem health".into()),
+        0 => Reading::Down("sem health".into()),
         n => rust(100 + n as u32, OLD),
     }) };
 
@@ -517,7 +517,7 @@ fn update_running_package_comes_from_the_root_above_the_binary() {
 }
 
 #[tokio::test]
-async fn update_python_only_health_is_a_failure() {
+async fn update_health_404_after_restart_is_a_failure() {
     let fake = FakeRelease::new().await;
     let machine = Machine::new();
     let old = machine.current();
@@ -526,7 +526,7 @@ async fn update_python_only_health_is_a_failure() {
     let release = fake.release();
     let restart = FakeRestart::default();
     let health = FakeHealth { restarts: restart.count.clone(), reading: Box::new(|n| match n {
-        1 => Reading::NotRust("404 em /__hangar_server/health".into()),
+        1 => Reading::Down("404 em /__hangar_server/health sem o hangar-server".into()),
         n => served(n),
     }) };
 
@@ -534,7 +534,7 @@ async fn update_python_only_health_is_a_failure() {
 
     let Outcome::Failed { voltou, erro, .. } = outcome else { panic!("{outcome:?}") };
     assert!(voltou, "{erro}");
-    assert!(erro.contains("rust"), "{erro}");
+    assert!(erro.contains("404 em /__hangar_server/health"), "{erro}");
     assert_eq!(machine.current(), old);
 }
 
@@ -867,10 +867,10 @@ fn update_shell_runner_does_not_wait_for_a_grandchild_and_kills_the_tree_on_time
 }
 
 #[tokio::test]
-async fn update_http_health_tells_rust_from_python_and_down() {
+async fn update_http_health_tells_the_server_from_another_program_and_down() {
     let root = tempfile::tempdir().unwrap();
     let (python, server) = serve(root.path().to_path_buf()).await;
-    assert!(matches!(HttpHealth::new(&python).read().await, Reading::NotRust(_)), "404 no health = só o Python");
+    assert!(matches!(HttpHealth::new(&python).read().await, Reading::Down(d) if d.contains("404")), "404 no health = não é o hangar-server");
     std::fs::create_dir_all(root.path().join("__hangar_server")).unwrap();
     std::fs::write(root.path().join("__hangar_server/health"), r#"{"ok":true,"protocol":89,"pid":4321}"#).unwrap();
     assert_eq!(HttpHealth::new(&python).read().await, Reading::Rust { protocol: 89, pid: Some(4321), commit: None }, "modo desenvolvedor");

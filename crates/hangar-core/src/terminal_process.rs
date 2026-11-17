@@ -3,8 +3,8 @@ use std::{io,time::Duration};
 use tokio::process::{Child,Command};
 
 /// Autoridade do servidor que nenhum programa auxiliar (CLI de conta, ffmpeg) deve herdar.
-pub const PRIVATE_ENV_KEYS: [&str; 7] = ["HANGAR_INTERNAL_SECRET", "CP_AUTH_TOKEN", "HANGAR_RUNTIME_INSTANCE", "HANGAR_AUTH_CONTEXT", "HANGAR_PLUGIN_TOKEN",
-    "HANGAR_SERVER_LISTEN", "HANGAR_SERVER_UPSTREAM"];
+pub const PRIVATE_ENV_KEYS: [&str; 6] = ["HANGAR_INTERNAL_SECRET", "CP_AUTH_TOKEN", "HANGAR_RUNTIME_INSTANCE", "HANGAR_AUTH_CONTEXT", "HANGAR_PLUGIN_TOKEN",
+    "HANGAR_SERVER_LISTEN"];
 
 /// Faz o programa gráfico sobreviver aos sinais da sessão do servidor, como `start_new_session`.
 /// No Windows o parâmetro do Python não altera a criação do processo.

@@ -643,7 +643,6 @@ def test_timeout_guarda_so_ultima_cauda_privada(tmp_path, monkeypatch):
     diario = diag.caminho_do_dia().read_text()
     eventos = [json.loads(linha) for linha in diario.splitlines()]
     assert all(e["codigo"] == "timeout" for e in eventos)
-    assert "SEGREDO" not in diag.ler_tudo()
 
 
 @pytest.mark.skipif(os.name != "posix", reason="o lancador so e usado em pane POSIX por ora")

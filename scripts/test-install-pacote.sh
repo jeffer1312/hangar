@@ -45,7 +45,7 @@ expect_no "novo: nenhum uv" "$S/out" 'uv: (command )?not found|uv sync'
 expect_no "novo: nenhum npm" "$S/log/calls" '^npm '
 expect_no "novo: nenhum git" "$S/log/calls" '^git '
 expect_line "novo: push pelo Python do pacote" "$S/log/python" "^$R/backend -m app.vapid_setup$"
-expect_line "novo: fumaça pelo Python do pacote" "$S/log/python" "^$R/backend -c from app import api"
+expect_line "novo: fumaça pelo Python do pacote" "$S/log/python" "^$R/backend -c import app.codex_contas"
 expect_line "novo: tela pronta" "$S/out" 'a tela vem pronta com o pacote'
 expect_line "novo: binários do pacote" "$S/out" 'hangar-server e hangar-cano: vieram no pacote'
 expect_line "novo: serviço sem --backend-only" "$S/log/scripts" 'services-setup.sh $'

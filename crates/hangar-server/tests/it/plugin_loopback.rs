@@ -82,10 +82,10 @@ impl Server {
 fn http() -> reqwest::Client { reqwest::Client::builder().no_proxy().build().unwrap() }
 
 async fn setup() -> (Arc<Fake>, Server, Mods) {
-    let (python, upstream) = spawn_fake().await;
+    let (python, _) = spawn_fake().await;
     let mut mods = None;
     let server = Server::launch(|| {
-        let state = AppState::new(config(upstream, "127.0.0.1"));
+        let state = AppState::new(config("127.0.0.1"));
         state.mods.attach_terminal("t", "proc-t", 1, Arc::new(Probe::default()));
         mods = Some(state.mods.clone());
         state
@@ -134,7 +134,7 @@ async fn click_url_uses_the_same_attempt_on_public_and_loopback_entries() {
 
 #[tokio::test]
 async fn bridge_never_promotes_owner_guest_or_internal_credentials_to_plugin_identity() {
-    let (python, mut server, mods) = setup().await;
+    let (_python, mut server, mods) = setup().await;
     for extra_header in [("authorization", format!("Bearer {OWNER}")), ("authorization", "Bearer guest".into()),
         ("x-hangar-internal", SECRET.into())] {
         let response = http().post(format!("http://{}/api/plugin/ui", server.bridge))
@@ -146,25 +146,12 @@ async fn bridge_never_promotes_owner_guest_or_internal_credentials_to_plugin_ide
     let missing = post(server.bridge, "ui", json!({"sessao":"t", "above":null, "panes":[]})).await;
     assert!(!missing.status().is_success());
     assert!(mods.replay("t").is_empty());
-    assert_eq!(python.hits_to("/api/plugin/ui"), 0);
     server.stop().await;
 }
 
-async fn echo(request: axum::extract::Request) -> impl axum::response::IntoResponse {
-    let path = request.uri().path_and_query().unwrap().as_str().to_owned();
-    let method = request.method().to_string();
-    let client_ip = request.headers().get("x-forwarded-for").map(|value| value.to_str().unwrap().to_owned());
-    let internal = request.headers().contains_key("x-hangar-internal");
-    let body = axum::body::to_bytes(request.into_body(), 1024 * 1024).await.unwrap();
-    ([("content-type", "application/json")], json!({"path":path, "method":method, "client_ip":client_ip, "internal":internal, "body":String::from_utf8(body.to_vec()).unwrap()}).to_string())
-}
-
 #[tokio::test]
-async fn plugin_endpoints_are_rust_and_mods_methods_keep_the_python_path() {
-    let upstream = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = upstream.local_addr().unwrap();
-    let upstream_task = tokio::spawn(async { axum::serve(upstream, axum::Router::new().fallback(echo)).await });
-    let mut server = Server::launch(|| AppState::new(config(address, "127.0.0.1"))).await;
+async fn plugin_and_mods_endpoints_are_rust() {
+    let mut server = Server::launch(|| AppState::new(config("127.0.0.1"))).await;
     // As nove rotas do plugin são do Rust nas duas portas: pedido sem envelope é recusado aqui, nunca ecoado.
     for base in [server.bridge, server.public] {
         for endpoint in ["whoami", "pull", "suggest", "ask", "ask-fim", "filled", "submitted", "state", "rate"] {
@@ -182,37 +169,28 @@ async fn plugin_endpoints_are_rust_and_mods_methods_keep_the_python_path() {
             assert!(!response.text().await.unwrap().contains("\"path\""), "{endpoint}: chegou ao Python");
         }
     }
-    let response = http().request(reqwest::Method::OPTIONS, format!("http://{}/api/plugin/ui", server.bridge)).send().await.unwrap();
-    assert_eq!(response.status().as_u16(), 200);
-    let received: Value = serde_json::from_str(&response.text().await.unwrap()).unwrap();
-    assert_eq!(received["path"], "/api/plugin/ui");
-    assert_eq!(received["method"], "OPTIONS");
     server.stop().await;
-    upstream_task.abort();
 }
 
 #[tokio::test]
 async fn loopback_does_not_publish_the_rest_of_the_public_or_private_api() {
-    let (python, mut server, _mods) = setup().await;
+    let (_python, mut server, _mods) = setup().await;
     for path in ["/api/sessions", "/internal/list/facts", "/__hangar_server/health", "/__hangar_server/terminal",
         "/api/sessions/t/plugin/press", "/api/plugin-extra/whoami", "/api/plugin/%2e%2e/sessions", "/api/plugin/missing"] {
-        let before = python.hits_to(path);
         let response = http().post(format!("http://{}{path}", server.bridge)).header("authorization", format!("Bearer {OWNER}"))
             .header("x-hangar-internal", SECRET).body("{}").send().await.unwrap();
         assert_eq!(response.status().as_u16(), 404, "{path}");
-        assert_eq!(python.hits_to(path), before, "{path}");
     }
     server.stop().await;
 }
 
 #[tokio::test]
 async fn occupied_bridge_fails_before_public_health_and_releases_our_sockets() {
-    let (_python, upstream) = spawn_fake().await;
     let occupied = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = occupied.local_addr().unwrap();
     let public = SocketAddr::from((Ipv4Addr::new(127,0,0,2), address.port()));
     let listener = TcpListener::bind(public).await.unwrap();
-    let result = hangar_server::routes::serve(listener, config(upstream, "127.0.0.1")).await;
+    let result = hangar_server::routes::serve(listener, config("127.0.0.1")).await;
     assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::AddrInUse);
     crate::assert_closed(public, "a porta pública").await;
     assert!(tokio::net::TcpStream::connect(address).await.is_ok());
@@ -220,11 +198,11 @@ async fn occupied_bridge_fails_before_public_health_and_releases_our_sockets() {
 
 /// Sobe de novo nas portas que o servidor parado soltou. Um filho de outro teste, entre o fork e o exec,
 /// pode carregar por instantes a cópia dos sockets antigos; o exec os solta, e o prazo cobre isso.
-async fn restart(address: SocketAddr, upstream: SocketAddr) -> Server {
+async fn restart(address: SocketAddr) -> Server {
     let deadline = std::time::Instant::now() + Duration::from_secs(2);
     loop {
         if let Ok(listener) = TcpListener::bind(address).await
-            && let Some(server) = Server::try_start(listener, AppState::new(config(upstream, "127.0.0.1"))).await
+            && let Some(server) = Server::try_start(listener, AppState::new(config("127.0.0.1"))).await
         {
             return server;
         }
@@ -235,13 +213,12 @@ async fn restart(address: SocketAddr, upstream: SocketAddr) -> Server {
 
 #[tokio::test]
 async fn stopping_allows_a_restart_on_the_same_public_and_bridge_port() {
-    let (_python, upstream) = spawn_fake().await;
     // A primeira partida sorteia portas livres (a da ponte pode ser de outro teste); a segunda volta nelas.
-    let mut server = Server::launch(|| AppState::new(config(upstream, "127.0.0.1"))).await;
+    let mut server = Server::launch(|| AppState::new(config("127.0.0.1"))).await;
     let address = server.public;
     for again in [false, true] {
         if again {
-            server = restart(address, upstream).await;
+            server = restart(address).await;
         }
         // A rota do plugin é do Rust: corpo vazio é recusado por ele (422), prova de que a ponte atende.
         let response = post(server.bridge, "state", json!({})).await;
@@ -329,10 +306,9 @@ mod held_routes {
             crate::assert_ran_one(&output.stdout);
             return;
         }
-        let (_python, upstream) = spawn_fake().await;
         let mut shared = None;
         let mut server = Server::launch(|| {
-            let state = AppState::new(config(upstream, "127.0.0.1"));
+            let state = AppState::new(config("127.0.0.1"));
             shared = Some((state.plugin.clone(), state.interactions.clone(), state.state.clone()));
             state
         }).await;
@@ -600,10 +576,9 @@ mod held_routes {
 
 #[tokio::test]
 async fn start_reports_a_bridge_port_taken_by_someone_else() {
-    let (_python, upstream) = spawn_fake().await;
     let occupied = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let listener = TcpListener::bind((Ipv4Addr::new(127, 0, 0, 2), occupied.local_addr().unwrap().port())).await.unwrap();
     let started = tokio::time::Instant::now();
-    assert!(Server::try_start(listener, AppState::new(config(upstream, "127.0.0.1"))).await.is_none());
+    assert!(Server::try_start(listener, AppState::new(config("127.0.0.1"))).await.is_none());
     assert!(started.elapsed() < Duration::from_secs(2), "esperou a saúde de um servidor que não subiu");
 }

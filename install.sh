@@ -1202,9 +1202,9 @@ fi
 mark_step instalar ok
 mark_step final fazendo
 say "8/8 Checagem de fumaça"
-py_backend -c "from app import api" \
-  && { ok "o backend importa"; mark_item backend-importa ok "o servidor abre"; } \
-  || fail "o backend não importa nesta máquina"
+py_backend -c "import app.codex_contas, app.adapters.codex.lancador, app.vapid_setup" \
+  && { ok "as ferramentas Python importam"; mark_item backend-importa ok "as ferramentas abrem"; } \
+  || fail "as ferramentas Python não importam nesta máquina"
 
 S="cp-fumaca-$$"
 if tmux new-session -d -s "$S" -c /tmp 'sh' 2>/dev/null; then

@@ -87,7 +87,7 @@ mod route {
             let bin = root.path().join("bin");
             std::fs::create_dir_all(home.join(".claude")).unwrap();
             std::fs::create_dir_all(&bin).unwrap();
-            let mut state = AppState::new(crate::fake::config(crate::refused_address(), "127.0.0.1"));
+            let mut state = AppState::new(crate::fake::config("127.0.0.1"));
             state.accounts = AccountService::new(AccountEnvironment::from_map(BTreeMap::from([
                 ("HOME".into(), home.to_string_lossy().into_owned()),
                 ("USERPROFILE".into(), home.to_string_lossy().into_owned()),

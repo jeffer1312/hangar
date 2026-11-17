@@ -246,7 +246,7 @@ async fn desktop_contract_preserves_palette_wallpaper_and_local_http() {
     let edge = Edge {
         trusted: TrustedHosts::parse("127.0.0.1"),
         auth: Auth::configured("desktop-proof"),
-        diag: DiagClient::new("127.0.0.1:9".parse().unwrap(), String::new())
+        diag: DiagClient::new()
             .with_diary(Some(home.path().join("diary"))),
     };
     let app = hangar_desktop_theme::router::<()>(edge, theme);

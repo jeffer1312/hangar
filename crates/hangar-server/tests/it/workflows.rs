@@ -17,7 +17,7 @@ use hangar_server::list::mux::Mux;
 use hangar_server::locate::ListLocate;
 use hangar_server::routes::{AppState, router};
 
-use super::fake::{OWNER, SECRET, config};
+use super::fake::{OWNER, config};
 
 async fn scene() -> (tempfile::TempDir, axum::Router, PathBuf) {
     let root = tempfile::tempdir().unwrap();
@@ -35,7 +35,7 @@ async fn scene() -> (tempfile::TempDir, axum::Router, PathBuf) {
         "omp_agent": home.join(".omp/agent"), "kimi_home": home.join(".kimi-code")})
         .to_string(),
     );
-    let mut state = AppState::new(config("127.0.0.1:9".parse().unwrap(), ""));
+    let mut state = AppState::new(config(""));
     state.origins_home = home.clone();
     let list = Arc::new(ListBridge::new(
         ListEnv {
@@ -44,7 +44,7 @@ async fn scene() -> (tempfile::TempDir, axum::Router, PathBuf) {
             procs: Arc::new(hangar_server::list::procs::SystemProcs::default()),
             dirs,
         },
-        FactsClient::new(state.cfg.upstream, SECRET.into()),
+        FactsClient::new(),
     ));
     let row = list.find_row("s0").await.unwrap().unwrap();
     let empty = list.find_row("s1").await.unwrap().unwrap();

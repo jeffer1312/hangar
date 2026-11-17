@@ -175,7 +175,6 @@ impl AccountService {
                     | "HANGAR_INTERNAL_SECRET"
                     | "HANGAR_RUNTIME_INSTANCE" | "HANGAR_AUTH_CONTEXT"
                     | "HANGAR_SERVER_LISTEN"
-                    | "HANGAR_SERVER_UPSTREAM"
             ) && !key.to_ascii_uppercase().starts_with("ANTHROPIC_")
                 && !matches!(
                     key.to_ascii_uppercase().as_str(),

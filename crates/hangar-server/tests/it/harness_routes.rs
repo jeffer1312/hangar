@@ -5,7 +5,7 @@ use std::{sync::Arc, time::Duration};
 #[tokio::test]
 async fn harness_admission_and_install_status_are_native() {
     let home = tempfile::tempdir().unwrap();
-    let mut state = AppState::new(crate::fake::config(crate::refused_address(), "127.0.0.1"));
+    let mut state = AppState::new(crate::fake::config("127.0.0.1"));
     state.accounts = AccountService::new(AccountEnvironment::from_map([
         ("HOME".into(), home.path().display().to_string()),
         ("USERPROFILE".into(), home.path().display().to_string()),
@@ -49,7 +49,7 @@ async fn harness_admission_and_install_status_are_native() {
 async fn codex_integration_routes_share_the_service_used_by_config_sync() {
     let home=tempfile::tempdir().unwrap();std::fs::create_dir(home.path().join(".claude")).unwrap();
     std::fs::write(home.path().join(".claude/runtime-config.json"),br#"{"codex_sync":false,"codex_memory_import":true}"#).unwrap();
-    let mut state=AppState::new(crate::fake::config(crate::refused_address(),"127.0.0.1"));
+    let mut state=AppState::new(crate::fake::config("127.0.0.1"));
     state.accounts=AccountService::new(AccountEnvironment::from_pairs([("HOME",home.path().display().to_string()),("USERPROFILE",home.path().display().to_string()),("PATH",String::new())]));
     let state=Arc::new(state);let service=state.codex_setup_service().unwrap();
     let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();let address=listener.local_addr().unwrap();let shared=state.clone();

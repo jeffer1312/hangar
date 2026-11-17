@@ -72,7 +72,6 @@ async fn owner_unlocks_and_the_list_publishes_the_change() {
     let ev = next_named(&mut es, "keyring").await;
     assert_eq!(serde_json::from_str::<Value>(&ev.data).unwrap(), json!({"state": "unlocked"}));
     assert_eq!(*keyring.restarts.lock().unwrap(), 0, "abriu sem reiniciar o daemon");
-    assert_eq!(srv.python.hits_to("/api/keyring/unlock"), 0);
 }
 
 /// Senha aceita e chaveiro ainda trancado: reinicia o daemon e manda a senha de novo, uma vez.
@@ -103,5 +102,4 @@ async fn only_the_owner_and_never_forwarded() {
     assert_eq!((status, b["detail"]["code"].clone()), (422, json!("keyring_bad_request")));
     assert_eq!(post(srv.addr, Some(OWNER), &[], json!({"password": ""})).await.0, 422);
     assert!(keyring.received.lock().unwrap().is_empty());
-    assert_eq!(srv.python.hits_to("/api/keyring/unlock"), 0);
 }

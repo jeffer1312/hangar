@@ -14,7 +14,6 @@ async fn engine_crud_preserves_secrets_and_refuses_corruption() {
     let address = listener.local_addr().unwrap();
     let mut state = AppState::new(Config {
         listen: address,
-        upstream: crate::refused_address(),
         internal_secret: "fixture-internal".into(),
         auth_token: "fixture-owner".into(),
         log_path: None,
@@ -104,7 +103,6 @@ async fn engine_routes_keep_auth_rate_limit() {
     let address = listener.local_addr().unwrap();
     let mut state = AppState::new(Config {
         listen: address,
-        upstream: crate::refused_address(),
         internal_secret: "fixture-internal".into(),
         auth_token: "fixture-owner".into(),
         log_path: None,

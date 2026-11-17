@@ -444,8 +444,46 @@ pub(super) fn write_launcher(source: &Path, launcher: &Path) -> Result<(), Strin
     std::fs::write(&tmp, &bytes).and_then(|()| {
         #[cfg(unix)]
         { use std::os::unix::fs::PermissionsExt; std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755))?; }
-        std::fs::rename(&tmp, launcher)
+        std::fs::rename(&tmp, launcher).or_else(|error| {
+            if !cfg!(windows) || !launcher.exists() { return Err(error); }
+            replace_aside(&tmp, launcher, &mut |from, to| std::fs::rename(from, to))
+        })
     }).map_err(|e| { let _ = std::fs::remove_file(&tmp); format!("não consegui gravar o lançador {}: {e}", launcher.display()) })
+}
+
+/// No Windows o lançador em execução não pode ser substituído, mas pode mudar de nome: ele vai para
+/// `.old` e o novo entra. Se o novo não entra, o de antes volta ao nome: a tarefa nunca fica sem lançador.
+pub(super) fn replace_aside(tmp: &Path, target: &Path, rename: &mut dyn FnMut(&Path, &Path) -> std::io::Result<()>) -> std::io::Result<()> {
+    let aside = target.with_extension("old");
+    let _ = std::fs::remove_file(&aside);
+    rename(target, &aside)?;
+    rename(tmp, target).map_err(|error| match rename(&aside, target) {
+        Ok(()) => error,
+        Err(back) => std::io::Error::other(format!("{error}; e o lançador anterior não voltou de {}: {back}", aside.display())),
+    })
+}
+
+/// Renova o lançador estável com o `hangar-server` da versão `version`. Máquina sem o lançador
+/// (checkout, Windows sem pacote) ou versão sem `bin/` (modo desenvolvedor) fica como está.
+/// Devolve se trocou. Versão que sobe direto (`boot: direct`) sem o binário é erro: o lançador
+/// antigo ficaria sem saber subi-la.
+pub fn refresh_launcher(home: &Path, version: &Path, windows: bool) -> Result<bool, String> {
+    let launcher = launcher_path(home, windows);
+    let source = version.join("bin").join(if windows { "hangar-server.exe" } else { "hangar-server" });
+    if !launcher.exists() { return Ok(false); }
+    if !source.is_file() {
+        let manifest = std::fs::read(version.join("manifest.json")).ok().and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
+        if manifest.as_ref().and_then(|manifest| manifest.get("boot")).and_then(Value::as_str) == Some("direct") {
+            tracing::warn!(code = "launcher_source_missing", version = %version.display(), "versão que sobe direto sem bin/hangar-server: lançador não renovado");
+            return Err(format!("launcher_source_missing: a versão sobe direto (boot: direct) e não tem {}", source.display()));
+        }
+        return Ok(false);
+    }
+    let len = |p: &Path| std::fs::metadata(p).map(|m| m.len()).ok();
+    let same = len(&launcher) == len(&source)
+        && std::fs::read(&launcher).ok().zip(std::fs::read(&source).ok()).is_some_and(|(a, b)| a == b);
+    if same { return Ok(false); }
+    write_launcher(&source, &launcher).map(|()| true)
 }
 
 /// Os efeitos, na ordem; cada um entra no registro assim que feito.

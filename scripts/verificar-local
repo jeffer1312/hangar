@@ -81,7 +81,7 @@ VM_GIT=/c/hangar-verificacao/arvore
 VM_WIN='C:/hangar-verificacao'
 
 # Os mesmos do passo "Contenção e regressões" do server.yml: mudar lá exige mudar aqui.
-RUNTIME_TESTS=(tests/test_runtime_process.py tests/test_sidecar_coordination.py)
+RUNTIME_TESTS=(tests/test_sidecar_coordination.py)
 
 PROCESSOS_PADRAO=4
 
@@ -112,8 +112,7 @@ classificar() {
         [[ -z "$f" ]] && continue
         case "$f" in
             crates/*|backend/tests/fixtures/*|plugins/hangar/hooks/*|\
-            backend/tests/test_claude_headless_cano.py|backend/app/runtime_process.py|\
-            backend/app/rust_server.py|backend/tests/test_runtime_*.py) rust=1 ;;
+            backend/tests/test_claude_headless_cano.py) rust=1 ;;
         esac
         # A suíte do backend lê quase o repositório inteiro (scripts, skills, plugins, docs, front).
         # Fica de fora só o que ela comprovadamente não lê. Workflow do CI não é código: quem o
@@ -288,7 +287,9 @@ passo_preparo() {
     if [[ "$plano" == *" backend_rapido "* ]]; then
         # A prova das duas portas precisa do mesmo executável e biblioteca desta árvore fixa. Sempre:
         # teste ou dependência mudada puxa a suíte inteira, e quem usa o par não dá para listar pelo diff.
-        (cd crates && cargo build --locked -p hangar-server -p hangar-auth && pin_auth_pair) || falhou=1
+        # Os testes de orquestração chamam o exemplo `orq_contract`, que só o passo completo compilava.
+        (cd crates && cargo build --locked -p hangar-server -p hangar-auth && pin_auth_pair && \
+            cargo build --locked -p hangar-server --example orq_contract) || falhou=1
     fi
     # cargo test também pode regravar o servidor: publicar só depois do último build.
     if [[ "$plano" == *" rust "* || "$plano" == *" backend "* ]]; then
@@ -422,7 +423,7 @@ passo_backend_rapido() {
                 m="$(basename "$f" .py)"
                 [[ "$m" == __init__ ]] && m="$(basename "$(dirname "$f")")"
                 [[ "$m" == app ]] && { inteiro=1; continue; }
-                # O teste com o nome do módulo pode chegar a ele por outro (app.api registra o router).
+                # O teste com o nome do módulo pode chegar a ele por outro.
                 [[ -f "backend/tests/test_${m}.py" ]] && testes+=("tests/test_${m}.py")
                 # Quem importa o módulo: `app.x`, `from app import ... x` e a linha só com o nome dentro
                 # de um import em várias linhas (`from app import (\n    x,`). A palavra solta pegava

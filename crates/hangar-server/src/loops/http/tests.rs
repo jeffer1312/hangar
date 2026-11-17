@@ -148,7 +148,7 @@ async fn guest_loop_http_reuses_the_pass_while_rename_waits() {
     use std::time::Duration;
     let home = tempfile::tempdir().unwrap();
     let st = super::super::tests::invalid_config_state(home.path());
-    let runtime = Arc::new(RuntimeRegistry::new("127.0.0.1:1".parse().unwrap(), "fixture".into(), "fixture".into()));
+    let runtime = Arc::new(RuntimeRegistry::new("fixture".into()));
     let program = home.path().join("mux");
     std::fs::write(&program, "#!/bin/sh\nexit 0\n").unwrap();
     use std::os::unix::fs::PermissionsExt;

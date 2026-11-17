@@ -53,7 +53,7 @@ mod tests {
     use super::*;
     fn state(home: &std::path::Path, pairs: &[(&str, &str)]) -> crate::routes::AppState {
         let mut state = crate::routes::AppState::new(crate::config::Config {
-            listen: "127.0.0.1:0".parse().unwrap(), upstream: "127.0.0.1:1".parse().unwrap(),
+            listen: "127.0.0.1:0".parse().unwrap(),
             internal_secret: "fixture-secret".into(), auth_token: "fixture-owner".into(),
             log_path: None, trusted: crate::auth::TrustedHosts::parse("127.0.0.1"),
         });
@@ -65,7 +65,7 @@ mod tests {
         let mut list_env = crate::list::bridge::ListEnv::from_env();
         list_env.dirs = None;
         state.list = std::sync::Arc::new(crate::list::bridge::ListBridge::new(list_env,
-            crate::list::facts::FactsClient::new("127.0.0.1:1".parse().unwrap(), "fixture-secret".into())));
+            crate::list::facts::FactsClient::new()));
         state.accounts.env = crate::accounts::environment::AccountEnvironment::from_map(env);
         state
     }

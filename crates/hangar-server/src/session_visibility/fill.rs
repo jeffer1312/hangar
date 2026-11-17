@@ -197,7 +197,7 @@ mod tests {
         let mut rows: Vec<SessionRow> = vec![serde_json::from_value(json!({"name": "s", "lifecycle_id": format!("k:{live}"),
             "state": "awaiting_input"})).unwrap()];
         let mux = Mux::with_program("missing-test-mux", Duration::from_secs(1));
-        let diag = DiagClient::new("127.0.0.1:9".parse().unwrap(), "s".into());
+        let diag = DiagClient::new();
         fill_rows(home.path(), &mux, &mut rows, &diag).await;
         assert!(!rows[0].hidden_from_list);
         let marks = store::read(home.path()).unwrap();
@@ -223,7 +223,7 @@ mod reopened {
         let mut rows: Vec<SessionRow> = vec![serde_json::from_value(json!({"name": "s", "lifecycle_id": format!("k:{key}"),
             "state": "idle", "last_activity": now - 600.0 * 60.0})).unwrap()];
         let mux = Mux::with_program("missing-test-mux", Duration::from_secs(1));
-        let diag = DiagClient::new("127.0.0.1:9".parse().unwrap(), "s".into());
+        let diag = DiagClient::new();
         fill_rows(home.path(), &mux, &mut rows, &diag).await;
         assert!(!rows[0].hidden_from_list, "acabou de abrir");
 

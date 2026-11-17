@@ -25,8 +25,14 @@ function Get-HangarTaskProcesses($rows, [string]$name, [string]$directory) {
     $packagePattern = '(?:^|\s)launch\s+backend(?:\s|$)'
     foreach ($row in $rows) {
         if ($name -eq 'hangar-backend') {
-            if ($row.Name -notmatch '^(python(?:\d+(?:\.\d+)*)?|uv)\.exe$' -or
-                $row.CommandLine -notmatch '(?:^|\s)-m\s+app\.main(?:\s|$)') { continue }
+            $python = $row.Name -match '^(python(?:\d+(?:\.\d+)*)?|uv)\.exe$' -and
+                      $row.CommandLine -match '(?:^|\s)-m\s+app\.main(?:\s|$)'
+            # Versao que sobe sem o Python: o hangar-server filho direto do lancador `launch backend`.
+            $launcher = $byId[[int]$row.ParentProcessId]
+            $direct = $row.Name -eq 'hangar-server.exe' -and $row.CommandLine -notmatch $packagePattern -and
+                      $launcher -and $launcher.Name -match '^hangar-(?:server|launcher)\.exe$' -and
+                      $launcher.CommandLine -match $packagePattern -and $launcher.CreationDate -le $row.CreationDate
+            if (-not ($python -or $direct)) { continue }
         } elseif ($row.Name -notmatch '^(node|npm|vite)\.exe$') { continue }
         $current = $row
         $seen = New-Object 'System.Collections.Generic.HashSet[int]'
@@ -42,6 +48,26 @@ function Get-HangarTaskProcesses($rows, [string]$name, [string]$directory) {
             if ($parent -and $parent.CreationDate -gt $current.CreationDate) { break }
             $current = $parent
         }
+    }
+}
+
+# Decisao 38: o lancador do pacote fica de pe e religa o hangar-server que cai; entre a queda e a
+# religada ele e o unico processo da tarefa. Entra na parada o lancador pai de um candidato ou o
+# filho do wscript desta tarefa; o de outra instalacao, nao.
+function Get-HangarBackendLaunchers($rows, $candidates, [string]$name) {
+    if ($name -ne 'hangar-backend') { return }
+    $byId = @{}
+    foreach ($row in $rows) { $byId[[int]$row.ProcessId] = $row }
+    $vbs = [regex]::Escape((Join-Path $env:LOCALAPPDATA "hangar\$name.vbs"))
+    $taken = @($candidates | ForEach-Object { [int]$_.ProcessId })
+    $parents = @($candidates | ForEach-Object { [int]$_.ParentProcessId })
+    foreach ($row in $rows) {
+        if ($row.Name -notmatch '^hangar-(?:server|launcher)\.exe$' -or
+            $row.CommandLine -notmatch '(?:^|\s)launch\s+backend(?:\s|$)' -or [int]$row.ProcessId -in $taken) { continue }
+        $parent = $byId[[int]$row.ParentProcessId]
+        $fromTask = $parent -and $parent.Name -eq 'wscript.exe' -and $parent.CommandLine -match $vbs -and
+                    $parent.CreationDate -le $row.CreationDate
+        if ([int]$row.ProcessId -in $parents -or $fromTask) { $row }
     }
 }
 
@@ -173,6 +199,8 @@ function Restart-HangarTask([string]$name, [int]$port, [string]$directory, [swit
         $candidates = @($candidates) + @($rows | Where-Object {
             $_.Name -eq 'hangar-server.exe' -and [int]$_.ParentProcessId -in @($candidates.ProcessId)
         })
+        # Por ultimo: parado o servidor, o lancador sai sozinho; parado o lancador, o Job leva o resto.
+        $candidates = @($candidates) + @(Get-HangarBackendLaunchers $rows $candidates $name)
         $listeners = @(Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue)
         foreach ($listener in $listeners) {
             if ($listener.OwningProcess -notin @($candidates.ProcessId)) {
@@ -188,7 +216,7 @@ function Restart-HangarTask([string]$name, [int]$port, [string]$directory, [swit
         # 1) Nao da: zerar o RestartCount por Set-ScheduledTask produz um <RestartOnFailure> com
         #    <Interval> e sem <Count>, e o Agendador recusa o XML INTEIRO - HRESULT 0x80041319,
         #    "Um elemento ou atributo necessario esta faltando no XML da tarefa. (43,8):Count:".
-        #    Como as duas tarefas nascem com -RestartCount 3, isto falhava em 100% das chamadas:
+        #    Como as duas tarefas nascem com -RestartCount 999, isto falhava em 100% das chamadas:
         #    o Restart-HangarTask morria ANTES de parar qualquer coisa, o passo 7/8 do instalador
         #    virava pendencia ("nenhuma tarefa chegou a ser iniciada") e a vigia nunca recuperou
         #    travamento nenhum. Set-ScheduledTask tambem nao consegue REMOVER o bloco (ele funde

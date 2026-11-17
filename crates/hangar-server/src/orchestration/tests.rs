@@ -14,7 +14,6 @@ fn fixture(name: &str) -> Value {
 fn isolated_state(home: &Path) -> Arc<crate::routes::AppState> {
     let mut st = crate::routes::AppState::new(crate::config::Config {
         listen: "127.0.0.1:0".parse().unwrap(),
-        upstream: "127.0.0.1:1".parse().unwrap(),
         internal_secret: "fixture-secret".into(),
         auth_token: "fixture-owner".into(),
         log_path: None,
@@ -109,7 +108,6 @@ async fn review_unreadable_policy_aborts_role_write() {
     let d = tempfile::tempdir().unwrap();
     let mut st = crate::routes::AppState::new(crate::config::Config {
         listen: "127.0.0.1:0".parse().unwrap(),
-        upstream: "127.0.0.1:1".parse().unwrap(),
         internal_secret: "fixture-secret".into(),
         auth_token: "fixture-owner".into(),
         log_path: None,

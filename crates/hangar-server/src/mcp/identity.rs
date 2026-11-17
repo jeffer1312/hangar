@@ -1,4 +1,4 @@
-//! Quem é a sessão que chama o MCP, pelo que ela manda no cabeçalho (`quem_chama.py`). Ordem:
+//! Quem é a sessão que chama o MCP e o `GET /api/whoami`, pelo que ela manda no cabeçalho. Ordem:
 //!
 //! - `X-Hangar-Voice`: a assistente de voz, que não é sessão. Só com a assinatura que este servidor
 //!   faz a cada chamada (`<nonce>.<hmac>`); presente e inválida é erro, sem cair nos outros.
@@ -88,7 +88,30 @@ async fn owners_of<'a>(mux: &Mux, sessions: BTreeSet<&'a str>, key: &str) -> Vec
     sessions.into_iter().zip(keys).filter(|(_, k)| k.as_deref() == Some(key)).map(|(s, _)| s).collect()
 }
 
-/// A sessão existe nesta máquina (`quem_chama._por_nome`): pane no multiplexador ou sidecar.
+/// `GET /api/whoami`: dono e convidado perguntam quem é a sessão pelos cabeçalhos do MCP; nada
+/// resolvido é 404, nunca um chamador padrão. Sessão fora do alcance do convidado leva o mesmo 404
+/// de nada resolvido: a resposta não pode dizer que ela existe.
+pub async fn route(axum::extract::State(st): axum::extract::State<std::sync::Arc<crate::routes::AppState>>,
+                   axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
+                   req: axum::extract::Request) -> axum::response::Response {
+    use axum::http::{Method, StatusCode};
+    use hangar_core::http::{detail, json_response};
+    let (_, caller) = match crate::routes::who(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
+    let Some(caller) = caller else { return crate::session_write::stranger(&st, peer, req, None).await };
+    let home = st.list.env().dirs.as_ref().map(|d| d.home.clone()).or_else(std::env::home_dir).unwrap_or_default();
+    let local = Local { home: &home, mux: &st.list.env().mux };
+    let headers = req.headers();
+    let mut response = match resolve(headers, &local, &st.cfg.internal_secret).await {
+        Ok((name, origin)) if caller.can(&name, &Method::GET) =>
+            json_response(StatusCode::OK, serde_json::json!({"name": name, "origem": origin.as_str()})),
+        Ok(_) => detail(StatusCode::NOT_FOUND, "erro_sessao_desconhecida", HINT, serde_json::json!({})),
+        Err(reason) => detail(StatusCode::NOT_FOUND, "erro_sessao_desconhecida", &reason, serde_json::json!({})),
+    };
+    crate::routes::cors(headers, response.headers_mut());
+    response
+}
+
+/// A sessão existe nesta máquina: pane no multiplexador ou sidecar.
 pub async fn exists(local: &Local<'_>, name: &str) -> bool {
     sidecar_exists(local.home, name) || local.mux.list_panes().await.unwrap_or_default().iter().any(|p| p.session == name)
 }
@@ -148,5 +171,21 @@ mod tests {
         }
         assert!(!voice_signature_valid(sign("", "0a1b").as_bytes(), ""), "sem segredo nenhuma assinatura vale");
         assert!(!voice_signature_valid(b"\xf1.\xff", "s3"));
+    }
+
+    proptest::proptest! {
+        // Cabeçalho vem de fora: qualquer byte que o HTTP aceite resolve ou recusa, sem pânico.
+        #[test]
+        fn any_identity_header_resolves_or_refuses(field in 0usize..4, value in proptest::collection::vec(proptest::num::u8::ANY, 0..80)) {
+            let Ok(value) = axum::http::HeaderValue::from_bytes(&value) else { return Ok(()) };
+            let name = ["x-hangar-voice", "x-hangar-key", "x-hangar-pane", "x-hangar-session"][field];
+            let mut headers = HeaderMap::new();
+            headers.insert(name, value);
+            let home = tempfile::tempdir().unwrap();
+            let mux = Mux::with_program("/nonexistent/hangar-test-mux", std::time::Duration::from_secs(1));
+            let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+            let outcome = runtime.block_on(resolve(&headers, &Local { home: home.path(), mux: &mux }, "s3"));
+            proptest::prop_assert!(outcome.map_or(true, |(name, _)| !name.is_empty()), "nunca um nome vazio");
+        }
     }
 }

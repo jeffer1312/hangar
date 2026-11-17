@@ -6,12 +6,11 @@ use serde_json::Value;
 
 use crate::fake::*;
 
-/// Todo pedido é do Rust: o válido abre ou recusa, e o corpo que não é pedido leva o 422 dele, sem ir ao
-/// Python, que não tem mais a rota.
+/// Todo pedido é do Rust: o válido abre ou recusa, e o corpo que não é pedido leva o 422 dele.
 #[tokio::test]
 async fn create_opens_claude_terminal_in_rust_and_refuses_a_bad_body() {
-    let (fake, up) = spawn_fake().await;
-    let srv = spawn_server(config(up, "127.0.0.1")).await;
+    let (fake, _) = spawn_fake().await;
+    let srv = spawn_server_for(&fake, config("127.0.0.1")).await;
     let post = |body: &'static [u8]| client().post(format!("http://{srv}/api/sessions")).bearer_auth(OWNER)
         .header("content-type", "application/json").header("x-hangar-open", "python").body(body.to_vec()).send();
     let resp = post(br#"{"name":"s1","cwd":"/nao/existe","provider":"claude","headless":false}"#).await.unwrap();
@@ -19,57 +18,24 @@ async fn create_opens_claude_terminal_in_rust_and_refuses_a_bad_body() {
     assert_eq!(serde_json::from_str::<Value>(&resp.text().await.unwrap()).unwrap()["detail"]["code"], "erro_cwd_inexistente");
     let codex = post(br#"{"name":"s1","cwd":"/nao/existe","provider":"codex","headless":true}"#).await.unwrap();
     assert_eq!(serde_json::from_str::<Value>(&codex.text().await.unwrap()).unwrap()["detail"]["code"], "erro_cwd_inexistente");
-    assert_eq!(fake.hits_to("/api/sessions"), 0, "o Rust respondeu sozinho");
     let headless = post(br#"{"name":"s1","cwd":"/nao/existe","provider":"claude","headless":true}"#).await.unwrap();
     assert_eq!(serde_json::from_str::<Value>(&headless.text().await.unwrap()).unwrap()["detail"]["code"], "erro_cwd_inexistente");
-    assert_eq!(fake.hits_to("/api/sessions"), 0, "o Claude sem terminal também é do Rust");
     for body in [&br#"{"name":"s1","cwd":"/x","bogus":1}"#[..], b"nem json"] {
         let resp = client().post(format!("http://{srv}/api/sessions")).bearer_auth(OWNER)
             .header("content-type", "application/json").header("x-hangar-open", "python").body(body.to_vec()).send().await.unwrap();
         assert_eq!(resp.status(), 422);
         assert_eq!(serde_json::from_str::<Value>(&resp.text().await.unwrap()).unwrap()["detail"]["code"], "erro_corpo_invalido");
     }
-    assert_eq!(fake.hits_to("/api/sessions"), 0);
-}
-
-/// O que entrou direto no Python (Connect) chega pela ponte privada (`<nome>/open`), só com o segredo, e
-/// abre (ou é recusado) no Rust.
-#[tokio::test]
-async fn the_private_claude_bridge_opens_what_entered_python_directly() {
-    let (_python, upstream) = spawn_fake().await;
-    let state = std::sync::Arc::new(hangar_server::routes::AppState::new(config(upstream, "127.0.0.1")));
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let private = listener.local_addr().unwrap();
-    let router = hangar_server::routes::terminal_router(state);
-    tokio::spawn(async move { axum::serve(listener, router.into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap() });
-    let open = |body: Value, secret: bool| {
-        let request = client().post(format!("http://{private}/__hangar_server/claude/s1/open")).header("content-type", "application/json");
-        let request = if secret { request.header("x-hangar-internal", SECRET) } else { request };
-        async move { request.body(body.to_string()).send().await.unwrap() }
-    };
-    let codex = serde_json::json!({"request": {"name": "s1", "cwd": "/nao/existe", "provider": "codex"}, "guest": null});
-    assert_eq!(open(codex.clone(), false).await.status(), 404, "sem o segredo a ponte não existe");
-    let refused: Value = serde_json::from_str(&open(codex, true).await.text().await.unwrap()).unwrap();
-    assert_eq!(refused["detail"]["code"], "erro_cwd_inexistente", "o Codex abre (e recusa) no Rust");
-    let claude = serde_json::json!({"request": {"name": "s1", "cwd": "/nao/existe", "provider": "claude", "headless": false}, "guest": null});
-    let refused: Value = serde_json::from_str(&open(claude, true).await.text().await.unwrap()).unwrap();
-    assert_eq!(refused["detail"]["code"], "erro_cwd_inexistente", "a recusa é a da abertura do Rust");
-    // O pedido torto é recusa de validação, não "o Rust não atende": o 421 o faria parecer o Rust fora.
-    let bogus = open(serde_json::json!({"request": {"name": "s1", "cwd": "/x", "bogus": 1}, "guest": null}), true).await;
-    assert_eq!(bogus.status(), 422);
-    let refused: Value = serde_json::from_str(&bogus.text().await.unwrap()).unwrap();
-    assert_eq!(refused["detail"]["code"], "erro_corpo_invalido");
 }
 
 /// O passo da criação é do Rust (o Python também cria pelo repasse dele): a rota responde daqui.
 #[tokio::test]
 async fn the_creation_progress_is_answered_by_rust() {
-    let (fake, up) = spawn_fake().await;
-    let srv = spawn_server(config(up, "127.0.0.1")).await;
+    let (fake, _) = spawn_fake().await;
+    let srv = spawn_server_for(&fake, config("127.0.0.1")).await;
     let resp = client().get(format!("http://{srv}/api/sessions/creation-progress?name=ningu%C3%A9m")).bearer_auth(OWNER).send().await.unwrap();
     let body: Value = serde_json::from_str(&resp.text().await.unwrap()).unwrap_or(Value::Null);
     assert_eq!(body, serde_json::json!({"step": null, "params": {}}));
-    assert_eq!(fake.hits_to("/api/sessions/creation-progress"), 0);
 }
 
 /// `<ROOT>/a/b` vira o caminho desta máquina, com o separador dela (o cenário está escrito com `/` e
@@ -232,7 +198,7 @@ async fn the_env_file_in_the_user_data_folder_wins() {
     // `app/main.py` é comum a qualquer projeto Python: só ele não faz da pasta a do Hangar.
     std::fs::write(dir.path().join("inst/backend/app/main.py"), "").unwrap();
     assert!(!hangar_server::session_open::cli::is_backend(&dir.path().join("inst/backend")));
-    std::fs::write(dir.path().join("inst/backend/app/rust_server.py"), "").unwrap();
+    std::fs::write(dir.path().join("inst/backend/app/pricing_data.json"), "").unwrap();
     assert!(hangar_server::session_open::cli::is_backend(&dir.path().join("inst/backend")));
     assert!(!hangar_server::session_open::cli::is_backend(&dir.path().join("inst/bin")));
     let (code, _, stderr) = hangar_open(&bin, dir.path(), &["open", body], &[]).await;

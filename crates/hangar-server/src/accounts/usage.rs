@@ -335,20 +335,6 @@ where
 }
 
 impl AccountService {
-    /// Se um processo usa a conta (`None` = não dá para saber): o nascimento de sessão Codex do
-    /// Python se aposenta quando o app-server dele usa a conta, sem varrer a máquina inteira.
-    pub(crate) async fn process_uses(&self, key: &AccountKey, pid: u32) -> Option<bool> {
-        let (key, home) = (key.clone(), self.env.home.clone());
-        tokio::task::spawn_blocking(move || match uses(&crate::list::procs::SystemProcs::default(), i64::from(pid), &key, &home) {
-            Ok(uses) => Some(uses),
-            Err(Skip::Gone) => Some(false),
-            Err(Skip::Unknown) => None,
-        })
-        .await
-        .ok()
-        .flatten()
-    }
-
     /// Fatos desta máquina somados aos do runtime Rust. Runtime ausente deixa os fatos
     /// incompletos: nunca prova que a conta está livre.
     pub(crate) async fn usage(

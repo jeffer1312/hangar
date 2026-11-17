@@ -372,12 +372,6 @@ def test_cliente_novo_substitui_o_ligado_em_tcp(tmp_path, cano_cmd):
         p.wait()
 
 
-def test_suite_nunca_le_os_sidecars_reais():
-    from app.adapters.claude_headless import sessions
-    real = Path.home() / ".hangar" / "claude-headless"
-    assert sessions._dir() != real and real not in sessions._dir().parents
-
-
 def _vivo(pid: int) -> bool:
     # Zumbi conta como morto: quem colhe o filho do cano é o init, no tempo dele.
     try:

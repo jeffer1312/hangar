@@ -622,9 +622,6 @@ mod tests {
             json!({"claudeAiOauth":{"accessToken":"before","refreshToken":"refresh","expiresAt":1000}}).to_string()).unwrap();
         // Caminho absoluto: o `PATH` da CLI é só esta pasta, e sem o `sleep` ela sairia antes de a sessão pedir a conta.
         crate::write_test_executable(&bin.join("claude"), b"#!/bin/sh\nexec /bin/sleep 30\n");
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let server = tokio::spawn(async move { axum::serve(listener, axum::Router::new()).await.unwrap(); });
         let mut env = super::super::environment::AccountEnvironment::from_map(Default::default());
         env.home = temp.path().into();
         env.claude_base = temp.path().join(".claude");
@@ -636,7 +633,7 @@ mod tests {
         let service = AccountService::new(env);
         let account = service.claude_by_label("test").unwrap();
         let windows = WindowClient::with(Arc::new(super::super::claude_window::Refused));
-        let runtime = Arc::new(crate::runtime::gateway::RuntimeRegistry::new(address, "synthetic".into(), "synthetic".into()));
+        let runtime = Arc::new(crate::runtime::gateway::RuntimeRegistry::new("synthetic".into()));
         let key = AccountKey::new(Provider::Claude, &account_home).unwrap();
         let locks = service.locks.clone();
         let renewing = {
@@ -651,7 +648,6 @@ mod tests {
         acquire_for_session(&locks, &key, started + Duration::from_secs(5)).await.unwrap();
         assert!(started.elapsed() < Duration::from_secs(1), "{:?}", started.elapsed());
         assert_eq!(renewing.await.unwrap(), Err("cedeu-sessao"));
-        server.abort();
     }
 
     #[cfg(unix)]
@@ -666,21 +662,10 @@ mod tests {
         fs::write(account_home.join(".credentials.json"), old.to_string()).unwrap();
         let cli = bin.join("claude");
         crate::write_test_executable(&cli, b"#!/bin/sh\nprintf '%s' '{\"claudeAiOauth\":{\"accessToken\":\"after\",\"refreshToken\":\"refresh\",\"expiresAt\":20000000000000}}' > \"$CLAUDE_CONFIG_DIR/.credentials.json\"\n");
-        // Uso de verdade: sidecar de sessão sem terminal na conta. Os fatos nunca vêm do Python.
+        // Uso de verdade: sidecar de sessão sem terminal na conta.
         let sidecars = temp.path().join(".hangar/claude-headless");
         fs::create_dir_all(&sidecars).unwrap();
         fs::write(sidecars.join("busy.json"), json!({"name":"busy","config_dir":account_home}).to_string()).unwrap();
-        let python_facts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let counted = python_facts.clone();
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let app=axum::Router::new().route("/internal/accounts/facts",axum::routing::post(move || {
-            counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            async { axum::http::StatusCode::INTERNAL_SERVER_ERROR }
-        }));
-        let server = tokio::spawn(async move {
-            axum::serve(listener, app).await.unwrap();
-        });
         let mut env = super::super::environment::AccountEnvironment::from_map(Default::default());
         env.home = temp.path().into();
         env.claude_base = temp.path().join(".claude");
@@ -693,11 +678,7 @@ mod tests {
         let service = AccountService::new(env);
         let account = service.claude_by_label("test").unwrap();
         let windows = WindowClient::with(Arc::new(super::super::claude_window::Refused));
-        let runtime = Arc::new(crate::runtime::gateway::RuntimeRegistry::new(
-            address,
-            "synthetic".into(),
-            "synthetic".into(),
-        ));
+        let runtime = Arc::new(crate::runtime::gateway::RuntimeRegistry::new("synthetic".into()));
         assert_eq!(
             service
                 .refresh_claude(&account, windows.clone(), Some(runtime.clone()), true)
@@ -726,7 +707,5 @@ mod tests {
                 .try_acquire(&key, GuardMode::Exclusive)
                 .is_ok()
         );
-        assert_eq!(python_facts.load(std::sync::atomic::Ordering::SeqCst), 0, "fatos de uso pedidos ao Python");
-        server.abort();
     }
 }

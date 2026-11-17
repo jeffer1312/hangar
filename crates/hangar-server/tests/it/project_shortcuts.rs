@@ -1,7 +1,7 @@
 //! S01: esperado dos asserts originais de test_project_shortcuts.py e capturas S01.
 use crate::{fake::{OWNER, client}, workspace_fixture};
 use serde_json::{Value, json};
-use std::{path::{Path, PathBuf}, sync::atomic::Ordering};
+use std::path::{Path, PathBuf};
 
 fn git(root: &Path, args: &[&str]) {
     let output = std::process::Command::new("git").arg("-C").arg(root).args(args)
@@ -64,10 +64,6 @@ impl Scene {
         client().request(method.parse::<reqwest::Method>().unwrap(), format!("http://{}/api/sessions/fixture-{name}/project-shortcuts", self.f.addr))
             .bearer_auth(OWNER).json(&body)
     }
-    fn no_upstream(&self) {
-        assert_eq!(self.f.context_hits.load(Ordering::Relaxed), 0);
-        assert_eq!(self.f.hits(), 0);
-    }
 }
 
 async fn value(response: reqwest::Response, status: u16) -> Value {
@@ -91,7 +87,6 @@ struct Execution {
     scene: Scene,
     addr: std::net::SocketAddr,
     tasks: Vec<tokio::task::JoinHandle<()>>,
-    hits: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     runtime: std::sync::Arc<hangar_server::runtime::gateway::RuntimeRegistry>,
     state: std::sync::Arc<hangar_server::routes::AppState>,
 }
@@ -188,13 +183,7 @@ capture-pane) target=${{6#=}}; target=${{target%:}}; cat "$base/$target/output";
 esac
 exit 1
 "#,terms.display(),scene.panes.display()));
-        let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let hit = hits.clone();
-        let trap = axum::Router::new().fallback(move || { let hit=hit.clone(); async move { hit.fetch_add(1,Ordering::Relaxed); "upstream" } });
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let upstream = listener.local_addr().unwrap();
-        let trap_task = tokio::spawn(async move { axum::serve(listener,trap).await.unwrap(); });
-        let mut state = hangar_server::routes::AppState::new(crate::fake::config(upstream,"127.0.0.1"));
+        let mut state = hangar_server::routes::AppState::new(crate::fake::config("127.0.0.1"));
         state.accounts = hangar_server::accounts::AccountService::new(hangar_server::accounts::environment::AccountEnvironment::from_map([
             ("HOME".into(),scene.home.to_string_lossy().into_owned()),("USERPROFILE".into(),scene.home.to_string_lossy().into_owned()),
             ("CLAUDE_CONFIG_DIR".into(),scene.home.join(".claude").to_string_lossy().into_owned()),("SHELL".into(),shell.into()),
@@ -208,15 +197,15 @@ exit 1
         env.dirs=old.dirs.clone();
         env.capture_program=mux.as_os_str().into();
         env.mux=hangar_server::list::mux::Mux::with_program(&mux,std::time::Duration::from_secs(5));
-        state.list=std::sync::Arc::new(hangar_server::list::bridge::ListBridge::new(env,hangar_server::list::facts::FactsClient::new(upstream,crate::fake::SECRET.into())));
-        let runtime=std::sync::Arc::new(hangar_server::runtime::gateway::RuntimeRegistry::new(upstream,crate::fake::SECRET.into(),"s01-execution".into()).with_codex_environment(state.accounts.env.clone()));
+        state.list=std::sync::Arc::new(hangar_server::list::bridge::ListBridge::new(env,hangar_server::list::facts::FactsClient::new()));
+        let runtime=std::sync::Arc::new(hangar_server::runtime::gateway::RuntimeRegistry::new("s01-execution".into()).with_codex_environment(state.accounts.env.clone()));
         assert!(state.state.runtime.set(runtime.clone()).is_ok());
         let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr=listener.local_addr().unwrap();
         let state=std::sync::Arc::new(state);
         let app=hangar_server::routes::router(state.clone()).into_make_service_with_connect_info::<std::net::SocketAddr>();
         let task=tokio::spawn(async move { axum::serve(listener,app).await.unwrap(); });
-        Self {scene,addr,tasks:vec![trap_task,task],hits,runtime,state}
+        Self {scene,addr,tasks:vec![task],runtime,state}
     }
     async fn run(&self, name:&str, operation:&str, body:Value) -> reqwest::Response {
         client().post(format!("http://{}/api/sessions/fixture-{name}/{operation}",self.addr)).bearer_auth(OWNER).json(&body).send().await.unwrap()
@@ -281,7 +270,6 @@ async fn s01_waiting_execution_rechecks_the_life_before_effects() {
     assert_eq!(std::fs::read_dir(execution.scene.home.join("terms")).unwrap().count(),0);
     value(execution.run("main","shortcut-shell",json!({"command":command})).await,202).await;
     assert_eq!(std::fs::read_to_string(output).unwrap().trim_end(),execution.scene.wt.to_str().unwrap());
-    assert_eq!(execution.hits.load(Ordering::Relaxed),0);
 }
 
 #[cfg(unix)]
@@ -307,7 +295,6 @@ async fn s01_execution_holds_ingress_until_terminal_effects_finish() {
     closing.await.unwrap();
     execution.runtime.ingress().open("fixture-main");
     assert_eq!(std::fs::read_to_string(output).unwrap(),"effect");
-    assert_eq!(execution.hits.load(Ordering::Relaxed),0);
 }
 
 #[cfg(unix)]
@@ -331,7 +318,6 @@ async fn s01_shell_and_code_execute_in_the_requested_copy_folder() {
     assert_eq!(response["terminal"]["label"],"Terminal");
     assert_eq!(std::fs::read_to_string(marker).unwrap(),"BASH");
     assert_eq!(std::fs::read_to_string(output).unwrap().trim_end(),declared.scene.repo.join("sub").to_str().unwrap());
-    assert_eq!(declared.hits.load(Ordering::Relaxed),0);
     let response=value(execution.run("sub","shortcut-shell",json!({"command":"true","pasta":"missing"})).await,400).await;
     assert_eq!(response["detail"]["code"],"erro_shortcut_pasta");
     let response=value(execution.run("sub","run-code",json!({"command":"Write-Output 1","language":"powershell"})).await,409).await;
@@ -347,7 +333,6 @@ async fn s01_shell_and_code_execute_in_the_requested_copy_folder() {
         let response=value(execution.run("sub",operation,json!({"command":"⟦SEGREDO:PASS⟧"})).await,status).await;
         assert_eq!(response,json!({"detail":{"code":"erro_shortcut_segredo","msg":"preencha a credencial PASS antes de usar","params":{"nome":"PASS"}}}));
     }
-    assert_eq!(execution.hits.load(Ordering::Relaxed),0);
 }
 
 
@@ -402,7 +387,6 @@ async fn s01_hangar_reuses_one_ownerless_terminal_for_concurrent_clicks() {
     assert_ne!(replaced["terminal"]["id"],home_off["terminal"]["id"]);
     let response=value(execution.run("main","shortcut-shell",json!({"command":"true","runs_in":"hangar"})).await,400).await;
     assert_eq!(response["detail"]["code"],"erro_shortcut_sem_chave");
-    assert_eq!(execution.hits.load(Ordering::Relaxed),0);
 }
 
 #[cfg(unix)]
@@ -461,7 +445,6 @@ async fn s01_r1_restart_and_click_share_one_copy_and_preserve_original_spec() {
     assert!(!live[0].join("@cp_shortcut_owner").exists());
     assert_eq!(std::fs::read_to_string(live[0].join("@cp_shortcut_ask")).unwrap(),"0");
     assert!(["fixture-main","fixture-wt"].contains(&std::fs::read_to_string(live[0].join("@cp_shortcut_origin")).unwrap().as_str()));
-    assert_eq!(execution.hits.load(Ordering::Relaxed),0);
 }
 
 #[cfg(unix)]
@@ -499,7 +482,6 @@ async fn s01_plain_alias_and_missing_folder_keep_physical_identity() {
     let message=format!("pasta da sessao nao existe: {}",scene.root.join("sumiu").display());
     assert_eq!(value(scene.request("GET","missing",Value::Null).send().await.unwrap(),409).await,
         json!({"detail":{"code":"erro_project_shortcuts_projeto","msg":message,"params":{"detalhe":message}}}));
-    scene.no_upstream();
 }
 
 #[cfg(unix)]
@@ -522,7 +504,6 @@ async fn s01_login_folder_boundary_precedes_effects_and_valid_shell_still_runs()
     let response=client().post(&url).bearer_auth("s01-root-token").json(&json!({"command":format!("pwd > '{}'",output.display()),"pasta":"sub"})).send().await.unwrap();
     value(response,202).await;
     assert_eq!(std::fs::read_to_string(output).unwrap().trim_end(),execution.scene.repo.join("sub").to_str().unwrap());
-    assert_eq!(execution.hits.load(Ordering::Relaxed),0);
 }
 
 #[tokio::test]
@@ -543,7 +524,6 @@ async fn s01_guest_hangar_denial_precedes_command_and_does_not_reach_python() {
         assert_eq!(value(response,403).await["detail"]["code"],expected);
     }
     assert!(!scene.home.join("terms").exists());
-    scene.no_upstream();
 }
 
 #[test]
@@ -588,7 +568,6 @@ async fn s01_shared_persistence_through_public_routes_keeps_whole_json() {
     let stored: Value = serde_json::from_slice(&std::fs::read(scene.store()).unwrap()).unwrap();
     assert_eq!(stored, json!({"existing":{"items":[{"id":"keep"}],"extra":true},"metadata":[1,"kept"],
         project_key(&scene.root):{"items":[{"id":"x","type":"send_text","label":"X","text":"/x"}]}}));
-    scene.no_upstream();
 }
 
 #[tokio::test]
@@ -601,7 +580,6 @@ async fn s01_store_uses_the_original_effective_projects_directory() {
     assert!(store.is_file(),"o caminho original é settings.projects_dir.parent, incluindo CP_PROJECTS_DIR do .env");
     assert_eq!(serde_json::from_slice::<Value>(&std::fs::read(store).unwrap()).unwrap(),json!({project_key(&scene.repo):{"items":[item()]}}));
     assert!(!scene.store().exists());
-    scene.no_upstream();
 }
 
 #[tokio::test]
@@ -627,7 +605,6 @@ async fn s01_concurrent_twenty_projects_do_not_lose_updates() {
     for task in tasks { assert_eq!(task.await.unwrap()["items"],json!([item()])); }
     assert_eq!(serde_json::from_slice::<Value>(&std::fs::read(scene.store()).unwrap()).unwrap(),Value::Object(expected));
     for i in 0..20 { assert_eq!(value(scene.request("GET",&format!("p{i}"),Value::Null).send().await.unwrap(),200).await["items"],json!([item()])); }
-    scene.no_upstream();
 }
 
 #[tokio::test]
@@ -647,7 +624,6 @@ async fn s01_unreadable_store_is_500_and_put_preserves_exact_bytes() {
             assert_eq!(std::fs::read(scene.store()).unwrap(),bytes);
         }
     }
-    scene.no_upstream();
 }
 
 #[tokio::test]
@@ -718,7 +694,6 @@ async fn s01_r2_gzip_identity_threshold_cors_and_errors_match_starlette() {
     assert_eq!(response.status(),200);assert_eq!(response.headers()["content-length"],"2");
     assert!(!response.headers().contains_key("content-encoding"));assert!(!response.headers().contains_key("vary"));
     assert_eq!(response.text().await.unwrap(),"OK");
-    scene.no_upstream();
     assert!(failures.is_empty(),"{}",failures.join("\n"));
 }
 
@@ -761,7 +736,6 @@ async fn s01_http_headers_syntax_and_cookie_precedence_do_not_need_fastapi() {
     let response=value(scene.request("PUT","main",json!({"items":items})).send().await.unwrap(),422).await;
     assert_eq!(response["detail"][0]["type"],"too_long");
     assert_eq!(response["detail"][0]["ctx"],json!({"field_type":"List","max_length":500,"actual_length":501}));
-    scene.no_upstream();
 }
 
 #[tokio::test]
@@ -781,12 +755,12 @@ async fn s01_target_guard_ignores_corrupt_other_transfer_and_refuses_own_corrupt
     assert_eq!(value(scene.request("GET","main",Value::Null).send().await.unwrap(),200).await,expected);
     let body=json!({"items":[{"id":"i","type":"internal","action":"terminal"}]});
     let response=scene.request("PUT","main",body.clone()).send().await.unwrap();
-    assert!(!scene.store().exists());scene.no_upstream();
+    assert!(!scene.store().exists());
     assert_eq!(value(response,400).await,json!({"detail":{"code":"erro_project_shortcuts","msg":"item 1: atalho interno nao vale por projeto","params":{"detalhe":"item 1: atalho interno nao vale por projeto"}}}));
     std::fs::write(index("fixture-main"),json!([id]).to_string()).unwrap();
     assert_eq!(value(scene.request("PUT","main",body).send().await.unwrap(),503).await,
         json!({"detail":{"code":"shortcut_context_unavailable","msg":"contexto do terminal indisponível","params":{}}}));
-    assert!(!scene.store().exists());scene.no_upstream();
+    assert!(!scene.store().exists());
 }
 
 #[tokio::test]
@@ -828,7 +802,6 @@ async fn s01_validation_methods_auth_and_lifecycle_are_native() {
     std::fs::write(&scene.panes,rows).unwrap();
     assert_eq!(value(scene.request("PUT","main",json!({"items":[]})).send().await.unwrap(),200).await,
         json!({"key":project_key(&scene.repo),"name":"meu-repo","root":scene.repo,"items":[]}));
-    scene.no_upstream();
 }
 
 #[cfg(target_os = "linux")]
@@ -964,18 +937,12 @@ else printf '%s' "$3" > '{}'; printf 'ok\n'; fi
         }
     }
     let _processes=Processes { mux:mux.clone(),socket };
-    let hits=std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let hit=hits.clone();
-    let trap=axum::Router::new().fallback(move || { let hit=hit.clone(); async move { hit.fetch_add(1,Ordering::Relaxed); axum::http::StatusCode::BAD_GATEWAY } });
-    let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let unavailable=listener.local_addr().unwrap();
-    let trap_task=tokio::spawn(async move { axum::serve(listener,trap).await.unwrap(); });
-    let (f, state, task) = workspace_fixture::real_terminal_fixture(&home, &metadata_mux, &mux, unavailable, environment).await;
+    let (f, state, task) = workspace_fixture::real_terminal_fixture(&home, &metadata_mux, &mux, environment).await;
     let runtime = f.runtime.clone();
     let addr = f.addr;
     let upstream=addr;
     let scene = Scene { _dir:dir, root, repo, wt, home, panes, f };
-    let execution = Execution { scene, addr, tasks:vec![task,trap_task], hits, runtime, state };
+    let execution = Execution { scene, addr, tasks:vec![task], runtime, state };
     let response = client().get(format!("http://{upstream}/api/hangar-terminals"))
         .bearer_auth(OWNER).send().await.expect("GET inicial do Rust real falhou");
     assert_eq!(value(response, 200).await, json!({"terminals":[]}));
@@ -1215,7 +1182,6 @@ wait"#;
         .bearer_auth(OWNER).send().await.unwrap(), 200).await;
     assert_eq!(value(client().get(format!("http://{upstream}/api/hangar-terminals"))
         .bearer_auth(OWNER).send().await.unwrap(), 200).await, json!({"terminals":[]}));
-    assert_eq!(execution.hits.load(Ordering::Relaxed),0,"consumidor não pode recorrer ao Python");
     println!("{}", json!({"rust_created":[first,global,code],"rust_get":observed,"other_owner":other}));
 }
 

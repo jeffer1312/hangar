@@ -919,11 +919,7 @@ mod tests {
         let env = crate::accounts::environment::AccountEnvironment::from_map(
             [("HOME".into(), home.to_string_lossy().into_owned())].into(),
         );
-        let runtime = RuntimeRegistry::new(
-            "127.0.0.1:9".parse().unwrap(),
-            "fixture".into(),
-            "fixture".into(),
-        )
+        let runtime = RuntimeRegistry::new("fixture".into())
         .with_codex_environment(env);
         let origin = json!({"name":"session","provider":"claude","key":"11111111111111111111111111111111","cwd":home,"config_dir":home.join(".claude"),"session_id":"original","jsonl":home.join("original.jsonl"),"headless":true,"permission_mode":"default"});
         let original =
@@ -988,11 +984,7 @@ mod tests {
         let env = crate::accounts::environment::AccountEnvironment::from_map(
             [("HOME".into(), home.to_string_lossy().into_owned())].into(),
         );
-        let runtime = RuntimeRegistry::new(
-            "127.0.0.1:9".parse().unwrap(),
-            "fixture".into(),
-            "fixture".into(),
-        )
+        let runtime = RuntimeRegistry::new("fixture".into())
         .with_codex_environment(env);
         let record = TransferRecord {
             id: "11234567-89ab-4cde-8fab-0123456789ab".into(),
@@ -1066,11 +1058,7 @@ mod tests {
         let env = crate::accounts::environment::AccountEnvironment::from_map(
             [("HOME".into(), home.to_string_lossy().into_owned())].into(),
         );
-        let runtime = RuntimeRegistry::new(
-            "127.0.0.1:9".parse().unwrap(),
-            "fixture".into(),
-            "fixture".into(),
-        )
+        let runtime = RuntimeRegistry::new("fixture".into())
         .with_codex_environment(env);
         let mut source = std::process::Command::new("sleep").arg("30").spawn().unwrap();
         let root = i64::from(source.id());
@@ -1110,11 +1098,7 @@ mod tests {
         let env = crate::accounts::environment::AccountEnvironment::from_map(
             [("HOME".into(), home.to_string_lossy().into_owned())].into(),
         );
-        let runtime = RuntimeRegistry::new(
-            "127.0.0.1:9".parse().unwrap(),
-            "fixture".into(),
-            "fixture".into(),
-        )
+        let runtime = RuntimeRegistry::new("fixture".into())
         .with_codex_environment(env);
         let store = store(home);
         let record = |id: &str, name: &str| TransferRecord {

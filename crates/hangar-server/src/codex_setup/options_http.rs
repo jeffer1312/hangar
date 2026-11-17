@@ -183,7 +183,6 @@ mod route_tests {
         let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
         let mut state = AppState::new(crate::config::Config {
             listen: addr,
-            upstream: addr,
             internal_secret: "fixture-internal".into(),
             auth_token: "fixture-owner".into(),
             log_path: None,

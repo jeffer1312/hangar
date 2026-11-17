@@ -234,7 +234,7 @@ mod tests {
     async fn restore_never_creates_a_slot_and_drops_the_empty_one() {
         let layouts = Layouts::default();
         let list = ListBridge::new(ListEnv { mux: Default::default(), capture_program: "missing-test-mux".into(),
-            procs: Arc::new(SystemProcs::default()), dirs: None }, FactsClient::new("127.0.0.1:9".parse().unwrap(), "s".into()));
+            procs: Arc::new(SystemProcs::default()), dirs: None }, FactsClient::new());
         let dir = Path::new("/nonexistent");
         layouts.restore(dir, "never-seen", Some(1), &list).await;
         assert!(layouts.slots.lock().unwrap().is_empty());

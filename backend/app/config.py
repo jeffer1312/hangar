@@ -189,11 +189,6 @@ class Settings(BaseSettings):
     # CP_SCAN_ROOTS: raizes que o fs-scanner pode listar (string crua; resolvida por
     # resolve_scan_roots). Mantida como str pra aceitar o formato "a,b" direto do env.
     scan_roots: str = _DEFAULT_SCAN_ROOTS
-    # CP_DIAG_TERM_INPUT=1: registra no log privado as RESPOSTAS de terminal que o painel manda pro
-    # pty (CPR, DA, XTVERSION) — nunca a digitacao. Existe pro defeito do Windows em que caractere
-    # que ninguem digitou aparece no composer da TUI com o painel aberto (`termsock._diag_entrada`).
-    # Default off: ligado, um terminal movimentado enche o log.
-    diag_term_input: bool = False
     # CP_FRONT_PORT: onde o PWA é servido — entra no QR e no painel de alcance. VAZIO (0) = o
     # próprio servidor Rust, que serve o `frontend/dist` na raiz; é a topologia
     # padrão desde que o serviço separado de front deixou de ser instalado. Só quem mantém o
