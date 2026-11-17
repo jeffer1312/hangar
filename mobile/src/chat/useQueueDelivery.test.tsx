@@ -17,7 +17,7 @@ vi.mock('../stores/prefs', () => ({ prefs: { getString: (key: string) => disk.ge
 vi.mock('@react-native-menu/menu', async () => {
   const { createElement: h } = await import('react');
   type Action = { id: string; title: string; subtitle?: string; state?: string; attributes?: { disabled?: boolean } };
-  return { MenuView: ({ actions, onPressAction, children }: { actions: Action[]; onPressAction: (e: { nativeEvent: { event: string } }) => void; children: unknown }) =>
+  return { MenuView: ({ actions, onPressAction, children }: { actions: Action[]; onPressAction: (e: { nativeEvent: { event: string } }) => void; children: import('react').ReactNode }) =>
     h('div', null, ...actions.map((a) => h('button', { key: a.id, 'aria-label': a.title, 'data-subtitle': a.subtitle, 'aria-pressed': a.state === 'on',
       disabled: !!a.attributes?.disabled, onClick: () => onPressAction({ nativeEvent: { event: a.id } }) })), children) };
 });
