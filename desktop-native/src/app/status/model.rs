@@ -7,6 +7,8 @@ use hangar_api::status::{
     OutsideBlock, Point, ServerBlock, SessionsBlock, Severity, SlowBlock, StatusSnapshot, UpdateBlock, Usage, WatchdogKind,
 };
 use crate::i18n::{tr, tr_shared, tr_web};
+use super::super::costs::dec;
+use super::super::side::ago;
 
 const MIB: f64 = (1u64 << 20) as f64;
 const GIB: f64 = (1u64 << 30) as f64;
@@ -139,13 +141,11 @@ pub(crate) fn view_model_in<Tz: TimeZone>(snapshot: &StatusSnapshot, tz: &Tz) ->
 
 fn parse(ts: &str) -> Option<DateTime<Utc>> { DateTime::parse_from_rfc3339(ts).ok().map(|d| d.with_timezone(&Utc)) }
 
-fn fill(text: String, params: &[(&str, &str)]) -> String {
+pub(super) fn fill(text: String, params: &[(&str, &str)]) -> String {
     params.iter().fold(text, |text, (name, value)| text.replace(&format!("{{{name}}}"), value))
 }
 
 fn count(n: u64, one: String, many: String) -> String { if n == 1 { one } else { fill(many, &[("n", &n.to_string())]) } }
-
-fn dec(value: f64, places: usize) -> String { format!("{value:.places$}").replace('.', &tr("decimal")) }
 
 /// Memória de processo: "412 MB" até mil, depois "2,1 GB".
 pub(crate) fn mb(bytes: f64) -> String {
@@ -173,10 +173,6 @@ pub(crate) fn span(secs: i64) -> String {
         s if s < 86_400 => format!("{} h", s / 3_600),
         s => match (s % 86_400) / 3_600 { 0 => format!("{} d", s / 86_400), h => format!("{} d {h} h", s / 86_400) },
     }
-}
-
-fn ago(minutes: i64) -> String {
-    if minutes <= 0 { tr("status_now") } else { fill(tr("status_minutes_ago"), &[("n", &minutes.to_string())]) }
 }
 
 fn local<Tz: TimeZone>(at: DateTime<Utc>, tz: &Tz) -> NaiveDateTime { at.with_timezone(tz).naive_local() }
@@ -244,7 +240,7 @@ fn spark(series: &[Point], now: DateTime<Utc>, scale: f64, text: impl Fn(f64) ->
     series.iter().map(|p| SparkPoint {
         v: p.v / scale,
         text: text(p.v),
-        ago: parse(&p.ts).map(|at| ago((now - at).num_minutes())).unwrap_or_default(),
+        ago: parse(&p.ts).map(|at| ago((now - at).num_seconds() as f64)).unwrap_or_default(),
     }).collect()
 }
 
@@ -690,5 +686,14 @@ mod tests {
         assert_eq!(slow.hours[23].label.as_deref(), Some(tr("status_now").as_str()));
         assert!(slow.routes.iter().any(|r| r.bad && r.value == "502"));
         assert!(slow.watchdog.is_some());
+    }
+
+    #[test]
+    fn spark_point_ago_counts_from_the_snapshot() {
+        let now = parse("2026-11-17T14:00:00Z").unwrap();
+        let point = |ts: &str| Point { ts: ts.to_owned(), v: 1. };
+        let points = spark(&[point("2026-11-17T13:57:00Z"), point("2026-11-17T14:00:00Z")], now, 1., |v| v.to_string());
+        assert_eq!(points[0].ago, tr("ago_min").replace("{n}", "3"));
+        assert_eq!(points[1].ago, tr("ago_now"));
     }
 }

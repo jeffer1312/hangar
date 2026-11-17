@@ -6797,7 +6797,6 @@
   "native_status_version": "versão {version}",
   "native_status_under_minute": "menos de 1 min",
   "native_status_now": "agora",
-  "native_status_minutes_ago": "há {n} min",
   "native_status_hour_back": "1 h atrás",
   "native_status_memory": "Memória do servidor",
   "native_status_cpu": "CPU do servidor",

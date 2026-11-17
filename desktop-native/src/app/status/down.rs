@@ -3,6 +3,7 @@
 //! servidor de outra máquina fora só ganha o aviso, sem Subir. Leitura e ações rodam fora da thread da janela.
 use super::*;
 use super::super::device::DeviceReply;
+use super::model::fill;
 use hangar_local_server::{DEFAULT_PORT, Failure as LocalFailure, Listeners, LocalServer, LocalState, Os, PortHolder, Versions};
 
 /// Entre leituras enquanto o serviço diz que está subindo: o gerenciador não avisa quando decide. O próprio
@@ -51,10 +52,6 @@ pub(super) struct DownView {
     pub output: Vec<String>,
     /// Sem serviço instalado não há o que subir: só o conserto.
     pub can_start: bool,
-}
-
-fn fill(text: String, params: &[(&str, &str)]) -> String {
-    params.iter().fold(text, |text, (name, value)| text.replace(&format!("{{{name}}}"), value))
 }
 
 fn capitalize(text: String) -> String {
