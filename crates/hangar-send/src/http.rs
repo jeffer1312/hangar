@@ -28,8 +28,11 @@ pub const BODY_LIMIT: usize = 16 * 1024 * 1024;
 /// Por que não há resposta para ler.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Failure {
-    /// Conexão recusada, prazo vencido ou corte no meio: o pedido pode ter chegado.
+    /// A conexão nem abriu (recusada, sem rota, prazo da conexão): o pedido não chegou.
     NoAnswer,
+    /// A conexão abriu e a resposta não veio (prazo vencido ou corte no meio): o pedido pode ter
+    /// chegado. Fora do envio de recado vale a mesma frase do `NoAnswer`.
+    Cut,
     /// O pedido nem saiu (endereço ou token que não cabem num pedido HTTP), ou a resposta passou do
     /// teto: a frase diz qual.
     Invalid(String),
@@ -68,7 +71,11 @@ pub(crate) async fn fetch(endpoint: &Endpoint, method: &str, path: &str, body: O
     if let Some(body) = body {
         request = request.header(CONTENT_TYPE, "application/json").body(body.to_owned());
     }
-    let Ok(mut response) = request.send().await else { return Err(Failure::NoAnswer) };
+    let mut response = match request.send().await {
+        Ok(response) => response,
+        Err(error) if error.is_connect() => return Err(Failure::NoAnswer),
+        Err(_) => return Err(Failure::Cut),
+    };
     let status = response.status().as_u16();
     let mut bytes = Vec::new();
     loop {
@@ -78,7 +85,7 @@ pub(crate) async fn fetch(endpoint: &Endpoint, method: &str, path: &str, body: O
             }
             Ok(Some(chunk)) => bytes.extend_from_slice(&chunk),
             Ok(None) => return Ok((status, bytes)),
-            Err(_) => return Err(Failure::NoAnswer),
+            Err(_) => return Err(Failure::Cut),
         }
     }
 }
@@ -87,7 +94,7 @@ pub(crate) async fn fetch(endpoint: &Endpoint, method: &str, path: &str, body: O
 pub(crate) fn report(endpoint: &Endpoint, fetched: Fetched, err: &mut dyn Write) -> Result<Vec<u8>, u8> {
     let (status, body) = match fetched {
         Ok(answer) => answer,
-        Err(Failure::NoAnswer) => {
+        Err(Failure::NoAnswer | Failure::Cut) => {
             let _ = match &endpoint.peer {
                 Some(peer) => writeln!(err, "⚠ servidor '{peer}' fora do ar ({})", endpoint.base),
                 None => writeln!(err, "erro: backend inacessível em {} (hangar rodando?)", endpoint.base),

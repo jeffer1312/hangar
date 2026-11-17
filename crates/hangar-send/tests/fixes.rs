@@ -100,3 +100,26 @@ fn missing_token_says_where_it_looked() {
     assert_eq!(done.code, 1);
     assert_eq!(done.stderr, format!("erro: CP_AUTH_TOKEN ausente em {}\n", env.display()));
 }
+
+/// Revisão de falhas caladas: o servidor recebeu o recado e não respondeu no prazo. Antes a frase era
+/// "backend inacessível", e quem reenviava duplicava o recado; agora ela diz que pode ter chegado.
+/// Conexão recusada continua "backend inacessível".
+#[test]
+fn a_send_without_answer_says_the_message_may_have_arrived() {
+    let mut route = Route::new("POST", "/api/sessions/", 200, r#"{"delivered": true}"#);
+    route.replies[0].delay = 3.0;
+    let server = FakeServer::start(vec![route]);
+    let home = Home::new(server.port, "");
+    let done = home.run(&["alvo", "oi"], &[("API_TIMEOUT", "1")], &plain_host());
+    assert_eq!(done.code, 2, "{}", done.stderr);
+    assert_eq!(
+        done.stderr,
+        format!("erro: sem resposta de http://127.0.0.1:{} no prazo — o recado pode ter chegado; confira com hangar-send --list antes de reenviar\n", server.port)
+    );
+    assert_eq!(server.requests().len(), 1, "o pedido chegou ao servidor");
+
+    let port = common::dead_port();
+    let done = Home::new(port, "").run(&["alvo", "oi"], &[], &plain_host());
+    assert_eq!(done.code, 2, "{}", done.stderr);
+    assert_eq!(done.stderr, format!("erro: backend inacessível em http://127.0.0.1:{port} (hangar rodando?)\n"));
+}

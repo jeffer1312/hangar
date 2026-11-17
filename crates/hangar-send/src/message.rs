@@ -4,7 +4,7 @@ use std::io::Write;
 
 use serde_json::{Map, Value, json};
 
-use crate::http::Endpoint;
+use crate::http::{Endpoint, Failure};
 use crate::{Ctx, identity, list, parse, path_segment, truthy};
 
 const USAGE: &str = "uso: hangar-send [--tmux] <sessao|servidor::sessao> <mensagem...>";
@@ -111,11 +111,26 @@ fn is_external_alias(body: &[u8], alias: &str) -> bool {
 fn deliver(cx: &Ctx, endpoint: &Endpoint, target: &str, session: &str, text: &str, out: &mut dyn Write, err: &mut dyn Write) -> u8 {
     let body = json!({"text": text, "steer": true}).to_string();
     let path = format!("/api/sessions/{}/input", path_segment(session));
-    match cx.api(endpoint, "POST", &path, Some(&body), err) {
+    let fetched = cx.fetch(endpoint, "POST", &path, Some(&body));
+    if matches!(fetched, Err(Failure::Cut)) {
+        maybe_delivered(endpoint, err);
+        return 2;
+    }
+    match crate::http::report(endpoint, fetched, err) {
         Ok(response) => report_delivery(&response, target, out, err),
         Err(code) => code,
     }
 }
+
+/// A conexão abriu e a resposta não veio: reenviar às cegas pode duplicar o recado.
+pub(crate) fn maybe_delivered(endpoint: &Endpoint, err: &mut dyn Write) {
+    let _ = match &endpoint.peer {
+        Some(peer) => writeln!(err, "⚠ servidor '{peer}' não respondeu no prazo ({}) — {MAYBE_DELIVERED}", endpoint.base),
+        None => writeln!(err, "erro: sem resposta de {} no prazo — {MAYBE_DELIVERED}", endpoint.base),
+    };
+}
+
+pub(crate) const MAYBE_DELIVERED: &str = "o recado pode ter chegado; confira com hangar-send --list antes de reenviar";
 
 fn send_external(cx: &Ctx, target: &str, sender: &str, text: &str, out: &mut dyn Write, err: &mut dyn Write) -> u8 {
     let mut body = Map::new();
@@ -125,11 +140,15 @@ fn send_external(cx: &Ctx, target: &str, sender: &str, text: &str, out: &mut dyn
     let endpoint = Endpoint { connect: 3.0, total: 30.0, ..cx.local() };
     let (status, response) = match cx.fetch(&endpoint, "POST", "/api/external-pairs/send", Some(&Value::Object(body).to_string())) {
         Ok(answer) => answer,
-        Err(crate::http::Failure::NoAnswer) => {
+        Err(Failure::NoAnswer) => {
             let _ = writeln!(err, "erro: backend inacessível em {} (hangar rodando?)", endpoint.base);
             return 1;
         }
-        Err(crate::http::Failure::Invalid(detail)) => {
+        Err(Failure::Cut) => {
+            maybe_delivered(&endpoint, err);
+            return 1;
+        }
+        Err(Failure::Invalid(detail)) => {
             let _ = writeln!(err, "erro: {detail}");
             return 1;
         }
