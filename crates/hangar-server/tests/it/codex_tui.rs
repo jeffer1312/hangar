@@ -184,6 +184,24 @@ fn an_app_server_that_falls_with_the_tui_alive_comes_back_on_the_same_port() {
     assert!(!case.sidecar().exists(), "a saída apaga o arquivo pelo pid novo");
 }
 
+/// C-50: mais de 3 quedas em 5 min é laço; o lançador avisa, para de ressubir e a TUI fica.
+#[test]
+fn an_app_server_falling_in_a_loop_is_given_up_and_the_tui_stays() {
+    let case = Case::new(json!({}));
+    let mut config: Value = serde_json::from_slice(&std::fs::read(case.fake.join("config.json")).unwrap()).unwrap();
+    let dies = json!({"die_at_start": 9, "stderr": "fake app-server died\n"});
+    config["app_server"]["launches"] = json!([{"crash_after_tui_ms": 200}, dies, dies, dies, dies, dies]);
+    config["tui"] = json!({"hold_ms": 15000});
+    std::fs::write(case.fake.join("config.json"), config.to_string()).unwrap();
+    let output = case.run(&["--cwd", case.work.to_str().unwrap()]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let text = stderr(&output);
+    assert!(text.contains("hangar-codex-tui: app-server caindo em laço; desisto de ressubir\n"), "{text}");
+    assert_eq!(case.role("codex app-server").len(), 4, "a primeira e três ressubidas: a quarta queda desiste");
+    assert_eq!(case.role("codex tui").len(), 1, "a TUI não é relançada");
+    assert!(!case.sidecar().exists());
+}
+
 /// `SIGTERM` vira 143, derruba o app-server e apaga o arquivo (`launcher__sigterm`).
 #[test]
 fn sigterm_exits_143_and_takes_the_app_server_down() {
