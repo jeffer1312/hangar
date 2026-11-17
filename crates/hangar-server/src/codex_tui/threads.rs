@@ -27,7 +27,10 @@ pub(crate) fn primary(message: &Value, cwd: &str) -> Option<(String, String, Val
     Some((thread["id"].as_str()?.to_owned(), thread["path"].as_str()?.to_owned(), thread.clone()))
 }
 
-pub(crate) async fn listen(session: Arc<Session>, cwd: String, gone: Arc<AtomicBool>) {
+/// `ready` é avisado quando a resposta do `initialize` chega (ou a escuta desiste): a TUI só sobe
+/// depois, senão o `thread/started` da conversa nova sai antes de haver quem o escute.
+pub(crate) async fn listen(session: Arc<Session>, cwd: String, gone: Arc<AtomicBool>, ready: Option<tokio::sync::oneshot::Sender<()>>) {
+    let mut ready = ready;
     let config = WebSocketConfig::default().max_message_size(None).max_frame_size(None);
     let deadline = Instant::now() + WAIT;
     let mut socket = None;
@@ -52,6 +55,9 @@ pub(crate) async fn listen(session: Arc<Session>, cwd: String, gone: Arc<AtomicB
     }
     // Socket fechado: o servidor foi embora (a TUI saiu e a saída o derrubou), nada a gravar.
     while let Some(Ok(message)) = ws.next().await {
+        if let Some(ready) = ready.take() {
+            let _ = ready.send(());
+        }
         if !message.is_text() && !message.is_binary() {
             continue;
         }

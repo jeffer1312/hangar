@@ -38,6 +38,8 @@ pub(crate) use marketplaces::failed_lines as marketplaces_failed_lines;
 pub(crate) const PREFIX: &str = "hangar-codex-tui: ";
 /// A linha que deixa o pane aberto depois de uma abertura que falhou; a lista a reconhece.
 pub(crate) const ENTER: &str = "Pressione Enter para fechar esta sessão.";
+/// Teto da espera pela escuta de threads antes de abrir a TUI, com a porta já aberta.
+const LISTEN_READY: Duration = Duration::from_secs(5);
 
 /// Onde as linhas de andamento aparecem: o pane, ou a lista de um teste.
 pub(crate) trait Screen: Sync {
@@ -230,7 +232,7 @@ async fn flow(raw: &[String], env: &[(String, String)], life: &mut session::Life
             None => screen.say(&format!("nao achei o rollout da conversa {resume}")),
         }
     }
-    life.listen(&plan.cwd);
+    let listening = life.listen(&plan.cwd);
     screen.say("subindo o app-server do Codex…");
     if !life.wait_port(app_server::PORT_WAIT, &screen).await {
         return Exit::opening(1);
@@ -238,6 +240,9 @@ async fn flow(raw: &[String], env: &[(String, String)], life: &mut session::Life
     for line in hooks::lines(&hooks::trust(&endpoint, &plan.cwd, &home, &plan.codex_home).await) {
         screen.say(&line);
     }
+    // A conversa nova anuncia o `thread/started` logo que a TUI conecta: a escuta tem de estar ligada
+    // antes. Estourar o teto só perde o vínculo, como antes.
+    let _ = tokio::time::timeout(LISTEN_READY, listening).await;
     let argv = plan::tui_argv(&codex.to_string_lossy(), &plan, &endpoint, shared.selected_tier().as_deref());
     let mut tui = match tokio::process::Command::new(&argv[0]).args(&argv[1..]).env_clear().envs(&child_env).spawn() {
         Ok(tui) => tui,

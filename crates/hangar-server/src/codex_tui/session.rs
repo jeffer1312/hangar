@@ -250,10 +250,13 @@ impl Life {
     /// O pid do app-server de agora.
     pub fn server_pid(&self) -> Option<u32> { self.server.as_ref().map(|server| server.pid) }
 
-    /// Escuta as threads principais que a TUI abre, enquanto este app-server viver.
-    pub fn listen(&mut self, cwd: &str) {
-        let (Some(session), Some(server)) = (self.session.clone(), self.server.as_ref()) else { return };
-        self.listeners.push(tokio::spawn(threads::listen(session, cwd.to_owned(), server.gone.clone())));
+    /// Escuta as threads principais que a TUI abre, enquanto este app-server viver. O recibo responde
+    /// quando a escuta já recebe (ou desistiu).
+    pub fn listen(&mut self, cwd: &str) -> tokio::sync::oneshot::Receiver<()> {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        let (Some(session), Some(server)) = (self.session.clone(), self.server.as_ref()) else { return receiver };
+        self.listeners.push(tokio::spawn(threads::listen(session, cwd.to_owned(), server.gone.clone(), Some(sender))));
+        receiver
     }
 
     pub async fn wait_port(&mut self, limit: Duration, screen: &dyn Screen) -> bool {
@@ -315,7 +318,7 @@ impl Life {
         }
         // A escuta antiga morreu com o socket: sem uma nova, a sessão que caiu antes da primeira
         // thread nunca ganharia o arquivo.
-        self.listen(&plan.cwd);
+        let _ = self.listen(&plan.cwd);
         screen.say(&format!("app-server ressubido em {}", session.endpoint));
     }
 
