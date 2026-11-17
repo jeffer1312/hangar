@@ -1,0 +1,724 @@
+{
+ "source": "contract/clis of 2ad8e335e (capture_r34.py); only the fields the test reads",
+ "cases": [
+  {
+   "case": "all-vars",
+   "args": [
+    "$T/inst/scripts/hangar-mcp-headers.sh"
+   ],
+   "env": {
+    "HOME": "$T/home",
+    "CP_SESSION_KEY": "chave-s",
+    "HANGAR_CANO_KEY": "chave-c",
+    "TMUX_PANE": "%3",
+    "CP_SESSION_NAME": "eu",
+    "HANGAR_JEV": "on"
+   },
+   "files_before": {
+    "home/.hangar": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config/.env": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "CP_AUTH_TOKEN=tok-local\n"
+     }
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    }
+   },
+   "steps": [
+    {
+     "code": 0,
+     "stdout": {
+      "text": "{\"Authorization\": \"Bearer tok-local\", \"X-Hangar-Key\": \"chave-s\", \"X-Hangar-Pane\": \"%3\", \"X-Hangar-Session\": \"eu\", \"X-Hangar-Jev\": \"on\"}\n"
+     },
+     "stderr": {
+      "text": ""
+     },
+     "created": {},
+     "changed": {},
+     "removed": []
+    }
+   ]
+  },
+  {
+   "case": "backend-env-via-link",
+   "args": [
+    "$T/home/.local/bin/hangar-mcp-headers"
+   ],
+   "env": {
+    "HOME": "$T/home"
+   },
+   "files_before": {
+    "home/.local": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.local/bin": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.local/bin/hangar-mcp-headers": {
+     "type": "symlink",
+     "target": "$T/inst/scripts/hangar-mcp-headers.sh"
+    },
+    "inst/backend": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "inst/backend/.env": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "CP_AUTH_TOKEN=tok-local\n"
+     }
+    }
+   },
+   "steps": [
+    {
+     "code": 0,
+     "stdout": {
+      "text": "{\"Authorization\": \"Bearer tok-local\"}\n"
+     },
+     "stderr": {
+      "text": ""
+     },
+     "created": {},
+     "changed": {},
+     "removed": []
+    }
+   ]
+  },
+  {
+   "case": "cano-key-only",
+   "args": [
+    "$T/inst/scripts/hangar-mcp-headers.sh"
+   ],
+   "env": {
+    "HOME": "$T/home",
+    "HANGAR_CANO_KEY": "chave-c"
+   },
+   "files_before": {
+    "home/.hangar": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config/.env": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "CP_AUTH_TOKEN=tok-local\n"
+     }
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    }
+   },
+   "steps": [
+    {
+     "code": 0,
+     "stdout": {
+      "text": "{\"Authorization\": \"Bearer tok-local\", \"X-Hangar-Key\": \"chave-c\"}\n"
+     },
+     "stderr": {
+      "text": ""
+     },
+     "created": {},
+     "changed": {},
+     "removed": []
+    }
+   ]
+  },
+  {
+   "case": "config-env-wins-over-backend",
+   "args": [
+    "$T/inst/scripts/hangar-mcp-headers.sh"
+   ],
+   "env": {
+    "HOME": "$T/home"
+   },
+   "files_before": {
+    "home/.hangar": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config/.env": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "CP_AUTH_TOKEN=do-config\n"
+     }
+    },
+    "inst/backend": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "inst/backend/.env": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "CP_AUTH_TOKEN=do-backend\n"
+     }
+    }
+   },
+   "steps": [
+    {
+     "code": 0,
+     "stdout": {
+      "text": "{\"Authorization\": \"Bearer do-config\"}\n"
+     },
+     "stderr": {
+      "text": ""
+     },
+     "created": {},
+     "changed": {},
+     "removed": []
+    }
+   ]
+  },
+  {
+   "case": "env-file-empty",
+   "args": [
+    "$T/inst/scripts/hangar-mcp-headers.sh"
+   ],
+   "env": {
+    "HOME": "$T/home"
+   },
+   "files_before": {
+    "home/.hangar": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config/.env": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": ""
+     }
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    }
+   },
+   "steps": [
+    {
+     "code": 1,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     },
+     "created": {},
+     "changed": {},
+     "removed": []
+    }
+   ]
+  },
+  {
+   "case": "no-env-file",
+   "args": [
+    "$T/inst/scripts/hangar-mcp-headers.sh"
+   ],
+   "env": {
+    "HOME": "$T/home"
+   },
+   "files_before": {
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    }
+   },
+   "steps": [
+    {
+     "code": 2,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": "grep: $T/inst/scripts/../backend/.env: No such file or directory\n"
+     },
+     "created": {},
+     "changed": {},
+     "removed": []
+    }
+   ]
+  },
+  {
+   "case": "no-python3",
+   "args": [
+    "$T/inst/scripts/hangar-mcp-headers.sh"
+   ],
+   "env": {
+    "HOME": "$T/home"
+   },
+   "files_before": {
+    "home/.hangar": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config/.env": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "CP_AUTH_TOKEN=tok-local\n"
+     }
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    }
+   },
+   "steps": [
+    {
+     "code": 127,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": "$T/inst/scripts/hangar-mcp-headers.sh: line 10: python3: command not found\n"
+     },
+     "created": {},
+     "changed": {},
+     "removed": []
+    }
+   ]
+  },
+  {
+   "case": "no-token-line",
+   "args": [
+    "$T/inst/scripts/hangar-mcp-headers.sh"
+   ],
+   "env": {
+    "HOME": "$T/home"
+   },
+   "files_before": {
+    "home/.hangar": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config/.env": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "CP_PORT=1\n"
+     }
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    }
+   },
+   "steps": [
+    {
+     "code": 1,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     },
+     "created": {},
+     "changed": {},
+     "removed": []
+    }
+   ]
+  },
+  {
+   "case": "session-key-empty-falls-to-cano",
+   "args": [
+    "$T/inst/scripts/hangar-mcp-headers.sh"
+   ],
+   "env": {
+    "HOME": "$T/home",
+    "CP_SESSION_KEY": "",
+    "HANGAR_CANO_KEY": "chave-c",
+    "TMUX_PANE": ""
+   },
+   "files_before": {
+    "home/.hangar": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config/.env": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "CP_AUTH_TOKEN=tok-local\n"
+     }
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    }
+   },
+   "steps": [
+    {
+     "code": 0,
+     "stdout": {
+      "text": "{\"Authorization\": \"Bearer tok-local\", \"X-Hangar-Key\": \"chave-c\"}\n"
+     },
+     "stderr": {
+      "text": ""
+     },
+     "created": {},
+     "changed": {},
+     "removed": []
+    }
+   ]
+  },
+  {
+   "case": "token-duplicated",
+   "args": [
+    "$T/inst/scripts/hangar-mcp-headers.sh"
+   ],
+   "env": {
+    "HOME": "$T/home"
+   },
+   "files_before": {
+    "home/.hangar": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config/.env": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "CP_AUTH_TOKEN=um\nCP_AUTH_TOKEN=dois\n"
+     }
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    }
+   },
+   "steps": [
+    {
+     "code": 0,
+     "stdout": {
+      "text": "{\"Authorization\": \"Bearer um\\ndois\"}\n"
+     },
+     "stderr": {
+      "text": ""
+     },
+     "created": {},
+     "changed": {},
+     "removed": []
+    }
+   ]
+  },
+  {
+   "case": "token-export-prefix",
+   "args": [
+    "$T/inst/scripts/hangar-mcp-headers.sh"
+   ],
+   "env": {
+    "HOME": "$T/home"
+   },
+   "files_before": {
+    "home/.hangar": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config/.env": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "export CP_AUTH_TOKEN=tok\n"
+     }
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    }
+   },
+   "steps": [
+    {
+     "code": 1,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     },
+     "created": {},
+     "changed": {},
+     "removed": []
+    }
+   ]
+  },
+  {
+   "case": "token-line-empty",
+   "args": [
+    "$T/inst/scripts/hangar-mcp-headers.sh"
+   ],
+   "env": {
+    "HOME": "$T/home"
+   },
+   "files_before": {
+    "home/.hangar": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config/.env": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "CP_AUTH_TOKEN=\n"
+     }
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    }
+   },
+   "steps": [
+    {
+     "code": 1,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": "hangar-mcp-headers: CP_AUTH_TOKEN ausente em $T/home/.hangar/config/.env\n"
+     },
+     "created": {},
+     "changed": {},
+     "removed": []
+    }
+   ]
+  },
+  {
+   "case": "token-only",
+   "args": [
+    "$T/inst/scripts/hangar-mcp-headers.sh"
+   ],
+   "env": {
+    "HOME": "$T/home"
+   },
+   "files_before": {
+    "home/.hangar": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config/.env": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "CP_AUTH_TOKEN=tok-local\n"
+     }
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    }
+   },
+   "steps": [
+    {
+     "code": 0,
+     "stdout": {
+      "text": "{\"Authorization\": \"Bearer tok-local\"}\n"
+     },
+     "stderr": {
+      "text": ""
+     },
+     "created": {},
+     "changed": {},
+     "removed": []
+    }
+   ]
+  },
+  {
+   "case": "token-quoted-crlf",
+   "args": [
+    "$T/inst/scripts/hangar-mcp-headers.sh"
+   ],
+   "env": {
+    "HOME": "$T/home"
+   },
+   "files_before": {
+    "home/.hangar": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config/.env": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "CP_AUTH_TOKEN=\"tok local\"\r\n"
+     }
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    }
+   },
+   "steps": [
+    {
+     "code": 0,
+     "stdout": {
+      "text": "{\"Authorization\": \"Bearer \\\"tok local\\\"\\r\"}\n"
+     },
+     "stderr": {
+      "text": ""
+     },
+     "created": {},
+     "changed": {},
+     "removed": []
+    }
+   ]
+  },
+  {
+   "case": "token-with-equals-and-hash",
+   "args": [
+    "$T/inst/scripts/hangar-mcp-headers.sh"
+   ],
+   "env": {
+    "HOME": "$T/home"
+   },
+   "files_before": {
+    "home/.hangar": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config/.env": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "CP_AUTH_TOKEN=a=b #c\n"
+     }
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    }
+   },
+   "steps": [
+    {
+     "code": 0,
+     "stdout": {
+      "text": "{\"Authorization\": \"Bearer a=b #c\"}\n"
+     },
+     "stderr": {
+      "text": ""
+     },
+     "created": {},
+     "changed": {},
+     "removed": []
+    }
+   ]
+  },
+  {
+   "case": "unicode-values",
+   "args": [
+    "$T/inst/scripts/hangar-mcp-headers.sh"
+   ],
+   "env": {
+    "HOME": "$T/home",
+    "CP_SESSION_NAME": "sessão ✓ 🚀",
+    "TMUX_PANE": "%1"
+   },
+   "files_before": {
+    "home/.hangar": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config/.env": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "CP_AUTH_TOKEN=tok-local\n"
+     }
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    }
+   },
+   "steps": [
+    {
+     "code": 0,
+     "stdout": {
+      "text": "{\"Authorization\": \"Bearer tok-local\", \"X-Hangar-Pane\": \"%1\", \"X-Hangar-Session\": \"sess\\u00e3o \\u2713 \\ud83d\\ude80\"}\n"
+     },
+     "stderr": {
+      "text": ""
+     },
+     "created": {},
+     "changed": {},
+     "removed": []
+    }
+   ]
+  }
+ ]
+}

@@ -34,7 +34,7 @@ const VOICE_NEEDS_SESSION: &str = "a assistente de voz não é uma sessão: pass
 quem agir (tool `sessions`)";
 const JEV_OFF: &str = "o Jev não chegou ligado nesta chamada: ou a sessão nasceu sem ele (abra uma com \
 `hangar-send --new <nome> <cwd> --jev`, ou marque o Jev em \"Mais opções\" ao criar), ou o MCP hangar desta \
-conta foi registrado antes do cabeçalho X-Hangar-Jev (rode scripts/registrar-mcp.py e abra a sessão de novo). \
+conta foi registrado antes do cabeçalho X-Hangar-Jev (rode hangar-server mcp-register e abra a sessão de novo). \
 Sem ele, use browser e browser_batch.";
 const JEV_UNCONFIGURED: &str = "o Jev não está configurado neste servidor: cadastre a chave em Configurações do servidor > Jev.";
 const NAV_VERBS: [&str; 26] = ["snapshot", "click", "fill", "type", "press", "hover", "wait", "eval", "tema", "layout", "console",
@@ -129,7 +129,7 @@ struct VaultFile { entry: String, reason: String }
 struct VaultFill { entry: String, field: String, #[serde(rename = "ref")] target: String, reason: String }
 
 const VAULT_NO_KEY: &str = "erro_cofre_sem_chave_sessao: o cofre só atende uma sessão identificada pela chave dela (X-Hangar-Key, \
-a CP_SESSION_KEY); registre o MCP de novo (scripts/registrar-mcp.py) e reabra a sessão";
+a CP_SESSION_KEY); registre o MCP de novo (hangar-server mcp-register) e reabra a sessão";
 /// O alvo que o cartão mostra cabe no limite da dona.
 const TARGET_CHARS: usize = 2000;
 

@@ -375,7 +375,7 @@ fn texts_name_the_connect_entrance_too() {
         assert!(messages["erro_par_endereco_invalido"].as_str().unwrap().contains("hangar.dev.br"), "{locale}");
         assert!(!messages["native_par_placeholder"].as_str().unwrap().contains("ts.net"), "{locale}");
     }
-    for script in ["scripts/hangar-send", "scripts/install-hangar-send.sh"] {
+    for script in ["crates/hangar-send/src/help.txt", "scripts/install-hangar-send.sh"] {
         assert!(std::fs::read_to_string(format!("{root}/{script}")).unwrap().contains("--guest.….hangar.dev.br/par/"), "{script}");
     }
 }
