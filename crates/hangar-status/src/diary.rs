@@ -5,7 +5,7 @@
 //! `hangar-server` grava as três linhas; a raiz `diario/` é das telas e do Python antigo. Cada
 //! arquivo fica em cache pelo tamanho e pela data de modificação, e o que cresceu é lido só do
 //! ponto em que parou: o diário só recebe linhas no fim. Bloqueante: chamar fora do executor.
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
@@ -81,50 +81,21 @@ impl DiaryReader {
         Self { source: Source::At(dir), cache: Mutex::default() }
     }
 
+    /// Os dois blocos da tela numa leitura só da pasta.
+    pub fn blocks(&self, now: DateTime<Utc>) -> Option<(ExitsBlock, SlowBlock)> {
+        let cache = self.refresh(now)?;
+        Some((exits_of(&cache, now), slow_of(&cache, now)))
+    }
+
     /// Saídas do servidor com a hora da saída nos 7 dias até `now`, da mais antiga à mais nova.
     pub fn exits(&self, now: DateTime<Utc>) -> Option<ExitsBlock> {
-        let since = now - TimeDelta::days(EXITS_DAYS);
-        let cache = self.refresh()?;
-        let mut items: Vec<_> = cache.files.values().flat_map(|file| &file.facts.exits)
-            .filter(|(at, _)| *at > since && *at <= now).collect();
-        items.sort_by_key(|(at, _)| *at);
-        Some(ExitsBlock { items: items.into_iter().map(|(_, exit)| exit.clone()).collect() })
+        Some(exits_of(&self.refresh(now)?, now))
     }
 
     /// Pedidos lentos (código < 500 e ≥ 1 s) e com erro (≥ 500) em 24 faixas de uma hora, a última
     /// sendo a hora de `now`; as rotas que mais aparecem e os avisos do watchdog do mesmo período.
     pub fn slow(&self, now: DateTime<Utc>) -> Option<SlowBlock> {
-        let first = hour_of(now) - TimeDelta::hours(HOURS - 1);
-        let inside = |at: &DateTime<Utc>| *at >= first && *at <= now;
-        let cache = self.refresh()?;
-        let mut hours: Vec<HourBucket> = (0..HOURS).map(|hour| HourBucket {
-            hour_start: stamp(first + TimeDelta::hours(hour)), slow: 0, errors: 0 }).collect();
-        let mut routes: HashMap<&str, (RouteStat, DateTime<Utc>)> = HashMap::new();
-        let mut watchdog = Vec::new();
-        for facts in cache.files.values().map(|file| &file.facts) {
-            for request in facts.requests.iter().filter(|request| inside(&request.at)) {
-                let error = request.code >= 500;
-                let slow = !error && request.ms.is_some_and(|ms| ms >= SLOW_MS);
-                if !error && !slow {
-                    continue;
-                }
-                let bucket = &mut hours[(request.at - first).num_hours() as usize];
-                if error { bucket.errors += 1 } else { bucket.slow += 1 }
-                let (stat, last) = routes.entry(request.route.as_str()).or_insert_with(|| (RouteStat {
-                    route: request.route.clone(), count: 0, worst_ms: None, last_code: request.code }, request.at));
-                stat.count += 1;
-                stat.worst_ms = stat.worst_ms.max(request.ms);
-                if request.at >= *last {
-                    (stat.last_code, *last) = (request.code, request.at);
-                }
-            }
-            watchdog.extend(facts.watchdog.iter().filter(|(at, _)| inside(at)));
-        }
-        let mut top_routes: Vec<RouteStat> = routes.into_values().map(|(stat, _)| stat).collect();
-        top_routes.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.route.cmp(&b.route)));
-        top_routes.truncate(TOP_ROUTES);
-        watchdog.sort_by_key(|(at, _)| *at);
-        Some(SlowBlock { hours, top_routes, watchdog: watchdog.into_iter().map(|(_, event)| event.clone()).collect() })
+        Some(slow_of(&self.refresh(now)?, now))
     }
 
     /// O que a última leitura deixou de fora, para o servidor registrar.
@@ -134,14 +105,17 @@ impl DiaryReader {
             lines: sum.lines + file.facts.unreadable, files: sum.files + u64::from(file.failed) })
     }
 
-    /// Põe o cache em dia com a pasta: arquivo que sumiu sai, arquivo com tamanho ou data nova é
-    /// lido do ponto em que parou (do começo, se encolheu).
-    fn refresh(&self) -> Option<std::sync::MutexGuard<'_, Cache>> {
+    /// Põe o cache em dia com a pasta: arquivo que sumiu ou saiu da janela sai, arquivo com tamanho
+    /// ou data nova é lido do ponto em que parou (do começo, se encolheu).
+    fn refresh(&self, now: DateTime<Utc>) -> Option<std::sync::MutexGuard<'_, Cache>> {
         let dir = match &self.source {
             Source::Machine => hangar_core::diag::diary_dir()?,
             Source::At(dir) => dir.clone(),
         };
-        let paths = hangar_usage_diary::files(&dir);
+        let window = Window::at(now);
+        let first_day = window.first_day();
+        let paths: HashSet<PathBuf> = hangar_usage_diary::dated_files(&dir).into_iter()
+            .filter(|(day, _)| *day >= first_day).map(|(_, path)| path).collect();
         let mut guard = self.cache.lock().unwrap_or_else(PoisonError::into_inner);
         let Cache { files, reads } = &mut *guard;
         files.retain(|path, _| paths.contains(path));
@@ -159,7 +133,7 @@ impl DiaryReader {
                 *entry = FileCache::default();
             }
             *reads += 1;
-            match read_tail(&path, entry) {
+            match read_tail(&path, entry, &window) {
                 Ok(()) => (entry.len, entry.modified, entry.failed) = (len, modified, false),
                 Err(_) => entry.failed = true,
             }
@@ -168,23 +142,83 @@ impl DiaryReader {
     }
 }
 
+/// Desde quando cada fato interessa: as saídas, 7 dias; pedidos e watchdog, 24 h. O que chega
+/// já mais velho que isso não volta a entrar em janela nenhuma.
+struct Window {
+    exits_since: DateTime<Utc>,
+    recent_since: DateTime<Utc>,
+}
+
+impl Window {
+    fn at(now: DateTime<Utc>) -> Self {
+        Self { exits_since: now - TimeDelta::days(EXITS_DAYS), recent_since: now - TimeDelta::hours(HOURS) }
+    }
+
+    /// O dia do arquivo é o local de quem gravou: um dia de folga cobre qualquer fuso.
+    fn first_day(&self) -> String {
+        (self.exits_since - TimeDelta::days(1)).date_naive().format("%Y-%m-%d").to_string()
+    }
+}
+
+fn exits_of(cache: &Cache, now: DateTime<Utc>) -> ExitsBlock {
+    let since = now - TimeDelta::days(EXITS_DAYS);
+    let mut items: Vec<_> = cache.files.values().flat_map(|file| &file.facts.exits)
+        .filter(|(at, _)| *at > since && *at <= now).collect();
+    items.sort_by_key(|(at, _)| *at);
+    ExitsBlock { items: items.into_iter().map(|(_, exit)| exit.clone()).collect() }
+}
+
+fn slow_of(cache: &Cache, now: DateTime<Utc>) -> SlowBlock {
+    let first = hour_of(now) - TimeDelta::hours(HOURS - 1);
+    let inside = |at: &DateTime<Utc>| *at >= first && *at <= now;
+    let mut hours: Vec<HourBucket> = (0..HOURS).map(|hour| HourBucket {
+        hour_start: stamp(first + TimeDelta::hours(hour)), slow: 0, errors: 0 }).collect();
+    let mut routes: HashMap<&str, (RouteStat, DateTime<Utc>)> = HashMap::new();
+    let mut watchdog = Vec::new();
+    for facts in cache.files.values().map(|file| &file.facts) {
+        for request in facts.requests.iter().filter(|request| inside(&request.at)) {
+            let error = request.code >= 500;
+            let slow = !error && request.ms.is_some_and(|ms| ms >= SLOW_MS);
+            if !error && !slow {
+                continue;
+            }
+            let bucket = &mut hours[(request.at - first).num_hours() as usize];
+            if error { bucket.errors += 1 } else { bucket.slow += 1 }
+            let (stat, last) = routes.entry(request.route.as_str()).or_insert_with(|| (RouteStat {
+                route: request.route.clone(), count: 0, worst_ms: None, last_code: request.code }, request.at));
+            stat.count += 1;
+            stat.worst_ms = stat.worst_ms.max(request.ms);
+            if request.at >= *last {
+                (stat.last_code, *last) = (request.code, request.at);
+            }
+        }
+        watchdog.extend(facts.watchdog.iter().filter(|(at, _)| inside(at)));
+    }
+    let mut top_routes: Vec<RouteStat> = routes.into_values().map(|(stat, _)| stat).collect();
+    top_routes.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.route.cmp(&b.route)));
+    top_routes.truncate(TOP_ROUTES);
+    watchdog.sort_by_key(|(at, _)| *at);
+    SlowBlock { hours, top_routes, watchdog: watchdog.into_iter().map(|(_, event)| event.clone()).collect() }
+}
+
 /// Lê do ponto em que parou até a última quebra de linha: a linha que o escritor ainda está
 /// gravando fica para a próxima leitura, em vez de virar linha ilegível.
-fn read_tail(path: &Path, entry: &mut FileCache) -> std::io::Result<()> {
+fn read_tail(path: &Path, entry: &mut FileCache, window: &Window) -> std::io::Result<()> {
     let mut file = std::fs::File::open(path)?;
     file.seek(SeekFrom::Start(entry.read_to))?;
     let mut raw = Vec::new();
     file.read_to_end(&mut raw)?;
     let complete = raw.iter().rposition(|&byte| byte == b'\n').map_or(0, |end| end + 1);
     for line in raw[..complete].split(|&byte| byte == b'\n') {
-        entry.facts.add(line);
+        entry.facts.add(line, window);
     }
     entry.read_to += complete as u64;
     Ok(())
 }
 
 impl Facts {
-    fn add(&mut self, raw: &[u8]) {
+    /// Guarda o fato só se ele ainda cabe na janela dele.
+    fn add(&mut self, raw: &[u8], window: &Window) {
         if raw.iter().all(u8::is_ascii_whitespace) {
             return;
         }
@@ -193,9 +227,12 @@ impl Facts {
             return;
         };
         let read = match line.get("evento").and_then(Value::as_str) {
-            Some("hangar_server.saida") => exit(&line).map(|exit| self.exits.push(exit)),
-            Some("api.servidor") => request(&line).map(|request| self.requests.push(request)),
-            Some("systemd_watchdog") => watchdog(&line).map(|event| self.watchdog.push(event)),
+            Some("hangar_server.saida") => exit(&line)
+                .map(|exit| if exit.0 > window.exits_since { self.exits.push(exit) }),
+            Some("api.servidor") => request(&line)
+                .map(|request| if request.at >= window.recent_since { self.requests.push(request) }),
+            Some("systemd_watchdog") => watchdog(&line)
+                .map(|event| if event.0 >= window.recent_since { self.watchdog.push(event) }),
             _ => Some(()),
         };
         if read.is_none() {

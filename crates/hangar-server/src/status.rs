@@ -416,7 +416,10 @@ impl Live {
             let diary = diary_readable(hangar_core::diag::diary_dir().as_deref(), hangar_core::paths::log_base().as_deref());
             let (exits, slow) = match diary {
                 Err(code) => (Err(code), Err(code)),
-                Ok(()) => (Ok(status.diary.exits(now)), Ok(status.diary.slow(now))),
+                Ok(()) => {
+                    let (exits, slow) = status.diary.blocks(now).unzip();
+                    (Ok(exits), Ok(slow))
+                }
             };
             let skipped = status.diary.skipped();
             let sizes = status.dirs.current();
