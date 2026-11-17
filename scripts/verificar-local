@@ -133,6 +133,7 @@ classificar() {
             scripts/hangar-server-command|scripts/hangar-mcp-headers.sh|scripts/test-hangar-server-lookup.sh|\
             scripts/verificar-local|scripts/test-verificar-local.sh|scripts/podar-target|scripts/test-podar-target.sh|\
             scripts/memory-scope|scripts/test_memory_scope.py|scripts/deploy.sh|scripts/test-deploy.sh|\
+            scripts/test-claude-conta.sh|scripts/services-launchd.sh|scripts/test-services-launchd.sh|\
             scripts/hook-pr-verificado.mjs|scripts/hooks/*) wrap=1 ;;
         esac
         case "$f" in
@@ -180,6 +181,7 @@ classificar_rapido() {
             scripts/hangar-server-command|scripts/hangar-mcp-headers.sh|scripts/test-hangar-server-lookup.sh|\
             scripts/verificar-local|scripts/test-verificar-local.sh|scripts/podar-target|scripts/test-podar-target.sh|\
             scripts/memory-scope|scripts/test_memory_scope.py|scripts/deploy.sh|scripts/test-deploy.sh|\
+            scripts/test-claude-conta.sh|scripts/services-launchd.sh|scripts/test-services-launchd.sh|\
             scripts/hook-pr-verificado.mjs|scripts/hooks/*) wrap=1 ;;
         esac
         case "$f" in scripts/*statusline*) status=1 ;; esac
@@ -342,6 +344,8 @@ passo_shell() {
         uv run pytest -q ../scripts/test_memory_scope.py) || return 1
     [[ ! -f scripts/test-podar-target.sh ]] || bash scripts/test-podar-target.sh || return 1
     [[ "$SO" == linux ]] && { bash scripts/test-deploy.sh || return 1; }
+    [[ ! -f scripts/test-claude-conta.sh ]] || bash scripts/test-claude-conta.sh || return 1
+    [[ ! -f scripts/test-services-launchd.sh ]] || bash scripts/test-services-launchd.sh || return 1
     return 0
 }
 passo_statusline() {
