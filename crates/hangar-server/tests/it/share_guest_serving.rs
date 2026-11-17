@@ -185,7 +185,8 @@ async fn lista_do_convidado_nao_cita_outras_sessoes() {
     let t = srv.g.token("s0", Kind::Share);
     let r = client().get(format!("http://{}/api/sessions", srv.guest)).bearer_auth(&t).send().await.unwrap();
     let text = r.text().await.unwrap();
-    assert!(!text.contains("s2"), "{text}");
+    // Valor JSON: a pasta temporária aleatória pode conter "s2" (`/tmp/.tmp6s2Xes`).
+    assert!(!text.contains("\"s2\""), "{text}");
     let rows: Value = serde_json::from_str(&text).unwrap();
     for field in OTHERS {
         assert_eq!(row(&rows, "s0")[field], Value::Null, "{field}");
