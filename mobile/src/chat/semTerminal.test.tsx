@@ -1515,6 +1515,8 @@ describe('rascunho guardado no Composer', () => {
     storage.memory.set('draft.v1.recoverable:s1::sess', JSON.stringify({
       version: 1, text: 'anterior', revision: 1, transcript: '/old', attachment: previous, submission: null,
     }));
+    // Upload novo ainda no ar: o que se confere é só o que a recuperação trouxe.
+    realFirstInput.upload.mockImplementation(() => new Promise(() => {}));
     const { container, root } = await render(createElement(Composer, props));
     act(() => button(container, 'composer_draft_recover')!.click());
     expect(container.querySelector('textarea')!.value).toBe('atual\nanterior');

@@ -816,7 +816,7 @@ async function postUpload(
   name: string,
   file: { name: string; type: string },
   audioOnly: boolean,
-  body: BodyInit | undefined,
+  body: RequestInit['body'],
   send?: typeof fetch,
 ): Promise<{ path: string }> {
   const res = await apiFetchRes(`/api/sessions/${encodeURIComponent(name)}/upload${audioOnly ? '?audio_only=1' : ''}`, {
