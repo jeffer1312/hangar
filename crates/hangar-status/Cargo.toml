@@ -10,9 +10,10 @@ publish = false
 hangar-core.workspace = true
 hangar-api.workspace = true
 hangar-usage-diary.workspace = true
+chrono.workspace = true
 serde = { workspace = true, features = ["alloc"] }
 serde_json = { workspace = true, features = ["float_roundtrip", "alloc", "unbounded_depth", "arbitrary_precision", "raw_value"] }
-sysinfo = { version = "=0.39.6", default-features = false, features = ["system", "disk"] }
+sysinfo = { version = "=0.39.6", default-features = false, features = ["system", "disk", "linux-tmpfs"] }
 
 [dev-dependencies]
 tempfile.workspace = true

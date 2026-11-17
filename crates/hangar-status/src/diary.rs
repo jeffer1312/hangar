@@ -21,8 +21,9 @@ const EXITS_DAYS: i64 = 7;
 const HOURS: i64 = 24;
 const TOP_ROUTES: usize = 5;
 const SLOW_MS: u64 = 1000;
-/// Long-poll do plugin: fecha vazio a cada 25 s e entra no diário como pedido lento sem ser.
-const LONG_POLLS: [&str; 1] = ["POST /api/plugin/pull"];
+/// Esperas longas de propósito (long-poll do plugin, chamada de tool MCP): entram no diário
+/// como pedido lento sem ser.
+const LONG_POLLS: [&str; 2] = ["POST /api/plugin/pull", "POST /mcp/"];
 
 /// Leitor do diário com o cache dos arquivos já lidos; um por servidor.
 pub struct DiaryReader {
