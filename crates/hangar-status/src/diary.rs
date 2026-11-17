@@ -89,13 +89,15 @@ impl DiaryReader {
 
     /// Saídas do servidor com a hora da saída nos 7 dias até `now`, da mais antiga à mais nova.
     pub fn exits(&self, now: DateTime<Utc>) -> Option<ExitsBlock> {
-        Some(exits_of(&self.refresh(now)?, now))
+        let cache = self.refresh(now)?;
+        Some(exits_of(&cache, now))
     }
 
     /// Pedidos lentos (código < 500 e ≥ 1 s) e com erro (≥ 500) em 24 faixas de uma hora, a última
     /// sendo a hora de `now`; as rotas que mais aparecem e os avisos do watchdog do mesmo período.
     pub fn slow(&self, now: DateTime<Utc>) -> Option<SlowBlock> {
-        Some(slow_of(&self.refresh(now)?, now))
+        let cache = self.refresh(now)?;
+        Some(slow_of(&cache, now))
     }
 
     /// O que a última leitura deixou de fora, para o servidor registrar.
