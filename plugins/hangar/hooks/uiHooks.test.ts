@@ -26,6 +26,7 @@ async function start($: Engine, on: On, answer: Answer = OK): Promise<{ clock: M
   on("session.cwd", () => ({ value: "/tmp" }));
   on("session.model", () => ({ value: "modelo" }));
   on("session.id", () => ({ value: "sid" }) as never);
+  on("command.register", () => ({ value: undefined }) as never);
   on("http.fetch", ($, e) => {
     const path = e.url.slice(e.url.lastIndexOf("/") + 1);
     const body = JSON.parse(e.init?.body as string) as Record<string, unknown>;
@@ -52,7 +53,7 @@ const mount = ($: Engine, requestId: string) => $.ui.mount({ plugin: "paineis", 
 const control = ($: Engine) => $.ui.mount({ plugin: "paineis", surface: "desktop", component: "Pane", requestId: "controle", props: PANE });
 
 test("o painel colocado entra no ui.open; fechado o da frente, aparece o vizinho anterior", PLUGINS, async ($, on) => {
-  on("ui.focus", () => ({}));
+  on("ui.focus", { plugin: "*" }, () => ({}));
   const { clock, posts } = await start($, on);
   const botoes = await control($);
   await botoes.press({ key: "abrir" });
@@ -67,7 +68,7 @@ test("o painel colocado entra no ui.open; fechado o da frente, aparece o vizinho
 });
 
 test("o desenho que cruza o fechamento dos três não devolve o painel, e o reaberto vai para o fim", PLUGINS, async ($, on) => {
-  on("ui.focus", () => ({}));
+  on("ui.focus", { plugin: "*" }, () => ({}));
   const { clock, posts } = await start($, on);
   const botoes = await control($);
   await botoes.press({ key: "abrir" });
@@ -90,7 +91,7 @@ test("o desenho que cruza o fechamento dos três não devolve o painel, e o reab
 
 test("rolagem e foco com alvo armado vão ao backend, e a key armada entra no evento", PLUGINS, async ($, on) => {
   const focos: (string | undefined)[] = [];
-  on("ui.focus", ($, e) => {
+  on("ui.focus", { plugin: "*" }, ($, e) => {
     focos.push(e.element);
     return {};
   });
@@ -109,7 +110,7 @@ test("rolagem e foco com alvo armado vão ao backend, e a key armada entra no ev
 });
 
 test("na janela do foco armado, o envio do composer só cai com o alvo confirmado como armado", PLUGINS, async ($, on) => {
-  on("ui.focus", () => ({}));
+  on("ui.focus", { plugin: "*" }, () => ({}));
   const enviados: string[] = [];
   on("prompt.submit", ($, e) => {
     enviados.push(e.text);
@@ -149,7 +150,6 @@ test("na janela do foco armado, o envio do composer só cai com o alvo confirmad
 });
 
 test("botão do próprio plugin num painel vai ao app com o dono, e o de outro mod mantém o dele", PLUGINS, async ($, on) => {
-  on("command.register", () => ({ value: undefined }) as never);
   on("fs.list", () => ({ value: [] }) as never);
   on("fs.exists", () => ({ value: false }) as never);
   on("tool.call", { tool: "Bash" }, () => ({ result: { stdout: "", stderr: "", interrupted: false, backgroundTaskId: "b1" } }) as never);
