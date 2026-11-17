@@ -10,6 +10,7 @@ const { memory, calls, failWrites } = vi.hoisted(() => ({
     progress: vi.fn(),
     send: vi.fn(),
     history: vi.fn(),
+    upload: vi.fn(),
   },
 }));
 
@@ -38,7 +39,9 @@ vi.mock('@hangar/core', async (original) => ({
   getCreationProgress: calls.progress,
   sendInputForServer: calls.send,
   getHistory: calls.history,
+  uploadFromDiskForServer: calls.upload,
 }));
+vi.mock('../net/uploadFromDisk', () => ({ sendFromDisk: (uri: string) => ({ fromDisk: uri }) }));
 
 import { useServers } from './servers';
 import { readDraft, writeDraft } from './drafts';
@@ -393,6 +396,17 @@ describe('primeiro input', () => {
     calls.create.mockImplementation(async (_server, body) => ({ name: body.name, state: 'idle' }));
     calls.send.mockResolvedValue(undefined);
     calls.history.mockResolvedValue([]);
+  });
+
+  it('anexo escolhido antes da sessão sobe direto do arquivo no disco e a primeira mensagem leva o caminho', async () => {
+    calls.upload.mockResolvedValue({ path: '/up/pacote.zip' });
+    const attachment = { uri: 'file:///docs/draft-attachments/1-1.zip', name: 'pacote.zip', mime: 'application/zip', kind: 'file' as const };
+    await beginAttempt('server-a', { ...input, attachment });
+    const created = attempt()!;
+    await sendFirstInput('server-a', created.id);
+    expect(calls.upload).toHaveBeenCalledExactlyOnceWith(serverA, created.sessionName,
+      { name: 'pacote.zip', type: 'application/zip' }, { fromDisk: 'file:///docs/draft-attachments/1-1.zip' });
+    expect(calls.send).toHaveBeenCalledExactlyOnceWith(serverA, created.sessionName, expect.stringContaining('/up/pacote.zip'));
   });
 
   it('persiste sessão antes do input; dois toques usam snapshot único e só ACK permite finalizar', async () => {

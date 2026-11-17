@@ -106,6 +106,8 @@ vi.mock('@hangar/core', async (original) => ({
   transcribeUploadedForServer: realFirstInput.transcribe,
   // O ditado sobe o áudio por aqui (`audioOnly`) antes de transcrever.
   uploadFileForServer: realFirstInput.upload,
+  // Anexo: sobe direto do arquivo no disco.
+  uploadFromDiskForServer: realFirstInput.upload,
   relimparDitado: realFirstInput.relimpar,
 }));
 vi.mock('../stores/servers', () => {
@@ -1401,7 +1403,6 @@ describe('rascunho guardado no Composer', () => {
 
   it('colar vários anexa e sobe todos na hora; remover tira só aquele, mesmo com o upload dele no ar; Enviar junta os caminhos numa linha', async () => {
     composerChat.send.mockClear();
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({ blob: async () => new Blob(['x']) } as Response);
     let finishB!: (v: { path: string }) => void;
     realFirstInput.upload.mockReset().mockResolvedValueOnce({ path: '/up/a.png' })
       .mockImplementationOnce(() => new Promise((resolve) => { finishB = resolve; }))
@@ -1420,8 +1421,9 @@ describe('rascunho guardado no Composer', () => {
     expect(uris()).toEqual(['file:///a.png', 'file:///c.txt']);
     type(container, 'legenda');
     await act(async () => button(container, 'composer_enviar_mensagem')!.click());
-    // Os três subiram ao colar; o Enviar não sobe nada de novo.
+    // Os três subiram ao colar, direto do disco; o Enviar não sobe nada de novo.
     expect(realFirstInput.upload).toHaveBeenCalledTimes(3);
+    expect(realFirstInput.upload).toHaveBeenCalledWith(expect.anything(), 'sess', { name: 'c.txt', type: 'text/plain' }, expect.any(Function));
     expect(composerChat.send).toHaveBeenCalledExactlyOnceWith(
       'legenda — 📎 board_imagem: /up/a.png 📎 board_arquivo: /up/c.txt', expect.any(Number));
     expect(removers()).toHaveLength(0);
@@ -1430,7 +1432,6 @@ describe('rascunho guardado no Composer', () => {
     await act(async () => finishB({ path: '/up/b.txt' }));
     expect(removers()).toHaveLength(0);
     expect(uris()).toEqual([]);
-    fetchSpy.mockRestore();
     act(() => root.unmount());
   });
 
@@ -1438,7 +1439,6 @@ describe('rascunho guardado no Composer', () => {
     composerChat.send.mockClear();
     let fail!: (error: Error) => void;
     composerChat.send.mockImplementationOnce(() => new Promise((_, reject) => { fail = reject; }));
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({ blob: async () => new Blob(['x']) } as Response);
     realFirstInput.upload.mockReset().mockResolvedValueOnce({ path: '/up/a.png' });
     storage.memory.set('draft.v1:s1::sess', JSON.stringify({ version: 1, text: 'legenda', revision: 1, transcript: null, submission: null,
       attachments: [{ uri: 'file:///a.png', name: 'a.png', mime: 'image/png', kind: 'image' }] }));
@@ -1453,13 +1453,11 @@ describe('rascunho guardado no Composer', () => {
     expect(removers()).toHaveLength(1);
     expect(stored()).toMatchObject([{ uri: 'file:///a.png', uploadedPath: '/up/a.png' }]);
     expect(container.textContent).toContain('recusado');
-    fetchSpy.mockRestore();
     act(() => root.unmount());
   });
 
   it('anexo colado durante o upload fica no rascunho e espera o próximo envio', async () => {
     composerChat.send.mockClear();
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({ blob: async () => new Blob(['x']) } as Response);
     let uploaded!: (v: { path: string }) => void;
     realFirstInput.upload.mockReset().mockImplementationOnce(() => new Promise((resolve) => { uploaded = resolve; }));
     storage.memory.set('draft.v1:s1::sess', JSON.stringify({ version: 1, text: '', revision: 1, transcript: null, submission: null,
@@ -1472,13 +1470,11 @@ describe('rascunho guardado no Composer', () => {
     const uris = (JSON.parse(storage.memory.get('draft.v1:s1::sess')!) as { attachments: { uri: string }[] }).attachments.map((a) => a.uri);
     expect(uris).toEqual(['file:///novo.txt']);
     expect(container.querySelectorAll('[aria-label="board_remover_anexo"]')).toHaveLength(1);
-    fetchSpy.mockRestore();
     act(() => root.unmount());
   });
 
   it('upload em segundo plano que falhou é tentado uma vez pelo Enviar; falhando de novo, o erro aparece e o primeiro guarda o caminho', async () => {
     composerChat.send.mockClear();
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({ blob: async () => new Blob(['x']) } as Response);
     realFirstInput.upload.mockReset().mockResolvedValueOnce({ path: '/up/a.png' }).mockRejectedValueOnce(new Error('caiu'))
       .mockRejectedValueOnce(new Error('grande demais')).mockResolvedValueOnce({ path: '/up/b.txt' });
     storage.memory.set('draft.v1:s1::sess', JSON.stringify({ version: 1, text: '', revision: 1, transcript: null, submission: null, attachments: [
@@ -1495,7 +1491,6 @@ describe('rascunho guardado no Composer', () => {
     await act(async () => button(container, 'composer_enviar_mensagem')!.click());
     expect(realFirstInput.upload).toHaveBeenCalledTimes(4);
     expect(composerChat.send).toHaveBeenCalledExactlyOnceWith('📎 board_imagem: /up/a.png 📎 board_arquivo: /up/b.txt', expect.any(Number));
-    fetchSpy.mockRestore();
     act(() => root.unmount());
   });
 

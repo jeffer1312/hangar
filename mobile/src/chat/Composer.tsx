@@ -3,9 +3,10 @@ import * as Haptics from 'expo-haptics';
 import { AccessibilityInfo, ActivityIndicator, Alert, AppState, Keyboard, Platform, Pressable, ScrollView, Text, View, type NativeSyntheticEvent, type TextInput, type TextInputKeyPressEventData } from 'react-native';
 import type { NativeStackNavigationProp } from 'expo-router';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { broadcast, formataErro, uploadFileForServer, steerSession, podeEnviarSozinho, providerName, sendInputForServer, sideQuestionOf, slashMatches, slashTokenAt, replaceSlashToken, relimparDitado, estilosDitado, canUpdateQueueEdit, queueEditLeft, DELIVERY_STALLED } from '@hangar/core';
+import { broadcast, formataErro, uploadFromDiskForServer, steerSession, podeEnviarSozinho, providerName, sendInputForServer, sideQuestionOf, slashMatches, slashTokenAt, replaceSlashToken, relimparDitado, estilosDitado, canUpdateQueueEdit, queueEditLeft, DELIVERY_STALLED } from '@hangar/core';
 import type { CommandInfo, MotivoFim, Provider, QueueEdit, QueuePanel as QueuePanelModel, Server } from '@hangar/core';
 import { ComposerActions, ComposerBox, ComposerInput } from './ComposerField';
+import { sendFromDisk } from '../net/uploadFromDisk';
 import { Icon } from '../ui/Icon';
 import * as m from '../paraglide/messages';
 import { chatStore, filaCount as filaCountOf, submitConversationDraft, isSubmitting, settleDelivered } from '../stores/chat';
@@ -327,8 +328,7 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
     upload = (async () => {
       const server = useServers.getState().servers.find((s) => s.id === origin.serverId);
       if (!server) throw new Error(m.chat_servidor_removido());
-      const blob = await (await fetch(attach.uri)).blob();
-      const path = (await uploadFileForServer(server, origin.name, new File([blob], attach.name, { type: attach.mime }))).path;
+      const path = (await uploadFromDiskForServer(server, origin.name, { name: attach.name, type: attach.mime }, sendFromDisk(attach.uri))).path;
       if (uploadsRef.current.get(attach.uri) === upload) recordUpload(attach.uri, path, target);
       return path;
     })();
