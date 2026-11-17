@@ -57,6 +57,26 @@ impl Case {
     fn sidecar(&self) -> PathBuf { self.home.join(".hangar/codex-sessions/codex-proj.json") }
 }
 
+/// PR-01: aberto com `Path` e `SystemRoot` (a caixa que o Windows dá), o subcomando sobe as chaves como o
+/// `os.environ` do Python: o app-server e a TUI recebem `PATH` e `SYSTEMROOT`.
+#[test]
+fn subcommands_hand_children_uppercase_environment_keys() {
+    let case = Case::new(json!({}));
+    let system_root = std::env::var_os("SystemRoot").unwrap_or_else(|| r"C:\Windows".into());
+    let mut command = case.command();
+    command.env_clear()
+        .envs([("USERPROFILE", case.home.as_os_str()), ("HOME", case.home.as_os_str()), ("Path", case.stubs.as_os_str()),
+            ("HANGAR_FAKE_CODEX", case.fake.as_os_str()), ("SystemRoot", system_root.as_os_str())])
+        .envs([("PathExt", ".EXE;.CMD"), ("CP_SESSION_NAME", "codex-proj"), ("CP_SESSION_KEY", "key-0001"), ("CP_PROVIDER", "codex")]);
+    assert_eq!(command.status().unwrap().code(), Some(0));
+    let spawns = spawns(&case.fake);
+    let server = spawns.iter().find(|spawn| spawn["role"] == "codex app-server").expect("o app-server subiu");
+    let keys: Vec<&str> = server["env"].as_object().unwrap().keys().map(String::as_str).collect();
+    for (upper, mixed) in [("PATH", "Path"), ("SYSTEMROOT", "SystemRoot"), ("PATHEXT", "PathExt")] {
+        assert!(keys.contains(&upper) && !keys.contains(&mixed), "{upper}: {keys:?}");
+    }
+}
+
 /// PR-14: o pane recebe o código da TUI inteiro (`0xC000013A`, console fechado), como o `SystemExit` do
 /// Python, não só os 8 bits de baixo.
 #[test]
