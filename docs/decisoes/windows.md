@@ -1229,3 +1229,8 @@ reiniciar o servidor travado e religar a tarefa quando o lançador saía.
   atualização, a migração para o pacote) e correria com elas. Escolha: o lançador não sai mais
   sozinho; a única saída própria, voltar para uma versão que sobe pelo Python, passou a religar
   o Python dela. Lançador morto à força espera o próximo logon.
+
+Limites aceitos: o servidor que trava antes de gravar o endereço de saúde não é conferido (a
+versão que ainda não grava o endereço também não: o lançador não a derruba por engano); a versão
+que sobe pelo Python não é conferida; o `hangar-frontend` legado do checkout deixa de ser
+recuperado.
