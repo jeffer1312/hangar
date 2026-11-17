@@ -21,15 +21,17 @@ pub fn launch(args: &[String]) -> ExitCode {
     let home = crate::accounts::environment::AccountEnvironment::capture().home;
     let log = args.iter().position(|a| a == "--log").and_then(|i| args.get(i + 1)).map(PathBuf::from);
     // A versão vai em toda linha do lançador: na troca, o log recebe a saída da anterior e da nova.
-    let version = std::fs::canonicalize(current(&home)).ok()
-        .and_then(|real| real.file_name().map(|n| n.to_string_lossy().into_owned())).unwrap_or_else(|| "?".to_owned());
+    let version = version_of(&home);
     let explicit = std::env::var_os("CP_RUST_SERVER_BIN");
     let mut lines = vec![format!("launch_start: versão {version}, lançador pid {}", std::process::id())];
     let chosen = backend_noted(&home, &args[1..], cfg!(windows), explicit.as_deref(), &mut lines);
     // O direto no Windows gira o log antes de escrever: estas linhas abrem o arquivo da vida nova.
     let tell = |lines: &[String]| { for line in lines { report(log.as_deref(), line); } };
     match chosen {
-        Ok(Backend::Direct(command)) => run_direct(command, log.as_deref(), &version, lines),
+        Ok(Backend::Direct(command)) => {
+            let mut again = |notes: &mut Vec<String>| relaunch_backend(&home, &args[1..], cfg!(windows), explicit.as_deref(), notes);
+            run_direct(command, log.as_deref(), &version, lines, &home.join(".hangar"), &mut again)
+        }
         Ok(Backend::Python(command)) => { tell(&lines); run(command, log.as_deref(), &version) }
         Err((code, path)) => {
             tell(&lines);
@@ -37,6 +39,25 @@ pub fn launch(args: &[String]) -> ExitCode {
             failed(log.as_deref(), "erro", code, &path.display().to_string());
             ExitCode::from(3)
         }
+    }
+}
+
+/// O nome da versão para onde o `current` aponta agora; `?` sem ele.
+fn version_of(home: &Path) -> String {
+    std::fs::canonicalize(current(home)).ok()
+        .and_then(|real| real.file_name().map(|n| n.to_string_lossy().into_owned())).unwrap_or_else(|| "?".to_owned())
+}
+
+/// O servidor da religada, resolvido de novo como na primeira subida: depois de uma atualização o
+/// `current` aponta para outra versão, e o binário antigo pode já ter sido podado. A versão que
+/// passou a subir pelo Python não é religada aqui (o lançador não troca de modo no meio): o erro
+/// leva o Python, e a vigia da tarefa recupera.
+pub(crate) fn relaunch_backend(home: &Path, args: &[String], windows: bool, explicit: Option<&std::ffi::OsStr>, notes: &mut Vec<String>)
+    -> Result<(std::process::Command, String), (&'static str, PathBuf)> {
+    let version = version_of(home);
+    match backend_noted(home, args, windows, explicit, notes)? {
+        Backend::Direct(command) => Ok((command, version)),
+        Backend::Python(command) => Err(("launch_relaunch_python", PathBuf::from(command.get_program()))),
     }
 }
 
@@ -87,10 +108,14 @@ fn run(mut command: std::process::Command, log: Option<&Path>, version: &str) ->
     ExitCode::from(126)
 }
 
-/// O lançador vira o `hangar-server`: mesmo pid, então o `sd_notify` dele vale para a unit. Quem
-/// religa a queda é o systemd/launchd.
+/// O servidor da religada (`relaunch_backend`), com as notas da escolha.
+type Again<'a> = dyn FnMut(&mut Vec<String>) -> Result<(std::process::Command, String), (&'static str, PathBuf)> + 'a;
+
+/// O lançador vira o `hangar-server`: mesmo pid, então o `sd_notify` dele vale para a unit e a vida
+/// é dele. Quem religa a queda é o systemd/launchd.
 #[cfg(unix)]
-fn run_direct(mut command: std::process::Command, log: Option<&Path>, version: &str, lines: Vec<String>) -> ExitCode {
+fn run_direct(mut command: std::process::Command, log: Option<&Path>, version: &str, lines: Vec<String>, _hangar_dir: &Path,
+              _again: &mut Again<'_>) -> ExitCode {
     use std::os::unix::process::CommandExt;
     for line in &lines { report(log, line); }
     let error = command.exec();
@@ -107,10 +132,13 @@ fn notify_from_env(state: &str) -> std::io::Result<()> {
 
 /// No Windows: o servidor no Job do lançador, com o log da tarefa como saída (o Python o abria sozinho).
 /// O Agendador não religa quem cai depois de subir (decisão 38): o servidor que sai sem parada pedida
-/// (`exit_is_requested_stop`) volta depois da espera de `Relaunch`, sem desistir. O lançador só sai com a
-/// parada pedida ou morto, e aí o Job leva o servidor.
+/// (`exit_is_requested_stop`) volta depois da espera de `Relaunch`, sem desistir, resolvido de novo pelo
+/// `current`. O lançador só sai com a parada pedida, morto ou quando a versão nova não sobe direto (a
+/// vigia da tarefa recupera); morto, o Job leva o servidor.
 #[cfg(windows)]
-fn run_direct(mut command: std::process::Command, log: Option<&Path>, version: &str, lines: Vec<String>) -> ExitCode {
+fn run_direct(mut command: std::process::Command, log: Option<&Path>, version: &str, lines: Vec<String>, hangar_dir: &Path,
+              again: &mut Again<'_>) -> ExitCode {
+    let mut version = version.to_owned();
     let launcher = std::process::id();
     let mut relaunch = Relaunch::new(relaunch_first());
     let (mut pending, mut previous_fall) = (lines, None::<u32>);
@@ -166,8 +194,9 @@ fn run_direct(mut command: std::process::Command, log: Option<&Path>, version: &
                         let exited = format!("launch_backend_exited: versão {version}, hangar-server pid {pid}, {status}, depois de {} s", started.elapsed().as_secs());
                         if exit_is_requested_stop(status.code()) {
                             if !status.success() { say(file.as_ref(), log, &exited); }
+                            let life = close_life(hangar_dir, pid, file.as_ref(), log);
                             record(log, "lancador.parada", serde_json::json!({"evento": "lancador.parada", "nivel": "ok",
-                                "saida": format!("0x{:08X}", status.code().unwrap_or(0) as u32), "vida_s": started.elapsed().as_secs()}));
+                                "saida": format!("0x{:08X}", status.code().unwrap_or(0) as u32), "vida_s": started.elapsed().as_secs(), "vida": life}));
                             std::process::exit(status.code().unwrap_or(1));
                         }
                         (exited, status.code())
@@ -189,6 +218,37 @@ fn run_direct(mut command: std::process::Command, log: Option<&Path>, version: &
         drop(file);
         std::thread::sleep(wait);
         previous_fall = Some(fall);
+        // Depois da espera, quando uma atualização pode ter trocado o `current`.
+        let mut notes = Vec::new();
+        match again(&mut notes) {
+            Ok((fresh, fresh_version)) => {
+                pending.extend(notes);
+                (command, version) = (fresh, fresh_version);
+            }
+            Err((code, path)) => {
+                for note in &notes { report(log, note); }
+                report(log, &format!("{code}: {}; o lançador sai sem religar a versão anterior", path.display()));
+                failed(log, "erro", code, &path.display().to_string());
+                return ExitCode::from(3);
+            }
+        }
+    }
+}
+
+/// A parada pedida que não passou pelos tratadores do servidor (`Stop-Process -Force` é `TerminateProcess`)
+/// deixa a marca de pé dele: o lançador a fecha como parada limpa, só se ela for desse filho. Com o
+/// handle do filho ainda aberto, o pid dele não foi reusado.
+#[cfg(windows)]
+fn close_life(hangar_dir: &Path, pid: u32, file: Option<&std::fs::File>, log: Option<&Path>) -> &'static str {
+    match hangar_boot::life::end(hangar_dir, pid) {
+        Ok(hangar_boot::life::Ended::Cleared) => "limpa",
+        Ok(hangar_boot::life::Ended::OtherLife) => "outra",
+        Ok(hangar_boot::life::Ended::Reset) => "ilegivel",
+        Err(error) => {
+            say(file, log, &format!("launch_life_unwritable: marca de pé do hangar-server pid {pid} não fechada: {error}"));
+            failed(log, "aviso", "launch_life_unwritable", &format!("{:?}", error.kind()));
+            "erro"
+        }
     }
 }
 
@@ -364,6 +424,49 @@ mod tests {
         let n = abstract_listener.recv(&mut buf).unwrap();
         assert_eq!(&buf[..n], b"READY=1");
         to(None).send("READY=1").unwrap();
+    }
+
+    /// Decisão 38: a religada resolve o `current` de novo. Depois da troca de versão ela abre o servidor
+    /// da nova (com o nome dela para o log); versão que sobe pelo Python não é religada.
+    #[test]
+    fn the_relaunch_follows_the_current_and_refuses_a_python_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        let windows = cfg!(windows);
+        let exe = if windows { "hangar-server.exe" } else { "hangar-server" };
+        let version = |name: &str, manifest: &str| {
+            let real = home.join(".hangar").join("versions").join(name);
+            std::fs::create_dir_all(real.join("backend")).unwrap();
+            std::fs::write(real.join("manifest.json"), manifest).unwrap();
+            real
+        };
+        let runnable = |path: &std::path::Path| {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "").unwrap();
+            #[cfg(unix)]
+            { use std::os::unix::fs::PermissionsExt; std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap(); }
+        };
+        let relink = |target: &std::path::Path| {
+            let link = current(home);
+            #[cfg(unix)]
+            { let _ = std::fs::remove_file(&link); std::os::unix::fs::symlink(target, &link).unwrap(); }
+            #[cfg(windows)]
+            { let _ = std::fs::remove_dir(&link); crate::update::make_link(target, &link).unwrap(); }
+        };
+        let (v1, v2) = (version("v1", r#"{"boot":"direct"}"#), version("v2", r#"{"boot":"direct"}"#));
+        let v3 = version("v3", r#"{"version":"v3"}"#);
+        for real in [&v1, &v2] { runnable(&real.join("bin").join(exe)); }
+        runnable(&super::python_exe(&v3, windows));
+        for (real, name) in [(&v1, "v1"), (&v2, "v2")] {
+            relink(real);
+            let (command, version) = super::relaunch_backend(home, &[], windows, None, &mut Vec::new()).unwrap();
+            assert_eq!(version, name);
+            assert!(std::path::Path::new(command.get_program()).ends_with(std::path::Path::new(name).join("bin").join(exe)), "{command:?}");
+        }
+        relink(&v3);
+        let (code, path) = super::relaunch_backend(home, &[], windows, None, &mut Vec::new()).unwrap_err();
+        assert_eq!(code, "launch_relaunch_python");
+        assert!(path.ends_with(super::python_exe(std::path::Path::new("v3"), windows)), "{path:?}");
     }
 
     #[test]

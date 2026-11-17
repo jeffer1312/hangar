@@ -309,6 +309,37 @@ fn b38_windows_launcher_relaunches_a_fallen_server_with_growing_waits() {
     }
 }
 
+/// Decisão 38 (Windows): o `Stop-Process -Force` do reinício (`TerminateProcess`, saída `0xFFFFFFFF`)
+/// não roda os tratadores do servidor, e a marca de pé dele ficaria. O lançador a fecha como parada
+/// limpa: a subida seguinte não conta queda e nada vai ao diário como queda.
+#[cfg(windows)]
+#[test]
+fn d38_a_requested_stop_closes_the_server_life_and_counts_no_fall() {
+    use base64::Engine;
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    direct_version(home);
+    let hangar = home.join(".hangar");
+    // Servidor falso: grava a marca de pé com o próprio pid, como o `record_running`, e sai com -1.
+    let script = "$d = Join-Path $env:USERPROFILE '.hangar'; New-Item -ItemType Directory -Force $d | Out-Null; \
+        Set-Content -Encoding ascii (Join-Path $d 'server-life.json') ('{\"running\":true,\"unclean_exits\":0,\"pid\":' + $PID + '}'); exit -1";
+    let encoded = base64::engine::general_purpose::STANDARD.encode(script.encode_utf16().flat_map(u16::to_le_bytes).collect::<Vec<_>>());
+    let powershell = Path::new(&std::env::var_os("SystemRoot").expect("SystemRoot"))
+        .join("System32").join("WindowsPowerShell").join("v1.0").join("powershell.exe");
+    let out = launch_command(home, &["backend", "-NoProfile", "-NonInteractive", "-EncodedCommand", &encoded])
+        .env("CP_RUST_SERVER_BIN", &powershell).output().unwrap();
+    assert_eq!(out.status.code(), Some(-1), "{out:?}");
+    let life: serde_json::Value = serde_json::from_slice(&std::fs::read(hangar.join(hangar_boot::life::FILE)).unwrap()).unwrap();
+    assert_eq!(life["running"], false, "{life}");
+    let next = hangar_boot::life::begin(&hangar, "agora", |_, _| false).unwrap();
+    assert_eq!((next.unclean, next.unclean_exits), (false, 0));
+    let lines = diary(home);
+    assert!(lines.iter().all(|line| line["evento"] != "lancador.queda"), "{lines:?}");
+    let stops: Vec<_> = lines.iter().filter(|line| line["evento"] == "lancador.parada").collect();
+    assert_eq!(stops.len(), 1, "{lines:?}");
+    assert_eq!((stops[0]["saida"].as_str(), stops[0]["vida"].as_str()), (Some("0xFFFFFFFF"), Some("limpa")));
+}
+
 /// B-35 (Windows): o lançador põe o `hangar-server` no Job dele (`KILL_ON_JOB_CLOSE`): matar o
 /// lançador, como o `Stop-ScheduledTask`/`Stop-Process`, leva o servidor junto e solta a porta.
 #[cfg(windows)]
