@@ -62,7 +62,7 @@ fn link_current(real: &Path, home: &Path) {
 fn link_dir(link: &Path, target: &Path) {
     #[cfg(unix)]
     std::os::unix::fs::symlink(target, link).unwrap();
-    // O cmd não entende as aspas que o `arg` do Rust gera: a linha vai crua, como no `update::make_link`.
+    // O cmd não entende as aspas que o `arg` do Rust gera: a linha vai crua, como no `hangar_local_server::link::make_link`.
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
