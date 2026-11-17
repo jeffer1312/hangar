@@ -9,7 +9,8 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   ou volta de versão (lançador, `install.sh`/`install.ps1`, `scripts/windows-tasks.ps1`, unit ou
   tarefa, passo `tipo: maquina`, `crates/hangar-server/src/update/`, `crates/hangar-boot`) só é
   mesclado na `main` depois de, numa máquina de teste de cada sistema afetado, partindo da versão
-  publicada: atualizar pelo botão para o pacote do PR (canal `beta`), conferir o servidor novo de
+  publicada: atualizar pelo botão para o pacote do PR (a branch do PR enviada à `beta`, que publica
+  o `package-beta`; a máquina de teste fica no canal `beta`), conferir o servidor novo de
   pé, criar uma sessão de cada provedor instalado, voltar para a versão anterior e atualizar de
   novo. O PR lista o que foi feito e o resultado de cada etapa; etapa não feita é item desmarcado
   e impede o merge. [Motivo](#atualização-real-antes-do-merge-17112026).
