@@ -151,13 +151,18 @@ impl Hangar {
         cx.notify();
     }
 
+    /// O servidor do Jev: o da conversa aberta; sem ela (Configurações pela tela inicial), o ativo.
+    fn queue_jev_server(&self) -> Option<String> {
+        self.selected_key().map(|key| key.server).or_else(|| self.server.clone())
+    }
+
     pub(super) fn queue_jev_ready(&self) -> bool {
-        self.selected_key().and_then(|k| self.queue.jev.get(&k.server)).is_some_and(|(_, _, result)| matches!(result, Some(Ok(true))))
+        self.queue_jev_server().and_then(|server| self.queue.jev.get(&server)).is_some_and(|(_, _, result)| matches!(result, Some(Ok(true))))
     }
 
     /// Por que o Jev deste servidor está ou não disponível: a dica da opção.
     pub(super) fn queue_jev_help(&self) -> String {
-        let state = self.selected_key().and_then(|key| self.queue.jev.get(&key.server)).map(|(_, _, state)| state);
+        let state = self.queue_jev_server().and_then(|server| self.queue.jev.get(&server)).map(|(_, _, state)| state);
         state.map(|state| match state {
             None => tr("queue_jev_loading"),
             Some(Err(error)) => tr("queue_jev_read_error").replace("{error}", error),
@@ -167,18 +172,18 @@ impl Hangar {
     }
 
     pub(super) fn refresh_queue_jev(&mut self, cx: &mut Context<Self>) {
-        let Some(key) = self.selected_key() else { return };
-        if self.queue.jev.get(&key.server).is_some_and(|(at, _, result)| result.is_none() || at.elapsed() < Duration::from_secs(30)) { return; }
-        let Some(api) = self.api_for(&key.server) else { return };
+        let Some(server) = self.queue_jev_server() else { return };
+        if self.queue.jev.get(&server).is_some_and(|(at, _, result)| result.is_none() || at.elapsed() < Duration::from_secs(30)) { return; }
+        let Some(api) = self.api_for(&server) else { return };
         self.queue.jev_seq += 1;
         let seq = self.queue.jev_seq;
-        self.queue.jev.insert(key.server.clone(), (Instant::now(), seq, None));
+        self.queue.jev.insert(server.clone(), (Instant::now(), seq, None));
         let (connection, tx) = (self.connection, self.tx.clone());
         self.runtime.spawn(async move {
             let result = api.server_read(&["jev", "delivery"], &[], 10).await
                 .and_then(|config| config["available"].as_bool().ok_or_else(|| Failure::local("invalid_response")))
                 .map_err(|error| if error.status == Some(404) { tr("queue_jev_unsupported") } else { Hangar::fetch_failure(&error) });
-            let _ = tx.send(Envelope { connection, selection: None, payload: Payload::QueueJev(key.server, seq, result) }).await;
+            let _ = tx.send(Envelope { connection, selection: None, payload: Payload::QueueJev(server, seq, result) }).await;
         });
     }
 

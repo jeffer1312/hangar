@@ -430,10 +430,11 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   a guarda até a pausa entre ferramentas; no Codex, com e sem terminal, vai pelo `turn/steer`. No
   Claude com terminal (o Orientar ali é `ctrl+x ctrl+s`, que corta), em Pi, omp e Kimi e em comando
   de barra, o pedido vira a fila comum, sem marca, e a resposta diz `conversation: false`. O eco
-  `isReplay` não confirma linha marcada (ele sai quando a CLI lê a mensagem, mas é um evento do
-  stdout, não do transcript); quem confirma é o recibo do transcript (`queued_command`, `dequeue`/`remove`), relido a cada resultado de
-  ferramenta enquanto houver mensagem guardada. A linha marcada não entra no painel da fila e vai
-  aos aparelhos com `queued_conversation`. "Enviar agora" é o `queue/<id>/steer` de sempre: linha
+  `isReplay` confirma a linha marcada que abriu o turno (sessão parada), como qualquer entrada; a
+  guardada à espera da pausa é confirmada pelo recibo do transcript (`queued_command`,
+  `dequeue`/`remove`), relido a cada resultado de ferramenta enquanto houver mensagem guardada. A
+  linha marcada já entregue (`queued_delivered`) sai do painel da fila e vai aos aparelhos com
+  `queued_conversation`; a ainda não entregue fica no painel, onde pode ser cancelada. "Enviar agora" é o `queue/<id>/steer` de sempre: linha
   ainda esperando segue o Orientar; já escrita no Claude sem terminal, vira `SteerWritten`, que
   manda o `interrupt` e guarda a escrita em `steer_now`, sem reescrever o texto. Codex não tem
   "Enviar agora". Servidor antigo recusa a chave com 422 antes de gravar; os aparelhos reenviam

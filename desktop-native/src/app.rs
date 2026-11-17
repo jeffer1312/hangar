@@ -3119,7 +3119,7 @@ impl Hangar {
 
     /// `queue_only`: o Ctrl+Enter com "Na conversa" escolhido deixa a mensagem no painel "Na fila".
     fn submit_as(&mut self, steer: bool, confirmed: bool, queue_only: bool, window: &mut Window, cx: &mut Context<Self>) {
-        if self.defer_dictation_send(steer, cx) { return; }
+        if self.defer_dictation_send(steer, queue_only, cx) { return; }
         // Em edição, o Enter e o Enviar atualizam a mensagem da fila em vez de mandar outra.
         if self.selected.is_some() && self.queue_edit_active() { self.submit_queue_edit(window, cx); return; }
         if self.selected.is_none() && self.reopen.is_some() { self.send_reopen(window, cx); return; }
