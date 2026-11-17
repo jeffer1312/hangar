@@ -1,7 +1,7 @@
 import { memo, useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
-import { intlLocale, type StatusAttention, type StatusAttentionTarget, type StatusExit, type StatusExitsBlock, type StatusHostBlock,
+import { intlLocale, providerName, type Provider, type StatusAttention, type StatusAttentionTarget, type StatusExit, type StatusExitsBlock, type StatusHostBlock,
   type StatusLeftoversBlock, type StatusMachine, type StatusOutsideBlock, type StatusPoint, type StatusServerBlock, type StatusSessionsBlock,
   type StatusSlowBlock, type StatusUpdateBlock, type StatusUsage } from '@hangar/core';
 import { Icon, type IconName } from '../../ui/Icon';
@@ -11,7 +11,7 @@ import { Composition, useChartColors } from '../usage/ReportUI';
 import { useSettingsColors, withAlpha } from '../config/colors';
 import { INK, RADIUS, SPACE } from '../../theme/scale';
 import { Block, Chip, Chips, HourColumns, Legend, Meter, Mono, SegBar, Signal, Sparkline, type HourColumn } from './StatusParts';
-import { attentionText, bytes, duration, exitDetail, exitKindText, num, pct, platformName, processName, providerLabel, since, updateLines, when } from './format';
+import { attentionText, bytes, duration, exitDetail, exitKindText, num, pct, platformName, processName, since, updateLines, when } from './format';
 import * as m from '../../paraglide/messages';
 
 type Place = { flash?: boolean; onLayout?: (y: number) => void };
@@ -22,6 +22,7 @@ export const HealthCard = memo(function HealthCard({ attention, server, onJump }
   const ok = attention.length === 0;
   const tone = ok ? theme.tokens.status.success : theme.tokens.status.warning;
   const title = ok ? m.status_health_ok() : attention.length === 1 ? m.status_health_attention_one() : m.status_health_attention({ count: String(attention.length) });
+  const seen = new Map<string, number>();
   return <View style={{ padding: SPACE[4], gap: SPACE[3], backgroundColor: c.inset, borderRadius: RADIUS.lg }}>
     <View style={{ flexDirection: 'row', alignItems: 'center', gap: SPACE[3] }}>
       <View style={{ width: 52, height: 52, borderRadius: RADIUS.full, alignItems: 'center', justifyContent: 'center', backgroundColor: withAlpha(tone, 0.18) }}>
@@ -35,10 +36,14 @@ export const HealthCard = memo(function HealthCard({ attention, server, onJump }
       </View>
     </View>
     {ok ? null : <View style={{ gap: SPACE[1] }}>
-      {attention.map((a, i) => {
+      {attention.map((a) => {
         const color = a.severity === 'bad' ? theme.tokens.status.error : theme.tokens.status.warning;
         const text = attentionText(a);
-        return <Pressable key={`${a.code}:${i}`} accessibilityRole="button" accessibilityLabel={text}
+        // Rótulo de máquina não é único: dois itens iguais ganham o número da repetição.
+        const base = `${a.code}:${a.args.join('|')}`;
+        const n = seen.get(base) ?? 0;
+        seen.set(base, n + 1);
+        return <Pressable key={n ? `${base}#${n}` : base} accessibilityRole="button" accessibilityLabel={text}
           onPress={() => { haptic.selection(); onJump(a.target); }}
           style={({ pressed }) => ({ minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: SPACE[2], paddingHorizontal: SPACE[3],
             borderRadius: RADIUS.sm, borderWidth: 1, borderColor: c.border, backgroundColor: pressed ? c.hover : 'transparent' })}>
@@ -119,10 +124,9 @@ export const DaysCard = memo(function DaysCard({ exits, update, flash, onLayout 
     ...(updates === 0 ? [] : [updates === 1 ? m.status_days_updates_one() : m.status_days_updates({ count: String(updates) })]),
   ].join(' · ');
   const colorOf = (e: StatusExit) => e.kind === 'crash' ? theme.tokens.status.error : e.kind === 'update' ? c.accent : c.faint;
-  const labelOf = (e: StatusExit) => `${exitKindText(e.kind)} · ${when(e.ts)}${exitDetail(e) ? ` · ${exitDetail(e)}` : ''}`;
+  const details = new Map(items.map((e) => [e, exitDetail(e)]));
+  const labelOf = (e: StatusExit) => `${exitKindText(e.kind)} · ${when(e.ts)}${details.get(e) ? ` · ${details.get(e)}` : ''}`;
   const sel = picked !== null ? groups.find((g) => g.some((e) => e.ts === picked)) : undefined;
-  const upd = update ? updateLines(update) : null;
-  const kinds = new Set(items.map((e) => e.kind));
   return <Block title={m.status_days_title()} hint={hint} flash={flash} onLayout={onLayout}>
     {exits ? <>
       <View onLayout={(e) => setWidth(Math.max(1, e.nativeEvent.layout.width))} style={{ height: 52 }}>
@@ -136,51 +140,54 @@ export const DaysCard = memo(function DaysCard({ exits, update, flash, onLayout 
         {groups.map((g) => {
           const head = g[0];
           const chosen = sel === g;
-          if (g.length === 1) {
-            return <Pressable key={head.ts} accessibilityRole="button" accessibilityLabel={labelOf(head)} accessibilityState={{ selected: chosen }}
-              hitSlop={SPACE[4]} onPress={() => { haptic.selection(); setPicked(chosen ? null : head.ts); }}
-              style={{ position: 'absolute', left: at(Date.parse(head.ts)) - MARK / 2, top: 8, width: MARK, height: MARK, alignItems: 'center', justifyContent: 'center' }}>
-              <View style={{ width: head.kind === 'update' ? 10 : 12, height: head.kind === 'update' ? 10 : 12, backgroundColor: colorOf(head),
-                borderRadius: head.kind === 'update' ? 2 : RADIUS.full, borderWidth: chosen ? 2 : 0, borderColor: c.text,
-                transform: head.kind === 'update' ? [{ rotate: '45deg' }] : undefined }} />
-            </Pressable>;
-          }
+          const single = g.length === 1;
           // Vários no mesmo ponto: o alvo leva a cor do mais grave e a contagem, e abre a lista do dia.
           const worst = g.reduce((w, e) => KIND_WEIGHT[e.kind] > KIND_WEIGHT[w.kind] ? e : w, head);
-          const size = MARK + 6;
+          const size = single ? MARK : MARK + 6;
           return <Pressable key={head.ts} accessibilityRole="button" accessibilityLabel={g.map(labelOf).join('; ')} accessibilityState={{ selected: chosen }}
             hitSlop={SPACE[4]} onPress={() => { haptic.selection(); setPicked(chosen ? null : head.ts); }}
             style={{ position: 'absolute', left: at(Date.parse(head.ts)) - size / 2, top: 15 - size / 2, width: size, height: size,
-              borderRadius: RADIUS.full, alignItems: 'center', justifyContent: 'center', backgroundColor: colorOf(worst),
-              borderWidth: chosen ? 2 : 0, borderColor: c.text }}>
-            <Text style={{ color: INK.onAccent, fontSize: theme.base.text.xxxs, fontWeight: theme.base.weight.semibold }}>{String(g.length)}</Text>
+              alignItems: 'center', justifyContent: 'center',
+              ...(single ? null : { borderRadius: RADIUS.full, backgroundColor: colorOf(worst), borderWidth: chosen ? 2 : 0, borderColor: c.text }) }}>
+            {single
+              ? <View style={{ width: head.kind === 'update' ? 10 : 12, height: head.kind === 'update' ? 10 : 12, backgroundColor: colorOf(head),
+                borderRadius: head.kind === 'update' ? 2 : RADIUS.full, borderWidth: chosen ? 2 : 0, borderColor: c.text,
+                transform: head.kind === 'update' ? [{ rotate: '45deg' }] : undefined }} />
+              : <Text style={{ color: INK.onAccent, fontSize: theme.base.text.xxxs, fontWeight: theme.base.weight.semibold }}>{String(g.length)}</Text>}
           </Pressable>;
         })}
       </View>
       <Legend items={[
         { label: m.status_exit_crash(), color: theme.tokens.status.error, shape: 'dot' },
         { label: m.status_exit_update(), color: c.accent, shape: 'diamond' },
-        ...(kinds.has('requested') ? [{ label: m.status_exit_requested(), color: c.faint, shape: 'dot' as const }] : []),
+        ...(items.some((e) => e.kind === 'requested') ? [{ label: m.status_exit_requested(), color: c.faint, shape: 'dot' as const }] : []),
       ]} />
       {sel ? <View style={{ gap: SPACE[3], padding: SPACE[3], borderRadius: RADIUS.sm, backgroundColor: c.hover }}>
         {sel.map((e, n) => <View key={`${e.ts}:${n}`} style={{ gap: SPACE[1] }}>
           <Text style={{ color: c.text, fontSize: theme.base.text.xs, fontWeight: theme.base.weight.semibold }}>{`${exitKindText(e.kind)} · ${when(e.ts)}`}</Text>
-          {exitDetail(e) ? <Text style={{ color: c.muted, fontSize: theme.base.text.xxs }}>{exitDetail(e)}</Text> : null}
+          {details.get(e) ? <Text style={{ color: c.muted, fontSize: theme.base.text.xxs }}>{details.get(e)}</Text> : null}
           {e.error_lines.map((line, i) => <Mono key={i} color={c.muted}>{line}</Mono>)}
         </View>)}
       </View> : null}
     </> : null}
-    {upd ? <View style={{ flexDirection: 'row', alignItems: 'center', gap: SPACE[2], paddingTop: SPACE[2], borderTopWidth: exits ? 1 : 0, borderTopColor: c.border }}>
-      <View style={{ width: 28, height: 28, borderRadius: RADIUS.sm, alignItems: 'center', justifyContent: 'center', backgroundColor: c.accentDim }}>
-        <Icon name="ArrowUp" size={15} color={c.accentText} />
-      </View>
-      <View style={{ flex: 1, minWidth: 0 }}>
-        <Text style={{ color: c.text, fontSize: theme.base.text.xs }}>{upd.title}</Text>
-        <Text style={{ color: c.faint, fontSize: theme.base.text.xxs }}>{upd.detail}</Text>
-      </View>
-    </View> : null}
+    {update ? <UpdateRow update={update} divider={!!exits} /> : null}
   </Block>;
 });
+
+function UpdateRow({ update, divider }: { update: StatusUpdateBlock; divider: boolean }) {
+  const c = useSettingsColors();
+  const { theme } = useUnistyles();
+  const upd = updateLines(update);
+  return <View style={{ flexDirection: 'row', alignItems: 'center', gap: SPACE[2], paddingTop: SPACE[2], borderTopWidth: divider ? 1 : 0, borderTopColor: c.border }}>
+    <View style={{ width: 28, height: 28, borderRadius: RADIUS.sm, alignItems: 'center', justifyContent: 'center', backgroundColor: c.accentDim }}>
+      <Icon name="ArrowUp" size={15} color={c.accentText} />
+    </View>
+    <View style={{ flex: 1, minWidth: 0 }}>
+      <Text style={{ color: c.text, fontSize: theme.base.text.xs }}>{upd.title}</Text>
+      <Text style={{ color: c.faint, fontSize: theme.base.text.xxs }}>{upd.detail}</Text>
+    </View>
+  </View>;
+}
 
 function machineTag(mc: StatusMachine): string {
   if (mc.this_machine) return m.status_machines_this();
@@ -241,7 +248,7 @@ export const SessionsCard = memo(function SessionsCard({ sessions, flash, onLayo
   }
   const both = sessions.by_provider.length > 0 && sessions.by_process.length > 0;
   const list: StatusUsage[] = mode === 'process' && sessions.by_process.length ? sessions.by_process : sessions.by_provider.length ? sessions.by_provider : sessions.by_process;
-  const nameOf = list === sessions.by_process ? processName : providerLabel;
+  const nameOf = list === sessions.by_process ? processName : (key: string) => providerName(key as Provider);
   const total = sessions.by_provider.reduce((sum, u) => sum + (u.rss_bytes ?? 0), 0);
   const memory = total > 0 ? bytes(total) : '—';
   const hint = sessions.open === 1 ? m.status_sessions_hint_one({ memory }) : m.status_sessions_hint({ count: String(sessions.open), memory });
@@ -315,21 +322,16 @@ export const HostCard = memo(function HostCard({ host, flash, onLayout }: { host
   const build = host.dir_build_cache.bytes;
   const free = Math.max(0, host.disk_home.total - host.disk_home.used);
   const other = Math.max(0, host.disk_home.used - (hangar ?? 0) - (build ?? 0));
-  const part = (label: string, value: number | undefined, computing: boolean, color: string) =>
-    value === undefined ? { label, value: 0, color, detail: computing ? m.status_host_computing() : '—' } : { label, value, color, detail: bytes(value) };
-  const disk = [
-    part(m.status_host_dir_hangar(), hangar, host.dir_hangar.computing, colors[0]),
-    part(m.status_host_dir_build(), build, host.dir_build_cache.computing, colors[1]),
-    { label: m.status_host_other(), value: other, color: colors[5], detail: bytes(other) },
-    { label: m.status_host_free(), value: free, color: c.hover, detail: bytes(free) },
+  const parts: { label: string; value: number | undefined; computing?: boolean; color: string }[] = [
+    { label: m.status_host_dir_hangar(), value: hangar, computing: host.dir_hangar.computing, color: colors[0] },
+    { label: m.status_host_dir_build(), value: build, computing: host.dir_build_cache.computing, color: colors[1] },
+    { label: m.status_host_other(), value: other, color: colors[5] },
+    { label: m.status_host_free(), value: free, color: c.hover },
   ];
+  const disk = parts.map(({ label, value, computing, color }) => ({ label, color, value: value ?? 0,
+    detail: value !== undefined ? bytes(value) : computing ? m.status_host_computing() : '—' }));
   return <Block title={m.status_host_title()} hint={hint} flash={flash} onLayout={onLayout}>
-    <View>{meters.map((mt) => {
-      const text = `${bytes(mt.used)} / ${bytes(mt.total)}`;
-      const ratio = mt.total > 0 ? mt.used / mt.total : 0;
-      return <Meter key={mt.name} name={mt.name} used={mt.used} total={mt.total} text={text}
-        label={m.status_host_meter({ name: mt.name, pct: num(ratio * 100), used: bytes(mt.used), total: bytes(mt.total) })} />;
-    })}</View>
+    <View>{meters.map((mt) => <Meter key={mt.name} {...mt} />)}</View>
     <Text style={{ color: c.muted, fontSize: theme.base.text.xxs }}>{m.status_host_disk_use()}</Text>
     <Composition label={m.status_host_disk_use()} items={disk} />
     <Legend items={disk.map((d) => ({ label: d.label, color: d.color, extra: d.detail }))} />

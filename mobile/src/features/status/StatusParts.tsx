@@ -8,6 +8,8 @@ import { GrowFill, Panel } from '../usage/CostsVisuals';
 import { useSettingsColors, withAlpha } from '../config/colors';
 import { hexParaRgb, type StatusPoint } from '@hangar/core';
 import { INK, MONO, RADIUS, SPACE } from '../../theme/scale';
+import { bytes, num } from './format';
+import * as m from '../../paraglide/messages';
 
 /** Cartão de um bloco: título, a linha de resumo embaixo dele (como no celular do mock) e o realce de quem veio da lista de atenção. */
 export function Block({ title, hint, right, flash, onLayout, children }: {
@@ -171,10 +173,12 @@ export const HourColumns = memo(function HourColumns({ hours, label, describe }:
 });
 
 /** Medidor de uso: nome, trilho com a parte usada e "usado / total". */
-export function Meter({ name, used, total, text, label }: { name: string; used: number; total: number; text: string; label: string }) {
+export function Meter({ name, used, total }: { name: string; used: number; total: number }) {
   const c = useSettingsColors();
   const { theme } = useUnistyles();
   const ratio = total > 0 ? used / total : 0;
+  const text = `${bytes(used)} / ${bytes(total)}`;
+  const label = m.status_host_meter({ name, pct: num(ratio * 100), used: bytes(used), total: bytes(total) });
   const color = ratio >= 0.9 ? theme.tokens.status.error : ratio >= 0.75 ? theme.tokens.status.warning : c.accent;
   // Com fonte grande os dois textos crescem e quebram linha; o trilho fica com o que sobra, sem sumir.
   return <View accessible accessibilityLabel={label} style={{ minHeight: 32, flexDirection: 'row', alignItems: 'center', gap: SPACE[2] }}>
@@ -189,8 +193,8 @@ export function Meter({ name, used, total, text, label }: { name: string; used: 
 function rgbOf(color: string): [number, number, number] | null {
   const hex = hexParaRgb(color);
   if (hex) return hex;
-  const m = /^rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(color);
-  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+  const match = /^rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(color);
+  return match ? [Number(match[1]), Number(match[2]), Number(match[3])] : null;
 }
 
 /** Texto legível sobre a fatia: escuro em cor clara, branco em cor escura. */

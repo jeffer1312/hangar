@@ -1,4 +1,4 @@
-import { intlLocale, providerName, type StatusAttention, type StatusExit, type StatusUpdateBlock } from '@hangar/core';
+import { intlLocale, type StatusAttention, type StatusExit, type StatusUpdateBlock } from '@hangar/core';
 import * as m from '../../paraglide/messages';
 
 const MIB = 1024 * 1024;
@@ -87,8 +87,6 @@ export function processName(key: string): string {
     default: return key;
   }
 }
-
-export const providerLabel = (key: string) => providerName(key as never);
 
 export function platformName(platform: string): string {
   switch (platform) {
