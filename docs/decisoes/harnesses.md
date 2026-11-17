@@ -430,8 +430,8 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   a guarda até a pausa entre ferramentas; no Codex, com e sem terminal, vai pelo `turn/steer`. No
   Claude com terminal (o Orientar ali é `ctrl+x ctrl+s`, que corta), em Pi, omp e Kimi e em comando
   de barra, o pedido vira a fila comum, sem marca, e a resposta diz `conversation: false`. O eco
-  `isReplay` não confirma linha marcada: ele sai quando a CLI recebe, não quando lê; quem confirma
-  é o recibo do transcript (`queued_command`, `dequeue`/`remove`), relido a cada resultado de
+  `isReplay` não confirma linha marcada (ele sai quando a CLI lê a mensagem, mas é um evento do
+  stdout, não do transcript); quem confirma é o recibo do transcript (`queued_command`, `dequeue`/`remove`), relido a cada resultado de
   ferramenta enquanto houver mensagem guardada. A linha marcada não entra no painel da fila e vai
   aos aparelhos com `queued_conversation`. "Enviar agora" é o `queue/<id>/steer` de sempre: linha
   ainda esperando segue o Orientar; já escrita no Claude sem terminal, vira `SteerWritten`, que
@@ -1142,13 +1142,20 @@ Não reusa `steer:true` porque no Claude com terminal ele vira o `steer_entry`, 
 `ctrl+x ctrl+s` e corta o turno. A decisão do usuário foi não levar a mensagem à fila interna do
 Claude Code com terminal: ali "Na conversa" se comporta como Fila.
 
-Não medido ainda, e por isso fora das regras como fato: se a CLI 2.1.x, depois do `interrupt` do
-"Enviar agora", roda a mensagem guardada como turno seguinte (como faz com a orientação de
-`priority:"now"`) ou a descarta. O motor trata como o Orientar: o `result` do corte não é parada e o
-`command_lifecycle` `started` da mensagem guardada vira o turno; `cancelled` solta. Também não
-medido: em que momento sai o eco `isReplay` de uma mensagem guardada; por isso ele não confirma a
-linha marcada em nenhum caso. Medir com `claude -p --input-format stream-json` num turno com um
-`sleep` longo antes de dar a regra por provada.
+Medido em 16/11/2026 com a CLI 2.1.326 (`claude -p --safe-mode --model haiku --input-format
+stream-json --replay-user-messages`, pasta vazia, turno com três `sleep 4` em chamadas separadas):
+- Mensagem sem prioridade escrita aos 3,1 s, durante o primeiro `sleep`: o eco `isReplay` dela saiu
+  aos 8,9 s, logo depois do primeiro `tool_result`. O turno seguiu com os outros dois comandos e
+  terminou num `result` só, com o pedido da mensagem atendido. O eco marca quando a CLI lê, não
+  quando recebe.
+- Mensagem sem prioridade e, 0,5 s depois, `control_request` `interrupt`: a resposta do controle trouxe
+  `still_queued` com o uuid da mensagem; o comando foi cortado (`result` `error_during_execution`,
+  `terminal_reason` `aborted_tools`) e a mensagem guardada rodou como turno seguinte, com o eco e
+  um `result` `success` próprios. O "Enviar agora" pelo `interrupt` não perde nem duplica o texto.
+- O `command_lifecycle` só sai com as flags do lançamento do Hangar (`--include-partial-messages`,
+  `--include-hook-events`); sem elas não veio nenhum. Com elas: `queued` da guardada ao ser escrita,
+  e no corte `cancelled` do turno cortado seguido de `started` da guardada, cujo `command_uuid` é o
+  `uuid` escrito. É o que o motor espera para soltar o `steer_now`.
 
 ## Orientar corta o turno do Claude sem terminal (14/11/2026)
 
