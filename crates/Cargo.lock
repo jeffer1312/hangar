@@ -1796,6 +1796,7 @@ dependencies = [
  "ring",
  "serde_json",
  "subtle",
+ "tempfile",
  "tokio",
  "tracing",
 ]
@@ -1863,6 +1864,18 @@ dependencies = [
  "ring",
  "tempfile",
  "tokio",
+]
+
+[[package]]
+name = "hangar-install-setup"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "hangar-core",
+ "libc",
+ "ring",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -2085,6 +2098,7 @@ dependencies = [
  "hangar-docs",
  "hangar-dream",
  "hangar-http-file",
+ "hangar-install-setup",
  "hangar-mission",
  "hangar-notice-ignores",
  "hangar-omp-sync",
