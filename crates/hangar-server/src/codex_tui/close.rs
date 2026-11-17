@@ -56,22 +56,54 @@ pub(crate) fn local(dir: &Path, name: &str) -> std::io::Result<()> {
     let endpoint = meta.get("endpoint").and_then(Value::as_str).filter(|endpoint| !endpoint.is_empty());
     let pid = meta.get("app_pid").and_then(Value::as_u64).and_then(|pid| u32::try_from(pid).ok()).filter(|pid| *pid > 0);
     let (Some(endpoint), Some(pid)) = (endpoint, pid) else { return Ok(()) };
-    if app_server(pid, endpoint) == AppServer::Ours {
-        terminate(pid);
+    if app_server(pid, endpoint) == AppServer::Ours && !terminate(pid) {
+        // Arquivo apagado com o processo de pé deixaria um app-server escutando que ninguém acha.
+        return Err(std::io::Error::other("o app-server da sessão continua vivo"));
     }
     let key = meta.get("key").and_then(Value::as_str).filter(|key| !key.is_empty());
     codex_sidecar::delete_if_life(dir, name, endpoint, pid, key).map(|_| ())
 }
 
 #[cfg(unix)]
-fn terminate(pid: u32) {
+fn terminate(pid: u32) -> bool {
     // SAFETY: o pid foi conferido como o app-server deste endereço logo acima.
     unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM); }
+    true
 }
 
-/// No Windows o Job do lançador já leva o app-server quando o lançador morre.
-#[cfg(not(unix))]
-fn terminate(_pid: u32) {}
+/// O lançador morto por fora leva o app-server pelo Job; vivo (ou sem Job), só o `TerminateProcess`.
+/// `false` quando o processo não saiu dentro do prazo.
+#[cfg(windows)]
+fn terminate(pid: u32) -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
+    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE, TerminateProcess, WaitForSingleObject};
+    // SAFETY: o pid foi conferido como o app-server deste endereço logo acima; o handle é fechado aqui.
+    unsafe {
+        let process = OpenProcess(PROCESS_TERMINATE | PROCESS_SYNCHRONIZE, 0, pid);
+        if process.is_null() {
+            // Sem handle: o processo já saiu entre a conferência e aqui (ou não é mais abrível).
+            return app_server_gone(pid);
+        }
+        TerminateProcess(process, 1);
+        let gone = WaitForSingleObject(process, 5_000) == WAIT_OBJECT_0;
+        CloseHandle(process);
+        gone
+    }
+}
+
+#[cfg(windows)]
+fn app_server_gone(pid: u32) -> bool {
+    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+    // SAFETY: só abre para consulta e fecha logo.
+    unsafe {
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if process.is_null() {
+            return true;
+        }
+        windows_sys::Win32::Foundation::CloseHandle(process);
+        false
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -123,6 +155,30 @@ mod tests {
         local(dir.path(), "codex-proj").unwrap();
         let status = server.wait().unwrap();
         assert_eq!(std::os::unix::process::ExitStatusExt::signal(&status), Some(libc::SIGTERM));
+        assert!(!codex_sidecar::path(dir.path(), "codex-proj").exists());
+    }
+
+    /// PR-09: no Windows o app-server vivo daquele endereço sai pelo `TerminateProcess` antes do arquivo
+    /// sumir (o Python fazia `os.kill`, que lá é `TerminateProcess`).
+    #[cfg(windows)]
+    #[test]
+    fn the_live_app_server_of_that_address_is_terminated_on_windows() {
+        let dir = tempfile::tempdir().unwrap();
+        let endpoint = "ws://127.0.0.1:65000";
+        // O PowerShell junta os argumentos do `-Command`: o `#` faz do resto um comentário, e o argv
+        // continua com `app-server` e o endereço como palavras.
+        let mut server = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-Command", "Start-Sleep", "60", "#", "app-server", endpoint])
+            .spawn()
+            .unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while app_server(server.id(), endpoint) != AppServer::Ours && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(app_server(server.id(), endpoint), AppServer::Ours);
+        put(dir.path(), json!({"name": "codex-proj", "endpoint": endpoint, "app_pid": server.id(), "key": "k"}));
+        local(dir.path(), "codex-proj").unwrap();
+        assert!(server.try_wait().unwrap().is_some(), "o app-server saiu antes de o arquivo sumir");
         assert!(!codex_sidecar::path(dir.path(), "codex-proj").exists());
     }
 }
