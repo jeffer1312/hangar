@@ -1,11 +1,10 @@
 // Retrato da tela Status: espelho de `crates/hangar-api/src/status.rs`. Campo com `?` é bloco ou
 // valor sem fonte no servidor (a tela esconde ou mostra "—", nunca um zero inventado).
-import { apiFetchForServer } from './api';
+import { apiFetchForServer, ensureConfirmedRoute } from './api';
 import { apiEnv, type EventSourceLike } from './apiEnv';
 import { novoReq } from './diag';
-import { baseOf, UNCONFIRMED_BASE } from './rota';
+import { baseOf } from './rota';
 import type { Server } from './servers';
-import * as m from './paraglide/messages';
 
 export interface StatusPoint { ts: string; v: number }
 
@@ -195,9 +194,7 @@ export function parseStatusEvent(data: string): StatusSnapshot | null {
 export function openStatusStream(s: Server, req = novoReq()): EventSourceLike {
   const o = apiEnv().origin;
   const base = baseOf(s);
-  if (base === UNCONFIRMED_BASE) {
-    throw Object.assign(new Error(m.mobile_machines_identity_unconfirmed()), { status: 409, code: 'server_identity_unconfirmed' });
-  }
+  ensureConfirmedRoute(base);
   const isSameOrigin = !!o && (!base || base === o);
   const params = new URLSearchParams();
   if (!isSameOrigin) params.set('token', s.token);
