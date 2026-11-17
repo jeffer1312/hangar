@@ -224,7 +224,8 @@ fn hooks_call_the_stable_launcher_when_the_package_installed_it() {
     let (service, settings, repo) = claude_home(root.path());
     let launcher = root.path().join(".hangar/bin").join(if cfg!(windows) { "hangar-launcher.exe" } else { "hangar-launcher" });
     fs::create_dir_all(launcher.parent().unwrap()).unwrap();
-    fs::write(&launcher, "").unwrap();
+    // O lançador do pacote é cópia deste mesmo binário.
+    fs::copy(std::env::current_exe().unwrap(), &launcher).unwrap();
     hooks::sync_installers(&service, &repo, &["ensure_state_hooks_installed", "ensure_pair_hook_installed", "ensure_guard_hooks_installed"]).unwrap();
     let data = read(&settings);
     let quoted = format!("\"{}\" ", launcher.display());
@@ -426,7 +427,7 @@ fn startup_writes_hooks_and_bridges_through_the_unresolved_current() {
     std::os::unix::fs::symlink(&version, home.join(".hangar/current")).unwrap();
     let launcher = home.join(".hangar/bin/hangar-launcher");
     fs::create_dir_all(launcher.parent().unwrap()).unwrap();
-    fs::write(&launcher, "").unwrap();
+    fs::copy(std::env::current_exe().unwrap(), &launcher).unwrap();
     fs::create_dir_all(home.join(".claude")).unwrap();
     fs::create_dir_all(home.join(".codex")).unwrap();
     fs::create_dir_all(home.join(".pi/agent")).unwrap();

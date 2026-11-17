@@ -1025,3 +1025,70 @@ fn h48_h53_guard_matches_the_python_captures_and_bars_tmux_exe() {
         }
     }
 }
+
+/// H-17/H-21/H-22 (R1-S07/S08): as capturas `preview__concurrent-8-*` (8 processos da mesma mensagem
+/// ao mesmo tempo, 20 vezes, na ordem de largada de cada repetição) repetidas com processos de
+/// verdade: cada processo sai 0 calado, o sidecar final é o da captura (`ts` por presença) e ao lado
+/// dele só fica a trava (os temporários com pid não sobram).
+#[test]
+fn h17_h21_concurrent_preview_processes_match_the_captures() {
+    let fixtures = concat!(env!("CARGO_MANIFEST_DIR"), "/../hangar-agent-hooks/tests/fixtures/contract");
+    for name in ["preview__concurrent-8-in-order", "preview__concurrent-8-shuffled"] {
+        let fixture: Value = serde_json::from_slice(&std::fs::read(format!("{fixtures}/{name}.json")).unwrap()).unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let config = root.path().join("cfg");
+        std::fs::create_dir_all(&config).unwrap();
+        let sidecar = config.join(".hangar-preview/abc.json");
+        for run in fixture["runs"].as_array().unwrap() {
+            let _ = std::fs::remove_file(&sidecar);
+            let mut children = Vec::new();
+            for index in run["start_order"].as_array().unwrap() {
+                let index = index.as_u64().unwrap();
+                let child = Command::new(env!("CARGO_BIN_EXE_hangar-server"))
+                    .arg("preview-hook").env_clear().env("HOME", root.path()).env("USERPROFILE", root.path())
+                    .env("CLAUDE_CONFIG_DIR", &config).env("PATH", "")
+                    .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+                children.push((index, child));
+            }
+            // A entrada só vai depois de todos nascidos: a corrida pela trava é de verdade.
+            for (index, child) in &mut children {
+                let event = json!({"hook_event_name": "MessageDisplay", "session_id": "sess-cmdline",
+                    "transcript_path": "/home/u/.claude/projects/-home-u-proj/abc.jsonl", "cwd": "/home/u/proj",
+                    "message_id": "msg_01", "index": *index, "final": false, "delta": format!("[{index}]")});
+                let mut stdin = child.stdin.take().unwrap();
+                stdin.write_all(&serde_json::to_vec(&event).unwrap()).unwrap();
+            }
+            for (index, child) in children {
+                let out = child.wait_with_output().unwrap();
+                assert!(out.status.success() && out.stdout.is_empty() && out.stderr.is_empty(), "{name} {index}: {out:?}");
+            }
+            let mut got: Value = serde_json::from_slice(&std::fs::read(&sidecar).unwrap()).unwrap();
+            let mut want = run["sidecar"].clone();
+            assert!(got["ts"].is_number());
+            got["ts"] = Value::Null;
+            want["ts"] = Value::Null;
+            assert_eq!(got, want, "{name} rep {}", run["rep"]);
+            let mut others: Vec<String> = std::fs::read_dir(sidecar.parent().unwrap()).unwrap().flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned()).filter(|n| n != "abc.json").collect();
+            others.sort();
+            assert_eq!(serde_json::json!(others), run["other_files"], "{name} rep {}", run["rep"]);
+        }
+    }
+}
+
+/// R1-D05 (H-12): o `nav-hook` lê os BYTES do stdin e decodifica UTF-8 com troca, sem depender do
+/// encoding do sistema; bytes inválidos noutro campo não impedem "página" de casar. O Python lia o
+/// stdin em modo texto (cp1252 no Windows) e a dica não saía.
+#[test]
+fn d05_nav_hook_reads_stdin_bytes_as_utf8() {
+    let root = tempfile::tempdir().unwrap();
+    let nav = root.path().join(".hangar/nav");
+    std::fs::create_dir_all(&nav).unwrap();
+    std::fs::write(nav.join("_srv.json"), format!("{{\"pid\": {}}}", std::process::id())).unwrap();
+    let mut payload = b"{\"hook_event_name\": \"UserPromptSubmit\", \"cwd\": \"/c\xe1\xff\", \"prompt\": \"verifica a ".to_vec();
+    payload.extend_from_slice("página nova do cadastro agora\"}".as_bytes());
+    let result = run(root.path(), "nav-hook", &payload, &[("LANG", "C"), ("PYTHONIOENCODING", "cp1252")]);
+    assert!(result.status.success());
+    let out: Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert!(out["hookSpecificOutput"]["additionalContext"].as_str().unwrap().contains("navegador embutido"), "{out}");
+}

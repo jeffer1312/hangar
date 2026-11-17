@@ -6,7 +6,7 @@
 
 pub mod askq;
 mod input;
-mod log;
+pub mod log;
 mod marker;
 pub mod nav;
 pub mod preview;

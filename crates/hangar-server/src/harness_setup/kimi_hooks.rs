@@ -105,7 +105,18 @@ fn blocks(raw: &str, count: usize) -> Option<Vec<Range<usize>>> {
     (ranges.len() == count).then_some(ranges)
 }
 
+/// Instala o que falta e conserta o que existe (`harness-setup`, reparo `hooks-kimi`).
 pub fn sync(env: &AccountEnvironment, _repo: &Path) -> Result<Vec<String>, String> {
+    sync_impl(env, true)
+}
+
+/// A subida: só conserta e tira as repetidas das entradas do Hangar que já existem; nunca instala
+/// numa máquina que não as tinha.
+pub fn repair(env: &AccountEnvironment) -> Result<Vec<String>, String> {
+    sync_impl(env, false)
+}
+
+fn sync_impl(env: &AccountEnvironment, install: bool) -> Result<Vec<String>, String> {
     let home = super::files::directory(env, "kimi");
     if !home.is_dir() {
         return Ok(vec![]);
@@ -150,10 +161,13 @@ pub fn sync(env: &AccountEnvironment, _repo: &Path) -> Result<Vec<String>, Strin
                 continue;
             }
         }
-        edits.push((
-            command.span(),
-            serde_json::to_string(&crate::provider_hooks::command(&env.home, mode)?).map_err(|e| e.to_string())?,
-        ));
+        // Entrada que já roda o comando certo fica byte a byte (aspas literais do TOML inclusive).
+        if !installed(&env.home, text, mode) {
+            edits.push((
+                command.span(),
+                serde_json::to_string(&crate::provider_hooks::command(&env.home, mode)?).map_err(|e| e.to_string())?,
+            ));
+        }
     }
     edits.sort_by_key(|(range, _)| std::cmp::Reverse(range.start));
     let mut out = raw.clone();
@@ -164,10 +178,11 @@ pub fn sync(env: &AccountEnvironment, _repo: &Path) -> Result<Vec<String>, Strin
         data = toml::from_str(&out)
             .map_err(|_| "migração de hooks inválida; configuração preservada")?;
     }
-    for &(event, matcher, mode) in ENTRIES {
+    for &(event, matcher, mode) in ENTRIES.iter().filter(|_| install) {
+        // Entrada sem filtro vale para toda ferramenta: um guarda antigo sem `matcher` já cobre o Bash.
         let exists = data["hooks"].as_array().into_iter().flatten().any(|h| {
             h["event"] == event
-                && h["matcher"].as_str() == matcher
+                && (h["matcher"].is_null() || h["matcher"].as_str() == matcher)
                 && h["command"].as_str().is_some_and(|c| installed(&env.home, c, mode))
         });
         if exists {

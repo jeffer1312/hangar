@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::{Duration, SystemTime};
-use unicode_normalization::{UnicodeNormalization, char::is_combining_mark};
+use unicode_normalization::UnicodeNormalization;
 
 const LOG: &str = "nav_hook-falhas.log";
 /// Notificação de subagente chega como prompt, mas ninguém a escreveu pedindo tela.
@@ -24,14 +24,19 @@ const JEV_QUESTION: &str = "Will handling this message require opening, looking 
 
 pub fn handle(stdin: &[u8], context: &Context) -> Outcome {
     match hint(stdin, context) {
-        Some(text) => {
+        Ok(Some(text)) => {
             let line = pyjson::dumps(
                 &json!({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": text}}),
                 false,
             );
             Outcome { code: 0, stdout: format!("{line}\n").into_bytes(), stderr: Vec::new() }
         }
-        None => Outcome::default(),
+        Ok(None) => Outcome::default(),
+        // Falha aberta, mas não calada: sem dica e com a linha no log.
+        Err(reason) => {
+            crate::log::record(context, LOG, &format!("main falhou ({reason})"));
+            Outcome::default()
+        }
     }
 }
 
@@ -39,25 +44,30 @@ fn nav_dir(context: &Context) -> Option<PathBuf> {
     Some(context.home.as_ref()?.join(".hangar").join("nav"))
 }
 
-fn hint(stdin: &[u8], context: &Context) -> Option<String> {
-    let nav = nav_dir(context)?;
+/// `Ok(None)` = sem dica (caso normal); `Err` = falha que o `main` do Python registrava.
+fn hint(stdin: &[u8], context: &Context) -> Result<Option<String>, String> {
+    let Some(nav) = nav_dir(context) else { return Ok(None) };
     // O arquivo sobrevive a um crash do app: só o pid vivo diz que ele está no ar.
-    let server = std::fs::read(nav.join("_srv.json")).ok()?;
-    let server = input::parse(std::str::from_utf8(&server).ok()?)?;
-    if !pid_alive(server.as_object()?.get("pid").unwrap_or(&Value::Null)) {
-        return None;
+    let Some(server) = std::fs::read(nav.join("_srv.json")).ok()
+        .and_then(|bytes| input::parse(std::str::from_utf8(&bytes).ok()?)) else { return Ok(None) };
+    let Some(server) = server.as_object() else { return Ok(None) };
+    if !pid_alive(server.get("pid").unwrap_or(&Value::Null)) {
+        return Ok(None);
     }
     let prompt = prompt(stdin);
     if notification(&prompt) {
-        return None;
+        return Ok(None);
     }
-    let url = session_name(context).and_then(|name| browser_url(&nav, &name));
+    let url = match session_name(context) {
+        Some(name) => browser_url(&nav, &name)?,
+        None => None,
+    };
     // Fechado, a dica só vai em mensagem de tela: em toda mensagem ela custava contexto a quem nunca
     // abre página (o árbitro de uma orquestração).
     if url.is_none() && !needs_browser(&prompt, context) {
-        return None;
+        return Ok(None);
     }
-    Some(text(url.as_deref(), context.var("HANGAR_JEV") == Some("on")))
+    Ok(Some(text(url.as_deref(), context.var("HANGAR_JEV") == Some("on"))))
 }
 
 /// `isinstance(pid, int) and pid > 0` e vivo; `true` é o pid 1, como o `bool` do Python.
@@ -159,9 +169,11 @@ fn tmux_panes(context: &Context) -> Option<String> {
 
 /// Os `*.json` de `~/.hangar/nav` que não começam com `_` ou `.`; vale o de `chave` igual ao nome ou
 /// terminada em `::<nome>` (sessão vista por outra máquina).
-fn browser_url(nav: &Path, name: &str) -> Option<String> {
+/// Pasta ilegível é falha do hook (no Python, a exceção chegava ao `main`): sem dica, com log.
+fn browser_url(nav: &Path, name: &str) -> Result<Option<String>, String> {
     let suffix = format!("::{name}");
-    for entry in std::fs::read_dir(nav).ok()?.flatten() {
+    let entries = std::fs::read_dir(nav).map_err(|error| format!("{:?}: {error}", error.kind()))?;
+    for entry in entries.flatten() {
         let file = entry.file_name().to_string_lossy().into_owned();
         if !file.ends_with(".json") || file.starts_with(['_', '.']) {
             continue;
@@ -171,13 +183,13 @@ fn browser_url(nav: &Path, name: &str) -> Option<String> {
         let Some(data) = data.as_object() else { continue };
         let Some(key) = data.get("chave").and_then(Value::as_str) else { continue };
         if key == name || key.ends_with(&suffix) {
-            return Some(match data.get("url") {
+            return Ok(Some(match data.get("url") {
                 Some(url) if hangar_core::pycompat::truthy(url) => py::py_str(url),
                 _ => String::new(),
-            });
+            }));
         }
     }
-    None
+    Ok(None)
 }
 
 pub fn text(url: Option<&str>, jev: bool) -> String {
@@ -207,8 +219,11 @@ fn screen_words() -> &'static Regex {
     })
 }
 
+/// Minúsculas, NFD e sem as marcas de categoria `Mn` (só essas, como o `unicodedata` do Python).
 fn without_accents(text: &str) -> String {
-    text.to_lowercase().nfd().filter(|c| !is_combining_mark(*c)).collect()
+    static MN: OnceLock<Regex> = OnceLock::new();
+    let decomposed: String = text.to_lowercase().nfd().collect();
+    MN.get_or_init(|| Regex::new(r"\p{Mn}").unwrap()).replace_all(&decomposed, "").into_owned()
 }
 
 /// Mensagem de tela pela regex; o Jev (~0,5 s de rede) só barra o falso positivo, e resposta curta
@@ -271,7 +286,8 @@ fn ask_jev(endpoint: &str, key: &str, body: Vec<u8>) -> Result<f64, String> {
     let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()
         .map_err(|error| format!("RuntimeError: {error}"))?;
     runtime.block_on(async {
-        let client = hangar_core::net::http_client().timeout(JEV_TIMEOUT).build()
+        // Prazo por operação (conectar, cada leitura), como o `timeout` do urllib; não há teto total.
+        let client = hangar_core::net::http_client().connect_timeout(JEV_TIMEOUT).read_timeout(JEV_TIMEOUT).build()
             .map_err(|error| format!("URLError: {error}"))?;
         let response = client.post(endpoint)
             .header("authorization", format!("Bearer {key}"))
@@ -310,6 +326,14 @@ mod tests {
         for prompt in ["abre a página de configurações", "o botão não aparece", "testa o login", "veja http://localhost:3000"] {
             assert!(screen_message(prompt), "{prompt}");
         }
+    }
+
+    /// Revisão R1, item 7: só `Mn` sai; marca espaçada (`Mc`) e envolvente (`Me`) ficam, como no Python.
+    #[test]
+    fn only_nonspacing_marks_are_stripped() {
+        assert_eq!(without_accents("Página"), "pagina");
+        assert_eq!(without_accents("\u{0915}\u{093E}"), "\u{0915}\u{093E}", "Mc fica");
+        assert_eq!(without_accents("a\u{20DD}"), "a\u{20DD}", "Me fica");
     }
 
     #[test]

@@ -93,8 +93,25 @@ pub fn sync_hook(
     sync_hook_any(data, event, command, matcher, &[script], cfg!(windows))
 }
 
+/// Programa do Hangar num token: o servidor, o script que o acha ou o lançador estável.
+pub fn hangar_program(token: &str) -> bool {
+    let name = token.trim_matches(['"', '\'']).rsplit(['/', '\\']).next().unwrap_or_default();
+    matches!(name, "hangar-server" | "hangar-server.exe" | "hangar-server-command" | "hangar-launcher" | "hangar-launcher.exe")
+}
+
+/// O comando roda `mode` de um programa do Hangar (`"<…>/hangar-launcher" state-hook …`). Só o nome do
+/// subcomando não basta: um hook pessoal pode ter um argumento igual.
+pub fn runs_subcommand(command: &Value, mode: &str, windows: bool) -> bool {
+    command.as_str().is_some_and(|text| {
+        tokens(text, windows).windows(2).any(|pair| hangar_program(&pair[0]) && pair[1] == mode)
+    })
+}
+
+/// Script Python de antes pelo nome do arquivo; subcomando, só atrás de um programa do Hangar.
 fn refers_any(command: &Value, names: &[&str], windows: bool) -> bool {
-    names.iter().any(|name| refers_platform(command, name, true, windows))
+    names.iter().any(|name| {
+        if name.ends_with(".py") { refers_platform(command, name, true, windows) } else { runs_subcommand(command, name, windows) }
+    })
 }
 
 /// Uma entrada nossa por evento: a primeira que cita algum dos `names` (o script Python antigo ou o

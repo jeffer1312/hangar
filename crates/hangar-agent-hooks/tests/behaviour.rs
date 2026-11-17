@@ -80,6 +80,26 @@ fn d08_a_late_index_zero_of_the_closed_message_is_dropped() {
     assert_eq!(data["text"], "C");
 }
 
+/// Revisão R1, item 5: o segundo `Stop` mantém o `closed` da mensagem fechada (o Python gravava
+/// `null`), e o delta atrasado dela continua descartado depois dele.
+#[test]
+fn a_second_stop_keeps_the_closed_message() {
+    let root = tempfile::tempdir().unwrap();
+    let ctx = context(root.path());
+    let sidecar = root.path().join("cfg/.hangar-preview/abc.json");
+    let stop = event(json!({"hook_event_name": "Stop", "transcript_path": "/p/abc.jsonl"}));
+    preview::handle(&event(json!({"hook_event_name": "MessageDisplay", "transcript_path": "/p/abc.jsonl",
+        "message_id": "msg_01", "index": 0, "delta": "A"})), &ctx);
+    preview::handle(&stop, &ctx);
+    preview::handle(&stop, &ctx);
+    let data: Value = serde_json::from_slice(&fs::read(&sidecar).unwrap()).unwrap();
+    assert_eq!((data["text"].as_str(), data["closed"].as_str()), (Some(""), Some("msg_01")));
+    preview::handle(&event(json!({"hook_event_name": "MessageDisplay", "transcript_path": "/p/abc.jsonl",
+        "message_id": "msg_01", "index": 1, "delta": "B"})), &ctx);
+    let data: Value = serde_json::from_slice(&fs::read(&sidecar).unwrap()).unwrap();
+    assert_eq!(data["text"], "", "o rabo da mensagem fechada não volta");
+}
+
 /// R1-D07 (H-04/H-85): o temporário leva o pid. Um `<sid>.json.tmp` que não dá para abrir (o nome fixo
 /// do Python, aqui uma pasta) derrubava o marcador; agora não o atrapalha, e nenhuma sobra fica.
 #[test]
@@ -161,6 +181,108 @@ fn d05_nav_reads_utf8_regardless_of_the_platform_encoding() {
     assert!(nav::screen_message("verifica a página nova do cadastro agora"));
     let mojibake: String = "verifica a página nova do cadastro agora".bytes().map(char::from).collect();
     assert!(!nav::screen_message(&mojibake), "o texto decodificado em latin-1/cp1252 não casava");
+}
+
+fn live_server(root: &Path, pid: u32) {
+    let nav = root.join("home/.hangar/nav");
+    fs::create_dir_all(&nav).unwrap();
+    fs::write(nav.join("_srv.json"), format!("{{\"pid\": {pid}, \"port\": 9222}}")).unwrap();
+}
+
+const SCREEN: &str = "testa a página de login no navegador e tira um print";
+
+/// H-32/H-33: pid vivo do app manda a dica, pid morto não (no Windows por `OpenProcess`, nunca `kill`).
+#[test]
+fn h32_h33_only_a_live_app_pid_gets_the_hint() {
+    let root = tempfile::tempdir().unwrap();
+    let ctx = context(root.path());
+    live_server(root.path(), std::process::id());
+    let out = nav::handle(&event(json!({"hook_event_name": "UserPromptSubmit", "prompt": SCREEN})), &ctx);
+    assert!(String::from_utf8_lossy(&out.stdout).contains("navegador embutido"), "{out:?}");
+    let mut child = if cfg!(windows) { std::process::Command::new("cmd").args(["/C", "exit"]).spawn().unwrap() }
+        else { std::process::Command::new("true").spawn().unwrap() };
+    let dead = child.id();
+    child.wait().unwrap();
+    live_server(root.path(), dead);
+    let out = nav::handle(&event(json!({"hook_event_name": "UserPromptSubmit", "prompt": SCREEN})), &ctx);
+    assert!(out.stdout.is_empty());
+}
+
+/// Revisão R1, item 8: pasta do navegador que não se lista (o `_srv.json` ainda se lê pelo nome)
+/// derruba o hook como no Python: sem dica pela regex, com `main falhou` no log.
+#[cfg(unix)]
+#[test]
+fn an_unlistable_nav_folder_aborts_with_a_main_failure_line() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    let mut ctx = context(root.path());
+    live_server(root.path(), std::process::id());
+    let headless = root.path().join("home/.hangar/claude-headless");
+    fs::create_dir_all(&headless).unwrap();
+    fs::write(headless.join("s.json"), r#"{"key": "chave-1", "name": "minha-sessao"}"#).unwrap();
+    ctx.vars.insert("CP_SESSION_KEY".into(), "chave-1".into());
+    let nav = root.path().join("home/.hangar/nav");
+    fs::set_permissions(&nav, fs::Permissions::from_mode(0o100)).unwrap();
+    let out = nav::handle(&event(json!({"hook_event_name": "UserPromptSubmit", "prompt": SCREEN})), &ctx);
+    fs::set_permissions(&nav, fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(out.stdout.is_empty(), "{out:?}");
+    let log = fs::read_to_string(root.path().join("home/.hangar/logs/privado/nav_hook-falhas.log")).unwrap();
+    assert!(log.contains(" main falhou ("), "{log}");
+}
+
+/// Windows: a raiz do log é `%LOCALAPPDATA%\hangar` (sem a variável, `~\AppData\Local\hangar`).
+#[cfg(windows)]
+#[test]
+fn windows_log_root_is_localappdata() {
+    let root = tempfile::tempdir().unwrap();
+    let mut ctx = context(root.path());
+    assert_eq!(hangar_agent_hooks::log::private_dir(&ctx).unwrap(), root.path().join("home/AppData/Local/hangar/logs/privado"));
+    ctx.vars.insert("LOCALAPPDATA".into(), root.path().join("local").to_string_lossy().into_owned());
+    assert_eq!(hangar_agent_hooks::log::private_dir(&ctx).unwrap(), root.path().join("local/hangar/logs/privado"));
+}
+
+/// Windows (H-21): trava segurada por outro dá 5 s de espera e depois a linha de falha, sem gravar.
+#[cfg(windows)]
+#[test]
+fn windows_preview_lock_gives_up_after_five_seconds() {
+    let root = tempfile::tempdir().unwrap();
+    let ctx = context(root.path());
+    let dir = root.path().join("cfg/.hangar-preview");
+    fs::create_dir_all(&dir).unwrap();
+    let held = fs::OpenOptions::new().read(true).append(true).create(true).open(dir.join("abc.lock")).unwrap();
+    held.lock().unwrap();
+    let started = std::time::Instant::now();
+    let out = preview::handle(&event(json!({"hook_event_name": "MessageDisplay", "transcript_path": "C:/p/abc.jsonl",
+        "message_id": "m", "index": 0, "delta": "A"})), &ctx);
+    assert!(started.elapsed() >= std::time::Duration::from_millis(4500), "{:?}", started.elapsed());
+    assert_eq!(String::from_utf8_lossy(&out.stderr), "hangar: preview_hook falhou (PermissionError)\n");
+    assert!(!dir.join("abc.json").exists());
+    drop(held);
+    let out = preview::handle(&event(json!({"hook_event_name": "MessageDisplay", "transcript_path": "C:/p/abc.jsonl",
+        "message_id": "m", "index": 0, "delta": "A"})), &ctx);
+    assert!(out.stderr.is_empty() && dir.join("abc.json").exists());
+}
+
+/// Windows (H-10): sem `/proc` a subida pergunta ao sistema; argv e pai deste processo são legíveis e
+/// um `claude.exe` acima do pid é achado.
+#[cfg(windows)]
+#[test]
+fn windows_process_tree_walk_uses_the_system_table() {
+    use tree::Processes;
+    let me = std::process::id();
+    assert!(tree::System.argv(me).is_some_and(|argv| !argv.is_empty()));
+    assert!(tree::System.parent(me).is_some_and(|parent| parent > 0));
+    let dir = tempfile::tempdir().unwrap();
+    let claude = dir.path().join("claude.exe");
+    fs::copy(std::env::var("ComSpec").unwrap_or_else(|_| r"C:\Windows\System32\cmd.exe".into()), &claude).unwrap();
+    let mut child = std::process::Command::new(&claude)
+        .args(["/C", "ping -n 30 127.0.0.1 >NUL", "--session-id", "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"]).spawn().unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    let (boot, pid) = tree::boot_claude(child.id(), &tree::System);
+    let _ = child.kill();
+    let _ = child.wait();
+    assert_eq!(pid, Some(child.id()));
+    assert_eq!(boot.as_deref(), Some("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"));
 }
 
 proptest::proptest! {

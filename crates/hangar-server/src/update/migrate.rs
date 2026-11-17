@@ -619,6 +619,41 @@ fn apply(m: &Machine<'_>, record: &mut Record, target: &Path, service: &Path) ->
     Ok(())
 }
 
+/// Tira do Kimi e de cada Codex os hooks que chamam o lançador estável. O caminho vai cru e com a
+/// barra invertida dobrada (o TOML do Kimi o grava como texto JSON). Devolve o que não deu.
+fn drop_launcher_hooks(m: &Machine<'_>) -> Vec<String> {
+    let mut problems = Vec::new();
+    let raw = m.launcher().display().to_string();
+    let needles = [raw.clone(), raw.replace('\\', "\\\\")];
+    let kimi = m.kimi_home.join("config.toml");
+    match std::fs::read_to_string(&kimi) {
+        Ok(text) => {
+            let mut new = text.clone();
+            for needle in &needles { new = kimi_drop(&new, needle, m.windows).0; }
+            if new != text && let Err(e) = crate::runtime::queue::atomic_write(&kimi, new.as_bytes()) {
+                problems.push(format!("{}: os hooks do lançador não saíram: {e}", kimi.display()));
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => problems.push(format!("{}: ilegível ({e}); os hooks do lançador ficaram", kimi.display())),
+    }
+    for home in &m.codex_homes {
+        let path = home.join("hooks.json");
+        let mut doc = match std::fs::read(&path) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => { problems.push(format!("{}: ilegível ({e}); os hooks do lançador ficaram", path.display())); continue; }
+            Ok(bytes) => match serde_json::from_slice::<Value>(&bytes) {
+                Ok(doc) => doc,
+                Err(e) => { problems.push(format!("{}: ilegível ({e}); os hooks do lançador ficaram", path.display())); continue; }
+            },
+        };
+        if !codex_drop(&mut doc, &raw, m.windows).is_empty() && let Err(e) = write_json(&path, &doc) {
+            problems.push(format!("{}: os hooks do lançador não saíram: {e}", path.display()));
+        }
+    }
+    problems
+}
+
 /// Arquivo apagado depois da migração volta só com o que ela tirou.
 fn absent_is_empty(read: std::io::Result<String>) -> std::io::Result<String> {
     match read {
@@ -649,8 +684,13 @@ fn revert(m: &Machine<'_>, done: &[Done]) -> Vec<String> {
                     if *copied && let Err(e) = remove_tree(&new) { fail(format!("{} não saiu: {e}", new.display())); }
                 }
             }
-            Done::Launcher { existed } => if !existed && let Err(e) = remove_tree(&m.launcher()) {
-                fail(format!("{} não saiu: {e}", m.launcher().display()));
+            Done::Launcher { existed } => if !existed {
+                // Os hooks gravados depois da migração chamam o lançador; sem ele, falhariam a cada
+                // evento. O servidor do checkout grava os dele na subida.
+                for problem in drop_launcher_hooks(m) { fail(problem); }
+                if let Err(e) = remove_tree(&m.launcher()) {
+                    fail(format!("{} não saiu: {e}", m.launcher().display()));
+                }
             },
             Done::Current => if let Err(e) = super::remove_link(&current) { fail(format!("{} não saiu: {e}", current.display())); },
             Done::Front => if let Err(e) = m.service.front(true) { fail(format!("o serviço do front não voltou: {e}")); },

@@ -35,8 +35,9 @@ pub fn sync_startup(service: &AccountService) {
     if let Err(error) = codex_hooks::sync(&service.env.codex_default, &service.env.home, cfg!(windows)) {
         tracing::warn!(code = "harness_startup_codex_hooks_failed", %error, "hooks do Codex não conferidos na subida");
     }
-    // As entradas antigas do Kimi (uma por raiz de venv) viram uma por evento já na subida.
-    if let Err(error) = kimi_hooks::sync(&service.env, &repo) {
+    // As entradas antigas do Kimi (uma por raiz de venv) viram uma por evento já na subida; o que
+    // não havia continua sendo do `harness-setup`.
+    if let Err(error) = kimi_hooks::repair(&service.env) {
         tracing::warn!(code = "harness_startup_kimi_hooks_failed", %error, "hooks do Kimi não conferidos na subida");
     }
 }

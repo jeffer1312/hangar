@@ -107,6 +107,28 @@ fn h82_codex_machine_repairs_point_to_the_package_commands() {
     assert!(!pre.iter().any(|c| c.contains("codex-hook-allow.py")));
 }
 
+/// Revisão R1, item 2: o subcomando só é nosso atrás de um programa do Hangar. Hook pessoal com o
+/// mesmo argumento (`pair-context`, `state-hook`, `guard-tmux`) fica, inclusive repetido.
+#[test]
+fn personal_commands_with_our_subcommand_names_stay() {
+    let viewer = "\"/opt/x/pair-context-viewer\" pair-context";
+    let mine = "my-tool state-hook --log";
+    let guard = "\"/opt/audit\" guard-tmux";
+    let mut data = json!({"hooks": {
+        "SessionStart": [{"hooks": [{"type": "command", "command": viewer}, {"type": "command", "command": viewer}]}],
+        "Stop": [{"hooks": [{"type": "command", "command": mine}]}, {"hooks": [{"type": "command", "command": mine}]}],
+        "PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": guard}]}],
+    }});
+    hooks::reconcile(&mut data, Path::new(PROGRAM), Path::new("/h/.claude/.hangar-pair"), &|_: &str| true, false);
+    assert_eq!(commands(&data, "SessionStart")[..2], [viewer.to_owned(), viewer.to_owned()]);
+    assert_eq!(commands(&data, "SessionStart").iter().filter(|c| c.contains("pair-context")).count(), 3, "o nosso entra num bloco próprio");
+    assert_eq!(commands(&data, "Stop")[..2], [mine.to_owned(), mine.to_owned()]);
+    assert!(commands(&data, "PreToolUse").contains(&guard.to_owned()));
+    let mut codex = json!({"hooks": {"UserPromptSubmit": [{"hooks": [{"type": "command", "command": "notify nav-hook"}]}]}});
+    codex_hooks::reconcile(&mut codex, Path::new(PROGRAM), ALLOW, false);
+    assert_eq!(commands(&codex, "UserPromptSubmit"), vec!["notify nav-hook".to_owned(), codex_hooks::command(Path::new(PROGRAM), "nav-hook", false, false)]);
+}
+
 fn kimi_env(home: &Path) -> AccountEnvironment {
     AccountEnvironment::from_map([("HOME".into(), home.to_string_lossy().into_owned()), ("USERPROFILE".into(), home.to_string_lossy().into_owned())].into())
 }
@@ -156,7 +178,7 @@ fn h74_kimi_native_commands_follow_the_hook_program() {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     let launcher = root.path().join(".hangar/bin").join(if cfg!(windows) { "hangar-launcher.exe" } else { "hangar-launcher" });
     fs::create_dir_all(launcher.parent().unwrap()).unwrap();
-    fs::write(&launcher, "").unwrap();
+    fs::copy(std::env::current_exe().unwrap(), &launcher).unwrap();
     fs::write(&path, "[[hooks]]\nevent = 'Stop'\ncommand = '\"/h/.hangar/current/scripts/hangar-server-command\" kimi-state-hook'\ntimeout = 5\n").unwrap();
     let env = kimi_env(root.path());
     kimi_hooks::sync(&env, root.path()).unwrap();
@@ -164,6 +186,41 @@ fn h74_kimi_native_commands_follow_the_hook_program() {
     assert!(!text.contains("hangar-server-command"), "{text}");
     let data: toml::Value = toml::from_str(&text).unwrap();
     assert!(data["hooks"].as_array().unwrap().iter().all(|h| kimi_hooks::installed(root.path(), h["command"].as_str().unwrap(), if h["command"].as_str().unwrap().ends_with("guard-tmux") { "guard-tmux" } else { "kimi-state-hook" })));
+}
+
+/// Revisão R1, item 3 (R1-D03): a subida só conserta e tira repetidas; não instala onde não havia,
+/// não reescreve entrada já certa (aspas literais ficam) e não cria a cópia `.bak-hangar` à toa.
+#[test]
+fn kimi_boot_repair_never_installs_and_leaves_correct_entries_byte_identical() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join(".kimi-code/config.toml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let env = kimi_env(root.path());
+    let personal = "default_model = 'k2'\n\n[[hooks]]\nevent = 'Stop'\ncommand = 'notifier --fim'\n";
+    fs::write(&path, personal).unwrap();
+    assert!(kimi_hooks::repair(&env).unwrap().is_empty());
+    assert_eq!(fs::read_to_string(&path).unwrap(), personal);
+    assert!(!path.with_file_name("config.toml.bak-hangar").exists());
+    let program = hangar_server::codex_setup::hook_command::hook_server(root.path()).unwrap();
+    let correct = format!("[[hooks]]\nevent = 'Stop'\ncommand = '\"{}\" kimi-state-hook'\ntimeout = 5\n", program.display());
+    fs::write(&path, &correct).unwrap();
+    assert!(kimi_hooks::repair(&env).unwrap().is_empty());
+    assert_eq!(fs::read_to_string(&path).unwrap(), correct);
+    assert!(!path.with_file_name("config.toml.bak-hangar").exists());
+}
+
+/// Revisão R1, item 3: o guarda antigo sem `matcher` vale para o Bash; o instalador não põe outro.
+#[test]
+fn kimi_guard_without_matcher_does_not_get_a_second_one() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join(".kimi-code/config.toml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, "[[hooks]]\nevent = 'PreToolUse'\ncommand = 'python /v/backend/hooks/guard_tmux.py'\n").unwrap();
+    kimi_hooks::sync(&kimi_env(root.path()), root.path()).unwrap();
+    let data: toml::Value = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    let guards = data["hooks"].as_array().unwrap().iter().filter(|h| h["command"].as_str().unwrap().ends_with("guard-tmux")).count();
+    assert_eq!(guards, 1);
+    assert!(kimi_hooks::sync(&kimi_env(root.path()), root.path()).unwrap().is_empty());
 }
 
 /// H-64 + R1-D11: a lista "do Hangar" da exportação é fixa e cobre os subcomandos, o guarda e os

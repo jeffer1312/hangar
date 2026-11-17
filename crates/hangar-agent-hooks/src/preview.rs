@@ -60,7 +60,14 @@ fn publish(stdin: &[u8], context: &Context) -> Result<(), &'static str> {
     if name == "Stop" {
         let _lock = lock(&dir, &stem)?;
         let previous = read_previous(&dir, &stem);
-        let closed = previous.as_ref().and_then(|p| p.as_object()).and_then(|p| p.get("message_id")).cloned().unwrap_or(Value::Null);
+        let previous = previous.as_ref().and_then(Value::as_object);
+        // Um segundo `Stop` sobre a prévia já fechada guarda o mesmo `closed`: sem ele, um delta
+        // atrasado da mensagem fechada voltaria a aparecer.
+        let closed = match previous {
+            Some(p) if p.get("text") == Some(&json!("")) && p.contains_key("closed") => p["closed"].clone(),
+            Some(p) => p.get("message_id").cloned().unwrap_or(Value::Null),
+            None => Value::Null,
+        };
         let mut payload = Map::new();
         payload.insert("text".into(), json!(""));
         payload.insert("ts".into(), json!(input::now()));
