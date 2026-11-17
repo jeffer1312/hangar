@@ -145,10 +145,10 @@ mod tests {
     fn written_conversation_rows_wait_in_the_conversation_and_unwritten_ones_in_the_panel() {
         let mut row = queued("c", Some(true));
         row.queued_conversation = Some(true);
-        let derived = derived(&[queued("a", Some(false)), row.clone()]);
-        assert_eq!(derived.entries.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(), vec!["a"]);
+        let panel = derived(&[queued("a", Some(false)), row.clone()]);
+        assert_eq!(panel.entries.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(), vec!["a"]);
         assert_eq!(len(None, &[row.clone()]), 0);
-        assert!(!hidden("queued-c", &derived));
+        assert!(!hidden("queued-c", &panel));
         assert!(conversation_waiting(&row), "escrita mas ainda não lida pela CLI");
         let ends: [fn(&mut ChatEvent); 3] = [|e| e.queued_confirmed = Some(true), |e| e.queued_consumed = Some(true), |e| e.desistiu = Some(true)];
         for done in ends {
@@ -161,9 +161,9 @@ mod tests {
         let mut unwritten = row.clone();
         unwritten.queued_delivered = Some(false);
         assert!(!conversation_waiting(&unwritten));
-        let derived = derived(&[unwritten.clone()]);
-        assert_eq!(derived.entries.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(), vec!["c"]);
-        assert!(hidden("queued-c", &derived));
+        let panel = derived(&[unwritten.clone()]);
+        assert_eq!(panel.entries.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(), vec!["c"]);
+        assert!(hidden("queued-c", &panel));
         assert_eq!(len(None, &[unwritten]), 1);
     }
 

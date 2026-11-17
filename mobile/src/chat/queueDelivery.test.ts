@@ -128,7 +128,8 @@ it('"Na conversa" vale só com a sessão trabalhando, em Claude e Codex, e nunca
 
 it('"Na conversa" manda delivery; o servidor antigo recusa com 422 e a mensagem vai pela fila comum', async () => {
   vi.mocked(fetch)
-    .mockResolvedValueOnce(new Response('{"detail":"corpo"}', { status: 422 }))
+    .mockResolvedValueOnce(new Response(JSON.stringify({ detail: [{ type: 'extra_forbidden', loc: ['body', 'delivery'],
+      msg: 'Extra inputs are not permitted', input: 'conversation' }] }), { status: 422 }))
     .mockResolvedValueOnce(new Response('{"ok":true,"delivered":false}'));
   await expect(sendWithDelivery(server, 'sess', 'oi', { kind: 'conversation' })).resolves.toBeNull();
   const calls = vi.mocked(fetch).mock.calls;
