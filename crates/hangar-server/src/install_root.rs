@@ -50,14 +50,13 @@ fn version_of(home: &Path) -> String {
 
 /// O servidor da religada, resolvido de novo como na primeira subida: depois de uma atualização o
 /// `current` aponta para outra versão, e o binário antigo pode já ter sido podado. A versão que
-/// passou a subir pelo Python não é religada aqui (o lançador não troca de modo no meio): o erro
-/// leva o Python, e a vigia da tarefa recupera.
+/// sobe pelo Python (a volta da atualização) é religada pelo Python dela: nada mais traz de volta
+/// um lançador que sai.
 pub(crate) fn relaunch_backend(home: &Path, args: &[String], windows: bool, explicit: Option<&std::ffi::OsStr>, notes: &mut Vec<String>)
     -> Result<(std::process::Command, String), (&'static str, PathBuf)> {
     let version = version_of(home);
     match backend_noted(home, args, windows, explicit, notes)? {
-        Backend::Direct(command) => Ok((command, version)),
-        Backend::Python(command) => Err(("launch_relaunch_python", PathBuf::from(command.get_program()))),
+        Backend::Direct(command) | Backend::Python(command) => Ok((command, version)),
     }
 }
 
@@ -133,8 +132,8 @@ fn notify_from_env(state: &str) -> std::io::Result<()> {
 /// No Windows: o servidor no Job do lançador, com o log da tarefa como saída (o Python o abria sozinho).
 /// O Agendador não religa quem cai depois de subir (decisão 38): o servidor que sai sem parada pedida
 /// (`exit_is_requested_stop`) volta depois da espera de `Relaunch`, sem desistir, resolvido de novo pelo
-/// `current`. O lançador só sai com a parada pedida, morto ou quando a versão nova não sobe direto (a
-/// vigia da tarefa recupera); morto, o Job leva o servidor.
+/// `current`, também a versão que sobe pelo Python. O lançador só sai com a parada pedida ou morto;
+/// morto, o Job leva o servidor.
 #[cfg(windows)]
 fn run_direct(mut command: std::process::Command, log: Option<&Path>, version: &str, lines: Vec<String>, hangar_dir: &Path,
               again: &mut Again<'_>) -> ExitCode {
@@ -182,7 +181,7 @@ fn run_direct(mut command: std::process::Command, log: Option<&Path>, version: &
             }
             Ok(mut child) => {
                 let pid = child.id();
-                match child.wait() {
+                match wait_watching(&mut child, hangar_dir, file.as_ref(), log) {
                     // Sem saber se o servidor saiu, ele é encerrado antes da religada: dois na mesma porta não sobem.
                     Err(error) => {
                         failed(log, "erro", "launch_wait_failed", &format!("{:?}", error.kind()));
@@ -218,8 +217,8 @@ fn run_direct(mut command: std::process::Command, log: Option<&Path>, version: &
         drop(file);
         std::thread::sleep(wait);
         previous_fall = Some(fall);
-        // Depois da espera, quando uma atualização pode ter trocado o `current`. Versão que sobe pelo
-        // Python não é deste lançador; qualquer outra falha pode ser a troca no meio: tenta de novo.
+        // Depois da espera, quando uma atualização pode ter trocado o `current`. Falha pode ser a
+        // troca no meio: tenta de novo.
         loop {
             let mut notes = Vec::new();
             match again(&mut notes) {
@@ -231,10 +230,6 @@ fn run_direct(mut command: std::process::Command, log: Option<&Path>, version: &
                 Err((code, path)) => {
                     for note in &notes { report(log, note); }
                     failed(log, "erro", code, &path.display().to_string());
-                    if code == "launch_relaunch_python" {
-                        report(log, &format!("{code}: {}; o lançador sai sem religar a versão anterior", path.display()));
-                        return ExitCode::from(3);
-                    }
                     let (fall, wait) = relaunch.fall(std::time::Duration::ZERO);
                     report(log, &format!("{code}: {}; tenta de novo em {} ms", path.display(), wait.as_millis()));
                     std::thread::sleep(wait);
@@ -243,6 +238,46 @@ fn run_direct(mut command: std::process::Command, log: Option<&Path>, version: &
             }
         }
     }
+}
+
+/// Espera o servidor sair conferindo a saúde dele, como o `WatchdogSec` do systemd no Linux: travado,
+/// o lançador o encerra (código 1, que não é parada pedida) e a queda segue para a religada.
+#[cfg(windows)]
+fn wait_watching(child: &mut std::process::Child, hangar_dir: &Path, file: Option<&std::fs::File>, log: Option<&Path>)
+    -> std::io::Result<std::process::ExitStatus> {
+    let pid = child.id();
+    let mut watch = crate::watchdog::LauncherWatch::new(std::time::Instant::now());
+    loop {
+        if let Some(status) = child.try_wait()? { return Ok(status); }
+        let verdict = watch.tick(std::time::Instant::now(), || hangar_boot::life::health(hangar_dir, pid),
+            |address| crate::watchdog::health_answers_blocking(address, crate::watchdog::TIMEOUT));
+        if let Some(crate::watchdog::Verdict::Withheld(rounds)) = verdict {
+            say(file, log, &format!("launch_backend_hung: hangar-server pid {pid} sem responder a saúde em {rounds} rodadas seguidas; encerrado"));
+            record(log, "lancador.travado", serde_json::json!({"evento": "lancador.travado", "nivel": "erro", "codigo": "server_hung", "rodadas": rounds}));
+            note_restart_for_doctor(pid, rounds, file, log);
+            match child.kill() {
+                Ok(()) => return child.wait(),
+                // Sem encerrar não há religada: a próxima rodada tenta de novo.
+                Err(error) => say(file, log, &format!("launch_kill_failed: hangar-server pid {pid}: {error}")),
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+}
+
+/// O `hangar-doctor` conta os reinícios do vigia por esta linha, no log que a tarefa `hangar-vigia`
+/// escrevia antes de o vigia morar no lançador.
+#[cfg(windows)]
+fn note_restart_for_doctor(pid: u32, rounds: u32, file: Option<&std::fs::File>, log: Option<&Path>) {
+    use std::io::Write;
+    let Some(base) = hangar_core::paths::log_base() else { return };
+    let path = base.join("privado").join("hangar-vigia.log");
+    let line = format!("{} vigia: hangar-backend sem resposta HTTP; o lançador encerrou o hangar-server pid {pid} depois de {rounds} rodadas\n",
+        chrono::Local::now().format("%Y-%m-%dT%H:%M:%S"));
+    let written = std::fs::create_dir_all(base.join("privado"))
+        .and_then(|()| std::fs::OpenOptions::new().create(true).append(true).open(&path))
+        .and_then(|mut target| target.write_all(line.as_bytes()));
+    if let Err(error) = written { say(file, log, &format!("launch_vigia_log_unwritable: {}: {error}", path.display())); }
 }
 
 /// A parada pedida que não passou pelos tratadores do servidor (`Stop-Process -Force` é `TerminateProcess`)
@@ -473,10 +508,12 @@ mod tests {
             assert_eq!(version, name);
             assert!(std::path::Path::new(command.get_program()).ends_with(std::path::Path::new(name).join("bin").join(exe)), "{command:?}");
         }
+        // Sem a vigia, quem desiste fica fora até o próximo logon: a versão que sobe pelo Python
+        // (a volta da atualização) é religada pelo Python dela.
         relink(&v3);
-        let (code, path) = super::relaunch_backend(home, &[], windows, None, &mut Vec::new()).unwrap_err();
-        assert_eq!(code, "launch_relaunch_python");
-        assert!(path.ends_with(super::python_exe(std::path::Path::new("v3"), windows)), "{path:?}");
+        let (command, version) = super::relaunch_backend(home, &[], windows, None, &mut Vec::new()).unwrap();
+        assert_eq!(version, "v3");
+        assert!(std::path::Path::new(command.get_program()).ends_with(super::python_exe(std::path::Path::new("v3"), windows)), "{command:?}");
     }
 
     #[test]
