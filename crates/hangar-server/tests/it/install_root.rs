@@ -11,7 +11,14 @@ fn launch(home: &Path, args: &[&str]) -> std::process::Output {
 fn launch_outside_checkout(home: &Path, args: &[&str]) -> std::process::Output {
     let copy = home.join("launcher-copy").join(Path::new(env!("CARGO_BIN_EXE_hangar-server")).file_name().unwrap());
     std::fs::create_dir_all(copy.parent().unwrap()).unwrap();
-    std::fs::copy(env!("CARGO_BIN_EXE_hangar-server"), &copy).unwrap();
+    // No Unix a cópia é de outro processo: um fork de teste paralelo herdaria o descritor de escrita
+    // aberto aqui e o exec da cópia falharia com ETXTBSY.
+    if cfg!(unix) {
+        let copied = std::process::Command::new("cp").arg(env!("CARGO_BIN_EXE_hangar-server")).arg(&copy).status().unwrap();
+        assert!(copied.success(), "cp {copied}");
+    } else {
+        std::fs::copy(env!("CARGO_BIN_EXE_hangar-server"), &copy).unwrap();
+    }
     launch_program(&copy, home, args).output().unwrap()
 }
 
