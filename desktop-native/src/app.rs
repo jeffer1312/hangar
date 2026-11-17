@@ -650,6 +650,8 @@ pub struct Hangar {
     etag: Option<String>,
     error: Option<String>,
     list_error: Option<String>,
+    /// Quando a lista do servidor selecionado deixou de responder: a página Status mostra "há N min".
+    list_down_since: Option<Instant>,
     delivery: DeliveryTracker,
     stopping: HashSet<SessionKey>,
     stop_feedback: HashMap<SessionKey, (String, bool)>,
@@ -1202,7 +1204,7 @@ impl Hangar {
             address, token, unsaved_connection: None, connection_focus, root_focus, composer, composer_placeholder: String::new(), _input_subscription: input_subscription, _keyboard_subscription: keyboard_subscription,
             connection_dialog: true, list_online: false, chat_online: false, loading: false, history_started: false,
             history_installed: false, pending_chat: Vec::new(),
-            history_limit: 400, has_older: false, etag: None, error: None, list_error: None,
+            history_limit: 400, has_older: false, etag: None, error: None, list_error: None, list_down_since: None,
             delivery: DeliveryTracker::default(), stopping: HashSet::new(), stop_feedback: HashMap::new(), drafts: HashMap::new(), input_history: HashMap::new(),
             flight: InFlight::default(), action_feedback: HashMap::new(), jev_note_at: HashMap::new(), file_cards: HashMap::new(), queue: Default::default(), send_flight: None, local_send: None, local_queue: None, idle_sends: Vec::new(), send_landed: Vec::new(),
             note_slide: Default::default(), note_last: None, flight_places: Default::default(), live_terms: Vec::new(), keyring: HashMap::new(), vault: HashMap::new(), vault_page: None, plugins_page: None, guide: Default::default(), rename_suggest: Default::default(), tags: HashMap::new(), notice_ignores: HashMap::new(), notice_acted: HashMap::new(), question_open: None, question_card: None,
@@ -1603,6 +1605,7 @@ impl Hangar {
         for (_, (_, _, frames)) in self.media_reveal.drain() { for frame in frames { cx.drop_image(frame, Some(window)); } }
         self.error = None;
         self.list_error = None;
+        self.list_down_since = None;
         self.list_online = false;
         self.chat_online = false;
         self.loading = false;
@@ -2043,6 +2046,7 @@ impl Hangar {
             Payload::Mentions(seq, result) => { self.receive_mentions(seq, result, cx); }
             Payload::Sessions(Ok(sessions)) => {
                 self.list_error = None;
+                self.list_down_since = None;
                 if let Some((address, token)) = self.unsaved_connection.take() {
                     let known = self.servers.iter().any(|s| servers::norm(&s.address) == servers::norm(&address));
                     let label = if known { String::new() } else { servers::default_label(&address) };
@@ -2070,6 +2074,7 @@ impl Hangar {
                     self.error = Some(Self::failure(&error));
                 }
                 self.list_error = Some(self.active_failure(&error));
+                self.list_down_since.get_or_insert_with(Instant::now);
             }
             Payload::Stream(Update::Online) => {
                 if is_chat {
@@ -2082,6 +2087,7 @@ impl Hangar {
                 } else {
                     let back = !self.list_online;
                     self.list_online = true;
+                    self.list_down_since = None;
                     if back { self.server_back(window, cx); }
                     // A lista pode chegar só pelo stream (a primeira leitura falhou com o backend subindo): sem esta leitura
                     // o botão da voz nasce escondido e nenhuma reconexão o traz de volta.
@@ -2097,6 +2103,7 @@ impl Hangar {
                 else {
                     self.list_online = false;
                     self.list_error = Some(self.active_failure(&error));
+                    self.list_down_since.get_or_insert_with(Instant::now);
                     let server = self.active_key();
                     if self.set_keyring(&server, false, window, cx) { self.redraw(panes::Area::Nav, cx); }
                     if self.set_vault_requests(&server, None, window, cx) { self.redraw(panes::Area::Nav, cx); }

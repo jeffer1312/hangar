@@ -3,7 +3,7 @@
 //! servidor de outra máquina fora só ganha o aviso, sem Subir. Leitura e ações rodam fora da thread da janela.
 use super::*;
 use super::super::device::DeviceReply;
-use hangar_local_server::{DEFAULT_PORT, Failure as LocalFailure, LocalServer, LocalState, Os, PortHolder, Versions};
+use hangar_local_server::{DEFAULT_PORT, Failure as LocalFailure, Listeners, LocalServer, LocalState, Os, PortHolder, Versions};
 
 /// Entre leituras enquanto o serviço diz que está subindo: o gerenciador não avisa quando decide. O próprio
 /// crate encerra a subida em `STARTING_LIMIT`, então a repetição tem fim.
@@ -35,7 +35,7 @@ pub(super) enum Phase { Stopped, Starting, Failed }
 pub(super) enum Step { Done, Running, Waiting }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum Fix { FreePort(PortHolder), UseVersion(String), Reinstall }
+pub(super) enum Fix { FreePort(PortHolder), Listeners, UseVersion(String), Reinstall }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct FixRow { pub fix: Fix, pub title: String, pub detail: String, pub button: String, pub primary: bool }
@@ -143,16 +143,20 @@ fn failure_view(failure: &LocalFailure, probe: &Probe, os: Os, attempt: Attempt)
     let previous = switchable(os, &probe.versions);
     match failure.code.as_str() {
         "port_unavailable" => {
-            let title = fill(tr("status_down_port_title"), &[("port", &probe.port.to_string())]);
-            let Some(holder) = &failure.port_holder else { return failed(title, Some(tr("status_down_port_hidden")), Vec::new(), output) };
+            let port = probe.port.to_string();
+            let title = fill(tr("status_down_port_title"), &[("port", &port)]);
+            let listeners = FixRow { fix: Fix::Listeners, title: tr("status_down_fix_listeners"),
+                detail: fill(tr("status_down_fix_listeners_detail"), &[("port", &port)]), button: tr("status_down_fix_listeners_button"), primary: false };
+            let Some(holder) = &failure.port_holder else { return failed(title, Some(tr("status_down_port_hidden")), vec![listeners], output) };
             let (name, pid) = (holder_name(holder), holder.pid.to_string());
             let params = [("name", name.as_str()), ("pid", pid.as_str())];
             let detail = fill(tr(if holder.same_user { "status_down_port_holder" } else { "status_down_port_holder_other" }), &params);
             // Processo de outro usuário: daqui não se encerra.
-            let fixes = if holder.same_user {
+            let mut fixes = if holder.same_user {
                 vec![FixRow { fix: Fix::FreePort(holder.clone()), title: fill(tr("status_down_fix_free"), &params),
                     detail: fill(tr("status_down_fix_free_detail"), &params), button: tr("status_down_fix_free_button"), primary: false }]
             } else { Vec::new() };
+            fixes.push(listeners);
             failed(title, Some(detail), fixes, output)
         }
         code @ ("launch_no_server" | "launch_no_python") => {
@@ -186,6 +190,41 @@ fn failure_view(failure: &LocalFailure, probe: &Probe, os: Os, attempt: Attempt)
     }
 }
 
+/// "Não responde há 2 min": desde quando a lista do servidor selecionado caiu.
+pub(super) fn silent_for(elapsed: Duration) -> String {
+    match elapsed.as_secs() / 60 {
+        0 => tr("status_down_silent_moment"),
+        minutes @ 1..60 => fill(tr("status_down_silent_minutes"), &[("n", &minutes.to_string())]),
+        minutes => fill(tr("status_down_silent_hours"), &[("n", &(minutes / 60).to_string())]),
+    }
+}
+
+/// O servidor selecionado está fora do ar. A lista também cai com 503 quando só os fatos dela falharam: de outra
+/// máquina, só a conexão do retrato que também falhou confirma. `stream` é `None` sem essa conexão aberta (página
+/// fechada), e então vale a lista; aberta, `Some(falhou)`.
+pub(super) fn is_down(list_online: bool, list_error: bool, loopback: bool, stream: Option<bool>) -> bool {
+    !list_online && list_error && (loopback || stream.is_none_or(|failed| failed))
+}
+
+/// Quem escuta na porta, para o diálogo do "Ver processos…": linhas (nome, pid, usuário) e as notas abaixo delas.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ListenersView { pub rows: Vec<[String; 3]>, pub notes: Vec<String> }
+
+pub(super) fn listeners_model(listeners: &Listeners, port: u16) -> ListenersView {
+    let rows = listeners.holders.iter().map(|holder| [holder_name(holder), fill(tr("status_down_listeners_pid"), &[("pid", &holder.pid.to_string())]),
+        tr(if holder.same_user { "status_down_listeners_you" } else { "status_down_listeners_other_user" })]).collect();
+    let mut notes = Vec::new();
+    match &listeners.error {
+        Some(error) => notes.push(fill(tr("status_down_listeners_error"), &[("detail", error)])),
+        None if listeners.is_empty() => notes.push(fill(tr("status_down_listeners_none"), &[("port", &port.to_string())])),
+        None => {}
+    }
+    if listeners.hidden { notes.push(tr("status_down_listeners_hidden")); }
+    // Daqui só se encerra processo do próprio usuário: o diálogo diz por que não há o que fazer com os outros.
+    if listeners.holders.iter().any(|holder| !holder.same_user) { notes.push(tr("status_down_listeners_other_note")); }
+    ListenersView { rows, notes }
+}
+
 /// Frase de uma ação que falhou, pelo código do `ActionError`.
 pub(super) fn action_error_text(code: &str, detail: &str) -> String {
     let key = format!("status_down_error_{code}");
@@ -201,6 +240,8 @@ pub(in crate::app) struct Down {
     key: String,
     /// Só com o servidor nesta máquina.
     local: Option<Local>,
+    /// Redesenha a página a cada meio minuto, para o "há N min" andar; some com a queda.
+    tick: Option<Task<()>>,
 }
 
 struct Local {
@@ -258,7 +299,11 @@ where F: Fn(DeviceReply) -> std::pin::Pin<Box<dyn Future<Output = ()> + Send>> +
     }
     loop {
         let home = home.clone();
-        let Ok(probe) = tokio::task::spawn_blocking(move || read(&LocalServer::new(&home, port))).await else { return };
+        let probe = match tokio::task::spawn_blocking(move || read(&LocalServer::new(&home, port))).await {
+            Ok(probe) => probe,
+            // A leitura não voltou: sem o erro, o painel ficaria girando em "Lendo" para sempre.
+            Err(e) => return send(LocalReply::Done(Some(("local_server_io".to_owned(), e.to_string())))).await,
+        };
         let starting = probe.state == LocalState::Starting;
         send(LocalReply::Probe(Box::new(probe))).await;
         if !starting { return; }
@@ -267,8 +312,12 @@ where F: Fn(DeviceReply) -> std::pin::Pin<Box<dyn Future<Output = ()> + Send>> +
 }
 
 impl Hangar {
-    /// O servidor selecionado não responde: a lista caiu com erro.
-    fn server_down(&self) -> bool { self.api.is_some() && !self.list_online && self.list_error.is_some() }
+    /// O servidor selecionado não responde (`is_down`).
+    fn server_down(&self) -> bool {
+        let Some(api) = &self.api else { return false };
+        let page = &self.device.status;
+        is_down(self.list_online, self.list_error.is_some(), api.is_loopback(), page.stream.as_ref().map(|_| page.stream_failed))
+    }
 
     /// Abre ou fecha a queda pelo estado da lista. Chamado no desenho da navegação e da página.
     pub(super) fn status_down_sync(&mut self) {
@@ -281,7 +330,7 @@ impl Hangar {
             (Some((key, loopback)), _) => {
                 let port = url::Url::parse(&key).ok().and_then(|url| url.port_or_known_default()).unwrap_or(DEFAULT_PORT);
                 let local = loopback.then(|| Local { port, probe: None, tried: false, busy: false, error: None, generation: 0, task: None });
-                self.device.status.down = Some(Down { key, local });
+                self.device.status.down = Some(Down { key, local, tick: None });
                 if loopback { self.local_run(None); }
             }
         }
@@ -294,7 +343,7 @@ impl Hangar {
         let home = std::env::home_dir();
         let Some(local) = self.local_mut() else { return };
         if let Some(task) = local.task.take() { task.abort(); }
-        local.generation += 1;
+        local.generation = super::next_generation();
         if action.is_some() { (local.busy, local.tried, local.error) = (true, true, None); }
         let Some(home) = home else {
             local.busy = false;
@@ -310,7 +359,11 @@ impl Hangar {
         if local.generation != generation { return; }
         let mut back = false;
         match reply {
-            LocalReply::Done(error) => local.error = error.map(|(code, detail)| action_error_text(&code, &detail)),
+            LocalReply::Done(error) => {
+                // Falhou: nada mais vai tirar o painel da subida (ação recusada ou leitura que não voltou).
+                if error.is_some() { local.busy = false; }
+                local.error = error.map(|(code, detail)| action_error_text(&code, &detail));
+            }
             LocalReply::Probe(probe) => {
                 back = probe.state == LocalState::Running && local.probe.as_ref().is_none_or(|p| p.state != LocalState::Running);
                 local.probe = Some(*probe);
@@ -346,6 +399,7 @@ impl Hangar {
         let this = cx.entity().downgrade();
         match fix {
             Fix::Reinstall => self.open_setup_from_menu(window, cx),
+            Fix::Listeners => self.show_listeners(window, cx),
             Fix::FreePort(holder) => {
                 let (name, pid) = (holder_name(&holder), holder.pid.to_string());
                 let params = [("name", name.as_str()), ("pid", pid.as_str())];
@@ -371,15 +425,50 @@ impl Hangar {
         }
     }
 
+    /// "Ver processos…": quem escuta na porta agora. O diálogo abre lendo; a leitura roda fora da thread da janela.
+    fn show_listeners(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use gpui_kit::component::WindowExt;
+        let Some(port) = self.local_mut().map(|local| local.port) else { return };
+        let read: std::rc::Rc<std::cell::RefCell<Option<Listeners>>> = Default::default();
+        match std::env::home_dir() {
+            Some(home) => {
+                let (done, result) = tokio::sync::oneshot::channel();
+                self.runtime.spawn_blocking(move || { let _ = done.send(LocalServer::new(&home, port).listeners()); });
+                let read = read.clone();
+                cx.spawn_in(window, async move |this, cx| {
+                    let listeners = result.await.unwrap_or_else(|e| Listeners { error: Some(e.to_string()), ..Listeners::default() });
+                    *read.borrow_mut() = Some(listeners);
+                    let _ = this.update_in(cx, |_, window, _| window.refresh());
+                }).detach();
+            }
+            None => *read.borrow_mut() = Some(Listeners { error: Some("HOME".to_owned()), ..Listeners::default() }),
+        }
+        let title = fill(tr("status_down_listeners_title"), &[("port", &port.to_string())]);
+        window.open_dialog(cx, move |dialog, _, _| super::super::popup::dialog(dialog).w(px(440.)).title(title.clone())
+            .child(listeners_body(port, read.borrow().as_ref()))
+            .footer(div().flex().justify_end().child(Button::new("status-listeners-close").label(tr("close"))
+                .on_click(|_, window, cx| window.close_dialog(cx)))));
+    }
+
     // -----------------------------------------------------------------------------------------
     // Desenho
 
     /// O corpo da página com o servidor fora; `None` deixa a página normal (de pé, ou sem queda).
     pub(super) fn status_down_body(&mut self, cx: &mut Context<Self>) -> Option<Vec<AnyElement>> {
         self.status_down_sync();
+        let down = self.device.status.down.as_mut()?;
+        if down.tick.is_none() {
+            down.tick = Some(cx.spawn(async move |this, cx| loop {
+                cx.background_executor().timer(Duration::from_secs(30)).await;
+                let Ok(()) = this.update(cx, |this, cx| if this.settings == Some(Page::Status) { cx.notify(); }) else { return };
+            }));
+        }
         let down = self.device.status.down.as_ref()?;
         let Some(local) = &down.local else { return Some(vec![self.remote_down(cx)]) };
-        let Some(probe) = &local.probe else { return Some(vec![checking()]) };
+        let Some(probe) = &local.probe else {
+            // A primeira leitura não voltou: o erro e o ler de novo, nunca o "Lendo" parado.
+            return Some(vec![match local.error.clone() { Some(error) => self.read_failed(error, cx), None => checking() }]);
+        };
         let attempt = if local.busy { Attempt::Running } else if local.tried { Attempt::Done } else { Attempt::None };
         let view = down_model(probe, Os::current(), attempt)?;
         let (error, busy) = (local.error.clone(), local.busy);
@@ -390,33 +479,58 @@ impl Hangar {
     fn remote_down(&self, cx: &mut Context<Self>) -> AnyElement {
         let color = theme::danger();
         let server = self.server_label(cx);
+        let body = match self.list_down_since {
+            Some(since) => fill(tr("status_down_remote_body"), &[("silent", &silent_for(since.elapsed()))]),
+            None => tr_shared("status_down_body", &[]),
+        };
         settings_box().flex_row().items_start().gap(px(16.)).p(px(16.))
             .child(big_icon(chrome::small_icon(IconName::Close, 24., color).into_any_element(), color))
             .child(div().flex_1().min_w_0().flex().flex_col().gap(px(3.))
                 .child(div().text_size(px(18.)).font_weight(FontWeight::SEMIBOLD).whitespace_normal()
                     .child(tr_shared("status_down_title", &[("server", &server)])))
-                .child(div().text_size(px(12.5)).text_color(theme::muted()).whitespace_normal().child(tr_shared("status_down_body", &[])))
+                .child(div().text_size(px(12.5)).text_color(theme::muted()).whitespace_normal().child(body))
                 .child(div().mt(px(9.)).child(Button::new("status-down-remote-retry").outline().small().icon(IconName::RotateCw).label(tr("status_retry"))
                     .on_click(cx.listener(|this, _, _, cx| this.status_retry(cx))))))
             .into_any_element()
     }
 
+    /// A leitura do servidor desta máquina não voltou.
+    fn read_failed(&self, error: String, cx: &mut Context<Self>) -> AnyElement {
+        let color = theme::danger();
+        settings_box().flex_row().items_start().gap(px(16.)).p(px(16.)).border_color(color.opacity(0.45))
+            .child(big_icon(chrome::small_icon(IconName::TriangleAlert, 24., color).into_any_element(), color))
+            .child(div().flex_1().min_w_0().flex().flex_col().gap(px(3.))
+                .child(div().text_size(px(18.)).font_weight(FontWeight::SEMIBOLD).whitespace_normal().child(tr("status_down_read_failed_title")))
+                .child(div().text_size(px(12.5)).text_color(theme::muted()).whitespace_normal().child(error))
+                .child(div().mt(px(9.)).child(Button::new("status-down-read-retry").outline().small().icon(IconName::RotateCw).label(tr("status_retry"))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if let Some(local) = this.local_mut() { (local.error, local.probe) = (None, None); }
+                        this.local_run(None);
+                        cx.notify();
+                    })))))
+            .into_any_element()
+    }
+
+    /// "Não responde" e, com o instante da queda, há quanto tempo.
+    fn silent(&self) -> String {
+        self.list_down_since.map_or_else(|| tr("status_down_silent"), |since| silent_for(since.elapsed()))
+    }
+
     fn render_down(&self, view: DownView, error: Option<String>, busy: bool, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let (icon, color) = match view.phase {
             Phase::Stopped => (chrome::small_icon(IconName::Close, 24., theme::danger()).into_any_element(), theme::danger()),
-            Phase::Starting => (chrome::Spinner::new("status-down-spin", IconName::LoaderCircle, px(22.), theme::warning()).into_any_element(), theme::warning()),
+            Phase::Starting => (spinner("status-down-spin", 22., theme::warning(), view.title.clone()).into_any_element(), theme::warning()),
             Phase::Failed => (chrome::small_icon(IconName::TriangleAlert, 24., theme::danger()).into_any_element(), theme::danger()),
         };
         let sub = match view.phase {
-            Phase::Stopped => Some(match &view.detail { Some(reason) => format!("{} · {reason}", tr("status_down_silent")), None => tr("status_down_silent") }),
+            Phase::Stopped => Some(match &view.detail { Some(reason) => format!("{} · {reason}", self.silent()), None => self.silent() }),
             _ => view.detail.clone(),
         };
         let steps = (!view.steps.is_empty()).then(|| div().id("status-down-steps").role(Role::Status).mt(px(12.)).flex().flex_col().gap(px(8.))
             .text_size(px(12.5)).children(view.steps.iter().enumerate().map(|(i, (step, label))| {
                 let mark = match step {
                     Step::Done => chrome::small_icon(IconName::Check, 13., theme::success()).into_any_element(),
-                    Step::Running => chrome::Spinner::new(SharedString::from(format!("status-down-step-{i}")), IconName::LoaderCircle, px(13.), theme::muted())
-                        .into_any_element(),
+                    Step::Running => spinner(&format!("status-down-step-{i}"), 13., theme::muted(), tr("status_down_step_running")).into_any_element(),
                     Step::Waiting => div().size(px(13.)).flex().items_center().justify_center()
                         .child(div().size(px(7.)).rounded_full().border_1().border_color(theme::border_strong())).into_any_element(),
                 };
@@ -450,7 +564,8 @@ impl Hangar {
     fn render_fixes(&self, view: &DownView, busy: bool, cx: &mut Context<Self>) -> AnyElement {
         let rows = view.fixes.iter().enumerate().map(|(i, row)| {
             let (fix, ok) = (row.fix.clone(), row.button.clone());
-            let button = Button::new(SharedString::from(format!("status-down-fix-{i}"))).small().w(px(122.)).label(row.button.clone()).disabled(busy)
+            // Largura mínima, não fixa: o rótulo em inglês ("See processes…") não corta.
+            let button = Button::new(SharedString::from(format!("status-down-fix-{i}"))).small().min_w(px(122.)).label(row.button.clone()).disabled(busy)
                 .on_click(cx.listener(move |this, _, window, cx| this.local_fix(fix.clone(), ok.clone(), window, cx)));
             let button = match (&row.fix, row.primary) {
                 // O contorno vermelho do mock (`.btn.dng`): encerra um processo, não é o caminho de sempre.
@@ -490,11 +605,38 @@ fn big_icon(icon: AnyElement, color: Hsla) -> Div {
     div().size(px(52.)).flex_shrink_0().rounded_full().bg(color.opacity(0.18)).flex().items_center().justify_center().child(icon)
 }
 
+/// O `Spinner` com nome para o leitor de tela: sozinho é só um ícone girando.
+fn spinner(id: &str, size: f32, color: Hsla, label: String) -> Stateful<Div> {
+    div().id(SharedString::from(format!("{id}-label"))).role(Role::ProgressIndicator).aria_label(label).flex_shrink_0()
+        .child(chrome::Spinner::new(SharedString::from(id.to_owned()), IconName::LoaderCircle, px(size), color))
+}
+
 /// Antes da primeira leitura do serviço.
 fn checking() -> AnyElement {
     settings_box().flex_row().items_center().gap(px(12.)).p(px(16.))
-        .child(chrome::Spinner::new("status-down-checking", IconName::LoaderCircle, px(16.), theme::muted()))
+        .child(spinner("status-down-checking", 16., theme::muted(), tr("status_down_checking")))
         .child(div().text_size(px(13.)).text_color(theme::muted()).child(tr("status_down_checking")))
+        .into_any_element()
+}
+
+/// O corpo do diálogo "Ver processos…"; `None` enquanto a leitura roda.
+fn listeners_body(port: u16, read: Option<&Listeners>) -> AnyElement {
+    let Some(listeners) = read else {
+        return div().id("status-listeners-loading").role(Role::Status).flex().items_center().gap(px(10.)).text_size(px(13.)).text_color(theme::muted())
+            .child(spinner("status-listeners-spin", 14., theme::muted(), tr("status_down_listeners_loading")))
+            .child(tr("status_down_listeners_loading")).into_any_element();
+    };
+    let view = listeners_model(listeners, port);
+    let rows = (!view.rows.is_empty()).then(|| div().id("status-listeners").role(Role::List).flex().flex_col()
+        .children(view.rows.into_iter().enumerate().map(|(i, [name, pid, user])| div().id(SharedString::from(format!("status-listener-{i}")))
+            .role(Role::ListItem).aria_label(format!("{name}, {pid}, {user}")).flex().items_center().gap(px(12.)).py(px(7.))
+            .when(i > 0, |el| el.border_t_1().border_color(theme::border()))
+            .child(div().flex_1().min_w_0().truncate().font_family(theme::MONO).child(name))
+            .child(div().flex_shrink_0().text_color(theme::muted()).child(pid))
+            .child(div().flex_shrink_0().text_color(theme::muted()).child(user)))));
+    div().flex().flex_col().gap(px(10.)).text_size(px(13.))
+        .children(rows)
+        .children(view.notes.into_iter().map(|note| div().text_color(theme::muted()).whitespace_normal().child(note)))
         .into_any_element()
 }
 
@@ -563,16 +705,63 @@ mod tests {
     fn busy_port_frees_only_a_process_of_this_user() {
         crate::i18n::english_in_this_thread(false);
         let view = down_model(&stopped_with("port_unavailable", "python3", Some(holder(true))), Os::Linux, Attempt::None).unwrap();
-        assert_eq!((view.phase, fixes(&view)), (Phase::Failed, vec![Fix::FreePort(holder(true))]));
+        assert_eq!((view.phase, fixes(&view)), (Phase::Failed, vec![Fix::FreePort(holder(true)), Fix::Listeners]));
         assert!(view.title.contains("8765"));
         assert!(view.detail.as_deref().unwrap().contains("python3") && view.detail.as_deref().unwrap().contains("48211"));
         assert!(view.fixes[0].title.contains("python3"));
+        assert!(view.fixes[1].detail.contains("8765") && !view.fixes[1].primary);
         assert_eq!(view.output, ["linha 1", "linha 2"]);
+        // De outro usuário, ou sem dono visível: só ver quem escuta, nunca encerrar.
         let other = down_model(&stopped_with("port_unavailable", "python3", Some(holder(false))), Os::Linux, Attempt::None).unwrap();
-        assert!(other.fixes.is_empty());
+        assert_eq!(fixes(&other), [Fix::Listeners]);
         let hidden = down_model(&stopped_with("port_unavailable", "", None), Os::Linux, Attempt::None).unwrap();
-        assert_eq!((hidden.phase, hidden.fixes.len()), (Phase::Failed, 0));
+        assert_eq!((hidden.phase, fixes(&hidden)), (Phase::Failed, vec![Fix::Listeners]));
         assert_eq!(hidden.detail.as_deref(), Some(tr("status_down_port_hidden").as_str()));
+    }
+
+    #[test]
+    fn listeners_dialog_names_the_user_and_explains_other_users() {
+        crate::i18n::english_in_this_thread(false);
+        let mine = PortHolder { pid: 1, name: String::new(), same_user: true, start_time: 0 };
+        let view = listeners_model(&Listeners { holders: vec![holder(false), mine], hidden: true, error: None }, 8765);
+        assert_eq!(view.rows, [
+            ["python3".to_owned(), "pid 48211".to_owned(), tr("status_down_listeners_other_user")],
+            [tr("status_down_unknown_process"), "pid 1".to_owned(), tr("status_down_listeners_you")],
+        ]);
+        assert_eq!(view.notes, [tr("status_down_listeners_hidden"), tr("status_down_listeners_other_note")]);
+        let only_mine = listeners_model(&Listeners { holders: vec![holder(true)], ..Listeners::default() }, 8765);
+        assert!(only_mine.notes.is_empty());
+        let none = listeners_model(&Listeners::default(), 8765);
+        assert!(none.rows.is_empty() && none.notes.len() == 1 && none.notes[0].contains("8765"));
+        // A consulta falhou: o erro, nunca "ninguém escuta".
+        let failed = listeners_model(&Listeners { error: Some("ss: not found".into()), ..Listeners::default() }, 8765);
+        assert_eq!(failed.notes.len(), 1);
+        assert!(failed.notes[0].contains("ss: not found"));
+    }
+
+    #[test]
+    fn silent_time_counts_minutes_then_hours() {
+        crate::i18n::english_in_this_thread(true);
+        assert_eq!(silent_for(Duration::from_secs(59)), tr("status_down_silent_moment"));
+        assert_eq!(silent_for(Duration::from_secs(120)), "Not answering for 2 min");
+        assert_eq!(silent_for(Duration::from_secs(59 * 60 + 59)), "Not answering for 59 min");
+        assert_eq!(silent_for(Duration::from_secs(2 * 3600 + 600)), "Not answering for 2 h");
+        crate::i18n::english_in_this_thread(false);
+        assert_eq!(silent_for(Duration::from_secs(120)), "Não responde há 2 min");
+    }
+
+    #[test]
+    fn a_remote_server_is_down_only_when_the_status_stream_also_failed() {
+        // Lista de pé ou sem erro: nunca parado.
+        assert!(!is_down(true, true, false, None));
+        assert!(!is_down(false, false, true, None));
+        // Outra máquina com a página aberta: o 503 da lista sozinho não basta, o retrato ainda chega.
+        assert!(!is_down(false, true, false, Some(false)));
+        assert!(is_down(false, true, false, Some(true)));
+        // Página fechada (o ponto da navegação): vale a lista.
+        assert!(is_down(false, true, false, None));
+        // Esta máquina: quem decide é a leitura do serviço.
+        assert!(is_down(false, true, true, Some(false)));
     }
 
     #[test]

@@ -16,8 +16,10 @@ fn series(slot: usize) -> Hsla {
     match slot { 0 => theme::border_strong(), 1..=4 => super::super::costs::chart(slot), _ => theme::muted() }
 }
 
+/// Dado que só aparece no tooltip: o mesmo texto é o nome acessível, e o elemento entra no Tab, com o contorno do foco.
 fn tip(el: Stateful<Div>, text: String) -> Stateful<Div> {
-    el.tooltip(move |window, cx| Tooltip::new(text.clone()).build(window, cx))
+    el.aria_label(text.clone()).focusable().tab_stop(true).focus_visible(|el| el.border_1().border_color(theme::accent_focus()))
+        .tooltip(move |window, cx| Tooltip::new(text.clone()).build(window, cx))
 }
 
 fn card(flash: bool) -> Div {
@@ -76,9 +78,15 @@ fn chip_row(chips: &[Chip]) -> Div {
 
 const SPARK_HEIGHT: f32 = 46.;
 
+/// O nome acessível da curva: cada ponto com o valor e há quanto tempo, o que o mouse lê no tooltip.
+fn spark_label(label: &str, spark: &Spark) -> String {
+    let points = spark.points.iter().map(|p| format!("{} {}", p.text, p.ago)).collect::<Vec<_>>().join("; ");
+    format!("{label}: {points}")
+}
+
 /// A curva da última hora, com a média como linha neutra e uma bolinha no valor de agora; passar o mouse
-/// mostra o valor e há quanto tempo.
-fn spark_chart(id: &'static str, spark: &Spark) -> Div {
+/// mostra o valor e há quanto tempo; pelo teclado, o foco na curva lê os mesmos pontos.
+fn spark_chart(id: &'static str, label: &str, spark: &Spark) -> Stateful<Div> {
     #[derive(Clone)]
     struct Row { key: SharedString, v: f64, avg: f64, text: SharedString, ago: SharedString }
     let avg = spark.avg_value.unwrap_or(f64::NAN);
@@ -103,7 +111,9 @@ fn spark_chart(id: &'static str, spark: &Spark) -> Div {
         chart.y(|r: &Row| r.avg).stroke(theme::border_strong()).fill(transparent_black()).linear()
     } else { chart };
     // A ponta da curva fica na borda direita do gráfico; o anel na cor do cartão a destaca da área.
-    div().relative().w_full().h(px(SPARK_HEIGHT)).child(chart)
+    div().id(SharedString::from(format!("{id}-points"))).role(Role::Image).aria_label(spark_label(label, spark))
+        .focusable().tab_stop(true).focus_visible(|el| el.border_1().border_color(theme::accent_focus()))
+        .relative().w_full().h(px(SPARK_HEIGHT)).child(chart)
         .child(div().absolute().right(px(-5.)).top(px(last_y - 5.)).size(px(10.)).rounded_full()
             .border_2().border_color(theme::boxed()).bg(color))
 }
@@ -236,13 +246,13 @@ impl Hangar {
 
 fn stat_card(id: &'static str, label: String, spark: &Spark, flash: bool) -> Div {
     card(flash).flex_1().min_w_0()
-        .child(div().text_size(px(12.)).text_color(theme::muted()).child(label))
+        .child(div().text_size(px(12.)).text_color(theme::muted()).child(label.clone()))
         .child(div().mt(px(2.)).flex().items_baseline().gap(px(6.)).min_w_0()
             .child(div().text_size(px(24.)).font_weight(FontWeight::SEMIBOLD).child(spark.value.clone()))
             .children(spark.average.clone().map(|average| div().truncate().text_size(px(12.)).text_color(theme::muted()).child(average))))
         // Uma amostra só não faz curva: a primeira aparece depois de um minuto de servidor.
         .when(spark.points.len() > 1, |el| el
-            .child(spark_chart(id, spark).mt(px(8.)))
+            .child(spark_chart(id, &label, spark).mt(px(8.)))
             .child(div().mt(px(3.)).flex().justify_between().text_size(px(10.5)).text_color(theme::faint())
                 .child(tr("status_hour_back")).child(tr("status_now"))))
 }

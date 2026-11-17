@@ -98,6 +98,8 @@ impl Hangar {
         window.set_hidden(true);
         self.window_tray.hidden = true;
         self.presence_leave();
+        // Na bandeja ninguém lê a página: a conexão do retrato fecha já, sem esperar o próximo evento.
+        self.status_left();
         let (title, body) = (tr("tray_notice_title"), tr("tray_notice_body"));
         self.runtime.spawn_blocking(move || if appearance::take_tray_notice() { show_system_notification(&title, &body) });
         cx.notify();

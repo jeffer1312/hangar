@@ -36,12 +36,21 @@ pub(super) struct StatusPage {
     flash_task: Option<Task<()>>,
     generation: u64,
     stream: Option<JoinHandle<()>>,
+    /// A última notícia da conexão aberta foi a queda ou a recusa: o servidor de outra máquina não responde.
+    stream_failed: bool,
     /// O servidor selecionado fora do ar; com ele nesta máquina, a leitura do serviço e as ações.
     down: Option<down::Down>,
 }
 
 impl Drop for StatusPage {
     fn drop(&mut self) { if let Some(task) = self.stream.take() { task.abort(); } }
+}
+
+/// Geração nova da conexão do retrato ou da leitura local. Um contador só, que nunca volta: a troca de servidor recria
+/// a página, e um número que recomeçasse do zero deixaria passar evento da conexão anterior.
+fn next_generation() -> u64 {
+    static GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1
 }
 
 /// A linha marcada de cada bloco: o pulo da lista de atenção e a busca das Configurações rolam até ela.
@@ -124,9 +133,9 @@ impl Hangar {
     /// Fora da página (outra página, fechada ou janela na bandeja): a conexão fecha e o que chegar dela é descartado.
     pub(super) fn status_left(&mut self) {
         let page = &mut self.device.status;
-        page.generation += 1;
+        page.generation = next_generation();
         if let Some(task) = page.stream.take() { task.abort(); }
-        page.live = false;
+        (page.live, page.stream_failed) = (false, false);
     }
 
     /// Abre a conexão. O retrato que já está na tela fica até o próximo chegar.
@@ -136,7 +145,8 @@ impl Hangar {
         if self.active_invite() || self.window_tray.hidden { return; }
         let page = &mut self.device.status;
         if let Some(task) = page.stream.take() { task.abort(); }
-        page.generation += 1;
+        page.generation = next_generation();
+        page.stream_failed = false;
         if page.view.value.is_none() { page.view.loading = true; }
         let generation = page.generation;
         let done = self.device_send_later();
@@ -181,15 +191,22 @@ impl Hangar {
                 let blocks = model::view_model(&snapshot);
                 let page = &mut self.device.status;
                 page.view.set(Ok(blocks));
-                (page.detail, page.live) = (None, true);
+                (page.detail, page.live, page.stream_failed) = (None, true, false);
             }
-            // Só prova que a conexão vive: nada a redesenhar. A leitura local já saiu acima.
-            Feed::Ping | Feed::Local(..) => return,
-            Feed::Lost => self.device.status.live = false,
+            // Só prova que a conexão vive: nada a redesenhar, salvo o painel de outra máquina parada.
+            // A leitura local já saiu acima.
+            Feed::Ping => {
+                if !std::mem::take(&mut self.device.status.stream_failed) { return; }
+            }
+            Feed::Local(..) => return,
+            Feed::Lost => {
+                let page = &mut self.device.status;
+                (page.live, page.stream_failed) = (false, true);
+            }
             Feed::Failed(error) => {
                 let (text, detail) = failure_text(&self.server_label(cx), &error);
                 let page = &mut self.device.status;
-                page.live = false;
+                (page.live, page.stream_failed) = (false, true);
                 // Com um retrato na tela, a falha só apaga o "ao vivo": o servidor parado aparece no ponto da navegação.
                 if page.view.ok().is_none() {
                     page.view.set(Err(text));
