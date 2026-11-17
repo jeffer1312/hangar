@@ -1597,6 +1597,8 @@ impl Executor {
             if !self.expected_work(payload) {return Ok(reply(id,Disposition::Rejected,json!({"code":"queue_steer_work_changed","cleanup":"not_needed"})));}
             let services=self.services("maintenance","maintenance","");
             let facts=services.facts(&self.target.binding).await.map_err(|_|error("terminal_facts"))?;
+            // A leitura dos fatos espera o terminal: o turno pode ter mudado nesse meio.
+            if !self.expected_work(payload) {return Ok(reply(id,Disposition::Rejected,json!({"code":"queue_steer_work_changed","cleanup":"not_needed"})));}
             if facts.binding!=self.target.binding {return Ok(reply(id,Disposition::Deferred,json!({"code":"queue_steer_not_delivered","cleanup":"not_needed"})));}
             if facts.open_question {return Ok(reply(id,Disposition::Rejected,json!({"code":"queue_steer_question_open","cleanup":"not_needed"})));}
             let driver=TerminalDriver::new(self.target.binding.clone(),services,self.options.io.clone(),self.options.limits.clone());
