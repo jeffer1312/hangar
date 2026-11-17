@@ -38,8 +38,7 @@ export function queueSendMode(mode: DeliveryMode, ready: boolean, state: string,
   headless: boolean, message: string, events: ChatEvent[], ask: AskQuestionPayload | null): QueueSendMode | undefined {
   if (state !== 'working' || (provider !== 'claude' && provider !== 'codex') || message.trimStart().startsWith('/')) return;
   if (mode === 'direct') return { kind: 'direct', terminalClaude: provider === 'claude' && !headless };
-  // Claude com terminal fica na Fila (o servidor faria o mesmo): assim o eco já nasce no painel.
-  if (mode === 'conversation') return provider === 'claude' && !headless ? undefined : { kind: 'conversation' };
+  if (mode === 'conversation') return { kind: 'conversation' };
   if (mode !== 'jev' || !ready) return;
   let latest = -1;
   for (let i = events.length - 1; i >= 0; i--) {
@@ -84,11 +83,13 @@ export async function readQueueJev(server: Server, signal: AbortSignal): Promise
   return (value as { available: boolean }).available;
 }
 
-export async function sendWithDelivery(server: Server, name: string, text: string, mode: Exclude<QueueSendMode, 'steer'>): Promise<DeliveryFeedback | null> {
+/** O "Na conversa" que o servidor mandou para a fila comum: o eco passa para o painel "Na fila". */
+export const QUEUED_INSTEAD = Symbol('queued-instead');
+
+export async function sendWithDelivery(server: Server, name: string, text: string, mode: Exclude<QueueSendMode, 'steer'>): Promise<DeliveryFeedback | null | typeof QUEUED_INSTEAD> {
   if (mode.kind === 'conversation') {
     // A bolha "Em espera" na conversa já descreve o envio.
-    await sendInputForServer(server, name, text, 'conversation');
-    return null;
+    return await sendInputForServer(server, name, text, 'conversation') ? null : QUEUED_INSTEAD;
   }
   const steer = mode.kind === 'direct' && !mode.terminalClaude;
   const body = mode.kind === 'jev' ? { text, jev_task: mode.task, jev_message: mode.message }

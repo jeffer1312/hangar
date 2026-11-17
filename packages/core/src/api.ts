@@ -936,16 +936,23 @@ export async function rejectsDeliveryField(res: Response): Promise<boolean> {
     d?.type === 'extra_forbidden' && Array.isArray(d.loc) && d.loc[d.loc.length - 1] === 'delivery');
 }
 
-export async function sendInputForServer(s: Server, name: string, text: string, delivery?: 'conversation'): Promise<void> {
+/** Com `delivery`, devolve se o servidor a pôs "Na conversa"; `false` é a fila comum (servidor que não leva o modo a
+ *  esta sessão ou anterior a ele). */
+export async function sendInputForServer(s: Server, name: string, text: string, delivery?: 'conversation'): Promise<boolean> {
   const post = (body: Record<string, string>) => apiFetchRes(`/api/sessions/${encodeURIComponent(name)}/input`, {
     method: 'POST',
     body: JSON.stringify(body),
   }, s);
   let res = await post(delivery ? { text, delivery } : { text });
+  let accepted = !!delivery;
   // Só o servidor anterior ao "Na conversa" vai pela fila comum: ele recusa a chave nova antes de gravar.
   // Outro 422 é recusa de verdade e aparece, sem trocar o modo calado.
-  if (delivery && res.status === 422 && await rejectsDeliveryField(res)) res = await post({ text });
+  if (delivery && res.status === 422 && await rejectsDeliveryField(res)) { res = await post({ text }); accepted = false; }
   if (!res.ok) throw Object.assign(new Error(`${res.status}: ${await errorDetail(res)}`), { status: res.status });
+  if (!accepted) return false;
+  // Só o `false` dito pelo servidor é fila comum: corpo ilegível não prova nada, e a mensagem segue na conversa.
+  const body = await res.json().catch(() => null) as { conversation?: unknown } | null;
+  return body?.conversation !== false;
 }
 
 // Responde uma opção do picker (awaiting_input) direto do card. Mesma convenção de índice do

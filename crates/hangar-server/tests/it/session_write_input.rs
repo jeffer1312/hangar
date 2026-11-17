@@ -338,20 +338,22 @@ async fn conversation_with_steer_or_an_unknown_mode_is_a_rust_422() {
     assert_eq!(python.hits_to("/api/sessions/s/input"), 0);
 }
 
-/// Claude com terminal: o Orientar dali corta o turno, então "Na conversa" vira a fila comum, sem marca.
+/// Claude com terminal: a mensagem nasce marcada e é digitada pelo ator, sem o `ctrl+x ctrl+s` do Orientar,
+/// que cortaria o turno.
 #[tokio::test]
 #[cfg(unix)]
-async fn conversation_on_a_terminal_session_takes_the_queue_path() {
+async fn conversation_on_a_terminal_session_is_marked_and_never_cuts_the_turn() {
     let (dir, interactions) = (tempfile::tempdir().unwrap(), Arc::new(hangar_server::interactions::InteractionStore::default()));
     let (registry, _plugin) = crate::session_write_control::registry_with_plugin(&interactions).await;
     crate::session_write_control::open_terminal(&registry, dir.path(), "t").await;
     let (python, server) = serve(registry.clone(), Duration::from_secs(5)).await;
     let (status, reply) = post(server, "t", "input", r#"{"text":"oi","delivery":"conversation"}"#).await;
     assert_ne!(status, 422, "{reply}");
-    assert_ne!(reply["conversation"], true, "{reply}");
+    assert_eq!(reply["conversation"], true, "{reply}");
     assert_ne!(reply["steered"], true, "nada de ctrl+x ctrl+s: {reply}");
     let rows = registry.queue_action("t", "load".into(), Action::Load).await.unwrap();
-    assert!(rows.as_array().unwrap().iter().all(|row| row["conversation"] != true), "{rows}");
+    let row = rows.as_array().unwrap().iter().find(|row| row["text"] == "oi").cloned().unwrap();
+    assert_eq!(row["conversation"], true, "{row}");
     assert_eq!(python.hits_to("/api/sessions/t/input"), 0);
 }
 

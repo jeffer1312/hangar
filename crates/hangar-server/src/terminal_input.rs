@@ -534,7 +534,8 @@ impl PaneFormats {
     }
 }
 /// As teclas da reserva por teclado (T5): uma por chamada, e só os dois acordes medidos juntos.
-const MODS_KEYS: [&[&str]; 4] = [&["C-x", "Tab"], &["Tab"], &["Enter"], &["C-x", "x"]];
+const SEND_NOW_HINTS: [&str; 2] = ["ctrl+x ctrl+s to send now", "ctrl+enter to send now"];
+const MODS_KEYS: [&[&str]; 4] =[&["C-x", "Tab"], &["Tab"], &["Enter"], &["C-x", "x"]];
 
 /// Retrato comparável do menu: mover cursor e marcar caixas não troca a pergunta.
 pub fn interaction_pane(screen: &str) -> Result<Value, InteractionError> {
@@ -1366,7 +1367,9 @@ impl TerminalDriver {
         let _serial = self.serial.lock().await;
         let screen = match self.capture_inner().await { Ok(s) => s, Err(e) => return Self::failed(e, DeliveryStage::Steer) };
         // Sem a marca não se sabe se a TUI nunca teve fila ou já a consumiu: adiado com o código, nunca sucesso.
-        if !screen.contains("ctrl+x ctrl+s to send now") { return DeliveryResult::new(Disposition::Deferred, DeliveryStage::Steer, "no_queued_input"); }
+        // O Claude Code mostra o atalho que o terminal consegue mandar; os dois são o mesmo `chat:sendNow`, e o
+        // `ctrl+x ctrl+s` passa em qualquer terminal.
+        if !SEND_NOW_HINTS.iter().any(|hint| screen.contains(hint)) { return DeliveryResult::new(Disposition::Deferred, DeliveryStage::Steer, "no_queued_input"); }
         for key in ["C-x", "C-s"] { if let Err(e) = self.key_inner(key).await { return DeliveryResult::new(Disposition::Unknown, DeliveryStage::Steer, e.code); } }
         DeliveryResult::new(Disposition::Accepted, DeliveryStage::Steer, "steered")
     }
