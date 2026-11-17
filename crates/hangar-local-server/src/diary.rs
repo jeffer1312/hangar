@@ -10,15 +10,21 @@ use serde_json::{json, Map, Value};
 const TAIL_MAX: u64 = 1 << 20;
 const DAYS_KEPT: i64 = 7;
 
-/// Mesmo lugar do `hangar_core::paths::log_base` (este crate não depende do `hangar-core`): o log é
-/// do Hangar da máquina, não da conta.
-pub fn log_base(home: &Path) -> PathBuf {
+/// Mesmo lugar do `log_paths.base()` do Python: o log é do Hangar da máquina, não da conta. No
+/// Windows, `%LOCALAPPDATA%\hangar\logs` (sem a variável, a pasta padrão dela sob `home`); fora
+/// dele, `~/.hangar/logs`. Sem `home` e sem a variável, nada. O `hangar_core::paths` usa esta.
+pub fn log_base_from(home: Option<&Path>, local_appdata: Option<&std::ffi::OsStr>) -> Option<PathBuf> {
     if cfg!(windows) {
-        let root = std::env::var_os("LOCALAPPDATA").filter(|dir| !dir.is_empty()).map(PathBuf::from)
-            .unwrap_or_else(|| home.join("AppData").join("Local"));
-        return root.join("hangar").join("logs");
+        let root = local_appdata.filter(|dir| !dir.is_empty()).map(PathBuf::from)
+            .or_else(|| home.map(|home| home.join("AppData").join("Local")))?;
+        return Some(root.join("hangar").join("logs"));
     }
-    home.join(".hangar").join("logs")
+    Some(home?.join(".hangar").join("logs"))
+}
+
+/// `log_base_from` com o `LOCALAPPDATA` deste processo.
+pub fn log_base(home: &Path) -> PathBuf {
+    log_base_from(Some(home), std::env::var_os("LOCALAPPDATA").as_deref()).unwrap_or_else(|| home.join(".hangar").join("logs"))
 }
 
 /// Onde o servidor e o lançador gravam (`hangar_core::diag::diary_dir`).

@@ -41,12 +41,16 @@ pub struct Service {
     pub state: ServiceState,
     /// Código de saída da última vida, quando o gerenciador o guarda.
     pub exit_status: Option<i64>,
+    /// O processo do servidor na vida atual (`MainPID` da unit, `pid` do launchd; no Windows, o
+    /// `hangar-server` filho do lançador, achado depois pela lista de processos).
+    pub main_pid: Option<u32>,
     /// A leitura crua numa linha, para o retrato da falha (`unit: …`, `tarefa: …`, `launchd: …`).
     pub summary: String,
 }
 
 impl Service {
-    fn unreadable(summary: String) -> Service { Service { state: ServiceState::Unreadable, exit_status: None, summary } }
+    fn new(state: ServiceState, summary: String) -> Service { Service { state, exit_status: None, main_pid: None, summary } }
+    fn unreadable(summary: String) -> Service { Service::new(ServiceState::Unreadable, summary) }
 }
 
 pub fn read(host: &dyn Host, os: Os) -> Service {
@@ -79,7 +83,7 @@ pub fn read(host: &dyn Host, os: Os) -> Service {
                 Ok(out) if out.code == Some(0) => parse_launchd(&out.stdout),
                 // 113: o launchd não conhece o serviço.
                 Ok(out) if out.code == Some(113) || out.stdout.contains("Could not find service") || out.stderr.contains("Could not find service") =>
-                    Service { state: ServiceState::Missing, exit_status: None, summary: format!("launchd: {target} não carregado") },
+                    Service::new(ServiceState::Missing, format!("launchd: {target} não carregado")),
                 Ok(out) => Service::unreadable(format!("launchd: launchctl saiu com {:?}: {}", out.code, one_line(&format!("{}{}", out.stdout, out.stderr)))),
                 Err(e) => Service::unreadable(format!("launchd: launchctl não rodou: {e}")),
             }
@@ -123,14 +127,15 @@ pub fn parse_systemd(text: &str) -> Service {
         _ => ServiceState::Unreadable,
     };
     let exit_status = field("ExecMainStatus").parse::<i64>().ok().filter(|code| *code != 0);
+    let main_pid = field("MainPID").parse::<u32>().ok().filter(|pid| *pid != 0);
     let summary = format!("unit: {}", text.lines().map(str::trim).filter(|l| !l.is_empty()).collect::<Vec<_>>().join(" "));
-    Service { state, exit_status, summary }
+    Service { state, exit_status, main_pid, summary }
 }
 
 pub fn parse_task(text: &str) -> Service {
     let line = text.lines().map(str::trim).find(|l| l.starts_with("tarefa:")).unwrap_or("").to_owned();
     if line == "tarefa: ausente" {
-        return Service { state: ServiceState::Missing, exit_status: None, summary: format!("tarefa: {TASK} não registrada") };
+        return Service::new(ServiceState::Missing, format!("tarefa: {TASK} não registrada"));
     }
     let word = |key: &str| line.split_whitespace().find_map(|w| w.strip_prefix(key)).unwrap_or("");
     let state = match word("estado=") {
@@ -143,7 +148,7 @@ pub fn parse_task(text: &str) -> Service {
     let exit_status = word("ultimo_resultado=0x").get(..8).and_then(|hex| u32::from_str_radix(hex, 16).ok())
         .filter(|code| !matches!(code, 0 | 0x0004_1301 | 0x0004_1303)).map(i64::from);
     if line.is_empty() { return Service::unreadable(format!("tarefa: resposta sem estado: {}", one_line(text))); }
-    Service { state, exit_status, summary: line }
+    Service { state, exit_status, main_pid: None, summary: line }
 }
 
 pub fn parse_launchd(text: &str) -> Service {
@@ -155,7 +160,8 @@ pub fn parse_launchd(text: &str) -> Service {
         _ => ServiceState::Stopped,
     };
     let exit_status = field("last exit code").parse::<i64>().ok().filter(|code| *code != 0);
-    Service { state, exit_status, summary: format!("launchd: state={} last_exit={}", field("state"), field("last exit code")) }
+    let main_pid = field("pid").parse::<u32>().ok().filter(|pid| *pid != 0);
+    Service { state, exit_status, main_pid, summary: format!("launchd: state={} last_exit={}", field("state"), field("last exit code")) }
 }
 
 fn base64(bytes: &[u8]) -> String {
@@ -188,7 +194,7 @@ mod tests {
         assert_eq!(unit("activating", "start", "0").state, ServiceState::Starting);
         assert_eq!(unit("activating", "auto-restart", "3").state, ServiceState::Restarting);
         assert_eq!(unit("failed", "failed", "3").exit_status, Some(3));
-        assert_eq!(unit("inactive", "dead", "0"), Service { state: ServiceState::Stopped, exit_status: None,
+        assert_eq!(unit("inactive", "dead", "0"), Service { state: ServiceState::Stopped, exit_status: None, main_pid: None,
             summary: "unit: LoadState=loaded ActiveState=inactive SubState=dead MainPID=0 ExecMainStatus=0".to_owned() });
         assert_eq!(parse_systemd("LoadState=not-found\nActiveState=inactive\n").state, ServiceState::Missing);
     }
@@ -196,7 +202,7 @@ mod tests {
     #[test]
     fn task_states_ignore_the_running_and_never_ran_results() {
         let task = |state: &str, result: &str| parse_task(&format!("tarefa: estado={state} ultima_execucao=2026-11-17T10:00:00 ultimo_resultado=0x{result} acao=x launch backend\n"));
-        assert_eq!(task("Running", "00041301"), Service { state: ServiceState::Running, exit_status: None,
+        assert_eq!(task("Running", "00041301"), Service { state: ServiceState::Running, exit_status: None, main_pid: None,
             summary: "tarefa: estado=Running ultima_execucao=2026-11-17T10:00:00 ultimo_resultado=0x00041301 acao=x launch backend".to_owned() });
         assert_eq!(task("Ready", "00000001").exit_status, Some(1));
         assert_eq!(task("Ready", "00041303").exit_status, None);

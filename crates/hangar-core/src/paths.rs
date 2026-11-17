@@ -3,25 +3,16 @@ use std::path::{Path, PathBuf};
 
 use crate::account_env::AccountEnvironment;
 
-/// Mesmo lugar do `log_paths.base()` do Python: o log é do Hangar da máquina, não da conta.
+/// Mesmo lugar do `log_paths.base()` do Python: o log é do Hangar da máquina, não da conta. A regra
+/// mora no crate do servidor parado (`hangar_local_server::diary::log_base_from`).
 pub fn log_base() -> Option<PathBuf> {
-    if cfg!(windows) {
-        let root = std::env::var_os("LOCALAPPDATA").filter(|dir| !dir.is_empty()).map(PathBuf::from)
-            .or_else(|| std::env::home_dir().map(|home| home.join("AppData").join("Local")))?;
-        return Some(root.join("hangar").join("logs"));
-    }
-    Some(std::env::home_dir()?.join(".hangar").join("logs"))
+    hangar_local_server::diary::log_base_from(std::env::home_dir().as_deref(), std::env::var_os("LOCALAPPDATA").as_deref())
 }
 
 /// `log_base` pelo ambiente-base do registro (nos testes, a casa de teste, nunca o diário da máquina).
 pub fn log_base_in(env: &AccountEnvironment) -> Option<PathBuf> {
-    let home = Some(env.home.clone()).filter(|home| !home.as_os_str().is_empty());
-    if cfg!(windows) {
-        let root = env.base.get("LOCALAPPDATA").filter(|dir| !dir.is_empty()).map(PathBuf::from)
-            .or_else(|| home.map(|home| home.join("AppData").join("Local")))?;
-        return Some(root.join("hangar").join("logs"));
-    }
-    Some(home?.join(".hangar").join("logs"))
+    let home = Some(env.home.as_path()).filter(|home| !home.as_os_str().is_empty());
+    hangar_local_server::diary::log_base_from(home, env.base.get("LOCALAPPDATA").map(std::ffi::OsStr::new))
 }
 
 /// Pasta `backend/` de uma cópia do Hangar. O `.env` pode já estar em `~/.hangar/config/`, então um

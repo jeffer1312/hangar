@@ -35,6 +35,19 @@ pub fn parse(name: &str) -> Option<[u64; 4]> {
     it.next().is_none().then_some(parts)
 }
 
+pub const MANIFEST_FILE: &str = "manifest.json";
+
+/// É pacote pelo mesmo critério do `diag.install_manifest()` do Python: `version`, `commit` e
+/// `channel` presentes e não vazios. O resto não decide o modo: os dois lados têm que concordar,
+/// senão um manifesto aceito por um e recusado pelo outro deixa a máquina sem quem a atualize.
+pub fn package_manifest(dir: &Path) -> Option<serde_json::Value> {
+    let value = std::fs::read(dir.join(MANIFEST_FILE)).ok().and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())?;
+    ["version", "commit", "channel"].iter()
+        .all(|k| value.get(k).and_then(serde_json::Value::as_str).is_some_and(|s| !s.is_empty())).then_some(value)
+}
+
+pub fn is_package(dir: &Path) -> bool { package_manifest(dir).is_some() }
+
 /// Pasta de versão inteira: nome de versão, pasta (não link) e o servidor dentro.
 pub fn runnable(hangar: &Path, name: &str) -> bool {
     let dir = versions_dir(hangar).join(name);
@@ -52,7 +65,7 @@ pub fn read(hangar: &Path) -> Versions {
     let (current, dev_mode) = match link::real(&link::current(hangar)) {
         Ok(real) => {
             let name = real.file_name().and_then(|n| n.to_str()).filter(|n| parse(n).is_some()).map(str::to_owned);
-            let package = name.is_some() && real.parent() == real_versions.as_deref() && real.join("manifest.json").is_file();
+            let package = name.is_some() && real.parent() == real_versions.as_deref() && is_package(&real);
             if package { (name, false) } else { (None, true) }
         }
         // Ausente ou apontando para o nada: quebrado, não modo desenvolvedor.

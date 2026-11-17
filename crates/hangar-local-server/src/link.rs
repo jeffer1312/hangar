@@ -27,6 +27,20 @@ fn verbatim_stripped(text: &str) -> Option<String> {
     text.strip_prefix(r"\\?\").filter(|rest| rest.as_bytes().get(1) == Some(&b':')).map(str::to_owned)
 }
 
+#[cfg(test)]
+mod verbatim_tests {
+    use super::verbatim_stripped;
+
+    #[test]
+    fn verbatim_prefix_is_written_like_python() {
+        assert_eq!(verbatim_stripped(r"\\?\C:\Users\u\.claude-x").as_deref(), Some(r"C:\Users\u\.claude-x"));
+        assert_eq!(verbatim_stripped(r"\\?\UNC\srv\share\d").as_deref(), Some(r"\\srv\share\d"));
+        // Volume sem letra não tem forma curta: fica como veio.
+        assert_eq!(verbatim_stripped(r"\\?\Volume{abc}\d"), None);
+        assert_eq!(verbatim_stripped(r"C:\Users\u"), None);
+    }
+}
+
 /// Caminho real, sem o `\\?\` do Windows.
 pub fn real(path: &Path) -> std::io::Result<PathBuf> { std::fs::canonicalize(path).map(without_verbatim) }
 
@@ -117,6 +131,9 @@ pub struct Unproven {
     pub previous: Option<PathBuf>,
     pub target: PathBuf,
 }
+
+/// Registro ausente já é o resultado pedido.
+pub fn remove_unproven(hangar: &Path) -> std::io::Result<()> { absent_ok(std::fs::remove_file(unproven_file(hangar))) }
 
 /// `Ok(None)` sem registro; ilegível é erro, com o caminho.
 pub fn read_unproven(hangar: &Path) -> std::io::Result<Option<Unproven>> {

@@ -1,7 +1,8 @@
 //! O servidor desta máquina sem a API dele: estado do serviço, motivo da falha, versões instaladas,
 //! o `~/.hangar/current` e as ações que consertam (subir, liberar a porta, apontar para outra
 //! versão). Sem `hangar-core`: o app nativo usa este crate quando o servidor está parado, e o
-//! servidor usa as mesmas primitivas de link e de leitura. Nenhuma ação tem rota HTTP.
+//! servidor e o core usam as mesmas primitivas de link, de caminho e de leitura. Nenhuma ação tem
+//! rota HTTP.
 //!
 //! Tudo o que sai do processo passa por `host::Host`; tudo é bloqueante.
 pub mod diary;
@@ -26,15 +27,25 @@ pub use versions::Versions;
 
 pub const DEFAULT_PORT: u16 = 8765;
 const OUTPUT_LINES: usize = 40;
-/// Quanto `free_port` espera a porta soltar depois de encerrar o processo.
+/// Processo de pé há mais que isso sem a porta responder não está subindo, está preso. O servidor
+/// abre a porta antes de qualquer preparo, em segundos; 180 s é a carência do vigia do servidor
+/// (`watchdog::GRACE`), em que o `WATCHDOG=1` sai sempre. Depois dela o systemd (`WatchdogSec=60`)
+/// já mataria um servidor travado; no Windows não há quem mate, e é aqui que ele vira parado.
+pub const STARTING_LIMIT: Duration = Duration::from_secs(180);
+/// Quanto `free_port` espera a porta soltar depois do `SIGTERM` (ou do `taskkill`)...
 const RELEASE_WAIT: Duration = Duration::from_secs(5);
-const RELEASE_STEP: Duration = Duration::from_millis(100);
+/// ...e depois do `SIGKILL`.
+const KILL_WAIT: Duration = Duration::from_secs(3);
+const STEP: Duration = Duration::from_millis(100);
+/// Quanto `use_version` espera alguém responder na porta para conferir a versão.
+const VERSION_WAIT: Duration = Duration::from_secs(10);
+const VERSION_STEP: Duration = Duration::from_millis(500);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LocalState {
     Running,
     /// A saúde responde e o resto ainda devolve 503 `server_starting`, ou o gerenciador diz que
-    /// está subindo e a porta ainda não atende.
+    /// está subindo e a porta ainda não atende (até `STARTING_LIMIT`).
     Starting,
     Stopped { failure: Option<Failure> },
     /// Sem unit, tarefa ou agente: o servidor não é instalado como serviço nesta máquina.
@@ -55,11 +66,24 @@ pub struct Failure {
     pub output: Vec<String>,
 }
 
+/// O que o pedido de subir conseguiu dizer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StartOutcome {
+    Started,
+    /// O gerenciador não respondeu no prazo do comando (o `systemctl start` espera a unit ficar
+    /// pronta): o painel segue pelo `probe`.
+    StillStarting,
+}
+
 #[derive(Debug)]
 pub enum ActionError {
     /// Sem gerenciador conhecido, ou troca de versão no macOS (sem pacote).
     Unsupported,
     DevMode,
+    /// Sem unit, tarefa ou agente: não há quem suba a versão trocada.
+    NotInstalled,
+    /// O gerenciador não respondeu: não dá para saber se o servidor está parado.
+    ServiceUnreadable(String),
     /// Outra atualização ou troca segura a trava.
     Locked,
     ServerRunning,
@@ -70,6 +94,10 @@ pub enum ActionError {
     OtherUser,
     TerminateRefused,
     PortStillHeld,
+    /// Depois da troca e da subida, o `current` aponta para outra versão.
+    CurrentChanged(String),
+    /// Depois da troca e da subida, responde outra versão (subiu a antiga entre a conferência e a troca).
+    VersionMismatch(String),
     Command { code: Option<i32>, output: String },
     Io(std::io::Error),
 }
@@ -79,6 +107,8 @@ impl ActionError {
         match self {
             ActionError::Unsupported => "local_server_unsupported",
             ActionError::DevMode => "local_server_dev_mode",
+            ActionError::NotInstalled => "local_server_not_installed",
+            ActionError::ServiceUnreadable(_) => "local_server_service_unreadable",
             ActionError::Locked => "update_locked",
             ActionError::ServerRunning => "local_server_running",
             ActionError::UnknownVersion(_) => "local_server_unknown_version",
@@ -87,6 +117,8 @@ impl ActionError {
             ActionError::OtherUser => "local_server_other_user",
             ActionError::TerminateRefused => "local_server_terminate_refused",
             ActionError::PortStillHeld => "local_server_port_still_held",
+            ActionError::CurrentChanged(_) => "local_server_current_changed",
+            ActionError::VersionMismatch(_) => "local_server_version_mismatch",
             ActionError::Command { .. } => "local_server_command_failed",
             ActionError::Io(_) => "local_server_io",
         }
@@ -95,7 +127,8 @@ impl ActionError {
     /// O dado para o detalhe da tela e do diário.
     pub fn detail(&self) -> String {
         match self {
-            ActionError::UnknownVersion(v) | ActionError::NoBinary(v) => v.clone(),
+            ActionError::UnknownVersion(v) | ActionError::NoBinary(v) | ActionError::ServiceUnreadable(v)
+            | ActionError::CurrentChanged(v) | ActionError::VersionMismatch(v) => v.clone(),
             ActionError::Command { code, output } => format!("{code:?}: {output}"),
             ActionError::Io(e) => e.to_string(),
             _ => String::new(),
@@ -129,7 +162,8 @@ impl LocalServer<RealHost> {
 
 /// O que respondeu na porta.
 enum Answer {
-    Hangar { starting: bool },
+    /// `version`: o `package_version` da saúde; ausente fora de pacote.
+    Hangar { starting: bool, version: Option<String> },
     Other,
     Silent,
 }
@@ -139,28 +173,38 @@ impl<H: Host> LocalServer<H> {
 
     pub fn probe(&self) -> LocalState {
         match self.answer() {
-            Answer::Hangar { starting: true } => return LocalState::Starting,
-            Answer::Hangar { starting: false } => return LocalState::Running,
+            Answer::Hangar { starting: true, .. } => return LocalState::Starting,
+            Answer::Hangar { starting: false, .. } => return LocalState::Running,
             Answer::Other | Answer::Silent => {}
         }
         let service = self.service_now();
         match service.state {
             ServiceState::Missing => LocalState::NotInstalled,
             // De pé no gerenciador e a porta ainda sem resposta: a subida antes de abrir a porta.
-            ServiceState::Starting | ServiceState::Running => LocalState::Starting,
+            ServiceState::Starting | ServiceState::Running if !self.stuck(&service) => LocalState::Starting,
+            ServiceState::Starting | ServiceState::Running => LocalState::Stopped { failure: Some(Failure {
+                code: "service_failed".to_owned(), detail: service.summary.clone(), port_holder: None, output: self.output() }) },
             _ => LocalState::Stopped { failure: self.failure(&service) },
         }
+    }
+
+    /// O processo da vida atual está de pé há mais que `STARTING_LIMIT`. Sem pid conhecido, não.
+    fn stuck(&self, service: &Service) -> bool {
+        service.main_pid.and_then(|pid| self.host.process(pid))
+            .is_some_and(|process| self.host.now().saturating_sub(process.start_time) > STARTING_LIMIT.as_secs())
     }
 
     /// A saúde só diz "o hangar-server está de pé"; quem diz se a subida acabou é uma rota comum,
     /// que responde 503 `server_starting` até lá (a trava da subida vem antes da autenticação).
     fn answer(&self) -> Answer {
+        let json = |body: &str| serde_json::from_str::<serde_json::Value>(body).ok();
         match self.host.get(self.port, "/__hangar_server/health") {
             None => Answer::Silent,
-            Some(reply) if reply.status == 200 && serde_json::from_str::<serde_json::Value>(&reply.body).is_ok_and(|v| v.get("protocol").is_some()) => {
+            Some(reply) if reply.status == 200 && json(&reply.body).is_some_and(|v| v.get("protocol").is_some()) => {
+                let version = json(&reply.body).and_then(|v| v.get("package_version").and_then(serde_json::Value::as_str).map(str::to_owned));
                 let starting = self.host.get(self.port, "/api/client-api").is_some_and(|reply| reply.status == 503
-                    && serde_json::from_str::<serde_json::Value>(&reply.body).is_ok_and(|v| v.get("detail").and_then(serde_json::Value::as_str) == Some("server_starting")));
-                Answer::Hangar { starting }
+                    && json(&reply.body).is_some_and(|v| v.get("detail").and_then(serde_json::Value::as_str) == Some("server_starting")));
+                Answer::Hangar { starting, version }
             }
             Some(_) => Answer::Other,
         }
@@ -169,28 +213,31 @@ impl<H: Host> LocalServer<H> {
     /// A leitura crua do gerenciador.
     pub fn service(&self) -> Service { service::read(&self.host, self.os) }
 
-    /// A leitura corrigida: no Windows a tarefa segue `Running` com o lançador esperando para religar.
+    /// A leitura corrigida pela lista de processos no Windows: a tarefa segue `Running` com o
+    /// lançador esperando para religar, e o processo da vida é o `hangar-server` filho dele.
     fn service_now(&self) -> Service {
         let mut service = self.service();
-        if service.state == ServiceState::Running && self.launcher_waiting() { service.state = ServiceState::Restarting; }
+        if self.os != Os::Windows || service.state != ServiceState::Running { return service; }
+        let processes = self.host.processes();
+        let launchers: Vec<u32> = processes.iter().filter(|p| is_backend_launcher(&p.name, &p.cmd)).map(|p| p.pid).collect();
+        let server = processes.iter().find(|p| p.parent.is_some_and(|parent| launchers.contains(&parent))
+            && p.name.to_ascii_lowercase().starts_with("hangar-server"));
+        match server {
+            Some(server) => service.main_pid = Some(server.pid),
+            None if !launchers.is_empty() => service.state = ServiceState::Restarting,
+            None => {}
+        }
         service
     }
 
     pub fn listeners(&self) -> Listeners { port::listeners(&self.host, self.os, self.port) }
 
-    /// Windows: o lançador de pé sem um `hangar-server` filho está na espera entre uma queda e a
-    /// religada. Nos outros sistemas o gerenciador já diz isso (`auto-restart`, `spawn scheduled`).
-    fn launcher_waiting(&self) -> bool {
-        if self.os != Os::Windows { return false; }
-        let processes = self.host.processes();
-        let launchers: Vec<u32> = processes.iter().filter(|p| is_backend_launcher(&p.name, &p.cmd)).map(|p| p.pid).collect();
-        !launchers.is_empty() && !processes.iter().any(|p| p.parent.is_some_and(|parent| launchers.contains(&parent))
-            && p.name.to_ascii_lowercase().starts_with("hangar-server"))
-    }
-
     fn failure(&self, service: &Service) -> Option<Failure> {
         let listeners = self.listeners();
         let diary = diary::last_failure(&diary::server_dir(&self.log_base));
+        // O código de saída só explica uma parada que o gerenciador conta como falha: `systemctl
+        // stop` de um servidor que demorou a sair (SIGKILL no fim do prazo) também deixa código.
+        let failed = matches!(service.state, ServiceState::Failed | ServiceState::Restarting);
         let (code, detail, port_holder) = if let Some(holder) = listeners.holders.first() {
             ("port_unavailable".to_owned(), holder.name.clone(), Some(holder.clone()))
         } else if listeners.hidden {
@@ -199,9 +246,9 @@ impl<H: Host> LocalServer<H> {
             (failure.code, failure.detail, None)
         } else if service.state == ServiceState::Unreadable {
             ("service_unreadable".to_owned(), service.summary.clone(), None)
-        } else if let Some(status) = service.exit_status {
+        } else if let Some(status) = service.exit_status.filter(|_| failed) {
             ("service_exit".to_owned(), status.to_string(), None)
-        } else if matches!(service.state, ServiceState::Failed | ServiceState::Restarting) {
+        } else if failed {
             ("service_failed".to_owned(), service.summary.clone(), None)
         } else {
             // Parado limpo (alguém parou o serviço): nada a explicar.
@@ -232,13 +279,14 @@ impl<H: Host> LocalServer<H> {
     pub fn versions(&self) -> Versions { versions::read(&self.hangar()) }
 
     /// Sobe o serviço pelo gerenciador.
-    pub fn start(&self) -> Result<(), ActionError> {
+    pub fn start(&self) -> Result<StartOutcome, ActionError> {
         let result = self.start_service();
-        self.record("start", &result, &[]);
+        let outcome = match &result { Ok(StartOutcome::StillStarting) => "ainda_subindo", _ => "" };
+        self.record("start", result.as_ref().err(), &[("resultado", outcome)]);
         result
     }
 
-    fn start_service(&self) -> Result<(), ActionError> {
+    fn start_service(&self) -> Result<StartOutcome, ActionError> {
         let out = match self.os {
             Os::Linux => self.host.run("systemctl", &["--user", "start", service::UNIT]),
             Os::Windows => service::powershell(&self.host, &service::guarded(&format!("Start-ScheduledTask -TaskName '{}' -ErrorAction Stop", service::TASK))),
@@ -248,45 +296,103 @@ impl<H: Host> LocalServer<H> {
             }
             Os::Other => return Err(ActionError::Unsupported),
         }.map_err(ActionError::Io)?;
+        if out.timed_out { return Ok(StartOutcome::StillStarting); }
         match out.code {
-            Some(0) => Ok(()),
+            Some(0) => Ok(StartOutcome::Started),
             code => Err(ActionError::Command { code, output: format!("{}{}", out.stdout, out.stderr).trim().to_owned() }),
         }
     }
 
-    /// Encerra quem segura a porta, só se no momento ele ainda escuta nela, é do mesmo usuário e tem
-    /// o nascimento lido no diagnóstico (o pid pode ter sido reusado).
+    /// Encerra quem segura a porta e os filhos dele, só se no momento ele ainda escuta nela, é do
+    /// mesmo usuário e tem o nascimento lido no diagnóstico (o pid pode ter sido reusado). O
+    /// nascimento é reconferido logo antes de cada sinal.
     pub fn free_port(&self, holder: &PortHolder) -> Result<(), ActionError> {
         let result = self.free_port_checked(holder);
-        self.record("free_port", &result, &[("processo", &holder.name), ("alvo_pid", &holder.pid.to_string())]);
+        self.record("free_port", result.as_ref().err(), &[("processo", &holder.name), ("alvo_pid", &holder.pid.to_string())]);
         result
     }
 
     fn free_port_checked(&self, holder: &PortHolder) -> Result<(), ActionError> {
-        let now = self.listeners();
-        if !now.holders.iter().any(|h| h.pid == holder.pid) { return Err(ActionError::HolderChanged); }
-        let process = self.host.process(holder.pid).ok_or(ActionError::HolderChanged)?;
-        if process.start_time != holder.start_time { return Err(ActionError::HolderChanged); }
+        if !self.holds(holder.pid) { return Err(ActionError::HolderChanged); }
         let me = self.host.user();
-        if me.is_none() || process.user != me { return Err(ActionError::OtherUser); }
-        if !self.host.terminate(holder.pid) { return Err(ActionError::TerminateRefused); }
+        let same = || -> Result<String, ActionError> {
+            let process = self.host.process(holder.pid).ok_or(ActionError::HolderChanged)?;
+            if process.start_time != holder.start_time { return Err(ActionError::HolderChanged); }
+            if me.is_none() || process.user != me { return Err(ActionError::OtherUser); }
+            Ok(process.name)
+        };
+        // Um servidor do Hangar preso na porta sai sozinho: os filhos dele são as sessões (os
+        // servidores do psmux no Windows, os canos das sessões sem terminal), e a árvore as levaria.
+        let whole_tree = !same()?.to_ascii_lowercase().starts_with("hangar-");
+        if self.os == Os::Windows {
+            // À força: no Windows não há pedido de saída para um processo sem janela.
+            same()?;
+            let pid = holder.pid.to_string();
+            let args: &[&str] = if whole_tree { &["/PID", pid.as_str(), "/T", "/F"] } else { &["/PID", pid.as_str(), "/F"] };
+            let out = self.host.run("taskkill", args).map_err(ActionError::Io)?;
+            // O código do `taskkill` não diz o que aconteceu (128 sem o processo): quem decide é a porta.
+            return if self.released(holder.pid, RELEASE_WAIT) { Ok(()) } else if out.code == Some(0) {
+                Err(ActionError::PortStillHeld)
+            } else {
+                Err(ActionError::Command { code: out.code, output: format!("{}{}", out.stdout, out.stderr).trim().to_owned() })
+            };
+        }
+        let tree = if whole_tree { self.tree(holder.pid, me.as_deref()) } else { Vec::new() };
+        same()?;
+        if !self.host.signal(holder.pid, false) { return Err(ActionError::TerminateRefused); }
+        for child in &tree { self.host.signal(*child, false); }
+        if self.released(holder.pid, RELEASE_WAIT) { return Ok(()); }
+        // Não saiu com o pedido: à força, se ainda é o mesmo processo.
+        match same() {
+            Ok(_) => { self.host.signal(holder.pid, true); }
+            // Saiu (ou o pid já é outro) e a porta continua presa: quem segura agora é outro.
+            Err(ActionError::HolderChanged) => return Err(ActionError::PortStillHeld),
+            Err(e) => return Err(e),
+        }
+        for child in &tree { if self.host.process(*child).is_some() { self.host.signal(*child, true); } }
+        if self.released(holder.pid, KILL_WAIT) { Ok(()) } else { Err(ActionError::PortStillHeld) }
+    }
+
+    fn holds(&self, pid: u32) -> bool { self.listeners().holders.iter().any(|h| h.pid == pid) }
+
+    fn released(&self, pid: u32, wait: Duration) -> bool {
         let mut waited = Duration::ZERO;
         loop {
-            if !self.listeners().holders.iter().any(|h| h.pid == holder.pid) { return Ok(()); }
-            if waited >= RELEASE_WAIT { return Err(ActionError::PortStillHeld); }
-            self.host.pause(RELEASE_STEP);
-            waited += RELEASE_STEP;
+            if !self.holds(pid) { return true; }
+            if waited >= wait { return false; }
+            self.host.pause(STEP);
+            waited += STEP;
         }
     }
 
+    /// Os descendentes de `root` do mesmo usuário: os filhos herdam o socket e seguram a porta.
+    fn tree(&self, root: u32, me: Option<&str>) -> Vec<u32> {
+        let processes = self.host.processes();
+        let mut found = Vec::new();
+        let mut pending = vec![root];
+        while let Some(parent) = pending.pop() {
+            for child in processes.iter().filter(|p| p.parent == Some(parent) && me.is_some() && p.user.as_deref() == me) {
+                if child.pid != root && !found.contains(&child.pid) {
+                    found.push(child.pid);
+                    pending.push(child.pid);
+                }
+            }
+        }
+        found
+    }
+
     /// Aponta o `current` para `version` e sobe. Segura a trava da atualização e exige o servidor
-    /// parado; a troca é a do atualizador. Não existe no macOS, que não roda pacote.
-    pub fn use_version(&self, version: &str) -> Result<(), ActionError> {
+    /// parado com serviço instalado; a troca é a do atualizador. Depois da subida confere que o
+    /// `current` e a versão que responde são `version`. Não existe no macOS, que não roda pacote.
+    pub fn use_version(&self, version: &str) -> Result<StartOutcome, ActionError> {
         let from = self.versions().current.unwrap_or_default();
         let result = self.use_version_checked(version);
-        self.record("use_version", &result, &[("de", &from), ("para", version)]);
+        self.record("use_version", result.as_ref().err(), &[("de", &from), ("para", version)]);
         result?;
-        self.start()
+        let started = self.start()?;
+        let confirmed = self.confirm_version(version);
+        if let Err(e) = &confirmed { self.record("use_version_confirm", Some(e), &[("para", version)]); }
+        confirmed.map(|()| started)
     }
 
     fn use_version_checked(&self, version: &str) -> Result<(), ActionError> {
@@ -302,16 +408,48 @@ impl<H: Host> LocalServer<H> {
             LockError::Locked => ActionError::Locked,
             LockError::Io(e) => ActionError::Io(e),
         })?;
-        // Com o lançador religando, a troca vale na próxima tentativa dele: só a vida de pé recusa.
-        if !matches!(self.answer(), Answer::Silent) || matches!(self.service_now().state, ServiceState::Running | ServiceState::Starting) {
-            return Err(ActionError::ServerRunning);
+        if !matches!(self.answer(), Answer::Silent) { return Err(ActionError::ServerRunning); }
+        let service = self.service_now();
+        match service.state {
+            // Sem quem suba, a troca deixaria o `current` noutra versão e o servidor ainda parado.
+            ServiceState::Missing => return Err(ActionError::NotInstalled),
+            ServiceState::Unreadable => return Err(ActionError::ServiceUnreadable(service.summary)),
+            ServiceState::Running | ServiceState::Starting => return Err(ActionError::ServerRunning),
+            // Com o serviço religando, a troca vale na próxima tentativa; `confirm_version` pega a
+            // subida da versão antiga entre esta conferência e a troca.
+            ServiceState::Restarting | ServiceState::Stopped | ServiceState::Failed => {}
         }
-        link::swap(&hangar, &dir).map(|_| ()).map_err(ActionError::Io)
+        let previous = link::swap(&hangar, &dir).map_err(ActionError::Io)?;
+        // O registro da troca sem prova é da atualização que não se provou. Com a versão escolhida
+        // à mão (e a trava conosco, nenhuma atualização no meio), a próxima recuperação o usaria para
+        // desfazer a escolha quando ela é a própria versão do registro; nas outras ela só o apagaria.
+        if let Err(e) = link::remove_unproven(&hangar) {
+            if let Some(previous) = previous { let _ = link::swap(&hangar, &previous); }
+            return Err(ActionError::Io(e));
+        }
+        Ok(())
+    }
+
+    /// O `current` segue em `version` e quem responde na porta é ela. Ninguém respondendo no prazo
+    /// é a subida ainda em curso: o painel segue pelo `probe`.
+    fn confirm_version(&self, version: &str) -> Result<(), ActionError> {
+        let now = self.versions().current;
+        if now.as_deref() != Some(version) { return Err(ActionError::CurrentChanged(now.unwrap_or_default())); }
+        let mut waited = Duration::ZERO;
+        loop {
+            match self.answer() {
+                Answer::Hangar { version: Some(running), .. } if running == version => return Ok(()),
+                Answer::Hangar { version: running, .. } => return Err(ActionError::VersionMismatch(running.unwrap_or_default())),
+                Answer::Other | Answer::Silent => {}
+            }
+            if waited >= VERSION_WAIT { return Ok(()); }
+            self.host.pause(VERSION_STEP);
+            waited += VERSION_STEP;
+        }
     }
 
     /// A falha de gravar não muda o resultado da ação: vai ao stderr do app.
-    fn record(&self, action: &str, result: &Result<(), ActionError>, fields: &[(&str, &str)]) {
-        let error = result.as_ref().err();
+    fn record(&self, action: &str, error: Option<&ActionError>, fields: &[(&str, &str)]) {
         let detail = error.map(ActionError::detail).unwrap_or_default();
         let fields: Vec<(&str, &str)> = fields.iter().copied().chain([("detalhe", detail.as_str())]).collect();
         if let Err(e) = diary::record_action(&self.log_base, action, error.map(ActionError::code), &fields) {

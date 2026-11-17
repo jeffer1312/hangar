@@ -17,6 +17,8 @@ pub struct Output {
     pub code: Option<i32>,
     pub stdout: String,
     pub stderr: String,
+    /// Morto pelo prazo do `run`: o comando não terminou, o que não quer dizer que falhou.
+    pub timed_out: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,9 +49,12 @@ pub trait Host {
     fn process(&self, pid: u32) -> Option<ProcessInfo>;
     /// O usuário deste processo, no formato de `ProcessInfo::user`.
     fn user(&self) -> Option<String>;
-    /// Encerra o processo; `true` quando o sistema aceitou.
-    fn terminate(&self, pid: u32) -> bool;
+    /// Pede a saída do processo (`SIGTERM`) ou, com `force`, encerra (`SIGKILL`, ou o
+    /// `TerminateProcess` do Windows); `true` quando o sistema aceitou.
+    fn signal(&self, pid: u32, force: bool) -> bool;
     fn pause(&self, duration: Duration);
+    /// Segundos desde a época, na mesma escala de `ProcessInfo::start_time`.
+    fn now(&self) -> u64;
 }
 
 /// A máquina de verdade.
@@ -72,16 +77,16 @@ impl Host for RealHost {
         let stdout = drain(child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
         let stderr = drain(child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
         let deadline = Instant::now() + COMMAND_DEADLINE;
-        let code = loop {
-            if let Some(status) = child.try_wait()? { break status.code(); }
+        let (code, timed_out) = loop {
+            if let Some(status) = child.try_wait()? { break (status.code(), false); }
             if Instant::now() >= deadline {
                 let _ = child.kill();
                 let _ = child.wait();
-                break None;
+                break (None, true);
             }
             std::thread::sleep(Duration::from_millis(25));
         };
-        Ok(Output { code, stdout: stdout.join().unwrap_or_default(), stderr: stderr.join().unwrap_or_default() })
+        Ok(Output { code, stdout: stdout.join().unwrap_or_default(), stderr: stderr.join().unwrap_or_default(), timed_out })
     }
 
     fn get(&self, port: u16, path: &str) -> Option<Reply> {
@@ -112,16 +117,21 @@ impl Host for RealHost {
 
     fn user(&self) -> Option<String> { self.process(std::process::id())?.user }
 
-    fn terminate(&self, pid: u32) -> bool {
+    fn signal(&self, pid: u32, force: bool) -> bool {
         let mut system = sysinfo::System::new();
         let pid = sysinfo::Pid::from_u32(pid);
         system.refresh_processes_specifics(sysinfo::ProcessesToUpdate::Some(&[pid]), true, sysinfo::ProcessRefreshKind::nothing());
         let Some(process) = system.process(pid) else { return false };
-        // SIGTERM deixa o servidor gravar a parada; o Windows não tem sinal e encerra direto.
+        if force { return process.kill(); }
+        // O Windows não tem SIGTERM e encerra direto.
         process.kill_with(sysinfo::Signal::Term).unwrap_or_else(|| process.kill())
     }
 
     fn pause(&self, duration: Duration) { std::thread::sleep(duration); }
+
+    fn now(&self) -> u64 {
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
+    }
 }
 
 fn refresh_kind() -> sysinfo::ProcessRefreshKind {

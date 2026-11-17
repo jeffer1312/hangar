@@ -10,7 +10,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use hangar_local_server::link::{self, absent_ok, real};
+use hangar_local_server::link::{self, real};
 use hangar_package::{ExtractError, Manifest, PackageIndex, PlatformEntry, Version, MANIFEST_FILE};
 use serde_json::{json, Value};
 
@@ -142,14 +142,8 @@ impl UpdateLock {
 
 fn read_manifest(dir: &Path) -> Option<Manifest> { Manifest::parse(&std::fs::read(dir.join(MANIFEST_FILE)).ok()?).ok() }
 
-/// É pacote pelo mesmo critério do `diag.install_manifest()` do Python: `version`, `commit` e
-/// `channel` presentes e não vazios. O resto não decide o modo: os dois lados têm que concordar,
-/// senão um manifesto aceito por um e recusado pelo outro deixa a máquina sem quem a atualize.
-pub fn package_manifest(dir: &Path) -> Option<Value> {
-    let value = std::fs::read(dir.join(MANIFEST_FILE)).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok())?;
-    ["version", "commit", "channel"].iter().all(|k| value.get(k).and_then(Value::as_str).is_some_and(|s| !s.is_empty())).then_some(value)
-}
-pub fn is_package(dir: &Path) -> bool { package_manifest(dir).is_some() }
+/// É pacote: o critério mora no crate do servidor parado, que o app nativo também usa.
+pub use hangar_local_server::versions::{is_package, package_manifest};
 
 /// O manifesto em uso marca pacote mas não serve ao atualizador: o motivo, para o estado e a tela.
 pub fn broken_manifest(layout: &Layout) -> Option<String> {
@@ -341,7 +335,7 @@ fn note_unproven(layout: &Layout, target: &Path) -> Result<(), UpdateError> {
     crate::runtime::queue::atomic_write(&layout.unproven(), &serde_json::to_vec(&record).map_err(|e| io(&e))?).map_err(|e| io(&e))
 }
 
-fn clear_unproven(layout: &Layout) -> std::io::Result<()> { absent_ok(std::fs::remove_file(layout.unproven())) }
+fn clear_unproven(layout: &Layout) -> std::io::Result<()> { link::remove_unproven(&layout.hangar) }
 
 /// Diz se algum processo vivo usa a pasta.
 pub trait InUse {
