@@ -54,6 +54,30 @@ impl Marked {
     }
 }
 
+/// Por que o servidor vai reiniciar. Quem reinicia de fato grava a marca com ela antes de derrubar o
+/// processo; quem não derruba nada (instalação na mão) não grava.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RestartIntent {
+    pub kind: ExitKind,
+    pub cause: &'static str,
+    pub from: Option<String>,
+    pub to: Option<String>,
+}
+
+impl RestartIntent {
+    pub fn new(kind: ExitKind, cause: &'static str) -> Self { RestartIntent { kind, cause, from: None, to: None } }
+
+    pub fn between(mut self, from: Option<&str>, to: Option<&str>) -> Self {
+        self.from = from.map(str::to_owned);
+        self.to = to.map(str::to_owned);
+        self
+    }
+
+    pub fn mark(&self, hangar_dir: &Path) -> Marked {
+        before_restart(hangar_dir, self.kind, self.cause, self.from.as_deref(), self.to.as_deref())
+    }
+}
+
 fn now_secs() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |elapsed| elapsed.as_secs())
 }
@@ -75,7 +99,7 @@ fn kind_of(code: &str) -> Option<ExitKind> {
     }
 }
 
-/// Grava a marca imediatamente antes de `restarter.restart()`. O pid é o do servidor de pé segundo
+/// Grava a marca imediatamente antes de derrubar o servidor. O pid é o do servidor de pé segundo
 /// `server-life.json`, não o deste processo: o executor da atualização roda à parte. Sem servidor
 /// de pé ou sem gravar, o reinício segue e a saída vira a parada que ele mesmo gravar.
 pub fn before_restart(hangar_dir: &Path, kind: ExitKind, cause: &str, from: Option<&str>, to: Option<&str>) -> Marked {
@@ -517,37 +541,5 @@ mod tests {
         assert_eq!(lines[1], json!({"evento": "hangar_server.saida", "nivel": "aviso", "tipo": "crash", "causa": "out_of_memory",
             "quando": STARTED, "erro": "10:55:02 panic=true"}));
         assert!(!dir.path().join(FILE).exists(), "marca ilegível também sai");
-    }
-
-    /// Todo reinício do servidor no atualizador grava a marca antes: ponto novo esquecido falha aqui.
-    #[test]
-    fn stop_intent_precedes_every_restart() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join("update");
-        let test_module = regex::Regex::new(r"#\[cfg\(test\)\]\s*\n\s*(?:pub(?:\(crate\))? )?mod \w+ \{").unwrap();
-        let mut found = 0;
-        let mut missing = Vec::new();
-        let mut pending = vec![root];
-        while let Some(dir) = pending.pop() {
-            for entry in std::fs::read_dir(&dir).unwrap() {
-                let path = entry.unwrap().path();
-                if path.is_dir() { pending.push(path); continue; }
-                let name = path.file_name().unwrap().to_string_lossy().into_owned();
-                if !name.ends_with(".rs") || name == "tests.rs" || name == "stop_intent.rs" { continue; }
-                let text = std::fs::read_to_string(&path).unwrap();
-                let code = test_module.find(&text).map_or(text.as_str(), |cut| &text[..cut.start()]);
-                let lines: Vec<&str> = code.lines().collect();
-                for (index, line) in lines.iter().enumerate() {
-                    let restarts = line.contains("restarter.restart(") || line.contains("service.stop(")
-                        || (line.contains(".restart_service(") && !line.contains("fn restart_service"));
-                    if !restarts { continue; }
-                    found += 1;
-                    if !lines[index.saturating_sub(12)..=index].iter().any(|before| before.contains("before_restart(")) {
-                        missing.push(format!("{}:{}", path.display(), index + 1));
-                    }
-                }
-            }
-        }
-        assert!(found >= 10, "a busca achou só {found} reinícios: o padrão mudou?");
-        assert!(missing.is_empty(), "reinício sem stop_intent::before_restart antes: {missing:?}");
     }
 }

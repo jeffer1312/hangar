@@ -1,5 +1,6 @@
 //! Operações de serviço do checkout; a instalação manual nunca encerra processo alheio.
 use super::{Service, tail};
+use crate::update::stop_intent::{Marked, RestartIntent};
 impl Service {
     pub fn command(&self, args: &[&str], seconds: u64) -> Result<super::ProcessOutput, String> {
         self.run(
@@ -62,7 +63,19 @@ impl Service {
         }
         "0".into()
     }
-    pub fn restart_service(&self, topology: &str, port: u16) -> Result<(), String> {
+    /// Grava a marca de intenção só na topologia com serviço: sem ele, nada para e o reinício fica
+    /// pedido à mão; uma marca ali explicaria a queda de outra coisa.
+    pub fn restart_service(&self, topology: &str, port: u16, why: RestartIntent) -> Result<(), String> {
+        let intent = if matches!(topology, "systemd" | "windows" | "launchd") {
+            why.mark(&self.home.join(".hangar"))
+        } else {
+            Marked::none()
+        };
+        let restarted = self.restart_unit(topology, port);
+        intent.settle(&restarted);
+        restarted
+    }
+    fn restart_unit(&self, topology: &str, port: u16) -> Result<(), String> {
         match topology {
             "systemd" => {
                 let front = self

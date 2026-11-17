@@ -125,7 +125,7 @@ struct FakeRestart {
 }
 
 impl Restarter for FakeRestart {
-    async fn restart(&self) -> Result<(), String> {
+    async fn restart(&self, _why: stop_intent::RestartIntent) -> Result<(), String> {
         let n = self.count.fetch_add(1, Ordering::SeqCst) + 1;
         if self.fail_first && n == 1 { return Err("systemctl saiu com 1".into()); }
         Ok(())
