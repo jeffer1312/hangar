@@ -1156,6 +1156,8 @@ impl Executor {
         if kind=="input" && self.cleared(&state) && !self.expire_clear().await {return Err(error("runtime_clear_barrier"));}
         let text=payload["text"].as_str().unwrap_or("");
         let prompt=kind=="input"; let slash=prompt && text.trim_start().starts_with('/');
+        // "Na conversa": digitada com o turno em curso, o Claude Code a guarda e a lê na pausa seguinte, sem cortar.
+        let conversation=prompt && !slash && payload["conversation"]==true;
         let row_id=if prompt && !slash {Some(entry.unwrap_or_else(||id.into()))}else{None};
         let prepared=self.action(Action::Prepare {id:id.into(),payload:original,entry_id:row_id.clone()}).await?;
         if let Some(disposition)=match prepared["status"].as_str() {
@@ -1167,7 +1169,10 @@ impl Executor {
         if let Some(row)=&row_id {
             if !state.rows.iter().any(|r|r["id"]==*row) {
                 // Segurada: em idle a linha só aparece já entregue, sem piscar "Na fila"; o adiamento a publica no `Finish`.
-                self.services("maintenance","maintenance","").action_held("queue",Action::Append {text:text.into(),delivered:false,ts:None,pre_transcript:payload["pre_transcript"]==true,entry_id:Some(row.clone())},true).await?;
+                let pre_transcript=payload["pre_transcript"]==true;
+                let append=if conversation {Action::AppendConversation {text:text.into(),pre_transcript,entry_id:Some(row.clone())}}
+                    else {Action::Append {text:text.into(),delivered:false,ts:None,pre_transcript,entry_id:Some(row.clone())}};
+                self.services("maintenance","maintenance","").action_held("queue",append,true).await?;
                 self.batch_blocked=false;
                 fresh=true;
             }
@@ -1209,7 +1214,7 @@ impl Executor {
         let ok=facts.as_ref().and_then(|result|result.as_ref().ok());
         let busy=ok.is_some_and(|f|self.turn_busy(f.idle));
         let started_turn=ok.is_some_and(|f|f.idle);
-        let held=prompt && !slash && !steer && busy && ok.is_some_and(|f|!input::native_message(f,text));
+        let held=prompt && !slash && !steer && !conversation && busy && ok.is_some_and(|f|!input::native_message(f,text));
         let mut result=if !current {reply(id,Disposition::Deferred,json!({"code":"terminal_facts","cleanup":"not_needed"}))}
             else if held {reply(id,Disposition::Deferred,json!({"code":"terminal_turn_hold","queued":true,"cleanup":"not_needed"}))}
             else if prompt && !slash && !ok.is_some_and(|f|f.ready && !f.open_question || f.native.is_some()) {reply(id,Disposition::Deferred,json!({"queued":true,"cleanup":"not_needed"}))}
@@ -1503,18 +1508,21 @@ impl Executor {
             if self.stall.take().is_some_and(|s|s.surfaced) {self.publish().await?;}
             return Ok(json!({"drained":0}));
         }
-        // A fila comum espera o turno e sai em lote. O "Orientar" (`steer`) passa por
-        // cima, e o recado com socket nativo também, porque esse canal o Claude Code atende no meio do turno.
+        // A fila comum espera o turno e sai em lote. O "Orientar" (`steer`) passa por cima, o recado com socket
+        // nativo também, porque esse canal o Claude Code atende no meio do turno, e a primeira da fila marcada "Na
+        // conversa", que o Claude Code guarda e lê na pausa seguinte.
         if !steer && self.turn_busy(facts.idle) {
-            // Os fatos da manutenção não sabem do socket (ele depende do texto): o recado candidato relê com o dele.
             let waiting=super::queue::waiting_ids(&state,self.target.created);
-            let candidate=state.rows.iter().filter_map(|r|Some((r["id"].as_str()?,r["text"].as_str()?)))
+            let marked=waiting.first().filter(|id|entry.as_deref().is_none_or(|e|e==id.as_str())
+                && state.rows.iter().any(|r|r["id"]==id.as_str() && r["conversation"]==true)).cloned();
+            // Os fatos da manutenção não sabem do socket (ele depende do texto): o recado candidato relê com o dele.
+            let candidate=if marked.is_some() {None} else {state.rows.iter().filter_map(|r|Some((r["id"].as_str()?,r["text"].as_str()?)))
                 .find(|(id,text)|waiting.iter().any(|w|w==id) && entry.as_deref().is_none_or(|e|e==*id) && input::message_prefix(text).is_some())
-                .map(|(id,text)|(id.to_owned(),text.to_owned()));
+                .map(|(id,text)|(id.to_owned(),text.to_owned()))};
             let native=match candidate {
                 Some((id,text))=>self.services(&id,&id,&text).facts(&self.target.binding).await.ok()
                     .filter(|f|f.binding==self.target.binding && input::native_message(f,&text)).map(|_|id),
-                None=>None,
+                None=>marked,
             };
             let Some(native)=native else {
                 if self.stall.take().is_some_and(|s|s.surfaced) {self.publish().await?;}
@@ -1562,7 +1570,9 @@ impl Executor {
         // A sessão voltou a receber mensagem: o aviso da troca por limite que não aconteceu já passou.
         if let Some(sender)=&self.options.status {terminal_status::publish_limit(sender,None);}
         let attempt=format!("queue:{}:{}",row_id,self.sequence.fetch_add(1,Ordering::Relaxed));
-        let outcome=self.execute(&attempt,"input",json!({"text":row["text"],"pre_transcript":row["pre_transcript"]==true}),Some(row_id),steer).await?;
+        let mut payload=json!({"text":row["text"],"pre_transcript":row["pre_transcript"]==true});
+        if row["conversation"]==true {payload["conversation"]=json!(true);}
+        let outcome=self.execute(&attempt,"input",payload,Some(row_id),steer).await?;
         if directed && self.batch_blocked {self.batch_blocked=false;self.publish().await?;}
         Ok(json!({"drained":1,"reply":outcome}))
     }
@@ -1576,7 +1586,19 @@ impl Executor {
         // A que já saiu (ou nunca esteve) responde antes de ler a tela: nenhuma tecla.
         let state=self.queue.snapshot().await.map_err(|_|error("queue_io"))?;
         if !super::queue::waiting_ids(&state,self.target.created).contains(&entry) {
-            return Ok(reply(id,Disposition::Rejected,json!({"code":"queue_entry_gone","cleanup":"not_needed"})));
+            // "Na conversa" já digitada espera na fila do Claude Code: o Enviar agora só a promove, sem reescrevê-la.
+            let written=state.rows.iter().any(|r|r["id"]==entry.as_str() && r["conversation"]==true && r["delivered"]==true && r["confirmed"]!=true);
+            if !written {return Ok(reply(id,Disposition::Rejected,json!({"code":"queue_entry_gone","cleanup":"not_needed"})));}
+            let services=self.services("maintenance","maintenance","");
+            let facts=services.facts(&self.target.binding).await.map_err(|_|error("terminal_facts"))?;
+            if facts.binding!=self.target.binding {return Ok(reply(id,Disposition::Deferred,json!({"code":"queue_steer_not_delivered","cleanup":"not_needed"})));}
+            if facts.open_question {return Ok(reply(id,Disposition::Rejected,json!({"code":"queue_steer_question_open","cleanup":"not_needed"})));}
+            let driver=TerminalDriver::new(self.target.binding.clone(),services,self.options.io.clone(),self.options.limits.clone());
+            return Ok(match driver.steer().await.disposition {
+                input::Disposition::Accepted=>reply(id,Disposition::Accepted,json!({"steered":true,"drained":0})),
+                input::Disposition::Unknown=>reply(id,Disposition::Unknown,json!({"code":"queue_steer_uncertain"})),
+                _=>reply(id,Disposition::Deferred,json!({"code":"queue_steer_not_delivered","cleanup":"not_needed"})),
+            });
         }
         // A incerta segura toda escrita: a drenagem não levaria esta, e o app aponta o Descartar da que trava.
         if state.terminal_write_blocked(&self.target.binding.conversation) {
@@ -1927,12 +1949,13 @@ impl Executor {
 fn is_clear(text:&str)->bool {text.split_whitespace().next()==Some("/clear")}
 fn validate(kind:&str,payload:&Value)->Result<(),RuntimeError> {
     let fields:&[&str]=match kind {
-        "input"=>&["text","pre_transcript"],"steer"=>&[],"key"|"navigation_key"|"interactive_key"=>&["key"],"terminal_input"=>&["text"],
+        "input"=>&["text","pre_transcript","conversation"],"steer"=>&[],"key"|"navigation_key"|"interactive_key"=>&["key"],"terminal_input"=>&["text"],
         "select"=>&["option","require_cursor","request_id","interaction_id","text"],"answer_questions"|"answer_chat"=>&["answers","request_id","interaction_id"],"interrupt"=>&["clear"],"submit_selected"=>&["interaction_id"],"steer_queue"=>&["entry_id"],_=>return Err(error("terminal_control")),
     };
     if !payload.as_object().is_some_and(|p|p.keys().all(|k|fields.contains(&k.as_str()))){return Err(error("terminal_payload"));}
     let valid=match kind {
-        "input"=>payload["text"].as_str().is_some_and(valid_text) && payload.get("pre_transcript").is_none_or(Value::is_boolean),
+        "input"=>payload["text"].as_str().is_some_and(valid_text) && payload.get("pre_transcript").is_none_or(Value::is_boolean)
+            && payload.get("conversation").is_none_or(Value::is_boolean),
         "terminal_input"=>payload["text"].as_str().is_some_and(safe_characters),
         "key"|"navigation_key"|"interactive_key"=>payload["key"].is_string(),
         "select"=>payload["option"].as_u64().is_some_and(|v|v>0 && v<=100) && payload.get("require_cursor").is_none_or(Value::is_boolean) && payload.get("text").is_none_or(|t|t.as_str().is_some_and(|t|valid_text(t) && !t.contains('\n'))) && payload.get("request_id").is_none_or(Value::is_string),

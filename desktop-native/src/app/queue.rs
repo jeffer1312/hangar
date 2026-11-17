@@ -126,11 +126,6 @@ pub(super) fn sends_direct(enabled: bool, state: &str, provider: &str) -> bool {
     enabled && state == "working" && matches!(provider, "claude" | "codex")
 }
 
-/// "Na conversa": só Claude sem terminal e Codex leem a mensagem entre ferramentas; o Claude com terminal fica na Fila.
-pub(super) fn sends_in_conversation(enabled: bool, state: &str, provider: &str, headless: bool) -> bool {
-    sends_direct(enabled, state, provider) && (provider == "codex" || headless)
-}
-
 /// Aviso de entrega parada no painel: é onde a mensagem presa espera (a bolha dela some da conversa).
 pub(super) fn stalled_notice(panel: &model::QueuePanel, problem: Option<&str>, read_only: bool) -> bool {
     !panel.entries.is_empty() && problem == Some(super::STALLED) && !read_only
@@ -198,8 +193,8 @@ impl Hangar {
     pub(super) fn queue_timing(&self, direct: bool, ordinary: bool, message: &str) -> SendTiming {
         if direct { return SendTiming::Direct; }
         let mode = appearance::get().delivery_mode();
-        let (provider, headless) = self.provider();
-        if ordinary && sends_in_conversation(mode == DeliveryMode::Conversation, &self.chat.state.state, provider, headless) {
+        // "Na conversa" vale com e sem terminal: o Claude Code lê a mensagem na pausa seguinte nos dois.
+        if ordinary && sends_direct(mode == DeliveryMode::Conversation, &self.chat.state.state, self.provider().0) {
             return SendTiming::Conversation;
         }
         if ordinary && mode == DeliveryMode::Jev && self.queue_jev_ready()
@@ -513,7 +508,7 @@ impl Hangar {
 
 #[cfg(test)]
 mod tests {
-    use super::{panel_height, row_place_above, sends_direct, sends_in_conversation, stalled_notice};
+    use super::{panel_height, row_place_above, sends_direct, stalled_notice};
     use crate::api::dto::ChatEvent;
     use gpui_kit::{Bounds, point, px, size};
 
@@ -552,16 +547,5 @@ mod tests {
         assert!(!sends_direct(false, "working", "claude"), "desligada, a mensagem espera na fila");
         assert!(!sends_direct(true, "idle", "claude"), "parado, o envio comum já entra na hora");
         assert!(!sends_direct(true, "working", "kimi"), "o Kimi não tem Orientar por mensagem");
-    }
-
-    #[test]
-    fn in_conversation_only_where_the_cli_reads_between_tools() {
-        assert!(sends_in_conversation(true, "working", "claude", true), "Claude sem terminal");
-        assert!(sends_in_conversation(true, "working", "codex", false), "Codex com terminal também");
-        assert!(sends_in_conversation(true, "working", "codex", true));
-        assert!(!sends_in_conversation(true, "working", "claude", false), "Claude com terminal fica na Fila");
-        assert!(!sends_in_conversation(true, "working", "pi", true));
-        assert!(!sends_in_conversation(true, "idle", "claude", true), "parado, o envio comum já entra");
-        assert!(!sends_in_conversation(false, "working", "claude", true));
     }
 }

@@ -38,8 +38,7 @@ export function queueSendMode(mode: DeliveryMode, ready: boolean, state: string,
   headless: boolean, message: string, events: ChatEvent[], ask: AskQuestionPayload | null): QueueSendMode | undefined {
   if (state !== 'working' || (provider !== 'claude' && provider !== 'codex') || message.trimStart().startsWith('/')) return;
   if (mode === 'direct') return { kind: 'direct', terminalClaude: provider === 'claude' && !headless };
-  // Claude com terminal fica na Fila (o servidor faria o mesmo): assim o eco já nasce no painel.
-  if (mode === 'conversation') return provider === 'claude' && !headless ? undefined : { kind: 'conversation' };
+  if (mode === 'conversation') return { kind: 'conversation' };
   if (mode !== 'jev' || !ready) return;
   let latest = -1;
   for (let i = events.length - 1; i >= 0; i--) {

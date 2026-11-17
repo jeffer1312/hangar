@@ -117,8 +117,8 @@ it('"Na conversa" vale só com a sessão trabalhando, em Claude e Codex, e nunca
     return queueSendMode('conversation', false, state, provider, headless, text, events, null);
   };
   expect(pick({})).toEqual({ kind: 'conversation' });
-  // Claude com terminal fica na Fila; Codex com e sem terminal vai pelo caminho suave.
-  expect(pick({ headless: false })).toBeUndefined();
+  // Com e sem terminal: o Claude Code lê a mensagem na pausa seguinte nos dois.
+  expect(pick({ headless: false })).toEqual({ kind: 'conversation' });
   expect(pick({ provider: 'codex', headless: false })).toEqual({ kind: 'conversation' });
   expect(pick({ provider: 'codex', headless: true })).toEqual({ kind: 'conversation' });
   expect(pick({ state: 'idle' })).toBeUndefined();

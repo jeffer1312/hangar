@@ -745,6 +745,23 @@ async fn terminal_runtime_plain_text_is_held_even_with_the_native_socket() {
     h.stop().await.unwrap();
 }
 #[tokio::test]
+async fn terminal_runtime_conversation_message_is_typed_mid_turn_and_keeps_its_mark() {
+    // "Na conversa": com o Claude trabalhando ela é digitada na hora (o Claude Code a guarda e a lê na pausa
+    // seguinte), sem o ctrl+x ctrl+s que cortaria o turno; a comum continua esperando o turno.
+    use hangar_server::runtime::protocol::Disposition;
+    let f=Fixture::new().await; f.idle.store(false,std::sync::atomic::Ordering::Release); let h=f.start();
+    let mut marked=f.command("mid","No meio"); marked.payload["conversation"]=json!(true);
+    let reply=h.command(marked).await.unwrap();
+    assert_eq!(reply.disposition,Disposition::Accepted,"{}",reply.payload);
+    assert_eq!(f.sent_prompts(),vec!["No meio".to_string()]);
+    let row=f.state()["rows"].as_array().unwrap().iter().find(|r|r["id"]=="mid").cloned().unwrap();
+    assert_eq!((row["conversation"].clone(),row["delivered"].clone()),(json!(true),json!(true)),"{row}");
+    assert!(f.io.calls.lock().unwrap().iter().all(|c|!c.args.last().is_some_and(|k|k=="C-s")),"nada de ctrl+x ctrl+s");
+    let reply=h.command(f.command("plain","Comum")).await.unwrap();
+    assert_eq!((reply.disposition,reply.payload["code"].clone()),(Disposition::Deferred,json!("terminal_turn_hold")),"{}",reply.payload);
+    h.stop().await.unwrap();
+}
+#[tokio::test]
 async fn terminal_runtime_native_message_behind_held_rows_still_goes_mid_turn() {
     // Recado que chegou atrás de uma fala segurada: a drenagem o leva pelo socket sem esperar o turno.
     let f=Fixture::new().await; f.idle.store(false,std::sync::atomic::Ordering::Release); f.native.store(true,std::sync::atomic::Ordering::Release); let h=f.start();

@@ -1142,8 +1142,16 @@ conversa" reusa esse caminho, com uma marca própria na linha da fila para a bol
 depois de escrita; antes disso (limite, escrita incerta, adiada) ela espera no painel como a da Fila,
 onde pode ser cancelada.
 Não reusa `steer:true` porque no Claude com terminal ele vira o `steer_entry`, que aperta
-`ctrl+x ctrl+s` e corta o turno. A decisão do usuário foi não levar a mensagem à fila interna do
-Claude Code com terminal: ali "Na conversa" se comporta como Fila.
+`ctrl+x ctrl+s` e corta o turno. Com terminal, o ator digita a mensagem marcada com o turno em curso
+e não aperta nada além do Enter: o Claude Code a guarda e a lê na pausa seguinte. O "Enviar agora"
+dela, já digitada, só aperta `ctrl+x ctrl+s`. Em 17/11/2026 o usuário pediu os dois modos iguais
+(a primeira versão deixava o Claude com terminal na Fila, e no uso pareceu quebrado).
+
+Medido em 17/11/2026 com a CLI 2.1.326 no terminal (tmux à parte, Haiku, turno com cinco `sleep 4` em
+chamadas separadas): o texto digitado com Enter aos ~9 s mostrou "Queued · ctrl+enter to send now",
+entrou na conversa logo depois do primeiro `sleep` e o turno seguiu até o fim, respondendo também à
+mensagem. No transcript: `queue-operation` `enqueue`/`remove` e o anexo `queued_command` depois do
+primeiro `tool_result`, o mesmo que o recibo de entrega já reconhece.
 
 Medido em 16/11/2026 com a CLI 2.1.326 (`claude -p --safe-mode --model haiku --input-format
 stream-json --replay-user-messages`, pasta vazia, turno com três `sleep 4` em chamadas separadas):
