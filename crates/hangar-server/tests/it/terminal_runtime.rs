@@ -787,6 +787,13 @@ async fn terminal_runtime_send_now_of_a_typed_conversation_message_only_promotes
     assert_eq!((reply.disposition,reply.payload["steered"].clone()),(Disposition::Accepted,json!(true)),"{}",reply.payload);
     assert_eq!(f.sent_prompts(),vec!["No meio".to_string()],"nada reescrito");
     assert!(f.io.calls.lock().unwrap().iter().any(|c|c.args.last().is_some_and(|k|k=="C-s")),"ctrl+x ctrl+s");
+    assert_eq!(f.state()["rows"].as_array().unwrap().iter().find(|r|r["id"]=="mid").unwrap()["steered"],true);
+    // O segundo clique não aperta de novo: levaria junto o que estiver na fila interna do Claude Code.
+    let presses=||f.io.calls.lock().unwrap().iter().filter(|c|c.args.last().is_some_and(|k|k=="C-s")).count();
+    let before=presses();
+    let again=h.control("again".into(),"steer_entry".into(),json!({"entry_id":"mid"})).await.unwrap();
+    assert_eq!(again.payload["code"],"queue_entry_gone","{}",again.payload);
+    assert_eq!(presses(),before);
     h.stop().await.unwrap();
 }
 #[tokio::test]

@@ -1620,7 +1620,12 @@ impl Executor {
                 steered=driver.steer().await;
             }
             return Ok(match steered.disposition {
-                input::Disposition::Accepted=>reply(id,Disposition::Accepted,json!({"steered":true,"drained":0})),
+                // Marcada antes da resposta: outro clique nela não aperta o ctrl+x ctrl+s de novo.
+                input::Disposition::Accepted=>{
+                    self.action(Action::SetDelivered {entry_id:entry.clone(),value:true,steered:true}).await?;
+                    self.publish().await?;
+                    reply(id,Disposition::Accepted,json!({"steered":true,"drained":0}))
+                },
                 input::Disposition::Unknown=>{
                     tracing::warn!(key=%self.target.key,session=%self.target.name,code=%steered.code,"Enviar agora da mensagem na conversa: o ctrl+x ctrl+s não se comprovou");
                     reply(id,Disposition::Unknown,json!({"code":"queue_steer_uncertain"}))
