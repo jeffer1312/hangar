@@ -1218,6 +1218,12 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
       takePrewarm={takePrewarm}
       resumePrewarm={resumePrewarm}
       blocked={blocked || branchBlocked}
+      commandSource={provider === 'claude' ? {
+        // A mesma conta que vai no corpo da criação; sem pasta, a lista traz o que é da conta.
+        cwd: picked,
+        configDir: accountChosen || !!switchedFrom ? selectedConfig : null,
+        headless: canHeadless && headless,
+      } : null}
       keyboardOffset={keyboardOffset}
     />
     {branchPanel}

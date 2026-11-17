@@ -228,7 +228,7 @@ pub fn rust_route(method: &Method, path: &str) -> bool {
         | ("DELETE", Some("pair")) | ("GET" | "PUT", Some("pair/contract"))) {
         return true;
     }
-    (*method == Method::GET && path == crate::claude_customizations::CATALOG_PATH)
+    (*method == Method::GET && (path == crate::claude_customizations::CATALOG_PATH || path == crate::commands::NEW_CHAT_PATH))
         || crate::plans::routes::matches(method, path) || crate::share_reach::matches(method, path) || share_route(method, path)
         || crate::workspace_routes::matches(method, path) || crate::worktree_routes::matches(method, path)
         || crate::reviews::matches(method, path)

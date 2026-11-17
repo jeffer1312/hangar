@@ -1215,6 +1215,19 @@ export function getClaudeCustomizationsForServer(s: Server, cwd: string, configD
   return apiFetchForServer(s, `/api/claude/customizations?${q}`, undefined, 20_000);
 }
 
+// GET /api/claude/commands (Rust, commands/service.rs): a lista do `/` da conversa que ainda vai
+// nascer, no formato de getCommands. Sem pasta nem conta, a lista da conta padrão.
+export function getNewChatCommandsForServer(s: Server, cwd?: string | null, configDir?: string | null,
+  headless = false): Promise<CommandInfo[]> {
+  const q = new URLSearchParams({
+    ...(cwd ? { cwd } : {}),
+    ...(configDir ? { config_dir: configDir } : {}),
+    ...(headless ? { headless: '1' } : {}),
+  });
+  const query = q.toString();
+  return apiFetchForServer(s, `/api/claude/commands${query ? `?${query}` : ''}`, undefined, 30_000);
+}
+
 // POST /api/claude/defaults (Rust, claude_defaults.rs): grava no settings.json do principal da máquina.
 export interface ClaudeDefaultsBody { model?: string | null; effort?: string | null; permission?: string | null }
 export interface SessionDefaults { model: string; effort: string; permission: string }
