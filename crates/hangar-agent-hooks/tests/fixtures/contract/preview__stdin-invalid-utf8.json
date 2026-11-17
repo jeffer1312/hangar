@@ -1,0 +1,100 @@
+{
+ "case": "preview/stdin-invalid-utf8",
+ "source_commit": "2ad8e335e8d9118e74bc5b33f2efb4ac3bbd8eba",
+ "python": "3.14.9 websockets 16.0",
+ "capture_cmdline": "/usr/bin/python3 capture.py -j 8",
+ "route": "R1",
+ "hook": "preview_hook.py",
+ "contract_refs": [
+  "R1-S06",
+  "H-12"
+ ],
+ "description": "",
+ "harness": {
+  "how": "$PY -B -s $REF/backend/hooks/preview_hook.py, one process per step, stdin = step"
+ },
+ "input": {
+  "env": {
+   "HOME": "$T/home",
+   "USERPROFILE": "$T/home",
+   "LOCALAPPDATA": "$T/local",
+   "TMUX_TMPDIR": "$T/tmux",
+   "PATH": "$T/stubs:/usr/bin:/bin",
+   "CLAUDE_CONFIG_DIR": "$T/cfg"
+  },
+  "files_before": {}
+ },
+ "steps": [
+  {
+   "stdin": {
+    "b64": "eyJob29rX2V2ZW50X25hbWUiOiAiTWVzc2FnZURpc3BsYXkiLCAic2Vzc2lvbl9pZCI6ICJzZXNzLWNtZGxpbmUiLCAidHJhbnNjcmlwdF9wYXRoIjogIi9ob21lL3UvLmNsYXVkZS9wcm9qZWN0cy8taG9tZS11LXByb2ovYWJjLmpzb25sIiwgImN3ZCI6ICIvaG9tZS91L3Byb2oiLCAibWVzc2FnZV9pZCI6ICJtc2dfMDEiLCAiaW5kZXgiOiAwLCAiZmluYWwiOiBmYWxzZSwgImRlbHRhIjogIm9s4SD/In0=",
+    "utf8": false,
+    "size": 230
+   },
+   "code": 0,
+   "stdout": {
+    "text": ""
+   },
+   "stderr": {
+    "text": ""
+   },
+   "duration_ms": 33,
+   "files": {
+    "created": {
+     "cfg/.hangar-preview": {
+      "type": "dir",
+      "mode": "0o755"
+     },
+     "cfg/.hangar-preview/abc.json": {
+      "type": "file",
+      "mode": "0o644",
+      "size": 100,
+      "sha256": "2d6ad3c511cde488096b4814424b253777828d828d4acb5b18aa722fcb46af5c",
+      "content": {
+       "text": "{\"text\": \"ol� �\", \"ts\": 1794910460.1112635, \"message_id\": \"msg_01\", \"parts\": {\"0\": \"ol� �\"}}"
+      }
+     },
+     "cfg/.hangar-preview/abc.lock": {
+      "type": "file",
+      "mode": "0o644",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "content": {
+       "text": ""
+      }
+     }
+    },
+    "changed": {},
+    "removed": []
+   }
+  }
+ ],
+ "files_final": {
+  "cfg/.hangar-preview": {
+   "type": "dir",
+   "mode": "0o755"
+  },
+  "cfg/.hangar-preview/abc.json": {
+   "type": "file",
+   "mode": "0o644",
+   "size": 100,
+   "sha256": "2d6ad3c511cde488096b4814424b253777828d828d4acb5b18aa722fcb46af5c",
+   "content": {
+    "text": "{\"text\": \"ol� �\", \"ts\": 1794910460.1112635, \"message_id\": \"msg_01\", \"parts\": {\"0\": \"ol� �\"}}"
+   }
+  },
+  "cfg/.hangar-preview/abc.lock": {
+   "type": "file",
+   "mode": "0o644",
+   "size": 0,
+   "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "content": {
+    "text": ""
+   }
+  }
+ },
+ "window": {
+  "t_start": 1794910460.0849173,
+  "t_end": 1794910460.1198564
+ }
+}

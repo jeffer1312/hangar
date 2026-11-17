@@ -1,0 +1,26 @@
+[package]
+name = "hangar-agent-hooks"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+# Mesmas features do hangar-server: sem elas, compilar este crate sozinho guarda outra cópia de cada
+# dependência no target (ver o comentário do serde_json em hangar-server/Cargo.toml).
+[dependencies]
+chrono.workspace = true
+hangar-core.workspace = true
+regex.workspace = true
+reqwest = { workspace = true, features = ["rustls", "multipart"] }
+serde_json = { workspace = true, features = ["float_roundtrip", "alloc", "unbounded_depth", "arbitrary_precision", "raw_value"] }
+sha1_smol.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "io-util", "io-std", "process", "sync", "time", "fs", "signal"] }
+unicode-normalization = "=0.1.25"
+
+# Sem `/proc` a subida da árvore de processos pergunta ao sistema, como o psutil fazia no Python.
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+sysinfo = { version = "=0.39.6", default-features = false, features = ["system"] }
+
+[dev-dependencies]
+base64 = "=0.23.1"
+proptest.workspace = true
+tempfile.workspace = true

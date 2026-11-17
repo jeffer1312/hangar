@@ -135,14 +135,16 @@ pub fn own_skills(roots: &Roots) -> BTreeSet<String> {
         .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
         .collect()
 }
-pub fn own_hooks(roots: &Roots) -> BTreeSet<String> {
-    let mut names: BTreeSet<String> = names(&Path::new(&roots.hangar).join("backend/hooks"))
-        .iter()
-        .filter(|p| p.extension().is_some_and(|e| e == "py"))
-        .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
-        .collect();
-    names.insert("pair-context".into());
-    names
+/// Os hooks do Hangar (ficam no destino, não viajam): os subcomandos de hoje e os scripts Python que
+/// máquinas ainda não atualizadas gravam. Lista fixa: a pasta `backend/hooks` sai do pacote.
+pub const OWN_HOOKS: &[&str] = &[
+    "state-hook", "preview-hook", "nav-hook", "askq-capture", "pair-context", "guard-tmux", "kimi-state-hook",
+    "state_hook.py", "preview_hook.py", "nav_hook.py", "askq_capture.py", "subagent_hook.py", "guard_tmux.py",
+    "kimi_state_hook.py",
+];
+
+pub fn own_hooks(_roots: &Roots) -> BTreeSet<String> {
+    OWN_HOOKS.iter().map(|name| (*name).to_owned()).collect()
 }
 pub fn is_own_hook(command: &str, own: &BTreeSet<String>) -> bool {
     own.iter().any(|name| {

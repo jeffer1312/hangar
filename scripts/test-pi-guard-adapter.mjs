@@ -25,6 +25,8 @@ try {
     '"C:\\Hangar App\\bin\\hangar-server.exe" guard-tmux',
     '"/opt/current/scripts/hangar-server-command" guard-tmux',
     '/opt/bin/hangar-server guard-tmux',
+    '"/home/u/.hangar/bin/hangar-launcher" guard-tmux',
+    '"C:\\Users\\u\\.hangar\\bin\\hangar-launcher.exe" guard-tmux',
   ]) assert.equal(await count(command), 1, command);
   for (const command of [
     '"/opt/bin/hangar-server" engine',
@@ -33,7 +35,12 @@ try {
     '"/opt/`touch /tmp/forbidden`/hangar-server" guard-tmux',
     'python /opt/backend/hooks/guard_tmux.py',
     '"/opt/not-hangar-server" guard-tmux',
+    '"/opt/not-hangar-launcher" guard-tmux',
   ]) assert.equal(await count(command), 0, command);
+  // Os hooks de marcador do Claude, agora subcomandos, ficam fora mesmo com a pasta deles permitida.
+  for (const sub of ["state-hook", "askq-capture", "preview-hook"]) {
+    assert.equal(await count(`"/home/u/.hangar/bin/hangar-launcher" ${sub} || exit 0`, { allowPatterns: ["/.hangar/bin/"] }), 0, sub);
+  }
   assert.equal(await count('"/opt/bin/hangar-server" guard-tmux', { allowPatterns: ["/my-hooks/"] }), 0);
   assert.equal(await count('"/opt/bin/hangar-server" guard-tmux', { skipPatterns: ["guard-tmux"] }), 0);
   assert.equal(await count('python /my-hooks/own.py', { allowPatterns: ["/my-hooks/"] }), 1);

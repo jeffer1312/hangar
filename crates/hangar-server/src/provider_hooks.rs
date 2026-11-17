@@ -7,9 +7,8 @@ use std::{
     process::ExitCode,
 };
 
-pub fn command(mode: &str) -> Result<String, String> {
-    let (executable, _) = crate::codex_setup::hook_command::allow_wrapper()?;
-    Ok(format!("\"{executable}\" {mode}"))
+pub fn command(home: &Path, mode: &str) -> Result<String, String> {
+    crate::codex_setup::hook_command::hook_command(home, mode)
 }
 
 fn log_failure(file: &str, code: &str) {
@@ -84,7 +83,11 @@ pub fn run(mode: &str) -> ExitCode {
                 if reads_vault(command, 0, tool == "PowerShell") {
                     return Ok(Some(VAULT_DENIED.to_owned()));
                 }
-                Ok(dangerous(command, 0).map(|reason| format!(
+                // Caminho do Windows sem aspas (PowerShell, ou o Bash do Codex no Windows): a barra
+                // invertida é separador, não escape. Conferido também assim, só para barrar mais.
+                let reason = dangerous(command, 0)
+                    .or_else(|| command.contains('\\').then(|| dangerous(&command.replace('\\', "/"), 0)).flatten());
+                Ok(reason.map(|reason| format!(
                     "BLOQUEADO: {reason}.\nPrecisa de tmux limpo para uma sonda? Suba um SERVIDOR SEPARADO com socket próprio:\n  tmux -L probe-x new-session -d -s alvo ...\n  tmux -L probe-x kill-server\nNunca no servidor default, onde vivem as sessões de trabalho (TMUX_TMPDIR não isola: dentro do tmux quem manda é $TMUX).\nPara matar UMA sessão: `tmux kill-session -t '=nome:'`."
                 )))
             }
@@ -300,10 +303,13 @@ fn head(tokens: &[String]) -> (&str, &[String]) {
     ];
     for (i, token) in tokens.iter().enumerate() {
         let token_name = token.trim_matches(['\'', '"']);
-        let name = if cfg!(windows) {
-            token_name.rsplit(['/', '\\']).next().unwrap_or_default()
-        } else {
-            token_name.rsplit('/').next().unwrap_or_default()
+        // A barra invertida que sobra depois das aspas é de caminho do Windows, e o `.exe` não muda o
+        // programa: `"C:\tools\tmux.exe" kill-server` é o tmux.
+        let name = token_name.rsplit(['/', '\\']).next().unwrap_or_default();
+        let cut = name.len().saturating_sub(4);
+        let name = match name.get(cut..) {
+            Some(tail) if tail.eq_ignore_ascii_case(".exe") => &name[..cut],
+            _ => name,
         };
         let duration = {
             static DURATION: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();

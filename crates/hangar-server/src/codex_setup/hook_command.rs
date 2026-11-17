@@ -8,6 +8,63 @@ pub fn allow_wrapper() -> Result<(String, String), String> {
     Ok((executable, "codex-hook-allow".into()))
 }
 
+/// O programa dos hooks gravados nos agentes: `~/.hangar/bin/hangar-launcher`, o mesmo binário renovado
+/// a cada versão e preservado na volta de versão, então o comando novo não falha na versão antiga.
+/// Só vale quando ele É este servidor (mesmos bytes): no checkout e no modo desenvolvedor a
+/// atualização não o renova, e um lançador velho recusaria o subcomando novo. Fora disso, o
+/// `persistent_server`.
+pub fn hook_server(home: &Path) -> Result<PathBuf, String> {
+    let running = std::env::current_exe().map_err(|error| error.to_string())?;
+    hook_server_with(home, cfg!(windows), &running, persistent_server)
+}
+
+pub fn hook_server_with(home: &Path, windows: bool, running: &Path, fallback: impl FnOnce() -> Result<PathBuf, String>) -> Result<PathBuf, String> {
+    let launcher = crate::update::migrate::launcher_path(home, windows);
+    if same_bytes(&launcher, running) { Ok(launcher) } else { fallback() }
+}
+
+/// Os dois arquivos têm o mesmo conteúdo; ilegível ou ausente é "não". A resposta fica guardada por
+/// caminho, tamanho e data dos dois: o reparo do Kimi pergunta uma vez por entrada.
+fn same_bytes(a: &Path, b: &Path) -> bool {
+    type Key = (PathBuf, PathBuf, u64, Option<std::time::SystemTime>, u64, Option<std::time::SystemTime>);
+    static SEEN: std::sync::Mutex<Vec<(Key, bool)>> = std::sync::Mutex::new(Vec::new());
+    let (Ok(meta_a), Ok(meta_b)) = (std::fs::metadata(a), std::fs::metadata(b)) else { return false };
+    if !meta_a.is_file() || meta_a.len() != meta_b.len() {
+        return false;
+    }
+    let key: Key = (a.to_owned(), b.to_owned(), meta_a.len(), meta_a.modified().ok(), meta_b.len(), meta_b.modified().ok());
+    if let Some((_, same)) = SEEN.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|(k, _)| *k == key) {
+        return *same;
+    }
+    let same = compare(a, b);
+    let mut seen = SEEN.lock().unwrap_or_else(|e| e.into_inner());
+    if seen.len() > 16 { seen.clear(); }
+    seen.push((key, same));
+    same
+}
+
+fn compare(a: &Path, b: &Path) -> bool {
+    let (Ok(file_a), Ok(file_b)) = (std::fs::File::open(a), std::fs::File::open(b)) else { return false };
+    let (mut file_a, mut file_b) = (io::BufReader::new(file_a), io::BufReader::new(file_b));
+    let (mut buf_a, mut buf_b) = (vec![0u8; 1 << 16], vec![0u8; 1 << 16]);
+    loop {
+        let Ok(n) = file_a.read(&mut buf_a) else { return false };
+        if n == 0 {
+            return true;
+        }
+        if file_b.read_exact(&mut buf_b[..n]).is_err() || buf_a[..n] != buf_b[..n] {
+            return false;
+        }
+    }
+}
+
+/// `"<programa dos hooks>" <subcomando>`, sem sufixo.
+pub fn hook_command(home: &Path, mode: &str) -> Result<String, String> {
+    let program = hook_server(home)?;
+    let program = program.to_str().ok_or("O caminho do servidor não está em UTF-8")?;
+    Ok(format!("\"{program}\" {mode}"))
+}
+
 /// Este `hangar-server` por um caminho que sobrevive à troca de versão, para gravar em config de fora.
 pub fn persistent_server() -> Result<PathBuf, String> {
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
@@ -58,6 +115,24 @@ mod path_tests {
         for executable in [home.join(".hangar/bin/hangar-server"), home.join(".hangar/current/bin/hangar-server"), PathBuf::from("other-checkout/crates/target/debug/hangar-server")] {
             assert_eq!(persistent_executable(&executable, Some(home)), executable);
         }
+    }
+
+    /// Revisão R1, item 1: lançador mais velho que o servidor (checkout ou modo desenvolvedor, que a
+    /// atualização não renova) recusaria o subcomando novo; os hooks ficam no servidor em execução.
+    #[test]
+    fn hooks_use_the_launcher_only_when_it_is_this_server() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        let launcher = crate::update::migrate::launcher_path(&home, cfg!(windows));
+        std::fs::create_dir_all(launcher.parent().unwrap()).unwrap();
+        let running = temp.path().join("hangar-server");
+        std::fs::write(&running, b"servidor novo com state-hook").unwrap();
+        let fallback = || Ok(PathBuf::from("persistente"));
+        assert_eq!(hook_server_with(&home, cfg!(windows), &running, fallback).unwrap(), PathBuf::from("persistente"), "sem lançador");
+        std::fs::write(&launcher, b"servidor velho sem state-hook").unwrap();
+        assert_eq!(hook_server_with(&home, cfg!(windows), &running, fallback).unwrap(), PathBuf::from("persistente"), "lançador velho");
+        std::fs::write(&launcher, b"servidor novo com state-hook").unwrap();
+        assert_eq!(hook_server_with(&home, cfg!(windows), &running, fallback).unwrap(), launcher, "o mesmo binário");
     }
 
     #[cfg(unix)]

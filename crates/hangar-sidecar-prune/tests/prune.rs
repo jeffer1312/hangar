@@ -86,6 +86,22 @@ fn r6_03_session_key_families_go_by_the_stem_of_the_json_on_the_first_level() {
     assert!(other.exists() && nested.exists());
 }
 
+/// H-87/R1-D12: o `.hangar-prompt` do `state-hook` (501 arquivos sem poda nesta máquina) sai pela mesma
+/// regra das famílias por chave; a sobra do temporário com pid, pela idade.
+#[test]
+fn h87_the_prompt_marker_is_pruned_by_key_and_its_tmp_by_age() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = base(&dir);
+    let dead = write(&base, ".hangar-prompt", "morto-stem.json", days(8.0));
+    let young = write(&base, ".hangar-prompt", "morto-novo.json", days(1.0));
+    let alive = write(&base, ".hangar-prompt", "vivo-kimi.json", days(60.0));
+    let tmp = write(&base, ".hangar-prompt", "morto-stem.json.4242.tmp", hours(2));
+    let report = prune(&bases(&base), &live(&["vivo-kimi"], &["outra-sessao"], &["1"]), now());
+    assert_eq!(report.removed, removed(&[(".hangar-prompt", 1), (".hangar-prompt (.tmp)", 1)]));
+    assert!(!dead.exists() && !tmp.exists());
+    assert!(young.exists() && alive.exists());
+}
+
 #[test]
 fn r6_04_the_queue_and_the_baton_go_by_the_sanitized_session_name() {
     let dir = tempfile::tempdir().unwrap();

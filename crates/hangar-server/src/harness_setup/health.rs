@@ -573,12 +573,11 @@ pub fn claude_hooks(directory: &Path) -> Value {
     let hooks = &doc["hooks"];
     let text = codec::dumps(hooks, false);
     let mut missing: Vec<String> = [
-        "state_hook.py",
-        "askq_capture.py",
-        "preview_hook.py",
-        "subagent_hook.py",
+        "state-hook",
+        "askq-capture",
+        "preview-hook",
         "pair-context",
-        "nav_hook.py",
+        "nav-hook",
     ]
     .into_iter()
     .filter(|name| !text.contains(name))
@@ -625,7 +624,7 @@ pub fn claude_hooks(directory: &Path) -> Value {
             "hooks_ok",
             None,
             false,
-            &[("n", "6".into())],
+            &[("n", "5".into())],
         )
     }
 }

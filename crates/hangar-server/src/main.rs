@@ -10,6 +10,10 @@ fn main() -> std::process::ExitCode {
     if matches!(hook_args.first().and_then(|arg| arg.to_str()), Some("kimi-state-hook" | "guard-tmux")) {
         return hangar_server::provider_hooks::run(hook_args[0].to_str().unwrap());
     }
+    // Hooks de marcador do Claude e do Codex: um processo por evento, nada antes deles.
+    if let Some(mode) = hook_args.first().and_then(|arg| arg.to_str()).filter(|mode| hangar_agent_hooks::is_mode(mode)) {
+        return hangar_agent_hooks::run(mode);
+    }
     // `open`/`resolve`: o lançador como comando de terminal, com runtime próprio (fora do `run`).
     let args: Vec<String> = std::env::args_os().skip(1).map(|a| a.to_string_lossy().into_owned()).collect();
     if args.first().map(String::as_str) == Some("usage") {

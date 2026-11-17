@@ -1,0 +1,137 @@
+{
+ "case": "preview/delta-unicode-crlf",
+ "source_commit": "2ad8e335e8d9118e74bc5b33f2efb4ac3bbd8eba",
+ "python": "3.14.9 websockets 16.0",
+ "capture_cmdline": "/usr/bin/python3 capture.py -j 8",
+ "route": "R1",
+ "hook": "preview_hook.py",
+ "contract_refs": [
+  "R1-S06",
+  "H-22"
+ ],
+ "description": "",
+ "harness": {
+  "how": "$PY -B -s $REF/backend/hooks/preview_hook.py, one process per step, stdin = step"
+ },
+ "input": {
+  "env": {
+   "HOME": "$T/home",
+   "USERPROFILE": "$T/home",
+   "LOCALAPPDATA": "$T/local",
+   "TMUX_TMPDIR": "$T/tmux",
+   "PATH": "$T/stubs:/usr/bin:/bin",
+   "CLAUDE_CONFIG_DIR": "$T/cfg"
+  },
+  "files_before": {}
+ },
+ "steps": [
+  {
+   "stdin": {
+    "text": "{\"hook_event_name\": \"MessageDisplay\", \"session_id\": \"sess-cmdline\", \"transcript_path\": \"/home/u/.claude/projects/-home-u-proj/abc.jsonl\", \"cwd\": \"/home/u/proj\", \"message_id\": \"msg_01\", \"index\": 0, \"final\": false, \"delta\": \"Olá\\r\\n👋 café 😀\"}"
+   },
+   "code": 0,
+   "stdout": {
+    "text": ""
+   },
+   "stderr": {
+    "text": ""
+   },
+   "duration_ms": 30,
+   "files": {
+    "created": {
+     "cfg/.hangar-preview": {
+      "type": "dir",
+      "mode": "0o755"
+     },
+     "cfg/.hangar-preview/abc.json": {
+      "type": "file",
+      "mode": "0o644",
+      "size": 130,
+      "sha256": "0882e2032572a4c249f4b700826f25641671b73cc3951bd066e1c32e662f294f",
+      "content": {
+       "text": "{\"text\": \"Olá\\r\\n👋 café 😀\", \"ts\": 1794910459.8870742, \"message_id\": \"msg_01\", \"parts\": {\"0\": \"Olá\\r\\n👋 café 😀\"}}"
+      }
+     },
+     "cfg/.hangar-preview/abc.lock": {
+      "type": "file",
+      "mode": "0o644",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "content": {
+       "text": ""
+      }
+     }
+    },
+    "changed": {},
+    "removed": []
+   }
+  },
+  {
+   "stdin": {
+    "text": "{\"hook_event_name\": \"MessageDisplay\", \"session_id\": \"sess-cmdline\", \"transcript_path\": \"/home/u/.claude/projects/-home-u-proj/abc.jsonl\", \"cwd\": \"/home/u/proj\", \"message_id\": \"msg_01\", \"index\": 1, \"final\": false, \"delta\": \" fim\"}"
+   },
+   "code": 0,
+   "stdout": {
+    "text": ""
+   },
+   "stderr": {
+    "text": ""
+   },
+   "duration_ms": 27,
+   "files": {
+    "created": {},
+    "changed": {
+     "cfg/.hangar-preview/abc.json": {
+      "before": {
+       "type": "file",
+       "mode": "0o644",
+       "size": 130,
+       "sha256": "0882e2032572a4c249f4b700826f25641671b73cc3951bd066e1c32e662f294f",
+       "content": {
+        "text": "{\"text\": \"Olá\\r\\n👋 café 😀\", \"ts\": 1794910459.8870742, \"message_id\": \"msg_01\", \"parts\": {\"0\": \"Olá\\r\\n👋 café 😀\"}}"
+       }
+      },
+      "after": {
+       "type": "file",
+       "mode": "0o644",
+       "size": 146,
+       "sha256": "f723e70ffdd06353f7b749ca677cf341daac13ce5afc3f251c6b663996249d14",
+       "content": {
+        "text": "{\"text\": \"Olá\\r\\n👋 café 😀 fim\", \"ts\": 1794910459.916983, \"message_id\": \"msg_01\", \"parts\": {\"0\": \"Olá\\r\\n👋 café 😀\", \"1\": \" fim\"}}"
+       }
+      }
+     }
+    },
+    "removed": []
+   }
+  }
+ ],
+ "files_final": {
+  "cfg/.hangar-preview": {
+   "type": "dir",
+   "mode": "0o755"
+  },
+  "cfg/.hangar-preview/abc.json": {
+   "type": "file",
+   "mode": "0o644",
+   "size": 146,
+   "sha256": "f723e70ffdd06353f7b749ca677cf341daac13ce5afc3f251c6b663996249d14",
+   "content": {
+    "text": "{\"text\": \"Olá\\r\\n👋 café 😀 fim\", \"ts\": 1794910459.916983, \"message_id\": \"msg_01\", \"parts\": {\"0\": \"Olá\\r\\n👋 café 😀\", \"1\": \" fim\"}}"
+   }
+  },
+  "cfg/.hangar-preview/abc.lock": {
+   "type": "file",
+   "mode": "0o644",
+   "size": 0,
+   "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "content": {
+    "text": ""
+   }
+  }
+ },
+ "window": {
+  "t_start": 1794910459.8625748,
+  "t_end": 1794910459.9217758
+ }
+}
