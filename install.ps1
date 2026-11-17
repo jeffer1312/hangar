@@ -78,6 +78,15 @@ $pacote = (Test-Path -LiteralPath "$raiz\manifest.json") -and -not (Test-Path -L
 # O hangar-server da instalacao (regra unica em scripts\hangar-server-command.ps1). No checkout novo
 # ele so existe depois do passo dos binarios Rust.
 $srvComando = Join-Path $raiz 'scripts\hangar-server-command.ps1'
+# No -Update do checkout o hangar-server achado pode ser mais antigo que este codigo: subcomando que
+# ele nao conhece (saida 2 com argumentos validos) vira aviso, com o motivo. No pacote e na
+# instalacao nova o binario veio com o codigo, e a falta e erro.
+$srvAntigoAvisa = $Update -and -not $pacote
+function SrvAntigo($rc, $oque, $sub) {
+    if ($rc -ne 2 -or -not $script:srvAntigoAvisa) { return $false }
+    Falta "${oque}: o hangar-server desta maquina e anterior a este codigo (nao tem '$sub') - rode scripts\install-server-binaries.ps1 e .\install.ps1 -Update de novo"
+    return $true
+}
 . "$raiz\scripts\windows-tasks.ps1"
 . "$raiz\scripts\windows-wrappers.ps1"
 $installMutex = $null
@@ -1108,7 +1117,9 @@ foreach ($a in $script:agentesNovos) {
 # Sem o par VAPID o push para o celular sai calado e o celular nem se inscreve. Depois dos
 # binarios: no checkout novo o hangar-server so existe a partir daqui.
 $argsVapid = if ($pacote) { @('vapid-setup') } else { @('vapid-setup', '--root', $raiz) }
-if ((Nativo $PowerShellExe -NoProfile -ExecutionPolicy Bypass -File $srvComando @argsVapid) -eq 0) { Ok 'chaves do push para o celular prontas' }
+$rcVapid = Nativo $PowerShellExe -NoProfile -ExecutionPolicy Bypass -File $srvComando @argsVapid
+if ($rcVapid -eq 0) { Ok 'chaves do push para o celular prontas' }
+elseif (SrvAntigo $rcVapid 'chaves do push para o celular' 'vapid-setup') { }
 elseif ($pacote) { Falha 'chaves do push para o celular' 'rodar na mao:  ~\.hangar\current\bin\hangar-server.exe vapid-setup' }
 else { Falha 'chaves do push para o celular' "rodar na mao:  powershell -File scripts\hangar-server-command.ps1 vapid-setup --root `"$raiz`"" }
 # Prova do minimo: sem nenhum agente o app abre, mas nao tem o que pilotar.
@@ -2590,7 +2601,8 @@ if (-not $bash) {
     $anterior = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
-        $saida = & $bash '-lc' "export PATH='$binMsys':`$PATH; cd '$rota' && ./scripts/install-hangar-send.sh" 2>&1
+        $avisaAntigo = if ($srvAntigoAvisa) { '1' } else { '0' }
+        $saida = & $bash '-lc' "export PATH='$binMsys':`$PATH; cd '$rota' && HANGAR_SRV_ANTIGO_AVISA=$avisaAntigo ./scripts/install-hangar-send.sh" 2>&1
     } finally { $ErrorActionPreference = $anterior }
     if ($LASTEXITCODE -eq 0) {
         # O `ln -s` do Git Bash COPIA em vez de linkar, e o hangar-send se localiza pelo proprio
@@ -2728,8 +2740,23 @@ Mark-Step 'instalar' 'ok'
 Mark-Step 'final' 'fazendo'
 Titulo '8/8 Checagem de fumaca'
 $rc = Nativo $PowerShellExe -NoProfile -ExecutionPolicy Bypass -File $srvComando install-token
-if ($rc -ne 0) { Erro 'o hangar-server nao executa neste Windows - sem ele os atalhos e os hooks param'; exit 1 }
+if ($rc -ne 0 -and -not (SrvAntigo $rc 'checagem do hangar-server' 'install-token')) {
+    Erro 'o hangar-server nao executa neste Windows - sem ele os atalhos e os hooks param'; exit 1
+}
 Ok 'o hangar-server executa neste Windows'
+
+# A orquestracao (skill orquestrar) ainda roda no python3 da maquina, ate o PR dela; sem um 3.10 ou
+# mais novo ela nao roda. So aviso: o resto do Hangar nao usa Python. O python3 da Loja (WindowsApps)
+# nao conta e nem e executado: ele abre a Loja.
+if (Test-Path -LiteralPath (Join-Path $HOME '.claude\skills\orquestrar')) {
+    $pyOrq = Get-Command python3, python -CommandType Application -All -ErrorAction SilentlyContinue |
+        Where-Object { $_.Source -notlike '*\WindowsApps\*' } | Select-Object -First 1
+    $versaoOrq = ''
+    if ($pyOrq) { $versaoOrq = & { $ErrorActionPreference = 'Continue'; & $pyOrq.Source --version 2>&1 } | Out-String }
+    if (-not ($versaoOrq -match 'Python 3\.(\d+)' -and [int]$Matches[1] -ge 10)) {
+        Falta 'a orquestracao (skill orquestrar) precisa de um python3 3.10 ou mais novo ate o PR dela; sem ele ela nao roda. O resto do Hangar nao usa Python.'
+    }
+}
 Mark-Item 'backend-importa' 'ok' 'as ferramentas abrem'
 
 # Sobra de rodada anterior: o kill pode demorar, entao limpa antes de contar de novo.

@@ -269,6 +269,24 @@ fi
 # (regra única em scripts/hangar-server-lookup). No checkout novo ele só existe depois do passo
 # dos binários Rust.
 SRV="$REPO/scripts/hangar-server-command"
+# No --update do checkout o binário achado pode ser mais antigo que este código (o de ~/.hangar/bin
+# baixado antes do pull): subcomando que ele não conhece vira aviso, com o motivo. No pacote e na
+# instalação nova o binário veio com o código, e a falta é erro.
+SRV_ANTIGO_AVISA=0
+[ "$UPDATE" = 1 ] && [ "$PACOTE" = 0 ] && SRV_ANTIGO_AVISA=1
+srv_ou_aviso() { # srv_ou_aviso <o que> <subcomando> [args]
+  local oque=$1 err rc=0
+  shift
+  err=$(mktemp)
+  "$SRV" "$@" 2>"$err" || rc=$?
+  cat "$err" >&2
+  if [ "$rc" = 2 ] && [ "$SRV_ANTIGO_AVISA" = 1 ] && grep -q 'subcomando desconhecido' "$err"; then
+    falta "$oque: o hangar-server desta máquina é anterior a este código (não tem '$1') — rode ./scripts/install-server-binaries.sh e ./install.sh --update de novo" >&2
+    rc=0
+  fi
+  rm -f "$err"
+  return "$rc"
+}
 if [ "$PACOTE" = 1 ] && [ "$CHECK" = 0 ]; then
   mkdir -p "$HOME/.hangar/config" && chmod 700 "$HOME/.hangar/config"
 fi
@@ -724,7 +742,7 @@ if [ "$PACOTE" = 1 ]; then
   "$SRV" vapid-setup \
     || anota_problema "chaves do push para o celular não geradas — rode: ~/.hangar/current/bin/hangar-server vapid-setup" push
 else
-  "$SRV" vapid-setup --root "$REPO" \
+  srv_ou_aviso "chaves do push" vapid-setup --root "$REPO" \
     || anota_problema "chaves do push para o celular não geradas — rode: ./scripts/hangar-server-command vapid-setup --root \"$REPO\"" push
 fi
 
@@ -1075,11 +1093,11 @@ SEND_N=${#PROBLEMAS[@]}
 if [ -e "$HOME/.local/bin/hangar-send" ]; then
   # O binário é symlink (atualiza sozinho), mas o bloco "Sessões-irmãs" do ~/.claude/CLAUDE.md
   # sai de um heredoc deste script: sem re-rodar, as sessões novas leem o protocolo VELHO.
-  ./scripts/install-hangar-send.sh >/dev/null && ok "hangar-send + skills atualizados" || anota_problema "hangar-send + skills falharam ao atualizar"
+  HANGAR_SRV_ANTIGO_AVISA=$SRV_ANTIGO_AVISA ./scripts/install-hangar-send.sh >/dev/null && ok "hangar-send + skills atualizados" || anota_problema "hangar-send + skills falharam ao atualizar"
 elif [ "$UPDATE" = 1 ]; then
   :   # não instala coisa nova num --update; isso é decisão, não atualização
 elif [ "$CPSEND" = 1 ] && ask "Instalar hangar-send + skills (sessões conversam entre si e se pareiam)?"; then
-  ./scripts/install-hangar-send.sh || anota_problema "hangar-send + skills não instalaram"
+  HANGAR_SRV_ANTIGO_AVISA=$SRV_ANTIGO_AVISA ./scripts/install-hangar-send.sh || anota_problema "hangar-send + skills não instalaram"
 else
   nota "pulado — depois: ./scripts/install-hangar-send.sh"
 fi
@@ -1169,9 +1187,22 @@ fi
 mark_step instalar ok
 mark_step final fazendo
 say "8/8 Checagem de fumaça"
-"$SRV" install-token >/dev/null 2>&1 \
+srv_ou_aviso "checagem do hangar-server" install-token >/dev/null \
   && { ok "o hangar-server executa nesta máquina"; mark_item backend-importa ok "as ferramentas abrem"; } \
   || fail "o hangar-server não executa nesta máquina — sem ele os atalhos e os hooks param"
+
+# A orquestração (skill orquestrar) ainda roda no python3 da máquina, até o PR dela; sem um 3.10 ou
+# mais novo ela não roda (o macOS traz o 3.9). Só aviso: o resto do Hangar não usa Python. No macOS
+# sem as ferramentas de linha de comando o /usr/bin/python3 abriria o instalador delas: nem roda.
+if [ -e "$HOME/.claude/skills/orquestrar" ]; then
+  PY_MA='' PY_MI=''
+  if command -v python3 >/dev/null && { [ "$(uname -s)" != Darwin ] || xcode-select -p >/dev/null 2>&1; }; then
+    read -r PY_MA PY_MI <<<"$(python3 --version 2>/dev/null | sed -n 's/^Python \([0-9][0-9]*\)\.\([0-9][0-9]*\).*/\1 \2/p')" || true
+  fi
+  if [ "${PY_MA:-0}" -lt 3 ] || { [ "$PY_MA" = 3 ] && [ "${PY_MI:-0}" -lt 10 ]; }; then
+    falta "a orquestração (skill orquestrar) precisa do python3 3.10 ou mais novo até o PR dela; sem ele, ela não roda. O resto do Hangar não usa Python."
+  fi
+fi
 
 S="cp-fumaca-$$"
 if tmux new-session -d -s "$S" -c /tmp 'sh' 2>/dev/null; then

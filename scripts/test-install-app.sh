@@ -45,6 +45,8 @@ new_sandbox() {
 #!/bin/sh
 echo "\$*" >> "$S/log/server"
 [ ! -e "$S/server-fails-\$1" ] || exit 1
+# \`$S/server-old-<subcomando>\`: o binário é anterior a este código e não conhece o subcomando.
+if [ -e "$S/server-old-\$1" ]; then echo "hangar-server: subcomando desconhecido: \$1" >&2; exit 2; fi
 case "\$1" in
   install-token) echo $(printf 'c%.0s' $(seq 48)) ;;
   tailscale-dns-name) echo maquina.tail.ts.net ;;
@@ -232,6 +234,23 @@ run_install "$S/out" "${APP_ARGS[@]}"; rc=$?
 expect_line "vapid-falha: pendência push com o comando" "$S/out" "^##HANGAR-PENDENCIA## push .*vapid-setup --root"
 expect_line "vapid-falha: a instalação chega à fumaça" "$S/log/server" '^install-token$'
 expect_eq "vapid-falha: FIM pendente" "$(last_line "$S/out")" '##HANGAR-FIM## pendente'
+
+# --- Caso: binário anterior ao código no --update do checkout: aviso com o motivo, não falha ---
+new_sandbox binario-antigo
+run_install "$S/out" "${APP_ARGS[@]}"
+: > "$S/server-old-vapid-setup"; : > "$S/server-old-install-token"
+run_install "$S/out2" "${APP_ARGS[@]}" --update; rc=$?
+expect_eq "binário-antigo: --update sai 0" "$rc" 0
+expect_line "binário-antigo: o aviso diz o motivo" "$S/out2" "anterior a este código \\(não tem 'vapid-setup'\\)"
+expect_line "binário-antigo: a fumaça avisa" "$S/out2" "anterior a este código \\(não tem 'install-token'\\)"
+expect_no "binário-antigo: sem pendência do push" "$S/out2" '^##HANGAR-PENDENCIA## push'
+expect_no "binário-antigo: sem FIM falhou" "$S/out2" '^##HANGAR-FIM## falhou'
+# Na instalação nova o binário veio com o código: a falta é erro.
+new_sandbox binario-antigo-novo
+: > "$S/server-old-install-token"
+run_install "$S/out" "${APP_ARGS[@]}"; rc=$?
+expect_eq "binário-antigo na instalação nova: falha" "$rc" 1
+expect_line "binário-antigo na instalação nova: FALHA da fumaça" "$S/out" '^##HANGAR-FALHA## o hangar-server não executa nesta máquina'
 
 # --- Caso: a marca dos passos no checkout falhou: pendência com o comando ---
 new_sandbox marca-falha

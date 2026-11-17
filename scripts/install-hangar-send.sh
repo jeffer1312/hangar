@@ -59,7 +59,22 @@ linkar_bin "$REPO/scripts/folha"          "$HOME/.local/bin/folha"          "nod
 linkar_bin "$REPO/scripts/hangar-mcp-headers.sh" "$HOME/.local/bin/hangar-mcp-headers" "'$REPO/scripts/hangar-mcp-headers.sh'"
 # O registro, os agentes e o bloco do CLAUDE.md são subcomandos do hangar-server desta cópia.
 HANGAR_SERVER="$REPO/scripts/hangar-server-command"
-"$HANGAR_SERVER" mcp-register --root "$REPO"
+# No --update do checkout (o install.sh liga HANGAR_SRV_ANTIGO_AVISA) o binário achado pode ser mais
+# antigo que este código: subcomando que ele não conhece vira aviso e o resto segue. Fora disso o
+# binário veio junto com o código, e a falta é erro.
+srv() {
+    local err rc=0
+    err=$(mktemp)
+    "$HANGAR_SERVER" "$@" 2>"$err" || rc=$?
+    cat "$err" >&2
+    if [ "$rc" = 2 ] && [ "${HANGAR_SRV_ANTIGO_AVISA:-0}" = 1 ] && grep -q 'subcomando desconhecido' "$err"; then
+        echo "aviso: o hangar-server desta máquina é anterior a este código (não tem '$1'); rode ./scripts/install-server-binaries.sh e ./install.sh --update de novo" >&2
+        rc=0
+    fi
+    rm -f "$err"
+    return "$rc"
+}
+srv mcp-register --root "$REPO"
 
 mkdir -p "$HOME/.claude/skills"
 for skill in "$REPO"/skills/*/; do
@@ -108,7 +123,7 @@ else
 fi
 
 # Agentes das skills (ex.: preparar-plano da orquestrar): link no Claude, .toml em cada home do Codex.
-"$HANGAR_SERVER" agents-install --root "$REPO"
+srv agents-install --root "$REPO"
 
 # O texto do bloco Sessões-irmãs mora aqui; o subcomando o troca no ~/.claude/CLAUDE.md entre os
 # marcadores (ou o acrescenta no fim), no fim de linha que o arquivo já usa.
@@ -139,7 +154,7 @@ BLOCK=$(cat <<'EOF'
 EOF
 )
 
-printf '%s\n' "$BLOCK" | "$HANGAR_SERVER" claude-md-block
+printf '%s\n' "$BLOCK" | srv claude-md-block
 
 # Trava de vazamento: toda máquina que instala o hangar-send liga também os hooks git versionados
 # (scripts/hooks/), senão o clone novo commita nome interno sem nada recusar. O pacote não é clone.

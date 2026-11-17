@@ -301,13 +301,22 @@ desenvolvedor e para a máquina ainda não migrada. Evidência em
   gravam `~/.hangar/current` sem resolver o link, e toleram a pasta ausente por um instante.
 - **Instaladores sem Python nem `uv`.** `install.sh` e `install.ps1` não instalam nem exigem
   Python, `uv` ou `uv sync`, e não criam atalho de Python (`hangar-python`, `python3`,
-  `hangar-python.cmd`); o passo `2026-11-17-atalhos-python-removidos` tira os antigos. Chaves do
+  `hangar-python.cmd`); os antigos ficam (a versão anterior, na volta, usa) e saem com a `python/`
+  do pacote, no PR seguinte. Chaves do
   push (`vapid-setup`, depois dos binários Rust), token sem `openssl` (`install-token`, senão o
   `/dev/urandom`; nenhum gerador = a instalação para), nome do Tailscale (`tailscale-dns-name`) e a
   fumaça 8/8 (o `hangar-server` executa) são do `hangar-server`, achado por
   `scripts/hangar-server-command`. Instalação do zero pelo checkout marca os passos com
   `install-package --mark-steps --root <checkout>`; `--update` não marca. O pacote não leva Node
-  nem pip; Node é dependência da máquina, garantida por passo de máquina.
+  nem pip; Node é dependência da máquina, garantida por passo de máquina. No `--update` do
+  checkout, subcomando que o `hangar-server` achado não conhece (binário anterior ao código) vira
+  aviso com o motivo; no pacote e na instalação nova é erro. Sem `python3` 3.10 ou mais novo e com
+  a skill `orquestrar`, os instaladores avisam que a orquestração não roda até o PR dela.
+- **`backend/` continua no pacote por uma versão, e duas coisas ainda dependem dela.** O lançador
+  põe o servidor na `backend/` da versão quando ela existe (a versão anterior, na volta, só acha o
+  `backend/.env` da máquina não migrada pelo cwd), senão na raiz; e a tarefa do Windows nasce com
+  `Dir = "$raiz\backend"` (`install.ps1`). O PR que tirar `backend/` do pacote troca a pasta de
+  trabalho da tarefa para a raiz junto.
 - **O pacote só sai de commit com o `ci.yml` (job `backend`) e os testes do `server.yml` daquele
   sistema verdes.** O `package.yml` publica em `package-latest` (main) ou `package-<branch>`, com o
   índice `package-<canal>.json` por último; sistema não pronto fica com a entrada anterior.
