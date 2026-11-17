@@ -107,7 +107,7 @@ fn request_text_is_python_json() {
     assert_eq!(hangar_open_cli::run(&args, &vars, dir.path(), &server, &mut out, &mut err), 0);
     assert_eq!(
         std::fs::read_to_string(dir.path().join("request.json")).unwrap(),
-        r#"{"provider": "claude", "cwd": "/pasta Área", "headless": false, "initial_prompt": "olá \"aspas\""}"#
+        "{\"provider\": \"claude\", \"cwd\": \"/pasta \\u00c1rea\", \"headless\": false, \"initial_prompt\": \"ol\\u00e1 \\\"aspas\\\"\"}"
     );
 }
 
