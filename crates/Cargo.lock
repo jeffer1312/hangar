@@ -1747,6 +1747,7 @@ dependencies = [
  "form_urlencoded",
  "futures-util",
  "hangar-auth",
+ "hangar-local-server",
  "http-body-util",
  "hyper-util",
  "libc",
@@ -1845,6 +1846,17 @@ dependencies = [
  "ring",
  "tempfile",
  "tokio",
+]
+
+[[package]]
+name = "hangar-local-server"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "sysinfo",
+ "tempfile",
 ]
 
 [[package]]
@@ -2027,6 +2039,7 @@ dependencies = [
  "hangar-docs",
  "hangar-dream",
  "hangar-http-file",
+ "hangar-local-server",
  "hangar-mission",
  "hangar-notice-ignores",
  "hangar-omp-sync",
