@@ -411,7 +411,9 @@ fn drain_later(mut body: axum::body::Body) {
     use http_body_util::BodyExt;
     // Passado o teto da borda, cada pedaço volta como erro de limite: o descarte segue até o fim.
     tokio::spawn(tokio::time::timeout(std::time::Duration::from_secs(2), async move {
-        while body.frame().await.is_some() {}
+        while let Some(frame) = body.frame().await {
+            if frame.as_ref().is_err_and(|error| !crate::http_body_limit::is_limit(error)) { break; }
+        }
     }));
 }
 
