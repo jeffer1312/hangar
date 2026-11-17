@@ -60,6 +60,7 @@ mod install_root;
 mod web_ui;
 mod update_routes;
 mod update_install;
+mod update_steps_without_python;
 mod dictation_routes;
 mod dictation_public;
 mod dictation_public_cases;
