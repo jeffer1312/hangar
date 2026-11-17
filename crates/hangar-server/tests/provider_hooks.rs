@@ -956,3 +956,72 @@ fn provider_hooks_review_unicode_names_keep_python_spellings_and_aliases() {
         assert_eq!(result.status.code(), Some(expected), "{pattern}");
     }
 }
+
+/// H-48…H-53 + R1-D04 (Codex passa a usar o `guard-tmux`): as 86 capturas do `guard_tmux.py` da base,
+/// pelo binário. A decisão (passa/barra) é a mesma; barrar = `deny` no stdout, motivo com `BLOQUEADO`
+/// e `probe-x` no stderr, código 2; passar = 0 sem saída. O texto do motivo e o log são os do Rust.
+/// Decisão 15: `tmux.exe` é o tmux (`extra-windows-path`, que o Python deixava passar).
+#[test]
+fn h48_h53_guard_matches_the_python_captures_and_bars_tmux_exe() {
+    use base64::Engine;
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/guard_contract");
+    let mut names: Vec<_> = std::fs::read_dir(dir).unwrap().flatten().map(|e| e.path()).collect();
+    names.sort();
+    assert_eq!(names.len(), 86);
+    for path in names {
+        let name = path.file_stem().unwrap().to_string_lossy().into_owned();
+        let fixture: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let mut locked = Vec::new();
+        for (relative, entry) in fixture["input"]["files_before"].as_object().into_iter().flatten() {
+            if entry["type"] == "dir" {
+                std::fs::create_dir_all(root.path().join(relative)).unwrap();
+                locked.push(root.path().join(relative));
+            }
+        }
+        if name == "guard__log-dir-not-writable" {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(home.join(".hangar"), std::fs::Permissions::from_mode(0o500)).unwrap();
+            }
+        }
+        let steps: Vec<Value> = fixture.get("steps").and_then(Value::as_array).cloned().unwrap_or_else(|| vec![fixture["output"].clone()]);
+        for (index, step) in steps.iter().enumerate() {
+            let stdin = if step.get("stdin").is_some() { &step["stdin"] } else { &fixture["input"]["stdin"] };
+            let payload = match stdin.get("text").and_then(Value::as_str) {
+                Some(text) => text.as_bytes().to_vec(),
+                None => base64::engine::general_purpose::STANDARD.decode(stdin["b64"].as_str().unwrap_or_default()).unwrap(),
+            };
+            let mut command = Command::new(env!("CARGO_BIN_EXE_hangar-server"));
+            command.arg("guard-tmux").env_clear().env("HOME", &home).env("USERPROFILE", &home)
+                .env("LOCALAPPDATA", root.path().join("local")).env("PATH", "")
+                .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+            let mut child = command.spawn().unwrap();
+            child.stdin.take().unwrap().write_all(&payload).unwrap();
+            let result = child.wait_with_output().unwrap();
+            let expected = if name == "guard__extra-windows-path" { 2 } else { step["code"].as_i64().unwrap() as i32 };
+            assert_eq!(result.status.code(), Some(expected), "{name}[{index}]");
+            if expected == 2 {
+                let out: Value = serde_json::from_slice(&result.stdout).unwrap();
+                assert_eq!(out["hookSpecificOutput"]["permissionDecision"], "deny", "{name}");
+                let reason = String::from_utf8_lossy(&result.stderr);
+                assert!(reason.contains("BLOQUEADO") && reason.contains("probe-x"), "{name}: {reason}");
+            } else {
+                assert!(result.stdout.is_empty() && result.stderr.is_empty(), "{name}[{index}]");
+            }
+        }
+        // R1-S14/R1-D04: falha aberta deixa a linha no log quando o Python também deixava (o texto é o código).
+        let python_logged = fixture.to_string().contains("guard_tmux-falhas.log");
+        if python_logged && name != "guard__log-dir-not-writable" {
+            assert!(home.join(".hangar/logs/privado/guard_tmux-falhas.log").is_file(), "{name}");
+        }
+        #[cfg(unix)]
+        for dir in locked {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o755));
+        }
+    }
+}

@@ -1,0 +1,2335 @@
+{
+ "case": "preview/concurrent-8-shuffled",
+ "source_commit": "2ad8e335e8d9118e74bc5b33f2efb4ac3bbd8eba",
+ "python": "3.14.9 websockets 16.0",
+ "capture_cmdline": "/usr/bin/python3 capture.py -j 8",
+ "route": "R1",
+ "hook": "preview_hook.py",
+ "contract_refs": [
+  "R1-S07",
+  "R1-S08",
+  "H-21",
+  "H-22"
+ ],
+ "description": "8 simultaneous deltas (indices 0..7), start order shuffled, 20 repetitions",
+ "input": {
+  "env": {
+   "HOME": "$T/home",
+   "USERPROFILE": "$T/home",
+   "LOCALAPPDATA": "$T/local",
+   "TMUX_TMPDIR": "$T/tmux",
+   "PATH": "$T/stubs:/usr/bin:/bin",
+   "CLAUDE_CONFIG_DIR": "$T/cfg"
+  }
+ },
+ "summary": {
+  "reps": 20,
+  "all_parts_every_rep": true,
+  "text_complete_every_rep": true,
+  "leftover_files": [
+   "abc.lock"
+  ]
+ },
+ "runs": [
+  {
+   "rep": 0,
+   "start_order": [
+    4,
+    1,
+    5,
+    2,
+    0,
+    3,
+    7,
+    6
+   ],
+   "processes": [
+    {
+     "index": 4,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 1,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 5,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 2,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 0,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 3,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 7,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 6,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    }
+   ],
+   "sidecar": {
+    "text": "[0][1][2][3][4][5][6][7]",
+    "ts": 1794910547.418219,
+    "message_id": "msg_01",
+    "parts": {
+     "4": "[4]",
+     "5": "[5]",
+     "1": "[1]",
+     "2": "[2]",
+     "6": "[6]",
+     "3": "[3]",
+     "0": "[0]",
+     "7": "[7]"
+    }
+   },
+   "all_parts": true,
+   "text_ok": true,
+   "other_files": [
+    "abc.lock"
+   ]
+  },
+  {
+   "rep": 1,
+   "start_order": [
+    3,
+    6,
+    1,
+    5,
+    7,
+    0,
+    4,
+    2
+   ],
+   "processes": [
+    {
+     "index": 3,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 6,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 1,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 5,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 7,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 0,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 4,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 2,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    }
+   ],
+   "sidecar": {
+    "text": "[0][1][2][3][4][5][6][7]",
+    "ts": 1794910547.4751778,
+    "message_id": "msg_01",
+    "parts": {
+     "3": "[3]",
+     "6": "[6]",
+     "0": "[0]",
+     "1": "[1]",
+     "5": "[5]",
+     "7": "[7]",
+     "4": "[4]",
+     "2": "[2]"
+    }
+   },
+   "all_parts": true,
+   "text_ok": true,
+   "other_files": [
+    "abc.lock"
+   ]
+  },
+  {
+   "rep": 2,
+   "start_order": [
+    5,
+    3,
+    4,
+    1,
+    2,
+    6,
+    7,
+    0
+   ],
+   "processes": [
+    {
+     "index": 5,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 3,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 4,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 1,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 2,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 6,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 7,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 0,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    }
+   ],
+   "sidecar": {
+    "text": "[0][1][2][3][4][5][6][7]",
+    "ts": 1794910547.536598,
+    "message_id": "msg_01",
+    "parts": {
+     "3": "[3]",
+     "5": "[5]",
+     "2": "[2]",
+     "4": "[4]",
+     "1": "[1]",
+     "0": "[0]",
+     "6": "[6]",
+     "7": "[7]"
+    }
+   },
+   "all_parts": true,
+   "text_ok": true,
+   "other_files": [
+    "abc.lock"
+   ]
+  },
+  {
+   "rep": 3,
+   "start_order": [
+    0,
+    5,
+    7,
+    2,
+    1,
+    6,
+    4,
+    3
+   ],
+   "processes": [
+    {
+     "index": 0,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 5,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 7,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 2,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 1,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 6,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 4,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 3,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    }
+   ],
+   "sidecar": {
+    "text": "[0][1][2][3][4][5][6][7]",
+    "ts": 1794910547.608808,
+    "message_id": "msg_01",
+    "parts": {
+     "0": "[0]",
+     "5": "[5]",
+     "7": "[7]",
+     "1": "[1]",
+     "2": "[2]",
+     "6": "[6]",
+     "3": "[3]",
+     "4": "[4]"
+    }
+   },
+   "all_parts": true,
+   "text_ok": true,
+   "other_files": [
+    "abc.lock"
+   ]
+  },
+  {
+   "rep": 4,
+   "start_order": [
+    1,
+    6,
+    5,
+    4,
+    7,
+    0,
+    2,
+    3
+   ],
+   "processes": [
+    {
+     "index": 1,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 6,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 5,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 4,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 7,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 0,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 2,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 3,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    }
+   ],
+   "sidecar": {
+    "text": "[0][1][2][3][4][5][6][7]",
+    "ts": 1794910547.666461,
+    "message_id": "msg_01",
+    "parts": {
+     "1": "[1]",
+     "7": "[7]",
+     "6": "[6]",
+     "4": "[4]",
+     "5": "[5]",
+     "2": "[2]",
+     "0": "[0]",
+     "3": "[3]"
+    }
+   },
+   "all_parts": true,
+   "text_ok": true,
+   "other_files": [
+    "abc.lock"
+   ]
+  },
+  {
+   "rep": 5,
+   "start_order": [
+    6,
+    3,
+    1,
+    0,
+    7,
+    2,
+    5,
+    4
+   ],
+   "processes": [
+    {
+     "index": 6,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 3,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 1,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 0,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 7,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 2,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 5,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 4,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    }
+   ],
+   "sidecar": {
+    "text": "[0][1][2][3][4][5][6][7]",
+    "ts": 1794910547.7269306,
+    "message_id": "msg_01",
+    "parts": {
+     "3": "[3]",
+     "6": "[6]",
+     "1": "[1]",
+     "0": "[0]",
+     "5": "[5]",
+     "4": "[4]",
+     "7": "[7]",
+     "2": "[2]"
+    }
+   },
+   "all_parts": true,
+   "text_ok": true,
+   "other_files": [
+    "abc.lock"
+   ]
+  },
+  {
+   "rep": 6,
+   "start_order": [
+    5,
+    7,
+    6,
+    4,
+    0,
+    2,
+    3,
+    1
+   ],
+   "processes": [
+    {
+     "index": 5,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 7,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 6,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 4,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 0,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 2,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 3,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 1,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    }
+   ],
+   "sidecar": {
+    "text": "[0][1][2][3][4][5][6][7]",
+    "ts": 1794910547.7901993,
+    "message_id": "msg_01",
+    "parts": {
+     "5": "[5]",
+     "6": "[6]",
+     "7": "[7]",
+     "0": "[0]",
+     "4": "[4]",
+     "2": "[2]",
+     "1": "[1]",
+     "3": "[3]"
+    }
+   },
+   "all_parts": true,
+   "text_ok": true,
+   "other_files": [
+    "abc.lock"
+   ]
+  },
+  {
+   "rep": 7,
+   "start_order": [
+    6,
+    7,
+    2,
+    4,
+    0,
+    3,
+    1,
+    5
+   ],
+   "processes": [
+    {
+     "index": 6,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 7,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 2,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 4,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 0,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 3,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 1,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 5,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    }
+   ],
+   "sidecar": {
+    "text": "[0][1][2][3][4][5][6][7]",
+    "ts": 1794910547.8490021,
+    "message_id": "msg_01",
+    "parts": {
+     "7": "[7]",
+     "6": "[6]",
+     "0": "[0]",
+     "2": "[2]",
+     "4": "[4]",
+     "3": "[3]",
+     "1": "[1]",
+     "5": "[5]"
+    }
+   },
+   "all_parts": true,
+   "text_ok": true,
+   "other_files": [
+    "abc.lock"
+   ]
+  },
+  {
+   "rep": 8,
+   "start_order": [
+    5,
+    0,
+    6,
+    4,
+    1,
+    7,
+    2,
+    3
+   ],
+   "processes": [
+    {
+     "index": 5,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 0,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 6,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 4,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 1,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 7,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 2,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 3,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    }
+   ],
+   "sidecar": {
+    "text": "[0][1][2][3][4][5][6][7]",
+    "ts": 1794910547.9055026,
+    "message_id": "msg_01",
+    "parts": {
+     "5": "[5]",
+     "0": "[0]",
+     "6": "[6]",
+     "4": "[4]",
+     "7": "[7]",
+     "1": "[1]",
+     "3": "[3]",
+     "2": "[2]"
+    }
+   },
+   "all_parts": true,
+   "text_ok": true,
+   "other_files": [
+    "abc.lock"
+   ]
+  },
+  {
+   "rep": 9,
+   "start_order": [
+    3,
+    6,
+    0,
+    1,
+    5,
+    2,
+    4,
+    7
+   ],
+   "processes": [
+    {
+     "index": 3,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 6,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 0,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 1,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 5,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 2,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 4,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 7,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    }
+   ],
+   "sidecar": {
+    "text": "[0][1][2][3][4][5][6][7]",
+    "ts": 1794910547.9671495,
+    "message_id": "msg_01",
+    "parts": {
+     "3": "[3]",
+     "5": "[5]",
+     "0": "[0]",
+     "1": "[1]",
+     "6": "[6]",
+     "7": "[7]",
+     "2": "[2]",
+     "4": "[4]"
+    }
+   },
+   "all_parts": true,
+   "text_ok": true,
+   "other_files": [
+    "abc.lock"
+   ]
+  },
+  {
+   "rep": 10,
+   "start_order": [
+    2,
+    1,
+    5,
+    7,
+    4,
+    6,
+    3,
+    0
+   ],
+   "processes": [
+    {
+     "index": 2,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 1,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 5,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 7,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 4,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 6,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 3,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 0,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    }
+   ],
+   "sidecar": {
+    "text": "[0][1][2][3][4][5][6][7]",
+    "ts": 1794910548.0277205,
+    "message_id": "msg_01",
+    "parts": {
+     "2": "[2]",
+     "1": "[1]",
+     "5": "[5]",
+     "3": "[3]",
+     "7": "[7]",
+     "4": "[4]",
+     "6": "[6]",
+     "0": "[0]"
+    }
+   },
+   "all_parts": true,
+   "text_ok": true,
+   "other_files": [
+    "abc.lock"
+   ]
+  },
+  {
+   "rep": 11,
+   "start_order": [
+    1,
+    0,
+    2,
+    5,
+    3,
+    4,
+    6,
+    7
+   ],
+   "processes": [
+    {
+     "index": 1,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 0,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 2,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 5,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 3,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 4,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 6,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 7,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    }
+   ],
+   "sidecar": {
+    "text": "[0][1][2][3][4][5][6][7]",
+    "ts": 1794910548.086091,
+    "message_id": "msg_01",
+    "parts": {
+     "1": "[1]",
+     "0": "[0]",
+     "2": "[2]",
+     "3": "[3]",
+     "5": "[5]",
+     "7": "[7]",
+     "4": "[4]",
+     "6": "[6]"
+    }
+   },
+   "all_parts": true,
+   "text_ok": true,
+   "other_files": [
+    "abc.lock"
+   ]
+  },
+  {
+   "rep": 12,
+   "start_order": [
+    3,
+    1,
+    0,
+    6,
+    4,
+    5,
+    2,
+    7
+   ],
+   "processes": [
+    {
+     "index": 3,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 1,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 0,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 6,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 4,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 5,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 2,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 7,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    }
+   ],
+   "sidecar": {
+    "text": "[0][1][2][3][4][5][6][7]",
+    "ts": 1794910548.142713,
+    "message_id": "msg_01",
+    "parts": {
+     "3": "[3]",
+     "1": "[1]",
+     "5": "[5]",
+     "0": "[0]",
+     "6": "[6]",
+     "4": "[4]",
+     "2": "[2]",
+     "7": "[7]"
+    }
+   },
+   "all_parts": true,
+   "text_ok": true,
+   "other_files": [
+    "abc.lock"
+   ]
+  },
+  {
+   "rep": 13,
+   "start_order": [
+    3,
+    0,
+    6,
+    7,
+    1,
+    5,
+    2,
+    4
+   ],
+   "processes": [
+    {
+     "index": 3,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 0,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 6,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 7,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 1,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 5,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 2,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 4,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    }
+   ],
+   "sidecar": {
+    "text": "[0][1][2][3][4][5][6][7]",
+    "ts": 1794910548.2021487,
+    "message_id": "msg_01",
+    "parts": {
+     "3": "[3]",
+     "0": "[0]",
+     "6": "[6]",
+     "7": "[7]",
+     "4": "[4]",
+     "2": "[2]",
+     "5": "[5]",
+     "1": "[1]"
+    }
+   },
+   "all_parts": true,
+   "text_ok": true,
+   "other_files": [
+    "abc.lock"
+   ]
+  },
+  {
+   "rep": 14,
+   "start_order": [
+    0,
+    2,
+    3,
+    7,
+    6,
+    5,
+    4,
+    1
+   ],
+   "processes": [
+    {
+     "index": 0,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 2,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 3,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 7,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 6,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 5,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 4,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 1,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    }
+   ],
+   "sidecar": {
+    "text": "[0][1][2][3][4][5][6][7]",
+    "ts": 1794910548.259459,
+    "message_id": "msg_01",
+    "parts": {
+     "3": "[3]",
+     "0": "[0]",
+     "2": "[2]",
+     "7": "[7]",
+     "6": "[6]",
+     "5": "[5]",
+     "1": "[1]",
+     "4": "[4]"
+    }
+   },
+   "all_parts": true,
+   "text_ok": true,
+   "other_files": [
+    "abc.lock"
+   ]
+  },
+  {
+   "rep": 15,
+   "start_order": [
+    7,
+    2,
+    5,
+    1,
+    6,
+    4,
+    0,
+    3
+   ],
+   "processes": [
+    {
+     "index": 7,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 2,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 5,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 1,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 6,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 4,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 0,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 3,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    }
+   ],
+   "sidecar": {
+    "text": "[0][1][2][3][4][5][6][7]",
+    "ts": 1794910548.3202453,
+    "message_id": "msg_01",
+    "parts": {
+     "7": "[7]",
+     "5": "[5]",
+     "2": "[2]",
+     "1": "[1]",
+     "4": "[4]",
+     "0": "[0]",
+     "6": "[6]",
+     "3": "[3]"
+    }
+   },
+   "all_parts": true,
+   "text_ok": true,
+   "other_files": [
+    "abc.lock"
+   ]
+  },
+  {
+   "rep": 16,
+   "start_order": [
+    4,
+    1,
+    0,
+    7,
+    2,
+    6,
+    3,
+    5
+   ],
+   "processes": [
+    {
+     "index": 4,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 1,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 0,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 7,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 2,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 6,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 3,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 5,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    }
+   ],
+   "sidecar": {
+    "text": "[0][1][2][3][4][5][6][7]",
+    "ts": 1794910548.3824873,
+    "message_id": "msg_01",
+    "parts": {
+     "4": "[4]",
+     "1": "[1]",
+     "0": "[0]",
+     "7": "[7]",
+     "2": "[2]",
+     "5": "[5]",
+     "3": "[3]",
+     "6": "[6]"
+    }
+   },
+   "all_parts": true,
+   "text_ok": true,
+   "other_files": [
+    "abc.lock"
+   ]
+  },
+  {
+   "rep": 17,
+   "start_order": [
+    3,
+    1,
+    0,
+    4,
+    5,
+    2,
+    7,
+    6
+   ],
+   "processes": [
+    {
+     "index": 3,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 1,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 0,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 4,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 5,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 2,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 7,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 6,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    }
+   ],
+   "sidecar": {
+    "text": "[0][1][2][3][4][5][6][7]",
+    "ts": 1794910548.4435055,
+    "message_id": "msg_01",
+    "parts": {
+     "3": "[3]",
+     "1": "[1]",
+     "2": "[2]",
+     "0": "[0]",
+     "4": "[4]",
+     "5": "[5]",
+     "6": "[6]",
+     "7": "[7]"
+    }
+   },
+   "all_parts": true,
+   "text_ok": true,
+   "other_files": [
+    "abc.lock"
+   ]
+  },
+  {
+   "rep": 18,
+   "start_order": [
+    1,
+    4,
+    6,
+    7,
+    3,
+    5,
+    0,
+    2
+   ],
+   "processes": [
+    {
+     "index": 1,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 4,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 6,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 7,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 3,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 5,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 0,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 2,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    }
+   ],
+   "sidecar": {
+    "text": "[0][1][2][3][4][5][6][7]",
+    "ts": 1794910548.4997668,
+    "message_id": "msg_01",
+    "parts": {
+     "1": "[1]",
+     "6": "[6]",
+     "3": "[3]",
+     "4": "[4]",
+     "7": "[7]",
+     "0": "[0]",
+     "5": "[5]",
+     "2": "[2]"
+    }
+   },
+   "all_parts": true,
+   "text_ok": true,
+   "other_files": [
+    "abc.lock"
+   ]
+  },
+  {
+   "rep": 19,
+   "start_order": [
+    5,
+    2,
+    3,
+    1,
+    7,
+    4,
+    6,
+    0
+   ],
+   "processes": [
+    {
+     "index": 5,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 2,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 3,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 1,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 7,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 4,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 6,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    },
+    {
+     "index": 0,
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     }
+    }
+   ],
+   "sidecar": {
+    "text": "[0][1][2][3][4][5][6][7]",
+    "ts": 1794910548.5638287,
+    "message_id": "msg_01",
+    "parts": {
+     "5": "[5]",
+     "7": "[7]",
+     "2": "[2]",
+     "3": "[3]",
+     "4": "[4]",
+     "1": "[1]",
+     "6": "[6]",
+     "0": "[0]"
+    }
+   },
+   "all_parts": true,
+   "text_ok": true,
+   "other_files": [
+    "abc.lock"
+   ]
+  }
+ ]
+}

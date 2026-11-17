@@ -1,0 +1,80 @@
+{
+ "case": "askq/pre-pretty-lf-crlf",
+ "source_commit": "2ad8e335e8d9118e74bc5b33f2efb4ac3bbd8eba",
+ "python": "3.14.9 websockets 16.0",
+ "capture_cmdline": "/usr/bin/python3 capture.py -j 8",
+ "route": "R1",
+ "hook": "askq_capture.py",
+ "contract_refs": [
+  "R1-S17",
+  "H-44"
+ ],
+ "description": "raw bytes kept (CRLF, indentation, trailing newline)",
+ "harness": {
+  "how": "$PY -B -s $REF/backend/hooks/askq_capture.py, one process per step, stdin = step"
+ },
+ "input": {
+  "env": {
+   "HOME": "$T/home",
+   "USERPROFILE": "$T/home",
+   "LOCALAPPDATA": "$T/local",
+   "TMUX_TMPDIR": "$T/tmux",
+   "PATH": "$T/stubs:/usr/bin:/bin",
+   "CLAUDE_CONFIG_DIR": "$T/cfg"
+  },
+  "files_before": {}
+ },
+ "steps": [
+  {
+   "stdin": {
+    "text": "{\r\n  \"session_id\": \"11111111-2222-4333-8444-555555555555\",\r\n  \"transcript_path\": \"/home/u/.claude/projects/p/11111111-2222-4333-8444-555555555555.jsonl\",\r\n  \"cwd\": \"/home/u/proj\",\r\n  \"permission_mode\": \"default\",\r\n  \"hook_event_name\": \"PreToolUse\",\r\n  \"tool_name\": \"AskUserQuestion\",\r\n  \"tool_input\": {\r\n    \"questions\": [\r\n      {\r\n        \"question\": \"Qual opção?\",\r\n        \"header\": \"Opção\",\r\n        \"options\": [\r\n          {\r\n            \"label\": \"A\",\r\n            \"description\": \"ação\"\r\n          },\r\n          {\r\n            \"label\": \"B\",\r\n            \"description\": \"não\"\r\n          }\r\n        ],\r\n        \"multiSelect\": false\r\n      }\r\n    ]\r\n  },\r\n  \"tool_use_id\": \"toolu_A\"\r\n}\r\n"
+   },
+   "code": 0,
+   "stdout": {
+    "text": ""
+   },
+   "stderr": {
+    "text": ""
+   },
+   "duration_ms": 23,
+   "files": {
+    "created": {
+     "cfg/.hangar-askq": {
+      "type": "dir",
+      "mode": "0o755"
+     },
+     "cfg/.hangar-askq/11111111-2222-4333-8444-555555555555.json": {
+      "type": "file",
+      "mode": "0o644",
+      "size": 697,
+      "sha256": "5cfa861eb600b24e07e86d921b6ad8c906ac31a9c97c7da0b52e1ebd5ecb5c27",
+      "content": {
+       "text": "{\r\n  \"session_id\": \"11111111-2222-4333-8444-555555555555\",\r\n  \"transcript_path\": \"/home/u/.claude/projects/p/11111111-2222-4333-8444-555555555555.jsonl\",\r\n  \"cwd\": \"/home/u/proj\",\r\n  \"permission_mode\": \"default\",\r\n  \"hook_event_name\": \"PreToolUse\",\r\n  \"tool_name\": \"AskUserQuestion\",\r\n  \"tool_input\": {\r\n    \"questions\": [\r\n      {\r\n        \"question\": \"Qual opção?\",\r\n        \"header\": \"Opção\",\r\n        \"options\": [\r\n          {\r\n            \"label\": \"A\",\r\n            \"description\": \"ação\"\r\n          },\r\n          {\r\n            \"label\": \"B\",\r\n            \"description\": \"não\"\r\n          }\r\n        ],\r\n        \"multiSelect\": false\r\n      }\r\n    ]\r\n  },\r\n  \"tool_use_id\": \"toolu_A\"\r\n}\r\n"
+      }
+     }
+    },
+    "changed": {},
+    "removed": []
+   }
+  }
+ ],
+ "files_final": {
+  "cfg/.hangar-askq": {
+   "type": "dir",
+   "mode": "0o755"
+  },
+  "cfg/.hangar-askq/11111111-2222-4333-8444-555555555555.json": {
+   "type": "file",
+   "mode": "0o644",
+   "size": 697,
+   "sha256": "5cfa861eb600b24e07e86d921b6ad8c906ac31a9c97c7da0b52e1ebd5ecb5c27",
+   "content": {
+    "text": "{\r\n  \"session_id\": \"11111111-2222-4333-8444-555555555555\",\r\n  \"transcript_path\": \"/home/u/.claude/projects/p/11111111-2222-4333-8444-555555555555.jsonl\",\r\n  \"cwd\": \"/home/u/proj\",\r\n  \"permission_mode\": \"default\",\r\n  \"hook_event_name\": \"PreToolUse\",\r\n  \"tool_name\": \"AskUserQuestion\",\r\n  \"tool_input\": {\r\n    \"questions\": [\r\n      {\r\n        \"question\": \"Qual opção?\",\r\n        \"header\": \"Opção\",\r\n        \"options\": [\r\n          {\r\n            \"label\": \"A\",\r\n            \"description\": \"ação\"\r\n          },\r\n          {\r\n            \"label\": \"B\",\r\n            \"description\": \"não\"\r\n          }\r\n        ],\r\n        \"multiSelect\": false\r\n      }\r\n    ]\r\n  },\r\n  \"tool_use_id\": \"toolu_A\"\r\n}\r\n"
+   }
+  }
+ },
+ "window": {
+  "t_start": 1794910462.2574284,
+  "t_end": 1794910462.2811909
+ }
+}

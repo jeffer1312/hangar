@@ -1574,6 +1574,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-agent-hooks"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "chrono",
+ "hangar-core",
+ "proptest",
+ "regex",
+ "reqwest",
+ "serde_json",
+ "sha1_smol",
+ "sysinfo",
+ "tempfile",
+ "tokio",
+ "unicode-normalization",
+]
+
+[[package]]
 name = "hangar-api"
 version = "0.1.0"
 dependencies = [
@@ -2011,6 +2029,7 @@ dependencies = [
  "flate2",
  "form_urlencoded",
  "futures-util",
+ "hangar-agent-hooks",
  "hangar-api",
  "hangar-auth",
  "hangar-boot",

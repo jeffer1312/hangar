@@ -1,0 +1,90 @@
+{
+ "case": "nav/stdin-invalid-utf8",
+ "source_commit": "2ad8e335e8d9118e74bc5b33f2efb4ac3bbd8eba",
+ "python": "3.14.9 websockets 16.0",
+ "capture_cmdline": "/usr/bin/python3 capture.py -j 8",
+ "route": "R1",
+ "hook": "nav_hook.py",
+ "contract_refs": [
+  "R1-S10",
+  "R1-D05"
+ ],
+ "description": "",
+ "harness": {
+  "how": "$PY -B -s $REF/backend/hooks/nav_hook.py, one process per step, stdin = step"
+ },
+ "input": {
+  "env": {
+   "HOME": "$T/home",
+   "USERPROFILE": "$T/home",
+   "LOCALAPPDATA": "$T/local",
+   "TMUX_TMPDIR": "$T/tmux",
+   "PATH": "$T/stubs:/usr/bin:/bin",
+   "CLAUDE_CONFIG_DIR": "$T/cfg"
+  },
+  "files_before": {
+   "home/.hangar": {
+    "type": "dir",
+    "mode": "0o755"
+   },
+   "home/.hangar/nav": {
+    "type": "dir",
+    "mode": "0o755"
+   },
+   "home/.hangar/nav/_srv.json": {
+    "type": "file",
+    "mode": "0o644",
+    "size": 30,
+    "sha256": "fed0cb97f55bce152906c07950b4e2129f952b754b126e234e7607466ecead6f",
+    "content": {
+     "text": "{\"pid\": 3239413, \"port\": 9222}"
+    }
+   }
+  }
+ },
+ "steps": [
+  {
+   "stdin": {
+    "b64": "eyJzZXNzaW9uX2lkIjogIjExMTExMTExLTIyMjItNDMzMy04NDQ0LTU1NTU1NTU1NTU1NSIsICJ0cmFuc2NyaXB0X3BhdGgiOiAiL2hvbWUvdS8uY2xhdWRlL3Byb2plY3RzL3AvMTExMTExMTEtMjIyMi00MzMzLTg0NDQtNTU1NTU1NTU1NTU1Lmpzb25sIiwgImN3ZCI6ICIvaG9tZS91L3Byb2oiLCAicGVybWlzc2lvbl9tb2RlIjogImRlZmF1bHQiLCAiaG9va19ldmVudF9uYW1lIjogIlVzZXJQcm9tcHRTdWJtaXQiLCAicHJvbXB0IjogInDhZ2luYSBkbyBzaXRlIn0=",
+    "utf8": false,
+    "size": 266
+   },
+   "code": 0,
+   "stdout": {
+    "text": "{\"hookSpecificOutput\": {\"hookEventName\": \"UserPromptSubmit\", \"additionalContext\": \"[hangar] Pra ver, testar ou tirar print de uma p\\u00e1gina, use o navegador embutido do Hangar: tools `browser_open`/`browser`/`browser_batch` do MCP hangar (sem elas: `hangar-preview open <url>` no shell; skill hangar-preview). N\\u00e3o use agent-browser nem ver-front.\"}}\n"
+   },
+   "stderr": {
+    "text": ""
+   },
+   "duration_ms": 24,
+   "files": {
+    "created": {},
+    "changed": {},
+    "removed": []
+   }
+  }
+ ],
+ "files_final": {
+  "home/.hangar": {
+   "type": "dir",
+   "mode": "0o755"
+  },
+  "home/.hangar/nav": {
+   "type": "dir",
+   "mode": "0o755"
+  },
+  "home/.hangar/nav/_srv.json": {
+   "type": "file",
+   "mode": "0o644",
+   "size": 30,
+   "sha256": "fed0cb97f55bce152906c07950b4e2129f952b754b126e234e7607466ecead6f",
+   "content": {
+    "text": "{\"pid\": 3239413, \"port\": 9222}"
+   }
+  }
+ },
+ "window": {
+  "t_start": 1794910461.5356064,
+  "t_end": 1794910461.560262
+ }
+}
