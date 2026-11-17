@@ -11,6 +11,8 @@ use hangar_core::pycompat::{pyjson, truthy};
 use serde_json::{Map, Value, json};
 use std::path::Path;
 
+pub const LOG: &str = "state_hook-falhas.log";
+
 fn state_of(event: &str) -> Option<&'static str> {
     Some(match event {
         "UserPromptSubmit" | "PreToolUse" | "PostToolUse" => "working",
@@ -40,7 +42,7 @@ fn write_markers(stdin: &[u8], context: &Context, processes: &impl Processes, pa
     if let Some(state) = state_of(name)
         && truthy(sid)
     {
-        marker(&base, ".hangar-state", sid, &json!({"state": state, "ts": input::now()}))?;
+        marker(context, &base, ".hangar-state", sid, &json!({"state": state, "ts": input::now()}))?;
     }
     if name == "UserPromptSubmit"
         && truthy(sid)
@@ -51,7 +53,7 @@ fn write_markers(stdin: &[u8], context: &Context, processes: &impl Processes, pa
             return None;
         }
         let digest = sha1_smol::Sha1::from(hangar_core::pycompat::py::strip(prompt).as_bytes()).digest().to_string();
-        marker(&base, ".hangar-prompt", sid, &json!({"sha1": digest, "ts": input::now()}))?;
+        marker(context, &base, ".hangar-prompt", sid, &json!({"sha1": digest, "ts": input::now()}))?;
     }
     let transcript = event.get("transcript_path").unwrap_or(&Value::Null);
     if truthy(transcript) {
@@ -65,16 +67,23 @@ fn write_markers(stdin: &[u8], context: &Context, processes: &impl Processes, pa
             active.insert("ts".into(), json!(input::now()));
             active.insert("cwd".into(), event.get("cwd").cloned().unwrap_or(Value::Null));
             active.insert("pid".into(), json!(pid));
-            marker(&base, ".hangar-active", &boot, &Value::Object(active))?;
+            marker(context, &base, ".hangar-active", &boot, &Value::Object(active))?;
         }
     }
     Some(())
 }
 
 /// A pasta nasce antes de conferir a chave, como no Python (chave que não é texto deixava a pasta).
-fn marker(base: &Path, folder: &str, key: &Value, payload: &Value) -> Option<()> {
+/// Falha de disco segue sem saída e com 0, mas deixa a linha no log privado: sem ela, a lista ficava
+/// sem estado e sem pista.
+fn marker(context: &Context, base: &Path, folder: &str, key: &Value, payload: &Value) -> Option<()> {
     let dir = base.join(folder);
-    std::fs::create_dir_all(&dir).ok()?;
+    if let Err(error) = std::fs::create_dir_all(&dir) {
+        crate::log::record(context, LOG, &format!("{folder} não criada ({error})"));
+        return None;
+    }
     let key = file_key(key)?;
-    crate::marker::write(&dir, key, pyjson::dumps(payload, false).as_bytes()).ok()
+    crate::marker::write(&dir, key, pyjson::dumps(payload, false).as_bytes())
+        .inspect_err(|error| crate::log::record(context, LOG, &format!("{folder} não gravado ({error})")))
+        .ok()
 }

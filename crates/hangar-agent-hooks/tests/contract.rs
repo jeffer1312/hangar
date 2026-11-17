@@ -337,7 +337,15 @@ fn replay(name: &str) {
         let step = accepted(name, index, step.clone());
         let before = snapshot(root);
         let outcome = run(hook, &stdin_of(&step, &fixture), &ctx, &fixture);
-        let after = snapshot(root);
+        let mut after = snapshot(root);
+        // Revisão de falhas caladas: a pasta de marcadores sem escrita deixa a linha no log privado
+        // (o Python calava); fora isso, nada muda no disco.
+        if name == "state__config-dir-readonly" || name == "askq__config-not-writable" {
+            let file = if hook == "askq" { askq::LOG } else { state::LOG };
+            let line = format!("home/.hangar/logs/privado/{file}");
+            assert!(matches!(after.get(&line), Some(Entry::File(bytes, _)) if !bytes.is_empty()), "{name}: sem a linha de falha no log");
+            after.retain(|path, _| before.contains_key(path) || !(path == "home/.hangar" || path.starts_with("home/.hangar/logs")));
+        }
         assert_eq!(outcome.code as i64, step["code"].as_i64().unwrap(), "{name}[{index}] código");
         let stdout = if name == "nav__stdin-cp1252-simulated" {
             // R1-D05: o Rust lê UTF-8 também no Windows; vale o resultado da referência UTF-8.
