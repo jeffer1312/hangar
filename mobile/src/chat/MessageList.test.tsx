@@ -461,7 +461,7 @@ it('renderItem mantém identidade no tique da sessão e reage a provider/headles
 });
 
 describe('QueuedBubble: mandada "Na conversa"', () => {
-  const sendNow = (container: HTMLElement) => container.querySelector<HTMLButtonElement>(`[aria-label="${m.queued_conversation_send_now()}"]`);
+  const sendNow = (container: HTMLElement) => container.querySelector<HTMLButtonElement>(`[aria-label="${m.queued_conversation_send_now_message({ text: 'mensagem' })}"]`);
 
   it('fica inteira na conversa com "Em espera · Enviar agora", e Enviar agora orienta pela rota da fila', async () => {
     const chat = chatStore('a', 'sess');
@@ -484,10 +484,22 @@ describe('QueuedBubble: mandada "Na conversa"', () => {
   });
 
   it('no Codex só "Em espera": não há como cortar a vez dela', () => {
-    const { container } = mount(createElement(MessageList, props([event({ id: 'queued-c1', queued_conversation: true })],
+    const { container } = mount(createElement(MessageList, props([event({ id: 'queued-c1', queued_conversation: true, queued_delivered: true })],
       { sessionName: 'sess', serverId: 'a', session: { ...session, provider: 'codex' } })));
     expect(container.textContent).toContain(m.queued_conversation_waiting());
     expect(sendNow(container)).toBeNull();
+  });
+
+  it('ainda não escrita espera como a da Fila: no painel some da conversa, sem ele mostra "na fila"', () => {
+    const unwritten = event({ id: 'queued-c1', queued_conversation: true, queued_delivered: false });
+    const extra = { sessionName: 'sess', serverId: 'a', session: { ...session, headless: true } };
+    const { container, root } = mount(createElement(MessageList, props([unwritten], extra)));
+    expect(container.textContent).not.toContain(m.queued_conversation_waiting());
+    expect(container.textContent).toContain(m.native_queued());
+    act(() => root.render(createElement(MessageList, props([unwritten], {
+      ...extra, queuePanel: { entries: [{ id: 'c1', text: 'mensagem', ts: null }], actions: true },
+    }))));
+    expect(container.querySelector('[data-user]')).toBeNull();
   });
 
   it('lida ou consumida, a nota some', () => {

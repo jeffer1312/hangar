@@ -600,8 +600,9 @@ pub fn queue_panel_entries(queue: &Path, start_ts: f64) -> io::Result<QueuePanel
         .into_iter()
         .filter(|entry| {
             let ts = entry.get("ts").and_then(py::number).unwrap_or(0.0);
+            // A "Na conversa" ainda não escrita (limite, escrita incerta, adiada) espera como a da Fila: no
+            // painel, onde pode ser cancelada. `row_waits` já tira a escrita, que vira bolha na conversa.
             entry.get("text").and_then(Value::as_str).is_some_and(|text| !strip(text).is_empty())
-                && !is_conversation(entry)
                 && (start_ts == 0.0 || from_current_session(entry, start_ts, ts))
         })
         .map(Value::Object)
@@ -698,18 +699,20 @@ mod tests {
         assert!(json.get("queued_conversation").is_none(), "sem marca, o campo não sai: {json}");
     }
 
+    /// A "Na conversa" escrita sai do painel; a que não foi escrita espera nele como a da Fila, onde pode ser cancelada.
     #[test]
-    fn queue_panel_leaves_out_conversation_rows_even_while_they_wait() {
+    fn queue_panel_keeps_conversation_rows_only_while_unwritten() {
         let dir = tempfile::tempdir().unwrap();
         let queue = dir.path().join("q.jsonl");
         let rows = [
-            serde_json::json!({"id":"conv","text":"na conversa","ts":10.0,"delivered":false,"conversation":true}),
+            serde_json::json!({"id":"conv","text":"na conversa","ts":10.0,"delivered":true,"steered":true,"conversation":true}),
+            serde_json::json!({"id":"adiada","text":"não escrita","ts":10.5,"delivered":false,"conversation":true}),
             serde_json::json!({"id":"fila","text":"na fila","ts":11.0,"delivered":false}),
         ];
         std::fs::write(&queue, rows.iter().map(|r| format!("{r}\n")).collect::<String>()).unwrap();
         let panel = queue_panel_entries(&queue, 0.0).unwrap();
         let ids: Vec<&str> = panel.entries.iter().map(|e| e["id"].as_str().unwrap()).collect();
-        assert_eq!(ids, vec!["fila"]);
+        assert_eq!(ids, vec!["adiada", "fila"]);
         assert!(panel.present.contains("conv"), "segue na projeção: os aparelhos não tiram a bolha dela");
     }
 

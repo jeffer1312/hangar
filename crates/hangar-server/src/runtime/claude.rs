@@ -701,7 +701,8 @@ impl ClaudeEngine {
                 if !self.in_progress { return refuse("steer_no_turn"); }
                 if !self.pending.is_empty() || self.question.is_some() { return refuse("steer_question_open"); }
                 if self.steer_now.is_some() { return refuse("steer_in_flight"); }
-                self.gentle.remove(entry);
+                // Ela continua em `gentle` até o `started`/`cancelled` dela: corte não escrito ou recusado deixa
+                // o "Enviar agora" valer de novo.
                 // A mensagem já está na CLI: o corte só tira a espera pela pausa, e ela vira o turno seguinte como no Orientar.
                 self.steer_now = Some(written);
                 self.control(operation_id.clone(),"interrupt",json!({}),&mut effects);
@@ -988,15 +989,21 @@ impl ClaudeEngine {
             },
             "stream_event" => self.on_stream(&event["event"],effects),
             "command_lifecycle" => {
-                let steer = self.steer_now.clone().filter(|id|event["command_uuid"].as_str() == Some(echo_uuid(id).as_str()));
+                let uuid = event["command_uuid"].as_str();
+                let steer = self.steer_now.clone().filter(|id|uuid == Some(echo_uuid(id).as_str()));
+                let held = self.gentle.values().find(|id|uuid == Some(echo_uuid(id).as_str())).cloned();
                 // A guardada começou (ou a CLI a descartou): já não há o que adiantar.
                 if matches!(event["state"].as_str(),Some("started" | "cancelled")) {
-                    self.gentle.retain(|_,id|event["command_uuid"].as_str() != Some(echo_uuid(id).as_str()));
+                    self.gentle.retain(|_,id|uuid != Some(echo_uuid(id).as_str()));
                 }
                 match event["state"].as_str() {
                     Some("started") => {
-                        // A orientação que cortou vira o turno, e o `result` dele é a resposta dela.
-                        if let Some(id) = steer { self.steer_now = None; if self.active_input.is_none() { self.active_input = Some(id); } }
+                        // A orientação que cortou vira o turno, e o `result` dele é a resposta dela. A CLI roda as
+                        // guardadas em ordem: outra que começa depois do corte, antes da escolhida, também o encerra,
+                        // senão o `result` dela seria lido como mais um corte e o turno não acabaria.
+                        if let Some(id) = steer.or(held.filter(|_|self.active_input.is_none())) {
+                            self.steer_now = None; if self.active_input.is_none() { self.active_input = Some(id); }
+                        }
                         if !self.in_progress { self.start_turn(); self.changed(effects,true); }
                     }
                     Some("cancelled") if steer.is_some() => {
@@ -1233,7 +1240,10 @@ impl ClaudeEngine {
                 if event["isReplay"] == true && let Some(uuid) = event["uuid"].as_str()
                     && let Some(index) = self.echoes.iter().position(|(known,_)|known == uuid) {
                     let (_,operation_id) = self.echoes.remove(index).unwrap();
-                    effects.push(Effect::InputEchoed { operation_id });
+                    // A guardada no meio do turno é confirmada pelo recibo do transcript; a "Na conversa" que abriu
+                    // o turno (sessão parada) é uma mensagem comum e o eco a confirma.
+                    if self.gentle.values().any(|id|*id == operation_id) { effects.push(Effect::RecheckInputs); }
+                    else { effects.push(Effect::InputEchoed { operation_id }); }
                 }
                 // A guardada entra na pausa depois de uma ferramenta: o recibo dela está no transcript logo ali.
                 else if !self.gentle.is_empty() { effects.push(Effect::RecheckInputs); }

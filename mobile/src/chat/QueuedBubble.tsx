@@ -38,25 +38,25 @@ function DiscardQueued({ id, text, sessionName, serverId }: { id: string; text: 
 }
 
 // "Enviar agora" corta o turno, como o Orientar do painel, e usa a mesma ação (os erros aparecem no composer).
-function SendNow({ id, sessionName, serverId }: { id: string; sessionName: string; serverId: string }) {
+function SendNow({ id, text, sessionName, serverId }: { id: string; text: string; sessionName: string; serverId: string }) {
   const chat = chatStore(serverId, sessionName);
   const busy = chat.use((s) => s.queueBusy);
   return (
-    <Pressable accessibilityRole="button" accessibilityLabel={m.queued_conversation_send_now()} accessibilityState={{ disabled: busy }}
-      disabled={busy} hitSlop={{ top: 14, bottom: 14, left: 8, right: 8 }} onPress={() => void chat.steerQueued(id)}>
+    <Pressable accessibilityRole="button" accessibilityLabel={m.queued_conversation_send_now_message({ text: text.replace(/\s+/g, ' ').trim().slice(0, 80) })}
+      accessibilityState={{ disabled: busy }} disabled={busy} onPress={() => void chat.steerQueued(id)} style={styles.sendNowButton}>
       <Text style={[styles.sendNow, busy && styles.dim]}>{m.queued_conversation_send_now()}</Text>
     </Pressable>
   );
 }
 
 // O Codex não tem como cortar a vez dela: lá só "Em espera".
-function ConversationWaiting({ id, sessionName, serverId, sendNow }: { id: string; sessionName?: string; serverId?: string; sendNow: boolean }) {
+function ConversationWaiting({ id, text, sessionName, serverId, sendNow }: { id: string; text: string; sessionName?: string; serverId?: string; sendNow: boolean }) {
   return (
     <View style={styles.waiting}>
       <Text style={styles.muted}>{m.queued_conversation_waiting()}</Text>
       {sendNow && sessionName && serverId ? <>
         <Text style={styles.muted}> · </Text>
-        <SendNow id={id} sessionName={sessionName} serverId={serverId} />
+        <SendNow id={id} text={text} sessionName={sessionName} serverId={serverId} />
       </> : null}
     </View>
   );
@@ -96,7 +96,7 @@ export const QueuedBubble = memo(function QueuedBubble({ event, working, problem
           eventId={event.id} imageCount={event.image_count ?? 0} onQuoteClick={onQuoteClick} />
       </View>
       {notes.length ? <Text style={styles.note}>{notes.join(' · ')}</Text> : null}
-      {waiting ? <ConversationWaiting id={event.id.slice('queued-'.length)} sessionName={sessionName} serverId={serverId}
+      {waiting ? <ConversationWaiting id={event.id.slice('queued-'.length)} text={event.text ?? ''} sessionName={sessionName} serverId={serverId}
         sendNow={provider !== 'codex'} /> : null}
       {queued && !event.queued_consumed && (failed || discardsHeld(event, problem)) && sessionName && serverId
         ? <DiscardQueued id={event.id.slice('queued-'.length)} text={event.text ?? ''} sessionName={sessionName} serverId={serverId} /> : null}
@@ -109,6 +109,7 @@ const styles = StyleSheet.create((theme) => ({
   note: { fontSize: theme.base.text.xs, color: theme.tokens.status.warning, textAlign: 'right', marginTop: theme.base.space[1] },
   waiting: { flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'center', marginTop: theme.base.space[1] },
   muted: { fontSize: theme.base.text.xs, color: theme.tokens.text.muted },
+  sendNowButton: { minHeight: 44, minWidth: 44, justifyContent: 'center', paddingHorizontal: theme.base.space[2] },
   sendNow: { fontSize: theme.base.text.xs, fontWeight: theme.base.weight.semibold, color: theme.tokens.accent.base },
   action: { alignItems: 'flex-end' },
   button: { minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: theme.base.space[2], paddingHorizontal: theme.base.space[2] },

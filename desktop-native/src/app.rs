@@ -5776,8 +5776,9 @@ impl Hangar {
         let mut discard = None;
         let mut baton = None;
         let mut segments = None;
-        // "Na conversa" ainda não lida pela CLI: a entrada e se o "Enviar agora" vale (o Codex não corta o turno).
-        let mut waiting: Option<(String, bool)> = None;
+        // "Na conversa" ainda não lida pela CLI: a entrada, se o "Enviar agora" vale (o Codex não corta o turno) e o
+        // trecho que identifica a mensagem no rótulo de acessibilidade.
+        let mut waiting: Option<(String, bool, String)> = None;
         // Sessão orq: linha do tempo do orquestrador já interpretada pelo backend, desenhada à parte.
         if let Some(&Item::Event(event_index)) = self.conversation.items.get(index).filter(|_| id != PREVIEW) {
             if self.chat.events.get(event_index).is_some_and(|event| event.orq.is_some()) { return self.render_orq_event(&id, event_index, cx); }
@@ -5829,7 +5830,8 @@ impl Hangar {
             }
             else if let Some(note) = stuck_note(event, self.chat.state.problema.as_deref()) { notes.push(tr(note)); }
             else if crate::queue_panel::conversation_waiting(event) {
-                waiting = event.id.strip_prefix("queued-").map(|entry| (entry.to_owned(), self.provider().0 != "codex"));
+                waiting = event.id.strip_prefix("queued-").map(|entry| (entry.to_owned(), self.provider().0 != "codex",
+                    crate::queue_panel::label_excerpt(event.text.as_deref().unwrap_or(""))));
             }
             else if event.queued() && event.queued_consumed != Some(true) { notes.push(tr(if event.queued_delivered == Some(true) { "delivering" } else { "queued" })); }
             if event.is_error == Some(true) { notes.push(tr("tool_error")); }
@@ -5921,10 +5923,11 @@ impl Hangar {
         // Na linha do usuário o aviso ocupa a faixa de ações: a bolha local, a da fila e a gravada têm a mesma altura,
         // e a troca de uma pela outra não mexe a conversa.
         let note_in_strip = user && (note.is_some() || waiting.is_some());
-        let waiting = waiting.map(|(entry, send_now)| div().flex().items_center().justify_end().gap_1().min_h(px(24.))
+        let waiting = waiting.map(|(entry, send_now, excerpt)| div().flex().items_center().justify_end().gap_1().min_h(px(24.))
             .text_sm().text_color(theme::muted()).child(tr_shared("queued_conversation_waiting", &[]))
             .when(send_now, |el| el.child("·").child(Button::new(format!("send-now-{id}")).ghost().xsmall()
-                .label(tr_shared("queued_conversation_send_now", &[])).accessibility_label(tr_shared("queued_conversation_send_now", &[]))
+                .label(tr_shared("queued_conversation_send_now", &[]))
+                .accessibility_label(tr_shared("queued_conversation_send_now_message", &[("text", &excerpt)]))
                 .text_color(theme::muted()).disabled(busy)
                 .on_click(cx.listener(move |this, _, _, cx| this.act(Action::QueueSteer(entry.clone()), entry.clone(), cx))))));
         let row = div().id(SharedString::from(format!("message-{id}"))).group(ROW_GROUP).w_full().flex().flex_col().gap_2()

@@ -1137,7 +1137,9 @@ junta os modos que já existiam (Fila, Direto, Jev decide) e acrescenta "Na conv
 
 O caminho sem corte já existia para o recado entre sessões: a escrita sem `"priority":"now"` só
 entra quando a ferramenta em curso acaba (medido na entrada de 14/11 com um `ssh` de 590 s). "Na
-conversa" reusa esse caminho, com uma marca própria na linha da fila para a bolha não ir ao painel.
+conversa" reusa esse caminho, com uma marca própria na linha da fila para a bolha não ir ao painel
+depois de escrita; antes disso (limite, escrita incerta, adiada) ela espera no painel como a da Fila,
+onde pode ser cancelada.
 Não reusa `steer:true` porque no Claude com terminal ele vira o `steer_entry`, que aperta
 `ctrl+x ctrl+s` e corta o turno. A decisão do usuário foi não levar a mensagem à fila interna do
 Claude Code com terminal: ali "Na conversa" se comporta como Fila.

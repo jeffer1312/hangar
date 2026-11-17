@@ -1340,10 +1340,8 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
                     jobs.spawn(async move { Job::Saved(async {
                         let state = queue.snapshot().await.map_err(io_failure)?;
                         let Some(entry) = state.operations.get(&operation_id).and_then(|op|op.entry_id.clone()) else { return Ok(()) };
-                        // A "Na conversa" ecoa ao chegar na CLI, que ainda a guarda até a pausa: quem a confirma é o
-                        // recibo do transcript, senão a bolha perderia o "Em espera" antes da hora. A marca vale em
-                        // qualquer entrega, porque o `steered` só é gravado depois que o eco pode ter chegado.
-                        if !state.rows.iter().any(|row|row["id"] == entry.as_str() && row["confirmed"] != true && row["conversation"] != true) { return Ok(()); }
+                        // A "Na conversa" guardada na CLI não chega aqui: o motor deixa o recibo do transcript confirmá-la.
+                        if !state.rows.iter().any(|row|row["id"] == entry.as_str() && row["confirmed"] != true) { return Ok(()); }
                         queue.exec(generation,&format!("echo-confirm:{}",unique()),sample,Action::Confirm { entry_ids:vec![entry] }).await.map(|_|()).map_err(io_failure)
                     }.await) });
                 },

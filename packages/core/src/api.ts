@@ -929,14 +929,22 @@ export async function transcribePiece(
 // o chamador REMOVE o eco pendente e sinaliza — mensagem nunca "some" calada (mesmo contrato do
 // feedback de entrega do Chat). SEM timeout de propósito (igual ao sendInput por-servidor-ativo):
 // abortar um POST já em voo não desfaz o envio, e reportaria "não entregue" pra recado entregue.
+/** A recusa de campo desconhecido do `/input` antigo: `extra_forbidden` em `body.delivery`. */
+export async function rejectsDeliveryField(res: Response): Promise<boolean> {
+  const body = await res.clone().json().catch(() => null) as { detail?: unknown } | null;
+  return Array.isArray(body?.detail) && body.detail.some((d: { type?: unknown; loc?: unknown }) =>
+    d?.type === 'extra_forbidden' && Array.isArray(d.loc) && d.loc[d.loc.length - 1] === 'delivery');
+}
+
 export async function sendInputForServer(s: Server, name: string, text: string, delivery?: 'conversation'): Promise<void> {
   const post = (body: Record<string, string>) => apiFetchRes(`/api/sessions/${encodeURIComponent(name)}/input`, {
     method: 'POST',
     body: JSON.stringify(body),
   }, s);
   let res = await post(delivery ? { text, delivery } : { text });
-  // Servidor anterior ao "Na conversa" recusa a chave nova com 422 antes de gravar: vai pela fila comum.
-  if (delivery && res.status === 422) res = await post({ text });
+  // Só o servidor anterior ao "Na conversa" vai pela fila comum: ele recusa a chave nova antes de gravar.
+  // Outro 422 é recusa de verdade e aparece, sem trocar o modo calado.
+  if (delivery && res.status === 422 && await rejectsDeliveryField(res)) res = await post({ text });
   if (!res.ok) throw Object.assign(new Error(`${res.status}: ${await errorDetail(res)}`), { status: res.status });
 }
 

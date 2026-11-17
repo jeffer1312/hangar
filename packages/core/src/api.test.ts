@@ -661,12 +661,20 @@ describe('contratos de conversa com servidor explícito', () => {
 
   it('"Na conversa" manda delivery e, no 422 do servidor antigo, reenvia como fila comum', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch')
-      .mockResolvedValueOnce(new Response('{"detail":"corpo"}', { status: 422 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ detail: [{ type: 'extra_forbidden', loc: ['body', 'delivery'],
+        msg: 'Extra inputs are not permitted', input: 'conversation' }] }), { status: 422 }))
       .mockResolvedValueOnce(new Response('{"ok":true}', { status: 200 }));
     await sendInputForServer(target, 'sessao', 'texto', 'conversation');
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({ text: 'texto', delivery: 'conversation' });
     expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({ text: 'texto' });
+  });
+
+  it('"Na conversa" com outro 422 do servidor novo aparece como erro, sem reenviar pela fila', async () => {
+    const refused = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(
+      JSON.stringify({ detail: { code: 'erro_corpo_invalido', msg: 'delivery não combina com steer' } }), { status: 422 }));
+    await expect(sendInputForServer(target, 'sessao', 'texto', 'conversation')).rejects.toMatchObject({ status: 422 });
+    expect(refused).toHaveBeenCalledTimes(1);
   });
 
   it('"Na conversa" aceita de primeira não repete, e outro erro não vira fila', async () => {

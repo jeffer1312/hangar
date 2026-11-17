@@ -423,12 +423,15 @@ impl Api {
         Ok(Delivery { ok: true, delivered: true, ..Default::default() })
     }
 
-    /// "Na conversa". Servidor anterior recusa o campo com 422 antes de gravar: a mensagem vai pela fila comum.
+    /// "Na conversa". Servidor anterior recusa o campo antes de gravar: a mensagem vai pela fila comum. Outro 422 é
+    /// recusa de verdade e volta como erro, sem trocar o modo calado.
     pub async fn send_conversation(&self, name: &str, text: &str) -> Result<Delivery, Failure> {
-        match self.send_input(name, json!({"text": text, "delivery": "conversation"})).await {
-            Err(error) if error.status == Some(422) => self.send(name, text).await,
-            other => other,
+        let r = self.post_input(name, &json!({"text": text, "delivery": "conversation"})).await?;
+        if r.status() == StatusCode::UNPROCESSABLE_ENTITY {
+            let (body, failure) = failed_response(r, true, "POST", Some(self.base.as_str())).await;
+            return if rejects_delivery_field(body.as_ref()) { self.send(name, text).await } else { Err(failure) };
         }
+        self.delivery(r).await
     }
 
     pub async fn send_decided(&self, name: &str, text: &str, task: &str, message: &str) -> Result<Delivery, Failure> {
@@ -436,9 +439,17 @@ impl Api {
     }
 
     async fn send_input(&self, name: &str, body: Value) -> Result<Delivery, Failure> {
-        let r = self.client.post(self.endpoint(Some(name), Some("input")))
-            .json(&body).timeout(Duration::from_secs(60))
-            .send().await.map_err(|_| Failure::transport(true))?;
+        let r = self.post_input(name, &body).await?;
+        self.delivery(r).await
+    }
+
+    async fn post_input(&self, name: &str, body: &Value) -> Result<Response, Failure> {
+        self.client.post(self.endpoint(Some(name), Some("input")))
+            .json(body).timeout(Duration::from_secs(60))
+            .send().await.map_err(|_| Failure::transport(true))
+    }
+
+    async fn delivery(&self, r: Response) -> Result<Delivery, Failure> {
         let delivery: Delivery = self.checked(r, true).await?.json().await.map_err(|_| Failure::transport(true))?;
         if !delivery.ok { return Err(Failure::transport(true)); }
         Ok(delivery)
@@ -1153,6 +1164,11 @@ pub async fn redeem_invite(address: &str, code: &str, device: &str, token: Optio
 /// `identity`: a entrada que fez o pedido; só ela perde o Connect num 401 (sem entrada, nada a recusar).
 async fn checked_response(response: Response, post: bool, method: &str, identity: Option<&str>) -> Result<Response, Failure> {
     if response.status().is_success() || response.status() == StatusCode::NOT_MODIFIED { return Ok(response); }
+    Err(failed_response(response, post, method, identity).await.1)
+}
+
+/// A falha de uma resposta sem sucesso, com o corpo lido para quem precisa decidir por ele.
+async fn failed_response(response: Response, post: bool, method: &str, identity: Option<&str>) -> (Option<Value>, Failure) {
     let status = response.status().as_u16();
     let url = response.url().clone();
     let retry_after = response.headers().get(header::RETRY_AFTER).and_then(|s| s.to_str().ok()).and_then(|s| s.parse().ok());
@@ -1160,8 +1176,15 @@ async fn checked_response(response: Response, post: bool, method: &str, identity
     let code = envelope_code(body.as_ref());
     recent::record(method, &url, status, code.as_deref());
     if status == 401 && let Some(identity) = identity { route::refused_at(identity, &url); }
-    let detail = failure_detail(body, status);
-    Err(Failure { status: Some(status), detail: detail.chars().take(500).collect(), retry_after, uncertain: post && status >= 500, code })
+    let detail = failure_detail(body.clone(), status);
+    (body, Failure { status: Some(status), detail: detail.chars().take(500).collect(), retry_after, uncertain: post && status >= 500, code })
+}
+
+/// A recusa do `/input` anterior ao "Na conversa": campo desconhecido `delivery` (`extra_forbidden`).
+fn rejects_delivery_field(body: Option<&Value>) -> bool {
+    body.and_then(|b| b.get("detail")).and_then(Value::as_array).is_some_and(|items| items.iter().any(|item|
+        item.get("type").and_then(Value::as_str) == Some("extra_forbidden")
+            && item.get("loc").and_then(Value::as_array).and_then(|loc| loc.last()).and_then(Value::as_str) == Some("delivery")))
 }
 
 #[derive(Clone, serde::Deserialize, PartialEq)]
@@ -1192,6 +1215,21 @@ mod tests {
     use super::*;
     // O glob pode trazer o `test` da gpui, que colide com o atributo padrão; o nome explícito vence o glob.
     use core::prelude::v1::test;
+
+    #[test]
+    fn only_the_old_server_refusal_of_delivery_falls_back_to_the_queue() {
+        let old = json!({"detail":[{"type":"extra_forbidden","loc":["body","delivery"],"msg":"Extra inputs are not permitted","input":"conversation"}]});
+        assert!(rejects_delivery_field(Some(&old)));
+        for other in [
+            json!({"detail":[{"type":"missing","loc":["body","text"],"msg":"Field required"}]}),
+            json!({"detail":[{"type":"extra_forbidden","loc":["body","jev_task"]}]}),
+            json!({"detail":{"code":"erro_corpo_invalido","msg":"x"}}),
+            json!({"detail":"Unprocessable Entity"}),
+        ] {
+            assert!(!rejects_delivery_field(Some(&other)), "{other}");
+        }
+        assert!(!rejects_delivery_field(None));
+    }
 
     #[test]
     fn coded_not_found_is_not_needs_rust() {

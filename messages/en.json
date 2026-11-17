@@ -5253,7 +5253,7 @@
   "mobile_delivery_mode_conversation_desc": "Shows up in the conversation, like in Claude Desktop; Claude reads it at the next pause between tools, without stopping.",
   "queued_conversation_waiting": "Waiting",
   "queued_conversation_send_now": "Send now",
-  "native_settings_conversation_group": "Conversation",
+  "queued_conversation_send_now_message": "Send now: {text}",
   "native_settings_delivery_mode": "Message sent while the session is working",
   "native_settings_delivery_mode_search": "Queue, Direct, Jev decides, In the conversation, steer, queued panel, message working",
   "native_delivering": "Delivered to the agent; awaiting confirmation",

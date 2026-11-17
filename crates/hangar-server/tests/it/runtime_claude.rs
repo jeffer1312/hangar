@@ -104,6 +104,62 @@ fn send_now_without_a_held_message_is_refused_with_a_code() {
         .iter().any(|e|matches!(e,Effect::RecheckInputs)),"sem guardada, nada a reler");
 }
 
+/// "Na conversa" com a sessão parada abre o turno como mensagem comum: o eco a confirma. Só a guardada no meio
+/// do turno espera o recibo do transcript.
+#[test]
+fn echo_confirms_the_conversation_message_that_opened_the_turn_but_not_a_held_one() {
+    let mut engine = engine(json!({"name":"session","session_id":"sid","initialized":true}));
+    let opened = writes(&engine.command(command(OperationKind::Input,json!({"text":"abre","entry_id":"c0"})),clock(11.0)).unwrap()).remove(0);
+    let echo = |engine:&mut ClaudeEngine,frame:&Value,at:f64| line(engine,json!({"type":"user","isReplay":true,"uuid":frame["uuid"],
+        "message":{"role":"user","content":[{"type":"text","text":"x"}]}}),at);
+    let echoed = |effects:&[Effect]| effects.iter().filter_map(|e|match e { Effect::InputEchoed { operation_id } => Some(operation_id.clone()),_=>None }).collect::<Vec<_>>();
+    assert_eq!(echoed(&echo(&mut engine,&opened,11.5)),vec!["op-1".to_owned()]);
+
+    let held = writes(&engine.command(RuntimeCommand { operation_id:"guardada".into(),kind:OperationKind::Steer,
+        payload:json!({"text":"olha isso","entry_id":"c1"}) },clock(12.0)).unwrap()).remove(0);
+    let effects = echo(&mut engine,&held,12.5);
+    assert!(echoed(&effects).is_empty(),"{effects:?}");
+    assert!(effects.iter().any(|e|matches!(e,Effect::RecheckInputs)));
+}
+
+/// O `interrupt` do "Enviar agora" que não foi escrito deixa a mensagem guardada: o botão vale de novo.
+#[test]
+fn send_now_not_written_keeps_the_held_message() {
+    let mut engine = engine(json!({"name":"session","session_id":"sid","initialized":true}));
+    engine.command(command(OperationKind::Input,json!({"text":"primeiro"})),clock(11.0)).unwrap();
+    engine.command(RuntimeCommand { operation_id:"conversa".into(),kind:OperationKind::Steer,
+        payload:json!({"text":"olha isso","entry_id":"c1"}) },clock(12.0)).unwrap();
+    let now = |engine:&mut ClaudeEngine,id:&str| writes(&engine.command(RuntimeCommand { operation_id:id.into(),kind:OperationKind::SteerWritten,
+        payload:json!({"entry_id":"c1"}) },clock(13.0)).unwrap());
+    assert_eq!(now(&mut engine,"agora")[0]["request"]["subtype"],"interrupt");
+    engine.apply(EngineInput::WriteAck { operation_id:"agora".into(),outcome:WriteOutcome::NotWritten },clock(13.1)).unwrap();
+    let again = now(&mut engine,"agora-2");
+    assert_eq!(again.len(),1,"a guardada continua adiantável: {again:?}");
+    assert_eq!(again[0]["request"]["subtype"],"interrupt");
+}
+
+/// Com duas guardadas, a CLI as roda em ordem: a primeira começa depois do corte pedido pela segunda. O corte
+/// acaba ali, e o `result` dela fecha o turno e acorda a fila.
+#[test]
+fn an_earlier_held_message_starting_after_the_cut_releases_it() {
+    let mut engine = engine(json!({"name":"session","session_id":"sid","initialized":true}));
+    engine.command(command(OperationKind::Input,json!({"text":"primeiro"})),clock(11.0)).unwrap();
+    let held = |engine:&mut ClaudeEngine,id:&str,entry:&str| writes(&engine.command(RuntimeCommand { operation_id:id.into(),
+        kind:OperationKind::Steer,payload:json!({"text":id,"entry_id":entry}) },clock(12.0)).unwrap()).remove(0);
+    let a = held(&mut engine,"conversa-a","a");
+    let _b = held(&mut engine,"conversa-b","b");
+    engine.command(RuntimeCommand { operation_id:"agora".into(),kind:OperationKind::SteerWritten,payload:json!({"entry_id":"b"}) },clock(13.0)).unwrap();
+    engine.apply(EngineInput::WriteAck { operation_id:"agora".into(),outcome:WriteOutcome::Written },clock(13.1)).unwrap();
+
+    let cut = line(&mut engine,json!({"type":"result","subtype":"error_during_execution","terminal_reason":"aborted_tools"}),14.0);
+    assert!(!cut.iter().any(|e|matches!(e,Effect::WakeQueue)),"o corte não é parada");
+    line(&mut engine,json!({"type":"command_lifecycle","command_uuid":a["uuid"],"state":"started"}),14.1);
+    let done = line(&mut engine,json!({"type":"result","subtype":"success","terminal_reason":"completed"}),20.0);
+    assert_eq!(consumed(&done),vec!["conversa-a".to_owned()]);
+    assert!(done.iter().any(|e|matches!(e,Effect::WakeQueue)),"o turno da primeira acaba de verdade: {done:?}");
+    assert_eq!(engine.view()["in_progress"],false);
+}
+
 #[test]
 fn cut_steer_the_cli_cancels_frees_the_turn() {
     let mut engine = engine(json!({"name":"session","session_id":"sid","initialized":true}));

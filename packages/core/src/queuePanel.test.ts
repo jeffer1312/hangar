@@ -23,16 +23,21 @@ describe('queuePanel', () => {
     expect(currentQueuePanel(null, events).actions).toBe(false);
     expect(currentQueuePanel(panel('z'), events).entries[0].id).toBe('z');
   });
-  it('a mandada "Na conversa" fica na conversa: fora do painel, sem atenuar e com "Em espera" até ser lida', () => {
-    const conversa = q('c', { queued_conversation: true });
+  it('a mandada "Na conversa" e escrita fica na conversa: fora do painel, sem atenuar e com "Em espera" até ser lida', () => {
+    const conversa = q('c', { queued_conversation: true, queued_delivered: true });
     expect(derivedQueuePanel([q('a'), conversa]).entries.map((e) => e.id)).toEqual(['a']);
     expect(waitsInQueue(conversa)).toBe(false);
     expect(waitsInConversation(conversa)).toBe(true);
-    expect(waitsInConversation(q('c', { queued_conversation: true, queued_delivered: true }))).toBe(true);
-    expect(waitsInConversation(q('c', { queued_conversation: true, queued_consumed: true }))).toBe(false);
-    expect(waitsInConversation(q('c', { queued_conversation: true, queued_confirmed: true }))).toBe(false);
-    expect(waitsInConversation(q('c', { queued_conversation: true, desistiu: true }))).toBe(false);
+    expect(waitsInConversation({ ...conversa, queued_consumed: true })).toBe(false);
+    expect(waitsInConversation({ ...conversa, queued_confirmed: true })).toBe(false);
+    expect(waitsInConversation({ ...conversa, desistiu: true })).toBe(false);
     expect(waitsInConversation(q('a'))).toBe(false);
+  });
+  it('a "Na conversa" ainda não escrita espera no painel como a da Fila, onde pode ser cancelada', () => {
+    const adiada = q('c', { queued_conversation: true, queued_delivered: false });
+    expect(derivedQueuePanel([q('a'), adiada]).entries.map((e) => e.id)).toEqual(['a', 'c']);
+    expect(waitsInQueue(adiada, 'claude', true)).toBe(true);
+    expect(waitsInConversation(adiada)).toBe(false);
   });
   it('as apagadas noutro aparelho viram ids de bolha a retirar', () => {
     expect(queueRemovedBubbleIds({ entries: [], actions: true, removed: ['a', '', 3, 'b'] })).toEqual(['queued-a', 'queued-b']);

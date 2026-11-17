@@ -723,8 +723,13 @@ pub async fn queue_steer(State(st): State<Arc<AppState>>, ConnectInfo(peer): Con
         return invalid_body(ctx.headers());
     }
     // Só o Claude sem terminal guarda a mensagem escrita; no Codex o `turn/steer` já entrou no turno.
-    let written = ctx.target.provider == "claude" && matches!(ctx.target.handle, EntryHandle::Headless(_))
-        && written_conversation(&ctx.target.handle, &entry_id).await;
+    let written = if ctx.target.provider == "claude" && matches!(ctx.target.handle, EntryHandle::Headless(_)) {
+        // Sem ler a fila não se sabe se ela já está na CLI: reescrevê-la a duplicaria.
+        match written_conversation(&ctx.target.handle.queue(random_hex(16), Action::Load).await, &entry_id) {
+            Ok(written) => written,
+            Err(failed) => return answer(&ctx, failed),
+        }
+    } else { false };
     let result = match &ctx.target.handle {
         // Serial com a drenagem dentro do ator: subir e entregar acontecem sem outra mensagem no meio.
         EntryHandle::Terminal { handle, .. } =>
@@ -737,11 +742,12 @@ pub async fn queue_steer(State(st): State<Arc<AppState>>, ConnectInfo(peer): Con
     answer(&ctx, result)
 }
 
-/// A "Na conversa" já escrita na CLI do Claude sem terminal, que a guarda até a pausa entre ferramentas.
-async fn written_conversation(handle: &EntryHandle, entry_id: &str) -> bool {
-    let Ok(rows) = handle.queue(random_hex(16), Action::Load).await else { return false };
-    rows.as_array().is_some_and(|rows| rows.iter().any(|row| row["id"] == entry_id && row["conversation"] == true
-        && row["delivered"] == true && row["confirmed"] != true && row["desistiu"] != true))
+/// A "Na conversa" já escrita na CLI do Claude sem terminal, que a guarda até a pausa entre ferramentas. Falha
+/// ao ler a fila responde já, sem outro caminho.
+pub fn written_conversation(loaded: &Result<Value, RuntimeError>, entry_id: &str) -> Result<bool, Answer> {
+    let rows = loaded.as_ref().map_err(runtime_failed)?;
+    Ok(rows.as_array().is_some_and(|rows| rows.iter().any(|row| row["id"] == entry_id && row["conversation"] == true
+        && row["delivered"] == true && row["confirmed"] != true && row["desistiu"] != true)))
 }
 
 /// "Enviar agora" da mensagem já escrita: o corte por ela, sem reescrevê-la. O que já saiu da espera (começou,
@@ -874,6 +880,15 @@ mod tests {
         assert_eq!(queue_steer_terminal(&r(Disposition::Unknown, json!({"code":"queue_steer_uncertain"}))).1["detail"]["code"], "queue_steer_uncertain");
         assert_eq!(queue_steer_terminal(&r(Disposition::Rejected, json!({"code":"queue_steer_delivery_unproved"}))).1["detail"]["code"], "queue_steer_delivery_unproved");
         assert_eq!(queue_steer_terminal(&r(Disposition::Deferred, json!({}))).1["detail"]["code"], "queue_steer_not_delivered");
+    }
+
+    #[test]
+    fn written_conversation_answers_a_queue_failure_instead_of_rewriting() {
+        let rows = Ok(json!([{"id":"c","conversation":true,"delivered":true},{"id":"f","delivered":true}]));
+        assert_eq!(written_conversation(&rows, "c"), Ok(true));
+        assert_eq!(written_conversation(&rows, "f"), Ok(false), "a da Fila segue a orientação comum");
+        let failed = written_conversation(&Err(RuntimeError::new("queue_io", "disco")), "c").unwrap_err();
+        assert_eq!((failed.0, failed.1["detail"]["code"].as_str()), (StatusCode::BAD_GATEWAY, Some("erro_envio_falhou")));
     }
 
     #[test]
