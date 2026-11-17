@@ -98,6 +98,8 @@ pub enum ActionError {
     CurrentChanged(String),
     /// Depois da troca e da subida, responde outra versão (subiu a antiga entre a conferência e a troca).
     VersionMismatch(String),
+    /// A troca entrou, o passo seguinte falhou e o `current` não voltou: segue em `version`.
+    CurrentLeftOn { version: String, cause: String },
     Command { code: Option<i32>, output: String },
     Io(std::io::Error),
 }
@@ -119,6 +121,7 @@ impl ActionError {
             ActionError::PortStillHeld => "local_server_port_still_held",
             ActionError::CurrentChanged(_) => "local_server_current_changed",
             ActionError::VersionMismatch(_) => "local_server_version_mismatch",
+            ActionError::CurrentLeftOn { .. } => "local_server_current_left_on",
             ActionError::Command { .. } => "local_server_command_failed",
             ActionError::Io(_) => "local_server_io",
         }
@@ -129,6 +132,7 @@ impl ActionError {
         match self {
             ActionError::UnknownVersion(v) | ActionError::NoBinary(v) | ActionError::ServiceUnreadable(v)
             | ActionError::CurrentChanged(v) | ActionError::VersionMismatch(v) => v.clone(),
+            ActionError::CurrentLeftOn { version, cause } => format!("{version}: {cause}"),
             ActionError::Command { code, output } => format!("{code:?}: {output}"),
             ActionError::Io(e) => e.to_string(),
             _ => String::new(),
@@ -341,7 +345,7 @@ impl<H: Host> LocalServer<H> {
         same()?;
         if !self.host.signal(holder.pid, false) { return Err(ActionError::TerminateRefused); }
         for child in &tree { self.host.signal(*child, false); }
-        if self.released(holder.pid, RELEASE_WAIT) { return Ok(()); }
+        if self.released(holder.pid, RELEASE_WAIT) { return self.vacated(); }
         // Não saiu com o pedido: à força, se ainda é o mesmo processo.
         match same() {
             Ok(_) => { self.host.signal(holder.pid, true); }
@@ -350,7 +354,25 @@ impl<H: Host> LocalServer<H> {
             Err(e) => return Err(e),
         }
         for child in &tree { if self.host.process(*child).is_some() { self.host.signal(*child, true); } }
-        if self.released(holder.pid, KILL_WAIT) { Ok(()) } else { Err(ActionError::PortStillHeld) }
+        if self.released(holder.pid, KILL_WAIT) { self.vacated() } else { Err(ActionError::PortStillHeld) }
+    }
+
+    /// Quem segurava saiu; a porta só está livre quando ninguém mais escuta nela: um filho que
+    /// herdou o socket, ou outro processo que entrou no lugar. Consulta que falha não é porta livre.
+    fn vacated(&self) -> Result<(), ActionError> {
+        let mut waited = Duration::ZERO;
+        loop {
+            let now = self.listeners();
+            if now.error.is_none() && now.is_empty() { return Ok(()); }
+            if waited >= KILL_WAIT {
+                return Err(match now.error {
+                    Some(error) => ActionError::Io(std::io::Error::other(error)),
+                    None => ActionError::PortStillHeld,
+                });
+            }
+            self.host.pause(STEP);
+            waited += STEP;
+        }
     }
 
     fn holds(&self, pid: u32) -> bool { self.listeners().holders.iter().any(|h| h.pid == pid) }
@@ -420,14 +442,7 @@ impl<H: Host> LocalServer<H> {
             ServiceState::Restarting | ServiceState::Stopped | ServiceState::Failed => {}
         }
         let previous = link::swap(&hangar, &dir).map_err(ActionError::Io)?;
-        // O registro da troca sem prova é da atualização que não se provou. Com a versão escolhida
-        // à mão (e a trava conosco, nenhuma atualização no meio), a próxima recuperação o usaria para
-        // desfazer a escolha quando ela é a própria versão do registro; nas outras ela só o apagaria.
-        if let Err(e) = link::remove_unproven(&hangar) {
-            if let Some(previous) = previous { let _ = link::swap(&hangar, &previous); }
-            return Err(ActionError::Io(e));
-        }
-        Ok(())
+        drop_unproven_or_undo(&hangar, version, previous, link::remove_unproven, link::swap)
     }
 
     /// O `current` segue em `version` e quem responde na porta é ela. Ninguém respondendo no prazo
@@ -455,6 +470,25 @@ impl<H: Host> LocalServer<H> {
         if let Err(e) = diary::record_action(&self.log_base, action, error.map(ActionError::code), &fields) {
             eprintln!("hangar-local-server: local_server.acao {action} não gravado no diário ({:?})", e.kind());
         }
+    }
+}
+
+/// O registro da troca sem prova é da atualização que não se provou. Com a versão escolhida à mão
+/// (e a trava conosco, nenhuma atualização no meio), a próxima recuperação o usaria para desfazer a
+/// escolha quando ela é a própria versão do registro; nas outras ela só o apagaria. Sem apagá-lo, o
+/// `current` volta para `previous`; se não voltar, o erro diz que ficou em `version`.
+fn drop_unproven_or_undo(hangar: &Path, version: &str, previous: Option<PathBuf>,
+    remove: impl FnOnce(&Path) -> std::io::Result<()>,
+    swap: impl FnOnce(&Path, &Path) -> std::io::Result<Option<PathBuf>>) -> Result<(), ActionError> {
+    let Err(e) = remove(hangar) else { return Ok(()) };
+    let left = |cause: String| ActionError::CurrentLeftOn { version: version.to_owned(), cause };
+    match previous {
+        Some(previous) => match swap(hangar, &previous) {
+            Ok(_) => Err(ActionError::Io(e)),
+            Err(undo) => Err(left(format!("{e}; a volta para {} falhou: {undo}", previous.display()))),
+        },
+        // Não havia `current` antes: não há para onde voltar.
+        None => Err(left(e.to_string())),
     }
 }
 

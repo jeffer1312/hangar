@@ -609,7 +609,10 @@ async fn put_back(layout: &Layout, previous: Option<PathBuf>) -> Result<(), Upda
             None => remove_link(&layout.current()).map_err(|e| UpdateError::Swap(format!("{} não saiu: {e}", layout.current().display())))?,
         }
         // Sobra com o `current` fora do alvo é apagada pela próxima recuperação.
-        let _ = clear_unproven(&layout);
+        if let Err(e) = clear_unproven(&layout) {
+            tracing::warn!(code = "update_unproven_not_cleared", path = %layout.unproven().display(), error = %e,
+                "registro da troca sem prova ficou depois da volta");
+        }
         Ok(())
     }).await
 }

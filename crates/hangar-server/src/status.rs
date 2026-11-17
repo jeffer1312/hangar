@@ -468,7 +468,9 @@ impl Live {
 
     async fn update(&self) -> Block<UpdateBlock> {
         let Some(body) = crate::update::http::status_body(&self.st, false).await else { return Ok(None) };
-        Ok(update_block(&body, crate::update::periodic::last_check()))
+        let block = update_block(&body, crate::update::periodic::last_check());
+        if block.is_none() { tracing::warn!(code = "status_update_body_incomplete", "tela Status: corpo da atualização sem versão, canal ou disponibilidade"); }
+        Ok(block)
     }
 
     /// Linhas do dono: as da assinatura interna; antes da primeira produção dela, o retrato da lista.
@@ -549,8 +551,9 @@ impl Live {
             *seen = tmux.map(|now| now.into_iter().collect());
             confirmed
         };
+        if canos.is_none() { tracing::warn!(code = "status_own_user_unread", "tela Status: canos sem o usuário deste processo"); }
         // Na subida, cano de sessão que ainda vai ser religada não é resto.
-        let canos = self.st.startup.is_ready().then(|| hangar_status::leftovers::cano_orphans(&canos, &bound));
+        let canos = canos.filter(|_| self.st.startup.is_ready()).map(|canos| hangar_status::leftovers::cano_orphans(&canos, &bound));
         (block.map(Some), Ok(hangar_status::leftovers::block(tmux, canos)))
     }
 
@@ -656,10 +659,12 @@ impl Collect for Live {
     }
 }
 
-/// O bloco Atualização a partir do corpo do `GET /api/atualizacao`.
+/// O bloco Atualização a partir do corpo do `GET /api/atualizacao`. Sem canal ou sem saber se há
+/// versão nova, o bloco falta: `available` ausente diria "nada novo".
 fn update_block(body: &Value, last_check: Option<DateTime<Utc>>) -> Option<UpdateBlock> {
     let installed = body["versao_legivel"]["repo"].as_str().or_else(|| body["versoes"]["repo"].as_str())?.to_owned();
-    let available = body["atualizacao_disponivel"].as_bool().unwrap_or(false)
+    let channel = body["canal"].as_str()?.to_owned();
+    let available = body["atualizacao_disponivel"].as_bool()?
         .then(|| body["versao_legivel"]["remoto"].as_str().map(str::to_owned)).flatten();
     let estado = &body["estado"];
     let last_result = (estado["fase"] == "pronto").then(|| {
@@ -667,7 +672,7 @@ fn update_block(body: &Value, last_check: Option<DateTime<Utc>>) -> Option<Updat
         let ts = DateTime::parse_from_rfc3339(estado["ts"].as_str()?).ok()?.with_timezone(&Utc);
         Some(UpdateResult { ts: stamp(ts), ok, step: (!ok).then(|| estado["etapa"].as_str().map(str::to_owned)).flatten() })
     }).flatten();
-    Some(UpdateBlock { channel: body["canal"].as_str().unwrap_or_default().to_owned(), installed, available,
+    Some(UpdateBlock { channel, installed, available,
         last_check: last_check.map(stamp), last_result })
 }
 
@@ -717,9 +722,20 @@ async fn peer_version(base_url: &str, token: &str) -> Option<String> {
         .redirect(reqwest::redirect::Policy::none()).build().ok()).as_ref()?;
     let mut request = client.get(format!("{base_url}/__hangar_server/health"));
     if !token.is_empty() { request = request.bearer_auth(token); }
-    let response = request.send().await.ok()?;
-    if !response.status().is_success() { return None; }
-    let body: Value = serde_json::from_slice(&response.bytes().await.ok()?).ok()?;
+    let missed = |why: &str| tracing::debug!(code = "status_peer_version_unread", why, base_url, "versão do peer sem leitura");
+    let response = match request.send().await {
+        Ok(response) => response,
+        Err(e) => { missed(&format!("rede: {e}")); return None; }
+    };
+    if !response.status().is_success() { missed(&format!("http {}", response.status().as_u16())); return None; }
+    let body = match response.bytes().await {
+        Ok(bytes) => bytes,
+        Err(e) => { missed(&format!("corpo: {e}")); return None; }
+    };
+    let body: Value = match serde_json::from_slice(&body) {
+        Ok(body) => body,
+        Err(e) => { missed(&format!("corpo: {e}")); return None; }
+    };
     body["package_version"].as_str().filter(|v| !v.is_empty()).map(str::to_owned)
 }
 
@@ -953,6 +969,14 @@ mod tests {
             "atualizacao_disponivel": false, "estado": {"fase": "rodando", "ok": null}});
         let block = update_block(&running, None).unwrap();
         assert_eq!((block.available, block.last_check, block.last_result), (None, None, None));
+
+        // Sem saber se há versão nova, ou sem canal, o bloco falta em vez de dizer "nada novo" ou canal vazio.
+        let mut unknown = running.clone();
+        unknown.as_object_mut().unwrap().remove("atualizacao_disponivel");
+        assert_eq!(update_block(&unknown, None), None);
+        let mut no_channel = running.clone();
+        no_channel.as_object_mut().unwrap().remove("canal");
+        assert_eq!(update_block(&no_channel, None), None);
     }
 
     #[test]

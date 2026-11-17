@@ -54,14 +54,17 @@ pub fn cano_orphans(canos: &[Cano], bound: &HashSet<u32>) -> u32 {
 /// Os canos do usuário deste processo pelo `sysinfo`, sem as threads; `now` em segundos desde a época.
 /// Vale no Linux, no macOS e no Windows (`hangar-cano.exe`). O `System` precisa vir atualizado com o
 /// usuário (`ProcessRefreshKind::with_user`): sem ele os donos ficam desconhecidos e o cano de outro
-/// usuário da máquina entraria na conta.
-pub fn canos_in(sys: &sysinfo::System, now: u64) -> Vec<Cano> {
-    let own = sysinfo::get_current_pid().ok().and_then(|pid| sys.process(pid)).and_then(|p| p.user_id().cloned());
-    sys.processes().values()
+/// usuário da máquina entraria na conta. Sem o próprio usuário a leitura falta (`None`): contar
+/// zero diria "nenhum resto".
+pub fn canos_in(sys: &sysinfo::System, now: u64) -> Option<Vec<Cano>> { canos_of(sys, sysinfo::get_current_pid().ok(), now) }
+
+fn canos_of(sys: &sysinfo::System, own_pid: Option<sysinfo::Pid>, now: u64) -> Option<Vec<Cano>> {
+    let own = sys.process(own_pid?)?.user_id()?.clone();
+    Some(sys.processes().values()
         .filter(|p| p.thread_kind().is_none() && is_cano(&p.name().to_string_lossy()))
-        .filter(|p| p.user_id() == own.as_ref())
+        .filter(|p| p.user_id() == Some(&own))
         .map(|p| Cano { pid: p.pid().as_u32(), age: Duration::from_secs(now.saturating_sub(p.start_time())) })
-        .collect()
+        .collect())
 }
 
 /// O bloco; leitura que não veio fica ausente (multiplexador fora do ar, psmux sem a lista), e sem
@@ -108,5 +111,12 @@ mod tests {
         assert_eq!(block(None, None), None);
         assert_eq!(block(None, Some(0)), Some(LeftoversBlock { tmux_orphans: None, cano_orphans: Some(0) }));
         assert!(is_cano("hangar-cano.exe") && is_cano("hangar-cano") && !is_cano("hangar-server"));
+    }
+
+    #[test]
+    fn without_the_own_user_the_canos_are_unread_not_zero() {
+        let empty = sysinfo::System::new();
+        assert_eq!(canos_of(&empty, None, 100), None, "sem o próprio pid");
+        assert_eq!(canos_of(&empty, Some(sysinfo::Pid::from_u32(u32::MAX)), 100), None, "o próprio processo fora da leitura");
     }
 }

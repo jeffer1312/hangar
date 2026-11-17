@@ -17,6 +17,8 @@ struct Fake {
     http: Vec<(&'static str, Reply)>,
     /// O texto que o `ss` devolve enquanto o processo de `ss_pid` vive.
     ss: Option<(&'static str, u32)>,
+    /// Outra linha do `ss`, enquanto o processo dela vive: o filho que herdou o socket.
+    ss_inherited: Option<(&'static str, u32)>,
     /// Respostas HTTP que só aparecem depois de um `systemctl --user start` (o servidor subiu).
     http_after_start: Vec<(&'static str, Reply)>,
     processes: RefCell<Vec<ProcessInfo>>,
@@ -57,10 +59,9 @@ impl Host for Fake {
         let line = std::iter::once(program).chain(args.iter().copied()).collect::<Vec<_>>().join(" ");
         self.ran.borrow_mut().push(line.clone());
         if program == "ss" {
-            let stdout = match self.ss {
-                Some((text, pid)) if self.processes.borrow().iter().any(|p| p.pid == pid) => text.to_owned(),
-                _ => String::new(),
-            };
+            let alive = |pid: u32| self.processes.borrow().iter().any(|p| p.pid == pid);
+            let stdout = [self.ss, self.ss_inherited].into_iter().flatten().filter(|(_, pid)| alive(*pid))
+                .map(|(text, _)| text.trim_end()).collect::<Vec<_>>().join("\n");
             return Ok(Output { code: Some(0), stdout, ..Output::default() });
         }
         Ok(self.replies.iter().find(|(prefix, _)| line.starts_with(prefix)).map(|(_, out)| out.clone())
@@ -392,6 +393,52 @@ fn free_port_takes_the_tree_and_escalates_to_kill() {
         .process(48211, "hangar-server", ME, 5).child(48300, Some(48211), "hangar-cano", ME, 6));
     linux.free_port(&PortHolder { pid: 48211, name: "hangar-server".into(), same_user: true, start_time: 5 }).unwrap();
     assert_eq!(*linux.host.signals.borrow(), vec![(48211, false)]);
+}
+
+/// Quem segurava saiu com o pedido, mas o filho que herdou o socket não: a porta segue presa.
+#[test]
+fn free_port_is_not_done_while_a_child_still_listens() {
+    let dir = tempfile::tempdir().unwrap();
+    let child_line = "LISTEN 0      1024         0.0.0.0:8765      0.0.0.0:*    users:((\"python3\",pid=48300,fd=7))";
+    let fake = Fake { ss: Some((SS_BUSY, 48211)), ss_inherited: Some((child_line, 48300)), stubborn: vec![48300], ..Fake::default() }
+        .process(48211, "python3", ME, 1_700_000_000)
+        .child(48300, Some(48211), "python3", ME, 1_700_000_010);
+    let local = server(dir.path(), fake);
+    let result = local.free_port(&PortHolder { pid: 48211, name: "python3".into(), same_user: true, start_time: 1_700_000_000 });
+    assert!(matches!(result, Err(ActionError::PortStillHeld)), "{result:?}");
+    assert_eq!(*local.host.signals.borrow(), vec![(48211, false), (48300, false)]);
+    let last = local_diary(dir.path()).pop().unwrap();
+    assert_eq!((last["acao"].as_str(), last["codigo"].as_str()), (Some("free_port"), Some("local_server_port_still_held")));
+}
+
+/// O registro da troca sem prova não sai e o `current` não volta: o erro diz em que versão ele ficou.
+#[test]
+fn use_version_says_where_the_current_was_left_when_the_undo_fails() {
+    let root = Path::new("/h/.hangar");
+    let refused = |_: &Path| Err(std::io::Error::other("registro preso"));
+    let undo_fails = |_: &Path, _: &Path| Err(std::io::Error::other("sem link"));
+    let result = drop_unproven_or_undo(root, "0.1.0.2", Some(PathBuf::from("/v/0.1.0.1")), refused, undo_fails);
+    let Err(error) = result else { panic!("a volta falhou") };
+    assert_eq!(error.code(), "local_server_current_left_on");
+    assert!(error.detail().starts_with("0.1.0.2: registro preso") && error.detail().contains("sem link"), "{}", error.detail());
+
+    // A volta deu certo: o `current` está onde estava, e o erro é só o do registro.
+    let undo_ok = |_: &Path, _: &Path| Ok(None);
+    assert!(matches!(drop_unproven_or_undo(root, "0.1.0.2", Some(PathBuf::from("/v/0.1.0.1")), refused, undo_ok), Err(ActionError::Io(_))));
+    assert!(drop_unproven_or_undo(root, "0.1.0.2", None, |_: &Path| Ok(()), undo_fails).is_ok());
+
+    // Sem `current` antes não há para onde voltar: a troca fica, dita no erro e no diário.
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    let v1 = version(home, "0.1.0.1", true);
+    std::fs::create_dir_all(link::unproven_file(&hangar(home)).join("preso")).unwrap();
+    let local = server(home, Fake::default().reply("systemctl --user show", 0, FAILED_UNIT));
+    assert!(matches!(local.use_version("0.1.0.1"), Err(ActionError::CurrentLeftOn { version, .. }) if version == "0.1.0.1"));
+    assert_eq!(link::real(&link::current(&hangar(home))).unwrap(), link::real(&v1).unwrap());
+    let last = local_diary(home).pop().unwrap();
+    assert_eq!((last["acao"].as_str(), last["codigo"].as_str()), (Some("use_version"), Some("local_server_current_left_on")));
+    assert!(last["detalhe"].as_str().unwrap().starts_with("0.1.0.1: "));
+    assert!(!local.host.ran("systemctl --user start"), "sem a troca confirmada, nada sobe");
 }
 
 #[test]
