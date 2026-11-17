@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import {
   basename, createSessionForServer, fetchSessionsForServer, getCreationProgress, getHistory,
-  sanitizeSessionName, sendInputForServer, transitionFirstConversation, uniqueSessionName, uploadFileForServer,
+  sanitizeSessionName, sendInputForServer, transitionFirstConversation, uniqueSessionName, uploadFromDiskForServer,
 } from '@hangar/core';
 import type {
   ChatEvent, CreateSessionBody, FirstConversationAttempt, FirstConversationEvent, Server, SessionInfo,
@@ -11,6 +11,7 @@ import { useServers } from './servers';
 import { clearDraft, readDraft, withoutUpload, writeDraft, type DraftAttachment } from './drafts';
 import { resetCreatedChat, submitConversationDraft } from './chat';
 import * as m from '../paraglide/messages';
+import { sendFromDisk } from '../net/uploadFromDisk';
 
 // O servidor expande na abertura: o app não sabe a pasta do usuário e ela costuma estar fora das raízes.
 export const NO_PROJECT_CWD = '~';
@@ -261,8 +262,7 @@ export function sendFirstInput(serverId: string, attemptId: string): Promise<voi
     let path = attach && uploadedPath(attempt, attach);
     if (attach && !path) {
       try {
-        const blob = await (await fetch(attach.uri)).blob();
-        path = (await uploadFileForServer(server, sessionName, new File([blob], attach.name, { type: attach.mime }))).path;
+        path = (await uploadFromDiskForServer(server, sessionName, { name: attach.name, type: attach.mime }, sendFromDisk(attach.uri))).path;
       } catch (cause) {
         // A sessão existe; o anexo segue na tentativa e no rascunho dela, para reenviar aqui ou na conversa.
         setIssue(serverId, { kind: 'local', message: m.nova_conversa_anexo_falhou({ erro: messageOf(cause) }) });

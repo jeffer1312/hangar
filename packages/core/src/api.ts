@@ -797,17 +797,39 @@ export async function uploadFileForServer(
   // Ditado: mesmo motivo do `audioOnly` do `uploadFile`.
   opts?: { audioOnly?: boolean },
 ): Promise<{ path: string }> {
-  const res = await apiFetchRes(`/api/sessions/${encodeURIComponent(name)}/upload${opts?.audioOnly ? '?audio_only=1' : ''}`, {
+  return postUpload(s, name, file, opts?.audioOnly === true, file);
+}
+
+// Arquivo que já está no disco do aparelho: `send` o sobe direto de lá. No celular o fetch leria o
+// arquivo inteiro para a memória do JS, e um arquivo grande derruba o app.
+export function uploadFromDiskForServer(
+  s: Server,
+  name: string,
+  file: { name: string; type: string },
+  send: typeof fetch,
+): Promise<{ path: string }> {
+  return postUpload(s, name, file, false, undefined, send);
+}
+
+async function postUpload(
+  s: Server,
+  name: string,
+  file: { name: string; type: string },
+  audioOnly: boolean,
+  body: RequestInit['body'],
+  send?: typeof fetch,
+): Promise<{ path: string }> {
+  const res = await apiFetchRes(`/api/sessions/${encodeURIComponent(name)}/upload${audioOnly ? '?audio_only=1' : ''}`, {
     method: 'POST',
     headers: {
       'Content-Type': file.type || 'application/octet-stream',
       'X-Filename': encodeURIComponent(file.name || 'arquivo'),
     },
-    body: file,
+    body,
     // Sem teto, uma foto grande num link ruim (tablet em relay) deixava o composer preso em
     // "enviando…" pra sempre. 3min cobre upload legítimo lento; estourou -> erro visível + retry.
     signal: AbortSignal.timeout(180_000),
-  }, s);
+  }, s, false, true, send);
   if (!res.ok) throw new Error(`${res.status}: ${await errorDetail(res)}`);
   return res.json() as Promise<{ path: string }>;
 }
