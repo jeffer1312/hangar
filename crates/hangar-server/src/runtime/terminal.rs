@@ -1595,6 +1595,8 @@ impl Executor {
                 return Ok(reply(id,Disposition::Rejected,json!({"code":"queue_steer_delivery_unproved","cleanup":"not_needed"})));
             }
             if !self.expected_work(payload) {return Ok(reply(id,Disposition::Rejected,json!({"code":"queue_steer_work_changed","cleanup":"not_needed"})));}
+            // Outro processo está digitando no pane: nenhuma tecla, como na drenagem.
+            if self.loaned() {return Ok(reply(id,Disposition::Deferred,json!({"code":"queue_steer_not_delivered","cleanup":"not_needed"})));}
             let services=self.services("maintenance","maintenance","");
             let facts=services.facts(&self.target.binding).await.map_err(|_|error("terminal_facts"))?;
             // A leitura dos fatos espera o terminal: o turno pode ter mudado nesse meio.
