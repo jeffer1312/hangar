@@ -293,9 +293,6 @@ pub struct LeftoversBlock {
     pub tmux_orphans: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cano_orphans: Option<u32>,
-    /// Processos Python ainda escutando na porta do servidor.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub python_alive: Option<u32>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
