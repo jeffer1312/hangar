@@ -56,7 +56,7 @@ vi.mock('./CreateSessionSheet', () => ({
       React.createElement('button', { 'aria-label': 'open-mic', onClick: () => home?.onNewConversation(false) })),
 }));
 vi.mock('../../paraglide/messages', () => ({
-  native_sessions: () => 'Sessões', maquinas_este_aparelho: () => 'machines', config_modal_titulo: () => 'settings', nav_custos: () => 'costs',
+  native_sessions: () => 'Sessões', maquinas_este_aparelho: () => 'machines', config_modal_titulo: () => 'settings', nav_custos: () => 'costs', native_review_title: () => 'reviews',
 }));
 
 import Index from '../../../app/index';
