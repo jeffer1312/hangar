@@ -234,6 +234,33 @@ fn hooks_call_the_stable_launcher_when_the_package_installed_it() {
     assert_eq!(ours(&data, "PreToolUse", "guard-tmux"), vec![format!("{quoted}guard-tmux")]);
 }
 
+/// H-63: o item `claude_hooks` da configuração compartilhada roda os 7 instaladores (a lista `HOOKS`
+/// do pós-aplicar). Todos são conhecidos, o guarda Python antigo vira o subcomando com o matcher
+/// largo, cada hook cai no comando novo e uma segunda passada não muda nada.
+#[test]
+fn shared_config_hooks_item_runs_the_seven_installers_with_the_subcommands() {
+    let root = tempfile::tempdir().unwrap();
+    let (service, settings, repo) = claude_home(root.path());
+    let old = format!("python3 \"{}/.claude/hooks/guard_tmux.py\"", root.path().display());
+    fs::write(&settings, json!({"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": old}]}]}}).to_string()).unwrap();
+    let names = hangar_server::config_sync::after::HOOKS;
+    assert_eq!(names.len(), 7);
+    hooks::sync_installers(&service, &repo, names).unwrap();
+    let data = read(&settings);
+    assert!(ours(&data, "PreToolUse", "guard_tmux.py").is_empty(), "{data}");
+    let guard: Vec<_> = data["hooks"]["PreToolUse"].as_array().unwrap().iter()
+        .filter(|block| hooks::refers(&block["hooks"][0]["command"], "guard-tmux", true)).cloned().collect();
+    assert_eq!(guard, vec![json!({"matcher": "Bash|PowerShell|Read|Grep", "hooks": [{"type": "command", "command": command(root.path(), "guard-tmux")}]})]);
+    assert_eq!(ours(&data, "Stop", "state-hook"), vec![format!("{} || exit 0", command(root.path(), "state-hook"))]);
+    assert_eq!(ours(&data, "MessageDisplay", "preview-hook"), vec![format!("{} || exit 0", command(root.path(), "preview-hook"))]);
+    assert_eq!(ours(&data, "PostToolUseFailure", "askq-capture"), vec![format!("{} || exit 0", command(root.path(), "askq-capture"))]);
+    assert_eq!(ours(&data, "UserPromptSubmit", "nav-hook").len(), 1);
+    assert_eq!(ours(&data, "SessionStart", "pair-context").len(), 1);
+    assert!(data["hooks"].get("SubagentStart").is_none() && data["hooks"].get("SubagentStop").is_none(), "{data}");
+    let changes = hooks::sync_installers(&service, &repo, names).unwrap();
+    assert_eq!(changes["claude"], json!([]), "a segunda passada não muda nada: {changes}");
+}
+
 fn seed_old_pair(dir: &Path) {
     fs::create_dir_all(dir).unwrap();
     fs::write(dir.join("settings.json"), json!({"hooks": {"SessionStart": [
