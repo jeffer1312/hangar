@@ -19,6 +19,28 @@ pub struct Begin {
     /// A marca de pé é de outro servidor ainda vivo no mesmo HOME (binário de branch em teste):
     /// nada foi contado nem regravado.
     pub held_by: Option<u32>,
+    /// A vida anterior ainda não classificada: saiu sem `end` ou gravou a parada. Lida uma vez só,
+    /// porque esta subida tira a parada do arquivo.
+    pub previous: Option<Previous>,
+}
+
+/// A vida anterior, para a subida dizer por que ela saiu.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Previous {
+    pub pid: Option<u32>,
+    /// Quando ela ficou pronta (ISO).
+    pub started: Option<String>,
+    /// Saiu sem `end`: ficou a marca de pé.
+    pub unclean: bool,
+    pub stop: Option<Stop>,
+}
+
+/// A parada que a vida gravou ao sair.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Stop {
+    pub cause: Option<String>,
+    /// A saída foi por falha do servidor (`serve_failed`), não um pedido.
+    pub failed: bool,
 }
 
 /// Na subida, antes de qualquer outra coisa: a marca de pé que ficou é a vida anterior que não saiu
@@ -28,15 +50,50 @@ pub fn begin(dir: &Path, now: &str, alive: impl Fn(u32, f64) -> bool) -> std::io
     let (previous, reset) = read_or_reset(dir)?;
     let running = previous.get("running").and_then(Value::as_bool).unwrap_or(false);
     if running && let Some(pid) = holder(&previous, &alive) {
-        return Ok(Begin { unclean: false, unclean_exits: count_of(&previous), reset: false, held_by: Some(pid) });
+        return Ok(Begin { unclean: false, unclean_exits: count_of(&previous), reset: false, held_by: Some(pid), previous: None });
     }
     let unclean = running;
+    let stop = if running { None } else { stop_of(&previous) };
+    let prior = (unclean || stop.is_some()).then(|| Previous {
+        pid: pid_of(&previous),
+        started: previous.get("started").and_then(Value::as_str).map(str::to_owned),
+        unclean,
+        stop,
+    });
     let count = count_of(&previous) + u64::from(unclean);
     if unclean || reset {
         let last = if unclean { json!(now) } else { previous.get("last_unclean").cloned().unwrap_or(Value::Null) };
         write(dir, &json!({"running": false, "unclean_exits": count, "last_unclean": last}))?;
+    } else if previous.get(STOP).is_some() {
+        let mut consumed = previous;
+        consumed.as_object_mut().expect("read_or_reset devolve objeto").shift_remove(STOP);
+        write(dir, &consumed)?;
     }
-    Ok(Begin { unclean, unclean_exits: count, reset, held_by: None })
+    Ok(Begin { unclean, unclean_exits: count, reset, held_by: None, previous: prior })
+}
+
+/// A chave da parada gravada por `end_with`: `{pid, cause, failed}`.
+const STOP: &str = "stop";
+
+fn pid_of(life: &Value) -> Option<u32> {
+    u32::try_from(life.get("pid")?.as_u64()?).ok()
+}
+
+/// A parada só vale se for da vida que o arquivo descreve: a que uma versão antiga não apagou é de
+/// outra vida.
+fn stop_of(life: &Value) -> Option<Stop> {
+    let stop = life.get(STOP)?;
+    if stop.get("pid").and_then(Value::as_u64) != life.get("pid").and_then(Value::as_u64) { return None; }
+    Some(Stop {
+        cause: stop.get("cause").and_then(Value::as_str).map(str::to_owned),
+        failed: stop.get("failed").and_then(Value::as_bool).unwrap_or(false),
+    })
+}
+
+/// O pid do servidor de pé segundo a marca; `None` sem marca de pé.
+pub fn running_pid(dir: &Path) -> std::io::Result<Option<u32>> {
+    let life = read(dir)?;
+    Ok(if life.get("running").and_then(Value::as_bool).unwrap_or(false) { pid_of(&life) } else { None })
 }
 
 /// O pid da marca, quando o mesmo processo (pid e nascimento) ainda está de pé. Marca sem
@@ -72,6 +129,7 @@ pub fn mark_running(dir: &Path, pid: u32, birth: Option<f64>, now: &str, alive: 
         Some(birth) => map.insert("birth".into(), json!(birth)),
         None => map.shift_remove("birth"),
     };
+    map.shift_remove(STOP);
     map.insert("started".into(), json!(now));
     write(dir, &life).map(|()| Mark::Marked)
 }
@@ -85,15 +143,26 @@ pub enum Ended {
     Reset,
 }
 
-/// Parada limpa desta vida: só apaga a marca de pé se ela for deste `pid`.
+/// Parada desta vida sem causa conhecida (o lançador fechando a de um filho que não a gravou).
 pub fn end(dir: &Path, pid: u32) -> std::io::Result<Ended> {
+    end_with(dir, pid, None, false)
+}
+
+/// Parada desta vida: só apaga a marca de pé se ela for deste `pid`, e grava a causa e se a saída
+/// foi por falha. Parada já gravada desta vida fica: quem fecha depois (o lançador) não sabe a causa.
+pub fn end_with(dir: &Path, pid: u32, cause: Option<&str>, failed: bool) -> std::io::Result<Ended> {
+    let stop = json!({"pid": pid, "cause": cause, "failed": failed});
     let (mut life, reset) = read_or_reset(dir)?;
     if reset {
-        write(dir, &json!({"running": false, "unclean_exits": 0, "last_unclean": null}))?;
+        write(dir, &json!({"running": false, "unclean_exits": 0, "last_unclean": null, "pid": pid, "stop": stop}))?;
         return Ok(Ended::Reset);
     }
     if life.get("pid").and_then(Value::as_u64) != Some(u64::from(pid)) { return Ok(Ended::OtherLife); }
-    life.as_object_mut().expect("read_or_reset devolve objeto").insert("running".into(), json!(false));
+    let running = life.get("running").and_then(Value::as_bool).unwrap_or(false);
+    if !running && stop_of(&life).is_some() { return Ok(Ended::Cleared); }
+    let map = life.as_object_mut().expect("read_or_reset devolve objeto");
+    map.insert("running".into(), json!(false));
+    map.insert(STOP.into(), stop);
     write(dir, &life)?;
     Ok(Ended::Cleared)
 }

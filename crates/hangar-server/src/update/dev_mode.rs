@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 
+use hangar_api::status::ExitKind;
 use hangar_package::{Manifest, Version};
 
 use super::http::{mode, Mode};
@@ -173,7 +174,10 @@ pub async fn switch<R: Restarter, H: HealthProbe>(home: &Path, state_dir: &Path,
         .map_err(|e| Failure::new("erro_dev_mode_falhou", e.to_string()))?;
     if restarter.manual() { return Ok(Outcome::SwitchedManual(target)); }
     on_step("reiniciar");
-    let proved = match restarter.restart().await {
+    let intent = super::stop_intent::before_restart(&layout.hangar, ExitKind::Requested, "dev_mode", None, None);
+    let restarted = restarter.restart().await;
+    intent.settle(&restarted);
+    let proved = match restarted {
         Err(e) => Err(format!("o servidor não reiniciou: {e}")),
         Ok(()) => match &manifest {
             Some(manifest) => super::wait_rust(health, manifest, before, settings).await,
@@ -195,11 +199,15 @@ async fn roll_back<R: Restarter, H: HealthProbe>(layout: &Layout, previous: Opti
     // O checkout não tem manifesto: a prova da volta para ele é o Rust com outro pid.
     let expected = super::read_manifest(&previous);
     let failed_pid = super::failed_pid(health, expected.as_ref()).await;
+    let hangar = layout.hangar.clone();
     let layout = layout.clone();
     if let Err(e) = super::blocking(move || super::swap(&layout, &previous)).await {
         return failed(format!("{why}; e o current não voltou para onde estava: {e}"));
     }
-    if let Err(e) = restarter.restart().await {
+    let intent = super::stop_intent::before_restart(&hangar, ExitKind::Requested, "dev_mode", None, None);
+    let restarted = restarter.restart().await;
+    intent.settle(&restarted);
+    if let Err(e) = restarted {
         return failed(format!("{why}; o current voltou para onde estava, mas o reinício falhou: {e}"));
     }
     if let Err(e) = super::wait_previous(health, expected.as_ref(), failed_pid, settings).await {

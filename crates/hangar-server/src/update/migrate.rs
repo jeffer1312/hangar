@@ -695,10 +695,18 @@ fn revert(m: &Machine<'_>, done: &[Done]) -> Vec<String> {
     failures
 }
 
+/// Para o backend com a marca de intenção: a subida seguinte diz que a saída foi a migração.
+fn stop_marked(m: &Machine<'_>, cause: &str) -> Result<(), String> {
+    let intent = super::stop_intent::before_restart(&m.hangar(), hangar_api::status::ExitKind::Update, cause, None, None);
+    let stopped = m.service.stop();
+    intent.settle(&stopped);
+    stopped
+}
+
 /// Volta a máquina como estava e sobe o backend de antes. `running`: o backend novo está de pé.
 fn roll_back(m: &Machine<'_>, record: &Record, running: bool, why: String) -> String {
     // Desfazer com o backend novo de pé trocaria os dados e o `current` debaixo dele.
-    if running && let Err(e) = m.service.stop() {
+    if running && let Err(e) = stop_marked(m, "rollback") {
         return format!("{why}; e o backend novo não parou ({e}), então a volta não mexeu em nada: a máquina segue migrada \
             pela metade, com o registro em {}; pare o backend e rode `hangar-server migrate-package --undo`", m.partial().display());
     }
@@ -732,7 +740,7 @@ fn lock(m: &Machine<'_>) -> Result<UpdateLock, String> {
 fn undo_interrupted(m: &Machine<'_>) -> Result<bool, String> {
     if !m.partial().exists() { return Ok(false); }
     let record = read_record(&m.partial()).ok_or_else(|| format!("o registro {} está ilegível; confira à mão", m.partial().display()))?;
-    m.service.stop().map_err(|e| format!("o backend não parou para desfazer a migração interrompida: {e}"))?;
+    stop_marked(m, "migrate").map_err(|e| format!("o backend não parou para desfazer a migração interrompida: {e}"))?;
     let failures = revert(m, &record.done);
     let started = m.service.start();
     if !failures.is_empty() {
@@ -809,7 +817,7 @@ pub async fn migrate<H: HealthProbe>(m: &Machine<'_>, health: &H, dry_run: bool)
         reason: why, notes, done: Vec::new() };
     // O registro nasce antes de parar: morte daqui em diante sempre deixa o que desfazer.
     save(&m.partial(), &record)?;
-    if let Err(e) = m.service.stop() {
+    if let Err(e) = stop_marked(m, "migrate") {
         let _ = m.service.start();
         let _ = std::fs::remove_file(m.partial());
         return Err(format!("o backend não parou: {e}; nada foi mudado"));
@@ -845,7 +853,7 @@ pub async fn undo<H: HealthProbe>(m: &Machine<'_>, health: &H) -> Result<(), Str
     refuse_inside_service(m)?;
     let _lock = lock(m)?;
     let before = match health.read().await { Reading::Rust { pid, .. } => pid, _ => None };
-    m.service.stop().map_err(|e| format!("o backend não parou: {e}; nada foi desfeito"))?;
+    stop_marked(m, "migrate").map_err(|e| format!("o backend não parou: {e}; nada foi desfeito"))?;
     let failures = revert(m, &record.done);
     if failures.is_empty() {
         let _ = std::fs::remove_file(&path);

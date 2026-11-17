@@ -17,6 +17,7 @@ use serde_json::json;
 
 use super::dev_mode::Request as DevRequest;
 use super::restart::{SystemRestarter, Topology};
+use hangar_api::status::ExitKind;
 use super::{HealthProbe, Layout, Outcome, Reading, Release, Restarter, Settings, StateFile, UpdateLock};
 use crate::accounts::environment::AccountEnvironment;
 
@@ -364,7 +365,10 @@ pub async fn restart_only<R: Restarter, H: HealthProbe>(parts: &Parts, request_i
     let mark = (!restarter.manual()).then(|| super::startup_output::Mark::take(false));
     let trail = super::startup_output::Trail::new(health);
     let restarting = std::time::Instant::now();
-    let result = match restarter.restart().await {
+    let intent = super::stop_intent::before_restart(&parts.layout.hangar, ExitKind::Requested, "restart_only", None, None);
+    let restarted = restarter.restart().await;
+    intent.settle(&restarted);
+    let result = match restarted {
         Err(e) => Err(format!("o servidor não reiniciou: {e}")),
         Ok(()) => super::wait_new(&trail, before, settings).await,
     };
@@ -421,7 +425,10 @@ pub async fn dev_update<R: Restarter, H: HealthProbe>(parts: &Parts, root: &Path
     }
     state.step("reiniciar");
     let before = match health.read().await { Reading::Rust { pid, .. } => pid, _ => None };
-    let result = match restarter.restart().await {
+    let intent = super::stop_intent::before_restart(&parts.layout.hangar, ExitKind::Requested, "dev_mode", Some(from.as_str()), Some(to.as_str()));
+    let restarted = restarter.restart().await;
+    intent.settle(&restarted);
+    let result = match restarted {
         Err(e) => Err(format!("o servidor não reiniciou: {e}")),
         Ok(()) => super::wait_new(health, before, settings).await,
     };

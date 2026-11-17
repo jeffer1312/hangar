@@ -26,6 +26,7 @@ pub mod restart;
 pub mod startup_output;
 pub mod state;
 pub mod steps;
+pub mod stop_intent;
 
 #[cfg(test)]
 mod tests;
@@ -768,7 +769,13 @@ async fn roll_back<R: Restarter, H: HealthProbe>(job: &Job<'_>, state: &StateFil
     let back = Instant::now();
     let failure = match put_back(job.layout, previous).await {
         Err(e) => Some(format!("{why}; e não consegui voltar para a versão anterior: {e}")),
-        Ok(()) => restarter.restart().await.err().map(|e| format!("{why}; e a volta para a versão anterior também falhou: {e}")),
+        Ok(()) => {
+            let intent = stop_intent::before_restart(&job.layout.hangar, hangar_api::status::ExitKind::Update, "rollback",
+                None, expected.map(|m| m.version.as_str()));
+            let restarted = restarter.restart().await;
+            intent.settle(&restarted);
+            restarted.err().map(|e| format!("{why}; e a volta para a versão anterior também falhou: {e}"))
+        }
     };
     // A máquina pode ficar fora do ar: o retrato da volta é o que diz por quê.
     let trail = startup_output::Trail::new(health);
@@ -1032,7 +1039,10 @@ pub async fn run<R: Restarter, H: HealthProbe>(job: &Job<'_>, steps: std::sync::
     let restarting = Instant::now();
     let mark = job.startup_output.map(|_| startup_output::Mark::take(false));
     let trail = startup_output::Trail::new(health);
+    let intent = stop_intent::before_restart(&job.layout.hangar, hangar_api::status::ExitKind::Update, "package",
+        before.as_ref().map(|m| m.version.as_str()), Some(manifest.version.as_str()));
     let restarted = restarter.restart().await;
+    intent.settle(&restarted);
     let restart_took = restarting.elapsed();
     let proved = match restarted {
         Err(e) => Err(format!("o servidor não reiniciou: {e}")),

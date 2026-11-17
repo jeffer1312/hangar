@@ -349,8 +349,8 @@ fn platform() -> (String, String) {
     (format!("Windows {release} {build}"), std::env::var("PROCESSOR_ARCHITECTURE").unwrap_or_default())
 }
 
-/// Subida sem o Python: a queda da vida anterior (marca de pé que ficou) e o `backend.inicio`, os
-/// nomes que o relatório já colhe. Bloqueante; roda antes do log desta vida.
+/// Subida sem o Python: a queda da vida anterior (marca de pé que ficou), por que ela saiu
+/// (`hangar_server.saida`) e o `backend.inicio`. Bloqueante; roda antes do log desta vida.
 pub fn record_boot(hangar_dir: &std::path::Path, log: Option<&std::path::Path>) {
     let pid = std::process::id();
     let mut lines = Vec::new();
@@ -363,9 +363,14 @@ pub fn record_boot(hangar_dir: &std::path::Path, log: Option<&std::path::Path>) 
             if begin.reset {
                 lines.push(json!({"evento": "hangar_server.vida_ilegivel", "nivel": "aviso", "codigo": "server_life_reset"}));
             }
+            let saida = std::cell::OnceCell::new();
+            let errors = || saida.get_or_init(|| log.map(|log| hangar_boot::life::last_errors(log, 3)).unwrap_or_default()).clone();
             if begin.unclean {
-                let saida = log.map(|log| hangar_boot::life::last_errors(log, 3)).unwrap_or_default();
-                lines.push(json!({"evento": "hangar_server.caiu", "nivel": "aviso", "saidas_nao_limpas": begin.unclean_exits, "saida": saida}));
+                lines.push(json!({"evento": "hangar_server.caiu", "nivel": "aviso", "saidas_nao_limpas": begin.unclean_exits, "saida": errors()}));
+            }
+            // A marca de intenção é da vida que o outro servidor de pé ainda vive: fica para ela.
+            if begin.held_by.is_none() {
+                lines.extend(crate::update::stop_intent::record_previous(hangar_dir, begin.previous.as_ref(), errors));
             }
         }
         Err(error) => lines.push(json!({"evento": "hangar_server.vida_ilegivel", "nivel": "aviso",
@@ -411,11 +416,12 @@ pub fn record_running(hangar_dir: &std::path::Path) {
     record_blocking(diary_dir().as_deref(), &[line], "subida");
 }
 
-/// Saída deliberada (sinal, falha do servidor): a marca de pé desta vida sai, e a próxima subida
-/// não conta queda. `nivel` erro quando a saída foi por falha.
+/// Saída deliberada (sinal, falha do servidor): a marca de pé desta vida sai com a causa, e a
+/// próxima subida não conta queda pela marca; `failed` ela classifica como queda. `nivel` erro
+/// quando a saída foi por falha.
 pub fn record_stop(hangar_dir: &std::path::Path, cause: &str, failed: bool) {
     let mut line = json!({"evento": "backend.encerrando", "nivel": if failed { "erro" } else { "ok" }, "causa": cause});
-    match hangar_boot::life::end(hangar_dir, std::process::id()) {
+    match hangar_boot::life::end_with(hangar_dir, std::process::id(), Some(cause), failed) {
         Ok(hangar_boot::life::Ended::Reset) => line["codigo"] = json!("server_life_reset"),
         Ok(_) => {},
         Err(error) => {

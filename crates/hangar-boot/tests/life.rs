@@ -1,4 +1,4 @@
-use hangar_boot::life::{begin, end, last_errors, mark_running, reduce_error, unclean_exits, Ended, Mark, FILE};
+use hangar_boot::life::{begin, end, end_with, last_errors, mark_running, reduce_error, running_pid, unclean_exits, Ended, Mark, Previous, Stop, FILE};
 use hangar_boot::notify::Notifier;
 use proptest::prelude::*;
 
@@ -99,6 +99,59 @@ fn b24_unreadable_life_file_restarts_and_says_so() {
     std::fs::write(dir.path().join(FILE), b"{torto").unwrap();
     assert_eq!(end(dir.path(), 1).unwrap(), Ended::Reset);
     assert_eq!(life(dir.path())["running"], false, "arquivo ilegível na parada vira parado, nunca fica de pé");
+}
+
+/// A parada grava a causa e a falha; a subida seguinte as entrega uma vez só.
+#[test]
+fn exit_stop_cause_reaches_the_next_boot_once() {
+    let dir = tempfile::tempdir().unwrap();
+    boot(dir.path(), 1, T);
+    assert_eq!(running_pid(dir.path()).unwrap(), Some(1));
+    assert_eq!(end_with(dir.path(), 1, Some("sigterm"), false).unwrap(), Ended::Cleared);
+    assert_eq!(running_pid(dir.path()).unwrap(), None);
+    let next = begin(dir.path(), T, dead).unwrap();
+    assert_eq!(next.previous, Some(Previous { pid: Some(1), started: Some(T.into()), unclean: false,
+        stop: Some(Stop { cause: Some("sigterm".into()), failed: false }) }));
+    assert!(life(dir.path()).get("stop").is_none(), "a subida consome a parada");
+    // Subida que não ficou pronta não relê a mesma vida.
+    assert_eq!(begin(dir.path(), T, dead).unwrap().previous, None);
+}
+
+/// `serve_failed` grava a parada como falha, sem contar queda pela marca.
+#[test]
+fn exit_failed_stop_is_kept_as_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    boot(dir.path(), 1, T);
+    end_with(dir.path(), 1, Some("serve_failed"), true).unwrap();
+    let next = boot(dir.path(), 2, T);
+    assert!(!next.unclean);
+    assert_eq!(next.previous.unwrap().stop, Some(Stop { cause: Some("serve_failed".into()), failed: true }));
+    assert!(life(dir.path()).get("stop").is_none(), "a marca de pé nova não carrega a parada da anterior");
+}
+
+/// O lançador fechando depois não apaga a causa que o servidor gravou; fechando sozinho, a parada fica sem causa.
+#[test]
+fn exit_launcher_end_keeps_the_server_cause() {
+    let dir = tempfile::tempdir().unwrap();
+    boot(dir.path(), 1, T);
+    end_with(dir.path(), 1, Some("ctrl_close"), false).unwrap();
+    assert_eq!(end(dir.path(), 1).unwrap(), Ended::Cleared);
+    assert_eq!(begin(dir.path(), T, dead).unwrap().previous.unwrap().stop.unwrap().cause.as_deref(), Some("ctrl_close"));
+    boot(dir.path(), 2, T);
+    end(dir.path(), 2).unwrap();
+    assert_eq!(begin(dir.path(), T, dead).unwrap().previous.unwrap().stop, Some(Stop { cause: None, failed: false }));
+}
+
+/// Queda: a vida anterior vem sem parada e com o pid dela, que a marca de intenção confere.
+#[test]
+fn exit_unclean_life_comes_with_its_pid() {
+    let dir = tempfile::tempdir().unwrap();
+    boot(dir.path(), 7, T);
+    let next = begin(dir.path(), T, dead).unwrap();
+    assert_eq!(next.previous, Some(Previous { pid: Some(7), started: Some(T.into()), unclean: true, stop: None }));
+    // Parada de outra vida (versão antiga que não a apagou) não vale.
+    std::fs::write(dir.path().join(FILE), r#"{"running":false,"pid":3,"stop":{"pid":2,"cause":"x","failed":false}}"#).unwrap();
+    assert_eq!(begin(dir.path(), T, dead).unwrap().previous, None);
 }
 
 #[test]

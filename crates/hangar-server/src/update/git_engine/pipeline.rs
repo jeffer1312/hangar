@@ -5,6 +5,8 @@ use super::{
     tail,
 };
 use serde_json::{Value, json};
+use crate::update::stop_intent;
+use hangar_api::status::ExitKind;
 fn panic_cause(payload: &(dyn std::any::Any + Send)) -> String {
     payload.downcast_ref::<String>().cloned()
         .or_else(|| payload.downcast_ref::<&str>().map(|text| (*text).to_owned()))
@@ -73,7 +75,12 @@ impl Service {
         if let Err(error) = self
             .restore_dist()
             .and_then(|_| self.prepare(topology, false, None, source, platform))
-            .and_then(|_| self.restart_service(topology, port))
+            .and_then(|_| {
+                let intent = stop_intent::before_restart(&self.home.join(".hangar"), ExitKind::Update, "rollback", None, Some(commit));
+                let restarted = self.restart_service(topology, port);
+                intent.settle(&restarted);
+                restarted
+            })
         {
             return self.failed(
                 &format!("{message}; e a volta para a versao anterior tambem falhou: {error}"),
@@ -240,7 +247,11 @@ impl Service {
         }
         let before = self.server_pid(topology, port);
         if let Err(error)=self.step("reiniciar") {return super::super::StateSnapshot::failure(error);}
-        if let Err(error) = self.restart_service(topology, port) {
+        let to = self.state().read().get("commit_para").and_then(Value::as_str).map(str::to_owned);
+        let intent = stop_intent::before_restart(&self.home.join(".hangar"), ExitKind::Update, "checkout", Some(from), to.as_deref());
+        let restarted = self.restart_service(topology, port);
+        intent.settle(&restarted);
+        if let Err(error) = restarted {
             return self.rollback(
                 from,
                 &format!("o servidor nao reiniciou: {error}"),
@@ -304,7 +315,10 @@ impl Service {
             service.state().try_write(json!({"fase":"rodando","etapa":"reiniciar","passo":2,"total":2,"texto":"Reiniciando o servidor","etapa_inicio":chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%:z").to_string()}))?;
             let topology = service.topology();
             let before = service.server_pid(topology, port);
-            service.restart_service(topology, port)?;
+            let intent = stop_intent::before_restart(&service.home.join(".hangar"), ExitKind::Requested, "restart_only", None, None);
+            let restarted = service.restart_service(topology, port);
+            intent.settle(&restarted);
+            restarted?;
             if !service.up(port, 30) {
                 return Err("o servidor nao respondeu depois de reiniciar".into());
             }
