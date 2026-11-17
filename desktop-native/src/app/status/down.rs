@@ -639,6 +639,8 @@ fn listeners_body(port: u16, read: Option<&Listeners>) -> AnyElement {
 
 #[cfg(test)]
 mod tests {
+    use core::prelude::v1::test;
+
     use super::*;
 
     fn probe(state: LocalState) -> Probe {
