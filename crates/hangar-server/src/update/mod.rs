@@ -238,7 +238,10 @@ pub async fn entry(client: &reqwest::Client, release: &Release, platform: &str) 
         match read_index(client, release).await {
             Ok(index) => break index,
             Err((error, retry)) => match waits.next().filter(|_| retry) {
-                Some(wait) => tokio::time::sleep(wait).await,
+                Some(wait) => {
+                    tracing::warn!(code = "update_index_retry", error = %error, wait_s = wait.as_secs(), "índice da release não lido; tentando de novo");
+                    tokio::time::sleep(wait).await;
+                }
                 None => return Err(error),
             },
         }
