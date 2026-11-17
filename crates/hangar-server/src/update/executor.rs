@@ -725,9 +725,15 @@ mod tests {
         assert_eq!((state["fase"].clone(), state["ok"].clone()), (json!("pronto"), json!(false)));
     }
 
-    struct Restart(AtomicUsize);
+    /// Conta os reinícios e guarda a intenção de cada um.
+    #[derive(Default)]
+    struct Restart(AtomicUsize, Mutex<Vec<RestartIntent>>);
     impl Restarter for Restart {
-        async fn restart(&self, _why: RestartIntent) -> Result<(), String> { self.0.fetch_add(1, Ordering::SeqCst); Ok(()) }
+        async fn restart(&self, why: RestartIntent) -> Result<(), String> {
+            self.1.lock().unwrap().push(why);
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
     }
 
     /// Antes do reinício o pid 10; depois, o 11 (ou o mesmo, com `same`).
@@ -746,17 +752,18 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let args = Args::parse(&strings(&["--restart", "--request-id", "r1"])).unwrap();
         let parts = Parts::new(&env(dir.path(), None), &args, "x");
-        let restart = Restart(AtomicUsize::new(0));
+        let restart = Restart::default();
         assert!(restart_only(&parts, "r1", &restart, &Health(&restart.0, false), &fast()).await);
         let state = StateFile::new(&parts.state_dir).read();
         assert_eq!((state["fase"].clone(), state["ok"].clone(), state["request_id"].clone(), state["pid"].clone()),
             (json!("pronto"), json!(true), json!("r1"), json!(std::process::id())));
+        assert_eq!(*restart.1.lock().unwrap(), [RestartIntent::new(ExitKind::Requested, "restart_only")], "a marca diz que foi o reinício avulso");
 
         // Outra pasta, outra trava: um filho que outro teste lança herda a descrição do arquivo da
         // trava até o exec, e a segunda chamada na mesma pasta podia achá-la ocupada.
         let dir = tempfile::tempdir().unwrap();
         let parts = Parts::new(&env(dir.path(), None), &args, "x");
-        let same = Restart(AtomicUsize::new(0));
+        let same = Restart::default();
         assert!(!restart_only(&parts, "r2", &same, &Health(&same.0, true), &fast()).await);
         let state = StateFile::new(&parts.state_dir).read();
         assert_eq!(state["ok"], false);
@@ -783,7 +790,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (parts, checkout) = packaged(dir.path());
         let state = StateFile::new(&parts.state_dir);
-        let restart = Restart(AtomicUsize::new(0));
+        let restart = Restart::default();
         let health = Health(&restart.0, false);
 
         assert!(!dev_mode(&parts, &DevRequest::On(checkout.join("nada")), false, &restart, &health, &fast(), silent()).await);
@@ -824,7 +831,7 @@ mod tests {
         let clone = super::super::dev::tests::behind_clone(dir.path());
         let parts = Parts::new(&env(dir.path(), None), &Args::parse(&strings(&["--dev"])).unwrap(), "x");
         std::fs::write(clone.join("a"), "editado").unwrap();
-        let restart = Restart(AtomicUsize::new(0));
+        let restart = Restart::default();
         assert!(!dev_update(&parts, &clone, &restart, &Health(&restart.0, false), &fast(), silent()).await);
         assert_eq!(restart.0.load(Ordering::SeqCst), 0);
         assert!(!clone.join("b").exists(), "nada foi puxado");
@@ -863,7 +870,7 @@ mod tests {
         std::fs::create_dir_all(python.parent().unwrap()).unwrap();
         std::fs::write(&python, "").unwrap();
         let parts = Parts::new(&env(dir.path(), None), &Args::parse(&strings(&["--dev"])).unwrap(), "x");
-        let restart = Arc::new(Restart(AtomicUsize::new(0)));
+        let restart = Arc::new(Restart::default());
         let runner = Arc::new(Seen { restarts: Some(restart.clone()), ..Seen::default() });
         assert!(dev_update(&parts, &clone, &*restart, &Health(&restart.0, false), &fast(), runner.clone()).await);
         let calls = runner.calls.lock().unwrap().clone();

@@ -162,8 +162,9 @@ mod tests {
 
     fn why() -> RestartIntent { RestartIntent::new(hangar_api::status::ExitKind::Requested, "restart_only") }
 
-    /// O reinício grava a marca de intenção com o servidor de pé; na mão, onde nada para, não grava;
-    /// recusado com o servidor ainda de pé, a apaga.
+    /// O reinício grava a marca de intenção com o servidor de pé, com `de`/`para` quando a intenção os
+    /// traz, no systemd e no Windows; na mão, onde nada para, não grava; recusado com o servidor ainda
+    /// de pé, a apaga.
     #[tokio::test]
     async fn update_restart_marks_the_stop_intent_only_when_it_stops_the_server() {
         let marked = || {
@@ -173,14 +174,29 @@ mod tests {
         };
         let file = |dir: &Path| dir.join(".hangar").join(crate::update::stop_intent::FILE);
 
+        let read = |dir: &Path| serde_json::from_slice::<serde_json::Value>(&std::fs::read(file(dir)).unwrap()).unwrap();
+
         let dir = marked();
         restarter(Topology::Systemd, script(|_| code(0, "")), dir.path()).restart(why()).await.unwrap();
-        let written: serde_json::Value = serde_json::from_slice(&std::fs::read(file(dir.path())).unwrap()).unwrap();
+        let written = read(dir.path());
         assert_eq!((written["tipo"].as_str(), written["causa"].as_str(), written["pid"].as_u64()), (Some("requested"), Some("restart_only"), Some(41)));
+        assert!(written.get("de").is_none() && written.get("para").is_none(), "{written}");
+
+        let dir = marked();
+        let update = RestartIntent::new(hangar_api::status::ExitKind::Update, "package").between(Some("0.1.0.10"), Some("0.1.0.11"));
+        restarter(Topology::Systemd, script(|_| code(0, "")), dir.path()).restart(update).await.unwrap();
+        let written = read(dir.path());
+        assert_eq!((written["tipo"].as_str(), written["causa"].as_str(), written["de"].as_str(), written["para"].as_str()),
+            (Some("update"), Some("package"), Some("0.1.0.10"), Some("0.1.0.11")));
 
         let dir = marked();
         restarter(Topology::Manual, script(|_| code(0, "")), dir.path()).restart(why()).await.unwrap();
         assert!(!file(dir.path()).exists(), "na mão nada para");
+
+        let (dir, _root) = windows_home("0.1.0.11");
+        hangar_boot::life::mark_running(&dir.path().join(".hangar"), 41, Some(41.0), "agora", |_, _| false).unwrap();
+        restarter(Topology::Windows, script(|_| code(0, "")), dir.path()).restart(why()).await.unwrap();
+        assert_eq!(read(dir.path())["causa"].as_str(), Some("restart_only"), "as tarefas do Windows também derrubam o servidor");
 
         let dir = marked();
         let refused = script(|c| code(if c.contains("restart") { 1 } else { 0 }, "Access denied"));

@@ -352,4 +352,37 @@ mod stop_intent_tests {
         assert_eq!(service.state().read()["reiniciar_manual"], json!(true));
         assert!(!hangar.join(crate::update::stop_intent::FILE).exists(), "na mão nada para");
     }
+
+    /// Com serviço (systemd, Windows, launchd) a marca vai antes do reinício, com `de`/`para`; o
+    /// reinício recusado com o servidor ainda de pé a apaga. Os programas do serviço são falsos, no PATH.
+    #[cfg(unix)]
+    #[test]
+    fn stop_intent_is_written_by_every_service_restart() {
+        for (topology, program, code) in [("systemd", "systemctl", 0), ("windows", "powershell", 0), ("launchd", "launchctl", 0), ("systemd", "systemctl", 1)] {
+            let dir = tempfile::tempdir().unwrap();
+            let (home, root, bin) = (dir.path().join("home"), dir.path().join("repo"), dir.path().join("bin"));
+            let hangar = home.join(".hangar");
+            std::fs::create_dir_all(&root).unwrap();
+            std::fs::create_dir_all(&bin).unwrap();
+            // `install` grava sem deixar descritor de escrita aberto neste processo: sem "text file busy".
+            let source = dir.path().join("programa");
+            std::fs::write(&source, format!("#!/bin/sh\nexit {code}\n")).unwrap();
+            assert!(std::process::Command::new("install").arg("-m").arg("755").arg(&source).arg(bin.join(program)).status().unwrap().success());
+            hangar_boot::life::mark_running(&hangar, 41, Some(41.0), "agora", |_, _| false).unwrap();
+            let environment = [("PATH".to_owned(), bin.display().to_string()), ("HOME".to_owned(), home.display().to_string())].into();
+            let service = Service::new(home, root, dir.path().join("claude"), environment);
+            let intent = RestartIntent::new(ExitKind::Update, "checkout").between(Some("aaa"), Some("bbb"));
+            let restarted = service.restart_service(topology, 8123, intent);
+            let file = hangar.join(crate::update::stop_intent::FILE);
+            if code != 0 {
+                assert!(restarted.is_err());
+                assert!(!file.exists(), "reinício recusado com o servidor ainda de pé");
+                continue;
+            }
+            restarted.unwrap();
+            let written: Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+            assert_eq!((written["tipo"].as_str(), written["causa"].as_str(), written["de"].as_str(), written["para"].as_str(), written["pid"].as_u64()),
+                (Some("update"), Some("checkout"), Some("aaa"), Some("bbb"), Some(41)), "{topology}");
+        }
+    }
 }
