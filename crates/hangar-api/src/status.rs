@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 /// Raiz do retrato. Só `generated_at` e `attention` são obrigatórios: servidor que ainda não lê um
 /// bloco simplesmente não o manda.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct StatusSnapshot {
     pub generated_at: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]

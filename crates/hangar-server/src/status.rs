@@ -159,43 +159,34 @@ impl Hub {
     }
 }
 
-/// Os blocos da última leitura de cada um.
+/// Os blocos da última leitura de cada um, guardados no próprio retrato: publicar não copia nada.
 #[derive(Default)]
 struct Parts {
     package_version: Option<String>,
-    server: Option<ServerBlock>,
-    exits: Option<ExitsBlock>,
-    update: Option<UpdateBlock>,
-    machines: Option<Vec<Machine>>,
-    sessions: Option<SessionsBlock>,
-    slow: Option<SlowBlock>,
-    host: Option<HostBlock>,
-    outside: Option<OutsideBlock>,
-    leftovers: Option<LeftoversBlock>,
+    snapshot: StatusSnapshot,
 }
 
 impl Parts {
     fn absorb(&mut self, hub: &Hub, reading: Reading, report: &Report) {
         self.package_version = reading.package_version;
-        hub.settle(&mut self.server, reading.server, "server", report);
-        hub.settle(&mut self.exits, reading.exits, "exits", report);
-        hub.settle(&mut self.update, reading.update, "update", report);
-        hub.settle(&mut self.machines, reading.machines, "machines", report);
-        hub.settle(&mut self.sessions, reading.sessions, "sessions", report);
-        hub.settle(&mut self.slow, reading.slow, "slow", report);
-        hub.settle(&mut self.host, reading.host, "host", report);
-        hub.settle(&mut self.outside, reading.outside, "outside", report);
-        hub.settle(&mut self.leftovers, reading.leftovers, "leftovers", report);
+        let s = &mut self.snapshot;
+        hub.settle(&mut s.server, reading.server, "server", report);
+        hub.settle(&mut s.exits, reading.exits, "exits", report);
+        hub.settle(&mut s.update, reading.update, "update", report);
+        hub.settle(&mut s.machines, reading.machines, "machines", report);
+        hub.settle(&mut s.sessions, reading.sessions, "sessions", report);
+        hub.settle(&mut s.slow, reading.slow, "slow", report);
+        hub.settle(&mut s.host, reading.host, "host", report);
+        hub.settle(&mut s.outside, reading.outside, "outside", report);
+        hub.settle(&mut s.leftovers, reading.leftovers, "leftovers", report);
     }
 
-    fn snapshot(&self, now: DateTime<Utc>) -> StatusSnapshot {
-        let mut snapshot = StatusSnapshot {
-            generated_at: stamp(now), server: self.server.clone(), exits: self.exits.clone(), update: self.update.clone(),
-            machines: self.machines.clone(), sessions: self.sessions.clone(), slow: self.slow.clone(), host: self.host.clone(),
-            outside: self.outside.clone(), leftovers: self.leftovers.clone(), attention: Vec::new(),
-        };
-        snapshot.attention = hangar_status::attention::attention(&snapshot, self.package_version.as_deref());
-        snapshot
+    /// O retrato com a hora e os pontos de atenção desta rodada.
+    fn snapshot(&mut self, now: DateTime<Utc>) -> &StatusSnapshot {
+        self.snapshot.generated_at = stamp(now);
+        self.snapshot.attention = Vec::new();
+        self.snapshot.attention = hangar_status::attention::attention(&self.snapshot, self.package_version.as_deref());
+        &self.snapshot
     }
 }
 
@@ -229,7 +220,7 @@ async fn produce(hub: Arc<Hub>, collect: Arc<dyn Collect>, report: Report) {
         let due = Due { medium: round % MEDIUM_EVERY == 0, slow: round % SLOW_EVERY == 0 };
         let reading = collect.collect(due).await;
         parts.absorb(&hub, reading, &report);
-        match serde_json::to_string(&parts.snapshot(Utc::now())) {
+        match serde_json::to_string(parts.snapshot(Utc::now())) {
             Ok(json) => { hub.tx.send_replace(Some(json.into())); }
             Err(_) => report("snapshot", "status_unserializable"),
         }
@@ -392,12 +383,18 @@ struct Live {
     funnel: Mutex<Option<bool>>,
     /// Restos do multiplexador vistos na rodada anterior; `None` antes da primeira ou com ele fora.
     tmux_seen: Mutex<Option<HashSet<String>>>,
+    /// Sessões do multiplexador já confirmadas do Hangar, por nome e hora de criação: o
+    /// `CP_PROVIDER` delas não muda, e reler custa um processo por sessão a cada rodada.
+    tmux_hangar: Mutex<HashSet<(String, String)>>,
+    /// Memória e discos relidos no mesmo leitor a cada rodada.
+    host: Arc<Mutex<hangar_status::host::HostReader>>,
 }
 
 impl Live {
     fn new(st: Arc<AppState>) -> Self {
         let list = st.hub.subscribe_internal(&st.list, &st.devices, &st.diag);
-        Self { st, list, procs: Arc::default(), funnel: Mutex::new(None), tmux_seen: Mutex::new(None) }
+        Self { st, list, procs: Arc::default(), funnel: Mutex::new(None), tmux_seen: Mutex::new(None), tmux_hangar: Mutex::default(),
+            host: Arc::default() }
     }
 
     fn server(&self) -> Block<ServerBlock> {
@@ -410,7 +407,7 @@ impl Live {
 
     /// Diário (saídas e lentidão) e máquina, numa ida só ao pool bloqueante.
     async fn diary_and_host(&self, now: DateTime<Utc>) -> (Block<ExitsBlock>, Block<SlowBlock>, Block<HostBlock>) {
-        let st = self.st.clone();
+        let (st, host_reader) = (self.st.clone(), self.host.clone());
         let read = tokio::task::spawn_blocking(move || {
             let status = &st.status;
             let diary = diary_readable(hangar_core::diag::diary_dir().as_deref(), hangar_core::paths::log_base().as_deref());
@@ -424,7 +421,7 @@ impl Live {
             let skipped = status.diary.skipped();
             let sizes = status.dirs.current();
             // Sem casa ou sem disco que a contenha a máquina não foi lida: é falha, não "sem fonte".
-            let host = hangar_status::host::read_host(sizes.hangar, sizes.build_cache).map(Some).ok_or("status_host_unread");
+            let host = lock(&host_reader).read(sizes.hangar, sizes.build_cache).map(Some).ok_or("status_host_unread");
             (exits, slow, skipped, host)
         }).await;
         let Ok((exits, slow, skipped, host)) = read else {
@@ -494,17 +491,14 @@ impl Live {
                 }
             },
         };
-        let mut agents = Vec::new();
-        for row in rows.iter().filter(|row| !row.headless) {
-            let agent = match self.st.list.discovered_session(&row.name).await {
-                Ok(found) => Ok(found.and_then(|(_, pid)| pid)),
-                Err(error) => {
-                    tracing::warn!(session = %row.name, code = error.code, "tela Status: agente da sessão sem leitura");
-                    Err(())
-                }
-            };
-            agents.push((row.name.clone(), row.provider.clone(), agent));
-        }
+        let terminal: Vec<&SessionRow> = rows.iter().filter(|row| !row.headless).collect();
+        let pids = if terminal.is_empty() { Ok(HashMap::new()) } else {
+            self.st.list.discovered_agent_pids().await.map_err(|error| {
+                tracing::warn!(code = error.code, "tela Status: agentes das sessões sem leitura");
+            })
+        };
+        let agents: Vec<_> = terminal.into_iter().map(|row| (row.name.clone(), row.provider.clone(),
+            pids.as_ref().map(|pids| pids.get(&row.name).copied()).map_err(|_| ()))).collect();
         let roots = terminal_roots(panes.as_deref().map(Vec::as_slice), &agents);
         let queue_files = match self.st.state.runtime.get() {
             Some(registry) => registry.queue_files().await,
@@ -565,23 +559,34 @@ impl Live {
     async fn tmux_orphans(&self, listed: &HashSet<String>) -> Option<Vec<String>> {
         let env = self.st.list.env();
         let mut command = crate::terminal_input::child_command(&env.capture_program);
-        command.args(["list-sessions", "-F", "#{session_name}\t#{@cp_hidden}\t#{@cp_shortcut_key}"])
+        command.args(["list-sessions", "-F", "#{session_name}\t#{@cp_hidden}\t#{@cp_shortcut_key}\t#{session_created}"])
             .stdin(std::process::Stdio::null()).kill_on_drop(true);
         let out = tokio::time::timeout(Duration::from_secs(5), command.output()).await.ok()?.ok()?;
         if !out.status.success() {
             return crate::list::mux::is_absence(&String::from_utf8_lossy(&out.stderr)).then(Vec::new);
         }
-        let mut sessions = Vec::new();
-        for line in String::from_utf8_lossy(&out.stdout).lines() {
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let parsed: Vec<(&str, bool, bool, &str)> = stdout.lines().filter_map(|line| {
             let mut fields = line.split('\t');
-            let name = fields.next().unwrap_or_default();
-            if name.is_empty() { continue; }
+            let name = fields.next().filter(|name| !name.is_empty())?;
             let hidden = fields.next().is_some_and(|v| !v.is_empty() && v != "0");
             let shortcut = fields.next().is_some_and(|v| !v.is_empty());
+            // Hora de criação que não é número não identifica a sessão: fica vazia e nada é lembrado.
+            let created = fields.next().filter(|v| !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit())).unwrap_or_default();
+            Some((name, hidden, shortcut, created))
+        }).collect();
+        let memo = lock(&self.tmux_hangar).clone();
+        // Só o "é do Hangar" fica na memória, pela sessão e a hora em que ela nasceu: `None` também
+        // é falha de leitura, e sem a hora outra sessão com o mesmo nome herdaria a resposta.
+        let known = |name: &str, created: &str| !created.is_empty() && memo.contains(&(name.to_owned(), created.to_owned()));
+        let hangar = futures_util::future::join_all(parsed.iter().map(|&(name, hidden, shortcut, created)| async move {
             let candidate = !hidden && !shortcut && !listed.contains(name);
-            let hangar = candidate && env.mux.session_env(name, "CP_PROVIDER").await.is_some();
-            sessions.push(MuxSession { name: name.to_owned(), hangar, hidden, shortcut });
-        }
+            candidate && (known(name, created) || env.mux.session_env(name, "CP_PROVIDER").await.is_some())
+        })).await;
+        *lock(&self.tmux_hangar) = parsed.iter().zip(&hangar).filter(|(session, hangar)| **hangar && !session.3.is_empty())
+            .map(|(session, _)| (session.0.to_owned(), session.3.to_owned())).collect();
+        let sessions: Vec<MuxSession> = parsed.iter().zip(hangar).map(|(&(name, hidden, shortcut, _), hangar)|
+            MuxSession { name: name.to_owned(), hangar, hidden, shortcut }).collect();
         Some(hangar_status::leftovers::tmux_orphans(&sessions, listed))
     }
 

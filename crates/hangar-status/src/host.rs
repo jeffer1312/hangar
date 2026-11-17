@@ -4,33 +4,45 @@ use std::path::{Component, Path, PathBuf};
 use hangar_api::status::{DirSize, DiskUse, HostBlock};
 use sysinfo::{CpuRefreshKind, DiskRefreshKind, Disks, MemoryRefreshKind, System};
 
-/// Lê a máquina com o disco da partição da casa do usuário e da pasta temporária. `None` quando não
-/// há casa ou nenhum disco a contém: sem disco não há bloco.
-pub fn read_host(dir_hangar: DirSize, dir_build_cache: DirSize) -> Option<HostBlock> {
-    let home = std::env::home_dir()?;
-    read_host_at(&home, &std::env::temp_dir(), dir_hangar, dir_build_cache)
+/// Leitor da máquina que guarda o `System` e a lista de discos entre as rodadas; cada leitura os
+/// atualiza (os discos pelo `/proc/mounts` de novo: montagem nova entra, a que saiu sai).
+#[derive(Default)]
+pub struct HostReader {
+    system: System,
+    disks: Disks,
 }
 
-pub fn read_host_at(home: &Path, temp: &Path, dir_hangar: DirSize, dir_build_cache: DirSize) -> Option<HostBlock> {
-    let mut system = System::new();
-    system.refresh_memory_specifics(MemoryRefreshKind::nothing().with_ram().with_swap());
-    system.refresh_cpu_list(CpuRefreshKind::nothing());
-    let disks = Disks::new_with_refreshed_list_specifics(DiskRefreshKind::nothing().with_storage());
-    let home_disk = disk_of(&disks, home)?;
-    let temp_disk = disk_of(&disks, temp);
-    let disk_tmp = temp_disk.filter(|tmp| tmp.mount_point() != home_disk.mount_point()).map(usage);
-    Some(HostBlock {
-        mem_total: system.total_memory(),
-        mem_available: system.available_memory(),
-        swap_total: system.total_swap(),
-        swap_used: system.used_swap(),
-        load: load(),
-        cpus: u32::try_from(system.cpus().len()).unwrap_or(u32::MAX),
-        disk_home: usage(home_disk),
-        disk_tmp,
-        dir_hangar,
-        dir_build_cache,
-    })
+impl HostReader {
+    pub fn new() -> Self { Self::default() }
+
+    /// Lê a máquina com o disco da partição da casa do usuário e da pasta temporária. `None` quando
+    /// não há casa ou nenhum disco a contém: sem disco não há bloco.
+    pub fn read(&mut self, dir_hangar: DirSize, dir_build_cache: DirSize) -> Option<HostBlock> {
+        let home = std::env::home_dir()?;
+        self.read_at(&home, &std::env::temp_dir(), dir_hangar, dir_build_cache)
+    }
+
+    pub fn read_at(&mut self, home: &Path, temp: &Path, dir_hangar: DirSize, dir_build_cache: DirSize) -> Option<HostBlock> {
+        let Self { system, disks } = self;
+        system.refresh_memory_specifics(MemoryRefreshKind::nothing().with_ram().with_swap());
+        system.refresh_cpu_list(CpuRefreshKind::nothing());
+        disks.refresh_specifics(true, DiskRefreshKind::nothing().with_storage());
+        let home_disk = disk_of(disks, home)?;
+        let temp_disk = disk_of(disks, temp);
+        let disk_tmp = temp_disk.filter(|tmp| tmp.mount_point() != home_disk.mount_point()).map(usage);
+        Some(HostBlock {
+            mem_total: system.total_memory(),
+            mem_available: system.available_memory(),
+            swap_total: system.total_swap(),
+            swap_used: system.used_swap(),
+            load: load(),
+            cpus: u32::try_from(system.cpus().len()).unwrap_or(u32::MAX),
+            disk_home: usage(home_disk),
+            disk_tmp,
+            dir_hangar,
+            dir_build_cache,
+        })
+    }
 }
 
 #[cfg(windows)]
@@ -84,7 +96,9 @@ mod tests {
     fn host_reading_is_within_ranges() {
         let home = tempfile::tempdir().unwrap();
         let temp = tempfile::tempdir().unwrap();
-        let host = read_host_at(home.path(), temp.path(), NONE, NONE).expect("disco da pasta");
+        let mut reader = HostReader::new();
+        let host = reader.read_at(home.path(), temp.path(), NONE, NONE).expect("disco da pasta");
+        assert!(reader.read_at(home.path(), temp.path(), NONE, NONE).is_some(), "a segunda leitura atualiza o mesmo leitor");
         assert!(host.mem_total > 0);
         assert!(host.mem_available > 0 && host.mem_available <= host.mem_total);
         assert!(host.swap_used <= host.swap_total);
