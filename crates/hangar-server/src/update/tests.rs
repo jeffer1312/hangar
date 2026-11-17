@@ -219,6 +219,32 @@ async fn update_check_returns_the_entry_only_when_newer() {
     assert_eq!(check(&client, &missing, PLATFORM, None).await.unwrap_err().code(), "update_index_unavailable");
 }
 
+/// Conexão que cai no meio do corpo do índice (relatório `rompy6xf`) não vira atualização falha:
+/// a leitura tenta de novo e a segunda resposta, inteira, vale.
+#[tokio::test]
+async fn update_index_cut_mid_body_is_read_again() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let fake = FakeRelease::new().await;
+    let entry = fake.publish(NEW, b"qualquer", None);
+    let index = std::fs::read(fake.root.path().join("package-latest/package-latest.json")).unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        for cut in [true, false] {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0u8; 2048];
+            let _ = socket.read(&mut request).await;
+            let head = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", index.len());
+            socket.write_all(head.as_bytes()).await.unwrap();
+            socket.write_all(if cut { &index[..index.len() / 2] } else { &index }).await.unwrap();
+        }
+    });
+    let release = Release { base_url: base, channel: "latest".into() };
+    let client = crate::http_client().build().unwrap();
+    assert_eq!(super::entry(&client, &release, PLATFORM).await.unwrap(), entry);
+    server.await.unwrap();
+}
+
 #[tokio::test]
 async fn update_happy_path_swaps_restarts_proves_and_prunes() {
     let fake = FakeRelease::new().await;

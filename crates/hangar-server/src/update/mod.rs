@@ -232,14 +232,29 @@ pub async fn check(client: &reqwest::Client, release: &Release, platform: &str, 
 
 /// A entrada deste sistema no índice publicado, mais nova ou não.
 pub async fn entry(client: &reqwest::Client, release: &Release, platform: &str) -> Result<PlatformEntry, UpdateError> {
-    let url = release.index_url();
-    let response = client.get(&url).timeout(Duration::from_secs(60)).send().await.map_err(|e| UpdateError::Index(e.to_string()))?;
-    if !response.status().is_success() {
-        return Err(UpdateError::Index(format!("{} em {url}", response.status())));
-    }
-    let bytes = response.bytes().await.map_err(|e| UpdateError::Index(e.to_string()))?;
-    let index: PackageIndex = serde_json::from_slice(&bytes).map_err(|e| UpdateError::Index(e.to_string()))?;
+    // Queda de rede no meio do corpo não vira atualização falha; recusa do servidor (4xx) não muda tentando de novo.
+    let mut waits = [Duration::from_secs(2), Duration::from_secs(5)].into_iter();
+    let index = loop {
+        match read_index(client, release).await {
+            Ok(index) => break index,
+            Err((error, retry)) => match waits.next().filter(|_| retry) {
+                Some(wait) => tokio::time::sleep(wait).await,
+                None => return Err(error),
+            },
+        }
+    };
     index.platforms.get(platform).cloned().ok_or_else(|| UpdateError::NoPlatform(platform.to_owned()))
+}
+
+/// O índice publicado; o erro diz se vale tentar de novo.
+async fn read_index(client: &reqwest::Client, release: &Release) -> Result<PackageIndex, (UpdateError, bool)> {
+    let url = release.index_url();
+    let response = client.get(&url).timeout(Duration::from_secs(60)).send().await.map_err(|e| (UpdateError::Index(e.to_string()), true))?;
+    if !response.status().is_success() {
+        return Err((UpdateError::Index(format!("{} em {url}", response.status())), !response.status().is_client_error()));
+    }
+    let bytes = response.bytes().await.map_err(|e| (UpdateError::Index(e.to_string()), true))?;
+    serde_json::from_slice(&bytes).map_err(|e| (UpdateError::Index(e.to_string()), true))
 }
 
 /// Baixa com prazo, gravando e calculando o sha256 ao mesmo tempo.
