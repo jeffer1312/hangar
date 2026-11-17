@@ -97,7 +97,7 @@ pub fn standalone_env(settings: &Settings, places: &Places, kept: impl Fn(&str) 
         vars.push(("HANGAR_SERVER_LOG", folder.join("hangar-server.log").to_string_lossy().into_owned()));
     }
     vars.retain(|(key, _)| key.starts_with("CP_") || !kept(key));
-    let remove = INTERNAL.into_iter().filter(|key| !kept(key) && !vars.iter().any(|(set, _)| set == key)).collect();
+    let remove = INTERNAL.into_iter().filter(|key| !kept(*key) && !vars.iter().any(|(set, _)| set == key)).collect();
     Ok(Boot { vars, remove, warning, notes })
 }
 
