@@ -56,7 +56,8 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   [Captura avulsa pela saída](#captura-avulsa-pela-saída-não-pelo-código).
 - **`shutil.rmtree` em pasta onde o git escreveu precisa de `onexc`** que tira o somente-leitura:
   o git grava packs read-only e o Windows recusa o unlink (WinError 5); no POSIX passa.
-- **Encoding é por interpretador**: `.cmd` em OEM, `.vbs` em UTF-16LE com BOM, `.sh` em UTF-8 sem
+- **Encoding é por interpretador**: `.cmd` em OEM, `.vbs` em UTF-16LE (gravado sem BOM: quem o lê
+  decodifica UTF-16 explicitamente), `.sh` em UTF-8 sem
   BOM, `.env`/`settings.json` sem BOM, perfil do PowerShell com BOM. `bootstrap.ps1` é a exceção
   entre os `.ps1`: ASCII puro e SEM BOM, porque roda por `irm | iex` e o `irm` do 5.1 não tira o BOM.
 - **PATH lido do registro se EXPANDE e se ACRESCENTA, nunca substitui `$env:Path`**; o PATH de
@@ -76,8 +77,10 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   interativas elevadas e atalhos elevados do Electron; comum, usa UAC pontual. Atualização
   manual sem elevação não pode rebaixar uma instalação elevada.
 - **A tarefa Windows acompanha o processo até ele terminar.** Reinício controlado não encerra
-  a árvore inteira: sessões e atualizador sobrevivem. A vigia confirma falha HTTP, respeita
-  instalação/atualização e só inicia outra instância após confirmar a parada da anterior.
+  a árvore inteira: sessões e atualizador sobrevivem. O `hangar-server.exe` filho entra na parada
+  só quando o pai é o Python; filho do servidor direto é o executor da atualização. A vigia
+  confirma falha HTTP, respeita instalação/atualização e só inicia outra instância após confirmar
+  a parada da anterior. Ver [Atualização para a 0.1.0.10824](#atualização-para-a-0110824-falhava-em-todo-windows-17112026).
 - **O reinício do backend só vale com a porta aberta, e a porta do front pode ser do servidor.**
   `Start-HangarTask` repete o `Start-ScheduledTask` até 3 vezes enquanto a tarefa parar sem abrir a
   porta, e falha com erro se nenhuma tentativa ficar de pé; `LastRunTime` não prova a subida. Tarefa
@@ -1182,3 +1185,22 @@ chama a cada 250 ms e que começava conferindo o filho com `psutil` `status()` (
 `num_threads()` (3,2 ms); no Windows cada uma lista os 278 processos da máquina. O filho é um `Popen`
 nosso com o handle aberto, então `poll()` responde sem a varredura. No backend em uso, com a
 conferência trocada por dentro do processo: 3,41% → 0,51% de um núcleo, 2 min de cada lado.
+
+## Atualização para a 0.1.0.10824 falhava em todo Windows (17/11/2026)
+
+Relatórios `7io3oihu`, `pg3xnwua` e `tqeswo2z`. Três defeitos em sequência:
+
+1. A prova do passo `2026-11-16-servidor-sobe-sem-python-windows` procurava `launch backend` no
+   `.vbs` com `Select-String`. O `Escrever-Lancador` grava o `.vbs` com `GetBytes`, que não emite o
+   BOM: o arquivo é UTF-16LE sem BOM, o `Select-String` lê como UTF-8 e nunca acha. Na DELPHI-02: bytes
+   `57 00 53 00`, `Select-String` `False`, `RestartCount` 999; o passo saía 1 depois do `install.ps1`
+   imprimir o resumo. A conferência agora é `Test-HangarBackendTaskDirect` (`windows-tasks.ps1`), que
+   lê o arquivo como UTF-16 com ou sem BOM.
+2. A volta roda o `windows-tasks.ps1` do `current` já devolvido (a 0.1.0.10746), que não reconhece o
+   `hangar-server.exe` direto da versão nova: "Porta 8765 ocupada por outro processo". A máquina ficou
+   com o `current` na 10746 e o servidor 10824 de pé. Quem atualiza dali roda o executor da 10824, e a
+   volta continua presa ao script da versão anterior: o que destrava é o passo não falhar mais.
+3. Com o servidor direto, o `Restart-HangarTask` punha na parada todo `hangar-server.exe` filho de um
+   candidato, e o executor da atualização é filho do servidor: a segunda tentativa no Delphi 07 morreu
+   no reinício que o próprio `install.ps1 -Update` pediu ("o processo que a executava não existe
+   mais"). O filho só entra quando o pai é o Python.
