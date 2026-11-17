@@ -64,8 +64,10 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   nunca por `[Environment]::SetEnvironmentVariable`. O `powershell.exe` filho vem de `$PSHOME`, não
   do PATH.
 - **O instalador não instala nem procura Python.** Nenhum lançador passa por Python: `hangar-send`,
-  `hangar-conta` e o `hangar-codex-tui` chamam o `hangar-server.exe`. Os atalhos `python3`,
-  `python3.cmd` e `hangar-python.cmd` antigos saem pelo passo `2026-11-17-atalhos-python-removidos`.
+  `hangar-conta` e o `hangar-codex-tui` chamam o `hangar-server.exe`; o passo
+  `2026-11-17-atalhos-windows-sem-python` regrava os que a versão antiga gravou pelo Python. Os
+  atalhos `python3`, `python3.cmd` e `hangar-python.cmd` antigos ficam (a versão anterior, na volta,
+  usa) e saem junto com a `python/` do pacote, no PR seguinte.
   A orquestração ainda usa o `python3` da máquina, quando há. A história do Python do Install
   Manager está em [Python do Install Manager](#python-do-install-manager-22102026).
 - **Atalho sem extensão que o instalador grava em `~/.local/bin` ganha um gêmeo `.cmd` na mesma

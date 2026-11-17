@@ -5,8 +5,8 @@ fn steps_dir() -> PathBuf { Path::new(env!("CARGO_MANIFEST_DIR")).join("../../do
 
 fn repo() -> PathBuf { Path::new(env!("CARGO_MANIFEST_DIR")).join("../..") }
 
-/// O passo que apaga os atalhos do Python é o único que pode citá-los.
-const REMOVES_THE_SHIMS: &str = "2026-11-17-atalhos-python-removidos";
+/// O passo que regrava no Windows os lançadores que passavam pelo Python.
+const REWRITES_THE_LAUNCHERS: &str = "2026-11-17-atalhos-windows-sem-python";
 
 /// Os passos reescritos, com o título que eles tinham: o id e o título nunca mudam.
 const REWRITTEN: &[(&str, &str)] = &[
@@ -58,7 +58,7 @@ fn no_published_step_calls_python_on_either_system() {
     for windows in [false, true] {
         let (steps, invalid) = hangar_server::update::steps::read_steps(&steps_dir(), windows);
         assert!(invalid.is_empty(), "passos inválidos: {invalid:?}");
-        for step in steps.iter().filter(|step| step.id != REMOVES_THE_SHIMS) {
+        for step in &steps {
             if let Some(word) = python_word(&step.command) {
                 panic!("{} (windows={windows}) chama Python no comando: {word}", step.id);
             }
@@ -107,39 +107,41 @@ fn rewritten_commands_use_the_hangar_server_subcommands() {
     }
 }
 
+/// Decisão 21a: nenhum passo apaga os atalhos do Python; o do Windows só regrava os lançadores que
+/// passavam por ele, pelo instalador, e a prova sai da conferência do conteúdo novo.
 #[test]
-fn the_shim_removal_step_is_a_machine_step_on_both_systems() {
-    for windows in [false, true] {
-        let (steps, _) = hangar_server::update::steps::read_steps(&steps_dir(), windows);
-        let step = steps.iter().find(|step| step.id == REMOVES_THE_SHIMS).expect("passo que tira os atalhos");
-        assert!(step.machine && step.destructive);
-        assert!(!step.command.is_empty(), "windows={windows}: sem comando");
-        assert_eq!(step.proof, vec![format!("~/.hangar/passos/{REMOVES_THE_SHIMS}")]);
-        assert!(step.command.contains("hangar-python"));
+fn the_launcher_step_rewrites_on_windows_and_deletes_nothing() {
+    let (windows, _) = hangar_server::update::steps::read_steps(&steps_dir(), true);
+    let step = windows.iter().find(|step| step.id == REWRITES_THE_LAUNCHERS).expect("passo dos lançadores");
+    assert!(step.machine && !step.destructive);
+    assert!(step.command.starts_with("powershell -ExecutionPolicy Bypass -File install.ps1 -Update && "), "{}", step.command);
+    assert!(step.command.contains(r"-File scripts\windows-atalhos-sem-python.ps1"), "{}", step.command);
+    assert_eq!(step.proof, vec![format!("~/.hangar/passos/{REWRITES_THE_LAUNCHERS}")]);
+    // A conferência vai no pacote (`scripts/windows-*` não é excluído) e nunca apaga nada.
+    let checker = std::fs::read_to_string(repo().join("scripts/windows-atalhos-sem-python.ps1")).unwrap();
+    assert!(checker.contains(REWRITES_THE_LAUNCHERS));
+    assert!(!checker.contains("Remove-Item"), "a conferência apaga arquivo");
+    let (posix, _) = hangar_server::update::steps::read_steps(&steps_dir(), false);
+    if let Some(step) = posix.iter().find(|step| step.id == REWRITES_THE_LAUNCHERS) {
+        assert!(step.command.is_empty(), "no POSIX nada depende do Python: {}", step.command);
+    }
+    for steps in [&windows, &posix] {
+        for step in steps.iter() {
+            for shim in ["hangar-python", "python3.cmd"] {
+                assert!(!step.command.contains(shim), "{}: o passo mexe no atalho {shim}", step.id);
+            }
+        }
     }
 }
 
-/// O comando POSIX do passo, numa casa de mentira: tira só os atalhos do Hangar e deixa a prova.
-#[cfg(unix)]
+/// Os lançadores que o `install.ps1` da main gravava (pelo Python) são recusados pela conferência
+/// do passo, e os do `install.ps1` atual passam: o roteiro do PowerShell, no CI do Windows.
+#[cfg(windows)]
 #[test]
-fn the_shim_removal_keeps_a_real_python_and_removes_ours() {
-    let (steps, _) = hangar_server::update::steps::read_steps(&steps_dir(), false);
-    let step = steps.iter().find(|step| step.id == REMOVES_THE_SHIMS).unwrap();
-    let home = tempfile::tempdir().unwrap();
-    let bin = home.path().join(".local/bin");
-    let cache = home.path().join(".hangar/cache/install-bin");
-    let scripts = home.path().join("repo/scripts");
-    for dir in [&bin, &cache, &scripts] { std::fs::create_dir_all(dir).unwrap(); }
-    std::fs::write(scripts.join("hangar-python"), "#!/bin/sh\n").unwrap();
-    std::os::unix::fs::symlink(scripts.join("hangar-python"), bin.join("hangar-python")).unwrap();
-    std::fs::write(cache.join("python3"), format!("#!/bin/sh\nexec \"{}\" \"$@\"\n", scripts.join("hangar-python").display())).unwrap();
-    std::os::unix::fs::symlink("/usr/bin/python3", bin.join("python3")).unwrap();
-    let status = std::process::Command::new("/bin/sh").arg("-c").arg(&step.command)
-        .env("HOME", home.path()).current_dir(home.path()).status().unwrap();
-    assert!(status.success());
-    assert!(std::fs::symlink_metadata(bin.join("hangar-python")).is_err(), "atalho hangar-python ficou");
-    assert!(!cache.join("python3").exists(), "atalho python3 do instalador ficou");
-    assert!(std::fs::symlink_metadata(bin.join("python3")).is_ok(), "o python3 da pessoa saiu");
-    let proof = std::fs::read_to_string(home.path().join(".hangar/passos").join(REMOVES_THE_SHIMS)).unwrap();
-    assert_eq!(proof, "sobrou:\n");
+fn the_launcher_check_refuses_main_launchers_and_accepts_the_new_ones() {
+    let out = std::process::Command::new("powershell.exe")
+        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+        .arg(repo().join("scripts").join("test-windows-atalhos-sem-python.ps1"))
+        .output().unwrap();
+    assert!(out.status.success(), "{}\n{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
 }

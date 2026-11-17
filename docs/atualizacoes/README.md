@@ -89,7 +89,7 @@ Passos marcados:
 | `2026-11-12-painel-quickshell-removido` | units do systemd, atalhos e blocos do Hyprland do painel do Quickshell |
 | `2026-11-16-servidor-sobe-sem-python-linux` | unit do systemd (`Type=notify`, watchdog, nunca desiste) e lançador estável renovado |
 | `2026-11-16-servidor-sobe-sem-python-windows` | tarefa agendada (reinícios) e lançador estável renovado |
-| `2026-11-17-atalhos-python-removidos` | tira do `~/.local/bin` os atalhos `hangar-python` e `python3` que o Hangar criou |
+| `2026-11-17-atalhos-windows-sem-python` | regrava no Windows o `hangar-conta.cmd` e os lançadores do Codex que passavam pelo Python |
 
 Ficam sem o campo, mesmo com comando: os que rodam `install-hangar-send.sh`,
 `install-claude-wrapper.sh`/`setup-windows-wrappers.ps1` ou `hangar-server mcp-register` (conteúdo e
