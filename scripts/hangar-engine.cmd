@@ -1,4 +1,6 @@
 @echo off
-rem A regra unica de qual hangar-server rodar mora no hangar-server-command.ps1 (o cmd nao compara datas).
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0hangar-server-command.ps1" engine %*
-exit /b %errorlevel%
+setlocal
+rem A regra de qual hangar-server rodar mora no hangar-server-lookup.cmd, em cmd puro.
+call "%~dp0hangar-server-lookup.cmd" "%~dp0.." hangar-engine || exit /b 126
+"%HANGAR_SERVER_BIN%" engine %*
+exit /b %ERRORLEVEL%

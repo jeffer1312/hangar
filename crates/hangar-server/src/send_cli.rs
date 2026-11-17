@@ -86,7 +86,7 @@ pub fn cli(args: &[String]) -> std::process::ExitCode {
         .collect();
     let home = hangar_core::account_env::AccountEnvironment::from_map(vars.clone()).home;
     let host = MachineHost { home: home.clone(), root: root.clone() };
-    let invocation = Invocation { args, root, home, vars };
+    let invocation = Invocation { args, root, home, vars, cwd: std::env::current_dir().unwrap_or_default() };
     let code = hangar_send::run(&invocation, &host, &mut std::io::stdout(), &mut std::io::stderr());
     std::process::ExitCode::from(code)
 }

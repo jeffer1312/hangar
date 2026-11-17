@@ -104,14 +104,17 @@ pub fn run(args: &[String], vars: &BTreeMap<String, String>, cwd: &Path, server:
         Err(code) => return code,
     };
     let json = hangar_core::pycompat::pyjson::dumps(&Value::Object(body), false);
-    let opened = match Command::new(server).arg("open").arg(&json).stdin(Stdio::inherit()).output() {
+    // O stderr do `open` passa ao vivo (a espera pela conta aparece enquanto acontece); só o stdout,
+    // onde vem o nome, é lido.
+    let child = Command::new(server).arg("open").arg(&json)
+        .stdin(Stdio::inherit()).stdout(Stdio::piped()).stderr(Stdio::inherit()).spawn();
+    let opened = match child.and_then(|child| child.wait_with_output()) {
         Ok(opened) => opened,
         Err(error) => {
             let _ = writeln!(err, "hangar: não consegui rodar o hangar-server ({error}); abrindo o {provider} sem o Hangar");
             return RAW;
         }
     };
-    let _ = err.write_all(&opened.stderr);
     let stdout = String::from_utf8_lossy(&opened.stdout);
     let Some(code) = opened.status.code() else {
         let _ = writeln!(err, "hangar: o hangar-server parou{} sem abrir a sessão", signal_text(&opened.status));

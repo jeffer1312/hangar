@@ -411,7 +411,11 @@ fn resume(cx: &Ctx, endpoint: &Endpoint, remote: &str, name: &str, options: &Opt
     let Ok(response) = cx.api(&endpoint.with_total(CREATE_TIMEOUT), "POST", &path, Some(&Value::Object(body).to_string()), err) else { return 1 };
     let result = match parse(&response) {
         Some(Value::Object(result)) => result,
-        _ => Map::new(),
+        // A retomada aconteceu: o nome pedido vale, mas a pasta fica sem saber, e isso aparece.
+        _ => {
+            let _ = writeln!(err, "aviso: a retomada foi confirmada, mas não consegui ler a resposta (nome e pasta)");
+            Map::new()
+        }
     };
     let mut shown = if truthy(result.get("name")) { text(&result["name"]) } else { name.to_owned() };
     let cwd = if truthy(result.get("cwd")) { text(&result["cwd"]) } else { String::new() };

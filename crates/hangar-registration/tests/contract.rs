@@ -151,6 +151,10 @@ fn adjust(group: &str, case: &mut Case, block: Option<&str>) {
             let after = step.changed.remove("home/.codex/config.toml").unwrap();
             step.changed.insert("work/real.toml".into(), after);
         }
+        // Revisão da R3 (decisão 19): o settings.json mantém o modo dele, como o `.claude.json`.
+        ("registrar-mcp", "settings-partial-perms-order") => {
+            step.changed.get_mut("home/.claude/settings.json").unwrap()["mode"] = json!("0o600");
+        }
         // L7 / R3-D10: o fim de linha do arquivo fica.
         ("registrar-mcp", "codex-crlf-old-token") => {
             let after = step.changed.get_mut("home/.codex/config.toml").unwrap();

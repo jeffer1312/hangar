@@ -92,6 +92,53 @@ fn linked_claude_json_and_codex_config_stay_links() {
     }
 }
 
+/// O `settings.json` principal linkado continua link e com o modo dele (o Python o trocava por
+/// arquivo 0644).
+#[cfg(unix)]
+#[test]
+fn linked_settings_json_stays_a_link_with_its_mode() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    with_token(home, "CP_AUTH_TOKEN=t\n");
+    let real = home.join("dotfiles/settings.json");
+    write(&real, "{\"theme\": \"dark\"}");
+    std::fs::set_permissions(&real, std::fs::Permissions::from_mode(0o600)).unwrap();
+    std::fs::create_dir_all(home.join(".claude")).unwrap();
+    std::os::unix::fs::symlink(&real, home.join(".claude/settings.json")).unwrap();
+    let (code, _, err) = run(mcp_register::run, &invocation(home, ""));
+    assert_eq!(code, 0, "{err}");
+    assert!(std::fs::symlink_metadata(home.join(".claude/settings.json")).unwrap().file_type().is_symlink());
+    assert!(std::fs::read_to_string(&real).unwrap().contains("mcp__hangar__send"));
+    assert_eq!(std::fs::metadata(&real).unwrap().permissions().mode() & 0o777, 0o600);
+}
+
+/// A casa vem do USERPROFILE no Windows: o HOME=/c/Users/x do Git Bash viraria C:\c\Users\x.
+#[test]
+fn home_follows_the_account_rule() {
+    let vars = BTreeMap::from([("HOME".to_owned(), "/c/Users/x".to_owned()), ("USERPROFILE".to_owned(), r"C:\Users\x".to_owned())]);
+    let home = hangar_registration::home_of(&vars);
+    if cfg!(windows) {
+        assert_eq!(home, Path::new(r"C:\Users\x"));
+    } else {
+        assert_eq!(home, Path::new("/c/Users/x"));
+    }
+}
+
+/// No Windows o Python em modo texto passava o CLAUDE.md inteiro a CRLF; agora o LF fica LF.
+#[cfg(windows)]
+#[test]
+fn block_keeps_lf_on_windows() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join(".claude/CLAUDE.md");
+    write(&file, "antes\n<!-- claude-pocket:sessoes-irmas:start -->\nvelho\n<!-- claude-pocket:sessoes-irmas:end -->\ndepois\n");
+    let (code, _, err) = run(claude_md_block::run, &invocation(dir.path(), BLOCK));
+    assert_eq!(code, 0, "{err}");
+    let text = std::fs::read_to_string(&file).unwrap();
+    assert!(!text.contains('\r'), "{text:?}");
+    assert_eq!(text, format!("antes\n{BLOCK}\ndepois\n"));
+}
+
 /// Achado 8: `.codex-*.lock` e conta adicional vazia recebiam config.toml.
 #[test]
 fn lock_and_empty_codex_accounts_get_no_config() {

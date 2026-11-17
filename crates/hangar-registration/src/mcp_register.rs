@@ -155,15 +155,13 @@ fn claude_permissions(file: &Path, out: &mut dyn Write, err: &mut dyn Write) -> 
     }
     let written = (|| {
         let text = codec::dumps_indented_utf8(&data, 2).map_err(|detail| detail.to_owned())?;
-        if let Some(dir) = file.parent() {
+        // Como o `.claude.json`: grava no alvo do link (o link fica) e mantém o modo do arquivo.
+        let target = files::through_links(file);
+        if let Some(dir) = target.parent() {
             std::fs::create_dir_all(dir).map_err(|error| files::os_error(&error, dir))?;
         }
-        let tmp = file.with_file_name("settings.json.hangar-novo");
-        std::fs::write(&tmp, format!("{text}\n")).map_err(|error| files::os_error(&error, &tmp))?;
-        std::fs::rename(&tmp, file).map_err(|error| {
-            let _ = std::fs::remove_file(&tmp);
-            files::os_error(&error, file)
-        })
+        let mode = files::mode_of(&target).unwrap_or(0o644);
+        files::replace(&target, format!("{text}\n").as_bytes(), mode)
     })();
     match written {
         Ok(()) => {

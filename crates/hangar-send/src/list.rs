@@ -124,8 +124,10 @@ fn peer_lines(peer: &Endpoint, body: &[u8], out: &mut dyn Write, err: &mut dyn W
 /// Pares externos do servidor daqui: (`corpo`, `None`) ou o motivo da falha.
 pub(crate) fn external_get(cx: &Ctx) -> Result<Vec<u8>, String> {
     let endpoint = Endpoint { connect: 3.0, total: 8.0, ..cx.local() };
-    let Some((status, body)) = cx.fetch(&endpoint, "GET", EXTERNAL, None) else {
-        return Err("backend inacessível".into());
+    let (status, body) = match cx.fetch(&endpoint, "GET", EXTERNAL, None) {
+        Ok(answer) => answer,
+        Err(crate::http::Failure::NoAnswer) => return Err("backend inacessível".into()),
+        Err(crate::http::Failure::Invalid(detail)) => return Err(detail),
     };
     if (200..300).contains(&status) {
         return Ok(body);

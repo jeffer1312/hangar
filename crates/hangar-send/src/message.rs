@@ -123,9 +123,16 @@ fn send_external(cx: &Ctx, target: &str, sender: &str, text: &str, out: &mut dyn
     body.insert("target".into(), target.into());
     body.insert("text".into(), text.into());
     let endpoint = Endpoint { connect: 3.0, total: 30.0, ..cx.local() };
-    let Some((status, response)) = cx.fetch(&endpoint, "POST", "/api/external-pairs/send", Some(&Value::Object(body).to_string())) else {
-        let _ = writeln!(err, "erro: backend inacessível em {} (hangar rodando?)", endpoint.base);
-        return 1;
+    let (status, response) = match cx.fetch(&endpoint, "POST", "/api/external-pairs/send", Some(&Value::Object(body).to_string())) {
+        Ok(answer) => answer,
+        Err(crate::http::Failure::NoAnswer) => {
+            let _ = writeln!(err, "erro: backend inacessível em {} (hangar rodando?)", endpoint.base);
+            return 1;
+        }
+        Err(crate::http::Failure::Invalid(detail)) => {
+            let _ = writeln!(err, "erro: {detail}");
+            return 1;
+        }
     };
     if (200..300).contains(&status) {
         return report_delivery(&response, target, out, err);

@@ -120,7 +120,8 @@ fn overrides() -> BTreeMap<&'static str, Override> {
              erro: a sessão nova abriu, mas não consegui ler o resultado da ligação na resposta do servidor (confira com hangar-send --list)\n")),
         ("new__conta-auto-missing-label", why("surpresa 14 corrigida").code(2)
             .stderr("erro: resposta da cota ilegível em http://127.0.0.1:$HTTP_LOCAL — escolha uma conta: --conta <nome>\n")),
-        ("new__resume-response-not-json", why("surpresa 15 corrigida: cai no nome pedido").stderr("")
+        ("new__resume-response-not-json", why("surpresa 15 e decisão 16: cai no nome pedido e avisa")
+            .stderr("aviso: a retomada foi confirmada, mas não consegui ler a resposta (nome e pasta)\n")
             .stdout("sessão retomada: volta () na conversa abc — fala com ela via: hangar-send volta \"msg\"\n")),
         ("contrato__gravar-not-utf8", why("surpresa 11 corrigida: sem traceback").stderr("erro: '$T/work/c.md' não é texto UTF-8\n")),
         // D14.2: erro de uso sai com 2 e a frase `uso:`, sem o `script: line N:` do bash.

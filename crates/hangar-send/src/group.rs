@@ -214,12 +214,19 @@ pub(crate) fn contract(cx: &Ctx, args: &[String], out: &mut dyn Write, err: &mut
     0
 }
 
-/// Caminho relativo vale contra a pasta de quem chamou (`PWD`), como no script.
+/// Caminho relativo vale contra a pasta de quem chamou. O `PWD` lógico só quando é a pasta real do
+/// processo (um `PWD` herdado de outro lugar mandaria outro arquivo); senão, a pasta real.
 fn resolve(cx: &Ctx, file: &str) -> PathBuf {
     let path = Path::new(file);
-    match cx.var("PWD").map(Path::new).filter(|pwd| pwd.is_absolute()) {
-        Some(pwd) if path.is_relative() => pwd.join(path),
-        _ => path.to_path_buf(),
+    if path.is_absolute() {
+        return path.to_path_buf();
+    }
+    let real = Some(cx.inv.cwd.clone()).filter(|cwd| !cwd.as_os_str().is_empty()).or_else(|| std::env::current_dir().ok());
+    let pwd = cx.var("PWD").map(Path::new).filter(|pwd| pwd.is_absolute())
+        .filter(|pwd| real.is_none() || std::fs::canonicalize(pwd).ok() == real.as_deref().and_then(|dir| std::fs::canonicalize(dir).ok()));
+    match pwd.map(Path::to_path_buf).or(real) {
+        Some(dir) => dir.join(path),
+        None => path.to_path_buf(),
     }
 }
 

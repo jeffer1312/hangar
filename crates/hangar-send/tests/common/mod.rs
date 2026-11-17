@@ -242,7 +242,9 @@ pub struct Outcome {
 }
 
 pub fn invoke(args: &[String], root: Option<PathBuf>, home: &Path, vars: BTreeMap<String, String>, host: &dyn Host) -> Outcome {
-    let invocation = Invocation { args: args.to_vec(), root, home: home.to_path_buf(), vars };
+    // O caso roda no processo do teste: a pasta "real" de quem chama é o PWD do caso.
+    let cwd = vars.get("PWD").map(PathBuf::from).unwrap_or_default();
+    let invocation = Invocation { args: args.to_vec(), root, home: home.to_path_buf(), vars, cwd };
     let (mut out, mut err) = (Vec::new(), Vec::new());
     let code = hangar_send::run(&invocation, host, &mut out, &mut err);
     Outcome { code, stdout: String::from_utf8_lossy(&out).into_owned(), stderr: String::from_utf8_lossy(&err).into_owned() }

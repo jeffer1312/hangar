@@ -76,6 +76,9 @@ fn captured_cases() {
             Some((code, err)) => (code, err.to_owned()),
             None => (case["code"].as_u64().unwrap() as u8, case["stderr"].as_str().unwrap().to_owned()),
         };
+        // O stderr do `open` passa direto ao terminal, como no Python: não chega ao `err` de `run`.
+        let server_said = case["server"].get("stderr").and_then(Value::as_str).unwrap_or("");
+        let want_err = want_err.strip_prefix(server_said).unwrap_or(&want_err).to_owned();
         if code != want_code || err != want_err {
             failures.push(format!("{name}: código {code} (esperado {want_code}), stderr {err:?} (esperado {want_err:?})"));
         }

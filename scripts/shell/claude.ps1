@@ -116,8 +116,10 @@ function claude {
                 for ($espera = 0; $espera -lt 20 -and -not (Test-Path -LiteralPath $atual) -and (Test-Path -LiteralPath "$atual.old"); $espera++) { Start-Sleep -Milliseconds 50 }
                 $doPacote = Join-Path $atual 'bin\hangar-server.exe'
                 if (Test-Path -LiteralPath $doPacote -PathType Leaf) {
+                    # Pelo caminho real da versao (o `cd -P` do sh); alvo relativo nao e seguido.
                     $item = Get-Item -LiteralPath $atual
-                    $real = if ($item.LinkType -and $item.Target) { @($item.Target)[0] } else { $item.FullName }
+                    $alvo = if ($item.LinkType) { @($item.Target)[0] } else { $null }
+                    $real = if ($alvo -and [IO.Path]::IsPathRooted($alvo)) { $alvo } else { $item.FullName }
                     $servidor = Join-Path $real 'bin\hangar-server.exe'
                 } else {
                     foreach ($c in @((Join-Path $PSScriptRoot '..\..\crates\target\release\hangar-server.exe'),

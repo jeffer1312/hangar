@@ -38,7 +38,12 @@ pub struct Invocation {
     pub home: PathBuf,
     /// O ambiente de quem chama.
     pub vars: BTreeMap<String, String>,
+    /// A pasta real do processo (vazia = a do processo atual), contra a qual vale caminho relativo.
+    pub cwd: PathBuf,
 }
+
+/// Teto do corpo de uma resposta do servidor.
+pub const RESPONSE_LIMIT: usize = http::BODY_LIMIT;
 
 /// O texto do `--help`.
 pub const HELP: &str = include_str!("help.txt");

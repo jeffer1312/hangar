@@ -62,6 +62,11 @@ pub fn parse_args(args: &[String]) -> Result<(Option<PathBuf>, Option<PathBuf>),
     Ok((root, home))
 }
 
+/// A casa do ambiente, pela mesma regra das contas (`AccountEnvironment`): USERPROFILE no Windows.
+pub fn home_of(vars: &BTreeMap<String, String>) -> PathBuf {
+    hangar_core::account_env::AccountEnvironment::from_map(vars.clone()).home
+}
+
 /// O ambiente do processo; `stdin` só para quem o lê.
 fn from_process(args: &[String], command: &str, read_stdin: bool, err: &mut dyn Write) -> Result<Invocation, u8> {
     let (root, home_arg) = parse_args(args).map_err(|message| {
@@ -71,8 +76,8 @@ fn from_process(args: &[String], command: &str, read_stdin: bool, err: &mut dyn 
     let vars: BTreeMap<String, String> = std::env::vars_os()
         .map(|(key, value)| (key.to_string_lossy().into_owned(), value.to_string_lossy().into_owned()))
         .collect();
-    let home = vars.get("HOME").or_else(|| vars.get("USERPROFILE")).filter(|home| !home.is_empty())
-        .map(PathBuf::from).or_else(std::env::home_dir).unwrap_or_default();
+    // A casa do `Path.home()`: no Windows o USERPROFILE, nunca o HOME=/c/Users/x do Git Bash.
+    let home = home_of(&vars);
     let mut stdin = Vec::new();
     if read_stdin {
         use std::io::Read;

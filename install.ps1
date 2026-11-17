@@ -2555,29 +2555,28 @@ if (-not $bash) {
     if (Escrever-Lancador (Join-Path $binUsuario 'hangar-python.cmd') $corpoHp 'cmd') { Ok "atalho hangar-python.cmd criado em $binUsuario" }
     else { Ok 'atalho hangar-python.cmd ja atualizado' }
 
-    # (2) lancador pro PowerShell: o script nao tem extensao, entao o Windows nao o executa
-    # sozinho. O .cmd entrega tudo pro bash e repassa os argumentos.
+    # (2) lancador pro PowerShell: o hangar-send e o `hangar-server send`, chamado direto (sem o
+    # bash) pelo executavel que o scripts\hangar-server-lookup.cmd acha. A linha `rem` guarda o
+    # caminho do scripts\hangar-send entre aspas: plugins de terceiros o procuram no texto do atalho.
     $lancador = Join-Path $binUsuario 'hangar-send.cmd'
-    # PATH com o nosso bin NA FRENTE: o Windows tem um python3.exe proprio no atalho da
-    # Microsoft Store (%LOCALAPPDATA%\Microsoft\WindowsApps), que vem antes no PATH e responde
-    # "Python nao foi encontrado". Sem a precedencia, o atalho que acabamos de escrever nunca e
-    # alcancado - medido, o install-hangar-send.sh falhava mesmo com o atalho correto no lugar.
     $conteudo = "@echo off`r`n" +
-                "set `"PATH=%USERPROFILE%\.local\bin;%PATH%`"`r`n" +
-                "`"$bash`" `"$raizAtalhos\scripts\hangar-send`" %*`r`n"
+                "setlocal`r`n" +
+                "rem `"$raizAtalhos\scripts\hangar-send`"`r`n" +
+                "call `"$raizAtalhos\scripts\hangar-server-lookup.cmd`" `"$raizAtalhos`" || exit /b 126`r`n" +
+                "`"%HANGAR_SERVER_BIN%`" send --root `"$raizAtalhos`" %*`r`n" +
+                "exit /b %ERRORLEVEL%`r`n"
     if (Escrever-Lancador $lancador $conteudo 'cmd') { Ok "lancador hangar-send.cmd criado em $binUsuario" }
     else { Ok 'lancador hangar-send.cmd ja atualizado' }
 
     # (2b) lancador pro hangar-conta (helper de contas do claude-conta): sem ele o claude-conta.ps1
     # falha com "hangar-conta nao e reconhecido" antes de abrir o Claude.
-    # Pelo PYTHON, nao pelo bash: o hangar-conta e um script Python (`#!/usr/bin/env python3`), e
-    # `bash arquivo` NAO honra shebang - le o arquivo como shell e estoura no docstring. Foi assim
-    # que este lancador nasceu quebrado (copia do hangar-send.cmd, que e bash de verdade). Pelo
-    # hangar-python.cmd: o Python do pacote, o venv ou o real achado acima, nunca o atalho da Store.
-    # Criado sempre junto do hangar-python.cmd: quem decide o Python (e avisa quando falta) e ele.
+    # Direto no `hangar-server conta`: o scripts\hangar-conta e um atalho sh, que o cmd nao roda.
     $lancadorConta = Join-Path $binUsuario 'hangar-conta.cmd'
     $conteudoConta = "@echo off`r`n" +
-                     "call `"%~dp0hangar-python.cmd`" `"$raizAtalhos\scripts\hangar-conta`" %*`r`n"
+                     "setlocal`r`n" +
+                     "call `"$raizAtalhos\scripts\hangar-server-lookup.cmd`" `"$raizAtalhos`" hangar-conta || exit /b 126`r`n" +
+                     "`"%HANGAR_SERVER_BIN%`" conta %*`r`n" +
+                     "exit /b %ERRORLEVEL%`r`n"
     if (Escrever-Lancador $lancadorConta $conteudoConta 'cmd') { Ok "lancador hangar-conta.cmd criado em $binUsuario" }
     else { Ok 'lancador hangar-conta.cmd ja atualizado' }
 
@@ -2623,11 +2622,13 @@ if (-not $bash) {
 
     # headersHelper do MCP `hangar`: o Claude Code executa o caminho gravado no .claude.json, e o
     # shim sem extensao nao roda no Windows - sem cabecalho o backend da 401 e o MCP cai no OAuth.
-    # Pelo bash: o hangar-mcp-headers.sh e bash de verdade.
+    # Direto no `hangar-server mcp-headers`, sem o bash.
     $lancadorMcp = Join-Path $binUsuario 'hangar-mcp-headers.cmd'
     $conteudoMcp = "@echo off`r`n" +
-                   "set `"PATH=%USERPROFILE%\.local\bin;%PATH%`"`r`n" +
-                   "`"$bash`" `"$raizAtalhos\scripts\hangar-mcp-headers.sh`" %*`r`n"
+                   "setlocal`r`n" +
+                   "call `"$raizAtalhos\scripts\hangar-server-lookup.cmd`" `"$raizAtalhos`" hangar-mcp-headers || exit /b 1`r`n" +
+                   "`"%HANGAR_SERVER_BIN%`" mcp-headers --root `"$raizAtalhos`"`r`n" +
+                   "exit /b %ERRORLEVEL%`r`n"
     if (Escrever-Lancador $lancadorMcp $conteudoMcp 'cmd') { Ok "lancador hangar-mcp-headers.cmd criado em $binUsuario" }
     else { Ok 'lancador hangar-mcp-headers.cmd ja atualizado' }
 
