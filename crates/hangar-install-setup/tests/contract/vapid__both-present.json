@@ -1,0 +1,85 @@
+{
+ "case": "vapid/both-present",
+ "source_commit": "2ad8e335e8d9118e74bc5b33f2efb4ac3bbd8eba",
+ "python": "3.14.9 websockets 16.0",
+ "capture_cmdline": "/usr/bin/python3 capture.py --only pacote/ -j 8",
+ "route": "R4",
+ "script": "backend/app/vapid_setup.py",
+ "contract_refs": [
+  "R4-S01",
+  "P-03"
+ ],
+ "description": "",
+ "harness": {
+  "how": "$PY -B -s -m app.vapid_setup with cwd $T/inst/backend (copy of backend/app/{__init__,atomico,user_data,vapid_setup}.py); generated keys are replaced by $VAPID_PUBLIC/$VAPID_PRIVATE and checked in post.generated_pair",
+  "inst_root": "$T/inst",
+  "inst_files_copied_from_ref": [
+   "backend/app/__init__.py",
+   "backend/app/atomico.py",
+   "backend/app/user_data.py",
+   "backend/app/vapid_setup.py"
+  ],
+  "stub_config": {},
+  "notes": {}
+ },
+ "input": {
+  "argv": [
+   "$PY",
+   "-B",
+   "-s",
+   "-m",
+   "app.vapid_setup"
+  ],
+  "env": {
+   "HOME": "$T/home",
+   "USERPROFILE": "$T/home",
+   "LOCALAPPDATA": "$T/local",
+   "TMUX_TMPDIR": "$T/tmux",
+   "PATH": "$T/stubs:/usr/bin:/bin"
+  },
+  "stdin": {
+   "text": ""
+  },
+  "cwd": "$T/inst/backend",
+  "files_before": {
+   "inst/backend": {
+    "type": "dir",
+    "mode": "0o755"
+   },
+   "inst/backend/app": {
+    "type": "dir",
+    "mode": "0o755"
+   },
+   "inst/backend/.env": {
+    "type": "file",
+    "mode": "0o644",
+    "size": 42,
+    "sha256": "e383b56f84af046ed5fdc92a70c47d76c9e3f01a064464487f532876f3e9c1b5",
+    "content": {
+     "text": "CP_VAPID_PUBLIC=pub\nCP_VAPID_PRIVATE=priv\n"
+    }
+   }
+  }
+ },
+ "output": {
+  "code": 0,
+  "stdout": {
+   "text": "ok: $T/inst/backend/.env já tem as chaves VAPID (mantidas)\n"
+  },
+  "stderr": {
+   "text": ""
+  },
+  "duration_ms": 34,
+  "files": {
+   "created": {},
+   "changed": {},
+   "removed": []
+  }
+ },
+ "spawns": [],
+ "python_shim_calls": [],
+ "http": {},
+ "post": {
+  "generated_pair": null
+ }
+}
