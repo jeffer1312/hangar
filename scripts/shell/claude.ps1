@@ -101,26 +101,34 @@ function claude {
             [Console]::Error.WriteLine("hangar: o argumento '$barrou' nao cabe no pedido do Hangar; abrindo o claude sem o Hangar")
         }
         if ($cobre) {
-            # O mesmo binario que o Supervisor sobe (backend/app/rust_bins.py): CP_RUST_SERVER_BIN
-            # vence e nao cai para outro; sem ela, o mais novo entre o build desta copia e o baixado
-            # (empate fica com a copia); o PATH so sem nenhum dos dois.
+            # A regra unica dos atalhos (scripts/hangar-server-lookup): CP_RUST_SERVER_BIN vence e nao
+            # cai para outro; sem ela, o bin\ da versao em uso pelo caminho real do current; senao o
+            # mais novo entre o build desta copia e o baixado (empate fica com a copia).
             $servidor = $null
             $melhor = $null
-            if ($env:CP_RUST_SERVER_BIN) {
-                if (Test-Path -LiteralPath $env:CP_RUST_SERVER_BIN -PathType Leaf) { $servidor = $env:CP_RUST_SERVER_BIN }
+            $escolhido = "$env:CP_RUST_SERVER_BIN".Trim()
+            if ($escolhido) {
+                if ($escolhido -eq '~' -or $escolhido.StartsWith('~\') -or $escolhido.StartsWith('~/')) { $escolhido = $HOME + $escolhido.Substring(1) }
+                if (Test-Path -LiteralPath $escolhido -PathType Leaf) { $servidor = $escolhido }
             } else {
-                foreach ($c in @((Join-Path $PSScriptRoot '..\..\crates\target\release\hangar-server.exe'),
-                                 (Join-Path $HOME '.hangar\bin\hangar-server.exe'))) {
-                    if (Test-Path -LiteralPath $c -PathType Leaf) {
-                        $item = Get-Item -LiteralPath $c
-                        if (-not $melhor -or $item.LastWriteTimeUtc -gt $melhor.LastWriteTimeUtc) { $melhor = $item }
+                # A troca no Windows deixa so o `current.old` por um instante: espera o link novo ate 1 s.
+                $atual = Join-Path $HOME '.hangar\current'
+                for ($espera = 0; $espera -lt 20 -and -not (Test-Path -LiteralPath $atual) -and (Test-Path -LiteralPath "$atual.old"); $espera++) { Start-Sleep -Milliseconds 50 }
+                $doPacote = Join-Path $atual 'bin\hangar-server.exe'
+                if (Test-Path -LiteralPath $doPacote -PathType Leaf) {
+                    $item = Get-Item -LiteralPath $atual
+                    $real = if ($item.LinkType -and $item.Target) { @($item.Target)[0] } else { $item.FullName }
+                    $servidor = Join-Path $real 'bin\hangar-server.exe'
+                } else {
+                    foreach ($c in @((Join-Path $PSScriptRoot '..\..\crates\target\release\hangar-server.exe'),
+                                     (Join-Path $HOME '.hangar\bin\hangar-server.exe'))) {
+                        if (Test-Path -LiteralPath $c -PathType Leaf) {
+                            $item = Get-Item -LiteralPath $c
+                            if (-not $melhor -or $item.LastWriteTimeUtc -gt $melhor.LastWriteTimeUtc) { $melhor = $item }
+                        }
                     }
+                    if ($melhor) { $servidor = $melhor.FullName }
                 }
-                if ($melhor) { $servidor = $melhor.FullName }
-            }
-            if (-not $servidor -and -not $env:CP_RUST_SERVER_BIN) {
-                $servidor = (Get-Command hangar-server -CommandType Application -ErrorAction SilentlyContinue |
-                             Select-Object -First 1).Source
             }
             if (-not $servidor) {
                 [Console]::Error.WriteLine('hangar: hangar-server nao encontrado; abrindo o claude sem o Hangar')

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Trava a resolução de identidade do hangar-send (a função `me`), com um `tmux` FALSO no PATH — mesmo
-# padrão do test-wrappers.sh, e pelo mesmo motivo: é shell, a suíte pytest não alcança.
+# Trava a resolução de identidade do hangar-send (o `--whoami` do `hangar-server send`, pelo atalho),
+# com um `tmux` FALSO no PATH — mesmo padrão do test-wrappers.sh.
 #
 # Os dois bugs que isto encerra:
 #
@@ -26,9 +26,15 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 falhas=0
 
-# `me` sai do hangar-send de verdade: testar uma cópia colada aqui passaria com o arquivo real quebrado.
-sed -n '/^me() {/,/^}/p' "$REPO/scripts/hangar-send" > "$TMP/me.sh"
-[[ -s "$TMP/me.sh" ]] || { echo "FALHA: não achei a função me() em scripts/hangar-send"; exit 1; }
+# `me` é o `--whoami` do atalho de verdade, com o `hangar-server send` compilado desta árvore: a
+# raiz da cópia é o $TMP, e o .env sai de $TMP/backend (a porta 1 prova que nada vai à API).
+export CP_RUST_SERVER_BIN="$REPO/crates/target/debug/hangar-server"
+[[ -x "$CP_RUST_SERVER_BIN" ]] || { echo "compile antes: scripts/cargo-pinned build -p hangar-server"; exit 1; }
+mkdir -p "$TMP/scripts" "$TMP/backend" "$TMP/casa"
+cp "$REPO/scripts/hangar-send" "$REPO/scripts/hangar-server-lookup" "$TMP/scripts/"
+printf 'CP_AUTH_TOKEN=x\nCP_PORT=1\n' > "$TMP/backend/.env"
+export HOME="$TMP/casa"
+me() { "$TMP/scripts/hangar-send" --whoami; }
 
 # tmux falso: as sessões vêm de PANES_FAKE ("<pane_id> <sessao>" por linha) e SESSAO_ATUAL.
 mkdir -p "$TMP/bin"
@@ -49,7 +55,6 @@ esac
 FAKE
 chmod +x "$TMP/bin/tmux"
 export PATH="$TMP/bin:$PATH"
-source "$TMP/me.sh"
 unset CP_SESSION_KEY HANGAR_CANO_KEY HANGAR_HEADLESS_DIR
 
 checa() { # <caso> <esperado> <obtido>
@@ -125,18 +130,15 @@ export CP_SESSION_KEY="nao-existe"
 checa "chave órfã cai no pane" "outra" "$(me 2>/dev/null)"
 unset CP_SESSION_KEY HANGAR_CANO_KEY HANGAR_HEADLESS_DIR
 
-# 8) `--whoami` do script de verdade: imprime a identidade e sai sem chamar a API (curl falso que falha).
-mkdir -p "$TMP/scripts" "$TMP/backend" "$TMP/claude-headless"
-cp "$REPO/scripts/hangar-send" "$TMP/scripts/hangar-send"
-echo "CP_AUTH_TOKEN=x" > "$TMP/backend/.env"
+# 8) `--whoami` imprime a identidade e sai 0 sem a API: o .env aponta a porta 1, onde nada escuta.
+mkdir -p "$TMP/claude-headless"
 printf '{"name":"w-t4","provider":"claude","key":"k1"}\n' > "$TMP/claude-headless/t.json"
-printf '#!/usr/bin/env bash\necho chamou-api >> "%s/api.log"\nexit 1\n' "$TMP" > "$TMP/bin/curl"
-chmod +x "$TMP/bin/curl"
 quem=$(CP_SESSION_KEY=k1 HANGAR_HEADLESS_DIR="$TMP/claude-headless" "$TMP/scripts/hangar-send" --whoami 2>/dev/null)
 checa "--whoami imprime a identidade" "w-t4" "$quem"
-checa "--whoami sem chamada à API" "nao" "$([[ -e "$TMP/api.log" ]] && echo sim || echo nao)"
+CP_SESSION_KEY=k1 HANGAR_HEADLESS_DIR="$TMP/claude-headless" "$TMP/scripts/hangar-send" --whoami >/dev/null 2>&1
+checa "--whoami sem chamada à API" "0" "$?"
 
-# 9) Script de verdade com `pipefail`: a pasta do Claude sem a chave não encerra a busca antes da do Codex.
+# 9) A pasta do Claude sem a chave não encerra a busca antes da do Codex.
 mkdir -p "$TMP/home9/.hangar/claude-headless" "$TMP/home9/.hangar/codex-sessions"
 printf '{"name":"outra","key":"k-outra"}\n' > "$TMP/home9/.hangar/claude-headless/outra.json"
 printf '{"name":"cx-t9","provider":"codex","key":"k9"}\n' > "$TMP/home9/.hangar/codex-sessions/cx-t9.json"

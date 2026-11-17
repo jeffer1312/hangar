@@ -2,8 +2,11 @@
 $ErrorActionPreference = 'Stop'
 $serverRoot = Split-Path $PSScriptRoot -Parent
 $serverExecutable = $null
-if ($env:CP_RUST_SERVER_BIN) {
-    $serverExecutable = $env:CP_RUST_SERVER_BIN
+$serverChoice = "$env:CP_RUST_SERVER_BIN".Trim()
+if ($serverChoice) {
+    # A mesma regra do scripts/hangar-server-lookup: a variável vence e nunca cai para outro.
+    if ($serverChoice -eq '~' -or $serverChoice.StartsWith('~\') -or $serverChoice.StartsWith('~/')) { $serverChoice = $HOME + $serverChoice.Substring(1) }
+    $serverExecutable = $serverChoice
     if (-not (Test-Path -LiteralPath $serverExecutable -PathType Leaf)) {
         Write-Error 'CP_RUST_SERVER_BIN não é um executável'; exit 126
     }
