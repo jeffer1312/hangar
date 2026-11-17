@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { EventSourceLike, Server, StatusSnapshot } from '@hangar/core';
+import { intlLocale, type EventSourceLike, type Server, type StatusSnapshot } from '@hangar/core';
 import * as m from '../../paraglide/messages';
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -56,6 +56,7 @@ vi.mock('../usage/ReportUI', () => ({
 
 import StatusScreen from './StatusScreen';
 import { bytes } from './format';
+import { dayStartOf } from './StatusBlocks';
 import { STATUS_WATCHDOG_MS, keepUnchanged } from './useStatus';
 
 function fakeSource() {
@@ -198,7 +199,7 @@ describe('tela Status', () => {
     const day = new Date(); day.setHours(12, 0, 0, 0);
     const base = day.getTime() - 86_400_000;
     const crash = (ms: number, cause: string) => ({ ts: new Date(ms).toISOString(), kind: 'crash' as const, cause, error_lines: [] });
-    calls.getStatus.mockResolvedValue({ ...FIXTURE, exits: { items: [crash(base, 'out_of_memory'), crash(base + 600_000, 'watchdog')] } });
+    calls.getStatus.mockResolvedValue({ ...FIXTURE, generated_at: new Date().toISOString(), exits: { items: [crash(base, 'out_of_memory'), crash(base + 600_000, 'watchdog')] } });
     calls.openStream.mockReturnValue(fakeSource());
     const c = await mount();
     const marks = [...c.querySelectorAll<HTMLButtonElement>('button[aria-label]')]
@@ -216,13 +217,14 @@ describe('tela Status', () => {
     const oom = { ts: ago(1), kind: 'crash' as const, cause: 'out_of_memory', error_lines: [] };
     const upd = (n: number) => ({ ts: ago(n), kind: 'update' as const, from: 'a', to: 'b', error_lines: [] });
     const source = fakeSource();
-    calls.getStatus.mockResolvedValue({ ...FIXTURE, exits: { items: [upd(3), oom] } });
+    const now = new Date().toISOString();
+    calls.getStatus.mockResolvedValue({ ...FIXTURE, generated_at: now, exits: { items: [upd(3), oom] } });
     calls.openStream.mockReturnValue(source);
     const c = await mount();
     const mark = c.querySelector<HTMLButtonElement>(`button[aria-label^="${m.status_exit_crash()} · "]`)!;
     await act(async () => mark.click());
     expect(c.textContent).toContain(m.status_exit_cause_out_of_memory());
-    await act(async () => source.emit('status', JSON.stringify({ ...FIXTURE, exits: { items: [upd(5), upd(3), oom] } })));
+    await act(async () => source.emit('status', JSON.stringify({ ...FIXTURE, generated_at: now, exits: { items: [upd(5), upd(3), oom] } })));
     expect(c.textContent).toContain(m.status_exit_cause_out_of_memory());
     expect(c.textContent).not.toContain(m.status_exit_versions({ from: 'a', to: 'b' }));
   });
@@ -248,6 +250,43 @@ describe('tela Status', () => {
     const columns = c.querySelector<HTMLElement>(`[role="adjustable"][aria-label="${m.status_slow_chart()}"]`)!;
     expect(columns.getAttribute('aria-valuetext')).toBe(m.status_slow_hour({
       hour: `${String(new Date(lastHour.hour_start).getHours()).padStart(2, '0')}h`, slow: String(lastHour.slow), errors: String(lastHour.errors) }));
+  });
+
+  it('a janela de 7 dias vira com o retrato do dia seguinte, mesmo com as saídas iguais', async () => {
+    const label = (iso: string) => {
+      const d = new Date(dayStartOf(iso));
+      return `${d.toLocaleDateString(intlLocale(), { weekday: 'short' }).replace(/\.$/, '')} ${d.getDate()}`;
+    };
+    const source = fakeSource();
+    calls.getStatus.mockResolvedValue(FIXTURE);
+    calls.openStream.mockReturnValue(source);
+    const c = await mount();
+    const oldest = new Date(dayStartOf(FIXTURE.generated_at) - 6 * 86_400_000).toISOString();
+    const tomorrow = new Date(Date.parse(FIXTURE.generated_at) + 86_400_000).toISOString();
+    expect(c.textContent).toContain(label(oldest));
+    expect(c.textContent).not.toContain(label(tomorrow));
+    await act(async () => source.emit('status', JSON.stringify({ ...FIXTURE, generated_at: tomorrow })));
+    expect(c.textContent).not.toContain(label(oldest));
+    expect(c.textContent).toContain(label(tomorrow));
+  });
+
+  it('servidor recriado com os mesmos dados não reabre o SSE; token novo reabre', async () => {
+    calls.getStatus.mockResolvedValue(FIXTURE);
+    calls.openStream.mockImplementation(() => fakeSource());
+    const root = createRoot(document.createElement('div'));
+    roots.add(root);
+    const render = () => act(async () => root.render(createElement(StatusScreen)));
+    await render();
+    expect(calls.openStream).toHaveBeenCalledTimes(1);
+    calls.servers = [{ ...a }];
+    await render();
+    expect(calls.getStatus).toHaveBeenCalledTimes(1);
+    expect(calls.openStream).toHaveBeenCalledTimes(1);
+    const renewed = { ...a, token: 'tb' };
+    calls.servers = [renewed];
+    await render();
+    expect(calls.openStream).toHaveBeenCalledTimes(2);
+    expect(calls.openStream).toHaveBeenLastCalledWith(renewed);
   });
 
   it('retrato igual bloco a bloco mantém a referência do bloco', () => {

@@ -2,8 +2,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { configureApi, _resetApiEnvForTests, type ApiEnv, type EventSourceLike } from './apiEnv';
+import { configureDiag, _resetDiagForTests } from './diag';
 import {
-  getStatus, openStatusStream, parseStatusEvent,
+  _resetStatusEventRejectsForTests, getStatus, openStatusStream, parseStatusEvent,
   type StatusAppReport, type StatusAttention, type StatusAttentionTarget, type StatusConnectState, type StatusDeadSession,
   type StatusDirSize, type StatusDiskUse, type StatusExit, type StatusExitKind, type StatusExitsBlock, type StatusHostBlock,
   type StatusHourBucket, type StatusLeftoversBlock, type StatusMachine, type StatusMachineState, type StatusOutsideBlock,
@@ -151,6 +152,26 @@ describe('retrato de status: contrato C1', () => {
     expect(parseStatusEvent('null')).toBeNull();
     expect(parseStatusEvent('{"attention":[]}')).toBeNull();
     expect(parseStatusEvent('{"generated_at":"x"}')).toBeNull();
+  });
+
+  it('quadro descartado vai ao diário, uma vez por tipo de falha', () => {
+    const registrar = vi.fn();
+    configureDiag({ registrar, novoReq: () => '' });
+    _resetStatusEventRejectsForTests();
+    try {
+      parseStatusEvent('{');
+      parseStatusEvent('{"x"');
+      parseStatusEvent('null');
+      parseStatusEvent('{"attention":[]}');
+      parseStatusEvent(JSON.stringify(MINIMAL));
+      expect(registrar.mock.calls.map(([ev]) => ev)).toEqual([
+        { evento: 'status.evento_invalido', nivel: 'aviso', codigo: 'json_invalido' },
+        { evento: 'status.evento_invalido', nivel: 'aviso', codigo: 'nao_objeto' },
+        { evento: 'status.evento_invalido', nivel: 'aviso', codigo: 'sem_campos_raiz' },
+      ]);
+    } finally {
+      _resetDiagForTests();
+    }
   });
 });
 

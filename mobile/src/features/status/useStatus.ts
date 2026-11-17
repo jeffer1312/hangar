@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState } from 'react-native';
 import { useFocusEffect } from 'expo-router';
-import { STATUS_EVENT, getStatus, isServerParked, openStatusStream, parseStatusEvent, registrarDiag,
+import { STATUS_EVENT, baseOf, getStatus, isServerParked, openStatusStream, parseStatusEvent, registrarDiag,
   type EventSourceLike, type StatusSnapshot } from '@hangar/core';
 import { useServers } from '../../stores/servers';
 import { useSessions } from '../../stores/sessions';
@@ -46,6 +46,13 @@ export function keepUnchanged(prev: StatusSnapshot | undefined, next: StatusSnap
  */
 export function useStatus(): { view: StatusView; retry: () => void } {
   const server = useServers((s) => s.servers.find((x) => x.id === s.activeId) ?? null);
+  // O store recria o servidor quando muda outro campo (rótulo); o SSE só reabre quando muda o que a
+  // conexão usa: id, token e endereço.
+  const serverRef = useRef(server);
+  serverRef.current = server;
+  const serverId = server?.id;
+  const token = server?.token;
+  const base = server ? baseOf(server) : null;
   const bucket = useSessions((s) => s.byServer.find((b) => b.server.id === server?.id));
   const offline = bucket?.error === 'offline';
   // `parked` só força o redesenho: o estacionamento não avisa, quem o descobre é o laço abaixo.
@@ -63,7 +70,9 @@ export function useStatus(): { view: StatusView; retry: () => void } {
   }, []);
 
   useFocusEffect(useCallback(() => {
+    const server = serverRef.current;
     if (!server || down || !foreground) return;
+    const current = () => serverRef.current ?? server;
     let alive = true;
     let source: EventSourceLike | null = null;
     let timer: ReturnType<typeof setTimeout> | null = null;
@@ -94,7 +103,7 @@ export function useStatus(): { view: StatusView; retry: () => void } {
     };
     const open = () => {
       if (stopIfParked()) return;
-      source = openStatusStream(server);
+      source = openStatusStream(current());
       arm();
       source.addEventListener('ping', () => { if (alive && !stopIfParked()) arm(); });
       source.addEventListener(STATUS_EVENT, (ev) => {
@@ -109,7 +118,7 @@ export function useStatus(): { view: StatusView; retry: () => void } {
     };
     const load = async () => {
       try {
-        const snap = await getStatus(server);
+        const snap = await getStatus(current());
         if (!alive) return;
         had = true;
         setData((d) => ({ id: server.id, snap: keepUnchanged(d?.id === server.id ? d.snap : undefined, snap) }));
@@ -125,7 +134,7 @@ export function useStatus(): { view: StatusView; retry: () => void } {
     };
     void load();
     return () => { alive = false; if (timer) clearTimeout(timer); close(); };
-  }, [server, down, foreground, attempt]));
+  }, [serverId, token, base, down, foreground, attempt]));
 
   const retry = useCallback(() => {
     setData(null);

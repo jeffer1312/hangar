@@ -12,7 +12,7 @@ import { Icon } from '../../ui/Icon';
 import { toast } from '../../ui/Toast';
 import { RADIUS, SPACE } from '../../theme/scale';
 import { ActionButton } from './StatusParts';
-import { DaysCard, HealthCard, HostCard, MachinesCard, OutsideCard, ServerTiles, SessionsCard, SlowCard } from './StatusBlocks';
+import { DaysCard, dayStartOf, HealthCard, HostCard, MachinesCard, OutsideCard, ServerTiles, SessionsCard, SlowCard } from './StatusBlocks';
 import { duration } from './format';
 import { useStatus, type StatusFailure } from './useStatus';
 import * as m from '../../paraglide/messages';
@@ -55,7 +55,7 @@ function Body({ snap, scroll }: { snap: StatusSnapshot; scroll: RefObject<Scroll
   return <>
     <HealthCard attention={snap.attention} server={snap.server} onJump={jump} />
     {snap.server ? <ServerTiles server={snap.server} onLayout={place('server')} /> : null}
-    {snap.exits || snap.update ? <DaysCard exits={snap.exits} update={snap.update} {...at('exits')} /> : null}
+    {snap.exits || snap.update ? <DaysCard exits={snap.exits} update={snap.update} today={dayStartOf(snap.generated_at)} {...at('exits')} /> : null}
     {snap.machines ? <MachinesCard machines={snap.machines} {...at('machines')} /> : null}
     {snap.sessions ? <SessionsCard sessions={snap.sessions} {...at('sessions')} /> : null}
     {snap.slow ? <SlowCard slow={snap.slow} {...at('slow')} /> : null}

@@ -78,14 +78,26 @@ export const ServerTiles = memo(function ServerTiles({ server, onLayout }: { ser
   return <View onLayout={(e) => onLayout?.(e.nativeEvent.layout.y)} style={{ flexDirection: 'row', gap: SPACE[2] }}>
     <StatTile label={m.status_server_memory()} value={bytes(server.rss_bytes)} sub={memAvg} points={server.rss_series} color={colors[0]}
       a11y={[m.status_server_memory(), bytes(server.rss_bytes), memAvg].filter(Boolean).join(', ')}
-      format={(v, ago) => m.status_point_ago({ value: bytes(v), n: String(ago) })} />
+      format={memoryPoint} />
     <StatTile label={m.status_server_cpu()} value={pct(server.cpu_pct)} sub={cpuAvg} points={server.cpu_series} color={colors[2]}
       a11y={[m.status_server_cpu(), pct(server.cpu_pct), cpuAvg].filter(Boolean).join(', ')}
-      format={(v, ago) => m.status_point_ago({ value: pct(v), n: String(ago) })} />
+      format={cpuPoint} />
   </View>;
 });
 
+// Fora do componente: a mesma função em todo render, para o `Sparkline` em `memo` não redesenhar.
+function memoryPoint(v: number, ago: number) { return m.status_point_ago({ value: bytes(v), n: String(ago) }); }
+function cpuPoint(v: number, ago: number) { return m.status_point_ago({ value: pct(v), n: String(ago) }); }
+
 const DAY = 86_400_000;
+
+/** Meia-noite local do dia do retrato; sem data legível, a de agora. */
+export function dayStartOf(iso: string): number {
+  const ms = Date.parse(iso);
+  const d = new Date(Number.isNaN(ms) ? Date.now() : ms);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
 
 const MARK = 14;
 const KIND_WEIGHT: Record<StatusExit['kind'], number> = { crash: 2, update: 1, requested: 0 };
@@ -105,15 +117,15 @@ function groupExits(items: StatusExit[], from: number, at: (ts: number) => numbe
   return groups.map((g) => g.items);
 }
 
-export const DaysCard = memo(function DaysCard({ exits, update, flash, onLayout }: { exits?: StatusExitsBlock; update?: StatusUpdateBlock } & Place) {
+// `today` vem do retrato (`dayStartOf`): em `memo`, a janela vira de dia com o próximo retrato, não só quando as saídas mudam.
+export const DaysCard = memo(function DaysCard({ exits, update, today, flash, onLayout }: { exits?: StatusExitsBlock; update?: StatusUpdateBlock; today: number } & Place) {
   const c = useSettingsColors();
   const { theme } = useUnistyles();
   const [width, setWidth] = useState(300);
   // O `ts` de uma saída do alvo escolhido: o retrato seguinte pode trazer outra lista e o índice mudaria de dono.
   const [picked, setPicked] = useState<string | null>(null);
   const items = exits?.items ?? [];
-  const start = new Date(); start.setHours(0, 0, 0, 0);
-  const from = start.getTime() - 6 * DAY;
+  const from = today - 6 * DAY;
   const days = Array.from({ length: 7 }, (_, i) => new Date(from + i * DAY));
   const at = (ts: number) => Math.max(0, Math.min(1, (ts - from) / (7 * DAY))) * width;
   const groups = groupExits(items, from, at);

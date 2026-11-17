@@ -2,7 +2,7 @@
 // valor sem fonte no servidor (a tela esconde ou mostra "—", nunca um zero inventado).
 import { apiFetchForServer, ensureConfirmedRoute } from './api';
 import { apiEnv, type EventSourceLike } from './apiEnv';
-import { novoReq } from './diag';
+import { novoReq, registrar as registrarDiag } from './diag';
 import { baseOf } from './rota';
 import type { Server } from './servers';
 
@@ -182,12 +182,25 @@ export function getStatus(s: Server): Promise<StatusSnapshot> {
 /** Dado de um evento `status`; `null` quando não é um retrato (JSON torto ou sem os campos da raiz). */
 export function parseStatusEvent(data: string): StatusSnapshot | null {
   let raw: unknown;
-  try { raw = JSON.parse(data); } catch { return null; }
-  if (!raw || typeof raw !== 'object') return null;
+  try { raw = JSON.parse(data); } catch { return rejectStatusEvent('json_invalido'); }
+  if (!raw || typeof raw !== 'object') return rejectStatusEvent('nao_objeto');
   const snap = raw as Partial<StatusSnapshot>;
-  if (typeof snap.generated_at !== 'string' || !Array.isArray(snap.attention)) return null;
+  if (typeof snap.generated_at !== 'string' || !Array.isArray(snap.attention)) return rejectStatusEvent('sem_campos_raiz');
   return snap as StatusSnapshot;
 }
+
+// O SSE manda um retrato a cada poucos segundos: um quadro torto se repete, e o diário leva um por tipo.
+const rejectedStatusEvents = new Set<string>();
+function rejectStatusEvent(codigo: string): null {
+  if (!rejectedStatusEvents.has(codigo)) {
+    rejectedStatusEvents.add(codigo);
+    registrarDiag({ evento: 'status.evento_invalido', nivel: 'aviso', codigo });
+  }
+  return null;
+}
+
+// só para testes
+export function _resetStatusEventRejectsForTests(): void { rejectedStatusEvents.clear(); }
 
 // Mesma convenção de `openSessionsStream`: ?token só fora da origem (EventSource não manda
 // cabeçalho e cross-origin não leva cookie), cookie na mesma origem.
