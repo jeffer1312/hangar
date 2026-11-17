@@ -27,10 +27,17 @@ pub fn cli(args: &[String]) -> ExitCode {
     let server = super::prepare::server_of(&env, &home);
     let deleted = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
         Ok(runtime) => runtime.block_on(delete(&server, name)),
-        Err(_) => false,
+        Err(_) => Deleted::Unreachable,
     };
-    if deleted {
-        return ExitCode::SUCCESS;
+    match deleted {
+        Deleted::Yes => return ExitCode::SUCCESS,
+        Deleted::Refused(reason) => {
+            // O servidor respondeu e não fechou (ex.: 500 session_kill_unconfirmed): o arquivo fica para
+            // ele achar a sessão de novo, e o motivo aparece.
+            eprintln!("hangar-codex: o servidor não fechou a sessão {name}: {reason}");
+            return ExitCode::from(1);
+        }
+        Deleted::Unreachable => {}
     }
     match local(&codex_sidecar::dir(&home), name) {
         Ok(()) => ExitCode::SUCCESS,
@@ -41,12 +48,32 @@ pub fn cli(args: &[String]) -> ExitCode {
     }
 }
 
-/// O servidor fecha a sessão inteira (processos, fila, convite); `false` em qualquer falha.
-async fn delete(server: &super::prepare::Server, name: &str) -> bool {
-    let (Some(token), Ok(port)) = (server.token.as_deref(), server.port.trim().parse::<u16>()) else { return false };
-    let Ok(client) = crate::http_client().timeout(DELETE_TIMEOUT).build() else { return false };
+#[derive(Debug, PartialEq)]
+pub(crate) enum Deleted {
+    Yes,
+    /// Sem token, sem porta, sem conexão, sem resposta no prazo, ou 404 (o servidor não conhece a
+    /// sessão): a limpeza é local.
+    Unreachable,
+    /// O servidor respondeu e não fechou: status e código dele.
+    Refused(String),
+}
+
+/// O servidor fecha a sessão inteira (processos, fila, convite).
+pub(crate) async fn delete(server: &super::prepare::Server, name: &str) -> Deleted {
+    let (Some(token), Ok(port)) = (server.token.as_deref(), server.port.trim().parse::<u16>()) else { return Deleted::Unreachable };
+    let Ok(client) = crate::http_client().timeout(DELETE_TIMEOUT).build() else { return Deleted::Unreachable };
     let url = format!("http://127.0.0.1:{port}/api/sessions/{}", utf8_percent_encode(name, super::prepare::QUOTE));
-    client.delete(url).bearer_auth(token).send().await.is_ok_and(|response| response.status().is_success())
+    let Ok(response) = client.delete(url).bearer_auth(token).send().await else { return Deleted::Unreachable };
+    let status = response.status();
+    if status.is_success() {
+        return Deleted::Yes;
+    }
+    if status == reqwest::StatusCode::NOT_FOUND {
+        return Deleted::Unreachable;
+    }
+    let body: Value = response.bytes().await.ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or(Value::Null);
+    let code = body["detail"]["code"].as_str().or_else(|| body["detail"].as_str()).unwrap_or("");
+    Deleted::Refused(if code.is_empty() { format!("HTTP {}", status.as_u16()) } else { format!("HTTP {} {code}", status.as_u16()) })
 }
 
 /// Sem o servidor: o lançador normalmente já limpou ao ver a TUI sair; isto cobre o pane derrubado sem
@@ -56,7 +83,7 @@ pub(crate) fn local(dir: &Path, name: &str) -> std::io::Result<()> {
     let endpoint = meta.get("endpoint").and_then(Value::as_str).filter(|endpoint| !endpoint.is_empty());
     let pid = meta.get("app_pid").and_then(Value::as_u64).and_then(|pid| u32::try_from(pid).ok()).filter(|pid| *pid > 0);
     let (Some(endpoint), Some(pid)) = (endpoint, pid) else { return Ok(()) };
-    if app_server(pid, endpoint) == AppServer::Ours && !terminate(pid) {
+    if app_server(pid, endpoint) == AppServer::Ours && !terminate(pid, endpoint) {
         // Arquivo apagado com o processo de pé deixaria um app-server escutando que ninguém acha.
         return Err(std::io::Error::other("o app-server da sessão continua vivo"));
     }
@@ -64,17 +91,32 @@ pub(crate) fn local(dir: &Path, name: &str) -> std::io::Result<()> {
     codex_sidecar::delete_if_life(dir, name, endpoint, pid, key).map(|_| ())
 }
 
+/// Prazo para o app-server sair depois do sinal, o mesmo nos dois sistemas.
+const EXIT_WAIT: Duration = Duration::from_secs(5);
+
+/// SIGTERM e espera ele sair. `false` quando o sinal foi recusado ou ele seguiu vivo no prazo.
 #[cfg(unix)]
-fn terminate(pid: u32) -> bool {
+fn terminate(pid: u32, endpoint: &str) -> bool {
     // SAFETY: o pid foi conferido como o app-server deste endereço logo acima.
-    unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM); }
+    if unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) } != 0 {
+        // ESRCH: saiu entre a conferência e o sinal. EPERM e outros: o processo segue lá.
+        return std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH);
+    }
+    // Saiu = o pid não é mais o app-server deste endereço (filho zumbi também não tem mais o argv).
+    let deadline = std::time::Instant::now() + EXIT_WAIT;
+    while app_server(pid, endpoint) == AppServer::Ours {
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
     true
 }
 
 /// O lançador morto por fora leva o app-server pelo Job; vivo (ou sem Job), só o `TerminateProcess`.
 /// `false` quando o processo não saiu dentro do prazo.
 #[cfg(windows)]
-fn terminate(pid: u32) -> bool {
+fn terminate(pid: u32, _endpoint: &str) -> bool {
     use windows_sys::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
     use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE, TerminateProcess, WaitForSingleObject};
     // SAFETY: o pid foi conferido como o app-server deste endereço logo acima; o handle é fechado aqui.
@@ -156,6 +198,62 @@ mod tests {
         let status = server.wait().unwrap();
         assert_eq!(std::os::unix::process::ExitStatusExt::signal(&status), Some(libc::SIGTERM));
         assert!(!codex_sidecar::path(dir.path(), "codex-proj").exists());
+    }
+
+    /// Revisão de falhas caladas: o app-server que ignora o SIGTERM segue vivo no prazo, e o arquivo da
+    /// sessão fica (sem ele, ninguém acharia o processo que continua escutando).
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn an_app_server_that_survives_the_signal_keeps_its_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let endpoint = "ws://127.0.0.1:65001";
+        let mut server = std::process::Command::new("/bin/sh")
+            .args(["-c", "trap '' TERM; while :; do sleep 1; done", "app-server", endpoint])
+            .spawn()
+            .unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while app_server(server.id(), endpoint) != AppServer::Ours && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        put(dir.path(), json!({"name": "codex-proj", "endpoint": endpoint, "app_pid": server.id(), "key": "k"}));
+        let result = local(dir.path(), "codex-proj");
+        server.kill().unwrap();
+        server.wait().unwrap();
+        assert!(result.is_err(), "o processo seguiu vivo e a limpeza disse que deu certo");
+        assert!(codex_sidecar::path(dir.path(), "codex-proj").exists());
+    }
+
+    async fn answer_once(status: &'static str, body: &'static str) -> u16 {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0u8; 4096];
+            let _ = tokio::io::AsyncReadExt::read(&mut socket, &mut request).await;
+            let reply = format!(
+                "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = tokio::io::AsyncWriteExt::write_all(&mut socket, reply.as_bytes()).await;
+        });
+        port
+    }
+
+    /// Revisão de falhas caladas: só servidor fora (ou que não conhece a sessão) leva à limpeza local;
+    /// a recusa dele (500 `session_kill_unconfirmed`) volta com o status e o código.
+    #[tokio::test]
+    async fn only_an_unreachable_server_falls_back_to_the_local_cleanup() {
+        let server = |port: u16| super::super::prepare::Server { token: Some("t".into()), port: port.to_string() };
+        let port = answer_once("500 Internal Server Error", r#"{"detail":{"code":"session_kill_unconfirmed"}}"#).await;
+        assert_eq!(delete(&server(port), "codex-proj").await, Deleted::Refused("HTTP 500 session_kill_unconfirmed".into()));
+        let port = answer_once("404 Not Found", "{}").await;
+        assert_eq!(delete(&server(port), "codex-proj").await, Deleted::Unreachable);
+        let port = answer_once("200 OK", "{}").await;
+        assert_eq!(delete(&server(port), "codex-proj").await, Deleted::Yes);
+        let dead = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        assert_eq!(delete(&server(dead), "codex-proj").await, Deleted::Unreachable);
+        let no_token = super::super::prepare::Server { token: None, port: "1".into() };
+        assert_eq!(delete(&no_token, "codex-proj").await, Deleted::Unreachable);
     }
 
     /// PR-09: no Windows o app-server vivo daquele endereço sai pelo `TerminateProcess` antes do arquivo
