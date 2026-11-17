@@ -439,6 +439,18 @@ mod tests {
     }
 
     #[test]
+    fn one_pass_serves_both_blocks_and_skips_days_before_the_window() {
+        let dir = tempfile::tempdir().unwrap();
+        append(dir.path(), "2026-11-01", &[saida("2026-11-01T10:00:00Z", json!({"tipo": "crash"}))]);
+        append(dir.path(), "2026-11-17", &[api("2026-11-17T10:00:00Z", "GET /a", "500", 10)]);
+        let reader = DiaryReader::at(dir.path().to_owned());
+        let (exits, slow) = reader.blocks(utc("2026-11-17T12:00:00Z")).unwrap();
+        assert!(exits.items.is_empty());
+        assert_eq!(slow.top_routes[0].count, 1);
+        assert_eq!(reads(&reader), 1, "o arquivo de 16 dias atrás nem é aberto");
+    }
+
+    #[test]
     fn unreadable_line_is_skipped_and_counted_and_partial_line_waits() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("uso-2026-11-17.jsonl");
