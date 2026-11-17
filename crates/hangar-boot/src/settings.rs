@@ -36,6 +36,14 @@ impl Settings {
     }
 }
 
+/// No Windows o nome da variável não tem caixa, mas o servidor lê o ambiente como mapa (`PATH`,
+/// `PATHEXT`): as chaves sobem em maiúsculas, como o `os.environ` do Python as passava quando ele
+/// abria o servidor. `(de, para)` de cada chave a trocar; as ocultas de unidade (`=C:`) ficam.
+pub fn uppercase_renames<'a>(keys: impl IntoIterator<Item = &'a str>) -> Vec<(String, String)> {
+    keys.into_iter().filter(|key| !key.starts_with('='))
+        .filter_map(|key| { let upper = key.to_uppercase(); (upper != key).then(|| (key.to_owned(), upper)) }).collect()
+}
+
 /// As chaves internas que a subida decide. O ambiente herdado (unit, sessão que abriu o servidor à
 /// mão) nunca vence: o Python também as regravava e tirava a porta do convidado que não montou.
 pub const INTERNAL: [&str; 6] = ["HANGAR_SERVER_LISTEN", "HANGAR_SERVER_GUEST_LISTEN", "HANGAR_SERVER_LOG",

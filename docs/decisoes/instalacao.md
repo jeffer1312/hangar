@@ -5,6 +5,15 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
 
 ## Regras vigentes
 
+- **Atualização real antes do merge.** PR que muda como o servidor sobe, se instala, se atualiza
+  ou volta de versão (lançador, `install.sh`/`install.ps1`, `scripts/windows-tasks.ps1`, unit ou
+  tarefa, passo `tipo: maquina`, `crates/hangar-server/src/update/`, `crates/hangar-boot`) só é
+  mesclado na `main` depois de, numa máquina de teste de cada sistema afetado, partindo da versão
+  publicada: atualizar pelo botão para o pacote do PR (a branch do PR enviada à `beta`, que publica
+  o `package-beta`; a máquina de teste fica no canal `beta`), conferir o servidor novo de
+  pé, criar uma sessão de cada provedor instalado, voltar para a versão anterior e atualizar de
+  novo. O PR lista o que foi feito e o resultado de cada etapa; etapa não feita é item desmarcado
+  e impede o merge. [Motivo](#atualização-real-antes-do-merge-17112026).
 - **Quem serve a interface é o BACKEND; o `frontend/dist` chega pronto do CI.** Gate que pergunta
   "o front mudou?" tem que conhecer TODAS as entradas de onde o front é compilado (`frontend`,
   `packages`, `messages`, `project.inlang` e o `package.json`/`package-lock.json` da raiz) — senão
@@ -1477,3 +1486,22 @@ Jefferson-batis falhou duas vezes (9615→9620 em 07/11, 9615→9717 em 08/11, r
 O `Start-Process -Verb RunAs` fica preso até alguém responder ao UAC, então o `WaitForExit(120000)`
 nunca começava a contar; e o pedido vem de um processo escondido, que o Windows mostra só piscando
 na barra de tarefas, nem com a pessoa na frente ele aparece.
+
+## Atualização real antes do merge (17/11/2026)
+
+O PR #435 (0.1.0.10824, servidor sem o Python) passou pelos testes do Windows na DELPHI-02 e por uma
+tarefa agendada isolada, mas ninguém atualizou uma máquina da versão publicada para ele. Na primeira
+atualização real, todas as máquinas Windows falharam (relatórios `7io3oihu`, `pg3xnwua`, `tqeswo2z`,
+`mloswr6a`):
+
+- a prova do passo `2026-11-16-servidor-sobe-sem-python-windows` lia o `.vbs` em UTF-16 sem BOM como
+  UTF-8 e reprovava toda máquina com a tarefa;
+- a volta rodava o `windows-tasks.ps1` da versão anterior, que não reconhece o servidor direto;
+- o reinício parava o executor da atualização, filho do servidor direto (item que o próprio PR
+  deixou desmarcado);
+- aberto direto pelo lançador, o servidor recebia `Path` em vez do `PATH` que o Python lhe passava, e
+  nenhuma máquina conseguia criar sessão de Claude ou de Codex.
+
+Os quatro apareceriam na primeira tentativa de atualizar uma máquina de teste e criar uma sessão. Os
+testes automáticos do Windows (`verificar-local` roda só o runtime; o `test-windows-tasks.ps1` não
+está no CI) não exercitam a atualização nem a criação de sessão.

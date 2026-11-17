@@ -412,7 +412,9 @@ vigentes" de `docs/decisoes/windows.md`**.
 `atualizacoes.py`, `docs/atualizacoes/`, `VERSION`, `frontend/dist` servido pelo backend, na
 criação de sessão sob escopo do systemd ou no pacote por versão (`crates/hangar-package`,
 `crates/hangar-server/src/update/`, `scripts/montar-pacote.py`, `scripts/migrar-pacote.*`,
-`scripts/hangar-server-lookup`, `~/.hangar/config`): **leia "Regras vigentes" de `docs/decisoes/instalacao.md`**.
+`scripts/hangar-server-lookup`, `~/.hangar/config`), no lançador e na subida (`crates/hangar-boot`,
+`crates/hangar-server/src/install_root.rs`, `scripts/windows-tasks.ps1`): **leia "Regras vigentes"
+de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória antes do merge.
 
 ### Plataforma — nomes, pareamento, planos, ditado → [`docs/decisoes/plataforma.md`](docs/decisoes/plataforma.md)
 

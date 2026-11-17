@@ -71,6 +71,19 @@ function Get-HangarBackendLaunchers($rows, $candidates, [string]$name) {
     }
 }
 
+# Prova do passo de maquina: a tarefa do backend religa sempre e sobe pelo `launch backend`. Devolve
+# o motivo da reprovacao, ou nada. Sem a tarefa nao ha o que conferir. O .vbs e UTF-16LE sem BOM (os
+# bytes do GetBytes): lido como UTF-8, o texto nunca casaria.
+function Get-HangarBackendTaskProblem([string]$vbs) {
+    $task = Get-ScheduledTask -TaskName 'hangar-backend' -ErrorAction SilentlyContinue
+    if (-not $task) { return }
+    if ($task.Settings.RestartCount -ne 999) { return "a tarefa hangar-backend religa $($task.Settings.RestartCount) vezes, nao 999" }
+    if (-not (Test-Path -LiteralPath $vbs)) { return "$vbs nao existe" }
+    if ([IO.File]::ReadAllText($vbs, [Text.Encoding]::Unicode) -notmatch '(?:^|\s)launch\s+backend\b') {
+        return "$vbs nao abre o lancador pelo launch backend"
+    }
+}
+
 function Test-HangarHttp([int]$port) {
     $response = $null
     try {
@@ -194,10 +207,13 @@ function Restart-HangarTask([string]$name, [int]$port, [string]$directory, [swit
         if (-not $task.Settings.Enabled) { throw "A tarefa $name esta desabilitada" }
         $rows = Get-HangarProcessTable
         $candidates = @(Get-HangarTaskProcesses $rows $name $directory)
-        # O hangar-server e filho do backend e segura a porta publica: entra na parada depois do
-        # pai (ele sai sozinho quando o cano do stdin fecha; se ainda estiver vivo, cai aqui).
+        # Na versao pelo Python o hangar-server e filho dele e segura a porta publica: entra na parada
+        # depois do pai (ele sai sozinho quando o cano do stdin fecha; se ainda estiver vivo, cai aqui).
+        # So filho do Python: filho do hangar-server direto e o executor da atualizacao, que chamou isto.
+        $pythonIds = @($candidates | Where-Object { $_.Name -match '^(python(?:\d+(?:\.\d+)*)?|uv)\.exe$' } |
+            ForEach-Object { [int]$_.ProcessId })
         $candidates = @($candidates) + @($rows | Where-Object {
-            $_.Name -eq 'hangar-server.exe' -and [int]$_.ParentProcessId -in @($candidates.ProcessId)
+            $_.Name -eq 'hangar-server.exe' -and [int]$_.ParentProcessId -in $pythonIds
         })
         # Por ultimo: parado o servidor, o lancador sai sozinho; parado o lancador, o Job leva o resto.
         $candidates = @($candidates) + @(Get-HangarBackendLaunchers $rows $candidates $name)

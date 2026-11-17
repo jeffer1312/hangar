@@ -1,6 +1,6 @@
 //! Esperados tirados da captura do Python (`contract/boot/b01..b16`), com as diferenças aceitas
 //! (decisão 10: sem `export` nem `${VAR}`) escritas no próprio caso.
-use hangar_boot::settings::{bind_ip, parse_env_file, standalone_env, Places, Settings, GUEST_PORT, INTERNAL};
+use hangar_boot::settings::{bind_ip, parse_env_file, standalone_env, uppercase_renames, Places, Settings, GUEST_PORT, INTERNAL};
 use proptest::prelude::*;
 use std::net::IpAddr;
 
@@ -11,6 +11,15 @@ fn resolve(file: &str, environ: &[(&str, &str)]) -> Result<Settings, String> {
 
 fn s(bind: &str, port: u16, token: &str) -> Settings {
     Settings { bind: bind.into(), port, token: token.into(), forwarded: "127.0.0.1".into() }
+}
+
+/// O Windows guarda `Path` e `SystemRoot`; o Python, quando abria o servidor, os passava em
+/// maiúsculas, e o servidor lê o ambiente como mapa por `PATH`. As variáveis ocultas de unidade
+/// (`=C:`) e as já em maiúsculas ficam como estão.
+#[test]
+fn windows_env_keys_go_upper_like_the_python_passed_them() {
+    assert_eq!(uppercase_renames(["Path", "PATHEXT", "SystemRoot", "=C:", "=c:", "CP_PORT"]),
+        [("Path".to_owned(), "PATH".to_owned()), ("SystemRoot".to_owned(), "SYSTEMROOT".to_owned())]);
 }
 
 #[test]

@@ -3,7 +3,7 @@ import { type Bridge, bridge, onBtwChange, onOwnPane, onResend, setSurfaceBridge
 import { BTW_PANE, btwSupported, btwView } from "./btw";
 import { focusElement, holding, HOLD_MS, type FocusTarget } from "./uiFocus";
 import { openerUrl } from "./uiIntercept";
-import { bandBody, scrollOffset, shownAfterClose, stampOwn, UNDRAWN, type PaneEntry } from "./uiPayload";
+import { bandBody, bandTree, scrollOffset, shownAfterClose, stampOwn, UNDRAWN, type PaneEntry } from "./uiPayload";
 
 // A faixa redesenha a cada segundo enquanto um mod mostra relógio: o envio junta os quadros.
 const SEND_DELAY_MS = 500;
@@ -212,11 +212,12 @@ export function registerUi(on: On) {
     return next(e);
   });
 
-  on("ui.render", { component: "AbovePrompt" }, async ($, e, next) => {
+  // A faixa inteira: o `AbovePrompt` é pedido a cada mod em separado e um hook só ouve a linha do próprio
+  // plugin; a lista traz a de todos, já desenhada.
+  on("ui.render", { component: "AbovePromptList" }, async ($, e, next) => {
     const tree = await next(e);
     if (e.surface === "terminal") {
-      // A faixa do próprio plugin sai daqui sem o dono que o engine carimba na saída: sem ele o app não clica.
-      above = stampOwn(tree, "hangar");
+      above = bandTree(e.props.rows);
       // O `bodyColumns` que o mod recebeu; o `bandBody` manda ele (para o evento) e ele mais as 5 colunas
       // do `[-]` (o `columns` de hoje, que o Python lê para cortar a prévia).
       columns = e.props.bodyColumns;
@@ -225,13 +226,15 @@ export function registerUi(on: On) {
     return tree;
   });
 
-  on("ui.render", { component: "Pane" }, async ($, e, next) => {
+  // `plugin: "*"`: sem ele o hook só ouve os painéis do próprio plugin, e o de outro mod iria ao app vazio.
+  on("ui.render", { component: "Pane", plugin: "*" }, async ($, e, next) => {
     const tree = await next(e);
     if (e.surface === "terminal" && !closed.has(e.requestId)) {
       lastPlacement = e.props.placement;
       panes.set(e.requestId, {
         id: e.requestId, title: e.props.title, placement: e.props.placement, columns: e.props.bodyColumns,
-        tree: stampOwn(tree, "hangar"),
+        // O próprio plugin sai daqui sem o dono que o engine carimba na saída: sem ele o app não clica.
+        tree: stampOwn(tree, e.plugin ?? "hangar"),
         ...(e.requestId === BTW_PANE ? { data: btwView() } : {}),
       });
       drawn.add(e.requestId);
@@ -273,7 +276,7 @@ export function registerUi(on: On) {
     return next(e);
   });
 
-  on("ui.press", async ($, e, next) => {
+  on("ui.press", { plugin: "*" }, async ($, e, next) => {
     // A ponte do aparelho do clique: a do terminal, ou a da superfície `desktop` que o Hangar liga no
     // `claude -p`. Outra superfície (o app da Anthropic pelo Remote Control) segue sem janela.
     const ponte = e.surface === "terminal" ? bridge() : e.surface === "desktop" ? surfaceBridge() : null;
@@ -314,7 +317,7 @@ export function registerUi(on: On) {
 
   // Reserva por teclado do clique do app (T5): com um alvo armado, a `key` dele entra no evento e o
   // backend fica sabendo onde o anel pousou; sem alvo, o foco segue como veio.
-  on("ui.focus", async ($, e, next) => {
+  on("ui.focus", { plugin: "*" }, async ($, e, next) => {
     if (!bridge()) return next(e);
     const alvo = await askFocus($, e.requestId, e.plugin ?? null, e.element ?? null);
     if (!alvo) return next(e);

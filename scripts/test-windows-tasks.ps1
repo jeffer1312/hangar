@@ -58,6 +58,7 @@ function Reset-State {
     }
     $script:owner = 11
     $script:stuckLauncher = $false
+    $script:apart = @()
     $script:lateOwner = $null
     $script:frontOwner = $null
     $script:slowRelease = 0
@@ -78,6 +79,8 @@ function Reset-State {
     $script:httpReplies.Enqueue($false)
     $script:httpReplies.Enqueue($false)
 }
+# Processo vivo que nao e da tarefa (o executor da atualizacao sai do Job): nao a segura em Running.
+function Get-TaskLive { @($script:live.Keys | Where-Object { [int]$_ -notin $script:apart }).Count }
 function Get-HangarProcessTable {
     if ($script:tableFails) { throw 'WMI indisponivel' }
     $script:tableReads++
@@ -104,17 +107,17 @@ function Stop-Process { param($InputObject, [switch]$Force, $ErrorAction)
     if ($script:exitsBeforeStop -eq $InputObject.Id) {
         $script:live.Remove([int]$InputObject.Id)
         if ($script:owner -eq $InputObject.Id) { $script:owner = $null }
-        if (-not $script:live.Count -and -not $script:stuckLauncher) { $script:task.State = 'Ready' }
+        if (-not (Get-TaskLive) -and -not $script:stuckLauncher) { $script:task.State = 'Ready' }
         $InputObject | Add-Member -NotePropertyName HasExited -NotePropertyValue $true -Force
         throw [InvalidOperationException]'Process has exited, so the requested information is not available.'
     }
     $script:events += "stop:$($InputObject.Id)"
     $script:live.Remove([int]$InputObject.Id)
     if ($script:owner -eq $InputObject.Id) { $script:owner = $null }
-    if (-not $script:live.Count -and -not $script:stuckLauncher) { $script:task.State = 'Ready' }
+    if (-not (Get-TaskLive) -and -not $script:stuckLauncher) { $script:task.State = 'Ready' }
 }
 function Start-ScheduledTask { param($TaskName, $ErrorAction)
-    Assert (-not $script:live.Count -and -not $script:owner) 'Nova instancia iniciada antes de encerrar a antiga'
+    Assert (-not (Get-TaskLive) -and -not $script:owner) 'Nova instancia iniciada antes de encerrar a antiga'
     $script:events += 'start'
     if ($script:ignoredStarts -gt 0) { $script:ignoredStarts--; return }
     if (-not $script:frozenLastRun) { $script:lastRun = $script:lastRun.AddSeconds(1) }
@@ -285,6 +288,20 @@ try {
     $script:owner = 12
     Restart-HangarTask 'hangar-backend' 8765 'C:\repo\backend'
     Assert (($script:events -join ',') -eq 'stop:10,stop:11,stop:12,start') 'hangar-server do backend travou ou desordenou o reinicio'
+    # Versao direta: o executor da atualizacao e filho do hangar-server e e quem pediu o reinicio.
+    Reset-State
+    $script:processRows = @($direto[0], $direto[1],
+        (Row 74 71 'hangar-server.exe' '"C:\Users\u\.hangar\versions\0.1.0.7\bin\hangar-server.exe" update --run --listen 0.0.0.0:8765'))
+    $script:live = @{}
+    foreach ($id in @(70, 71, 74)) {
+        $process = [pscustomobject]@{ Id = $id; StartTime = $old }
+        $process | Add-Member ScriptMethod WaitForExit { param($timeout) return $true }
+        $script:live[$id] = $process
+    }
+    $script:apart = @(74)
+    $script:owner = 71
+    Restart-HangarTask 'hangar-backend' 8765 'C:\Users\u\.hangar\versions\0.1.0.8\backend' | Out-Null
+    Assert (($script:events -join ',') -eq 'stop:71,stop:70,start') "Reinicio da versao direta parou o executor da atualizacao: $($script:events -join ',')"
     Reset-State
     $script:processRows = @($rows) + @(Row 13 40 'hangar-server.exe' 'C:\other\hangar-server.exe')
     $script:owner = 13
@@ -423,5 +440,27 @@ try {
     catch { }
     finally { & ([scriptblock]::Create($outerTry.Finally.Extent.Text.TrimStart('{').TrimEnd('}'))) }
     Assert ($script:reposto['hangar-backend'] -eq $bloco) 'Falha da instalacao deixou recuperacao desativada'
+    # Prova do passo de maquina: o .vbs com os mesmos bytes que o Escrever-Lancador grava (sem BOM).
+    $pasta = Join-Path ([IO.Path]::GetTempPath()) "hangar-vbs-$PID"
+    New-Item -ItemType Directory -Force $pasta | Out-Null
+    try {
+        $semBom = New-Object System.Text.UnicodeEncoding $false, $true
+        $vbsDireto = Join-Path $pasta 'direto.vbs'
+        [IO.File]::WriteAllBytes($vbsDireto, $semBom.GetBytes('WScript.Quit CreateObject("WScript.Shell").Run("""C:\Users\u\.hangar\bin\hangar-launcher.exe"" launch backend --log ""C:\l.log""", 0, True)'))
+        $comBom = Join-Path $pasta 'bom.vbs'
+        [IO.File]::WriteAllBytes($comBom, $semBom.GetPreamble() + $semBom.GetBytes('Run("""C:\h\hangar-launcher.exe"" launch backend", 0, True)'))
+        $python = Join-Path $pasta 'python.vbs'
+        [IO.File]::WriteAllBytes($python, $semBom.GetBytes('Run("cmd /c ""C:\repo\.venv\Scripts\python.exe"" -m app.main", 0, True)'))
+        Reset-State
+        $script:task.Settings.RestartCount = 999
+        Assert (-not (Get-HangarBackendTaskProblem $vbsDireto)) '.vbs UTF-16 sem BOM com o launch backend reprovado'
+        Assert (-not (Get-HangarBackendTaskProblem $comBom)) '.vbs UTF-16 com BOM reprovado'
+        Assert ((Get-HangarBackendTaskProblem $python) -match 'launch backend') '.vbs sem o launch backend aprovado'
+        Assert ((Get-HangarBackendTaskProblem (Join-Path $pasta 'falta.vbs')) -match 'nao existe') '.vbs ausente aprovado'
+        $script:task.Settings.RestartCount = 3
+        Assert ((Get-HangarBackendTaskProblem $vbsDireto) -match 'religa 3 vezes') 'Tarefa sem os reinicios automaticos aprovada'
+        $script:task = $null
+        Assert (-not (Get-HangarBackendTaskProblem $python)) 'Maquina sem a tarefa reprovada'
+    } finally { Remove-Item -Recurse -Force $pasta -ErrorAction SilentlyContinue }
     Write-Output 'OK: selecao de processos, recuperacao, falhas, espera, atualizacao, vigia e lancador'
 } finally { $env:LOCALAPPDATA = $testLocalData }
