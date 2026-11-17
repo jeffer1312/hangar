@@ -12,7 +12,6 @@ from __future__ import annotations
 import argparse
 import fnmatch
 import http.client
-import importlib.machinery
 import importlib.util
 import io
 import json
@@ -34,7 +33,7 @@ from datetime import datetime
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE.parents[2] / "backend"))
+sys.path.insert(0, str(HERE))
 JOURNAL_CAP = 40_000
 COMMON_CAP = 8_000
 # A session that died holding a shared resource cannot freeze the team.
@@ -119,7 +118,7 @@ class SendError(OrqError):
 
 def _rust(operation: str, **arguments):
     """Transporte local dos leitores compartilhados com o servidor."""
-    from app.providers_bridge import local
+    from providers_bridge import local
     try:
         return local("orq-info", operation, **arguments)
     except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as exc:
@@ -2252,10 +2251,8 @@ def cmd_advance(a) -> int:
 
 def cmd_storage(a) -> int:
     """Transporte local para o dono do armazenamento, sem motor de limpeza no Python."""
-    loader = importlib.machinery.SourceFileLoader("orq_hangar_open", str(HERE.parents[2] / "scripts" / "hangar-open"))
-    mod = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
-    loader.exec_module(mod)
-    binary = mod.server_bin()
+    import rust_bins
+    binary = rust_bins.find_bin("hangar-server", "CP_RUST_SERVER_BIN")
     if not binary:
         raise OrqError("hangar-server não encontrado; atualize o servidor antes de executar a poda ou a prova")
     directory = a.dir or os.environ.get("ORQ_DIR")

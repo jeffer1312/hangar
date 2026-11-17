@@ -2,7 +2,7 @@ import json
 import os
 import subprocess
 
-from app import rust_bins
+import rust_bins
 
 
 

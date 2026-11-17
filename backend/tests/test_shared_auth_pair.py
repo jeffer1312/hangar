@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from app import rust_bins
+import rust_bins
 
 
 def _publisher():
