@@ -765,6 +765,13 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   O registro de cada chamada guarda os passos do modelo, nunca o que as ferramentas devolvem; o
   Parar mata as chamadas, mas nunca interrompe a gravação da memória.
   [Medição](docs/decisoes/plataforma.md#sonho-da-memória-13112026).
+- **Tela de Status: um retrato do Rust, produtor só com tela aberta, motivo da parada gravado na
+  parada.** `GET /api/status` e o SSE `/api/status/events` (só do dono) entregam o
+  `StatusSnapshot` de `hangar-api`; bloco sem fonte vem ausente. Todo `restarter.restart()` grava
+  antes a marca de intenção (`update/stop_intent.rs`); ponto novo de reinício sem ela é barrado por
+  teste. Com o servidor parado, o nativo age pelo crate folha `hangar-local-server`, que guarda as
+  primitivas do `current` e a `UpdateLock`; nenhuma dessas ações ganha rota. O ponto na linha
+  "Status" segue só o servidor. [Decisão](docs/decisoes/plataforma.md#tela-de-status-17112026).
 - **Computer Use e transferência de atalhos são do Rust.** `/api/computer-control*` mora no crate
   `hangar-computer-control-setup` e `/api/shortcuts/*` no `hangar-shortcut-transfer`, sem reserva
   Python. O hcu se instala sozinho da release e se atualiza só por tag

@@ -4883,3 +4883,36 @@ Issue #408. O painel que usa os conectores.
   painel, e nada sobe ao Help.
 - **Sessão achada pela chave.** Como o plugin, a sessão da PM é a da branch `PM-XXXXX` ou a de nome que
   começa pela chave; ligar no painel grava o vínculo e libera a tool. Uma sessão, um ticket.
+
+## Tela de Status (17/11/2026)
+
+Substitui a tela de migração. Mock aprovado pelo Jefferson em 17/11/2026, depois de recusar a versão
+em linhas de texto ("só texto jogado na cara do usuário"): resumo de saúde com pontos de atenção,
+curvas, linha do tempo, cartões de máquina, barra dividida, colunas por hora e medidores.
+
+- **Retrato único (`hangar_api::status::StatusSnapshot`, `CLIENT_API` 19).** `GET /api/status` e o
+  SSE `/api/status/events` (evento `status`), só do dono. Bloco ausente = sem fonte; o cliente
+  esconde ou mostra "—", nunca zero. A lista de atenção é montada no servidor
+  (`hangar-status/attention.rs`); o texto sai no cliente por `status_attention_<code>`.
+- **Produtor só com assinante**, no molde do `ListHub`: servidor e máquina a cada 5 s, processos e
+  sessões a cada 15 s, peers a cada 30 s. O amostrador do processo roda sempre (60 pontos, um por
+  minuto) para a média da última hora existir. As rotas da tela não entram na linha `api.servidor`
+  do diário: a espera dela não pode aparecer como lentidão nos números que ela mesma mostra.
+- **Motivo da parada gravado na parada, nunca cruzando horário.** Antes de todo
+  `restarter.restart()` o executor grava `~/.hangar/stop-intent.json` (tipo, causa, pid do servidor
+  substituído); vale só para esse pid e por 10 min, e reinício recusado com o servidor ainda de pé
+  a apaga. A subida seguinte grava `hangar_server.saida` (`crash` / `update` / `requested`). A
+  causa da queda no Linux vem do journal ("Failed with result"), porque o `Result` da unit já foi
+  zerado quando o serviço sobe de novo. A primeira atualização para esta versão ainda é feita pelo
+  executor antigo e não gera a linha.
+- **Servidor parado não tem API.** O nativo lê e age pelo crate folha `hangar-local-server`
+  (sem `hangar-core`): estado do serviço, motivo, versões e as ações subir, liberar a porta (mesmo
+  usuário e mesmo nascimento conferidos na hora) e apontar o `current` para a versão anterior (com a
+  `UpdateLock`, serviço parado, conferência da versão que responde). As primitivas de link e a
+  `UpdateLock` saíram de `update/mod.rs` para esse crate; o servidor e o `hangar-core` importam de
+  lá. Nenhuma ação ganha rota HTTP. "Reinstalar o serviço" abre o assistente de instalação, porque o
+  `install-package` recusa máquina já instalada.
+- **O ponto na linha "Status" segue só o servidor** (vermelho parado, âmbar subindo, nada de pé):
+  disco quase cheio ou máquina com versão antiga não são ação que falhou, e ficam dentro da tela.
+- **Fora:** "Python vivo" (o Python não sobe mais), `lan` dos peers (o servidor só chama o
+  `base_url`), limpar restos pela tela (só conta).
