@@ -199,6 +199,98 @@ async fn publish(st: &AppState, b: PublishBody) -> Value {
     out
 }
 
+/// Recusa do HTML citado aberto como página: código para o cliente e frase para quem lê o corpo.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct FilePageRefusal { pub status: StatusCode, pub code: &'static str, pub msg: &'static str }
+
+impl FilePageRefusal {
+    fn reply(&self) -> Response { hangar_core::http::detail(self.status, self.code, self.msg, json!({})) }
+}
+
+const fn refusal(status: StatusCode, code: &'static str, msg: &'static str) -> FilePageRefusal { FilePageRefusal { status, code, msg } }
+
+/// Só HTML vira página: qualquer outro tipo continua no Abrir/Baixar do cartão.
+pub(crate) fn is_html(path: &std::path::Path) -> bool {
+    path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("html") || e.eq_ignore_ascii_case("htm"))
+}
+
+/// O arquivo inteiro como texto: UTF-8 válido e no mesmo teto do `html_render`, lido no máximo até o teto em bytes.
+pub(crate) fn read_html(path: &std::path::Path) -> Result<String, FilePageRefusal> {
+    use std::io::Read;
+    let unreadable = refusal(StatusCode::NOT_FOUND, "file_page_unreadable", "o arquivo não pôde ser lido");
+    let too_large = refusal(StatusCode::PAYLOAD_TOO_LARGE, "file_page_too_large", "o html passa de 512000 caracteres");
+    // Sem bloqueio: abrir um pipe com nome `.html` esperaria alguém escrever nele. O tipo é conferido no descritor
+    // aberto, não no caminho, que pode ser trocado entre as duas leituras.
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)] { use std::os::unix::fs::OpenOptionsExt; options.custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW); }
+    let file = options.open(path).map_err(|_| unreadable)?;
+    if !file.metadata().is_ok_and(|m| m.is_file()) {
+        return Err(refusal(StatusCode::BAD_REQUEST, "file_page_not_file", "não é um arquivo comum"));
+    }
+    // Um caractere UTF-8 ocupa até 4 bytes: além disso nem vale ler o resto.
+    let limit = HTML_MAX_CHARS * 4;
+    let mut bytes = Vec::new();
+    file.take(limit as u64 + 1).read_to_end(&mut bytes)
+        .map_err(|_| refusal(StatusCode::NOT_FOUND, "file_page_unreadable", "o arquivo não pôde ser lido"))?;
+    if bytes.len() > limit { return Err(too_large); }
+    let text = String::from_utf8(bytes)
+        .map_err(|_| refusal(StatusCode::UNSUPPORTED_MEDIA_TYPE, "file_page_not_utf8", "o html não está em UTF-8"))?;
+    match text.chars().count() {
+        0 => Err(refusal(StatusCode::UNPROCESSABLE_ENTITY, "file_page_empty", "o arquivo está vazio")),
+        n if n > HTML_MAX_CHARS => Err(too_large),
+        _ => Ok(text),
+    }
+}
+
+/// Título da página: o nome do arquivo, no teto do título.
+fn file_title(path: &std::path::Path) -> String {
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).filter(|n| !n.trim().is_empty())
+        .unwrap_or_else(|| "page.html".into());
+    name.chars().take(TITLE_MAX_CHARS).collect()
+}
+
+/// HTML citado na conversa (`POST /api/sessions/{name}/file/page`, só o dono) guardado como rascunho isolado da
+/// sessão. `target` já passou pela mesma autorização do `/file`. O arquivo vai como está: sem embutir imagens
+/// (o caminho delas no disco é arbitrário) e sem o Chromium do servidor. A resposta traz o caminho da página e o
+/// endereço local com o bilhete dela, que só abre essa página e nunca leva o token do dono.
+pub(crate) async fn publish_file(st: &AppState, name: &str, target: PathBuf, cited_in: Option<&str>) -> Response {
+    if !is_html(&target) {
+        return refusal(StatusCode::UNSUPPORTED_MEDIA_TYPE, "file_page_not_html", "só arquivo .html ou .htm abre no navegador").reply();
+    }
+    // A página vai para a conversa contra a qual a citação foi conferida, nunca para uma que a troque no meio.
+    // Dono vazio nunca casaria com a lista: a limpeza apagaria a página no minuto seguinte.
+    let Some(jsonl) = cited_in.filter(|j| !j.is_empty()).map(str::to_owned) else {
+        return refusal(StatusCode::CONFLICT, "file_page_no_transcript", "a sessão ainda não tem transcript").reply();
+    };
+    let (pages, key) = (st.pages.clone(), crate::locate::session_key(&jsonl));
+    let saved = tokio::task::spawn_blocking(move || -> Result<String, Response> {
+        let html = read_html(&target).map_err(|r| r.reply())?;
+        let page = NewPage { html, title: file_title(&target), height: None, heights: BTreeMap::new(), draft: true, own_theme: true, url: None };
+        pages.save(&key, &jsonl, &page).map_err(|e| {
+            tracing::warn!(key = %key, code = "file_page_not_saved", "página do arquivo não gravada: {e}");
+            hangar_core::http::detail(StatusCode::INTERNAL_SERVER_ERROR, "file_page_not_saved", "não foi possível gravar a página", json!({}))
+        })
+    }).await;
+    let id = match saved {
+        Ok(Ok(id)) => id,
+        Ok(Err(r)) => {
+            if r.status().is_server_error() { st.diag.report("rust.file_page_failed", name, "file_page_not_saved", "página do arquivo não gravada"); }
+            return r;
+        }
+        Err(e) => {
+            tracing::error!(panic = e.is_panic(), "gravação da página do arquivo interrompida");
+            st.diag.report("rust.file_page_failed", name, "file_page_not_saved", "gravação da página interrompida");
+            return hangar_core::http::detail(StatusCode::INTERNAL_SERVER_ERROR, "file_page_not_saved", "a gravação caiu no servidor", json!({}));
+        }
+    };
+    let url = format!("/api/sessions/{}/pages/{id}", utf8_percent_encode(name, NON_ALPHANUMERIC));
+    match crate::nav_requests::resolve_url(name, &url, st.cfg.listen, &st.list.nav.tickets, crate::nav_requests::now() as u64) {
+        Ok(open_url) => json_reply(StatusCode::OK, json!({"id": id, "url": url, "open_url": open_url})),
+        Err((status, msg)) => hangar_core::http::detail(status, "file_page_bad_url", msg, json!({})),
+    }
+}
+
 /// Aviso a quem publicou: a página de tema próprio não pôs fundo, e o texto claro dela sumiria no branco.
 const UNPAINTED: &str = "own_theme sem fundo próprio: o texto claro sumia no branco e o servidor pôs o fundo escuro. \
 Ponha background e color no html/body, ou publique sem own_theme e use as variáveis do tema.";
@@ -477,6 +569,37 @@ mod tests {
         assert!(!r.heights.contains_key(&390), "o print do rascunho não é medição de coluna");
         let png = std::fs::read(&shot).unwrap();
         if let Some(keep) = std::env::var_os("HANGAR_DRAFT_SHOT") { std::fs::write(keep, &png).unwrap(); }
+    }
+
+    #[test]
+    fn cited_html_is_read_whole_in_utf8_and_within_the_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = |name: &str, bytes: &[u8]| { let p = dir.path().join(name); std::fs::write(&p, bytes).unwrap(); p };
+        assert_eq!(read_html(&file("a.html", "<p>olá</p>".as_bytes())).unwrap(), "<p>olá</p>");
+        let wide = "é".repeat(HTML_MAX_CHARS);
+        assert_eq!(read_html(&file("wide.html", wide.as_bytes())).unwrap().chars().count(), HTML_MAX_CHARS, "o teto é em caracteres");
+        let code = |p: &std::path::Path| read_html(p).unwrap_err().code;
+        assert_eq!(code(&file("latin.html", &b"<p>ol\xe1</p>"[..])), "file_page_not_utf8");
+        assert_eq!(code(&file("empty.html", &b""[..])), "file_page_empty");
+        assert_eq!(code(&file("big.html", "a".repeat(HTML_MAX_CHARS + 1).as_bytes())), "file_page_too_large");
+        assert_eq!(code(&file("huge.html", vec![b'a'; HTML_MAX_CHARS * 4 + 10].as_slice())), "file_page_too_large");
+        assert_eq!(code(&dir.path().join("missing.html")), "file_page_unreadable");
+        // No Windows a pasta nem abre como arquivo.
+        assert!(matches!(code(dir.path()), "file_page_not_file" | "file_page_unreadable"));
+        assert_eq!(read_html(&file("big2.html", "a".repeat(HTML_MAX_CHARS + 1).as_bytes())).unwrap_err().status, StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[test]
+    fn only_html_files_become_pages() {
+        for yes in ["a.html", "b.HTM", "/x/y/Relatório.Html"] { assert!(is_html(std::path::Path::new(yes)), "{yes}"); }
+        for no in ["a.html.txt", "a", "a.xhtml", "html", "/x/.html/a.md"] { assert!(!is_html(std::path::Path::new(no)), "{no}"); }
+    }
+
+    #[test]
+    fn file_page_title_is_the_file_name_within_the_limit() {
+        assert_eq!(file_title(std::path::Path::new("/repo/docs/mock.html")), "mock.html");
+        let long = format!("/r/{}.html", "x".repeat(300));
+        assert_eq!(file_title(std::path::Path::new(&long)).chars().count(), TITLE_MAX_CHARS);
     }
 
     #[test]

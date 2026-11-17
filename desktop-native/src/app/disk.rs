@@ -231,6 +231,17 @@ impl Uploads {
     }
 }
 
+/// Pastas ainda não resolvidas das listas de servidor desta máquina (`(loopback, sessões)`), sem repetir. A worktree
+/// onde o agente trabalha também: é nela que o painel de git roda.
+fn pending_dirs<'a>(lists: impl Iterator<Item = (bool, &'a [SessionInfo])>, known: &HashMap<String, Option<PathBuf>>) -> Vec<String> {
+    let mut pending: Vec<String> = lists.filter(|(loopback, _)| *loopback).flat_map(|(_, sessions)| sessions)
+        .flat_map(|s| [s.cwd.clone(), s.git_cwd.clone()]).flatten()
+        .filter(|cwd| !known.contains_key(cwd)).collect();
+    pending.sort();
+    pending.dedup();
+    pending
+}
+
 /// Retenção dos anexos (`upload_retention_days`); sem a configuração, a varredura fica para o próximo envio.
 pub(super) async fn retention(api: &Api) -> Option<i64> {
     api.config().await.ok()?.pointer("/campos/upload_retention_days/valor")?.as_i64()
@@ -268,11 +279,11 @@ impl Hangar {
     }
 
     /// Resolve em segundo plano a pasta real das sessões ainda não vistas; até chegar, elas seguem pelo backend.
+    /// Vale para toda lista de servidor desta máquina (loopback), seja ele o ativo ou não.
     pub(super) fn resolve_local_dirs(&mut self, cx: &mut Context<Self>) {
-        if !self.api.as_ref().is_some_and(|api| api.is_loopback()) { return; }
-        // A worktree onde o agente trabalha também: é nela que o painel de git roda.
-        let pending: Vec<String> = self.sessions.iter().flat_map(|s| [s.cwd.clone(), s.git_cwd.clone()]).flatten()
-            .filter(|cwd| !self.local_dirs.contains_key(cwd)).collect();
+        let active = (self.api.as_ref().is_some_and(Api::is_loopback), self.sessions.as_slice());
+        let others = self.remote.values().map(|list| (list.api.as_ref().is_some_and(Api::is_loopback), list.sessions.as_slice()));
+        let pending = pending_dirs(std::iter::once(active).chain(others), &self.local_dirs);
         if pending.is_empty() { return; }
         for cwd in &pending { self.local_dirs.insert(cwd.clone(), None); }
         cx.spawn(async move |this, cx| {
@@ -309,8 +320,22 @@ impl Hangar {
 
 #[cfg(test)]
 mod tests {
-    use super::{cited, plain_path, resolve, safe_ext, session_id, slug, transcript_image, uploads_dir};
-    use std::path::Path;
+    use super::{cited, pending_dirs, plain_path, resolve, safe_ext, session_id, slug, transcript_image, uploads_dir};
+    use crate::api::dto::SessionInfo;
+    use std::collections::HashMap;
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn local_dirs_come_from_every_list_of_this_machine_not_only_the_active_one() {
+        let session = |cwd: &str, git: Option<&str>| SessionInfo { cwd: Some(cwd.into()), git_cwd: git.map(Into::into), ..Default::default() };
+        let active_remote = [session("/casa/repo", None)];
+        let local = [session("/home/u/a", Some("/home/u/a-wt")), session("/home/u/a", None)];
+        let known = HashMap::from([("/home/u/visto".to_owned(), None::<PathBuf>)]);
+        let other_local = [session("/home/u/visto", None), session("/home/u/b", None)];
+        let lists = [(false, &active_remote[..]), (true, &local[..]), (true, &other_local[..])];
+        assert_eq!(pending_dirs(lists.into_iter(), &known), ["/home/u/a", "/home/u/a-wt", "/home/u/b"],
+            "a ativa de outra máquina fica de fora; as listas locais entram sem repetir nem refazer o já visto");
+    }
 
     #[test]
     fn verbatim_windows_prefix_is_dropped_for_the_system() {

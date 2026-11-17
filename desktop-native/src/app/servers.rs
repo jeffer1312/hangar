@@ -189,6 +189,7 @@ impl Hangar {
                         if stored == Some(true) { self.notice_ignores_changed(&key, cx); }
                         stored.is_some()
                     }
+                    // `nav` é aberto por quem chama, que tem a janela: a lista não muda.
                     _ => { changed = false; true }
                 };
                 let _ = frame.applied.send(applied);
