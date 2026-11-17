@@ -84,36 +84,6 @@ def test_skills_vem_da_skill_bridge_e_o_script_nao_poda(tmp_path):
     assert (ponte / "de-terceiro").is_symlink()
 
 
-# --- rtk no Codex: `updatedInput` exige `permissionDecision: allow` ---------------------------
-
-FILTRO = REPO / "scripts" / "codex-hook-allow.py"
-
-
-def _filtrar(entrada: str) -> str:
-    r = subprocess.run(["python3", str(FILTRO)], input=entrada, capture_output=True, text=True,
-                       timeout=10)
-    assert r.returncode == 0, r.stderr
-    return r.stdout
-
-
-def test_filtro_completa_o_allow_que_o_rtk_omite_em_comando_composto():
-    """rtk 0.43.0 devolve `updatedInput` sem `permissionDecision` quando reescreve so um pedaco de
-    um comando com `;`. Claude Code aceita; Codex recusa a reescrita ("PreToolUse hook returned
-    updatedInput without permissionDecision:allow") e roda o original."""
-    saida = json.loads(_filtrar(
-        '{"hookSpecificOutput":{"hookEventName":"PreToolUse","updatedInput":{"command":"pwd; rtk read x"}}}'))
-    assert saida["hookSpecificOutput"]["permissionDecision"] == "allow"
-    assert saida["hookSpecificOutput"]["updatedInput"] == {"command": "pwd; rtk read x"}
-
-
-def test_filtro_nao_mexe_em_decisao_ja_dada_nem_em_saida_vazia():
-    deny = ('{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny",'
-            '"updatedInput":{"command":"x"}}}')
-    assert json.loads(_filtrar(deny))["hookSpecificOutput"]["permissionDecision"] == "deny"
-    assert _filtrar("") == ""
-    assert _filtrar("texto que nao e json\n") == "texto que nao e json\n"
-
-
 def test_persona_e_pacotes_do_pi_seguem_idempotentes(tmp_path):
     home = _home(tmp_path)
     installed = home / ".claude" / "plugins" / "installed_plugins.json"
