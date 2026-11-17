@@ -124,12 +124,12 @@ foreach ($caso in @(@{ roda = $false; esperado = 0 }, @{ roda = $true; esperado 
     Assert ($script:conptyCalls -eq $caso.esperado) "-App -ConsertarRoda:$($caso.roda): install-psmux-conpty.ps1 chamado $($caso.esperado) vez(es)"
 }
 
-# Preambulo do -App: a codepage dos .cmd e lida antes da troca para UTF-8, e o Python sai em UTF-8
+# Preambulo do -App: a codepage dos .cmd e lida antes da troca para UTF-8
 $iCp = $texto.IndexOf('$script:launcherCodePage = [Console]::OutputEncoding.CodePage')
 $iUtf = $texto.IndexOf('try { [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false } catch { }')
 Assert ($iCp -ge 0 -and $iCp -lt $iUtf) 'a codepage dos .cmd e guardada antes da troca para UTF-8'
 $appIf = $ast.Find({ param($n) $n -is [Management.Automation.Language.IfStatementAst] -and $n.Clauses[0].Item1.Extent.Text -eq '$App' -and $n.Extent.Text.Contains('HANGAR-PROTOCOLO') }, $true)
-Assert ($appIf -and $appIf.Extent.Text.Contains("`$env:PYTHONIOENCODING = 'utf-8'")) '-App: o Python escreve em UTF-8'
+Assert (-not $texto.Contains('PYTHONIOENCODING')) 'o instalador nao prepara mais o Python'
 Assert ($appIf -and $appIf.Extent.Text.Contains("`$script:launcherCodePage = [int](Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Nls\CodePage').OEMCP")) '-App: os .cmd vao na OEM do sistema, nao na do console herdado'
 $d = $ast.Find({ param($x) $x -is [Management.Automation.Language.FunctionDefinitionAst] -and $x.Name -eq 'Escrever-Lancador' }, $true)
 . ([scriptblock]::Create($d.Extent.Text))
@@ -207,8 +207,9 @@ Assert ($script:depsError -eq 'sem-internet') 'Instale sem internet guarda sem-i
 $itens = @($script:saida | Where-Object { $_ -like '##HANGAR-ITEM## psmux *' })
 Assert (($itens -join '|') -eq '##HANGAR-ITEM## psmux fazendo psmux (multiplexador)|##HANGAR-ITEM## psmux falhou psmux (multiplexador)') 'Instale marca fazendo e falhou'
 $SoChecar = $true; Limpa
-[void](Instale 'uv' 'uv' 'astral-sh.uv' 'gerencia o venv do backend')
-Assert ($script:saida -contains '##HANGAR-ITEM## uv fila uv') 'no -SoChecar o que falta fica na fila'
+[void](Instale 'Node LTS (minimo 20)' 'node' 'OpenJS.NodeJS.LTS' 'o frontend e Svelte')
+Assert ($script:saida -contains '##HANGAR-ITEM## node fila Node LTS (minimo 20)') 'no -SoChecar o que falta fica na fila'
+Assert (-not ($texto -match "Instale '(Python|uv)'")) 'o instalador nao instala Python nem uv'
 $SoChecar = $false
 
 $pare = $ast.Find({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Pare' }, $true).Extent.Text
@@ -241,7 +242,7 @@ function Pausa-Log { }
 function Pausa-Fim { }
 function FakePowerShell { $global:LASTEXITCODE = 1 }
 $PowerShellExe = 'FakePowerShell'; $raiz = 'C:\hangar-falso'; $script:psmuxSessoes = 2
-$pyBackend = Join-Path $raiz 'backend\.venv\Scripts\python.exe'
+$srvComando = Join-Path $raiz 'scripts\hangar-server-command.ps1'
 '@
 function Run-Gate($caso, $corpo, $depois) {
     $child = Join-Path $env:TEMP ("hangar-test-" + [guid]::NewGuid().ToString('N') + '.ps1')

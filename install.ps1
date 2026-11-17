@@ -40,8 +40,6 @@ if ($App) {
     # O app le a saida como UTF-8; sem isto o 5.1 escreveria na codepage OEM do console.
     try { [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false } catch { }
     $OutputEncoding = New-Object System.Text.UTF8Encoding $false
-    # O mesmo para o Python (hangar-server doctor, uv run), que escreveria em cp1252 no arquivo do app.
-    $env:PYTHONIOENCODING = 'utf-8'
     Write-Host "##HANGAR-PROTOCOLO## $HangarProtocol"
 }
 # A senha do celular chega pelo ambiente, nunca pelo argv; sai dele ja aqui, para nenhum
@@ -75,10 +73,11 @@ if ($Agentes) {
 $ErrorActionPreference = 'Stop'
 $raiz = Split-Path -Parent $MyInvocation.MyCommand.Path
 # Modo pacote: esta pasta e uma versao extraida (manifest.json sem .git, o criterio do install_root).
-# Python, dependencias, binarios e tela vieram prontos: nada de git, uv, venv nem build da tela.
+# Binarios e tela vieram prontos: nada de git nem build da tela.
 $pacote = (Test-Path -LiteralPath "$raiz\manifest.json") -and -not (Test-Path -LiteralPath "$raiz\.git")
-# O Python do backend: o embutido do pacote ou o venv do checkout.
-$pyBackend = if ($pacote) { Join-Path $raiz 'python\python.exe' } else { Join-Path $raiz 'backend\.venv\Scripts\python.exe' }
+# O hangar-server da instalacao (regra unica em scripts\hangar-server-command.ps1). No checkout novo
+# ele so existe depois do passo dos binarios Rust.
+$srvComando = Join-Path $raiz 'scripts\hangar-server-command.ps1'
 . "$raiz\scripts\windows-tasks.ps1"
 . "$raiz\scripts\windows-wrappers.ps1"
 $installMutex = $null
@@ -907,21 +906,9 @@ if ($listaAgentes.Count) {
 } else {
     Instale-ClaudeCode 'nenhum agente de codigo encontrado; o Claude Code e o padrao' | Out-Null
 }
-if ($pacote) {
-    Ok 'Python e dependencias do backend: vieram no pacote'
-    Mark-Item 'py' 'ok' 'Python (do pacote)'
-} else {
-Instale 'Python'                'py'     'Python.Python.3.14'   'o backend e Python'        | Out-Null
-}
-# 3.14, nao 3.13: backend/pyproject.toml exige >=3.14 (e .python-version = 3.14). Com o 3.13 o
-# `uv sync` ate funcionava - baixava um 3.14 gerenciado por conta propria - mas o Python do winget
-# virava peso morto, servindo so ao shim python3 do hangar-send. Um Python so pros dois papeis.
 # No pacote a tela vem pronta; o Node segue servindo a statusline do Claude e ao hangar-preview.
 $praQueNode = if ($pacote) { 'statusline do Claude e hangar-preview' } else { 'o frontend e Svelte' }
 Instale 'Node LTS (minimo 20)'  'node'   'OpenJS.NodeJS.LTS'    $praQueNode                 | Out-Null
-if (-not $pacote) {
-Instale 'uv'                    'uv'     'astral-sh.uv'         'gerencia o venv do backend' | Out-Null
-}
 
 # O backend chama o multiplexador por `tmux`. O psmux publica esse alias; se um dia parar,
 # isso vira erro claro AQUI em vez de "falha ao criar sessao" dentro do app.
@@ -1076,23 +1063,9 @@ Mark-Step 'preparar' 'ok'
 # -- 2/8 Backend -------------------------------------------------------------
 Mark-Step 'instalar' 'fazendo'
 Titulo '2/8 Backend'
-Push-Location "$raiz\backend"
-if ($pacote) {
-    Ok 'dependencias: vieram no pacote'
-} else {
-$rcSync = Nativo uv sync --quiet
-if ($rcSync -ne 0) {
-    Pop-Location
-    $codigoSync = ''
-    if (-not (Test-Internet)) { $codigoSync = 'sem-internet' }
-    Pare 'uv sync falhou - o backend ficou sem as dependencias' @('rodar na mao:  cd backend ; uv sync') $codigoSync
-}
-Ok 'dependencias instaladas'
-Nota 'psutil entra aqui: no Windows nao ha /proc pra ler informacao de processo'
-}
 Mark-Item 'backend' 'ok' 'servidor do Hangar'
 # -- Binarios Rust (hangar-server e hangar-cano, release server-latest) -------
-# Sem eles o Python atende a API, mas a tela web e o ditado nao: a falta fica como pendencia.
+# Sem eles o Hangar nao sobe: a falta fica como pendencia.
 if (-not $SoChecar) {
     Titulo 'Binarios Rust'
     if ($pacote) {
@@ -1112,10 +1085,10 @@ if (-not $SoChecar) {
         $script:pendencias += 'binarios Rust'
     } else {
         $motivo = 'download ou conferência falhou'
-        Falta "binarios Rust nao baixaram ($motivo) - o backend em Python atende sozinho"
+        Falta "binarios Rust nao baixaram ($motivo) - sem eles o Hangar nao sobe"
         Mark-Item 'rust' 'pendente' 'servidor rapido'
         $script:pendencias += 'binarios Rust'
-        Write-Host '##HANGAR-AVISO## binarios Rust nao baixaram; o backend em Python atende sozinho'
+        Write-Host '##HANGAR-AVISO## binarios Rust nao baixaram; sem eles o Hangar nao sobe'
     }
 }
 
@@ -1132,10 +1105,12 @@ foreach ($a in $script:agentesNovos) {
     Mark-Item $a 'falhou' $nome
     Add-AppPending $nome 'agente-nao-instalou'
 }
-# Sem o par VAPID o push para o celular sai calado e o celular nem se inscreve.
-if ((Nativo $pyBackend -m app.vapid_setup) -eq 0) { Ok 'chaves do push para o celular prontas' }
-else { Falha 'chaves do push para o celular' 'rodar na mao:  cd backend ; uv run python -m app.vapid_setup' }
-Pop-Location
+# Sem o par VAPID o push para o celular sai calado e o celular nem se inscreve. Depois dos
+# binarios: no checkout novo o hangar-server so existe a partir daqui.
+$argsVapid = if ($pacote) { @('vapid-setup') } else { @('vapid-setup', '--root', $raiz) }
+if ((Nativo $PowerShellExe -NoProfile -ExecutionPolicy Bypass -File $srvComando @argsVapid) -eq 0) { Ok 'chaves do push para o celular prontas' }
+elseif ($pacote) { Falha 'chaves do push para o celular' 'rodar na mao:  ~\.hangar\current\bin\hangar-server.exe vapid-setup' }
+else { Falha 'chaves do push para o celular' "rodar na mao:  powershell -File scripts\hangar-server-command.ps1 vapid-setup --root `"$raiz`"" }
 # Prova do minimo: sem nenhum agente o app abre, mas nao tem o que pilotar.
 if (-not @($todosAgentes | Where-Object { Tem $_ }).Count) {
     Pare 'nenhum agente de codigo instalado - o Hangar precisa de pelo menos um' @('powershell -ExecutionPolicy Bypass -File install.ps1 -Agentes claude') 'sem-agente'
@@ -2308,7 +2283,7 @@ if ($registrou) {
                 if (Test-HangarPortOpen $portaBack) { $subiu = $true; break }
                 $tam = (Get-LogBackend).LastWriteTimeUtc
                 if ($tam -gt $tamAnt) {
-                    if (-not $avisou) { Nota 'o backend ainda esta subindo (primeira subida faz uv sync e passos de atualizacao)'; $avisou = $true }
+                    if (-not $avisou) { Nota 'o backend ainda esta subindo (primeira subida faz passos de atualizacao)'; $avisou = $true }
                     $tamAnt = $tam
                     $ocioso = 0
                 } else {
@@ -2440,12 +2415,10 @@ WScript.Quit CreateObject("WScript.Shell").Run("powershell -NoProfile -Execution
 }
 
 # -- 7b/8 hangar-send + skills ---------------------------------------------------
-# O hangar-send e bash falando com o backend por HTTP - nada nele exige unix. Faltavam tres coisas
-# no Windows, e sao estas que este passo resolve:
-#   1. um `python3` que exista (o instalador do Python cria python.exe e py.exe, e o hangar-send
-#      chama python3 dez vezes pra ler JSON);
-#   2. um lancador que o PowerShell enxergue, ja que o script nao tem extensao;
-#   3. rodar o proprio install-hangar-send.sh - e ele quem cria o link, as skills e o bloco de
+# O hangar-send e o `hangar-server send`. Faltavam duas coisas no Windows, e sao estas que este
+# passo resolve:
+#   1. um lancador que o PowerShell enxergue, ja que o script nao tem extensao;
+#   2. rodar o proprio install-hangar-send.sh - e ele quem cria o link, as skills e o bloco de
 #      protocolo no ~/.claude/CLAUDE.md. Duplicar esse texto aqui daria duas fontes da verdade,
 #      e a que diverge silenciosamente e sempre a copia.
 Mark-ItemSince 'servicos' $antesServ 'inicio automatico'
@@ -2469,92 +2442,10 @@ if (-not $bash) {
     # Forma /c/... do mesmo diretorio, pra usar dentro do bash.
     $binMsys = ($binUsuario -replace '\\', '/') -replace '^([A-Za-z]):', '/$1'
 
-    # (1) shim de python3 SEM extensao: quem vai executa-lo e o bash, e ele le o shebang.
-    # Um python3.cmd nao serviria - o bash nao roda .cmd por conta propria.
-    # O caminho do Python vai CRAVADO no atalho, resolvido aqui pelo PowerShell - nos mesmos
-    # instalamos ele no passo 1, entao o local e conhecido e nao ha por que procurar duas vezes.
-    # Procurar de novo la dentro nao funciona: `bash -lc` e login shell e reconstroi o PATH, entao
-    # o que o PowerShell acha o shell do atalho nao acha. Medido: caiu no `python` e pegou o stub
-    # da Microsoft Store ("Python nao foi encontrado"), que e o que ha no PATH de um Windows tipico.
-    $pyExe = $null
-    $atalhos = @()
-    # No pacote e o embutido, pelo current: o da maquina pode faltar ou nao ter as dependencias (websockets).
-    if ($pacote) { $pyExe = Join-Path $HOME '.hangar\current\python\python.exe' }
-    foreach ($cand in 'py', 'python') {
-        if ($pyExe) { break }
-        $c = Get-Command $cand -CommandType Application -ErrorAction SilentlyContinue |
-             Select-Object -First 1
-        if (-not $c) { continue }
-        if ($c.Source -notlike '*WindowsApps*') { $pyExe = $c.Source; break }
-        $atalhos += $c.Source
-    }
-    if (-not $pyExe) {
-        # Em WindowsApps mora tanto o atalho falso da Store quanto o do Python Install Manager, que
-        # e como o winget instala o Python 3.14 e executa de verdade. O bash nao roda alias de app,
-        # entao o atalho so serve pra perguntar onde esta o interpretador real. %LOCALAPPDATA%\Python\bin
-        # e o diretorio de atalhos do Install Manager, que ele nem sempre poe no PATH.
-        $candidatos = @()
-        if ($env:LOCALAPPDATA) { $candidatos += Join-Path $env:LOCALAPPDATA 'Python\bin\python.exe' }
-        $candidatos += $atalhos
-        foreach ($cand in $candidatos) {
-            if (-not (Test-Path $cand)) { continue }
-            $real = & { $ErrorActionPreference = 'Continue'; & $cand -c 'import sys; print(sys.executable)' 2>$null } |
-                    Select-Object -Last 1
-            # Pela saida, nao pelo codigo: o atalho da Store devolve texto de erro e nenhum caminho.
-            if ($real -and (Test-Path -LiteralPath $real.Trim()) -and $real -notlike '*WindowsApps*') {
-                $pyExe = $real.Trim(); break
-            }
-        }
-    }
-    if (-not $pyExe) {
-        Falta 'nenhum Python real encontrado (so o atalho da Store) - hangar-send ficaria sem JSON'
-        $sendOk = $false
-        Nota 'instale com:  winget install --id Python.Python.3.14'
-    } else {
-        # C:\Windows\py.exe -> /c/Windows/py.exe, que e a forma que o bash do MSYS executa.
-        $pyMsys = ($pyExe -replace '\\', '/') -replace '^([A-Za-z]):', '/$1'
-        $arg = if ((Split-Path -Leaf $pyExe) -ieq 'py.exe') { ' -3' } else { '' }
-        $shim = Join-Path $binUsuario 'python3'
-        $corpoShim = "#!/bin/sh`n" +
-                     "# Gerado por hangar/install.ps1 - o hangar-send chama python3.`n" +
-                     "exec '$pyMsys'$arg `"`$@`"`n"
-        if (Escrever-Lancador $shim $corpoShim 'sh') { Ok "atalho python3 -> $pyExe$arg" }
-        else { Ok 'atalho python3 ja atualizado' }
-        # Gemeo .cmd do atalho: os lancadores poem este bin na frente do PATH, e ai o PowerShell e o
-        # cmd resolvem `python3` para o arquivo sem extensao, que o Windows so sabe ABRIR (dialogo
-        # "como deseja abrir"). Com o .cmd na mesma pasta, os dois escolhem ele; o bash segue no sh.
-        $shimCmd = Join-Path $binUsuario 'python3.cmd'
-        $corpoShimCmd = "@echo off`r`n`"$pyExe`"$arg %*`r`n"
-        if (Escrever-Lancador $shimCmd $corpoShimCmd 'cmd') { Ok "atalho python3.cmd -> $pyExe$arg" }
-        else { Ok 'atalho python3.cmd ja atualizado' }
-    }
-
     # Atalhos em maquina migrada vao pelo current do perfil: o caminho real da versao seria podado.
     $raizAtalhos = if (Test-Path -LiteralPath (Join-Path $HOME '.hangar\current')) { '%USERPROFILE%\.hangar\current' } else { $raiz }
     # A mesma raiz na forma /c/... dos atalhos do Git Bash.
     $shimRootMsys = $(if (Test-Path -LiteralPath (Join-Path $HOME '.hangar\current')) { Join-Path $HOME '.hangar\current' } else { $raiz }) -replace '\\', '/' -replace '^([A-Za-z]):', '/$1'
-    # (1b) hangar-python.cmd: gemeo do atalho sem extensao que o install-hangar-send.sh grava. Mesma
-    # regra do backend/app/install_root.py: raiz = ~\.hangar\current (pacote) ou esta copia; nela o
-    # Python embutido, senao o venv; sem nenhum, o Python real achado acima.
-    # shortcut: o cache de bytecode nao leva a versao (o cmd nao le o alvo da junction); a pasta espelha
-    # o caminho do fonte e o Python confere a data, entao uma so serve a todas as versoes.
-    $pyFallback = if ($pyExe) { "`"$pyExe`"$arg %*`r`nexit /b %ERRORLEVEL%`r`n" }
-                  else { "echo hangar-python: nenhum Python encontrado 1>&2`r`nexit /b 9009`r`n" }
-    $corpoHp = "@echo off`r`nsetlocal`r`n" +
-               "set `"R=%USERPROFILE%\.hangar\current`"`r`n" +
-               "if not exist `"%R%`" set `"R=$raiz`"`r`n" +
-               "set `"HP=%R%\python\python.exe`"`r`n" +
-               "if exist `"%HP%`" goto pacote`r`n" +
-               "set `"HP=%R%\backend\.venv\Scripts\python.exe`"`r`n" +
-               "if exist `"%HP%`" goto rodar`r`n" +
-               $pyFallback +
-               ":pacote`r`n" +
-               ":rodar`r`n" +
-               "`"%HP%`" %*`r`n" +
-               "exit /b %ERRORLEVEL%`r`n"
-    if (Escrever-Lancador (Join-Path $binUsuario 'hangar-python.cmd') $corpoHp 'cmd') { Ok "atalho hangar-python.cmd criado em $binUsuario" }
-    else { Ok 'atalho hangar-python.cmd ja atualizado' }
-
     # (2) lancador pro PowerShell: o hangar-send e o `hangar-server send`, chamado direto (sem o
     # bash) pelo executavel que o scripts\hangar-server-lookup.cmd acha. A linha `rem` guarda o
     # caminho do scripts\hangar-send entre aspas: plugins de terceiros o procuram no texto do atalho.
@@ -2753,16 +2644,14 @@ else {
 # maquina ANTIGA ate aqui. Sem esta marca, o primeiro Atualizar no app rodaria a historia inteira de
 # passos, todos ja cumpridos por este instalador. No -Update NAO se marca nada: ali a maquina e
 # justamente a antiga, e os passos precisam rodar. No pacote quem marca e o hangar-server, depois da
-# checagem de fumaca (so com a instalacao no fim).
+# checagem de fumaca (so com a instalacao no fim); no checkout e o mesmo comando, pela raiz dele.
 if (-not $Update -and -not $pacote) {
     Titulo 'Passos de atualizacao'
-    $marcou = $false
-    try {
-        & uv run --directory "$raiz\backend" python -c "from app import atualizacoes; atualizacoes.marcar_todos()" 2>&1 | Out-Null
-        $marcou = ($LASTEXITCODE -eq 0)
-    } catch { $marcou = $false }
-    if ($marcou) { Ok 'marcados como ja aplicados (instalacao nova)' }
-    else { Nota 'nao consegui marcar agora -- o app resolve no primeiro Atualizar' }
+    if ((Nativo $PowerShellExe -NoProfile -ExecutionPolicy Bypass -File $srvComando install-package --mark-steps --root $raiz) -eq 0) {
+        Ok 'marcados como ja aplicados (instalacao nova)'
+    } else {
+        Falha 'passos de atualizacao' "nao foram marcados como aplicados - rode:  powershell -File scripts\hangar-server-command.ps1 install-package --mark-steps --root `"$raiz`""
+    }
 }
 
 # -- 7c/8 Atualizar sozinho no proximo git pull ------------------------------
@@ -2833,22 +2722,15 @@ if ($script:psmuxConsole -eq 'fazer' -and -not $script:faltaRodaPsmux -and (Psmu
 }
 
 # -- 8/8 Checagem de fumaca --------------------------------------------------
-# Ate aqui foi tudo instalacao. Este passo separa "instalou" de "funciona": ate pouco tempo o
-# backend nem IMPORTAVA no Windows (um `import fcntl` no topo do projects.py) e um instalador
-# sem esta checagem teria reportado sucesso do mesmo jeito.
+# Ate aqui foi tudo instalacao. Este passo separa "instalou" de "funciona": o hangar-server que os
+# atalhos e os hooks chamam precisa executar neste Windows.
 Mark-Step 'instalar' 'ok'
 Mark-Step 'final' 'fazendo'
 Titulo '8/8 Checagem de fumaca'
-Push-Location "$raiz\backend"
-# O Python do backend: o embutido do pacote, ou o do uv no checkout.
-# Atribuicao direta pelo mesmo motivo do $quieto do npm: o `if` desembrulharia o array de um item.
-$pyFumaca = @('uv', 'run', 'python')
-if ($pacote) { $pyFumaca = @($pyBackend) }
-$rc = Nativo @pyFumaca -c "import app.codex_contas, app.adapters.codex.lancador, app.vapid_setup"
-if ($rc -ne 0) { Erro 'as ferramentas Python nao importam neste Windows'; Pop-Location; exit 1 }
-Ok 'as ferramentas Python importam'
+$rc = Nativo $PowerShellExe -NoProfile -ExecutionPolicy Bypass -File $srvComando install-token
+if ($rc -ne 0) { Erro 'o hangar-server nao executa neste Windows - sem ele os atalhos e os hooks param'; exit 1 }
+Ok 'o hangar-server executa neste Windows'
 Mark-Item 'backend-importa' 'ok' 'as ferramentas abrem'
-Pop-Location
 
 # Sobra de rodada anterior: o kill pode demorar, entao limpa antes de contar de novo.
 # Sem servidor do psmux ainda (instalacao nova) o list-sessions avisa no stderr; com 'Stop' isso
@@ -3011,9 +2893,6 @@ if ($pendencias.Count -gt 0) {
 }
 Titulo 'Pronto'
 Mark-Step 'final' 'ok'
-# O passo 7b tambem define $pyVenv, mas ele pode nao ter rodado (-Update parcial, venv ausente):
-# a tela final nao pode depender de um ramo anterior ter executado.
-$pyVenv = $pyBackend
 $qrMostrado = $false
 if ($script:Interativo -and -not $Update) {
     Pausa-Log   # a URL do QR carrega o token (a legenda quem escreve e o proprio hangar-server doctor)
@@ -3021,12 +2900,10 @@ if ($script:Interativo -and -not $Update) {
     # Continue porque qualquer linha no stderr viraria NativeCommandError com 'Stop'.
     $eapAnt = $ErrorActionPreference
     $encAnt = [Console]::OutputEncoding
-    $pyioAnt = $env:PYTHONIOENCODING
     Push-Location (Join-Path $raiz 'backend')   # o .env e lido em caminho relativo
     try {
         $ErrorActionPreference = 'Continue'
         [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false
-        $env:PYTHONIOENCODING = 'utf-8'
         & (Join-Path $raiz 'scripts\hangar-server-command.ps1') doctor --backend (Join-Path $raiz 'backend') --qr
         # Exit 0 e a prova: com o preference em 'Continue' um hangar-server doctor que falha nao levanta nada,
         # e a tela final mandaria ler um QR que nunca foi desenhado.
@@ -3038,7 +2915,6 @@ if ($script:Interativo -and -not $Update) {
         Nota "nao consegui desenhar o QR: $_"
     } finally {
         if ($encAnt) { [Console]::OutputEncoding = $encAnt }
-        $env:PYTHONIOENCODING = $pyioAnt
         $ErrorActionPreference = $eapAnt
         Pop-Location
     }

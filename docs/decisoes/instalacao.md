@@ -39,13 +39,12 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   registro é do que JÁ RODOU aqui — não do intervalo de commits.
 - **A volta da atualização devolve o binário do Rust junto com o código.** Antes de gravar o
   binário novo, a atualização guarda o anterior em `~/.hangar/bin/<nome>.prev`; a volta o
-  devolve antes de reiniciar. Sem isso, código antigo com binário novo é contrato diferente e o
-  Python atende sozinho. A cópia de outra rodada é descartada antes de instalar e ao terminar bem.
+  devolve antes de reiniciar. Sem isso, código antigo com binário novo é contrato diferente. A cópia de outra rodada é descartada antes de instalar e ao terminar bem.
 - **Falha depois do código novo volta tudo, mesmo antes do reinício.** Passo ou instalação que
   falha com o checkout já trocado passa pela mesma volta do reinício (código, binário, tela e
   reinício): o próximo reinício, de qualquer origem, subiria versões que não se entendem.
 - **Dentro do Atualizar, só ele baixa o binário do Rust.** Ele marca o ambiente
-  (`HANGAR_UPDATE_OWNS_RUST=1`) e o `python -m app.rust_release` dos instaladores chamados pelos
+  (`HANGAR_UPDATE_OWNS_RUST=1`) e o `install-server-binaries` dos instaladores chamados pelos
   passos não baixa; senão vinha o binário do topo da release, sem a cópia que a volta devolve.
   Passo que falha mostra as linhas `##HANGAR-FALHA##` do instalador, não as últimas linhas.
 - **O Atualizar segue a main, ou a branch de `CP_UPDATE_BRANCH`.** Só ela e a branch em que a
@@ -300,9 +299,15 @@ desenvolvedor e para a máquina ainda não migrada. Evidência em
   religa até 999 vezes; o `rust_bins` e todo
   `sys.executable` gravado usam o caminho real. Hooks, atalhos, `plugin-dir`, skills e `⟦HANGAR⟧`
   gravam `~/.hangar/current` sem resolver o link, e toleram a pasta ausente por um instante.
-- **Script do Hangar roda o Python pelo atalho `hangar-python`**: o embutido do pacote, senão o venv
-  do backend, senão o `python3` da máquina. O pacote não leva Node nem pip; Node é dependência da
-  máquina, garantida por passo de máquina.
+- **Instaladores sem Python nem `uv`.** `install.sh` e `install.ps1` não instalam nem exigem
+  Python, `uv` ou `uv sync`, e não criam atalho de Python (`hangar-python`, `python3`,
+  `hangar-python.cmd`); o passo `2026-11-17-atalhos-python-removidos` tira os antigos. Chaves do
+  push (`vapid-setup`, depois dos binários Rust), token sem `openssl` (`install-token`, senão o
+  `/dev/urandom`; nenhum gerador = a instalação para), nome do Tailscale (`tailscale-dns-name`) e a
+  fumaça 8/8 (o `hangar-server` executa) são do `hangar-server`, achado por
+  `scripts/hangar-server-command`. Instalação do zero pelo checkout marca os passos com
+  `install-package --mark-steps --root <checkout>`; `--update` não marca. O pacote não leva Node
+  nem pip; Node é dependência da máquina, garantida por passo de máquina.
 - **O pacote só sai de commit com o `ci.yml` (job `backend`) e os testes do `server.yml` daquele
   sistema verdes.** O `package.yml` publica em `package-latest` (main) ou `package-<branch>`, com o
   índice `package-<canal>.json` por último; sistema não pronto fica com a entrada anterior.
@@ -359,8 +364,7 @@ desenvolvedor e para a máquina ainda não migrada. Evidência em
   `server-<canal>` não tem o `install-package`, e o binário recusa subcomando desconhecido (código 2)
   em vez de subir como servidor. O bootstrap também recusa checkout do Hangar na pasta padrão e, com o pacote no lugar,
   qualquer entrada pelo git (o caminho é o `dev-mode on`). O `install.sh` com `manifest.json` e sem
-  `.git` pula git, `uv`, venv, build da tela e binários Rust, grava o `.env` em `~/.hangar/config`,
-  põe um `python3` que é o `hangar-python` à frente do PATH dos sub-scripts, confere a tela da
+  `.git` pula git, build da tela e binários Rust, grava o `.env` em `~/.hangar/config`, confere a tela da
   `dist_key` em `~/.hangar/ui` (ausente com a tela web ligada é pendência) e, só ao chegar ao fim,
   registra os passos como aplicados (`install-package --mark-steps`, malformado vira aviso). Marca
   só com `HANGAR_FRESH_PACKAGE=1`, que o bootstrap põe quando o `install-package` acabou de criar a
@@ -372,9 +376,7 @@ desenvolvedor e para a máquina ainda não migrada. Evidência em
   `-Destino` do app são o git. O sha256 do `hangar-server.exe` vem do `server-latest.json` e é
   conferido por `Get-FileHash`; https nunca segue redirecionamento para http. O `install-package`
   recusa (4) também com a tarefa já gravada (`%LOCALAPPDATA%\hangar\hangar-backend.vbs`). O
-  `install.ps1` do pacote pula Python, `uv`, `uv sync`, build da tela, `rust_release` e o hook de
-  `git pull`; roda o backend pelo `python\python.exe` do pacote e os lançadores pelo Python do
-  `current`; marca os passos com `install-package --mark-steps` depois da fumaça, com a mesma
+  `install.ps1` do pacote pula build da tela, `rust_release` e o hook de `git pull`; marca os passos com `install-package --mark-steps` depois da fumaça, com a mesma
   condição do `HANGAR_FRESH_PACKAGE`. O download do `bootstrap.ps1` tem teto total (o
   `--max-time` do curl), não só por leitura. A barra de status do
   Claude grava o caminho pelo `current` (`configure-statusline.cjs`), nos dois sistemas.
