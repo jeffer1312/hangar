@@ -17,6 +17,7 @@ type Page = { route: string; icon: IconName; title: () => string; rows: Array<()
 
 const UPDATES = '/config/atualizacoes';
 const MANUAL = '/config/manual';
+const STATUS = '/config/status';
 
 // Ordem e ícones do Rust (settings.rs), sem as páginas só de desktop. `rows` são os
 // títulos de linha que a busca acha, que só abre a página.
@@ -42,6 +43,8 @@ const SERVER: Page[] = [
   { route: '/config/usage-log', icon: 'FileText', title: m.native_settings_page_diary, rows: [] },
   { route: '/config/maquinas', icon: 'Server', title: m.native_settings_page_servers,
     rows: [m.sessao_adicionar_servidor, m.config_maquinas_testar] },
+  { route: STATUS, icon: 'ChartLine', title: m.status_title,
+    rows: [m.status_days_title, m.status_machines_title, m.status_sessions_title, m.status_slow_title, m.status_host_title, m.status_outside_title] },
   { route: '/config/sync', icon: 'RefreshCw', title: m.native_settings_page_sync, rows: [] },
   { route: '/config/shared-config', icon: 'Layers', title: m.shared_config_title, rows: [] },
   { route: '/config/contas', icon: 'User', title: m.native_settings_page_accounts,
@@ -86,6 +89,11 @@ export default function ConfigIndex() {
   const newBadge = docs.count === 1 ? m.updates_history_new_one() : docs.count > 1 ? m.updates_history_new_count({ n: String(docs.count) }) : undefined;
   const searching = query.trim() !== '';
   const found = searching ? search(query, device) : [];
+  // O ponto da linha Status só segue o servidor: vermelho fora do ar. O celular não vê a subida.
+  const { theme } = useUnistyles();
+  const activeId = useServers((s) => s.activeId);
+  const offline = useSessions((s) => s.byServer.find((b) => b.server.id === activeId)?.error === 'offline');
+  const statusDot = offline ? { color: theme.tokens.status.error, label: m.status_dot_down() } : undefined;
 
   return (
     <Pagina>
@@ -119,7 +127,8 @@ export default function ConfigIndex() {
           {device.map((p) => <SettingsMenuItem key={p.route} icon={p.icon} label={p.title()}
             badge={p.route === UPDATES ? newBadge : undefined} onPress={() => open(p.route)} />)}
           <SettingsMenuGroup title={m.native_settings_group_server()} right={<ServerPicker />} />
-          {SERVER.map((p) => <SettingsMenuItem key={p.route} icon={p.icon} label={p.title()} onPress={() => open(p.route)} />)}
+          {SERVER.map((p) => <SettingsMenuItem key={p.route} icon={p.icon} label={p.title()}
+            dot={p.route === STATUS ? statusDot : undefined} onPress={() => open(p.route)} />)}
         </View>
       )}
     </Pagina>
