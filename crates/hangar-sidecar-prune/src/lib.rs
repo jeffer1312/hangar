@@ -247,3 +247,57 @@ fn recorded_pid_dead(path: &Path) -> Verdict {
         Err(_) => Verdict::Failed,
     }
 }
+
+/// As travas `<nome>.lock` de `~/.hangar/codex-sessions` sem o `<nome>.json` ao lado, com mais de
+/// `MIN_AGE` e sem dono agora: o lançador e o servidor nunca as apagam, e quem grava cria de novo.
+/// Devolve (apagadas, falhas).
+pub fn prune_codex_locks(dir: &Path, now: SystemTime) -> (usize, usize) {
+    let Ok(entries) = fs::read_dir(dir) else { return (0, 0) };
+    let (mut removed, mut failed) = (0, 0);
+    for entry in entries.flatten() {
+        let Some(name) = entry.file_name().to_str().map(str::to_owned) else { continue };
+        let Some(stem) = file_stem(&name, ".lock").filter(|stem| *stem != name) else { continue };
+        if dir.join(format!("{stem}.json")).exists() { continue; }
+        let path = entry.path();
+        let old = fs::symlink_metadata(&path)
+            .is_ok_and(|meta| meta.is_file() && meta.modified().is_ok_and(|at| now.duration_since(at).is_ok_and(|age| age >= MIN_AGE)));
+        if !old { continue; }
+        let Ok(lock) = fs::OpenOptions::new().read(true).append(true).open(&path) else { failed += 1; continue };
+        // Com dono agora, fica: alguém está gravando esse sidecar.
+        if lock.try_lock().is_err() { continue; }
+        // No Windows o arquivo aberto não sai; a trava é solta antes, e quem a pegar depois cria outra.
+        #[cfg(windows)]
+        drop(lock);
+        match fs::remove_file(&path) {
+            Ok(()) => removed += 1,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(_) => failed += 1,
+        }
+    }
+    (removed, failed)
+}
+
+#[cfg(test)]
+mod codex_lock_tests {
+    use super::*;
+
+    #[test]
+    fn only_old_orphan_free_locks_leave() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["orfa.lock", "viva.lock", "viva.json", "nova.lock", "presa.lock", "outro.txt"] {
+            fs::write(dir.path().join(name), "").unwrap();
+        }
+        let later = SystemTime::now() + MIN_AGE + Duration::from_secs(60);
+        // `nova` é recente: o relógio da poda olha só os antigos.
+        let held = fs::OpenOptions::new().read(true).append(true).open(dir.path().join("presa.lock")).unwrap();
+        held.lock().unwrap();
+        let (removed, failed) = prune_codex_locks(dir.path(), later);
+        assert_eq!((removed, failed), (2, 0), "a órfã e a nova (velha no relógio de amanhã); a viva tem sidecar e a presa tem dono");
+        let left: std::collections::BTreeSet<String> = fs::read_dir(dir.path()).unwrap().flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        assert_eq!(left, ["outro.txt", "presa.lock", "viva.json", "viva.lock"].into_iter().map(String::from).collect());
+        drop(held);
+        assert_eq!(prune_codex_locks(dir.path(), SystemTime::now()), (0, 0), "nada é velho hoje");
+        assert_eq!(prune_codex_locks(&dir.path().join("sem-pasta"), later), (0, 0));
+    }
+}

@@ -1,0 +1,193 @@
+{
+ "case": "hangar-codex/local-cleanup-app-pid-dead",
+ "source_commit": "2ad8e335e8d9118e74bc5b33f2efb4ac3bbd8eba",
+ "python": "3.14.9 websockets 16.0",
+ "capture_cmdline": "/usr/bin/python3 capture.py -j 8",
+ "route": "R2",
+ "script": "scripts/hangar-codex",
+ "contract_refs": [
+  "C-66"
+ ],
+ "description": "",
+ "harness": {
+  "how": "direct: $PY -B -s $REF/scripts/hangar-codex",
+  "codex_layout": "absent",
+  "codex_path": null,
+  "codex_fake_config": {
+   "app_server": {
+    "threads": [
+     {
+      "id": "thread-1",
+      "path": "$T/home/.codex/sessions/2026/11/17/rollout-2026-11-17T10-00-00-thread-1.jsonl",
+      "cwd": "$T/work",
+      "source": "cli",
+      "threadSource": "user"
+     }
+    ]
+   }
+  },
+  "npm_stub_config": null,
+  "lock_busy": false,
+  "signal": null,
+  "no_tty": "stdin=/dev/null, stdout/stderr pipes (no script -q)"
+ },
+ "input": {
+  "argv": [
+   "$PY",
+   "-B",
+   "-s",
+   "$REF/scripts/hangar-codex"
+  ],
+  "env": {
+   "HOME": "$T/home",
+   "USERPROFILE": "$T/home",
+   "LOCALAPPDATA": "$T/local",
+   "TMUX_TMPDIR": "$T/tmux",
+   "PATH": "$T/stubs:/usr/bin:/bin",
+   "CP_RUST_SERVER_BIN": "$T/srvbin/hangar-server"
+  },
+  "cwd": "$T/work",
+  "files_before": {
+   "home/.hangar": {
+    "type": "dir",
+    "mode": "0o755"
+   },
+   "home/.codex": {
+    "type": "dir",
+    "mode": "0o755"
+   },
+   "home/.hangar/codex-sessions": {
+    "type": "dir",
+    "mode": "0o755"
+   },
+   "home/.hangar/config": {
+    "type": "dir",
+    "mode": "0o755"
+   },
+   "home/.hangar/codex-sessions/codex-proj.json": {
+    "type": "file",
+    "mode": "0o644",
+    "size": 42,
+    "sha256": "e903f8273f44a5c370f2cd09d3ebfaeaeea5dfa111ee298707ebed4b0de0caf7",
+    "content": {
+     "text": "{\"name\": \"codex-proj\", \"app_pid\": 4194313}"
+    }
+   },
+   "home/.hangar/config/.env": {
+    "type": "file",
+    "mode": "0o644",
+    "size": 56,
+    "sha256": "8b221ec5b50aba80640d71187946127b299b06ba02da05bb027adca2495d71eb",
+    "content": {
+     "text": "# servidor\nCP_AUTH_TOKEN=fake-owner-token\nCP_PORT=57705\n"
+    }
+   }
+  }
+ },
+ "output": {
+  "code": 0,
+  "stdout": {
+   "text": ""
+  },
+  "stderr": {
+   "text": "Codex gerenciado pelo hangar: codex-proj (detach: Ctrl-b d)\n"
+  },
+  "duration_ms": 159,
+  "files": {
+   "created": {
+    "home/.hangar/codex-sessions/codex-proj.lock": {
+     "type": "file",
+     "mode": "0o644",
+     "size": 0,
+     "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+     "content": {
+      "text": ""
+     }
+    }
+   },
+   "changed": {},
+   "removed": [
+    "home/.hangar/codex-sessions/codex-proj.json"
+   ]
+  }
+ },
+ "spawns": [
+  {
+   "role": "hangar-server",
+   "argv": [
+    "$T/srvbin/hangar-server",
+    "open",
+    "{\"cwd\": \"$T/work\", \"provider\": \"codex\", \"headless\": false, \"initial_prompt\": null}"
+   ],
+   "cwd": "$T/work",
+   "pid": 3242534,
+   "ppid": 3242461,
+   "t": 1794910488.9633477,
+   "env": {
+    "HOME": "$T/home",
+    "USERPROFILE": "$T/home",
+    "LOCALAPPDATA": "$T/local",
+    "TMUX_TMPDIR": "$T/tmux",
+    "PATH": "$T/stubs:/usr/bin:/bin",
+    "CP_RUST_SERVER_BIN": "$T/srvbin/hangar-server",
+    "LC_CTYPE": "C.UTF-8"
+   },
+   "call": 1
+  },
+  {
+   "role": "tmux",
+   "argv": [
+    "$T/stubs/tmux",
+    "attach-session",
+    "-t",
+    "=codex-proj"
+   ],
+   "cwd": "$T/work",
+   "pid": 3242535,
+   "ppid": 3242461,
+   "t": 1794910488.9879782,
+   "env": {
+    "HOME": "$T/home",
+    "USERPROFILE": "$T/home",
+    "LOCALAPPDATA": "$T/local",
+    "TMUX_TMPDIR": "$T/tmux",
+    "PATH": "$T/stubs:/usr/bin:/bin",
+    "CP_RUST_SERVER_BIN": "$T/srvbin/hangar-server",
+    "LC_CTYPE": "C.UTF-8"
+   },
+   "call": 1
+  },
+  {
+   "role": "tmux",
+   "argv": [
+    "$T/stubs/tmux",
+    "has-session",
+    "-t",
+    "=codex-proj"
+   ],
+   "cwd": "$T/work",
+   "pid": 3242538,
+   "ppid": 3242461,
+   "t": 1794910489.0074642,
+   "env": {
+    "HOME": "$T/home",
+    "USERPROFILE": "$T/home",
+    "LOCALAPPDATA": "$T/local",
+    "TMUX_TMPDIR": "$T/tmux",
+    "PATH": "$T/stubs:/usr/bin:/bin",
+    "CP_RUST_SERVER_BIN": "$T/srvbin/hangar-server",
+    "LC_CTYPE": "C.UTF-8"
+   },
+   "call": 1
+  }
+ ],
+ "processes_alive_after_exit": {
+  "3242534": false,
+  "3242535": false,
+  "3242538": false
+ },
+ "window": {
+  "t_start": 1794910488.8773854,
+  "t_end": 1794910489.0369408
+ }
+}

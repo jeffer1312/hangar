@@ -447,7 +447,9 @@ pub fn wrapper(env: &AccountEnvironment, cli: &str, windows: bool) -> Value {
         }
     }
     if cli == "codex" {
-        for name in ["hangar-codex", "hangar-codex-tui"] {
+        // O pane do Codex roda `hangar-server codex-tui`; no Windows ele passa pelo `.cmd` do PATH.
+        let launchers: &[&str] = if windows { &["hangar-codex", "hangar-codex-tui"] } else { &["hangar-codex"] };
+        for name in launchers {
             if !env.home.join(".local/bin").join(name).exists() {
                 missing.push(format!("lançador {name}"));
             }

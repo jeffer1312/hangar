@@ -78,7 +78,7 @@ diretos=$(grep -nE '(^|[^-[:alnum:]_/.])python3([[:space:]]|$)' "$REPO/scripts/h
 checa "hangar-send não chama python3 direto" "" "$diretos"
 
 # --- scripts Python pelo shebang ---------------------------------------------------------------
-for s in scripts/hangar-codex scripts/hangar-engine scripts/hangar-conta scripts/hangar-open \
+for s in scripts/hangar-engine scripts/hangar-conta scripts/hangar-open \
          skills/orquestrar/scripts/orq.py skills/orquestrar/scripts/orq-valida-eventos.py \
          skills/pr-review-auto/scripts/pr_watch.py; do
     copia="$TMP/s/$(basename "$s")"

@@ -188,10 +188,11 @@ pub fn context_overrides(codex_home:&Path,runtime_config:&Value) -> Vec<String> 
 
 /// `identity_override`: a identidade da sessão no shell dos comandos do Codex, por `set` (vale com
 /// qualquer `inherit` e soma ao `set` do usuário). Só as variáveis presentes no ambiente da subida.
-fn identity(env:&BTreeMap<String,String>) -> Vec<String> {
+pub(crate) fn identity(env:&BTreeMap<String,String>) -> Vec<String> {
     ["CP_SESSION_NAME","CP_SESSION_KEY","HANGAR_CANO_KEY","TMUX","TMUX_PANE"].into_iter()
         .filter_map(|name|env.get(name).filter(|v|!v.is_empty()).map(|value|(name,value)))
-        .flat_map(|(name,value)|["-c".to_owned(),format!("shell_environment_policy.set.{name}={}",Value::from(value.as_str()))]).collect()
+        // O `json.dumps` do Python (não-ASCII escapado): o mesmo valor TOML, e o mesmo argv de antes.
+        .flat_map(|(name,value)|["-c".to_owned(),format!("shell_environment_policy.set.{name}={}",crate::orchestration::codec::dumps(&Value::from(value.as_str()),false))]).collect()
 }
 
 #[cfg(test)]

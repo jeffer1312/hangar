@@ -488,6 +488,7 @@ pub(crate) fn write_test_executable(path: &std::path::Path, content: impl AsRef<
 }
 
 pub mod codex_setup;
+pub mod codex_tui;
 
 pub mod harness_setup;
 pub mod provider_hooks;

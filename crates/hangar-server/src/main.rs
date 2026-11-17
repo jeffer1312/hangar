@@ -37,6 +37,14 @@ fn main() -> std::process::ExitCode {
     if matches!(args.first().map(String::as_str), Some("open" | "resolve")) {
         return hangar_server::session_open::cli::run(&args);
     }
+    // O lançador da sessão Codex com terminal: o comando que o pane roda.
+    if args.first().map(String::as_str) == Some("codex-tui") {
+        return hangar_server::codex_tui::cli(&args[1..]);
+    }
+    // A limpeza que o `hangar-codex` do terminal pede quando a sessão dele acabou.
+    if args.first().map(String::as_str) == Some("codex-close") {
+        return hangar_server::codex_tui::close::cli(&args[1..]);
+    }
     // O serviço sobe o backend por aqui: a versão real para onde o `current` aponta na largada.
     if args.first().map(String::as_str) == Some("launch") {
         return hangar_server::install_root::launch(&args[1..]);
