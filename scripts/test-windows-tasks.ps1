@@ -453,14 +453,14 @@ try {
         [IO.File]::WriteAllBytes($python, $semBom.GetBytes('Run("cmd /c ""C:\repo\.venv\Scripts\python.exe"" -m app.main", 0, True)'))
         Reset-State
         $script:task.Settings.RestartCount = 999
-        Assert (Test-HangarBackendTaskDirect $vbsDireto) '.vbs UTF-16 sem BOM com o launch backend reprovado'
-        Assert (Test-HangarBackendTaskDirect $comBom) '.vbs UTF-16 com BOM reprovado'
-        Assert (-not (Test-HangarBackendTaskDirect $python)) '.vbs sem o launch backend aprovado'
-        Assert (-not (Test-HangarBackendTaskDirect (Join-Path $pasta 'falta.vbs'))) '.vbs ausente aprovado'
+        Assert (-not (Get-HangarBackendTaskProblem $vbsDireto)) '.vbs UTF-16 sem BOM com o launch backend reprovado'
+        Assert (-not (Get-HangarBackendTaskProblem $comBom)) '.vbs UTF-16 com BOM reprovado'
+        Assert ((Get-HangarBackendTaskProblem $python) -match 'launch backend') '.vbs sem o launch backend aprovado'
+        Assert ((Get-HangarBackendTaskProblem (Join-Path $pasta 'falta.vbs')) -match 'nao existe') '.vbs ausente aprovado'
         $script:task.Settings.RestartCount = 3
-        Assert (-not (Test-HangarBackendTaskDirect $vbsDireto)) 'Tarefa sem os reinicios automaticos aprovada'
+        Assert ((Get-HangarBackendTaskProblem $vbsDireto) -match 'religa 3 vezes') 'Tarefa sem os reinicios automaticos aprovada'
         $script:task = $null
-        Assert (Test-HangarBackendTaskDirect $python) 'Maquina sem a tarefa reprovada'
+        Assert (-not (Get-HangarBackendTaskProblem $python)) 'Maquina sem a tarefa reprovada'
     } finally { Remove-Item -Recurse -Force $pasta -ErrorAction SilentlyContinue }
     Write-Output 'OK: selecao de processos, recuperacao, falhas, espera, atualizacao, vigia e lancador'
 } finally { $env:LOCALAPPDATA = $testLocalData }

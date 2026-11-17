@@ -71,14 +71,17 @@ function Get-HangarBackendLaunchers($rows, $candidates, [string]$name) {
     }
 }
 
-# Prova do passo de maquina: a tarefa do backend religa sempre e sobe pelo `launch backend`. Sem a
-# tarefa nao ha o que conferir. O .vbs e UTF-16LE sem BOM (os bytes do GetBytes): lido como UTF-8, o
-# texto nunca casaria.
-function Test-HangarBackendTaskDirect([string]$vbs) {
+# Prova do passo de maquina: a tarefa do backend religa sempre e sobe pelo `launch backend`. Devolve
+# o motivo da reprovacao, ou nada. Sem a tarefa nao ha o que conferir. O .vbs e UTF-16LE sem BOM (os
+# bytes do GetBytes): lido como UTF-8, o texto nunca casaria.
+function Get-HangarBackendTaskProblem([string]$vbs) {
     $task = Get-ScheduledTask -TaskName 'hangar-backend' -ErrorAction SilentlyContinue
-    if (-not $task) { return $true }
-    if ($task.Settings.RestartCount -ne 999 -or -not (Test-Path -LiteralPath $vbs)) { return $false }
-    return ([IO.File]::ReadAllText($vbs, [Text.Encoding]::Unicode) -match '(?:^|\s)launch\s+backend\b')
+    if (-not $task) { return }
+    if ($task.Settings.RestartCount -ne 999) { return "a tarefa hangar-backend religa $($task.Settings.RestartCount) vezes, nao 999" }
+    if (-not (Test-Path -LiteralPath $vbs)) { return "$vbs nao existe" }
+    if ([IO.File]::ReadAllText($vbs, [Text.Encoding]::Unicode) -notmatch '(?:^|\s)launch\s+backend\b') {
+        return "$vbs nao abre o lancador pelo launch backend"
+    }
 }
 
 function Test-HangarHttp([int]$port) {

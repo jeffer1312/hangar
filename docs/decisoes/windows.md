@@ -1194,8 +1194,8 @@ Relatórios `7io3oihu`, `pg3xnwua` e `tqeswo2z`. Três defeitos em sequência:
    `.vbs` com `Select-String`. O `Escrever-Lancador` grava o `.vbs` com `GetBytes`, que não emite o
    BOM: o arquivo é UTF-16LE sem BOM, o `Select-String` lê como UTF-8 e nunca acha. Na DELPHI-02: bytes
    `57 00 53 00`, `Select-String` `False`, `RestartCount` 999; o passo saía 1 depois do `install.ps1`
-   imprimir o resumo. A conferência agora é `Test-HangarBackendTaskDirect` (`windows-tasks.ps1`), que
-   lê o arquivo como UTF-16 com ou sem BOM.
+   imprimir o resumo. A conferência agora é `Get-HangarBackendTaskProblem` (`windows-tasks.ps1`), que
+   lê o arquivo como UTF-16 com ou sem BOM e devolve o motivo da reprovação.
 2. A volta roda o `windows-tasks.ps1` do `current` já devolvido (a 0.1.0.10746), que não reconhece o
    `hangar-server.exe` direto da versão nova: "Porta 8765 ocupada por outro processo". A máquina ficou
    com o `current` na 10746 e o servidor 10824 de pé. Quem atualiza dali roda o executor da 10824, e a
