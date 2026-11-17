@@ -22,6 +22,13 @@ path = "tests/fixtures/commands_cli.rs"
 test = false
 bench = false
 
+# O `codex` falso do lançador (`codex-tui`): app-server WebSocket, TUI e marketplaces.
+[[bin]]
+name = "hangar-codex-fixture"
+path = "tests/fixtures/codex_cli.rs"
+test = false
+bench = false
+
 [[test]]
 name = "diag_client"
 path = "tests/diag_client.rs"

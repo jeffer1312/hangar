@@ -329,7 +329,7 @@ fn hook_origin(source:&str) -> String {
 }
 
 /// Thread principal aberta pela TUI, como `sessions.primary_thread` do Python: subagente e outra pasta não trocam o vínculo.
-fn primary_thread(thread:&Value,cwd:Option<&str>) -> bool {
+pub(crate) fn primary_thread(thread:&Value,cwd:Option<&str>) -> bool {
     cwd.is_some() && thread["cwd"].as_str() == cwd && matches!(thread["source"].as_str(),Some("cli" | "vscode"))
         && thread["parentThreadId"].as_str().is_none_or(str::is_empty) && thread["threadSource"] != "subagent"
         && thread["canAcceptDirectInput"] != false

@@ -1,0 +1,419 @@
+{
+ "case": "launcher/app-server-crash-resubido",
+ "source_commit": "2ad8e335e8d9118e74bc5b33f2efb4ac3bbd8eba",
+ "python": "3.14.9 websockets 16.0",
+ "capture_cmdline": "/usr/bin/python3 capture.py -j 8",
+ "route": "R2",
+ "script": "scripts/hangar-codex-tui",
+ "contract_refs": [
+  "R2-S05",
+  "R2-S13",
+  "R2-S15",
+  "R2-S16",
+  "C-34",
+  "C-49"
+ ],
+ "description": "",
+ "harness": {
+  "how": "direct: $PY -B -s $REF/scripts/hangar-codex-tui",
+  "codex_layout": "plain",
+  "codex_path": "$T/stubs/codex",
+  "codex_fake_config": {
+   "app_server": {
+    "crash_after": 1.5,
+    "crash_launches": 1,
+    "threads": [
+     {
+      "id": "thread-1",
+      "path": "$T/home/.codex/sessions/2026/11/17/rollout-2026-11-17T10-00-00-thread-1.jsonl",
+      "cwd": "$T/work",
+      "source": "cli",
+      "threadSource": "user"
+     }
+    ]
+   },
+   "tui": {
+    "snapshot_after": 6.5
+   }
+  },
+  "npm_stub_config": null,
+  "lock_busy": false,
+  "signal": null,
+  "no_tty": "stdin=/dev/null, stdout/stderr pipes (no script -q)"
+ },
+ "input": {
+  "argv": [
+   "$PY",
+   "-B",
+   "-s",
+   "$REF/scripts/hangar-codex-tui",
+   "--cwd",
+   "$T/work",
+   "--service-tier",
+   "priority",
+   "--tool-output-token-limit",
+   "144000"
+  ],
+  "env": {
+   "HOME": "$T/home",
+   "USERPROFILE": "$T/home",
+   "LOCALAPPDATA": "$T/local",
+   "TMUX_TMPDIR": "$T/tmux",
+   "PATH": "$T/stubs:/usr/bin:/bin",
+   "CP_SESSION_NAME": "codex-proj",
+   "CP_SESSION_KEY": "key-0001",
+   "CP_PROVIDER": "codex",
+   "HANGAR_CLAUDE_SETTINGS": "",
+   "TMUX": "/tmp/tmux-1000/default,1234,5",
+   "TMUX_PANE": "%7",
+   "CP_CODEX_SYNC_ENABLED": "0"
+  },
+  "cwd": "$T/work",
+  "files_before": {
+   "home/.hangar": {
+    "type": "dir",
+    "mode": "0o755"
+   },
+   "home/.codex": {
+    "type": "dir",
+    "mode": "0o755"
+   },
+   "home/.hangar/config": {
+    "type": "dir",
+    "mode": "0o755"
+   },
+   "home/.hangar/codex-atualizacao.json": {
+    "type": "file",
+    "mode": "0o644",
+    "size": 34,
+    "sha256": "95b89460f21dfefda5fe9e6c17c801660995550d187cdb7acf30f7a79a3ca786",
+    "content": {
+     "text": "{\"proxima_em\": 1794913455.5753915}"
+    }
+   },
+   "home/.hangar/config/.env": {
+    "type": "file",
+    "mode": "0o644",
+    "size": 56,
+    "sha256": "a912479c50fb0facefbd1b760b67f33b4514bb2fc1bf3acd0dbf239a2f9874b1",
+    "content": {
+     "text": "# servidor\nCP_AUTH_TOKEN=fake-owner-token\nCP_PORT=41931\n"
+    }
+   }
+  }
+ },
+ "output": {
+  "code": 0,
+  "stdout": {
+   "text": ""
+  },
+  "stderr": {
+   "text": "hangar-codex-tui: conferindo os plugins…\nhangar-codex-tui: subindo o app-server do Codex…\nhangar-codex-tui: o app-server saiu com codigo 9 antes de abrir ws://127.0.0.1:$WS_PORT:\nfake app-server crashed\nhangar-codex-tui: app-server ressubido em ws://127.0.0.1:$WS_PORT\n"
+  },
+  "duration_ms": 6977,
+  "files": {
+   "created": {
+    "home/.hangar/logs": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/codex-sessions": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/logs/privado": {
+     "type": "dir",
+     "mode": "0o700"
+    },
+    "home/.hangar/logs/diario": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/logs/privado/codex-app-server-dae16489dfddfd3a.log": {
+     "type": "file",
+     "mode": "0o600",
+     "size": 24,
+     "sha256": "d7b1a48a785a8d9ae4fe16caa9adcb472720a56e2bee0fd490f156182b79cd23",
+     "content": {
+      "text": "fake app-server crashed\n"
+     }
+    },
+    "home/.hangar/logs/diario/uso-2026-11-17.jsonl": {
+     "type": "file",
+     "mode": "0o644",
+     "size": 313,
+     "sha256": "54f5e0c40de0a9a26992840d2e2c1c4643b1d3c6fcf2bf1ee984664c7f31e03c",
+     "content": {
+      "text": "{\"ts\": \"2026-11-17T07:14:18.921-03:00\", \"evento\": \"codex.app_server.falhou\", \"nivel\": \"erro\", \"sessao\": \"codex-proj\", \"provider\": \"codex\", \"codigo\": \"processo_encerrou\", \"inicio_backend\": \"2026-11-17T07:14:18.921-03:00\", \"pid_backend\": 3239429, \"retorno\": 9, \"etapa\": \"executar_app_server\", \"origem\": \"servidor\"}\n"
+     }
+    },
+    "home/.hangar/codex-sessions/codex-proj.lock": {
+     "type": "file",
+     "mode": "0o644",
+     "size": 0,
+     "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+     "content": {
+      "text": ""
+     }
+    }
+   },
+   "changed": {},
+   "removed": []
+  }
+ },
+ "spawns": [
+  {
+   "role": "codex plugin marketplace upgrade",
+   "argv": [
+    "$T/stubs/codex",
+    "plugin",
+    "marketplace",
+    "upgrade",
+    "--json"
+   ],
+   "cwd": "$T/work",
+   "pid": 3239482,
+   "ppid": 3239429,
+   "t": 1794910455.7473307,
+   "env": {
+    "HOME": "$T/home",
+    "USERPROFILE": "$T/home",
+    "LOCALAPPDATA": "$T/local",
+    "TMUX_TMPDIR": "$T/tmux",
+    "PATH": "$T/stubs:/usr/bin:/bin",
+    "CP_SESSION_NAME": "codex-proj",
+    "CP_SESSION_KEY": "key-0001",
+    "CP_PROVIDER": "codex",
+    "HANGAR_CLAUDE_SETTINGS": "",
+    "TMUX": "/tmp/tmux-1000/default,1234,5",
+    "TMUX_PANE": "%7",
+    "CP_CODEX_SYNC_ENABLED": "0",
+    "LC_CTYPE": "C.UTF-8",
+    "CODEX_HOME": "$T/home/.codex"
+   }
+  },
+  {
+   "role": "codex app-server",
+   "argv": [
+    "$T/stubs/codex",
+    "app-server",
+    "--listen",
+    "ws://127.0.0.1:$WS_PORT",
+    "-c",
+    "sandbox_mode=\"danger-full-access\"",
+    "-c",
+    "approval_policy=\"never\"",
+    "-c",
+    "tool_output_token_limit=144000",
+    "-c",
+    "service_tier=\"priority\"",
+    "-c",
+    "shell_environment_policy.set.CP_SESSION_NAME=\"codex-proj\"",
+    "-c",
+    "shell_environment_policy.set.CP_SESSION_KEY=\"key-0001\"",
+    "-c",
+    "shell_environment_policy.set.TMUX=\"/tmp/tmux-1000/default,1234,5\"",
+    "-c",
+    "shell_environment_policy.set.TMUX_PANE=\"%7\""
+   ],
+   "cwd": "$T/work",
+   "pid": 3239488,
+   "ppid": 3239429,
+   "t": 1794910455.775517,
+   "env": {
+    "HOME": "$T/home",
+    "USERPROFILE": "$T/home",
+    "LOCALAPPDATA": "$T/local",
+    "TMUX_TMPDIR": "$T/tmux",
+    "PATH": "$T/stubs:/usr/bin:/bin",
+    "CP_SESSION_NAME": "codex-proj",
+    "CP_SESSION_KEY": "key-0001",
+    "CP_PROVIDER": "codex",
+    "HANGAR_CLAUDE_SETTINGS": "",
+    "TMUX": "/tmp/tmux-1000/default,1234,5",
+    "TMUX_PANE": "%7",
+    "CP_CODEX_SYNC_ENABLED": "0",
+    "LC_CTYPE": "C.UTF-8",
+    "CODEX_HOME": "$T/home/.codex"
+   },
+   "launch": 1
+  },
+  {
+   "role": "app-server-rpc",
+   "launch": 1,
+   "t": 1794910455.865816,
+   "msg": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "initialize",
+    "params": {
+     "clientInfo": {
+      "name": "hangar",
+      "title": null,
+      "version": "0.1.0"
+     },
+     "capabilities": null
+    }
+   }
+  },
+  {
+   "role": "app-server-rpc",
+   "launch": 1,
+   "t": 1794910455.8659897,
+   "msg": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "initialize",
+    "params": {
+     "clientInfo": {
+      "name": "hangar",
+      "title": null,
+      "version": "0.1.0"
+     },
+     "capabilities": null
+    }
+   }
+  },
+  {
+   "role": "app-server-rpc",
+   "launch": 1,
+   "t": 1794910455.916113,
+   "msg": {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "hooks/list",
+    "params": {
+     "cwds": [
+      "$T/work"
+     ]
+    }
+   }
+  },
+  {
+   "role": "codex tui",
+   "argv": [
+    "$T/stubs/codex",
+    "--remote",
+    "ws://127.0.0.1:$WS_PORT",
+    "--no-alt-screen",
+    "-C",
+    "$T/work",
+    "--sandbox",
+    "danger-full-access",
+    "--ask-for-approval",
+    "never",
+    "-c",
+    "service_tier=\"priority\"",
+    "-c",
+    "check_for_update_on_startup=false"
+   ],
+   "cwd": "$T/work",
+   "pid": 3239531,
+   "ppid": 3239429,
+   "t": 1794910455.9321477,
+   "env": {
+    "HOME": "$T/home",
+    "USERPROFILE": "$T/home",
+    "LOCALAPPDATA": "$T/local",
+    "TMUX_TMPDIR": "$T/tmux",
+    "PATH": "$T/stubs:/usr/bin:/bin",
+    "CP_SESSION_NAME": "codex-proj",
+    "CP_SESSION_KEY": "key-0001",
+    "CP_PROVIDER": "codex",
+    "HANGAR_CLAUDE_SETTINGS": "",
+    "TMUX": "/tmp/tmux-1000/default,1234,5",
+    "TMUX_PANE": "%7",
+    "CP_CODEX_SYNC_ENABLED": "0",
+    "LC_CTYPE": "C.UTF-8",
+    "CODEX_HOME": "$T/home/.codex"
+   }
+  },
+  {
+   "role": "app-server-crash",
+   "launch": 1,
+   "t": 1794910457.332942
+  },
+  {
+   "role": "codex app-server",
+   "argv": [
+    "$T/stubs/codex",
+    "app-server",
+    "--listen",
+    "ws://127.0.0.1:$WS_PORT",
+    "-c",
+    "sandbox_mode=\"danger-full-access\"",
+    "-c",
+    "approval_policy=\"never\"",
+    "-c",
+    "tool_output_token_limit=144000",
+    "-c",
+    "service_tier=\"priority\"",
+    "-c",
+    "shell_environment_policy.set.CP_SESSION_NAME=\"codex-proj\"",
+    "-c",
+    "shell_environment_policy.set.CP_SESSION_KEY=\"key-0001\"",
+    "-c",
+    "shell_environment_policy.set.TMUX=\"/tmp/tmux-1000/default,1234,5\"",
+    "-c",
+    "shell_environment_policy.set.TMUX_PANE=\"%7\""
+   ],
+   "cwd": "$T/work",
+   "pid": 3239940,
+   "ppid": 3239429,
+   "t": 1794910458.936185,
+   "env": {
+    "HOME": "$T/home",
+    "USERPROFILE": "$T/home",
+    "LOCALAPPDATA": "$T/local",
+    "TMUX_TMPDIR": "$T/tmux",
+    "PATH": "$T/stubs:/usr/bin:/bin",
+    "CP_SESSION_NAME": "codex-proj",
+    "CP_SESSION_KEY": "key-0001",
+    "CP_PROVIDER": "codex",
+    "HANGAR_CLAUDE_SETTINGS": "",
+    "TMUX": "/tmp/tmux-1000/default,1234,5",
+    "TMUX_PANE": "%7",
+    "CP_CODEX_SYNC_ENABLED": "0",
+    "LC_CTYPE": "C.UTF-8",
+    "CODEX_HOME": "$T/home/.codex"
+   },
+   "launch": 2
+  },
+  {
+   "role": "app-server-rpc",
+   "launch": 2,
+   "t": 1794910459.0246634,
+   "msg": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "initialize",
+    "params": {
+     "clientInfo": {
+      "name": "hangar",
+      "title": null,
+      "version": "0.1.0"
+     },
+     "capabilities": null
+    }
+   }
+  },
+  {
+   "role": "tui-sidecar-snapshot",
+   "t": 1794910462.4324603,
+   "files": {
+    "codex-proj.json": "{\"name\": \"codex-proj\", \"provider\": \"codex\", \"thread_id\": \"thread-1\", \"rollout_path\": \"$T/home/.codex/sessions/2026/11/17/rollout-2026-11-17T10-00-00-thread-1.jsonl\", \"cwd\": \"$T/work\", \"model\": null, \"effort\": null, \"endpoint\": \"ws://127.0.0.1:$WS_PORT\", \"app_pid\": 3239940, \"service_tier\": \"priority\", \"codex_home\": \"$T/home/.codex\", \"codex_account\": \"default\", \"key\": \"key-0001\", \"permission_mode\": \"Full Access\", \"tool_output_token_limit\": 144000, \"tui_pid\": 3239531}",
+    "codex-proj.lock": ""
+   }
+  }
+ ],
+ "processes_alive_after_exit": {
+  "3239482": false,
+  "3239488": false,
+  "3239531": false,
+  "3239940": false
+ },
+ "window": {
+  "t_start": 1794910455.5862024,
+  "t_end": 1794910462.5640204
+ }
+}

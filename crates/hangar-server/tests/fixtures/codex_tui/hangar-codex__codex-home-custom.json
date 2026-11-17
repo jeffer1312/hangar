@@ -1,0 +1,97 @@
+{
+ "case": "hangar-codex/codex-home-custom",
+ "source_commit": "2ad8e335e8d9118e74bc5b33f2efb4ac3bbd8eba",
+ "python": "3.14.9 websockets 16.0",
+ "capture_cmdline": "/usr/bin/python3 capture.py -j 8",
+ "route": "R2",
+ "script": "scripts/hangar-codex",
+ "contract_refs": [
+  "R2-S20",
+  "C-62"
+ ],
+ "description": "",
+ "harness": {
+  "how": "direct: $PY -B -s $REF/scripts/hangar-codex",
+  "codex_layout": "absent",
+  "codex_path": null,
+  "codex_fake_config": {
+   "app_server": {
+    "threads": [
+     {
+      "id": "thread-1",
+      "path": "$T/home/.codex/sessions/2026/11/17/rollout-2026-11-17T10-00-00-thread-1.jsonl",
+      "cwd": "$T/work",
+      "source": "cli",
+      "threadSource": "user"
+     }
+    ]
+   }
+  },
+  "npm_stub_config": null,
+  "lock_busy": false,
+  "signal": null,
+  "no_tty": "stdin=/dev/null, stdout/stderr pipes (no script -q)"
+ },
+ "input": {
+  "argv": [
+   "$PY",
+   "-B",
+   "-s",
+   "$REF/scripts/hangar-codex"
+  ],
+  "env": {
+   "HOME": "$T/home",
+   "USERPROFILE": "$T/home",
+   "LOCALAPPDATA": "$T/local",
+   "TMUX_TMPDIR": "$T/tmux",
+   "PATH": "$T/stubs:/usr/bin:/bin",
+   "CP_RUST_SERVER_BIN": "$T/srvbin/hangar-server",
+   "CODEX_HOME": "$T/outra"
+  },
+  "cwd": "$T/work",
+  "files_before": {
+   "home/.hangar": {
+    "type": "dir",
+    "mode": "0o755"
+   },
+   "home/.codex": {
+    "type": "dir",
+    "mode": "0o755"
+   },
+   "home/.hangar/config": {
+    "type": "dir",
+    "mode": "0o755"
+   },
+   "home/.hangar/config/.env": {
+    "type": "file",
+    "mode": "0o644",
+    "size": 56,
+    "sha256": "87dd9376fff52ad6f8f9fbcef200e845b93cc91c8fb7d50af39d600b5f5a1f7d",
+    "content": {
+     "text": "# servidor\nCP_AUTH_TOKEN=fake-owner-token\nCP_PORT=40931\n"
+    }
+   }
+  }
+ },
+ "output": {
+  "code": 1,
+  "stdout": {
+   "text": ""
+  },
+  "stderr": {
+   "text": "hangar-codex: CODEX_HOME personalizado não é uma conta Codex gerenciada pelo Hangar (~/.codex-<conta>)\n"
+  },
+  "duration_ms": 64,
+  "files": {
+   "created": {},
+   "changed": {},
+   "removed": []
+  }
+ },
+ "spawns": [],
+ "processes_alive_after_exit": {},
+ "window": {
+  "t_start": 1794910487.802889,
+  "t_end": 1794910487.867458
+ }
+}

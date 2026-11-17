@@ -52,7 +52,7 @@ expect_eq "checkout: skill pelo current" "$(readlink "$H/.claude/skills/teste")"
 ( env -i HOME="$H" SHELL=/bin/bash PATH="$(dirname "$(command -v python3)"):/usr/bin:/bin" \
     bash "$K/scripts/install-claude-wrapper.sh" bash --no-tmux --no-statusline > "$ROOT/out" 2>&1 ); rc=$?
 expect_eq "checkout: wrapper sai 0" "$rc" 0 "$ROOT/out"
-expect_eq "checkout: lançador do Codex pelo current" "$(readlink "$H/.local/bin/hangar-codex-tui")" "$C/scripts/hangar-codex-tui" "$ROOT/out"
+expect_eq "checkout: hangar-codex pelo current" "$(readlink "$H/.local/bin/hangar-codex")" "$C/scripts/hangar-codex" "$ROOT/out"
 expect_eq "checkout: hangar-open pelo current" "$(readlink "$H/.local/bin/hangar-open")" "$C/scripts/hangar-open"
 grep -q "source \"$C/scripts/shell/" "$H/.bashrc" 2>/dev/null && pass "checkout: bloco do shell pelo current" \
     || flunk "checkout: bloco do shell pelo current" "$H/.bashrc"

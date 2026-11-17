@@ -2636,38 +2636,33 @@ if (-not $bash) {
     # so acha o que casa PATHEXT (.COM;.EXE;.BAT;.CMD;...), entao arquivo SEM extensao nunca e
     # achado por mais que ~/.local/bin esteja no PATH - medido: which('hangar-codex-tui')=None ao
     # lado de which('hangar-engine')=...CMD. Sem estes artefatos, criar sessao Codex devolve 400.
-    # Por PYTHON (os dois sao `#!/usr/bin/env python3`), nunca por bash nem por node.
-    # O `-tui` leva o python do VENV, nao o do sistema: ele importa `websockets`, que so existe la
-    # (medido: sistema nao tem, venv tem 16.0). Ele TENTA se reexecutar no venv sozinho, mas
-    # procura `backend/.venv/bin/python` - layout POSIX, inexistente no Windows -, entao quem
-    # escolhe o interpretador tem de ser este instalador. O `hangar-codex` fica no python do
-    # sistema: ele so importa stdlib.
-    $pyTui = Join-Path $raiz 'backend\.venv\Scripts\python.exe'
-    $argTui = ''
-    if (-not (Test-Path $pyTui)) { $pyTui = $pyExe; $argTui = $arg }
-    if (-not $pyExe) {
-        Falta 'lancadores do Codex nao criados - precisa de um Python real (ver acima)'
+    # O `-tui` e o subcomando `codex-tui` do hangar-server; o `hangar-codex` e shell POSIX, pelo bash
+    # do Git for Windows (como o hangar-mcp-headers). Nenhum dos dois precisa de Python.
+    $servidorTui = if (Test-Path -LiteralPath (Join-Path $HOME '.hangar\current')) { '%USERPROFILE%\.hangar\current\bin\hangar-server.exe' } else { $servidorCheckout }
+    if (-not $servidorTui) {
+        Falta 'lancadores do Codex nao criados - hangar-server nao encontrado (ver acima)'
         $sendOk = $false
     } else {
-        foreach ($par in @(@('hangar-codex-tui', $pyTui, $argTui), @('hangar-codex', $pyExe, $arg))) {
-            $nome, $py, $a = $par
+        $servidorTuiMsys = $(if (Test-Path -LiteralPath (Join-Path $HOME '.hangar\current')) { "$shimRootMsys/bin/hangar-server.exe" } else { ($servidorCheckout -replace '\\', '/') -replace '^([A-Za-z]):', '/$1' })
+        $lancadoresCodex = @(
+            @('hangar-codex-tui', "`"$servidorTui`" codex-tui %*", "exec '$servidorTuiMsys' codex-tui `"`$@`""),
+            @('hangar-codex', "`"$bash`" `"$raizAtalhos\scripts\hangar-codex`" %*", "exec sh '$shimRootMsys/scripts/hangar-codex' `"`$@`"")
+        )
+        foreach ($par in $lancadoresCodex) {
+            $nome, $linhaCmd, $linhaSh = $par
             $cmdPath = Join-Path $binUsuario "$nome.cmd"
             $corpo = "@echo off`r`n" +
                      "set `"PATH=%USERPROFILE%\.local\bin;%PATH%`"`r`n" +
-                     "`"$py`"$a `"$raizAtalhos\scripts\$nome`" %*`r`n"
+                     "$linhaCmd`r`n"
             if (Escrever-Lancador $cmdPath $corpo 'cmd') { Ok "lancador $nome.cmd criado em $binUsuario" }
             else { Ok "lancador $nome.cmd ja atualizado" }
-            # Shim sh pro Git Bash, mesma razao do hangar-send/hangar-preview: o `ln -s` de la
-            # COPIA, e a copia resolve `_REPO = Path(__file__).parent.parent` como ~/.local, onde
-            # nao ha `backend/`. Interpretador PINADO em vez de deixar o shebang decidir: um
-            # `python3` no Git Bash cai no atalho da Microsoft Store.
-            $pyMsysTui = ($py -replace '\\', '/') -replace '^([A-Za-z]):', '/$1'
+            # Shim sh pro Git Bash, mesma razao do hangar-send/hangar-preview: o `ln -s` de la COPIA.
             $shPath = Join-Path $binUsuario $nome
             $corpoSh = "#!/bin/sh`n" +
                        "# Gerado pelo instalador do hangar (install.ps1 / install-hangar-send.sh).`n" +
                        "PATH='$binMsys':`$PATH; export PATH`n" +
-                       "exec '$pyMsysTui'$a '$shimRootMsys/scripts/$nome' `"`$@`"`n"
-            if (Escrever-Lancador $shPath $corpoSh 'sh') { Ok "$nome do ~/.local/bin aponta pro script do repo" }
+                       "$linhaSh`n"
+            if (Escrever-Lancador $shPath $corpoSh 'sh') { Ok "$nome do ~/.local/bin aponta pro lancador" }
             else { Ok "$nome do ~/.local/bin ja atualizado" }
         }
     }

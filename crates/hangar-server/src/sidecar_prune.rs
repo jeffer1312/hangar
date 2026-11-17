@@ -52,7 +52,12 @@ async fn round(state: Arc<AppState>) -> bool {
     let accounts = state.accounts.clone();
     let done = tokio::task::spawn_blocking(move || {
         let (bases, catalog) = bases(&accounts);
-        (sweep(discovered, recorded, &bases, SystemTime::now()), catalog)
+        let now = SystemTime::now();
+        let mut swept = sweep(discovered, recorded, &bases, now);
+        if let Ok((report, _)) = &mut swept {
+            codex_locks(&crate::runtime::codex_sidecar::dir(&accounts.env.home), now, report);
+        }
+        (swept, catalog)
     }).await;
     let (line, ran) = match done {
         Err(error) => {
@@ -70,6 +75,15 @@ async fn round(state: Arc<AppState>) -> bool {
     line["evento"] = json!("rust.sidecar_prune");
     state.diag.record_line(line);
     ran
+}
+
+/// As travas órfãs dos arquivos de sessão do Codex entram no relatório da rodada.
+fn codex_locks(dir: &Path, now: SystemTime, report: &mut Report) {
+    let (removed, failed) = hangar_sidecar_prune::prune_codex_locks(dir, now);
+    if removed > 0 {
+        *report.removed.entry("codex-sessions (.lock)".to_owned()).or_default() += removed;
+    }
+    report.failed += failed;
 }
 
 /// Pastas de conta Claude do catálogo e a base do servidor; catálogo ilegível fica só com a base.

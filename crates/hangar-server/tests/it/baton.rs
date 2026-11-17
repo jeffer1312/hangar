@@ -1234,7 +1234,7 @@ case "$1" in
 *) printf '%s\000' "$@" >> "$root/codex-unknown"; printf 'Sonda Codex sintética não implementada\n' >&2; exit 78;;
 esac
 "#);
-        crate::write_executable(&root.join("bin/hangar-codex-tui"),"#!/bin/sh\nprintf '%s\\000' \"$@\" >> \"$HANGAR_BATON_CHILD_ROOT/launcher-executed\"\nprintf 'Lançador não deve executar fora do mux sintético\\n' >&2\nexit 78\n");
+        crate::write_executable(&root.join("bin/hangar-server"),"#!/bin/sh\nprintf '%s\\000' \"$@\" >> \"$HANGAR_BATON_CHILD_ROOT/launcher-executed\"\nprintf 'Lançador não deve executar fora do mux sintético\\n' >&2\nexit 78\n");
         let sidecar=h.home.join(".hangar/codex-sessions/fixture.json");std::fs::create_dir_all(sidecar.parent().unwrap()).unwrap();
         std::fs::write(&sidecar,json!({"name":"fixture","provider":"codex","key":"baton-codex-origin","cwd":h.root,
             "codex_home":work,"thread_id":CODEX_ID,"rollout_path":h.path,"headless":true}).to_string()).unwrap();
@@ -1267,7 +1267,7 @@ esac
         assert_eq!(specs.len(),1,"um spec da abertura efetiva: {specs:?}");assert_eq!(specs[0]["provider"],"codex");
         assert_eq!(specs[0]["surface"],"terminal");assert_eq!(specs[0]["account"],json!({"kind":"codex","account_id":"work"}));
         let args=std::fs::read_to_string(root.join("new-session-argv")).unwrap();
-        assert!(args.contains("hangar-codex-tui") && args.contains("--codex-home") && args.contains(work.to_str().unwrap()) && args.contains("--codex-account"),"{args}");
+        assert!(args.contains("hangar-server codex-tui") && args.contains("--codex-home") && args.contains(work.to_str().unwrap()) && args.contains("--codex-account"),"{args}");
         assert_eq!(args.matches(body["kickoff"].as_str().unwrap()).count(),1,"kickoff único no comando do lançador");
         assert!(!root.join("launcher-executed").exists(),
             "launcher-executed={:?}",std::fs::read(root.join("launcher-executed")));
@@ -1288,7 +1288,7 @@ fn b01_codex_post_rejects_a_different_known_successor_account_before_effects() {
         std::fs::create_dir_all(other.join("sessions")).unwrap();std::fs::write(other.join(".hangar-codex-conta"),r#"{"version":1,"id":"other"}"#).unwrap();
         std::fs::write(root.join("codex-fixture"),"codex\n").unwrap();
         crate::write_executable(&root.join("bin/codex"),"#!/bin/sh\nprintf '%s\\000' \"$@\" >> \"$HANGAR_BATON_CHILD_ROOT/codex-probes\"\nprintf 'Codex não deve executar na recusa prévia\\n' >&2\nexit 78\n");
-        crate::write_executable(&root.join("bin/hangar-codex-tui"),"#!/bin/sh\nprintf '%s\\000' \"$@\" >> \"$HANGAR_BATON_CHILD_ROOT/launcher-executed\"\nexit 78\n");
+        crate::write_executable(&root.join("bin/hangar-server"),"#!/bin/sh\nprintf '%s\\000' \"$@\" >> \"$HANGAR_BATON_CHILD_ROOT/launcher-executed\"\nexit 78\n");
         let sidecar=h.home.join(".hangar/codex-sessions/fixture.json");std::fs::create_dir_all(sidecar.parent().unwrap()).unwrap();
         std::fs::write(&sidecar,json!({"name":"fixture","provider":"codex","key":"baton-codex-origin","cwd":h.root,
             "codex_home":work,"thread_id":CODEX_ID,"rollout_path":h.path,"headless":true}).to_string()).unwrap();
