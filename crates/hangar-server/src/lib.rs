@@ -169,20 +169,21 @@ fn shutdown_signal() -> impl std::future::Future<Output = &'static str> + Send +
 
 #[cfg(windows)]
 fn shutdown_signal() -> impl std::future::Future<Output = &'static str> + Send + 'static {
-    use tokio::signal::windows::{ctrl_break, ctrl_c, ctrl_close, ctrl_shutdown};
-    let streams = match (ctrl_c(), ctrl_break(), ctrl_close(), ctrl_shutdown()) {
-        (Ok(c), Ok(brk), Ok(close), Ok(shutdown)) => Some((c, brk, close, shutdown)),
+    use tokio::signal::windows::{ctrl_break, ctrl_c, ctrl_close, ctrl_logoff, ctrl_shutdown};
+    let streams = match (ctrl_c(), ctrl_break(), ctrl_close(), ctrl_logoff(), ctrl_shutdown()) {
+        (Ok(c), Ok(brk), Ok(close), Ok(logoff), Ok(shutdown)) => Some((c, brk, close, logoff, shutdown)),
         _ => {
             tracing::error!(code = "stop_signal_unavailable", "sem os eventos de parada do console: só o kill encerra o servidor");
             None
         }
     };
     async move {
-        let Some((mut c, mut brk, mut close, mut shutdown)) = streams else { return std::future::pending().await };
+        let Some((mut c, mut brk, mut close, mut logoff, mut shutdown)) = streams else { return std::future::pending().await };
         tokio::select! {
             _ = c.recv() => "ctrl_c",
             _ = brk.recv() => "ctrl_break",
             _ = close.recv() => "ctrl_close",
+            _ = logoff.recv() => "ctrl_logoff",
             _ = shutdown.recv() => "ctrl_shutdown",
         }
     }
