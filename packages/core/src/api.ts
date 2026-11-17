@@ -950,8 +950,9 @@ export async function sendInputForServer(s: Server, name: string, text: string, 
   if (delivery && res.status === 422 && await rejectsDeliveryField(res)) { res = await post({ text }); accepted = false; }
   if (!res.ok) throw Object.assign(new Error(`${res.status}: ${await errorDetail(res)}`), { status: res.status });
   if (!accepted) return false;
+  // Só o `false` dito pelo servidor é fila comum: corpo ilegível não prova nada, e a mensagem segue na conversa.
   const body = await res.json().catch(() => null) as { conversation?: unknown } | null;
-  return body?.conversation === true;
+  return body?.conversation !== false;
 }
 
 // Responde uma opção do picker (awaiting_input) direto do card. Mesma convenção de índice do

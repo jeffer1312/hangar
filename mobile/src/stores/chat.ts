@@ -1158,7 +1158,9 @@ function criarChatStore(serverId: string, name: string): ChatApi {
             const sent = await sendWithDelivery(target, name, trimmed, mode);
             // Servidor que não leva "Na conversa" a esta sessão a pôs na fila comum: o eco vai para o painel.
             if (sent === QUEUED_INSTEAD) {
-              useChatStore.setState((s) => ({ pending: s.pending.map((p) => p.id === id ? { ...p, conversation: undefined, queue: true, known } : p) }));
+              // O evento da fila pode ter chegado antes da resposta: a entrada já listada leva o eco agora.
+              const listed = useChatStore.getState().queuePanel?.entries ?? [];
+              useChatStore.setState((s) => ({ pending: settleQueued(s.pending.map((p) => p.id === id ? { ...p, conversation: undefined, queue: true, known } : p), listed, []) }));
             } else showDeliveryFeedback(sent);
           }
           else await sendInputForServer(target, name, trimmed);
