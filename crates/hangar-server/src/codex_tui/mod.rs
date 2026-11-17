@@ -78,6 +78,11 @@ pub fn cli(args: &[String]) -> ExitCode {
     let code = runtime.block_on(run(args));
     // A escuta de threads que ainda espera o app-server morto não segura a saída.
     runtime.shutdown_timeout(Duration::from_millis(200));
+    // O pane mostra o código da TUI inteiro (`0xC000013A` do console fechado), como o `SystemExit` do
+    // Python; o `ExitCode` só leva 8 bits.
+    #[cfg(windows)]
+    std::process::exit(code);
+    #[cfg(not(windows))]
     ExitCode::from((code & 0xff) as u8)
 }
 
