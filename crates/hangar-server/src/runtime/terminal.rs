@@ -1194,7 +1194,8 @@ impl Executor {
             return Ok(result);
         }
         // Mensagem nova não passa à frente de outra que ficou adiada: espera na fila e a drenagem entrega na ordem.
-        if fresh && state.pending_ahead(self.target.created) {
+        // A "Na conversa" entra no turno como o Orientar; as comuns seguem esperando o fim dele.
+        if fresh && !conversation && state.pending_ahead(self.target.created) {
             return self.defer(id,json!({"code":"queue_ahead","queued":true,"cleanup":"not_needed"})).await;
         }
         let root=row_id.as_deref().unwrap_or(id);
@@ -1509,11 +1510,11 @@ impl Executor {
             return Ok(json!({"drained":0}));
         }
         // A fila comum espera o turno e sai em lote. O "Orientar" (`steer`) passa por cima, o recado com socket
-        // nativo também, porque esse canal o Claude Code atende no meio do turno, e a primeira da fila marcada "Na
-        // conversa", que o Claude Code guarda e lê na pausa seguinte.
+        // nativo também, porque esse canal o Claude Code atende no meio do turno, e a marcada "Na conversa", que o
+        // Claude Code guarda e lê na pausa seguinte (a mais antiga delas primeiro).
         if !steer && self.turn_busy(facts.idle) {
             let waiting=super::queue::waiting_ids(&state,self.target.created);
-            let marked=waiting.first().filter(|id|entry.as_deref().is_none_or(|e|e==id.as_str())
+            let marked=waiting.iter().find(|id|entry.as_deref().is_none_or(|e|e==id.as_str())
                 && state.rows.iter().any(|r|r["id"]==id.as_str() && r["conversation"]==true)).cloned();
             // Os fatos da manutenção não sabem do socket (ele depende do texto): o recado candidato relê com o dele.
             let candidate=if marked.is_some() {None} else {state.rows.iter().filter_map(|r|Some((r["id"].as_str()?,r["text"].as_str()?)))
@@ -1587,16 +1588,25 @@ impl Executor {
         let state=self.queue.snapshot().await.map_err(|_|error("queue_io"))?;
         if !super::queue::waiting_ids(&state,self.target.created).contains(&entry) {
             // "Na conversa" já digitada espera na fila do Claude Code: o Enviar agora só a promove, sem reescrevê-la.
-            let written=state.rows.iter().any(|r|r["id"]==entry.as_str() && r["conversation"]==true && r["delivered"]==true && r["confirmed"]!=true);
+            let written=state.rows.iter().any(|r|r["id"]==entry.as_str() && r["conversation"]==true && r["delivered"]==true
+                && r["confirmed"]!=true && r["desistiu"]!=true && r["steered"]!=true);
             if !written {return Ok(reply(id,Disposition::Rejected,json!({"code":"queue_entry_gone","cleanup":"not_needed"})));}
+            if state.terminal_write_blocked(&self.target.binding.conversation) {
+                return Ok(reply(id,Disposition::Rejected,json!({"code":"queue_steer_delivery_unproved","cleanup":"not_needed"})));
+            }
+            if !self.expected_work(payload) {return Ok(reply(id,Disposition::Rejected,json!({"code":"queue_steer_work_changed","cleanup":"not_needed"})));}
             let services=self.services("maintenance","maintenance","");
             let facts=services.facts(&self.target.binding).await.map_err(|_|error("terminal_facts"))?;
             if facts.binding!=self.target.binding {return Ok(reply(id,Disposition::Deferred,json!({"code":"queue_steer_not_delivered","cleanup":"not_needed"})));}
             if facts.open_question {return Ok(reply(id,Disposition::Rejected,json!({"code":"queue_steer_question_open","cleanup":"not_needed"})));}
             let driver=TerminalDriver::new(self.target.binding.clone(),services,self.options.io.clone(),self.options.limits.clone());
-            return Ok(match driver.steer().await.disposition {
+            let steered=driver.steer().await;
+            return Ok(match steered.disposition {
                 input::Disposition::Accepted=>reply(id,Disposition::Accepted,json!({"steered":true,"drained":0})),
-                input::Disposition::Unknown=>reply(id,Disposition::Unknown,json!({"code":"queue_steer_uncertain"})),
+                input::Disposition::Unknown=>{
+                    tracing::warn!(key=%self.target.key,session=%self.target.name,code=%steered.code,"Enviar agora da mensagem na conversa: o ctrl+x ctrl+s não se comprovou");
+                    reply(id,Disposition::Unknown,json!({"code":"queue_steer_uncertain"}))
+                },
                 _=>reply(id,Disposition::Deferred,json!({"code":"queue_steer_not_delivered","cleanup":"not_needed"})),
             });
         }

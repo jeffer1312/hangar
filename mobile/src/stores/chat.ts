@@ -45,7 +45,7 @@ import * as m from '../paraglide/messages';
 import { bindQueued, ECHO_SETTLE_MS, QUEUE_APPEAR_MS, reconcilePending, sameMessage, settleQueued, type PendingMsg } from '../chat/pending';
 import { useServers } from './servers';
 import { clearDraft, deliveredDraft, readDictation, readDraft, writeDraft, type ConversationDraft } from './drafts';
-import { sendWithDelivery, type DeliveryFeedback, type QueueSendMode } from '../chat/queueDelivery';
+import { QUEUED_INSTEAD, sendWithDelivery, type DeliveryFeedback, type QueueSendMode } from '../chat/queueDelivery';
 
 // Store vivo do chat de UMA sessão — porte do núcleo de frontend/src/screens/Chat.svelte
 // para zustand. Histórico janelado (cauda primeiro), merge SSE com dedup por id, preview ao
@@ -1149,11 +1149,18 @@ function criarChatStore(serverId: string, name: string): ChatApi {
         const queue = state === 'working' && mode !== 'steer' && !conversation && !(typeof mode === 'object' && mode.kind === 'direct');
         // A bolha `queued-` da fila durável sai depois, e o registro real chega com outro id.
         const afterId = useChatStore.getState().events.findLast((e) => e.kind === 'user_msg' && !e.id.startsWith('queued-'))?.id;
+        const known = useChatStore.getState().queuePanel?.entries.map((entry) => entry.id) ?? [];
         useChatStore.setState((s) => ({ pending: [...s.pending, { id, text: trimmed, solid, afterId, ...(conversation && { conversation }),
-          ...(queue && { queue, known: s.queuePanel?.entries.map((entry) => entry.id) ?? [] }) }] }));
+          ...(queue && { queue, known }) }] }));
         try {
           if (mode === 'steer') await steerSession(name, trimmed, target);
-          else if (mode) showDeliveryFeedback(await sendWithDelivery(target, name, trimmed, mode));
+          else if (mode) {
+            const sent = await sendWithDelivery(target, name, trimmed, mode);
+            // Servidor que não leva "Na conversa" a esta sessão a pôs na fila comum: o eco vai para o painel.
+            if (sent === QUEUED_INSTEAD) {
+              useChatStore.setState((s) => ({ pending: s.pending.map((p) => p.id === id ? { ...p, conversation: undefined, queue: true, known } : p) }));
+            } else showDeliveryFeedback(sent);
+          }
           else await sendInputForServer(target, name, trimmed);
         } catch (err) {
           // O /steer também usa 409 quando escreveu sem confirmar: não presumir recusa.

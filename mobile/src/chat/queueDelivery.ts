@@ -83,11 +83,13 @@ export async function readQueueJev(server: Server, signal: AbortSignal): Promise
   return (value as { available: boolean }).available;
 }
 
-export async function sendWithDelivery(server: Server, name: string, text: string, mode: Exclude<QueueSendMode, 'steer'>): Promise<DeliveryFeedback | null> {
+/** O "Na conversa" que o servidor mandou para a fila comum: o eco passa para o painel "Na fila". */
+export const QUEUED_INSTEAD = Symbol('queued-instead');
+
+export async function sendWithDelivery(server: Server, name: string, text: string, mode: Exclude<QueueSendMode, 'steer'>): Promise<DeliveryFeedback | null | typeof QUEUED_INSTEAD> {
   if (mode.kind === 'conversation') {
     // A bolha "Em espera" na conversa já descreve o envio.
-    await sendInputForServer(server, name, text, 'conversation');
-    return null;
+    return await sendInputForServer(server, name, text, 'conversation') ? null : QUEUED_INSTEAD;
   }
   const steer = mode.kind === 'direct' && !mode.terminalClaude;
   const body = mode.kind === 'jev' ? { text, jev_task: mode.task, jev_message: mode.message }
