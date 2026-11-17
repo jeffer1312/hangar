@@ -89,19 +89,22 @@ async fn owners_of<'a>(mux: &Mux, sessions: BTreeSet<&'a str>, key: &str) -> Vec
 }
 
 /// `GET /api/whoami`: dono e convidado perguntam quem é a sessão pelos cabeçalhos do MCP; nada
-/// resolvido é 404, nunca um chamador padrão.
+/// resolvido é 404, nunca um chamador padrão. Sessão fora do alcance do convidado leva o mesmo 404
+/// de nada resolvido: a resposta não pode dizer que ela existe.
 pub async fn route(axum::extract::State(st): axum::extract::State<std::sync::Arc<crate::routes::AppState>>,
                    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
                    req: axum::extract::Request) -> axum::response::Response {
-    use axum::http::StatusCode;
+    use axum::http::{Method, StatusCode};
     use hangar_core::http::{detail, json_response};
     let (_, caller) = match crate::routes::who(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
-    if caller.is_none() { return crate::session_write::stranger(&st, peer, req, None).await; }
+    let Some(caller) = caller else { return crate::session_write::stranger(&st, peer, req, None).await };
     let home = st.list.env().dirs.as_ref().map(|d| d.home.clone()).or_else(std::env::home_dir).unwrap_or_default();
     let local = Local { home: &home, mux: &st.list.env().mux };
     let headers = req.headers();
     let mut response = match resolve(headers, &local, &st.cfg.internal_secret).await {
-        Ok((name, origin)) => json_response(StatusCode::OK, serde_json::json!({"name": name, "origem": origin.as_str()})),
+        Ok((name, origin)) if caller.can(&name, &Method::GET) =>
+            json_response(StatusCode::OK, serde_json::json!({"name": name, "origem": origin.as_str()})),
+        Ok(_) => detail(StatusCode::NOT_FOUND, "erro_sessao_desconhecida", HINT, serde_json::json!({})),
         Err(reason) => detail(StatusCode::NOT_FOUND, "erro_sessao_desconhecida", &reason, serde_json::json!({})),
     };
     crate::routes::cors(headers, response.headers_mut());

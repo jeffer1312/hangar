@@ -800,3 +800,31 @@ async fn whoami_w09_a_signed_guest_header_alone_is_refused() {
         ("x-hangar-session", "s0")]).await;
     assert_eq!(status, 401);
 }
+
+/// O `whoami` com o convidado já decidido (convite ou login), como o porteiro o entrega ao roteador.
+async fn whoami_as_guest(s: &Scene, sessions: &[(&str, hangar_core::guest::Kind)], session: &str) -> (u16, Value) {
+    use tower::ServiceExt;
+    let mut request = axum::http::Request::builder().uri("/api/whoami").header("x-hangar-session", session)
+        .body(axum::body::Body::empty()).unwrap();
+    request.extensions_mut().insert(axum::extract::ConnectInfo::<SocketAddr>("127.0.0.1:1234".parse().unwrap()));
+    request.extensions_mut().insert(hangar_core::guest::Caller::Guest(Arc::new(hangar_core::guest::GuestGrant {
+        token: "convidado".into(), token_hash: "convidado-hash".into(), pair_roots: vec![], invite: true,
+        sessions: sessions.iter().map(|(name, kind)| ((*name).to_owned(), *kind)).collect() })));
+    let response = router(s.state.clone()).oneshot(request).await.unwrap();
+    let status = response.status().as_u16();
+    let body = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+    (status, serde_json::from_slice(&body).unwrap_or(Value::Null))
+}
+
+/// W-09: o convidado só fica sabendo do nome das sessões que alcança; a viva fora do convite leva o
+/// mesmo 404 da que não existe, sem revelar que existe.
+#[tokio::test(flavor = "multi_thread")]
+async fn whoami_w09_a_guest_learns_only_the_sessions_it_reaches() {
+    use hangar_core::guest::Kind;
+    let s = scene().await;
+    let hint = hangar_server::mcp::identity::HINT;
+    assert_eq!(whoami_as_guest(&s, &[("s1", Kind::Share)], "s0").await, unknown(hint), "viva, mas fora do convite");
+    assert_eq!(whoami_as_guest(&s, &[("s1", Kind::Share)], "zeta").await, unknown(hint), "inexistente: a mesma resposta");
+    assert_eq!(whoami_as_guest(&s, &[("s0", Kind::Share)], "s0").await, found("s0", "nome"));
+    assert_eq!(whoami_as_guest(&s, &[("s0", Kind::Pair)], "s0").await, found("s0", "nome"), "o par lê");
+}
