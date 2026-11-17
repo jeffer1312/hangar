@@ -55,6 +55,7 @@ vi.mock('../usage/ReportUI', () => ({
 }));
 
 import StatusScreen from './StatusScreen';
+import { bytes } from './format';
 
 function fakeSource() {
   const listeners = new Map<string, (ev: { data: string }) => void>();
@@ -113,10 +114,16 @@ describe('tela Status', () => {
     expect(text).toContain(m.status_leftover_tmux({ count: '2', names: 'cx-antigo, teste-voz' }));
     expect(text).toContain(m.status_update_available({ version: '0.1.0.10833' }));
 
+    // Fatia grande (Claude, ~62%) leva o valor dentro; a pequena (Pi, ~5%) fica sem rótulo.
+    const bar = () => c.querySelector<HTMLElement>(`[role="image"][aria-label^="${m.status_sessions_title()}:"]`)!;
+    const providers = FIXTURE.sessions!.by_provider;
+    expect(bar().getAttribute('aria-label')).toContain('Codex');
+    expect(bar().children[0].textContent).toBe(bytes(providers[0].rss_bytes));
+    expect(providers[2].key).toBe('pi');
+    expect(bar().children[2].textContent).toBe('');
     // Provedor e processo: a mesma barra troca de divisão.
-    expect(c.querySelector('[data-composition]')?.textContent).toContain('Codex');
     await act(async () => button(c, m.status_sessions_by_process())!.click());
-    expect(c.querySelector('[data-composition]')?.textContent).toContain(m.status_process_codex_app_server());
+    expect(bar().getAttribute('aria-label')).toContain(m.status_process_codex_app_server());
 
     await act(async () => source.emit('status', JSON.stringify({ ...FIXTURE, attention: [] })));
     expect(c.textContent).toContain(m.status_health_ok());

@@ -10,7 +10,7 @@ import { Segmented } from '../usage/CostsVisuals';
 import { Composition, useChartColors } from '../usage/ReportUI';
 import { useSettingsColors, withAlpha } from '../config/colors';
 import { RADIUS, SPACE } from '../../theme/scale';
-import { Block, Chip, Chips, HourColumns, Legend, Meter, Mono, Signal, Sparkline, type HourColumn } from './StatusParts';
+import { Block, Chip, Chips, HourColumns, Legend, Meter, Mono, SegBar, Signal, Sparkline, type HourColumn } from './StatusParts';
 import { attentionText, bytes, duration, exitDetail, exitKindText, num, pct, platformName, processName, providerLabel, since, updateLines, when } from './format';
 import * as m from '../../paraglide/messages';
 
@@ -217,7 +217,7 @@ export function SessionsCard({ sessions, flash, onLayout }: { sessions: StatusSe
   return <Block title={m.status_sessions_title()} hint={hint} flash={flash} onLayout={onLayout}
     right={both ? <Segmented label={m.status_sessions_split()} value={mode} onChange={(k) => setMode(k as 'provider' | 'process')}
       options={[{ key: 'provider', label: m.status_sessions_by_provider() }, { key: 'process', label: m.status_sessions_by_process() }]} /> : undefined}>
-    <Composition label={m.status_sessions_title()} items={items} />
+    <SegBar label={m.status_sessions_title()} items={items} />
     <Legend items={items.map((it) => ({ label: it.label, color: it.color, extra: `${it.count} · ${it.detail}` }))} />
     {dead.length || sessions.asleep || sessions.queued ? <Chips>
       {dead.length ? <Chip tone="bad" text={dead.length === 1 ? m.status_sessions_dead_one({ name: dead[0].name })

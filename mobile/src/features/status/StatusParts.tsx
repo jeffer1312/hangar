@@ -6,7 +6,8 @@ import { Icon, type IconName } from '../../ui/Icon';
 import { haptic } from '../../ui/haptics';
 import { GrowFill, Panel } from '../usage/CostsVisuals';
 import { useSettingsColors, withAlpha } from '../config/colors';
-import { MONO, RADIUS, SPACE } from '../../theme/scale';
+import { hexParaRgb } from '@hangar/core';
+import { INK, MONO, RADIUS, SPACE } from '../../theme/scale';
 
 /** Cartão de um bloco: título, a linha de resumo embaixo dele (como no celular do mock) e o realce de quem veio da lista de atenção. */
 export function Block({ title, hint, right, flash, onLayout, children }: {
@@ -148,6 +149,38 @@ export function Meter({ name, used, total, text, label }: { name: string; used: 
       <GrowFill percent={ratio * 100} color={color} height={8} />
     </View>
     <Text numberOfLines={1} style={{ minWidth: 92, textAlign: 'right', color: c.text, fontSize: theme.base.text.xxs, fontVariant: ['tabular-nums'] }}>{text}</Text>
+  </View>;
+}
+
+function rgbOf(color: string): [number, number, number] | null {
+  const hex = hexParaRgb(color);
+  if (hex) return hex;
+  const m = /^rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(color);
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+}
+
+/** Texto legível sobre a fatia: escuro em cor clara, branco em cor escura. */
+function inkOn(color: string): string {
+  const rgb = rgbOf(color);
+  if (!rgb) return INK.onAccent;
+  const [r, g, b] = rgb.map((v) => { const s = v / 255; return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4; });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.4 ? DARK_INK : INK.onAccent;
+}
+const DARK_INK = 'rgba(0,0,0,0.85)';
+
+/** Barra dividida alta: fatia com mais de 12% leva o próprio valor, alinhado à esquerda. */
+export function SegBar({ label, items }: { label: string; items: { label: string; value: number; color: string; detail: string }[] }) {
+  const c = useSettingsColors();
+  const { theme } = useUnistyles();
+  const total = items.reduce((sum, it) => sum + Math.max(0, it.value), 0);
+  return <View accessible accessibilityRole="image" accessibilityLabel={`${label}: ${items.map((it) => `${it.label} ${it.detail}`).join(' · ')}`}
+    style={{ flexDirection: 'row', height: 24, borderRadius: RADIUS.sm, overflow: 'hidden', backgroundColor: c.hover }}>
+    {items.map((it, i) => {
+      const share = total > 0 ? Math.max(0, it.value) / total : 0;
+      return <View key={i} style={{ width: `${share * 100}%`, height: 24, justifyContent: 'center', paddingHorizontal: SPACE[1.5], backgroundColor: it.color }}>
+        {share > 0.12 ? <Text numberOfLines={1} style={{ color: inkOn(it.color), fontSize: theme.base.text.xxs, fontWeight: theme.base.weight.semibold }}>{it.detail}</Text> : null}
+      </View>;
+    })}
   </View>;
 }
 
