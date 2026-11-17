@@ -133,10 +133,12 @@ fn standalone() -> Result<(), std::process::ExitCode> {
     let claude = std::env::var_os("CLAUDE_CONFIG_DIR").map(std::path::PathBuf::from);
     let log_base = hangar_core::paths::log_base();
     let places = hangar_boot::settings::Places { home: &home, claude_config: claude.as_deref(), log_base: log_base.as_deref() };
-    let boot = hangar_boot::settings::standalone_env(&settings, &places, |key| std::env::var_os(key).is_some())
+    let keep = std::env::var_os(hangar_boot::settings::KEEP_INHERITED).is_some_and(|value| value == "1");
+    let boot = hangar_boot::settings::standalone_env(&settings, &places, |key| keep && std::env::var_os(key).is_some())
         .map_err(|message| refuse("startup_refused", 1, message))?;
     if let Some(warning) = boot.warning { println!("{warning}"); }
     for note in boot.notes { eprintln!("hangar-server: {note}"); }
+    for key in boot.remove { unsafe { std::env::remove_var(key) } }
     for (key, value) in boot.vars { unsafe { std::env::set_var(key, value) } }
     Ok(())
 }

@@ -22,8 +22,9 @@ fn command(home: &Path) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_hangar-server"));
     command.env_clear().env("HOME", home).env("USERPROFILE", home).env("PATH", home)
         .env("CP_RUST_NO_ORPHAN_SWEEP", "1")
-        // A 8766 de verdade é do servidor de quem roda os testes; o processo vence o que a subida monta.
-        .env("HANGAR_SERVER_GUEST_LISTEN", "127.0.0.1:0")
+        // A 8766 de verdade é do servidor de quem roda os testes; só com a chave dos testes a porta
+        // trazida vence o que a subida monta.
+        .env("HANGAR_SERVER_GUEST_LISTEN", "127.0.0.1:0").env(hangar_boot::settings::KEEP_INHERITED, "1")
         .current_dir(home).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
     if cfg!(windows) {
         for key in ["SystemRoot", "WINDIR"] {

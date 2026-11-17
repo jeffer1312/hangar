@@ -312,7 +312,8 @@ async fn stopped_server(name: &str, entry: &str) {
         .env("HANGAR_SERVER_GUEST_LISTEN",guest.to_string())
         .env("HANGAR_SHARES_FILE",scene.home.join("shares.json"))
         .env("HANGAR_INTERNAL_SECRET",SECRET).env("CP_AUTH_TOKEN",OWNER)
-        .env("CP_RUST_NO_ORPHAN_SWEEP","1").env("HANGAR_SERVER_LOG",&log);
+        .env("CP_RUST_NO_ORPHAN_SWEEP","1").env("HANGAR_SERVER_LOG",&log)
+        .env(hangar_boot::settings::KEEP_INHERITED,"1");
     drop(public_reservation); drop(guest_reservation);
     let mut serving = command.spawn().unwrap();
     let pid = serving.id().unwrap();

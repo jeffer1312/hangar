@@ -36,10 +36,21 @@ impl Settings {
     }
 }
 
+/// As chaves internas que a subida decide. O ambiente herdado (unit, sessão que abriu o servidor à
+/// mão) nunca vence: o Python também as regravava e tirava a porta do convidado que não montou.
+pub const INTERNAL: [&str; 6] = ["HANGAR_SERVER_LISTEN", "HANGAR_SERVER_GUEST_LISTEN", "HANGAR_SERVER_LOG",
+    "HANGAR_SHARES_FILE", "HANGAR_INTERNAL_SECRET", "HANGAR_RUNTIME_INSTANCE"];
+
+/// Só os testes, que sobem o servidor com porta, segredo e log próprios: com `1`, a chave interna
+/// já presente no ambiente fica.
+pub const KEEP_INHERITED: &str = "HANGAR_TEST_KEEP_INTERNAL_ENV";
+
 /// O que a subida põe no ambiente antes do runtime, e o aviso que o Python imprimia.
 #[derive(Debug)]
 pub struct Boot {
     pub vars: Vec<(&'static str, String)>,
+    /// Chaves internas herdadas que a subida não montou: saem do ambiente.
+    pub remove: Vec<&'static str>,
     pub warning: Option<String>,
     /// O que a subida resolveu diferente do pedido, com código, para o stderr: o log ainda não abriu.
     pub notes: Vec<String>,
@@ -52,8 +63,9 @@ pub struct Places<'a> {
     pub log_base: Option<&'a Path>,
 }
 
-/// `present`: a variável já está no ambiente do processo, e ele vence.
-pub fn standalone_env(settings: &Settings, places: &Places, present: impl Fn(&str) -> bool) -> Result<Boot, String> {
+/// `kept`: a chave interna herdada fica (só com `KEEP_INHERITED`, nos testes). As `CP_*` resolvidas
+/// sempre vão: a precedência `.env`/processo delas já foi decidida em `Settings::resolve`.
+pub fn standalone_env(settings: &Settings, places: &Places, kept: impl Fn(&str) -> bool) -> Result<Boot, String> {
     let warning = guard(settings)?;
     let mut notes = Vec::new();
     let ip = if settings.bind == "auto" {
@@ -84,8 +96,9 @@ pub fn standalone_env(settings: &Settings, places: &Places, present: impl Fn(&st
         create_private_dir(&folder).map_err(|e| format!("pasta de logs {}: {e}", folder.display()))?;
         vars.push(("HANGAR_SERVER_LOG", folder.join("hangar-server.log").to_string_lossy().into_owned()));
     }
-    vars.retain(|(key, _)| key.starts_with("CP_") || !present(key));
-    Ok(Boot { vars, warning, notes })
+    vars.retain(|(key, _)| key.starts_with("CP_") || !kept(key));
+    let remove = INTERNAL.into_iter().filter(|key| !kept(key) && !vars.iter().any(|(set, _)| set == key)).collect();
+    Ok(Boot { vars, remove, warning, notes })
 }
 
 fn guard(settings: &Settings) -> Result<Option<String>, String> {

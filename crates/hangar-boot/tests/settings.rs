@@ -1,6 +1,6 @@
 //! Esperados tirados da captura do Python (`contract/boot/b01..b16`), com as diferenças aceitas
 //! (decisão 10: sem `export` nem `${VAR}`) escritas no próprio caso.
-use hangar_boot::settings::{bind_ip, parse_env_file, standalone_env, Places, Settings, GUEST_PORT};
+use hangar_boot::settings::{bind_ip, parse_env_file, standalone_env, Places, Settings, GUEST_PORT, INTERNAL};
 use proptest::prelude::*;
 use std::net::IpAddr;
 
@@ -170,12 +170,33 @@ fn b13_b14_instance_and_secret_are_new_each_boot() {
     }
 }
 
+/// O ambiente herdado nunca vence as chaves internas: o que a subida montou vai, e o que ela não
+/// montou (convidado na 8766, log sem pasta) sai, como o Python fazia.
 #[test]
-fn process_env_keeps_what_it_already_has() {
+fn inherited_internal_keys_never_win() {
+    let home = tempfile::tempdir().unwrap();
+    let base = home.path().join("logs");
+    let boot = standalone_env(&s("127.0.0.1", 8765, "t"), &Places { home: home.path(), claude_config: None, log_base: Some(&base) },
+        |_| false).unwrap();
+    for key in INTERNAL {
+        assert!(boot.vars.iter().any(|(set, _)| *set == key), "{key} montada pela subida");
+    }
+    assert!(boot.remove.is_empty(), "{:?}", boot.remove);
+    let boot = standalone_env(&s("127.0.0.1", GUEST_PORT, "t"), &places(home.path()), |_| false).unwrap();
+    assert_eq!(boot.remove, ["HANGAR_SERVER_GUEST_LISTEN", "HANGAR_SERVER_LOG"]);
+    for key in boot.remove { assert!(boot.vars.iter().all(|(set, _)| *set != key), "{key}"); }
+}
+
+/// Só os testes (`KEEP_INHERITED`) mantêm a chave interna que já trouxeram; as `CP_*` resolvidas vão sempre.
+#[test]
+fn the_test_switch_keeps_what_the_test_brought() {
     let home = tempfile::tempdir().unwrap();
     let boot = standalone_env(&s("127.0.0.1", 8765, "t"), &places(home.path()), |key| key == "HANGAR_SERVER_GUEST_LISTEN").unwrap();
     assert!(boot.vars.iter().all(|(key, _)| *key != "HANGAR_SERVER_GUEST_LISTEN"));
+    assert!(!boot.remove.contains(&"HANGAR_SERVER_GUEST_LISTEN"), "a trazida pelo teste não sai");
     assert!(boot.vars.iter().any(|(key, _)| *key == "CP_AUTH_TOKEN"), "o token resolvido sempre vai");
+    let boot = standalone_env(&s("127.0.0.1", 8765, "t"), &places(home.path()), |key| key == "CP_AUTH_TOKEN").unwrap();
+    assert!(boot.vars.iter().any(|(key, _)| *key == "CP_AUTH_TOKEN"), "a CP_* resolvida não depende da chave");
 }
 
 /// A subida e quem consulta a porta depois (atualização, modo desenvolvedor) leem o mesmo `.env` do

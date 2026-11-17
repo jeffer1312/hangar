@@ -391,6 +391,7 @@ async fn child_identity(home: &std::path::Path, inherited: Option<&str>) -> Valu
     command.env_clear().env("HOME",home).env("USERPROFILE",home).env("PATH",home)
         .env("HANGAR_SERVER_ID","before").env("HANGAR_SERVER_LISTEN",address.to_string())
         .env("HANGAR_INTERNAL_SECRET","proof").env("CP_AUTH_TOKEN","proof")
+        .env(hangar_boot::settings::KEEP_INHERITED,"1")
         .current_dir(home).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null());
     if cfg!(windows) {
         for key in ["SystemRoot", "WINDIR"] {

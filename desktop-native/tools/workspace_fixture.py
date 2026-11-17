@@ -113,7 +113,7 @@ def main():
     threading.Thread(target=server.serve_forever, daemon=True).start()
     env = {**os.environ,"HANGAR_SERVER_LISTEN":f"{args.bind}:{args.port}","HANGAR_SERVER_UPSTREAM":f"127.0.0.1:{server.server_port}",
            "CP_AUTH_TOKEN":TOKEN,"CP_FORWARDED_ALLOW_IPS":"127.0.0.1","HANGAR_INTERNAL_SECRET":SECRET,
-           "HANGAR_SERVER_LOG":str(output / "server.log")}
+           "HANGAR_SERVER_LOG":str(output / "server.log"),"HANGAR_TEST_KEEP_INTERNAL_ENV":"1"}
     child = subprocess.Popen([str(args.server_bin.resolve())], stdin=subprocess.PIPE, env=env)
     print(json.dumps({"address":f"http://{args.bind}:{args.port}","token":TOKEN,"repo":str(repo),"pid":child.pid}), flush=True)
     try:

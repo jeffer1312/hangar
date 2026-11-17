@@ -333,7 +333,7 @@ fn b35_killing_the_launcher_takes_the_server_along_and_frees_the_port() {
     let mut launcher = launch_command(home, &["backend"]).env("PATH", home)
         .env("CP_RUST_SERVER_BIN", env!("CARGO_BIN_EXE_hangar-server"))
         .env("CP_RUST_NO_ORPHAN_SWEEP", "1").env("HANGAR_SERVER_GUEST_LISTEN", "127.0.0.1:0")
-        .stdin(std::process::Stdio::null()).spawn().unwrap();
+        .env(hangar_boot::settings::KEEP_INHERITED, "1").stdin(std::process::Stdio::null()).spawn().unwrap();
     let deadline = Instant::now() + Duration::from_secs(60);
     while !health() {
         assert!(launcher.try_wait().unwrap().is_none(), "o lançador saiu antes de o servidor subir");
