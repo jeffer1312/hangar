@@ -932,7 +932,9 @@ impl Hangar {
         let enabled = MODES.map(|m| m != DeliveryMode::Jev || self.queue_jev_ready());
         let control = super::settings::segments_where("delivery-mode", &labels, &[], MODES.iter().position(|m| *m == mode).unwrap_or(0),
             &enabled, false, jev_help, |this: &mut Hangar, index, _: &mut Window, cx| this.set_delivery_mode(MODES[index], cx), cx);
-        self.row(IconName::MessageSquare, "settings_delivery_mode", Some(desc), true, control)
+        // As quatro opções não cabem ao lado do título sem espremê-lo: vão embaixo da descrição, como no mock.
+        let below = div().flex().flex_col().gap(px(10.)).child(desc).child(div().flex().child(control));
+        self.row_with(IconName::MessageSquare, "settings_delivery_mode", below, true, div().into_any_element())
     }
 
     pub(super) fn render_diary(&mut self, cx: &mut Context<Self>) -> AnyElement {
