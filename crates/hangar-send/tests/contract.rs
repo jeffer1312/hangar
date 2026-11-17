@@ -142,9 +142,17 @@ struct Places {
     ports: Vec<(String, u16)>,
 }
 
+/// A porta fixa (`CP_PORT=<n>`, n ≥ 1024) que a captura gravou para o servidor desligado.
+fn dead_port_literal(text: &str) -> Option<u16> {
+    let rest = &text[text.find("CP_PORT=")? + "CP_PORT=".len()..];
+    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    digits.parse::<u16>().ok().filter(|port| *port >= 1024)
+}
+
 impl Places {
     fn fill(&self, text: &str) -> String {
-        let mut text = text.to_owned();
+        // Alguns casos gravaram a porta morta como número fixo no `.env`; ela vira a porta morta do teste.
+        let mut text = dead_port_literal(text).map_or_else(|| text.to_owned(), |port| text.replace(&format!("CP_PORT={port}\n"), "CP_PORT=$DEAD_PORT\n"));
         for (name, port) in &self.ports {
             text = text.replace(name, &port.to_string());
         }
