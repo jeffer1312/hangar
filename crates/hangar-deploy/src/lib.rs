@@ -91,3 +91,32 @@ pub async fn webhook(
         ),
     }
 }
+
+/// A porta do backend como o servidor a lê: `CP_PORT` do ambiente, senão a do `.env` dos dados do
+/// usuário (ou da `backend/` dada, na máquina não migrada), senão 8765. Valor que não é porta é erro.
+pub fn port(home: &std::path::Path, backend: Option<&std::path::Path>, environment: Option<&str>) -> Result<u16, String> {
+    let value = match environment {
+        Some(value) => Some(value.to_owned()),
+        None => hangar_core::user_data::env_value(home, backend, "CP_PORT")?,
+    };
+    let Some(value) = value else { return Ok(8765) };
+    value.trim().parse::<u16>().ok().filter(|port| *port > 0).ok_or_else(|| format!("CP_PORT={value:?} não é uma porta"))
+}
+
+/// `hangar-server deploy-port [--backend <pasta>]`: a porta que o `deploy.sh` sonda depois do restart.
+pub fn port_cli(args: &[String]) -> std::process::ExitCode {
+    let backend = match args {
+        [] => None,
+        [flag, dir] if flag == "--backend" => Some(std::path::PathBuf::from(dir)),
+        _ => {
+            eprintln!("uso: hangar-server deploy-port [--backend <pasta>]");
+            return std::process::ExitCode::from(2);
+        }
+    };
+    let home = std::env::home_dir().unwrap_or_default();
+    let environment = std::env::var("CP_PORT").ok();
+    match port(&home, backend.as_deref(), environment.as_deref()) {
+        Ok(port) => { println!("{port}"); std::process::ExitCode::SUCCESS }
+        Err(error) => { eprintln!("deploy-port: {error}"); std::process::ExitCode::FAILURE }
+    }
+}

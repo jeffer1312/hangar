@@ -8,7 +8,7 @@
 //!
 //! Token, porta e as opções `CP_*` vêm do `~/.hangar/config/.env` ou, sem ele, do `backend/.env` da
 //! cópia do Hangar: a de onde o binário mora (checkout) ou a que o servidor anotou ao subir
-//! (`~/.hangar/backend-dir`, para o `~/.hangar/bin`).
+//! (`~/.hangar/install-root-dir`, ou o `~/.hangar/backend-dir` antigo, para o `~/.hangar/bin`).
 //! PEDIDO é o JSON do `POST /api/sessions`; omitido, vem da entrada padrão. Recusa sai em stderr no
 //! envelope `{"detail": …}` com código 1; uso errado, 2; sem token no `.env`, 4 (nada é enviado).
 use std::collections::BTreeMap;
@@ -128,6 +128,20 @@ pub fn backend_dir_for_home(home: &std::path::Path) -> Option<PathBuf> {
     Some(crate::install_root::root(home)?.join("backend")).filter(|dir| is_backend(dir))
 }
 
+/// A `backend/` do servidor em execução, pela pasta onde ele roda: a da raiz da versão (onde o
+/// lançador o põe) ou a própria `backend/` de um lançamento antigo; fora de uma cópia do Hangar, a
+/// pasta mesma, como antes. Serve para achar o `.env`/`peers.json` da máquina ainda não migrada e,
+/// pela pai, a raiz da cópia.
+pub fn server_backend() -> Option<PathBuf> {
+    let dir = std::env::current_dir().ok()?;
+    Some(hangar_core::paths::backend_of(&dir).unwrap_or(dir))
+}
+
+/// A raiz da cópia do Hangar do servidor em execução (a pai da `server_backend`).
+pub fn server_root() -> Option<PathBuf> {
+    server_backend().and_then(|backend| backend.parent().map(std::path::Path::to_path_buf))
+}
+
 /// O ambiente que o servidor teria: a conta e as opções `CP_*` de quem chama não valem (uma sessão
 /// dentro da conta B leria a configuração da B); as `CP_*` vêm do `.env` do servidor.
 fn server_env(caller: impl Iterator<Item = (String, String)>, server: &BTreeMap<String, String>) -> BTreeMap<String, String> {
@@ -184,10 +198,14 @@ fn usage() -> ExitCode {
 
 pub(crate) use hangar_core::paths::pointer;
 
-/// O servidor anota a `backend/` de onde roda (a pasta de trabalho dele) ao subir.
-pub fn publish_backend_dir(home: &std::path::Path, backend: &std::path::Path) -> std::io::Result<()> {
+/// O servidor anota de onde roda ao subir: a raiz (a pai da `backend`) em `install-root-dir` e, para
+/// a versão anterior que só lê o ponteiro antigo, a `backend/` em `backend-dir`. O novo é gravado
+/// por último, para vencer o antigo pela data.
+pub fn publish_install_root(home: &std::path::Path, backend: &std::path::Path) -> std::io::Result<()> {
     std::fs::create_dir_all(home.join(".hangar"))?;
-    crate::runtime::queue::atomic_write(&pointer(home), backend.to_string_lossy().as_bytes())
+    crate::runtime::queue::atomic_write(&pointer(home), backend.to_string_lossy().as_bytes())?;
+    let Some(root) = backend.parent() else { return Ok(()) };
+    crate::runtime::queue::atomic_write(&hangar_core::paths::root_pointer(home), root.to_string_lossy().as_bytes())
 }
 
 #[cfg(test)]

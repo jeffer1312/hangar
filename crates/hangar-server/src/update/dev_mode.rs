@@ -31,7 +31,7 @@ async fn fetch_rust_with_binary(runner:Arc<dyn StepRunner+Send+Sync>,checkout:&P
     let failed=tokio::task::spawn_blocking(move||{
         let command=if cfg!(windows){format!("\"{}\" rust-release \"{}\"",binary.display(),checkout.display())}
         else{format!("'{}' rust-release '{}'",binary.display().to_string().replace('\'',"'\\''"),checkout.display().to_string().replace('\'',"'\\''"))};
-        let StepRun{code,output}=runner.run(&command,&checkout.join("backend"));
+        let StepRun{code,output}=runner.run(&command,&checkout);
         (code!=Some(0)).then(||format!("o hangar-server rust-release saiu com {code:?}: {}",output.trim()))
     }).await.unwrap_or_else(|error|Some(error.to_string()))?;
     let warning=format!("o Rust do modo desenvolvedor não foi atualizado ({failed}); o servidor pode subir com o binário antigo de ~/.hangar/bin");
@@ -370,7 +370,7 @@ mod tests {
     /// O executor nativo aceita o checkout com espaço e aspa sem depender de Python.
     #[cfg(unix)]
     #[tokio::test]
-    async fn dev_mode_fetch_rust_runs_the_native_executor_from_backend() {
+    async fn dev_mode_fetch_rust_runs_the_native_executor_from_the_checkout_root() {
         use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
         let checkout = dir.path().join("che ck'out");
@@ -379,11 +379,11 @@ mod tests {
         std::fs::write(&binary, "#!/bin/sh\necho \"$PWD $*\" > \"$0.ran\"\n").unwrap();
         std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
         let runner = Arc::new(super::super::ShellRunner { timeout: Duration::from_secs(20) });
-        std::fs::create_dir_all(checkout.join("backend")).unwrap();
+        // Sem `backend/`: o executor roda na raiz do checkout.
         assert_eq!(fetch_rust_with_binary(runner, &checkout, &binary).await, None);
         let ran = std::fs::read_to_string(binary.with_extension("ran")).unwrap();
         // Canônico: no macOS o temporário fica sob /var, link para /private/var, e o $PWD vem resolvido.
-        assert_eq!(ran.trim(), format!("{} rust-release {}", checkout.join("backend").canonicalize().unwrap().display(), checkout.display()));
+        assert_eq!(ran.trim(), format!("{} rust-release {}", checkout.canonicalize().unwrap().display(), checkout.display()));
     }
 
     #[tokio::test]

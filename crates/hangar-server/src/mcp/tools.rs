@@ -768,9 +768,9 @@ impl Tools {
         if !env.iter().any(|(k, v)| k == "TYPESAFE_API_KEY" && !v.is_empty()) { return Err(JEV_UNCONFIGURED.into()); }
         let node = crate::runtime::process::resolve_program("node", env.iter().map(|(k, v)| (k, v)))
             .ok_or("node não encontrado no PATH do backend: o objetivo roda pelo hangar-preview")?;
-        // A raiz da instalação; sem ela, o pai da pasta de trabalho (`backend/`), herdada do Python.
+        // A raiz da instalação; sem ela, a da cópia onde o servidor roda.
         let home = crate::accounts::environment::AccountEnvironment::capture().home;
-        let script = crate::install_root::root(&home).unwrap_or_else(|| std::env::current_dir().unwrap_or_default().join(".."))
+        let script = crate::install_root::root(&home).or_else(crate::session_open::cli::server_root).unwrap_or_default()
             .join("scripts").join("hangar-preview");
         // Mesma trava dos verbos: um `browser` no meio refaria o snapshot e trocaria as refs do Jev.
         let lock = self.nav_lock(&target);

@@ -275,11 +275,11 @@ pub fn versioned_text(value: &Value) -> String {
     hangar_core::pycompat::pyjson::dumps_indent(&sorted(value), 1, false) + "\n"
 }
 
-/// Baixa o catálogo e regrava o snapshot (`backend/app/pricing_data.json`) e o recorte dos testes a
-/// partir da raiz do repositório, que tem de ter as duas pastas (nada é criado). Catálogo sem modelo
-/// conhecido é recusado (D13). Os dois arquivos só trocam depois de os dois estarem prontos.
+/// Baixa o catálogo e regrava o snapshot (`crates/hangar-server/data/pricing_data.json`) e o recorte
+/// dos testes a partir da raiz do repositório, que tem de ter as duas pastas (nada é criado). Catálogo
+/// sem modelo conhecido é recusado (D13). Os dois arquivos só trocam depois de os dois estarem prontos.
 pub async fn write_snapshot(root: &Path, url: &str) -> Result<Vec<String>, String> {
-    let snapshot = root.join("backend/app/pricing_data.json");
+    let snapshot = root.join(super::pricing::SNAPSHOT_PATH);
     let fixture = root.join("crates/hangar-server/tests/it/fixtures/pricing/models_dev_recorte.json");
     for path in [&snapshot, &fixture] {
         let parent = path.parent().unwrap_or(root).to_owned();

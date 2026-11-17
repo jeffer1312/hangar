@@ -130,7 +130,7 @@ impl ServerHost {
     pub async fn new(st: Arc<AppState>) -> Self {
         // `TerminalEnv::local` pode esperar o `systemctl --user` (até 3 s): fora das threads do runtime.
         let (env, terminal) = tokio::task::spawn_blocking(|| {
-            let dotenv = crate::user_data::env_file(std::env::current_dir().ok().as_deref())
+            let dotenv = crate::user_data::env_file(super::cli::server_backend().as_deref())
                 .inspect_err(|e| tracing::warn!(code = "user_data_env_unreadable", "abertura: .env dos dados do usuário ilegível, segue sem ele: {e}"))
                 .ok().flatten().unwrap_or_default();
             let env = AccountEnvironment::from_map(server_env(std::env::vars().collect(), &dotenv));
@@ -234,8 +234,8 @@ impl OpenHost for ServerHost {
     fn mux(&self) -> &dyn Mux { &self.mux }
     fn bridge(&self) -> Option<PluginBridge> { Some(PluginBridge { port: self.st.cfg.listen.port(), secret: self.st.cfg.auth_token.clone() }) }
     fn server_projects(&self) -> PathBuf { self.env.claude_base.join("projects") }
-    /// O servidor roda na `backend/` (é de lá que ele lê o `.env`).
-    fn backend_dir(&self) -> Option<PathBuf> { std::env::current_dir().ok() }
+    /// A `backend/` da cópia onde o servidor roda (a raiz da versão; lançamento antigo, a própria).
+    fn backend_dir(&self) -> Option<PathBuf> { super::cli::server_backend() }
 
     fn run(&self, argv: Vec<String>, timeout: Duration) -> BoxFuture<'_, MuxOutput> {
         Box::pin(run_program(&self.env.base, argv, timeout))

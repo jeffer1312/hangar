@@ -121,7 +121,7 @@ impl Service {
         .map_err(|error| error.to_string())
     }
     pub fn preflight(&self) -> Result<Value, String> {
-        let missing = ["git", "node", "npm", "uv"]
+        let missing = ["git", "node", "npm"]
             .into_iter()
             .filter(|name| self.binary(name).is_none())
             .map(str::to_owned)

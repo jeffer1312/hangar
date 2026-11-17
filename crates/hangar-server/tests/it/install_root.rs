@@ -39,13 +39,29 @@ fn diary(home: &Path) -> Vec<serde_json::Value> {
         .filter_map(|line| serde_json::from_str(line).ok()).collect::<Vec<_>>()).collect()
 }
 
-/// Versão do pacote que sobe direto (`boot: direct`) e sem o `bin/hangar-server`.
+/// Versão do pacote que sobe direto (`boot: direct`), sem `backend/` e sem o `bin/hangar-server`.
 fn direct_version(home: &Path) -> std::path::PathBuf {
     let real = home.join(".hangar").join("versions").join("v1");
-    std::fs::create_dir_all(real.join("backend")).unwrap();
+    std::fs::create_dir_all(&real).unwrap();
     std::fs::write(real.join("manifest.json"), r#"{"version":"v1","boot":"direct"}"#).unwrap();
     link_current(&real, home);
     real
+}
+
+/// P9: a versão que sobe direto roda na raiz dela, mesmo sem `backend/` (o pacote deixa de levá-la).
+#[cfg(unix)]
+#[test]
+fn a_direct_version_runs_its_server_in_the_version_root() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    let real = direct_version(home);
+    let server = home.join("server-falso");
+    std::fs::write(&server, "#!/bin/sh\npwd -P > \"$HOME/cwd\"\n").unwrap();
+    std::fs::set_permissions(&server, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let out = launch_command(home, &["backend"]).env("CP_RUST_SERVER_BIN", &server).output().unwrap();
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert_eq!(std::fs::read_to_string(home.join("cwd")).unwrap().trim(), real.canonicalize().unwrap().display().to_string());
 }
 
 /// As linhas do lançador no log da tarefa, sem o prefixo.

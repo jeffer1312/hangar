@@ -10,24 +10,41 @@ pub fn root(home: &Path) -> Option<PathBuf> {
     if current.exists() { Some(current) } else { checkout(home) }
 }
 
-/// O checkout de onde este binário roda, ou o anotado em `~/.hangar/backend-dir` (binário em `~/.hangar/bin`).
+/// O checkout de onde este binário roda, ou o anotado em `~/.hangar/install-root-dir` (ou, na volta,
+/// em `~/.hangar/backend-dir`) quando o binário está em `~/.hangar/bin`.
 fn checkout(home: &Path) -> Option<PathBuf> {
     checkout_from(std::env::current_exe().ok().and_then(|exe| exe.canonicalize().ok()), home)
 }
 
-/// Cópia acima do binário com `.env` vence a anotada; sem `.env` (worktree de desenvolvimento) vale a
-/// anotada, que é a do servidor e tem o token; sem nenhuma das duas, a cópia acima do binário.
+/// Cópia acima do binário com `backend/.env` vence a anotada; sem `.env` (worktree de
+/// desenvolvimento) vale a anotada, que é a do servidor e tem o token; sem nenhuma das duas, a cópia
+/// acima do binário.
 fn checkout_from(exe: Option<PathBuf>, home: &Path) -> Option<PathBuf> {
-    use crate::paths::is_backend;
-    let above = |found: fn(&Path) -> bool| exe.as_deref()
-        .and_then(|exe| exe.ancestors().skip(1).map(|dir| dir.join("backend")).find(|dir| found(dir)));
-    let backend = above(|dir| dir.join(".env").is_file())
-        .or_else(|| {
-            let noted = PathBuf::from(std::fs::read_to_string(crate::paths::pointer(home)).ok()?.trim());
-            is_backend(&noted).then_some(noted)
-        })
-        .or_else(|| above(is_backend))?;
-    backend.parent().map(Path::to_path_buf)
+    use crate::paths::is_install_root;
+    let above = |found: &dyn Fn(&Path) -> bool| exe.as_deref()
+        .and_then(|exe| exe.ancestors().skip(1).find(|dir| found(dir)).map(Path::to_path_buf));
+    above(&|dir: &Path| dir.join("backend").join(".env").is_file())
+        .or_else(|| noted_root(home))
+        .or_else(|| above(&is_install_root))
+}
+
+/// A raiz anotada pelo servidor. O ponteiro novo (a raiz) vence o antigo (a `backend/`), salvo quando
+/// o antigo foi gravado depois: a versão anterior subiu na volta e só regrava aquele.
+pub fn noted_root(home: &Path) -> Option<PathBuf> {
+    use crate::paths::{is_backend, is_install_root};
+    let read = |path: PathBuf| {
+        let modified = std::fs::metadata(&path).and_then(|meta| meta.modified()).ok();
+        std::fs::read_to_string(&path).ok().map(|text| (PathBuf::from(text.trim()), modified))
+    };
+    let new = read(crate::paths::root_pointer(home)).filter(|(root, _)| is_install_root(root));
+    let old = read(crate::paths::pointer(home))
+        .filter(|(backend, _)| is_backend(backend))
+        .and_then(|(backend, modified)| Some((backend.parent()?.to_path_buf(), modified)));
+    match (new, old) {
+        (Some((_, new_at)), Some((old_root, old_at))) if old_at > new_at => Some(old_root),
+        (Some((root, _)), _) | (None, Some((root, _))) => Some(root),
+        (None, None) => None,
+    }
 }
 
 /// O Python embutido do pacote; sem ele, o venv do backend (checkout ou modo desenvolvedor).
@@ -111,8 +128,9 @@ pub fn backend_noted(home: &Path, args: &[String], windows: bool, explicit: Opti
     while let Some(arg) = rest.next() {
         if arg == "--log" { rest.next(); } else { command.arg(arg); }
     }
-    // Na `backend/` o servidor anota a pasta para o `hangar-server open` de `~/.hangar/bin` achar o `.env`.
-    command.current_dir(real.join("backend"));
+    // Na raiz da versão: o pacote pode não ter `backend/`, e o servidor anota a raiz para o
+    // `hangar-server open` de `~/.hangar/bin` achar o `.env`.
+    command.current_dir(&real);
     Ok(Backend::Direct(command))
 }
 
@@ -184,7 +202,7 @@ mod tests {
         let (home, worktree, main) = (dir.path().join("home"), dir.path().join("wt"), dir.path().join("main"));
         let exe = worktree.join("crates/target/release/hangar-server");
         std::fs::create_dir_all(worktree.join("backend/app")).unwrap();
-        std::fs::write(worktree.join("backend/app/pricing_data.json"), "").unwrap();
+        std::fs::write(worktree.join(".git"), "gitdir: ../main/.git/worktrees/wt\n").unwrap();
         std::fs::create_dir_all(main.join("backend")).unwrap();
         std::fs::write(main.join("backend/.env"), "CP_AUTH_TOKEN=t\n").unwrap();
         std::fs::create_dir_all(home.join(".hangar")).unwrap();
@@ -197,6 +215,35 @@ mod tests {
         std::fs::remove_file(worktree.join("backend/.env")).unwrap();
         std::fs::remove_file(crate::paths::pointer(&home)).unwrap();
         assert_eq!(checkout_from(Some(exe), &home), Some(worktree));
+    }
+
+    /// O ponteiro novo (a raiz) vence o antigo (a `backend/`); o antigo vale sozinho e quando foi
+    /// gravado depois, que é o que a versão anterior faz ao subir na volta.
+    #[test]
+    fn the_root_pointer_wins_unless_the_old_one_is_newer() {
+        let dir = tempfile::tempdir().unwrap();
+        let (home, new, old) = (dir.path().join("home"), dir.path().join("v2"), dir.path().join("v1"));
+        std::fs::create_dir_all(&new).unwrap();
+        std::fs::write(new.join("manifest.json"), "{}").unwrap();
+        std::fs::create_dir_all(old.join("backend")).unwrap();
+        std::fs::write(old.join("backend/.env"), "CP_AUTH_TOKEN=t\n").unwrap();
+        std::fs::create_dir_all(home.join(".hangar")).unwrap();
+        let exe = Some(dir.path().join("elsewhere/hangar-server"));
+        assert_eq!(super::noted_root(&home), None);
+        std::fs::write(crate::paths::pointer(&home), old.join("backend").to_string_lossy().as_bytes()).unwrap();
+        assert_eq!(checkout_from(exe.clone(), &home), Some(old.clone()), "só o antigo: vale ele");
+        let at = |path: std::path::PathBuf, secs: u64| std::fs::File::options().write(true).open(path).unwrap()
+            .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs)).unwrap();
+        std::fs::write(crate::paths::root_pointer(&home), new.to_string_lossy().as_bytes()).unwrap();
+        at(crate::paths::pointer(&home), 1_000);
+        at(crate::paths::root_pointer(&home), 2_000);
+        assert_eq!(checkout_from(exe.clone(), &home), Some(new.clone()), "o novo vence");
+        at(crate::paths::pointer(&home), 3_000);
+        assert_eq!(checkout_from(exe.clone(), &home), Some(old), "a volta regravou só o antigo");
+        // Raiz anotada que deixou de ser uma cópia do Hangar não vale.
+        std::fs::remove_file(crate::paths::pointer(&home)).unwrap();
+        std::fs::remove_file(new.join("manifest.json")).unwrap();
+        assert_eq!(checkout_from(exe, &home), None);
     }
 
     /// O pacote leva os `.pyc` prontos: com `PYTHONPYCACHEPREFIX` o Python os ignora e recompila tudo.
@@ -242,11 +289,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path();
         let real = version(home, "1.0.0.9", r#"{"version":"1.0.0.9","boot":"direct"}"#);
+        // A versão que sobe direto não precisa da `backend/`: o servidor roda na raiz dela.
+        std::fs::remove_dir(real.join("backend")).unwrap();
         let args = ["--log".to_owned(), "/tmp/x.log".to_owned()];
         let Ok(super::Backend::Direct(command)) = super::backend(home, &args, false, None) else { panic!("devia ser direto") };
         assert_eq!(command.get_program(), real.join("bin/hangar-server"));
         assert_eq!(command.get_args().count(), 0, "o --log fica com o lançador");
-        assert_eq!(command.get_current_dir(), Some(real.join("backend").as_path()));
+        assert_eq!(command.get_current_dir(), Some(real.as_path()));
     }
 
     /// Decisão 1: versão sem o campo (a anterior, na volta da atualização) sobe pelo Python como antes.

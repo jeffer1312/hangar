@@ -399,7 +399,7 @@ fn plan(m: &Machine<'_>, mode: Mode, why: Option<&str>, channel: &str, service: 
     lines.push(format!("tirar do Kimi e do Codex os hooks de {}", m.hooks_needle(&m.checkout)));
     lines.push(if m.windows { "apontar os atalhos .cmd para %USERPROFILE%\\.hangar\\current".to_owned() }
         else { format!("apontar para {} os links de {} que vão ao checkout", m.layout().current().display(), LINK_DIRS.join(", ")) });
-    lines.push("regravar ~/.hangar/backend-dir e ~/.hangar/plugin-dir".to_owned());
+    lines.push("regravar ~/.hangar/backend-dir, ~/.hangar/install-root-dir e ~/.hangar/plugin-dir".to_owned());
     lines.push("tirar o serviço do front (vite), se houver, guardado em ~/.hangar: a porta dele passa a ser do servidor".to_owned());
     lines.push("subir o backend e provar o servidor em modo rust".to_owned());
     lines.push(format!("gravar {}", m.marker().display()));
@@ -616,6 +616,8 @@ fn apply(m: &Machine<'_>, record: &mut Record, target: &Path, service: &Path) ->
             Err(_) => {}
         }
     }
+    // O ponteiro novo leva a raiz; o servidor o regrava ao subir.
+    rewrite(m, record, &m.hangar().join("install-root-dir"), format!("{}\n", current.display()).as_bytes())?;
     Ok(())
 }
 
@@ -1114,7 +1116,7 @@ pub fn run(args: &[String]) -> Result<Vec<String>, (u8, String)> {
             let read = read_record(&home.join(".hangar").join(MARKER)).or_else(|| read_record(&home.join(".hangar").join(PARTIAL)));
             read.map(|r| r.checkout)
         })
-        .or_else(|| Some(PathBuf::from(std::fs::read_to_string(home.join(".hangar").join("backend-dir")).ok()?.trim()).parent()?.to_path_buf()))
+        .or_else(|| hangar_core::install_root::noted_root(&home))
         .filter(|d| is_checkout(d));
     let Some(checkout) = checkout else {
         return Err((2, "##HANGAR-FALHA## não achei o checkout do Hangar; rode de dentro dele ou passe --checkout".to_owned()));
