@@ -3,8 +3,9 @@
 export function sendFromDisk(uri: string): typeof fetch {
   return async (input, init) => {
     const signal = init?.signal;
-    if (signal?.aborted) throw signal.reason;
     const FileSystem = await import('expo-file-system/legacy');
+    // Depois do import: abortado durante a espera, o ouvinte abaixo nunca dispararia.
+    if (signal?.aborted) throw signal.reason;
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
     const task = FileSystem.createUploadTask(url, uri, {
       httpMethod: 'POST',

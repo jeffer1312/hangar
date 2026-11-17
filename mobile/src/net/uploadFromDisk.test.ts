@@ -47,6 +47,16 @@ describe('sendFromDisk', () => {
     expect(res.status).toBe(413);
   });
 
+  it('prazo que estoura antes do envio começar não abre a tarefa nativa', async () => {
+    const controller = new AbortController();
+    const reply = sendFromDisk('file:///docs/pacote.zip')('http://maquina:8765/api/sessions/s/upload',
+      { method: 'POST', headers: {}, signal: controller.signal });
+    const reason = new DOMException('prazo', 'TimeoutError');
+    controller.abort(reason);
+    await expect(reply).rejects.toBe(reason);
+    expect(native.createUploadTask).not.toHaveBeenCalled();
+  });
+
   it('o prazo estourado cancela o envio nativo e rejeita com o motivo do sinal', async () => {
     const controller = new AbortController();
     const reply = sendFromDisk('file:///docs/pacote.zip')('http://maquina:8765/api/sessions/s/upload',
