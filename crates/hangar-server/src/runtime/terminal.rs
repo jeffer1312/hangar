@@ -1615,8 +1615,10 @@ impl Executor {
             // A dica só aparece depois dos hooks de envio da conta: espera como o Orientar, enquanto o turno é o mesmo.
             let deadline=tokio::time::Instant::now()+STEER_HINT_WAIT;
             let mut steered=driver.steer().await;
-            while steered.disposition==input::Disposition::Deferred && tokio::time::Instant::now()<deadline && self.expected_work(payload) {
+            while steered.disposition==input::Disposition::Deferred && tokio::time::Instant::now()<deadline {
                 tokio::time::sleep(self.options.limits.settle).await;
+                // A dica que aparecer num turno novo não é desta mensagem: nenhuma tecla.
+                if !self.expected_work(payload) {return Ok(reply(id,Disposition::Rejected,json!({"code":"queue_steer_work_changed","cleanup":"not_needed"})));}
                 steered=driver.steer().await;
             }
             return Ok(match steered.disposition {
