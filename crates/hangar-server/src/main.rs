@@ -102,6 +102,16 @@ fn main() -> std::process::ExitCode {
 /// O servidor monta o próprio ambiente: `.env` + processo, instância e segredo novos, porta do
 /// convidado e log. O resto do servidor lê o ambiente como sempre.
 fn standalone() -> Result<(), std::process::ExitCode> {
+    // Antes de qualquer leitura do ambiente: aberto direto pelo lançador, o servidor recebe `Path`.
+    #[cfg(windows)]
+    {
+        let keys: Vec<String> = std::env::vars_os().filter_map(|(key, _)| key.into_string().ok()).collect();
+        for (from, to) in hangar_boot::settings::uppercase_renames(keys.iter().map(String::as_str)) {
+            if let Some(value) = std::env::var_os(&from) {
+                unsafe { std::env::remove_var(&from); std::env::set_var(&to, value); }
+            }
+        }
+    }
     // Antes do log desta vida: a falha de gravar no diário só aparece pelo stderr.
     let refuse = |code: &'static str, exit: u8, message: String| {
         eprintln!("hangar-server: {message}");
