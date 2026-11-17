@@ -148,7 +148,11 @@ pub fn sync_hook_any(
         };
         let before = entries.len();
         entries.retain_mut(|hook| {
-            if !hook.is_object() || !refers_any(&hook["command"], names, windows) {
+            // O próprio comando que gravamos também é nosso, qualquer que seja o nome do programa.
+            let ours = hook.is_object()
+                && (refers_any(&hook["command"], names, windows)
+                    || (command.is_some() && hook["command"].as_str() == command));
+            if !ours {
                 return true;
             }
             if kept || moved {
