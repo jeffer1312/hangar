@@ -7,6 +7,15 @@ use super::{
 use serde_json::{Value, json};
 use crate::update::stop_intent;
 use hangar_api::status::ExitKind;
+/// A marca de intenção antes do `restart_service`. Na topologia sem serviço ele só pede o reinício à
+/// mão e nada para: uma marca ali explicaria a queda de outra coisa.
+fn before_restart(home: &std::path::Path, topology: &str, kind: ExitKind, cause: &str, from: Option<&str>, to: Option<&str>) -> stop_intent::Marked {
+    if matches!(topology, "systemd" | "windows" | "launchd") {
+        stop_intent::before_restart(&home.join(".hangar"), kind, cause, from, to)
+    } else {
+        stop_intent::Marked::none()
+    }
+}
 fn panic_cause(payload: &(dyn std::any::Any + Send)) -> String {
     payload.downcast_ref::<String>().cloned()
         .or_else(|| payload.downcast_ref::<&str>().map(|text| (*text).to_owned()))
@@ -76,7 +85,7 @@ impl Service {
             .restore_dist()
             .and_then(|_| self.prepare(topology, false, None, source, platform))
             .and_then(|_| {
-                let intent = stop_intent::before_restart(&self.home.join(".hangar"), ExitKind::Update, "rollback", None, Some(commit));
+                let intent = before_restart(&self.home, topology, ExitKind::Update, "rollback", None, Some(commit));
                 let restarted = self.restart_service(topology, port);
                 intent.settle(&restarted);
                 restarted
@@ -248,7 +257,7 @@ impl Service {
         let before = self.server_pid(topology, port);
         if let Err(error)=self.step("reiniciar") {return super::super::StateSnapshot::failure(error);}
         let to = self.state().read().get("commit_para").and_then(Value::as_str).map(str::to_owned);
-        let intent = stop_intent::before_restart(&self.home.join(".hangar"), ExitKind::Update, "checkout", Some(from), to.as_deref());
+        let intent = before_restart(&self.home, topology, ExitKind::Update, "checkout", Some(from), to.as_deref());
         let restarted = self.restart_service(topology, port);
         intent.settle(&restarted);
         if let Err(error) = restarted {
@@ -315,7 +324,7 @@ impl Service {
             service.state().try_write(json!({"fase":"rodando","etapa":"reiniciar","passo":2,"total":2,"texto":"Reiniciando o servidor","etapa_inicio":chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%:z").to_string()}))?;
             let topology = service.topology();
             let before = service.server_pid(topology, port);
-            let intent = stop_intent::before_restart(&service.home.join(".hangar"), ExitKind::Requested, "restart_only", None, None);
+            let intent = before_restart(&service.home, topology, ExitKind::Requested, "restart_only", None, None);
             let restarted = service.restart_service(topology, port);
             intent.settle(&restarted);
             restarted?;
@@ -342,5 +351,21 @@ impl Service {
             }
         };
         outcome
+    }
+}
+
+#[cfg(test)]
+mod stop_intent_tests {
+    use super::*;
+
+    #[test]
+    fn stop_intent_is_written_only_when_a_service_restarts() {
+        let dir = tempfile::tempdir().unwrap();
+        let hangar = dir.path().join(".hangar");
+        hangar_boot::life::mark_running(&hangar, 41, Some(41.0), "agora", |_, _| false).unwrap();
+        before_restart(dir.path(), "manual", ExitKind::Requested, "restart_only", None, None).settle(&Ok::<(), ()>(()));
+        assert!(!hangar.join(stop_intent::FILE).exists(), "na mão nada para");
+        before_restart(dir.path(), "systemd", ExitKind::Requested, "restart_only", None, None).settle(&Ok::<(), ()>(()));
+        assert!(hangar.join(stop_intent::FILE).exists());
     }
 }

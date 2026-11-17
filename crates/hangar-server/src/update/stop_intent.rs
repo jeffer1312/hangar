@@ -30,18 +30,24 @@ pub struct Intent {
     pub ts: u64,
 }
 
-/// A marca gravada antes de um reinício; reinício que falha a apaga.
+/// A marca gravada antes de um reinício: a pasta do Hangar e o pid marcado.
 #[must_use = "o reinício que falha precisa apagar a marca"]
-pub struct Marked(Option<PathBuf>);
+pub struct Marked(Option<(PathBuf, u32)>);
 
 impl Marked {
+    /// Sem marca: reinício que não para nada (instalação na mão).
+    pub fn none() -> Self { Marked(None) }
+
     pub fn settle<T, E>(self, restarted: &Result<T, E>) {
         if restarted.is_err() { self.restart_failed(); }
     }
 
+    /// Só apaga a marca com o servidor marcado ainda de pé: reinício recusado. Se ele já saiu (a unit
+    /// parou o velho e a nova não subiu), a marca explica essa saída e fica; o prazo e o pid a limitam.
     pub fn restart_failed(self) {
-        let Some(path) = self.0 else { return };
-        if let Err(error) = std::fs::remove_file(&path) && error.kind() != std::io::ErrorKind::NotFound {
+        let Some((hangar_dir, pid)) = self.0 else { return };
+        if !matches!(hangar_boot::life::running_pid(&hangar_dir), Ok(Some(running)) if running == pid) { return; }
+        if let Err(error) = std::fs::remove_file(hangar_dir.join(FILE)) && error.kind() != std::io::ErrorKind::NotFound {
             tracing::warn!(code = "stop_intent_not_removed", kind = ?error.kind(), "marca de intenção do reinício que falhou não apagada; ela vence em 10 min");
         }
     }
@@ -90,11 +96,10 @@ pub fn before_restart(hangar_dir: &Path, kind: ExitKind, cause: &str, from: Opti
     if let Some(to) = to.filter(|to| !to.is_empty()) { intent.insert("para".into(), json!(to)); }
     intent.insert("pid".into(), json!(pid));
     intent.insert("ts".into(), json!(now_secs()));
-    let path = hangar_dir.join(FILE);
     let written = std::fs::create_dir_all(hangar_dir)
-        .and_then(|()| hangar_core::fs::atomic_write(&path, Value::Object(intent).to_string().as_bytes()));
+        .and_then(|()| hangar_core::fs::atomic_write(&hangar_dir.join(FILE), Value::Object(intent).to_string().as_bytes()));
     match written {
-        Ok(()) => Marked(Some(path)),
+        Ok(()) => Marked(Some((hangar_dir.to_path_buf(), pid))),
         Err(error) => {
             tracing::warn!(code = "stop_intent_unwritable", kind = ?error.kind(), cause, "marca de intenção não gravada; o reinício segue sem ela");
             Marked(None)
@@ -373,11 +378,28 @@ mod tests {
         let hangar = dir.path();
         hangar_boot::life::mark_running(hangar, 41, Some(41.0), "agora", |_, _| false).unwrap();
         before_restart(hangar, ExitKind::Update, "package", Some("1"), Some("2")).settle(&Err::<(), _>("recusado"));
-        assert!(!hangar.join(FILE).exists());
+        assert!(!hangar.join(FILE).exists(), "reinício recusado com o servidor ainda de pé");
         // Sem servidor de pé, nada é gravado.
         let empty = tempfile::tempdir().unwrap();
         before_restart(empty.path(), ExitKind::Update, "package", None, None).restart_failed();
         assert!(!empty.path().join(FILE).exists());
+    }
+
+    /// A unit parou o servidor velho e a nova não subiu: o reinício falha, mas a marca fica e a subida
+    /// seguinte (a da volta) registra a atualização, não um pedido.
+    #[test]
+    fn stop_intent_stays_when_the_restart_fails_after_the_server_left() {
+        let dir = tempfile::tempdir().unwrap();
+        let hangar = dir.path();
+        hangar_boot::life::begin(hangar, "2026-11-17T10:00:00-03:00", |_, _| false).unwrap();
+        hangar_boot::life::mark_running(hangar, 41, Some(41.0), "2026-11-17T10:00:00-03:00", |_, _| false).unwrap();
+        let marked = before_restart(hangar, ExitKind::Update, "package", Some("1"), Some("2"));
+        hangar_boot::life::end_with(hangar, 41, Some("sigterm"), false).unwrap();
+        marked.settle(&Err::<(), _>("a unit nova não subiu"));
+        assert!(hangar.join(FILE).exists());
+        let previous = hangar_boot::life::begin(hangar, "2026-11-17T10:02:00-03:00", |_, _| false).unwrap().previous;
+        let lines = previous_exit(hangar, previous.as_ref(), String::new, &Fixed(None), now_secs());
+        assert_eq!(lines, [json!({"evento": "hangar_server.saida", "nivel": "aviso", "tipo": "update", "causa": "package", "de": "1", "para": "2"})]);
     }
 
     /// Queda sem marca: a causa vem do journal e o erro, das últimas linhas do log.

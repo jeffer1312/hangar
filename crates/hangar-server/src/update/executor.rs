@@ -365,7 +365,9 @@ pub async fn restart_only<R: Restarter, H: HealthProbe>(parts: &Parts, request_i
     let mark = (!restarter.manual()).then(|| super::startup_output::Mark::take(false));
     let trail = super::startup_output::Trail::new(health);
     let restarting = std::time::Instant::now();
-    let intent = super::stop_intent::before_restart(&parts.layout.hangar, ExitKind::Requested, "restart_only", None, None);
+    // Na mão o `restart()` não para nada: uma marca explicaria a queda de outra coisa.
+    let intent = if restarter.manual() { super::stop_intent::Marked::none() }
+        else { super::stop_intent::before_restart(&parts.layout.hangar, ExitKind::Requested, "restart_only", None, None) };
     let restarted = restarter.restart().await;
     intent.settle(&restarted);
     let result = match restarted {
@@ -763,6 +765,34 @@ mod tests {
         let state = StateFile::new(&parts.state_dir).read();
         assert_eq!(state["ok"], false);
         assert!(state["reinicio_erro"].as_str().unwrap().contains("mesmo de antes"));
+    }
+
+    struct Manual(AtomicUsize);
+    impl Restarter for Manual {
+        async fn restart(&self) -> Result<(), String> { self.0.fetch_add(1, Ordering::SeqCst); Ok(()) }
+        fn manual(&self) -> bool { true }
+    }
+
+    /// O reinício grava a marca de intenção com o servidor de pé; na mão, onde nada para, não grava.
+    #[tokio::test]
+    async fn update_restart_only_marks_the_stop_intent_except_by_hand() {
+        let marked = |dir: &Path| {
+            let parts = Parts::new(&env(dir, None), &Args::parse(&strings(&["--restart", "--request-id", "r"])).unwrap(), "x");
+            hangar_boot::life::mark_running(&parts.layout.hangar, 41, Some(41.0), "agora", |_, _| false).unwrap();
+            parts
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let parts = marked(dir.path());
+        let restart = Restart(AtomicUsize::new(0));
+        assert!(restart_only(&parts, "r", &restart, &Health(&restart.0, false), &fast()).await);
+        assert!(parts.layout.hangar.join(super::super::stop_intent::FILE).exists());
+
+        let dir = tempfile::tempdir().unwrap();
+        let parts = marked(dir.path());
+        let manual = Manual(AtomicUsize::new(0));
+        let _ = restart_only(&parts, "r", &manual, &Health(&manual.0, false), &fast()).await;
+        assert_eq!(manual.0.load(Ordering::SeqCst), 1);
+        assert!(!parts.layout.hangar.join(super::super::stop_intent::FILE).exists());
     }
 
     /// Uma máquina em pacote e um checkout ao lado.

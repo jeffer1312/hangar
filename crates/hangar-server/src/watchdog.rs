@@ -82,12 +82,17 @@ pub async fn notify_alive(notifier: hangar_boot::notify::Notifier, every: Durati
                 "provas de vida atrasadas em rodadas seguidas; o aviso ao systemd não sai e ele religa pelo prazo"),
             Verdict::Grace | Verdict::Passed => {}
         }
-        // Gravado aqui, sem o pool bloqueante: ele pode ser justamente a prova que travou.
-        if let Some(line) = diary_line(verdict, probe, ms) {
-            crate::diag::record_blocking(crate::diag::diary_dir().as_deref(), &[line], "watchdog");
-        }
         if verdict.sends() && let Err(error) = notifier.send("WATCHDOG=1") {
             tracing::warn!(code = "systemd_watchdog_send_failed", kind = ?error.kind(), "aviso de vida ao systemd não saiu");
+        }
+        // Depois do aviso, e numa thread própria: disco lento não atrasa o aviso nem a rodada, e o pool
+        // bloqueante pode ser justamente a prova que travou.
+        if let Some(line) = diary_line(verdict, probe, ms) {
+            let spawned = std::thread::Builder::new().name("watchdog-diary".into())
+                .spawn(move || crate::diag::record_blocking(crate::diag::diary_dir().as_deref(), &[line], "watchdog"));
+            if let Err(error) = spawned {
+                tracing::warn!(code = "systemd_watchdog_diary_failed", kind = ?error.kind(), "rodada atrasada do watchdog não foi ao diário");
+            }
         }
         tokio::time::sleep(every).await;
     }
