@@ -51,6 +51,7 @@ mod disk;
 mod player;
 mod machines;
 mod migration;
+mod status;
 mod orchestration;
 mod orq_roles;
 mod orq_panel;

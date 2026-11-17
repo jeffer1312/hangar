@@ -22,14 +22,14 @@ pub(crate) use guide::{group_heading as news_group_heading, kind_icon as news_ki
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Page {
     General, Appearance, Sessions, Updates, Manual, Diary, About, Migration,
-    Servers, Sync, Connect, Devices, SharedConfig, Accounts, Plugins, Scheduled, Memory, Vault, Orchestration, Harnesses, Voice, Jev, Windows, Notifications, Shortcuts, Attachments, Worktrees, Advanced,
+    Servers, Sync, Connect, Devices, SharedConfig, Accounts, Status, Plugins, Scheduled, Memory, Vault, Orchestration, Harnesses, Voice, Jev, Windows, Notifications, Shortcuts, Attachments, Worktrees, Advanced,
 }
 
 impl Page {
     // Sessões fica no geral: a configuração vale para todas as máquinas, sem seletor.
     const DEVICE: [Page; 6] = [Page::General, Page::Appearance, Page::Sessions, Page::Updates, Page::Manual, Page::About];
     // O diário é do servidor escolhido no seletor ("O registro de uso de <servidor>"), não do aparelho.
-    const SERVER: [Page; 21] = [Page::Diary, Page::Servers, Page::Sync, Page::Connect, Page::Devices, Page::SharedConfig, Page::Accounts, Page::Plugins, Page::Scheduled, Page::Memory, Page::Vault, Page::Orchestration, Page::Harnesses,
+    const SERVER: [Page; 22] = [Page::Diary, Page::Servers, Page::Sync, Page::Connect, Page::Devices, Page::SharedConfig, Page::Accounts, Page::Status, Page::Plugins, Page::Scheduled, Page::Memory, Page::Vault, Page::Orchestration, Page::Harnesses,
         Page::Voice, Page::Jev, Page::Windows, Page::Notifications, Page::Shortcuts, Page::Attachments, Page::Worktrees, Page::Advanced];
 
     /// As seções da navegação, na ordem dela; a voz abre uma pelo `key`.
@@ -44,7 +44,7 @@ impl Page {
     pub(super) fn key(self) -> &'static str {
         match self {
             Page::General => "general", Page::Appearance => "appearance", Page::Sessions => "sessions", Page::Updates => "updates", Page::Manual => "manual", Page::Diary => "diary", Page::About => "about", Page::Migration => "migration",
-            Page::Servers => "servers", Page::Sync => "sync", Page::Connect => "connect", Page::Devices => "devices", Page::SharedConfig => "shared_config", Page::Accounts => "accounts", Page::Plugins => "plugins", Page::Scheduled => "scheduled", Page::Memory => "memory", Page::Vault => "vault", Page::Orchestration => "orchestration",
+            Page::Servers => "servers", Page::Sync => "sync", Page::Connect => "connect", Page::Devices => "devices", Page::SharedConfig => "shared_config", Page::Accounts => "accounts", Page::Status => "status", Page::Plugins => "plugins", Page::Scheduled => "scheduled", Page::Memory => "memory", Page::Vault => "vault", Page::Orchestration => "orchestration",
             Page::Harnesses => "harnesses", Page::Voice => "voice", Page::Jev => "jev", Page::Windows => "windows", Page::Notifications => "notifications",
             Page::Shortcuts => "shortcuts", Page::Attachments => "attachments", Page::Worktrees => "worktrees", Page::Advanced => "advanced",
         }
@@ -55,7 +55,7 @@ impl Page {
             Page::General => IconName::Globe, Page::Appearance => IconName::Palette, Page::Sessions => IconName::EyeOff, Page::Diary => IconName::FileText,
             Page::Updates => IconName::Sparkles, Page::Manual => IconName::BookOpen,
             Page::About => IconName::Info, Page::Migration => IconName::Activity, Page::Servers => IconName::Server, Page::Sync => IconName::RefreshCw, Page::Connect => IconName::Globe, Page::Devices => IconName::Smartphone, Page::SharedConfig => IconName::Layers,
-            Page::Accounts => IconName::User, Page::Plugins => IconName::Package, Page::Scheduled => IconName::Clock, Page::Memory => IconName::Moon, Page::Vault => IconName::KeyRound, Page::Orchestration => IconName::Users, Page::Harnesses => IconName::Activity,
+            Page::Accounts => IconName::User, Page::Status => IconName::Gauge, Page::Plugins => IconName::Package, Page::Scheduled => IconName::Clock, Page::Memory => IconName::Moon, Page::Vault => IconName::KeyRound, Page::Orchestration => IconName::Users, Page::Harnesses => IconName::Activity,
             Page::Voice => IconName::Mic, Page::Jev => IconName::Zap, Page::Windows => IconName::Monitor, Page::Notifications => IconName::Bell,
             Page::Shortcuts => IconName::Keyboard, Page::Attachments => IconName::Paperclip, Page::Worktrees => IconName::GitBranch, Page::Advanced => IconName::SlidersHorizontal,
         }
@@ -68,6 +68,7 @@ impl Page {
         if self == Page::Jev { return tr_shared("jev_title", &[]); }
         if self == Page::SharedConfig { return tr_shared("shared_config_title", &[]); }
         if self == Page::Migration { return tr_shared("migration_title", &[]); }
+        if self == Page::Status { return tr("status_title"); }
         tr(&format!("settings_page_{}", self.key()))
     }
 }
@@ -124,6 +125,10 @@ const PAGE_ROWS: &[(Page, &[(&str, Option<&str>)])] = &[
     (Page::Shortcuts, &[("shortcuts_add", Some("shortcuts_lead")), ("shortcuts_restore", Some("shortcuts_restore_help")),
         ("keyboard_title", Some("keyboard_lead")), ("keyboard_hold_title", Some("keyboard_hold_help"))]),
     (Page::Harnesses, &[("harness_legend", None)]),
+    // Cada bloco da Status: a busca rola até ele, pela mesma marca do pulo da lista de atenção.
+    (Page::Status, &[("status_memory", None), ("status_cpu", None), ("status_days_title", Some("status_legend_crash")),
+        ("status_machines_title", Some("status_machines_hint")), ("status_sessions_title", None), ("status_slow_title", Some("status_slow_legend")),
+        ("status_host_title", Some("status_disk_usage")), ("status_outside_title", Some("status_keyring"))]),
     (Page::Voice, &[("voice_transcribe", Some("voice_transcribe_help")), ("voice_groq", Some("voice_groq_help")),
         ("voice_transcription_endpoint", Some("voice_transcription_endpoint_help")), ("voice_transcription_model", Some("voice_transcription_model_help")),
         ("voice_hands_free", Some("voice_hands_free_help")), ("voice_style", Some("voice_style_help")), ("voice_vocabulary", Some("voice_vocabulary_help")),
@@ -558,6 +563,7 @@ impl Hangar {
             self.sync_page_left();
             self.connect_page_left();
             self.devices_page_left();
+            self.status_left();
             let ui = &mut self.settings_ui;
             (ui.live, ui.hit, ui.drag) = (false, None, None);
             self.root_focus.focus(window, cx);
@@ -843,6 +849,7 @@ impl Hangar {
         // Na caixa solta o destaque suave some sobre o vidro; o item da página aberta leva mais cor.
         let selected = if floating { theme::accent().alpha(0.26) } else { theme::selected_row() };
         let new_count = self.guide.new_count();
+        let status_dot = self.status_nav_dot();
         let nav_item = |page_item: Page, current: Page, cx: &mut Context<Self>| {
             let on = page_item == current;
             Button::new(SharedString::from(format!("settings-nav-{}", page_item.key())))
@@ -859,7 +866,11 @@ impl Hangar {
                     // Não vistas desde a última visita; some com a página aberta, que as marca vistas.
                     .when(page_item == Page::Updates && !on && new_count > 0, |el| el.child(div().ml_auto()
                         .child(super::vault::chip(if new_count == 1 { tr("updates_new_one") } else { tr("updates_new_count").replace("{n}", &new_count.to_string()) },
-                            theme::on_accent(), theme::accent()).rounded_full()))))
+                            theme::on_accent(), theme::accent()).rounded_full())))
+                    // Só o estado do servidor selecionado; de pé, sem ponto.
+                    .when_some(status_dot.clone().filter(|_| page_item == Page::Status), |el, (color, _)| el.child(div().ml_auto()
+                        .size(px(7.)).flex_shrink_0().rounded_full().bg(color))))
+                .when_some(status_dot.clone().filter(|_| page_item == Page::Status), |el, (_, text)| el.tooltip(text))
                 .on_click(cx.listener(move |this, _, window, cx| this.open_settings(page_item, window, cx)))
                 .map(|button| div().when(page_item == Page::Scheduled, |el| popup::anchor(el, crate::tour::anchors::SCHEDULED_TASKS)).child(button))
         };
@@ -910,6 +921,7 @@ impl Hangar {
             Page::Diary => self.render_diary(cx),
             Page::About => self.render_about(cx),
             Page::Migration => self.render_migration(cx),
+            Page::Status => self.render_status(window, cx),
             Page::Accounts => self.render_accounts(accounts_wide, window, cx),
             Page::Vault => self.render_vault(window, cx),
             Page::Plugins => self.render_plugins(window, cx),
