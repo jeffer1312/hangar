@@ -84,9 +84,12 @@ pub fn run(mode: &str) -> ExitCode {
                     return Ok(Some(VAULT_DENIED.to_owned()));
                 }
                 // Caminho do Windows sem aspas (PowerShell, ou o Bash do Codex no Windows): a barra
-                // invertida é separador, não escape. Conferido também assim, só para barrar mais.
-                let reason = dangerous(command, 0)
-                    .or_else(|| command.contains('\\').then(|| dangerous(&command.replace('\\', "/"), 0)).flatten());
+                // invertida é separador, não escape. Conferido também assim, só para barrar mais; só
+                // nas palavras com cara de caminho, para não mexer no escape de um padrão do `pkill -f`.
+                let reason = dangerous(command, 0).or_else(|| {
+                    let slashed = windows_paths_slashed(command);
+                    (slashed != command).then(|| dangerous(&slashed, 0)).flatten()
+                });
                 Ok(reason.map(|reason| format!(
                     "BLOQUEADO: {reason}.\nPrecisa de tmux limpo para uma sonda? Suba um SERVIDOR SEPARADO com socket próprio:\n  tmux -L probe-x new-session -d -s alvo ...\n  tmux -L probe-x kill-server\nNunca no servidor default, onde vivem as sessões de trabalho (TMUX_TMPDIR não isola: dentro do tmux quem manda é $TMUX).\nPara matar UMA sessão: `tmux kill-session -t '=nome:'`."
                 )))
@@ -278,6 +281,30 @@ fn tokens(segment: &str) -> Vec<String> {
     }
     if started {
         out.push(buf);
+    }
+    out
+}
+/// Troca `\` por `/` só nas palavras que começam como caminho do Windows (`C:\`, `\\`, `.\`, `..\`).
+fn windows_paths_slashed(command: &str) -> String {
+    let mut out = String::with_capacity(command.len());
+    let mut in_path = false;
+    let mut word_start = true;
+    for (index, ch) in command.char_indices() {
+        if ch.is_whitespace() {
+            in_path = false;
+            word_start = true;
+            out.push(ch);
+            continue;
+        }
+        if word_start {
+            let rest = command[index..].as_bytes();
+            in_path = matches!(rest, [drive, b':', b'\\', ..] if drive.is_ascii_alphabetic())
+                || rest.starts_with(b"\\\\")
+                || rest.starts_with(b".\\")
+                || rest.starts_with(b"..\\");
+            word_start = false;
+        }
+        out.push(if in_path && ch == '\\' { '/' } else { ch });
     }
     out
 }
