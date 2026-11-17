@@ -96,6 +96,10 @@ pub fn standalone_env(settings: &Settings, places: &Places, kept: impl Fn(&str) 
         create_private_dir(&folder).map_err(|e| format!("pasta de logs {}: {e}", folder.display()))?;
         vars.push(("HANGAR_SERVER_LOG", folder.join("hangar-server.log").to_string_lossy().into_owned()));
     }
+    // Fora dos testes a chave mantida esconderia uma configuração errada: fica dito no stderr.
+    for (key, _) in vars.iter().filter(|(key, _)| !key.starts_with("CP_") && kept(key)) {
+        notes.push(format!("internal_env_kept: {key} herdada mantida por {KEEP_INHERITED}"));
+    }
     vars.retain(|(key, _)| key.starts_with("CP_") || !kept(key));
     let remove = INTERNAL.into_iter().filter(|key| !kept(*key) && !vars.iter().any(|(set, _)| set == key)).collect();
     Ok(Boot { vars, remove, warning, notes })

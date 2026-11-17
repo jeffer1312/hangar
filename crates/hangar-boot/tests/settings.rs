@@ -194,6 +194,7 @@ fn the_test_switch_keeps_what_the_test_brought() {
     let boot = standalone_env(&s("127.0.0.1", 8765, "t"), &places(home.path()), |key| key == "HANGAR_SERVER_GUEST_LISTEN").unwrap();
     assert!(boot.vars.iter().all(|(key, _)| *key != "HANGAR_SERVER_GUEST_LISTEN"));
     assert!(!boot.remove.contains(&"HANGAR_SERVER_GUEST_LISTEN"), "a trazida pelo teste não sai");
+    assert!(boot.notes.iter().any(|note| note.starts_with("internal_env_kept: HANGAR_SERVER_GUEST_LISTEN")), "{:?}", boot.notes);
     assert!(boot.vars.iter().any(|(key, _)| *key == "CP_AUTH_TOKEN"), "o token resolvido sempre vai");
     let boot = standalone_env(&s("127.0.0.1", 8765, "t"), &places(home.path()), |key| key == "CP_AUTH_TOKEN").unwrap();
     assert!(boot.vars.iter().any(|(key, _)| *key == "CP_AUTH_TOKEN"), "a CP_* resolvida não depende da chave");

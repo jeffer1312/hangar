@@ -218,18 +218,28 @@ fn run_direct(mut command: std::process::Command, log: Option<&Path>, version: &
         drop(file);
         std::thread::sleep(wait);
         previous_fall = Some(fall);
-        // Depois da espera, quando uma atualização pode ter trocado o `current`.
-        let mut notes = Vec::new();
-        match again(&mut notes) {
-            Ok((fresh, fresh_version)) => {
-                pending.extend(notes);
-                (command, version) = (fresh, fresh_version);
-            }
-            Err((code, path)) => {
-                for note in &notes { report(log, note); }
-                report(log, &format!("{code}: {}; o lançador sai sem religar a versão anterior", path.display()));
-                failed(log, "erro", code, &path.display().to_string());
-                return ExitCode::from(3);
+        // Depois da espera, quando uma atualização pode ter trocado o `current`. Versão que sobe pelo
+        // Python não é deste lançador; qualquer outra falha pode ser a troca no meio: tenta de novo.
+        loop {
+            let mut notes = Vec::new();
+            match again(&mut notes) {
+                Ok((fresh, fresh_version)) => {
+                    pending.extend(notes);
+                    (command, version) = (fresh, fresh_version);
+                    break;
+                }
+                Err((code, path)) => {
+                    for note in &notes { report(log, note); }
+                    failed(log, "erro", code, &path.display().to_string());
+                    if code == "launch_relaunch_python" {
+                        report(log, &format!("{code}: {}; o lançador sai sem religar a versão anterior", path.display()));
+                        return ExitCode::from(3);
+                    }
+                    let (fall, wait) = relaunch.fall(std::time::Duration::ZERO);
+                    report(log, &format!("{code}: {}; tenta de novo em {} ms", path.display(), wait.as_millis()));
+                    std::thread::sleep(wait);
+                    previous_fall = Some(fall);
+                }
             }
         }
     }

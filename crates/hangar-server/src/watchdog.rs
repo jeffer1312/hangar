@@ -117,7 +117,15 @@ pub fn server_probes(listen: SocketAddr, state: std::sync::Arc<crate::state::liv
 /// depois, e as ações esperam por ela (`startup`), não o aviso ao systemd.
 pub async fn wait_serving(listen: SocketAddr) {
     let address = probe_address(listen);
-    while !health_answers(address, TIMEOUT).await { tokio::time::sleep(Duration::from_millis(100)).await; }
+    let started = std::time::Instant::now();
+    let mut warned = false;
+    while !health_answers(address, TIMEOUT).await {
+        if !warned && started.elapsed() >= Duration::from_secs(60) {
+            tracing::warn!(code = "server_ready_late", %address, "a saúde não responde há 60 s: sem READY=1 nem marca de pé");
+            warned = true;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
 }
 
 /// Quem escuta em todas as interfaces responde no loopback da mesma família.
