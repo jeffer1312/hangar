@@ -390,12 +390,14 @@ struct Live {
     procs: Arc<Mutex<Option<sysinfo::System>>>,
     /// O Funnel só é relido na cadência lenta (é um processo do `tailscale`).
     funnel: Mutex<Option<bool>>,
+    /// Restos do multiplexador vistos na rodada anterior; `None` antes da primeira ou com ele fora.
+    tmux_seen: Mutex<Option<HashSet<String>>>,
 }
 
 impl Live {
     fn new(st: Arc<AppState>) -> Self {
         let list = st.hub.subscribe_internal(&st.list, &st.devices, &st.diag);
-        Self { st, list, procs: Arc::default(), funnel: Mutex::new(None) }
+        Self { st, list, procs: Arc::default(), funnel: Mutex::new(None), tmux_seen: Mutex::new(None) }
     }
 
     fn server(&self) -> Block<ServerBlock> {
@@ -411,10 +413,16 @@ impl Live {
         let st = self.st.clone();
         let read = tokio::task::spawn_blocking(move || {
             let status = &st.status;
-            let (exits, slow) = (status.diary.exits(now), status.diary.slow(now));
+            let diary = diary_readable(hangar_core::diag::diary_dir().as_deref(), hangar_core::paths::log_base().as_deref());
+            let (exits, slow) = match diary {
+                Err(code) => (Err(code), Err(code)),
+                Ok(()) => (Ok(status.diary.exits(now)), Ok(status.diary.slow(now))),
+            };
             let skipped = status.diary.skipped();
             let sizes = status.dirs.current();
-            (exits, slow, skipped, hangar_status::host::read_host(sizes.hangar, sizes.build_cache))
+            // Sem casa ou sem disco que a contenha a máquina não foi lida: é falha, não "sem fonte".
+            let host = hangar_status::host::read_host(sizes.hangar, sizes.build_cache).map(Some).ok_or("status_host_unread");
+            (exits, slow, skipped, host)
         }).await;
         let Ok((exits, slow, skipped, host)) = read else {
             return (Err("status_task_failed"), Err("status_task_failed"), Err("status_task_failed"));
@@ -427,7 +435,7 @@ impl Live {
             self.st.diag.report_with("status.diario_ignorado", "", "status_diary_skipped",
                 "linhas ou arquivos do diário fora das contas da tela Status", json!({"lines": skipped.lines, "files": skipped.files}));
         }
-        (Ok(exits), Ok(slow), Ok(host))
+        (exits, slow, host)
     }
 
     async fn outside(&self, slow: bool) -> OutsideBlock {
@@ -475,23 +483,31 @@ impl Live {
         let env = self.st.list.env().clone();
         let panes = match env.mux.shared(PANES_MAX_AGE) {
             Some(panes) => Some(panes),
-            None => env.mux.list_panes().await.ok().map(Arc::new),
+            None => match env.mux.list_panes().await {
+                Ok(panes) => Some(Arc::new(panes)),
+                Err(error) => {
+                    tracing::warn!(code = error.code, "tela Status: panes do multiplexador sem leitura");
+                    None
+                }
+            },
         };
-        let mut roots: HashMap<String, Vec<Root>> = HashMap::new();
-        for pane in panes.iter().flat_map(|panes| panes.iter()) {
-            if let Some(pid) = pane.pid { roots.entry(pane.session.clone()).or_default().push(Root { pid, group: None }); }
-        }
-        // O agente depois do pane: a pilha da soma o visita primeiro, e ele leva o grupo do provedor
-        // mesmo com o executável chamado pela versão.
+        let mut agents = Vec::new();
         for row in rows.iter().filter(|row| !row.headless) {
-            if let Ok(Some((_, Some(agent)))) = self.st.list.discovered_session(&row.name).await {
-                roots.entry(row.name.clone()).or_default().push(Root { pid: agent, group: ProcessGroup::of_provider(&row.provider) });
-            }
+            let agent = match self.st.list.discovered_session(&row.name).await {
+                Ok(found) => Ok(found.and_then(|(_, pid)| pid)),
+                Err(error) => {
+                    tracing::warn!(session = %row.name, code = error.code, "tela Status: agente da sessão sem leitura");
+                    Err(())
+                }
+            };
+            agents.push((row.name.clone(), row.provider.clone(), agent));
         }
+        let roots = terminal_roots(panes.as_deref().map(Vec::as_slice), &agents);
         let queue_files = match self.st.state.runtime.get() {
             Some(registry) => registry.queue_files().await,
             None => BTreeMap::new(),
         };
+        let working: HashSet<String> = rows.iter().filter(|row| row.state == "working").map(|row| row.name.clone()).collect();
         let hangar = env.dirs.as_ref().map_or_else(|| self.st.hangar_dir.clone(), |dirs| dirs.home.join(".hangar"));
         let home = env.dirs.as_ref().map(|dirs| dirs.home.clone());
         let (procs, rows_owned) = (self.procs.clone(), rows.clone());
@@ -502,10 +518,11 @@ impl Live {
                 let live: Vec<&SessionRow> = rows_owned.iter().collect();
                 all.extend(crate::session_open::fallen::rows(home, &live));
             }
-            let mut bound = HashSet::new();
-            sidecar_roots(&hangar, &mut roots, &mut bound);
+            let (mut bound, mut headless) = (HashSet::new(), HashMap::new());
+            sidecar_roots(&hangar, &mut headless, &mut bound);
             prewarm_canos(&hangar.join("prewarm"), &mut bound);
-            let queues: Vec<QueueWait> = queue_files.into_values().filter_map(|(_, path, created)| queue_wait(&path, created)).collect();
+            let waits = queue_files.into_values().filter_map(|(name, path, created)| Some((name, queue_wait(&path, created)?))).collect();
+            let queues = without_working_age(waits, &working);
             let mut guard = lock(&procs);
             let system = guard.get_or_insert_with(|| {
                 // A CPU de um processo só vale na segunda leitura.
@@ -516,18 +533,28 @@ impl Live {
             });
             refresh(system);
             let children = children_of(system);
-            let facts = hangar_status::sessions::Facts { rows: &all, pids: &roots, tmux_server: tmux_server(system, &pane_pids),
-                children: &children, queues: &queues, now: now.timestamp_millis() as f64 / 1000.0 };
-            let block = hangar_status::sessions::sessions_block(&facts, &*system);
+            let block = roots.map(|mut roots| {
+                // Depois dos panes: as raízes das sessões sem terminal e o app-server do Codex com terminal.
+                for (name, list) in headless { roots.entry(name).or_default().extend(list); }
+                let facts = hangar_status::sessions::Facts { rows: &all, pids: &roots, tmux_server: tmux_server(system, &pane_pids),
+                    children: &children, queues: &queues, now: now.timestamp_millis() as f64 / 1000.0 };
+                hangar_status::sessions::sessions_block(&facts, &*system)
+            });
             let canos = hangar_status::leftovers::canos_in(system, u64::try_from(now.timestamp()).unwrap_or(0));
             let listed: HashSet<String> = all.iter().map(|row| row.name.clone()).collect();
             (block, canos, bound, listed)
         }).await;
         let Ok((block, canos, bound, listed)) = counted else { return (Err("status_task_failed"), Err("status_task_failed")) };
         let tmux = self.tmux_orphans(&listed).await;
+        let tmux = {
+            let mut seen = lock(&self.tmux_seen);
+            let confirmed = tmux.as_deref().and_then(|now| confirmed_orphans(seen.as_ref(), now));
+            *seen = tmux.map(|now| now.into_iter().collect());
+            confirmed
+        };
         // Na subida, cano de sessão que ainda vai ser religada não é resto.
         let canos = self.st.startup.is_ready().then(|| hangar_status::leftovers::cano_orphans(&canos, &bound));
-        (Ok(Some(block)), Ok(hangar_status::leftovers::block(tmux, canos)))
+        (block.map(Some), Ok(hangar_status::leftovers::block(tmux, canos)))
     }
 
     /// Sessões do multiplexador abertas pelo Hangar sem linha na lista. `CP_PROVIDER` só vale
@@ -588,6 +615,8 @@ impl Live {
                 latency_ms: probe.as_ref().filter(|probe| probe.up).and_then(|probe| probe.ms), server_version, outdated, lan: false,
                 app: take_app(peer.id.as_str()) });
         }
+        // Máquina que saiu do `peers.json` não guarda hora de queda.
+        down.retain(|id, _| peers.iter().any(|peer| peer.id == *id));
         drop(down);
         // App sem servidor conhecido aqui vira cartão só de app.
         machines.extend(apps.into_iter().map(|app| Machine { id: format!("app:{}", app.device), label: app.report.host.clone(),
@@ -697,6 +726,54 @@ fn tmux_server(system: &sysinfo::System, pane_pids: &[u32]) -> Option<u32> {
     let parent = system.process(sysinfo::Pid::from_u32(*pane_pids.first()?))?.parent()?;
     let name = system.process(parent)?.name().to_string_lossy().into_owned();
     (ProcessGroup::from_executable(&name) == Some(ProcessGroup::Tmux)).then_some(parent.as_u32())
+}
+
+/// Os panes de cada sessão e, depois deles, o agente: a pilha da soma visita primeiro o agente, que
+/// leva o grupo do provedor mesmo com o executável chamado pela versão. Sem a lista de panes ou com
+/// um agente que não foi lido, os números sairiam menores que os reais: o bloco falha.
+fn terminal_roots(panes: Option<&[crate::list::mux::Pane]>, agents: &[(String, String, Result<Option<u32>, ()>)])
+    -> Result<HashMap<String, Vec<Root>>, &'static str> {
+    let panes = panes.ok_or("status_mux_unavailable")?;
+    let unread = agents.iter().filter(|(_, _, agent)| agent.is_err()).count();
+    if unread > 0 {
+        tracing::warn!(code = "status_agent_unread", unread, "tela Status: agentes sem leitura");
+        return Err("status_agent_unread");
+    }
+    let mut roots: HashMap<String, Vec<Root>> = HashMap::new();
+    for pane in panes {
+        if let Some(pid) = pane.pid { roots.entry(pane.session.clone()).or_default().push(Root { pid, group: None }); }
+    }
+    for (name, provider, agent) in agents {
+        if let Ok(Some(pid)) = agent {
+            roots.entry(name.clone()).or_default().push(Root { pid: *pid, group: ProcessGroup::of_provider(provider) });
+        }
+    }
+    Ok(roots)
+}
+
+/// A idade da fila só conta com a sessão parada: numa rodada longa a mensagem só espera a vez dela.
+fn without_working_age(waits: Vec<(String, QueueWait)>, working: &HashSet<String>) -> Vec<QueueWait> {
+    waits.into_iter().map(|(name, wait)| if working.contains(&name) { QueueWait { oldest_ts: None, ..wait } } else { wait }).collect()
+}
+
+/// Resto só visto em duas rodadas seguidas: sessão recém-aberta ainda sem linha na lista não conta.
+/// Sem rodada anterior, ainda não se sabe.
+fn confirmed_orphans(previous: Option<&HashSet<String>>, now: &[String]) -> Option<Vec<String>> {
+    let previous = previous?;
+    Some(now.iter().filter(|name| previous.contains(*name)).cloned().collect())
+}
+
+/// O diário pode ser lido? Desligado (`diary_dir` sem pasta com a base dos logs conhecida) é `Ok`
+/// e os blocos saem ausentes pelo leitor; sem base dos logs ou pasta ilegível é falha.
+fn diary_readable(dir: Option<&Path>, log_base: Option<&Path>) -> Result<(), &'static str> {
+    match dir {
+        None if log_base.is_none() => Err("status_diary_dir_unknown"),
+        None => Ok(()),
+        Some(dir) => match std::fs::read_dir(dir) {
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err("status_diary_unreadable"),
+            _ => Ok(()),
+        },
+    }
 }
 
 /// Raízes das sessões sem terminal e os canos ligados, pelos sidecars do Claude e do Codex.
@@ -856,6 +933,60 @@ mod tests {
         let peers = peer_entries(book.as_object().unwrap());
         let seen: Vec<(&str, &str, &str, bool)> = peers.iter().map(|p| (p.id.as_str(), p.label.as_str(), p.base_url.as_str(), p.enabled)).collect();
         assert_eq!(seen, vec![("casa", "Casa", "http://100.64.0.2:8765", true), ("vps", "vps", "https://vps.example", false)]);
+    }
+
+    fn pane(session: &str, pid: u32) -> crate::list::mux::Pane {
+        crate::list::mux::Pane { session: session.into(), pid: Some(pid), ..Default::default() }
+    }
+
+    #[test]
+    fn status_sessions_fail_instead_of_undercounting() {
+        let agent = |name: &str, read: Result<Option<u32>, ()>| (name.to_owned(), "claude".to_owned(), read);
+        assert_eq!(terminal_roots(None, &[]), Err("status_mux_unavailable"), "sem panes, nenhuma sessão com terminal entra");
+        assert_eq!(terminal_roots(Some(&[pane("a", 10)]), &[agent("a", Ok(Some(11))), agent("b", Err(()))]),
+            Err("status_agent_unread"), "um agente sem leitura derruba o bloco");
+
+        let roots = terminal_roots(Some(&[pane("a", 10)]), &[agent("a", Ok(Some(11))), agent("b", Ok(None))]).unwrap();
+        assert_eq!(roots["a"], vec![Root { pid: 10, group: None }, Root { pid: 11, group: Some(ProcessGroup::Claude) }],
+            "o agente vem depois do pane");
+        assert!(!roots.contains_key("b"), "sessão sem agente achado não inventa raiz");
+    }
+
+    #[test]
+    fn status_queue_age_only_counts_for_a_stopped_session() {
+        let wait = QueueWait { waiting: 1, oldest_ts: Some(1_000.0) };
+        let working = HashSet::from(["ocupada".to_owned()]);
+        let queues = without_working_age(vec![("ocupada".into(), wait), ("parada".into(), wait)], &working);
+        assert_eq!(queues, vec![QueueWait { waiting: 1, oldest_ts: None }, wait], "a mensagem conta, a idade não");
+
+        let rows: Vec<SessionRow> = ["ocupada", "parada"].iter().map(|name| serde_json::from_value(json!({
+            "name": name, "provider": "claude", "state": if *name == "ocupada" { "working" } else { "idle" }})).unwrap()).collect();
+        struct Nothing;
+        impl hangar_status::sessions::ProcessReading for Nothing {
+            fn read(&self, _pid: u32) -> Option<hangar_status::sessions::ProcStat> { None }
+        }
+        let facts = hangar_status::sessions::Facts { rows: &rows, pids: &HashMap::new(), tmux_server: None,
+            children: &HashMap::new(), queues: &queues[..1], now: 1_000.0 + 3_600.0 };
+        let block = hangar_status::sessions::sessions_block(&facts, &Nothing);
+        assert_eq!((block.queued, block.oldest_queued_secs), (1, None), "rodada longa não acende fila parada");
+    }
+
+    #[test]
+    fn status_tmux_leftover_needs_two_rounds() {
+        assert_eq!(confirmed_orphans(None, &["x".to_owned()]), None, "primeira rodada ainda não sabe");
+        let previous = HashSet::from(["x".to_owned(), "y".to_owned()]);
+        assert_eq!(confirmed_orphans(Some(&previous), &["x".to_owned(), "z".to_owned()]), Some(vec!["x".to_owned()]));
+    }
+
+    #[test]
+    fn status_diary_unreadable_is_a_failure_and_off_is_not() {
+        let base = tempfile::tempdir().unwrap();
+        assert_eq!(diary_readable(None, None), Err("status_diary_dir_unknown"));
+        assert_eq!(diary_readable(None, Some(base.path())), Ok(()), "desligado");
+        assert_eq!(diary_readable(Some(&base.path().join("ainda-nao-existe")), Some(base.path())), Ok(()));
+        let file = base.path().join("arquivo");
+        std::fs::write(&file, b"").unwrap();
+        assert_eq!(diary_readable(Some(&file), Some(base.path())), Err("status_diary_unreadable"), "pasta que não abre");
     }
 
     fn route_state(script: Arc<Script>) -> Arc<AppState> {

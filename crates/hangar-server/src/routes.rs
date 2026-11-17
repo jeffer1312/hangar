@@ -840,7 +840,7 @@ async fn access_line(st: &AppState, method: &Method, path: &str, correlation: &s
     let logs_itself = (*method == Method::POST && path == "/api/sessions")
         || (*method == Method::POST && path.starts_with("/api/archive/") && path.ends_with("/resume"))
         || path.strip_prefix("/api/sessions/").and_then(|rest| rest.split_once('/')).is_some_and(|(_, tail)| tail.starts_with("plugin/"));
-    if !(status.is_server_error() || elapsed >= Duration::from_secs(1)) || path.starts_with("/api/diag")
+    if !(status.is_server_error() || elapsed >= Duration::from_secs(1)) || reads_the_diary(path)
         || logs_itself {
         return response;
     }
@@ -853,6 +853,12 @@ async fn access_line(st: &AppState, method: &Method, path: &str, correlation: &s
     if let Some(cause) = cause { line["causa"] = serde_json::json!(cause); }
     st.diag.record_line(line);
     response
+}
+
+/// Rotas que leem o diário de uso fora da linha `api.servidor`: a tela Status soma a lentidão e os
+/// 5xx dessa linha, e a própria espera dela (peers, retrato que não ficou pronto) não pode se medir.
+fn reads_the_diary(path: &str) -> bool {
+    path.starts_with("/api/diag") || matches!(path, "/api/status" | "/api/status/events")
 }
 
 /// `detail.code` ou `code` do corpo de erro JSON pequeno; o corpo segue igual e nunca vai ao diário.
@@ -1856,6 +1862,15 @@ mod tests {
     async fn guest_socket_reuses_the_address_only_outside_windows() {
         let listener = guest_socket("127.0.0.1:0".parse().unwrap()).unwrap();
         assert_eq!(socket2::SockRef::from(&listener).reuse_address().unwrap(), cfg!(unix));
+    }
+
+    /// A tela Status não se mede: o `GET` frio esperando os peers e o 503 dela não entram na lentidão
+    /// nem nos 5xx que ela mesma mostra.
+    #[test]
+    fn status_routes_stay_out_of_the_access_line() {
+        assert!(reads_the_diary("/api/status") && reads_the_diary("/api/status/events"));
+        assert!(reads_the_diary("/api/diag") && reads_the_diary("/api/diag/arquivo"));
+        assert!(!reads_the_diary("/api/statusx") && !reads_the_diary("/api/sessions"), "só as rotas da tela");
     }
 
     /// A linha `api.servidor` nunca leva nome ou id escolhido por alguém (I-14).
