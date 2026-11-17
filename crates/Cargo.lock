@@ -1916,6 +1916,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-open-cli"
+version = "0.1.0"
+dependencies = [
+ "hangar-core",
+ "proptest",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "hangar-opencode-cookie"
 version = "0.1.0"
 dependencies = [
@@ -1985,6 +1995,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-registration"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "hangar-core",
+ "libc",
+ "proptest",
+ "serde_json",
+ "tempfile",
+ "toml",
+]
+
+[[package]]
 name = "hangar-reviews"
 version = "0.1.0"
 dependencies = [
@@ -2012,6 +2035,22 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "hangar-send"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "futures-util",
+ "hangar-core",
+ "percent-encoding",
+ "proptest",
+ "regex",
+ "reqwest",
+ "serde_json",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]
@@ -2049,14 +2088,17 @@ dependencies = [
  "hangar-mission",
  "hangar-notice-ignores",
  "hangar-omp-sync",
+ "hangar-open-cli",
  "hangar-opencode-cookie",
  "hangar-package",
  "hangar-plugins",
  "hangar-port-preview",
  "hangar-projects",
  "hangar-psmux",
+ "hangar-registration",
  "hangar-reviews",
  "hangar-scheduled-tasks",
+ "hangar-send",
  "hangar-session-tools",
  "hangar-shortcut-transfer",
  "hangar-sidecar-prune",

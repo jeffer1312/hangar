@@ -192,7 +192,7 @@ mod tests {
     }
 
     /// Um servidor falso: responde cada pedido com o próximo da fila e grava método, caminho e token.
-    async fn server(replies: Vec<(u16, Value)>) -> (Server, Arc<Mutex<Vec<String>>>) {
+    async fn fake_server(replies: Vec<(u16, Value)>) -> (Server, Arc<Mutex<Vec<String>>>) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port().to_string();
         let seen = Arc::new(Mutex::new(Vec::new()));
@@ -227,7 +227,7 @@ mod tests {
     #[tokio::test]
     async fn a_running_preparation_is_waited_with_one_line_per_stage() {
         let home = tempfile::tempdir().unwrap();
-        let (server, seen) = server(vec![
+        let (server, seen) = fake_server(vec![
             (200, json!({"status": "running", "etapa": {"codigo": "skills", "params": {}, "texto": "copiando skills"}})),
             (200, json!({"status": "running", "etapa": {"codigo": "skills", "params": {}, "texto": "copiando skills"}})),
             (200, json!({"status": "running", "etapa": {"codigo": "plugins", "params": {"segredo": 1}, "texto": "instalando plugins"}})),
@@ -246,7 +246,7 @@ mod tests {
     #[tokio::test]
     async fn another_state_asks_for_the_preparation_and_partial_opens_with_the_codes() {
         let home = tempfile::tempdir().unwrap();
-        let (server, seen) = server(vec![(200, json!({"status": "idle"})), (200, json!({"status": "running", "etapa": "preparando"})),
+        let (server, seen) = fake_server(vec![(200, json!({"status": "idle"})), (200, json!({"status": "running", "etapa": "preparando"})),
             (200, json!({"status": "ok"}))]).await;
         let lines = Lines::new();
         assert_eq!(run(&target(home.path(), server), &lines).await, Ok(()));
@@ -254,14 +254,14 @@ mod tests {
         let methods: Vec<String> = seen.lock().unwrap().iter().map(|line| line.split(' ').next().unwrap().to_owned()).collect();
         assert_eq!(methods, ["GET", "POST", "GET"]);
 
-        let (server, _) = server(vec![(200, json!({"status": "partial"})), (200, json!({"status": "partial", "issues": [
+        let (server, _) = fake_server(vec![(200, json!({"status": "partial"})), (200, json!({"status": "partial", "issues": [
             {"code": "plugin_fora_do_marketplace", "params": {"segredo": "x"}}, {"code": "skill_x"}, {"code": "Inválido!"}, "texto", {"code": 3}]}))]).await;
         let lines = Lines::new();
         assert_eq!(run(&target(home.path(), server), &lines).await, Ok(()));
         assert_eq!(lines.all(), ["pendência do preparo: plugin_fora_do_marketplace", "pendência do preparo: skill_x",
             "a sessão abre com pendências; confira a sincronização da conta"]);
 
-        let (server, _) = server(vec![(200, json!({"status": "idle"})), (200, json!({"status": "error", "issues": [{"code": "login_ausente"}]}))]).await;
+        let (server, _) = fake_server(vec![(200, json!({"status": "idle"})), (200, json!({"status": "error", "issues": [{"code": "login_ausente"}]}))]).await;
         let lines = Lines::new();
         assert_eq!(run(&target(home.path(), server), &lines).await,
             Err("o preparo não terminou; confira as pendências da sincronização antes de abrir".into()));
@@ -269,7 +269,7 @@ mod tests {
 
         // Erro HTTP não é servidor fora: não reaproveita a marca.
         std::fs::write(home.path().join(PREPARED_MARKER), "{}").unwrap();
-        let (server, _) = server(vec![(500, json!({}))]).await;
+        let (server, _) = fake_server(vec![(500, json!({}))]).await;
         assert_eq!(run(&target(home.path(), server), &Lines::new()).await, Err("HTTP 500".into()));
     }
 

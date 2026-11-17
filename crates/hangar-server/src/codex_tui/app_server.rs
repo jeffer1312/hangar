@@ -47,7 +47,7 @@ impl Tail {
         let size = file.seek(SeekFrom::End(0))?;
         file.seek(SeekFrom::Start(size.saturating_sub(TAIL_MAX)))?;
         let mut tail = Vec::new();
-        file.by_ref().take(TAIL_MAX).read_to_end(&mut tail)?;
+        std::io::Read::by_ref(file).take(TAIL_MAX).read_to_end(&mut tail)?;
         file.seek(SeekFrom::End(0))?;
         Ok(tail)
     }
