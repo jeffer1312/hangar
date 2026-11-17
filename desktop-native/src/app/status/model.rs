@@ -189,8 +189,10 @@ fn date_time(at: NaiveDateTime) -> String {
         ("time", &format!("{:02}:{:02}", at.hour(), at.minute()))])
 }
 
+/// Mesmos códigos e chaves do Expo (`status_exit_cause_*`); o que não tem frase própria vai em "Causa: <código>".
 fn cause_text(cause: &str) -> String {
-    tr_web(&format!("status_exit_cause_{cause}"), &Default::default()).unwrap_or_else(|| cause.to_owned())
+    tr_web(&format!("status_exit_cause_{cause}"), &Default::default())
+        .unwrap_or_else(|| tr_shared("status_exit_cause_other", &[("code", cause)]))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -645,6 +647,8 @@ mod tests {
         // 15/11 03:12 no fuso de Brasília: 4 dias e 3,2 h depois do começo da semana.
         assert!((crash.pos - 4.133 / 7.).abs() < 0.001, "posição {}", crash.pos);
         assert!(crash.title.ends_with("15 nov, 03:12"), "{}", crash.title);
+        assert_eq!(crash.detail.as_deref(), Some(tr_shared("status_exit_cause_out_of_memory", &[]).as_str()));
+        assert_eq!(cause_text("restart_only"), tr_shared("status_exit_cause_other", &[("code", "restart_only")]));
         let update = timeline.events.iter().find(|e| e.kind == ExitKind::Update).expect("a atualização");
         assert_eq!(update.detail.as_deref(), Some("0.1.0.10751 → 0.1.0.10790"));
         assert!(!timeline.has_restart);

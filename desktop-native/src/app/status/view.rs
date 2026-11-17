@@ -4,7 +4,7 @@
 use super::*;
 use super::model::{Block, Chip, ChipIcon, Days, Health, Host, Machines, Outside, ServerCards, Sessions, Seg, Slow, Spark, TileIcon, Tone};
 use super::super::chrome::Skeleton;
-use gpui_kit::component::{chart::AreaChart, progress::Progress, tooltip::Tooltip};
+use gpui_kit::component::{Icon, chart::AreaChart, progress::Progress, tooltip::Tooltip};
 use hangar_api::status::ExitKind;
 
 fn tone(t: Tone) -> Hsla {
@@ -31,6 +31,11 @@ fn card_head(title: String, hint: Option<String>) -> Div {
 }
 
 fn swatch(color: Hsla, round: bool) -> Div { div().size(px(9.)).flex_shrink_0().rounded(px(if round { 5. } else { 3. })).bg(color) }
+
+/// O losango da atualização, desenhado por SVG: `div` não gira. Só a forma importa, a cor vem do `text_color`.
+const DIAMOND: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 1 23 12 12 23 1 12Z" fill="black"/></svg>"#;
+
+fn diamond(size: f32, color: Hsla) -> Icon { Icon::default().data(DIAMOND).size(px(size)).text_color(color) }
 
 fn legend() -> Div { div().flex().flex_wrap().items_center().gap_x(px(14.)).gap_y(px(4.)).text_size(px(11.5)).text_color(theme::muted()) }
 
@@ -69,8 +74,11 @@ fn chip_row(chips: &[Chip]) -> Div {
     }))
 }
 
-/// A curva da última hora, com a média como linha neutra; passar o mouse mostra o valor e há quanto tempo.
-fn spark_chart(id: &'static str, spark: &Spark) -> AnyElement {
+const SPARK_HEIGHT: f32 = 46.;
+
+/// A curva da última hora, com a média como linha neutra e uma bolinha no valor de agora; passar o mouse
+/// mostra o valor e há quanto tempo.
+fn spark_chart(id: &'static str, spark: &Spark) -> Div {
     #[derive(Clone)]
     struct Row { key: SharedString, v: f64, avg: f64, text: SharedString, ago: SharedString }
     let avg = spark.avg_value.unwrap_or(f64::NAN);
@@ -82,16 +90,22 @@ fn spark_chart(id: &'static str, spark: &Spark) -> AnyElement {
     // Faixa justa à curva, como o mock; série reta ganha folga, senão o kit não desenha nada.
     let (low, high) = if high - low < 1e-6 { (low - 1., high + 1.) } else { (low * 0.92, high * 1.05) };
     let color = series(spark.slot);
+    let last = rows.last().map_or(low, |r| r.v);
+    // Sem folga no gráfico, a escala é linear de `high` (topo) a `low` (base): a bolinha usa a mesma conta.
+    let last_y = ((high - last) / (high - low)) as f32 * SPARK_HEIGHT;
     let chart = AreaChart::new(rows).id(id).x(|r: &Row| r.key.clone()).x_axis(false).grid(false)
         .y(|r: &Row| r.v).stroke(color).fill(color.opacity(0.12)).linear()
-        .y_domain(low, high)
+        .y_domain(low, high).y_padding(0., 0.)
         .tooltip_content(|r: &Row, _, _| div().flex().flex_col().gap(px(2.))
             .child(div().text_size(px(13.)).font_weight(FontWeight::SEMIBOLD).child(r.text.clone()))
             .child(div().text_size(px(12.)).text_color(theme::muted()).child(r.ago.clone())));
     let chart = if spark.avg_value.is_some() {
         chart.y(|r: &Row| r.avg).stroke(theme::border_strong()).fill(transparent_black()).linear()
     } else { chart };
-    chart.into_any_element()
+    // A ponta da curva fica na borda direita do gráfico; o anel na cor do cartão a destaca da área.
+    div().relative().w_full().h(px(SPARK_HEIGHT)).child(chart)
+        .child(div().absolute().right(px(-5.)).top(px(last_y - 5.)).size(px(10.)).rounded_full()
+            .border_2().border_color(theme::boxed()).bg(color))
 }
 
 impl Hangar {
@@ -135,7 +149,17 @@ impl Hangar {
     fn status_health(&self, h: &Health, cx: &mut Context<Self>) -> Div {
         let ok = h.items.is_empty();
         let color = if ok { theme::success() } else { theme::warning() };
-        let sub = [h.uptime.clone(), h.version.clone().map(|v| tr("status_version").replace("{version}", &v))].into_iter().flatten().collect::<Vec<_>>();
+        // A versão em fonte mono no meio da frase: o texto em volta dela sai da própria chave.
+        let version = h.version.clone().map(|v| {
+            let text = tr("status_version");
+            let (before, after) = text.split_once("{version}").map_or((text.clone(), String::new()), |(b, a)| (b.trim_end().to_owned(), a.trim_start().to_owned()));
+            div().flex().items_baseline().gap(px(4.)).when(!before.is_empty(), |el| el.child(before))
+                .child(div().font_family(theme::MONO).child(v)).when(!after.is_empty(), |el| el.child(after))
+        });
+        let sub = (h.uptime.is_some() || version.is_some()).then(|| div().flex().items_baseline().gap(px(4.)).text_size(px(12.5)).text_color(theme::muted())
+            .children(h.uptime.clone())
+            .when(h.uptime.is_some() && version.is_some(), |el| el.child("·"))
+            .children(version));
         let attention = (!ok).then(|| div().ml_auto().min_w_0().max_w(relative(0.56)).flex().flex_col().gap(px(6.))
             .children(h.items.iter().enumerate().map(|(i, item)| {
                 let target = item.target;
@@ -152,7 +176,7 @@ impl Hangar {
                 .child(chrome::small_icon(if ok { IconName::Check } else { IconName::TriangleAlert }, if ok { 26. } else { 24. }, color)))
             .child(div().min_w_0().flex().flex_col().gap(px(3.))
                 .child(div().text_size(px(18.)).font_weight(FontWeight::SEMIBOLD).child(h.title.clone()))
-                .when(!sub.is_empty(), |el| el.child(div().text_size(px(12.5)).text_color(theme::muted()).child(sub.join(" · ")))))
+                .children(sub))
             .children(attention)
     }
 
@@ -215,7 +239,7 @@ fn stat_card(id: &'static str, label: String, spark: &Spark, flash: bool) -> Div
             .children(spark.average.clone().map(|average| div().truncate().text_size(px(12.)).text_color(theme::muted()).child(average))))
         // Uma amostra só não faz curva: a primeira aparece depois de um minuto de servidor.
         .when(spark.points.len() > 1, |el| el
-            .child(div().mt(px(8.)).h(px(46.)).w_full().child(spark_chart(id, spark)))
+            .child(spark_chart(id, spark).mt(px(8.)))
             .child(div().mt(px(3.)).flex().justify_between().text_size(px(10.5)).text_color(theme::faint())
                 .child(tr("status_hour_back")).child(tr("status_now"))))
 }
@@ -229,7 +253,10 @@ fn status_server(s: &ServerCards, flash: bool) -> Div {
 fn event_mark(kind: ExitKind) -> Div {
     match kind {
         ExitKind::Crash => div().size(px(18.)).ml(px(-9.)).top(px(14.)).rounded_full().border_2().border_color(theme::boxed()).bg(theme::danger()),
-        ExitKind::Update => div().size(px(14.)).ml(px(-7.)).top(px(16.)).rounded(px(4.)).border_2().border_color(theme::boxed()).bg(theme::accent()),
+        // O anel na cor do cartão é um losango maior por baixo, como a borda dos círculos.
+        ExitKind::Update => div().size(px(20.)).ml(px(-10.)).top(px(13.))
+            .child(div().absolute().top(px(0.)).left(px(0.)).child(diamond(20., theme::boxed())))
+            .child(div().absolute().top(px(3.)).left(px(3.)).child(diamond(14., theme::accent()))),
         ExitKind::Requested => div().size(px(14.)).ml(px(-7.)).top(px(16.)).rounded_full().border_2().border_color(theme::boxed()).bg(theme::muted()),
     }
 }
@@ -247,7 +274,7 @@ fn status_days(d: &Days, flash: bool) -> Div {
             }));
         let marks = legend()
             .child(legend_item(theme::danger(), true, tr("status_legend_crash"), None))
-            .child(legend_item(theme::accent(), false, tr("status_legend_update"), None))
+            .child(div().flex().items_center().gap(px(6.)).child(diamond(10., theme::accent())).child(tr("status_legend_update")))
             .when(t.has_restart, |el| el.child(legend_item(theme::muted(), true, tr("status_legend_restart"), None)));
         div().child(line).child(marks)
     });
