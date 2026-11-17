@@ -5,6 +5,7 @@ use std::rc::Rc;
 use gpui_kit::base::AccordionTrigger;
 
 use super::*;
+use crate::appearance::DeliveryMode;
 use crate::queue_panel::{self as model, QueueEdit, QueueEntry};
 
 /// Cerca de quatro linhas à vista; o resto rola dentro do painel.
@@ -125,6 +126,11 @@ pub(super) fn sends_direct(enabled: bool, state: &str, provider: &str) -> bool {
     enabled && state == "working" && matches!(provider, "claude" | "codex")
 }
 
+/// "Na conversa": só Claude sem terminal e Codex leem a mensagem entre ferramentas; o Claude com terminal fica na Fila.
+pub(super) fn sends_in_conversation(enabled: bool, state: &str, provider: &str, headless: bool) -> bool {
+    sends_direct(enabled, state, provider) && (provider == "codex" || headless)
+}
+
 /// Aviso de entrega parada no painel: é onde a mensagem presa espera (a bolha dela some da conversa).
 pub(super) fn stalled_notice(panel: &model::QueuePanel, problem: Option<&str>, read_only: bool) -> bool {
     !panel.entries.is_empty() && problem == Some(super::STALLED) && !read_only
@@ -135,42 +141,49 @@ impl Hangar {
 
     /// O envio desta conversa sai como Orientar, sem esperar no painel.
     pub(super) fn queue_sends_direct(&self) -> bool {
-        sends_direct(appearance::get().steer_while_working, &self.chat.state.state, self.provider().0)
+        sends_direct(appearance::get().delivery_mode() == DeliveryMode::Direct, &self.chat.state.state, self.provider().0)
     }
 
-    fn set_queue_direct(&mut self, on: bool, cx: &mut Context<Self>) {
+    pub(super) fn set_delivery_mode(&mut self, mode: DeliveryMode, cx: &mut Context<Self>) {
         let mut next = appearance::get();
-        next.steer_while_working = on;
-        if on { next.jev_delivery = false; }
+        next.set_delivery_mode(mode);
         self.apply_appearance(next, true, cx);
         cx.notify();
     }
 
-    fn set_queue_jev(&mut self, on: bool, cx: &mut Context<Self>) {
-        let mut next = appearance::get();
-        next.jev_delivery = on;
-        if on { next.steer_while_working = false; }
-        self.apply_appearance(next, true, cx);
-        cx.notify();
+    /// O servidor do Jev: o da conversa aberta; sem ela (Configurações pela tela inicial), o ativo.
+    fn queue_jev_server(&self) -> Option<String> {
+        self.selected_key().map(|key| key.server).or_else(|| self.server.clone())
     }
 
     pub(super) fn queue_jev_ready(&self) -> bool {
-        self.selected_key().and_then(|k| self.queue.jev.get(&k.server)).is_some_and(|(_, _, result)| matches!(result, Some(Ok(true))))
+        self.queue_jev_server().and_then(|server| self.queue.jev.get(&server)).is_some_and(|(_, _, result)| matches!(result, Some(Ok(true))))
     }
 
-    fn refresh_queue_jev(&mut self, cx: &mut Context<Self>) {
-        let Some(key) = self.selected_key() else { return };
-        if self.queue.jev.get(&key.server).is_some_and(|(at, _, result)| result.is_none() || at.elapsed() < Duration::from_secs(30)) { return; }
-        let Some(api) = self.api_for(&key.server) else { return };
+    /// Por que o Jev deste servidor está ou não disponível: a dica da opção.
+    pub(super) fn queue_jev_help(&self) -> String {
+        let state = self.queue_jev_server().and_then(|server| self.queue.jev.get(&server)).map(|(_, _, state)| state);
+        state.map(|state| match state {
+            None => tr("queue_jev_loading"),
+            Some(Err(error)) => tr("queue_jev_read_error").replace("{error}", error),
+            Some(Ok(false)) => tr("queue_jev_setup"),
+            Some(Ok(true)) => tr("queue_jev_help"),
+        }).unwrap_or_else(|| tr("queue_jev_loading"))
+    }
+
+    pub(super) fn refresh_queue_jev(&mut self, cx: &mut Context<Self>) {
+        let Some(server) = self.queue_jev_server() else { return };
+        if self.queue.jev.get(&server).is_some_and(|(at, _, result)| result.is_none() || at.elapsed() < Duration::from_secs(30)) { return; }
+        let Some(api) = self.api_for(&server) else { return };
         self.queue.jev_seq += 1;
         let seq = self.queue.jev_seq;
-        self.queue.jev.insert(key.server.clone(), (Instant::now(), seq, None));
+        self.queue.jev.insert(server.clone(), (Instant::now(), seq, None));
         let (connection, tx) = (self.connection, self.tx.clone());
         self.runtime.spawn(async move {
             let result = api.server_read(&["jev", "delivery"], &[], 10).await
                 .and_then(|config| config["available"].as_bool().ok_or_else(|| Failure::local("invalid_response")))
                 .map_err(|error| if error.status == Some(404) { tr("queue_jev_unsupported") } else { Hangar::fetch_failure(&error) });
-            let _ = tx.send(Envelope { connection, selection: None, payload: Payload::QueueJev(key.server, seq, result) }).await;
+            let _ = tx.send(Envelope { connection, selection: None, payload: Payload::QueueJev(server, seq, result) }).await;
         });
     }
 
@@ -184,7 +197,12 @@ impl Hangar {
 
     pub(super) fn queue_timing(&self, direct: bool, ordinary: bool, message: &str) -> SendTiming {
         if direct { return SendTiming::Direct; }
-        if ordinary && appearance::get().jev_delivery && self.queue_jev_ready()
+        let mode = appearance::get().delivery_mode();
+        let (provider, headless) = self.provider();
+        if ordinary && sends_in_conversation(mode == DeliveryMode::Conversation, &self.chat.state.state, provider, headless) {
+            return SendTiming::Conversation;
+        }
+        if ordinary && mode == DeliveryMode::Jev && self.queue_jev_ready()
             && sends_direct(true, &self.chat.state.state, self.provider().0) {
             let latest = self.chat.events.iter().rposition(|e| e.kind == "user_msg" && !e.queued() && !e.id.starts_with("pending-") && peer_of(e).is_none());
             let task = latest.map(|index| {
@@ -304,8 +322,6 @@ impl Hangar {
             .child(tr_shared("queue_panel_editing", &[])))
     }
 
-    /// O painel; sem mensagem esperando só aparece com o "mandar direto" ligado e o agente trabalhando, porque aí nada entra
-    /// na fila e esta é a única caixinha para desligá-lo.
     /// Quanto a altura do painel deslizando muda do último quadro para este. A raiz soma isso à altura medida da faixa
     /// de baixo, que é a do quadro anterior, e o painel é desenhado com a mesma conta.
     pub(super) fn queue_slide_step(&mut self) -> f32 {
@@ -316,9 +332,9 @@ impl Hangar {
     pub(super) fn render_queue_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         self.idle_tick(cx);
         let (planned, _) = (self.queue.planned.take(), self.queue.drawn.take());
+        // O Jev decide no Enter: a leitura dele não pode esperar o painel aparecer.
+        if matches!(self.provider().0, "claude" | "codex") && appearance::get().delivery_mode() == DeliveryMode::Jev { self.refresh_queue_jev(cx); }
         let panel = self.chat.queue_panel();
-        let direct = appearance::get().steer_while_working;
-        let supports = matches!(self.provider().0, "claude" | "codex");
         let read_only = self.selected.as_ref().is_some_and(|s| s.read_only());
         let stalled = stalled_notice(&panel, self.chat.state.problema.as_deref(), read_only);
         // A mensagem enviada com a sessão parada fica na conversa até ser entregue: não entra no painel.
@@ -329,7 +345,7 @@ impl Hangar {
         if let Some(text) = self.local_queue_text(&entries) { entries.push(QueueEntry { id: send_flight::LOCAL_QUEUE.into(), text, ts: None }); }
         // Uma cópia por quadro, dividida pelas linhas e pelos handlers de setas e de soltar.
         let entries: Rc<[QueueEntry]> = entries.into();
-        let live = !entries.is_empty() || supports && direct && self.chat.state.state == "working";
+        let live = !entries.is_empty();
         // O painel abre e fecha pela altura, para a conversa ganhar e perder o espaço aos poucos.
         let moving = !cx.reduce_motion();
         // Com o aviso de entrega parada a altura depende do texto dele: o painel não desliza.
@@ -359,16 +375,6 @@ impl Hangar {
         if self.queue.collapsed || entries.len() != 1 && !entries.iter().any(|e| e.id == send_flight::LOCAL_QUEUE) { self.flight_places.queue.set(None); }
         let rows = if self.queue.collapsed { 0 } else { entries.len() };
         self.queue.shape = (rows, slides);
-        if supports { self.refresh_queue_jev(cx); }
-        let jev_ready = self.queue_jev_ready();
-        let jev_state = self.selected_key().and_then(|key| self.queue.jev.get(&key.server)).map(|(_, _, state)| state);
-        let jev_configured = !matches!(jev_state, Some(Some(Ok(false))));
-        let jev_help = jev_state.map(|state| match state {
-            None => tr("queue_jev_loading"),
-            Some(Err(error)) => tr("queue_jev_read_error").replace("{error}", error),
-            Some(Ok(false)) => tr("queue_jev_setup"),
-            Some(Ok(true)) => tr("queue_jev_help"),
-        }).unwrap_or_else(|| tr("queue_jev_loading"));
         let expanded = !self.queue.collapsed;
         let header_focus = window.use_keyed_state("queue-panel-header-focus", cx, |_, cx| cx.focus_handle().tab_stop(true)).read(cx).clone();
         let weak = cx.entity().downgrade();
@@ -387,15 +393,8 @@ impl Hangar {
             div().id("queue-panel-list").max_h(px(LIST_MAX)).overflow_y_scroll().flex().flex_col().gap(px(ROW_GAP)).px(px(LIST_SIDE)).pb(px(LIST_PAD))
                 .children(rows)
         });
-        // Fora do cabeçalho: clicar na caixinha não abre nem fecha o painel.
-        let toggle = supports.then(|| Checkbox::new("queue-direct").small().label(tr("queue_panel_direct")).checked(direct)
-            .on_click(cx.listener(|this, checked: &bool, _, cx| this.set_queue_direct(*checked, cx))));
-        let jev_toggle = (supports && jev_configured).then(||Checkbox::new("queue-jev").small().label(tr("queue_jev"))
-            .checked(appearance::get().jev_delivery && jev_ready).disabled(!jev_ready)
-            .tooltip(jev_help)
-            .on_click(cx.listener(|this, checked: &bool, _, cx| this.set_queue_jev(*checked, cx))));
         let top = div().h(px(HEAD_HEIGHT)).flex_shrink_0().flex().flex_wrap().items_center().gap(px(6.)).pr(px(10.))
-            .child(div().flex_1().min_w_0().child(header)).children(toggle).children(jev_toggle);
+            .child(div().flex_1().min_w_0().child(header));
         // Fora da lista: com o painel recolhido o aviso e o Reabrir continuam à vista.
         let stalled = stalled.then(|| div().id("queue-stalled").flex().flex_wrap().items_center().gap(px(8.)).px(px(12.)).pb(px(6.))
             .child(div().flex_1().min_w_0().text_size(px(12.5)).text_color(theme::warning())
@@ -514,7 +513,7 @@ impl Hangar {
 
 #[cfg(test)]
 mod tests {
-    use super::{panel_height, row_place_above, sends_direct, stalled_notice};
+    use super::{panel_height, row_place_above, sends_direct, sends_in_conversation, stalled_notice};
     use crate::api::dto::ChatEvent;
     use gpui_kit::{Bounds, point, px, size};
 
@@ -553,5 +552,16 @@ mod tests {
         assert!(!sends_direct(false, "working", "claude"), "desligada, a mensagem espera na fila");
         assert!(!sends_direct(true, "idle", "claude"), "parado, o envio comum já entra na hora");
         assert!(!sends_direct(true, "working", "kimi"), "o Kimi não tem Orientar por mensagem");
+    }
+
+    #[test]
+    fn in_conversation_only_where_the_cli_reads_between_tools() {
+        assert!(sends_in_conversation(true, "working", "claude", true), "Claude sem terminal");
+        assert!(sends_in_conversation(true, "working", "codex", false), "Codex com terminal também");
+        assert!(sends_in_conversation(true, "working", "codex", true));
+        assert!(!sends_in_conversation(true, "working", "claude", false), "Claude com terminal fica na Fila");
+        assert!(!sends_in_conversation(true, "working", "pi", true));
+        assert!(!sends_in_conversation(true, "idle", "claude", true), "parado, o envio comum já entra");
+        assert!(!sends_in_conversation(false, "working", "claude", true));
     }
 }

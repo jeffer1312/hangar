@@ -1,4 +1,5 @@
-// Painel "Na fila", faixa de cima da caixa do composer: o que espera a vez no Hangar e o modo de envio.
+// Painel "Na fila", faixa de cima da caixa do composer: o que espera a vez no Hangar. O modo de envio mora nas
+// Configurações > Geral.
 // Toque longo na linha abre o menu (Subir, Descer, Orientar, Editar, Apagar), como o T3 mobile; tocar no
 // texto mostra a mensagem inteira. Fila vazia não ocupa espaço nenhum.
 import { useEffect, useState } from 'react';
@@ -13,7 +14,6 @@ import { useServers } from '../stores/servers';
 import { Icon } from '../ui/Icon';
 import { haptic } from '../ui/haptics';
 import { toast } from '../ui/Toast';
-import { deliveryModeLabel, deliveryOptions, type DeliveryControls, type DeliveryMode } from './queueDelivery';
 import { QUEUE_APPEAR_MS, type PendingMsg } from './pending';
 import { FlightDestination } from './SendFlight';
 
@@ -46,8 +46,6 @@ interface Props {
   onSteer: (id: string) => void;
   onRemove: (id: string) => void;
   onMove: (id: string, delta: -1 | 1) => void;
-  delivery?: DeliveryControls;
-  onModeChange?: (mode: DeliveryMode) => void;
   /** Só com o aviso `headless_delivery_stalled` da sessão: a fila não anda e só a pessoa reabre. */
   reopen?: { serverId: string; name: string };
   /** Envios daqui que o servidor ainda não listou: a linha nasce no envio, sem ações, e a do servidor toma o lugar. */
@@ -94,7 +92,7 @@ function ReopenStalled({ serverId, name }: { serverId: string; name: string }) {
 // por um instante; o painel só surge se ela continuar esperando, para a mensagem que já está indo não piscar.
 export const QUEUE_PANEL_APPEAR_MS = QUEUE_APPEAR_MS;
 
-export function QueuePanel({ panel, editingId, busy, onEdit, onCancelEdit, onSteer, onRemove, onMove, delivery, onModeChange, reopen, locals = NO_LOCALS, route = null }: Props) {
+export function QueuePanel({ panel, editingId, busy, onEdit, onCancelEdit, onSteer, onRemove, onMove, reopen, locals = NO_LOCALS, route = null }: Props) {
   const { theme } = useUnistyles();
   const [expanded, setExpanded] = useState(true);
   const [full, setFull] = useState<string | null>(null);
@@ -118,8 +116,6 @@ export function QueuePanel({ panel, editingId, busy, onEdit, onCancelEdit, onSte
     else onRemove(id);
   };
   const muted = theme.tokens.text.muted;
-  const jevReady = delivery?.status === 'ready';
-  const jevWarning = delivery?.status === 'setup' || delivery?.status === 'error';
   return (
     <View style={styles.band}>
       <View style={styles.header}>
@@ -136,32 +132,7 @@ export function QueuePanel({ panel, editingId, busy, onEdit, onCancelEdit, onSte
           <Text style={[styles.count, { backgroundColor: theme.tokens.fillSubtle }]}>{panel.entries.length + locals.length}</Text>
           <Icon name={expanded ? 'ChevronDown' : 'ChevronUp'} size={14} color={muted} />
         </Pressable>
-        {delivery ? (
-          <View accessibilityRole="radiogroup" accessibilityLabel={m.mobile_queue_mode_label()}
-            style={[styles.segments, { backgroundColor: theme.tokens.fillSubtle, borderColor: theme.tokens.border.subtle }]}>
-            {deliveryOptions(delivery).map(({ mode, checked, disabled }) => {
-              return (
-                <Pressable key={mode} accessibilityRole="radio" accessibilityLabel={deliveryModeLabel(mode)}
-                  accessibilityHint={mode === 'jev' ? delivery.help : undefined}
-                  aria-checked={checked} aria-disabled={disabled} aria-busy={mode === 'jev' && delivery.status === 'loading'}
-                  disabled={disabled} hitSlop={{ top: 8, bottom: 8 }}
-                  onPress={() => { if (delivery.mode === mode) return; haptic.selection(); onModeChange?.(mode); }}
-                  style={[styles.segment, checked && { backgroundColor: theme.tokens.bg.elevated }, disabled && styles.disabled]}>
-                  <Text style={[styles.segmentText, { color: checked ? (mode === 'queued' ? theme.tokens.text.primary : theme.tokens.accent.base) : theme.tokens.text.secondary }]}>
-                    {deliveryModeLabel(mode)}
-                  </Text>
-                  {mode === 'jev' && jevWarning ? <Icon name="CircleAlert" size={12} color={theme.tokens.status.warning} /> : null}
-                </Pressable>
-              );
-            })}
-          </View>
-        ) : null}
       </View>
-      {delivery?.mode === 'jev' ? (
-        <Text style={[styles.help, !jevReady && delivery.status !== 'loading' && { color: theme.tokens.status.warning }]} accessibilityLiveRegion="polite">
-          {jevReady ? m.mobile_queue_jev_short() : m.mobile_queue_jev_fallback({ reason: delivery.help.replace(/[\s.…]+$/, '') })}
-        </Text>
-      ) : null}
       {reopen ? <ReopenStalled serverId={reopen.serverId} name={reopen.name} /> : null}
       {expanded ? (
         <ScrollView style={styles.list} nestedScrollEnabled keyboardShouldPersistTaps="handled">
@@ -274,10 +245,6 @@ const styles = StyleSheet.create((theme) => ({
   },
   header: { flexDirection: 'row', alignItems: 'center', gap: theme.base.space[2], paddingLeft: theme.base.space[3], paddingRight: theme.base.space[2], minHeight: 44 },
   toggle: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: theme.base.space[1.5], minHeight: 44 },
-  segments: { flexDirection: 'row', padding: theme.base.space[0.5], borderRadius: theme.base.radius.full, borderWidth: StyleSheet.hairlineWidth },
-  segment: { minHeight: 28, flexDirection: 'row', alignItems: 'center', gap: theme.base.space[1], paddingHorizontal: theme.base.space[3], borderRadius: theme.base.radius.full },
-  segmentText: { fontSize: theme.base.text.xxs, fontWeight: theme.base.weight.semibold },
-  help: { fontSize: theme.base.text.xxs, color: theme.tokens.text.muted, paddingHorizontal: theme.base.space[3], paddingBottom: theme.base.space[1.5] },
   title: { fontSize: theme.base.text.xs, fontWeight: theme.base.weight.semibold, color: theme.tokens.text.muted },
   count: { fontSize: theme.base.text.xxs, color: theme.tokens.text.muted, fontVariant: ['tabular-nums'], paddingHorizontal: theme.base.space[1.5], borderRadius: theme.base.radius.full, overflow: 'hidden' },
   // Cerca de quatro linhas; passou disso, a lista rola dentro do painel.

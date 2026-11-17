@@ -345,6 +345,49 @@ async fn deferred_submit_with_steer_promotes_that_very_entry() {
     assert_eq!(python.hits_to("/api/sessions/s/input"), 0);
 }
 
+#[tokio::test]
+async fn conversation_during_a_turn_enters_it_without_cutting_and_keeps_its_mark() {
+    let (dir, registry) = (tempfile::tempdir().unwrap(), registry().await);
+    open_headless(&registry, dir.path(), "s", "written").await;
+    let (python, server) = serve(registry.clone(), Duration::from_secs(5)).await;
+    assert_eq!(post(server, "s", "input", r#"{"text":"um"}"#).await.1["delivered"], true);
+    let (status, body) = post(server, "s", "input", r#"{"text":"dois","delivery":"conversation"}"#).await;
+    assert_eq!((status, &body), (200, &json!({"ok": true, "delivered": true, "steered": true, "native": false, "conversation": true})), "{body}");
+    let rows = registry.queue_action("s", "load".into(), Action::Load).await.unwrap();
+    let row = rows.as_array().unwrap().iter().find(|row| row["text"] == "dois").cloned().unwrap();
+    assert_eq!((row["conversation"].clone(), row["steered"].clone()), (json!(true), json!(true)), "{row}");
+    assert_eq!(python.hits_to("/api/sessions/s/input"), 0);
+}
+
+#[tokio::test]
+async fn conversation_with_steer_or_an_unknown_mode_is_a_rust_422() {
+    let (dir, registry) = (tempfile::tempdir().unwrap(), registry().await);
+    open_headless(&registry, dir.path(), "s", "written").await;
+    let (python, server) = serve(registry, Duration::from_secs(5)).await;
+    for body in [r#"{"text":"oi","steer":true,"delivery":"conversation"}"#, r#"{"text":"oi","delivery":"agora"}"#] {
+        let (status, reply) = post(server, "s", "input", body).await;
+        assert_eq!((status, reply["detail"]["code"].as_str()), (422, Some("erro_corpo_invalido")), "{body}");
+    }
+    assert_eq!(python.hits_to("/api/sessions/s/input"), 0);
+}
+
+/// Claude com terminal: o Orientar dali corta o turno, então "Na conversa" vira a fila comum, sem marca.
+#[tokio::test]
+#[cfg(unix)]
+async fn conversation_on_a_terminal_session_takes_the_queue_path() {
+    let (dir, interactions) = (tempfile::tempdir().unwrap(), Arc::new(hangar_server::interactions::InteractionStore::default()));
+    let (registry, _plugin) = crate::session_write_control::registry_with_plugin(&interactions).await;
+    crate::session_write_control::open_terminal(&registry, dir.path(), "t").await;
+    let (python, server) = serve(registry.clone(), Duration::from_secs(5)).await;
+    let (status, reply) = post(server, "t", "input", r#"{"text":"oi","delivery":"conversation"}"#).await;
+    assert_ne!(status, 422, "{reply}");
+    assert_ne!(reply["conversation"], true, "{reply}");
+    assert_ne!(reply["steered"], true, "nada de ctrl+x ctrl+s: {reply}");
+    let rows = registry.queue_action("t", "load".into(), Action::Load).await.unwrap();
+    assert!(rows.as_array().unwrap().iter().all(|row| row["conversation"] != true), "{rows}");
+    assert_eq!(python.hits_to("/api/sessions/t/input"), 0);
+}
+
 #[test]
 fn steer_without_body_that_steered_an_entry_keeps_the_fields_old_clients_read() {
     use hangar_server::runtime::protocol::Disposition;

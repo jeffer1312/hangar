@@ -1333,12 +1333,14 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
                     }
                 },
                 Effect::WakeQueue => { drain_requested = true; },
+                Effect::RecheckInputs => { confirm_until = Some(Instant::now() + CONFIRM_WINDOW); confirm_seen = None; },
                 Effect::InputEchoed { operation_id } => {
                     // Prova direta da CLI: confirma a entrada da operação sem esperar o transcript (que fica de reserva).
                     let queue = queue.clone(); let generation = target.generation; let sample = clock(start);
                     jobs.spawn(async move { Job::Saved(async {
                         let state = queue.snapshot().await.map_err(io_failure)?;
                         let Some(entry) = state.operations.get(&operation_id).and_then(|op|op.entry_id.clone()) else { return Ok(()) };
+                        // A "Na conversa" guardada na CLI não chega aqui: o motor deixa o recibo do transcript confirmá-la.
                         if !state.rows.iter().any(|row|row["id"] == entry.as_str() && row["confirmed"] != true) { return Ok(()); }
                         queue.exec(generation,&format!("echo-confirm:{}",unique()),sample,Action::Confirm { entry_ids:vec![entry] }).await.map(|_|()).map_err(io_failure)
                     }.await) });
@@ -1562,8 +1564,12 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
                                     let entry_id = command.payload["entry_id"].as_str().unwrap_or(&id);
                                     let rows = queue.exec(target.generation,&format!("load:{id}"),sample,Action::Load).await.map_err(io_failure)?;
                                     if !rows.as_array().is_some_and(|rows|rows.iter().any(|row|row["id"] == entry_id)) {
-                                        queue.exec(target.generation,&format!("append:{id}"),sample,Action::Append { text:command.payload["text"].as_str().ok_or_else(||failure("input_text"))?.into(),
-                                            delivered:false,ts:None,pre_transcript:command.payload["pre_transcript"] == true,entry_id:Some(entry_id.into()) }).await.map_err(io_failure)?;
+                                        let text:String = command.payload["text"].as_str().ok_or_else(||failure("input_text"))?.into();
+                                        let pre_transcript = command.payload["pre_transcript"] == true;
+                                        let entry_id = Some(entry_id.to_owned());
+                                        let row = if command.payload["conversation"] == true { Action::AppendConversation { text,pre_transcript,entry_id } }
+                                            else { Action::Append { text,delivered:false,ts:None,pre_transcript,entry_id } };
+                                        queue.exec(target.generation,&format!("append:{id}"),sample,row).await.map_err(io_failure)?;
                                     }
                                 }
                                 // A reservada já existe com a própria entrada: a mesma intenção, nunca outra.

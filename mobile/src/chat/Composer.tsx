@@ -1701,11 +1701,10 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
   return (
     <>
     <ComposerBox focused={focado} footer={actions}>
-        {/* Faixa de cima da caixa: o que espera a vez no Hangar, as ações por mensagem e o modo de envio. */}
+        {/* Faixa de cima da caixa: o que espera a vez no Hangar e as ações por mensagem. */}
         <QueuePanel panel={queueList} locals={queueLocals} route={flightRoute(serverId, name)}
           editingId={queueEdit?.entryId ?? null} busy={queueBusy}
           onEdit={handleQueueEdit} onCancelEdit={chat.cancelQueueEdit}
-          delivery={supportsDelivery ? delivery : undefined} onModeChange={useDeliveryMode.getState().setMode}
           onSteer={chat.steerQueued} onRemove={chat.removeQueued} onMove={chat.moveQueued}
           reopen={deliveryStalled ? { serverId, name } : undefined} />
         {/* Fila da TUI do Kimi esperando o turno: diz quantas e dá a saída de mandar agora. */}

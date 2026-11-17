@@ -2905,6 +2905,11 @@ impl Hangar {
                 }
                 self.submit(false, false, window, cx);
             }
+            // Com "Na conversa" escolhido, o Ctrl+Enter é a saída para a Fila; nos outros modos ele segue sem ação.
+            InputEvent::PressEnter { secondary: true, shift: false } if !self.connection_dialog
+                && appearance::get().delivery_mode() == appearance::DeliveryMode::Conversation => {
+                self.submit_as(false, false, true, window, cx);
+            }
             // A lista de comandos acompanha o que se digita.
             // Texto e sugestões só aparecem na faixa de baixo.
             InputEvent::Change => {
@@ -3109,7 +3114,12 @@ impl Hangar {
 
     // `confirmed` = a pessoa já aceitou o aviso de comando destrutivo para este mesmo texto.
     fn submit(&mut self, steer: bool, confirmed: bool, window: &mut Window, cx: &mut Context<Self>) {
-        if self.defer_dictation_send(steer, cx) { return; }
+        self.submit_as(steer, confirmed, false, window, cx);
+    }
+
+    /// `queue_only`: o Ctrl+Enter com "Na conversa" escolhido deixa a mensagem no painel "Na fila".
+    fn submit_as(&mut self, steer: bool, confirmed: bool, queue_only: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.defer_dictation_send(steer, queue_only, cx) { return; }
         // Em edição, o Enter e o Enviar atualizam a mensagem da fila em vez de mandar outra.
         if self.selected.is_some() && self.queue_edit_active() { self.submit_queue_edit(window, cx); return; }
         if self.selected.is_none() && self.reopen.is_some() { self.send_reopen(window, cx); return; }
@@ -3165,8 +3175,10 @@ impl Hangar {
         self.action_feedback.remove(&key);
         // O grupo é o da hora do Enter: o texto pode sair depois, com outra conversa aberta ou o grupo mudado.
         let group = if steer { None } else { self.group_targets(&key, &text) };
-        let steer = steer || group.is_none() && !command && self.queue_sends_direct();
-        let steer = self.queue_timing(steer, group.is_none() && !command, &text);
+        let steer = if queue_only { SendTiming::Queued } else {
+            let steer = steer || group.is_none() && !command && self.queue_sends_direct();
+            self.queue_timing(steer, group.is_none() && !command, &text)
+        };
         let steer = if flying || attached { steer.after_wait() } else { steer };
         // Sem terminal, o `/btw` só sai traduzido e com o plugin anunciando que o atende; mesmo com a lista de
         // comandos ainda vazia (sem `blocked_command`), nunca vai cru ao Claude Code.
@@ -3196,13 +3208,13 @@ impl Hangar {
         // As referências da bandeja vão antes do digitado; o que volta ao campo numa falha é só o digitado.
         let message = quotes::compose_refs(&refs, &text);
         // Só o texto digitado, sozinho, ganha o destino local e viaja até ele; o resto entra como sempre. Com a sessão
-        // trabalhando e sem "mandar direto", o destino é o painel "Na fila"; senão, o fim da conversa.
+        // trabalhando e sem "mandar direto" nem "Na conversa", o destino é o painel "Na fila"; senão, o fim da conversa.
         // Texto longo fica no caminho de sempre: a bolha local o mostraria inteiro, sem o corte da mensagem gravada.
         let flies = refs.is_empty() && !command && group.is_none() && send_flight::flies(&field);
         let idle = self.chat.state.state != "working";
         // Com a entrega parada a mensagem fica no painel mesmo com a sessão parada: é para lá que ela viaja.
         let stalled = self.chat.state.problema.as_deref() == Some(STALLED);
-        let to_queue = (!idle || stalled) && steer != SendTiming::Direct;
+        let to_queue = (!idle || stalled) && !matches!(steer, SendTiming::Direct | SendTiming::Conversation);
         let known_before = if flies { known.clone() } else { HashSet::new() };
         if self.deliver(key.clone(), message, field.clone(), steer, known, group, cx) {
             if flies { self.send_takeoff(&field, idle, to_queue, known_before, window, cx); }
@@ -3260,6 +3272,7 @@ impl Hangar {
                 Some(names) => api.broadcast(&names, &text).await.and_then(|results| group_sheet::group_delivery(&key.name, results)),
                 None if terminal_claude => api.send_direct(&key.name, &text).await,
                 None if steer == SendTiming::Direct => api.steer_text(&key.name, &text).await,
+                None if steer == SendTiming::Conversation => api.send_conversation(&key.name, &text).await,
                 None if matches!(steer, SendTiming::Jev { .. }) => {
                     let SendTiming::Jev { task, message } = steer else { unreachable!() };
                     api.send_decided(&key.name, &text, &task, &message).await
@@ -3795,6 +3808,9 @@ impl Hangar {
             Action::Discard(id) => self.chat.events.iter().any(|e| e.id == format!("queued-{id}")
                 && (e.desistiu == Some(true) || discardable(e, self.chat.state.problema.as_deref()))).then(|| id.clone()),
             Action::Cancel | Action::Steer => Some(String::new()),
+            // O "Enviar agora" da bolha "Em espera" orienta uma entrada que nunca está no painel.
+            Action::QueueSteer(id) if self.chat.events.iter().any(|e| e.id == format!("queued-{id}") && crate::queue_panel::conversation_waiting(e)) =>
+                Some(id.clone()),
             // O instantâneo é o id: a entrada ainda tem de estar no painel.
             Action::QueueCancel(id) | Action::QueueEdit(id, _) | Action::QueueSteer(id) | Action::QueueReorder(id, _) =>
                 self.chat.queue_panel().entries.iter().any(|e| &e.id == id).then(|| id.clone()),
@@ -3805,10 +3821,14 @@ impl Hangar {
         let ask = self.chat.ask.as_ref()?;
         if self.ask_form.fingerprint != ask.fingerprint { return None; }
         let mut body = interaction::answer_body(ask, &self.ask_picks(cx))?;
-        let preferences = appearance::get();
-        // A identidade da pergunta já comprova a relação com o trabalho: o Jev não precisa inferi-la.
-        if ask.payload.is_async && ask.payload.provider.as_deref() == Some("codex")
-            && (preferences.steer_while_working || preferences.jev_delivery && self.queue_jev_ready()) {
+        // A identidade da pergunta já comprova a relação com o trabalho: o Jev não precisa inferi-la. No Codex o
+        // `turn/steer` não corta o turno, então "Na conversa" também orienta.
+        let steers = match appearance::get().delivery_mode() {
+            appearance::DeliveryMode::Direct | appearance::DeliveryMode::Conversation => true,
+            appearance::DeliveryMode::Jev => self.queue_jev_ready(),
+            appearance::DeliveryMode::Queue => false,
+        };
+        if ask.payload.is_async && ask.payload.provider.as_deref() == Some("codex") && steers {
             body["steer"] = json!(true);
         }
         Some(body)
@@ -5756,6 +5776,9 @@ impl Hangar {
         let mut discard = None;
         let mut baton = None;
         let mut segments = None;
+        // "Na conversa" ainda não lida pela CLI: a entrada, se o "Enviar agora" vale (o Codex não corta o turno) e o
+        // trecho que identifica a mensagem no rótulo de acessibilidade.
+        let mut waiting: Option<(String, bool, String)> = None;
         // Sessão orq: linha do tempo do orquestrador já interpretada pelo backend, desenhada à parte.
         if let Some(&Item::Event(event_index)) = self.conversation.items.get(index).filter(|_| id != PREVIEW) {
             if self.chat.events.get(event_index).is_some_and(|event| event.orq.is_some()) { return self.render_orq_event(&id, event_index, cx); }
@@ -5806,6 +5829,10 @@ impl Hangar {
                 if discardable(event, self.chat.state.problema.as_deref()) { discard = event.id.strip_prefix("queued-").map(str::to_owned); }
             }
             else if let Some(note) = stuck_note(event, self.chat.state.problema.as_deref()) { notes.push(tr(note)); }
+            else if crate::queue_panel::conversation_waiting(event) {
+                waiting = event.id.strip_prefix("queued-").map(|entry| (entry.to_owned(), self.provider().0 != "codex",
+                    crate::queue_panel::label_excerpt(event.text.as_deref().unwrap_or(""))));
+            }
             else if event.queued() && event.queued_consumed != Some(true) { notes.push(tr(if event.queued_delivered == Some(true) { "delivering" } else { "queued" })); }
             if event.is_error == Some(true) { notes.push(tr("tool_error")); }
             (label, (!notes.is_empty()).then(|| notes.join(" · ")), event.kind == "user_msg", event.is_error == Some(true))
@@ -5895,7 +5922,14 @@ impl Hangar {
         let landing = self.send_targets_bubble(&id).then(|| self.flight_places.clone());
         // Na linha do usuário o aviso ocupa a faixa de ações: a bolha local, a da fila e a gravada têm a mesma altura,
         // e a troca de uma pela outra não mexe a conversa.
-        let note_in_strip = user && note.is_some();
+        let note_in_strip = user && (note.is_some() || waiting.is_some());
+        let waiting = waiting.map(|(entry, send_now, excerpt)| div().flex().items_center().justify_end().gap_1().min_h(px(24.))
+            .text_sm().text_color(theme::muted()).child(tr_shared("queued_conversation_waiting", &[]))
+            .when(send_now, |el| el.child("·").child(Button::new(format!("send-now-{id}")).ghost().xsmall()
+                .label(tr_shared("queued_conversation_send_now", &[]))
+                .accessibility_label(tr_shared("queued_conversation_send_now_message", &[("text", &excerpt)]))
+                .text_color(theme::muted()).disabled(busy)
+                .on_click(cx.listener(move |this, _, _, cx| this.act(Action::QueueSteer(entry.clone()), entry.clone(), cx))))));
         let row = div().id(SharedString::from(format!("message-{id}"))).group(ROW_GROUP).w_full().flex().flex_col().gap_2()
             .map(|el| if user { el.items_end().child(match peer_scope {
                     Some(scope) => peer_bubble(content, scope),
@@ -5907,6 +5941,7 @@ impl Hangar {
             .when_some(note, |el, note| el.child(div().flex().items_center().gap_2().when(user, |el| el.justify_end().min_h(px(24.)))
                 .child(div().min_w_0().text_sm().text_color(theme::warning()).child(note))
                 .when_some(discard, |el, button| el.child(button))))
+            .when_some(waiting, |el, waiting| el.child(waiting))
             .when_some(actions.filter(|_| !note_in_strip), |el, actions| el.child(actions))
             // A prévia guarda o lugar da faixa de ações: virar a resposta gravada não muda a altura da linha.
             .when(id == PREVIEW, |el| el.child(div().h(px(24.))));
@@ -8218,8 +8253,9 @@ impl Hangar {
     /// prévia da aba, que depende de uma opção desligada.
     fn offer_root_tips(&mut self) {
         for tip in crate::tour::steps::TIPS.iter().filter(|tip| tip.on_sight).map(|tip| tip.step) {
-            // O painel "Na fila" aparece também com o Mandar direto ligado; aí não há o que ensinar.
-            if tip.id == "queue-direct" && (appearance::get().steer_while_working || !matches!(self.provider().0, "claude" | "codex")) { continue; }
+            // Com o envio Direto escolhido não há o que ensinar no painel.
+            if tip.id == "queue-direct" && (appearance::get().delivery_mode() == appearance::DeliveryMode::Direct
+                || !matches!(self.provider().0, "claude" | "codex")) { continue; }
             // Antes da âncora: lida, ela pediria outro quadro a cada movimento, mesmo de dica já vista.
             if self.tour.may_offer(tip.id) && popup::anchor_bounds(tip.anchor).is_some() { self.offer_step_tip(tip); }
         }

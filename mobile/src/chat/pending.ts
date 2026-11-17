@@ -9,6 +9,8 @@ export interface PendingMsg {
   afterId?: string;
   /** Enviada com a sessão trabalhando: o lugar dela é o painel "Na fila", não o fim da conversa. */
   queue?: boolean;
+  /** Mandada "Na conversa": o eco fica no fim da conversa sem atenuar, como a bolha "Em espera" que o substitui. */
+  conversation?: boolean;
   /** As entradas que o painel já listava no envio: nenhuma delas é a deste eco. */
   known?: string[];
   /** A bolha `queued-` do servidor que este eco representa: ela fica escondida enquanto o eco existir. */

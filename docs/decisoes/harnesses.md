@@ -424,6 +424,21 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   `result` não é parada (a vista segue trabalhando e a fila não acorda) até o `command_lifecycle`
   da orientação dizer `started` (ela vira o turno) ou `cancelled` (o turno acaba). Ver
   [Orientar corta o turno](#orientar-corta-o-turno-do-claude-sem-terminal-14112026).
+- **"Na conversa" entra no turno sem cortá-lo, só onde o turno é do processo.** O `/input` com
+  `"delivery":"conversation"` (nunca junto de `steer:true` nem do Jev: 422) grava a linha com a marca
+  `conversation` (`AppendConversation`) e, com turno, a orienta sem `now`: no Claude sem terminal a CLI
+  a guarda até a pausa entre ferramentas; no Codex, com e sem terminal, vai pelo `turn/steer`. No
+  Claude com terminal (o Orientar ali é `ctrl+x ctrl+s`, que corta), em Pi, omp e Kimi e em comando
+  de barra, o pedido vira a fila comum, sem marca, e a resposta diz `conversation: false`. O eco
+  `isReplay` confirma a linha marcada que abriu o turno (sessão parada), como qualquer entrada; a
+  guardada à espera da pausa é confirmada pelo recibo do transcript (`queued_command`,
+  `dequeue`/`remove`), relido a cada resultado de ferramenta enquanto houver mensagem guardada. A
+  linha marcada já entregue (`queued_delivered`) sai do painel da fila e vai aos aparelhos com
+  `queued_conversation`; a ainda não entregue fica no painel, onde pode ser cancelada. "Enviar agora" é o `queue/<id>/steer` de sempre: linha
+  ainda esperando segue o Orientar; já escrita no Claude sem terminal, vira `SteerWritten`, que
+  manda o `interrupt` e guarda a escrita em `steer_now`, sem reescrever o texto. Codex não tem
+  "Enviar agora". Servidor antigo recusa a chave com 422 antes de gravar; os aparelhos reenviam
+  como fila. Ver [mensagem na conversa](#mensagem-na-conversa-sem-cortar-o-turno-16112026).
 - **Modo de permissão troca COM a sessão trabalhando** — é tecla, não texto. O guard de "está
   trabalhando" existe para o `/model`, que é texto.
 - **Depois do BTab, o rodapé é lido na hora, sem pausa fixa**, e o Shift+Tab do app mostra o modo
@@ -1113,6 +1128,37 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   também recebe `success`. Só o `task_updated` (`killed`) ou o `task_notification` (`stopped`) daquele id
   prova a parada. Matar pelo pid não é caminho: a árvore de processos muda de um sistema para outro e o
   modelo não fica sabendo. Ver [parar tarefa do Claude](#parar-tarefa-do-claude-13112026).
+
+## Mensagem na conversa sem cortar o turno (16/11/2026)
+
+O pedido foi o comportamento do Claude Desktop: a mensagem mandada com a sessão trabalhando aparece
+na conversa na hora e o Claude a lê na próxima pausa entre ferramentas, sem parar o que faz. A
+configuração "Mensagem enviada com a sessão trabalhando" (nativo em Geral, Expo em Configurações)
+junta os modos que já existiam (Fila, Direto, Jev decide) e acrescenta "Na conversa".
+
+O caminho sem corte já existia para o recado entre sessões: a escrita sem `"priority":"now"` só
+entra quando a ferramenta em curso acaba (medido na entrada de 14/11 com um `ssh` de 590 s). "Na
+conversa" reusa esse caminho, com uma marca própria na linha da fila para a bolha não ir ao painel
+depois de escrita; antes disso (limite, escrita incerta, adiada) ela espera no painel como a da Fila,
+onde pode ser cancelada.
+Não reusa `steer:true` porque no Claude com terminal ele vira o `steer_entry`, que aperta
+`ctrl+x ctrl+s` e corta o turno. A decisão do usuário foi não levar a mensagem à fila interna do
+Claude Code com terminal: ali "Na conversa" se comporta como Fila.
+
+Medido em 16/11/2026 com a CLI 2.1.326 (`claude -p --safe-mode --model haiku --input-format
+stream-json --replay-user-messages`, pasta vazia, turno com três `sleep 4` em chamadas separadas):
+- Mensagem sem prioridade escrita aos 3,1 s, durante o primeiro `sleep`: o eco `isReplay` dela saiu
+  aos 8,9 s, logo depois do primeiro `tool_result`. O turno seguiu com os outros dois comandos e
+  terminou num `result` só, com o pedido da mensagem atendido. O eco marca quando a CLI lê, não
+  quando recebe.
+- Mensagem sem prioridade e, 0,5 s depois, `control_request` `interrupt`: a resposta do controle trouxe
+  `still_queued` com o uuid da mensagem; o comando foi cortado (`result` `error_during_execution`,
+  `terminal_reason` `aborted_tools`) e a mensagem guardada rodou como turno seguinte, com o eco e
+  um `result` `success` próprios. O "Enviar agora" pelo `interrupt` não perde nem duplica o texto.
+- O `command_lifecycle` só sai com as flags do lançamento do Hangar (`--include-partial-messages`,
+  `--include-hook-events`); sem elas não veio nenhum. Com elas: `queued` da guardada ao ser escrita,
+  e no corte `cancelled` do turno cortado seguido de `started` da guardada, cujo `command_uuid` é o
+  `uuid` escrito. É o que o motor espera para soltar o `steer_now`.
 
 ## Orientar corta o turno do Claude sem terminal (14/11/2026)
 

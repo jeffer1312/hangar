@@ -66,7 +66,10 @@ pub enum WriteOutcome { Written, NotWritten, Unknown }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OperationKind {
-    Input, Steer, SteerQueue, Interrupt, AnswerQuestions, Select, SetModel, SetEffort, SetServiceTier,
+    Input, Steer, SteerQueue,
+    /// Claude sem terminal: corta o turno por uma mensagem já escrita sem `now`, sem reescrevê-la ("Enviar agora").
+    SteerWritten,
+    Interrupt, AnswerQuestions, Select, SetModel, SetEffort, SetServiceTier,
     SetPermissionMode, Compact, Clear, ListModels, ListSkills, ReadRateLimits, ReadSettings,
     SetMode, SkipQuestion, Restart, OpenTerminal, Reload, Cwd, Detach, RefreshHooks,
     /// Codex: encerra um comando que ficou rodando (`thread/backgroundTerminals/terminate`).
@@ -131,6 +134,9 @@ pub enum Effect {
     /// Claude sem terminal: o eco (`isReplay`, mesmo `uuid`) da mensagem escrita por esta operação saiu, então
     /// ela entrou na conversa (o prompt barrado por hook não ecoa).
     InputEchoed { operation_id: String },
+    /// Claude sem terminal: veio um resultado de ferramenta com mensagem "Na conversa" guardada na CLI; o
+    /// transcript é relido para confirmá-la sem esperar a próxima volta da conferência.
+    RecheckInputs,
     StateChanged,
     /// Interface dos mods (superfície remota): quadro fora do diário, publicação, aviso e resposta aos apps.
     Surface { effect: crate::mods::model::SurfaceEffect },

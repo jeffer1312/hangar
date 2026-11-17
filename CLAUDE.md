@@ -301,7 +301,9 @@ registrado, fora do caminho de leitura, para não competir com o que vale hoje.
   que entra pelo Connect com credencial própria também é registrado. Evidência em [frontend.md](docs/decisoes/frontend.md#tour-de-primeiro-uso-do-nativo-30102026).
 - **Mensagem esperando na fila do Hangar aparece no painel "Na fila", não como bolha.** A lista e a
   ordem vêm do evento `queue`; o modelo é `packages/core/src/queuePanel.ts` (o nativo repete em
-  `desktop-native/src/queue_panel.rs`).
+  `desktop-native/src/queue_panel.rs`). Exceção: linha mandada "Na conversa" (`queued_conversation`)
+  já entregue ao agente (`queued_delivered`) fica fora do painel e aparece como bolha no fim da conversa, com "Em espera · Enviar agora", até o
+  transcript confirmar. [Regra](docs/decisoes/harnesses.md#mensagem-na-conversa-sem-cortar-o-turno-16112026).
 - **Dedup de fila/pending é delicado** — bolhas `pending`/`queued-` reconciliam por texto
   normalizado contra o transcript real.
 - **Vite HMR pode servir componente VAZIO** (stub <1KB, sem erro no console): a tela some sem

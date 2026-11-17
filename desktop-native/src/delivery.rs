@@ -46,7 +46,7 @@ pub struct DeliveryTracker {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum SendTiming { Queued, Direct, Jev { task: String, message: String } }
+pub enum SendTiming { Queued, Direct, Jev { task: String, message: String }, Conversation }
 
 /// A fala do agente dá sentido a respostas curtas que o pedido inicial, sozinho, não explica.
 pub fn timing_context(task: &str, recent: &str) -> String {

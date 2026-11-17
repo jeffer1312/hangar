@@ -1144,11 +1144,12 @@ function criarChatStore(serverId: string, name: string): ChatApi {
         // Em idle a mensagem é digitada na hora: o eco atenuado parecia mensagem entrando na fila.
         const state = useChatStore.getState().stateEvent?.state;
         const solid = state === 'idle';
-        // Trabalhando, tudo que não é Direto espera a vez na fila: o eco nasce no painel.
-        const queue = state === 'working' && mode !== 'steer' && !(typeof mode === 'object' && mode.kind === 'direct');
+        // "Na conversa" fica no fim da conversa, inteiro; trabalhando, o resto que não é Direto espera no painel.
+        const conversation = typeof mode === 'object' && mode.kind === 'conversation';
+        const queue = state === 'working' && mode !== 'steer' && !conversation && !(typeof mode === 'object' && mode.kind === 'direct');
         // A bolha `queued-` da fila durável sai depois, e o registro real chega com outro id.
         const afterId = useChatStore.getState().events.findLast((e) => e.kind === 'user_msg' && !e.id.startsWith('queued-'))?.id;
-        useChatStore.setState((s) => ({ pending: [...s.pending, { id, text: trimmed, solid, afterId,
+        useChatStore.setState((s) => ({ pending: [...s.pending, { id, text: trimmed, solid, afterId, ...(conversation && { conversation }),
           ...(queue && { queue, known: s.queuePanel?.entries.map((entry) => entry.id) ?? [] }) }] }));
         try {
           if (mode === 'steer') await steerSession(name, trimmed, target);
