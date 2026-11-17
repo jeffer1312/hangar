@@ -9,7 +9,7 @@ set -u
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT="$HERE/deploy.sh"
 LOOKUP="$HERE/hangar-server-lookup"
-SCENARIOS=(success delayed boot_fail wrong_body same_pid flapping restart_fail rollback_fail build_fail
+SCENARIOS=(success delayed boot_fail wrong_body nested_body same_pid flapping restart_fail rollback_fail build_fail
   npm_ci_fail dirty front_fail self_update self_update_fail rollback_restart_fail)
 [ "$#" -gt 0 ] && SCENARIOS=("$@")
 
@@ -76,6 +76,8 @@ case $name in
     out=
     while [ "$#" -gt 0 ]; do [ "$1" = -o ] && out=$2; shift; done
     if [ "$candidate" = 1 ] && [ "$scenario" = wrong_body ]; then printf '<html>wrong server</html>' > "$out"
+    # Outro programa com um `"hangar": true` aninhado: só o do topo é a saúde do Hangar.
+    elif [ "$candidate" = 1 ] && [ "$scenario" = nested_body ]; then printf '{"app": {"hangar": true}}' > "$out"
     else printf '{"hangar": true, "version": "x"}' > "$out"; fi
     echo 200 ;;
 esac

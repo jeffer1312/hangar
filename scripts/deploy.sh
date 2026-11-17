@@ -86,10 +86,13 @@ wait_healthy() {
     for unit in "${UNITS[@]}"; do
       systemctl --user is-active --quiet "$unit" || active=0
     done
-    # Só a saúde do Hangar (`{"hangar": true, …}`) conta: outro programa na porta responde 200 também.
+    # Só a saúde do Hangar (`{"hangar": true, …}` no topo) conta: outro programa na porta responde 200
+    # também. Pelo node, que o build do front já exige.
     if [[ "$code" == 200 && "$current" =~ ^[1-9][0-9]*$ \
           && "$current" != "$previous" && "$current" == "$after" && "$active" == 1 ]] \
-        && grep -Eq '"hangar"[[:space:]]*:[[:space:]]*true([[:space:]]*[,}])' "$BACKUP/health.json" 2>/dev/null; then
+        && node -e 'let j; try { j = JSON.parse(require("fs").readFileSync(0, "utf8")) } catch { process.exit(1) }
+                    process.exit(j !== null && typeof j === "object" && !Array.isArray(j) && j.hangar === true ? 0 : 1)' \
+          < "$BACKUP/health.json" 2>/dev/null; then
       if [[ "$current" == "$last" ]]; then
         consecutive=$((consecutive + 1))
       else
