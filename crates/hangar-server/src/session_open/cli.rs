@@ -133,8 +133,12 @@ pub fn backend_dir_for_home(home: &std::path::Path) -> Option<PathBuf> {
 /// pasta mesma, como antes. Serve para achar o `.env`/`peers.json` da máquina ainda não migrada e,
 /// pela pai, a raiz da cópia.
 pub fn server_backend() -> Option<PathBuf> {
-    let dir = std::env::current_dir().ok()?;
-    Some(hangar_core::paths::backend_of(&dir).unwrap_or(dir))
+    Some(backend_for(&std::env::current_dir().ok()?))
+}
+
+/// A `server_backend` para uma pasta de trabalho dada.
+pub fn backend_for(cwd: &std::path::Path) -> PathBuf {
+    hangar_core::paths::backend_of(cwd).unwrap_or_else(|| cwd.to_path_buf())
 }
 
 /// A raiz da cópia do Hangar do servidor em execução (a pai da `server_backend`).
@@ -210,7 +214,33 @@ pub fn publish_install_root(home: &std::path::Path, backend: &std::path::Path) -
 
 #[cfg(test)]
 mod tests {
-    use super::{Ask, OPEN_TIMEOUT, answer};
+    use super::{Ask, OPEN_TIMEOUT, answer, backend_for};
+
+    /// P-53, P-55, P-56: com o servidor na raiz da cópia (onde o lançador o põe agora), a `backend/`
+    /// segue achada: o `.env` da máquina não migrada (CP_PROJECTS_DIR da lista), e pela pai a raiz que
+    /// tem as skills da instalação e o `scripts/hangar-preview` do `browser_goal`.
+    #[test]
+    fn the_server_at_the_copy_root_still_finds_the_backend_env_and_the_root() {
+        use crate::machine_peers::dotenv::{SettingsEnvironment, SettingsSnapshot};
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let checkout = dir.path().join("checkout");
+        std::fs::create_dir_all(checkout.join("backend/app")).unwrap();
+        std::fs::create_dir_all(checkout.join(".git")).unwrap();
+        std::fs::write(checkout.join("backend/.env"), "CP_PROJECTS_DIR=/srv/projetos\n").unwrap();
+        for cwd in [checkout.clone(), checkout.join("backend")] {
+            let backend = backend_for(&cwd);
+            assert_eq!(backend, checkout.join("backend"), "{cwd:?}");
+            assert_eq!(backend.parent(), Some(checkout.as_path()), "raiz das skills e do hangar-preview");
+            let settings = SettingsSnapshot::capture(&home, Some(&backend), SettingsEnvironment::default()).unwrap();
+            assert_eq!(settings.value("CP_PROJECTS_DIR").unwrap().as_deref(), Some("/srv/projetos"), "{cwd:?}");
+        }
+        let version = dir.path().join("versions/0.1.0.1");
+        std::fs::create_dir_all(&version).unwrap();
+        std::fs::write(version.join("manifest.json"), "{}").unwrap();
+        assert_eq!(backend_for(&version).parent(), Some(version.as_path()), "versão sem backend/: a raiz é ela");
+    }
 
     /// A abertura no servidor pode levar até 180 s (bastão com resumo pelo modelo): desistir antes vira erro
     /// falso, e tentar de novo abre uma segunda sessão `-2`.
