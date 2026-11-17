@@ -136,7 +136,7 @@ async fn started(receive: &mut tokio::sync::mpsc::UnboundedReceiver<bool>) -> bo
 #[test]
 fn preparation_routes_belong_to_rust() {
     use axum::http::Method;
-    use hangar_server::migration_status::rust_route;
+    use hangar_server::owned_routes::rust_route;
     assert!(rust_route(&Method::POST, "/api/claude-configs"));
     assert!(rust_route(&Method::GET, "/api/codex-contas"));
 }

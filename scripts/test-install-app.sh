@@ -17,7 +17,7 @@ fail=0
 
 # Ferramentas reais que o install.sh usa. Fora delas não há tmux, git, sudo, gerenciador de pacotes
 # nem tailscale: cada caso põe em $B os falsos que quiser.
-SYS_TOOLS="bash sh env cat grep sed tr cut tail head date mkdir rm mv cp mktemp tee dirname basename uname id sleep seq awk find timeout setsid openssl python3 wc sort ls chmod ln touch readlink"
+SYS_TOOLS="bash sh env cat grep sed tr cut tail head date mkdir rm mv cp mktemp tee dirname basename uname id sleep seq awk find timeout setsid openssl od wc sort ls chmod ln touch readlink"
 
 # fake <comando> <corpo sh>: programa falso que registra a chamada em $S/log/calls e roda o corpo.
 fake() {
@@ -36,13 +36,29 @@ new_sandbox() {
   done
   # Sub-scripts do repositório: só registram que foram chamados.
   for t in install-native.sh install-claude-wrapper.sh services-setup.sh install-hangar-send.sh \
-           install-skills-bridge.sh tmux-persist-setup.sh lan-setup.sh; do
+           install-skills-bridge.sh tmux-persist-setup.sh lan-setup.sh install-server-binaries.sh; do
     printf '#!/bin/sh\necho "$0 $*" >> "%s/log/scripts"\nexit 0\n' "$S" > "$R/scripts/$t"
     chmod +x "$R/scripts/$t"
   done
+  # O hangar-server do checkout: registra os argumentos; `$S/server-fails-<subcomando>` o faz falhar.
+  cat > "$R/scripts/hangar-server-command" <<EOF
+#!/bin/sh
+echo "\$*" >> "$S/log/server"
+[ ! -e "$S/server-fails-\$1" ] || exit 1
+# \`$S/server-old-<subcomando>\`: o binário é anterior a este código e não conhece o subcomando.
+if [ -e "$S/server-old-\$1" ]; then echo "hangar-server: subcomando desconhecido: \$1" >&2; exit 2; fi
+case "\$1" in
+  install-token) echo $(printf 'c%.0s' $(seq 48)) ;;
+  tailscale-dns-name) echo maquina.tail.ts.net ;;
+esac
+exit 0
+EOF
+  chmod +x "$R/scripts/hangar-server-command"
   fake tmux 'exit 0'
   fake claude 'exit 0'
-  fake uv 'exit 0'
+  # Python e uv não fazem parte da instalação: qualquer chamada fica anotada e falha.
+  fake python3 'exit 97'
+  fake uv 'exit 97'
   fake hostname 'echo 192.168.0.10'
   fake systemctl 'case "$*" in *is-active*) echo active ;; *list-unit-files*|*" cat "*) exit 1 ;; esac; exit 0'
 }
@@ -136,6 +152,16 @@ expect_line "feliz: ask responde sim (serviços)" "$S/log/scripts" 'services-set
 expect_no "feliz: ask_extra responde não (persistência)" "$S/log/scripts" 'tmux-persist-setup'
 expect_no "feliz: --sem-nativo não roda o install-native" "$S/log/scripts" 'install-native'
 expect_no "feliz: --tailscale=nao não cria etapa" "$S/out" '^##HANGAR-PASSO## tailscale'
+expect_no "feliz: nenhum Python nem uv" "$S/log/calls" '^(python3|uv) '
+expect_line "feliz: push pelo hangar-server, com a raiz do checkout" "$S/log/server" "^vapid-setup --root $R$"
+before "$S/log/scripts" 'install-server-binaries' 'install-hangar-send' && pass "feliz: binários antes do resto" || flunk "feliz: binários antes do resto" "$S/log/scripts"
+expect_line "feliz: passos marcados pela raiz do checkout" "$S/log/server" "^install-package --mark-steps --root $R$"
+expect_line "feliz: fumaça pelo hangar-server" "$S/log/server" '^install-token$'
+expect_line "feliz: frase da fumaça" "$S/out" 'o hangar-server executa nesta máquina'
+before "$S/log/server" '^install-package' '^install-token$' && pass "feliz: marca antes da fumaça" || flunk "feliz: marca antes da fumaça" "$S/log/server"
+: > "$S/log/server"
+TEST_TOKEN='outra-senha-456' run_install "$S/out2" "${APP_ARGS[@]}" --update
+expect_no "de novo: --update não marca passos" "$S/log/server" 'install-package'
 TEST_TOKEN='outra-senha-456' run_install "$S/out2" "${APP_ARGS[@]}"
 expect_eq "de novo: FIM ok" "$(last_line "$S/out2")" '##HANGAR-FIM## ok'
 expect_eq "de novo: uma linha de senha só" "$(grep -c '^CP_AUTH_TOKEN=' "$R/backend/.env")" 1
@@ -159,14 +185,7 @@ expect_eq "migrada: nome da máquina não repete" "$(grep -c '^CP_SERVER_ID=' "$
 # --- Caso: senha com símbolo comum chega ao backend igual ---
 new_sandbox especial
 TEST_TOKEN='minha+senha&123' run_install "$S/out" "${APP_ARGS[@]}"
-# O backend lê o .env pelo python-dotenv; sem o venv aqui, confere a linha gravada.
-PY="$REPO/backend/.venv/bin/python"
-if [ -x "$PY" ] && "$PY" -c 'import dotenv' 2>/dev/null; then
-  expect_eq "especial: o backend lê igual" \
-    "$("$PY" -c 'import sys; from dotenv import dotenv_values; print(dotenv_values(sys.argv[1])["CP_AUTH_TOKEN"])' "$R/backend/.env")" 'minha+senha&123'
-else
-  expect_eq "especial: gravada literal" "$(grep '^CP_AUTH_TOKEN=' "$R/backend/.env")" 'CP_AUTH_TOKEN=minha+senha&123'
-fi
+expect_eq "especial: gravada literal" "$(grep '^CP_AUTH_TOKEN=' "$R/backend/.env")" 'CP_AUTH_TOKEN=minha+senha&123'
 
 # --- Caso: senha que o .env não guarda inteira ou que o login recusa é recusada ---
 for t in 'abc #def' 'x${HOME}y' '"com-aspas"' ' espaco-inicial' 'minha senha 123' 'minha senha ção'; do
@@ -200,13 +219,81 @@ expect_no "ts-nao: tailscale nunca é chamada" "$S/log/calls" '^tailscale '
 expect_no "ts-nao: sem etapa tailscale" "$S/out" '^##HANGAR-PASSO## tailscale'
 
 # --- Caso: falha essencial termina com PASSO falhou e FIM falhou ---
-new_sandbox uv-falha
-fake uv '[ "$1" = sync ] && exit 1; exit 0'
+new_sandbox fumaca-falha
+: > "$S/server-fails-install-token"
 run_install "$S/out" "${APP_ARGS[@]}"; rc=$?
-expect_eq "uv-falha: sai com erro" "$rc" 1
-expect_line "uv-falha: FALHA com o texto de sempre" "$S/out" '^##HANGAR-FALHA## uv sync falhou — o backend ficou sem as dependências$'
-expect_line "uv-falha: etapa instalar falhou" "$S/out" '^##HANGAR-PASSO## instalar falhou$'
-expect_eq "uv-falha: FIM falhou é a última linha" "$(last_line "$S/out")" '##HANGAR-FIM## falhou'
+expect_eq "fumaça-falha: sai com erro" "$rc" 1
+expect_line "fumaça-falha: FALHA diz que o hangar-server não executa" "$S/out" '^##HANGAR-FALHA## o hangar-server não executa nesta máquina'
+expect_line "fumaça-falha: etapa final falhou" "$S/out" '^##HANGAR-PASSO## final falhou$'
+expect_eq "fumaça-falha: FIM falhou é a última linha" "$(last_line "$S/out")" '##HANGAR-FIM## falhou'
+
+# --- Caso: chaves do push não geradas: pendência com o comando, sem parar a instalação ---
+new_sandbox vapid-falha
+: > "$S/server-fails-vapid-setup"
+run_install "$S/out" "${APP_ARGS[@]}"; rc=$?
+expect_line "vapid-falha: pendência push com o comando" "$S/out" "^##HANGAR-PENDENCIA## push .*vapid-setup --root"
+expect_line "vapid-falha: a instalação chega à fumaça" "$S/log/server" '^install-token$'
+expect_eq "vapid-falha: FIM pendente" "$(last_line "$S/out")" '##HANGAR-FIM## pendente'
+
+# --- Caso: binário anterior ao código no --update do checkout: aviso com o motivo, não falha ---
+new_sandbox binario-antigo
+run_install "$S/out" "${APP_ARGS[@]}"
+: > "$S/server-old-vapid-setup"; : > "$S/server-old-install-token"
+run_install "$S/out2" "${APP_ARGS[@]}" --update; rc=$?
+expect_eq "binário-antigo: --update sai 0" "$rc" 0
+expect_line "binário-antigo: o aviso diz o motivo" "$S/out2" "anterior a este código \\(não tem 'vapid-setup'\\)"
+expect_line "binário-antigo: a fumaça avisa" "$S/out2" "anterior a este código \\(não tem 'install-token'\\)"
+expect_no "binário-antigo: sem pendência do push" "$S/out2" '^##HANGAR-PENDENCIA## push'
+expect_no "binário-antigo: sem FIM falhou" "$S/out2" '^##HANGAR-FIM## falhou'
+# Na instalação nova o binário veio com o código: a falta é erro.
+new_sandbox binario-antigo-novo
+: > "$S/server-old-install-token"
+run_install "$S/out" "${APP_ARGS[@]}"; rc=$?
+expect_eq "binário-antigo na instalação nova: falha" "$rc" 1
+expect_line "binário-antigo na instalação nova: FALHA da fumaça" "$S/out" '^##HANGAR-FALHA## o hangar-server não executa nesta máquina'
+
+# --- Caso: a marca dos passos no checkout falhou: pendência com o comando ---
+new_sandbox marca-falha
+: > "$S/server-fails-install-package"
+run_install "$S/out" "${APP_ARGS[@]}"; rc=$?
+expect_line "marca-falha: pendência" "$S/out" '^##HANGAR-PENDENCIA## .*passos de atualização.*--mark-steps --root'
+expect_eq "marca-falha: FIM pendente" "$(last_line "$S/out")" '##HANGAR-FIM## pendente'
+
+# --- Caso: sem openssl, o token aleatório sai do hangar-server ---
+new_sandbox sem-openssl
+rm -f "$S/sys/openssl"
+TEST_TOKEN='' run_install "$S/out" "${APP_ARGS[@]}"
+expect_line "sem-openssl: token do hangar-server" "$R/backend/.env" "^CP_AUTH_TOKEN=$(printf 'c%.0s' $(seq 48))$"
+expect_no "sem-openssl: nenhum Python" "$S/log/calls" '^python3 '
+
+# --- Caso: openssl que imprime e falha não deixa meio token ---
+new_sandbox openssl-quebrado
+rm -f "$S/sys/openssl"; fake openssl 'echo abc; exit 1'
+TEST_TOKEN='' run_install "$S/out" "${APP_ARGS[@]}"
+expect_eq "openssl-quebrado: uma linha de token, inteira" "$(grep '^CP_AUTH_TOKEN=' "$R/backend/.env")" "CP_AUTH_TOKEN=$(printf 'c%.0s' $(seq 48))"
+
+# --- Caso: sem openssl e sem hangar-server (checkout antes dos binários): /dev/urandom ---
+new_sandbox so-urandom
+rm -f "$S/sys/openssl"; : > "$S/server-fails-install-token"
+TEST_TOKEN='' run_install "$S/out" "${APP_ARGS[@]}"
+tok=$(grep '^CP_AUTH_TOKEN=' "$R/backend/.env" | cut -d= -f2-)
+if [ "${#tok}" = 48 ] && [ -z "$(printf '%s' "$tok" | tr -d '0-9a-f')" ]; then pass "so-urandom: 48 hex"; else flunk "so-urandom: 48 hex (veio '$tok')" "$S/out"; fi
+
+# --- Caso: nenhum gerador: a instalação para dizendo o que fazer, sem token vazio ---
+new_sandbox sem-gerador
+rm -f "$S/sys/openssl" "$S/sys/od"; : > "$S/server-fails-install-token"
+TEST_TOKEN='' run_install "$S/out" "${APP_ARGS[@]}"; rc=$?
+expect_eq "sem-gerador: falha" "$rc" 1
+expect_line "sem-gerador: diz o que fazer" "$S/out" '^##HANGAR-FALHA## não consegui gerar um token aleatório'
+expect_no "sem-gerador: nenhum token vazio" "$R/backend/.env" '^CP_AUTH_TOKEN=$'
+
+# --- Caso: Tailscale logado: o nome sai do hangar-server, sem Python ---
+new_sandbox ts-nome
+fake tailscale 'case "$1" in status) echo "{\"Self\":{\"DNSName\":\"maquina.tail.ts.net.\"}}" ;; esac; exit 0'
+run_install "$S/out" --app --tailscale=sim --sem-nativo --no-frontend
+expect_line "ts-nome: JSON lido pelo hangar-server" "$S/log/server" '^tailscale-dns-name$'
+expect_no "ts-nome: sem login não é dito" "$S/out" 'Tailscale sem login'
+expect_no "ts-nome: nenhum Python" "$S/log/calls" '^python3 '
 
 # --- Caso: pendência termina com FIM pendente (e sai 1, como hoje) ---
 new_sandbox pendente
@@ -242,7 +329,7 @@ rm -f "$B/tmux"; fake apt-get 'exit 0'
 run_install "$S/out" --check --app --no-frontend
 expect_line "itens: tmux na fila" "$S/out" '^##HANGAR-ITEM## tmux fila tmux$'
 expect_line "itens: Claude encontrado" "$S/out" '^##HANGAR-ITEM## claude ok Claude Code$'
-expect_line "itens: uv encontrado" "$S/out" '^##HANGAR-ITEM## uv ok uv$'
+expect_no "itens: nem uv nem Python entre as dependências" "$S/out" '^##HANGAR-ITEM## (uv|python3) '
 expect_line "itens: git opcional pendente" "$S/out" '^##HANGAR-ITEM## git pendente git$'
 expect_eq "itens: preparar pendente" "$(steps "$S/out")" 'preparar fazendo|preparar pendente'
 expect_eq "itens: FIM pendente" "$(last_line "$S/out")" '##HANGAR-FIM## pendente'
@@ -270,25 +357,27 @@ run_install "$S/out" "${APP_ARGS[@]}"
 expect_line "claude-falhou: item falhou" "$S/out" '^##HANGAR-ITEM## claude falhou Claude Code$'
 if before "$S/out" '^##HANGAR-ERRO## agente-nao-instalou$' '^##HANGAR-FALHA## faltam: Claude Code'; then pass "claude-falhou: ERRO antes da FALHA"; else flunk "claude-falhou: ERRO antes da FALHA" "$S/out"; fi
 
-# --- Caso: sem internet no uv sync ---
+# --- Caso: sem internet o Node não baixa ---
+# sem_node: sem node nem npm na máquina; o unzip existe, então o que falha é o download do fnm.
+sem_node() { rm -f "$B/node" "$B/npm"; fake unzip 'exit 0'; }
 new_sandbox sem-internet
-fake uv '[ "$1" = sync ] && exit 1; exit 0'
+sem_node
 fake curl 'exit 7'
-run_install "$S/out" "${APP_ARGS[@]}"
-if before "$S/out" '^##HANGAR-ERRO## sem-internet$' '^##HANGAR-FALHA## uv sync falhou'; then pass "sem-internet: ERRO antes da FALHA"; else flunk "sem-internet: ERRO antes da FALHA" "$S/out"; fi
+run_install "$S/out" --app --tailscale=nao --sem-nativo
+if before "$S/out" '^##HANGAR-ERRO## sem-internet$' '^##HANGAR-FALHA## faltam: Node'; then pass "sem-internet: ERRO antes da FALHA"; else flunk "sem-internet: ERRO antes da FALHA" "$S/out"; fi
 
-# --- Caso: uv sync falha com a internet no ar: nenhum código inventado ---
-new_sandbox uv-com-rede
-fake uv '[ "$1" = sync ] && exit 1; exit 0'
+# --- Caso: o Node não instalou com a internet no ar: nenhum código inventado ---
+new_sandbox node-com-rede
+sem_node
 fake curl 'exit 0'
-run_install "$S/out" "${APP_ARGS[@]}"
-expect_no "uv-com-rede: sem código" "$S/out" '^##HANGAR-ERRO##'
+run_install "$S/out" --app --tailscale=nao --sem-nativo
+expect_no "node-com-rede: sem código" "$S/out" '^##HANGAR-ERRO##'
 
 # --- Caso: o código de erro também sai no terminal ---
 new_sandbox erro-terminal
-fake uv '[ "$1" = sync ] && exit 1; exit 0'
+sem_node
 fake curl 'exit 7'
-run_install "$S/out" --yes --tailscale=nao --no-frontend
+run_install "$S/out" --yes --tailscale=nao
 expect_line "erro-terminal: código sem --app" "$S/out" '^##HANGAR-ERRO## sem-internet$'
 expect_no "erro-terminal: sem FIM fora do --app" "$S/out" '^##HANGAR-FIM##'
 
@@ -302,7 +391,7 @@ expect_eq "sem-systemd: FIM falhou" "$(last_line "$S/out")" '##HANGAR-FIM## falh
 # --- Caso: no --app a senha vai do auxiliar do app ao sudo -S ---
 new_sandbox sudo-app
 rm -f "$B/tmux"; apt_installs_tmux; fake sudo "$SUDO_APP"; askpass_says 'echo s3nha-certa'
-fake uv "env | grep '^HANGAR_ASKPASS' >> '$S/log/vazou'; exit 0"
+printf '#!/bin/sh\nenv | grep "^HANGAR_ASKPASS" >> "%s/log/vazou"\nexit 0\n' "$S" > "$R/scripts/install-server-binaries.sh"
 TEST_ASKPASS="$B/askpass" run_install "$S/out" "${APP_ARGS[@]}"
 expect_line "sudo-app: tenta a credencial guardada antes" "$S/log/calls" '^sudo -n true$'
 expect_line "sudo-app: o auxiliar recebe o motivo" "$S/log/calls" '^askpass instalar o tmux$'

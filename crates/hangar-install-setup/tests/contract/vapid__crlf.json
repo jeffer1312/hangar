@@ -1,0 +1,112 @@
+{
+ "case": "vapid/crlf",
+ "source_commit": "2ad8e335e8d9118e74bc5b33f2efb4ac3bbd8eba",
+ "python": "3.14.9 websockets 16.0",
+ "capture_cmdline": "/usr/bin/python3 capture.py --only pacote/ -j 8",
+ "route": "R4",
+ "script": "backend/app/vapid_setup.py",
+ "contract_refs": [
+  "R4-S01",
+  "P-06"
+ ],
+ "description": "",
+ "harness": {
+  "how": "$PY -B -s -m app.vapid_setup with cwd $T/inst/backend (copy of backend/app/{__init__,atomico,user_data,vapid_setup}.py); generated keys are replaced by $VAPID_PUBLIC/$VAPID_PRIVATE and checked in post.generated_pair",
+  "inst_root": "$T/inst",
+  "inst_files_copied_from_ref": [
+   "backend/app/__init__.py",
+   "backend/app/atomico.py",
+   "backend/app/user_data.py",
+   "backend/app/vapid_setup.py"
+  ],
+  "stub_config": {},
+  "notes": {}
+ },
+ "input": {
+  "argv": [
+   "$PY",
+   "-B",
+   "-s",
+   "-m",
+   "app.vapid_setup"
+  ],
+  "env": {
+   "HOME": "$T/home",
+   "USERPROFILE": "$T/home",
+   "LOCALAPPDATA": "$T/local",
+   "TMUX_TMPDIR": "$T/tmux",
+   "PATH": "$T/stubs:/usr/bin:/bin"
+  },
+  "stdin": {
+   "text": ""
+  },
+  "cwd": "$T/inst/backend",
+  "files_before": {
+   "inst/backend": {
+    "type": "dir",
+    "mode": "0o755"
+   },
+   "inst/backend/app": {
+    "type": "dir",
+    "mode": "0o755"
+   },
+   "inst/backend/.env": {
+    "type": "file",
+    "mode": "0o644",
+    "size": 28,
+    "sha256": "b1ebce9e5f55510eb07349411764c3ad00816b41560c1680d0ec8d5135039167",
+    "content": {
+     "text": "CP_AUTH_TOKEN=x\r\nCP_PORT=1\r\n"
+    }
+   }
+  }
+ },
+ "output": {
+  "code": 0,
+  "stdout": {
+   "text": "ok: chaves VAPID geradas em $T/inst/backend/.env (reinicie o backend para valer)\n"
+  },
+  "stderr": {
+   "text": ""
+  },
+  "duration_ms": 148,
+  "files": {
+   "created": {},
+   "changed": {
+    "inst/backend/.env": {
+     "before": {
+      "type": "file",
+      "mode": "0o644",
+      "size": 28,
+      "sha256": "b1ebce9e5f55510eb07349411764c3ad00816b41560c1680d0ec8d5135039167",
+      "content": {
+       "text": "CP_AUTH_TOKEN=x\r\nCP_PORT=1\r\n"
+      }
+     },
+     "after": {
+      "type": "file",
+      "mode": "0o644",
+      "size": 191,
+      "sha256": "0180bbce161861ff3e96e6ff9fa6c988245941de9129f6b0d3e98c716079d460",
+      "content": {
+       "text": "CP_AUTH_TOKEN=x\nCP_PORT=1\nCP_VAPID_PUBLIC=$VAPID_PUBLIC\nCP_VAPID_PRIVATE=$VAPID_PRIVATE\n"
+      }
+     }
+    }
+   },
+   "removed": []
+  }
+ },
+ "spawns": [],
+ "python_shim_calls": [],
+ "http": {},
+ "post": {
+  "generated_pair": {
+   "public_len": 65,
+   "public_first_byte_0x04": true,
+   "private_len": 32,
+   "base64url_no_padding": true,
+   "private_times_G_equals_public": true
+  }
+ }
+}

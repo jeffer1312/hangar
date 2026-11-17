@@ -39,20 +39,33 @@ done
 
 # Blocos que o instalador gravou entre marcadores no Hyprland; o resto do arquivo fica intacto.
 # `claude-pocket:` é o marcador de antes da troca de nome.
+# Cada bloco sai com as linhas vazias em volta, que viram uma quebra só. Bloco sem o fim deixa o
+# arquivo como estava.
 tira_bloco() {
-  local file=$1 mark=$2 tag=$3
+  local file=$1 mark=$2 tag=$3 tmp
   [ -f "$file" ] && grep -qF -- "-- ${mark}:${tag}:start" "$file" || return 0
-  MARK="$mark" TAG="$tag" python3 - "$file" <<'PYEOF' && echo "painel: bloco $mark:$tag removido de $file"
-import os, re, sys
-path, mark, tag = sys.argv[1], os.environ["MARK"], os.environ["TAG"]
-text = open(path, encoding="utf-8").read()
-start, end = f"-- {mark}:{tag}:start", f"-- {mark}:{tag}:end"
-pattern = re.compile(r"\n*" + re.escape(start) + r".*?" + re.escape(end) + r"\n*", re.S)
-new, n = pattern.subn("\n", text)
-if not n:
-    sys.exit(f"painel: {path} tem {start} sem {end}; bloco deixado")
-open(path, "w", encoding="utf-8").write(new)
-PYEOF
+  tmp=$(mktemp "$file.XXXXXX") || return 1
+  if ! START="-- ${mark}:${tag}:start" END="-- ${mark}:${tag}:end" awk '
+    BEGIN { start = ENVIRON["START"]; end = ENVIRON["END"] }
+    inside { if (index($0, end)) { inside = 0; after = 1 }; next }
+    index($0, start) { inside = 1; blanks = 0; if (!printed) lead = 1; next }
+    $0 == "" { if (!after) blanks++; next }
+    {
+      if (lead) { print ""; lead = 0 }
+      for (; blanks > 0; blanks--) print ""
+      print; printed = 1; after = 0
+    }
+    END {
+      if (inside) exit 3
+      if (lead) print ""
+      if (!after) for (; blanks > 0; blanks--) print ""
+    }' "$file" > "$tmp"; then
+    rm -f "$tmp"
+    echo "painel: $file tem -- ${mark}:${tag}:start sem -- ${mark}:${tag}:end; bloco deixado" >&2
+    return 1
+  fi
+  # `cat >` e não `mv`: o arquivo continua o mesmo (link, dono e modo ficam).
+  cat "$tmp" > "$file" && rm -f "$tmp" && echo "painel: bloco $mark:$tag removido de $file"
 }
 H="$HOME/.config/hypr/custom"
 for mark in hangar claude-pocket; do

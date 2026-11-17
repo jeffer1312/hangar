@@ -39,6 +39,11 @@ try {
         if ($text -like "*$version*" -or $text -notmatch '[\\/]\.hangar[\\/]current[\\/]scripts[\\/]') { $failures += "$name -> $text" }
     }
     if ($failures.Count) { throw ("Atalho fora do current:`n" + ($failures -join "`n")) }
+    # Os atalhos do Python (python3, python3.cmd, hangar-python.cmd) nao sao mais criados.
+    $textoInstalador = $ast.Extent.Text
+    foreach ($atalho in "'python3'", "'python3.cmd'", "'hangar-python.cmd'") {
+        if ($textoInstalador.Contains("Join-Path `$binUsuario $atalho")) { throw "o instalador ainda cria o atalho $atalho" }
+    }
     'ok: todos os atalhos apontam para o current'
 } finally {
     Remove-Item -LiteralPath $temporary -Recurse -Force -ErrorAction SilentlyContinue

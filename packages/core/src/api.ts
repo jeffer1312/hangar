@@ -29,7 +29,6 @@ import type {
   UpdateNews,
   NewsHistory,
   Manual,
-  MigrationStatus,
   SessionInfo,
   Provider,
   ChatEvent,
@@ -2681,12 +2680,6 @@ export function getConfig(): Promise<ConfigServidor> {
 export function getAtualizacao(procurar = false, fetcher?: typeof fetch): Promise<Atualizacao> {
   return apiFetch(`/api/atualizacao${procurar ? '?procurar=1' : ''}`,
                   { signal: AbortSignal.timeout(procurar ? 120000 : 20000) }, fetcher);
-}
-
-/** Tela temporária "Migração para Rust": quem atende cada área, versões e consumo. */
-export function getMigrationStatus(s: Server | null = null): Promise<MigrationStatus> {
-  return s ? apiFetchForServer(s, '/api/migration/status', {}, 10000)
-           : apiFetch('/api/migration/status', { signal: AbortSignal.timeout(10000) });
 }
 
 function confirmUpdateStarted(value: unknown): { ok: boolean; pid: number; request_id?: string } {

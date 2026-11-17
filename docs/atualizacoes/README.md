@@ -5,7 +5,7 @@ uma dependência nova, um arquivo que precisa sair da frente, uma pasta que muda
 coisa vira **um arquivo aqui**, no mesmo commit que a exige.
 
 O botão Atualizar do app lê estes arquivos, roda o que ainda não rodou naquela máquina, e nunca
-pede nada a quem está usando. Quem lê o formato é `backend/app/atualizacoes.py`.
+pede nada a quem está usando. Quem lê o formato é `crates/hangar-server/src/update/steps.rs`.
 
 ## Formato
 
@@ -36,8 +36,13 @@ mudou para ela — não sobre o que o comando faz.
 ## Duas regras
 
 **O passo tem que poder rodar duas vezes.** Ele pode rodar de novo numa máquina que reclonou o
-repo. Comando que só funciona uma vez nasce com guarda — o modelo é
-`backend/app/migracao_sidecars.py`: destino já existe, para com aviso, nunca funde.
+repo. Comando que só funciona uma vez nasce com guarda: destino já existe, para com aviso, nunca
+funde.
+
+**Passo não chama Python nem `uv`.** O comando usa shell e os subcomandos do `hangar-server`
+(`scripts/hangar-server-command <sub>` no POSIX; no Windows `bin\hangar-server.exe`, senão
+`%USERPROFILE%\.hangar\bin\hangar-server.exe`, como o `2026-10-29-codex-preparo-unico`). O teste
+`update_steps_without_python` confere.
 
 **O passo entra no registro só depois da prova passar.** Se a prova falhar, ele fica pendente e
 tenta de novo na próxima — é o contrário de marcar como feito e deixar a máquina sem o efeito.
@@ -84,9 +89,10 @@ Passos marcados:
 | `2026-11-12-painel-quickshell-removido` | units do systemd, atalhos e blocos do Hyprland do painel do Quickshell |
 | `2026-11-16-servidor-sobe-sem-python-linux` | unit do systemd (`Type=notify`, watchdog, nunca desiste) e lançador estável renovado |
 | `2026-11-16-servidor-sobe-sem-python-windows` | tarefa agendada (reinícios) e lançador estável renovado |
+| `2026-11-17-atalhos-windows-sem-python` | regrava no Windows o `hangar-conta.cmd` e os lançadores do Codex que passavam pelo Python |
 
 Ficam sem o campo, mesmo com comando: os que rodam `install-hangar-send.sh`,
-`install-claude-wrapper.sh`/`setup-windows-wrappers.ps1` ou `registrar-mcp.py` (conteúdo e
+`install-claude-wrapper.sh`/`setup-windows-wrappers.ps1` ou `hangar-server mcp-register` (conteúdo e
 atalhos), `2026-10-02-hangar-server-binarios` (o binário vem no pacote) e
 `2026-10-19-trava-do-client-api` (hook do git do checkout, só no modo desenvolvedor). A exceção
 é o `2026-10-31-links-do-pacote`: ele roda o `install-claude-wrapper.sh` para levar ao `current`
@@ -95,7 +101,7 @@ os atalhos que ficaram fora da pasta da versão, apontando para o checkout.
 ## O que o botão faz sozinho, e o que só um passo faz
 
 O botão Atualizar **não roda mais o instalador inteiro**. Sozinho ele faz: `git fetch` +
-fast-forward, troca o `frontend/dist` pelo build do CI, `uv sync` no backend, `npm ci` quando o
+fast-forward, troca o `frontend/dist` pelo build do CI, `npm ci` quando o
 `package-lock.json` mudou (e só onde já existe `node_modules`), no Linux o `install-chromium.sh`
 quando há um chrome-headless-shell baixado (ele não se atualiza como o Chrome da distro), reinício
 do serviço/tarefa e prova de vida por pid. Todo o resto só acontece quando um commit declara o passo aqui — e o pre-commit e

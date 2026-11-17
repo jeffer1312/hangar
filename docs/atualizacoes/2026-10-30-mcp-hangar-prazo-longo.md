@@ -1,9 +1,9 @@
 ---
 id: 2026-10-30-mcp-hangar-prazo-longo
 titulo: As sessões Claude e Codex esperam até 10 minutos pela sua resposta no cofre de senhas
-comando_posix: python3 scripts/registrar-mcp.py
+comando_posix: scripts/hangar-server-command mcp-register --root .
 comando_windows: powershell -ExecutionPolicy Bypass -File install.ps1 -Update
-prova: scripts/registrar-mcp.py
+prova: ~/.claude/settings.json
 destrutivo: false
 ---
 

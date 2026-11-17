@@ -105,6 +105,15 @@ fn main() -> std::process::ExitCode {
         Some("claude-md-block") => return hangar_registration::claude_md_block::cli(&args[1..]),
         _ => {}
     }
+    // Chaves do push, token e nome do Tailscale: o instalador e os passos chamam, sem Python.
+    match args.first().map(String::as_str) {
+        Some("vapid-setup") => return hangar_install_setup::vapid::cli(&args[1..]),
+        Some("install-token") => return hangar_install_setup::token::cli(&args[1..]),
+        Some("tailscale-dns-name") => return hangar_install_setup::tailscale::cli(&args[1..]),
+        // A porta que o `deploy.sh` confere depois de reiniciar: ambiente, `.env`, 8765.
+        Some("deploy-port") => return hangar_deploy::port_cli(&args[1..]),
+        _ => {}
+    }
     // Hook de SessionStart: só disco, nunca sobe o servidor.
     if args.first().map(String::as_str) == Some("pair-context") {
         return hangar_server::groups::context_cmd::run(&args);
@@ -138,7 +147,7 @@ fn standalone() -> Result<(), std::process::ExitCode> {
         std::process::ExitCode::from(exit)
     };
     let home = hangar_server::accounts::environment::AccountEnvironment::capture().home;
-    let backend = std::env::current_dir().ok().filter(|dir| hangar_server::session_open::cli::is_backend(dir))
+    let backend = std::env::current_dir().ok().and_then(|dir| hangar_core::paths::backend_of(&dir))
         .or_else(hangar_server::session_open::cli::backend_dir);
     let env_file = hangar_core::user_data::read_env_raw(&home, backend.as_deref())
         .map_err(|e| refuse("env_unreadable", 2, format!(".env ilegível: {e}")))?;
@@ -263,11 +272,12 @@ async fn run(notifier: hangar_boot::notify::Notifier) {
             Err(_) => tracing::warn!(code = "auth_orphans_failed", "tarefa da varredura do contador de login falhou"),
         }
     });
-    // O `hangar-server open` instalado em `~/.hangar/bin` acha a `backend/` por aqui (o servidor roda nela).
-    if let Ok(backend) = std::env::current_dir() && hangar_server::session_open::cli::is_backend(&backend) {
+    // O `hangar-server open` instalado em `~/.hangar/bin` acha a cópia por aqui: o servidor roda na
+    // raiz dela (ou, lançado do jeito antigo, na `backend/`).
+    if let Some(backend) = std::env::current_dir().ok().and_then(|dir| hangar_core::paths::backend_of(&dir)) {
         let home = hangar_server::accounts::environment::AccountEnvironment::capture().home;
-        if let Err(error) = hangar_server::session_open::cli::publish_backend_dir(&home, &backend) {
-            tracing::warn!(kind = ?error.kind(), "pasta do backend não anotada; o comando de terminal instalado não acha o .env");
+        if let Err(error) = hangar_server::session_open::cli::publish_install_root(&home, &backend) {
+            tracing::warn!(kind = ?error.kind(), "raiz da instalação não anotada; o comando de terminal instalado não acha o .env");
         }
     }
     let listener = match tokio::net::TcpListener::bind(cfg.listen).await {

@@ -1,0 +1,112 @@
+{
+ "case": "vapid/unicode-other-lines",
+ "source_commit": "2ad8e335e8d9118e74bc5b33f2efb4ac3bbd8eba",
+ "python": "3.14.9 websockets 16.0",
+ "capture_cmdline": "/usr/bin/python3 capture.py --only pacote/ -j 8",
+ "route": "R4",
+ "script": "backend/app/vapid_setup.py",
+ "contract_refs": [
+  "R4-S01",
+  "P-06"
+ ],
+ "description": "",
+ "harness": {
+  "how": "$PY -B -s -m app.vapid_setup with cwd $T/inst/backend (copy of backend/app/{__init__,atomico,user_data,vapid_setup}.py); generated keys are replaced by $VAPID_PUBLIC/$VAPID_PRIVATE and checked in post.generated_pair",
+  "inst_root": "$T/inst",
+  "inst_files_copied_from_ref": [
+   "backend/app/__init__.py",
+   "backend/app/atomico.py",
+   "backend/app/user_data.py",
+   "backend/app/vapid_setup.py"
+  ],
+  "stub_config": {},
+  "notes": {}
+ },
+ "input": {
+  "argv": [
+   "$PY",
+   "-B",
+   "-s",
+   "-m",
+   "app.vapid_setup"
+  ],
+  "env": {
+   "HOME": "$T/home",
+   "USERPROFILE": "$T/home",
+   "LOCALAPPDATA": "$T/local",
+   "TMUX_TMPDIR": "$T/tmux",
+   "PATH": "$T/stubs:/usr/bin:/bin"
+  },
+  "stdin": {
+   "text": ""
+  },
+  "cwd": "$T/inst/backend",
+  "files_before": {
+   "inst/backend": {
+    "type": "dir",
+    "mode": "0o755"
+   },
+   "inst/backend/app": {
+    "type": "dir",
+    "mode": "0o755"
+   },
+   "inst/backend/.env": {
+    "type": "file",
+    "mode": "0o644",
+    "size": 32,
+    "sha256": "626759fcd86621aec01a462cae98aa3f6fea61c439a0b2ac22bc1da0b49e0876",
+    "content": {
+     "text": "NOME=sessão ✓ 🚀\nOUTRO=a=b\n"
+    }
+   }
+  }
+ },
+ "output": {
+  "code": 0,
+  "stdout": {
+   "text": "ok: chaves VAPID geradas em $T/inst/backend/.env (reinicie o backend para valer)\n"
+  },
+  "stderr": {
+   "text": ""
+  },
+  "duration_ms": 125,
+  "files": {
+   "created": {},
+   "changed": {
+    "inst/backend/.env": {
+     "before": {
+      "type": "file",
+      "mode": "0o644",
+      "size": 32,
+      "sha256": "626759fcd86621aec01a462cae98aa3f6fea61c439a0b2ac22bc1da0b49e0876",
+      "content": {
+       "text": "NOME=sessão ✓ 🚀\nOUTRO=a=b\n"
+      }
+     },
+     "after": {
+      "type": "file",
+      "mode": "0o644",
+      "size": 197,
+      "sha256": "5693789a6ddb1ed74a5d21beeefcbf2da033fb4ef8f8424b94feefd2172a0952",
+      "content": {
+       "text": "NOME=sessão ✓ 🚀\nOUTRO=a=b\nCP_VAPID_PUBLIC=$VAPID_PUBLIC\nCP_VAPID_PRIVATE=$VAPID_PRIVATE\n"
+      }
+     }
+    }
+   },
+   "removed": []
+  }
+ },
+ "spawns": [],
+ "python_shim_calls": [],
+ "http": {},
+ "post": {
+  "generated_pair": {
+   "public_len": 65,
+   "public_first_byte_0x04": true,
+   "private_len": 32,
+   "base64url_no_padding": true,
+   "private_times_G_equals_public": true
+  }
+ }
+}

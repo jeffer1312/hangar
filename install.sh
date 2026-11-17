@@ -17,7 +17,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 REPO=$(pwd)
 # Modo pacote: esta pasta é uma versão extraída (manifest.json sem .git, o critério do install_root).
-# Python, dependências, binários e tela vieram prontos: nada de git, uv, venv nem build da tela.
+# Binários e tela vieram prontos: nada de git nem build da tela.
 PACOTE=0
 [ -f manifest.json ] && [ ! -e .git ] && PACOTE=1
 # Dados do usuário: no pacote (e depois da migração) o `.env` mora em ~/.hangar/config; antes, aqui.
@@ -39,8 +39,7 @@ for arg in "$@"; do
     --tailscale=*) echo "--tailscale aceita sim ou nao"; exit 1 ;;
     --sem-nativo)  SEM_NATIVO=1 ;;
     # --update: modo do hook post-merge. Re-aplica o que o `git pull` NÃO atualiza (units com
-    # caminho cravado, o bloco de protocolo no ~/.claude/CLAUDE.md, deps do backend, build do
-    # front) e NÃO toca em nada que peça senha ou decisão: sem instalar dependência, sem token,
+    # caminho cravado, o bloco de protocolo no ~/.claude/CLAUDE.md, build do front) e NÃO toca em nada que peça senha ou decisão: sem instalar dependência, sem token,
     # sem firewall, sem Tailscale. Um hook que para pedindo sudo no meio de um pull é pior que
     # hook nenhum.
     --update)      UPDATE=1; YES=1 ;;
@@ -266,19 +265,30 @@ if [ "$UPDATE" = 0 ] && [ "$CHECK" = 0 ]; then
   exec > >(tee -a "$LOG") 2>&1
 fi
 
-# O Python do backend: o embutido do pacote (pelo hangar-python) ou o venv do checkout.
-py_backend() {
-  if [ "$PACOTE" = 1 ]; then (cd backend && ../scripts/hangar-python "$@")
-  else (cd backend && uv run --quiet --no-sync python "$@"); fi
+# O `hangar-server` da instalação: o do pacote, o do build do checkout ou o de ~/.hangar/bin
+# (regra única em scripts/hangar-server-lookup). No checkout novo ele só existe depois do passo
+# dos binários Rust.
+SRV="$REPO/scripts/hangar-server-command"
+# No --update do checkout o binário achado pode ser mais antigo que este código (o de ~/.hangar/bin
+# baixado antes do pull): subcomando que ele não conhece vira aviso, com o motivo. No pacote e na
+# instalação nova o binário veio com o código, e a falta é erro.
+SRV_ANTIGO_AVISA=0
+[ "$UPDATE" = 1 ] && [ "$PACOTE" = 0 ] && SRV_ANTIGO_AVISA=1
+srv_ou_aviso() { # srv_ou_aviso <o que> <subcomando> [args]
+  local oque=$1 err rc=0
+  shift
+  err=$(mktemp)
+  "$SRV" "$@" 2>"$err" || rc=$?
+  cat "$err" >&2
+  if [ "$rc" = 2 ] && [ "$SRV_ANTIGO_AVISA" = 1 ] && grep -q 'subcomando desconhecido' "$err"; then
+    falta "$oque: o hangar-server desta máquina é anterior a este código (não tem '$1') — rode ./scripts/install-server-binaries.sh e ./install.sh --update de novo" >&2
+    rc=0
+  fi
+  rm -f "$err"
+  return "$rc"
 }
 if [ "$PACOTE" = 1 ] && [ "$CHECK" = 0 ]; then
   mkdir -p "$HOME/.hangar/config" && chmod 700 "$HOME/.hangar/config"
-  # Os sub-scripts chamam `python3`; no pacote ele é o Python embutido, e a máquina pode não ter outro.
-  SHIM="$HOME/.hangar/cache/install-bin"
-  mkdir -p "$SHIM"
-  printf '#!/bin/sh\nexec "%s/scripts/hangar-python" "$@"\n' "$REPO" > "$SHIM/python3"
-  chmod +x "$SHIM/python3"
-  export PATH="$SHIM:$PATH"
 fi
 # O .env guarda o token: nasce só do dono, e o que já existia aberto é fechado.
 if [ "$CHECK" = 0 ]; then
@@ -362,7 +372,18 @@ fi
 # As DUAS decisões que são da pessoa (token e "vou usar fora de casa?") vêm juntas, na frente:
 # depois disto o instalador segue sozinho, e o que restar de senha já foi anunciado aqui.
 # O --check não entra: ele não pode gravar nada no disco, token incluído.
-gera_token() { openssl rand -hex 24 2>/dev/null || python3 -c 'import secrets; print(secrets.token_hex(24))'; }
+# Só vale o que saiu inteiro: um gerador que imprime e falha não pode deixar meio token no .env.
+# No checkout novo o hangar-server ainda não foi baixado; aí o /dev/urandom do sistema serve.
+token_hex48() { [ ${#1} -eq 48 ] && case $1 in *[!0-9a-f]*) return 1 ;; esac; }
+gera_token() {
+  local t gerador
+  for gerador in 'openssl rand -hex 24' '"$SRV" install-token' 'od -An -N24 -tx1 /dev/urandom'; do
+    t=$(eval "$gerador" 2>/dev/null | tr -d ' \n') || continue
+    token_hex48 "$t" && { printf '%s\n' "$t"; return 0; }
+  done
+  return 1
+}
+SEM_GERADOR="não consegui gerar um token aleatório (nem openssl, nem hangar-server, nem /dev/urandom) — defina CP_AUTH_TOKEN em $ENV_FILE e rode de novo"
 # O backend lê o .env pelo python-dotenv, que corta o valor em " #" e expande "${VAR}": sem aspas
 # no .env, a senha com esses caracteres não chega inteira e o celular nunca entra.
 # Só ASCII visível: o app nativo monta o cabeçalho Authorization com a senha, e acento não autentica.
@@ -387,7 +408,7 @@ elif [ "$APP" = 1 ]; then
   # Mesmo piso da pergunta do terminal; vazio = o app pediu a senha gerada.
   case $APP_TOKEN in *$'\n'*|*$'\r'*) fail "a senha do celular veio do app com quebra de linha" ;; esac
   if [ -z "$APP_TOKEN" ]; then
-    APP_TOKEN=$(gera_token); ok "senha aleatória gerada (o app a lê de $ENV_FILE)"
+    APP_TOKEN=$(gera_token) || fail "$SEM_GERADOR"; ok "senha aleatória gerada (o app a lê de $ENV_FILE)"
   elif [ ${#APP_TOKEN} -lt 8 ] || [ "$APP_TOKEN" = change-me ]; then
     fail "a senha do celular veio do app com menos de 8 caracteres"
   elif token_proibido "$APP_TOKEN"; then
@@ -397,13 +418,14 @@ elif [ "$APP" = 1 ]; then
   fi
   printf 'CP_AUTH_TOKEN=%s\n' "$APP_TOKEN" >> "$ENV_FILE"
 elif [ "$YES" = 1 ]; then
-  printf 'CP_AUTH_TOKEN=%s\n' "$(gera_token)" >> "$ENV_FILE"
+  TOKEN=$(gera_token) || fail "$SEM_GERADOR"
+  printf 'CP_AUTH_TOKEN=%s\n' "$TOKEN" >> "$ENV_FILE"
   ok "token aleatório gerado (--yes não pergunta)"
 elif [ "$TEM_TTY" = 0 ]; then
   # Sem terminal não dá pra perguntar, mas token é a ÚNICA tranca do app: gerar um aleatório é
   # o lado seguro (o inseguro seria seguir sem token). O que não pode é fazer isso calado —
   # quem rodou precisa saber que existe um token e onde ele está.
-  TOKEN=$(gera_token)
+  TOKEN=$(gera_token) || fail "$SEM_GERADOR"
   printf 'CP_AUTH_TOKEN=%s\n' "$TOKEN" >> "$ENV_FILE"
   # NÃO ecoar o valor: sem tty isto roda em provisionamento automatizado (CI, Ansible, ssh
   # não-interativo) e o stdout vira log. Pior aqui do que em qualquer projeto: o próprio app lê
@@ -419,7 +441,7 @@ else
   while :; do
     printf '  Token: '
     read -r TOKEN <&3 || TOKEN=''
-    [ -z "$TOKEN" ] && { TOKEN=$(gera_token); ok "aleatório gerado"; break; }
+    [ -z "$TOKEN" ] && { TOKEN=$(gera_token) || fail "$SEM_GERADOR"; ok "aleatório gerado"; break; }
     # O backend só recusa o literal 'change-me'; o piso de 8 é daqui, pra senha curta não passar.
     [ ${#TOKEN} -lt 8 ] && { erro "curto demais — no mínimo 8 caracteres"; continue; }
     [ "$TOKEN" = "change-me" ] && { erro "esse valor o backend recusa de propósito"; continue; }
@@ -609,11 +631,6 @@ elif [ -n "$ACHADOS" ]; then
 else
   precisa_home "Claude Code" claude "$CLAUDE_INSTALL" 'nenhum agente de código encontrado; o Claude Code é o padrão' || true
 fi
-if [ "$PACOTE" = 1 ]; then
-  ok "Python e dependências do backend: vieram no pacote"
-else
-  precisa_home "uv"          uv     'curl -LsSf https://astral.sh/uv/install.sh | sh' 'gerencia o venv do backend' || true
-fi
 # No pacote a tela vem pronta; o Node segue servindo à statusline do Claude e ao hangar-preview.
 PRA_QUE_NODE='o frontend é Svelte'
 [ "$PACOTE" = 1 ] && PRA_QUE_NODE='statusline do Claude e hangar-preview'
@@ -629,39 +646,6 @@ elif ! node -e 'process.exit(parseInt(process.versions.node) >= 20 ? 0 : 1)' 2>/
   erro "Node 20+ é necessário (atual: $(node --version))"; mark_item node falhou "Node 20+"; PENDENTE+=("Node 20+")
 else
   ok "node $(node --version)"; mark_item node ok "Node $(node --version)"
-fi
-
-# Os scripts de instalação (registrar-mcp.py, ponte de skills) rodam no python3 do PATH, não no
-# venv do backend. O do macOS é 3.9 e não aceita a sintaxe deles; o uv põe um 3.14 em ~/.local/bin.
-py_ok() { python3 -c 'import sys; sys.exit(sys.version_info < (3, 10))' 2>/dev/null; }
-PY_ATUAL=$(python3 -V 2>&1 | awk '{print $2}') || true
-if [ "$PACOTE" = 1 ]; then
-  # No pacote os scripts rodam no Python embutido, pelo atalho `python3` que a instalação cria.
-  ok "python3: o do pacote"; mark_item python3 ok "Python (do pacote)"
-elif py_ok; then
-  ok "python3 $PY_ATUAL"; mark_item python3 ok "Python $PY_ATUAL"
-elif [ "$CHECK" = 1 ]; then
-  falta "Python 3.10+ — os scripts de instalação usam o python3 (atual: ${PY_ATUAL:-nenhum})"
-  nota "uv python install 3.14 --default"; mark_item python3 fila "Python 3.10+"; PENDENTE+=("Python 3.10+")
-elif [ "$UPDATE" = 1 ]; then
-  # O --update é o hook do `git pull`: aviso, não barreira. Barrar travaria quem já usa num Python antigo.
-  falta "Python 3.10+ — os scripts de instalação usam o python3 (atual: ${PY_ATUAL:-nenhum})"
-  nota "uv python install 3.14 --default"; mark_item python3 pendente "Python 3.10+"
-elif ! command -v uv >/dev/null; then
-  erro "Python 3.10+ é necessário (atual: ${PY_ATUAL:-nenhum})"; nota "uv python install 3.14 --default"
-  mark_item python3 falhou "Python 3.10+"; PENDENTE+=("Python 3.10+")
-elif ask "Instalar o Python 3.14 pelo uv? (vai pro teu \$HOME, sem sudo)"; then
-  mark_item python3 fazendo "Python 3.10+"
-  uv python install 3.14 --default >/dev/null 2>>"$LOG" || true
-  export PATH="$HOME/.local/bin:$PATH"
-  hash -r 2>/dev/null || true
-  if py_ok; then ok "Python $(python3 -V 2>&1 | awk '{print $2}') instalado"; mark_item python3 ok "Python 3.10+"
-  else
-    erro "Python 3.10+ continua faltando"; mark_item python3 falhou "Python 3.10+"
-    DEPS_ERROR=${DEPS_ERROR:-$(net_code)}; PENDENTE+=("Python 3.10+")
-  fi
-else
-  erro "Python 3.10+ continua faltando"; mark_item python3 falhou "Python 3.10+"; PENDENTE+=("Python 3.10+")
 fi
 
 if command -v git >/dev/null; then ok "git"; mark_item git ok git
@@ -738,19 +722,10 @@ mark_step preparar ok
 # ── 2/8 Backend ──────────────────────────────────────────────────────────────
 mark_step instalar fazendo
 say "2/8 Backend"
-if [ "$PACOTE" = 1 ]; then
-  ok "dependências: vieram no pacote"
-else
-  (cd backend && uv sync --quiet) || fail_with "$(net_code)" "uv sync falhou — o backend ficou sem as dependências"
-  ok "dependências instaladas"
-fi
 mark_item backend ok "servidor do Hangar"
-# Sem o par VAPID o push para o celular sai calado e o celular nem se inscreve.
-py_backend -m app.vapid_setup \
-  || anota_problema "chaves do push para o celular não geradas — rode: cd backend && uv run python -m app.vapid_setup" push
 
 # ── Binários Rust (hangar-server e hangar-cano, release server-latest) ───────
-# Sem eles o Python atende a API, mas a tela web e o ditado não: a falta fica como pendência.
+# Sem eles o Hangar não sobe: a falta fica como pendência.
 say "Binários Rust"
 RUST_RC=0
 if [ "$PACOTE" = 1 ]; then RUST_RC=pacote
@@ -759,8 +734,17 @@ case "$RUST_RC" in
   pacote) ok "hangar-server e hangar-cano: vieram no pacote"; mark_item rust ok "servidor rápido" ;;
   0) ok "hangar-server e hangar-cano em ~/.hangar/bin"; mark_item rust ok "servidor rápido" ;;
   2) anota_problema "sem binários Rust para esta máquina — sem eles a tela web e o ditado não funcionam"; mark_item rust pendente "servidor rápido (não há para esta máquina)" ;;
-  *) anota_problema "binários Rust não baixaram — o backend em Python atende sozinho (tente: ./scripts/install-server-binaries.sh)"; mark_item rust pendente "servidor rápido" ;;
+  *) anota_problema "binários Rust não baixaram — sem eles o Hangar não sobe (tente: ./scripts/install-server-binaries.sh)"; mark_item rust pendente "servidor rápido" ;;
 esac
+# Sem o par VAPID o push para o celular sai calado e o celular nem se inscreve. Depois dos
+# binários: no checkout novo o hangar-server só existe a partir daqui.
+if [ "$PACOTE" = 1 ]; then
+  "$SRV" vapid-setup \
+    || anota_problema "chaves do push para o celular não geradas — rode: ~/.hangar/current/bin/hangar-server vapid-setup" push
+else
+  srv_ou_aviso "chaves do push" vapid-setup --root "$REPO" \
+    || anota_problema "chaves do push para o celular não geradas — rode: ./scripts/hangar-server-command vapid-setup --root \"$REPO\"" push
+fi
 
 for a in $AGENTES_NOVOS; do
   mark_item "$a" fazendo "$(nome_agente "$a")"
@@ -1005,7 +989,7 @@ fi
 
 publica_tailscale() { # grava CP_PUBLIC_URL com o https do tailnet; o serve precisa de root (ou operator)
   local nome saida_serve teto='' codigo=outro
-  nome=$(tailscale status --json 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))' 2>/dev/null || true)
+  nome=$(tailscale status --json 2>/dev/null | "$SRV" tailscale-dns-name 2>/dev/null || true)
   [ -n "$nome" ] || { falta "Tailscale sem login — sudo tailscale up e ./install.sh de novo"; TS_STATE=pendente; return 1; }
   nota "Publicar o Hangar no Tailscale precisa da senha (tailscale serve)."
   ask_senha "Publicar agora (vai pedir a senha)?" || { nota "pulado — depois: ./install.sh"; return 1; }
@@ -1056,7 +1040,7 @@ SERV_N=${#PROBLEMAS[@]}
 # macOS: o serviço é um LaunchAgent (scripts/services-launchd.sh); o backend serve a interface.
 if [ "$(uname -s)" = Darwin ]; then
   if [ -f "$HOME/Library/LaunchAgents/br.dev.hangar.backend.plist" ]; then
-    # O caminho do uv e do node ficam cravados no plist: re-rodar o grava de novo, e o script só
+    # O caminho do node fica cravado no PATH do plist: re-rodar o grava de novo, e o script só
     # reinicia quando ele mudou.
     SETUP_RC=0
     ./scripts/services-launchd.sh >/dev/null || SETUP_RC=$?
@@ -1109,11 +1093,11 @@ SEND_N=${#PROBLEMAS[@]}
 if [ -e "$HOME/.local/bin/hangar-send" ]; then
   # O binário é symlink (atualiza sozinho), mas o bloco "Sessões-irmãs" do ~/.claude/CLAUDE.md
   # sai de um heredoc deste script: sem re-rodar, as sessões novas leem o protocolo VELHO.
-  ./scripts/install-hangar-send.sh >/dev/null && ok "hangar-send + skills atualizados" || anota_problema "hangar-send + skills falharam ao atualizar"
+  HANGAR_SRV_ANTIGO_AVISA=$SRV_ANTIGO_AVISA ./scripts/install-hangar-send.sh >/dev/null && ok "hangar-send + skills atualizados" || anota_problema "hangar-send + skills falharam ao atualizar"
 elif [ "$UPDATE" = 1 ]; then
   :   # não instala coisa nova num --update; isso é decisão, não atualização
 elif [ "$CPSEND" = 1 ] && ask "Instalar hangar-send + skills (sessões conversam entre si e se pareiam)?"; then
-  ./scripts/install-hangar-send.sh || anota_problema "hangar-send + skills não instalaram"
+  HANGAR_SRV_ANTIGO_AVISA=$SRV_ANTIGO_AVISA ./scripts/install-hangar-send.sh || anota_problema "hangar-send + skills não instalaram"
 else
   nota "pulado — depois: ./scripts/install-hangar-send.sh"
 fi
@@ -1148,14 +1132,15 @@ fi
 # no app, ela rodaria a história inteira de passos, todos já cumpridos por este instalador.
 # No --update NÃO se marca nada: ali a máquina é justamente a antiga, e os passos precisam rodar.
 # No pacote quem marca é o hangar-server, depois da checagem de fumaça (só com a instalação no fim).
+# No checkout é o mesmo comando, pela raiz deste checkout.
 if [ "$UPDATE" = 1 ] || [ "$PACOTE" = 1 ]; then
   :
 else
   say "Passos de atualização"
-  if uv run --directory backend python -c "from app import atualizacoes; atualizacoes.marcar_todos()" 2>/dev/null; then
+  if "$SRV" install-package --mark-steps --root "$REPO"; then
     ok "marcados como já aplicados (instalação nova)"
   else
-    nota "não consegui marcar agora — o app resolve no primeiro Atualizar"
+    anota_problema "os passos de atualização não foram marcados como aplicados — rode: ./scripts/hangar-server-command install-package --mark-steps --root \"$REPO\""
   fi
 fi
 
@@ -1197,14 +1182,27 @@ else
 fi
 
 # ── 8/8 Checagem de fumaça ───────────────────────────────────────────────────
-# Até aqui foi tudo instalação. Este passo separa "instalou" de "funciona" — e é o mesmo passo
-# que, do lado Windows, pegou o backend não importando por causa de um `import fcntl`.
+# Até aqui foi tudo instalação. Este passo separa "instalou" de "funciona": o hangar-server que
+# os atalhos e os hooks chamam precisa executar nesta máquina.
 mark_step instalar ok
 mark_step final fazendo
 say "8/8 Checagem de fumaça"
-py_backend -c "import app.codex_contas, app.adapters.codex.lancador, app.vapid_setup" \
-  && { ok "as ferramentas Python importam"; mark_item backend-importa ok "as ferramentas abrem"; } \
-  || fail "as ferramentas Python não importam nesta máquina"
+srv_ou_aviso "checagem do hangar-server" install-token >/dev/null \
+  && { ok "o hangar-server executa nesta máquina"; mark_item backend-importa ok "as ferramentas abrem"; } \
+  || fail "o hangar-server não executa nesta máquina — sem ele os atalhos e os hooks param"
+
+# A orquestração (skill orquestrar) ainda roda no python3 da máquina, até o PR dela; sem um 3.10 ou
+# mais novo ela não roda (o macOS traz o 3.9). Só aviso: o resto do Hangar não usa Python. No macOS
+# sem as ferramentas de linha de comando o /usr/bin/python3 abriria o instalador delas: nem roda.
+if [ -e "$HOME/.claude/skills/orquestrar" ]; then
+  PY_MA='' PY_MI=''
+  if command -v python3 >/dev/null && { [ "$(uname -s)" != Darwin ] || xcode-select -p >/dev/null 2>&1; }; then
+    read -r PY_MA PY_MI <<<"$(python3 --version 2>/dev/null | sed -n 's/^Python \([0-9][0-9]*\)\.\([0-9][0-9]*\).*/\1 \2/p')" || true
+  fi
+  if [ "${PY_MA:-0}" -lt 3 ] || { [ "$PY_MA" = 3 ] && [ "${PY_MI:-0}" -lt 10 ]; }; then
+    falta "a orquestração (skill orquestrar) precisa do python3 3.10 ou mais novo até o PR dela; sem ele, ela não roda. O resto do Hangar não usa Python."
+  fi
+fi
 
 S="cp-fumaca-$$"
 if tmux new-session -d -s "$S" -c /tmp 'sh' 2>/dev/null; then

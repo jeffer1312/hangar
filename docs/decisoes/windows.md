@@ -63,15 +63,18 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   usuário se grava como `REG_EXPAND_SZ` (`Set-ItemProperty -Type ExpandString` + `WM_SETTINGCHANGE`),
   nunca por `[Environment]::SetEnvironmentVariable`. O `powershell.exe` filho vem de `$PSHOME`, não
   do PATH.
-- **Python em `WindowsApps` não é só o atalho da Store.** O Python Install Manager (o 3.14 do
-  winget) também mora lá e executa. O instalador pergunta `sys.executable` ao atalho e grava o
-  interpretador real nos lançadores, porque o bash não roda alias de app; quem não devolve caminho
-  é a Store. Exceção: o `hangar-codex-tui` usa `backend\.venv\Scripts\python.exe` quando ele
-  existe, e o Python dos outros lançadores sem o venv; sem Python real, nenhum lançador é criado. Ver [Python do Install Manager](#python-do-install-manager-22102026).
+- **O instalador não instala nem procura Python.** Nenhum lançador passa por Python: `hangar-send`,
+  `hangar-conta` e o `hangar-codex-tui` chamam o `hangar-server.exe`; o passo
+  `2026-11-17-atalhos-windows-sem-python` regrava os que a versão antiga gravou pelo Python. Os
+  atalhos `python3`, `python3.cmd` e `hangar-python.cmd` antigos ficam (a versão anterior, na volta,
+  usa) e saem junto com a `python/` do pacote, no PR seguinte.
+  A orquestração ainda usa o `python3` da máquina, quando há. A história do Python do Install
+  Manager está em [Python do Install Manager](#python-do-install-manager-22102026).
 - **Atalho sem extensão que o instalador grava em `~/.local/bin` ganha um gêmeo `.cmd` na mesma
   pasta.** Sem ele, o
   PowerShell e o `cmd` resolvem o nome para o arquivo do bash e o Windows pergunta com que programa
-  abri-lo. Ver [`python3.cmd`](#python3cmd-ao-lado-do-atalho-do-bash-23102026).
+  abri-lo. Ver [`python3.cmd`](#python3cmd-ao-lado-do-atalho-do-bash-23102026) (o atalho em si
+  saiu; a regra vale para os que ficaram).
 - **Instalação Windows mantém o nível de permissão**: iniciada como admin, registra tarefas
   interativas elevadas e atalhos elevados do Electron; comum, usa UAC pontual. Atualização
   manual sem elevação não pode rebaixar uma instalação elevada.
@@ -190,9 +193,8 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   está de pé, e o `Restart-HangarTask` o para também (`Get-HangarBackendLaunchers`). Medição em
   [Queda do servidor sem religada no Windows](#queda-do-servidor-sem-religada-no-windows-16112026).
 - **Atalho `.cmd` em máquina migrada aponta para `%USERPROFILE%\.hangar\current\scripts\…`, nunca
-  para o caminho real da versão**, que a poda apaga. `hangar-python.cmd` escolhe o Python do
-  pacote, senão o venv, senão o real; `hangar-conta.cmd` e `hangar-engine.cmd` passam por ele.
-  Vale também para os atalhos sem extensão do Git Bash (`/c/Users/…/.hangar/current/scripts/…`).
+  para o caminho real da versão**, que a poda apaga. `hangar-conta.cmd` e `hangar-send.cmd` acham o
+  `hangar-server.exe` pelo `scripts\hangar-server-lookup.cmd` do `current`. Vale também para os atalhos sem extensão do Git Bash (`/c/Users/…/.hangar/current/scripts/…`).
   Até 12/11/2026 o `hangar-send`, o `hangar-preview`, o `folha`, o `hangar-mcp-headers.cmd` e os
   lançadores do Codex saíam do `$raiz`, a pasta da versão de onde o instalador rodou: na DELPHI-02
   eles ainda chamavam a `0.1.0.9467` com a `0.1.0.10172` instalada, e parariam quando a poda a
@@ -207,9 +209,7 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   cópia**, não como link: link de arquivo pede administrador.
 - **Instalação nova é pelo pacote: o `bootstrap.ps1` baixa o `hangar-server.exe`, confere o sha256 e
   roda o `install.ps1` do `current` em modo pacote** (`manifest.json` sem `.git`); `CP_DEV`,
-  `CP_DESTINO` e `-Destino` seguem pelo git. No pacote, o Python dos lançadores é o
-  `%USERPROFILE%\.hangar\current\python\python.exe` (o `hangar-codex-tui` precisa do `websockets`
-  dele), e o manifesto se lê por regex: o `ConvertFrom-Json` do 5.1 recusa JSON acima de 2 MB. Regras
+  `CP_DESTINO` e `-Destino` seguem pelo git. O manifesto se lê por regex: o `ConvertFrom-Json` do 5.1 recusa JSON acima de 2 MB. Regras
   e recusas em [instalacao.md](instalacao.md#pacote-por-versão). Só raciocinado até a prova na VM.
 - **O cofre de senhas no Windows exige o servidor no logon interativo do usuário.** A chave mora no
   Gerenciador de Credenciais, que não existe em logon por SSH nem em serviço sem perfil

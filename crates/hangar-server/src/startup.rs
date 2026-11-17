@@ -55,7 +55,7 @@ pub(crate) async fn maintenance(state: Arc<crate::routes::AppState>) {
         Ok(settings) => {
             let printed = tokio::task::spawn_blocking(move || {
                 use std::io::IsTerminal;
-                crate::machine_peers::pairing::print(
+                crate::machine_peers::pairing::print_boot(
                     &settings,
                     &crate::machine_peers::network::lan_ip(),
                     // stdout pertence ao anúncio privado lido pelo Supervisor.

@@ -135,6 +135,33 @@ async fn install_package_mark_steps_marks_every_step_of_current_and_warns_on_mal
 }
 
 #[tokio::test]
+async fn install_package_mark_steps_marks_every_step_of_a_fresh_checkout() {
+    let home = tempfile::tempdir().unwrap();
+    let checkout = tempfile::tempdir().unwrap();
+    let steps = checkout.path().join("docs").join("atualizacoes");
+    std::fs::create_dir_all(&steps).unwrap();
+    std::fs::write(steps.join("2026-02-01-maquina.md"),
+        "---\nid: 2026-02-01-maquina\ntitulo: Passo\ncomando: touch ~/nunca\nprova: ~/nunca\ntipo: maquina\n---\ntexto\n").unwrap();
+    std::fs::write(steps.join("2026-02-02-texto.md"), "---\ntitulo: Só texto\n---\nnada a rodar\n").unwrap();
+    let root = checkout.path().to_str().unwrap();
+    // Sem `.git` + `backend/app` a pasta não é checkout: nada é marcado.
+    let out = install(home.path(), &["--mark-steps", "--root", root]).await;
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out));
+    assert!(!home.path().join(".claude/.hangar-update/aplicados.json").exists());
+    std::fs::create_dir_all(checkout.path().join(".git")).unwrap();
+    std::fs::create_dir_all(checkout.path().join("backend").join("app")).unwrap();
+    let out = install(home.path(), &["--mark-steps", "--root", root]).await;
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let applied = read_json(&home.path().join(".claude/.hangar-update/aplicados.json"));
+    assert_eq!(applied, serde_json::json!(["2026-02-01-maquina", "2026-02-02-texto"]));
+    assert!(!home.path().join("nunca").exists(), "marcar não roda o passo");
+    assert!(!home.path().join(".hangar").join("current").exists(), "o checkout não vira pacote");
+    for args in [&["--mark-steps", "--root"][..], &["--mark-steps", "--root", ""][..], &["--mark-steps", "--outro", root][..]] {
+        assert_eq!(install(home.path(), args).await.status.code(), Some(2), "{args:?}");
+    }
+}
+
+#[tokio::test]
 async fn install_package_refuses_an_existing_installation() {
     let release = Release::new().await;
     release.publish("latest", &hangar_server::update::platform(), None);

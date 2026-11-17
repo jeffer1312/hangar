@@ -48,7 +48,7 @@ fn codex_login_routes_are_owned() {
     use axum::http::Method;
     for method in [Method::POST, Method::GET, Method::DELETE] {
         assert!(
-            hangar_server::migration_status::rust_route(&method, "/api/codex-contas/alpha/login"),
+            hangar_server::owned_routes::rust_route(&method, "/api/codex-contas/alpha/login"),
             "login Codex ainda passa pelo Python: {method}"
         );
     }
@@ -58,10 +58,10 @@ fn codex_login_routes_are_owned() {
 fn legacy_device_routes_are_owned() {
     use axum::http::Method;
     for method in [Method::POST, Method::GET, Method::DELETE] {
-        assert!(hangar_server::migration_status::rust_route(&method, "/api/credenciais/codex/login"),
+        assert!(hangar_server::owned_routes::rust_route(&method, "/api/credenciais/codex/login"),
             "device flow legado ainda passa pelo Python: {method}");
     }
-    assert!(hangar_server::migration_status::rust_route(&Method::GET, "/api/credenciais/codex"));
+    assert!(hangar_server::owned_routes::rust_route(&Method::GET, "/api/credenciais/codex"));
 }
 
 #[tokio::test]
@@ -295,7 +295,7 @@ async fn device_state_reads_destinations_locally_and_keeps_strict_profile_error(
 
 #[test]
 fn codex_sign_out_route_is_owned() {
-    assert!(hangar_server::migration_status::rust_route(
+    assert!(hangar_server::owned_routes::rust_route(
         &axum::http::Method::POST,
         "/api/codex-contas/alpha/logout"
     ));

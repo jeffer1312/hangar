@@ -1,9 +1,9 @@
 ---
 id: 2026-10-02-codex-mcp-hangar-headers
 titulo: O MCP hangar no Codex volta a saber de qual sessão vem cada chamada
-comando_posix: python3 scripts/registrar-mcp.py
+comando_posix: scripts/hangar-server-command mcp-register --root .
 comando_windows: powershell -ExecutionPolicy Bypass -File install.ps1 -Update
-prova: scripts/registrar-mcp.py
+prova: ~/.claude/settings.json
 destrutivo: false
 ---
 
