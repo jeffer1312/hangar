@@ -1101,7 +1101,7 @@ if [ -e "$HOME/.local/bin/hangar-send" ]; then
   HANGAR_SRV_ANTIGO_AVISA=$SRV_ANTIGO_AVISA ./scripts/install-hangar-send.sh >/dev/null || SEND_RC=$?
   case "$SEND_RC" in
     0) ok "hangar-send + skills atualizados" ;;
-    3) anota_problema "hangar-send + skills: parte não atualizou porque o hangar-server desta máquina é anterior a este código" ;;
+    3) anota_problema "hangar-send + skills: parte ficou pendente (veja os avisos e erros acima)" ;;
     *) anota_problema "hangar-send + skills falharam ao atualizar" ;;
   esac
 elif [ "$UPDATE" = 1 ]; then
@@ -1111,7 +1111,7 @@ elif [ "$CPSEND" = 1 ] && ask "Instalar hangar-send + skills (sessões conversam
   HANGAR_SRV_ANTIGO_AVISA=$SRV_ANTIGO_AVISA ./scripts/install-hangar-send.sh || SEND_RC=$?
   case "$SEND_RC" in
     0) ;;
-    3) anota_problema "hangar-send + skills: parte não instalou porque o hangar-server desta máquina é anterior a este código" ;;
+    3) anota_problema "hangar-send + skills: parte ficou pendente (veja os avisos e erros acima)" ;;
     *) anota_problema "hangar-send + skills não instalaram" ;;
   esac
 else

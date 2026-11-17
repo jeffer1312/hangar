@@ -199,6 +199,11 @@ fn adjust(group: &str, case: &mut Case, block: Option<&str>) {
         }
         _ => {}
     }
+    // Decisão 22: o arquivo da conta que o registro pula é `erro:` (a saída segue 0, como antes), e o
+    // install-hangar-send.sh o conta como pendência.
+    if group == "registrar-mcp" {
+        step.stderr = step.stderr.replace("aviso: ", "erro: ");
+    }
 }
 
 fn sub(text: &str, t: &str, block: Option<&str>) -> String {

@@ -91,7 +91,8 @@ fn claude_account(file: &Path, entry: &Value, out: &mut dyn Write, err: &mut dyn
         let bytes = std::fs::read(&target).map_err(|error| files::os_error(&error, file))?;
         let parsed = std::str::from_utf8(&bytes).ok().and_then(codec::loads);
         let Some(parsed) = parsed else {
-            let _ = writeln!(err, "aviso: {} não é JSON válido — pulado", file.display());
+            // Pular segue saindo 0, como antes; o `erro:` faz o instalador contar a conta como pendência.
+            let _ = writeln!(err, "erro: {} não é JSON válido — pulado", file.display());
             return Ok(());
         };
         parsed
@@ -138,7 +139,7 @@ fn claude_permissions(file: &Path, out: &mut dyn Write, err: &mut dyn Write) -> 
             .and_then(|bytes| String::from_utf8(bytes).ok())
             .and_then(|text| codec::loads(&text));
         let Some(parsed) = parsed else {
-            let _ = writeln!(err, "aviso: {} ilegível — liberação do recado não gravada", file.display());
+            let _ = writeln!(err, "erro: {} ilegível — liberação do recado não gravada", file.display());
             return true;
         };
         parsed
@@ -147,7 +148,7 @@ fn claude_permissions(file: &Path, out: &mut dyn Write, err: &mut dyn Write) -> 
     };
     match with_permissions(&mut data) {
         None => {
-            let _ = writeln!(err, "aviso: {} tem permissions num formato inesperado — liberação não gravada", file.display());
+            let _ = writeln!(err, "erro: {} tem permissions num formato inesperado — liberação não gravada", file.display());
             return true;
         }
         Some(false) => return true,

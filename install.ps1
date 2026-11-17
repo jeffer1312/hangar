@@ -2615,10 +2615,12 @@ if (-not $bash) {
         $avisaAntigo = if ($srvAntigoAvisa) { '1' } else { '0' }
         $saida = & $bash '-lc' "export PATH='$binMsys':`$PATH; cd '$rota' && HANGAR_SRV_ANTIGO_AVISA=$avisaAntigo ./scripts/install-hangar-send.sh" 2>&1
     } finally { $ErrorActionPreference = $anterior }
-    # 3: tudo rodou, mas algo foi pulado por hangar-server anterior a este codigo (pendencia).
+    # 3: tudo rodou, mas algo ficou pulado (hangar-server anterior a este codigo, ou conta que o
+    # registro pulou): pendencia, com as linhas que dizem o que foi.
     $sendRc = $LASTEXITCODE
     if ($sendRc -eq 3) {
-        Falta 'hangar-send + skills: parte nao atualizou porque o hangar-server desta maquina e anterior a este codigo'
+        Falta 'hangar-send + skills: parte ficou pendente:'
+        $saida | Where-Object { "$_" -match '^(erro|aviso):' } | ForEach-Object { Nota "  $_" }
         $sendOk = $false
     }
     if ($sendRc -eq 0 -or $sendRc -eq 3) {

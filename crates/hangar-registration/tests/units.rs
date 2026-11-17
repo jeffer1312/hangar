@@ -190,6 +190,24 @@ fn codex_dir_without_write_is_an_error_line_and_the_rest_continues() {
     assert!(std::fs::read_to_string(home.join(".codex-b/config.toml")).unwrap().contains("# >>> hangar: mcp"));
 }
 
+/// Decisão 22: a conta com `.claude.json` cortado e o settings ilegível seguem saindo 0, como antes,
+/// mas as linhas dizem `erro:` para o instalador contar a pendência; nada é gravado neles.
+#[test]
+fn skipped_account_files_are_error_lines_and_stay_untouched() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    with_token(home, "CP_AUTH_TOKEN=t\n");
+    write(&home.join(".claude.json"), "{\"mcpServers\": {");
+    write(&home.join(".claude/settings.json"), "{\"permissions\": ");
+    let (code, _, err) = run(mcp_register::run, &invocation(home, ""));
+    assert_eq!(code, 0, "{err}");
+    assert!(err.contains("erro: ") && err.contains(".claude.json não é JSON válido — pulado"), "{err}");
+    assert!(err.contains("erro: ") && err.contains("settings.json ilegível"), "{err}");
+    assert!(!err.contains("aviso: "), "{err}");
+    assert_eq!(std::fs::read_to_string(home.join(".claude.json")).unwrap(), "{\"mcpServers\": {");
+    assert_eq!(std::fs::read_to_string(home.join(".claude/settings.json")).unwrap(), "{\"permissions\": ");
+}
+
 /// R3-D06: início sem fim deixava o arquivo igual e dizia ATUALIZADO.
 #[test]
 fn block_start_without_end_leaves_the_file_and_fails() {

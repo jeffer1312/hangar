@@ -111,5 +111,24 @@ expect_eq "binário antigo: sai 3, não 0" "$rc" 3 "$ROOT/out"
 grep -q '^claude-md-block' "$ROOT/calls" && [ -s "$ROOT/block" ] && pass "binário antigo: o bloco do CLAUDE.md ainda é gravado" \
     || flunk "binário antigo: o bloco do CLAUDE.md ainda é gravado" "$ROOT/out"
 
+# Conta que o registro pulou (sai 0 com `erro:`): o resto roda, e a saída 3 vira pendência.
+cat > "$SERVER" <<STUB
+#!/bin/sh
+printf '%s\n' "\$*" >> "$ROOT/calls"
+[ "\$1" = mcp-register ] && echo "erro: /x/.claude.json não é JSON válido — pulado" >&2
+if [ "\$1" = claude-md-block ]; then cat > "$ROOT/block"; fi
+exit 0
+STUB
+: > "$ROOT/calls"
+( env -i HOME="$H" CP_RUST_SERVER_BIN="$SERVER" PATH="$ROOT/stubs:/usr/bin:/bin" HANGAR_SRV_ANTIGO_AVISA=0 \
+    bash "$H/.hangar/current/scripts/install-hangar-send.sh" > "$ROOT/out" 2>&1 ); rc=$?
+expect_eq "conta pulada pelo registro, no instalador: sai 3" "$rc" 3 "$ROOT/out"
+grep -q '^claude-md-block' "$ROOT/calls" && pass "conta pulada: o resto roda" || flunk "conta pulada: o resto roda" "$ROOT/out"
+# No passo de atualização (sem a variável dos instaladores) a mesma conta não derruba o passo.
+run_install "$H/.hangar/current/scripts/install-hangar-send.sh"; rc=$?
+expect_eq "conta pulada pelo registro, no passo de atualização: sai 0" "$rc" 0 "$ROOT/out"
+grep -q '^erro: ' "$ROOT/out" && pass "conta pulada: a linha erro: fica na saída do passo" \
+    || flunk "conta pulada: a linha erro: fica na saída do passo" "$ROOT/out"
+
 if [ "$fail" = 0 ]; then echo "tudo ok"; else echo "houve falha"; fi
 exit "$fail"
