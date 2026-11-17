@@ -58,21 +58,26 @@ fn update(file: &Path, block: &str) -> Result<Outcome, String> {
     // O bloco entra no fim de linha que o arquivo já usa.
     let crlf = raw.windows(2).any(|pair| pair == b"\r\n");
     let block = if crlf { block.replace('\n', "\r\n") } else { block.to_owned() };
-    let write = |bytes: &[u8], append: bool| {
-        let mut options = std::fs::OpenOptions::new();
-        if append { options.append(true); } else { options.write(true).truncate(true); }
-        options.open(file).and_then(|mut handle| handle.write_all(bytes))
-            .map_err(|error| format!("não consegui gravar {}: {}", file.display(), files::os_error(&error, file)))
+    // O arquivo inteiro vai por temporário + rename: disco cheio no meio não deixa o CLAUDE.md global
+    // cortado. Arquivo sem escrita continua recusado, como antes, e o link segue link.
+    let write = |bytes: &[u8]| {
+        let refused = |error: std::io::Error| format!("não consegui gravar {}: {}", file.display(), files::os_error(&error, file));
+        std::fs::OpenOptions::new().write(true).open(file).map_err(refused)?;
+        let target = files::through_links(file);
+        let mode = files::mode_of(&target).unwrap_or(0o644);
+        files::replace(&target, bytes, mode).map_err(|detail| format!("não consegui gravar {}: {detail}", file.display()))
     };
     if !raw.windows(START.len()).any(|window| window == START.as_bytes()) {
         let eol = if crlf { "\r\n" } else { "\n" };
-        write(format!("{eol}{block}{eol}").as_bytes(), true)?;
+        let mut whole = raw.clone();
+        whole.extend_from_slice(format!("{eol}{block}{eol}").as_bytes());
+        write(&whole)?;
         return Ok(Outcome::Appended);
     }
     let text = std::str::from_utf8(&raw).map_err(|_| format!("{} não é texto UTF-8 — bloco Sessões-irmãs não gravado", file.display()))?;
     let Some(updated) = replace_blocks(text, &block) else { return Ok(Outcome::Unclosed) };
     if updated != text {
-        write(updated.as_bytes(), false)?;
+        write(updated.as_bytes())?;
     }
     Ok(Outcome::Replaced)
 }

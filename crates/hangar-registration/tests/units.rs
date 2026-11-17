@@ -221,6 +221,23 @@ fn block_start_without_end_leaves_the_file_and_fails() {
     assert_eq!(std::fs::read_to_string(&file).unwrap(), before);
 }
 
+/// Revisão de falhas caladas: o CLAUDE.md global é gravado por temporário + rename. Quando o
+/// temporário não pode ser escrito (aqui, um diretório no lugar dele), a troca falha com `erro:` e o
+/// arquivo do usuário fica inteiro, na troca e no acréscimo.
+#[test]
+fn block_write_failure_leaves_the_global_claude_md_whole() {
+    for before in ["antes\n<!-- claude-pocket:sessoes-irmas:start -->\nvelho\n<!-- claude-pocket:sessoes-irmas:end -->\ndepois\n", "só texto do usuário\n"] {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join(".claude/CLAUDE.md");
+        write(&file, before);
+        std::fs::create_dir_all(dir.path().join(".claude/CLAUDE.md.hangar-novo")).unwrap();
+        let (code, out, err) = run(claude_md_block::run, &invocation(dir.path(), BLOCK));
+        assert_eq!((code, out.as_str()), (1, ""), "{err}");
+        assert!(err.starts_with("erro: não consegui gravar "), "{err}");
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), before);
+    }
+}
+
 /// R3-D10: o bloco trocado num CLAUDE.md em CRLF saía em LF.
 #[test]
 fn block_keeps_crlf_when_replacing_and_appending() {
