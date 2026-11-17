@@ -82,8 +82,19 @@ $srvComando = Join-Path $raiz 'scripts\hangar-server-command.ps1'
 # ele nao conhece (saida 2 com argumentos validos) vira aviso, com o motivo. No pacote e na
 # instalacao nova o binario veio com o codigo, e a falta e erro.
 $srvAntigoAvisa = $Update -and -not $pacote
+$srvSaida = ''
+# Roda um subcomando do hangar-server desta instalacao e guarda a saida (stdout e stderr) para o
+# SrvAntigo conferir a frase: saida 2 sozinha nao prova que o binario e antigo.
+function Srv {
+    $anterior = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $script:srvSaida = & $PowerShellExe -NoProfile -ExecutionPolicy Bypass -File $srvComando @args 2>&1 | Out-String
+        return $LASTEXITCODE
+    } finally { $ErrorActionPreference = $anterior }
+}
 function SrvAntigo($rc, $oque, $sub) {
-    if ($rc -ne 2 -or -not $script:srvAntigoAvisa) { return $false }
+    if ($rc -ne 2 -or -not $script:srvAntigoAvisa -or $script:srvSaida -notmatch 'subcomando desconhecido') { return $false }
     Falta "${oque}: o hangar-server desta maquina e anterior a este codigo (nao tem '$sub') - rode scripts\install-server-binaries.ps1 e .\install.ps1 -Update de novo"
     return $true
 }
@@ -1117,7 +1128,7 @@ foreach ($a in $script:agentesNovos) {
 # Sem o par VAPID o push para o celular sai calado e o celular nem se inscreve. Depois dos
 # binarios: no checkout novo o hangar-server so existe a partir daqui.
 $argsVapid = if ($pacote) { @('vapid-setup') } else { @('vapid-setup', '--root', $raiz) }
-$rcVapid = Nativo $PowerShellExe -NoProfile -ExecutionPolicy Bypass -File $srvComando @argsVapid
+$rcVapid = Srv @argsVapid
 if ($rcVapid -eq 0) { Ok 'chaves do push para o celular prontas' }
 elseif (SrvAntigo $rcVapid 'chaves do push para o celular' 'vapid-setup') { }
 elseif ($pacote) { Falha 'chaves do push para o celular' 'rodar na mao:  ~\.hangar\current\bin\hangar-server.exe vapid-setup' }
@@ -2604,7 +2615,13 @@ if (-not $bash) {
         $avisaAntigo = if ($srvAntigoAvisa) { '1' } else { '0' }
         $saida = & $bash '-lc' "export PATH='$binMsys':`$PATH; cd '$rota' && HANGAR_SRV_ANTIGO_AVISA=$avisaAntigo ./scripts/install-hangar-send.sh" 2>&1
     } finally { $ErrorActionPreference = $anterior }
-    if ($LASTEXITCODE -eq 0) {
+    # 3: tudo rodou, mas algo foi pulado por hangar-server anterior a este codigo (pendencia).
+    $sendRc = $LASTEXITCODE
+    if ($sendRc -eq 3) {
+        Falta 'hangar-send + skills: parte nao atualizou porque o hangar-server desta maquina e anterior a este codigo'
+        $sendOk = $false
+    }
+    if ($sendRc -eq 0 -or $sendRc -eq 3) {
         # O `ln -s` do Git Bash COPIA em vez de linkar, e o hangar-send se localiza pelo proprio
         # caminho: `dirname $(realpath $0)/../backend/.env`. Com a copia em ~/.local/bin, ele
         # procura o .env em ~/.local/backend/ - que nao existe, e o --list falha dizendo que nao
@@ -2635,7 +2652,7 @@ if (-not $bash) {
         if (Escrever-Lancador $cpPreviewSh $corpoPreview 'sh') {
             Ok 'hangar-preview do ~/.local/bin aponta pro script do repo'
         }
-        Ok 'hangar-send + skills instalados'
+        if ($sendRc -eq 0) { Ok 'hangar-send + skills instalados' }
         Nota 'teste (em terminal NOVO):  hangar-send --list'
     } else {
         Falta 'install-hangar-send.sh falhou:'
@@ -2739,11 +2756,18 @@ if ($script:psmuxConsole -eq 'fazer' -and -not $script:faltaRodaPsmux -and (Psmu
 Mark-Step 'instalar' 'ok'
 Mark-Step 'final' 'fazendo'
 Titulo '8/8 Checagem de fumaca'
-$rc = Nativo $PowerShellExe -NoProfile -ExecutionPolicy Bypass -File $srvComando install-token
-if ($rc -ne 0 -and -not (SrvAntigo $rc 'checagem do hangar-server' 'install-token')) {
-    Erro 'o hangar-server nao executa neste Windows - sem ele os atalhos e os hooks param'; exit 1
+$rc = Srv install-token
+# Binario antigo sem o subcomando: a checagem nao rodou, e o item fica pendente, nunca ok.
+$fumacaPulada = $false
+if ($rc -ne 0) {
+    if (-not (SrvAntigo $rc 'checagem do hangar-server' 'install-token')) {
+        Erro 'o hangar-server nao executa neste Windows - sem ele os atalhos e os hooks param'; exit 1
+    }
+    $fumacaPulada = $true
+    $pendencias += 'checagem do hangar-server (binario anterior a este codigo)'
+} else {
+    Ok 'o hangar-server executa neste Windows'
 }
-Ok 'o hangar-server executa neste Windows'
 
 # A orquestracao (skill orquestrar) ainda roda no python3 da maquina, ate o PR dela; sem um 3.10 ou
 # mais novo ela nao roda. So aviso: o resto do Hangar nao usa Python. O python3 da Loja (WindowsApps)
@@ -2757,7 +2781,8 @@ if (Test-Path -LiteralPath (Join-Path $HOME '.claude\skills\orquestrar')) {
         Falta 'a orquestracao (skill orquestrar) precisa de um python3 3.10 ou mais novo ate o PR dela; sem ele ela nao roda. O resto do Hangar nao usa Python.'
     }
 }
-Mark-Item 'backend-importa' 'ok' 'as ferramentas abrem'
+if ($fumacaPulada) { Mark-Item 'backend-importa' 'pendente' 'as ferramentas abrem' }
+else { Mark-Item 'backend-importa' 'ok' 'as ferramentas abrem' }
 
 # Sobra de rodada anterior: o kill pode demorar, entao limpa antes de contar de novo.
 # Sem servidor do psmux ainda (instalacao nova) o list-sessions avisa no stderr; com 'Stop' isso

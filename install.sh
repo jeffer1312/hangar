@@ -274,15 +274,19 @@ SRV="$REPO/scripts/hangar-server-command"
 # instalação nova o binário veio com o código, e a falta é erro.
 SRV_ANTIGO_AVISA=0
 [ "$UPDATE" = 1 ] && [ "$PACOTE" = 0 ] && SRV_ANTIGO_AVISA=1
+# 1 quando a última chamada pulou o subcomando por binário antigo: quem chama não marca ok.
+SRV_PULOU=0
 srv_ou_aviso() { # srv_ou_aviso <o que> <subcomando> [args]
   local oque=$1 err rc=0
   shift
+  SRV_PULOU=0
   err=$(mktemp)
   "$SRV" "$@" 2>"$err" || rc=$?
   cat "$err" >&2
   if [ "$rc" = 2 ] && [ "$SRV_ANTIGO_AVISA" = 1 ] && grep -q 'subcomando desconhecido' "$err"; then
     falta "$oque: o hangar-server desta máquina é anterior a este código (não tem '$1') — rode ./scripts/install-server-binaries.sh e ./install.sh --update de novo" >&2
     rc=0
+    SRV_PULOU=1
   fi
   rm -f "$err"
   return "$rc"
@@ -1093,11 +1097,23 @@ SEND_N=${#PROBLEMAS[@]}
 if [ -e "$HOME/.local/bin/hangar-send" ]; then
   # O binário é symlink (atualiza sozinho), mas o bloco "Sessões-irmãs" do ~/.claude/CLAUDE.md
   # sai de um heredoc deste script: sem re-rodar, as sessões novas leem o protocolo VELHO.
-  HANGAR_SRV_ANTIGO_AVISA=$SRV_ANTIGO_AVISA ./scripts/install-hangar-send.sh >/dev/null && ok "hangar-send + skills atualizados" || anota_problema "hangar-send + skills falharam ao atualizar"
+  SEND_RC=0
+  HANGAR_SRV_ANTIGO_AVISA=$SRV_ANTIGO_AVISA ./scripts/install-hangar-send.sh >/dev/null || SEND_RC=$?
+  case "$SEND_RC" in
+    0) ok "hangar-send + skills atualizados" ;;
+    3) anota_problema "hangar-send + skills: parte não atualizou porque o hangar-server desta máquina é anterior a este código" ;;
+    *) anota_problema "hangar-send + skills falharam ao atualizar" ;;
+  esac
 elif [ "$UPDATE" = 1 ]; then
   :   # não instala coisa nova num --update; isso é decisão, não atualização
 elif [ "$CPSEND" = 1 ] && ask "Instalar hangar-send + skills (sessões conversam entre si e se pareiam)?"; then
-  HANGAR_SRV_ANTIGO_AVISA=$SRV_ANTIGO_AVISA ./scripts/install-hangar-send.sh || anota_problema "hangar-send + skills não instalaram"
+  SEND_RC=0
+  HANGAR_SRV_ANTIGO_AVISA=$SRV_ANTIGO_AVISA ./scripts/install-hangar-send.sh || SEND_RC=$?
+  case "$SEND_RC" in
+    0) ;;
+    3) anota_problema "hangar-send + skills: parte não instalou porque o hangar-server desta máquina é anterior a este código" ;;
+    *) anota_problema "hangar-send + skills não instalaram" ;;
+  esac
 else
   nota "pulado — depois: ./scripts/install-hangar-send.sh"
 fi
@@ -1188,8 +1204,14 @@ mark_step instalar ok
 mark_step final fazendo
 say "8/8 Checagem de fumaça"
 srv_ou_aviso "checagem do hangar-server" install-token >/dev/null \
-  && { ok "o hangar-server executa nesta máquina"; mark_item backend-importa ok "as ferramentas abrem"; } \
   || fail "o hangar-server não executa nesta máquina — sem ele os atalhos e os hooks param"
+# Binário antigo sem o subcomando: a checagem não rodou, e o item fica pendente, nunca ok.
+if [ "$SRV_PULOU" = 1 ]; then
+  anota_problema "checagem do hangar-server não rodou: o binário desta máquina é anterior a este código"
+  mark_item backend-importa pendente "as ferramentas abrem"
+else
+  ok "o hangar-server executa nesta máquina"; mark_item backend-importa ok "as ferramentas abrem"
+fi
 
 # A orquestração (skill orquestrar) ainda roda no python3 da máquina, até o PR dela; sem um 3.10 ou
 # mais novo ela não roda (o macOS traz o 3.9). Só aviso: o resto do Hangar não usa Python. No macOS

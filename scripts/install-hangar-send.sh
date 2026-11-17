@@ -61,7 +61,9 @@ linkar_bin "$REPO/scripts/hangar-mcp-headers.sh" "$HOME/.local/bin/hangar-mcp-he
 HANGAR_SERVER="$REPO/scripts/hangar-server-command"
 # No --update do checkout (o install.sh liga HANGAR_SRV_ANTIGO_AVISA) o binário achado pode ser mais
 # antigo que este código: subcomando que ele não conhece vira aviso e o resto segue. Fora disso o
-# binário veio junto com o código, e a falta é erro.
+# binário veio junto com o código, e a falta é erro. Algo pulado assim faz o script sair com 3 no
+# fim, depois de tudo: quem chama mostra pendência, não "atualizado".
+SRV_PULOU=0
 srv() {
     local err rc=0
     err=$(mktemp)
@@ -70,6 +72,7 @@ srv() {
     if [ "$rc" = 2 ] && [ "${HANGAR_SRV_ANTIGO_AVISA:-0}" = 1 ] && grep -q 'subcomando desconhecido' "$err"; then
         echo "aviso: o hangar-server desta máquina é anterior a este código (não tem '$1'); rode ./scripts/install-server-binaries.sh e ./install.sh --update de novo" >&2
         rc=0
+        SRV_PULOU=1
     fi
     rm -f "$err"
     return "$rc"
@@ -154,8 +157,12 @@ BLOCK=$(cat <<'EOF'
 EOF
 )
 
-printf '%s\n' "$BLOCK" | srv claude-md-block
+# Sem pipe: o `srv` roda neste shell e a marca de pulado não se perde num subshell.
+srv claude-md-block <<<"$BLOCK"
 
 # Trava de vazamento: toda máquina que instala o hangar-send liga também os hooks git versionados
 # (scripts/hooks/), senão o clone novo commita nome interno sem nada recusar. O pacote não é clone.
 if [ -e "$REPO/.git" ]; then "$(dirname "$(realpath "$0")")/install-hooks.sh"; fi
+
+# Algo foi pulado por binário antigo: o resto rodou, e a saída 3 vira pendência em quem chama.
+[ "$SRV_PULOU" = 0 ] || exit 3

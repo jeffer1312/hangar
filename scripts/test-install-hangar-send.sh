@@ -96,5 +96,20 @@ run_install "$H/.hangar/current/scripts/install-hangar-send.sh"; rc=$?
 expect_eq "registro que falha para o instalador" "$rc" 1 "$ROOT/out"
 expect_eq "nada depois do registro que falhou" "$(cat "$ROOT/calls")" "mcp-register --root $C" "$ROOT/out"
 
+# Binário anterior ao código no --update do checkout: o resto roda, e a saída 3 diz que algo foi pulado.
+cat > "$SERVER" <<STUB
+#!/bin/sh
+printf '%s\n' "\$*" >> "$ROOT/calls"
+[ "\$1" = agents-install ] && { echo "hangar-server: subcomando desconhecido: agents-install" >&2; exit 2; }
+if [ "\$1" = claude-md-block ]; then cat > "$ROOT/block"; fi
+exit 0
+STUB
+: > "$ROOT/calls"; rm -f "$ROOT/block"
+( env -i HOME="$H" CP_RUST_SERVER_BIN="$SERVER" PATH="$ROOT/stubs:/usr/bin:/bin" HANGAR_SRV_ANTIGO_AVISA=1 \
+    bash "$H/.hangar/current/scripts/install-hangar-send.sh" > "$ROOT/out" 2>&1 ); rc=$?
+expect_eq "binário antigo: sai 3, não 0" "$rc" 3 "$ROOT/out"
+grep -q '^claude-md-block' "$ROOT/calls" && [ -s "$ROOT/block" ] && pass "binário antigo: o bloco do CLAUDE.md ainda é gravado" \
+    || flunk "binário antigo: o bloco do CLAUDE.md ainda é gravado" "$ROOT/out"
+
 if [ "$fail" = 0 ]; then echo "tudo ok"; else echo "houve falha"; fi
 exit "$fail"
