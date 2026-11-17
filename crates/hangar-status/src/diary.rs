@@ -21,9 +21,6 @@ const EXITS_DAYS: i64 = 7;
 const HOURS: i64 = 24;
 const TOP_ROUTES: usize = 5;
 const SLOW_MS: u64 = 1000;
-/// Esperas longas de propósito (long-poll do plugin, chamada de tool MCP): entram no diário
-/// como pedido lento sem ser.
-const LONG_POLLS: [&str; 2] = ["POST /api/plugin/pull", "POST /mcp/"];
 
 /// Leitor do diário com o cache dos arquivos já lidos; um por servidor.
 pub struct DiaryReader {
@@ -107,8 +104,7 @@ impl DiaryReader {
         for facts in cache.files.values().map(|file| &file.facts) {
             for request in facts.requests.iter().filter(|request| inside(&request.at)) {
                 let error = request.code >= 500;
-                let slow = !error && request.ms.is_some_and(|ms| ms >= SLOW_MS)
-                    && !LONG_POLLS.contains(&request.route.as_str());
+                let slow = !error && request.ms.is_some_and(|ms| ms >= SLOW_MS);
                 if !error && !slow {
                     continue;
                 }
@@ -309,7 +305,6 @@ mod tests {
             api("2026-11-17T10:05:00.000-03:00", "GET /api/sessions/*/history", "503", 20),
             api("2026-11-17T14:10:00.000Z", "GET /api/costs", "200", 1800),
             api("2026-11-17T14:11:00.000Z", "POST /api/sessions", "409", 200),
-            api("2026-11-17T14:12:00.000Z", "POST /api/plugin/pull", "200", 25001),
             api("2026-11-17T14:31:00.000Z", "GET /api/costs", "200", 1500),
         ]);
         let slow = DiaryReader::at(dir.path().to_owned()).slow(utc("2026-11-17T14:30:00Z")).unwrap();
@@ -318,7 +313,7 @@ mod tests {
         assert_eq!(slow.hours[22], HourBucket { hour_start: "2026-11-17T13:00:00Z".into(), slow: 0, errors: 1 });
         assert_eq!(slow.hours[23], HourBucket { hour_start: "2026-11-17T14:00:00Z".into(), slow: 1, errors: 0 });
         let total: u32 = slow.hours.iter().map(|hour| hour.slow + hour.errors).sum();
-        assert_eq!(total, 3, "fora da janela, rápido não 5xx e long-poll não contam");
+        assert_eq!(total, 3, "fora da janela e rápido não 5xx não contam");
     }
 
     #[test]

@@ -840,8 +840,8 @@ async fn access_line(st: &AppState, method: &Method, path: &str, correlation: &s
     let logs_itself = (*method == Method::POST && path == "/api/sessions")
         || (*method == Method::POST && path.starts_with("/api/archive/") && path.ends_with("/resume"))
         || path.strip_prefix("/api/sessions/").and_then(|rest| rest.split_once('/')).is_some_and(|(_, tail)| tail.starts_with("plugin/"));
-    if !(status.is_server_error() || elapsed >= Duration::from_secs(1)) || reads_the_diary(path)
-        || logs_itself {
+    let slow = elapsed >= Duration::from_secs(1) && !waits_on_purpose(method, path);
+    if !(status.is_server_error() || slow) || reads_the_diary(path) || logs_itself {
         return response;
     }
     let (response, cause) = error_code(response).await;
@@ -859,6 +859,12 @@ async fn access_line(st: &AppState, method: &Method, path: &str, correlation: &s
 /// 5xx dessa linha, e a própria espera dela (peers, retrato que não ficou pronto) não pode se medir.
 fn reads_the_diary(path: &str) -> bool {
     path.starts_with("/api/diag") || matches!(path, "/api/status" | "/api/status/events")
+}
+
+/// Esperas longas de propósito (long-poll do plugin, chamada de tool MCP pelo `/mcp/` que os
+/// clientes usam): demorar não é lentidão, só o 5xx delas vai ao diário.
+fn waits_on_purpose(method: &Method, path: &str) -> bool {
+    *method == Method::POST && matches!(path, "/api/plugin/pull" | "/mcp/")
 }
 
 /// `detail.code` ou `code` do corpo de erro JSON pequeno; o corpo segue igual e nunca vai ao diário.
@@ -1871,6 +1877,15 @@ mod tests {
         assert!(reads_the_diary("/api/status") && reads_the_diary("/api/status/events"));
         assert!(reads_the_diary("/api/diag") && reads_the_diary("/api/diag/arquivo"));
         assert!(!reads_the_diary("/api/statusx") && !reads_the_diary("/api/sessions"), "só as rotas da tela");
+    }
+
+    /// Long-poll do plugin e tool MCP demoram de propósito: a linha só sai com 5xx.
+    #[test]
+    fn long_waits_are_not_slow_requests() {
+        assert!(waits_on_purpose(&Method::POST, "/api/plugin/pull") && waits_on_purpose(&Method::POST, "/mcp/"));
+        assert!(!waits_on_purpose(&Method::GET, "/api/plugin/pull") && !waits_on_purpose(&Method::POST, "/api/plugin/pullx"));
+        assert!(!waits_on_purpose(&Method::POST, "/api/sessions"));
+        assert_eq!(masked_route("/mcp/"), "/mcp/", "a rota do diário é a mesma que o filtro casa");
     }
 
     /// A linha `api.servidor` nunca leva nome ou id escolhido por alguém (I-14).
