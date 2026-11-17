@@ -40,7 +40,7 @@ falhou=0
     # Plano só de backend: o cargo muitas vezes não tem o que compilar, e o preparo não espera memória.
     PLANO='backend_rapido'
     passo_preparo || { echo 'FALHOU: preparo de backend esperou memória'; exit 1; }
-    [[ "$(cat "$preparation_log")" == 'build --locked -p hangar-server -p hangar-auth' ]] || {
+    [[ "$(cat "$preparation_log")" == $'build --locked -p hangar-server -p hangar-auth\nbuild --locked -p hangar-server --example orq_contract' ]] || {
         echo 'FALHOU: preparo de backend não compilou o par'; cat "$preparation_log"; exit 1; }
 ) || falhou=1
 
