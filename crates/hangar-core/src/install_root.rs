@@ -128,9 +128,11 @@ pub fn backend_noted(home: &Path, args: &[String], windows: bool, explicit: Opti
     while let Some(arg) = rest.next() {
         if arg == "--log" { rest.next(); } else { command.arg(arg); }
     }
-    // Na raiz da versão: o pacote pode não ter `backend/`, e o servidor anota a raiz para o
+    // Na `backend/` enquanto a versão a tiver: a anterior, na volta, só acha o `backend/.env` da
+    // máquina não migrada pelo cwd. Sem ela, na raiz; o servidor anota a raiz para o
     // `hangar-server open` de `~/.hangar/bin` achar o `.env`.
-    command.current_dir(&real);
+    let backend = real.join("backend");
+    command.current_dir(if backend.is_dir() { backend } else { real });
     Ok(Backend::Direct(command))
 }
 
@@ -289,12 +291,15 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path();
         let real = version(home, "1.0.0.9", r#"{"version":"1.0.0.9","boot":"direct"}"#);
-        // A versão que sobe direto não precisa da `backend/`: o servidor roda na raiz dela.
-        std::fs::remove_dir(real.join("backend")).unwrap();
         let args = ["--log".to_owned(), "/tmp/x.log".to_owned()];
         let Ok(super::Backend::Direct(command)) = super::backend(home, &args, false, None) else { panic!("devia ser direto") };
         assert_eq!(command.get_program(), real.join("bin/hangar-server"));
         assert_eq!(command.get_args().count(), 0, "o --log fica com o lançador");
+        // Com a `backend/` na versão, ela: a versão anterior, na volta, acha o `.env` pelo cwd.
+        assert_eq!(command.get_current_dir(), Some(real.join("backend").as_path()));
+        // Sem ela, a raiz da versão.
+        std::fs::remove_dir(real.join("backend")).unwrap();
+        let Ok(super::Backend::Direct(command)) = super::backend(home, &args, false, None) else { panic!("devia ser direto") };
         assert_eq!(command.get_current_dir(), Some(real.as_path()));
     }
 

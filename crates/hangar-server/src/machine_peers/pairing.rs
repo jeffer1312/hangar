@@ -60,22 +60,29 @@ pub(crate) fn qr_text(url:&str)->Result<String,String> {
     }
     Ok(result)
 }
-/// No terminal, os QR e as URLs com o token. Fora dele a saída vai ao journal ou ao log, que não
-/// podem guardar o token: só os endereços, e o caminho para ver o QR.
+/// O que o `hangar-server pairing` imprime: quem pediu leva o token, também por pipe.
 pub fn print(settings:&Settings,lan_ip:&str,tty:bool,writer:&mut impl Write)->Result<(),String> {
+    let (pwa,api)=settings.urls(lan_ip);
     let mut emit=|text:String| -> Result<(),String> {
         writer.write_all(text.as_bytes()).and_then(|_|writer.flush()).map_err(|e|e.to_string())
     };
-    if !tty {
-        let (front,api)=settings.addresses(lan_ip);
-        emit(format!("  Pareamento (abra no celular): {front}/ (o QR com a senha: scripts/show-qr.sh num terminal)\n\n"))?;
-        return emit(format!("  App nativo: {api}/\n\n"));
+    if tty {
+        emit(format!("{}\n",qr_text(&pwa)?))?;
+        emit(format!("  Scan to pair, or open: {pwa}\n\n"))?;
+        emit(format!("{}\n",qr_text(&api)?))?;
+    } else {
+        emit(format!("  Pareamento (abra no celular): {pwa}\n\n"))?;
     }
-    let (pwa,api)=settings.urls(lan_ip);
-    emit(format!("{}\n",qr_text(&pwa)?))?;
-    emit(format!("  Scan to pair, or open: {pwa}\n\n"))?;
-    emit(format!("{}\n",qr_text(&api)?))?;
     emit(format!("  App nativo: {api}\n\n"))
+}
+
+/// A linha automática da subida. Sem terminal ela vai ao journal ou ao log, que não podem guardar
+/// o token: só os endereços, e o caminho para ver o QR.
+pub fn print_boot(settings:&Settings,lan_ip:&str,tty:bool,writer:&mut impl Write)->Result<(),String> {
+    if tty { return print(settings,lan_ip,tty,writer); }
+    let (front,api)=settings.addresses(lan_ip);
+    let text=format!("  Pareamento (abra no celular): {front}/ (o QR com a senha: scripts/show-qr.sh num terminal)\n\n  App nativo: {api}/\n\n");
+    writer.write_all(text.as_bytes()).and_then(|_|writer.flush()).map_err(|e|e.to_string())
 }
 pub fn cli(args:&[String])->std::process::ExitCode {
     let backend=match args { []=>crate::session_open::cli::backend_dir(), [flag,path] if flag=="--backend"=>Some(std::path::PathBuf::from(path)), _=>{eprintln!("uso: hangar-server pairing [--backend <pasta>]");return 2.into();} };

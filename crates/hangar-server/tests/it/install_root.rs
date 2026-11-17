@@ -48,10 +48,11 @@ fn direct_version(home: &Path) -> std::path::PathBuf {
     real
 }
 
-/// P9: a versão que sobe direto roda na raiz dela, mesmo sem `backend/` (o pacote deixa de levá-la).
+/// P9: a versão que sobe direto roda na `backend/` dela enquanto a tiver (a anterior, na volta, só
+/// acha o `backend/.env` da máquina não migrada pelo cwd) e, sem ela, na raiz.
 #[cfg(unix)]
 #[test]
-fn a_direct_version_runs_its_server_in_the_version_root() {
+fn a_direct_version_runs_its_server_in_its_backend_or_else_in_the_version_root() {
     use std::os::unix::fs::PermissionsExt;
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path();
@@ -59,9 +60,14 @@ fn a_direct_version_runs_its_server_in_the_version_root() {
     let server = home.join("server-falso");
     std::fs::write(&server, "#!/bin/sh\npwd -P > \"$HOME/cwd\"\n").unwrap();
     std::fs::set_permissions(&server, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let out = launch_command(home, &["backend"]).env("CP_RUST_SERVER_BIN", &server).output().unwrap();
-    assert_eq!(out.status.code(), Some(0), "{out:?}");
-    assert_eq!(std::fs::read_to_string(home.join("cwd")).unwrap().trim(), real.canonicalize().unwrap().display().to_string());
+    let cwd = || {
+        let out = launch_command(home, &["backend"]).env("CP_RUST_SERVER_BIN", &server).output().unwrap();
+        assert_eq!(out.status.code(), Some(0), "{out:?}");
+        std::fs::read_to_string(home.join("cwd")).unwrap().trim().to_owned()
+    };
+    assert_eq!(cwd(), real.canonicalize().unwrap().display().to_string(), "sem backend/: a raiz");
+    std::fs::create_dir_all(real.join("backend")).unwrap();
+    assert_eq!(cwd(), real.join("backend").canonicalize().unwrap().display().to_string(), "com backend/: ela");
 }
 
 /// As linhas do lançador no log da tarefa, sem o prefixo.
