@@ -1,0 +1,111 @@
+//! Memória, swap, carga, núcleos e disco desta máquina, para o bloco "Esta máquina".
+use std::path::{Component, Path, PathBuf};
+
+use hangar_api::status::{DirSize, DiskUse, HostBlock};
+use sysinfo::{CpuRefreshKind, DiskRefreshKind, Disks, MemoryRefreshKind, System};
+
+/// Lê a máquina com o disco da partição da casa do usuário e da pasta temporária. `None` quando não
+/// há casa ou nenhum disco a contém: sem disco não há bloco.
+pub fn read_host(dir_hangar: DirSize, dir_build_cache: DirSize) -> Option<HostBlock> {
+    let home = std::env::home_dir()?;
+    read_host_at(&home, &std::env::temp_dir(), dir_hangar, dir_build_cache)
+}
+
+pub fn read_host_at(home: &Path, temp: &Path, dir_hangar: DirSize, dir_build_cache: DirSize) -> Option<HostBlock> {
+    let mut system = System::new();
+    system.refresh_memory_specifics(MemoryRefreshKind::nothing().with_ram().with_swap());
+    system.refresh_cpu_list(CpuRefreshKind::nothing());
+    let disks = Disks::new_with_refreshed_list_specifics(DiskRefreshKind::nothing().with_storage());
+    let home_disk = disk_of(&disks, home)?;
+    let temp_disk = disk_of(&disks, temp);
+    let disk_tmp = temp_disk.filter(|tmp| tmp.mount_point() != home_disk.mount_point()).map(usage);
+    Some(HostBlock {
+        mem_total: system.total_memory(),
+        mem_available: system.available_memory(),
+        swap_total: system.total_swap(),
+        swap_used: system.used_swap(),
+        load: load(),
+        cpus: u32::try_from(system.cpus().len()).unwrap_or(u32::MAX),
+        disk_home: usage(home_disk),
+        disk_tmp,
+        dir_hangar,
+        dir_build_cache,
+    })
+}
+
+#[cfg(windows)]
+fn load() -> Option<[f64; 3]> { None }
+
+#[cfg(not(windows))]
+fn load() -> Option<[f64; 3]> {
+    let l = System::load_average();
+    Some([l.one, l.five, l.fifteen])
+}
+
+fn usage(disk: &sysinfo::Disk) -> DiskUse {
+    let total = disk.total_space();
+    DiskUse { used: total.saturating_sub(disk.available_space()), total }
+}
+
+/// O disco cujo ponto de montagem é o prefixo mais longo do caminho.
+fn disk_of<'a>(disks: &'a Disks, path: &Path) -> Option<&'a sysinfo::Disk> {
+    let path = resolved(path);
+    disks.list().iter()
+        .filter(|disk| disk.total_space() > 0 && contains(disk.mount_point(), &path))
+        .max_by_key(|disk| disk.mount_point().components().count())
+}
+
+/// Caminho absoluto sem link no meio. No Windows o `canonicalize` devolve `\\?\C:\...`, que não casa
+/// com o ponto de montagem `C:\`: ali basta o absoluto.
+fn resolved(path: &Path) -> PathBuf {
+    if cfg!(windows) {
+        return std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    }
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// Comparação por componente; no Windows a letra do disco e os nomes não diferenciam maiúscula.
+fn contains(mount: &Path, path: &Path) -> bool {
+    let norm = |c: Component<'_>| {
+        let text = c.as_os_str().to_string_lossy().into_owned();
+        if cfg!(windows) { text.to_lowercase() } else { text }
+    };
+    let mut path = path.components();
+    mount.components().all(|m| path.next().is_some_and(|p| norm(p) == norm(m)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const NONE: DirSize = DirSize { bytes: None, computing: false };
+
+    #[test]
+    fn host_reading_is_within_ranges() {
+        let home = tempfile::tempdir().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let host = read_host_at(home.path(), temp.path(), NONE, NONE).expect("disco da pasta");
+        assert!(host.mem_total > 0);
+        assert!(host.mem_available > 0 && host.mem_available <= host.mem_total);
+        assert!(host.swap_used <= host.swap_total);
+        assert!(host.cpus > 0);
+        assert!(0 < host.disk_home.used && host.disk_home.used <= host.disk_home.total);
+        if let Some(tmp) = host.disk_tmp {
+            assert!(tmp.used <= tmp.total && tmp.total > 0);
+        }
+        if cfg!(windows) {
+            assert_eq!(host.load, None);
+        } else {
+            assert!(host.load.is_some_and(|l| l.iter().all(|v| *v >= 0.0)));
+        }
+        assert_eq!((host.dir_hangar, host.dir_build_cache), (NONE, NONE), "tamanhos vêm de quem chama");
+    }
+
+    #[test]
+    fn mount_contains_by_component() {
+        assert!(contains(Path::new("/"), Path::new("/home/u")));
+        assert!(contains(Path::new("/home"), Path::new("/home/u")));
+        assert!(!contains(Path::new("/home"), Path::new("/homes/u")), "prefixo de texto não é prefixo de pasta");
+        assert!(!contains(Path::new("/tmp"), Path::new("/")));
+    }
+}
