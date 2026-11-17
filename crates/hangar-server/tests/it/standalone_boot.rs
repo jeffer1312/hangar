@@ -95,7 +95,7 @@ fn life(home: &Path) -> Value {
     serde_json::from_slice(&std::fs::read(home.join(".hangar").join(hangar_boot::life::FILE)).unwrap()).unwrap()
 }
 
-/// A marca de pé só sai com a subida pronta, depois da porta aberta.
+/// A marca de pé sai quando a porta pública atende a saúde, sem esperar a preparação das sessões.
 fn wait_running(home: &Path) {
     let deadline = Instant::now() + Duration::from_secs(60);
     while std::fs::read(home.join(".hangar").join(hangar_boot::life::FILE)).ok()
@@ -259,6 +259,7 @@ fn p2_ready_watchdog_and_stopping_reach_the_systemd_socket() {
     let socket_path = home.path().join("notify.sock");
     let socket = std::os::unix::net::UnixDatagram::bind(&socket_path).unwrap();
     socket.set_read_timeout(Some(Duration::from_secs(60))).unwrap();
+    // READY=1 vem com a porta atendendo; nos primeiros 180 s o WATCHDOG=1 sai sem julgar as provas.
     let mut server = Server(command(home.path()).env("NOTIFY_SOCKET", &socket_path).env("WATCHDOG_USEC", "400000").spawn().unwrap());
     let mut seen = Vec::new();
     let mut buffer = [0u8; 256];

@@ -293,7 +293,9 @@ desenvolvedor e para a máquina ainda não migrada. Evidência em
   versão. A unit nunca desiste (`StartLimitIntervalSec=0`; espera crescente até 10 min só no systemd
   254+, nos mais velhos 10 s fixos) e espera 120 s na parada. Ela é `Type=notify` com `WatchdogSec`
   e `TimeoutStartSec=300` só quando o manifesto da versão diz `boot: direct` e o lançador é igual ao
-  `hangar-server` dela; o resto fica `Type=simple`. Se a unit de notify cair numa versão que sobe pelo
+  `hangar-server` dela; o resto fica `Type=simple`. O servidor avisa pronto quando a porta pública
+  atende, antes de preparar as sessões; o `WATCHDOG=1` sai sempre nos 180 s seguintes e depois só é
+  retido na quarta rodada de provas falha seguida. Se a unit de notify cair numa versão que sobe pelo
   Python (volta da atualização), o lançador avisa pronto e desliga o watchdog. A tarefa do Windows
   religa até 999 vezes; o `rust_bins` e todo
   `sys.executable` gravado usam o caminho real. Hooks, atalhos, `plugin-dir`, skills e `⟦HANGAR⟧`

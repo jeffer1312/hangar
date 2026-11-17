@@ -304,6 +304,34 @@ async fn run(notifier: hangar_boot::notify::Notifier) {
     let (alive_state, listen) = (state.state.clone(), state.cfg.listen);
     let (ready_recorded, ready_dir, ready_notifier) = (stop_recorded.clone(), hangar_dir.clone(), notifier.clone());
     let ready_stopped = stopped.clone();
+    // Pronto quando a porta pública atende, antes da preparação demorada (hooks, sessões): uma máquina
+    // cheia não estoura o `TimeoutStartSec` e vira um laço de religadas sem queda contada.
+    let _ready = tokio::spawn(async move {
+        hangar_server::watchdog::wait_serving(listen).await;
+        // Daqui em diante sair sem a parada gravada é queda. Parada pedida antes de pronto não marca
+        // de pé: fora do Windows a parada só é gravada depois que o servidor termina, e a marca ficaria até lá.
+        let marked = tokio::task::spawn_blocking(move || {
+            let recorded = ready_recorded.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if *recorded || ready_stopped.get().is_some() { return false; }
+            hangar_server::diag::record_running(&ready_dir);
+            true
+        }).await;
+        let marked = match marked {
+            Ok(marked) => marked,
+            Err(error) => {
+                tracing::error!(code = "server_ready_failed", %error, "tarefa da marca de pé falhou: sem READY=1 nem watchdog, o systemd encerra pelo prazo de subida");
+                false
+            }
+        };
+        if !marked { return; }
+        if let Err(error) = ready_notifier.send("READY=1") {
+            tracing::warn!(code = "systemd_notify_failed", kind = ?error.kind(), "aviso de pronto ao systemd não saiu");
+        }
+        if let Some(every) = ready_notifier.watchdog {
+            tokio::spawn(hangar_server::watchdog::notify_alive(ready_notifier, every,
+                hangar_server::watchdog::server_probes(listen, alive_state), hangar_server::watchdog::Policy::SERVER));
+        }
+    });
     let _preparation = tokio::spawn(async move {
         match service {
             Ok(service) => match tokio::task::spawn_blocking(move || service.startup_outcome()).await {
@@ -327,30 +355,6 @@ async fn run(notifier: hangar_boot::notify::Notifier) {
         startup_prewarm.clean_receipts().await;
         hangar_server::startup::prepare_sessions(startup_environment).await;
         startup.finish();
-        // Só agora a vida está pronta: daqui em diante sair sem a parada gravada é queda.
-        // Parada pedida antes de pronto não marca de pé: fora do Windows a parada só é gravada
-        // depois que o servidor termina, e a marca ficaria até lá.
-        let marked = tokio::task::spawn_blocking(move || {
-            let recorded = ready_recorded.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            if *recorded || ready_stopped.get().is_some() { return false; }
-            hangar_server::diag::record_running(&ready_dir);
-            true
-        }).await;
-        let marked = match marked {
-            Ok(marked) => marked,
-            Err(error) => {
-                tracing::error!(code = "server_ready_failed", %error, "tarefa da marca de pé falhou: sem READY=1 nem watchdog, o systemd encerra pelo prazo de subida");
-                false
-            }
-        };
-        if !marked { return; }
-        if let Err(error) = ready_notifier.send("READY=1") {
-            tracing::warn!(code = "systemd_notify_failed", kind = ?error.kind(), "aviso de pronto ao systemd não saiu");
-        }
-        if let Some(every) = ready_notifier.watchdog {
-            tokio::spawn(hangar_server::watchdog::notify_alive(ready_notifier, every,
-                hangar_server::watchdog::server_probes(listen, alive_state)));
-        }
     });
     let prewarm = state.prewarm.clone();
     let connect = state.connect_supervisor.clone();

@@ -116,7 +116,8 @@ BACK_WATCHDOG=""
 if [[ -n "$LAUNCHER" ]] && grep -Eqs '"boot"[[:space:]]*:[[:space:]]*"direct"' "$HOME/.hangar/current/manifest.json" \
    && cmp -s "$HOME/.hangar/current/bin/hangar-server" "$LAUNCHER"; then
   BACK_TYPE=notify
-  # O servidor só avisa pronto depois de preparar as sessões, que demora numa máquina cheia.
+  # O servidor avisa pronto quando a porta atende, antes de preparar as sessões; o prazo largo cobre a
+  # subida numa máquina cheia.
   BACK_WATCHDOG=$'NotifyAccess=main\nWatchdogSec=60\nTimeoutStartSec=300\n'
 fi
 # A espera crescente (RestartSteps/RestartMaxDelaySec) só existe no systemd 254+; o mais velho ignora as
