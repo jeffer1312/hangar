@@ -388,6 +388,8 @@ mod codex_batch;
 // O lançador do Codex com terminal e o `hangar-codex` do shell, com o `codex` e o tmux falsos.
 #[cfg(unix)]
 mod codex_tui;
+#[cfg(windows)]
+mod codex_tui_windows;
 #[cfg(unix)]
 mod hangar_codex_shell;
 

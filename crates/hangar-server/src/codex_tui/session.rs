@@ -323,11 +323,12 @@ impl Life {
     }
 
     /// Sempre na saída: derruba o app-server, espera as escutas (senão gravariam o arquivo apontando
-    /// para o servidor morto) e apaga o arquivo desta vida.
-    pub async fn finish(&mut self, screen: &dyn Screen) {
+    /// para o servidor morto) e apaga o arquivo desta vida. `budget` é o teto das duas esperas juntas:
+    /// metade para o app-server sair, o resto para as escutas; o arquivo sai mesmo se elas estourarem.
+    pub async fn finish_within(&mut self, screen: &dyn Screen, budget: Duration) {
         let Some(server) = self.server.as_mut() else { return };
-        server.stop().await;
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + budget;
+        server.stop_within(budget / 2).await;
         for mut listener in self.listeners.drain(..) {
             if tokio::time::timeout_at(deadline, &mut listener).await.is_err() {
                 listener.abort();
@@ -379,6 +380,29 @@ mod tests {
             "tool_output_token_limit": 144000, "launcher_pid": std::process::id(), "tui_pid": 41}));
         assert!(lines.0.lock().unwrap().is_empty());
         assert_eq!(session.selected_tier().as_deref(), Some("priority"), "a conversa do arquivo é a atual");
+    }
+
+    /// PR-07: com um app-server que ignora o pedido de saída e uma escuta que não termina, a limpeza do
+    /// fechamento do console cabe no teto (o Windows mata o processo uns 5 s depois) e o arquivo sai.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_close_budget_bounds_the_whole_cleanup_and_still_removes_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let session = Arc::new(Session::new(dir.path().to_path_buf(), &plan("cx"), "ws://127.0.0.1:9".into(), Some("k")));
+        let argv: Vec<String> = ["/bin/sh", "-c", "trap '' TERM; while :; do sleep 1; done"].map(str::to_owned).to_vec();
+        let env = BTreeMap::from([("PATH".to_owned(), "/usr/bin:/bin".to_owned())]);
+        let server = Server::spawn(&argv, "/", &env, &Tail::none()).unwrap();
+        session.set_app_pid(server.pid);
+        let lines = Lines(Default::default());
+        session.save_thread("t1", "/r/t1", Some(&thread("t1", json!({}))), &lines);
+        assert!(codex_sidecar::path(dir.path(), "cx").exists());
+        let mut life = Life { session: Some(session), server: Some(server), ..Life::default() };
+        life.listeners.push(tokio::spawn(std::future::pending::<()>()));
+        let started = Instant::now();
+        life.finish_within(&lines, Duration::from_secs(2)).await;
+        assert!(started.elapsed() < Duration::from_millis(2_800), "levou {:?}", started.elapsed());
+        assert!(life.server.as_mut().unwrap().exited(), "o app-server que ignorou o pedido saiu pelo kill");
+        assert!(!codex_sidecar::path(dir.path(), "cx").exists());
     }
 
     /// `/new` troca a conversa; subagente e outra pasta não. `launcher__new-thread-sequence-new-and-subagent`.

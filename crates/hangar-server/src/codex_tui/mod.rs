@@ -93,24 +93,38 @@ fn value_of<'a>(env: &'a [(String, String)], key: &str) -> Option<&'a str> {
 async fn run(raw: &[String]) -> i32 {
     let env = pane_environment();
     let mut life = session::Life::default();
-    let exit = tokio::select! {
-        exit = flow(raw, &env, &mut life) => exit,
-        code = signals() => Exit::done(code),
+    let (exit, hurry) = tokio::select! {
+        exit = flow(raw, &env, &mut life) => (exit, false),
+        signal = signals() => (Exit::done(signal.code), signal.hurry),
     };
-    life.finish(&Pane).await;
+    // O Windows dá uns 5 s ao fechamento do console antes de matar o processo: a limpeza cabe nisso.
+    let budget = if hurry { CLOSE_BUDGET } else { FINISH_BUDGET };
+    life.finish_within(&Pane, budget).await;
     if exit.opening && exit.code != 0 {
         // O pane fechado (SIGHUP) ou o `kill-session` não esperam o Enter.
         tokio::select! {
             () = wait_enter() => {}
-            code = signals() => return code,
+            signal = signals() => return signal.code,
         }
     }
     exit.code
 }
 
+/// Teto da limpeza normal: parar o app-server e esperar as escutas.
+const FINISH_BUDGET: Duration = Duration::from_secs(10);
+/// Teto da limpeza no fechamento do console do Windows, abaixo dos ~5 s que ele espera.
+const CLOSE_BUDGET: Duration = Duration::from_secs(3);
+
+struct Signal {
+    code: i32,
+    /// O sistema mata o processo logo depois (fechamento do console no Windows).
+    hurry: bool,
+}
+
 /// `SIGTERM`/`SIGHUP` viram 143 e a limpeza roda: `tmux kill-session` derruba o pane por sinal, e sem
-/// isso o app-server ficaria escutando sem dono. No Windows o fechamento do console faz o mesmo.
-async fn signals() -> i32 {
+/// isso o app-server ficaria escutando sem dono. `SIGINT` vira 130. No Windows o fechamento do console
+/// vale o `SIGHUP`, e Ctrl+C e Ctrl+Break valem o `SIGINT`.
+async fn signals() -> Signal {
     #[cfg(unix)]
     {
         use tokio::signal::unix::{SignalKind, signal};
@@ -118,20 +132,23 @@ async fn signals() -> i32 {
             (signal(SignalKind::terminate()), signal(SignalKind::hangup()), signal(SignalKind::interrupt())) else {
             return std::future::pending().await;
         };
-        tokio::select! {
+        let code = tokio::select! {
             _ = term.recv() => 143,
             _ = hup.recv() => 143,
             _ = int.recv() => 130,
-        }
+        };
+        Signal { code, hurry: false }
     }
     #[cfg(windows)]
     {
-        match tokio::signal::windows::ctrl_close() {
-            Ok(mut close) => {
-                close.recv().await;
-                143
-            }
-            Err(_) => std::future::pending().await,
+        use tokio::signal::windows::{ctrl_break, ctrl_c, ctrl_close};
+        let (Ok(mut close), Ok(mut interrupt), Ok(mut brk)) = (ctrl_close(), ctrl_c(), ctrl_break()) else {
+            return std::future::pending().await;
+        };
+        tokio::select! {
+            _ = close.recv() => Signal { code: 143, hurry: true },
+            _ = interrupt.recv() => Signal { code: 130, hurry: false },
+            _ = brk.recv() => Signal { code: 130, hurry: false },
         }
     }
 }

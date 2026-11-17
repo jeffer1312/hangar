@@ -226,7 +226,10 @@ impl Server {
     pub fn status(&self) -> Option<i32> { self.status }
 
     /// `terminate`, 5 s, `kill`. No Windows o Job inteiro.
-    pub async fn stop(&mut self) {
+    pub async fn stop(&mut self) { self.stop_within(Duration::from_secs(5)).await }
+
+    /// `limit`: quanto o filho tem para sair antes do `kill`.
+    pub async fn stop_within(&mut self, limit: Duration) {
         self.gone.store(true, Ordering::Release);
         if self.exited() { return; }
         #[cfg(unix)]
@@ -239,7 +242,7 @@ impl Server {
             use hangar_core::terminal_process::OwnedTree;
             let _ = self.tree.terminate();
         }
-        if tokio::time::timeout(Duration::from_secs(5), self.child.wait()).await.is_err() {
+        if tokio::time::timeout(limit, self.child.wait()).await.is_err() {
             let _ = self.child.kill().await;
         }
         let _ = self.exited();
