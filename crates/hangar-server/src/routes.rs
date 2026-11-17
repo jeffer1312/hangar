@@ -1022,6 +1022,7 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         // Mesmo caminho: o axum junta o POST à rota de cima (um repasse só, o dela).
         .route("/api/presence", axum::routing::post(crate::presence::route))
         .route("/api/presence/heartbeat", axum::routing::post(crate::presence::route).fallback(pass_registered))
+        .route("/api/presence/app", axum::routing::post(crate::presence::route).fallback(pass_registered))
         .route("/api/jev/aux/cliproxy", get(crate::jev_aux::cliproxy).fallback(pass_any))
         .route("/api/jev/aux/models", axum::routing::post(crate::jev_aux::models).fallback(pass_any))
         .route("/api/voice", get(crate::voice::routes::ws).options(crate::voice::routes::preflight))

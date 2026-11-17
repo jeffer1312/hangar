@@ -162,7 +162,7 @@ pub fn rust_route(method: &Method, path: &str) -> bool {
     }
     // Interface dos mods: o Rust atende as sessões dele e repassa as outras (os contadores mostram).
     if *method == Method::POST {
-        if matches!(path, "/api/sessions" | "/api/claude/defaults" | "/api/presence" | "/api/presence/heartbeat" | "/api/jev/aux/models" | "/api/mermaid") {
+        if matches!(path, "/api/sessions" | "/api/claude/defaults" | "/api/presence" | "/api/presence/heartbeat" | "/api/presence/app" | "/api/jev/aux/models" | "/api/mermaid") {
             return true;
         }
         let tail = path.strip_prefix("/api/sessions/").and_then(|r| r.split_once('/')).map(|(_, t)| t);

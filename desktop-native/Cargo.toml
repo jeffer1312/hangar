@@ -47,7 +47,7 @@ tree-sitter-swift = "=0.7.3"
 tree-sitter-pascal = "=0.10.2"
 tree-sitter-dart = "=0.2.0"
 tree-sitter-kotlin-sg = "=0.4.1"
-sysinfo = { version = "=0.31.4", default-features = false, features = ["system"] }
+sysinfo = { version = "=0.39.6", default-features = false, features = ["system"] }
 # QR do APK e da fonte do SideStore na tela de instalar nos aparelhos; só o SVG.
 qrcode = { version = "=0.14.1", default-features = false, features = ["svg"] }
 
