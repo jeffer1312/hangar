@@ -314,7 +314,8 @@ mod tests {
         let start = std::time::Instant::now();
         let at = |secs: u64| start + Duration::from_secs(secs);
         let address: SocketAddr = "127.0.0.1:8765".parse().unwrap();
-        let probed = std::cell::Cell::new(0);
+        let count = std::cell::Cell::new(0);
+        let probed = &count;
         let answer = |reply: bool| move |_| { probed.set(probed.get() + 1); reply };
         let mut watch = LauncherWatch::new(start);
         assert_eq!(watch.tick(at(10), || Some(address), answer(false)), None, "fora da hora da rodada");
