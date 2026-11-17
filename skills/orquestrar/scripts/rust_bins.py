@@ -1,4 +1,4 @@
-# backend/app/rust_bins.py
+# skills/orquestrar/scripts/rust_bins.py
 """Onde estão os binários Rust do Hangar (`hangar-server`, `hangar-cano`).
 
 Ordem: a variável de ambiente (escolha explícita, vence e não cai para as outras); sem ela, o
@@ -15,7 +15,7 @@ import time
 from pathlib import Path
 
 _log = logging.getLogger(__name__)
-_REPO = Path(__file__).resolve().parents[2]
+_REPO = Path(__file__).resolve().parents[3]
 
 
 def auth_pair(binary: Path) -> tuple[Path, str]:

@@ -11,7 +11,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from app import providers_bridge
+import providers_bridge
 
 
 def _prepare(cwd, *, home=None, env=None):

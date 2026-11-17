@@ -595,8 +595,10 @@ echo "== abertura pelo Hangar (fora do tmux, em terminal) =="
 # uma sessão real no servidor vivo.
 HS_DIR="$TMP/hs"
 mkdir -p "$HS_DIR"
-cat >"$HS_DIR/hangar-server" <<'FAKE'
-#!/usr/bin/env bash
+# O `open-cli` (o pedido que o hangar-open monta) é o do binário compilado; com o argv0 deste falso,
+# ele chama o `open` aqui, que só grava o pedido.
+printf '#!/usr/bin/env bash\n[ "$1" = open-cli ] && exec -a "$0" %q "$@"\n' "$WRAPPER_SERVER_BIN" >"$HS_DIR/hangar-server"
+cat >>"$HS_DIR/hangar-server" <<'FAKE'
 [ "$1" = open ] || { echo "fake hangar-server: esperava open, veio '$1'" >&2; exit 2; }
 # 2 = binário antigo sem `open`; 4 = sem token no .env. Nos dois nada foi enviado.
 [ -n "${CP_TEST_HS_EXIT:-}" ] && { echo "fake hangar-server: saída $CP_TEST_HS_EXIT" >&2; exit "$CP_TEST_HS_EXIT"; }

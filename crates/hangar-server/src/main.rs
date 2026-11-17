@@ -89,6 +89,22 @@ fn main() -> std::process::ExitCode {
     if args.first().map(String::as_str) == Some("pricing-snapshot") {
         return hangar_server::costs::pricing_refresh::cli(&args[1..]);
     }
+    // O `hangar-send` inteiro; o atalho `scripts/hangar-send` passa a raiz da cópia dele.
+    if args.first().map(String::as_str) == Some("send") {
+        return hangar_server::send_cli::cli(&args[1..]);
+    }
+    // O pedido do `scripts/hangar-open`: monta, chama o `open` e imprime o nome para o atalho anexar.
+    if args.first().map(String::as_str) == Some("open-cli") {
+        return hangar_open_cli::cli(&args[1..]);
+    }
+    // Registro do MCP `hangar`, agentes das skills e bloco do CLAUDE.md, pelo instalador e pelos passos.
+    match args.first().map(String::as_str) {
+        Some("mcp-headers") => return hangar_registration::mcp_headers::cli(&args[1..]),
+        Some("mcp-register") => return hangar_registration::mcp_register::cli(&args[1..]),
+        Some("agents-install") => return hangar_registration::agents_install::cli(&args[1..]),
+        Some("claude-md-block") => return hangar_registration::claude_md_block::cli(&args[1..]),
+        _ => {}
+    }
     // Hook de SessionStart: só disco, nunca sobe o servidor.
     if args.first().map(String::as_str) == Some("pair-context") {
         return hangar_server::groups::context_cmd::run(&args);

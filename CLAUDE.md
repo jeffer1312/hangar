@@ -412,7 +412,7 @@ vigentes" de `docs/decisoes/windows.md`**.
 `atualizacoes.py`, `docs/atualizacoes/`, `VERSION`, `frontend/dist` servido pelo backend, na
 criação de sessão sob escopo do systemd ou no pacote por versão (`crates/hangar-package`,
 `crates/hangar-server/src/update/`, `scripts/montar-pacote.py`, `scripts/migrar-pacote.*`,
-`scripts/hangar-python`, `~/.hangar/config`): **leia "Regras vigentes" de `docs/decisoes/instalacao.md`**.
+`scripts/hangar-server-lookup`, `~/.hangar/config`): **leia "Regras vigentes" de `docs/decisoes/instalacao.md`**.
 
 ### Plataforma — nomes, pareamento, planos, ditado → [`docs/decisoes/plataforma.md`](docs/decisoes/plataforma.md)
 

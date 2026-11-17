@@ -61,7 +61,7 @@ def test_caminho_gravado_fora_do_hangar_aponta_para_o_current(home, monkeypatch,
 
 
 def test_binario_do_pacote_vence(home, monkeypatch):
-    from app import rust_bins
+    import rust_bins
     current = _pacote(home)
     monkeypatch.delenv("CP_RUST_CANO_BIN", raising=False)
     exe = current / "bin" / ("hangar-cano" + (".exe" if os.name == "nt" else ""))
