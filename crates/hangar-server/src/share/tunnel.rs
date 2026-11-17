@@ -179,6 +179,12 @@ async fn is_on(ts: &dyn Tailscale) -> Result<bool, TunnelError> {
         .is_some_and(|allow| allow.iter().any(|(k, on)| k.ends_with(&suffix) && truthy(on))))
 }
 
+/// O Funnel da porta do convidado está ligado agora? Só lê. `Err` traz o `fix` de quando o Tailscale
+/// não respondeu (`confirmed_absent` separa o "não instalado" e o "sem login").
+pub async fn funnel_on(ts: &dyn Tailscale) -> Result<bool, String> {
+    is_on(ts).await.map_err(|e| e.fix)
+}
+
 /// Endereço do Funnel desta máquina, conferidos os pré-requisitos; não liga nada.
 async fn ready(ts: &dyn Tailscale) -> Result<String, TunnelError> {
     let s = status(ts).await?;

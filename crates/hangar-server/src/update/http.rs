@@ -91,6 +91,7 @@ pub(crate) async fn published(release: &Release, refresh: bool) -> Published {
     }
     let read = super::entry(&CLIENT, release, &super::platform()).await
         .inspect_err(|e| tracing::warn!(code = e.code(), "update: índice da release ilegível: {e}")).map_err(|e| e.to_string());
+    if read.is_ok() { super::periodic::note_check(); }
     let known = Published::merge(cached.map(|(_, known)| known), read);
     CACHE.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(url, (Instant::now(), known.clone()));
     known
@@ -187,8 +188,19 @@ fn with_cors(headers: &axum::http::HeaderMap, mut resp: Response) -> Response {
 pub async fn status(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
     if mode(&st.accounts.env.home) == Mode::Unmigrated { return super::git_engine::http::serve(st, peer, req).await; }
     if let Err(response)=crate::routes::owner_gate(&st,peer,&req).await{return response;}
-    let mode=mode(&st.accounts.env.home);
     let refresh = req.uri().query().is_some_and(|q| q.split('&').any(|p| matches!(p, "procurar=1" | "procurar=true")));
+    match status_body(&st, refresh).await {
+        Some(body) => with_cors(req.headers(), json_guarded_ascii(StatusCode::OK, body)),
+        // A máquina deixou de ser migrada entre a primeira leitura e esta.
+        None => super::git_engine::http::serve(st, peer, req).await,
+    }
+}
+
+/// O corpo do `GET /api/atualizacao`, sem a autorização; `None` na máquina não migrada, que é do
+/// motor do checkout. A tela Status lê daqui o bloco Atualização.
+pub(crate) async fn status_body(st: &AppState, refresh: bool) -> Option<Value> {
+    let mode=mode(&st.accounts.env.home);
+    if mode == Mode::Unmigrated { return None; }
     let (home, claude) = (st.accounts.env.home.clone(), st.accounts.env.claude_base.clone());
     let topology = topology().await.name();
     let running = super::running_package().map(|p| p.version.clone());
@@ -232,7 +244,7 @@ pub async fn status(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
             let checkout = tokio::task::spawn_blocking(move || super::dev::read(&root, refresh)).await.unwrap_or_else(|e| Err(e.to_string()));
             dev_body(checkout.as_ref().map_err(String::as_str), super::dev::boot_head(), topology, estado)
         }
-        Mode::Unmigrated => unreachable!("filtrado em owned"),
+        Mode::Unmigrated => return None,
     };
     // A linha do modo e o interruptor do modo desenvolvedor: canal do pacote, ou a branch do checkout.
     body["canal"] = match body["modo"].as_str() {
@@ -241,7 +253,7 @@ pub async fn status(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
     }.into();
     body["checkout"] = suggested.map(|p| p.display().to_string()).into();
     mark_pending_warning(&mut body, &home);
-    with_cors(req.headers(), json_guarded_ascii(StatusCode::OK, body))
+    Some(body)
 }
 
 /// Aviso importante que a pessoa ainda não aceitou (a migração pendente, ou feita sem o aviso): a

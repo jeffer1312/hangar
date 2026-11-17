@@ -155,6 +155,8 @@ pub struct AppState {
     /// Avisos do Mission Control à sessão, pelo handler da rota de entrada; o estado entra quando o roteador nasce.
     pub mission_notify: Arc<crate::mission_notify::SessionNotify>,
     pub ticket_actions: std::sync::OnceLock<Arc<hangar_ticket_actions::Engine>>,
+    /// Tela Status: hub do retrato e amostrador do processo; o teste troca a coleta.
+    pub status: Arc<crate::status::Status>,
 }
 
 impl AppState {
@@ -313,6 +315,7 @@ impl AppState {
             mission,
             mission_notify,
             ticket_actions: Default::default(),
+            status: Arc::default(),
             hangar_dir, device_install,
             upload_naming: Default::default(),
             origins: std::sync::Mutex::new(indexmap::IndexMap::new()),
@@ -417,6 +420,8 @@ pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest:
     }
     let _worktree_sweep=crate::AbortOnDrop(crate::worktree_policy::spawn(state.clone()));
     let _keyring_watch = crate::AbortOnDrop(crate::keyring::spawn(state.list.keyring.clone()));
+    // A curva da última hora da tela Status existe com ou sem tela aberta.
+    let _status_sampler = crate::AbortOnDrop(crate::status::spawn_sampler(&state));
     let _vault_backup = crate::AbortOnDrop(crate::vault::backup::spawn(state.clone()));
     let _vault_files = crate::AbortOnDrop(tokio::spawn(crate::vault::files::sweep_at_start()));
     let _auto_report = crate::AbortOnDrop(crate::diag_report::auto::spawn(state.clone()));
@@ -1007,6 +1012,9 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/session-auto-hide", axum::routing::get(crate::session_visibility::auto::route).put(crate::session_visibility::auto::route))
         .route("/api/tags", axum::routing::get(crate::tags::handle).put(crate::tags::handle))
         .route("/api/notice-ignores", axum::routing::get(crate::notice_ignores::handle).put(crate::notice_ignores::handle))
+        // Tela Status: só o dono, nunca repassada (o Python não tem a rota).
+        .route("/api/status", get(crate::status::snapshot))
+        .route("/api/status/events", get(crate::status::events))
         .route("/api/config-sync/manifest", axum::routing::get(crate::config_sync::http::handle))
         .route("/api/config-sync/bundle", axum::routing::get(crate::config_sync::http::handle))
         .route("/api/config-sync/apply", axum::routing::any(crate::config_sync::apply_http::handle))

@@ -2041,6 +2041,7 @@ dependencies = [
  "hangar-session-tools",
  "hangar-shortcut-transfer",
  "hangar-sidecar-prune",
+ "hangar-status",
  "hangar-ticket-actions",
  "hangar-transcript",
  "hangar-update-news",
@@ -2139,6 +2140,20 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+]
+
+[[package]]
+name = "hangar-status"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "hangar-api",
+ "hangar-core",
+ "hangar-usage-diary",
+ "serde",
+ "serde_json",
+ "sysinfo",
+ "tempfile",
 ]
 
 [[package]]

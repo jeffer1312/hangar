@@ -11109,5 +11109,16 @@
   "native_news_tickets_status": "Em programação",
   "native_news_tickets_plan": "Planejamento",
   "native_news_tickets_execute": "Execução",
-  "native_mission_folder_hint": "Escolha a pasta onde a sessão trabalhará e ajuste as opções do agente."
+  "native_mission_folder_hint": "Escolha a pasta onde a sessão trabalhará e ajuste as opções do agente.",
+  "status_attention_machine_down": "{name} fora há {since}",
+  "status_attention_exits_crash": "Quedas do servidor em 7 dias: {count}",
+  "status_attention_machine_outdated": "{name} com versão antiga ({version})",
+  "status_attention_app_version_differs": "App de {host} na versão {version}, servidor na {server}",
+  "status_attention_disk_full": "Disco {pct}% cheio",
+  "status_attention_tmp_full": "Temporário {pct}% cheio",
+  "status_attention_session_dead": "A sessão {name} caiu",
+  "status_attention_queue_stuck": "Fila parada há {minutes} min",
+  "status_attention_server_errors": "Erros do servidor nas últimas 24 h: {count}",
+  "status_attention_watchdog": "Avisos do watchdog nas últimas 24 h: {count}",
+  "status_attention_keyring_locked": "Chaveiro trancado"
 }
