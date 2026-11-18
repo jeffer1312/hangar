@@ -64,23 +64,32 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   usuário se grava como `REG_EXPAND_SZ` (`Set-ItemProperty -Type ExpandString` + `WM_SETTINGCHANGE`),
   nunca por `[Environment]::SetEnvironmentVariable`. O `powershell.exe` filho vem de `$PSHOME`, não
   do PATH.
-- **Python em `WindowsApps` não é só o atalho da Store.** O Python Install Manager (o 3.14 do
-  winget) também mora lá e executa. O instalador pergunta `sys.executable` ao atalho e grava o
-  interpretador real nos lançadores, porque o bash não roda alias de app; quem não devolve caminho
-  é a Store. Exceção: o `hangar-codex-tui` usa `backend\.venv\Scripts\python.exe` quando ele
-  existe, e o Python dos outros lançadores sem o venv; sem Python real, nenhum lançador é criado. Ver [Python do Install Manager](#python-do-install-manager-22102026).
+- **O instalador não instala nem procura Python.** Nenhum lançador passa por Python: `hangar-send`,
+  `hangar-conta` e o `hangar-codex-tui` chamam o `hangar-server.exe`; o passo
+  `2026-11-17-atalhos-windows-sem-python` regrava os que a versão antiga gravou pelo Python. Os
+  atalhos `python3`, `python3.cmd` e `hangar-python.cmd` antigos ficam (a versão anterior, na volta,
+  usa) e saem junto com a `python/` do pacote, no PR seguinte.
+  A orquestração ainda usa o `python3` da máquina, quando há. A história do Python do Install
+  Manager está em [Python do Install Manager](#python-do-install-manager-22102026).
 - **Atalho sem extensão que o instalador grava em `~/.local/bin` ganha um gêmeo `.cmd` na mesma
   pasta.** Sem ele, o
   PowerShell e o `cmd` resolvem o nome para o arquivo do bash e o Windows pergunta com que programa
-  abri-lo. Ver [`python3.cmd`](#python3cmd-ao-lado-do-atalho-do-bash-23102026).
+  abri-lo. Ver [`python3.cmd`](#python3cmd-ao-lado-do-atalho-do-bash-23102026) (o atalho em si
+  saiu; a regra vale para os que ficaram).
 - **Instalação Windows mantém o nível de permissão**: iniciada como admin, registra tarefas
   interativas elevadas e atalhos elevados do Electron; comum, usa UAC pontual. Atualização
   manual sem elevação não pode rebaixar uma instalação elevada.
 - **A tarefa Windows acompanha o processo até ele terminar.** Reinício controlado não encerra
   a árvore inteira: sessões e atualizador sobrevivem. O `hangar-server.exe` filho entra na parada
-  só quando o pai é o Python; filho do servidor direto é o executor da atualização. A vigia
-  confirma falha HTTP, respeita instalação/atualização e só inicia outra instância após confirmar
-  a parada da anterior. Ver [Atualização para a 0.1.0.10824](#atualização-para-a-0110824-falhava-em-todo-windows-17112026).
+  só quando o pai é o Python; filho do servidor direto é o executor da atualização. Ver
+  [Atualização para a 0.1.0.10824](#atualização-para-a-01010824-falhava-em-todo-windows-17112026).
+- **O lançador é a vigia: não há tarefa `hangar-vigia`.** Ele confere `/__hangar_server/health`
+  no endereço que o servidor grava na marca de pé (`server-life.json`), com a carência e a
+  tolerância do watchdog do Linux (`watchdog::Policy::SERVER`), e encerra o servidor travado para
+  a religada. Depois de abrir a primeira vida ele nunca sai sozinho: a versão que sobe pelo
+  Python (a volta) também é religada. Só a escolha da primeira vida que falha sai com código 3.
+  Lançador morto à força só volta no logon: o Agendador não religa tarefa que sai com erro.
+  [Medição](#a-vigia-mora-no-lançador-17112026).
 - **O reinício do backend só vale com a porta aberta, e a porta do front pode ser do servidor.**
   `Start-HangarTask` repete o `Start-ScheduledTask` até 3 vezes enquanto a tarefa parar sem abrir a
   porta, e falha com erro se nenhuma tentativa ficar de pé; `LastRunTime` não prova a subida. Tarefa
@@ -93,7 +102,7 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   processo que saiu sozinho entre a leitura e o `Stop-Process` (o `hangar-server` sai com o Python);
   identidade divergente aborta sempre.
   O front não passa por ele, e erro dele em `Restart-HangarTasks` vira aviso: front parado
-  não desfaz uma versão boa, e a vigia o sobe. Na
+  não desfaz uma versão boa. Na
   máquina migrada, porta do front com o `hangar-server` é tela servida, nunca conflito:
   `hangar-frontend` sai sem subir. A migração e o `atualizar.py` seguem com o início direto. Medição em
   [Reinício sem início e porta do front](#reinício-sem-início-e-porta-do-front-05112026).
@@ -193,16 +202,19 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   está de pé, e o `Restart-HangarTask` o para também (`Get-HangarBackendLaunchers`). Medição em
   [Queda do servidor sem religada no Windows](#queda-do-servidor-sem-religada-no-windows-16112026).
 - **Atalho `.cmd` em máquina migrada aponta para `%USERPROFILE%\.hangar\current\scripts\…`, nunca
-  para o caminho real da versão**, que a poda apaga. `hangar-python.cmd` escolhe o Python do
-  pacote, senão o venv, senão o real; `hangar-conta.cmd` e `hangar-engine.cmd` passam por ele.
-  Vale também para os atalhos sem extensão do Git Bash (`/c/Users/…/.hangar/current/scripts/…`).
+  para o caminho real da versão**, que a poda apaga. `hangar-conta.cmd` e `hangar-send.cmd` acham o
+  `hangar-server.exe` pelo `scripts\hangar-server-lookup.cmd` do `current`. Vale também para os atalhos sem extensão do Git Bash (`/c/Users/…/.hangar/current/scripts/…`).
+  Na máquina com pacote, `hangar-send.cmd`, `hangar-conta.cmd`, `hangar-mcp-headers.cmd` e
+  `hangar-codex-tui` vão antes pela cópia dos hooks (`~\.hangar\bin\hangar-hooks.exe`, regra em
+  [instalacao.md](instalacao.md#a-cópia-dos-hooks-sobrevive-à-volta-de-versão-18112026)); sem ela, ou
+  com `CP_RUST_SERVER_BIN`, pelo lookup.
   Até 12/11/2026 o `hangar-send`, o `hangar-preview`, o `folha`, o `hangar-mcp-headers.cmd` e os
   lançadores do Codex saíam do `$raiz`, a pasta da versão de onde o instalador rodou: na DELPHI-02
   eles ainda chamavam a `0.1.0.9467` com a `0.1.0.10172` instalada, e parariam quando a poda a
   apagasse. O `install.ps1` usa `$raizAtalhos`/`$shimRootMsys` em todos; o passo
   `2026-11-12-atalhos-windows-current` regrava os das máquinas já instaladas. Teste:
   `scripts/test-install-shims-current.ps1`.
-- **Tarefa e vigia reconhecem o pacote pela linha de comando.** O backend é `hangar-server.exe` ou
+- **O reinício da tarefa reconhece o pacote pela linha de comando.** O backend é `hangar-server.exe` ou
   `hangar-launcher.exe` com `launch backend`, porque o Python roda do caminho real da versão e não
   da pasta da tarefa; atualização em curso também é `hangar-server.exe` com `update` ou
   `migrate-package`, além do `python -m app.atualizar`.
@@ -210,9 +222,7 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   cópia**, não como link: link de arquivo pede administrador.
 - **Instalação nova é pelo pacote: o `bootstrap.ps1` baixa o `hangar-server.exe`, confere o sha256 e
   roda o `install.ps1` do `current` em modo pacote** (`manifest.json` sem `.git`); `CP_DEV`,
-  `CP_DESTINO` e `-Destino` seguem pelo git. No pacote, o Python dos lançadores é o
-  `%USERPROFILE%\.hangar\current\python\python.exe` (o `hangar-codex-tui` precisa do `websockets`
-  dele), e o manifesto se lê por regex: o `ConvertFrom-Json` do 5.1 recusa JSON acima de 2 MB. Regras
+  `CP_DESTINO` e `-Destino` seguem pelo git. O manifesto se lê por regex: o `ConvertFrom-Json` do 5.1 recusa JSON acima de 2 MB. Regras
   e recusas em [instalacao.md](instalacao.md#pacote-por-versão). Só raciocinado até a prova na VM.
 - **O cofre de senhas no Windows exige o servidor no logon interativo do usuário.** A chave mora no
   Gerenciador de Credenciais, que não existe em logon por SSH nem em serviço sem perfil
@@ -1204,3 +1214,38 @@ Relatórios `7io3oihu`, `pg3xnwua` e `tqeswo2z`. Três defeitos em sequência:
    candidato, e o executor da atualização é filho do servidor: a segunda tentativa no Delphi 07 morreu
    no reinício que o próprio `install.ps1 -Update` pediu ("o processo que a executava não existe
    mais"). O filho só entra quando o pai é o Python.
+
+## A vigia mora no lançador (17/11/2026)
+
+A tarefa `hangar-vigia` rodava a cada 5 minutos um `.vbs` que chamava o PowerShell com
+`-EncodedCommand`. Numa máquina o `.vbs` sumiu e o Windows passou a mostrar "Não é possível
+encontrar o arquivo de script ...\hangar-vigia.vbs" a cada disparo (suspeita, sem prova: o
+antivírus apagou o arquivo, pelo padrão `powershell -EncodedCommand`). Ela fazia dois trabalhos:
+reiniciar o servidor travado e religar a tarefa quando o lançador saía.
+
+- **Travado:** o lançador já fica de pé ao lado do servidor (decisão 38). Ele confere a saúde a
+  cada 30 s com a política do watchdog do Linux (180 s de carência depois do pronto, 4 rodadas
+  seguidas sem resposta) e encerra o servidor, que segue para a religada.
+- **Lançador que sai:** medido na DELPHI-02 com uma tarefa descartável como a do Hangar
+  (`RestartCount 999`, `RestartInterval PT1M`): a ação que sai com código 3 rodou uma vez em
+  200 s. O reinício por falha do Agendador não religa tarefa que sai com erro depois de abrir.
+  Um gatilho de repetição a cada minuto com `IgnoreNew` religava (4 execuções em 3,5 min, sem
+  duplicar a que estava de pé), mas também desfaria toda parada de propósito (o reinício da
+  atualização, a migração para o pacote) e correria com elas. Escolha: depois de abrir a primeira
+  vida, o lançador não sai mais sozinho. A versão que sobe pelo Python (a volta da atualização)
+  entra no mesmo laço, na primeira subida e na religada, e o Python dela é religado. Lançador
+  morto à força espera o próximo logon.
+
+Limites aceitos: o servidor que trava antes de gravar o endereço de saúde não é conferido (a
+versão que ainda não grava o endereço também não: o lançador não a derruba por engano); a versão
+que sobe pelo Python é religada quando cai, mas não é conferida; o `hangar-frontend` legado do
+checkout deixa de ser recuperado. A escolha da primeira vida que falha (sem `current` e sem
+checkout) sai com código 3 antes do laço e espera o próximo logon. A vigia não pausa durante a
+atualização, como o `WatchdogSec` do Linux: o servidor só é encerrado depois de 4 rodadas sem
+resposta, e o reinício da atualização para o lançador junto com ele. A rodada é só a resposta HTTP
+da saúde, como a da `hangar-vigia`: as provas internas do servidor no Linux (pool bloqueante,
+registro das sessões) não entram. O servidor encerrado à força (`Stop-Process`, saída -1) conta
+como parada pedida: o lançador sai com ele e o backend fica fora até o próximo logon, onde a
+`hangar-vigia` o religava em até 15 min. Na versão que sobe pelo
+Python, o `hangar-server` neto que ainda segura a porta faz a religada cair e tentar de novo, com a
+espera crescente, até ele sair.

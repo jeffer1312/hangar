@@ -1574,6 +1574,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-agent-hooks"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "chrono",
+ "hangar-core",
+ "proptest",
+ "regex",
+ "reqwest",
+ "serde_json",
+ "sha1_smol",
+ "sysinfo",
+ "tempfile",
+ "tokio",
+ "unicode-normalization",
+]
+
+[[package]]
 name = "hangar-api"
 version = "0.1.0"
 dependencies = [
@@ -1779,6 +1797,7 @@ dependencies = [
  "ring",
  "serde_json",
  "subtle",
+ "tempfile",
  "tokio",
  "tracing",
 ]
@@ -1849,6 +1868,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-install-setup"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "hangar-core",
+ "libc",
+ "ring",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "hangar-local-server"
 version = "0.1.0"
 dependencies = [
@@ -1908,6 +1939,16 @@ dependencies = [
  "tokio",
  "tracing",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "hangar-open-cli"
+version = "0.1.0"
+dependencies = [
+ "hangar-core",
+ "proptest",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -1980,6 +2021,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-registration"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "hangar-core",
+ "libc",
+ "proptest",
+ "serde_json",
+ "tempfile",
+ "toml",
+]
+
+[[package]]
 name = "hangar-reviews"
 version = "0.1.0"
 dependencies = [
@@ -2010,6 +2064,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-send"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "futures-util",
+ "hangar-core",
+ "percent-encoding",
+ "proptest",
+ "regex",
+ "reqwest",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "hangar-server"
 version = "0.1.0"
 dependencies = [
@@ -2024,6 +2094,7 @@ dependencies = [
  "flate2",
  "form_urlencoded",
  "futures-util",
+ "hangar-agent-hooks",
  "hangar-api",
  "hangar-auth",
  "hangar-boot",
@@ -2040,18 +2111,22 @@ dependencies = [
  "hangar-docs",
  "hangar-dream",
  "hangar-http-file",
+ "hangar-install-setup",
  "hangar-local-server",
  "hangar-mission",
  "hangar-notice-ignores",
  "hangar-omp-sync",
+ "hangar-open-cli",
  "hangar-opencode-cookie",
  "hangar-package",
  "hangar-plugins",
  "hangar-port-preview",
  "hangar-projects",
  "hangar-psmux",
+ "hangar-registration",
  "hangar-reviews",
  "hangar-scheduled-tasks",
+ "hangar-send",
  "hangar-session-tools",
  "hangar-shortcut-transfer",
  "hangar-sidecar-prune",

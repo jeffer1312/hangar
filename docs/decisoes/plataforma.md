@@ -1371,6 +1371,11 @@ de integração também conferiu os imports Python após as exclusões.
 
 ## Configuração compartilhada: leva o conteúdo, o destino resolve caminho e programa
 
+**Preferências de worktrees (17/11/2026):** a cópia de preferências inclui a configuração de
+criação e limpeza, com caminho portável, validação e backup no destino. A seleção parcial
+respeita a entrada `worktrees`; pacote sem essa entrada conserva a configuração local. Antes,
+uma cópia bem-sucedida das preferências podia deixar a limpeza desligada na outra máquina.
+
 (30/10/2026.) A migração dos motores inclui os leitores e escritores do pacote de configuração.
 As rotas `/api/config-sync/*` executam no Rust, assim como exportação, tradução, aplicação e
 pós-aplicar. A tradução usa o serviço `speech` já incorporado à branch principal, incluindo suas
@@ -2559,6 +2564,13 @@ componentes dos três clientes. Cobrem confirmação, preservação da branch, r
 locks, sessões e revalidação. Nenhuma prova apaga uma pasta residual do ambiente em uso.
 
 ### Diretórios ignorados e submódulos na confirmação
+
+**Caches Rust grandes (17/11/2026):** a impressão dos arquivos não percorre `target` ignorado
+pelo Git, assim como já não percorria dependências instaladas. Uma pasta `target` com identidade
+Git própria ou sem regra de exclusão continua lida. A confirmação dos arquivos perdidos e as
+guardas de sessão, branch e alterações locais continuam valendo. Uma worktree com mais de
+100 mil artefatos atingia o limite da leitura e recusava até a remoção manual com confirmação;
+a regressão cria esse cache e chama a remoção pública, com Git e disco descartáveis.
 
 **Regra:** a lista do que será perdido inclui os diretórios ignorados inteiros e cada
 submódulo inicializado (`<caminho>/`); a confirmação existente autoriza o descarte deles.
@@ -4916,3 +4928,37 @@ curvas, linha do tempo, cartões de máquina, barra dividida, colunas por hora e
   disco quase cheio ou máquina com versão antiga não são ação que falhou, e ficam dentro da tela.
 - **Fora:** "Python vivo" (o Python não sobe mais), `lan` dos peers (o servidor só chama o
   `base_url`), limpar restos pela tela (só conta).
+
+## Vídeo do celular: upload responde ao gravar, quadros e fala por pedido que espera (17/11/2026)
+
+- **Motivo.** O envio nativo do Expo (`File.upload`) desiste com 60 s sem resposta (Android OkHttp
+  `readTimeout(60)`, iOS sessão padrão). O `/upload` de vídeo só respondia depois de `media::extract`
+  (ffprobe 30 s, até 6 quadros de 25 s, áudio 90 s) e da transcrição (até 120 s). Vídeo com fala longa
+  aparecia como falha no celular, embora o arquivo já estivesse no servidor; e o app jogava fora quadros
+  e fala, que o desktop põe na mensagem.
+- **Contrato.** `POST …/upload?media=later` com vídeo responde na hora com `"media":"pending"` e um
+  `media_id` aleatório; o processamento roda numa tarefa e o resultado fica num registro em memória
+  (`uploads::media::MediaJobs`). `GET …/upload-media?id=<media_id>` segura o pedido até ficar
+  pronto ou 45 s (`status: pending`), e devolve `{"status":"done","frames","transcript"}`. Id
+  desconhecido, expirado (10 min depois de pronto), de tarefa que caiu ou perdido por
+  reinício é 404 `upload_media_unknown`: o app segue só com o vídeo, como o desktop quando a
+  transcrição falha. Sem `media=later` nada muda: desktop e web continuam recebendo quadros e fala na
+  resposta.
+- **Chave pelo id, não pela sessão.** `/clear`, troca de nome e a conversa nova (que sobe antes do
+  primeiro envio) mudam a sessão entre o upload e a espera.
+- **Uma tarefa de mídia por vez, no caminho `media=later`.** Cada uma roda ffmpeg e ocupa uma vaga de
+  transcrição até o fim; o cliente não segura mais a resposta, então várias em paralelo tirariam as
+  vagas do ditado (`transcription_busy`). O caminho sem o parâmetro (desktop e web) continua como era.
+  A tarefa não é cancelada quando o anexo é removido.
+- **Pedido que espera, não evento no chat.** Sem formato novo de evento nos três clientes; o app repete
+  o pedido quando o servidor devolve `pending`. O teto do core (3 min) conta só o tempo SEM resposta:
+  cada `pending` o renova, porque a fila de vídeos é finita e contá-la deixava o segundo vídeo longo
+  sem quadros nem fala (revisão local do PR #443).
+- **A espera acha a mídia só pelo id**, sem procurar a sessão do nome na URL: a sessão renomeada no meio
+  dava 404. O id aleatório vale como chave de acesso.
+- **No módulo `uploads/`, não crate próprio.** É o mesmo recurso do upload: usa o `UploadStore`, o
+  `extract` e a transcrição do servidor; separar exigiria descer os três para o `hangar-core`.
+- **Prazo do upload pelo tamanho.** `max(180 s, tamanho / 50 kB/s)`; o prazo estourado não marca a
+  máquina como fora do ar, a queda de rede continua marcando (`countsOutage: 'network'`). Vale para o
+  app e para a web, que compartilham o core. Sem teto: um link que trava num arquivo grande deixa o
+  envio esperando até o prazo dele.

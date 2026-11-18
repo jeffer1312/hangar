@@ -1,6 +1,7 @@
 //! Vida do servidor: a marca de "de pé" a cada subida e a de parada limpa. A subida que acha a marca
 //! de pé sabe que a vida anterior não saiu limpa (queda, kill, falta de energia) e a conta.
 use std::io::{Read, Seek, SeekFrom, Write};
+use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::LazyLock;
 
@@ -119,8 +120,10 @@ pub enum Mark {
 }
 
 /// Pronta para atender: daqui em diante, sair sem `end` é uma saída não limpa. `birth` é o
-/// nascimento deste processo, que a subida seguinte confere antes de contar a queda.
-pub fn mark_running(dir: &Path, pid: u32, birth: Option<f64>, now: &str, alive: impl Fn(u32, f64) -> bool) -> std::io::Result<Mark> {
+/// nascimento deste processo, que a subida seguinte confere antes de contar a queda. `health` é o
+/// endereço da saúde que o lançador do Windows confere; vai na mesma escrita da marca de pé para
+/// nunca haver vida de pé sem ele.
+pub fn mark_running(dir: &Path, pid: u32, birth: Option<f64>, health: Option<SocketAddr>, now: &str, alive: impl Fn(u32, f64) -> bool) -> std::io::Result<Mark> {
     let (mut life, _) = read_or_reset(dir)?;
     let running = life.get("running").and_then(Value::as_bool).unwrap_or(false);
     let ours = life.get("pid").and_then(Value::as_u64) == Some(u64::from(pid));
@@ -138,7 +141,19 @@ pub fn mark_running(dir: &Path, pid: u32, birth: Option<f64>, now: &str, alive: 
     };
     map.shift_remove(STOP);
     map.insert("started".into(), json!(now));
+    match health {
+        Some(address) => map.insert("health".into(), json!(address.to_string())),
+        None => map.shift_remove("health"),
+    };
     write(dir, &life).map(|()| Mark::Marked)
+}
+
+/// O endereço de saúde da vida `pid` de pé; `None` em qualquer outro caso, inclusive arquivo
+/// ilegível e a versão que não o grava.
+pub fn health(dir: &Path, pid: u32) -> Option<SocketAddr> {
+    let life = read(dir).ok()?;
+    if !running_as(&life, pid) { return None; }
+    life.get("health")?.as_str()?.parse().ok()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -180,6 +195,10 @@ pub fn end_with(dir: &Path, pid: u32, cause: Option<&str>, failed: bool, at: u64
     map.insert(STOP.into(), stop);
     write(dir, &life)?;
     Ok(Ended::Cleared)
+}
+
+fn running_as(life: &Value, pid: u32) -> bool {
+    life.get("running").and_then(Value::as_bool) == Some(true) && life.get("pid").and_then(Value::as_u64) == Some(u64::from(pid))
 }
 
 fn read_or_reset(dir: &Path) -> std::io::Result<(Value, bool)> {

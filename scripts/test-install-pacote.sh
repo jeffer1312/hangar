@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Testa o install.sh em modo pacote (a pasta tem manifest.json e não tem .git), sem instalar nada:
-# a sandbox do test-install-app.sh, sem uv, sem npm e sem o python3 da máquina; o Python do backend é
-# um hangar-python falso que registra as chamadas.
+# a sandbox do test-install-app.sh, sem uv, sem npm e sem Python; o hangar-server do pacote é um
+# falso que registra as chamadas.
 #
 #   ./scripts/test-install-pacote.sh
 set -uo pipefail
@@ -15,17 +15,23 @@ KEY=$(printf 'a%.0s' $(seq 64))
 pacote_sandbox() {
   new_sandbox "$1"
   printf '{\n  "channel": "latest",\n  "commit": "c",\n  "dist_key": "%s",\n  "version": "0.1.0.42"\n}\n' "$KEY" > "$R/manifest.json"
-  rm -rf "$R/frontend" "$B/uv" "$S/sys/python3"
+  rm -rf "$R/frontend"
   # A tela da chave, como o install-package a deixa.
   mkdir -p "$S/home/.hangar/ui/$KEY" && : > "$S/home/.hangar/ui/$KEY/index.html"
-  # O Python embutido: registra a pasta e os argumentos, e sai 0.
-  printf '#!/bin/sh\necho "$(pwd) $*" >> "%s/log/python"\nexit 0\n' "$S" > "$R/scripts/hangar-python"
-  chmod +x "$R/scripts/hangar-python"
-  # O hangar-server do pacote: registra os argumentos; falha com $S/mark-fails.
+  # O hangar-server do pacote: registra os argumentos; a marca dos passos avisa um malformado e falha
+  # com $S/mark-fails; `$S/server-fails-<subcomando>` faz os outros falharem.
   mkdir -p "$R/bin"
-  printf '#!/bin/sh\necho "$*" >> "%s/log/server"\necho "aviso: passo malformado ignorado: torto.md"\n[ ! -e "%s/mark-fails" ]\n' "$S" "$S" > "$R/bin/hangar-server"
+  cat > "$R/bin/hangar-server" <<EOF
+#!/bin/sh
+echo "\$*" >> "$S/log/server"
+case "\$1" in
+  install-package) echo "aviso: passo malformado ignorado: torto.md"; [ ! -e "$S/mark-fails" ] ;;
+  install-token) [ ! -e "$S/server-fails-install-token" ] && echo $(printf 'd%.0s' $(seq 48)) ;;
+  *) [ ! -e "$S/server-fails-\$1" ] ;;
+esac
+EOF
   chmod +x "$R/bin/hangar-server"
-  cp "$REPO/scripts/hangar-doctor" "$REPO/scripts/hangar-server-command" "$R/scripts/"
+  cp "$REPO/scripts/hangar-doctor" "$REPO/scripts/hangar-server-command" "$REPO/scripts/hangar-server-lookup" "$R/scripts/"
   mkdir -p "$S/home/.hangar"
   ln -s "$R" "$S/home/.hangar/current"
   fake node 'case "$1" in --version) echo v22.0.0 ;; esac; exit 0'
@@ -44,19 +50,20 @@ expect_eq "novo: config só do usuário" "$(stat -c %a "$S/home/.hangar/config")
 expect_no "novo: nenhum uv" "$S/out" 'uv: (command )?not found|uv sync'
 expect_no "novo: nenhum npm" "$S/log/calls" '^npm '
 expect_no "novo: nenhum git" "$S/log/calls" '^git '
-expect_line "novo: push pelo Python do pacote" "$S/log/python" "^$R/backend -m app.vapid_setup$"
-expect_line "novo: fumaça pelo Python do pacote" "$S/log/python" "^$R/backend -c import app.codex_contas"
+expect_no "novo: nenhum Python" "$S/log/calls" '^(python3|uv) '
+expect_line "novo: push pelo hangar-server do pacote" "$S/log/server" '^vapid-setup$'
+expect_line "novo: fumaça pelo hangar-server do pacote" "$S/log/server" '^install-token$'
+expect_line "novo: frase da fumaça" "$S/out" 'o hangar-server executa nesta máquina'
 expect_line "novo: tela pronta" "$S/out" 'a tela vem pronta com o pacote'
 expect_line "novo: binários do pacote" "$S/out" 'hangar-server e hangar-cano: vieram no pacote'
 expect_line "novo: serviço sem --backend-only" "$S/log/scripts" 'services-setup.sh $'
 expect_line "novo: hangar-send e skills" "$S/log/scripts" '^\./scripts/install-hangar-send\.sh'
-expect_eq "novo: passos marcados no fim, pelo hangar-server do pacote" "$(cat "$S/log/server" 2>/dev/null)" 'install-package --mark-steps'
+expect_eq "novo: passos marcados no fim, pelo hangar-server do pacote" "$(tail -n 1 "$S/log/server" 2>/dev/null)" 'install-package --mark-steps'
 expect_line "novo: passo malformado aparece" "$S/out" 'passo malformado ignorado: torto.md'
-before "$S/out" 'o backend importa' 'passo malformado' && pass "novo: marca depois da fumaça" || flunk "novo: marca depois da fumaça" "$S/out"
+before "$S/out" 'o hangar-server executa' 'passo malformado' && pass "novo: marca depois da fumaça" || flunk "novo: marca depois da fumaça" "$S/out"
 [ -e "$S/home/.hangar/fresh-package" ] && flunk "novo: marcador de instalação nova apagado" "$S/out" || pass "novo: marcador de instalação nova apagado"
 expect_no "novo: sem hook de git pull" "$S/out" 'sem .git|hook de atualização'
-SHIM="$S/home/.hangar/cache/install-bin/python3"
-expect_line "novo: python3 dos sub-scripts é o do pacote" "$SHIM" "exec \"$R/scripts/hangar-python\""
+[ -e "$S/home/.hangar/cache/install-bin/python3" ] && flunk "novo: nenhum atalho python3 criado" || pass "novo: nenhum atalho python3 criado"
 expect_eq "novo: .env só do dono" "$(stat -c %a "$S/home/.hangar/config/.env")" 600
 
 # fnm_box <nome> [falha]: pacote sem Node, e o curl falso serve o instalador do fnm, que exige o unzip
@@ -131,7 +138,7 @@ expect_line "com-git: persistência roda" "$S/log/scripts" 'tmux-persist-setup'
 pacote_sandbox de-novo
 run_install "$S/out" --app --tailscale=nao --sem-nativo; rc=$?
 expect_eq "de-novo: sai 0" "$rc" 0
-[ -e "$S/log/server" ] && flunk "de-novo: nada marcado" "$S/out" || pass "de-novo: nada marcado"
+expect_no "de-novo: nada marcado" "$S/log/server" '^install-package'
 expect_line "de-novo: diz que os pendentes ficam para o Atualizar" "$S/out" 'nenhum passo de atualização marcado.*Atualizar'
 
 # --- Caso: segunda rodada sem terminal acha o Claude que a primeira pôs em ~/.local/bin ---
@@ -172,7 +179,36 @@ pacote_sandbox falha-cedo
 fake tmux 'exit 1'
 TEST_FRESH=1 run_install "$S/out" --app --tailscale=nao --sem-nativo; rc=$?
 expect_eq "falha-cedo: sai 1" "$rc" 1
-[ -e "$S/log/server" ] && flunk "falha-cedo: nada marcado" "$S/out" || pass "falha-cedo: nada marcado"
+expect_no "falha-cedo: nada marcado" "$S/log/server" '^install-package'
+
+# --- Caso: o hangar-server do pacote não executa: a fumaça para antes de marcar ---
+pacote_sandbox fumaca-falha
+: > "$S/server-fails-install-token"
+mkdir -p "$S/home/.hangar" && : > "$S/home/.hangar/fresh-package"
+TEST_FRESH=1 run_install "$S/out" --app --tailscale=nao --sem-nativo; rc=$?
+expect_eq "fumaça-falha: sai 1" "$rc" 1
+expect_line "fumaça-falha: diz que o hangar-server não executa" "$S/out" '^##HANGAR-FALHA## o hangar-server não executa nesta máquina'
+expect_no "fumaça-falha: nada marcado" "$S/log/server" '^install-package'
+[ -e "$S/home/.hangar/fresh-package" ] && pass "fumaça-falha: marcador fica" || flunk "fumaça-falha: marcador fica" "$S/out"
+
+# --- Caso: as chaves do push não saíram: pendência com o comando do pacote ---
+pacote_sandbox vapid-falha
+: > "$S/server-fails-vapid-setup"
+run_install "$S/out" --app --tailscale=nao --sem-nativo; rc=$?
+expect_line "vapid-falha: pendência push" "$S/out" '^##HANGAR-PENDENCIA## push .*current/bin/hangar-server vapid-setup$'
+
+# --- Caso: passo da atualização, com o `current` ainda na versão anterior sem os subcomandos novos ---
+pacote_sandbox atualiza
+OLD="$ROOT/atualiza/versao-anterior"
+mkdir -p "$OLD/bin"
+printf '#!/bin/sh\necho "$*" >> "%s/log/old-server"\necho "hangar-server: subcomando desconhecido: $1" >&2\nexit 2\n' "$S" > "$OLD/bin/hangar-server"
+chmod +x "$OLD/bin/hangar-server"
+rm "$S/home/.hangar/current" && ln -s "$OLD" "$S/home/.hangar/current"
+run_install "$S/out" --update --tailscale=nao --sem-nativo; rc=$?
+expect_line "atualiza: push pelo binário da versão nova" "$S/log/server" '^vapid-setup$'
+[ -e "$S/log/old-server" ] && flunk "atualiza: o binário da versão anterior não é chamado" "$S/log/old-server" \
+  || pass "atualiza: o binário da versão anterior não é chamado"
+expect_no "atualiza: sem pendência do push" "$S/out" 'PENDENCIA## push'
 
 # --- install-native.sh: a primeira conexão do app leva a senha de ~/.hangar/config/.env ---
 # native_box <nome>: N (cópia do Hangar com o install-native.sh de verdade), H (HOME) e NREL (a release falsa).
@@ -209,7 +245,7 @@ env -i HOME="$S/home" PATH="$S/sys" "$R/scripts/hangar-doctor" --qr > "$S/out" 2
 env -i HOME="$S/home" PATH="$S/sys" "$R/scripts/show-qr.sh" >> "$S/out" 2>&1
 expect_line "doctor: pelo binário" "$S/log/server" "^doctor --backend $R/backend --qr$"
 expect_line "show-qr: pelo binário e backend explícito" "$S/log/server" "^pairing --backend $R/backend$"
-[ -e "$S/log/python" ] && flunk "diagnóstico e QR não chamam Python" || pass "diagnóstico e QR não chamam Python"
+expect_no "diagnóstico e QR não chamam Python" "$S/log/calls" '^python3 '
 
 # --- Caso: --check no pacote confere sem uv e sem gravar, nem marcar passos (mesmo em instalação nova) ---
 pacote_sandbox check

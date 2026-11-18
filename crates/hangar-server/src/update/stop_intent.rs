@@ -465,7 +465,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let hangar = dir.path();
         hangar_boot::life::begin(hangar, "2026-11-17T10:00:00-03:00", |_, _| false).unwrap();
-        hangar_boot::life::mark_running(hangar, 41, Some(41.0), "2026-11-17T10:00:00-03:00", |_, _| false).unwrap();
+        hangar_boot::life::mark_running(hangar, 41, Some(41.0), None, "2026-11-17T10:00:00-03:00", |_, _| false).unwrap();
         let marked = before_restart(hangar, ExitKind::Requested, "restart_only", None, None);
         let written: Value = serde_json::from_slice(&std::fs::read(hangar.join(FILE)).unwrap()).unwrap();
         assert_eq!((written["tipo"].as_str(), written["causa"].as_str(), written["pid"].as_u64()), (Some("requested"), Some("restart_only"), Some(41)));
@@ -483,7 +483,7 @@ mod tests {
     fn stop_intent_is_removed_when_the_restart_fails() {
         let dir = tempfile::tempdir().unwrap();
         let hangar = dir.path();
-        hangar_boot::life::mark_running(hangar, 41, Some(41.0), "agora", |_, _| false).unwrap();
+        hangar_boot::life::mark_running(hangar, 41, Some(41.0), None, "agora", |_, _| false).unwrap();
         before_restart(hangar, ExitKind::Update, "package", Some("1"), Some("2")).settle(&Err::<(), _>("recusado"));
         assert!(!hangar.join(FILE).exists(), "reinício recusado com o servidor ainda de pé");
         // Sem servidor de pé, nada é gravado.
@@ -499,7 +499,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let hangar = dir.path();
         hangar_boot::life::begin(hangar, "2026-11-17T10:00:00-03:00", |_, _| false).unwrap();
-        hangar_boot::life::mark_running(hangar, 41, Some(41.0), "2026-11-17T10:00:00-03:00", |_, _| false).unwrap();
+        hangar_boot::life::mark_running(hangar, 41, Some(41.0), None, "2026-11-17T10:00:00-03:00", |_, _| false).unwrap();
         let marked = before_restart(hangar, ExitKind::Update, "package", Some("1"), Some("2"));
         hangar_boot::life::end_with(hangar, 41, Some("sigterm"), false, NOW).unwrap();
         marked.settle(&Err::<(), _>("a unit nova não subiu"));

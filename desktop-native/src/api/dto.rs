@@ -670,6 +670,8 @@ pub struct Delivery {
     pub ok: bool,
     #[serde(default)] pub delivered: bool,
     #[serde(default)] pub timing_note: Option<String>,
+    /// Pedida "Na conversa": `Some(false)` é a fila comum (servidor que não leva o modo a esta sessão ou anterior a ele).
+    #[serde(default)] pub conversation: Option<bool>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]

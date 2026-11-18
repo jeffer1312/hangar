@@ -258,11 +258,12 @@ fn parse_body(bytes: &Bytes) -> Option<(String, bool)> {
     (body.task.is_none() && !body.conversation).then_some((body.text, body.steer))
 }
 
-/// Na conversa só onde o turno é do processo e a mensagem entra sem cortá-lo: Claude e Codex sem terminal, e
-/// Codex com terminal (`turn/steer`). No Claude com terminal o Orientar aperta `ctrl+x ctrl+s`, que corta:
-/// ali, como em Pi, omp e Kimi, a mensagem segue o caminho da fila.
+/// Na conversa onde a mensagem entra no turno sem cortá-lo: Claude e Codex sem terminal, Codex com terminal
+/// (`turn/steer`) e Claude com terminal, onde o ator digita com o turno em curso e o Claude Code a lê na pausa
+/// seguinte. Pi, omp e Kimi seguem o caminho da fila.
 fn gentle(target: &WriteTarget) -> bool {
-    gentle_surface(matches!(target.handle, crate::runtime::gateway::EntryHandle::Headless(_) | crate::runtime::gateway::EntryHandle::CodexTerminal { .. }),
+    use crate::runtime::gateway::EntryHandle;
+    gentle_surface(matches!(target.handle, EntryHandle::Headless(_) | EntryHandle::CodexTerminal { .. } | EntryHandle::Terminal { .. }),
         &target.provider)
 }
 
@@ -307,7 +308,10 @@ async fn send(st: &AppState, name: &str, target: &WriteTarget, text: &str, steer
 #[allow(clippy::too_many_arguments)]
 async fn send_with_receipt(st: &AppState, name: &str, target: &WriteTarget, text: &str, steer: bool, conversation: bool, expected_turn: Option<Value>, include_uncertain: bool) -> (StatusCode, Value) {
     let operation_id = random_hex(16);
-    let steer = steer || conversation;
+    // No Claude com terminal o Orientar aperta `ctrl+x ctrl+s`, que corta o turno: lá o próprio ator digita a
+    // mensagem marcada mesmo com o Claude trabalhando.
+    let claude_terminal = matches!(target.handle, crate::runtime::gateway::EntryHandle::Terminal { .. });
+    let steer = steer || (conversation && !claude_terminal);
     let params = Params { text, steer, terminal: target.terminal, codex: target.provider == "codex", operation_id: &operation_id };
     let mut payload = json!({"text": text, "pre_transcript": false});
     if conversation { payload["conversation"] = json!(true); }

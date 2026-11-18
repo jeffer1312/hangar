@@ -690,9 +690,11 @@ impl Hangar {
 
     pub(super) fn step_session(&mut self, step: isize, window: &mut Window, cx: &mut Context<Self>) {
         if self.session_keys_blocked(window, cx) { return; }
-        let order = self.visible_order(cx);
+        let tabs = appearance::get().navigation.tabs();
+        let order = if tabs { self.tab_stops() } else { self.visible_order(cx) };
         if order.is_empty() { return; }
-        let current = self.selected_target().and_then(|t| order.iter().position(|o| *o == t));
+        let current = self.selected_target().map(|t| if tabs { self.tab_stop_of(&t) } else { t })
+            .and_then(|t| order.iter().position(|o| *o == t));
         let Some(next) = wrap_step(current, order.len(), step) else { return };
         self.select_target(&order[next], window, cx);
     }

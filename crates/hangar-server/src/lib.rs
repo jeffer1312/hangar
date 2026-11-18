@@ -41,9 +41,9 @@ pub mod locate;
 pub mod loops;
 pub mod mcp;
 pub mod mermaid;
-pub mod migration_status;
 pub mod mods;
 pub mod nav_requests;
+pub mod owned_routes;
 pub mod pages;
 pub mod prewarm;
 pub(crate) mod queue_feed;
@@ -81,6 +81,7 @@ pub mod speech;
 pub mod stats;
 pub mod status;
 pub mod usage_cli;
+pub mod send_cli;
 pub mod subagents;
 pub mod tail;
 pub mod term;
@@ -489,6 +490,7 @@ pub(crate) fn write_test_executable(path: &std::path::Path, content: impl AsRef<
 }
 
 pub mod codex_setup;
+pub mod codex_tui;
 
 pub mod harness_setup;
 pub mod provider_hooks;

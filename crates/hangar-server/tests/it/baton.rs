@@ -3,6 +3,16 @@ use crate::{fake::{OWNER, client}, workspace_fixture};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
+/// Os `--prompt-b64` do comando gravado, já decodificados.
+fn prompts_b64(command: &str) -> Vec<String> {
+    use base64::Engine;
+    let words: Vec<&str> = command.split(['\0', ' ']).collect();
+    words.windows(2).filter(|pair| pair[0] == "--prompt-b64").map(|pair| {
+        let bytes = base64::engine::general_purpose::STANDARD_NO_PAD.decode(pair[1].trim_matches(['\'', '"'])).unwrap();
+        String::from_utf8(bytes).unwrap()
+    }).collect()
+}
+
 const CLAUDE_ID: &str = "2751096f-84dc-4986-b0a8-a40d641ee43d";
 const LIVE_ID: &str = "00000000-0000-4000-8000-000000000101";
 const CODEX_ID: &str = "019f0000-0000-7000-8000-000000000001";
@@ -1234,7 +1244,7 @@ case "$1" in
 *) printf '%s\000' "$@" >> "$root/codex-unknown"; printf 'Sonda Codex sintética não implementada\n' >&2; exit 78;;
 esac
 "#);
-        crate::write_executable(&root.join("bin/hangar-codex-tui"),"#!/bin/sh\nprintf '%s\\000' \"$@\" >> \"$HANGAR_BATON_CHILD_ROOT/launcher-executed\"\nprintf 'Lançador não deve executar fora do mux sintético\\n' >&2\nexit 78\n");
+        crate::write_executable(&root.join("bin/hangar-server"),"#!/bin/sh\nprintf '%s\\000' \"$@\" >> \"$HANGAR_BATON_CHILD_ROOT/launcher-executed\"\nprintf 'Lançador não deve executar fora do mux sintético\\n' >&2\nexit 78\n");
         let sidecar=h.home.join(".hangar/codex-sessions/fixture.json");std::fs::create_dir_all(sidecar.parent().unwrap()).unwrap();
         std::fs::write(&sidecar,json!({"name":"fixture","provider":"codex","key":"baton-codex-origin","cwd":h.root,
             "codex_home":work,"thread_id":CODEX_ID,"rollout_path":h.path,"headless":true}).to_string()).unwrap();
@@ -1267,8 +1277,9 @@ esac
         assert_eq!(specs.len(),1,"um spec da abertura efetiva: {specs:?}");assert_eq!(specs[0]["provider"],"codex");
         assert_eq!(specs[0]["surface"],"terminal");assert_eq!(specs[0]["account"],json!({"kind":"codex","account_id":"work"}));
         let args=std::fs::read_to_string(root.join("new-session-argv")).unwrap();
-        assert!(args.contains("hangar-codex-tui") && args.contains("--codex-home") && args.contains(work.to_str().unwrap()) && args.contains("--codex-account"),"{args}");
-        assert_eq!(args.matches(body["kickoff"].as_str().unwrap()).count(),1,"kickoff único no comando do lançador");
+        assert!(args.contains("hangar-server codex-tui") && args.contains("--codex-home") && args.contains(work.to_str().unwrap()) && args.contains("--codex-account"),"{args}");
+        // Kickoff de várias linhas vai em base64: o `.cmd` do Windows cortaria o texto na quebra de linha.
+        assert_eq!(prompts_b64(&args),vec![body["kickoff"].as_str().unwrap().to_owned()],"kickoff único e inteiro no comando do lançador");
         assert!(!root.join("launcher-executed").exists(),
             "launcher-executed={:?}",std::fs::read(root.join("launcher-executed")));
         assert!(!h.home.join(".claude/.hangar-queue/cx2.jsonl").exists());
@@ -1288,7 +1299,7 @@ fn b01_codex_post_rejects_a_different_known_successor_account_before_effects() {
         std::fs::create_dir_all(other.join("sessions")).unwrap();std::fs::write(other.join(".hangar-codex-conta"),r#"{"version":1,"id":"other"}"#).unwrap();
         std::fs::write(root.join("codex-fixture"),"codex\n").unwrap();
         crate::write_executable(&root.join("bin/codex"),"#!/bin/sh\nprintf '%s\\000' \"$@\" >> \"$HANGAR_BATON_CHILD_ROOT/codex-probes\"\nprintf 'Codex não deve executar na recusa prévia\\n' >&2\nexit 78\n");
-        crate::write_executable(&root.join("bin/hangar-codex-tui"),"#!/bin/sh\nprintf '%s\\000' \"$@\" >> \"$HANGAR_BATON_CHILD_ROOT/launcher-executed\"\nexit 78\n");
+        crate::write_executable(&root.join("bin/hangar-server"),"#!/bin/sh\nprintf '%s\\000' \"$@\" >> \"$HANGAR_BATON_CHILD_ROOT/launcher-executed\"\nexit 78\n");
         let sidecar=h.home.join(".hangar/codex-sessions/fixture.json");std::fs::create_dir_all(sidecar.parent().unwrap()).unwrap();
         std::fs::write(&sidecar,json!({"name":"fixture","provider":"codex","key":"baton-codex-origin","cwd":h.root,
             "codex_home":work,"thread_id":CODEX_ID,"rollout_path":h.path,"headless":true}).to_string()).unwrap();

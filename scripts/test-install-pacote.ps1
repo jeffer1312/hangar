@@ -122,19 +122,33 @@ public static class FakeMark {
 
     # --- O que o pacote pula, e onde ---
     $texto = [IO.File]::ReadAllText($installer) -replace "`r`n", "`n"
-    Assert ($texto.Contains("if (`$pacote) {`n    Ok 'dependencias: vieram no pacote'`n} else {`n`$rcSync = Nativo uv sync --quiet")) 'pacote: sem uv sync'
-    Assert ($texto.Contains("if (-not `$pacote) {`nInstale 'uv'")) 'pacote: sem instalar uv'
-    Assert ($texto.Contains("    if (`$pacote) {`n        `$rcRust = 'pacote'`n    } elseif")) 'pacote: sem rust_release'
-    Assert ($texto.Contains("if (-not `$Update -and -not `$pacote) {`n    Titulo 'Passos de atualizacao'")) 'pacote: marcar_todos do uv fica de fora'
+    Assert (-not ($texto -match '(?m)^[^#\n]*\buv (sync|run)\b')) 'sem uv sync nem uv run'
+    Assert (-not ($texto -match "Instale '(Python|uv)'")) 'sem instalar Python nem uv'
+    Assert (-not ($texto -match 'pyBackend|pyFumaca|pyExe|hangar-python\.cmd|python3\.cmd|PYTHONIOENCODING')) 'nenhum Python do instalador nem atalho dele'
+    Assert ($texto.Contains("    if (`$pacote) {`n        `$rcRust = 'pacote'`n    } else {")) 'pacote: sem rust_release'
+    Assert ($texto.Contains("if (-not `$Update -and -not `$pacote) {`n    Titulo 'Passos de atualizacao'")) 'checkout: passos marcados fora do pacote'
+    Assert ($texto.Contains('install-package --mark-steps --root $raiz')) 'checkout: passos marcados pela raiz do checkout'
     Assert ($texto.Contains("} elseif (`$pacote) {`n    Ok 'o pacote se atualiza pelo Atualizar do app, sem git pull'")) 'pacote: sem hook de git pull'
-    Assert ($texto.Contains("if (`$pacote) { `$pyFumaca = @(`$pyBackend) }")) 'pacote: fumaca pelo Python do pacote'
-    Assert (-not ($texto -match '\$pyFumaca = if')) 'pacote: fumaca nunca pelo valor de um if (desembrulha o array de um item)'
-    Assert ($texto.Contains("if (`$pacote) { `$pyExe = Join-Path `$HOME '.hangar\current\python\python.exe' }")) 'pacote: lancadores pelo Python do pacote, via current'
+    Assert ($texto.Contains("`$argsVapid = @(if (`$pacote) { 'vapid-setup' } else { 'vapid-setup', '--root', `$raiz })")) 'chaves do push pelo hangar-server, com a raiz so no checkout'
+    # A linha do instalador, rodada: no pacote o splat leva um argumento so, nunca letra por letra.
+    $vapid = Trecho '$argsVapid = ' 'vapid-setup'
+    function Contar { ,@($args) }
+    $pacoteAntes = $pacote
+    $pacote = $true; . $vapid
+    Assert (((Contar @argsVapid) -join '|') -eq 'vapid-setup') 'pacote: vapid-setup vai como um argumento'
+    $pacote = $false; . $vapid
+    Assert (((Contar @argsVapid) -join '|') -eq "vapid-setup|--root|$raiz") 'checkout: vapid-setup --root <raiz>'
+    $pacote = $pacoteAntes
+    $binarios = $texto.IndexOf("Titulo 'Binarios Rust'")
+    $vapid = $texto.IndexOf('@argsVapid')
+    Assert ($binarios -gt 0 -and $vapid -gt $binarios) 'chaves do push depois dos binarios'
+    Assert ($texto.Contains('-File $serverCommand @args') -and $texto.Contains('$rc = Srv install-token')) 'fumaca pelo hangar-server'
+    Assert ($texto.Contains("`$serverBinary = Join-Path `$raiz 'bin\hangar-server.exe'") -and $texto.Contains('& $serverBinary @args')) 'pacote: o binario desta versao, nao o do current'
     $fumaca = $texto.IndexOf("Ok 'o multiplexador mata sessao'")
     $marca = $texto.IndexOf('install-package --mark-steps 2>&1')
     $fim = $texto.IndexOf('# -- Confere e entrega o acesso')
     Assert ($fumaca -gt 0 -and $marca -gt $fumaca -and $fim -gt $marca) 'pacote: passos marcados depois da fumaca'
-    $saiChecar = $texto.IndexOf("if (`$SoChecar) {`n    `$pyVenvCheck")
+    $saiChecar = $texto.IndexOf("if (`$SoChecar) {`n    Titulo 'Diagn")
     Assert ($saiChecar -gt 0 -and $saiChecar -lt $marca) 'pacote: -SoChecar sai antes de marcar passos'
     $bytes = [IO.File]::ReadAllBytes($installer)
     Assert ($bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) 'install.ps1 continua UTF-8 com BOM'

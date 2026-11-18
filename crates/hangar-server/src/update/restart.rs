@@ -169,7 +169,7 @@ mod tests {
     async fn update_restart_marks_the_stop_intent_only_when_it_stops_the_server() {
         let marked = || {
             let dir = tempfile::tempdir().unwrap();
-            hangar_boot::life::mark_running(&dir.path().join(".hangar"), 41, Some(41.0), "agora", |_, _| false).unwrap();
+            hangar_boot::life::mark_running(&dir.path().join(".hangar"), 41, Some(41.0), None, "agora", |_, _| false).unwrap();
             dir
         };
         let file = |dir: &Path| dir.join(".hangar").join(crate::update::stop_intent::FILE);
@@ -194,7 +194,7 @@ mod tests {
         assert!(!file(dir.path()).exists(), "na mão nada para");
 
         let (dir, _root) = windows_home("0.1.0.11");
-        hangar_boot::life::mark_running(&dir.path().join(".hangar"), 41, Some(41.0), "agora", |_, _| false).unwrap();
+        hangar_boot::life::mark_running(&dir.path().join(".hangar"), 41, Some(41.0), None, "agora", |_, _| false).unwrap();
         restarter(Topology::Windows, script(|_| code(0, "")), dir.path()).restart(why()).await.unwrap();
         assert_eq!(read(dir.path())["causa"].as_str(), Some("restart_only"), "as tarefas do Windows também derrubam o servidor");
 

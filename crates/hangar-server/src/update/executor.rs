@@ -853,7 +853,7 @@ mod tests {
     impl super::super::StepRunner for Seen {
         fn run(&self, command: &str, cwd: &Path) -> super::super::StepRun {
             let restarts = self.restarts.as_ref().map_or(0, |r| r.0.load(Ordering::SeqCst));
-            let pulled = cwd.parent().is_some_and(|c| c.join("b").exists());
+            let pulled = cwd.join("b").exists();
             self.calls.lock().unwrap().push((command.to_owned(), cwd.to_owned(), restarts, pulled));
             super::super::StepRun { code: Some(1), output: "sem rede".into() }
         }
@@ -877,7 +877,7 @@ mod tests {
         assert_eq!(calls.len(), 1);
         let (command, cwd, restarts, pulled) = &calls[0];
         assert!(command.contains("rust-release") && command.contains(&clone.display().to_string()) && !command.contains("app.rust_release"), "{command}");
-        assert_eq!((cwd, *restarts, *pulled), (&clone.join("backend"), 0, true));
+        assert_eq!((cwd, *restarts, *pulled), (&clone, 0, true));
         assert_eq!(restart.0.load(Ordering::SeqCst), 1);
         let state = StateFile::new(&parts.state_dir).read();
         assert_eq!(state["ok"], true);

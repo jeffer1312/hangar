@@ -1,0 +1,149 @@
+{
+ "case": "nav/jev-pause-expired",
+ "source_commit": "2ad8e335e8d9118e74bc5b33f2efb4ac3bbd8eba",
+ "python": "3.14.9 websockets 16.0",
+ "capture_cmdline": "/usr/bin/python3 capture.py -j 8",
+ "route": "R1",
+ "hook": "nav_hook.py",
+ "contract_refs": [
+  "R1-S13",
+  "H-40"
+ ],
+ "description": "",
+ "harness": {
+  "how": "$PY -B -s $REF/backend/hooks/nav_hook.py, one process per step, stdin = step"
+ },
+ "input": {
+  "env": {
+   "HOME": "$T/home",
+   "USERPROFILE": "$T/home",
+   "LOCALAPPDATA": "$T/local",
+   "TMUX_TMPDIR": "$T/tmux",
+   "PATH": "$T/stubs:/usr/bin:/bin",
+   "CLAUDE_CONFIG_DIR": "$T/cfg",
+   "TYPESAFE_API_KEY": "fake-typesafe-key",
+   "JEV_ENDPOINT": "http://127.0.0.1:$HTTP_PORT/v1/systemone"
+  },
+  "files_before": {
+   "home/.hangar": {
+    "type": "dir",
+    "mode": "0o755"
+   },
+   "home/.hangar/nav": {
+    "type": "dir",
+    "mode": "0o755"
+   },
+   "home/.hangar/nav/_jev_pausa": {
+    "type": "file",
+    "mode": "0o644",
+    "size": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "content": {
+     "text": ""
+    }
+   },
+   "home/.hangar/nav/_srv.json": {
+    "type": "file",
+    "mode": "0o644",
+    "size": 30,
+    "sha256": "fed0cb97f55bce152906c07950b4e2129f952b754b126e234e7607466ecead6f",
+    "content": {
+     "text": "{\"pid\": 3239413, \"port\": 9222}"
+    }
+   }
+  }
+ },
+ "steps": [
+  {
+   "stdin": {
+    "text": "{\"session_id\": \"11111111-2222-4333-8444-555555555555\", \"transcript_path\": \"/home/u/.claude/projects/p/11111111-2222-4333-8444-555555555555.jsonl\", \"cwd\": \"/home/u/proj\", \"permission_mode\": \"default\", \"hook_event_name\": \"UserPromptSubmit\", \"prompt\": \"testa a página de login no navegador e tira um print\"}"
+   },
+   "code": 0,
+   "stdout": {
+    "text": ""
+   },
+   "stderr": {
+    "text": ""
+   },
+   "duration_ms": 68,
+   "files": {
+    "created": {},
+    "changed": {},
+    "removed": []
+   }
+  }
+ ],
+ "files_final": {
+  "home/.hangar": {
+   "type": "dir",
+   "mode": "0o755"
+  },
+  "home/.hangar/nav": {
+   "type": "dir",
+   "mode": "0o755"
+  },
+  "home/.hangar/nav/_jev_pausa": {
+   "type": "file",
+   "mode": "0o644",
+   "size": 0,
+   "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "content": {
+    "text": ""
+   }
+  },
+  "home/.hangar/nav/_srv.json": {
+   "type": "file",
+   "mode": "0o644",
+   "size": 30,
+   "sha256": "fed0cb97f55bce152906c07950b4e2129f952b754b126e234e7607466ecead6f",
+   "content": {
+    "text": "{\"pid\": 3239413, \"port\": 9222}"
+   }
+  }
+ },
+ "window": {
+  "t_start": 1794910461.436949,
+  "t_end": 1794910461.5061898
+ },
+ "http": [
+  {
+   "method": "POST",
+   "raw_path": "/v1/systemone",
+   "headers": [
+    [
+     "Accept-Encoding",
+     "identity"
+    ],
+    [
+     "Content-Length",
+     "274"
+    ],
+    [
+     "Host",
+     "127.0.0.1:$HTTP_PORT"
+    ],
+    [
+     "User-Agent",
+     "Python-urllib/3.14"
+    ],
+    [
+     "Authorization",
+     "Bearer fake-typesafe-key"
+    ],
+    [
+     "Content-Type",
+     "application/json"
+    ],
+    [
+     "Connection",
+     "close"
+    ]
+   ],
+   "body": {
+    "text": "{\"model\": \"jev-latest\", \"state\": \"testa a p\\u00e1gina de login no navegador e tira um print\", \"questions\": {\"precisa\": {\"type\": \"noul\", \"instructions\": \"Will handling this message require opening, looking at, clicking or testing a web page or an app screen in a browser?\"}}}"
+   },
+   "t": 1794910461.4899826
+  }
+ ],
+ "http_port": 40991
+}

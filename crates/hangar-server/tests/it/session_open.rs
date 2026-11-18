@@ -160,7 +160,7 @@ async fn a_server_refusal_goes_to_stderr() {
 }
 
 /// Instalado em `~/.hangar/bin` (sem `backend/` acima), o comando acha o `.env` pelo ponteiro que o
-/// servidor grava ao subir (`~/.hangar/backend-dir`).
+/// servidor grava ao subir (`~/.hangar/install-root-dir` e o antigo `~/.hangar/backend-dir`).
 #[tokio::test]
 async fn the_installed_command_finds_the_env_file_through_the_pointer() {
     let (fake, up) = spawn_fake().await;
@@ -172,11 +172,25 @@ async fn the_installed_command_finds_the_env_file_through_the_pointer() {
     let backend = dir.path().join("checkout/backend");
     std::fs::create_dir_all(&backend).unwrap();
     std::fs::write(backend.join(".env"), format!("CP_AUTH_TOKEN=do-ponteiro\nCP_PORT={}\n", up.port())).unwrap();
-    hangar_server::session_open::cli::publish_backend_dir(&home, &backend).unwrap();
+    hangar_server::session_open::cli::publish_install_root(&home, &backend).unwrap();
     let body = r#"{"name":"s1","cwd":"/x","provider":"claude"}"#;
     let (code, _, stderr) = hangar_open(&bin, dir.path(), &["open", body], &[]).await;
     assert_eq!(code, 0, "{stderr}");
     assert_eq!(fake.last_hit().1["authorization"], "Bearer do-ponteiro");
+}
+
+/// O servidor grava os dois ponteiros: a raiz no novo (`install-root-dir`) e a `backend/` no antigo,
+/// que a versão anterior lê na volta.
+#[test]
+fn the_server_notes_the_root_and_keeps_the_old_pointer() {
+    let dir = tempfile::tempdir().unwrap();
+    let (home, root) = (dir.path().join("home"), dir.path().join("versions/2"));
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("manifest.json"), "{}").unwrap();
+    hangar_server::session_open::cli::publish_install_root(&home, &root.join("backend")).unwrap();
+    assert_eq!(std::fs::read_to_string(home.join(".hangar/install-root-dir")).unwrap(), root.to_string_lossy());
+    assert_eq!(std::fs::read_to_string(home.join(".hangar/backend-dir")).unwrap(), root.join("backend").to_string_lossy());
+    assert_eq!(hangar_core::install_root::noted_root(&home), Some(root));
 }
 
 /// Máquina migrada: o `.env` mora em `~/.hangar/config/` e vence o da `backend/`; a `backend/` da
@@ -198,9 +212,13 @@ async fn the_env_file_in_the_user_data_folder_wins() {
     // `app/main.py` é comum a qualquer projeto Python: só ele não faz da pasta a do Hangar.
     std::fs::write(dir.path().join("inst/backend/app/main.py"), "").unwrap();
     assert!(!hangar_server::session_open::cli::is_backend(&dir.path().join("inst/backend")));
-    std::fs::write(dir.path().join("inst/backend/app/pricing_data.json"), "").unwrap();
+    // A marca é da raiz: o manifesto da versão (que pode nem ter `backend/`) ou o checkout.
+    std::fs::write(dir.path().join("inst/manifest.json"), "{}").unwrap();
     assert!(hangar_server::session_open::cli::is_backend(&dir.path().join("inst/backend")));
     assert!(!hangar_server::session_open::cli::is_backend(&dir.path().join("inst/bin")));
+    std::fs::remove_file(dir.path().join("inst/manifest.json")).unwrap();
+    std::fs::create_dir_all(dir.path().join("inst/.git")).unwrap();
+    assert!(hangar_server::session_open::cli::is_backend(&dir.path().join("inst/backend")), "checkout: .git e backend/app");
     let (code, _, stderr) = hangar_open(&bin, dir.path(), &["open", body], &[]).await;
     assert_eq!(code, 0, "{stderr}");
     assert_eq!(fake.hits_to("/api/sessions"), 2);

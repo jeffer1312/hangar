@@ -1,255 +1,158 @@
-#!/usr/bin/env -S sh -c 'exec "$(command -v hangar-python || command -v python3)" "$0" "$@"'
-"""Cria uma sessao Codex gerenciada pelo hangar e anexa o terminal ao tmux.
+#!/bin/sh
+# Cria uma sessão Codex gerenciada pelo Hangar e anexa o terminal ao tmux dela.
+#
+# Abre pelo `hangar-server open`, o lançador do app: ele pede ao servidor e, com o servidor fora,
+# abre igual nesta máquina e o servidor adota depois. Sem um `hangar-server` que abra sai com 3, e a
+# função `codex` do shell abre o oficial; recusa sai com 1 e não abre nada. Cada chamada cria uma
+# sessão nova. Quando a sessão acaba (não um detach), `hangar-server codex-close` a fecha no servidor
+# ou, sem ele, limpa o que ficou da vida dela.
+set -u
 
-Abre pelo `hangar-server open`, o lançador do app: ele pede ao servidor e, com o servidor fora ou
-sem o Rust, abre igual nesta máquina (spec, chave, escopo, nome livre) e o servidor adota depois.
-Sem um `hangar-server` que abra sai com 3, e o wrapper do shell abre o `codex` oficial; recusa sai
-com 1 e não abre nada. Cada chamada cria uma sessao nova.
-"""
-from __future__ import annotations
+if [ "$#" -gt 1 ]; then
+    printf '%s\n' 'uso: hangar-codex [prompt]' >&2
+    exit 2
+fi
 
-import json
-import os
-import shutil
-import signal
-import subprocess
-import sys
-import time
-import urllib.error
-import urllib.request
-from pathlib import Path
+say() { printf 'hangar-codex: %s\n' "$1" >&2; }
 
+# A cópia do Hangar deste script: `~/.local/bin/hangar-codex` é link.
+script=$0
+while [ -L "$script" ]; do
+    dir=$(CDPATH= cd -- "$(dirname -- "$script")" && pwd)
+    link=$(readlink "$script")
+    case "$link" in /*) script=$link ;; *) script=$dir/$link ;; esac
+done
+root=$(CDPATH= cd -- "$(dirname -- "$script")/.." && pwd)
 
-class BackendHttpError(RuntimeError):
-    def __init__(self, status: int, detail):
-        self.status = status
-        self.detail = detail
-        super().__init__(f"HTTP {status}: {detail}")
+# Texto como string JSON: aspas, contrabarra e controle escapados; o resto passa como está (UTF-8).
+json_string() {
+    printf '%s\n' "$1" | awk '
+        BEGIN { for (i = 1; i < 32; i++) esc[sprintf("%c", i)] = sprintf("\\u%04x", i)
+                esc["\\"] = "\\\\"; esc["\""] = "\\\""; esc["\t"] = "\\t"; esc["\r"] = "\\r" }
+        { out = ""; n = length($0)
+          for (i = 1; i <= n; i++) { c = substr($0, i, 1); out = out ((c in esc) ? esc[c] : c) }
+          printf "%s%s", (NR > 1 ? "\\n" : ""), out }'
+}
 
+# Texto sem espaço nem linha em branco nas pontas.
+trimmed() {
+    printf '%s' "$1" | awk 'BEGIN { RS = "\001" } { gsub(/^[ \t\r\n]+|[ \t\r\n]+$/, ""); printf "%s", $0 }'
+}
 
-def _repo() -> Path:
-    return Path(__file__).resolve().parent.parent
+# Caminho absoluto: `~` expandido e a pasta (ou a pasta de cima, se ela não existe) pelo caminho real.
+absolute() {
+    case "$1" in
+        "~") path=$HOME ;;
+        "~/"*) path=$HOME/${1#"~/"} ;;
+        /*) path=$1 ;;
+        *) path=$(pwd -P)/$1 ;;
+    esac
+    path=${path%/}
+    if [ -d "$path" ]; then
+        (CDPATH= cd -- "$path" && pwd -P)
+    elif [ -d "${path%/*}" ]; then
+        printf '%s/%s\n' "$(CDPATH= cd -- "${path%/*}" && pwd -P)" "${path##*/}"
+    else
+        printf '%s\n' "$path"
+    fi
+}
 
+# `CODEX_HOME` herdado precisa ser uma conta gerenciada (`~/.codex-<id>`); a padrão não manda o campo.
+# Pelo caminho, sem perguntar ao servidor: com ele fora a sessão abre igual, e o lançador confere a marca.
+account=
+if [ -n "${CODEX_HOME:-}" ]; then
+    target=$(absolute "$CODEX_HOME")
+    base=$(absolute "$HOME")
+    name=${target##*/}
+    if [ "$target" = "$base/.codex" ]; then
+        account=
+    elif [ "${target%/*}" = "$base" ] && [ "${name#.codex-}" != "$name" ] && [ -n "${name#.codex-}" ]; then
+        account=${name#.codex-}
+    else
+        say 'CODEX_HOME personalizado não é uma conta Codex gerenciada pelo Hangar (~/.codex-<conta>)'
+        exit 1
+    fi
+fi
 
-def _do_backend():
-    """O `sessions.py` do backend (limpeza do sidecar sem API), ou None.
+# O mesmo `hangar-server` dos outros atalhos; sem nenhum, o do PATH, como o `codex` digitado sempre aceitou.
+# O explícito errado não cai para o do PATH.
+. "$root/scripts/hangar-server-lookup"
+server=
+if hangar_server_find "$root"; then
+    server=$HANGAR_SERVER_BIN
+elif [ "$HANGAR_SERVER_MISSING" = env ]; then
+    printf 'rust_bins: CP_RUST_SERVER_BIN=%s não é executável; seguindo sem hangar-server\n' \
+        "$(printf '%s' "$CP_RUST_SERVER_BIN" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')" >&2
+else
+    server=$(command -v hangar-server)
+fi
+if [ -z "$server" ]; then
+    say 'hangar-server não encontrado (CP_RUST_SERVER_BIN, crates/target/release, ~/.hangar/bin ou PATH): nenhuma sessão foi aberta'
+    exit 3
+fi
 
-    Carregado por CAMINHO, e nao por `from app.adapters.codex import sessions`: o import normal
-    executa `app/adapters/__init__.py`, que instancia os adapters e puxa `app.config` -> pydantic, e
-    este wrapper roda no `python3` do sistema, sem o venv.
-    """
-    import importlib.machinery
-    import importlib.util
+cwd=$(pwd -P)
+if [ "$#" -eq 1 ]; then prompt="\"$(json_string "$1")\""; else prompt=null; fi
+body="{\"cwd\": \"$(json_string "$cwd")\", \"provider\": \"codex\", \"headless\": false, \"initial_prompt\": $prompt"
+[ -n "$account" ] && body="$body, \"codex_account\": \"$(json_string "$account")\""
+body="$body}"
 
-    base = _repo() / "backend"
-    sys.path.insert(0, str(base))   # `sessions.py` importa `app.atomico`/`app.names` (stdlib)
-    caminho = base / "app" / "adapters" / "codex" / "sessions.py"
-    try:
-        loader = importlib.machinery.SourceFileLoader("hangar_codex_sessions", str(caminho))
-        spec = importlib.util.spec_from_loader(loader.name, loader)
-        mod = importlib.util.module_from_spec(spec)
-        loader.exec_module(mod)
-        return mod
-    except (ImportError, OSError) as exc:
-        print(f"hangar-codex: sem os modulos do backend ({exc}); usando a API", file=sys.stderr)
-        return None
+errors=$(mktemp "${TMPDIR:-/tmp}/hangar-codex.XXXXXX") || exit 1
+opened=$("$server" open "$body" 2>"$errors")
+status=$?
+problem=$(cat "$errors")
+rm -f "$errors"
 
+if [ "$status" -ne 0 ]; then
+    text=$problem
+    [ -n "$(trimmed "$text")" ] || text=$opened
+    text=$(trimmed "$text")
+    # 2 = hangar-server antigo, sem `open`; 4 = sem token no .env. Nada foi enviado: o oficial abre.
+    if [ "$status" -eq 2 ] || [ "$status" -eq 4 ]; then
+        say "o hangar-server não abriu a sessão (saída $status): $text"
+        exit 3
+    fi
+    # Recusa: a última linha é o envelope `{"detail": …}` do servidor; dele vale a mensagem.
+    last=$(printf '%s\n' "$text" | tail -n 1)
+    message=
+    case "$last" in
+        "{"*'"detail"'*)
+            message=$(printf '%s\n' "$last" | sed -n 's/.*"msg"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+            [ -n "$message" ] || message=$(printf '%s\n' "$last" | sed -n 's/.*"detail"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+            ;;
+    esac
+    [ -n "$message" ] || message=$text
+    [ -n "$message" ] || message="hangar-server open saiu com $status"
+    # O `codex` oficial abriria fora do Hangar a sessão que ele recusou.
+    say "$message"
+    exit 1
+fi
 
-def _env_file() -> Path:
-    """O `.env` do servidor: `~/.hangar/config/` quando está lá ou a máquina migrou (`current`), senão o
-    da `backend/` do checkout. A regra do `app/user_data.py`: no pacote, a `backend/` acima deste
-    script é a da versão, sem `.env`."""
-    hangar = Path.home() / ".hangar"
-    new = hangar / "config" / ".env"
-    return new if new.exists() or (hangar / "current").exists() else _repo() / "backend" / ".env"
+# O primeiro `name` da resposta é o da sessão (objetos de dentro vêm depois).
+name=$(printf '%s\n' "$opened" | grep -o '"name"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n 1 | sed 's/.*"\([^"]*\)"$/\1/')
+if [ -z "$name" ]; then
+    say 'o hangar-server abriu sem dizer o nome da sessão; confira a lista no app'
+    exit 1
+fi
 
+printf 'Codex gerenciado pelo hangar: %s (detach: Ctrl-b d)\n' "$name" >&2
+# Um terminal novo pode herdar o ambiente de um pane que já morreu.
+if [ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ] && tmux list-panes -t "$TMUX_PANE" >/dev/null 2>&1; then
+    tmux switch-client -t "=$name"
+    attached=$?
+    if [ "$attached" -eq 0 ]; then
+        # Este processo fica no pane antigo enquanto o cliente usa a sessão Codex; quando ela termina,
+        # o tmux volta para outra sessão e a limpeza roda daqui.
+        while tmux has-session -t "=$name" >/dev/null 2>&1; do sleep 0.5; done
+    fi
+else
+    unset TMUX TMUX_PANE
+    tmux attach-session -t "=$name"
+    attached=$?
+fi
 
-def _env() -> dict[str, str]:
-    out: dict[str, str] = {}
-    try:
-        for line in _env_file().read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                key, value = line.split("=", 1)
-                out[key.strip()] = value.strip()
-    except OSError:
-        pass
-    return out
-
-
-def _api(method: str, path: str, body: dict | None = None):
-    env = _env()
-    token = os.environ.get("CP_AUTH_TOKEN") or env.get("CP_AUTH_TOKEN")
-    port = os.environ.get("CP_PORT") or env.get("CP_PORT") or "8765"
-    if not token:
-        raise RuntimeError(f"hangar-codex: CP_AUTH_TOKEN ausente em {_env_file()}")
-    data = json.dumps(body).encode() if body is not None else None
-    req = urllib.request.Request(
-        f"http://127.0.0.1:{port}{path}",
-        data=data,
-        method=method,
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-        },
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=30) as response:
-            return json.load(response)
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode(errors="replace")
-        try:
-            detail = json.loads(detail)
-        except (TypeError, ValueError):
-            pass
-        if isinstance(detail, dict) and isinstance(detail.get("detail"), dict):
-            detail = detail["detail"]
-        raise BackendHttpError(exc.code, detail) from exc
-    except (OSError, TimeoutError, urllib.error.URLError) as exc:
-        raise RuntimeError(f"backend inacessivel em 127.0.0.1:{port}: {exc}") from exc
-
-
-class LancadorAusente(RuntimeError):
-    """Sem `hangar-server` que abra: o wrapper do shell abre o `codex` oficial."""
-
-
-def _hangar_server() -> str:
-    """O `hangar-server` que o Supervisor subiria, pela mesma regra do `hangar-open`."""
-    import importlib.machinery
-    import importlib.util
-
-    try:
-        loader = importlib.machinery.SourceFileLoader("hangar_open", str(_repo() / "scripts" / "hangar-open"))
-        mod = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
-        loader.exec_module(mod)
-        exe = mod.server_bin()
-    except (ImportError, OSError):
-        exe = shutil.which("hangar-server")
-    if exe:
-        return exe
-    raise LancadorAusente("hangar-server não encontrado (CP_RUST_SERVER_BIN, crates/target/release, ~/.hangar/bin "
-                          "ou PATH): nenhuma sessão foi aberta")
-
-
-def _open(body: dict) -> dict:
-    """`hangar-server open`: pede ao servidor e, sem ele, a sessão nasce aqui igual às do app."""
-    r = subprocess.run([_hangar_server(), "open", json.dumps(body)], capture_output=True, text=True)
-    if r.returncode == 0:
-        return json.loads(r.stdout)
-    texto = (r.stderr or r.stdout).strip()
-    # 2 = hangar-server antigo, sem `open`; 4 = sem token no .env. Nada foi enviado.
-    if r.returncode in (2, 4):
-        raise LancadorAusente(f"o hangar-server não abriu a sessão (saída {r.returncode}): {texto}")
-    try:
-        detail = json.loads(texto.splitlines()[-1])["detail"]
-    except (ValueError, IndexError, KeyError, TypeError):
-        detail = texto or f"hangar-server open saiu com {r.returncode}"
-    raise BackendHttpError(r.returncode, detail)
-
-
-def _conta_do_codex_home() -> str | None:
-    """`CODEX_HOME` herdado precisa ser uma conta gerenciada (`~/.codex-<id>`); a padrão não manda o
-    campo. Pelo caminho, sem perguntar ao servidor: com ele fora a sessão abre igual, e o lançador
-    confere a marca da conta."""
-    home = os.environ.get("CODEX_HOME")
-    if not home:
-        return None
-    alvo = Path(home).expanduser().resolve(strict=False)
-    casa = Path.home().resolve(strict=False)
-    if alvo == casa / ".codex":
-        return None
-    if alvo.parent == casa and alvo.name.startswith(".codex-"):
-        return alvo.name.removeprefix(".codex-")
-    raise RuntimeError("CODEX_HOME personalizado não é uma conta Codex gerenciada pelo Hangar (~/.codex-<conta>)")
-
-
-def _create(cwd: str, prompt: str | None) -> str:
-    body = {"cwd": cwd, "provider": "codex", "headless": False, "initial_prompt": prompt}
-    codex_account = _conta_do_codex_home()
-    if codex_account is not None:
-        body["codex_account"] = codex_account
-    try:
-        return _open(body)["name"]
-    except BackendHttpError as exc:
-        msg = exc.detail.get("msg") if isinstance(exc.detail, dict) else exc.detail
-        raise RuntimeError(msg or str(exc)) from None
-
-
-def _limpar_local(name: str, codex_sessions) -> None:
-    """Limpeza que o backend faria no DELETE: mata o app-server por pid e apaga o sidecar.
-
-    Normalmente o proprio lancador ja fez isto ao ver a TUI sair. Isto cobre o pane derrubado sem
-    que ele chegasse la — e, sem backend, era o caso em que sobrava sidecar orfao mais um servidor
-    escutando em loopback, calado.
-    """
-    if codex_sessions is None:
-        print(f"hangar-codex: sem API e sem os modulos do backend — o sidecar de {name} pode ter "
-              "ficado para tras", file=sys.stderr)
-        return
-    meta = codex_sessions.load(name) or {}
-    pid = meta.get("app_pid")
-    if isinstance(pid, int):
-        try:
-            os.kill(pid, signal.SIGTERM)
-        except OSError:
-            pass          # ja morreu (o caso comum: o lancador chegou primeiro)
-    codex_sessions.delete(name)
-
-
-def main() -> int:
-    if len(sys.argv) > 2:
-        print("uso: hangar-codex [prompt]", file=sys.stderr)
-        return 2
-    prompt = sys.argv[1] if len(sys.argv) == 2 else None
-    cwd = os.getcwd()
-    codex_sessions = _do_backend()
-    try:
-        name = _create(cwd, prompt)
-    except LancadorAusente as exc:
-        # 3: sem conexão e sem lançador; o wrapper do shell segue com o `codex` oficial.
-        print(f"hangar-codex: {exc}", file=sys.stderr)
-        return 3
-    except RuntimeError as exc:
-        # Recusa: o `codex` oficial abriria fora do Hangar a sessão que ele recusou.
-        print(f"hangar-codex: {exc}", file=sys.stderr)
-        return 1
-    print(f"Codex gerenciado pelo hangar: {name} (detach: Ctrl-b d)", file=sys.stderr)
-    # Um terminal novo pode herdar o ambiente de um pane que ja morreu.
-    pane = os.environ.get("TMUX_PANE")
-    in_tmux = bool(os.environ.get("TMUX") and pane) and subprocess.run(
-        ["tmux", "list-panes", "-t", pane],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    ).returncode == 0
-    if not in_tmux:
-        os.environ.pop("TMUX", None)
-        os.environ.pop("TMUX_PANE", None)
-    if in_tmux:
-        attached = subprocess.run(["tmux", "switch-client", "-t", f"={name}"]).returncode
-        if attached == 0:
-            # O helper continua no pane antigo enquanto o cliente usa a sessao Codex. Quando ela
-            # termina, o tmux volta para outra sessao e este processo conclui a limpeza.
-            while subprocess.run(
-                ["tmux", "has-session", "-t", f"={name}"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            ).returncode == 0:
-                time.sleep(0.5)
-    else:
-        attached = subprocess.run(["tmux", "attach-session", "-t", f"={name}"]).returncode
-    # Se o usuario encerrou o Codex, remove o sidecar/app-server. Se apenas deu detach, a sessao
-    # continua viva no tmux e no app.
-    alive = subprocess.run(
-        ["tmux", "has-session", "-t", f"={name}"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    ).returncode == 0
-    if not alive:
-        try:
-            _api("DELETE", f"/api/sessions/{name}")
-        except RuntimeError:
-            _limpar_local(name, codex_sessions)
-    return attached
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
+# Encerrada (não um detach): o servidor fecha a sessão; sem ele, a limpeza local.
+if ! tmux has-session -t "=$name" >/dev/null 2>&1; then
+    "$server" codex-close "$name"
+fi
+exit "$attached"

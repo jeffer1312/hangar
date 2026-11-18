@@ -139,7 +139,7 @@ def test_pacote_tem_exatamente_os_arquivos_do_manifesto(tmp_path, monkeypatch, o
     # Os instaladores vão no pacote: a instalação nova roda o do `current`, em modo pacote; o install.ps1
     # carrega os dois .ps1 de scripts/ na primeira linha.
     for must in ("VERSION", "install.sh", "install.ps1", "scripts/windows-tasks.ps1", "scripts/windows-wrappers.ps1",
-                 "backend/app/vapid_setup.py", "backend/hooks", "resources/", "skills/", "plugins/hangar/",
+                 "backend/hooks", "resources/", "skills/", "plugins/hangar/",
                  "messages/pt.json", "docs/atualizacoes/README.md", "shell/preview_fmt.cjs",
                  "scripts/hangar-send", "scripts/hangar-preview",
                  # O setup-windows-tmux.ps1 (passo 5b do install.ps1) copia o modelo de docs/.

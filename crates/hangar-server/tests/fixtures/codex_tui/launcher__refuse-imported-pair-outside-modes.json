@@ -1,0 +1,129 @@
+{
+ "case": "launcher/refuse-imported-pair-outside-modes",
+ "source_commit": "2ad8e335e8d9118e74bc5b33f2efb4ac3bbd8eba",
+ "python": "3.14.9 websockets 16.0",
+ "capture_cmdline": "/usr/bin/python3 capture.py -j 8",
+ "route": "R2",
+ "script": "scripts/hangar-codex-tui",
+ "contract_refs": [
+  "R2-S01",
+  "C-10"
+ ],
+ "description": "",
+ "harness": {
+  "how": "direct: $PY -B -s $REF/scripts/hangar-codex-tui",
+  "codex_layout": "plain",
+  "codex_path": "$T/stubs/codex",
+  "codex_fake_config": {
+   "app_server": {
+    "threads": [
+     {
+      "id": "thread-1",
+      "path": "$T/home/.codex/sessions/2026/11/17/rollout-2026-11-17T10-00-00-thread-1.jsonl",
+      "cwd": "$T/work",
+      "source": "cli",
+      "threadSource": "user"
+     }
+    ]
+   }
+  },
+  "npm_stub_config": null,
+  "lock_busy": false,
+  "signal": null,
+  "no_tty": "stdin=/dev/null, stdout/stderr pipes (no script -q)"
+ },
+ "input": {
+  "argv": [
+   "$PY",
+   "-B",
+   "-s",
+   "$REF/scripts/hangar-codex-tui",
+   "--resume",
+   "thread-imp",
+   "--approval-policy",
+   "never",
+   "--sandbox",
+   "read-only"
+  ],
+  "env": {
+   "HOME": "$T/home",
+   "USERPROFILE": "$T/home",
+   "LOCALAPPDATA": "$T/local",
+   "TMUX_TMPDIR": "$T/tmux",
+   "PATH": "$T/stubs:/usr/bin:/bin",
+   "CP_SESSION_NAME": "codex-proj",
+   "CP_SESSION_KEY": "key-0001",
+   "CP_PROVIDER": "codex",
+   "HANGAR_CLAUDE_SETTINGS": "",
+   "TMUX": "/tmp/tmux-1000/default,1234,5",
+   "TMUX_PANE": "%7"
+  },
+  "cwd": "$T/work",
+  "files_before": {
+   "home/.hangar": {
+    "type": "dir",
+    "mode": "0o755"
+   },
+   "home/.codex": {
+    "type": "dir",
+    "mode": "0o755"
+   },
+   "home/.hangar/codex-sessions": {
+    "type": "dir",
+    "mode": "0o755"
+   },
+   "home/.hangar/config": {
+    "type": "dir",
+    "mode": "0o755"
+   },
+   "home/.hangar/codex-atualizacao.json": {
+    "type": "file",
+    "mode": "0o644",
+    "size": 34,
+    "sha256": "fa722e9b457760ae49b7556b5a849d4b8e4922fcbb05aff3e803a8bd8e38e4eb",
+    "content": {
+     "text": "{\"proxima_em\": 1794913463.3375454}"
+    }
+   },
+   "home/.hangar/codex-sessions/codex-proj.json": {
+    "type": "file",
+    "mode": "0o644",
+    "size": 419,
+    "sha256": "302a92bd98aab60d9c4ab3d686dc28c4e99990618ea27ea62bf6fb9eab7574fb",
+    "content": {
+     "text": "{\"name\": \"codex-proj\", \"provider\": \"codex\", \"thread_id\": \"thread-imp\", \"transfer_id\": \"tr-1\", \"codex_home\": \"$T/home/.codex-imp\", \"codex_account\": \"imp\", \"key\": \"key-imp\", \"cwd\": \"$T/work\", \"permission_mode\": \"Ask for approval\", \"model\": \"gpt-6\", \"effort\": \"high\", \"tool_output_token_limit\": 144000}"
+    }
+   },
+   "home/.hangar/config/.env": {
+    "type": "file",
+    "mode": "0o644",
+    "size": 56,
+    "sha256": "6c6efb3521fb56d79be713309bbdedffc096b263e5d8f1c32803c3363e164f91",
+    "content": {
+     "text": "# servidor\nCP_AUTH_TOKEN=fake-owner-token\nCP_PORT=39519\n"
+    }
+   }
+  }
+ },
+ "output": {
+  "code": 2,
+  "stdout": {
+   "text": ""
+  },
+  "stderr": {
+   "text": "usage: hangar-codex-tui [-h] [--name NAME] [--cwd CWD] [--prompt PROMPT]\n                        [--resume RESUME] [--model MODEL] [--effort EFFORT]\n                        [--approval-policy {never,on-request}]\n                        [--sandbox {read-only,workspace-write,danger-full-access}]\n                        [--tool-output-token-limit TOOL_OUTPUT_TOKEN_LIMIT]\nhangar-codex-tui: error: combinação de aprovação e sandbox não suportada para conversa importada; sessão preservada\n"
+  },
+  "duration_ms": 108,
+  "files": {
+   "created": {},
+   "changed": {},
+   "removed": []
+  }
+ },
+ "spawns": [],
+ "processes_alive_after_exit": {},
+ "window": {
+  "t_start": 1794910463.3386178,
+  "t_end": 1794910463.4471042
+ }
+}

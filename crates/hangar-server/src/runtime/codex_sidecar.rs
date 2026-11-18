@@ -52,7 +52,7 @@ pub fn read(path:&Path) -> io::Result<Option<Meta>> {
     }
 }
 
-pub(super) fn write(path:&Path,meta:&Meta) -> io::Result<()> { super::queue::atomic_write(path,&serde_json::to_vec(meta)?) }
+pub(crate) fn write(path:&Path,meta:&Meta) -> io::Result<()> { super::queue::atomic_write(path,&serde_json::to_vec(meta)?) }
 
 fn text<'a>(meta:&'a Meta,field:&str) -> Option<&'a str> { meta.get(field).and_then(Value::as_str).filter(|s|!s.is_empty()) }
 
@@ -129,6 +129,51 @@ pub const PERMISSION_UNKNOWN:&str = "permission_unknown";
 
 /// Grava o sidecar inteiro sob a trava: a volta da troca de modo cobre o lançador que o apagou ao sair.
 pub fn put(dir:&Path,name:&str,meta:&Meta) -> io::Result<()> { locked(dir,name,|path|write(path,meta)) }
+
+/// O que regravar o sidecar conserva do anterior: a chave sempre (sem ela a adoção sorteia outra); o
+/// resto só na mesma conversa.
+const SAVE_KEEPS:&[&str] = &["key","transfer_id","tool_output_token_limit","codex_home","codex_account","permission_mode","previous_non_plan","jev","service_tier"];
+
+/// `sessions.save`: o sidecar inteiro da conversa nova, com o que o anterior tinha da sessão. Devolve o gravado.
+pub fn save(dir:&Path,name:&str,mut meta:Meta) -> io::Result<Meta> {
+    locked(dir,name,|path| {
+        let previous = load(path).unwrap_or_default();
+        let same_thread = previous.get("thread_id").unwrap_or(&Value::Null) == meta.get("thread_id").unwrap_or(&Value::Null);
+        for field in SAVE_KEEPS {
+            if !meta.contains_key(*field) && let Some(value) = previous.get(*field) && (*field == "key" || same_thread) {
+                meta.insert((*field).to_owned(),value.clone());
+            }
+        }
+        write(path,&meta)?;
+        Ok(meta)
+    })
+}
+
+/// `sessions.update`: funde campos no sidecar que existe (thread nova descarta o que era da anterior).
+/// `None`: não há sidecar, e nada foi gravado.
+pub fn update(dir:&Path,name:&str,fields:&Meta) -> io::Result<Option<Meta>> {
+    locked(dir,name,|path| {
+        let Some(meta) = load(path) else { return Ok(None) };
+        let merged = merge_conversation(meta,fields);
+        write(path,&merged)?;
+        Ok(Some(merged))
+    })
+}
+
+/// `sessions.switch_thread`: a TUI abriu outra conversa principal (`/new`). Só no sidecar desta vida
+/// (endpoint e pid do app-server) e só a partir da conversa anterior; subagente nunca entra.
+pub fn switch_thread(dir:&Path,name:&str,thread:&Value,previous:&str,endpoint:&str,app_pid:u32) -> io::Result<bool> {
+    locked(dir,name,|path| {
+        let Some(meta) = load(path) else { return Ok(false) };
+        if !same_process(&meta,endpoint,app_pid) || !super::codex::primary_thread(thread,text(&meta,"cwd")) { return Ok(false); }
+        let recorded = meta.get("thread_id").and_then(Value::as_str);
+        if recorded == thread["id"].as_str() { return Ok(true); }
+        if recorded != Some(previous) { return Ok(false); }
+        let fields:Meta = [("thread_id".to_owned(),thread["id"].clone()),("rollout_path".to_owned(),thread["path"].clone())].into_iter().collect();
+        write(path,&merge_conversation(meta,&fields))?;
+        Ok(true)
+    })
+}
 
 /// O que o ator do Codex com terminal precisa para gravar o sidecar sem o Python.
 #[derive(Clone,Debug)]
@@ -363,6 +408,53 @@ mod tests {
         }).unwrap();
         let other = std::fs::OpenOptions::new().read(true).append(true).open(dir.path().join("cx.lock")).unwrap();
         assert!(other.try_lock().is_ok(),"fechar solta");
+    }
+
+    /// `sessions.save`: a chave fica sempre; o que é da conversa só na mesma thread.
+    #[test]
+    fn save_keeps_the_key_always_and_the_conversation_fields_on_the_same_thread() {
+        let dir = tempfile::tempdir().unwrap();
+        sidecar(dir.path(),json!({"permission_mode":"Ask for approval","codex_account":"x","jev":true}));
+        let fresh = |thread:&str| json!({"name":"cx","provider":"codex","thread_id":thread,"rollout_path":"/r","cwd":"/w"}).as_object().unwrap().clone();
+        let same = save(dir.path(),"cx",fresh("t1")).unwrap();
+        for kept in ["key","transfer_id","tool_output_token_limit","service_tier","permission_mode","codex_account","jev"] {
+            assert_eq!(same.get(kept),read(dir.path()).get(kept),"{kept}");
+            assert!(same.contains_key(kept),"{kept} é da mesma conversa");
+        }
+        assert!(same.get("endpoint").is_none(),"o resto é o que a gravação trouxe");
+        let other = save(dir.path(),"cx",fresh("t2")).unwrap();
+        assert_eq!(other["key"],"k1","a chave fica mesmo noutra conversa");
+        for gone in ["transfer_id","tool_output_token_limit","service_tier","permission_mode","codex_account","jev"] {
+            assert!(!other.contains_key(gone),"{gone} era da conversa anterior");
+        }
+        // Campo dado vence o anterior.
+        let mut own = fresh("t2");
+        own.insert("key".into(),json!("k9"));
+        assert_eq!(save(dir.path(),"cx",own).unwrap()["key"],"k9");
+    }
+
+    /// `sessions.switch_thread`: só a vida deste app-server, a partir da conversa anterior, e nunca subagente.
+    #[test]
+    fn switch_thread_follows_a_new_primary_only_from_the_previous_one() {
+        let dir = tempfile::tempdir().unwrap();
+        sidecar(dir.path(),json!({}));
+        let thread = |id:&str,extra:Value| { let mut t = json!({"id":id,"path":format!("/r/{id}"),"cwd":"/w","source":"cli"});
+            for (k,v) in extra.as_object().unwrap() { t[k] = v.clone(); } t };
+        let (endpoint,pid) = ("ws://127.0.0.1:4000",40);
+        assert!(!switch_thread(dir.path(),"cx",&thread("t2",json!({"parentThreadId":"t1"})),"t1",endpoint,pid).unwrap(),"subagente");
+        assert!(!switch_thread(dir.path(),"cx",&thread("t2",json!({"cwd":"/outra"})),"t1",endpoint,pid).unwrap(),"outra pasta");
+        assert!(!switch_thread(dir.path(),"cx",&thread("t2",json!({})),"t1",endpoint,41).unwrap(),"outro app-server");
+        assert!(!switch_thread(dir.path(),"cx",&thread("t2",json!({})),"t0",endpoint,pid).unwrap(),"não era a anterior");
+        assert_eq!(read(dir.path())["thread_id"],"t1");
+        assert!(switch_thread(dir.path(),"cx",&thread("t2",json!({})),"t1",endpoint,pid).unwrap());
+        let meta = read(dir.path());
+        assert_eq!((meta["thread_id"].as_str(),meta["rollout_path"].as_str()),(Some("t2"),Some("/r/t2")));
+        assert!(meta.get("transfer_id").is_none() && meta.get("service_tier").is_none(),"o que era da conversa anterior sai");
+        assert!(switch_thread(dir.path(),"cx",&thread("t2",json!({})),"t1",endpoint,pid).unwrap(),"já trocada");
+        // `update` sem sidecar não cria nada.
+        std::fs::remove_file(path(dir.path(),"cx")).unwrap();
+        assert!(update(dir.path(),"cx",&json!({"tui_pid":1}).as_object().unwrap().clone()).unwrap().is_none());
+        assert!(!path(dir.path(),"cx").exists());
     }
 
     #[test]

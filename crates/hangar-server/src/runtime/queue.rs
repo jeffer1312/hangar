@@ -853,6 +853,7 @@ fn recover_terminal(state:&mut State,clock:ClockSample)->io::Result<()> {
         if !queue_text_ok(text) {return Err(invalid("intenção terminal inválida"));}
         let mut row=json!({"id":entry,"text":text,"ts":clock.epoch_s,"delivered":false});
         if op.payload["payload"]["pre_transcript"]==true {row["pre_transcript"]=json!(true);}
+        if op.payload["payload"]["conversation"]==true {row["conversation"]=json!(true);}
         append_row(state,row)?;
     }
     let mut finished:Vec<_>=state.operations.values().filter(|op|terminal_input(state,op) && matches!(op.status,Status::Deferred|Status::Rejected))

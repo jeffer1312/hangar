@@ -46,7 +46,11 @@ impl Service {
         }
     }
     fn frontend_port(&self) -> String {
-        let Ok(raw) = std::fs::read_to_string(self.root.join("backend/.env")) else {
+        // O `.env` dos dados do usuário (`~/.hangar/config`), ou o da `backend/` na máquina não migrada.
+        let Ok(Some(path)) = crate::user_data::path(&self.home, Some(&self.root.join("backend")), ".env") else {
+            return "0".into();
+        };
+        let Ok(raw) = std::fs::read_to_string(path) else {
             return "0".into();
         };
         for line in crate::transcript::py::splitlines(&raw) {

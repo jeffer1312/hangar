@@ -5,18 +5,14 @@ dir — `.credentials.json` (token OAuth, renovado sozinho a cada ~8h) e `.claud
 `oauthAccount`). Com um arquivo só, duas sessões vivas em contas diferentes se atropelam: quem
 renovar por último sobrescreve a outra, e a primeira passa a mandar o token da conta errada.
 
-A reconciliação e a criação são do Rust (`crates/hangar-server/src/accounts/claude_config.rs`),
-chamadas aqui pelo `hangar-server conta`.
+A reconciliação e a criação são do Rust (`crates/hangar-server/src/accounts/claude_config.rs`).
 
 Por que `~/.claude-<nome>`: `config.list_config_dirs()` já varre `~/.claude*` procurando config
 dir. Nomear assim faz a conta nova aparecer na tela de criação sem inventar registro novo.
 """
 import json
 import re
-import subprocess
 from pathlib import Path
-
-from app import diag, rust_bins
 
 
 class ContaError(Exception):
@@ -116,27 +112,3 @@ def _conferir_plugins(dir_conta: Path) -> list[str]:
                           f"({', '.join(map(str, sem_pasta))}) — reinstalar: "
                           f"claude plugin install {nome}")
     return avisos
-
-
-def _run_account_command(*args: str) -> list[str]:
-    """`hangar-server conta <args>`: os avisos `hangar-conta: ` do stderr; saída diferente de 0 é ContaError."""
-    exe = rust_bins.find_bin("hangar-server", "CP_RUST_SERVER_BIN")
-    if exe is None:
-        raise ContaError(503, "hangar-server não encontrado: as contas Claude são reconciliadas e criadas pelo Rust")
-    proc = subprocess.run([str(exe), "conta", *args], stdin=subprocess.DEVNULL, capture_output=True,
-                          text=True, encoding="utf-8", errors="replace")
-    warnings = [line.removeprefix("hangar-conta: ") for line in proc.stderr.splitlines() if line.startswith("hangar-conta: ")]
-    if proc.returncode != 0:
-        raise ContaError(500, warnings[-1] if warnings else proc.stderr.strip()[:200])
-    return warnings
-
-
-def reconciliar(nome: str, projeto: str | None = None) -> list[str]:
-    return _run_account_command("--prep", nome, *([] if projeto is None else [projeto]))
-
-
-@diag.rastrear("conta.criar", provider="claude")
-def criar(nome: str) -> Path:
-    """Cria a pasta pronta pro `/login`. NÃO loga — o OAuth abre navegador e é interativo."""
-    _run_account_command("--new", nome)
-    return caminho(nome)

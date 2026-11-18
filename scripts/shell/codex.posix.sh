@@ -10,7 +10,7 @@ codex() {
     if [ "$#" -eq 1 ]; then
         case "$1" in
             -*) command codex "$@"; return ;;
-            exec|review|resume|fork|archive|delete|unarchive|login|logout|mcp|plugin|app-server|remote-control|cloud|doctor|debug|features|completion|update|sandbox|apply)
+            exec|review|resume|fork|archive|delete|unarchive|login|logout|mcp|plugin|app-server|app|remote-control|cloud|doctor|debug|features|completion|update|sandbox|apply)
                 command codex "$@"; return ;;
         esac
     fi

@@ -93,6 +93,8 @@ pub struct AppState {
     pub hangar_dir: std::path::PathBuf,
     /// Relógio e sufixo dos nomes do cofre de anexos; o teste de contrato fixa os da referência.
     pub upload_naming: crate::uploads::store::Naming,
+    /// Quadros e fala dos vídeos subidos com `media=later`.
+    pub upload_media: crate::uploads::media::MediaJobs,
     pub origins: std::sync::Mutex<indexmap::IndexMap<std::path::PathBuf, crate::costs::origins::Origins>>,
     pub list: Arc<crate::list::bridge::ListBridge>,
     /// Produtor único da lista do dono; liga com a primeira lista aberta.
@@ -318,6 +320,7 @@ impl AppState {
             status: Arc::default(),
             hangar_dir, device_install,
             upload_naming: Default::default(),
+            upload_media: Default::default(),
             origins: std::sync::Mutex::new(indexmap::IndexMap::new()),
             list, state,
             term: Arc::default(),
@@ -985,7 +988,6 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/search", get(crate::search::http::route).fallback(pass_registered))
         .route("/api/ask-history", axum::routing::post(crate::search::ask::route).fallback(pass_registered))
         .route("/api/search/context", get(crate::search_context::route).fallback(pass_registered))
-        .route("/api/migration/status", get(crate::migration_status::status).fallback(pass_registered))
         // Novidades e avisos da próxima atualização: só o dono, nunca repassado (o Python não tem a rota).
         .route("/api/update/notes", get(crate::update_notes::route))
         // O que as atualizações já trouxeram e cada aparelho ainda não viu: só o dono, nunca repassado.
@@ -1106,7 +1108,6 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/update-channel", axum::routing::any(crate::update::git_engine::http::channel))
         // A tela web é servida aqui; o que não é dela leva o 404 ou a recusa do caminho sem rota.
         .fallback(crate::ui::fallback)
-        .layer(axum::middleware::from_fn(crate::migration_status::count_public))
         .with_state(state.clone())
         .merge(owner_share_router(&state, pair))
         .layer(axum::middleware::from_fn(request_auth))
@@ -1132,7 +1133,6 @@ fn plugin_routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
 fn plugin_router(state: Arc<AppState>) -> Router {
     // A ponte local não expõe o restante da API nem dá acesso às rotas privadas.
     plugin_routes(&state).fallback(|| async { StatusCode::NOT_FOUND })
-        .layer(axum::middleware::from_fn(crate::migration_status::count_public))
         .layer(axum::middleware::from_fn(request_auth))
         .layer(axum::middleware::from_fn_with_state(state.clone(), crate::startup::guard))
         .with_state(state)

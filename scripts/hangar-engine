@@ -1,18 +1,20 @@
 #!/bin/sh
 # O motor funciona sem serviço e sem Python; toda regra vive no executável Rust.
-set -eu
-engine_script=$0
-while [ -L "$engine_script" ]; do
-    engine_dir=$(CDPATH= cd -- "$(dirname -- "$engine_script")" && pwd)
-    engine_link=$(readlink "$engine_script")
-    case "$engine_link" in /*) engine_script=$engine_link ;; *) engine_script=$engine_dir/$engine_link ;; esac
+set -u
+self=$0
+while [ -L "$self" ]; do
+    dir=$(CDPATH= cd -- "$(dirname -- "$self")" && pwd)
+    link=$(readlink -- "$self")
+    case $link in /*) self=$link ;; *) self=$dir/$link ;; esac
 done
-engine_root=$(CDPATH= cd -- "$(dirname -- "$engine_script")/.." && pwd)
-if [ -n "${CP_RUST_SERVER_BIN:-}" ] && [ -x "$CP_RUST_SERVER_BIN" ]; then
-    exec "$CP_RUST_SERVER_BIN" engine "$@"
+root=$(CDPATH= cd -P -- "$(dirname -- "$self")/.." && pwd -P)
+. "$root/scripts/hangar-server-lookup"
+if ! hangar_server_find "$root"; then
+    if [ "$HANGAR_SERVER_MISSING" = env ]; then
+        printf '%s\n' 'hangar-engine: CP_RUST_SERVER_BIN não é um executável' >&2
+    else
+        printf '%s\n' 'hangar-engine: hangar-server não encontrado; instale o Hangar ou configure CP_RUST_SERVER_BIN' >&2
+    fi
+    exit 126
 fi
-for engine_binary in "$engine_root/bin/hangar-server" "$engine_root/crates/target/release/hangar-server" "$HOME/.hangar/bin/hangar-server"; do
-    if [ -x "$engine_binary" ]; then exec "$engine_binary" engine "$@"; fi
-done
-printf '%s\n' 'hangar-engine: hangar-server não encontrado; instale o Hangar ou configure CP_RUST_SERVER_BIN' >&2
-exit 126
+exec "$HANGAR_SERVER_BIN" engine "$@"

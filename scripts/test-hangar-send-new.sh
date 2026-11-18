@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # Trava o que o hangar-send manda ao backend — o POST /api/sessions do `--new`, o POST /input do
-# recado com HANGAR_SEND_PAINEL=1 e o GET/PUT do `--contrato` —, contra um backend FALSO que só grava o corpo. É shell, a suíte
-# pytest não alcança; e o script de verdade é copiado (não colado aqui), pra o teste quebrar junto
-# com ele.
+# recado com HANGAR_SEND_PAINEL=1 e o GET/PUT do `--contrato` —, contra um backend FALSO que só grava
+# o corpo, pelo atalho de verdade e o `hangar-server send` compilado desta árvore.
 #
 # Existe pelo --headless: só a tela de criar sessão abria sessão sem terminal, e o flag faltando no
 # script fazia quem orquestra por hangar-send cair calado numa sessão com terminal.
@@ -30,19 +29,11 @@ export PATH="$TMP/bin:$PATH"
 
 PORTA=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
 mkdir -p "$TMP/scripts" "$TMP/backend"
-cp "$REPO/scripts/hangar-send" "$TMP/scripts/hangar-send"
-# O hangar-send lê o peers.json pelo binário do servidor; aqui, um falso sobre a pasta do teste.
-cat > "$TMP/scripts/hangar-server-command" <<'SH'
-#!/usr/bin/env bash
-peers="$(dirname "$0")/../backend/peers.json"
-case "$2" in
-    path) echo "$peers" ;;
-    config) python3 -c 'import json,sys
-p = json.load(open(sys.argv[1])).get(sys.argv[2])
-print("%s\t%s" % (p["base_url"], p["token"])) if p else sys.exit("erro: servidor desconhecido")' "$peers" "$3" ;;
-esac
-SH
-chmod +x "$TMP/scripts/hangar-server-command"
+# O atalho de verdade, copiado, roda o `hangar-server send` compilado desta árvore: a raiz da cópia é
+# o $TMP, então o .env e o peers.json saem de $TMP/backend.
+cp "$REPO/scripts/hangar-send" "$REPO/scripts/hangar-server-lookup" "$TMP/scripts/"
+export CP_RUST_SERVER_BIN="$REPO/crates/target/debug/hangar-server"
+[[ -x "$CP_RUST_SERVER_BIN" ]] || { echo "compile antes: scripts/cargo-pinned build -p hangar-server"; exit 1; }
 printf 'CP_AUTH_TOKEN=teste\nCP_PORT=%s\n' "$PORTA" > "$TMP/backend/.env"
 
 python3 - "$PORTA" "$TMP/corpo.json" <<'PY' &
@@ -184,7 +175,7 @@ checa "--headless com codex: permissão" '"Full Access"' "$(campo permission_mod
 bash "$TMP/scripts/hangar-send" --new hl-2x /tmp --headless --headless >/dev/null 2>&1
 checa "--headless duas vezes: código" '2' "$?"
 
-# 5. O --help documenta o flag (a ajuda é o cabeçalho do script).
+# 5. O --help documenta o flag.
 bash "$REPO/scripts/hangar-send" --help 2>/dev/null | grep -- '--headless' >/dev/null
 checa "--help menciona --headless" '0' "$?"
 
@@ -203,7 +194,7 @@ checa "painel sem [painel:]: nada enviado" 'ausente' "$([[ -e "$TMP/corpo.json" 
 HANGAR_SEND_PAINEL=1 bash "$TMP/scripts/hangar-send" srv::alvo "[painel: x] oi" >/dev/null 2>&1
 checa "painel para outro servidor: código" '2' "$?"
 
-# 8. O --help documenta a variável (a ajuda é o cabeçalho do script).
+# 8. O --help documenta a variável.
 bash "$REPO/scripts/hangar-send" --help 2>/dev/null | grep HANGAR_SEND_PAINEL >/dev/null
 checa "--help menciona HANGAR_SEND_PAINEL" '0' "$?"
 
