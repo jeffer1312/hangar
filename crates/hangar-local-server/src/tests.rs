@@ -484,3 +484,40 @@ fn log_base_follows_the_machine_rule() {
     }
     assert_eq!(diary::log_base_from(None, None), None);
 }
+
+#[test]
+fn env_port_reads_like_the_server_start() {
+    assert_eq!(config::port_in_env("CP_PORT=1\n  cp_port = 9100  # a porta\nOUTRA=2\n"), Some(9100));
+    assert_eq!(config::port_in_env("CP_PORT=\"9200\"\n"), Some(9200));
+    assert_eq!(config::port_in_env("# CP_PORT=9300\nCP_AUTH_TOKEN=x\n"), None);
+    // Valor que não é porta: o servidor recusaria subir, e quem decide a porta é a padrão.
+    assert_eq!(config::port_in_env("CP_PORT=porta\n"), None);
+}
+
+#[test]
+fn service_port_follows_the_unit_then_the_env_file_then_the_default() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    let unit = |env: &str, work: &str| Fake::default().reply("systemctl --user show", 0, &format!("Environment={env}\nWorkingDirectory={work}\n"));
+    // Máquina sem `.env`: a padrão.
+    assert_eq!(config::service_port(&unit("PATH=/usr/bin", ""), Os::Linux, home), DEFAULT_PORT);
+    // Clone sem migrar: o `.env` da `backend/` que a unit usa como pasta.
+    let backend = home.join("hangar").join("backend");
+    std::fs::create_dir_all(&backend).unwrap();
+    std::fs::write(backend.join(".env"), "CP_PORT=9000\n").unwrap();
+    let work = backend.to_string_lossy().into_owned();
+    assert_eq!(config::service_port(&unit("PATH=/usr/bin", &work), Os::Linux, home), 9000);
+    // Máquina migrada: vale o `.env` dos dados do usuário, nunca o da `backend/`.
+    let config = hangar(home).join("config");
+    std::fs::create_dir_all(&config).unwrap();
+    std::fs::write(config.join(".env"), "CP_AUTH_TOKEN=t\nCP_PORT=8790\n").unwrap();
+    assert_eq!(config::service_port(&unit("PATH=/usr/bin", &work), Os::Linux, home), 8790);
+    assert_eq!(config::service_port(&Fake::default(), Os::Windows, home), 8790);
+    // A porta do ambiente da unit vence o `.env`, como no `Settings::resolve`.
+    assert_eq!(config::service_port(&unit("PATH=/usr/bin CP_PORT=9555", &work), Os::Linux, home), 9555);
+    // Sem `.env` no lugar novo, mas com `current`: o lugar novo ainda vale, e sem arquivo é a padrão.
+    let other = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(hangar(other.path()).join("current")).unwrap();
+    assert_eq!(config::env_path(other.path(), Some(&backend)), Some(hangar(other.path()).join("config").join(".env")));
+    assert_eq!(config::service_port(&unit("", &work), Os::Linux, other.path()), DEFAULT_PORT);
+}

@@ -5,6 +5,7 @@
 //! rota HTTP.
 //!
 //! Tudo o que sai do processo passa por `host::Host`; tudo é bloqueante.
+pub mod config;
 pub mod diary;
 pub mod host;
 pub mod link;
@@ -161,6 +162,11 @@ pub struct LocalServer<H: Host = RealHost> {
 impl LocalServer<RealHost> {
     pub fn new(home: &Path, port: u16) -> LocalServer<RealHost> {
         LocalServer { home: home.to_path_buf(), port, log_base: diary::log_base(home), os: Os::current(), host: RealHost }
+    }
+
+    /// Na porta em que o serviço sobe (`config::service_port`). Bloqueia: lê a unit e o `.env`.
+    pub fn configured(home: &Path) -> LocalServer<RealHost> {
+        LocalServer::new(home, config::service_port(&RealHost, Os::current(), home))
     }
 }
 
