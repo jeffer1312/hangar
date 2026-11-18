@@ -611,6 +611,28 @@ impl Apply {
                 }
             }
         }
+        if let Some(settings) = self.bundle.items[item].get("worktrees") {
+            use hangar_workspace::worktree_settings::{self, WorktreeSettings};
+            let settings: WorktreeSettings = serde_json::from_value(export::uncanon(settings, &self.context.roots))
+                .map_err(|e| Error::new("config_sync_invalid_bundle", e.to_string(), json!({})))?;
+            let home = Path::new(&self.context.roots.home);
+            settings.location_path(home)
+                .map_err(|e| Error::new("config_sync_invalid_bundle", e.to_string(), json!({})))?;
+            let path = home.join(".hangar/worktree-settings.json");
+            let changed = worktree_settings::locked(&path, || {
+                let current = WorktreeSettings::load_at(&path)?;
+                if current == settings && path.exists() { return Ok(false); }
+                if path.exists() {
+                    let backup = files::backup_target(&path, &self.context.roots, &self.backups)
+                        .map_err(|e| hangar_workspace::error(503, e.to_string()))?;
+                    std::fs::copy(&path, backup)
+                        .map_err(|e| hangar_workspace::error(503, e.to_string()))?;
+                }
+                worktree_settings::write_json(&path, &settings)?;
+                Ok(true)
+            }).map_err(|e| Error::new("config_sync_runtime_failed", e.to_string(), json!({})))?;
+            if changed { self.changed(item, "worktrees"); }
+        }
         Ok(())
     }
     fn appearance(&mut self) -> Result<(), Error> {

@@ -449,11 +449,14 @@ fn tree_stamp(root: &Path) -> Result<(String, u64)> {
                 let child = entry
                     .map_err(|_| error(409, "pasta da worktree ilegível"))?
                     .path();
-                // Dependência instalada se regenera e estourava o teto de leitura; repositório com o
-                // mesmo nome continua lido.
-                if child.file_name().is_some_and(|n| n == "node_modules")
-                    && !child.join(".git").exists()
-                {
+                // Artefatos regeneráveis não podem esgotar a leitura dos fontes da worktree.
+                let dependency = child.file_name().is_some_and(|n| n == "node_modules");
+                let rust_build = child.file_name().is_some_and(|n| n == "target")
+                    && child.strip_prefix(root).ok().and_then(Path::to_str).is_some_and(|relative| {
+                        git::command(root, &["check-ignore", "--quiet", "--", relative])
+                            .is_ok_and(|out| out.code == 0)
+                    });
+                if (dependency || rust_build) && !child.join(".git").exists() {
                     continue;
                 }
                 stack.push(child);
@@ -967,6 +970,71 @@ mod tests {
             &["worktree", "add", "-b", "topic", wt.to_str().unwrap()],
         );
         (dir, repo, wt)
+    }
+
+    #[test]
+    fn removal_accepts_large_ignored_rust_builds_and_keeps_the_branch() {
+        let (dir, repo, wt) = policy_fixture();
+        std::fs::write(wt.join(".gitignore"), "target/\n").unwrap();
+        git(&wt, &["add", ".gitignore"]);
+        git(&wt, &["-c", "user.name=Teste", "-c", "user.email=test@example.invalid", "commit", "-m", "Ignorar a compilação"]);
+        let build = wt.join("crates/target/debug/deps");
+        std::fs::create_dir_all(&build).unwrap();
+        for index in 0..100_005 {
+            std::fs::write(build.join(format!("object-{index}")), b"").unwrap();
+        }
+        let removed = remove(repo.to_str().unwrap(), wt.to_str().unwrap(), &[], &[], dir.path(),
+            RemoveOptions { confirm: true, keep_branch: true, ..Default::default() }).unwrap();
+        assert_eq!(removed["removed"], wt.to_string_lossy().as_ref());
+        assert!(!wt.exists());
+        git(&repo, &["show-ref", "--verify", "refs/heads/topic"]);
+    }
+
+    #[test]
+    fn removal_keeps_changed_sources_named_target_and_nested_repositories() {
+        for nested_repository in [false, true] {
+            let (dir, repo, wt) = policy_fixture();
+            let source = wt.join("target/source.rs");
+            std::fs::create_dir(wt.join("target")).unwrap();
+            if nested_repository {
+                std::fs::write(wt.join(".gitignore"), "target/\n").unwrap();
+                git(&wt.join("target"), &["init", "-b", "main"]);
+            } else {
+                std::fs::write(wt.join(".gitignore"), "!target/\n!target/**\n").unwrap();
+            }
+            git(&wt, &["add", ".gitignore"]);
+            git(&wt, &["-c", "user.name=Teste", "-c", "user.email=test@example.invalid", "commit", "-m", "Definir a pasta local"]);
+            std::fs::write(&source, "fonte original").unwrap();
+            let changed = |_: &str| {
+                std::fs::write(&source, "fonte modificada durante a remoção").unwrap();
+                Ok(())
+            };
+            let result = remove_with_guard(repo.to_str().unwrap(), wt.to_str().unwrap(), &[], &[], dir.path(),
+                RemoveOptions { confirm: true, keep_branch: true, ..Default::default() }, &changed);
+            assert!(result.is_err());
+            assert_eq!(std::fs::read_to_string(source).unwrap(), "fonte modificada durante a remoção");
+            assert!(wt.exists());
+        }
+    }
+
+    #[test]
+    fn removal_keeps_changed_tracked_sources_inside_an_ignored_target() {
+        let (dir, repo, wt) = policy_fixture();
+        std::fs::create_dir(wt.join("target")).unwrap();
+        let source = wt.join("target/source.rs");
+        std::fs::write(wt.join(".gitignore"), "target/\n").unwrap();
+        std::fs::write(&source, "fonte com commit").unwrap();
+        git(&wt, &["add", "--force", ".gitignore", "target/source.rs"]);
+        git(&wt, &["-c", "user.name=Teste", "-c", "user.email=test@example.invalid", "commit", "-m", "Fonte versionado"]);
+        std::fs::write(&source, "primeira alteração local").unwrap();
+        let changed = |_: &str| {
+            std::fs::write(&source, "segunda alteração local durante a remoção").unwrap();
+            Ok(())
+        };
+        let result = remove_with_guard(repo.to_str().unwrap(), wt.to_str().unwrap(), &[], &[], dir.path(),
+            RemoveOptions { confirm: true, keep_branch: true, ..Default::default() }, &changed);
+        assert!(result.is_err());
+        assert_eq!(std::fs::read_to_string(source).unwrap(), "segunda alteração local durante a remoção");
     }
 
     fn mature_candidate(path: &str, home: &Path, settings: &WorktreeSettings) -> (Candidate,u64) {

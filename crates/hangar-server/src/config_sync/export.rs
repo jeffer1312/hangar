@@ -630,7 +630,20 @@ fn export_item(
                 });
             }
             let values = canon(&pick(&values, keep, ""), roots);
-            Ok(json!({key:values,"hashes":bundle::hashes(&values,"")}))
+            let mut data = json!({key:values,"hashes":bundle::hashes(&values,"")});
+            if item == "hangar_prefs" && selected("worktrees") {
+                let path = Path::new(&roots.home).join(".hangar/worktree-settings.json");
+                if path.try_exists()? {
+                    let settings = hangar_workspace::worktree_settings::WorktreeSettings::load_at(&path)
+                        .map_err(|e| Error::new("config_sync_invalid_json", e.to_string(), json!({})))?;
+                    let settings = serde_json::to_value(settings)
+                        .map_err(|e| Error::new("config_sync_invalid_json", e.to_string(), json!({})))?;
+                    let settings = canon(&settings, roots);
+                    data["hashes"]["worktrees"] = json!(bundle::hash(&settings));
+                    data["worktrees"] = settings;
+                }
+            }
+            Ok(data)
         }
         "claude_mcp" => {
             let raw = read_json(&Path::new(&roots.home).join(".claude.json"))?;

@@ -15,6 +15,44 @@ fn roots(home: &std::path::Path) -> Roots {
     }
 }
 #[test]
+fn shared_preferences_copy_worktree_settings_to_the_destination() {
+    use hangar_workspace::worktree_settings::{KeepWhen, WorktreeSettings};
+    let source = tempfile::tempdir().unwrap();
+    let target = tempfile::tempdir().unwrap();
+    let settings = WorktreeSettings {
+        location: source.path().join("trees").to_string_lossy().into_owned(),
+        inactive_days: Some(5),
+        delete_merged: true,
+        delete_unchanged: true,
+        keep_when: KeepWhen::UncommittedChanges,
+    };
+    settings.save_at(&source.path().join(".hangar/worktree-settings.json"), source.path()).unwrap();
+    let context = Context::new(roots(source.path()));
+    let bundle = super::export::export(&context, &["hangar_prefs".into()], None, true).unwrap();
+    assert!(bundle.manifest()["items"]["hangar_prefs"]["hashes"]["worktrees"].is_string());
+    let bundle = Bundle::unpack(&bundle.pack().unwrap()).unwrap();
+    let target_context = Context::new(roots(target.path()));
+    let previous = WorktreeSettings { inactive_days: Some(30), ..Default::default() };
+    let target_file = target.path().join(".hangar/worktree-settings.json");
+    previous.save_at(&target_file, target.path()).unwrap();
+    let mut apply = Apply::new(target_context, bundle, "worktrees", Default::default());
+    apply.apply_item("hangar_prefs").unwrap();
+    let copied = WorktreeSettings::load_at(&target_file).unwrap();
+    assert_eq!(copied.inactive_days, Some(5));
+    assert!(copied.delete_merged);
+    assert!(copied.delete_unchanged);
+    assert_eq!(copied.keep_when, KeepWhen::UncommittedChanges);
+    assert_eq!(copied.location, target.path().join("trees").to_string_lossy());
+    assert!(apply.report["hangar_prefs"]["changed"].as_array().unwrap().contains(&json!("worktrees")));
+    assert_eq!(WorktreeSettings::load_at(&apply.backups.join("files/.hangar/worktree-settings.json")).unwrap(), previous);
+    let selected = json!({"hangar_prefs": ["dictation_organization_mode"]});
+    let filtered = super::export::export(&context, &["hangar_prefs".into()], selected.as_object(), true).unwrap();
+    assert!(filtered.items["hangar_prefs"].get("worktrees").is_none());
+    let mut filtered_apply = Apply::new(Context::new(roots(target.path())), filtered, "filtered", Default::default());
+    filtered_apply.apply_item("hangar_prefs").unwrap();
+    assert_eq!(WorktreeSettings::load_at(&target_file).unwrap(), copied);
+}
+#[test]
 fn malformed_warnings_are_discarded_before_application() {
     let mut source = Bundle::default();
     source.warnings.insert("engines".into(), json!("invalid"));
