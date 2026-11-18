@@ -113,6 +113,17 @@ pub fn input_answer(sent: &Sent, steered: bool) -> (StatusCode, Value) {
     }
 }
 
+fn terminal_input_answer(sent: &Sent, result: &Result<RuntimeReply, RuntimeError>) -> (StatusCode, Value) {
+    let accepted = result.as_ref().ok().filter(|reply| reply.disposition == Disposition::Accepted);
+    let steered = accepted.is_some_and(|reply| reply.payload["steered"] == true);
+    let (status, mut body) = input_answer(sent, steered);
+    // O Claude pode receber o texto sem precisar do atalho que antecipa seu consumo.
+    if status.is_success() && accepted.is_some_and(|reply| reply.payload["drained"] == 1) {
+        body["delivered"] = json!(true);
+    }
+    (status, body)
+}
+
 pub(super) fn sem_turno(msg: &str) -> (StatusCode, Value) { (StatusCode::CONFLICT, detail_body("erro_sem_turno", msg, json!({}))) }
 
 pub(super) const MSG_CODEX_CONTROL: &str = "O Codex não aceitou a alteração; atualize a sessão e tente novamente.";
@@ -325,8 +336,7 @@ async fn send_with_receipt(st: &AppState, name: &str, target: &WriteTarget, text
         if let Some(expected) = expected_turn { payload["expected_turn"] = expected; }
         if let crate::runtime::gateway::EntryHandle::Terminal { handle, .. } = &target.handle {
             let result = handle.control(random_hex(16), "steer_entry".into(), payload).await;
-            let (status, reply) = super::control::queue_steer_terminal(&result);
-            return input_answer(&sent, status.is_success() && reply["steered"] == true);
+            return terminal_input_answer(&sent, &result);
         }
         let promoted = target.handle.command(RuntimeCommand { operation_id: random_hex(16), kind: OperationKind::SteerQueue,
             payload }).await;
@@ -751,6 +761,27 @@ pub async fn steer(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
 #[cfg(test)]
 mod broadcast_tests {
     use super::*;
+
+    #[test]
+    fn direct_delivery_reports_when_the_claude_terminal_accepted_the_message() {
+        let queued = Sent::Done { delivered: false, native: false, entry: true };
+        for (payload, delivered, steered) in [
+            (json!({"drained": 1, "steered": false}), true, false),
+            (json!({"drained": 1, "steered": false, "code": "queue_steer_hint_missing"}), true, false),
+            (json!({"drained": 1, "steered": true}), true, true),
+            (json!({"drained": 0, "steered": false}), false, false),
+        ] {
+            let result = Ok(RuntimeReply {
+                operation_id: "steer".into(),
+                disposition: Disposition::Accepted,
+                payload,
+            });
+            let (status, body) = terminal_input_answer(&queued, &result);
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(body["delivered"], delivered);
+            assert_eq!(body["steered"], steered);
+        }
+    }
 
     #[test]
     fn automatic_delivery_requires_bounded_context_and_cannot_override_explicit_steering() {

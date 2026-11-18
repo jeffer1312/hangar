@@ -1215,8 +1215,8 @@ impl Executor {
         // Com o Claude trabalhando a mensagem fica na fila do Hangar, onde o painel a apaga, edita e reordena.
         // O recado com socket nativo segue: é o canal do próprio Claude Code para o meio do turno.
         let ok=facts.as_ref().and_then(|result|result.as_ref().ok());
-        let busy=ok.is_some_and(|f|self.turn_busy(f.idle));
-        let started_turn=ok.is_some_and(|f|f.idle);
+        let started_turn = ok.is_some_and(InputFacts::foreground_idle);
+        let busy = ok.is_some() && self.turn_busy(started_turn);
         let held=prompt && !slash && !steer && !conversation && busy && ok.is_some_and(|f|!input::native_message(f,text));
         // Parado, não há turno para entrar: a "Na conversa" respeita a ordem da fila como as comuns.
         if fresh && conversation && current && ok.is_some() && !busy && state.pending_ahead(self.target.created) {
@@ -1518,7 +1518,7 @@ impl Executor {
         // A fila comum espera o turno e sai em lote. O "Orientar" (`steer`) passa por cima, o recado com socket
         // nativo também, porque esse canal o Claude Code atende no meio do turno, e a marcada "Na conversa", que o
         // Claude Code guarda e lê na pausa seguinte (a mais antiga delas primeiro).
-        if !steer && self.turn_busy(facts.idle) {
+        if !steer && self.turn_busy(facts.foreground_idle()) {
             let waiting=super::queue::waiting_ids(&state,self.target.created);
             let marked=waiting.iter().find(|id|entry.as_deref().is_none_or(|e|e==id.as_str())
                 && state.rows.iter().any(|r|r["id"]==id.as_str() && r["conversation"]==true)).cloned();
@@ -1650,9 +1650,9 @@ impl Executor {
         self.publish().await?;
         // O turno pode começar entre as leituras: a entrega sempre passa pelo turno, e quem decide se promove é
         // a marca da fila interna na tela, lida depois.
-        let idle=facts.idle;
+        let idle = facts.foreground_idle();
         // Como no pedido de drenagem: a falha aparece na vista, além de voltar a quem pediu.
-        let drained=match self.drain_once(Some(entry),true).await {Ok(value)=>value,Err(failure)=>{self.enter_error(failure.clone()).await?; return Err(failure);}};
+        let drained=match self.drain_once(Some(entry.clone()),true).await {Ok(value)=>value,Err(failure)=>{self.enter_error(failure.clone()).await?; return Err(failure);}};
         let outcome=serde_json::from_value::<RuntimeReply>(drained["reply"].clone()).ok();
         match outcome.map(|r|r.disposition) {
             Some(Disposition::Accepted)=>{},
@@ -1662,7 +1662,9 @@ impl Executor {
             _=>return Ok(reply(id,Disposition::Deferred,json!({"code":"queue_steer_not_delivered","cleanup":"not_needed"}))),
         }
         let driver=TerminalDriver::new(self.target.binding.clone(),services,self.options.io.clone(),self.options.limits.clone());
-        if !self.expected_work(payload) {return Ok(reply(id,Disposition::Accepted,json!({"steered":false,"drained":1})));}
+        if self.entry_confirmed(&entry).await || !self.expected_work(payload) {
+            return Ok(reply(id, Disposition::Accepted, json!({"steered": false, "drained": 1})));
+        }
         // A marca da fila pode demorar um quadro a aparecer depois do Enter; sem ela de vez, o Claude estava parado
         // (ou o turno acabou no meio) e já levou a mensagem: entregue igual, sem promover. Parado, a entrega abriu
         // o turno com ela: uma leitura basta, sem as esperas.
@@ -1682,11 +1684,19 @@ impl Executor {
         }
         let accepted=steered.disposition==input::Disposition::Accepted;
         // Trabalhando e sem a dica no prazo: a mensagem espera a próxima pausa do Claude, e quem clicou precisa saber.
-        if steered.disposition==input::Disposition::Deferred && !turn_ended && !idle {
+        if steered.disposition==input::Disposition::Deferred && !turn_ended && !idle && !self.entry_confirmed(&entry).await {
             tracing::warn!(key=%self.target.key,session=%self.target.name,code=%steered.code,"Orientar: a dica do ctrl+x ctrl+s não apareceu no prazo");
             return Ok(reply(id,Disposition::Accepted,json!({"steered":false,"drained":1,"code":"queue_steer_hint_missing"})));
         }
         Ok(reply(id,Disposition::Accepted,json!({"steered":accepted,"drained":1})))
+    }
+
+    async fn entry_confirmed(&mut self, entry: &str) -> bool {
+        // O eco do Claude pode chegar enquanto o ator ainda espera a indicação de envio imediato.
+        if self.confirm_rows().await.is_err() { return false; }
+        self.queue.snapshot().await.is_ok_and(|state| {
+            state.rows.iter().any(|row| row["id"] == entry && row["confirmed"] == true)
+        })
     }
 
     fn working_revision(&self)->Option<u64> {

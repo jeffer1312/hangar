@@ -863,6 +863,50 @@ async fn terminal_runtime_steer_entry_when_idle_is_a_plain_delivery() {
     assert!(f.io.calls.lock().unwrap().iter().all(|c|!c.args.last().is_some_and(|k|k=="C-s")),"parado não promove");
     h.stop().await.unwrap();
 }
+
+#[tokio::test]
+async fn direct_delivery_does_not_warn_after_claude_records_the_prompt() {
+    let f = Fixture::new().await;
+    f.idle.store(false, std::sync::atomic::Ordering::Release);
+    let h = f.start();
+    h.command(f.command("one", "Recebida")).await.unwrap();
+    let steering = h.control("steer-recorded".into(), "steer_entry".into(), json!({"entry_id": "one"}));
+    let record = async {
+        f.wait_for("o terminal recebeu Enter", || {
+            f.io.calls.lock().unwrap().iter().any(|call| call.args.first().is_some_and(|arg| arg == "send-keys")
+                && call.args.last().is_some_and(|arg| arg == "\r"))
+        }).await;
+        use std::io::Write;
+        let mut transcript = std::fs::OpenOptions::new().append(true).open(&f.target.transcript).unwrap();
+        writeln!(transcript, "{}", json!({
+            "type": "user", "uuid": "user-one", "sessionId": "sid",
+            "message": {"role": "user", "content": "Recebida"}
+        })).unwrap();
+    };
+    let (reply, ()) = tokio::join!(steering, record);
+    let reply = reply.unwrap();
+    assert_eq!(reply.payload["drained"], 1);
+    assert!(reply.payload["code"].is_null(), "{}", reply.payload);
+    assert!(!f.io.calls.lock().unwrap().iter().any(|call| call.args.last().is_some_and(|arg| arg == "C-s")));
+    h.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn direct_delivery_background_agent_does_not_hold_a_prompt() {
+    use std::sync::atomic::Ordering;
+    let f = Fixture::new().await;
+    f.idle.store(false, Ordering::Release);
+    let h = f.start();
+    // A CLI pode manter busy no registro nativo mesmo quando só um subagente trabalha.
+    let rule = "────────────────────────────────";
+    *f.io.panes.lock().unwrap() = vec![
+        format!("✻ Waiting for 1 background agent to finish\n{rule}\n❯ \n{rule}\n"),
+    ];
+    let result = h.command(f.command("background", "Próxima mensagem")).await.unwrap();
+    assert_ne!(result.payload["code"], "terminal_turn_hold", "{}", result.payload);
+    assert!(f.sent_prompts().iter().any(|text| text == "Próxima mensagem"));
+    h.stop().await.unwrap();
+}
 #[tokio::test]
 async fn terminal_runtime_steer_without_body_steers_the_first_waiting_entry() {
     // O chip de app antigo (`/steer` sem corpo) com mensagens esperando no Hangar: orienta a primeira.
