@@ -12,7 +12,8 @@ use crate::DEFAULT_PORT;
 /// que deu para ler; o código vai ao log de quem chama.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Issue {
-    /// `local_server_unit_unreadable`, `local_server_env_unreadable` ou `local_server_port_invalid`.
+    /// `local_server_unit_unreadable`, `local_server_env_unreadable`, `local_server_env_file_unreadable`
+    /// ou `local_server_port_invalid`.
     pub code: &'static str,
     pub detail: String,
 }
@@ -50,16 +51,53 @@ pub fn env_value(text: &str) -> Option<String> {
     Some(value.trim().to_owned())
 }
 
-/// `Environment=` e `WorkingDirectory=` da unit: o `CP_PORT` herdado (cru) vence o `.env`, e a pasta
-/// é a `backend/` de uma máquina que ainda não migrou.
-pub fn parse_unit(text: &str) -> (Option<String>, Option<PathBuf>) {
+/// A leitura da unit que decide a porta.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Unit {
+    /// O `CP_PORT` cru do `Environment=`: vence o `.env`.
+    pub port: Option<String>,
+    /// A pasta `backend/` de uma máquina que ainda não migrou.
+    pub dir: Option<PathBuf>,
+    /// `EnvironmentFile=` na ordem da unit; `true` quando o arquivo pode faltar (`-` na frente).
+    pub env_files: Vec<(PathBuf, bool)>,
+}
+
+/// `Environment=`, `EnvironmentFiles=` e `WorkingDirectory=` do `systemctl show`.
+pub fn parse_unit(text: &str) -> Unit {
     let field = |key: &str| text.lines().find_map(|line| line.trim().strip_prefix(key)?.strip_prefix('=')).map(str::trim);
-    let port = field("Environment").and_then(|env| env.split_whitespace()
-        .filter_map(|pair| pair.trim_matches('"').split_once('='))
+    let port = field("Environment").and_then(|env| assignments(env).into_iter()
+        .filter_map(|pair| pair.split_once('=').map(|(key, value)| (key.to_owned(), value.to_owned())))
         .filter(|(key, _)| key.eq_ignore_ascii_case("CP_PORT")).last()
-        .map(|(_, value)| value.to_owned()));
+        .map(|(_, value)| value));
     let dir = field("WorkingDirectory").filter(|dir| !dir.is_empty() && *dir != "[not set]").map(PathBuf::from);
-    (port, dir)
+    // Uma linha por arquivo: `EnvironmentFiles=/caminho (ignore_errors=no)`.
+    let env_files = text.lines().filter_map(|line| line.trim().strip_prefix("EnvironmentFiles=")).filter(|v| !v.is_empty())
+        .map(|value| match value.rsplit_once(" (ignore_errors=") {
+            Some((path, flag)) => (PathBuf::from(path), flag.starts_with("yes")),
+            None => (PathBuf::from(value), false),
+        }).collect();
+    Unit { port, dir, env_files }
+}
+
+/// As atribuições de uma linha `Environment=`: o `systemctl show` põe entre aspas duplas (com `\`
+/// antes de `"`, `\`, `$` e crase) a que tem espaço, e cortar no espaço leria o pedaço de outra variável.
+fn assignments(line: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    let mut word = String::new();
+    let (mut quoted, mut started) = (false, false);
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => { quoted = !quoted; started = true; }
+            '\\' if quoted => { if let Some(next) = chars.next() { word.push(next); } }
+            c if c.is_whitespace() && !quoted => {
+                if started { found.push(std::mem::take(&mut word)); started = false; }
+            }
+            c => { word.push(c); started = true; }
+        }
+    }
+    if started { found.push(word); }
+    found
 }
 
 /// A porta do serviço desta máquina. A tarefa do Windows e o agente do launchd não passam porta
@@ -69,20 +107,31 @@ pub fn parse_unit(text: &str) -> (Option<String>, Option<PathBuf>) {
 /// (`config_invalid`): não há porta certa, a leitura segue na padrão e o `Issue` diz por quê.
 pub fn resolve(host: &dyn Host, os: Os, home: &Path) -> Resolved {
     let mut issue = None;
-    let (inherited, backend) = match os {
-        Os::Linux => match host.run("systemctl", &["--user", "show", UNIT, "--no-pager", "-p", "Environment", "-p", "WorkingDirectory"]) {
+    let unit = match os {
+        Os::Linux => match host.run("systemctl", &["--user", "show", UNIT, "--no-pager", "-p", "Environment", "-p", "EnvironmentFiles", "-p", "WorkingDirectory"]) {
             Ok(out) if out.code == Some(0) => parse_unit(&out.stdout),
             Ok(out) => {
                 issue = Some(Issue { code: "local_server_unit_unreadable", detail: format!("systemctl saiu com {:?}", out.code) });
-                (None, None)
+                Unit::default()
             }
             Err(e) => {
                 issue = Some(Issue { code: "local_server_unit_unreadable", detail: format!("systemctl não rodou: {e}") });
-                (None, None)
+                Unit::default()
             }
         },
-        _ => (None, None),
+        _ => Unit::default(),
     };
+    // O systemd aplica os `EnvironmentFile=` por cima do `Environment=`, o último arquivo vencendo.
+    let mut inherited = unit.port;
+    for (path, optional) in &unit.env_files {
+        match std::fs::read_to_string(path) {
+            Ok(text) => if let Some(value) = env_value(&text) { inherited = Some(value); },
+            Err(e) if *optional && e.kind() == std::io::ErrorKind::NotFound => {}
+            // Sem ler o arquivo, a porta lida pode não ser a que o serviço recebe.
+            Err(e) => issue = Some(Issue { code: "local_server_env_file_unreadable", detail: format!("{}: {e}", path.display()) }),
+        }
+    }
+    let backend = unit.dir;
     let raw = match inherited {
         Some(raw) => Some(raw),
         None => match env_path(home, backend.as_deref()).map(|path| (std::fs::read_to_string(&path), path)) {

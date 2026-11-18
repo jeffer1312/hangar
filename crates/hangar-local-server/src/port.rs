@@ -30,8 +30,12 @@ impl Listeners {
 pub fn listeners(host: &dyn Host, os: Os, port: u16) -> Listeners {
     let read = match os {
         Os::Linux => host.run("ss", &["-ltnpH", &format!("sport = :{port}")]).map(|out| (out.code == Some(0), parse_ss(&out.stdout), out.stderr)),
-        Os::Windows => powershell(host, &format!(
-            "@(Get-NetTCPConnection -State Listen -LocalPort {port} -EA SilentlyContinue) | ForEach-Object {{ $_.OwningProcess }} | Sort-Object -Unique"))
+        // Só o "não achou" do cmdlet é ninguém escutando; outro erro é consulta que falhou.
+        Os::Windows => powershell(host, &format!(concat!(
+            "$c=@(Get-NetTCPConnection -State Listen -LocalPort {port} -EA SilentlyContinue -EV e); ",
+            "$f=@($e | Where-Object {{ $_.FullyQualifiedErrorId -notlike 'CmdletizationQuery_NotFound*' }}); ",
+            "if($f.Count){{ [Console]::Error.WriteLine(($f | Out-String)); exit 1 }}; ",
+            "$c | ForEach-Object {{ $_.OwningProcess }} | Sort-Object -Unique"), port = port))
             .map(|out| (out.code == Some(0), (parse_pid_lines(&out.stdout), false), out.stderr)),
         // `lsof` sai 1 quando ninguém escuta.
         Os::Macos => host.run("lsof", &["-nP", &format!("-iTCP:{port}"), "-sTCP:LISTEN", "-Fp"])

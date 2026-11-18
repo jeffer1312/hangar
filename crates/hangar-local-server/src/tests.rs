@@ -24,6 +24,8 @@ struct Fake {
     processes: RefCell<Vec<ProcessInfo>>,
     /// Pids que só saem com `SIGKILL`.
     stubborn: Vec<u32>,
+    /// Pids que saem com o pedido e logo nascem de novo noutro processo (o pid reusado).
+    reborn: Vec<u32>,
     now: u64,
     ran: RefCell<Vec<String>>,
     signals: RefCell<Vec<(u32, bool)>>,
@@ -76,6 +78,10 @@ impl Host for Fake {
     fn user(&self) -> Option<String> { Some(ME.to_owned()) }
     fn signal(&self, pid: u32, force: bool) -> bool {
         self.signals.borrow_mut().push((pid, force));
+        if !force && self.reborn.contains(&pid) {
+            self.processes.borrow_mut().iter_mut().filter(|p| p.pid == pid).for_each(|p| p.start_time += 1_000);
+            return true;
+        }
         if force || !self.stubborn.contains(&pid) { self.processes.borrow_mut().retain(|p| p.pid != pid); }
         true
     }
@@ -395,6 +401,18 @@ fn free_port_takes_the_tree_and_escalates_to_kill() {
     assert_eq!(*linux.host.signals.borrow(), vec![(48211, false)]);
 }
 
+/// O filho saiu com o pedido e o pid dele foi para outro processo na espera: o `SIGKILL` não vai.
+#[test]
+fn free_port_never_kills_a_reused_child_pid() {
+    let dir = tempfile::tempdir().unwrap();
+    let fake = Fake { ss: Some((SS_BUSY, 48211)), stubborn: vec![48211], reborn: vec![48300], ..Fake::default() }
+        .process(48211, "python3", ME, 1_700_000_000)
+        .child(48300, Some(48211), "python3", ME, 1_700_000_010);
+    let local = server(dir.path(), fake);
+    local.free_port(&PortHolder { pid: 48211, name: "python3".into(), same_user: true, start_time: 1_700_000_000 }).unwrap();
+    assert_eq!(*local.host.signals.borrow(), vec![(48211, false), (48300, false), (48211, true)]);
+}
+
 /// Quem segurava saiu com o pedido, mas o filho que herdou o socket não: a porta segue presa.
 #[test]
 fn free_port_is_not_done_while_a_child_still_listens() {
@@ -540,4 +558,31 @@ fn service_port_follows_the_unit_then_the_env_file_then_the_default() {
     std::fs::create_dir_all(hangar(other.path()).join("current")).unwrap();
     assert_eq!(config::env_path(other.path(), Some(&backend)), Some(hangar(other.path()).join("config").join(".env")));
     assert_eq!(port(&unit("", &work), Os::Linux, other.path()), DEFAULT_PORT);
+}
+
+/// O `systemctl show` põe entre aspas a atribuição com espaço: o `CP_PORT` de dentro do valor de
+/// outra variável não conta.
+#[test]
+fn unit_port_keeps_each_quoted_assignment_whole() {
+    let unit = config::parse_unit("Environment=CP_PORT=8790 \"LABEL=dev CP_PORT=8765 local\" \"Q=a\\\"b\"\nWorkingDirectory=/w\n");
+    assert_eq!((unit.port.as_deref(), unit.dir), (Some("8790"), Some(PathBuf::from("/w"))));
+    assert_eq!(config::parse_unit("Environment=\"CP_PORT=9100\"\n").port.as_deref(), Some("9100"));
+}
+
+/// `EnvironmentFile=` vence o `Environment=`; arquivo que não deu para ler deixa a porta com ressalva.
+#[test]
+fn unit_environment_file_overrides_the_environment() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("hangar.env");
+    std::fs::write(&file, "CP_PORT=8790\n").unwrap();
+    let missing = dir.path().join("falta.env");
+    let show = |files: &str| Fake::default().reply("systemctl --user show", 0, &format!("Environment=CP_PORT=8765\n{files}WorkingDirectory=\n"));
+    let read = |files: String| config::resolve(&show(&files), Os::Linux, dir.path());
+    let one = read(format!("EnvironmentFiles={} (ignore_errors=no)\n", file.display()));
+    assert_eq!(one, config::Resolved { port: 8790, issue: None });
+    // Arquivo opcional ausente: o systemd o pula, e a leitura também.
+    let optional = read(format!("EnvironmentFiles={} (ignore_errors=yes)\n", missing.display()));
+    assert_eq!(optional, config::Resolved { port: 8765, issue: None });
+    let broken = read(format!("EnvironmentFiles={} (ignore_errors=no)\n", missing.display()));
+    assert_eq!((broken.port, broken.issue.map(|i| i.code)), (8765, Some("local_server_env_file_unreadable")));
 }

@@ -65,10 +65,12 @@ pub fn read(host: &dyn Host, os: Os) -> Service {
             }
         }
         Os::Windows => {
-            // Sem acento nem aspas duplas: o texto volta na codepage do console.
+            // Sem acento nem aspas duplas: o texto volta na codepage do console. Só o "não achou" do
+            // cmdlet é tarefa ausente; acesso negado ou falha do serviço de tarefas é leitura que falhou.
             let script = concat!(
-                "$n='hangar-backend'; $t=Get-ScheduledTask -TaskName $n -EA SilentlyContinue; ",
-                "if(-not $t){'tarefa: ausente'; exit 0}; $i=Get-ScheduledTaskInfo -TaskName $n -EA SilentlyContinue; ",
+                "$n='hangar-backend'; $t=Get-ScheduledTask -TaskName $n -EA SilentlyContinue -EV e; ",
+                "if(-not $t){ if(@($e | Where-Object { $_.FullyQualifiedErrorId -notlike 'CmdletizationQuery_NotFound*' }).Count){ ($e | Out-String); exit 1 }; ",
+                "'tarefa: ausente'; exit 0}; $i=Get-ScheduledTaskInfo -TaskName $n -EA SilentlyContinue; ",
                 "if($i){$r=('{0:X8}' -f $i.LastTaskResult); $w=$i.LastRunTime.ToString('s')} else {$r='?'; $w='?'}; ",
                 "'tarefa: estado=' + $t.State + ' ultima_execucao=' + $w + ' ultimo_resultado=0x' + $r + ' acao=' + $t.Actions[0].Execute + ' ' + $t.Actions[0].Arguments");
             match powershell(host, script) {

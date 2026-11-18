@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 pub use host::{Host, RealHost};
+use host::ProcessInfo;
 pub use lock::{LockError, UpdateLock};
 pub use port::{Listeners, PortHolder};
 pub use service::{Os, Service, ServiceState};
@@ -343,7 +344,7 @@ impl<H: Host> LocalServer<H> {
             let args: &[&str] = if whole_tree { &["/PID", pid.as_str(), "/T", "/F"] } else { &["/PID", pid.as_str(), "/F"] };
             let out = self.host.run("taskkill", args).map_err(ActionError::Io)?;
             // O código do `taskkill` não diz o que aconteceu (128 sem o processo): quem decide é a porta.
-            return if self.released(holder.pid, RELEASE_WAIT) { Ok(()) } else if out.code == Some(0) {
+            return if self.released(holder.pid, RELEASE_WAIT) { self.vacated() } else if out.code == Some(0) {
                 Err(ActionError::PortStillHeld)
             } else {
                 Err(ActionError::Command { code: out.code, output: format!("{}{}", out.stdout, out.stderr).trim().to_owned() })
@@ -352,7 +353,7 @@ impl<H: Host> LocalServer<H> {
         let tree = if whole_tree { self.tree(holder.pid, me.as_deref()) } else { Vec::new() };
         same()?;
         if !self.host.signal(holder.pid, false) { return Err(ActionError::TerminateRefused); }
-        for child in &tree { self.host.signal(*child, false); }
+        for child in &tree { if self.still(child, me.as_deref()) { self.host.signal(child.pid, false); } }
         if self.released(holder.pid, RELEASE_WAIT) { return self.vacated(); }
         // Não saiu com o pedido: à força, se ainda é o mesmo processo.
         match same() {
@@ -361,7 +362,7 @@ impl<H: Host> LocalServer<H> {
             Err(ActionError::HolderChanged) => return Err(ActionError::PortStillHeld),
             Err(e) => return Err(e),
         }
-        for child in &tree { if self.host.process(*child).is_some() { self.host.signal(*child, true); } }
+        for child in &tree { if self.still(child, me.as_deref()) { self.host.signal(child.pid, true); } }
         if self.released(holder.pid, KILL_WAIT) { self.vacated() } else { Err(ActionError::PortStillHeld) }
     }
 
@@ -396,19 +397,24 @@ impl<H: Host> LocalServer<H> {
     }
 
     /// Os descendentes de `root` do mesmo usuário: os filhos herdam o socket e seguram a porta.
-    fn tree(&self, root: u32, me: Option<&str>) -> Vec<u32> {
+    fn tree(&self, root: u32, me: Option<&str>) -> Vec<ProcessInfo> {
         let processes = self.host.processes();
-        let mut found = Vec::new();
+        let mut found: Vec<ProcessInfo> = Vec::new();
         let mut pending = vec![root];
         while let Some(parent) = pending.pop() {
             for child in processes.iter().filter(|p| p.parent == Some(parent) && me.is_some() && p.user.as_deref() == me) {
-                if child.pid != root && !found.contains(&child.pid) {
-                    found.push(child.pid);
+                if child.pid != root && !found.iter().any(|f| f.pid == child.pid) {
+                    found.push(child.clone());
                     pending.push(child.pid);
                 }
             }
         }
         found
+    }
+
+    /// O filho ainda é o lido em `tree`: na espera o pid pode ter ido para outro processo.
+    fn still(&self, child: &ProcessInfo, me: Option<&str>) -> bool {
+        self.host.process(child.pid).is_some_and(|now| now.start_time == child.start_time && me.is_some() && now.user.as_deref() == me)
     }
 
     /// Aponta o `current` para `version` e sobe. Segura a trava da atualização e exige o servidor

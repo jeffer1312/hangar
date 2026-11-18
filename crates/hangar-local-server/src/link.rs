@@ -107,7 +107,15 @@ pub fn swap(hangar: &Path, target: &Path) -> std::io::Result<Option<PathBuf>> {
     replace_link(&fresh, &current).inspect_err(|_| { let _ = remove_link(&fresh); })?;
     // O link de antes só sai depois de conferido o novo no lugar.
     if real(&current).ok().as_ref() != Some(&target) {
-        return Err(std::io::Error::other(format!("{} não aponta para {} depois da troca", current.display(), target.display())));
+        let wrong = format!("{} não aponta para {} depois da troca", current.display(), target.display());
+        // Quem chama sem registro da troca (a ação do servidor local) não teria como voltar: volta aqui.
+        let Some(previous) = previous else { return Err(std::io::Error::other(wrong)) };
+        let _ = remove_link(&fresh);
+        let undo = make_link(&previous, &fresh).and_then(|()| replace_link(&fresh, &current));
+        return Err(std::io::Error::other(match undo {
+            Ok(()) => format!("{wrong}; voltou para {}", previous.display()),
+            Err(e) => { let _ = remove_link(&fresh); format!("{wrong}; a volta para {} falhou: {e}", previous.display()) }
+        }));
     }
     // Sobra ao lado não atrapalha: a troca seguinte a tira antes de usar o nome.
     let _ = remove_link(&aside(hangar));
