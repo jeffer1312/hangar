@@ -1650,7 +1650,8 @@ impl Executor {
         self.publish().await?;
         // O turno pode começar entre as leituras: a entrega sempre passa pelo turno, e quem decide se promove é
         // a marca da fila interna na tela, lida depois.
-        let idle = facts.foreground_idle();
+        // Prazo e aviso seguem o turno real: na espera por subagentes, a entrada consumida já sai pelo recibo.
+        let idle = facts.idle;
         // Como no pedido de drenagem: a falha aparece na vista, além de voltar a quem pediu.
         let drained=match self.drain_once(Some(entry.clone()),true).await {Ok(value)=>value,Err(failure)=>{self.enter_error(failure.clone()).await?; return Err(failure);}};
         let outcome=serde_json::from_value::<RuntimeReply>(drained["reply"].clone()).ok();
