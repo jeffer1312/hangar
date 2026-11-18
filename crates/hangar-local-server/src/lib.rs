@@ -164,9 +164,11 @@ impl LocalServer<RealHost> {
         LocalServer { home: home.to_path_buf(), port, log_base: diary::log_base(home), os: Os::current(), host: RealHost }
     }
 
-    /// Na porta em que o serviço sobe (`config::service_port`). Bloqueia: lê a unit e o `.env`.
-    pub fn configured(home: &Path) -> LocalServer<RealHost> {
-        LocalServer::new(home, config::service_port(&RealHost, Os::current(), home))
+    /// Na porta em que o serviço sobe (`config::resolve`), com a ressalva da leitura dela para o log de
+    /// quem chama. Bloqueia: lê a unit e o `.env`.
+    pub fn configured(home: &Path) -> (LocalServer<RealHost>, Option<config::Issue>) {
+        let resolved = config::resolve(&RealHost, Os::current(), home);
+        (LocalServer::new(home, resolved.port), resolved.issue)
     }
 }
 
