@@ -128,8 +128,8 @@ pub(crate) fn parse(raw: &[String], env_name: Option<&str>) -> Result<Parsed, Re
             Some((flag, value)) if flag.starts_with("--") => (flag, Some(value.to_owned())),
             _ => (token, None),
         };
-        const FLAGS: [&str; 13] = ["--name", "--cwd", "--prompt", "--resume", "--model", "--effort", "--service-tier", "--codex-home",
-            "--codex-account", "--approval-policy", "--sandbox", "--tool-output-token-limit", "--config"];
+        const FLAGS: [&str; 14] = ["--name", "--cwd", "--prompt", "--prompt-b64", "--resume", "--model", "--effort", "--service-tier",
+            "--codex-home", "--codex-account", "--approval-policy", "--sandbox", "--tool-output-token-limit", "--config"];
         if !FLAGS.contains(&flag) {
             unknown.push(token);
             continue;
@@ -146,6 +146,13 @@ pub(crate) fn parse(raw: &[String], env_name: Option<&str>) -> Result<Parsed, Re
             "--name" => name = Some(value),
             "--cwd" => args.cwd = Some(value),
             "--prompt" => args.prompt = Some(value),
+            // Interna: o servidor manda assim a mensagem com quebra de linha (`session_open::codex::prompt_args`).
+            "--prompt-b64" => {
+                use base64::Engine;
+                let bytes = base64::engine::general_purpose::STANDARD_NO_PAD.decode(value.as_bytes()).ok();
+                let text = bytes.and_then(|bytes| String::from_utf8(bytes).ok());
+                args.prompt = Some(text.ok_or_else(|| Refusal::Usage(format!("argument {flag}: invalid base64 value: '{value}'")))?);
+            }
             "--resume" => args.resume = Some(value),
             "--model" => args.model = Some(value),
             "--effort" => args.effort = Some(value),
@@ -205,6 +212,17 @@ mod tests {
         assert_eq!(args.prompt.as_deref(), Some("-x"));
         assert_eq!(run(&["--prompt", "-x"], Some("cx")), Err(Refusal::Usage("argument --prompt: expected one argument".into())));
         assert_eq!(run(&["--help"], None), Ok(Parsed::Help));
+    }
+
+    /// A mensagem de várias linhas chega em base64 e sai inteira; valor que não decodifica é recusa de uso.
+    #[test]
+    fn the_base64_prompt_is_decoded_whole_and_a_bad_one_is_refused() {
+        let Ok(Parsed::Run(args)) = run(&["--prompt-b64", "bGluaGEgMQpsaW5oYSAy"], Some("cx")) else { panic!() };
+        assert_eq!(args.prompt.as_deref(), Some("linha 1\nlinha 2"));
+        assert_eq!(run(&["--prompt-b64", "não é base64"], Some("cx")),
+            Err(Refusal::Usage("argument --prompt-b64: invalid base64 value: 'não é base64'".into())));
+        assert_eq!(run(&["--prompt-b64", "/w"], Some("cx")),
+            Err(Refusal::Usage("argument --prompt-b64: invalid base64 value: '/w'".into())), "bytes que não são UTF-8");
     }
 
     #[test]

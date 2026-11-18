@@ -98,9 +98,20 @@ pub fn launcher_argv(launch: &Launch) -> Result<Vec<String>, OpenError> {
         argv.extend(["--tool-output-token-limit".into(), limit.to_string()]);
     }
     if let Some(prompt) = launch.prompt.as_ref().filter(|p| !p.is_empty()) {
-        argv.extend(["--prompt".into(), prompt.clone()]);
+        argv.extend(prompt_args(prompt));
     }
     Ok(argv)
+}
+
+/// Quebra de linha no argumento é cortada pelo `cmd` do `hangar-codex-tui.cmd` no Windows: a mensagem
+/// com várias linhas vai em base64, alfabeto que nenhum shell corta nem toma por opção.
+pub fn prompt_args(prompt: &str) -> [String; 2] {
+    if prompt.contains(['\r', '\n']) {
+        use base64::Engine;
+        ["--prompt-b64".into(), base64::engine::general_purpose::STANDARD_NO_PAD.encode(prompt)]
+    } else {
+        ["--prompt".into(), prompt.to_owned()]
+    }
 }
 
 /// O lançador da criação: a conta resolvida e a escolha do spec; o modo do spec vale.
@@ -236,6 +247,20 @@ mod tests {
             "--codex-account", "b", "--resume", "t-1", "--model", "gpt-5.5", "--effort", "high", "--approval-policy", "on-request",
             "--sandbox", "read-only", "--tool-output-token-limit", "9000", "--prompt", "começa"]);
         assert_eq!(policy("Approve for me").unwrap(), ("on-request", "workspace-write"));
+    }
+
+    /// A primeira mensagem com quebra de linha sai do comando do pane sem quebra; o lançador a lê inteira.
+    #[test]
+    fn a_multi_line_prompt_leaves_the_pane_command_without_a_line_break() {
+        let text = "Primeira linha: responda apenas MULTI-OK.\r\nSegunda linha: confirme.\núltima";
+        let argv = launcher_argv(&Launch { prompt: Some(text.into()), ..launch() }).unwrap();
+        assert!(argv.iter().all(|arg| !arg.contains(['\r', '\n'])), "{argv:?}");
+        let at = argv.iter().position(|arg| arg == "--prompt-b64").expect("--prompt-b64");
+        assert!(!argv[at + 1].starts_with('-') && !argv[at + 1].contains(['=', ' ', '"', '\'']), "{}", argv[at + 1]);
+        let raw: Vec<String> = argv[2..].to_vec();
+        let Ok(crate::codex_tui::args::Parsed::Run(args)) = crate::codex_tui::args::parse(&raw, Some("cx")) else { panic!("{raw:?}") };
+        assert_eq!(args.prompt.as_deref(), Some(text));
+        assert_eq!(prompt_args("uma linha só"), ["--prompt".to_owned(), "uma linha só".to_owned()]);
     }
 
     /// O `hangar-server` do `current` quando este binário é dele; de um checkout, ele mesmo; nos

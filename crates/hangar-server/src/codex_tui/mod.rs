@@ -12,7 +12,7 @@
 //! Toda linha de andamento vai ao stderr do pane com o prefixo `hangar-codex-tui: `: a lista do
 //! servidor lê esse prefixo enquanto a sessão ainda não tem conversa.
 mod app_server;
-mod args;
+pub(crate) mod args;
 pub mod close;
 mod hooks;
 mod marketplaces;
