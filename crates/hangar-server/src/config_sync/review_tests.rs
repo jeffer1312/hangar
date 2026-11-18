@@ -46,7 +46,10 @@ fn shared_preferences_copy_worktree_settings_to_the_destination() {
     assert!(copied.delete_merged);
     assert!(copied.delete_unchanged);
     assert_eq!(copied.keep_when, KeepWhen::UncommittedChanges);
-    assert_eq!(copied.location, target_home.join("trees").to_string_lossy());
+    assert_eq!(
+        copied.location_path(&target_home).unwrap(),
+        target_home.join("trees"),
+    );
     assert!(!target.path().join("account-home/.hangar/worktree-settings.json").exists());
     assert!(apply.report["hangar_prefs"]["changed"].as_array().unwrap().contains(&json!("worktrees")));
     assert_eq!(WorktreeSettings::load_at(&apply.backups.join("files/.hangar/worktree-settings.json")).unwrap(), previous);
