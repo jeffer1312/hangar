@@ -22,12 +22,13 @@ pub fn hook_server_with(home: &Path, windows: bool, running: &Path, fallback: im
     let launcher = crate::update::migrate::launcher_path(home, windows);
     if !same_bytes(&launcher, running) { return fallback(); }
     let copy = hooks_path(home, windows);
-    match renew_hooks_copy(&copy, running, current_version(home).as_deref()) {
+    match renew_hooks_copy(&copy, running, running_version(running).as_deref()) {
         Ok(()) => Ok(copy),
         Err(error) => {
-            // Sem a cópia em dia, o lançador ainda é este servidor: só a volta de versão perde.
             tracing::warn!(code = "hooks_copy_failed", "a cópia dos hooks não foi renovada: {error}");
-            Ok(launcher)
+            // A cópia que já existe segue nos hooks (trocá-los pelo lançador perderia a volta de versão);
+            // sem nenhuma, o lançador ainda é este servidor.
+            Ok(if copy.is_file() { copy } else { launcher })
         }
     }
 }
@@ -37,9 +38,11 @@ pub fn hooks_path(home: &Path, windows: bool) -> PathBuf {
     home.join(".hangar").join("bin").join(if windows { "hangar-hooks.exe" } else { "hangar-hooks" })
 }
 
-/// A versão do pacote em uso (`~/.hangar/current/manifest.json`).
-fn current_version(home: &Path) -> Option<String> {
-    let path = crate::install_root::current(home).join(hangar_package::MANIFEST_FILE);
+/// A versão do binário em execução: o `manifest.json` da pasta da versão dele (`<versão>/bin/hangar-server`).
+/// O `current` pode já apontar outra versão durante a troca.
+fn running_version(running: &Path) -> Option<String> {
+    let bin = running.parent().filter(|dir| dir.file_name().is_some_and(|name| name == "bin"))?;
+    let path = bin.parent()?.join(hangar_package::MANIFEST_FILE);
     let manifest: serde_json::Value = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
     manifest.get("version").and_then(serde_json::Value::as_str).map(str::to_owned)
 }
@@ -50,22 +53,31 @@ fn version_key(version: &str) -> Option<Vec<u64>> {
 
 /// Copia `running` para `copy` quando difere, nunca por cima de uma versão mais nova (a volta entre
 /// duas versões que já têm a cópia a deixaria sem os subcomandos da mais nova). A versão gravada mora
-/// em `hangar-hooks.version`; versão ilegível dos dois lados não segura a troca.
+/// em `hangar-hooks.version`, gravada só depois da troca. Sem saber a versão deste binário, só a
+/// primeira cópia nasce; cópia marcada com versão ilegível também fica.
 pub fn renew_hooks_copy(copy: &Path, running: &Path, version: Option<&str>) -> Result<(), String> {
     if same_bytes(copy, running) { return Ok(()); }
     let marker = copy.with_extension("version");
-    let recorded = std::fs::read_to_string(&marker).ok().and_then(|text| version_key(&text));
-    if copy.is_file() && let (Some(recorded), Some(running)) = (recorded, version.and_then(version_key)) && recorded > running {
-        return Ok(());
+    let running_key = version.and_then(version_key);
+    if copy.is_file() {
+        let recorded = match std::fs::read_to_string(&marker) {
+            Ok(text) => Some(version_key(&text)),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+            Err(error) => return Err(format!("{}: {error}", marker.display())),
+        };
+        let keep = match (recorded, &running_key) {
+            (_, None) => true,
+            (Some(None), _) => true,
+            (Some(Some(recorded)), Some(running)) => recorded > *running,
+            (None, Some(_)) => false,
+        };
+        if keep { return Ok(()); }
     }
     crate::update::migrate::write_launcher(running, copy)?;
-    match version {
-        Some(version) => crate::runtime::queue::atomic_write(&marker, format!("{version}\n").as_bytes())
+    match (version, running_key) {
+        (Some(version), Some(_)) => crate::runtime::queue::atomic_write(&marker, format!("{version}\n").as_bytes())
             .map_err(|error| format!("{}: {error}", marker.display())),
-        None => match std::fs::remove_file(&marker) {
-            Err(error) if error.kind() != io::ErrorKind::NotFound => Err(format!("{}: {error}", marker.display())),
-            _ => Ok(()),
-        },
+        _ => Ok(()),
     }
 }
 
@@ -216,9 +228,66 @@ mod path_tests {
         std::fs::write(&same, b"0.1.0.20 refeita").unwrap();
         renew_hooks_copy(&copy, &same, Some("0.1.0.20")).unwrap();
         assert_eq!(std::fs::read(&copy).unwrap(), b"0.1.0.20 refeita", "a mesma versão troca");
-        renew_hooks_copy(&copy, &old, None).unwrap();
-        assert_eq!(std::fs::read(&copy).unwrap(), b"0.1.0.9", "versão ilegível não segura a troca");
-        assert!(!copy.with_extension("version").exists(), "nem fica marcada com a versão de antes");
+    }
+
+    /// Sem saber a versão deste binário (ou com a marca ilegível), a cópia que existe fica; só a primeira nasce.
+    #[test]
+    fn an_unknown_version_keeps_the_existing_copy() {
+        let temp = tempfile::tempdir().unwrap();
+        let copy = temp.path().join("hangar-hooks");
+        let (new, other) = (temp.path().join("new"), temp.path().join("other"));
+        std::fs::write(&new, b"nova").unwrap();
+        std::fs::write(&other, b"outra").unwrap();
+        renew_hooks_copy(&copy, &new, Some("0.1.0.20")).unwrap();
+        renew_hooks_copy(&copy, &other, None).unwrap();
+        assert_eq!(std::fs::read(&copy).unwrap(), b"nova", "versão deste binário desconhecida");
+        assert_eq!(std::fs::read_to_string(copy.with_extension("version")).unwrap(), "0.1.0.20\n");
+        std::fs::write(copy.with_extension("version"), "ilegível").unwrap();
+        renew_hooks_copy(&copy, &other, Some("0.1.0.30")).unwrap();
+        assert_eq!(std::fs::read(&copy).unwrap(), b"nova", "marca ilegível");
+        let fresh = temp.path().join("fresh-hooks");
+        renew_hooks_copy(&fresh, &other, None).unwrap();
+        assert_eq!(std::fs::read(&fresh).unwrap(), b"outra", "a primeira cópia nasce");
+        assert!(!fresh.with_extension("version").exists(), "sem versão, sem marca");
+    }
+
+    /// Troca da cópia que falha (pasta sem escrita): os hooks seguem na cópia que já existe, não voltam
+    /// ao lançador; sem cópia nenhuma, o lançador.
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_renewal_keeps_the_hooks_on_the_existing_copy() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        let launcher = crate::update::migrate::launcher_path(&home, false);
+        let bin = launcher.parent().unwrap().to_path_buf();
+        std::fs::create_dir_all(&bin).unwrap();
+        // Binário de versão conhecida (`<versão>/bin/hangar-server` com o manifesto): a troca é tentada.
+        let running = temp.path().join("v/bin/hangar-server");
+        std::fs::create_dir_all(running.parent().unwrap()).unwrap();
+        std::fs::write(temp.path().join("v/manifest.json"), r#"{"version":"0.1.0.5"}"#).unwrap();
+        std::fs::write(&running, b"servidor").unwrap();
+        std::fs::write(&launcher, b"servidor").unwrap();
+        let copy = hooks_path(&home, false);
+        std::fs::write(&copy, b"copia de antes").unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let chosen = hook_server_with(&home, false, &running, || Ok(PathBuf::from("persistente")));
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        if std::fs::read(&copy).unwrap() == b"servidor" { return; } // root escreve mesmo sem permissão
+        assert_eq!(chosen.unwrap(), copy, "a cópia de antes segue nos hooks");
+        std::fs::remove_file(&copy).unwrap();
+        std::fs::create_dir(&copy).unwrap();
+        assert_eq!(hook_server_with(&home, false, &running, || Ok(PathBuf::from("persistente"))).unwrap(), launcher, "sem cópia: o lançador");
+    }
+
+    /// Cada escrita tem o próprio temporário, ao lado do alvo e nunca o `.new` comum.
+    #[test]
+    fn each_writer_gets_its_own_temp_file() {
+        let target = Path::new("/h/.hangar/bin/hangar-hooks");
+        let (a, b) = (crate::update::migrate::temp_path(target), crate::update::migrate::temp_path(target));
+        assert_ne!(a, b);
+        assert_eq!(a.parent(), target.parent());
+        assert_ne!(a, target.with_extension("new"));
     }
 
     #[cfg(unix)]

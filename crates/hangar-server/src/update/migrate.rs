@@ -437,10 +437,20 @@ pub(crate) fn launcher_path(home: &Path, windows: bool) -> PathBuf {
     home.join(".hangar").join("bin").join(if windows { "hangar-launcher.exe" } else { "hangar-launcher" })
 }
 
+/// Nome temporário próprio de cada escrita, ao lado do alvo: duas escritas ao mesmo tempo (a subida e
+/// o instalador) não gravam no mesmo arquivo nem renomeiam o pela metade da outra.
+pub(crate) fn temp_path(target: &Path) -> PathBuf {
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let name = target.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or_default();
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    target.with_file_name(format!(".{name}.{}-{nanos}-{seq}.new", std::process::id()))
+}
+
 /// Copia o lançador com nome temporário e `rename`: um lançador pela metade nunca tem o nome final.
 pub(crate) fn write_launcher(source: &Path, launcher: &Path) -> Result<(), String> {
     let bytes = std::fs::read(source).map_err(|e| format!("não consegui ler o lançador {}: {e}", source.display()))?;
-    let tmp = launcher.with_extension("new");
+    let tmp = temp_path(launcher);
     std::fs::write(&tmp, &bytes).and_then(|()| {
         #[cfg(unix)]
         { use std::os::unix::fs::PermissionsExt; std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755))?; }
