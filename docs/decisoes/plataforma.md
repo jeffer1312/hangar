@@ -4884,6 +4884,53 @@ Issue #408. O painel que usa os conectores.
 - **Sessão achada pela chave.** Como o plugin, a sessão da PM é a da branch `PM-XXXXX` ou a de nome que
   começa pela chave; ligar no painel grava o vínculo e libera a tool. Uma sessão, um ticket.
 
+## Revisão do trabalho (`work_review/v1`): capacidade do conector, releitura no fim do turno (18/11/2026)
+
+A sessão ligada a um ticket mostra numa aba própria do painel, "Revisão", a revisão que o
+conector oferece (comparação com o mock, no primeiro conector que a usa) e devolve as decisões ao agente
+pelo conector. Contrato em [`docs/connectors/work-review-v1.md`](../connectors/work-review-v1.md);
+motor no crate `hangar-work-review`, ligado em `crates/hangar-server/src/work_review_watch.rs`.
+
+- **Aba própria, não seção do Contexto.** No teste de uso real, a revisão dentro do Contexto ficava
+  espremida entre o medidor e as Ações, com os quadros do mock pequenos. A aba só existe quando a
+  sessão tem revisão, leva o número do que falta, e o chip do card abre a sessão já nela.
+- **Capacidade, não fornecedor.** `work_review/v1` exige `work_tracking/v1`. O Hangar não conhece
+  mock nem fornecedor: título, etapas, escolhas e motivos vêm do conector; o texto genérico (enviar,
+  anterior e próxima, "falta N") é do Hangar.
+- **O Hangar relê; o conector não avisa.** O host lê só a resposta do pedido que fez, um por vez, e a
+  vida morre após 60 s sem pedido: uma notificação `work_review.changed` quebraria a vida. A revisão é
+  relida (a) ao abrir a aba Revisão, (b) no fim de cada turno, pelas linhas da lista, mesmo sem painel
+  aberto (é o que alimenta o chip), (c) depois do envio das decisões e (d) a cada chamada da tool
+  `mission` nesta máquina, inclusive a sem argumentos, que a skill usa para a barra andar no meio de
+  um turno longo. A releitura pela tool roda em tarefa própria: a tool tem corte de ~60 s.
+- **Fim do turno pelas linhas da lista.** Passagem de `working` para outro estado, `last_reply_at`
+  novo fora de `working`, branch trocada ou primeira vista (esta só relê quem ainda não tem resumo).
+  Lista em erro não conta nada. O vigia só assina a lista (assinatura interna, que não conta como app
+  aberto) enquanto houver conector ligado com a capacidade, conferido a cada 60 s; sem ele, o produtor
+  da lista para quando nenhum app está aberto.
+- **Fila por conector.** A releitura em segundo plano tem no máximo uma chamada em voo por conector;
+  o pedido da pessoa (painel, imagem, envio) não entra na fila e espera no máximo a chamada em voo.
+  Por sessão, uma leitura por vez, com uma releitura marcada para o fim. O envio sobe a geração da
+  sessão: leitura começada antes dele não grava.
+- **Ticket da sessão.** Primeiro o vínculo do Tickets, pela mesma regra da tool `mission`
+  (`hangar_mission::link::resolve`: sessão ou grupo, com a chave da vida conferida). Sem vínculo, cada
+  conector com a capacidade recebe `work_tracking.get(<branch da sessão>)`, aceito só com `key` igual
+  à branch ("achado pela branch"); o resultado, inclusive o negativo, fica guardado por conector e
+  branch até a branch mudar, e erro não vira negativo. Resumo e cache são por nome e vida: sessão
+  recriada com o mesmo nome não herda a revisão.
+- **Fora do escopo: ticket de outra máquina.** O vínculo remoto que a tool `mission` resolve pelos
+  peers não é seguido; a seção não aparece nessa sessão.
+- **Imagens em cache no disco.** `<cache>/hangar/work-review/<conector>/<ticket>/<rodada>/<asset>`,
+  imutáveis dentro do `review_id`; a pasta do ticket sai quando a rodada muda, e o total tem teto de
+  256 MiB (saem os tickets mais antigos). A rota responde `Cache-Control: private, max-age=86400, immutable`.
+- **Só o dono.** As rotas `/api/sessions/{nome}/work-review*` usam `owner_only`; o evento
+  `work_reviews` sai só pelo laço da lista do dono, nunca pelo do convidado (teste em `list/hub.rs`).
+  Corpo: `{"reviews": {"<sessão>": {"review_id", "state", "badge": {"text","tone"}|null, "updated_at"}}}`,
+  só com as sessões atuais que têm revisão, publicado quando muda o resumo ou as linhas.
+- **Falha em segundo plano vai ao diário.** Releitura que falha mantém o resumo anterior e registra
+  `rust.work_review` com o código, uma vez por minuto por sessão e código; a tela não vê. Falha da
+  leitura que a pessoa pediu (abrir o painel, enviar) aparece na seção.
+
 ## Vídeo do celular: upload responde ao gravar, quadros e fala por pedido que espera (17/11/2026)
 
 - **Motivo.** O envio nativo do Expo (`File.upload`) desiste com 60 s sem resposta (Android OkHttp

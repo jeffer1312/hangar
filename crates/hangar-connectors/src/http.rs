@@ -52,7 +52,7 @@ async fn reply(state: &Http, peer: Option<SocketAddr>, request: Request) -> Resp
     let method = request.method().clone();
     match (method, &segments[..]) {
         (Method::GET, ["api", "connectors"]) => match state.host.list() {
-            Ok(list) => json_response(StatusCode::OK, json!({"connectors": list})),
+            Ok(list) => json_response(StatusCode::OK, json!({"connectors": list, "capabilities": crate::protocol::capabilities_json()})),
             Err(error) => admin_error(&error),
         },
         (Method::POST, ["api", "connectors"]) => {
@@ -146,7 +146,8 @@ fn admin_error(error: &AdminError) -> Response {
     detail(status, error.code(), &error.message, json!({}))
 }
 
-fn call_error(error: &CallError) -> Response {
+/// Resposta HTTP de uma chamada que falhou; também serve às rotas de outros crates sobre o host.
+pub fn call_error(error: &CallError) -> Response {
     let status = match error {
         CallError::Admin(error) => return admin_error(error),
         CallError::Disabled(_) => StatusCode::CONFLICT,
@@ -157,6 +158,7 @@ fn call_error(error: &CallError) -> Response {
             ErrorCode::NotFound => StatusCode::NOT_FOUND,
             ErrorCode::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
             ErrorCode::Timeout => StatusCode::GATEWAY_TIMEOUT,
+            ErrorCode::StaleReview => StatusCode::CONFLICT,
             ErrorCode::UnsupportedVersion | ErrorCode::ProtocolError | ErrorCode::PayloadTooLarge => StatusCode::BAD_GATEWAY,
         },
     };

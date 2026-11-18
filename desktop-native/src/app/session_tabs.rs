@@ -670,6 +670,8 @@ impl Hangar {
         if session.pending_questions > 0 { label.push_str(&format!(" · ? {}", session.pending_questions)); }
         let asleep = tr_shared("session_asleep_badge", &[]);
         if session.asleep { label.push_str(&format!(" · {asleep}")); }
+        let review = self.work_review_badge(&target.server, &target.name);
+        if let Some((text, _)) = &review { label.push_str(&format!(" · {text}")); }
         // A aba de trás de um grupo é posicionada pela faixa dele: sem placa.
         let plate = slot.is_none().then(|| self.tab_plate(target, session, on, self.multi_server().then(|| machine.to_owned()), machines)).flatten();
         let ctx = context_pct(session);
@@ -694,6 +696,8 @@ impl Hangar {
             .child(title)
             // A aba estreita de trás da faixa não tem largura para o selo: lá ele fica só na dica.
             .when(session.asleep && !compact, |el| el.child(badge(asleep, theme::muted())))
+            // Como o selo de adormecida: a aba estreita só tem a dica.
+            .children(review.filter(|_| !compact).and_then(|_| self.work_review_chip_button(target, false, cx)))
             .when(session.pending_questions > 0, |el| el.child(div().flex_shrink_0().text_size(px(if compact { 9. } else { 12. })).text_color(theme::warning())
                 .child(if compact { format!("?{}", session.pending_questions) } else { format!("? {}", session.pending_questions) })))
             .on_click(cx.listener(move |this, _, window, cx| this.open_target(&pick, window, cx)))

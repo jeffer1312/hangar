@@ -60,6 +60,7 @@ hangar-plugins.workspace = true
 hangar-connectors.workspace = true
 hangar-mission.workspace = true
 hangar-ticket-actions.workspace = true
+hangar-work-review.workspace = true
 hangar-workflows.workspace = true
 hangar-http-file.workspace = true
 hangar-desktop-theme.workspace = true

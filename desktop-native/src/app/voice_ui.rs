@@ -391,7 +391,7 @@ fn read_screen(window: &Window, area: Option<&str>) -> Result<(Option<String>, S
 /// Uma ação da tela do Hangar que a voz executa pelo mesmo caminho do botão; o id é o de acessibilidade dele.
 pub(super) struct UiAction { pub(super) id: &'static str, pub(super) label: &'static str, pub(super) description: &'static str }
 
-pub(super) const HANGAR_ACTIONS: [UiAction; 16] = [
+pub(super) const HANGAR_ACTIONS: [UiAction; 17] = [
     UiAction { id: "topbar-settings", label: "Abrir configurações", description: "Abre a tela de configurações; arg opcional = seção (veja as seções abaixo)." },
     UiAction { id: "settings-back", label: "Fechar configurações", description: "Fecha a tela de configurações e volta à conversa." },
     UiAction { id: "sidebar-new-session", label: "Nova sessão", description: "Abre o diálogo de criar sessão (a pessoa escolhe e confirma)." },
@@ -401,6 +401,7 @@ pub(super) const HANGAR_ACTIONS: [UiAction; 16] = [
     UiAction { id: "side-tab-files", label: "Painel: Arquivos", description: "Abre o painel lateral na aba Arquivos da sessão ativa." },
     UiAction { id: "side-tab-activity", label: "Painel: Atividade", description: "Abre o painel lateral na aba Atividade, quando a sessão tem." },
     UiAction { id: "side-tab-git", label: "Painel: Git", description: "Abre o painel lateral na aba Git, quando a pasta é um repositório." },
+    UiAction { id: "side-tab-review", label: "Painel: Revisão", description: "Abre o painel lateral na aba Revisão, quando a sessão tem revisão do trabalho." },
     UiAction { id: "terminal-show", label: "Abrir o terminal", description: "Abre o painel de terminal da sessão ativa." },
     UiAction { id: "terminal-close", label: "Fechar o terminal", description: "Fecha o painel de terminal." },
     UiAction { id: "topbar-voice", label: "Abrir o cartão da voz", description: "Mostra o cartão desta conversa por voz." },
@@ -930,7 +931,7 @@ impl Hangar {
     pub(super) fn run_hangar_action(&mut self, id: &str, arg: Option<&str>, window: &mut Window, cx: &mut Context<Self>) -> Result<String, String> {
         use crate::appearance::SideTab;
         if self.connection_dialog { return Err("A janela de conexão está aberta; feche-a antes.".into()); }
-        let side_tab = |tab| match tab { SideTab::Files => "Arquivos", SideTab::Activity => "Atividade", SideTab::Git => "Git", _ => "Contexto" };
+        let side_tab = |tab| match tab { SideTab::Files => "Arquivos", SideTab::Activity => "Atividade", SideTab::Git => "Git", SideTab::Review => "Revisão", _ => "Contexto" };
         match id {
             "topbar-settings" => {
                 let page = match arg.filter(|a| !a.trim().is_empty()) {
@@ -953,11 +954,14 @@ impl Hangar {
             "sidebar-new-session" => { self.open_new_session(None, window, cx); Ok("Diálogo de nova sessão aberto; a pessoa escolhe e confirma.".into()) }
             "sidebar-fold" if appearance::get().navigation.tabs() => Err("Com a navegação em abas não há barra de sessões para recolher.".into()),
             "sidebar-fold" => { self.toggle_rail(cx); Ok(if self.rail() { "Barra de sessões recolhida." } else { "Barra de sessões aberta." }.into()) }
-            "side-toggle" | "side-tab-context" | "side-tab-files" | "side-tab-activity" | "side-tab-git" if self.selected.is_none() =>
+            "side-toggle" | "side-tab-context" | "side-tab-files" | "side-tab-activity" | "side-tab-git" | "side-tab-review" if self.selected.is_none() =>
                 Err("Nenhuma sessão aberta; o painel lateral é da sessão.".into()),
             "side-toggle" => { self.toggle_side(cx); Ok(if self.side.open { "Painel lateral aberto." } else { "Painel lateral escondido." }.into()) }
-            "side-tab-context" | "side-tab-files" | "side-tab-activity" | "side-tab-git" => {
-                let tab = match id { "side-tab-files" => SideTab::Files, "side-tab-activity" => SideTab::Activity, "side-tab-git" => SideTab::Git, _ => SideTab::Context };
+            "side-tab-context" | "side-tab-files" | "side-tab-activity" | "side-tab-git" | "side-tab-review" => {
+                let tab = match id {
+                    "side-tab-files" => SideTab::Files, "side-tab-activity" => SideTab::Activity, "side-tab-git" => SideTab::Git,
+                    "side-tab-review" => SideTab::Review, _ => SideTab::Context,
+                };
                 if !self.side.open { self.toggle_side(cx); }
                 self.choose_side_tab(tab, window, cx);
                 // A aba que a sessão não tem cai em outra: dizer, em vez de fingir.
@@ -1788,7 +1792,7 @@ mod tests {
     fn hangar_action_ids_are_unique_and_stable() {
         let ids: Vec<&str> = HANGAR_ACTIONS.iter().map(|a| a.id).collect();
         assert_eq!(ids, ["topbar-settings", "settings-back", "sidebar-new-session", "sidebar-fold", "side-toggle", "side-tab-context", "side-tab-files",
-            "side-tab-activity", "side-tab-git", "terminal-show", "terminal-close", "topbar-voice", "voice-panel-close", "topbar-cost", "costs-usage", "costs-back"],
+            "side-tab-activity", "side-tab-git", "side-tab-review", "terminal-show", "terminal-close", "topbar-voice", "voice-panel-close", "topbar-cost", "costs-usage", "costs-back"],
             "o organizador guarda estes ids: mudar um quebra o que ele já aprendeu na chamada");
         assert_eq!(ids.iter().collect::<HashSet<_>>().len(), ids.len());
         assert!(HANGAR_ACTIONS.iter().all(|a| !a.label.is_empty() && !a.description.is_empty()));

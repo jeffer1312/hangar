@@ -1450,6 +1450,7 @@ impl Hangar {
             SideTab::Git if own && self.selected.as_ref().is_some_and(super::sidebar::has_git) => SideTab::Git,
             // Lembrada de outra execução ou fechada no ×, a aba só volta depois que o navegador for aberto de novo.
             SideTab::Browser if key.is_some_and(|k| self.side.browser_open.contains(&k)) => SideTab::Browser,
+            SideTab::Review if self.work_review_tab_shown() => SideTab::Review,
             _ => SideTab::Context,
         }
     }
@@ -1482,7 +1483,8 @@ impl Hangar {
         self.act.pending_tab = None;
         self.act.tab_error = None;
         if let Some(key) = self.side_key() { self.side.tabs.insert(key, tab); }
-        if appearance::get().side_tab != tab { self.apply_appearance(appearance::Appearance { side_tab: tab, ..appearance::get() }, true, cx); }
+        // A Revisão só existe nas sessões ligadas a ticket: vira padrão das outras não, fica só na desta.
+        if tab != SideTab::Review && appearance::get().side_tab != tab { self.apply_appearance(appearance::Appearance { side_tab: tab, ..appearance::get() }, true, cx); }
         if self.side_tab() == SideTab::Files { self.show_tree(true, Some(window), cx); }
         self.sync_activity(cx);
         cx.notify();
@@ -1823,31 +1825,18 @@ impl Hangar {
     }
 
     /// Abas "Contexto | Arquivos | Atividade | Git" numa fileira, como o web: Atividade só com atividade e Git só com
-    /// repositório; Arquivos e Git pedem a sessão legível. Navegador de aberto pelo menu até fechado no × dele.
+    /// repositório; Arquivos e Git pedem a sessão legível. Navegador de aberto pelo menu até fechado no × dele. Revisão
+    /// só com revisão do trabalho na sessão, logo depois de Arquivos.
     pub(super) fn render_side_title(&self, cx: &mut Context<Self>) -> AnyElement {
         let readable = self.selected.as_ref().is_some_and(|s| s.readable());
         let git = readable && self.selected.as_ref().is_some_and(super::sidebar::has_git);
         let orq = self.selected.as_ref().is_some_and(SessionInfo::orq);
+        let review = self.work_review_tab_shown();
         let current = (self.act.active_tab.is_none() && !self.side_menu_shown()).then(|| self.side_tab());
-        let tab = |id: &'static str, label: String, which: SideTab, close: Option<Button>, cx: &mut Context<Self>| {
-            let text = div().min_w_0().truncate().text_size(px(12.)).child(label.clone());
-            // O × mora dentro do botão da aba, como o das abas de subagente: o clique dele para ali e não escolhe a aba.
-            let body = match close {
-                Some(close) => div().min_w_0().flex().items_center().gap(px(2.)).child(text).child(close).into_any_element(),
-                None => text.into_any_element(),
-            };
+        let tab = |id: &'static str, label: String, which: SideTab, extra: Option<AnyElement>, cx: &mut Context<Self>| {
             let selected = current == Some(which);
-            // Desenho da `.aba` do web: texto pequeno, só a cor e o sublinhado marcam a escolhida (negrito mudaria a largura
-            // ao trocar). As quatro cabem a partir de ~300 px; mais estreito, cada uma encolhe com reticências, e o piso
-            // guarda "Git" inteiro em vez de virar só "…".
-            div().h_full().min_w(px(36.)).flex().items_center().border_b_2().border_color(if selected { theme::accent() } else { transparent_black() })
-                .child(Button::new(id).custom(ButtonCustomVariant::new(cx).color(transparent_black())
-                        .foreground(if selected { theme::text() } else { theme::muted() }).hover(theme::hover()).active(theme::hover()))
-                    // O Button não encolhe sozinho (flex_shrink_0 interno): acompanha a aba, que encolhe, e o rótulo
-                    // corta com reticências. O tamanho do texto vai no rótulo porque o do Button é sobrescrito.
-                    .w_full().h(px(28.)).px(px(8.)).rounded(px(6.))
-                    .role(Role::Tab).aria_selected(selected).accessibility_label(label).child(body)
-                    .on_click(cx.listener(move |this, _, window, cx| this.choose_side_tab(which, window, cx))))
+            side_tab_slot(selected, side_tab_button(id, label, selected, extra, cx)
+                .on_click(cx.listener(move |this, _, window, cx| this.choose_side_tab(which, window, cx))))
         };
         let browser = self.side_key().is_some_and(|k| self.side.browser_open.contains(&k)).then(|| Button::new("side-tab-browser-close").ghost().xsmall().icon(TAB_CROSS)
             .tooltip(tr("browser_close")).accessibility_label(tr("browser_close"))
@@ -1855,9 +1844,11 @@ impl Hangar {
         div().id("side-tabs").role(Role::TabList).aria_label(tr("side_tabs")).flex_1().h_full().min_w_0().flex().gap(px(2.)).overflow_hidden()
             .child(tab("side-tab-context", if orq { tr_shared("orq_tab_title", &[]) } else { tr("side_context") }, SideTab::Context, None, cx))
             .when(readable, |el| el.child(tab("side-tab-files", web("arq_aba"), SideTab::Files, None, cx)))
+            .when(review, |el| { let badge = self.work_review_tab_badge(cx);
+                el.child(popup::anchor(tab("side-tab-review", tr_shared("work_review_tab", &[]), SideTab::Review, badge, cx), crate::tour::anchors::SIDE_REVIEW)) })
             .when(self.has_activity(), |el| el.child(tab("side-tab-activity", self.background_label(), SideTab::Activity, None, cx)))
             .when(git, |el| el.child(tab("side-tab-git", web("git_coluna_abrir"), SideTab::Git, None, cx)))
-            .when_some(browser, |el, close| el.child(tab("side-tab-browser", tr("browser"), SideTab::Browser, Some(close), cx)))
+            .when_some(browser, |el, close| el.child(tab("side-tab-browser", tr("browser"), SideTab::Browser, Some(close.into_any_element()), cx)))
             .into_any_element()
     }
 
@@ -1890,6 +1881,30 @@ impl Hangar {
                 .flex().items_center().justify_center().child(badge.to_string())))
             .into_any_element())
     }
+}
+
+/// O botão de uma aba do painel; quem chama põe o clique. `extra` vem depois do rótulo (selo, ×).
+pub(crate) fn side_tab_button(id: &'static str, label: String, selected: bool, extra: Option<AnyElement>, cx: &App) -> Button {
+    let text = div().min_w_0().truncate().text_size(px(12.)).child(label.clone());
+    // O × mora dentro do botão da aba, como o das abas de subagente: o clique dele para ali e não escolhe a aba.
+    let body = match extra {
+        Some(extra) => div().min_w_0().flex().items_center().gap(px(2.)).child(text).child(extra).into_any_element(),
+        None => text.into_any_element(),
+    };
+    Button::new(id).custom(ButtonCustomVariant::new(cx).color(transparent_black())
+            .foreground(if selected { theme::text() } else { theme::muted() }).hover(theme::hover()).active(theme::hover()))
+        // O Button não encolhe sozinho (flex_shrink_0 interno): acompanha a aba, que encolhe, e o rótulo
+        // corta com reticências. O tamanho do texto vai no rótulo porque o do Button é sobrescrito.
+        .w_full().h(px(28.)).px(px(8.)).rounded(px(6.))
+        .role(Role::Tab).aria_selected(selected).accessibility_label(label).child(body)
+}
+
+/// Desenho da `.aba` do web: texto pequeno, só a cor e o sublinhado marcam a escolhida (negrito mudaria a largura ao
+/// trocar). As quatro cabem a partir de ~300 px; mais estreito, cada uma encolhe com reticências, e o piso guarda "Git"
+/// inteiro em vez de virar só "…".
+pub(crate) fn side_tab_slot(selected: bool, button: Button) -> Div {
+    div().h_full().min_w(px(36.)).flex().items_center().border_b_2().border_color(if selected { theme::accent() } else { transparent_black() })
+        .child(button)
 }
 
 #[cfg(test)]

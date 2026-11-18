@@ -37,6 +37,7 @@ impl Bench {
             "capabilities": {"work_tracking": 1}, "command": command});
         let mut value = value;
         if args.contains(&"--actions") { value["capabilities"]["work_actions"] = json!(1); }
+        if args.contains(&"--review") { value["capabilities"]["work_review"] = json!(1); }
         self.host.add(Manifest::parse(value.to_string().as_bytes(), folder).unwrap()).unwrap();
     }
 
@@ -211,6 +212,63 @@ async fn arguments_and_folder_with_spaces_reach_the_connector_intact() {
     bench.add_in(&folder, "espacos", &["--title", "título com espaço e 'aspas' \"duplas\""]);
     let result = bench.host.list_tickets("espacos", params(1)).await.unwrap();
     assert_eq!(result.items[0].title, "título com espaço e 'aspas' \"duplas\"");
+}
+
+fn initialize_params(bench: &Bench) -> serde_json::Value {
+    serde_json::from_str(&std::fs::read_to_string(bench.path("init")).unwrap()).unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn initialize_lists_every_declared_capability_beyond_work_tracking() {
+    let bench = Bench::quick();
+    let init = bench.path("init");
+    bench.add("tres", &["--init-file", init.to_str().unwrap(), "--actions", "on", "--review", "on"]);
+    bench.host.get_review("tres", GetParams { ticket_id: "t-1".into() }).await.unwrap();
+    assert_eq!(initialize_params(&bench)["capabilities"], json!({"work_tracking": 1, "work_actions": 1, "work_review": 1}));
+    bench.add("revisao", &["--init-file", init.to_str().unwrap(), "--review", "on"]);
+    bench.host.get_review("revisao", GetParams { ticket_id: "t-1".into() }).await.unwrap();
+    assert_eq!(initialize_params(&bench)["capabilities"], json!({"work_tracking": 1, "work_review": 1}), "work_review sem work_actions também negocia");
+    bench.add("basica", &["--init-file", init.to_str().unwrap()]);
+    bench.host.list_tickets("basica", params(1)).await.unwrap();
+    assert!(initialize_params(&bench).get("capabilities").is_none(), "só work_tracking mantém a forma básica");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn review_get_asset_and_decide_go_through_one_life() {
+    use hangar_connectors::work_review::{Answer, AssetParams, DecideParams, ReviewState};
+    let bench = Bench::quick();
+    bench.add("revisao", &["--pid-file", bench.path("pids").to_str().unwrap(), "--review", "on"]);
+    let review = bench.host.get_review("revisao", GetParams { ticket_id: "t-1".into() }).await.unwrap().expect("revisão do ticket");
+    assert_eq!((review.id.as_str(), review.state), ("r-1", ReviewState::Waiting));
+    assert_eq!(bench.host.get_review("revisao", GetParams { ticket_id: "sem-revisao".into() }).await.unwrap(), None);
+    let asset = bench.host.review_asset("revisao", AssetParams::new("t-1", "r-1", "a1").unwrap()).await.unwrap();
+    assert_eq!(asset.mime, "image/png");
+    assert!(asset.bytes.starts_with(b"\x89PNG\r\n\x1a\n"));
+    let answer = |review_id: &str| DecideParams::new("t-1", review_id, vec![Answer { id: "47".into(), choice: "manter".into(), reason: Some("padrão do kit".into()) }]).unwrap();
+    bench.host.decide_review("revisao", answer("r-1")).await.unwrap();
+    bench.host.decide_review("revisao", answer("r-1")).await.expect("repetir o mesmo decide responde ok");
+    assert_eq!(bench.host.decide_review("revisao", answer("r-0")).await.unwrap_err().code(), "stale_review");
+    assert_eq!(bench.lives("pids").len(), 1, "erro tipado do conector mantém a vida");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn review_asset_whose_bytes_do_not_match_the_mime_ends_the_life() {
+    use hangar_connectors::work_review::AssetParams;
+    let bench = Bench::quick();
+    bench.add("revisao", &["--pid-file", bench.path("pids").to_str().unwrap(), "--review", "on", "--bad-asset", "on"]);
+    let error = bench.host.review_asset("revisao", AssetParams::new("t-1", "r-1", "a1").unwrap()).await.unwrap_err();
+    assert_eq!(error.code(), "protocol_error");
+    assert!(!bench.host.list().unwrap()[0].running);
+    gone(bench.lives("pids")[0]).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn review_needs_the_declared_capability() {
+    let bench = Bench::quick();
+    bench.add("so-tickets", &["--pid-file", bench.path("pids").to_str().unwrap()]);
+    let error = bench.host.get_review("so-tickets", GetParams { ticket_id: "t-1".into() }).await.unwrap_err();
+    assert_eq!(error.code(), "unsupported_capability");
+    assert!(bench.lives("pids").is_empty(), "recusa sem iniciar o processo");
 }
 
 #[tokio::test(flavor = "multi_thread")]

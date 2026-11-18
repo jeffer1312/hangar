@@ -6,6 +6,7 @@ import type { AggSession, Server, StateEvent } from '@hangar/core';
 import * as m from '../../paraglide/messages';
 import { ContextTab } from './ContextTab';
 import { ContextPanel } from './ContextPanel';
+import { usePanelTabRequest } from './panelTab';
 import { getLocale, overwriteGetLocale } from '../../paraglide/runtime';
 
 const state = vi.hoisted(() => ({ statusLine: null as string | null, stateEvent: null as StateEvent | null, rows: [] as AggSession[] }));
@@ -34,6 +35,15 @@ vi.mock('../../stores/sessions', () => ({
 vi.mock('./ActionsGrid', () => ({ ActionsGrid: ({ serverId, name }: { serverId: string; name: string }) =>
   createElement('button', null, `action-${serverId}-${name}`),
 }));
+const reviewState = vi.hoisted(() => ({ summary: null as null | { state: string; badge: null | { text: string; tone: string } },
+  review: null as null | { state: string; decisions: { id: string; title: string; choices: { id: string; label: string }[] }[] },
+  choices: {} as Record<string, { choice: string; reason: string }> }));
+vi.mock('../workReview/useWorkReview', () => ({ useWorkReview: () => reviewState }));
+vi.mock('../workReview/WorkReviewSection', () => ({
+  WorkReviewSection: () => createElement('div', null, 'work-review-section'),
+  WorkReviewView: ({ name, tall }: { name: string; tall?: boolean }) => createElement('div', { 'data-tall': tall }, `work-review-${name}`),
+  hasWorkReview: (s: typeof reviewState) => !!s.summary || !!s.review,
+}));
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 let root: Root;
@@ -46,6 +56,10 @@ beforeEach(() => {
   servers.servers = [{ id: 'srv', label: 'Casa', baseUrl: 'https://casa.test', token: 'test' }];
   groupHooks.servers.mockClear();
   groupHooks.identities.mockClear();
+  reviewState.summary = null;
+  reviewState.review = null;
+  reviewState.choices = {};
+  usePanelTabRequest.setState({ request: null });
   container = document.createElement('div');
   root = createRoot(container);
 });
@@ -103,6 +117,62 @@ describe('ContextPanel', () => {
     selectTab(m.tablet_tab_background());
     renderPanel('outra', 'outro');
     expect(container.textContent).toContain('action-outro-outra');
+  });
+
+  // O mock do react-native repassa o `testID` como atributo cru.
+  const badge = (id: string) => container.querySelector(`[testid="${id}"]`);
+
+  it('a aba Revisão só existe com revisão anunciada, depois de Arquivos, e mostra a revisão inteira', () => {
+    renderPanel();
+    expect(container.querySelector(`[role="tab"][aria-label="${m.work_review_tab()}"]`)).toBeNull();
+    reviewState.summary = { state: 'running', badge: null };
+    renderPanel('outra');
+    const labels = [...container.querySelectorAll('[role="tab"]')].map((tab) => tab.getAttribute('aria-label'));
+    expect(labels).toEqual([m.tablet_tab_context(), m.tablet_tab_files(), m.work_review_tab(), m.tablet_tab_background(), m.tablet_tab_git()]);
+    expect(badge('review-tab-dot')).not.toBeNull();
+    selectTab(m.work_review_tab());
+    expect(container.querySelector('[data-tall]')?.textContent).toBe('work-review-outra');
+    expect(container.querySelector('[data-tall]')?.getAttribute('data-tall')).toBe('true');
+    expect(container.textContent).not.toContain('action-srv-outra');
+  });
+
+  it('a marca da aba conta as pendentes com as escolhas e mostra ✓ quando concluída', () => {
+    const choices = [{ id: 'ok', label: 'Igualar' }];
+    reviewState.summary = { state: 'waiting', badge: { text: 'mock: 2 para você', tone: 'warning' } };
+    renderPanel();
+    expect(badge('review-tab-dot')).not.toBeNull();
+    reviewState.review = { state: 'waiting', decisions: [{ id: '1', title: 'a', choices }, { id: '2', title: 'b', choices }] };
+    reviewState.choices = { 1: { choice: 'ok', reason: '' } };
+    renderPanel('outra');
+    expect(badge('review-tab-count')?.textContent).toBe('1');
+    reviewState.review = { state: 'done', decisions: [] };
+    renderPanel('mais');
+    expect(badge('review-tab-done')?.textContent).toBe('✓');
+  });
+
+  it('a revisão sumiu com a aba aberta: volta ao Contexto', () => {
+    reviewState.summary = { state: 'running', badge: null };
+    renderPanel();
+    selectTab(m.work_review_tab());
+    expect(container.textContent).toContain('work-review-sess');
+    reviewState.summary = null;
+    renderPanel();
+    expect(container.textContent).toContain('action-srv-sess');
+    expect(container.querySelector(`[role="tab"][aria-label="${m.work_review_tab()}"]`)).toBeNull();
+  });
+
+  it('o chip da revisão abre a sessão já na aba Revisão e o pedido vale uma vez', () => {
+    reviewState.summary = { state: 'waiting', badge: null };
+    act(() => usePanelTabRequest.getState().open('srv', 'outra', 'review'));
+    renderPanel();
+    expect(container.textContent).toContain('action-srv-sess');
+    renderPanel('outra');
+    expect(container.textContent).toContain('work-review-outra');
+    expect(usePanelTabRequest.getState().request).toBeNull();
+    // Com o painel já na sessão, o pedido troca a aba na hora.
+    selectTab(m.tablet_tab_files());
+    act(() => usePanelTabRequest.getState().open('srv', 'outra', 'review'));
+    expect(container.textContent).toContain('work-review-outra');
   });
 
   it('espera os servidores carregarem e mostra erro claro quando o servidor sumiu', () => {
@@ -224,6 +294,13 @@ describe('ContextTab', () => {
     expect(container.textContent).toContain(m.uso_reset({ quando: '1h55m' }));
     expect(container.querySelector('svg')).toBeNull();
     expect(container.querySelector(`[aria-label="${m.tablet_actions()}"]`)).toBeNull();
+  });
+
+  it('a revisão do trabalho não fica no Contexto: tem aba própria', () => {
+    reviewState.summary = { state: 'waiting', badge: null };
+    render();
+    expect(container.textContent).not.toContain('work-review');
+    expect(container.textContent).toContain('action-srv-sess');
   });
 
   it('antes do primeiro estado mostra carregamento e conserva as ações', () => {

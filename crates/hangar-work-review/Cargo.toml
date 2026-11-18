@@ -1,0 +1,35 @@
+[package]
+name = "hangar-work-review"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+# O conector de prova do hangar-connectors, compilado aqui: `CARGO_BIN_EXE_*` só existe para binários
+# do próprio pacote. Nome próprio para não colidir com o executável de lá no mesmo target.
+[[bin]]
+name = "hangar-work-review-fixture"
+path = "../hangar-connectors/src/bin/fixture_connector.rs"
+test = false
+doc = false
+
+# Mesmas features do hangar-server: sem elas, compilar este crate sozinho guarda outra cópia de cada
+# dependência no target (ver o comentário do serde_json em hangar-server/Cargo.toml).
+[dependencies]
+hangar-core.workspace = true
+hangar-connectors.workspace = true
+hangar-mission.workspace = true
+axum = { workspace = true }
+# Só do binário de prova.
+base64.workspace = true
+chrono = { workspace = true }
+form_urlencoded = { workspace = true }
+percent-encoding = { workspace = true }
+serde = { workspace = true, features = ["alloc"] }
+serde_json = { workspace = true, features = ["float_roundtrip", "alloc", "unbounded_depth", "arbitrary_precision", "raw_value"] }
+sha1_smol.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "io-util", "io-std", "process", "sync", "time", "fs", "signal"] }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile.workspace = true
+tower = { version = "=0.5.3", default-features = false, features = ["util"] }

@@ -566,7 +566,7 @@ impl Hangar {
         cx.notify();
     }
 
-    fn read_failure(error: &Failure) -> String {
+    pub(super) fn read_failure(error: &Failure) -> String {
         if error.uncertain && error.status.is_none() { tr("network_error") } else { Self::fetch_failure(error) }
     }
 
@@ -1105,6 +1105,9 @@ impl Hangar {
         // Cabeçalho do mock: título "Contexto" e o botão de recolher. Nome e estado já estão no cabeçalho da conversa;
         // o detalhe do estado e o loop descem para a primeira seção.
         let _ = state;
+        // Só o dono lê a revisão. Lê com o painel à vista em qualquer aba: a achada só pela branch não está no evento da
+        // lista, e sem esta leitura a aba Revisão nunca apareceria.
+        if readable && !session.read_only() && !session.orq() { self.sync_work_review(window, cx); }
         // Aba de subagente aberta vence a aba escolhida; a árvore só vigia o disco com a aba Arquivos à vista.
         let menu = self.side_menu_shown();
         let tab = (!self.subagent_tab_open() && !menu).then(|| self.side_tab());
@@ -1150,6 +1153,7 @@ impl Hangar {
         }
         let queued = if readable { self.pending_count() } else { 0 };
         let orq_body = if orq && tab == Some(SideTab::Context) { self.render_orq_panel(cx) } else { div().into_any_element() };
+        let review_body = if tab == Some(SideTab::Review) { self.render_work_review(width, window, cx) } else { None };
         let handle = div().id("side-resize").absolute().left_0().top_0().bottom_0().w(px(6.)).cursor_col_resize()
             .hover(|el| el.bg(theme::accent_dim()))
             .on_mouse_down(MouseButton::Left, cx.listener(move |this, event: &MouseDownEvent, window, cx| {
@@ -1173,6 +1177,9 @@ impl Hangar {
                     Some(SideTab::Files) => div().flex_1().min_h_0().child(self.render_tree(cx)).into_any_element(),
                     Some(SideTab::Activity) => div().flex_1().min_h_0().child(self.activity_view()).into_any_element(),
                     Some(SideTab::Git) => div().flex_1().min_h_0().children(self.side_git(window, cx)).into_any_element(),
+                    // A revisão ganha a altura inteira do painel, com o recuo das seções do Contexto.
+                    Some(SideTab::Review) => div().id("side-review-scroll").track_scroll(&self.work_review.scroll).flex_1().min_h_0().overflow_y_scroll()
+                        .child(div().px_4().py(px(14.)).children(review_body)).into_any_element(),
                     Some(SideTab::Browser) => match self.remote_browser_shown() {
                         Some(remote) => div().flex_1().min_h_0().child(remote).into_any_element(),
                         None => div().flex_1().min_h_0().children(self.browser_key().and_then(|k| self.side.browsers.get(&k).cloned())).into_any_element(),

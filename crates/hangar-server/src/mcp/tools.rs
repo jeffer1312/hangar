@@ -640,7 +640,11 @@ impl Tools {
                     Err(_)=>return Err("ticket_remote_unavailable: não foi possível conferir o ticket na outra máquina".into()),
                 }
             }
-            if owner.is_none() && status==404 {return Err(coded(status,&value));}
+            if owner.is_none() && status==404 {
+                // Sem vínculo, a revisão ainda pode vir pela branch.
+                crate::work_review_watch::refresh_session(&self.st,&me);
+                return Err(coded(status,&value));
+            }
         }
         if let Some((owner,life))=owner.as_ref().zip(life.as_ref()) {
             let (store,name,life,owner,gid)=(self.st.mission.clone(),me.clone(),life.clone(),owner.clone(),group.as_ref().map(|group|group.gid.clone()));
@@ -650,7 +654,11 @@ impl Tools {
                 Ok::<_,hangar_mission::store::Error>(())
             }).await.map_err(|_|"ticket_remote_unavailable: gravação do vínculo interrompida")?.map_err(|_|"ticket_remote_unavailable: não foi possível guardar o vínculo")?;
         }
-        if a.etapa.is_none() && a.nota.is_none() && a.evidencias.is_empty() {return Ok(dict(value));}
+        if a.etapa.is_none() && a.nota.is_none() && a.evidencias.is_empty() {
+            // A skill chama a leitura no meio do turno para a revisão andar; ticket de outra máquina fica fora.
+            if owner.is_none() {crate::work_review_watch::refresh_session(&self.st,&me);}
+            return Ok(dict(value));
+        }
         let evidence:Vec<Value>=a.evidencias.into_iter().map(|e|json!({"path":e.caminho,"caption":e.legenda})).collect();
         let mut body=json!({"session":session,"key":key,"group_id":group.map(|group|group.gid),"connector":value["item"]["connector"],"ticket_id":value["item"]["ticket_id"],"history_revision":value["item"]["history"].as_array().map(Vec::len),"stage":a.etapa,"note":a.nota,"evidence":evidence});
         if let Some(owner)=owner {
@@ -664,6 +672,7 @@ impl Tools {
             return Ok(dict(value));
         }
         let (status,value)=self.route_from(Some(&me),Method::POST,"/api/mission/report",Some(body)).await;
+        crate::work_review_watch::refresh_session(&self.st,&me);
         if (200..300).contains(&status) {Ok(dict(value))} else {Err(coded(status,&value))}
     }
 

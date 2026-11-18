@@ -841,11 +841,24 @@ impl Api {
     pub async fn server_bytes(&self, path: &[&str], seconds: u64) -> Result<Vec<u8>, Failure> {
         let r = self.client.get(self.server_url(path, &[])).timeout(Duration::from_secs(seconds)).send().await
             .map_err(|_| Failure::transport(false))?;
-        let r = self.checked(r, false).await?;
+        Self::capped_bytes(self.checked(r, false).await?).await
+    }
+
+    /// Corpo inteiro com o teto dos anexos: o tamanho declarado recusa antes de ler, e o lido confere de novo.
+    async fn capped_bytes(r: Response) -> Result<Vec<u8>, Failure> {
         if r.content_length().is_some_and(|n| n > MAX_BYTES) { return Err(Failure::local("attach_too_big")); }
         let bytes = r.bytes().await.map_err(|_| Failure::transport(false))?;
         if bytes.len() as u64 > MAX_BYTES { return Err(Failure::local("attach_too_big")); }
         Ok(bytes.to_vec())
+    }
+
+    /// Bytes de uma rota da sessão (as imagens da revisão do trabalho), com consulta e o mesmo teto.
+    pub async fn session_bytes(&self, name: &str, path: &[&str], query: &[(&str, &str)], seconds: u64) -> Result<Vec<u8>, Failure> {
+        let mut url = self.endpoint(Some(name), None);
+        url.path_segments_mut().expect("validated HTTP base").extend(path);
+        if !query.is_empty() { url.query_pairs_mut().extend_pairs(query); }
+        let r = self.client.get(url).timeout(Duration::from_secs(seconds)).send().await.map_err(|_| Failure::transport(false))?;
+        Self::capped_bytes(self.checked(r, false).await?).await
     }
 
     /// Mutação no servidor, sem retry: queda depois de enviar é incerteza.
@@ -947,11 +960,7 @@ impl Api {
         if let Some(keys) = keys { query.push(("keys", keys)); }
         let r = self.client.get(self.server_url(&["config-sync", "bundle"], &query)).timeout(Duration::from_secs(180)).send().await
             .map_err(|_| Failure::transport(false))?;
-        let r = self.checked(r, false).await?;
-        if r.content_length().is_some_and(|n| n > MAX_BYTES) { return Err(Failure::local("attach_too_big")); }
-        let bytes = r.bytes().await.map_err(|_| Failure::transport(false))?;
-        if bytes.len() as u64 > MAX_BYTES { return Err(Failure::local("attach_too_big")); }
-        Ok(bytes.to_vec())
+        Self::capped_bytes(self.checked(r, false).await?).await
     }
 
     /// Aplica o pacote no destino; o envio e a aplicação são o mesmo pedido, e as etapas chegam em `on`.
