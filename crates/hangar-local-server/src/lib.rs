@@ -309,7 +309,8 @@ impl<H: Host> LocalServer<H> {
             }
             Os::Other => return Err(ActionError::Unsupported),
         }.map_err(ActionError::Io)?;
-        if out.timed_out { return Ok(StartOutcome::StillStarting); }
+        // Só o comando vencido é "ainda subindo": com o código em mãos, o pipe preso por um descendente não esconde a falha.
+        if out.timed_out && out.code.is_none() { return Ok(StartOutcome::StillStarting); }
         match out.code {
             Some(0) => Ok(StartOutcome::Started),
             code => Err(ActionError::Command { code, output: format!("{}{}", out.stdout, out.stderr).trim().to_owned() }),

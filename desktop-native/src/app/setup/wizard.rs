@@ -1164,7 +1164,15 @@ impl SetupWizard {
         }
         let started = run.started.clone();
         run.stopped = true;
-        cx.background_executor().spawn(async move { stop_agent_process(pid, &started) }).detach();
+        let stop = cx.background_executor().spawn(async move { stop_agent_process(pid, &started) });
+        // Sobreviveu: a tela diz que não parou, e a saída com erro dele volta a contar como falha.
+        cx.spawn(async move |this, cx| {
+            if stop.await { return; }
+            let _ = this.update(cx, |w, cx| {
+                if let Some(run) = w.agent.as_mut() { run.stopped = false; run.not_stopped = true; }
+                cx.notify();
+            });
+        }).detach();
         cx.notify();
     }
 

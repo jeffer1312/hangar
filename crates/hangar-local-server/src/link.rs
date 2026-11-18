@@ -109,7 +109,9 @@ pub fn swap(hangar: &Path, target: &Path) -> std::io::Result<Option<PathBuf>> {
     if real(&current).ok().as_ref() != Some(&target) {
         let wrong = format!("{} não aponta para {} depois da troca", current.display(), target.display());
         // Quem chama sem registro da troca (a ação do servidor local) não teria como voltar: volta aqui.
-        let Some(previous) = previous else { return Err(std::io::Error::other(wrong)) };
+        let Some(previous) = previous else {
+            return Err(std::io::Error::other(format!("{wrong}; não havia versão anterior para voltar, e o current ficou assim")));
+        };
         let _ = remove_link(&fresh);
         let undo = make_link(&previous, &fresh).and_then(|()| replace_link(&fresh, &current));
         return Err(std::io::Error::other(match undo {

@@ -311,7 +311,8 @@ describe('tela Status', () => {
       expect(dayIndex(bounds, bounds[0] - 1)).toBe(-1);
       expect(dayIndex(bounds, bounds[7])).toBe(-1);
     } finally {
-      process.env.TZ = tz;
+      if (tz === undefined) delete process.env.TZ;
+      else process.env.TZ = tz;
     }
   });
 
