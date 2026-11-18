@@ -275,7 +275,8 @@ fn windows_process_tree_walk_uses_the_system_table() {
     let claude = dir.path().join("claude.exe");
     fs::copy(std::env::var("ComSpec").unwrap_or_else(|_| r"C:\Windows\System32\cmd.exe".into()), &claude).unwrap();
     let mut child = std::process::Command::new(&claude)
-        .args(["/C", "ping -n 30 127.0.0.1 >NUL", "--session-id", "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"]).spawn().unwrap();
+        // O cmd passa o resto da linha ao último comando: o `rem` os engole, senão o ping recusa e sai na hora.
+        .args(["/C", "ping -n 30 127.0.0.1 >NUL & rem", "--session-id", "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"]).spawn().unwrap();
     std::thread::sleep(std::time::Duration::from_millis(500));
     let (boot, pid) = tree::boot_claude(child.id(), &tree::System);
     let _ = child.kill();

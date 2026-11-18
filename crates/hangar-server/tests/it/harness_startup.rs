@@ -222,7 +222,7 @@ fn startup_repairs_an_existing_python_guard_but_never_installs_one() {
 fn hooks_call_the_stable_launcher_when_the_package_installed_it() {
     let root = tempfile::tempdir().unwrap();
     let (service, settings, repo) = claude_home(root.path());
-    let launcher = root.path().join(".hangar/bin").join(if cfg!(windows) { "hangar-launcher.exe" } else { "hangar-launcher" });
+    let launcher = root.path().join(".hangar").join("bin").join(if cfg!(windows) { "hangar-launcher.exe" } else { "hangar-launcher" });
     fs::create_dir_all(launcher.parent().unwrap()).unwrap();
     // O lançador do pacote é cópia deste mesmo binário.
     fs::copy(std::env::current_exe().unwrap(), &launcher).unwrap();

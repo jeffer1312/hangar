@@ -6,8 +6,13 @@ $ErrorActionPreference = 'Stop'
 $temporary = Join-Path ([IO.Path]::GetTempPath()) ('hangar-atalhos-sem-python-' + [guid]::NewGuid().ToString('N'))
 $prova = '.hangar\passos\2026-11-17-atalhos-windows-sem-python'
 function Conferir([string]$perfil) {
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $Checker -Perfil $perfil 2>&1 | Out-Null
-    $LASTEXITCODE
+    # Com 'Stop', o PowerShell 5.1 transforma o stderr esperado da recusa em erro terminal.
+    $anterior = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $Checker -Perfil $perfil 2>&1 | Out-Null
+        $LASTEXITCODE
+    } finally { $ErrorActionPreference = $anterior }
 }
 function Gravar([string]$bin, [hashtable]$arquivos) {
     New-Item -ItemType Directory -Force $bin | Out-Null

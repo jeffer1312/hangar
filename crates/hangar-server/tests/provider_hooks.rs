@@ -1036,7 +1036,9 @@ fn h48_h53_guard_matches_the_python_captures_and_bars_tmux_exe() {
         // Falha aberta deixa a linha no log quando o Python também deixava (o texto é o código).
         let python_logged = fixture.to_string().contains("guard_tmux-falhas.log");
         if python_logged && name != "guard__log-dir-not-writable" {
-            assert!(home.join(".hangar/logs/privado/guard_tmux-falhas.log").is_file(), "{name}");
+            // Logs da máquina: `%LOCALAPPDATA%\hangar\logs` no Windows, `~/.hangar/logs` no resto.
+            let logs = if cfg!(windows) { root.path().join("local").join("hangar") } else { home.join(".hangar") };
+            assert!(logs.join("logs").join("privado").join("guard_tmux-falhas.log").is_file(), "{name}");
         }
         #[cfg(unix)]
         for dir in locked {

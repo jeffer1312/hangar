@@ -241,30 +241,37 @@ mod tests {
 
     fn args(name: &str) -> Args { Args { name: name.into(), ..Args::default() } }
 
+    /// Caminho absoluto no sistema do teste: `/w` não é absoluto no Windows.
+    fn abs(path: &str) -> String { if cfg!(windows) { format!("C:{}", path.replace('/', "\\")) } else { path.to_owned() } }
+
+    fn here() -> &'static Path { Path::new(if cfg!(windows) { r"C:\w" } else { "/w" }) }
+
     fn facts<'a>(home: &'a Path, key: Option<&'a str>) -> Facts<'a> {
-        Facts { session_key: key, here: Path::new("/w"), inherited_codex_home: None, home }
+        Facts { session_key: key, here: here(), inherited_codex_home: None, home }
     }
 
     fn meta(value: Value) -> Map<String, Value> { value.as_object().unwrap().clone() }
 
     #[test]
     fn without_choices_the_session_opens_in_full_access_with_the_default_account() {
-        let home = Path::new("/h");
+        let home = abs("/h");
+        let home = Path::new(&home);
         let plan = decide(args("cx"), None, &facts(home, None)).unwrap();
         assert_eq!((plan.approval, plan.sandbox, plan.mode), ("never", "danger-full-access", Some("Full Access")));
-        assert_eq!((plan.account.as_str(), plan.codex_home.as_path(), plan.cwd.as_str()), ("default", Path::new("/h/.codex"), "/w"));
+        assert_eq!((plan.account.as_str(), plan.codex_home.as_path(), plan.cwd.as_str()), ("default", Path::new(&abs("/h/.codex")), abs("/w").as_str()));
         assert!(plan.prepares(true) && !plan.prepares(false));
         // Pasta relativa vira absoluta sem `..`; `CODEX_HOME` herdado é a casa padrão, não outra conta.
         let mut relative = args("cx");
         relative.cwd = Some("a/../b".into());
-        let inherited = Facts { inherited_codex_home: Some("/velho"), ..facts(home, None) };
+        let old = abs("/velho");
+        let inherited = Facts { inherited_codex_home: Some(&old), ..facts(home, None) };
         let plan = decide(relative, None, &inherited).unwrap();
-        assert_eq!((plan.cwd.as_str(), plan.codex_home.as_path(), plan.account.as_str()), ("/w/b", Path::new("/velho"), "default"));
+        assert_eq!((plan.cwd.as_str(), plan.codex_home.as_path(), plan.account.as_str()), (abs("/w/b").as_str(), Path::new(&old), "default"));
         let mut tilde = args("cx");
         tilde.codex_home = Some("~/.codex-x".into());
         tilde.codex_account = Some("x".into());
         let plan = decide(tilde, None, &facts(home, None)).unwrap();
-        assert_eq!(plan.codex_home, Path::new("/h/.codex-x"));
+        assert_eq!(plan.codex_home, Path::new(&abs("/h/.codex-x")));
         assert!(plan.prepares(false), "a adicional prepara sempre");
     }
 
@@ -280,12 +287,12 @@ mod tests {
     #[test]
     fn the_own_relaunch_completes_from_the_file_and_refuses_an_unknown_mode() {
         let saved = meta(json!({"name":"cx","thread_id":"t-own","key":"k1","model":"gpt-6","effort":"high","service_tier":"priority",
-            "codex_home":"/h/.codex-x","codex_account":"x","permission_mode":"Ask for approval","tool_output_token_limit":144000}));
+            "codex_home":abs("/h/.codex-x"),"codex_account":"x","permission_mode":"Ask for approval","tool_output_token_limit":144000}));
         let mut relaunch = args("cx");
         relaunch.resume = Some("t-own".into());
         let plan = decide(relaunch.clone(), Some(&saved), &facts(Path::new("/h"), Some("k1"))).unwrap();
         assert_eq!((plan.model.as_deref(), plan.effort.as_deref(), plan.service_tier.as_deref()), (Some("gpt-6"), Some("high"), Some("priority")));
-        assert_eq!((plan.account.as_str(), plan.codex_home.as_path(), plan.limit), ("x", Path::new("/h/.codex-x"), Some(144000)));
+        assert_eq!((plan.account.as_str(), plan.codex_home.as_path(), plan.limit), ("x", Path::new(&abs("/h/.codex-x")), Some(144000)));
         assert_eq!((plan.approval, plan.sandbox), ("on-request", "read-only"));
         // Outra chave não é a própria sessão: só o limite da mesma conversa vem do arquivo.
         let other = decide(relaunch.clone(), Some(&saved), &facts(Path::new("/h"), Some("k2"))).unwrap();
@@ -307,13 +314,13 @@ mod tests {
 
     #[test]
     fn the_imported_resume_validates_the_file_and_swaps_the_identity() {
-        let saved = meta(json!({"name":"cx","thread_id":"t-imp","transfer_id":"tr","key":"k-imp","cwd":"/proj","codex_home":"/h/.codex-x",
+        let saved = meta(json!({"name":"cx","thread_id":"t-imp","transfer_id":"tr","key":"k-imp","cwd":abs("/proj"),"codex_home":abs("/h/.codex-x"),
             "codex_account":"x","permission_mode":"Ask for approval","model":"gpt-6"}));
         let mut resume = args("cx");
         resume.resume = Some("t-imp".into());
         let plan = decide(resume.clone(), Some(&saved), &facts(Path::new("/h"), Some("k-operador"))).unwrap();
         assert_eq!(plan.imported_key.as_deref(), Some("k-imp"));
-        assert_eq!((plan.cwd.as_str(), plan.account.as_str(), plan.approval, plan.sandbox), ("/proj", "x", "on-request", "read-only"));
+        assert_eq!((plan.cwd.as_str(), plan.account.as_str(), plan.approval, plan.sandbox), (abs("/proj").as_str(), "x", "on-request", "read-only"));
         assert_eq!(plan.model.as_deref(), Some("gpt-6"));
         assert!(!plan.prepares(true), "a importada nunca prepara");
         // Override parcial que forma modo é aceito; par fora dos modos recusa sem tocar em nada.
@@ -356,7 +363,7 @@ mod tests {
         let mut plan = decide(args("cx"), None, &facts(Path::new("/h"), None)).unwrap();
         (plan.model, plan.effort, plan.prompt) = (Some("gpt-6".into()), Some("high".into()), Some("olá".into()));
         assert_eq!(tui_argv("/b/codex", &plan, "ws://127.0.0.1:9", Some("priority")), ["/b/codex", "--remote", "ws://127.0.0.1:9", "--no-alt-screen",
-            "-C", "/w", "--sandbox", "danger-full-access", "--ask-for-approval", "never", "-c", "service_tier=\"priority\"",
+            "-C", abs("/w").as_str(), "--sandbox", "danger-full-access", "--ask-for-approval", "never", "-c", "service_tier=\"priority\"",
             "-c", "check_for_update_on_startup=false", "-m", "gpt-6", "-c", "model_reasoning_effort=\"high\"", "olá"]);
         plan.resume = Some("t-1".into());
         (plan.model, plan.effort, plan.prompt) = (None, Some(String::new()), None);

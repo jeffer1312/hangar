@@ -94,7 +94,8 @@ fn repeated_token_uses_the_last_line() {
 #[test]
 fn missing_token_says_where_it_looked() {
     let home = Home::new(common::dead_port(), "");
-    let env = home.home().join(".hangar/config/.env");
+    // Um componente por vez: no Windows o caminho dito usa `\` em todas as partes.
+    let env = home.home().join(".hangar").join("config").join(".env");
     std::fs::write(&env, "CP_PORT=1\n").unwrap();
     let done = home.run(&["--whoami"], &[], &plain_host());
     assert_eq!(done.code, 1);
