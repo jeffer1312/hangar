@@ -396,8 +396,8 @@ pub(super) fn codex_account(auth: &str) -> Option<String> {
 const CLAUDE_DENIED: [&str; 9] = ["Bash(sudo:*)", "Bash(rm -rf:*)", "Bash(tmux kill-server:*)", "Bash(tmux kill-session:*)",
     "Edit(~/.claude/**)", "Edit(~/.claude-*/**)", "Edit(~/.claude.json)", "Write(~/.claude/**)", "Write(~/.claude-*/**)"];
 
-/// Sem pedir permissão (decisão do produto): o agente conserta sozinho, e a pessoa acompanha e pode parar. O Codex roda na
-/// sandbox dele, gravando só em `work` (a `~/.hangar`): o diagnóstico traz saída de log, que ninguém conferiu.
+/// Sem pedir permissão e sem sandbox (decisão do produto): consertar pode exigir gravar fora da `~/.hangar` (unit,
+/// lançador), e a pessoa acompanha e pode parar. O Codex não tem regra de negar por linha de comando; fica o prompt.
 pub(super) fn args(agent: Agent, work: &Path) -> Vec<String> {
     match agent {
         Agent::Claude => {
@@ -406,10 +406,9 @@ pub(super) fn args(agent: Agent, work: &Path) -> Vec<String> {
             args.extend(CLAUDE_DENIED.map(String::from));
             args
         }
-        // A rede fica: o gerenciador do serviço e a saúde do servidor respondem por socket.
-        Agent::Codex => vec!["exec".into(), "--json".into(), "--color".into(), "never".into(), "--sandbox".into(), "workspace-write".into(),
-            "-c".into(), "approval_policy=\"never\"".into(), "-c".into(), "sandbox_workspace_write.network_access=true".into(),
-            "--skip-git-repo-check".into(), "-C".into(), work.to_string_lossy().into_owned(), "-".into()],
+        Agent::Codex => vec!["exec".into(), "--json".into(), "--color".into(), "never".into(),
+            "--dangerously-bypass-approvals-and-sandbox".into(), "--skip-git-repo-check".into(), "-C".into(),
+            work.to_string_lossy().into_owned(), "-".into()],
     }
 }
 
@@ -634,11 +633,9 @@ mod tests {
         let codex = args(Agent::Codex, Path::new("/home/x/.hangar"));
         assert_eq!((codex.first().map(String::as_str), codex.last().map(String::as_str)), (Some("exec"), Some("-")));
         let joined = codex.join(" ");
-        for needle in ["--json", "--sandbox workspace-write", "approval_policy=\"never\"", "sandbox_workspace_write.network_access=true",
-            "--skip-git-repo-check", "-C /home/x/.hangar"] {
+        for needle in ["--json", "--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check", "-C /home/x/.hangar"] {
             assert!(joined.contains(needle), "{needle}: {joined}");
         }
-        assert!(!joined.contains("dangerously") && !joined.contains("danger-full-access"), "{joined}");
     }
 
     /// O "Parar" só diz que parou com o agente fora; depois disso nada mais é sinalizado pelo número dele.
