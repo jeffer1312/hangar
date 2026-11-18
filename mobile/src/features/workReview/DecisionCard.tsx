@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from 'react';
+import { memo, useEffect, useRef, type ReactNode } from 'react';
 import { ActivityIndicator, Pressable, Text, TextInput, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { pendingCount, readyToSend } from '@hangar/core';
@@ -25,7 +25,7 @@ type Props = {
   onReason: (decisionId: string, reason: string) => void;
   onSend: () => void;
   onCompare: () => void;
-  onAssetError: () => void;
+  onAssetError: (asset: string) => void;
   /** Desenho de cada lado no lugar da captura (animação da novidade). */
   drawing?: (side: WorkReviewSide) => ReactNode;
 };
@@ -45,27 +45,32 @@ export function DecisionCard({ review, choices, index, sending, sendError, tall 
   const ready = readyToSend(review, choices);
   const input = useRef<TextInput>(null);
   const advance = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  useEffect(() => () => clearTimeout(advance.current), []);
+  // O avanço agendado vale só para a decisão em que a pessoa escolheu: trocar de decisão ou desmontar o cancela.
+  useEffect(() => () => clearTimeout(advance.current), [index, decision?.id]);
+  // O campo do motivo só existe depois do commit da escolha: o foco espera ele montar.
+  const focusFor = useRef<string | null>(null);
+  const reasonKey = decision && option?.requires_reason ? `${decision.id}:${option.id}` : null;
+  useEffect(() => {
+    if (reasonKey && focusFor.current === reasonKey) input.current?.focus();
+    focusFor.current = null;
+  }, [reasonKey]);
   if (!decision) return null;
 
   const choose = (choice: WorkReviewChoice) => {
     clearTimeout(advance.current);
     onPick(decision.id, choice);
-    if (choice.requires_reason) setTimeout(() => input.current?.focus(), 0);
-    else if (index < total - 1) advance.current = setTimeout(() => onIndex(index + 1), ADVANCE_MS);
+    if (choice.requires_reason) {
+      const key = `${decision.id}:${choice.id}`;
+      if (key === reasonKey) input.current?.focus();
+      else focusFor.current = key;
+    } else if (index < total - 1) advance.current = setTimeout(() => onIndex(index + 1), ADVANCE_MS);
   };
+  const go = (to: number) => { clearTimeout(advance.current); onIndex(to); };
   const frame = (side: WorkReviewSide, height: number) => (
-    <View style={styles.side}>
-      <View style={styles.caption}>
-        <Text style={styles.captionLabel} numberOfLines={1}>{side.label}</Text>
-        {side.value ? <Text style={styles.captionValue} numberOfLines={1}>{side.value}</Text> : null}
-      </View>
-      {/* A chave é a URL: rodada nova traz imagem nova e o quadro quebrado volta a tentar. */}
-      <ZoomFrame key={asset(side.asset).uri} side={side} source={asset(side.asset)} height={height} onPress={onCompare} onError={onAssetError}
-        drawing={drawing?.(side)} label={decision.right
-          ? m.work_review_compare_title({ title: decision.title, left: decision.left?.label ?? '', right: decision.right.label })
-          : `${decision.title}: ${side.label}`} />
-    </View>
+    <SideFrame side={side} source={asset(side.asset)} height={height} onCompare={onCompare} onAssetError={onAssetError}
+      drawing={drawing?.(side)} label={decision.right
+        ? m.work_review_compare_title({ title: decision.title, left: decision.left?.label ?? '', right: decision.right.label })
+        : `${decision.title}: ${side.label}`} />
   );
   const sendLabel = pending > 1 ? m.work_review_pending({ count: pending }) : pending === 1 ? m.work_review_pending_one() : m.work_review_send();
   const reasonMissing = !!option?.requires_reason && !picked?.reason.trim();
@@ -121,13 +126,13 @@ export function DecisionCard({ review, choices, index, sending, sendError, tall 
       ) : null}
 
       <View style={styles.nav}>
-        <Pressable onPress={() => onIndex(index - 1)} disabled={index === 0} accessibilityRole="button"
+        <Pressable onPress={() => go(index - 1)} disabled={index === 0} accessibilityRole="button"
           accessibilityLabel={m.work_review_previous_short()} accessibilityState={{ disabled: index === 0 }}
           style={[styles.navButton, index === 0 && styles.disabled]}>
           <Icon name="ChevronLeft" size={16} color={theme.tokens.text.primary} />
           <Text style={styles.navText}>{m.work_review_previous_short()}</Text>
         </Pressable>
-        <Pressable onPress={() => onIndex(index + 1)} disabled={index >= total - 1} accessibilityRole="button"
+        <Pressable onPress={() => go(index + 1)} disabled={index >= total - 1} accessibilityRole="button"
           accessibilityLabel={m.work_review_next_short()} accessibilityState={{ disabled: index >= total - 1 }}
           style={[styles.navButton, index >= total - 1 && styles.disabled]}>
           <Text style={styles.navText}>{m.work_review_next_short()}</Text>
@@ -144,6 +149,24 @@ export function DecisionCard({ review, choices, index, sending, sendError, tall 
     </View>
   );
 }
+
+// Memo: digitar o motivo redesenha o cartão, e o quadro com a captura não precisa acompanhar.
+const SideFrame = memo(function SideFrame({ side, source, height, label, onCompare, onAssetError, drawing }: {
+  side: WorkReviewSide; source: Source; height: number; label: string; onCompare: () => void; onAssetError: (asset: string) => void;
+  drawing?: ReactNode;
+}) {
+  return (
+    <View style={styles.side}>
+      <View style={styles.caption}>
+        <Text style={styles.captionLabel} numberOfLines={1}>{side.label}</Text>
+        {side.value ? <Text style={styles.captionValue} numberOfLines={1}>{side.value}</Text> : null}
+      </View>
+      {/* A chave é a URL: rodada nova traz imagem nova e o quadro quebrado volta a tentar. */}
+      <ZoomFrame key={source.uri} side={side} source={source} height={height} onPress={onCompare} onError={onAssetError}
+        drawing={drawing} label={label} />
+    </View>
+  );
+});
 
 const styles = StyleSheet.create((theme) => ({
   card: { gap: theme.base.space[2], padding: theme.base.space[3], borderWidth: 1, borderRadius: theme.base.radius.md },

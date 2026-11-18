@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useContext, useEffect, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { pendingCount, stateTone, type AggSession } from '@hangar/core';
@@ -7,7 +7,9 @@ import { useServers } from '../../stores/servers';
 import { FilesPanel } from '../files/FilesPanel';
 import { ActivityPanel } from '../activity/ActivityPanel';
 import { GitPanel } from '../git/GitPanel';
+import { WorkingMarkPaused } from '../../ui/WorkingMark';
 import { useWorkReview, type WorkReviewController } from '../workReview/useWorkReview';
+import { useWorkReviewSummary } from '../workReview/summaries';
 import { WorkReviewView, hasWorkReview } from '../workReview/WorkReviewSection';
 import { badgeColor, toneColors } from '../workReview/tones';
 import { ContextTab } from './ContextTab';
@@ -35,12 +37,14 @@ export function ContextPanel({ serverId, name, focused, onPick }: Props) {
     setSelection({ key: sessionKey, tab: requested });
     clearRequest(sessionKey);
   }, [requested, clearRequest, sessionKey]);
-  const review = useWorkReview(serverId, name);
-  const reviewShown = hasWorkReview(review);
   const selected = selection.key === sessionKey ? selection.tab : requested ?? 'context';
-  // A revisão acabou com a aba aberta: volta ao Contexto em vez de deixar o painel vazio.
-  if (selection.key === sessionKey && selected === 'review' && !reviewShown) setSelection({ key: sessionKey, tab: 'context' });
+  // Sessão sem revisão anunciada nem pedida não lê: cada troca de sessão seria um GET (404 em servidor sem a rota).
+  const summary = useWorkReviewSummary(serverId, name);
+  const review = useWorkReview(serverId, name, !!summary || selected === 'review' || requested === 'review');
+  const reviewShown = hasWorkReview(review);
+  // A escolha fica: sem a revisão (lista religando, revisão acabou) mostra o Contexto, e a Revisão volta quando reaparecer.
   const tab = selected === 'review' && !reviewShown ? 'context' : selected;
+  const paused = useContext(WorkingMarkPaused);
   const ready = useServers((s) => s.ready);
   const server = useServers((s) => s.servers.find((item) => item.id === serverId));
 
@@ -61,7 +65,9 @@ export function ContextPanel({ serverId, name, focused, onPick }: Props) {
       <View key={sessionKey} style={styles.body}>
         {tab === 'context' ? <ContextTab serverId={serverId} name={name} onPick={onPick} />
           : tab === 'review' ? <ScrollView style={styles.body} contentContainerStyle={styles.review} keyboardShouldPersistTaps="handled">
-            <WorkReviewView state={review} name={name} tall />
+            <WorkingMarkPaused.Provider value={paused || !focused}>
+              <WorkReviewView state={review} name={name} tall />
+            </WorkingMarkPaused.Provider>
           </ScrollView>
           : !ready ? <View style={styles.feedback}><ActivityIndicator accessibilityLabel={m.comum_carregando()} /></View>
           : !server ? <View style={styles.feedback}><Text style={styles.error} accessibilityRole="alert">{m.chat_servidor_removido()}</Text></View>

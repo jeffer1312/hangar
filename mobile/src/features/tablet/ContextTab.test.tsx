@@ -38,7 +38,12 @@ vi.mock('./ActionsGrid', () => ({ ActionsGrid: ({ serverId, name }: { serverId: 
 const reviewState = vi.hoisted(() => ({ summary: null as null | { state: string; badge: null | { text: string; tone: string } },
   review: null as null | { state: string; decisions: { id: string; title: string; choices: { id: string; label: string }[] }[] },
   choices: {} as Record<string, { choice: string; reason: string }> }));
-vi.mock('../workReview/useWorkReview', () => ({ useWorkReview: () => reviewState }));
+const reviewReads = vi.hoisted(() => ({ calls: [] as [string, string, boolean | undefined][] }));
+vi.mock('../workReview/useWorkReview', () => ({ useWorkReview: (serverId: string, name: string, enabled?: boolean) => {
+  reviewReads.calls.push([serverId, name, enabled]);
+  return reviewState;
+} }));
+vi.mock('../workReview/summaries', () => ({ useWorkReviewSummary: () => reviewState.summary }));
 vi.mock('../workReview/WorkReviewSection', () => ({
   WorkReviewSection: () => createElement('div', null, 'work-review-section'),
   WorkReviewView: ({ name, tall }: { name: string; tall?: boolean }) => createElement('div', { 'data-tall': tall }, `work-review-${name}`),
@@ -59,6 +64,7 @@ beforeEach(() => {
   reviewState.summary = null;
   reviewState.review = null;
   reviewState.choices = {};
+  reviewReads.calls = [];
   usePanelTabRequest.setState({ request: null });
   container = document.createElement('div');
   root = createRoot(container);
@@ -150,7 +156,7 @@ describe('ContextPanel', () => {
     expect(badge('review-tab-done')?.textContent).toBe('✓');
   });
 
-  it('a revisão sumiu com a aba aberta: volta ao Contexto', () => {
+  it('a revisão sumiu com a aba aberta: mostra o Contexto e volta à Revisão quando ela reaparece', () => {
     reviewState.summary = { state: 'running', badge: null };
     renderPanel();
     selectTab(m.work_review_tab());
@@ -159,6 +165,29 @@ describe('ContextPanel', () => {
     renderPanel();
     expect(container.textContent).toContain('action-srv-sess');
     expect(container.querySelector(`[role="tab"][aria-label="${m.work_review_tab()}"]`)).toBeNull();
+    // A lista religou: a escolha de aba não se perdeu.
+    reviewState.summary = { state: 'running', badge: null };
+    renderPanel();
+    expect(container.textContent).toContain('work-review-sess');
+    expect(container.textContent).not.toContain('action-srv-sess');
+    // Outra sessão continua nascendo no Contexto.
+    renderPanel('outra');
+    expect(container.textContent).toContain('action-srv-outra');
+  });
+
+  it('só lê a revisão com o resumo da lista ou com a aba Revisão pedida', () => {
+    const last = (name: string) => reviewReads.calls.filter((call) => call[1] === name).at(-1);
+    renderPanel();
+    expect(last('sess')).toEqual(['srv', 'sess', false]);
+    reviewState.summary = { state: 'waiting', badge: null };
+    renderPanel();
+    expect(last('sess')).toEqual(['srv', 'sess', true]);
+    reviewState.summary = null;
+    act(() => usePanelTabRequest.getState().open('srv', 'outra', 'review'));
+    renderPanel('outra');
+    expect(last('outra')).toEqual(['srv', 'outra', true]);
+    renderPanel('mais');
+    expect(last('mais')).toEqual(['srv', 'mais', false]);
   });
 
   it('o chip da revisão abre a sessão já na aba Revisão e o pedido vale uma vez', () => {

@@ -14,7 +14,8 @@ type Props = {
   height: number;
   label: string;
   onPress: () => void;
-  onError: () => void;
+  /** Recebe o id do asset: o diário registra qual imagem falhou, sem a URL. */
+  onError: (asset: string) => void;
   /** Desenho no lugar da imagem, no retângulo que ela ocuparia (a animação da novidade não baixa captura). */
   drawing?: ReactNode;
 };
@@ -33,7 +34,7 @@ export const ZoomFrame = memo(function ZoomFrame({ side, source, height, label, 
         : zoom ? <>
           {drawing ? <View style={{ position: 'absolute', left: zoom.left, top: zoom.top, width: zoom.imageWidth, height: zoom.imageHeight }}>{drawing}</View>
             : <Image source={source} recyclingKey={source.uri} contentFit="fill" transition={150}
-              onError={() => { setBroken(true); onError(); }}
+              onError={() => { setBroken(true); onError(side.asset); }}
               style={{ position: 'absolute', left: zoom.left, top: zoom.top, width: zoom.imageWidth, height: zoom.imageHeight }} />}
           {zoom.mark ? <View pointerEvents="none" style={[styles.veil, {
             left: zoom.mark.left - VEIL, top: zoom.mark.top - VEIL,

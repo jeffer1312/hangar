@@ -124,6 +124,15 @@ async fn decisions_answer_ok_refuse_stale_and_oversized_bodies() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn asset_without_review_id_is_a_bad_request() {
+    let routes = Routes::new();
+    routes.linked();
+    let (status, body) = routes.send("GET", "/api/sessions/s1/work-review/assets/a1", Some(TOKEN), None).await;
+    assert_eq!((status, &body["detail"]["code"]), (StatusCode::BAD_REQUEST, &json!("invalid_params")), "{body}");
+    assert!(routes.bench.calls("help", "work_review.asset").is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn asset_without_link_is_not_found() {
     let routes = Routes::new();
     routes.bench.session("s1", "life-1", None);

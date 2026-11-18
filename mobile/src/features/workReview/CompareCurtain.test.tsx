@@ -46,6 +46,20 @@ describe('CompareCurtain', () => {
     expect(onClose).toHaveBeenCalled();
   });
 
+  it('item só com depois e sem proporção do conector usa a da imagem de depois', () => {
+    // O mock do react-native não dispara layout nem carga: os handlers saem das props que o React guardou no nó.
+    const props = (el: Element) => Object.entries(el).find(([k]) => k.startsWith('__reactProps'))![1] as Record<string, (e: unknown) => void>;
+    act(() => root.render(createElement(CompareCurtain, {
+      items: [{ title: 'Só depois', before: null, after: img('a'), leftTag: 'Antes', rightTag: 'Depois' }], index: 0, onIndex: vi.fn(), onClose: vi.fn(),
+    })));
+    const stage = [...container.querySelectorAll('div')].find((el) => typeof props(el).onLayout === 'function')!;
+    act(() => props(stage).onLayout({ nativeEvent: { layout: { width: 300 } } }));
+    act(() => props(container.querySelector('img')!).onLoad({ source: { width: 100, height: 200 } }));
+    const curtain = container.querySelector('[role="adjustable"]') as HTMLElement;
+    // Em pé (2:1), a altura da tela limita: 62% de 844 pt.
+    expect(parseFloat(curtain.style.height)).toBeCloseTo(844 * 0.62, 1);
+  });
+
   it('um item só, sem depois: nem navegação nem dica da divisória', () => {
     act(() => root.render(createElement(CompareCurtain, {
       items: [{ title: 'Diferença', before: img('x'), after: null, leftTag: 'Mock', rightTag: '' }], index: 0, onIndex: vi.fn(), onClose: vi.fn(),

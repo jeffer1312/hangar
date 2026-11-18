@@ -63,6 +63,8 @@ const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'obj
 const obj = (v: unknown): Record<string, unknown> => { if (!isObject(v)) throw new Bad(); return v; };
 const str = (v: unknown): string => { if (typeof v !== 'string') throw new Bad(); return v; };
 const num = (v: unknown): number => { if (typeof v !== 'number' || !Number.isFinite(v)) throw new Bad(); return v; };
+// Tamanho de imagem: zero ou negativo dá escala infinita no zoom e proporção quebrada na cortina.
+const positive = (v: unknown): number => { const n = num(v); if (n <= 0) throw new Bad(); return n; };
 const bool = (v: unknown): boolean => { if (typeof v !== 'boolean') throw new Bad(); return v; };
 const list = <T>(v: unknown, item: (x: unknown) => T): T[] => { if (!Array.isArray(v)) throw new Bad(); return v.map(item); };
 const oneOf = <T extends string>(v: unknown, values: readonly T[]): T => {
@@ -82,7 +84,7 @@ const side = (v: unknown): WorkReviewSide => {
   const o = obj(v);
   const box = opt(o.box, (b) => list(b, num));
   if (box && box.length !== 4) throw new Bad();
-  return clean({ label: str(o.label), value: opt(o.value, str), asset: str(o.asset), width: num(o.width), height: num(o.height),
+  return clean({ label: str(o.label), value: opt(o.value, str), asset: str(o.asset), width: positive(o.width), height: positive(o.height),
     box: box as [number, number, number, number] | undefined });
 };
 const choice = (v: unknown): WorkReviewChoice => {

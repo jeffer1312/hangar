@@ -161,9 +161,10 @@ impl Engine {
         self.changed.notify_one();
     }
 
-    /// Algum conector ligado oferece a revisão: sem ele, o servidor nem acompanha os turnos.
-    pub fn has_review_connector(&self) -> bool {
-        self.host.list().is_ok_and(|list| list.iter().any(|status| offers_review(&status.entry)))
+    /// Algum conector ligado oferece a revisão: sem ele, o servidor nem acompanha os turnos. Catálogo
+    /// ilegível é erro, para quem chama registrar em vez de desligar calado.
+    pub fn has_review_connector(&self) -> Result<bool, AdminError> {
+        Ok(self.host.list()?.iter().any(|status| offers_review(&status.entry)))
     }
 
     /// Corpo do evento `work_reviews`: só as sessões atuais, na mesma vida, com revisão.
@@ -346,8 +347,9 @@ impl Engine {
             return Ok(None);
         };
         self.retarget(session, turn, &target);
-        let supported = catalog.as_ref()
-            .is_ok_and(|list| list.iter().find(|status| status.entry.id == target.connector).is_some_and(|status| offers_review(&status.entry)));
+        // Catálogo ilegível é falha da leitura: como "sem revisão", o chip e a aba sumiriam calados.
+        let supported = catalog.as_ref().map_err(|error| CallError::from(error.clone()))?.iter()
+            .find(|status| status.entry.id == target.connector).is_some_and(|status| offers_review(&status.entry));
         let review = if supported {
             let params = GetParams::new(target.ticket_id.clone())?;
             self.queued(background, &target.connector, self.host.get_review(&target.connector, params)).await?

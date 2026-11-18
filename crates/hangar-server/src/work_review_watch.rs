@@ -88,8 +88,9 @@ pub(crate) fn spawn(st: Arc<AppState>) -> JoinHandle<()> {
 
 async fn run(st: Arc<AppState>) {
     let engine = st.work_review.clone();
+    let mut failing = false;
     loop {
-        if !offered(&engine).await {
+        if !offered(&st, &mut failing).await {
             tokio::time::sleep(RECHECK).await;
             continue;
         }
@@ -103,15 +104,29 @@ async fn run(st: Arc<AppState>) {
             if !ended.is_empty() { tokio::spawn(reread(st.clone(), engine.clone(), ended)); }
             if checked.elapsed() >= RECHECK {
                 checked = Instant::now();
-                if !offered(&engine).await { break; }
+                if !offered(&st, &mut failing).await { break; }
             }
         }
     }
 }
 
-async fn offered(engine: &Arc<Engine>) -> bool {
-    let engine = engine.clone();
-    tokio::task::spawn_blocking(move || engine.has_review_connector()).await.unwrap_or(false)
+/// Catálogo que não se lê conta como "sem conector" e é relido no próximo `RECHECK`; vai ao diário só
+/// quando começa a falhar, senão repetiria a cada minuto.
+async fn offered(st: &AppState, failing: &mut bool) -> bool {
+    let engine = st.work_review.clone();
+    let code = match tokio::task::spawn_blocking(move || engine.has_review_connector()).await {
+        Ok(Ok(offered)) => {
+            *failing = false;
+            return offered;
+        }
+        Ok(Err(error)) => error.code(),
+        Err(error) if error.is_panic() => "panicked",
+        Err(_) => "cancelled",
+    };
+    if !std::mem::replace(failing, true) {
+        st.diag.report(EVENT, "", &format!("work_review_catalog_unreadable:{code}"), "catálogo dos conectores ilegível; vigia do fim de turno parado até reler");
+    }
+    false
 }
 
 fn turn_rows(rows: &[SessionRow]) -> Vec<TurnRow> {

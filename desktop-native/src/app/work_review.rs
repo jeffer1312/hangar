@@ -285,8 +285,19 @@ impl Hangar {
         let asset = slot.0.clone();
         let request = async move {
             let bytes = api.session_bytes(&name, &["work-review", "assets", &asset], &[("review_id", &review_id)], 60).await?;
-            Ok(tokio::task::spawn_blocking(move || if full { media::decode(&bytes, FULL_SIDE, FULL_SIDE, None) } else { media::thumbnail(&bytes) })
-                .await.ok().flatten())
+            let size = bytes.len();
+            let decoded = tokio::task::spawn_blocking(move || if full { media::decode(&bytes, FULL_SIDE, FULL_SIDE, None) } else { media::thumbnail(&bytes) }).await;
+            // O quadro fica em branco; sem a linha no log, nada diria que a imagem veio e não abriu.
+            let failed = match &decoded {
+                Ok(Some(_)) => None,
+                Ok(None) => Some("decode"),
+                Err(error) if error.is_panic() => Some("panic"),
+                Err(_) => Some("cancelled"),
+            };
+            if let Some(reason) = failed {
+                crate::log_line(&format!("work_review.asset_decode_failed asset={asset} bytes={size} full={full} reason={reason}"));
+            }
+            Ok(decoded.ok().flatten())
         };
         run(&self.runtime, request, window, cx, move |this: &mut Hangar, result: Result<Option<Arc<RenderImage>>, Failure>, window, cx| {
             // A rodada ou a sessão mudou no meio: a imagem não tem mais onde ficar.

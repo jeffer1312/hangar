@@ -15,7 +15,8 @@ export type WorkReviewLoad =
 // O servidor responde "NNN: frase"; na seção o número não ajuda quem lê.
 export const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e)).replace(/^\d{3}: /, '');
 
-export function useWorkReview(serverId: string, name: string) {
+/** `enabled` falso não lê: o painel do tablet só lê quando a lista anunciou a revisão ou a aba foi pedida. */
+export function useWorkReview(serverId: string, name: string, enabled = true) {
   const server = useServers((s) => s.servers.find((item) => item.id === serverId) ?? null);
   const summary = useWorkReviewSummary(serverId, name);
   const [load, setLoad] = useState<WorkReviewLoad>({ status: 'loading' });
@@ -29,6 +30,8 @@ export function useWorkReview(serverId: string, name: string) {
   serverRef.current = server;
 
   const reviewId = useRef<string | undefined>(undefined);
+  const assetRetried = useRef<string | null>(null);
+  const assetLogged = useRef(new Set<string>());
   // O painel do tablet troca de sessão sem remontar: a revisão e as escolhas da anterior não passam para a nova.
   const sessionKey = `${serverId}::${name}`;
   // Muda a cada troca de sessão, inclusive A → B → A: o envio da passagem anterior não vale na seguinte.
@@ -46,6 +49,7 @@ export function useWorkReview(serverId: string, name: string) {
     visit.current++;
     hasData.current = false;
     reviewId.current = undefined;
+    assetLogged.current.clear();
   }
 
   const apply = useCallback((data: WorkReviewResponse) => {
@@ -76,12 +80,11 @@ export function useWorkReview(serverId: string, name: string) {
   }, [apply, name]);
 
   // Abrir lê; depois, só quando o evento da lista diz que a revisão mudou.
+  // Sem leitura ainda, o `quiet` não muda nada: a tela já está em carregando e a falha aparece.
   const summaryKey = summary ? `${summary.review_id}|${summary.state}|${summary.updated_at}` : '';
-  const first = useRef(true);
   useEffect(() => {
-    if (first.current) { first.current = false; reload(); return; }
-    reload(true);
-  }, [summaryKey, reload, sessionKey]);
+    if (enabled) reload(true);
+  }, [enabled, summaryKey, reload, sessionKey]);
   useEffect(() => () => { generation.current++; }, []);
 
   const review: WorkReview | null = load.status === 'ready' && load.data.linked ? load.data.review : null;
@@ -123,9 +126,19 @@ export function useWorkReview(serverId: string, name: string) {
   }, [apply, choices, load, name, reload, review, sending]);
 
   // Imagem recusada pode ser rodada nova (409): relê uma vez por rodada, nunca em laço.
-  const assetRetried = useRef<string | null>(null);
-  const onAssetError = useCallback(() => {
-    if (!review || assetRetried.current === review.id) return;
+  // Cada falha vai ao diário uma vez antes e uma depois da releitura, para separar rodada trocada de imagem quebrada.
+  const onAssetError = useCallback((asset: string) => {
+    if (!review) return;
+    const retried = assetRetried.current === review.id;
+    const key = `${review.id}|${asset}|${retried}`;
+    if (!assetLogged.current.has(key)) {
+      assetLogged.current.add(key);
+      const target = serverRef.current;
+      registrarDiag({ evento: 'work_review.asset_failed', nivel: 'aviso', tela: 'work_review',
+        codigo: retried ? 'asset_failed_after_retry' : 'asset_failed', detalhe: `review=${review.id} asset=${asset}` },
+      target ? baseOf(target) : undefined);
+    }
+    if (retried) return;
     assetRetried.current = review.id;
     reload(true);
   }, [reload, review]);

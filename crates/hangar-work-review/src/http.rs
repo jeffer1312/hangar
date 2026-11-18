@@ -58,8 +58,10 @@ async fn reply(state: &Http, peer: Option<SocketAddr>, request: Request) -> Resp
             Err(failure) => error(&failure),
         },
         (Method::GET, ["api", "sessions", name, "work-review", "assets", asset]) => {
-            let review = form_urlencoded::parse(request.uri().query().unwrap_or("").as_bytes())
-                .find(|(key, _)| key == "review_id").map(|(_, value)| value.into_owned()).unwrap_or_default();
+            let Some(review) = form_urlencoded::parse(request.uri().query().unwrap_or("").as_bytes())
+                .find(|(key, _)| key == "review_id").map(|(_, value)| value.into_owned()) else {
+                return detail(StatusCode::BAD_REQUEST, "invalid_params", "falta o review_id", json!({}));
+            };
             match state.engine.asset(name, asset, &review).await {
                 Ok(image) => {
                     let mut response = (StatusCode::OK, image.bytes).into_response();

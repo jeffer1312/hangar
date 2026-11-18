@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Modal, Pressable, Text, View, useWindowDimensions, type LayoutChangeEvent } from 'react-native';
-import { Image } from 'expo-image';
+import { Image, type ImageLoadEventData } from 'expo-image';
 import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
 import Animated, { useAnimatedStyle, useSharedValue } from 'react-native-reanimated';
 import { scheduleOnRN } from 'react-native-worklets';
@@ -31,15 +31,20 @@ export function CompareCurtain({ items, index, onIndex, onClose }: Props) {
   const window = useWindowDimensions();
   const item = items[index];
   const [box, setBox] = useState(0);
-  const [loaded, setLoaded] = useState<number | null>(null);
+  // A proporção vem da imagem que carregar, com a de antes na frente: item só com depois também tem tamanho.
+  const [loaded, setLoaded] = useState<{ before?: number; after?: number }>({});
   const [pct, setPct] = useState(50);
   const pos = useSharedValue(0.5);
   const width = useSharedValue(0);
 
   // Cada item abre com a divisória no meio, como o desenho.
-  useEffect(() => { pos.value = 0.5; setPct(50); setLoaded(null); }, [index, pos]);
+  useEffect(() => { pos.value = 0.5; setPct(50); setLoaded({}); }, [index, pos]);
 
-  const aspect = item?.aspect ?? loaded ?? 9 / 16;
+  const aspect = item?.aspect ?? loaded.before ?? loaded.after ?? 9 / 16;
+  const measure = (key: 'before' | 'after') => (e: ImageLoadEventData) => {
+    const { width: w, height: h } = e.source;
+    if (w > 0 && h > 0) setLoaded((prev) => (prev[key] === h / w ? prev : { ...prev, [key]: h / w }));
+  };
   // Em pé a largura manda; deitado, a altura da tela limita e a imagem encolhe centrada.
   const imageWidth = box > 0 ? Math.min(box, (window.height * 0.62) / aspect) : 0;
   useEffect(() => { width.value = imageWidth; }, [imageWidth, width]);
@@ -83,12 +88,11 @@ export function CompareCurtain({ items, index, onIndex, onClose }: Props) {
                   accessibilityActions={[{ name: 'increment' }, { name: 'decrement' }]}
                   onAccessibilityAction={(e) => adjust(e.nativeEvent.actionName === 'increment' ? STEP : -STEP)}>
                   {item.before ? <Image source={item.before} recyclingKey={item.before.uri} contentFit="cover" contentPosition="top left"
-                    onLoad={(e) => { if (e.source.width > 0) setLoaded(e.source.height / e.source.width); }}
-                    style={{ width: imageWidth, height: imageHeight }} /> : null}
+                    onLoad={measure('before')} style={{ width: imageWidth, height: imageHeight }} /> : null}
                   {item.after ? <Animated.View style={[styles.clip, clip]}>
                     <Animated.View style={[styles.shifted, { width: imageWidth, height: imageHeight }, shifted]}>
                       <Image source={item.after} recyclingKey={item.after.uri} contentFit="cover" contentPosition="top left"
-                        style={{ width: imageWidth, height: imageHeight }} />
+                        onLoad={measure('after')} style={{ width: imageWidth, height: imageHeight }} />
                     </Animated.View>
                   </Animated.View> : null}
                   {item.after ? <Animated.View pointerEvents="none" style={[styles.bar, bar]} /> : null}

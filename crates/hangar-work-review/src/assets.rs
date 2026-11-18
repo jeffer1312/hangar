@@ -49,24 +49,25 @@ impl AssetCache {
         let cache = self.clone();
         let path = dir.join(hash(asset)).with_extension(kind.ext);
         let bytes = image.bytes.clone();
-        let _ = tokio::task::spawn_blocking(move || {
+        let done = tokio::task::spawn_blocking(move || {
             let mut total = cache.total();
             let before = file_size(&path);
             let written = path.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|()| hangar_core::fs::atomic_write(&path, &bytes));
-            if let Err(error) = written { tracing::debug!(code = "work_review_asset_cache_write", error = ?error.kind()); }
+            if let Err(error) = written { tracing::warn!(code = "work_review_asset_cache_write", error = ?error.kind(), "work_review: imagem não foi ao cache"); }
             let now = match *total {
                 Some(known) => (known + file_size(&path)).saturating_sub(before),
                 None => cache.tickets().iter().map(|(_, size, _)| size).sum(),
             };
             *total = Some(if now > cache.limit { cache.evict(&keep) } else { now });
         }).await;
+        if let Err(error) = done { tracing::warn!(code = "work_review_asset_cache_join", %error, "work_review: gravação no cache interrompida"); }
     }
 
     /// Rodada nova do ticket: as imagens das outras rodadas não voltam mais.
     pub(crate) async fn keep_only(&self, connector: &str, ticket: &str, review: &str) {
         let (Some(dir), keep) = (self.ticket_dir(connector, ticket), hash(review)) else { return };
         let cache = self.clone();
-        let _ = tokio::task::spawn_blocking(move || {
+        let done = tokio::task::spawn_blocking(move || {
             let Ok(entries) = std::fs::read_dir(&dir) else { return };
             let mut total = cache.total();
             for entry in entries.flatten().filter(|entry| entry.file_name().to_str() != Some(keep.as_str())) {
@@ -77,6 +78,7 @@ impl AssetCache {
                 if let Some(known) = total.as_mut() { *known = known.saturating_sub(gone); }
             }
         }).await;
+        if let Err(error) = done { tracing::warn!(code = "work_review_asset_cache_join", %error, "work_review: limpeza das rodadas antigas interrompida"); }
     }
 
     /// Pastas de ticket com o arquivo mais novo e o tamanho de cada uma.

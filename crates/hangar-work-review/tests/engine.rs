@@ -142,6 +142,22 @@ async fn relinked_ticket_drops_the_old_summary_and_the_failure_goes_to_diag() {
     assert_eq!(reported, vec![("work_review_refresh_failed".into(), "s1".into(), "timeout".into())]);
 }
 
+/// Catálogo ilegível não é "conector sem revisão": a pessoa vê o erro, o segundo plano vai ao diário.
+#[tokio::test(flavor = "multi_thread")]
+async fn unreadable_catalog_is_a_read_failure_not_unsupported() {
+    let bench = Bench::new();
+    bench.connector("help", true, &[]);
+    let session = bench.session("s1", "life-1", None);
+    bench.link("help", "1", &session);
+    std::fs::write(bench.path("connectors.json"), "{ilegível").unwrap();
+    assert_eq!(bench.engine.session_review("s1").await.unwrap_err().code(), "registry_invalid");
+    assert_eq!(bench.engine.has_review_connector().unwrap_err().code(), "registry_invalid");
+    bench.engine.refresh(session);
+    bench.diag.reported().await;
+    let reported = bench.diag.0.lock().unwrap().clone();
+    assert_eq!(reported, vec![("work_review_refresh_failed".into(), "s1".into(), "registry_invalid".into())]);
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn background_failure_keeps_the_previous_summary_and_warns_once() {
     let bench = Bench::new();

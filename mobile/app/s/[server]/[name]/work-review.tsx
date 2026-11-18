@@ -1,9 +1,10 @@
-import { useMemo } from 'react';
+import { useContext, useMemo } from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
-import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
+import { Stack, useIsFocused, useLocalSearchParams, useRouter } from 'expo-router';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Icon } from '../../../../src/ui/Icon';
+import { WorkingMarkPaused } from '../../../../src/ui/WorkingMark';
 import { WorkReviewSection } from '../../../../src/features/workReview/WorkReviewSection';
 import * as m from '../../../../src/paraglide/messages';
 
@@ -16,6 +17,9 @@ export default function WorkReviewSheet() {
   const { theme } = useUnistyles();
   const backgroundColor = theme.tokens.bg.base;
   const screenOptions = useMemo(() => ({ headerShown: false, contentStyle: { backgroundColor } }), [backgroundColor]);
+  // Outra tela por cima mantém a folha montada: o pulso da etapa para com ela coberta.
+  const paused = useContext(WorkingMarkPaused);
+  const focused = useIsFocused();
   const close = () => {
     if (router.canGoBack()) router.back();
     else router.replace('/' as never);
@@ -31,7 +35,9 @@ export default function WorkReviewSheet() {
         </Pressable>
       </View>
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-        <WorkReviewSection key={`${serverId}:${name}`} serverId={serverId} name={name} standalone />
+        <WorkingMarkPaused.Provider value={paused || !focused}>
+          <WorkReviewSection key={`${serverId}:${name}`} serverId={serverId} name={name} standalone />
+        </WorkingMarkPaused.Provider>
       </ScrollView>
     </KeyboardAvoidingView>
   );

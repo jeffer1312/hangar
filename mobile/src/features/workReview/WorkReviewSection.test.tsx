@@ -34,6 +34,7 @@ vi.mock('./CompareCurtain', () => ({
 
 import { setWorkReviewSummaries, clearWorkReviewSummaries } from './summaries';
 import { WorkReviewSection } from './WorkReviewSection';
+import { useWorkReview } from './useWorkReview';
 
 const waiting = (): WorkReview => ({
   id: 'r-7', title: 'Comparação com o mock', subject: 'Controle Bancário', updated_at: new Date().toISOString(), state: 'waiting',
@@ -244,6 +245,17 @@ describe('WorkReviewSection', () => {
     await act(async () => { vi.advanceTimersByTime(250); });
     await click('Igualar ao mock');
     expect(button(m.work_review_send())!.disabled).toBe(false);
+  });
+
+  it('desligada não lê; ligada lê na hora', async () => {
+    api.fetch.mockResolvedValue(linked(waiting()));
+    const Probe = ({ enabled }: { enabled: boolean }) => { useWorkReview('srv', 'pm', enabled); return null; };
+    await act(async () => root.render(createElement(Probe, { enabled: false })));
+    await flush();
+    expect(api.fetch).not.toHaveBeenCalled();
+    await act(async () => root.render(createElement(Probe, { enabled: true })));
+    await flush();
+    expect(api.fetch).toHaveBeenCalledTimes(1);
   });
 
   it('o evento da lista com outra rodada relê a revisão', async () => {

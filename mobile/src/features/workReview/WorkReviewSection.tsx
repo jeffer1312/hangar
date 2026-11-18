@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { ActivityIndicator, FlatList, Linking, Pressable, Text, View } from 'react-native';
+import { memo, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { ActivityIndicator, AppState, FlatList, Linking, Pressable, Text, View, type ListRenderItem } from 'react-native';
 import { Image } from 'expo-image';
 import Animated, { cancelAnimation, useAnimatedStyle, useReducedMotion, useSharedValue, withRepeat, withTiming } from 'react-native-reanimated';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
@@ -7,6 +7,7 @@ import { pendingCount, relativeTime, stateTone, stepStatus, waitingHeadlineText 
 import type { Server, WaitingHeadlineText, WorkReview, WorkReviewResolvedItem, WorkReviewSteps, WorkReviewState, WorkReviewTone } from '@hangar/core';
 import { Icon } from '../../ui/Icon';
 import { toast } from '../../ui/Toast';
+import { WorkingMarkPaused } from '../../ui/WorkingMark';
 import { CompareCurtain, type CurtainItem } from './CompareCurtain';
 import { DecisionCard } from './DecisionCard';
 import { useWorkReview, type WorkReviewController } from './useWorkReview';
@@ -69,7 +70,9 @@ export function WorkReviewView({ state, name, standalone = false, tall = false }
   return <ReviewBody review={review} server={server} name={name} branch={data.via === 'branch'} state={state} tall={tall} />;
 }
 
-const stripKey = (item: CurtainItem | null, k: number) => (item ? `${k}:${item.title}` : 'more');
+/** Quadro da tira com os ids dos assets, que o diário registra quando a imagem falha. `null` é o quadro "+N". */
+type StripEntry = { item: CurtainItem; before?: string; after?: string } | null;
+const stripKey = (entry: StripEntry, k: number) => (entry ? `${k}:${entry.item.title}` : 'more');
 
 function headlineText(kind: WaitingHeadlineText, connector: string | undefined): string | undefined {
   if (kind === 'ready') return m.work_review_ready();
@@ -96,24 +99,35 @@ function ReviewBody({ review, server, name, branch, state, tall }: {
   const pending = pendingCount(review, state.choices);
   const updated = Date.parse(review.updated_at);
 
-  const resolvedItems = useMemo<CurtainItem[]>(() => (review.resolved?.items ?? []).map((item: WorkReviewResolvedItem) => ({
-    title: item.title, before: item.before ? asset(item.before) : null, after: item.after ? asset(item.after) : null,
-    leftTag: m.work_review_before(), rightTag: m.work_review_after(),
+  const entries = useMemo(() => (review.resolved?.items ?? []).map((item: WorkReviewResolvedItem) => ({
+    item: {
+      title: item.title, before: item.before ? asset(item.before) : null, after: item.after ? asset(item.after) : null,
+      leftTag: m.work_review_before(), rightTag: m.work_review_after(),
+    } satisfies CurtainItem,
+    before: item.before, after: item.after,
   })), [review.resolved, asset]);
-  const openDecision = () => {
-    const d = review.decisions[state.index];
+  const resolvedItems = useMemo<CurtainItem[]>(() => entries.map((e) => e.item), [entries]);
+  // Estáveis: digitar o motivo redesenha a seção, e os quadros em `memo` não precisam acompanhar.
+  const { decisions } = review;
+  const { index: decisionIndex, onAssetError } = state;
+  const openDecision = useCallback(() => {
+    const d = decisions[decisionIndex];
     if (!d?.left) return;
     setCurtain({ index: 0, items: [{
       title: d.right ? m.work_review_compare_title({ title: d.title, left: d.left.label, right: d.right.label }) : d.title,
       before: asset(d.left.asset), after: d.right ? asset(d.right.asset) : null,
       leftTag: d.left.label, rightTag: d.right?.label ?? '', aspect: d.left.height / d.left.width,
     }] });
-  };
+  }, [decisions, decisionIndex, asset]);
+  const openResolved = useCallback((k: number) => setCurtain({ items: resolvedItems, index: k }), [resolvedItems]);
 
   const resolvedCount = review.resolved ? review.resolved.count ?? review.resolved.items.length : 0;
   const more = review.resolved ? resolvedCount - review.resolved.items.length : 0;
   // Só os quadros perto da tela montam: são até 200 pares de imagens grandes. `null` no fim é o quadro "+N".
-  const strip = useMemo<(CurtainItem | null)[]>(() => (more > 0 ? [...resolvedItems, null] : resolvedItems), [resolvedItems, more]);
+  const strip = useMemo<StripEntry[]>(() => (more > 0 ? [...entries, null] : entries), [entries, more]);
+  const renderThumb = useCallback<ListRenderItem<StripEntry>>(({ item: entry, index: k }) => (entry
+    ? <Thumb entry={entry} index={k} onOpen={openResolved} onError={onAssetError} />
+    : <View style={styles.moreTile}><Text style={styles.muted}>{m.work_review_more({ count: more })}</Text></View>), [openResolved, onAssetError, more]);
 
   return (
     <View style={styles.section}>
@@ -144,7 +158,7 @@ function ReviewBody({ review, server, name, branch, state, tall }: {
       {waiting ? (
         <DecisionCard review={review} choices={state.choices} index={state.index} sending={state.sending} sendError={state.sendError} tall={tall}
           asset={asset} onIndex={state.setIndex} onPick={state.pick} onReason={state.setReason} onSend={state.send}
-          onCompare={openDecision} onAssetError={state.onAssetError} />
+          onCompare={openDecision} onAssetError={onAssetError} />
       ) : state.sendError ? <Text style={styles.error} accessibilityRole="alert">{state.sendError}</Text> : null}
 
       {/* O desenho tira as corrigidas enquanto roda: a lista ainda está mudando. */}
@@ -153,21 +167,7 @@ function ReviewBody({ review, server, name, branch, state, tall }: {
           onToggle={() => setResolvedOpen((v) => !v)}>
           <FlatList horizontal data={strip} keyExtractor={stripKey} showsHorizontalScrollIndicator={false}
             contentContainerStyle={styles.strip} initialNumToRender={4} maxToRenderPerBatch={4} windowSize={3}
-            renderItem={({ item, index: k }) => item ? (
-              <Pressable disabled={!item.before && !item.after} accessibilityRole="imagebutton"
-                accessibilityLabel={item.title} onPress={() => setCurtain({ items: resolvedItems, index: k })} style={styles.pair}>
-                <View style={styles.pairImage}>
-                  {item.before ? <Image source={item.before} recyclingKey={item.before.uri} contentFit="cover" contentPosition="top left"
-                    style={styles.pairFull} onError={state.onAssetError} /> : null}
-                  {item.after ? <View style={[styles.pairHalf, !item.before && styles.pairWhole]}>
-                    <Image source={item.after} recyclingKey={item.after.uri} contentFit="cover" contentPosition="top left"
-                      style={[styles.pairShifted, !item.before && styles.pairUnshifted]} onError={state.onAssetError} />
-                  </View> : null}
-                  {item.before && item.after ? <View style={styles.pairDivider} /> : null}
-                </View>
-                <Text style={styles.caption} numberOfLines={1}>{item.title}</Text>
-              </Pressable>
-            ) : <View style={styles.moreTile}><Text style={styles.muted}>{m.work_review_more({ count: more })}</Text></View>} />
+            renderItem={renderThumb} />
         </Collapsible>
       ) : null}
 
@@ -207,6 +207,26 @@ function ReviewBody({ review, server, name, branch, state, tall }: {
     </View>
   );
 }
+
+const Thumb = memo(function Thumb({ entry: { item, before, after }, index, onOpen, onError }: {
+  entry: NonNullable<StripEntry>; index: number; onOpen: (index: number) => void; onError: (asset: string) => void;
+}) {
+  return (
+    <Pressable disabled={!item.before && !item.after} accessibilityRole="imagebutton"
+      accessibilityLabel={item.title} onPress={() => onOpen(index)} style={styles.pair}>
+      <View style={styles.pairImage}>
+        {item.before ? <Image source={item.before} recyclingKey={item.before.uri} contentFit="cover" contentPosition="top left"
+          style={styles.pairFull} onError={() => before && onError(before)} /> : null}
+        {item.after ? <View style={[styles.pairHalf, !item.before && styles.pairWhole]}>
+          <Image source={item.after} recyclingKey={item.after.uri} contentFit="cover" contentPosition="top left"
+            style={[styles.pairShifted, !item.before && styles.pairUnshifted]} onError={() => after && onError(after)} />
+        </View> : null}
+        {item.before && item.after ? <View style={styles.pairDivider} /> : null}
+      </View>
+      <Text style={styles.caption} numberOfLines={1}>{item.title}</Text>
+    </Pressable>
+  );
+});
 
 /** Faixa de chamada no tom do estado; esperando, o número é o que ainda falta decidir aqui. Sem `headline` e fora da
  *  espera, não aparece. */
@@ -278,7 +298,16 @@ function StepDot({ status, tone, pulse }: { status: 'done' | 'current' | 'pendin
   const { theme } = useUnistyles();
   const reduced = useReducedMotion();
   const ring = useSharedValue(0);
-  const animate = pulse && !reduced;
+  // O pulso é contínuo: para com a folha coberta, a aba escondida, a gaveta aberta ou o app em segundo plano.
+  const paused = useContext(WorkingMarkPaused);
+  const [foreground, setForeground] = useState(() => AppState.currentState === 'active');
+  useEffect(() => {
+    if (!pulse) return;
+    setForeground(AppState.currentState === 'active');
+    const sub = AppState.addEventListener('change', (next) => setForeground(next === 'active'));
+    return () => sub.remove();
+  }, [pulse]);
+  const animate = pulse && !reduced && !paused && foreground;
   useEffect(() => {
     if (!animate) { cancelAnimation(ring); ring.value = 0; return; }
     ring.value = withRepeat(withTiming(1, { duration: 1200 }), -1, false);

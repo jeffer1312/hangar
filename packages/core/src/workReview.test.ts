@@ -81,6 +81,11 @@ describe('parseWorkReviewResponse', () => {
     const badBox = waitingRaw();
     badBox.decisions[0].left!.box = [1, 2, 3] as unknown as [number, number, number, number];
     expect(parseWorkReviewResponse(linked(badBox))).toBeNull();
+    for (const size of [{ width: 0 }, { height: -900 }]) {
+      const badSize = waitingRaw();
+      Object.assign(badSize.decisions[0].right!, size);
+      expect(parseWorkReviewResponse(linked(badSize))).toBeNull();
+    }
     const noPrint = waitingRaw();
     delete (noPrint.decisions[1] as { left?: unknown }).left;
     expect(parseWorkReviewResponse(linked(noPrint))?.linked).toBe(true);
