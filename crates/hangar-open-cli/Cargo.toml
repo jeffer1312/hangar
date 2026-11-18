@@ -1,0 +1,14 @@
+[package]
+name = "hangar-open-cli"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+# Mesmas features do hangar-server: sem elas o target guarda outra cópia de cada dependência.
+[dependencies]
+hangar-core.workspace = true
+serde_json = { workspace = true, features = ["float_roundtrip", "alloc", "unbounded_depth", "arbitrary_precision", "raw_value"] }
+
+[dev-dependencies]
+proptest.workspace = true
+tempfile.workspace = true

@@ -2,7 +2,7 @@
 use crate::accounts::environment::AccountEnvironment;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::{fs, io::Write, path::Path};
+use std::{collections::BTreeSet, fs, io::Write, ops::Range, path::Path};
 
 pub const ENTRIES: &[(&str, Option<&str>, &str)] = &[
     ("SessionStart", None, "kimi-state-hook"),
@@ -24,11 +24,15 @@ struct Config {
 #[derive(Deserialize)]
 struct Hook {
     #[serde(default)]
+    event: Option<toml::Value>,
+    #[serde(default)]
+    matcher: Option<toml::Value>,
+    #[serde(default)]
     command: Option<toml::Spanned<toml::Value>>,
 }
 
-pub fn installed(command: &str, mode: &str) -> bool {
-    crate::provider_hooks::command(mode).is_ok_and(|expected| {
+pub fn installed(home: &Path, command: &str, mode: &str) -> bool {
+    crate::provider_hooks::command(home, mode).is_ok_and(|expected| {
         super::hooks::tokens(command, cfg!(windows))
             == super::hooks::tokens(&expected, cfg!(windows))
     })
@@ -37,15 +41,77 @@ fn native_command(command: &str, mode: &str) -> bool {
     let tokens = super::hooks::tokens(command, cfg!(windows));
     tokens.len() == 2
         && tokens[1] == mode
-        && tokens[0].rsplit(['/', '\\']).next().is_some_and(|name| {
-            matches!(
-                name,
-                "hangar-server" | "hangar-server.exe" | "hangar-server-command"
-            )
-        })
+        && super::hooks::hangar_program(&tokens[0])
 }
 
+/// O modo do Hangar de um comando gravado (Python antigo ou subcomando), ou `None` se é pessoal.
+fn ours(command: &str) -> Option<&'static str> {
+    [("kimi_state_hook.py", "kimi-state-hook"), ("guard_tmux.py", "guard-tmux")]
+        .into_iter()
+        .find(|(legacy, mode)| {
+            super::hooks::refers_platform(&json!(command), legacy, true, cfg!(windows)) || native_command(command, mode)
+        })
+        .map(|(_, mode)| mode)
+}
+
+/// Onde cada `[[hooks]]` começa e termina no texto, com o comentário do Hangar logo acima e a linha
+/// em branco que o separa. `None` quando o texto não tem um cabeçalho por entrada (não dá para casar).
+fn blocks(raw: &str, count: usize) -> Option<Vec<Range<usize>>> {
+    let mut lines: Vec<(usize, &str)> = Vec::new();
+    let mut at = 0;
+    for line in raw.split_inclusive('\n') {
+        lines.push((at, line));
+        at += line.len();
+    }
+    fn header(line: &str) -> bool {
+        let line = line.trim();
+        let line = line.split_once('#').map_or(line, |(head, _)| head).trim_end();
+        line.strip_prefix("[[").and_then(|rest| rest.strip_suffix("]]")).is_some_and(|name| name.trim() == "hooks")
+    }
+    fn table(line: &str) -> bool { line.trim_start().starts_with('[') }
+    fn loose(line: &str) -> bool { line.trim().is_empty() || line.trim_start().starts_with('#') }
+    let mut ranges = Vec::new();
+    for (index, &(start, line)) in lines.iter().enumerate() {
+        if !header(line) {
+            continue;
+        }
+        // O bloco vai até a próxima tabela, sem os comentários e linhas em branco logo acima dela:
+        // esses são de quem vem depois.
+        let mut last = lines[index + 1..].iter().position(|&(_, line)| table(line)).map_or(lines.len(), |offset| index + 1 + offset);
+        while last > index + 1 && loose(lines[last - 1].1) {
+            last -= 1;
+        }
+        let end = lines.get(last).map_or(raw.len(), |(start, _)| *start);
+        let mut first = index;
+        while first > 0 {
+            let above = lines[first - 1].1.trim();
+            if above.starts_with("# hangar") || above.starts_with("# Remova este bloco") {
+                first -= 1;
+            } else {
+                break;
+            }
+        }
+        if first > 0 && lines[first - 1].1.trim().is_empty() && first != index {
+            first -= 1;
+        }
+        let begin = if first == index { start } else { lines[first].0 };
+        ranges.push(begin..end);
+    }
+    (ranges.len() == count).then_some(ranges)
+}
+
+/// Instala o que falta e conserta o que existe (`harness-setup`, reparo `hooks-kimi`).
 pub fn sync(env: &AccountEnvironment, _repo: &Path) -> Result<Vec<String>, String> {
+    sync_impl(env, true)
+}
+
+/// A subida: só conserta e tira as repetidas das entradas do Hangar que já existem; nunca instala
+/// numa máquina que não as tinha.
+pub fn repair(env: &AccountEnvironment) -> Result<Vec<String>, String> {
+    sync_impl(env, false)
+}
+
+fn sync_impl(env: &AccountEnvironment, install: bool) -> Result<Vec<String>, String> {
     let home = super::files::directory(env, "kimi");
     if !home.is_dir() {
         return Ok(vec![]);
@@ -67,43 +133,52 @@ pub fn sync(env: &AccountEnvironment, _repo: &Path) -> Result<Vec<String>, Strin
     }
     let parsed: Config =
         toml::from_str(&raw).map_err(|_| "config.toml inválido; hooks preservados")?;
-    let mut replacements = Vec::new();
-    for hook in parsed.hooks {
+    let ranges = blocks(&raw, parsed.hooks.len());
+    let mut seen = BTreeSet::new();
+    let mut edits: Vec<(Range<usize>, String)> = Vec::new();
+    for (index, hook) in parsed.hooks.into_iter().enumerate() {
         let Some(command) = hook.command else {
             continue;
         };
         let Some(text) = command.get_ref().as_str() else {
             continue;
         };
-        for (legacy, mode) in [
-            ("kimi_state_hook.py", "kimi-state-hook"),
-            ("guard_tmux.py", "guard-tmux"),
-        ] {
-            if super::hooks::refers_platform(&json!(text), legacy, true, cfg!(windows))
-                || native_command(text, mode)
-            {
-                replacements.push((
-                    command.span(),
-                    serde_json::to_string(&crate::provider_hooks::command(mode)?)
-                        .map_err(|e| e.to_string())?,
-                ));
-                break;
+        let Some(mode) = ours(text) else {
+            continue;
+        };
+        let event = hook.event.as_ref().and_then(toml::Value::as_str).unwrap_or_default().to_owned();
+        let matcher = hook.matcher.as_ref().and_then(toml::Value::as_str).map(str::to_owned);
+        // Cada raiz de venv antiga deixava uma entrada: a primeira de cada evento fica e vira o
+        // subcomando, as repetidas saem com o comentário do Hangar acima delas.
+        if !seen.insert((event, matcher, mode)) {
+            if let Some(ranges) = &ranges {
+                edits.push((ranges[index].clone(), String::new()));
+                continue;
             }
         }
+        // Entrada que já roda o comando certo fica byte a byte (aspas literais do TOML inclusive).
+        if !installed(&env.home, text, mode) {
+            edits.push((
+                command.span(),
+                serde_json::to_string(&crate::provider_hooks::command(&env.home, mode)?).map_err(|e| e.to_string())?,
+            ));
+        }
     }
+    edits.sort_by_key(|(range, _)| std::cmp::Reverse(range.start));
     let mut out = raw.clone();
-    for (span, replacement) in replacements.into_iter().rev() {
-        out.replace_range(span, &replacement);
+    for (range, replacement) in edits {
+        out.replace_range(range, &replacement);
     }
     if out != raw {
         data = toml::from_str(&out)
             .map_err(|_| "migração de hooks inválida; configuração preservada")?;
     }
-    for &(event, matcher, mode) in ENTRIES {
+    for &(event, matcher, mode) in ENTRIES.iter().filter(|_| install) {
+        // Entrada sem filtro vale para toda ferramenta: um guarda antigo sem `matcher` já cobre o Bash.
         let exists = data["hooks"].as_array().into_iter().flatten().any(|h| {
             h["event"] == event
-                && h["matcher"].as_str() == matcher
-                && h["command"].as_str().is_some_and(|c| installed(c, mode))
+                && (h["matcher"].is_null() || h["matcher"].as_str() == matcher)
+                && h["command"].as_str().is_some_and(|c| installed(&env.home, c, mode))
         });
         if exists {
             continue;
@@ -117,7 +192,7 @@ pub fn sync(env: &AccountEnvironment, _repo: &Path) -> Result<Vec<String>, Strin
         }
         out += &format!(
             "command = {}\ntimeout = 5\n",
-            serde_json::to_string(&crate::provider_hooks::command(mode)?)
+            serde_json::to_string(&crate::provider_hooks::command(&env.home, mode)?)
                 .map_err(|e| e.to_string())?
         );
     }

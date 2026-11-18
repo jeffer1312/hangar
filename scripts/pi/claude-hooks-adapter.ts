@@ -46,6 +46,10 @@ function loadConfig(): Required<AdapterConfig> {
 			"/backend/hooks/askq_capture.py",
 			"/backend/hooks/preview_hook.py",
 			"/backend/hooks/subagent_hook.py",
+			// The same hooks as `hangar-server`/`hangar-launcher` subcommands.
+			" state-hook",
+			" askq-capture",
+			" preview-hook",
 		],
 		events: {
 			SessionStart: true,
@@ -83,7 +87,7 @@ function shouldRunCommand(command: string, config: Required<AdapterConfig>): boo
 	// The Hangar writes Windows hooks with backslashes; the patterns are written with slashes.
 	const cmd = command.replaceAll("\\", "/");
 	// A guarda do Hangar migrou para um subcomando autônomo, fora da pasta de hooks.
-	const nativeGuard = config.allowPatterns.includes("/.claude/hooks/") && /^(?:"[^"\n$`]*[/]hangar-server(?:\.exe|-command)?"|[^\s"';&|`$()]*[/]hangar-server(?:\.exe|-command)?) guard-tmux$/.test(cmd);
+	const nativeGuard = config.allowPatterns.includes("/.claude/hooks/") && /^(?:"[^"\n$`]*[/]hangar-(?:server(?:\.exe|-command)?|launcher(?:\.exe)?|hooks(?:\.exe)?)"|[^\s"';&|`$()]*[/]hangar-(?:server(?:\.exe|-command)?|launcher(?:\.exe)?|hooks(?:\.exe)?)) guard-tmux$/.test(cmd);
 	if (config.allowPatterns.length > 0 && !nativeGuard && !config.allowPatterns.some((p) => cmd.includes(p))) {
 		return false;
 	}

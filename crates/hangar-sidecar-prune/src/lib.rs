@@ -26,8 +26,9 @@ pub const MIN_AGE: Duration = Duration::from_secs(7 * 86_400);
 /// Idade mínima da sobra de `tmp+rename`: o único risco é a escrita em voo, que vive milissegundos.
 pub const TMP_MIN_AGE: Duration = Duration::from_secs(3_600);
 
-/// Pela chave da sessão (`session_key` do transcript).
-const STEM_KEYED: [&str; 5] = [".hangar-status", ".hangar-state", ".hangar-preview", ".hangar-askq", ".hangar-pi/models"];
+/// Pela chave da sessão (`session_key` do transcript). O `.hangar-prompt` do `state-hook` usa o
+/// `session_id`, que é a mesma chave fora de sessão retomada; a retomada só o deixa para a idade.
+const STEM_KEYED: [&str; 6] = [".hangar-status", ".hangar-state", ".hangar-preview", ".hangar-askq", ".hangar-prompt", ".hangar-pi/models"];
 /// Pelo nome sanitizado: a fila sobrevive ao `/clear` e o bastão é do destino.
 const NAME_KEYED: [(&str, &str); 2] = [(".hangar-queue", ".jsonl"), (".hangar-bastao", ".md")];
 /// Bilhetes: pela chave da sessão, pelo nome (psmux) ou pelo pane, conforme quem gravou.

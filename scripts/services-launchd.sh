@@ -11,7 +11,8 @@
 #   ./scripts/services-launchd.sh --ativo     # sai 0 só com o backend de pé (prova do instalador)
 #   ./scripts/services-launchd.sh --uninstall # para e remove o serviço
 #
-# A configuração continua no backend/.env, lida pelo próprio hangar-server.
+# A configuração fica no ~/.hangar/config/.env (ou no backend/.env de máquina não migrada), lida
+# pelo próprio hangar-server.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -25,7 +26,10 @@ log() { printf '\033[36m==>\033[0m %s\n' "$*"; }
 
 carregado() { launchctl print "$ALVO" >/dev/null 2>&1; }
 pid_atual() { launchctl print "$ALVO" 2>/dev/null | awk '$1 == "pid" && $2 == "=" {print $3; exit}'; }
-PORTA=$(grep '^CP_PORT=' "$REPO/backend/.env" 2>/dev/null | tail -1 | cut -d= -f2- || true)
+# O mesmo `.env` que o servidor lê: o de ~/.hangar/config numa máquina migrada.
+ENV_FILE="$REPO/backend/.env"
+if [[ -f "$HOME/.hangar/config/.env" ]]; then ENV_FILE="$HOME/.hangar/config/.env"; fi
+PORTA=$(grep '^CP_PORT=' "$ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2- || true)
 PORTA=${PORTA:-8765}
 # Pid sozinho não prova nada: num ciclo de queda o launchd sempre tem um processo novo subindo.
 # De pé = o serviço tem processo E o backend responde, por até 60 s (a subida leva uns segundos).

@@ -1,0 +1,111 @@
+{
+ "case": "state/stdin-invalid-utf8-in-prompt",
+ "source_commit": "2ad8e335e8d9118e74bc5b33f2efb4ac3bbd8eba",
+ "python": "3.14.9 websockets 16.0",
+ "capture_cmdline": "/usr/bin/python3 capture.py -j 8",
+ "route": "R1",
+ "hook": "state_hook.py",
+ "contract_refs": [
+  "R1-S05",
+  "H-11",
+  "H-12",
+  "§0 armadilhas"
+ ],
+ "description": "",
+ "harness": {
+  "how": "unshare -Ucpf --mount-proc (user ns mapping the current uid, no root caps); process layers outer->inner, innermost runs sh -c <command>",
+  "layers": [
+   {
+    "argv0": "capture-init"
+   },
+   {
+    "argv0": "claude",
+    "extra": [
+     "--session-id",
+     "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+    ]
+   }
+  ],
+  "command": "\"$PY\" -B -s \"$REF/backend/hooks/state_hook.py\" || exit 0",
+  "namespace_pids": {
+   "layer0:capture-init": 1,
+   "layer1:claude": 2
+  },
+  "hook_parent": "sh (hop 1), then the layers from inner to outer"
+ },
+ "input": {
+  "env": {
+   "HOME": "$T/home",
+   "USERPROFILE": "$T/home",
+   "LOCALAPPDATA": "$T/local",
+   "TMUX_TMPDIR": "$T/tmux",
+   "PATH": "$T/stubs:/usr/bin:/bin",
+   "CLAUDE_CONFIG_DIR": "$T/cfg"
+  },
+  "stdin": {
+   "b64": "eyJzZXNzaW9uX2lkIjogIjExMTExMTExLTIyMjItNDMzMy04NDQ0LTU1NTU1NTU1NTU1NSIsICJ0cmFuc2NyaXB0X3BhdGgiOiAiL2hvbWUvdS8uY2xhdWRlL3Byb2plY3RzLy1ob21lLXUtcHJvai8xMTExMTExMS0yMjIyLTQzMzMtODQ0NC01NTU1NTU1NTU1NTUuanNvbmwiLCAiY3dkIjogIi9ob21lL3UvcHJvaiIsICJwZXJtaXNzaW9uX21vZGUiOiAiZGVmYXVsdCIsICJob29rX2V2ZW50X25hbWUiOiAiVXNlclByb21wdFN1Ym1pdCIsICJwcm9tcHQiOiAib2zhIP8ifQ==",
+   "utf8": false,
+   "size": 268
+  },
+  "files_before": {}
+ },
+ "output": {
+  "code": 0,
+  "stdout": {
+   "text": ""
+  },
+  "stderr": {
+   "text": ""
+  },
+  "duration_ms": 98,
+  "files": {
+   "created": {
+    "cfg/.hangar-active": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "cfg/.hangar-prompt": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "cfg/.hangar-state": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "cfg/.hangar-active/aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee.json": {
+     "type": "file",
+     "mode": "0o644",
+     "size": 152,
+     "sha256": "985b3370f72c86d9449bbd5033b87b1a9795aa9531a4e03faf298f6edbdb5c8f",
+     "content": {
+      "text": "{\"jsonl\": \"/home/u/.claude/projects/-home-u-proj/11111111-2222-4333-8444-555555555555.jsonl\", \"ts\": 1794910459.4646664, \"cwd\": \"/home/u/proj\", \"pid\": 2}"
+     }
+    },
+    "cfg/.hangar-prompt/11111111-2222-4333-8444-555555555555.json": {
+     "type": "file",
+     "mode": "0o644",
+     "size": 77,
+     "sha256": "308b52e07fa32ea72338bdcea5dcdc44d5cb6ba76f8398d2a42f49fe771ec3bb",
+     "content": {
+      "text": "{\"sha1\": \"61d6d3bce4cd05c4fe358cdcf871a2a03ff89bf8\", \"ts\": 1794910459.464539}"
+     }
+    },
+    "cfg/.hangar-state/11111111-2222-4333-8444-555555555555.json": {
+     "type": "file",
+     "mode": "0o644",
+     "size": 46,
+     "sha256": "eb9d701a28bff617bac56d19034283d7fa7b76af95e0e944dd07ea06623d09d1",
+     "content": {
+      "text": "{\"state\": \"working\", \"ts\": 1794910459.4635983}"
+     }
+    }
+   },
+   "changed": {},
+   "removed": []
+  }
+ },
+ "window": {
+  "t_start": 1794910459.37954,
+  "t_end": 1794910459.477578
+ }
+}

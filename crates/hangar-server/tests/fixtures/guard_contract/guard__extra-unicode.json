@@ -1,0 +1,55 @@
+{
+ "case": "guard/extra-unicode",
+ "source_commit": "2ad8e335e8d9118e74bc5b33f2efb4ac3bbd8eba",
+ "python": "3.14.9 websockets 16.0",
+ "capture_cmdline": "/usr/bin/python3 capture.py -j 8",
+ "route": "R1",
+ "hook": "guard_tmux.py",
+ "contract_refs": [
+  "R1-S18",
+  "H-48",
+  "H-49",
+  "H-50",
+  "H-51",
+  "H-52"
+ ],
+ "description": "command \"echo 'sessão é 👋' && tmux kill-server\"",
+ "harness": {
+  "how": "$PY -B -s $REF/backend/hooks/guard_tmux.py, one process per step, stdin = step"
+ },
+ "input": {
+  "env": {
+   "HOME": "$T/home",
+   "USERPROFILE": "$T/home",
+   "LOCALAPPDATA": "$T/local",
+   "TMUX_TMPDIR": "$T/tmux",
+   "PATH": "$T/stubs:/usr/bin:/bin"
+  },
+  "files_before": {}
+ },
+ "steps": [
+  {
+   "stdin": {
+    "text": "{\"session_id\": \"019a0000-1111-7222-8333-444455556666\", \"transcript_path\": \"/home/u/.codex/sessions/2026/11/17/rollout-2026-11-17T10-00-00-019a0000-1111-7222-8333-444455556666.jsonl\", \"cwd\": \"/home/u/proj\", \"hook_event_name\": \"PreToolUse\", \"model\": \"gpt-6\", \"permission_mode\": \"bypassPermissions\", \"tool_name\": \"Bash\", \"tool_input\": {\"command\": \"echo 'sessão é 👋' && tmux kill-server\"}, \"tool_use_id\": \"call_abc123\"}"
+   },
+   "code": 2,
+   "stdout": {
+    "text": "{\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", \"permissionDecision\": \"deny\", \"permissionDecisionReason\": \"BLOQUEADO: `tmux kill-server` sem -L/-S derruba TODAS as sessoes do socket default.\\nPrecisa de tmux limpo pra uma sonda? Suba um SERVIDOR SEPARADO com socket proprio e derrube ele inteiro a vontade:\\n  tmux -L probe-x new-session -d -s alvo ...\\n  tmux -L probe-x kill-server\\nNunca no servidor default \\u2014 e onde vivem as sessoes de trabalho do usuario (TMUX_TMPDIR NAO isola: dentro do tmux quem manda e $TMUX).\\nPra matar UMA sessao: `tmux kill-session -t '=nome:'`.\"}}\n"
+   },
+   "stderr": {
+    "text": "BLOQUEADO: `tmux kill-server` sem -L/-S derruba TODAS as sessoes do socket default.\nPrecisa de tmux limpo pra uma sonda? Suba um SERVIDOR SEPARADO com socket proprio e derrube ele inteiro a vontade:\n  tmux -L probe-x new-session -d -s alvo ...\n  tmux -L probe-x kill-server\nNunca no servidor default — e onde vivem as sessoes de trabalho do usuario (TMUX_TMPDIR NAO isola: dentro do tmux quem manda e $TMUX).\nPra matar UMA sessao: `tmux kill-session -t '=nome:'`.\n"
+   },
+   "duration_ms": 23,
+   "files": {
+    "created": {},
+    "changed": {},
+    "removed": []
+   }
+  }
+ ],
+ "files_final": {},
+ "window": {
+  "t_start": 1794910462.8081539,
+  "t_end": 1794910462.8324223
+ }
+}

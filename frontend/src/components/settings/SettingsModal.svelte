@@ -7,7 +7,6 @@
   import ServerSettings from './ServerSettings.svelte';
   import ShortcutsSettings from './ShortcutsSettings.svelte';
   import SobreSettings from './SobreSettings.svelte';
-  import MigrationSettings from './MigrationSettings.svelte';
   import DiarioSettings from './DiarioSettings.svelte';
   import MaquinasSettings from './MaquinasSettings.svelte';
   import ContasSettings from './ContasSettings.svelte';
@@ -136,7 +135,7 @@
   const convidado = $derived(papelDo(resolvedServer) === 'guest');
   const linhasVisiveis = $derived(convidado ? LINHAS.filter((l) => !l.servidor) : LINHAS);
   // Link direto para tela de servidor não pode abrir o que o backend recusa.
-  $effect(() => { if (convidado && ((TELAS_DE_SERVIDOR.includes(tela) && !convidadoLe(tela)) || tela === 'migration')) onIrPara('root'); });
+  $effect(() => { if (convidado && TELAS_DE_SERVIDOR.includes(tela) && !convidadoLe(tela)) onIrPara('root'); });
 
   // Troca de tela do modal: fly curto na direção da navegação (180ms ease-out, uso ocasional).
   // Entrar numa sub-tela vem da direita; voltar pra raiz vem da esquerda. Com reduced-motion
@@ -406,10 +405,7 @@
       <p>{m.config_modal_escolha_servidor()}</p>
     {/if}
   {:else if telaAtual === 'sobre'}
-    <SobreSettings onMigration={convidado ? undefined : () => onIrPara('migration')} />
-  {:else if telaAtual === 'migration'}
-    <!-- Outro servidor = outra tela: resposta em voo do anterior não cai nesta. -->
-    {#if !convidado}{#key resolvedServer?.id}<MigrationSettings server={resolvedServer} />{/key}{/if}
+    <SobreSettings />
   {:else if telaAtual === 'maquinas'}
     <MaquinasSettings resolvedServer={resolvedServer} apiTarget={alvo}
       fallbackFocus={fecharEl} {store} desktop={isDesktop}

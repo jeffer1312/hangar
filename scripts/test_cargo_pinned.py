@@ -89,7 +89,7 @@ def checkout(tmp_path):
     library.write_bytes(b"old-library")
     publisher = _module("pin_auth_for_wrapper", ROOT / "scripts/pin-auth-pair.py")
     publisher.publish(server, library)
-    resolver = _module("rust_bins_for_wrapper", ROOT / "backend/app/rust_bins.py")
+    resolver = _module("rust_bins_for_wrapper", ROOT / "skills/orquestrar/scripts/rust_bins.py")
     environment = {"PATH": str(tools) + os.pathsep + os.defpath, "HOME": str(tmp_path),
         "FAKE_REPO": str(root), "FAKE_TARGET": str(tmp_path / "shared-target"),
         "HANGAR_BUILD_LOCK": str(tmp_path / "build.lock"), "CARGO_BUILD_JOBS": "3"}

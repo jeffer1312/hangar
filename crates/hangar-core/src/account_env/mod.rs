@@ -112,7 +112,8 @@ impl AccountEnvironment {
 
     pub fn codex(&self, account: &Account) -> BTreeMap<String, String> {
         static AUTH: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
-            regex::Regex::new(r"^(?:OPENAI|CODEX|CHATGPT)_.+(?:(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL)(?:_FILE)?|ACCOUNT_ID|ORG_ID|PROJECT_ID)$").unwrap()
+            // `.*`: o sufixo logo depois do prefixo (`CHATGPT_ACCOUNT_ID`) também é identidade da principal.
+            regex::Regex::new(r"^(?:OPENAI|CODEX|CHATGPT)_.*(?:(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL)(?:_FILE)?|ACCOUNT_ID|ORG_ID|PROJECT_ID)$").unwrap()
         });
         let mut env = self.base.clone();
         env.retain(|key, _| {
@@ -161,5 +162,41 @@ pub fn expand(value: &str, home: &Path) -> PathBuf {
         home.join(rest)
     } else {
         value.into()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn environment(pairs: &[(&str, &str)]) -> AccountEnvironment {
+        AccountEnvironment::from_pairs(pairs.iter().map(|&(k, v)| (k, v)))
+    }
+
+    /// A conta adicional não leva identidade nenhuma da principal. O lançador Python deixava passar
+    /// `CHATGPT_ACCOUNT_ID`, `OPENAI_ACCOUNT_ID`, `CODEX_ACCOUNT_ID` e `CODEX_PROJECT_ID` (a regra
+    /// pedia um caractere entre o prefixo e o sufixo).
+    #[test]
+    fn an_additional_account_drops_every_identity_of_the_main_one() {
+        let inherited = [("HOME", "/h"), ("USERPROFILE", "/h"), ("PATH", "/bin"), ("CHATGPT_ACCOUNT_ID", "acc"),
+            ("OPENAI_ACCOUNT_ID", "acc2"), ("CODEX_ACCOUNT_ID", "acc3"), ("CODEX_PROJECT_ID", "proj"), ("OPENAI_API_KEY", "sk"),
+            ("CODEX_API_KEY", "k"), ("OPENAI_ORG_ID", "org"), ("CHATGPT_SESSION_TOKEN", "t"), ("OPENAI_BASE_URL", "http://proxy"),
+            ("CODEX_SQLITE_HOME", "/x"), ("CODEX_HOME", "/velho"), ("XDG_CONFIG_HOME", "/c"), ("XDG_RUNTIME_DIR", "/run/user/1"),
+            ("CP_AUTH_TOKEN", "segredo"), ("TMUX_PANE", "%7")];
+        let env = environment(&inherited);
+        let extra = env.codex(&Account { id: "x".into(), home: "/h/.codex-x".into(), is_default: false });
+        for gone in ["CHATGPT_ACCOUNT_ID", "OPENAI_ACCOUNT_ID", "CODEX_ACCOUNT_ID", "CODEX_PROJECT_ID", "OPENAI_API_KEY", "CODEX_API_KEY",
+            "OPENAI_ORG_ID", "CHATGPT_SESSION_TOKEN", "OPENAI_BASE_URL", "CODEX_SQLITE_HOME", "XDG_CONFIG_HOME", "CP_AUTH_TOKEN"] {
+            assert!(!extra.contains_key(gone), "{gone} vazou para a conta adicional");
+        }
+        assert_eq!((extra["HOME"].as_str(), extra["USERPROFILE"].as_str(), extra["CODEX_HOME"].as_str()), ("/h", "/h", "/h/.codex-x"));
+        for kept in ["PATH", "XDG_RUNTIME_DIR", "TMUX_PANE"] {
+            assert!(extra.contains_key(kept), "{kept}");
+        }
+        // A padrão herda a identidade do servidor; só a autoridade dele não passa.
+        let default = env.codex(&Account { id: "default".into(), home: "/h/.codex".into(), is_default: true });
+        assert_eq!(default["CHATGPT_ACCOUNT_ID"], "acc");
+        assert_eq!(default["CODEX_HOME"], "/h/.codex");
+        assert!(!default.contains_key("CP_AUTH_TOKEN"));
     }
 }

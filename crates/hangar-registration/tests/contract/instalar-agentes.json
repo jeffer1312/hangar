@@ -1,0 +1,1245 @@
+{
+ "source": "contract/clis of 2ad8e335e (capture_r34.py); only the fields the test reads",
+ "cases": [
+  {
+   "case": "body-hard-chars",
+   "args": [
+    "$PY",
+    "-B",
+    "-s",
+    "$T/inst/scripts/instalar-agentes.py",
+    "--home",
+    "$T/home"
+   ],
+   "env": {
+    "HOME": "$T/home"
+   },
+   "files_before": {
+    "home/.codex-sem-nada": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.codex-conta2": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.codex": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.codex-arquivo": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "x"
+     }
+    },
+    "home/.codex-conta2/agents": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.codex/config.toml": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": ""
+     }
+    },
+    "inst/skills": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "inst/skills/s": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "inst/skills/s/agents": {
+     "type": "dir",
+     "mode": "0o755"
+    }
+   },
+   "steps": [
+    {
+     "code": 0,
+     "stdout": {
+      "text": "ok: $T/home/.claude/agents/duro.md -> $T/inst/skills/s/agents/a.md\nok: $T/home/.codex-conta2/agents/duro.toml\nok: $T/home/.codex/agents/duro.toml\n"
+     },
+     "stderr": {
+      "text": ""
+     },
+     "created": {
+      "home/.claude": {
+       "type": "dir",
+       "mode": "0o755"
+      },
+      "home/.claude/agents": {
+       "type": "dir",
+       "mode": "0o755"
+      },
+      "home/.claude/agents/duro.md": {
+       "type": "symlink",
+       "target": "$T/inst/skills/s/agents/a.md"
+      },
+      "home/.codex-conta2/agents/duro.toml": {
+       "type": "file",
+       "mode": "0o644",
+       "content": {
+        "text": "name = \"duro\"\ndescription = \"aspas \\\"x\\\" e \\\\ barra\"\nmodel_reasoning_effort = \"high\"\ndeveloper_instructions = \"triplo \\\"\\\"\\\" e \\\\n literal\\nDEL[] ctrl[\\u0001] tab[\\t] 🚀 é\\n\"\n"
+       }
+      },
+      "home/.codex/agents": {
+       "type": "dir",
+       "mode": "0o755"
+      },
+      "home/.codex/agents/duro.toml": {
+       "type": "file",
+       "mode": "0o644",
+       "content": {
+        "text": "name = \"duro\"\ndescription = \"aspas \\\"x\\\" e \\\\ barra\"\nmodel_reasoning_effort = \"high\"\ndeveloper_instructions = \"triplo \\\"\\\"\\\" e \\\\n literal\\nDEL[] ctrl[\\u0001] tab[\\t] 🚀 é\\n\"\n"
+       }
+      }
+     },
+     "changed": {},
+     "removed": []
+    }
+   ],
+   "inst_sources": {
+    "inst/skills/s/agents/a.md": "---\nname: duro\ndescription: aspas \"x\" e \\ barra\n---\n\ntriplo \"\"\" e \\n literal\nDEL[] ctrl[\u0001] tab[\t] 🚀 é\n"
+   }
+  },
+  {
+   "case": "crlf-header-skipped",
+   "args": [
+    "$PY",
+    "-B",
+    "-s",
+    "$T/inst/scripts/instalar-agentes.py",
+    "--home",
+    "$T/home"
+   ],
+   "env": {
+    "HOME": "$T/home"
+   },
+   "files_before": {
+    "inst/skills": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "inst/skills/s": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "inst/skills/s/agents": {
+     "type": "dir",
+     "mode": "0o755"
+    }
+   },
+   "steps": [
+    {
+     "code": 0,
+     "stdout": {
+      "text": "ok: $T/home/.claude/agents/crlf.md -> $T/inst/skills/s/agents/a.md\n"
+     },
+     "stderr": {
+      "text": ""
+     },
+     "created": {
+      "home/.claude": {
+       "type": "dir",
+       "mode": "0o755"
+      },
+      "home/.claude/agents": {
+       "type": "dir",
+       "mode": "0o755"
+      },
+      "home/.claude/agents/crlf.md": {
+       "type": "symlink",
+       "target": "$T/inst/skills/s/agents/a.md"
+      }
+     },
+     "changed": {},
+     "removed": []
+    }
+   ],
+   "inst_sources": {
+    "inst/skills/s/agents/a.md": "---\nname: crlf\ndescription: d\n---\n\nCorpo.\n"
+   }
+  },
+  {
+   "case": "description-missing",
+   "args": [
+    "$PY",
+    "-B",
+    "-s",
+    "$T/inst/scripts/instalar-agentes.py",
+    "--home",
+    "$T/home"
+   ],
+   "env": {
+    "HOME": "$T/home"
+   },
+   "files_before": {
+    "home/.codex-sem-nada": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.codex-conta2": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.codex": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.codex-arquivo": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "x"
+     }
+    },
+    "home/.codex-conta2/agents": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.codex/config.toml": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": ""
+     }
+    },
+    "inst/skills": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "inst/skills/s": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "inst/skills/s/agents": {
+     "type": "dir",
+     "mode": "0o755"
+    }
+   },
+   "steps": [
+    {
+     "code": 0,
+     "stdout": {
+      "text": "ok: $T/home/.claude/agents/semdesc.md -> $T/inst/skills/s/agents/a.md\nok: $T/home/.codex-conta2/agents/semdesc.toml\nok: $T/home/.codex/agents/semdesc.toml\n"
+     },
+     "stderr": {
+      "text": ""
+     },
+     "created": {
+      "home/.claude": {
+       "type": "dir",
+       "mode": "0o755"
+      },
+      "home/.claude/agents": {
+       "type": "dir",
+       "mode": "0o755"
+      },
+      "home/.claude/agents/semdesc.md": {
+       "type": "symlink",
+       "target": "$T/inst/skills/s/agents/a.md"
+      },
+      "home/.codex-conta2/agents/semdesc.toml": {
+       "type": "file",
+       "mode": "0o644",
+       "content": {
+        "text": "name = \"semdesc\"\ndescription = \"\"\nmodel_reasoning_effort = \"high\"\ndeveloper_instructions = \"corpo\\n\"\n"
+       }
+      },
+      "home/.codex/agents": {
+       "type": "dir",
+       "mode": "0o755"
+      },
+      "home/.codex/agents/semdesc.toml": {
+       "type": "file",
+       "mode": "0o644",
+       "content": {
+        "text": "name = \"semdesc\"\ndescription = \"\"\nmodel_reasoning_effort = \"high\"\ndeveloper_instructions = \"corpo\\n\"\n"
+       }
+      }
+     },
+     "changed": {},
+     "removed": []
+    }
+   ],
+   "inst_sources": {
+    "inst/skills/s/agents/a.md": "---\nname: semdesc\n---\ncorpo\n"
+   }
+  },
+  {
+   "case": "existing-dest-dir",
+   "args": [
+    "$PY",
+    "-B",
+    "-s",
+    "$T/inst/scripts/instalar-agentes.py",
+    "--home",
+    "$T/home"
+   ],
+   "env": {
+    "HOME": "$T/home"
+   },
+   "files_before": {
+    "home/.claude": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.claude/agents": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.claude/agents/a.md": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "inst/skills": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "inst/skills/s": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "inst/skills/s/agents": {
+     "type": "dir",
+     "mode": "0o755"
+    }
+   },
+   "steps": [
+    {
+     "code": 1,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": "Traceback (most recent call last):\n  File \"$T/inst/scripts/instalar-agentes.py\", line 70, in <module>\n    main()\n    ~~~~^^\n  File \"$T/inst/scripts/instalar-agentes.py\", line 50, in main\n    destino.unlink()\n    ~~~~~~~~~~~~~~^^\n  File \"$PYHOME/lib/python3.14/pathlib/__init__.py\", line 1042, in unlink\n    os.unlink(self)\n    ~~~~~~~~~^^^^^^\nIsADirectoryError: [Errno 21] Is a directory: '$T/home/.claude/agents/a.md'\n"
+     },
+     "created": {},
+     "changed": {},
+     "removed": []
+    }
+   ],
+   "inst_sources": {
+    "inst/skills/s/agents/a.md": "---\nname: a\ndescription: d\n---\n\nCorpo.\n"
+   }
+  },
+  {
+   "case": "existing-dest-file-and-link",
+   "args": [
+    "$PY",
+    "-B",
+    "-s",
+    "$T/inst/scripts/instalar-agentes.py",
+    "--home",
+    "$T/home"
+   ],
+   "env": {
+    "HOME": "$T/home"
+   },
+   "files_before": {
+    "home/.claude": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.claude/agents": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.claude/agents/b.md": {
+     "type": "symlink",
+     "target": "$T/work/nao-existe"
+    },
+    "home/.claude/agents/a.md": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "antigo\n"
+     }
+    },
+    "inst/skills": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "inst/skills/s": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "inst/skills/s/agents": {
+     "type": "dir",
+     "mode": "0o755"
+    }
+   },
+   "steps": [
+    {
+     "code": 0,
+     "stdout": {
+      "text": "ok: $T/home/.claude/agents/a.md -> $T/inst/skills/s/agents/a.md\nok: $T/home/.claude/agents/b.md -> $T/inst/skills/s/agents/b.md\n"
+     },
+     "stderr": {
+      "text": ""
+     },
+     "created": {},
+     "changed": {
+      "home/.claude/agents/b.md": {
+       "type": "symlink",
+       "target": "$T/inst/skills/s/agents/b.md"
+      },
+      "home/.claude/agents/a.md": {
+       "type": "symlink",
+       "target": "$T/inst/skills/s/agents/a.md"
+      }
+     },
+     "removed": []
+    }
+   ],
+   "inst_sources": {
+    "inst/skills/s/agents/a.md": "---\nname: a\ndescription: d\n---\n\nCorpo.\n",
+    "inst/skills/s/agents/b.md": "---\nname: b\ndescription: d\n---\n\nCorpo.\n"
+   }
+  },
+  {
+   "case": "header-colon-in-value",
+   "args": [
+    "$PY",
+    "-B",
+    "-s",
+    "$T/inst/scripts/instalar-agentes.py",
+    "--home",
+    "$T/home"
+   ],
+   "env": {
+    "HOME": "$T/home"
+   },
+   "files_before": {
+    "home/.codex-sem-nada": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.codex-conta2": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.codex": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.codex-arquivo": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "x"
+     }
+    },
+    "home/.codex-conta2/agents": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.codex/config.toml": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": ""
+     }
+    },
+    "inst/skills": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "inst/skills/s": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "inst/skills/s/agents": {
+     "type": "dir",
+     "mode": "0o755"
+    }
+   },
+   "steps": [
+    {
+     "code": 0,
+     "stdout": {
+      "text": "ok: $T/home/.claude/agents/n.md -> $T/inst/skills/s/agents/a.md\nok: $T/home/.codex-conta2/agents/n.toml\nok: $T/home/.codex/agents/n.toml\n"
+     },
+     "stderr": {
+      "text": ""
+     },
+     "created": {
+      "home/.claude": {
+       "type": "dir",
+       "mode": "0o755"
+      },
+      "home/.claude/agents": {
+       "type": "dir",
+       "mode": "0o755"
+      },
+      "home/.claude/agents/n.md": {
+       "type": "symlink",
+       "target": "$T/inst/skills/s/agents/a.md"
+      },
+      "home/.codex-conta2/agents/n.toml": {
+       "type": "file",
+       "mode": "0o644",
+       "content": {
+        "text": "name = \"n\"\ndescription = \"a: b: c\"\nmodel_reasoning_effort = \"high\"\ndeveloper_instructions = \"corpo\\n\"\n"
+       }
+      },
+      "home/.codex/agents": {
+       "type": "dir",
+       "mode": "0o755"
+      },
+      "home/.codex/agents/n.toml": {
+       "type": "file",
+       "mode": "0o644",
+       "content": {
+        "text": "name = \"n\"\ndescription = \"a: b: c\"\nmodel_reasoning_effort = \"high\"\ndeveloper_instructions = \"corpo\\n\"\n"
+       }
+      }
+     },
+     "changed": {},
+     "removed": []
+    }
+   ],
+   "inst_sources": {
+    "inst/skills/s/agents/a.md": "---\nname: n\ndescription: a: b: c\nsem dois pontos\n---\ncorpo\n"
+   }
+  },
+  {
+   "case": "name-empty-skipped",
+   "args": [
+    "$PY",
+    "-B",
+    "-s",
+    "$T/inst/scripts/instalar-agentes.py",
+    "--home",
+    "$T/home"
+   ],
+   "env": {
+    "HOME": "$T/home"
+   },
+   "files_before": {
+    "inst/skills": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "inst/skills/s": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "inst/skills/s/agents": {
+     "type": "dir",
+     "mode": "0o755"
+    }
+   },
+   "steps": [
+    {
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     },
+     "created": {},
+     "changed": {},
+     "removed": []
+    }
+   ],
+   "inst_sources": {
+    "inst/skills/s/agents/a.md": "---\nname:\n---\ncorpo\n"
+   }
+  },
+  {
+   "case": "no-agents",
+   "args": [
+    "$PY",
+    "-B",
+    "-s",
+    "$T/inst/scripts/instalar-agentes.py",
+    "--home",
+    "$T/home"
+   ],
+   "env": {
+    "HOME": "$T/home"
+   },
+   "files_before": {
+    "home/.codex-sem-nada": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.codex-conta2": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.codex": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.codex-arquivo": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "x"
+     }
+    },
+    "home/.codex-conta2/agents": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.codex/config.toml": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": ""
+     }
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    }
+   },
+   "steps": [
+    {
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     },
+     "created": {},
+     "changed": {},
+     "removed": []
+    }
+   ],
+   "inst_sources": {}
+  },
+  {
+   "case": "no-home-arg-uses-HOME",
+   "args": [
+    "$PY",
+    "-B",
+    "-s",
+    "$T/inst/scripts/instalar-agentes.py"
+   ],
+   "env": {
+    "HOME": "$T/home"
+   },
+   "files_before": {
+    "home/.codex-sem-nada": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.codex-conta2": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.codex": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.codex-arquivo": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "x"
+     }
+    },
+    "home/.codex-conta2/agents": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.codex/config.toml": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": ""
+     }
+    },
+    "inst/skills": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "inst/skills/s": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "inst/skills/s/agents": {
+     "type": "dir",
+     "mode": "0o755"
+    }
+   },
+   "steps": [
+    {
+     "code": 0,
+     "stdout": {
+      "text": "ok: $T/home/.claude/agents/a.md -> $T/inst/skills/s/agents/a.md\nok: $T/home/.codex-conta2/agents/a.toml\nok: $T/home/.codex/agents/a.toml\n"
+     },
+     "stderr": {
+      "text": ""
+     },
+     "created": {
+      "home/.claude": {
+       "type": "dir",
+       "mode": "0o755"
+      },
+      "home/.claude/agents": {
+       "type": "dir",
+       "mode": "0o755"
+      },
+      "home/.claude/agents/a.md": {
+       "type": "symlink",
+       "target": "$T/inst/skills/s/agents/a.md"
+      },
+      "home/.codex-conta2/agents/a.toml": {
+       "type": "file",
+       "mode": "0o644",
+       "content": {
+        "text": "name = \"a\"\ndescription = \"d\"\nmodel_reasoning_effort = \"high\"\ndeveloper_instructions = \"Corpo.\\n\"\n"
+       }
+      },
+      "home/.codex/agents": {
+       "type": "dir",
+       "mode": "0o755"
+      },
+      "home/.codex/agents/a.toml": {
+       "type": "file",
+       "mode": "0o644",
+       "content": {
+        "text": "name = \"a\"\ndescription = \"d\"\nmodel_reasoning_effort = \"high\"\ndeveloper_instructions = \"Corpo.\\n\"\n"
+       }
+      }
+     },
+     "changed": {},
+     "removed": []
+    }
+   ],
+   "inst_sources": {
+    "inst/skills/s/agents/a.md": "---\nname: a\ndescription: d\n---\n\nCorpo.\n"
+   }
+  },
+  {
+   "case": "no-name-skipped",
+   "args": [
+    "$PY",
+    "-B",
+    "-s",
+    "$T/inst/scripts/instalar-agentes.py",
+    "--home",
+    "$T/home"
+   ],
+   "env": {
+    "HOME": "$T/home"
+   },
+   "files_before": {
+    "home/.codex-sem-nada": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.codex-conta2": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.codex": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.codex-arquivo": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "x"
+     }
+    },
+    "home/.codex-conta2/agents": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.codex/config.toml": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": ""
+     }
+    },
+    "inst/skills": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "inst/skills/s": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "inst/skills/s/agents": {
+     "type": "dir",
+     "mode": "0o755"
+    }
+   },
+   "steps": [
+    {
+     "code": 0,
+     "stdout": {
+      "text": "ok: $T/home/.claude/agents/bom.md -> $T/inst/skills/s/agents/b.md\nok: $T/home/.codex-conta2/agents/bom.toml\nok: $T/home/.codex/agents/bom.toml\n"
+     },
+     "stderr": {
+      "text": ""
+     },
+     "created": {
+      "home/.claude": {
+       "type": "dir",
+       "mode": "0o755"
+      },
+      "home/.claude/agents": {
+       "type": "dir",
+       "mode": "0o755"
+      },
+      "home/.claude/agents/bom.md": {
+       "type": "symlink",
+       "target": "$T/inst/skills/s/agents/b.md"
+      },
+      "home/.codex-conta2/agents/bom.toml": {
+       "type": "file",
+       "mode": "0o644",
+       "content": {
+        "text": "name = \"bom\"\ndescription = \"d\"\nmodel_reasoning_effort = \"high\"\ndeveloper_instructions = \"Corpo.\\n\"\n"
+       }
+      },
+      "home/.codex/agents": {
+       "type": "dir",
+       "mode": "0o755"
+      },
+      "home/.codex/agents/bom.toml": {
+       "type": "file",
+       "mode": "0o644",
+       "content": {
+        "text": "name = \"bom\"\ndescription = \"d\"\nmodel_reasoning_effort = \"high\"\ndeveloper_instructions = \"Corpo.\\n\"\n"
+       }
+      }
+     },
+     "changed": {},
+     "removed": []
+    }
+   ],
+   "inst_sources": {
+    "inst/skills/s/agents/a.md": "---\ndescription: x\n---\ncorpo\n",
+    "inst/skills/s/agents/b.md": "---\nname: bom\ndescription: d\n---\n\nCorpo.\n"
+   }
+  },
+  {
+   "case": "raiz-is-current",
+   "args": [
+    "$PY",
+    "-B",
+    "-s",
+    "$T/inst/scripts/instalar-agentes.py",
+    "--home",
+    "$T/home"
+   ],
+   "env": {
+    "HOME": "$T/home"
+   },
+   "files_before": {
+    "home/.hangar": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/current": {
+     "type": "symlink",
+     "target": "$T/inst"
+    },
+    "inst/skills": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "inst/skills/s": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "inst/skills/s/agents": {
+     "type": "dir",
+     "mode": "0o755"
+    }
+   },
+   "steps": [
+    {
+     "code": 0,
+     "stdout": {
+      "text": "ok: $T/home/.claude/agents/a.md -> $T/home/.hangar/current/skills/s/agents/a.md\n"
+     },
+     "stderr": {
+      "text": ""
+     },
+     "created": {
+      "home/.claude": {
+       "type": "dir",
+       "mode": "0o755"
+      },
+      "home/.claude/agents": {
+       "type": "dir",
+       "mode": "0o755"
+      },
+      "home/.claude/agents/a.md": {
+       "type": "symlink",
+       "target": "$T/home/.hangar/current/skills/s/agents/a.md"
+      }
+     },
+     "changed": {},
+     "removed": []
+    }
+   ],
+   "inst_sources": {
+    "inst/skills/s/agents/a.md": "---\nname: a\ndescription: d\n---\n\nCorpo.\n"
+   }
+  },
+  {
+   "case": "real-skills-base",
+   "args": [
+    "$PY",
+    "-B",
+    "-s",
+    "$T/inst/scripts/instalar-agentes.py",
+    "--home",
+    "$T/home"
+   ],
+   "env": {
+    "HOME": "$T/home"
+   },
+   "files_before": {
+    "home/.codex-sem-nada": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.codex-conta2": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.codex": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.codex-arquivo": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "x"
+     }
+    },
+    "home/.codex-conta2/agents": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.codex/config.toml": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": ""
+     }
+    },
+    "inst/skills": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "inst/skills/orquestrar": {
+     "type": "dir",
+     "mode": "0o755"
+    }
+   },
+   "steps": [
+    {
+     "code": 0,
+     "stdout": {
+      "text": "ok: $T/home/.claude/agents/preparar-plano.md -> $T/inst/skills/orquestrar/agents/preparar-plano.md\nok: $T/home/.codex-conta2/agents/preparar-plano.toml\nok: $T/home/.codex/agents/preparar-plano.toml\nok: $T/home/.claude/agents/revisor-orq.md -> $T/inst/skills/orquestrar/agents/revisor-orq.md\nok: $T/home/.codex-conta2/agents/revisor-orq.toml\nok: $T/home/.codex/agents/revisor-orq.toml\n"
+     },
+     "stderr": {
+      "text": ""
+     },
+     "created": {
+      "home/.claude": {
+       "type": "dir",
+       "mode": "0o755"
+      },
+      "home/.claude/agents": {
+       "type": "dir",
+       "mode": "0o755"
+      },
+      "home/.claude/agents/revisor-orq.md": {
+       "type": "symlink",
+       "target": "$T/inst/skills/orquestrar/agents/revisor-orq.md"
+      },
+      "home/.claude/agents/preparar-plano.md": {
+       "type": "symlink",
+       "target": "$T/inst/skills/orquestrar/agents/preparar-plano.md"
+      },
+      "home/.codex-conta2/agents/revisor-orq.toml": {
+       "type": "file",
+       "mode": "0o644",
+       "content": {
+        "text": "name = \"revisor-orq\"\ndescription = \"Reviews ONE frozen round of an orquestrar Task in a clean context. Use ONLY when an orquestrar executor dispatches it with the path of a review package built by `orq review-package`. Never edits code.\"\nmodel_reasoning_effort = \"high\"\ndeveloper_instructions = \"# Review one round\\n\\nYou get one path: a review package. Everything you judge is in it or reachable from the repo it\\nnames. You never edit a file under the repo; you write only under the durable directory the\\npackage names. `orq` refuses your verdict if the worktree changed while you reviewed.\\n\\n1. Read the package whole. The package lists earlier verdicts: read their reports; the same cause\\n   rejected again → add `--reincide`.\\n2. Judge the round the way `~/.claude/skills/orquestrar/references/revisor.md` says in \\\"3. Judge\\\"\\n   and \\\"4. Write the report\\\" (read those two sections; ignore the rest of the page: you are not a\\n   session, you do not wake up, prove protection or wait). A blocker gets its closed recipe\\n   (`revisor-receita.md`).\\n3. The package says \\\"This round is round R + reviewer patch\\\" → judge only whether the patch\\n   closes each blocker it claims to close without breaking the rest of the files it touches.\\n4. Every blocker is a small local fix you can write, and the plan allows `corrige` → write the\\n   patch (`git diff` format, paths relative to the repo) where the package says, and answer\\n   `corrige`. Otherwise `reprova` with recipes, `devolvido` for what only the arbiter decides,\\n   or `aprova`.\\n5. Run the verdict command printed at the end of the package. It fails → fix what it says and run\\n   it again; never skip it.\\n6. Reply with one line: the verdict and the report path.\\n\"\n"
+       }
+      },
+      "home/.codex-conta2/agents/preparar-plano.toml": {
+       "type": "file",
+       "mode": "0o644",
+       "content": {
+        "text": "name = \"preparar-plano\"\ndescription = \"Prepares a plan for the orquestrar skill in a clean context. Use ONLY when the orquestrar planner dispatches it with the user's three answers (parallel, max simultaneous Tasks, proof mode). Rewrites the orchestration plan draft and stamps it; never touches the user's plan.\"\nmodel_reasoning_effort = \"high\"\ndeveloper_instructions = \"# Prepare a plan for orquestrar\\n\\nYou get: the orchestration plan draft the planner wrote (`<user plan dir>/<user plan\\nstem>.orq.md`), the user's plan path, the repo path, and three answers —\\n`Paralelo:` (sequencial | até N), `Prova:` (nenhuma | por-task | lote(N) | manual — roteiros\\nkept; the user tests them all at the end), and, when given, `Correção pelo revisor:` (até N\\nlinhas; default 20) and `Revisão:` (subagente | sessão; default subagente). Missing any of the\\nfirst two → reply only `faltam: <which>` and stop. You never ask the user anything: the planner\\ndoes.\\n\\n## Steps\\n\\n1. Read the draft and the user's plan whole, then the code they name. The user's plan is never\\n   edited. Keep every decision already in the draft: `Risk` per Task, estimates, owners,\\n   untouchables, the shared-state header, the \\\"What their plan does NOT decide\\\" section.\\n2. Check, writing each finding with `file:line`:\\n   - every symbol, file and command the plan cites exists (`grep`, `git ls-files`);\\n   - two Tasks touching the same files: `git merge-tree` over their file lists, output pasted;\\n   - what breaks if the order is followed (a Task using what a later one creates);\\n   - every Task's `Files` holds each file its steps must change to reach the behavior named: read\\n     the callers of the functions it changes and the module that owns the state it writes; a\\n     missing file → add it, with the `file:line` that makes it needed;\\n   - every behavior a roteiro or a Task expects from reused code (library, store, component) is\\n     found in that code or its installed source; not found → it moves to \\\"What their plan does\\n     NOT decide\\\" as an open decision;\\n   - every Task with proof has a roteiro the plan can support (what to run, what to look at,\\n     what counts as pass); a Task on a screen cites the `provar-tela` skill in its roteiro;\\n   - Task with independent responsibilities or distinct dependencies → separate those\\n     parts; line counts, including tests/translations, impose no split or block.\\n3. Build the waves: independent Tasks share a wave, never more per wave than `Paralelo:`.\\n   Suggest `Revisão: subagente` unless the user asked for another model or account to review.\\n   A Task on a screen → suggest `Prova: manual` unless the user asked for automated proof.\\n4. Rewrite the draft in place, in this shape and no other, carrying what step 1 kept:\\n\\n   ```markdown\\n   # Orchestration plan — <work>\\n   User's plan: <absolute path>   (it is in charge; this file only orchestrates)\\n\\n   ## Projeto\\n   Checagens: `<cmd>` · `<cmd>`          (or —)\\n   Integração: `<cmd>`                   (or —)\\n   Aditivos: `<file or glob>` · …        (or —: files where two Tasks insert at declared anchors)\\n   Prova: <answer>\\n   Paralelo: <answer>\\n   Revisão: <answer>\\n   Correção pelo revisor: até <N> linhas\\n\\n   ## Tasks\\n   | # | What it is | Where in their plan | Files | Verification | Wave | Risk | Roteiro |\\n   |---|---|---|---|---|---|---|---|\\n\\n   ## What their plan does NOT decide, and I decided here\\n   ```\\n\\n   `Checagens:` are the commands the project already uses before a delivery (tests, lint,\\n   typecheck, build — whatever exists; read `package.json`, `pyproject.toml`, `Makefile`, CI\\n   files). None found → `—`, and say so in the report. `Risk`: `low | high` when the draft\\n   selects the executor row by risk, `—` otherwise. Roteiros go to `<user plan dir>/roteiros/`.\\n5. Run `python3 ~/.claude/skills/orquestrar/scripts/orq.py plan-check <the orchestration plan>\\n   --repo <repo> --stamp`. Fix every line it prints and run again until `plan-check ok` and the\\n   `Preparado:` line is written.\\n6. Reply with a short report, nothing else:\\n   - `Corrigi:` what you changed or decided, one line each;\\n   - `Não decidi:` what needs the user, one line each with the options;\\n   - `Plano:` the path, and the `Preparado:` line.\\n\"\n"
+       }
+      },
+      "home/.codex/agents": {
+       "type": "dir",
+       "mode": "0o755"
+      },
+      "home/.codex/agents/revisor-orq.toml": {
+       "type": "file",
+       "mode": "0o644",
+       "content": {
+        "text": "name = \"revisor-orq\"\ndescription = \"Reviews ONE frozen round of an orquestrar Task in a clean context. Use ONLY when an orquestrar executor dispatches it with the path of a review package built by `orq review-package`. Never edits code.\"\nmodel_reasoning_effort = \"high\"\ndeveloper_instructions = \"# Review one round\\n\\nYou get one path: a review package. Everything you judge is in it or reachable from the repo it\\nnames. You never edit a file under the repo; you write only under the durable directory the\\npackage names. `orq` refuses your verdict if the worktree changed while you reviewed.\\n\\n1. Read the package whole. The package lists earlier verdicts: read their reports; the same cause\\n   rejected again → add `--reincide`.\\n2. Judge the round the way `~/.claude/skills/orquestrar/references/revisor.md` says in \\\"3. Judge\\\"\\n   and \\\"4. Write the report\\\" (read those two sections; ignore the rest of the page: you are not a\\n   session, you do not wake up, prove protection or wait). A blocker gets its closed recipe\\n   (`revisor-receita.md`).\\n3. The package says \\\"This round is round R + reviewer patch\\\" → judge only whether the patch\\n   closes each blocker it claims to close without breaking the rest of the files it touches.\\n4. Every blocker is a small local fix you can write, and the plan allows `corrige` → write the\\n   patch (`git diff` format, paths relative to the repo) where the package says, and answer\\n   `corrige`. Otherwise `reprova` with recipes, `devolvido` for what only the arbiter decides,\\n   or `aprova`.\\n5. Run the verdict command printed at the end of the package. It fails → fix what it says and run\\n   it again; never skip it.\\n6. Reply with one line: the verdict and the report path.\\n\"\n"
+       }
+      },
+      "home/.codex/agents/preparar-plano.toml": {
+       "type": "file",
+       "mode": "0o644",
+       "content": {
+        "text": "name = \"preparar-plano\"\ndescription = \"Prepares a plan for the orquestrar skill in a clean context. Use ONLY when the orquestrar planner dispatches it with the user's three answers (parallel, max simultaneous Tasks, proof mode). Rewrites the orchestration plan draft and stamps it; never touches the user's plan.\"\nmodel_reasoning_effort = \"high\"\ndeveloper_instructions = \"# Prepare a plan for orquestrar\\n\\nYou get: the orchestration plan draft the planner wrote (`<user plan dir>/<user plan\\nstem>.orq.md`), the user's plan path, the repo path, and three answers —\\n`Paralelo:` (sequencial | até N), `Prova:` (nenhuma | por-task | lote(N) | manual — roteiros\\nkept; the user tests them all at the end), and, when given, `Correção pelo revisor:` (até N\\nlinhas; default 20) and `Revisão:` (subagente | sessão; default subagente). Missing any of the\\nfirst two → reply only `faltam: <which>` and stop. You never ask the user anything: the planner\\ndoes.\\n\\n## Steps\\n\\n1. Read the draft and the user's plan whole, then the code they name. The user's plan is never\\n   edited. Keep every decision already in the draft: `Risk` per Task, estimates, owners,\\n   untouchables, the shared-state header, the \\\"What their plan does NOT decide\\\" section.\\n2. Check, writing each finding with `file:line`:\\n   - every symbol, file and command the plan cites exists (`grep`, `git ls-files`);\\n   - two Tasks touching the same files: `git merge-tree` over their file lists, output pasted;\\n   - what breaks if the order is followed (a Task using what a later one creates);\\n   - every Task's `Files` holds each file its steps must change to reach the behavior named: read\\n     the callers of the functions it changes and the module that owns the state it writes; a\\n     missing file → add it, with the `file:line` that makes it needed;\\n   - every behavior a roteiro or a Task expects from reused code (library, store, component) is\\n     found in that code or its installed source; not found → it moves to \\\"What their plan does\\n     NOT decide\\\" as an open decision;\\n   - every Task with proof has a roteiro the plan can support (what to run, what to look at,\\n     what counts as pass); a Task on a screen cites the `provar-tela` skill in its roteiro;\\n   - Task with independent responsibilities or distinct dependencies → separate those\\n     parts; line counts, including tests/translations, impose no split or block.\\n3. Build the waves: independent Tasks share a wave, never more per wave than `Paralelo:`.\\n   Suggest `Revisão: subagente` unless the user asked for another model or account to review.\\n   A Task on a screen → suggest `Prova: manual` unless the user asked for automated proof.\\n4. Rewrite the draft in place, in this shape and no other, carrying what step 1 kept:\\n\\n   ```markdown\\n   # Orchestration plan — <work>\\n   User's plan: <absolute path>   (it is in charge; this file only orchestrates)\\n\\n   ## Projeto\\n   Checagens: `<cmd>` · `<cmd>`          (or —)\\n   Integração: `<cmd>`                   (or —)\\n   Aditivos: `<file or glob>` · …        (or —: files where two Tasks insert at declared anchors)\\n   Prova: <answer>\\n   Paralelo: <answer>\\n   Revisão: <answer>\\n   Correção pelo revisor: até <N> linhas\\n\\n   ## Tasks\\n   | # | What it is | Where in their plan | Files | Verification | Wave | Risk | Roteiro |\\n   |---|---|---|---|---|---|---|---|\\n\\n   ## What their plan does NOT decide, and I decided here\\n   ```\\n\\n   `Checagens:` are the commands the project already uses before a delivery (tests, lint,\\n   typecheck, build — whatever exists; read `package.json`, `pyproject.toml`, `Makefile`, CI\\n   files). None found → `—`, and say so in the report. `Risk`: `low | high` when the draft\\n   selects the executor row by risk, `—` otherwise. Roteiros go to `<user plan dir>/roteiros/`.\\n5. Run `python3 ~/.claude/skills/orquestrar/scripts/orq.py plan-check <the orchestration plan>\\n   --repo <repo> --stamp`. Fix every line it prints and run again until `plan-check ok` and the\\n   `Preparado:` line is written.\\n6. Reply with a short report, nothing else:\\n   - `Corrigi:` what you changed or decided, one line each;\\n   - `Não decidi:` what needs the user, one line each with the options;\\n   - `Plano:` the path, and the `Preparado:` line.\\n\"\n"
+       }
+      }
+     },
+     "changed": {},
+     "removed": []
+    },
+    {
+     "code": 0,
+     "stdout": {
+      "text": "ok: $T/home/.claude/agents/preparar-plano.md -> $T/inst/skills/orquestrar/agents/preparar-plano.md\nok: $T/home/.codex-conta2/agents/preparar-plano.toml\nok: $T/home/.codex/agents/preparar-plano.toml\nok: $T/home/.claude/agents/revisor-orq.md -> $T/inst/skills/orquestrar/agents/revisor-orq.md\nok: $T/home/.codex-conta2/agents/revisor-orq.toml\nok: $T/home/.codex/agents/revisor-orq.toml\n"
+     },
+     "stderr": {
+      "text": ""
+     },
+     "created": {},
+     "changed": {},
+     "removed": []
+    }
+   ],
+   "inst_sources": {
+    "inst/skills/orquestrar/agents/openai.yaml": "interface:\n  display_name: \"Orquestrar\"\n  short_description: \"Trabalho com revisão independente: rota audit (quem planejou escreve, revisão fresca no fim) ou full (time com portão por Task). Só quando o usuário pedir o fluxo.\"\n  default_prompt: \"Use $orquestrar para conduzir este trabalho: leia a página do papel de planejador, decida a rota (audit | full) e o time comigo antes de qualquer sessão, e só então lance.\"\n",
+    "inst/skills/orquestrar/agents/preparar-plano.md": "---\nname: preparar-plano\ndescription: Prepares a plan for the orquestrar skill in a clean context. Use ONLY when the orquestrar planner dispatches it with the user's three answers (parallel, max simultaneous Tasks, proof mode). Rewrites the orchestration plan draft and stamps it; never touches the user's plan.\ntools: Read, Grep, Glob, Bash, Write, Edit\nmodel: inherit\n---\n\n# Prepare a plan for orquestrar\n\nYou get: the orchestration plan draft the planner wrote (`<user plan dir>/<user plan\nstem>.orq.md`), the user's plan path, the repo path, and three answers —\n`Paralelo:` (sequencial | até N), `Prova:` (nenhuma | por-task | lote(N) | manual — roteiros\nkept; the user tests them all at the end), and, when given, `Correção pelo revisor:` (até N\nlinhas; default 20) and `Revisão:` (subagente | sessão; default subagente). Missing any of the\nfirst two → reply only `faltam: <which>` and stop. You never ask the user anything: the planner\ndoes.\n\n## Steps\n\n1. Read the draft and the user's plan whole, then the code they name. The user's plan is never\n   edited. Keep every decision already in the draft: `Risk` per Task, estimates, owners,\n   untouchables, the shared-state header, the \"What their plan does NOT decide\" section.\n2. Check, writing each finding with `file:line`:\n   - every symbol, file and command the plan cites exists (`grep`, `git ls-files`);\n   - two Tasks touching the same files: `git merge-tree` over their file lists, output pasted;\n   - what breaks if the order is followed (a Task using what a later one creates);\n   - every Task's `Files` holds each file its steps must change to reach the behavior named: read\n     the callers of the functions it changes and the module that owns the state it writes; a\n     missing file → add it, with the `file:line` that makes it needed;\n   - every behavior a roteiro or a Task expects from reused code (library, store, component) is\n     found in that code or its installed source; not found → it moves to \"What their plan does\n     NOT decide\" as an open decision;\n   - every Task with proof has a roteiro the plan can support (what to run, what to look at,\n     what counts as pass); a Task on a screen cites the `provar-tela` skill in its roteiro;\n   - Task with independent responsibilities or distinct dependencies → separate those\n     parts; line counts, including tests/translations, impose no split or block.\n3. Build the waves: independent Tasks share a wave, never more per wave than `Paralelo:`.\n   Suggest `Revisão: subagente` unless the user asked for another model or account to review.\n   A Task on a screen → suggest `Prova: manual` unless the user asked for automated proof.\n4. Rewrite the draft in place, in this shape and no other, carrying what step 1 kept:\n\n   ```markdown\n   # Orchestration plan — <work>\n   User's plan: <absolute path>   (it is in charge; this file only orchestrates)\n\n   ## Projeto\n   Checagens: `<cmd>` · `<cmd>`          (or —)\n   Integração: `<cmd>`                   (or —)\n   Aditivos: `<file or glob>` · …        (or —: files where two Tasks insert at declared anchors)\n   Prova: <answer>\n   Paralelo: <answer>\n   Revisão: <answer>\n   Correção pelo revisor: até <N> linhas\n\n   ## Tasks\n   | # | What it is | Where in their plan | Files | Verification | Wave | Risk | Roteiro |\n   |---|---|---|---|---|---|---|---|\n\n   ## What their plan does NOT decide, and I decided here\n   ```\n\n   `Checagens:` are the commands the project already uses before a delivery (tests, lint,\n   typecheck, build — whatever exists; read `package.json`, `pyproject.toml`, `Makefile`, CI\n   files). None found → `—`, and say so in the report. `Risk`: `low | high` when the draft\n   selects the executor row by risk, `—` otherwise. Roteiros go to `<user plan dir>/roteiros/`.\n5. Run `python3 ~/.claude/skills/orquestrar/scripts/orq.py plan-check <the orchestration plan>\n   --repo <repo> --stamp`. Fix every line it prints and run again until `plan-check ok` and the\n   `Preparado:` line is written.\n6. Reply with a short report, nothing else:\n   - `Corrigi:` what you changed or decided, one line each;\n   - `Não decidi:` what needs the user, one line each with the options;\n   - `Plano:` the path, and the `Preparado:` line.\n",
+    "inst/skills/orquestrar/agents/revisor-orq.md": "---\nname: revisor-orq\ndescription: Reviews ONE frozen round of an orquestrar Task in a clean context. Use ONLY when an orquestrar executor dispatches it with the path of a review package built by `orq review-package`. Never edits code.\ntools: Read, Grep, Glob, Bash, Write\nmodel: inherit\n---\n\n# Review one round\n\nYou get one path: a review package. Everything you judge is in it or reachable from the repo it\nnames. You never edit a file under the repo; you write only under the durable directory the\npackage names. `orq` refuses your verdict if the worktree changed while you reviewed.\n\n1. Read the package whole. The package lists earlier verdicts: read their reports; the same cause\n   rejected again → add `--reincide`.\n2. Judge the round the way `~/.claude/skills/orquestrar/references/revisor.md` says in \"3. Judge\"\n   and \"4. Write the report\" (read those two sections; ignore the rest of the page: you are not a\n   session, you do not wake up, prove protection or wait). A blocker gets its closed recipe\n   (`revisor-receita.md`).\n3. The package says \"This round is round R + reviewer patch\" → judge only whether the patch\n   closes each blocker it claims to close without breaking the rest of the files it touches.\n4. Every blocker is a small local fix you can write, and the plan allows `corrige` → write the\n   patch (`git diff` format, paths relative to the repo) where the package says, and answer\n   `corrige`. Otherwise `reprova` with recipes, `devolvido` for what only the arbiter decides,\n   or `aprova`.\n5. Run the verdict command printed at the end of the package. It fails → fix what it says and run\n   it again; never skip it.\n6. Reply with one line: the verdict and the report path.\n"
+   }
+  },
+  {
+   "case": "same-name-two-skills",
+   "args": [
+    "$PY",
+    "-B",
+    "-s",
+    "$T/inst/scripts/instalar-agentes.py",
+    "--home",
+    "$T/home"
+   ],
+   "env": {
+    "HOME": "$T/home"
+   },
+   "files_before": {
+    "home/.codex-sem-nada": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.codex-conta2": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.codex": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.codex-arquivo": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "x"
+     }
+    },
+    "home/.codex-conta2/agents": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.codex/config.toml": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": ""
+     }
+    },
+    "inst/skills": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "inst/skills/b": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "inst/skills/a": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "inst/skills/b/agents": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "inst/skills/a/agents": {
+     "type": "dir",
+     "mode": "0o755"
+    }
+   },
+   "steps": [
+    {
+     "code": 0,
+     "stdout": {
+      "text": "ok: $T/home/.claude/agents/mesmo.md -> $T/inst/skills/a/agents/x.md\nok: $T/home/.codex-conta2/agents/mesmo.toml\nok: $T/home/.codex/agents/mesmo.toml\nok: $T/home/.claude/agents/mesmo.md -> $T/inst/skills/b/agents/y.md\nok: $T/home/.codex-conta2/agents/mesmo.toml\nok: $T/home/.codex/agents/mesmo.toml\n"
+     },
+     "stderr": {
+      "text": ""
+     },
+     "created": {
+      "home/.claude": {
+       "type": "dir",
+       "mode": "0o755"
+      },
+      "home/.claude/agents": {
+       "type": "dir",
+       "mode": "0o755"
+      },
+      "home/.claude/agents/mesmo.md": {
+       "type": "symlink",
+       "target": "$T/inst/skills/b/agents/y.md"
+      },
+      "home/.codex-conta2/agents/mesmo.toml": {
+       "type": "file",
+       "mode": "0o644",
+       "content": {
+        "text": "name = \"mesmo\"\ndescription = \"de b\"\nmodel_reasoning_effort = \"high\"\ndeveloper_instructions = \"Corpo.\\n\"\n"
+       }
+      },
+      "home/.codex/agents": {
+       "type": "dir",
+       "mode": "0o755"
+      },
+      "home/.codex/agents/mesmo.toml": {
+       "type": "file",
+       "mode": "0o644",
+       "content": {
+        "text": "name = \"mesmo\"\ndescription = \"de b\"\nmodel_reasoning_effort = \"high\"\ndeveloper_instructions = \"Corpo.\\n\"\n"
+       }
+      }
+     },
+     "changed": {},
+     "removed": []
+    }
+   ],
+   "inst_sources": {
+    "inst/skills/a/agents/x.md": "---\nname: mesmo\ndescription: de a\n---\n\nCorpo.\n",
+    "inst/skills/b/agents/y.md": "---\nname: mesmo\ndescription: de b\n---\n\nCorpo.\n"
+   }
+  },
+  {
+   "case": "unclosed-header",
+   "args": [
+    "$PY",
+    "-B",
+    "-s",
+    "$T/inst/scripts/instalar-agentes.py",
+    "--home",
+    "$T/home"
+   ],
+   "env": {
+    "HOME": "$T/home"
+   },
+   "files_before": {
+    "inst/skills": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "inst/skills/s": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "inst/skills/s/agents": {
+     "type": "dir",
+     "mode": "0o755"
+    }
+   },
+   "steps": [
+    {
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     },
+     "created": {},
+     "changed": {},
+     "removed": []
+    }
+   ],
+   "inst_sources": {
+    "inst/skills/s/agents/a.md": "---\nname: x\ncorpo sem fim\n"
+   }
+  }
+ ]
+}

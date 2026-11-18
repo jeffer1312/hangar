@@ -1,0 +1,216 @@
+{
+ "case": "preview/late-delta-index0-after-stop",
+ "source_commit": "2ad8e335e8d9118e74bc5b33f2efb4ac3bbd8eba",
+ "python": "3.14.9 websockets 16.0",
+ "capture_cmdline": "/usr/bin/python3 capture.py -j 8",
+ "route": "R1",
+ "hook": "preview_hook.py",
+ "contract_refs": [
+  "R1-S06",
+  "H-19",
+  "R1-D08"
+ ],
+ "description": "Python republishes; Rust must not (R1-D08)",
+ "harness": {
+  "how": "$PY -B -s $REF/backend/hooks/preview_hook.py, one process per step, stdin = step"
+ },
+ "input": {
+  "env": {
+   "HOME": "$T/home",
+   "USERPROFILE": "$T/home",
+   "LOCALAPPDATA": "$T/local",
+   "TMUX_TMPDIR": "$T/tmux",
+   "PATH": "$T/stubs:/usr/bin:/bin",
+   "CLAUDE_CONFIG_DIR": "$T/cfg"
+  },
+  "files_before": {}
+ },
+ "steps": [
+  {
+   "stdin": {
+    "text": "{\"hook_event_name\": \"MessageDisplay\", \"session_id\": \"sess-cmdline\", \"transcript_path\": \"/home/u/.claude/projects/-home-u-proj/abc.jsonl\", \"cwd\": \"/home/u/proj\", \"message_id\": \"msg_01\", \"index\": 0, \"final\": false, \"delta\": \"A\"}"
+   },
+   "code": 0,
+   "stdout": {
+    "text": ""
+   },
+   "stderr": {
+    "text": ""
+   },
+   "duration_ms": 37,
+   "files": {
+    "created": {
+     "cfg/.hangar-preview": {
+      "type": "dir",
+      "mode": "0o755"
+     },
+     "cfg/.hangar-preview/abc.json": {
+      "type": "file",
+      "mode": "0o644",
+      "size": 84,
+      "sha256": "b3509fa3049b4853ebb198eabea743273fb86b494ebac42ac7b8475a6dcc0b45",
+      "content": {
+       "text": "{\"text\": \"A\", \"ts\": 1794910459.9630103, \"message_id\": \"msg_01\", \"parts\": {\"0\": \"A\"}}"
+      }
+     },
+     "cfg/.hangar-preview/abc.lock": {
+      "type": "file",
+      "mode": "0o644",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "content": {
+       "text": ""
+      }
+     }
+    },
+    "changed": {},
+    "removed": []
+   }
+  },
+  {
+   "stdin": {
+    "text": "{\"hook_event_name\": \"MessageDisplay\", \"session_id\": \"sess-cmdline\", \"transcript_path\": \"/home/u/.claude/projects/-home-u-proj/abc.jsonl\", \"cwd\": \"/home/u/proj\", \"message_id\": \"msg_01\", \"index\": 1, \"final\": false, \"delta\": \"B\"}"
+   },
+   "code": 0,
+   "stdout": {
+    "text": ""
+   },
+   "stderr": {
+    "text": ""
+   },
+   "duration_ms": 39,
+   "files": {
+    "created": {},
+    "changed": {
+     "cfg/.hangar-preview/abc.json": {
+      "before": {
+       "type": "file",
+       "mode": "0o644",
+       "size": 84,
+       "sha256": "b3509fa3049b4853ebb198eabea743273fb86b494ebac42ac7b8475a6dcc0b45",
+       "content": {
+        "text": "{\"text\": \"A\", \"ts\": 1794910459.9630103, \"message_id\": \"msg_01\", \"parts\": {\"0\": \"A\"}}"
+       }
+      },
+      "after": {
+       "type": "file",
+       "mode": "0o644",
+       "size": 95,
+       "sha256": "edaf38774392d6bd8084c090a59123536eb403a10c579ac911951008e3ddafb1",
+       "content": {
+        "text": "{\"text\": \"AB\", \"ts\": 1794910460.0013275, \"message_id\": \"msg_01\", \"parts\": {\"0\": \"A\", \"1\": \"B\"}}"
+       }
+      }
+     }
+    },
+    "removed": []
+   }
+  },
+  {
+   "stdin": {
+    "text": "{\"hook_event_name\": \"Stop\", \"session_id\": \"sess-cmdline\", \"transcript_path\": \"/home/u/.claude/projects/-home-u-proj/abc.jsonl\", \"cwd\": \"/home/u/proj\", \"permission_mode\": \"default\", \"stop_hook_active\": false}"
+   },
+   "code": 0,
+   "stdout": {
+    "text": ""
+   },
+   "stderr": {
+    "text": ""
+   },
+   "duration_ms": 30,
+   "files": {
+    "created": {},
+    "changed": {
+     "cfg/.hangar-preview/abc.json": {
+      "before": {
+       "type": "file",
+       "mode": "0o644",
+       "size": 95,
+       "sha256": "edaf38774392d6bd8084c090a59123536eb403a10c579ac911951008e3ddafb1",
+       "content": {
+        "text": "{\"text\": \"AB\", \"ts\": 1794910460.0013275, \"message_id\": \"msg_01\", \"parts\": {\"0\": \"A\", \"1\": \"B\"}}"
+       }
+      },
+      "after": {
+       "type": "file",
+       "mode": "0o644",
+       "size": 58,
+       "sha256": "1c90dfbdb7fa8f9d045e994b2c7b81f5ec49d836b570f5a21ec97322c2823179",
+       "content": {
+        "text": "{\"text\": \"\", \"ts\": 1794910460.0351005, \"closed\": \"msg_01\"}"
+       }
+      }
+     }
+    },
+    "removed": []
+   }
+  },
+  {
+   "stdin": {
+    "text": "{\"hook_event_name\": \"MessageDisplay\", \"session_id\": \"sess-cmdline\", \"transcript_path\": \"/home/u/.claude/projects/-home-u-proj/abc.jsonl\", \"cwd\": \"/home/u/proj\", \"message_id\": \"msg_01\", \"index\": 0, \"final\": false, \"delta\": \"A\"}"
+   },
+   "code": 0,
+   "stdout": {
+    "text": ""
+   },
+   "stderr": {
+    "text": ""
+   },
+   "duration_ms": 35,
+   "files": {
+    "created": {},
+    "changed": {
+     "cfg/.hangar-preview/abc.json": {
+      "before": {
+       "type": "file",
+       "mode": "0o644",
+       "size": 58,
+       "sha256": "1c90dfbdb7fa8f9d045e994b2c7b81f5ec49d836b570f5a21ec97322c2823179",
+       "content": {
+        "text": "{\"text\": \"\", \"ts\": 1794910460.0351005, \"closed\": \"msg_01\"}"
+       }
+      },
+      "after": {
+       "type": "file",
+       "mode": "0o644",
+       "size": 83,
+       "sha256": "adfbb26c85a4c28d9fab5f07ee40b1c89e03b978526ab8e1ac0800701806ce14",
+       "content": {
+        "text": "{\"text\": \"A\", \"ts\": 1794910460.071778, \"message_id\": \"msg_01\", \"parts\": {\"0\": \"A\"}}"
+       }
+      }
+     }
+    },
+    "removed": []
+   }
+  }
+ ],
+ "files_final": {
+  "cfg/.hangar-preview": {
+   "type": "dir",
+   "mode": "0o755"
+  },
+  "cfg/.hangar-preview/abc.json": {
+   "type": "file",
+   "mode": "0o644",
+   "size": 83,
+   "sha256": "adfbb26c85a4c28d9fab5f07ee40b1c89e03b978526ab8e1ac0800701806ce14",
+   "content": {
+    "text": "{\"text\": \"A\", \"ts\": 1794910460.071778, \"message_id\": \"msg_01\", \"parts\": {\"0\": \"A\"}}"
+   }
+  },
+  "cfg/.hangar-preview/abc.lock": {
+   "type": "file",
+   "mode": "0o644",
+   "size": 0,
+   "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "content": {
+    "text": ""
+   }
+  }
+ },
+ "window": {
+  "t_start": 1794910459.930629,
+  "t_end": 1794910460.0803812
+ }
+}

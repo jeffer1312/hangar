@@ -1,0 +1,140 @@
+{
+ "case": "guard/log-no-rotation",
+ "source_commit": "2ad8e335e8d9118e74bc5b33f2efb4ac3bbd8eba",
+ "python": "3.14.9 websockets 16.0",
+ "capture_cmdline": "/usr/bin/python3 capture.py -j 8",
+ "route": "R1",
+ "hook": "guard_tmux.py",
+ "contract_refs": [
+  "R1-S14",
+  "H-53"
+ ],
+ "description": "guard log has no rotation",
+ "harness": {
+  "how": "$PY -B -s $REF/backend/hooks/guard_tmux.py, one process per step, stdin = step"
+ },
+ "input": {
+  "env": {
+   "HOME": "$T/home",
+   "USERPROFILE": "$T/home",
+   "LOCALAPPDATA": "$T/local",
+   "TMUX_TMPDIR": "$T/tmux",
+   "PATH": "$T/stubs:/usr/bin:/bin"
+  },
+  "files_before": {
+   "home/.hangar": {
+    "type": "dir",
+    "mode": "0o755"
+   },
+   "home/.hangar/logs": {
+    "type": "dir",
+    "mode": "0o755"
+   },
+   "home/.hangar/logs/privado": {
+    "type": "dir",
+    "mode": "0o755"
+   },
+   "home/.hangar/logs/privado/guard_tmux-falhas.log": {
+    "type": "file",
+    "mode": "0o644",
+    "size": 262145,
+    "sha256": "9408817bc040328d1c403ff97e94cea3dfd3a361b2fb7ecc7af75ff3a5157139",
+    "content": {
+     "omitted": true,
+     "head": {
+      "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+     },
+     "tail": {
+      "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+     }
+    }
+   }
+  }
+ },
+ "steps": [
+  {
+   "stdin": {
+    "text": "lixo"
+   },
+   "code": 0,
+   "stdout": {
+    "text": ""
+   },
+   "stderr": {
+    "text": ""
+   },
+   "duration_ms": 33,
+   "files": {
+    "created": {},
+    "changed": {
+     "home/.hangar/logs/privado/guard_tmux-falhas.log": {
+      "before": {
+       "type": "file",
+       "mode": "0o644",
+       "size": 262145,
+       "sha256": "9408817bc040328d1c403ff97e94cea3dfd3a361b2fb7ecc7af75ff3a5157139",
+       "content": {
+        "omitted": true,
+        "head": {
+         "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        "tail": {
+         "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        }
+       }
+      },
+      "after": {
+       "type": "file",
+       "mode": "0o644",
+       "size": 262224,
+       "sha256": "547f7afc2a8b19abdb7359c6b005ba5949eb3e4a3296e63c8b0155a8b6c92d50",
+       "content": {
+        "omitted": true,
+        "head": {
+         "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        "tail": {
+         "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx2026-11-17 07:14:22 JSONDecodeError: Expecting value: line 1 column 1 (char 0)\n"
+        }
+       }
+      }
+     }
+    },
+    "removed": []
+   }
+  }
+ ],
+ "files_final": {
+  "home/.hangar": {
+   "type": "dir",
+   "mode": "0o755"
+  },
+  "home/.hangar/logs": {
+   "type": "dir",
+   "mode": "0o755"
+  },
+  "home/.hangar/logs/privado": {
+   "type": "dir",
+   "mode": "0o755"
+  },
+  "home/.hangar/logs/privado/guard_tmux-falhas.log": {
+   "type": "file",
+   "mode": "0o644",
+   "size": 262224,
+   "sha256": "547f7afc2a8b19abdb7359c6b005ba5949eb3e4a3296e63c8b0155a8b6c92d50",
+   "content": {
+    "omitted": true,
+    "head": {
+     "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    },
+    "tail": {
+     "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx2026-11-17 07:14:22 JSONDecodeError: Expecting value: line 1 column 1 (char 0)\n"
+    }
+   }
+  }
+ },
+ "window": {
+  "t_start": 1794910462.9388072,
+  "t_end": 1794910462.9746888
+ }
+}

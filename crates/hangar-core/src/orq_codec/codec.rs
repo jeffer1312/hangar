@@ -65,6 +65,12 @@ pub fn dumps_indented_utf8(value: &Value, indent: usize) -> Result<String, &'sta
     Ok(restore_markers(crate::pycompat::pyjson::dumps_indent(value, indent, false), false))
 }
 
+/// `json.dumps(v, indent=indent)` do Python: ASCII, e o que o `loads` acima aceitou (NaN, Infinity,
+/// surrogate solto, inteiro largo) volta escrito como estava.
+pub fn dumps_indented_ascii(value: &Value, indent: usize) -> String {
+    restore_markers(crate::pycompat::pyjson::dumps_indent_literal(value, indent), true)
+}
+
 /// JSON UTF-8 com os separadores padrão do Python, sem copiar a árvore.
 pub fn dumps_utf8(value:&Value)->Result<String,&'static str>{
     if contains_surrogate(value){return Err("surrogate Unicode isolado");}

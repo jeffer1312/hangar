@@ -80,9 +80,6 @@ MEMORY_WAIT="${HANGAR_VERIFY_WAIT:-300}"
 VM_GIT=/c/hangar-verificacao/arvore
 VM_WIN='C:/hangar-verificacao'
 
-# Os mesmos do passo "Contenção e regressões" do server.yml: mudar lá exige mudar aqui.
-RUNTIME_TESTS=(tests/test_sidecar_coordination.py)
-
 PROCESSOS_PADRAO=4
 
 erro() { echo "verificar-local: $*" >&2; exit 2; }
@@ -111,8 +108,7 @@ classificar() {
     while IFS= read -r f; do
         [[ -z "$f" ]] && continue
         case "$f" in
-            crates/*|backend/tests/fixtures/*|plugins/hangar/hooks/*|\
-            backend/tests/test_claude_headless_cano.py) rust=1 ;;
+            crates/*|backend/tests/fixtures/*|plugins/hangar/hooks/*) rust=1 ;;
         esac
         # A suíte do backend lê quase o repositório inteiro (scripts, skills, plugins, docs, front).
         # Fica de fora só o que ela comprovadamente não lê. Workflow do CI não é código: quem o
@@ -133,8 +129,11 @@ classificar() {
         esac
         case "$f" in
             scripts/shell/*|scripts/test-wrappers.sh|scripts/hangar-engine|scripts/install-claude-wrapper.sh|\
+            scripts/hangar-server-lookup|scripts/hangar-send|scripts/hangar-open|scripts/hangar-conta|\
+            scripts/hangar-server-command|scripts/hangar-mcp-headers.sh|scripts/test-hangar-server-lookup.sh|\
             scripts/verificar-local|scripts/test-verificar-local.sh|scripts/podar-target|scripts/test-podar-target.sh|\
-            scripts/memory-scope|scripts/test_memory_scope.py|\
+            scripts/memory-scope|scripts/test_memory_scope.py|scripts/deploy.sh|scripts/test-deploy.sh|\
+            scripts/test-claude-conta.sh|scripts/services-launchd.sh|scripts/test-services-launchd.sh|\
             scripts/hook-pr-verificado.mjs|scripts/hooks/*) wrap=1 ;;
         esac
         case "$f" in
@@ -144,7 +143,7 @@ classificar() {
             scripts/pi/*|scripts/test-pi-hangar-state.mjs) pi=1 ;;
         esac
         case "$f" in
-            backend/*|*.ps1) winback=1 ;;
+            *.ps1) winback=1 ;;
         esac
     done
     (( rust )) && lin+=(rust) && win+=(rust)
@@ -178,13 +177,16 @@ classificar_rapido() {
         case "$f" in desktop-native/*|crates/hangar-api/*|crates/hangar-workspace/*|crates/Cargo.toml|messages/*) nativo=1 ;; esac
         case "$f" in
             scripts/shell/*|scripts/test-wrappers.sh|scripts/hangar-engine|scripts/install-claude-wrapper.sh|\
+            scripts/hangar-server-lookup|scripts/hangar-send|scripts/hangar-open|scripts/hangar-conta|\
+            scripts/hangar-server-command|scripts/hangar-mcp-headers.sh|scripts/test-hangar-server-lookup.sh|\
             scripts/verificar-local|scripts/test-verificar-local.sh|scripts/podar-target|scripts/test-podar-target.sh|\
-            scripts/memory-scope|scripts/test_memory_scope.py|\
+            scripts/memory-scope|scripts/test_memory_scope.py|scripts/deploy.sh|scripts/test-deploy.sh|\
+            scripts/test-claude-conta.sh|scripts/services-launchd.sh|scripts/test-services-launchd.sh|\
             scripts/hook-pr-verificado.mjs|scripts/hooks/*) wrap=1 ;;
         esac
         case "$f" in scripts/*statusline*) status=1 ;; esac
         case "$f" in scripts/pi/*|scripts/test-pi-hangar-state.mjs) pi=1 ;; esac
-        case "$f" in *.ps1|backend/app/atomico.py) winback=1 ;; esac
+        case "$f" in *.ps1|crates/hangar-core/src/fs.rs) winback=1 ;; esac
     done
     (( rust )) && lin+=(rust_rapido)
     (( back )) && lin+=(backend_rapido)
@@ -203,21 +205,11 @@ classificar_rapido() {
 
 # No Linux, o que os passos compilam e instalam vem do passo_preparo, que roda antes deles.
 passo_rust() {
-    (cd crates && cargo test --locked --workspace --no-fail-fast) || return 1
-    if [[ "$SO" == linux ]]; then
-        (cd backend && uv run pytest -q "${RUNTIME_TESTS[@]}") || return 1
-        # Sem o binário a suíte pula os casos Rust e sairia verde: aqui a falta é erro, como no CI.
-        local cano="$PWD/crates/target/debug/hangar-cano"
-        [[ -x "$cano" ]] || { echo "hangar-cano não foi compilado em $cano"; return 1; }
-        (cd backend && CP_RUST_CANO_BIN="$cano" uv run pytest -q tests/test_claude_headless_cano.py)
-    else
-        passo_runtime
-    fi
+    (cd crates && cargo test --locked --workspace --no-fail-fast)
 }
 
-# No Windows o CI só roda estes do pytest. A suíte inteira lá nem coleta (fcntl, os.geteuid), e
-# testes com `tmux -L … kill-server` falariam com o psmux de verdade da VM.
-passo_runtime() { (cd backend && uv run pytest -q "${RUNTIME_TESTS[@]}"); }
+# A trava e a leitura dos arquivos trocados por outro processo, que no Windows se comportam diferente.
+passo_runtime() { (cd crates && cargo test --locked -p hangar-core --test sidecar_coordination --test replace_windows); }
 
 passo_backend() {   # só Linux: no Windows fica o passo_runtime
     local omp; omp="$(omp_de_teste)" || return 1
@@ -258,7 +250,7 @@ passo_preparo() {
         pids+=($!)
     fi
     # Os rápidos compilam só o que usam, no próprio passo.
-    if [[ "$plano" == *" rust "* || "$plano" == *" backend "* || "$plano" == *" backend_rapido "* ]]; then
+    if [[ "$plano" == *" backend "* || "$plano" == *" backend_rapido "* ]]; then
         (cd backend && uv sync) || falhou=1
     fi
     if [[ "$plano" == *" rust "* ]]; then
@@ -273,15 +265,13 @@ passo_preparo() {
             cargo build --locked --workspace --all-targets) || falhou=1
     fi
     if [[ "$plano" == *" backend "* ]]; then
-        # Os contratos e as sondas de contas que o pytest executa (ci.yml): as sondas são módulos do
-        # executável de testes `it` do hangar-server.
+        # Os contratos que o pytest executa (ci.yml): o servidor, o par do porteiro e o `orq_contract`.
         if [[ "$plano" == *" rust "* ]]; then
             (cd crates && pin_auth_pair) || falhou=1
         else
             (cd crates && cargo build --locked -p hangar-server -p hangar-auth && \
                 pin_auth_pair && \
-                cargo build --locked -p hangar-server --example orq_contract && \
-                cargo test --locked -p hangar-server --no-run --test it) || falhou=1
+                cargo build --locked -p hangar-server --example orq_contract) || falhou=1
         fi
     fi
     if [[ "$plano" == *" backend_rapido "* ]]; then
@@ -347,11 +337,16 @@ passo_mobile() {
 passo_nativo() { (cd desktop-native && CARGO_TARGET_DIR="$PWD/target" cargo test --locked); }
 passo_shell() {
     bash scripts/test-wrappers.sh || return 1
+    bash scripts/test-hangar-server-lookup.sh || return 1
     [[ ! -f scripts/test-verificar-local.sh ]] || bash scripts/test-verificar-local.sh || return 1
     # Com o runtime real: com o do passo o systemd não responde e os testes do grupo seriam pulados.
     [[ ! -f scripts/test_memory_scope.py ]] || (cd backend && XDG_RUNTIME_DIR="${HANGAR_VERIFY_RUNTIME:-${XDG_RUNTIME_DIR:-}}" \
         uv run pytest -q ../scripts/test_memory_scope.py) || return 1
-    [[ ! -f scripts/test-podar-target.sh ]] || bash scripts/test-podar-target.sh
+    [[ ! -f scripts/test-podar-target.sh ]] || bash scripts/test-podar-target.sh || return 1
+    [[ "$SO" == linux ]] && { bash scripts/test-deploy.sh || return 1; }
+    [[ ! -f scripts/test-claude-conta.sh ]] || bash scripts/test-claude-conta.sh || return 1
+    [[ ! -f scripts/test-services-launchd.sh ]] || bash scripts/test-services-launchd.sh || return 1
+    return 0
 }
 passo_statusline() {
     node --test scripts/test-configure-statusline.cjs || return 1
@@ -696,7 +691,7 @@ rodar_passos() {   # $1 = sha, resto = passos; cwd = árvore preparada
         # Por arquivo: as funções mais a lista de arquivos de um diff grande passam do limite de um
         # argumento só (128 KB no Linux), e o `bash -c` nem começava.
         roteiro="${log%.log}.roteiro"
-        { declare -f; declare -p RUNTIME_TESTS PROCESSOS PLANO ARQUIVOS HANGAR_VERIFICAR_BASE MEM_CHECK_GB MEM_BUILD_GB MEMORY_WAIT; echo "passo_$p"; } > "$roteiro"
+        { declare -f; declare -p PROCESSOS PLANO ARQUIVOS HANGAR_VERIFICAR_BASE MEM_CHECK_GB MEM_BUILD_GB MEMORY_WAIT; echo "passo_$p"; } > "$roteiro"
         # setsid no Linux: o passo vira grupo próprio e o vigia mata a árvore inteira.
         "${LIMPO[@]}" SO="$SO" $SETSID bash "$roteiro" >"$log" 2>&1 &
         local spid=$! vigia rc

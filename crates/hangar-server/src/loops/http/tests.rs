@@ -93,7 +93,7 @@ fn op_reads_the_routes_and_the_escaped_name() {
     assert_eq!(op(&Method::GET, "/api/sessions/s/then"), None);
     assert_eq!(op(&Method::POST, "/api/sessions//loop"), None);
     assert_eq!(op(&Method::POST, "/api/sessions/s/loop/x"), None);
-    assert!(crate::migration_status::rust_route(&Method::DELETE, "/api/sessions/s/loop"));
+    assert!(crate::owned_routes::rust_route(&Method::DELETE, "/api/sessions/s/loop"));
 }
 
 /// B3: a trava de branch lê a worktree onde o agente trabalha, na criação e em cada volta.

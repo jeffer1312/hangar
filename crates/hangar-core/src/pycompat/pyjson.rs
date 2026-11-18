@@ -115,6 +115,13 @@ pub(crate) fn dumps_compact_sorted_unicode(value:&Value,sort_keys:bool)->String 
     super::json_writer::write(&mut out,value,false,None,if sort_keys{Some(&compare)}else{None},true,false);out
 }
 
+/// `dumps_literal` com recuo: o codec troca os marcadores depois, então eles saem como os demais.
+pub(crate) fn dumps_indent_literal(v: &Value, indent: usize) -> String {
+    let mut out = String::new();
+    super::json_writer::write(&mut out, v, true, Some(indent), None, false, false);
+    out
+}
+
 /// O codec com marcadores próprios precisa conservar os caracteres Unicode legítimos.
 pub(crate) fn dumps_literal(v: &Value) -> String {
     let mut out = String::new();

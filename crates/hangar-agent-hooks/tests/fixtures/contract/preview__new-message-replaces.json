@@ -1,0 +1,176 @@
+{
+ "case": "preview/new-message-replaces",
+ "source_commit": "2ad8e335e8d9118e74bc5b33f2efb4ac3bbd8eba",
+ "python": "3.14.9 websockets 16.0",
+ "capture_cmdline": "/usr/bin/python3 capture.py -j 8",
+ "route": "R1",
+ "hook": "preview_hook.py",
+ "contract_refs": [
+  "R1-S06",
+  "H-17"
+ ],
+ "description": "",
+ "harness": {
+  "how": "$PY -B -s $REF/backend/hooks/preview_hook.py, one process per step, stdin = step"
+ },
+ "input": {
+  "env": {
+   "HOME": "$T/home",
+   "USERPROFILE": "$T/home",
+   "LOCALAPPDATA": "$T/local",
+   "TMUX_TMPDIR": "$T/tmux",
+   "PATH": "$T/stubs:/usr/bin:/bin",
+   "CLAUDE_CONFIG_DIR": "$T/cfg"
+  },
+  "files_before": {}
+ },
+ "steps": [
+  {
+   "stdin": {
+    "text": "{\"hook_event_name\": \"MessageDisplay\", \"session_id\": \"sess-cmdline\", \"transcript_path\": \"/home/u/.claude/projects/-home-u-proj/abc.jsonl\", \"cwd\": \"/home/u/proj\", \"message_id\": \"m1\", \"index\": 0, \"final\": false, \"delta\": \"A\"}"
+   },
+   "code": 0,
+   "stdout": {
+    "text": ""
+   },
+   "stderr": {
+    "text": ""
+   },
+   "duration_ms": 39,
+   "files": {
+    "created": {
+     "cfg/.hangar-preview": {
+      "type": "dir",
+      "mode": "0o755"
+     },
+     "cfg/.hangar-preview/abc.json": {
+      "type": "file",
+      "mode": "0o644",
+      "size": 79,
+      "sha256": "4029b776f77d54b4d9ee7ace66d922b5afa546b26ad16a56d6efbe2b3ee65886",
+      "content": {
+       "text": "{\"text\": \"A\", \"ts\": 1794910459.842974, \"message_id\": \"m1\", \"parts\": {\"0\": \"A\"}}"
+      }
+     },
+     "cfg/.hangar-preview/abc.lock": {
+      "type": "file",
+      "mode": "0o644",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "content": {
+       "text": ""
+      }
+     }
+    },
+    "changed": {},
+    "removed": []
+   }
+  },
+  {
+   "stdin": {
+    "text": "{\"hook_event_name\": \"MessageDisplay\", \"session_id\": \"sess-cmdline\", \"transcript_path\": \"/home/u/.claude/projects/-home-u-proj/abc.jsonl\", \"cwd\": \"/home/u/proj\", \"message_id\": \"m1\", \"index\": 1, \"final\": false, \"delta\": \"B\"}"
+   },
+   "code": 0,
+   "stdout": {
+    "text": ""
+   },
+   "stderr": {
+    "text": ""
+   },
+   "duration_ms": 31,
+   "files": {
+    "created": {},
+    "changed": {
+     "cfg/.hangar-preview/abc.json": {
+      "before": {
+       "type": "file",
+       "mode": "0o644",
+       "size": 79,
+       "sha256": "4029b776f77d54b4d9ee7ace66d922b5afa546b26ad16a56d6efbe2b3ee65886",
+       "content": {
+        "text": "{\"text\": \"A\", \"ts\": 1794910459.842974, \"message_id\": \"m1\", \"parts\": {\"0\": \"A\"}}"
+       }
+      },
+      "after": {
+       "type": "file",
+       "mode": "0o644",
+       "size": 91,
+       "sha256": "16cdf048589dc49f734b1feb795e02af9e0df4d2ecff1f11424d75ad5a076968",
+       "content": {
+        "text": "{\"text\": \"AB\", \"ts\": 1794910459.8789454, \"message_id\": \"m1\", \"parts\": {\"0\": \"A\", \"1\": \"B\"}}"
+       }
+      }
+     }
+    },
+    "removed": []
+   }
+  },
+  {
+   "stdin": {
+    "text": "{\"hook_event_name\": \"MessageDisplay\", \"session_id\": \"sess-cmdline\", \"transcript_path\": \"/home/u/.claude/projects/-home-u-proj/abc.jsonl\", \"cwd\": \"/home/u/proj\", \"message_id\": \"m2\", \"index\": 0, \"final\": false, \"delta\": \"X\"}"
+   },
+   "code": 0,
+   "stdout": {
+    "text": ""
+   },
+   "stderr": {
+    "text": ""
+   },
+   "duration_ms": 40,
+   "files": {
+    "created": {},
+    "changed": {
+     "cfg/.hangar-preview/abc.json": {
+      "before": {
+       "type": "file",
+       "mode": "0o644",
+       "size": 91,
+       "sha256": "16cdf048589dc49f734b1feb795e02af9e0df4d2ecff1f11424d75ad5a076968",
+       "content": {
+        "text": "{\"text\": \"AB\", \"ts\": 1794910459.8789454, \"message_id\": \"m1\", \"parts\": {\"0\": \"A\", \"1\": \"B\"}}"
+       }
+      },
+      "after": {
+       "type": "file",
+       "mode": "0o644",
+       "size": 79,
+       "sha256": "8a8fe287c99213a7e2a180c78099babb1783f969cd7dc23e7a7cb20d67820af5",
+       "content": {
+        "text": "{\"text\": \"X\", \"ts\": 1794910459.917856, \"message_id\": \"m2\", \"parts\": {\"0\": \"X\"}}"
+       }
+      }
+     }
+    },
+    "removed": []
+   }
+  }
+ ],
+ "files_final": {
+  "cfg/.hangar-preview": {
+   "type": "dir",
+   "mode": "0o755"
+  },
+  "cfg/.hangar-preview/abc.json": {
+   "type": "file",
+   "mode": "0o644",
+   "size": 79,
+   "sha256": "8a8fe287c99213a7e2a180c78099babb1783f969cd7dc23e7a7cb20d67820af5",
+   "content": {
+    "text": "{\"text\": \"X\", \"ts\": 1794910459.917856, \"message_id\": \"m2\", \"parts\": {\"0\": \"X\"}}"
+   }
+  },
+  "cfg/.hangar-preview/abc.lock": {
+   "type": "file",
+   "mode": "0o644",
+   "size": 0,
+   "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "content": {
+    "text": ""
+   }
+  }
+ },
+ "window": {
+  "t_start": 1794910459.8107185,
+  "t_end": 1794910459.9252355
+ }
+}

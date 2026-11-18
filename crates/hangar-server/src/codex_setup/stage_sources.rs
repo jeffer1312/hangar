@@ -245,8 +245,11 @@ fn excluded(command: &Value) -> bool {
     }
     static GUARD: OnceLock<regex::Regex> = OnceLock::new();
     static CLAUDE: OnceLock<regex::Regex> = OnceLock::new();
+    static OWN: OnceLock<regex::Regex> = OnceLock::new();
     GUARD.get_or_init(||regex::Regex::new(r#"(?:^|/)guard_tmux\.py(?:["'\s\x1c-\x1f;]|$)"#).unwrap()).is_match(&command)
  || CLAUDE.get_or_init(||regex::Regex::new(r#"(?:^|[/"'\s\x1c-\x1f])(?:skill-suggester|jev-command-gate|jev-answer-check)\.py(?:["'\s\x1c-\x1f;|&]|$)"#).unwrap()).is_match(&command)
+ // Os hooks do Hangar como subcomando do servidor: o Codex tem os dele (`nav-hook`, `guard-tmux`).
+ || OWN.get_or_init(||regex::Regex::new(r#"(?:^|[/"'\s\x1c-\x1f])hangar-(?:server(?:\.exe|-command)?|launcher(?:\.exe)?)["']?[\s\x1c-\x1f]+(?:state-hook|preview-hook|nav-hook|askq-capture|pair-context|guard-tmux|kimi-state-hook)(?:["'\s\x1c-\x1f;|&]|$)"#).unwrap()).is_match(&command)
 }
 pub fn without_app_hooks(value: &Value) -> Value {
     use crate::orchestration::codec;

@@ -971,7 +971,6 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/search", get(crate::search::http::route).fallback(pass_registered))
         .route("/api/ask-history", axum::routing::post(crate::search::ask::route).fallback(pass_registered))
         .route("/api/search/context", get(crate::search_context::route).fallback(pass_registered))
-        .route("/api/migration/status", get(crate::migration_status::status).fallback(pass_registered))
         // Novidades e avisos da próxima atualização: só o dono, nunca repassado (o Python não tem a rota).
         .route("/api/update/notes", get(crate::update_notes::route))
         // O que as atualizações já trouxeram e cada aparelho ainda não viu: só o dono, nunca repassado.
@@ -1088,7 +1087,6 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/update-channel", axum::routing::any(crate::update::git_engine::http::channel))
         // A tela web é servida aqui; o que não é dela leva o 404 ou a recusa do caminho sem rota.
         .fallback(crate::ui::fallback)
-        .layer(axum::middleware::from_fn(crate::migration_status::count_public))
         .with_state(state.clone())
         .merge(owner_share_router(&state, pair))
         .layer(axum::middleware::from_fn(request_auth))
@@ -1114,7 +1112,6 @@ fn plugin_routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
 fn plugin_router(state: Arc<AppState>) -> Router {
     // A ponte local não expõe o restante da API nem dá acesso às rotas privadas.
     plugin_routes(&state).fallback(|| async { StatusCode::NOT_FOUND })
-        .layer(axum::middleware::from_fn(crate::migration_status::count_public))
         .layer(axum::middleware::from_fn(request_auth))
         .layer(axum::middleware::from_fn_with_state(state.clone(), crate::startup::guard))
         .with_state(state)

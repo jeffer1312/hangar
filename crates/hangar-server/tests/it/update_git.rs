@@ -44,7 +44,7 @@ async fn unmigrated_git_update_is_owned_without_python() {
     git(&repo, &["init", "-b", "main"]);
     git(&repo, &["add", "."]);
     git(&repo, &["commit", "-m", "fixture"]);
-    hangar_server::session_open::cli::publish_backend_dir(&home, &repo.join("backend")).unwrap();
+    hangar_server::session_open::cli::publish_install_root(&home, &repo.join("backend")).unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let mut state = AppState::new(Config {
@@ -178,6 +178,40 @@ fn channel_live_publication_child() {
     );
 }
 
+/// O motor `git` não pede o `uv`. Com `git`, `node` e `npm` no PATH e sem `uv`, a conferência
+/// deixa atualizar e não lista nada faltando.
+#[cfg(unix)]
+#[test]
+fn preflight_does_not_require_uv() {
+    use hangar_server::update::git_engine::Service;
+    use std::os::unix::fs::PermissionsExt;
+    let temp = crate::physical_tempdir();
+    let (repo, home, bin) = (temp.path().join("repo"), temp.path().join("home"), temp.path().join("bin"));
+    std::fs::create_dir_all(&repo).unwrap();
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&bin).unwrap();
+    git(&repo, &["init", "-b", "main"]);
+    std::fs::write(repo.join("file"), "fixture").unwrap();
+    git(&repo, &["add", "file"]);
+    git(&repo, &["commit", "-m", "fixture"]);
+    let real_git = hangar_server::machine_peers::doctor::find_binary("git").expect("git no PATH do teste");
+    for (name, body) in [("git", format!("#!/bin/sh\nexec '{}' \"$@\"\n", real_git.display())), ("node", "#!/bin/sh\n".into()), ("npm", "#!/bin/sh\n".into())] {
+        std::fs::write(bin.join(name), body).unwrap();
+        std::fs::set_permissions(bin.join(name), std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    assert!(!bin.join("uv").exists());
+    let environment = [
+        ("PATH".into(), bin.display().to_string()),
+        ("HOME".into(), home.display().to_string()),
+        ("GIT_CONFIG_NOSYSTEM".into(), "1".into()),
+        ("GIT_CONFIG_GLOBAL".into(), "/dev/null".into()),
+    ].into();
+    let service = Service::new(home.clone(), repo, home.join(".claude"), environment);
+    let pre = service.preflight().unwrap();
+    assert_eq!(pre["faltando"], serde_json::json!([]), "{pre}");
+    assert_eq!(pre["pode"], true, "{pre}");
+}
+
 #[tokio::test]
 async fn migration_contract_native_fetch_has_no_python_prerequisite() {
     struct Recorder(std::sync::Mutex<Vec<String>>);
@@ -187,7 +221,7 @@ async fn migration_contract_native_fetch_has_no_python_prerequisite() {
             hangar_server::update::StepRun{code:Some(0),output:String::new()}
         }
     }
-    let temp=crate::physical_tempdir();std::fs::create_dir(temp.path().join("backend")).unwrap();
+    let temp=crate::physical_tempdir();
     let runner=std::sync::Arc::new(Recorder(std::sync::Mutex::new(vec![])));
     assert_eq!(hangar_server::update::dev_mode::fetch_rust(runner.clone(),temp.path()).await,None);
     let calls=runner.0.lock().unwrap();assert_eq!(calls.len(),1);assert!(calls[0].contains("rust-release"));assert!(!calls[0].contains("app.rust_release"));

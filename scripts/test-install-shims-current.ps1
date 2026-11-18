@@ -8,7 +8,7 @@ try {
     New-Item -ItemType Directory -Force $raiz, (Join-Path $fakeHome '.hangar\current') | Out-Null
     $bash = 'C:\Program Files\Git\bin\bash.exe'
     $binMsys = '/c/perfil/.local/bin'
-    $py = 'C:\py\python.exe'; $a = ''; $nome = 'hangar-codex'; $pyMsysTui = '/c/py/python.exe'
+    $servidorCheckout = $null
 
     $tokens = $null; $errors = $null
     $ast = [Management.Automation.Language.Parser]::ParseFile((Resolve-Path -LiteralPath $InstallScript).ProviderPath, [ref]$tokens, [ref]$errors)
@@ -22,6 +22,14 @@ try {
     }
     . (Get-Assignment '$raizAtalhos')
     . (Get-Assignment '$shimRootMsys')
+    # Os lançadores do Codex: o `-tui` é o hangar-server do current; o `hangar-codex`, o script do current.
+    . (Get-Assignment '$servidorTui')
+    . (Get-Assignment '$servidorTuiMsys')
+    . (Get-Assignment '$lancadoresCodex')
+    foreach ($linha in $lancadoresCodex[0][1], $lancadoresCodex[0][2]) {
+        if ($linha -notmatch '[\\/]\.hangar[\\/]current[\\/]bin[\\/]hangar-server\.exe.* codex-tui ') { throw "lançador do Codex fora do current: $linha" }
+    }
+    $nome, $linhaCmd, $linhaSh = $lancadoresCodex[1]
 
     $version = '0.1.0.1'
     $failures = @()
@@ -31,6 +39,11 @@ try {
         if ($text -like "*$version*" -or $text -notmatch '[\\/]\.hangar[\\/]current[\\/]scripts[\\/]') { $failures += "$name -> $text" }
     }
     if ($failures.Count) { throw ("Atalho fora do current:`n" + ($failures -join "`n")) }
+    # Os atalhos do Python (python3, python3.cmd, hangar-python.cmd) nao sao mais criados.
+    $textoInstalador = $ast.Extent.Text
+    foreach ($atalho in "'python3'", "'python3.cmd'", "'hangar-python.cmd'") {
+        if ($textoInstalador.Contains("Join-Path `$binUsuario $atalho")) { throw "o instalador ainda cria o atalho $atalho" }
+    }
     'ok: todos os atalhos apontam para o current'
 } finally {
     Remove-Item -LiteralPath $temporary -Recurse -Force -ErrorAction SilentlyContinue
