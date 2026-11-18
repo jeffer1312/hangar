@@ -421,10 +421,10 @@ fn git_config(path: &str) -> Result<String> {
 }
 fn tree_stamp(root: &Path) -> Result<(String, u64)> {
     let start = Instant::now();
-    let mut stack = vec![root.to_path_buf()];
+    let mut stack = vec![(root.to_path_buf(), true)];
     let mut entries = Vec::new();
     let mut newest = 0;
-    while let Some(path) = stack.pop() {
+    while let Some((path, outer_repo)) = stack.pop() {
         if entries.len() > 100_000 || start.elapsed() > Duration::from_secs(5) {
             return Err(error(409, "leitura do disco incompleta"));
         }
@@ -443,23 +443,31 @@ fn tree_stamp(root: &Path) -> Result<(String, u64)> {
             meta.is_dir(),
         ));
         if meta.is_dir() && !meta.is_symlink() {
+            let outer_repo = outer_repo && (path == root || matches!(
+                std::fs::symlink_metadata(path.join(".git")),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound
+            ));
             for entry in
                 std::fs::read_dir(&path).map_err(|_| error(409, "pasta da worktree ilegível"))?
             {
-                let child = entry
-                    .map_err(|_| error(409, "pasta da worktree ilegível"))?
-                    .path();
+                let entry = entry.map_err(|_| error(409, "pasta da worktree ilegível"))?;
+                let child = entry.path();
                 // Artefatos regeneráveis não podem esgotar a leitura dos fontes da worktree.
                 let dependency = child.file_name().is_some_and(|n| n == "node_modules");
-                let rust_build = child.file_name().is_some_and(|n| n == "target")
+                let rust_build = outer_repo
+                    && child.file_name().is_some_and(|n| n == "target")
+                    && entry.file_type().is_ok_and(|kind| kind.is_dir() && !kind.is_symlink())
                     && child.strip_prefix(root).ok().and_then(Path::to_str).is_some_and(|relative| {
                         git::command(root, &["check-ignore", "--quiet", "--", relative])
                             .is_ok_and(|out| out.code == 0)
                     });
-                if (dependency || rust_build) && !child.join(".git").exists() {
+                if (dependency || rust_build) && matches!(
+                    std::fs::symlink_metadata(child.join(".git")),
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound
+                ) {
                     continue;
                 }
-                stack.push(child);
+                stack.push((child, outer_repo));
             }
         }
     }
@@ -970,6 +978,54 @@ mod tests {
             &["worktree", "add", "-b", "topic", wt.to_str().unwrap()],
         );
         (dir, repo, wt)
+    }
+
+    #[test]
+    fn removal_detects_changes_to_ignored_target_files_and_nested_sources() {
+        const ISOLATED: &str = "HANGAR_TEST_ISOLATED_TARGET_REMOVAL";
+        if std::env::var_os(ISOLATED).is_none() {
+            let config = tempfile::NamedTempFile::new().unwrap();
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "worktree_cleanup::tests::removal_detects_changes_to_ignored_target_files_and_nested_sources", "--nocapture"])
+                .env(ISOLATED, "1")
+                .env("GIT_CONFIG_GLOBAL", config.path())
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .env_remove("GIT_CONFIG_PARAMETERS")
+                .env_remove("GIT_CONFIG_COUNT")
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{}\n{}", String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr));
+            return;
+        }
+        for nested in [false, true] {
+            let (dir, repo, wt) = policy_fixture();
+            std::fs::write(wt.join(".gitignore"), "target\n").unwrap();
+            git(&wt, &["add", ".gitignore"]);
+            git(&wt, &["-c", "user.name=Teste", "-c", "user.email=test@example.invalid", "commit", "-m", "Ignorar target"]);
+            let source = if nested {
+                let nested = wt.join("nested");
+                std::fs::create_dir(&nested).unwrap();
+                git(&nested, &["init", "-b", "main"]);
+                std::fs::create_dir(nested.join("target")).unwrap();
+                let source = nested.join("target/source.rs");
+                std::fs::write(&source, "original").unwrap();
+                git(&nested, &["add", "target/source.rs"]);
+                source
+            } else {
+                let source = wt.join("target");
+                std::fs::write(&source, "original").unwrap();
+                source
+            };
+            let guard = |_: &str| {
+                std::fs::write(&source, "alterado durante a remoção").unwrap();
+                Ok(())
+            };
+            let result = remove_with_guard(repo.to_str().unwrap(), wt.to_str().unwrap(), &[], &[], dir.path(),
+                RemoveOptions { confirm: true, keep_branch: true, ..Default::default() }, &guard);
+            assert!(result.is_err(), "a remoção deve detectar a escrita em {source:?}");
+            assert_eq!(std::fs::read_to_string(source).unwrap(), "alterado durante a remoção");
+        }
     }
 
     #[test]

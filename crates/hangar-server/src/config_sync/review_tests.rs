@@ -19,36 +19,41 @@ fn shared_preferences_copy_worktree_settings_to_the_destination() {
     use hangar_workspace::worktree_settings::{KeepWhen, WorktreeSettings};
     let source = tempfile::tempdir().unwrap();
     let target = tempfile::tempdir().unwrap();
+    let source_home = source.path().join("worktree-home");
+    let target_home = target.path().join("worktree-home");
     let settings = WorktreeSettings {
-        location: source.path().join("trees").to_string_lossy().into_owned(),
+        location: source_home.join("trees").to_string_lossy().into_owned(),
         inactive_days: Some(5),
         delete_merged: true,
         delete_unchanged: true,
         keep_when: KeepWhen::UncommittedChanges,
     };
-    settings.save_at(&source.path().join(".hangar/worktree-settings.json"), source.path()).unwrap();
-    let context = Context::new(roots(source.path()));
+    settings.save_at(&source_home.join(".hangar/worktree-settings.json"), &source_home).unwrap();
+    let mut context = Context::new(roots(&source.path().join("account-home")));
+    context.worktree_home = source_home;
     let bundle = super::export::export(&context, &["hangar_prefs".into()], None, true).unwrap();
     assert!(bundle.manifest()["items"]["hangar_prefs"]["hashes"]["worktrees"].is_string());
     let bundle = Bundle::unpack(&bundle.pack().unwrap()).unwrap();
-    let target_context = Context::new(roots(target.path()));
+    let mut target_context = Context::new(roots(&target.path().join("account-home")));
+    target_context.worktree_home = target_home.clone();
     let previous = WorktreeSettings { inactive_days: Some(30), ..Default::default() };
-    let target_file = target.path().join(".hangar/worktree-settings.json");
-    previous.save_at(&target_file, target.path()).unwrap();
-    let mut apply = Apply::new(target_context, bundle, "worktrees", Default::default());
+    let target_file = target_home.join(".hangar/worktree-settings.json");
+    previous.save_at(&target_file, &target_home).unwrap();
+    let mut apply = Apply::new(target_context.clone(), bundle, "worktrees", Default::default());
     apply.apply_item("hangar_prefs").unwrap();
     let copied = WorktreeSettings::load_at(&target_file).unwrap();
     assert_eq!(copied.inactive_days, Some(5));
     assert!(copied.delete_merged);
     assert!(copied.delete_unchanged);
     assert_eq!(copied.keep_when, KeepWhen::UncommittedChanges);
-    assert_eq!(copied.location, target.path().join("trees").to_string_lossy());
+    assert_eq!(copied.location, target_home.join("trees").to_string_lossy());
+    assert!(!target.path().join("account-home/.hangar/worktree-settings.json").exists());
     assert!(apply.report["hangar_prefs"]["changed"].as_array().unwrap().contains(&json!("worktrees")));
     assert_eq!(WorktreeSettings::load_at(&apply.backups.join("files/.hangar/worktree-settings.json")).unwrap(), previous);
     let selected = json!({"hangar_prefs": ["dictation_organization_mode"]});
     let filtered = super::export::export(&context, &["hangar_prefs".into()], selected.as_object(), true).unwrap();
     assert!(filtered.items["hangar_prefs"].get("worktrees").is_none());
-    let mut filtered_apply = Apply::new(Context::new(roots(target.path())), filtered, "filtered", Default::default());
+    let mut filtered_apply = Apply::new(target_context, filtered, "filtered", Default::default());
     filtered_apply.apply_item("hangar_prefs").unwrap();
     assert_eq!(WorktreeSettings::load_at(&target_file).unwrap(), copied);
 }
