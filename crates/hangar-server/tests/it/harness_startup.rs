@@ -132,7 +132,7 @@ fn broken_settings_are_left_byte_for_byte_and_the_error_returns() {
 fn state_hook_covers_six_events_and_warns_only_where_stdout_reaches_the_model() {
     let root = tempfile::tempdir().unwrap();
     let (service, settings, repo) = claude_home(root.path());
-    // H-56/H-58: a entrada Python antiga vira o subcomando no lugar.
+    // A entrada Python antiga vira o subcomando no lugar.
     fs::write(&settings, json!({"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "python3 /x/backend/hooks/state_hook.py"}]}]}}).to_string()).unwrap();
     hooks::sync_installer(&service, &repo, "ensure_state_hooks_installed").unwrap();
     let data = read(&settings);
@@ -149,7 +149,7 @@ fn state_hook_covers_six_events_and_warns_only_where_stdout_reaches_the_model() 
     assert_eq!(data["hooks"]["Stop"].as_array().unwrap().len(), 1, "a entrada antiga vira a nova no lugar");
 }
 
-/// Decisão 12: o comando novo mantém o aviso ao modelo quando falha de verdade (aqui, programa ausente).
+/// O comando novo mantém o aviso ao modelo quando falha de verdade (aqui, programa ausente).
 #[test]
 #[cfg(unix)]
 fn missing_hook_program_exits_zero_and_tells_the_model() {
@@ -164,7 +164,7 @@ fn missing_hook_program_exits_zero_and_tells_the_model() {
     }
 }
 
-/// H-15/H-42/H-47 e R1-D01: prévia e navegador uma vez por evento; o hook de subagente sai, com o
+/// Prévia e navegador uma vez por evento; o hook de subagente sai, com o
 /// evento que esvaziou, e o que é pessoal no mesmo evento fica.
 #[test]
 fn preview_and_nav_land_once_and_the_subagent_hook_leaves() {
@@ -195,7 +195,7 @@ fn preview_and_nav_land_once_and_the_subagent_hook_leaves() {
     assert!(!fs::read_to_string(&settings).unwrap().contains("subagent_hook"));
 }
 
-/// H-81/R1-D10: a entrada pessoal que chamava `~/.claude/hooks/guard_tmux.py` vira o `guard-tmux` do
+/// A entrada pessoal que chamava `~/.claude/hooks/guard_tmux.py` vira o `guard-tmux` do
 /// pacote já na subida (que não instala o guarda onde ele não estava).
 #[test]
 fn startup_repairs_an_existing_python_guard_but_never_installs_one() {
@@ -234,7 +234,7 @@ fn hooks_call_the_stable_launcher_when_the_package_installed_it() {
     assert_eq!(ours(&data, "PreToolUse", "guard-tmux"), vec![format!("{quoted}guard-tmux")]);
 }
 
-/// H-63: o item `claude_hooks` da configuração compartilhada roda os 7 instaladores (a lista `HOOKS`
+/// O item `claude_hooks` da configuração compartilhada roda os 7 instaladores (a lista `HOOKS`
 /// do pós-aplicar). Todos são conhecidos, o guarda Python antigo vira o subcomando com o matcher
 /// largo, cada hook cai no comando novo e uma segunda passada não muda nada.
 #[test]
@@ -314,7 +314,7 @@ fn codex_hooks_append_after_the_existing_groups_and_settle() {
     assert_eq!((&pre[0], &pre[1]), (&review, &rtk));
     assert_eq!(pre.len(), 3, "{data}");
     assert!(pre[2]["matcher"] == "Bash" && hooks::refers(&pre[2]["hooks"][0]["command"], "guard-tmux", true));
-    // R1-D02: o hook de estado não entra mais no Codex.
+    // O hook de estado não entra mais no Codex.
     for event in ["SessionStart", "PostToolUse", "Stop"] {
         assert!(data["hooks"].get(event).is_none(), "{event}: {data}");
     }

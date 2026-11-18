@@ -57,8 +57,8 @@ impl Case {
     fn sidecar(&self) -> PathBuf { self.home.join(".hangar/codex-sessions/codex-proj.json") }
 }
 
-/// PR-01: aberto com `Path` e `SystemRoot` (a caixa que o Windows dá), o subcomando sobe as chaves como o
-/// `os.environ` do Python: o app-server e a TUI recebem `PATH` e `SYSTEMROOT`.
+/// Aberto com `Path` e `SystemRoot` (a caixa que o Windows dá), o subcomando sobe as chaves: o
+/// app-server e a TUI recebem `PATH` e `SYSTEMROOT`.
 #[test]
 fn subcommands_hand_children_uppercase_environment_keys() {
     let case = Case::new(json!({}));
@@ -77,8 +77,7 @@ fn subcommands_hand_children_uppercase_environment_keys() {
     }
 }
 
-/// PR-14: o pane recebe o código da TUI inteiro (`0xC000013A`, console fechado), como o `SystemExit` do
-/// Python, não só os 8 bits de baixo.
+/// O pane recebe o código da TUI inteiro (`0xC000013A`, console fechado), não só os 8 bits de baixo.
 #[test]
 fn the_tui_exit_code_reaches_the_pane_with_all_32_bits() {
     let code = 0xC000_013A_u32 as i32;
@@ -118,7 +117,7 @@ fn ctrl_break_exits_130_and_cleans_up() {
     }
 }
 
-/// PR-13 (decisão 26): com o `codex.cmd` do npm, a primeira mensagem de várias linhas não vai no argv
+/// Com o `codex.cmd` do npm, a primeira mensagem de várias linhas não vai no argv
 /// (o std recusa quebra de linha em `.cmd`): a TUI abre sem ela, e ela chega inteira, uma vez, como
 /// `turn/start` na thread que a TUI anunciou.
 #[test]

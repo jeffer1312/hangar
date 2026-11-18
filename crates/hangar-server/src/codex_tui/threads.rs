@@ -233,7 +233,7 @@ mod tests {
         outs.iter().filter_map(|out| match out { Out::Send(frame) => Some(frame), _ => None }).collect()
     }
 
-    /// PR-13 (decisão 26): conversa nova, a mensagem vai uma vez só, inteira, como `turn/start` na thread
+    /// Conversa nova: a mensagem vai uma vez só, inteira, como `turn/start` na thread
     /// que a TUI anunciou; antes disso nada sai, e a confirmação aparece no pane.
     #[test]
     fn a_new_conversation_gets_the_whole_first_prompt_once_after_its_thread_starts() {

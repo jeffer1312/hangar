@@ -131,7 +131,7 @@ if [ "\$1" = claude-md-block ]; then cat > "$ROOT/block"; fi
 exit 0
 STUB
 : > "$ROOT/calls"; rm -f "$ROOT/block"
-( env -i HOME="$H" CP_RUST_SERVER_BIN="$SERVER" PATH="$ROOT/stubs:/usr/bin:/bin" HANGAR_SRV_ANTIGO_AVISA=1 \
+( env -i HOME="$H" CP_RUST_SERVER_BIN="$SERVER" PATH="$ROOT/stubs:/usr/bin:/bin" HANGAR_SERVER_OLD_WARNS=1 \
     bash "$H/.hangar/current/scripts/install-hangar-send.sh" > "$ROOT/out" 2>&1 ); rc=$?
 expect_eq "binário antigo: sai 3, não 0" "$rc" 3 "$ROOT/out"
 grep -q '^claude-md-block' "$ROOT/calls" && [ -s "$ROOT/block" ] && pass "binário antigo: o bloco do CLAUDE.md ainda é gravado" \
@@ -146,7 +146,7 @@ if [ "\$1" = claude-md-block ]; then cat > "$ROOT/block"; fi
 exit 0
 STUB
 : > "$ROOT/calls"
-( env -i HOME="$H" CP_RUST_SERVER_BIN="$SERVER" PATH="$ROOT/stubs:/usr/bin:/bin" HANGAR_SRV_ANTIGO_AVISA=0 \
+( env -i HOME="$H" CP_RUST_SERVER_BIN="$SERVER" PATH="$ROOT/stubs:/usr/bin:/bin" HANGAR_SERVER_OLD_WARNS=0 \
     bash "$H/.hangar/current/scripts/install-hangar-send.sh" > "$ROOT/out" 2>&1 ); rc=$?
 expect_eq "conta pulada pelo registro, no instalador: sai 3" "$rc" 3 "$ROOT/out"
 grep -q '^claude-md-block' "$ROOT/calls" && pass "conta pulada: o resto roda" || flunk "conta pulada: o resto roda" "$ROOT/out"

@@ -200,7 +200,7 @@ mod tests {
         assert!(!codex_sidecar::path(dir.path(), "codex-proj").exists());
     }
 
-    /// Revisão de falhas caladas: o app-server que ignora o SIGTERM segue vivo no prazo, e o arquivo da
+    /// O app-server que ignora o SIGTERM segue vivo no prazo, e o arquivo da
     /// sessão fica (sem ele, ninguém acharia o processo que continua escutando).
     #[cfg(target_os = "linux")]
     #[test]
@@ -242,7 +242,7 @@ mod tests {
         port
     }
 
-    /// Revisão de falhas caladas: só servidor fora (ou que não conhece a sessão) leva à limpeza local;
+    /// Só servidor fora (ou que não conhece a sessão) leva à limpeza local;
     /// a recusa dele (500 `session_kill_unconfirmed`) volta com o status e o código.
     #[tokio::test]
     async fn only_an_unreachable_server_falls_back_to_the_local_cleanup() {
@@ -259,8 +259,7 @@ mod tests {
         assert_eq!(delete(&no_token, "codex-proj").await, Deleted::Unreachable);
     }
 
-    /// PR-09: no Windows o app-server vivo daquele endereço sai pelo `TerminateProcess` antes do arquivo
-    /// sumir (o Python fazia `os.kill`, que lá é `TerminateProcess`).
+    /// No Windows o app-server vivo daquele endereço sai pelo `TerminateProcess` antes do arquivo sumir.
     #[cfg(windows)]
     #[test]
     fn the_live_app_server_of_that_address_is_terminated_on_windows() {

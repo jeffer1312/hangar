@@ -54,13 +54,10 @@ pub(crate) fn pair(cx: &Ctx, args: &[String], out: &mut dyn Write, err: &mut dyn
     if peer.is_empty() {
         let Some(result) = object(&response) else { return unreadable(err, &path) };
         let gid = if truthy(result.get("gid")) { text(&result["gid"]) } else { String::new() };
-        let me = identity::me(cx, false, err);
         let _ = writeln!(out, "grupo de orquestração criado: {me}, sozinha, gid {gid} (ninguém recebe aviso; o time entra depois)");
     } else if orq {
-        let me = identity::me(cx, false, err);
         let _ = writeln!(out, "pareado: {me} <-> {peer} (grupo de orquestração: ninguém recebe aviso; o kick-off traz o protocolo)");
     } else {
-        let me = identity::me(cx, false, err);
         let _ = writeln!(out, "pareado: {me} <-> {peer} (registrado no app; quem estava sem grupo recebe o protocolo)");
     }
     0

@@ -86,8 +86,8 @@ fn r6_03_session_key_families_go_by_the_stem_of_the_json_on_the_first_level() {
     assert!(other.exists() && nested.exists());
 }
 
-/// H-87/R1-D12: o `.hangar-prompt` do `state-hook` (501 arquivos sem poda nesta máquina) sai pela mesma
-/// regra das famílias por chave; a sobra do temporário com pid, pela idade.
+/// O `.hangar-prompt` do `state-hook` sai pela mesma regra das famílias por chave; a sobra do
+/// temporário com pid, pela idade.
 #[test]
 fn h87_the_prompt_marker_is_pruned_by_key_and_its_tmp_by_age() {
     let dir = tempfile::tempdir().unwrap();

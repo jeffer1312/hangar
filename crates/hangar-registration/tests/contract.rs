@@ -96,7 +96,7 @@ fn adjust(group: &str, case: &mut Case, block: Option<&str>) {
     let step = &mut case.steps[0];
     let missing = |path: &str| format!("hangar-mcp-headers: CP_AUTH_TOKEN ausente em {path}\n");
     match (group, case.name.as_str()) {
-        // R3-D07: sem a linha (ou com `export`, que o leitor do servidor não lê) a falha diz a frase.
+        // Sem a linha (ou com `export`, que o leitor do servidor não lê) a falha diz a frase.
         ("mcp-headers", "env-file-empty" | "no-token-line" | "token-export-prefix") => {
             step.code = 1;
             step.stderr = missing("$T/home/.hangar/config/.env");
@@ -111,38 +111,38 @@ fn adjust(group: &str, case: &mut Case, block: Option<&str>) {
             step.stdout = "{\"Authorization\": \"Bearer tok-local\"}\n".into();
             step.stderr = String::new();
         }
-        // Decisão 16 (achado 18) e decisão 14.8: o `.env` passa pelo leitor do servidor: a última linha
+        // O `.env` passa pelo leitor do servidor: a última linha
         // vale, aspas e `\r` saem, `#` depois de espaço é comentário.
         ("mcp-headers", "token-duplicated") => step.stdout = "{\"Authorization\": \"Bearer dois\"}\n".into(),
         ("mcp-headers", "token-quoted-crlf") => step.stdout = "{\"Authorization\": \"Bearer tok local\"}\n".into(),
         ("mcp-headers", "token-with-equals-and-hash") => step.stdout = "{\"Authorization\": \"Bearer a=b\"}\n".into(),
-        // R3-D02: `.env` ausente é frase, não traceback.
+        // `.env` ausente é frase, não traceback.
         ("registrar-mcp", "no-env-file") => {
             step.code = 1;
             step.stderr = "erro: .env não encontrado: $T/inst/backend/.env\n".into();
         }
-        // Achado 5 e decisão 14.8: o token sai sem as aspas e vai escapado no TOML; o Codex é registrado.
+        // O token sai sem as aspas e vai escapado no TOML; o Codex é registrado.
         ("registrar-mcp", "env-quoted-token-export-spaces") => {
             step.code = 0;
             step.stderr = String::new();
             step.stdout.push_str("ok: MCP hangar em $T/home/.codex/config.toml\n");
             step.created.insert("home/.codex/config.toml".into(), file("0o600", &marked("tok q")));
         }
-        // Achado 6: a pasta do Codex sem escrita vira `erro:` com código 1, sem traceback.
+        // A pasta do Codex sem escrita vira `erro:` com código 1, sem traceback.
         ("registrar-mcp", "codex-dir-not-writable") => {
             case.needs_permissions = true;
             step.stderr = "erro: $T/home/.codex/config.toml: MCP hangar não registrado: [Errno 13] Permission denied: \
                            '$T/home/.codex/config.toml.hangar-novo'\nerro: alguma conta do Codex ficou sem o MCP hangar (veja acima)\n".into();
         }
         ("registrar-mcp", "claude-account-dir-not-writable") => case.needs_permissions = true,
-        // Achado 8: `.codex-*.lock` e conta adicional vazia não recebem config.toml.
+        // `.codex-*.lock` e conta adicional vazia não recebem config.toml.
         ("registrar-mcp", "codex-homes-glob") => {
             step.stdout = step.stdout.replace("ok: MCP hangar em $T/home/.codex-b/config.toml\n", "")
                 .replace("ok: MCP hangar em $T/home/.codex-x.lock/config.toml\n", "");
             step.created.remove("home/.codex-b/config.toml");
             step.created.remove("home/.codex-x.lock/config.toml");
         }
-        // Achado 7: link continua link; grava-se no alvo.
+        // Link continua link; grava-se no alvo.
         ("registrar-mcp", "claude-json-is-symlink") => {
             let after = step.changed.remove("home/.claude.json").unwrap();
             step.changed.insert("work/real.claude.json".into(), after);
@@ -151,11 +151,11 @@ fn adjust(group: &str, case: &mut Case, block: Option<&str>) {
             let after = step.changed.remove("home/.codex/config.toml").unwrap();
             step.changed.insert("work/real.toml".into(), after);
         }
-        // Revisão da R3 (decisão 19): o settings.json mantém o modo dele, como o `.claude.json`.
+        // O settings.json mantém o modo dele, como o `.claude.json`.
         ("registrar-mcp", "settings-partial-perms-order") => {
             step.changed.get_mut("home/.claude/settings.json").unwrap()["mode"] = json!("0o600");
         }
-        // L7 / R3-D10: o fim de linha do arquivo fica.
+        // O fim de linha do arquivo fica.
         ("registrar-mcp", "codex-crlf-old-token") => {
             let after = step.changed.get_mut("home/.codex/config.toml").unwrap();
             let content = crlf(after["content"]["text"].as_str().unwrap());
@@ -169,14 +169,14 @@ fn adjust(group: &str, case: &mut Case, block: Option<&str>) {
             let content = format!("antes\r\ndepois\r\n\r\n{}\r\n", crlf(block.unwrap()));
             step.changed.insert("home/.claude/CLAUDE.md".into(), file("0o644", &content));
         }
-        // R3-D06: início sem fim deixa o arquivo como está e não diz ATUALIZADO.
+        // Início sem fim deixa o arquivo como está e não diz ATUALIZADO.
         ("claude-md-block", "start-without-end" | "end-before-start") => {
             step.code = 1;
             step.stdout = String::new();
             step.stderr = "aviso: $T/home/.claude/CLAUDE.md tem o início do bloco Sessões-irmãs sem o fim; \
                            arquivo deixado como está\n".into();
         }
-        // R3-D02: traceback e erro do bash viram frase com o arquivo.
+        // Traceback e erro do bash viram frase com o arquivo.
         ("claude-md-block", "file-read-only" | "file-read-only-with-block") => {
             case.needs_permissions = true;
             step.stderr = "erro: não consegui gravar $T/home/.claude/CLAUDE.md: [Errno 13] Permission denied: \
@@ -185,7 +185,7 @@ fn adjust(group: &str, case: &mut Case, block: Option<&str>) {
         ("claude-md-block", "non-utf8-with-block") => {
             step.stderr = "erro: $T/home/.claude/CLAUDE.md não é texto UTF-8 — bloco Sessões-irmãs não gravado\n".into();
         }
-        // Achado 4: DEL escapado; o TOML do agente é válido.
+        // DEL escapado; o TOML do agente é válido.
         ("instalar-agentes", "body-hard-chars") => {
             for entry in step.created.values_mut().chain(step.changed.values_mut()) {
                 if let Some(content) = entry["content"]["text"].as_str().map(|t| t.replace('\u{7f}', "\\u007f")) {
@@ -199,7 +199,7 @@ fn adjust(group: &str, case: &mut Case, block: Option<&str>) {
         }
         _ => {}
     }
-    // Decisão 22: o arquivo da conta que o registro pula é `erro:` (a saída segue 0, como antes), e o
+    // O arquivo da conta que o registro pula é `erro:` (a saída segue 0, como antes), e o
     // install-hangar-send.sh o conta como pendência.
     if group == "registrar-mcp" {
         step.stderr = step.stderr.replace("aviso: ", "erro: ");

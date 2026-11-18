@@ -55,7 +55,7 @@ fn decide(case: &Value, dir: &Path) -> Result<plan::Plan, String> {
     plan::decide(args, existing.as_ref(), &facts).map_err(|refusal| refusal.render())
 }
 
-/// R2-S01: toda recusa antes de qualquer efeito, com a frase e o código 2 do lançador Python.
+/// Toda recusa antes de qualquer efeito, com a frase e o código 2 do lançador Python.
 #[cfg(unix)]
 #[test]
 fn every_refusal_matches_the_python_launcher() {
@@ -75,7 +75,7 @@ fn spawned<'a>(case: &'a Value, role: &str) -> Vec<&'a Value> {
 
 fn strings(value: &Value) -> Vec<String> { value.as_array().unwrap().iter().map(|a| placed(a.as_str().unwrap())).collect() }
 
-/// R2-S02/S11: o argv do app-server e o da TUI saem iguais aos do lançador Python, na criação, na
+/// O argv do app-server e o da TUI saem iguais aos do lançador Python, na criação, na
 /// retomada, no relançamento da própria sessão e na conversa importada.
 #[cfg(unix)]
 #[test]
@@ -108,9 +108,8 @@ impl super::Screen for NoScreen {
     fn say(&self, _: &str) {}
 }
 
-/// R2-S03 e a correção da decisão 15: a conta adicional não leva identidade nenhuma da principal. O
-/// lançador Python deixava `CHATGPT_ACCOUNT_ID`, `OPENAI_ACCOUNT_ID`, `CODEX_ACCOUNT_ID` e
-/// `CODEX_PROJECT_ID` chegarem ao app-server (`launcher__prepare-secondary-ready`).
+/// A conta adicional não leva identidade nenhuma da principal: `CHATGPT_ACCOUNT_ID`,
+/// `OPENAI_ACCOUNT_ID`, `CODEX_ACCOUNT_ID` e `CODEX_PROJECT_ID` não chegam ao app-server.
 #[cfg(unix)]
 #[test]
 fn the_additional_account_environment_has_no_identity_of_the_main_one() {

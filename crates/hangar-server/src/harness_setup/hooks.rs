@@ -107,10 +107,28 @@ pub fn runs_subcommand(command: &Value, mode: &str, windows: bool) -> bool {
     })
 }
 
-/// Script Python de antes pelo nome do arquivo; subcomando, só atrás de um programa do Hangar.
+/// Script Python de antes pelo nome do arquivo, ou pelo fim do caminho quando o nome traz pasta;
+/// subcomando, só atrás de um programa do Hangar.
 fn refers_any(command: &Value, names: &[&str], windows: bool) -> bool {
     names.iter().any(|name| {
-        if name.ends_with(".py") { refers_platform(command, name, true, windows) } else { runs_subcommand(command, name, windows) }
+        if name.contains('/') {
+            refers_path_suffix(command, name, windows)
+        } else if name.ends_with(".py") {
+            refers_platform(command, name, true, windows)
+        } else {
+            runs_subcommand(command, name, windows)
+        }
+    })
+}
+
+/// Algum token termina em `/<suffix>`: só o nome do arquivo pegaria um script pessoal homônimo.
+pub(super) fn refers_path_suffix(command: &Value, suffix: &str, windows: bool) -> bool {
+    let suffix = format!("/{suffix}");
+    command.as_str().is_some_and(|text| {
+        tokens(text, windows).iter().any(|token| {
+            let token = token.trim_matches(['"', '\'']);
+            if windows { token.replace('\\', "/").ends_with(&suffix) } else { token.ends_with(&suffix) }
+        })
     })
 }
 

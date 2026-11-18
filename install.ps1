@@ -77,25 +77,25 @@ $raiz = Split-Path -Parent $MyInvocation.MyCommand.Path
 $pacote = (Test-Path -LiteralPath "$raiz\manifest.json") -and -not (Test-Path -LiteralPath "$raiz\.git")
 # O hangar-server da instalacao (regra unica em scripts\hangar-server-command.ps1). No checkout novo
 # ele so existe depois do passo dos binarios Rust.
-$srvComando = Join-Path $raiz 'scripts\hangar-server-command.ps1'
+$serverCommand = Join-Path $raiz 'scripts\hangar-server-command.ps1'
 # No -Update do checkout o hangar-server achado pode ser mais antigo que este codigo: subcomando que
 # ele nao conhece (saida 2 com argumentos validos) vira aviso, com o motivo. No pacote e na
 # instalacao nova o binario veio com o codigo, e a falta e erro.
-$srvAntigoAvisa = $Update -and -not $pacote
-$srvSaida = ''
+$serverOldWarns = $Update -and -not $pacote
+$serverOutput = ''
 # Roda um subcomando do hangar-server desta instalacao e guarda a saida (stdout e stderr) para o
-# SrvAntigo conferir a frase: saida 2 sozinha nao prova que o binario e antigo.
+# ServerTooOld conferir a frase: saida 2 sozinha nao prova que o binario e antigo.
 function Srv {
     $anterior = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
-        $script:srvSaida = & $PowerShellExe -NoProfile -ExecutionPolicy Bypass -File $srvComando @args 2>&1 | Out-String
+        $script:serverOutput = & $PowerShellExe -NoProfile -ExecutionPolicy Bypass -File $serverCommand @args 2>&1 | Out-String
         return $LASTEXITCODE
     } finally { $ErrorActionPreference = $anterior }
 }
-function SrvAntigo($rc, $oque, $sub) {
-    if ($rc -ne 2 -or -not $script:srvAntigoAvisa -or $script:srvSaida -notmatch 'subcomando desconhecido') { return $false }
-    Falta "${oque}: o hangar-server desta maquina e anterior a este codigo (nao tem '$sub') - rode scripts\install-server-binaries.ps1 e .\install.ps1 -Update de novo"
+function ServerTooOld($rc, $what, $sub) {
+    if ($rc -ne 2 -or -not $script:serverOldWarns -or $script:serverOutput -notmatch 'subcomando desconhecido') { return $false }
+    Falta "${what}: o hangar-server desta maquina e anterior a este codigo (nao tem '$sub') - rode scripts\install-server-binaries.ps1 e .\install.ps1 -Update de novo"
     return $true
 }
 . "$raiz\scripts\windows-tasks.ps1"
@@ -1130,7 +1130,7 @@ foreach ($a in $script:agentesNovos) {
 $argsVapid = if ($pacote) { @('vapid-setup') } else { @('vapid-setup', '--root', $raiz) }
 $rcVapid = Srv @argsVapid
 if ($rcVapid -eq 0) { Ok 'chaves do push para o celular prontas' }
-elseif (SrvAntigo $rcVapid 'chaves do push para o celular' 'vapid-setup') { }
+elseif (ServerTooOld $rcVapid 'chaves do push para o celular' 'vapid-setup') { }
 elseif ($pacote) { Falha 'chaves do push para o celular' 'rodar na mao:  ~\.hangar\current\bin\hangar-server.exe vapid-setup' }
 else { Falha 'chaves do push para o celular' "rodar na mao:  powershell -File scripts\hangar-server-command.ps1 vapid-setup --root `"$raiz`"" }
 # Prova do minimo: sem nenhum agente o app abre, mas nao tem o que pilotar.
@@ -2612,8 +2612,8 @@ if (-not $bash) {
     $anterior = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
-        $avisaAntigo = if ($srvAntigoAvisa) { '1' } else { '0' }
-        $saida = & $bash '-lc' "export PATH='$binMsys':`$PATH; cd '$rota' && HANGAR_SRV_ANTIGO_AVISA=$avisaAntigo ./scripts/install-hangar-send.sh" 2>&1
+        $oldWarns = if ($serverOldWarns) { '1' } else { '0' }
+        $saida = & $bash '-lc' "export PATH='$binMsys':`$PATH; cd '$rota' && HANGAR_SERVER_OLD_WARNS=$oldWarns ./scripts/install-hangar-send.sh" 2>&1
     } finally { $ErrorActionPreference = $anterior }
     # 3: tudo rodou, mas algo ficou pulado (hangar-server anterior a este codigo, ou conta que o
     # registro pulou): pendencia, com as linhas que dizem o que foi.
@@ -2678,7 +2678,7 @@ else {
 # checagem de fumaca (so com a instalacao no fim); no checkout e o mesmo comando, pela raiz dele.
 if (-not $Update -and -not $pacote) {
     Titulo 'Passos de atualizacao'
-    if ((Nativo $PowerShellExe -NoProfile -ExecutionPolicy Bypass -File $srvComando install-package --mark-steps --root $raiz) -eq 0) {
+    if ((Nativo $PowerShellExe -NoProfile -ExecutionPolicy Bypass -File $serverCommand install-package --mark-steps --root $raiz) -eq 0) {
         Ok 'marcados como ja aplicados (instalacao nova)'
     } else {
         Falha 'passos de atualizacao' "nao foram marcados como aplicados - rode:  powershell -File scripts\hangar-server-command.ps1 install-package --mark-steps --root `"$raiz`""
@@ -2760,12 +2760,12 @@ Mark-Step 'final' 'fazendo'
 Titulo '8/8 Checagem de fumaca'
 $rc = Srv install-token
 # Binario antigo sem o subcomando: a checagem nao rodou, e o item fica pendente, nunca ok.
-$fumacaPulada = $false
+$smokeSkipped = $false
 if ($rc -ne 0) {
-    if (-not (SrvAntigo $rc 'checagem do hangar-server' 'install-token')) {
+    if (-not (ServerTooOld $rc 'checagem do hangar-server' 'install-token')) {
         Erro 'o hangar-server nao executa neste Windows - sem ele os atalhos e os hooks param'; exit 1
     }
-    $fumacaPulada = $true
+    $smokeSkipped = $true
     $pendencias += 'checagem do hangar-server (binario anterior a este codigo)'
 } else {
     Ok 'o hangar-server executa neste Windows'
@@ -2775,15 +2775,15 @@ if ($rc -ne 0) {
 # mais novo ela nao roda. So aviso: o resto do Hangar nao usa Python. O python3 da Loja (WindowsApps)
 # nao conta e nem e executado: ele abre a Loja.
 if (Test-Path -LiteralPath (Join-Path $HOME '.claude\skills\orquestrar')) {
-    $pyOrq = Get-Command python3, python -CommandType Application -All -ErrorAction SilentlyContinue |
+    $orqPython = Get-Command python3, python -CommandType Application -All -ErrorAction SilentlyContinue |
         Where-Object { $_.Source -notlike '*\WindowsApps\*' } | Select-Object -First 1
-    $versaoOrq = ''
-    if ($pyOrq) { $versaoOrq = & { $ErrorActionPreference = 'Continue'; & $pyOrq.Source --version 2>&1 } | Out-String }
-    if (-not ($versaoOrq -match 'Python 3\.(\d+)' -and [int]$Matches[1] -ge 10)) {
+    $orqPythonVersion = ''
+    if ($orqPython) { $orqPythonVersion = & { $ErrorActionPreference = 'Continue'; & $orqPython.Source --version 2>&1 } | Out-String }
+    if (-not ($orqPythonVersion -match 'Python 3\.(\d+)' -and [int]$Matches[1] -ge 10)) {
         Falta 'a orquestracao (skill orquestrar) precisa de um python3 3.10 ou mais novo ate o PR dela; sem ele ela nao roda. O resto do Hangar nao usa Python.'
     }
 }
-if ($fumacaPulada) { Mark-Item 'backend-importa' 'pendente' 'as ferramentas abrem' }
+if ($smokeSkipped) { Mark-Item 'backend-importa' 'pendente' 'as ferramentas abrem' }
 else { Mark-Item 'backend-importa' 'ok' 'as ferramentas abrem' }
 
 # Sobra de rodada anterior: o kill pode demorar, entao limpa antes de contar de novo.

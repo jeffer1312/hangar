@@ -328,7 +328,7 @@ mod tests {
         }
     }
 
-    /// Revisão R1, item 7: só `Mn` sai; marca espaçada (`Mc`) e envolvente (`Me`) ficam, como no Python.
+    /// Só `Mn` sai; marca espaçada (`Mc`) e envolvente (`Me`) ficam, para casar a mesma regex de antes.
     #[test]
     fn only_nonspacing_marks_are_stripped() {
         assert_eq!(without_accents("Página"), "pagina");

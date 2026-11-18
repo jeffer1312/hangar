@@ -187,13 +187,15 @@ pub(crate) fn run(cx: &Ctx, args: &[String], out: &mut dyn Write, err: &mut dyn 
         };
         endpoint = Endpoint { base, token, connect: 8.0, total: cx.total(), peer: None };
     }
+    // Lida uma vez só, quando precisar: cada leitura custa até quatro chamadas ao tmux.
+    let mut me: Option<String> = None;
     if options.provider.is_empty() {
         // --conta e --subagente sem --provider sempre foram Claude; o padrão lembrado não os reinterpreta.
         if !options.engine.is_empty() || !options.account.is_empty() || !options.subagent.is_empty() {
             options.provider = "claude".into();
         } else if !options.profile.is_empty() {
             options.provider = "omp".into();
-        } else if remote.is_empty() && options.resume.is_empty() && identity::me(cx, false, err) != "cli" {
+        } else if remote.is_empty() && options.resume.is_empty() && me.get_or_insert_with(|| identity::me(cx, false, err)).as_str() != "cli" {
             // Chamado de uma sessão: o servidor usa o agente dela (a criadora).
         } else {
             match default_provider(cx, &endpoint, err) {
@@ -267,7 +269,7 @@ pub(crate) fn run(cx: &Ctx, args: &[String], out: &mut dyn Write, err: &mut dyn 
     // A sessão que roda o comando é a criadora; noutra máquina ela não existe, e "cli" é não saber.
     let mut creator = String::new();
     if remote.is_empty() {
-        creator = identity::me(cx, false, err);
+        creator = me.take().unwrap_or_else(|| identity::me(cx, false, err));
         if creator == "cli" {
             creator.clear();
         }

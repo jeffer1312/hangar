@@ -57,7 +57,7 @@ fn headers_keep_the_session_key_before_the_cano_key() {
     assert_eq!(out, "{\"Authorization\": \"Bearer t\", \"X-Hangar-Key\": \"cano\", \"X-Hangar-Session\": \"sess\\u00e3o\"}\n");
 }
 
-/// Achado 5: um `"` no token derrubava o passo do Codex com traceback depois de gravar o Claude.
+/// Um `"` no token não derruba o passo do Codex depois de gravar o Claude.
 #[test]
 fn token_with_quote_still_registers_codex_with_valid_toml() {
     let dir = tempfile::tempdir().unwrap();
@@ -70,7 +70,7 @@ fn token_with_quote_still_registers_codex_with_valid_toml() {
     assert_eq!(doc["mcp_servers"]["hangar"]["http_headers"]["Authorization"].as_str(), Some("Bearer a\"b\\c"));
 }
 
-/// Achado 7: o `os.replace` trocava o link por um arquivo comum.
+/// Gravar não troca o link por um arquivo comum.
 #[test]
 fn linked_claude_json_and_codex_config_stay_links() {
     let dir = tempfile::tempdir().unwrap();
@@ -139,7 +139,7 @@ fn block_keeps_lf_on_windows() {
     assert_eq!(text, format!("antes\n{BLOCK}\ndepois\n"));
 }
 
-/// Achado 8: `.codex-*.lock` e conta adicional vazia recebiam config.toml.
+/// `.codex-*.lock` e conta adicional vazia não recebem config.toml.
 #[test]
 fn lock_and_empty_codex_accounts_get_no_config() {
     let dir = tempfile::tempdir().unwrap();
@@ -155,7 +155,7 @@ fn lock_and_empty_codex_accounts_get_no_config() {
     assert!(home.join(".codex-cheia/config.toml").exists());
 }
 
-/// L7 / R3-D10: o Python reescrevia o config.toml em LF.
+/// O config.toml em CRLF não é reescrito em LF.
 #[test]
 fn codex_config_keeps_crlf() {
     let dir = tempfile::tempdir().unwrap();
@@ -168,7 +168,7 @@ fn codex_config_keeps_crlf() {
     assert!(!text.replace("\r\n", "").contains('\n'), "{text:?}");
 }
 
-/// Achado 6: pasta do Codex sem escrita dava traceback; agora é `erro:` e as outras seguem.
+/// Pasta do Codex sem escrita é `erro:`, e as outras seguem.
 #[cfg(unix)]
 #[test]
 fn codex_dir_without_write_is_an_error_line_and_the_rest_continues() {
@@ -190,7 +190,7 @@ fn codex_dir_without_write_is_an_error_line_and_the_rest_continues() {
     assert!(std::fs::read_to_string(home.join(".codex-b/config.toml")).unwrap().contains("# >>> hangar: mcp"));
 }
 
-/// Decisão 22: a conta com `.claude.json` cortado e o settings ilegível seguem saindo 0, como antes,
+/// A conta com `.claude.json` cortado e o settings ilegível seguem saindo 0, como antes,
 /// mas as linhas dizem `erro:` para o instalador contar a pendência; nada é gravado neles.
 #[test]
 fn skipped_account_files_are_error_lines_and_stay_untouched() {
@@ -208,7 +208,7 @@ fn skipped_account_files_are_error_lines_and_stay_untouched() {
     assert_eq!(std::fs::read_to_string(home.join(".claude/settings.json")).unwrap(), "{\"permissions\": ");
 }
 
-/// R3-D06: início sem fim deixava o arquivo igual e dizia ATUALIZADO.
+/// Início sem fim deixa o arquivo igual e não diz ATUALIZADO.
 #[test]
 fn block_start_without_end_leaves_the_file_and_fails() {
     let dir = tempfile::tempdir().unwrap();
@@ -221,7 +221,7 @@ fn block_start_without_end_leaves_the_file_and_fails() {
     assert_eq!(std::fs::read_to_string(&file).unwrap(), before);
 }
 
-/// Revisão de falhas caladas: o CLAUDE.md global é gravado por temporário + rename. Quando o
+/// O CLAUDE.md global é gravado por temporário + rename. Quando o
 /// temporário não pode ser escrito (aqui, um diretório no lugar dele), a troca falha com `erro:` e o
 /// arquivo do usuário fica inteiro, na troca e no acréscimo.
 #[test]
@@ -238,7 +238,7 @@ fn block_write_failure_leaves_the_global_claude_md_whole() {
     }
 }
 
-/// R3-D10: o bloco trocado num CLAUDE.md em CRLF saía em LF.
+/// O bloco trocado num CLAUDE.md em CRLF continua em CRLF.
 #[test]
 fn block_keeps_crlf_when_replacing_and_appending() {
     let dir = tempfile::tempdir().unwrap();
@@ -261,7 +261,7 @@ fn block_without_text_on_stdin_is_a_usage_error() {
     assert!(!dir.path().join(".claude/CLAUDE.md").exists());
 }
 
-/// Achado 4: o DEL saía cru e o Codex descartava o arquivo do agente.
+/// O DEL sai escapado: cru, o Codex descartaria o arquivo do agente.
 #[test]
 fn agent_toml_escapes_del_and_parses() {
     let agent = agents_install::codex_agent("n", "d", "DEL[\u{7f}] ctrl[\u{1}] \"\"\" \\ 🚀\n");
@@ -270,7 +270,7 @@ fn agent_toml_escapes_del_and_parses() {
     assert!(agent.contains("\\u007f"));
 }
 
-/// R3-D02: destino que é pasta derrubava o instalador com traceback.
+/// Destino que é pasta vira frase, não traceback que derruba o instalador.
 #[test]
 fn agent_destination_that_is_a_directory_is_an_error_line() {
     let dir = tempfile::tempdir().unwrap();

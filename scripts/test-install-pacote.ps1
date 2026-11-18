@@ -133,7 +133,7 @@ public static class FakeMark {
     $binarios = $texto.IndexOf("Titulo 'Binarios Rust'")
     $vapid = $texto.IndexOf('@argsVapid')
     Assert ($binarios -gt 0 -and $vapid -gt $binarios) 'chaves do push depois dos binarios'
-    Assert ($texto.Contains('-File $srvComando install-token')) 'fumaca pelo hangar-server'
+    Assert ($texto.Contains('-File $serverCommand @args') -and $texto.Contains('$rc = Srv install-token')) 'fumaca pelo hangar-server'
     $fumaca = $texto.IndexOf("Ok 'o multiplexador mata sessao'")
     $marca = $texto.IndexOf('install-package --mark-steps 2>&1')
     $fim = $texto.IndexOf('# -- Confere e entrega o acesso')

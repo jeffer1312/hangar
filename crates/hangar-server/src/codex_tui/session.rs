@@ -410,7 +410,7 @@ mod tests {
         assert_eq!(session.selected_tier().as_deref(), Some("priority"), "a conversa do arquivo é a atual");
     }
 
-    /// PR-07: com um app-server que ignora o pedido de saída e uma escuta que não termina, a limpeza do
+    /// Com um app-server que ignora o pedido de saída e uma escuta que não termina, a limpeza do
     /// fechamento do console cabe no teto (o Windows mata o processo uns 5 s depois) e o arquivo sai.
     #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread")]

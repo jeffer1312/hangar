@@ -1,7 +1,7 @@
 //! Repete pelos hooks Rust as capturas reais do Python (`tests/fixtures/contract/*.json`, base
 //! 2ad8e335e): mesmo stdin, mesmo ambiente e mesma árvore antes; mesmo código, stdout, stderr e
 //! arquivos depois. `ts` é comparado por presença (modo N); as diferenças aceitas pelo contrato
-//! (R1-D05…D08) têm o esperado escrito no próprio teste.
+//! têm o esperado escrito no próprio teste.
 #![cfg(unix)]
 use base64::Engine;
 use hangar_agent_hooks::{Context, Outcome, askq, nav, preview, state, tree::Processes};
@@ -247,7 +247,7 @@ fn nav_world(name: &str, root: &Path) -> (u16, Option<Requests>) {
 fn log_line_shape(expected: &str, actual: &str) -> bool {
     let re = regex::Regex::new(r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d ").unwrap();
     let (expected, actual): (Vec<&str>, Vec<&str>) = (expected.lines().collect(), actual.lines().collect());
-    // Texto da exceção pode diferir (decisão 13.4); a forma, o começo do motivo e o fim não.
+    // Texto da exceção é de cada linguagem; a forma, o começo do motivo e o fim não.
     expected.len() == actual.len()
         && actual.iter().all(|line| re.is_match(line))
         && expected.iter().zip(&actual).all(|(e, a)| {
@@ -299,14 +299,14 @@ fn run(hook: &str, stdin: &[u8], ctx: &Context, fixture: &Value) -> Outcome {
 
 /// Diferenças aceitas: o esperado do Rust onde ele difere da captura.
 fn accepted(name: &str, step: usize, mut expected: Value) -> Value {
-    // R1-D08: o índice 0 atrasado da mensagem fechada não republica (o Python republicava).
+    // O índice 0 atrasado da mensagem fechada não republica (o Python republicava).
     if (name, step) == ("preview__late-delta-index0-after-stop", 3) {
         expected["files"] = serde_json::json!({"created": {}, "changed": {}, "removed": []});
     }
     expected
 }
 
-/// R1-D06: `session_id` hostil fica dentro da pasta do marcador, com o basename.
+/// `session_id` hostil fica dentro da pasta do marcador, com o basename.
 const BASENAME_CASES: [&str; 3] = ["state__hostile-session_id-dotdot", "state__hostile-session_id-slash", "askq__pre-hostile-session_id"];
 
 fn replay(name: &str) {
@@ -338,8 +338,8 @@ fn replay(name: &str) {
         let before = snapshot(root);
         let outcome = run(hook, &stdin_of(&step, &fixture), &ctx, &fixture);
         let mut after = snapshot(root);
-        // Revisão de falhas caladas: a pasta de marcadores sem escrita deixa a linha no log privado
-        // (o Python calava); fora isso, nada muda no disco.
+        // A pasta de marcadores sem escrita deixa a linha no log privado, para a falha não ficar calada;
+        // fora isso, nada muda no disco.
         if name == "state__config-dir-readonly" || name == "askq__config-not-writable" {
             let file = if hook == "askq" { askq::LOG } else { state::LOG };
             let line = format!("home/.hangar/logs/privado/{file}");
@@ -348,7 +348,7 @@ fn replay(name: &str) {
         }
         assert_eq!(outcome.code as i64, step["code"].as_i64().unwrap(), "{name}[{index}] código");
         let stdout = if name == "nav__stdin-cp1252-simulated" {
-            // R1-D05: o Rust lê UTF-8 também no Windows; vale o resultado da referência UTF-8.
+            // O Rust lê UTF-8 também no Windows; vale o resultado da referência UTF-8.
             bytes_of(&load("nav__stdin-utf8-reference")["steps"][0]["stdout"]).unwrap()
         } else {
             bytes_of(&step["stdout"]).unwrap_or_default()
@@ -369,7 +369,7 @@ fn replay(name: &str) {
             continue;
         }
         let want_created: BTreeSet<String> = files["created"].as_object().into_iter().flatten().map(|(k, _)| k.clone()).collect();
-        // R1-D07: o temporário fixo de antes (`<sid>.json.tmp`) não é mais o do hook; quem o leva é a poda.
+        // O temporário fixo de antes (`<sid>.json.tmp`) não é mais o do hook; quem o leva é a poda.
         let want_removed: BTreeSet<String> = files["removed"].as_array().into_iter().flatten()
             .filter_map(|v| v.as_str()).filter(|p| !p.ends_with(".tmp")).map(str::to_owned).collect();
         let want_changed: BTreeSet<String> = files["changed"].as_object().into_iter().flatten().map(|(k, _)| k.clone()).collect();
@@ -423,11 +423,11 @@ macro_rules! replay_all {
     };
 }
 
-// H-01…H-12 (marcadores de estado, prompt e ativo; árvore de processos; stdin tolerante).
+// Marcadores de estado, prompt e ativo; árvore de processos; stdin tolerante.
 replay_all!(h01_h12_state_hook_matches_the_python_captures, "state__");
-// H-15…H-23 (prévia por índice, Stop, retardatários, trava, falhas com uma linha no stderr).
+// Prévia por índice, Stop, retardatários, trava, falhas com uma linha no stderr.
 replay_all!(h15_h23_preview_hook_matches_the_python_captures, "preview__");
-// H-43…H-46 (pergunta gravada crua, apagada só pela mesma chamada, sem stdout).
+// Pergunta gravada crua, apagada só pela mesma chamada, sem stdout.
 replay_all!(h43_h46_askq_capture_matches_the_python_captures, "askq__");
-// H-32…H-41 (navegador: pid vivo, nome da sessão, URL, regex, Jev, pausa, log).
+// Navegador: pid vivo, nome da sessão, URL, regex, Jev, pausa, log.
 replay_all!(h32_h41_nav_hook_matches_the_python_captures, "nav__");

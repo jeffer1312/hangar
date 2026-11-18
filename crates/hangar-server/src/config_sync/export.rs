@@ -146,8 +146,13 @@ pub const OWN_HOOKS: &[&str] = &[
 pub fn own_hooks(_roots: &Roots) -> BTreeSet<String> {
     OWN_HOOKS.iter().map(|name| (*name).to_owned()).collect()
 }
+/// Subcomando só conta atrás de um programa do Hangar, como na instalação: hook pessoal com o mesmo
+/// argumento viaja.
 pub fn is_own_hook(command: &str, own: &BTreeSet<String>) -> bool {
     own.iter().any(|name| {
+        if !name.ends_with(".py") {
+            return crate::harness_setup::hooks::runs_subcommand(&Value::from(command), name, cfg!(windows));
+        }
         let pattern = format!(r#"(?:^|[\s/\\"']){}(?:$|[\s"'])"#, regex::escape(name));
         regex::Regex::new(&pattern).unwrap().is_match(command)
     })

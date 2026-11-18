@@ -13,31 +13,40 @@ const WARNING_TAIL: &str = "Reabra a sessão pelo wrapper atualizado pra corrigi
 
 /// `quiet` = o `2>/dev/null` do script: o aviso do cliente anexado não sai.
 pub(crate) fn me(cx: &Ctx, quiet: bool, err: &mut dyn Write) -> String {
+    let (name, attached) = resolve(cx);
+    if attached && !quiet {
+        warn_attached(&name, err);
+    }
+    name
+}
+
+/// O nome e se ele saiu do cliente anexado, o caso que pede aviso.
+pub(crate) fn resolve(cx: &Ctx) -> (String, bool) {
     if let Some(name) = headless_name(cx) {
-        return name;
+        return (name, false);
     }
     if let Some(pane) = cx.var("TMUX_PANE")
         && let Some(name) = pane_owner(cx, pane)
     {
-        return name;
+        return (name, false);
     }
     if let Some(name) = spec_name(cx) {
-        return name;
+        return (name, false);
     }
     if let Some(stamp) = cx.var("CP_SESSION_NAME")
         && cx.host.tmux(&["has-session", "-t", format!("={stamp}").as_str()]).is_some_and(|run| run.code == 0)
     {
-        return stamp.to_owned();
+        return (stamp.to_owned(), false);
     }
-    let mut current = String::new();
-    if cx.var("TMUX").is_some() {
-        current = attached_client(cx).unwrap_or_default();
-        let shown = if current.is_empty() { "cli" } else { &current };
-        if !quiet {
-            let _ = writeln!(err, "{WARNING_HEAD} ('{shown}'). {WARNING_TAIL}");
-        }
+    if cx.var("TMUX").is_none() {
+        return ("cli".into(), false);
     }
-    if current.is_empty() { "cli".into() } else { current }
+    let current = attached_client(cx).unwrap_or_default();
+    (if current.is_empty() { "cli".into() } else { current }, true)
+}
+
+pub(crate) fn warn_attached(name: &str, err: &mut dyn Write) {
+    let _ = writeln!(err, "{WARNING_HEAD} ('{name}'). {WARNING_TAIL}");
 }
 
 /// O primeiro `"name"` do arquivo, linha a linha, mesmo aninhado: o grep do script não lê JSON.

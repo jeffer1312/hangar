@@ -1,4 +1,4 @@
-//! Um teste por defeito do `hangar-send` antigo que a migração corrigiu (decisão 14.3 e R3-D05). Cada um
+//! Um teste por defeito do `hangar-send` antigo que a migração corrigiu. Cada um
 //! falha no comportamento de antes, dito no comentário.
 
 mod common;
@@ -101,8 +101,8 @@ fn missing_token_says_where_it_looked() {
     assert_eq!(done.stderr, format!("erro: CP_AUTH_TOKEN ausente em {}\n", env.display()));
 }
 
-/// Revisão de falhas caladas: o servidor recebeu o recado e não respondeu no prazo. Antes a frase era
-/// "backend inacessível", e quem reenviava duplicava o recado; agora ela diz que pode ter chegado.
+/// O servidor recebeu o recado e não respondeu no prazo: a frase diz que pode ter chegado, porque
+/// "backend inacessível" levaria a reenviar e duplicar o recado.
 /// Conexão recusada continua "backend inacessível".
 #[test]
 fn a_send_without_answer_says_the_message_may_have_arrived() {

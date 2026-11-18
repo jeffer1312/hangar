@@ -908,7 +908,7 @@ fn provider_hooks_review_python_character_classes_keep_literals_and_ranges() {
     }
 }
 
-/// Decisão 17: o caminho do Windows é conferido com `/` também entre aspas e depois do `&` do
+/// O caminho do Windows é conferido com `/` também entre aspas e depois do `&` do
 /// PowerShell; escape de padrão do `pkill -f` não vira caminho.
 #[test]
 fn guard_reads_quoted_windows_paths_but_leaves_pattern_escapes() {
@@ -978,10 +978,9 @@ fn provider_hooks_review_unicode_names_keep_python_spellings_and_aliases() {
     }
 }
 
-/// H-48…H-53 + R1-D04 (Codex passa a usar o `guard-tmux`): as 86 capturas do `guard_tmux.py` da base,
-/// pelo binário. A decisão (passa/barra) é a mesma; barrar = `deny` no stdout, motivo com `BLOQUEADO`
+/// As capturas do `guard_tmux.py`, pelo binário (que o Codex também usa). A decisão (passa/barra) é a mesma; barrar = `deny` no stdout, motivo com `BLOQUEADO`
 /// e `probe-x` no stderr, código 2; passar = 0 sem saída. O texto do motivo e o log são os do Rust.
-/// Decisão 15: `tmux.exe` é o tmux (`extra-windows-path`, que o Python deixava passar).
+/// `tmux.exe` é o tmux (`extra-windows-path`): sem isso o guarda deixava passar o comando.
 #[test]
 fn h48_h53_guard_matches_the_python_captures_and_bars_tmux_exe() {
     use base64::Engine;
@@ -1034,7 +1033,7 @@ fn h48_h53_guard_matches_the_python_captures_and_bars_tmux_exe() {
                 assert!(result.stdout.is_empty() && result.stderr.is_empty(), "{name}[{index}]");
             }
         }
-        // R1-S14/R1-D04: falha aberta deixa a linha no log quando o Python também deixava (o texto é o código).
+        // Falha aberta deixa a linha no log quando o Python também deixava (o texto é o código).
         let python_logged = fixture.to_string().contains("guard_tmux-falhas.log");
         if python_logged && name != "guard__log-dir-not-writable" {
             assert!(home.join(".hangar/logs/privado/guard_tmux-falhas.log").is_file(), "{name}");
@@ -1047,7 +1046,7 @@ fn h48_h53_guard_matches_the_python_captures_and_bars_tmux_exe() {
     }
 }
 
-/// H-17/H-21/H-22 (R1-S07/S08): as capturas `preview__concurrent-8-*` (8 processos da mesma mensagem
+/// As capturas `preview__concurrent-8-*` (8 processos da mesma mensagem
 /// ao mesmo tempo, 20 vezes, na ordem de largada de cada repetição) repetidas com processos de
 /// verdade: cada processo sai 0 calado, o sidecar final é o da captura (`ts` por presença) e ao lado
 /// dele só fica a trava (os temporários com pid não sobram).
@@ -1097,9 +1096,8 @@ fn h17_h21_concurrent_preview_processes_match_the_captures() {
     }
 }
 
-/// R1-D05 (H-12): o `nav-hook` lê os BYTES do stdin e decodifica UTF-8 com troca, sem depender do
-/// encoding do sistema; bytes inválidos noutro campo não impedem "página" de casar. O Python lia o
-/// stdin em modo texto (cp1252 no Windows) e a dica não saía.
+/// O `nav-hook` lê os BYTES do stdin e decodifica UTF-8 com troca, sem depender do encoding do
+/// sistema (cp1252 no Windows tirava a dica); bytes inválidos noutro campo não impedem "página" de casar.
 #[test]
 fn d05_nav_hook_reads_stdin_bytes_as_utf8() {
     let root = tempfile::tempdir().unwrap();

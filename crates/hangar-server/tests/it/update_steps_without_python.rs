@@ -107,7 +107,7 @@ fn rewritten_commands_use_the_hangar_server_subcommands() {
     }
 }
 
-/// Decisão 21a: nenhum passo apaga os atalhos do Python; o do Windows só regrava os lançadores que
+/// Nenhum passo apaga os atalhos do Python; o do Windows só regrava os lançadores que
 /// passavam por ele, pelo instalador, e a prova sai da conferência do conteúdo novo.
 #[test]
 fn the_launcher_step_rewrites_on_windows_and_deletes_nothing() {

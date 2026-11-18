@@ -25,7 +25,7 @@ impl Actions for GuardFails {
     fn codex(&self)->Step<'_>{Box::pin(async{panic!("Codex não selecionado")})}
 }
 
-/// H-63: `claude_hooks` roda os 7 instaladores; a falha de um vira aviso `config_sync_after_failed`
+/// `claude_hooks` roda os 7 instaladores; a falha de um vira aviso `config_sync_after_failed`
 /// com o passo e a causa, e não desfaz nem interrompe os outros.
 #[tokio::test]
 async fn hooks_item_runs_every_installer_and_a_failure_is_only_a_warning() {

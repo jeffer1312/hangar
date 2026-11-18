@@ -56,6 +56,7 @@ impl Shell {
         let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/hangar-codex");
         let script = scripts.join("hangar-codex");
         crate::copy_executable(&source, &script);
+        std::fs::copy(source.with_file_name("hangar-server-lookup"), scripts.join("hangar-server-lookup")).unwrap();
         crate::write_executable(&stubs.join("tmux"), TMUX);
         crate::write_executable(&srvbin.join("hangar-server"), SERVER);
         std::fs::write(state.join("open.out"), json!({"name": "codex-proj", "cwd": "/w", "group": {"name": "outro"}}).to_string()).unwrap();

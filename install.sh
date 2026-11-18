@@ -272,21 +272,21 @@ SRV="$REPO/scripts/hangar-server-command"
 # No --update do checkout o binário achado pode ser mais antigo que este código (o de ~/.hangar/bin
 # baixado antes do pull): subcomando que ele não conhece vira aviso, com o motivo. No pacote e na
 # instalação nova o binário veio com o código, e a falta é erro.
-SRV_ANTIGO_AVISA=0
-[ "$UPDATE" = 1 ] && [ "$PACOTE" = 0 ] && SRV_ANTIGO_AVISA=1
+SERVER_OLD_WARNS=0
+[ "$UPDATE" = 1 ] && [ "$PACOTE" = 0 ] && SERVER_OLD_WARNS=1
 # 1 quando a última chamada pulou o subcomando por binário antigo: quem chama não marca ok.
-SRV_PULOU=0
-srv_ou_aviso() { # srv_ou_aviso <o que> <subcomando> [args]
-  local oque=$1 err rc=0
+SERVER_SKIPPED=0
+server_or_warn() { # server_or_warn <o que> <subcomando> [args]
+  local what=$1 err rc=0
   shift
-  SRV_PULOU=0
+  SERVER_SKIPPED=0
   err=$(mktemp)
   "$SRV" "$@" 2>"$err" || rc=$?
   cat "$err" >&2
-  if [ "$rc" = 2 ] && [ "$SRV_ANTIGO_AVISA" = 1 ] && grep -q 'subcomando desconhecido' "$err"; then
-    falta "$oque: o hangar-server desta máquina é anterior a este código (não tem '$1') — rode ./scripts/install-server-binaries.sh e ./install.sh --update de novo" >&2
+  if [ "$rc" = 2 ] && [ "$SERVER_OLD_WARNS" = 1 ] && grep -q 'subcomando desconhecido' "$err"; then
+    falta "$what: o hangar-server desta máquina é anterior a este código (não tem '$1') — rode ./scripts/install-server-binaries.sh e ./install.sh --update de novo" >&2
     rc=0
-    SRV_PULOU=1
+    SERVER_SKIPPED=1
   fi
   rm -f "$err"
   return "$rc"
@@ -387,7 +387,7 @@ gera_token() {
   done
   return 1
 }
-SEM_GERADOR="não consegui gerar um token aleatório (nem openssl, nem hangar-server, nem /dev/urandom) — defina CP_AUTH_TOKEN em $ENV_FILE e rode de novo"
+NO_TOKEN_GENERATOR="não consegui gerar um token aleatório (nem openssl, nem hangar-server, nem /dev/urandom) — defina CP_AUTH_TOKEN em $ENV_FILE e rode de novo"
 # O backend lê o .env pelo python-dotenv, que corta o valor em " #" e expande "${VAR}": sem aspas
 # no .env, a senha com esses caracteres não chega inteira e o celular nunca entra.
 # Só ASCII visível: o app nativo monta o cabeçalho Authorization com a senha, e acento não autentica.
@@ -412,7 +412,7 @@ elif [ "$APP" = 1 ]; then
   # Mesmo piso da pergunta do terminal; vazio = o app pediu a senha gerada.
   case $APP_TOKEN in *$'\n'*|*$'\r'*) fail "a senha do celular veio do app com quebra de linha" ;; esac
   if [ -z "$APP_TOKEN" ]; then
-    APP_TOKEN=$(gera_token) || fail "$SEM_GERADOR"; ok "senha aleatória gerada (o app a lê de $ENV_FILE)"
+    APP_TOKEN=$(gera_token) || fail "$NO_TOKEN_GENERATOR"; ok "senha aleatória gerada (o app a lê de $ENV_FILE)"
   elif [ ${#APP_TOKEN} -lt 8 ] || [ "$APP_TOKEN" = change-me ]; then
     fail "a senha do celular veio do app com menos de 8 caracteres"
   elif token_proibido "$APP_TOKEN"; then
@@ -422,14 +422,14 @@ elif [ "$APP" = 1 ]; then
   fi
   printf 'CP_AUTH_TOKEN=%s\n' "$APP_TOKEN" >> "$ENV_FILE"
 elif [ "$YES" = 1 ]; then
-  TOKEN=$(gera_token) || fail "$SEM_GERADOR"
+  TOKEN=$(gera_token) || fail "$NO_TOKEN_GENERATOR"
   printf 'CP_AUTH_TOKEN=%s\n' "$TOKEN" >> "$ENV_FILE"
   ok "token aleatório gerado (--yes não pergunta)"
 elif [ "$TEM_TTY" = 0 ]; then
   # Sem terminal não dá pra perguntar, mas token é a ÚNICA tranca do app: gerar um aleatório é
   # o lado seguro (o inseguro seria seguir sem token). O que não pode é fazer isso calado —
   # quem rodou precisa saber que existe um token e onde ele está.
-  TOKEN=$(gera_token) || fail "$SEM_GERADOR"
+  TOKEN=$(gera_token) || fail "$NO_TOKEN_GENERATOR"
   printf 'CP_AUTH_TOKEN=%s\n' "$TOKEN" >> "$ENV_FILE"
   # NÃO ecoar o valor: sem tty isto roda em provisionamento automatizado (CI, Ansible, ssh
   # não-interativo) e o stdout vira log. Pior aqui do que em qualquer projeto: o próprio app lê
@@ -445,7 +445,7 @@ else
   while :; do
     printf '  Token: '
     read -r TOKEN <&3 || TOKEN=''
-    [ -z "$TOKEN" ] && { TOKEN=$(gera_token) || fail "$SEM_GERADOR"; ok "aleatório gerado"; break; }
+    [ -z "$TOKEN" ] && { TOKEN=$(gera_token) || fail "$NO_TOKEN_GENERATOR"; ok "aleatório gerado"; break; }
     # O backend só recusa o literal 'change-me'; o piso de 8 é daqui, pra senha curta não passar.
     [ ${#TOKEN} -lt 8 ] && { erro "curto demais — no mínimo 8 caracteres"; continue; }
     [ "$TOKEN" = "change-me" ] && { erro "esse valor o backend recusa de propósito"; continue; }
@@ -746,7 +746,7 @@ if [ "$PACOTE" = 1 ]; then
   "$SRV" vapid-setup \
     || anota_problema "chaves do push para o celular não geradas — rode: ~/.hangar/current/bin/hangar-server vapid-setup" push
 else
-  srv_ou_aviso "chaves do push" vapid-setup --root "$REPO" \
+  server_or_warn "chaves do push" vapid-setup --root "$REPO" \
     || anota_problema "chaves do push para o celular não geradas — rode: ./scripts/hangar-server-command vapid-setup --root \"$REPO\"" push
 fi
 
@@ -1098,7 +1098,7 @@ if [ -e "$HOME/.local/bin/hangar-send" ]; then
   # O binário é symlink (atualiza sozinho), mas o bloco "Sessões-irmãs" do ~/.claude/CLAUDE.md
   # sai de um heredoc deste script: sem re-rodar, as sessões novas leem o protocolo VELHO.
   SEND_RC=0
-  HANGAR_SRV_ANTIGO_AVISA=$SRV_ANTIGO_AVISA ./scripts/install-hangar-send.sh >/dev/null || SEND_RC=$?
+  HANGAR_SERVER_OLD_WARNS=$SERVER_OLD_WARNS ./scripts/install-hangar-send.sh >/dev/null || SEND_RC=$?
   case "$SEND_RC" in
     0) ok "hangar-send + skills atualizados" ;;
     3) anota_problema "hangar-send + skills: parte ficou pendente (veja os avisos e erros acima)" ;;
@@ -1108,7 +1108,7 @@ elif [ "$UPDATE" = 1 ]; then
   :   # não instala coisa nova num --update; isso é decisão, não atualização
 elif [ "$CPSEND" = 1 ] && ask "Instalar hangar-send + skills (sessões conversam entre si e se pareiam)?"; then
   SEND_RC=0
-  HANGAR_SRV_ANTIGO_AVISA=$SRV_ANTIGO_AVISA ./scripts/install-hangar-send.sh || SEND_RC=$?
+  HANGAR_SERVER_OLD_WARNS=$SERVER_OLD_WARNS ./scripts/install-hangar-send.sh || SEND_RC=$?
   case "$SEND_RC" in
     0) ;;
     3) anota_problema "hangar-send + skills: parte ficou pendente (veja os avisos e erros acima)" ;;
@@ -1203,10 +1203,10 @@ fi
 mark_step instalar ok
 mark_step final fazendo
 say "8/8 Checagem de fumaça"
-srv_ou_aviso "checagem do hangar-server" install-token >/dev/null \
+server_or_warn "checagem do hangar-server" install-token >/dev/null \
   || fail "o hangar-server não executa nesta máquina — sem ele os atalhos e os hooks param"
 # Binário antigo sem o subcomando: a checagem não rodou, e o item fica pendente, nunca ok.
-if [ "$SRV_PULOU" = 1 ]; then
+if [ "$SERVER_SKIPPED" = 1 ]; then
   anota_problema "checagem do hangar-server não rodou: o binário desta máquina é anterior a este código"
   mark_item backend-importa pendente "as ferramentas abrem"
 else

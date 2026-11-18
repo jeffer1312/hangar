@@ -117,7 +117,7 @@ mod path_tests {
         }
     }
 
-    /// Revisão R1, item 1: lançador mais velho que o servidor (checkout ou modo desenvolvedor, que a
+    /// Lançador mais velho que o servidor (checkout ou modo desenvolvedor, que a
     /// atualização não renova) recusaria o subcomando novo; os hooks ficam no servidor em execução.
     #[test]
     fn hooks_use_the_launcher_only_when_it_is_this_server() {

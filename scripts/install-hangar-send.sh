@@ -59,23 +59,23 @@ linkar_bin "$REPO/scripts/folha"          "$HOME/.local/bin/folha"          "nod
 linkar_bin "$REPO/scripts/hangar-mcp-headers.sh" "$HOME/.local/bin/hangar-mcp-headers" "'$REPO/scripts/hangar-mcp-headers.sh'"
 # O registro, os agentes e o bloco do CLAUDE.md são subcomandos do hangar-server desta cópia.
 HANGAR_SERVER="$REPO/scripts/hangar-server-command"
-# No --update do checkout (o install.sh liga HANGAR_SRV_ANTIGO_AVISA) o binário achado pode ser mais
+# No --update do checkout (o install.sh liga HANGAR_SERVER_OLD_WARNS) o binário achado pode ser mais
 # antigo que este código: subcomando que ele não conhece vira aviso e o resto segue. Fora disso o
 # binário veio junto com o código, e a falta é erro. Algo pulado assim, ou uma linha `erro:` de um
 # subcomando que saiu 0 (conta pulada pelo registro), faz o script sair com 3 no fim, depois de tudo:
 # quem chama mostra pendência, não "atualizado".
-SRV_PULOU=0
+SERVER_SKIPPED=0
 srv() {
     local err rc=0
     err=$(mktemp)
     "$HANGAR_SERVER" "$@" 2>"$err" || rc=$?
     cat "$err" >&2
     if [ "$rc" = 0 ] && grep -q '^erro:' "$err"; then
-        SRV_PULOU=1
-    elif [ "$rc" = 2 ] && [ "${HANGAR_SRV_ANTIGO_AVISA:-0}" = 1 ] && grep -q 'subcomando desconhecido' "$err"; then
+        SERVER_SKIPPED=1
+    elif [ "$rc" = 2 ] && [ "${HANGAR_SERVER_OLD_WARNS:-0}" = 1 ] && grep -q 'subcomando desconhecido' "$err"; then
         echo "aviso: o hangar-server desta máquina é anterior a este código (não tem '$1'); rode ./scripts/install-server-binaries.sh e ./install.sh --update de novo" >&2
         rc=0
-        SRV_PULOU=1
+        SERVER_SKIPPED=1
     fi
     rm -f "$err"
     return "$rc"
@@ -168,6 +168,6 @@ srv claude-md-block <<<"$BLOCK"
 if [ -e "$REPO/.git" ]; then "$(dirname "$(realpath "$0")")/install-hooks.sh"; fi
 
 # Algo ficou pulado (binário antigo ou `erro:` acima): o resto rodou, e a saída 3 vira pendência nos
-# instaladores, que sempre passam HANGAR_SRV_ANTIGO_AVISA. O passo de atualização não passa: ali uma
+# instaladores, que sempre passam HANGAR_SERVER_OLD_WARNS. O passo de atualização não passa: ali uma
 # conta com `.claude.json` cortado faria todo passo falhar, e as linhas `erro:` já ficam na saída dele.
-[ "$SRV_PULOU" = 0 ] || [ -z "${HANGAR_SRV_ANTIGO_AVISA:-}" ] || exit 3
+[ "$SERVER_SKIPPED" = 0 ] || [ -z "${HANGAR_SERVER_OLD_WARNS:-}" ] || exit 3

@@ -178,7 +178,7 @@ fn channel_live_publication_child() {
     );
 }
 
-/// P6: o motor `git` não pede o `uv`. Com `git`, `node` e `npm` no PATH e sem `uv`, a conferência
+/// O motor `git` não pede o `uv`. Com `git`, `node` e `npm` no PATH e sem `uv`, a conferência
 /// deixa atualizar e não lista nada faltando.
 #[cfg(unix)]
 #[test]

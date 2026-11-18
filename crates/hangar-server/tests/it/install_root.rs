@@ -48,7 +48,7 @@ fn direct_version(home: &Path) -> std::path::PathBuf {
     real
 }
 
-/// P9: a versão que sobe direto roda na `backend/` dela enquanto a tiver (a anterior, na volta, só
+/// A versão que sobe direto roda na `backend/` dela enquanto a tiver (a anterior, na volta, só
 /// acha o `backend/.env` da máquina não migrada pelo cwd) e, sem ela, na raiz.
 #[cfg(unix)]
 #[test]

@@ -61,7 +61,7 @@ pub fn root_pointer(home: &Path) -> PathBuf { home.join(".hangar").join("install
 mod tests {
     use super::{backend_of, is_backend, is_install_root};
 
-    /// P8: a marca da instalação é a raiz (manifesto ou checkout), não um arquivo dentro de `backend/`;
+    /// A marca da instalação é a raiz (manifesto ou checkout), não um arquivo dentro de `backend/`;
     /// o servidor na raiz e o lançado do jeito antigo, na `backend/`, acham a mesma `backend/`.
     #[test]
     fn the_install_marker_is_the_root_and_both_cwds_find_the_backend() {

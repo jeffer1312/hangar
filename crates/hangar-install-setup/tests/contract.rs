@@ -166,26 +166,26 @@ fn file_value(mode: &str, text: &str) -> Value {
 fn adjust(case: &str, mut e: Expected) -> Expected {
     let not_written = |env: &str, errno: &str| format!("erro: não consegui gravar {env}: {errno}\n");
     match case {
-        // Decisão 16 (surpresa 10): o `mkstemp` que falha vira frase com código, sem traceback.
+        // O `mkstemp` que falha vira frase com código, sem traceback.
         "vapid/dir-not-writable" => e.stderr = not_written("$T/inst/backend/.env", "[Errno 13] Permission denied"),
         "vapid/current-without-config-dir" | "vapid/manifest-without-config-dir" =>
             e.stderr = not_written("$T/home/.hangar/config/.env", "[Errno 2] No such file or directory"),
-        // Decisão 13.3: `export CP_VAPID_*=` é regravado sem `export`, com aviso.
+        // `export CP_VAPID_*=` é regravado sem `export`, com aviso: o servidor ignora a linha com ele.
         "vapid/export-both" => {
             e.stderr = "aviso: $T/inst/backend/.env: `export` tirado de CP_VAPID_PUBLIC, CP_VAPID_PRIVATE; o servidor ignora a linha com ele (reinicie o backend para valer)\n".to_owned();
             e.diff.insert("inst/backend/.env".to_owned(), Some(file_value("0o644", "CP_VAPID_PUBLIC=a\nCP_VAPID_PRIVATE=b\n")));
         }
-        // Decisão 16 (surpresa 9): o fim de linha do arquivo fica.
+        // O fim de linha do arquivo fica.
         "vapid/crlf" => {
             e.diff.insert("inst/backend/.env".to_owned(), Some(file_value("0o644",
                 "CP_AUTH_TOKEN=x\r\nCP_PORT=1\r\nCP_VAPID_PUBLIC=$VAPID_PUBLIC\r\nCP_VAPID_PRIVATE=$VAPID_PRIVATE\r\n")));
         }
-        // Decisão 16 (surpresa 7): o link continua link; grava no alvo, no modo dele.
+        // O link continua link; grava no alvo, no modo dele.
         "vapid/env-symlink" => {
             let after = e.diff.remove("inst/backend/.env").unwrap().unwrap();
             e.diff.insert("work/real.env".to_owned(), Some(after));
         }
-        // Decisão 16 (surpresa 10): a linha da chave vazia recebe o valor; a chave não aparece duas vezes.
+        // A linha da chave vazia recebe o valor; a chave não aparece duas vezes.
         "vapid/empty-values" => {
             e.diff.insert("inst/backend/.env".to_owned(), Some(file_value("0o644",
                 "CP_VAPID_PUBLIC=$VAPID_PUBLIC\nCP_VAPID_PRIVATE=$VAPID_PRIVATE\n")));

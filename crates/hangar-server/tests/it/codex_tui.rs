@@ -184,7 +184,7 @@ fn an_app_server_that_falls_with_the_tui_alive_comes_back_on_the_same_port() {
     assert!(!case.sidecar().exists(), "a saída apaga o arquivo pelo pid novo");
 }
 
-/// C-50: mais de 3 quedas em 5 min é laço; o lançador avisa, para de ressubir e a TUI fica.
+/// Mais de 3 quedas em 5 min é laço; o lançador avisa, para de ressubir e a TUI fica.
 #[test]
 fn an_app_server_falling_in_a_loop_is_given_up_and_the_tui_stays() {
     let case = Case::new(json!({}));

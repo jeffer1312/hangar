@@ -242,7 +242,7 @@ function Pausa-Log { }
 function Pausa-Fim { }
 function FakePowerShell { $global:LASTEXITCODE = 1 }
 $PowerShellExe = 'FakePowerShell'; $raiz = 'C:\hangar-falso'; $script:psmuxSessoes = 2
-$srvComando = Join-Path $raiz 'scripts\hangar-server-command.ps1'
+$serverCommand = Join-Path $raiz 'scripts\hangar-server-command.ps1'
 '@
 function Run-Gate($caso, $corpo, $depois) {
     $child = Join-Path $env:TEMP ("hangar-test-" + [guid]::NewGuid().ToString('N') + '.ps1')

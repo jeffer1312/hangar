@@ -92,14 +92,15 @@ pub fn reconcile(data: &mut Value, program: &Path, allow: &str, windows: bool) -
             touched.push(event.to_owned());
         }
     };
+    // O Python só gravou o script na pasta `backend/hooks` do Hangar; homônimo em outra pasta é pessoal.
     let events: Vec<String> = data["hooks"].as_object().map(|events| events.keys().cloned().collect()).unwrap_or_default();
     for event in &events {
-        mark(event, remove_hook(data, event, &["state_hook.py", "state-hook"], windows));
+        mark(event, remove_hook(data, event, &["backend/hooks/state_hook.py", "state-hook"], windows));
     }
     let nav = command(program, "nav-hook", windows, false);
-    mark("UserPromptSubmit", sync_hook_any(data, "UserPromptSubmit", Some(&nav), None, &["nav_hook.py", "nav-hook"], windows));
+    mark("UserPromptSubmit", sync_hook_any(data, "UserPromptSubmit", Some(&nav), None, &["backend/hooks/nav_hook.py", "nav-hook"], windows));
     let guard = command(program, "guard-tmux", windows, true);
-    mark("PreToolUse", sync_hook_any(data, "PreToolUse", Some(&guard), Some("Bash"), &["guard_tmux.py", "guard-tmux"], windows));
+    mark("PreToolUse", sync_hook_any(data, "PreToolUse", Some(&guard), Some("Bash"), &["backend/hooks/guard_tmux.py", "guard-tmux"], windows));
     for (event, changed) in repair_foreign(data, program, allow, windows) {
         mark(&event, changed);
     }

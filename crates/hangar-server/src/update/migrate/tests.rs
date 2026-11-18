@@ -387,7 +387,7 @@ async fn migrate_undo_points_everything_back_to_the_checkout() {
     assert!(b.marker().is_none());
 }
 
-/// R1-S27 (revisão R1, item 4): o `--undo` apaga o lançador que a migração criou; os hooks que o
+/// O `--undo` apaga o lançador que a migração criou; os hooks que o
 /// servidor do pacote gravou chamando ele (Kimi e Codex) saem junto, e os de antes voltam.
 #[tokio::test]
 async fn migrate_undo_takes_out_the_hooks_that_call_the_removed_launcher() {

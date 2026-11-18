@@ -333,7 +333,7 @@ mod tests {
         }
     }
 
-    /// PR-13 (decisão 26): só prompt com quebra de linha num `.cmd`/`.bat` sai do argv; o resto fica como era.
+    /// Só prompt com quebra de linha num `.cmd`/`.bat` sai do argv (o std a recusa ali); o resto fica.
     #[test]
     fn only_a_multiline_prompt_for_a_batch_codex_leaves_the_argv() {
         let mut plan = decide(args("cx"), None, &facts(Path::new("/h"), None)).unwrap();

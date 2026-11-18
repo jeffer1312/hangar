@@ -52,12 +52,7 @@ async fn round(state: Arc<AppState>) -> bool {
     let accounts = state.accounts.clone();
     let done = tokio::task::spawn_blocking(move || {
         let (bases, catalog) = bases(&accounts);
-        let now = SystemTime::now();
-        let mut swept = sweep(discovered, recorded, &bases, now);
-        if let Ok((report, _)) = &mut swept {
-            codex_locks(&crate::runtime::codex_sidecar::dir(&accounts.env.home), now, report);
-        }
-        (swept, catalog)
+        (sweep(discovered, recorded, &bases, SystemTime::now()), catalog)
     }).await;
     let (line, ran) = match done {
         Err(error) => {
@@ -75,15 +70,6 @@ async fn round(state: Arc<AppState>) -> bool {
     line["evento"] = json!("rust.sidecar_prune");
     state.diag.record_line(line);
     ran
-}
-
-/// As travas órfãs dos arquivos de sessão do Codex entram no relatório da rodada.
-fn codex_locks(dir: &Path, now: SystemTime, report: &mut Report) {
-    let (removed, failed) = hangar_sidecar_prune::prune_codex_locks(dir, now);
-    if removed > 0 {
-        *report.removed.entry("codex-sessions (.lock)".to_owned()).or_default() += removed;
-    }
-    report.failed += failed;
 }
 
 /// Pastas de conta Claude do catálogo e a base do servidor; catálogo ilegível fica só com a base.
@@ -410,5 +396,21 @@ mod tests {
         let diag = state.diag.clone();
         assert!(!round(Arc::new(state)).await);
         assert_eq!(prune_lines(&diag, &failed).await[0]["codigo"], "mux_unavailable");
+    }
+
+    /// Trava do sidecar do Codex sem o `.json`, mesmo velha, fica: outro processo pode ter acabado de
+    /// abri-la para o mesmo nome, e apagá-la deixaria dois escritores com travas em inodes diferentes.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_old_orphan_codex_lock_stays_after_a_round() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let lock = crate::runtime::codex_sidecar::dir(&home).join("orfa.lock");
+        fs::create_dir_all(lock.parent().unwrap()).unwrap();
+        fs::write(&lock, "").unwrap();
+        fs::File::options().write(true).open(&lock).unwrap().set_modified(SystemTime::now() - Duration::from_secs(30 * 86_400)).unwrap();
+        let state = state_for(&home, std::ffi::OsStr::new("true"), &dir.path().join("diario"));
+        assert!(round(Arc::new(state)).await);
+        assert!(lock.exists());
     }
 }

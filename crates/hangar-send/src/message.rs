@@ -41,13 +41,16 @@ pub(crate) fn run(cx: &Ctx, args: &[String], out: &mut dyn Write, err: &mut dyn 
         }
         return deliver(cx, &cx.local(), target, target, &message, out, err);
     }
-    let me = identity::me(cx, true, err);
+    // Lida uma vez: cada leitura custa até quatro chamadas ao tmux. O aviso só sai se o recado seguir.
+    let (short, attached) = identity::resolve(cx);
     let server_id = cx.settings.server_id.as_str();
-    if *target == me || (!server_id.is_empty() && *target == format!("{server_id}::{me}")) {
+    if *target == short || (!server_id.is_empty() && *target == format!("{server_id}::{short}")) {
         let _ = writeln!(err, "recusado: '{target}' é esta sessão — o recado voltaria pra você. Quem é quem: hangar-send --list");
         return 1;
     }
-    let short = identity::me(cx, false, err);
+    if attached {
+        identity::warn_attached(&short, err);
+    }
     let mut sender = short.clone();
     let mut endpoint = cx.local();
     let mut session = target.as_str();

@@ -207,7 +207,7 @@ fn write(target: &Path, text: &str) -> io::Result<()> {
     result
 }
 
-/// O comando: frases e códigos do `python -m app.vapid_setup`, com as correções da decisão 16.
+/// O comando: frases e códigos do `python -m app.vapid_setup`, sem os tracebacks e as reescritas dele.
 pub fn run(request: &Request, out: &mut dyn Write, err: &mut dyn Write) -> u8 {
     let env = match env_path(request) {
         Ok(env) => env,

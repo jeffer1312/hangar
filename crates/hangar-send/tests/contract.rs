@@ -65,46 +65,46 @@ fn overrides() -> BTreeMap<&'static str, Override> {
     let encoded = |path: &str| json!({"local": [{"method": "POST", "path": path, "auth": "Bearer tok-local", "json": true,
                                                   "body": "{\"text\": \"[de: cli] oi\", \"steer\": true}"}]});
     BTreeMap::from([
-        // D11: o binário é o próprio processo; achar o hangar-server é do atalho.
+        // O binário é o próprio processo; achar o hangar-server é do atalho.
         ("env__no-binary-126", skip("D11", "coberto pelo teste do atalho")),
         ("env__rust-bin-invalid-126", skip("D11", "coberto pelo teste do atalho")),
         ("env__peers-path-fails", skip("D11", "coberto pelo teste do atalho")),
-        // D14.8 + D13: `.env` pelo leitor do Rust, falha com frase em vez do `grep`/`pipefail`.
+        // `.env` pelo leitor do Rust, falha com frase em vez do `grep`/`pipefail`.
         ("env__no-env-file", why("D14.8").code(2).stderr("erro: .env não encontrado: $T/inst/backend/.env\n")),
         ("env__no-env-file-whoami", why("D14.8").code(2).stderr("erro: .env não encontrado: $T/inst/backend/.env\n")),
         ("env__no-token-line", why("D14.8").code(1).stderr("erro: CP_AUTH_TOKEN ausente em $T/home/.hangar/config/.env\n")),
         ("env__export-token-not-read", why("D14.8").code(1).stderr("erro: CP_AUTH_TOKEN ausente em $T/home/.hangar/config/.env\n")),
         ("env__token-quoted-crlf", why("D14.8: aspas e \\r saem do token").auth("Bearer tok q")),
         ("env__token-duplicated", why("D14.8 / surpresa 18: vale a última linha").auth("Bearer dois")),
-        // D14.7: a ajuda documenta API_TIMEOUT e API_CONNECT_TIMEOUT.
+        // A ajuda documenta API_TIMEOUT e API_CONNECT_TIMEOUT.
         ("help__help", why("D14.7").stdout("<HELP>")),
         ("help__h", why("D14.7").stdout("<HELP>")),
-        // D14.3: `--list` com o servidor fora dá `erro:` e 2; resposta torta vira frase, sem traceback.
+        // `--list` com o servidor fora dá `erro:` e 2; resposta torta vira frase, sem traceback.
         ("list__local-down", why("D14.3").code(2).stderr("erro: backend inacessível em http://127.0.0.1:$DEAD_PORT (hangar rodando?)\n")),
         ("list__local-401", why("R3-D02").stderr("erro HTTP 401: {\"detail\": \"token\"}\n")),
         ("list__local-not-json", why("R3-D02").stderr("erro: resposta ilegível de /api/sessions\n")),
         ("list__session-missing-state", why("D14.3: campo faltando vira erro:").stderr("erro: resposta de /api/sessions sem o campo 'state'\n")),
         ("list__ext-missing-field", why("D14.3: campo faltando vira erro:").stderr("erro: resposta de /api/external-pairs sem o campo 'session'\n")),
-        // D14.3: o nome vai codificado na URL (antes `#`, `?`, `/` e espaço mandavam o pedido a outra rota).
+        // O nome vai codificado na URL: `#`, `?`, `/` e espaço mandariam o pedido a outra rota.
         ("msg__target-raw-hash", why("D14.3").path("local", 0, "/api/sessions/a%23b/input")),
         ("msg__target-raw-slash", why("D14.3").path("local", 0, "/api/sessions/a%2Fb/input")),
         ("msg__target-raw-question", why("D14.3").path("local", 0, "/api/sessions/a%3Fb%3D1/input")),
         ("msg__target-raw-percent", why("D14.3").path("local", 0, "/api/sessions/a%252Fb/input")),
         ("msg__target-raw-space", why("D14.3 / surpresa 13").code(0).stderr("")
             .stdout("na fila -> a b (não orientado; entrega no próximo idle)\n").http(encoded("/api/sessions/a%20b/input"))),
-        // D14.3: flag desconhecida no topo é recusada (antes virava o nome do destino).
+        // Flag desconhecida no topo é recusada; senão viraria o nome do destino.
         ("msg__unknown-flag-is-target", why("D14.3").code(2).stdout("")
             .stderr("erro: opção desconhecida '--foo' (veja hangar-send --help)\n").no_http()),
         ("msg__no-target", why("D14.2: erro de uso sai com 2")
             .code(2).stderr("uso: hangar-send [--tmux] <sessao|servidor::sessao> <mensagem...>\n")),
-        // R3-D05: resposta ilegível do envio não vira "na fila".
+        // Resposta ilegível do envio não vira "na fila".
         ("msg__response-not-json", why("R3-D05").code(1).stdout("").stderr(&unreadable_send("alvo"))),
         ("msg__response-empty", why("R3-D05").code(1).stdout("").stderr(&unreadable_send("alvo"))),
         ("msg__ext-pair-send-not-json", why("R3-D05").code(1).stdout("").stderr(&unreadable_send("ana::s1"))),
-        // D14.3: `a::b::c` recusado antes de qualquer pedido.
+        // `a::b::c` recusado antes de qualquer pedido.
         ("msg__remote-three-parts", why("D14.3").code(2).stdout("")
             .stderr("erro: nome inválido 'a::b::c': use servidor::sessao (um '::' só)\n").no_http()),
-        // D14.3 / R3-D02: campo faltando ou JSON torto na resposta vira `erro:` com código 1.
+        // Campo faltando ou JSON torto na resposta vira `erro:` com código 1.
         ("aceitar-par__missing-field", why("R3-D02").stderr("erro: resposta de /api/sessions/cli/pair-accept sem o campo 'session'\n")),
         ("group__missing-peers", why("R3-D02").stderr("erro: resposta de /api/sessions/eu/group-message sem o campo 'peers'\n")),
         ("group__warning-str-none-delivered", why("surpresa 16 corrigida").code(0).stderr("")
@@ -124,13 +124,13 @@ fn overrides() -> BTreeMap<&'static str, Override> {
             .stderr("aviso: a retomada foi confirmada, mas não consegui ler a resposta (nome e pasta)\n")
             .stdout("sessão retomada: volta () na conversa abc — fala com ela via: hangar-send volta \"msg\"\n")),
         ("contrato__gravar-not-utf8", why("surpresa 11 corrigida: sem traceback").stderr("erro: '$T/work/c.md' não é texto UTF-8\n")),
-        // D14.2: erro de uso sai com 2 e a frase `uso:`, sem o `script: line N:` do bash.
+        // Erro de uso sai com 2 e a frase `uso:`, sem o `script: line N:` do bash.
         ("new__no-name", why("D14.2").code(2).stderr(NEW_USAGE)),
         ("new__value-missing-at-end", why("D14.2").code(2).stderr("uso: --model <id>\n")),
         ("pair__no-peer", why("D14.2").code(2).stderr(PAIR_USAGE)),
         ("close__no-target", why("D14.2").code(2).stderr("uso: hangar-send --close <sessao|servidor::sessao>\n")),
         ("contrato__gravar-no-value", why("D14.2").code(2).stderr(CONTRACT_USAGE)),
-        // D13.4: NaN no JSON é recusado com código (o Python o aceitava e reenviava).
+        // NaN no JSON é recusado com código, não reenviado.
         ("new__customizations-nan", why("D13.4").code(2).stdout("")
             .stderr("erro: --customizations precisa ser um objeto JSON\n").no_http()),
     ])

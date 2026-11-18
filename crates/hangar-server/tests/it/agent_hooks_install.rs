@@ -1,5 +1,5 @@
-//! R1 (hooks no Rust): o que o instalador grava e conserta no Codex, no Kimi, na exportação, na
-//! importação e na saúde. Um teste por item do inventário (`H-xx`) ou diferença aceita (`R1-Dxx`).
+//! Hooks no Rust: o que o instalador grava e conserta no Codex, no Kimi, na exportação, na
+//! importação e na saúde.
 use hangar_server::{
     accounts::environment::AccountEnvironment,
     codex_setup::stage_sources,
@@ -19,7 +19,7 @@ fn commands(data: &Value, event: &str) -> Vec<String> {
         .collect()
 }
 
-/// H-14 + R1-D02: o hook de estado sai de todo evento do Codex; evento que esvazia sai junto.
+/// O hook de estado sai de todo evento do Codex; evento que esvazia sai junto.
 #[test]
 fn h14_codex_state_hook_entries_leave_every_event() {
     let personal = json!({"hooks": [{"type": "command", "command": "notify-send stop"}]});
@@ -33,7 +33,7 @@ fn h14_codex_state_hook_entries_leave_every_event() {
     assert_eq!(data["hooks"]["Stop"], json!([personal]));
 }
 
-/// H-54/H-69: formas do comando por plataforma. POSIX: `|| exit 0`, guarda sem sufixo; Windows
+/// Formas do comando por plataforma. POSIX: `|| exit 0`, guarda sem sufixo; Windows
 /// (PowerShell): `& "exe" sub ; exit 0` e o guarda leva `$LASTEXITCODE`.
 #[test]
 fn h54_h69_codex_command_forms_per_platform() {
@@ -44,7 +44,7 @@ fn h54_h69_codex_command_forms_per_platform() {
     assert_eq!(codex_hooks::command(program, "guard-tmux", true, true), format!("& \"{PROGRAM}\" guard-tmux ; exit $LASTEXITCODE"));
 }
 
-/// H-68/H-70 + R1-D15: a entrada nossa funcional (de outro checkout, de venv que sumiu, forma Windows
+/// A entrada nossa funcional (de outro checkout, de venv que sumiu, forma Windows
 /// sem `&`) é reescrita NO LUGAR; as alheias ficam byte a byte; segunda rodada não muda nada.
 #[test]
 fn h68_h70_codex_rewrites_our_entries_in_place_and_settles() {
@@ -73,7 +73,7 @@ fn h68_h70_codex_rewrites_our_entries_in_place_and_settles() {
     }
 }
 
-/// H-71: `hooks.json` torto fica byte a byte (o modo conferido devolve o erro); pasta sem conta, nada.
+/// `hooks.json` torto fica byte a byte (o modo conferido devolve o erro); pasta sem conta, nada.
 #[test]
 fn h71_broken_codex_hooks_json_is_kept_and_a_missing_account_is_skipped() {
     let root = tempfile::tempdir().unwrap();
@@ -88,7 +88,7 @@ fn h71_broken_codex_hooks_json_is_kept_and_a_missing_account_is_skipped() {
     assert!(codex_hooks::sync(&root.path().join(".codex-nao-existe"), root.path(), cfg!(windows)).unwrap().is_empty());
 }
 
-/// H-82 + R1-D10: no Codex, o `pair-context` que veio de um binário de teste passa ao programa dos
+/// No Codex, o `pair-context` que veio de um binário de teste passa ao programa dos
 /// hooks com os mesmos argumentos, e o `codex-hook-allow.py` de um checkout vira o `codex-hook-allow`.
 #[test]
 fn h82_codex_machine_repairs_point_to_the_package_commands() {
@@ -107,7 +107,7 @@ fn h82_codex_machine_repairs_point_to_the_package_commands() {
     assert!(!pre.iter().any(|c| c.contains("codex-hook-allow.py")));
 }
 
-/// Revisão R1, item 2: o subcomando só é nosso atrás de um programa do Hangar. Hook pessoal com o
+/// O subcomando só é nosso atrás de um programa do Hangar. Hook pessoal com o
 /// mesmo argumento (`pair-context`, `state-hook`, `guard-tmux`) fica, inclusive repetido.
 #[test]
 fn personal_commands_with_our_subcommand_names_stay() {
@@ -129,12 +129,26 @@ fn personal_commands_with_our_subcommand_names_stay() {
     assert_eq!(commands(&codex, "UserPromptSubmit"), vec!["notify nav-hook".to_owned(), codex_hooks::command(Path::new(PROGRAM), "nav-hook", false, false)]);
 }
 
+/// Script pessoal com o nome de um hook antigo do Hangar fica no Codex: só o de `backend/hooks` é nosso.
+#[test]
+fn codex_personal_script_named_like_an_old_hook_stays() {
+    let state = "python3 ~/tools/state_hook.py";
+    let nav = "python3 ~/tools/nav_hook.py";
+    let legacy = "\"/v/python/bin/python3\" \"/v/backend/hooks/state_hook.py\" || exit 0";
+    let mut data = json!({"hooks": {
+        "Stop": [{"hooks": [{"type": "command", "command": state}, {"type": "command", "command": legacy}]}],
+        "UserPromptSubmit": [{"hooks": [{"type": "command", "command": nav}]}],
+    }});
+    codex_hooks::reconcile(&mut data, Path::new(PROGRAM), ALLOW, false);
+    assert_eq!(commands(&data, "Stop"), vec![state.to_owned()]);
+    assert_eq!(commands(&data, "UserPromptSubmit"), vec![nav.to_owned(), codex_hooks::command(Path::new(PROGRAM), "nav-hook", false, false)]);
+}
+
 fn kimi_env(home: &Path) -> AccountEnvironment {
     AccountEnvironment::from_map([("HOME".into(), home.to_string_lossy().into_owned()), ("USERPROFILE".into(), home.to_string_lossy().into_owned())].into())
 }
 
-/// H-74/H-75 + R1-D03: o `config.toml` desta máquina (cópia sanitizada da forma: dezenas de entradas
-/// antigas de várias raízes de venv para o mesmo evento) vira uma entrada por evento, com o resto do
+/// Um `config.toml` com dezenas de entradas antigas de várias raízes de venv para o mesmo evento vira uma entrada por evento, com o resto do
 /// TOML byte a byte e a cópia `.bak-hangar` uma vez.
 #[test]
 fn h74_h75_kimi_old_entries_collapse_into_one_per_event() {
@@ -169,7 +183,7 @@ fn h74_h75_kimi_old_entries_collapse_into_one_per_event() {
     assert!(kimi_hooks::sync(&env, root.path()).unwrap().is_empty());
 }
 
-/// H-74: o comando nativo de antes (`hangar-server`, `hangar-server-command`) é reconhecido como nosso e
+/// O comando nativo de antes (`hangar-server`, `hangar-server-command`) é reconhecido como nosso e
 /// passa ao programa dos hooks, inclusive o próprio lançador estável.
 #[test]
 fn h74_kimi_native_commands_follow_the_hook_program() {
@@ -188,7 +202,7 @@ fn h74_kimi_native_commands_follow_the_hook_program() {
     assert!(data["hooks"].as_array().unwrap().iter().all(|h| kimi_hooks::installed(root.path(), h["command"].as_str().unwrap(), if h["command"].as_str().unwrap().ends_with("guard-tmux") { "guard-tmux" } else { "kimi-state-hook" })));
 }
 
-/// Revisão R1, item 3 (R1-D03): a subida só conserta e tira repetidas; não instala onde não havia,
+/// A subida só conserta e tira repetidas; não instala onde não havia,
 /// não reescreve entrada já certa (aspas literais ficam) e não cria a cópia `.bak-hangar` à toa.
 #[test]
 fn kimi_boot_repair_never_installs_and_leaves_correct_entries_byte_identical() {
@@ -209,7 +223,7 @@ fn kimi_boot_repair_never_installs_and_leaves_correct_entries_byte_identical() {
     assert!(!path.with_file_name("config.toml.bak-hangar").exists());
 }
 
-/// Revisão R1, item 3: o guarda antigo sem `matcher` vale para o Bash; o instalador não põe outro.
+/// O guarda antigo sem `matcher` vale para o Bash; o instalador não põe outro.
 #[test]
 fn kimi_guard_without_matcher_does_not_get_a_second_one() {
     let root = tempfile::tempdir().unwrap();
@@ -223,7 +237,7 @@ fn kimi_guard_without_matcher_does_not_get_a_second_one() {
     assert!(kimi_hooks::sync(&kimi_env(root.path()), root.path()).unwrap().is_empty());
 }
 
-/// H-64 + R1-D11: a lista "do Hangar" da exportação é fixa e cobre os subcomandos, o guarda e os
+/// A lista "do Hangar" da exportação é fixa e cobre os subcomandos, o guarda e os
 /// scripts Python de máquinas não atualizadas; comando pessoal não entra.
 #[test]
 fn h64_export_own_hooks_is_a_fixed_list_with_the_subcommands() {
@@ -245,7 +259,15 @@ fn h64_export_own_hooks_is_a_fixed_list_with_the_subcommands() {
     }
 }
 
-/// H-67 + R1-D09: a importação Claude→Codex deixa de fora os subcomandos do Hangar (o Codex tem os
+/// Hook pessoal com um subcomando do Hangar como argumento viaja na exportação.
+#[test]
+fn export_personal_hook_with_our_subcommand_as_argument_is_foreign() {
+    let own: std::collections::BTreeSet<String> = export::OWN_HOOKS.iter().map(|n| (*n).to_owned()).collect();
+    assert!(!export::is_own_hook("~/bin/notify guard-tmux", &own));
+    assert!(export::is_own_hook(&format!("\"{PROGRAM}\" guard-tmux"), &own));
+}
+
+/// A importação Claude→Codex deixa de fora os subcomandos do Hangar (o Codex tem os
 /// dele), além dos scripts Python de antes; o que é pessoal atravessa.
 #[test]
 fn h67_import_to_codex_excludes_the_hangar_subcommands() {
@@ -266,7 +288,7 @@ fn h67_import_to_codex_excludes_the_hangar_subcommands() {
     assert_eq!(kept, json!({"UserPromptSubmit": [{"hooks": [{"type": "command", "command": "rtk hook claude"}]}]}));
 }
 
-/// H-65 + R1-D14: a saúde do Claude confere os subcomandos (cinco hooks); o Python antigo conta como faltando.
+/// A saúde do Claude confere os subcomandos (cinco hooks); o Python antigo conta como faltando.
 #[test]
 fn h65_claude_health_checks_the_subcommands() {
     let root = tempfile::tempdir().unwrap();

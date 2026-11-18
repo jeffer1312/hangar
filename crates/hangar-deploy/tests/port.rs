@@ -1,4 +1,4 @@
-//! P5: a porta do `deploy.sh` sai do Rust, na mesma ordem do `settings.port` do Python: ambiente,
+//! A porta do `deploy.sh` sai do Rust, na mesma ordem do `settings.port` do Python: ambiente,
 //! `.env`, 8765; valor que não é porta é erro.
 use hangar_deploy::port;
 

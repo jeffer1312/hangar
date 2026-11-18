@@ -74,39 +74,19 @@ if [ -n "${CODEX_HOME:-}" ]; then
     fi
 fi
 
-# O mesmo `hangar-server` que o serviço sobe: o explícito (errado não cai para outro), o da versão em
-# uso pelo caminho real, o mais novo entre o build desta cópia e ~/.hangar/bin (empate: a cópia) e,
-# sem nenhum deles, o do PATH.
-server_bin() {
-    explicit=$(printf '%s' "${CP_RUST_SERVER_BIN:-}" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
-    if [ -n "$explicit" ]; then
-        candidate=$explicit
-        case "$candidate" in "~") candidate=$HOME ;; "~/"*) candidate=$HOME/${candidate#"~/"} ;; esac
-        if [ -f "$candidate" ] && [ -x "$candidate" ]; then
-            printf '%s\n' "$candidate"
-            return 0
-        fi
-        printf 'rust_bins: CP_RUST_SERVER_BIN=%s não é executável; seguindo sem hangar-server\n' "$explicit" >&2
-        return 1
-    fi
-    if [ -f "$HOME/.hangar/current/bin/hangar-server" ] && [ -x "$HOME/.hangar/current/bin/hangar-server" ]; then
-        printf '%s/hangar-server\n' "$(CDPATH= cd -- "$HOME/.hangar/current/bin" && pwd -P)"
-        return 0
-    fi
-    chosen=
-    for candidate in "$root/crates/target/release/hangar-server" "$HOME/.hangar/bin/hangar-server"; do
-        if [ -f "$candidate" ] && [ -x "$candidate" ] && { [ -z "$chosen" ] || [ "$candidate" -nt "$chosen" ]; }; then
-            chosen=$candidate
-        fi
-    done
-    if [ -n "$chosen" ]; then
-        printf '%s\n' "$chosen"
-        return 0
-    fi
-    command -v hangar-server
-}
-
-if ! server=$(server_bin) || [ -z "$server" ]; then
+# O mesmo `hangar-server` dos outros atalhos; sem nenhum, o do PATH, como o `codex` digitado sempre aceitou.
+# O explícito errado não cai para o do PATH.
+. "$root/scripts/hangar-server-lookup"
+server=
+if hangar_server_find "$root"; then
+    server=$HANGAR_SERVER_BIN
+elif [ "$HANGAR_SERVER_MISSING" = env ]; then
+    printf 'rust_bins: CP_RUST_SERVER_BIN=%s não é executável; seguindo sem hangar-server\n' \
+        "$(printf '%s' "$CP_RUST_SERVER_BIN" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')" >&2
+else
+    server=$(command -v hangar-server)
+fi
+if [ -z "$server" ]; then
     say 'hangar-server não encontrado (CP_RUST_SERVER_BIN, crates/target/release, ~/.hangar/bin ou PATH): nenhuma sessão foi aberta'
     exit 3
 fi
