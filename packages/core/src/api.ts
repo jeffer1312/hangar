@@ -870,8 +870,9 @@ export async function waitUploadMediaForServer(
     if (body?.status === 'done') return { frames: body.frames ?? [], transcript: body.transcript ?? '' };
     if (body?.status !== 'pending') {
       await new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, 2000);
-        signal?.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
+        const stop = () => { clearTimeout(timer); resolve(); };
+        const timer = setTimeout(() => { signal?.removeEventListener('abort', stop); resolve(); }, 2000);
+        signal?.addEventListener('abort', stop, { once: true });
       });
     }
   }
