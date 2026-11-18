@@ -912,6 +912,8 @@ impl Hangar {
         let servers_wide = page == Page::Servers;
         // O artigo do Manual leva o "Nesta página" ao lado do texto.
         let article_wide = page == Page::Manual && self.article_wide(window);
+        // Status é um painel de gráficos: ocupa a largura toda ao lado da navegação.
+        let status_wide = page == Page::Status;
         let body = match page {
             Page::Updates => self.render_updates(window, cx),
             Page::Manual => self.render_manual(window, cx),
@@ -941,8 +943,10 @@ impl Hangar {
         };
         let scroll = div().id("settings-content").role(Role::TabPanel).aria_label(page.title())
             .accessibility_id(format!("settings-page-{}", page.key())).flex_1().min_h_0().overflow_y_scroll().track_scroll(&self.settings_ui.scroll)
-            .child(div().w_full().flex().justify_center().child(motion::fade_quick(div().w(px(if accounts_wide || servers_wide { 1040. }
-                else if article_wide { 960. } else { 720. })).max_w_full().px_4().pt(px(44.)).pb(px(40.)), body_in).child(body)));
+            .child(div().w_full().flex().justify_center().child(motion::fade_quick(div()
+                .when(status_wide, |el| el.w_full().px(px(20.)))
+                .when(!status_wide, |el| el.w(px(if accounts_wide || servers_wide { 1040. } else if article_wide { 960. } else { 720. })).px_4())
+                .max_w_full().pt(px(44.)).pb(px(40.)), body_in).child(body)));
         let strip = match page { Page::Appearance => Some(self.section_tabs(cx)), Page::Manual => self.manual_tabs(cx), _ => None };
         let tabs = strip.map(|strip| div().w_full().flex_shrink_0().flex().justify_center().px_4().pt(px(14.)).pb(px(6.))
             .child(div().w(px(720.)).max_w_full().when(page == Page::Manual, |el| el.flex().justify_center()).child(strip)));

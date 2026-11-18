@@ -170,6 +170,11 @@ fn exits_of(cache: &Cache, now: DateTime<Utc>) -> ExitsBlock {
     ExitsBlock { items: items.into_iter().map(|(_, exit)| exit.clone()).collect() }
 }
 
+/// Pedido que fica aberto de propósito (espera do plugin, MCP): demorar não é lentidão.
+pub fn waits_on_purpose(method: &str, path: &str) -> bool {
+    method == "POST" && matches!(path, "/api/plugin/pull" | "/mcp/")
+}
+
 fn slow_of(cache: &Cache, now: DateTime<Utc>) -> SlowBlock {
     let first = hour_of(now) - TimeDelta::hours(HOURS - 1);
     let inside = |at: &DateTime<Utc>| *at >= first && *at <= now;
@@ -180,7 +185,9 @@ fn slow_of(cache: &Cache, now: DateTime<Utc>) -> SlowBlock {
     for facts in cache.files.values().map(|file| &file.facts) {
         for request in facts.requests.iter().filter(|request| inside(&request.at)) {
             let error = request.code >= 500;
-            let slow = !error && request.ms.is_some_and(|ms| ms >= SLOW_MS);
+            // Linhas gravadas antes de o servidor deixar de anotar essas esperas ainda estão na janela.
+            let waits = request.route.split_once(' ').is_some_and(|(method, path)| waits_on_purpose(method, path));
+            let slow = !error && !waits && request.ms.is_some_and(|ms| ms >= SLOW_MS);
             if !error && !slow {
                 continue;
             }
@@ -370,6 +377,22 @@ mod tests {
         let top: Vec<_> = slow.top_routes.iter().map(|stat| (stat.route.as_str(), stat.count)).collect();
         assert_eq!(top, [("GET /a", 7), ("GET /b", 5), ("GET /c", 4), ("GET /d", 3), ("GET /e", 2)]);
         assert_eq!(slow.top_routes[0], RouteStat { route: "GET /a".into(), count: 7, worst_ms: Some(1500), last_code: 502 });
+    }
+
+    #[test]
+    fn waiting_on_purpose_is_not_slow_but_its_5xx_counts() {
+        let dir = tempfile::tempdir().unwrap();
+        append(dir.path(), "2026-11-17", &[
+            api("2026-11-17T12:00:00Z", "POST /api/plugin/pull", "200", 27_000),
+            api("2026-11-17T12:01:00Z", "POST /mcp/", "200", 9_000),
+            api("2026-11-17T12:02:00Z", "POST /api/plugin/pull", "502", 30),
+            api("2026-11-17T12:03:00Z", "GET /api/plugin/pull", "200", 2_000),
+        ]);
+        let slow = DiaryReader::at(dir.path().to_owned()).slow(utc("2026-11-17T14:00:00Z")).unwrap();
+        let (slow_total, errors): (u32, u32) = slow.hours.iter().fold((0, 0), |(s, e), h| (s + h.slow, e + h.errors));
+        assert_eq!((slow_total, errors), (1, 1));
+        let top: Vec<_> = slow.top_routes.iter().map(|stat| (stat.route.as_str(), stat.count)).collect();
+        assert_eq!(top, [("GET /api/plugin/pull", 1), ("POST /api/plugin/pull", 1)]);
     }
 
     #[test]

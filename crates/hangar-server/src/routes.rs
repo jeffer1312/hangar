@@ -864,7 +864,7 @@ fn reads_the_diary(path: &str) -> bool {
 /// Esperas longas de propósito (long-poll do plugin, chamada de tool MCP pelo `/mcp/` que os
 /// clientes usam): demorar não é lentidão, só o 5xx delas vai ao diário.
 fn waits_on_purpose(method: &Method, path: &str) -> bool {
-    *method == Method::POST && matches!(path, "/api/plugin/pull" | "/mcp/")
+    hangar_status::diary::waits_on_purpose(method.as_str(), path)
 }
 
 /// `detail.code` ou `code` do corpo de erro JSON pequeno; o corpo segue igual e nunca vai ao diário.
