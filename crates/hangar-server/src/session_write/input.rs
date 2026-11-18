@@ -114,11 +114,14 @@ pub fn input_answer(sent: &Sent, steered: bool) -> (StatusCode, Value) {
 }
 
 fn terminal_input_answer(sent: &Sent, result: &Result<RuntimeReply, RuntimeError>) -> (StatusCode, Value) {
-    let accepted = result.as_ref().ok().filter(|reply| reply.disposition == Disposition::Accepted);
-    let steered = accepted.is_some_and(|reply| reply.payload["steered"] == true);
+    let reply = result.as_ref().ok();
+    let steered = reply.is_some_and(|reply| reply.disposition == Disposition::Accepted && reply.payload["steered"] == true);
     let (status, mut body) = input_answer(sent, steered);
-    // O Claude pode receber o texto sem precisar do atalho que antecipa seu consumo.
-    if status.is_success() && accepted.is_some_and(|reply| reply.payload["drained"] == 1) {
+    // O ator só informa que drenou a entrada depois de a CLI aceitar o texto.
+    if status.is_success() && reply.is_some_and(|reply| {
+        matches!(reply.disposition, Disposition::Accepted | Disposition::Unknown)
+            && reply.payload["drained"] == 1
+    }) {
         body["delivered"] = json!(true);
     }
     (status, body)
@@ -765,15 +768,17 @@ mod broadcast_tests {
     #[test]
     fn direct_delivery_reports_when_the_claude_terminal_accepted_the_message() {
         let queued = Sent::Done { delivered: false, native: false, entry: true };
-        for (payload, delivered, steered) in [
-            (json!({"drained": 1, "steered": false}), true, false),
-            (json!({"drained": 1, "steered": false, "code": "queue_steer_hint_missing"}), true, false),
-            (json!({"drained": 1, "steered": true}), true, true),
-            (json!({"drained": 0, "steered": false}), false, false),
+        for (disposition, payload, delivered, steered) in [
+            (Disposition::Accepted, json!({"drained": 1, "steered": false}), true, false),
+            (Disposition::Accepted, json!({"drained": 1, "steered": false, "code": "queue_steer_hint_missing"}), true, false),
+            (Disposition::Accepted, json!({"drained": 1, "steered": true}), true, true),
+            (Disposition::Accepted, json!({"drained": 0, "steered": false}), false, false),
+            (Disposition::Unknown, json!({"code": "queue_steer_uncertain", "drained": 1}), true, false),
+            (Disposition::Unknown, json!({"code": "queue_steer_uncertain"}), false, false),
         ] {
             let result = Ok(RuntimeReply {
                 operation_id: "steer".into(),
-                disposition: Disposition::Accepted,
+                disposition,
                 payload,
             });
             let (status, body) = terminal_input_answer(&queued, &result);

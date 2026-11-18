@@ -1670,21 +1670,21 @@ impl Executor {
         // o turno com ela: uma leitura basta, sem as esperas.
         let deadline=tokio::time::Instant::now()+if idle {STEER_HINT_WAIT_IDLE} else {STEER_HINT_WAIT};
         let mut steered=driver.steer().await;
-        // Só o prazo esgotado é "a dica não veio": o turno acabando no meio entregou a mensagem como envio comum.
-        let mut turn_ended=false;
         while steered.disposition==input::Disposition::Deferred && tokio::time::Instant::now()<deadline {
             tokio::time::sleep(self.options.limits.settle).await;
-            if !self.expected_work(payload) {turn_ended=true; break;}
+            if self.entry_confirmed(&entry).await || !self.expected_work(payload) {
+                return Ok(reply(id, Disposition::Accepted, json!({"steered": false, "drained": 1})));
+            }
             steered=driver.steer().await;
         }
         // O ctrl+x ctrl+s pode ter ido sem se comprovar: nem "orientou" nem "a dica não veio", e quem clicou confere.
         if steered.disposition==input::Disposition::Unknown {
             tracing::warn!(key=%self.target.key,session=%self.target.name,code=%steered.code,"a mensagem entrou na fila do Claude Code, mas o ctrl+x ctrl+s não se comprovou");
-            return Ok(reply(id,Disposition::Unknown,json!({"code":"queue_steer_uncertain"})));
+            return Ok(reply(id,Disposition::Unknown,json!({"code":"queue_steer_uncertain","drained":1})));
         }
         let accepted=steered.disposition==input::Disposition::Accepted;
         // Trabalhando e sem a dica no prazo: a mensagem espera a próxima pausa do Claude, e quem clicou precisa saber.
-        if steered.disposition==input::Disposition::Deferred && !turn_ended && !idle && !self.entry_confirmed(&entry).await {
+        if steered.disposition==input::Disposition::Deferred && !idle && !self.entry_confirmed(&entry).await {
             tracing::warn!(key=%self.target.key,session=%self.target.name,code=%steered.code,"Orientar: a dica do ctrl+x ctrl+s não apareceu no prazo");
             return Ok(reply(id,Disposition::Accepted,json!({"steered":false,"drained":1,"code":"queue_steer_hint_missing"})));
         }
@@ -1692,8 +1692,11 @@ impl Executor {
     }
 
     async fn entry_confirmed(&mut self, entry: &str) -> bool {
-        // O eco do Claude pode chegar enquanto o ator ainda espera a indicação de envio imediato.
+        // Enquanto espera a indicação, só releia o recibo se o transcript mudou de tamanho.
+        let len = std::fs::metadata(&self.target.transcript).ok().map(|m| m.len());
+        if len == self.confirm_seen { return false; }
         if self.confirm_rows().await.is_err() { return false; }
+        self.confirm_seen = len;
         self.queue.snapshot().await.is_ok_and(|state| {
             state.rows.iter().any(|row| row["id"] == entry && row["confirmed"] == true)
         })
