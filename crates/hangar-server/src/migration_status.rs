@@ -52,7 +52,7 @@ pub fn area_of(path: &str) -> usize {
             "pair" | "pair-remote" | "unpair-remote" | "pair-accept" | "pair-invite" | "peer-address"
             | "group-message" => "pairing",
             "share" => "guests",
-            "upload" | "uploads" | "transcript-image" => "uploads",
+            "upload" | "uploads" | "upload-media" | "transcript-image" => "uploads",
             "transcribe" => "dictation",
             "plugin" => "mods",
             "conta" => "accounts",

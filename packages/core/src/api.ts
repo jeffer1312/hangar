@@ -277,7 +277,8 @@ function ensureConfirmedRoute(base: string): void {
   }
 }
 
-async function apiFetchRes(path: string, init?: RequestInit, server?: Server, probe = false, countsOutage = true, fetcher: typeof fetch = fetch): Promise<Response> {
+// `countsOutage: 'network'`: só a falha de rede esfria; o prazo estourado é o link lento de quem envia.
+async function apiFetchRes(path: string, init?: RequestInit, server?: Server, probe = false, countsOutage: boolean | 'network' = true, fetcher: typeof fetch = fetch): Promise<Response> {
   // Durante a espera, só uma verificação explícita pode antecipar a nova tentativa. O ativo e a
   // máquina de um chat aberto não esperam: o prazo pode ter sido gravado antes de o chat abrir.
   // Vem antes da rota: decidir a rota já sonda todos os endereços da máquina.
@@ -351,7 +352,7 @@ async function apiFetchRes(path: string, init?: RequestInit, server?: Server, pr
       if (poll) _semRede.add(`${destino}|${rota}`);
       if (typeof e === 'object' && e !== null) _semResposta.add(e);
       // Só falha de REDE esfria (o `isAbortError` acima já tirou o cancelamento de quem chamou).
-      if (server && countsOutage) registrarFalha(server.id);
+      if (server && countsOutage && !(countsOutage === 'network' && timedOut)) registrarFalha(server.id);
     }
     throw e;
   }
@@ -797,41 +798,93 @@ export async function uploadFileForServer(
   // Ditado: mesmo motivo do `audioOnly` do `uploadFile`.
   opts?: { audioOnly?: boolean },
 ): Promise<{ path: string }> {
-  return postUpload(s, name, file, opts?.audioOnly === true, file);
+  return postUpload(s, name, file, opts?.audioOnly ? '?audio_only=1' : '', file);
 }
 
+export type DiskUpload = { path: string; media?: 'pending'; media_id?: string };
+
 // Arquivo que já está no disco do aparelho: `send` o sobe direto de lá. No celular o fetch leria o
-// arquivo inteiro para a memória do JS, e um arquivo grande derruba o app.
+// arquivo inteiro para a memória do JS, e um arquivo grande derruba o app. Vídeo volta com
+// `media_id`: o envio nativo desiste com 60 s sem resposta, e quadros mais fala passam disso.
 export function uploadFromDiskForServer(
   s: Server,
   name: string,
-  file: { name: string; type: string },
+  file: { name: string; type: string; size?: number },
   send: typeof fetch,
-): Promise<{ path: string }> {
-  return postUpload(s, name, file, false, undefined, send);
+): Promise<DiskUpload> {
+  return postUpload(s, name, file, '?media=later', undefined, send);
+}
+
+// Sem teto, uma foto grande num link ruim (tablet em relay) deixava o composer preso em "enviando…"
+// pra sempre; teto fixo cortava arquivo grande legítimo. O piso de velocidade é o de um link móvel ruim.
+export function uploadTimeoutMs(size: number | undefined): number {
+  return Math.max(180_000, Math.ceil((size ?? 0) / 50_000) * 1000);
 }
 
 async function postUpload(
   s: Server,
   name: string,
-  file: { name: string; type: string },
-  audioOnly: boolean,
+  file: { name: string; type: string; size?: number },
+  query: string,
   body: RequestInit['body'],
   send?: typeof fetch,
-): Promise<{ path: string }> {
-  const res = await apiFetchRes(`/api/sessions/${encodeURIComponent(name)}/upload${audioOnly ? '?audio_only=1' : ''}`, {
+): Promise<DiskUpload> {
+  const res = await apiFetchRes(`/api/sessions/${encodeURIComponent(name)}/upload${query}`, {
     method: 'POST',
     headers: {
       'Content-Type': file.type || 'application/octet-stream',
       'X-Filename': encodeURIComponent(file.name || 'arquivo'),
     },
     body,
-    // Sem teto, uma foto grande num link ruim (tablet em relay) deixava o composer preso em
-    // "enviando…" pra sempre. 3min cobre upload legítimo lento; estourou -> erro visível + retry.
-    signal: AbortSignal.timeout(180_000),
-  }, s, false, true, send);
+    signal: AbortSignal.timeout(uploadTimeoutMs(file.size)),
+  }, s, false, 'network', send);
   if (!res.ok) throw new Error(`${res.status}: ${await errorDetail(res)}`);
-  return res.json() as Promise<{ path: string }>;
+  return res.json() as Promise<DiskUpload>;
+}
+
+// Teto do tempo SEM resposta do servidor. `pending` renova: a fila de vídeos no servidor é finita, e
+// contá-la deixava o segundo vídeo longo sem quadros nem fala.
+const MEDIA_UNANSWERED_MS = 3 * 60_000;
+
+/** Quadros e fala de um vídeo subido com `media_id`. `null` quando não vêm (falha, servidor
+ *  reiniciado, servidor sem responder): quem chama segue só com o vídeo, como o desktop quando a
+ *  transcrição falha. `signal` abortado (anexo removido, tela fechada) rejeita com o motivo dele. */
+export async function waitUploadMediaForServer(
+  s: Server,
+  name: string,
+  mediaId: string,
+  signal?: AbortSignal,
+): Promise<{ frames: string[]; transcript: string } | null> {
+  let deadline = Date.now() + MEDIA_UNANSWERED_MS;
+  // Sinal sem motivo (polyfill antigo) ainda tem que chegar como AbortError a quem decide pelo nome.
+  const cancelled = () => signal?.reason ?? new DOMException(undefined, 'AbortError');
+  // Cada pedido fica no servidor até a mídia ficar pronta ou ~45 s; só a falha espera do lado de cá.
+  while (Date.now() < deadline) {
+    if (signal?.aborted) throw cancelled();
+    // O teto vale para o pedido e para a pausa, não só para o começo de cada volta.
+    const res = await apiFetchRes(`/api/sessions/${encodeURIComponent(name)}/upload-media?id=${encodeURIComponent(mediaId)}`, {
+      signal: comTeto(signal, Math.max(1, Math.min(60_000, deadline - Date.now()))),
+    }, s, false, false).catch(() => null);
+    // 4xx (sem registro, sem acesso, convite encerrado) não muda tentando de novo; rede caída, 5xx,
+    // 408 e 429 passam (app em segundo plano, troca de rede) enquanto o servidor guarda o resultado.
+    if (res && res.status >= 400 && res.status < 500 && res.status !== 408 && res.status !== 429) return null;
+    const body = res?.ok ? await res.json().catch(() => null) as { status?: string; frames?: string[]; transcript?: string } | null : null;
+    if (signal?.aborted) throw cancelled();
+    if (body?.status === 'done') return { frames: body.frames ?? [], transcript: body.transcript ?? '' };
+    if (body?.status === 'pending') {
+      deadline = Date.now() + MEDIA_UNANSWERED_MS;
+      continue;
+    }
+    const left = deadline - Date.now();
+    if (left > 0) {
+      await new Promise<void>((resolve) => {
+        const stop = () => { clearTimeout(timer); resolve(); };
+        const timer = setTimeout(() => { signal?.removeEventListener('abort', stop); resolve(); }, Math.min(2000, left));
+        signal?.addEventListener('abort', stop, { once: true });
+      });
+    }
+  }
+  return null;
 }
 
 // Opções do ditado que viajam na query do /transcribe. `estilo` é o que a PILL mostrava na hora de
@@ -3134,9 +3187,7 @@ export function uploadFile(
     xhr.setRequestHeader('X-Hangar-Req', req);
     xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
     xhr.setRequestHeader('X-Filename', encodeURIComponent(file.name || 'arquivo'));
-    // Mesmo teto do uploadFileForServer: sem ele, uma foto grande num link ruim deixava o composer
-    // presto em "enviando…" pra sempre.
-    xhr.timeout = 180_000;
+    xhr.timeout = uploadTimeoutMs(file.size);
     xhr.upload.onprogress = (e) => {
       // `lengthComputable` é falso em algumas pontes (proxy que recodifica): aí não há fração pra
       // mostrar, e quem chama decide o que fazer com a ausência.
