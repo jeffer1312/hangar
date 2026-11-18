@@ -361,6 +361,8 @@ vi.mock('../features/attachments/DocumentViewer', () => ({ DocumentViewer: () =>
 vi.mock('../features/attachments/mediaCache', () => ({ canShareFile: false, shareFile: async () => {} }));
 vi.mock('../ui/Toast', () => ({ toast: { ok: () => {}, erro: () => {} } }));
 vi.mock('expo-clipboard', () => ({ setStringAsync: vi.fn(async () => {}) }));
+// O envio pelo disco é do `uploadFromDiskForServer` simulado acima; o tamanho lido do disco não existe no node.
+vi.mock('../net/uploadFromDisk', () => ({ sendFromDisk: () => async () => new Response('{}'), diskFileSize: async () => undefined }));
 const previewTexts = vi.hoisted(() => [] as string[]);
 vi.mock('./PreviewBubble', () => ({ PreviewBubble: ({ text }: { text: string }) => { previewTexts.push(text); return null; } }));
 vi.mock('./ThinkingBlock', () => ({ ThinkingBlock: () => null }));
@@ -1426,7 +1428,7 @@ describe('rascunho guardado no Composer', () => {
     await act(async () => button(container, 'composer_enviar_mensagem')!.click());
     // Os três subiram ao colar, direto do disco; o Enviar não sobe nada de novo.
     expect(realFirstInput.upload).toHaveBeenCalledTimes(3);
-    expect(realFirstInput.upload).toHaveBeenCalledWith(expect.anything(), 'sess', { name: 'c.txt', type: 'text/plain' }, expect.any(Function));
+    expect(realFirstInput.upload).toHaveBeenCalledWith(expect.anything(), 'sess', { name: 'c.txt', type: 'text/plain', size: 10 }, expect.any(Function));
     expect(composerChat.send).toHaveBeenCalledExactlyOnceWith(
       'legenda — 📎 board_imagem: /up/a.png 📎 board_arquivo: /up/c.txt', expect.any(Number));
     expect(removers()).toHaveLength(0);
