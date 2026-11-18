@@ -56,7 +56,8 @@ vi.mock('../usage/ReportUI', () => ({
 
 import StatusScreen from './StatusScreen';
 import { bytes } from './format';
-import { dayStartOf } from './StatusBlocks';
+import { dayIndex, dayStartOf, weekBounds } from './StatusBlocks';
+import { minutesBefore } from './StatusParts';
 import { STATUS_WATCHDOG_MS, keepUnchanged } from './useStatus';
 
 function fakeSource() {
@@ -296,6 +297,37 @@ describe('tela Status', () => {
     expect(out.attention).toBe(FIXTURE.attention);
     expect(out.sessions).toBe(next.sessions);
     expect(out.generated_at).toBe('depois');
+  });
+
+  it('a semana da linha são sete dias de calendário, inclusive na troca de horário', () => {
+    const tz = process.env.TZ;
+    process.env.TZ = 'America/New_York';
+    try {
+      // O horário de verão de Nova York acaba em 1/11/2026: aquele dia tem 25 h.
+      const bounds = weekBounds(new Date(2026, 10, 4).getTime());
+      expect(bounds.map((b) => new Date(b).getDate())).toEqual([29, 30, 31, 1, 2, 3, 4, 5]);
+      expect(bounds.every((b) => new Date(b).getHours() === 0)).toBe(true);
+      expect(dayIndex(bounds, new Date(2026, 10, 1, 23, 30).getTime())).toBe(3);
+      expect(dayIndex(bounds, bounds[0] - 1)).toBe(-1);
+      expect(dayIndex(bounds, bounds[7])).toBe(-1);
+    } finally {
+      process.env.TZ = tz;
+    }
+  });
+
+  it('a saída anterior à primeira meia-noite fica fora da linha e da contagem', async () => {
+    const source = fakeSource();
+    const before = new Date(dayStartOf(FIXTURE.generated_at) - 6 * 86_400_000 - 3_600_000).toISOString();
+    calls.getStatus.mockResolvedValue({ ...FIXTURE, exits: { items: [{ ts: before, kind: 'crash', error_lines: [] }] } });
+    calls.openStream.mockReturnValue(source);
+    const c = await mount();
+    expect(c.textContent).toContain(m.status_days_none());
+  });
+
+  it('o "há N min" da curva sai do horário dos pontos, não da posição', () => {
+    const points = [{ ts: '2026-11-17T14:00:00Z', v: 1 }, { ts: '2026-11-17T14:05:00Z', v: 2 }, { ts: '2026-11-17T14:06:00Z', v: 3 }];
+    expect(minutesBefore(points, 0, 2)).toBe(6);
+    expect(minutesBefore(points, 2, 2)).toBe(0);
   });
 
   describe('com relógio falso', () => {

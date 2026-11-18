@@ -89,8 +89,6 @@ export const ServerTiles = memo(function ServerTiles({ server, onLayout }: { ser
 function memoryPoint(v: number, ago: number) { return m.status_point_ago({ value: bytes(v), n: String(ago) }); }
 function cpuPoint(v: number, ago: number) { return m.status_point_ago({ value: pct(v), n: String(ago) }); }
 
-const DAY = 86_400_000;
-
 /** Meia-noite local do dia do retrato; sem data legível, a de agora. */
 export function dayStartOf(iso: string): number {
   const ms = Date.parse(iso);
@@ -102,13 +100,30 @@ export function dayStartOf(iso: string): number {
 const MARK = 14;
 const KIND_WEIGHT: Record<StatusExit['kind'], number> = { crash: 2, update: 1, requested: 0 };
 
+/** As oito meias-noites locais que limitam os sete dias até `today`, por calendário: um dia com troca de horário
+ *  não tem 24 h. */
+export function weekBounds(today: number): number[] {
+  return Array.from({ length: 8 }, (_, i) => {
+    const d = new Date(today);
+    d.setDate(d.getDate() - 6 + i);
+    d.setHours(0, 0, 0, 0);
+    return d.getTime();
+  });
+}
+
+/** Em que dia da linha cai o instante; `-1` fora dos sete dias. */
+export function dayIndex(bounds: number[], ts: number): number {
+  for (let i = 0; i < 7; i++) if (ts >= bounds[i] && ts < bounds[i + 1]) return i;
+  return -1;
+}
+
 /** Marcadores do mesmo dia que cairiam um sobre o outro viram um alvo só, na ordem do tempo. */
-function groupExits(items: StatusExit[], from: number, at: (ts: number) => number): StatusExit[][] {
+function groupExits(items: StatusExit[], bounds: number[], at: (ts: number) => number): StatusExit[][] {
   const sorted = [...items].sort((p, q) => Date.parse(p.ts) - Date.parse(q.ts));
   const groups: { day: number; x: number; items: StatusExit[] }[] = [];
   for (const e of sorted) {
     const ts = Date.parse(e.ts);
-    const day = Math.max(0, Math.min(6, Math.floor((ts - from) / DAY)));
+    const day = dayIndex(bounds, ts);
     const x = at(ts);
     const prev = groups[groups.length - 1];
     if (prev && prev.day === day && x - prev.x < MARK) prev.items.push(e);
@@ -124,11 +139,15 @@ export const DaysCard = memo(function DaysCard({ exits, update, today, flash, on
   const [width, setWidth] = useState(300);
   // O `ts` de uma saída do alvo escolhido: o retrato seguinte pode trazer outra lista e o índice mudaria de dono.
   const [picked, setPicked] = useState<string | null>(null);
-  const items = exits?.items ?? [];
-  const from = today - 6 * DAY;
-  const days = Array.from({ length: 7 }, (_, i) => new Date(from + i * DAY));
-  const at = (ts: number) => Math.max(0, Math.min(1, (ts - from) / (7 * DAY))) * width;
-  const groups = groupExits(items, from, at);
+  const bounds = weekBounds(today);
+  // A janela do servidor é móvel (168 h) e a linha começa à meia-noite: o que fica antes não é desenhado nem contado.
+  const items = (exits?.items ?? []).filter((e) => dayIndex(bounds, Date.parse(e.ts)) >= 0);
+  const days = bounds.slice(0, 7).map((b) => new Date(b));
+  const at = (ts: number) => {
+    const i = dayIndex(bounds, ts);
+    return (i < 0 ? 0 : (i + (ts - bounds[i]) / (bounds[i + 1] - bounds[i])) / 7) * width;
+  };
+  const groups = groupExits(items, bounds, at);
   const crashes = items.filter((e) => e.kind === 'crash').length;
   const updates = items.filter((e) => e.kind === 'update').length;
   const hint = !exits ? undefined : [

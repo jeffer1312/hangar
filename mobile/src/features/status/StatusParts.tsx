@@ -61,6 +61,12 @@ function touched(locationX: number | undefined, toIndex: (x: number) => number, 
   return typeof locationX === 'number' && Number.isFinite(locationX) ? Math.max(0, Math.min(last, toIndex(locationX))) : last;
 }
 
+/** Minutos entre o ponto e o último, pelo horário: um minuto que o amostrador perdeu não entra na série. */
+export function minutesBefore(points: StatusPoint[], i: number, last: number): number {
+  const gap = Date.parse(points[last].ts) - Date.parse(points[i].ts);
+  return Number.isFinite(gap) ? Math.max(0, Math.round(gap / 60_000)) : last - i;
+}
+
 /** Deslizar para cima ou para baixo no leitor de tela anda um ponto; começa no último. */
 const STEP_ACTIONS = [{ name: 'increment' }, { name: 'decrement' }];
 function stepped(action: string, current: number, last: number): number | null {
@@ -94,7 +100,7 @@ export const Sparkline = memo(function Sparkline({ points, color, format, label 
   const pick = (i: number | null) => setPickedTs(i === null ? null : points[i].ts);
   return <View style={{ gap: SPACE[1] }}>
     <Pressable accessibilityRole="adjustable" accessibilityLabel={label} hitSlop={SPACE[1]}
-      accessibilityValue={{ text: format(values[current], last - current) }}
+      accessibilityValue={{ text: format(values[current], minutesBefore(points, current, last)) }}
       accessibilityActions={STEP_ACTIONS}
       onAccessibilityAction={(e) => { const i = stepped(e.nativeEvent.actionName, current, last); if (i !== null) pick(i); }}
       onLayout={(e) => setWidth(Math.max(1, e.nativeEvent.layout.width))}
@@ -113,7 +119,7 @@ export const Sparkline = memo(function Sparkline({ points, color, format, label 
       </Svg>
     </Pressable>
     <Text numberOfLines={1} style={{ color: c.faint, fontSize: theme.base.text.xxxs }}>
-      {picked !== null ? format(values[picked], last - picked) : ' '}
+      {picked !== null ? format(values[picked], minutesBefore(points, picked, last)) : ' '}
     </Text>
   </View>;
 });
