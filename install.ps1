@@ -2336,104 +2336,20 @@ if ($registrou) {
     Nota "  $((Get-LogBackend).FullName)"
     Nota 'Remover depois: Unregister-ScheduledTask -TaskName hangar-backend'
 
-    # Vigia registrada em try/catch PROPRIO, separado do de cima: achado IMPORTANTE da revisao
-    # final. Antes, os dois viviam sob o MESMO try, e uma falha AQUI (na vigia) saia com a mensagem
-    # "nao deu pra registrar as tarefas: ..." mesmo com backend E frontend ja registrados e ja
-    # respondendo (Ok impresso linhas acima) - e como nada disto entrava em $pendencias, o script
-    # ainda fechava em "Pronto". A vigia falhar e real (menos grave que o backend nao subir, mas
-    # ainda assim: sem ela, travamentos deixam de ser recuperados) e tem que aparecer como o que e.
-    try {
-    # A vigia confirma falha HTTP e recupera somente os processos desta tarefa.
-    $vigiaHelper = (Join-Path $raiz 'scripts\windows-tasks.ps1').Replace("'", "''")
-    $vigiaDirectory = "$raiz\backend".Replace("'", "''")
-    $vigiaFrontDirectory = "$raiz\frontend".Replace("'", "''")
-    $vigiaLog = (Join-Path $env:LOCALAPPDATA "hangar\logs\privado\hangar-vigia.log").Replace("'", "''")
-    $vigiaTemplate = @'
-$ErrorActionPreference = 'Stop'
-& {
-    . '__HELPER__'
-    Repair-HangarTask 'hangar-backend' __PORTA__ '__BACKEND__'
-__FRONT__
-} *>&1 | Out-File -FilePath '__LOG__' -Append -Encoding utf8
-'@
-    $vigiaFront = if ($temTarefaFront) { "    Repair-HangarTask 'hangar-frontend' $portaFront '$vigiaFrontDirectory'" } else { '' }
-    $vigiaPs = $vigiaTemplate.Replace('__HELPER__', $vigiaHelper).Replace('__PORTA__', "$portaBack").Replace('__BACKEND__', $vigiaDirectory).Replace('__FRONT__', $vigiaFront).Replace('__LOG__', $vigiaLog)
-    $vigiaEnc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($vigiaPs))
-    $vigiaVbs = Join-Path $env:LOCALAPPDATA "hangar\hangar-vigia.vbs"   # mesmo lugar dos outros .vbs
-    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $vigiaVbs) | Out-Null
-    Escrever-Lancador $vigiaVbs @"
-WScript.Quit CreateObject("WScript.Shell").Run("powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand $vigiaEnc", 0, True)
-"@ 'vbs' | Out-Null
-    # NAO e -AtLogOn puro (era a versao anterior) - MEDIDO na maquina real em 09/08/2026 que a
-    # Repetition so comeca a CONTAR a partir do disparo do gatilho, e registrar a tarefa nao
-    # dispara nada sozinho: registrada as 02:28, com o ultimo logon interativo as 19:53 do dia
-    # ANTERIOR, o gatilho -AtLogOn ja tinha passado e nunca mais ia dispar por conta propria -
-    # LastRunTime ficou em 30/11/1999 (nunca rodou), NextRunTime VAZIO, e nem iniciar a tarefa a
-    # mao arma a repeticao. E exatamente o tipo de coisa que alguem "simplifica" de volta achando
-    # AtLogon mais direto - nao e, ele so dispara em logon FUTURO, e reboot/retomada de suspensao
-    # nao geram logon nenhum.
-    #
-    # -Once com horario no FUTURO IMEDIATO arma a serie na hora do REGISTRO, sem depender de
-    # logon: e o unico jeito medido de deixar NextRunTime preenchido logo depois de
-    # Register-ScheduledTask. -RepetitionDuration ([TimeSpan]::MaxValue) e recusado pelo
-    # Agendador no PowerShell 5.1 - 9999 dias (~27 anos) e "pra sempre" na pratica sem cair
-    # nessa rejeicao.
-    $vigiaOnce = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) `
-        -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration (New-TimeSpan -Days 9999)
-    # -AtLogOn continua registrado JUNTO, nao no lugar - cinto e suspensorio: cobre o logon
-    # interativo de verdade (login de manha, por exemplo), enquanto o -Once repetido acima e
-    # quem cobre reboot e retomada de suspensao, os dois casos que nao passam por logon e que
-    # sao justamente o motivo da vigia existir.
-    $vigiaLogon = New-ScheduledTaskTrigger -AtLogOn -User $contaTarefa
-    # -Settings com bateria: o default e DisallowStartIfOnBatteries=$true, e a maquina que suspende
-    # e justamente o notebook - a vigia ficaria morta exatamente quando e necessaria, e o teste na
-    # tomada passaria. As tarefas existentes ja passam estes dois (acima).
-    $vigiaSet = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
-        -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 2)
-    # O reparo de dono continua disponivel para instalacoes comuns antigas.
-    try {
-        Register-ScheduledTask -TaskName 'hangar-vigia' `
-            -Action (New-ScheduledTaskAction -Execute 'wscript.exe' -Argument "`"$vigiaVbs`"") `
-            -Trigger $vigiaOnce, $vigiaLogon -Settings $vigiaSet `
-            -Principal $taskPrincipal -Force | Out-Null
-    } catch {
-        if ($script:installRunLevel -eq 'Highest') { throw }
-        if (-not (Get-ScheduledTask -TaskName 'hangar-vigia' -ErrorAction SilentlyContinue)) { throw }
-        if (-not $Update -and (Reparar-DonoTarefa 'hangar-vigia')) {
-            Register-ScheduledTask -TaskName 'hangar-vigia' `
-                -Action (New-ScheduledTaskAction -Execute 'wscript.exe' -Argument "`"$vigiaVbs`"") `
-                -Trigger $vigiaOnce, $vigiaLogon -Settings $vigiaSet `
-                -Principal $taskPrincipal -Force | Out-Null
-            Ok 'vigia recriada como sua (antes era do Administrador)'
-        } else {
-            Nota "sem permissao pra re-registrar hangar-vigia - reaproveitando a existente (o .vbs dela foi atualizado)"
+    # O servidor travado e religado pelo proprio lancador: a tarefa hangar-vigia e o .vbs dela saem.
+    # Sem permissao para tirar a tarefa (criada como administrador) o .vbs fica: sem ele o Windows
+    # mostraria "arquivo de script nao encontrado" a cada disparo.
+    $vigiaVbs = Join-Path $env:LOCALAPPDATA 'hangar\hangar-vigia.vbs'
+    if (Get-ScheduledTask -TaskName 'hangar-vigia' -ErrorAction SilentlyContinue) {
+        try {
+            Unregister-ScheduledTask -TaskName 'hangar-vigia' -Confirm:$false -ErrorAction Stop
+            Ok 'tarefa hangar-vigia removida (o lancador religa o servidor travado)'
+        } catch {
+            Falta "a tarefa hangar-vigia nao saiu ($_); numa janela ELEVADA: Unregister-ScheduledTask -TaskName hangar-vigia -Confirm:`$false"
         }
     }
-    $registered = Get-ScheduledTask -TaskName 'hangar-vigia'
-    if ($registered.Principal.RunLevel -ne $script:installRunLevel -or $registered.Principal.LogonType -ne 'Interactive') {
-        throw "A vigia nao manteve a permissao $script:installRunLevel e o logon interativo"
-    }
-    if ($registered.Settings.MultipleInstances -ne 'IgnoreNew') {
-        throw 'A vigia nao manteve a protecao contra execucoes sobrepostas'
-    }
-    # CONFERE o NextRunTime, nao anuncia so por ter registrado - achado IMPORTANTE da revisao final:
-    # este exato ponto ja mediu ERRADO 2x nesta maquina (o gatilho antigo -AtLogOn puro deixava
-    # NextRunTime vazio, comentario acima sobre a medicao de 09/08/2026). So afirma com o campo
-    # preenchido; vazio quer dizer que a vigia pode nao disparar sozinha, e isso tem que aparecer.
-    $infoVigia = Get-ScheduledTask -TaskName 'hangar-vigia' -ErrorAction SilentlyContinue |
-                 Get-ScheduledTaskInfo -ErrorAction SilentlyContinue
-    if ($infoVigia -and $infoVigia.NextRunTime) {
-        Ok "vigia registrada (proximo tick: $($infoVigia.NextRunTime), depois a cada 5 min)"
-    } else {
-        Falta 'vigia registrada mas NextRunTime veio vazio - ela pode nao disparar sozinha'
-        $script:pendencias += 'vigia'
-    }
-    # Dispara agora para conferir o lancador; a recuperacao espera o instalador terminar.
-    Start-ScheduledTask -TaskName 'hangar-vigia' -ErrorAction SilentlyContinue
-    } catch {
-        Falta "nao deu pra registrar a vigia: $_"
-        Nota 'Sem ela, os reinicios por falha continuam, mas travamentos deixam de ser recuperados.'
-        $script:pendencias += 'vigia'
+    if (-not (Get-ScheduledTask -TaskName 'hangar-vigia' -ErrorAction SilentlyContinue)) {
+        Remove-Item -LiteralPath $vigiaVbs -Force -ErrorAction SilentlyContinue
     }
 } else {
     Nota 'pulado - rodando na mao, fechar o terminal derruba o backend'
