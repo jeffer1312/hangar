@@ -419,7 +419,7 @@ describe('primeiro input', () => {
     await beginAttempt('server-a', { ...input, attachment });
     const created = attempt()!;
     await sendFirstInput('server-a', created.id);
-    expect(calls.media).toHaveBeenCalledExactlyOnceWith(serverA, created.sessionName, 'm1');
+    expect(calls.media).toHaveBeenCalledExactlyOnceWith(serverA, created.sessionName, 'm1', undefined);
     const sent = calls.send.mock.calls[0][2] as string;
     expect(sent).toContain('/up/v.mp4 📎 ');
     expect(sent).toContain('/up/q1.jpg');

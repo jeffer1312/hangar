@@ -1449,7 +1449,7 @@ describe('rascunho guardado no Composer', () => {
     await act(async () => pasteInput.onPaste!([{ uri: 'file:///v.mp4', fileName: 'v.mp4', type: 'video/mp4', fileSize: 2048 }], null));
     const stored = () => (JSON.parse(storage.memory.get('draft.v1:s1::sess')!) as { attachments: Record<string, unknown>[] }).attachments;
     expect(stored()).toMatchObject([{ uploadedPath: '/up/v.mp4', uploadedMediaId: 'm1' }]);
-    expect(realFirstInput.media).toHaveBeenCalledWith(expect.anything(), 'sess', 'm1');
+    expect(realFirstInput.media).toHaveBeenCalledWith(expect.anything(), 'sess', 'm1', expect.any(AbortSignal));
     await act(async () => { void button(container, 'composer_enviar_mensagem')!.click(); });
     expect(composerChat.send).not.toHaveBeenCalled();
     await act(async () => ready({ frames: ['/up/q1.jpg', '/up/q2.jpg'], transcript: 'oi\ntudo   bem' }));
