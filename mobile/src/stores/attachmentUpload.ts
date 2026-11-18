@@ -2,6 +2,9 @@ import { uploadFromDiskForServer, waitUploadMediaForServer, type Server } from '
 import { diskFileSize, sendFromDisk } from '../net/uploadFromDisk';
 import type { PickedAttachment } from '../ui/attachmentPicker';
 
+/** O rascunho não gravou o upload: não é falha do upload, e quem gravou já avisou a pessoa. */
+export class DraftSaveError extends Error {}
+
 /** O que o upload grava no anexo do rascunho. Os quatro campos vão sempre, para trocar o que havia. */
 export type UploadedFields = {
   uploadedPath: string;

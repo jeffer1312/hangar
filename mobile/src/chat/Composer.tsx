@@ -6,7 +6,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { broadcast, formataErro, isAbortError, steerSession, podeEnviarSozinho, providerName, sendInputForServer, sideQuestionOf, slashMatches, slashTokenAt, replaceSlashToken, relimparDitado, estilosDitado, canUpdateQueueEdit, queueEditLeft, DELIVERY_STALLED } from '@hangar/core';
 import type { CommandInfo, MotivoFim, Provider, QueueEdit, QueuePanel as QueuePanelModel, Server } from '@hangar/core';
 import { ComposerActions, ComposerBox, ComposerInput } from './ComposerField';
-import { uploadAttachment, type UploadedFields } from '../stores/attachmentUpload';
+import { DraftSaveError, uploadAttachment, type UploadedFields } from '../stores/attachmentUpload';
 import { Icon } from '../ui/Icon';
 import * as m from '../paraglide/messages';
 import { chatStore, filaCount as filaCountOf, submitConversationDraft, isSubmitting, settleDelivered } from '../stores/chat';
@@ -348,7 +348,7 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
       return uploadAttachment(server, origin.name, attach, (fields) => {
         // Caminho sem gravar no rascunho: esperar a mídia faria o app fechado subir o vídeo de novo.
         if (uploadsRef.current.get(attach.uri) === upload && !recordUpload(attach.uri, { ...fields, uploadedFor: target })) {
-          throw new Error(m.draft_write_error());
+          throw new DraftSaveError(m.draft_write_error());
         }
       }, { pending: pendingMediaUpload(attach, target), signal: abort.signal });
     })();
@@ -813,12 +813,13 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
             let uploaded: UploadedFields;
             try {
               uploaded = await startUpload(attach).catch((e: unknown) => {
-                if (!inFlight || isAbortError(e)) throw e;
+                if (!inFlight || isAbortError(e) || e instanceof DraftSaveError) throw e;
                 return startUpload(attach);
               });
             } catch (e) {
-              // Cancelado pela tela fechando ou pela sessão recriada: não é falha de upload.
-              if (!isAbortError(e)) {
+              // Cancelado pela tela fechando ou pela sessão recriada, ou rascunho que não gravou (o aviso
+              // dele já está na tela): não é falha de upload.
+              if (!isAbortError(e) && !(e instanceof DraftSaveError)) {
                 // O backend diz o motivo (tamanho, formato); o texto e os anexos continuam no rascunho, e
                 // os que já subiram guardam o caminho para não subir de novo.
                 setError(e instanceof Error && e.message ? `${m.board_falha_upload()}: ${e.message}` : m.board_falha_upload());
