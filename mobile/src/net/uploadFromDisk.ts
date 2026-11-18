@@ -1,3 +1,13 @@
+/** Tamanho do arquivo no disco, para o prazo do upload; ilegível, o prazo fica no mínimo. */
+export async function diskFileSize(uri: string): Promise<number | undefined> {
+  try {
+    const { File } = await import('expo-file-system');
+    return new File(uri).size ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 // `fetch` que sobe o arquivo do disco pelo envio nativo, ignorando o `body`. O fetch do Expo lê o
 // arquivo inteiro para o JS e o reconverte por base64 ao enviar: um zip grande estoura o Hermes.
 export function sendFromDisk(uri: string): typeof fetch {

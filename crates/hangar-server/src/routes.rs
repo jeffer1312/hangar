@@ -93,6 +93,8 @@ pub struct AppState {
     pub hangar_dir: std::path::PathBuf,
     /// Relógio e sufixo dos nomes do cofre de anexos; o teste de contrato fixa os da referência.
     pub upload_naming: crate::uploads::store::Naming,
+    /// Quadros e fala dos vídeos subidos com `media=later`.
+    pub upload_media: crate::uploads::media::MediaJobs,
     pub origins: std::sync::Mutex<indexmap::IndexMap<std::path::PathBuf, crate::costs::origins::Origins>>,
     pub list: Arc<crate::list::bridge::ListBridge>,
     /// Produtor único da lista do dono; liga com a primeira lista aberta.
@@ -315,6 +317,7 @@ impl AppState {
             ticket_actions: Default::default(),
             hangar_dir, device_install,
             upload_naming: Default::default(),
+            upload_media: Default::default(),
             origins: std::sync::Mutex::new(indexmap::IndexMap::new()),
             list, state,
             term: Arc::default(),

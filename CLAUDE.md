@@ -577,6 +577,10 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
 - **Mermaid é desenhado pelo `hangar-server` (`POST /api/mermaid`), em PNG, num Chromium sem rede**,
   com a biblioteca embutida no binário; os clientes só exibem a imagem. Evidência em
   [plataforma.md](docs/decisoes/plataforma.md#mermaid-desenhado-no-servidor-15102026).
+- **Vídeo subido com `media=later` responde ao gravar; quadros e fala saem por `upload-media?id=&wait=1`.**
+  A chave é o `media_id` (nunca a sessão), uma tarefa de mídia por vez, registro só em memória; 404 faz o
+  cliente seguir só com o vídeo. Sem o parâmetro a resposta é a de sempre. Motivo em
+  [plataforma.md](docs/decisoes/plataforma.md#vídeo-do-celular-upload-responde-ao-gravar-quadros-e-fala-por-pedido-que-espera-17112026).
 - **Plugins do Claude são do Rust (`hangar-plugins`), pela CLI oficial na pasta principal.** Vale
   para todas as contas da máquina: ligar e remover gravam no `~/.claude/settings.json` (remover
   grava `false`, porque o espelho não apaga nas contas), e toda subida de processo Claude em conta

@@ -797,41 +797,71 @@ export async function uploadFileForServer(
   // Ditado: mesmo motivo do `audioOnly` do `uploadFile`.
   opts?: { audioOnly?: boolean },
 ): Promise<{ path: string }> {
-  return postUpload(s, name, file, opts?.audioOnly === true, file);
+  return postUpload(s, name, file, opts?.audioOnly ? '?audio_only=1' : '', file);
 }
 
+export type DiskUpload = { path: string; media?: 'pending'; media_id?: string };
+
 // Arquivo que já está no disco do aparelho: `send` o sobe direto de lá. No celular o fetch leria o
-// arquivo inteiro para a memória do JS, e um arquivo grande derruba o app.
+// arquivo inteiro para a memória do JS, e um arquivo grande derruba o app. Vídeo volta com
+// `media_id`: o envio nativo desiste com 60 s sem resposta, e quadros mais fala passam disso.
 export function uploadFromDiskForServer(
   s: Server,
   name: string,
-  file: { name: string; type: string },
+  file: { name: string; type: string; size?: number },
   send: typeof fetch,
-): Promise<{ path: string }> {
-  return postUpload(s, name, file, false, undefined, send);
+): Promise<DiskUpload> {
+  return postUpload(s, name, file, '?media=later', undefined, send);
 }
 
-async function postUpload(
+// Sem teto, uma foto grande num link ruim (tablet em relay) deixava o composer preso em "enviando…"
+// pra sempre; teto fixo cortava arquivo grande legítimo. 50 kB/s é um link móvel ruim.
+export function uploadTimeoutMs(size: number | undefined): number {
+  return Math.max(180_000, Math.ceil((size ?? 0) / 50_000) * 1000);
+}
+
+async function postUpload<T extends { path: string }>(
   s: Server,
   name: string,
-  file: { name: string; type: string },
-  audioOnly: boolean,
+  file: { name: string; type: string; size?: number },
+  query: string,
   body: RequestInit['body'],
   send?: typeof fetch,
-): Promise<{ path: string }> {
-  const res = await apiFetchRes(`/api/sessions/${encodeURIComponent(name)}/upload${audioOnly ? '?audio_only=1' : ''}`, {
+): Promise<T> {
+  const res = await apiFetchRes(`/api/sessions/${encodeURIComponent(name)}/upload${query}`, {
     method: 'POST',
     headers: {
       'Content-Type': file.type || 'application/octet-stream',
       'X-Filename': encodeURIComponent(file.name || 'arquivo'),
     },
     body,
-    // Sem teto, uma foto grande num link ruim (tablet em relay) deixava o composer preso em
-    // "enviando…" pra sempre. 3min cobre upload legítimo lento; estourou -> erro visível + retry.
-    signal: AbortSignal.timeout(180_000),
-  }, s, false, true, send);
+    signal: AbortSignal.timeout(uploadTimeoutMs(file.size)),
+  // Prazo de upload estourado é o link lento da pessoa, não a máquina fora do ar.
+  }, s, false, false, send);
   if (!res.ok) throw new Error(`${res.status}: ${await errorDetail(res)}`);
-  return res.json() as Promise<{ path: string }>;
+  return res.json() as Promise<T>;
+}
+
+const MEDIA_WAIT_TOTAL_MS = 8 * 60_000;
+
+/** Quadros e fala de um vídeo subido com `media_id`. `null` quando não vêm (falha, servidor
+ *  reiniciado, teto total): quem chama segue só com o vídeo, como o desktop quando a transcrição falha. */
+export async function waitUploadMediaForServer(
+  s: Server,
+  name: string,
+  mediaId: string,
+): Promise<{ frames: string[]; transcript: string } | null> {
+  const deadline = Date.now() + MEDIA_WAIT_TOTAL_MS;
+  // Cada pedido fica no servidor até a mídia ficar pronta ou ~45 s; não há espera do lado de cá.
+  while (Date.now() < deadline) {
+    const res = await apiFetchRes(`/api/sessions/${encodeURIComponent(name)}/upload-media?id=${encodeURIComponent(mediaId)}&wait=1`, {
+      signal: AbortSignal.timeout(60_000),
+    }, s, false, false).catch(() => null);
+    if (!res?.ok) return null;
+    const body = await res.json() as { status: string; frames?: string[]; transcript?: string };
+    if (body.status === 'done') return { frames: body.frames ?? [], transcript: body.transcript ?? '' };
+  }
+  return null;
 }
 
 // Opções do ditado que viajam na query do /transcribe. `estilo` é o que a PILL mostrava na hora de
@@ -3134,9 +3164,7 @@ export function uploadFile(
     xhr.setRequestHeader('X-Hangar-Req', req);
     xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
     xhr.setRequestHeader('X-Filename', encodeURIComponent(file.name || 'arquivo'));
-    // Mesmo teto do uploadFileForServer: sem ele, uma foto grande num link ruim deixava o composer
-    // presto em "enviando…" pra sempre.
-    xhr.timeout = 180_000;
+    xhr.timeout = uploadTimeoutMs(file.size);
     xhr.upload.onprogress = (e) => {
       // `lengthComputable` é falso em algumas pontes (proxy que recodifica): aí não há fração pra
       // mostrar, e quem chama decide o que fazer com a ausência.

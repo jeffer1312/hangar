@@ -3,10 +3,10 @@ import * as Haptics from 'expo-haptics';
 import { AccessibilityInfo, ActivityIndicator, Alert, AppState, Keyboard, Platform, Pressable, ScrollView, Text, View, type NativeSyntheticEvent, type TextInput, type TextInputKeyPressEventData } from 'react-native';
 import type { NativeStackNavigationProp } from 'expo-router';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { broadcast, formataErro, uploadFromDiskForServer, steerSession, podeEnviarSozinho, providerName, sendInputForServer, sideQuestionOf, slashMatches, slashTokenAt, replaceSlashToken, relimparDitado, estilosDitado, canUpdateQueueEdit, queueEditLeft, DELIVERY_STALLED } from '@hangar/core';
+import { broadcast, formataErro, uploadFromDiskForServer, waitUploadMediaForServer, steerSession, podeEnviarSozinho, providerName, sendInputForServer, sideQuestionOf, slashMatches, slashTokenAt, replaceSlashToken, relimparDitado, estilosDitado, canUpdateQueueEdit, queueEditLeft, DELIVERY_STALLED } from '@hangar/core';
 import type { CommandInfo, MotivoFim, Provider, QueueEdit, QueuePanel as QueuePanelModel, Server } from '@hangar/core';
 import { ComposerActions, ComposerBox, ComposerInput } from './ComposerField';
-import { sendFromDisk } from '../net/uploadFromDisk';
+import { diskFileSize, sendFromDisk } from '../net/uploadFromDisk';
 import { Icon } from '../ui/Icon';
 import * as m from '../paraglide/messages';
 import { chatStore, filaCount as filaCountOf, submitConversationDraft, isSubmitting, settleDelivered } from '../stores/chat';
@@ -66,6 +66,7 @@ interface Props {
 }
 
 type PendingAttach = PickedAttachment;
+type UploadPatch = Partial<Pick<DraftAttachment, 'uploadedPath' | 'uploadedFor' | 'uploadedMediaId' | 'uploadedFrames' | 'uploadedSpeech'>>;
 
 // Como o PWA: os caminhos de todos os anexos numa linha só (o envio por terminal recusa quebra de linha).
 const attachLine = (list: readonly PendingAttach[]) => list.map((a) => attachInsert(a, a.uploadedPath!)).join(' ');
@@ -309,12 +310,14 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
   // uri: anexo removido sai do mapa e o resultado que chegar depois não volta para a lista.
   const uploadsRef = useRef(new Map<string, Promise<string>>());
   const failedUploadsRef = useRef(new Set<string>());
-  const recordUpload = useCallback((uri: string, path: string, target: UploadTarget): boolean => {
+  const recordUpload = useCallback((uri: string, patch: UploadPatch): boolean => {
     // Desmontado, a lista em memória é velha: gravá-la apagaria o que outra montagem pôs no rascunho.
     if (!mountedRef.current) return true;
     const list = attachmentsRef.current;
-    if (!list.some((a) => a.uri === uri && a.uploadedPath !== path)) return true;
-    const next = list.map((a) => (a.uri === uri ? { ...a, uploadedPath: path, uploadedFor: target } : a));
+    const current = list.find((a) => a.uri === uri);
+    if (!current || (Object.keys(patch) as (keyof UploadPatch)[])
+      .every((key) => JSON.stringify(current[key]) === JSON.stringify(patch[key]))) return true;
+    const next = list.map((a) => (a.uri === uri ? { ...a, ...patch } : a));
     if (!persistDraft({ attachments: next })) return false;
     setPendingAttachments(next);
     return true;
@@ -328,8 +331,22 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
     upload = (async () => {
       const server = useServers.getState().servers.find((s) => s.id === origin.serverId);
       if (!server) throw new Error(m.chat_servidor_removido());
-      const path = (await uploadFromDiskForServer(server, origin.name, { name: attach.name, type: attach.mime }, sendFromDisk(attach.uri))).path;
-      if (uploadsRef.current.get(attach.uri) === upload) recordUpload(attach.uri, path, target);
+      const mine = () => uploadsRef.current.get(attach.uri) === upload;
+      // Vídeo já subido com a mídia pendente (app reaberto no meio): só falta esperar, sem subir de novo.
+      let path = attach.uploadedMediaId ? reusableUploadPath(attach, target) : null;
+      let mediaId = path ? attach.uploadedMediaId : undefined;
+      if (!path) {
+        const size = attach.size ?? await diskFileSize(attach.uri);
+        const saved = await uploadFromDiskForServer(server, origin.name, { name: attach.name, type: attach.mime, size }, sendFromDisk(attach.uri));
+        path = saved.path;
+        mediaId = saved.media_id;
+        // O caminho vai ao rascunho já: fechar o app esperando a mídia não sobe o vídeo outra vez.
+        if (mine()) recordUpload(attach.uri, { uploadedPath: path, uploadedFor: target, uploadedMediaId: mediaId, uploadedFrames: undefined, uploadedSpeech: undefined });
+      }
+      if (mediaId) {
+        const media = await waitUploadMediaForServer(server, origin.name, mediaId);
+        if (mine()) recordUpload(attach.uri, { uploadedMediaId: undefined, uploadedFrames: media?.frames ?? [], uploadedSpeech: media?.transcript ?? '' });
+      }
       return path;
     })();
     uploadsRef.current.set(attach.uri, upload);
@@ -468,7 +485,7 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
     const target = { serverId: origin.serverId, name: origin.name, transcript: transcriptRef.current };
     for (const a of pendingAttachments) {
       // A falha fica para o Enviar, que tenta de novo e mostra o motivo; aqui não sobe o mesmo arquivo de novo.
-      if (!reusableUploadPath(a, target) && !failedUploadsRef.current.has(a.uri)) {
+      if ((!reusableUploadPath(a, target) || a.uploadedMediaId) && !failedUploadsRef.current.has(a.uri)) {
         startUpload(a).catch(() => { failedUploadsRef.current.add(a.uri); });
       }
     }
@@ -775,7 +792,7 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
       try {
         for (const attach of sentAttachments) {
           let path = reusableUploadPath(attach, target);
-          if (!path) {
+          if (!path || attach.uploadedMediaId) {
             if (!useServers.getState().servers.some((s) => s.id === origin.serverId)) {
               setError(m.chat_servidor_removido());
               stop();
@@ -795,12 +812,13 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
               stop();
               return;
             }
-            if (!recordUpload(attach.uri, path, target)) {
+            if (!recordUpload(attach.uri, { uploadedPath: path, uploadedFor: target })) {
               stop();
               return;
             }
           }
-          inserts.push(attachInsert(attach, path));
+          // Os quadros e a fala do vídeo chegam ao rascunho depois do upload, não ao retrato do início do envio.
+          inserts.push(attachInsert(attachmentsRef.current.find((a) => a.uri === attach.uri) ?? attach, path));
         }
       } finally {
         setUploading(false);

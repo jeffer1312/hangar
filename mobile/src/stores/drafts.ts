@@ -13,6 +13,10 @@ const attachmentSchema = z.object({
     name: z.string().min(1),
     transcript: z.string().min(1).nullable(),
   }).optional(),
+  // Vídeo: com o id, quadros e fala ainda estão sendo feitos no servidor; sem ele, já chegaram.
+  uploadedMediaId: z.string().min(1).optional(),
+  uploadedFrames: z.array(z.string().min(1)).optional(),
+  uploadedSpeech: z.string().optional(),
 });
 
 // Rascunho gravado antes da lista tinha `attachment` (um só ou null): vira a lista na leitura.

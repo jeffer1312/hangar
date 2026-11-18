@@ -67,6 +67,7 @@ pub fn matches(method: &Method, path: &str) -> bool {
         return false;
     };
     (*method == Method::POST && tail == "upload")
+        || (*method == Method::GET && tail == "upload-media")
         || (matches!(*method, Method::GET | Method::HEAD)
             && (tail == "uploads"
                 || tail
@@ -155,7 +156,7 @@ pub async fn public(st: Arc<AppState>, req: Request) -> Response {
     handle(&st, &name, &tail, req).await
 }
 
-async fn handle(st: &AppState, name: &str, tail: &str, req: Request) -> Response {
+async fn handle(st: &Arc<AppState>, name: &str, tail: &str, req: Request) -> Response {
     let query: HashMap<String, String> =
         form_urlencoded::parse(req.uri().query().unwrap_or("").as_bytes())
             .into_owned()
@@ -221,7 +222,7 @@ pub(super) async fn resolve_audio(store: &UploadStore, project: &str, facts: &Fa
 }
 
 async fn execute(
-    st: &AppState,
+    st: &Arc<AppState>,
     tail: &str,
     req: Request,
     facts: Facts,
@@ -237,6 +238,11 @@ async fn execute(
         let audio_only = match boolean(query.get("audio_only")) {
             Ok(value) => value,
             Err(()) => return response(json!({"detail":"valor booleano inválido"}), 422),
+        };
+        let media_later = match query.get("media").map(String::as_str) {
+            None => false,
+            Some("later") => true,
+            Some(_) => return response(json!({"detail":"valor de media inválido"}), 422),
         };
         let length = req
             .headers()
@@ -256,6 +262,22 @@ async fn execute(
             Ok(path) => path,
             Err(r) => return r,
         };
+        // O envio nativo do celular desiste com 60 s sem resposta, e quadros mais fala passam disso.
+        if media_later && !audio_only && media::is_video(&path) {
+            let Ok(id) = crate::accounts::claude_login::nonce() else {
+                return failure(500, "erro_midia_indisponivel", "não foi possível registrar o processamento do vídeo");
+            };
+            let (st, store, session, file, owner) = (st.clone(), store.clone(), facts.session.clone(), path.clone(), project.clone());
+            st.upload_media.clone().start(id.clone(), owner, async move {
+                let (frames, audio) = media::extract(&store, &project, &session, &file).await;
+                let transcript = match audio {
+                    Some(audio) => media::transcribe(&st, audio).await,
+                    None => String::new(),
+                };
+                media::Media { frames, transcript: transcript.trim().to_owned() }
+            });
+            return response(json!({"path":path,"frames":[],"transcript":"","media":"pending","media_id":id}), 200);
+        }
         let (frames, audio) = if audio_only {
             (vec![], None)
         } else {
@@ -269,6 +291,19 @@ async fn execute(
             json!({"path":path,"frames":frames,"transcript":transcript.trim()}),
             200,
         );
+    }
+    if tail == "upload-media" {
+        let wait = match boolean(query.get("wait")) {
+            Ok(v) => v,
+            Err(()) => return response(json!({"detail":"valor booleano inválido"}), 422),
+        };
+        let cap = if wait { media::WAIT_CAP } else { std::time::Duration::ZERO };
+        let id = query.get("id").map(String::as_str).unwrap_or_default();
+        return match st.upload_media.wait(id, &project, cap).await {
+            media::Waited::Done(m) => response(json!({"status":"done","frames":m.frames,"transcript":m.transcript}), 200),
+            media::Waited::Pending => response(json!({"status":"pending"}), 200),
+            media::Waited::Unknown => failure(404, "erro_midia_desconhecida", "nenhuma mídia em processamento para esse arquivo"),
+        };
     }
     if tail == "uploads" {
         let (session, retention, now) = (facts.session.clone(), facts.retention, now());
@@ -319,14 +354,14 @@ mod tests {
         body::{Body, to_bytes},
         http::header,
     };
-    fn state() -> AppState {
-        AppState::new(crate::config::Config {
+    fn state() -> Arc<AppState> {
+        Arc::new(AppState::new(crate::config::Config {
             listen: "127.0.0.1:0".parse().unwrap(),
             internal_secret: "synthetic".into(),
             auth_token: "synthetic".into(),
             log_path: None,
             trusted: crate::auth::TrustedHosts::parse("127.0.0.1"),
-        })
+        }))
     }
     fn facts(root: &std::path::Path) -> Facts {
         Facts {

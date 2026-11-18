@@ -11,7 +11,7 @@ function overwriteGetLocale(fn: () => 'en' | 'pt') {
 }
 import { configureApi } from './apiEnv';
 // `getHistoryDesde` veio da main junto com o histórico condicional (304 + ETag).
-import { getConfig, getConfigForServer, patchConfig, patchConfigForServer, createSession, getHistory, getHistoryDesde, isAbortError, transcribeFile, transcribeFileForServer, transcribeUploaded, transcribeUploadedForServer, uploadFile, uploadFileForServer, getModelOptions, setEngineModel, rotaGenerica, pairSession } from './api';
+import { getConfig, getConfigForServer, patchConfig, patchConfigForServer, createSession, getHistory, getHistoryDesde, isAbortError, transcribeFile, transcribeFileForServer, transcribeUploaded, transcribeUploadedForServer, uploadFile, uploadFileForServer, uploadFromDiskForServer, uploadTimeoutMs, waitUploadMediaForServer, getModelOptions, setEngineModel, rotaGenerica, pairSession } from './api';
 import { createSessionForServer, getSessionDefaultsForServer, getFolderGitForServer, folderGitActionForServer, defaultBase, freshBase, baseChoices, commitsLeftOut, resumeArchivedConversation } from './api';
 import { mensagemDeErro, formataErro } from './errosApi';
 import { passarBastao, getSyncSetupForServer, setupSyncForServer, disableSyncForServer, getNewChatCommandsForServer } from './api';
@@ -1009,6 +1009,47 @@ describe('transcribeFile', () => {
       'https://a.test/api/sessions/sessao/upload?audio_only=1',
       'https://a.test/api/sessions/sessao/upload',
     ]);
+  });
+
+  it('prazo do upload cresce com o tamanho, a partir de 180 s', () => {
+    expect(uploadTimeoutMs(undefined)).toBe(180_000);
+    expect(uploadTimeoutMs(1_000_000)).toBe(180_000);
+    expect(uploadTimeoutMs(100_000_000)).toBe(2_000_000);
+  });
+
+  it('upload do disco pede a mídia para depois e devolve o id dela', async () => {
+    const send = vi.fn(async () => new Response(JSON.stringify(
+      { path: '/up/v.mp4', frames: [], transcript: '', media: 'pending', media_id: 'm1' }), { status: 200 }));
+    const saved = await uploadFromDiskForServer(server, 'sessao', { name: 'v.mp4', type: 'video/mp4', size: 10 }, send);
+    expect(send.mock.calls[0][0]).toBe('https://a.test/api/sessions/sessao/upload?media=later');
+    expect(saved).toMatchObject({ path: '/up/v.mp4', media: 'pending', media_id: 'm1' });
+  });
+
+  it('espera da mídia repete enquanto pendente e devolve quadros e fala', async () => {
+    const replies = [{ status: 'pending' }, { status: 'done', frames: ['/up/q1.jpg'], transcript: 'ola' }];
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      new Response(JSON.stringify(replies.shift()), { status: 200 }));
+    expect(await waitUploadMediaForServer(server, 'sessao', 'm1')).toEqual({ frames: ['/up/q1.jpg'], transcript: 'ola' });
+    expect(fetchMock.mock.calls.map((c) => c[0])).toEqual([
+      'https://a.test/api/sessions/sessao/upload-media?id=m1&wait=1',
+      'https://a.test/api/sessions/sessao/upload-media?id=m1&wait=1',
+    ]);
+  });
+
+  it('espera da mídia devolve null para resposta que não é 200 e depois do teto total', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      new Response(JSON.stringify({ detail: { code: 'erro_midia_desconhecida' } }), { status: 404 }));
+    expect(await waitUploadMediaForServer(server, 'sessao', 'm1')).toBeNull();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+        vi.setSystemTime(Date.now() + 9 * 60_000);
+        return new Response(JSON.stringify({ status: 'pending' }), { status: 200 });
+      });
+      expect(await waitUploadMediaForServer(server, 'sessao', 'm1')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('falha de ?arquivo= leva o status', async () => {
