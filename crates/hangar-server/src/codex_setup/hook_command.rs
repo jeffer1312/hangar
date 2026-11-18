@@ -8,11 +8,11 @@ pub fn allow_wrapper() -> Result<(String, String), String> {
     Ok((executable, "codex-hook-allow".into()))
 }
 
-/// O programa dos hooks gravados nos agentes: `~/.hangar/bin/hangar-launcher`, o mesmo binário renovado
-/// a cada versão e preservado na volta de versão, então o comando novo não falha na versão antiga.
-/// Só vale quando ele É este servidor (mesmos bytes): no checkout e no modo desenvolvedor a
-/// atualização não o renova, e um lançador velho recusaria o subcomando novo. Fora disso, o
-/// `persistent_server`.
+/// O programa dos hooks gravados nos agentes e dos atalhos `.cmd`: `~/.hangar/bin/hangar-hooks`, cópia
+/// deste servidor. Versão anterior a ela não a conhece nem a troca (o `hangar-launcher` ela troca), então
+/// o comando gravado segue funcionando na volta de versão. Só no pacote, quando o lançador É este
+/// servidor (mesmos bytes): no checkout e no modo desenvolvedor a atualização não o renova. Fora disso,
+/// o `persistent_server`.
 pub fn hook_server(home: &Path) -> Result<PathBuf, String> {
     let running = std::env::current_exe().map_err(|error| error.to_string())?;
     hook_server_with(home, cfg!(windows), &running, persistent_server)
@@ -20,7 +20,53 @@ pub fn hook_server(home: &Path) -> Result<PathBuf, String> {
 
 pub fn hook_server_with(home: &Path, windows: bool, running: &Path, fallback: impl FnOnce() -> Result<PathBuf, String>) -> Result<PathBuf, String> {
     let launcher = crate::update::migrate::launcher_path(home, windows);
-    if same_bytes(&launcher, running) { Ok(launcher) } else { fallback() }
+    if !same_bytes(&launcher, running) { return fallback(); }
+    let copy = hooks_path(home, windows);
+    match renew_hooks_copy(&copy, running, current_version(home).as_deref()) {
+        Ok(()) => Ok(copy),
+        Err(error) => {
+            // Sem a cópia em dia, o lançador ainda é este servidor: só a volta de versão perde.
+            tracing::warn!(code = "hooks_copy_failed", "a cópia dos hooks não foi renovada: {error}");
+            Ok(launcher)
+        }
+    }
+}
+
+/// `~/.hangar/bin/hangar-hooks`: a cópia do servidor que só os hooks e os atalhos chamam.
+pub fn hooks_path(home: &Path, windows: bool) -> PathBuf {
+    home.join(".hangar").join("bin").join(if windows { "hangar-hooks.exe" } else { "hangar-hooks" })
+}
+
+/// A versão do pacote em uso (`~/.hangar/current/manifest.json`).
+fn current_version(home: &Path) -> Option<String> {
+    let path = crate::install_root::current(home).join(hangar_package::MANIFEST_FILE);
+    let manifest: serde_json::Value = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
+    manifest.get("version").and_then(serde_json::Value::as_str).map(str::to_owned)
+}
+
+fn version_key(version: &str) -> Option<Vec<u64>> {
+    version.trim().split('.').map(|part| part.parse().ok()).collect()
+}
+
+/// Copia `running` para `copy` quando difere, nunca por cima de uma versão mais nova (a volta entre
+/// duas versões que já têm a cópia a deixaria sem os subcomandos da mais nova). A versão gravada mora
+/// em `hangar-hooks.version`; versão ilegível dos dois lados não segura a troca.
+pub fn renew_hooks_copy(copy: &Path, running: &Path, version: Option<&str>) -> Result<(), String> {
+    if same_bytes(copy, running) { return Ok(()); }
+    let marker = copy.with_extension("version");
+    let recorded = std::fs::read_to_string(&marker).ok().and_then(|text| version_key(&text));
+    if copy.is_file() && let (Some(recorded), Some(running)) = (recorded, version.and_then(version_key)) && recorded > running {
+        return Ok(());
+    }
+    crate::update::migrate::write_launcher(running, copy)?;
+    match version {
+        Some(version) => crate::runtime::queue::atomic_write(&marker, format!("{version}\n").as_bytes())
+            .map_err(|error| format!("{}: {error}", marker.display())),
+        None => match std::fs::remove_file(&marker) {
+            Err(error) if error.kind() != io::ErrorKind::NotFound => Err(format!("{}: {error}", marker.display())),
+            _ => Ok(()),
+        },
+    }
 }
 
 /// Os dois arquivos têm o mesmo conteúdo; ilegível ou ausente é "não". A resposta fica guardada por
@@ -132,7 +178,47 @@ mod path_tests {
         std::fs::write(&launcher, b"servidor velho sem state-hook").unwrap();
         assert_eq!(hook_server_with(&home, cfg!(windows), &running, fallback).unwrap(), PathBuf::from("persistente"), "lançador velho");
         std::fs::write(&launcher, b"servidor novo com state-hook").unwrap();
-        assert_eq!(hook_server_with(&home, cfg!(windows), &running, fallback).unwrap(), launcher, "o mesmo binário");
+        let copy = hooks_path(&home, cfg!(windows));
+        assert_eq!(hook_server_with(&home, cfg!(windows), &running, fallback).unwrap(), copy, "o mesmo binário: a cópia dos hooks");
+        assert_eq!(std::fs::read(&copy).unwrap(), b"servidor novo com state-hook");
+    }
+
+    /// Decisão 30: a versão antiga troca o lançador pelo binário dela; a cópia dos hooks ela não conhece.
+    /// Os comandos gravados apontam para a cópia, que fica na volta de versão.
+    #[test]
+    fn the_hooks_copy_survives_a_launcher_swapped_by_an_older_version() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        let launcher = crate::update::migrate::launcher_path(&home, cfg!(windows));
+        std::fs::create_dir_all(launcher.parent().unwrap()).unwrap();
+        let running = temp.path().join("hangar-server");
+        std::fs::write(&running, b"versao nova").unwrap();
+        std::fs::write(&launcher, b"versao nova").unwrap();
+        let copy = hook_server_with(&home, cfg!(windows), &running, || Ok(PathBuf::from("persistente"))).unwrap();
+        std::fs::write(&launcher, b"versao antiga, sem state-hook").unwrap();
+        assert_eq!(std::fs::read(&copy).unwrap(), b"versao nova", "a volta de versão não toca a cópia");
+    }
+
+    /// Volta entre duas versões que já têm a cópia: a mais velha nunca a troca pela dela; a igual ou mais
+    /// nova troca e grava a versão ao lado.
+    #[test]
+    fn the_hooks_copy_is_never_downgraded() {
+        let temp = tempfile::tempdir().unwrap();
+        let copy = temp.path().join("hangar-hooks");
+        let (new, old) = (temp.path().join("new"), temp.path().join("old"));
+        std::fs::write(&new, b"0.1.0.20").unwrap();
+        std::fs::write(&old, b"0.1.0.9").unwrap();
+        renew_hooks_copy(&copy, &new, Some("0.1.0.20")).unwrap();
+        assert_eq!(std::fs::read_to_string(copy.with_extension("version")).unwrap(), "0.1.0.20\n");
+        renew_hooks_copy(&copy, &old, Some("0.1.0.9")).unwrap();
+        assert_eq!(std::fs::read(&copy).unwrap(), b"0.1.0.20", "versão menor não troca");
+        let same = temp.path().join("same");
+        std::fs::write(&same, b"0.1.0.20 refeita").unwrap();
+        renew_hooks_copy(&copy, &same, Some("0.1.0.20")).unwrap();
+        assert_eq!(std::fs::read(&copy).unwrap(), b"0.1.0.20 refeita", "a mesma versão troca");
+        renew_hooks_copy(&copy, &old, None).unwrap();
+        assert_eq!(std::fs::read(&copy).unwrap(), b"0.1.0.9", "versão ilegível não segura a troca");
+        assert!(!copy.with_extension("version").exists(), "nem fica marcada com a versão de antes");
     }
 
     #[cfg(unix)]

@@ -41,12 +41,7 @@ fn native_command(command: &str, mode: &str) -> bool {
     let tokens = super::hooks::tokens(command, cfg!(windows));
     tokens.len() == 2
         && tokens[1] == mode
-        && tokens[0].rsplit(['/', '\\']).next().is_some_and(|name| {
-            matches!(
-                name,
-                "hangar-server" | "hangar-server.exe" | "hangar-server-command" | "hangar-launcher" | "hangar-launcher.exe"
-            )
-        })
+        && super::hooks::hangar_program(&tokens[0])
 }
 
 /// O modo do Hangar de um comando gravado (Python antigo ou subcomando), ou `None` se é pessoal.

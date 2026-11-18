@@ -149,8 +149,7 @@ fn with_program(text: &str, program: &Path, windows: bool) -> Option<String> {
     };
     // Só programa do Hangar: comando pessoal que por acaso cita `pair-context` fica como está.
     let current = super::hooks::tokens(rest, windows).into_iter().next()?;
-    let name = current.trim_matches(['"', '\'']).rsplit(['/', '\\']).next()?.to_owned();
-    if !matches!(name.as_str(), "hangar-server" | "hangar-server.exe" | "hangar-server-command" | "hangar-launcher" | "hangar-launcher.exe") {
+    if !super::hooks::hangar_program(&current) {
         return None;
     }
     Some(format!("{prefix}\"{}\"{tail}", program.display()))

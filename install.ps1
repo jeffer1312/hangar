@@ -2398,11 +2398,22 @@ if (-not $bash) {
     # (2) lancador pro PowerShell: o hangar-send e o `hangar-server send`, chamado direto (sem o
     # bash) pelo executavel que o scripts\hangar-server-lookup.cmd acha. A linha `rem` guarda o
     # caminho do scripts\hangar-send entre aspas: plugins de terceiros o procuram no texto do atalho.
+    # Na maquina com pacote vai pela copia dos hooks: a versao anterior troca o lancador e nao tem o
+    # lookup.cmd, mas nao conhece a copia, e o atalho segue de pe na volta de versao. Sem a copia
+    # (instalacao nova, checkout) ou com CP_RUST_SERVER_BIN escolhido, a regra do lookup.cmd.
+    function Achar-Servidor([string]$quem, [string]$codigo) {
+        $alvo = if ($quem) { " $quem" } else { '' }
+        $lookup = "call `"$raizAtalhos\scripts\hangar-server-lookup.cmd`" `"$raizAtalhos`"$alvo || exit /b $codigo`r`n"
+        if ($raizAtalhos -ne '%USERPROFILE%\.hangar\current') { return $lookup }
+        return "set `"HANGAR_SERVER_BIN=%USERPROFILE%\.hangar\bin\hangar-hooks.exe`"`r`n" +
+               "if defined CP_RUST_SERVER_BIN set `"HANGAR_SERVER_BIN=`"`r`n" +
+               "if not exist `"%HANGAR_SERVER_BIN%`" (`r`n    $lookup)`r`n"
+    }
     $lancador = Join-Path $binUsuario 'hangar-send.cmd'
     $conteudo = "@echo off`r`n" +
                 "setlocal`r`n" +
                 "rem `"$raizAtalhos\scripts\hangar-send`"`r`n" +
-                "call `"$raizAtalhos\scripts\hangar-server-lookup.cmd`" `"$raizAtalhos`" || exit /b 126`r`n" +
+                (Achar-Servidor '' '126') +
                 "`"%HANGAR_SERVER_BIN%`" send --root `"$raizAtalhos`" %*`r`n" +
                 "exit /b %ERRORLEVEL%`r`n"
     if (Escrever-Lancador $lancador $conteudo 'cmd') { Ok "lancador hangar-send.cmd criado em $binUsuario" }
@@ -2414,7 +2425,7 @@ if (-not $bash) {
     $lancadorConta = Join-Path $binUsuario 'hangar-conta.cmd'
     $conteudoConta = "@echo off`r`n" +
                      "setlocal`r`n" +
-                     "call `"$raizAtalhos\scripts\hangar-server-lookup.cmd`" `"$raizAtalhos`" hangar-conta || exit /b 126`r`n" +
+                     (Achar-Servidor 'hangar-conta' '126') +
                      "`"%HANGAR_SERVER_BIN%`" conta %*`r`n" +
                      "exit /b %ERRORLEVEL%`r`n"
     if (Escrever-Lancador $lancadorConta $conteudoConta 'cmd') { Ok "lancador hangar-conta.cmd criado em $binUsuario" }
@@ -2466,7 +2477,7 @@ if (-not $bash) {
     $lancadorMcp = Join-Path $binUsuario 'hangar-mcp-headers.cmd'
     $conteudoMcp = "@echo off`r`n" +
                    "setlocal`r`n" +
-                   "call `"$raizAtalhos\scripts\hangar-server-lookup.cmd`" `"$raizAtalhos`" hangar-mcp-headers || exit /b 1`r`n" +
+                   (Achar-Servidor 'hangar-mcp-headers' '1') +
                    "`"%HANGAR_SERVER_BIN%`" mcp-headers --root `"$raizAtalhos`"`r`n" +
                    "exit /b %ERRORLEVEL%`r`n"
     if (Escrever-Lancador $lancadorMcp $conteudoMcp 'cmd') { Ok "lancador hangar-mcp-headers.cmd criado em $binUsuario" }
@@ -2485,8 +2496,17 @@ if (-not $bash) {
         $sendOk = $false
     } else {
         $servidorTuiMsys = $(if (Test-Path -LiteralPath (Join-Path $HOME '.hangar\current')) { "$shimRootMsys/bin/hangar-server.exe" } else { ($servidorCheckout -replace '\\', '/') -replace '^([A-Za-z]):', '/$1' })
+        # O -tui tambem pela copia dos hooks quando ela existe: o binario da versao anterior nao tem codex-tui.
+        $tuiCmd = "`"$servidorTui`" codex-tui %*"
+        $tuiSh = "exec '$servidorTuiMsys' codex-tui `"`$@`""
+        if (Test-Path -LiteralPath (Join-Path $HOME '.hangar\current')) {
+            $tuiCmd = "set `"HANGAR_TUI=%USERPROFILE%\.hangar\bin\hangar-hooks.exe`"`r`n" +
+                      "if not exist `"%HANGAR_TUI%`" set `"HANGAR_TUI=$servidorTui`"`r`n" +
+                      "`"%HANGAR_TUI%`" codex-tui %*"
+            $tuiSh = "b=`"`$HOME/.hangar/bin/hangar-hooks.exe`"; [ -f `"`$b`" ] || b='$servidorTuiMsys'; exec `"`$b`" codex-tui `"`$@`""
+        }
         $lancadoresCodex = @(
-            @('hangar-codex-tui', "`"$servidorTui`" codex-tui %*", "exec '$servidorTuiMsys' codex-tui `"`$@`""),
+            @('hangar-codex-tui', $tuiCmd, $tuiSh),
             @('hangar-codex', "`"$bash`" `"$raizAtalhos\scripts\hangar-codex`" %*", "exec sh '$shimRootMsys/scripts/hangar-codex' `"`$@`"")
         )
         foreach ($par in $lancadoresCodex) {

@@ -55,10 +55,28 @@ try {
         if (-not $node) { throw "Atribuicao $name nao encontrada no instalador." }
         [scriptblock]::Create($node.Extent.Text)
     }
+    # A forma de maquina com pacote: a atribuicao que leva a copia dos hooks, nao a de checkout.
+    function Get-AssignmentWith([string]$name, [string]$marker) {
+        $node = $ast.Find({ param($n)
+            $n -is [Management.Automation.Language.AssignmentStatementAst] -and $n.Left.Extent.Text -eq $name -and $n.Extent.Text.Contains($marker)
+        }, $true)
+        if (-not $node) { throw "Atribuicao $name com $marker nao encontrada no instalador." }
+        [scriptblock]::Create($node.Extent.Text)
+    }
+    $achar = $ast.Find({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Achar-Servidor' }, $true)
+    if (-not $achar) { throw 'Achar-Servidor nao encontrada no instalador.' }
+    . ([scriptblock]::Create($achar.Extent.Text))
     $servidorTui = '%USERPROFILE%\.hangar\current\bin\hangar-server.exe'
     $servidorTuiMsys = '/c/perfil/.hangar/current/bin/hangar-server.exe'
     . (Get-Assignment '$conteudoConta')
+    . (Get-AssignmentWith '$tuiCmd' 'hangar-hooks.exe')
+    . (Get-AssignmentWith '$tuiSh' 'hangar-hooks.exe')
     . (Get-Assignment '$lancadoresCodex')
+    # Decisao 30: no pacote os atalhos preferem a copia dos hooks, que a versao anterior nao troca.
+    foreach ($texto in @($conteudoConta, $tuiCmd, $tuiSh)) {
+        if (-not $texto.Contains('.hangar\bin\hangar-hooks.exe') -and -not $texto.Contains('.hangar/bin/hangar-hooks.exe')) { throw "atalho sem a copia dos hooks: $texto" }
+    }
+    if (-not $conteudoConta.Contains('hangar-server-lookup.cmd')) { throw 'hangar-conta sem a regra do lookup quando falta a copia' }
     $novos = @{ 'hangar-conta.cmd' = $conteudoConta }
     foreach ($par in $lancadoresCodex) {
         $nome, $linhaCmd, $linhaSh = $par

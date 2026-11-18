@@ -308,6 +308,11 @@ desenvolvedor e para a máquina ainda não migrada. Evidência em
   religa até 999 vezes; o `rust_bins` e todo
   `sys.executable` gravado usam o caminho real. Hooks, atalhos, `plugin-dir`, skills e `⟦HANGAR⟧`
   gravam `~/.hangar/current` sem resolver o link, e toleram a pasta ausente por um instante.
+- **Hooks e atalhos chamam a cópia dos hooks, que a volta de versão não troca.** No pacote, o
+  servidor copia a si mesmo para `~/.hangar/bin/hangar-hooks` (`.exe` no Windows) ao gravar os
+  hooks, e é ela que os hooks dos agentes e os atalhos `.cmd` do Windows chamam. A versão anterior
+  troca o `hangar-launcher` pelo binário dela, mas não conhece a cópia. A cópia nunca desce de
+  versão (`hangar-hooks.version` ao lado). [Motivo](#a-cópia-dos-hooks-sobrevive-à-volta-de-versão-18112026).
 - **Instaladores sem Python nem `uv`.** `install.sh` e `install.ps1` não instalam nem exigem
   Python, `uv` ou `uv sync`, e não criam atalho de Python (`hangar-python`, `python3`,
   `hangar-python.cmd`); os antigos ficam (a versão anterior, na volta, usa) e saem com a `python/`
@@ -416,6 +421,18 @@ desenvolvedor e para a máquina ainda não migrada. Evidência em
   `"mode": "package"`, também rodando de um checkout. No Linux e no macOS o servidor abre o Codex
   pelo `current/scripts/hangar-codex-tui`, e não pelo nome no PATH. Ver
   [a entrada](#links-que-voltaram-ao-checkout-depois-da-migração-31102026).
+
+## A cópia dos hooks sobrevive à volta de versão (18/11/2026)
+
+Na DELPHI-02, depois de atualizar para a versão sem Python e voltar para a publicada (0.1.0.10869), a
+versão antiga trocou o `~/.hangar/bin/hangar-launcher.exe` pelo binário dela. Os hooks gravados pelo
+lançador (`state-hook`, `nav-hook`) passaram a sair 2 ("subcomando desconhecido"), e o do
+`UserPromptSubmit` pedia ao modelo que avisasse a pessoa a cada mensagem. Os atalhos
+`hangar-send.cmd`, `hangar-conta.cmd` e `hangar-mcp-headers.cmd` chamavam o
+`current\scripts\hangar-server-lookup.cmd`, que a versão antiga não tem, e o `hangar-codex-tui.cmd`
+chamava um `codex-tui` que o binário antigo não conhece. Atualizar de novo consertava tudo. A cópia
+`hangar-hooks` tem nome que versão anterior não conhece, então fica; e só versão igual ou mais nova a
+troca, para a volta entre duas versões que já a têm não perder subcomandos.
 
 ## Links que voltaram ao checkout depois da migração (31/10/2026)
 

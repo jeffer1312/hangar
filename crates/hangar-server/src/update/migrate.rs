@@ -438,7 +438,7 @@ pub(crate) fn launcher_path(home: &Path, windows: bool) -> PathBuf {
 }
 
 /// Copia o lançador com nome temporário e `rename`: um lançador pela metade nunca tem o nome final.
-pub(super) fn write_launcher(source: &Path, launcher: &Path) -> Result<(), String> {
+pub(crate) fn write_launcher(source: &Path, launcher: &Path) -> Result<(), String> {
     let bytes = std::fs::read(source).map_err(|e| format!("não consegui ler o lançador {}: {e}", source.display()))?;
     let tmp = launcher.with_extension("new");
     std::fs::write(&tmp, &bytes).and_then(|()| {
@@ -624,8 +624,13 @@ fn apply(m: &Machine<'_>, record: &mut Record, target: &Path, service: &Path) ->
 /// Tira do Kimi e de cada Codex os hooks que chamam o lançador estável. O caminho vai cru e com a
 /// barra invertida dobrada (o TOML do Kimi o grava como texto JSON). Devolve o que não deu.
 fn drop_launcher_hooks(m: &Machine<'_>) -> Vec<String> {
+    let copy = crate::codex_setup::hook_command::hooks_path(&m.home, m.windows);
+    [m.launcher(), copy].iter().flat_map(|program| drop_program_hooks(m, program)).collect()
+}
+
+fn drop_program_hooks(m: &Machine<'_>, program: &Path) -> Vec<String> {
     let mut problems = Vec::new();
-    let raw = m.launcher().display().to_string();
+    let raw = program.display().to_string();
     let needles = [raw.clone(), raw.replace('\\', "\\\\")];
     let kimi = m.kimi_home.join("config.toml");
     match std::fs::read_to_string(&kimi) {
@@ -692,6 +697,10 @@ fn revert(m: &Machine<'_>, done: &[Done]) -> Vec<String> {
                 for problem in drop_launcher_hooks(m) { fail(problem); }
                 if let Err(e) = remove_tree(&m.launcher()) {
                     fail(format!("{} não saiu: {e}", m.launcher().display()));
+                }
+                let copy = crate::codex_setup::hook_command::hooks_path(&m.home, m.windows);
+                for path in [copy.with_extension("version"), copy] {
+                    if let Err(e) = remove_tree(&path) { fail(format!("{} não saiu: {e}", path.display())); }
                 }
             },
             Done::Current => if let Err(e) = super::remove_link(&current) { fail(format!("{} não saiu: {e}", current.display())); },

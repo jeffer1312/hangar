@@ -27,6 +27,8 @@ try {
     '/opt/bin/hangar-server guard-tmux',
     '"/home/u/.hangar/bin/hangar-launcher" guard-tmux',
     '"C:\\Users\\u\\.hangar\\bin\\hangar-launcher.exe" guard-tmux',
+    '"/home/u/.hangar/bin/hangar-hooks" guard-tmux',
+    '"C:\\Users\\u\\.hangar\\bin\\hangar-hooks.exe" guard-tmux',
   ]) assert.equal(await count(command), 1, command);
   for (const command of [
     '"/opt/bin/hangar-server" engine',
@@ -36,6 +38,7 @@ try {
     'python /opt/backend/hooks/guard_tmux.py',
     '"/opt/not-hangar-server" guard-tmux',
     '"/opt/not-hangar-launcher" guard-tmux',
+    '"/opt/not-hangar-hooks" guard-tmux',
   ]) assert.equal(await count(command), 0, command);
   // Os hooks de marcador do Claude, agora subcomandos, ficam fora mesmo com a pasta deles permitida.
   for (const sub of ["state-hook", "askq-capture", "preview-hook"]) {

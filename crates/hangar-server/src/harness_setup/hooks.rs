@@ -93,10 +93,11 @@ pub fn sync_hook(
     sync_hook_any(data, event, command, matcher, &[script], cfg!(windows))
 }
 
-/// Programa do Hangar num token: o servidor, o script que o acha ou o lançador estável.
+/// Programa do Hangar num token: o servidor, o script que o acha, o lançador estável ou a cópia dos hooks.
 pub fn hangar_program(token: &str) -> bool {
     let name = token.trim_matches(['"', '\'']).rsplit(['/', '\\']).next().unwrap_or_default();
-    matches!(name, "hangar-server" | "hangar-server.exe" | "hangar-server-command" | "hangar-launcher" | "hangar-launcher.exe")
+    matches!(name, "hangar-server" | "hangar-server.exe" | "hangar-server-command" | "hangar-launcher" | "hangar-launcher.exe"
+        | "hangar-hooks" | "hangar-hooks.exe")
 }
 
 /// O comando roda `mode` de um programa do Hangar (`"<…>/hangar-launcher" state-hook …`). Só o nome do

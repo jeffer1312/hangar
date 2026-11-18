@@ -204,6 +204,10 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
 - **Atalho `.cmd` em máquina migrada aponta para `%USERPROFILE%\.hangar\current\scripts\…`, nunca
   para o caminho real da versão**, que a poda apaga. `hangar-conta.cmd` e `hangar-send.cmd` acham o
   `hangar-server.exe` pelo `scripts\hangar-server-lookup.cmd` do `current`. Vale também para os atalhos sem extensão do Git Bash (`/c/Users/…/.hangar/current/scripts/…`).
+  Na máquina com pacote, `hangar-send.cmd`, `hangar-conta.cmd`, `hangar-mcp-headers.cmd` e
+  `hangar-codex-tui` vão antes pela cópia dos hooks (`~\.hangar\bin\hangar-hooks.exe`, regra em
+  [instalacao.md](instalacao.md#a-cópia-dos-hooks-sobrevive-à-volta-de-versão-18112026)); sem ela, ou
+  com `CP_RUST_SERVER_BIN`, pelo lookup.
   Até 12/11/2026 o `hangar-send`, o `hangar-preview`, o `folha`, o `hangar-mcp-headers.cmd` e os
   lançadores do Codex saíam do `$raiz`, a pasta da versão de onde o instalador rodou: na DELPHI-02
   eles ainda chamavam a `0.1.0.9467` com a `0.1.0.10172` instalada, e parariam quando a poda a

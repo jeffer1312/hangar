@@ -217,21 +217,28 @@ fn startup_repairs_an_existing_python_guard_but_never_installs_one() {
     assert!(!fs::read_to_string(&settings).unwrap().contains("guard-tmux"));
 }
 
-/// Decisões 12/13: com o lançador estável na casa, todo comando gravado o chama (sobrevive à volta de versão).
+/// Decisões 12/13/30: com o lançador do pacote igual a este servidor, todo comando gravado chama a
+/// cópia dos hooks, que a versão anterior não troca; o comando de antes pelo lançador migra para ela.
 #[test]
-fn hooks_call_the_stable_launcher_when_the_package_installed_it() {
+fn hooks_call_the_hooks_copy_when_the_package_installed_the_launcher() {
     let root = tempfile::tempdir().unwrap();
     let (service, settings, repo) = claude_home(root.path());
-    let launcher = root.path().join(".hangar").join("bin").join(if cfg!(windows) { "hangar-launcher.exe" } else { "hangar-launcher" });
-    fs::create_dir_all(launcher.parent().unwrap()).unwrap();
+    let bin = root.path().join(".hangar").join("bin");
+    let launcher = bin.join(if cfg!(windows) { "hangar-launcher.exe" } else { "hangar-launcher" });
+    let copy = bin.join(if cfg!(windows) { "hangar-hooks.exe" } else { "hangar-hooks" });
+    fs::create_dir_all(&bin).unwrap();
     // O lançador do pacote é cópia deste mesmo binário.
     fs::copy(std::env::current_exe().unwrap(), &launcher).unwrap();
+    let before = format!("\"{}\" state-hook || exit 0", launcher.display());
+    fs::write(&settings, json!({"hooks": {"Stop": [{"hooks": [{"type": "command", "command": before}]}]}}).to_string()).unwrap();
     hooks::sync_installers(&service, &repo, &["ensure_state_hooks_installed", "ensure_pair_hook_installed", "ensure_guard_hooks_installed"]).unwrap();
+    assert_eq!(fs::read(&copy).unwrap(), fs::read(&launcher).unwrap(), "a cópia é este servidor");
     let data = read(&settings);
-    let quoted = format!("\"{}\" ", launcher.display());
-    assert_eq!(ours(&data, "Stop", "state-hook"), vec![format!("{quoted}state-hook || exit 0")]);
+    let quoted = format!("\"{}\" ", copy.display());
+    assert_eq!(ours(&data, "Stop", "state-hook"), vec![format!("{quoted}state-hook || exit 0")], "o comando pelo lançador migrou");
     assert!(ours(&data, "SessionStart", "pair-context")[0].starts_with(&format!("{quoted}pair-context ")));
     assert_eq!(ours(&data, "PreToolUse", "guard-tmux"), vec![format!("{quoted}guard-tmux")]);
+    assert!(!fs::read_to_string(&settings).unwrap().contains("hangar-launcher"));
 }
 
 /// O item `claude_hooks` da configuração compartilhada roda os 7 instaladores (a lista `HOOKS`
@@ -462,7 +469,8 @@ fn startup_writes_hooks_and_bridges_through_the_unresolved_current() {
     harness_setup::sync_startup(&service);
     let current = home.join(".hangar/current");
     let data = read(&home.join(".claude/settings.json"));
-    let stop = format!("\"{}\" state-hook || exit 0", launcher.display());
+    let copy = home.join(".hangar/bin/hangar-hooks");
+    let stop = format!("\"{}\" state-hook || exit 0", copy.display());
     assert_eq!(ours(&data, "Stop", "state-hook"), vec![stop]);
     for (event, mode) in [("PreToolUse", "askq-capture"), ("MessageDisplay", "preview-hook"),
         ("SessionStart", "pair-context"), ("UserPromptSubmit", "nav-hook")] {
@@ -472,7 +480,7 @@ fn startup_writes_hooks_and_bridges_through_the_unresolved_current() {
     let text = fs::read_to_string(home.join(".claude/settings.json")).unwrap();
     assert!(!text.contains("versions") && !text.contains("python"), "{text}");
     let codex = read(&home.join(".codex/hooks.json"));
-    assert_eq!(ours(&codex, "UserPromptSubmit", "nav-hook"), vec![format!("\"{}\" nav-hook || exit 0", launcher.display())]);
+    assert_eq!(ours(&codex, "UserPromptSubmit", "nav-hook"), vec![format!("\"{}\" nav-hook || exit 0", copy.display())]);
     assert!(codex["hooks"].get("Stop").is_none());
     assert_eq!(fs::read_link(home.join(".pi/agent/skills-bridge/from-repo")).unwrap(), current.join("skills/from-repo"));
 }
