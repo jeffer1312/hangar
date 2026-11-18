@@ -1652,6 +1652,7 @@ impl Executor {
         // a marca da fila interna na tela, lida depois.
         // Prazo e aviso seguem o turno real: na espera por subagentes, a entrada consumida já sai pelo recibo.
         let idle = facts.idle;
+        let dispatchable = facts.foreground_idle();
         // Como no pedido de drenagem: a falha aparece na vista, além de voltar a quem pediu.
         let drained=match self.drain_once(Some(entry.clone()),true).await {Ok(value)=>value,Err(failure)=>{self.enter_error(failure.clone()).await?; return Err(failure);}};
         let outcome=serde_json::from_value::<RuntimeReply>(drained["reply"].clone()).ok();
@@ -1659,7 +1660,7 @@ impl Executor {
             Some(Disposition::Accepted)=>{},
             Some(Disposition::Unknown)=>return Ok(reply(id,Disposition::Unknown,json!({"code":"queue_steer_uncertain"}))),
             // Parado e sem entregar agora (caixa ilegível, foco num mod): ficou na frente e sai no próximo tique.
-            None|Some(Disposition::Deferred) if idle=>return Ok(reply(id,Disposition::Accepted,json!({"steered":false,"drained":0}))),
+            None|Some(Disposition::Deferred) if dispatchable=>return Ok(reply(id,Disposition::Accepted,json!({"steered":false,"drained":0}))),
             _=>return Ok(reply(id,Disposition::Deferred,json!({"code":"queue_steer_not_delivered","cleanup":"not_needed"}))),
         }
         let driver=TerminalDriver::new(self.target.binding.clone(),services,self.options.io.clone(),self.options.limits.clone());
