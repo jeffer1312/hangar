@@ -45,9 +45,10 @@ impl Marked {
 
     /// Só apaga a marca com o servidor marcado ainda de pé: reinício recusado. Se ele já saiu (a unit
     /// parou o velho e a nova não subiu), a marca explica essa saída e fica; o prazo e o pid a limitam.
+    /// "De pé" é o processo vivo com o mesmo nascimento: morto sem `end`, o arquivo ainda diz `running`.
     pub fn restart_failed(self) {
         let Some((hangar_dir, pid)) = self.0 else { return };
-        if !matches!(hangar_boot::life::running_pid(&hangar_dir), Ok(Some(running)) if running == pid) { return; }
+        if !matches!(hangar_boot::life::running_pid(&hangar_dir, same_process), Ok(Some(running)) if running == pid) { return; }
         if let Err(error) = std::fs::remove_file(hangar_dir.join(FILE)) && error.kind() != std::io::ErrorKind::NotFound {
             tracing::warn!(code = "stop_intent_not_removed", kind = ?error.kind(), "marca de intenção do reinício que falhou não apagada; ela vence em 10 min");
         }
@@ -78,6 +79,12 @@ impl RestartIntent {
     }
 }
 
+/// O processo da marca de pé ainda é o mesmo: pid e nascimento iguais. Diferente do `life_alive` da
+/// subida, este processo conta: quem reinicia pode ser o próprio servidor.
+fn same_process(pid: u32, birth: f64) -> bool {
+    crate::terminal_facts::agent_birth(pid).is_some_and(|now| crate::terminal_facts::same_birth(now, birth))
+}
+
 fn now_secs() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |elapsed| elapsed.as_secs())
 }
@@ -101,9 +108,10 @@ fn kind_of(code: &str) -> Option<ExitKind> {
 
 /// Grava a marca imediatamente antes de derrubar o servidor. O pid é o do servidor de pé segundo
 /// `server-life.json`, não o deste processo: o executor da atualização roda à parte. Sem servidor
-/// de pé ou sem gravar, o reinício segue e a saída vira a parada que ele mesmo gravar.
+/// de pé ou sem gravar, o reinício segue e a saída vira a parada que ele mesmo gravar. Servidor que
+/// já morreu sem `end` também não ganha marca: ela esconderia a queda dele.
 pub fn before_restart(hangar_dir: &Path, kind: ExitKind, cause: &str, from: Option<&str>, to: Option<&str>) -> Marked {
-    let pid = match hangar_boot::life::running_pid(hangar_dir) {
+    let pid = match hangar_boot::life::running_pid(hangar_dir, same_process) {
         Ok(Some(pid)) => pid,
         Ok(None) => {
             tracing::warn!(code = "stop_intent_without_server", cause, "nenhum servidor de pé em server-life.json; o reinício segue sem marca de intenção");
@@ -212,7 +220,9 @@ fn utc_text(text: &str) -> Option<String> {
 /// queda, com a causa do journal quando há. O instante é o da parada gravada; sem ela, o da marca;
 /// sem as duas (queda), o começo da vida, o único que o `server-life.json` guarda dela.
 pub fn classify(previous: &Previous, intent: Option<&Intent>, journal: Option<&str>, now: u64) -> ExitRecord {
-    let valid = intent.filter(|intent| valid_for(intent, previous.pid, now));
+    // O prazo mede a marca contra a saída, não contra a subida: o servidor pode voltar horas depois.
+    let stopped_at = previous.stop.as_ref().and_then(|stop| stop.at).unwrap_or(now);
+    let valid = intent.filter(|intent| valid_for(intent, previous.pid, stopped_at));
     let when = previous.stop.as_ref().and_then(|stop| stop.at).and_then(utc_secs)
         .or_else(|| valid.and_then(|intent| utc_secs(intent.ts)))
         .or_else(|| previous.started.as_deref().and_then(utc_text));
@@ -319,6 +329,15 @@ pub fn previous_exit(hangar_dir: &Path, previous: Option<&Previous>, pid: Option
     let erro = (record.kind == ExitKind::Crash).then(errors);
     lines.push(record.line(erro.as_deref()));
     lines
+}
+
+/// Marca este processo de teste como o servidor de pé: a marca de intenção confere pid e nascimento
+/// de um processo vivo. Devolve o pid.
+#[cfg(test)]
+pub(crate) fn mark_this_process_running(hangar_dir: &Path, now: &str) -> u32 {
+    let pid = std::process::id();
+    hangar_boot::life::mark_running(hangar_dir, pid, crate::terminal_facts::agent_birth(pid), None, now, |_, _| false).unwrap();
+    pid
 }
 
 /// Subida: a vida anterior vira a linha `hangar_server.saida`, com o journal desta máquina.
@@ -465,17 +484,18 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let hangar = dir.path();
         hangar_boot::life::begin(hangar, "2026-11-17T10:00:00-03:00", |_, _| false).unwrap();
-        hangar_boot::life::mark_running(hangar, 41, Some(41.0), None, "2026-11-17T10:00:00-03:00", |_, _| false).unwrap();
+        let pid = mark_this_process_running(hangar, "2026-11-17T10:00:00-03:00");
         let marked = before_restart(hangar, ExitKind::Requested, "restart_only", None, None);
         let written: Value = serde_json::from_slice(&std::fs::read(hangar.join(FILE)).unwrap()).unwrap();
-        assert_eq!((written["tipo"].as_str(), written["causa"].as_str(), written["pid"].as_u64()), (Some("requested"), Some("restart_only"), Some(41)));
+        assert_eq!((written["tipo"].as_str(), written["causa"].as_str(), written["pid"].as_u64()), (Some("requested"), Some("restart_only"), Some(u64::from(pid))));
         assert!(written.get("de").is_none());
         marked.settle(&Ok::<(), ()>(()));
-        hangar_boot::life::end_with(hangar, 41, Some("sigterm"), false, NOW).unwrap();
+        let stopped = now_secs();
+        hangar_boot::life::end_with(hangar, pid, Some("sigterm"), false, stopped).unwrap();
         let begin = hangar_boot::life::begin(hangar, "2026-11-17T10:01:00-03:00", |_, _| false).unwrap();
-        let lines = previous_exit(hangar, begin.previous.as_ref(), begin.pid, || panic!("erro só na queda"), &Fixed(None), now_secs());
+        let lines = previous_exit(hangar, begin.previous.as_ref(), begin.pid, || panic!("erro só na queda"), &Fixed(None), stopped + 3600);
         assert_eq!(lines, [json!({"evento": "hangar_server.saida", "nivel": "aviso", "tipo": "requested", "causa": "restart_only",
-            "quando": "2027-01-15T08:00:00Z"})], "o quando é o instante da parada gravada");
+            "quando": utc_secs(stopped)})], "o quando é o instante da parada gravada, e a volta uma hora depois não vence a marca");
         assert!(!hangar.join(FILE).exists(), "a subida consome a marca");
     }
 
@@ -483,13 +503,47 @@ mod tests {
     fn stop_intent_is_removed_when_the_restart_fails() {
         let dir = tempfile::tempdir().unwrap();
         let hangar = dir.path();
-        hangar_boot::life::mark_running(hangar, 41, Some(41.0), None, "agora", |_, _| false).unwrap();
+        mark_this_process_running(hangar, "agora");
         before_restart(hangar, ExitKind::Update, "package", Some("1"), Some("2")).settle(&Err::<(), _>("recusado"));
         assert!(!hangar.join(FILE).exists(), "reinício recusado com o servidor ainda de pé");
         // Sem servidor de pé, nada é gravado.
         let empty = tempfile::tempdir().unwrap();
         before_restart(empty.path(), ExitKind::Update, "package", None, None).restart_failed();
         assert!(!empty.path().join(FILE).exists());
+    }
+
+    /// Servidor que morreu sem gravar a parada deixa `running` no arquivo: ele não ganha marca (ela
+    /// esconderia a queda), e a marca de quem morreu depois dela fica mesmo com o reinício falhando.
+    #[cfg(unix)]
+    #[test]
+    fn stop_intent_follows_the_process_not_the_running_flag() {
+        let dir = tempfile::tempdir().unwrap();
+        let hangar = dir.path();
+        hangar_boot::life::mark_running(hangar, 41, Some(41.0), None, "agora", |_, _| false).unwrap();
+        let _ = before_restart(hangar, ExitKind::Update, "migrate", None, None);
+        assert!(!hangar.join(FILE).exists(), "pid 41 com esse nascimento não está de pé");
+
+        let mut child = std::process::Command::new("sleep").arg("30").spawn().unwrap();
+        let pid = child.id();
+        let birth = crate::terminal_facts::agent_birth(pid).unwrap();
+        hangar_boot::life::mark_running(hangar, pid, Some(birth), None, "agora", |_, _| false).unwrap();
+        let marked = before_restart(hangar, ExitKind::Update, "package", None, None);
+        assert!(hangar.join(FILE).exists());
+        child.kill().unwrap();
+        child.wait().unwrap();
+        marked.restart_failed();
+        assert!(hangar.join(FILE).exists(), "o servidor saiu sem `end`: a marca explica essa saída");
+    }
+
+    /// A marca vale contra a hora da parada gravada; sem ela, contra a subida.
+    #[test]
+    fn exit_intent_is_checked_against_the_recorded_stop() {
+        let mut stopped = life(41, false, Some(("sigterm", false)));
+        stopped.stop.as_mut().unwrap().at = Some(NOW - 3600 + 5);
+        let marked = intent(ExitKind::Update, "package", 41, NOW - 3600);
+        assert_eq!(classify(&stopped, Some(&marked), None, NOW).kind, ExitKind::Update, "voltou uma hora depois");
+        stopped.stop.as_mut().unwrap().at = Some(NOW - 3600 + VALID_FOR.as_secs());
+        assert_eq!(classify(&stopped, Some(&marked), None, NOW).kind, ExitKind::Requested, "parada fora do prazo da marca");
     }
 
     /// A unit parou o servidor velho e a nova não subiu: o reinício falha, mas a marca fica e a subida
@@ -499,15 +553,16 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let hangar = dir.path();
         hangar_boot::life::begin(hangar, "2026-11-17T10:00:00-03:00", |_, _| false).unwrap();
-        hangar_boot::life::mark_running(hangar, 41, Some(41.0), None, "2026-11-17T10:00:00-03:00", |_, _| false).unwrap();
+        let pid = mark_this_process_running(hangar, "2026-11-17T10:00:00-03:00");
         let marked = before_restart(hangar, ExitKind::Update, "package", Some("1"), Some("2"));
-        hangar_boot::life::end_with(hangar, 41, Some("sigterm"), false, NOW).unwrap();
+        let stopped = now_secs();
+        hangar_boot::life::end_with(hangar, pid, Some("sigterm"), false, stopped).unwrap();
         marked.settle(&Err::<(), _>("a unit nova não subiu"));
         assert!(hangar.join(FILE).exists());
         let begin = hangar_boot::life::begin(hangar, "2026-11-17T10:02:00-03:00", |_, _| false).unwrap();
         let lines = previous_exit(hangar, begin.previous.as_ref(), begin.pid, String::new, &Fixed(None), now_secs());
         assert_eq!(lines, [json!({"evento": "hangar_server.saida", "nivel": "aviso", "tipo": "update", "causa": "package", "de": "1", "para": "2",
-            "quando": "2027-01-15T08:00:00Z"})]);
+            "quando": utc_secs(stopped)})]);
     }
 
     /// Primeira atualização para esta versão: a vida anterior (versão sem a parada gravada) não deixa

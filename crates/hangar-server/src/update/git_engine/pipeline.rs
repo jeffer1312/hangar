@@ -345,7 +345,7 @@ mod stop_intent_tests {
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path().join("home");
         let hangar = home.join(".hangar");
-        hangar_boot::life::mark_running(&hangar, 41, Some(41.0), None, "agora", |_, _| false).unwrap();
+        crate::update::stop_intent::mark_this_process_running(&hangar, "agora");
         let service = Service::new(home, dir.path().join("repo"), dir.path().join("claude"), Default::default());
         std::fs::create_dir_all(&service.state_dir).unwrap();
         service.restart_service("manual", 8123, RestartIntent::new(ExitKind::Requested, "restart_only")).unwrap();
@@ -368,7 +368,7 @@ mod stop_intent_tests {
             let source = dir.path().join("programa");
             std::fs::write(&source, format!("#!/bin/sh\nexit {code}\n")).unwrap();
             assert!(std::process::Command::new("install").arg("-m").arg("755").arg(&source).arg(bin.join(program)).status().unwrap().success());
-            hangar_boot::life::mark_running(&hangar, 41, Some(41.0), None, "agora", |_, _| false).unwrap();
+            let pid = crate::update::stop_intent::mark_this_process_running(&hangar, "agora");
             let environment = [("PATH".to_owned(), bin.display().to_string()), ("HOME".to_owned(), home.display().to_string())].into();
             let service = Service::new(home, root, dir.path().join("claude"), environment);
             let intent = RestartIntent::new(ExitKind::Update, "checkout").between(Some("aaa"), Some("bbb"));
@@ -382,7 +382,7 @@ mod stop_intent_tests {
             restarted.unwrap();
             let written: Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
             assert_eq!((written["tipo"].as_str(), written["causa"].as_str(), written["de"].as_str(), written["para"].as_str(), written["pid"].as_u64()),
-                (Some("update"), Some("checkout"), Some("aaa"), Some("bbb"), Some(41)), "{topology}");
+                (Some("update"), Some("checkout"), Some("aaa"), Some("bbb"), Some(u64::from(pid))), "{topology}");
         }
     }
 }

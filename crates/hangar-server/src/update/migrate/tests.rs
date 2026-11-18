@@ -773,7 +773,7 @@ fn migrate_system_service_marks_the_stop_intent_before_stopping() {
     let file = |home: &Path| home.join(".hangar").join(crate::update::stop_intent::FILE);
     let machine = |windows: bool, code: i32| {
         let dir = tempfile::tempdir().unwrap();
-        hangar_boot::life::mark_running(&dir.path().join(".hangar"), 41, Some(41.0), None, "agora", |_, _| false).unwrap();
+        crate::update::stop_intent::mark_this_process_running(&dir.path().join(".hangar"), "agora");
         let runner = Arc::new(Answers { code, ran: Mutex::default() });
         let service = SystemService { runner: runner.clone(), windows, checkout: dir.path().join("checkout"), port: 8765, home: dir.path().to_path_buf() };
         (dir, runner, service)
@@ -782,7 +782,7 @@ fn migrate_system_service_marks_the_stop_intent_before_stopping() {
         let (dir, runner, service) = machine(windows, 0);
         service.stop(intent("migrate")).unwrap();
         let written: serde_json::Value = serde_json::from_slice(&std::fs::read(file(dir.path())).unwrap()).unwrap();
-        assert_eq!((written["tipo"].as_str(), written["causa"].as_str(), written["pid"].as_u64()), (Some("update"), Some("migrate"), Some(41)), "windows={windows}");
+        assert_eq!((written["tipo"].as_str(), written["causa"].as_str(), written["pid"].as_u64()), (Some("update"), Some("migrate"), Some(u64::from(std::process::id()))), "windows={windows}");
         let ran = runner.ran.lock().unwrap();
         assert!(ran.len() == 1 && ran[0].contains(if windows { "-NoStart" } else { "systemctl --user stop" }), "{ran:?}");
     }

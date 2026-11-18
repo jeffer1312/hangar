@@ -126,9 +126,11 @@ fn b24_unreadable_life_file_restarts_and_says_so() {
 fn exit_stop_cause_reaches_the_next_boot_once() {
     let dir = tempfile::tempdir().unwrap();
     boot(dir.path(), 1, T);
-    assert_eq!(running_pid(dir.path()).unwrap(), Some(1));
+    let first = |pid: u32, birth: f64| pid == 1 && birth == 1.0;
+    assert_eq!(running_pid(dir.path(), first).unwrap(), Some(1));
+    assert_eq!(running_pid(dir.path(), dead).unwrap(), None, "morreu sem `end`: a marca de pé não basta");
     assert_eq!(end_with(dir.path(), 1, Some("sigterm"), false, AT).unwrap(), Ended::Cleared);
-    assert_eq!(running_pid(dir.path()).unwrap(), None);
+    assert_eq!(running_pid(dir.path(), first).unwrap(), None);
     let next = begin(dir.path(), T, dead).unwrap();
     assert_eq!(next.pid, Some(1));
     assert_eq!(next.previous, Some(Previous { pid: Some(1), started: Some(T.into()), unclean: false,

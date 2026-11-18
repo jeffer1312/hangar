@@ -48,6 +48,8 @@ const SEND_TIMEOUT: Duration = Duration::from_secs(30);
 /// Quanto o `GET` espera o primeiro retrato quando o produtor estava parado (peers levam até 3 s).
 const FIRST_WAIT: Duration = Duration::from_secs(20);
 const PEER_TIMEOUT: Duration = Duration::from_secs(3);
+/// O Funnel espera o mesmo que um peer; vencido, o campo fica ausente.
+const FUNNEL_TIMEOUT: Duration = Duration::from_secs(3);
 /// Panes que a descoberta da lista acabou de ler servem; mais velhos, lê de novo.
 const PANES_MAX_AGE: Duration = Duration::from_secs(5);
 const OWNER_ONLY: (&str, &str) = ("status_owner_only", "só o dono vê o status do servidor");
@@ -443,7 +445,9 @@ impl Live {
             let funnel = match &self.st.share {
                 // Sem convites não há Funnel do Hangar nesta máquina.
                 None => None,
-                Some(_) => match crate::share::tunnel::funnel_on(&crate::share::tunnel::Real).await {
+                // Prazo próprio: o `tailscale` travado segura o retrato inteiro, que espera este `join!`.
+                Some(_) => match tokio::time::timeout(FUNNEL_TIMEOUT, crate::share::tunnel::funnel_on(&crate::share::tunnel::Real)).await
+                    .unwrap_or_else(|_| Err("status_funnel_timeout".to_owned())) {
                     Ok(on) => Some(on),
                     Err(fix) => {
                         if !crate::share::tunnel::confirmed_absent(&fix) {
@@ -769,7 +773,12 @@ fn tmux_server(system: &sysinfo::System, pane_pids: &[u32]) -> Option<u32> {
 /// um agente que não foi lido, os números sairiam menores que os reais: o bloco falha.
 fn terminal_roots(panes: Option<&[crate::list::mux::Pane]>, agents: &[(String, String, Result<Option<u32>, ()>)])
     -> Result<HashMap<String, Vec<Root>>, &'static str> {
-    let panes = panes.ok_or("status_mux_unavailable")?;
+    // Sem sessão com terminal, nada depende dos panes: as sem terminal ainda entram pelos sidecars.
+    let panes = match panes {
+        Some(panes) => panes,
+        None if agents.is_empty() => return Ok(HashMap::new()),
+        None => return Err("status_mux_unavailable"),
+    };
     let unread = agents.iter().filter(|(_, _, agent)| agent.is_err()).count();
     if unread > 0 {
         tracing::warn!(code = "status_agent_unread", unread, "tela Status: agentes sem leitura");
@@ -998,7 +1007,9 @@ mod tests {
     #[test]
     fn status_sessions_fail_instead_of_undercounting() {
         let agent = |name: &str, read: Result<Option<u32>, ()>| (name.to_owned(), "claude".to_owned(), read);
-        assert_eq!(terminal_roots(None, &[]), Err("status_mux_unavailable"), "sem panes, nenhuma sessão com terminal entra");
+        assert_eq!(terminal_roots(None, &[agent("a", Ok(Some(11)))]), Err("status_mux_unavailable"),
+            "sem panes, nenhuma sessão com terminal entra");
+        assert_eq!(terminal_roots(None, &[]), Ok(HashMap::new()), "só sessões sem terminal: os sidecars bastam");
         assert_eq!(terminal_roots(Some(&[pane("a", 10)]), &[agent("a", Ok(Some(11))), agent("b", Err(()))]),
             Err("status_agent_unread"), "um agente sem leitura derruba o bloco");
 

@@ -1,5 +1,7 @@
 //! Vigia do servidor para o systemd: com `WatchdogSec`, quem parar de avisar é religado.
 use std::net::SocketAddr;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 pub const TIMEOUT: Duration = Duration::from_secs(5);
@@ -73,6 +75,7 @@ impl Verdict {
 pub async fn notify_alive(notifier: hangar_boot::notify::Notifier, every: Duration, probes: Vec<(&'static str, Probe)>, policy: Policy) {
     let limit = TIMEOUT.min(every);
     let mut rounds = Rounds::new(policy, std::time::Instant::now());
+    let diary_pending = Arc::new(AtomicBool::new(false));
     loop {
         let round = std::time::Instant::now();
         let late = if rounds.in_grace(round) { None } else { Some(late_probe(&probes, limit).await) };
@@ -91,11 +94,20 @@ pub async fn notify_alive(notifier: hangar_boot::notify::Notifier, every: Durati
         }
         // Depois do aviso, e numa thread própria: disco lento não atrasa o aviso nem a rodada, e o pool
         // bloqueante pode ser justamente a prova que travou.
+        // Uma gravação por vez: com o diário travado, cada rodada atrasada deixaria mais uma thread presa.
         if let Some(line) = diary_line(verdict, probe, ms) {
-            let spawned = std::thread::Builder::new().name("watchdog-diary".into())
-                .spawn(move || crate::diag::record_blocking(crate::diag::diary_dir().as_deref(), &[line], "watchdog"));
-            if let Err(error) = spawned {
-                tracing::warn!(code = "systemd_watchdog_diary_failed", kind = ?error.kind(), "rodada atrasada do watchdog não foi ao diário");
+            if diary_pending.swap(true, Ordering::AcqRel) {
+                tracing::warn!(code = "systemd_watchdog_diary_busy", "gravação anterior do watchdog ainda presa; esta rodada não vai ao diário");
+            } else {
+                let pending = diary_pending.clone();
+                let spawned = std::thread::Builder::new().name("watchdog-diary".into()).spawn(move || {
+                    crate::diag::record_blocking(crate::diag::diary_dir().as_deref(), &[line], "watchdog");
+                    pending.store(false, Ordering::Release);
+                });
+                if let Err(error) = spawned {
+                    diary_pending.store(false, Ordering::Release);
+                    tracing::warn!(code = "systemd_watchdog_diary_failed", kind = ?error.kind(), "rodada atrasada do watchdog não foi ao diário");
+                }
             }
         }
         tokio::time::sleep(every).await;

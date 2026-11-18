@@ -169,9 +169,10 @@ mod tests {
     async fn update_restart_marks_the_stop_intent_only_when_it_stops_the_server() {
         let marked = || {
             let dir = tempfile::tempdir().unwrap();
-            hangar_boot::life::mark_running(&dir.path().join(".hangar"), 41, Some(41.0), None, "agora", |_, _| false).unwrap();
+            crate::update::stop_intent::mark_this_process_running(&dir.path().join(".hangar"), "agora");
             dir
         };
+        let pid = u64::from(std::process::id());
         let file = |dir: &Path| dir.join(".hangar").join(crate::update::stop_intent::FILE);
 
         let read = |dir: &Path| serde_json::from_slice::<serde_json::Value>(&std::fs::read(file(dir)).unwrap()).unwrap();
@@ -179,7 +180,7 @@ mod tests {
         let dir = marked();
         restarter(Topology::Systemd, script(|_| code(0, "")), dir.path()).restart(why()).await.unwrap();
         let written = read(dir.path());
-        assert_eq!((written["tipo"].as_str(), written["causa"].as_str(), written["pid"].as_u64()), (Some("requested"), Some("restart_only"), Some(41)));
+        assert_eq!((written["tipo"].as_str(), written["causa"].as_str(), written["pid"].as_u64()), (Some("requested"), Some("restart_only"), Some(pid)));
         assert!(written.get("de").is_none() && written.get("para").is_none(), "{written}");
 
         let dir = marked();
@@ -194,7 +195,7 @@ mod tests {
         assert!(!file(dir.path()).exists(), "na mão nada para");
 
         let (dir, _root) = windows_home("0.1.0.11");
-        hangar_boot::life::mark_running(&dir.path().join(".hangar"), 41, Some(41.0), None, "agora", |_, _| false).unwrap();
+        crate::update::stop_intent::mark_this_process_running(&dir.path().join(".hangar"), "agora");
         restarter(Topology::Windows, script(|_| code(0, "")), dir.path()).restart(why()).await.unwrap();
         assert_eq!(read(dir.path())["causa"].as_str(), Some("restart_only"), "as tarefas do Windows também derrubam o servidor");
 

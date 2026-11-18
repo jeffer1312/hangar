@@ -98,10 +98,11 @@ fn stop_of(life: &Value) -> Option<Stop> {
     })
 }
 
-/// O pid do servidor de pé segundo a marca; `None` sem marca de pé.
-pub fn running_pid(dir: &Path) -> std::io::Result<Option<u32>> {
+/// O pid do servidor de pé segundo a marca, conferido por `alive` (pid e nascimento): servidor que
+/// morreu sem `end` deixa `running` no arquivo. `None` sem marca de pé ou com o processo já fora.
+pub fn running_pid(dir: &Path, alive: impl Fn(u32, f64) -> bool) -> std::io::Result<Option<u32>> {
     let life = read(dir)?;
-    Ok(if life.get("running").and_then(Value::as_bool).unwrap_or(false) { pid_of(&life) } else { None })
+    Ok(if life.get("running").and_then(Value::as_bool).unwrap_or(false) { holder(&life, &alive) } else { None })
 }
 
 /// O pid da marca, quando o mesmo processo (pid e nascimento) ainda está de pé. Marca sem
