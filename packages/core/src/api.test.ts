@@ -1066,17 +1066,31 @@ describe('transcribeFile', () => {
     await expect(waiting).rejects.toBe(reason);
   });
 
-  it('espera da mídia devolve null para mídia desconhecida e depois do teto total', async () => {
+  it('espera da mídia devolve null para mídia desconhecida e para servidor sem responder além do teto', async () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
-      new Response(JSON.stringify({ detail: { code: 'erro_midia_desconhecida' } }), { status: 404 }));
+      new Response(JSON.stringify({ detail: { code: 'upload_media_unknown' } }), { status: 404 }));
     expect(await waitUploadMediaForServer(server, 'sessao', 'm1')).toBeNull();
     vi.useFakeTimers({ toFake: ['Date'] });
     try {
       vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
-        vi.setSystemTime(Date.now() + 9 * 60_000);
-        return new Response(JSON.stringify({ status: 'pending' }), { status: 200 });
+        vi.setSystemTime(Date.now() + 4 * 60_000);
+        throw new TypeError('Network request failed');
       });
       expect(await waitUploadMediaForServer(server, 'sessao', 'm1')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('espera da mídia não desiste enquanto o servidor responde que ainda processa (fila de vídeos)', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const replies = [{ status: 'pending' }, { status: 'pending' }, { status: 'done', frames: [], transcript: 'ola' }];
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+        vi.setSystemTime(Date.now() + 2 * 60_000);
+        return new Response(JSON.stringify(replies.shift()), { status: 200 });
+      });
+      expect(await waitUploadMediaForServer(server, 'sessao', 'm1')).toEqual({ frames: [], transcript: 'ola' });
     } finally {
       vi.useRealTimers();
     }

@@ -4895,17 +4895,25 @@ Issue #408. O painel que usa os conectores.
   `media_id` aleatório; o processamento roda numa tarefa e o resultado fica num registro em memória
   (`uploads::media::MediaJobs`). `GET …/upload-media?id=<media_id>` segura o pedido até ficar
   pronto ou 45 s (`status: pending`), e devolve `{"status":"done","frames","transcript"}`. Id
-  desconhecido, de outro projeto, expirado (10 min depois de pronto), de tarefa que caiu ou perdido por
-  reinício é 404 `erro_midia_desconhecida`: o app segue só com o vídeo, como o desktop quando a
+  desconhecido, expirado (10 min depois de pronto), de tarefa que caiu ou perdido por
+  reinício é 404 `upload_media_unknown`: o app segue só com o vídeo, como o desktop quando a
   transcrição falha. Sem `media=later` nada muda: desktop e web continuam recebendo quadros e fala na
   resposta.
 - **Chave pelo id, não pela sessão.** `/clear`, troca de nome e a conversa nova (que sobe antes do
   primeiro envio) mudam a sessão entre o upload e a espera.
-- **Uma tarefa de mídia por vez.** Cada uma roda ffmpeg e ocupa uma vaga de transcrição até o fim; com
-  o cliente desistindo antes, várias em paralelo tirariam as vagas do ditado (`transcription_busy`).
+- **Uma tarefa de mídia por vez, no caminho `media=later`.** Cada uma roda ffmpeg e ocupa uma vaga de
+  transcrição até o fim; o cliente não segura mais a resposta, então várias em paralelo tirariam as
+  vagas do ditado (`transcription_busy`). O caminho sem o parâmetro (desktop e web) continua como era.
+  A tarefa não é cancelada quando o anexo é removido.
 - **Pedido que espera, não evento no chat.** Sem formato novo de evento nos três clientes; o app repete
-  o pedido só quando o servidor devolve `pending`, com teto total de 8 min no core.
+  o pedido quando o servidor devolve `pending`. O teto do core (3 min) conta só o tempo SEM resposta:
+  cada `pending` o renova, porque a fila de vídeos é finita e contá-la deixava o segundo vídeo longo
+  sem quadros nem fala (revisão local do PR #443).
+- **A espera acha a mídia só pelo id**, sem procurar a sessão do nome na URL: a sessão renomeada no meio
+  dava 404. O id aleatório vale como chave de acesso.
 - **No módulo `uploads/`, não crate próprio.** É o mesmo recurso do upload: usa o `UploadStore`, o
   `extract` e a transcrição do servidor; separar exigiria descer os três para o `hangar-core`.
-- **Prazo do upload pelo tamanho.** `max(180 s, tamanho / 50 kB/s)`; estourar não marca a máquina como
-  fora do ar (`countsOutage=false`). Vale para o app e para a web, que compartilham o core.
+- **Prazo do upload pelo tamanho.** `max(180 s, tamanho / 50 kB/s)`; o prazo estourado não marca a
+  máquina como fora do ar, a queda de rede continua marcando (`countsOutage: 'network'`). Vale para o
+  app e para a web, que compartilham o core. Sem teto: um link que trava num arquivo grande deixa o
+  envio esperando até o prazo dele.

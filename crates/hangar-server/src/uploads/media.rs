@@ -20,25 +20,20 @@ pub struct Media {
     pub transcript: String,
 }
 
-/// Teto de um pedido de `upload-media`: abaixo dos 60 s que o envio nativo espera sem resposta.
+/// Teto de um pedido de `upload-media`: abaixo do tempo que o envio nativo espera sem resposta.
 pub const WAIT_CAP: Duration = Duration::from_secs(45);
 /// Quanto tempo o resultado fica guardado depois de pronto.
 const KEEP: Duration = Duration::from_secs(600);
 
-/// Mídia em processamento ou pronta, por id próprio: a sessão muda no meio (`/clear`, troca de nome,
-/// conversa nova), o id não. Só em memória: reiniciar o servidor perde o registro, e o cliente segue
-/// só com o vídeo, como quando a transcrição falha.
+/// Mídia em processamento ou pronta, só pelo id: a sessão muda no meio (`/clear`, troca de nome,
+/// conversa nova), o id não, e ele é aleatório o bastante para valer como chave de acesso. Só em
+/// memória: reiniciar o servidor perde o registro, e o cliente segue só com o vídeo, como quando a
+/// transcrição falha.
 #[derive(Clone)]
 pub struct MediaJobs {
-    jobs: Arc<Mutex<HashMap<String, Job>>>,
+    jobs: Arc<Mutex<HashMap<String, watch::Receiver<Option<Media>>>>>,
     // Uma por vez: cada uma roda ffmpeg e ocupa uma vaga de transcrição até o fim.
     queue: Arc<tokio::sync::Semaphore>,
-}
-
-#[derive(Clone)]
-struct Job {
-    project: String,
-    result: watch::Receiver<Option<Media>>,
 }
 
 pub enum Waited {
@@ -54,9 +49,9 @@ impl Default for MediaJobs {
 }
 
 impl MediaJobs {
-    pub fn start(&self, id: String, project: String, work: impl Future<Output = Media> + Send + 'static) {
+    pub fn start(&self, id: String, work: impl Future<Output = Media> + Send + 'static) {
         let (tx, rx) = watch::channel(None);
-        self.jobs.lock().unwrap_or_else(|e| e.into_inner()).insert(id.clone(), Job { project, result: rx });
+        self.jobs.lock().unwrap_or_else(|e| e.into_inner()).insert(id.clone(), rx);
         let (jobs, queue) = (self.jobs.clone(), self.queue.clone());
         tokio::spawn(async move {
             let turn = queue.acquire_owned().await;
@@ -70,10 +65,8 @@ impl MediaJobs {
         });
     }
 
-    /// Só responde a quem pede da mesma pasta de projeto do upload.
-    pub async fn wait(&self, id: &str, project: &str, cap: Duration) -> Waited {
-        let job = self.jobs.lock().unwrap_or_else(|e| e.into_inner()).get(id).cloned();
-        let Some(mut rx) = job.filter(|job| job.project == project).map(|job| job.result) else {
+    pub async fn wait(&self, id: &str, cap: Duration) -> Waited {
+        let Some(mut rx) = self.jobs.lock().unwrap_or_else(|e| e.into_inner()).get(id).cloned() else {
             return Waited::Unknown;
         };
         match tokio::time::timeout(cap, rx.wait_for(Option::is_some)).await {
@@ -342,40 +335,38 @@ mod tests {
     async fn wait_returns_pending_at_the_cap_and_the_result_once_ready() {
         let jobs = MediaJobs::default();
         let (finish, finished) = tokio::sync::oneshot::channel::<()>();
-        jobs.start("id1".into(), "proj".into(), async move {
+        jobs.start("id1".into(), async move {
             finished.await.ok();
             done("ola")
         });
-        assert!(matches!(jobs.wait("id1", "proj", Duration::from_millis(20)).await, Waited::Pending));
+        assert!(matches!(jobs.wait("id1", Duration::from_millis(20)).await, Waited::Pending));
         finish.send(()).unwrap();
-        match jobs.wait("id1", "proj", Duration::from_secs(5)).await {
+        match jobs.wait("id1", Duration::from_secs(5)).await {
             Waited::Done(media) => assert_eq!(media, done("ola")),
             _ => panic!("esperava a mídia pronta"),
         }
     }
 
     #[tokio::test]
-    async fn unknown_id_other_project_or_a_job_that_died_is_unknown() {
+    async fn unknown_id_or_a_job_that_died_is_unknown() {
         let jobs = MediaJobs::default();
-        assert!(matches!(jobs.wait("nada", "proj", Duration::from_millis(20)).await, Waited::Unknown));
-        jobs.start("id1".into(), "proj".into(), async { done("ola") });
-        assert!(matches!(jobs.wait("id1", "outro", Duration::from_secs(5)).await, Waited::Unknown));
-        jobs.start("caiu".into(), "proj".into(), async { panic!("ffmpeg caiu") });
-        assert!(matches!(jobs.wait("caiu", "proj", Duration::from_secs(5)).await, Waited::Unknown));
+        assert!(matches!(jobs.wait("nada", Duration::from_millis(20)).await, Waited::Unknown));
+        jobs.start("caiu".into(), async { panic!("ffmpeg caiu") });
+        assert!(matches!(jobs.wait("caiu", Duration::from_secs(5)).await, Waited::Unknown));
     }
 
     #[tokio::test]
     async fn jobs_run_one_at_a_time() {
         let jobs = MediaJobs::default();
         let (finish, finished) = tokio::sync::oneshot::channel::<()>();
-        jobs.start("primeiro".into(), "proj".into(), async move {
+        jobs.start("primeiro".into(), async move {
             finished.await.ok();
             done("1")
         });
-        jobs.start("segundo".into(), "proj".into(), async { done("2") });
-        assert!(matches!(jobs.wait("segundo", "proj", Duration::from_millis(50)).await, Waited::Pending));
+        jobs.start("segundo".into(), async { done("2") });
+        assert!(matches!(jobs.wait("segundo", Duration::from_millis(50)).await, Waited::Pending));
         finish.send(()).unwrap();
-        assert!(matches!(jobs.wait("segundo", "proj", Duration::from_secs(5)).await, Waited::Done(_)));
+        assert!(matches!(jobs.wait("segundo", Duration::from_secs(5)).await, Waited::Done(_)));
     }
 
     #[test]

@@ -307,7 +307,8 @@ async fn video_with_media_later_answers_pending_and_the_wait_route_delivers_the_
     assert_eq!(status, StatusCode::OK, "{saved}");
     assert_eq!((saved["frames"].clone(), saved["transcript"].clone(), saved["media"].clone()), (json!([]), json!(""), json!("pending")));
     let id = saved["media_id"].as_str().unwrap();
-    let (status, media) = scene.get(&format!("/api/sessions/s/upload-media?id={id}")).await;
+    // Pelo id, mesmo com outro nome na URL: a sessão pode ter sido renomeada no meio.
+    let (status, media) = scene.get(&format!("/api/sessions/renomeada/upload-media?id={id}")).await;
     // Arquivo que não é vídeo de verdade: o ffmpeg não tira quadro nem áudio, e a mídia termina vazia.
     assert_eq!((status, media), (StatusCode::OK, json!({"status": "done", "frames": [], "transcript": ""})));
 }
@@ -320,7 +321,7 @@ async fn media_later_does_not_change_the_answer_for_files_that_are_not_video() {
     assert_eq!(status, StatusCode::OK, "{saved}");
     assert_eq!((saved.get("media"), saved.get("media_id")), (None, None), "{saved}");
     let (status, body) = scene.get("/api/sessions/s/upload-media?id=desconhecido").await;
-    assert_eq!((status, body["detail"]["code"].clone()), (StatusCode::NOT_FOUND, json!("erro_midia_desconhecida")));
+    assert_eq!((status, body["detail"]["code"].clone()), (StatusCode::NOT_FOUND, json!("upload_media_unknown")));
 }
 
 #[tokio::test]

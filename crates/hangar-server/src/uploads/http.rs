@@ -176,6 +176,15 @@ async fn handle(st: &Arc<AppState>, name: &str, tail: &str, req: Request) -> Res
             Err(_) => return StatusCode::BAD_REQUEST.into_response(),
         }
     };
+    // Só pelo id: a sessão do nome na URL pode ter sido renomeada enquanto o vídeo era processado.
+    if tail == "upload-media" {
+        let id = query.get("id").map(String::as_str).unwrap_or_default();
+        return match st.upload_media.wait(id, media::WAIT_CAP).await {
+            media::Waited::Done(m) => response(json!({"status":"done","frames":m.frames,"transcript":m.transcript}), 200),
+            media::Waited::Pending => response(json!({"status":"pending"}), 200),
+            media::Waited::Unknown => failure(404, "upload_media_unknown", "nenhuma mídia em processamento com esse id"),
+        };
+    }
     let facts = match facts(st, name, &filename, writing).await {
         Ok(f) => f,
         Err(r) => return *r,
@@ -262,14 +271,14 @@ async fn execute(
             Ok(path) => path,
             Err(r) => return r,
         };
-        // O envio nativo do celular desiste com 60 s sem resposta, e quadros mais fala passam disso.
+        // O envio nativo do celular desiste antes de quadros e fala ficarem prontos.
         if media_later && !audio_only && media::is_video(&path) {
             let id = hangar_core::ids::random_hex(16);
             let work = {
                 let (st, store, project, session, file) = (st.clone(), store.clone(), project.clone(), facts.session.clone(), path.clone());
                 async move { media::process(&st, &store, &project, &session, &file).await }
             };
-            st.upload_media.start(id.clone(), project, work);
+            st.upload_media.start(id.clone(), work);
             return response(json!({"path":path,"frames":[],"transcript":"","media":"pending","media_id":id}), 200);
         }
         let media = if audio_only {
@@ -278,14 +287,6 @@ async fn execute(
             media::process(st, &store, &project, &facts.session, &path).await
         };
         return response(json!({"path":path,"frames":media.frames,"transcript":media.transcript}), 200);
-    }
-    if tail == "upload-media" {
-        let id = query.get("id").map(String::as_str).unwrap_or_default();
-        return match st.upload_media.wait(id, &project, media::WAIT_CAP).await {
-            media::Waited::Done(m) => response(json!({"status":"done","frames":m.frames,"transcript":m.transcript}), 200),
-            media::Waited::Pending => response(json!({"status":"pending"}), 200),
-            media::Waited::Unknown => failure(404, "erro_midia_desconhecida", "nenhuma mídia em processamento para esse arquivo"),
-        };
     }
     if tail == "uploads" {
         let (session, retention, now) = (facts.session.clone(), facts.retention, now());

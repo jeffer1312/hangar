@@ -8,7 +8,7 @@ import type {
 } from '@hangar/core';
 import { prefs } from './prefs';
 import { useServers } from './servers';
-import { clearDraft, readDraft, withoutUpload, writeDraft, type DraftAttachment } from './drafts';
+import { clearDraft, pendingMediaUpload, readDraft, withoutUpload, writeDraft, type DraftAttachment } from './drafts';
 import { resetCreatedChat, submitConversationDraft } from './chat';
 import * as m from '../paraglide/messages';
 import { uploadAttachment } from './attachmentUpload';
@@ -285,7 +285,7 @@ export function sendFirstInput(serverId: string, attemptId: string): Promise<voi
     };
     if (attach && sent === attach) {
       const uploadedFor = { serverId, name: sessionName, transcript: null };
-      const pending = kept?.uploadedMediaId && kept.uploadedPath ? { path: kept.uploadedPath, mediaId: kept.uploadedMediaId } : null;
+      const pending = kept && pendingMediaUpload(kept, uploadedFor);
       // Rascunho que não grava para na hora (o aviso já saiu do `keep`), sem esperar a mídia.
       const saveFailed = new Error('draft_save_failed');
       try {
