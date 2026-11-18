@@ -1238,4 +1238,10 @@ que sobe pelo Python é religada quando cai, mas não é conferida; o `hangar-fr
 checkout deixa de ser recuperado. A escolha da primeira vida que falha (sem `current` e sem
 checkout) sai com código 3 antes do laço e espera o próximo logon. A vigia não pausa durante a
 atualização, como o `WatchdogSec` do Linux: o servidor só é encerrado depois de 4 rodadas sem
-resposta, e o reinício da atualização para o lançador junto com ele.
+resposta, e o reinício da atualização para o lançador junto com ele. A rodada é só a resposta HTTP
+da saúde, como a da `hangar-vigia`: as provas internas do servidor no Linux (pool bloqueante,
+registro das sessões) não entram. O servidor encerrado à força (`Stop-Process`, saída -1) conta
+como parada pedida: o lançador sai com ele e o backend fica fora até o próximo logon, onde a
+`hangar-vigia` o religava em até 15 min. Na versão que sobe pelo
+Python, o `hangar-server` neto que ainda segura a porta faz a religada cair e tentar de novo, com a
+espera crescente, até ele sair.

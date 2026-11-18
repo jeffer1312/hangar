@@ -28,8 +28,6 @@ pub fn launch(args: &[String]) -> ExitCode {
     // O direto no Windows gira o log antes de escrever: estas linhas abrem o arquivo da vida nova.
     let tell = |lines: &[String]| { for line in lines { report(log.as_deref(), line); } };
     match chosen {
-        #[cfg(unix)]
-        Ok(Backend::Python(command)) => { tell(&lines); run(command, log.as_deref(), &version) }
         Ok(backend) => {
             let mut again = |notes: &mut Vec<String>| relaunch_backend(&home, &args[1..], cfg!(windows), explicit.as_deref(), notes);
             run_direct(backend, log.as_deref(), &version, lines, &home.join(".hangar"), &mut again)
@@ -109,14 +107,17 @@ fn run(mut command: std::process::Command, log: Option<&Path>, version: &str) ->
 /// O servidor da religada (`relaunch_backend`), com as notas da escolha.
 type Again<'a> = dyn FnMut(&mut Vec<String>) -> Result<(Backend, String), (&'static str, PathBuf)> + 'a;
 
-/// O lançador vira o `hangar-server`: mesmo pid, então o `sd_notify` dele vale para a unit e a vida
-/// é dele. Quem religa a queda é o systemd/launchd.
+/// O lançador vira o `hangar-server`, ou o Python da versão que ainda sobe por ele: mesmo pid, então o
+/// `sd_notify` vale para a unit e a vida é dele. Quem religa a queda é o systemd/launchd.
 #[cfg(unix)]
 fn run_direct(backend: Backend, log: Option<&Path>, version: &str, lines: Vec<String>, _hangar_dir: &Path,
               _again: &mut Again<'_>) -> ExitCode {
     use std::os::unix::process::CommandExt;
-    let (Backend::Direct(mut command) | Backend::Python(mut command)) = backend;
     for line in &lines { report(log, line); }
+    let mut command = match backend {
+        Backend::Direct(command) => command,
+        Backend::Python(command) => return run(command, log, version),
+    };
     let error = command.exec();
     report(log, &format!("launch_exec_failed: versão {version}: {error}"));
     failed(log, "erro", "launch_exec_failed", &Path::new(command.get_program()).display().to_string());
@@ -258,6 +259,8 @@ fn wait_watching(child: &mut std::process::Child, hangar_dir: &Path, file: Optio
         if let Some(status) = child.try_wait()? { return Ok(status); }
         let verdict = watch.tick(std::time::Instant::now(), || hangar_boot::life::health(hangar_dir, pid),
             |address| crate::watchdog::health_answers_blocking(address, crate::watchdog::TIMEOUT));
+        // Voltou a responder: um travamento seguinte é outro, e vai ao log e ao diário.
+        if verdict == Some(crate::watchdog::Verdict::Passed) { hung = false; }
         if let Some(crate::watchdog::Verdict::Withheld(rounds)) = verdict {
             if !hung {
                 hung = true;

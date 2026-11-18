@@ -99,9 +99,9 @@ precisar (firewall, Modo Desenvolvedor). Uma instalação elevada também exige 
 para atualizar manualmente; o botão Atualizar já herda a permissão do backend.
 O backend continua no Agendador, sem serviço do Windows: a tarefa abre o lançador do Hangar, que
 reabre o servidor quando ele cai e o reinicia quando ele para de responder por cerca de dois
-minutos. Essa conferência começa 3 minutos depois de o servidor ficar pronto; o servidor que trava
-antes de ficar pronto, e a versão anterior que ainda sobe pelo Python, só são reabertos quando
-caem. Fechar o app não encerra o backend; ainda é necessário estar logado.
+minutos. Essa conferência começa 3 minutos depois de o servidor ficar pronto (um travamento nesses
+3 minutos é percebido logo depois deles); o servidor que trava antes de ficar pronto, e a versão
+anterior que ainda sobe pelo Python, só são reabertos quando caem. Fechar o app não encerra o backend; ainda é necessário estar logado.
 Quer escolher cada extra? No checkout: `./install.sh --avancado` / `.\install.ps1 -Avancado`
 (o `bootstrap.ps1` não repassa argumentos; o `bootstrap.sh` aceita `bash -s -- --avancado`).
 Agentes de código: o instalador usa os que já estão no computador e só instala o Claude Code

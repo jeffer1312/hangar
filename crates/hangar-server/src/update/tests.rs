@@ -219,7 +219,7 @@ async fn update_check_returns_the_entry_only_when_newer() {
     assert_eq!(check(&client, &missing, PLATFORM, None).await.unwrap_err().code(), "update_index_unavailable");
 }
 
-/// Conexão que cai no meio do corpo do índice (relatório `rompy6xf`) não vira atualização falha:
+/// Conexão que cai no meio do corpo do índice não vira atualização falha:
 /// a leitura tenta de novo e a segunda resposta, inteira, vale.
 #[tokio::test]
 async fn update_index_cut_mid_body_is_read_again() {
