@@ -1,6 +1,18 @@
 //! hangar-server: o servidor do Hangar, na porta pública.
 
 fn main() -> std::process::ExitCode {
+    // Antes de qualquer subcomando ler o ambiente: aberto pelo Windows, o processo recebe `Path`, e quem
+    // lê o ambiente como mapa (ou o repassa a um filho) espera as chaves em maiúsculas, como o
+    // `os.environ` do Python as dava. Ainda sem outras threads, então a troca é segura.
+    #[cfg(windows)]
+    {
+        let keys: Vec<String> = std::env::vars_os().filter_map(|(key, _)| key.into_string().ok()).collect();
+        for (from, to) in hangar_boot::settings::uppercase_renames(keys.iter().map(String::as_str)) {
+            if let Some(value) = std::env::var_os(&from) {
+                unsafe { std::env::remove_var(&from); std::env::set_var(&to, value); }
+            }
+        }
+    }
     let hook_args: Vec<_> = std::env::args_os().skip(1).collect();
     if let Some(mode) = hook_args.first().and_then(|arg| arg.to_str())
         && matches!(mode, "codex-hook-allow" | "codex-hook-json")
@@ -9,6 +21,10 @@ fn main() -> std::process::ExitCode {
     }
     if matches!(hook_args.first().and_then(|arg| arg.to_str()), Some("kimi-state-hook" | "guard-tmux")) {
         return hangar_server::provider_hooks::run(hook_args[0].to_str().unwrap());
+    }
+    // Hooks de marcador do Claude e do Codex: um processo por evento, nada antes deles.
+    if let Some(mode) = hook_args.first().and_then(|arg| arg.to_str()).filter(|mode| hangar_agent_hooks::is_mode(mode)) {
+        return hangar_agent_hooks::run(mode);
     }
     // `open`/`resolve`: o lançador como comando de terminal, com runtime próprio (fora do `run`).
     let args: Vec<String> = std::env::args_os().skip(1).map(|a| a.to_string_lossy().into_owned()).collect();
@@ -36,6 +52,14 @@ fn main() -> std::process::ExitCode {
     }
     if matches!(args.first().map(String::as_str), Some("open" | "resolve")) {
         return hangar_server::session_open::cli::run(&args);
+    }
+    // O lançador da sessão Codex com terminal: o comando que o pane roda.
+    if args.first().map(String::as_str) == Some("codex-tui") {
+        return hangar_server::codex_tui::cli(&args[1..]);
+    }
+    // A limpeza que o `hangar-codex` do terminal pede quando a sessão dele acabou.
+    if args.first().map(String::as_str) == Some("codex-close") {
+        return hangar_server::codex_tui::close::cli(&args[1..]);
     }
     // O serviço sobe o backend por aqui: a versão real para onde o `current` aponta na largada.
     if args.first().map(String::as_str) == Some("launch") {
@@ -77,6 +101,31 @@ fn main() -> std::process::ExitCode {
     if args.first().map(String::as_str) == Some("pricing-snapshot") {
         return hangar_server::costs::pricing_refresh::cli(&args[1..]);
     }
+    // O `hangar-send` inteiro; o atalho `scripts/hangar-send` passa a raiz da cópia dele.
+    if args.first().map(String::as_str) == Some("send") {
+        return hangar_server::send_cli::cli(&args[1..]);
+    }
+    // O pedido do `scripts/hangar-open`: monta, chama o `open` e imprime o nome para o atalho anexar.
+    if args.first().map(String::as_str) == Some("open-cli") {
+        return hangar_open_cli::cli(&args[1..]);
+    }
+    // Registro do MCP `hangar`, agentes das skills e bloco do CLAUDE.md, pelo instalador e pelos passos.
+    match args.first().map(String::as_str) {
+        Some("mcp-headers") => return hangar_registration::mcp_headers::cli(&args[1..]),
+        Some("mcp-register") => return hangar_registration::mcp_register::cli(&args[1..]),
+        Some("agents-install") => return hangar_registration::agents_install::cli(&args[1..]),
+        Some("claude-md-block") => return hangar_registration::claude_md_block::cli(&args[1..]),
+        _ => {}
+    }
+    // Chaves do push, token e nome do Tailscale: o instalador e os passos chamam, sem Python.
+    match args.first().map(String::as_str) {
+        Some("vapid-setup") => return hangar_install_setup::vapid::cli(&args[1..]),
+        Some("install-token") => return hangar_install_setup::token::cli(&args[1..]),
+        Some("tailscale-dns-name") => return hangar_install_setup::tailscale::cli(&args[1..]),
+        // A porta que o `deploy.sh` confere depois de reiniciar: ambiente, `.env`, 8765.
+        Some("deploy-port") => return hangar_deploy::port_cli(&args[1..]),
+        _ => {}
+    }
     // Hook de SessionStart: só disco, nunca sobe o servidor.
     if args.first().map(String::as_str) == Some("pair-context") {
         return hangar_server::groups::context_cmd::run(&args);
@@ -102,16 +151,6 @@ fn main() -> std::process::ExitCode {
 /// O servidor monta o próprio ambiente: `.env` + processo, instância e segredo novos, porta do
 /// convidado e log. O resto do servidor lê o ambiente como sempre.
 fn standalone() -> Result<(), std::process::ExitCode> {
-    // Antes de qualquer leitura do ambiente: aberto direto pelo lançador, o servidor recebe `Path`.
-    #[cfg(windows)]
-    {
-        let keys: Vec<String> = std::env::vars_os().filter_map(|(key, _)| key.into_string().ok()).collect();
-        for (from, to) in hangar_boot::settings::uppercase_renames(keys.iter().map(String::as_str)) {
-            if let Some(value) = std::env::var_os(&from) {
-                unsafe { std::env::remove_var(&from); std::env::set_var(&to, value); }
-            }
-        }
-    }
     // Antes do log desta vida: a falha de gravar no diário só aparece pelo stderr.
     let refuse = |code: &'static str, exit: u8, message: String| {
         eprintln!("hangar-server: {message}");
@@ -120,7 +159,7 @@ fn standalone() -> Result<(), std::process::ExitCode> {
         std::process::ExitCode::from(exit)
     };
     let home = hangar_server::accounts::environment::AccountEnvironment::capture().home;
-    let backend = std::env::current_dir().ok().filter(|dir| hangar_server::session_open::cli::is_backend(dir))
+    let backend = std::env::current_dir().ok().and_then(|dir| hangar_core::paths::backend_of(&dir))
         .or_else(hangar_server::session_open::cli::backend_dir);
     let env_file = hangar_core::user_data::read_env_raw(&home, backend.as_deref())
         .map_err(|e| refuse("env_unreadable", 2, format!(".env ilegível: {e}")))?;
@@ -245,11 +284,12 @@ async fn run(notifier: hangar_boot::notify::Notifier) {
             Err(_) => tracing::warn!(code = "auth_orphans_failed", "tarefa da varredura do contador de login falhou"),
         }
     });
-    // O `hangar-server open` instalado em `~/.hangar/bin` acha a `backend/` por aqui (o servidor roda nela).
-    if let Ok(backend) = std::env::current_dir() && hangar_server::session_open::cli::is_backend(&backend) {
+    // O `hangar-server open` instalado em `~/.hangar/bin` acha a cópia por aqui: o servidor roda na
+    // raiz dela (ou, lançado do jeito antigo, na `backend/`).
+    if let Some(backend) = std::env::current_dir().ok().and_then(|dir| hangar_core::paths::backend_of(&dir)) {
         let home = hangar_server::accounts::environment::AccountEnvironment::capture().home;
-        if let Err(error) = hangar_server::session_open::cli::publish_backend_dir(&home, &backend) {
-            tracing::warn!(kind = ?error.kind(), "pasta do backend não anotada; o comando de terminal instalado não acha o .env");
+        if let Err(error) = hangar_server::session_open::cli::publish_install_root(&home, &backend) {
+            tracing::warn!(kind = ?error.kind(), "raiz da instalação não anotada; o comando de terminal instalado não acha o .env");
         }
     }
     let listener = match tokio::net::TcpListener::bind(cfg.listen).await {

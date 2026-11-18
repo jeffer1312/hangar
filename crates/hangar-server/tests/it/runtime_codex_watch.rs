@@ -463,8 +463,8 @@ async fn an_old_sidecar_without_endpoint_is_relaunched_by_the_rust_and_a_failure
     assert_eq!(gave_up.map(|r|r.map_err(|e|e.code)),Some(Err("codex_terminal_relaunch_gave_up".into())));
 }
 
-/// O relançamento usa o lançador único da criação: o pane roda o `hangar-codex-tui` com a chave, o
-/// ambiente da sessão por `-e` (cores, Kimi, provedor) e a política explícita do modo gravado.
+/// O relançamento usa o lançador único da criação: o pane roda o `hangar-server codex-tui` com a chave,
+/// o ambiente da sessão por `-e` (cores, Kimi, provedor) e a política explícita do modo gravado.
 #[tokio::test]
 async fn the_relaunch_pane_is_the_creation_launcher_with_the_session_environment() {
     let fx = fixture();
@@ -472,7 +472,7 @@ async fn the_relaunch_pane_is_the_creation_launcher_with_the_session_environment
     std::fs::write(&fx.panes,"").unwrap();
     let registry = relaunch_registry(&fx).await;
     let bin = fx.root.join("bin");
-    crate::write_executable(&bin.join("hangar-codex-tui"),"#!/bin/sh\nexit 0\n");
+    crate::write_executable(&bin.join("hangar-server"),"#!/bin/sh\nexit 0\n");
     crate::write_executable(&bin.join("codex"),"#!/bin/sh\nexit 0\n");
     let asked = fx.root.join("new-session.args");
     let tmux = fx.root.join("tmux-record");
@@ -489,7 +489,7 @@ async fn the_relaunch_pane_is_the_creation_launcher_with_the_session_environment
     }
     let command = args.last().unwrap();
     assert!(!command.contains("--session-relaunch"),"sem o auxiliar com IPC: {command}");
-    let launcher = format!("hangar-codex-tui --cwd {} --codex-home {} --codex-account default --resume thread-1 --approval-policy never --sandbox danger-full-access \
+    let launcher = format!("hangar-server codex-tui --cwd {} --codex-home {} --codex-account default --resume thread-1 --approval-policy never --sandbox danger-full-access \
         --config model_context_window=1000000 --config model_auto_compact_token_limit=900000",
         fx.root.display(),fx.home.join(".codex").display());
     assert!(command.starts_with("exec env ") && command.ends_with(&launcher),"{command}");
@@ -845,7 +845,7 @@ async fn a_failure_after_the_kill_puts_the_terminal_mode_back_and_leaves_no_head
     let registry = relaunch_registry(&fx).await;
     let bin = fx.root.join("bin");
     // Lançador presente (a volta existe antes do kill) e um `codex` que não sobe: o sem terminal falha.
-    crate::write_executable(&bin.join("hangar-codex-tui"),"#!/bin/sh\nexit 0\n");
+    crate::write_executable(&bin.join("hangar-server"),"#!/bin/sh\nexit 0\n");
     crate::write_executable(&bin.join("codex"),"#!/bin/sh\nexit 1\n");
     // tmux falso que derruba os processos do pane no kill-session (o SIGHUP de verdade) e não cria sessão.
     let tmux = fx.root.join("tmux-relaunch");
@@ -908,7 +908,7 @@ async fn an_app_server_that_outlives_the_kill_leaves_the_session_parked_not_buri
     let reaper = reap(vec![tui]);
     let registry = relaunch_registry(&fx).await;
     let bin = fx.root.join("bin");
-    crate::write_executable(&bin.join("hangar-codex-tui"),"#!/bin/sh\nexit 0\n");
+    crate::write_executable(&bin.join("hangar-server"),"#!/bin/sh\nexit 0\n");
     crate::write_executable(&bin.join("codex"),"#!/bin/sh\nexit 1\n");
     let watcher = relaunch_watcher(&fx,&relaunch_tmux(&fx));
     registry.bind_watcher(watcher.clone());
@@ -985,7 +985,7 @@ async fn to_headless_brings_up_the_headless_with_the_read_mode_restores_plan_and
     let reaper = reap(vec![app,tui]);
     let registry = relaunch_registry(&fx).await;
     let bin = fx.root.join("bin");
-    crate::write_executable(&bin.join("hangar-codex-tui"),"#!/bin/sh\nexit 0\n");
+    crate::write_executable(&bin.join("hangar-server"),"#!/bin/sh\nexit 0\n");
     let log = fx.root.join("codex-methods.jsonl");
     fake_headless_codex(&bin,&log);
     let watcher = relaunch_watcher(&fx,&relaunch_tmux(&fx));
@@ -1690,7 +1690,7 @@ const RESUMABLE:&str = "thread-resumable";
 async fn sleep_registry(fx:&Fixture) -> Arc<RuntimeRegistry> {
     let bin = fx.root.join("bin");
     std::fs::create_dir_all(&bin).unwrap();
-    crate::write_executable(&bin.join("hangar-codex-tui"),"#!/bin/sh\nexit 0\n");
+    crate::write_executable(&bin.join("hangar-server"),"#!/bin/sh\nexit 0\n");
     if !bin.join("codex").exists() { crate::write_executable(&bin.join("codex"),"#!/bin/sh\nexit 1\n"); }
     let map = [("HOME",fx.home.clone()),("PATH",bin),("CLAUDE_CONFIG_DIR",fx.root.join("claude"))]
         .into_iter().map(|(k,v)|(k.to_owned(),v.to_string_lossy().into_owned())).collect();

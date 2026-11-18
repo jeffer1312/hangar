@@ -33,7 +33,7 @@ const RESERVE_WINDOW: f64 = 15.0 * 60.0;
 const TAIL_BYTES: u64 = 64 * 1024;
 const HEAD_LINES: usize = 60;
 
-/// As quatro rotas, para o `migration_status`.
+/// As quatro rotas, para o `owned_routes`.
 pub fn matches(method: &Method, path: &str) -> bool {
     *method == Method::GET && (matches!(path, "/api/archive" | "/api/archive-por-cwd")
         || path.strip_prefix("/api/archive/").is_some_and(|rest| !rest.is_empty() && !rest.contains('/')))

@@ -3,7 +3,7 @@ id: 2026-10-03-claude-to-codex-transfer
 titulo: O seletor de contas permite continuar a sessão Claude no Codex
 comando_posix: ./scripts/install-claude-wrapper.sh
 comando_windows: powershell -ExecutionPolicy Bypass -File scripts/setup-windows-wrappers.ps1
-prova: scripts/hangar-codex-tui
+prova: scripts/hangar-codex
 destrutivo: false
 ---
 

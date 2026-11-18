@@ -339,9 +339,8 @@ async fn upgrade_marketplaces(program:&[String],env:&std::collections::BTreeMap<
     match tokio::time::timeout(MARKETPLACES_TIMEOUT,command.output()).await {
         Ok(Ok(out)) if out.status.success() => {}
         Ok(Ok(out)) => {
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            let detail = stderr.lines().find(|line|line.starts_with("Failed to upgrade marketplace")).unwrap_or("");
-            tracing::warn!(code=?out.status.code(),detail=%detail.chars().take(200).collect::<String>(),"codex: conferência dos marketplaces falhou");
+            let failed = crate::codex_tui::marketplaces_failed_lines(&String::from_utf8_lossy(&out.stderr));
+            tracing::warn!(code=?out.status.code(),detail=%failed.first().map_or("",String::as_str),"codex: conferência dos marketplaces falhou");
         }
         Ok(Err(err)) => tracing::warn!(kind=?err.kind(),"codex: conferência dos marketplaces não rodou"),
         Err(_) => tracing::warn!("codex: conferência dos marketplaces passou do prazo"),

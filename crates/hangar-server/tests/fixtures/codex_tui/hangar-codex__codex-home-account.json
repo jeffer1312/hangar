@@ -1,0 +1,175 @@
+{
+ "case": "hangar-codex/codex-home-account",
+ "source_commit": "2ad8e335e8d9118e74bc5b33f2efb4ac3bbd8eba",
+ "python": "3.14.9 websockets 16.0",
+ "capture_cmdline": "/usr/bin/python3 capture.py -j 8",
+ "route": "R2",
+ "script": "scripts/hangar-codex",
+ "contract_refs": [
+  "R2-S20",
+  "C-61",
+  "C-62"
+ ],
+ "description": "",
+ "harness": {
+  "how": "direct: $PY -B -s $REF/scripts/hangar-codex",
+  "codex_layout": "absent",
+  "codex_path": null,
+  "codex_fake_config": {
+   "app_server": {
+    "threads": [
+     {
+      "id": "thread-1",
+      "path": "$T/home/.codex/sessions/2026/11/17/rollout-2026-11-17T10-00-00-thread-1.jsonl",
+      "cwd": "$T/work",
+      "source": "cli",
+      "threadSource": "user"
+     }
+    ]
+   }
+  },
+  "npm_stub_config": null,
+  "lock_busy": false,
+  "signal": null,
+  "no_tty": "stdin=/dev/null, stdout/stderr pipes (no script -q)"
+ },
+ "input": {
+  "argv": [
+   "$PY",
+   "-B",
+   "-s",
+   "$REF/scripts/hangar-codex",
+   "olá, prompt"
+  ],
+  "env": {
+   "HOME": "$T/home",
+   "USERPROFILE": "$T/home",
+   "LOCALAPPDATA": "$T/local",
+   "TMUX_TMPDIR": "$T/tmux",
+   "PATH": "$T/stubs:/usr/bin:/bin",
+   "CP_RUST_SERVER_BIN": "$T/srvbin/hangar-server",
+   "CODEX_HOME": "$T/home/.codex-trabalho"
+  },
+  "cwd": "$T/work",
+  "files_before": {
+   "home/.hangar": {
+    "type": "dir",
+    "mode": "0o755"
+   },
+   "home/.codex": {
+    "type": "dir",
+    "mode": "0o755"
+   },
+   "home/.hangar/config": {
+    "type": "dir",
+    "mode": "0o755"
+   },
+   "home/.hangar/config/.env": {
+    "type": "file",
+    "mode": "0o644",
+    "size": 56,
+    "sha256": "a9c0a40041c91197e57df5f41e446737eea5056d5661ca2eb51457c35ee39cd7",
+    "content": {
+     "text": "# servidor\nCP_AUTH_TOKEN=fake-owner-token\nCP_PORT=58473\n"
+    }
+   }
+  }
+ },
+ "output": {
+  "code": 0,
+  "stdout": {
+   "text": ""
+  },
+  "stderr": {
+   "text": "Codex gerenciado pelo hangar: codex-proj (detach: Ctrl-b d)\n"
+  },
+  "duration_ms": 134,
+  "files": {
+   "created": {},
+   "changed": {},
+   "removed": []
+  }
+ },
+ "spawns": [
+  {
+   "role": "hangar-server",
+   "argv": [
+    "$T/srvbin/hangar-server",
+    "open",
+    "{\"cwd\": \"$T/work\", \"provider\": \"codex\", \"headless\": false, \"initial_prompt\": \"ol\\u00e1, prompt\", \"codex_account\": \"trabalho\"}"
+   ],
+   "cwd": "$T/work",
+   "pid": 3242395,
+   "ppid": 3242392,
+   "t": 1794910488.1157663,
+   "env": {
+    "HOME": "$T/home",
+    "USERPROFILE": "$T/home",
+    "LOCALAPPDATA": "$T/local",
+    "TMUX_TMPDIR": "$T/tmux",
+    "PATH": "$T/stubs:/usr/bin:/bin",
+    "CP_RUST_SERVER_BIN": "$T/srvbin/hangar-server",
+    "CODEX_HOME": "$T/home/.codex-trabalho",
+    "LC_CTYPE": "C.UTF-8"
+   },
+   "call": 1
+  },
+  {
+   "role": "tmux",
+   "argv": [
+    "$T/stubs/tmux",
+    "attach-session",
+    "-t",
+    "=codex-proj"
+   ],
+   "cwd": "$T/work",
+   "pid": 3242397,
+   "ppid": 3242392,
+   "t": 1794910488.1348212,
+   "env": {
+    "HOME": "$T/home",
+    "USERPROFILE": "$T/home",
+    "LOCALAPPDATA": "$T/local",
+    "TMUX_TMPDIR": "$T/tmux",
+    "PATH": "$T/stubs:/usr/bin:/bin",
+    "CP_RUST_SERVER_BIN": "$T/srvbin/hangar-server",
+    "CODEX_HOME": "$T/home/.codex-trabalho",
+    "LC_CTYPE": "C.UTF-8"
+   },
+   "call": 1
+  },
+  {
+   "role": "tmux",
+   "argv": [
+    "$T/stubs/tmux",
+    "has-session",
+    "-t",
+    "=codex-proj"
+   ],
+   "cwd": "$T/work",
+   "pid": 3242399,
+   "ppid": 3242392,
+   "t": 1794910488.1516252,
+   "env": {
+    "HOME": "$T/home",
+    "USERPROFILE": "$T/home",
+    "LOCALAPPDATA": "$T/local",
+    "TMUX_TMPDIR": "$T/tmux",
+    "PATH": "$T/stubs:/usr/bin:/bin",
+    "CP_RUST_SERVER_BIN": "$T/srvbin/hangar-server",
+    "CODEX_HOME": "$T/home/.codex-trabalho",
+    "LC_CTYPE": "C.UTF-8"
+   },
+   "call": 1
+  }
+ ],
+ "processes_alive_after_exit": {
+  "3242395": false,
+  "3242397": false,
+  "3242399": false
+ },
+ "window": {
+  "t_start": 1794910488.0373132,
+  "t_end": 1794910488.1715872
+ }
+}

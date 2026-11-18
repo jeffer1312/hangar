@@ -555,7 +555,7 @@ fn materialize(fixture: &Value, root: &std::path::Path) {
     }
     let bin = root.join("bin");
     std::fs::create_dir_all(&bin).unwrap();
-    for program in ["claude", "codex", "pi", "omp", "kimi", "hangar-codex-tui", "hangar-engine", "bwrap"] {
+    for program in ["claude", "codex", "pi", "omp", "kimi", "hangar-server", "hangar-engine", "bwrap"] {
         crate::write_test_executable(&bin.join(program), b"#!/bin/sh\nexit 1\n");
     }
     // O catálogo do Codex que o harness deu à ponte vira o `model/list` de um app-server falso; sem
@@ -1651,7 +1651,7 @@ fn the_codex_open_follows_the_cases() {
         let launcher = launcher.rsplit_once("hangar-codex-tui").unwrap().1;
         let command = argv.last().unwrap();
         // O config.toml da fixture não fixa a janela: o pane pede o 1M padrão do Hangar.
-        let wanted = format!("hangar-codex-tui{launcher} --approval-policy never --sandbox danger-full-access{} \
+        let wanted = format!("hangar-server codex-tui{launcher} --approval-policy never --sandbox danger-full-access{} \
             --config model_context_window=1000000 --config model_auto_compact_token_limit=900000",
             prompt.map(|p| format!(" --prompt {p}")).unwrap_or_default());
         assert!(command.ends_with(&wanted), "{name}: {command}\nesperado no fim: {wanted}");

@@ -1,0 +1,96 @@
+{
+ "case": "state/stdin-duplicate-keys",
+ "source_commit": "2ad8e335e8d9118e74bc5b33f2efb4ac3bbd8eba",
+ "python": "3.14.9 websockets 16.0",
+ "capture_cmdline": "/usr/bin/python3 capture.py -j 8",
+ "route": "R1",
+ "hook": "state_hook.py",
+ "contract_refs": [
+  "R1-S05",
+  "H-11",
+  "H-12",
+  "§0 armadilhas"
+ ],
+ "description": "",
+ "harness": {
+  "how": "unshare -Ucpf --mount-proc (user ns mapping the current uid, no root caps); process layers outer->inner, innermost runs sh -c <command>",
+  "layers": [
+   {
+    "argv0": "capture-init"
+   },
+   {
+    "argv0": "claude",
+    "extra": [
+     "--session-id",
+     "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+    ]
+   }
+  ],
+  "command": "\"$PY\" -B -s \"$REF/backend/hooks/state_hook.py\" || exit 0",
+  "namespace_pids": {
+   "layer0:capture-init": 1,
+   "layer1:claude": 2
+  },
+  "hook_parent": "sh (hop 1), then the layers from inner to outer"
+ },
+ "input": {
+  "env": {
+   "HOME": "$T/home",
+   "USERPROFILE": "$T/home",
+   "LOCALAPPDATA": "$T/local",
+   "TMUX_TMPDIR": "$T/tmux",
+   "PATH": "$T/stubs:/usr/bin:/bin",
+   "CLAUDE_CONFIG_DIR": "$T/cfg"
+  },
+  "stdin": {
+   "text": "{\"session_id\":\"dup-1\",\"session_id\":\"dup-2\",\"hook_event_name\":\"Stop\",\"transcript_path\":\"/t/x.jsonl\"}"
+  },
+  "files_before": {}
+ },
+ "output": {
+  "code": 0,
+  "stdout": {
+   "text": ""
+  },
+  "stderr": {
+   "text": ""
+  },
+  "duration_ms": 100,
+  "files": {
+   "created": {
+    "cfg/.hangar-active": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "cfg/.hangar-state": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "cfg/.hangar-active/aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee.json": {
+     "type": "file",
+     "mode": "0o644",
+     "size": 72,
+     "sha256": "5123e9f714261b6224274373d7dc7a3e2846e4b7b8fbd1a6a3fe4a50379b00c7",
+     "content": {
+      "text": "{\"jsonl\": \"/t/x.jsonl\", \"ts\": 1794910459.4946241, \"cwd\": null, \"pid\": 2}"
+     }
+    },
+    "cfg/.hangar-state/dup-2.json": {
+     "type": "file",
+     "mode": "0o644",
+     "size": 43,
+     "sha256": "32e095b7d574a023519e5131d8b1dcbbbb946989b602a3da459f7fe4882fbef1",
+     "content": {
+      "text": "{\"state\": \"idle\", \"ts\": 1794910459.4944503}"
+     }
+    }
+   },
+   "changed": {},
+   "removed": []
+  }
+ },
+ "window": {
+  "t_start": 1794910459.4099464,
+  "t_end": 1794910459.5108507
+ }
+}

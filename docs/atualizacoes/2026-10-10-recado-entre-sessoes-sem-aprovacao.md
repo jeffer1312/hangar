@@ -1,7 +1,7 @@
 ---
 id: 2026-10-10-recado-entre-sessoes-sem-aprovacao
 titulo: Mandar recado para outra sessão deixa de pedir aprovação no Claude
-comando_posix: python3 scripts/registrar-mcp.py
+comando_posix: scripts/hangar-server-command mcp-register --root .
 comando_windows: powershell -ExecutionPolicy Bypass -File install.ps1 -Update
 prova: ~/.claude/settings.json
 destrutivo: false

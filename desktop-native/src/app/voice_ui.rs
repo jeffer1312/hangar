@@ -1964,7 +1964,7 @@ mod tests {
 
     #[test]
     fn risky_click_asks_before_destructive_buttons() {
-        assert!(!risky_click("migration-open", Some("Ver migração para Rust")));
+        assert!(!risky_click("settings-tab-about", Some("Ver a versão do Hangar")));
         assert!(!risky_click("settings-tab-advanced", None));
         assert!(risky_click("row-menu-delete", None));
         assert!(risky_click("composer-send", Some("Enviar")));

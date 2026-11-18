@@ -1,0 +1,104 @@
+{
+ "case": "state/hostile-session_id-space-accent",
+ "source_commit": "2ad8e335e8d9118e74bc5b33f2efb4ac3bbd8eba",
+ "python": "3.14.9 websockets 16.0",
+ "capture_cmdline": "/usr/bin/python3 capture.py -j 8",
+ "route": "R1",
+ "hook": "state_hook.py",
+ "contract_refs": [
+  "R1-S01",
+  "R1-D06",
+  "H-02"
+ ],
+ "description": "bare claude ancestor (no --session-id) so the active marker key is the session_id too",
+ "harness": {
+  "how": "unshare -Ucpf --mount-proc (user ns mapping the current uid, no root caps); process layers outer->inner, innermost runs sh -c <command>",
+  "layers": [
+   {
+    "argv0": "capture-init"
+   },
+   {
+    "argv0": "claude"
+   }
+  ],
+  "command": "\"$PY\" -B -s \"$REF/backend/hooks/state_hook.py\" || exit 0",
+  "namespace_pids": {
+   "layer0:capture-init": 1,
+   "layer1:claude": 2
+  },
+  "hook_parent": "sh (hop 1), then the layers from inner to outer"
+ },
+ "input": {
+  "env": {
+   "HOME": "$T/home",
+   "USERPROFILE": "$T/home",
+   "LOCALAPPDATA": "$T/local",
+   "TMUX_TMPDIR": "$T/tmux",
+   "PATH": "$T/stubs:/usr/bin:/bin",
+   "CLAUDE_CONFIG_DIR": "$T/cfg"
+  },
+  "stdin": {
+   "text": "{\"session_id\": \"sessão com espaço\", \"transcript_path\": \"/home/u/.claude/projects/-home-u-proj/sessão com espaço.jsonl\", \"cwd\": \"/home/u/proj\", \"permission_mode\": \"default\", \"hook_event_name\": \"UserPromptSubmit\", \"prompt\": \"oi\"}"
+  },
+  "files_before": {}
+ },
+ "output": {
+  "code": 0,
+  "stdout": {
+   "text": ""
+  },
+  "stderr": {
+   "text": ""
+  },
+  "duration_ms": 81,
+  "files": {
+   "created": {
+    "cfg/.hangar-active": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "cfg/.hangar-prompt": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "cfg/.hangar-state": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "cfg/.hangar-active/sessão com espaço.json": {
+     "type": "file",
+     "mode": "0o644",
+     "size": 143,
+     "sha256": "cfdb427c9ff8667c60cfa878da6ad0c3097b09f90f2e1aa2e46b3e87020fdeb4",
+     "content": {
+      "text": "{\"jsonl\": \"/home/u/.claude/projects/-home-u-proj/sess\\u00e3o com espa\\u00e7o.jsonl\", \"ts\": 1794910456.9628384, \"cwd\": \"/home/u/proj\", \"pid\": 2}"
+     }
+    },
+    "cfg/.hangar-prompt/sessão com espaço.json": {
+     "type": "file",
+     "mode": "0o644",
+     "size": 78,
+     "sha256": "285588d6562b4cae449c176172d974d12507a6ce9bf75aff7df70261db10dc44",
+     "content": {
+      "text": "{\"sha1\": \"ef67e0868c98e5f0b0e2fcd9b0c4a3bad808f551\", \"ts\": 1794910456.9626548}"
+     }
+    },
+    "cfg/.hangar-state/sessão com espaço.json": {
+     "type": "file",
+     "mode": "0o644",
+     "size": 46,
+     "sha256": "66af42c070bf5c88856d6625f2e6c94a1cf240dd9aec92cae19d69b0779d1562",
+     "content": {
+      "text": "{\"state\": \"working\", \"ts\": 1794910456.9614828}"
+     }
+    }
+   },
+   "changed": {},
+   "removed": []
+  }
+ },
+ "window": {
+  "t_start": 1794910456.8918388,
+  "t_end": 1794910456.9734004
+ }
+}

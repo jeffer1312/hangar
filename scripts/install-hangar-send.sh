@@ -52,14 +52,35 @@ linkar_bin() {
     echo "ok: $destino (copia -> shim; o ln do Git Bash nao linka, entao chama o script do repo)"
 }
 
-# O Python do Hangar (pacote, venv ou python3) para os scripts; no Windows o install.ps1 grava o .cmd.
-linkar_bin "$REPO/scripts/hangar-python"  "$HOME/.local/bin/hangar-python"  "'$REPO/scripts/hangar-python'"
 linkar_bin "$REPO/scripts/hangar-send"    "$HOME/.local/bin/hangar-send"    "'$REPO/scripts/hangar-send'"
 linkar_bin "$REPO/scripts/hangar-preview" "$HOME/.local/bin/hangar-preview" "node '$REPO/scripts/hangar-preview'"
 linkar_bin "$REPO/scripts/hangar-doctor"  "$HOME/.local/bin/hangar-doctor"  "'$REPO/scripts/hangar-doctor'"
 linkar_bin "$REPO/scripts/folha"          "$HOME/.local/bin/folha"          "node '$REPO/scripts/folha'"
 linkar_bin "$REPO/scripts/hangar-mcp-headers.sh" "$HOME/.local/bin/hangar-mcp-headers" "'$REPO/scripts/hangar-mcp-headers.sh'"
-python3 "$REPO/scripts/registrar-mcp.py"
+# O registro, os agentes e o bloco do CLAUDE.md são subcomandos do hangar-server desta cópia.
+HANGAR_SERVER="$REPO/scripts/hangar-server-command"
+# No --update do checkout (o install.sh liga HANGAR_SERVER_OLD_WARNS) o binário achado pode ser mais
+# antigo que este código: subcomando que ele não conhece vira aviso e o resto segue. Fora disso o
+# binário veio junto com o código, e a falta é erro. Algo pulado assim, ou uma linha `erro:` de um
+# subcomando que saiu 0 (conta pulada pelo registro), faz o script sair com 3 no fim, depois de tudo:
+# quem chama mostra pendência, não "atualizado".
+SERVER_SKIPPED=0
+srv() {
+    local err rc=0
+    err=$(mktemp)
+    "$HANGAR_SERVER" "$@" 2>"$err" || rc=$?
+    cat "$err" >&2
+    if [ "$rc" = 0 ] && grep -q '^erro:' "$err"; then
+        SERVER_SKIPPED=1
+    elif [ "$rc" = 2 ] && [ "${HANGAR_SERVER_OLD_WARNS:-0}" = 1 ] && grep -q 'subcomando desconhecido' "$err"; then
+        echo "aviso: o hangar-server desta máquina é anterior a este código (não tem '$1'); rode ./scripts/install-server-binaries.sh e ./install.sh --update de novo" >&2
+        rc=0
+        SERVER_SKIPPED=1
+    fi
+    rm -f "$err"
+    return "$rc"
+}
+srv mcp-register --root "$REPO"
 
 mkdir -p "$HOME/.claude/skills"
 for skill in "$REPO"/skills/*/; do
@@ -108,12 +129,10 @@ else
 fi
 
 # Agentes das skills (ex.: preparar-plano da orquestrar): link no Claude, .toml em cada home do Codex.
-python3 "$REPO/scripts/instalar-agentes.py"
+srv agents-install --root "$REPO"
 
-MD="$HOME/.claude/CLAUDE.md"
-START="<!-- claude-pocket:sessoes-irmas:start -->"
-END="<!-- claude-pocket:sessoes-irmas:end -->"
-
+# O texto do bloco Sessões-irmãs mora aqui; o subcomando o troca no ~/.claude/CLAUDE.md entre os
+# marcadores (ou o acrescenta no fim), no fim de linha que o arquivo já usa.
 BLOCK=$(cat <<'EOF'
 <!-- claude-pocket:sessoes-irmas:start -->
 # Sessões-irmãs (hangar)
@@ -141,26 +160,14 @@ BLOCK=$(cat <<'EOF'
 EOF
 )
 
-mkdir -p "$(dirname "$MD")"
-touch "$MD"
-
-if grep -qF "$START" "$MD"; then
-    # Bloco já existe -> substitui o conteúdo entre os marcadores (atualização).
-    BLOCK="$BLOCK" python3 - "$MD" <<'PYEOF'
-import os, re, sys
-path = sys.argv[1]
-block = os.environ["BLOCK"]
-text = open(path, encoding="utf-8").read()
-start, end = "<!-- claude-pocket:sessoes-irmas:start -->", "<!-- claude-pocket:sessoes-irmas:end -->"
-pattern = re.compile(re.escape(start) + r".*?" + re.escape(end), re.S)
-open(path, "w", encoding="utf-8").write(pattern.sub(lambda _: block, text))
-PYEOF
-    echo "ok: bloco Sessões-irmãs ATUALIZADO em $MD"
-else
-    printf '\n%s\n' "$BLOCK" >> "$MD"
-    echo "ok: bloco Sessões-irmãs ADICIONADO em $MD"
-fi
+# Sem pipe: o `srv` roda neste shell e a marca de pulado não se perde num subshell.
+srv claude-md-block <<<"$BLOCK"
 
 # Trava de vazamento: toda máquina que instala o hangar-send liga também os hooks git versionados
 # (scripts/hooks/), senão o clone novo commita nome interno sem nada recusar. O pacote não é clone.
 if [ -e "$REPO/.git" ]; then "$(dirname "$(realpath "$0")")/install-hooks.sh"; fi
+
+# Algo ficou pulado (binário antigo ou `erro:` acima): o resto rodou, e a saída 3 vira pendência nos
+# instaladores, que sempre passam HANGAR_SERVER_OLD_WARNS. O passo de atualização não passa: ali uma
+# conta com `.claude.json` cortado faria todo passo falhar, e as linhas `erro:` já ficam na saída dele.
+[ "$SERVER_SKIPPED" = 0 ] || [ -z "${HANGAR_SERVER_OLD_WARNS:-}" ] || exit 3

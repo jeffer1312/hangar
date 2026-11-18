@@ -1,0 +1,215 @@
+{
+ "case": "preview/new-message-index1-before-0-after-stop",
+ "source_commit": "2ad8e335e8d9118e74bc5b33f2efb4ac3bbd8eba",
+ "python": "3.14.9 websockets 16.0",
+ "capture_cmdline": "/usr/bin/python3 capture.py -j 8",
+ "route": "R1",
+ "hook": "preview_hook.py",
+ "contract_refs": [
+  "R1-S06",
+  "H-19"
+ ],
+ "description": "",
+ "harness": {
+  "how": "$PY -B -s $REF/backend/hooks/preview_hook.py, one process per step, stdin = step"
+ },
+ "input": {
+  "env": {
+   "HOME": "$T/home",
+   "USERPROFILE": "$T/home",
+   "LOCALAPPDATA": "$T/local",
+   "TMUX_TMPDIR": "$T/tmux",
+   "PATH": "$T/stubs:/usr/bin:/bin",
+   "CLAUDE_CONFIG_DIR": "$T/cfg"
+  },
+  "files_before": {}
+ },
+ "steps": [
+  {
+   "stdin": {
+    "text": "{\"hook_event_name\": \"MessageDisplay\", \"session_id\": \"sess-cmdline\", \"transcript_path\": \"/home/u/.claude/projects/-home-u-proj/abc.jsonl\", \"cwd\": \"/home/u/proj\", \"message_id\": \"m1\", \"index\": 0, \"final\": false, \"delta\": \"A\"}"
+   },
+   "code": 0,
+   "stdout": {
+    "text": ""
+   },
+   "stderr": {
+    "text": ""
+   },
+   "duration_ms": 29,
+   "files": {
+    "created": {
+     "cfg/.hangar-preview": {
+      "type": "dir",
+      "mode": "0o755"
+     },
+     "cfg/.hangar-preview/abc.json": {
+      "type": "file",
+      "mode": "0o644",
+      "size": 79,
+      "sha256": "2f47f9f0d61ee62d77aed7ebbbac9453f3aacd0479b3db5f38440fb0ea9f7725",
+      "content": {
+       "text": "{\"text\": \"A\", \"ts\": 1794910460.001466, \"message_id\": \"m1\", \"parts\": {\"0\": \"A\"}}"
+      }
+     },
+     "cfg/.hangar-preview/abc.lock": {
+      "type": "file",
+      "mode": "0o644",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "content": {
+       "text": ""
+      }
+     }
+    },
+    "changed": {},
+    "removed": []
+   }
+  },
+  {
+   "stdin": {
+    "text": "{\"hook_event_name\": \"Stop\", \"session_id\": \"sess-cmdline\", \"transcript_path\": \"/home/u/.claude/projects/-home-u-proj/abc.jsonl\", \"cwd\": \"/home/u/proj\", \"permission_mode\": \"default\", \"stop_hook_active\": false}"
+   },
+   "code": 0,
+   "stdout": {
+    "text": ""
+   },
+   "stderr": {
+    "text": ""
+   },
+   "duration_ms": 30,
+   "files": {
+    "created": {},
+    "changed": {
+     "cfg/.hangar-preview/abc.json": {
+      "before": {
+       "type": "file",
+       "mode": "0o644",
+       "size": 79,
+       "sha256": "2f47f9f0d61ee62d77aed7ebbbac9453f3aacd0479b3db5f38440fb0ea9f7725",
+       "content": {
+        "text": "{\"text\": \"A\", \"ts\": 1794910460.001466, \"message_id\": \"m1\", \"parts\": {\"0\": \"A\"}}"
+       }
+      },
+      "after": {
+       "type": "file",
+       "mode": "0o644",
+       "size": 54,
+       "sha256": "15b3e11d0acbc97df05916ac05c6bacf4dac0face79de8a0bc898e1722ec02bc",
+       "content": {
+        "text": "{\"text\": \"\", \"ts\": 1794910460.0323875, \"closed\": \"m1\"}"
+       }
+      }
+     }
+    },
+    "removed": []
+   }
+  },
+  {
+   "stdin": {
+    "text": "{\"hook_event_name\": \"MessageDisplay\", \"session_id\": \"sess-cmdline\", \"transcript_path\": \"/home/u/.claude/projects/-home-u-proj/abc.jsonl\", \"cwd\": \"/home/u/proj\", \"message_id\": \"m2\", \"index\": 1, \"final\": false, \"delta\": \"seg\"}"
+   },
+   "code": 0,
+   "stdout": {
+    "text": ""
+   },
+   "stderr": {
+    "text": ""
+   },
+   "duration_ms": 34,
+   "files": {
+    "created": {},
+    "changed": {
+     "cfg/.hangar-preview/abc.json": {
+      "before": {
+       "type": "file",
+       "mode": "0o644",
+       "size": 54,
+       "sha256": "15b3e11d0acbc97df05916ac05c6bacf4dac0face79de8a0bc898e1722ec02bc",
+       "content": {
+        "text": "{\"text\": \"\", \"ts\": 1794910460.0323875, \"closed\": \"m1\"}"
+       }
+      },
+      "after": {
+       "type": "file",
+       "mode": "0o644",
+       "size": 84,
+       "sha256": "5edc8ea1e18ebfb4828afce987af36ecbb701183521f0e0d9b73dc603ee22546",
+       "content": {
+        "text": "{\"text\": \"seg\", \"ts\": 1794910460.0678954, \"message_id\": \"m2\", \"parts\": {\"1\": \"seg\"}}"
+       }
+      }
+     }
+    },
+    "removed": []
+   }
+  },
+  {
+   "stdin": {
+    "text": "{\"hook_event_name\": \"MessageDisplay\", \"session_id\": \"sess-cmdline\", \"transcript_path\": \"/home/u/.claude/projects/-home-u-proj/abc.jsonl\", \"cwd\": \"/home/u/proj\", \"message_id\": \"m2\", \"index\": 0, \"final\": false, \"delta\": \"pri\"}"
+   },
+   "code": 0,
+   "stdout": {
+    "text": ""
+   },
+   "stderr": {
+    "text": ""
+   },
+   "duration_ms": 43,
+   "files": {
+    "created": {},
+    "changed": {
+     "cfg/.hangar-preview/abc.json": {
+      "before": {
+       "type": "file",
+       "mode": "0o644",
+       "size": 84,
+       "sha256": "5edc8ea1e18ebfb4828afce987af36ecbb701183521f0e0d9b73dc603ee22546",
+       "content": {
+        "text": "{\"text\": \"seg\", \"ts\": 1794910460.0678954, \"message_id\": \"m2\", \"parts\": {\"1\": \"seg\"}}"
+       }
+      },
+      "after": {
+       "type": "file",
+       "mode": "0o644",
+       "size": 99,
+       "sha256": "683dbea0c4835c9d18bd2a63585d7cad064714ddcf2bb4872fc6e53b7021ec92",
+       "content": {
+        "text": "{\"text\": \"priseg\", \"ts\": 1794910460.1084054, \"message_id\": \"m2\", \"parts\": {\"1\": \"seg\", \"0\": \"pri\"}}"
+       }
+      }
+     }
+    },
+    "removed": []
+   }
+  }
+ ],
+ "files_final": {
+  "cfg/.hangar-preview": {
+   "type": "dir",
+   "mode": "0o755"
+  },
+  "cfg/.hangar-preview/abc.json": {
+   "type": "file",
+   "mode": "0o644",
+   "size": 99,
+   "sha256": "683dbea0c4835c9d18bd2a63585d7cad064714ddcf2bb4872fc6e53b7021ec92",
+   "content": {
+    "text": "{\"text\": \"priseg\", \"ts\": 1794910460.1084054, \"message_id\": \"m2\", \"parts\": {\"1\": \"seg\", \"0\": \"pri\"}}"
+   }
+  },
+  "cfg/.hangar-preview/abc.lock": {
+   "type": "file",
+   "mode": "0o644",
+   "size": 0,
+   "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "content": {
+    "text": ""
+   }
+  }
+ },
+ "window": {
+  "t_start": 1794910459.9757116,
+  "t_end": 1794910460.1180947
+ }
+}

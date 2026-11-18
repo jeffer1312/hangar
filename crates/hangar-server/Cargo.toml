@@ -22,6 +22,13 @@ path = "tests/fixtures/commands_cli.rs"
 test = false
 bench = false
 
+# O `codex` falso do lançador (`codex-tui`): app-server WebSocket, TUI e marketplaces.
+[[bin]]
+name = "hangar-codex-fixture"
+path = "tests/fixtures/codex_cli.rs"
+test = false
+bench = false
+
 [[test]]
 name = "diag_client"
 path = "tests/diag_client.rs"
@@ -42,6 +49,10 @@ iana-time-zone.workspace = true
 hangar-conversation-transfer.workspace = true
 hangar-codex-transfer.workspace = true
 hangar-session-tools.workspace = true
+hangar-send.workspace = true
+hangar-registration.workspace = true
+hangar-open-cli.workspace = true
+hangar-install-setup.workspace = true
 hangar-projects.workspace = true
 hangar-auth = { path = "../hangar-auth" }
 # float_roundtrip: o float lido sai com o mesmo valor que o float() do Python, e o repr bate.
@@ -66,6 +77,7 @@ hangar-http-file.workspace = true
 hangar-desktop-theme.workspace = true
 hangar-shortcut-transfer.workspace = true
 hangar-sidecar-prune.workspace = true
+hangar-agent-hooks.workspace = true
 hangar-usage-diary.workspace = true
 hangar-boot.workspace = true
 hangar-opencode-cookie.workspace = true

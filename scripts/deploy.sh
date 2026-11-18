@@ -44,10 +44,14 @@ fi
 
 log "deploy $LOCAL -> $REMOTE"
 
-# A configuração anterior ainda é importável e respeita CP_PORT, inclusive o .env da VPS.
-PORT="$(cd "$REPO/backend" && uv run --no-sync python -c 'from app.config import settings; print(settings.port)')"
+# A porta como o servidor a lê (CP_PORT do ambiente, senão do .env da VPS, senão 8765), pelo Rust.
+. "$REPO/scripts/hangar-server-lookup"
+if ! hangar_server_find "$REPO"; then
+  log "ERRO: hangar-server não encontrado; não dá para resolver a porta do backend."; exit 1
+fi
+PORT="$("$HANGAR_SERVER_BIN" deploy-port --backend "$REPO/backend")" || PORT=""
 [[ "$PORT" =~ ^[0-9]+$ ]] && (( PORT > 0 && PORT <= 65535 )) || {
-  log "ERRO: não foi possível resolver a porta do backend."; exit 1;
+  log "ERRO: não foi possível resolver a porta do backend ($HANGAR_SERVER_BIN deploy-port)."; exit 1;
 }
 HEALTH_URL="http://127.0.0.1:$PORT/api/peers/ping"
 UNITS=("$BACK")
@@ -66,11 +70,8 @@ if [[ -d frontend/dist ]]; then
   HAD_DIST=1
 fi
 NODE_CHANGED=0
-BACK_CHANGED=0
 git diff --quiet "$LOCAL" "$REMOTE" -- package-lock.json || NODE_CHANGED=1
-git diff --quiet "$LOCAL" "$REMOTE" -- backend/uv.lock backend/pyproject.toml || BACK_CHANGED=1
 NODE_TOUCHED=0
-BACK_TOUCHED=0
 RESTART_ATTEMPTED=0
 DEPLOY_STARTED="$(date '+%F %T')"
 
@@ -85,9 +86,12 @@ wait_healthy() {
     for unit in "${UNITS[@]}"; do
       systemctl --user is-active --quiet "$unit" || active=0
     done
+    # Só a saúde do Hangar (`{"hangar": true, …}` no topo) conta: outro programa na porta responde 200
+    # também. Pelo node, que o build do front já exige.
     if [[ "$code" == 200 && "$current" =~ ^[1-9][0-9]*$ \
           && "$current" != "$previous" && "$current" == "$after" && "$active" == 1 ]] \
-        && python3 -c 'import json,sys; sys.exit(json.load(sys.stdin).get("hangar") is not True)' \
+        && node -e 'let j; try { j = JSON.parse(require("fs").readFileSync(0, "utf8")) } catch { process.exit(1) }
+                    process.exit(j !== null && typeof j === "object" && !Array.isArray(j) && j.hangar === true ? 0 : 1)' \
           < "$BACKUP/health.json" 2>/dev/null; then
       if [[ "$current" == "$last" ]]; then
         consecutive=$((consecutive + 1))
@@ -139,9 +143,6 @@ rollback() {
   fi
   if (( NODE_TOUCHED )) && ! (cd "$REPO" && npm ci --workspace=@hangar/core --workspace=frontend); then
     log "CRITICO: rollback das dependências do front falhou."; exit 2
-  fi
-  if (( BACK_TOUCHED )) && ! (cd "$REPO/backend" && uv sync --locked --quiet); then
-    log "CRITICO: rollback das dependências do backend falhou."; exit 2
   fi
   if (( RESTART_ATTEMPTED )); then
     systemctl --user reset-failed "$BACK" || log "AVISO: reset-failed não pôde ser aplicado."
@@ -199,15 +200,6 @@ deploy() {
   STAGE="build"
   log "build"
   npm run build -w frontend
-
-  # --- Backend: deps so quando o lock mudou ---
-  STAGE="dependências do backend"
-  cd "$REPO/backend"
-  if (( BACK_CHANGED )); then
-    BACK_TOUCHED=1
-    log "uv.lock/pyproject mudou -> uv sync"
-    uv sync --locked --quiet
-  fi
 
   # --- Restart (so chega aqui com build ok) ---
   # O FRONT so existe quando a instalacao escolheu servico separado no 5173; com o backend servindo a

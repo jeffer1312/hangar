@@ -9,6 +9,8 @@ import pytest
 # No import, antes de qualquer teste importar o `app.config`: o `settings` nasce na importação, e
 # um `.env` de desenvolvimento com a branch de teste mudaria o alvo de toda a suíte do Atualizar.
 os.environ["CP_UPDATE_BRANCH"] = ""
+# `rust_bins` e `providers_bridge` moraram em `app/` e mudaram para o motor da orquestração.
+sys.path.append(str(Path(__file__).resolve().parents[2] / "skills" / "orquestrar" / "scripts"))
 
 
 def _instalar_home_do_windows() -> None:

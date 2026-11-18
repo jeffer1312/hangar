@@ -172,7 +172,7 @@ async fn credentials_answer_each_case() {
 #[test]
 fn credentials_list_and_cookie_are_rust_owned() {
     use axum::http::Method;
-    use hangar_server::migration_status::rust_route;
+    use hangar_server::owned_routes::rust_route;
     assert!(rust_route(&Method::GET, "/api/credenciais"));
     assert!(rust_route(&Method::PUT, "/api/credenciais/cookie"));
     for (method, path) in [(Method::PUT, "/api/credenciais/apelido"),

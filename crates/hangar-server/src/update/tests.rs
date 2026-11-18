@@ -825,6 +825,35 @@ fn update_steps_read_like_python_and_register_after_the_proof() {
     assert!(!steps::applied(&state_dir).unwrap().contains("2026-01-07-c"));
 }
 
+/// P-44: o vizinho com o mesmo comando não roda de novo, salvo quando a prova dele falta: aí roda
+/// para ele, e só registra se a prova aparecer.
+#[test]
+fn update_steps_rerun_the_shared_command_when_the_neighbours_proof_is_missing() {
+    let home = tempfile::tempdir().unwrap();
+    let root = home.path().join("versao");
+    let docs = root.join("docs/atualizacoes");
+    std::fs::create_dir_all(&docs).unwrap();
+    let state_dir = home.path().join(".hangar-update");
+    std::fs::write(docs.join("2026-02-01-a.md"), step_doc("2026-02-01-a", "maquina", "instalar", "prova-a")).unwrap();
+    std::fs::write(docs.join("2026-02-02-b.md"), step_doc("2026-02-02-b", "maquina", "instalar", "prova-b")).unwrap();
+
+    // A primeira rodada deixa só a prova do primeiro; a segunda, a do vizinho.
+    struct Proofs { root: PathBuf, calls: Mutex<Vec<PathBuf>> }
+    impl StepRunner for Proofs {
+        fn run(&self, _command: &str, cwd: &Path) -> StepRun {
+            let mut calls = self.calls.lock().unwrap();
+            calls.push(cwd.to_path_buf());
+            std::fs::write(self.root.join(if calls.len() == 1 { "prova-a" } else { "prova-b" }), "").unwrap();
+            StepRun { code: Some(0), output: String::new() }
+        }
+    }
+    let runner = Proofs { root: root.clone(), calls: Mutex::new(Vec::new()) };
+    let state = StateFile::new(&state_dir);
+    let done = apply_machine_steps(&root, home.path(), &state_dir, &runner, &state).unwrap();
+    assert_eq!(done, ["2026-02-01-a", "2026-02-02-b"]);
+    assert_eq!(*runner.calls.lock().unwrap(), vec![root.clone(), root.clone()], "roda de novo, na raiz da versão, para o vizinho sem prova");
+}
+
 /// Registro ilegível é erro, nunca "nada aplicado": nem some o histórico nem se roda tudo de novo.
 #[test]
 fn update_steps_unreadable_registry_is_an_error_and_is_kept() {

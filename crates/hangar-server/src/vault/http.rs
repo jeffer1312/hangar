@@ -12,7 +12,7 @@ use crate::{routes::AppState, session_write::detail};
 
 const MAX_BODY: usize = 64 * 1024;
 
-/// As rotas do `routes::router` daqui, para a tabela da migração (`migration_status::rust_route`).
+/// As rotas do `routes::router` daqui, para a tabela das rotas do Rust (`owned_routes::rust_route`).
 pub fn matches(method: &Method, path: &str) -> bool {
     let Some(rest) = path.strip_prefix("/api/vault/") else { return false };
     match rest.split('/').collect::<Vec<_>>().as_slice() {

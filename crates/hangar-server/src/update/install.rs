@@ -1,7 +1,7 @@
 //! Instalação nova direto pelo pacote, sem git:
 //!
 //!   hangar-server install-package [--channel <canal>] [--release-base <url>]
-//!   hangar-server install-package --mark-steps
+//!   hangar-server install-package --mark-steps [--root <checkout>]
 //!
 //! Baixa e extrai o pacote mais novo do canal pelo mesmo download conferido da migração (índice,
 //! sha256, extração e a tela web da chave), copia o lançador do pacote para
@@ -99,15 +99,26 @@ fn valid_channel(channel: &str) -> bool {
     !channel.is_empty() && !channel.starts_with('.') && channel.bytes().all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
 }
 
-/// Registra como aplicados os passos do `current`; os malformados saem como aviso.
-fn mark_steps() -> ExitCode {
+/// Registra como aplicados os passos do `current` ou, com `--root`, os do checkout recém-instalado
+/// (instalação do zero pelo git); os malformados saem como aviso.
+fn mark_steps(root: Option<PathBuf>) -> ExitCode {
     let env = crate::accounts::environment::AccountEnvironment::capture();
-    let current = Layout::new(&env.home).current();
-    if !current.join(hangar_package::MANIFEST_FILE).is_file() {
-        eprintln!("{} não é um pacote instalado; nada a marcar", current.display());
-        return ExitCode::from(1);
-    }
-    match super::steps::mark_all(&current, &super::state_dir(&env.claude_base)) {
+    let root = match root {
+        Some(root) if migrate::is_checkout(&root) || root.join(hangar_package::MANIFEST_FILE).is_file() => root,
+        Some(root) => {
+            eprintln!("{} não é um checkout do Hangar nem um pacote; nada a marcar", root.display());
+            return ExitCode::from(1);
+        }
+        None => {
+            let current = Layout::new(&env.home).current();
+            if !current.join(hangar_package::MANIFEST_FILE).is_file() {
+                eprintln!("{} não é um pacote instalado; nada a marcar", current.display());
+                return ExitCode::from(1);
+            }
+            current
+        }
+    };
+    match super::steps::mark_all(&root, &super::state_dir(&env.claude_base)) {
         Ok((count, invalid)) => {
             for file in invalid { println!("aviso: passo malformado ignorado: {file} (docs/atualizacoes)"); }
             println!("passos de atualização marcados como aplicados: {count}");
@@ -119,10 +130,13 @@ fn mark_steps() -> ExitCode {
 
 /// `hangar-server install-package …`: `args` sem o nome do programa nem o subcomando.
 pub fn cli(args: &[String]) -> ExitCode {
-    let usage = "uso: hangar-server install-package [--channel <canal>] [--release-base <url>] | --mark-steps";
+    let usage = "uso: hangar-server install-package [--channel <canal>] [--release-base <url>] | --mark-steps [--root <checkout>]";
     if args.first().map(String::as_str) == Some("--mark-steps") {
-        if args.len() > 1 { eprintln!("{usage}"); return ExitCode::from(2); }
-        return mark_steps();
+        return match &args[1..] {
+            [] => mark_steps(None),
+            [flag, root] if flag == "--root" && !root.is_empty() => mark_steps(Some(PathBuf::from(root))),
+            _ => { eprintln!("{usage}"); ExitCode::from(2) }
+        };
     }
     let (mut channel, mut base_url) = ("latest".to_owned(), super::RELEASE_BASE.to_owned());
     let mut it = args.iter();

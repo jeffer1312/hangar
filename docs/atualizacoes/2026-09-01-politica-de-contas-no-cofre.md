@@ -1,7 +1,7 @@
 ---
 id: 2026-09-01-politica-de-contas-no-cofre
 titulo: A política de contas da orquestração mudou de ~/.claude para o cofre ~/.hangar
-prova: backend/app/orq_politica.py
+prova: crates/hangar-server/src/orchestration/policy.rs
 destrutivo: false
 ---
 

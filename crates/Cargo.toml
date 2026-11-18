@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["hangar-scheduled-tasks", "hangar-conversation-transfer", "hangar-codex-transfer", "hangar-auth", "hangar-api", "hangar-core", "hangar-transcript", "hangar-omp-sync", "hangar-server", "hangar-cano", "hangar-workspace", "hangar-codex", "hangar-package", "hangar-psmux", "hangar-connect", "hangar-plugins", "hangar-update-news", "hangar-notice-ignores", "hangar-workflows", "hangar-http-file", "hangar-desktop-theme", "hangar-opencode-cookie", "hangar-deploy", "hangar-port-preview", "hangar-session-tools", "hangar-codex-account-sync", "hangar-projects", "hangar-reviews", "hangar-docs", "hangar-computer-control-setup", "hangar-shortcut-transfer", "hangar-sidecar-prune", "hangar-usage-diary", "hangar-boot", "hangar-dream", "hangar-connectors", "hangar-mission", "hangar-ticket-actions", "hangar-work-review"]
+members = ["hangar-scheduled-tasks", "hangar-conversation-transfer", "hangar-codex-transfer", "hangar-auth", "hangar-api", "hangar-core", "hangar-transcript", "hangar-omp-sync", "hangar-server", "hangar-cano", "hangar-workspace", "hangar-codex", "hangar-package", "hangar-psmux", "hangar-connect", "hangar-plugins", "hangar-update-news", "hangar-notice-ignores", "hangar-workflows", "hangar-http-file", "hangar-desktop-theme", "hangar-opencode-cookie", "hangar-deploy", "hangar-port-preview", "hangar-session-tools", "hangar-codex-account-sync", "hangar-projects", "hangar-reviews", "hangar-docs", "hangar-computer-control-setup", "hangar-shortcut-transfer", "hangar-sidecar-prune", "hangar-usage-diary", "hangar-boot", "hangar-dream", "hangar-connectors", "hangar-mission", "hangar-ticket-actions", "hangar-work-review", "hangar-agent-hooks", "hangar-send", "hangar-registration", "hangar-open-cli", "hangar-install-setup"]
 
 [workspace.package]
 version = "0.1.0"
@@ -19,10 +19,15 @@ hangar-connectors = { path = "hangar-connectors" }
 hangar-mission = { path = "hangar-mission" }
 hangar-ticket-actions = { path = "hangar-ticket-actions" }
 hangar-work-review = { path = "hangar-work-review" }
+hangar-agent-hooks = { path = "hangar-agent-hooks" }
 hangar-codex-account-sync = { path = "hangar-codex-account-sync" }
 hangar-conversation-transfer = { path = "hangar-conversation-transfer" }
 hangar-codex-transfer = { path = "hangar-codex-transfer" }
 hangar-session-tools = { path = "hangar-session-tools" }
+hangar-send = { path = "hangar-send" }
+hangar-registration = { path = "hangar-registration" }
+hangar-open-cli = { path = "hangar-open-cli" }
+hangar-install-setup = { path = "hangar-install-setup" }
 # Mesmas versões do desktop-native/Cargo.toml: o hangar-api entra nos dois builds.
 serde = { version = "=1.0.229", features = ["derive"] }
 # preserve_order: o tool_input reescrito sai com as chaves na ordem do dict do Python.

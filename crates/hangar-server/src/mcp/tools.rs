@@ -34,7 +34,7 @@ const VOICE_NEEDS_SESSION: &str = "a assistente de voz não é uma sessão: pass
 quem agir (tool `sessions`)";
 const JEV_OFF: &str = "o Jev não chegou ligado nesta chamada: ou a sessão nasceu sem ele (abra uma com \
 `hangar-send --new <nome> <cwd> --jev`, ou marque o Jev em \"Mais opções\" ao criar), ou o MCP hangar desta \
-conta foi registrado antes do cabeçalho X-Hangar-Jev (rode scripts/registrar-mcp.py e abra a sessão de novo). \
+conta foi registrado antes do cabeçalho X-Hangar-Jev (rode hangar-server mcp-register e abra a sessão de novo). \
 Sem ele, use browser e browser_batch.";
 const JEV_UNCONFIGURED: &str = "o Jev não está configurado neste servidor: cadastre a chave em Configurações do servidor > Jev.";
 const NAV_VERBS: [&str; 26] = ["snapshot", "click", "fill", "type", "press", "hover", "wait", "eval", "tema", "layout", "console",
@@ -129,7 +129,7 @@ struct VaultFile { entry: String, reason: String }
 struct VaultFill { entry: String, field: String, #[serde(rename = "ref")] target: String, reason: String }
 
 const VAULT_NO_KEY: &str = "erro_cofre_sem_chave_sessao: o cofre só atende uma sessão identificada pela chave dela (X-Hangar-Key, \
-a CP_SESSION_KEY); registre o MCP de novo (scripts/registrar-mcp.py) e reabra a sessão";
+a CP_SESSION_KEY); registre o MCP de novo (hangar-server mcp-register) e reabra a sessão";
 /// O alvo que o cartão mostra cabe no limite da dona.
 const TARGET_CHARS: usize = 2000;
 
@@ -777,9 +777,9 @@ impl Tools {
         if !env.iter().any(|(k, v)| k == "TYPESAFE_API_KEY" && !v.is_empty()) { return Err(JEV_UNCONFIGURED.into()); }
         let node = crate::runtime::process::resolve_program("node", env.iter().map(|(k, v)| (k, v)))
             .ok_or("node não encontrado no PATH do backend: o objetivo roda pelo hangar-preview")?;
-        // A raiz da instalação; sem ela, o pai da pasta de trabalho (`backend/`), herdada do Python.
+        // A raiz da instalação; sem ela, a da cópia onde o servidor roda.
         let home = crate::accounts::environment::AccountEnvironment::capture().home;
-        let script = crate::install_root::root(&home).unwrap_or_else(|| std::env::current_dir().unwrap_or_default().join(".."))
+        let script = crate::install_root::root(&home).or_else(crate::session_open::cli::server_root).unwrap_or_default()
             .join("scripts").join("hangar-preview");
         // Mesma trava dos verbos: um `browser` no meio refaria o snapshot e trocaria as refs do Jev.
         let lock = self.nav_lock(&target);

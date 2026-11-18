@@ -683,12 +683,16 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   entrada na fila do Hangar (`terminal_turn_hold`, `delivered:false`) em vez de digitá-la. A fila
   drena com o Claude parado, composer legível e sem pergunta, um lote por vez, no tique do ator; a
   entrega que encontrou o Claude parado faz a próxima esperar até 3 s (`turn_start_wait`) pelo
-  turno que ela abriu. Recado com socket nativo (`[de: …]`, `[grupo: …]`, `[painel: …]`) e comando
-  de barra não são segurados, e o recado passa no meio do turno mesmo atrás de mensagem segurada. Com
-  mensagem esperando, comando de barra é recusado na tela (`queue_waiting`): não passa à frente nem
+  turno que ela abriu. Para despachar, a indicação de que a CLI só espera subagentes em segundo
+  plano também libera o prompt legível e sem pergunta. Recado com socket nativo (`[de: …]`,
+  `[grupo: …]`, `[painel: …]`) e comando de barra não são segurados, e o recado passa no meio do turno
+  mesmo atrás de mensagem segurada. Com mensagem esperando, comando de barra é recusado na tela
+  (`queue_waiting`): não passa à frente nem
   some na troca de conversa do `/clear`. "Orientar" de uma entrada (`steer_entry`) digita só ela e
   aperta `ctrl+x ctrl+s`, que leva junto o que já estava na fila interna do Claude Code e interrompe
-  o turno; parado, ela vai para a frente e sai na entrega comum. As ações do painel (apagar,
+  o turno; parado, ela vai para a frente e sai na entrega comum. Se o transcript já confirmou a
+  entrada, o ator pode responder sem o atalho. No retorno de `/input`, `delivered` informa que a
+  CLI aceitou o texto e `steered` informa se o atalho foi aplicado. As ações do painel (apagar,
   editar, reordenar, Orientar) valem só para a entrada que ainda espera e passam pelo ator da
   sessão; a que a drenagem já reivindicou responde 409 `queue_entry_gone`. Com uma entrega incerta
   segurando a escrita, o Orientar responde 409 `queue_steer_delivery_unproved` sem tecla nem troca
@@ -5359,6 +5363,14 @@ O corte do painel de agentes do #137 continua valendo.
 - O `/steer` sem corpo, que o chip "mandar agora" de um app antigo ainda manda, vira o Orientar da
   primeira entrada esperando (`steer_first` no ator): só promover a fila interna do Claude Code
   deixaria a mensagem do Hangar para trás. Sem entrada esperando, o comportamento é o de antes.
+
+Em 18/11/2026, o Claude Code 2.1.327 manteve o registro nativo ocupado enquanto a tela avisava que
+esperava um subagente em segundo plano. O Hangar reteve uma entrada por 10 min e 10 s.
+Em um tmux isolado, o mesmo Claude Code aceitou outro prompt com Enter e o registrou no
+transcript em 0,2 s. O subagente terminou depois da entrada do novo prompt. Em outro caso, a entrada
+já constava no transcript cinco segundos antes de o Hangar avisar que ela continuava esperando.
+O recibo da própria entrada agora encerra a tentativa de antecipação. A indicação de subagentes
+em segundo plano só é usada para liberar o despacho de prompts.
 
 ## Catálogo de comandos e reload-plugins
 

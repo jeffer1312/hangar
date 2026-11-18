@@ -397,4 +397,20 @@ mod tests {
         assert!(!round(Arc::new(state)).await);
         assert_eq!(prune_lines(&diag, &failed).await[0]["codigo"], "mux_unavailable");
     }
+
+    /// Trava do sidecar do Codex sem o `.json`, mesmo velha, fica: outro processo pode ter acabado de
+    /// abri-la para o mesmo nome, e apagá-la deixaria dois escritores com travas em inodes diferentes.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_old_orphan_codex_lock_stays_after_a_round() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let lock = crate::runtime::codex_sidecar::dir(&home).join("orfa.lock");
+        fs::create_dir_all(lock.parent().unwrap()).unwrap();
+        fs::write(&lock, "").unwrap();
+        fs::File::options().write(true).open(&lock).unwrap().set_modified(SystemTime::now() - Duration::from_secs(30 * 86_400)).unwrap();
+        let state = state_for(&home, std::ffi::OsStr::new("true"), &dir.path().join("diario"));
+        assert!(round(Arc::new(state)).await);
+        assert!(lock.exists());
+    }
 }

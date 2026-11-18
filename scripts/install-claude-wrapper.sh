@@ -134,25 +134,10 @@ install_fish() {
 # Helper chamado pelos wrappers de shell. Symlink absoluto preserva a descoberta do backend/.env
 # mesmo quando executado de qualquer cwd e atualiza automaticamente depois de git pull.
 mkdir -p "$HOME/.local/bin"
-# No Git Bash o `ln -s` COPIA e devolve 0, e a copia se localiza pelo PROPRIO caminho: os dois
-# scripts do Codex fazem `_REPO = Path(__file__).parent.parent`, entao a copia em ~/.local/bin
-# procura `backend/` em ~/.local e morre. Por isso a checagem e `test -L` DEPOIS do ln, e nao o
-# codigo de saida dele. Mesmo conserto que o install-hangar-send.sh ja faz, e o mesmo shim que o
-# install.ps1 escreve — as duas fontes precisam produzir a mesma coisa.
-# Interpretador PINADO: deixar o shebang decidir cai no `python3` do PATH, que no Windows e o
-# atalho da Microsoft Store. O Python do pacote ou o venv do backend tem `websockets`, que o -tui importa.
-# Mesma regra do backend/app/install_root.py: raiz = ~/.hangar/current (pacote) ou este checkout.
-# No Linux o `ln` linka de verdade, `test -L` e verdadeiro e nada abaixo do `if` roda.
-py_do_venv() {
-    raiz="$HOME/.hangar/current"
-    [ -e "$raiz" ] || raiz="$REPO_DIR"
-    for c in "$raiz/python/bin/python3" "$raiz/python/python.exe" \
-             "$raiz/backend/.venv/bin/python" "$raiz/backend/.venv/Scripts/python.exe"; do
-        [ -x "$c" ] && { echo "$c"; return; }
-    done
-    echo python3
-}
-
+# No Git Bash o `ln -s` COPIA e devolve 0, e a copia acharia a copia do Hangar pelo PROPRIO caminho
+# (~/.local). Por isso a checagem e `test -L` DEPOIS do ln, e nao o codigo de saida dele; sem link,
+# um shim que roda o script do repo. O mesmo shim que o install.ps1 escreve. No Linux o `ln` linka
+# de verdade e nada abaixo do `if` roda. O lancador da sessao Codex e o `hangar-server codex-tui`.
 linkar_codex() {
     origem="$SCRIPT_DIR/$1"; destino="$HOME/.local/bin/$1"
     chmod +x "$origem"
@@ -165,7 +150,7 @@ linkar_codex() {
         echo "#!/bin/sh"
         echo "# Gerado pelo instalador do hangar (install.ps1 / install-claude-wrapper.sh)."
         echo "PATH='$HOME/.local/bin':\$PATH; export PATH"
-        echo "exec '$(py_do_venv)' '$origem' \"\$@\""
+        echo "exec sh '$origem' \"\$@\""
     } > "$destino"
     chmod +x "$destino"
     echo "  installed $2 -> $destino (copia -> shim; o ln do Git Bash nao linka)"
@@ -173,7 +158,6 @@ linkar_codex() {
 
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 linkar_codex hangar-codex "Codex helper"
-linkar_codex hangar-codex-tui "Codex launcher"
 chmod +x "$SCRIPT_DIR/hangar-engine"
 ln -sfn "$SCRIPT_DIR/hangar-engine" "$HOME/.local/bin/hangar-engine"
 echo "  installed engine helper -> $HOME/.local/bin/hangar-engine"

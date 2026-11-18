@@ -412,7 +412,7 @@ vigentes" de `docs/decisoes/windows.md`**.
 `atualizacoes.py`, `docs/atualizacoes/`, `VERSION`, `frontend/dist` servido pelo backend, na
 criação de sessão sob escopo do systemd ou no pacote por versão (`crates/hangar-package`,
 `crates/hangar-server/src/update/`, `scripts/montar-pacote.py`, `scripts/migrar-pacote.*`,
-`scripts/hangar-python`, `~/.hangar/config`), no lançador e na subida (`crates/hangar-boot`,
+`scripts/hangar-server-lookup`, `~/.hangar/config`), no lançador e na subida (`crates/hangar-boot`,
 `crates/hangar-server/src/install_root.rs`, `scripts/windows-tasks.ps1`): **leia "Regras vigentes"
 de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória antes do merge.
 
@@ -872,8 +872,9 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   - Partida: o `hangar-server` sobe sozinho (`crates/hangar-boot`), sem processo Python. Travada,
     limite e queda são avisados pelo Rust (`push/watch.rs`); a retomada dos loops ativos na subida
     também é só do Rust (`loops/watch.rs`). O systemd religa e vigia pelo `WatchdogSec`.
-  - O que sobra no `backend/app/`: só o que o `hangar-codex-tui`, os scripts do orq, o
-    `vapid_setup` e os instaladores importam; nenhum deles é o servidor.
+  - O que sobra no `backend/app/`: o `atomico` que o `preview_hook.py` antigo importa (o pacote
+    ainda leva `python/` e `backend/` por uma versão) e o que os testes da orquestração importam.
+    Instaladores, passos de atualização e lançadores não chamam Python.
 - **Qual conversa é a da sessão é o Rust que decide** (`locate.rs`, a descoberta da lista), e a
   troca de transcript só vale lida duas vezes seguidas; provider, modo do Codex ou outra vida da
   sessão trocam na hora. Com o chat ao vivo aberto, o `/history` segue o transcript que o hub

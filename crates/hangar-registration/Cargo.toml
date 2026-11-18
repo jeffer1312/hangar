@@ -1,0 +1,19 @@
+[package]
+name = "hangar-registration"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+# Mesmas features do hangar-server: sem elas o target guarda outra cópia de cada dependência.
+[dependencies]
+hangar-core.workspace = true
+serde_json = { workspace = true, features = ["float_roundtrip", "alloc", "unbounded_depth", "arbitrary_precision", "raw_value"] }
+toml = { version = "=1.1.7", default-features = false, features = ["parse", "std", "serde", "preserve_order"] }
+
+[dev-dependencies]
+base64.workspace = true
+proptest.workspace = true
+tempfile.workspace = true
+
+[target.'cfg(unix)'.dev-dependencies]
+libc.workspace = true

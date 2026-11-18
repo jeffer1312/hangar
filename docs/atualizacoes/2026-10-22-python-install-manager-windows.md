@@ -2,7 +2,7 @@
 id: 2026-10-22-python-install-manager-windows
 titulo: No Windows, o Python instalado pelo winget volta a servir aos comandos do Hangar
 comando_windows: powershell -ExecutionPolicy Bypass -File install.ps1 -Update
-prova: ~/.local/bin/hangar-conta.cmd ~/.local/bin/python3.cmd
+prova: ~/.local/bin/hangar-conta.cmd
 destrutivo: false
 tipo: maquina
 ---

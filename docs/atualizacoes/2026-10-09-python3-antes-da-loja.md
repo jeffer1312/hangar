@@ -2,7 +2,7 @@
 id: 2026-10-09-python3-antes-da-loja
 titulo: No Windows, os hooks em Python do Claude voltam a rodar
 comando_windows: powershell -ExecutionPolicy Bypass -File install.ps1 -Update
-prova: ~/.local/bin/python3
+prova: ~/.local/bin/hangar-send.cmd
 destrutivo: false
 tipo: maquina
 ---

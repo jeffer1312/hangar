@@ -37,8 +37,10 @@ pub async fn route(State(state): State<Arc<AppState>>, ConnectInfo(peer): Connec
     }
     // Mesmo registro que o `atualizacoes.py` grava.
     let base = std::env::var_os("CLAUDE_CONFIG_DIR").filter(|v| !v.is_empty()).map(PathBuf::from).unwrap_or_else(|| state.accounts.env.home.join(".claude"));
-    let cwd = std::env::current_dir().unwrap_or_default();
-    let branch = update_branch(std::env::var("CP_UPDATE_BRANCH").ok(), tokio::fs::read_to_string(cwd.join(".env")).await.ok().as_deref());
+    let cwd = server_root();
+    let env_file = crate::user_data::path(&home, crate::session_open::cli::server_backend().as_deref(), ".env").ok().flatten();
+    let saved = match env_file { Some(path) => tokio::fs::read_to_string(path).await.ok(), None => None };
+    let branch = update_branch(std::env::var("CP_UPDATE_BRANCH").ok(), saved.as_deref());
     match collect(&cwd, &format!("origin/{branch}"), &crate::update::state_dir(&base)).await {
         Ok(notes) => json_response(StatusCode::OK, with_acceptance(notes, &home)),
         Err(()) => { tracing::warn!(branch = %branch, cwd = %cwd.display(), "leitura dos avisos da atualização falhou no git"); unavailable() }
@@ -69,7 +71,8 @@ pub(crate) fn notes_root(home: &Path) -> PathBuf {
     server_root()
 }
 
-/// A raiz de onde este servidor roda: o motor `git` o sobe na `backend/` do checkout.
+/// A raiz de onde este servidor roda: o lançador o põe na raiz da cópia; o motor `git` antigo, na
+/// `backend/` do checkout.
 pub(crate) fn server_root() -> PathBuf {
     let cwd = std::env::current_dir().unwrap_or_default();
     if cwd.file_name().is_some_and(|n| n == "backend") { cwd.parent().map(Path::to_path_buf).unwrap_or(cwd) } else { cwd }

@@ -1,0 +1,140 @@
+{
+ "case": "state/preexisting-0600-marker-and-tmp",
+ "source_commit": "2ad8e335e8d9118e74bc5b33f2efb4ac3bbd8eba",
+ "python": "3.14.9 websockets 16.0",
+ "capture_cmdline": "/usr/bin/python3 capture.py -j 8",
+ "route": "R1",
+ "hook": "state_hook.py",
+ "contract_refs": [
+  "R1-S01",
+  "H-04"
+ ],
+ "description": "mode of the replaced marker; fixed tmp name overwritten",
+ "harness": {
+  "how": "unshare -Ucpf --mount-proc (user ns mapping the current uid, no root caps); process layers outer->inner, innermost runs sh -c <command>",
+  "layers": [
+   {
+    "argv0": "capture-init"
+   },
+   {
+    "argv0": "claude",
+    "extra": [
+     "--session-id",
+     "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+    ]
+   }
+  ],
+  "command": "\"$PY\" -B -s \"$REF/backend/hooks/state_hook.py\" || exit 0",
+  "namespace_pids": {
+   "layer0:capture-init": 1,
+   "layer1:claude": 2
+  },
+  "hook_parent": "sh (hop 1), then the layers from inner to outer"
+ },
+ "input": {
+  "env": {
+   "HOME": "$T/home",
+   "USERPROFILE": "$T/home",
+   "LOCALAPPDATA": "$T/local",
+   "TMUX_TMPDIR": "$T/tmux",
+   "PATH": "$T/stubs:/usr/bin:/bin",
+   "CLAUDE_CONFIG_DIR": "$T/cfg"
+  },
+  "stdin": {
+   "text": "{\"session_id\": \"11111111-2222-4333-8444-555555555555\", \"transcript_path\": \"/home/u/.claude/projects/-home-u-proj/11111111-2222-4333-8444-555555555555.jsonl\", \"cwd\": \"/home/u/proj\", \"permission_mode\": \"default\", \"hook_event_name\": \"UserPromptSubmit\", \"prompt\": \"oi\"}"
+  },
+  "files_before": {
+   "cfg/.hangar-state": {
+    "type": "dir",
+    "mode": "0o755"
+   },
+   "cfg/.hangar-state/11111111-2222-4333-8444-555555555555.json.tmp": {
+    "type": "file",
+    "mode": "0o644",
+    "size": 9,
+    "sha256": "cf4ba5b931ba56f010ee2f15121644e7a23860a764c123c9eceef5908a92c5bd",
+    "content": {
+     "text": "stale tmp"
+    }
+   },
+   "cfg/.hangar-state/11111111-2222-4333-8444-555555555555.json": {
+    "type": "file",
+    "mode": "0o600",
+    "size": 23,
+    "sha256": "5482aebe41a61a39a0e013600ee99beb035cd68b1c3dbdd9c2b6a339242fe1fe",
+    "content": {
+     "text": "{\"state\":\"idle\",\"ts\":1}"
+    }
+   }
+  }
+ },
+ "output": {
+  "code": 0,
+  "stdout": {
+   "text": ""
+  },
+  "stderr": {
+   "text": ""
+  },
+  "duration_ms": 85,
+  "files": {
+   "created": {
+    "cfg/.hangar-active": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "cfg/.hangar-prompt": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "cfg/.hangar-active/aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee.json": {
+     "type": "file",
+     "mode": "0o644",
+     "size": 152,
+     "sha256": "6c49a5fcbe32fc1a76f38f908036ef5d770f80a17485cac05092ceaddd6e37b9",
+     "content": {
+      "text": "{\"jsonl\": \"/home/u/.claude/projects/-home-u-proj/11111111-2222-4333-8444-555555555555.jsonl\", \"ts\": 1794910459.6690466, \"cwd\": \"/home/u/proj\", \"pid\": 2}"
+     }
+    },
+    "cfg/.hangar-prompt/11111111-2222-4333-8444-555555555555.json": {
+     "type": "file",
+     "mode": "0o644",
+     "size": 78,
+     "sha256": "f4bd5c4f2913d7fe83c0eb02a1f97d21a971fd6a691baecd845db6d17bd01c27",
+     "content": {
+      "text": "{\"sha1\": \"ef67e0868c98e5f0b0e2fcd9b0c4a3bad808f551\", \"ts\": 1794910459.6688912}"
+     }
+    }
+   },
+   "changed": {
+    "cfg/.hangar-state/11111111-2222-4333-8444-555555555555.json": {
+     "before": {
+      "type": "file",
+      "mode": "0o600",
+      "size": 23,
+      "sha256": "5482aebe41a61a39a0e013600ee99beb035cd68b1c3dbdd9c2b6a339242fe1fe",
+      "content": {
+       "text": "{\"state\":\"idle\",\"ts\":1}"
+      }
+     },
+     "after": {
+      "type": "file",
+      "mode": "0o644",
+      "size": 45,
+      "sha256": "74742fec4967942674b7d8a450c924d1363d95be468cfe9fc7b44277b2e28c0a",
+      "content": {
+       "text": "{\"state\": \"working\", \"ts\": 1794910459.667875}"
+      }
+     }
+    }
+   },
+   "removed": [
+    "cfg/.hangar-state/11111111-2222-4333-8444-555555555555.json.tmp"
+   ]
+  }
+ },
+ "window": {
+  "t_start": 1794910459.596792,
+  "t_end": 1794910459.6823838
+ }
+}

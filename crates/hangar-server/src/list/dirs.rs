@@ -21,7 +21,7 @@ pub fn system() -> Result<Dirs, &'static str> {
         return super::bridge::parse_dirs(&raw).ok_or("list_dirs_invalid");
     }
     let env = AccountEnvironment::capture();
-    let backend = std::env::current_dir().map_err(|_| "list_cwd_unavailable")?;
+    let backend = crate::session_open::cli::server_backend().ok_or("list_cwd_unavailable")?;
     let settings = SettingsSnapshot::capture(
         &env.home,
         Some(&backend),

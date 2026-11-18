@@ -1,0 +1,3016 @@
+{
+ "source": "contract/clis of 2ad8e335e (capture_r34.py); only the fields the test reads",
+ "cases": [
+  {
+   "case": "claude-account-dir-not-writable",
+   "args": [
+    "$PY",
+    "-B",
+    "-s",
+    "$T/inst/scripts/registrar-mcp.py"
+   ],
+   "env": {
+    "HOME": "$T/home"
+   },
+   "files_before": {
+    "home/.claude-ro": {
+     "type": "dir",
+     "mode": "0o555"
+    },
+    "home/.hangar": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.claude-ro/.claude.json": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "{}"
+     }
+    },
+    "home/.hangar/config": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config/.env": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "CP_AUTH_TOKEN=tok-local\n"
+     }
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    }
+   },
+   "steps": [
+    {
+     "code": 1,
+     "stdout": {
+      "text": "ok: MCP hangar em $T/home/.claude.json\nok: recado pelo MCP hangar liberado em $T/home/.claude/settings.json\n"
+     },
+     "stderr": {
+      "text": "erro: $T/home/.claude-ro/.claude.json: MCP hangar não registrado: [Errno 13] Permission denied: '$T/home/.claude-ro/.claude.json.hangar-novo'\nerro: alguma conta do Claude ficou sem o MCP hangar (veja acima)\n"
+     },
+     "created": {
+      "home/.claude": {
+       "type": "dir",
+       "mode": "0o755"
+      },
+      "home/.claude.json": {
+       "type": "file",
+       "mode": "0o600",
+       "content": {
+        "text": "{\n  \"mcpServers\": {\n    \"hangar\": {\n      \"type\": \"http\",\n      \"url\": \"http://127.0.0.1:8765/mcp/\",\n      \"headersHelper\": \"$T/home/.local/bin/hangar-mcp-headers\",\n      \"timeout\": 660000\n    }\n  }\n}"
+       }
+      },
+      "home/.claude/settings.json": {
+       "type": "file",
+       "mode": "0o644",
+       "content": {
+        "text": "{\n  \"permissions\": {\n    \"allow\": [\n      \"mcp__hangar__send\",\n      \"mcp__hangar__group\",\n      \"mcp__hangar__sessions\",\n      \"mcp__hangar__who_am_i\"\n    ]\n  }\n}\n"
+       }
+      }
+     },
+     "changed": {},
+     "removed": []
+    }
+   ]
+  },
+  {
+   "case": "claude-accounts-order-and-filters",
+   "args": [
+    "$PY",
+    "-B",
+    "-s",
+    "$T/inst/scripts/registrar-mcp.py"
+   ],
+   "env": {
+    "HOME": "$T/home"
+   },
+   "files_before": {
+    "home/.claude-c": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.claude-x.lock": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.claude-semjson": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.claude-a": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.claude-b": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.claude-arquivo": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "não é pasta"
+     }
+    },
+    "home/.claude-c/.claude.json": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.claude-c/.claude.json/x": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "{}"
+     }
+    },
+    "home/.claude-x.lock/.claude.json": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "{}"
+     }
+    },
+    "home/.claude-a/.claude.json": {
+     "type": "file",
+     "mode": "0o600",
+     "content": {
+      "text": "{\n  \"x\": 1\n}"
+     }
+    },
+    "home/.claude-b/.claude.json": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "{}"
+     }
+    },
+    "home/.hangar/config": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config/.env": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "CP_AUTH_TOKEN=tok-local\n"
+     }
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    }
+   },
+   "steps": [
+    {
+     "code": 0,
+     "stdout": {
+      "text": "ok: MCP hangar em $T/home/.claude.json\nok: MCP hangar em $T/home/.claude-a/.claude.json\nok: MCP hangar em $T/home/.claude-b/.claude.json\nok: recado pelo MCP hangar liberado em $T/home/.claude/settings.json\n"
+     },
+     "stderr": {
+      "text": ""
+     },
+     "created": {
+      "home/.claude": {
+       "type": "dir",
+       "mode": "0o755"
+      },
+      "home/.claude.json": {
+       "type": "file",
+       "mode": "0o600",
+       "content": {
+        "text": "{\n  \"mcpServers\": {\n    \"hangar\": {\n      \"type\": \"http\",\n      \"url\": \"http://127.0.0.1:8765/mcp/\",\n      \"headersHelper\": \"$T/home/.local/bin/hangar-mcp-headers\",\n      \"timeout\": 660000\n    }\n  }\n}"
+       }
+      },
+      "home/.claude/settings.json": {
+       "type": "file",
+       "mode": "0o644",
+       "content": {
+        "text": "{\n  \"permissions\": {\n    \"allow\": [\n      \"mcp__hangar__send\",\n      \"mcp__hangar__group\",\n      \"mcp__hangar__sessions\",\n      \"mcp__hangar__who_am_i\"\n    ]\n  }\n}\n"
+       }
+      }
+     },
+     "changed": {
+      "home/.claude-a/.claude.json": {
+       "type": "file",
+       "mode": "0o600",
+       "content": {
+        "text": "{\n  \"x\": 1,\n  \"mcpServers\": {\n    \"hangar\": {\n      \"type\": \"http\",\n      \"url\": \"http://127.0.0.1:8765/mcp/\",\n      \"headersHelper\": \"$T/home/.local/bin/hangar-mcp-headers\",\n      \"timeout\": 660000\n    }\n  }\n}"
+       }
+      },
+      "home/.claude-b/.claude.json": {
+       "type": "file",
+       "mode": "0o644",
+       "content": {
+        "text": "{\n  \"mcpServers\": {\n    \"hangar\": {\n      \"type\": \"http\",\n      \"url\": \"http://127.0.0.1:8765/mcp/\",\n      \"headersHelper\": \"$T/home/.local/bin/hangar-mcp-headers\",\n      \"timeout\": 660000\n    }\n  }\n}"
+       }
+      }
+     },
+     "removed": []
+    }
+   ]
+  },
+  {
+   "case": "claude-bom",
+   "args": [
+    "$PY",
+    "-B",
+    "-s",
+    "$T/inst/scripts/registrar-mcp.py"
+   ],
+   "env": {
+    "HOME": "$T/home"
+   },
+   "files_before": {
+    "home/.hangar": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.claude.json": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "﻿{}"
+     }
+    },
+    "home/.hangar/config": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config/.env": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "CP_AUTH_TOKEN=tok-local\n"
+     }
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    }
+   },
+   "steps": [
+    {
+     "code": 0,
+     "stdout": {
+      "text": "ok: recado pelo MCP hangar liberado em $T/home/.claude/settings.json\n"
+     },
+     "stderr": {
+      "text": "aviso: $T/home/.claude.json não é JSON válido — pulado\n"
+     },
+     "created": {
+      "home/.claude": {
+       "type": "dir",
+       "mode": "0o755"
+      },
+      "home/.claude/settings.json": {
+       "type": "file",
+       "mode": "0o644",
+       "content": {
+        "text": "{\n  \"permissions\": {\n    \"allow\": [\n      \"mcp__hangar__send\",\n      \"mcp__hangar__group\",\n      \"mcp__hangar__sessions\",\n      \"mcp__hangar__who_am_i\"\n    ]\n  }\n}\n"
+       }
+      }
+     },
+     "changed": {},
+     "removed": []
+    }
+   ]
+  },
+  {
+   "case": "claude-different-entry-keeps-rest-mode-0640",
+   "args": [
+    "$PY",
+    "-B",
+    "-s",
+    "$T/inst/scripts/registrar-mcp.py"
+   ],
+   "env": {
+    "HOME": "$T/home"
+   },
+   "files_before": {
+    "home/.hangar": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.claude.json": {
+     "type": "file",
+     "mode": "0o640",
+     "content": {
+      "text": "{\"zeta\": 1, \"mcpServers\": {\"outro\": {\"type\": \"stdio\"}, \"hangar\": {\"type\": \"http\", \"url\": \"velho\"}}, \"alfa\": \"\\u00e7\"}"
+     }
+    },
+    "home/.hangar/config": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config/.env": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "CP_AUTH_TOKEN=tok-local\n"
+     }
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    }
+   },
+   "steps": [
+    {
+     "code": 0,
+     "stdout": {
+      "text": "ok: MCP hangar em $T/home/.claude.json\nok: recado pelo MCP hangar liberado em $T/home/.claude/settings.json\n"
+     },
+     "stderr": {
+      "text": ""
+     },
+     "created": {
+      "home/.claude": {
+       "type": "dir",
+       "mode": "0o755"
+      },
+      "home/.claude/settings.json": {
+       "type": "file",
+       "mode": "0o644",
+       "content": {
+        "text": "{\n  \"permissions\": {\n    \"allow\": [\n      \"mcp__hangar__send\",\n      \"mcp__hangar__group\",\n      \"mcp__hangar__sessions\",\n      \"mcp__hangar__who_am_i\"\n    ]\n  }\n}\n"
+       }
+      }
+     },
+     "changed": {
+      "home/.claude.json": {
+       "type": "file",
+       "mode": "0o640",
+       "content": {
+        "text": "{\n  \"zeta\": 1,\n  \"mcpServers\": {\n    \"outro\": {\n      \"type\": \"stdio\"\n    },\n    \"hangar\": {\n      \"type\": \"http\",\n      \"url\": \"http://127.0.0.1:8765/mcp/\",\n      \"headersHelper\": \"$T/home/.local/bin/hangar-mcp-headers\",\n      \"timeout\": 660000\n    }\n  },\n  \"alfa\": \"\\u00e7\"\n}"
+       }
+      }
+     },
+     "removed": []
+    }
+   ]
+  },
+  {
+   "case": "claude-equal-entry-and-perms-no-write",
+   "args": [
+    "$PY",
+    "-B",
+    "-s",
+    "$T/inst/scripts/registrar-mcp.py"
+   ],
+   "env": {
+    "HOME": "$T/home"
+   },
+   "files_before": {
+    "home/.claude": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.claude.json": {
+     "type": "file",
+     "mode": "0o600",
+     "content": {
+      "text": "{\"mcpServers\": {\"hangar\": {\"type\": \"http\", \"url\": \"http://127.0.0.1:8765/mcp/\", \"headersHelper\": \"$T/home/.local/bin/hangar-mcp-headers\", \"timeout\": 660000}}}"
+     }
+    },
+    "home/.claude/settings.json": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "{\"permissions\": {\"allow\": [\"mcp__hangar__send\", \"mcp__hangar__group\", \"mcp__hangar__sessions\", \"mcp__hangar__who_am_i\"]}}"
+     }
+    },
+    "home/.hangar/config": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config/.env": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "CP_AUTH_TOKEN=tok-local\n"
+     }
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    }
+   },
+   "steps": [
+    {
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     },
+     "created": {},
+     "changed": {},
+     "removed": []
+    }
+   ]
+  },
+  {
+   "case": "claude-invalid-json",
+   "args": [
+    "$PY",
+    "-B",
+    "-s",
+    "$T/inst/scripts/registrar-mcp.py"
+   ],
+   "env": {
+    "HOME": "$T/home"
+   },
+   "files_before": {
+    "home/.hangar": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.claude.json": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "{x"
+     }
+    },
+    "home/.hangar/config": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config/.env": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "CP_AUTH_TOKEN=tok-local\n"
+     }
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    }
+   },
+   "steps": [
+    {
+     "code": 0,
+     "stdout": {
+      "text": "ok: recado pelo MCP hangar liberado em $T/home/.claude/settings.json\n"
+     },
+     "stderr": {
+      "text": "aviso: $T/home/.claude.json não é JSON válido — pulado\n"
+     },
+     "created": {
+      "home/.claude": {
+       "type": "dir",
+       "mode": "0o755"
+      },
+      "home/.claude/settings.json": {
+       "type": "file",
+       "mode": "0o644",
+       "content": {
+        "text": "{\n  \"permissions\": {\n    \"allow\": [\n      \"mcp__hangar__send\",\n      \"mcp__hangar__group\",\n      \"mcp__hangar__sessions\",\n      \"mcp__hangar__who_am_i\"\n    ]\n  }\n}\n"
+       }
+      }
+     },
+     "changed": {},
+     "removed": []
+    }
+   ]
+  },
+  {
+   "case": "claude-invalid-utf8",
+   "args": [
+    "$PY",
+    "-B",
+    "-s",
+    "$T/inst/scripts/registrar-mcp.py"
+   ],
+   "env": {
+    "HOME": "$T/home"
+   },
+   "files_before": {
+    "home/.hangar": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.claude.json": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "b64": "eyJhIjogIv8ifQ==",
+      "utf8": false,
+      "size": 10
+     }
+    },
+    "home/.hangar/config": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config/.env": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "CP_AUTH_TOKEN=tok-local\n"
+     }
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    }
+   },
+   "steps": [
+    {
+     "code": 0,
+     "stdout": {
+      "text": "ok: recado pelo MCP hangar liberado em $T/home/.claude/settings.json\n"
+     },
+     "stderr": {
+      "text": "aviso: $T/home/.claude.json não é JSON válido — pulado\n"
+     },
+     "created": {
+      "home/.claude": {
+       "type": "dir",
+       "mode": "0o755"
+      },
+      "home/.claude/settings.json": {
+       "type": "file",
+       "mode": "0o644",
+       "content": {
+        "text": "{\n  \"permissions\": {\n    \"allow\": [\n      \"mcp__hangar__send\",\n      \"mcp__hangar__group\",\n      \"mcp__hangar__sessions\",\n      \"mcp__hangar__who_am_i\"\n    ]\n  }\n}\n"
+       }
+      }
+     },
+     "changed": {},
+     "removed": []
+    }
+   ]
+  },
+  {
+   "case": "claude-json-is-symlink",
+   "args": [
+    "$PY",
+    "-B",
+    "-s",
+    "$T/inst/scripts/registrar-mcp.py"
+   ],
+   "env": {
+    "HOME": "$T/home"
+   },
+   "files_before": {
+    "home/.hangar": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.claude.json": {
+     "type": "symlink",
+     "target": "$T/work/real.claude.json"
+    },
+    "home/.hangar/config": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config/.env": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "CP_AUTH_TOKEN=tok-local\n"
+     }
+    },
+    "work/real.claude.json": {
+     "type": "file",
+     "mode": "0o600",
+     "content": {
+      "text": "{}"
+     }
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    }
+   },
+   "steps": [
+    {
+     "code": 0,
+     "stdout": {
+      "text": "ok: MCP hangar em $T/home/.claude.json\nok: recado pelo MCP hangar liberado em $T/home/.claude/settings.json\n"
+     },
+     "stderr": {
+      "text": ""
+     },
+     "created": {
+      "home/.claude": {
+       "type": "dir",
+       "mode": "0o755"
+      },
+      "home/.claude/settings.json": {
+       "type": "file",
+       "mode": "0o644",
+       "content": {
+        "text": "{\n  \"permissions\": {\n    \"allow\": [\n      \"mcp__hangar__send\",\n      \"mcp__hangar__group\",\n      \"mcp__hangar__sessions\",\n      \"mcp__hangar__who_am_i\"\n    ]\n  }\n}\n"
+       }
+      }
+     },
+     "changed": {
+      "home/.claude.json": {
+       "type": "file",
+       "mode": "0o600",
+       "content": {
+        "text": "{\n  \"mcpServers\": {\n    \"hangar\": {\n      \"type\": \"http\",\n      \"url\": \"http://127.0.0.1:8765/mcp/\",\n      \"headersHelper\": \"$T/home/.local/bin/hangar-mcp-headers\",\n      \"timeout\": 660000\n    }\n  }\n}"
+       }
+      }
+     },
+     "removed": []
+    }
+   ]
+  },
+  {
+   "case": "claude-json-traps",
+   "args": [
+    "$PY",
+    "-B",
+    "-s",
+    "$T/inst/scripts/registrar-mcp.py"
+   ],
+   "env": {
+    "HOME": "$T/home"
+   },
+   "files_before": {
+    "home/.hangar": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.claude.json": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "{\"f\": 1.0, \"e\": 1e+20, \"big\": 12345678901234567890123, \"nan\": NaN, \"inf\": -Infinity, \"s\": \"\\ud800\", \"dup\": 1, \"dup\": 2, \"u\": \"ação 🚀\", \"esc\": \"\\u00e7\"}"
+     }
+    },
+    "home/.hangar/config": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config/.env": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "CP_AUTH_TOKEN=tok-local\n"
+     }
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    }
+   },
+   "steps": [
+    {
+     "code": 0,
+     "stdout": {
+      "text": "ok: MCP hangar em $T/home/.claude.json\nok: recado pelo MCP hangar liberado em $T/home/.claude/settings.json\n"
+     },
+     "stderr": {
+      "text": ""
+     },
+     "created": {
+      "home/.claude": {
+       "type": "dir",
+       "mode": "0o755"
+      },
+      "home/.claude/settings.json": {
+       "type": "file",
+       "mode": "0o644",
+       "content": {
+        "text": "{\n  \"permissions\": {\n    \"allow\": [\n      \"mcp__hangar__send\",\n      \"mcp__hangar__group\",\n      \"mcp__hangar__sessions\",\n      \"mcp__hangar__who_am_i\"\n    ]\n  }\n}\n"
+       }
+      }
+     },
+     "changed": {
+      "home/.claude.json": {
+       "type": "file",
+       "mode": "0o644",
+       "content": {
+        "text": "{\n  \"f\": 1.0,\n  \"e\": 1e+20,\n  \"big\": 12345678901234567890123,\n  \"nan\": NaN,\n  \"inf\": -Infinity,\n  \"s\": \"\\ud800\",\n  \"dup\": 2,\n  \"u\": \"a\\u00e7\\u00e3o \\ud83d\\ude80\",\n  \"esc\": \"\\u00e7\",\n  \"mcpServers\": {\n    \"hangar\": {\n      \"type\": \"http\",\n      \"url\": \"http://127.0.0.1:8765/mcp/\",\n      \"headersHelper\": \"$T/home/.local/bin/hangar-mcp-headers\",\n      \"timeout\": 660000\n    }\n  }\n}"
+       }
+      }
+     },
+     "removed": []
+    }
+   ]
+  },
+  {
+   "case": "claude-mcpservers-list",
+   "args": [
+    "$PY",
+    "-B",
+    "-s",
+    "$T/inst/scripts/registrar-mcp.py"
+   ],
+   "env": {
+    "HOME": "$T/home"
+   },
+   "files_before": {
+    "home/.hangar": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.claude.json": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "{\n  \"mcpServers\": []\n}"
+     }
+    },
+    "home/.hangar/config": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config/.env": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "CP_AUTH_TOKEN=tok-local\n"
+     }
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    }
+   },
+   "steps": [
+    {
+     "code": 1,
+     "stdout": {
+      "text": "ok: recado pelo MCP hangar liberado em $T/home/.claude/settings.json\n"
+     },
+     "stderr": {
+      "text": "erro: $T/home/.claude.json: MCP hangar não registrado: 'list' object has no attribute 'get'\nerro: alguma conta do Claude ficou sem o MCP hangar (veja acima)\n"
+     },
+     "created": {
+      "home/.claude": {
+       "type": "dir",
+       "mode": "0o755"
+      },
+      "home/.claude/settings.json": {
+       "type": "file",
+       "mode": "0o644",
+       "content": {
+        "text": "{\n  \"permissions\": {\n    \"allow\": [\n      \"mcp__hangar__send\",\n      \"mcp__hangar__group\",\n      \"mcp__hangar__sessions\",\n      \"mcp__hangar__who_am_i\"\n    ]\n  }\n}\n"
+       }
+      }
+     },
+     "changed": {},
+     "removed": []
+    }
+   ]
+  },
+  {
+   "case": "claude-not-object",
+   "args": [
+    "$PY",
+    "-B",
+    "-s",
+    "$T/inst/scripts/registrar-mcp.py"
+   ],
+   "env": {
+    "HOME": "$T/home"
+   },
+   "files_before": {
+    "home/.hangar": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.claude.json": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "[\n  1,\n  2\n]"
+     }
+    },
+    "home/.hangar/config": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config/.env": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "CP_AUTH_TOKEN=tok-local\n"
+     }
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    }
+   },
+   "steps": [
+    {
+     "code": 1,
+     "stdout": {
+      "text": "ok: recado pelo MCP hangar liberado em $T/home/.claude/settings.json\n"
+     },
+     "stderr": {
+      "text": "erro: $T/home/.claude.json: MCP hangar não registrado: 'list' object has no attribute 'setdefault'\nerro: alguma conta do Claude ficou sem o MCP hangar (veja acima)\n"
+     },
+     "created": {
+      "home/.claude": {
+       "type": "dir",
+       "mode": "0o755"
+      },
+      "home/.claude/settings.json": {
+       "type": "file",
+       "mode": "0o644",
+       "content": {
+        "text": "{\n  \"permissions\": {\n    \"allow\": [\n      \"mcp__hangar__send\",\n      \"mcp__hangar__group\",\n      \"mcp__hangar__sessions\",\n      \"mcp__hangar__who_am_i\"\n    ]\n  }\n}\n"
+       }
+      }
+     },
+     "changed": {},
+     "removed": []
+    }
+   ]
+  },
+  {
+   "case": "codex-app-format-equal",
+   "args": [
+    "$PY",
+    "-B",
+    "-s",
+    "$T/inst/scripts/registrar-mcp.py"
+   ],
+   "env": {
+    "HOME": "$T/home"
+   },
+   "files_before": {
+    "home/.codex": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.codex/config.toml": {
+     "type": "file",
+     "mode": "0o600",
+     "content": {
+      "text": "model = \"x\"\n\n[mcp_servers.hangar]\nurl = \"http://127.0.0.1:8765/mcp/\"\ntool_timeout_sec = 660\n\n[mcp_servers.hangar.http_headers]\nAuthorization = \"Bearer tok-local\"\n\n[mcp_servers.hangar.env_http_headers]\nX-Hangar-Key = \"CP_SESSION_KEY\"\nX-Hangar-Pane = \"TMUX_PANE\"\nX-Hangar-Session = \"CP_SESSION_NAME\"\nX-Hangar-Jev = \"HANGAR_JEV\"\n"
+     }
+    },
+    "home/.hangar/config": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config/.env": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "CP_AUTH_TOKEN=tok-local\n"
+     }
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    }
+   },
+   "steps": [
+    {
+     "code": 0,
+     "stdout": {
+      "text": "ok: MCP hangar em $T/home/.claude.json\nok: recado pelo MCP hangar liberado em $T/home/.claude/settings.json\n"
+     },
+     "stderr": {
+      "text": ""
+     },
+     "created": {
+      "home/.claude": {
+       "type": "dir",
+       "mode": "0o755"
+      },
+      "home/.claude.json": {
+       "type": "file",
+       "mode": "0o600",
+       "content": {
+        "text": "{\n  \"mcpServers\": {\n    \"hangar\": {\n      \"type\": \"http\",\n      \"url\": \"http://127.0.0.1:8765/mcp/\",\n      \"headersHelper\": \"$T/home/.local/bin/hangar-mcp-headers\",\n      \"timeout\": 660000\n    }\n  }\n}"
+       }
+      },
+      "home/.claude/settings.json": {
+       "type": "file",
+       "mode": "0o644",
+       "content": {
+        "text": "{\n  \"permissions\": {\n    \"allow\": [\n      \"mcp__hangar__send\",\n      \"mcp__hangar__group\",\n      \"mcp__hangar__sessions\",\n      \"mcp__hangar__who_am_i\"\n    ]\n  }\n}\n"
+       }
+      }
+     },
+     "changed": {},
+     "removed": []
+    }
+   ]
+  },
+  {
+   "case": "codex-app-plus-marked-duplicate",
+   "args": [
+    "$PY",
+    "-B",
+    "-s",
+    "$T/inst/scripts/registrar-mcp.py"
+   ],
+   "env": {
+    "HOME": "$T/home"
+   },
+   "files_before": {
+    "home/.codex": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.codex/config.toml": {
+     "type": "file",
+     "mode": "0o600",
+     "content": {
+      "text": "[mcp_servers.hangar]\nurl = \"http://127.0.0.1:8765/mcp/\"\ntool_timeout_sec = 660\n\n[mcp_servers.hangar.http_headers]\nAuthorization = \"Bearer tok-local\"\n\n[mcp_servers.hangar.env_http_headers]\nX-Hangar-Key = \"CP_SESSION_KEY\"\nX-Hangar-Pane = \"TMUX_PANE\"\nX-Hangar-Session = \"CP_SESSION_NAME\"\nX-Hangar-Jev = \"HANGAR_JEV\"\n\n# >>> hangar: mcp\n[mcp_servers.hangar]\nurl = \"http://127.0.0.1:8765/mcp/\"\ntool_timeout_sec = 660\nhttp_headers = { \"Authorization\" = \"Bearer tok-local\" }\nenv_http_headers = { \"X-Hangar-Key\" = \"CP_SESSION_KEY\", \"X-Hangar-Pane\" = \"TMUX_PANE\", \"X-Hangar-Session\" = \"CP_SESSION_NAME\", \"X-Hangar-Jev\" = \"HANGAR_JEV\" }\n# <<< hangar: mcp\n"
+     }
+    },
+    "home/.hangar/config": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config/.env": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "CP_AUTH_TOKEN=tok-local\n"
+     }
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    }
+   },
+   "steps": [
+    {
+     "code": 0,
+     "stdout": {
+      "text": "ok: MCP hangar em $T/home/.claude.json\nok: recado pelo MCP hangar liberado em $T/home/.claude/settings.json\nok: MCP hangar em $T/home/.codex/config.toml\n"
+     },
+     "stderr": {
+      "text": ""
+     },
+     "created": {
+      "home/.claude": {
+       "type": "dir",
+       "mode": "0o755"
+      },
+      "home/.claude.json": {
+       "type": "file",
+       "mode": "0o600",
+       "content": {
+        "text": "{\n  \"mcpServers\": {\n    \"hangar\": {\n      \"type\": \"http\",\n      \"url\": \"http://127.0.0.1:8765/mcp/\",\n      \"headersHelper\": \"$T/home/.local/bin/hangar-mcp-headers\",\n      \"timeout\": 660000\n    }\n  }\n}"
+       }
+      },
+      "home/.claude/settings.json": {
+       "type": "file",
+       "mode": "0o644",
+       "content": {
+        "text": "{\n  \"permissions\": {\n    \"allow\": [\n      \"mcp__hangar__send\",\n      \"mcp__hangar__group\",\n      \"mcp__hangar__sessions\",\n      \"mcp__hangar__who_am_i\"\n    ]\n  }\n}\n"
+       }
+      }
+     },
+     "changed": {
+      "home/.codex/config.toml": {
+       "type": "file",
+       "mode": "0o600",
+       "content": {
+        "text": "# >>> hangar: mcp\n[mcp_servers.hangar]\nurl = \"http://127.0.0.1:8765/mcp/\"\ntool_timeout_sec = 660\nhttp_headers = { \"Authorization\" = \"Bearer tok-local\" }\nenv_http_headers = { \"X-Hangar-Key\" = \"CP_SESSION_KEY\", \"X-Hangar-Pane\" = \"TMUX_PANE\", \"X-Hangar-Session\" = \"CP_SESSION_NAME\", \"X-Hangar-Jev\" = \"HANGAR_JEV\" }\n# <<< hangar: mcp\n"
+       }
+      }
+     },
+     "removed": []
+    },
+    {
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     },
+     "created": {},
+     "changed": {},
+     "removed": []
+    }
+   ]
+  },
+  {
+   "case": "codex-config-symlink",
+   "args": [
+    "$PY",
+    "-B",
+    "-s",
+    "$T/inst/scripts/registrar-mcp.py"
+   ],
+   "env": {
+    "HOME": "$T/home"
+   },
+   "files_before": {
+    "home/.codex": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.codex/config.toml": {
+     "type": "symlink",
+     "target": "$T/work/real.toml"
+    },
+    "home/.hangar/config": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config/.env": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "CP_AUTH_TOKEN=tok-local\n"
+     }
+    },
+    "work/real.toml": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "a = 1\n"
+     }
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    }
+   },
+   "steps": [
+    {
+     "code": 0,
+     "stdout": {
+      "text": "ok: MCP hangar em $T/home/.claude.json\nok: recado pelo MCP hangar liberado em $T/home/.claude/settings.json\nok: MCP hangar em $T/home/.codex/config.toml\n"
+     },
+     "stderr": {
+      "text": ""
+     },
+     "created": {
+      "home/.claude": {
+       "type": "dir",
+       "mode": "0o755"
+      },
+      "home/.claude.json": {
+       "type": "file",
+       "mode": "0o600",
+       "content": {
+        "text": "{\n  \"mcpServers\": {\n    \"hangar\": {\n      \"type\": \"http\",\n      \"url\": \"http://127.0.0.1:8765/mcp/\",\n      \"headersHelper\": \"$T/home/.local/bin/hangar-mcp-headers\",\n      \"timeout\": 660000\n    }\n  }\n}"
+       }
+      },
+      "home/.claude/settings.json": {
+       "type": "file",
+       "mode": "0o644",
+       "content": {
+        "text": "{\n  \"permissions\": {\n    \"allow\": [\n      \"mcp__hangar__send\",\n      \"mcp__hangar__group\",\n      \"mcp__hangar__sessions\",\n      \"mcp__hangar__who_am_i\"\n    ]\n  }\n}\n"
+       }
+      }
+     },
+     "changed": {
+      "home/.codex/config.toml": {
+       "type": "file",
+       "mode": "0o600",
+       "content": {
+        "text": "a = 1\n\n# >>> hangar: mcp\n[mcp_servers.hangar]\nurl = \"http://127.0.0.1:8765/mcp/\"\ntool_timeout_sec = 660\nhttp_headers = { \"Authorization\" = \"Bearer tok-local\" }\nenv_http_headers = { \"X-Hangar-Key\" = \"CP_SESSION_KEY\", \"X-Hangar-Pane\" = \"TMUX_PANE\", \"X-Hangar-Session\" = \"CP_SESSION_NAME\", \"X-Hangar-Jev\" = \"HANGAR_JEV\" }\n# <<< hangar: mcp\n"
+       }
+      }
+     },
+     "removed": []
+    }
+   ]
+  },
+  {
+   "case": "codex-crlf-marked-correct",
+   "args": [
+    "$PY",
+    "-B",
+    "-s",
+    "$T/inst/scripts/registrar-mcp.py"
+   ],
+   "env": {
+    "HOME": "$T/home"
+   },
+   "files_before": {
+    "home/.codex": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.codex/config.toml": {
+     "type": "file",
+     "mode": "0o600",
+     "content": {
+      "text": "# >>> hangar: mcp\r\n[mcp_servers.hangar]\r\nurl = \"http://127.0.0.1:8765/mcp/\"\r\ntool_timeout_sec = 660\r\nhttp_headers = { \"Authorization\" = \"Bearer tok-local\" }\r\nenv_http_headers = { \"X-Hangar-Key\" = \"CP_SESSION_KEY\", \"X-Hangar-Pane\" = \"TMUX_PANE\", \"X-Hangar-Session\" = \"CP_SESSION_NAME\", \"X-Hangar-Jev\" = \"HANGAR_JEV\" }\r\n# <<< hangar: mcp\r\n"
+     }
+    },
+    "home/.hangar/config": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config/.env": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "CP_AUTH_TOKEN=tok-local\n"
+     }
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    }
+   },
+   "steps": [
+    {
+     "code": 0,
+     "stdout": {
+      "text": "ok: MCP hangar em $T/home/.claude.json\nok: recado pelo MCP hangar liberado em $T/home/.claude/settings.json\n"
+     },
+     "stderr": {
+      "text": ""
+     },
+     "created": {
+      "home/.claude": {
+       "type": "dir",
+       "mode": "0o755"
+      },
+      "home/.claude.json": {
+       "type": "file",
+       "mode": "0o600",
+       "content": {
+        "text": "{\n  \"mcpServers\": {\n    \"hangar\": {\n      \"type\": \"http\",\n      \"url\": \"http://127.0.0.1:8765/mcp/\",\n      \"headersHelper\": \"$T/home/.local/bin/hangar-mcp-headers\",\n      \"timeout\": 660000\n    }\n  }\n}"
+       }
+      },
+      "home/.claude/settings.json": {
+       "type": "file",
+       "mode": "0o644",
+       "content": {
+        "text": "{\n  \"permissions\": {\n    \"allow\": [\n      \"mcp__hangar__send\",\n      \"mcp__hangar__group\",\n      \"mcp__hangar__sessions\",\n      \"mcp__hangar__who_am_i\"\n    ]\n  }\n}\n"
+       }
+      }
+     },
+     "changed": {},
+     "removed": []
+    }
+   ]
+  },
+  {
+   "case": "codex-crlf-old-token",
+   "args": [
+    "$PY",
+    "-B",
+    "-s",
+    "$T/inst/scripts/registrar-mcp.py"
+   ],
+   "env": {
+    "HOME": "$T/home"
+   },
+   "files_before": {
+    "home/.codex": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.codex/config.toml": {
+     "type": "file",
+     "mode": "0o600",
+     "content": {
+      "text": "model = \"x\"\r\n\r\n# >>> hangar: mcp\r\n[mcp_servers.hangar]\r\nurl = \"http://127.0.0.1:8765/mcp/\"\r\ntool_timeout_sec = 660\r\nhttp_headers = { \"Authorization\" = \"Bearer velho\" }\r\nenv_http_headers = { \"X-Hangar-Key\" = \"CP_SESSION_KEY\", \"X-Hangar-Pane\" = \"TMUX_PANE\", \"X-Hangar-Session\" = \"CP_SESSION_NAME\", \"X-Hangar-Jev\" = \"HANGAR_JEV\" }\r\n# <<< hangar: mcp\r\n"
+     }
+    },
+    "home/.hangar/config": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config/.env": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "CP_AUTH_TOKEN=tok-local\n"
+     }
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    }
+   },
+   "steps": [
+    {
+     "code": 0,
+     "stdout": {
+      "text": "ok: MCP hangar em $T/home/.claude.json\nok: recado pelo MCP hangar liberado em $T/home/.claude/settings.json\nok: MCP hangar em $T/home/.codex/config.toml\n"
+     },
+     "stderr": {
+      "text": ""
+     },
+     "created": {
+      "home/.claude": {
+       "type": "dir",
+       "mode": "0o755"
+      },
+      "home/.claude.json": {
+       "type": "file",
+       "mode": "0o600",
+       "content": {
+        "text": "{\n  \"mcpServers\": {\n    \"hangar\": {\n      \"type\": \"http\",\n      \"url\": \"http://127.0.0.1:8765/mcp/\",\n      \"headersHelper\": \"$T/home/.local/bin/hangar-mcp-headers\",\n      \"timeout\": 660000\n    }\n  }\n}"
+       }
+      },
+      "home/.claude/settings.json": {
+       "type": "file",
+       "mode": "0o644",
+       "content": {
+        "text": "{\n  \"permissions\": {\n    \"allow\": [\n      \"mcp__hangar__send\",\n      \"mcp__hangar__group\",\n      \"mcp__hangar__sessions\",\n      \"mcp__hangar__who_am_i\"\n    ]\n  }\n}\n"
+       }
+      }
+     },
+     "changed": {
+      "home/.codex/config.toml": {
+       "type": "file",
+       "mode": "0o600",
+       "content": {
+        "text": "model = \"x\"\n\n# >>> hangar: mcp\n[mcp_servers.hangar]\nurl = \"http://127.0.0.1:8765/mcp/\"\ntool_timeout_sec = 660\nhttp_headers = { \"Authorization\" = \"Bearer tok-local\" }\nenv_http_headers = { \"X-Hangar-Key\" = \"CP_SESSION_KEY\", \"X-Hangar-Pane\" = \"TMUX_PANE\", \"X-Hangar-Session\" = \"CP_SESSION_NAME\", \"X-Hangar-Jev\" = \"HANGAR_JEV\" }\n# <<< hangar: mcp\n"
+       }
+      }
+     },
+     "removed": []
+    }
+   ]
+  },
+  {
+   "case": "codex-dir-not-writable",
+   "args": [
+    "$PY",
+    "-B",
+    "-s",
+    "$T/inst/scripts/registrar-mcp.py"
+   ],
+   "env": {
+    "HOME": "$T/home"
+   },
+   "files_before": {
+    "home/.codex": {
+     "type": "dir",
+     "mode": "0o555"
+    },
+    "home/.hangar": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config/.env": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "CP_AUTH_TOKEN=tok-local\n"
+     }
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    }
+   },
+   "steps": [
+    {
+     "code": 1,
+     "stdout": {
+      "text": "ok: MCP hangar em $T/home/.claude.json\nok: recado pelo MCP hangar liberado em $T/home/.claude/settings.json\n"
+     },
+     "stderr": {
+      "text": "Traceback (most recent call last):\n  File \"$T/inst/scripts/registrar-mcp.py\", line 180, in <module>\n    codex(url, env[\"CP_AUTH_TOKEN\"])\n    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"$T/inst/scripts/registrar-mcp.py\", line 165, in codex\n    tmp.write_text(novo, encoding=\"utf-8\")\n    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"$PYHOME/lib/python3.14/pathlib/__init__.py\", line 809, in write_text\n    with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:\n         ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"$PYHOME/lib/python3.14/pathlib/__init__.py\", line 771, in open\n    return io.open(self, mode, buffering, encoding, errors, newline)\n           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nPermissionError: [Errno 13] Permission denied: '$T/home/.codex/config.toml.hangar-novo'\n"
+     },
+     "created": {
+      "home/.claude": {
+       "type": "dir",
+       "mode": "0o755"
+      },
+      "home/.claude.json": {
+       "type": "file",
+       "mode": "0o600",
+       "content": {
+        "text": "{\n  \"mcpServers\": {\n    \"hangar\": {\n      \"type\": \"http\",\n      \"url\": \"http://127.0.0.1:8765/mcp/\",\n      \"headersHelper\": \"$T/home/.local/bin/hangar-mcp-headers\",\n      \"timeout\": 660000\n    }\n  }\n}"
+       }
+      },
+      "home/.claude/settings.json": {
+       "type": "file",
+       "mode": "0o644",
+       "content": {
+        "text": "{\n  \"permissions\": {\n    \"allow\": [\n      \"mcp__hangar__send\",\n      \"mcp__hangar__group\",\n      \"mcp__hangar__sessions\",\n      \"mcp__hangar__who_am_i\"\n    ]\n  }\n}\n"
+       }
+      }
+     },
+     "changed": {},
+     "removed": []
+    }
+   ]
+  },
+  {
+   "case": "codex-empty-dir",
+   "args": [
+    "$PY",
+    "-B",
+    "-s",
+    "$T/inst/scripts/registrar-mcp.py"
+   ],
+   "env": {
+    "HOME": "$T/home"
+   },
+   "files_before": {
+    "home/.codex": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config/.env": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "CP_AUTH_TOKEN=tok-local\n"
+     }
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    }
+   },
+   "steps": [
+    {
+     "code": 0,
+     "stdout": {
+      "text": "ok: MCP hangar em $T/home/.claude.json\nok: recado pelo MCP hangar liberado em $T/home/.claude/settings.json\nok: MCP hangar em $T/home/.codex/config.toml\n"
+     },
+     "stderr": {
+      "text": ""
+     },
+     "created": {
+      "home/.claude": {
+       "type": "dir",
+       "mode": "0o755"
+      },
+      "home/.claude.json": {
+       "type": "file",
+       "mode": "0o600",
+       "content": {
+        "text": "{\n  \"mcpServers\": {\n    \"hangar\": {\n      \"type\": \"http\",\n      \"url\": \"http://127.0.0.1:8765/mcp/\",\n      \"headersHelper\": \"$T/home/.local/bin/hangar-mcp-headers\",\n      \"timeout\": 660000\n    }\n  }\n}"
+       }
+      },
+      "home/.claude/settings.json": {
+       "type": "file",
+       "mode": "0o644",
+       "content": {
+        "text": "{\n  \"permissions\": {\n    \"allow\": [\n      \"mcp__hangar__send\",\n      \"mcp__hangar__group\",\n      \"mcp__hangar__sessions\",\n      \"mcp__hangar__who_am_i\"\n    ]\n  }\n}\n"
+       }
+      },
+      "home/.codex/config.toml": {
+       "type": "file",
+       "mode": "0o600",
+       "content": {
+        "text": "# >>> hangar: mcp\n[mcp_servers.hangar]\nurl = \"http://127.0.0.1:8765/mcp/\"\ntool_timeout_sec = 660\nhttp_headers = { \"Authorization\" = \"Bearer tok-local\" }\nenv_http_headers = { \"X-Hangar-Key\" = \"CP_SESSION_KEY\", \"X-Hangar-Pane\" = \"TMUX_PANE\", \"X-Hangar-Session\" = \"CP_SESSION_NAME\", \"X-Hangar-Jev\" = \"HANGAR_JEV\" }\n# <<< hangar: mcp\n"
+       }
+      }
+     },
+     "changed": {},
+     "removed": []
+    }
+   ]
+  },
+  {
+   "case": "codex-empty-file-0644",
+   "args": [
+    "$PY",
+    "-B",
+    "-s",
+    "$T/inst/scripts/registrar-mcp.py"
+   ],
+   "env": {
+    "HOME": "$T/home"
+   },
+   "files_before": {
+    "home/.codex": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.codex/config.toml": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": ""
+     }
+    },
+    "home/.hangar/config": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config/.env": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "CP_AUTH_TOKEN=tok-local\n"
+     }
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    }
+   },
+   "steps": [
+    {
+     "code": 0,
+     "stdout": {
+      "text": "ok: MCP hangar em $T/home/.claude.json\nok: recado pelo MCP hangar liberado em $T/home/.claude/settings.json\nok: MCP hangar em $T/home/.codex/config.toml\n"
+     },
+     "stderr": {
+      "text": ""
+     },
+     "created": {
+      "home/.claude": {
+       "type": "dir",
+       "mode": "0o755"
+      },
+      "home/.claude.json": {
+       "type": "file",
+       "mode": "0o600",
+       "content": {
+        "text": "{\n  \"mcpServers\": {\n    \"hangar\": {\n      \"type\": \"http\",\n      \"url\": \"http://127.0.0.1:8765/mcp/\",\n      \"headersHelper\": \"$T/home/.local/bin/hangar-mcp-headers\",\n      \"timeout\": 660000\n    }\n  }\n}"
+       }
+      },
+      "home/.claude/settings.json": {
+       "type": "file",
+       "mode": "0o644",
+       "content": {
+        "text": "{\n  \"permissions\": {\n    \"allow\": [\n      \"mcp__hangar__send\",\n      \"mcp__hangar__group\",\n      \"mcp__hangar__sessions\",\n      \"mcp__hangar__who_am_i\"\n    ]\n  }\n}\n"
+       }
+      }
+     },
+     "changed": {
+      "home/.codex/config.toml": {
+       "type": "file",
+       "mode": "0o600",
+       "content": {
+        "text": "# >>> hangar: mcp\n[mcp_servers.hangar]\nurl = \"http://127.0.0.1:8765/mcp/\"\ntool_timeout_sec = 660\nhttp_headers = { \"Authorization\" = \"Bearer tok-local\" }\nenv_http_headers = { \"X-Hangar-Key\" = \"CP_SESSION_KEY\", \"X-Hangar-Pane\" = \"TMUX_PANE\", \"X-Hangar-Session\" = \"CP_SESSION_NAME\", \"X-Hangar-Jev\" = \"HANGAR_JEV\" }\n# <<< hangar: mcp\n"
+       }
+      }
+     },
+     "removed": []
+    }
+   ]
+  },
+  {
+   "case": "codex-homes-glob",
+   "args": [
+    "$PY",
+    "-B",
+    "-s",
+    "$T/inst/scripts/registrar-mcp.py"
+   ],
+   "env": {
+    "HOME": "$T/home"
+   },
+   "files_before": {
+    "home/.codexsemhifen": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.codex-x.lock": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.codex-a": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.codex-b": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.codex-arquivo": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "x"
+     }
+    },
+    "home/.codex-a/config.toml": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": ""
+     }
+    },
+    "home/.hangar/config": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config/.env": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "CP_AUTH_TOKEN=tok-local\n"
+     }
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    }
+   },
+   "steps": [
+    {
+     "code": 0,
+     "stdout": {
+      "text": "ok: MCP hangar em $T/home/.claude.json\nok: recado pelo MCP hangar liberado em $T/home/.claude/settings.json\nok: MCP hangar em $T/home/.codex-a/config.toml\nok: MCP hangar em $T/home/.codex-b/config.toml\nok: MCP hangar em $T/home/.codex-x.lock/config.toml\n"
+     },
+     "stderr": {
+      "text": ""
+     },
+     "created": {
+      "home/.claude": {
+       "type": "dir",
+       "mode": "0o755"
+      },
+      "home/.claude.json": {
+       "type": "file",
+       "mode": "0o600",
+       "content": {
+        "text": "{\n  \"mcpServers\": {\n    \"hangar\": {\n      \"type\": \"http\",\n      \"url\": \"http://127.0.0.1:8765/mcp/\",\n      \"headersHelper\": \"$T/home/.local/bin/hangar-mcp-headers\",\n      \"timeout\": 660000\n    }\n  }\n}"
+       }
+      },
+      "home/.claude/settings.json": {
+       "type": "file",
+       "mode": "0o644",
+       "content": {
+        "text": "{\n  \"permissions\": {\n    \"allow\": [\n      \"mcp__hangar__send\",\n      \"mcp__hangar__group\",\n      \"mcp__hangar__sessions\",\n      \"mcp__hangar__who_am_i\"\n    ]\n  }\n}\n"
+       }
+      },
+      "home/.codex-x.lock/config.toml": {
+       "type": "file",
+       "mode": "0o600",
+       "content": {
+        "text": "# >>> hangar: mcp\n[mcp_servers.hangar]\nurl = \"http://127.0.0.1:8765/mcp/\"\ntool_timeout_sec = 660\nhttp_headers = { \"Authorization\" = \"Bearer tok-local\" }\nenv_http_headers = { \"X-Hangar-Key\" = \"CP_SESSION_KEY\", \"X-Hangar-Pane\" = \"TMUX_PANE\", \"X-Hangar-Session\" = \"CP_SESSION_NAME\", \"X-Hangar-Jev\" = \"HANGAR_JEV\" }\n# <<< hangar: mcp\n"
+       }
+      },
+      "home/.codex-b/config.toml": {
+       "type": "file",
+       "mode": "0o600",
+       "content": {
+        "text": "# >>> hangar: mcp\n[mcp_servers.hangar]\nurl = \"http://127.0.0.1:8765/mcp/\"\ntool_timeout_sec = 660\nhttp_headers = { \"Authorization\" = \"Bearer tok-local\" }\nenv_http_headers = { \"X-Hangar-Key\" = \"CP_SESSION_KEY\", \"X-Hangar-Pane\" = \"TMUX_PANE\", \"X-Hangar-Session\" = \"CP_SESSION_NAME\", \"X-Hangar-Jev\" = \"HANGAR_JEV\" }\n# <<< hangar: mcp\n"
+       }
+      }
+     },
+     "changed": {
+      "home/.codex-a/config.toml": {
+       "type": "file",
+       "mode": "0o600",
+       "content": {
+        "text": "# >>> hangar: mcp\n[mcp_servers.hangar]\nurl = \"http://127.0.0.1:8765/mcp/\"\ntool_timeout_sec = 660\nhttp_headers = { \"Authorization\" = \"Bearer tok-local\" }\nenv_http_headers = { \"X-Hangar-Key\" = \"CP_SESSION_KEY\", \"X-Hangar-Pane\" = \"TMUX_PANE\", \"X-Hangar-Session\" = \"CP_SESSION_NAME\", \"X-Hangar-Jev\" = \"HANGAR_JEV\" }\n# <<< hangar: mcp\n"
+       }
+      }
+     },
+     "removed": []
+    }
+   ]
+  },
+  {
+   "case": "codex-invalid-toml",
+   "args": [
+    "$PY",
+    "-B",
+    "-s",
+    "$T/inst/scripts/registrar-mcp.py"
+   ],
+   "env": {
+    "HOME": "$T/home"
+   },
+   "files_before": {
+    "home/.codex": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.codex/config.toml": {
+     "type": "file",
+     "mode": "0o600",
+     "content": {
+      "text": "isto = = nao toml\n"
+     }
+    },
+    "home/.hangar/config": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config/.env": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "CP_AUTH_TOKEN=tok-local\n"
+     }
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    }
+   },
+   "steps": [
+    {
+     "code": 0,
+     "stdout": {
+      "text": "ok: MCP hangar em $T/home/.claude.json\nok: recado pelo MCP hangar liberado em $T/home/.claude/settings.json\nok: MCP hangar em $T/home/.codex/config.toml\n"
+     },
+     "stderr": {
+      "text": ""
+     },
+     "created": {
+      "home/.claude": {
+       "type": "dir",
+       "mode": "0o755"
+      },
+      "home/.claude.json": {
+       "type": "file",
+       "mode": "0o600",
+       "content": {
+        "text": "{\n  \"mcpServers\": {\n    \"hangar\": {\n      \"type\": \"http\",\n      \"url\": \"http://127.0.0.1:8765/mcp/\",\n      \"headersHelper\": \"$T/home/.local/bin/hangar-mcp-headers\",\n      \"timeout\": 660000\n    }\n  }\n}"
+       }
+      },
+      "home/.claude/settings.json": {
+       "type": "file",
+       "mode": "0o644",
+       "content": {
+        "text": "{\n  \"permissions\": {\n    \"allow\": [\n      \"mcp__hangar__send\",\n      \"mcp__hangar__group\",\n      \"mcp__hangar__sessions\",\n      \"mcp__hangar__who_am_i\"\n    ]\n  }\n}\n"
+       }
+      }
+     },
+     "changed": {
+      "home/.codex/config.toml": {
+       "type": "file",
+       "mode": "0o600",
+       "content": {
+        "text": "isto = = nao toml\n\n# >>> hangar: mcp\n[mcp_servers.hangar]\nurl = \"http://127.0.0.1:8765/mcp/\"\ntool_timeout_sec = 660\nhttp_headers = { \"Authorization\" = \"Bearer tok-local\" }\nenv_http_headers = { \"X-Hangar-Key\" = \"CP_SESSION_KEY\", \"X-Hangar-Pane\" = \"TMUX_PANE\", \"X-Hangar-Session\" = \"CP_SESSION_NAME\", \"X-Hangar-Jev\" = \"HANGAR_JEV\" }\n# <<< hangar: mcp\n"
+       }
+      }
+     },
+     "removed": []
+    }
+   ]
+  },
+  {
+   "case": "codex-marked-correct",
+   "args": [
+    "$PY",
+    "-B",
+    "-s",
+    "$T/inst/scripts/registrar-mcp.py"
+   ],
+   "env": {
+    "HOME": "$T/home"
+   },
+   "files_before": {
+    "home/.codex": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.codex/config.toml": {
+     "type": "file",
+     "mode": "0o600",
+     "content": {
+      "text": "model = \"x\"\n\n# >>> hangar: mcp\n[mcp_servers.hangar]\nurl = \"http://127.0.0.1:8765/mcp/\"\ntool_timeout_sec = 660\nhttp_headers = { \"Authorization\" = \"Bearer tok-local\" }\nenv_http_headers = { \"X-Hangar-Key\" = \"CP_SESSION_KEY\", \"X-Hangar-Pane\" = \"TMUX_PANE\", \"X-Hangar-Session\" = \"CP_SESSION_NAME\", \"X-Hangar-Jev\" = \"HANGAR_JEV\" }\n# <<< hangar: mcp\n"
+     }
+    },
+    "home/.hangar/config": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config/.env": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "CP_AUTH_TOKEN=tok-local\n"
+     }
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    }
+   },
+   "steps": [
+    {
+     "code": 0,
+     "stdout": {
+      "text": "ok: MCP hangar em $T/home/.claude.json\nok: recado pelo MCP hangar liberado em $T/home/.claude/settings.json\n"
+     },
+     "stderr": {
+      "text": ""
+     },
+     "created": {
+      "home/.claude": {
+       "type": "dir",
+       "mode": "0o755"
+      },
+      "home/.claude.json": {
+       "type": "file",
+       "mode": "0o600",
+       "content": {
+        "text": "{\n  \"mcpServers\": {\n    \"hangar\": {\n      \"type\": \"http\",\n      \"url\": \"http://127.0.0.1:8765/mcp/\",\n      \"headersHelper\": \"$T/home/.local/bin/hangar-mcp-headers\",\n      \"timeout\": 660000\n    }\n  }\n}"
+       }
+      },
+      "home/.claude/settings.json": {
+       "type": "file",
+       "mode": "0o644",
+       "content": {
+        "text": "{\n  \"permissions\": {\n    \"allow\": [\n      \"mcp__hangar__send\",\n      \"mcp__hangar__group\",\n      \"mcp__hangar__sessions\",\n      \"mcp__hangar__who_am_i\"\n    ]\n  }\n}\n"
+       }
+      }
+     },
+     "changed": {},
+     "removed": []
+    }
+   ]
+  },
+  {
+   "case": "codex-no-trailing-newline-tables-after",
+   "args": [
+    "$PY",
+    "-B",
+    "-s",
+    "$T/inst/scripts/registrar-mcp.py"
+   ],
+   "env": {
+    "HOME": "$T/home"
+   },
+   "files_before": {
+    "home/.codex": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.codex/config.toml": {
+     "type": "file",
+     "mode": "0o600",
+     "content": {
+      "text": "[mcp_servers.hangar]\nurl = \"x\"\n[mcp_servers.hangar.http_headers]\nA = \"b\"\n[depois]\nb = 2"
+     }
+    },
+    "home/.hangar/config": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config/.env": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "CP_AUTH_TOKEN=tok-local\n"
+     }
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    }
+   },
+   "steps": [
+    {
+     "code": 0,
+     "stdout": {
+      "text": "ok: MCP hangar em $T/home/.claude.json\nok: recado pelo MCP hangar liberado em $T/home/.claude/settings.json\nok: MCP hangar em $T/home/.codex/config.toml\n"
+     },
+     "stderr": {
+      "text": ""
+     },
+     "created": {
+      "home/.claude": {
+       "type": "dir",
+       "mode": "0o755"
+      },
+      "home/.claude.json": {
+       "type": "file",
+       "mode": "0o600",
+       "content": {
+        "text": "{\n  \"mcpServers\": {\n    \"hangar\": {\n      \"type\": \"http\",\n      \"url\": \"http://127.0.0.1:8765/mcp/\",\n      \"headersHelper\": \"$T/home/.local/bin/hangar-mcp-headers\",\n      \"timeout\": 660000\n    }\n  }\n}"
+       }
+      },
+      "home/.claude/settings.json": {
+       "type": "file",
+       "mode": "0o644",
+       "content": {
+        "text": "{\n  \"permissions\": {\n    \"allow\": [\n      \"mcp__hangar__send\",\n      \"mcp__hangar__group\",\n      \"mcp__hangar__sessions\",\n      \"mcp__hangar__who_am_i\"\n    ]\n  }\n}\n"
+       }
+      }
+     },
+     "changed": {
+      "home/.codex/config.toml": {
+       "type": "file",
+       "mode": "0o600",
+       "content": {
+        "text": "[depois]\nb = 2\n\n# >>> hangar: mcp\n[mcp_servers.hangar]\nurl = \"http://127.0.0.1:8765/mcp/\"\ntool_timeout_sec = 660\nhttp_headers = { \"Authorization\" = \"Bearer tok-local\" }\nenv_http_headers = { \"X-Hangar-Key\" = \"CP_SESSION_KEY\", \"X-Hangar-Pane\" = \"TMUX_PANE\", \"X-Hangar-Session\" = \"CP_SESSION_NAME\", \"X-Hangar-Jev\" = \"HANGAR_JEV\" }\n# <<< hangar: mcp\n"
+       }
+      }
+     },
+     "removed": []
+    }
+   ]
+  },
+  {
+   "case": "codex-old-token-keeps-node-repl",
+   "args": [
+    "$PY",
+    "-B",
+    "-s",
+    "$T/inst/scripts/registrar-mcp.py"
+   ],
+   "env": {
+    "HOME": "$T/home"
+   },
+   "files_before": {
+    "home/.codex": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.codex/config.toml": {
+     "type": "file",
+     "mode": "0o600",
+     "content": {
+      "text": "# >>> hangar: mcp\n[mcp_servers.hangar]\nurl = \"http://127.0.0.1:8765/mcp/\"\ntool_timeout_sec = 660\nhttp_headers = { \"Authorization\" = \"Bearer velho\" }\nenv_http_headers = { \"X-Hangar-Key\" = \"CP_SESSION_KEY\", \"X-Hangar-Pane\" = \"TMUX_PANE\", \"X-Hangar-Session\" = \"CP_SESSION_NAME\", \"X-Hangar-Jev\" = \"HANGAR_JEV\" }\n# <<< hangar: mcp\n\n[mcp_servers.node_repl]\ncommand = \"node\"\n"
+     }
+    },
+    "home/.hangar/config": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config/.env": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "CP_AUTH_TOKEN=tok-local\n"
+     }
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    }
+   },
+   "steps": [
+    {
+     "code": 0,
+     "stdout": {
+      "text": "ok: MCP hangar em $T/home/.claude.json\nok: recado pelo MCP hangar liberado em $T/home/.claude/settings.json\nok: MCP hangar em $T/home/.codex/config.toml\n"
+     },
+     "stderr": {
+      "text": ""
+     },
+     "created": {
+      "home/.claude": {
+       "type": "dir",
+       "mode": "0o755"
+      },
+      "home/.claude.json": {
+       "type": "file",
+       "mode": "0o600",
+       "content": {
+        "text": "{\n  \"mcpServers\": {\n    \"hangar\": {\n      \"type\": \"http\",\n      \"url\": \"http://127.0.0.1:8765/mcp/\",\n      \"headersHelper\": \"$T/home/.local/bin/hangar-mcp-headers\",\n      \"timeout\": 660000\n    }\n  }\n}"
+       }
+      },
+      "home/.claude/settings.json": {
+       "type": "file",
+       "mode": "0o644",
+       "content": {
+        "text": "{\n  \"permissions\": {\n    \"allow\": [\n      \"mcp__hangar__send\",\n      \"mcp__hangar__group\",\n      \"mcp__hangar__sessions\",\n      \"mcp__hangar__who_am_i\"\n    ]\n  }\n}\n"
+       }
+      }
+     },
+     "changed": {
+      "home/.codex/config.toml": {
+       "type": "file",
+       "mode": "0o600",
+       "content": {
+        "text": "\n[mcp_servers.node_repl]\ncommand = \"node\"\n\n# >>> hangar: mcp\n[mcp_servers.hangar]\nurl = \"http://127.0.0.1:8765/mcp/\"\ntool_timeout_sec = 660\nhttp_headers = { \"Authorization\" = \"Bearer tok-local\" }\nenv_http_headers = { \"X-Hangar-Key\" = \"CP_SESSION_KEY\", \"X-Hangar-Pane\" = \"TMUX_PANE\", \"X-Hangar-Session\" = \"CP_SESSION_NAME\", \"X-Hangar-Jev\" = \"HANGAR_JEV\" }\n# <<< hangar: mcp\n"
+       }
+      }
+     },
+     "removed": []
+    }
+   ]
+  },
+  {
+   "case": "codex-unmarked-without-identity",
+   "args": [
+    "$PY",
+    "-B",
+    "-s",
+    "$T/inst/scripts/registrar-mcp.py"
+   ],
+   "env": {
+    "HOME": "$T/home"
+   },
+   "files_before": {
+    "home/.codex": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.codex/config.toml": {
+     "type": "file",
+     "mode": "0o600",
+     "content": {
+      "text": "[mcp_servers.hangar]\nurl = \"http://127.0.0.1:8765/mcp/\"\nhttp_headers = { \"Authorization\" = \"Bearer tok-local\" }\n\n[outra]\na = 1\n"
+     }
+    },
+    "home/.hangar/config": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config/.env": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "CP_AUTH_TOKEN=tok-local\n"
+     }
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    }
+   },
+   "steps": [
+    {
+     "code": 0,
+     "stdout": {
+      "text": "ok: MCP hangar em $T/home/.claude.json\nok: recado pelo MCP hangar liberado em $T/home/.claude/settings.json\nok: MCP hangar em $T/home/.codex/config.toml\n"
+     },
+     "stderr": {
+      "text": ""
+     },
+     "created": {
+      "home/.claude": {
+       "type": "dir",
+       "mode": "0o755"
+      },
+      "home/.claude.json": {
+       "type": "file",
+       "mode": "0o600",
+       "content": {
+        "text": "{\n  \"mcpServers\": {\n    \"hangar\": {\n      \"type\": \"http\",\n      \"url\": \"http://127.0.0.1:8765/mcp/\",\n      \"headersHelper\": \"$T/home/.local/bin/hangar-mcp-headers\",\n      \"timeout\": 660000\n    }\n  }\n}"
+       }
+      },
+      "home/.claude/settings.json": {
+       "type": "file",
+       "mode": "0o644",
+       "content": {
+        "text": "{\n  \"permissions\": {\n    \"allow\": [\n      \"mcp__hangar__send\",\n      \"mcp__hangar__group\",\n      \"mcp__hangar__sessions\",\n      \"mcp__hangar__who_am_i\"\n    ]\n  }\n}\n"
+       }
+      }
+     },
+     "changed": {
+      "home/.codex/config.toml": {
+       "type": "file",
+       "mode": "0o600",
+       "content": {
+        "text": "[outra]\na = 1\n\n# >>> hangar: mcp\n[mcp_servers.hangar]\nurl = \"http://127.0.0.1:8765/mcp/\"\ntool_timeout_sec = 660\nhttp_headers = { \"Authorization\" = \"Bearer tok-local\" }\nenv_http_headers = { \"X-Hangar-Key\" = \"CP_SESSION_KEY\", \"X-Hangar-Pane\" = \"TMUX_PANE\", \"X-Hangar-Session\" = \"CP_SESSION_NAME\", \"X-Hangar-Jev\" = \"HANGAR_JEV\" }\n# <<< hangar: mcp\n"
+       }
+      }
+     },
+     "removed": []
+    }
+   ]
+  },
+  {
+   "case": "env-backend-fallback-port",
+   "args": [
+    "$PY",
+    "-B",
+    "-s",
+    "$T/inst/scripts/registrar-mcp.py"
+   ],
+   "env": {
+    "HOME": "$T/home"
+   },
+   "files_before": {
+    "inst/backend": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "inst/backend/.env": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "# c\nCP_AUTH_TOKEN=tok-b\nCP_PORT=9999\n"
+     }
+    }
+   },
+   "steps": [
+    {
+     "code": 0,
+     "stdout": {
+      "text": "ok: MCP hangar em $T/home/.claude.json\nok: recado pelo MCP hangar liberado em $T/home/.claude/settings.json\n"
+     },
+     "stderr": {
+      "text": ""
+     },
+     "created": {
+      "home/.claude": {
+       "type": "dir",
+       "mode": "0o755"
+      },
+      "home/.claude.json": {
+       "type": "file",
+       "mode": "0o600",
+       "content": {
+        "text": "{\n  \"mcpServers\": {\n    \"hangar\": {\n      \"type\": \"http\",\n      \"url\": \"http://127.0.0.1:9999/mcp/\",\n      \"headersHelper\": \"$T/home/.local/bin/hangar-mcp-headers\",\n      \"timeout\": 660000\n    }\n  }\n}"
+       }
+      },
+      "home/.claude/settings.json": {
+       "type": "file",
+       "mode": "0o644",
+       "content": {
+        "text": "{\n  \"permissions\": {\n    \"allow\": [\n      \"mcp__hangar__send\",\n      \"mcp__hangar__group\",\n      \"mcp__hangar__sessions\",\n      \"mcp__hangar__who_am_i\"\n    ]\n  }\n}\n"
+       }
+      }
+     },
+     "changed": {},
+     "removed": []
+    }
+   ]
+  },
+  {
+   "case": "env-crlf",
+   "args": [
+    "$PY",
+    "-B",
+    "-s",
+    "$T/inst/scripts/registrar-mcp.py"
+   ],
+   "env": {
+    "HOME": "$T/home"
+   },
+   "files_before": {
+    "home/.codex": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config/.env": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "CP_AUTH_TOKEN=tok-crlf\r\nCP_PORT=8766\r\n"
+     }
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    }
+   },
+   "steps": [
+    {
+     "code": 0,
+     "stdout": {
+      "text": "ok: MCP hangar em $T/home/.claude.json\nok: recado pelo MCP hangar liberado em $T/home/.claude/settings.json\nok: MCP hangar em $T/home/.codex/config.toml\n"
+     },
+     "stderr": {
+      "text": ""
+     },
+     "created": {
+      "home/.claude": {
+       "type": "dir",
+       "mode": "0o755"
+      },
+      "home/.claude.json": {
+       "type": "file",
+       "mode": "0o600",
+       "content": {
+        "text": "{\n  \"mcpServers\": {\n    \"hangar\": {\n      \"type\": \"http\",\n      \"url\": \"http://127.0.0.1:8766/mcp/\",\n      \"headersHelper\": \"$T/home/.local/bin/hangar-mcp-headers\",\n      \"timeout\": 660000\n    }\n  }\n}"
+       }
+      },
+      "home/.claude/settings.json": {
+       "type": "file",
+       "mode": "0o644",
+       "content": {
+        "text": "{\n  \"permissions\": {\n    \"allow\": [\n      \"mcp__hangar__send\",\n      \"mcp__hangar__group\",\n      \"mcp__hangar__sessions\",\n      \"mcp__hangar__who_am_i\"\n    ]\n  }\n}\n"
+       }
+      },
+      "home/.codex/config.toml": {
+       "type": "file",
+       "mode": "0o600",
+       "content": {
+        "text": "# >>> hangar: mcp\n[mcp_servers.hangar]\nurl = \"http://127.0.0.1:8766/mcp/\"\ntool_timeout_sec = 660\nhttp_headers = { \"Authorization\" = \"Bearer tok-crlf\" }\nenv_http_headers = { \"X-Hangar-Key\" = \"CP_SESSION_KEY\", \"X-Hangar-Pane\" = \"TMUX_PANE\", \"X-Hangar-Session\" = \"CP_SESSION_NAME\", \"X-Hangar-Jev\" = \"HANGAR_JEV\" }\n# <<< hangar: mcp\n"
+       }
+      }
+     },
+     "changed": {},
+     "removed": []
+    }
+   ]
+  },
+  {
+   "case": "env-quoted-token-export-spaces",
+   "args": [
+    "$PY",
+    "-B",
+    "-s",
+    "$T/inst/scripts/registrar-mcp.py"
+   ],
+   "env": {
+    "HOME": "$T/home"
+   },
+   "files_before": {
+    "home/.codex": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config/.env": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "CP_AUTH_TOKEN = \"tok q\"\nexport CP_PORT=1\nCP_PORT=\n"
+     }
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    }
+   },
+   "steps": [
+    {
+     "code": 1,
+     "stdout": {
+      "text": "ok: MCP hangar em $T/home/.claude.json\nok: recado pelo MCP hangar liberado em $T/home/.claude/settings.json\n"
+     },
+     "stderr": {
+      "text": "Traceback (most recent call last):\n  File \"$T/inst/scripts/registrar-mcp.py\", line 180, in <module>\n    codex(url, env[\"CP_AUTH_TOKEN\"])\n    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"$T/inst/scripts/registrar-mcp.py\", line 161, in codex\n    novo = codex_config(texto, bloco)\n  File \"$T/inst/scripts/registrar-mcp.py\", line 140, in codex_config\n    if sem_marcado == texto and codex_has_hangar(texto, bloco):\n                                ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^\n  File \"$T/inst/scripts/registrar-mcp.py\", line 133, in codex_has_hangar\n    esperado = tomllib.loads(bloco)[\"mcp_servers\"][\"hangar\"]\n               ~~~~~~~~~~~~~^^^^^^^\n  File \"$PYHOME/lib/python3.14/tomllib/_parser.py\", line 182, in loads\n    pos = key_value_rule(src, pos, out, header, parse_float)\n  File \"$PYHOME/lib/python3.14/tomllib/_parser.py\", line 411, in key_value_rule\n    pos, key, value = parse_key_value_pair(src, pos, parse_float)\n                      ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^\n  File \"$PYHOME/lib/python3.14/tomllib/_parser.py\", line 454, in parse_key_value_pair\n    pos, value = parse_value(src, pos, parse_float)\n                 ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^\n  File \"$PYHOME/lib/python3.14/tomllib/_parser.py\", line 711, in parse_value\n    return parse_inline_table(src, pos, parse_float)\n  File \"$PYHOME/lib/python3.14/tomllib/_parser.py\", line 550, in parse_inline_table\n    raise TOMLDecodeError(\"Unclosed inline table\", src, pos)\ntomllib.TOMLDecodeError: Unclosed inline table (at line 5, column 45)\n"
+     },
+     "created": {
+      "home/.claude": {
+       "type": "dir",
+       "mode": "0o755"
+      },
+      "home/.claude.json": {
+       "type": "file",
+       "mode": "0o600",
+       "content": {
+        "text": "{\n  \"mcpServers\": {\n    \"hangar\": {\n      \"type\": \"http\",\n      \"url\": \"http://127.0.0.1:8765/mcp/\",\n      \"headersHelper\": \"$T/home/.local/bin/hangar-mcp-headers\",\n      \"timeout\": 660000\n    }\n  }\n}"
+       }
+      },
+      "home/.claude/settings.json": {
+       "type": "file",
+       "mode": "0o644",
+       "content": {
+        "text": "{\n  \"permissions\": {\n    \"allow\": [\n      \"mcp__hangar__send\",\n      \"mcp__hangar__group\",\n      \"mcp__hangar__sessions\",\n      \"mcp__hangar__who_am_i\"\n    ]\n  }\n}\n"
+       }
+      }
+     },
+     "changed": {},
+     "removed": []
+    }
+   ]
+  },
+  {
+   "case": "env-token-empty",
+   "args": [
+    "$PY",
+    "-B",
+    "-s",
+    "$T/inst/scripts/registrar-mcp.py"
+   ],
+   "env": {
+    "HOME": "$T/home"
+   },
+   "files_before": {
+    "home/.hangar": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config/.env": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "CP_AUTH_TOKEN=\n"
+     }
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    }
+   },
+   "steps": [
+    {
+     "code": 1,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": "erro: CP_AUTH_TOKEN ausente no backend/.env\n"
+     },
+     "created": {},
+     "changed": {},
+     "removed": []
+    }
+   ]
+  },
+  {
+   "case": "env-without-token",
+   "args": [
+    "$PY",
+    "-B",
+    "-s",
+    "$T/inst/scripts/registrar-mcp.py"
+   ],
+   "env": {
+    "HOME": "$T/home"
+   },
+   "files_before": {
+    "home/.hangar": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config/.env": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "CP_PORT=1\n"
+     }
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    }
+   },
+   "steps": [
+    {
+     "code": 1,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": "erro: CP_AUTH_TOKEN ausente no backend/.env\n"
+     },
+     "created": {},
+     "changed": {},
+     "removed": []
+    }
+   ]
+  },
+  {
+   "case": "fresh-home",
+   "args": [
+    "$PY",
+    "-B",
+    "-s",
+    "$T/inst/scripts/registrar-mcp.py"
+   ],
+   "env": {
+    "HOME": "$T/home"
+   },
+   "files_before": {
+    "home/.hangar": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config/.env": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "CP_AUTH_TOKEN=tok-local\n"
+     }
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    }
+   },
+   "steps": [
+    {
+     "code": 0,
+     "stdout": {
+      "text": "ok: MCP hangar em $T/home/.claude.json\nok: recado pelo MCP hangar liberado em $T/home/.claude/settings.json\n"
+     },
+     "stderr": {
+      "text": ""
+     },
+     "created": {
+      "home/.claude": {
+       "type": "dir",
+       "mode": "0o755"
+      },
+      "home/.claude.json": {
+       "type": "file",
+       "mode": "0o600",
+       "content": {
+        "text": "{\n  \"mcpServers\": {\n    \"hangar\": {\n      \"type\": \"http\",\n      \"url\": \"http://127.0.0.1:8765/mcp/\",\n      \"headersHelper\": \"$T/home/.local/bin/hangar-mcp-headers\",\n      \"timeout\": 660000\n    }\n  }\n}"
+       }
+      },
+      "home/.claude/settings.json": {
+       "type": "file",
+       "mode": "0o644",
+       "content": {
+        "text": "{\n  \"permissions\": {\n    \"allow\": [\n      \"mcp__hangar__send\",\n      \"mcp__hangar__group\",\n      \"mcp__hangar__sessions\",\n      \"mcp__hangar__who_am_i\"\n    ]\n  }\n}\n"
+       }
+      }
+     },
+     "changed": {},
+     "removed": []
+    }
+   ]
+  },
+  {
+   "case": "idempotent-two-runs",
+   "args": [
+    "$PY",
+    "-B",
+    "-s",
+    "$T/inst/scripts/registrar-mcp.py"
+   ],
+   "env": {
+    "HOME": "$T/home"
+   },
+   "files_before": {
+    "home/.codex": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config/.env": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "CP_AUTH_TOKEN=tok-local\n"
+     }
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    }
+   },
+   "steps": [
+    {
+     "code": 0,
+     "stdout": {
+      "text": "ok: MCP hangar em $T/home/.claude.json\nok: recado pelo MCP hangar liberado em $T/home/.claude/settings.json\nok: MCP hangar em $T/home/.codex/config.toml\n"
+     },
+     "stderr": {
+      "text": ""
+     },
+     "created": {
+      "home/.claude": {
+       "type": "dir",
+       "mode": "0o755"
+      },
+      "home/.claude.json": {
+       "type": "file",
+       "mode": "0o600",
+       "content": {
+        "text": "{\n  \"mcpServers\": {\n    \"hangar\": {\n      \"type\": \"http\",\n      \"url\": \"http://127.0.0.1:8765/mcp/\",\n      \"headersHelper\": \"$T/home/.local/bin/hangar-mcp-headers\",\n      \"timeout\": 660000\n    }\n  }\n}"
+       }
+      },
+      "home/.claude/settings.json": {
+       "type": "file",
+       "mode": "0o644",
+       "content": {
+        "text": "{\n  \"permissions\": {\n    \"allow\": [\n      \"mcp__hangar__send\",\n      \"mcp__hangar__group\",\n      \"mcp__hangar__sessions\",\n      \"mcp__hangar__who_am_i\"\n    ]\n  }\n}\n"
+       }
+      },
+      "home/.codex/config.toml": {
+       "type": "file",
+       "mode": "0o600",
+       "content": {
+        "text": "# >>> hangar: mcp\n[mcp_servers.hangar]\nurl = \"http://127.0.0.1:8765/mcp/\"\ntool_timeout_sec = 660\nhttp_headers = { \"Authorization\" = \"Bearer tok-local\" }\nenv_http_headers = { \"X-Hangar-Key\" = \"CP_SESSION_KEY\", \"X-Hangar-Pane\" = \"TMUX_PANE\", \"X-Hangar-Session\" = \"CP_SESSION_NAME\", \"X-Hangar-Jev\" = \"HANGAR_JEV\" }\n# <<< hangar: mcp\n"
+       }
+      }
+     },
+     "changed": {},
+     "removed": []
+    },
+    {
+     "code": 0,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": ""
+     },
+     "created": {},
+     "changed": {},
+     "removed": []
+    }
+   ]
+  },
+  {
+   "case": "no-env-file",
+   "args": [
+    "$PY",
+    "-B",
+    "-s",
+    "$T/inst/scripts/registrar-mcp.py"
+   ],
+   "env": {
+    "HOME": "$T/home"
+   },
+   "files_before": {
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    }
+   },
+   "steps": [
+    {
+     "code": 1,
+     "stdout": {
+      "text": ""
+     },
+     "stderr": {
+      "text": "Traceback (most recent call last):\n  File \"$T/inst/scripts/registrar-mcp.py\", line 172, in <module>\n    env = env_backend()\n  File \"$T/inst/scripts/registrar-mcp.py\", line 31, in env_backend\n    for linha in (env if env.exists() else REPO / \"backend\" / \".env\").read_text(encoding=\"utf-8\").splitlines():\n                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^\n  File \"$PYHOME/lib/python3.14/pathlib/__init__.py\", line 787, in read_text\n    with self.open(mode='r', encoding=encoding, errors=errors, newline=newline) as f:\n         ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"$PYHOME/lib/python3.14/pathlib/__init__.py\", line 771, in open\n    return io.open(self, mode, buffering, encoding, errors, newline)\n           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nFileNotFoundError: [Errno 2] No such file or directory: '$T/inst/backend/.env'\n"
+     },
+     "created": {},
+     "changed": {},
+     "removed": []
+    }
+   ]
+  },
+  {
+   "case": "settings-allow-string",
+   "args": [
+    "$PY",
+    "-B",
+    "-s",
+    "$T/inst/scripts/registrar-mcp.py"
+   ],
+   "env": {
+    "HOME": "$T/home"
+   },
+   "files_before": {
+    "home/.claude": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.claude/settings.json": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "{\n  \"permissions\": {\n    \"allow\": \"x\"\n  }\n}"
+     }
+    },
+    "home/.hangar/config": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config/.env": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "CP_AUTH_TOKEN=tok-local\n"
+     }
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    }
+   },
+   "steps": [
+    {
+     "code": 0,
+     "stdout": {
+      "text": "ok: MCP hangar em $T/home/.claude.json\n"
+     },
+     "stderr": {
+      "text": "aviso: $T/home/.claude/settings.json tem permissions num formato inesperado — liberação não gravada\n"
+     },
+     "created": {
+      "home/.claude.json": {
+       "type": "file",
+       "mode": "0o600",
+       "content": {
+        "text": "{\n  \"mcpServers\": {\n    \"hangar\": {\n      \"type\": \"http\",\n      \"url\": \"http://127.0.0.1:8765/mcp/\",\n      \"headersHelper\": \"$T/home/.local/bin/hangar-mcp-headers\",\n      \"timeout\": 660000\n    }\n  }\n}"
+       }
+      }
+     },
+     "changed": {},
+     "removed": []
+    }
+   ]
+  },
+  {
+   "case": "settings-crlf-no-newline",
+   "args": [
+    "$PY",
+    "-B",
+    "-s",
+    "$T/inst/scripts/registrar-mcp.py"
+   ],
+   "env": {
+    "HOME": "$T/home"
+   },
+   "files_before": {
+    "home/.claude": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.claude/settings.json": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "{\r\n  \"a\": 1\r\n}"
+     }
+    },
+    "home/.hangar/config": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config/.env": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "CP_AUTH_TOKEN=tok-local\n"
+     }
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    }
+   },
+   "steps": [
+    {
+     "code": 0,
+     "stdout": {
+      "text": "ok: MCP hangar em $T/home/.claude.json\nok: recado pelo MCP hangar liberado em $T/home/.claude/settings.json\n"
+     },
+     "stderr": {
+      "text": ""
+     },
+     "created": {
+      "home/.claude.json": {
+       "type": "file",
+       "mode": "0o600",
+       "content": {
+        "text": "{\n  \"mcpServers\": {\n    \"hangar\": {\n      \"type\": \"http\",\n      \"url\": \"http://127.0.0.1:8765/mcp/\",\n      \"headersHelper\": \"$T/home/.local/bin/hangar-mcp-headers\",\n      \"timeout\": 660000\n    }\n  }\n}"
+       }
+      }
+     },
+     "changed": {
+      "home/.claude/settings.json": {
+       "type": "file",
+       "mode": "0o644",
+       "content": {
+        "text": "{\n  \"a\": 1,\n  \"permissions\": {\n    \"allow\": [\n      \"mcp__hangar__send\",\n      \"mcp__hangar__group\",\n      \"mcp__hangar__sessions\",\n      \"mcp__hangar__who_am_i\"\n    ]\n  }\n}\n"
+       }
+      }
+     },
+     "removed": []
+    }
+   ]
+  },
+  {
+   "case": "settings-invalid-json",
+   "args": [
+    "$PY",
+    "-B",
+    "-s",
+    "$T/inst/scripts/registrar-mcp.py"
+   ],
+   "env": {
+    "HOME": "$T/home"
+   },
+   "files_before": {
+    "home/.claude": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.claude/settings.json": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "{"
+     }
+    },
+    "home/.hangar/config": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config/.env": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "CP_AUTH_TOKEN=tok-local\n"
+     }
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    }
+   },
+   "steps": [
+    {
+     "code": 0,
+     "stdout": {
+      "text": "ok: MCP hangar em $T/home/.claude.json\n"
+     },
+     "stderr": {
+      "text": "aviso: $T/home/.claude/settings.json ilegível — liberação do recado não gravada\n"
+     },
+     "created": {
+      "home/.claude.json": {
+       "type": "file",
+       "mode": "0o600",
+       "content": {
+        "text": "{\n  \"mcpServers\": {\n    \"hangar\": {\n      \"type\": \"http\",\n      \"url\": \"http://127.0.0.1:8765/mcp/\",\n      \"headersHelper\": \"$T/home/.local/bin/hangar-mcp-headers\",\n      \"timeout\": 660000\n    }\n  }\n}"
+       }
+      }
+     },
+     "changed": {},
+     "removed": []
+    }
+   ]
+  },
+  {
+   "case": "settings-not-object",
+   "args": [
+    "$PY",
+    "-B",
+    "-s",
+    "$T/inst/scripts/registrar-mcp.py"
+   ],
+   "env": {
+    "HOME": "$T/home"
+   },
+   "files_before": {
+    "home/.claude": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.claude/settings.json": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "[\n  1\n]"
+     }
+    },
+    "home/.hangar/config": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config/.env": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "CP_AUTH_TOKEN=tok-local\n"
+     }
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    }
+   },
+   "steps": [
+    {
+     "code": 0,
+     "stdout": {
+      "text": "ok: MCP hangar em $T/home/.claude.json\n"
+     },
+     "stderr": {
+      "text": "aviso: $T/home/.claude/settings.json tem permissions num formato inesperado — liberação não gravada\n"
+     },
+     "created": {
+      "home/.claude.json": {
+       "type": "file",
+       "mode": "0o600",
+       "content": {
+        "text": "{\n  \"mcpServers\": {\n    \"hangar\": {\n      \"type\": \"http\",\n      \"url\": \"http://127.0.0.1:8765/mcp/\",\n      \"headersHelper\": \"$T/home/.local/bin/hangar-mcp-headers\",\n      \"timeout\": 660000\n    }\n  }\n}"
+       }
+      }
+     },
+     "changed": {},
+     "removed": []
+    }
+   ]
+  },
+  {
+   "case": "settings-partial-perms-order",
+   "args": [
+    "$PY",
+    "-B",
+    "-s",
+    "$T/inst/scripts/registrar-mcp.py"
+   ],
+   "env": {
+    "HOME": "$T/home"
+   },
+   "files_before": {
+    "home/.claude": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.claude/settings.json": {
+     "type": "file",
+     "mode": "0o600",
+     "content": {
+      "text": "{\n  \"permissions\": {\n    \"allow\": [\n      \"Bash(ls:*)\",\n      \"mcp__hangar__group\"\n    ],\n    \"deny\": []\n  },\n  \"x\": \"\\u00e7\"\n}"
+     }
+    },
+    "home/.hangar/config": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config/.env": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "CP_AUTH_TOKEN=tok-local\n"
+     }
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    }
+   },
+   "steps": [
+    {
+     "code": 0,
+     "stdout": {
+      "text": "ok: MCP hangar em $T/home/.claude.json\nok: recado pelo MCP hangar liberado em $T/home/.claude/settings.json\n"
+     },
+     "stderr": {
+      "text": ""
+     },
+     "created": {
+      "home/.claude.json": {
+       "type": "file",
+       "mode": "0o600",
+       "content": {
+        "text": "{\n  \"mcpServers\": {\n    \"hangar\": {\n      \"type\": \"http\",\n      \"url\": \"http://127.0.0.1:8765/mcp/\",\n      \"headersHelper\": \"$T/home/.local/bin/hangar-mcp-headers\",\n      \"timeout\": 660000\n    }\n  }\n}"
+       }
+      }
+     },
+     "changed": {
+      "home/.claude/settings.json": {
+       "type": "file",
+       "mode": "0o644",
+       "content": {
+        "text": "{\n  \"permissions\": {\n    \"allow\": [\n      \"Bash(ls:*)\",\n      \"mcp__hangar__group\",\n      \"mcp__hangar__send\",\n      \"mcp__hangar__sessions\",\n      \"mcp__hangar__who_am_i\"\n    ],\n    \"deny\": []\n  },\n  \"x\": \"ç\"\n}\n"
+       }
+      }
+     },
+     "removed": []
+    }
+   ]
+  },
+  {
+   "case": "settings-permissions-list",
+   "args": [
+    "$PY",
+    "-B",
+    "-s",
+    "$T/inst/scripts/registrar-mcp.py"
+   ],
+   "env": {
+    "HOME": "$T/home"
+   },
+   "files_before": {
+    "home/.claude": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.claude/settings.json": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "{\n  \"permissions\": []\n}"
+     }
+    },
+    "home/.hangar/config": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/config/.env": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "CP_AUTH_TOKEN=tok-local\n"
+     }
+    },
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    }
+   },
+   "steps": [
+    {
+     "code": 0,
+     "stdout": {
+      "text": "ok: MCP hangar em $T/home/.claude.json\n"
+     },
+     "stderr": {
+      "text": "aviso: $T/home/.claude/settings.json tem permissions num formato inesperado — liberação não gravada\n"
+     },
+     "created": {
+      "home/.claude.json": {
+       "type": "file",
+       "mode": "0o600",
+       "content": {
+        "text": "{\n  \"mcpServers\": {\n    \"hangar\": {\n      \"type\": \"http\",\n      \"url\": \"http://127.0.0.1:8765/mcp/\",\n      \"headersHelper\": \"$T/home/.local/bin/hangar-mcp-headers\",\n      \"timeout\": 660000\n    }\n  }\n}"
+       }
+      }
+     },
+     "changed": {},
+     "removed": []
+    }
+   ]
+  },
+  {
+   "case": "unicode-home-path",
+   "args": [
+    "$PY",
+    "-B",
+    "-s",
+    "$T/inst/scripts/registrar-mcp.py"
+   ],
+   "env": {
+    "HOME": "$T/casa Área ç"
+   },
+   "files_before": {
+    "inst/scripts": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "casa Área ç/.codex": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "casa Área ç/.hangar": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "casa Área ç/.hangar/config": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "casa Área ç/.hangar/config/.env": {
+     "type": "file",
+     "mode": "0o644",
+     "content": {
+      "text": "CP_AUTH_TOKEN=tok-local\n"
+     }
+    }
+   },
+   "steps": [
+    {
+     "code": 0,
+     "stdout": {
+      "text": "ok: MCP hangar em $T/casa Área ç/.claude.json\nok: recado pelo MCP hangar liberado em $T/casa Área ç/.claude/settings.json\nok: MCP hangar em $T/casa Área ç/.codex/config.toml\n"
+     },
+     "stderr": {
+      "text": ""
+     },
+     "created": {
+      "casa Área ç/.claude": {
+       "type": "dir",
+       "mode": "0o755"
+      },
+      "casa Área ç/.claude.json": {
+       "type": "file",
+       "mode": "0o600",
+       "content": {
+        "text": "{\n  \"mcpServers\": {\n    \"hangar\": {\n      \"type\": \"http\",\n      \"url\": \"http://127.0.0.1:8765/mcp/\",\n      \"headersHelper\": \"$T/casa \\u00c1rea \\u00e7/.local/bin/hangar-mcp-headers\",\n      \"timeout\": 660000\n    }\n  }\n}"
+       }
+      },
+      "casa Área ç/.claude/settings.json": {
+       "type": "file",
+       "mode": "0o644",
+       "content": {
+        "text": "{\n  \"permissions\": {\n    \"allow\": [\n      \"mcp__hangar__send\",\n      \"mcp__hangar__group\",\n      \"mcp__hangar__sessions\",\n      \"mcp__hangar__who_am_i\"\n    ]\n  }\n}\n"
+       }
+      },
+      "casa Área ç/.codex/config.toml": {
+       "type": "file",
+       "mode": "0o600",
+       "content": {
+        "text": "# >>> hangar: mcp\n[mcp_servers.hangar]\nurl = \"http://127.0.0.1:8765/mcp/\"\ntool_timeout_sec = 660\nhttp_headers = { \"Authorization\" = \"Bearer tok-local\" }\nenv_http_headers = { \"X-Hangar-Key\" = \"CP_SESSION_KEY\", \"X-Hangar-Pane\" = \"TMUX_PANE\", \"X-Hangar-Session\" = \"CP_SESSION_NAME\", \"X-Hangar-Jev\" = \"HANGAR_JEV\" }\n# <<< hangar: mcp\n"
+       }
+      }
+     },
+     "changed": {},
+     "removed": []
+    }
+   ]
+  }
+ ]
+}
