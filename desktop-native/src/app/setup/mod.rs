@@ -23,7 +23,6 @@ mod tail;
 mod wizard;
 
 pub(super) use wizard::SetupWizard;
-pub(crate) use wizard::{stop_agent_process, sweep_group};
 pub(crate) use app_copy::target as installed_app_target;
 
 /// O assistente existe onde há script de instalação com modo `--app`.

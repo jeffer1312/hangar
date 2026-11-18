@@ -6,7 +6,7 @@ use super::agent_fix::{self, Action, Choice, Progress, StepState};
 use super::down::{Attempt, Fix, big_icon, down_model, spinner};
 use super::model::fill;
 use super::super::setup::agent::{self as setup_agent, Agent};
-use hangar_local_server::{LocalState, Os, STARTING_LIMIT};
+use hangar_local_server::{Host, LocalState, Os, STARTING_LIMIT, ServiceState};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::app) enum RunPhase {
@@ -31,6 +31,8 @@ pub(in crate::app) struct AgentRun {
     handle: agent_fix::Handle,
     stop_requested: bool,
     stop_failed: bool,
+    /// O teto passou com um Parar ainda em curso: se esse falhar, o teto tenta de novo.
+    cap_pending: bool,
     steps_open: bool,
     diagnosis: String,
     tasks: Vec<Task<()>>,
@@ -40,7 +42,7 @@ pub(in crate::app) struct AgentRun {
 impl Drop for AgentRun {
     // Descartada com o agente vivo (troca de servidor, outra execução): ele não segue sozinho.
     fn drop(&mut self) {
-        if let Some((pid, identity)) = agent_fix::abandon(&self.handle) { std::thread::spawn(move || { agent_fix::stop(pid, &identity); }); }
+        if let Some(owner) = agent_fix::abandon(&self.handle) { std::thread::spawn(move || { agent_fix::stop(&owner); }); }
     }
 }
 
@@ -108,15 +110,31 @@ fn outcome_text(run: &AgentRun) -> String {
     }
 }
 
-/// Fora da janela: lê o servidor desta máquina até sair do "subindo" (o agente pode ter acabado de pedir a subida).
+/// Fora da janela: lê o servidor desta máquina até sair do "subindo" (o agente pode ter acabado de pedir a subida). De pé,
+/// a versão é a de quem respondeu, não a do `current`: trocado com a versão antiga de pé, seriam outras.
 fn check(home: std::path::PathBuf) -> (LocalState, Option<String>) {
     let (server, _) = super::down::local_server(&home);
     let deadline = Instant::now() + STARTING_LIMIT;
     loop {
         let state = server.probe();
-        if state != LocalState::Starting || Instant::now() >= deadline { return (state, server.versions().current); }
+        if state == LocalState::Running { return (state, answered_version(&server)); }
+        let rising = state == LocalState::Starting
+            || matches!(state, LocalState::Stopped { .. }) && restarting(server.service().state, server.os);
+        if !rising || Instant::now() >= deadline { return (state, None); }
         std::thread::sleep(super::down::STARTING_POLL);
     }
+}
+
+/// O gerenciador ainda vai religar: a espera do `systemd`/`launchd`, ou a tarefa do Windows de pé com o lançador
+/// esperando para subir o `hangar-server` (a leitura crua diz `Running`). A leitura da tela chama isso de falha.
+fn restarting(raw: ServiceState, os: Os) -> bool {
+    raw == ServiceState::Restarting || (os == Os::Windows && raw == ServiceState::Running)
+}
+
+/// O `package_version` da saúde; ausente fora de pacote ou se a resposta mudou.
+fn answered_version(server: &hangar_local_server::LocalServer) -> Option<String> {
+    let reply = server.host.get(server.port, "/__hangar_server/health").filter(|reply| reply.status == 200)?;
+    serde_json::from_str::<serde_json::Value>(&reply.body).ok()?.get("package_version")?.as_str().map(str::to_owned)
 }
 
 impl Hangar {
@@ -154,13 +172,13 @@ impl Hangar {
         // Antes de subir: fechar o app enquanto o agente ainda sobe também o encerra (quem sobe confere a marca).
         let on_quit = handle.clone();
         let quit = cx.on_app_quit(move |_, _| {
-            if let Some((pid, identity)) = agent_fix::abandon(&on_quit) { agent_fix::kill_now(pid, &identity); }
+            if let Some(owner) = agent_fix::abandon(&on_quit) { agent_fix::kill_now(&owner); }
             async {}
         });
         // A anterior (já acabada) sai daqui: só uma execução por página.
         self.device.status.fix = Some(AgentRun { agent, id, started: Instant::now(), ended: None, progress: Progress::default(),
-            phase: RunPhase::Starting, handle: handle.clone(), stop_requested: false, stop_failed: false, steps_open: false, diagnosis,
-            tasks: Vec::new(), _quit: Some(quit) });
+            phase: RunPhase::Starting, handle: handle.clone(), stop_requested: false, stop_failed: false, cap_pending: false,
+            steps_open: false, diagnosis, tasks: Vec::new(), _quit: Some(quit) });
         let (done, started) = tokio::sync::oneshot::channel();
         self.runtime.spawn_blocking(move || { let _ = done.send(agent_fix::start(agent, prompt, &home, &handle)); });
         let reader = cx.spawn(async move |this, cx| {
@@ -184,7 +202,10 @@ impl Hangar {
         // O mesmo teto do conserto do instalador: passou, para como o "Parar".
         let cap = cx.spawn(async move |this, cx| {
             cx.background_executor().timer(setup_agent::MAX_RUN).await;
-            let _ = this.update(cx, |this, cx| this.agent_stop(id, cx));
+            let _ = this.update(cx, |this, cx| {
+                if let Some(run) = this.device.status.fix.as_mut().filter(|run| run.id == id && run.active()) { run.cap_pending = true; }
+                this.agent_stop(id, cx);
+            });
         });
         if let Some(run) = self.device.status.fix.as_mut() { run.tasks.extend([reader, tick, cap]); }
         cx.notify();
@@ -200,7 +221,7 @@ impl Hangar {
                 cx.notify();
                 Some(output)
             }
-            // Parado (ou no teto) antes de subir: quem subiu viu a marca e o encerrou.
+            // Parado (ou no teto) antes de o agente nascer: nada rodou, não há o que reler.
             Err(error) if error == agent_fix::ABANDONED => {
                 (run.ended, run.phase) = (Some(run.started.elapsed()), RunPhase::Failed { error: None });
                 cx.notify();
@@ -221,16 +242,14 @@ impl Hangar {
             setup_agent::Output::Line(line) => { let (agent, at) = (run.agent, run.started.elapsed()); run.progress.feed(agent, &line, at); }
             setup_agent::Output::Exit(ended) => {
                 (run.ended, run.phase, run.progress.exit) = (Some(run.started.elapsed()), RunPhase::Checking, Some(ended));
-                let process = agent_fix::exited(&run.handle);
+                // O grupo dele já saiu junto (`agent::spawn`).
+                agent_fix::exited(&run.handle);
                 let Some(home) = std::env::home_dir() else {
                     run.phase = RunPhase::Failed { error: Some("HOME".to_owned()) };
                     return cx.notify();
                 };
                 let (done, checked) = tokio::sync::oneshot::channel();
-                self.runtime.spawn_blocking(move || {
-                    if let Some((pid, identity)) = process { agent_fix::sweep(pid, &identity); }
-                    let _ = done.send(check(home));
-                });
+                self.runtime.spawn_blocking(move || { let _ = done.send(check(home)); });
                 let task = cx.spawn(async move |this, cx| {
                     let checked = checked.await.ok();
                     let _ = this.update(cx, |this, cx| this.agent_checked(id, checked, cx));
@@ -257,17 +276,21 @@ impl Hangar {
     /// à releitura do servidor.
     fn agent_stop(&mut self, id: u64, cx: &mut Context<Self>) {
         let Some(run) = self.device.status.fix.as_mut().filter(|run| run.id == id && run.stoppable()) else { return };
-        (run.stop_requested, run.stop_failed) = (true, false);
+        (run.stop_requested, run.stop_failed, run.cap_pending) = (true, false, false);
         // Ainda subindo sem processo: a marca basta, quem sobe o encerra e a execução acaba como parada.
         let process = if run.phase == RunPhase::Starting { agent_fix::stop_mark(&run.handle) } else { agent_fix::process(&run.handle) };
-        let Some((pid, identity)) = process else { return cx.notify() };
+        let Some(owner) = process else { return cx.notify() };
         let (done, stopped) = tokio::sync::oneshot::channel();
-        self.runtime.spawn_blocking(move || { let _ = done.send(agent_fix::stop(pid, &identity)); });
+        self.runtime.spawn_blocking(move || { let _ = done.send(agent_fix::stop(&owner)); });
         let task = cx.spawn(async move |this, cx| {
-            // Sem identidade conferida o agente não é sinalizado e segue rodando: a tela diz isso.
+            // Sobreviveu à força: a tela diz isso e o Parar volta.
             if stopped.await.unwrap_or(false) { return; }
             let _ = this.update(cx, |this, cx| {
-                if let Some(run) = this.device.status.fix.as_mut().filter(|run| run.id == id) { run.stop_failed = true; cx.notify(); }
+                let Some(run) = this.device.status.fix.as_mut().filter(|run| run.id == id) else { return };
+                run.stop_failed = true;
+                let retry = run.cap_pending;
+                if retry { this.agent_stop(id, cx); }
+                cx.notify();
             });
         });
         run.tasks.push(task);
@@ -412,6 +435,9 @@ impl Hangar {
                 }))))
             .child(Button::new("status-agent-report").ghost().small().icon(IconName::Copy).label(tr("status_agent_copy_report"))
                 .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(text.clone()))))
+            // Sem conserto guiado nem outro agente, é a saída da falha: o diagnóstico volta, com o botão do agente.
+            .child(Button::new("status-agent-back").ghost().small().label(tr("status_agent_see_status"))
+                .on_click(cx.listener(|this, _, _, cx| this.agent_dismiss(cx))))
             .into_any_element()
     }
 
@@ -481,5 +507,15 @@ mod tests {
         // O Parar não alcançou o processo: o teto e um novo clique tentam de novo.
         assert!(can_stop(&RunPhase::Running, true, true) && can_stop(&RunPhase::Starting, true, true));
         assert!(!can_stop(&RunPhase::Checking, true, true) && !can_stop(&RunPhase::Failed { error: None }, false, false));
+    }
+
+    #[test]
+    fn the_check_waits_while_the_manager_will_restart_the_server() {
+        assert!(restarting(ServiceState::Restarting, Os::Linux) && restarting(ServiceState::Restarting, Os::Macos));
+        // A tarefa do Windows segue `Running` com o lançador esperando para religar.
+        assert!(restarting(ServiceState::Running, Os::Windows));
+        // No Linux, `Running` com a porta muda é a subida presa: não espera.
+        assert!(!restarting(ServiceState::Running, Os::Linux));
+        assert!(!restarting(ServiceState::Failed, Os::Windows) && !restarting(ServiceState::Stopped, Os::Linux));
     }
 }

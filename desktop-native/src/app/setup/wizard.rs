@@ -144,6 +144,8 @@ pub(crate) struct AgentRun {
     pub(super) timed_out: bool,
     /// "Parar" sem identidade do processo: ele segue rodando, e a tela diz isso.
     pub(super) not_stopped: bool,
+    /// O app pediu a parada (Parar ou o teto): a saída com erro que vem depois não é falha do agente.
+    stopped: bool,
     /// Desfazendo: a resposta da tarefa que desfaz, para quem fechar no meio mandar o relatório com o diff.
     restore_done: Option<tokio::sync::oneshot::Receiver<repo::Restored>>,
 }
@@ -151,7 +153,7 @@ pub(crate) struct AgentRun {
 impl AgentRun {
     fn new(agent: Agent, number: u64) -> Self {
         Self { agent, phase: AgentPhase::Starting, transcript: agent::Transcript::default(), number, pid: None, started: String::new(),
-            snapshot: None, restored: None, timed_out: false, not_stopped: false, restore_done: None }
+            snapshot: None, restored: None, timed_out: false, not_stopped: false, stopped: false, restore_done: None }
     }
 
     /// Subindo, trabalhando ou desfazendo: a pasta é dele, nada mais roda nela.
@@ -174,7 +176,7 @@ fn start_agent(agent: Agent, report: &str, dest: &Path, options: &Options, state
     let mut snapshot = repo::snapshot(dest)?;
     repo::save_at(state_dir, &snapshot).map_err(|e| e.to_string())?;
     let (pid, output) = match agent::spawn(launch) {
-        Ok(spawned) => spawned,
+        Ok((owner, output)) => (owner.pid(), output),
         Err(why) => { repo::clear_at(state_dir); return Err(why); }
     };
     // Gone = já saiu (o `Exit` chega pela saída); Unknown depois das tentativas fica sem identidade e nunca é parado.
@@ -237,8 +239,8 @@ fn stop_plan(recorded: &str, now: &run::Identity) -> StopPlan {
 }
 
 /// Pára o agente e espera ele sair — uma última escrita depois de desfazer passaria —; ainda vivo em 10 s, mata sem
-/// escolha. Só sinaliza com a identidade conferida agora; `false` = não deu para conferir (quem chama avisa e desfaz
-/// mesmo assim). Bloqueia: só fora da janela.
+/// escolha. Só sinaliza com a identidade conferida agora; `false` = não deu para conferir ou ele sobreviveu à força (quem
+/// chama avisa e desfaz mesmo assim). Bloqueia: só fora da janela.
 pub(crate) fn stop_agent_process(pid: u32, started: &str) -> bool {
     match stop_plan(started, &run::read_identity(pid)) {
         StopPlan::Gone => {
@@ -252,12 +254,13 @@ pub(crate) fn stop_agent_process(pid: u32, started: &str) -> bool {
         StopPlan::Signal => {}
     }
     run::stop(pid, started);
-    if !wait_gone(pid, started, Duration::from_secs(10)) {
+    let gone = wait_gone(pid, started, Duration::from_secs(10)) || {
         run::kill(pid, started);
-        if !wait_gone(pid, started, Duration::from_secs(3)) { crate::log_line(&format!("assistente: agente {pid} não saiu nem morto")); }
-    }
+        wait_gone(pid, started, Duration::from_secs(3))
+    };
+    if !gone { crate::log_line(&format!("assistente: agente {pid} não saiu nem morto")); }
     sweep_group(pid);
-    true
+    gone
 }
 
 /// O líder conferido saiu, mas um comando dele pode seguir no grupo e escrever na pasta depois de desfeita. Enquanto o
@@ -1080,12 +1083,8 @@ impl SetupWizard {
                 if exited { break; }
             }
             let Ok(Some((snapshot, done))) = this.update(cx, |w, cx| w.take_snapshot(cx)) else { return };
-            let restored = cx.background_executor().spawn(async move {
-                // Saiu sozinho: um filho dele ainda vivo no grupo escreveria na pasta depois de desfeita. Só com a
-                // identidade conferida na largada o grupo é sabidamente dele.
-                if let Some(pid) = snapshot.agent_pid.filter(|_| !snapshot.agent_started.is_empty()) { sweep_group(pid); }
-                finish_restore(snapshot)
-            }).await;
+            // O grupo dele já saiu com ele (`agent::spawn`): nenhum filho escreve na pasta depois de desfeita.
+            let restored = cx.background_executor().spawn(async move { finish_restore(snapshot) }).await;
             // Fechado enquanto desfazia: quem fechou espera esta resposta para mandar o relatório com o diff.
             let _ = done.send(restored.clone());
             let _ = window.update(cx, |_, window, cx| this.update(cx, |w, cx| w.recheck_after_agent(restored, window, cx)));
@@ -1124,7 +1123,11 @@ impl SetupWizard {
         let Some(run) = self.agent.as_mut() else { return };
         match item {
             agent::Output::Line(line) => { let agent = run.agent; run.transcript.feed(agent, &line); }
-            agent::Output::Exit(_) => { run.pid = None; run.phase = AgentPhase::Restoring; }
+            agent::Output::Exit(ended) => {
+                run.transcript.exited(&ended, run.stopped);
+                run.pid = None;
+                run.phase = AgentPhase::Restoring;
+            }
         }
         cx.notify();
     }
@@ -1160,6 +1163,7 @@ impl SetupWizard {
             return cx.notify();
         }
         let started = run.started.clone();
+        run.stopped = true;
         cx.background_executor().spawn(async move { stop_agent_process(pid, &started) }).detach();
         cx.notify();
     }

@@ -90,18 +90,20 @@ fn logged_in(agent: Agent, program: &Path, env: &[(String, String)]) -> bool {
     match agent { Agent::Claude => claude_logged_in(&stdout), Agent::Codex => success }
 }
 
-/// Saída de um comando curto com teto: um CLI travado não segura o painel da falha.
+/// Saída de um comando curto com teto: um CLI travado não segura o painel da falha. `None` quando o teto passa, também
+/// esperando a saída: um descendente que herdou o `stdout` o segura aberto depois que o comando sai.
 pub(crate) fn run_within(command: &mut Command, limit: Duration) -> Option<(bool, String)> {
     let mut child = command.stdout(Stdio::piped()).stderr(Stdio::null()).spawn().ok()?;
     let mut stdout = child.stdout.take()?;
-    let reader = std::thread::spawn(move || { let mut text = String::new(); let _ = stdout.read_to_string(&mut text); text });
+    let (tx, text) = std::sync::mpsc::channel();
+    std::thread::spawn(move || { let mut text = String::new(); let _ = stdout.read_to_string(&mut text); let _ = tx.send(text); });
     let started = Instant::now();
     let status = loop {
         if let Ok(Some(status)) = child.try_wait() { break status; }
         if started.elapsed() > limit { let _ = child.kill(); let _ = child.wait(); return None; }
         std::thread::sleep(Duration::from_millis(100));
     };
-    Some((status.success(), reader.join().ok()?))
+    Some((status.success(), text.recv_timeout(limit.saturating_sub(started.elapsed())).ok()?))
 }
 
 /// `home` e a pasta do Hangar são os únicos lugares onde o agente escreve por ferramenta; o prompt vai pela entrada.
@@ -216,6 +218,11 @@ impl Transcript {
             _ => {}
         }
     }
+
+    /// Sair com erro sem evento de erro também é falha do agente; parado pelo app (Parar ou o teto), não.
+    pub(crate) fn exited(&mut self, ended: &Ended, stopped_by_app: bool) {
+        if !ended.success() && !stopped_by_app { self.failed = true; }
+    }
 }
 
 pub(crate) enum Output { Line(String), Exit(Ended) }
@@ -244,15 +251,78 @@ pub(crate) struct Launch {
     pub prompt: String,
 }
 
-/// Sobe o agente destacado (sessão própria no Linux, sem janela no Windows), com o ambiente exatamente o de `env`.
-pub(crate) fn spawn(launch: Launch) -> Result<(u32, async_channel::Receiver<Output>), String> {
+/// Quanto o fim espera a leitura da saída depois que o agente saiu: um descendente fora do grupo (no Windows, qualquer
+/// um) pode segurar o cano aberto.
+const READ_GRACE: Duration = Duration::from_secs(3);
+
+/// O agente enquanto não foi recolhido: até lá o número dele (e o do grupo, no Linux) não volta a ser usado, e sinalizar
+/// por ele nunca alcança outro processo. Quem recolhe marca a saída antes, sob a mesma trava do sinal.
+#[derive(Debug)]
+pub(crate) struct Owner {
+    pid: u32,
+    exited: std::sync::Mutex<bool>,
+    changed: std::sync::Condvar,
+}
+
+impl Owner {
+    fn new(pid: u32) -> Owner { Owner { pid, exited: std::sync::Mutex::new(false), changed: std::sync::Condvar::new() } }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, bool> { self.exited.lock().unwrap_or_else(|e| e.into_inner()) }
+
+    pub(crate) fn pid(&self) -> u32 { self.pid }
+
+    pub(crate) fn has_exited(&self) -> bool { *self.lock() }
+
+    /// O pedido de saída (`force`: SIGKILL) ao agente e ao grupo dele; no Windows, a árvore à força. `false` = já tinha
+    /// saído, nada foi sinalizado.
+    pub(crate) fn signal(&self, force: bool) -> bool {
+        let exited = self.lock();
+        if *exited { return false; }
+        #[cfg(target_os = "linux")]
+        unsafe { libc::kill(-(self.pid as i32), if force { libc::SIGKILL } else { libc::SIGTERM }); }
+        #[cfg(windows)]
+        {
+            let _ = force;
+            let out = super::system::hidden(&mut Command::new("taskkill")).args(["/PID", &self.pid.to_string(), "/T", "/F"]).output();
+            if !out.is_ok_and(|out| out.status.success()) { crate::log_line(&format!("agente {}: taskkill recusou", self.pid)); }
+        }
+        #[cfg(not(any(target_os = "linux", windows)))]
+        let _ = force;
+        drop(exited);
+        true
+    }
+
+    /// Espera a saída até `limit`; `true` = saiu.
+    pub(crate) fn wait_exit(&self, limit: Duration) -> bool {
+        let exited = self.lock();
+        let (exited, _) = self.changed.wait_timeout_while(exited, limit, |exited| !*exited).unwrap_or_else(|e| e.into_inner());
+        *exited
+    }
+
+    fn mark_exited(&self) {
+        *self.lock() = true;
+        self.changed.notify_all();
+    }
+}
+
+/// Espera o agente sair sem recolhê-lo: o zumbi segura o número do grupo enquanto o resto dele é encerrado.
+#[cfg(target_os = "linux")]
+fn wait_unreaped(pid: u32) {
+    let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+    while unsafe { libc::waitid(libc::P_PID, pid as libc::id_t, &mut info, libc::WEXITED | libc::WNOWAIT) } != 0
+        && std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {}
+}
+
+/// Sobe o agente destacado (sessão própria no Linux, sem janela no Windows), com o ambiente exatamente o de `env`. Ao
+/// sair, o grupo dele sai junto (um `journalctl -f`, um servidor subido à mão), e só então chega o `Exit`.
+pub(crate) fn spawn(launch: Launch) -> Result<(std::sync::Arc<Owner>, async_channel::Receiver<Output>), String> {
     std::fs::create_dir_all(&launch.work).map_err(|e| e.to_string())?;
     let mut command = Command::new(&launch.program);
     command.args(&launch.args).current_dir(&launch.work).env_clear().envs(launch.env.iter().map(|(k, v)| (k, v)))
         .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
     run::detach(&mut command);
     let mut child = command.spawn().map_err(|e| e.to_string())?;
-    let pid = child.id();
+    let owner = std::sync::Arc::new(Owner::new(child.id()));
     let (tx, rx) = async_channel::unbounded();
     let (stdin, stdout, stderr) = (child.stdin.take(), child.stdout.take(), child.stderr.take());
     let prompt = launch.prompt;
@@ -260,8 +330,10 @@ pub(crate) fn spawn(launch: Launch) -> Result<(u32, async_channel::Receiver<Outp
     std::thread::spawn(move || { if let Some(mut stdin) = stdin { let _ = stdin.write_all(prompt.as_bytes()); } });
     let pipes: Vec<Box<dyn Read + Send>> = [stdout.map(|p| Box::new(p) as Box<dyn Read + Send>), stderr.map(|p| Box::new(p) as Box<dyn Read + Send>)]
         .into_iter().flatten().collect();
-    let readers: Vec<_> = pipes.into_iter().map(|pipe| {
-        let tx = tx.clone();
+    let readers = pipes.len();
+    let (read_done, reads) = std::sync::mpsc::channel();
+    for pipe in pipes {
+        let (tx, read_done) = (tx.clone(), read_done.clone());
         std::thread::spawn(move || {
             // Byte inválido vira U+FFFD: parar de ler deixaria o agente travado no cano cheio.
             let (mut reader, mut buf) = (BufReader::new(pipe), Vec::new());
@@ -270,14 +342,33 @@ pub(crate) fn spawn(launch: Launch) -> Result<(u32, async_channel::Receiver<Outp
                 let _ = tx.send_blocking(Output::Line(line));
                 buf.clear();
             }
-        })
-    }).collect();
+            let _ = read_done.send(());
+        });
+    }
+    let waiter = owner.clone();
     std::thread::spawn(move || {
-        let ended = Ended::of(child.wait());
-        for reader in readers { let _ = reader.join(); }
+        #[cfg(target_os = "linux")]
+        let ended = {
+            let pid = waiter.pid();
+            wait_unreaped(pid);
+            run::kill_group(pid);
+            // Marcada antes de recolher: depois do `wait` o número pode ser de outro.
+            waiter.mark_exited();
+            Ended::of(child.wait())
+        };
+        // No Windows o `Child` segura o processo até o fim deste bloco: o número não volta a ser usado antes da marca.
+        #[cfg(not(target_os = "linux"))]
+        let ended = { let ended = Ended::of(child.wait()); waiter.mark_exited(); ended };
+        let deadline = Instant::now() + READ_GRACE;
+        for _ in 0..readers {
+            if reads.recv_timeout(deadline.saturating_duration_since(Instant::now())).is_err() {
+                crate::log_line(&format!("agente {}: saída ainda aberta depois do fim; seguindo sem ela", waiter.pid()));
+                break;
+            }
+        }
         let _ = tx.send_blocking(Output::Exit(ended));
     });
-    Ok((pid, rx))
+    Ok((owner, rx))
 }
 
 #[cfg(test)]
@@ -412,5 +503,75 @@ mod tests {
         };
         assert_eq!(ended, Some(Ended::Signal(9)));
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[cfg(target_os = "linux")]
+    fn script(dir: &Path, name: &str, body: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::create_dir_all(dir).unwrap();
+        let path = dir.join(name);
+        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+
+    /// Um filho que herdou a saída não segura o fim: o grupo sai junto com o agente e o `Exit` chega.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn exit_arrives_while_a_child_holds_the_output() {
+        let dir = std::env::temp_dir().join(format!("hangar-agent-child-{}", std::process::id()));
+        let program = script(&dir, "fake.sh", "sleep 30 &\necho \"filho $!\"\nexit 0");
+        let started = Instant::now();
+        let (owner, output) = spawn(Launch { program, args: vec![], work: dir.join("work"), env: vec![], prompt: String::new() }).unwrap();
+        let (mut child, mut ended) = (None, None);
+        while let Ok(item) = output.recv_blocking() {
+            match item {
+                Output::Line(line) => child = line.strip_prefix("filho ").and_then(|pid| pid.parse::<u32>().ok()),
+                Output::Exit(end) => { ended = Some(end); break; }
+            }
+        }
+        assert_eq!(ended, Some(Ended::Code(0)));
+        assert!(started.elapsed() < Duration::from_secs(10), "{:?}", started.elapsed());
+        assert!(owner.has_exited() && !owner.signal(true), "recolhido: nada mais é sinalizado");
+        let child = child.expect("pid do filho");
+        let gone = (0..50).any(|_| { std::thread::sleep(Duration::from_millis(20)); run::read_identity(child) == run::Identity::Gone });
+        assert!(gone, "o filho saiu junto");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn owner_stops_the_agent_and_reports_the_exit() {
+        let dir = std::env::temp_dir().join(format!("hangar-agent-owner-{}", std::process::id()));
+        let program = script(&dir, "fake.sh", "exec sleep 30");
+        let (owner, output) = spawn(Launch { program, args: vec![], work: dir.join("work"), env: vec![], prompt: String::new() }).unwrap();
+        assert!(!owner.wait_exit(Duration::from_millis(50)));
+        assert!(owner.signal(false));
+        assert!(owner.wait_exit(Duration::from_secs(5)));
+        let ended = loop { match output.recv_blocking() { Ok(Output::Exit(ended)) => break Some(ended), Ok(_) => {}, Err(_) => break None } };
+        assert_eq!(ended, Some(Ended::Signal(libc::SIGTERM)));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn run_within_does_not_wait_for_a_child_holding_the_output() {
+        let started = Instant::now();
+        let mut command = Command::new("sh");
+        command.args(["-c", "sleep 5 & echo oi"]);
+        assert_eq!(run_within(&mut command, Duration::from_millis(500)), None);
+        assert!(started.elapsed() < Duration::from_secs(3), "{:?}", started.elapsed());
+        assert_eq!(run_within(Command::new("sh").args(["-c", "echo oi"]), Duration::from_secs(5)), Some((true, "oi\n".to_owned())));
+    }
+
+    #[test]
+    fn non_zero_exit_fails_the_agent_unless_the_app_stopped_it() {
+        let mut t = Transcript::default();
+        t.exited(&Ended::Code(0), false);
+        assert!(!t.failed);
+        t.exited(&Ended::Signal(15), true);
+        assert!(!t.failed, "Parar e o teto não são falha do agente");
+        t.exited(&Ended::Code(2), false);
+        assert!(t.failed);
     }
 }

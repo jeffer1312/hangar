@@ -2,10 +2,11 @@
 //! do servidor parado e conserta sem pedir permissão. O app lê os eventos dele (`stream-json` do Claude, `--json` do
 //! Codex) linha a linha, sem consulta periódica, e mostra cada comando como um passo.
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 use serde_json::Value;
 use hangar_local_server::{LocalState, Os, Versions};
-use super::super::setup::{agent::{self, Agent}, run, system};
+use super::super::setup::{agent::{self, Agent}, system};
 
 /// As primeiras linhas da saída de um comando, no passo.
 const OUTPUT_LINES: usize = 6;
@@ -168,7 +169,9 @@ impl Progress {
                 if !self.steps.iter().any(|s| s.id == id) && let Some(command) = field("command") {
                     self.start(&id, Action::Command { description: None, command: plain_command(&command) }, at);
                 }
-                let failed = item.get("exit_code").and_then(Value::as_i64).is_some_and(|code| code != 0);
+                // O `exit_code` vem nulo quando o comando nem rodou: o `status` diz a falha.
+                let failed = field("status").as_deref() == Some("failed")
+                    || item.get("exit_code").and_then(Value::as_i64).is_some_and(|code| code != 0);
                 self.finish(&id, &field("aggregated_output").unwrap_or_default(), failed, at);
             }
             (Some("item.completed"), Some("file_change")) => {
@@ -176,7 +179,7 @@ impl Progress {
                     .filter_map(|c| c.get("path").and_then(Value::as_str).map(str::to_owned)).collect();
                 if !paths.is_empty() {
                     self.start(&id, Action::Edit(paths), at);
-                    self.finish(&id, "", false, at);
+                    self.finish(&id, "", field("status").as_deref() == Some("failed"), at);
                 }
             }
             (Some("item.completed"), Some("agent_message")) => if let Some(text) = field("text").filter(|t| !t.trim().is_empty()) {
@@ -337,7 +340,7 @@ pub(super) fn prompt(diagnosis: &str, home: &Path, port: u16, os: Os, english: b
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Choice { pub agent: Agent, pub account: Option<String> }
 
-/// Só onde o app consegue parar o agente: no macOS o processo não nasce num grupo próprio nem tem identidade legível, e
+/// Só onde o app consegue parar o agente: no macOS o processo não nasce num grupo próprio e o app não o sinaliza, e
 /// Parar, o teto e o fechar do app não o alcançariam enquanto ele roda sem pedir permissão.
 pub(super) fn supported(os: Os) -> bool { matches!(os, Os::Linux | Os::Windows) }
 
@@ -393,7 +396,8 @@ pub(super) fn codex_account(auth: &str) -> Option<String> {
 const CLAUDE_DENIED: [&str; 9] = ["Bash(sudo:*)", "Bash(rm -rf:*)", "Bash(tmux kill-server:*)", "Bash(tmux kill-session:*)",
     "Edit(~/.claude/**)", "Edit(~/.claude-*/**)", "Edit(~/.claude.json)", "Write(~/.claude/**)", "Write(~/.claude-*/**)"];
 
-/// Sem pedir permissão (decisão do produto): o agente conserta sozinho, e a pessoa acompanha e pode parar.
+/// Sem pedir permissão (decisão do produto): o agente conserta sozinho, e a pessoa acompanha e pode parar. O Codex roda na
+/// sandbox dele, gravando só em `work` (a `~/.hangar`): o diagnóstico traz saída de log, que ninguém conferiu.
 pub(super) fn args(agent: Agent, work: &Path) -> Vec<String> {
     match agent {
         Agent::Claude => {
@@ -402,7 +406,9 @@ pub(super) fn args(agent: Agent, work: &Path) -> Vec<String> {
             args.extend(CLAUDE_DENIED.map(String::from));
             args
         }
-        Agent::Codex => vec!["exec".into(), "--json".into(), "--color".into(), "never".into(), "--dangerously-bypass-approvals-and-sandbox".into(),
+        // A rede fica: o gerenciador do serviço e a saúde do servidor respondem por socket.
+        Agent::Codex => vec!["exec".into(), "--json".into(), "--color".into(), "never".into(), "--sandbox".into(), "workspace-write".into(),
+            "-c".into(), "approval_policy=\"never\"".into(), "-c".into(), "sandbox_workspace_write.network_access=true".into(),
             "--skip-git-repo-check".into(), "-C".into(), work.to_string_lossy().into_owned(), "-".into()],
     }
 }
@@ -414,21 +420,25 @@ pub(super) struct Started { pub output: async_channel::Receiver<agent::Output> }
 /// descarte da execução chegam também enquanto ele ainda está subindo.
 #[derive(Debug, Default)]
 pub(super) struct Pending {
-    /// Pid e identidade, com a identidade lida.
-    process: Option<(u32, String)>,
+    process: Option<Arc<agent::Owner>>,
     /// Pediram para encerrar: quem subir depois disso encerra na hora.
     abandoned: bool,
 }
 
-pub(super) type Handle = std::sync::Arc<std::sync::Mutex<Pending>>;
+pub(super) type Handle = Arc<std::sync::Mutex<Pending>>;
 
-/// O erro de `start` quando o encerramento chegou antes de o agente subir: não é falha dele.
+/// O erro de `start` quando o encerramento chegou antes de o agente nascer: não é falha dele. Depois de nascer, ele é
+/// encerrado e a execução segue pelo `Exit`, que relê o servidor.
 pub(super) const ABANDONED: &str = "abandoned";
+
+/// Quanto o "Parar" espera a saída pedida antes da força, e a força antes de dizer que não parou.
+const STOP_WAIT: Duration = Duration::from_secs(10);
+const KILL_WAIT: Duration = Duration::from_secs(3);
 
 fn lock(handle: &Handle) -> std::sync::MutexGuard<'_, Pending> { handle.lock().unwrap_or_else(|e| e.into_inner()) }
 
 /// Marca para encerrar e devolve o processo, se já subiu. O que subir depois da marca é encerrado por `start`.
-pub(super) fn abandon(handle: &Handle) -> Option<(u32, String)> {
+pub(super) fn abandon(handle: &Handle) -> Option<Arc<agent::Owner>> {
     let mut pending = lock(handle);
     pending.abandoned = true;
     pending.process.take()
@@ -436,17 +446,17 @@ pub(super) fn abandon(handle: &Handle) -> Option<(u32, String)> {
 
 /// "Parar" ou o teto ainda na subida: já subiu, devolve o processo (fica no `Handle` para tentar de novo); senão marca,
 /// e quem sobe o encerra.
-pub(super) fn stop_mark(handle: &Handle) -> Option<(u32, String)> {
+pub(super) fn stop_mark(handle: &Handle) -> Option<Arc<agent::Owner>> {
     let mut pending = lock(handle);
     if pending.process.is_none() { pending.abandoned = true; }
     pending.process.clone()
 }
 
 /// O processo saiu sozinho: ninguém mais o encerra.
-pub(super) fn exited(handle: &Handle) -> Option<(u32, String)> { lock(handle).process.take() }
+pub(super) fn exited(handle: &Handle) { lock(handle).process = None; }
 
 /// O processo vivo, sem tirá-lo do `Handle` (o "Parar" espera o `Exit`).
-pub(super) fn process(handle: &Handle) -> Option<(u32, String)> { lock(handle).process.clone() }
+pub(super) fn process(handle: &Handle) -> Option<Arc<agent::Owner>> { lock(handle).process.clone() }
 
 /// Roda na `~/.hangar` (a pasta do que ele conserta), com o prompt pela entrada. Bloqueia: fora da janela.
 pub(super) fn start(agent: Agent, prompt: String, home: &Path, handle: &Handle) -> Result<Started, String> {
@@ -455,59 +465,27 @@ pub(super) fn start(agent: Agent, prompt: String, home: &Path, handle: &Handle) 
     let hangar = home.join(".hangar");
     let work: PathBuf = if hangar.is_dir() { hangar } else { home.to_owned() };
     let launch = agent::Launch { program, args: args(agent, &work), work, env: env(&path), prompt };
-    let (pid, output) = agent::spawn(launch)?;
-    // Sem identidade nunca se sinaliza: o pid pode ter sido reaproveitado. `Gone` = já saiu; o `Exit` chega pela saída.
-    let read = (0..20).find_map(|_| match run::read_identity(pid) {
-        run::Identity::Unknown => { std::thread::sleep(Duration::from_millis(100)); None }
-        known => Some(known),
-    }).unwrap_or(run::Identity::Unknown);
-    let identity = match &read { run::Identity::Known(id) => id.clone(), _ => String::new() };
-    if matches!(read, run::Identity::Unknown) { crate::log_line(&format!("status: agente {pid} sem identidade; o Parar não poderá conferi-lo")); }
+    if lock(handle).abandoned { return Err(ABANDONED.to_owned()); }
+    let (owner, output) = agent::spawn(launch)?;
     // Sob a trava: ou quem encerra já marcou e o agente sai aqui, ou ele acha o processo no `Handle`.
     let mut pending = lock(handle);
-    if pending.abandoned {
-        drop(pending);
-        match read {
-            run::Identity::Known(_) => kill_now(pid, &identity),
-            // Acabou de nascer deste app e o `wait` dele ainda não o recolheu: o pid ainda é o dele.
-            run::Identity::Unknown => kill_spawned(pid),
-            run::Identity::Gone => {}
-        }
-        return Err(ABANDONED.to_owned());
-    }
-    pending.process = Some((pid, identity));
+    pending.process = Some(owner.clone());
+    let abandoned = pending.abandoned;
+    drop(pending);
+    // Nasceu depois da marca: talvez já tenha pedido a subida do serviço, e o `Exit` leva à releitura.
+    if abandoned { owner.signal(true); }
     Ok(Started { output })
 }
 
-/// À força, sem conferir a identidade: só para o processo que `start` acabou de subir. No Linux ele lidera o próprio
-/// grupo (`setsid`); no Windows vai a árvore.
-fn kill_spawned(pid: u32) {
-    #[cfg(target_os = "linux")]
-    {
-        run::kill_group(pid);
-        if pid > 1 && pid <= i32::MAX as u32 { unsafe { libc::kill(pid as i32, libc::SIGKILL); } }
-    }
-    #[cfg(windows)]
-    {
-        let out = system::hidden(&mut std::process::Command::new("taskkill")).args(["/PID", &pid.to_string(), "/T", "/F"]).output();
-        if !out.is_ok_and(|out| out.status.success()) { crate::log_line(&format!("status: agente {pid} abandonado não foi encerrado")); }
-    }
-    #[cfg(not(any(target_os = "linux", windows)))]
-    crate::log_line(&format!("status: agente {pid} abandonado não pôde ser encerrado neste sistema"));
+/// "Parar" e o teto: o pedido de saída, a força depois, ao agente e ao grupo. `true` só com o agente fora. Bloqueia.
+pub(super) fn stop(owner: &agent::Owner) -> bool {
+    if !owner.signal(false) || owner.wait_exit(STOP_WAIT) { return true; }
+    owner.signal(true);
+    owner.wait_exit(KILL_WAIT)
 }
-
-/// "Parar" e o teto: o pedido de saída, a força depois, e o grupo inteiro (um comando dele em andamento). Bloqueia.
-pub(super) fn stop(pid: u32, identity: &str) -> bool { super::super::setup::stop_agent_process(pid, identity) }
-
-/// Saiu sozinho: um filho dele ainda vivo no grupo (um `journalctl -f`, um servidor subido à mão) sai junto. Bloqueia.
-pub(super) fn sweep(pid: u32, identity: &str) { if !identity.is_empty() { super::super::setup::sweep_group(pid); } }
 
 /// O app fechando: sem esperar a saída educada, que levaria até 10 s.
-pub(super) fn kill_now(pid: u32, identity: &str) {
-    if identity.is_empty() { return; }
-    run::kill(pid, identity);
-    run::kill_group(pid);
-}
+pub(super) fn kill_now(owner: &agent::Owner) { owner.signal(true); }
 
 #[cfg(test)]
 mod tests {
@@ -656,9 +634,43 @@ mod tests {
         let codex = args(Agent::Codex, Path::new("/home/x/.hangar"));
         assert_eq!((codex.first().map(String::as_str), codex.last().map(String::as_str)), (Some("exec"), Some("-")));
         let joined = codex.join(" ");
-        for needle in ["--json", "--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check", "-C /home/x/.hangar"] {
+        for needle in ["--json", "--sandbox workspace-write", "approval_policy=\"never\"", "sandbox_workspace_write.network_access=true",
+            "--skip-git-repo-check", "-C /home/x/.hangar"] {
             assert!(joined.contains(needle), "{needle}: {joined}");
         }
+        assert!(!joined.contains("dangerously") && !joined.contains("danger-full-access"), "{joined}");
+    }
+
+    /// O "Parar" só diz que parou com o agente fora; depois disso nada mais é sinalizado pelo número dele.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn stop_reports_the_agent_gone_and_never_signals_it_again() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("hangar-status-stop-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let fake = dir.join("fake.sh");
+        std::fs::write(&fake, "#!/bin/sh\nexec sleep 30\n").unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let (owner, _output) = agent::spawn(agent::Launch { program: fake, args: vec![], work: dir.join("work"), env: vec![], prompt: String::new() }).unwrap();
+        let handle = Handle::default();
+        lock(&handle).process = Some(owner.clone());
+        let process = process(&handle).unwrap();
+        assert!(stop(&process));
+        assert!(owner.has_exited() && !owner.signal(true));
+        // Já fora: pedir de novo não espera nem sinaliza.
+        assert!(stop(&process));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn codex_failed_status_fails_the_step_without_an_exit_code() {
+        let p = feed(Agent::Codex, &[
+            r#"{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"systemctl --user start x","aggregated_output":"","exit_code":null,"status":"failed"}}"#,
+            r#"{"type":"item.completed","item":{"id":"item_2","type":"file_change","changes":[{"path":"/home/x/.hangar/config/.env","kind":"update"}],"status":"failed"}}"#,
+            r#"{"type":"item.completed","item":{"id":"item_3","type":"file_change","changes":[{"path":"/home/x/.hangar/a","kind":"add"}],"status":"completed"}}"#,
+        ]);
+        let states: Vec<StepState> = p.steps.iter().map(|s| s.state).collect();
+        assert_eq!(states, [StepState::Failed, StepState::Failed, StepState::Done]);
     }
 
     #[test]
