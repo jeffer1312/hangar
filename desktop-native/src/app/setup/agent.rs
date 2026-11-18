@@ -218,8 +218,23 @@ impl Transcript {
     }
 }
 
-/// `Exit`: o código de saída do agente; `None` morto por sinal ou sem o estado do processo.
-pub(crate) enum Output { Line(String), Exit(Option<i32>) }
+pub(crate) enum Output { Line(String), Exit(Ended) }
+
+/// Como o agente acabou: um agente morto pelo sistema (falta de memória, `kill -9`) não tem código de saída.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Ended { Code(i32), Signal(i32), Unknown(String) }
+
+impl Ended {
+    pub(crate) fn of(status: std::io::Result<std::process::ExitStatus>) -> Ended {
+        let status = match status { Ok(status) => status, Err(e) => return Ended::Unknown(e.to_string()) };
+        if let Some(code) = status.code() { return Ended::Code(code); }
+        #[cfg(unix)]
+        { use std::os::unix::process::ExitStatusExt; if let Some(signal) = status.signal() { return Ended::Signal(signal); } }
+        Ended::Unknown(status.to_string())
+    }
+
+    pub(crate) fn success(&self) -> bool { *self == Ended::Code(0) }
+}
 
 pub(crate) struct Launch {
     pub program: PathBuf,
@@ -258,9 +273,9 @@ pub(crate) fn spawn(launch: Launch) -> Result<(u32, async_channel::Receiver<Outp
         })
     }).collect();
     std::thread::spawn(move || {
-        let code = child.wait().ok().and_then(|status| status.code());
+        let ended = Ended::of(child.wait());
         for reader in readers { let _ = reader.join(); }
-        let _ = tx.send_blocking(Output::Exit(code));
+        let _ = tx.send_blocking(Output::Exit(ended));
     });
     Ok((pid, rx))
 }
@@ -381,12 +396,21 @@ mod tests {
         let (_, output) = spawn(Launch { program: fake, args: vec![], work: dir.join("work"), env, prompt: "conserte\n".into() }).unwrap();
         let mut lines = Vec::new();
         let exit = loop {
-            match output.recv_blocking() { Ok(Output::Line(line)) => lines.push(line), Ok(Output::Exit(code)) => break code, Err(_) => break None }
+            match output.recv_blocking() { Ok(Output::Line(line)) => lines.push(line), Ok(Output::Exit(ended)) => break Some(ended), Err(_) => break None }
         };
         lines.sort();
         assert_eq!(lines, vec!["erro", "prompt: conserte", "token: ausente"]);
         // O código de saída chega com o fim: é ele que explica um agente que saiu sem conseguir.
-        assert_eq!(exit, Some(3));
+        assert_eq!(exit, Some(Ended::Code(3)));
+        // Morto pelo sistema não tem código: o sinal é o motivo.
+        let killed = dir.join("killed.sh");
+        std::fs::write(&killed, "#!/bin/sh\nkill -KILL $$\n").unwrap();
+        std::fs::set_permissions(&killed, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let (_, output) = spawn(Launch { program: killed, args: vec![], work: dir.join("work"), env: vec![], prompt: String::new() }).unwrap();
+        let ended = loop {
+            match output.recv_blocking() { Ok(Output::Exit(ended)) => break Some(ended), Ok(Output::Line(_)) => {}, Err(_) => break None }
+        };
+        assert_eq!(ended, Some(Ended::Signal(9)));
         let _ = std::fs::remove_dir_all(dir);
     }
 }

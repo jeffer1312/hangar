@@ -6821,6 +6821,8 @@
   "native_status_agent_no_summary": "The agent exited without explaining what it did.",
   "native_status_agent_error": "The agent stopped with an error: {detail}",
   "native_status_agent_exit": "The agent exited with code {code}.",
+  "native_status_agent_signal": "The agent was ended by the system (signal {signal}), for example for lack of memory.",
+  "native_status_agent_exit_unknown": "The agent ended without an exit code: {detail}",
   "native_status_agent_try_other": "Try with {agent}",
   "native_status_agent_copy_report": "Copy report",
   "native_status_agent_report_title": "Server fix with {agent}",

@@ -47,7 +47,13 @@ impl Drop for AgentRun {
 impl AgentRun {
     fn elapsed(&self) -> Duration { self.ended.unwrap_or_else(|| self.started.elapsed()) }
     fn active(&self) -> bool { matches!(self.phase, RunPhase::Starting | RunPhase::Running | RunPhase::Checking) }
-    fn stoppable(&self) -> bool { matches!(self.phase, RunPhase::Starting | RunPhase::Running) && !self.stop_requested }
+    fn stoppable(&self) -> bool { can_stop(&self.phase, self.stop_requested, self.stop_failed) }
+}
+
+/// Parar vale enquanto o agente sobe ou roda; depois de um Parar que não alcançou o processo, o teto e um novo clique
+/// tentam de novo.
+fn can_stop(phase: &RunPhase, requested: bool, failed: bool) -> bool {
+    matches!(phase, RunPhase::Starting | RunPhase::Running) && (!requested || failed)
 }
 
 fn short_name(agent: Agent) -> &'static str { match agent { Agent::Claude => "Claude", Agent::Codex => "Codex" } }
@@ -89,8 +95,12 @@ fn outcome_text(run: &AgentRun) -> String {
         agent_fix::Ending::StartFailed(error) => fill(tr("status_agent_start_failed"), &[("detail", &error)]),
         agent_fix::Ending::Stopped => tr("status_agent_stopped_by_you"),
         agent_fix::Ending::Error(error) => fill(tr("status_agent_error"), &[("detail", &error)]),
-        agent_fix::Ending::Exit { code, tail } => {
-            let text = fill(tr("status_agent_exit"), &[("code", &code.to_string())]);
+        agent_fix::Ending::Exit { ended, tail } => {
+            let text = match ended {
+                setup_agent::Ended::Code(code) => fill(tr("status_agent_exit"), &[("code", &code.to_string())]),
+                setup_agent::Ended::Signal(signal) => fill(tr("status_agent_signal"), &[("signal", &signal.to_string())]),
+                setup_agent::Ended::Unknown(detail) => fill(tr("status_agent_exit_unknown"), &[("detail", &detail)]),
+            };
             if tail.is_empty() { text } else { format!("{text}\n{}", tail.join("\n")) }
         }
         agent_fix::Ending::Summary(summary) => summary,
@@ -209,8 +219,8 @@ impl Hangar {
         let Some(run) = self.device.status.fix.as_mut().filter(|run| run.id == id) else { return };
         match item {
             setup_agent::Output::Line(line) => { let (agent, at) = (run.agent, run.started.elapsed()); run.progress.feed(agent, &line, at); }
-            setup_agent::Output::Exit(code) => {
-                (run.ended, run.phase, run.progress.exit) = (Some(run.started.elapsed()), RunPhase::Checking, code);
+            setup_agent::Output::Exit(ended) => {
+                (run.ended, run.phase, run.progress.exit) = (Some(run.started.elapsed()), RunPhase::Checking, Some(ended));
                 let process = agent_fix::exited(&run.handle);
                 let Some(home) = std::env::home_dir() else {
                     run.phase = RunPhase::Failed { error: Some("HOME".to_owned()) };
@@ -247,16 +257,10 @@ impl Hangar {
     /// à releitura do servidor.
     fn agent_stop(&mut self, id: u64, cx: &mut Context<Self>) {
         let Some(run) = self.device.status.fix.as_mut().filter(|run| run.id == id && run.stoppable()) else { return };
-        run.stop_requested = true;
-        // Ainda subindo: a marca basta, quem sobe o encerra e a execução acaba como parada.
-        if run.phase == RunPhase::Starting {
-            // Subiu entre o clique e aqui: o processo já está no `Handle` e sai por aqui.
-            if let Some((pid, identity)) = agent_fix::abandon(&run.handle) {
-                self.runtime.spawn_blocking(move || { agent_fix::stop(pid, &identity); });
-            }
-            return cx.notify();
-        }
-        let Some((pid, identity)) = agent_fix::process(&run.handle) else { return };
+        (run.stop_requested, run.stop_failed) = (true, false);
+        // Ainda subindo sem processo: a marca basta, quem sobe o encerra e a execução acaba como parada.
+        let process = if run.phase == RunPhase::Starting { agent_fix::stop_mark(&run.handle) } else { agent_fix::process(&run.handle) };
+        let Some((pid, identity)) = process else { return cx.notify() };
         let (done, stopped) = tokio::sync::oneshot::channel();
         self.runtime.spawn_blocking(move || { let _ = done.send(agent_fix::stop(pid, &identity)); });
         let task = cx.spawn(async move |this, cx| {
@@ -461,4 +465,21 @@ fn steps_list(run: &AgentRun) -> AnyElement {
                 .child(div().flex_shrink_0().text_size(px(11.5)).text_color(theme::faint()).child(took))
         }))
         .into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use core::prelude::v1::test;
+
+    use super::*;
+
+    #[test]
+    fn stop_retries_after_a_failed_stop_while_the_agent_lives() {
+        assert!(can_stop(&RunPhase::Starting, false, false) && can_stop(&RunPhase::Running, false, false));
+        // Pedido em curso: o botão espera o resultado.
+        assert!(!can_stop(&RunPhase::Running, true, false));
+        // O Parar não alcançou o processo: o teto e um novo clique tentam de novo.
+        assert!(can_stop(&RunPhase::Running, true, true) && can_stop(&RunPhase::Starting, true, true));
+        assert!(!can_stop(&RunPhase::Checking, true, true) && !can_stop(&RunPhase::Failed { error: None }, false, false));
+    }
 }

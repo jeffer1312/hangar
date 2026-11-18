@@ -52,8 +52,8 @@ pub(super) struct Progress {
     pub summary: Option<String>,
     /// O erro que o agente informou e que nenhuma rodada depois desfez (limite, API).
     pub error: Option<String>,
-    /// O código de saída do processo; `None` morto por sinal ou ainda rodando.
-    pub exit: Option<i32>,
+    /// Como o processo acabou; `None` ainda rodando.
+    pub exit: Option<agent::Ended>,
     /// Stderr e linhas que não são JSON, as últimas.
     pub raw: Vec<String>,
 }
@@ -64,7 +64,8 @@ pub(super) enum Ending {
     StartFailed(String),
     Stopped,
     Error(String),
-    Exit { code: i32, tail: Vec<String> },
+    /// Saiu com código diferente de zero, morto por sinal ou sem estado legível.
+    Exit { ended: agent::Ended, tail: Vec<String> },
     Summary(String),
     Silent,
 }
@@ -75,15 +76,15 @@ const TAIL_LINES: usize = 4;
 impl Progress {
     pub(super) fn commands(&self) -> usize { self.steps.iter().filter(|s| matches!(s.action, Action::Command { .. })).count() }
 
-    pub(super) fn failed(&self) -> bool { self.error.is_some() || self.exit.is_some_and(|code| code != 0) }
+    pub(super) fn failed(&self) -> bool { self.error.is_some() || self.exit.as_ref().is_some_and(|ended| !ended.success()) }
 
     /// O que dizer quando o servidor não respondeu no fim: o erro do agente vence o resumo dele.
     pub(super) fn ending(&self, start_error: Option<&str>, stopped: bool) -> Ending {
         if let Some(error) = start_error { return Ending::StartFailed(error.to_owned()); }
         if stopped { return Ending::Stopped; }
         if let Some(error) = &self.error { return Ending::Error(error.clone()); }
-        if let Some(code) = self.exit.filter(|code| *code != 0) {
-            return Ending::Exit { code, tail: self.raw[self.raw.len().saturating_sub(TAIL_LINES)..].to_vec() };
+        if let Some(ended) = self.exit.clone().filter(|ended| !ended.success()) {
+            return Ending::Exit { ended, tail: self.raw[self.raw.len().saturating_sub(TAIL_LINES)..].to_vec() };
         }
         self.summary.clone().or_else(|| self.said.clone()).map_or(Ending::Silent, Ending::Summary)
     }
@@ -433,6 +434,14 @@ pub(super) fn abandon(handle: &Handle) -> Option<(u32, String)> {
     pending.process.take()
 }
 
+/// "Parar" ou o teto ainda na subida: já subiu, devolve o processo (fica no `Handle` para tentar de novo); senão marca,
+/// e quem sobe o encerra.
+pub(super) fn stop_mark(handle: &Handle) -> Option<(u32, String)> {
+    let mut pending = lock(handle);
+    if pending.process.is_none() { pending.abandoned = true; }
+    pending.process.clone()
+}
+
 /// O processo saiu sozinho: ninguém mais o encerra.
 pub(super) fn exited(handle: &Handle) -> Option<(u32, String)> { lock(handle).process.take() }
 
@@ -448,21 +457,43 @@ pub(super) fn start(agent: Agent, prompt: String, home: &Path, handle: &Handle) 
     let launch = agent::Launch { program, args: args(agent, &work), work, env: env(&path), prompt };
     let (pid, output) = agent::spawn(launch)?;
     // Sem identidade nunca se sinaliza: o pid pode ter sido reaproveitado. `Gone` = já saiu; o `Exit` chega pela saída.
-    let identity = (0..20).find_map(|_| match run::read_identity(pid) {
-        run::Identity::Known(id) => Some(id),
-        run::Identity::Gone => Some(String::new()),
+    let read = (0..20).find_map(|_| match run::read_identity(pid) {
         run::Identity::Unknown => { std::thread::sleep(Duration::from_millis(100)); None }
-    }).unwrap_or_default();
-    if identity.is_empty() { crate::log_line(&format!("status: agente {pid} sem identidade; não poderá ser parado")); }
+        known => Some(known),
+    }).unwrap_or(run::Identity::Unknown);
+    let identity = match &read { run::Identity::Known(id) => id.clone(), _ => String::new() };
+    if matches!(read, run::Identity::Unknown) { crate::log_line(&format!("status: agente {pid} sem identidade; o Parar não poderá conferi-lo")); }
     // Sob a trava: ou quem encerra já marcou e o agente sai aqui, ou ele acha o processo no `Handle`.
     let mut pending = lock(handle);
     if pending.abandoned {
         drop(pending);
-        kill_now(pid, &identity);
+        match read {
+            run::Identity::Known(_) => kill_now(pid, &identity),
+            // Acabou de nascer deste app e o `wait` dele ainda não o recolheu: o pid ainda é o dele.
+            run::Identity::Unknown => kill_spawned(pid),
+            run::Identity::Gone => {}
+        }
         return Err(ABANDONED.to_owned());
     }
     pending.process = Some((pid, identity));
     Ok(Started { output })
+}
+
+/// À força, sem conferir a identidade: só para o processo que `start` acabou de subir. No Linux ele lidera o próprio
+/// grupo (`setsid`); no Windows vai a árvore.
+fn kill_spawned(pid: u32) {
+    #[cfg(target_os = "linux")]
+    {
+        run::kill_group(pid);
+        if pid > 1 && pid <= i32::MAX as u32 { unsafe { libc::kill(pid as i32, libc::SIGKILL); } }
+    }
+    #[cfg(windows)]
+    {
+        let out = system::hidden(&mut std::process::Command::new("taskkill")).args(["/PID", &pid.to_string(), "/T", "/F"]).output();
+        if !out.is_ok_and(|out| out.status.success()) { crate::log_line(&format!("status: agente {pid} abandonado não foi encerrado")); }
+    }
+    #[cfg(not(any(target_os = "linux", windows)))]
+    crate::log_line(&format!("status: agente {pid} abandonado não pôde ser encerrado neste sistema"));
 }
 
 /// "Parar" e o teto: o pedido de saída, a força depois, e o grupo inteiro (um comando dele em andamento). Bloqueia.
@@ -541,14 +572,18 @@ mod tests {
     #[test]
     fn non_zero_exit_explains_the_end_with_the_stderr_tail() {
         let mut p = feed(Agent::Claude, &["linha 1", "linha 2", "linha 3", "linha 4", "Error: auth expired"]);
-        p.exit = Some(1);
+        p.exit = Some(agent::Ended::Code(1));
         assert!(p.failed());
-        assert_eq!(p.ending(None, false), Ending::Exit { code: 1, tail: vec!["linha 2".into(), "linha 3".into(), "linha 4".into(),
-            "Error: auth expired".into()] });
+        let tail: Vec<String> = ["linha 2", "linha 3", "linha 4", "Error: auth expired"].map(String::from).into();
+        assert_eq!(p.ending(None, false), Ending::Exit { ended: agent::Ended::Code(1), tail: tail.clone() });
+        // Morto pelo sistema (sem código) também explica o fim, nunca "sem resumo".
+        p.exit = Some(agent::Ended::Signal(9));
+        assert!(p.failed());
+        assert_eq!(p.ending(None, false), Ending::Exit { ended: agent::Ended::Signal(9), tail });
         // Parada pela pessoa e falha na subida vêm antes de tudo.
         assert_eq!(p.ending(None, true), Ending::Stopped);
         assert_eq!(p.ending(Some("sem PATH"), true), Ending::StartFailed("sem PATH".into()));
-        p.exit = Some(0);
+        p.exit = Some(agent::Ended::Code(0));
         assert_eq!(p.ending(None, false), Ending::Silent);
     }
 
