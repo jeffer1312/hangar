@@ -2,7 +2,7 @@
 use std::net::SocketAddr;
 use std::time::Duration;
 
-const TIMEOUT: Duration = Duration::from_secs(5);
+pub const TIMEOUT: Duration = Duration::from_secs(5);
 
 type ProbeFuture = std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send>>;
 pub type Probe = Box<dyn Fn() -> ProbeFuture + Send + Sync>;
@@ -137,11 +137,46 @@ pub fn probe_address(listen: SocketAddr) -> SocketAddr {
     }
 }
 
+const HEALTH_REQUEST: &[u8] = b"GET /__hangar_server/health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+
+/// Intervalo das rodadas do lançador do Windows: o mesmo das do `WatchdogSec` da unit.
+pub const LAUNCHER_EVERY: Duration = Duration::from_secs(30);
+
+/// O lançador do Windows faz pelo servidor que abriu o que o `WatchdogSec` do systemd faz no Linux:
+/// confere a saúde a cada `LAUNCHER_EVERY`, com a carência e a tolerância de `Policy::SERVER`.
+#[derive(Debug)]
+pub struct LauncherWatch { rounds: Option<Rounds>, next: std::time::Instant }
+
+impl LauncherWatch {
+    pub fn new(now: std::time::Instant) -> Self { Self { rounds: None, next: now + LAUNCHER_EVERY } }
+
+    /// O veredito da rodada, quando chegou a hora dela. `health` é o endereço que o servidor gravou ao
+    /// ficar pronto: antes dele nada é julgado, e a carência conta do primeiro pronto visto.
+    pub fn tick(&mut self, now: std::time::Instant, health: impl FnOnce() -> Option<SocketAddr>,
+                answers: impl FnOnce(SocketAddr) -> bool) -> Option<Verdict> {
+        if now < self.next { return None; }
+        self.next = now + LAUNCHER_EVERY;
+        let address = health()?;
+        let rounds = self.rounds.get_or_insert_with(|| Rounds::new(Policy::SERVER, now));
+        let passed = (!rounds.in_grace(now)).then(|| answers(address));
+        Some(rounds.round(now, passed))
+    }
+}
+
+/// `health_answers` sem runtime, para o lançador.
+pub fn health_answers_blocking(addr: SocketAddr, limit: Duration) -> bool {
+    use std::io::{Read, Write};
+    let Ok(mut stream) = std::net::TcpStream::connect_timeout(&addr, limit) else { return false };
+    if stream.set_read_timeout(Some(limit)).is_err() || stream.set_write_timeout(Some(limit)).is_err() { return false; }
+    let mut head = [0u8; 12];
+    stream.write_all(HEALTH_REQUEST).is_ok() && stream.read_exact(&mut head).is_ok() && head.starts_with(b"HTTP/1.1 200")
+}
+
 async fn health_answers(addr: SocketAddr, limit: Duration) -> bool {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let exchange = async {
         let mut stream = tokio::net::TcpStream::connect(addr).await.ok()?;
-        stream.write_all(b"GET /__hangar_server/health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n").await.ok()?;
+        stream.write_all(HEALTH_REQUEST).await.ok()?;
         let mut head = [0u8; 12];
         stream.read_exact(&mut head).await.ok()?;
         Some(head.starts_with(b"HTTP/1.1 200"))
@@ -247,5 +282,51 @@ mod tests {
         server.await.unwrap();
         // Ninguém escutando: não há aviso.
         assert!(!health_answers(addr, Duration::from_secs(5)).await);
+    }
+
+    #[test]
+    fn the_launcher_probe_needs_a_200_in_time() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (gave_up, released) = std::sync::mpsc::channel::<()>();
+        let server = std::thread::spawn(move || {
+            for answer in [Some(&b"HTTP/1.1 200 OK\r\n\r\n"[..]), Some(&b"HTTP/1.1 503 Service Unavailable\r\n\r\n"[..]), None] {
+                let (mut socket, _) = listener.accept().unwrap();
+                let mut request = [0u8; 256];
+                let _ = socket.read(&mut request);
+                // Sem resposta: o servidor aceita e trava, como o processo preso, até o cliente desistir.
+                match answer { Some(answer) => socket.write_all(answer).unwrap(), None => released.recv().unwrap() }
+            }
+        });
+        assert!(health_answers_blocking(addr, Duration::from_secs(5)));
+        assert!(!health_answers_blocking(addr, Duration::from_secs(5)));
+        assert!(!health_answers_blocking(addr, Duration::from_millis(100)), "aceitou e não respondeu no prazo");
+        gave_up.send(()).unwrap();
+        server.join().unwrap();
+        assert!(!health_answers_blocking(addr, Duration::from_secs(5)), "ninguém escutando");
+    }
+
+    /// O lançador do Windows com a carência e a tolerância do vigia do servidor: nada é julgado antes
+    /// do pronto, a carência conta do primeiro pronto visto, e só a quarta rodada sem resposta encerra.
+    #[test]
+    fn the_launcher_stops_the_server_only_after_the_grace_and_four_unanswered_rounds() {
+        let start = std::time::Instant::now();
+        let at = |secs: u64| start + Duration::from_secs(secs);
+        let address: SocketAddr = "127.0.0.1:8765".parse().unwrap();
+        let count = std::cell::Cell::new(0);
+        let probed = &count;
+        let answer = |reply: bool| move |_| { probed.set(probed.get() + 1); reply };
+        let mut watch = LauncherWatch::new(start);
+        assert_eq!(watch.tick(at(10), || Some(address), answer(false)), None, "fora da hora da rodada");
+        assert_eq!(watch.tick(at(30), || None, answer(false)), None, "ainda não pronto");
+        assert_eq!(watch.tick(at(60), || Some(address), answer(false)), Some(Verdict::Grace), "pronto visto: começa a carência");
+        assert_eq!(watch.tick(at(210), || Some(address), answer(false)), Some(Verdict::Grace));
+        assert_eq!(probed.get(), 0, "na carência nada é conferido");
+        let verdicts: Vec<_> = (0..5).map(|n| watch.tick(at(240 + 30 * n), || Some(address), answer(n == 2))).collect();
+        assert_eq!(verdicts, [Some(Verdict::Tolerated(1)), Some(Verdict::Tolerated(2)), Some(Verdict::Passed), Some(Verdict::Tolerated(1)), Some(Verdict::Tolerated(2))]);
+        let verdicts: Vec<_> = (5..7).map(|n| watch.tick(at(240 + 30 * n), || Some(address), answer(false))).collect();
+        assert_eq!(verdicts, [Some(Verdict::Tolerated(3)), Some(Verdict::Withheld(4))]);
+        assert_eq!(probed.get(), 7);
     }
 }

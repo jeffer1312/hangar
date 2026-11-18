@@ -78,9 +78,14 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   manual sem elevação não pode rebaixar uma instalação elevada.
 - **A tarefa Windows acompanha o processo até ele terminar.** Reinício controlado não encerra
   a árvore inteira: sessões e atualizador sobrevivem. O `hangar-server.exe` filho entra na parada
-  só quando o pai é o Python; filho do servidor direto é o executor da atualização. A vigia
-  confirma falha HTTP, respeita instalação/atualização e só inicia outra instância após confirmar
-  a parada da anterior. Ver [Atualização para a 0.1.0.10824](#atualização-para-a-0110824-falhava-em-todo-windows-17112026).
+  só quando o pai é o Python; filho do servidor direto é o executor da atualização. Ver
+  [Atualização para a 0.1.0.10824](#atualização-para-a-0110824-falhava-em-todo-windows-17112026).
+- **O lançador é a vigia: não há tarefa `hangar-vigia`.** Ele confere `/__hangar_server/health`
+  no endereço que o servidor grava na marca de pé (`server-life.json`), com a carência e a
+  tolerância do watchdog do Linux (`watchdog::Policy::SERVER`), e encerra o servidor travado para
+  a religada. Ele nunca sai sozinho: a versão que sobe pelo Python (a volta) também é religada.
+  Lançador morto à força só volta no logon: o Agendador não religa tarefa que sai com erro.
+  [Medição](#a-vigia-mora-no-lançador-17112026).
 - **O reinício do backend só vale com a porta aberta, e a porta do front pode ser do servidor.**
   `Start-HangarTask` repete o `Start-ScheduledTask` até 3 vezes enquanto a tarefa parar sem abrir a
   porta, e falha com erro se nenhuma tentativa ficar de pé; `LastRunTime` não prova a subida. Tarefa
@@ -93,7 +98,7 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   processo que saiu sozinho entre a leitura e o `Stop-Process` (o `hangar-server` sai com o Python);
   identidade divergente aborta sempre.
   O front não passa por ele, e erro dele em `Restart-HangarTasks` vira aviso: front parado
-  não desfaz uma versão boa, e a vigia o sobe. Na
+  não desfaz uma versão boa. Na
   máquina migrada, porta do front com o `hangar-server` é tela servida, nunca conflito:
   `hangar-frontend` sai sem subir. A migração e o `atualizar.py` seguem com o início direto. Medição em
   [Reinício sem início e porta do front](#reinício-sem-início-e-porta-do-front-05112026).
@@ -202,7 +207,7 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   apagasse. O `install.ps1` usa `$raizAtalhos`/`$shimRootMsys` em todos; o passo
   `2026-11-12-atalhos-windows-current` regrava os das máquinas já instaladas. Teste:
   `scripts/test-install-shims-current.ps1`.
-- **Tarefa e vigia reconhecem o pacote pela linha de comando.** O backend é `hangar-server.exe` ou
+- **O reinício da tarefa reconhece o pacote pela linha de comando.** O backend é `hangar-server.exe` ou
   `hangar-launcher.exe` com `launch backend`, porque o Python roda do caminho real da versão e não
   da pasta da tarefa; atualização em curso também é `hangar-server.exe` com `update` ou
   `migrate-package`, além do `python -m app.atualizar`.
@@ -1204,3 +1209,28 @@ Relatórios `7io3oihu`, `pg3xnwua` e `tqeswo2z`. Três defeitos em sequência:
    candidato, e o executor da atualização é filho do servidor: a segunda tentativa no Delphi 07 morreu
    no reinício que o próprio `install.ps1 -Update` pediu ("o processo que a executava não existe
    mais"). O filho só entra quando o pai é o Python.
+
+## A vigia mora no lançador (17/11/2026)
+
+A tarefa `hangar-vigia` rodava a cada 5 minutos um `.vbs` que chamava o PowerShell com
+`-EncodedCommand`. Numa máquina o `.vbs` sumiu e o Windows passou a mostrar "Não é possível
+encontrar o arquivo de script ...\hangar-vigia.vbs" a cada disparo (suspeita, sem prova: o
+antivírus apagou o arquivo, pelo padrão `powershell -EncodedCommand`). Ela fazia dois trabalhos:
+reiniciar o servidor travado e religar a tarefa quando o lançador saía.
+
+- **Travado:** o lançador já fica de pé ao lado do servidor (decisão 38). Ele confere a saúde a
+  cada 30 s com a política do watchdog do Linux (180 s de carência depois do pronto, 4 rodadas
+  seguidas sem resposta) e encerra o servidor, que segue para a religada.
+- **Lançador que sai:** medido na DELPHI-02 com uma tarefa descartável como a do Hangar
+  (`RestartCount 999`, `RestartInterval PT1M`): a ação que sai com código 3 rodou uma vez em
+  200 s. O reinício por falha do Agendador não religa tarefa que sai com erro depois de abrir.
+  Um gatilho de repetição a cada minuto com `IgnoreNew` religava (4 execuções em 3,5 min, sem
+  duplicar a que estava de pé), mas também desfaria toda parada de propósito (o reinício da
+  atualização, a migração para o pacote) e correria com elas. Escolha: o lançador não sai mais
+  sozinho; a única saída própria, voltar para uma versão que sobe pelo Python, passou a religar
+  o Python dela. Lançador morto à força espera o próximo logon.
+
+Limites aceitos: o servidor que trava antes de gravar o endereço de saúde não é conferido (a
+versão que ainda não grava o endereço também não: o lançador não a derruba por engano); a versão
+que sobe pelo Python não é conferida; o `hangar-frontend` legado do checkout deixa de ser
+recuperado.

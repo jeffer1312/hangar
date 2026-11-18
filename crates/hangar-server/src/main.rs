@@ -323,7 +323,7 @@ async fn run(notifier: hangar_boot::notify::Notifier) {
         let marked = tokio::task::spawn_blocking(move || {
             let recorded = ready_recorded.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             if *recorded || ready_stopped.get().is_some() { return false; }
-            hangar_server::diag::record_running(&ready_dir);
+            hangar_server::diag::record_running(&ready_dir, hangar_server::watchdog::probe_address(listen));
             true
         }).await;
         let marked = match marked {

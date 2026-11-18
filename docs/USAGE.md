@@ -97,10 +97,9 @@ No Windows, pode usar PowerShell comum ou **Executar como administrador**. A ins
 configura backend e atualização para usar administrador. A comum pede UAC só para o que
 precisar (firewall, Modo Desenvolvedor). Uma instalação elevada também exige PowerShell elevado
 para atualizar manualmente; o botão Atualizar já herda a permissão do backend.
-O backend continua no Agendador, sem serviço do Windows: a tarefa acompanha o Python e tenta
-reiniciar até três vezes, com intervalo de um minuto, quando ele encerra com erro. A vigia
-verifica a resposta HTTP a cada cinco minutos e recupera travamentos, respeitando a instalação
-e a atualização. Fechar o app não encerra o backend; ainda é necessário estar logado.
+O backend continua no Agendador, sem serviço do Windows: a tarefa abre o lançador do Hangar, que
+reabre o servidor quando ele cai e o reinicia quando ele para de responder por cerca de dois
+minutos. Fechar o app não encerra o backend; ainda é necessário estar logado.
 Quer escolher cada extra? No checkout: `./install.sh --avancado` / `.\install.ps1 -Avancado`
 (o `bootstrap.ps1` não repassa argumentos; o `bootstrap.sh` aceita `bash -s -- --avancado`).
 Agentes de código: o instalador usa os que já estão no computador e só instala o Claude Code

@@ -1,6 +1,7 @@
 //! Vida do servidor: a marca de "de pé" a cada subida e a de parada limpa. A subida que acha a marca
 //! de pé sabe que a vida anterior não saiu limpa (queda, kill, falta de energia) e a conta.
 use std::io::{Read, Seek, SeekFrom, Write};
+use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::LazyLock;
 
@@ -73,7 +74,29 @@ pub fn mark_running(dir: &Path, pid: u32, birth: Option<f64>, now: &str, alive: 
         None => map.shift_remove("birth"),
     };
     map.insert("started".into(), json!(now));
+    map.shift_remove("health");
     write(dir, &life).map(|()| Mark::Marked)
+}
+
+/// O endereço onde esta vida, já de pé, atende a saúde: o lançador do Windows o confere. `false`
+/// quando a marca de pé não é deste `pid`.
+pub fn mark_health(dir: &Path, pid: u32, address: SocketAddr) -> std::io::Result<bool> {
+    let (mut life, _) = read_or_reset(dir)?;
+    if !running_as(&life, pid) { return Ok(false); }
+    life.as_object_mut().expect("read_or_reset devolve objeto").insert("health".into(), json!(address.to_string()));
+    write(dir, &life).map(|()| true)
+}
+
+/// O endereço de saúde da vida `pid` de pé; `None` em qualquer outro caso, inclusive arquivo
+/// ilegível e a versão que não o grava.
+pub fn health(dir: &Path, pid: u32) -> Option<SocketAddr> {
+    let life = read(dir).ok()?;
+    if !running_as(&life, pid) { return None; }
+    life.get("health")?.as_str()?.parse().ok()
+}
+
+fn running_as(life: &Value, pid: u32) -> bool {
+    life.get("running").and_then(Value::as_bool) == Some(true) && life.get("pid").and_then(Value::as_u64) == Some(u64::from(pid))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
