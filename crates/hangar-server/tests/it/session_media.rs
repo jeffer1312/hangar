@@ -307,7 +307,7 @@ async fn video_with_media_later_answers_pending_and_the_wait_route_delivers_the_
     assert_eq!(status, StatusCode::OK, "{saved}");
     assert_eq!((saved["frames"].clone(), saved["transcript"].clone(), saved["media"].clone()), (json!([]), json!(""), json!("pending")));
     let id = saved["media_id"].as_str().unwrap();
-    let (status, media) = scene.get(&format!("/api/sessions/s/upload-media?id={id}&wait=1")).await;
+    let (status, media) = scene.get(&format!("/api/sessions/s/upload-media?id={id}")).await;
     // Arquivo que não é vídeo de verdade: o ffmpeg não tira quadro nem áudio, e a mídia termina vazia.
     assert_eq!((status, media), (StatusCode::OK, json!({"status": "done", "frames": [], "transcript": ""})));
 }

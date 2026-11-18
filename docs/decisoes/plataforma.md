@@ -4893,7 +4893,7 @@ Issue #408. O painel que usa os conectores.
   e fala, que o desktop põe na mensagem.
 - **Contrato.** `POST …/upload?media=later` com vídeo responde na hora com `"media":"pending"` e um
   `media_id` aleatório; o processamento roda numa tarefa e o resultado fica num registro em memória
-  (`uploads::media::MediaJobs`). `GET …/upload-media?id=<media_id>&wait=1` segura o pedido até ficar
+  (`uploads::media::MediaJobs`). `GET …/upload-media?id=<media_id>` segura o pedido até ficar
   pronto ou 45 s (`status: pending`), e devolve `{"status":"done","frames","transcript"}`. Id
   desconhecido, de outro projeto, expirado (10 min depois de pronto), de tarefa que caiu ou perdido por
   reinício é 404 `erro_midia_desconhecida`: o app segue só com o vídeo, como o desktop quando a

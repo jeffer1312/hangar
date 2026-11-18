@@ -820,14 +820,14 @@ export function uploadTimeoutMs(size: number | undefined): number {
   return Math.max(180_000, Math.ceil((size ?? 0) / 50_000) * 1000);
 }
 
-async function postUpload<T extends { path: string }>(
+async function postUpload(
   s: Server,
   name: string,
   file: { name: string; type: string; size?: number },
   query: string,
   body: RequestInit['body'],
   send?: typeof fetch,
-): Promise<T> {
+): Promise<DiskUpload> {
   const res = await apiFetchRes(`/api/sessions/${encodeURIComponent(name)}/upload${query}`, {
     method: 'POST',
     headers: {
@@ -839,27 +839,34 @@ async function postUpload<T extends { path: string }>(
   // Prazo de upload estourado é o link lento da pessoa, não a máquina fora do ar.
   }, s, false, false, send);
   if (!res.ok) throw new Error(`${res.status}: ${await errorDetail(res)}`);
-  return res.json() as Promise<T>;
+  return res.json() as Promise<DiskUpload>;
 }
 
 const MEDIA_WAIT_TOTAL_MS = 8 * 60_000;
 
 /** Quadros e fala de um vídeo subido com `media_id`. `null` quando não vêm (falha, servidor
- *  reiniciado, teto total): quem chama segue só com o vídeo, como o desktop quando a transcrição falha. */
+ *  reiniciado, teto total): quem chama segue só com o vídeo, como o desktop quando a transcrição falha.
+ *  `signal` abortado (anexo removido, tela fechada) rejeita com o motivo dele: não é "sem mídia". */
 export async function waitUploadMediaForServer(
   s: Server,
   name: string,
   mediaId: string,
+  signal?: AbortSignal,
 ): Promise<{ frames: string[]; transcript: string } | null> {
   const deadline = Date.now() + MEDIA_WAIT_TOTAL_MS;
-  // Cada pedido fica no servidor até a mídia ficar pronta ou ~45 s; não há espera do lado de cá.
+  // Cada pedido fica no servidor até a mídia ficar pronta ou ~45 s; só a falha espera do lado de cá.
   while (Date.now() < deadline) {
-    const res = await apiFetchRes(`/api/sessions/${encodeURIComponent(name)}/upload-media?id=${encodeURIComponent(mediaId)}&wait=1`, {
+    if (signal?.aborted) throw signal.reason;
+    const res = await apiFetchRes(`/api/sessions/${encodeURIComponent(name)}/upload-media?id=${encodeURIComponent(mediaId)}`, {
       signal: AbortSignal.timeout(60_000),
     }, s, false, false).catch(() => null);
-    if (!res?.ok) return null;
-    const body = await res.json() as { status: string; frames?: string[]; transcript?: string };
-    if (body.status === 'done') return { frames: body.frames ?? [], transcript: body.transcript ?? '' };
+    // Sem registro ou sem acesso não muda tentando de novo; rede caída e 5xx passam (app em segundo
+    // plano, troca de rede) enquanto o servidor guarda o resultado.
+    if (res && [401, 403, 404].includes(res.status)) return null;
+    const body = res?.ok ? await res.json().catch(() => null) as { status?: string; frames?: string[]; transcript?: string } | null : null;
+    if (signal?.aborted) throw signal.reason;
+    if (body?.status === 'done') return { frames: body.frames ?? [], transcript: body.transcript ?? '' };
+    if (body?.status !== 'pending') await new Promise((resolve) => setTimeout(resolve, 2000));
   }
   return null;
 }

@@ -1,8 +1,7 @@
 import { create } from 'zustand';
 import {
   basename, createSessionForServer, fetchSessionsForServer, getCreationProgress, getHistory,
-  sanitizeSessionName, sendInputForServer, transitionFirstConversation, uniqueSessionName, uploadFromDiskForServer,
-  waitUploadMediaForServer,
+  sanitizeSessionName, sendInputForServer, transitionFirstConversation, uniqueSessionName,
 } from '@hangar/core';
 import type {
   ChatEvent, CreateSessionBody, FirstConversationAttempt, FirstConversationEvent, Server, SessionInfo,
@@ -12,7 +11,7 @@ import { useServers } from './servers';
 import { clearDraft, readDraft, withoutUpload, writeDraft, type DraftAttachment } from './drafts';
 import { resetCreatedChat, submitConversationDraft } from './chat';
 import * as m from '../paraglide/messages';
-import { diskFileSize, sendFromDisk } from '../net/uploadFromDisk';
+import { uploadAttachment } from './attachmentUpload';
 
 // O servidor expande na abertura: o app não sabe a pasta do usuário e ela costuma estar fora das raízes.
 export const NO_PROJECT_CWD = '~';
@@ -266,9 +265,8 @@ export function sendFirstInput(serverId: string, attemptId: string): Promise<voi
     const sessionName = attempt.sessionName;
     const attach = attemptAttachment(attempt);
     const kept = attach && uploadedCopy(attempt, attach);
-    let path = kept?.uploadedPath ?? null;
-    // O anexo como vai na mensagem: com os quadros e a fala do vídeo, quando chegam.
-    let sent = kept ?? attach;
+    // O anexo como vai na mensagem: já subido e pronto, ou o que o upload devolver.
+    let sent = kept && !kept.uploadedMediaId ? kept : attach;
     // Grava o upload no rascunho da sessão; removido na conversa antes do upload, não volta à lista.
     const keep = (uploaded: DraftAttachment): boolean => {
       try {
@@ -283,31 +281,23 @@ export function sendFirstInput(serverId: string, attemptId: string): Promise<voi
         return false;
       }
     };
-    if (attach) {
+    if (attach && sent === attach) {
       const uploadedFor = { serverId, name: sessionName, transcript: null };
-      let mediaId = kept?.uploadedMediaId;
-      if (!path) {
-        try {
-          const saved = await uploadFromDiskForServer(server, sessionName,
-            { name: attach.name, type: attach.mime, size: await diskFileSize(attach.uri) }, sendFromDisk(attach.uri));
-          path = saved.path;
-          mediaId = saved.media_id;
-        } catch (cause) {
-          // A sessão existe; o anexo segue na tentativa e no rascunho dela, para reenviar aqui ou na conversa.
-          setIssue(serverId, { kind: 'local', message: m.nova_conversa_anexo_falhou({ erro: messageOf(cause) }) });
-          return;
-        }
-        // O caminho vai ao rascunho já: fechar o app esperando a mídia não sobe o vídeo outra vez.
-        sent = { ...withoutUpload(attach), uploadedPath: path, uploadedFor, ...(mediaId ? { uploadedMediaId: mediaId } : {}) };
-        if (!keep(sent)) return;
+      const pending = kept?.uploadedMediaId && kept.uploadedPath ? { path: kept.uploadedPath, mediaId: kept.uploadedMediaId } : null;
+      let saveFailed = false;
+      try {
+        const fields = await uploadAttachment(server, sessionName, attach, (f) => {
+          if (!saveFailed && !keep({ ...withoutUpload(attach), ...f, uploadedFor })) saveFailed = true;
+        }, { pending });
+        sent = { ...withoutUpload(attach), ...fields, uploadedFor };
+      } catch (cause) {
+        // A sessão existe; o anexo segue na tentativa e no rascunho dela, para reenviar aqui ou na conversa.
+        setIssue(serverId, { kind: 'local', message: m.nova_conversa_anexo_falhou({ erro: messageOf(cause) }) });
+        return;
       }
-      if (mediaId) {
-        const media = await waitUploadMediaForServer(server, sessionName, mediaId);
-        sent = { ...withoutUpload(attach), uploadedPath: path, uploadedFor, uploadedFrames: media?.frames ?? [], uploadedSpeech: media?.transcript ?? '' };
-        if (!keep(sent)) return;
-      }
+      if (saveFailed) return;
     }
-    const message = sent && path ? withAttach(attempt.text.trim(), attachInsert(sent, path)) : attempt.text;
+    const message = sent?.uploadedPath ? withAttach(attempt.text.trim(), attachInsert(sent, sent.uploadedPath)) : attempt.text;
     // Com anexo o texto enviado difere do rascunho; a revisão explícita deixa o ACK limpar o campo.
     let draftRevision: number | undefined;
     if (attach) {

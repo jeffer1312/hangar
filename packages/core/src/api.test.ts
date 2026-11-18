@@ -1031,12 +1031,31 @@ describe('transcribeFile', () => {
       new Response(JSON.stringify(replies.shift()), { status: 200 }));
     expect(await waitUploadMediaForServer(server, 'sessao', 'm1')).toEqual({ frames: ['/up/q1.jpg'], transcript: 'ola' });
     expect(fetchMock.mock.calls.map((c) => c[0])).toEqual([
-      'https://a.test/api/sessions/sessao/upload-media?id=m1&wait=1',
-      'https://a.test/api/sessions/sessao/upload-media?id=m1&wait=1',
+      'https://a.test/api/sessions/sessao/upload-media?id=m1',
+      'https://a.test/api/sessions/sessao/upload-media?id=m1',
     ]);
   });
 
-  it('espera da mídia devolve null para resposta que não é 200 e depois do teto total', async () => {
+  it('espera da mídia tenta de novo depois de queda de rede e de erro do servidor', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout'] });
+    try {
+      let calls = 0;
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+        calls += 1;
+        if (calls === 1) throw new TypeError('Network request failed');
+        if (calls === 2) return new Response(JSON.stringify({ detail: { code: 'upload_facts_unavailable' } }), { status: 503 });
+        return new Response(JSON.stringify({ status: 'done', frames: [], transcript: 'ola' }), { status: 200 });
+      });
+      const waiting = waitUploadMediaForServer(server, 'sessao', 'm1');
+      await vi.runAllTimersAsync();
+      expect(await waiting).toEqual({ frames: [], transcript: 'ola' });
+      expect(calls).toBe(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('espera da mídia devolve null para mídia desconhecida e depois do teto total', async () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
       new Response(JSON.stringify({ detail: { code: 'erro_midia_desconhecida' } }), { status: 404 }));
     expect(await waitUploadMediaForServer(server, 'sessao', 'm1')).toBeNull();

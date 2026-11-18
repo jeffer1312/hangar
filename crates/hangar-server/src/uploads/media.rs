@@ -14,13 +14,13 @@ use std::{
 use tokio::{io::AsyncReadExt, sync::watch};
 
 /// Quadros e fala de um vídeo, entregues depois do upload (`media=later`).
-#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Media {
     pub frames: Vec<PathBuf>,
     pub transcript: String,
 }
 
-/// Teto de um pedido de `upload-media?wait=1`: abaixo dos 60 s que o envio nativo espera sem resposta.
+/// Teto de um pedido de `upload-media`: abaixo dos 60 s que o envio nativo espera sem resposta.
 pub const WAIT_CAP: Duration = Duration::from_secs(45);
 /// Quanto tempo o resultado fica guardado depois de pronto.
 const KEEP: Duration = Duration::from_secs(600);
@@ -56,7 +56,7 @@ impl Default for MediaJobs {
 impl MediaJobs {
     pub fn start(&self, id: String, project: String, work: impl Future<Output = Media> + Send + 'static) {
         let (tx, rx) = watch::channel(None);
-        self.jobs.lock().unwrap_or_else(|e| e.into_inner()).insert(id.clone(), Job { project, result: rx.clone() });
+        self.jobs.lock().unwrap_or_else(|e| e.into_inner()).insert(id.clone(), Job { project, result: rx });
         let (jobs, queue) = (self.jobs.clone(), self.queue.clone());
         tokio::spawn(async move {
             let turn = queue.acquire_owned().await;
@@ -66,10 +66,7 @@ impl MediaJobs {
             }
             drop((turn, tx));
             tokio::time::sleep(KEEP).await;
-            let mut map = jobs.lock().unwrap_or_else(|e| e.into_inner());
-            if map.get(&id).is_some_and(|job| job.result.same_channel(&rx)) {
-                map.remove(&id);
-            }
+            jobs.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
         });
     }
 
@@ -315,6 +312,16 @@ pub fn frame_positions(duration: f64) -> Vec<f64> {
         vec![0.0]
     }
 }
+/// Quadros e fala do vídeo; outro arquivo devolve vazio.
+pub async fn process(st: &crate::routes::AppState, store: &UploadStore, project: &str, session: &str, path: &Path) -> Media {
+    let (frames, audio) = extract(store, project, session, path).await;
+    let transcript = match audio {
+        Some(audio) => transcribe(st, audio).await,
+        None => String::new(),
+    };
+    Media { frames, transcript }
+}
+
 /// O áudio do vídeo, no perfil de vídeo; falha vira texto vazio e o anexo segue.
 pub async fn transcribe(st: &crate::routes::AppState, audio: Vec<u8>) -> String {
     crate::transcription::routes::transcribe_here(st, audio.into(), Some("audio.m4a".into()), crate::transcription::model::Profile::Video)

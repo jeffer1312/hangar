@@ -78,10 +78,21 @@ export type DictationDraft = z.infer<typeof dictationSchema>;
 export type UploadTarget = NonNullable<DraftAttachment['uploadedFor']>;
 
 // Upload feito antes de a sessão ter transcript ainda é dela; transcript diferente é sessão recriada.
-export function reusableUploadPath(attachment: DraftAttachment, target: UploadTarget): string | null {
+function uploadedFor(attachment: DraftAttachment, target: UploadTarget): string | null {
   const done = attachment.uploadedFor;
   if (!attachment.uploadedPath || !done || done.serverId !== target.serverId || done.name !== target.name) return null;
   return done.transcript === null || done.transcript === target.transcript ? attachment.uploadedPath : null;
+}
+
+/** Caminho de um upload pronto para ir na mensagem; vídeo com quadros e fala pendentes ainda não está. */
+export function reusableUploadPath(attachment: DraftAttachment, target: UploadTarget): string | null {
+  return attachment.uploadedMediaId ? null : uploadedFor(attachment, target);
+}
+
+/** Vídeo já subido para esta sessão cujos quadros e fala ainda não chegaram: retoma só a espera. */
+export function pendingMediaUpload(attachment: DraftAttachment, target: UploadTarget): { path: string; mediaId: string } | null {
+  const path = uploadedFor(attachment, target);
+  return path && attachment.uploadedMediaId ? { path, mediaId: attachment.uploadedMediaId } : null;
 }
 
 export function withoutUpload(attachment: DraftAttachment): DraftAttachment {

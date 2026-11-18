@@ -264,42 +264,24 @@ async fn execute(
         };
         // O envio nativo do celular desiste com 60 s sem resposta, e quadros mais fala passam disso.
         if media_later && !audio_only && media::is_video(&path) {
-            let Ok(id) = crate::accounts::claude_login::nonce() else {
-                return failure(500, "erro_midia_indisponivel", "não foi possível registrar o processamento do vídeo");
+            let id = hangar_core::ids::random_hex(16);
+            let work = {
+                let (st, store, project, session, file) = (st.clone(), store.clone(), project.clone(), facts.session.clone(), path.clone());
+                async move { media::process(&st, &store, &project, &session, &file).await }
             };
-            let (st, store, session, file, owner) = (st.clone(), store.clone(), facts.session.clone(), path.clone(), project.clone());
-            st.upload_media.clone().start(id.clone(), owner, async move {
-                let (frames, audio) = media::extract(&store, &project, &session, &file).await;
-                let transcript = match audio {
-                    Some(audio) => media::transcribe(&st, audio).await,
-                    None => String::new(),
-                };
-                media::Media { frames, transcript: transcript.trim().to_owned() }
-            });
+            st.upload_media.start(id.clone(), project, work);
             return response(json!({"path":path,"frames":[],"transcript":"","media":"pending","media_id":id}), 200);
         }
-        let (frames, audio) = if audio_only {
-            (vec![], None)
+        let media = if audio_only {
+            media::Media::default()
         } else {
-            media::extract(&store, &project, &facts.session, &path).await
+            media::process(st, &store, &project, &facts.session, &path).await
         };
-        let transcript = match audio {
-            Some(audio) => media::transcribe(st, audio).await,
-            None => String::new(),
-        };
-        return response(
-            json!({"path":path,"frames":frames,"transcript":transcript.trim()}),
-            200,
-        );
+        return response(json!({"path":path,"frames":media.frames,"transcript":media.transcript}), 200);
     }
     if tail == "upload-media" {
-        let wait = match boolean(query.get("wait")) {
-            Ok(v) => v,
-            Err(()) => return response(json!({"detail":"valor booleano inválido"}), 422),
-        };
-        let cap = if wait { media::WAIT_CAP } else { std::time::Duration::ZERO };
         let id = query.get("id").map(String::as_str).unwrap_or_default();
-        return match st.upload_media.wait(id, &project, cap).await {
+        return match st.upload_media.wait(id, &project, media::WAIT_CAP).await {
             media::Waited::Done(m) => response(json!({"status":"done","frames":m.frames,"transcript":m.transcript}), 200),
             media::Waited::Pending => response(json!({"status":"pending"}), 200),
             media::Waited::Unknown => failure(404, "erro_midia_desconhecida", "nenhuma mídia em processamento para esse arquivo"),
