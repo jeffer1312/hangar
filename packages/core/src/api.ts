@@ -865,9 +865,9 @@ export async function waitUploadMediaForServer(
     const res = await apiFetchRes(`/api/sessions/${encodeURIComponent(name)}/upload-media?id=${encodeURIComponent(mediaId)}`, {
       signal: comTeto(signal, Math.max(1, Math.min(60_000, deadline - Date.now()))),
     }, s, false, false).catch(() => null);
-    // Sem registro ou sem acesso não muda tentando de novo; rede caída e 5xx passam (app em segundo
-    // plano, troca de rede) enquanto o servidor guarda o resultado.
-    if (res && [401, 403, 404].includes(res.status)) return null;
+    // 4xx (sem registro, sem acesso, convite encerrado) não muda tentando de novo; rede caída, 5xx,
+    // 408 e 429 passam (app em segundo plano, troca de rede) enquanto o servidor guarda o resultado.
+    if (res && res.status >= 400 && res.status < 500 && res.status !== 408 && res.status !== 429) return null;
     const body = res?.ok ? await res.json().catch(() => null) as { status?: string; frames?: string[]; transcript?: string } | null : null;
     if (signal?.aborted) throw cancelled();
     if (body?.status === 'done') return { frames: body.frames ?? [], transcript: body.transcript ?? '' };

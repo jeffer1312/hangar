@@ -1066,6 +1066,13 @@ describe('transcribeFile', () => {
     await expect(waiting).rejects.toBe(reason);
   });
 
+  it('espera da mídia para na hora em convite encerrado (410) e outros 4xx definitivos', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      new Response(JSON.stringify({ detail: 'encerrado' }), { status: 410 }));
+    expect(await waitUploadMediaForServer(server, 'sessao', 'm1')).toBeNull();
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
   it('espera da mídia devolve null para mídia desconhecida e para servidor sem responder além do teto', async () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
       new Response(JSON.stringify({ detail: { code: 'upload_media_unknown' } }), { status: 404 }));
