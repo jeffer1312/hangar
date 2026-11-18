@@ -134,6 +134,7 @@ public static class FakeMark {
     $vapid = $texto.IndexOf('@argsVapid')
     Assert ($binarios -gt 0 -and $vapid -gt $binarios) 'chaves do push depois dos binarios'
     Assert ($texto.Contains('-File $serverCommand @args') -and $texto.Contains('$rc = Srv install-token')) 'fumaca pelo hangar-server'
+    Assert ($texto.Contains("`$serverBinary = Join-Path `$raiz 'bin\hangar-server.exe'") -and $texto.Contains('& $serverBinary @args')) 'pacote: o binario desta versao, nao o do current'
     $fumaca = $texto.IndexOf("Ok 'o multiplexador mata sessao'")
     $marca = $texto.IndexOf('install-package --mark-steps 2>&1')
     $fim = $texto.IndexOf('# -- Confere e entrega o acesso')

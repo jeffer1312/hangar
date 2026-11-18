@@ -197,6 +197,19 @@ pacote_sandbox vapid-falha
 run_install "$S/out" --app --tailscale=nao --sem-nativo; rc=$?
 expect_line "vapid-falha: pendência push" "$S/out" '^##HANGAR-PENDENCIA## push .*current/bin/hangar-server vapid-setup$'
 
+# --- Caso: passo da atualização, com o `current` ainda na versão anterior sem os subcomandos novos ---
+pacote_sandbox atualiza
+OLD="$ROOT/atualiza/versao-anterior"
+mkdir -p "$OLD/bin"
+printf '#!/bin/sh\necho "$*" >> "%s/log/old-server"\necho "hangar-server: subcomando desconhecido: $1" >&2\nexit 2\n' "$S" > "$OLD/bin/hangar-server"
+chmod +x "$OLD/bin/hangar-server"
+rm "$S/home/.hangar/current" && ln -s "$OLD" "$S/home/.hangar/current"
+run_install "$S/out" --update --tailscale=nao --sem-nativo; rc=$?
+expect_line "atualiza: push pelo binário da versão nova" "$S/log/server" '^vapid-setup$'
+[ -e "$S/log/old-server" ] && flunk "atualiza: o binário da versão anterior não é chamado" "$S/log/old-server" \
+  || pass "atualiza: o binário da versão anterior não é chamado"
+expect_no "atualiza: sem pendência do push" "$S/out" 'PENDENCIA## push'
+
 # --- install-native.sh: a primeira conexão do app leva a senha de ~/.hangar/config/.env ---
 # native_box <nome>: N (cópia do Hangar com o install-native.sh de verdade), H (HOME) e NREL (a release falsa).
 native_box() {

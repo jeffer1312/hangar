@@ -269,6 +269,11 @@ fi
 # (regra única em scripts/hangar-server-lookup). No checkout novo ele só existe depois do passo
 # dos binários Rust.
 SRV="$REPO/scripts/hangar-server-command"
+# No pacote vale o binário desta versão: no passo da atualização o `current` ainda aponta a anterior,
+# que não conhece os subcomandos novos. Escolha explícita (CP_RUST_SERVER_BIN) continua vencendo.
+if [ "$PACOTE" = 1 ] && [ -z "${CP_RUST_SERVER_BIN:-}" ] && [ -x "$REPO/bin/hangar-server" ]; then
+  SRV="$REPO/bin/hangar-server"
+fi
 # No --update do checkout o binário achado pode ser mais antigo que este código (o de ~/.hangar/bin
 # baixado antes do pull): subcomando que ele não conhece vira aviso, com o motivo. No pacote e na
 # instalação nova o binário veio com o código, e a falta é erro.

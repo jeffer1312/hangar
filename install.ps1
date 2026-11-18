@@ -78,6 +78,10 @@ $pacote = (Test-Path -LiteralPath "$raiz\manifest.json") -and -not (Test-Path -L
 # O hangar-server da instalacao (regra unica em scripts\hangar-server-command.ps1). No checkout novo
 # ele so existe depois do passo dos binarios Rust.
 $serverCommand = Join-Path $raiz 'scripts\hangar-server-command.ps1'
+# No pacote vale o binario desta versao: no passo da atualizacao o current ainda aponta a anterior,
+# que nao conhece os subcomandos novos. Escolha explicita (CP_RUST_SERVER_BIN) continua vencendo.
+$serverBinary = Join-Path $raiz 'bin\hangar-server.exe'
+$serverOwn = $pacote -and -not "$env:CP_RUST_SERVER_BIN".Trim() -and (Test-Path -LiteralPath $serverBinary -PathType Leaf)
 # No -Update do checkout o hangar-server achado pode ser mais antigo que este codigo: subcomando que
 # ele nao conhece (saida 2 com argumentos validos) vira aviso, com o motivo. No pacote e na
 # instalacao nova o binario veio com o codigo, e a falta e erro.
@@ -89,7 +93,8 @@ function Srv {
     $anterior = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
-        $script:serverOutput = & $PowerShellExe -NoProfile -ExecutionPolicy Bypass -File $serverCommand @args 2>&1 | Out-String
+        if ($script:serverOwn) { $script:serverOutput = & $serverBinary @args 2>&1 | Out-String }
+        else { $script:serverOutput = & $PowerShellExe -NoProfile -ExecutionPolicy Bypass -File $serverCommand @args 2>&1 | Out-String }
         return $LASTEXITCODE
     } finally { $ErrorActionPreference = $anterior }
 }
