@@ -10,3 +10,6 @@ tipo: maquina
 O Hangar passa a perceber sozinho quando o servidor trava e o reinicia. A tarefa separada que
 fazia isso a cada 5 minutos sai, e com ela o aviso "Não é possível encontrar o arquivo de script
 hangar-vigia.vbs" que aparecia em algumas máquinas.
+
+A conferência começa 3 minutos depois de o servidor ficar pronto. O servidor que trava antes
+disso, e uma versão anterior que ainda sobe pelo Python, só são reabertos quando caem.

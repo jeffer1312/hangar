@@ -28,11 +28,12 @@ pub fn launch(args: &[String]) -> ExitCode {
     // O direto no Windows gira o log antes de escrever: estas linhas abrem o arquivo da vida nova.
     let tell = |lines: &[String]| { for line in lines { report(log.as_deref(), line); } };
     match chosen {
-        Ok(Backend::Direct(command)) => {
-            let mut again = |notes: &mut Vec<String>| relaunch_backend(&home, &args[1..], cfg!(windows), explicit.as_deref(), notes);
-            run_direct(command, log.as_deref(), &version, lines, &home.join(".hangar"), &mut again)
-        }
+        #[cfg(unix)]
         Ok(Backend::Python(command)) => { tell(&lines); run(command, log.as_deref(), &version) }
+        Ok(backend) => {
+            let mut again = |notes: &mut Vec<String>| relaunch_backend(&home, &args[1..], cfg!(windows), explicit.as_deref(), notes);
+            run_direct(backend, log.as_deref(), &version, lines, &home.join(".hangar"), &mut again)
+        }
         Err((code, path)) => {
             tell(&lines);
             report(log.as_deref(), &format!("{code}: {}", path.display()));
@@ -53,11 +54,9 @@ fn version_of(home: &Path) -> String {
 /// sobe pelo Python (a volta da atualização) é religada pelo Python dela: nada mais traz de volta
 /// um lançador que sai.
 pub(crate) fn relaunch_backend(home: &Path, args: &[String], windows: bool, explicit: Option<&std::ffi::OsStr>, notes: &mut Vec<String>)
-    -> Result<(std::process::Command, String), (&'static str, PathBuf)> {
+    -> Result<(Backend, String), (&'static str, PathBuf)> {
     let version = version_of(home);
-    match backend_noted(home, args, windows, explicit, notes)? {
-        Backend::Direct(command) | Backend::Python(command) => Ok((command, version)),
-    }
+    Ok((backend_noted(home, args, windows, explicit, notes)?, version))
 }
 
 /// `lancador.falhou` no diário: o gerenciador religa sem fim, e a causa fica no diário que o
@@ -108,14 +107,15 @@ fn run(mut command: std::process::Command, log: Option<&Path>, version: &str) ->
 }
 
 /// O servidor da religada (`relaunch_backend`), com as notas da escolha.
-type Again<'a> = dyn FnMut(&mut Vec<String>) -> Result<(std::process::Command, String), (&'static str, PathBuf)> + 'a;
+type Again<'a> = dyn FnMut(&mut Vec<String>) -> Result<(Backend, String), (&'static str, PathBuf)> + 'a;
 
 /// O lançador vira o `hangar-server`: mesmo pid, então o `sd_notify` dele vale para a unit e a vida
 /// é dele. Quem religa a queda é o systemd/launchd.
 #[cfg(unix)]
-fn run_direct(mut command: std::process::Command, log: Option<&Path>, version: &str, lines: Vec<String>, _hangar_dir: &Path,
+fn run_direct(backend: Backend, log: Option<&Path>, version: &str, lines: Vec<String>, _hangar_dir: &Path,
               _again: &mut Again<'_>) -> ExitCode {
     use std::os::unix::process::CommandExt;
+    let (Backend::Direct(mut command) | Backend::Python(mut command)) = backend;
     for line in &lines { report(log, line); }
     let error = command.exec();
     report(log, &format!("launch_exec_failed: versão {version}: {error}"));
@@ -135,8 +135,9 @@ fn notify_from_env(state: &str) -> std::io::Result<()> {
 /// `current`, também a versão que sobe pelo Python. O lançador só sai com a parada pedida ou morto;
 /// morto, o Job leva o servidor.
 #[cfg(windows)]
-fn run_direct(mut command: std::process::Command, log: Option<&Path>, version: &str, lines: Vec<String>, hangar_dir: &Path,
+fn run_direct(backend: Backend, log: Option<&Path>, version: &str, lines: Vec<String>, hangar_dir: &Path,
               again: &mut Again<'_>) -> ExitCode {
+    let (mut command, mut python) = split(backend);
     let mut version = version.to_owned();
     let launcher = std::process::id();
     let mut relaunch = Relaunch::new(relaunch_first());
@@ -173,6 +174,9 @@ fn run_direct(mut command: std::process::Command, log: Option<&Path>, version: &
             }
             None => { command.stdout(std::process::Stdio::inherit()).stderr(std::process::Stdio::inherit()); }
         }
+        // A versão que sobe pelo Python precisa do interpretador efetivo registrado, como na subida dela.
+        let snapshot = python.then(|| crate::boot_version::PythonLaunch::capture(&command)
+            .inspect_err(|error| say(file.as_ref(), log, &format!("launch_python_version_unavailable: {error}"))).ok()).flatten();
         let started = std::time::Instant::now();
         let (ended, exit) = match command.spawn() {
             Err(error) => {
@@ -181,16 +185,18 @@ fn run_direct(mut command: std::process::Command, log: Option<&Path>, version: &
             }
             Ok(mut child) => {
                 let pid = child.id();
+                let who = if python { "python" } else { "hangar-server" };
+                if let Some(snapshot) = snapshot { record_python_launch(&snapshot, &mut child, file.as_ref(), log); }
                 match wait_watching(&mut child, hangar_dir, file.as_ref(), log) {
                     // Sem saber se o servidor saiu, ele é encerrado antes da religada: dois na mesma porta não sobem.
                     Err(error) => {
                         failed(log, "erro", "launch_wait_failed", &format!("{:?}", error.kind()));
                         let killed = child.kill().and_then(|()| child.wait().map(drop));
                         let killed = killed.err().map(|e| format!("; encerrar falhou: {e}")).unwrap_or_default();
-                        (format!("launch_wait_failed: versão {version}, hangar-server pid {pid}: {error}{killed}"), None)
+                        (format!("launch_wait_failed: versão {version}, {who} pid {pid}: {error}{killed}"), None)
                     }
                     Ok(status) => {
-                        let exited = format!("launch_backend_exited: versão {version}, hangar-server pid {pid}, {status}, depois de {} s", started.elapsed().as_secs());
+                        let exited = format!("launch_backend_exited: versão {version}, {who} pid {pid}, {status}, depois de {} s", started.elapsed().as_secs());
                         if exit_is_requested_stop(status.code()) {
                             if !status.success() { say(file.as_ref(), log, &exited); }
                             let life = close_life(hangar_dir, pid, file.as_ref(), log);
@@ -224,7 +230,7 @@ fn run_direct(mut command: std::process::Command, log: Option<&Path>, version: &
             match again(&mut notes) {
                 Ok((fresh, fresh_version)) => {
                     pending.extend(notes);
-                    (command, version) = (fresh, fresh_version);
+                    ((command, python), version) = (split(fresh), fresh_version);
                     break;
                 }
                 Err((code, path)) => {
@@ -247,16 +253,23 @@ fn wait_watching(child: &mut std::process::Child, hangar_dir: &Path, file: Optio
     -> std::io::Result<std::process::ExitStatus> {
     let pid = child.id();
     let mut watch = crate::watchdog::LauncherWatch::new(std::time::Instant::now());
+    let mut hung = false;
     loop {
         if let Some(status) = child.try_wait()? { return Ok(status); }
         let verdict = watch.tick(std::time::Instant::now(), || hangar_boot::life::health(hangar_dir, pid),
             |address| crate::watchdog::health_answers_blocking(address, crate::watchdog::TIMEOUT));
         if let Some(crate::watchdog::Verdict::Withheld(rounds)) = verdict {
-            say(file, log, &format!("launch_backend_hung: hangar-server pid {pid} sem responder a saúde em {rounds} rodadas seguidas; encerrado"));
-            record(log, "lancador.travado", serde_json::json!({"evento": "lancador.travado", "nivel": "erro", "codigo": "server_hung", "rodadas": rounds}));
-            note_restart_for_doctor(pid, rounds, file, log);
-            match child.kill() {
-                Ok(()) => return child.wait(),
+            if !hung {
+                hung = true;
+                say(file, log, &format!("launch_backend_hung: hangar-server pid {pid} sem responder a saúde em {rounds} rodadas seguidas; encerrando"));
+                record(log, "lancador.travado", serde_json::json!({"evento": "lancador.travado", "nivel": "erro", "codigo": "server_hung", "rodadas": rounds}));
+            }
+            // O reinício só é contado para o `hangar-doctor` com o filho de fato fora.
+            match child.kill().and_then(|()| child.wait()) {
+                Ok(status) => {
+                    note_restart_for_doctor(pid, rounds, file, log);
+                    return Ok(status);
+                }
                 // Sem encerrar não há religada: a próxima rodada tenta de novo.
                 Err(error) => say(file, log, &format!("launch_kill_failed: hangar-server pid {pid}: {error}")),
             }
@@ -340,58 +353,34 @@ fn open_log(target: &Path) -> std::io::Result<(std::fs::File, std::path::PathBuf
     Err(last)
 }
 
-/// No Windows não há `exec`: espera o backend e sai com o código dele, os dois no mesmo Job.
+/// O comando da vida e se ela sobe pelo Python.
 #[cfg(windows)]
-fn run(mut command: std::process::Command, log: Option<&Path>, version: &str) -> ExitCode {
-    // Sem o Job o backend sobe como antes, só sem a proteção: a falha vai ao log da tarefa.
-    if let Err(error) = die_with_the_launcher() {
-        report(log, &format!("launch_job_failed: {error}"));
-        failed(log, "aviso", "launch_job_failed", &format!("{:?}", error.kind()));
+fn split(backend: Backend) -> (std::process::Command, bool) {
+    match backend {
+        Backend::Direct(command) => (command, false),
+        Backend::Python(command) => (command, true),
     }
-    let snapshot = match crate::boot_version::PythonLaunch::capture(&command) {
-        Ok(snapshot) => Some(snapshot),
-        Err(error) => { report(log, &format!("launch_python_version_unavailable: {error}")); None }
-    };
-    let mut child = match command.spawn() {
-        Ok(child) => child,
-        Err(error) => {
-            report(log, &format!("launch_exec_failed: versão {version}: {error}"));
-            failed(log, "erro", "launch_exec_failed", &Path::new(command.get_program()).display().to_string());
-            return ExitCode::from(126);
-        }
-    };
-    let (pid, started) = (child.id(), std::time::Instant::now());
-    report(log, &format!("launch_backend_started: versão {version}, python pid {pid}"));
-    if let Some(snapshot) = snapshot {
-        let mut birth = None;
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        let confirmed = loop {
-            if birth.is_none() { birth = crate::terminal_facts::agent_birth(pid); }
-            if let Some(birth) = birth {
-                match snapshot.record_windows(pid, birth) {
-                    Ok(true) => break true,
-                    Err(error) => { report(log, &format!("launch_python_version_unavailable: {error}")); break false; }
-                    Ok(false) => {}
-                }
+}
+
+/// O interpretador que o Python da versão de fato usa, conferido pelo nascimento do filho, até 5 s.
+#[cfg(windows)]
+fn record_python_launch(snapshot: &crate::boot_version::PythonLaunch, child: &mut std::process::Child, file: Option<&std::fs::File>, log: Option<&Path>) {
+    let pid = child.id();
+    let mut birth = None;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let confirmed = loop {
+        if birth.is_none() { birth = crate::terminal_facts::agent_birth(pid); }
+        if let Some(birth) = birth {
+            match snapshot.record_windows(pid, birth) {
+                Ok(true) => break true,
+                Err(error) => { say(file, log, &format!("launch_python_version_unavailable: {error}")); break false; }
+                Ok(false) => {}
             }
-            if std::time::Instant::now() >= deadline || child.try_wait().ok().flatten().is_some() { break false; }
-            std::thread::park_timeout(std::time::Duration::from_millis(50));
-        };
-        if !confirmed { report(log, "launch_python_version_unavailable: interpretador efetivo não confirmado"); }
-    }
-    match child.wait() {
-        Ok(status) => {
-            // 0xffffffff é o `Stop-Process` do reinício: a versão que estava de pé sendo parada.
-            if !status.success() {
-                report(log, &format!("launch_backend_exited: versão {version}, python pid {pid}, {status}, depois de {} s", started.elapsed().as_secs()));
-            }
-            std::process::exit(status.code().unwrap_or(1))
         }
-        Err(error) => {
-            report(log, &format!("launch_wait_failed: versão {version}, python pid {pid}: {error}"));
-            ExitCode::from(126)
-        }
-    }
+        if std::time::Instant::now() >= deadline || child.try_wait().ok().flatten().is_some() { break false; }
+        std::thread::park_timeout(std::time::Duration::from_millis(50));
+    };
+    if !confirmed { say(file, log, "launch_python_version_unavailable: interpretador efetivo não confirmado"); }
 }
 
 /// Põe o lançador num Job que mata o grupo quando o último handle fecha: matar o lançador
@@ -426,7 +415,7 @@ fn die_with_the_launcher() -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{current, root};
+    use super::{current, root, Backend};
 
     /// B-36: cada subida começa um log novo e a saída da anterior (a de uma queda) fica em `.1`; as
     /// mais velhas andam uma casa até `.5`.
@@ -472,9 +461,9 @@ mod tests {
     }
 
     /// Decisão 38: a religada resolve o `current` de novo. Depois da troca de versão ela abre o servidor
-    /// da nova (com o nome dela para o log); versão que sobe pelo Python não é religada.
+    /// da nova (com o nome dela para o log), e a versão que sobe pelo Python volta pelo Python dela.
     #[test]
-    fn the_relaunch_follows_the_current_and_refuses_a_python_version() {
+    fn the_relaunch_follows_the_current_for_direct_and_python_versions() {
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path();
         let windows = cfg!(windows);
@@ -504,14 +493,16 @@ mod tests {
         runnable(&super::python_exe(&v3, windows));
         for (real, name) in [(&v1, "v1"), (&v2, "v2")] {
             relink(real);
-            let (command, version) = super::relaunch_backend(home, &[], windows, None, &mut Vec::new()).unwrap();
+            let (Backend::Direct(command), version) = super::relaunch_backend(home, &[], windows, None, &mut Vec::new()).unwrap()
+                else { panic!("{name} sobe direto") };
             assert_eq!(version, name);
             assert!(std::path::Path::new(command.get_program()).ends_with(std::path::Path::new(name).join("bin").join(exe)), "{command:?}");
         }
         // Sem a vigia, quem desiste fica fora até o próximo logon: a versão que sobe pelo Python
         // (a volta da atualização) é religada pelo Python dela.
         relink(&v3);
-        let (command, version) = super::relaunch_backend(home, &[], windows, None, &mut Vec::new()).unwrap();
+        let (Backend::Python(command), version) = super::relaunch_backend(home, &[], windows, None, &mut Vec::new()).unwrap()
+            else { panic!("v3 sobe pelo Python") };
         assert_eq!(version, "v3");
         assert!(std::path::Path::new(command.get_program()).ends_with(super::python_exe(std::path::Path::new("v3"), windows)), "{command:?}");
     }

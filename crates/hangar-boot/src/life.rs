@@ -56,8 +56,10 @@ pub enum Mark {
 }
 
 /// Pronta para atender: daqui em diante, sair sem `end` é uma saída não limpa. `birth` é o
-/// nascimento deste processo, que a subida seguinte confere antes de contar a queda.
-pub fn mark_running(dir: &Path, pid: u32, birth: Option<f64>, now: &str, alive: impl Fn(u32, f64) -> bool) -> std::io::Result<Mark> {
+/// nascimento deste processo, que a subida seguinte confere antes de contar a queda. `health` é o
+/// endereço da saúde que o lançador do Windows confere; vai na mesma escrita da marca de pé para
+/// nunca haver vida de pé sem ele.
+pub fn mark_running(dir: &Path, pid: u32, birth: Option<f64>, health: Option<SocketAddr>, now: &str, alive: impl Fn(u32, f64) -> bool) -> std::io::Result<Mark> {
     let (mut life, _) = read_or_reset(dir)?;
     let running = life.get("running").and_then(Value::as_bool).unwrap_or(false);
     let ours = life.get("pid").and_then(Value::as_u64) == Some(u64::from(pid));
@@ -74,17 +76,11 @@ pub fn mark_running(dir: &Path, pid: u32, birth: Option<f64>, now: &str, alive: 
         None => map.shift_remove("birth"),
     };
     map.insert("started".into(), json!(now));
-    map.shift_remove("health");
+    match health {
+        Some(address) => map.insert("health".into(), json!(address.to_string())),
+        None => map.shift_remove("health"),
+    };
     write(dir, &life).map(|()| Mark::Marked)
-}
-
-/// O endereço onde esta vida, já de pé, atende a saúde: o lançador do Windows o confere. `false`
-/// quando a marca de pé não é deste `pid`.
-pub fn mark_health(dir: &Path, pid: u32, address: SocketAddr) -> std::io::Result<bool> {
-    let (mut life, _) = read_or_reset(dir)?;
-    if !running_as(&life, pid) { return Ok(false); }
-    life.as_object_mut().expect("read_or_reset devolve objeto").insert("health".into(), json!(address.to_string()));
-    write(dir, &life).map(|()| true)
 }
 
 /// O endereço de saúde da vida `pid` de pé; `None` em qualquer outro caso, inclusive arquivo
@@ -93,10 +89,6 @@ pub fn health(dir: &Path, pid: u32) -> Option<SocketAddr> {
     let life = read(dir).ok()?;
     if !running_as(&life, pid) { return None; }
     life.get("health")?.as_str()?.parse().ok()
-}
-
-fn running_as(life: &Value, pid: u32) -> bool {
-    life.get("running").and_then(Value::as_bool) == Some(true) && life.get("pid").and_then(Value::as_u64) == Some(u64::from(pid))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -119,6 +111,10 @@ pub fn end(dir: &Path, pid: u32) -> std::io::Result<Ended> {
     life.as_object_mut().expect("read_or_reset devolve objeto").insert("running".into(), json!(false));
     write(dir, &life)?;
     Ok(Ended::Cleared)
+}
+
+fn running_as(life: &Value, pid: u32) -> bool {
+    life.get("running").and_then(Value::as_bool) == Some(true) && life.get("pid").and_then(Value::as_u64) == Some(u64::from(pid))
 }
 
 fn read_or_reset(dir: &Path) -> std::io::Result<(Value, bool)> {

@@ -16,6 +16,10 @@ pub const GRACE: Duration = Duration::from_secs(180);
 /// Rodadas falhas seguidas antes de reter o aviso: uma rodada lenta sob carga (build saturando a
 /// máquina, pool bloqueante ocupado) não vira um laço de reinício.
 pub const FAILURES: u32 = 4;
+/// Intervalo das rodadas do lançador do Windows: o mesmo das do `WatchdogSec` da unit.
+pub const LAUNCHER_EVERY: Duration = Duration::from_secs(30);
+
+const HEALTH_REQUEST: &[u8] = b"GET /__hangar_server/health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
 
 /// Quando reter o aviso ao systemd. O antigo vigia do Python também esperava 15 min entre dois
 /// religamentos; aqui quem espaça é a espera crescente da unit (`RestartSteps`).
@@ -137,11 +141,6 @@ pub fn probe_address(listen: SocketAddr) -> SocketAddr {
     }
 }
 
-const HEALTH_REQUEST: &[u8] = b"GET /__hangar_server/health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
-
-/// Intervalo das rodadas do lançador do Windows: o mesmo das do `WatchdogSec` da unit.
-pub const LAUNCHER_EVERY: Duration = Duration::from_secs(30);
-
 /// O lançador do Windows faz pelo servidor que abriu o que o `WatchdogSec` do systemd faz no Linux:
 /// confere a saúde a cada `LAUNCHER_EVERY`, com a carência e a tolerância de `Policy::SERVER`.
 #[derive(Debug)]
@@ -163,13 +162,25 @@ impl LauncherWatch {
     }
 }
 
-/// `health_answers` sem runtime, para o lançador.
+/// `health_answers` sem runtime, para o lançador. `limit` vale para a troca inteira, não para cada
+/// leitura: resposta em pedaços que passa do prazo é falha.
 pub fn health_answers_blocking(addr: SocketAddr, limit: Duration) -> bool {
     use std::io::{Read, Write};
-    let Ok(mut stream) = std::net::TcpStream::connect_timeout(&addr, limit) else { return false };
-    if stream.set_read_timeout(Some(limit)).is_err() || stream.set_write_timeout(Some(limit)).is_err() { return false; }
+    let deadline = std::time::Instant::now() + limit;
+    let left = || deadline.checked_duration_since(std::time::Instant::now()).filter(|left| !left.is_zero());
+    let Some(Ok(mut stream)) = left().map(|left| std::net::TcpStream::connect_timeout(&addr, left)) else { return false };
+    if stream.set_write_timeout(left()).is_err() || left().is_none() || stream.write_all(HEALTH_REQUEST).is_err() { return false; }
     let mut head = [0u8; 12];
-    stream.write_all(HEALTH_REQUEST).is_ok() && stream.read_exact(&mut head).is_ok() && head.starts_with(b"HTTP/1.1 200")
+    let mut filled = 0;
+    while filled < head.len() {
+        let Some(left) = left() else { return false };
+        if stream.set_read_timeout(Some(left)).is_err() { return false; }
+        match stream.read(&mut head[filled..]) {
+            Ok(0) | Err(_) => return false,
+            Ok(n) => filled += n,
+        }
+    }
+    head.starts_with(b"HTTP/1.1 200")
 }
 
 async fn health_answers(addr: SocketAddr, limit: Duration) -> bool {
@@ -290,18 +301,23 @@ mod tests {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         let (gave_up, released) = std::sync::mpsc::channel::<()>();
+        let (stuck, accepted) = std::sync::mpsc::channel::<()>();
         let server = std::thread::spawn(move || {
             for answer in [Some(&b"HTTP/1.1 200 OK\r\n\r\n"[..]), Some(&b"HTTP/1.1 503 Service Unavailable\r\n\r\n"[..]), None] {
                 let (mut socket, _) = listener.accept().unwrap();
                 let mut request = [0u8; 256];
                 let _ = socket.read(&mut request);
                 // Sem resposta: o servidor aceita e trava, como o processo preso, até o cliente desistir.
-                match answer { Some(answer) => socket.write_all(answer).unwrap(), None => released.recv().unwrap() }
+                match answer {
+                    Some(answer) => socket.write_all(answer).unwrap(),
+                    None => { stuck.send(()).unwrap(); released.recv().unwrap() }
+                }
             }
         });
         assert!(health_answers_blocking(addr, Duration::from_secs(5)));
         assert!(!health_answers_blocking(addr, Duration::from_secs(5)));
         assert!(!health_answers_blocking(addr, Duration::from_millis(100)), "aceitou e não respondeu no prazo");
+        accepted.recv_timeout(Duration::from_secs(10)).expect("o servidor aceitou a terceira conexão: a falha foi o prazo de resposta");
         gave_up.send(()).unwrap();
         server.join().unwrap();
         assert!(!health_answers_blocking(addr, Duration::from_secs(5)), "ninguém escutando");
@@ -323,10 +339,12 @@ mod tests {
         assert_eq!(watch.tick(at(60), || Some(address), answer(false)), Some(Verdict::Grace), "pronto visto: começa a carência");
         assert_eq!(watch.tick(at(210), || Some(address), answer(false)), Some(Verdict::Grace));
         assert_eq!(probed.get(), 0, "na carência nada é conferido");
-        let verdicts: Vec<_> = (0..5).map(|n| watch.tick(at(240 + 30 * n), || Some(address), answer(n == 2))).collect();
-        assert_eq!(verdicts, [Some(Verdict::Tolerated(1)), Some(Verdict::Tolerated(2)), Some(Verdict::Passed), Some(Verdict::Tolerated(1)), Some(Verdict::Tolerated(2))]);
-        let verdicts: Vec<_> = (5..7).map(|n| watch.tick(at(240 + 30 * n), || Some(address), answer(false))).collect();
-        assert_eq!(verdicts, [Some(Verdict::Tolerated(3)), Some(Verdict::Withheld(4))]);
+        let mut verdicts = Vec::new();
+        for n in 0..7 {
+            verdicts.push(watch.tick(at(240 + 30 * n), || Some(address), answer(n == 2)));
+        }
+        assert_eq!(verdicts, [Some(Verdict::Tolerated(1)), Some(Verdict::Tolerated(2)), Some(Verdict::Passed), Some(Verdict::Tolerated(1)),
+            Some(Verdict::Tolerated(2)), Some(Verdict::Tolerated(3)), Some(Verdict::Withheld(4))]);
         assert_eq!(probed.get(), 7);
     }
 }

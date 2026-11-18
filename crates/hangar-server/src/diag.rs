@@ -399,8 +399,7 @@ fn life_alive(pid: u32, birth: f64) -> bool {
 pub fn record_running(hangar_dir: &std::path::Path, health: std::net::SocketAddr) {
     let pid = std::process::id();
     let birth = crate::terminal_facts::agent_birth(pid);
-    let line = match hangar_boot::life::mark_running(hangar_dir, pid, birth, &iso(chrono::Local::now()), life_alive)
-        .and_then(|mark| if mark == hangar_boot::life::Mark::Marked { hangar_boot::life::mark_health(hangar_dir, pid, health).map(|_| mark) } else { Ok(mark) }) {
+    let line = match hangar_boot::life::mark_running(hangar_dir, pid, birth, Some(health), &iso(chrono::Local::now()), life_alive) {
         Ok(hangar_boot::life::Mark::Marked) => return,
         Ok(hangar_boot::life::Mark::Held(holder)) => {
             tracing::warn!(code = "server_life_held", holder, "outro hangar-server de pé neste HOME segura a marca de pé; a queda desta vida não será contada");

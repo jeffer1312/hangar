@@ -233,11 +233,15 @@ pub async fn check(client: &reqwest::Client, release: &Release, platform: &str, 
 /// A entrada deste sistema no índice publicado, mais nova ou não.
 pub async fn entry(client: &reqwest::Client, release: &Release, platform: &str) -> Result<PlatformEntry, UpdateError> {
     // Queda de rede no meio do corpo não vira atualização falha; recusa do servidor (4xx) não muda tentando de novo.
+    // O total cabe nos 120 s em que a tela desiste do `?procurar=1`, com folga para a resposta.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(110);
     let mut waits = [Duration::from_secs(2), Duration::from_secs(5)].into_iter();
     let index = loop {
-        match read_index(client, release).await {
+        let limit = deadline.saturating_duration_since(tokio::time::Instant::now()).min(Duration::from_secs(60));
+        match read_index(client, release, limit).await {
             Ok(index) => break index,
-            Err((error, retry)) => match waits.next().filter(|_| retry) {
+            Err((error, retry)) => match waits.next()
+                .filter(|wait| retry && deadline.saturating_duration_since(tokio::time::Instant::now()) > *wait + Duration::from_secs(5)) {
                 Some(wait) => {
                     tracing::warn!(code = "update_index_retry", error = %error, wait_s = wait.as_secs(), "índice da release não lido; tentando de novo");
                     tokio::time::sleep(wait).await;
@@ -249,15 +253,16 @@ pub async fn entry(client: &reqwest::Client, release: &Release, platform: &str) 
     index.platforms.get(platform).cloned().ok_or_else(|| UpdateError::NoPlatform(platform.to_owned()))
 }
 
-/// O índice publicado; o erro diz se vale tentar de novo.
-async fn read_index(client: &reqwest::Client, release: &Release) -> Result<PackageIndex, (UpdateError, bool)> {
+/// O índice publicado; o erro diz se vale tentar de novo. Só a rede falha passageira: laço de
+/// redirecionamento e índice fora do formato dão o mesmo resultado na tentativa seguinte.
+async fn read_index(client: &reqwest::Client, release: &Release, limit: Duration) -> Result<PackageIndex, (UpdateError, bool)> {
     let url = release.index_url();
-    let response = client.get(&url).timeout(Duration::from_secs(60)).send().await.map_err(|e| (UpdateError::Index(e.to_string()), true))?;
+    let response = client.get(&url).timeout(limit).send().await.map_err(|e| { let retry = !e.is_redirect(); (UpdateError::Index(e.to_string()), retry) })?;
     if !response.status().is_success() {
         return Err((UpdateError::Index(format!("{} em {url}", response.status())), !response.status().is_client_error()));
     }
     let bytes = response.bytes().await.map_err(|e| (UpdateError::Index(e.to_string()), true))?;
-    serde_json::from_slice(&bytes).map_err(|e| (UpdateError::Index(e.to_string()), true))
+    serde_json::from_slice(&bytes).map_err(|e| (UpdateError::Index(e.to_string()), false))
 }
 
 /// Baixa com prazo, gravando e calculando o sha256 ao mesmo tempo.

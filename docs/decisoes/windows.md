@@ -79,11 +79,12 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
 - **A tarefa Windows acompanha o processo até ele terminar.** Reinício controlado não encerra
   a árvore inteira: sessões e atualizador sobrevivem. O `hangar-server.exe` filho entra na parada
   só quando o pai é o Python; filho do servidor direto é o executor da atualização. Ver
-  [Atualização para a 0.1.0.10824](#atualização-para-a-0110824-falhava-em-todo-windows-17112026).
+  [Atualização para a 0.1.0.10824](#atualização-para-a-01010824-falhava-em-todo-windows-17112026).
 - **O lançador é a vigia: não há tarefa `hangar-vigia`.** Ele confere `/__hangar_server/health`
   no endereço que o servidor grava na marca de pé (`server-life.json`), com a carência e a
   tolerância do watchdog do Linux (`watchdog::Policy::SERVER`), e encerra o servidor travado para
-  a religada. Ele nunca sai sozinho: a versão que sobe pelo Python (a volta) também é religada.
+  a religada. Depois de abrir a primeira vida ele nunca sai sozinho: a versão que sobe pelo
+  Python (a volta) também é religada. Só a escolha da primeira vida que falha sai com código 3.
   Lançador morto à força só volta no logon: o Agendador não religa tarefa que sai com erro.
   [Medição](#a-vigia-mora-no-lançador-17112026).
 - **O reinício do backend só vale com a porta aberta, e a porta do front pode ser do servidor.**
@@ -1226,11 +1227,15 @@ reiniciar o servidor travado e religar a tarefa quando o lançador saía.
   200 s. O reinício por falha do Agendador não religa tarefa que sai com erro depois de abrir.
   Um gatilho de repetição a cada minuto com `IgnoreNew` religava (4 execuções em 3,5 min, sem
   duplicar a que estava de pé), mas também desfaria toda parada de propósito (o reinício da
-  atualização, a migração para o pacote) e correria com elas. Escolha: o lançador não sai mais
-  sozinho; a única saída própria, voltar para uma versão que sobe pelo Python, passou a religar
-  o Python dela. Lançador morto à força espera o próximo logon.
+  atualização, a migração para o pacote) e correria com elas. Escolha: depois de abrir a primeira
+  vida, o lançador não sai mais sozinho. A versão que sobe pelo Python (a volta da atualização)
+  entra no mesmo laço, na primeira subida e na religada, e o Python dela é religado. Lançador
+  morto à força espera o próximo logon.
 
 Limites aceitos: o servidor que trava antes de gravar o endereço de saúde não é conferido (a
 versão que ainda não grava o endereço também não: o lançador não a derruba por engano); a versão
-que sobe pelo Python não é conferida; o `hangar-frontend` legado do checkout deixa de ser
-recuperado.
+que sobe pelo Python é religada quando cai, mas não é conferida; o `hangar-frontend` legado do
+checkout deixa de ser recuperado. A escolha da primeira vida que falha (sem `current` e sem
+checkout) sai com código 3 antes do laço e espera o próximo logon. A vigia não pausa durante a
+atualização, como o `WatchdogSec` do Linux: o servidor só é encerrado depois de 4 rodadas sem
+resposta, e o reinício da atualização para o lançador junto com ele.

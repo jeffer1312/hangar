@@ -232,15 +232,21 @@ async fn update_index_cut_mid_body_is_read_again() {
     let server = tokio::spawn(async move {
         for cut in [true, false] {
             let (mut socket, _) = listener.accept().await.unwrap();
-            let mut request = [0u8; 2048];
-            let _ = socket.read(&mut request).await;
+            // A requisição inteira antes da resposta: fechar com bytes por ler manda RST e perde a resposta.
+            let mut request = Vec::new();
+            let mut chunk = [0u8; 1024];
+            while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+                let n = socket.read(&mut chunk).await.unwrap();
+                if n == 0 { break; }
+                request.extend_from_slice(&chunk[..n]);
+            }
             let head = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", index.len());
             socket.write_all(head.as_bytes()).await.unwrap();
             socket.write_all(if cut { &index[..index.len() / 2] } else { &index }).await.unwrap();
         }
     });
     let release = Release { base_url: base, channel: "latest".into() };
-    let client = crate::http_client().build().unwrap();
+    let client = crate::http_client().no_proxy().build().unwrap();
     assert_eq!(super::entry(&client, &release, PLATFORM).await.unwrap(), entry);
     server.await.unwrap();
 }
