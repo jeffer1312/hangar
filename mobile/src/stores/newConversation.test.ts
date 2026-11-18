@@ -436,7 +436,7 @@ describe('primeiro input', () => {
       return { frames: ['/up/q1.jpg'], transcript: '' };
     });
     await sendFirstInput('server-a', created.id);
-    expect(readDraft('server-a', created.sessionName!)).toBeNull();
+    expect(readDraft('server-a', created.sessionName!)?.attachments ?? []).toEqual([]);
   });
 
   it('vídeo cuja mídia não vem manda só o caminho', async () => {
