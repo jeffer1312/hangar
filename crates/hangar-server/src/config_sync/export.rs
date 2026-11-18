@@ -640,16 +640,15 @@ fn export_item(
             let values = canon(&pick(&values, keep, ""), roots);
             let mut data = json!({key:values,"hashes":bundle::hashes(&values,"")});
             if item == "hangar_prefs" && selected("worktrees") {
+                // Sem arquivo vale o padrão, que também precisa poder ser enviado.
                 let path = ctx.worktree_home.join(".hangar/worktree-settings.json");
-                if path.try_exists()? {
-                    let settings = hangar_workspace::worktree_settings::WorktreeSettings::load_at(&path)
-                        .map_err(|e| Error::new("config_sync_invalid_json", e.to_string(), json!({})))?;
-                    let settings = serde_json::to_value(settings)
-                        .map_err(|e| Error::new("config_sync_invalid_json", e.to_string(), json!({})))?;
-                    let settings = canon(&settings, &ctx.worktree_roots());
-                    data["hashes"]["worktrees"] = json!(bundle::hash(&settings));
-                    data["worktrees"] = settings;
-                }
+                let settings = hangar_workspace::worktree_settings::WorktreeSettings::load_at(&path)
+                    .map_err(|e| Error::new("config_sync_invalid_json", e.to_string(), json!({})))?;
+                let settings = serde_json::to_value(settings)
+                    .map_err(|e| Error::new("config_sync_invalid_json", e.to_string(), json!({})))?;
+                let settings = canon(&settings, &ctx.worktree_roots());
+                data["hashes"]["worktrees"] = json!(bundle::hash(&settings));
+                data["worktrees"] = settings;
             }
             Ok(data)
         }

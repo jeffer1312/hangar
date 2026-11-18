@@ -614,15 +614,23 @@ impl Apply {
         if let Some(settings) = self.bundle.items[item].get("worktrees") {
             use hangar_workspace::worktree_settings::{self, WorktreeSettings};
             let roots = self.context.worktree_roots();
-            let settings: WorktreeSettings = serde_json::from_value(export::uncanon(settings, &roots))
-                .map_err(|e| Error::new("config_sync_invalid_bundle", e.to_string(), json!({})))?;
-            let home = &self.context.worktree_home;
-            settings.location_path(home)
-                .map_err(|e| Error::new("config_sync_invalid_bundle", e.to_string(), json!({})))?;
+            let home = self.context.worktree_home.clone();
+            // Como as outras preferências: recusada aqui não desfaz as que já foram gravadas.
+            let parsed = serde_json::from_value::<WorktreeSettings>(export::uncanon(settings, &roots))
+                .map_err(|e| e.to_string())
+                .and_then(|s| s.location_path(&home).map(|_| s).map_err(|e| e.to_string()));
+            let settings = match parsed {
+                Ok(settings) => settings,
+                Err(error) => {
+                    self.warn(item, "config_sync_pref_rejected",
+                        json!({"key":"worktrees","error":error.chars().take(200).collect::<String>()}));
+                    return Ok(());
+                }
+            };
             let path = home.join(".hangar/worktree-settings.json");
             let changed = worktree_settings::locked(&path, || {
                 let current = WorktreeSettings::load_at(&path)?;
-                if current == settings && path.exists() { return Ok(false); }
+                if current == settings { return Ok(false); }
                 if path.exists() {
                     let backup = files::backup_target(&path, &roots, &self.backups)
                         .map_err(|e| hangar_workspace::error(503, e.to_string()))?;

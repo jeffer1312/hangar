@@ -419,13 +419,15 @@ fn git_config(path: &str) -> Result<String> {
     }
     Ok(out.stdout)
 }
+// Teto menor nos testes para provar o estouro sem criar 100 mil arquivos.
+const TREE_ENTRY_LIMIT: usize = if cfg!(test) { 1_000 } else { 100_000 };
 fn tree_stamp(root: &Path) -> Result<(String, u64)> {
     let start = Instant::now();
     let mut stack = vec![(root.to_path_buf(), true)];
     let mut entries = Vec::new();
     let mut newest = 0;
     while let Some((path, outer_repo)) = stack.pop() {
-        if entries.len() > 100_000 || start.elapsed() > Duration::from_secs(5) {
+        if entries.len() > TREE_ENTRY_LIMIT || start.elapsed() > Duration::from_secs(5) {
             return Err(error(409, "leitura do disco incompleta"));
         }
         let meta = std::fs::symlink_metadata(&path)
@@ -994,7 +996,9 @@ mod tests {
                 .env_remove("GIT_CONFIG_COUNT")
                 .output()
                 .unwrap();
-            assert!(output.status.success(), "{}\n{}", String::from_utf8_lossy(&output.stdout),
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            // Filtro que não casa nada também sai com sucesso.
+            assert!(output.status.success() && stdout.contains("1 passed"), "{stdout}\n{}",
                 String::from_utf8_lossy(&output.stderr));
             return;
         }
@@ -1036,7 +1040,7 @@ mod tests {
         git(&wt, &["-c", "user.name=Teste", "-c", "user.email=test@example.invalid", "commit", "-m", "Ignorar a compilação"]);
         let build = wt.join("crates/target/debug/deps");
         std::fs::create_dir_all(&build).unwrap();
-        for index in 0..100_005 {
+        for index in 0..TREE_ENTRY_LIMIT + 5 {
             std::fs::write(build.join(format!("object-{index}")), b"").unwrap();
         }
         let removed = remove(repo.to_str().unwrap(), wt.to_str().unwrap(), &[], &[], dir.path(),

@@ -61,6 +61,23 @@ fn shared_preferences_copy_worktree_settings_to_the_destination() {
     assert_eq!(WorktreeSettings::load_at(&target_file).unwrap(), copied);
 }
 #[test]
+fn default_worktree_settings_are_exported_and_a_rejected_copy_only_warns() {
+    let source = tempfile::tempdir().unwrap();
+    let target = tempfile::tempdir().unwrap();
+    let mut context = Context::new(roots(&source.path().join("account-home")));
+    context.worktree_home = source.path().join("worktree-home");
+    let mut bundle = super::export::export(&context, &["hangar_prefs".into()], None, true).unwrap();
+    assert!(bundle.items["hangar_prefs"]["hashes"]["worktrees"].is_string());
+    bundle.items["hangar_prefs"]["worktrees"]["future_field"] = json!(true);
+    let mut target_context = Context::new(roots(&target.path().join("account-home")));
+    target_context.worktree_home = target.path().join("worktree-home");
+    let mut apply = Apply::new(target_context, bundle, "rejected", Default::default());
+    apply.apply_item("hangar_prefs").unwrap();
+    assert!(!target.path().join("worktree-home/.hangar/worktree-settings.json").exists());
+    let report = apply.report["hangar_prefs"].to_string();
+    assert!(report.contains("config_sync_pref_rejected") && report.contains("worktrees"), "{report}");
+}
+#[test]
 fn malformed_warnings_are_discarded_before_application() {
     let mut source = Bundle::default();
     source.warnings.insert("engines".into(), json!("invalid"));
