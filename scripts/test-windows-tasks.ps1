@@ -75,9 +75,6 @@ function Reset-State {
     $script:tableFails = $false
     $script:processRows = $rows
     $script:lastRun = $old
-    $script:httpReplies = [Collections.Generic.Queue[bool]]::new()
-    $script:httpReplies.Enqueue($false)
-    $script:httpReplies.Enqueue($false)
 }
 # Processo vivo que nao e da tarefa (o executor da atualizacao sai do Job): nao a segura em Running.
 function Get-TaskLive { @($script:live.Keys | Where-Object { [int]$_ -notin $script:apart }).Count }
@@ -126,7 +123,6 @@ function Start-ScheduledTask { param($TaskName, $ErrorAction)
     $script:listening = -not $script:noPort
 }
 function Start-Sleep { param($Seconds, $Milliseconds) }
-function Test-HangarHttp { param($port) return $script:httpReplies.Dequeue() }
 
 try {
     Reset-State
@@ -324,27 +320,6 @@ try {
         Assert ('start' -notin $script:events) "Duplicou processo: $scenario"
         Assert ($script:task.Settings.RestartCount -eq 3) "Perdeu recuperacao automatica: $scenario"
     }
-    foreach ($scenario in @('healthy', 'transient', 'recent', 'updating', 'rust-updating', 'checkout-updating', 'migrating', 'dev-mode', 'installing')) {
-        Reset-State
-        switch ($scenario) {
-            healthy { $script:httpReplies.Clear(); $script:httpReplies.Enqueue($true) }
-            transient { $script:httpReplies.Clear(); $script:httpReplies.Enqueue($false); $script:httpReplies.Enqueue($true) }
-            recent { $script:lastRun = Get-Date }
-            updating { }
-            'rust-updating' { $script:processRows = @($rows[0], $rows[1], $pacote[2]) }
-            'checkout-updating' { $script:processRows = @($rows[0], $rows[1], (Row 53 11 'hangar-server.exe' 'C:\repo\hangar-server.exe checkout-update --run --port 8765')) }
-            migrating { $script:processRows = @($rows[0], $rows[1], (Row 51 1 'hangar-server.exe' 'C:\Users\u\.hangar\migrate\hangar-server.exe migrate-package')) }
-            'dev-mode' { $script:processRows = @($rows[0], $rows[1], (Row 52 1 'hangar-server.exe' 'C:\Users\u\.hangar\current\bin\hangar-server.exe dev-mode off')) }
-            installing { $script:processRows = @($rows[0], $rows[1], (Row 50 1 'powershell.exe' 'powershell -File install.ps1 -Update')) }
-        }
-        Repair-HangarTask 'hangar-backend' 8765 'C:\repo\backend'
-        Assert (-not $script:events.Count) "Vigia interferiu: $scenario"
-    }
-    Reset-State
-    $script:processRows = @($rows[0], $rows[1], $rows[4], $rows[5], $rows[6])
-    Repair-HangarTask 'hangar-backend' 8765 'C:\repo\backend' | Out-Null
-    Assert ('start' -in $script:events) 'Vigia nao recuperou travamento confirmado'
-
     $lockJob = Start-Job {
         $mutex = New-Object Threading.Mutex($false, 'Local\HangarInstall')
         try {
@@ -360,8 +335,9 @@ try {
         }
         Assert ('locked' -in @(Receive-Job $lockJob -Keep)) 'Processo de teste nao adquiriu a exclusao'
         Reset-State
-        Repair-HangarTask 'hangar-backend' 8765 'C:\repo\backend'
-        Assert (-not $script:events.Count -and $script:httpReplies.Count -eq 2) 'Vigia interferiu com instalacao em outro processo'
+        $failed = $null
+        try { Restart-HangarTasks 'C:\repo' 8765 0 } catch { $failed = "$_" }
+        Assert ($failed -match 'em andamento' -and -not $script:events.Count) "Reinicio do atualizador interferiu com instalacao em outro processo: $failed"
     } finally { Remove-Job $lockJob -Force }
 
     $tokens = $null; $errors = $null
@@ -462,5 +438,5 @@ try {
         $script:task = $null
         Assert (-not (Get-HangarBackendTaskProblem $python)) 'Maquina sem a tarefa reprovada'
     } finally { Remove-Item -Recurse -Force $pasta -ErrorAction SilentlyContinue }
-    Write-Output 'OK: selecao de processos, recuperacao, falhas, espera, atualizacao, vigia e lancador'
+    Write-Output 'OK: selecao de processos, recuperacao, falhas, espera, atualizacao e lancador'
 } finally { $env:LOCALAPPDATA = $testLocalData }

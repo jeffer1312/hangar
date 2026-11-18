@@ -1,4 +1,4 @@
-use hangar_boot::life::{begin, end, last_errors, mark_running, reduce_error, unclean_exits, Ended, Mark, FILE};
+use hangar_boot::life::{begin, end, health, last_errors, mark_running, reduce_error, unclean_exits, Ended, Mark, FILE};
 use hangar_boot::notify::Notifier;
 use proptest::prelude::*;
 
@@ -10,7 +10,7 @@ fn dead(_: u32, _: f64) -> bool { false }
 /// Uma vida inteira: a conferência da subida e a marca de pé quando pronta. O nascimento é o pid.
 fn boot(dir: &std::path::Path, pid: u32, now: &str) -> hangar_boot::life::Begin {
     let begin = begin(dir, now, dead).unwrap();
-    assert_eq!(mark_running(dir, pid, Some(f64::from(pid)), now, dead).unwrap(), Mark::Marked);
+    assert_eq!(mark_running(dir, pid, Some(f64::from(pid)), None, now, dead).unwrap(), Mark::Marked);
     begin
 }
 
@@ -72,7 +72,7 @@ fn b24_a_live_server_keeps_its_mark_from_a_second_one() {
     let first_alive = |pid: u32, birth: f64| pid == 1 && birth == 1.0;
     let second = begin(dir.path(), T, first_alive).unwrap();
     assert_eq!((second.unclean, second.unclean_exits, second.held_by), (false, 0, Some(1)));
-    assert_eq!(mark_running(dir.path(), 2, Some(2.0), T, first_alive).unwrap(), Mark::Held(1));
+    assert_eq!(mark_running(dir.path(), 2, Some(2.0), None, T, first_alive).unwrap(), Mark::Held(1));
     assert_eq!(end(dir.path(), 2).unwrap(), Ended::OtherLife);
     assert_eq!((life(dir.path())["pid"].as_u64(), life(dir.path())["running"].as_bool()), (Some(1), Some(true)));
     let reborn = begin(dir.path(), T, |pid, birth| pid == 1 && birth == 9.0).unwrap();
@@ -85,9 +85,27 @@ fn b24_a_live_server_keeps_its_mark_from_a_second_one() {
 fn b24_a_mark_without_birth_is_counted_even_with_the_pid_alive() {
     let dir = tempfile::tempdir().unwrap();
     begin(dir.path(), T, dead).unwrap();
-    mark_running(dir.path(), 1, None, T, dead).unwrap();
+    mark_running(dir.path(), 1, None, None, T, dead).unwrap();
     assert!(life(dir.path()).get("birth").is_none());
     assert!(begin(dir.path(), T, |_, _| true).unwrap().unclean);
+}
+
+/// O lançador do Windows só confere a saúde do servidor que ele abriu, de pé e com o endereço
+/// gravado: a versão que não grava o endereço, outro filho ou a vida parada não são conferidos.
+#[test]
+fn the_launcher_reads_the_health_address_only_of_its_own_running_server() {
+    let dir = tempfile::tempdir().unwrap();
+    let address: std::net::SocketAddr = "127.0.0.1:8765".parse().unwrap();
+    assert_eq!(health(dir.path(), 1), None, "sem arquivo");
+    boot(dir.path(), 1, T);
+    assert_eq!(health(dir.path(), 1), None, "versão que não grava o endereço");
+    assert_eq!(mark_running(dir.path(), 1, Some(1.0), Some(address), T, dead).unwrap(), Mark::Marked);
+    assert_eq!(health(dir.path(), 1), Some(address));
+    assert_eq!(health(dir.path(), 2), None, "outro filho");
+    assert_eq!(end(dir.path(), 1).unwrap(), Ended::Cleared);
+    assert_eq!(health(dir.path(), 1), None, "vida parada");
+    boot(dir.path(), 3, T);
+    assert_eq!(health(dir.path(), 3), None, "a vida nova não herda o endereço da anterior");
 }
 
 #[test]
