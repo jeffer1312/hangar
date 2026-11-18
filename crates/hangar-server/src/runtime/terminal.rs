@@ -1779,7 +1779,7 @@ impl Executor {
         };
         if waited<self.options.give_up_after || self.give_up_retry_at.is_some_and(|at|now<at) {return;}
         match self.services("maintenance","maintenance","").facts(&self.target.binding).await {
-            Ok(facts) if facts.binding==self.target.binding && facts.foreground_idle()=>{},
+            Ok(facts) if facts.binding==self.target.binding && facts.idle=>{},
             Ok(_)=>return,
             Err(_)=>{skip(&self.target.key,"give_up_facts","prazo da entrega incerta: fatos indisponíveis, sem saber se o Claude parou"); return},
         }
@@ -1824,7 +1824,7 @@ impl Executor {
             && ["attempt_ts","dispatched_ts","claimed_ts","ts"].iter().find_map(|k|r[*k].as_f64()).unwrap_or(0.0)+grace<=now);
         if !due {return;}
         // Parado, o que o Claude tivesse enfileirado já teria virado conversa.
-        if !self.services("maintenance","maintenance","").facts(&self.target.binding).await.is_ok_and(|facts|facts.binding==self.target.binding && facts.foreground_idle()) {return;}
+        if !self.services("maintenance","maintenance","").facts(&self.target.binding).await.is_ok_and(|facts|facts.binding==self.target.binding && facts.idle) {return;}
         if self.confirm_rows().await.is_err() {return;}
         let id=format!("give_up_unproved:{}",self.sequence.fetch_add(1,Ordering::Relaxed));
         match self.queue.exec(self.target.generation,&id,sample(),Action::GiveUpUnproved {now,grace}).await {
