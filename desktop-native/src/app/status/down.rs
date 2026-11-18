@@ -8,7 +8,7 @@ use hangar_local_server::{DEFAULT_PORT, Failure as LocalFailure, Listeners, Loca
 
 /// Entre leituras enquanto o serviço diz que está subindo: o gerenciador não avisa quando decide. O próprio
 /// crate encerra a subida em `STARTING_LIMIT`, então a repetição tem fim.
-const STARTING_POLL: Duration = Duration::from_millis(1500);
+pub(super) const STARTING_POLL: Duration = Duration::from_millis(1500);
 
 // ---------------------------------------------------------------------------------------------
 // Modelo
@@ -74,13 +74,16 @@ fn with_detail(text: String, detail: &str) -> String {
     if detail.trim().is_empty() { text } else { format!("{text} ({})", detail.trim()) }
 }
 
+/// A leitura crua do gerenciador (`unit: LoadState=… MainPID=…`) não é frase: fica só na saída, nunca no título.
+fn raw_detail(code: &str) -> bool { matches!(code, "service_failed" | "service_unreadable") }
+
 /// O motivo das falhas sem conserto próprio, em minúscula: entra no meio da frase.
 fn reason(failure: &LocalFailure, os: Os) -> String {
     let service = service_name(os);
     match failure.code.as_str() {
         "service_exit" => fill(tr("status_down_reason_exit"), &[("service", &service), ("code", &failure.detail)]),
-        "service_failed" => with_detail(fill(tr("status_down_reason_failed"), &[("service", &service)]), &failure.detail),
-        "service_unreadable" => with_detail(tr("status_down_reason_unreadable"), &failure.detail),
+        "service_failed" => fill(tr("status_down_reason_failed"), &[("service", &service)]),
+        "service_unreadable" => tr("status_down_reason_unreadable"),
         "server_exited" => with_detail(tr("status_down_reason_exited"), &failure.detail),
         "server_failed" => with_detail(tr("status_down_reason_server_failed"), &failure.detail),
         code => with_detail(fill(tr("status_down_reason_other"), &[("code", code)]), &failure.detail),
@@ -136,7 +139,8 @@ pub(super) fn down_model(probe: &Probe, os: Os, attempt: Attempt) -> Option<Down
 }
 
 fn failure_view(failure: &LocalFailure, probe: &Probe, os: Os, attempt: Attempt) -> DownView {
-    let output = failure.output.clone();
+    let mut output = failure.output.clone();
+    if raw_detail(&failure.code) && !failure.detail.trim().is_empty() { output.insert(0, failure.detail.trim().to_owned()); }
     let previous = switchable(os, &probe.versions);
     match failure.code.as_str() {
         "port_unavailable" => {
@@ -280,13 +284,14 @@ fn act(server: &LocalServer, action: &Action) -> Result<(), hangar_local_server:
     }
 }
 
-/// Faz a ação (se houver) e lê o servidor; enquanto ele sobe, lê de novo. `StillStarting` segue pela leitura.
-async fn local_task<F>(home: std::path::PathBuf, port: u16, action: Option<Action>, generation: u64, done: F)
+/// Faz a ação (se houver) e lê o servidor; enquanto ele sobe, lê de novo. `StillStarting` segue pela leitura. A porta é
+/// a do serviço (`LocalServer::configured`), não a da conexão do app: com as duas diferentes, a unit de pé parecia parada.
+async fn local_task<F>(home: std::path::PathBuf, action: Option<Action>, generation: u64, done: F)
 where F: Fn(DeviceReply) -> std::pin::Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync + 'static {
     let send = |reply| done(DeviceReply::Status(0, Feed::Local(generation, reply)));
     if let Some(action) = action {
         let home = home.clone();
-        let result = tokio::task::spawn_blocking(move || act(&LocalServer::new(&home, port), &action)).await;
+        let result = tokio::task::spawn_blocking(move || act(&LocalServer::configured(&home), &action)).await;
         let error = match result {
             Ok(Ok(())) => None,
             Ok(Err(e)) => Some((e.code().to_owned(), e.detail())),
@@ -296,7 +301,7 @@ where F: Fn(DeviceReply) -> std::pin::Pin<Box<dyn Future<Output = ()> + Send>> +
     }
     loop {
         let home = home.clone();
-        let probe = match tokio::task::spawn_blocking(move || read(&LocalServer::new(&home, port))).await {
+        let probe = match tokio::task::spawn_blocking(move || read(&LocalServer::configured(&home))).await {
             Ok(probe) => probe,
             // A leitura não voltou: sem o erro, o painel ficaria girando em "Lendo" para sempre.
             Err(e) => return send(LocalReply::Done(Some(("local_server_io".to_owned(), e.to_string())))).await,
@@ -347,9 +352,15 @@ impl Hangar {
             local.error = Some(action_error_text("local_server_io", "HOME"));
             return;
         };
-        let (generation, port) = (local.generation, local.port);
-        local.task = Some(runtime.spawn(local_task(home, port, action, generation, done)));
+        let generation = local.generation;
+        local.task = Some(runtime.spawn(local_task(home, action, generation, done)));
     }
+
+    /// A leitura mais recente do servidor desta máquina, com ele parado.
+    pub(super) fn local_probe(&self) -> Option<&Probe> { self.device.status.down.as_ref()?.local.as_ref()?.probe.as_ref() }
+
+    /// Lê o servidor desta máquina de novo, sem ação.
+    pub(super) fn local_refresh(&mut self) { self.local_run(None); }
 
     pub(super) fn receive_local(&mut self, generation: u64, reply: LocalReply, cx: &mut Context<Self>) {
         let Some(local) = self.local_mut() else { return };
@@ -363,6 +374,8 @@ impl Hangar {
             }
             LocalReply::Probe(probe) => {
                 back = probe.state == LocalState::Running && local.probe.as_ref().is_none_or(|p| p.state != LocalState::Running);
+                // A do serviço, que o "Ver processos…" também lê.
+                local.port = probe.port;
                 local.probe = Some(*probe);
                 local.busy = false;
             }
@@ -392,7 +405,7 @@ impl Hangar {
     }
 
     /// `ok`: o rótulo do botão da linha, repetido no confirmar.
-    fn local_fix(&mut self, fix: Fix, ok: String, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn local_fix(&mut self, fix: Fix, ok: String, window: &mut Window, cx: &mut Context<Self>) {
         let this = cx.entity().downgrade();
         match fix {
             Fix::Reinstall => self.open_setup_from_menu(window, cx),
@@ -460,6 +473,7 @@ impl Hangar {
                 let Ok(()) = this.update(cx, |this, cx| if this.settings == Some(Page::Status) { cx.notify(); }) else { return };
             }));
         }
+        if down.local.is_some() { self.agent_detect(cx); }
         let down = self.device.status.down.as_ref()?;
         let Some(local) = &down.local else { return Some(vec![self.remote_down(cx)]) };
         let Some(probe) = &local.probe else {
@@ -537,13 +551,19 @@ impl Hangar {
         let error = error.map(|text| div().mt(px(10.)).flex().items_start().gap(px(6.)).text_size(px(12.5)).text_color(theme::danger())
             .child(div().pt(px(2.)).child(chrome::small_icon(IconName::TriangleAlert, 13., theme::danger())))
             .child(div().flex_1().min_w_0().whitespace_normal().child(text)));
+        // Com agente no PATH, o conserto por ele é o caminho de destaque e o subir fica secundário, à direita (mock).
+        let agents = view.phase != Phase::Starting && !self.agent_choices().is_empty();
         let button = match view.phase {
-            Phase::Stopped => Some(Button::new("status-down-start").primary().small().icon(IconName::Play).label(tr("status_down_start"))
-                .disabled(busy || !view.can_start).on_click(cx.listener(|this, _, _, cx| this.local_start(cx)))),
+            Phase::Stopped => {
+                let button = Button::new("status-down-start").small().icon(IconName::Play).label(tr("status_down_start"))
+                    .disabled(busy || !view.can_start).on_click(cx.listener(|this, _, _, cx| this.local_start(cx)));
+                Some(if agents { button.outline() } else { button.primary() })
+            }
             Phase::Failed if view.can_start => Some(Button::new("status-down-retry").outline().small().icon(IconName::RotateCw)
                 .label(tr("status_down_retry")).disabled(busy).on_click(cx.listener(|this, _, _, cx| this.local_start(cx)))),
             _ => None,
         };
+        let actions = if agents { Some(self.agent_bar(button, busy, cx)) } else { button.map(|button| div().mt(px(12.)).child(button).into_any_element()) };
         let head = settings_box().flex_row().items_start().gap(px(16.)).p(px(16.))
             .when(view.phase == Phase::Failed, |el| el.border_color(theme::danger().opacity(0.45)))
             .child(big_icon(icon, color))
@@ -552,7 +572,7 @@ impl Hangar {
                 .children(sub.map(|text| div().text_size(px(12.5)).text_color(theme::muted()).whitespace_normal().child(text)))
                 .children(steps)
                 .children(error)
-                .children(button.map(|button| div().mt(px(12.)).child(button))));
+                .children(actions));
         let mut out = vec![head.into_any_element()];
         if !view.fixes.is_empty() || !view.output.is_empty() { out.push(self.render_fixes(&view, busy, cx)); }
         out
@@ -598,12 +618,12 @@ impl Hangar {
     }
 }
 
-fn big_icon(icon: AnyElement, color: Hsla) -> Div {
+pub(super) fn big_icon(icon: AnyElement, color: Hsla) -> Div {
     div().size(px(52.)).flex_shrink_0().rounded_full().bg(color.opacity(0.18)).flex().items_center().justify_center().child(icon)
 }
 
 /// O `Spinner` com nome para o leitor de tela: sozinho é só um ícone girando.
-fn spinner(id: &str, size: f32, color: Hsla, label: String) -> Stateful<Div> {
+pub(super) fn spinner(id: &str, size: f32, color: Hsla, label: String) -> Stateful<Div> {
     div().id(SharedString::from(format!("{id}-label"))).role(Role::ProgressIndicator).aria_label(label).flex_shrink_0()
         .child(chrome::Spinner::new(SharedString::from(id.to_owned()), IconName::LoaderCircle, px(size), color))
 }
@@ -800,8 +820,7 @@ mod tests {
     #[test]
     fn failures_without_a_fix_are_a_reason_until_someone_tries() {
         crate::i18n::english_in_this_thread(false);
-        for (code, detail) in [("service_exit", "3"), ("service_failed", "failed/failed"), ("service_unreadable", "timeout"),
-            ("server_exited", "101"), ("server_failed", "panic"), ("identity_conflict", "")] {
+        for (code, detail) in [("service_exit", "3"), ("server_exited", "101"), ("server_failed", "panic"), ("identity_conflict", "")] {
             let stopped = down_model(&stopped_with(code, detail, None), Os::Linux, Attempt::None).unwrap();
             assert_eq!(stopped.phase, Phase::Stopped, "{code}");
             assert!(stopped.can_start && stopped.fixes.is_empty() && stopped.output.is_empty(), "{code}");
@@ -811,6 +830,15 @@ mod tests {
             assert_eq!(failed.phase, Phase::Failed, "{code}");
             assert!(failed.title.contains(&reason), "{code}: {}", failed.title);
             assert_eq!(failed.output, ["linha 1", "linha 2"], "{code}");
+        }
+        // A leitura crua do gerenciador nunca vira título: só a primeira linha da saída.
+        let raw = "unit: LoadState=loaded ActiveState=active SubState=running MainPID=4242 NRestarts=0";
+        for code in ["service_failed", "service_unreadable"] {
+            let stopped = down_model(&stopped_with(code, raw, None), Os::Linux, Attempt::None).unwrap();
+            assert!(!stopped.detail.clone().unwrap().contains("LoadState"), "{code}: {:?}", stopped.detail);
+            let failed = down_model(&stopped_with(code, raw, None), Os::Linux, Attempt::Done).unwrap();
+            assert!(!failed.title.contains("LoadState") && !failed.title.contains("unit:"), "{code}: {}", failed.title);
+            assert_eq!(failed.output, [raw, "linha 1", "linha 2"], "{code}");
         }
         let exit = down_model(&stopped_with("service_exit", "3", None), Os::Linux, Attempt::None).unwrap();
         assert!(exit.detail.unwrap().contains("hangar-backend.service"));

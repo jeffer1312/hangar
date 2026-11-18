@@ -3,7 +3,7 @@
 //! de endereço + token.
 use super::*;
 
-mod agent;
+pub(crate) mod agent;
 mod app_copy;
 mod askpass;
 mod codes;
@@ -16,13 +16,14 @@ mod phone;
 mod precheck;
 mod repo;
 mod report;
-mod run;
+pub(crate) mod run;
 mod screens;
 pub(crate) mod system;
 mod tail;
 mod wizard;
 
 pub(super) use wizard::SetupWizard;
+pub(crate) use wizard::{stop_agent_process, sweep_group};
 pub(crate) use app_copy::target as installed_app_target;
 
 /// O assistente existe onde há script de instalação com modo `--app`.

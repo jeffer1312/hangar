@@ -6,6 +6,8 @@ use super::device::{DeviceReply, Remote};
 use super::settings::Page;
 use hangar_api::status::{AttentionTarget, StatusSnapshot};
 
+mod agent_fix;
+mod agent_view;
 mod down;
 mod model;
 mod view;
@@ -40,6 +42,12 @@ pub(super) struct StatusPage {
     stream_failed: bool,
     /// O servidor selecionado fora do ar; com ele nesta máquina, a leitura do serviço e as ações.
     down: Option<down::Down>,
+    /// Os agentes no PATH e a conta de cada um; `None` antes da primeira leitura.
+    agents: Option<Vec<agent_fix::Choice>>,
+    detecting: bool,
+    agent_pick: usize,
+    /// O "Consertar com agente" em curso ou acabado; sobrevive à volta do servidor até "Ver Status".
+    fix: Option<agent_view::AgentRun>,
 }
 
 impl Drop for StatusPage {

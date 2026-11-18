@@ -239,7 +239,7 @@ fn stop_plan(recorded: &str, now: &run::Identity) -> StopPlan {
 /// Pára o agente e espera ele sair — uma última escrita depois de desfazer passaria —; ainda vivo em 10 s, mata sem
 /// escolha. Só sinaliza com a identidade conferida agora; `false` = não deu para conferir (quem chama avisa e desfaz
 /// mesmo assim). Bloqueia: só fora da janela.
-fn stop_agent_process(pid: u32, started: &str) -> bool {
+pub(crate) fn stop_agent_process(pid: u32, started: &str) -> bool {
     match stop_plan(started, &run::read_identity(pid)) {
         StopPlan::Gone => {
             crate::log_line(&format!("assistente: agente {pid} já não existe ou o número é de outro processo; nenhum sinal enviado"));
@@ -262,7 +262,7 @@ fn stop_agent_process(pid: u32, started: &str) -> bool {
 
 /// O líder conferido saiu, mas um comando dele pode seguir no grupo e escrever na pasta depois de desfeita. Enquanto o
 /// grupo tem membros, o número dele não volta a ser usado: ainda é o grupo do agente. Só para líder conferido.
-fn sweep_group(pid: u32) {
+pub(crate) fn sweep_group(pid: u32) {
     let deadline = Instant::now() + Duration::from_secs(3);
     while run::group_alive(pid) && Instant::now() < deadline {
         run::kill_group(pid);

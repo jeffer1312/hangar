@@ -91,7 +91,7 @@ fn logged_in(agent: Agent, program: &Path, env: &[(String, String)]) -> bool {
 }
 
 /// Saída de um comando curto com teto: um CLI travado não segura o painel da falha.
-fn run_within(command: &mut Command, limit: Duration) -> Option<(bool, String)> {
+pub(crate) fn run_within(command: &mut Command, limit: Duration) -> Option<(bool, String)> {
     let mut child = command.stdout(Stdio::piped()).stderr(Stdio::null()).spawn().ok()?;
     let mut stdout = child.stdout.take()?;
     let reader = std::thread::spawn(move || { let mut text = String::new(); let _ = stdout.read_to_string(&mut text); text });
