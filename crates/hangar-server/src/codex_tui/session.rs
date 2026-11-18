@@ -258,7 +258,10 @@ impl Life {
     /// A escuta da primeira subida, que também entrega a primeira mensagem que não coube no argv.
     pub fn listen_with(&mut self, cwd: &str, first: Option<threads::FirstPrompt>) -> tokio::sync::oneshot::Receiver<()> {
         let (sender, receiver) = tokio::sync::oneshot::channel();
-        self.first_failures = threads::Failures::new(self.diary.clone());
+        // A escuta da ressubida não leva primeira mensagem: a falha guardada da primeira subida fica.
+        if first.is_some() {
+            self.first_failures = threads::Failures::new(self.diary.clone());
+        }
         let (Some(session), Some(server)) = (self.session.clone(), self.server.as_ref()) else {
             if let Some(prompt) = &first {
                 prompt.report_closed(&self.first_failures);
@@ -361,6 +364,17 @@ mod tests {
     struct Lines(std::sync::Mutex<Vec<String>>);
     impl Screen for Lines {
         fn say(&self, line: &str) { self.0.lock().unwrap().push(line.to_owned()); }
+    }
+
+    /// A escuta da ressubida não apaga a falha da primeira mensagem, que ainda volta quando a TUI sai.
+    #[tokio::test]
+    async fn a_restart_listener_keeps_the_first_prompt_failure() {
+        let mut life = Life::default();
+        let _ = life.listen_with("/w", Some(threads::FirstPrompt::new("a\nb".into(), None)));
+        let failure = life.first_prompt_failure();
+        assert!(failure.as_deref().is_some_and(|line| line.starts_with("erro:")), "{failure:?}");
+        let _ = life.listen("/w");
+        assert_eq!(life.first_prompt_failure(), failure);
     }
 
     fn plan(name: &str) -> Plan {
