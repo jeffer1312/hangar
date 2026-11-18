@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { configureApi, type ChatEvent } from '@hangar/core';
-import { answerWithDelivery, deliveryOptions, queueSendMode, readQueueJev, sendWithDelivery, timingFeedback } from './queueDelivery';
+import { answerWithDelivery, deliveryOptions, QUEUED_INSTEAD, queueSendMode, readQueueJev, sendWithDelivery, timingFeedback } from './queueDelivery';
 import * as m from '../paraglide/messages';
 
 const server = { id: 'owner', label: 'fixture', baseUrl: 'https://owner.test', token: 'owner-token' };
@@ -117,8 +117,8 @@ it('"Na conversa" vale só com a sessão trabalhando, em Claude e Codex, e nunca
     return queueSendMode('conversation', false, state, provider, headless, text, events, null);
   };
   expect(pick({})).toEqual({ kind: 'conversation' });
-  // Claude com terminal fica na Fila; Codex com e sem terminal vai pelo caminho suave.
-  expect(pick({ headless: false })).toBeUndefined();
+  // Com e sem terminal: o Claude Code lê a mensagem na pausa seguinte nos dois.
+  expect(pick({ headless: false })).toEqual({ kind: 'conversation' });
   expect(pick({ provider: 'codex', headless: false })).toEqual({ kind: 'conversation' });
   expect(pick({ provider: 'codex', headless: true })).toEqual({ kind: 'conversation' });
   expect(pick({ state: 'idle' })).toBeUndefined();
@@ -131,12 +131,18 @@ it('"Na conversa" manda delivery; o servidor antigo recusa com 422 e a mensagem 
     .mockResolvedValueOnce(new Response(JSON.stringify({ detail: [{ type: 'extra_forbidden', loc: ['body', 'delivery'],
       msg: 'Extra inputs are not permitted', input: 'conversation' }] }), { status: 422 }))
     .mockResolvedValueOnce(new Response('{"ok":true,"delivered":false}'));
-  await expect(sendWithDelivery(server, 'sess', 'oi', { kind: 'conversation' })).resolves.toBeNull();
+  await expect(sendWithDelivery(server, 'sess', 'oi', { kind: 'conversation' })).resolves.toBe(QUEUED_INSTEAD);
   const calls = vi.mocked(fetch).mock.calls;
   expect(calls).toHaveLength(2);
   expect(calls[0][0]).toBe('https://owner.test/api/sessions/sess/input');
   expect(JSON.parse(calls[0][1]!.body as string)).toEqual({ text: 'oi', delivery: 'conversation' });
   expect(JSON.parse(calls[1][1]!.body as string)).toEqual({ text: 'oi' });
+});
+
+it('"Na conversa" que o servidor pôs na fila comum avisa, para o eco ir ao painel', async () => {
+  vi.mocked(fetch).mockResolvedValue(new Response('{"ok":true,"delivered":false,"conversation":false}'));
+  await expect(sendWithDelivery(server, 'sess', 'oi', { kind: 'conversation' })).resolves.toBe(QUEUED_INSTEAD);
+  expect(fetch).toHaveBeenCalledTimes(1);
 });
 
 it('"Na conversa" aceita de primeira não repete o envio', async () => {

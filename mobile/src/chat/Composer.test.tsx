@@ -17,6 +17,7 @@ const h = vi.hoisted(() => ({
   onFinish: null as null | ((file: File, reason: MotivoFim, uri: string, stop?: { stoppedAt: number; fileAt: number },
     pieces?: { result: Promise<unknown>; abort: () => void } | null) => Promise<void>),
   transcribe: vi.fn(),
+  diskUpload: vi.fn(),
   navigation: { addListener: () => () => {}, isFocused: () => true },
 }));
 vi.mock('react-native-mmkv', () => ({ createMMKV: () => ({
@@ -31,6 +32,7 @@ vi.mock('react-native', async (original) => {
   } } };
 });
 vi.mock('expo-router', () => ({ useNavigation: () => h.navigation, useRouter: () => ({ push: vi.fn() }) }));
+vi.mock('../net/uploadFromDisk', () => ({ sendFromDisk: () => h.diskUpload, diskFileSize: async () => undefined }));
 vi.mock('../stores/chat', async (original) => ({
   ...await original<typeof import('../stores/chat')>(), chatStore: () => h.chat, filaCount: () => 0,
 }));
@@ -185,11 +187,11 @@ it('Jev salvo e sem configuração avisa no envio que foi pela fila', async () =
 });
 
 it('turno que acaba durante o upload do anexo não manda direto para uma sessão parada', async () => {
-  vi.stubGlobal('fetch', vi.fn(async (url: string) => {
-    if (url === 'file:///a.png') { act(() => h.chat.use.setState({ stateEvent: { state: 'idle' } })); return new Response('png'); }
-    if (String(url).includes('/upload')) return new Response('{"path":"/up/a.png"}');
-    return new Response('{"available":true}');
-  }));
+  vi.stubGlobal('fetch', vi.fn(async () => new Response('{"available":true}')));
+  h.diskUpload.mockImplementation(async () => {
+    act(() => h.chat.use.setState({ stateEvent: { state: 'idle' } }));
+    return new Response('{"path":"/up/a.png"}');
+  });
   useDeliveryMode.setState({ mode: 'direct' });
   writeDraft('srv', 'sess', { version: 1, text: 'usar azul', revision: 7, transcript: '/sessions/current', submission: null,
     attachments: [{ uri: 'file:///a.png', name: 'a.png', mime: 'image/png', kind: 'image' }] });

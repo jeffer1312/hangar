@@ -267,7 +267,10 @@ async fn transcript_image_of_a_complete_transfer_comes_from_the_frozen_source_wi
 
 impl Scene {
     async fn upload(&self, name: &str, body: &'static [u8], filename: &str) -> (StatusCode, Value) {
-        let response = client().post(format!("http://{}/api/sessions/{name}/upload", self.address)).bearer_auth(OWNER)
+        self.upload_at(&format!("/api/sessions/{name}/upload"), body, filename).await
+    }
+    async fn upload_at(&self, path: &str, body: &'static [u8], filename: &str) -> (StatusCode, Value) {
+        let response = client().post(format!("http://{}{path}", self.address)).bearer_auth(OWNER)
             .header("x-filename", filename).body(body).send().await.unwrap();
         let status = response.status();
         (status, serde_json::from_str(&response.text().await.unwrap()).unwrap_or(Value::Null))
@@ -294,6 +297,41 @@ async fn uploads_are_saved_listed_and_served() {
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(response.headers()["content-type"].to_str().unwrap().split(';').next(), Some("text/plain"));
     assert_eq!(response.bytes().await.unwrap().as_ref(), b"abc");
+}
+
+#[tokio::test]
+async fn video_with_media_later_answers_pending_and_the_wait_route_delivers_the_result() {
+    let scene = Scene::new().await;
+    scene.claude("s", &[]);
+    let (status, saved) = scene.upload_at("/api/sessions/s/upload?media=later", b"nao e video de verdade", "clip.mp4").await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!((saved["frames"].clone(), saved["transcript"].clone(), saved["media"].clone()), (json!([]), json!(""), json!("pending")));
+    let id = saved["media_id"].as_str().unwrap();
+    // Pelo id, mesmo com outro nome na URL: a sessão pode ter sido renomeada no meio.
+    let (status, media) = scene.get(&format!("/api/sessions/renomeada/upload-media?id={id}")).await;
+    // Arquivo que não é vídeo de verdade: o ffmpeg não tira quadro nem áudio, e a mídia termina vazia.
+    assert_eq!((status, media), (StatusCode::OK, json!({"status": "done", "frames": [], "transcript": ""})));
+}
+
+#[tokio::test]
+async fn media_later_does_not_change_the_answer_for_files_that_are_not_video() {
+    let scene = Scene::new().await;
+    scene.claude("s", &[]);
+    let (status, saved) = scene.upload_at("/api/sessions/s/upload?media=later", b"abc", "nota.txt").await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!((saved.get("media"), saved.get("media_id")), (None, None), "{saved}");
+    let (status, body) = scene.get("/api/sessions/s/upload-media?id=desconhecido").await;
+    assert_eq!((status, body["detail"]["code"].clone()), (StatusCode::NOT_FOUND, json!("upload_media_unknown")));
+}
+
+#[tokio::test]
+async fn video_without_media_later_still_answers_with_the_media_inline() {
+    let scene = Scene::new().await;
+    scene.claude("s", &[]);
+    let (status, saved) = scene.upload("s", b"nao e video de verdade", "clip.mp4").await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!(saved.get("media"), None, "{saved}");
+    assert_eq!((saved["frames"].clone(), saved["transcript"].clone()), (json!([]), json!("")));
 }
 
 #[tokio::test]

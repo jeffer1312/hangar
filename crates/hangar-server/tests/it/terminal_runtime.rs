@@ -7,8 +7,8 @@ use std::sync::{Arc,Mutex,atomic::AtomicU64};
 use std::time::Duration;
 use tokio::sync::{broadcast,Notify};
 
-struct Io { native_record:Mutex<Option<(std::path::PathBuf,u32,std::path::PathBuf)>>, idle:Arc<std::sync::atomic::AtomicBool>, ready:Arc<std::sync::atomic::AtomicBool>, native:Arc<std::sync::atomic::AtomicBool>, generation:Arc<AtomicU64>, binding_generation:AtomicU64, capture_error:std::sync::atomic::AtomicBool, calls:Mutex<Vec<CommandRequest>>, text:Mutex<String>, gate:Notify, blocked:std::sync::atomic::AtomicBool, fail_write:std::sync::atomic::AtomicBool, fail_enter:std::sync::atomic::AtomicBool, rotate_enter:std::sync::atomic::AtomicBool, conversation:Arc<Mutex<String>>, socket_calls:Mutex<Vec<Vec<u8>>>, ghost:Mutex<String>, hold_capture:std::sync::atomic::AtomicBool, hold_skip:std::sync::atomic::AtomicUsize, mods_screen:Mutex<Option<String>>, ring_keys:std::sync::atomic::AtomicUsize, ring_returns:std::sync::atomic::AtomicBool, swallow:std::sync::atomic::AtomicBool, footer:std::sync::atomic::AtomicBool, panes:Mutex<Vec<String>>, created:AtomicU64, switch_at:Mutex<Option<(usize,&'static str)>>, projection_at_facts:Mutex<Option<(std::path::PathBuf,Vec<String>)>>, send_now_hint:std::sync::atomic::AtomicBool, drop_enter:std::sync::atomic::AtomicUsize, enqueue_on_drop:Mutex<Option<std::path::PathBuf>>, direct:std::sync::atomic::AtomicBool, direct_calls:Mutex<Vec<CommandRequest>>, direct_once:std::sync::atomic::AtomicBool, fail_capture_after_drop:std::sync::atomic::AtomicUsize, capture_countdown:std::sync::atomic::AtomicUsize }
-impl Io { fn new()->Self { Self { projection_at_facts:Mutex::new(None),native_record:Default::default(),idle:Arc::new(std::sync::atomic::AtomicBool::new(true)),ready:Arc::new(std::sync::atomic::AtomicBool::new(true)),native:Default::default(),generation:Arc::new(AtomicU64::new(1)),binding_generation:AtomicU64::new(1),capture_error:Default::default(),calls:Mutex::new(vec![]),text:Mutex::new(String::new()),gate:Notify::new(),blocked:std::sync::atomic::AtomicBool::new(false),fail_write:std::sync::atomic::AtomicBool::new(false),fail_enter:std::sync::atomic::AtomicBool::new(false),rotate_enter:std::sync::atomic::AtomicBool::new(false),conversation:Arc::new(Mutex::new("sid".into())),socket_calls:Mutex::new(vec![]),ghost:Mutex::new(String::new()),hold_capture:std::sync::atomic::AtomicBool::new(false),hold_skip:Default::default(),mods_screen:Mutex::new(None),ring_keys:Default::default(),ring_returns:Default::default(),swallow:Default::default(),footer:Default::default(),panes:Mutex::new(vec![]),created:AtomicU64::new(1),switch_at:Mutex::new(None),send_now_hint:std::sync::atomic::AtomicBool::new(false),drop_enter:Default::default(),enqueue_on_drop:Mutex::new(None),direct:Default::default(),direct_calls:Mutex::new(vec![]),direct_once:Default::default(),fail_capture_after_drop:Default::default(),capture_countdown:Default::default() } } }
+struct Io { native_record:Mutex<Option<(std::path::PathBuf,u32,std::path::PathBuf)>>, idle:Arc<std::sync::atomic::AtomicBool>, ready:Arc<std::sync::atomic::AtomicBool>, native:Arc<std::sync::atomic::AtomicBool>, generation:Arc<AtomicU64>, binding_generation:AtomicU64, capture_error:std::sync::atomic::AtomicBool, calls:Mutex<Vec<CommandRequest>>, text:Mutex<String>, gate:Notify, blocked:std::sync::atomic::AtomicBool, fail_write:std::sync::atomic::AtomicBool, fail_enter:std::sync::atomic::AtomicBool, rotate_enter:std::sync::atomic::AtomicBool, conversation:Arc<Mutex<String>>, socket_calls:Mutex<Vec<Vec<u8>>>, ghost:Mutex<String>, hold_capture:std::sync::atomic::AtomicBool, hold_skip:std::sync::atomic::AtomicUsize, mods_screen:Mutex<Option<String>>, ring_keys:std::sync::atomic::AtomicUsize, ring_returns:std::sync::atomic::AtomicBool, swallow:std::sync::atomic::AtomicBool, footer:std::sync::atomic::AtomicBool, panes:Mutex<Vec<String>>, created:AtomicU64, switch_at:Mutex<Option<(usize,&'static str)>>, projection_at_facts:Mutex<Option<(std::path::PathBuf,Vec<String>)>>, send_now_hint:std::sync::atomic::AtomicBool, enter_hint:std::sync::atomic::AtomicBool, drop_enter:std::sync::atomic::AtomicUsize, enqueue_on_drop:Mutex<Option<std::path::PathBuf>>, direct:std::sync::atomic::AtomicBool, direct_calls:Mutex<Vec<CommandRequest>>, direct_once:std::sync::atomic::AtomicBool, fail_capture_after_drop:std::sync::atomic::AtomicUsize, capture_countdown:std::sync::atomic::AtomicUsize }
+impl Io { fn new()->Self { Self { projection_at_facts:Mutex::new(None),native_record:Default::default(),idle:Arc::new(std::sync::atomic::AtomicBool::new(true)),ready:Arc::new(std::sync::atomic::AtomicBool::new(true)),native:Default::default(),generation:Arc::new(AtomicU64::new(1)),binding_generation:AtomicU64::new(1),capture_error:Default::default(),calls:Mutex::new(vec![]),text:Mutex::new(String::new()),gate:Notify::new(),blocked:std::sync::atomic::AtomicBool::new(false),fail_write:std::sync::atomic::AtomicBool::new(false),fail_enter:std::sync::atomic::AtomicBool::new(false),rotate_enter:std::sync::atomic::AtomicBool::new(false),conversation:Arc::new(Mutex::new("sid".into())),socket_calls:Mutex::new(vec![]),ghost:Mutex::new(String::new()),hold_capture:std::sync::atomic::AtomicBool::new(false),hold_skip:Default::default(),mods_screen:Mutex::new(None),ring_keys:Default::default(),ring_returns:Default::default(),swallow:Default::default(),footer:Default::default(),panes:Mutex::new(vec![]),created:AtomicU64::new(1),switch_at:Mutex::new(None),send_now_hint:std::sync::atomic::AtomicBool::new(false),enter_hint:Default::default(),drop_enter:Default::default(),enqueue_on_drop:Mutex::new(None),direct:Default::default(),direct_calls:Mutex::new(vec![]),direct_once:Default::default(),fail_capture_after_drop:Default::default(),capture_countdown:Default::default() } } }
 impl Io {
     fn refresh_record(&self) {
         if let Some((path,pid,socket))=&*self.native_record.lock().unwrap() {
@@ -52,7 +52,9 @@ impl TerminalIo for Io {
                 // `footer`: o foco no painel de agentes, abaixo do composer, que o Esc não devolve.
                 let footer=if self.footer.load(std::sync::atomic::Ordering::Acquire) {"  ↑/↓ to select\n\n❯ ● main\n  ◯ general-purpose  sleep\n"} else {""};
                 // `send_now_hint`: a dica da fila interna do Claude Code, que o Orientar procura antes do ctrl+x ctrl+s.
-                let hint=if self.send_now_hint.load(std::sync::atomic::Ordering::Acquire) {"  ctrl+x ctrl+s to send now\n"} else {""};
+                // `enter_hint`: a mesma dica no terminal que manda ctrl+enter, o atalho que o Claude Code mostra ali.
+                let hint=match (self.send_now_hint.load(std::sync::atomic::Ordering::Acquire),self.enter_hint.load(std::sync::atomic::Ordering::Acquire)) {
+                    (true,true)=>"  Queued · ctrl+enter to send now\n",(true,false)=>"  ctrl+x ctrl+s to send now\n",_=>""};
                 format!("────────────────────────────────\n❯ {}\n────────────────────────────────\n{hint}{footer}",if text.is_empty(){ghost}else{text}).into_bytes()},
             // O `ctrl+x tab` da devolução do foco: com `ring_returns`, o foco volta ao prompt.
             "send-keys" if r.args.iter().any(|a|a=="C-x")=>{
@@ -745,6 +747,56 @@ async fn terminal_runtime_plain_text_is_held_even_with_the_native_socket() {
     h.stop().await.unwrap();
 }
 #[tokio::test]
+async fn terminal_runtime_conversation_message_is_typed_mid_turn_and_keeps_its_mark() {
+    // "Na conversa": com o Claude trabalhando ela é digitada na hora (o Claude Code a guarda e a lê na pausa
+    // seguinte), sem o ctrl+x ctrl+s que cortaria o turno; a comum continua esperando o turno.
+    use hangar_server::runtime::protocol::Disposition;
+    let f=Fixture::new().await; f.idle.store(false,std::sync::atomic::Ordering::Release); let h=f.start();
+    let mut marked=f.command("mid","No meio"); marked.payload["conversation"]=json!(true);
+    let reply=h.command(marked).await.unwrap();
+    assert_eq!(reply.disposition,Disposition::Accepted,"{}",reply.payload);
+    assert_eq!(f.sent_prompts(),vec!["No meio".to_string()]);
+    let row=f.state()["rows"].as_array().unwrap().iter().find(|r|r["id"]=="mid").cloned().unwrap();
+    assert_eq!((row["conversation"].clone(),row["delivered"].clone()),(json!(true),json!(true)),"{row}");
+    assert!(f.io.calls.lock().unwrap().iter().all(|c|!c.args.last().is_some_and(|k|k=="C-s")),"nada de ctrl+x ctrl+s");
+    let reply=h.command(f.command("plain","Comum")).await.unwrap();
+    assert_eq!((reply.disposition,reply.payload["code"].clone()),(Disposition::Deferred,json!("terminal_turn_hold")),"{}",reply.payload);
+    h.stop().await.unwrap();
+}
+#[tokio::test]
+async fn terminal_runtime_conversation_message_behind_a_held_one_still_goes_mid_turn() {
+    use hangar_server::runtime::protocol::Disposition;
+    let f=Fixture::new().await; f.idle.store(false,std::sync::atomic::Ordering::Release); let h=f.start();
+    h.command(f.command("plain","Comum")).await.unwrap();
+    let mut marked=f.command("mid","No meio"); marked.payload["conversation"]=json!(true);
+    assert_eq!(h.command(marked).await.unwrap().disposition,Disposition::Accepted);
+    assert_eq!(f.sent_prompts(),vec!["No meio".to_string()],"a comum segue esperando o turno");
+    let rows=f.state()["rows"].as_array().unwrap().clone();
+    assert_eq!(rows.iter().find(|r|r["id"]=="plain").unwrap()["delivered"],false);
+    h.stop().await.unwrap();
+}
+#[tokio::test]
+async fn terminal_runtime_send_now_of_a_typed_conversation_message_only_promotes_it() {
+    // Já digitada, ela está na fila do Claude Code: o Enviar agora aperta o ctrl+x ctrl+s sem digitá-la de novo.
+    use hangar_server::runtime::protocol::Disposition;
+    let f=Fixture::new().await; f.idle.store(false,std::sync::atomic::Ordering::Release); let h=f.start();
+    let mut marked=f.command("mid","No meio"); marked.payload["conversation"]=json!(true);
+    h.command(marked).await.unwrap();
+    f.io.send_now_hint.store(true,std::sync::atomic::Ordering::Release);
+    let reply=h.control("now".into(),"steer_entry".into(),json!({"entry_id":"mid"})).await.unwrap();
+    assert_eq!((reply.disposition,reply.payload["steered"].clone()),(Disposition::Accepted,json!(true)),"{}",reply.payload);
+    assert_eq!(f.sent_prompts(),vec!["No meio".to_string()],"nada reescrito");
+    assert!(f.io.calls.lock().unwrap().iter().any(|c|c.args.last().is_some_and(|k|k=="C-s")),"ctrl+x ctrl+s");
+    assert_eq!(f.state()["rows"].as_array().unwrap().iter().find(|r|r["id"]=="mid").unwrap()["steered"],true);
+    // O segundo clique não aperta de novo: levaria junto o que estiver na fila interna do Claude Code.
+    let presses=||f.io.calls.lock().unwrap().iter().filter(|c|c.args.last().is_some_and(|k|k=="C-s")).count();
+    let before=presses();
+    let again=h.control("again".into(),"steer_entry".into(),json!({"entry_id":"mid"})).await.unwrap();
+    assert_eq!(again.payload["code"],"queue_entry_gone","{}",again.payload);
+    assert_eq!(presses(),before);
+    h.stop().await.unwrap();
+}
+#[tokio::test]
 async fn terminal_runtime_native_message_behind_held_rows_still_goes_mid_turn() {
     // Recado que chegou atrás de uma fala segurada: a drenagem o leva pelo socket sem esperar o turno.
     let f=Fixture::new().await; f.idle.store(false,std::sync::atomic::Ordering::Release); f.native.store(true,std::sync::atomic::Ordering::Release); let h=f.start();
@@ -767,6 +819,17 @@ async fn terminal_runtime_steer_entry_types_and_promotes_mid_turn() {
     assert!(calls.iter().any(|c|c.args.contains(&"-l".into()) && c.args.last().is_some_and(|t|t=="Dois")),"a escolhida foi digitada");
     assert!(calls.iter().any(|c|c.args.last().is_some_and(|k|k=="C-s")),"ctrl+x ctrl+s promoveu");
     assert_eq!(f.state()["rows"].as_array().unwrap().iter().find(|r|r["id"]=="one").unwrap()["delivered"],false,"a outra segue esperando");
+    h.stop().await.unwrap();
+}
+#[tokio::test]
+async fn terminal_runtime_steer_entry_promotes_when_the_hint_names_ctrl_enter() {
+    // Onde o terminal manda ctrl+enter, é esse o atalho que o Claude Code mostra; o ctrl+x ctrl+s faz o mesmo.
+    let f=Fixture::new().await; f.idle.store(false,std::sync::atomic::Ordering::Release); let h=f.start();
+    h.command(f.command("one","Um")).await.unwrap();
+    f.io.enter_hint.store(true,std::sync::atomic::Ordering::Release); f.io.send_now_hint.store(true,std::sync::atomic::Ordering::Release);
+    let reply=h.control("steer-one".into(),"steer_entry".into(),json!({"entry_id":"one"})).await.unwrap();
+    assert_eq!((reply.disposition,reply.payload["steered"].clone()),(hangar_server::runtime::protocol::Disposition::Accepted,json!(true)),"{}",reply.payload);
+    assert!(f.io.calls.lock().unwrap().iter().any(|c|c.args.last().is_some_and(|k|k=="C-s")),"ctrl+x ctrl+s promoveu");
     h.stop().await.unwrap();
 }
 #[tokio::test]

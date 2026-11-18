@@ -70,7 +70,8 @@ vi.mock('./queueDelivery', async (original) => ({
   readQueueJev: vi.fn(async () => false),
 }));
 const realFirstInput = vi.hoisted(() => ({ enabled: false, send: vi.fn(), steer: vi.fn(), history: vi.fn(), transcribe: vi.fn(), relimpar: vi.fn(),
-  upload: vi.fn(async () => ({ path: '/up/sess/ditado-1.m4a' })) }));
+  upload: vi.fn(async (): Promise<{ path: string; media?: 'pending'; media_id?: string }> => ({ path: '/up/sess/ditado-1.m4a' })),
+  media: vi.fn(async (): Promise<{ frames: string[]; transcript: string } | null> => null) }));
 const voiceInput = vi.hoisted(() => ({ recording: false, simulateRecorder: false, delayStop: false, stop: vi.fn(),
   startPending: null as Promise<void> | null, startError: null as Error | null, stopWithoutResult: false,
   stopPending: null as Promise<void> | null, finishStop: null as null | (() => void), finished: null as Promise<void> | null,
@@ -106,6 +107,9 @@ vi.mock('@hangar/core', async (original) => ({
   transcribeUploadedForServer: realFirstInput.transcribe,
   // O ditado sobe o áudio por aqui (`audioOnly`) antes de transcrever.
   uploadFileForServer: realFirstInput.upload,
+  // Anexo: sobe direto do arquivo no disco.
+  uploadFromDiskForServer: realFirstInput.upload,
+  waitUploadMediaForServer: realFirstInput.media,
   relimparDitado: realFirstInput.relimpar,
 }));
 vi.mock('../stores/servers', () => {
@@ -222,6 +226,7 @@ beforeEach(() => {
   storage.memory.clear(); storage.failSet = false; storage.failRemove = false; sessionsState.rows = []; realFirstInput.enabled = false; voiceInput.simulateRecorder = false;
   voiceInput.startPending = null; voiceInput.startError = null; voiceInput.stopWithoutResult = false;
   realFirstInput.upload.mockReset().mockResolvedValue({ path: '/up/sess/ditado-1.m4a' });
+  realFirstInput.media.mockReset().mockResolvedValue(null);
   _limparEsfriamentoParaTestes();
   _resetRotasForTests();
 });
@@ -356,6 +361,8 @@ vi.mock('../features/attachments/DocumentViewer', () => ({ DocumentViewer: () =>
 vi.mock('../features/attachments/mediaCache', () => ({ canShareFile: false, shareFile: async () => {} }));
 vi.mock('../ui/Toast', () => ({ toast: { ok: () => {}, erro: () => {} } }));
 vi.mock('expo-clipboard', () => ({ setStringAsync: vi.fn(async () => {}) }));
+// O envio pelo disco é do `uploadFromDiskForServer` simulado acima; o tamanho lido do disco não existe no node.
+vi.mock('../net/uploadFromDisk', () => ({ sendFromDisk: () => async () => new Response('{}'), diskFileSize: async () => undefined }));
 const previewTexts = vi.hoisted(() => [] as string[]);
 vi.mock('./PreviewBubble', () => ({ PreviewBubble: ({ text }: { text: string }) => { previewTexts.push(text); return null; } }));
 vi.mock('./ThinkingBlock', () => ({ ThinkingBlock: () => null }));
@@ -1401,7 +1408,6 @@ describe('rascunho guardado no Composer', () => {
 
   it('colar vários anexa e sobe todos na hora; remover tira só aquele, mesmo com o upload dele no ar; Enviar junta os caminhos numa linha', async () => {
     composerChat.send.mockClear();
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({ blob: async () => new Blob(['x']) } as Response);
     let finishB!: (v: { path: string }) => void;
     realFirstInput.upload.mockReset().mockResolvedValueOnce({ path: '/up/a.png' })
       .mockImplementationOnce(() => new Promise((resolve) => { finishB = resolve; }))
@@ -1420,8 +1426,9 @@ describe('rascunho guardado no Composer', () => {
     expect(uris()).toEqual(['file:///a.png', 'file:///c.txt']);
     type(container, 'legenda');
     await act(async () => button(container, 'composer_enviar_mensagem')!.click());
-    // Os três subiram ao colar; o Enviar não sobe nada de novo.
+    // Os três subiram ao colar, direto do disco; o Enviar não sobe nada de novo.
     expect(realFirstInput.upload).toHaveBeenCalledTimes(3);
+    expect(realFirstInput.upload).toHaveBeenCalledWith(expect.anything(), 'sess', { name: 'c.txt', type: 'text/plain', size: 10 }, expect.any(Function));
     expect(composerChat.send).toHaveBeenCalledExactlyOnceWith(
       'legenda — 📎 board_imagem: /up/a.png 📎 board_arquivo: /up/c.txt', expect.any(Number));
     expect(removers()).toHaveLength(0);
@@ -1430,7 +1437,52 @@ describe('rascunho guardado no Composer', () => {
     await act(async () => finishB({ path: '/up/b.txt' }));
     expect(removers()).toHaveLength(0);
     expect(uris()).toEqual([]);
-    fetchSpy.mockRestore();
+    act(() => root.unmount());
+  });
+
+  it('vídeo colado vai com os quadros e a fala, e o caminho fica no rascunho antes de a mídia ficar pronta', async () => {
+    composerChat.send.mockClear();
+    realFirstInput.upload.mockReset().mockResolvedValue({ path: '/up/v.mp4', media: 'pending', media_id: 'm1' });
+    let ready!: (v: { frames: string[]; transcript: string }) => void;
+    realFirstInput.media.mockReset().mockImplementation(() => new Promise((resolve) => { ready = resolve; }));
+    const { container, root } = await render(createElement(Composer, props));
+    await act(async () => pasteInput.onPaste!([{ uri: 'file:///v.mp4', fileName: 'v.mp4', type: 'video/mp4', fileSize: 2048 }], null));
+    const stored = () => (JSON.parse(storage.memory.get('draft.v1:s1::sess')!) as { attachments: Record<string, unknown>[] }).attachments;
+    expect(stored()).toMatchObject([{ uploadedPath: '/up/v.mp4', uploadedMediaId: 'm1' }]);
+    expect(realFirstInput.media).toHaveBeenCalledWith(expect.anything(), 'sess', 'm1', expect.any(AbortSignal));
+    await act(async () => { void button(container, 'composer_enviar_mensagem')!.click(); });
+    expect(composerChat.send).not.toHaveBeenCalled();
+    await act(async () => ready({ frames: ['/up/q1.jpg', '/up/q2.jpg'], transcript: 'oi\ntudo   bem' }));
+    expect(composerChat.send).toHaveBeenCalledOnce();
+    const sent = composerChat.send.mock.calls[0][0] as string;
+    expect(sent.startsWith('📎 board_arquivo: /up/v.mp4 📎 board_imagem: /up/q1.jpg 📎 board_imagem: /up/q2.jpg ')).toBe(true);
+    expect(sent).toContain('oi tudo bem');
+    expect(sent).not.toContain('\n');
+    expect(realFirstInput.upload).toHaveBeenCalledOnce();
+    act(() => root.unmount());
+  });
+
+  it('vídeo cuja mídia não vem vai só com o caminho', async () => {
+    composerChat.send.mockClear();
+    realFirstInput.upload.mockReset().mockResolvedValue({ path: '/up/v.mp4', media: 'pending', media_id: 'm1' });
+    const { container, root } = await render(createElement(Composer, props));
+    await act(async () => pasteInput.onPaste!([{ uri: 'file:///v.mp4', fileName: 'v.mp4', type: 'video/mp4', fileSize: 2048 }], null));
+    await act(async () => button(container, 'composer_enviar_mensagem')!.click());
+    expect(composerChat.send).toHaveBeenCalledExactlyOnceWith('📎 board_arquivo: /up/v.mp4', expect.any(Number));
+    act(() => root.unmount());
+  });
+
+  it('vídeo gravado com a mídia pendente, ao reabrir, espera a mídia sem subir de novo', async () => {
+    composerChat.send.mockClear();
+    realFirstInput.media.mockReset().mockResolvedValue({ frames: ['/up/q1.jpg'], transcript: '' });
+    storage.memory.set('draft.v1:s1::sess', JSON.stringify({ version: 1, text: '', revision: 1, transcript: null, submission: null, attachments: [
+      { uri: 'file:///v.mp4', name: 'v.mp4', mime: 'video/mp4', kind: 'file', uploadedPath: '/up/v.mp4', uploadedMediaId: 'm1',
+        uploadedFor: { serverId: 's1', name: 'sess', transcript: null } },
+    ] }));
+    const { container, root } = await render(createElement(Composer, props));
+    await act(async () => button(container, 'composer_enviar_mensagem')!.click());
+    expect(realFirstInput.upload).not.toHaveBeenCalled();
+    expect(composerChat.send).toHaveBeenCalledExactlyOnceWith('📎 board_arquivo: /up/v.mp4 📎 board_imagem: /up/q1.jpg', expect.any(Number));
     act(() => root.unmount());
   });
 
@@ -1438,7 +1490,6 @@ describe('rascunho guardado no Composer', () => {
     composerChat.send.mockClear();
     let fail!: (error: Error) => void;
     composerChat.send.mockImplementationOnce(() => new Promise((_, reject) => { fail = reject; }));
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({ blob: async () => new Blob(['x']) } as Response);
     realFirstInput.upload.mockReset().mockResolvedValueOnce({ path: '/up/a.png' });
     storage.memory.set('draft.v1:s1::sess', JSON.stringify({ version: 1, text: 'legenda', revision: 1, transcript: null, submission: null,
       attachments: [{ uri: 'file:///a.png', name: 'a.png', mime: 'image/png', kind: 'image' }] }));
@@ -1453,13 +1504,11 @@ describe('rascunho guardado no Composer', () => {
     expect(removers()).toHaveLength(1);
     expect(stored()).toMatchObject([{ uri: 'file:///a.png', uploadedPath: '/up/a.png' }]);
     expect(container.textContent).toContain('recusado');
-    fetchSpy.mockRestore();
     act(() => root.unmount());
   });
 
   it('anexo colado durante o upload fica no rascunho e espera o próximo envio', async () => {
     composerChat.send.mockClear();
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({ blob: async () => new Blob(['x']) } as Response);
     let uploaded!: (v: { path: string }) => void;
     realFirstInput.upload.mockReset().mockImplementationOnce(() => new Promise((resolve) => { uploaded = resolve; }));
     storage.memory.set('draft.v1:s1::sess', JSON.stringify({ version: 1, text: '', revision: 1, transcript: null, submission: null,
@@ -1472,13 +1521,11 @@ describe('rascunho guardado no Composer', () => {
     const uris = (JSON.parse(storage.memory.get('draft.v1:s1::sess')!) as { attachments: { uri: string }[] }).attachments.map((a) => a.uri);
     expect(uris).toEqual(['file:///novo.txt']);
     expect(container.querySelectorAll('[aria-label="board_remover_anexo"]')).toHaveLength(1);
-    fetchSpy.mockRestore();
     act(() => root.unmount());
   });
 
   it('upload em segundo plano que falhou é tentado uma vez pelo Enviar; falhando de novo, o erro aparece e o primeiro guarda o caminho', async () => {
     composerChat.send.mockClear();
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({ blob: async () => new Blob(['x']) } as Response);
     realFirstInput.upload.mockReset().mockResolvedValueOnce({ path: '/up/a.png' }).mockRejectedValueOnce(new Error('caiu'))
       .mockRejectedValueOnce(new Error('grande demais')).mockResolvedValueOnce({ path: '/up/b.txt' });
     storage.memory.set('draft.v1:s1::sess', JSON.stringify({ version: 1, text: '', revision: 1, transcript: null, submission: null, attachments: [
@@ -1495,7 +1542,6 @@ describe('rascunho guardado no Composer', () => {
     await act(async () => button(container, 'composer_enviar_mensagem')!.click());
     expect(realFirstInput.upload).toHaveBeenCalledTimes(4);
     expect(composerChat.send).toHaveBeenCalledExactlyOnceWith('📎 board_imagem: /up/a.png 📎 board_arquivo: /up/b.txt', expect.any(Number));
-    fetchSpy.mockRestore();
     act(() => root.unmount());
   });
 
@@ -1520,6 +1566,8 @@ describe('rascunho guardado no Composer', () => {
     storage.memory.set('draft.v1.recoverable:s1::sess', JSON.stringify({
       version: 1, text: 'anterior', revision: 1, transcript: '/old', attachment: previous, submission: null,
     }));
+    // Upload novo ainda no ar: o que se confere é só o que a recuperação trouxe.
+    realFirstInput.upload.mockImplementation(() => new Promise(() => {}));
     const { container, root } = await render(createElement(Composer, props));
     act(() => button(container, 'composer_draft_recover')!.click());
     expect(container.querySelector('textarea')!.value).toBe('atual\nanterior');
