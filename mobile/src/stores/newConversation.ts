@@ -268,9 +268,11 @@ export function sendFirstInput(serverId: string, attemptId: string): Promise<voi
     // O anexo como vai na mensagem: já subido e pronto, ou o que o upload devolver.
     let sent = kept && !kept.uploadedMediaId ? kept : attach;
     // Grava o upload no rascunho da sessão; removido na conversa antes do upload, não volta à lista.
-    const keep = (uploaded: DraftAttachment): boolean => {
+    // `create`: só o upload pode criar o rascunho; sem ele na chegada da mídia, o anexo foi removido.
+    const keep = (uploaded: DraftAttachment, create: boolean): boolean => {
       try {
         const draft = readDraft(serverId, sessionName);
+        if (!draft && !create) return true;
         const base = draft ?? { version: 1 as const, text: attempt.text, revision: 1, transcript: null, attachments: [uploaded], submission: null };
         if (base.attachments.some((a) => a.uri === uploaded.uri)) {
           writeDraft(serverId, sessionName, { ...base, attachments: base.attachments.map((a) => (a.uri === uploaded.uri ? uploaded : a)) });
@@ -288,7 +290,7 @@ export function sendFirstInput(serverId: string, attemptId: string): Promise<voi
       const saveFailed = new Error('draft_save_failed');
       try {
         const fields = await uploadAttachment(server, sessionName, attach, (f) => {
-          if (!keep({ ...withoutUpload(attach), ...f, uploadedFor })) throw saveFailed;
+          if (!keep({ ...withoutUpload(attach), ...f, uploadedFor }, f.uploadedFrames === undefined)) throw saveFailed;
         }, { pending });
         sent = { ...withoutUpload(attach), ...fields, uploadedFor };
       } catch (cause) {

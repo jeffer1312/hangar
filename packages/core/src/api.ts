@@ -859,8 +859,9 @@ export async function waitUploadMediaForServer(
   // Cada pedido fica no servidor até a mídia ficar pronta ou ~45 s; só a falha espera do lado de cá.
   while (Date.now() < deadline) {
     if (signal?.aborted) throw cancelled();
+    // O teto vale para o pedido e para a pausa, não só para o começo de cada volta.
     const res = await apiFetchRes(`/api/sessions/${encodeURIComponent(name)}/upload-media?id=${encodeURIComponent(mediaId)}`, {
-      signal: comTeto(signal, 60_000),
+      signal: comTeto(signal, Math.max(1, Math.min(60_000, deadline - Date.now()))),
     }, s, false, false).catch(() => null);
     // Sem registro ou sem acesso não muda tentando de novo; rede caída e 5xx passam (app em segundo
     // plano, troca de rede) enquanto o servidor guarda o resultado.
@@ -868,10 +869,11 @@ export async function waitUploadMediaForServer(
     const body = res?.ok ? await res.json().catch(() => null) as { status?: string; frames?: string[]; transcript?: string } | null : null;
     if (signal?.aborted) throw cancelled();
     if (body?.status === 'done') return { frames: body.frames ?? [], transcript: body.transcript ?? '' };
-    if (body?.status !== 'pending') {
+    const left = deadline - Date.now();
+    if (body?.status !== 'pending' && left > 0) {
       await new Promise<void>((resolve) => {
         const stop = () => { clearTimeout(timer); resolve(); };
-        const timer = setTimeout(() => { signal?.removeEventListener('abort', stop); resolve(); }, 2000);
+        const timer = setTimeout(() => { signal?.removeEventListener('abort', stop); resolve(); }, Math.min(2000, left));
         signal?.addEventListener('abort', stop, { once: true });
       });
     }

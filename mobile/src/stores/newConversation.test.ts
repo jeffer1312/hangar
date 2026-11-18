@@ -426,6 +426,19 @@ describe('primeiro input', () => {
     expect(sent).toContain('oi voce');
   });
 
+  it('vídeo removido do rascunho durante a espera da mídia não volta para ele', async () => {
+    calls.upload.mockResolvedValue({ path: '/up/v.mp4', media: 'pending', media_id: 'm1' });
+    const attachment = { uri: 'file:///docs/draft-attachments/1-1.mp4', name: 'v.mp4', mime: 'video/mp4', kind: 'file' as const };
+    await beginAttempt('server-a', { ...input, text: '', attachment });
+    const created = attempt()!;
+    calls.media.mockImplementation(async () => {
+      memory.delete(`draft.v1:server-a::${created.sessionName}`);
+      return { frames: ['/up/q1.jpg'], transcript: '' };
+    });
+    await sendFirstInput('server-a', created.id);
+    expect(readDraft('server-a', created.sessionName!)).toBeNull();
+  });
+
   it('vídeo cuja mídia não vem manda só o caminho', async () => {
     calls.upload.mockResolvedValue({ path: '/up/v.mp4', media: 'pending', media_id: 'm1' });
     calls.media.mockResolvedValue(null);

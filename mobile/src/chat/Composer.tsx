@@ -346,7 +346,10 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
       const server = useServers.getState().servers.find((s) => s.id === origin.serverId);
       if (!server) throw new Error(m.chat_servidor_removido());
       return uploadAttachment(server, origin.name, attach, (fields) => {
-        if (uploadsRef.current.get(attach.uri) === upload) recordUpload(attach.uri, { ...fields, uploadedFor: target });
+        // Caminho sem gravar no rascunho: esperar a mídia faria o app fechado subir o vídeo de novo.
+        if (uploadsRef.current.get(attach.uri) === upload && !recordUpload(attach.uri, { ...fields, uploadedFor: target })) {
+          throw new Error(m.draft_write_error());
+        }
       }, { pending: pendingMediaUpload(attach, target), signal: abort.signal });
     })();
     uploadsRef.current.set(attach.uri, upload);
