@@ -4922,7 +4922,11 @@ curvas, linha do tempo, cartões de máquina, barra dividida, colunas por hora e
   usuário e mesmo nascimento conferidos na hora) e apontar o `current` para a versão anterior (com a
   `UpdateLock`, serviço parado, conferência da versão que responde). As primitivas de link e a
   `UpdateLock` saíram de `update/mod.rs` para esse crate; o servidor e o `hangar-core` importam de
-  lá. Nenhuma ação ganha rota HTTP. "Reinstalar o serviço" abre o assistente de instalação, porque o
+  lá. Nenhuma ação ganha rota HTTP. É exceção à regra do crate novo sobre o `hangar-core`: o app nativo é
+  outro workspace (`desktop-native/Cargo.toml`) e só puxa crates folha (`hangar-api`, `hangar-workspace`);
+  depender do core levaria o axum e a pilha HTTP do servidor para o binário do app. Por isso o crate
+  fica abaixo do core, só com std, serde, chrono e sysinfo, e nunca depende do `hangar-core` nem do
+  `hangar-server`. "Reinstalar o serviço" abre o assistente de instalação, porque o
   `install-package` recusa máquina já instalada.
 - **O ponto na linha "Status" segue só o servidor** (vermelho parado, âmbar subindo, nada de pé):
   disco quase cheio ou máquina com versão antiga não são ação que falhou, e ficam dentro da tela.
