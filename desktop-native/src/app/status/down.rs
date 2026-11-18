@@ -23,6 +23,8 @@ pub(in crate::app) struct Probe {
     pub port_open: bool,
     /// Parado sem motivo registrado: as últimas linhas do serviço, que só o `Failure` traria.
     pub output: Vec<String>,
+    /// A porta não saiu da leitura de sempre (`config::Issue`): código e dado, para o diagnóstico do agente.
+    pub port_issue: Option<String>,
 }
 
 /// O que a pessoa já pediu nesta queda.
@@ -269,11 +271,21 @@ pub(in crate::app) enum LocalReply {
     Done(Option<(String, String)>),
 }
 
-fn read(server: &LocalServer) -> Probe {
+/// O servidor na porta do serviço. A porta lida com ressalva (unit ilegível, `.env` ilegível, `CP_PORT` inválido) vai
+/// ao log do app com o código: o nativo não tem quem colha o `tracing` do crate. Bloqueia.
+pub(super) fn local_server(home: &std::path::Path) -> (LocalServer, Option<String>) {
+    let (server, issue) = LocalServer::configured(home);
+    let issue = issue.map(|issue| format!("{}: {}", issue.code, issue.detail));
+    if let Some(issue) = &issue { crate::log_line(&format!("status: porta {} do serviço com ressalva: {issue}", server.port)); }
+    (server, issue)
+}
+
+fn read(home: &std::path::Path) -> Probe {
+    let (server, port_issue) = local_server(home);
     let state = server.probe();
     let port_open = state == LocalState::Starting && !server.listeners().is_empty();
     let output = if state == (LocalState::Stopped { failure: None }) { server.output() } else { Vec::new() };
-    Probe { versions: server.versions(), port: server.port, port_open, output, state }
+    Probe { versions: server.versions(), port: server.port, port_open, output, state, port_issue }
 }
 
 fn act(server: &LocalServer, action: &Action) -> Result<(), hangar_local_server::ActionError> {
@@ -291,7 +303,7 @@ where F: Fn(DeviceReply) -> std::pin::Pin<Box<dyn Future<Output = ()> + Send>> +
     let send = |reply| done(DeviceReply::Status(0, Feed::Local(generation, reply)));
     if let Some(action) = action {
         let home = home.clone();
-        let result = tokio::task::spawn_blocking(move || act(&LocalServer::configured(&home), &action)).await;
+        let result = tokio::task::spawn_blocking(move || act(&local_server(&home).0, &action)).await;
         let error = match result {
             Ok(Ok(())) => None,
             Ok(Err(e)) => Some((e.code().to_owned(), e.detail())),
@@ -301,7 +313,7 @@ where F: Fn(DeviceReply) -> std::pin::Pin<Box<dyn Future<Output = ()> + Send>> +
     }
     loop {
         let home = home.clone();
-        let probe = match tokio::task::spawn_blocking(move || read(&LocalServer::configured(&home))).await {
+        let probe = match tokio::task::spawn_blocking(move || read(&home)).await {
             Ok(probe) => probe,
             // A leitura não voltou: sem o erro, o painel ficaria girando em "Lendo" para sempre.
             Err(e) => return send(LocalReply::Done(Some(("local_server_io".to_owned(), e.to_string())))).await,
@@ -665,7 +677,7 @@ mod tests {
 
     fn probe(state: LocalState) -> Probe {
         Probe { state, versions: Versions { current: Some("0.1.0.10824".into()), previous: Some("0.1.0.10790".into()),
-            installed: vec!["0.1.0.10824".into(), "0.1.0.10790".into()], dev_mode: false }, port: 8765, port_open: false, output: Vec::new() }
+            installed: vec!["0.1.0.10824".into(), "0.1.0.10790".into()], dev_mode: false }, port: 8765, port_open: false, output: Vec::new(), port_issue: None }
     }
 
     fn stopped_with(code: &str, detail: &str, holder: Option<PortHolder>) -> Probe {

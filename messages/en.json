@@ -6819,6 +6819,8 @@
   "native_status_agent_stopped_by_you": "You stopped the agent before it finished.",
   "native_status_agent_start_failed": "The agent didn't open: {detail}",
   "native_status_agent_no_summary": "The agent exited without explaining what it did.",
+  "native_status_agent_error": "The agent stopped with an error: {detail}",
+  "native_status_agent_exit": "The agent exited with code {code}.",
   "native_status_agent_try_other": "Try with {agent}",
   "native_status_agent_copy_report": "Copy report",
   "native_status_agent_report_title": "Server fix with {agent}",

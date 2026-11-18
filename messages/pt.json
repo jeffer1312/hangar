@@ -6819,6 +6819,8 @@
   "native_status_agent_stopped_by_you": "Você parou o agente antes de ele terminar.",
   "native_status_agent_start_failed": "O agente não abriu: {detail}",
   "native_status_agent_no_summary": "O agente saiu sem explicar o que fez.",
+  "native_status_agent_error": "O agente parou com erro: {detail}",
+  "native_status_agent_exit": "O agente saiu com o código {code}.",
   "native_status_agent_try_other": "Tentar com {agent}",
   "native_status_agent_copy_report": "Copiar relatório",
   "native_status_agent_report_title": "Conserto do servidor com {agent}",

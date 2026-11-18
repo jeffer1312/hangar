@@ -1075,7 +1075,7 @@ impl SetupWizard {
                 }
             };
             while let Ok(item) = output.recv().await {
-                let exited = matches!(item, agent::Output::Exit);
+                let exited = matches!(item, agent::Output::Exit(_));
                 if this.update(cx, |w, cx| w.agent_output(item, cx)).is_err() { return; }
                 if exited { break; }
             }
@@ -1124,7 +1124,7 @@ impl SetupWizard {
         let Some(run) = self.agent.as_mut() else { return };
         match item {
             agent::Output::Line(line) => { let agent = run.agent; run.transcript.feed(agent, &line); }
-            agent::Output::Exit => { run.pid = None; run.phase = AgentPhase::Restoring; }
+            agent::Output::Exit(_) => { run.pid = None; run.phase = AgentPhase::Restoring; }
         }
         cx.notify();
     }

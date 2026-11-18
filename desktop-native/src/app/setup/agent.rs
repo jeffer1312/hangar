@@ -218,7 +218,8 @@ impl Transcript {
     }
 }
 
-pub(crate) enum Output { Line(String), Exit }
+/// `Exit`: o código de saída do agente; `None` morto por sinal ou sem o estado do processo.
+pub(crate) enum Output { Line(String), Exit(Option<i32>) }
 
 pub(crate) struct Launch {
     pub program: PathBuf,
@@ -257,9 +258,9 @@ pub(crate) fn spawn(launch: Launch) -> Result<(u32, async_channel::Receiver<Outp
         })
     }).collect();
     std::thread::spawn(move || {
-        let _ = child.wait();
+        let code = child.wait().ok().and_then(|status| status.code());
         for reader in readers { let _ = reader.join(); }
-        let _ = tx.send_blocking(Output::Exit);
+        let _ = tx.send_blocking(Output::Exit(code));
     });
     Ok((pid, rx))
 }
@@ -374,16 +375,18 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("hangar-agent-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let fake = dir.join("fake.sh");
-        std::fs::write(&fake, "#!/bin/sh\nread -r first\necho \"prompt: $first\"\necho \"token: ${HANGAR_TOKEN:-ausente}\"\necho erro >&2\n").unwrap();
+        std::fs::write(&fake, "#!/bin/sh\nread -r first\necho \"prompt: $first\"\necho \"token: ${HANGAR_TOKEN:-ausente}\"\necho erro >&2\nexit 3\n").unwrap();
         std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
         let env = agent_env([("HANGAR_TOKEN".to_owned(), "t0ken".to_owned())], "/usr/bin:/bin");
         let (_, output) = spawn(Launch { program: fake, args: vec![], work: dir.join("work"), env, prompt: "conserte\n".into() }).unwrap();
         let mut lines = Vec::new();
-        while let Ok(item) = output.recv_blocking() {
-            match item { Output::Line(line) => lines.push(line), Output::Exit => break }
-        }
+        let exit = loop {
+            match output.recv_blocking() { Ok(Output::Line(line)) => lines.push(line), Ok(Output::Exit(code)) => break code, Err(_) => break None }
+        };
         lines.sort();
         assert_eq!(lines, vec!["erro", "prompt: conserte", "token: ausente"]);
+        // O código de saída chega com o fim: é ele que explica um agente que saiu sem conseguir.
+        assert_eq!(exit, Some(3));
         let _ = std::fs::remove_dir_all(dir);
     }
 }

@@ -6,7 +6,7 @@ use super::agent_fix::{self, Action, Choice, Progress, StepState};
 use super::down::{Attempt, Fix, big_icon, down_model, spinner};
 use super::model::fill;
 use super::super::setup::agent::{self as setup_agent, Agent};
-use hangar_local_server::{LocalServer, LocalState, Os, STARTING_LIMIT};
+use hangar_local_server::{LocalState, Os, STARTING_LIMIT};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::app) enum RunPhase {
@@ -27,8 +27,8 @@ pub(in crate::app) struct AgentRun {
     ended: Option<Duration>,
     progress: Progress,
     phase: RunPhase,
-    /// Pid e identidade enquanto o processo é nosso; sai no `Exit`.
-    process: Option<(u32, String)>,
+    /// O processo, também enquanto ele sobe; sai do `Handle` no `Exit`.
+    handle: agent_fix::Handle,
     stop_requested: bool,
     stop_failed: bool,
     steps_open: bool,
@@ -40,13 +40,14 @@ pub(in crate::app) struct AgentRun {
 impl Drop for AgentRun {
     // Descartada com o agente vivo (troca de servidor, outra execução): ele não segue sozinho.
     fn drop(&mut self) {
-        if let Some((pid, identity)) = self.process.take() { std::thread::spawn(move || { agent_fix::stop(pid, &identity); }); }
+        if let Some((pid, identity)) = agent_fix::abandon(&self.handle) { std::thread::spawn(move || { agent_fix::stop(pid, &identity); }); }
     }
 }
 
 impl AgentRun {
     fn elapsed(&self) -> Duration { self.ended.unwrap_or_else(|| self.started.elapsed()) }
     fn active(&self) -> bool { matches!(self.phase, RunPhase::Starting | RunPhase::Running | RunPhase::Checking) }
+    fn stoppable(&self) -> bool { matches!(self.phase, RunPhase::Starting | RunPhase::Running) && !self.stop_requested }
 }
 
 fn short_name(agent: Agent) -> &'static str { match agent { Agent::Claude => "Claude", Agent::Codex => "Codex" } }
@@ -81,18 +82,25 @@ fn report(run: &AgentRun) -> String {
     out.join("\n")
 }
 
-/// O fim contado pelo agente, ou por que não há o que contar.
+/// O fim contado pelo agente, ou por que não há o que contar. Consertado, vale o resumo; sem conserto, o erro dele vem antes.
 fn outcome_text(run: &AgentRun) -> String {
-    match &run.phase {
-        RunPhase::Failed { error: Some(error) } => fill(tr("status_agent_start_failed"), &[("detail", error)]),
-        _ if run.stop_requested => tr("status_agent_stopped_by_you"),
-        _ => run.progress.summary.clone().or_else(|| run.progress.said.clone()).unwrap_or_else(|| tr("status_agent_no_summary")),
+    let start_error = match &run.phase { RunPhase::Failed { error } => error.as_deref(), _ => None };
+    match run.progress.ending(start_error, run.stop_requested) {
+        agent_fix::Ending::StartFailed(error) => fill(tr("status_agent_start_failed"), &[("detail", &error)]),
+        agent_fix::Ending::Stopped => tr("status_agent_stopped_by_you"),
+        agent_fix::Ending::Error(error) => fill(tr("status_agent_error"), &[("detail", &error)]),
+        agent_fix::Ending::Exit { code, tail } => {
+            let text = fill(tr("status_agent_exit"), &[("code", &code.to_string())]);
+            if tail.is_empty() { text } else { format!("{text}\n{}", tail.join("\n")) }
+        }
+        agent_fix::Ending::Summary(summary) => summary,
+        agent_fix::Ending::Silent => tr("status_agent_no_summary"),
     }
 }
 
 /// Fora da janela: lê o servidor desta máquina até sair do "subindo" (o agente pode ter acabado de pedir a subida).
 fn check(home: std::path::PathBuf) -> (LocalState, Option<String>) {
-    let server = LocalServer::configured(&home);
+    let (server, _) = super::down::local_server(&home);
     let deadline = Instant::now() + STARTING_LIMIT;
     loop {
         let state = server.probe();
@@ -128,21 +136,28 @@ impl Hangar {
         let os = Os::current();
         let Some(view) = down_model(&probe, os, Attempt::Done) else { return };
         let facts = agent_fix::Facts { title: &view.title, detail: view.detail.as_deref(), state: &probe.state, versions: &probe.versions,
-            port: probe.port, output: &view.output };
+            port: probe.port, port_issue: probe.port_issue.as_deref(), output: &view.output };
         let diagnosis = agent_fix::diagnosis(&facts);
         let prompt = agent_fix::prompt(&diagnosis, &home, probe.port, os, crate::i18n::english());
         let id = super::next_generation();
+        let handle = agent_fix::Handle::default();
+        // Antes de subir: fechar o app enquanto o agente ainda sobe também o encerra (quem sobe confere a marca).
+        let on_quit = handle.clone();
+        let quit = cx.on_app_quit(move |_, _| {
+            if let Some((pid, identity)) = agent_fix::abandon(&on_quit) { agent_fix::kill_now(pid, &identity); }
+            async {}
+        });
         // A anterior (já acabada) sai daqui: só uma execução por página.
         self.device.status.fix = Some(AgentRun { agent, id, started: Instant::now(), ended: None, progress: Progress::default(),
-            phase: RunPhase::Starting, process: None, stop_requested: false, stop_failed: false, steps_open: false, diagnosis,
-            tasks: Vec::new(), _quit: None });
+            phase: RunPhase::Starting, handle: handle.clone(), stop_requested: false, stop_failed: false, steps_open: false, diagnosis,
+            tasks: Vec::new(), _quit: Some(quit) });
         let (done, started) = tokio::sync::oneshot::channel();
-        self.runtime.spawn_blocking(move || { let _ = done.send(agent_fix::start(agent, prompt, &home)); });
+        self.runtime.spawn_blocking(move || { let _ = done.send(agent_fix::start(agent, prompt, &home, &handle)); });
         let reader = cx.spawn(async move |this, cx| {
             let started = started.await.unwrap_or_else(|e| Err(e.to_string()));
             let Ok(Some(output)) = this.update(cx, |this, cx| this.agent_started(id, started, cx)) else { return };
             while let Ok(item) = output.recv().await {
-                let exited = matches!(item, setup_agent::Output::Exit);
+                let exited = matches!(item, setup_agent::Output::Exit(_));
                 if this.update(cx, |this, cx| this.agent_output(id, item, cx)).is_err() || exited { break; }
             }
         });
@@ -167,24 +182,19 @@ impl Hangar {
 
     fn agent_started(&mut self, id: u64, started: Result<agent_fix::Started, String>, cx: &mut Context<Self>)
         -> Option<async_channel::Receiver<setup_agent::Output>> {
-        let run = self.device.status.fix.as_mut().filter(|run| run.id == id);
-        let Some(run) = run else {
-            // A execução foi descartada enquanto o agente subia: ninguém mais o acompanha.
-            if let Ok(s) = started { std::thread::spawn(move || { agent_fix::stop(s.pid, &s.identity); }); }
-            return None;
-        };
+        // Descartada enquanto o agente subia: o `Drop` marcou o `Handle`, e quem subiu já o encerrou.
+        let run = self.device.status.fix.as_mut().filter(|run| run.id == id)?;
         match started {
-            Ok(agent_fix::Started { pid, identity, output }) => {
-                (run.process, run.phase) = (Some((pid, identity)), RunPhase::Running);
-                // Fechar o app não espera a saída educada: o agente sai junto, à força.
-                run._quit = Some(cx.on_app_quit(move |this, _| {
-                    if let Some((pid, identity)) = this.device.status.fix.as_mut().filter(|run| run.id == id).and_then(|run| run.process.take()) {
-                        agent_fix::kill_now(pid, &identity);
-                    }
-                    async {}
-                }));
+            Ok(agent_fix::Started { output }) => {
+                run.phase = RunPhase::Running;
                 cx.notify();
                 Some(output)
+            }
+            // Parado (ou no teto) antes de subir: quem subiu viu a marca e o encerrou.
+            Err(error) if error == agent_fix::ABANDONED => {
+                (run.ended, run.phase) = (Some(run.started.elapsed()), RunPhase::Failed { error: None });
+                cx.notify();
+                None
             }
             Err(error) => {
                 crate::log_line(&format!("status: o agente {} não subiu: {error}", run.agent.id()));
@@ -199,9 +209,9 @@ impl Hangar {
         let Some(run) = self.device.status.fix.as_mut().filter(|run| run.id == id) else { return };
         match item {
             setup_agent::Output::Line(line) => { let (agent, at) = (run.agent, run.started.elapsed()); run.progress.feed(agent, &line, at); }
-            setup_agent::Output::Exit => {
-                (run.ended, run.phase) = (Some(run.started.elapsed()), RunPhase::Checking);
-                let process = run.process.take();
+            setup_agent::Output::Exit(code) => {
+                (run.ended, run.phase, run.progress.exit) = (Some(run.started.elapsed()), RunPhase::Checking, code);
+                let process = agent_fix::exited(&run.handle);
                 let Some(home) = std::env::home_dir() else {
                     run.phase = RunPhase::Failed { error: Some("HOME".to_owned()) };
                     return cx.notify();
@@ -236,9 +246,17 @@ impl Hangar {
     /// "Parar" e o teto: a saída pedida, a força depois e o grupo inteiro, fora da janela. O `Exit` que vem depois leva
     /// à releitura do servidor.
     fn agent_stop(&mut self, id: u64, cx: &mut Context<Self>) {
-        let Some(run) = self.device.status.fix.as_mut().filter(|run| run.id == id && run.phase == RunPhase::Running) else { return };
-        let Some((pid, identity)) = run.process.clone() else { return };
+        let Some(run) = self.device.status.fix.as_mut().filter(|run| run.id == id && run.stoppable()) else { return };
         run.stop_requested = true;
+        // Ainda subindo: a marca basta, quem sobe o encerra e a execução acaba como parada.
+        if run.phase == RunPhase::Starting {
+            // Subiu entre o clique e aqui: o processo já está no `Handle` e sai por aqui.
+            if let Some((pid, identity)) = agent_fix::abandon(&run.handle) {
+                self.runtime.spawn_blocking(move || { agent_fix::stop(pid, &identity); });
+            }
+            return cx.notify();
+        }
+        let Some((pid, identity)) = agent_fix::process(&run.handle) else { return };
         let (done, stopped) = tokio::sync::oneshot::channel();
         self.runtime.spawn_blocking(move || { let _ = done.send(agent_fix::stop(pid, &identity)); });
         let task = cx.spawn(async move |this, cx| {
@@ -303,7 +321,7 @@ impl Hangar {
                 };
                 let id = run.id;
                 let stop = Button::new("status-agent-stop").danger().small().icon(IconName::Square).label(tr("status_agent_stop"))
-                    .disabled(run.phase != RunPhase::Running || run.stop_requested)
+                    .disabled(!run.stoppable())
                     .on_click(cx.listener(move |this, _, _, cx| this.agent_stop(id, cx)));
                 let stop_failed = run.stop_failed.then(|| div().mt(px(8.)).text_size(px(12.5)).text_color(theme::danger()).whitespace_normal()
                     .child(tr("status_agent_stop_failed")));
