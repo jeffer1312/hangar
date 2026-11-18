@@ -142,7 +142,12 @@ pub fn dir_bytes(root: &Path) -> Option<u64> {
     let mut total = 0u64;
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            // Raiz que não se lista daria zero, que diria "pasta vazia".
+            Err(_) if dir == root => return None,
+            Err(_) => continue,
+        };
         for entry in entries.flatten() {
             let Ok(meta) = entry.metadata() else { continue };
             let kind = meta.file_type();
@@ -184,6 +189,26 @@ mod tests {
         assert_eq!(dir_bytes(dir.path()), Some(1244));
         assert_eq!(dir_bytes(&dir.path().join("missing")), None);
         assert_eq!(dir_bytes(&dir.path().join("a.bin")), None, "arquivo não é pasta");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dir_bytes_unlistable_root_is_none_and_inner_one_is_skipped() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let empty = dir.path().join("empty");
+        std::fs::create_dir(&empty).unwrap();
+        assert_eq!(dir_bytes(&empty), Some(0), "raiz lida e vazia");
+        write(&dir.path().join("root/a.bin"), 100);
+        write(&dir.path().join("root/locked/b.bin"), 50);
+        let (root, locked) = (dir.path().join("root"), dir.path().join("root/locked"));
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        assert_eq!(dir_bytes(&root), Some(100), "pasta ilegível no meio fica de fora");
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let unlistable = dir_bytes(&root);
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(unlistable, None, "raiz que não se lista não é zero");
     }
 
     #[cfg(unix)]

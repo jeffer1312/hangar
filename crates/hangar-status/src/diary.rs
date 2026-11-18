@@ -140,6 +140,7 @@ impl DiaryReader {
                 Err(_) => entry.failed = true,
             }
         }
+        for entry in files.values_mut() { entry.facts.expire(&window); }
         Some(guard)
     }
 }
@@ -235,18 +236,32 @@ impl Facts {
             self.unreadable += 1;
             return;
         };
-        let read = match line.get("evento").and_then(Value::as_str) {
-            Some("hangar_server.saida") => exit(&line)
-                .map(|exit| if exit.0 > window.exits_since { self.exits.push(exit) }),
-            Some("api.servidor") => request(&line)
-                .map(|request| if request.at >= window.recent_since { self.requests.push(request) }),
-            Some("systemd_watchdog") => watchdog(&line)
-                .map(|event| if event.0 >= window.recent_since { self.watchdog.push(event) }),
-            _ => Some(()),
-        };
-        if read.is_none() {
-            self.unreadable += 1;
+        match line.get("evento").and_then(Value::as_str) {
+            Some("hangar_server.saida") => match exit(&line) {
+                Some(exit) if exit.0 > window.exits_since => self.exits.push(exit),
+                Some(_) => {}
+                None => self.unreadable += 1,
+            },
+            Some("api.servidor") => match request(&line) {
+                Some(request) if request.at >= window.recent_since => self.requests.push(request),
+                Some(_) => {}
+                None => self.unreadable += 1,
+            },
+            Some("systemd_watchdog") => match watchdog(&line) {
+                Some(event) if event.0 >= window.recent_since => self.watchdog.push(event),
+                Some(_) => {}
+                None => self.unreadable += 1,
+            },
+            _ => {}
         }
+    }
+
+    /// Tira o que saiu da janela: um arquivo que não muda fica no cache e, sem isso, os pedidos lentos
+    /// de dias atrás seguiriam ocupando memória e sendo percorridos a cada consulta.
+    fn expire(&mut self, window: &Window) {
+        self.requests.retain(|request| request.at >= window.recent_since);
+        self.watchdog.retain(|(at, _)| *at >= window.recent_since);
+        self.exits.retain(|(at, _)| *at > window.exits_since);
     }
 }
 
@@ -461,6 +476,18 @@ mod tests {
         append(dir.path(), "2026-11-17", &[api("2026-11-17T11:00:00Z", "GET /a", "500", 10)]);
         assert_eq!(reader.slow(now).unwrap().top_routes[0].count, 3, "a linha nova entra sem duplicar as antigas");
         assert_eq!(reads(&reader), 3, "só o arquivo do dia foi relido");
+    }
+
+    #[test]
+    fn unchanged_file_drops_requests_that_left_the_window() {
+        let dir = tempfile::tempdir().unwrap();
+        append(dir.path(), "2026-11-17", &[api("2026-11-17T10:00:00Z", "GET /a", "500", 10)]);
+        let reader = DiaryReader::at(dir.path().to_owned());
+        assert_eq!(reader.slow(utc("2026-11-17T12:00:00Z")).unwrap().top_routes.len(), 1);
+        assert!(reader.slow(utc("2026-11-18T11:00:00Z")).unwrap().top_routes.is_empty());
+        assert_eq!(reads(&reader), 1, "o arquivo não mudou");
+        let cache = reader.cache.lock().unwrap();
+        assert!(cache.files.values().all(|file| file.facts.requests.is_empty()), "o pedido de 25 h atrás saiu do cache");
     }
 
     #[test]
