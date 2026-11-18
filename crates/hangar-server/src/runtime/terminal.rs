@@ -1692,11 +1692,15 @@ impl Executor {
     }
 
     async fn entry_confirmed(&mut self, entry: &str) -> bool {
-        // Enquanto espera a indicação, só releia o recibo se o transcript mudou de tamanho.
+        // Enquanto espera a indicação, só releia o recibo se o transcript mudou de tamanho; a fila é sempre lida.
         let len = std::fs::metadata(&self.target.transcript).ok().map(|m| m.len());
-        if len == self.confirm_seen { return false; }
-        if self.confirm_rows().await.is_err() { return false; }
-        self.confirm_seen = len;
+        if len != self.confirm_seen {
+            if self.confirm_rows().await.is_ok() {
+                self.confirm_seen = len;
+            } else if crate::warn_limit::allow(Some(&self.target.key), "steer_receipt") {
+                tracing::warn!(key=%self.target.key, code="steer_receipt", "Orientar: transcript ilegível ao conferir a entrada; segue esperando a dica");
+            }
+        }
         self.queue.snapshot().await.is_ok_and(|state| {
             state.rows.iter().any(|row| row["id"] == entry && row["confirmed"] == true)
         })
@@ -1775,7 +1779,7 @@ impl Executor {
         };
         if waited<self.options.give_up_after || self.give_up_retry_at.is_some_and(|at|now<at) {return;}
         match self.services("maintenance","maintenance","").facts(&self.target.binding).await {
-            Ok(facts) if facts.binding==self.target.binding && facts.idle=>{},
+            Ok(facts) if facts.binding==self.target.binding && facts.foreground_idle()=>{},
             Ok(_)=>return,
             Err(_)=>{skip(&self.target.key,"give_up_facts","prazo da entrega incerta: fatos indisponíveis, sem saber se o Claude parou"); return},
         }
@@ -1820,7 +1824,7 @@ impl Executor {
             && ["attempt_ts","dispatched_ts","claimed_ts","ts"].iter().find_map(|k|r[*k].as_f64()).unwrap_or(0.0)+grace<=now);
         if !due {return;}
         // Parado, o que o Claude tivesse enfileirado já teria virado conversa.
-        if !self.services("maintenance","maintenance","").facts(&self.target.binding).await.is_ok_and(|facts|facts.binding==self.target.binding && facts.idle) {return;}
+        if !self.services("maintenance","maintenance","").facts(&self.target.binding).await.is_ok_and(|facts|facts.binding==self.target.binding && facts.foreground_idle()) {return;}
         if self.confirm_rows().await.is_err() {return;}
         let id=format!("give_up_unproved:{}",self.sequence.fetch_add(1,Ordering::Relaxed));
         match self.queue.exec(self.target.generation,&id,sample(),Action::GiveUpUnproved {now,grace}).await {

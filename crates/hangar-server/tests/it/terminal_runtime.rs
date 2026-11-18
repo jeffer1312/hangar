@@ -899,18 +899,18 @@ async fn direct_delivery_does_not_warn_after_claude_records_the_prompt() {
 #[tokio::test]
 async fn direct_delivery_background_agent_does_not_hold_a_prompt() {
     use std::sync::atomic::Ordering;
-    let f = Fixture::new().await;
-    f.idle.store(false, Ordering::Release);
-    let h = f.start();
-    // A CLI pode manter busy no registro nativo mesmo quando só um subagente trabalha.
-    let rule = "────────────────────────────────";
-    *f.io.panes.lock().unwrap() = vec![
-        format!("✻ Waiting for 1 background agent to finish\n{rule}\n❯ \n{rule}\n"),
-    ];
-    let result = h.command(f.command("background", "Próxima mensagem")).await.unwrap();
-    assert_ne!(result.payload["code"], "terminal_turn_hold", "{}", result.payload);
-    assert!(f.sent_prompts().iter().any(|text| text == "Próxima mensagem"));
-    h.stop().await.unwrap();
+    for label in ["Waiting for 1 background agent to finish", "Waiting for 2 background agents to finish… (3m 2s)"] {
+        let f = Fixture::new().await;
+        f.idle.store(false, Ordering::Release);
+        let h = f.start();
+        // A CLI pode manter busy no registro nativo mesmo quando só um subagente trabalha.
+        let rule = "────────────────────────────────";
+        *f.io.panes.lock().unwrap() = vec![format!("✻ {label}\n{rule}\n❯ \n{rule}\n")];
+        let result = h.command(f.command("background", "Próxima mensagem")).await.unwrap();
+        assert_ne!(result.payload["code"], "terminal_turn_hold", "{label}: {}", result.payload);
+        assert!(f.sent_prompts().iter().any(|text| text == "Próxima mensagem"), "{label}");
+        h.stop().await.unwrap();
+    }
 }
 #[tokio::test]
 async fn terminal_runtime_steer_without_body_steers_the_first_waiting_entry() {

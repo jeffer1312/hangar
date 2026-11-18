@@ -339,7 +339,9 @@ async fn send_with_receipt(st: &AppState, name: &str, target: &WriteTarget, text
         if let Some(expected) = expected_turn { payload["expected_turn"] = expected; }
         if let crate::runtime::gateway::EntryHandle::Terminal { handle, .. } = &target.handle {
             let result = handle.control(random_hex(16), "steer_entry".into(), payload).await;
-            return terminal_input_answer(&sent, &result);
+            let mut answer = terminal_input_answer(&sent, &result);
+            if uncertain { answer.1["uncertain"] = json!(true); }
+            return answer;
         }
         let promoted = target.handle.command(RuntimeCommand { operation_id: random_hex(16), kind: OperationKind::SteerQueue,
             payload }).await;

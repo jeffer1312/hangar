@@ -59,7 +59,8 @@ impl InputFacts {
                 .and_then(|label| label.split_once(" background "))
                 .is_some_and(|(count, suffix)| {
                     count.parse::<u32>().is_ok_and(|count| count > 0)
-                        && matches!(suffix, "agent to finish" | "agents to finish")
+                        // O rótulo pode trazer reticências e tempo depois do texto.
+                        && (suffix.starts_with("agent to finish") || suffix.starts_with("agents to finish"))
                 })
         })
     }
