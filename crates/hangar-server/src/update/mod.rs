@@ -254,7 +254,8 @@ pub async fn entry(client: &reqwest::Client, release: &Release, platform: &str) 
 }
 
 /// O índice publicado; o erro diz se vale tentar de novo. Só a rede falha passageira: laço de
-/// redirecionamento e índice fora do formato dão o mesmo resultado na tentativa seguinte.
+/// redirecionamento e índice fora do formato dão o mesmo resultado na tentativa seguinte, mas o
+/// JSON que acaba no meio é corpo cortado sem `Content-Length`.
 async fn read_index(client: &reqwest::Client, release: &Release, limit: Duration) -> Result<PackageIndex, (UpdateError, bool)> {
     let url = release.index_url();
     let response = client.get(&url).timeout(limit).send().await.map_err(|e| { let retry = !e.is_redirect(); (UpdateError::Index(e.to_string()), retry) })?;
@@ -262,7 +263,7 @@ async fn read_index(client: &reqwest::Client, release: &Release, limit: Duration
         return Err((UpdateError::Index(format!("{} em {url}", response.status())), !response.status().is_client_error()));
     }
     let bytes = response.bytes().await.map_err(|e| (UpdateError::Index(e.to_string()), true))?;
-    serde_json::from_slice(&bytes).map_err(|e| (UpdateError::Index(e.to_string()), false))
+    serde_json::from_slice(&bytes).map_err(|e| { let retry = e.is_eof(); (UpdateError::Index(e.to_string()), retry) })
 }
 
 /// Baixa com prazo, gravando e calculando o sha256 ao mesmo tempo.

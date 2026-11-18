@@ -265,8 +265,9 @@ fn wait_watching(child: &mut std::process::Child, hangar_dir: &Path, file: Optio
                 record(log, "lancador.travado", serde_json::json!({"evento": "lancador.travado", "nivel": "erro", "codigo": "server_hung", "rodadas": rounds}));
             }
             // O reinício só é contado para o `hangar-doctor` com o filho de fato fora.
-            match child.kill().and_then(|()| child.wait()) {
-                Ok(status) => {
+            match child.kill() {
+                Ok(()) => {
+                    let status = child.wait()?;
                     note_restart_for_doctor(pid, rounds, file, log);
                     return Ok(status);
                 }
