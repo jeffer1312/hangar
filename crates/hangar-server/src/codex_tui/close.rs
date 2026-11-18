@@ -207,12 +207,15 @@ mod tests {
     fn an_app_server_that_survives_the_signal_keeps_its_file() {
         let dir = tempfile::tempdir().unwrap();
         let endpoint = "ws://127.0.0.1:65001";
+        // O argv já é o do app-server antes do `trap`: o sinal só pode sair depois do marcador.
+        let ready = dir.path().join("trap-ready");
         let mut server = std::process::Command::new("/bin/sh")
-            .args(["-c", "trap '' TERM; while :; do sleep 1; done", "app-server", endpoint])
+            .args(["-c", "trap '' TERM; : > \"$2\"; while :; do sleep 1; done", "app-server", endpoint])
+            .arg(&ready)
             .spawn()
             .unwrap();
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        while app_server(server.id(), endpoint) != AppServer::Ours && std::time::Instant::now() < deadline {
+        while (!ready.exists() || app_server(server.id(), endpoint) != AppServer::Ours) && std::time::Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(20));
         }
         put(dir.path(), json!({"name": "codex-proj", "endpoint": endpoint, "app_pid": server.id(), "key": "k"}));

@@ -115,6 +115,7 @@ pub(crate) fn error_kind(error: &io::Error) -> &'static str {
 }
 
 /// O diário exportável dos comandos do lançador e a cauda privada da última falha da sessão.
+#[derive(Clone)]
 pub(crate) struct Diary { session: String, base: Option<PathBuf> }
 
 impl Diary {
@@ -138,6 +139,14 @@ impl Diary {
             self.tail_failed(failure, &error);
         }
         bytes
+    }
+
+    /// A primeira mensagem que não chegou ao Codex: só o código, nunca o texto dela.
+    pub fn first_prompt_failed(&self, code: &'static str) {
+        let mut event = Failure::new(code, "entregar_primeira_mensagem").fields(&self.session);
+        event.insert("evento".into(), json!("codex.primeira_mensagem.falhou"));
+        event.insert("nivel".into(), json!("erro"));
+        self.write(Value::Object(event));
     }
 
     fn tail_failed(&self, failure: &Failure, error: &io::Error) {

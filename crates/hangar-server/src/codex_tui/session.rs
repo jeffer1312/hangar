@@ -215,6 +215,7 @@ pub(crate) struct Life {
     tail: Option<Tail>,
     server: Option<Server>,
     listeners: Vec<tokio::task::JoinHandle<()>>,
+    first_failures: threads::Failures,
 }
 
 impl Life {
@@ -257,15 +258,20 @@ impl Life {
     /// A escuta da primeira subida, que também entrega a primeira mensagem que não coube no argv.
     pub fn listen_with(&mut self, cwd: &str, first: Option<threads::FirstPrompt>) -> tokio::sync::oneshot::Receiver<()> {
         let (sender, receiver) = tokio::sync::oneshot::channel();
+        self.first_failures = threads::Failures::new(self.diary.clone());
         let (Some(session), Some(server)) = (self.session.clone(), self.server.as_ref()) else {
-            if let Some(line) = first.as_ref().and_then(threads::FirstPrompt::closed) {
-                super::Pane.say(&line);
+            if let Some(prompt) = &first {
+                prompt.report_closed(&self.first_failures);
             }
             return receiver;
         };
-        self.listeners.push(tokio::spawn(threads::listen(session, cwd.to_owned(), server.gone.clone(), Some(sender), first)));
+        self.listeners.push(tokio::spawn(threads::listen(session, cwd.to_owned(), server.gone.clone(), Some(sender), first,
+            self.first_failures.clone())));
         receiver
     }
+
+    /// A falha da primeira mensagem já dita no pane, se houve.
+    pub fn first_prompt_failure(&self) -> Option<String> { self.first_failures.last() }
 
     pub async fn wait_port(&mut self, limit: Duration, screen: &dyn Screen) -> bool {
         let (Some(session), Some(server), Some(tail), Some(diary)) = (self.session.as_ref(), self.server.as_mut(), self.tail.as_mut(), self.diary.as_ref()) else {

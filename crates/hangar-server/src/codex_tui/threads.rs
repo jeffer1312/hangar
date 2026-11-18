@@ -1,7 +1,7 @@
 //! A escuta das threads principais que a TUI abre durante a vida do pane. Só olha: quem chama
 //! `thread/start` é a TUI (thread de outro cliente sem turno não tem rollout e o `codex resume` a recusa).
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
@@ -10,6 +10,7 @@ use serde_json::{Value, json};
 use tokio::time::Instant;
 use tokio_tungstenite::tungstenite::{Message, protocol::WebSocketConfig};
 
+use super::app_server::Diary;
 use super::session::Session;
 use super::{Pane, Screen};
 
@@ -36,6 +37,33 @@ const FIRST_TURN_ID: &str = "hangar-tui:first";
 pub(crate) enum Out {
     Send(Value),
     Say(String),
+    Fail { code: &'static str, line: String },
+}
+
+/// A falha da primeira mensagem vai ao pane, que a TUI pode redesenhar por cima, ao diário e fica
+/// guardada para repetir quando a TUI sair.
+#[derive(Clone, Default)]
+pub(crate) struct Failures {
+    diary: Option<Diary>,
+    last: Arc<Mutex<Option<String>>>,
+}
+
+impl Failures {
+    pub fn new(diary: Option<Diary>) -> Self { Self { diary, last: Arc::default() } }
+
+    pub fn report(&self, code: &'static str, line: &str) {
+        Pane.say(line);
+        if let Some(diary) = &self.diary {
+            diary.first_prompt_failed(code);
+        }
+        *self.last.lock().unwrap_or_else(PoisonError::into_inner) = Some(line.to_owned());
+    }
+
+    pub fn last(&self) -> Option<String> { self.last.lock().unwrap_or_else(PoisonError::into_inner).clone() }
+}
+
+fn not_delivered(reason: &str) -> String {
+    format!("erro: a primeira mensagem não chegou ao Codex ({reason}); ela não foi cortada, mande de novo pela conversa")
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -75,6 +103,11 @@ impl FirstPrompt {
     pub(crate) fn message(&mut self, message: &Value, primary: Option<&str>) -> Vec<Out> {
         let id = message.get("id").filter(|_| message.get("method").is_none());
         match self.stage {
+            Stage::Waiting if id == Some(&json!(1)) && message.get("error").is_some() => {
+                self.stage = Stage::Done;
+                let reason = Self::refused(message).unwrap_or_default();
+                vec![Out::Fail { code: "initialize_recusado", line: not_delivered(&format!("o app-server recusou a conexão: {reason}")) }]
+            }
             // Retomando, o `thread/started` não vem: assina a thread logo depois do `initialize`.
             Stage::Waiting if self.resume.is_some() && id == Some(&json!(1)) => {
                 self.stage = Stage::Resuming;
@@ -95,7 +128,7 @@ impl FirstPrompt {
             Stage::Resuming if id == Some(&json!(FIRST_RESUME_ID)) => match Self::refused(message) {
                 Some(reason) => {
                     self.stage = Stage::Done;
-                    vec![Out::Say(format!("erro: a primeira mensagem não chegou ao Codex (a conversa não abriu: {reason}); ela não foi cortada, mande de novo pela conversa"))]
+                    vec![Out::Fail { code: "resume_recusado", line: not_delivered(&format!("a conversa não abriu: {reason}")) }]
                 }
                 None => {
                     self.stage = Stage::Sent;
@@ -104,10 +137,10 @@ impl FirstPrompt {
             },
             Stage::Sent if id == Some(&json!(FIRST_TURN_ID)) => {
                 self.stage = Stage::Done;
-                vec![Out::Say(match Self::refused(message) {
-                    Some(reason) => format!("erro: a primeira mensagem não chegou ao Codex ({reason}); ela não foi cortada, mande de novo pela conversa"),
-                    None => "primeira mensagem entregue pelo app-server".into(),
-                })]
+                vec![match Self::refused(message) {
+                    Some(reason) => Out::Fail { code: "turno_recusado", line: not_delivered(&reason) },
+                    None => Out::Say("primeira mensagem aceita pelo app-server".into()),
+                }]
             }
             _ => vec![],
         }
@@ -117,21 +150,28 @@ impl FirstPrompt {
     pub(crate) fn closed(&self) -> Option<String> {
         (self.stage != Stage::Done).then(|| "erro: a primeira mensagem não chegou ao Codex (o app-server saiu antes da confirmação); mande de novo pela conversa".into())
     }
+
+    /// O que não foi confirmado, dito por todas as saídas da falha.
+    pub(crate) fn report_closed(&self, failures: &Failures) {
+        if let Some(line) = self.closed() {
+            failures.report("sem_confirmacao", &line);
+        }
+    }
 }
 
 /// `ready` é avisado quando a resposta do `initialize` chega (ou a escuta desiste): a TUI só sobe
 /// depois, senão o `thread/started` da conversa nova sai antes de haver quem o escute.
 pub(crate) async fn listen(session: Arc<Session>, cwd: String, gone: Arc<AtomicBool>, ready: Option<tokio::sync::oneshot::Sender<()>>,
-    first: Option<FirstPrompt>) {
+    first: Option<FirstPrompt>, failures: Failures) {
     let mut first = first;
-    follow(&session, &cwd, &gone, ready, &mut first).await;
-    if let Some(line) = first.as_ref().and_then(FirstPrompt::closed) {
-        Pane.say(&line);
+    follow(&session, &cwd, &gone, ready, &mut first, &failures).await;
+    if let Some(prompt) = &first {
+        prompt.report_closed(&failures);
     }
 }
 
 async fn follow(session: &Session, cwd: &str, gone: &AtomicBool, ready: Option<tokio::sync::oneshot::Sender<()>>,
-    first: &mut Option<FirstPrompt>) {
+    first: &mut Option<FirstPrompt>, failures: &Failures) {
     let mut ready = ready;
     let config = WebSocketConfig::default().max_message_size(None).max_frame_size(None);
     let deadline = Instant::now() + WAIT;
@@ -172,6 +212,7 @@ async fn follow(session: &Session, cwd: &str, gone: &AtomicBool, ready: Option<t
         for out in prompt.message(&value, started.as_ref().map(|(id, _, _)| id.as_str())) {
             match out {
                 Out::Say(line) => Pane.say(&line),
+                Out::Fail { code, line } => failures.report(code, &line),
                 Out::Send(frame) => {
                     if ws.send(Message::Text(frame.to_string().into())).await.is_err() {
                         return;
@@ -189,7 +230,7 @@ mod tests {
     const TEXT: &str = "linha 1\r\nlinha 2\nlinha 3";
 
     fn sent(outs: &[Out]) -> Vec<&Value> {
-        outs.iter().filter_map(|out| match out { Out::Send(frame) => Some(frame), Out::Say(_) => None }).collect()
+        outs.iter().filter_map(|out| match out { Out::Send(frame) => Some(frame), _ => None }).collect()
     }
 
     /// PR-13 (decisão 26): conversa nova, a mensagem vai uma vez só, inteira, como `turn/start` na thread
@@ -207,7 +248,7 @@ mod tests {
         assert!(first.message(&json!({"method": "thread/started"}), Some("t2")).is_empty(), "uma vez só");
         assert!(first.closed().is_some(), "sem confirmação ainda é falha");
         assert_eq!(first.message(&json!({"id": FIRST_TURN_ID, "result": {"turn": {"id": "u1"}}}), None),
-            vec![Out::Say("primeira mensagem entregue pelo app-server".into())]);
+            vec![Out::Say("primeira mensagem aceita pelo app-server".into())]);
         assert_eq!(first.closed(), None);
     }
 
@@ -229,13 +270,44 @@ mod tests {
         let mut first = FirstPrompt::new(TEXT.into(), None);
         first.message(&json!({"method": "thread/started"}), Some("t1"));
         let outs = first.message(&json!({"id": FIRST_TURN_ID, "error": {"code": -32600, "message": "thread not loaded"}}), None);
-        assert!(matches!(&outs[..], [Out::Say(line)] if line.starts_with("erro:") && line.contains("thread not loaded")), "{outs:?}");
+        assert!(matches!(&outs[..], [Out::Fail { code: "turno_recusado", line }] if line.starts_with("erro:") && line.contains("thread not loaded")), "{outs:?}");
         assert_eq!(first.closed(), None, "a recusa já foi dita");
         let mut resumed = FirstPrompt::new(TEXT.into(), Some("t-9".into()));
         resumed.message(&json!({"id": 1, "result": {}}), None);
         let outs = resumed.message(&json!({"id": FIRST_RESUME_ID, "error": {"message": "no rollout found"}}), None);
-        assert!(matches!(&outs[..], [Out::Say(line)] if line.starts_with("erro:") && line.contains("no rollout found")), "{outs:?}");
+        assert!(matches!(&outs[..], [Out::Fail { code: "resume_recusado", line }] if line.starts_with("erro:") && line.contains("no rollout found")), "{outs:?}");
         assert!(FirstPrompt::new(TEXT.into(), None).closed().is_some_and(|line| line.starts_with("erro:")));
+    }
+
+    /// `initialize` recusado não abre a retomada nem espera o `thread/started`: diz a causa na hora.
+    #[test]
+    fn a_refused_initialize_is_said_with_its_cause() {
+        for resume in [None, Some("t-9".to_owned())] {
+            let mut first = FirstPrompt::new(TEXT.into(), resume);
+            let outs = first.message(&json!({"id": 1, "error": {"code": -32600, "message": "unsupported client"}}), None);
+            assert!(matches!(&outs[..], [Out::Fail { code: "initialize_recusado", line }] if line.starts_with("erro:") && line.contains("unsupported client")), "{outs:?}");
+            assert_eq!(first.closed(), None);
+            assert!(first.message(&json!({"method": "thread/started"}), Some("t1")).is_empty(), "nada sai depois da recusa");
+        }
+    }
+
+    /// A falha fica no diário só com o código e é guardada para repetir quando a TUI sair.
+    #[test]
+    fn a_reported_failure_reaches_the_diary_and_is_kept_for_after_the_tui() {
+        let base = tempfile::tempdir().unwrap();
+        let failures = Failures::new(Some(Diary::new("cx-proj", Some(base.path().to_path_buf()))));
+        assert_eq!(failures.last(), None);
+        FirstPrompt::new(TEXT.into(), None).report_closed(&failures);
+        assert!(failures.last().is_some_and(|line| line.starts_with("erro:")));
+        let dir = base.path().join("diario").join("codex-tui");
+        let lines: Vec<Value> = std::fs::read_dir(&dir).unwrap().flatten()
+            .flat_map(|entry| std::fs::read_to_string(entry.path()).unwrap().lines().map(|line| serde_json::from_str(line).unwrap()).collect::<Vec<_>>())
+            .collect();
+        let [line] = lines.try_into().unwrap();
+        assert_eq!(line["evento"], "codex.primeira_mensagem.falhou");
+        assert_eq!(line["codigo"], "sem_confirmacao");
+        assert_eq!(line["etapa"], "entregar_primeira_mensagem");
+        assert!(!line.to_string().contains("linha 2"), "o texto da mensagem nunca vai ao diário");
     }
 
     #[test]

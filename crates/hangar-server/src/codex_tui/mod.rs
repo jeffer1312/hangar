@@ -280,7 +280,12 @@ async fn flow(raw: &[String], env: &[(String, String)], life: &mut session::Life
     if let Some(pid) = tui.id() {
         shared.tui_started(pid, &screen);
     }
-    Exit::done(life.watch(&mut tui, &plan, &screen).await)
+    let code = life.watch(&mut tui, &plan, &screen).await;
+    // A TUI redesenha a tela inteira por cima do aviso: ele volta depois que ela sai.
+    if let Some(line) = life.first_prompt_failure() {
+        screen.say(&line);
+    }
+    Exit::done(code)
 }
 
 /// `CP_CODEX_SYNC_ENABLED` do `.env` do servidor, o mesmo que decide o limite das instruções no pane.

@@ -139,5 +139,5 @@ fn a_multiline_first_prompt_reaches_a_cmd_codex_through_the_app_server() {
     assert_eq!(turns.len(), 1, "{spawns:?}");
     assert_eq!(turns[0]["msg"]["params"]["threadId"], "thread-1");
     assert_eq!(turns[0]["msg"]["params"]["input"], json!([{"type": "text", "text": text}]));
-    assert!(stderr.contains("primeira mensagem entregue pelo app-server"), "{stderr}");
+    assert!(stderr.contains("primeira mensagem aceita pelo app-server"), "{stderr}");
 }
