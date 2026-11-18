@@ -93,9 +93,13 @@ function Srv {
     $anterior = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
-        if ($script:serverOwn) { $script:serverOutput = & $serverBinary @args 2>&1 | Out-String }
-        else { $script:serverOutput = & $PowerShellExe -NoProfile -ExecutionPolicy Bypass -File $serverCommand @args 2>&1 | Out-String }
-        return $LASTEXITCODE
+        # "$_" tira do stderr o embrulho de ErrorRecord do PowerShell: fica so o texto da linha.
+        if ($script:serverOwn) { $script:serverOutput = (& $serverBinary @args 2>&1 | ForEach-Object { "$_" }) -join "`n" }
+        else { $script:serverOutput = (& $PowerShellExe -NoProfile -ExecutionPolicy Bypass -File $serverCommand @args 2>&1 | ForEach-Object { "$_" }) -join "`n" }
+        $rc = $LASTEXITCODE
+        # Sem isto a falha so diria "rodar na mao", sem a causa que o hangar-server deu.
+        if ($rc -ne 0) { $script:serverOutput.Trim() -split "`r?`n" | ForEach-Object { Write-Host "      $_" } }
+        return $rc
     } finally { $ErrorActionPreference = $anterior }
 }
 function ServerTooOld($rc, $what, $sub) {
