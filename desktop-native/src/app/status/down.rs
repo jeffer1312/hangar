@@ -1,10 +1,11 @@
 //! Servidor parado (spec, bloco "Servidor parado"; mock, estado "Servidor parado"). Com o servidor selecionado
 //! nesta máquina fora do ar, a página Status lê o serviço pelo `hangar-local-server` e oferece subir e consertar;
 //! servidor de outra máquina fora só ganha o aviso, sem Subir. Leitura e ações rodam fora da thread da janela.
+use hangar_local_server::{DEFAULT_PORT, Failure as LocalFailure, Listeners, LocalServer, LocalState, Os, PortHolder, Versions};
+
 use super::*;
 use super::super::device::DeviceReply;
 use super::model::fill;
-use hangar_local_server::{DEFAULT_PORT, Failure as LocalFailure, Listeners, LocalServer, LocalState, Os, PortHolder, Versions};
 
 /// Entre leituras enquanto o serviço diz que está subindo: o gerenciador não avisa quando decide. O próprio
 /// crate encerra a subida em `STARTING_LIMIT`, então a repetição tem fim.
@@ -125,18 +126,18 @@ pub(super) fn down_model(probe: &Probe, os: Os, attempt: Attempt) -> Option<Down
             (prepare, tr("status_down_step_prepare"))],
         fixes: Vec::new(), output: Vec::new(), can_start: false,
     };
-    // A ação ainda roda: o pedido ao gerenciador é o primeiro passo.
-    if attempt == Attempt::Running { return Some(starting(Step::Running, Step::Waiting, Step::Waiting)); }
-    match &probe.state {
-        LocalState::Running => None,
-        LocalState::Starting if probe.port_open => Some(starting(Step::Done, Step::Done, Step::Running)),
-        LocalState::Starting => Some(starting(Step::Done, Step::Running, Step::Waiting)),
-        LocalState::NotInstalled => Some(DownView { can_start: false, ..failed(tr("status_down_unit_title"),
+    match (attempt, &probe.state) {
+        // A ação ainda roda: o pedido ao gerenciador é o primeiro passo.
+        (Attempt::Running, _) => Some(starting(Step::Running, Step::Waiting, Step::Waiting)),
+        (_, LocalState::Running) => None,
+        (_, LocalState::Starting) if probe.port_open => Some(starting(Step::Done, Step::Done, Step::Running)),
+        (_, LocalState::Starting) => Some(starting(Step::Done, Step::Running, Step::Waiting)),
+        (_, LocalState::NotInstalled) => Some(DownView { can_start: false, ..failed(tr("status_down_unit_title"),
             Some(capitalize(fill(tr("status_down_unit_detail"), &[("service", &service_name(os))]))), reinstall(os, true).into_iter().collect(), Vec::new()) }),
-        LocalState::Stopped { failure: None } if attempt == Attempt::None => Some(stopped(None)),
-        LocalState::Stopped { failure: None } => Some(failed(tr("status_down_clean_title"), Some(tr("status_down_clean_detail")), Vec::new(),
+        (Attempt::None, LocalState::Stopped { failure: None }) => Some(stopped(None)),
+        (_, LocalState::Stopped { failure: None }) => Some(failed(tr("status_down_clean_title"), Some(tr("status_down_clean_detail")), Vec::new(),
             probe.output.clone())),
-        LocalState::Stopped { failure: Some(failure) } => Some(failure_view(failure, probe, os, attempt)),
+        (_, LocalState::Stopped { failure: Some(failure) }) => Some(failure_view(failure, probe, os, attempt)),
     }
 }
 
@@ -150,17 +151,22 @@ fn failure_view(failure: &LocalFailure, probe: &Probe, os: Os, attempt: Attempt)
             let title = fill(tr("status_down_port_title"), &[("port", &port)]);
             let listeners = FixRow { fix: Fix::Listeners, title: tr("status_down_fix_listeners"),
                 detail: fill(tr("status_down_fix_listeners_detail"), &[("port", &port)]), button: tr("status_down_fix_listeners_button"), primary: false };
-            let Some(holder) = &failure.port_holder else { return failed(title, Some(tr("status_down_port_hidden")), vec![listeners], output) };
-            let (name, pid) = (holder_name(holder), holder.pid.to_string());
-            let params = [("name", name.as_str()), ("pid", pid.as_str())];
-            let detail = fill(tr(if holder.same_user { "status_down_port_holder" } else { "status_down_port_holder_other" }), &params);
-            // Processo de outro usuário: daqui não se encerra.
-            let mut fixes = if holder.same_user {
-                vec![FixRow { fix: Fix::FreePort(holder.clone()), title: fill(tr("status_down_fix_free"), &params),
-                    detail: fill(tr("status_down_fix_free_detail"), &params), button: tr("status_down_fix_free_button"), primary: false }]
-            } else { Vec::new() };
-            fixes.push(listeners);
-            failed(title, Some(detail), fixes, output)
+            match &failure.port_holder {
+                None => failed(title, Some(tr("status_down_port_hidden")), vec![listeners], output),
+                Some(holder) => {
+                    let (name, pid) = (holder_name(holder), holder.pid.to_string());
+                    let params = [("name", name.as_str()), ("pid", pid.as_str())];
+                    let detail = fill(tr(if holder.same_user { "status_down_port_holder" } else { "status_down_port_holder_other" }), &params);
+                    // Processo de outro usuário: daqui não se encerra. Porta com ressalva pode não ser a do serviço:
+                    // quem a segura não é necessariamente o culpado.
+                    let mut fixes = if holder.same_user && probe.port_issue.is_none() {
+                        vec![FixRow { fix: Fix::FreePort(holder.clone()), title: fill(tr("status_down_fix_free"), &params),
+                            detail: fill(tr("status_down_fix_free_detail"), &params), button: tr("status_down_fix_free_button"), primary: false }]
+                    } else { Vec::new() };
+                    fixes.push(listeners);
+                    failed(title, Some(detail), fixes, output)
+                }
+            }
         }
         code @ ("launch_no_server" | "launch_no_python") => {
             let title = tr(if code == "launch_no_server" { "status_down_no_server_title" } else { "status_down_no_python_title" });
@@ -487,15 +493,19 @@ impl Hangar {
         }
         if down.local.is_some() { self.agent_detect(cx); }
         let down = self.device.status.down.as_ref()?;
-        let Some(local) = &down.local else { return Some(vec![self.remote_down(cx)]) };
-        let Some(probe) = &local.probe else {
+        match &down.local {
+            None => Some(vec![self.remote_down(cx)]),
             // A primeira leitura não voltou: o erro e o ler de novo, nunca o "Lendo" parado.
-            return Some(vec![match local.error.clone() { Some(error) => self.read_failed(error, cx), None => checking() }]);
-        };
-        let attempt = if local.busy { Attempt::Running } else if local.tried { Attempt::Done } else { Attempt::None };
-        let view = down_model(probe, Os::current(), attempt)?;
-        let (error, busy) = (local.error.clone(), local.busy);
-        Some(self.render_down(view, error, busy, cx))
+            Some(local) => match &local.probe {
+                None => Some(vec![match local.error.clone() { Some(error) => self.read_failed(error, cx), None => checking() }]),
+                Some(probe) => {
+                    let attempt = if local.busy { Attempt::Running } else if local.tried { Attempt::Done } else { Attempt::None };
+                    let view = down_model(probe, Os::current(), attempt)?;
+                    let (error, busy) = (local.error.clone(), local.busy);
+                    Some(self.render_down(view, error, busy, cx))
+                }
+            },
+        }
     }
 
     /// Outra máquina: daqui não se sobe nada.
@@ -745,6 +755,10 @@ mod tests {
         // De outro usuário, ou sem dono visível: só ver quem escuta, nunca encerrar.
         let other = down_model(&stopped_with("port_unavailable", "python3", Some(holder(false))), Os::Linux, Attempt::None).unwrap();
         assert_eq!(fixes(&other), [Fix::Listeners]);
+        // Porta com ressalva (CP_PORT inválido, por exemplo): quem a segura pode não ser o serviço.
+        let mut doubtful = stopped_with("port_unavailable", "python3", Some(holder(true)));
+        doubtful.port_issue = Some("local_server_port_invalid".into());
+        assert_eq!(fixes(&down_model(&doubtful, Os::Linux, Attempt::None).unwrap()), [Fix::Listeners]);
         let hidden = down_model(&stopped_with("port_unavailable", "", None), Os::Linux, Attempt::None).unwrap();
         assert_eq!((hidden.phase, fixes(&hidden)), (Phase::Failed, vec![Fix::Listeners]));
         assert_eq!(hidden.detail.as_deref(), Some(tr("status_down_port_hidden").as_str()));

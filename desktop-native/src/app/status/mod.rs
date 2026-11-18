@@ -1,16 +1,17 @@
 //! Página Status: o retrato do servidor selecionado (`GET /api/status/events`, só do dono), ao vivo
 //! enquanto a página está aberta e a janela à vista. Fechar a página, esconder a janela na bandeja ou
 //! trocar de servidor encerra a conexão; voltar à vista abre outra.
-use super::*;
-use super::device::{DeviceReply, Remote};
-use super::settings::Page;
-use hangar_api::status::{AttentionTarget, StatusSnapshot};
-
 mod agent_fix;
 mod agent_view;
 mod down;
 mod model;
 mod view;
+
+use hangar_api::status::{AttentionTarget, StatusSnapshot};
+
+use super::*;
+use super::device::{DeviceReply, Remote};
+use super::settings::Page;
 
 /// O que a conexão manda à página.
 pub(super) enum Feed {
@@ -52,81 +53,6 @@ pub(super) struct StatusPage {
 
 impl Drop for StatusPage {
     fn drop(&mut self) { if let Some(task) = self.stream.take() { task.abort(); } }
-}
-
-/// Geração nova da conexão do retrato ou da leitura local. Um contador só, que nunca volta: a troca de servidor recria
-/// a página, e um número que recomeçasse do zero deixaria passar evento da conexão anterior.
-fn next_generation() -> u64 {
-    static GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1
-}
-
-/// A linha marcada de cada bloco: o pulo da lista de atenção e a busca das Configurações rolam até ela.
-fn target_key(target: AttentionTarget) -> &'static str {
-    match target {
-        AttentionTarget::Server => "status_memory",
-        AttentionTarget::Exits => "status_days_title",
-        AttentionTarget::Machines => "status_machines_title",
-        AttentionTarget::Sessions => "status_sessions_title",
-        AttentionTarget::Slow => "status_slow_title",
-        AttentionTarget::Host => "status_host_title",
-        AttentionTarget::Outside => "status_outside_title",
-    }
-}
-
-/// A frase da falha e o detalhe técnico que vai para a área de transferência.
-fn failure_text(server: &str, error: &Failure) -> (String, String) {
-    let text = match error.status {
-        Some(code) => tr("status_error_http").replace("{server}", server).replace("{code}", &code.to_string()),
-        None if error.detail == "invalid_response" => tr("status_error_invalid").replace("{server}", server),
-        None => tr("status_error_network").replace("{server}", server),
-    };
-    let code = error.status.map_or_else(|| "—".to_owned(), |code| code.to_string());
-    (text, format!("GET /api/status/events · {code} · {}", error.detail))
-}
-
-/// Lê os eventos até a conexão cair e reabre com espera crescente; recusa que não muda sozinha encerra.
-async fn stream<F>(api: Api, generation: u64, done: F)
-where F: Fn(DeviceReply) -> std::pin::Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync + 'static {
-    use eventsource_stream::Eventsource;
-    use futures::StreamExt;
-    let mut delay = 1u64;
-    loop {
-        api::route::ensure(&api).await;
-        match api.server_events(&["status", "events"]).await {
-            Ok(response) => {
-                delay = 1;
-                // O servidor manda `ping` a cada 10 s: sem bytes por 25 s, a conexão está morta.
-                let bytes = futures::stream::unfold(Box::pin(response.bytes_stream()), |mut stream| async move {
-                    match tokio::time::timeout(Duration::from_secs(25), stream.next()).await {
-                        Ok(Some(chunk)) => Some((chunk, stream)),
-                        _ => None,
-                    }
-                });
-                let mut events = Box::pin(bytes.eventsource());
-                while let Some(Ok(item)) = events.next().await {
-                    let feed = match item.event.as_str() {
-                        "status" => match serde_json::from_str::<StatusSnapshot>(&item.data) {
-                            Ok(snapshot) => Feed::Snapshot(Box::new(snapshot)),
-                            Err(_) => Feed::Failed(Failure::local("invalid_response")),
-                        },
-                        "ping" => Feed::Ping,
-                        _ => continue,
-                    };
-                    done(DeviceReply::Status(generation, feed)).await;
-                }
-                api::route::forget(&api);
-                done(DeviceReply::Status(generation, Feed::Lost)).await;
-            }
-            Err(error) => {
-                let lasting = matches!(error.status, Some(code) if (400..500).contains(&code) && code != 408 && code != 429);
-                done(DeviceReply::Status(generation, Feed::Failed(error))).await;
-                if lasting { return; }
-            }
-        }
-        tokio::time::sleep(Duration::from_secs(delay)).await;
-        delay = (delay * 2).min(30);
-    }
 }
 
 impl Hangar {
@@ -231,5 +157,80 @@ impl Hangar {
         self.status_down_sync();
         self.device.status.down.as_ref()?;
         self.local_dot().unwrap_or_else(|| Some((theme::danger(), tr("status_nav_down"))))
+    }
+}
+
+/// Geração nova da conexão do retrato ou da leitura local. Um contador só, que nunca volta: a troca de servidor recria
+/// a página, e um número que recomeçasse do zero deixaria passar evento da conexão anterior.
+fn next_generation() -> u64 {
+    static GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1
+}
+
+/// A linha marcada de cada bloco: o pulo da lista de atenção e a busca das Configurações rolam até ela.
+fn target_key(target: AttentionTarget) -> &'static str {
+    match target {
+        AttentionTarget::Server => "status_memory",
+        AttentionTarget::Exits => "status_days_title",
+        AttentionTarget::Machines => "status_machines_title",
+        AttentionTarget::Sessions => "status_sessions_title",
+        AttentionTarget::Slow => "status_slow_title",
+        AttentionTarget::Host => "status_host_title",
+        AttentionTarget::Outside => "status_outside_title",
+    }
+}
+
+/// A frase da falha e o detalhe técnico que vai para a área de transferência.
+fn failure_text(server: &str, error: &Failure) -> (String, String) {
+    let text = match error.status {
+        Some(code) => tr("status_error_http").replace("{server}", server).replace("{code}", &code.to_string()),
+        None if error.detail == "invalid_response" => tr("status_error_invalid").replace("{server}", server),
+        None => tr("status_error_network").replace("{server}", server),
+    };
+    let code = error.status.map_or_else(|| "—".to_owned(), |code| code.to_string());
+    (text, format!("GET /api/status/events · {code} · {}", error.detail))
+}
+
+/// Lê os eventos até a conexão cair e reabre com espera crescente; recusa que não muda sozinha encerra.
+async fn stream<F>(api: Api, generation: u64, done: F)
+where F: Fn(DeviceReply) -> std::pin::Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync + 'static {
+    use eventsource_stream::Eventsource;
+    use futures::StreamExt;
+    let mut delay = 1u64;
+    loop {
+        api::route::ensure(&api).await;
+        match api.server_events(&["status", "events"]).await {
+            Ok(response) => {
+                delay = 1;
+                // O servidor manda `ping` a cada 10 s: sem bytes por 25 s, a conexão está morta.
+                let bytes = futures::stream::unfold(Box::pin(response.bytes_stream()), |mut stream| async move {
+                    match tokio::time::timeout(Duration::from_secs(25), stream.next()).await {
+                        Ok(Some(chunk)) => Some((chunk, stream)),
+                        _ => None,
+                    }
+                });
+                let mut events = Box::pin(bytes.eventsource());
+                while let Some(Ok(item)) = events.next().await {
+                    let feed = match item.event.as_str() {
+                        "status" => match serde_json::from_str::<StatusSnapshot>(&item.data) {
+                            Ok(snapshot) => Feed::Snapshot(Box::new(snapshot)),
+                            Err(_) => Feed::Failed(Failure::local("invalid_response")),
+                        },
+                        "ping" => Feed::Ping,
+                        _ => continue,
+                    };
+                    done(DeviceReply::Status(generation, feed)).await;
+                }
+                api::route::forget(&api);
+                done(DeviceReply::Status(generation, Feed::Lost)).await;
+            }
+            Err(error) => {
+                let lasting = matches!(error.status, Some(code) if (400..500).contains(&code) && code != 408 && code != 429);
+                done(DeviceReply::Status(generation, Feed::Failed(error))).await;
+                if lasting { return; }
+            }
+        }
+        tokio::time::sleep(Duration::from_secs(delay)).await;
+        delay = (delay * 2).min(30);
     }
 }

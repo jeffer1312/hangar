@@ -2,10 +2,12 @@
 //! quando o servidor mandou a fonte dele: bloco ausente some da tela. Os tempos relativos ("há 2 h") contam
 //! do `generated_at` do retrato, não do relógio deste computador.
 use chrono::{DateTime, Datelike, NaiveDateTime, TimeZone, Timelike, Utc};
+
 use hangar_api::status::{
     Attention, AttentionTarget, ConnectState, DirSize, DiskUse, Exit, ExitKind, HostBlock, LeftoversBlock, Machine, MachineState,
     OutsideBlock, Point, ServerBlock, SessionsBlock, Severity, SlowBlock, StatusSnapshot, UpdateBlock, Usage, WatchdogKind,
 };
+
 use crate::i18n::{tr, tr_shared, tr_web};
 use super::super::costs::dec;
 use super::super::side::ago;
@@ -139,30 +141,15 @@ pub(crate) fn view_model_in<Tz: TimeZone>(snapshot: &StatusSnapshot, tz: &Tz) ->
 // ---------------------------------------------------------------------------------------------
 // Texto
 
-fn parse(ts: &str) -> Option<DateTime<Utc>> { DateTime::parse_from_rfc3339(ts).ok().map(|d| d.with_timezone(&Utc)) }
-
 pub(super) fn fill(text: String, params: &[(&str, &str)]) -> String {
     params.iter().fold(text, |text, (name, value)| text.replace(&format!("{{{name}}}"), value))
 }
-
-fn count(n: u64, one: String, many: String) -> String { if n == 1 { one } else { fill(many, &[("n", &n.to_string())]) } }
 
 /// Memória de processo: "412 MB" até mil, depois "2,1 GB".
 pub(crate) fn mb(bytes: f64) -> String {
     let mib = bytes / MIB;
     if mib < 1000. { format!("{} MB", mib.round()) } else { format!("{} GB", dec(bytes / GIB, 1)) }
 }
-
-/// Gigabytes de disco e memória da máquina: uma casa abaixo de 100 (sem ",0"), inteiro acima.
-fn gb_number(bytes: u64) -> String {
-    let gib = bytes as f64 / GIB;
-    if gib >= 100. { return format!("{}", gib.round()); }
-    let text = format!("{gib:.1}");
-    let text = text.strip_suffix(".0").unwrap_or(&text).to_owned();
-    text.replace('.', &tr("decimal"))
-}
-
-fn pct_text(pct: f64) -> String { format!("{} %", dec(pct, 1)) }
 
 /// Duração curta: "4 min", "2 h", "3 d 4 h".
 pub(crate) fn span(secs: i64) -> String {
@@ -174,6 +161,21 @@ pub(crate) fn span(secs: i64) -> String {
         s => match (s % 86_400) / 3_600 { 0 => format!("{} d", s / 86_400), h => format!("{} d {h} h", s / 86_400) },
     }
 }
+
+fn parse(ts: &str) -> Option<DateTime<Utc>> { DateTime::parse_from_rfc3339(ts).ok().map(|d| d.with_timezone(&Utc)) }
+
+fn count(n: u64, one: String, many: String) -> String { if n == 1 { one } else { fill(many, &[("n", &n.to_string())]) } }
+
+/// Gigabytes de disco e memória da máquina: uma casa abaixo de 100 (sem ",0"), inteiro acima.
+fn gb_number(bytes: u64) -> String {
+    let gib = bytes as f64 / GIB;
+    if gib >= 100. { return format!("{}", gib.round()); }
+    let text = format!("{gib:.1}");
+    let text = text.strip_suffix(".0").unwrap_or(&text).to_owned();
+    text.replace('.', &tr("decimal"))
+}
+
+fn pct_text(pct: f64) -> String { format!("{} %", dec(pct, 1)) }
 
 fn local<Tz: TimeZone>(at: DateTime<Utc>, tz: &Tz) -> NaiveDateTime { at.with_timezone(tz).naive_local() }
 
@@ -305,8 +307,9 @@ fn days<Tz: TimeZone>(exits: Option<&[Exit]>, update: Option<&UpdateBlock>, now:
         }).collect();
         Timeline { has_restart: events.iter().any(|e| e.kind == ExitKind::Requested), days, events }
     });
-    let hint = exits.map(|items| {
-        let n = |kind: ExitKind| items.iter().filter(|e| e.kind == kind).count() as u64;
+    // A janela do servidor é móvel (7 × 24 h) e a linha começa à meia-noite: o resumo conta só o que a linha desenha.
+    let hint = timeline.as_ref().map(|line| {
+        let n = |kind: ExitKind| line.events.iter().filter(|e| e.kind == kind).count() as u64;
         let (crashes, updates, restarts) = (n(ExitKind::Crash), n(ExitKind::Update), n(ExitKind::Requested));
         let mut parts = vec![if crashes == 0 { tr("status_crashes_none") } else { count(crashes, tr("status_crashes_one"), tr("status_crashes_many")) }];
         if updates > 0 { parts.push(count(updates, tr("status_updates_one"), tr("status_updates_many"))); }
@@ -651,6 +654,24 @@ mod tests {
         let line = days.update.as_ref().expect("linha da atualização");
         assert_eq!(line.title, fill(tr("status_update_available"), &[("version", "0.1.0.10833")]));
         assert!(line.meta.contains(&fill(tr("status_checked"), &[("span", "12 min")])), "{}", line.meta);
+    }
+
+    #[test]
+    fn hint_counts_only_the_exits_the_timeline_draws() {
+        crate::i18n::english_in_this_thread(false);
+        let hint_of = |snapshot: &StatusSnapshot| {
+            let blocks = view_model_in(snapshot, &brt());
+            let Some(Block::Days(days)) = blocks.iter().find(|b| matches!(b, Block::Days(_))) else { panic!("sem o bloco dos 7 dias") };
+            days.hint.clone()
+        };
+        let mut snapshot = fixture();
+        let before = hint_of(&snapshot);
+        // Dentro das 168 h do servidor, mas antes da meia-noite em que a linha começa (qua 11).
+        let exits = snapshot.exits.as_mut().expect("saídas na fixture");
+        let mut early = exits.items.iter().find(|e| e.kind == ExitKind::Crash).expect("a queda").clone();
+        early.ts = "2026-11-10T22:00:00-03:00".into();
+        exits.items.push(early);
+        assert_eq!(hint_of(&snapshot), before);
     }
 
     #[test]

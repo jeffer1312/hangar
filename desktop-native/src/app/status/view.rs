@@ -1,11 +1,13 @@
 //! Desenho da página Status sobre o modelo já montado: os blocos do mock aprovado
 //! (`docs/superpowers/specs/2026-11-17-tela-status-mock.html`). Gráficos de série com o `AreaChart` do kit,
 //! medidores com o `Progress`; barras divididas, colunas por hora, linha do tempo e cartões são `div`s.
+use gpui_kit::component::{Icon, chart::AreaChart, progress::Progress, tooltip::Tooltip};
+
+use hangar_api::status::ExitKind;
+
 use super::*;
 use super::model::{Block, Chip, ChipIcon, Days, Health, Host, Machines, Outside, ServerCards, Sessions, Seg, Slow, Spark, TileIcon, Tone};
 use super::super::chrome::Skeleton;
-use gpui_kit::component::{Icon, chart::AreaChart, progress::Progress, tooltip::Tooltip};
-use hangar_api::status::ExitKind;
 
 fn tone(t: Tone) -> Hsla {
     match t { Tone::Ok => theme::success(), Tone::Warn => theme::warning(), Tone::Bad => theme::danger(), Tone::Faint => theme::faint(), Tone::Accent => theme::accent() }
