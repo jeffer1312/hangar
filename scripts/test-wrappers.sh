@@ -628,9 +628,10 @@ mkdir -p "$TTY_CWD" "$TTY_HOME"
 # resto=args. CASE_CFG/CASE_ENGINE/CASE_PROFILE viram CLAUDE_CONFIG_DIR/CP_ENGINE/OMP_PROFILE.
 # Imprime a pasta do caso: cli (argv do CLI cru), hs (pedido JSON), tmux, rc, tty (saída do pty).
 tty_case() {
-    local sh="$1" cli="$2" mode="$3" d="$TMP/tty.$RANDOM.$RANDOM" path="$REPO/scripts:$TMP/bin:/usr/bin:/bin"
+    # Pasta única por caso: o `$RANDOM` de um `$(…)` pode repetir a de um caso anterior e herdar o `hs` dele.
+    local sh="$1" cli="$2" mode="$3" d path="$REPO/scripts:$TMP/bin:/usr/bin:/bin"
+    d=$(mktemp -d "$TMP/tty.XXXXXXXX")
     shift 3
-    mkdir -p "$d"
     [ "$mode" = noopen ] && path="$TMP/bin:/usr/bin:/bin"
     [ "$mode" = none ] || [ "$mode" = noopen ] || path="$HS_DIR:$path"
     local -a extra=() run=() pty=(python3 -c 'import pty,sys; pty.spawn(sys.argv[1:])')
