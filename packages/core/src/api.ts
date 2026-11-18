@@ -857,7 +857,7 @@ export async function waitUploadMediaForServer(
 ): Promise<{ frames: string[]; transcript: string } | null> {
   let deadline = Date.now() + MEDIA_UNANSWERED_MS;
   // Sinal sem motivo (polyfill antigo) ainda tem que chegar como AbortError a quem decide pelo nome.
-  const cancelled = () => signal?.reason ?? new DOMException('Aborted', 'AbortError');
+  const cancelled = () => signal?.reason ?? new DOMException(undefined, 'AbortError');
   // Cada pedido fica no servidor até a mídia ficar pronta ou ~45 s; só a falha espera do lado de cá.
   while (Date.now() < deadline) {
     if (signal?.aborted) throw cancelled();
