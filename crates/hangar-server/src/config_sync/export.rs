@@ -45,6 +45,7 @@ pub struct Context {
     pub roots: Roots,
     pub engines: PathBuf,
     pub preferences: PathBuf,
+    pub worktree_home: PathBuf,
     pub aliases: PathBuf,
     pub native: PathBuf,
     pub progress: Option<tokio::sync::mpsc::UnboundedSender<Value>>,
@@ -55,6 +56,7 @@ impl Context {
             progress: None,
             engines: Path::new(&roots.claude).join("engines.json"),
             preferences: Path::new(&roots.claude).join("runtime-config.json"),
+            worktree_home: PathBuf::from(&roots.home),
             aliases: Path::new(&roots.claude).join(".hangar-apelidos.json"),
             native: Path::new(&roots.home).join(if cfg!(windows) {
                 "AppData/Roaming/hangar-native"
@@ -62,6 +64,12 @@ impl Context {
                 ".config/hangar-native"
             }),
             roots,
+        }
+    }
+    pub(super) fn worktree_roots(&self) -> Roots {
+        Roots {
+            home: self.worktree_home.to_string_lossy().into_owned(),
+            ..self.roots.clone()
         }
     }
     pub fn emit(&self, event: Value) {
@@ -637,7 +645,19 @@ fn export_item(
                 });
             }
             let values = canon(&pick(&values, keep, ""), roots);
-            Ok(json!({key:values,"hashes":bundle::hashes(&values,"")}))
+            let mut data = json!({key:values,"hashes":bundle::hashes(&values,"")});
+            if item == "hangar_prefs" && selected("worktrees") {
+                // Sem arquivo vale o padrão, que também precisa poder ser enviado.
+                let path = ctx.worktree_home.join(".hangar/worktree-settings.json");
+                let settings = hangar_workspace::worktree_settings::WorktreeSettings::load_at(&path)
+                    .map_err(|e| Error::new("config_sync_invalid_json", e.to_string(), json!({})))?;
+                let settings = serde_json::to_value(settings)
+                    .map_err(|e| Error::new("config_sync_invalid_json", e.to_string(), json!({})))?;
+                let settings = canon(&settings, &ctx.worktree_roots());
+                data["hashes"]["worktrees"] = json!(bundle::hash(&settings));
+                data["worktrees"] = settings;
+            }
+            Ok(data)
         }
         "claude_mcp" => {
             let raw = read_json(&Path::new(&roots.home).join(".claude.json"))?;

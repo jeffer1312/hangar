@@ -1371,6 +1371,11 @@ de integração também conferiu os imports Python após as exclusões.
 
 ## Configuração compartilhada: leva o conteúdo, o destino resolve caminho e programa
 
+**Preferências de worktrees (17/11/2026):** a cópia de preferências inclui a configuração de
+criação e limpeza, com caminho portável, validação e backup no destino. A seleção parcial
+respeita a entrada `worktrees`; pacote sem essa entrada conserva a configuração local. Antes,
+uma cópia bem-sucedida das preferências podia deixar a limpeza desligada na outra máquina.
+
 (30/10/2026.) A migração dos motores inclui os leitores e escritores do pacote de configuração.
 As rotas `/api/config-sync/*` executam no Rust, assim como exportação, tradução, aplicação e
 pós-aplicar. A tradução usa o serviço `speech` já incorporado à branch principal, incluindo suas
@@ -2559,6 +2564,13 @@ componentes dos três clientes. Cobrem confirmação, preservação da branch, r
 locks, sessões e revalidação. Nenhuma prova apaga uma pasta residual do ambiente em uso.
 
 ### Diretórios ignorados e submódulos na confirmação
+
+**Caches Rust grandes (17/11/2026):** a impressão dos arquivos não percorre `target` ignorado
+pelo Git, assim como já não percorria dependências instaladas. Uma pasta `target` com identidade
+Git própria ou sem regra de exclusão continua lida. A confirmação dos arquivos perdidos e as
+guardas de sessão, branch e alterações locais continuam valendo. Uma worktree com mais de
+100 mil artefatos atingia o limite da leitura e recusava até a remoção manual com confirmação;
+a regressão cria esse cache e chama a remoção pública, com Git e disco descartáveis.
 
 **Regra:** a lista do que será perdido inclui os diretórios ignorados inteiros e cada
 submódulo inicializado (`<caminho>/`); a confirmação existente autoriza o descarte deles.
