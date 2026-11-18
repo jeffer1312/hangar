@@ -125,11 +125,20 @@ public static class FakeMark {
     Assert (-not ($texto -match '(?m)^[^#\n]*\buv (sync|run)\b')) 'sem uv sync nem uv run'
     Assert (-not ($texto -match "Instale '(Python|uv)'")) 'sem instalar Python nem uv'
     Assert (-not ($texto -match 'pyBackend|pyFumaca|pyExe|hangar-python\.cmd|python3\.cmd|PYTHONIOENCODING')) 'nenhum Python do instalador nem atalho dele'
-    Assert ($texto.Contains("    if (`$pacote) {`n        `$rcRust = 'pacote'`n    } elseif")) 'pacote: sem rust_release'
+    Assert ($texto.Contains("    if (`$pacote) {`n        `$rcRust = 'pacote'`n    } else {")) 'pacote: sem rust_release'
     Assert ($texto.Contains("if (-not `$Update -and -not `$pacote) {`n    Titulo 'Passos de atualizacao'")) 'checkout: passos marcados fora do pacote'
     Assert ($texto.Contains('install-package --mark-steps --root $raiz')) 'checkout: passos marcados pela raiz do checkout'
     Assert ($texto.Contains("} elseif (`$pacote) {`n    Ok 'o pacote se atualiza pelo Atualizar do app, sem git pull'")) 'pacote: sem hook de git pull'
-    Assert ($texto.Contains("`$argsVapid = if (`$pacote) { @('vapid-setup') } else { @('vapid-setup', '--root', `$raiz) }")) 'chaves do push pelo hangar-server, com a raiz so no checkout'
+    Assert ($texto.Contains("`$argsVapid = @(if (`$pacote) { 'vapid-setup' } else { 'vapid-setup', '--root', `$raiz })")) 'chaves do push pelo hangar-server, com a raiz so no checkout'
+    # A linha do instalador, rodada: no pacote o splat leva um argumento so, nunca letra por letra.
+    $vapid = Trecho '$argsVapid = ' 'vapid-setup'
+    function Contar { ,@($args) }
+    $pacoteAntes = $pacote
+    $pacote = $true; . $vapid
+    Assert (((Contar @argsVapid) -join '|') -eq 'vapid-setup') 'pacote: vapid-setup vai como um argumento'
+    $pacote = $false; . $vapid
+    Assert (((Contar @argsVapid) -join '|') -eq "vapid-setup|--root|$raiz") 'checkout: vapid-setup --root <raiz>'
+    $pacote = $pacoteAntes
     $binarios = $texto.IndexOf("Titulo 'Binarios Rust'")
     $vapid = $texto.IndexOf('@argsVapid')
     Assert ($binarios -gt 0 -and $vapid -gt $binarios) 'chaves do push depois dos binarios'

@@ -1136,7 +1136,9 @@ foreach ($a in $script:agentesNovos) {
 }
 # Sem o par VAPID o push para o celular sai calado e o celular nem se inscreve. Depois dos
 # binarios: no checkout novo o hangar-server so existe a partir daqui.
-$argsVapid = if ($pacote) { @('vapid-setup') } else { @('vapid-setup', '--root', $raiz) }
+# @(...) por fora: `$x = if (...) { @('um') }` desembrulha a lista de um item em texto, e o
+# splat passaria letra por letra.
+$argsVapid = @(if ($pacote) { 'vapid-setup' } else { 'vapid-setup', '--root', $raiz })
 $rcVapid = Srv @argsVapid
 if ($rcVapid -eq 0) { Ok 'chaves do push para o celular prontas' }
 elseif (ServerTooOld $rcVapid 'chaves do push para o celular' 'vapid-setup') { }
