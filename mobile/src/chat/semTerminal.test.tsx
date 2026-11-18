@@ -70,7 +70,7 @@ vi.mock('./queueDelivery', async (original) => ({
   readQueueJev: vi.fn(async () => false),
 }));
 const realFirstInput = vi.hoisted(() => ({ enabled: false, send: vi.fn(), steer: vi.fn(), history: vi.fn(), transcribe: vi.fn(), relimpar: vi.fn(),
-  upload: vi.fn(async () => ({ path: '/up/sess/ditado-1.m4a' })),
+  upload: vi.fn(async (): Promise<{ path: string; media?: 'pending'; media_id?: string }> => ({ path: '/up/sess/ditado-1.m4a' })),
   media: vi.fn(async (): Promise<{ frames: string[]; transcript: string } | null> => null) }));
 const voiceInput = vi.hoisted(() => ({ recording: false, simulateRecorder: false, delayStop: false, stop: vi.fn(),
   startPending: null as Promise<void> | null, startError: null as Error | null, stopWithoutResult: false,

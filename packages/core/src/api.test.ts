@@ -1018,7 +1018,7 @@ describe('transcribeFile', () => {
   });
 
   it('upload do disco pede a mídia para depois e devolve o id dela', async () => {
-    const send = vi.fn(async () => new Response(JSON.stringify(
+    const send = vi.fn<typeof fetch>(async () => new Response(JSON.stringify(
       { path: '/up/v.mp4', frames: [], transcript: '', media: 'pending', media_id: 'm1' }), { status: 200 }));
     const saved = await uploadFromDiskForServer(server, 'sessao', { name: 'v.mp4', type: 'video/mp4', size: 10 }, send);
     expect(send.mock.calls[0][0]).toBe('https://a.test/api/sessions/sessao/upload?media=later');
