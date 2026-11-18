@@ -1055,6 +1055,17 @@ describe('transcribeFile', () => {
     }
   });
 
+  it('espera da mídia cancelada para o pedido em andamento e rejeita com o motivo', async () => {
+    const abort = new AbortController();
+    vi.spyOn(globalThis, 'fetch').mockImplementation((_url, init) => new Promise((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(init.signal!.reason), { once: true });
+    }));
+    const waiting = waitUploadMediaForServer(server, 'sessao', 'm1', abort.signal);
+    const reason = new DOMException('removido', 'AbortError');
+    abort.abort(reason);
+    await expect(waiting).rejects.toBe(reason);
+  });
+
   it('espera da mídia devolve null para mídia desconhecida e depois do teto total', async () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
       new Response(JSON.stringify({ detail: { code: 'erro_midia_desconhecida' } }), { status: 404 }));

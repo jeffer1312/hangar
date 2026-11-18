@@ -284,18 +284,19 @@ export function sendFirstInput(serverId: string, attemptId: string): Promise<voi
     if (attach && sent === attach) {
       const uploadedFor = { serverId, name: sessionName, transcript: null };
       const pending = kept?.uploadedMediaId && kept.uploadedPath ? { path: kept.uploadedPath, mediaId: kept.uploadedMediaId } : null;
-      let saveFailed = false;
+      // Rascunho que não grava para na hora (o aviso já saiu do `keep`), sem esperar a mídia.
+      const saveFailed = new Error('draft_save_failed');
       try {
         const fields = await uploadAttachment(server, sessionName, attach, (f) => {
-          if (!saveFailed && !keep({ ...withoutUpload(attach), ...f, uploadedFor })) saveFailed = true;
+          if (!keep({ ...withoutUpload(attach), ...f, uploadedFor })) throw saveFailed;
         }, { pending });
         sent = { ...withoutUpload(attach), ...fields, uploadedFor };
       } catch (cause) {
+        if (cause === saveFailed) return;
         // A sessão existe; o anexo segue na tentativa e no rascunho dela, para reenviar aqui ou na conversa.
         setIssue(serverId, { kind: 'local', message: m.nova_conversa_anexo_falhou({ erro: messageOf(cause) }) });
         return;
       }
-      if (saveFailed) return;
     }
     const message = sent?.uploadedPath ? withAttach(attempt.text.trim(), attachInsert(sent, sent.uploadedPath)) : attempt.text;
     // Com anexo o texto enviado difere do rascunho; a revisão explícita deixa o ACK limpar o campo.

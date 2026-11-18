@@ -3,7 +3,7 @@ import * as Haptics from 'expo-haptics';
 import { AccessibilityInfo, ActivityIndicator, Alert, AppState, Keyboard, Platform, Pressable, ScrollView, Text, View, type NativeSyntheticEvent, type TextInput, type TextInputKeyPressEventData } from 'react-native';
 import type { NativeStackNavigationProp } from 'expo-router';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { broadcast, formataErro, steerSession, podeEnviarSozinho, providerName, sendInputForServer, sideQuestionOf, slashMatches, slashTokenAt, replaceSlashToken, relimparDitado, estilosDitado, canUpdateQueueEdit, queueEditLeft, DELIVERY_STALLED } from '@hangar/core';
+import { broadcast, formataErro, isAbortError, steerSession, podeEnviarSozinho, providerName, sendInputForServer, sideQuestionOf, slashMatches, slashTokenAt, replaceSlashToken, relimparDitado, estilosDitado, canUpdateQueueEdit, queueEditLeft, DELIVERY_STALLED } from '@hangar/core';
 import type { CommandInfo, MotivoFim, Provider, QueueEdit, QueuePanel as QueuePanelModel, Server } from '@hangar/core';
 import { ComposerActions, ComposerBox, ComposerInput } from './ComposerField';
 import { uploadAttachment, type UploadedFields } from '../stores/attachmentUpload';
@@ -491,7 +491,8 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
     for (const a of pendingAttachments) {
       // A falha fica para o Enviar, que tenta de novo e mostra o motivo; aqui não sobe o mesmo arquivo de novo.
       if (!reusableUploadPath(a, target) && !failedUploadsRef.current.has(a.uri)) {
-        startUpload(a).catch(() => { failedUploadsRef.current.add(a.uri); });
+        // Cancelado (anexo removido, tela fechada) não é falha: voltando ao rascunho, sobe de novo.
+        startUpload(a).catch((e: unknown) => { if (!isAbortError(e)) failedUploadsRef.current.add(a.uri); });
       }
     }
   }, [pendingAttachments, origin, startUpload]);
@@ -796,8 +797,9 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
       setUploading(true);
       try {
         for (const attach of sentAttachments) {
-          let sent: DraftAttachment = attach;
-          if (!reusableUploadPath(attach, target)) {
+          const ready = reusableUploadPath(attach, target);
+          let sent = ready ? { ...attach, uploadedPath: ready } : null;
+          if (!sent) {
             if (!useServers.getState().servers.some((s) => s.id === origin.serverId)) {
               setError(m.chat_servidor_removido());
               stop();
@@ -808,13 +810,16 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
             let uploaded: UploadedFields;
             try {
               uploaded = await startUpload(attach).catch((e: unknown) => {
-                if (!inFlight) throw e;
+                if (!inFlight || isAbortError(e)) throw e;
                 return startUpload(attach);
               });
             } catch (e) {
-              // O backend diz o motivo (tamanho, formato); o texto e os anexos continuam no rascunho, e
-              // os que já subiram guardam o caminho para não subir de novo.
-              setError(e instanceof Error && e.message ? `${m.board_falha_upload()}: ${e.message}` : m.board_falha_upload());
+              // Cancelado pela tela fechando ou pela sessão recriada: não é falha de upload.
+              if (!isAbortError(e)) {
+                // O backend diz o motivo (tamanho, formato); o texto e os anexos continuam no rascunho, e
+                // os que já subiram guardam o caminho para não subir de novo.
+                setError(e instanceof Error && e.message ? `${m.board_falha_upload()}: ${e.message}` : m.board_falha_upload());
+              }
               stop();
               return;
             }
@@ -824,7 +829,7 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
               return;
             }
           }
-          inserts.push(attachInsert(sent, sent.uploadedPath!));
+          inserts.push(attachInsert(sent, sent.uploadedPath));
         }
       } finally {
         setUploading(false);

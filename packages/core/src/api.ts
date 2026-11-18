@@ -854,19 +854,26 @@ export async function waitUploadMediaForServer(
   signal?: AbortSignal,
 ): Promise<{ frames: string[]; transcript: string } | null> {
   const deadline = Date.now() + MEDIA_WAIT_TOTAL_MS;
+  // Sinal sem motivo (polyfill antigo) ainda tem que chegar como AbortError a quem decide pelo nome.
+  const cancelled = () => signal?.reason ?? new DOMException('Aborted', 'AbortError');
   // Cada pedido fica no servidor até a mídia ficar pronta ou ~45 s; só a falha espera do lado de cá.
   while (Date.now() < deadline) {
-    if (signal?.aborted) throw signal.reason;
+    if (signal?.aborted) throw cancelled();
     const res = await apiFetchRes(`/api/sessions/${encodeURIComponent(name)}/upload-media?id=${encodeURIComponent(mediaId)}`, {
-      signal: AbortSignal.timeout(60_000),
+      signal: comTeto(signal, 60_000),
     }, s, false, false).catch(() => null);
     // Sem registro ou sem acesso não muda tentando de novo; rede caída e 5xx passam (app em segundo
     // plano, troca de rede) enquanto o servidor guarda o resultado.
     if (res && [401, 403, 404].includes(res.status)) return null;
     const body = res?.ok ? await res.json().catch(() => null) as { status?: string; frames?: string[]; transcript?: string } | null : null;
-    if (signal?.aborted) throw signal.reason;
+    if (signal?.aborted) throw cancelled();
     if (body?.status === 'done') return { frames: body.frames ?? [], transcript: body.transcript ?? '' };
-    if (body?.status !== 'pending') await new Promise((resolve) => setTimeout(resolve, 2000));
+    if (body?.status !== 'pending') {
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, 2000);
+        signal?.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
+      });
+    }
   }
   return null;
 }
