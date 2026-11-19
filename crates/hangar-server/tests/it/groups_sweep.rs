@@ -283,12 +283,11 @@ async fn dead_session_with_sanitized_name_ends_its_external_pair_by_the_raw_name
 #[tokio::test]
 async fn only_the_main_server_sweeps() {
     let tmp = tempfile::tempdir().unwrap();
-    let (_python, upstream) = fake::spawn_fake().await;
-    let mut state = hangar_server::routes::AppState::new(fake::config(upstream, ""));
+    let mut state = hangar_server::routes::AppState::new(fake::config(""));
     state.groups = Some(Arc::new(GroupService::new(PairDir::new(tmp.path().join("pair"), tmp.path().join("arquivo")),
         Arc::new(Phase(Mutex::default())), String::new())));
     assert!(hangar_server::groups::sweep::spawn(Arc::new(state)).is_none(), "servidor de teste não varre");
-    let mut state = hangar_server::routes::AppState::new(fake::config(upstream, ""));
+    let mut state = hangar_server::routes::AppState::new(fake::config(""));
     state.groups = Some(Arc::new(GroupService::new(PairDir::new(tmp.path().join("pair"), tmp.path().join("arquivo")),
         Arc::new(Phase(Mutex::default())), "casa".into())));
     state.startup = hangar_server::startup::Readiness::pending();
