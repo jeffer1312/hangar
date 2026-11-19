@@ -115,7 +115,9 @@ impl Rig {
         let wrapper = root.join("tmux");
         crate::write_executable(&wrapper, format!(r#"#!/bin/sh
 case " $* " in *" send-keys "*" -l "*) [ -e '{root}/fail-literal' ] && exit 1;; esac
-case "$1" in load-buffer|paste-buffer|set-buffer) [ -e '{root}/fail-buffer' ] && exit 1;; esac
+# Como o tmux, lê o texto antes de recusar: sair sem ler quebra a escrita de quem manda (EPIPE), e
+# isso é "pode ter digitado", não a recusa do buffer.
+case "$1" in load-buffer|paste-buffer|set-buffer) [ -e '{root}/fail-buffer' ] && {{ cat >/dev/null; exit 1; }};; esac
 [ "$1" = send-keys ] && [ -e '{root}/slow-keys' ] && grep -qx -- "$3" '{root}/slow-keys' && sleep 2
 [ "$1" = capture-pane ] && [ -e '{root}/fail-capture' ] && exit 1
 [ "$1" = list-panes ] && [ -e '{root}/fail-list' ] && exit 1
