@@ -3,7 +3,7 @@
 //! de endereço + token.
 use super::*;
 
-mod agent;
+pub(crate) mod agent;
 mod app_copy;
 mod askpass;
 mod codes;
@@ -16,7 +16,7 @@ mod phone;
 mod precheck;
 mod repo;
 mod report;
-mod run;
+pub(crate) mod run;
 mod screens;
 pub(crate) mod system;
 mod tail;
@@ -24,6 +24,11 @@ mod wizard;
 
 pub(super) use wizard::SetupWizard;
 pub(crate) use app_copy::target as installed_app_target;
+pub(crate) use report::{Secrets, scrub};
+
+/// O `CP_AUTH_TOKEN` da instalação desta máquina, para esconder o valor mesmo sem rótulo. Roda `systemctl`/PowerShell e
+/// lê o `.env`: só fora da janela.
+pub(crate) fn local_token() -> Option<String> { local::find_install().and_then(|install| install.token) }
 
 /// O assistente existe onde há script de instalação com modo `--app`.
 pub(super) fn supported() -> bool { cfg!(any(target_os = "linux", target_os = "windows")) }

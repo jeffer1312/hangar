@@ -28,8 +28,9 @@ const TARGET_WAIT: Duration = Duration::from_secs(2);
 /// Subidas e quedas do backend e do `hangar-server`, conferidas no diário real. O lançador que não
 /// achou o servidor é religado sem fim pelo gerenciador: a causa só aparece por esta linha. No
 /// Windows quem religa o servidor que cai é o lançador (`lancador.queda`, com o código de saída).
-const RESTARTS: [&str; 8] = ["backend.inicio", "backend.encerrando", "hangar_server.de_pe", "hangar_server.caiu",
-    "hangar_server.partida", "hangar_server.reserva", "lancador.falhou", "lancador.queda"];
+/// `hangar_server.saida` diz por que a vida anterior saiu (queda, atualização ou pedido).
+const RESTARTS: [&str; 9] = ["backend.inicio", "backend.encerrando", "hangar_server.de_pe", "hangar_server.caiu",
+    "hangar_server.saida", "hangar_server.partida", "hangar_server.reserva", "lancador.falhou", "lancador.queda"];
 /// Campos do `hangar-server.log` que podem sair: os que dizem o que caiu e onde. Valores passam pelo
 /// `scrub`, caminho vira o último segmento e cada um é cortado em `VALUE_MAX`.
 const LOG_FIELDS: [&str; 21] = ["code", "session", "account", "reason", "stage", "step", "kind", "io_kind", "os_error", "error",
@@ -675,5 +676,28 @@ pub(crate) async fn versions(st: &crate::routes::AppState, s: &Scrubber) -> Vers
     };
     let (claude, mux, os) = tokio::join!(claude, mux, os);
     Versions { claude, mux, os, ..Versions::local() }
+}
+
+#[cfg(test)]
+mod exit_tests {
+    use super::*;
+
+    /// O motivo da saída da vida anterior entra nos reinícios do pacote, com tipo, causa e versões.
+    #[test]
+    fn exit_line_is_listed_among_the_restarts() {
+        let dir = tempfile::tempdir().unwrap();
+        let now = Local::now();
+        let ts = (now - chrono::TimeDelta::hours(1)).to_rfc3339();
+        let file = dir.path().join(format!("diario/servidor-rust/uso-{}.jsonl", now.format("%Y-%m-%d")));
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, format!("{}\n", json!({"ts": ts, "evento": "hangar_server.saida", "nivel": "aviso", "tipo": "update",
+            "causa": "package", "de": "0.1.0.9000", "para": "0.1.0.9010"}))).unwrap();
+        let scrubber = Scrubber::new(Some("/home/fulano".into()), None);
+        let Diary { restarts, .. } = read_diary(&diary_files(dir.path()), now, &scrubber);
+        assert_eq!(restarts.len(), 1);
+        let line = restarts[0].restart_line();
+        assert!(line.contains("hangar_server.saida aviso") && line.contains("tipo=update") && line.contains("causa=package")
+            && line.contains("de=0.1.0.9000") && line.contains("para=0.1.0.9010"), "{line}");
+    }
 }
 

@@ -302,7 +302,7 @@ fn note_restart_for_doctor(pid: u32, rounds: u32, file: Option<&std::fs::File>, 
 /// handle do filho ainda aberto, o pid dele não foi reusado.
 #[cfg(windows)]
 fn close_life(hangar_dir: &Path, pid: u32, file: Option<&std::fs::File>, log: Option<&Path>) -> &'static str {
-    match hangar_boot::life::end(hangar_dir, pid) {
+    match hangar_boot::life::end(hangar_dir, pid, hangar_boot::life::now_secs()) {
         Ok(hangar_boot::life::Ended::Cleared) => "limpa",
         Ok(hangar_boot::life::Ended::OtherLife) => "outra",
         Ok(hangar_boot::life::Ended::Reset) => "ilegivel",
@@ -489,7 +489,7 @@ mod tests {
             #[cfg(unix)]
             { let _ = std::fs::remove_file(&link); std::os::unix::fs::symlink(target, &link).unwrap(); }
             #[cfg(windows)]
-            { let _ = std::fs::remove_dir(&link); crate::update::make_link(target, &link).unwrap(); }
+            { let _ = std::fs::remove_dir(&link); hangar_local_server::link::make_link(target, &link).unwrap(); }
         };
         let (v1, v2) = (version("v1", r#"{"boot":"direct"}"#), version("v2", r#"{"boot":"direct"}"#));
         let v3 = version("v3", r#"{"version":"v3"}"#);
@@ -521,7 +521,7 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(&real, current(home)).unwrap();
         #[cfg(windows)]
-        crate::update::make_link(&real, &current(home)).unwrap();
+        hangar_local_server::link::make_link(&real, &current(home)).unwrap();
         assert_eq!(root(home), Some(home.join(".hangar").join("current")));
     }
 }

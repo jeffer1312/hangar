@@ -290,7 +290,8 @@ pub fn files(base: &Path) -> Vec<PathBuf> {
     dated_files(base).into_iter().map(|(_, path)| path).collect()
 }
 
-fn dated_files(base: &Path) -> Vec<(String, PathBuf)> {
+/// Como `files`, com o dia (`AAAA-MM-DD`) do nome de cada um.
+pub fn dated_files(base: &Path) -> Vec<(String, PathBuf)> {
     let mut found = Vec::new();
     let mut pending = vec![base.to_owned()];
     while let Some(dir) = pending.pop() {

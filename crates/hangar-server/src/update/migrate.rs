@@ -22,7 +22,8 @@ use hangar_package::Manifest;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::{HealthProbe, Layout, Reading, Release, Settings, UpdateError, UpdateLock};
+use super::stop_intent::RestartIntent;
+use super::{HealthProbe, Layout, Reading, Release, Settings, StepRunner, UpdateError, UpdateLock};
 
 pub const MARKER: &str = "migration.json";
 /// O passo de `docs/atualizacoes` que roda esta migração: ela para o backend antes de o motor `git`
@@ -57,7 +58,8 @@ fn channel(f: &Facts) -> &'static str { if f.branch == "beta" { "beta" } else { 
 
 /// Para e sobe o backend desta máquina (unit do systemd ou tarefa agendada).
 pub trait Service: Sync {
-    fn stop(&self) -> Result<(), String>;
+    /// Quem para de fato grava antes a marca de intenção com `why`, e a desfaz se a parada falhar.
+    fn stop(&self, why: RestartIntent) -> Result<(), String>;
     fn start(&self) -> Result<(), String>;
     /// Liga ou desliga o serviço do front (`vite preview`); sem ele, não faz nada.
     fn front(&self, on: bool) -> Result<(), String>;
@@ -756,10 +758,13 @@ fn revert(m: &Machine<'_>, done: &[Done]) -> Vec<String> {
     failures
 }
 
+/// A parada da migração: a subida seguinte diz que a saída foi ela (`migrate`) ou a volta dela (`rollback`).
+fn intent(cause: &'static str) -> RestartIntent { RestartIntent::new(hangar_api::status::ExitKind::Update, cause) }
+
 /// Volta a máquina como estava e sobe o backend de antes. `running`: o backend novo está de pé.
 fn roll_back(m: &Machine<'_>, record: &Record, running: bool, why: String) -> String {
     // Desfazer com o backend novo de pé trocaria os dados e o `current` debaixo dele.
-    if running && let Err(e) = m.service.stop() {
+    if running && let Err(e) = m.service.stop(intent("rollback")) {
         return format!("{why}; e o backend novo não parou ({e}), então a volta não mexeu em nada: a máquina segue migrada \
             pela metade, com o registro em {}; pare o backend e rode `hangar-server migrate-package --undo`", m.partial().display());
     }
@@ -793,7 +798,7 @@ fn lock(m: &Machine<'_>) -> Result<UpdateLock, String> {
 fn undo_interrupted(m: &Machine<'_>) -> Result<bool, String> {
     if !m.partial().exists() { return Ok(false); }
     let record = read_record(&m.partial()).ok_or_else(|| format!("o registro {} está ilegível; confira à mão", m.partial().display()))?;
-    m.service.stop().map_err(|e| format!("o backend não parou para desfazer a migração interrompida: {e}"))?;
+    m.service.stop(intent("migrate")).map_err(|e| format!("o backend não parou para desfazer a migração interrompida: {e}"))?;
     let failures = revert(m, &record.done);
     let started = m.service.start();
     if !failures.is_empty() {
@@ -870,7 +875,7 @@ pub async fn migrate<H: HealthProbe>(m: &Machine<'_>, health: &H, dry_run: bool)
         reason: why, notes, done: Vec::new() };
     // O registro nasce antes de parar: morte daqui em diante sempre deixa o que desfazer.
     save(&m.partial(), &record)?;
-    if let Err(e) = m.service.stop() {
+    if let Err(e) = m.service.stop(intent("migrate")) {
         let _ = m.service.start();
         let _ = std::fs::remove_file(m.partial());
         return Err(format!("o backend não parou: {e}; nada foi mudado"));
@@ -906,7 +911,7 @@ pub async fn undo<H: HealthProbe>(m: &Machine<'_>, health: &H) -> Result<(), Str
     refuse_inside_service(m)?;
     let _lock = lock(m)?;
     let before = match health.read().await { Reading::Rust { pid, .. } => pid, _ => None };
-    m.service.stop().map_err(|e| format!("o backend não parou: {e}; nada foi desfeito"))?;
+    m.service.stop(intent("migrate")).map_err(|e| format!("o backend não parou: {e}; nada foi desfeito"))?;
     let failures = revert(m, &record.done);
     if failures.is_empty() {
         let _ = std::fs::remove_file(&path);
@@ -918,15 +923,17 @@ pub async fn undo<H: HealthProbe>(m: &Machine<'_>, health: &H) -> Result<(), Str
 
 /// A unit do systemd ou as tarefas agendadas, pelo shell do sistema.
 pub struct SystemService {
-    pub runner: super::ShellRunner,
+    pub runner: std::sync::Arc<dyn StepRunner + Send + Sync>,
     pub windows: bool,
     pub checkout: PathBuf,
     pub port: u16,
+    /// A pasta da marca de intenção é o `~/.hangar` daqui.
+    pub home: PathBuf,
 }
 
 impl SystemService {
     fn run(&self, command: &str) -> Result<(), String> {
-        let run = super::StepRunner::run(&self.runner, command, &self.checkout);
+        let run = self.runner.run(command, &self.checkout);
         match run.code {
             Some(0) => Ok(()),
             code => Err(format!("{command} saiu com {code:?}: {}", run.output.trim())),
@@ -939,12 +946,21 @@ fn ps_quote(path: &Path) -> String {
     path.display().to_string().chars().flat_map(|c| if matches!(c, '\'' | '‘' | '’' | '‚' | '‛') { vec![c, c] } else { vec![c] }).collect()
 }
 
-impl Service for SystemService {
-    fn stop(&self) -> Result<(), String> {
+impl SystemService {
+    fn stop_unit(&self) -> Result<(), String> {
         if !self.windows { return self.run("systemctl --user stop hangar-backend.service"); }
         let helper = self.checkout.join("scripts").join("windows-tasks.ps1");
         self.run(&format!("powershell -NoProfile -ExecutionPolicy Bypass -Command \"{}\"", super::restart::guarded_ps(&format!(
             ". '{}'; Restart-HangarTask 'hangar-backend' {} '{}' -NoStart", ps_quote(&helper), self.port, ps_quote(&self.checkout.join("backend"))))))
+    }
+}
+
+impl Service for SystemService {
+    fn stop(&self, why: RestartIntent) -> Result<(), String> {
+        let marked = why.mark(&Layout::new(&self.home).hangar);
+        let stopped = self.stop_unit();
+        marked.settle(&stopped);
+        stopped
     }
 
     fn start(&self) -> Result<(), String> {
@@ -1147,7 +1163,7 @@ pub fn run(args: &[String]) -> Result<Vec<String>, (u8, String)> {
         .filter(|p| p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n == ".codex" || n.starts_with(".codex-")) && p.join("hooks.json").is_file()));
     codex_homes.dedup();
     let launcher_source = std::env::current_exe().and_then(|exe| super::executor::executor_path(&exe)).unwrap_or_default();
-    let runner = super::ShellRunner { timeout: Duration::from_secs(180) };
+    let runner = std::sync::Arc::new(super::ShellRunner { timeout: Duration::from_secs(180) });
     let probe = Machine {
         home: home.clone(), checkout: checkout.clone(), windows,
         systemd_dir: var("XDG_CONFIG_HOME").unwrap_or_else(|| home.join(".config")).join("systemd").join("user"),
@@ -1159,7 +1175,7 @@ pub fn run(args: &[String]) -> Result<Vec<String>, (u8, String)> {
         settings: Settings { download_deadline: Duration::from_secs(300), ..Settings::default() },
     };
     let port = probe.env_port("CP_PORT").map_err(|e| (1, e))?.unwrap_or(8765);
-    let service = SystemService { runner, windows, checkout, port };
+    let service = SystemService { runner, windows, checkout, port, home: home.clone() };
     let client = crate::http_client().build().map_err(|e| (1, format!("cliente http: {e}")))?;
     let fetcher = ReleaseFetcher { client, platform: super::platform(), home: home.clone(), deadline: probe.settings.download_deadline,
         base_url: super::RELEASE_BASE.to_owned() };
@@ -1185,7 +1201,7 @@ pub fn run(args: &[String]) -> Result<Vec<String>, (u8, String)> {
 struct Unused;
 
 impl Service for Unused {
-    fn stop(&self) -> Result<(), String> { Err("sem serviço".into()) }
+    fn stop(&self, _why: RestartIntent) -> Result<(), String> { Err("sem serviço".into()) }
     fn start(&self) -> Result<(), String> { Err("sem serviço".into()) }
     fn front(&self, _on: bool) -> Result<(), String> { Err("sem serviço".into()) }
 }

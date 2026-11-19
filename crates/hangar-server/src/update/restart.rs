@@ -3,6 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use super::stop_intent::RestartIntent;
 use super::{Restarter, StepRunner};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,8 +103,20 @@ fn tail(output: &str) -> String {
 }
 
 impl Restarter for SystemRestarter {
-    async fn restart(&self) -> Result<(), String> {
+    /// Na mão nada para: uma marca ali explicaria a queda de outra coisa.
+    async fn restart(&self, why: RestartIntent) -> Result<(), String> {
         let Some(command) = self.command()? else { return Ok(()) };
+        let intent = why.mark(&super::Layout::new(&self.home).hangar);
+        let restarted = self.run(command).await;
+        intent.settle(&restarted);
+        restarted
+    }
+
+    fn manual(&self) -> bool { self.topology == Topology::Manual }
+}
+
+impl SystemRestarter {
+    async fn run(&self, command: String) -> Result<(), String> {
         let (runner, home) = (self.runner.clone(), self.home.clone());
         let run = tokio::task::spawn_blocking(move || runner.run(&command, &home)).await.map_err(|e| e.to_string())?;
         let attempts = task_attempts(&run.output);
@@ -115,8 +128,6 @@ impl Restarter for SystemRestarter {
             code => Err(format!("o reinício saiu com {code:?}: {}", tail(&run.output))),
         }
     }
-
-    fn manual(&self) -> bool { self.topology == Topology::Manual }
 }
 
 #[cfg(test)]
@@ -149,6 +160,51 @@ mod tests {
         SystemRestarter { topology, runner, home: home.to_path_buf(), port: 8765, diary_dir: None }
     }
 
+    fn why() -> RestartIntent { RestartIntent::new(hangar_api::status::ExitKind::Requested, "restart_only") }
+
+    /// O reinício grava a marca de intenção com o servidor de pé, com `de`/`para` quando a intenção os
+    /// traz, no systemd e no Windows; na mão, onde nada para, não grava; recusado com o servidor ainda
+    /// de pé, a apaga.
+    #[tokio::test]
+    async fn update_restart_marks_the_stop_intent_only_when_it_stops_the_server() {
+        let marked = || {
+            let dir = tempfile::tempdir().unwrap();
+            crate::update::stop_intent::mark_this_process_running(&dir.path().join(".hangar"), "agora");
+            dir
+        };
+        let pid = u64::from(std::process::id());
+        let file = |dir: &Path| dir.join(".hangar").join(crate::update::stop_intent::FILE);
+
+        let read = |dir: &Path| serde_json::from_slice::<serde_json::Value>(&std::fs::read(file(dir)).unwrap()).unwrap();
+
+        let dir = marked();
+        restarter(Topology::Systemd, script(|_| code(0, "")), dir.path()).restart(why()).await.unwrap();
+        let written = read(dir.path());
+        assert_eq!((written["tipo"].as_str(), written["causa"].as_str(), written["pid"].as_u64()), (Some("requested"), Some("restart_only"), Some(pid)));
+        assert!(written.get("de").is_none() && written.get("para").is_none(), "{written}");
+
+        let dir = marked();
+        let update = RestartIntent::new(hangar_api::status::ExitKind::Update, "package").between(Some("0.1.0.10"), Some("0.1.0.11"));
+        restarter(Topology::Systemd, script(|_| code(0, "")), dir.path()).restart(update).await.unwrap();
+        let written = read(dir.path());
+        assert_eq!((written["tipo"].as_str(), written["causa"].as_str(), written["de"].as_str(), written["para"].as_str()),
+            (Some("update"), Some("package"), Some("0.1.0.10"), Some("0.1.0.11")));
+
+        let dir = marked();
+        restarter(Topology::Manual, script(|_| code(0, "")), dir.path()).restart(why()).await.unwrap();
+        assert!(!file(dir.path()).exists(), "na mão nada para");
+
+        let (dir, _root) = windows_home("0.1.0.11");
+        crate::update::stop_intent::mark_this_process_running(&dir.path().join(".hangar"), "agora");
+        restarter(Topology::Windows, script(|_| code(0, "")), dir.path()).restart(why()).await.unwrap();
+        assert_eq!(read(dir.path())["causa"].as_str(), Some("restart_only"), "as tarefas do Windows também derrubam o servidor");
+
+        let dir = marked();
+        let refused = script(|c| code(if c.contains("restart") { 1 } else { 0 }, "Access denied"));
+        restarter(Topology::Systemd, refused, dir.path()).restart(why()).await.unwrap_err();
+        assert!(!file(dir.path()).exists(), "reinício recusado com o servidor ainda de pé");
+    }
+
     #[test]
     fn update_topology_is_windows_systemd_or_manual() {
         let dir = tempfile::tempdir().unwrap();
@@ -163,15 +219,15 @@ mod tests {
     async fn update_systemd_restart_takes_the_frontend_first_when_it_exists() {
         let dir = tempfile::tempdir().unwrap();
         let both = script(|_| code(0, ""));
-        restarter(Topology::Systemd, both.clone(), dir.path()).restart().await.unwrap();
+        restarter(Topology::Systemd, both.clone(), dir.path()).restart(why()).await.unwrap();
         assert_eq!(both.ran.lock().unwrap().last().unwrap(), "systemctl --user restart hangar-frontend.service hangar-backend.service");
 
         let backend = script(|c| code(if c.contains("list-unit-files hangar-frontend") { 1 } else { 0 }, ""));
-        restarter(Topology::Systemd, backend.clone(), dir.path()).restart().await.unwrap();
+        restarter(Topology::Systemd, backend.clone(), dir.path()).restart(why()).await.unwrap();
         assert_eq!(backend.ran.lock().unwrap().last().unwrap(), "systemctl --user restart hangar-backend.service");
 
         let refused = script(|c| if c.contains("restart") { code(1, "Failed to restart hangar-backend.service: Access denied") } else { code(1, "") });
-        let error = restarter(Topology::Systemd, refused, dir.path()).restart().await.unwrap_err();
+        let error = restarter(Topology::Systemd, refused, dir.path()).restart(why()).await.unwrap_err();
         assert!(error.contains("Access denied"), "{error}");
     }
 
@@ -192,7 +248,7 @@ mod tests {
     async fn update_windows_restart_runs_the_tasks_helper_of_the_new_root() {
         let (dir, root) = windows_home("0.1.0.11");
         let runner = script(|_| code(0, ""));
-        restarter(Topology::Windows, runner.clone(), dir.path()).restart().await.unwrap();
+        restarter(Topology::Windows, runner.clone(), dir.path()).restart(why()).await.unwrap();
         let helper = root.join("scripts").join("windows-tasks.ps1");
         assert_eq!(runner.ran.lock().unwrap().as_slice(), [format!(
             "powershell -NoProfile -ExecutionPolicy Bypass -Command \"try {{ . '{}'; Restart-HangarTasks '{}' 8765 5173 }} catch {{ Write-Output ($_ | Out-String); exit 1 }}\"",
@@ -206,7 +262,7 @@ mod tests {
         let output = "hangar-tarefa: hangar-backend tentativa=1 porta=nao estado=Ready ms=2100\nhangar-tarefa: hangar-backend tentativa=2 porta=sim estado=Running ms=3400\n";
         let mut restarter = restarter(Topology::Windows, script(move |_| code(0, output)), dir.path());
         restarter.diary_dir = Some(diary.clone());
-        restarter.restart().await.unwrap();
+        restarter.restart(why()).await.unwrap();
         let lines: String = std::fs::read_dir(&diary).unwrap().flatten().map(|e| std::fs::read_to_string(e.path()).unwrap()).collect();
         let levels: Vec<String> = lines.lines().map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap()["nivel"].as_str().unwrap().to_owned()).collect();
         assert_eq!(levels, ["aviso", "ok"], "{lines}");
@@ -219,12 +275,12 @@ mod tests {
         let env = dir.path().join(".hangar/config/.env");
         std::fs::write(&env, "CP_FRONT_PORT='5174'  # o front\n").unwrap();
         let runner = script(|_| code(0, ""));
-        restarter(Topology::Windows, runner.clone(), dir.path()).restart().await.unwrap();
+        restarter(Topology::Windows, runner.clone(), dir.path()).restart(why()).await.unwrap();
         assert!(runner.ran.lock().unwrap()[0].contains(" 8765 5174 } catch "), "{:?}", runner.ran.lock().unwrap());
 
         std::fs::write(&env, "CP_FRONT_PORT=cinco\n").unwrap();
         let runner = script(|_| code(0, ""));
-        let error = restarter(Topology::Windows, runner.clone(), dir.path()).restart().await.unwrap_err();
+        let error = restarter(Topology::Windows, runner.clone(), dir.path()).restart(why()).await.unwrap_err();
         assert!(error.contains("CP_FRONT_PORT"), "{error}");
         assert!(runner.ran.lock().unwrap().is_empty(), "porta ilegível não vira 0 calada");
     }
@@ -237,7 +293,7 @@ mod tests {
         std::fs::rename(&root, &odd).unwrap();
         crate::update::swap(&crate::update::Layout::new(dir.path()), &odd).unwrap();
         let refused = script(|_| code(1, "Instalacao ou recuperacao em andamento; tente de novo em instantes"));
-        let error = restarter(Topology::Windows, refused.clone(), dir.path()).restart().await.unwrap_err();
+        let error = restarter(Topology::Windows, refused.clone(), dir.path()).restart(why()).await.unwrap_err();
         assert!(error.contains("Instalacao ou recuperacao em andamento"), "{error}");
         assert!(refused.ran.lock().unwrap()[0].contains("o''v ’’x‘‘y‚‚z‛‛"), "{:?}", refused.ran.lock().unwrap());
     }
@@ -248,7 +304,7 @@ mod tests {
         let runner = script(|_| code(0, ""));
         let manual = restarter(Topology::Manual, runner.clone(), dir.path());
         assert!(manual.manual());
-        manual.restart().await.unwrap();
+        manual.restart(why()).await.unwrap();
         assert!(runner.ran.lock().unwrap().is_empty());
         assert!(!restarter(Topology::Systemd, runner, dir.path()).manual());
     }

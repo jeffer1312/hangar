@@ -157,6 +157,8 @@ pub struct AppState {
     /// Avisos do Mission Control à sessão, pelo handler da rota de entrada; o estado entra quando o roteador nasce.
     pub mission_notify: Arc<crate::mission_notify::SessionNotify>,
     pub ticket_actions: std::sync::OnceLock<Arc<hangar_ticket_actions::Engine>>,
+    /// Tela Status: hub do retrato e amostrador do processo; o teste troca a coleta.
+    pub status: Arc<crate::status::Status>,
     /// Revisão do trabalho (`work_review/v1`) das sessões ligadas a um ticket.
     pub work_review: Arc<hangar_work_review::Engine>,
 }
@@ -319,6 +321,7 @@ impl AppState {
             mission,
             mission_notify,
             ticket_actions: Default::default(),
+            status: Arc::default(),
             work_review,
             hangar_dir, device_install,
             upload_naming: Default::default(),
@@ -425,6 +428,8 @@ pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest:
     }
     let _worktree_sweep=crate::AbortOnDrop(crate::worktree_policy::spawn(state.clone()));
     let _keyring_watch = crate::AbortOnDrop(crate::keyring::spawn(state.list.keyring.clone()));
+    // A curva da última hora da tela Status existe com ou sem tela aberta.
+    let _status_sampler = crate::AbortOnDrop(crate::status::spawn_sampler(&state));
     let _vault_backup = crate::AbortOnDrop(crate::vault::backup::spawn(state.clone()));
     let _vault_files = crate::AbortOnDrop(tokio::spawn(crate::vault::files::sweep_at_start()));
     let _auto_report = crate::AbortOnDrop(crate::diag_report::auto::spawn(state.clone()));
@@ -844,8 +849,8 @@ async fn access_line(st: &AppState, method: &Method, path: &str, correlation: &s
     let logs_itself = (*method == Method::POST && path == "/api/sessions")
         || (*method == Method::POST && path.starts_with("/api/archive/") && path.ends_with("/resume"))
         || path.strip_prefix("/api/sessions/").and_then(|rest| rest.split_once('/')).is_some_and(|(_, tail)| tail.starts_with("plugin/"));
-    if !(status.is_server_error() || elapsed >= Duration::from_secs(1)) || path.starts_with("/api/diag")
-        || logs_itself {
+    let slow = elapsed >= Duration::from_secs(1) && !waits_on_purpose(method, path);
+    if !(status.is_server_error() || slow) || reads_the_diary(path) || logs_itself {
         return response;
     }
     let (response, cause) = error_code(response).await;
@@ -857,6 +862,18 @@ async fn access_line(st: &AppState, method: &Method, path: &str, correlation: &s
     if let Some(cause) = cause { line["causa"] = serde_json::json!(cause); }
     st.diag.record_line(line);
     response
+}
+
+/// Rotas que leem o diário de uso fora da linha `api.servidor`: a tela Status soma a lentidão e os
+/// 5xx dessa linha, e a própria espera dela (peers, retrato que não ficou pronto) não pode se medir.
+fn reads_the_diary(path: &str) -> bool {
+    path.starts_with("/api/diag") || matches!(path, "/api/status" | "/api/status/events")
+}
+
+/// Esperas longas de propósito (long-poll do plugin, chamada de tool MCP pelo `/mcp/` que os
+/// clientes usam): demorar não é lentidão, só o 5xx delas vai ao diário.
+fn waits_on_purpose(method: &Method, path: &str) -> bool {
+    hangar_status::diary::waits_on_purpose(method.as_str(), path)
 }
 
 /// `detail.code` ou `code` do corpo de erro JSON pequeno; o corpo segue igual e nunca vai ao diário.
@@ -1015,6 +1032,9 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/session-auto-hide", axum::routing::get(crate::session_visibility::auto::route).put(crate::session_visibility::auto::route))
         .route("/api/tags", axum::routing::get(crate::tags::handle).put(crate::tags::handle))
         .route("/api/notice-ignores", axum::routing::get(crate::notice_ignores::handle).put(crate::notice_ignores::handle))
+        // Tela Status: só o dono, nunca repassada (o Python não tem a rota).
+        .route("/api/status", get(crate::status::snapshot))
+        .route("/api/status/events", get(crate::status::events))
         .route("/api/config-sync/manifest", axum::routing::get(crate::config_sync::http::handle))
         .route("/api/config-sync/bundle", axum::routing::get(crate::config_sync::http::handle))
         .route("/api/config-sync/apply", axum::routing::any(crate::config_sync::apply_http::handle))
@@ -1030,6 +1050,7 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         // Mesmo caminho: o axum junta o POST à rota de cima (um repasse só, o dela).
         .route("/api/presence", axum::routing::post(crate::presence::route))
         .route("/api/presence/heartbeat", axum::routing::post(crate::presence::route).fallback(pass_registered))
+        .route("/api/presence/app", axum::routing::post(crate::presence::route).fallback(pass_registered))
         .route("/api/jev/aux/cliproxy", get(crate::jev_aux::cliproxy).fallback(pass_any))
         .route("/api/jev/aux/models", axum::routing::post(crate::jev_aux::models).fallback(pass_any))
         .route("/api/voice", get(crate::voice::routes::ws).options(crate::voice::routes::preflight))
@@ -1854,6 +1875,24 @@ mod tests {
     async fn guest_socket_reuses_the_address_only_outside_windows() {
         let listener = guest_socket("127.0.0.1:0".parse().unwrap()).unwrap();
         assert_eq!(socket2::SockRef::from(&listener).reuse_address().unwrap(), cfg!(unix));
+    }
+
+    /// A tela Status não se mede: o `GET` frio esperando os peers e o 503 dela não entram na lentidão
+    /// nem nos 5xx que ela mesma mostra.
+    #[test]
+    fn status_routes_stay_out_of_the_access_line() {
+        assert!(reads_the_diary("/api/status") && reads_the_diary("/api/status/events"));
+        assert!(reads_the_diary("/api/diag") && reads_the_diary("/api/diag/arquivo"));
+        assert!(!reads_the_diary("/api/statusx") && !reads_the_diary("/api/sessions"), "só as rotas da tela");
+    }
+
+    /// Long-poll do plugin e tool MCP demoram de propósito: a linha só sai com 5xx.
+    #[test]
+    fn long_waits_are_not_slow_requests() {
+        assert!(waits_on_purpose(&Method::POST, "/api/plugin/pull") && waits_on_purpose(&Method::POST, "/mcp/"));
+        assert!(!waits_on_purpose(&Method::GET, "/api/plugin/pull") && !waits_on_purpose(&Method::POST, "/api/plugin/pullx"));
+        assert!(!waits_on_purpose(&Method::POST, "/api/sessions"));
+        assert_eq!(masked_route("/mcp/"), "/mcp/", "a rota do diário é a mesma que o filtro casa");
     }
 
     /// A linha `api.servidor` nunca leva nome ou id escolhido por alguém (I-14).

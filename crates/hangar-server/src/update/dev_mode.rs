@@ -10,10 +10,12 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 
+use hangar_api::status::ExitKind;
 use hangar_package::{Manifest, Version};
 
 use super::http::{mode, Mode};
 use super::restart::{SystemRestarter, Topology};
+use super::stop_intent::RestartIntent;
 use super::{HealthProbe, Layout, Reading, Restarter, Settings, StateFile, StepRun, StepRunner, UpdateError};
 
 /// Teto do download do Rust do checkout, o mesmo dos comandos da migração.
@@ -173,7 +175,8 @@ pub async fn switch<R: Restarter, H: HealthProbe>(home: &Path, state_dir: &Path,
         .map_err(|e| Failure::new("erro_dev_mode_falhou", e.to_string()))?;
     if restarter.manual() { return Ok(Outcome::SwitchedManual(target)); }
     on_step("reiniciar");
-    let proved = match restarter.restart().await {
+    let restarted = restarter.restart(RestartIntent::new(ExitKind::Requested, "dev_mode")).await;
+    let proved = match restarted {
         Err(e) => Err(format!("o servidor não reiniciou: {e}")),
         Ok(()) => match &manifest {
             Some(manifest) => super::wait_rust(health, manifest, before, settings).await,
@@ -199,7 +202,7 @@ async fn roll_back<R: Restarter, H: HealthProbe>(layout: &Layout, previous: Opti
     if let Err(e) = super::blocking(move || super::swap(&layout, &previous)).await {
         return failed(format!("{why}; e o current não voltou para onde estava: {e}"));
     }
-    if let Err(e) = restarter.restart().await {
+    if let Err(e) = restarter.restart(RestartIntent::new(ExitKind::Requested, "dev_mode")).await {
         return failed(format!("{why}; o current voltou para onde estava, mas o reinício falhou: {e}"));
     }
     if let Err(e) = super::wait_previous(health, expected.as_ref(), failed_pid, settings).await {
@@ -265,7 +268,7 @@ mod tests {
 
     struct FakeRestart(Arc<AtomicUsize>);
     impl Restarter for FakeRestart {
-        async fn restart(&self) -> Result<(), String> { self.0.fetch_add(1, Ordering::SeqCst); Ok(()) }
+        async fn restart(&self, _why: RestartIntent) -> Result<(), String> { self.0.fetch_add(1, Ordering::SeqCst); Ok(()) }
     }
 
     /// Pid 10 antes de reiniciar; depois, 10 + reinícios (ou 10 sempre, com `proves` falso). `commit`
@@ -482,7 +485,7 @@ mod tests {
     /// O reinício de número `fails` (1 = o da troca) falha.
     struct FailingRestart { count: Arc<AtomicUsize>, fails: usize }
     impl Restarter for FailingRestart {
-        async fn restart(&self) -> Result<(), String> {
+        async fn restart(&self, _why: RestartIntent) -> Result<(), String> {
             let n = self.count.fetch_add(1, Ordering::SeqCst) + 1;
             if n == self.fails { Err("systemctl saiu com 1".into()) } else { Ok(()) }
         }
@@ -535,7 +538,7 @@ mod tests {
 
     struct Manual;
     impl Restarter for Manual {
-        async fn restart(&self) -> Result<(), String> { Err("na mão não reinicia".into()) }
+        async fn restart(&self, _why: RestartIntent) -> Result<(), String> { Err("na mão não reinicia".into()) }
         fn manual(&self) -> bool { true }
     }
 

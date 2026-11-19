@@ -56,7 +56,7 @@ pub fn rust_route(method: &Method, path: &str) -> bool {
     // `peer-address` saiu: o Rust responde qualquer método com o 404 de rota inexistente.
     if path.strip_prefix("/api/sessions/").and_then(|r| r.split_once('/')).is_some_and(|(_, t)| t == "peer-address") { return true; }
     if *method == Method::GET {
-        if matches!(path, "/api/sessions" | "/api/sessions/events" | "/api/sessions/creation-progress" | "/api/costs" | "/api/cotacao" | "/api/uso" | "/api/presence" | "/api/update/notes" | "/api/update/arrived" | "/api/news" | "/api/manual"
+        if matches!(path, "/api/sessions" | "/api/sessions/events" | "/api/sessions/creation-progress" | "/api/costs" | "/api/cotacao" | "/api/uso" | "/api/status" | "/api/status/events" | "/api/presence" | "/api/update/notes" | "/api/update/arrived" | "/api/news" | "/api/manual"
             | "/api/voice" | "/api/voice/settings" | "/api/voice/memory" | "/api/jev/aux/cliproxy" | "/api/jev/delivery" | "/api/client-api"
             | "/api/search" | "/api/search/context") {
             return true;
@@ -81,7 +81,7 @@ pub fn rust_route(method: &Method, path: &str) -> bool {
     }
     // Interface dos mods: o Rust atende as sessões dele e repassa as outras.
     if *method == Method::POST {
-        if matches!(path, "/api/sessions" | "/api/claude/defaults" | "/api/presence" | "/api/presence/heartbeat" | "/api/jev/aux/models" | "/api/mermaid") {
+        if matches!(path, "/api/sessions" | "/api/claude/defaults" | "/api/presence" | "/api/presence/heartbeat" | "/api/presence/app" | "/api/jev/aux/models" | "/api/mermaid") {
             return true;
         }
         let tail = path.strip_prefix("/api/sessions/").and_then(|r| r.split_once('/')).map(|(_, t)| t);
@@ -178,6 +178,7 @@ mod tests {
         assert!(get("/api/sessions/a/git/log") && get("/api/worktrees"), "Git e worktrees vêm dos matches");
         assert!(get("/api/sessions/a/pages/p1") && get("/api/sessions/a/pages/p1/shot") && !get("/api/sessions/a/pages"));
         assert!(rust_route(&Method::POST, "/api/mermaid") && !get("/api/mermaid"));
+        assert!(get("/api/status") && get("/api/status/events"), "a tela Status é só do Rust");
         assert!(rust_route(&Method::POST, "/api/sessions/a/input") && rust_route(&Method::DELETE, "/api/sessions/a/queue/e1")
             && !rust_route(&Method::POST, "/api/sessions/a/queue/e1") && rust_route(&Method::POST, "/api/sessions/a/queue/e1/steer")
             && rust_route(&Method::PATCH, "/api/sessions/a/queue/e1") && get("/api/cotas") && rust_route(&Method::POST, "/api/worktrees/create"));
