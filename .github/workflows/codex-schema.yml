@@ -1,4 +1,5 @@
-# Confere o Codex mais novo publicado contra os campos que o Hangar usa (`crates/hangar-codex`).
+# Confere o Codex mais novo publicado contra os campos que o Hangar usa (`crates/hangar-codex` e a
+# importação da transferência, `crates/hangar-codex-transfer`).
 # Versão nova sem mudança nesses campos passa calada; campo usado que sumiu ou mudou de nome falha o
 # run, e o GitHub avisa por e-mail. Não grava nada: atualizar o recorte guardado é
 # `scripts/conferir-codex-schema`, à mão.
@@ -46,3 +47,6 @@ jobs:
           CODEX_SCHEMA_DIR="$schema" cargo test --locked -p hangar-codex --lib -- --ignored --exact \
             schema_check::fields_used_exist_in_installed_codex 2>&1 | tee saida.txt
           grep -qE 'test result: ok\. 1 passed' saida.txt
+          CODEX_SCHEMA_DIR="$schema" cargo test --locked -p hangar-codex-transfer --lib -- --ignored --exact \
+            schema_check::fields_used_exist_in_installed_codex 2>&1 | tee saida-transferencia.txt
+          grep -qE 'test result: ok\. 1 passed' saida-transferencia.txt

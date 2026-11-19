@@ -11,7 +11,6 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
 
-const VERSION: &str = hangar_codex_transfer::SUPPORTED_VERSION;
 fn error(code: &str) -> TransferError {
     TransferError::new(code)
 }
@@ -170,6 +169,8 @@ struct ImportClient {
     service: AccountService,
     models: Arc<crate::dictation::catalog::Models>,
     account_home: PathBuf,
+    // O catálogo de modelos muda com a versão do cliente; vale a do Codex que importa.
+    codex_version: String,
 }
 impl NativeImport for ImportClient {
     async fn request(&mut self, method: &str, params: Value) -> Result<Value, TransferError> {
@@ -180,7 +181,13 @@ impl NativeImport for ImportClient {
     }
     async fn raw_model(&mut self, config: &Value, model: &str) -> Result<Value, TransferError> {
         self.models
-            .raw_model(&self.service, &self.account_home, config, model, VERSION)
+            .raw_model(
+                &self.service,
+                &self.account_home,
+                config,
+                model,
+                &self.codex_version,
+            )
             .await
             .map_err(error)
     }
@@ -201,6 +208,7 @@ impl ImportClient {
         account: &crate::accounts::catalog::Account,
         record: &TransferRecord,
         limit: usize,
+        codex_version: String,
     ) -> Result<Self, TransferError> {
         let store = store(&service.env.home);
         let mut private = store.runtime(&record.id)?;
@@ -297,6 +305,7 @@ impl ImportClient {
             service,
             models,
             account_home: account.home.clone(),
+            codex_version,
         })
     }
     async fn close(&mut self) -> Result<(), TransferError> {
@@ -324,10 +333,12 @@ impl ImportClient {
     }
 }
 
+/// A conta de destino e a versão do Codex que vai importar. A versão não é comparada com nenhuma:
+/// a importação confere cada resposta que usa, e o workflow `codex-schema` confere o Codex novo.
 async fn check_target(
     service: &AccountService,
     id: &str,
-) -> Result<crate::accounts::catalog::Account, TransferError> {
+) -> Result<(crate::accounts::catalog::Account, String), TransferError> {
     let accounts = service
         .visible_codex_accounts()
         .map_err(|_| error("session_transfer_unknown_account").with_status(400))?;
@@ -377,13 +388,12 @@ async fn check_target(
         .and_then(Result::ok)
         .filter(|o| o.status.success())
         .ok_or_else(|| error("session_transfer_native_unavailable"))?;
-    if !String::from_utf8_lossy(&output.stdout)
+    let version = String::from_utf8_lossy(&output.stdout)
         .split_whitespace()
-        .any(|s| s == VERSION)
-    {
-        return Err(error("session_transfer_codex_version_unsupported"));
-    }
-    Ok(account)
+        .last()
+        .map(str::to_owned)
+        .ok_or_else(|| error("session_transfer_native_unavailable"))?;
+    Ok((account, version))
 }
 
 impl RuntimeRegistry {
@@ -545,7 +555,7 @@ impl RuntimeRegistry {
             return Err(error("session_transfer_source_changed"));
         }
         let (permission, collaboration) = permission(&current)?;
-        let account = check_target(&service, &request.credential_id).await?;
+        let (account, codex_version) = check_target(&service, &request.credential_id).await?;
         let (catalog, _) = models
             .get(
                 &service,
@@ -623,7 +633,7 @@ impl RuntimeRegistry {
             hangar_conversation_transfer::verify_source(record.source.as_ref().unwrap())?;
             record.source.as_mut().unwrap().selected_uuids=context.selected_uuids.iter().cloned().collect();store.save(&record)?;
             let options=ImportOptions{cwd:current.spec.cwd.clone(),account_home:account.home.to_string_lossy().into_owned(),account_id:account.id.clone(),transfer_id:record.id.clone(),model:request.model,effort:request.effort,permission_mode:permission.into(),collaboration_mode:collaboration.into()};
-            let mut client=ImportClient::open(service,models,&account,&record,hangar_codex_transfer::import_output_limit(&context)).await?;
+            let mut client=ImportClient::open(service,models,&account,&record,hangar_codex_transfer::import_output_limit(&context),codex_version).await?;
             let imported=async {
                 client.request("initialize",json!({"clientInfo":{"name":"hangar","title":null,"version":"0.1.0"},"capabilities":{"experimentalApi":true}})).await?;
                 client.client.notify("initialized",json!({})).await.map_err(|_|error("session_transfer_native_unavailable"))?;
@@ -1042,7 +1052,7 @@ mod tests {
             home: home.join(".codex"),
             is_default: true,
         };
-        let failure = ImportClient::open(service, Default::default(), &account, &record, 1)
+        let failure = ImportClient::open(service, Default::default(), &account, &record, 1, "0.0.0".into())
             .await
             .err()
             .unwrap();

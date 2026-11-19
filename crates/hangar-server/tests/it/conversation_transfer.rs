@@ -62,7 +62,7 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
     crate::write_executable(
         &bin.join("codex"),
         format!(
-            "#!/bin/bash\nif [ \"$1\" = --version ]; then echo 'codex-cli 0.159.3'; exit; fi\nexec -a codex '{}' '{}' \"$@\"\n",
+            "#!/bin/bash\nif [ \"$1\" = --version ]; then echo 'codex-cli 0.171.4'; exit; fi\nexec -a codex '{}' '{}' \"$@\"\n",
             node.trim(),
             script.display()
         ),

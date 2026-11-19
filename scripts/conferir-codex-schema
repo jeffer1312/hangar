@@ -3,14 +3,16 @@
 set -euo pipefail
 raiz="$(cd "$(dirname "$0")/.." && pwd)"
 conferida="$(grep -oE '"[0-9]+\.[0-9]+\.[0-9]+[^"]*"' "$raiz/crates/hangar-codex/src/version.rs" | head -1 | tr -d '"')"
-instalada="$(codex --version | awk '{print $2}')"
-if [ "$instalada" != "$conferida" ]; then
-  echo "Codex instalado: $instalada; conferida no código: $conferida."
-  echo "Para conferir $instalada: troque o valor de checked_version!() em crates/hangar-codex/src/version.rs e rode de novo."
-  exit 1
-fi
+instalada="$(codex --version | awk '{print $NF}')"
+versao="$raiz/crates/hangar-codex/src/version.rs"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
-codex app-server generate-json-schema --experimental --out "$tmp" >/dev/null
+if [ "$instalada" != "$conferida" ]; then
+  echo "Codex instalado: $instalada; conferida no código: $conferida. Passando a conferida para $instalada."
+  sed "s/\"$conferida\"/\"$instalada\"/" "$versao" >"$tmp/version.rs"
+  grep -q "\"$instalada\"" "$tmp/version.rs" || { echo "checked_version!() não encontrado em $versao"; exit 1; }
+  cat "$tmp/version.rs" >"$versao"
+fi
+codex app-server generate-json-schema --experimental --out "$tmp/schema" >/dev/null
 # Filtro que não casa nenhum teste sai 0 calado; aqui isso é falha.
 rodar() {
   local saida
@@ -18,6 +20,8 @@ rodar() {
   echo "$saida"
   grep -qE 'test result: ok\. [1-9]' <<<"$saida" || { echo "Nenhum teste rodou: $*"; exit 1; }
 }
-rodar env CODEX_SCHEMA_DIR="$tmp" CARGO_BUILD_JOBS=4 cargo test -q -p hangar-codex --lib -- --ignored regenerate_slice
+rodar env CODEX_SCHEMA_DIR="$tmp/schema" CARGO_BUILD_JOBS=4 cargo test -q -p hangar-codex --lib -- --ignored regenerate_slice
 rodar env CARGO_BUILD_JOBS=4 cargo test -q -p hangar-codex --lib schema_check::fields_used_exist_in_checked_schema
-git -C "$raiz" status --short -- crates/hangar-codex/schema
+rodar env CODEX_SCHEMA_DIR="$tmp/schema" CARGO_BUILD_JOBS=4 cargo test -q -p hangar-codex-transfer --lib -- --ignored --exact schema_check::fields_used_exist_in_installed_codex
+if [ "$instalada" != "$conferida" ]; then rm -f "$raiz/crates/hangar-codex/schema/$conferida.json"; fi
+git -C "$raiz" status --short -- crates/hangar-codex/schema crates/hangar-codex/src/version.rs

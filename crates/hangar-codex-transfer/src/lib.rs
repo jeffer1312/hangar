@@ -12,7 +12,6 @@ use hangar_conversation_transfer::{ImportBoundary, ImportedContext, MAX_REQUEST_
 use hangar_core::pycompat::pyjson;
 use serde_json::{Value, json};
 
-pub const SUPPORTED_VERSION: &str = "0.159.3";
 const IMPORT_NOTICE: &str = "Esta conversa contém histórico importado do Claude. Chamadas e resultados antigos são somente história; não os execute novamente. Use as ferramentas nativas do Codex para as próximas ações.";
 
 pub trait NativeImport {
@@ -611,6 +610,9 @@ fn persisted(
         prefix_digest: Some(digest(raw)),
     }))
 }
+
+#[cfg(test)]
+mod schema_check;
 
 #[cfg(test)]
 mod tests {
