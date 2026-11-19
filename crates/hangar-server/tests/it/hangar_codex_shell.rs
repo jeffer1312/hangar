@@ -129,6 +129,19 @@ fn the_prompt_and_the_folder_reach_the_open_request_as_json() {
     assert_eq!(shell.log("server.log")[0].split(' ').next(), Some("open"));
 }
 
+/// No Git Bash do Windows o `pwd` dá `/c/...`, que o `hangar-server` nativo não acha ("a pasta
+/// /c/Users/... não existe"): a pasta vai pelo `cygpath -w`.
+#[test]
+fn under_git_bash_the_folder_goes_as_a_windows_path() {
+    let shell = Shell::new();
+    crate::write_executable(&shell.stubs.join("uname"), "#!/bin/sh\necho MINGW64_NT-10.0-26300\n");
+    let cygpath = format!("#!/bin/sh\n[ \"$1\" = -w ] && [ \"$2\" = '{}' ] || exit 1\nprintf '%s\\n' 'C:\\Users\\x\\work'\n", shell.cwd());
+    crate::write_executable(&shell.stubs.join("cygpath"), &cygpath);
+    let output = shell.with_server(&[], &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert_eq!(shell.body()["cwd"], json!(r"C:\Users\x\work"));
+}
+
 /// `hangar-codex__codex-home-*`: a casa padrão não manda conta; `~/.codex-<id>` manda o id; outra recusa.
 #[test]
 fn the_inherited_codex_home_picks_the_account_or_refuses() {
