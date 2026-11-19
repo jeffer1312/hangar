@@ -48,6 +48,8 @@ export interface WorkReviewsEvent { reviews: Record<string, WorkReviewSummary> }
 
 /** O que a pessoa escolheu, por id da decisão. */
 export type WorkReviewChoices = Record<string, { choice: string; reason: string }>;
+/** Teto do motivo que o servidor aceita (`MAX_REASON` do conector), em caracteres. */
+export const WORK_REVIEW_MAX_REASON = 2000;
 export interface WorkReviewDecisionsBody { review_id: string; decisions: { id: string; choice: string; reason?: string }[] }
 
 export type WorkReviewStepStatus = 'done' | 'current' | 'pending';

@@ -28,9 +28,12 @@ export function WorkReviewSection({ serverId, name, standalone = false }: Props)
   return <WorkReviewView state={state} name={name} standalone={standalone} />;
 }
 
-/** A sessão tem revisão: a lista a anunciou ou a leitura a trouxe. É o que decide a aba Revisão do tablet. */
+/** A aba Revisão do tablet. A última leitura concluída vence a lista, que pode ainda anunciar uma revisão já acabada;
+ * a releitura em segundo plano não volta a carregando, então a aba não pisca enquanto ela corre. */
 export function hasWorkReview({ summary, review, server, load }: WorkReviewController): boolean {
-  return !!summary || (!!review && !!server && load.status === 'ready' && load.data.linked && load.data.supported);
+  if (load.status === 'ready') return !!review && !!server && load.data.linked && load.data.supported;
+  // Sem leitura concluída, ou só com falha, vale o anúncio: carregando e erro só aparecem com ele.
+  return !!summary;
 }
 
 type ViewProps = {

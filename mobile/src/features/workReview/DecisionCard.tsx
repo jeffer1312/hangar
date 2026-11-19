@@ -1,7 +1,7 @@
 import { memo, useEffect, useRef, type ReactNode } from 'react';
 import { ActivityIndicator, Pressable, Text, TextInput, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { pendingCount, readyToSend } from '@hangar/core';
+import { WORK_REVIEW_MAX_REASON, pendingCount, readyToSend } from '@hangar/core';
 import type { WorkReview, WorkReviewChoice, WorkReviewChoices, WorkReviewSide } from '@hangar/core';
 import { Icon } from '../../ui/Icon';
 import { MultilineInput } from '../../ui/MultilineInput';
@@ -119,7 +119,7 @@ export function DecisionCard({ review, choices, index, sending, sendError, tall 
         <View style={styles.reasonBox}>
           {option.reason_prompt ? <Text style={styles.reasonPrompt}>{option.reason_prompt}</Text> : null}
           <MultilineInput ref={input} value={picked?.reason ?? ''} onChangeText={(text) => onReason(decision.id, text)}
-            accessibilityLabel={option.reason_prompt ?? option.label} maxHeight={140}
+            accessibilityLabel={option.reason_prompt ?? option.label} maxHeight={140} maxLength={WORK_REVIEW_MAX_REASON}
             style={[styles.input, { borderColor: reasonMissing ? theme.tokens.status.error : theme.tokens.border.default }]} />
           {reasonMissing ? <Text style={styles.error} accessibilityRole="alert">{m.work_review_reason_required()}</Text> : null}
         </View>

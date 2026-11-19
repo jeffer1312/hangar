@@ -86,10 +86,10 @@ pub(super) fn render(started: Instant, width: Pixels, window: &mut Window, cx: &
     let w = app::review_frame_width(inner, true);
     let h = (w * 0.5).clamp(70., 120.);
     let sample = &SAMPLES[index];
-    let quadro = |slot: &str| div().id(SharedString::from(format!("news-work-review-frame-{slot}")));
+    let frame = |slot: &str| div().id(SharedString::from(format!("news-work-review-frame-{slot}")));
     let frames = app::review_frames_row(
-        app::review_side_frame(quadro("left"), decision.left.as_ref().unwrap(), w, h, Some(shot(sample.left))),
-        Some(app::review_side_frame(quadro("right"), decision.right.as_ref().unwrap(), w, h, Some(shot(sample.right)))));
+        app::review_side_frame(frame("left"), decision.left.as_ref().unwrap(), w, h, Some(shot(sample.left))),
+        Some(app::review_side_frame(frame("right"), decision.right.as_ref().unwrap(), w, h, Some(shot(sample.right)))));
     let chosen = picked > index;
     let choices = decision.choices.iter().map(|c| app::review_choice_button(&decision.id, c, chosen && c.id == "match", cx).tab_stop(false)).collect();
     let done = (0..TOTAL).map(|n| n < picked).collect::<Vec<_>>();

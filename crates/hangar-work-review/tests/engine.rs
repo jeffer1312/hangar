@@ -275,6 +275,36 @@ async fn closed_session_forgets_its_branch_lookup() {
     assert_eq!(bench.calls("help", "work_tracking.get").len(), 2, "a busca da sessão que saiu não fica guardada");
 }
 
+/// Sem lista aberta só o vigia do fim de turno poda: a sessão que saiu das linhas dele é esquecida.
+#[tokio::test(flavor = "multi_thread")]
+async fn prune_forgets_sessions_outside_the_live_rows() {
+    let bench = Bench::new();
+    bench.connector("help", true, &["--plain-key", "on"]);
+    bench.set_review("help", review("r-1", "running", &[], "2026-11-18T10:00:00Z"));
+    bench.session("s1", "life-1", Some("PM-7"));
+    bench.engine.session_review("s1").await.unwrap();
+    bench.engine.prune(&[("s1", Some("life-1"))]);
+    bench.engine.session_review("s1").await.unwrap();
+    assert_eq!(bench.calls("help", "work_tracking.get").len(), 1, "a sessão viva mantém a busca guardada");
+    bench.engine.prune(&[("outra", None)]);
+    assert!(bench.summaries(&[("s1", Some("life-1"))]).get("s1").is_none(), "a vaga da que saiu foi apagada");
+    bench.engine.session_review("s1").await.unwrap();
+    assert_eq!(bench.calls("help", "work_tracking.get").len(), 2, "e a busca pela branch dela também");
+}
+
+/// Chave da vida ilegível: o vínculo gravado não é conferido, e a branch ainda acha o ticket.
+#[tokio::test(flavor = "multi_thread")]
+async fn without_the_session_key_only_the_branch_finds_the_ticket() {
+    let bench = Bench::new();
+    bench.connector("help", true, &["--plain-key", "on"]);
+    bench.set_review("help", review("r-1", "running", &[], "2026-11-18T10:00:00Z"));
+    let session = bench.session("s1", "life-1", Some("PM-7"));
+    bench.link("help", "1", &session);
+    bench.sessions.0.lock().unwrap().get_mut("s1").unwrap().key = None;
+    let linked = bench.engine.session_review("s1").await.unwrap().unwrap();
+    assert_eq!((linked.target.via, linked.target.ticket_id.as_str()), (Via::Branch, "PM-7"));
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn asset_uses_the_ticket_already_read_for_the_session() {
     let bench = Bench::new();

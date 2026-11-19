@@ -2,6 +2,7 @@
 //! O ID de asset pode ter `:` (proibido no Windows) e ponto solto, por isso o nome é hash. Tudo aqui é
 //! cache: falha de disco só faz pedir de novo ao conector.
 use hangar_connectors::work_review::{Asset, IMAGE_TYPES};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::SystemTime;
@@ -10,19 +11,27 @@ pub(crate) const LIMIT: u64 = 256 * 1024 * 1024;
 
 fn hash(text: &str) -> String { sha1_smol::Sha1::from(text).digest().to_string() }
 
+#[derive(Default)]
+struct Disk {
+    /// Bytes em disco: lidos na primeira escrita, depois somados e subtraídos. Só a passada da limpeza
+    /// relê a árvore, e corrige o que escapou da conta.
+    bytes: Option<u64>,
+    /// Rodada atual de cada pasta de ticket, gravada por `keep_only` sob esta trava: a imagem atrasada
+    /// de outra rodada não recria a pasta que acabou de sair.
+    rounds: HashMap<PathBuf, String>,
+}
+
 #[derive(Clone)]
 pub(crate) struct AssetCache {
     root: PathBuf,
     limit: u64,
-    /// Bytes em disco: lidos na primeira escrita, depois somados e subtraídos. Só a passada da limpeza
-    /// relê a árvore, e corrige o que escapou da conta.
-    total: Arc<Mutex<Option<u64>>>,
+    disk: Arc<Mutex<Disk>>,
 }
 
 impl AssetCache {
-    pub(crate) fn new(cache_dir: &Path, limit: u64) -> Self { Self { root: cache_dir.join("work-review"), limit, total: Arc::default() } }
+    pub(crate) fn new(cache_dir: &Path, limit: u64) -> Self { Self { root: cache_dir.join("work-review"), limit, disk: Arc::default() } }
 
-    fn total(&self) -> MutexGuard<'_, Option<u64>> { self.total.lock().unwrap_or_else(|e| e.into_inner()) }
+    fn disk(&self) -> MutexGuard<'_, Disk> { self.disk.lock().unwrap_or_else(|e| e.into_inner()) }
 
     /// O conector vira pasta: só `[a-z][a-z0-9-]{0,63}`. O do manifesto já passa por `valid_id` no
     /// cadastro, mas o do vínculo vem do `mission.json`.
@@ -48,17 +57,18 @@ impl AssetCache {
         let (Some(keep), Some(dir)) = (self.ticket_dir(connector, ticket), self.review_dir(connector, ticket, review)) else { return };
         let cache = self.clone();
         let path = dir.join(hash(asset)).with_extension(kind.ext);
-        let bytes = image.bytes.clone();
+        let (bytes, round) = (image.bytes.clone(), hash(review));
         let done = tokio::task::spawn_blocking(move || {
-            let mut total = cache.total();
+            let mut disk = cache.disk();
+            if disk.rounds.get(&keep).is_some_and(|current| *current != round) { return; }
             let before = file_size(&path);
             let written = path.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|()| hangar_core::fs::atomic_write(&path, &bytes));
             if let Err(error) = written { tracing::warn!(code = "work_review_asset_cache_write", error = ?error.kind(), "work_review: imagem não foi ao cache"); }
-            let now = match *total {
+            let now = match disk.bytes {
                 Some(known) => (known + file_size(&path)).saturating_sub(before),
                 None => cache.tickets().iter().map(|(_, size, _)| size).sum(),
             };
-            *total = Some(if now > cache.limit { cache.evict(&keep) } else { now });
+            disk.bytes = Some(if now > cache.limit { cache.evict(&keep, &mut disk.rounds) } else { now });
         }).await;
         if let Err(error) = done { tracing::warn!(code = "work_review_asset_cache_join", %error, "work_review: gravação no cache interrompida"); }
     }
@@ -68,14 +78,15 @@ impl AssetCache {
         let (Some(dir), keep) = (self.ticket_dir(connector, ticket), hash(review)) else { return };
         let cache = self.clone();
         let done = tokio::task::spawn_blocking(move || {
+            let mut disk = cache.disk();
+            disk.rounds.insert(dir.clone(), keep.clone());
             let Ok(entries) = std::fs::read_dir(&dir) else { return };
-            let mut total = cache.total();
             for entry in entries.flatten().filter(|entry| entry.file_name().to_str() != Some(keep.as_str())) {
                 let before = review_size(&entry.path());
                 let _ = std::fs::remove_dir_all(entry.path());
                 // O que não saiu continua na conta.
                 let gone = before.saturating_sub(review_size(&entry.path()));
-                if let Some(known) = total.as_mut() { *known = known.saturating_sub(gone); }
+                if let Some(known) = disk.bytes.as_mut() { *known = known.saturating_sub(gone); }
             }
         }).await;
         if let Err(error) = done { tracing::warn!(code = "work_review_asset_cache_join", %error, "work_review: limpeza das rodadas antigas interrompida"); }
@@ -91,14 +102,17 @@ impl AssetCache {
 
     /// Acima do teto, saem as pastas de ticket menos usadas, nunca a que acabou de receber a imagem.
     /// Devolve o total relido depois da limpeza.
-    fn evict(&self, keep: &Path) -> u64 {
+    fn evict(&self, keep: &Path, rounds: &mut HashMap<PathBuf, String>) -> u64 {
         let mut tickets = self.tickets();
         let mut total: u64 = tickets.iter().map(|(_, size, _)| size).sum();
         tickets.sort_by_key(|(newest, _, _)| *newest);
         for (_, size, path) in tickets {
             if total <= self.limit { break; }
             if path == keep { continue; }
-            if std::fs::remove_dir_all(&path).is_ok() { total = total.saturating_sub(size); }
+            if std::fs::remove_dir_all(&path).is_ok() {
+                total = total.saturating_sub(size);
+                rounds.remove(&path);
+            }
         }
         total
     }
@@ -176,10 +190,22 @@ mod tests {
         cache.put("help", "t-1", "r-1", "a:1", &png(1000)).await;
         cache.put("help", "t-1", "r-1", "a:2", &png(500)).await;
         cache.put("help", "t-1", "r-1", "a:2", &png(700)).await;
-        assert_eq!(*cache.total(), Some(1700), "a mesma imagem regravada troca o tamanho, não soma");
+        assert_eq!(cache.disk().bytes, Some(1700), "a mesma imagem regravada troca o tamanho, não soma");
         cache.put("help", "t-1", "r-2", "a:1", &png(300)).await;
         cache.keep_only("help", "t-1", "r-2").await;
-        assert_eq!(*cache.total(), Some(300), "a rodada apagada sai da conta");
+        assert_eq!(cache.disk().bytes, Some(300), "a rodada apagada sai da conta");
+    }
+
+    #[tokio::test]
+    async fn a_late_image_of_a_dropped_round_does_not_come_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = AssetCache::new(dir.path(), LIMIT);
+        cache.put("help", "t-1", "r-1", "a:1", &png(100)).await;
+        cache.keep_only("help", "t-1", "r-2").await;
+        cache.put("help", "t-1", "r-1", "a:2", &png(100)).await;
+        assert!(!cache.review_dir("help", "t-1", "r-1").unwrap().exists(), "a pasta da rodada apagada não volta");
+        cache.put("help", "t-1", "r-2", "a:1", &png(100)).await;
+        assert!(cache.get("help", "t-1", "r-2", "a:1").await.is_some(), "a rodada atual grava");
     }
 
     #[tokio::test]

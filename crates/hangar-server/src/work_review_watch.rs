@@ -54,8 +54,14 @@ impl Sessions for SessionNotify {
                 }
             };
             let (key, group_id) = tokio::join!(identity, group);
-            // Sem a chave da vida o vínculo gravado não confere; a tool `mission` também recusa.
-            let key = key.map_err(|_| "session_key_unavailable")?;
+            // Sem a chave da vida o vínculo gravado não confere (a tool `mission` também recusa), mas a
+            // busca pela branch não precisa dela.
+            let key = key.unwrap_or_else(|_| {
+                if hangar_core::warn_limit::allow(Some(&name), "work_review_session_key_unavailable") {
+                    state.diag.report(EVENT, &name, "work_review_session_key_unavailable", "chave da sessão ilegível; só a branch acha o ticket");
+                }
+                None
+            });
             let group_id = group_id.map_err(|_| "groups_unavailable")?;
             Ok(Some(SessionRef { name, lifecycle_id, key, group_id, branch }))
         }.await; read.map_err(str::to_owned) })
@@ -97,13 +103,17 @@ async fn run(st: Arc<AppState>) {
         let sub = st.hub.subscribe_internal(&st.list, &st.devices, &st.diag);
         let mut tracker = TurnTracker::new();
         let mut checked = Instant::now();
+        let mut live: Option<Vec<(String, Option<String>)>> = None;
         loop {
             tokio::time::sleep(TICK).await;
             let rows = sub.rows().map(|rows| turn_rows(&rows));
+            if let Some(rows) = &rows { prune(&engine, rows, &mut live); }
             let ended = tracker.ended(rows.as_deref());
             if !ended.is_empty() { tokio::spawn(reread(st.clone(), engine.clone(), ended)); }
             if checked.elapsed() >= RECHECK {
                 checked = Instant::now();
+                // A releitura que termina depois da poda recria a vaga de quem já saiu: poda de novo no próximo tique.
+                live = None;
                 if !offered(&st, &mut failing).await { break; }
             }
         }
@@ -129,6 +139,15 @@ async fn offered(st: &AppState, failing: &mut bool) -> bool {
     false
 }
 
+/// Sem lista do dono aberta, só daqui o engine esquece as sessões que saíram; poda quando as linhas mudam.
+fn prune(engine: &Engine, rows: &[TurnRow], live: &mut Option<Vec<(String, Option<String>)>>) {
+    let mut now: Vec<(String, Option<String>)> = rows.iter().map(|row| (row.name.clone(), row.lifecycle_id.clone())).collect();
+    now.sort();
+    if live.as_ref() == Some(&now) { return; }
+    engine.prune(&now.iter().map(|(name, life)| (name.as_str(), life.as_deref())).collect::<Vec<_>>());
+    *live = Some(now);
+}
+
 fn turn_rows(rows: &[SessionRow]) -> Vec<TurnRow> {
     rows.iter().map(|row| TurnRow { name: row.name.clone(), lifecycle_id: row.lifecycle_id.clone(), state: row.state.clone(),
         last_reply_at: row.last_reply_at, branch: row.branch.clone() }).collect()
@@ -145,12 +164,16 @@ async fn reread(st: Arc<AppState>, engine: Arc<Engine>, ended: Vec<Ended>) {
     }
 }
 
-/// Leitura que falhou vai ao diário: em segundo plano não há tela para o erro.
+/// Leitura que falhou vai ao diário, uma vez por minuto por sessão e código: em segundo plano não há tela
+/// para o erro, e a falha que persiste se repetiria a cada fim de turno.
 async fn resolved(st: &AppState, name: String) -> Option<SessionRef> {
     match Sessions::resolve(&*st.mission_notify, name.clone()).await {
         Ok(session) => session,
         Err(code) => {
-            st.diag.report(EVENT, &name, &format!("work_review_session_unreadable:{code}"), "sessão sem leitura; revisão não relida");
+            let code = format!("work_review_session_unreadable:{code}");
+            if hangar_core::warn_limit::allow(Some(&name), &code) {
+                st.diag.report(EVENT, &name, &code, "sessão sem leitura; revisão não relida");
+            }
             None
         }
     }

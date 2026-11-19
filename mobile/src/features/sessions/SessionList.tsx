@@ -135,7 +135,7 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
     router.push(`/s/${s.serverId}/${s.name}/git` as never);
   }, [router, onClose]);
   // O chip da revisão decide pelo celular, sem abrir a conversa.
-  const abrirRevisao = useCallback((s: AggSession) => {
+  const openReview = useCallback((s: AggSession) => {
     onClose();
     router.push(`/s/${encodeURIComponent(s.serverId)}/${encodeURIComponent(s.name)}/work-review` as never);
   }, [router, onClose]);
@@ -574,7 +574,7 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
               mostrarServidor={todos.length > 1 && (modo !== 'server' || section.id.startsWith('state:') || item.serverId !== section.id)}
               onPress={abrir}
               onGit={abrirGit}
-              onWorkReview={proprios.has(item.serverId) && !item.outside ? abrirRevisao : undefined}
+              onWorkReview={proprios.has(item.serverId) && !item.outside ? openReview : undefined}
               onExcluir={excluir}
               onRenomear={setRenomeando}
               onResume={retomar}

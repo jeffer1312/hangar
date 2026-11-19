@@ -27,6 +27,10 @@ const IMAGE_BUDGET: usize = 64 * 1024 * 1024;
 /// Imagem guardada por (asset, inteira): o asset é imutável dentro da rodada, e trocar de rodada ou sessão esvazia tudo.
 type AssetKey = (String, bool);
 
+/// Busca de imagem que falhou: `read` é a leitura da revisão em que foi pedida; `stale`, se o servidor disse rodada vencida.
+#[derive(Clone, Copy)]
+struct FailedAsset { read: u64, stale: bool }
+
 pub(super) struct Loaded { pub(super) via_branch: bool, pub(super) review: Arc<WorkReview> }
 
 pub(super) struct Reason { input: Entity<TextareaState>, _changed: Subscription }
@@ -48,6 +52,10 @@ pub(super) struct Panel {
     kept_open: bool,
     /// Buscando ou ilegível, o quadro mostra o marcador no lugar.
     images: media::MediaCache<AssetKey>,
+    /// Só volta a pedir depois de outra leitura da revisão: tentar a cada desenho seria um laço.
+    failed: HashMap<AssetKey, FailedAsset>,
+    /// Sobe a cada leitura da revisão que chega e ao abrir a aba pelo chip.
+    reads: u64,
     /// Sobe a cada `clear_round`: a imagem que chega de uma rodada ou sessão anterior não entra.
     round: u64,
     advance_seq: u64,
@@ -59,7 +67,7 @@ pub(super) struct Panel {
 impl Default for Panel {
     fn default() -> Self {
         Self { owner: None, seen: None, read: Remote::default(), reading: model::Read::Open, choices: Choices::new(), reasons: HashMap::new(), index: 0,
-            sending: false, send_error: None, resolved_closed: false, kept_open: false, images: media::MediaCache::with_budget(IMAGE_BUDGET), round: 0,
+            sending: false, send_error: None, resolved_closed: false, kept_open: false, images: media::MediaCache::with_budget(IMAGE_BUDGET), failed: HashMap::new(), reads: 0, round: 0,
             advance_seq: 0, strip: ScrollHandle::new(), scroll: ScrollHandle::new() }
     }
 }
@@ -75,6 +83,7 @@ impl Panel {
     /// Rodada ou sessão nova: escolhas, caixas e imagens eram da anterior.
     fn clear_round(&mut self, window: &mut Window, cx: &mut App) {
         for image in self.images.clear() { cx.drop_image(image, Some(window)); }
+        self.failed.clear();
         self.round += 1;
         self.choices.clear();
         self.reasons.clear();
@@ -164,6 +173,7 @@ impl Hangar {
     fn open_work_review(&mut self, target: &super::sidebar::Target, window: &mut Window, cx: &mut Context<Self>) {
         self.clear_hover();
         if self.select_target(target, window, cx).is_none() { return; }
+        self.work_review.reads += 1;
         if !self.side.open { self.toggle_side(cx); }
         self.choose_side_tab(crate::appearance::SideTab::Review, window, cx);
     }
@@ -270,16 +280,17 @@ impl Hangar {
             panel.reasons.retain(|id, _| panel.choices.contains_key(id));
             panel.index = panel.index.min(loaded.review.decisions.len().saturating_sub(1));
         }
+        panel.reads += 1;
         panel.read.finish(seq, Ok(loaded));
     }
 
-    /// Busca o asset uma vez por rodada; `full` decodifica no tamanho dos quadros e da cortina, senão a miniatura.
+    /// Busca o asset uma vez por rodada (a que falhou, de novo depois da próxima leitura); `full` decodifica no tamanho dos quadros e da cortina, senão a miniatura.
     pub(super) fn want_review_image(&mut self, asset: &str, full: bool, window: &mut Window, cx: &mut Context<Self>) {
         let panel = &self.work_review;
         let (Some(owner), Some(review)) = (panel.owner.as_ref(), panel.review()) else { return };
         let slot = (asset.to_owned(), full);
-        if panel.images.contains(&slot) { return; }
-        let (name, review_id, round) = (owner.name.clone(), review.id.clone(), panel.round);
+        if panel.images.contains(&slot) && panel.failed.get(&slot).is_none_or(|failed| failed.read == panel.reads) { return; }
+        let (name, review_id, round, read) = (owner.name.clone(), review.id.clone(), panel.round, panel.reads);
         let Some(api) = self.api_for(&owner.server) else { return };
         self.work_review.images.start(slot.clone());
         let asset = slot.0.clone();
@@ -307,11 +318,21 @@ impl Hangar {
             }
             match result {
                 Ok(image) => {
+                    this.work_review.failed.remove(&slot);
                     let state = image.map_or_else(|| media::MediaState::Failed(String::new()), media::MediaState::Image);
                     for old in this.work_review.images.insert(slot, state) { cx.drop_image(old, Some(window)); }
                 }
-                Err(error) if error.code.as_deref() == Some("stale_review") => this.load_work_review(model::Read::Background, window, cx),
-                Err(error) => crate::log_line(&format!("work_review.asset_failed status={:?} code={}", error.status, error.code.as_deref().unwrap_or("-"))),
+                Err(error) => {
+                    let code = error.code.clone().unwrap_or_default();
+                    let stale = code == "stale_review";
+                    let panel = &mut this.work_review;
+                    // Vencida de novo logo depois de reler: não relê outra vez, espera a próxima leitura.
+                    let reread = stale && !panel.failed.get(&slot).is_some_and(|failed| failed.stale);
+                    panel.failed.insert(slot.clone(), FailedAsset { read, stale });
+                    for old in panel.images.insert(slot, media::MediaState::Failed(code)) { cx.drop_image(old, Some(window)); }
+                    if reread { this.load_work_review(model::Read::Background, window, cx); }
+                    if !stale { crate::log_line(&format!("work_review.asset_failed status={:?} code={}", error.status, error.code.as_deref().unwrap_or("-"))); }
+                }
             }
         });
     }
@@ -346,9 +367,14 @@ impl Hangar {
         let input = cx.new(|cx| TextareaState::new(window, cx).auto_grow(2, 6));
         input.update(cx, |input, cx| { input.set_value(reason, window, cx); input.focus(window, cx); });
         let id = decision.clone();
-        let changed = cx.subscribe(&input, move |this: &mut Hangar, input, event: &InputEvent, cx| {
+        let changed = cx.subscribe_in(&input, window, move |this: &mut Hangar, input, event: &InputEvent, window, cx| {
             if !matches!(event, InputEvent::Change) { return; }
-            let value = input.read(cx).value().to_string();
+            let mut value = input.read(cx).value().to_string();
+            // A caixa não tem teto próprio: o excedente sai aqui, senão o envio voltaria recusado.
+            if let Some(capped) = model::capped_reason(&value) {
+                value = capped.clone();
+                input.update(cx, |input, cx| input.set_value(capped, window, cx));
+            }
             if let Some(picked) = this.work_review.choices.get_mut(&id) { picked.reason = value; }
             cx.notify();
         });
@@ -492,11 +518,11 @@ impl Hangar {
     fn render_side_frame(&mut self, slot: &'static str, decision: &WorkReviewDecision, side: &WorkReviewSide, w: f32, cx: &mut Context<Self>) -> Div {
         let image = self.work_review.image(&side.asset, true);
         let decision_id = decision.id.clone();
-        let quadro = div().id(SharedString::from(format!("work-review-frame-{slot}-{}", decision.id)))
+        let frame = div().id(SharedString::from(format!("work-review-frame-{slot}-{}", decision.id)))
             .cursor(CursorStyle::PointingHand)
             .role(Role::Button).aria_label(format!("{} · {}", decision.title, side.label))
             .on_click(cx.listener(move |this, _, window, cx| this.open_decision_compare(decision_id.clone(), window, cx)));
-        side_frame(quadro, side, w, FRAME_H, image.map(|image| img(image).size_full().into_any_element()))
+        side_frame(frame, side, w, FRAME_H, image.map(|image| img(image).size_full().into_any_element()))
     }
 
     fn open_decision_compare(&mut self, decision: String, window: &mut Window, cx: &mut Context<Self>) {
@@ -605,21 +631,21 @@ pub(crate) fn decision_frame_width(inner: f32, pair: bool) -> f32 {
 pub(crate) fn frames_row(left: Div, right: Option<Div>) -> Div { div().flex().gap(px(8.)).child(left).children(right) }
 
 /// Um lado da decisão: rótulo e valor em cima e o quadro `w`×`h` com zoom no trecho e a moldura vermelha. `fill` ocupa o
-/// lugar da imagem no quadro; sem ele, o marcador de imagem. `quadro` traz id, clique e acessibilidade de quem chama.
-pub(crate) fn side_frame(quadro: Stateful<Div>, side: &WorkReviewSide, w: f32, h: f32, fill: Option<AnyElement>) -> Div {
+/// lugar da imagem no quadro; sem ele, o marcador de imagem. `frame` traz id, clique e acessibilidade de quem chama.
+pub(crate) fn side_frame(frame: Stateful<Div>, side: &WorkReviewSide, w: f32, h: f32, fill: Option<AnyElement>) -> Div {
     let framing = model::frame((w, h), (side.width, side.height), side.frame);
-    let mut quadro = quadro.relative().w(px(w)).h(px(h))
+    let mut frame = frame.relative().w(px(w)).h(px(h))
         // Fundo branco como o do desenho: o zoom perto da borda da captura não mostra uma faixa escura.
         .overflow_hidden().rounded(px(6.)).border_1().border_color(theme::border()).bg(if fill.is_some() { gpui::white() } else { theme::inset() });
-    quadro = match fill {
-        Some(fill) => quadro.child(div().absolute().left(px(framing.image.x)).top(px(framing.image.y)).w(px(framing.image.w)).h(px(framing.image.h)).child(fill)),
-        None => quadro.flex().items_center().justify_center().child(chrome::small_icon(IconName::Image, 20., theme::faint())),
+    frame = match fill {
+        Some(fill) => frame.child(div().absolute().left(px(framing.image.x)).top(px(framing.image.y)).w(px(framing.image.w)).h(px(framing.image.h)).child(fill)),
+        None => frame.flex().items_center().justify_center().child(chrome::small_icon(IconName::Image, 20., theme::faint())),
     };
     if let Some(mark) = framing.mark {
         // O lado de fora do trecho escurece em quatro faixas: a sombra gigante do web não é recortada aqui.
         let dim = theme::scrim().opacity(0.32);
         let (right, bottom) = (mark.x + mark.w, mark.y + mark.h);
-        quadro = quadro
+        frame = frame
             .child(div().absolute().left_0().top_0().w(px(w)).h(px(mark.y.max(0.))).bg(dim))
             .child(div().absolute().left_0().top(px(bottom)).w(px(w)).h(px((h - bottom).max(0.))).bg(dim))
             .child(div().absolute().left_0().top(px(mark.y)).w(px(mark.x.max(0.))).h(px(mark.h)).bg(dim))
@@ -630,7 +656,7 @@ pub(crate) fn side_frame(quadro: Stateful<Div>, side: &WorkReviewSide, w: f32, h
         .child(div().flex().items_center().gap_2().text_size(px(11.)).text_color(theme::muted())
             .child(div().flex_1().min_w_0().truncate().child(side.label.clone()))
             .children(side.value.clone().map(|v| div().flex_shrink_0().font_family(theme::MONO).font_weight(FontWeight::MEDIUM).text_color(theme::text()).child(v))))
-        .child(quadro)
+        .child(frame)
 }
 
 /// Uma escolha da decisão; quem chama põe o clique. Escolhida, ganha o tom (âmbar quando pede motivo).

@@ -38,6 +38,14 @@ pub(super) fn ready_to_send(review: &WorkReview, choices: &Choices) -> bool {
 
 pub(super) fn initial_reason(choice: &WorkReviewChoice) -> String { choice.default_reason.clone().unwrap_or_default() }
 
+/// O teto do servidor (`MAX_REASON` em `hangar-connectors`), em caracteres: acima dele o envio volta recusado.
+pub(super) const MAX_REASON: usize = 2000;
+
+/// O motivo cortado no teto; `None` quando já cabe.
+pub(super) fn capped_reason(text: &str) -> Option<String> {
+    text.char_indices().nth(MAX_REASON).map(|(at, _)| text[..at].to_owned())
+}
+
 pub(super) fn state_tone(state: WorkReviewState) -> Tone {
     match state {
         WorkReviewState::Running => Tone::Accent,
@@ -230,6 +238,12 @@ mod tests {
         let r = two();
         assert_eq!(initial_reason(&r.decisions[0].choices[1]), "padrão do kit");
         assert_eq!(initial_reason(&r.decisions[0].choices[0]), "");
+    }
+
+    #[test]
+    fn reason_is_capped_in_characters_at_the_server_limit() {
+        assert_eq!(capped_reason(&"é".repeat(MAX_REASON)), None, "no teto, conta caractere e não byte");
+        assert_eq!(capped_reason(&format!("{}xyz", "é".repeat(MAX_REASON))), Some("é".repeat(MAX_REASON)));
     }
 
     #[test]

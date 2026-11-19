@@ -33,7 +33,7 @@ vi.mock('./CompareCurtain', () => ({
 }));
 
 import { setWorkReviewSummaries, clearWorkReviewSummaries } from './summaries';
-import { WorkReviewSection } from './WorkReviewSection';
+import { WorkReviewSection, hasWorkReview } from './WorkReviewSection';
 import { useWorkReview } from './useWorkReview';
 
 const waiting = (): WorkReview => ({
@@ -256,6 +256,41 @@ describe('WorkReviewSection', () => {
     await act(async () => root.render(createElement(Probe, { enabled: true })));
     await flush();
     expect(api.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('aba Revisão: a leitura concluída vence a lista, e a releitura em voo mantém o último resultado', async () => {
+    const shown: boolean[] = [];
+    const Probe = () => { shown.push(hasWorkReview(useWorkReview('srv', 'pm'))); return null; };
+    const deferred = () => { let resolve!: (v: WorkReviewResponse) => void; const p = new Promise<WorkReviewResponse>((r) => { resolve = r; }); return { p, resolve }; };
+    const last = () => shown[shown.length - 1];
+
+    setWorkReviewSummaries('srv', { pm: { review_id: 'r-7', state: 'waiting', badge: null, updated_at: 'x' } });
+    const first = deferred();
+    api.fetch.mockReturnValueOnce(first.p);
+    await act(async () => root.render(createElement(Probe)));
+    await flush();
+    expect(last()).toBe(true);
+
+    // A lista ainda anuncia, mas a leitura disse que não há revisão.
+    await act(async () => first.resolve(linked(null)));
+    await flush();
+    expect(last()).toBe(false);
+
+    const second = deferred();
+    api.fetch.mockReturnValueOnce(second.p);
+    const before = shown.length;
+    await act(async () => setWorkReviewSummaries('srv', { pm: { review_id: 'r-8', state: 'waiting', badge: null, updated_at: 'y' } }));
+    await flush();
+    expect(api.fetch).toHaveBeenCalledTimes(2);
+    expect(shown.slice(before).every((v) => !v)).toBe(true);
+    await act(async () => second.resolve(linked(waiting())));
+    await flush();
+    expect(last()).toBe(true);
+
+    api.fetch.mockResolvedValueOnce({ linked: false });
+    await act(async () => setWorkReviewSummaries('srv', { pm: { review_id: 'r-8', state: 'done', badge: null, updated_at: 'z' } }));
+    await flush();
+    expect(last()).toBe(false);
   });
 
   it('o evento da lista com outra rodada relê a revisão', async () => {

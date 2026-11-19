@@ -10,9 +10,9 @@ import * as m from '../../paraglide/messages';
 const focus = vi.hoisted(() => vi.fn());
 vi.mock('../../ui/Icon', () => ({ Icon: () => null }));
 vi.mock('../../ui/MultilineInput', () => ({
-  MultilineInput: forwardRef((p: { value: string }, ref) => {
+  MultilineInput: forwardRef((p: { value: string; maxLength?: number }, ref) => {
     useImperativeHandle(ref, () => ({ focus }));
-    return createElement('textarea', { value: p.value, readOnly: true });
+    return createElement('textarea', { value: p.value, readOnly: true, maxLength: p.maxLength });
   }),
 }));
 vi.mock('./ZoomFrame', () => ({ ZoomFrame: () => null }));
@@ -82,5 +82,10 @@ describe('DecisionCard', () => {
     render(1);
     render(0, { a: { choice: 'manter', reason: '' } });
     expect(focus).toHaveBeenCalledTimes(1);
+  });
+
+  it('o motivo para no teto que o servidor aceita', () => {
+    render(0, { a: { choice: 'manter', reason: '' } });
+    expect(container.querySelector('textarea')!.maxLength).toBe(2000);
   });
 });

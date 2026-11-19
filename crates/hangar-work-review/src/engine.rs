@@ -5,7 +5,7 @@ use hangar_connectors::protocol::{ConnectorError, ErrorCode};
 use hangar_connectors::registry::Entry;
 use hangar_connectors::work_review::{self, Answer, Asset, AssetRefs, Badge, DecideParams, Review, ReviewState};
 use hangar_connectors::work_tracking::GetParams;
-use hangar_connectors::{AdminError, CallError};
+use hangar_connectors::{AdminError, AdminKind, CallError};
 use hangar_mission::Store;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -15,15 +15,20 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use tokio::sync::{Notify, Semaphore};
 
 pub type Task<T> = Pin<Box<dyn Future<Output = T> + Send>>;
+
+/// Branch que não é ticket volta a ser procurada depois disto: o ticket pode ser criado depois.
+const BRANCH_MISS_TTL: Duration = Duration::from_secs(5 * 60);
 
 /// Quem a sessão é agora; quem monta é o servidor, com a mesma identidade da tool `mission`.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SessionRef {
     pub name: String,
     pub lifecycle_id: Option<String>,
+    /// `None`: a chave da vida não foi lida. O vínculo gravado não confere sem ela; só a branch acha o ticket.
     pub key: Option<String>,
     pub group_id: Option<String>,
     pub branch: Option<String>,
@@ -119,12 +124,31 @@ struct Slot {
     published: u64,
 }
 
+/// Resultado da busca pela branch e quando foi feita.
+struct BranchHit { target: Option<Target>, at: Instant }
+
 #[derive(Default)]
 struct State {
     slots: HashMap<String, Slot>,
     /// Busca pela branch por `(conector, branch)`, inclusive o negativo; erro não entra.
-    branches: HashMap<(String, String), Option<Target>>,
+    branches: HashMap<(String, String), BranchHit>,
     seq: u64,
+}
+
+impl State {
+    /// Esquece as sessões fora de `current` e as buscas pela branch que só elas usavam.
+    fn prune(&mut self, current: &[(&str, Option<&str>)]) {
+        self.slots.retain(|name, slot| slot.running || current.iter().any(|(current, _)| current == name));
+        // As de fechadas e renomeadas não voltam a ser pedidas.
+        let live: std::collections::HashSet<String> = self.slots.values().filter_map(|slot| slot.branch.clone()).collect();
+        self.branches.retain(|(_, branch), _| live.contains(branch));
+    }
+
+    /// O achado vale até a branch mudar; o negativo, só por `BRANCH_MISS_TTL`.
+    fn cached_branch(&self, key: &(String, String), now: Instant) -> Option<Option<Target>> {
+        let hit = self.branches.get(key)?;
+        (hit.target.is_some() || now.saturating_duration_since(hit.at) < BRANCH_MISS_TTL).then(|| hit.target.clone())
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -167,13 +191,21 @@ impl Engine {
         Ok(self.host.list()?.iter().any(|status| offers_review(&status.entry)))
     }
 
+    /// O catálogo lê e interpreta um arquivo: fora do runtime assíncrono.
+    async fn catalog(&self) -> Catalog {
+        let host = self.host.clone();
+        tokio::task::spawn_blocking(move || host.list()).await
+            .unwrap_or_else(|_| Err(AdminError::new(AdminKind::RegistryUnavailable, "leitura do catálogo interrompida")))
+    }
+
+    /// Esquece as sessões que saíram da lista. O vigia do fim de turno chama com as linhas dele: sem lista
+    /// aberta, `summaries_for` não roda e as vagas criadas pelos turnos ficariam para sempre.
+    pub fn prune(&self, current: &[(&str, Option<&str>)]) { self.lock().prune(current); }
+
     /// Corpo do evento `work_reviews`: só as sessões atuais, na mesma vida, com revisão.
     pub fn summaries_for(&self, current: &[(&str, Option<&str>)]) -> Value {
         let mut state = self.lock();
-        state.slots.retain(|name, slot| slot.running || current.iter().any(|(current, _)| current == name));
-        // Só as branches das sessões vivas: as de fechadas e renomeadas não voltam a ser pedidas.
-        let live: std::collections::HashSet<String> = state.slots.values().filter_map(|slot| slot.branch.clone()).collect();
-        state.branches.retain(|(_, branch), _| live.contains(branch));
+        state.prune(current);
         let mut reviews = serde_json::Map::new();
         for (name, life) in current {
             if let Some(slot) = state.slots.get(*name) && slot.life.as_deref() == *life && let Some(summary) = &slot.summary {
@@ -208,13 +240,14 @@ impl Engine {
         };
         let target = match slot(self).and_then(|(target, _)| target) {
             Some(target) => target,
-            None => self.locate(&session, false, &self.host.list()).await?.ok_or(Failure::NotLinked)?,
+            None => self.locate(&session, false, &self.catalog().await).await?.ok_or(Failure::NotLinked)?,
         };
         if let Some(hit) = self.assets.get(&target.connector, &target.ticket_id, review_id, asset).await { return Ok(hit); }
         let params = refs.for_ticket(target.ticket_id.clone())?;
         let image = self.host.review_asset(&target.connector, params).await?;
         // Só a rodada atual (conferida depois da resposta) vai ao disco: a resposta atrasada de uma
         // rodada antiga recriaria a pasta apagada, e qualquer `review_id` pedido criaria pasta nova.
+        // A rodada que troca entre esta conferência e a gravação o cache recusa sob a própria trava.
         let current = slot(self).and_then(|(known, review)| (known.as_ref() == Some(&target)).then_some(review).flatten());
         if current.as_deref() == Some(review_id) {
             self.assets.put(&target.connector, &target.ticket_id, review_id, asset, &image).await;
@@ -316,11 +349,11 @@ impl Engine {
         self.slot(&mut state, session).generation += 1;
     }
 
-    /// Grava o resultado se nenhuma escrita nem leitura mais nova passou na frente.
-    fn publish(&self, session: &SessionRef, turn: Turn, target: Option<&Target>, review: Option<&Review>) {
+    /// Grava o resultado se nenhuma escrita nem leitura mais nova passou na frente; `false` quando não gravou.
+    fn publish(&self, session: &SessionRef, turn: Turn, target: Option<&Target>, review: Option<&Review>) -> bool {
         let mut state = self.lock();
-        let Some(slot) = state.slots.get_mut(&session.name) else { return };
-        if slot.life != session.lifecycle_id || slot.generation != turn.generation || turn.seq < slot.published { return; }
+        let Some(slot) = state.slots.get_mut(&session.name) else { return false };
+        if slot.life != session.lifecycle_id || slot.generation != turn.generation || turn.seq < slot.published { return false; }
         slot.published = turn.seq;
         slot.target = target.cloned();
         let summary = review.map(Summary::of);
@@ -328,6 +361,7 @@ impl Engine {
             slot.summary = summary;
             self.notify_changed();
         }
+        true
     }
 
     /// Vínculo trocado de ticket: o resumo do anterior sai antes da leitura, que pode falhar.
@@ -341,7 +375,7 @@ impl Engine {
 
     async fn read(&self, session: &SessionRef, background: bool) -> Result<Option<Linked>, Failure> {
         let turn = self.begin(session);
-        let catalog = self.host.list();
+        let catalog = self.catalog().await;
         let Some(target) = self.locate(session, background, &catalog).await? else {
             self.publish(session, turn, None, None);
             return Ok(None);
@@ -354,21 +388,27 @@ impl Engine {
             let params = GetParams::new(target.ticket_id.clone())?;
             self.queued(background, &target.connector, self.host.get_review(&target.connector, params)).await?
         } else { None };
-        if let Some(review) = &review { self.assets.keep_only(&target.connector, &target.ticket_id, &review.id).await; }
-        self.publish(session, turn, Some(&target), review.as_ref());
+        // Depois de publicar: a imagem atrasada da rodada anterior já não passa pela conferência de `asset`.
+        // A leitura que não gravou deixa a limpeza para a que gravou.
+        if self.publish(session, turn, Some(&target), review.as_ref()) && let Some(review) = &review {
+            self.assets.keep_only(&target.connector, &target.ticket_id, &review.id).await;
+        }
         Ok(Some(Linked { target, supported, review, fetched_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true) }))
     }
 
     /// O vínculo do Tickets vence; sem ele, o ticket cujo `key` é a branch, em cada conector com a revisão.
     async fn locate(&self, session: &SessionRef, background: bool, catalog: &Catalog) -> Result<Option<Target>, Failure> {
-        let store = self.mission.clone();
-        let snapshot = tokio::task::spawn_blocking(move || store.snapshot()).await
-            .map_err(|_| CallError::connector(ErrorCode::Unavailable, "leitura dos tickets interrompida"))?
-            .map_err(Failure::Mission)?;
-        let linked = hangar_mission::link::resolve(&snapshot, &session.name, session.key.as_deref(), session.group_id.as_deref())
-            .map_err(Failure::Mission)?;
-        if let Some(item) = linked {
-            return Ok(Some(Target { via: Via::Ticket, connector: item.connector, ticket_id: item.ticket_id, key: item.key }));
+        // Sem a chave, `link::resolve` aceitaria o vínculo sem chave gravada, que com ela não confere.
+        if let Some(key) = session.key.as_deref() {
+            let store = self.mission.clone();
+            let snapshot = tokio::task::spawn_blocking(move || store.snapshot()).await
+                .map_err(|_| CallError::connector(ErrorCode::Unavailable, "leitura dos tickets interrompida"))?
+                .map_err(Failure::Mission)?;
+            let linked = hangar_mission::link::resolve(&snapshot, &session.name, Some(key), session.group_id.as_deref())
+                .map_err(Failure::Mission)?;
+            if let Some(item) = linked {
+                return Ok(Some(Target { via: Via::Ticket, connector: item.connector, ticket_id: item.ticket_id, key: item.key }));
+            }
         }
         let Some(branch) = session.branch.clone().filter(|branch| !branch.is_empty()) else { return Ok(None) };
         let connectors = catalog.as_ref().map_err(|error| CallError::from(error.clone()))?.iter()
@@ -377,7 +417,7 @@ impl Engine {
         let mut failed = None;
         for connector in connectors {
             let cache_key = (connector.clone(), branch.clone());
-            match self.lock().branches.get(&cache_key).cloned() {
+            match self.lock().cached_branch(&cache_key, Instant::now()) {
                 Some(Some(target)) => return Ok(Some(target)),
                 Some(None) => continue,
                 None => {}
@@ -393,7 +433,7 @@ impl Engine {
                 Err(CallError::Connector(error)) if matches!(error.code, ErrorCode::NotFound | ErrorCode::InvalidParams) => None,
                 Err(error) => { failed.get_or_insert(error); continue; }
             };
-            self.lock().branches.insert(cache_key, hit.clone());
+            self.lock().branches.insert(cache_key, BranchHit { target: hit.clone(), at: Instant::now() });
             if hit.is_some() { return Ok(hit); }
         }
         failed.map_or(Ok(None), |error| Err(error.into()))
@@ -457,6 +497,20 @@ mod tests {
             supported: true, review: None, fetched_at: "2026-11-18T10:00:00.000Z".into() };
         assert_eq!(serde_json::to_string(&linked).unwrap(),
             r#"{"via":"branch","connector":"help","ticket_id":"1","key":"PM-1","supported":true,"review":null,"fetched_at":"2026-11-18T10:00:00.000Z"}"#);
+    }
+
+    #[test]
+    fn a_branch_miss_expires_but_a_hit_stays() {
+        let mut state = State::default();
+        let at = Instant::now();
+        let target = Target { via: Via::Branch, connector: "help".into(), ticket_id: "1".into(), key: "PM-1".into() };
+        let (hit, miss) = (("help".to_owned(), "PM-1".to_owned()), ("help".to_owned(), "PM-2".to_owned()));
+        state.branches.insert(hit.clone(), BranchHit { target: Some(target.clone()), at });
+        state.branches.insert(miss.clone(), BranchHit { target: None, at });
+        let later = at + BRANCH_MISS_TTL;
+        assert_eq!(state.cached_branch(&miss, at), Some(None), "o negativo vale por um tempo");
+        assert_eq!(state.cached_branch(&miss, later), None, "depois, a branch é procurada de novo");
+        assert_eq!(state.cached_branch(&hit, later), Some(Some(target)), "o achado fica");
     }
 
     /// O host serializa as chamadas por conector, então a corrida não se monta pela rota: a leitura
