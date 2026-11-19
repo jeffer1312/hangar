@@ -6,9 +6,10 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use chrono::{DateTime, SecondsFormat, Utc};
+use serde_json::{Map, Value, json};
+
 use hangar_api::status::ExitKind;
 use hangar_boot::life::Previous;
-use serde_json::{Map, Value, json};
 
 pub const FILE: &str = "stop-intent.json";
 /// A marca só explica uma saída que veio logo depois dela.

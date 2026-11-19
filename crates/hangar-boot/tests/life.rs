@@ -194,6 +194,9 @@ fn exit_unclean_life_comes_with_its_pid() {
     // Parada de outra vida (versão antiga que não a apagou) não vale.
     std::fs::write(dir.path().join(FILE), r#"{"running":false,"pid":3,"stop":{"pid":2,"cause":"x","failed":false}}"#).unwrap();
     assert_eq!(begin(dir.path(), T, dead).unwrap().previous, None);
+    // Sem pid nos dois lados não se sabe de que vida é a parada.
+    std::fs::write(dir.path().join(FILE), r#"{"running":false,"stop":{}}"#).unwrap();
+    assert_eq!(begin(dir.path(), T, dead).unwrap().previous, None);
 }
 
 #[test]

@@ -5,13 +5,13 @@
 //! O hub segue o `ListHub`: um produtor por servidor, ligado só enquanto há tela aberta. Servidor e
 //! máquina a cada 5 s, processos e sessões a cada 15 s, peers e atualização a cada 30 s; diário e
 //! pastas pelos caches do crate. O amostrador do processo roda sempre (`spawn_sampler`). Bloco que
-//! falha sai ausente e vai ao diário uma vez por episódio (`status.bloco_falhou`), nunca à tela.
+//! falha sai ausente e vai ao diário uma vez por episódio (`rust.status_bloco_falhou`), nunca à tela.
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::convert::Infallible;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 
@@ -48,6 +48,10 @@ const SEND_TIMEOUT: Duration = Duration::from_secs(30);
 /// Quanto o `GET` espera o primeiro retrato quando o produtor estava parado (peers levam até 3 s).
 const FIRST_WAIT: Duration = Duration::from_secs(20);
 const PEER_TIMEOUT: Duration = Duration::from_secs(3);
+/// Diário e discos: um ponto de montagem de rede travado prende o `statvfs` e a leitura da pasta.
+const DIARY_TIMEOUT: Duration = Duration::from_secs(10);
+/// Teto do corpo da saúde de um peer.
+const PEER_HEALTH_MAX: usize = 64 * 1024;
 /// O Funnel espera o mesmo que um peer; vencido, o campo fica ausente.
 const FUNNEL_TIMEOUT: Duration = Duration::from_secs(3);
 /// Panes que a descoberta da lista acabou de ler servem; mais velhos, lê de novo.
@@ -265,7 +269,7 @@ impl Status {
     fn subscribe(&self, st: &Arc<AppState>) -> Subscription {
         let diag = st.diag.clone();
         let report: Report = Arc::new(move |block, code| {
-            diag.report_episode("status.bloco_falhou", block, code, "bloco da tela Status sem leitura", json!({}), true);
+            diag.report_episode("rust.status_bloco_falhou", block, code, "bloco da tela Status sem leitura", json!({}), true);
         });
         let (make, st) = (self.make.clone(), st.clone());
         self.hub.subscribe(move || make(st), report)
@@ -358,14 +362,18 @@ async fn client_loop(mut subscription: Subscription, out: mpsc::Sender<Bytes>) {
     let start = tokio::time::Instant::now();
     let mut ping = tokio::time::interval_at(start + PING_EVERY, PING_EVERY);
     let mut comment = tokio::time::interval_at(start + COMMENT_EVERY, COMMENT_EVERY);
+    // O retrato só sai ao assinar e a cada mudança: o ping volta ao topo do laço e não reenvia o mesmo.
+    let mut fresh = true;
     loop {
-        let current = subscription.rx.borrow_and_update().clone();
-        if let Some(json) = current && !push(&out, sse_frame("status", &json, None)).await { return; }
+        if std::mem::take(&mut fresh) {
+            let current = subscription.rx.borrow_and_update().clone();
+            if let Some(json) = current && !push(&out, sse_frame("status", &json, None)).await { return; }
+        }
         tokio::select! {
             () = out.closed() => return,
             _ = ping.tick() => if !push(&out, ping_frame()).await { return },
             _ = comment.tick() => if !push(&out, comment_frame()).await { return },
-            changed = subscription.rx.changed() => if changed.is_err() { return },
+            changed = subscription.rx.changed() => { if changed.is_err() { return } fresh = true; }
         }
     }
 }
@@ -383,20 +391,23 @@ struct Live {
     procs: Arc<Mutex<Option<sysinfo::System>>>,
     /// O Funnel só é relido na cadência lenta (é um processo do `tailscale`).
     funnel: Mutex<Option<bool>>,
-    /// Restos do multiplexador vistos na rodada anterior; `None` antes da primeira ou com ele fora.
-    tmux_seen: Mutex<Option<HashSet<String>>>,
+    /// Restos do multiplexador vistos na rodada anterior, por nome e hora de criação; `None` antes da
+    /// primeira ou com ele fora.
+    tmux_seen: Mutex<Option<HashSet<(String, String)>>>,
     /// Sessões do multiplexador já confirmadas do Hangar, por nome e hora de criação: o
     /// `CP_PROVIDER` delas não muda, e reler custa um processo por sessão a cada rodada.
     tmux_hangar: Mutex<HashSet<(String, String)>>,
     /// Memória e discos relidos no mesmo leitor a cada rodada.
     host: Arc<Mutex<hangar_status::host::HostReader>>,
+    /// Leitura do diário e da máquina ainda no pool bloqueante.
+    diary_busy: Arc<AtomicBool>,
 }
 
 impl Live {
     fn new(st: Arc<AppState>) -> Self {
         let list = st.hub.subscribe_internal(&st.list, &st.devices, &st.diag);
         Self { st, list, procs: Arc::default(), funnel: Mutex::new(None), tmux_seen: Mutex::new(None), tmux_hangar: Mutex::default(),
-            host: Arc::default() }
+            host: Arc::default(), diary_busy: Arc::default() }
     }
 
     fn server(&self) -> Block<ServerBlock> {
@@ -407,10 +418,11 @@ impl Live {
         Ok(lock(&self.st.status.sampler).block(version, commit))
     }
 
-    /// Diário (saídas e lentidão) e máquina, numa ida só ao pool bloqueante.
-    async fn diary_and_host(&self, now: DateTime<Utc>) -> (Block<ExitsBlock>, Block<SlowBlock>, Block<HostBlock>) {
+    /// Diário (saídas e lentidão) e máquina, numa ida só ao pool bloqueante. `None`: a leitura de uma
+    /// rodada anterior ainda está presa, e os três blocos ficam como estavam.
+    async fn diary_and_host(&self, now: DateTime<Utc>) -> Option<(Block<ExitsBlock>, Block<SlowBlock>, Block<HostBlock>)> {
         let (st, host_reader) = (self.st.clone(), self.host.clone());
-        let read = tokio::task::spawn_blocking(move || {
+        let read = bounded_blocking(&self.diary_busy, DIARY_TIMEOUT, move || {
             let status = &st.status;
             let diary = diary_readable(hangar_core::diag::diary_dir().as_deref(), hangar_core::paths::log_base().as_deref());
             let (exits, slow) = match diary {
@@ -425,19 +437,20 @@ impl Live {
             // Sem casa ou sem disco que a contenha a máquina não foi lida: é falha, não "sem fonte".
             let host = lock(&host_reader).read(sizes.hangar, sizes.build_cache).map(Some).ok_or("status_host_unread");
             (exits, slow, skipped, host)
-        }).await;
-        let Ok((exits, slow, skipped, host)) = read else {
-            return (Err("status_task_failed"), Err("status_task_failed"), Err("status_task_failed"));
+        }).await?;
+        let (exits, slow, skipped, host) = match read {
+            Ok(read) => read,
+            Err(code) => return Some((Err(code), Err(code), Err(code))),
         };
         let changed = {
             let mut last = lock(&self.st.status.diary_skipped);
             std::mem::replace(&mut *last, skipped) != skipped
         };
         if changed && (skipped.lines > 0 || skipped.files > 0) {
-            self.st.diag.report_with("status.diario_ignorado", "", "status_diary_skipped",
+            self.st.diag.report_with("rust.status_diario_ignorado", "", "status_diary_skipped",
                 "linhas ou arquivos do diário fora das contas da tela Status", json!({"lines": skipped.lines, "files": skipped.files}));
         }
-        (exits, slow, host)
+        Some((exits, slow, host))
     }
 
     async fn outside(&self, slow: bool) -> OutsideBlock {
@@ -472,9 +485,9 @@ impl Live {
 
     async fn update(&self) -> Block<UpdateBlock> {
         let Some(body) = crate::update::http::status_body(&self.st, false).await else { return Ok(None) };
-        let block = update_block(&body, crate::update::periodic::last_check());
-        if block.is_none() { tracing::warn!(code = "status_update_body_incomplete", "tela Status: corpo da atualização sem versão, canal ou disponibilidade"); }
-        Ok(block)
+        // Sem saber a versão nova (índice fora, checkout ilegível, corpo incompleto) o bloco sai: um aviso
+        // ao diário por episódio, não um por rodada.
+        update_block(&body, crate::update::periodic::last_check()).map(Some).ok_or("status_update_unknown")
     }
 
     /// Linhas do dono: as da assinatura interna; antes da primeira produção dela, o retrato da lista.
@@ -561,9 +574,10 @@ impl Live {
         (block.map(Some), Ok(hangar_status::leftovers::block(tmux, canos)))
     }
 
-    /// Sessões do multiplexador abertas pelo Hangar sem linha na lista. `CP_PROVIDER` só vale
-    /// confirmado na própria sessão (o formato cai no ambiente global); multiplexador fora: `None`.
-    async fn tmux_orphans(&self, listed: &HashSet<String>) -> Option<Vec<String>> {
+    /// Sessões do multiplexador abertas pelo Hangar sem linha na lista, com a hora em que nasceram.
+    /// `CP_PROVIDER` só vale confirmado na própria sessão (o formato cai no ambiente global);
+    /// multiplexador fora: `None`.
+    async fn tmux_orphans(&self, listed: &HashSet<String>) -> Option<Vec<(String, String)>> {
         let env = self.st.list.env();
         let mut command = crate::terminal_input::child_command(&env.capture_program);
         command.args(["list-sessions", "-F", "#{session_name}\t#{@cp_hidden}\t#{@cp_shortcut_key}\t#{session_created}"])
@@ -594,16 +608,22 @@ impl Live {
             .map(|(session, _)| (session.0.to_owned(), session.3.to_owned())).collect();
         let sessions: Vec<MuxSession> = parsed.iter().zip(hangar).map(|(&(name, hidden, shortcut, _), hangar)|
             MuxSession { name: name.to_owned(), hangar, hidden, shortcut }).collect();
-        Some(hangar_status::leftovers::tmux_orphans(&sessions, listed))
+        let orphans = hangar_status::leftovers::tmux_orphans(&sessions, listed);
+        Some(orphans.into_iter().map(|name| {
+            let created = parsed.iter().find(|session| session.0 == name).map_or("", |session| session.3).to_owned();
+            (name, created)
+        }).collect())
     }
 
     /// Esta máquina, os peers do `peers.json` e os apps nativos que reportam aqui.
     async fn machines(&self, ours: Option<&str>, now: DateTime<Utc>) -> Block<Vec<Machine>> {
-        let service = crate::machine_peers::Service::from_state(&self.st).map_err(|_| "status_peers_unavailable")?;
-        let peers = peer_entries(&service.store.tolerant());
+        // Sem a configuração dos peers, esta máquina e os apps que reportam aqui continuam no bloco.
+        let service = crate::machine_peers::Service::from_state(&self.st)
+            .inspect_err(|_| tracing::warn!(code = "status_peers_unavailable", "tela Status: configuração dos peers sem leitura")).ok();
+        let peers = service.as_ref().map(|service| peer_entries(&service.store.tolerant())).unwrap_or_default();
         let probes = futures_util::future::join_all(peers.iter().map(|peer| {
-            let service = &service;
-            async move { if peer.enabled { Some(probe(service, peer).await) } else { None } }
+            let service = service.as_ref();
+            async move { match service { Some(service) if peer.enabled => Some(probe(service, peer).await), _ => None } }
         })).await;
         let mut apps = crate::presence::apps(std::time::Instant::now());
         let mut take_app = |id: &str| apps.iter().position(|app| app.machine_id.as_deref() == Some(id)).map(|i| apps.remove(i).report);
@@ -651,25 +671,31 @@ impl Collect for Live {
             let slow = async {
                 if due.slow { Some(tokio::join!(self.machines(package_version.as_deref(), now), self.update())) } else { None }
             };
-            let (((exits, slow_requests, host), outside), medium, slow) =
+            let ((diary, outside), medium, slow) =
                 tokio::join!(async { tokio::join!(self.diary_and_host(now), self.outside(due.slow)) }, medium, slow);
+            let (exits, slow_requests, host) = diary.map_or((None, None, None), |(e, s, h)| (Some(e), Some(s), Some(h)));
             let (sessions, leftovers) = medium.map_or((None, None), |(s, l)| (Some(s), Some(l)));
             let (machines, update) = slow.map_or((None, None), |(m, u)| (Some(m), Some(u)));
             Reading {
-                package_version: package_version.clone(), server: Some(self.server()), exits: Some(exits), update, machines, sessions,
-                slow: Some(slow_requests), host: Some(host), outside: Some(Ok(Some(outside))), leftovers,
+                package_version: package_version.clone(), server: Some(self.server()), exits, update, machines, sessions,
+                slow: slow_requests, host, outside: Some(Ok(Some(outside))), leftovers,
             }
         })
     }
 }
 
 /// O bloco Atualização a partir do corpo do `GET /api/atualizacao`. Sem canal ou sem saber se há
-/// versão nova, o bloco falta: `available` ausente diria "nada novo".
+/// versão nova, o bloco falta: `available` ausente diria "nada novo". Índice que não respondeu ou
+/// checkout ilegível também é "não se sabe", e a versão nova sem número idem.
 fn update_block(body: &Value, last_check: Option<DateTime<Utc>>) -> Option<UpdateBlock> {
-    let installed = body["versao_legivel"]["repo"].as_str().or_else(|| body["versoes"]["repo"].as_str())?.to_owned();
+    if matches!(body["pre_voo"]["erro"].as_str(), Some("indice_indisponivel" | "nao_e_repo")) { return None; }
+    let installed = body["versao_legivel"]["repo"].as_str().or_else(|| body["versoes"]["repo"].as_str())
+        .filter(|v| !v.is_empty())?.to_owned();
     let channel = body["canal"].as_str()?.to_owned();
-    let available = body["atualizacao_disponivel"].as_bool()?
-        .then(|| body["versao_legivel"]["remoto"].as_str().map(str::to_owned)).flatten();
+    let available = match body["atualizacao_disponivel"].as_bool()? {
+        true => Some(body["versao_legivel"]["remoto"].as_str().filter(|v| !v.is_empty())?.to_owned()),
+        false => None,
+    };
     let estado = &body["estado"];
     let last_result = (estado["fase"] == "pronto").then(|| {
         let ok = estado["ok"].as_bool()?;
@@ -732,15 +758,43 @@ async fn peer_version(base_url: &str, token: &str) -> Option<String> {
         Err(e) => { missed(&format!("rede: {e}")); return None; }
     };
     if !response.status().is_success() { missed(&format!("http {}", response.status().as_u16())); return None; }
-    let body = match response.bytes().await {
-        Ok(bytes) => bytes,
-        Err(e) => { missed(&format!("corpo: {e}")); return None; }
-    };
+    // A saúde do Hangar tem poucos bytes; um proxy no caminho pode devolver uma página inteira.
+    let mut response = response;
+    let mut body = Vec::new();
+    loop {
+        match response.chunk().await {
+            Ok(Some(chunk)) if body.len() + chunk.len() <= PEER_HEALTH_MAX => body.extend_from_slice(&chunk),
+            Ok(Some(_)) => { missed("corpo grande demais"); return None; }
+            Ok(None) => break,
+            Err(e) => { missed(&format!("corpo: {e}")); return None; }
+        }
+    }
     let body: Value = match serde_json::from_slice(&body) {
         Ok(body) => body,
         Err(e) => { missed(&format!("corpo: {e}")); return None; }
     };
     body["package_version"].as_str().filter(|v| !v.is_empty()).map(str::to_owned)
+}
+
+/// Solta a marca de leitura pendente quando a tarefa termina, até em pânico.
+struct Release(Arc<AtomicBool>);
+
+impl Drop for Release {
+    fn drop(&mut self) { self.0.store(false, Ordering::Release); }
+}
+
+/// Leitura no pool bloqueante com prazo e no máximo uma pendente: presa, a rodada sai sem ela, e as
+/// seguintes não empilham outra thread enquanto a primeira não voltar. `None`: a anterior segue presa.
+async fn bounded_blocking<T: Send + 'static>(busy: &Arc<AtomicBool>, limit: Duration, read: impl FnOnce() -> T + Send + 'static)
+    -> Option<Result<T, &'static str>> {
+    if busy.swap(true, Ordering::AcqRel) { return None; }
+    let release = Release(busy.clone());
+    let task = tokio::task::spawn_blocking(move || { let _release = release; read() });
+    Some(match tokio::time::timeout(limit, task).await {
+        Ok(Ok(value)) => Ok(value),
+        Ok(Err(_)) => Err("status_task_failed"),
+        Err(_) => Err("status_read_timeout"),
+    })
 }
 
 fn refresh(system: &mut sysinfo::System) {
@@ -801,11 +855,12 @@ fn without_working_age(waits: Vec<(String, QueueWait)>, working: &HashSet<String
     waits.into_iter().map(|(name, wait)| if working.contains(&name) { QueueWait { oldest_ts: None, ..wait } } else { wait }).collect()
 }
 
-/// Resto só visto em duas rodadas seguidas: sessão recém-aberta ainda sem linha na lista não conta.
-/// Sem rodada anterior, ainda não se sabe.
-fn confirmed_orphans(previous: Option<&HashSet<String>>, now: &[String]) -> Option<Vec<String>> {
+/// Resto só visto em duas rodadas seguidas, a mesma sessão (nome e hora de criação): a recém-aberta
+/// ainda sem linha na lista não conta, nem a que nasceu com o nome de uma que fechou. Sem hora, nada
+/// se confirma. Sem rodada anterior, ainda não se sabe.
+fn confirmed_orphans(previous: Option<&HashSet<(String, String)>>, now: &[(String, String)]) -> Option<Vec<String>> {
     let previous = previous?;
-    Some(now.iter().filter(|name| previous.contains(*name)).cloned().collect())
+    Some(now.iter().filter(|session| !session.1.is_empty() && previous.contains(*session)).map(|session| session.0.clone()).collect())
 }
 
 /// O diário pode ser lido? Desligado (`diary_dir` sem pasta com a base dos logs conhecida) é `Ok`
@@ -986,6 +1041,19 @@ mod tests {
         let mut no_channel = running.clone();
         no_channel.as_object_mut().unwrap().remove("canal");
         assert_eq!(update_block(&no_channel, None), None);
+        // Índice fora do ar (pacote) ou checkout ilegível (desenvolvedor): nunca "versão mais recente".
+        let mut index_down = running.clone();
+        index_down["pre_voo"] = json!({"erro": "indice_indisponivel"});
+        index_down["atualizacao_disponivel"] = true.into();
+        index_down["versao_legivel"]["remoto"] = Value::Null;
+        assert_eq!(update_block(&index_down, None), None);
+        let mut not_repo = running.clone();
+        not_repo["pre_voo"] = json!({"erro": "nao_e_repo"});
+        assert_eq!(update_block(&not_repo, None), None);
+        let mut no_number = running;
+        no_number["atualizacao_disponivel"] = true.into();
+        no_number["versao_legivel"]["remoto"] = Value::Null;
+        assert_eq!(update_block(&no_number, None), None, "versão nova sem número");
     }
 
     #[test]
@@ -1038,11 +1106,67 @@ mod tests {
         assert_eq!((block.queued, block.oldest_queued_secs), (1, None), "rodada longa não acende fila parada");
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn status_events_send_the_snapshot_only_when_it_changes() {
+        let hub = Arc::new(Hub::default());
+        hub.tx.send_replace(Some(Arc::from("{\"a\":1}")));
+        let subscription = Subscription { hub: hub.clone(), rx: hub.tx.subscribe() };
+        let (tx, mut rx) = mpsc::channel::<Bytes>(64);
+        let task = tokio::spawn(client_loop(subscription, tx));
+        let statuses = |rx: &mut mpsc::Receiver<Bytes>| {
+            let mut n = 0;
+            while let Ok(frame) = rx.try_recv() { n += usize::from(String::from_utf8_lossy(&frame).contains("event: status")); }
+            n
+        };
+        // Três pings e dois comentários depois, o mesmo retrato saiu uma vez só.
+        tokio::time::sleep(Duration::from_secs(35)).await;
+        assert_eq!(statuses(&mut rx), 1);
+        hub.tx.send_replace(Some(Arc::from("{\"a\":2}")));
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        assert_eq!(statuses(&mut rx), 1, "a mudança sai");
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn status_stuck_blocking_read_times_out_and_does_not_pile_up() {
+        let busy = Arc::new(AtomicBool::new(false));
+        let (unblock, wait) = std::sync::mpsc::channel::<()>();
+        let stuck = bounded_blocking(&busy, Duration::from_millis(50), move || wait.recv().is_ok()).await;
+        assert_eq!(stuck, Some(Err("status_read_timeout")), "presa, a rodada sai sem ela");
+        assert_eq!(bounded_blocking(&busy, Duration::from_secs(5), || true).await, None, "não empilha outra");
+        unblock.send(()).unwrap();
+        while busy.load(Ordering::Acquire) { tokio::time::sleep(Duration::from_millis(5)).await; }
+        assert_eq!(bounded_blocking(&busy, Duration::from_secs(5), || 7).await, Some(Ok(7)), "solta, volta a ler");
+    }
+
+    #[tokio::test]
+    async fn status_peer_version_ignores_an_oversized_health_body() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let big = format!("{{\"package_version\":\"0.1.0.1\",\"pad\":\"{}\"}}", "x".repeat(PEER_HEALTH_MAX));
+        tokio::spawn(async move {
+            for body in [big, "{\"package_version\":\"0.1.0.2\"}".to_owned()] {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0u8; 4096];
+                let _ = socket.read(&mut request).await;
+                let head = format!("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n", body.len());
+                let _ = socket.write_all(head.as_bytes()).await;
+                let _ = socket.write_all(body.as_bytes()).await;
+            }
+        });
+        let base = format!("http://{address}");
+        assert_eq!(peer_version(&base, "").await, None, "corpo acima do teto");
+        assert_eq!(peer_version(&base, "").await.as_deref(), Some("0.1.0.2"));
+    }
+
     #[test]
     fn status_tmux_leftover_needs_two_rounds() {
-        assert_eq!(confirmed_orphans(None, &["x".to_owned()]), None, "primeira rodada ainda não sabe");
-        let previous = HashSet::from(["x".to_owned(), "y".to_owned()]);
-        assert_eq!(confirmed_orphans(Some(&previous), &["x".to_owned(), "z".to_owned()]), Some(vec!["x".to_owned()]));
+        let s = |name: &str, created: &str| (name.to_owned(), created.to_owned());
+        assert_eq!(confirmed_orphans(None, &[s("x", "100")]), None, "primeira rodada ainda não sabe");
+        let previous = HashSet::from([s("x", "100"), s("y", "100"), s("w", "100"), s("n", "")]);
+        assert_eq!(confirmed_orphans(Some(&previous), &[s("x", "100"), s("z", "100"), s("w", "200"), s("n", "")]),
+            Some(vec!["x".to_owned()]), "outra sessão com o mesmo nome, ou sem hora, não confirma");
     }
 
     #[test]

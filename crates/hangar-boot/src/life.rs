@@ -87,10 +87,11 @@ fn pid_of(life: &Value) -> Option<u32> {
 }
 
 /// A parada só vale se for da vida que o arquivo descreve: a que uma versão antiga não apagou é de
-/// outra vida.
+/// outra vida, e sem pid dos dois lados não se sabe de qual.
 fn stop_of(life: &Value) -> Option<Stop> {
     let stop = life.get(STOP)?;
-    if stop.get("pid").and_then(Value::as_u64) != life.get("pid").and_then(Value::as_u64) { return None; }
+    let stop_pid = u32::try_from(stop.get("pid")?.as_u64()?).ok()?;
+    if Some(stop_pid) != pid_of(life) { return None; }
     Some(Stop {
         cause: stop.get("cause").and_then(Value::as_str).map(str::to_owned),
         failed: stop.get("failed").and_then(Value::as_bool).unwrap_or(false),
