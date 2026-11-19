@@ -22,19 +22,20 @@ fn failed(p: &str, code: &str, msg: String, params: Value) -> Value {
 
 /// Sai do grupo: (ex-companheiros, quem o `notify_exit` avisa). Grupo entre máquinas sai pela dona,
 /// na fila (`fed_exit`); `orq` = fases vindas de outra fonte (a ponte do Python).
-pub async fn leave(st: &AppState, groups: &GroupService, name: &str, orq: Option<&dyn OrqFacts>) -> Result<(Vec<String>, Vec<String>), GroupError> {
-    if let Some(left) = super::fed_exit::leave(st, groups, name).await {
+/// `why` = quem pediu a saída, para o log de exclusão.
+pub async fn leave(st: &AppState, groups: &GroupService, name: &str, orq: Option<&dyn OrqFacts>, why: &'static str) -> Result<(Vec<String>, Vec<String>), GroupError> {
+    if let Some(left) = super::fed_exit::leave(st, groups, name, why).await {
         let ex = left?;
         let tell = super::fed_exit::notified(st, &ex);
         return Ok((ex, tell));
     }
-    let ex = match orq { Some(orq) => groups.leave_with(name, orq).await?, None => groups.leave(name).await? };
+    let ex = match orq { Some(orq) => groups.leave_with(name, orq, why).await?, None => groups.leave(name, why).await? };
     Ok((ex.clone(), ex))
 }
 
 /// `leave` e o aviso a cada ex-companheiro de fora: (ex-companheiros, falhas).
-pub async fn leave_and_notify(st: &AppState, groups: &GroupService, name: &str) -> Result<(Vec<String>, Vec<Value>), GroupError> {
-    let (ex, tell) = leave(st, groups, name, None).await?;
+pub async fn leave_and_notify(st: &AppState, groups: &GroupService, name: &str, why: &'static str) -> Result<(Vec<String>, Vec<Value>), GroupError> {
+    let (ex, tell) = leave(st, groups, name, None, why).await?;
     let warnings = notify_exit(st, groups, name, &tell).await;
     Ok((ex, warnings))
 }
