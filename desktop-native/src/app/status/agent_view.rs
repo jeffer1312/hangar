@@ -74,8 +74,15 @@ fn step_title(action: &Action) -> String {
     }
 }
 
-/// O texto do "Copiar relatório": o diagnóstico, cada passo com o comando e a saída, e o fim.
+/// O texto do "Copiar relatório", com a mesma limpeza do relatório do instalador: um passo que leu o `.env` traz o
+/// `CP_AUTH_TOKEN`, e o texto vai para a área de transferência.
 fn report(run: &AgentRun) -> String {
+    use super::super::setup::{Secrets, scrub};
+    scrub(&raw_report(run), &Secrets::here(Vec::new()))
+}
+
+/// O diagnóstico, cada passo com o comando e a saída, e o fim.
+fn raw_report(run: &AgentRun) -> String {
     let mut out = vec![fill(tr("status_agent_report_title"), &[("agent", run.agent.name())]), String::new(), run.diagnosis.clone(), String::new(),
         tr("status_agent_report_steps")];
     for step in &run.progress.steps {
@@ -93,7 +100,8 @@ fn report(run: &AgentRun) -> String {
 /// O fim contado pelo agente, ou por que não há o que contar. Consertado, vale o resumo; sem conserto, o erro dele vem antes.
 fn outcome_text(run: &AgentRun) -> String {
     let start_error = match &run.phase { RunPhase::Failed { error } => error.as_deref(), _ => None };
-    match run.progress.ending(start_error, run.stop_requested) {
+    // Um Parar que não alcançou o processo não explica a saída: vale o código dela.
+    match run.progress.ending(start_error, run.stop_requested && !run.stop_failed) {
         agent_fix::Ending::StartFailed(error) => fill(tr("status_agent_start_failed"), &[("detail", &error)]),
         agent_fix::Ending::Stopped => tr("status_agent_stopped_by_you"),
         agent_fix::Ending::Error(error) => fill(tr("status_agent_error"), &[("detail", &error)]),
@@ -171,9 +179,15 @@ impl Hangar {
         let handle = agent_fix::Handle::default();
         // Antes de subir: fechar o app enquanto o agente ainda sobe também o encerra (quem sobe confere a marca).
         let on_quit = handle.clone();
+        // O `taskkill` do Windows roda fora da janela: o fechar espera no máximo o prazo do GPUI para os
+        // `on_app_quit`, e o `taskkill` já lançado segue sozinho se o app sair antes.
         let quit = cx.on_app_quit(move |_, _| {
-            if let Some(owner) = agent_fix::abandon(&on_quit) { agent_fix::kill_now(&owner); }
-            async {}
+            let (done, killed) = tokio::sync::oneshot::channel::<()>();
+            match agent_fix::abandon(&on_quit) {
+                Some(owner) => { std::thread::spawn(move || { agent_fix::kill_now(&owner); let _ = done.send(()); }); }
+                None => drop(done),
+            }
+            async move { let _ = killed.await; }
         });
         // A anterior (já acabada) sai daqui: só uma execução por página.
         self.device.status.fix = Some(AgentRun { agent, id, started: Instant::now(), ended: None, progress: Progress::default(),
@@ -216,8 +230,13 @@ impl Hangar {
         // Descartada enquanto o agente subia: o `Drop` marcou o `Handle`, e quem subiu já o encerrou.
         let run = self.device.status.fix.as_mut().filter(|run| run.id == id)?;
         match started {
-            Ok(agent_fix::Started { output }) => {
+            Ok(agent_fix::Started { output, stop_failed }) => {
                 run.phase = RunPhase::Running;
+                // O Parar da subida não derrubou o agente: o botão volta, e o teto que já passou tenta de novo.
+                if stop_failed {
+                    run.stop_failed = true;
+                    if run.cap_pending { self.agent_stop(id, cx); }
+                }
                 cx.notify();
                 Some(output)
             }
@@ -507,6 +526,34 @@ mod tests {
         // O Parar não alcançou o processo: o teto e um novo clique tentam de novo.
         assert!(can_stop(&RunPhase::Running, true, true) && can_stop(&RunPhase::Starting, true, true));
         assert!(!can_stop(&RunPhase::Checking, true, true) && !can_stop(&RunPhase::Failed { error: None }, false, false));
+    }
+
+    fn finished_run() -> AgentRun {
+        AgentRun { agent: Agent::Claude, id: 1, started: Instant::now(), ended: Some(Duration::from_secs(3)), progress: Progress::default(),
+            phase: RunPhase::Failed { error: None }, handle: agent_fix::Handle::default(), stop_requested: false, stop_failed: false,
+            cap_pending: false, steps_open: false, diagnosis: "Failure code: launch_failed".into(), tasks: Vec::new(), _quit: None }
+    }
+
+    #[test]
+    fn copied_report_hides_the_server_token() {
+        let mut run = finished_run();
+        run.progress.feed(Agent::Claude, r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"cat ~/.hangar/config/.env"}}]}}"#, Duration::ZERO);
+        run.progress.feed(Agent::Claude, r#"{"type":"user","message":{"content":[{"tool_use_id":"t1","type":"tool_result","content":"CP_PORT=8765\nCP_AUTH_TOKEN=s3cr3t-fixture-token"}]}}"#, Duration::ZERO);
+        run.progress.feed(Agent::Claude, "curl -H 'Authorization: Bearer outro-fixture-token' falhou", Duration::ZERO);
+        let text = report(&run);
+        assert!(!text.contains("s3cr3t-fixture-token") && !text.contains("outro-fixture-token"), "{text}");
+        assert!(text.contains("CP_PORT=8765") && text.contains("launch_failed"), "{text}");
+    }
+
+    #[test]
+    fn a_stop_that_missed_the_agent_does_not_explain_its_exit() {
+        crate::i18n::english_in_this_thread(false);
+        let mut run = finished_run();
+        run.progress.exit = Some(setup_agent::Ended::Code(2));
+        run.stop_requested = true;
+        assert_eq!(outcome_text(&run), tr("status_agent_stopped_by_you"));
+        run.stop_failed = true;
+        assert_eq!(outcome_text(&run), fill(tr("status_agent_exit"), &[("code", "2")]));
     }
 
     #[test]

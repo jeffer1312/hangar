@@ -523,18 +523,27 @@ mod tests {
         let program = script(&dir, "fake.sh", "sleep 30 &\necho \"filho $!\"\nexit 0");
         let started = Instant::now();
         let (owner, output) = spawn(Launch { program, args: vec![], work: dir.join("work"), env: vec![], prompt: String::new() }).unwrap();
-        let (mut child, mut ended) = (None, None);
-        while let Ok(item) = output.recv_blocking() {
-            match item {
-                Output::Line(line) => child = line.strip_prefix("filho ").and_then(|pid| pid.parse::<u32>().ok()),
-                Output::Exit(end) => { ended = Some(end); break; }
+        // Com prazo: uma regressão que nunca manda o `Exit` falha aqui, não trava a suíte.
+        let (done, read) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let (mut child, mut ended) = (None, None);
+            while let Ok(item) = output.recv_blocking() {
+                match item {
+                    Output::Line(line) => child = line.strip_prefix("filho ").and_then(|pid| pid.parse::<u32>().ok()),
+                    Output::Exit(end) => { ended = Some(end); break; }
+                }
             }
-        }
+            let _ = done.send((child, ended));
+        });
+        let (child, ended) = read.recv_timeout(Duration::from_secs(10)).expect("o Exit chega em 10 s");
         assert_eq!(ended, Some(Ended::Code(0)));
         assert!(started.elapsed() < Duration::from_secs(10), "{:?}", started.elapsed());
         assert!(owner.has_exited() && !owner.signal(true), "recolhido: nada mais é sinalizado");
         let child = child.expect("pid do filho");
-        let gone = (0..50).any(|_| { std::thread::sleep(Duration::from_millis(20)); run::read_identity(child) == run::Identity::Gone });
+        // Morto, o filho órfão pode ficar zumbi até o init da máquina (ou do contêiner do CI) recolher.
+        let dead = |pid: u32| std::fs::read_to_string(format!("/proc/{pid}/stat"))
+            .map_or(true, |stat| stat.rsplit_once(") ").is_some_and(|(_, rest)| rest.starts_with('Z')));
+        let gone = (0..50).any(|_| { std::thread::sleep(Duration::from_millis(20)); dead(child) });
         assert!(gone, "o filho saiu junto");
         let _ = std::fs::remove_dir_all(dir);
     }

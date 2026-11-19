@@ -349,10 +349,13 @@ pub(super) fn detect() -> Vec<Choice> {
     if !supported(Os::current()) { return Vec::new(); }
     let path = system::refreshed_path();
     let env = env(&path);
-    Agent::ALL.into_iter().filter_map(|agent| {
-        let program = agent::program(agent, &path)?;
-        Some(Choice { agent, account: account(agent, &program, &env) })
-    }).collect()
+    let mut found = Vec::new();
+    // Fora do PATH, o agente não entra; com ele, a conta é lida no CLI ou no arquivo de login.
+    for agent in Agent::ALL {
+        let Some(program) = agent::program(agent, &path) else { continue };
+        found.push(Choice { agent, account: account(agent, &program, &env) });
+    }
+    found
 }
 
 fn env(path: &str) -> Vec<(String, String)> {
@@ -412,8 +415,9 @@ pub(super) fn args(agent: Agent, work: &Path) -> Vec<String> {
     }
 }
 
-/// O agente que subiu: a saída dele. Pid e identidade ficam no `Handle`.
-pub(super) struct Started { pub output: async_channel::Receiver<agent::Output> }
+/// O agente que subiu: a saída dele. Pid e identidade ficam no `Handle`. `stop_failed`: nasceu depois de um Parar e
+/// sobreviveu à força; o Parar volta.
+pub(super) struct Started { pub output: async_channel::Receiver<agent::Output>, pub stop_failed: bool }
 
 /// O processo do agente, compartilhado entre quem o sobe (fora da janela) e quem o encerra: o fechar do app, o teto e o
 /// descarte da execução chegam também enquanto ele ainda está subindo.
@@ -472,15 +476,17 @@ pub(super) fn start(agent: Agent, prompt: String, home: &Path, handle: &Handle) 
     let abandoned = pending.abandoned;
     drop(pending);
     // Nasceu depois da marca: talvez já tenha pedido a subida do serviço, e o `Exit` leva à releitura.
-    if abandoned { owner.signal(true); }
-    Ok(Started { output })
+    let stop_failed = abandoned && !kill_and_wait(&owner);
+    Ok(Started { output, stop_failed })
 }
+
+/// A força e a espera dela; `true` com o agente fora.
+fn kill_and_wait(owner: &agent::Owner) -> bool { !owner.signal(true) || owner.wait_exit(KILL_WAIT) }
 
 /// "Parar" e o teto: o pedido de saída, a força depois, ao agente e ao grupo. `true` só com o agente fora. Bloqueia.
 pub(super) fn stop(owner: &agent::Owner) -> bool {
     if !owner.signal(false) || owner.wait_exit(STOP_WAIT) { return true; }
-    owner.signal(true);
-    owner.wait_exit(KILL_WAIT)
+    kill_and_wait(owner)
 }
 
 /// O app fechando: sem esperar a saída educada, que levaria até 10 s.
