@@ -489,8 +489,11 @@ pub(super) fn stop(owner: &agent::Owner) -> bool {
     kill_and_wait(owner)
 }
 
-/// O app fechando: sem esperar a saída educada, que levaria até 10 s.
-pub(super) fn kill_now(owner: &agent::Owner) { owner.signal(true); }
+/// O app fechando: sem esperar a saída educada, que levaria até 10 s. Sobreviveu à força: fica no log, porque
+/// não sobra tela para mostrar.
+pub(super) fn kill_now(owner: &agent::Owner) {
+    if !kill_and_wait(owner) { crate::log_line("status: status_agent_kill_on_quit_failed: o agente sobreviveu à parada forçada ao fechar"); }
+}
 
 #[cfg(test)]
 mod tests {

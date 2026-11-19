@@ -401,13 +401,17 @@ struct Live {
     host: Arc<Mutex<hangar_status::host::HostReader>>,
     /// Leitura do diário e da máquina ainda no pool bloqueante.
     diary_busy: Arc<AtomicBool>,
+    /// Últimos peers lidos: sem a configuração eles ficam no bloco como desconhecidos, nunca como "sem peers".
+    peers_seen: Mutex<Vec<PeerEntry>>,
+    /// Configuração dos peers sem leitura agora: um aviso ao diário por episódio.
+    peers_failing: AtomicBool,
 }
 
 impl Live {
     fn new(st: Arc<AppState>) -> Self {
         let list = st.hub.subscribe_internal(&st.list, &st.devices, &st.diag);
         Self { st, list, procs: Arc::default(), funnel: Mutex::new(None), tmux_seen: Mutex::new(None), tmux_hangar: Mutex::default(),
-            host: Arc::default(), diary_busy: Arc::default() }
+            host: Arc::default(), diary_busy: Arc::default(), peers_seen: Mutex::default(), peers_failing: AtomicBool::new(false) }
     }
 
     fn server(&self) -> Block<ServerBlock> {
@@ -617,10 +621,25 @@ impl Live {
 
     /// Esta máquina, os peers do `peers.json` e os apps nativos que reportam aqui.
     async fn machines(&self, ours: Option<&str>, now: DateTime<Utc>) -> Block<Vec<Machine>> {
-        // Sem a configuração dos peers, esta máquina e os apps que reportam aqui continuam no bloco.
-        let service = crate::machine_peers::Service::from_state(&self.st)
-            .inspect_err(|_| tracing::warn!(code = "status_peers_unavailable", "tela Status: configuração dos peers sem leitura")).ok();
-        let peers = service.as_ref().map(|service| peer_entries(&service.store.tolerant())).unwrap_or_default();
+        // Sem a configuração dos peers, esta máquina e os apps que reportam aqui continuam no bloco, e os peers da última
+        // leitura ficam como desconhecidos.
+        let service = crate::machine_peers::Service::from_state(&self.st).ok();
+        let peers = match &service {
+            Some(service) => {
+                let peers = peer_entries(&service.store.tolerant());
+                *lock(&self.peers_seen) = peers.clone();
+                self.peers_failing.store(false, Ordering::Relaxed);
+                peers
+            }
+            None => {
+                if !self.peers_failing.swap(true, Ordering::Relaxed) {
+                    tracing::warn!(code = "status_peers_unavailable", "tela Status: configuração dos peers sem leitura");
+                    self.st.diag.report_episode("rust.status_bloco_falhou", "machines", "status_peers_unavailable",
+                        "bloco da tela Status sem leitura", json!({}), true);
+                }
+                lock(&self.peers_seen).clone()
+            }
+        };
         let probes = futures_util::future::join_all(peers.iter().map(|peer| {
             let service = service.as_ref();
             async move { match service { Some(service) if peer.enabled => Some(probe(service, peer).await), _ => None } }
@@ -706,6 +725,7 @@ fn update_block(body: &Value, last_check: Option<DateTime<Utc>>) -> Option<Updat
         last_check: last_check.map(stamp), last_result })
 }
 
+#[derive(Clone)]
 struct PeerEntry { id: String, label: String, base_url: String, token: String, enabled: bool }
 
 /// Máquinas do `peers.json` com endereço; `enabled: false` fica sem sonda (estado desconhecido).

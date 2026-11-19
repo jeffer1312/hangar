@@ -227,8 +227,14 @@ impl Hangar {
 
     fn agent_started(&mut self, id: u64, started: Result<agent_fix::Started, String>, cx: &mut Context<Self>)
         -> Option<async_channel::Receiver<setup_agent::Output>> {
-        // Descartada enquanto o agente subia: o `Drop` marcou o `Handle`, e quem subiu já o encerrou.
-        let run = self.device.status.fix.as_mut().filter(|run| run.id == id)?;
+        // Descartada enquanto o agente subia: o `Drop` marcou o `Handle`, e quem subiu já o encerrou. Se a força
+        // falhou, o agente segue vivo sem tela que o mostre: fica no log.
+        let Some(run) = self.device.status.fix.as_mut().filter(|run| run.id == id) else {
+            if let Ok(agent_fix::Started { stop_failed: true, .. }) = &started {
+                crate::log_line("status: status_agent_stop_failed_discarded: o agente sobreviveu à parada de uma execução descartada");
+            }
+            return None;
+        };
         match started {
             Ok(agent_fix::Started { output, stop_failed }) => {
                 run.phase = RunPhase::Running;

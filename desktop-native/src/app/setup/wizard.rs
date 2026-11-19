@@ -289,17 +289,20 @@ pub(crate) fn sweep_group(pid: u32) {
     if run::group_alive(pid) { crate::log_line(&format!("assistente: grupo do agente {pid} ainda vivo")); }
 }
 
-/// Pára (se ainda roda) e desfaz. O `bool` diz que o agente não pôde ser parado: a pasta é desfeita mesmo assim.
+/// Pára (se ainda roda) e desfaz. O `bool` diz que o agente não pôde ser parado: a pasta é desfeita mesmo assim, e a
+/// anotação fica para a próxima abertura parar e desfazer de novo.
 fn stop_and_restore(pid: Option<u32>, started: &str, snapshot: Option<repo::Snapshot>) -> (Option<repo::Restored>, bool) {
     let not_stopped = pid.is_some_and(|pid| !stop_agent_process(pid, started));
-    (snapshot.map(|snapshot| finish_restore(snapshot, false)), not_stopped)
+    (snapshot.map(|snapshot| finish_restore(snapshot, not_stopped)), not_stopped)
 }
 
-/// O agente subiu mas ninguém o acompanha mais (assistente fechado enquanto subia).
+/// O agente subiu mas ninguém o acompanha mais (assistente fechado enquanto subia). Sem tela que mostre a falha da
+/// parada, ela fica no log.
 fn abandon_started(started: Started) {
     let Started { snapshot, pid, started, output } = started;
     drop(output);
-    stop_and_restore(Some(pid), &started, Some(snapshot));
+    let (_, not_stopped) = stop_and_restore(Some(pid), &started, Some(snapshot));
+    if not_stopped { crate::log_line(&format!("assistente: setup_agent_abandoned_not_stopped: agente {pid} sobreviveu à parada")); }
 }
 
 /// O que a abertura fez com um conserto interrompido; mostrado até a pessoa fechar o aviso.
@@ -1100,9 +1103,9 @@ impl SetupWizard {
                 if this.update(cx, |w, cx| w.agent_output(item, cx)).is_err() { return; }
                 if exited { break; }
             }
-            let Ok(Some((snapshot, done))) = this.update(cx, |w, cx| w.take_snapshot(cx)) else { return };
+            let Ok(Some((snapshot, keep, done))) = this.update(cx, |w, cx| w.take_snapshot(cx)) else { return };
             // O grupo dele já saiu com ele (`agent::spawn`): nenhum filho escreve na pasta depois de desfeita.
-            let restored = cx.background_executor().spawn(async move { finish_restore(snapshot, false) }).await;
+            let restored = cx.background_executor().spawn(async move { finish_restore(snapshot, keep) }).await;
             // Fechado enquanto desfazia: quem fechou espera esta resposta para mandar o relatório com o diff.
             let _ = done.send(restored.clone());
             let _ = window.update(cx, |_, window, cx| this.update(cx, |w, cx| w.recheck_after_agent(restored, window, cx)));
@@ -1151,14 +1154,15 @@ impl SetupWizard {
     }
 
     /// `None` quando o `close` já levou a execução. O canal leva o resultado a quem fechar no meio.
-    fn take_snapshot(&mut self, cx: &mut Context<Self>) -> Option<(repo::Snapshot, tokio::sync::oneshot::Sender<repo::Restored>)> {
+    /// O `bool` é o `keep` da restauração: a parada que falhou deixa a anotação, como no fechar.
+    fn take_snapshot(&mut self, cx: &mut Context<Self>) -> Option<(repo::Snapshot, bool, tokio::sync::oneshot::Sender<repo::Restored>)> {
         let run = self.agent.as_mut()?;
         run.phase = AgentPhase::Restoring;
         cx.notify();
         let snapshot = run.snapshot.take()?;
         let (done, wait) = tokio::sync::oneshot::channel();
         run.restore_done = Some(wait);
-        Some((snapshot, done))
+        Some((snapshot, run.not_stopped, done))
     }
 
     /// Reconfere rodando o script inteiro, como o "Tentar de novo": passou vai a "Tudo pronto", falhou volta ao painel.
