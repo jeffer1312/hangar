@@ -527,7 +527,8 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   standalone (nunca o da conta), antes do app-server (versão publicada consultada no máximo
   uma vez por hora, a tela mostra
   "atualizando o Codex"), confere os marketplaces de plugins (`codex plugin marketplace upgrade`,
-  em toda abertura, também no sem terminal) e confia nos hooks pendentes pelo app-server (`hooks/list` +
+  no máximo uma vez por hora por conta, também no sem terminal; só a que terminou bem conta) e
+  confia nos hooks pendentes pelo app-server (`hooks/list` +
   `config/batchWrite` do `trusted_hash`), porque eles vêm da sincronização do próprio Hangar.
   Falha em qualquer dos dois só registra na tela e a abertura segue. O cartão pré-thread
   reconhece o rodapé curto (`enter continue · esc skip`) além do antigo.
@@ -1528,9 +1529,12 @@ primeiras ferramentas; a reaprovação reativa gravou o `config.toml` às 08:23:
   `config/batchWrite` sem aviso e sem gastar a rodada reativa do turno. Leitura de arquivo e
   bytecode Python não acordam: o próprio hook rodando abriria os arquivos sem fim.
 - Os dois lançadores (`scripts/hangar-codex-tui` e `launch_if_needed` do sem terminal) rodam
-  `codex plugin marketplace upgrade --json` no `CODEX_HOME` da conta antes do app-server, em toda
-  abertura (decisão do dono): é a mesma função da atualização automática (`marketplace_cmd.rs` →
-  `manager.rs`), que também reinstala o cache dos plugins, então a do app-server não acha nada novo.
+  `codex plugin marketplace upgrade --json` no `CODEX_HOME` da conta antes do app-server, no
+  máximo uma vez por hora por conta (decisão do dono em 19/11/2026; antes era em toda abertura):
+  é a mesma função da atualização automática (`marketplace_cmd.rs` → `manager.rs`), que também
+  reinstala o cache dos plugins, então a do app-server não acha nada novo. A marca
+  `.hangar-marketplaces-upgraded` na pasta da conta só é gravada quando a conferência termina bem;
+  dentro da hora, o plugin que mudar é reinstalado pelo app-server e reaprovado pelo observador.
   Custa ~5 s com 10 marketplaces e nada a atualizar (medido duas vezes: 5,6 s e 5,2 s); roda depois
   da atualização do Codex porque no Windows o binário não troca com outro `codex` aberto. Falha ou
   prazo de 20 s só registram e a abertura segue (sem rede, o `git fetch` não segura a sessão; o

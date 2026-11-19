@@ -2,6 +2,7 @@
 //! com a sessão aberta e reinstalaria o plugin que mudou, e o Codex recusaria os hooks dele até a
 //! reaprovação. Roda depois da atualização do Codex: no Windows o binário não troca com outro aberto.
 use std::collections::BTreeMap;
+use std::path::Path;
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -11,6 +12,26 @@ use super::Screen;
 
 /// Sem rede, o `git fetch` não pode segurar a abertura.
 pub(crate) const TIMEOUT: Duration = Duration::from_secs(20);
+
+/// Uma conferência por conta por hora: ela custa uns 5 s de rede, e o plugin que mudar dentro da hora
+/// é reinstalado pelo app-server e reaprovado pelo ator.
+pub(crate) const EVERY: Duration = Duration::from_secs(3600);
+const MARKER: &str = ".hangar-marketplaces-upgraded";
+
+/// A conta não teve conferência bem-sucedida na última hora (marca ausente, ilegível ou no futuro).
+pub(crate) fn due(env: &BTreeMap<String, String>) -> bool {
+    let Some(home) = env.get("CODEX_HOME") else { return true };
+    std::fs::metadata(Path::new(home).join(MARKER)).and_then(|meta| meta.modified()).ok()
+        .and_then(|at| at.elapsed().ok()).is_none_or(|age| age >= EVERY)
+}
+
+/// Só a conferência que terminou bem conta: a que falhou é tentada de novo na próxima abertura.
+pub(crate) fn mark_done(env: &BTreeMap<String, String>) {
+    let Some(home) = env.get("CODEX_HOME") else { return };
+    if let Err(error) = std::fs::write(Path::new(home).join(MARKER), b"") {
+        tracing::warn!(io_kind = ?error.kind(), "marca da conferência dos marketplaces não foi gravada");
+    }
+}
 
 /// As linhas de marketplace que falharam (o Codex escreve uma por marketplace), até 3, em 200 caracteres.
 pub(crate) fn failed_lines(stderr: &str) -> Vec<String> {
@@ -48,6 +69,7 @@ pub(crate) async fn run(env: &BTreeMap<String, String>, screen: &dyn Screen) {
 }
 
 async fn run_with(env: &BTreeMap<String, String>, limit: Duration, screen: &dyn Screen) {
+    if !due(env) { return; }
     let Some(codex) = crate::runtime::process::resolve_program("codex", env) else { return };
     screen.say("conferindo os plugins…");
     let spawned = tokio::process::Command::new(codex).args(["plugin", "marketplace", "upgrade", "--json"]).env_clear().envs(env)
@@ -61,6 +83,7 @@ async fn run_with(env: &BTreeMap<String, String>, limit: Duration, screen: &dyn 
                 stdout: String::from_utf8_lossy(&output.stdout).into_owned(), stderr: String::from_utf8_lossy(&output.stderr).into_owned() },
         },
     };
+    if matches!(outcome, Outcome::Ran { code: Some(0), .. }) { mark_done(env); }
     for line in lines(&outcome) {
         screen.say(&line);
     }
@@ -69,6 +92,21 @@ async fn run_with(env: &BTreeMap<String, String>, limit: Duration, screen: &dyn 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_successful_check_holds_for_an_hour_per_account() {
+        let dir = tempfile::tempdir().unwrap();
+        let env: BTreeMap<String, String> = [("CODEX_HOME".to_owned(), dir.path().to_string_lossy().into_owned())].into();
+        assert!(due(&env), "conta sem conferência");
+        mark_done(&env);
+        assert!(!due(&env), "conferida agora");
+        let old = std::time::SystemTime::now() - EVERY - Duration::from_secs(1);
+        std::fs::File::options().write(true).open(dir.path().join(MARKER)).unwrap().set_modified(old).unwrap();
+        assert!(due(&env), "a hora passou");
+        let other = tempfile::tempdir().unwrap();
+        assert!(due(&[("CODEX_HOME".to_owned(), other.path().to_string_lossy().into_owned())].into()), "a marca é da conta");
+        assert!(due(&BTreeMap::new()), "sem CODEX_HOME confere");
+    }
 
     /// `launcher__marketplaces-*`: atualizados, falha (3 linhas cortadas em 200), JSON torto e prazo.
     #[test]
