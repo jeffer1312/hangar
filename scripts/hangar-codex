@@ -93,7 +93,14 @@ fi
 
 cwd=$(pwd -P)
 # No Git Bash do Windows o `pwd` dá `/c/...`; o hangar-server é nativo e precisa de `C:\...`.
-case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) cwd=$(cygpath -w "$cwd") ;; esac
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+        if ! cwd=$(cygpath -w "$cwd") || [ -z "$cwd" ]; then
+            say "cygpath não converteu a pasta $(pwd -P) para caminho do Windows: nenhuma sessão foi aberta"
+            exit 1
+        fi
+        ;;
+esac
 if [ "$#" -eq 1 ]; then prompt="\"$(json_string "$1")\""; else prompt=null; fi
 body="{\"cwd\": \"$(json_string "$cwd")\", \"provider\": \"codex\", \"headless\": false, \"initial_prompt\": $prompt"
 [ -n "$account" ] && body="$body, \"codex_account\": \"$(json_string "$account")\""

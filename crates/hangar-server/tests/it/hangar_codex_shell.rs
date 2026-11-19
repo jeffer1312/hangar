@@ -142,6 +142,18 @@ fn under_git_bash_the_folder_goes_as_a_windows_path() {
     assert_eq!(shell.body()["cwd"], json!(r"C:\Users\x\work"));
 }
 
+/// `cygpath` que falha não pode mandar `"cwd": ""` ao servidor: sai com erro antes do `open`.
+#[test]
+fn under_git_bash_a_failed_cygpath_stops_before_the_server() {
+    let shell = Shell::new();
+    crate::write_executable(&shell.stubs.join("uname"), "#!/bin/sh\necho MINGW64_NT-10.0-26300\n");
+    crate::write_executable(&shell.stubs.join("cygpath"), "#!/bin/sh\nexit 1\n");
+    let output = shell.with_server(&[], &[]);
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    assert!(stderr(&output).contains("cygpath"), "{}", stderr(&output));
+    assert!(shell.log("server.log").is_empty());
+}
+
 /// `hangar-codex__codex-home-*`: a casa padrão não manda conta; `~/.codex-<id>` manda o id; outra recusa.
 #[test]
 fn the_inherited_codex_home_picks_the_account_or_refuses() {
