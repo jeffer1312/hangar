@@ -81,9 +81,10 @@ pub(super) fn render(started: Instant, width: Pixels, window: &mut Window, cx: &
             vec![parts::down_head(chrome::small_icon(IconName::Close, 24., theme::danger()).into_any_element(), theme::danger(), false,
                 tr("status_down_stopped_title"), Some(parts::silent_for(Duration::from_secs(150))), [bar]).into_any_element()]
         }
-        Phase::Working(done) => {
+        Phase::Working(_) => {
             let steps = sample_steps(t);
-            let sub = parts::working_sub(&parts::clock(agent_time(t)), done + 1);
+            // A página conta os comandos já começados: os que estão na lista.
+            let sub = parts::working_sub(&parts::clock(agent_time(t)), steps.len());
             let mut out = vec![parts::working_head(name, sub, parts::stop_button().tab_stop(false), false).into_any_element()];
             out.extend(parts::working_steps(&steps, agent_time(t), None));
             out
@@ -126,5 +127,7 @@ mod tests {
         assert!(!steps[0].output.is_empty());
         assert_eq!(steps[1].state, parts::StepState::Running);
         assert!(steps[1].output.is_empty());
+        // Os três terminados antes do servidor voltar: a contagem do subtítulo segue em 3.
+        assert_eq!(sample_steps(4.4).len(), 3);
     }
 }
