@@ -171,6 +171,8 @@ struct ImportClient {
     account_home: PathBuf,
     // O catálogo de modelos muda com a versão do cliente; vale a do Codex que importa.
     codex_version: String,
+    /// Modo de colaboração anunciado por thread, e o aviso para quem espera por ele.
+    modes: Arc<(Mutex<HashMap<String, String>>, tokio::sync::Notify)>,
 }
 impl NativeImport for ImportClient {
     async fn request(&mut self, method: &str, params: Value) -> Result<Value, TransferError> {
@@ -199,6 +201,22 @@ impl NativeImport for ImportClient {
         self.record.destination_meta = Some(destination);
         self.record.boundary = boundary;
         self.store.save(&self.record)
+    }
+    async fn applied_mode(&mut self, thread: &str) -> Option<String> {
+        let (modes, changed) = &*self.modes;
+        let wait = async {
+            loop {
+                // Inscrito antes de olhar o mapa: um anúncio entre a leitura e a espera não se perde.
+                let notified = changed.notified();
+                tokio::pin!(notified);
+                notified.as_mut().enable();
+                if let Some(mode) = modes.lock().unwrap_or_else(|e| e.into_inner()).get(thread) {
+                    return mode.clone();
+                }
+                notified.await;
+            }
+        };
+        tokio::time::timeout(Duration::from_secs(10), wait).await.ok()
     }
 }
 impl ImportClient {
@@ -283,15 +301,28 @@ impl ImportClient {
             return Err(e);
         }
         let responder = client.clone();
+        let modes: Arc<(Mutex<HashMap<String, String>>, tokio::sync::Notify)> = Arc::default();
+        let announced = modes.clone();
         let drain = tokio::spawn(async move {
             while let Some(event) = incoming.recv().await {
-                if let Incoming::Request { id, .. } = event {
-                    let _ = responder
-                        .respond(
-                            id,
-                            Err((-32601, "a importação não executa ferramentas".into())),
-                        )
-                        .await;
+                match event {
+                    Incoming::Request { id, .. } => {
+                        let _ = responder
+                            .respond(
+                                id,
+                                Err((-32601, "a importação não executa ferramentas".into())),
+                            )
+                            .await;
+                    }
+                    Incoming::Notification { method, params } if method == "thread/settings/updated" => {
+                        let mode = params["threadSettings"]["collaborationMode"]["mode"].as_str();
+                        if let (Some(thread), Some(mode)) = (params["threadId"].as_str(), mode) {
+                            let (map, changed) = &*announced;
+                            map.lock().unwrap_or_else(|e| e.into_inner()).insert(thread.to_owned(), mode.to_owned());
+                            changed.notify_waiters();
+                        }
+                    }
+                    Incoming::Notification { .. } => {}
                 }
             }
         });
@@ -306,6 +337,7 @@ impl ImportClient {
             models,
             account_home: account.home.clone(),
             codex_version,
+            modes,
         })
     }
     async fn close(&mut self) -> Result<(), TransferError> {
@@ -388,12 +420,8 @@ async fn check_target(
         .and_then(Result::ok)
         .filter(|o| o.status.success())
         .ok_or_else(|| error("session_transfer_native_unavailable"))?;
-    // Só uma versão de verdade vai ao catálogo: um aviso impresso depois dela não pode virar `client_version`.
-    let version = String::from_utf8_lossy(&output.stdout)
-        .split_whitespace()
-        .rev()
-        .find(|word| crate::codex_tui::update::version(word).is_some())
-        .map(str::to_owned)
+    // O mesmo leitor do catálogo: os dois pedem a lista de modelos com a mesma versão.
+    let version = crate::codex_tui::update::cli_version(&String::from_utf8_lossy(&output.stdout))
         .ok_or_else(|| error("session_transfer_native_unavailable"))?;
     Ok((account, version))
 }

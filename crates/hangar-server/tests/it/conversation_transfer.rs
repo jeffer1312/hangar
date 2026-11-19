@@ -42,7 +42,9 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
  case 'thread/start': fs.writeFileSync(rollout,JSON.stringify({type:'session_meta',payload:{id:threadId,cwd}})+'\n');result=settings();break;
  case 'thread/resume': result=settings();break;
  case 'thread/read': result={thread:thread()};break;
- case 'thread/settings/update': if(p.effort)effort=p.effort;if(p.collaborationMode)mode=p.collaborationMode.mode;result=settings();break;
+ case 'thread/settings/update': if(p.effort)effort=p.effort;if(p.collaborationMode){mode=p.collaborationMode.mode;
+   process.stdout.write(JSON.stringify({method:'thread/settings/updated',params:{threadId,threadSettings:{collaborationMode:p.collaborationMode}}})+'\n');}
+   result=settings();break;
  case 'skills/list': result={data:[{cwd,skills:[],errors:[]}]};break;
  case 'mcpServerStatus/list': result={data:[],nextCursor:null};break;
  case 'thread/inject_items':

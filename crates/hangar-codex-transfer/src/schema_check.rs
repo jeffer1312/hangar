@@ -62,12 +62,24 @@ const FIELDS: &[(&str, &[&str])] = &[
     ("ThreadInjectItemsParams", &["threadId", "items"]),
 ];
 
+// Nomes como `Settings` e `Thread` se repetem no schema: confere que o campo usado aponta para eles.
+const REFS: &[(&str, &str, &str)] = &[
+    ("CollaborationMode", "settings", "Settings"),
+    ("ThreadStartResponse", "thread", "Thread"),
+    ("ThreadReadResponse", "thread", "Thread"),
+];
+
+fn refers(def: &Value, field: &str, target: &str) -> bool {
+    def["properties"][field].to_string().contains(&format!("\"#/definitions/{target}\""))
+}
+
 fn props(def: &Value) -> BTreeSet<String> {
     let own = def["properties"].as_object().into_iter().flat_map(Map::keys);
     let branches = def["oneOf"]
         .as_array()
         .into_iter()
         .chain(def["anyOf"].as_array())
+        .chain(def["allOf"].as_array())
         .flatten()
         .flat_map(|b| b["properties"].as_object().into_iter().flat_map(Map::keys));
     own.chain(branches).cloned().collect()
@@ -94,6 +106,11 @@ fn missing(defs: &Map<String, Value>, methods: &BTreeSet<String>) -> Vec<String>
             .iter()
             .filter(|m| !methods.contains(**m))
             .map(|m| format!("método {m}")),
+    );
+    out.extend(
+        REFS.iter()
+            .filter(|(owner, field, target)| defs.get(*owner).is_some_and(|def| !refers(def, field, target)))
+            .map(|(owner, field, target)| format!("{owner}.{field} não aponta para {target}")),
     );
     out
 }
@@ -155,7 +172,10 @@ fn a_used_field_or_method_that_disappeared_is_reported() {
         let properties: Map<String, Value> = fields
             .iter()
             .filter(|f| !(*name == "Thread" && **f == "path"))
-            .map(|f| ((*f).to_owned(), Value::Object(Map::new())))
+            .map(|f| {
+                let target = REFS.iter().find(|(owner, field, _)| owner == name && field == f).map(|(_, _, target)| *target);
+                ((*f).to_owned(), target.map_or_else(|| Value::Object(Map::new()), |t| serde_json::json!({"$ref": format!("#/definitions/{t}")})))
+            })
             .collect();
         defs.insert((*name).to_owned(), serde_json::json!({"properties": properties}));
     }

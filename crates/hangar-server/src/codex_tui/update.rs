@@ -77,7 +77,11 @@ pub(crate) fn due(raw: Option<&[u8]>, now: f64) -> bool {
 fn now() -> f64 { SystemTime::now().duration_since(UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64()) }
 
 /// A última palavra do `codex --version`.
-fn last_word(text: &str) -> String { text.split_whitespace().last().unwrap_or("").to_owned() }
+/// A versão do `codex --version`: a primeira palavra com forma de versão. A última pode ser a de um
+/// aviso de atualização impresso depois (`0.170.0 → 0.171.0`), que não é a instalada.
+pub(crate) fn cli_version(text: &str) -> Option<String> {
+    text.split_whitespace().find(|word| version(word).is_some()).map(str::to_owned)
+}
 
 enum Ran { Done { code: Option<i32>, stdout: String, stderr: String }, Timeout }
 
@@ -112,7 +116,7 @@ impl<'a> Update<'a> {
 
     async fn installed_version(&self, codex: &Path) -> Option<String> {
         match self.run_captured(codex, &["--version"], self.limits.query).await {
-            Ok(Ran::Done { code: Some(0), stdout, .. }) => Some(last_word(&stdout)),
+            Ok(Ran::Done { code: Some(0), stdout, .. }) => cli_version(&stdout),
             _ => None,
         }
     }
@@ -314,6 +318,15 @@ mod tests {
         for bad in ["", "0.161", "0.161.0.1", "v0.161.0", "0.161.0-", "0.161.0-a b", "0.161.0-\u{1b}[31m", "1.2.x", "ilegível", "-1.2.3"] {
             assert_eq!(version(bad), None, "{bad:?}");
         }
+    }
+
+    #[test]
+    fn the_installed_version_is_the_first_one_printed() {
+        assert_eq!(cli_version("codex-cli 0.170.0\n").as_deref(), Some("0.170.0"));
+        assert_eq!(cli_version("codex-cli 0.170.0\nUpdate available · 0.170.0 → 0.171.0\n").as_deref(), Some("0.170.0"),
+            "o aviso de atualização vem depois e não é a instalada");
+        assert_eq!(cli_version("codex-cli\n"), None);
+        assert_eq!(cli_version(""), None);
     }
 
     #[test]

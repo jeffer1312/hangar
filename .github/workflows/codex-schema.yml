@@ -48,5 +48,5 @@ jobs:
             schema_check::fields_used_exist_in_installed_codex 2>&1 | tee saida.txt
           grep -qE 'test result: ok\. 1 passed' saida.txt
           CODEX_SCHEMA_DIR="$schema" cargo test --locked -p hangar-codex-transfer --lib -- --ignored --exact \
-            schema_check::fields_used_exist_in_installed_codex 2>&1 | tee saida-transferencia.txt
-          grep -qE 'test result: ok\. 1 passed' saida-transferencia.txt
+            schema_check::fields_used_exist_in_installed_codex 2>&1 | tee transfer-output.txt
+          grep -qE 'test result: ok\. 1 passed' transfer-output.txt
