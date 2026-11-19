@@ -240,13 +240,28 @@ impl Drop for RawTasks {
     }
 }
 
-pub async fn connect_raw_ws(url:&str) -> Result<RawWebSocket,ClientError> {
+pub type WsRequest = tokio_tungstenite::tungstenite::handshake::client::Request;
+
+/// O pedido de abertura do WebSocket, com o token do app-server (`--ws-auth capability-token`) quando ele tem.
+pub fn ws_request(url:&str,bearer:Option<&str>) -> Result<WsRequest,ClientError> {
+    use tokio_tungstenite::tungstenite::{client::IntoClientRequest,http::{HeaderValue,header::AUTHORIZATION}};
+    let mut request = url.into_client_request().map_err(|error|ClientError::Io(error.to_string()))?;
+    if let Some(token) = bearer {
+        let value = HeaderValue::from_str(&format!("Bearer {token}")).map_err(|_|ClientError::Io("token do app-server inválido".into()))?;
+        request.headers_mut().insert(AUTHORIZATION,value);
+    }
+    Ok(request)
+}
+
+pub async fn connect_raw_ws(url:&str) -> Result<RawWebSocket,ClientError> { connect_raw_ws_with(url,None).await }
+
+pub async fn connect_raw_ws_with(url:&str,bearer:Option<&str>) -> Result<RawWebSocket,ClientError> {
     use futures_util::{SinkExt,StreamExt};
-    use tokio_tungstenite::tungstenite::{Message,protocol::WebSocketConfig,client::IntoClientRequest};
+    use tokio_tungstenite::tungstenite::{Message,protocol::WebSocketConfig};
     // Sem teto, como o `max_size=None` do Python: o `thread/resume` devolve o histórico inteiro, e uma conversa
     // longa passa de 16 MiB; o teto derrubava a conexão a cada assinatura.
     let config = WebSocketConfig::default().max_message_size(None).max_frame_size(None);
-    let request = url.into_client_request().map_err(|error|ClientError::Io(error.to_string()))?;
+    let request = ws_request(url,bearer)?;
     // O transporte não tem TLS: wss:// sairia em texto puro para uma porta TLS.
     if request.uri().scheme_str() != Some("ws") { return Err(ClientError::Io("só ws:// é aceito (transporte sem TLS)".into())); }
     let host = request.uri().host().ok_or_else(||ClientError::Io("WebSocket sem host".into()))?;

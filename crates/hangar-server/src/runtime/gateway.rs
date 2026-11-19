@@ -1988,7 +1988,8 @@ impl RuntimeRegistry {
                     }
                 }
                 let queue = QueueActor::start(store,lease);
-                let connection = match super::websocket::WebSocketConnection::connect(&target.endpoint).await {
+                let token = { let meta = target.metadata.clone(); tokio::task::spawn_blocking(move||super::codex_sidecar::ws_token(&meta)).await.ok().flatten() };
+                let connection = match super::websocket::WebSocketConnection::connect_with(&target.endpoint,token.as_deref()).await {
                     Ok(connection)=>connection,
                     Err(error)=>{
                         if let Err(stop) = queue.shutdown().await {
@@ -2004,7 +2005,7 @@ impl RuntimeRegistry {
                 if let Some(store) = &self.interactions { engine = engine.with_interactions(target.key.clone(),store.clone())?; }
                 engine = engine.with_live(self.live_sender(&target.name)).with_lifecycle(self.self_ref.get().cloned());
                 let cell = AdoptionCell::new(&target.endpoint,target.app_pid).with_lifecycle(self.codex_wake.clone(),target.sidecar_life());
-                let adoption = Adoption { endpoint:target.endpoint.clone(),app_pid:target.app_pid,cell:cell.clone() };
+                let adoption = Adoption { endpoint:target.endpoint.clone(),token,app_pid:target.app_pid,cell:cell.clone() };
                 let handle = RuntimeActor::spawn_adopted(runtime,queue,connection,engine,adoption);
                 self.entries.lock().await.insert(target.key.clone(),Entry { generation:target.generation,
                     handle:EntryHandle::CodexTerminal { target:Box::new(target.clone()),handle:handle.clone(),cell },

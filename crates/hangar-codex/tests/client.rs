@@ -206,6 +206,28 @@ async fn raw_websocket_refuses_wss_before_opening_a_connection() {
     assert!(tokio::time::timeout(Duration::from_millis(200),listener.accept()).await.is_err(),"conexão aberta antes da recusa");
 }
 
+/// O app-server com `--ws-auth capability-token` só aceita quem manda o token como Bearer; sem token, nada vai.
+#[tokio::test]
+async fn raw_websocket_sends_the_app_server_token_only_when_given() {
+    for bearer in [Some("token-de-prova"),None] {
+        let (listener,url) = raw_listener().await;
+        let server = tokio::spawn(async move {
+            let (stream,_) = listener.accept().await.unwrap();
+            let seen = std::sync::Arc::new(std::sync::Mutex::new(None));
+            let keep = seen.clone();
+            let callback = move |request:&tokio_tungstenite::tungstenite::handshake::server::Request,response| {
+                *keep.lock().unwrap() = request.headers().get("authorization").map(|v|v.to_str().unwrap().to_owned());
+                Ok(response)
+            };
+            drop(tokio_tungstenite::accept_hdr_async(stream,callback).await.unwrap());
+            seen.lock().unwrap().clone()
+        });
+        let raw = connect_raw_ws_with(&url,bearer).await.unwrap();
+        assert_eq!(server.await.unwrap(),bearer.map(|token|format!("Bearer {token}")));
+        drop(raw);
+    }
+}
+
 #[tokio::test]
 async fn raw_websocket_keeps_engine_id_and_receipts_after_the_send() {
     use futures_util::{SinkExt,StreamExt};

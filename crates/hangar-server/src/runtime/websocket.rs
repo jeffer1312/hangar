@@ -31,8 +31,11 @@ impl WebSocketConnection {
     pub fn new(socket: RawWebSocket) -> Self { Self { socket } }
 
     /// Só o código no erro: a mensagem crua da conexão pode trazer endereço ou texto do servidor.
-    pub async fn connect(url: &str) -> Result<Self, RuntimeError> {
-        hangar_codex::client::connect_raw_ws(url).await.map(Self::new)
+    pub async fn connect(url: &str) -> Result<Self, RuntimeError> { Self::connect_with(url, None).await }
+
+    /// `token`: o do app-server desta vida, lido do arquivo que o sidecar aponta.
+    pub async fn connect_with(url: &str, token: Option<&str>) -> Result<Self, RuntimeError> {
+        hangar_codex::client::connect_raw_ws_with(url, token).await.map(Self::new)
             .map_err(|_| RuntimeError::new("websocket_connect", "não foi possível conectar ao app-server do Codex"))
     }
 

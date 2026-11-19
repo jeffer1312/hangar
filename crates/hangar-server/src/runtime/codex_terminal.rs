@@ -140,7 +140,8 @@ impl AdoptionCell {
 
 /// O que o ator precisa para reconectar sem o registro: o endereço e o pid da abertura, e a célula viva.
 #[derive(Clone)]
-pub struct Adoption { pub endpoint:String, pub app_pid:u32, pub cell:AdoptionCell }
+/// `token`: o do app-server da vida adotada; a ressubida na mesma porta mantém o mesmo.
+pub struct Adoption { pub endpoint:String, pub token:Option<String>, pub app_pid:u32, pub cell:AdoptionCell }
 
 impl Adoption {
     fn still_ours(&self) -> bool { self.cell.current().is_some_and(|(endpoint,pid)|endpoint == self.endpoint && pid == self.app_pid) }
@@ -155,7 +156,7 @@ pub async fn reconnect(adoption:&Adoption) -> Attempt {
     if app_server_of(adoption.app_pid,&adoption.endpoint).await != AppServer::Ours {
         return Attempt::Gone(RuntimeError::new("codex_app_server_gone","o app-server da sessão não está mais vivo neste endereço"));
     }
-    match WebSocketConnection::connect(&adoption.endpoint).await {
+    match WebSocketConnection::connect_with(&adoption.endpoint,adoption.token.as_deref()).await {
         Ok(_) if !adoption.still_ours() => Attempt::Gone(RuntimeError::new("codex_adoption_changed","a sessão trocou de dono durante a reconexão")),
         Ok(connection) => Attempt::Connected(super::actor::RuntimeConnection::WebSocket(connection)),
         Err(error) => Attempt::Retry(error),

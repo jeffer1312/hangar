@@ -2680,6 +2680,24 @@ fn early_trust_without_answer_stays_silent() {
 }
 
 #[test]
+fn early_trust_without_answer_is_not_repeated_on_every_plugin_change() {
+    let mut engine = Engine::new(json!({"name":"session","thread_id":"thread-1","headless":true,"initialized":true,"ready":true,
+        "cwd":"/home/u","codex_home":"/home/u/.codex"}),1,clock(10.0));
+    assert_eq!(frames(&engine.plugins_changed())[0]["method"],"hooks/list");
+    engine.apply(EngineInput::Tick,clock(60.0)).unwrap();
+    assert!(frames(&engine.plugins_changed()).is_empty(),"o Codex não respondeu à anterior: outra pergunta igual só acumula");
+    // A recusa de um hook continua pedindo a reaprovação.
+    let refused = json!({"method":"hook/completed","params":{"threadId":"thread-1","run":{"eventName":"postToolUse","status":"failed",
+        "sourcePath":"/home/u/.codex/plugins/cache/m/p/local/hooks/hooks.json",
+        "entries":[{"kind":"error","text":"plugin contents changed; hook approval required"}]}}});
+    let reactive = frames(&line(&mut engine,refused,61.0));
+    assert_eq!(reactive[0]["method"],"hooks/list");
+    // Respondeu: a próxima mudança de plugin volta a reaprovar antes da recusa.
+    line(&mut engine,json!({"id":reactive[0]["id"],"result":{"data":[{"cwd":"/home/u","hooks":[]}]}}),61.1);
+    assert_eq!(frames(&engine.plugins_changed())[0]["method"],"hooks/list");
+}
+
+#[test]
 fn synced_hooks_refresh_waits_for_native_approval_before_confirming() {
     for headless in [true,false] {
         let mut engine = Engine::new(json!({"name":"session","thread_id":"thread-1","headless":headless,

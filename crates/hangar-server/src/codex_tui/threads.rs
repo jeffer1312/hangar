@@ -181,7 +181,11 @@ async fn follow(session: &Session, cwd: &str, gone: &AtomicBool, ready: Option<t
         if gone.load(Ordering::Acquire) {
             return;
         }
-        match tokio::time::timeout(Duration::from_secs(1), tokio_tungstenite::connect_async_with_config(session.endpoint.as_str(), Some(config), false)).await {
+        let Ok(request) = hangar_codex::client::ws_request(&session.endpoint, session.ws_token.as_deref()) else {
+            Pane.say(&format!("endereço do app-server inválido: {}", session.endpoint));
+            return;
+        };
+        match tokio::time::timeout(Duration::from_secs(1), tokio_tungstenite::connect_async_with_config(request, Some(config), false)).await {
             Ok(Ok((ws, _))) => socket = Some(ws),
             _ => tokio::time::sleep(Duration::from_millis(100)).await,
         }

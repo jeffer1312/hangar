@@ -172,7 +172,8 @@ impl NativeProcess {
         ));
         let admin = super::storage::NewDirectory::create(&admin_path)
             .map_err(|_| "codex_account_login_failed")?;
-        command.args(["-c", "project_root_markers=[]"]);
+        // Sem plugins o app-server não confere os marketplaces pela rede a cada leitura de login.
+        command.args(["-c", "project_root_markers=[]", "-c", "features.plugins=false"]);
         if !account.is_default {
             command.args(["-c", r#"cli_auth_credentials_store="file""#]);
         }

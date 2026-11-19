@@ -191,6 +191,9 @@ pub struct Engine {
     notices_seen:BTreeSet<String>,
     /// A rodada de reaprovação deste turno já terminou (aprovou, falhou ou não tinha o que aprovar).
     hook_trust_settled:bool,
+    /// A antecipada ficou sem resposta nesta conexão: outra mudança de plugin não pergunta de novo até
+    /// o Codex responder ou a conexão ser refeita; a reaprovação pela recusa do hook continua valendo.
+    early_trust_unanswered:bool,
     /// Saída nova de comando ainda não publicada: sai no Tick deste instante.
     output_due:Option<f64>,
     thinking:LiveBuffer,
@@ -506,7 +509,7 @@ impl Engine {
             // já foi recusado no `new_checked`; em nenhum dos dois vira Full Access.
             permission_mode:headless.then(||super::codex_launch::stored_mode(&metadata).ok()).flatten().map(Into::into),token_usage:Value::Null,rate_limits:Value::Null,usage_limited:false,
             preview:LiveBuffer::default(),response_started:false,first_response_start:None,compacting:false,
-            running_commands:BTreeMap::new(),hook_streaks:BTreeMap::new(),notices_seen:BTreeSet::new(),hook_trust_settled:false,output_due:None,thinking:LiveBuffer::default(),was_working:metadata["in_progress"] == true,
+            running_commands:BTreeMap::new(),hook_streaks:BTreeMap::new(),notices_seen:BTreeSet::new(),hook_trust_settled:false,early_trust_unanswered:false,output_due:None,thinking:LiveBuffer::default(),was_working:metadata["in_progress"] == true,
             rpc:BTreeMap::new(),server_requests:Vec::new(),
             request_epochs:BTreeMap::new(),answering:BTreeSet::new(),lost_requests:BTreeSet::new(),wires:BTreeMap::new(),policies:BTreeMap::new(),last_format_request:None,format_gate:FormatGate::default(),reported_formats:BTreeSet::new(),async_questions,subagents:BTreeMap::new(),subagent_revision:0,subagent_epoch:Arc::new(subagents::FamilyEpoch::default()),reservations:Vec::new(),skill_preparations:BTreeMap::new(),skips:BTreeMap::new(),last_event:clock.monotonic_s,mode_write:None,metadata }
     }
@@ -813,7 +816,7 @@ impl Engine {
     /// Plugin reinstalado no disco: reaprova antes do próximo hook, sem esperar a recusa dele.
     pub fn plugins_changed(&mut self) -> Vec<Effect> {
         let mut effects = Vec::new();
-        if self.sendable() { self.trust_synced_hooks(None,true,&mut effects); }
+        if self.sendable() && !self.early_trust_unanswered { self.trust_synced_hooks(None,true,&mut effects); }
         effects
     }
 
@@ -836,6 +839,7 @@ impl Engine {
     }
 
     fn hook_trust_reply(&mut self,rpc:&Rpc,line:&Value,effects:&mut Vec<Effect>) {
+        self.early_trust_unanswered = false;
         let parent = rpc.continuation.as_ref().and_then(|next|next["parent"].as_str());
         // A antecipada não gasta a rodada do turno nem avisa: se falhar, a recusa do hook dispara a reativa.
         let early = rpc.continuation.as_ref().is_some_and(|next|next["early"] == true);
@@ -1188,7 +1192,7 @@ impl Engine {
         // Terminal adota a thread que a TUI abriu: nunca cria conversa nem sobe outro processo.
         if !self.headless && self.thread_id.is_empty() { return Err(error("Codex com terminal sem conversa identificada")); }
         self.reconnect = reconnect;
-        self.ready = false;
+        self.ready = false; self.early_trust_unanswered = false;
         self.connected = false; self.subscribed = false; self.subscribe_due = None; self.subscribe_wait = SUBSCRIBE_RETRY_BASE;
         self.turn_known = false;
         let mut effects = Vec::new();
@@ -1941,12 +1945,14 @@ impl Engine {
                 let mut subscribe_lost = false;
                 let mut uncertain = Vec::new();
                 let mut trust_expired = false;
+                let mut early_expired = false;
                 for rpc in self.rpc.values_mut() {
                     if !rpc.timed_out && clock.monotonic_s >= rpc.deadline {
                         rpc.timed_out = true;
                         let hook_trust = rpc.continuation.as_ref().filter(|next|next["kind"] == "hook_trust");
                         if hook_trust.is_some_and(|next|next["early"] == true) {
                             tracing::warn!(session=%self.state.session,method=%rpc.method,"codex: reaprovação antecipada sem resposta");
+                            early_expired = true;
                         }
                         trust_expired |= hook_trust.is_some_and(|next|next["early"] != true);
                         subscribe_lost |= subscribe_rpc(rpc) && rpc.params["threadId"] == self.thread_id.as_str();
@@ -1960,6 +1966,7 @@ impl Engine {
                     }
                 }
                 for entry in uncertain { self.set_reservation(&entry,ReservationState::Uncertain); }
+                if early_expired { self.early_trust_unanswered = true; }
                 // Reaprovação sem resposta: o hook que motivou continua recusado, e a conversa precisa saber.
                 if trust_expired && !self.hook_trust_settled {
                     self.hook_trust_settled = true;
