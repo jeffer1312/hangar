@@ -147,6 +147,10 @@ impl Diary {
         let mut event = json!({"evento": "codex.abertura.etapas", "nivel": if opened { "info" } else { "aviso" }, "sessao": self.session,
             "provider": "codex", "abriu": if opened { "sim" } else { "nao" }, "total_ms": stages.iter().map(|(_, ms)| ms).sum::<u64>()});
         for (stage, ms) in stages { event[format!("{stage}_ms")] = json!(ms); }
+        if !opened {
+            let before = stages.iter().rev().map(|(stage, _)| *stage).find(|stage| *stage != "interrompida").unwrap_or("inicio");
+            event["parou_depois_de"] = json!(before);
+        }
         self.write(event);
     }
 

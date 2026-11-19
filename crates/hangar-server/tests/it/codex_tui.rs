@@ -159,6 +159,8 @@ fn without_codex_the_pane_stays_open_with_the_error() {
     assert_eq!(stages.len(), 1);
     assert_eq!(stages[0]["abriu"], "nao");
     assert!(stages[0]["plugins_ms"].is_number() && stages[0].get("tui_ms").is_none(), "{}", stages[0]);
+    assert!(stages[0]["interrompida_ms"].is_number(), "a etapa que parou entra com o seu tempo: {}", stages[0]);
+    assert_eq!(stages[0]["parou_depois_de"], "plugins");
 }
 
 /// App-server que morre na largada: a cauda do stderr na tela, sem TUI, pane aberto

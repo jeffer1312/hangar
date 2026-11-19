@@ -184,6 +184,8 @@ impl Stages {
     fn finish(&mut self, opened: bool) {
         if self.written { return; }
         self.written = true;
+        // A etapa que estava rodando quando a abertura parou entra com o tempo que gastou até ali.
+        if !opened { self.mark("interrompida"); }
         if let Some(session) = &self.session {
             app_server::Diary::new(session, hangar_core::paths::log_base()).stages(&self.done, opened);
         }
