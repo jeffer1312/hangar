@@ -228,7 +228,7 @@ fn unread() -> RuntimeError { refuse("Não consegui ler os processos da sessão;
 /// Sidecar com os campos de processo zerados no modo pedido.
 fn cleared(mut meta:Meta,headless:bool) -> Meta {
     meta.insert("headless".into(),json!(headless));
-    for field in ["cano","endpoint","app_pid","tui_pid","launcher_pid"] { meta.insert(field.into(),Value::Null); }
+    for field in ["cano","endpoint","app_pid","tui_pid","launcher_pid",codex_sidecar::WS_TOKEN_FILE] { meta.insert(field.into(),Value::Null); }
     meta
 }
 
@@ -325,7 +325,11 @@ impl Watcher {
                 ensure_absent(lives,&[i64::from(cano.pid)]).await.map_err(|_|job())?;
             }
         } else {self.drop_terminal(registry,name,&MuxProcess::new(&self.cfg.mux_program,TIMEOUT)).await?;}
-        codex_sidecar::locked(&codex_sidecar::dir(&self.cfg.home),name,|path|match std::fs::remove_file(path) {Err(e) if e.kind()!=std::io::ErrorKind::NotFound=>Err(e),_=>Ok(())}).map_err(|_|job())
+        let dir=codex_sidecar::dir(&self.cfg.home);
+        codex_sidecar::locked(&dir,name,|path|{
+            let token=codex_sidecar::load(path).and_then(|meta|meta.get(codex_sidecar::WS_TOKEN_FILE).and_then(Value::as_str).map(str::to_owned));
+            match std::fs::remove_file(path) {Err(e) if e.kind()!=std::io::ErrorKind::NotFound=>Err(e),_=>{codex_sidecar::remove_ws_token(&dir,token.as_deref());Ok(())}}
+        }).map_err(|_|job())
     }
 
     async fn load(&self,name:&str) -> Option<Meta> {

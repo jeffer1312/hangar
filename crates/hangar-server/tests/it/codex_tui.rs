@@ -86,7 +86,10 @@ fn a_new_session_runs_the_tui_over_its_app_server_and_cleans_up() {
     assert_eq!(stderr(&output), "hangar-codex-tui: conferindo os plugins…\nhangar-codex-tui: subindo o app-server do Codex…\n");
     let [server] = case.role("codex app-server").try_into().unwrap();
     let endpoint = endpoint(&server);
-    assert_eq!(server["argv"], json!(["app-server", "--listen", endpoint, "-c", "sandbox_mode=\"workspace-write\"", "-c", "approval_policy=\"on-request\"",
+    let token_file = server["argv"][6].as_str().unwrap().to_owned();
+    assert!(token_file.contains("/.hangar/codex-sessions/ws-tokens/"), "{token_file}");
+    assert_eq!(server["argv"], json!(["app-server", "--listen", endpoint, "--ws-auth", "capability-token", "--ws-token-file", token_file,
+        "-c", "sandbox_mode=\"workspace-write\"", "-c", "approval_policy=\"on-request\"",
         "-c", "tool_output_token_limit=144000", "-c", "service_tier=\"priority\"", "-c", "shell_environment_policy.set.CP_SESSION_NAME=\"codex-proj\"",
         "-c", "shell_environment_policy.set.CP_SESSION_KEY=\"key-0001\"", "-c", "shell_environment_policy.set.TMUX=\"/tmp/tmux-1000/default,1234,5\"",
         "-c", "shell_environment_policy.set.TMUX_PANE=\"%7\"", "-c", "model_verbosity=\"low\""]));
@@ -94,8 +97,22 @@ fn a_new_session_runs_the_tui_over_its_app_server_and_cleans_up() {
     assert!(server["env"].get("CP_AUTH_TOKEN").is_none(), "o token do servidor não chega ao Codex");
     let [tui] = case.role("codex tui").try_into().unwrap();
     assert_eq!(tui["argv"], json!(["--remote", endpoint, "--no-alt-screen", "-C", case.work, "--sandbox", "workspace-write", "--ask-for-approval",
-        "on-request", "-c", "service_tier=\"priority\"", "-c", "check_for_update_on_startup=false", "-m", "gpt-6", "-c",
-        "model_reasoning_effort=\"high\"", "olá, começa"]));
+        "on-request", "-c", "service_tier=\"priority\"", "-c", "check_for_update_on_startup=false", "--remote-auth-token-env",
+        "HANGAR_CODEX_WS_TOKEN", "-m", "gpt-6", "-c", "model_reasoning_effort=\"high\"", "olá, começa"]));
+    // O token vai só pelo ambiente da TUI e é o do arquivo que o app-server lê.
+    let token = tui["env"]["HANGAR_CODEX_WS_TOKEN"].as_str().unwrap();
+    assert_eq!(token.len(), 64);
+    assert!(!tui["argv"].to_string().contains(token) && !server["argv"].to_string().contains(token));
+    let diary = case.home.join(".hangar/logs/diario/codex-tui");
+    let stages: Vec<Value> = std::fs::read_dir(&diary).unwrap().flatten()
+        .flat_map(|entry| std::fs::read_to_string(entry.path()).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect::<Vec<Value>>())
+        .filter(|line: &Value| line["evento"] == "codex.abertura.etapas").collect();
+    let [opened] = stages.try_into().unwrap();
+    assert_eq!(opened["abriu"], "sim");
+    for stage in ["preparo", "porta_e_token", "atualizacao", "plugins", "subir_app_server", "esperar_porta", "hooks", "escuta", "tui"] {
+        assert!(opened[format!("{stage}_ms")].is_number(), "{stage}: {opened}");
+    }
+    assert!(!opened.to_string().contains(token));
     let [snapshot] = case.role("tui-sidecar-snapshot").try_into().unwrap();
     let meta = &snapshot["sidecar"];
     for (field, value) in [("name", json!("codex-proj")), ("thread_id", json!("thread-1")), ("cwd", json!(case.work)), ("model", json!("gpt-6")),
@@ -134,9 +151,14 @@ fn without_codex_the_pane_stays_open_with_the_error() {
     let lines: Vec<Value> = std::fs::read_dir(&diary).unwrap().flatten()
         .flat_map(|entry| std::fs::read_to_string(entry.path()).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect::<Vec<Value>>())
         .collect();
-    assert_eq!(lines.len(), 1);
-    assert_eq!((lines[0]["evento"].as_str(), lines[0]["codigo"].as_str(), lines[0]["sessao"].as_str()),
-        (Some("codex.app_server.falhou"), Some("criar_processo"), Some("codex-proj")));
+    let failures: Vec<&Value> = lines.iter().filter(|line| line["evento"] == "codex.app_server.falhou").collect();
+    assert_eq!(failures.len(), 1);
+    assert_eq!((failures[0]["codigo"].as_str(), failures[0]["sessao"].as_str()), (Some("criar_processo"), Some("codex-proj")));
+    // A abertura que parou antes da TUI também diz até onde chegou.
+    let stages: Vec<&Value> = lines.iter().filter(|line| line["evento"] == "codex.abertura.etapas").collect();
+    assert_eq!(stages.len(), 1);
+    assert_eq!(stages[0]["abriu"], "nao");
+    assert!(stages[0]["plugins_ms"].is_number() && stages[0].get("tui_ms").is_none(), "{}", stages[0]);
 }
 
 /// App-server que morre na largada: a cauda do stderr na tela, sem TUI, pane aberto

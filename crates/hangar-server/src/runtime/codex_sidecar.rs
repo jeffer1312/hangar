@@ -116,7 +116,14 @@ pub fn create_ws_token(dir:&Path,name:&str) -> io::Result<(PathBuf,String)> {
     let tokens = ws_tokens(dir);
     std::fs::create_dir_all(&tokens)?;
     #[cfg(unix)] { use std::os::unix::fs::PermissionsExt; std::fs::set_permissions(&tokens,std::fs::Permissions::from_mode(0o700))?; }
-    let file = std::path::absolute(tokens.join(format!("{}-{}.token",sanitize_session_name(name),hex(&suffix))))?;
+    let stem = sanitize_session_name(name);
+    // Vida nova da sessão: o token que um lançador morto à força deixou não serve a mais ninguém.
+    for entry in std::fs::read_dir(&tokens)?.flatten() {
+        let old = entry.file_name();
+        let rest = old.to_str().and_then(|old|old.strip_prefix(&format!("{stem}-"))).and_then(|rest|rest.strip_suffix(".token"));
+        if rest.is_some_and(|rest|rest.len() == 12 && rest.bytes().all(|b|b.is_ascii_hexdigit())) { let _ = std::fs::remove_file(entry.path()); }
+    }
+    let file = std::path::absolute(tokens.join(format!("{stem}-{}.token",hex(&suffix))))?;
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)] { use std::os::unix::fs::OpenOptionsExt; options.mode(0o600); }
@@ -134,7 +141,9 @@ pub fn ws_token(meta:&Value) -> Option<String> {
 /// Só apaga dentro da pasta dos tokens: o caminho vem do sidecar.
 pub fn remove_ws_token(dir:&Path,file:Option<&str>) {
     let Some(file) = file.map(Path::new) else { return };
-    let inside = std::path::absolute(ws_tokens(dir)).ok().is_some_and(|tokens|file.parent() == Some(tokens.as_path()));
+    // Comparados já resolvidos: o lançador e o servidor podem escrever o HOME de jeitos diferentes.
+    let parent = file.parent().and_then(|parent|std::fs::canonicalize(parent).ok());
+    let inside = parent.is_some_and(|parent|std::fs::canonicalize(ws_tokens(dir)).is_ok_and(|tokens|tokens == parent));
     if inside { let _ = std::fs::remove_file(file); }
 }
 
@@ -527,17 +536,27 @@ mod tests {
             assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777,0o600);
             assert_eq!(std::fs::metadata(file.parent().unwrap()).unwrap().permissions().mode() & 0o777,0o700);
         }
-        let (other,_) = create_ws_token(dir.path(),"cx").unwrap();
-        assert_ne!(other,file,"cada vida tem o seu arquivo");
+        let (other,_) = create_ws_token(dir.path(),"cx-a").unwrap();
         sidecar(dir.path(),json!({"ws_token_file":file}));
         assert_eq!(ws_token(&serde_json::to_value(load(&path(dir.path(),"cx")).unwrap()).unwrap()).as_deref(),Some(token.as_str()));
         assert_eq!(ws_token(&json!({})),None,"sidecar de lançador antigo conecta sem token");
         assert!(delete_if_life(dir.path(),"cx","ws://127.0.0.1:4000",40,Some("k1")).unwrap());
         assert!(!file.exists(),"o token sai com o sidecar");
-        assert!(other.exists(),"o de outra vida fica");
+        assert!(other.exists(),"o de outra sessão fica");
         let outside = dir.path().join("fora.token");
         std::fs::write(&outside,"x").unwrap();
         remove_ws_token(dir.path(),outside.to_str());
         assert!(outside.exists(),"caminho fora da pasta dos tokens não é apagado");
+    }
+
+    /// Lançador morto à força não apaga o seu token: a vida seguinte da mesma sessão apaga.
+    #[test]
+    fn a_new_life_removes_the_tokens_left_by_dead_lives_of_the_same_session_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let (left,_) = create_ws_token(dir.path(),"cx").unwrap();
+        let (neighbour,_) = create_ws_token(dir.path(),"cx-a").unwrap();
+        let (current,_) = create_ws_token(dir.path(),"cx").unwrap();
+        assert!(!left.exists(),"token de vida morta da mesma sessão");
+        assert!(current.exists() && neighbour.exists(),"a vida nova e a sessão de nome parecido ficam");
     }
 }

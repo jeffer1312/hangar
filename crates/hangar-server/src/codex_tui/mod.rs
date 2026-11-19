@@ -168,17 +168,30 @@ async fn wait_enter() {
     }).await;
 }
 
-/// Os milissegundos de cada etapa da abertura, na ordem em que acabaram.
-struct Stages { last: std::time::Instant, done: Vec<(&'static str, u64)> }
+/// Os milissegundos de cada etapa da abertura, na ordem em que acabaram. Vai ao diário uma vez, também
+/// quando a abertura para antes da TUI: é aí que mais interessa saber até onde chegou.
+struct Stages { last: std::time::Instant, done: Vec<(&'static str, u64)>, session: Option<String>, written: bool }
 
 impl Stages {
-    fn new() -> Self { Self { last: std::time::Instant::now(), done: Vec::new() } }
+    fn new() -> Self { Self { last: std::time::Instant::now(), done: Vec::new(), session: None, written: false } }
 
     fn mark(&mut self, stage: &'static str) {
         let now = std::time::Instant::now();
         self.done.push((stage, u64::try_from(now.duration_since(self.last).as_millis()).unwrap_or(u64::MAX)));
         self.last = now;
     }
+
+    fn finish(&mut self, opened: bool) {
+        if self.written { return; }
+        self.written = true;
+        if let Some(session) = &self.session {
+            app_server::Diary::new(session, hangar_core::paths::log_base()).stages(&self.done, opened);
+        }
+    }
+}
+
+impl Drop for Stages {
+    fn drop(&mut self) { self.finish(false); }
 }
 
 /// A abertura inteira, da leitura dos argumentos até a TUI sair.
@@ -216,6 +229,7 @@ async fn flow(raw: &[String], env: &[(String, String)], life: &mut session::Life
     if let Some(warning) = plan.mode_warning() {
         screen.say(&warning);
     }
+    stages.session = Some(plan.name.clone());
     // A conta tem de ser do Hangar, a mesma recusa da abertura pelo servidor.
     let service = AccountService::new(AccountEnvironment::from_pairs(env.iter().cloned()));
     if let Err(error) = service.resolve(Provider::Codex, &plan.account) {
@@ -251,7 +265,7 @@ async fn flow(raw: &[String], env: &[(String, String)], life: &mut session::Life
             return Exit::opening(1);
         }
     };
-    stages.mark("porta");
+    stages.mark("porta_e_token");
     update::Update::new(&home, &child_env).run(&screen).await;
     stages.mark("atualizacao");
     marketplaces::run(&child_env, &screen).await;
@@ -285,12 +299,13 @@ async fn flow(raw: &[String], env: &[(String, String)], life: &mut session::Life
             None => screen.say(&format!("nao achei o rollout da conversa {resume}")),
         }
     }
+    stages.mark("subir_app_server");
     let listening = life.listen_with(&plan.cwd, first.map(|text| threads::FirstPrompt::new(text, plan.resume.clone())));
     screen.say("subindo o app-server do Codex…");
     if !life.wait_port(app_server::PORT_WAIT, &screen).await {
         return Exit::opening(1);
     }
-    stages.mark("app_server");
+    stages.mark("esperar_porta");
     for line in hooks::lines(&hooks::trust(&endpoint, shared.ws_token.as_deref(), &plan.cwd, &home, &plan.codex_home).await) {
         screen.say(&line);
     }
@@ -314,7 +329,7 @@ async fn flow(raw: &[String], env: &[(String, String)], life: &mut session::Life
         shared.tui_started(pid, &screen);
     }
     stages.mark("tui");
-    app_server::Diary::new(&plan.name, hangar_core::paths::log_base()).stages(&stages.done);
+    stages.finish(true);
     let code = life.watch(&mut tui, &plan, &screen).await;
     // A TUI redesenha a tela inteira por cima do aviso: ele volta depois que ela sai.
     if let Some(line) = life.first_prompt_failure() {
