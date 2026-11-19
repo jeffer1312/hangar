@@ -361,10 +361,12 @@ export const HostCard = memo(function HostCard({ host, flash, onLayout }: { host
   const hangarShare = Math.min(hangar ?? 0, used);
   const buildShare = Math.min(build ?? 0, used - hangarShare);
   const other = used - hangarShare - buildShare;
+  // Pasta ainda sem medida: o saldo a inclui, então não é "Outros" e encolheria quando a conta terminasse (como no nativo).
+  const pending = (hangar === undefined && host.dir_hangar.computing) || (build === undefined && host.dir_build_cache.computing);
   const parts: { label: string; value: number | undefined; share: number; computing?: boolean; color: string }[] = [
     { label: m.status_host_dir_hangar(), value: hangar, share: hangarShare, computing: host.dir_hangar.computing, color: colors[0] },
     { label: m.status_host_dir_build(), value: build, share: buildShare, computing: host.dir_build_cache.computing, color: colors[1] },
-    { label: m.status_host_other(), value: other, share: other, color: colors[5] },
+    { label: pending ? m.native_status_disk_unclassified() : m.status_host_other(), value: other, share: other, color: colors[5] },
     { label: m.status_host_free(), value: free, share: free, color: c.hover },
   ];
   const disk = parts.map(({ label, value, share, computing, color }) => ({ label, color, value: share,

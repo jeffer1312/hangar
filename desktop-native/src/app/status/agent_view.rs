@@ -35,6 +35,8 @@ pub(in crate::app) struct AgentRun {
     cap_pending: bool,
     steps_open: bool,
     diagnosis: String,
+    /// O token do servidor desta máquina, lido quando o agente subiu: o relatório copiado o esconde mesmo sem rótulo.
+    secrets: Vec<String>,
     tasks: Vec<Task<()>>,
     _quit: Option<Subscription>,
 }
@@ -78,7 +80,7 @@ fn step_title(action: &Action) -> String {
 /// `CP_AUTH_TOKEN`, e o texto vai para a área de transferência.
 fn report(run: &AgentRun) -> String {
     use super::super::setup::{Secrets, scrub};
-    scrub(&raw_report(run), &Secrets::here(Vec::new()))
+    scrub(&raw_report(run), &Secrets::here(run.secrets.clone()))
 }
 
 /// O diagnóstico, cada passo com o comando e a saída, e o fim.
@@ -192,7 +194,7 @@ impl Hangar {
         // A anterior (já acabada) sai daqui: só uma execução por página.
         self.device.status.fix = Some(AgentRun { agent, id, started: Instant::now(), ended: None, progress: Progress::default(),
             phase: RunPhase::Starting, handle: handle.clone(), stop_requested: false, stop_failed: false, cap_pending: false,
-            steps_open: false, diagnosis, tasks: Vec::new(), _quit: Some(quit) });
+            steps_open: false, diagnosis, secrets: Vec::new(), tasks: Vec::new(), _quit: Some(quit) });
         let (done, started) = tokio::sync::oneshot::channel();
         self.runtime.spawn_blocking(move || { let _ = done.send(agent_fix::start(agent, prompt, &home, &handle)); });
         let reader = cx.spawn(async move |this, cx| {
@@ -236,8 +238,8 @@ impl Hangar {
             return None;
         };
         match started {
-            Ok(agent_fix::Started { output, stop_failed }) => {
-                run.phase = RunPhase::Running;
+            Ok(agent_fix::Started { output, stop_failed, secrets }) => {
+                (run.phase, run.secrets) = (RunPhase::Running, secrets);
                 // O Parar da subida não derrubou o agente: o botão volta, e o teto que já passou tenta de novo.
                 if stop_failed {
                     run.stop_failed = true;
@@ -265,6 +267,8 @@ impl Hangar {
         let Some(run) = self.device.status.fix.as_mut().filter(|run| run.id == id) else { return };
         match item {
             setup_agent::Output::Line(line) => { let (agent, at) = (run.agent, run.started.elapsed()); run.progress.feed(agent, &line, at); }
+            // A página Status não desfaz pasta: a sobra já está no log do `agent::spawn`.
+            setup_agent::Output::Held => {}
             setup_agent::Output::Exit(ended) => {
                 (run.ended, run.phase, run.progress.exit) = (Some(run.started.elapsed()), RunPhase::Checking, Some(ended));
                 // O grupo dele já saiu junto (`agent::spawn`).
@@ -537,7 +541,7 @@ mod tests {
     fn finished_run() -> AgentRun {
         AgentRun { agent: Agent::Claude, id: 1, started: Instant::now(), ended: Some(Duration::from_secs(3)), progress: Progress::default(),
             phase: RunPhase::Failed { error: None }, handle: agent_fix::Handle::default(), stop_requested: false, stop_failed: false,
-            cap_pending: false, steps_open: false, diagnosis: "Failure code: launch_failed".into(), tasks: Vec::new(), _quit: None }
+            cap_pending: false, steps_open: false, diagnosis: "Failure code: launch_failed".into(), secrets: Vec::new(), tasks: Vec::new(), _quit: None }
     }
 
     #[test]
@@ -546,8 +550,12 @@ mod tests {
         run.progress.feed(Agent::Claude, r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"cat ~/.hangar/config/.env"}}]}}"#, Duration::ZERO);
         run.progress.feed(Agent::Claude, r#"{"type":"user","message":{"content":[{"tool_use_id":"t1","type":"tool_result","content":"CP_PORT=8765\nCP_AUTH_TOKEN=s3cr3t-fixture-token"}]}}"#, Duration::ZERO);
         run.progress.feed(Agent::Claude, "curl -H 'Authorization: Bearer outro-fixture-token' falhou", Duration::ZERO);
+        // O valor sozinho na linha, sem rótulo: só sai porque o token desta máquina é conhecido.
+        run.progress.feed(Agent::Claude, "token-sem-rotulo-fixture", Duration::ZERO);
+        run.secrets = vec!["token-sem-rotulo-fixture".into()];
         let text = report(&run);
         assert!(!text.contains("s3cr3t-fixture-token") && !text.contains("outro-fixture-token"), "{text}");
+        assert!(!text.contains("token-sem-rotulo-fixture"), "{text}");
         assert!(text.contains("CP_PORT=8765") && text.contains("launch_failed"), "{text}");
     }
 

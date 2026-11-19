@@ -225,7 +225,9 @@ impl Transcript {
     }
 }
 
-pub(crate) enum Output { Line(String), Exit(Ended) }
+/// `Held`: o agente saiu, mas alguém que nasceu dele ainda segura a saída (vem logo antes do `Exit`). No Windows o fim
+/// do agente não leva os filhos, e quem desfaz a pasta precisa saber que ainda pode haver quem escreva nela.
+pub(crate) enum Output { Line(String), Held, Exit(Ended) }
 
 /// Como o agente acabou: um agente morto pelo sistema (falta de memória, `kill -9`) não tem código de saída.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -363,6 +365,7 @@ pub(crate) fn spawn(launch: Launch) -> Result<(std::sync::Arc<Owner>, async_chan
         for _ in 0..readers {
             if reads.recv_timeout(deadline.saturating_duration_since(Instant::now())).is_err() {
                 crate::log_line(&format!("agente {}: saída ainda aberta depois do fim; seguindo sem ela", waiter.pid()));
+                let _ = tx.send_blocking(Output::Held);
                 break;
             }
         }
@@ -487,7 +490,9 @@ mod tests {
         let (_, output) = spawn(Launch { program: fake, args: vec![], work: dir.join("work"), env, prompt: "conserte\n".into() }).unwrap();
         let mut lines = Vec::new();
         let exit = loop {
-            match output.recv_blocking() { Ok(Output::Line(line)) => lines.push(line), Ok(Output::Exit(ended)) => break Some(ended), Err(_) => break None }
+            match output.recv_blocking() {
+                Ok(Output::Line(line)) => lines.push(line), Ok(Output::Held) => {}, Ok(Output::Exit(ended)) => break Some(ended), Err(_) => break None,
+            }
         };
         lines.sort();
         assert_eq!(lines, vec!["erro", "prompt: conserte", "token: ausente"]);
@@ -499,7 +504,7 @@ mod tests {
         std::fs::set_permissions(&killed, std::fs::Permissions::from_mode(0o755)).unwrap();
         let (_, output) = spawn(Launch { program: killed, args: vec![], work: dir.join("work"), env: vec![], prompt: String::new() }).unwrap();
         let ended = loop {
-            match output.recv_blocking() { Ok(Output::Exit(ended)) => break Some(ended), Ok(Output::Line(_)) => {}, Err(_) => break None }
+            match output.recv_blocking() { Ok(Output::Exit(ended)) => break Some(ended), Ok(Output::Line(_) | Output::Held) => {}, Err(_) => break None }
         };
         assert_eq!(ended, Some(Ended::Signal(9)));
         let _ = std::fs::remove_dir_all(dir);
@@ -530,6 +535,7 @@ mod tests {
             while let Ok(item) = output.recv_blocking() {
                 match item {
                     Output::Line(line) => child = line.strip_prefix("filho ").and_then(|pid| pid.parse::<u32>().ok()),
+                    Output::Held => {}
                     Output::Exit(end) => { ended = Some(end); break; }
                 }
             }

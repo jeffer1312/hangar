@@ -504,8 +504,14 @@ fn dir_part(label: String, dir: DirSize, slot: usize) -> Option<Seg> {
 
 fn disk_parts(home: DiskUse, hangar: DirSize, cache: DirSize) -> Vec<Seg> {
     let mut parts: Vec<Seg> = [dir_part("~/.hangar".into(), hangar, 1), dir_part(tr("status_disk_build_cache"), cache, 3)].into_iter().flatten().collect();
-    let known: u64 = hangar.bytes.unwrap_or(0) + cache.bytes.unwrap_or(0);
-    let other = home.used.saturating_sub(known);
+    // A medida das pastas tem até uma hora e o cache pode estar noutro volume: na barra elas nunca passam do usado
+    // agora, senão o livre encolheria. O texto continua com a medida real.
+    let mut budget = home.used;
+    for seg in &mut parts {
+        let bytes = (seg.weight as u64).min(budget);
+        (seg.weight, budget) = (bytes as f32, budget - bytes);
+    }
+    let other = budget;
     let free = home.total.saturating_sub(home.used);
     // Pasta ainda sem medida: o saldo inclui ela, então não é "Outros" e encolheria quando a conta terminasse.
     let pending = |dir: DirSize| dir.bytes.is_none() && dir.computing;
@@ -669,6 +675,18 @@ mod tests {
         assert_eq!(rest(DirSize { bytes: Some(15 << 30), computing: true }), tr("status_disk_other"));
         // Sem pasta de cache não há o que esperar.
         assert_eq!(rest(DirSize { bytes: None, computing: false }), tr("status_disk_other"));
+    }
+
+    #[test]
+    fn folders_never_take_more_bar_than_the_used_space() {
+        crate::i18n::english_in_this_thread(false);
+        // Medidas antigas (ou o cache noutro volume) maiores que o usado de agora.
+        let home = DiskUse { used: 20 << 30, total: 100 << 30 };
+        let parts = disk_parts(home, DirSize { bytes: Some(60 << 30), computing: false }, DirSize { bytes: Some(10 << 30), computing: false });
+        let weight = |slot: usize| parts.iter().find(|s| s.slot == slot).map(|s| s.weight as u64).unwrap_or(0);
+        assert_eq!((weight(1), weight(3), weight(5), weight(0)), (20 << 30, 0, 0, 80 << 30));
+        // O texto segue com a medida real.
+        assert_eq!(parts.iter().find(|s| s.slot == 1).and_then(|s| s.count.clone()).as_deref(), Some("60 GB"));
     }
 
     #[test]

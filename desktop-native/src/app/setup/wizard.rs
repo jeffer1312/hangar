@@ -17,6 +17,7 @@ use super::system;
 use super::tail::Tail;
 use crate::single_instance::AskpassRequest;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 const POLL_EVERY: Duration = Duration::from_millis(400);
 /// Voltas sem saída nova antes de perguntar se o processo ainda vive (~5 s).
@@ -144,8 +145,10 @@ pub(crate) struct AgentRun {
     pub(super) timed_out: bool,
     /// "Parar" sem identidade do processo: ele segue rodando, e a tela diz isso.
     pub(super) not_stopped: bool,
-    /// O app pediu a parada (Parar ou o teto): a saída com erro que vem depois não é falha do agente.
-    stopped: bool,
+    /// O app de fato sinalizou o agente (Parar ou o teto): a saída com erro que vem depois não é falha dele. Marcada
+    /// pela tarefa da parada antes do sinal, não no clique: o agente que já tinha saído sozinho com erro não é
+    /// absolvido por um Parar que não o alcançou.
+    stopped: Arc<AtomicBool>,
     /// Desfazendo: a resposta da tarefa que desfaz, para quem fechar no meio mandar o relatório com o diff.
     restore_done: Option<tokio::sync::oneshot::Receiver<repo::Restored>>,
 }
@@ -153,7 +156,7 @@ pub(crate) struct AgentRun {
 impl AgentRun {
     fn new(agent: Agent, number: u64) -> Self {
         Self { agent, phase: AgentPhase::Starting, transcript: agent::Transcript::default(), number, pid: None, started: String::new(),
-            snapshot: None, restored: None, timed_out: false, not_stopped: false, stopped: false, restore_done: None }
+            snapshot: None, restored: None, timed_out: false, not_stopped: false, stopped: Arc::default(), restore_done: None }
     }
 
     /// Subindo, trabalhando ou desfazendo: a pasta é dele, nada mais roda nela.
@@ -253,7 +256,10 @@ fn stop_plan(recorded: &str, now: &run::Identity) -> StopPlan {
 /// Pára o agente e espera ele sair — uma última escrita depois de desfazer passaria —; ainda vivo em 10 s, mata sem
 /// escolha. Só sinaliza com a identidade conferida agora; `false` = não deu para conferir ou ele sobreviveu à força (quem
 /// chama avisa e desfaz mesmo assim). Bloqueia: só fora da janela.
-pub(crate) fn stop_agent_process(pid: u32, started: &str) -> bool {
+pub(crate) fn stop_agent_process(pid: u32, started: &str) -> bool { stop_agent_marking(pid, started, None) }
+
+/// `stop_agent_process`, marcando `signalled` logo antes do primeiro sinal.
+fn stop_agent_marking(pid: u32, started: &str, signalled: Option<&AtomicBool>) -> bool {
     match stop_plan(started, &run::read_identity(pid)) {
         StopPlan::Gone => {
             crate::log_line(&format!("assistente: agente {pid} já não existe ou o número é de outro processo; nenhum sinal enviado"));
@@ -265,6 +271,7 @@ pub(crate) fn stop_agent_process(pid: u32, started: &str) -> bool {
         }
         StopPlan::Signal => {}
     }
+    if let Some(signalled) = signalled { signalled.store(true, Ordering::SeqCst); }
     run::stop(pid, started);
     let left = match wait_gone(pid, started, Duration::from_secs(10)) {
         Left::Alive => { run::kill(pid, started); wait_gone(pid, started, Duration::from_secs(3)) }
@@ -1144,8 +1151,11 @@ impl SetupWizard {
         let Some(run) = self.agent.as_mut() else { return };
         match item {
             agent::Output::Line(line) => { let agent = run.agent; run.transcript.feed(agent, &line); }
+            // Quem nasceu do agente ainda vive: a pasta é desfeita, mas a anotação fica para a próxima abertura
+            // desfazer de novo, e o relatório diz que ele não parou.
+            agent::Output::Held => { run.not_stopped = true; }
             agent::Output::Exit(ended) => {
-                run.transcript.exited(&ended, run.stopped);
+                run.transcript.exited(&ended, run.stopped.load(Ordering::SeqCst));
                 run.pid = None;
                 run.phase = AgentPhase::Restoring;
             }
@@ -1184,16 +1194,15 @@ impl SetupWizard {
             crate::log_line(&format!("assistente: agente {pid} sem identidade gravada; não foi parado"));
             return cx.notify();
         }
-        let (started, number) = (run.started.clone(), run.number);
-        run.stopped = true;
-        let stop = cx.background_executor().spawn(async move { stop_agent_process(pid, &started) });
+        let (started, number, signalled) = (run.started.clone(), run.number, run.stopped.clone());
+        let stop = cx.background_executor().spawn(async move { stop_agent_marking(pid, &started, Some(&signalled)) });
         // Sobreviveu: a tela diz que não parou, e a saída com erro dele volta a contar como falha. Só vale para esta
         // execução ainda rodando: depois do `Exit` (ou em outra execução) a resposta não muda nada.
         cx.spawn(async move |this, cx| {
             if stop.await { return; }
             let _ = this.update(cx, |w, cx| {
                 if let Some(run) = w.agent.as_mut().filter(|run| run.number == number && run.phase == AgentPhase::Running) {
-                    run.stopped = false;
+                    run.stopped.store(false, Ordering::SeqCst);
                     run.not_stopped = true;
                 }
                 cx.notify();

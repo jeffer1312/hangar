@@ -147,8 +147,8 @@ impl Hangar {
                 let (text, detail) = failure_text(&self.server_label(cx), &error);
                 let page = &mut self.device.status;
                 // Só falha de rede (ou o proxy dizendo que não alcança) prova o servidor fora: um 404 ou 403 é
-                // resposta dele, e o painel de parado esconderia a rota ausente.
-                let unreachable = error.status.is_none_or(|code| matches!(code, 502..=504));
+                // resposta dele, e o painel de parado esconderia a rota ausente. Retrato ilegível também é resposta.
+                let unreachable = error.detail != "invalid_response" && error.status.is_none_or(|code| matches!(code, 502..=504));
                 (page.live, page.stream_failed) = (false, unreachable);
                 // Com um retrato na tela, a falha só apaga o "ao vivo": o servidor parado aparece no ponto da navegação.
                 if page.view.ok().is_none() {

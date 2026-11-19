@@ -417,7 +417,8 @@ pub(super) fn args(agent: Agent, work: &Path) -> Vec<String> {
 
 /// O agente que subiu: a saída dele. Pid e identidade ficam no `Handle`. `stop_failed`: nasceu depois de um Parar e
 /// sobreviveu à força; o Parar volta.
-pub(super) struct Started { pub output: async_channel::Receiver<agent::Output>, pub stop_failed: bool }
+/// `secrets`: valores que o relatório copiado esconde mesmo sem rótulo (o token do servidor desta máquina).
+pub(super) struct Started { pub output: async_channel::Receiver<agent::Output>, pub stop_failed: bool, pub secrets: Vec<String> }
 
 /// O processo do agente, compartilhado entre quem o sobe (fora da janela) e quem o encerra: o fechar do app, o teto e o
 /// descarte da execução chegam também enquanto ele ainda está subindo.
@@ -477,7 +478,8 @@ pub(super) fn start(agent: Agent, prompt: String, home: &Path, handle: &Handle) 
     drop(pending);
     // Nasceu depois da marca: talvez já tenha pedido a subida do serviço, e o `Exit` leva à releitura.
     let stop_failed = abandoned && !kill_and_wait(&owner);
-    Ok(Started { output, stop_failed })
+    let secrets = super::super::setup::local_token().into_iter().collect();
+    Ok(Started { output, stop_failed, secrets })
 }
 
 /// A força e a espera dela; `true` com o agente fora.
