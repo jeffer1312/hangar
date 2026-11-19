@@ -26,7 +26,7 @@ trap restore EXIT
 if [ "$instalada" != "$conferida" ]; then
   echo "Codex instalado: $instalada; conferida no código: $conferida. Passando a conferida para $instalada."
   cp "$version_file" "$tmp/version.orig"
-  sed "s/\"$conferida\"/\"$instalada\"/" "$version_file" >"$tmp/version.rs"
+  sed "s/\"${conferida//./\\.}\"/\"$instalada\"/" "$version_file" >"$tmp/version.rs"
   grep -q "\"$instalada\"" "$tmp/version.rs" || { echo "checked_version!() não encontrado em $version_file"; exit 1; }
   cat "$tmp/version.rs" >"$version_file"
 fi

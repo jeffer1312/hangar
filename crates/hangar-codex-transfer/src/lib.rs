@@ -30,9 +30,9 @@ pub trait NativeImport {
         destination: Value,
         boundary: Option<ImportBoundary>,
     ) -> impl Future<Output = Result<(), TransferError>> + Send;
-    /// O modo de colaboração que o Codex anunciou para a thread (`thread/settings/updated`); a resposta
-    /// do `thread/settings/update` vem vazia. `None` quando ele não anunciou dentro do prazo.
-    fn applied_mode(&mut self, thread: &str) -> impl Future<Output = Option<String>> + Send;
+    /// Se o Codex anunciou `wanted` como modo de colaboração da thread (`thread/settings/updated`); a
+    /// resposta do `thread/settings/update` vem vazia. Anúncio anterior com outro modo não conta.
+    fn mode_applied(&mut self, thread: &str, wanted: &str) -> impl Future<Output = bool> + Send;
 }
 
 pub struct ImportOptions {
@@ -211,7 +211,7 @@ pub async fn prepare_import(
         client.request("thread/settings/update", json!({"threadId":thread_id,"collaborationMode":{
             "mode":"plan","settings":{"model":model,"reasoning_effort":effort,"developer_instructions":null}}})).await?;
         // Sem a versão fixa, só o anúncio do Codex prova que o Plano valeu: sem ele a conversa seguiria sem o modo.
-        if client.applied_mode(&thread_id).await.as_deref() != Some("plan") {
+        if !client.mode_applied(&thread_id, "plan").await {
             return Err(mismatch());
         }
     }
@@ -659,8 +659,11 @@ mod tests {
                 }
                 "thread/read" => Ok(json!({"thread":thread})),
                 "thread/settings/update" => {
-                    if !self.ignores_mode && let Some(mode) = params["collaborationMode"]["mode"].as_str() {
-                        self.mode = Some(mode.to_owned());
+                    // Como o Codex real: toda troca anuncia o modo vigente, e a do esforço anuncia `default`.
+                    match params["collaborationMode"]["mode"].as_str() {
+                        Some(mode) if !self.ignores_mode => self.mode = Some(mode.to_owned()),
+                        Some(_) => {}
+                        None => self.mode = Some("default".into()),
                     }
                     Ok(json!({}))
                 }
@@ -706,7 +709,7 @@ mod tests {
             Ok(())
         }
 
-        async fn applied_mode(&mut self, _: &str) -> Option<String> { self.mode.clone() }
+        async fn mode_applied(&mut self, _: &str, wanted: &str) -> bool { self.mode.as_deref() == Some(wanted) }
     }
 
     #[tokio::test]

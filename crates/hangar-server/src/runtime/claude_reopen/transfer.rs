@@ -202,21 +202,26 @@ impl NativeImport for ImportClient {
         self.record.boundary = boundary;
         self.store.save(&self.record)
     }
-    async fn applied_mode(&mut self, thread: &str) -> Option<String> {
+    async fn mode_applied(&mut self, thread: &str, wanted: &str) -> bool {
         let (modes, changed) = &*self.modes;
+        let current = || modes.lock().unwrap_or_else(|e| e.into_inner()).get(thread).cloned();
         let wait = async {
             loop {
                 // Inscrito antes de olhar o mapa: um anúncio entre a leitura e a espera não se perde.
                 let notified = changed.notified();
                 tokio::pin!(notified);
                 notified.as_mut().enable();
-                if let Some(mode) = modes.lock().unwrap_or_else(|e| e.into_inner()).get(thread) {
-                    return mode.clone();
+                if current().as_deref() == Some(wanted) {
+                    return;
                 }
                 notified.await;
             }
         };
-        tokio::time::timeout(Duration::from_secs(10), wait).await.ok()
+        if tokio::time::timeout(Duration::from_secs(10), wait).await.is_ok() {
+            return true;
+        }
+        tracing::warn!(transfer=%self.record.id,wanted,announced=?current(),"o Codex não anunciou o modo pedido na importação");
+        false
     }
 }
 impl ImportClient {
@@ -320,6 +325,8 @@ impl ImportClient {
                             let (map, changed) = &*announced;
                             map.lock().unwrap_or_else(|e| e.into_inner()).insert(thread.to_owned(), mode.to_owned());
                             changed.notify_waiters();
+                        } else {
+                            tracing::warn!("thread/settings/updated sem threadId ou modo de colaboração na importação");
                         }
                     }
                     Incoming::Notification { .. } => {}
