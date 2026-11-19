@@ -36,6 +36,7 @@ export const SF_SYMBOLS: Partial<Record<IconName, SFSymbol>> = {
   CircleHelp: 'questionmark.circle',
   CircleUser: 'person.crop.circle',
   CircleX: 'xmark.circle',
+  ClipboardCheck: 'list.bullet.clipboard',
   ClipboardPaste: 'doc.on.clipboard',
   Clock: 'clock',
   Cloud: 'cloud',

@@ -22,6 +22,7 @@ import { UpdatesManualAnimation } from './UpdatesManualAnimation';
 import { VaultAnimation } from './VaultAnimation';
 import { WorktreeFreshAnimation } from './WorktreeFreshAnimation';
 import { SessionSettingsAnimation } from './SessionSettingsAnimation';
+import { WorkReviewAnimation } from './WorkReviewAnimation';
 
 // Miniaturas feitas dos componentes reais (ex.: src/chat/ComposerField.tsx) entram aqui pelo nome da novidade.
 const animations: Record<string, ComponentType<{ width: number }>> = {
@@ -42,6 +43,7 @@ const animations: Record<string, ComponentType<{ width: number }>> = {
   'ocultar-da-lista': HideFromListAnimation,
   'plugins-do-claude': PluginsAnimation,
   'relatorio-automatico': AutoReportAnimation,
+  'revisao-do-trabalho': WorkReviewAnimation,
   'revelacao-imagem': ImageRevealAnimation,
   'pedido-na-sessao': SessionVaultAnimation,
   'sem-projeto': NoProjectAnimation,

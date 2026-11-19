@@ -706,6 +706,110 @@ pub struct Steered {
     #[serde(default)] pub queued_ids: Vec<String>,
 }
 
+// Revisão do trabalho (`work_review/v1`) como a rota da sessão manda: texto e rótulo são do conector.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkReviewState { Running, Waiting, Applying, Done }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkReviewTone { Warning, Success, Info }
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+pub struct WorkReviewBadge { pub text: String, pub tone: WorkReviewTone }
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+pub struct WorkReviewSteps { pub labels: Vec<String>, pub current: u32 }
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+pub struct WorkReviewHeadline { pub value: String, pub text: String, #[serde(default)] pub detail: Option<String> }
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+pub struct WorkReviewProgress { pub label: String, pub done: u64, pub total: u64 }
+
+/// `box` em px do asset: x, y, largura, altura.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+pub struct WorkReviewSide {
+    pub label: String,
+    #[serde(default)] pub value: Option<String>,
+    pub asset: String,
+    pub width: u32,
+    pub height: u32,
+    #[serde(default, rename = "box")] pub frame: Option<[u32; 4]>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+pub struct WorkReviewChoice {
+    pub id: String,
+    pub label: String,
+    #[serde(default)] pub hint: Option<String>,
+    #[serde(default)] pub requires_reason: bool,
+    #[serde(default)] pub default_reason: Option<String>,
+    #[serde(default)] pub reason_prompt: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+pub struct WorkReviewDecision {
+    pub id: String,
+    #[serde(default)] pub tag: Option<String>,
+    pub title: String,
+    #[serde(default)] pub reason: Option<String>,
+    #[serde(default)] pub reason_label: Option<String>,
+    #[serde(default)] pub left: Option<WorkReviewSide>,
+    #[serde(default)] pub right: Option<WorkReviewSide>,
+    pub choices: Vec<WorkReviewChoice>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+pub struct WorkReviewResolvedItem { pub title: String, #[serde(default)] pub before: Option<String>, #[serde(default)] pub after: Option<String> }
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+pub struct WorkReviewResolved { pub label: String, #[serde(default)] pub count: Option<u64>, pub items: Vec<WorkReviewResolvedItem> }
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+pub struct WorkReviewKeptItem { pub title: String, pub reason: String }
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+pub struct WorkReviewKept { pub label: String, #[serde(default)] pub count: Option<u64>, pub items: Vec<WorkReviewKeptItem> }
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+pub struct WorkReviewLink { pub label: String, pub url: String, #[serde(default)] pub local: bool }
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+pub struct WorkReview {
+    pub id: String,
+    pub title: String,
+    #[serde(default)] pub subject: Option<String>,
+    pub updated_at: String,
+    pub state: WorkReviewState,
+    #[serde(default)] pub steps: Option<WorkReviewSteps>,
+    #[serde(default)] pub headline: Option<WorkReviewHeadline>,
+    #[serde(default)] pub progress: Option<WorkReviewProgress>,
+    #[serde(default)] pub badge: Option<WorkReviewBadge>,
+    #[serde(default)] pub decisions: Vec<WorkReviewDecision>,
+    #[serde(default)] pub resolved: Option<WorkReviewResolved>,
+    #[serde(default)] pub kept: Option<WorkReviewKept>,
+    #[serde(default)] pub links: Vec<WorkReviewLink>,
+}
+
+/// `GET /api/sessions/{nome}/work-review`; `linked: false` chega como `None` em `via`.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+pub struct WorkReviewResponse {
+    pub linked: bool,
+    #[serde(default)] pub via: Option<String>,
+    #[serde(default)] pub supported: bool,
+    #[serde(default)] pub review: Option<WorkReview>,
+}
+
+/// Uma linha do evento `work_reviews` da lista do dono.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+pub struct WorkReviewSummary {
+    pub review_id: String,
+    pub state: WorkReviewState,
+    #[serde(default)] pub badge: Option<WorkReviewBadge>,
+    pub updated_at: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::{ChatEvent, ChatEventExt, OrqEntry, OrqLine, OrqPanel, SessionInfo, SessionState, plan_pending};

@@ -28,6 +28,7 @@ mod updates_manual;
 mod worktree_fresh;
 mod reviews;
 mod tickets;
+mod work_review;
 
 use std::{cell::Cell, time::{Duration, Instant}};
 use gpui_kit::*;
@@ -85,6 +86,7 @@ pub fn animation(name: &str) -> Option<NewsAnimation> {
         "estilo-claude-desktop" => Some(desktop_tool_look::render),
         "sonho-da-memoria" => Some(memory_dream::render),
         "avisos-do-claude" => Some(claude_notices::render),
+        "revisao-do-trabalho" => Some(work_review::render),
         _ => None,
     }
 }

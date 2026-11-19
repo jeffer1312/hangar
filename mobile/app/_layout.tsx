@@ -223,6 +223,7 @@ export default function Layout() {
           <Stack.Screen name="s/[server]/[name]/attachments" options={sheetOptions} />
           <Stack.Screen name="s/[server]/[name]/codex-limits" options={sheetOptions} />
           <Stack.Screen name="s/[server]/[name]/bastao" options={sheetOptions} />
+          <Stack.Screen name="s/[server]/[name]/work-review" options={sheetOptions} />
           <Stack.Screen name="update-confirm" options={sheetOptions} />
           <Stack.Screen name="whats-new" options={sheetOptions} />
         </Stack>

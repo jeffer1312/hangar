@@ -71,6 +71,7 @@ vi.mock('../../paraglide/messages', async (importOriginal) => ({
 import { useUnistyles } from 'react-native-unistyles';
 import { SessionRow } from './SessionRow';
 import { HANGAR_MARK_ARCS } from '../../ui/HangarMark';
+import { clearWorkReviewSummaries, setWorkReviewSummaries } from '../workReview/summaries';
 
 // O tema de teste não traz as pílulas de estado, que pintam a marca da linha.
 useUnistyles().theme.tokens.pill = {
@@ -604,6 +605,27 @@ describe('SessionRow', () => {
     await act(async () => { (container.querySelector('[aria-label="liberar Ana"]') as HTMLElement).click(); });
     expect(onPair).toHaveBeenCalledWith(expect.objectContaining({ name: 'api' }), { kind: 'release', pair });
     act(() => root.unmount());
+  });
+
+  it('a revisão do trabalho vira chip que abre a folha; a sessão de fora não mostra', async () => {
+    setWorkReviewSummaries('s1', {
+      api: { review_id: 'r-7', state: 'waiting', badge: { text: 'mock: 2 para você', tone: 'warning' }, updated_at: 'x' },
+    });
+    try {
+      const onWorkReview = vi.fn();
+      const { container, root } = await render({ ...base, name: 'api', provider: 'claude' }, { onWorkReview });
+      const chip = container.querySelector('[aria-label="mock: 2 para você"]') as HTMLElement;
+      expect(chip).not.toBeNull();
+      await act(async () => { chip.click(); });
+      expect(onWorkReview).toHaveBeenCalledWith(expect.objectContaining({ name: 'api' }));
+      act(() => root.unmount());
+
+      const outside = await render({ ...base, name: 'api', provider: 'claude', outside: { owner: 'Ana', alias: 'casa', localServerId: 's1', localSession: 'web' } }, { onWorkReview });
+      expect(outside.container.textContent).not.toContain('mock: 2 para você');
+      act(() => outside.root.unmount());
+    } finally {
+      clearWorkReviewSummaries();
+    }
   });
 
   it('worktree apagada aparece como texto', async () => {

@@ -18,6 +18,26 @@ target/debug/hangar-server connectors --registry "$REG" ticket js-demo c0ffee-01
 O exemplo em JavaScript precisa de `node` no PATH e devolve tickets fictícios, sem credencial nem
 rede. Um conector compilado pode usar um executável próprio; o Hangar não instala interpretadores.
 
+A revisão (`work_review/v1`) tem um exemplo próprio, com um ticket em cada estado
+(`rev-running`, `rev-waiting`, `rev-done`). Os comandos `review*` só funcionam com `--registry`:
+
+```bash
+target/debug/hangar-server connectors --registry "$REG" add ../examples/connectors/work_review.json
+target/debug/hangar-server connectors --registry "$REG" review js-review rev-waiting
+target/debug/hangar-server connectors --registry "$REG" review-asset js-review rev-waiting <review_id> <asset> > lado.png
+target/debug/hangar-server connectors --registry "$REG" review-decide js-review rev-waiting \
+  '{"review_id": "<review_id>", "decisions": [{"id": "47", "choice": "igualar"}]}'
+target/debug/hangar-server connectors --registry "$REG" review-decide js-review rev-waiting \
+  '{"review_id": "<review_id>", "decisions": [{"id": "48", "choice": "manter", "reason": "sem legenda no kit"}, {"id": "49", "choice": "remover"}]}'
+```
+
+Cada comando abre um processo novo do conector. Para a prova atravessar comandos, o exemplo guarda
+as decisões enviadas em `hangar-work-review-demo.json`, na pasta temporária do sistema (ou no caminho
+de `WORK_REVIEW_DEMO_STATE`); apague o arquivo para recomeçar. O `rev-waiting` tem três decisões e
+aceita lotes: depois do primeiro `review-decide`, a leitura continua em `waiting` com as duas
+restantes e o mesmo `review_id`. Depois da última, a leitura seguinte vem em `applying` e as outras
+em `done`. Repetir um lote já enviado responde ok.
+
 ## Conector do fornecedor
 
 O fornecedor entrega o programa, o manifesto e o procedimento de login. Instale a versão adequada

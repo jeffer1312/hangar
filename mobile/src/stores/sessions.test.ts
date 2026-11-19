@@ -14,6 +14,7 @@ vi.mock('react-native-mmkv', () => ({
 }));
 import { useServers } from './servers';
 import { useSessions, _resetSessionsForTests, markLeavingPair, setPairNotice, setMachineDiscovery } from './sessions';
+import { workReviewSummaries } from '../features/workReview/summaries';
 
 const avisos: string[] = [];
 const cooldownStorage = {
@@ -860,6 +861,26 @@ test('evento tags dá nome e conta à linha e sobrevive à lista seguinte e a fr
   expect(row().serverLabel).toBe('Casa');
   created[0].trigger('tags', '{torto');
   expect(row().accountTag?.name).toBe('ana');
+  rel();
+});
+
+test('evento work_reviews guarda o resumo por servidor e sessão, sem trocar o que não mudou', async () => {
+  const rel = useSessions.getState().retain();
+  await settle();
+  const row = (state: string, updated: string) => ({ review_id: 'r-7', state, badge: { text: 'mock: 2 para você', tone: 'warning' }, updated_at: updated });
+  created[0].trigger('work_reviews', JSON.stringify({ reviews: { a: row('waiting', '2026-11-18T09:20:00Z'), b: row('running', '2026-11-18T09:00:00Z') } }));
+  const reviews = () => workReviewSummaries().srv1;
+  expect(reviews().a.state).toBe('waiting');
+  expect(reviews().a.badge?.text).toBe('mock: 2 para você');
+  const b = reviews().b;
+  created[0].trigger('work_reviews', JSON.stringify({ reviews: { a: row('applying', '2026-11-18T09:30:00Z'), b: row('running', '2026-11-18T09:00:00Z') } }));
+  expect(reviews().a.state).toBe('applying');
+  expect(reviews().b).toBe(b);
+  created[0].trigger('work_reviews', '{torto');
+  expect(reviews().a.state).toBe('applying');
+  // Sessão fora do evento perdeu a revisão: o chip some.
+  created[0].trigger('work_reviews', JSON.stringify({ reviews: { b: row('running', '2026-11-18T09:00:00Z') } }));
+  expect(reviews().a).toBeUndefined();
   rel();
 });
 

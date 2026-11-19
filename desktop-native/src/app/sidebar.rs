@@ -2204,6 +2204,7 @@ impl Hangar {
         // O trilho não tem largura para o selo: a marca vai na dica e no que o leitor de tela diz.
         if session.asleep { tip.push_str(&format!(" · {}", tr_shared("session_asleep_badge", &[]))); }
         if session.orq() { tip.push_str(&format!(" · {}", tr_shared("orq_row_badge", &[]))); }
+        if let Some((text, _)) = self.work_review_badge(&target.server, &session.name) { tip.push_str(&format!(" · {text}")); }
         let status = self.nav_avatar(format!("rail-mark-{row_key}"), session_look(&session), 24.);
         let tip_text = tip.clone();
         let el = div().id(SharedString::from(format!("rail-{row_key}"))).relative().flex_shrink_0().w_full().min_h(px(44.)).pt(px(3.))
