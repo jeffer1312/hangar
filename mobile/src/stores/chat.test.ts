@@ -236,9 +236,11 @@ test('máquina sem identidade provada não derruba o chat e o SSE abre quando el
     chat.retain();
     await vi.advanceTimersByTimeAsync(0);
     expect(created).toHaveLength(0);
+    expect(chat.use.getState().error).not.toBe('');
 
     proves = true;
     await vi.advanceTimersByTimeAsync(3_000);
+    expect(chat.use.getState().error).toBe('');
     expect(created).toHaveLength(1);
     expect(created[0].url.startsWith(`${target.baseUrl}/api/sessions/sess/events`)).toBe(true);
   } finally {

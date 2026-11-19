@@ -6,6 +6,7 @@ import {
   openEventStreamForServer,
   baseOf,
   decidirRota,
+  esquecerRota,
   UNCONFIRMED_BASE,
   prependOlder,
   mergeHistoryWithLiveRetiring,
@@ -69,6 +70,8 @@ let releaseGraceMs = process.env.VITEST ? 0 : 1_000;
 // Prazo para o `queue` do retrato chegar depois de a conexão abrir.
 const QUEUE_SNAPSHOT_MS = 3_000;
 const SSE_RETRY_MAX_MS = 30_000;
+// Mesmo teto da lista de sessões para esperar a decisão de rota.
+const ROUTE_WAIT_MS = 6_000;
 
 // Edição da fila com as citações da mensagem: o campo mostra só o texto digitado e elas voltam na
 // frente ao gravar (com elas o Atualizar vale mesmo com o campo vazio).
@@ -601,16 +604,20 @@ function criarChatStore(serverId: string, name: string): ChatApi {
     const attempt = ++sseAttempt;
     // Sem a máquina provada a abertura lança, e a reconexão pararia ali até o app voltar do fundo.
     if (baseOf(target) === UNCONFIRMED_BASE) {
-      void decidirRota(target).then(() => {
+      // O fetch pode ignorar o abort: sem prazo, uma decisão presa pararia a reconexão do mesmo jeito.
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const late = new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(true), ROUTE_WAIT_MS); });
+      void Promise.race([decidirRota(target).then(() => false), late]).then((timedOut) => {
+        clearTimeout(timer);
         if (attempt !== sseAttempt || !alive || !foreground) return;
+        if (timedOut) esquecerRota(target.id);
         const current = destino();
+        // O histórico falhou pela mesma rota: recarregar tira o erro da tela antes de reabrir o SSE.
         if (current && baseOf(current) !== UNCONFIRMED_BASE) {
-          connectSSE();
+          sincronizar();
           return;
         }
-        registrarDiag({ evento: 'sse.rota_nao_confirmada', nivel: 'aviso', tela: 'chat',
-          codigo: 'server_identity_unconfirmed' }, target.baseUrl);
-        scheduleReconnect(target.baseUrl);
+        scheduleReconnect(target.baseUrl, 'server_identity_unconfirmed');
       });
       return;
     }
@@ -916,10 +923,11 @@ function criarChatStore(serverId: string, name: string): ChatApi {
     es.onerror = onStreamError;
   }
 
-  function scheduleReconnect(base: string | undefined): void {
+  function scheduleReconnect(base: string | undefined, codigo?: string): void {
     clearTimeout(retryTimer);
     retryTimer = setTimeout(connectSSE, retryDelay);
-    if (base !== undefined) registrarDiag({ evento: 'sse.retentativa', tela: 'chat', espera_ms: retryDelay }, base);
+    if (base !== undefined) registrarDiag({ evento: 'sse.retentativa', tela: 'chat', espera_ms: retryDelay,
+      ...(codigo ? { codigo } : {}) }, base);
     retryDelay = Math.min(retryDelay * 2, SSE_RETRY_MAX_MS);
   }
 
