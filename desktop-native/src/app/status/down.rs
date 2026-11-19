@@ -57,6 +57,37 @@ pub(super) struct DownView {
     pub can_start: bool,
 }
 
+/// A queda do servidor selecionado: começa quando a lista cai e acaba quando ela volta ou o servidor troca.
+pub(in crate::app) struct Down {
+    key: String,
+    /// Só com o servidor nesta máquina.
+    local: Option<Local>,
+    /// Redesenha a página a cada meio minuto, para o "há N min" andar; some com a queda.
+    tick: Option<Task<()>>,
+}
+
+pub(in crate::app) enum LocalReply {
+    Probe(Box<Probe>),
+    /// A ação acabou; com erro, o código e o dado dele.
+    Done(Option<(String, String)>),
+    /// A leitura não voltou: a anterior deixa de valer.
+    ReadFailed(String, String),
+}
+
+struct Local {
+    port: u16,
+    probe: Option<Probe>,
+    tried: bool,
+    /// Uma ação roda; o painel mostra a subida até a primeira leitura depois dela.
+    busy: bool,
+    error: Option<String>,
+    generation: u64,
+    task: Option<JoinHandle<()>>,
+}
+
+#[derive(Debug, Clone)]
+enum Action { Start, FreePort(PortHolder), UseVersion(String) }
+
 fn capitalize(text: String) -> String {
     let mut chars = text.chars();
     match chars.next() { Some(first) => first.to_uppercase().chain(chars).collect(), None => text }
@@ -210,9 +241,9 @@ pub(super) fn silent_for(elapsed: Duration) -> String {
 
 /// O servidor selecionado está fora do ar. A lista também cai com 503 quando só os fatos dela falharam: de outra
 /// máquina, só a conexão do retrato que também falhou confirma. `stream` é `None` sem essa conexão aberta (página
-/// fechada), e então vale a lista; aberta, `Some(falhou)`.
+/// fechada), e então de outra máquina não se sabe; aberta, `Some(falhou)`.
 pub(super) fn is_down(list_online: bool, list_error: bool, loopback: bool, stream: Option<bool>) -> bool {
-    !list_online && list_error && (loopback || stream.is_none_or(|failed| failed))
+    !list_online && list_error && (loopback || stream == Some(true))
 }
 
 /// Quem escuta na porta, para o diálogo do "Ver processos…": linhas (nome, pid, usuário) e as notas abaixo delas.
@@ -244,37 +275,8 @@ pub(super) fn action_error_text(code: &str, detail: &str) -> String {
 // ---------------------------------------------------------------------------------------------
 // Estado e tarefas
 
-/// A queda do servidor selecionado: começa quando a lista cai e acaba quando ela volta ou o servidor troca.
-pub(in crate::app) struct Down {
-    key: String,
-    /// Só com o servidor nesta máquina.
-    local: Option<Local>,
-    /// Redesenha a página a cada meio minuto, para o "há N min" andar; some com a queda.
-    tick: Option<Task<()>>,
-}
-
-struct Local {
-    port: u16,
-    probe: Option<Probe>,
-    tried: bool,
-    /// Uma ação roda; o painel mostra a subida até a primeira leitura depois dela.
-    busy: bool,
-    error: Option<String>,
-    generation: u64,
-    task: Option<JoinHandle<()>>,
-}
-
 impl Drop for Local {
     fn drop(&mut self) { if let Some(task) = self.task.take() { task.abort(); } }
-}
-
-#[derive(Debug, Clone)]
-enum Action { Start, FreePort(PortHolder), UseVersion(String) }
-
-pub(in crate::app) enum LocalReply {
-    Probe(Box<Probe>),
-    /// A ação acabou; com erro, o código e o dado dele.
-    Done(Option<(String, String)>),
 }
 
 /// O servidor na porta do serviço. A porta lida com ressalva (unit ilegível, `.env` ilegível, `CP_PORT` inválido) vai
@@ -309,10 +311,17 @@ where F: Fn(DeviceReply) -> std::pin::Pin<Box<dyn Future<Output = ()> + Send>> +
     let send = |reply| done(DeviceReply::Status(0, Feed::Local(generation, reply)));
     if let Some(action) = action {
         let home = home.clone();
-        let result = tokio::task::spawn_blocking(move || act(&local_server(&home).0, &action)).await;
+        let result = tokio::task::spawn_blocking(move || {
+            let (server, issue) = local_server(&home);
+            // A porta pode ter ficado em dúvida depois da confirmação: quem a segura pode não ser o serviço.
+            match (&action, issue) {
+                (Action::FreePort(_), Some(issue)) => Err(("port_doubtful".to_owned(), issue)),
+                _ => act(&server, &action).map_err(|e| (e.code().to_owned(), e.detail())),
+            }
+        }).await;
         let error = match result {
             Ok(Ok(())) => None,
-            Ok(Err(e)) => Some((e.code().to_owned(), e.detail())),
+            Ok(Err(e)) => Some(e),
             Err(e) => Some(("local_server_io".to_owned(), e.to_string())),
         };
         send(LocalReply::Done(error)).await;
@@ -322,7 +331,7 @@ where F: Fn(DeviceReply) -> std::pin::Pin<Box<dyn Future<Output = ()> + Send>> +
         let probe = match tokio::task::spawn_blocking(move || read(&home)).await {
             Ok(probe) => probe,
             // A leitura não voltou: sem o erro, o painel ficaria girando em "Lendo" para sempre.
-            Err(e) => return send(LocalReply::Done(Some(("local_server_io".to_owned(), e.to_string())))).await,
+            Err(e) => return send(LocalReply::ReadFailed("local_server_io".to_owned(), e.to_string())).await,
         };
         let starting = probe.state == LocalState::Starting;
         send(LocalReply::Probe(Box::new(probe))).await;
@@ -377,8 +386,12 @@ impl Hangar {
     /// A leitura mais recente do servidor desta máquina, com ele parado.
     pub(super) fn local_probe(&self) -> Option<&Probe> { self.device.status.down.as_ref()?.local.as_ref()?.probe.as_ref() }
 
-    /// Lê o servidor desta máquina de novo, sem ação.
-    pub(super) fn local_refresh(&mut self) { self.local_run(None); }
+    /// Lê o servidor desta máquina de novo, sem ação. Com uma ação em curso não: cancelar a tarefa dela perderia o
+    /// resultado e soltaria o `busy` com o `spawn_blocking` ainda rodando, abrindo caminho a uma segunda ação.
+    pub(super) fn local_refresh(&mut self) {
+        if self.local_mut().is_some_and(|local| local.busy) { return; }
+        self.local_run(None);
+    }
 
     pub(super) fn receive_local(&mut self, generation: u64, reply: LocalReply, cx: &mut Context<Self>) {
         let Some(local) = self.local_mut() else { return };
@@ -389,6 +402,11 @@ impl Hangar {
                 // Falhou: nada mais vai tirar o painel da subida (ação recusada ou leitura que não voltou).
                 if error.is_some() { local.busy = false; }
                 local.error = error.map(|(code, detail)| action_error_text(&code, &detail));
+            }
+            // Sem leitura válida o painel mostra o erro e o ler de novo, não uma subida que ninguém confere.
+            LocalReply::ReadFailed(code, detail) => {
+                (local.probe, local.busy) = (None, false);
+                local.error = Some(action_error_text(&code, &detail));
             }
             LocalReply::Probe(probe) => {
                 back = probe.state == LocalState::Running && local.probe.as_ref().is_none_or(|p| p.state != LocalState::Running);
@@ -488,7 +506,12 @@ impl Hangar {
         if down.tick.is_none() {
             down.tick = Some(cx.spawn(async move |this, cx| loop {
                 cx.background_executor().timer(Duration::from_secs(30)).await;
-                let Ok(()) = this.update(cx, |this, cx| if this.settings == Some(Page::Status) { cx.notify(); }) else { return };
+                let Ok(()) = this.update(cx, |this, cx| {
+                    // Subido por fora do app com a lista ainda fora: sem reler, o painel seguiria oferecendo subir.
+                    // Durante a subida a própria tarefa já relê mais rápido.
+                    if this.local_probe().is_some_and(|probe| probe.state != LocalState::Starting) { this.local_refresh(); }
+                    if this.settings == Some(Page::Status) { cx.notify(); }
+                }) else { return };
             }));
         }
         if down.local.is_some() { self.agent_detect(cx); }
@@ -803,10 +826,11 @@ mod tests {
         // Outra máquina com a página aberta: o 503 da lista sozinho não basta, o retrato ainda chega.
         assert!(!is_down(false, true, false, Some(false)));
         assert!(is_down(false, true, false, Some(true)));
-        // Página fechada (o ponto da navegação): vale a lista.
-        assert!(is_down(false, true, false, None));
+        // Página fechada (o ponto da navegação): de outra máquina, o 503 da lista sozinho não diz que caiu.
+        assert!(!is_down(false, true, false, None));
         // Esta máquina: quem decide é a leitura do serviço.
         assert!(is_down(false, true, true, Some(false)));
+        assert!(is_down(false, true, true, None));
     }
 
     #[test]

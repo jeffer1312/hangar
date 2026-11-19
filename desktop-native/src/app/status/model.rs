@@ -31,22 +31,6 @@ pub(crate) enum Block {
     Outside(Outside),
 }
 
-impl Block {
-    /// O bloco para onde um ponto de atenção leva.
-    pub(crate) fn target(&self) -> Option<AttentionTarget> {
-        Some(match self {
-            Block::Health(_) => return None,
-            Block::Server(_) => AttentionTarget::Server,
-            Block::Days(_) => AttentionTarget::Exits,
-            Block::Machines(_) => AttentionTarget::Machines,
-            Block::Sessions(_) => AttentionTarget::Sessions,
-            Block::Slow(_) => AttentionTarget::Slow,
-            Block::Host(_) => AttentionTarget::Host,
-            Block::Outside(_) => AttentionTarget::Outside,
-        })
-    }
-}
-
 pub(crate) struct AttentionItem { pub tone: Tone, pub text: String, pub target: AttentionTarget }
 
 pub(crate) struct Health {
@@ -119,6 +103,22 @@ pub(crate) enum TileIcon { Globe, Tunnel, Key }
 pub(crate) struct Tile { pub icon: TileIcon, pub tone: Tone, pub title: String, pub value: String }
 
 pub(crate) struct Outside { pub tiles: Vec<Tile>, pub chips: Vec<Chip> }
+
+impl Block {
+    /// O bloco para onde um ponto de atenção leva.
+    pub(crate) fn target(&self) -> Option<AttentionTarget> {
+        Some(match self {
+            Block::Health(_) => return None,
+            Block::Server(_) => AttentionTarget::Server,
+            Block::Days(_) => AttentionTarget::Exits,
+            Block::Machines(_) => AttentionTarget::Machines,
+            Block::Sessions(_) => AttentionTarget::Sessions,
+            Block::Slow(_) => AttentionTarget::Slow,
+            Block::Host(_) => AttentionTarget::Host,
+            Block::Outside(_) => AttentionTarget::Outside,
+        })
+    }
+}
 
 /// Os blocos da tela, na ordem do mock, no fuso deste computador.
 pub(crate) fn view_model(snapshot: &StatusSnapshot) -> Vec<Block> { view_model_in(snapshot, &chrono::Local) }
@@ -507,7 +507,10 @@ fn disk_parts(home: DiskUse, hangar: DirSize, cache: DirSize) -> Vec<Seg> {
     let known: u64 = hangar.bytes.unwrap_or(0) + cache.bytes.unwrap_or(0);
     let other = home.used.saturating_sub(known);
     let free = home.total.saturating_sub(home.used);
-    for (label, bytes, slot) in [(tr("status_disk_other"), other, 5), (tr("status_disk_free"), free, 0)] {
+    // Pasta ainda sem medida: o saldo inclui ela, então não é "Outros" e encolheria quando a conta terminasse.
+    let pending = |dir: DirSize| dir.bytes.is_none() && dir.computing;
+    let rest = if pending(hangar) || pending(cache) { tr("status_disk_unclassified") } else { tr("status_disk_other") };
+    for (label, bytes, slot) in [(rest, other, 5), (tr("status_disk_free"), free, 0)] {
         let size = format!("{} GB", gb_number(bytes));
         parts.push(Seg { label, count: Some(size.clone()), weight: bytes as f32, inside: None, tip: size, slot });
     }
@@ -654,6 +657,18 @@ mod tests {
         let line = days.update.as_ref().expect("linha da atualização");
         assert_eq!(line.title, fill(tr("status_update_available"), &[("version", "0.1.0.10833")]));
         assert!(line.meta.contains(&fill(tr("status_checked"), &[("span", "12 min")])), "{}", line.meta);
+    }
+
+    #[test]
+    fn disk_rest_is_other_only_when_every_folder_was_measured() {
+        crate::i18n::english_in_this_thread(false);
+        let home = DiskUse { used: 60 << 30, total: 100 << 30 };
+        let measured = DirSize { bytes: Some(20 << 30), computing: false };
+        let rest = |cache: DirSize| disk_parts(home, measured, cache).into_iter().find(|s| s.slot == 5).expect("o saldo").label;
+        assert_eq!(rest(DirSize { bytes: None, computing: true }), tr("status_disk_unclassified"));
+        assert_eq!(rest(DirSize { bytes: Some(15 << 30), computing: true }), tr("status_disk_other"));
+        // Sem pasta de cache não há o que esperar.
+        assert_eq!(rest(DirSize { bytes: None, computing: false }), tr("status_disk_other"));
     }
 
     #[test]

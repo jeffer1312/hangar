@@ -9,6 +9,11 @@ use super::*;
 use super::model::{Block, Chip, ChipIcon, Days, Health, Host, Machines, Outside, ServerCards, Sessions, Seg, Slow, Spark, TileIcon, Tone};
 use super::super::chrome::Skeleton;
 
+/// O losango da atualização, desenhado por SVG: `div` não gira. Só a forma importa, a cor vem do `text_color`.
+const DIAMOND: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 1 23 12 12 23 1 12Z" fill="black"/></svg>"#;
+
+const SPARK_HEIGHT: f32 = 46.;
+
 fn tone(t: Tone) -> Hsla {
     match t { Tone::Ok => theme::success(), Tone::Warn => theme::warning(), Tone::Bad => theme::danger(), Tone::Faint => theme::faint(), Tone::Accent => theme::accent() }
 }
@@ -35,9 +40,6 @@ fn card_head(title: String, hint: Option<String>) -> Div {
 }
 
 fn swatch(color: Hsla, round: bool) -> Div { div().size(px(9.)).flex_shrink_0().rounded(px(if round { 5. } else { 3. })).bg(color) }
-
-/// O losango da atualização, desenhado por SVG: `div` não gira. Só a forma importa, a cor vem do `text_color`.
-const DIAMOND: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 1 23 12 12 23 1 12Z" fill="black"/></svg>"#;
 
 fn diamond(size: f32, color: Hsla) -> Icon { Icon::default().data(DIAMOND).size(px(size)).text_color(color) }
 
@@ -77,8 +79,6 @@ fn chip_row(chips: &[Chip]) -> Div {
         match chip.tip.clone() { Some(text) => tip(el, text), None => el }
     }))
 }
-
-const SPARK_HEIGHT: f32 = 46.;
 
 /// O nome acessível da curva: cada ponto com o valor e há quanto tempo, o que o mouse lê no tooltip.
 fn spark_label(label: &str, spark: &Spark) -> String {
@@ -380,7 +380,8 @@ fn status_slow(s: &Slow, flash: bool) -> Div {
             .child(div().flex_1().min_w_0().truncate().font_family(theme::MONO).text_color(theme::muted()).child(r.route.clone()))
             .child(div().flex_shrink_0().w(px(72. * r.share)).h(px(6.)).rounded(px(3.)).bg(if r.bad { theme::danger() } else { theme::warning() }))
             .child(div().flex_shrink_0().w(px(44.)).text_right().child(r.value.clone()));
-        tip(row, r.tip.clone())
+        // A linha corta o caminho: o tooltip o leva inteiro, senão duas rotas de mesmo começo ficam iguais.
+        tip(row, format!("{} · {}", r.route, r.tip))
     })));
     card(flash).child(card_head(tr("status_slow_title"), Some(s.hint.clone()))).child(columns).child(marks).children(routes)
 }

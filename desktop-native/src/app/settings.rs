@@ -62,13 +62,15 @@ impl Page {
     }
 
     pub(super) fn title(self) -> String {
-        // O nome é o do web: uma frase, um dicionário.
-        if self == Page::Scheduled { return tr_shared("scheduled_title", &[]); }
-        if self == Page::Memory { return tr_shared("dream_title", &[]); }
-        if self == Page::Jev { return tr_shared("jev_title", &[]); }
-        if self == Page::SharedConfig { return tr_shared("shared_config_title", &[]); }
-        if self == Page::Status { return tr("status_title"); }
-        tr(&format!("settings_page_{}", self.key()))
+        match self {
+            // O nome é o do web: uma frase, um dicionário.
+            Page::Scheduled => tr_shared("scheduled_title", &[]),
+            Page::Memory => tr_shared("dream_title", &[]),
+            Page::Jev => tr_shared("jev_title", &[]),
+            Page::SharedConfig => tr_shared("shared_config_title", &[]),
+            Page::Status => tr("status_title"),
+            _ => tr(&format!("settings_page_{}", self.key())),
+        }
     }
 }
 

@@ -134,13 +134,22 @@ impl Hangar {
             }
             Feed::Local(..) => return,
             Feed::Lost => {
+                // Caiu antes do primeiro retrato: sem o erro, a página ficaria no esqueleto a cada reconexão.
+                let failure = self.device.status.view.ok().is_none().then(|| failure_text(&self.server_label(cx), &Failure::local("stream_lost")));
                 let page = &mut self.device.status;
                 (page.live, page.stream_failed) = (false, true);
+                if let Some((text, detail)) = failure {
+                    page.view.set(Err(text));
+                    page.detail = Some(detail);
+                }
             }
             Feed::Failed(error) => {
                 let (text, detail) = failure_text(&self.server_label(cx), &error);
                 let page = &mut self.device.status;
-                (page.live, page.stream_failed) = (false, true);
+                // Só falha de rede (ou o proxy dizendo que não alcança) prova o servidor fora: um 404 ou 403 é
+                // resposta dele, e o painel de parado esconderia a rota ausente.
+                let unreachable = error.status.is_none_or(|code| matches!(code, 502..=504));
+                (page.live, page.stream_failed) = (false, unreachable);
                 // Com um retrato na tela, a falha só apaga o "ao vivo": o servidor parado aparece no ponto da navegação.
                 if page.view.ok().is_none() {
                     page.view.set(Err(text));
@@ -201,7 +210,6 @@ where F: Fn(DeviceReply) -> std::pin::Pin<Box<dyn Future<Output = ()> + Send>> +
         api::route::ensure(&api).await;
         match api.server_events(&["status", "events"]).await {
             Ok(response) => {
-                delay = 1;
                 // O servidor manda `ping` a cada 10 s: sem bytes por 25 s, a conexão está morta.
                 let bytes = futures::stream::unfold(Box::pin(response.bytes_stream()), |mut stream| async move {
                     match tokio::time::timeout(Duration::from_secs(25), stream.next()).await {
@@ -219,6 +227,8 @@ where F: Fn(DeviceReply) -> std::pin::Pin<Box<dyn Future<Output = ()> + Send>> +
                         "ping" => Feed::Ping,
                         _ => continue,
                     };
+                    // A espera curta volta só com um evento válido: um 200 que fecha na hora reconectaria a cada segundo.
+                    if !matches!(feed, Feed::Failed(_)) { delay = 1; }
                     done(DeviceReply::Status(generation, feed)).await;
                 }
                 api::route::forget(&api);
