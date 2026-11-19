@@ -4915,8 +4915,11 @@ curvas, linha do tempo, cartões de máquina, barra dividida, colunas por hora e
   substituído); vale só para esse pid e por 10 min, e reinício recusado com o servidor ainda de pé
   a apaga. A subida seguinte grava `hangar_server.saida` (`crash` / `update` / `requested`). A
   causa da queda no Linux vem do journal ("Failed with result"), porque o `Result` da unit já foi
-  zerado quando o serviço sobe de novo. A primeira atualização para esta versão ainda é feita pelo
-  executor antigo e não gera a linha.
+  zerado quando o serviço sobe de novo. Sem marca válida, o `estado.json` do executor no passo
+  `reiniciar` para a versão que sobe explica a saída como `update`: a primeira atualização para esta
+  versão é feita pelo executor antigo, que não grava a marca, e no Windows ele encerra o servidor à
+  força (saída não limpa). Medido na DELPHI-02 em 19/11/2026: sem isso, cada atualização a partir da
+  0.1.0.10969 virava uma queda na tela.
 - **Servidor parado não tem API.** O nativo lê e age pelo crate folha `hangar-local-server`
   (sem `hangar-core`): estado do serviço, motivo, versões e as ações subir, liberar a porta (mesmo
   usuário e mesmo nascimento conferidos na hora) e apontar o `current` para a versão anterior (com a

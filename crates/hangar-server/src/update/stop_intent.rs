@@ -306,7 +306,8 @@ pub fn last_failed_result(journal: &str) -> Option<String> {
 /// As linhas da subida sobre a vida anterior: o C2 e, com a marca ilegível, o aviso dela. Consome a
 /// marca. `pid`: o da vida descrita no `server-life.json`, que confere a marca também sem `previous`.
 /// `errors`: as últimas linhas de erro do log, lidas só na queda.
-pub fn previous_exit(hangar_dir: &Path, previous: Option<&Previous>, pid: Option<u32>, errors: impl FnOnce() -> String, journal: &dyn Journal, now: u64) -> Vec<Value> {
+pub fn previous_exit(hangar_dir: &Path, previous: Option<&Previous>, pid: Option<u32>, errors: impl FnOnce() -> String, journal: &dyn Journal,
+    now: u64, update: Option<&UpdateRun>) -> Vec<Value> {
     let mut lines = Vec::new();
     let intent = match take(hangar_dir) {
         Ok(intent) => intent,
@@ -315,10 +316,16 @@ pub fn previous_exit(hangar_dir: &Path, previous: Option<&Previous>, pid: Option
             None
         }
     };
+    let life_pid = previous.map_or(pid, |previous| previous.pid);
+    let stopped_at = previous.and_then(|previous| previous.stop.as_ref()).and_then(|stop| stop.at).unwrap_or(now);
+    // Quem parou a vida anterior pode ser uma versão de antes da marca: o executor dela, no meio do
+    // reinício para esta versão, explica a saída que a marca não explica.
+    let intent = intent.filter(|intent| valid_for(intent, life_pid, stopped_at))
+        .or_else(|| Some(update?.intent(life_pid?, stopped_at)));
     let Some(previous) = previous else {
         // A vida anterior parou sem gravar a causa (versão de antes da marca, na primeira atualização
         // para esta): a marca dela ainda explica a saída.
-        if let Some(intent) = intent.as_ref().filter(|intent| valid_for(intent, pid, now)) {
+        if let Some(intent) = intent.as_ref() {
             lines.push(ExitRecord::from_intent(intent, utc_secs(intent.ts)).line(None));
         }
         return lines;
@@ -342,8 +349,33 @@ pub(crate) fn mark_this_process_running(hangar_dir: &Path, now: &str) -> u32 {
 }
 
 /// Subida: a vida anterior vira a linha `hangar_server.saida`, com o journal desta máquina.
-pub fn record_previous(hangar_dir: &Path, previous: Option<&Previous>, pid: Option<u32>, errors: impl FnOnce() -> String) -> Vec<Value> {
-    previous_exit(hangar_dir, previous, pid, errors, &SystemdJournal, now_secs())
+/// `update_state`: a pasta do estado da atualização (`<claude>/.hangar-update`).
+pub fn record_previous(hangar_dir: &Path, update_state: &Path, previous: Option<&Previous>, pid: Option<u32>,
+    errors: impl FnOnce() -> String) -> Vec<Value> {
+    let update = crate::update::running_package().and_then(|package| update_run(update_state, &package.version));
+    previous_exit(hangar_dir, previous, pid, errors, &SystemdJournal, now_secs(), update.as_ref())
+}
+
+/// Uma atualização no passo de reiniciar, indo para a versão que acaba de subir.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UpdateRun {
+    pub from: Option<String>,
+    pub to: String,
+}
+
+impl UpdateRun {
+    fn intent(&self, pid: u32, ts: u64) -> Intent {
+        Intent { kind: ExitKind::Update, cause: "package".into(), from: self.from.clone(), to: Some(self.to.clone()), pid, ts }
+    }
+}
+
+/// O `estado.json` do executor: rodando, no passo `reiniciar` e com `versao_para` = `version`. Todo
+/// executor grava esses campos, também o das versões de antes da marca de intenção.
+pub fn update_run(update_state: &Path, version: &str) -> Option<UpdateRun> {
+    let state: Value = serde_json::from_slice(&std::fs::read(update_state.join("estado.json")).ok()?).ok()?;
+    let text = |key: &str| state.get(key).and_then(Value::as_str);
+    (text("fase")? == "rodando" && text("etapa")? == "reiniciar" && text("versao_para")? == version)
+        .then(|| UpdateRun { from: text("versao_de").map(str::to_owned), to: version.to_owned() })
 }
 
 #[cfg(test)]
@@ -494,7 +526,7 @@ mod tests {
         let stopped = now_secs();
         hangar_boot::life::end_with(hangar, pid, Some("sigterm"), false, stopped).unwrap();
         let begin = hangar_boot::life::begin(hangar, "2026-11-17T10:01:00-03:00", |_, _| false).unwrap();
-        let lines = previous_exit(hangar, begin.previous.as_ref(), begin.pid, || panic!("erro só na queda"), &Fixed(None), stopped + 3600);
+        let lines = previous_exit(hangar, begin.previous.as_ref(), begin.pid, || panic!("erro só na queda"), &Fixed(None), stopped + 3600, None);
         assert_eq!(lines, [json!({"evento": "hangar_server.saida", "nivel": "aviso", "tipo": "requested", "causa": "restart_only",
             "quando": utc_secs(stopped)})], "o quando é o instante da parada gravada, e a volta uma hora depois não vence a marca");
         assert!(!hangar.join(FILE).exists(), "a subida consome a marca");
@@ -561,7 +593,7 @@ mod tests {
         marked.settle(&Err::<(), _>("a unit nova não subiu"));
         assert!(hangar.join(FILE).exists());
         let begin = hangar_boot::life::begin(hangar, "2026-11-17T10:02:00-03:00", |_, _| false).unwrap();
-        let lines = previous_exit(hangar, begin.previous.as_ref(), begin.pid, String::new, &Fixed(None), now_secs());
+        let lines = previous_exit(hangar, begin.previous.as_ref(), begin.pid, String::new, &Fixed(None), now_secs(), None);
         assert_eq!(lines, [json!({"evento": "hangar_server.saida", "nivel": "aviso", "tipo": "update", "causa": "package", "de": "1", "para": "2",
             "quando": utc_secs(stopped)})]);
     }
@@ -575,14 +607,14 @@ mod tests {
         let write_intent = |pid: u32| std::fs::write(hangar.join(FILE), json!({"tipo": "update", "causa": "package",
             "de": "0.1.0.9000", "para": "0.1.0.9010", "pid": pid, "ts": NOW - 10}).to_string()).unwrap();
         write_intent(41);
-        let lines = previous_exit(hangar, None, Some(41), || panic!("erro só na queda"), &Fixed(None), NOW);
+        let lines = previous_exit(hangar, None, Some(41), || panic!("erro só na queda"), &Fixed(None), NOW, None);
         assert_eq!(lines, [json!({"evento": "hangar_server.saida", "nivel": "aviso", "tipo": "update", "causa": "package",
             "de": "0.1.0.9000", "para": "0.1.0.9010", "quando": utc_secs(NOW - 10)})]);
         assert!(!hangar.join(FILE).exists(), "a subida consome a marca");
         write_intent(40);
-        assert!(previous_exit(hangar, None, Some(41), String::new, &Fixed(None), NOW).is_empty());
+        assert!(previous_exit(hangar, None, Some(41), String::new, &Fixed(None), NOW, None).is_empty());
         write_intent(41);
-        assert!(previous_exit(hangar, None, Some(41), String::new, &Fixed(None), NOW + VALID_FOR.as_secs()).is_empty(), "marca vencida");
+        assert!(previous_exit(hangar, None, Some(41), String::new, &Fixed(None), NOW + VALID_FOR.as_secs(), None).is_empty(), "marca vencida");
         assert!(!hangar.join(FILE).exists());
     }
 
@@ -592,10 +624,56 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join(FILE), "{torto").unwrap();
         let previous = life(41, true, None);
-        let lines = previous_exit(dir.path(), Some(&previous), previous.pid, || "10:55:02 panic=true".into(), &Fixed(Some("oom-kill")), NOW);
+        let lines = previous_exit(dir.path(), Some(&previous), previous.pid, || "10:55:02 panic=true".into(), &Fixed(Some("oom-kill")), NOW, None);
         assert_eq!(lines[0]["codigo"], "stop_intent_unreadable");
         assert_eq!(lines[1], json!({"evento": "hangar_server.saida", "nivel": "aviso", "tipo": "crash", "causa": "out_of_memory",
             "quando": STARTED, "erro": "10:55:02 panic=true"}));
         assert!(!dir.path().join(FILE).exists(), "marca ilegível também sai");
+    }
+
+    fn run() -> UpdateRun { UpdateRun { from: Some("0.1.0.9000".into()), to: "0.1.0.9010".into() } }
+
+    /// Primeira atualização de uma versão sem a marca: no Windows o executor antigo encerra o servidor à
+    /// força (saída não limpa, sem parada gravada). O estado dele, no meio do reinício para esta versão,
+    /// explica a saída como atualização, nunca queda.
+    #[test]
+    fn update_run_explains_an_unclean_exit_without_intent() {
+        let dir = tempfile::tempdir().unwrap();
+        let previous = life(41, true, None);
+        let lines = previous_exit(dir.path(), Some(&previous), previous.pid, || panic!("erro só na queda"), &Fixed(None), NOW, Some(&run()));
+        assert_eq!(lines, [json!({"evento": "hangar_server.saida", "nivel": "aviso", "tipo": "update", "causa": "package",
+            "de": "0.1.0.9000", "para": "0.1.0.9010", "quando": utc_secs(NOW)})]);
+    }
+
+    /// No Linux a versão antiga para limpa e sem `previous`: o estado do executor também vira a linha. Uma
+    /// marca que não vale para esta vida (de outra vida, deixada por uma volta de versão) não o esconde.
+    #[test]
+    fn update_run_explains_a_life_without_stop_record_even_with_a_stale_intent() {
+        let dir = tempfile::tempdir().unwrap();
+        let hangar = dir.path();
+        std::fs::write(hangar.join(FILE), json!({"tipo": "update", "causa": "package", "pid": 40, "ts": NOW - 10}).to_string()).unwrap();
+        let lines = previous_exit(hangar, None, Some(41), || panic!("erro só na queda"), &Fixed(None), NOW, Some(&run()));
+        assert_eq!(lines, [json!({"evento": "hangar_server.saida", "nivel": "aviso", "tipo": "update", "causa": "package",
+            "de": "0.1.0.9000", "para": "0.1.0.9010", "quando": utc_secs(NOW)})]);
+        // A marca válida continua vencendo o estado.
+        std::fs::write(hangar.join(FILE), json!({"tipo": "requested", "causa": "restart_only", "pid": 41, "ts": NOW - 10}).to_string()).unwrap();
+        let lines = previous_exit(hangar, None, Some(41), String::new, &Fixed(None), NOW, Some(&run()));
+        assert_eq!(lines[0]["tipo"], "requested");
+    }
+
+    /// Só o executor no passo de reiniciar, indo para a versão que sobe, conta.
+    #[test]
+    fn update_run_needs_the_restart_step_toward_this_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = |value: Value| std::fs::write(dir.path().join("estado.json"), value.to_string()).unwrap();
+        state(json!({"fase": "rodando", "etapa": "reiniciar", "versao_de": "0.1.0.9000", "versao_para": "0.1.0.9010"}));
+        assert_eq!(update_run(dir.path(), "0.1.0.9010"), Some(run()));
+        assert_eq!(update_run(dir.path(), "0.1.0.9011"), None, "outra versão subiu");
+        state(json!({"fase": "pronto", "etapa": "reiniciar", "versao_de": "0.1.0.9000", "versao_para": "0.1.0.9010"}));
+        assert_eq!(update_run(dir.path(), "0.1.0.9010"), None, "atualização já encerrada");
+        state(json!({"fase": "rodando", "etapa": "baixar", "versao_para": "0.1.0.9010"}));
+        assert_eq!(update_run(dir.path(), "0.1.0.9010"), None, "ainda baixando");
+        std::fs::remove_file(dir.path().join("estado.json")).unwrap();
+        assert_eq!(update_run(dir.path(), "0.1.0.9010"), None);
     }
 }

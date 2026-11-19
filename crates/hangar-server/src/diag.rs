@@ -351,7 +351,7 @@ fn platform() -> (String, String) {
 
 /// Subida sem o Python: a queda da vida anterior (marca de pé que ficou), por que ela saiu
 /// (`hangar_server.saida`) e o `backend.inicio`. Bloqueante; roda antes do log desta vida.
-pub fn record_boot(hangar_dir: &std::path::Path, log: Option<&std::path::Path>) {
+pub fn record_boot(hangar_dir: &std::path::Path, claude_base: &std::path::Path, log: Option<&std::path::Path>) {
     let pid = std::process::id();
     let mut lines = Vec::new();
     match hangar_boot::life::begin(hangar_dir, &iso(chrono::Local::now()), life_alive) {
@@ -370,7 +370,8 @@ pub fn record_boot(hangar_dir: &std::path::Path, log: Option<&std::path::Path>) 
             }
             // A marca de intenção é da vida que o outro servidor de pé ainda vive: fica para ela.
             if begin.held_by.is_none() {
-                lines.extend(crate::update::stop_intent::record_previous(hangar_dir, begin.previous.as_ref(), begin.pid, errors));
+                lines.extend(crate::update::stop_intent::record_previous(hangar_dir, &crate::update::state::state_dir(claude_base),
+                    begin.previous.as_ref(), begin.pid, errors));
             }
         }
         Err(error) => lines.push(json!({"evento": "hangar_server.vida_ilegivel", "nivel": "aviso",
