@@ -4,6 +4,9 @@ import {
   getHistory,
   getHistoryDesde,
   openEventStreamForServer,
+  baseOf,
+  decidirRota,
+  UNCONFIRMED_BASE,
   prependOlder,
   mergeHistoryWithLiveRetiring,
   hasSeam,
@@ -213,6 +216,8 @@ function criarChatStore(serverId: string, name: string): ChatApi {
   // Conexão aberta sem o evento `queue` no retrato (a sessão voltou ao Python): a lista antiga do servidor sai.
   let queueAbsentTimer: ReturnType<typeof setTimeout> | undefined;
   let retryDelay = SSE_RETRY_MIN_MS;
+  // Decisão de rota que termina depois de outra abertura (ou de soltar a tela) não reabre nada.
+  let sseAttempt = 0;
   let alive = false;
   let refs = 0;
   let identity: { jsonl?: string | null; lifecycle_id?: string | null; provider?: string | null } | undefined;
@@ -221,6 +226,7 @@ function criarChatStore(serverId: string, name: string): ChatApi {
     releaseTimer = null;
     alive = false;
     histGen++;
+    sseAttempt++;
     histAbort?.abort();
     es?.close();
     es = null;
@@ -592,6 +598,22 @@ function criarChatStore(serverId: string, name: string): ChatApi {
     es?.close();
     es = null;
     if (!target) return;
+    const attempt = ++sseAttempt;
+    // Sem a máquina provada a abertura lança, e a reconexão pararia ali até o app voltar do fundo.
+    if (baseOf(target) === UNCONFIRMED_BASE) {
+      void decidirRota(target).then(() => {
+        if (attempt !== sseAttempt || !alive || !foreground) return;
+        const current = destino();
+        if (current && baseOf(current) !== UNCONFIRMED_BASE) {
+          connectSSE();
+          return;
+        }
+        registrarDiag({ evento: 'sse.rota_nao_confirmada', nivel: 'aviso', tela: 'chat',
+          codigo: 'server_identity_unconfirmed' }, target.baseUrl);
+        scheduleReconnect(target.baseUrl);
+      });
+      return;
+    }
 
     const opened = openEventStreamForServer(target, name, undefined, lastEventId);
     // O adapter pode entregar um quadro já enfileirado depois do close.
@@ -889,12 +911,16 @@ function criarChatStore(serverId: string, name: string): ChatApi {
         useChatStore.setState({ sseRecusado: true });
         return;
       }
-      retryTimer = setTimeout(connectSSE, retryDelay);
-      if (base !== undefined) registrarDiag({ evento: 'sse.retentativa', tela: 'chat',
-        espera_ms: retryDelay }, base);
-      retryDelay = Math.min(retryDelay * 2, SSE_RETRY_MAX_MS);
+      scheduleReconnect(target.baseUrl);
     }
     es.onerror = onStreamError;
+  }
+
+  function scheduleReconnect(base: string): void {
+    clearTimeout(retryTimer);
+    retryTimer = setTimeout(connectSSE, retryDelay);
+    registrarDiag({ evento: 'sse.retentativa', tela: 'chat', espera_ms: retryDelay }, base);
+    retryDelay = Math.min(retryDelay * 2, SSE_RETRY_MAX_MS);
   }
 
   // Aviso de falha da fila: some sozinho, como o aviso do PWA, sem ficar sobre uma fila que já mudou.

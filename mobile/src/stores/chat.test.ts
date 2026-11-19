@@ -1,5 +1,6 @@
+import { createHmac } from 'node:crypto';
 import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
-import { configureApi, configureDiag, registrarSucesso } from '@hangar/core';
+import { configureApi, configureDiag, esquecerRota, registrarSucesso } from '@hangar/core';
 import type { ChatEvent } from '@hangar/core';
 import { chatStore, resetCreatedChat, syncChatTranscripts, _resetChatsForTests, filaCount, setChatsForeground, submitConversationDraft, isSubmitting } from './chat';
 import * as m from '../paraglide/messages';
@@ -11,7 +12,7 @@ vi.mock('react-native-mmkv', () => ({ createMMKV: () => ({
   remove: (key: string) => { disk.values.delete(key); },
 }) }));
 const servidores = vi.hoisted(() => ({
-  lista: [] as { id: string; label: string; baseUrl: string; token: string }[],
+  lista: [] as { id: string; label: string; baseUrl: string; token: string; lan?: { url: string; id: string } }[],
 }));
 vi.mock('./servers', () => ({ useServers: { getState: () => ({ servers: servidores.lista }) } }));
 const toasts = vi.hoisted(() => ({ mod: vi.fn() }));
@@ -207,6 +208,42 @@ test('(a) history inicial + message novo via SSE = N+1 com ids únicos', async (
 
     chat.release();
   } finally {
+    vi.useRealTimers();
+  }
+});
+
+test('máquina sem identidade provada não derruba o chat e o SSE abre quando ela prova', async () => {
+  vi.useFakeTimers();
+  const target = { id: 'srv-rota', label: 'rota', baseUrl: 'http://10.0.0.3:8765', token: 'tok3',
+    lan: { url: 'http://10.0.0.3:8765', id: 'maquina-3' } };
+  servidores.lista = [target];
+  let proves = false;
+  vi.stubGlobal('fetch', vi.fn(async (input: string) => {
+    const url = new URL(input);
+    if (url.pathname === '/api/peers/prova') {
+      if (!proves) return new Response('', { status: 503 });
+      const prova = createHmac('sha256', target.token)
+        .update(`${url.searchParams.get('desafio')}|${target.lan.id}`).digest('hex');
+      return new Response(JSON.stringify({ identificador: target.lan.id, prova }), { status: 200 });
+    }
+    if (url.pathname === '/api/peers/identificador') {
+      return new Response(JSON.stringify({ identificador: target.lan.id }), { status: 200 });
+    }
+    return new Response('[]', { status: 200 });
+  }));
+  const chat = chatStore(target.id, 'sess');
+  try {
+    chat.retain();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(created).toHaveLength(0);
+
+    proves = true;
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(created).toHaveLength(1);
+    expect(created[0].url.startsWith(`${target.baseUrl}/api/sessions/sess/events`)).toBe(true);
+  } finally {
+    chat.release();
+    esquecerRota(target.id);
     vi.useRealTimers();
   }
 });
