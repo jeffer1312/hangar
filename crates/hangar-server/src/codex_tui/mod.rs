@@ -20,7 +20,7 @@ mod plan;
 mod prepare;
 mod session;
 mod threads;
-mod update;
+pub(crate) mod update;
 
 use std::collections::BTreeMap;
 use std::path::Path;

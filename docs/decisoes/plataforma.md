@@ -69,7 +69,8 @@ Claude completo; `hangar-codex-transfer` importa pelo app-server sem iniciar inf
 servidor integra esses crates ao ciclo de vida já existente e conduz a recuperação.
 
 Permanecem os registros de `conversation-transfers`, os códigos de erro, os modos de permissão,
-a restrição ao Codex 0.159.3 e a conferência de capacidade, configuração e conteúdo persistido.
+e a conferência de capacidade, configuração e conteúdo persistido. A restrição ao Codex 0.159.3
+saiu depois: ver [transferência sem versão fixa](harnesses.md#transferência-sem-versão-fixa-do-codex-19112026).
 O digest do snapshot e a fronteira do rollout continuam protegendo o histórico e as imagens.
 Falha após parar a origem exige restaurá-la; registro incompleto não autoriza publicar o destino.
 

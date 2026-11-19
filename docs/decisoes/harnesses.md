@@ -359,7 +359,12 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   (`rust.codex_decode`); item ruim do histórico vira desconhecido sem derrubar o turno. A versão
   do Codex instalado não é comparada com a do recorte: o workflow semanal `codex-schema` instala
   o Codex mais novo e falha só se um campo usado sumiu. Atualizar o recorte guardado:
-  `scripts/conferir-codex-schema`.
+  `scripts/conferir-codex-schema`, que passa a versão conferida para a instalada.
+- **A transferência Claude → Codex não compara a versão do Codex.** Cada resposta do app-server
+  que a importação usa é conferida na hora, e falha restaura o Claude; os métodos e campos dela
+  entram no mesmo workflow `codex-schema` (`hangar-codex-transfer/src/schema_check.rs`). O
+  catálogo de modelos é pedido com a versão instalada (`client_version`), nunca com uma fixa: a
+  lista muda com ela. Ver [transferência sem versão fixa](#transferência-sem-versão-fixa-do-codex-19112026).
 - **A rota do terminal Claude só recebe sessão Claude.** `route_sync`, `run_admin` e
   `answer_sync` abrem `prepare_session(name, "claude")`, que suspende a escrita sem vínculo
   Claude nem pane. Rota que atende outros provedores filtra pelo provedor antes (`/answer`,
@@ -1892,6 +1897,28 @@ comando original voltou com a mesma recusa. Após a correção, texto e Enter ch
 processo `cat`, que devolveu a linha submetida. O observador continuou somente de leitura,
 e o servidor de teste foi encerrado. Os testes também cobrem retorno de erro após a única
 tentativa de recuperação, envio literal de `-c`, cliente explícito e isolamento do psmux.
+
+## Transferência sem versão fixa do Codex (19/11/2026)
+
+A transferência recusava todo Codex diferente de 0.159.3 (`session_transfer_codex_version_unsupported`)
+e, com a 0.170.0 instalada, não abria mais. Comparado com os binários 0.159.3 e 0.170.0:
+
+- `generate-json-schema --experimental` das duas: nos oito métodos que a importação chama, só
+  houve campo acrescentado (`attachedToThreadId`, `environments`, `client_search_provider`,
+  `toolListMeta`); nenhum campo lido sumiu ou mudou de tipo.
+- A sequência da importação, em `CODEX_HOME` descartável, sem conta nem inferência, deu o mesmo
+  resultado nas duas: thread criada com `path` e `cwd`, esforço e modo Plano aplicados, quatro
+  itens injetados e um resultado de 144.000 caracteres inteiro no rollout (2,15 s e 2,01 s).
+- `model/list` sem conta: a 0.159.3 não tem `gpt-6.2-sol` (padrão da 0.170.0), `gpt-6.2-astra`
+  nem `gpt-6.1-terra`. Como o catálogo HTTP também muda com `client_version`, a versão fixa
+  enviada pela transferência faria esses modelos caírem em `session_transfer_model_capacity_unknown`,
+  e o cache do catálogo (guardado com a versão instalada) nunca servia: uma chamada HTTP a mais
+  por transferência.
+
+Segue o caminho do aviso de versão retirado em 24/10: nada compara versão em tempo de execução, e
+o workflow semanal confere os campos no Codex mais novo. Codex antigo sem `thread/inject_items`
+falha na importação e a origem é restaurada, como em qualquer falha dela. Não comprovado: troca
+real com conta e modelo reais na 0.170.0.
 
 ## Transferência Claude → Codex: captura nativa em validação
 
