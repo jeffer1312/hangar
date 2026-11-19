@@ -330,6 +330,7 @@ pub(super) async fn launch_if_needed(policy:&PolicyClient,target:&mut RuntimeTar
 /// sessão já aberta, recusando os hooks dele até a reaprovação; conferidos antes, ele não acha nada
 /// novo. Falha não impede a abertura: o Codex confere depois e o ator reaprova o que mudar.
 async fn upgrade_marketplaces(program:&[String],env:&std::collections::BTreeMap<String,String>) {
+    if !crate::codex_tui::marketplaces_due(env) { return; }
     let Some(codex) = program.first().and_then(|name|process::resolve_program(name,env.iter())) else { return };
     let mut command = tokio::process::Command::new(codex);
     command.args(["plugin","marketplace","upgrade","--json"]).env_clear().envs(env)
@@ -337,7 +338,9 @@ async fn upgrade_marketplaces(program:&[String],env:&std::collections::BTreeMap<
     #[cfg(windows)]
     command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     match tokio::time::timeout(MARKETPLACES_TIMEOUT,command.output()).await {
-        Ok(Ok(out)) if out.status.success() => {}
+        // Código 0 com marketplace que falhou não conta como conferida: a próxima subida tenta de novo.
+        Ok(Ok(out)) if out.status.success() && crate::codex_tui::marketplaces_failed_lines(&String::from_utf8_lossy(&out.stderr)).is_empty() =>
+            crate::codex_tui::marketplaces_done(env),
         Ok(Ok(out)) => {
             let failed = crate::codex_tui::marketplaces_failed_lines(&String::from_utf8_lossy(&out.stderr));
             tracing::warn!(code=?out.status.code(),detail=%failed.first().map_or("",String::as_str),"codex: conferência dos marketplaces falhou");
@@ -346,7 +349,7 @@ async fn upgrade_marketplaces(program:&[String],env:&std::collections::BTreeMap<
         Err(_) => tracing::warn!("codex: conferência dos marketplaces passou do prazo"),
     }
 }
-/// Toda abertura espera a conferência: sem rede, o `git fetch` não pode segurar a sessão; o ator cobre o resto.
+/// Sem rede, o `git fetch` não pode segurar a sessão; o ator cobre o resto.
 const MARKETPLACES_TIMEOUT:Duration = Duration::from_secs(20);
 
 /// Marca da configuração que o `claude -p` leu ao nascer: o botão Recarregar e a adoção da reserva

@@ -32,7 +32,7 @@ use crate::accounts::environment::{Account, AccountEnvironment};
 use crate::accounts::{AccountService, Provider};
 use crate::runtime::codex_sidecar;
 
-pub(crate) use marketplaces::failed_lines as marketplaces_failed_lines;
+pub(crate) use marketplaces::{due as marketplaces_due, failed_lines as marketplaces_failed_lines, mark_done as marketplaces_done};
 
 /// O prefixo que a lista do servidor e as telas leem no pane.
 pub(crate) const PREFIX: &str = "hangar-codex-tui: ";
