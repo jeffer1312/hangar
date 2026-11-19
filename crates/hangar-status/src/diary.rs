@@ -12,10 +12,11 @@ use std::sync::{Mutex, PoisonError};
 use std::time::SystemTime;
 
 use chrono::{DateTime, SecondsFormat, TimeDelta, Utc};
+use serde_json::{Map, Value};
+
 use hangar_api::status::{
     Exit, ExitKind, ExitsBlock, HourBucket, RouteStat, SlowBlock, WatchdogEvent, WatchdogKind,
 };
-use serde_json::{Map, Value};
 
 const EXITS_DAYS: i64 = 7;
 const HOURS: i64 = 24;
@@ -28,17 +29,17 @@ pub struct DiaryReader {
     cache: Mutex<Cache>,
 }
 
-enum Source {
-    Machine,
-    At(PathBuf),
-}
-
 /// O que foi deixado de fora na última leitura: linhas que não são JSON ou evento conhecido com
 /// campo fora de forma, e arquivos que não abriram.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Skipped {
     pub lines: u64,
     pub files: u64,
+}
+
+enum Source {
+    Machine,
+    At(PathBuf),
 }
 
 #[derive(Default)]
@@ -69,6 +70,13 @@ struct Request {
     route: String,
     code: u16,
     ms: Option<u64>,
+}
+
+/// Desde quando cada fato interessa: as saídas, 7 dias; pedidos e watchdog, 24 h. O que chega
+/// já mais velho que isso não volta a entrar em janela nenhuma.
+struct Window {
+    exits_since: DateTime<Utc>,
+    recent_since: DateTime<Utc>,
 }
 
 impl DiaryReader {
@@ -145,13 +153,6 @@ impl DiaryReader {
     }
 }
 
-/// Desde quando cada fato interessa: as saídas, 7 dias; pedidos e watchdog, 24 h. O que chega
-/// já mais velho que isso não volta a entrar em janela nenhuma.
-struct Window {
-    exits_since: DateTime<Utc>,
-    recent_since: DateTime<Utc>,
-}
-
 impl Window {
     fn at(now: DateTime<Utc>) -> Self {
         Self { exits_since: now - TimeDelta::days(EXITS_DAYS), recent_since: now - TimeDelta::hours(HOURS) }
@@ -163,17 +164,56 @@ impl Window {
     }
 }
 
+impl Facts {
+    /// Guarda o fato só se ele ainda cabe na janela dele.
+    fn add(&mut self, raw: &[u8], window: &Window) {
+        if raw.iter().all(u8::is_ascii_whitespace) {
+            return;
+        }
+        let Ok(line) = serde_json::from_slice::<Map<String, Value>>(raw) else {
+            self.unreadable += 1;
+            return;
+        };
+        match line.get("evento").and_then(Value::as_str) {
+            Some("hangar_server.saida") => match exit(&line) {
+                Some(exit) if exit.0 > window.exits_since => self.exits.push(exit),
+                Some(_) => {}
+                None => self.unreadable += 1,
+            },
+            Some("api.servidor") => match request(&line) {
+                Some(request) if request.at >= window.recent_since => self.requests.push(request),
+                Some(_) => {}
+                None => self.unreadable += 1,
+            },
+            Some("systemd_watchdog") => match watchdog(&line) {
+                Some(event) if event.0 >= window.recent_since => self.watchdog.push(event),
+                Some(_) => {}
+                None => self.unreadable += 1,
+            },
+            _ => {}
+        }
+    }
+
+    /// Tira o que saiu da janela: um arquivo que não muda fica no cache e, sem isso, os pedidos lentos
+    /// de dias atrás seguiriam ocupando memória e sendo percorridos a cada consulta.
+    fn expire(&mut self, window: &Window) {
+        self.requests.retain(|request| request.at >= window.recent_since);
+        self.watchdog.retain(|(at, _)| *at >= window.recent_since);
+        self.exits.retain(|(at, _)| *at > window.exits_since);
+    }
+}
+
+/// Pedido que fica aberto de propósito (espera do plugin, MCP): demorar não é lentidão.
+pub fn waits_on_purpose(method: &str, path: &str) -> bool {
+    method == "POST" && matches!(path, "/api/plugin/pull" | "/mcp/")
+}
+
 fn exits_of(cache: &Cache, now: DateTime<Utc>) -> ExitsBlock {
     let since = now - TimeDelta::days(EXITS_DAYS);
     let mut items: Vec<_> = cache.files.values().flat_map(|file| &file.facts.exits)
         .filter(|(at, _)| *at > since && *at <= now).collect();
     items.sort_by_key(|(at, _)| *at);
     ExitsBlock { items: items.into_iter().map(|(_, exit)| exit.clone()).collect() }
-}
-
-/// Pedido que fica aberto de propósito (espera do plugin, MCP): demorar não é lentidão.
-pub fn waits_on_purpose(method: &str, path: &str) -> bool {
-    method == "POST" && matches!(path, "/api/plugin/pull" | "/mcp/")
 }
 
 fn slow_of(cache: &Cache, now: DateTime<Utc>) -> SlowBlock {
@@ -224,45 +264,6 @@ fn read_tail(path: &Path, entry: &mut FileCache, window: &Window) -> std::io::Re
     }
     entry.read_to += complete as u64;
     Ok(())
-}
-
-impl Facts {
-    /// Guarda o fato só se ele ainda cabe na janela dele.
-    fn add(&mut self, raw: &[u8], window: &Window) {
-        if raw.iter().all(u8::is_ascii_whitespace) {
-            return;
-        }
-        let Ok(line) = serde_json::from_slice::<Map<String, Value>>(raw) else {
-            self.unreadable += 1;
-            return;
-        };
-        match line.get("evento").and_then(Value::as_str) {
-            Some("hangar_server.saida") => match exit(&line) {
-                Some(exit) if exit.0 > window.exits_since => self.exits.push(exit),
-                Some(_) => {}
-                None => self.unreadable += 1,
-            },
-            Some("api.servidor") => match request(&line) {
-                Some(request) if request.at >= window.recent_since => self.requests.push(request),
-                Some(_) => {}
-                None => self.unreadable += 1,
-            },
-            Some("systemd_watchdog") => match watchdog(&line) {
-                Some(event) if event.0 >= window.recent_since => self.watchdog.push(event),
-                Some(_) => {}
-                None => self.unreadable += 1,
-            },
-            _ => {}
-        }
-    }
-
-    /// Tira o que saiu da janela: um arquivo que não muda fica no cache e, sem isso, os pedidos lentos
-    /// de dias atrás seguiriam ocupando memória e sendo percorridos a cada consulta.
-    fn expire(&mut self, window: &Window) {
-        self.requests.retain(|request| request.at >= window.recent_since);
-        self.watchdog.retain(|(at, _)| *at >= window.recent_since);
-        self.exits.retain(|(at, _)| *at > window.exits_since);
-    }
 }
 
 /// C2: `{tipo, causa?, de?, para?, quando?, erro?}`; `erro` traz as últimas linhas de erro numa

@@ -10,21 +10,11 @@ use hangar_api::status::DirSize;
 
 pub const VALID_FOR: Duration = Duration::from_secs(3600);
 
-type Measure = Arc<dyn Fn(&Path) -> Option<u64> + Send + Sync>;
-
 /// As duas pastas do bloco "Esta máquina".
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Sizes {
     pub hangar: DirSize,
     pub build_cache: DirSize,
-}
-
-#[derive(Default)]
-struct State {
-    hangar: Option<u64>,
-    build_cache: Option<u64>,
-    measured_at: Option<Instant>,
-    computing: bool,
 }
 
 #[derive(Clone)]
@@ -34,6 +24,16 @@ pub struct DirSizes {
     build_root: Option<PathBuf>,
     measure: Measure,
     valid_for: Duration,
+}
+
+type Measure = Arc<dyn Fn(&Path) -> Option<u64> + Send + Sync>;
+
+#[derive(Default)]
+struct State {
+    hangar: Option<u64>,
+    build_cache: Option<u64>,
+    measured_at: Option<Instant>,
+    computing: bool,
 }
 
 impl DirSizes {
@@ -92,6 +92,39 @@ impl Default for DirSizes {
     fn default() -> Self { Self::new() }
 }
 
+/// Soma dos arquivos da árvore sem seguir link (o `current` aponta para dentro do próprio
+/// `~/.hangar`), contando uma vez o arquivo com vários hardlinks, como o `du`. Não desce em montagem
+/// de outro volume (`du -x`): a soma entra como parte do disco da raiz. Pasta ou arquivo ilegível no
+/// meio fica de fora (de propósito); raiz ilegível é `None`.
+pub fn dir_bytes(root: &Path) -> Option<u64> {
+    let root_meta = std::fs::symlink_metadata(root).ok()?;
+    if !root_meta.is_dir() {
+        return None;
+    }
+    let root_device = device(&root_meta);
+    let mut seen = HashSet::new();
+    let mut total = 0u64;
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            // Raiz que não se lista daria zero, que diria "pasta vazia".
+            Err(_) if dir == root => return None,
+            Err(_) => continue,
+        };
+        for entry in entries.filter_map(Result::ok) {
+            let Ok(meta) = entry.metadata() else { continue };
+            let kind = meta.file_type();
+            if kind.is_dir() {
+                if device(&meta) == root_device { stack.push(entry.path()); }
+            } else if kind.is_file() && first_link(&meta, &mut seen) {
+                total = total.saturating_add(meta.len());
+            }
+        }
+    }
+    Some(total)
+}
+
 /// Mesma ordem do cargo: `CARGO_TARGET_DIR`, `build.target-dir` do `config.toml` do usuário, e por
 /// fim `~/.cache/cargo/target`. `None` quando a pasta não existe: o bloco fica sem o valor.
 fn build_cache_dir(home: Option<&Path>, env: &dyn Fn(&str) -> Option<std::ffi::OsString>) -> Option<PathBuf> {
@@ -131,35 +164,14 @@ fn config_target_dir(text: &str) -> Option<String> {
     None
 }
 
-/// Soma dos arquivos da árvore sem seguir link (o `current` aponta para dentro do próprio
-/// `~/.hangar`), contando uma vez o arquivo com vários hardlinks, como o `du`. Pasta ou arquivo
-/// ilegível no meio fica de fora; raiz ilegível é `None`.
-pub fn dir_bytes(root: &Path) -> Option<u64> {
-    if !std::fs::symlink_metadata(root).ok()?.is_dir() {
-        return None;
-    }
-    let mut seen = HashSet::new();
-    let mut total = 0u64;
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        let entries = match std::fs::read_dir(&dir) {
-            Ok(entries) => entries,
-            // Raiz que não se lista daria zero, que diria "pasta vazia".
-            Err(_) if dir == root => return None,
-            Err(_) => continue,
-        };
-        for entry in entries.flatten() {
-            let Ok(meta) = entry.metadata() else { continue };
-            let kind = meta.file_type();
-            if kind.is_dir() {
-                stack.push(entry.path());
-            } else if kind.is_file() && first_link(&meta, &mut seen) {
-                total = total.saturating_add(meta.len());
-            }
-        }
-    }
-    Some(total)
+#[cfg(unix)]
+fn device(meta: &std::fs::Metadata) -> Option<u64> {
+    use std::os::unix::fs::MetadataExt;
+    Some(meta.dev())
 }
+
+#[cfg(not(unix))]
+fn device(_meta: &std::fs::Metadata) -> Option<u64> { None }
 
 #[cfg(unix)]
 fn first_link(meta: &std::fs::Metadata, seen: &mut HashSet<(u64, u64)>) -> bool {
