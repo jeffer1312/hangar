@@ -1215,8 +1215,8 @@ impl Executor {
         // Com o Claude trabalhando a mensagem fica na fila do Hangar, onde o painel a apaga, edita e reordena.
         // O recado com socket nativo segue: é o canal do próprio Claude Code para o meio do turno.
         let ok=facts.as_ref().and_then(|result|result.as_ref().ok());
-        let busy=ok.is_some_and(|f|self.turn_busy(f.idle));
-        let started_turn=ok.is_some_and(|f|f.idle);
+        let started_turn = ok.is_some_and(InputFacts::foreground_idle);
+        let busy = ok.is_some() && self.turn_busy(started_turn);
         let held=prompt && !slash && !steer && !conversation && busy && ok.is_some_and(|f|!input::native_message(f,text));
         // Parado, não há turno para entrar: a "Na conversa" respeita a ordem da fila como as comuns.
         if fresh && conversation && current && ok.is_some() && !busy && state.pending_ahead(self.target.created) {
@@ -1518,7 +1518,7 @@ impl Executor {
         // A fila comum espera o turno e sai em lote. O "Orientar" (`steer`) passa por cima, o recado com socket
         // nativo também, porque esse canal o Claude Code atende no meio do turno, e a marcada "Na conversa", que o
         // Claude Code guarda e lê na pausa seguinte (a mais antiga delas primeiro).
-        if !steer && self.turn_busy(facts.idle) {
+        if !steer && self.turn_busy(facts.foreground_idle()) {
             let waiting=super::queue::waiting_ids(&state,self.target.created);
             let marked=waiting.iter().find(|id|entry.as_deref().is_none_or(|e|e==id.as_str())
                 && state.rows.iter().any(|r|r["id"]==id.as_str() && r["conversation"]==true)).cloned();
@@ -1650,43 +1650,62 @@ impl Executor {
         self.publish().await?;
         // O turno pode começar entre as leituras: a entrega sempre passa pelo turno, e quem decide se promove é
         // a marca da fila interna na tela, lida depois.
-        let idle=facts.idle;
+        // Prazo e aviso seguem o turno real: na espera por subagentes, a entrada consumida já sai pelo recibo.
+        let idle = facts.idle;
+        let dispatchable = facts.foreground_idle();
         // Como no pedido de drenagem: a falha aparece na vista, além de voltar a quem pediu.
-        let drained=match self.drain_once(Some(entry),true).await {Ok(value)=>value,Err(failure)=>{self.enter_error(failure.clone()).await?; return Err(failure);}};
+        let drained=match self.drain_once(Some(entry.clone()),true).await {Ok(value)=>value,Err(failure)=>{self.enter_error(failure.clone()).await?; return Err(failure);}};
         let outcome=serde_json::from_value::<RuntimeReply>(drained["reply"].clone()).ok();
         match outcome.map(|r|r.disposition) {
             Some(Disposition::Accepted)=>{},
             Some(Disposition::Unknown)=>return Ok(reply(id,Disposition::Unknown,json!({"code":"queue_steer_uncertain"}))),
             // Parado e sem entregar agora (caixa ilegível, foco num mod): ficou na frente e sai no próximo tique.
-            None|Some(Disposition::Deferred) if idle=>return Ok(reply(id,Disposition::Accepted,json!({"steered":false,"drained":0}))),
+            None|Some(Disposition::Deferred) if dispatchable=>return Ok(reply(id,Disposition::Accepted,json!({"steered":false,"drained":0}))),
             _=>return Ok(reply(id,Disposition::Deferred,json!({"code":"queue_steer_not_delivered","cleanup":"not_needed"}))),
         }
         let driver=TerminalDriver::new(self.target.binding.clone(),services,self.options.io.clone(),self.options.limits.clone());
-        if !self.expected_work(payload) {return Ok(reply(id,Disposition::Accepted,json!({"steered":false,"drained":1})));}
+        if self.entry_confirmed(&entry).await || !self.expected_work(payload) {
+            return Ok(reply(id, Disposition::Accepted, json!({"steered": false, "drained": 1})));
+        }
         // A marca da fila pode demorar um quadro a aparecer depois do Enter; sem ela de vez, o Claude estava parado
         // (ou o turno acabou no meio) e já levou a mensagem: entregue igual, sem promover. Parado, a entrega abriu
         // o turno com ela: uma leitura basta, sem as esperas.
         let deadline=tokio::time::Instant::now()+if idle {STEER_HINT_WAIT_IDLE} else {STEER_HINT_WAIT};
         let mut steered=driver.steer().await;
-        // Só o prazo esgotado é "a dica não veio": o turno acabando no meio entregou a mensagem como envio comum.
-        let mut turn_ended=false;
         while steered.disposition==input::Disposition::Deferred && tokio::time::Instant::now()<deadline {
             tokio::time::sleep(self.options.limits.settle).await;
-            if !self.expected_work(payload) {turn_ended=true; break;}
+            if self.entry_confirmed(&entry).await || !self.expected_work(payload) {
+                return Ok(reply(id, Disposition::Accepted, json!({"steered": false, "drained": 1})));
+            }
             steered=driver.steer().await;
         }
         // O ctrl+x ctrl+s pode ter ido sem se comprovar: nem "orientou" nem "a dica não veio", e quem clicou confere.
         if steered.disposition==input::Disposition::Unknown {
             tracing::warn!(key=%self.target.key,session=%self.target.name,code=%steered.code,"a mensagem entrou na fila do Claude Code, mas o ctrl+x ctrl+s não se comprovou");
-            return Ok(reply(id,Disposition::Unknown,json!({"code":"queue_steer_uncertain"})));
+            return Ok(reply(id,Disposition::Unknown,json!({"code":"queue_steer_uncertain","drained":1})));
         }
         let accepted=steered.disposition==input::Disposition::Accepted;
         // Trabalhando e sem a dica no prazo: a mensagem espera a próxima pausa do Claude, e quem clicou precisa saber.
-        if steered.disposition==input::Disposition::Deferred && !turn_ended && !idle {
+        if steered.disposition==input::Disposition::Deferred && !idle && !self.entry_confirmed(&entry).await {
             tracing::warn!(key=%self.target.key,session=%self.target.name,code=%steered.code,"Orientar: a dica do ctrl+x ctrl+s não apareceu no prazo");
             return Ok(reply(id,Disposition::Accepted,json!({"steered":false,"drained":1,"code":"queue_steer_hint_missing"})));
         }
         Ok(reply(id,Disposition::Accepted,json!({"steered":accepted,"drained":1})))
+    }
+
+    async fn entry_confirmed(&mut self, entry: &str) -> bool {
+        // Enquanto espera a indicação, só releia o recibo se o transcript mudou de tamanho; a fila é sempre lida.
+        let len = std::fs::metadata(&self.target.transcript).ok().map(|m| m.len());
+        if len != self.confirm_seen {
+            if self.confirm_rows().await.is_ok() {
+                self.confirm_seen = len;
+            } else if crate::warn_limit::allow(Some(&self.target.key), "steer_receipt") {
+                tracing::warn!(key=%self.target.key, code="steer_receipt", "Orientar: transcript ilegível ao conferir a entrada; segue esperando a dica");
+            }
+        }
+        self.queue.snapshot().await.is_ok_and(|state| {
+            state.rows.iter().any(|row| row["id"] == entry && row["confirmed"] == true)
+        })
     }
 
     fn working_revision(&self)->Option<u64> {

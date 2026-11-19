@@ -1723,6 +1723,7 @@ name = "hangar-connectors"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "base64 0.23.1",
  "chrono",
  "form_urlencoded",
  "futures-util",
@@ -2135,6 +2136,7 @@ dependencies = [
  "hangar-transcript",
  "hangar-update-news",
  "hangar-usage-diary",
+ "hangar-work-review",
  "hangar-workflows",
  "hangar-workspace",
  "http-body-util",
@@ -2299,6 +2301,27 @@ dependencies = [
  "proptest",
  "serde_json",
  "tempfile",
+ "tracing",
+]
+
+[[package]]
+name = "hangar-work-review"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64 0.23.1",
+ "chrono",
+ "form_urlencoded",
+ "hangar-connectors",
+ "hangar-core",
+ "hangar-mission",
+ "percent-encoding",
+ "serde",
+ "serde_json",
+ "sha1_smol",
+ "tempfile",
+ "tokio",
+ "tower",
  "tracing",
 ]
 

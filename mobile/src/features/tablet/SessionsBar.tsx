@@ -19,11 +19,14 @@ import { SessionChip } from './SessionChip';
 import { barRows, type BarItem } from './barRows';
 import * as m from '../../paraglide/messages';
 
-type Props = { placement: SessionsBarPlacement; selected?: { serverId: string; name: string }; onPick(s: AggSession): void; onNew(): void };
+type Props = {
+  placement: SessionsBarPlacement; selected?: { serverId: string; name: string };
+  onPick(s: AggSession): void; onNew(): void; onWorkReview?(s: AggSession): void;
+};
 
 const keyOf = (s: AggSession) => `${s.serverId}::${s.name}`;
 
-export function SessionsBar({ placement, selected, onPick, onNew }: Props) {
+export function SessionsBar({ placement, selected, onPick, onNew, onWorkReview }: Props) {
   const { theme } = useUnistyles();
   const rows = useSessions(s => s.rows);
   const loading = useSessions(s => s.loading);
@@ -52,8 +55,10 @@ export function SessionsBar({ placement, selected, onPick, onNew }: Props) {
   const notices = byServer.filter(b => machineNoticeVisible(b, noticeNow));
   const allDown = machinesAllDown(byServer);
   const isSelected = (s: AggSession) => s.serverId === selected?.serverId && s.name === selected?.name;
+  // Mesma regra da lista do celular: convite e sessão de fora não abrem revisão.
+  const reviewOf = (s: AggSession) => !s.outside && servers.some(x => x.id === s.serverId && !x.invite) ? onWorkReview : undefined;
   const sessionItem = (s: AggSession) => {
-    if (placement === 'left' && !rail) return <SessionRow key={keyOf(s)} session={s} mostrarServidor compact selected={isSelected(s)} onPress={onPick} />;
+    if (placement === 'left' && !rail) return <SessionRow key={keyOf(s)} session={s} mostrarServidor compact selected={isSelected(s)} onPress={onPick} onWorkReview={reviewOf(s)} />;
     if (rail) return (
       <Pressable key={keyOf(s)} onPress={() => onPick(s)} accessibilityRole="button"
         accessibilityLabel={`${s.name}, ${s.serverLabel}, ${rotuloEstado(s.state)}${s.asleep ? `, ${m.session_asleep_badge()}` : ''}`} accessibilityState={{ selected: isSelected(s) }}
@@ -62,11 +67,11 @@ export function SessionsBar({ placement, selected, onPick, onNew }: Props) {
         <View style={styles.dot}><StateDot state={s.state} size={6} /></View>
       </Pressable>
     );
-    return <SessionChip key={keyOf(s)} session={s} selected={selected} full={tabsDetail === 'full'} onPick={onPick} />;
+    return <SessionChip key={keyOf(s)} session={s} selected={selected} full={tabsDetail === 'full'} onPick={onPick} onWorkReview={reviewOf(s)} />;
   };
   const renderItem = ({ item }: { item: BarItem }) => item.kind === 'single' ? sessionItem(item.session) : horizontal ? (
     <SessionChip session={item.members[0]} members={item.members.slice(1)} label={item.label}
-      selected={selected} full={tabsDetail === 'full'} onPick={onPick} />
+      selected={selected} full={tabsDetail === 'full'} onPick={onPick} onWorkReview={reviewOf(item.members[0])} />
   ) : (
     <View style={styles.group}>
       {!rail && item.label ? <Text numberOfLines={1}

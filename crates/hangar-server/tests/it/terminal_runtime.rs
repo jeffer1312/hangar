@@ -112,7 +112,7 @@ fn plugin_instance()->String {
     let mut stamp=std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
     let mut instance=String::new();while stamp>0 {instance.insert(0,char::from_digit((stamp%36) as u32,36).unwrap());stamp/=36;}instance.push_str("-fixture");instance
 }
-struct Fixture { _dir:tempfile::TempDir,target:TerminalTarget,policy:PolicyClient,io:Arc<Io>, idle:Arc<std::sync::atomic::AtomicBool>, ready:Arc<std::sync::atomic::AtomicBool>, generation:Arc<AtomicU64>, native:Arc<std::sync::atomic::AtomicBool>, unknown:Arc<std::sync::atomic::AtomicBool>, focus_plugin:Arc<std::sync::atomic::AtomicBool>, fill_plugin:Arc<std::sync::atomic::AtomicBool>, repull_ms:Arc<AtomicU64>, plugin:Arc<hangar_server::plugin::Store>, instance:String, plugin_task:Mutex<Option<tokio::task::JoinHandle<()>>>, plugin_requests:Arc<Mutex<Vec<Value>>>,status:StatusSender, turn_start_ms:AtomicU64 }
+struct Fixture { _dir:tempfile::TempDir,target:TerminalTarget,policy:PolicyClient,io:Arc<Io>, idle:Arc<std::sync::atomic::AtomicBool>, ready:Arc<std::sync::atomic::AtomicBool>, generation:Arc<AtomicU64>, native:Arc<std::sync::atomic::AtomicBool>, unknown:Arc<std::sync::atomic::AtomicBool>, focus_plugin:Arc<std::sync::atomic::AtomicBool>, fill_plugin:Arc<std::sync::atomic::AtomicBool>, repull_ms:Arc<AtomicU64>, plugin:Arc<hangar_server::plugin::Store>, instance:String, plugin_task:Mutex<Option<tokio::task::JoinHandle<()>>>, plugin_requests:Arc<Mutex<Vec<Value>>>,status:StatusSender, turn_start_ms:AtomicU64, settle:Duration }
 impl Fixture {
     async fn new()->Self {
         let dir=tempfile::tempdir().unwrap();let io=Arc::new(Io::new());let config=dir.path().join("config");
@@ -126,7 +126,7 @@ impl Fixture {
         let unknown=Arc::new(std::sync::atomic::AtomicBool::new(false));let focus_plugin=Arc::new(std::sync::atomic::AtomicBool::new(false));
         let (fill_plugin,repull_ms)=(Arc::new(std::sync::atomic::AtomicBool::new(false)),Arc::new(AtomicU64::new(0)));
         let plugin=Arc::new(hangar_server::plugin::Store::new(Arc::new(hangar_server::interactions::InteractionStore::default())));
-        Self {_dir:dir,target,policy:PolicyClient::new(),io,idle,ready,generation,native,unknown,focus_plugin,fill_plugin,repull_ms,plugin,instance:plugin_instance(),plugin_task:Default::default(),plugin_requests:Default::default(),status:tokio::sync::watch::channel(TerminalStatus::default()).0,turn_start_ms:AtomicU64::new(0)}
+        Self {_dir:dir,target,policy:PolicyClient::new(),io,idle,ready,generation,native,unknown,focus_plugin,fill_plugin,repull_ms,plugin,instance:plugin_instance(),plugin_task:Default::default(),plugin_requests:Default::default(),status:tokio::sync::watch::channel(TerminalStatus::default()).0,turn_start_ms:AtomicU64::new(0),settle:Duration::ZERO}
     }
     fn owner(&self,receipt:bool) {
         let binding=hangar_server::terminal_facts::LocalTerminalFacts::binding(&self.target);
@@ -177,7 +177,7 @@ impl Fixture {
         self.start_plugin();
         let lease=crate::lease_when_free(&self.target.lease_path);
         let store=Store::open(&self.target.state_path,&self.target.projection_dir,queue::State::new("key",1,"session",vec![])).unwrap();
-        let options=TerminalOptions {interactions:Some(self.plugin.interactions().clone()),plugin:Some(self.plugin.clone()),io:self.io.clone(),limits:InputLimits {settle:Duration::ZERO,literal_settle:Duration::ZERO,multiline_settle:Duration::ZERO,slash_settle:Duration::ZERO,proof_attempts:1,ready_attempts:1,cleanup_attempts:1},tick:Duration::from_millis(15),stall_notice,focus_return,clear_wait,status:Some(self.status.clone()),turn_start_wait:self.turn_start_wait(),..TerminalOptions::default()};
+        let options=TerminalOptions {interactions:Some(self.plugin.interactions().clone()),plugin:Some(self.plugin.clone()),io:self.io.clone(),limits:InputLimits {settle:self.settle,literal_settle:Duration::ZERO,multiline_settle:Duration::ZERO,slash_settle:Duration::ZERO,proof_attempts:1,ready_attempts:1,cleanup_attempts:1},tick:Duration::from_millis(15),stall_notice,focus_return,clear_wait,status:Some(self.status.clone()),turn_start_wait:self.turn_start_wait(),..TerminalOptions::default()};
         TerminalActor::spawn(self.target.clone(),QueueActor::start(store,lease),self.policy.clone(),options,events,Arc::new(AtomicU64::new(0)))
     }
     fn start_give_up(&self,give_up_after:Duration)->hangar_server::runtime::terminal::TerminalHandle {
@@ -862,6 +862,55 @@ async fn terminal_runtime_steer_entry_when_idle_is_a_plain_delivery() {
     assert_eq!((reply.disposition,reply.payload["steered"].clone()),(hangar_server::runtime::protocol::Disposition::Accepted,json!(false)));
     assert!(f.io.calls.lock().unwrap().iter().all(|c|!c.args.last().is_some_and(|k|k=="C-s")),"parado não promove");
     h.stop().await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn direct_delivery_does_not_warn_after_claude_records_the_prompt() {
+    let mut f = Fixture::new().await;
+    f.settle = Duration::from_millis(50);
+    f.idle.store(false, std::sync::atomic::Ordering::Release);
+    let h = f.start();
+    h.command(f.command("one", "Recebida")).await.unwrap();
+    let started = tokio::time::Instant::now();
+    let steering = h.control("steer-recorded".into(), "steer_entry".into(), json!({"entry_id": "one"}));
+    let record = async {
+        f.wait_for("o terminal começou a procurar a indicação do atalho", || {
+            let calls = f.io.calls.lock().unwrap();
+            calls.iter().skip_while(|call| call.args.last().is_none_or(|arg| arg != "\r"))
+                .any(|call| call.args.first().is_some_and(|arg| arg == "capture-pane")
+                    && !call.args.iter().any(|arg| arg == "-e"))
+        }).await;
+        use std::io::Write;
+        let mut transcript = std::fs::OpenOptions::new().append(true).open(&f.target.transcript).unwrap();
+        writeln!(transcript, "{}", json!({
+            "type": "user", "uuid": "user-one", "sessionId": "sid",
+            "message": {"role": "user", "content": "Recebida"}
+        })).unwrap();
+    };
+    let (reply, ()) = tokio::join!(steering, record);
+    let reply = reply.unwrap();
+    assert_eq!(reply.payload["drained"], 1);
+    assert!(reply.payload["code"].is_null(), "{}", reply.payload);
+    assert!(started.elapsed() < Duration::from_secs(5), "a espera seguiu até o prazo depois do recibo");
+    assert!(!f.io.calls.lock().unwrap().iter().any(|call| call.args.last().is_some_and(|arg| arg == "C-s")));
+    h.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn direct_delivery_background_agent_does_not_hold_a_prompt() {
+    use std::sync::atomic::Ordering;
+    for label in ["Waiting for 1 background agent to finish", "Waiting for 2 background agents to finish… (3m 2s)"] {
+        let f = Fixture::new().await;
+        f.idle.store(false, Ordering::Release);
+        let h = f.start();
+        // A CLI pode manter busy no registro nativo mesmo quando só um subagente trabalha.
+        let rule = "────────────────────────────────";
+        *f.io.panes.lock().unwrap() = vec![format!("✻ {label}\n{rule}\n❯ \n{rule}\n")];
+        let result = h.command(f.command("background", "Próxima mensagem")).await.unwrap();
+        assert_ne!(result.payload["code"], "terminal_turn_hold", "{label}: {}", result.payload);
+        assert!(f.sent_prompts().iter().any(|text| text == "Próxima mensagem"), "{label}");
+        h.stop().await.unwrap();
+    }
 }
 #[tokio::test]
 async fn terminal_runtime_steer_without_body_steers_the_first_waiting_entry() {

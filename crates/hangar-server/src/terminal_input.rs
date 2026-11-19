@@ -47,6 +47,24 @@ pub struct InputFacts {
     #[serde(skip)]
     pub screen: Option<String>,
 }
+
+impl InputFacts {
+    /// A espera só por subagentes mantém o registro nativo ocupado, mas o Claude aceita
+    /// um novo prompt de primeiro plano. A exceção vale apenas para a entrega.
+    pub(crate) fn foreground_idle(&self) -> bool {
+        self.idle || self.ready && !self.open_question && self.screen.as_deref().is_some_and(|screen| {
+            let state = crate::terminal_state::analyze(screen);
+            state.label.as_deref()
+                .and_then(|label| label.strip_prefix("Waiting for "))
+                .and_then(|label| label.split_once(" background "))
+                .is_some_and(|(count, suffix)| {
+                    count.parse::<u32>().is_ok_and(|count| count > 0)
+                        // O rótulo pode trazer reticências e tempo depois do texto.
+                        && (suffix.starts_with("agent to finish") || suffix.starts_with("agents to finish"))
+                })
+        })
+    }
+}
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 /// `Focus` não entrega texto: o plugin devolve o teclado ao prompt, de onde estiver nos mods, sem mexer no

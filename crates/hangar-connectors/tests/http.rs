@@ -73,6 +73,8 @@ async fn owner_registers_lists_reads_and_removes() {
     let (status, body) = bench.send("GET", "/api/connectors", Some(TOKEN), None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["connectors"][0]["running"], false, "listar não inicia o processo");
+    assert_eq!(body["capabilities"], json!({"work_tracking": 1, "work_actions": 1, "work_review": 1}),
+        "o conector confere o que o servidor aceita antes de declarar uma capacidade nova");
 
     let (status, body) = bench.send("GET", "/api/connectors/prova/tickets?limit=2&query=impress%C3%A3o", Some(TOKEN), None).await;
     assert_eq!(status, StatusCode::OK, "{body}");
@@ -123,6 +125,10 @@ async fn contract_errors_keep_their_codes_without_looking_like_hangar_auth() {
     bench.send("POST", "/api/connectors", Some(TOKEN), Some(json!({"manifest": manifest}))).await;
     let (status, body) = bench.send("GET", "/api/connectors/sem-login/tickets", Some(TOKEN), None).await;
     assert_eq!((status, body["detail"]["code"].clone()), (StatusCode::FAILED_DEPENDENCY, json!("auth_required")));
+    let manifest = bench.manifest("rodada-velha", &["--fail", "work_tracking.get=stale_review"]);
+    bench.send("POST", "/api/connectors", Some(TOKEN), Some(json!({"manifest": manifest}))).await;
+    let (status, body) = bench.send("GET", "/api/connectors/rodada-velha/tickets/t-1", Some(TOKEN), None).await;
+    assert_eq!((status, body["detail"]["code"].clone()), (StatusCode::CONFLICT, json!("stale_review")));
     let (status, body) = bench.send("GET", "/api/connectors/sem-login/tickets?jql=x", Some(TOKEN), None).await;
     assert_eq!((status, body["detail"]["code"].clone()), (StatusCode::BAD_REQUEST, json!("invalid_params")));
     let (status, body) = bench.send("GET", "/api/connectors/sem-login/tickets?limit=500", Some(TOKEN), None).await;

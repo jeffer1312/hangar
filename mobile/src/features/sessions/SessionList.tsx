@@ -134,6 +134,11 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
     onClose();
     router.push(`/s/${s.serverId}/${s.name}/git` as never);
   }, [router, onClose]);
+  // O chip da revisão decide pelo celular, sem abrir a conversa.
+  const openReview = useCallback((s: AggSession) => {
+    onClose();
+    router.push(`/s/${encodeURIComponent(s.serverId)}/${encodeURIComponent(s.name)}/work-review` as never);
+  }, [router, onClose]);
   // Convite fica de fora: o backend recusa worktrees ao convidado.
   const proprios = useMemo(() => new Set(servers.filter((x) => !x.invite).map((x) => x.id)), [servers]);
   // A folha fala com o servidor da linha, não com o ativo: não precisa trocar de servidor.
@@ -569,6 +574,7 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
               mostrarServidor={todos.length > 1 && (modo !== 'server' || section.id.startsWith('state:') || item.serverId !== section.id)}
               onPress={abrir}
               onGit={abrirGit}
+              onWorkReview={proprios.has(item.serverId) && !item.outside ? openReview : undefined}
               onExcluir={excluir}
               onRenomear={setRenomeando}
               onResume={retomar}

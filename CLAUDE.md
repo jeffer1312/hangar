@@ -603,6 +603,12 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   nunca repassadas; credencial do fornecedor é do conector, nunca do manifesto. Guia em
   [`docs/connectors/`](docs/connectors/README.md); evidência em
   [plataforma.md](docs/decisoes/plataforma.md#conectores-de-trabalho-host-rust-e-processo-externo-por-capacidade-12112026).
+- **Revisão do trabalho (`work_review/v1`) é capacidade do conector, e o Hangar relê; o conector não avisa.**
+  Mora numa aba própria do painel (Revisão), que só existe com revisão. Releitura ao abrir a aba, no fim do turno pelas linhas da lista (vigia só assinado com conector
+  da capacidade ligado), depois do envio e a cada tool `mission` desta máquina; uma chamada em voo por
+  conector. Ticket pelo vínculo (`link::resolve`), senão pela branch. Rotas e evento `work_reviews` só
+  do dono; falha em segundo plano vai ao diário. Evidência em
+  [plataforma.md](docs/decisoes/plataforma.md#revisão-do-trabalho-work_reviewv1-capacidade-do-conector-releitura-no-fim-do-turno-18112026).
 - **Mission Control (`hangar-mission`) guarda etapa, vínculo, portão e evidências; o ticket é do
   conector, e nada volta ao sistema de origem.** A sessão ligada informa etapa e anexa evidências pela
   tool `mission` (rota `/api/mission/report`); etapa com portão só é passada com a aprovação do dono,

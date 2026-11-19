@@ -159,6 +159,8 @@ pub struct AppState {
     pub ticket_actions: std::sync::OnceLock<Arc<hangar_ticket_actions::Engine>>,
     /// Tela Status: hub do retrato e amostrador do processo; o teste troca a coleta.
     pub status: Arc<crate::status::Status>,
+    /// Revisão do trabalho (`work_review/v1`) das sessões ligadas a um ticket.
+    pub work_review: Arc<hangar_work_review::Engine>,
 }
 
 impl AppState {
@@ -277,6 +279,8 @@ impl AppState {
                 .with_config(Arc::new(move || crate::runtime::codex_launch::runtime_config(&env))))
         };
         let mission=Arc::new(hangar_mission::Store::new(hangar_dir.join("mission")));
+        let work_review = crate::work_review_watch::engine(connectors.clone(), mission.clone(), mission_notify.clone(), diag.clone());
+        let _ = list.work_review.set(work_review.clone());
         let groups = crate::groups::from_env(list.env().dirs.as_ref(), server_id.clone(),
             Arc::new(crate::groups::orq::OrqVault::new()
                 .with_paths(list.env().dirs.as_ref().map(|d| d.home.clone()).unwrap_or_default(),
@@ -318,6 +322,7 @@ impl AppState {
             mission_notify,
             ticket_actions: Default::default(),
             status: Arc::default(),
+            work_review,
             hangar_dir, device_install,
             upload_naming: Default::default(),
             upload_media: Default::default(),
@@ -440,6 +445,7 @@ pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest:
     let _dream_clock = crate::AbortOnDrop(crate::dream::spawn(state.clone()));
     let _group_sweep = crate::groups::sweep::spawn(state.clone()).map(crate::AbortOnDrop);
     let _link_return = crate::groups::link_return::spawn(state.clone()).map(crate::AbortOnDrop);
+    let _work_review_watch = crate::AbortOnDrop(crate::work_review_watch::spawn(state.clone()));
     let _session_sleep = crate::AbortOnDrop(crate::session_sleep::spawn(state.clone()));
     let _federation = crate::groups::federation::spawn(state.clone()).map(crate::AbortOnDrop);
     // O aviso no celular é decidido aqui, com ou sem lista aberta.
@@ -1067,6 +1073,7 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .merge(hangar_ticket_actions::http::router(state.edge(),
             state.ticket_actions.get_or_init(|| hangar_ticket_actions::Engine::new(hangar_ticket_actions::Ledger::new(state.hangar_dir.join("ticket-actions")),
                 state.mission.clone(),state.connectors.clone(),state.mission_notify.clone())).clone()))
+        .merge(hangar_work_review::http::router(state.edge(), state.work_review.clone()))
         .route("/api/claude/customizations", get(crate::claude_customizations::catalog_route).fallback(pass_registered))
         .route("/api/claude/commands", get(crate::commands::new_chat_route).fallback(pass_registered))
         // Senha do chaveiro: só o dono; o preflight do CORS cai no caminho sem rota.

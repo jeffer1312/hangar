@@ -94,8 +94,11 @@ impl Manifest {
                 Some(_) => {}
             }
         }
-        if raw.capabilities.contains_key("work_actions") && !raw.capabilities.contains_key("work_tracking") {
-            return Err(AdminError::new(AdminKind::UnsupportedCapability, "work_actions exige work_tracking para preencher os dados do ticket"));
+        // As extensões partem do ticket que o work_tracking lê.
+        for extension in [crate::work_actions::CAPABILITY, crate::work_review::CAPABILITY] {
+            if raw.capabilities.contains_key(extension) && !raw.capabilities.contains_key(crate::work_tracking::CAPABILITY) {
+                return Err(AdminError::new(AdminKind::UnsupportedCapability, format!("{extension} exige work_tracking")));
+            }
         }
         if raw.command.is_empty() { return Err(AdminError::invalid("command vazio")); }
         if raw.command.iter().any(|part| part.is_empty() || part.contains('\0') || part.len() > 4096) {

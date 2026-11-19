@@ -11,6 +11,7 @@ import { Icon } from '../../ui/Icon';
 import { LiveVoiceChatButton } from '../voice/LiveVoiceChatButton';
 import { SessionsBar } from './SessionsBar';
 import { ContextPanel } from './ContextPanel';
+import { usePanelTabRequest } from './panelTab';
 import * as m from '../../paraglide/messages';
 
 type Props = { selected?: { serverId: string; name: string }; children: ReactNode; active?: boolean };
@@ -24,6 +25,7 @@ export function TabletShell({ selected, children, active = true }: Props) {
   const collapsed = useTabletPrefs(s => s.collapsed);
   const toggleCollapsed = useTabletPrefs(s => s.toggleCollapsed);
   const panelOpen = useTabletPrefs(s => s.panelOpen);
+  const togglePanel = useTabletPrefs(s => s.togglePanel);
   const activeId = useServers(s => s.activeId);
   const voiceServer = selected?.serverId ?? activeId;
   const pickSession = (s: AggSession) => {
@@ -32,9 +34,16 @@ export function TabletShell({ selected, children, active = true }: Props) {
     else if (selected) router.dismissTo(path);
     else router.push(path);
   };
+  // O chip da revisão abre a sessão com o painel na aba Revisão, aberto mesmo que estivesse fechado.
+  const openReview = (s: AggSession) => {
+    usePanelTabRequest.getState().open(s.serverId, s.name, 'review');
+    if (!panelOpen) togglePanel();
+    const onChat = s.serverId === selected?.serverId && s.name === selected?.name && /^\/s\/[^/]+\/[^/]+\/?$/.test(pathname);
+    if (!onChat) pickSession(s);
+  };
   const bar = (position: typeof placement) => active && placement === position && (position === 'left' || !collapsed) ? (
     <SessionsBar placement={placement} selected={selected}
-      onPick={pickSession}
+      onPick={pickSession} onWorkReview={openReview}
       onNew={() => router.push('/create')} />
   ) : null;
 

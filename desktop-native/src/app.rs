@@ -126,6 +126,11 @@ mod find;
 mod costs;
 mod mission;
 pub(crate) use mission::ticket_card_view;
+pub(crate) use activity::{side_tab_button, side_tab_slot};
+pub(crate) use work_review::{choice_button as review_choice_button, decision_card as review_decision_card, decision_frame_width as review_frame_width,
+    decision_nav as review_decision_nav, decision_nav_row as review_decision_nav_row, frames_row as review_frames_row, render_band as review_band,
+    side_frame as review_side_frame, tab_pill as review_tab_pill};
+mod work_review;
 mod worktrees;
 mod reviews;
 mod artifacts;
@@ -696,6 +701,10 @@ pub struct Hangar {
     tags: HashMap<String, tags::Event>,
     /// Avisos da CLI ignorados em cada máquina (chave `servers::norm`), do evento `notice_ignores` da lista.
     notice_ignores: HashMap<String, std::collections::BTreeSet<String>>,
+    /// Revisão do trabalho de cada sessão por máquina (chave `servers::norm`, depois o nome), do evento `work_reviews`.
+    work_reviews: HashMap<String, HashMap<String, WorkReviewSummary>>,
+    /// Seção da revisão do trabalho da sessão aberta, na aba Contexto.
+    work_review: work_review::Panel,
     /// Avisos em que a pessoa agiu nesta janela (id do evento): seguem na tela com Desfazer ou com o erro.
     notice_acted: HashMap<String, notice_line::Acted>,
     /// Cartão da pergunta aberto: (máquina, dono — vazio = No Hangar, terminal) e o diálogo que o mostra.
@@ -1207,7 +1216,7 @@ impl Hangar {
             history_limit: 400, has_older: false, etag: None, error: None, list_error: None, list_down_since: None,
             delivery: DeliveryTracker::default(), stopping: HashSet::new(), stop_feedback: HashMap::new(), drafts: HashMap::new(), input_history: HashMap::new(),
             flight: InFlight::default(), action_feedback: HashMap::new(), jev_note_at: HashMap::new(), file_cards: HashMap::new(), queue: Default::default(), send_flight: None, local_send: None, local_queue: None, idle_sends: Vec::new(), send_landed: Vec::new(),
-            note_slide: Default::default(), note_last: None, flight_places: Default::default(), live_terms: Vec::new(), keyring: HashMap::new(), vault: HashMap::new(), vault_page: None, plugins_page: None, guide: Default::default(), rename_suggest: Default::default(), tags: HashMap::new(), notice_ignores: HashMap::new(), notice_acted: HashMap::new(), question_open: None, question_card: None,
+            note_slide: Default::default(), note_last: None, flight_places: Default::default(), live_terms: Vec::new(), keyring: HashMap::new(), vault: HashMap::new(), vault_page: None, plugins_page: None, guide: Default::default(), rename_suggest: Default::default(), tags: HashMap::new(), notice_ignores: HashMap::new(), work_reviews: HashMap::new(), work_review: Default::default(), notice_acted: HashMap::new(), question_open: None, question_card: None,
             hangar_open: false, hangar_focus: cx.focus_handle(), hangar_error: None, live_clock: None, ask_form: AskForm::default(), ask_drafts: HashMap::new(), plans_dismissed: HashSet::new(), answered_tools: HashSet::new(), answering: HashMap::new(), ask_scroll: Default::default(), plan_scroll: Default::default(), plan_view: None,
             plan_review: Default::default(),
             list_state, rail_hover: None, follow: Default::default(), row_ids: Vec::new(), row_signatures: Vec::new(), conversation: Default::default(), row_assets: Vec::new(), expanded: HashSet::new(), kept_expanded: HashMap::new(), orq_days: HashSet::new(),
@@ -2161,6 +2170,14 @@ impl Hangar {
                     let stored = notice_line::store(&mut self.notice_ignores, &server, &frame.data);
                     visible = stored == Some(true);
                     if visible { self.notice_ignores_changed(&server, cx); }
+                    stored.is_some()
+                }
+                // Chip das linhas e releitura da revisão da sessão aberta (no desenho do painel lateral, pedido aqui).
+                else if frame.event == "work_reviews" {
+                    let server = self.active_key();
+                    let stored = work_review::store(&mut self.work_reviews, &server, &frame.data);
+                    visible = stored == Some(true);
+                    if visible { self.redraw(panes::Area::Nav, cx); self.work_reviews_changed(&server, cx); }
                     stored.is_some()
                 }
                 // Celular que ainda não tinha aparecido: a dica do "No PC / Fora", uma vez por aparelho.
@@ -6883,6 +6900,7 @@ impl Hangar {
                     .child(chrome::small_icon(IconName::Link, 12., theme::accent()))))
                 .when_some(session.owner.clone(), |el, owner| el.child(badge(format!("👤 {owner}"), theme::muted())))
                 .children(pair_badges(&session))
+                .children(self.work_review_chip_button(&target, false, cx))
                 .children(seal.map(|seal| self.render_seal(&target, seal, cx)))
                 .when(questions > 0, |el| el.child(div().flex_shrink_0().text_xs().text_color(theme::warning()).child(format!("? {questions}"))))
                 .when(untracked, |el| el.child(badge(tr("untracked_badge"), theme::faint()))).into_any_element(),
@@ -6894,6 +6912,7 @@ impl Hangar {
         spoken.push(state_label);
         if session.asleep { spoken.push(tr_shared("session_asleep_badge", &[])); }
         if session.headless { spoken.push(tr("create_mode_headless")); }
+        if let Some((text, _)) = self.work_review_badge(&target.server, &session.name) { spoken.push(text); }
         session_row_frame(SharedString::from(row_id), selected)
             .when_some(focus.as_ref(), |el, focus| el.track_focus(focus))
             .when(focus.as_ref().is_some_and(|f| f.is_focused(window)), |el| el.focus_ring_style(window, cx))

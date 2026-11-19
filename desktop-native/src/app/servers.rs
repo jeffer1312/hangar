@@ -189,6 +189,13 @@ impl Hangar {
                         if stored == Some(true) { self.notice_ignores_changed(&key, cx); }
                         stored.is_some()
                     }
+                    // O chip das linhas dessa máquina e a seção da sessão aberta nela.
+                    "work_reviews" => {
+                        let stored = super::work_review::store(&mut self.work_reviews, &key, &frame.data);
+                        changed = stored == Some(true);
+                        if changed { self.work_reviews_changed(&key, cx); }
+                        stored.is_some()
+                    }
                     // `nav` é aberto por quem chama, que tem a janela: a lista não muda.
                     _ => { changed = false; true }
                 };

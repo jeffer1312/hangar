@@ -30,6 +30,7 @@ mod updates_manual;
 mod worktree_fresh;
 mod reviews;
 mod tickets;
+mod work_review;
 
 use std::{cell::Cell, time::{Duration, Instant}};
 use gpui_kit::*;
@@ -89,6 +90,7 @@ pub fn animation(name: &str) -> Option<NewsAnimation> {
         "avisos-do-claude" => Some(claude_notices::render),
         "tela-de-status" => Some(server_status::render),
         "consertar-com-agente" => Some(agent_fix::render),
+        "revisao-do-trabalho" => Some(work_review::render),
         _ => None,
     }
 }

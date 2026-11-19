@@ -1,0 +1,9 @@
+{
+  "manifest_version": 1,
+  "id": "js-review",
+  "name": "Revisão de exemplo em JavaScript",
+  "version": "0.1.0",
+  "protocol_version": 1,
+  "capabilities": { "work_tracking": 1, "work_review": 1 },
+  "command": ["node", "./work_review.mjs"]
+}

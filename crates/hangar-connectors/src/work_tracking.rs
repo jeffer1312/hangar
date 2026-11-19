@@ -151,7 +151,7 @@ pub fn with_fetched_at(mut value: Value) -> Value {
     value
 }
 
-fn absolute_http(url: &str) -> bool {
+pub(crate) fn absolute_http(url: &str) -> bool {
     reqwest::Url::parse(url).is_ok_and(|url| matches!(url.scheme(), "http" | "https") && url.host().is_some())
 }
 
