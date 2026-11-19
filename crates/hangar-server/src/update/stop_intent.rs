@@ -694,8 +694,10 @@ mod tests {
     #[test]
     fn update_run_never_explains_a_life_newer_than_the_step() {
         let dir = tempfile::tempdir().unwrap();
-        let after = Previous { started: utc_secs(NOW - 5), ..life(41, true, None) };
-        let lines = previous_exit(dir.path(), Some(&after), after.pid, String::new, &Fixed(None), NOW, || Ok(Some(run())));
+        let previous = life(41, true, None);
+        // O passo começou um minuto antes de a vida anterior subir.
+        let step = DateTime::parse_from_rfc3339(STARTED).unwrap().timestamp() as u64 - 60;
+        let lines = previous_exit(dir.path(), Some(&previous), previous.pid, String::new, &Fixed(None), NOW, || Ok(Some(UpdateRun { at: step, ..run() })));
         assert_eq!(lines[0]["tipo"], "crash");
     }
 
