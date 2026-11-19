@@ -221,8 +221,9 @@ export function SegBar({ label, items }: { label: string; items: { label: string
     style={{ flexDirection: 'row', height: 24, borderRadius: RADIUS.sm, overflow: 'hidden', backgroundColor: c.hover }}>
     {items.map((it, i) => {
       const share = total > 0 ? Math.max(0, it.value) / total : 0;
-      return <View key={i} style={{ width: `${share * 100}%`, height: 24, justifyContent: 'center', paddingHorizontal: SPACE[1.5], backgroundColor: it.color }}>
-        {share > 0.12 ? <Text numberOfLines={1} style={{ color: inkOn(it.color), fontSize: theme.base.text.xxs, fontWeight: theme.base.weight.semibold }}>{it.detail}</Text> : null}
+      // O espaçamento fica no texto: no Yoga o padding é largura mínima e uma fatia de 0% apareceria.
+      return <View key={i} style={{ width: `${share * 100}%`, height: 24, justifyContent: 'center', backgroundColor: it.color }}>
+        {share > 0.12 ? <Text numberOfLines={1} style={{ paddingHorizontal: SPACE[1.5], color: inkOn(it.color), fontSize: theme.base.text.xxs, fontWeight: theme.base.weight.semibold }}>{it.detail}</Text> : null}
       </View>;
     })}
   </View>;

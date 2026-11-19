@@ -271,10 +271,21 @@ export const SessionsCard = memo(function SessionsCard({ sessions, flash, onLayo
   const { theme } = useUnistyles();
   const colors = useChartColors();
   const [mode, setMode] = useState<'provider' | 'process'>('provider');
+  const dead = sessions.dead;
+  // Caída não conta em `open`: uma única sessão caída daria só o vazio, sem o aviso dela.
+  const chips = dead.length || sessions.asleep || sessions.queued ? <Chips>
+    {dead.length ? <Chip tone="bad" text={dead.length === 1 ? m.status_sessions_dead_one({ name: dead[0].name })
+      : m.status_sessions_dead({ count: String(dead.length), names: dead.map((d) => d.name).join(', ') })} /> : null}
+    {sessions.asleep ? <Chip text={sessions.asleep === 1 ? m.status_sessions_asleep_one() : m.status_sessions_asleep({ count: String(sessions.asleep) })} /> : null}
+    {sessions.queued ? <Chip text={sessions.oldest_queued_secs !== undefined
+      ? m.status_sessions_queued_for({ count: String(sessions.queued), time: duration(sessions.oldest_queued_secs * 1000) })
+      : m.status_sessions_queued({ count: String(sessions.queued) })} /> : null}
+  </Chips> : null;
   if (sessions.open === 0) {
     return <Block title={m.status_sessions_title()} hint={m.status_sessions_none_hint()} flash={flash} onLayout={onLayout}>
       <View style={{ height: 6, borderRadius: RADIUS.full, backgroundColor: c.hover }} />
       <Text style={{ color: c.faint, fontSize: theme.base.text.xxs }}>{m.status_sessions_none()}</Text>
+      {chips}
     </Block>;
   }
   const both = sessions.by_provider.length > 0 && sessions.by_process.length > 0;
@@ -284,20 +295,12 @@ export const SessionsCard = memo(function SessionsCard({ sessions, flash, onLayo
   const memory = total > 0 ? bytes(total) : '—';
   const hint = sessions.open === 1 ? m.status_sessions_hint_one({ memory }) : m.status_sessions_hint({ count: String(sessions.open), memory });
   const items = list.map((u, i) => ({ label: nameOf(u.key), value: u.rss_bytes ?? 0, color: colors[i % colors.length], detail: u.rss_bytes !== undefined ? bytes(u.rss_bytes) : '—', count: u.count }));
-  const dead = sessions.dead;
   return <Block title={m.status_sessions_title()} hint={hint} flash={flash} onLayout={onLayout}
     right={both ? <Segmented label={m.status_sessions_split()} value={mode} onChange={(k) => setMode(k as 'provider' | 'process')}
       options={[{ key: 'provider', label: m.status_sessions_by_provider() }, { key: 'process', label: m.status_sessions_by_process() }]} /> : undefined}>
     <SegBar label={m.status_sessions_title()} items={items} />
     <Legend items={items.map((it) => ({ label: it.label, color: it.color, extra: `${it.count} · ${it.detail}` }))} />
-    {dead.length || sessions.asleep || sessions.queued ? <Chips>
-      {dead.length ? <Chip tone="bad" text={dead.length === 1 ? m.status_sessions_dead_one({ name: dead[0].name })
-        : m.status_sessions_dead({ count: String(dead.length), names: dead.map((d) => d.name).join(', ') })} /> : null}
-      {sessions.asleep ? <Chip text={sessions.asleep === 1 ? m.status_sessions_asleep_one() : m.status_sessions_asleep({ count: String(sessions.asleep) })} /> : null}
-      {sessions.queued ? <Chip text={sessions.oldest_queued_secs !== undefined
-        ? m.status_sessions_queued_for({ count: String(sessions.queued), time: duration(sessions.oldest_queued_secs * 1000) })
-        : m.status_sessions_queued({ count: String(sessions.queued) })} /> : null}
-    </Chips> : null}
+    {chips}
   </Block>;
 });
 
@@ -351,15 +354,20 @@ export const HostCard = memo(function HostCard({ host, flash, onLayout }: { host
   ];
   const hangar = host.dir_hangar.bytes;
   const build = host.dir_build_cache.bytes;
-  const free = Math.max(0, host.disk_home.total - host.disk_home.used);
-  const other = Math.max(0, host.disk_home.used - (hangar ?? 0) - (build ?? 0));
-  const parts: { label: string; value: number | undefined; computing?: boolean; color: string }[] = [
-    { label: m.status_host_dir_hangar(), value: hangar, computing: host.dir_hangar.computing, color: colors[0] },
-    { label: m.status_host_dir_build(), value: build, computing: host.dir_build_cache.computing, color: colors[1] },
-    { label: m.status_host_other(), value: other, color: colors[5] },
-    { label: m.status_host_free(), value: free, color: c.hover },
+  const used = host.disk_home.used;
+  const free = Math.max(0, host.disk_home.total - used);
+  // O tamanho das pastas pode ter até uma hora e o disco é de agora: as fatias nunca passam do usado, senão a
+  // composição soma mais que o disco e o livre encolhe.
+  const hangarShare = Math.min(hangar ?? 0, used);
+  const buildShare = Math.min(build ?? 0, used - hangarShare);
+  const other = used - hangarShare - buildShare;
+  const parts: { label: string; value: number | undefined; share: number; computing?: boolean; color: string }[] = [
+    { label: m.status_host_dir_hangar(), value: hangar, share: hangarShare, computing: host.dir_hangar.computing, color: colors[0] },
+    { label: m.status_host_dir_build(), value: build, share: buildShare, computing: host.dir_build_cache.computing, color: colors[1] },
+    { label: m.status_host_other(), value: other, share: other, color: colors[5] },
+    { label: m.status_host_free(), value: free, share: free, color: c.hover },
   ];
-  const disk = parts.map(({ label, value, computing, color }) => ({ label, color, value: value ?? 0,
+  const disk = parts.map(({ label, value, share, computing, color }) => ({ label, color, value: share,
     detail: value !== undefined ? bytes(value) : computing ? m.status_host_computing() : '—' }));
   return <Block title={m.status_host_title()} hint={hint} flash={flash} onLayout={onLayout}>
     <View>{meters.map((mt) => <Meter key={mt.name} {...mt} />)}</View>
