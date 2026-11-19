@@ -21,7 +21,7 @@ const ACCOUNT_ENV: [&str; 7] = ["CLAUDE_CONFIG_DIR", "CODEX_HOME", "CP_ENGINE", 
 // Eventos
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum Action {
+pub(crate) enum Action {
     /// `description`: a linha que o Claude escreve para o comando; o Codex não manda.
     Command { description: Option<String>, command: String },
     Read(String),
@@ -30,10 +30,10 @@ pub(super) enum Action {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum StepState { Running, Done, Failed }
+pub(crate) enum StepState { Running, Done, Failed }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct Step {
+pub(crate) struct Step {
     pub id: String,
     pub action: Action,
     pub output: Vec<String>,
@@ -239,7 +239,7 @@ pub(super) fn summary_items(text: &str) -> Vec<String> {
 }
 
 /// `m:ss`.
-pub(super) fn clock(elapsed: Duration) -> String {
+pub(crate) fn clock(elapsed: Duration) -> String {
     let secs = elapsed.as_secs();
     format!("{}:{:02}", secs / 60, secs % 60)
 }

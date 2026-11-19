@@ -1,6 +1,7 @@
 //! Animações das novidades da atualização: cada uma é desenhada com as mesmas partes do app que ela mostra.
 
 mod account_tags;
+mod agent_fix;
 mod auto_report;
 mod claude_notices;
 mod codex_activity;
@@ -20,6 +21,7 @@ mod hide_from_list;
 mod image_reveal;
 mod rename_suggestion;
 mod search_conversations;
+mod server_status;
 mod sleep_hidden;
 mod speech_pause;
 mod session_vault;
@@ -85,6 +87,8 @@ pub fn animation(name: &str) -> Option<NewsAnimation> {
         "estilo-claude-desktop" => Some(desktop_tool_look::render),
         "sonho-da-memoria" => Some(memory_dream::render),
         "avisos-do-claude" => Some(claude_notices::render),
+        "tela-de-status" => Some(server_status::render),
+        "consertar-com-agente" => Some(agent_fix::render),
         _ => None,
     }
 }

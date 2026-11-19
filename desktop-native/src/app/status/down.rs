@@ -231,7 +231,7 @@ fn failure_view(failure: &LocalFailure, probe: &Probe, os: Os, attempt: Attempt)
 }
 
 /// "Não responde há 2 min": desde quando a lista do servidor selecionado caiu.
-pub(super) fn silent_for(elapsed: Duration) -> String {
+pub(crate) fn silent_for(elapsed: Duration) -> String {
     match elapsed.as_secs() / 60 {
         0 => tr("status_down_silent_moment"),
         minutes @ 1..60 => fill(tr("status_down_silent_minutes"), &[("n", &minutes.to_string())]),
@@ -545,7 +545,7 @@ impl Hangar {
                 .child(div().text_size(px(18.)).font_weight(FontWeight::SEMIBOLD).whitespace_normal()
                     .child(tr_shared("status_down_title", &[("server", &server)])))
                 .child(div().text_size(px(12.5)).text_color(theme::muted()).whitespace_normal().child(body))
-                .child(div().mt(px(9.)).child(Button::new("status-down-remote-retry").outline().small().icon(IconName::RotateCw).label(tr("status_retry"))
+                .child(div().mt(px(9.)).flex().child(Button::new("status-down-remote-retry").outline().small().icon(IconName::RotateCw).label(tr("status_retry"))
                     .on_click(cx.listener(|this, _, _, cx| this.status_retry(cx))))))
             .into_any_element()
     }
@@ -558,7 +558,7 @@ impl Hangar {
             .child(div().flex_1().min_w_0().flex().flex_col().gap(px(3.))
                 .child(div().text_size(px(18.)).font_weight(FontWeight::SEMIBOLD).whitespace_normal().child(tr("status_down_read_failed_title")))
                 .child(div().text_size(px(12.5)).text_color(theme::muted()).whitespace_normal().child(error))
-                .child(div().mt(px(9.)).child(Button::new("status-down-read-retry").outline().small().icon(IconName::RotateCw).label(tr("status_retry"))
+                .child(div().mt(px(9.)).flex().child(Button::new("status-down-read-retry").outline().small().icon(IconName::RotateCw).label(tr("status_retry"))
                     .on_click(cx.listener(|this, _, _, cx| {
                         if let Some(local) = this.local_mut() { (local.error, local.probe) = (None, None); }
                         this.local_run(None);
@@ -600,24 +600,17 @@ impl Hangar {
         let agents = view.phase != Phase::Starting && !self.agent_choices().is_empty();
         let button = match view.phase {
             Phase::Stopped => {
-                let button = Button::new("status-down-start").small().icon(IconName::Play).label(tr("status_down_start"))
-                    .disabled(busy || !view.can_start).on_click(cx.listener(|this, _, _, cx| this.local_start(cx)));
+                let button = start_button().disabled(busy || !view.can_start).on_click(cx.listener(|this, _, _, cx| this.local_start(cx)));
                 Some(if agents { button.outline() } else { button.primary() })
             }
             Phase::Failed if view.can_start => Some(Button::new("status-down-retry").outline().small().icon(IconName::RotateCw)
                 .label(tr("status_down_retry")).disabled(busy).on_click(cx.listener(|this, _, _, cx| this.local_start(cx)))),
             _ => None,
         };
-        let actions = if agents { Some(self.agent_bar(button, busy, cx)) } else { button.map(|button| div().mt(px(12.)).child(button).into_any_element()) };
-        let head = settings_box().flex_row().items_start().gap(px(16.)).p(px(16.))
-            .when(view.phase == Phase::Failed, |el| el.border_color(theme::danger().opacity(0.45)))
-            .child(big_icon(icon, color))
-            .child(div().flex_1().min_w_0().flex().flex_col().gap(px(3.))
-                .child(div().text_size(px(18.)).font_weight(FontWeight::SEMIBOLD).whitespace_normal().child(view.title.clone()))
-                .children(sub.map(|text| div().text_size(px(12.5)).text_color(theme::muted()).whitespace_normal().child(text)))
-                .children(steps)
-                .children(error)
-                .children(actions));
+        let actions = if agents { Some(self.agent_bar(button, busy, cx)) } else { button.map(|button| div().mt(px(12.)).flex().child(button).into_any_element()) };
+        let below = steps.map(IntoElement::into_any_element).into_iter()
+            .chain(error.map(IntoElement::into_any_element)).chain(actions);
+        let head = down_head(icon, color, view.phase == Phase::Failed, view.title.clone(), sub, below);
         let mut out = vec![head.into_any_element()];
         if !view.fixes.is_empty() || !view.output.is_empty() { out.push(self.render_fixes(&view, busy, cx)); }
         out
@@ -661,6 +654,20 @@ impl Hangar {
             .children(output)
             .into_any_element()
     }
+}
+
+pub(crate) fn start_button() -> Button { Button::new("status-down-start").small().icon(IconName::Play).label(tr("status_down_start")) }
+
+/// O cartão do topo da página do servidor parado: ícone, título, a linha de baixo e o que vem embaixo dela.
+pub(crate) fn down_head(icon: AnyElement, color: Hsla, failed: bool, title: String, sub: Option<String>,
+    below: impl IntoIterator<Item = AnyElement>) -> Div {
+    settings_box().flex_row().items_start().gap(px(16.)).p(px(16.))
+        .when(failed, |el| el.border_color(theme::danger().opacity(0.45)))
+        .child(big_icon(icon, color))
+        .child(div().flex_1().min_w_0().flex().flex_col().gap(px(3.))
+            .child(div().text_size(px(18.)).font_weight(FontWeight::SEMIBOLD).whitespace_normal().child(title))
+            .children(sub.map(|text| div().text_size(px(12.5)).text_color(theme::muted()).whitespace_normal().child(text)))
+            .children(below))
 }
 
 pub(super) fn big_icon(icon: AnyElement, color: Hsla) -> Div {

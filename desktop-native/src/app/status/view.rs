@@ -165,38 +165,49 @@ impl Hangar {
     }
 
     fn status_health(&self, h: &Health, cx: &mut Context<Self>) -> Div {
-        let ok = h.items.is_empty();
-        let color = if ok { theme::success() } else { theme::warning() };
-        // A versão em fonte mono no meio da frase: o texto em volta dela sai da própria chave.
-        let version = h.version.clone().map(|v| {
-            let text = tr("status_version");
-            let (before, after) = text.split_once("{version}").map_or((text.clone(), String::new()), |(b, a)| (b.trim_end().to_owned(), a.trim_start().to_owned()));
-            div().flex().items_baseline().gap(px(4.)).when(!before.is_empty(), |el| el.child(before))
-                .child(div().font_family(theme::MONO).child(v)).when(!after.is_empty(), |el| el.child(after))
-        });
-        let sub = (h.uptime.is_some() || version.is_some()).then(|| div().flex().items_baseline().gap(px(4.)).text_size(px(12.5)).text_color(theme::muted())
-            .children(h.uptime.clone())
-            .when(h.uptime.is_some() && version.is_some(), |el| el.child("·"))
-            .children(version));
-        let attention = (!ok).then(|| div().ml_auto().min_w_0().max_w(relative(0.56)).flex().flex_col().gap(px(6.))
-            .children(h.items.iter().enumerate().map(|(i, item)| {
-                let target = item.target;
-                Button::new(SharedString::from(format!("status-attention-{i}")))
-                    .custom(ButtonCustomVariant::new(cx).color(theme::inset()).foreground(theme::text()).hover(theme::hover()).active(theme::hover()))
-                    .w_full().h(px(28.)).px(px(9.)).rounded(px(8.)).accessibility_label(item.text.clone())
-                    .child(div().w_full().min_w_0().flex().items_center().gap(px(8.)).text_size(px(12.5))
-                        .child(chrome::small_icon(IconName::TriangleAlert, 13., tone(item.tone)))
-                        .child(div().flex_1().min_w_0().truncate().child(item.text.clone())))
-                    .on_click(cx.listener(move |this, _, _, cx| this.status_jump(target, cx)))
-            })));
-        settings_box().flex_row().items_center().gap(px(16.)).p(px(16.))
-            .child(div().size(px(52.)).flex_shrink_0().rounded_full().bg(color.opacity(0.18)).flex().items_center().justify_center()
-                .child(chrome::small_icon(if ok { IconName::Check } else { IconName::TriangleAlert }, if ok { 26. } else { 24. }, color)))
-            .child(div().min_w_0().flex().flex_col().gap(px(3.))
-                .child(div().text_size(px(18.)).font_weight(FontWeight::SEMIBOLD).child(h.title.clone()))
-                .children(sub))
-            .children(attention)
+        let this = cx.entity().downgrade();
+        health_card(h, cx, move |button, target| {
+            let this = this.clone();
+            button.on_click(move |_, _, cx| { let _ = this.update(cx, |this, cx| this.status_jump(target, cx)); })
+        })
     }
+}
+
+/// O cartão do topo; `wire` liga cada ponto de atenção ao salto até o bloco dele.
+pub(crate) fn health_card(h: &Health, cx: &App, wire: impl Fn(Button, AttentionTarget) -> Button) -> Div {
+    let ok = h.items.is_empty();
+    let color = if ok { theme::success() } else { theme::warning() };
+    // A versão em fonte mono no meio da frase: o texto em volta dela sai da própria chave.
+    let version = h.version.clone().map(|v| {
+        let text = tr("status_version");
+        let (before, after) = text.split_once("{version}").map_or((text.clone(), String::new()), |(b, a)| (b.trim_end().to_owned(), a.trim_start().to_owned()));
+        div().flex().items_baseline().gap(px(4.)).when(!before.is_empty(), |el| el.child(before))
+            .child(div().font_family(theme::MONO).child(v)).when(!after.is_empty(), |el| el.child(after))
+    });
+    let sub = (h.uptime.is_some() || version.is_some()).then(|| div().flex().items_baseline().gap(px(4.)).text_size(px(12.5)).text_color(theme::muted())
+        .children(h.uptime.clone())
+        .when(h.uptime.is_some() && version.is_some(), |el| el.child("·"))
+        .children(version));
+    let attention = (!ok).then(|| div().ml_auto().min_w_0().max_w(relative(0.56)).flex().flex_col().gap(px(6.))
+        .children(h.items.iter().enumerate().map(|(i, item)| {
+            let button = Button::new(SharedString::from(format!("status-attention-{i}")))
+                .custom(ButtonCustomVariant::new(cx).color(theme::inset()).foreground(theme::text()).hover(theme::hover()).active(theme::hover()))
+                .w_full().h(px(28.)).px(px(9.)).rounded(px(8.)).accessibility_label(item.text.clone())
+                .child(div().w_full().min_w_0().flex().items_center().gap(px(8.)).text_size(px(12.5))
+                    .child(chrome::small_icon(IconName::TriangleAlert, 13., tone(item.tone)))
+                    .child(div().flex_1().min_w_0().truncate().child(item.text.clone())));
+            wire(button, item.target)
+        })));
+    settings_box().flex_row().items_center().gap(px(16.)).p(px(16.))
+        .child(div().size(px(52.)).flex_shrink_0().rounded_full().bg(color.opacity(0.18)).flex().items_center().justify_center()
+            .child(chrome::small_icon(if ok { IconName::Check } else { IconName::TriangleAlert }, if ok { 26. } else { 24. }, color)))
+        .child(div().min_w_0().flex().flex_col().gap(px(3.))
+            .child(div().text_size(px(18.)).font_weight(FontWeight::SEMIBOLD).child(h.title.clone()))
+            .children(sub))
+        .children(attention)
+}
+
+impl Hangar {
 
     fn status_sessions(&self, s: &Sessions, flash: bool, cx: &mut Context<Self>) -> Div {
         let head = card_head(tr("status_sessions_title"), Some(s.hint.clone()));
@@ -262,7 +273,7 @@ fn stat_card(id: &'static str, label: String, spark: &Spark, flash: bool) -> Div
                 .child(tr("status_hour_back")).child(tr("status_now"))))
 }
 
-fn status_server(s: &ServerCards, flash: bool) -> Div {
+pub(crate) fn status_server(s: &ServerCards, flash: bool) -> Div {
     div().flex().gap(px(12.))
         .child(stat_card("status-spark-memory", tr("status_memory"), &s.memory, flash))
         .child(stat_card("status-spark-cpu", tr("status_cpu"), &s.cpu, flash))
@@ -279,7 +290,7 @@ fn event_mark(kind: ExitKind) -> Div {
     }
 }
 
-fn status_days(d: &Days, flash: bool) -> Div {
+pub(crate) fn status_days(d: &Days, flash: bool) -> Div {
     let timeline = d.timeline.as_ref().map(|t| {
         let line = div().relative().w_full().h(px(58.)).mt(px(4.))
             .child(div().absolute().left(px(0.)).right(px(0.)).top(px(22.)).h(px(2.)).rounded(px(1.)).bg(theme::border()))

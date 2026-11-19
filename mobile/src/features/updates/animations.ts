@@ -22,6 +22,7 @@ import { UpdatesManualAnimation } from './UpdatesManualAnimation';
 import { VaultAnimation } from './VaultAnimation';
 import { WorktreeFreshAnimation } from './WorktreeFreshAnimation';
 import { SessionSettingsAnimation } from './SessionSettingsAnimation';
+import { StatusAnimation } from './StatusAnimation';
 
 // Miniaturas feitas dos componentes reais (ex.: src/chat/ComposerField.tsx) entram aqui pelo nome da novidade.
 const animations: Record<string, ComponentType<{ width: number }>> = {
@@ -47,6 +48,7 @@ const animations: Record<string, ComponentType<{ width: number }>> = {
   'sem-projeto': NoProjectAnimation,
   'sonho-da-memoria': DreamAnimation,
   'sugestao-de-nome': RenameSuggestionAnimation,
+  'tela-de-status': StatusAnimation,
   'worktree-atualizada': WorktreeFreshAnimation,
 };
 

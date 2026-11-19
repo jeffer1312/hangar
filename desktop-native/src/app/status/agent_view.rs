@@ -348,18 +348,10 @@ impl Hangar {
             super::super::settings::segments("status-agent-pick", &labels, selected, labels.len(), busy, String::new(),
                 |this, n, _, cx| { this.device.status.agent_pick = n; cx.notify(); }, cx)
         } else {
-            div().text_size(px(12.5)).font_weight(FontWeight::MEDIUM).child(short_name(agent)).into_any_element()
+            single_agent(agent)
         };
-        div().mt(px(12.)).flex().flex_col().gap(px(8.))
-            .child(div().flex().flex_wrap().items_center().gap(px(10.))
-                .child(Button::new("status-agent-fix").primary().small().icon(IconName::Sparkles).label(tr("status_agent_fix")).disabled(busy)
-                    .accessibility_label(fill(tr("status_agent_fix_with"), &[("agent", agent.name()), ("account", &account)]))
-                    .on_click(cx.listener(move |this, _, _, cx| this.agent_start(agent, cx))))
-                .child(picker)
-                .child(div().min_w_0().truncate().text_size(px(12.)).text_color(theme::muted()).child(account))
-                .children(retry.map(|button| div().ml_auto().child(button))))
-            .child(div().text_size(px(12.)).text_color(theme::faint()).whitespace_normal().child(tr("status_agent_note")))
-            .into_any_element()
+        let button = fix_button(agent, &account).disabled(busy).on_click(cx.listener(move |this, _, _, cx| this.agent_start(agent, cx)));
+        fix_bar(button, picker, account, retry)
     }
 
     /// Estados 2, 3 e 4, no lugar do diagnóstico.
@@ -371,53 +363,18 @@ impl Hangar {
         Some(match &run.phase {
             RunPhase::Starting | RunPhase::Running | RunPhase::Checking => {
                 let checking = run.phase == RunPhase::Checking;
-                let sub = if checking { tr("status_agent_checking") } else {
-                    format!("{} · {}", fill(tr("status_agent_started_ago"), &[("time", &elapsed)]),
-                        count_text(commands, "status_agent_commands_so_far_one", "status_agent_commands_so_far"))
-                };
+                let sub = if checking { tr("status_agent_checking") } else { working_sub(&elapsed, commands) };
                 let id = run.id;
-                let stop = Button::new("status-agent-stop").danger().small().icon(IconName::Square).label(tr("status_agent_stop"))
-                    .disabled(!run.stoppable())
-                    .on_click(cx.listener(move |this, _, _, cx| this.agent_stop(id, cx)));
-                let stop_failed = run.stop_failed.then(|| div().mt(px(8.)).text_size(px(12.5)).text_color(theme::danger()).whitespace_normal()
-                    .child(tr("status_agent_stop_failed")));
-                let title = fill(tr("status_agent_working_title"), &[("agent", name)]);
-                let head = settings_box().flex_row().items_start().gap(px(16.)).p(px(16.))
-                    .child(big_icon(spinner("status-agent-spin", 22., theme::warning(), title.clone()).into_any_element(), theme::warning()))
-                    .child(div().flex_1().min_w_0().flex().flex_col().gap(px(3.))
-                        .child(div().text_size(px(18.)).font_weight(FontWeight::SEMIBOLD).whitespace_normal().child(title))
-                        .child(div().text_size(px(12.5)).text_color(theme::muted()).whitespace_normal().child(sub))
-                        .children(stop_failed))
-                    .child(div().flex_shrink_0().child(stop));
-                let mut out = vec![head.into_any_element()];
-                if !run.progress.steps.is_empty() || run.progress.said.is_some() {
-                    out.push(settings_box().px(px(16.)).py(px(12.))
-                        .children((!run.progress.steps.is_empty()).then(|| steps_list(run)))
-                        .children(run.progress.said.clone().map(|said| quote(said).mt(px(12.))))
-                        .into_any_element());
-                }
+                let stop = stop_button().disabled(!run.stoppable()).on_click(cx.listener(move |this, _, _, cx| this.agent_stop(id, cx)));
+                let mut out = vec![working_head(name, sub, stop, run.stop_failed).into_any_element()];
+                out.extend(working_steps(&run.progress.steps, run.elapsed(), run.progress.said.clone()));
                 out
             }
             RunPhase::Fixed { version } => {
-                let sub = match version {
-                    Some(version) => fill(tr("status_agent_fixed_sub"), &[("agent", name), ("time", &elapsed), ("version", version)]),
-                    None => fill(tr("status_agent_fixed_sub_plain"), &[("agent", name), ("time", &elapsed)]),
-                };
+                let sub = fixed_sub(name, &elapsed, version.as_deref());
                 let items = run.progress.summary.as_deref().map(agent_fix::summary_items).unwrap_or_default();
-                let list = (!items.is_empty()).then(|| div().id("status-agent-summary").role(Role::List).mt(px(10.)).flex().flex_col().gap(px(5.))
-                    .text_size(px(13.)).children(items.into_iter().enumerate().map(|(i, item)| div().id(SharedString::from(format!("status-agent-summary-{i}")))
-                        .role(Role::ListItem).flex().items_start().gap(px(8.))
-                        .child(div().mt(px(7.)).size(px(5.)).flex_shrink_0().rounded_full().bg(theme::success()))
-                        .child(div().flex_1().min_w_0().whitespace_normal().child(item)))));
-                let head = settings_box().flex_row().items_start().gap(px(16.)).p(px(16.))
-                    .child(big_icon(chrome::small_icon(IconName::CircleCheck, 24., theme::success()).into_any_element(), theme::success()))
-                    .child(div().flex_1().min_w_0().flex().flex_col().gap(px(3.))
-                        .child(div().text_size(px(18.)).font_weight(FontWeight::SEMIBOLD).whitespace_normal().child(tr("status_agent_fixed_title")))
-                        .child(div().text_size(px(12.5)).text_color(theme::muted()).whitespace_normal().child(sub))
-                        .children(list)
-                        .child(div().mt(px(12.)).child(Button::new("status-agent-done").primary().small().label(tr("status_agent_see_status"))
-                            .on_click(cx.listener(|this, _, _, cx| this.agent_dismiss(cx))))));
-                let mut out = vec![head.into_any_element()];
+                let done = see_status_button().on_click(cx.listener(|this, _, _, cx| this.agent_dismiss(cx)));
+                let mut out = vec![fixed_head(sub, items, done).into_any_element()];
                 out.extend(self.all_steps(run, cx));
                 out
             }
@@ -481,19 +438,96 @@ impl Hangar {
                 cx.notify();
             }));
         Some(settings_box().px(px(12.)).py(px(8.)).child(div().child(toggle))
-            .when(open, |el| el.child(div().px(px(4.)).pt(px(6.)).child(steps_list(run))))
+            .when(open, |el| el.child(div().px(px(4.)).pt(px(6.)).child(steps_list(&run.progress.steps, run.elapsed()))))
             .into_any_element())
     }
+}
+
+// As partes desenhadas recebem dados simples: a página e a animação da novidade chamam as mesmas.
+
+pub(crate) fn single_agent(agent: Agent) -> AnyElement {
+    div().text_size(px(12.5)).font_weight(FontWeight::MEDIUM).child(short_name(agent)).into_any_element()
+}
+
+pub(crate) fn fix_button(agent: Agent, account: &str) -> Button {
+    Button::new("status-agent-fix").primary().small().icon(IconName::Sparkles).label(tr("status_agent_fix"))
+        .accessibility_label(fill(tr("status_agent_fix_with"), &[("agent", agent.name()), ("account", account)]))
+}
+
+/// Estado 1: o botão, a escolha do agente, a conta e o "Tentar subir de novo" à direita, com a nota embaixo.
+pub(crate) fn fix_bar(button: Button, picker: AnyElement, account: String, retry: Option<Button>) -> AnyElement {
+    div().mt(px(12.)).flex().flex_col().gap(px(8.))
+        .child(div().flex().flex_wrap().items_center().gap(px(10.))
+            .child(button)
+            .child(picker)
+            .child(div().min_w_0().truncate().text_size(px(12.)).text_color(theme::muted()).child(account))
+            .children(retry.map(|button| div().ml_auto().child(button))))
+        .child(div().text_size(px(12.)).text_color(theme::faint()).whitespace_normal().child(tr("status_agent_note")))
+        .into_any_element()
+}
+
+pub(crate) fn working_sub(elapsed: &str, commands: usize) -> String {
+    format!("{} · {}", fill(tr("status_agent_started_ago"), &[("time", elapsed)]),
+        count_text(commands, "status_agent_commands_so_far_one", "status_agent_commands_so_far"))
+}
+
+pub(crate) fn stop_button() -> Button {
+    Button::new("status-agent-stop").danger().small().icon(IconName::Square).label(tr("status_agent_stop"))
+}
+
+pub(crate) fn working_head(agent: &str, sub: String, stop: Button, stop_failed: bool) -> Div {
+    let stop_failed = stop_failed.then(|| div().mt(px(8.)).text_size(px(12.5)).text_color(theme::danger()).whitespace_normal()
+        .child(tr("status_agent_stop_failed")));
+    let title = fill(tr("status_agent_working_title"), &[("agent", agent)]);
+    settings_box().flex_row().items_start().gap(px(16.)).p(px(16.))
+        .child(big_icon(spinner("status-agent-spin", 22., theme::warning(), title.clone()).into_any_element(), theme::warning()))
+        .child(div().flex_1().min_w_0().flex().flex_col().gap(px(3.))
+            .child(div().text_size(px(18.)).font_weight(FontWeight::SEMIBOLD).whitespace_normal().child(title))
+            .child(div().text_size(px(12.5)).text_color(theme::muted()).whitespace_normal().child(sub))
+            .children(stop_failed))
+        .child(div().flex_shrink_0().child(stop))
+}
+
+/// Os passos de até agora e a última fala do agente; nada antes do primeiro.
+pub(crate) fn working_steps(steps: &[agent_fix::Step], now: Duration, said: Option<String>) -> Option<AnyElement> {
+    (!steps.is_empty() || said.is_some()).then(|| settings_box().px(px(16.)).py(px(12.))
+        .children((!steps.is_empty()).then(|| steps_list(steps, now)))
+        .children(said.map(|said| quote(said).mt(px(12.))))
+        .into_any_element())
+}
+
+pub(crate) fn fixed_sub(agent: &str, elapsed: &str, version: Option<&str>) -> String {
+    match version {
+        Some(version) => fill(tr("status_agent_fixed_sub"), &[("agent", agent), ("time", elapsed), ("version", version)]),
+        None => fill(tr("status_agent_fixed_sub_plain"), &[("agent", agent), ("time", elapsed)]),
+    }
+}
+
+pub(crate) fn see_status_button() -> Button { Button::new("status-agent-done").primary().small().label(tr("status_agent_see_status")) }
+
+pub(crate) fn fixed_head(sub: String, items: Vec<String>, done: Button) -> Div {
+    let list = (!items.is_empty()).then(|| div().id("status-agent-summary").role(Role::List).mt(px(10.)).flex().flex_col().gap(px(5.))
+        .text_size(px(13.)).children(items.into_iter().enumerate().map(|(i, item)| div().id(SharedString::from(format!("status-agent-summary-{i}")))
+            .role(Role::ListItem).flex().items_start().gap(px(8.))
+            .child(div().mt(px(7.)).size(px(5.)).flex_shrink_0().rounded_full().bg(theme::success()))
+            .child(div().flex_1().min_w_0().whitespace_normal().child(item)))));
+    settings_box().flex_row().items_start().gap(px(16.)).p(px(16.))
+        .child(big_icon(chrome::small_icon(IconName::CircleCheck, 24., theme::success()).into_any_element(), theme::success()))
+        .child(div().flex_1().min_w_0().flex().flex_col().gap(px(3.))
+            .child(div().text_size(px(18.)).font_weight(FontWeight::SEMIBOLD).whitespace_normal().child(tr("status_agent_fixed_title")))
+            .child(div().text_size(px(12.5)).text_color(theme::muted()).whitespace_normal().child(sub))
+            .children(list)
+            // Em linha: num bloco o botão esticaria na largura do cartão.
+            .child(div().mt(px(12.)).flex().child(done)))
 }
 
 fn quote(text: String) -> Div {
     div().pl(px(12.)).border_l_2().border_color(theme::accent()).text_size(px(13.)).text_color(theme::muted()).whitespace_normal().child(text)
 }
 
-fn steps_list(run: &AgentRun) -> AnyElement {
-    let now = run.elapsed();
+fn steps_list(steps: &[agent_fix::Step], now: Duration) -> AnyElement {
     div().id("status-agent-steps-list").role(Role::List).flex().flex_col()
-        .children(run.progress.steps.iter().enumerate().map(|(i, step)| {
+        .children(steps.iter().enumerate().map(|(i, step)| {
             let title = step_title(&step.action);
             let dot = match step.state {
                 StepState::Done => chrome::small_icon(IconName::Check, 13., theme::success()).into_any_element(),

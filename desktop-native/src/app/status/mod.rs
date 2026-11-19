@@ -7,6 +7,16 @@ mod down;
 mod model;
 mod view;
 
+/// As partes da página que a animação da novidade desenha com dados de amostra.
+pub(crate) mod parts {
+    pub(crate) use super::agent_fix::{Action, Step, StepState, clock};
+    pub(crate) use super::agent_view::{fix_bar, fix_button, fixed_head, fixed_sub, see_status_button, single_agent, stop_button,
+        working_head, working_steps, working_sub};
+    pub(crate) use super::down::{down_head, silent_for, start_button};
+    pub(crate) use super::model::{Block, view_model};
+    pub(crate) use super::view::{health_card, status_days, status_server};
+}
+
 use hangar_api::status::{AttentionTarget, StatusSnapshot};
 
 use super::*;
