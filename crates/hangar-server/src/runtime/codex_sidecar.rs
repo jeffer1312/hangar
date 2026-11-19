@@ -135,16 +135,30 @@ pub fn create_ws_token(dir:&Path,name:&str) -> io::Result<(PathBuf,String)> {
 /// O token da vida gravada no sidecar; sem o campo (app-server de um lançador antigo), conecta sem ele.
 pub fn ws_token(meta:&Value) -> Option<String> {
     let path = meta.get(WS_TOKEN_FILE).and_then(Value::as_str).filter(|s|!s.is_empty())?;
-    std::fs::read_to_string(path).ok().map(|token|token.trim().to_owned()).filter(|token|!token.is_empty())
+    let token = std::fs::read_to_string(path).map(|token|token.trim().to_owned());
+    match token {
+        Ok(token) if !token.is_empty() => Some(token),
+        // A vida tem token e ele não foi lido: a conexão sem ele vai levar 401, e o motivo fica aqui.
+        failed => {
+            tracing::warn!(code="codex_ws_token_unreadable",io_kind=?failed.err().map(|e|e.kind()),"token do app-server do Codex não foi lido");
+            None
+        }
+    }
 }
 
 /// Só apaga dentro da pasta dos tokens: o caminho vem do sidecar.
 pub fn remove_ws_token(dir:&Path,file:Option<&str>) {
-    let Some(file) = file.map(Path::new) else { return };
+    let Some(file) = file.map(Path::new).filter(|file|file.exists()) else { return };
     // Comparados já resolvidos: o lançador e o servidor podem escrever o HOME de jeitos diferentes.
     let parent = file.parent().and_then(|parent|std::fs::canonicalize(parent).ok());
     let inside = parent.is_some_and(|parent|std::fs::canonicalize(ws_tokens(dir)).is_ok_and(|tokens|tokens == parent));
-    if inside { let _ = std::fs::remove_file(file); }
+    if !inside {
+        tracing::warn!(code="codex_ws_token_outside","token do app-server do Codex fora da pasta dos tokens; não foi apagado");
+        return;
+    }
+    if let Err(error) = std::fs::remove_file(file) && error.kind() != io::ErrorKind::NotFound {
+        tracing::warn!(code="codex_ws_token_remove_failed",io_kind=?error.kind(),"token do app-server do Codex não foi apagado");
+    }
 }
 
 /// Funde `patch` no sidecar só se cada campo de `expect` ainda tem o valor esperado (ausente = nulo).
