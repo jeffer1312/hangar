@@ -6,6 +6,7 @@
 use std::collections::BTreeMap;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
+use std::sync::{Mutex, MutexGuard};
 
 use serde_json::Value;
 
@@ -23,6 +24,13 @@ fn expected_change(case: &str) -> Option<(u8, &'static str)> {
         "tmux-attach-fails" => (0, ""),
         _ => return None,
     })
+}
+
+// Um processo nascido em outro teste herda o script ainda aberto para escrita, e o exec dele sai ETXTBSY.
+static EXEC: Mutex<()> = Mutex::new(());
+
+fn exclusive() -> MutexGuard<'static, ()> {
+    EXEC.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 fn fake_server(dir: &Path, server: &Value) -> std::path::PathBuf {
@@ -63,6 +71,7 @@ fn captured_cases() {
         let t = dir.path();
         let server_dir = t.join("srv");
         std::fs::create_dir_all(&server_dir).unwrap();
+        let _exec = exclusive();
         let server = fake_server(&server_dir, &case["server"]);
         let cwd = std::path::PathBuf::from(place(case["cwd"].as_str().unwrap(), t));
         std::fs::create_dir_all(&cwd).unwrap();
@@ -99,6 +108,7 @@ fn captured_cases() {
 /// O pedido sai com o `json.dumps` do Python: quem lê o argv do `open` vê o mesmo texto de antes.
 #[test]
 fn request_text_is_python_json() {
+    let _exec = exclusive();
     let dir = tempfile::tempdir().unwrap();
     let server = fake_server(dir.path(), &serde_json::json!({"rc": 0, "stdout": "{\"name\": \"x\"}"}));
     let vars = BTreeMap::from([("PWD".to_owned(), "/pasta Área".to_owned())]);
@@ -114,6 +124,7 @@ fn request_text_is_python_json() {
 /// Um 100 do servidor nunca chega ao wrapper: ele abriria a sessão uma segunda vez.
 #[test]
 fn server_100_becomes_1() {
+    let _exec = exclusive();
     let dir = tempfile::tempdir().unwrap();
     let server = fake_server(dir.path(), &serde_json::json!({"rc": 100}));
     let (mut out, mut err) = (Vec::new(), Vec::new());
