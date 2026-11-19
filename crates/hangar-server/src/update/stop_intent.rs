@@ -353,8 +353,14 @@ pub(crate) fn mark_this_process_running(hangar_dir: &Path, now: &str) -> u32 {
 pub fn record_previous(hangar_dir: &Path, update_state: &Path, previous: Option<&Previous>, pid: Option<u32>,
     errors: impl FnOnce() -> String) -> Vec<Value> {
     let now = now_secs();
-    let update = crate::update::running_package().and_then(|package| update_run(update_state, &package.version, now));
-    previous_exit(hangar_dir, previous, pid, errors, &SystemdJournal, now, update.as_ref())
+    let (update, unreadable) = match crate::update::running_package().map(|package| update_run(update_state, &package.version, now)) {
+        Some(Err(code)) => (None, Some(json!({"evento": "hangar_server.estado_atualizacao_ilegivel", "nivel": "aviso", "codigo": code}))),
+        Some(Ok(run)) => (run, None),
+        None => (None, None),
+    };
+    let mut lines: Vec<Value> = unreadable.into_iter().collect();
+    lines.extend(previous_exit(hangar_dir, previous, pid, errors, &SystemdJournal, now, update.as_ref()));
+    lines
 }
 
 /// Uma atualização no passo de reiniciar, indo para a versão que acaba de subir.
@@ -373,13 +379,19 @@ impl UpdateRun {
 /// O `estado.json` do executor: rodando, no passo `reiniciar` começado há menos de `VALID_FOR` e com
 /// `versao_para` = `version`. Todo executor grava esses campos, também o das versões de antes da marca
 /// de intenção. O prazo descarta o estado que um executor morto deixou: uma queda depois não é ele.
-pub fn update_run(update_state: &Path, version: &str, now: u64) -> Option<UpdateRun> {
-    let state: Value = serde_json::from_slice(&std::fs::read(update_state.join("estado.json")).ok()?).ok()?;
+/// Sem arquivo é `Ok(None)`; arquivo que existe e não se lê volta o código para o diário.
+pub fn update_run(update_state: &Path, version: &str, now: u64) -> Result<Option<UpdateRun>, &'static str> {
+    let raw = match std::fs::read(update_state.join("estado.json")) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err("update_state_unreadable"),
+    };
+    let state: Value = serde_json::from_slice(&raw).map_err(|_| "update_state_invalid")?;
     let text = |key: &str| state.get(key).and_then(Value::as_str);
-    let started = u64::try_from(DateTime::parse_from_rfc3339(text("etapa_inicio")?).ok()?.timestamp()).ok()?;
-    (text("fase")? == "rodando" && text("etapa")? == "reiniciar" && text("versao_para")? == version
-        && started.abs_diff(now) < VALID_FOR.as_secs())
-        .then(|| UpdateRun { from: text("versao_de").map(str::to_owned), to: version.to_owned() })
+    let started = text("etapa_inicio").and_then(|at| DateTime::parse_from_rfc3339(at).ok()).and_then(|at| u64::try_from(at.timestamp()).ok());
+    let restarting = text("fase") == Some("rodando") && text("etapa") == Some("reiniciar") && text("versao_para") == Some(version);
+    Ok((restarting && started.is_some_and(|started| started.abs_diff(now) < VALID_FOR.as_secs()))
+        .then(|| UpdateRun { from: text("versao_de").map(str::to_owned), to: version.to_owned() }))
 }
 
 #[cfg(test)]
@@ -674,17 +686,19 @@ mod tests {
         let started = "2027-01-15T05:00:00-03:00";
         let at = DateTime::parse_from_rfc3339(started).unwrap().timestamp() as u64;
         state(json!({"fase": "rodando", "etapa": "reiniciar", "etapa_inicio": started, "versao_de": "0.1.0.9000", "versao_para": "0.1.0.9010"}));
-        assert_eq!(update_run(dir.path(), "0.1.0.9010", at + 20), Some(run()));
-        assert_eq!(update_run(dir.path(), "0.1.0.9011", at + 20), None, "outra versão subiu");
+        assert_eq!(update_run(dir.path(), "0.1.0.9010", at + 20), Ok(Some(run())));
+        assert_eq!(update_run(dir.path(), "0.1.0.9011", at + 20), Ok(None), "outra versão subiu");
         // Executor que morreu deixou o estado assim: uma queda bem depois não vira atualização.
-        assert_eq!(update_run(dir.path(), "0.1.0.9010", at + VALID_FOR.as_secs()), None, "etapa velha");
+        assert_eq!(update_run(dir.path(), "0.1.0.9010", at + VALID_FOR.as_secs()), Ok(None), "etapa velha");
         state(json!({"fase": "rodando", "etapa": "reiniciar", "versao_para": "0.1.0.9010"}));
-        assert_eq!(update_run(dir.path(), "0.1.0.9010", at + 20), None, "sem o começo da etapa");
+        assert_eq!(update_run(dir.path(), "0.1.0.9010", at + 20), Ok(None), "sem o começo da etapa");
         state(json!({"fase": "pronto", "etapa": "reiniciar", "etapa_inicio": started, "versao_para": "0.1.0.9010"}));
-        assert_eq!(update_run(dir.path(), "0.1.0.9010", at + 20), None, "atualização já encerrada");
+        assert_eq!(update_run(dir.path(), "0.1.0.9010", at + 20), Ok(None), "atualização já encerrada");
         state(json!({"fase": "rodando", "etapa": "baixar", "etapa_inicio": started, "versao_para": "0.1.0.9010"}));
-        assert_eq!(update_run(dir.path(), "0.1.0.9010", at + 20), None, "ainda baixando");
+        assert_eq!(update_run(dir.path(), "0.1.0.9010", at + 20), Ok(None), "ainda baixando");
+        std::fs::write(dir.path().join("estado.json"), "{torto").unwrap();
+        assert_eq!(update_run(dir.path(), "0.1.0.9010", at + 20), Err("update_state_invalid"), "ilegível vai ao diário");
         std::fs::remove_file(dir.path().join("estado.json")).unwrap();
-        assert_eq!(update_run(dir.path(), "0.1.0.9010", at + 20), None);
+        assert_eq!(update_run(dir.path(), "0.1.0.9010", at + 20), Ok(None));
     }
 }
