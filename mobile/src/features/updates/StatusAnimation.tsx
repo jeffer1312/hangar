@@ -50,19 +50,24 @@ export function StatusAnimation({ width }: { width: number }) {
   const stage = useRef<View>(null);
   const window = useWindowDimensions();
   const [visible, setVisible] = useState(false);
+  const [measured, setMeasured] = useState(false);
   const focused = useIsFocused();
   const [active, setActive] = useState(AppState.currentState === 'active');
   useEffect(() => { const sub = AppState.addEventListener('change', (state) => setActive(state === 'active')); return () => sub.remove(); }, []);
   useEffect(() => {
     if (!focused || !active) return;
-    const check = () => stage.current?.measureInWindow((x, y, w, height) =>
-      setVisible(height > 0 && w > 0 && y < window.height && y + height > 0 && x < window.width && x + w > 0));
+    const check = () => stage.current?.measureInWindow((x, y, w, height) => {
+      setMeasured(true);
+      setVisible(height > 0 && w > 0 && y < window.height && y + height > 0 && x < window.width && x + w > 0);
+    });
     check();
     const timer = setInterval(check, 500);
     return () => clearInterval(timer);
   }, [focused, active, window.height, window.width]);
   const still = reduced || !active || !focused || !visible;
-  const t = useScriptStep(STEPS, CYCLE, STILL, still);
+  // Antes da primeira medida o roteiro ainda não começou: o quadro é o do começo, não o parado do fim.
+  const scripted = useScriptStep(STEPS, CYCLE, STILL, still);
+  const t = reduced || measured ? scripted : 0;
   const crashed = t >= CRASH;
   const flash = t >= JUMP;
   // O instante da amostra fica fixo: os blocos em `memo` não redesenham a cada passo sem mudança.

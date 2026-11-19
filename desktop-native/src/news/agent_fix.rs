@@ -21,17 +21,18 @@ const STAGE_HEIGHT: f32 = 340.;
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Phase {
     Down,
-    /// Quantos passos já terminaram.
-    Working(usize),
+    Working,
     Fixed,
 }
 
 fn frame(t: f32) -> Phase {
-    if t >= FIXED { Phase::Fixed } else if t >= START { Phase::Working(STEPS_DONE.iter().filter(|done| t >= **done).count()) } else { Phase::Down }
+    if t >= FIXED { Phase::Fixed } else if t >= START { Phase::Working } else { Phase::Down }
 }
 
+/// Até o próximo quadro diferente: com o agente trabalhando, o relógio dele anda a cada segundo dele.
 fn until_next_step(t: f32) -> f32 {
-    [START, STEPS_DONE[0], STEPS_DONE[1], STEPS_DONE[2], FIXED, CYCLE].into_iter().filter(|b| *b > t).fold(CYCLE, f32::min) - t
+    let step = [START, STEPS_DONE[0], STEPS_DONE[1], STEPS_DONE[2], FIXED, CYCLE].into_iter().filter(|b| *b > t).fold(CYCLE, f32::min) - t;
+    if frame(t) == Phase::Working { step.min(1. / CLOCK_SPEED) } else { step }
 }
 
 fn agent_time(t: f32) -> Duration { Duration::from_secs_f32(((t - START) * CLOCK_SPEED).max(0.)) }
@@ -39,7 +40,7 @@ fn agent_time(t: f32) -> Duration { Duration::from_secs_f32(((t - START) * CLOCK
 /// Os três passos da amostra: ler o serviço, achar a causa no log e subir de novo.
 fn sample_steps(t: f32) -> Vec<parts::Step> {
     let (status, log, restart) = if cfg!(windows) {
-        (format!("schtasks /Query /TN \"{TASK}\" /V /FO LIST"), "Get-Content $HOME\\.hangar\\logs\\server.log -Tail 40".to_owned(),
+        (format!("schtasks /Query /TN \"{TASK}\" /V /FO LIST"), "Get-Content $env:LOCALAPPDATA\\hangar\\logs\\privado\\hangar-server.log -Tail 40".to_owned(),
             format!("Stop-Process -Id (Get-NetTCPConnection -LocalPort 8765).OwningProcess\nschtasks /Run /TN \"{TASK}\""))
     } else {
         (format!("systemctl --user status {UNIT}"), format!("journalctl --user -u {UNIT} -n 40"),
@@ -81,7 +82,7 @@ pub(super) fn render(started: Instant, width: Pixels, window: &mut Window, cx: &
             vec![parts::down_head(chrome::small_icon(IconName::Close, 24., theme::danger()).into_any_element(), theme::danger(), false,
                 tr("status_down_stopped_title"), Some(parts::silent_for(Duration::from_secs(150))), [bar]).into_any_element()]
         }
-        Phase::Working(_) => {
+        Phase::Working => {
             let steps = sample_steps(t);
             // A página conta os comandos já começados: os que estão na lista.
             let sub = parts::working_sub(&parts::clock(agent_time(t)), steps.len());
@@ -113,10 +114,19 @@ mod tests {
     #[test]
     fn the_agent_works_step_by_step_and_then_the_server_is_back() {
         assert_eq!(frame(0.5), Phase::Down);
-        assert_eq!(frame(1.7), Phase::Working(0));
-        assert_eq!(frame(2.6), Phase::Working(1));
-        assert_eq!(frame(4.3), Phase::Working(3));
+        assert_eq!(frame(1.7), Phase::Working);
+        assert_eq!(frame(4.3), Phase::Working);
         assert_eq!(frame(5.), Phase::Fixed);
+        assert_eq!([1.7, 2.6, 3.1, 4.3].map(|t| sample_steps(t).len()), [1, 2, 3, 3]);
+    }
+
+    #[test]
+    fn the_agent_clock_ticks_while_it_works() {
+        let close = |a: f32, b: f32| (a - b).abs() < 1e-4;
+        // Trabalhando, o quadro muda a cada segundo do agente; fora disso, só no próximo degrau.
+        assert!(close(until_next_step(1.7), 1. / CLOCK_SPEED));
+        assert!(close(until_next_step(0.5), START - 0.5));
+        assert!(close(until_next_step(5.), CYCLE - 5.));
     }
 
     #[test]
