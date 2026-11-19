@@ -18,7 +18,7 @@ pub mod versions;
 mod tests;
 
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub use host::{Host, RealHost};
 use host::ProcessInfo;
@@ -338,43 +338,46 @@ impl<H: Host> LocalServer<H> {
         // Um servidor do Hangar preso na porta sai sozinho: os filhos dele são as sessões (os
         // servidores do psmux no Windows, os canos das sessões sem terminal), e a árvore as levaria.
         let whole_tree = !same()?.to_ascii_lowercase().starts_with("hangar-");
+        let tree = if whole_tree { self.tree(holder.pid, me.as_deref()) } else { Vec::new() };
+        // Quem da árvore lida no diagnóstico ainda escuta: um filho que herdou o socket segura a porta
+        // depois de o pai sair.
+        let ours = |pid: u32| pid == holder.pid || tree.iter().any(|child| child.pid == pid);
         if self.os == Os::Windows {
-            // À força: no Windows não há pedido de saída para um processo sem janela.
+            // À força: no Windows não há pedido de saída para um processo sem janela. Um por um, e não
+            // pelo `/T`, que levaria filho de outro usuário sem a conferência de dono e nascimento.
             same()?;
-            let pid = holder.pid.to_string();
-            let args: &[&str] = if whole_tree { &["/PID", pid.as_str(), "/T", "/F"] } else { &["/PID", pid.as_str(), "/F"] };
-            let out = self.host.run("taskkill", args).map_err(ActionError::Io)?;
+            let out = self.host.run("taskkill", &["/PID", &holder.pid.to_string(), "/F"]).map_err(ActionError::Io)?;
+            for child in &tree { if self.still(child, me.as_deref()) { let _ = self.host.run("taskkill", &["/PID", &child.pid.to_string(), "/F"]); } }
             // O código do `taskkill` não diz o que aconteceu (128 sem o processo): quem decide é a porta.
-            return if self.released(holder.pid, RELEASE_WAIT) { self.vacated() } else if out.code == Some(0) {
+            return if self.released(&ours, RELEASE_WAIT) { self.vacated() } else if out.code == Some(0) {
                 Err(ActionError::PortStillHeld)
             } else {
                 Err(ActionError::Command { code: out.code, output: format!("{}{}", out.stdout, out.stderr).trim().to_owned() })
             };
         }
-        let tree = if whole_tree { self.tree(holder.pid, me.as_deref()) } else { Vec::new() };
         same()?;
         if !self.host.signal(holder.pid, false) { return Err(ActionError::TerminateRefused); }
         for child in &tree { if self.still(child, me.as_deref()) { self.host.signal(child.pid, false); } }
-        if self.released(holder.pid, RELEASE_WAIT) { return self.vacated(); }
-        // Não saiu com o pedido: à força, se ainda é o mesmo processo.
+        if self.released(&ours, RELEASE_WAIT) { return self.vacated(); }
+        // Alguém da árvore não saiu com o pedido: à força quem ainda é o mesmo processo.
         match same() {
             Ok(_) => { self.host.signal(holder.pid, true); }
-            // Saiu (ou o pid já é outro) e a porta continua presa: quem segura agora é outro.
-            Err(ActionError::HolderChanged) => return Err(ActionError::PortStillHeld),
+            // O pai saiu (ou o pid já é outro): sobra o filho que ainda escuta.
+            Err(ActionError::HolderChanged) => {}
             Err(e) => return Err(e),
         }
         for child in &tree { if self.still(child, me.as_deref()) { self.host.signal(child.pid, true); } }
-        if self.released(holder.pid, KILL_WAIT) { self.vacated() } else { Err(ActionError::PortStillHeld) }
+        if self.released(&ours, KILL_WAIT) { self.vacated() } else { Err(ActionError::PortStillHeld) }
     }
 
     /// Quem segurava saiu; a porta só está livre quando ninguém mais escuta nela: um filho que
     /// herdou o socket, ou outro processo que entrou no lugar. Consulta que falha não é porta livre.
     fn vacated(&self) -> Result<(), ActionError> {
-        let mut waited = Duration::ZERO;
+        let (started, mut waited) = (Instant::now(), Duration::ZERO);
         loop {
             let now = self.listeners();
             if now.error.is_none() && now.is_empty() { return Ok(()); }
-            if waited >= KILL_WAIT {
+            if past(started, waited, KILL_WAIT) {
                 return Err(match now.error {
                     Some(error) => ActionError::Io(std::io::Error::other(error)),
                     None => ActionError::PortStillHeld,
@@ -387,11 +390,12 @@ impl<H: Host> LocalServer<H> {
 
     fn holds(&self, pid: u32) -> bool { self.listeners().holders.iter().any(|h| h.pid == pid) }
 
-    fn released(&self, pid: u32, wait: Duration) -> bool {
-        let mut waited = Duration::ZERO;
+    /// Nenhum dos processos de `ours` escuta mais a porta.
+    fn released(&self, ours: &dyn Fn(u32) -> bool, wait: Duration) -> bool {
+        let (started, mut waited) = (Instant::now(), Duration::ZERO);
         loop {
-            if !self.holds(pid) { return true; }
-            if waited >= wait { return false; }
+            if !self.listeners().holders.iter().any(|h| ours(h.pid)) { return true; }
+            if past(started, waited, wait) { return false; }
             self.host.pause(STEP);
             waited += STEP;
         }
@@ -451,7 +455,8 @@ impl<H: Host> LocalServer<H> {
             // Sem quem suba, a troca deixaria o `current` noutra versão e o servidor ainda parado.
             ServiceState::Missing => return Err(ActionError::NotInstalled),
             ServiceState::Unreadable => return Err(ActionError::ServiceUnreadable(service.summary)),
-            ServiceState::Running | ServiceState::Starting => return Err(ActionError::ServerRunning),
+            // Parada ainda em curso: a troca agora pediria a subida antes de ela terminar.
+            ServiceState::Running | ServiceState::Starting | ServiceState::Stopping => return Err(ActionError::ServerRunning),
             // Com o serviço religando, a troca vale na próxima tentativa; `confirm_version` pega a
             // subida da versão antiga entre esta conferência e a troca.
             ServiceState::Restarting | ServiceState::Stopped | ServiceState::Failed => {}
@@ -468,7 +473,11 @@ impl<H: Host> LocalServer<H> {
         let mut waited = Duration::ZERO;
         loop {
             match self.answer() {
-                Answer::Hangar { version: Some(running), .. } if running == version => return Ok(()),
+                // A trava já saiu: o `current` é relido junto da resposta, não só antes da espera.
+                Answer::Hangar { version: Some(running), .. } if running == version => {
+                    let now = self.versions().current;
+                    return if now.as_deref() == Some(version) { Ok(()) } else { Err(ActionError::CurrentChanged(now.unwrap_or_default())) };
+                }
                 Answer::Hangar { version: running, .. } => return Err(ActionError::VersionMismatch(running.unwrap_or_default())),
                 Answer::Other | Answer::Silent => {}
             }
@@ -506,6 +515,10 @@ fn drop_unproven_or_undo(hangar: &Path, version: &str, previous: Option<PathBuf>
         None => Err(left(e.to_string())),
     }
 }
+
+/// A espera acabou: pela soma das pausas ou pelo relógio. Cada consulta de porta também gasta tempo
+/// (o PowerShell leva cerca de 1 s para abrir), e contar só as pausas multiplicaria o prazo.
+fn past(started: Instant, waited: Duration, limit: Duration) -> bool { waited >= limit || started.elapsed() >= limit }
 
 /// `hangar-server.exe` ou `hangar-launcher.exe` com `launch backend` (o lançador da tarefa).
 fn is_backend_launcher(name: &str, cmd: &[String]) -> bool {

@@ -12,6 +12,8 @@ const HTTP_DEADLINE: Duration = Duration::from_secs(3);
 const HTTP_MAX: u64 = 64 * 1024;
 /// Espera mínima pelo fim da saída depois que o filho terminou.
 const PIPE_GRACE: Duration = Duration::from_secs(1);
+/// O que se guarda de cada saída; o resto é lido e descartado, para o filho não travar no pipe cheio.
+const OUTPUT_MAX: usize = 1024 * 1024;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Output {
@@ -19,8 +21,8 @@ pub struct Output {
     pub code: Option<i32>,
     pub stdout: String,
     pub stderr: String,
-    /// Morto pelo prazo do `run`, ou com a saída ainda aberta nele (vem a parcial): o comando não
-    /// terminou, o que não quer dizer que falhou.
+    /// Morto pelo prazo do `run`, com a saída ainda aberta nele ou cortada em `OUTPUT_MAX` (vem a
+    /// parcial): a saída não está inteira, o que não quer dizer que o comando falhou.
     pub timed_out: bool,
 }
 
@@ -135,15 +137,17 @@ impl Host for RealHost {
     }
 }
 
-/// Leitura de um pipe numa thread, guardando o que já chegou para a saída parcial.
+/// Leitura de um pipe numa thread, guardando até `limit` bytes do que já chegou para a saída parcial.
 pub(crate) struct Drain {
-    bytes: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+    bytes: std::sync::Arc<std::sync::Mutex<(Vec<u8>, bool)>>,
     done: std::sync::mpsc::Receiver<()>,
 }
 
 impl Drain {
-    pub(crate) fn start(pipe: Option<Box<dyn Read + Send>>) -> Self {
-        let bytes = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    pub(crate) fn start(pipe: Option<Box<dyn Read + Send>>) -> Self { Self::capped(pipe, OUTPUT_MAX) }
+
+    fn capped(pipe: Option<Box<dyn Read + Send>>, limit: usize) -> Self {
+        let bytes = std::sync::Arc::new(std::sync::Mutex::new((Vec::new(), false)));
         let (tx, done) = std::sync::mpsc::channel();
         let shared = bytes.clone();
         std::thread::spawn(move || {
@@ -151,7 +155,11 @@ impl Drain {
                 let mut chunk = [0u8; 8192];
                 while let Ok(n) = pipe.read(&mut chunk) {
                     if n == 0 { break; }
-                    if let Ok(mut bytes) = shared.lock() { bytes.extend_from_slice(&chunk[..n]); }
+                    if let Ok(mut kept) = shared.lock() {
+                        let room = limit.saturating_sub(kept.0.len());
+                        kept.0.extend_from_slice(&chunk[..n.min(room)]);
+                        kept.1 |= n > room;
+                    }
                 }
             }
             let _ = tx.send(());
@@ -159,11 +167,12 @@ impl Drain {
         Self { bytes, done }
     }
 
-    /// O texto lido até `until`; `true` quando o pipe ainda não tinha fechado.
+    /// O texto lido até `until`; `true` quando ele não está inteiro (o pipe ainda aberto ou a
+    /// saída cortada no teto).
     pub(crate) fn finish(self, until: Instant) -> (String, bool) {
-        let cut = self.done.recv_timeout(until.saturating_duration_since(Instant::now())).is_err();
-        let text = self.bytes.lock().map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
-        (text, cut)
+        let open = self.done.recv_timeout(until.saturating_duration_since(Instant::now())).is_err();
+        let (text, truncated) = self.bytes.lock().map(|b| (String::from_utf8_lossy(&b.0).into_owned(), b.1)).unwrap_or_default();
+        (text, open || truncated)
     }
 }
 
@@ -224,6 +233,16 @@ mod tests {
         let (text, cut) = drain.finish(Instant::now() + Duration::from_millis(300));
         assert!(begin.elapsed() < Duration::from_secs(5));
         assert_eq!((text.as_str(), cut), ("oi\n", true));
+    }
+
+    /// Saída maior que o teto: guarda só o começo e diz que não está inteira.
+    #[test]
+    fn output_over_the_limit_is_kept_up_to_it_and_marked_incomplete() {
+        let drain = Drain::capped(Some(Box::new(std::io::Cursor::new(vec![b'x'; 20_000]))), 10_000);
+        let (text, cut) = drain.finish(Instant::now() + Duration::from_secs(5));
+        assert_eq!((text.len(), cut), (10_000, true));
+        let drain = Drain::capped(Some(Box::new(std::io::Cursor::new(b"oi".to_vec()))), 10_000);
+        assert_eq!(drain.finish(Instant::now() + Duration::from_secs(5)), ("oi".to_owned(), false));
     }
 
     /// Quem manda um byte de cada vez não segura a consulta além do prazo total.

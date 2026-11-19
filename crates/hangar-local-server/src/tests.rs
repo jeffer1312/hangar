@@ -22,6 +22,8 @@ struct Fake {
     /// Respostas HTTP que só aparecem depois de um `systemctl --user start` (o servidor subiu).
     http_after_start: Vec<(&'static str, Reply)>,
     processes: RefCell<Vec<ProcessInfo>>,
+    /// Roda a cada pedido HTTP: outra operação mexendo na máquina enquanto a ação espera.
+    on_get: Option<Box<dyn Fn()>>,
     /// Pids que só saem com `SIGKILL`.
     stubborn: Vec<u32>,
     /// Pids que saem com o pedido e logo nascem de novo noutro processo (o pid reusado).
@@ -34,6 +36,10 @@ struct Fake {
 impl Fake {
     fn reply(mut self, prefix: &'static str, code: i32, stdout: &str) -> Fake {
         self.replies.push((prefix, Output { code: Some(code), stdout: stdout.to_owned(), ..Output::default() }));
+        self
+    }
+    fn output(mut self, prefix: &'static str, out: Output) -> Fake {
+        self.replies.push((prefix, out));
         self
     }
     fn timeout(mut self, prefix: &'static str) -> Fake {
@@ -70,6 +76,7 @@ impl Host for Fake {
             .unwrap_or(Output { code: Some(0), ..Output::default() }))
     }
     fn get(&self, _port: u16, path: &str) -> Option<Reply> {
+        if let Some(hook) = &self.on_get { hook(); }
         let started = self.ran("systemctl --user start");
         self.http.iter().chain(self.http_after_start.iter().filter(|_| started)).find(|(p, _)| *p == path).map(|(_, reply)| reply.clone())
     }
@@ -214,6 +221,13 @@ fn use_version_refuses_without_the_lock_and_with_the_server_up() {
     assert!(matches!(up.use_version("0.1.0.1"), Err(ActionError::ServerRunning)));
     let active = server(home, Fake::default().reply("systemctl --user show", 0, ACTIVE_UNIT));
     assert!(matches!(active.use_version("0.1.0.1"), Err(ActionError::ServerRunning)));
+    // A parada ainda corre com a porta já fechada: a troca espera ela acabar.
+    let stopping = server(home, Fake::default().reply("systemctl --user show", 0, "LoadState=loaded\nActiveState=deactivating\nSubState=stop-sigterm\n"));
+    assert!(matches!(stopping.use_version("0.1.0.1"), Err(ActionError::ServerRunning)));
+    // A leitura da unit cortada no meio não é "parado".
+    let partial = server(home, Fake::default().output("systemctl --user show",
+        Output { code: Some(0), stdout: "LoadState=loaded\nActiveState=inactive\n".into(), timed_out: true, ..Output::default() }));
+    assert!(matches!(partial.use_version("0.1.0.1"), Err(ActionError::ServiceUnreadable(_))));
     // Sem serviço, ou sem conseguir lê-lo, ninguém subiria a versão trocada.
     let missing = server(home, Fake::default().reply("systemctl --user show", 0, "LoadState=not-found\nActiveState=inactive\n"));
     assert!(matches!(missing.use_version("0.1.0.1"), Err(ActionError::NotInstalled)));
@@ -290,6 +304,22 @@ fn use_version_confirms_who_answers_and_a_slow_start_is_still_starting() {
     assert_eq!((last["acao"].as_str(), last["nivel"].as_str(), last["resultado"].as_str()), (Some("start"), Some("ok"), Some("ainda_subindo")));
 }
 
+/// Outra operação aponta o `current` para outra versão enquanto a escolhida sobe: a resposta da
+/// versão certa não basta, o `current` é relido junto.
+#[test]
+fn use_version_rereads_the_current_when_the_version_answers() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().to_path_buf();
+    let (_old, new) = (version(&home, "0.1.0.1", true), version(&home, "0.1.0.2", true));
+    point_current(&home, &new);
+    let (moved_home, moved_to) = (home.clone(), new.clone());
+    let local = server(&home, Fake { on_get: Some(Box::new(move || point_current(&moved_home, &moved_to))), ..Fake::default() }
+        .reply("systemctl --user show", 0, STOPPED_UNIT)
+        .http_after_start("/__hangar_server/health", 200, r#"{"ok":true,"protocol":7,"package_version":"0.1.0.1"}"#)
+        .http_after_start("/api/client-api", 401, ""));
+    assert!(matches!(local.use_version("0.1.0.1"), Err(ActionError::CurrentChanged(v)) if v == "0.1.0.2"));
+}
+
 // ---------- estado e motivo ----------
 
 #[test]
@@ -343,6 +373,19 @@ fn busy_port_names_the_holder_before_the_diary() {
     assert_eq!(failure.port_holder, Some(PortHolder { pid: 48211, name: "python3".into(), same_user: true, start_time: 1_700_000_000 }));
 }
 
+/// Só a consulta inteira diz que ninguém escuta: a cortada e o `lsof` que saiu 1 explicando um erro
+/// são consulta que falhou.
+#[test]
+fn listeners_only_trust_a_whole_successful_query() {
+    let out = |code: i32, stderr: &str, timed_out: bool| Output { code: Some(code), stderr: stderr.into(), timed_out, ..Output::default() };
+    let windows = Fake::default().output("powershell", out(0, "", true));
+    assert!(port::listeners(&windows, Os::Windows, 8765).error.is_some());
+    let nobody = Fake::default().output("lsof", out(1, "", false));
+    assert_eq!(port::listeners(&nobody, Os::Macos, 8765), Listeners::default());
+    let failed = Fake::default().output("lsof", out(1, "lsof: status error on /x: Permission denied", false));
+    assert!(port::listeners(&failed, Os::Macos, 8765).error.is_some_and(|e| e.contains("Permission denied")));
+}
+
 // ---------- liberar a porta ----------
 
 #[test]
@@ -385,10 +428,12 @@ fn free_port_takes_the_tree_and_escalates_to_kill() {
     local.free_port(&PortHolder { pid: 48211, name: "python3".into(), same_user: true, start_time: 1_700_000_000 }).unwrap();
     assert_eq!(*local.host.signals.borrow(), vec![(48211, false), (48300, false), (48301, false), (48211, true)]);
 
-    // No Windows a árvore vai inteira pelo `taskkill`, sem sinal por pid.
-    let windows = LocalServer { os: Os::Windows, ..server(dir.path(), Fake::default().reply("powershell", 0, "48211\n").process(48211, "python.exe", ME, 5)) };
+    // No Windows cada processo conferido sai pelo `taskkill`, sem o `/T`: filho de outro usuário fica.
+    let windows = LocalServer { os: Os::Windows, ..server(dir.path(), Fake::default().reply("powershell", 0, "48211\n")
+        .process(48211, "python.exe", ME, 5).child(48300, Some(48211), "node.exe", ME, 6).child(48400, Some(48211), "x.exe", "S-1-5-18", 7)) };
     let _ = windows.free_port(&PortHolder { pid: 48211, name: "python.exe".into(), same_user: true, start_time: 5 });
-    assert!(windows.host.ran("taskkill /PID 48211 /T /F"));
+    assert!(windows.host.ran("taskkill /PID 48211 /F") && windows.host.ran("taskkill /PID 48300 /F"));
+    assert!(!windows.host.ran("taskkill /PID 48400") && !windows.host.ran("taskkill /PID 48211 /T"));
     assert!(windows.host.signals.borrow().is_empty());
 
     // Um hangar-server preso sai sem a árvore: os filhos dele são as sessões.
@@ -413,18 +458,27 @@ fn free_port_never_kills_a_reused_child_pid() {
     assert_eq!(*local.host.signals.borrow(), vec![(48211, false), (48300, false), (48211, true)]);
 }
 
-/// Quem segurava saiu com o pedido, mas o filho que herdou o socket não: a porta segue presa.
+/// Quem segurava saiu com o pedido, mas o filho que herdou o socket não: ele sai à força, e só então
+/// a porta está livre. Quem entra no lugar, fora da árvore, segue segurando.
 #[test]
-fn free_port_is_not_done_while_a_child_still_listens() {
+fn free_port_escalates_on_a_child_that_still_listens() {
     let dir = tempfile::tempdir().unwrap();
     let child_line = "LISTEN 0      1024         0.0.0.0:8765      0.0.0.0:*    users:((\"python3\",pid=48300,fd=7))";
-    let fake = Fake { ss: Some((SS_BUSY, 48211)), ss_inherited: Some((child_line, 48300)), stubborn: vec![48300], ..Fake::default() }
+    let tree = |stubborn: Vec<u32>| Fake { ss: Some((SS_BUSY, 48211)), ss_inherited: Some((child_line, 48300)), stubborn, ..Fake::default() }
         .process(48211, "python3", ME, 1_700_000_000)
         .child(48300, Some(48211), "python3", ME, 1_700_000_010);
-    let local = server(dir.path(), fake);
-    let result = local.free_port(&PortHolder { pid: 48211, name: "python3".into(), same_user: true, start_time: 1_700_000_000 });
+    let holder = PortHolder { pid: 48211, name: "python3".into(), same_user: true, start_time: 1_700_000_000 };
+    let local = server(dir.path(), tree(vec![48300]));
+    local.free_port(&holder).unwrap();
+    assert_eq!(*local.host.signals.borrow(), vec![(48211, false), (48300, false), (48300, true)]);
+
+    // O filho que escuta é de fora da árvore lida no diagnóstico: nunca recebe sinal.
+    let stranger = Fake { ss: Some((SS_BUSY, 48211)), ss_inherited: Some((child_line, 48300)), stubborn: vec![48300], ..Fake::default() }
+        .process(48211, "python3", ME, 1_700_000_000).process(48300, "python3", ME, 1_700_000_010);
+    let local = server(dir.path(), stranger);
+    let result = local.free_port(&holder);
     assert!(matches!(result, Err(ActionError::PortStillHeld)), "{result:?}");
-    assert_eq!(*local.host.signals.borrow(), vec![(48211, false), (48300, false)]);
+    assert_eq!(*local.host.signals.borrow(), vec![(48211, false)]);
     let last = local_diary(dir.path()).pop().unwrap();
     assert_eq!((last["acao"].as_str(), last["codigo"].as_str()), (Some("free_port"), Some("local_server_port_still_held")));
 }
@@ -556,7 +610,7 @@ fn service_port_follows_the_unit_then_the_env_file_then_the_default() {
     // Sem `.env` no lugar novo, mas com `current`: o lugar novo ainda vale, e sem arquivo é a padrão.
     let other = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(hangar(other.path()).join("current")).unwrap();
-    assert_eq!(config::env_path(other.path(), Some(&backend)), Some(hangar(other.path()).join("config").join(".env")));
+    assert_eq!(config::env_path(other.path(), Some(&backend)).unwrap(), Some(hangar(other.path()).join("config").join(".env")));
     assert_eq!(port(&unit("", &work), Os::Linux, other.path()), DEFAULT_PORT);
 }
 

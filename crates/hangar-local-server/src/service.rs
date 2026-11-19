@@ -30,6 +30,9 @@ pub enum ServiceState {
     Starting,
     /// Caiu e espera para religar (`auto-restart` do systemd, espera do lançador no Windows).
     Restarting,
+    /// A parada ainda corre (`deactivating` do systemd): a porta pode já ter fechado sem os passos
+    /// de saída terem acabado.
+    Stopping,
     Stopped,
     Failed,
     /// O gerenciador não respondeu (barramento do usuário fora, PowerShell que não abriu).
@@ -58,8 +61,9 @@ pub fn read(host: &dyn Host, os: Os) -> Service {
         Os::Linux => {
             let out = host.run("systemctl", &["--user", "show", UNIT, "--no-pager", "-p", "LoadState", "-p", "ActiveState", "-p", "SubState",
                 "-p", "MainPID", "-p", "ExecMainStatus", "-p", "ExecMainCode", "-p", "NRestarts", "-p", "ExecMainStartTimestamp"]);
+            // Saída cortada pode trazer `ActiveState=inactive` sem o resto: não é leitura.
             match out {
-                Ok(out) if out.code == Some(0) => parse_systemd(&out.stdout),
+                Ok(out) if out.code == Some(0) && !out.timed_out => parse_systemd(&out.stdout),
                 Ok(out) => Service::unreadable(format!("unit: systemctl saiu com {:?}: {}", out.code, one_line(&format!("{}{}", out.stdout, out.stderr)))),
                 Err(e) => Service::unreadable(format!("unit: systemctl não rodou: {e}")),
             }
@@ -74,7 +78,7 @@ pub fn read(host: &dyn Host, os: Os) -> Service {
                 "if($i){$r=('{0:X8}' -f $i.LastTaskResult); $w=$i.LastRunTime.ToString('s')} else {$r='?'; $w='?'}; ",
                 "'tarefa: estado=' + $t.State + ' ultima_execucao=' + $w + ' ultimo_resultado=0x' + $r + ' acao=' + $t.Actions[0].Execute + ' ' + $t.Actions[0].Arguments");
             match powershell(host, script) {
-                Ok(out) if out.code == Some(0) => parse_task(&out.stdout),
+                Ok(out) if out.code == Some(0) && !out.timed_out => parse_task(&out.stdout),
                 Ok(out) => Service::unreadable(format!("tarefa: PowerShell saiu com {:?}: {}", out.code, one_line(&format!("{}{}", out.stdout, out.stderr)))),
                 Err(e) => Service::unreadable(format!("tarefa: PowerShell não rodou: {e}")),
             }
@@ -82,7 +86,7 @@ pub fn read(host: &dyn Host, os: Os) -> Service {
         Os::Macos => {
             let Some(target) = launchd_target(host) else { return Service::unreadable("launchd: uid ilegível".to_owned()) };
             match host.run("launchctl", &["print", &target]) {
-                Ok(out) if out.code == Some(0) => parse_launchd(&out.stdout),
+                Ok(out) if out.code == Some(0) && !out.timed_out => parse_launchd(&out.stdout),
                 // 113: o launchd não conhece o serviço.
                 Ok(out) if out.code == Some(113) || out.stdout.contains("Could not find service") || out.stderr.contains("Could not find service") =>
                     Service::new(ServiceState::Missing, format!("launchd: {target} não carregado")),
@@ -96,7 +100,7 @@ pub fn read(host: &dyn Host, os: Os) -> Service {
 
 /// `gui/<uid>/br.dev.hangar.backend`.
 pub fn launchd_target(host: &dyn Host) -> Option<String> {
-    let out = host.run("id", &["-u"]).ok().filter(|out| out.code == Some(0))?;
+    let out = host.run("id", &["-u"]).ok().filter(|out| out.code == Some(0) && !out.timed_out)?;
     let uid: u32 = out.stdout.trim().parse().ok()?;
     Some(format!("gui/{uid}/{LAUNCHD_LABEL}"))
 }
@@ -125,7 +129,8 @@ pub fn parse_systemd(text: &str) -> Service {
         (_, "activating", "auto-restart") => ServiceState::Restarting,
         (_, "activating", _) => ServiceState::Starting,
         (_, "failed", _) => ServiceState::Failed,
-        (_, "inactive" | "deactivating", _) => ServiceState::Stopped,
+        (_, "deactivating", _) => ServiceState::Stopping,
+        (_, "inactive", _) => ServiceState::Stopped,
         _ => ServiceState::Unreadable,
     };
     let exit_status = field("ExecMainStatus").parse::<i64>().ok().filter(|code| *code != 0);
@@ -199,6 +204,7 @@ mod tests {
         assert_eq!(unit("inactive", "dead", "0"), Service { state: ServiceState::Stopped, exit_status: None, main_pid: None,
             summary: "unit: LoadState=loaded ActiveState=inactive SubState=dead MainPID=0 ExecMainStatus=0".to_owned() });
         assert_eq!(parse_systemd("LoadState=not-found\nActiveState=inactive\n").state, ServiceState::Missing);
+        assert_eq!(unit("deactivating", "stop-sigterm", "0").state, ServiceState::Stopping);
     }
 
     #[test]

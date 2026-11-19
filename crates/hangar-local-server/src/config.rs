@@ -26,13 +26,12 @@ pub struct Resolved {
 
 /// O `.env` que a subida lê: `~/.hangar/config/.env` quando existe ou a máquina migrou
 /// (`~/.hangar/current`); senão o da pasta `backend/` do serviço. A regra do
-/// `hangar_core::user_data::path`, que este crate não importa.
-pub fn env_path(home: &Path, backend: Option<&Path>) -> Option<PathBuf> {
+/// `hangar_core::user_data::path`, que este crate não importa. Disco que não deixa conferir é erro,
+/// como lá: a subida recusa, e a leitura daqui fica com ressalva.
+pub fn env_path(home: &Path, backend: Option<&Path>) -> std::io::Result<Option<PathBuf>> {
     let new = home.join(".hangar").join("config").join(".env");
-    // Disco que não deixa conferir conta como o lugar novo: é o que a subida também tentaria ler.
-    let exists = |path: &Path| path.try_exists().unwrap_or(true);
-    if exists(&new) || exists(&home.join(".hangar").join("current")) { return Some(new); }
-    backend.map(|dir| dir.join(".env"))
+    if new.try_exists()? || home.join(".hangar").join("current").try_exists()? { return Ok(Some(new)); }
+    Ok(backend.map(|dir| dir.join(".env")))
 }
 
 /// O valor cru do `CP_PORT` de um `.env` no formato que o servidor lê: chave sem caixa, a última
@@ -109,9 +108,10 @@ pub fn resolve(host: &dyn Host, os: Os, home: &Path) -> Resolved {
     let mut issue = None;
     let unit = match os {
         Os::Linux => match host.run("systemctl", &["--user", "show", UNIT, "--no-pager", "-p", "Environment", "-p", "EnvironmentFiles", "-p", "WorkingDirectory"]) {
-            Ok(out) if out.code == Some(0) => parse_unit(&out.stdout),
+            // Saída cortada pode não trazer o `Environment=`: não confirma a porta.
+            Ok(out) if out.code == Some(0) && !out.timed_out => parse_unit(&out.stdout),
             Ok(out) => {
-                issue = Some(Issue { code: "local_server_unit_unreadable", detail: format!("systemctl saiu com {:?}", out.code) });
+                issue = Some(Issue { code: "local_server_unit_unreadable", detail: format!("systemctl saiu com {:?} (cortada: {})", out.code, out.timed_out) });
                 Unit::default()
             }
             Err(e) => {
@@ -134,15 +134,21 @@ pub fn resolve(host: &dyn Host, os: Os, home: &Path) -> Resolved {
     let backend = unit.dir;
     let raw = match inherited {
         Some(raw) => Some(raw),
-        None => match env_path(home, backend.as_deref()).map(|path| (std::fs::read_to_string(&path), path)) {
-            None => None,
-            Some((Ok(text), _)) => env_value(&text),
-            // Sem o arquivo é a máquina na porta padrão, não falha.
-            Some((Err(e), _)) if e.kind() == std::io::ErrorKind::NotFound => None,
-            Some((Err(e), path)) => {
-                issue = Some(Issue { code: "local_server_env_unreadable", detail: format!("{}: {e}", path.display()) });
+        None => match env_path(home, backend.as_deref()) {
+            Err(e) => {
+                issue = Some(Issue { code: "local_server_env_unreadable", detail: format!("{}: {e}", home.join(".hangar").display()) });
                 None
             }
+            Ok(None) => None,
+            Ok(Some(path)) => match std::fs::read_to_string(&path) {
+                Ok(text) => env_value(&text),
+                // Sem o arquivo é a máquina na porta padrão, não falha.
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+                Err(e) => {
+                    issue = Some(Issue { code: "local_server_env_unreadable", detail: format!("{}: {e}", path.display()) });
+                    None
+                }
+            },
         },
     };
     let port = match raw {

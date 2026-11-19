@@ -28,18 +28,22 @@ impl Listeners {
 }
 
 pub fn listeners(host: &dyn Host, os: Os, port: u16) -> Listeners {
+    // Saída cortada não prova que ninguém escuta: só a consulta inteira vale.
     let read = match os {
-        Os::Linux => host.run("ss", &["-ltnpH", &format!("sport = :{port}")]).map(|out| (out.code == Some(0), parse_ss(&out.stdout), out.stderr)),
+        Os::Linux => host.run("ss", &["-ltnpH", &format!("sport = :{port}")])
+            .map(|out| (out.code == Some(0) && !out.timed_out, parse_ss(&out.stdout), out.stderr)),
         // Só o "não achou" do cmdlet é ninguém escutando; outro erro é consulta que falhou.
         Os::Windows => powershell(host, &format!(concat!(
             "$c=@(Get-NetTCPConnection -State Listen -LocalPort {port} -EA SilentlyContinue -EV e); ",
             "$f=@($e | Where-Object {{ $_.FullyQualifiedErrorId -notlike 'CmdletizationQuery_NotFound*' }}); ",
             "if($f.Count){{ [Console]::Error.WriteLine(($f | Out-String)); exit 1 }}; ",
             "$c | ForEach-Object {{ $_.OwningProcess }} | Sort-Object -Unique"), port = port))
-            .map(|out| (out.code == Some(0), (parse_pid_lines(&out.stdout), false), out.stderr)),
-        // `lsof` sai 1 quando ninguém escuta.
+            .map(|out| (out.code == Some(0) && !out.timed_out, (parse_pid_lines(&out.stdout), false), out.stderr)),
+        // `lsof` sai 1 quando ninguém escuta, e também quando a consulta falha: aí ele explica no stderr.
+        // O `-Q` que separa os dois não existe no `lsof` do macOS.
         Os::Macos => host.run("lsof", &["-nP", &format!("-iTCP:{port}"), "-sTCP:LISTEN", "-Fp"])
-            .map(|out| (matches!(out.code, Some(0 | 1)), (parse_lsof(&out.stdout), false), out.stderr)),
+            .map(|out| (!out.timed_out && (out.code == Some(0) || (out.code == Some(1) && out.stderr.trim().is_empty())),
+                (parse_lsof(&out.stdout), false), out.stderr)),
         Os::Other => return Listeners { error: Some("sistema sem consulta de porta".to_owned()), ..Listeners::default() },
     };
     let (pids, hidden) = match read {
