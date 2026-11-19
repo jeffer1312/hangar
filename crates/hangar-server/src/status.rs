@@ -403,7 +403,7 @@ struct Live {
     /// Memória e discos relidos no mesmo leitor a cada rodada.
     host: Arc<Mutex<hangar_status::host::HostReader>>,
     /// Últimos peers lidos: sem a configuração eles ficam no bloco como desconhecidos, nunca como "sem peers".
-    peers_seen: Mutex<Vec<PeerEntry>>,
+    peers_seen: Mutex<Option<Vec<PeerEntry>>>,
     /// Configuração dos peers sem leitura agora: um aviso ao diário por episódio.
     peers_failing: AtomicBool,
 }
@@ -630,7 +630,7 @@ impl Live {
         let (service, peers) = match read {
             Ok((service, book)) => {
                 let peers = peer_entries(&book);
-                *lock(&self.peers_seen) = peers.clone();
+                *lock(&self.peers_seen) = Some(peers.clone());
                 self.peers_failing.store(false, Ordering::Relaxed);
                 (Some(service), peers)
             }
@@ -639,7 +639,9 @@ impl Live {
                     tracing::warn!(code, "tela Status: configuração dos peers sem leitura");
                     self.st.diag.report_episode("rust.status_bloco_falhou", "machines", code, "bloco da tela Status sem leitura", json!({}), true);
                 }
-                (None, lock(&self.peers_seen).clone())
+                // Sem nenhuma leitura boa ainda, "nenhum peer" seria mentira: o bloco sai ausente.
+                let Some(seen) = lock(&self.peers_seen).clone() else { return Err(code) };
+                (None, seen)
             }
         };
         let probes = futures_util::future::join_all(peers.iter().map(|peer| {

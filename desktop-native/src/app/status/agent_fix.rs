@@ -478,7 +478,9 @@ pub(super) fn start(agent: Agent, prompt: String, home: &Path, handle: &Handle) 
     drop(pending);
     // Nasceu depois da marca: talvez já tenha pedido a subida do serviço, e o `Exit` leva à releitura.
     let stop_failed = abandoned && !kill_and_wait(&owner);
-    let secrets = super::super::setup::local_token().into_iter().collect();
+    let token = super::super::setup::local_token();
+    if token.is_none() { crate::log_line("status_agent_token_unread: relatório copiado sem esconder o token sem rótulo"); }
+    let secrets = token.into_iter().collect();
     Ok(Started { output, stop_failed, secrets })
 }
 
