@@ -21,8 +21,14 @@ const MARKER: &str = ".hangar-marketplaces-upgraded";
 /// A conta não teve conferência bem-sucedida na última hora (marca ausente, ilegível ou no futuro).
 pub(crate) fn due(env: &BTreeMap<String, String>) -> bool {
     let Some(home) = env.get("CODEX_HOME") else { return true };
-    std::fs::metadata(Path::new(home).join(MARKER)).and_then(|meta| meta.modified()).ok()
-        .and_then(|at| at.elapsed().ok()).is_none_or(|age| age >= EVERY)
+    let age = std::fs::metadata(Path::new(home).join(MARKER)).and_then(|meta| meta.modified()).ok().and_then(|at| at.elapsed().ok());
+    match age {
+        Some(age) if age < EVERY => {
+            tracing::info!(age_s = age.as_secs(), "conferência dos marketplaces pulada: a conta conferiu há menos de uma hora");
+            false
+        }
+        _ => true,
+    }
 }
 
 /// Só a conferência que terminou bem conta: a que falhou é tentada de novo na próxima abertura.
@@ -83,7 +89,7 @@ async fn run_with(env: &BTreeMap<String, String>, limit: Duration, screen: &dyn 
                 stdout: String::from_utf8_lossy(&output.stdout).into_owned(), stderr: String::from_utf8_lossy(&output.stderr).into_owned() },
         },
     };
-    if matches!(outcome, Outcome::Ran { code: Some(0), .. }) { mark_done(env); }
+    if let Outcome::Ran { code: Some(0), stderr, .. } = &outcome && failed_lines(stderr).is_empty() { mark_done(env); }
     for line in lines(&outcome) {
         screen.say(&line);
     }

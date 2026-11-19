@@ -338,7 +338,9 @@ async fn upgrade_marketplaces(program:&[String],env:&std::collections::BTreeMap<
     #[cfg(windows)]
     command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     match tokio::time::timeout(MARKETPLACES_TIMEOUT,command.output()).await {
-        Ok(Ok(out)) if out.status.success() => crate::codex_tui::marketplaces_done(env),
+        // Código 0 com marketplace que falhou não conta como conferida: a próxima subida tenta de novo.
+        Ok(Ok(out)) if out.status.success() && crate::codex_tui::marketplaces_failed_lines(&String::from_utf8_lossy(&out.stderr)).is_empty() =>
+            crate::codex_tui::marketplaces_done(env),
         Ok(Ok(out)) => {
             let failed = crate::codex_tui::marketplaces_failed_lines(&String::from_utf8_lossy(&out.stderr));
             tracing::warn!(code=?out.status.code(),detail=%failed.first().map_or("",String::as_str),"codex: conferência dos marketplaces falhou");
