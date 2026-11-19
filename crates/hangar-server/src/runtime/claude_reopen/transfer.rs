@@ -388,9 +388,11 @@ async fn check_target(
         .and_then(Result::ok)
         .filter(|o| o.status.success())
         .ok_or_else(|| error("session_transfer_native_unavailable"))?;
+    // Só uma versão de verdade vai ao catálogo: um aviso impresso depois dela não pode virar `client_version`.
     let version = String::from_utf8_lossy(&output.stdout)
         .split_whitespace()
-        .last()
+        .rev()
+        .find(|word| crate::codex_tui::update::version(word).is_some())
         .map(str::to_owned)
         .ok_or_else(|| error("session_transfer_native_unavailable"))?;
     Ok((account, version))
