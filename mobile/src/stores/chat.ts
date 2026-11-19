@@ -911,15 +911,15 @@ function criarChatStore(serverId: string, name: string): ChatApi {
         useChatStore.setState({ sseRecusado: true });
         return;
       }
-      scheduleReconnect(target.baseUrl);
+      scheduleReconnect(base);
     }
     es.onerror = onStreamError;
   }
 
-  function scheduleReconnect(base: string): void {
+  function scheduleReconnect(base: string | undefined): void {
     clearTimeout(retryTimer);
     retryTimer = setTimeout(connectSSE, retryDelay);
-    registrarDiag({ evento: 'sse.retentativa', tela: 'chat', espera_ms: retryDelay }, base);
+    if (base !== undefined) registrarDiag({ evento: 'sse.retentativa', tela: 'chat', espera_ms: retryDelay }, base);
     retryDelay = Math.min(retryDelay * 2, SSE_RETRY_MAX_MS);
   }
 
@@ -1116,6 +1116,7 @@ function criarChatStore(serverId: string, name: string): ChatApi {
       if (!active) {
         // Só GET é descartável: POST em voo segue, e transcript, pergunta, pending e cursor ficam.
         histGen++;
+        sseAttempt++;
         histAbort?.abort();
         histAbort = null;
         clearTimeout(retryTimer);
