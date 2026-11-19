@@ -250,6 +250,9 @@ pub struct Status {
     down_since: Mutex<HashMap<String, DateTime<Utc>>>,
     /// O que o diário deixou de fora na última conta, para avisar só quando muda.
     diary_skipped: Mutex<hangar_status::diary::Skipped>,
+    /// Leitura do diário e da máquina ainda no pool bloqueante. Mora aqui, não no produtor: reabrir a tela cria
+    /// outro produtor, e a tarefa presa da abertura anterior não pode ganhar uma irmã.
+    diary_busy: Arc<AtomicBool>,
     make: Maker,
 }
 
@@ -262,7 +265,7 @@ impl Status {
         Self {
             hub: Arc::default(), sampler: Arc::new(Mutex::new(ProcessSampler::new())),
             dirs: hangar_status::dirs::DirSizes::new(), diary: hangar_status::diary::DiaryReader::machine(),
-            down_since: Mutex::default(), diary_skipped: Mutex::default(), make,
+            down_since: Mutex::default(), diary_skipped: Mutex::default(), diary_busy: Arc::default(), make,
         }
     }
 
@@ -399,8 +402,6 @@ struct Live {
     tmux_hangar: Mutex<HashSet<(String, String)>>,
     /// Memória e discos relidos no mesmo leitor a cada rodada.
     host: Arc<Mutex<hangar_status::host::HostReader>>,
-    /// Leitura do diário e da máquina ainda no pool bloqueante.
-    diary_busy: Arc<AtomicBool>,
     /// Últimos peers lidos: sem a configuração eles ficam no bloco como desconhecidos, nunca como "sem peers".
     peers_seen: Mutex<Vec<PeerEntry>>,
     /// Configuração dos peers sem leitura agora: um aviso ao diário por episódio.
@@ -411,7 +412,7 @@ impl Live {
     fn new(st: Arc<AppState>) -> Self {
         let list = st.hub.subscribe_internal(&st.list, &st.devices, &st.diag);
         Self { st, list, procs: Arc::default(), funnel: Mutex::new(None), tmux_seen: Mutex::new(None), tmux_hangar: Mutex::default(),
-            host: Arc::default(), diary_busy: Arc::default(), peers_seen: Mutex::default(), peers_failing: AtomicBool::new(false) }
+            host: Arc::default(), peers_seen: Mutex::default(), peers_failing: AtomicBool::new(false) }
     }
 
     fn server(&self) -> Block<ServerBlock> {
@@ -426,7 +427,7 @@ impl Live {
     /// rodada anterior ainda está presa, e os três blocos ficam como estavam.
     async fn diary_and_host(&self, now: DateTime<Utc>) -> Option<(Block<ExitsBlock>, Block<SlowBlock>, Block<HostBlock>)> {
         let (st, host_reader) = (self.st.clone(), self.host.clone());
-        let read = bounded_blocking(&self.diary_busy, DIARY_TIMEOUT, move || {
+        let read = bounded_blocking(&self.st.status.diary_busy, DIARY_TIMEOUT, move || {
             let status = &st.status;
             let diary = diary_readable(hangar_core::diag::diary_dir().as_deref(), hangar_core::paths::log_base().as_deref());
             let (exits, slow) = match diary {
@@ -621,23 +622,24 @@ impl Live {
 
     /// Esta máquina, os peers do `peers.json` e os apps nativos que reportam aqui.
     async fn machines(&self, ours: Option<&str>, now: DateTime<Utc>) -> Block<Vec<Machine>> {
-        // Sem a configuração dos peers, esta máquina e os apps que reportam aqui continuam no bloco, e os peers da última
-        // leitura ficam como desconhecidos.
-        let service = crate::machine_peers::Service::from_state(&self.st).ok();
-        let peers = match &service {
-            Some(service) => {
-                let peers = peer_entries(&service.store.tolerant());
+        // Sem a configuração dos peers (ou com o `peers.json` ilegível, que se edita à mão), esta máquina e os apps que
+        // reportam aqui continuam no bloco, e os peers da última leitura ficam como desconhecidos, sem sonda. Arquivo
+        // ausente é lista vazia, não falha.
+        let read = crate::machine_peers::Service::from_state(&self.st).map_err(|_| "status_peers_unavailable")
+            .and_then(|service| service.store.read().map(|book| (service, book)).map_err(|_| "status_peers_unreadable"));
+        let (service, peers) = match read {
+            Ok((service, book)) => {
+                let peers = peer_entries(&book);
                 *lock(&self.peers_seen) = peers.clone();
                 self.peers_failing.store(false, Ordering::Relaxed);
-                peers
+                (Some(service), peers)
             }
-            None => {
+            Err(code) => {
                 if !self.peers_failing.swap(true, Ordering::Relaxed) {
-                    tracing::warn!(code = "status_peers_unavailable", "tela Status: configuração dos peers sem leitura");
-                    self.st.diag.report_episode("rust.status_bloco_falhou", "machines", "status_peers_unavailable",
-                        "bloco da tela Status sem leitura", json!({}), true);
+                    tracing::warn!(code, "tela Status: configuração dos peers sem leitura");
+                    self.st.diag.report_episode("rust.status_bloco_falhou", "machines", code, "bloco da tela Status sem leitura", json!({}), true);
                 }
-                lock(&self.peers_seen).clone()
+                (None, lock(&self.peers_seen).clone())
             }
         };
         let probes = futures_util::future::join_all(peers.iter().map(|peer| {

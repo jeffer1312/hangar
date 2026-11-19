@@ -26,6 +26,8 @@ struct Fake {
     on_get: Option<Box<dyn Fn()>>,
     /// Pids que só saem com `SIGKILL`.
     stubborn: Vec<u32>,
+    /// O `ss` falha depois do primeiro sinal: a consulta que não prova nada no meio da liberação.
+    ss_fails_after_signal: bool,
     /// Pids que saem com o pedido e logo nascem de novo noutro processo (o pid reusado).
     reborn: Vec<u32>,
     now: u64,
@@ -67,6 +69,9 @@ impl Host for Fake {
         let line = std::iter::once(program).chain(args.iter().copied()).collect::<Vec<_>>().join(" ");
         self.ran.borrow_mut().push(line.clone());
         if program == "ss" {
+            if self.ss_fails_after_signal && !self.signals.borrow().is_empty() {
+                return Ok(Output { code: Some(255), stderr: "ss: falhou".to_owned(), ..Output::default() });
+            }
             let alive = |pid: u32| self.processes.borrow().iter().any(|p| p.pid == pid);
             let stdout = [self.ss, self.ss_inherited].into_iter().flatten().filter(|(_, pid)| alive(*pid))
                 .map(|(text, _)| text.trim_end()).collect::<Vec<_>>().join("\n");
@@ -471,6 +476,11 @@ fn free_port_escalates_on_a_child_that_still_listens() {
     let local = server(dir.path(), tree(vec![48300]));
     local.free_port(&holder).unwrap();
     assert_eq!(*local.host.signals.borrow(), vec![(48211, false), (48300, false), (48300, true)]);
+
+    // A consulta que falha depois do sinal não prova a saída: a escalada ainda chega ao filho.
+    let blind = server(dir.path(), Fake { ss_fails_after_signal: true, ..tree(vec![48300]) });
+    assert!(blind.free_port(&holder).is_err(), "sem consulta válida a porta não é dada como livre");
+    assert!(blind.host.signals.borrow().contains(&(48300, true)), "{:?}", blind.host.signals.borrow());
 
     // O filho que escuta é de fora da árvore lida no diagnóstico: nunca recebe sinal.
     let stranger = Fake { ss: Some((SS_BUSY, 48211)), ss_inherited: Some((child_line, 48300)), stubborn: vec![48300], ..Fake::default() }

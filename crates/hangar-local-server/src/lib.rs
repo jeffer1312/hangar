@@ -390,11 +390,13 @@ impl<H: Host> LocalServer<H> {
 
     fn holds(&self, pid: u32) -> bool { self.listeners().holders.iter().any(|h| h.pid == pid) }
 
-    /// Nenhum dos processos de `ours` escuta mais a porta.
+    /// Nenhum dos processos de `ours` escuta mais a porta. Consulta que falhou não prova a saída: a espera segue e,
+    /// vencida, quem chamou escala.
     fn released(&self, ours: &dyn Fn(u32) -> bool, wait: Duration) -> bool {
         let (started, mut waited) = (Instant::now(), Duration::ZERO);
         loop {
-            if !self.listeners().holders.iter().any(|h| ours(h.pid)) { return true; }
+            let now = self.listeners();
+            if now.error.is_none() && !now.holders.iter().any(|h| ours(h.pid)) { return true; }
             if past(started, waited, wait) { return false; }
             self.host.pause(STEP);
             waited += STEP;

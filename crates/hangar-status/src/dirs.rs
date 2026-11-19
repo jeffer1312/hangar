@@ -114,9 +114,11 @@ pub fn dir_bytes(root: &Path) -> Option<u64> {
         };
         for entry in entries.filter_map(Result::ok) {
             let Ok(meta) = entry.metadata() else { continue };
+            // Pasta ou arquivo montado de outro volume não é parte do disco da raiz.
+            if device(&meta) != root_device { continue; }
             let kind = meta.file_type();
             if kind.is_dir() {
-                if device(&meta) == root_device { stack.push(entry.path()); }
+                stack.push(entry.path());
             } else if kind.is_file() && first_link(&meta, &mut seen) {
                 total = total.saturating_add(meta.len());
             }
