@@ -26,7 +26,7 @@ impl batch::Actions for Actions {
         let pid=u32::try_from(value.ok_or("PID fora da faixa do sistema")?).map_err(|_|"PID fora da faixa do sistema")?;
         crate::terminal_process::pid_alive(pid).map_err(|error|error.to_string())
     }
-    async fn reload(&mut self,endpoint:&str,cwd:&str,account:&Account)->Result<bool,String>{Ok(super::reload::reload(endpoint,cwd,&self.0.accounts.env.home,&account.home).await)}
+    async fn reload(&mut self,endpoint:&str,token:Option<&str>,cwd:&str,account:&Account)->Result<bool,String>{Ok(super::reload::reload(endpoint,token,cwd,&self.0.accounts.env.home,&account.home).await)}
 }
 impl Service {
     pub async fn repair_all(self:&Arc<Self>)->Result<(),String>{

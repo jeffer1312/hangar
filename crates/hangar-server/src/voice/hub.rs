@@ -241,6 +241,8 @@ impl VoiceHub {
             if !account.is_default { command.args(["-c", r#"cli_auth_credentials_store="file""#]); }
             // Fala nova cancelaria a resposta em andamento: quem falasse sem parar nunca ouviria nada.
             command.args(["-c", "features.instant_interrupt=false"]);
+            // As conversas da voz já desligam cada plugin; no processo, evita conferir os marketplaces ao subir.
+            command.args(["-c", "features.plugins=false"]);
             command.arg("app-server").env_clear().envs(accounts.env.codex(&account));
             Ok(command)
         }).await.map_err(|_| "failed")??;

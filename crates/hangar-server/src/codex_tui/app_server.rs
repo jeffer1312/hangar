@@ -141,6 +141,13 @@ impl Diary {
         bytes
     }
 
+    /// Quanto cada etapa da abertura levou: sem isto todas saem no mesmo milissegundo e não se sabe onde ela demora.
+    pub fn stages(&self, stages: &[(&'static str, u64)]) {
+        let each: serde_json::Map<String, Value> = stages.iter().map(|(stage, ms)| ((*stage).to_owned(), json!(ms))).collect();
+        self.write(json!({"evento": "codex.abertura.etapas", "nivel": "info", "sessao": self.session, "provider": "codex",
+            "etapas_ms": each, "total_ms": stages.iter().map(|(_, ms)| ms).sum::<u64>()}));
+    }
+
     /// A primeira mensagem que não chegou ao Codex: só o código, nunca o texto dela.
     pub fn first_prompt_failed(&self, code: &'static str) {
         let mut event = Failure::new(code, "entregar_primeira_mensagem").fields(&self.session);

@@ -5,7 +5,7 @@ impl batch::Actions for Actions {
  async fn repair(&mut self,account:&Account)->Result<(),String>{self.calls.push(json!(["repair",account.id,{"adotar_preparo":true}]));if self.name=="repair-failure"{Err("fixture repair".into())}else{Ok(())}}
  fn sessions(&mut self)->Result<Vec<Value>,String>{self.calls.push(json!(["sessions",{"include_incomplete":true}]));Ok(self.sessions.clone())}
  fn alive(&self,_pid:&Value)->Result<bool,String>{if self.name=="probe-error"{Err("consulta de processo falhou".into())}else{Ok(self.name!="dead")}}
- async fn reload(&mut self,endpoint:&str,cwd:&str,account:&Account)->Result<bool,String>{self.calls.push(json!(["reload",endpoint,cwd,{"recarregar":true,"codex_home":account.home}]));Ok(self.name!="reload-false")}
+ async fn reload(&mut self,endpoint:&str,_token:Option<&str>,cwd:&str,account:&Account)->Result<bool,String>{self.calls.push(json!(["reload",endpoint,cwd,{"recarregar":true,"codex_home":account.home}]));Ok(self.name!="reload-false")}
 }
 #[test]
 fn codex_service_batch_cli_works_without_python_or_a_server() {

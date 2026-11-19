@@ -168,9 +168,23 @@ async fn wait_enter() {
     }).await;
 }
 
+/// Os milissegundos de cada etapa da abertura, na ordem em que acabaram.
+struct Stages { last: std::time::Instant, done: Vec<(&'static str, u64)> }
+
+impl Stages {
+    fn new() -> Self { Self { last: std::time::Instant::now(), done: Vec::new() } }
+
+    fn mark(&mut self, stage: &'static str) {
+        let now = std::time::Instant::now();
+        self.done.push((stage, u64::try_from(now.duration_since(self.last).as_millis()).unwrap_or(u64::MAX)));
+        self.last = now;
+    }
+}
+
 /// A abertura inteira, da leitura dos argumentos até a TUI sair.
 async fn flow(raw: &[String], env: &[(String, String)], life: &mut session::Life) -> Exit {
     let screen = Pane;
+    let mut stages = Stages::new();
     let args = match args::parse(raw, value_of(env, "CP_SESSION_NAME")) {
         Ok(args::Parsed::Help) => {
             print!("{}", args::HELP);
@@ -221,6 +235,7 @@ async fn flow(raw: &[String], env: &[(String, String)], life: &mut session::Life
             return Exit::opening(1);
         }
     }
+    stages.mark("preparo");
     let endpoint = match app_server::free_endpoint() {
         Ok(endpoint) => endpoint,
         Err(error) => {
@@ -228,12 +243,24 @@ async fn flow(raw: &[String], env: &[(String, String)], life: &mut session::Life
             return Exit::opening(1);
         }
     };
+    // Sem o token a porta de loopback aceitaria qualquer processo da máquina: sem ele, não abre.
+    let (token_file, token) = match codex_sidecar::create_ws_token(&sidecars, &plan.name) {
+        Ok(created) => created,
+        Err(error) => {
+            screen.say(&format!("não deu para criar o token do app-server ({:?})", error.kind()));
+            return Exit::opening(1);
+        }
+    };
+    stages.mark("porta");
     update::Update::new(&home, &child_env).run(&screen).await;
+    stages.mark("atualizacao");
     marketplaces::run(&child_env, &screen).await;
+    stages.mark("plugins");
     let diary = app_server::Diary::new(&plan.name, hangar_core::paths::log_base());
     let Some(codex) = crate::runtime::process::resolve_program("codex", &child_env) else {
         diary.failure(&app_server::Failure::new("criar_processo", "abrir_app_server").kind("FileNotFoundError"), &mut app_server::Tail::none());
         eprintln!("{PREFIX}nao achei o executavel `codex` no PATH deste processo. Instale o Codex CLI (npm install -g @openai/codex) e reabra a sessao.");
+        codex_sidecar::remove_ws_token(&sidecars, token_file.to_str());
         return Exit::opening(1);
     };
     let first = plan::prompt_through_app_server(&codex, &plan);
@@ -242,7 +269,7 @@ async fn flow(raw: &[String], env: &[(String, String)], life: &mut session::Life
     }
     // A chave do spec que o Rust pôs no pane (na importada, a da conversa): o registro é por ela.
     let key = plan.imported_key.as_deref().or(value_of(env, "CP_SESSION_KEY")).filter(|key| !key.is_empty());
-    let shared = Arc::new(session::Session::new(sidecars, &plan, endpoint.clone(), key));
+    let shared = Arc::new(session::Session::new(sidecars, &plan, endpoint.clone(), key).with_ws_token(token_file, token));
     life.start(shared.clone(), codex.clone(), child_env.clone(), diary);
     if let Err(error) = life.spawn_server(&plan).await {
         screen.say(&format!("não deu para subir o app-server do Codex ({:?})", error.kind()));
@@ -263,14 +290,20 @@ async fn flow(raw: &[String], env: &[(String, String)], life: &mut session::Life
     if !life.wait_port(app_server::PORT_WAIT, &screen).await {
         return Exit::opening(1);
     }
-    for line in hooks::lines(&hooks::trust(&endpoint, &plan.cwd, &home, &plan.codex_home).await) {
+    stages.mark("app_server");
+    for line in hooks::lines(&hooks::trust(&endpoint, shared.ws_token.as_deref(), &plan.cwd, &home, &plan.codex_home).await) {
         screen.say(&line);
     }
+    stages.mark("hooks");
     // A conversa nova anuncia o `thread/started` logo que a TUI conecta: a escuta tem de estar ligada
     // antes. Estourar o teto só perde o vínculo, como antes.
     let _ = tokio::time::timeout(LISTEN_READY, listening).await;
-    let argv = plan::tui_argv(&codex.to_string_lossy(), &plan, &endpoint, shared.selected_tier().as_deref());
-    let mut tui = match tokio::process::Command::new(&argv[0]).args(&argv[1..]).env_clear().envs(&child_env).spawn() {
+    stages.mark("escuta");
+    let argv = plan::tui_argv(&codex.to_string_lossy(), &plan, &endpoint, shared.selected_tier().as_deref(), shared.ws_token.is_some());
+    let mut command = tokio::process::Command::new(&argv[0]);
+    command.args(&argv[1..]).env_clear().envs(&child_env);
+    if let Some(token) = &shared.ws_token { command.env(plan::WS_TOKEN_ENV, token); }
+    let mut tui = match command.spawn() {
         Ok(tui) => tui,
         Err(error) => {
             screen.say(&format!("não deu para abrir a TUI do Codex ({:?})", error.kind()));
@@ -280,6 +313,8 @@ async fn flow(raw: &[String], env: &[(String, String)], life: &mut session::Life
     if let Some(pid) = tui.id() {
         shared.tui_started(pid, &screen);
     }
+    stages.mark("tui");
+    app_server::Diary::new(&plan.name, hangar_core::paths::log_base()).stages(&stages.done);
     let code = life.watch(&mut tui, &plan, &screen).await;
     // A TUI redesenha a tela inteira por cima do aviso: ele volta depois que ela sai.
     if let Some(line) = life.first_prompt_failure() {

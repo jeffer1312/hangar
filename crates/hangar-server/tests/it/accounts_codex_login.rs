@@ -363,3 +363,38 @@ process.stdout.write(JSON.stringify({id:m.id,result})+'\n');});"#;
     assert_eq!((error.status, error.code), (502, "codex_account_sign_out_unconfirmed"));
     service.codex_readers.close().await;
 }
+
+/// Ler o login sobe um app-server efêmero: sem plugins ele não confere os marketplaces pela rede.
+#[cfg(unix)]
+#[tokio::test]
+async fn login_read_starts_the_app_server_without_plugins() {
+    use hangar_server::accounts::{AccountService, Provider, environment::AccountEnvironment};
+    let root = tempfile::tempdir().unwrap();
+    let fixture = root.path().join("cli");
+    std::fs::create_dir_all(&fixture).unwrap();
+    let source = r#"const fs=require('fs'),p=require('path');
+fs.appendFileSync(p.join(process.env.CODEX_HOME,'argv.jsonl'),JSON.stringify(process.argv.slice(2))+'\n');
+require('readline').createInterface({input:process.stdin}).on('line', text=>{const m=JSON.parse(text);if(!m.id)return;
+const result=m.method==='account/read'?{account:{type:'chatgpt',email:'pessoa@exemplo.com',planType:'plus'}}:{};
+process.stdout.write(JSON.stringify({id:m.id,result})+'\n');});"#;
+    crate::write_executable(&fixture.join("codex"), format!("#!/usr/bin/env node\n{source}"));
+    let mut environment: std::collections::BTreeMap<String, String> = std::env::vars().collect();
+    let path = environment.iter().find(|(k, _)| k.eq_ignore_ascii_case("PATH")).unwrap().1.clone();
+    let dirs = std::iter::once(fixture.clone()).chain(std::env::split_paths(&path));
+    environment.insert("PATH".into(), std::env::join_paths(dirs).unwrap().to_string_lossy().into());
+    for name in ["HOME", "USERPROFILE"] {
+        environment.insert(name.into(), root.path().to_string_lossy().into());
+    }
+    environment.remove("CODEX_HOME");
+    let service = AccountService::new(AccountEnvironment::from_map(environment));
+    let account = service.create(Provider::Codex, "work", |_| Ok(())).unwrap();
+    assert_eq!(service.read_codex_auth(&account).await["status"], "connected");
+    service.codex_readers.close().await;
+    let starts = std::fs::read_to_string(account.home.join("argv.jsonl")).unwrap();
+    let argv: Vec<String> = serde_json::from_str(starts.lines().next().unwrap()).unwrap();
+    assert!(argv.contains(&"app-server".to_owned()), "{argv:?}");
+    assert!(
+        argv.windows(2).any(|w| w == ["-c", "features.plugins=false"]),
+        "leitura de login subiu o app-server com plugins: {argv:?}"
+    );
+}

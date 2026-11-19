@@ -302,6 +302,12 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   cartão fecha sem autoria e o app recebe 409 `erro_sem_confirmacao_resposta`. Pedido sem
   resposta do app fica para a TUI; nunca recusar automaticamente como no sem terminal. Ver
   [Codex com terminal no Rust](#codex-com-terminal-no-rust-adoção-e-dono-único).
+- **O WebSocket do app-server do Codex com terminal exige o token da vida.** O lançador sobe com
+  `--ws-auth capability-token --ws-token-file <arquivo 0600 em codex-sessions/ws-tokens/>`, a TUI
+  lê o token de `HANGAR_CODEX_WS_TOKEN` (`--remote-auth-token-env`) e todo cliente do Hangar manda
+  `Authorization: Bearer`. O sidecar guarda só o caminho (`ws_token_file`), nunca o token; sem o
+  campo (lançador antigo ainda vivo) conecta sem ele. Sem conseguir criar o token, a sessão não
+  abre. Ver [token no app-server do Codex com terminal](#token-no-app-server-do-codex-com-terminal-19112026).
 - **Codex com terminal abrindo a conversa (pane Codex sem sidecar, ou sidecar `launching`) é do
   Rust.** Texto (`/input`, pontes do Python, broadcast) entra na fila da chave da vida
   (`CP_SESSION_KEY` do pane ou `key` do sidecar) como `pre_transcript` e responde
@@ -1132,6 +1138,21 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   também recebe `success`. Só o `task_updated` (`killed`) ou o `task_notification` (`stopped`) daquele id
   prova a parada. Matar pelo pid não é caminho: a árvore de processos muda de um sistema para outro e o
   modelo não fica sabendo. Ver [parar tarefa do Claude](#parar-tarefa-do-claude-13112026).
+
+## Token no app-server do Codex com terminal (19/11/2026)
+
+O app-server das sessões com terminal subia com `--listen ws://127.0.0.1:<porta>` e nada mais.
+Medido com o Codex 0.170.0 em `CODEX_HOME` descartável: um processo qualquer da máquina conectou
+sem credencial, recebeu o `initialize` e listou as conversas (`thread/list`). Conexão com
+cabeçalho `Origin` (o que um navegador manda) levou 403, então página web não alcança; o risco é
+qualquer processo local, de qualquer usuário do sistema, dirigir uma sessão, inclusive em acesso
+total.
+
+Com `--ws-auth capability-token --ws-token-file <arquivo>`: sem token e com token errado, 401;
+com `Authorization: Bearer <token>`, 101. A TUI `codex --remote … --remote-auth-token-env VAR`
+conectou com o token e, sem ele, saiu com "failed to connect to remote app server …: HTTP error:
+401 Unauthorized". As duas flags existem na 0.159.3 e na 0.170.0. O token vai pelo ambiente da
+TUI, não pelo argv, que aparece na lista de processos. Não comprovado: Windows.
 
 ## Mensagem na conversa sem cortar o turno (16/11/2026)
 
