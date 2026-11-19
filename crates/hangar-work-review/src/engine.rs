@@ -28,10 +28,12 @@ const BRANCH_MISS_TTL: Duration = Duration::from_secs(5 * 60);
 pub struct SessionRef {
     pub name: String,
     pub lifecycle_id: Option<String>,
-    /// `None`: a chave da vida não foi lida. O vínculo gravado não confere sem ela; só a branch acha o ticket.
+    /// `None`: a sessão não tem chave da vida; o vínculo vale como na tool `mission`.
     pub key: Option<String>,
     pub group_id: Option<String>,
     pub branch: Option<String>,
+    /// A chave existe mas não foi lida: o vínculo gravado não confere sem ela; só a branch acha o ticket.
+    pub key_unreadable: bool,
 }
 
 pub trait Sessions: Send + Sync + 'static {
@@ -398,13 +400,13 @@ impl Engine {
 
     /// O vínculo do Tickets vence; sem ele, o ticket cujo `key` é a branch, em cada conector com a revisão.
     async fn locate(&self, session: &SessionRef, background: bool, catalog: &Catalog) -> Result<Option<Target>, Failure> {
-        // Sem a chave, `link::resolve` aceitaria o vínculo sem chave gravada, que com ela não confere.
-        if let Some(key) = session.key.as_deref() {
+        // Com a chave ilegível, `link::resolve` aceitaria o vínculo sem chave gravada, que com ela não confere.
+        if !session.key_unreadable {
             let store = self.mission.clone();
             let snapshot = tokio::task::spawn_blocking(move || store.snapshot()).await
                 .map_err(|_| CallError::connector(ErrorCode::Unavailable, "leitura dos tickets interrompida"))?
                 .map_err(Failure::Mission)?;
-            let linked = hangar_mission::link::resolve(&snapshot, &session.name, Some(key), session.group_id.as_deref())
+            let linked = hangar_mission::link::resolve(&snapshot, &session.name, session.key.as_deref(), session.group_id.as_deref())
                 .map_err(Failure::Mission)?;
             if let Some(item) = linked {
                 return Ok(Some(Target { via: Via::Ticket, connector: item.connector, ticket_id: item.ticket_id, key: item.key }));

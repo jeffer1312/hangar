@@ -98,7 +98,7 @@ impl Bench {
     }
 
     pub fn session(&self, name: &str, life: &str, branch: Option<&str>) -> SessionRef {
-        let session = SessionRef { name: name.into(), lifecycle_id: Some(life.into()), key: Some(life.into()), group_id: None, branch: branch.map(str::to_owned) };
+        let session = SessionRef { name: name.into(), lifecycle_id: Some(life.into()), key: Some(life.into()), group_id: None, branch: branch.map(str::to_owned), key_unreadable: false };
         self.sessions.0.lock().unwrap().insert(name.into(), session.clone());
         session
     }

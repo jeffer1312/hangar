@@ -56,14 +56,17 @@ impl Sessions for SessionNotify {
             let (key, group_id) = tokio::join!(identity, group);
             // Sem a chave da vida o vínculo gravado não confere (a tool `mission` também recusa), mas a
             // busca pela branch não precisa dela.
-            let key = key.unwrap_or_else(|_| {
-                if hangar_core::warn_limit::allow(Some(&name), "work_review_session_key_unavailable") {
-                    state.diag.report(EVENT, &name, "work_review_session_key_unavailable", "chave da sessão ilegível; só a branch acha o ticket");
+            let (key, key_unreadable) = match key {
+                Ok(key) => (key, false),
+                Err(_) => {
+                    if hangar_core::warn_limit::allow(Some(&name), "work_review_session_key_unavailable") {
+                        state.diag.report(EVENT, &name, "work_review_session_key_unavailable", "chave da sessão ilegível; só a branch acha o ticket");
+                    }
+                    (None, true)
                 }
-                None
-            });
+            };
             let group_id = group_id.map_err(|_| "groups_unavailable")?;
-            Ok(Some(SessionRef { name, lifecycle_id, key, group_id, branch }))
+            Ok(Some(SessionRef { name, lifecycle_id, key, group_id, branch, key_unreadable }))
         }.await; read.map_err(str::to_owned) })
     }
 }
