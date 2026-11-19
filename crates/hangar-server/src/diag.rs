@@ -365,14 +365,17 @@ pub fn record_boot(hangar_dir: &std::path::Path, claude_base: &std::path::Path, 
             }
             let saida = std::cell::OnceCell::new();
             let errors = || saida.get_or_init(|| log.map(|log| hangar_boot::life::last_errors(log, 3)).unwrap_or_default()).clone();
-            if begin.unclean {
+            // A marca de intenção é da vida que o outro servidor de pé ainda vive: fica para ela.
+            let exit = if begin.held_by.is_none() {
+                crate::update::stop_intent::record_previous(hangar_dir, &crate::update::state::state_dir(claude_base),
+                    begin.previous.as_ref(), begin.pid, errors)
+            } else { Vec::new() };
+            // Saída não limpa que a atualização ou o reinício explicam não é queda: no Windows eles encerram à força.
+            let explained = exit.iter().any(|line| line["evento"] == "hangar_server.saida" && line["tipo"] != "crash");
+            if begin.unclean && !explained {
                 lines.push(json!({"evento": "hangar_server.caiu", "nivel": "aviso", "saidas_nao_limpas": begin.unclean_exits, "saida": errors()}));
             }
-            // A marca de intenção é da vida que o outro servidor de pé ainda vive: fica para ela.
-            if begin.held_by.is_none() {
-                lines.extend(crate::update::stop_intent::record_previous(hangar_dir, &crate::update::state::state_dir(claude_base),
-                    begin.previous.as_ref(), begin.pid, errors));
-            }
+            lines.extend(exit);
         }
         Err(error) => lines.push(json!({"evento": "hangar_server.vida_ilegivel", "nivel": "aviso",
             "codigo": "server_life_unwritable", "tipo": format!("{:?}", error.kind())})),

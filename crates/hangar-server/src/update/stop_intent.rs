@@ -306,8 +306,9 @@ pub fn last_failed_result(journal: &str) -> Option<String> {
 /// As linhas da subida sobre a vida anterior: o C2 e, com a marca ilegível, o aviso dela. Consome a
 /// marca. `pid`: o da vida descrita no `server-life.json`, que confere a marca também sem `previous`.
 /// `errors`: as últimas linhas de erro do log, lidas só na queda.
+/// `update`: o estado do executor, lido só quando a marca não explica a saída.
 pub fn previous_exit(hangar_dir: &Path, previous: Option<&Previous>, pid: Option<u32>, errors: impl FnOnce() -> String, journal: &dyn Journal,
-    now: u64, update: Option<&UpdateRun>) -> Vec<Value> {
+    now: u64, update: impl FnOnce() -> Result<Option<UpdateRun>, &'static str>) -> Vec<Value> {
     let mut lines = Vec::new();
     let intent = match take(hangar_dir) {
         Ok(intent) => intent,
@@ -320,8 +321,16 @@ pub fn previous_exit(hangar_dir: &Path, previous: Option<&Previous>, pid: Option
     let stopped_at = previous.and_then(|previous| previous.stop.as_ref()).and_then(|stop| stop.at).unwrap_or(now);
     // Quem parou a vida anterior pode ser uma versão de antes da marca: o executor dela, no meio do
     // reinício para esta versão, explica a saída que a marca não explica.
-    let intent = intent.filter(|intent| valid_for(intent, life_pid, stopped_at))
-        .or_else(|| Some(update?.intent(life_pid?, stopped_at)));
+    let intent = match intent.filter(|intent| valid_for(intent, life_pid, stopped_at)) {
+        Some(intent) => Some(intent),
+        None => match update() {
+            Err(code) => {
+                lines.push(json!({"evento": "hangar_server.update_state_unreadable", "nivel": "aviso", "codigo": code}));
+                None
+            }
+            Ok(run) => run.filter(|run| explains(hangar_dir, run, previous)).and_then(|run| Some(run.intent(life_pid?))),
+        },
+    };
     let Some(previous) = previous else {
         // A vida anterior parou sem gravar a causa (versão de antes da marca, na primeira atualização
         // para esta): a marca dela ainda explica a saída.
@@ -353,14 +362,10 @@ pub(crate) fn mark_this_process_running(hangar_dir: &Path, now: &str) -> u32 {
 pub fn record_previous(hangar_dir: &Path, update_state: &Path, previous: Option<&Previous>, pid: Option<u32>,
     errors: impl FnOnce() -> String) -> Vec<Value> {
     let now = now_secs();
-    let (update, unreadable) = match crate::update::running_package().map(|package| update_run(update_state, &package.version, now)) {
-        Some(Err(code)) => (None, Some(json!({"evento": "hangar_server.estado_atualizacao_ilegivel", "nivel": "aviso", "codigo": code}))),
-        Some(Ok(run)) => (run, None),
-        None => (None, None),
-    };
-    let mut lines: Vec<Value> = unreadable.into_iter().collect();
-    lines.extend(previous_exit(hangar_dir, previous, pid, errors, &SystemdJournal, now, update.as_ref()));
-    lines
+    previous_exit(hangar_dir, previous, pid, errors, &SystemdJournal, now, || match crate::update::running_package() {
+        Some(package) => update_run(update_state, &package.version, now),
+        None => Ok(None),
+    })
 }
 
 /// Uma atualização no passo de reiniciar, indo para a versão que acaba de subir.
@@ -368,12 +373,30 @@ pub fn record_previous(hangar_dir: &Path, update_state: &Path, previous: Option<
 pub struct UpdateRun {
     pub from: Option<String>,
     pub to: String,
+    /// Quando o passo de reiniciar começou: a hora da saída que ele explica.
+    pub at: u64,
 }
 
 impl UpdateRun {
-    fn intent(&self, pid: u32, ts: u64) -> Intent {
-        Intent { kind: ExitKind::Update, cause: "package".into(), from: self.from.clone(), to: Some(self.to.clone()), pid, ts }
+    fn intent(&self, pid: u32) -> Intent {
+        Intent { kind: ExitKind::Update, cause: "package".into(), from: self.from.clone(), to: Some(self.to.clone()), pid, ts: self.at }
     }
+}
+
+/// Qual passo de reiniciar já explicou uma saída: cada um vale uma vez.
+const UPDATE_SEEN: &str = "stop-intent-update.seen";
+
+/// O estado explica só a vida que já estava de pé quando o passo começou, e uma vez: a versão nova
+/// caindo em laço logo depois é queda, não a mesma atualização de novo.
+fn explains(hangar_dir: &Path, run: &UpdateRun, previous: Option<&Previous>) -> bool {
+    let started = previous.and_then(|previous| previous.started.as_deref()).and_then(|at| DateTime::parse_from_rfc3339(at).ok());
+    if started.is_some_and(|started| started.timestamp() >= i64::try_from(run.at).unwrap_or(i64::MAX)) { return false; }
+    let seen = hangar_dir.join(UPDATE_SEEN);
+    if std::fs::read_to_string(&seen).is_ok_and(|text| text.trim() == run.at.to_string()) { return false; }
+    if let Err(error) = hangar_core::fs::atomic_write(&seen, run.at.to_string().as_bytes()) {
+        tracing::warn!(code = "stop_intent_update_seen_unwritable", kind = ?error.kind(), "passo de reiniciar usado não gravado; uma queda logo depois pode repetir a atualização");
+    }
+    true
 }
 
 /// O `estado.json` do executor: rodando, no passo `reiniciar` começado há menos de `VALID_FOR` e com
@@ -390,8 +413,8 @@ pub fn update_run(update_state: &Path, version: &str, now: u64) -> Result<Option
     let text = |key: &str| state.get(key).and_then(Value::as_str);
     let started = text("etapa_inicio").and_then(|at| DateTime::parse_from_rfc3339(at).ok()).and_then(|at| u64::try_from(at.timestamp()).ok());
     let restarting = text("fase") == Some("rodando") && text("etapa") == Some("reiniciar") && text("versao_para") == Some(version);
-    Ok((restarting && started.is_some_and(|started| started.abs_diff(now) < VALID_FOR.as_secs()))
-        .then(|| UpdateRun { from: text("versao_de").map(str::to_owned), to: version.to_owned() }))
+    Ok(started.filter(|started| restarting && started.abs_diff(now) < VALID_FOR.as_secs())
+        .map(|at| UpdateRun { from: text("versao_de").map(str::to_owned), to: version.to_owned(), at }))
 }
 
 #[cfg(test)]
@@ -542,7 +565,7 @@ mod tests {
         let stopped = now_secs();
         hangar_boot::life::end_with(hangar, pid, Some("sigterm"), false, stopped).unwrap();
         let begin = hangar_boot::life::begin(hangar, "2026-11-17T10:01:00-03:00", |_, _| false).unwrap();
-        let lines = previous_exit(hangar, begin.previous.as_ref(), begin.pid, || panic!("erro só na queda"), &Fixed(None), stopped + 3600, None);
+        let lines = previous_exit(hangar, begin.previous.as_ref(), begin.pid, || panic!("erro só na queda"), &Fixed(None), stopped + 3600, no_run);
         assert_eq!(lines, [json!({"evento": "hangar_server.saida", "nivel": "aviso", "tipo": "requested", "causa": "restart_only",
             "quando": utc_secs(stopped)})], "o quando é o instante da parada gravada, e a volta uma hora depois não vence a marca");
         assert!(!hangar.join(FILE).exists(), "a subida consome a marca");
@@ -609,7 +632,7 @@ mod tests {
         marked.settle(&Err::<(), _>("a unit nova não subiu"));
         assert!(hangar.join(FILE).exists());
         let begin = hangar_boot::life::begin(hangar, "2026-11-17T10:02:00-03:00", |_, _| false).unwrap();
-        let lines = previous_exit(hangar, begin.previous.as_ref(), begin.pid, String::new, &Fixed(None), now_secs(), None);
+        let lines = previous_exit(hangar, begin.previous.as_ref(), begin.pid, String::new, &Fixed(None), now_secs(), no_run);
         assert_eq!(lines, [json!({"evento": "hangar_server.saida", "nivel": "aviso", "tipo": "update", "causa": "package", "de": "1", "para": "2",
             "quando": utc_secs(stopped)})]);
     }
@@ -623,14 +646,14 @@ mod tests {
         let write_intent = |pid: u32| std::fs::write(hangar.join(FILE), json!({"tipo": "update", "causa": "package",
             "de": "0.1.0.9000", "para": "0.1.0.9010", "pid": pid, "ts": NOW - 10}).to_string()).unwrap();
         write_intent(41);
-        let lines = previous_exit(hangar, None, Some(41), || panic!("erro só na queda"), &Fixed(None), NOW, None);
+        let lines = previous_exit(hangar, None, Some(41), || panic!("erro só na queda"), &Fixed(None), NOW, no_run);
         assert_eq!(lines, [json!({"evento": "hangar_server.saida", "nivel": "aviso", "tipo": "update", "causa": "package",
             "de": "0.1.0.9000", "para": "0.1.0.9010", "quando": utc_secs(NOW - 10)})]);
         assert!(!hangar.join(FILE).exists(), "a subida consome a marca");
         write_intent(40);
-        assert!(previous_exit(hangar, None, Some(41), String::new, &Fixed(None), NOW, None).is_empty());
+        assert!(previous_exit(hangar, None, Some(41), String::new, &Fixed(None), NOW, no_run).is_empty());
         write_intent(41);
-        assert!(previous_exit(hangar, None, Some(41), String::new, &Fixed(None), NOW + VALID_FOR.as_secs(), None).is_empty(), "marca vencida");
+        assert!(previous_exit(hangar, None, Some(41), String::new, &Fixed(None), NOW + VALID_FOR.as_secs(), no_run).is_empty(), "marca vencida");
         assert!(!hangar.join(FILE).exists());
     }
 
@@ -640,25 +663,53 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join(FILE), "{torto").unwrap();
         let previous = life(41, true, None);
-        let lines = previous_exit(dir.path(), Some(&previous), previous.pid, || "10:55:02 panic=true".into(), &Fixed(Some("oom-kill")), NOW, None);
+        let lines = previous_exit(dir.path(), Some(&previous), previous.pid, || "10:55:02 panic=true".into(), &Fixed(Some("oom-kill")), NOW, no_run);
         assert_eq!(lines[0]["codigo"], "stop_intent_unreadable");
         assert_eq!(lines[1], json!({"evento": "hangar_server.saida", "nivel": "aviso", "tipo": "crash", "causa": "out_of_memory",
             "quando": STARTED, "erro": "10:55:02 panic=true"}));
         assert!(!dir.path().join(FILE).exists(), "marca ilegível também sai");
     }
 
-    fn run() -> UpdateRun { UpdateRun { from: Some("0.1.0.9000".into()), to: "0.1.0.9010".into() } }
+    fn no_run() -> Result<Option<UpdateRun>, &'static str> { Ok(None) }
+
+    /// O passo de reiniciar começou 20 s antes da subida.
+    fn run() -> UpdateRun { UpdateRun { from: Some("0.1.0.9000".into()), to: "0.1.0.9010".into(), at: NOW - 20 } }
 
     /// Primeira atualização de uma versão sem a marca: no Windows o executor antigo encerra o servidor à
     /// força (saída não limpa, sem parada gravada). O estado dele, no meio do reinício para esta versão,
-    /// explica a saída como atualização, nunca queda.
+    /// explica a saída como atualização, com a hora do passo, nunca queda. Uma vez só: a versão nova
+    /// caindo logo depois é queda.
     #[test]
-    fn update_run_explains_an_unclean_exit_without_intent() {
+    fn update_run_explains_an_unclean_exit_without_intent_once() {
         let dir = tempfile::tempdir().unwrap();
         let previous = life(41, true, None);
-        let lines = previous_exit(dir.path(), Some(&previous), previous.pid, || panic!("erro só na queda"), &Fixed(None), NOW, Some(&run()));
+        let lines = previous_exit(dir.path(), Some(&previous), previous.pid, || panic!("erro só na queda"), &Fixed(None), NOW, || Ok(Some(run())));
         assert_eq!(lines, [json!({"evento": "hangar_server.saida", "nivel": "aviso", "tipo": "update", "causa": "package",
-            "de": "0.1.0.9000", "para": "0.1.0.9010", "quando": utc_secs(NOW)})]);
+            "de": "0.1.0.9000", "para": "0.1.0.9010", "quando": utc_secs(NOW - 20)})]);
+        let lines = previous_exit(dir.path(), Some(&previous), previous.pid, String::new, &Fixed(None), NOW + 5, || Ok(Some(run())));
+        assert_eq!(lines[0]["tipo"], "crash", "o mesmo passo não explica outra saída");
+    }
+
+    /// A vida que subiu depois do passo começar é a versão nova: ela caindo é queda.
+    #[test]
+    fn update_run_never_explains_a_life_newer_than_the_step() {
+        let dir = tempfile::tempdir().unwrap();
+        let after = Previous { started: utc_secs(NOW - 5), ..life(41, true, None) };
+        let lines = previous_exit(dir.path(), Some(&after), after.pid, String::new, &Fixed(None), NOW, || Ok(Some(run())));
+        assert_eq!(lines[0]["tipo"], "crash");
+    }
+
+    /// Estado ilegível vai ao diário com o código, e só quando a marca não explica a saída.
+    #[test]
+    fn update_state_unreadable_is_written_only_when_needed() {
+        let dir = tempfile::tempdir().unwrap();
+        let previous = life(41, true, None);
+        let lines = previous_exit(dir.path(), Some(&previous), previous.pid, String::new, &Fixed(None), NOW, || Err("update_state_invalid"));
+        assert_eq!(lines[0], json!({"evento": "hangar_server.update_state_unreadable", "nivel": "aviso", "codigo": "update_state_invalid"}));
+        assert_eq!(lines[1]["tipo"], "crash");
+        std::fs::write(dir.path().join(FILE), json!({"tipo": "requested", "causa": "restart_only", "pid": 41, "ts": NOW - 10}).to_string()).unwrap();
+        let lines = previous_exit(dir.path(), Some(&previous), previous.pid, String::new, &Fixed(None), NOW, || panic!("marca válida não lê o estado"));
+        assert_eq!(lines.len(), 1);
     }
 
     /// No Linux a versão antiga para limpa e sem `previous`: o estado do executor também vira a linha. Uma
@@ -668,12 +719,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let hangar = dir.path();
         std::fs::write(hangar.join(FILE), json!({"tipo": "update", "causa": "package", "pid": 40, "ts": NOW - 10}).to_string()).unwrap();
-        let lines = previous_exit(hangar, None, Some(41), || panic!("erro só na queda"), &Fixed(None), NOW, Some(&run()));
+        let lines = previous_exit(hangar, None, Some(41), || panic!("erro só na queda"), &Fixed(None), NOW, || Ok(Some(run())));
         assert_eq!(lines, [json!({"evento": "hangar_server.saida", "nivel": "aviso", "tipo": "update", "causa": "package",
-            "de": "0.1.0.9000", "para": "0.1.0.9010", "quando": utc_secs(NOW)})]);
+            "de": "0.1.0.9000", "para": "0.1.0.9010", "quando": utc_secs(NOW - 20)})]);
         // A marca válida continua vencendo o estado.
         std::fs::write(hangar.join(FILE), json!({"tipo": "requested", "causa": "restart_only", "pid": 41, "ts": NOW - 10}).to_string()).unwrap();
-        let lines = previous_exit(hangar, None, Some(41), String::new, &Fixed(None), NOW, Some(&run()));
+        let lines = previous_exit(hangar, None, Some(41), String::new, &Fixed(None), NOW, || Ok(Some(run())));
         assert_eq!(lines[0]["tipo"], "requested");
     }
 
@@ -686,7 +737,7 @@ mod tests {
         let started = "2027-01-15T05:00:00-03:00";
         let at = DateTime::parse_from_rfc3339(started).unwrap().timestamp() as u64;
         state(json!({"fase": "rodando", "etapa": "reiniciar", "etapa_inicio": started, "versao_de": "0.1.0.9000", "versao_para": "0.1.0.9010"}));
-        assert_eq!(update_run(dir.path(), "0.1.0.9010", at + 20), Ok(Some(run())));
+        assert_eq!(update_run(dir.path(), "0.1.0.9010", at + 20), Ok(Some(UpdateRun { at, ..run() })));
         assert_eq!(update_run(dir.path(), "0.1.0.9011", at + 20), Ok(None), "outra versão subiu");
         // Executor que morreu deixou o estado assim: uma queda bem depois não vira atualização.
         assert_eq!(update_run(dir.path(), "0.1.0.9010", at + VALID_FOR.as_secs()), Ok(None), "etapa velha");

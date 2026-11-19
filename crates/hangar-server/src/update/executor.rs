@@ -359,6 +359,8 @@ pub async fn restart_only<R: Restarter, H: HealthProbe>(parts: &Parts, request_i
     let Some(_lock) = lock(parts, &state) else { return false };
     if !state.publish(json!({"fase": "rodando", "ok": null, "erro": null, "voltou": null, "no_ar": null, "resgate": null,
         "pid": std::process::id(), "reinicio_erro": null, "avisos": [], "log": [], "commit_de": "", "commit_para": null,
+        // As versões são da última atualização: a subida leria este reinício como ela.
+        "versao_de": null, "versao_para": null,
         "reiniciar_manual": false, "shell_mudou": false, "waiting_for_server_build": false, "request_id": request_id})) { return false; }
     for note in &parts.notes { state.warn(note); }
     state.step("reiniciar");
