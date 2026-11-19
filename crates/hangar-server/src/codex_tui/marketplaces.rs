@@ -146,11 +146,15 @@ mod tests {
         let codex = dir.path().join("codex");
         std::fs::write(&codex, format!("#!/bin/sh\necho \"$*|$CODEX_HOME\" > '{}'\n[ -n \"$SLOW\" ] && exec sleep 5\necho '{{\"upgradedRoots\":[\"/m\"]}}'\n", log.display())).unwrap();
         std::fs::set_permissions(&codex, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let mut env = BTreeMap::from([("PATH".to_owned(), format!("{}:/usr/bin:/bin", dir.path().display())), ("CODEX_HOME".to_owned(), "/h/.codex-x".to_owned())]);
+        // Uma conta por cenário: a marca da primeira conferência pularia a segunda.
+        let (first, second) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let home = first.path().to_string_lossy().into_owned();
+        let mut env = BTreeMap::from([("PATH".to_owned(), format!("{}:/usr/bin:/bin", dir.path().display())), ("CODEX_HOME".to_owned(), home.clone())]);
         let lines = Lines(Default::default());
         run_with(&env, TIMEOUT, &lines).await;
         assert_eq!(lines.0.lock().unwrap().as_slice(), ["conferindo os plugins…", "plugins atualizados em 1 marketplace(s)"]);
-        assert_eq!(std::fs::read_to_string(&log).unwrap(), "plugin marketplace upgrade --json|/h/.codex-x\n");
+        assert_eq!(std::fs::read_to_string(&log).unwrap(), format!("plugin marketplace upgrade --json|{home}\n"));
+        env.insert("CODEX_HOME".into(), second.path().to_string_lossy().into_owned());
         env.insert("SLOW".into(), "1".into());
         let lines = Lines(Default::default());
         run_with(&env, Duration::from_millis(300), &lines).await;
