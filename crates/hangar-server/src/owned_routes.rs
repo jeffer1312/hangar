@@ -115,6 +115,10 @@ pub fn rust_route(method: &Method, path: &str) -> bool {
     if matches!(*method, Method::POST | Method::DELETE) && tail == Some("rename-suggestion") {
         return true;
     }
+    // Consertar o hook de um aviso do Claude (`notice_actions`): só o dono, nunca repassada.
+    if *method == Method::POST && matches!(tail, Some("notice/fix" | "notice/fix/preview")) {
+        return true;
+    }
     // Ocultar da lista (`session_visibility`): só o dono, nunca repassada.
     if matches!(*method, Method::PUT | Method::DELETE) && tail == Some("hidden") {
         return true;
