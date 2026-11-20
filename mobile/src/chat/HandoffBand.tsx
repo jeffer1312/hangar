@@ -24,9 +24,13 @@ export const HandoffBand = memo(function HandoffBand({ serverId, name }: { serve
   const title = row && handoff ? handoffTitle(handoff, row.state) : '';
   const spoken = `${title}: ${from} → ${to}`;
   // No iOS a região viva não fala sozinha: a passagem de esperando para falhou é anunciada, sem cortar a fala.
+  // A troca que já existia ao montar não é anunciada; a que aparece depois, sim.
   const announced = useRef<string | undefined>(undefined);
+  const mounted = useRef(false);
   useEffect(() => {
-    if (handoff?.state && handoff.state !== announced.current && announced.current !== undefined && Platform.OS === 'ios') {
+    const first = !mounted.current;
+    mounted.current = true;
+    if (!first && handoff?.state && handoff.state !== announced.current && Platform.OS === 'ios') {
       AccessibilityInfo.announceForAccessibilityWithOptions(spoken, { queue: true });
     }
     announced.current = handoff?.state;
