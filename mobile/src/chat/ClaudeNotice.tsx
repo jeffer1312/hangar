@@ -35,6 +35,9 @@ export const ClaudeNotice = memo(function ClaudeNotice({ event, serverId, sessio
   const [sheetOpen, setSheetOpen] = useState(false);
   const [fixBusy, setFixBusy] = useState(false);
   const [fixError, setFixError] = useState<string | null>(null);
+  // Aberta e ainda sem a nota "consertando": sem isto o botão voltaria e um segundo toque abriria outra sessão.
+  // Guarda o estado de quando abriu: qualquer nota nova deste aviso troca o objeto e devolve a linha a ela.
+  const [fixStarted, setFixStarted] = useState<{ from: FixState | undefined } | null>(null);
   const localRef = useRef(local);
   localRef.current = local;
   // Outro aparelho mudou a mesma chave depois: a lista volta a decidir. Só na chegada da lista, para o "ignorado"
@@ -90,7 +93,8 @@ export const ClaudeNotice = memo(function ClaudeNotice({ event, serverId, sessio
   const reload = () => {
     if (!serverId || !sessionName) return;
     setReinstall('reloading');
-    Promise.resolve().then(() => recarregarSessao(sessionName, serverOf(serverId))).catch((error: unknown) => { haptic.error(); setReinstall({ failed: why(error) }); });
+    Promise.resolve().then(() => recarregarSessao(sessionName, serverOf(serverId)))
+      .then(() => setReinstall('idle'), (error: unknown) => { haptic.error(); setReinstall({ failed: why(error) }); });
   };
   const request = (): FixRequest | null => {
     const subject = event.notice_meta?.subject;
@@ -109,10 +113,11 @@ export const ClaudeNotice = memo(function ClaudeNotice({ event, serverId, sessio
     const body = request();
     if (!serverId || !sessionName || !body) return;
     setFixBusy(true);
-    startFix(serverId, sessionName, body).then(() => { haptic.success(); setSheetOpen(false); },
+    startFix(serverId, sessionName, body).then(() => { haptic.success(); setFixStarted({ from: fix }); setSheetOpen(false); },
       (error: unknown) => { haptic.error(); setFixError(why(error)); }).finally(() => setFixBusy(false));
   };
 
+  const starting = fixStarted !== null && fixStarted.from === fix;
   let title = noticeTitle(event);
   let icon: ReactNode;
   let actionPart: ReactNode = null;
@@ -132,14 +137,14 @@ export const ClaudeNotice = memo(function ClaudeNotice({ event, serverId, sessio
     } else if (fix?.state === 'done') {
       icon = <NoticeMark ok />;
       title = `${title} · ${m.notice_fixed()}`;
-    } else if (fixBusy && !sheetOpen) {
+    } else if (starting || (fixBusy && !sheetOpen)) {
       actionPart = <NoticeBusy label={m.notice_fix()} />;
     } else {
       actionPart = <NoticePill label={m.notice_fix()} onPress={openFix} />;
     }
   }
   const lineError = typeof reinstall === 'object' ? m.notice_reinstall_failed({ why: reinstall.failed })
-    : fix?.state === 'failed' ? m.notice_fix_failed() : fixError && !sheetOpen ? m.notice_fix_start_failed({ why: fixError }) : null;
+    : fix?.state === 'failed' && !starting ? m.notice_fix_failed() : fixError && !sheetOpen ? m.notice_fix_start_failed({ why: fixError }) : null;
 
   const detail = noticeDetail(event);
   const expandable = detail != null || key != null;

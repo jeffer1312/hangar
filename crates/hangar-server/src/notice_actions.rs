@@ -18,6 +18,8 @@ const TICK: Duration = Duration::from_secs(2);
 const SETTLE_S: f64 = 20.0;
 /// Conserto que não respondeu nisso vira falha: a linha não fica "consertando" para sempre.
 const MAX_AGE_MS: u64 = 2 * 3600 * 1000;
+/// `dead` antes disso pode ser a abertura em curso; depois, a sessão de conserto caiu.
+const DEAD_GRACE_MS: u64 = 60 * 1000;
 const MAX_DETAIL: usize = 4000;
 const MAX_SUBJECT: usize = 200;
 const MAX_READ: u64 = 8 * 1024 * 1024;
@@ -129,6 +131,8 @@ pub async fn start(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
         creator: Some(name.clone()), disable_hooks: body.blocking, ..SessionOpenRequest::default()
     };
     let fix = Fix { parent: name.clone(), notice_id: body.notice_id, attempt, subject: body.subject };
+    let (reserved_child, origin) = (child.clone(), name.clone());
+    let st_after = st.clone();
     // Tarefa própria: o celular que vai para o fundo cancela o pedido, e a sessão aberta ficaria sem a nota
     // de andamento ou com o registro de uma abertura recusada.
     let task = tokio::spawn(async move {
@@ -153,7 +157,16 @@ pub async fn start(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
             }
         }
     });
-    task.await.unwrap_or_else(|_| failure(StatusCode::INTERNAL_SERVER_ERROR, "erro_criacao_sessao", "a abertura do conserto não terminou"))
+    match task.await {
+        Ok(response) => response,
+        Err(_) => {
+            // A abertura caiu no meio: a reserva sai, ou o aviso ficaria preso em "em andamento" por 2 h.
+            if registry(&st_after, move |all| { all.remove(&reserved_child); }).await.is_err() {
+                report(&st_after, &origin, "notice_fixes_write_failed", "abertura que caiu ficou no registro de consertos");
+            }
+            failure(StatusCode::INTERNAL_SERVER_ERROR, "erro_criacao_sessao", "a abertura do conserto não terminou")
+        }
+    }
 }
 
 /// Lê o registro, aplica `change` e grava, sob a trava e fora das threads do servidor. Ilegível é erro.
@@ -246,6 +259,7 @@ enum Step { Wait, Answered, Failed(&'static str) }
 fn step(fix: &Fix, row: Option<&SessionRow>, since: Option<f64>, now_s: f64, now_ms: u64) -> Step {
     if now_ms.saturating_sub(fix.attempt) > MAX_AGE_MS { return Step::Failed("a sessão de conserto não respondeu em 2 h"); }
     let Some(row) = row else { return Step::Wait };
+    if row.state == "dead" && now_ms.saturating_sub(fix.attempt) > DEAD_GRACE_MS { return Step::Failed("a sessão de conserto caiu"); }
     let answered = row.state == "idle" && row.last_reply_at.is_some_and(|at| at * 1000.0 >= fix.attempt as f64);
     if answered && since.is_some_and(|since| now_s - since >= SETTLE_S) { Step::Answered } else { Step::Wait }
 }
@@ -253,7 +267,10 @@ fn step(fix: &Fix, row: Option<&SessionRow>, since: Option<f64>, now_s: f64, now
 /// Uma rodada: lê o registro, grava as notas sem a trava (a origem pode demorar) e tira os entregues. `false`
 /// quando não sobrou conserto.
 async fn round(st: &AppState, rows: &[SessionRow], settled: &mut HashMap<String, (f64, f64)>) -> bool {
-    let Ok(all) = registry(st, |all| all.clone()).await else { return true };
+    let Ok(all) = registry(st, |all| all.clone()).await else {
+        report(st, "", "notice_fixes_unreadable", "notice-fixes.json ilegível; consertos parados");
+        return true;
+    };
     let (now_s, now) = (crate::state::monitor::wall_now(), now_ms());
     let mut finished = Vec::new();
     for (child, fix) in all {
@@ -267,9 +284,13 @@ async fn round(st: &AppState, rows: &[SessionRow], settled: &mut HashMap<String,
             Step::Wait => continue,
             Step::Failed(why) => ("failed", format!("{child}: {why}")),
             Step::Answered => match row.and_then(|r| r.jsonl.clone()).map(PathBuf::from) {
-                Some(jsonl) => match tokio::task::spawn_blocking(move || final_reply(&jsonl)).await.ok().flatten() {
-                    Some(reply) => ("done", format!("{child}: {}", hangar_notice_actions::result_line(&reply))),
-                    None => ("failed", format!("{child}: o turno terminou sem resposta em texto")),
+                Some(jsonl) => match tokio::task::spawn_blocking(move || final_reply(&jsonl)).await {
+                    Ok(Ok(Some(reply))) => ("done", format!("{child}: {}", hangar_notice_actions::result_line(&reply))),
+                    Ok(Ok(None)) => ("failed", format!("{child}: o turno terminou sem resposta em texto")),
+                    _ => {
+                        report(st, &child, "notice_fix_reply_unreadable", "conversa da sessão de conserto não lida");
+                        ("failed", format!("{child}: não consegui ler a conversa da sessão de conserto"))
+                    }
                 },
                 None => ("failed", format!("{child}: conversa da sessão de conserto não encontrada")),
             },
@@ -298,12 +319,12 @@ fn origin_gone(rows: &[SessionRow], fix: &Fix, now_ms: u64) -> bool {
 }
 
 /// A última resposta em texto da sessão de conserto (não aviso).
-fn final_reply(jsonl: &Path) -> Option<String> {
+fn final_reply(jsonl: &Path) -> Result<Option<String>, ()> {
     let request = crate::transcript::HistoryRequest { provider: crate::transcript::Provider::Claude, jsonl: jsonl.to_owned(), queue: None,
         limit: Some(60), tail_window: crate::transcript::TAIL_WINDOW };
-    let events = crate::transcript::history::merged_history_capped(&request, MAX_READ).ok()?;
-    events.into_iter().rev().find(|event| event.kind == ChatKind::AssistantMsg && event.notice_meta.is_none())
-        .and_then(|event| event.text).filter(|text| !text.trim().is_empty())
+    let events = crate::transcript::history::merged_history_capped(&request, MAX_READ).map_err(|_| ())?;
+    Ok(events.into_iter().rev().find(|event| event.kind == ChatKind::AssistantMsg && event.notice_meta.is_none())
+        .and_then(|event| event.text).filter(|text| !text.trim().is_empty()))
 }
 
 #[cfg(test)]
@@ -324,6 +345,14 @@ mod tests {
         assert_eq!(step(&f, Some(&row("idle", Some(1100.0))), Some(90.0), 100.0, now_ms), Step::Wait, "parada há menos de 20 s");
         assert_eq!(step(&f, Some(&row("idle", Some(1100.0))), Some(70.0), 100.0, now_ms), Step::Answered);
         assert!(matches!(step(&f, None, None, 100.0, 1_000_000 + MAX_AGE_MS + 1), Step::Failed(_)), "não fica consertando para sempre");
+    }
+
+    #[test]
+    fn a_dead_fix_session_fails_after_it_had_time_to_start() {
+        let f = fix();
+        assert_eq!(step(&f, Some(&row("dead", None)), None, 100.0, f.attempt + 5_000), Step::Wait, "ainda abrindo");
+        assert!(matches!(step(&f, Some(&row("dead", None)), None, 100.0, f.attempt + DEAD_GRACE_MS + 1), Step::Failed(_)),
+            "caiu: não fica consertando por 2 h");
     }
 
     #[test]

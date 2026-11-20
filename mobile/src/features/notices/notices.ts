@@ -73,15 +73,18 @@ export function fixStates(events: readonly ChatEvent[]): Map<string, FixState> {
 
 /**
  * O mesmo cálculo para uma lista que cresce: com os eventos de antes iguais, lê só os novos. Devolve o mesmo mapa
- * enquanto nenhum conserto muda, para a lista não redesenhar as linhas.
+ * enquanto nenhum conserto muda, para a lista não redesenhar as linhas. `revision` muda quando a lista troca ou tira
+ * eventos no meio: aí relê tudo.
  */
-export function fixTracker(): (events: readonly ChatEvent[]) => Map<string, FixState> {
+export function fixTracker(): (events: readonly ChatEvent[], revision?: number) => Map<string, FixState> {
   let seen: readonly ChatEvent[] = [];
+  let seenRevision: number | undefined;
   let latest: Latest = new Map();
   let out = new Map<string, FixState>();
-  return (events) => {
+  return (events, revision) => {
     const last = seen.length - 1;
-    const grew = last >= 0 && events.length > last && events[last] === seen[last];
+    const grew = revision === seenRevision && last >= 0 && events.length > last && events[last] === seen[last];
+    seenRevision = revision;
     if (!grew) latest = new Map();
     let changed = !grew;
     for (let i = grew ? seen.length : 0; i < events.length; i++) changed = absorb(latest, events[i]) || changed;

@@ -16,6 +16,8 @@ pub(super) enum Acted {
     Reloading,
     /// Buscando a prévia ou abrindo a sessão de conserto.
     FixStarting,
+    /// Aberta, com o estado de antes: até a nota "consertando" chegar a linha não volta ao botão.
+    FixOpened(Option<FixState>),
     FixFailed(String),
 }
 
@@ -217,7 +219,10 @@ impl Hangar {
             window, cx, move |this, result, _, cx| {
                 // O andamento chega pela nota do servidor; aqui só o erro fica.
                 match result {
-                    Ok(_) => { this.notice_acted.remove(&event_id); }
+                    Ok(_) => {
+                        let before = fix_state(&this.chat.events, &event_id);
+                        this.notice_acted.insert(event_id, Acted::FixOpened(before));
+                    }
                     Err(error) => { this.notice_acted.insert(event_id, Acted::FixFailed(Hangar::fetch_failure(&error))); }
                 }
                 this.redraw_notice_lines(cx);
@@ -323,7 +328,8 @@ impl Hangar {
                     .into_any_element(),
             }),
             (NoticeAction::Fix, acted) => {
-                if matches!(acted, Some(Acted::FixStarting)) { return Some(spin(tr_shared("notice_fix", &[]))); }
+                let opened = matches!(acted, Some(Acted::FixOpened(before)) if *before == fix);
+                if opened || matches!(acted, Some(Acted::FixStarting)) { return Some(spin(tr_shared("notice_fix", &[]))); }
                 match fix {
                     Some(FixState::Running { child }) => Some(notice_spin(&id, notice_fixing(&id, &child).cursor_pointer()
                             .on_click(cx.listener(move |this, _, window, cx| this.open_fix_child(child.clone(), window, cx))))

@@ -61,6 +61,14 @@ describe('aviso da CLI do Claude', () => {
     expect(track([ev('outra', null, { id: 'z' })]).size).toBe(0);
   });
 
+  test('troca no meio da lista (revisão nova) relê tudo, mesmo com o último evento igual', () => {
+    const fix = (id: string, state: string) => ev('x', { fix_of: 'hookfail:a', attempt: 1, state, child: 'c' }, { id });
+    const tail = ev('oi', null, { id: 'm1' });
+    const track = fixTracker();
+    expect(track([fix('f1', 'running'), tail], 1).get('hookfail:a')?.state).toBe('running');
+    expect(track([fix('f1', 'failed'), tail], 2).get('hookfail:a')).toEqual({ state: 'failed' });
+  });
+
   test('lista ignorada: aceita a rota e o evento, recusa o torto', () => {
     expect(parseNoticeIgnores('{"keys":["hook:Stop"]}')).toEqual(['hook:Stop']);
     expect(parseNoticeIgnores({ keys: [] })).toEqual([]);

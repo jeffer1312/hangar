@@ -129,7 +129,7 @@ export function MessageList({
   }, [pending, queuePanel]);
   // O mapa só troca quando um conserto muda: evento comum não redesenha as outras linhas.
   const fixTrack = useRef(fixTracker());
-  const fixes = useMemo(() => fixTrack.current(events), [events, eventsRevision]);
+  const fixes = useMemo(() => fixTrack.current(events, eventsRevision), [events, eventsRevision]);
   const projection = projectConversation(previous.current, {
     events, eventsRevision, pref, merge: look === 'tree', everyRun, tasksEnabled: tarefasLigadas,
     pagesEnabled: !!sessionName, running: new Set(agentesRodando.map((a) => a.id)), queuePanel: hiddenQueue,
