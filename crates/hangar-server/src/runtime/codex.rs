@@ -1848,7 +1848,11 @@ impl Engine {
                 // com turno rodando é recusada: o turno em andamento seguiria no sandbox antigo.
                 if sandbox(mode) != sandbox(self.launch_mode()) {
                     if !self.ready || !self.turn_known { return Err(error("não foi possível confirmar o estado do turno; permissão mantida")); }
-                    if self.in_progress || !self.server_requests.is_empty() {
+                    // Turno pedido e ainda sem resposta também conta: ele começaria no sandbox antigo e ficaria nele.
+                    let starting = self.rpc.values().any(|rpc|!rpc.timed_out && (rpc.params["threadId"] == self.thread_id
+                        && matches!(rpc.method.as_str(),"turn/start" | "turn/steer" | "thread/compact/start")
+                        || rpc.continuation.as_ref().is_some_and(|next|next["kind"] == "skill_lookup")));
+                    if self.in_progress || starting || !self.server_requests.is_empty() || !self.skill_preparations.is_empty() {
                         return Err(RuntimeError::new("erro_permissao_ocupada","a sessão está trabalhando; espere ela terminar para mudar o sandbox"));
                     }
                     let request = ClientRequest::ThreadSettingsUpdate(wire::ThreadSettingsUpdateParams { thread_id:self.thread_id.clone(),

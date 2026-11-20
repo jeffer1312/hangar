@@ -2508,6 +2508,19 @@ fn no_turn_starts_while_a_sandbox_switch_waits_for_codex() {
     assert_eq!(engine.control_view()["deliverable"],true);
 }
 
+/// Turno pedido e ainda sem resposta começaria no sandbox antigo e ficaria nele: a troca espera.
+#[test]
+fn a_sandbox_switch_is_refused_while_a_turn_start_waits_for_codex() {
+    let (mut engine,sent) = bootstrapped(json!({"name":"session","thread_id":"thread-1","headless":true,"cwd":"/w","permission_mode":"Full Access"}));
+    let resume = find_method(&sent,"thread/resume");
+    line(&mut engine,json!({"id":resume["id"],"result":{"thread":{"id":"thread-1","path":"/r.jsonl","status":{"type":"idle"},"turns":[]}}}),12.0);
+    let started = engine.command(RuntimeCommand { operation_id:"msg".into(),kind:OperationKind::Input,payload:json!({"text":"primeira"}) },clock(12.5)).unwrap();
+    assert!(frames(&started).iter().any(|f|f["method"] == "turn/start"));
+    assert_eq!(engine.control_view()["in_progress"],false,"o Codex ainda não respondeu ao turn/start");
+    let refused = engine.command(command(OperationKind::SetPermissionMode,json!({"mode":"Ask for approval"})),clock(13.0)).unwrap_err();
+    assert_eq!(refused.code,"erro_permissao_ocupada");
+}
+
 /// Troca sem resposta no prazo conta como não feita: nenhum turno sai até o modo gravado ser reaplicado, e a
 /// confirmação tardia não o troca de novo.
 #[test]
