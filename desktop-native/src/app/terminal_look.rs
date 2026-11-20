@@ -104,7 +104,7 @@ fn terminal_thinking_text(view: &Entity<TextViewState>, cx: &App) -> Div {
         .child(div().flex_1().min_w_0()
             // Conversa nova: o rótulo diz que o texto cinza é o raciocínio, não a resposta.
             .when(crate::appearance::conversation_beta(), |el| el.child(div().text_size(px(11.5)).font_weight(FontWeight::SEMIBOLD)
-                .text_color(theme::faint()).child(tr("thinking").to_uppercase())))
+                .text_color(theme::faint()).child(tr("beta_thinking_label").to_uppercase())))
             .child(thinking_markdown(view, cx)))
 }
 
@@ -162,6 +162,8 @@ pub(super) fn bullet(color: Hsla, line: f32) -> Div {
 /// Começo da linha dobrada: o ponto enquanto alguma chamada roda; terminada, só o espaço dele, como o Claude Code.
 pub(super) fn fold_lead(live: bool) -> Div {
     if live { bullet(theme::accent(), 19.).debug_selector(|| "term-fold-dot".into()) }
+    // Conversa nova: o passo terminado fica com o ponto verde, como as outras linhas do trilho.
+    else if crate::appearance::conversation_beta() { bullet(theme::success(), 19.) }
     else { div().flex_none().w(px(7.)).h(px(19.)) }
 }
 
@@ -192,10 +194,14 @@ pub(super) fn fold_header(id: SharedString, title: String, open: bool, live: boo
 }
 
 /// Linha `⎿` da dobra recolhida: o que roda agora ou a saída de uma falha.
-pub(super) fn fold_sub(text: String, color: Hsla) -> AnyElement {
-    div().flex().gap(px(8.)).pl(px(FOLD_SUB_INDENT)).font_family(theme::MONO).text_size(px(12.5)).line_height(px(19.))
+pub(super) fn fold_sub(text: String, color: Hsla) -> AnyElement { fold_sub_with(text, color, None) }
+
+/// A linha `⎿` com uma ação no fim (o "ver saída" da falha, na conversa nova).
+pub(super) fn fold_sub_with(text: String, color: Hsla, action: Option<AnyElement>) -> AnyElement {
+    div().flex().items_center().gap(px(8.)).pl(px(FOLD_SUB_INDENT)).font_family(theme::MONO).text_size(px(12.5)).line_height(px(19.))
         .child(div().flex_none().text_color(theme::faint()).child("⎿"))
-        .child(div().min_w_0().truncate().text_color(color).child(text)).into_any_element()
+        .child(div().min_w_0().truncate().text_color(color).child(text))
+        .children(action).into_any_element()
 }
 
 /// Texto do agente na pele Terminal: o ponto branco antes do primeiro parágrafo, como o "● texto" do Claude Code.
@@ -636,7 +642,7 @@ impl Hangar {
             let title = fold_title(&self.chat.events, folded, &folded_kinds, live.is_some());
             let toggle_key = key.clone();
             let failures: Vec<Tool> = folded.iter().filter(|t| t.result.is_some_and(|r| self.chat.events[r].is_error == Some(true))).copied().collect();
-            let mut block = vec![fold_header(SharedString::from(key), title, open, live.is_some(), failures.len(),
+            let mut block = vec![fold_header(SharedString::from(key.clone()), title, open, live.is_some(), failures.len(),
                 cx.listener(move |this, _, _, cx| this.toggle(toggle_key.clone(), cx)))];
             if !open {
                 // Recolhida, a linha mostra o que roda agora e a saída de cada falha, como o Claude Code.
@@ -647,8 +653,14 @@ impl Hangar {
                     let shell = call.tool_name.as_deref().is_some_and(|name| is_any(name, SHELL_TOOLS));
                     block.push(fold_sub(if shell { format!("$ {summary}") } else { summary }, theme::muted()));
                 }
-                for tool in &failures {
-                    block.push(fold_sub(self.tool_status(*tool).0, theme::danger()));
+                // Conversa nova: cada falha leva o "ver saída", que abre a dobra com a saída dela.
+                let beta = crate::appearance::conversation_beta();
+                for (n, tool) in failures.iter().enumerate() {
+                    let open_key = key.clone();
+                    let link = beta.then(|| Button::new(SharedString::from(format!("{key}-out-{n}"))).ghost().xsmall().h(px(19.)).px(px(4.))
+                        .child(div().font_family(theme::MONO).text_size(px(13.)).text_color(theme::accent_text()).underline().child(tr("beta_see_output")))
+                        .on_click(cx.listener(move |this, _, _, cx| this.toggle(open_key.clone(), cx))).into_any_element());
+                    block.push(fold_sub_with(self.tool_status(*tool).0, if beta { theme::danger_text() } else { theme::danger() }, link));
                 }
             }
             rows.push(div().flex().flex_col().children(block).into_any_element());

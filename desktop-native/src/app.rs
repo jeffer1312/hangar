@@ -89,7 +89,7 @@ pub(crate) use tags::{account_icon, machine_icon};
 pub(crate) use notice_line::{api_error_box, fix_open_button, fix_result_row, ignore_button, ignored_text, notice_action_button, notice_body,
     notice_fixed, notice_fixing, notice_head, notice_head_marked, notice_reinstalled, notice_rule_line, notice_spin, undo_button};
 pub(crate) use voice_ui::{call_actions, call_footer, call_header, call_status, equalizer as voice_equalizer, mute_button, speech_pause_button, stop_button};
-pub(crate) use rename_suggest::{Strip as RenameStrip, rename_strip};
+pub(crate) use rename_suggest::{Strip as RenameStrip, beta_rename_strip, rename_strip};
 pub(crate) use vault_requests::{approve_body, approve_title, request_button, request_card, request_command, request_pair};
 pub(crate) use create::{base_button, base_row, mode_row, quiet_button, worktree_field_label, worktree_warning};
 pub(crate) use reviews::{Comment as ReviewComment, Summary as ReviewSummary, Thread as ReviewThread,
@@ -4431,7 +4431,13 @@ impl Hangar {
         if self.tree_motion { motion::request_frame(window, cx); }
         // A linha de aviso tem o ritmo das linhas de ferramenta, não o de uma mensagem.
         let message = id == PREVIEW || id == landing::OPENING || id == send_flight::LOCAL_SEND || notice.is_none() && matches!(self.conversation.items.get(index), Some(Item::Event(_)));
-        let row = row_frame(inner, message).when(after_card(&self.conversation.items, &self.chat.events, index), |el| el.pt(px(8.)));
+        let card_gap = after_card(&self.conversation.items, &self.chat.events, index);
+        // Conversa nova (pele Terminal): o trilho que liga os passos, interrompido em volta do ponto de cada linha.
+        let rail = self.rail_dot(index).map(|dot| Rail {
+            top: index > 0 && self.rail_dot(index - 1).is_some(),
+            dot: dot.map(|center| center + if card_gap { 8. } else { 0. }),
+        });
+        let row = row_frame(inner, message, rail).when(card_gap, |el| el.pt(px(8.)));
         // Pede quadro só para a área da conversa, e só enquanto a linha entra; rolar até ela depois não a anima de novo.
         let entering = self.arrived.get(&id).map(|at| motion::FADE_IN.raw(*at)).filter(|raw| *raw < 1. && !cx.reduce_motion());
         let row = match entering {
@@ -4452,6 +4458,31 @@ impl Hangar {
             None => row,
         };
         row.id(SharedString::from(id)).into_any_element()
+    }
+
+    /// Se a linha `index` entra no trilho da conversa nova e onde fica o centro do ponto dela, medido do topo da linha:
+    /// `Some(None)` é trilho contínuo (raciocínio), `None` fica fora (bolha, cartão, aviso).
+    fn rail_dot(&self, index: usize) -> Option<Option<f32>> {
+        if !appearance::conversation_beta() || appearance::get().tool_look != appearance::ToolLook::Terminal { return None; }
+        let id = self.row_ids.get(index)?;
+        if id.starts_with("queued-") || id.starts_with(PINNED) || [PREVIEW, LIVE_THINKING, LIVE_TOOL, WORKING, landing::OPENING, send_flight::LOCAL_SEND].contains(&id.as_str()) {
+            return None;
+        }
+        // Linha de ferramenta: 2 px de respiro e a linha de 19 px do cabeçalho.
+        const TOOL_DOT: f32 = 2. + 19. / 2.;
+        match self.conversation.items.get(index)? {
+            Item::Tool(tool) => {
+                let name = self.chat.events.get(tool.call)?.tool_name.as_deref();
+                (!conversation::is_agent_call(name) && !conversation::is_page_call(name)).then_some(Some(TOOL_DOT))
+            }
+            Item::Group { .. } => Some(Some(TOOL_DOT)),
+            Item::Thinking { .. } => Some(None),
+            Item::Event(i) => {
+                let event = self.chat.events.get(*i)?;
+                (event.kind == "assistant_msg" && !notice_line::is_notice_line(event)).then(|| Some(8. + conversation_line(false) / 2.))
+            }
+            _ => None,
+        }
     }
 
     fn disclosure(&self, key: &str, open: bool) -> Button {
@@ -6178,10 +6209,26 @@ fn after_card(items: &[Item], events: &[ChatEvent], index: usize) -> bool {
     index > 0 && items.get(index).is_some() && card(items.get(index - 1)) && !card(items.get(index))
 }
 
-fn row_frame(inner: AnyElement, message: bool) -> Div {
+/// O trilho da linha na conversa nova: `top` liga à linha de cima; `dot` é a altura do centro do ponto, em volta do qual o
+/// traço se interrompe (sem ponto, o traço é contínuo).
+#[derive(Clone, Copy)]
+struct Rail { top: bool, dot: Option<f32> }
+
+/// Vão do traço em volta do ponto, de cada lado do centro.
+const RAIL_GAP: f32 = 7.;
+
+fn row_frame(inner: AnyElement, message: bool, rail: Option<Rail>) -> Div {
+    let line = || div().absolute().left(px(column_padding() + 3.)).w(px(1.)).bg(theme::text().alpha(0.10));
+    let rail = rail.map(|rail| match rail.dot {
+        Some(center) => vec![
+            rail.top.then(|| line().top_0().h(px((center - RAIL_GAP).max(0.)))),
+            Some(line().top(px(center + RAIL_GAP)).bottom_0()),
+        ].into_iter().flatten().collect::<Vec<_>>(),
+        None => vec![line().top_0().bottom_0()],
+    }).unwrap_or_default();
     div().w_full().px(px(16.)).when(message, |el| el.py(px(8.))).when(!message, |el| el.py(px(2.)))
         .flex().justify_center()
-        .child(column_box(false).px(px(column_padding())).child(inner))
+        .child(column_box(false).relative().px(px(column_padding())).children(rail).child(inner))
 }
 
 /// A conversa ainda sem histórico: turnos fantasmas no formato das linhas (pergunta em bolha à direita, resposta em
@@ -8222,6 +8269,26 @@ impl Hangar {
                 let view = self.plugin_view(cx);
                 crate::plugin_ui::panes(&self.plugin_panes, active.as_deref(), &view, height)
                     .map(|pane| in_column(pane).id("plugin-interaction-space").into_any_element())
+            }
+            // Conversa nova: a linha do mod minimizado diz qual é ("Mod pmedico › PM-20108"), com abrir e configurar à direita.
+            Display::Minimized if appearance::conversation_beta() => {
+                let pane = active.as_deref().and_then(|id| self.plugin_panes.iter().find(|p| p["id"].as_str() == Some(id)));
+                let id = pane.and_then(|p| p["id"].as_str()).unwrap_or_default();
+                let title = pane.and_then(|p| p["title"].as_str()).filter(|t| !t.is_empty()).unwrap_or(id).to_owned();
+                let plugin = pane.and_then(|p| p["plugin"].as_str()).filter(|p| !p.is_empty())
+                    .or_else(|| id.split_once(':').map(|(plugin, _)| plugin)).map(str::to_owned);
+                let name = plugin.map_or_else(|| tr("beta_mod"), |plugin| format!("{} {plugin}", tr("beta_mod")));
+                Some(in_column(div().id("plugin-minimized").h(px(30.)).my(px(6.)).pl(px(20.)).pr(px(4.)).flex().items_center().gap(px(8.))
+                    .text_size(px(13.)).text_color(theme::muted())
+                    .child(chrome::small_icon(IconName::Puzzle, 14., theme::muted())).child(name)
+                    .when(!title.is_empty(), |el| el.child(chrome::small_icon(IconName::ChevronRight, 12., theme::faint()))
+                        .child(div().min_w_0().truncate().font_family(theme::MONO).text_size(px(12.5)).font_weight(FontWeight::MEDIUM).text_color(theme::text()).child(title)))
+                    .child(div().flex_1())
+                    .child(chrome::icon_button("plugin-restore", IconName::ChevronDown, tr("plugin_restore"), cx)
+                        .on_click(cx.listener(|this, _, window, cx| this.open_plugin(None, window, cx))))
+                    .child(chrome::icon_button("plugin-settings", IconName::Settings, tr("beta_mod_settings"), cx)
+                        .on_click(cx.listener(|this, _, window, cx| this.open_settings(settings::Page::Plugins, window, cx)))))
+                    .into_any_element())
             }
             Display::Minimized => Some(in_column(div().id("plugin-minimized").flex().items_center().gap_2().py_2()
                 .child(div().flex_1().text_xs().text_color(theme::muted()).child(tr("plugin_minimized")))

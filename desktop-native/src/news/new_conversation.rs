@@ -45,9 +45,11 @@ pub(super) fn render(started: Instant, width: Pixels, window: &mut Window, cx: &
             .child(tabs);
         if compact { return stage.into_any_element(); }
         // Miniatura só leitura: os botões da faixa ficam sem clique e fora do Tab.
-        stage.child(app::rename_strip(&tr_shared("news_rename_sample_name", &[]), app::RenameStrip { weak: true, ..Default::default() },
-                |button| button.tab_stop(false), |button| button.tab_stop(false), |button| button.tab_stop(false)))
-            .into_any_element()
+        let sample = tr_shared("news_rename_sample_name", &[]);
+        let strip = app::RenameStrip { weak: true, ..Default::default() };
+        let card = if new { app::beta_rename_strip(&sample, strip, |el| el, |button| button.tab_stop(false), |button| button.tab_stop(false)) }
+            else { app::rename_strip(&sample, strip, |button| button.tab_stop(false), |button| button.tab_stop(false), |button| button.tab_stop(false)) };
+        stage.child(card).into_any_element()
     })
 }
 

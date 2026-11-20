@@ -166,7 +166,7 @@ impl Hangar {
         let composer = self.render_composer(false, false, false, 0, false, false, window, cx);
         div().id("new-chat").size_full().flex().flex_col()
             .child(div().flex_1().min_h_0().flex().flex_col().justify_end().relative().opacity(shown).top(px(rise))
-                .child(row_frame(bubble, true)).child(row_frame(line.into_any_element(), false)))
+                .child(row_frame(bubble, true, None)).child(row_frame(line.into_any_element(), false, None)))
             .child(div().relative().top(px(-drop)).child(composer))
             .into_any_element()
     }

@@ -883,10 +883,15 @@ impl Hangar {
     }
 
     pub(super) fn start_session_rename(&mut self, target: Target, window: &mut Window, cx: &mut Context<Self>) {
+        self.start_session_rename_with(target, None, window, cx);
+    }
+
+    /// Renomear começando de `value` (a sugestão de nome que a pessoa quer mudar), sempre no diálogo.
+    pub(super) fn start_session_rename_with(&mut self, target: Target, value: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
         if !self.target_session(&target).is_some_and(|s| !s.orq()) { return; }
         // No trilho a linha não tem onde mostrar o campo: vai ao diálogo, como o web com a barra recolhida.
-        let inline = appearance::get().navigation == appearance::Navigation::Sidebar && !self.rail();
-        let name = target.name.clone();
+        let inline = value.is_none() && appearance::get().navigation == appearance::Navigation::Sidebar && !self.rail();
+        let name = value.unwrap_or_else(|| target.name.clone());
         let input = cx.new(|cx| InputState::new(window, cx).default_value(name.clone()));
         let old = target.clone();
         let events = cx.subscribe_in(&input, window, move |this, _, event: &InputEvent, window, cx| match event {
