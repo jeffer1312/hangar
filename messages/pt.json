@@ -5154,7 +5154,7 @@
   "native_file_close": "Fechar aba (Alt+W)",
   "native_file_back": "Voltar à conversa",
   "native_file_loading": "Carregando arquivo…",
-  "native_file_truncated": "Arquivo cortado em 256 MB.",
+  "native_file_truncated": "Arquivo cortado em {size}.",
   "native_file_wrap": "Quebrar linhas",
   "native_file_wrap_on": "Ligar a quebra de linha",
   "native_file_wrap_off": "Desligar a quebra de linha",

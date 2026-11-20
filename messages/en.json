@@ -5154,7 +5154,7 @@
   "native_file_close": "Close tab (Alt+W)",
   "native_file_back": "Back to conversation",
   "native_file_loading": "Loading file…",
-  "native_file_truncated": "File truncated at 256 MB.",
+  "native_file_truncated": "File truncated at {size}.",
   "native_file_wrap": "Word wrap",
   "native_file_wrap_on": "Enable word wrap",
   "native_file_wrap_off": "Disable word wrap",

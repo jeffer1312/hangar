@@ -16,6 +16,8 @@ pub(super) struct LineComments {
     selected: RangeDecorationCollection,
     /// Onde o editor está na janela, medido no quadro anterior: posiciona o cartão sob a linha.
     area: Rc<Cell<Bounds<Pixels>>>,
+    /// Onde o cartão aberto está: clique nele (que também cobre a margem) não é seleção de linhas.
+    card: Rc<Cell<Bounds<Pixels>>>,
 }
 
 /// `text` é o trecho como estava ao abrir o cartão: recarregar o arquivo antes de enviar não troca o que foi comentado.
@@ -27,7 +29,7 @@ impl LineComments {
             state.set_gutter_decorations_width(px(4.), cx);
             (state.create_gutter_decorations_collection(Vec::new(), cx), state.create_range_decorations_collection(Vec::new(), cx))
         });
-        Self { drag: None, draft: None, marks, selected, area: Rc::default() }
+        Self { drag: None, draft: None, marks, selected, area: Rc::default(), card: Rc::default() }
     }
 }
 
@@ -91,6 +93,7 @@ impl Hangar {
     pub(super) fn line_comment_press(&mut self, id: u64, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         if event.button != MouseButton::Left || event.modifiers.shift { return; }
         let Some(doc) = self.comment_doc(id) else { return };
+        if doc.comment.draft.is_some() && doc.comment.card.get().contains(&event.position) { return; }
         let editor = doc.editor.clone();
         let line = { let state = editor.read(cx); line_at(state, event.position.y).filter(|line| in_gutter(state, event.position, *line)) };
         let Some(line) = line else { return };
@@ -120,7 +123,12 @@ impl Hangar {
         let (start, end) = (anchor.min(line), anchor.max(line));
         select_lines(&editor, start, end, cx);
         let range = lines_range(editor.read(cx), start, end);
-        let text = editor.read(cx).text().slice(range.clone()).to_string();
+        // O trecho segue o teto da citação: o caminho e as linhas já dizem ao agente onde ler o resto.
+        let text = {
+            let rope = editor.read(cx).text();
+            let end = rope.char_index_to_offset(rope.offset_to_char_index(range.start) + crate::context_refs::TEXT_MAX).min(range.end);
+            rope.slice(range.start..end).to_string()
+        };
         if let Some(doc) = self.comment_doc(id) {
             doc.comment.selected.set(vec![RangeDecoration::new(range).with_style(RangeDecorationStyle::Fill).with_color(theme::accent().opacity(0.18))], cx);
         }
@@ -183,6 +191,7 @@ impl Hangar {
         self.sync_comment_marks(tab, doc, cx);
         let id = tab.id;
         let area = doc.comment.area.clone();
+        let card_bounds = doc.comment.card.clone();
         let measure = canvas(move |bounds, _, _| area.set(bounds), |_, _, _, _| {}).absolute().inset_0();
         let card = doc.comment.draft.as_ref().and_then(|draft| {
             let state = doc.editor.read(cx);
@@ -200,8 +209,10 @@ impl Hangar {
                 .child(Button::new("file-comment-send").primary().xsmall().label(tr("file_comment_send")).disabled(empty)
                     .on_click(cx.listener(move |this, _, window, cx| this.submit_line_comment(id, window, cx))));
             // Cobre também os números da margem: as linhas sob o cartão não ficam numeradas ao lado dele.
+            let card_bounds = card_bounds.clone();
             div().id("file-comment").absolute().top(top).left(px(8.)).right(px(12.)).mt_1()
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(canvas(move |bounds, _, _| card_bounds.set(bounds), |_, _, _, _| {}).absolute().inset_0())
                 .child(comment_card(label.clone(), Textarea::new(&draft.input).aria_label(label), actions))
         });
         div().relative().size_full()

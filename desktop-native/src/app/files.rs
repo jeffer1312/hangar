@@ -17,6 +17,8 @@ actions!(file_view, [CloseFile, NextFile, PreviousFile, SaveFile, FindFile, GoTo
 /// Lado maior da imagem decodificada: cabe numa tela grande sem guardar o original inteiro na memória.
 const PICTURE_SIDE: u32 = 4096;
 const UNREADABLE_PICTURE: &str = "file_image_unreadable";
+/// Prazo da leitura que pode trazer até 256 MB de outra máquina: os 30 s de costume não bastam num link lento.
+const LARGE_READ_SECONDS: u64 = 300;
 
 pub(super) struct Files {
     owner: Option<SessionOwner>,
@@ -102,7 +104,8 @@ struct Document {
 }
 
 impl Document {
-    fn editable(&self) -> bool { self.base.editable() }
+    /// Arquivo grande nunca é editável: o texto mora só no editor e não haveria com o que comparar.
+    fn editable(&self) -> bool { self.base.editable() && !self.large() }
     fn dirty(&self) -> bool { self.dirty }
     fn large(&self) -> bool { self.large_size.is_some() }
 }
@@ -209,7 +212,7 @@ async fn read_file(api: Api, name: String, mut path: String, candidates: Vec<Str
         Some(Value::Null) => (["file", "text"], path.as_str()),
         _ => return Err(Failure::local("invalid_response")),
     };
-    let mut content: Content = serde_json::from_value(api.read(&name, &route, &[("path", requested), ("large", "1")], 30).await?)
+    let mut content: Content = serde_json::from_value(api.read(&name, &route, &[("path", requested), ("large", "1")], LARGE_READ_SECONDS).await?)
         .map_err(|_| Failure::local("invalid_response"))?;
     content.external = route[0] == "file";
     Ok(with_table(content))
@@ -382,7 +385,8 @@ impl Hangar {
                             // Arquivo grande é só leitura e não guarda o texto em `base`: nunca fica "não salvo".
                             doc.dirty = !doc.large() && doc.editor.read(cx).value().as_ref() != doc.base.text;
                             doc.saved = None;
-                            if doc.table.is_some() && doc.dirty { doc.table_stale = true; }
+                            // Qualquer mudança no texto (edição, Descartar, Recarregar) deixa a tabela para ser refeita ao voltar.
+                            if doc.table.is_some() && !doc.large() { doc.table_stale = true; }
                             if let Some(view) = &doc.markdown {
                                 let text = doc.editor.read(cx).value().to_string();
                                 view.update(cx, |view, cx| view.set_text(&text, cx));
@@ -418,8 +422,9 @@ impl Hangar {
             None if error.detail == "file_missing" => activity::web("erro_arq_inexistente"),
             _ => file_failure(&error),
         }));
-        // Arquivo grande abre no código: a leitura de Markdown e a tabela não são montadas para ele.
-        if matches!(&self.files.tabs[ix].content, Some(Ok(doc)) if doc.large()) { self.files.tabs[ix].reader.set_mode(reader::ReaderMode::Source); }
+        // Arquivo grande abre no código (a leitura de Markdown não é montada para ele); CSV grande até o teto da tabela
+        // abre nela, que é a vista leve.
+        if matches!(&self.files.tabs[ix].content, Some(Ok(doc)) if doc.large() && doc.table.is_none()) { self.files.tabs[ix].reader.set_mode(reader::ReaderMode::Source); }
         // A leitura não toma o foco de outra aba, diálogo ou campo aberto enquanto esperava.
         if ix == self.files.active && self.files.focus.contains_focused(window, cx) { self.focus_file(window, cx); }
         cx.notify();

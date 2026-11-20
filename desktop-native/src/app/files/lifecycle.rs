@@ -223,14 +223,22 @@ impl Hangar {
                 // A classificação de arquivo grande vale para o texto relido: ele pode ter crescido ou diminuído. Grande,
                 // o texto vai para o editor sem ficar uma cópia em `base`.
                 let large = content.text.len() > hangar_workspace::files::MAX_BYTES;
+                let reclassified = large != doc.large();
                 doc.large_size = large.then_some(content.text.len());
                 if let Some(markdown) = doc.markdown.as_ref().filter(|_| !large) { markdown.update(cx, |state, cx| state.set_text(&content.text, cx)); }
+                // Cresceu além do teto: a prévia de Markdown sai e a aba mostra o código. O caminho inverso não cria a
+                // prévia: como a linguagem de destaque, ela volta ao reabrir a aba.
+                if large && doc.markdown.is_some() {
+                    (doc.markdown, doc._markdown_changed) = (None, None);
+                    tab.reader.set_mode(super::reader::ReaderMode::Source);
+                }
                 if doc.table.is_some() { doc.table = content.table.take(); doc.table_stale = false; }
                 let text = if large { std::mem::take(&mut content.text) } else { content.text.clone() };
                 doc.editor.update(cx, |state, cx| {
                     let cursor = state.cursor_position();
                     state.set_value(text, window, cx);
                     state.set_soft_wrap(word_wrap && !large, window, cx);
+                    if reclassified { state.set_highlighter(if large { "text" } else { super::file_language(&tab.path) }, cx); }
                     if restore_cursor {
                         let row = cursor.line.min(state.text().lines_len().saturating_sub(1) as u32);
                         state.set_cursor_position(Position::new(row, cursor.character), window, cx);
@@ -281,7 +289,7 @@ async fn read_open_file(api: Api, name: String, path: String, external: bool, lo
     }
     let route = if external { ["file", "text"] } else { ["files", "read"] };
     let large = if large { "1" } else { "0" };
-    let mut content: Content = serde_json::from_value(api.read(&name, &route, &[("path", path.as_str()), ("large", large)], 30).await?)
+    let mut content: Content = serde_json::from_value(api.read(&name, &route, &[("path", path.as_str()), ("large", large)], if large == "1" { LARGE_READ_SECONDS } else { 30 }).await?)
         .map_err(|_| Failure::local("invalid_response"))?;
     if content.path != path { return Err(Failure::local("invalid_response")); }
     content.external = external;

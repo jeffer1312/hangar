@@ -172,7 +172,8 @@ impl Hangar {
                 }
             });
         div().size_full().min_h_0().min_w_0().flex().flex_col()
-            .when(doc.base.truncated, |el| el.child(div().px_4().py_2().text_xs().text_color(theme::warning()).child(tr("file_truncated"))))
+            .when(doc.base.truncated, |el| el.child(div().px_4().py_2().text_xs().text_color(theme::warning())
+                .child(tr("file_truncated").replace("{size}", &super::super::human_size(doc.large_size.unwrap_or(doc.base.text.len()) as u64)))))
             .when(doc.editor.read(cx).value().trim().is_empty(), |el| el.child(div().px_4().py_2().text_sm().text_color(theme::faint()).child(tr("file_empty"))))
             .child(div().flex_1().min_h_0().min_w_0().flex().when(stacked, |el| el.flex_col())
                 .when(show_outline, |el| el.child(outline))
@@ -194,7 +195,8 @@ impl Hangar {
 
     pub(super) fn reader_source(&self, tab: &FileTab, doc: &Document, cx: &mut Context<Self>) -> Div {
         div().flex().flex_col().size_full().min_h_0()
-            .when(doc.base.truncated, |el| el.child(div().px_4().py_2().text_xs().text_color(theme::warning()).child(tr("file_truncated"))))
+            .when(doc.base.truncated, |el| el.child(div().px_4().py_2().text_xs().text_color(theme::warning())
+                .child(tr("file_truncated").replace("{size}", &super::super::human_size(doc.large_size.unwrap_or(doc.base.text.len()) as u64)))))
             .when_some(doc.error.as_ref(), |el, error| el.child(div().id("file-save-error").role(Role::Alert)
                 .flex_shrink_0().px_4().py_2().text_sm().text_color(theme::danger()).child(error.clone())))
             .child(div().flex_1().min_h_0().overflow_hidden()
