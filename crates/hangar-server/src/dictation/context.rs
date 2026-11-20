@@ -213,6 +213,17 @@ pub fn for_row(
         context.env.insert("ANTHROPIC_API_KEY".into(), key.into());
         context.env.insert("ANTHROPIC_BASE_URL".into(), url.into());
         let mut data = data.clone();
+        if let Some(account) = row.engine_account.as_deref()
+            && row.conta.as_deref().is_some_and(|c| c.starts_with("cliproxy:"))
+        {
+            // Conta que só existe no proxy: credencial e prefixo vêm do próprio proxy, sem raiz Codex.
+            let entry = crate::engines::proxy::resolve(&state.accounts, account, None)
+                .map_err(|_| "dictation_organization_failed")?;
+            let prefix = entry["prefix"].as_str().filter(|s| !s.is_empty()).ok_or("dictation_organization_failed")?;
+            data["dictation_prefix"] = json!(prefix);
+            context.engine = Some(data);
+            return Ok(context);
+        }
         if row.engine_account.is_some() {
             let home = row
                 .conta

@@ -242,7 +242,6 @@ pub fn ensure(home: &Path, now_unix: u64, persist_management: impl FnOnce(&str) 
     let text = text.unwrap_or_default();
     let new_client = config.client_keys.is_empty().then(secret);
     let new_management = (!config.management_key_set).then(secret);
-    // `payload` com regras da pessoa fica como está: o Ultra Fast só não aparece para esse proxy.
     let v8 = config.format == Format::V8;
     let mut edited = text.clone();
     // `payload` com regras da pessoa fica como está: o Ultra Fast só não aparece para esse proxy.

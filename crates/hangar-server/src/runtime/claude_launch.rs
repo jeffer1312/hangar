@@ -106,9 +106,13 @@ pub fn plan(spec: &SessionSpec, meta: &Value, ctx: &Context) -> Result<Launch, R
         None => return Err(refused("launch_permission_mode", "modo de permissão da sessão desconhecido; a sessão não foi aberta")),
     };
     let engine = match &spec.account { Account::Engine { name, context_window, .. } => Some((name, context_window)), _ => None };
+    // A criação e a troca de velocidade já recusam Fast sem suporte. Aqui é acordar, restaurar ou reabrir uma sessão
+    // que já existe: se o Fast saiu do motor depois, ela volta na velocidade normal em vez de não voltar.
     let tier = match spec.service_tier {
-        Some(tier) if tier.is_fast() && !ctx.fast =>
-            return Err(refused("launch_service_tier", "service_tier exige Claude com motor GPT no CLIProxyAPI local")),
+        Some(tier) if tier.is_fast() && !ctx.fast => {
+            tracing::warn!(session = %spec.name, tier = tier.name(), "Fast indisponível agora; a sessão volta na velocidade normal");
+            None
+        }
         Some(tier) if ctx.fast => Some(tier),
         _ => None,
     };
@@ -234,10 +238,17 @@ pub fn plan_for(env: &AccountEnvironment, bridge: Option<&PluginBridge>, spec: &
         _ => None,
     };
     let fast = spec.service_tier.is_some() && facts.supports_fast(engine, spec.model.as_deref());
-    if spec.service_tier == Some(crate::session_open::ServiceTier::Ultrafast) && !engine.is_some_and(|engine|
+    // Mesma ideia para o Ultra Fast: conta que perdeu o plano ou regra que sumiu do config não impedem a sessão de
+    // voltar; ela volta em Fast (ou na normal, se nem o Fast servir).
+    let degraded;
+    let spec = if spec.service_tier == Some(crate::session_open::ServiceTier::Ultrafast) && !engine.is_some_and(|engine|
         crate::engines::catalog::supports_ultrafast(&crate::accounts::AccountService::new(env.clone()), engine, spec.model.as_deref(), account)) {
-        return Err(refused("launch_service_tier", crate::engines::catalog::ULTRAFAST_REFUSED));
-    }
+        tracing::warn!(session = %spec.name, "Ultra Fast indisponível agora; a sessão volta em Fast");
+        let mut copy = spec.clone();
+        copy.service_tier = Some(crate::session_open::ServiceTier::Priority);
+        degraded = copy;
+        &degraded
+    } else { spec };
     let display = crate::display_env::for_launch(|name| env.base.get(name).filter(|v| !v.is_empty()).cloned());
     plan(spec, meta, &Context { env, runtime_config: &config, plugin_roots: &roots, bridge, engine_route: route.as_ref(), fast, display: &display })
 }
@@ -468,7 +479,7 @@ mod tests {
     }
 
     #[test]
-    fn unknown_mode_read_only_and_priority_without_fast_are_refused() {
+    fn unknown_mode_and_read_only_are_refused_and_fast_without_support_falls_back() {
         let case = case("create_claude_headless_then_launch");
         let env = AccountEnvironment::from_map(case.server_env());
         let ctx = Context { env: &env, runtime_config: &json!({}), plugin_roots: &[], bridge: None, engine_route: None, fast: false, display: &[] };
@@ -479,8 +490,9 @@ mod tests {
         spec.read_only = true;
         assert_eq!(plan(&spec, &case.meta(), &ctx).unwrap_err().code, "headless_read_only");
         let mut spec = case.spec();
+        // Sessão que já existe e perdeu o Fast volta na velocidade normal, sem `--service-tier`.
         spec.service_tier = Some(crate::session_open::ServiceTier::Priority);
-        assert_eq!(plan(&spec, &case.meta(), &ctx).unwrap_err().code, "launch_service_tier");
+        assert!(!plan(&spec, &case.meta(), &ctx).unwrap().program.contains(&"--service-tier".to_owned()), "Fast sem suporte cai no normal");
         spec.service_tier = Some(crate::session_open::ServiceTier::Default);
         assert!(!plan(&spec, &case.meta(), &ctx).unwrap().program.contains(&"--service-tier".to_owned()), "default sem Fast é ignorado");
     }

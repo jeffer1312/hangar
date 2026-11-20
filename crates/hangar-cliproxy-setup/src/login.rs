@@ -51,9 +51,16 @@ fn valid_state(state: &str) -> bool {
     !state.is_empty() && state.len() <= 128 && state.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
-/// Só o endereço local que o provedor usa de volta; qualquer outro não vai ao proxy.
-fn valid_redirect(url: &str) -> bool {
-    url.len() <= 4096 && ["http://127.0.0.1:", "http://localhost:"].iter().any(|p| url.starts_with(p))
+/// Só o endereço local que o provedor usa de volta, com o `state` deste login; qualquer outro não vai ao proxy.
+/// Lido como URL: `http://localhost:@outro/…` começa igual, mas a máquina de verdade é a do `@`.
+fn valid_redirect(url: &str, state: &str) -> bool {
+    let Ok(parsed) = reqwest::Url::parse(url) else { return false };
+    url.len() <= 4096
+        && parsed.scheme() == "http"
+        && matches!(parsed.host_str(), Some("127.0.0.1" | "localhost"))
+        && parsed.username().is_empty()
+        && parsed.password().is_none()
+        && parsed.query_pairs().find(|(key, _)| key == "state").is_some_and(|(_, value)| value == state)
 }
 
 async fn call(m: &Management, request: reqwest::RequestBuilder) -> Result<Value, Error> {
@@ -126,7 +133,7 @@ pub async fn callback(m: &Management, state: &str, redirect_url: &str) -> Result
     if !valid_state(state) {
         return Err(Error::BadInput("state"));
     }
-    if !valid_redirect(redirect_url) || !redirect_url.contains(&format!("state={state}")) {
+    if !valid_redirect(redirect_url, state) {
         return Err(Error::BadInput("endereço de volta"));
     }
     let url = format!("{}/v8/management/oauth/callback", m.base_url);
@@ -146,8 +153,12 @@ mod tests {
 
     #[test]
     fn only_a_local_return_address_of_the_same_login_is_accepted() {
-        assert!(valid_redirect("http://127.0.0.1:1455/auth/callback?state=abc&code=x"));
-        assert!(!valid_redirect("https://evil.example/auth?state=abc"));
+        assert!(valid_redirect("http://127.0.0.1:1455/auth/callback?state=abc&code=x", "abc"));
+        assert!(valid_redirect("http://localhost:54545/callback?code=x&state=abc", "abc"));
+        assert!(!valid_redirect("https://evil.example/auth?state=abc", "abc"));
+        assert!(!valid_redirect("http://localhost:@evil.example/auth/callback?state=abc", "abc"), "a máquina é a depois do @");
+        assert!(!valid_redirect("http://127.0.0.1:x@evil.example/cb?state=abc", "abc"));
+        assert!(!valid_redirect("http://127.0.0.1:1455/auth/callback?state=abcdef", "abc"), "state com prefixo igual não vale");
         assert!(!valid_state("a&b") && !valid_state("") && valid_state("Ab-9_z"));
     }
 

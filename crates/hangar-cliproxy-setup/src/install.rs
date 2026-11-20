@@ -12,6 +12,7 @@ use crate::service::{self, Service};
 const DEFAULT_BASE: &str = "http://127.0.0.1:8317";
 const START_TIMEOUT: Duration = Duration::from_secs(30);
 const LATEST_TTL: Duration = Duration::from_secs(3600);
+const LATEST_FAILURE_TTL: Duration = Duration::from_secs(300);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Step {
@@ -312,10 +313,13 @@ impl Installer {
         json!({ "kind": job.kind, "step": job.step.name(), "done": done, "error": error, "outcome": outcome })
     }
 
-    /// A release mais nova, relida no máximo uma vez por hora; falha também fica guardada por esse prazo.
+    /// A release mais nova, relida no máximo uma vez por hora; falha fica guardada só 5 min, para a rede que voltou não esperar a hora.
     pub async fn latest(&self, github: &Github) -> Result<Release, String> {
         let mut cached = self.latest.lock().await;
-        if let Some((_, value)) = cached.as_ref().filter(|(at, _)| at.elapsed() < LATEST_TTL) {
+        let fresh = |(at, value): &(Instant, Result<Release, String>)| {
+            at.elapsed() < if value.is_ok() { LATEST_TTL } else { LATEST_FAILURE_TTL }
+        };
+        if let Some((_, value)) = cached.as_ref().filter(|entry| fresh(entry)) {
             return value.clone();
         }
         let value = release::latest(github).await.map_err(|e| e.code().to_owned());
