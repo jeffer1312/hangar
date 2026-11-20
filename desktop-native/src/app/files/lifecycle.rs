@@ -176,7 +176,8 @@ impl Hangar {
         if !self.files_visible() { return; }
         let Some(tab) = self.files.tabs.get(self.files.active) else { return };
         let Some(Ok(doc)) = &tab.content else { return };
-        if doc.saving || doc.reloading || doc.checking { return; }
+        // Arquivo grande não é relido a cada 5 s: Recarregar continua valendo.
+        if doc.saving || doc.reloading || doc.checking || doc.large() { return; }
         self.read_file_refresh(tab.id, false, cx);
     }
 
@@ -200,7 +201,7 @@ impl Hangar {
         let (connection, tx) = (self.connection, self.tx.clone());
         self.runtime.spawn(async move {
             let here = local.is_some() || (api.is_loopback() && cwd.is_some_and(|cwd| std::path::Path::new(&cwd).is_dir()));
-            let result = read_open_file(api, key.name, path, external, local, here).await;
+            let result = read_open_file(api, key.name, path, external, local, here, reload).await;
             let _ = tx.send(Envelope { connection, selection: None,
                 payload: Payload::FileView(FileReply::Refresh(id, seq, reload, result)) }).await;
         });
@@ -217,10 +218,15 @@ impl Hangar {
         let previous = (doc.disk_changed, doc.error.clone(), doc.poll_error.clone());
         (doc.checking, doc.reloading) = (false, false);
         match result {
-            Ok(content) if reload => {
+            Ok(mut content) if reload => {
+                // Arquivo grande: o texto vai para o editor sem ficar uma cópia em `base`.
+                let text = if doc.large() {
+                    doc.large_size = Some(content.text.len());
+                    std::mem::take(&mut content.text)
+                } else { content.text.clone() };
                 doc.editor.update(cx, |state, cx| {
                     let cursor = state.cursor_position();
-                    state.set_value(content.text.clone(), window, cx);
+                    state.set_value(text, window, cx);
                     if restore_cursor {
                         let row = cursor.line.min(state.text().lines_len().saturating_sub(1) as u32);
                         state.set_cursor_position(Position::new(row, cursor.character), window, cx);
@@ -244,11 +250,13 @@ impl Hangar {
     }
 }
 
-async fn read_open_file(api: Api, name: String, path: String, external: bool, local: Option<PathBuf>, here: bool) -> Result<Content, Failure> {
+/// `large` só no Recarregar: a verificação a cada 5 s lê até 512 KB, e um arquivo que cresceu além disso aparece como
+/// mudado no disco em vez de ser relido inteiro.
+async fn read_open_file(api: Api, name: String, path: String, external: bool, local: Option<PathBuf>, here: bool, large: bool) -> Result<Content, Failure> {
     if !external {
         if let Some(root) = local {
-            return tokio::task::spawn_blocking(move || super::super::tree::read_local(&root, &path).map(|read|
-                Content { path, text: read.text, truncated: read.truncated, digest: read.digest, external: false }))
+            return tokio::task::spawn_blocking(move || super::super::tree::read_local(&root, &path, large).map(|read|
+                Content { path, text: read.text, truncated: read.truncated, digest: read.digest, external: false, table: None }))
                 .await.unwrap_or_else(|_| Err(Failure::local("invalid_response")));
         }
     } else if here {
@@ -260,13 +268,14 @@ async fn read_open_file(api: Api, name: String, path: String, external: bool, lo
                 if real.components().any(|part| part.as_os_str() == ".git") { return Err(Failure::local("erro_arq_area_do_git")); }
                 let (Some(folder), Some(file_name)) = (real.parent(), real.file_name().and_then(|name| name.to_str()))
                     else { return Err(Failure::local("erro_arq_inexistente")) };
-                super::super::tree::read_local(folder, file_name).map(|read|
-                    Content { path, text: read.text, truncated: read.truncated, digest: read.digest, external: true })
+                super::super::tree::read_local(folder, file_name, large).map(|read|
+                    Content { path, text: read.text, truncated: read.truncated, digest: read.digest, external: true, table: None })
             }).await.unwrap_or_else(|_| Err(Failure::local("invalid_response")));
         }
     }
     let route = if external { ["file", "text"] } else { ["files", "read"] };
-    let mut content: Content = serde_json::from_value(api.read(&name, &route, &[("path", &path)], 30).await?)
+    let large = if large { "1" } else { "0" };
+    let mut content: Content = serde_json::from_value(api.read(&name, &route, &[("path", path.as_str()), ("large", large)], 30).await?)
         .map_err(|_| Failure::local("invalid_response"))?;
     if content.path != path { return Err(Failure::local("invalid_response")); }
     content.external = external;

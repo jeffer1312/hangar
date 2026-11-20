@@ -19,7 +19,7 @@ export function ContextRefTray({ refs, draftKey, disabled }: { refs: DraftContex
         return (
           <View key={ref.draftId} style={[styles.item, { backgroundColor: superficie(theme, 0.8), borderColor: theme.tokens.border.subtle }]}>
             <View style={styles.row}>
-              <Icon name={ref.kind === 'quote' ? 'TextQuote' : 'MousePointerClick'} size={16} color={theme.tokens.accent.base} />
+              <Icon name={ref.kind === 'quote' ? 'TextQuote' : ref.kind === 'code' ? 'FileCode' : 'MousePointerClick'} size={16} color={theme.tokens.accent.base} />
               <Text style={[styles.label, { color: theme.tokens.text.primary }]} numberOfLines={1}>{label}</Text>
               <Pressable
                 onPress={() => setEditing(editing === ref.draftId ? null : ref.draftId)}

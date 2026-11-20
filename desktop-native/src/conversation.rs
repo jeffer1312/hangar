@@ -739,14 +739,17 @@ pub fn thought_summary(text: &str) -> String {
 }
 
 /// Code fence that survives backtick runs inside the content.
-pub fn fenced(source: &str) -> String {
+pub fn fenced(source: &str) -> String { fenced_as(source, "text") }
+
+/// Como `fenced`, com a linguagem do bloco (quem chama garante que ela não tem espaço nem crase).
+pub fn fenced_as(source: &str, lang: &str) -> String {
     let mut longest = 0;
     let mut run = 0;
     for ch in source.chars() {
         if ch == '`' { run += 1; longest = longest.max(run); } else { run = 0; }
     }
     let fence = "`".repeat(longest.max(2) + 1);
-    format!("{fence}text\n{source}\n{fence}")
+    format!("{fence}{lang}\n{source}\n{fence}")
 }
 
 /// Bounded view of a long text; the full text stays in the event and in the copy action.

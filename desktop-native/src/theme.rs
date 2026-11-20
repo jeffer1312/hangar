@@ -594,6 +594,7 @@ pub fn sync_kit(window: Option<&mut Window>, cx: &mut App) {
         appearance::CodeFont::Named(name) => name.0.into(),
     };
     theme.mono_font_size = px(appearance.code_size as f32 / 2.);
+    theme.highlight_theme = crate::code_theme::highlight_theme(dark);
     Theme::sync_base(cx);
 }
 

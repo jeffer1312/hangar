@@ -3,7 +3,7 @@ import { Keyboard, Modal, Platform, Pressable, ScrollView, Text, TextInput, View
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { EnrichedMarkdownText } from 'react-native-enriched-markdown';
-import { elementLabel, withContextRefComment } from '@hangar/core';
+import { codeLabel, elementLabel, withContextRefComment } from '@hangar/core';
 import * as m from '../paraglide/messages';
 import { mkMutedMarkdownStyle } from './AssistantBubble';
 import { addContextRef } from '../stores/contextRefs';
@@ -68,7 +68,14 @@ function CiteReplyCard({ request, onFinish }: { request: CiteRequest; onFinish: 
       <ScrollView style={[styles.excerpt, { borderColor: theme.tokens.accent.base }]} nestedScrollEnabled>
         {ref.kind === 'quote'
           ? <EnrichedMarkdownText markdown={ref.text} markdownStyle={md} flavor="github" />
-          : <Text style={{ color: theme.tokens.text.primary }}>{elementLabel(ref)}</Text>}
+          : ref.kind === 'code'
+            ? (
+              <>
+                <Text style={{ color: theme.tokens.text.primary }}>{codeLabel(ref)}</Text>
+                <Text style={[styles.code, { color: theme.tokens.text.secondary }]}>{ref.text}</Text>
+              </>
+            )
+            : <Text style={{ color: theme.tokens.text.primary }}>{elementLabel(ref)}</Text>}
       </ScrollView>
       <TextInput
         ref={input}
@@ -112,6 +119,7 @@ const styles = StyleSheet.create((theme) => ({
     maxHeight: '90%',
   },
   title: { fontSize: theme.base.text.base, fontWeight: theme.base.weight.semibold },
+  code: { fontFamily: theme.base.fontMono, fontSize: theme.base.text.xs },
   excerpt: { flexGrow: 0, maxHeight: 220, borderLeftWidth: 3, paddingLeft: theme.base.space[2] },
   field: {
     minHeight: 88,

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { elementLabel, withContextRefComment } from '@hangar/core';
+  import { codeLabel, elementLabel, withContextRefComment } from '@hangar/core';
   import * as m from '../paraglide/messages';
   import ModalDialog from './ModalDialog.svelte';
   import { renderMarkdown } from '../lib/markdown';
@@ -53,6 +53,9 @@
         <!-- Mesmo renderMarkdown das bolhas: escapa tudo, e `**` nunca aparece cru. -->
         <!-- eslint-disable-next-line svelte/no-at-html-tags -->
         {@html renderMarkdown(ref.text)}
+      {:else if ref.kind === 'code'}
+        <p class="cr-el">{codeLabel(ref)}</p>
+        <pre class="cr-code">{ref.text}</pre>
       {:else}
         <p class="cr-el">{elementLabel(ref)}</p>
         {#if ref.url}<p class="cr-url">{ref.url}</p>{/if}
@@ -103,6 +106,7 @@
   .cr-trecho :global(pre) { white-space: pre-wrap; font-size: 0.875em; margin: var(--space-1) 0; }
   .cr-trecho :global(code) { font-family: var(--font-mono); font-size: 0.875em; }
   .cr-el { font-weight: 600; color: var(--text-primary); }
+  .cr-code { margin: var(--space-1) 0 0; font-family: var(--font-mono); font-size: var(--text-xs); white-space: pre; overflow-x: auto; }
   .cr-url { font-size: var(--text-xs); color: var(--text-muted); }
   /* 16px: abaixo disso o Safari do iPhone dá zoom na página ao focar. */
   .cr-campo {

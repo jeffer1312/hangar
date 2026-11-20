@@ -6,6 +6,7 @@ mod auto_report;
 mod claude_notices;
 mod notice_actions;
 mod codex_activity;
+mod code_comments;
 mod compact_idle;
 mod composer_history;
 mod connect_approval;
@@ -93,6 +94,7 @@ pub fn animation(name: &str) -> Option<NewsAnimation> {
         "tela-de-status" => Some(server_status::render),
         "consertar-com-agente" => Some(agent_fix::render),
         "revisao-do-trabalho" => Some(work_review::render),
+        "comentar-linhas" => Some(code_comments::render),
         _ => None,
     }
 }

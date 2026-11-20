@@ -1,14 +1,15 @@
 import { useMemo, useState } from 'react';
-import { Pressable, Text, View } from 'react-native';
+import { Pressable, ScrollView, Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { EnrichedMarkdownText, type MarkdownStyle } from 'react-native-enriched-markdown';
-import { contextRefLabel, parseContextRefs, type ContextRef, type QuoteRef } from '@hangar/core';
+import { codeLabel, contextRefLabel, parseContextRefs, type ContextRef, type QuoteRef } from '@hangar/core';
 import * as m from '../paraglide/messages';
 import { Icon } from '../ui/Icon';
 import { mkMutedMarkdownStyle } from './AssistantBubble';
 
 // Mensagem do usuário com blocos <hangar-ref>: a citação em destaque (barra à esquerda) com o
-// comentário fora dela, o elemento como cartão compacto e o texto digitado como sempre.
+// comentário fora dela, o elemento como cartão compacto, as linhas de arquivo com o nome, as linhas e o
+// código em fonte monoespaçada, e o texto digitado como sempre.
 export function ContextRefView({ text, onQuoteClick }: { text: string; onQuoteClick?: (ref: QuoteRef) => void }) {
   const { theme } = useUnistyles();
   const segments = useMemo(() => parseContextRefs(text), [text]);
@@ -48,6 +49,17 @@ function RefItem({ refItem, md, onQuoteClick }: { refItem: ContextRef; md: Markd
           )}
           <EnrichedMarkdownText markdown={refItem.text} markdownStyle={md} flavor="github" />
         </View>
+      ) : refItem.kind === 'code' ? (
+        <View style={[styles.quote, { borderColor: theme.tokens.accent.base }]}>
+          <Text style={[styles.headTxt, { color: theme.tokens.accent.base }]}>{m.cite_code()}</Text>
+          <Text style={[styles.codeName, { color: theme.tokens.text.primary }]} numberOfLines={1}>{codeLabel(refItem)}</Text>
+          {codeLabel(refItem).startsWith(refItem.path)
+            ? null
+            : <Text style={[styles.url, { color: theme.tokens.text.muted }]} numberOfLines={1}>{refItem.path}</Text>}
+          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+            <Text style={[styles.code, { color: theme.tokens.text.secondary }]} selectable>{refItem.text}</Text>
+          </ScrollView>
+        </View>
       ) : (
         <View style={[styles.card, { borderColor: theme.tokens.border.subtle }]}>
           <Text style={[styles.headTxt, { color: theme.tokens.accent.base }]}>{m.cite_element()}</Text>
@@ -80,4 +92,5 @@ const styles = StyleSheet.create((theme) => ({
   toggle: { minHeight: 32, justifyContent: 'center' },
   toggleTxt: { fontSize: theme.base.text.xs },
   code: { fontFamily: theme.base.fontMono, fontSize: theme.base.text.xs },
+  codeName: { fontFamily: theme.base.fontMono, fontSize: theme.base.text.sm, fontWeight: theme.base.weight.semibold },
 }));

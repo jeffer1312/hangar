@@ -451,7 +451,10 @@ async fn run(
         let args = if method == Method::POST {
             json!({"alvo":path,"path":payload["path"],"texto":payload["text"],"digest_lido":payload["digest"]})
         } else {
-            json!({"alvo":path,"path":params.get("path")})
+            let Some(large) = bool_param(params.get("large"), false) else {
+                return Err(hangar_workspace::error(422, "operação de workspace inválida"));
+            };
+            json!({"alvo":path,"path":params.get("path"),"large":large})
         };
         let Some(next) = operation(
             if method == Method::POST {
@@ -587,6 +590,7 @@ fn map_operation(
         }
         "files/read" => {
             a.insert("path".into(), json!(q.get("path")?));
+            a.insert("large".into(), json!(bool_param(q.get("large"), false)?));
             "read_file"
         }
         "files/write" => {
