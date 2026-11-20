@@ -309,8 +309,21 @@ const DEFAULT: Appearance = Appearance { panels: Panels::Attached, theme: ThemeM
     language: Language::System, currency: Currency::Usd, hands_free: false, skip_chat_confirmations: false, delivery: None, steer_while_working: false, jev_delivery: false, accounts_compact: false, machines_tray_compact: false, sidebar_group: SidebarGroup::None, side_tab: SideTab::Context,
     terminal_font: CodeFont::JetBrainsMono, terminal_size: 12, code_font: CodeFont::JetBrainsMono, code_size: 25, keep_in_tray: false, chrome_autofill: false, full_chrome: false };
 
+thread_local! {
+    /// A miniatura da novidade desenha um lado ou o outro, qualquer que seja a escolha guardada.
+    static BETA_PREVIEW: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
 /// A conversa nova (beta) está ligada: os desenhos que mudaram consultam isto e caem no anterior quando desligada.
-pub fn conversation_beta() -> bool { get().conversation_beta }
+pub fn conversation_beta() -> bool { BETA_PREVIEW.get().unwrap_or_else(|| get().conversation_beta) }
+
+/// Monta `build` com a conversa nova ligada ou desligada, sem mexer na escolha guardada: só a miniatura usa.
+pub fn with_conversation_beta<T>(on: bool, build: impl FnOnce() -> T) -> T {
+    let before = BETA_PREVIEW.replace(Some(on));
+    let result = build();
+    BETA_PREVIEW.set(before);
+    result
+}
 
 impl Default for Appearance {
     fn default() -> Self { DEFAULT }

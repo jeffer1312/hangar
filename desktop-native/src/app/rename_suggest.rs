@@ -106,11 +106,11 @@ pub(crate) fn rename_strip<E: IntoElement>(suggestion: &str, state: Strip, dismi
     ];
     // Conversa nova: cartão próprio com filete de destaque, o nome sugerido em mono e as ações logo depois do texto.
     if beta {
-        return div().id("rename-suggest").my_2().relative().overflow_hidden().rounded(px(12.)).border_1().border_color(theme::border_strong())
+        return div().id("rename-suggest").my_2().max_w(px(760.)).relative().overflow_hidden().rounded(px(12.)).border_1().border_color(theme::border_strong())
             .bg(theme::raised()).pl(px(19.)).pr(px(12.)).py(px(10.)).flex().items_center().gap(px(16.))
             .role(Role::Group).aria_label(title)
             .child(div().absolute().left_0().top_0().bottom_0().w(px(3.)).bg(theme::accent()))
-            .child(div().min_w_0().flex().flex_col().gap(px(2.))
+            .child(div().flex_1().min_w_0().flex().flex_col().gap(px(2.))
                 .child(div().flex().items_center().gap(px(6.)).text_sm().min_w_0()
                     .child(div().flex_none().text_color(theme::muted()).font_weight(FontWeight::MEDIUM).child(tr("rename_beta_label")))
                     .child(div().min_w_0().truncate().font_family(theme::MONO).text_color(theme::accent_text()).child(suggestion.to_string())))

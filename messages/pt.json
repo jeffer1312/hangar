@@ -6631,6 +6631,7 @@
   "native_settings_code_mode_off": "Desligado",
   "native_settings_code_mode_on": "Ligado",
   "native_settings_code_mode_settings": "Já ligado no settings.json do Claude nesta máquina: vale para todas as sessões, inclusive as abertas fora do Hangar.",
+  "native_news_conversation_waiting_tab": "Esperando você",
   "native_settings_task_list": "Lista de tarefas",
   "native_settings_task_list_hide": "Não mostrar",
   "native_settings_task_list_progress": "Progresso",
