@@ -59,6 +59,10 @@ type ListProps = {
   nestedScrollEnabled?: boolean;
   recycleItems?: boolean;
   onScroll: (event: NativeSyntheticEvent<NativeScrollEvent>) => void;
+  onScrollBeginDrag?: (event: NativeSyntheticEvent<NativeScrollEvent>) => void;
+  onScrollEndDrag?: (event: NativeSyntheticEvent<NativeScrollEvent>) => void;
+  onMomentumScrollBegin?: (event: NativeSyntheticEvent<NativeScrollEvent>) => void;
+  onMomentumScrollEnd?: (event: NativeSyntheticEvent<NativeScrollEvent>) => void;
   onContentSizeChange?: (width: number, height: number) => void;
   onStartReached?: () => void;
 };
@@ -217,6 +221,36 @@ it('scroll atrasado não desfaz pausa antes nem depois da nova medida', () => {
   list.geometry = { contentLength: 2000, scroll: 1600, scrollLength: 400 };
   scrollList(1600, 2000, 400); // Altura igual à anterior, mas confirmada pelo callback.
   expect(latestList().maintainScrollAtEnd).toBe(true);
+});
+
+it('linha nova não puxa ao fim enquanto o dedo arrasta, mesmo perto do fim', () => {
+  vi.useFakeTimers();
+  const initial = props([event({ id: 'one' })]);
+  const { root } = mount(createElement(MessageList, initial));
+  const at = (y: number) => ({ nativeEvent: {
+    contentOffset: { y }, contentSize: { height: 2000 }, layoutMeasurement: { height: 400 },
+  } } as NativeSyntheticEvent<NativeScrollEvent>);
+  const addRow = (id: string) => {
+    act(() => root.render(createElement(MessageList, { ...initial, events: [...initial.events, event({ id })] })));
+    act(() => vi.advanceTimersByTime(300));
+  };
+  act(() => vi.advanceTimersByTime(300));
+  list.scrollToEnd.mockClear();
+  act(() => latestList().onScrollBeginDrag?.(at(1600)));
+  addRow('during-drag');
+  expect(list.scrollToEnd).not.toHaveBeenCalled();
+  act(() => latestList().onScroll(at(1590))); // Ainda dentro da faixa do fim, com o dedo na tela.
+  act(() => latestList().onScrollEndDrag?.(at(1590)));
+  act(() => latestList().onMomentumScrollBegin?.(at(1590)));
+  addRow('during-momentum');
+  expect(list.scrollToEnd).not.toHaveBeenCalled();
+  act(() => latestList().onMomentumScrollEnd?.(at(1200)));
+  addRow('away');
+  expect(list.scrollToEnd).not.toHaveBeenCalled();
+  act(() => latestList().onScrollBeginDrag?.(at(1200)));
+  act(() => latestList().onScrollEndDrag?.(at(1600)));
+  addRow('back-at-end');
+  expect(list.scrollToEnd).toHaveBeenCalledWith({ animated: false });
 });
 
 it('retoma só no fim medido pelo scroll ou pelo botão Ir pro fim', () => {

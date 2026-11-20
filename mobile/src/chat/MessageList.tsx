@@ -176,6 +176,9 @@ export function MessageList({
     toolGroupPausedRef.current = false;
     setToolGroupPaused(false);
   }, []);
+  // Com o dedo na lista ou o impulso andando, nada a leva ao fim: a posição lida chega com atraso
+  // e, logo depois de abrir a conversa, ainda diz "no fim".
+  const dragging = useRef(false);
   const dataRef = useRef(data);
   useEffect(() => { dataRef.current = data; }, [data]);
   // Medidas lidas na hora do toque, por referência: como dependência, cada mudança de altura do
@@ -302,6 +305,15 @@ export function MessageList({
     if (reading.current.atEnd && toolGroupPausedRef.current) resumeFollowing();
     setLongeDoFim(falta > viewport);
   }, [resumeFollowing]);
+  const onScrollBeginDrag = useCallback(() => {
+    dragging.current = true;
+    reading.current.atEnd = false;
+  }, []);
+  const onMomentumScrollBegin = useCallback(() => { dragging.current = true; }, []);
+  const settleScroll = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
+    dragging.current = false;
+    onScroll(e);
+  }, [onScroll]);
   const onContentSizeChange = useCallback((_width: number, height: number) => {
     if (!toolGroupPausedRef.current || !Number.isFinite(height) || !(height > 0)) return;
     toolGroupMeasurement.current.height = height;
@@ -321,9 +333,9 @@ export function MessageList({
   const rowCount = data.length;
   const hasPreview = !!visiblePreview;
   useEffect(() => {
-    if (!reading.current.atEnd || toolGroupPausedRef.current) return;
+    if (!reading.current.atEnd || toolGroupPausedRef.current || dragging.current) return;
     const keepAtEnd = () => {
-      if (reading.current.atEnd && !toolGroupPausedRef.current) void lista.current?.scrollToEnd({ animated: false });
+      if (reading.current.atEnd && !toolGroupPausedRef.current && !dragging.current) void lista.current?.scrollToEnd({ animated: false });
     };
     const frame = requestAnimationFrame(keepAtEnd);
     const later = setTimeout(keepAtEnd, 250);
@@ -374,6 +386,10 @@ export function MessageList({
     <LegendList
       ref={lista}
       onScroll={onScroll}
+      onScrollBeginDrag={onScrollBeginDrag}
+      onScrollEndDrag={settleScroll}
+      onMomentumScrollBegin={onMomentumScrollBegin}
+      onMomentumScrollEnd={settleScroll}
       onContentSizeChange={preserveExpansion ? onContentSizeChange : undefined}
       scrollEventThrottle={100}
       nestedScrollEnabled={nestedScrollEnabled}
