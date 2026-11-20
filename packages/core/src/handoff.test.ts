@@ -17,7 +17,7 @@ describe('modelDisplay', () => {
 });
 
 describe('handoffTitle', () => {
-  const handoff = (state: SessionHandoff['state'], code?: string): SessionHandoff => ({ state, provider: 'codex', conta: 'codex:a', code });
+  const handoff = (state: SessionHandoff['state'], code?: string): SessionHandoff => ({ state, provider: 'codex', account: 'codex:a', code });
 
   it('distingue espera com a sessão trabalhando, troca em curso e falha', () => {
     const waiting = handoffTitle(handoff('waiting'), 'idle');

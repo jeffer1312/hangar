@@ -151,6 +151,8 @@ impl Hangar {
     pub(super) fn picker_opened(&mut self, cx: &mut Context<Self>) {
         self.controls.picker_tab = None;
         self.controls.picker_more = false;
+        // Cada abertura relê o catálogo do Codex: uma falha não fica presa, e a conta de mais folga é a de agora.
+        self.controls.handoff = None;
         if self.controls.favorites.is_none() { self.controls.favorites = Some(crate::appearance::favorite_models()); }
         if self.handoff_source_now().is_some() { self.ensure_session_accounts(cx); }
     }
@@ -217,7 +219,9 @@ impl Hangar {
         let favorites = self.favorite_list();
         let has_favorites = own.iter().chain(&handoff).any(|c| favorites.contains(&c.key));
         // A aba à vista: a escolhida, ou os favoritos quando algum está na lista, ou o agente da sessão.
-        let tab = self.controls.picker_tab.clone().unwrap_or_else(|| if has_favorites { FAVORITES.into() } else { self.provider().0.to_owned() });
+        // Sem favorito sobrando, a aba de Favoritos sai do trilho e a lista volta ao agente da sessão.
+        let tab = self.controls.picker_tab.clone().filter(|tab| tab != FAVORITES || has_favorites)
+            .unwrap_or_else(|| if has_favorites { FAVORITES.into() } else { self.provider().0.to_owned() });
         PickerView { own, handoff, tab, has_favorites }
     }
 
@@ -256,7 +260,14 @@ impl Hangar {
         let list = self.controls.favorites.get_or_insert_with(Vec::new);
         match list.iter().position(|f| *f == key) { Some(at) => { list.remove(at); } None => list.push(key) }
         let saved = list.clone();
-        self.runtime.spawn_blocking(move || crate::appearance::save_favorite_models(&saved));
+        // Estrelas rápidas gravam em ordem: só a lista mais nova chega ao disco.
+        static LATEST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        static WRITING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let version = LATEST.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+        self.runtime.spawn_blocking(move || {
+            let _turn = WRITING.lock().unwrap_or_else(|e| e.into_inner());
+            if LATEST.load(std::sync::atomic::Ordering::SeqCst) == version { crate::appearance::save_favorite_models(&saved); }
+        });
         cx.notify();
     }
 

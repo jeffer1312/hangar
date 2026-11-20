@@ -19,6 +19,8 @@ use hangar_api::session::HandoffState;
 
 /// Teto entre conferências da origem: o evento do ator acorda antes; sem ele, a conferência periódica vale.
 const POLL: Duration = Duration::from_secs(2);
+/// Intervalo mínimo entre conferências, mesmo com eventos seguidos.
+const MIN_GAP: Duration = Duration::from_secs(1);
 /// Teto da espera: sessão esquecida trabalhando não segura a fila para sempre.
 const MAX_WAIT: Duration = Duration::from_secs(2 * 60 * 60);
 /// Quanto a falha fica na linha antes de sair.
@@ -31,7 +33,7 @@ pub(super) async fn start(st: Arc<AppState>, runtime: Arc<RuntimeRegistry>, name
         return super::account::transfer_refusal(headers, hangar_conversation_transfer::TransferError::new("session_transfer_busy"));
     }
     let view = hangar_api::session::Handoff { state: HandoffState::Waiting, provider: "codex".into(), model: request.model.clone(),
-        effort: request.effort.clone(), conta: request.credential_id.clone(), code: None };
+        effort: request.effort.clone(), account: request.credential_id.clone(), code: None };
     let generation = runtime.hold_handoff(&name, view.clone());
     st.list.invalidate();
     tokio::spawn(run(st, runtime, name, request, generation));
@@ -50,7 +52,10 @@ async fn next_turn_signal(events: &mut tokio::sync::broadcast::Receiver<crate::r
             }
         }
     };
+    let started = tokio::time::Instant::now();
     let _ = tokio::time::timeout(POLL, signal).await;
+    // Turno em fluxo publica vários eventos por segundo: no máximo uma conferência por segundo.
+    tokio::time::sleep(MIN_GAP.saturating_sub(started.elapsed())).await;
 }
 
 async fn run(st: Arc<AppState>, runtime: Arc<RuntimeRegistry>, name: String, request: TransferRequest, generation: u64) {

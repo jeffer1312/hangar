@@ -1207,7 +1207,9 @@ Claude → Codex recusava sessão ocupada (`session_transfer_source_busy`) e fil
 
 O seletor de modelos do nativo passa a oferecer o Codex numa aba do trilho. O pedido leva
 `when_idle`; o servidor guarda a troca, para a fila (o Claude não recebe mais nada) e confere a
-origem a cada segundo. Livre, a transferência roda inteira, com a recuperação que já existia. A fila
+origem quando o ator da sessão publica um evento, no máximo uma vez por segundo, ou a cada 2 s sem
+evento. Cancelada, a troca não volta a andar, e a transferência direta (cartão de contas) é recusada
+enquanto ela vale. Livre, a transferência roda inteira, com a recuperação que já existia. A fila
 não muda de dono: a chave é a mesma, e o Codex adotado entrega o que ficou esperando, que é o
 comportamento do T3 (o que foi mandado depois da escolha vai ao modelo novo). Linha já entregue e
 sem confirmação pode estar no transcript do Claude; ela segura a troca até confirmar. Espera

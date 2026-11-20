@@ -277,7 +277,7 @@ export interface SessionHandoff {
   provider: string;
   model?: string | null;
   effort?: string | null;
-  conta: string;
+  account: string;
   /** Código do motivo, só em `failed`. */
   code?: string | null;
 }

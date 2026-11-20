@@ -735,7 +735,7 @@ impl RuntimeRegistry {
     /// Com a fila segurada para a troca, só a linha entregue e ainda não confirmada segura: a que espera
     /// entrega vai ao Codex.
     async fn transfer_queue_empty(&self, name: &str, key: &str) -> Result<(), TransferError> {
-        let held = self.queue_held(name);
+        let held = self.handoff_held(name);
         let queue = self.codex_environment().claude_base.join(".hangar-queue");
         let (state, _) = super::super::codex_terminal::queue_files(&queue, key);
         let rows = match super::super::queue::read_replaced(&state) {

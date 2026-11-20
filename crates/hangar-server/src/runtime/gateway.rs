@@ -483,7 +483,9 @@ impl RuntimeRegistry {
     }
     pub fn limit_held(&self,name:&str) -> bool { self.limit_holds.lock().unwrap_or_else(|e|e.into_inner()).contains(name) }
     /// A fila parada para ir com a conversa a outro destino: troca de conta no limite ou troca de agente.
-    pub fn queue_held(&self,name:&str) -> bool { self.limit_held(name) || self.handoffs.lock().unwrap_or_else(|e|e.into_inner()).get(name).is_some_and(|p|!p.cancelled) }
+    pub fn queue_held(&self,name:&str) -> bool { self.limit_held(name) || self.handoff_held(name) }
+    /// A fila segurada por uma troca de agente que ainda vale (nem cancelada nem falha).
+    pub fn handoff_held(&self,name:&str) -> bool { self.handoffs.lock().unwrap_or_else(|e|e.into_inner()).get(name).is_some_and(|p|!p.cancelled) }
     /// Registra a troca de agente à espera; devolve a geração dela. Pedido novo no mesmo nome substitui o anterior.
     pub fn hold_handoff(&self,name:&str,view:hangar_api::session::Handoff) -> u64 {
         static NEXT:std::sync::atomic::AtomicU64=std::sync::atomic::AtomicU64::new(1);
@@ -495,6 +497,8 @@ impl RuntimeRegistry {
     pub fn handoff_mark(&self,name:&str,generation:u64,state:HandoffState,code:Option<&str>) -> bool {
         let mut all=self.handoffs.lock().unwrap_or_else(|e|e.into_inner());
         let Some(pending)=all.get_mut(name).filter(|p|p.generation==generation) else { return false };
+        // Cancelada não volta a andar: o DELETE já respondeu que a troca não acontece.
+        if pending.cancelled && state!=HandoffState::Failed { return false; }
         pending.view.state=state;
         pending.view.code=code.map(str::to_owned);
         // Falha devolve a fila na hora; a linha ainda mostra o motivo.
@@ -3507,7 +3511,7 @@ pub(crate) mod tests {
 
     fn handoff_view() -> hangar_api::session::Handoff {
         hangar_api::session::Handoff { state: HandoffState::Waiting, provider: "codex".into(), model: Some("gpt-6.2-sol".into()),
-            effort: Some("low".into()), conta: "codex:a".into(), code: None }
+            effort: Some("low".into()), account: "codex:a".into(), code: None }
     }
 
     #[test]
@@ -3533,6 +3537,7 @@ pub(crate) mod tests {
         assert!(registry.handoff_mark("s", generation, HandoffState::Waiting, None));
         assert!(registry.cancel_handoff("s"));
         assert!(!registry.handoff_live("s", generation) && !registry.queue_held("s"));
+        assert!(!registry.handoff_mark("s", generation, HandoffState::Running, None), "cancelada não volta a trocar");
         let generation = registry.hold_handoff("s", handoff_view());
         registry.fail_handoff("s", generation, "session_transfer_login_required");
         let shown = registry.handoff_view("s").unwrap();

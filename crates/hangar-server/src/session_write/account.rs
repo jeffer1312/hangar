@@ -234,6 +234,10 @@ pub async fn switch_route(State(st):State<Arc<AppState>>,ConnectInfo(peer):Conne
                 }
                 return super::handoff::start(st.clone(),runtime,name,request,&parts.headers).await;
             }
+            // A troca pedida pelo seletor ainda vale: a transferência direta passaria por cima dela.
+            if runtime.handoff_held(&name) {
+                return transfer_refusal(&parts.headers,hangar_conversation_transfer::TransferError::new("session_transfer_busy"));
+            }
             let (st2,owned)=(st.clone(),name.clone());
             let outcome=tokio::spawn(async move { transfer_now(&st2,&runtime,&owned,request).await })
                 .await.unwrap_or_else(|_|Err(hangar_conversation_transfer::TransferError::new("session_transfer_failed").with_status(500)));

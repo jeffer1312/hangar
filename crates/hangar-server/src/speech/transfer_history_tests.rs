@@ -410,6 +410,9 @@ fn handoff_divider_closes_the_history_before_any_new_turn_and_skips_other_conver
     let mut events = vec![event("user_msg", boundary, 1.)];
     insert_handoff_divider(directory.path(), "session", &path, &mut events);
     assert_eq!(events.last().map(|e| e.kind.as_str()), Some("handoff"));
+    let mut later = vec![event("user_msg", boundary + 40, 2.), event("assistant_msg", boundary + 90, 3.)];
+    insert_handoff_divider(directory.path(), "session", &path, &mut later);
+    assert_eq!(later.len(), 2, "página só com turnos do Codex não leva o divisor");
     let mut untouched = vec![event("user_msg", 10, 1.)];
     insert_handoff_divider(directory.path(), "other", &path, &mut untouched);
     assert_eq!(untouched.len(), 1, "conversa sem transferência fica igual");

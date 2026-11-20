@@ -31,7 +31,7 @@ pub struct Handoff {
     pub model: Option<String>,
     #[serde(default)]
     pub effort: Option<String>,
-    pub conta: String,
+    pub account: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub code: Option<String>,
 }
