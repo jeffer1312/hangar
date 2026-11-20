@@ -230,8 +230,10 @@ it('linha nova não puxa ao fim enquanto o dedo arrasta, mesmo perto do fim', ()
   const at = (y: number) => ({ nativeEvent: {
     contentOffset: { y }, contentSize: { height: 2000 }, layoutMeasurement: { height: 400 },
   } } as NativeSyntheticEvent<NativeScrollEvent>);
+  let events = initial.events;
   const addRow = (id: string) => {
-    act(() => root.render(createElement(MessageList, { ...initial, events: [...initial.events, event({ id })] })));
+    events = [...events, event({ id })];
+    act(() => root.render(createElement(MessageList, { ...initial, events })));
     act(() => vi.advanceTimersByTime(300));
   };
   act(() => vi.advanceTimersByTime(300));
