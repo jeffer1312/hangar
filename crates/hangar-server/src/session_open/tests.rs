@@ -142,6 +142,13 @@ fn hooks_off_is_only_for_the_server() {
     assert_eq!(open::with_hooks_off(None, true), Some(serde_json::json!({"disableAllHooks": true})));
 }
 
+#[test]
+fn hooks_off_reaches_the_claude_command_line() {
+    let settings = open::with_hooks_off(Some(serde_json::json!({"enabledPlugins": {"p@m": true}})), true).unwrap();
+    let passed: serde_json::Value = serde_json::from_str(&super::claude::settings_json(&settings)).unwrap();
+    assert_eq!(passed["disableAllHooks"], serde_json::json!(true), "o `--settings` do processo leva o desligar dos hooks");
+}
+
 // ── resolve_open ─────────────────────────────────────────────────────────────────────────────
 
 /// Os fatos do cenário: o estado inicial (`state`) e as respostas das bordas (`fakes`).

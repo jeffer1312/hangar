@@ -107,35 +107,37 @@ pub async fn start(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
     let files = hook_files(&row, &body.subject).await;
     let prompt = hangar_notice_actions::fix_prompt(&body.subject, &body.detail, &files);
     let attempt = now_ms();
-    // Gravado antes de abrir: a volta nunca acha a sessão sem saber de quem ela é. O nome fica reservado no registro.
     let taken: HashSet<String> = rows.iter().map(|r| r.name.clone()).collect();
-    let (parent, notice_id, subject) = (name.clone(), body.notice_id.clone(), body.subject.clone());
-    let reserved = registry(&st, move |all| {
-        if fixes::running(all, &parent, &notice_id) { return Err(("erro_conserto_em_andamento", "este aviso já tem um conserto em andamento")); }
-        let child = fixes::child_name(&subject, |candidate| taken.contains(candidate) || all.contains_key(candidate))
-            .ok_or(("erro_nome_em_uso", "sem nome livre para a sessão de conserto"))?;
-        all.insert(child.clone(), Fix { parent, notice_id, attempt, subject });
-        Ok(child)
-    }).await;
-    let child = match reserved {
-        Ok(Ok(child)) => child,
-        Ok(Err((code, message))) => return failure(StatusCode::CONFLICT, code, message),
-        Err(_) => return failure(StatusCode::SERVICE_UNAVAILABLE, "erro_consertos_gravacao", "o registro de consertos não pôde ser gravado"),
-    };
-    // O vigia acorda já: se a abertura terminar sem quem pediu, a volta não depende do fim deste pedido.
-    WAKE.notify_one();
-    let open = SessionOpenRequest {
-        name: Some(child.clone()), cwd: row.cwd.clone().unwrap_or_default(),
-        config_dir: crate::list::context::config_dir_of(row.conta.as_deref()).map(|dir| dir.display().to_string()),
-        provider: Some("claude".into()), headless: Some(true), model: Some("sonnet".into()), initial_prompt: Some(prompt),
-        creator: Some(name.clone()), disable_hooks: body.blocking, ..SessionOpenRequest::default()
-    };
-    let fix = Fix { parent: name.clone(), notice_id: body.notice_id, attempt, subject: body.subject };
-    let (reserved_child, origin) = (child.clone(), name.clone());
-    let st_after = st.clone();
-    // Tarefa própria: o celular que vai para o fundo cancela o pedido, e a sessão aberta ficaria sem a nota
-    // de andamento ou com o registro de uma abertura recusada.
+    // O nome reservado, para a reserva sair se a tarefa cair no meio.
+    let reserved_child: Arc<std::sync::Mutex<Option<String>>> = Arc::default();
+    let (reserved_in_task, origin, st_after) = (reserved_child.clone(), name.clone(), st.clone());
+    // Tarefa própria, da reserva ao fim: o celular que vai para o fundo cancela o pedido, e a reserva gravada
+    // ficaria sem sessão, ou a sessão aberta sem a nota de andamento.
     let task = tokio::spawn(async move {
+        // Gravado antes de abrir: a volta nunca acha a sessão sem saber de quem ela é. O nome fica reservado no registro.
+        let (parent, notice_id, subject) = (name.clone(), body.notice_id.clone(), body.subject.clone());
+        let reserved = registry(&st, move |all| {
+            if fixes::running(all, &parent, &notice_id) { return Err(("erro_conserto_em_andamento", "este aviso já tem um conserto em andamento")); }
+            let child = fixes::child_name(&subject, |candidate| taken.contains(candidate) || all.contains_key(candidate))
+                .ok_or(("erro_nome_em_uso", "sem nome livre para a sessão de conserto"))?;
+            all.insert(child.clone(), Fix { parent, notice_id, attempt, subject });
+            Ok(child)
+        }).await;
+        let child = match reserved {
+            Ok(Ok(child)) => child,
+            Ok(Err((code, message))) => return failure(StatusCode::CONFLICT, code, message),
+            Err(_) => return failure(StatusCode::SERVICE_UNAVAILABLE, "erro_consertos_gravacao", "o registro de consertos não pôde ser gravado"),
+        };
+        *reserved_in_task.lock().unwrap_or_else(|e| e.into_inner()) = Some(child.clone());
+        // O vigia acorda já: se a abertura terminar sem quem pediu, a volta não depende do fim deste pedido.
+        WAKE.notify_one();
+        let open = SessionOpenRequest {
+            name: Some(child.clone()), cwd: row.cwd.clone().unwrap_or_default(),
+            config_dir: crate::list::context::config_dir_of(row.conta.as_deref()).map(|dir| dir.display().to_string()),
+            provider: Some("claude".into()), headless: Some(true), model: Some("sonnet".into()), initial_prompt: Some(prompt),
+            creator: Some(name.clone()), disable_hooks: body.blocking, ..SessionOpenRequest::default()
+        };
+        let fix = Fix { parent: name.clone(), notice_id: body.notice_id, attempt, subject: body.subject };
         match open_owned(&st, open).await {
             Decision::Opened(_) => {
                 let text = format!("Consertando em {child}");
@@ -161,7 +163,8 @@ pub async fn start(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
         Ok(response) => response,
         Err(_) => {
             // A abertura caiu no meio: a reserva sai, ou o aviso ficaria preso em "em andamento" por 2 h.
-            if registry(&st_after, move |all| { all.remove(&reserved_child); }).await.is_err() {
+            let child = reserved_child.lock().unwrap_or_else(|e| e.into_inner()).take();
+            if let Some(child) = child && registry(&st_after, move |all| { all.remove(&child); }).await.is_err() {
                 report(&st_after, &origin, "notice_fixes_write_failed", "abertura que caiu ficou no registro de consertos");
             }
             failure(StatusCode::INTERNAL_SERVER_ERROR, "erro_criacao_sessao", "a abertura do conserto não terminou")
@@ -204,6 +207,10 @@ async fn note(st: &AppState, parent: &str, entry_id: &str, text: &str, meta: Val
     }
     if let Some(mark) = runtime.asleep(parent).await {
         return runtime.asleep_queue_action(parent, &mark.key, &call(), action()).await.map(|_| ()).map_err(|e| e.code);
+    }
+    // Sem terminal e estacionada (parada há mais de uma hora): fila dela pelo arquivo, sem subir o processo.
+    if let Some(key) = runtime.claude_headless_key(parent).await {
+        return runtime.asleep_queue_action(parent, &key, &call(), action()).await.map(|_| ()).map_err(|e| e.code);
     }
     runtime.adopt_claude_terminal(parent).await.map_err(|e| e.code)?;
     runtime.queue_action(parent, call(), action()).await.map(|_| ()).map_err(|e| e.code)
@@ -258,8 +265,9 @@ enum Step { Wait, Answered, Failed(&'static str) }
 /// `since`: desde quando a linha está parada com a mesma resposta (segundos do relógio).
 fn step(fix: &Fix, row: Option<&SessionRow>, since: Option<f64>, now_s: f64, now_ms: u64) -> Step {
     if now_ms.saturating_sub(fix.attempt) > MAX_AGE_MS { return Step::Failed("a sessão de conserto não respondeu em 2 h"); }
-    let Some(row) = row else { return Step::Wait };
-    if row.state == "dead" && now_ms.saturating_sub(fix.attempt) > DEAD_GRACE_MS { return Step::Failed("a sessão de conserto caiu"); }
+    let started = now_ms.saturating_sub(fix.attempt) > DEAD_GRACE_MS;
+    let Some(row) = row else { return if started { Step::Failed("a sessão de conserto foi fechada") } else { Step::Wait } };
+    if row.state == "dead" && started { return Step::Failed("a sessão de conserto caiu"); }
     let answered = row.state == "idle" && row.last_reply_at.is_some_and(|at| at * 1000.0 >= fix.attempt as f64);
     if answered && since.is_some_and(|since| now_s - since >= SETTLE_S) { Step::Answered } else { Step::Wait }
 }
@@ -353,6 +361,8 @@ mod tests {
         assert_eq!(step(&f, Some(&row("dead", None)), None, 100.0, f.attempt + 5_000), Step::Wait, "ainda abrindo");
         assert!(matches!(step(&f, Some(&row("dead", None)), None, 100.0, f.attempt + DEAD_GRACE_MS + 1), Step::Failed(_)),
             "caiu: não fica consertando por 2 h");
+        assert!(matches!(step(&f, None, None, 100.0, f.attempt + DEAD_GRACE_MS + 1), Step::Failed(_)),
+            "fechada (fora da lista depois de abrir): não fica consertando por 2 h");
     }
 
     #[test]

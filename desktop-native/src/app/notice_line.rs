@@ -328,7 +328,9 @@ impl Hangar {
                     .into_any_element(),
             }),
             (NoticeAction::Fix, acted) => {
-                let opened = matches!(acted, Some(Acted::FixOpened(before)) if *before == fix);
+                // A nota "consertando" pode chegar antes da resposta do pedido: andamento e resultado vencem o giro.
+                let opened = matches!(acted, Some(Acted::FixOpened(before)) if *before == fix)
+                    && !matches!(fix, Some(FixState::Running { .. } | FixState::Done));
                 if opened || matches!(acted, Some(Acted::FixStarting)) { return Some(spin(tr_shared("notice_fix", &[]))); }
                 match fix {
                     Some(FixState::Running { child }) => Some(notice_spin(&id, notice_fixing(&id, &child).cursor_pointer()
