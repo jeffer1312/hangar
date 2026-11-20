@@ -101,7 +101,11 @@ fn terminal_thinking_text(view: &Entity<TextViewState>, cx: &App) -> Div {
     div().flex().items_start().gap(px(chrome::THINKING_GAP)).pl(px(INDENT - 8.)).text_color(dim)
         .child(div().flex_none().h(px(conversation_line(false))).flex().items_center()
             .child(chrome::small_icon(IconName::Brain, chrome::THINKING_ICON, dim)))
-        .child(div().flex_1().min_w_0().child(thinking_markdown(view, cx)))
+        .child(div().flex_1().min_w_0()
+            // Conversa nova: o rótulo diz que o texto cinza é o raciocínio, não a resposta.
+            .when(crate::appearance::conversation_beta(), |el| el.child(div().text_size(px(11.5)).font_weight(FontWeight::SEMIBOLD)
+                .text_color(theme::faint()).child(tr("thinking").to_uppercase())))
+            .child(thinking_markdown(view, cx)))
 }
 
 /// Raciocínio recolhido: o brain e a primeira frase numa linha, num botão que abre o texto inteiro.
@@ -166,12 +170,24 @@ pub(super) const FOLD_SUB_INDENT: f32 = 7. + 8.;
 
 /// Linha de cima da dobra: o ponto e o título num botão, que foca pelo teclado, ativa com Enter/Espaço e leva o rótulo,
 /// como o cabeçalho da chamada.
-pub(super) fn fold_header(id: SharedString, title: String, open: bool, live: bool,
+pub(super) fn fold_header(id: SharedString, title: String, open: bool, live: bool, failed: usize,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> AnyElement {
-    div().flex().gap(px(8.)).child(fold_lead(live))
+    // Conversa nova: a falha aparece na própria linha (marca vermelha e "N falhou"), sem abrir a dobra.
+    let flagged = failed > 0 && !live && crate::appearance::conversation_beta();
+    let lead = if flagged {
+        div().flex_none().w(px(7.)).h(px(19.)).flex().items_center().justify_center()
+            .child(chrome::small_icon(IconName::CircleX, 12., theme::danger())).into_any_element()
+    } else { fold_lead(live).into_any_element() };
+    let note = flagged.then(|| super::rows::failed_count(failed));
+    let label = super::rows::tree_header_title(title.clone(), if flagged { failed } else { 0 });
+    div().flex().gap(px(8.)).child(lead)
         .child(Button::new(id).ghost().flex_1().min_w_0().h_auto().p_0().justify_start().toggled(open)
-            .accessibility_label(title.clone())
-            .child(div().w_full().font_family(theme::MONO).text_size(px(12.5)).line_height(px(19.)).text_color(theme::muted()).child(title))
+            .accessibility_label(label)
+            .child(div().w_full().flex().items_center().gap(px(8.)).font_family(theme::MONO).text_size(px(12.5)).line_height(px(19.))
+                .child(div().min_w_0().text_color(if flagged { theme::text() } else { theme::muted() })
+                    .when(flagged, |el| el.font_weight(FontWeight::SEMIBOLD)).child(title))
+                .when_some(note, |el, note| el.child(div().flex_none().px(px(6.)).rounded(px(5.)).bg(theme::danger().alpha(0.12))
+                    .text_color(theme::danger()).text_size(px(12.)).child(note))))
             .on_click(on_click)).into_any_element()
 }
 
@@ -186,7 +202,8 @@ pub(super) fn fold_sub(text: String, color: Hsla) -> AnyElement {
 pub(super) fn assistant_text_row(content: Div, line: f32) -> Div {
     div().w_full().flex().items_start().gap(px(8.))
         .child(bullet(theme::text(), line).debug_selector(|| "term-text-dot".into()))
-        .child(content.flex_1().min_w_0())
+        // Conversa nova: a prosa para em ~95 caracteres; diffs e saídas continuam na largura da coluna.
+        .child(content.flex_1().min_w_0().when(crate::appearance::conversation_beta(), |el| el.max_w(px(760.))))
 }
 
 /// Edit, MultiEdit e o patch do Codex aparecem como "Update", e MCP como "servidor - ferramenta (MCP)": os nomes que
@@ -253,7 +270,10 @@ fn line(op: Op, number: Option<u32>, width: usize, code: impl IntoElement) -> Di
     let (marker, tint) = (match op { Op::Add => "+", Op::Del => "-", Op::Same => " " }, tint(op));
     let ink = tint.unwrap_or_else(|| theme::faint().opacity(0.8));
     div().w_full().flex().font_family(theme::MONO).text_size(px(12.)).line_height(px(19.))
-        .when_some(tint, |el, tint| el.bg(tint.opacity(0.14)))
+        // Conversa nova: tinta leve com um filete na borda; o código fica em primeiro plano, não a mancha verde.
+        .when_some(tint, |el, tint| if crate::appearance::conversation_beta() {
+            el.bg(tint.opacity(0.07)).border_l_2().border_color(tint.opacity(0.55))
+        } else { el.bg(tint.opacity(0.14)) })
         .child(div().flex_none().w(px(width as f32 * 7.5 + 8.)).flex().justify_end().text_color(ink).child(number.map(|n| n.to_string()).unwrap_or_default()))
         .child(div().flex_none().w(px(18.)).flex().justify_center().text_color(ink).child(marker))
         .child(div().flex_1().min_w_0().text_color(theme::text().opacity(0.92)).child(code))
@@ -611,7 +631,8 @@ impl Hangar {
             let live = folded.iter().rev().find(|t| t.result.is_none() && self.running(t.call)).copied();
             let title = fold_title(&self.chat.events, folded, &folded_kinds, live.is_some());
             let toggle_key = key.clone();
-            let mut block = vec![fold_header(SharedString::from(key), title, open, live.is_some(),
+            let failures: Vec<Tool> = folded.iter().filter(|t| t.result.is_some_and(|r| self.chat.events[r].is_error == Some(true))).copied().collect();
+            let mut block = vec![fold_header(SharedString::from(key), title, open, live.is_some(), failures.len(),
                 cx.listener(move |this, _, _, cx| this.toggle(toggle_key.clone(), cx)))];
             if !open {
                 // Recolhida, a linha mostra o que roda agora e a saída de cada falha, como o Claude Code.
@@ -622,7 +643,7 @@ impl Hangar {
                     let shell = call.tool_name.as_deref().is_some_and(|name| is_any(name, SHELL_TOOLS));
                     block.push(fold_sub(if shell { format!("$ {summary}") } else { summary }, theme::muted()));
                 }
-                for tool in folded.iter().filter(|t| t.result.is_some_and(|r| self.chat.events[r].is_error == Some(true))) {
+                for tool in &failures {
                     block.push(fold_sub(self.tool_status(*tool).0, theme::danger()));
                 }
             }

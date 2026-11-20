@@ -53,6 +53,8 @@ pub fn rust_route(method: &Method, path: &str) -> bool {
     if *method == Method::POST && matches!(path, "/api/device-install/trust" | "/api/device-install/start" | "/api/device-install/code" | "/api/device-install/certs") { return true; }
     if *method == Method::POST && matches!(path, "/api/update/accept" | "/api/update/arrived/seen") { return true; }
     if *method == Method::POST && path == "/api/ask-history" { return true; }
+    // Code Mode já ligado no settings.json principal (`claude_defaults::code_mode`).
+    if *method == Method::GET && path == "/api/claude/code-mode" { return true; }
     // `peer-address` saiu: o Rust responde qualquer método com o 404 de rota inexistente.
     if path.strip_prefix("/api/sessions/").and_then(|r| r.split_once('/')).is_some_and(|(_, t)| t == "peer-address") { return true; }
     if *method == Method::GET {

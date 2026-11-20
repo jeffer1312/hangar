@@ -14,6 +14,7 @@ mod dictation_pill;
 mod login_browser;
 mod memory_dream;
 mod new_chat_mode;
+mod new_conversation;
 mod no_project;
 mod password_vault;
 mod plugins;
@@ -93,6 +94,7 @@ pub fn animation(name: &str) -> Option<NewsAnimation> {
         "tela-de-status" => Some(server_status::render),
         "consertar-com-agente" => Some(agent_fix::render),
         "revisao-do-trabalho" => Some(work_review::render),
+        "conversa-nova" => Some(new_conversation::render),
         _ => None,
     }
 }

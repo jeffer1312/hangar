@@ -30,6 +30,27 @@ fn settings_mode(permission: &str) -> Option<&'static str> {
     })
 }
 
+/// O Code Mode já ligado pelo `env` do settings.json principal: o app mostra a opção como ligada fora dele.
+fn code_mode_in_settings(home: &Path) -> bool {
+    crate::config_sync::runtime::main_claude_settings(home)
+        .is_some_and(|settings| crate::config_sync::runtime::env_on(&settings, crate::session_open::claude::CODE_MODE_ENV))
+}
+
+/// `GET /api/claude/code-mode`: o Code Mode já ligado no settings.json principal, que o espelho leva às contas.
+pub async fn code_mode(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    request: Request,
+) -> Response {
+    let (forward, owner) = match gate(&state, peer, &request).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
+    if !owner {
+        return pass(&state, request, &forward).await;
+    }
+    let home = state.accounts.env.home.clone();
+    let on = tokio::task::spawn_blocking(move || code_mode_in_settings(&home)).await.unwrap_or(false);
+    json_response(StatusCode::OK, json!({"settings": on}))
+}
+
 pub async fn save(
     State(state): State<Arc<AppState>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
@@ -126,6 +147,23 @@ fn apply(path: &Path, body: &Value) -> Result<Vec<&'static str>, Failure> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn code_mode_reads_the_env_of_the_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".claude")).unwrap();
+        let path = dir.path().join(".claude/settings.json");
+        assert!(!code_mode_in_settings(dir.path()), "sem arquivo");
+        for (raw, on) in [(r#"{"env":{"CLAUDE_CODE_EXPERIMENTAL_CODE_MODE":"1"}}"#, true),
+            (r#"{"env":{"CLAUDE_CODE_EXPERIMENTAL_CODE_MODE":"true"}}"#, true),
+            (r#"{"env":{"CLAUDE_CODE_EXPERIMENTAL_CODE_MODE":"0"}}"#, false),
+            (r#"{"env":{"CLAUDE_CODE_EXPERIMENTAL_CODE_MODE":"Yes"}}"#, true),
+            (r#"{"env":{"OUTRA":"1"}}"#, false),
+            ("{ quebrado", false)] {
+            std::fs::write(&path, raw).unwrap();
+            assert_eq!(code_mode_in_settings(dir.path()), on, "{raw}");
+        }
+    }
 
     fn run(start: Option<&str>, body: Value) -> (Result<Vec<&'static str>, Failure>, Option<Value>) {
         let dir = tempfile::tempdir().unwrap();

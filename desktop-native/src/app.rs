@@ -249,6 +249,13 @@ pub(crate) fn menu_pill(id: impl Into<ElementId>, text: String, accent: bool, cx
 /// Linha de baixo do cartão: ícones à esquerda; seletores e a ação à direita. Coluna estreita (painel direito aberto):
 /// os seletores e o Enviar descem para a linha de baixo, e entre si quebram de novo se ainda não couberem, em vez de
 /// passar da borda do cartão por cima do painel.
+/// Parar o turno: o quadrado vermelho no botão redondo, o mesmo com o campo vazio e ao lado do Enviar.
+fn turn_stop_button(stopping: bool, cx: &App) -> Button {
+    Button::new("stop").custom(ButtonCustomVariant::new(cx).color(theme::elevated()).foreground(theme::danger()).hover(theme::raised()).active(theme::raised()))
+        .bg(theme::elevated()).child(div().size(px(10.)).rounded(px(2.)).bg(theme::danger())).size(px(30.)).rounded_full()
+        .tooltip(tr("stop_hint")).accessibility_label(tr("stop")).disabled(stopping)
+}
+
 pub(crate) fn composer_control_row(left: impl IntoIterator<Item = AnyElement>, right: impl IntoIterator<Item = AnyElement>, action: impl IntoElement) -> Div {
     div().w_full().flex().flex_wrap().items_center().gap_1().gap_y(px(4.))
         .child(div().flex_shrink_0().flex().items_center().gap_1().children(left))
@@ -4498,7 +4505,15 @@ impl Hangar {
         let mark = if preview { div().size(px(14.)).flex_shrink_0().flex().items_center().justify_center()
                 .child(div().size(px(7.)).rounded_full().bg(theme::accent())).into_any_element() }
             else { self.working_mark_slot(panes::Area::Conversation, "working-line", 14., theme::accent()) };
-        let row = working_line(mark, verb)
+        // Conversa nova: o que acontece agora vem primeiro, em português e na cor do texto; o verbo do terminal vai para a dica.
+        let beta = appearance::conversation_beta() && !sending;
+        let row = if beta {
+            let act = if self.chat.live_thinking.is_empty() { tr("beta_working") } else { tr("beta_thinking") };
+            working_line_box().child(mark)
+                .child(div().id("working-beta").flex_none().text_size(px(14.)).font_weight(FontWeight::SEMIBOLD).text_color(theme::text())
+                    .child(act).tooltip(move |window, cx| gpui_kit::component::tooltip::Tooltip::new(verb.clone()).build(window, cx)))
+        } else { working_line(mark, verb) };
+        let row = row
             .map(|el| match since.filter(|_| !preview) {
                 Some(since) => el.child(self.elapsed_slot(panes::Area::Conversation, "working-elapsed", since, tokens)),
                 // Sem começo conhecido não há segundos, mas os tokens do terminal valem sozinhos.
@@ -5532,6 +5547,11 @@ impl Hangar {
         // A revisão da branch (PR ou MR), quando o servidor acha uma: o chip abre a aba dela no git.
         let review_chip = if session.is_some() { self.review_chip(cx) } else { None };
         let cache = crate::chat::last_cache(&self.chat.events).filter(|_| readable);
+        // Conversa nova: com a aba Contexto à vista, o contexto já está nela e o rodapé não repete o anel.
+        let context_in_panel = appearance::conversation_beta() && self.side_shown(window) && !self.subagent_tab_open()
+            && !self.side_menu_shown() && self.side_tab() == appearance::SideTab::Context;
+        // Sem o anel, o cartão do contexto ficaria preso a uma âncora que não existe mais.
+        if context_in_panel { self.context_card = false; }
         let footer = (repo.is_some() || ctx_pct.is_some() || session.is_some() || cache.is_some()).then(|| {
             let branch = status.as_ref().and_then(|s| s.branch.clone()).or_else(|| session.as_ref().and_then(|s| s.branch.clone())).unwrap_or_default();
             let dirty = status.as_ref().and_then(|s| s.dirty) == Some(true);
@@ -5579,12 +5599,13 @@ impl Hangar {
                     .on_click(cx.listener(|this, _, window, cx| this.open_git_panel(window, cx)))).into_any_element()
             } else { place.into_any_element() };
             // O recuo negativo põe o texto do último item na mesma borda da faixa da pasta, do outro lado.
+            let rings = !context_in_panel;
             let usage = div().flex_shrink_0().ml_auto().mr(px(-6.)).flex().items_center().gap(px(2.))
                 .when_some(cache, |el, cache| el.child(cache_chip(cache)))
-                .child(popup::anchor(div(), "composer-ctx").child(ring("composer-ctx", tr("ring_context"), ctx_pct, self.context_card)
+                .when(rings, |el| el.child(popup::anchor(div(), "composer-ctx").child(ring("composer-ctx", tr("ring_context"), ctx_pct, self.context_card)
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_context_card(cx)))))
                 .child(popup::anchor(div(), crate::tour::anchors::COMPOSER_ACCOUNT).child(ring("composer-account", self.focused_account().map(|(_, name, _)| name).unwrap_or_else(|| tr("ring_account")), account, self.accounts.card)
-                    .on_click(cx.listener(|this, _, _, cx| this.toggle_usage_card(cx)))))
+                    .on_click(cx.listener(|this, _, _, cx| this.toggle_usage_card(cx))))))
                 .when_some(cost, |el, cost| el.child(div().text_color(theme::faint()).opacity(0.6).child("·"))
                     .child(div().h(px(22.)).px(px(6.)).flex().items_center().text_color(theme::muted()).child(cost)));
             // Coluna estreita (painel direito aberto): os anéis descem para a linha de baixo em vez de vazar para baixo do
@@ -5604,14 +5625,30 @@ impl Hangar {
             let enabled = crate::queue_panel::can_update(&payload) && !busy && self.chat_online && self.history_installed;
             self.queue_update_button(enabled, cx)
         } else if can_stop && !has_input {
-            Button::new("stop").custom(ButtonCustomVariant::new(cx).color(theme::elevated()).foreground(theme::danger()).hover(theme::raised()).active(theme::raised()))
-                .bg(theme::elevated()).child(div().size(px(10.)).rounded(px(2.)).bg(theme::danger())).size(px(30.)).rounded_full()
-                .tooltip(tr("stop_hint")).accessibility_label(tr("stop")).disabled(stopping)
-                .on_click(cx.listener(|this, _, window, cx| this.request_stop(window, cx)))
+            turn_stop_button(stopping, cx).on_click(cx.listener(|this, _, window, cx| this.request_stop(window, cx)))
         } else {
             send_button("send", !blocked && has_input, send_label, cx)
                 .on_click(cx.listener(|this, _, window, cx| this.submit(false, false, window, cx)))
         };
+        // Conversa nova: com rascunho no meio do turno, o Parar continua à vista ao lado do Enviar, e uma linha diz
+        // para onde a mensagem vai antes do clique.
+        let beta_draft = appearance::conversation_beta() && can_stop && has_input && !editing;
+        let action = if beta_draft {
+            div().flex().items_center().gap(px(10.))
+                .child(turn_stop_button(stopping, cx).on_click(cx.listener(|this, _, window, cx| this.request_stop(window, cx))))
+                .child(action).into_any_element()
+        } else { action.into_any_element() };
+        let draft_hint = beta_draft.then(|| {
+            // O mesmo critério do `queue_timing`: sem como entrar no turno, Na conversa e Jev caem na fila.
+            let joins = queue::sends_direct(true, &self.chat.state.state, self.provider().0);
+            let key = match appearance::get().delivery_mode() {
+                appearance::DeliveryMode::Direct => "beta_draft_direct",
+                appearance::DeliveryMode::Conversation if joins => "beta_draft_conversation",
+                appearance::DeliveryMode::Jev if joins && self.queue_jev_ready() => "beta_draft_jev",
+                _ => "beta_draft_queue",
+            };
+            div().pb(px(4.)).text_size(px(12.5)).text_color(theme::faint()).child(tr(key))
+        });
         let [commands, attach, recent] = composer_icons(cx);
         let commands = commands.disabled(!readable).selected(self.command_panel)
             .on_click(cx.listener(|this, _, window, cx| {
@@ -5643,6 +5680,7 @@ impl Hangar {
                 .child(tr("attach_progress").replace("{done}", &done.to_string()).replace("{total}", &total.to_string()))))
             .children(self.queue_editing_note())
             .child(field)
+            .children(draft_hint)
             .children(dictation_strip)
             .child(control_row);
         // Na conversa, a caixa e o recuo de 12 px do `.composer` do web; a tela sem sessão fica na largura dela.
@@ -7244,11 +7282,18 @@ pub(crate) fn cache_chip_at(cache: crate::chat::LastCache, now: f64) -> Stateful
         (Some(_), true) => (theme::warning(), theme::warning()),
         (Some(_), false) => (theme::muted(), theme::success()),
     };
+    // Conversa nova: a frase diz o que o tempo é, sem o ponto verde que lia como "saudável"; âmbar só perto do fim.
+    let beta = crate::appearance::conversation_beta();
+    let text = match (&label, beta) {
+        (Some(label), true) => tr("beta_cache_left").replace("{label}", label),
+        (None, true) => tr("beta_cache_expired"),
+        (label, false) => label.clone().unwrap_or_else(|| web("composer_expirou", &[])),
+    };
     div().id("composer-cache").flex_shrink_0().h(px(22.)).px(px(6.)).flex().items_center().gap(px(4.))
-        .font_family(theme::MONO).text_xs().text_color(ink)
+        .when(!beta, |el| el.font_family(theme::MONO)).text_xs().text_color(ink)
         .tooltip(move |window, cx| gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(window, cx))
-        .child(div().size(px(6.)).rounded_full().bg(dot))
-        .child(label.unwrap_or_else(|| web("composer_expirou", &[])))
+        .when(!beta, |el| el.child(div().size(px(6.)).rounded_full().bg(dot)))
+        .child(text)
 }
 
 /// "Trabalhou por 7s · 14:59"; conversa aberta no meio do turno não sabe quando ele começou, e fica só a hora.

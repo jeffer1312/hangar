@@ -726,7 +726,9 @@ impl Hangar {
         // barra larga, a linha do turno e as janelas de cota lado a lado, tudo num bloco só. Painel até 380 px segue a
         // container query do web: legenda desce para a linha de baixo e as partes da linha do turno empilham.
         let narrow = width <= 380.;
-        let number = div().flex_shrink_0().whitespace_nowrap().text_size(px(44.)).line_height(px(44.)).font_weight(FontWeight::SEMIBOLD).text_color(pct_color)
+        // Conversa nova: o número não disputa atenção com o andamento e a decisão pendente.
+        let big = if appearance::conversation_beta() { 30. } else { 44. };
+        let number = div().flex_shrink_0().whitespace_nowrap().text_size(px(big)).line_height(px(big)).font_weight(FontWeight::SEMIBOLD).text_color(pct_color)
             .child(pct.map(|p| format!("{}%", p.round())).unwrap_or_else(|| "—".into()));
         let caption = div().min_w_0().flex().items_baseline().when(narrow, |el| el.flex_wrap()).text_xs().text_color(theme::faint())
             .child(div().flex_shrink_0().whitespace_nowrap().child(tr("side_ctx_label")))
