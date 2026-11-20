@@ -965,6 +965,17 @@ fn a_saved_speed_without_support_falls_back_on_relaunch() {
     assert_eq!(claude::relaunch_tier(&spec, &facts), Some(ServiceTier::Priority), "sem conta Pro fixa o Ultra Fast cai em Fast");
     engines(false);
     assert_eq!(claude::relaunch_tier(&spec, &facts), None, "motor sem Fast: a sessão volta na velocidade normal");
+
+    // A velocidade que caiu fica gravada no registro da mesma vida da sessão.
+    let sidecars = home.join("sidecars");
+    std::fs::create_dir_all(&sidecars).unwrap();
+    std::fs::write(crate::runtime::codex_sidecar::path(&sidecars, "s1"),
+        json!({"name": "s1", "key": spec.key, "service_tier": "ultrafast"}).to_string()).unwrap();
+    crate::runtime::claude_launch::persist_relaunch_tier(&mut spec, &facts, &sidecars, "s1");
+    assert_eq!(spec.service_tier, None);
+    let stored: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(
+        crate::runtime::codex_sidecar::path(&sidecars, "s1")).unwrap()).unwrap();
+    assert!(stored["service_tier"].is_null());
 }
 
 /// `model: ""` com Fast cai no modelo do motor como o `or` do Python: o Fast passa, e quem recusa é

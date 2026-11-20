@@ -121,9 +121,9 @@ export function useServiceTierControl({ serverId, name, provider, model: selecte
   const hidden = !candidate || catalog?.visible === false;
   const available = !hidden && !!catalog && !loading && !error && (isCodex
     ? known || (tier === 'default' && (catalog.supported || catalog.ultrafast))
-    : catalog.offered ? catalog.supported && (tier === 'default' || known) : known);
-  // Ultra Fast já ligado continua escolhível para poder desligar; motor sem Fast deixa só o Normal.
-  const fast = available && catalog?.offered !== false;
+    : known || (catalog.offered && catalog.supported && tier === 'default'));
+  // Ultra Fast já ligado continua escolhível para poder desligar; motor ou modelo sem Fast deixa só o Normal.
+  const fast = available && catalog?.offered !== false && (isCodex || catalog?.supported === true);
   const ultrafast = fast && (current === 'ultrafast' || catalog?.ultrafast === true);
 
   const choose = useCallback(async (next: Tier) => {

@@ -578,6 +578,20 @@ describe('Fast na folha de ajustes real', () => {
     expect(api.tier).toHaveBeenCalledExactlyOnceWith('sess', 'default', state.servers[0]);
   });
 
+  it('modelo atual sem Fast num motor com Fast e a sessão em Fast: só o Normal, e ele volta', async () => {
+    state.rows[0].engine = 'local-gpt';
+    const catalog = { ...engine(), current: { model: 'gpt-current[1m]', service_tier: 'priority' } };
+    catalog.models = [{ id: 'gpt-current', supports_fast: false }];
+    api.models.mockResolvedValue(catalog);
+    const { container } = await mount('claude');
+    expect(fastButton(container).disabled).toBe(true);
+    const normal = speedButton(container, 'native_ctl_speed_normal');
+    expect(normal.disabled).toBe(false);
+    api.tier.mockResolvedValue({ ok: true, service_tier: 'default' });
+    await act(async () => normal.click());
+    expect(api.tier).toHaveBeenCalledExactlyOnceWith('sess', 'default', state.servers[0]);
+  });
+
   it.each(['model-disabled', 'unknown-tier'])('Claude mantém o interruptor indisponível: %s', async (kind) => {
     state.rows[0].engine = 'local-gpt';
     const catalog = engine();

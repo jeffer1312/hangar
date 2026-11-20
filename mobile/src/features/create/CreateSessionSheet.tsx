@@ -304,7 +304,8 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     setEngine('');
     setCotas([]);
     setProviderProbe(null);
-  }, [active]);
+    // Pela identidade da máquina: renovar o token (novo objeto, mesmo destino) não desfaz o motor escolhido.
+  }, [active?.id, active?.baseUrl]);
 
   useEffect(() => {
     if (!enabled) return;

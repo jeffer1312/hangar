@@ -217,8 +217,24 @@ pub fn prepare(env: &AccountEnvironment, bridge: Option<&PluginBridge>, meta: &V
     let mut spec = crate::session_open::record::claude_live(&env.home, meta, name)
         .map_err(|error| refused("launch_meta", &format!("registro da sessão ilegível: {error}")))?;
     let facts = crate::session_open::facts::LocalFacts::new(env.clone(), runtime);
-    refresh_window(&mut spec, &facts, &env.home.join(".hangar").join("claude-headless"), name);
+    let sidecar_dir = env.home.join(".hangar").join("claude-headless");
+    refresh_window(&mut spec, &facts, &sidecar_dir, name);
+    persist_relaunch_tier(&mut spec, &facts, &sidecar_dir, name);
     plan_for(env, bridge, &spec, meta, &facts)
+}
+
+/// A velocidade que caiu na volta fica gravada: a tela e a próxima subida leem a de verdade, não a antiga.
+pub(crate) fn persist_relaunch_tier(spec: &mut SessionSpec, facts: &dyn crate::session_open::OpenFacts, sidecar_dir: &Path, name: &str) {
+    let tier = crate::session_open::claude::relaunch_tier(spec, facts);
+    if tier == spec.service_tier { return; }
+    spec.service_tier = tier;
+    let value = tier.map_or(Value::Null, |tier| Value::from(tier.name()));
+    let patch = [("service_tier".to_owned(), value)].into_iter().collect();
+    match super::codex_sidecar::update_if(sidecar_dir, name, &[("key", Value::from(spec.key.clone()))], &patch) {
+        Ok(Some(_)) => {}
+        Ok(None) => tracing::warn!(session = %name, "sidecar mudou de vida; a velocidade efetiva não foi gravada"),
+        Err(error) => tracing::warn!(session = %name, kind = ?error.kind(), "a velocidade efetiva não foi gravada no sidecar"),
+    }
 }
 
 /// O comando de agora para um spec já decidido, sem sessão registrada: a subida da sessão (`prepare`) e
