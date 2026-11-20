@@ -584,6 +584,19 @@ fn engine_route(host: &dyn OpenHost, spec: &SessionSpec) -> Result<Option<claude
 /// O pane do Claude, o transcript da conversa nova e a rota da conta ChatGPT fixa do motor.
 /// As escolhas de plugins e skills da conversa: as pedidas e, na retomada, as que ela já tinha guardado.
 pub(crate) async fn conversation_settings(host: &dyn OpenHost, spec: &SessionSpec, sid: &str, resume: bool) -> Result<Option<Value>, OpenError> {
+    let settings = chosen_settings(host, spec, sid, resume).await?;
+    Ok(with_hooks_off(settings, spec.hooks_off))
+}
+
+/// Por cima do que a conversa escolheu: o ajuste vale em toda subida, também na retomada.
+pub(crate) fn with_hooks_off(settings: Option<Value>, hooks_off: bool) -> Option<Value> {
+    if !hooks_off { return settings; }
+    let mut settings = settings.filter(Value::is_object).unwrap_or_else(|| json!({}));
+    settings["disableAllHooks"] = json!(true);
+    Some(settings)
+}
+
+async fn chosen_settings(host: &dyn OpenHost, spec: &SessionSpec, sid: &str, resume: bool) -> Result<Option<Value>, OpenError> {
     if spec.customizations.is_none() && !resume { return Ok(None); }
     let effective_dir = spec.account.config_dir().map(str::to_owned).or_else(|| host.env().get("CLAUDE_CONFIG_DIR").filter(|v| !v.is_empty()).cloned())
         .unwrap_or_else(|| host.home().join(".claude").to_string_lossy().into_owned());

@@ -11,7 +11,7 @@ import { QueuedBubble } from './QueuedBubble';
 import { AssistantBubble } from './AssistantBubble';
 import { OrqTimelineEntry } from './OrqTimelineEntry';
 import { ClaudeNotice } from './ClaudeNotice';
-import { isNoticeLine } from '../features/notices/notices';
+import { fixTracker, isFixRunningNote, isNoticeLine } from '../features/notices/notices';
 import { PreviewBubble } from './PreviewBubble';
 import { ToolGroup } from './tools/ToolGroup';
 import { ToolCard } from './tools/ToolCard';
@@ -127,6 +127,9 @@ export function MessageList({
     const held = pending.flatMap((p) => (p.entry ? [{ id: p.entry.slice('queued-'.length), text: p.text, ts: null }] : []));
     return held.length ? { entries: [...(queuePanel?.entries ?? []), ...held], actions: queuePanel?.actions ?? false } : queuePanel;
   }, [pending, queuePanel]);
+  // O mapa só troca quando um conserto muda: evento comum não redesenha as outras linhas.
+  const fixTrack = useRef(fixTracker());
+  const fixes = useMemo(() => fixTrack.current(events, eventsRevision), [events, eventsRevision]);
   const projection = projectConversation(previous.current, {
     events, eventsRevision, pref, merge: look === 'tree', everyRun, tasksEnabled: tarefasLigadas,
     pagesEnabled: !!sessionName, running: new Set(agentesRodando.map((a) => a.id)), queuePanel: hiddenQueue,
@@ -238,7 +241,10 @@ export function MessageList({
           }
           return <UserBubble text={ev.text ?? ''} sessionName={sessionName} serverId={serverId} ts={ev.ts} eventId={ev.id} imageCount={ev.image_count ?? 0} onQuoteClick={goToQuote} />;
         }
-        if (isNoticeLine(ev) && (ev.kind === 'assistant_msg' || ev.kind === 'notice')) return <ClaudeNotice event={ev} serverId={serverId} />;
+        if (isNoticeLine(ev) && (ev.kind === 'assistant_msg' || ev.kind === 'notice')) {
+          if (isFixRunningNote(ev)) return null;
+          return <ClaudeNotice event={ev} serverId={serverId} sessionName={sessionName} fix={fixes.get(ev.id)} />;
+        }
         if (ev.kind === 'assistant_msg') {
           return <AssistantBubble text={ev.text ?? ''} sessionName={sessionName} serverId={serverId} ts={ev.ts} eventId={ev.id} canQuote={canQuote} />;
         }
@@ -262,7 +268,7 @@ export function MessageList({
         return nunca;
       }
     }
-  }, [abrirDetalhe, sessionName, serverId, look, working, session?.provider, session?.headless, session?.plugin_tool_servers, stateEvent?.problema, goToQuote, canQuote, preserveExpansion, pauseForToolGroup]);
+  }, [abrirDetalhe, sessionName, serverId, look, working, session?.provider, session?.headless, session?.plugin_tool_servers, stateEvent?.problema, goToQuote, canQuote, preserveExpansion, pauseForToolGroup, fixes]);
   const renderItem = useCallback(({ item }: { item: MessageRow }) => {
     const row = renderRow(item);
     const arrived = arrivals.current.at.get(item.id);

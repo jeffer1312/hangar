@@ -3,7 +3,7 @@ use crate::mods::{model::{ModsCall,ModsError,SurfaceEffect,missing},surface::Sur
 use crate::interactions::{ExpectedInteraction,InteractionBinding,InteractionError,InteractionKind,InteractionStore,native_target,runtime_error};
 use std::sync::Arc;
 use hangar_api::state::StateEvent;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
 struct Waiter {
@@ -1519,20 +1519,31 @@ impl ClaudeEngine {
         let mut meta = json!({"subject":name});
         if !blocking { meta["key"] = json!(format!("hook:{name}")); }
         if count > 1 { meta["count"] = json!(count); }
+        // Sem terminal o CLI não manda o comando: só o erro pode citar a pasta do plugin.
+        if let Some(meta) = meta.as_object_mut() { meta.extend(hangar_notice_actions::hook_action(detail,None,hangar_notice_actions::exists_on_disk)); }
         self.policy("local_output",json!({"text":format!("Hook falhou — {detail}"),"hook_error":detail,"notice":"hook_failed","entry_id":id,"meta":meta}),effects);
     }
 
     /// Aviso da CLI na conversa. O mapa `meta`, mesmo vazio, é o que o marca como aviso para os clientes; a chave
     /// só vai no que pode ser ignorado: bloqueio real e defeito do Hangar ficam sem ela.
     fn cli_note(&mut self,ignore_key:Option<&str>,text:String,effects:&mut Vec<Effect>) {
-        let meta = ignore_key.map_or_else(||json!({}),|key|json!({"key":key}));
-        self.policy("local_output",json!({"text":text,"meta":meta}),effects);
+        self.cli_note_with(ignore_key,Map::new(),text,effects);
+    }
+
+    /// `extra`: a ação do aviso (`action`, `plugin`), quando ele tem botão.
+    fn cli_note_with(&mut self,ignore_key:Option<&str>,mut extra:Map<String,Value>,text:String,effects:&mut Vec<Effect>) {
+        if let Some(key) = ignore_key { extra.insert("key".into(),json!(key)); }
+        self.policy("local_output",json!({"text":text,"meta":extra}),effects);
     }
 
     /// Aviso que vale uma vez por vida do processo: o relançamento mostra de novo, a adoção pelo Rust não.
     fn notice_once(&mut self,key:&str,ignore_key:Option<&str>,text:String,effects:&mut Vec<Effect>) -> bool {
+        self.notice_once_with(key,ignore_key,Map::new(),text,effects)
+    }
+
+    fn notice_once_with(&mut self,key:&str,ignore_key:Option<&str>,extra:Map<String,Value>,text:String,effects:&mut Vec<Effect>) -> bool {
         let new = self.unknown.insert(format!("notice:{key}"));
-        if new && !self.replaying { self.cli_note(ignore_key,text,effects); }
+        if new && !self.replaying { self.cli_note_with(ignore_key,extra,text,effects); }
         new
     }
 
@@ -1559,17 +1570,30 @@ impl ClaudeEngine {
             let rest = if names.len() > 5 { format!(" e mais {}",names.len()-5) } else { String::new() };
             lines.push(format!("{}: {}{rest}",if names.len() == 1 { one } else { many },shown.join(", ")));
         }
+        // Plugin de marketplace tem botão de reinstalar: nota própria. O resto (`inline[0]`, de `--plugin-dir`) fica junto.
+        let mut reinstall = Vec::new();
         for plugin in init["plugin_errors"].as_array().into_iter().flatten() {
             let name = plugin["plugin"].as_str().unwrap_or("?");
-            broken.push(name);
-            lines.push(format!("O plugin `{name}` não carregou: {}",clip(plugin["message"].as_str().unwrap_or(""),300)));
+            let line = format!("O plugin `{name}` não carregou: {}",clip(plugin["message"].as_str().unwrap_or(""),300));
+            match hangar_plugins::PluginId::parse(name) {
+                Ok(id) => reinstall.push((id,line)),
+                Err(_) => { broken.push(name); lines.push(line); }
+            }
         }
-        if lines.is_empty() { return; }
-        let text = format!("⚙️ {}",lines.join("\n"));
-        broken.sort_unstable();
-        let ignore_key = format!("note:startup:{}",&hangar_core::pycompat::py::md5_hex(&broken.join("\n"))[..8]);
+        let mut new = false;
+        if !lines.is_empty() {
+            let text = format!("⚙️ {}",lines.join("\n"));
+            broken.sort_unstable();
+            let ignore_key = format!("note:startup:{}",&hangar_core::pycompat::py::md5_hex(&broken.join("\n"))[..8]);
+            new |= self.notice_once(&text.clone(),Some(&ignore_key),text,effects);
+        }
+        for (id,line) in reinstall {
+            let text = format!("⚙️ {line}");
+            let extra = Map::from_iter([("action".to_owned(),json!(hangar_notice_actions::ACTION_REINSTALL)),("plugin".to_owned(),json!(id.as_str()))]);
+            new |= self.notice_once_with(&text.clone(),Some(&format!("note:plugin:{}",id.as_str())),extra,text,effects);
+        }
         // O `init` chega a cada turno: o diário só registra o problema novo.
-        if self.notice_once(&text.clone(),Some(&ignore_key),text,effects) && !self.replaying {
+        if new && !self.replaying {
             self.diary("claude_init_problem",||json!({"mcp_servers":init["mcp_servers"],"plugin_errors":init["plugin_errors"]}),effects);
         }
     }

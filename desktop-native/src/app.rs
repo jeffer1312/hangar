@@ -86,7 +86,8 @@ pub(crate) use rows::{agent_card, agent_clock};
 pub(crate) use desktop_look::{call_button as desktop_call_button, desktop_summary, group_block as desktop_group_block, summary_button as desktop_summary_button};
 pub(crate) use session_tabs::{PlateMark, PlateSegment, plate, tab_frame, tab_title, with_context_ring};
 pub(crate) use tags::{account_icon, machine_icon};
-pub(crate) use notice_line::{api_error_box, ignore_button, ignored_text, notice_body, notice_head, notice_rule_line, undo_button};
+pub(crate) use notice_line::{api_error_box, fix_open_button, fix_result_row, ignore_button, ignored_text, notice_action_button, notice_body,
+    notice_fixed, notice_fixing, notice_head, notice_head_marked, notice_reinstalled, notice_rule_line, notice_spin, undo_button};
 pub(crate) use voice_ui::{call_actions, call_footer, call_header, call_status, equalizer as voice_equalizer, mute_button, speech_pause_button, stop_button};
 pub(crate) use rename_suggest::{Strip as RenameStrip, rename_strip};
 pub(crate) use vault_requests::{approve_body, approve_title, request_button, request_card, request_command, request_pair};

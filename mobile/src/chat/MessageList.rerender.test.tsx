@@ -10,6 +10,7 @@ import { MessageList } from './MessageList';
 vi.mock('../paraglide/messages', async (original) => ({ ...await original<typeof import('../paraglide/messages')>(), msg_aria_mensagens: () => 'msg_aria_mensagens' }));
 vi.mock('react-native-enriched-markdown', () => ({ EnrichedMarkdownText: ({ markdown }: { markdown: string }) => createElement('article', null, markdown) }));
 vi.mock('../ui/Sheet', () => ({ Sheet: ({ children }: { children: ReactNode }) => createElement('section', null, children) }));
+vi.mock('expo-router', () => ({ useRouter: () => ({ push: vi.fn() }) }));
 vi.mock('../ui/Toast', () => ({ toast: { erro: vi.fn() } }));
 vi.mock('react-native-mmkv', () => ({ createMMKV: () => ({ getString: () => undefined, set: () => {}, remove: () => {} }) }));
 vi.mock('../stores/servers', () => ({ useServers: { getState: () => ({ servers: [] }) } }));

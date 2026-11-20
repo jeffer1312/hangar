@@ -1911,6 +1911,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-notice-actions"
+version = "0.1.0"
+dependencies = [
+ "hangar-core",
+ "hangar-plugins",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "hangar-notice-ignores"
 version = "0.1.0"
 dependencies = [
@@ -2115,6 +2125,7 @@ dependencies = [
  "hangar-install-setup",
  "hangar-local-server",
  "hangar-mission",
+ "hangar-notice-actions",
  "hangar-notice-ignores",
  "hangar-omp-sync",
  "hangar-open-cli",
@@ -2270,6 +2281,7 @@ version = "0.1.0"
 dependencies = [
  "hangar-api",
  "hangar-core",
+ "hangar-notice-actions",
  "memchr",
  "proptest",
  "regex",

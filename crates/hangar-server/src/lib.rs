@@ -63,6 +63,7 @@ pub mod session_defaults;
 pub mod session_sleep;
 pub mod session_visibility;
 pub mod notice_ignores;
+pub mod notice_actions;
 mod sidecar_prune;
 pub mod tags;
 pub mod tour_progress;

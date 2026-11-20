@@ -594,6 +594,15 @@ impl RuntimeRegistry {
             })
         }).await.ok().flatten()
     }
+    /// Chave da fila do Claude sem terminal pelo sidecar dele: a estacionada não tem ator, e quem só deixa
+    /// nota nela escreve na fila sem reabrir o processo.
+    pub async fn claude_headless_key(&self,name:&str) -> Option<String> {
+        let (dir,name)=(self.policy.codex_environment().home.join(".hangar").join("claude-headless"),name.to_owned());
+        tokio::task::spawn_blocking(move||{
+            let meta=super::codex_sidecar::read(&super::codex_sidecar::path(&dir,&name)).ok()??;
+            meta.get("key").and_then(Value::as_str).filter(|key|!key.is_empty()).map(str::to_owned)
+        }).await.ok().flatten()
+    }
     /// Acordar em curso na sessão: a chave da fila dela.
     pub fn waking_key(&self,name:&str) -> Option<String> { self.waking.lock().unwrap_or_else(|e|e.into_inner()).get(name).cloned() }
     fn claim_waking(&self,name:&str,key:&str) -> bool {

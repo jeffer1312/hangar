@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["hangar-scheduled-tasks", "hangar-conversation-transfer", "hangar-codex-transfer", "hangar-auth", "hangar-api", "hangar-core", "hangar-transcript", "hangar-omp-sync", "hangar-server", "hangar-cano", "hangar-workspace", "hangar-codex", "hangar-package", "hangar-psmux", "hangar-connect", "hangar-plugins", "hangar-update-news", "hangar-notice-ignores", "hangar-workflows", "hangar-http-file", "hangar-desktop-theme", "hangar-opencode-cookie", "hangar-deploy", "hangar-port-preview", "hangar-session-tools", "hangar-codex-account-sync", "hangar-projects", "hangar-reviews", "hangar-docs", "hangar-computer-control-setup", "hangar-shortcut-transfer", "hangar-sidecar-prune", "hangar-usage-diary", "hangar-boot", "hangar-dream", "hangar-connectors", "hangar-mission", "hangar-ticket-actions", "hangar-work-review", "hangar-agent-hooks", "hangar-send", "hangar-registration", "hangar-open-cli", "hangar-install-setup", "hangar-status", "hangar-local-server"]
+members = ["hangar-scheduled-tasks", "hangar-conversation-transfer", "hangar-codex-transfer", "hangar-auth", "hangar-api", "hangar-core", "hangar-transcript", "hangar-omp-sync", "hangar-server", "hangar-cano", "hangar-workspace", "hangar-codex", "hangar-package", "hangar-psmux", "hangar-connect", "hangar-plugins", "hangar-update-news", "hangar-notice-ignores", "hangar-notice-actions", "hangar-workflows", "hangar-http-file", "hangar-desktop-theme", "hangar-opencode-cookie", "hangar-deploy", "hangar-port-preview", "hangar-session-tools", "hangar-codex-account-sync", "hangar-projects", "hangar-reviews", "hangar-docs", "hangar-computer-control-setup", "hangar-shortcut-transfer", "hangar-sidecar-prune", "hangar-usage-diary", "hangar-boot", "hangar-dream", "hangar-connectors", "hangar-mission", "hangar-ticket-actions", "hangar-work-review", "hangar-agent-hooks", "hangar-send", "hangar-registration", "hangar-open-cli", "hangar-install-setup", "hangar-status", "hangar-local-server"]
 
 [workspace.package]
 version = "0.1.0"
@@ -68,6 +68,7 @@ hangar-psmux = { path = "hangar-psmux" }
 hangar-core = { path = "hangar-core" }
 hangar-auth = { path = "hangar-auth" }
 hangar-transcript = { path = "hangar-transcript" }
+hangar-notice-actions = { path = "hangar-notice-actions" }
 hangar-omp-sync = { path = "hangar-omp-sync" }
 hangar-connect = { path = "hangar-connect" }
 hangar-plugins = { path = "hangar-plugins" }

@@ -671,7 +671,7 @@ mod tests {
             else { super::super::Account::Default }, account_source: super::super::AccountSource::Default, model: None, effort: None,
             service_tier: None, permission_mode: Some(mode), subagent_model: None, customizations: None, jev: false, read_only: false,
             worktree: None, creator: None, created_at: 1.0, conversation: Some("c1".into()),
-            name_auto: None, rename_suggestion: None, rename_weak_at: None, rename_dismissed: false };
+            name_auto: None, rename_suggestion: None, rename_weak_at: None, rename_dismissed: false, hooks_off: false };
         super::super::record::write(home, &spec).unwrap();
     }
 
