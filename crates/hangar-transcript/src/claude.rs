@@ -126,7 +126,7 @@ pub(crate) fn silent_attachment_timestamp(line: &str, notices: bool) -> Option<&
         return None;
     }
     let head = ATTACHMENT_HEAD.captures(line)?;
-    if matches!(&head[1], "queued_command" | "hook_additional_context") || (notices && &head[1] == "hook_non_blocking_error") {
+    if matches!(&head[1], "queued_command" | "hook_additional_context" | "poll_events") || (notices && &head[1] == "hook_non_blocking_error") {
         return None;
     }
     let i = line.rfind(ATTACHMENT_TAIL)?;
@@ -686,6 +686,9 @@ fn attachment(obj: &Map<String, Value>, uid: &str) -> Vec<ChatEvent> {
         };
         let joined = parts.join("\n");
         let prompt = att.get("prompt").and_then(Value::as_str).unwrap_or(&joined);
+        if crate::code_mode::is_queued_event(prompt) {
+            return crate::code_mode::queued_event(prompt).into_iter().collect();
+        }
         if let Some(stopped) = stopped_agents(prompt, uid, ts(obj)) {
             return stopped;
         }
@@ -741,6 +744,8 @@ fn user(obj: &Map<String, Value>, uid: &str, content: Option<&Value>, resolve: P
         return c;
     }
     match content {
+        // A entrega de script consumida da fila chega como mensagem do usuário.
+        Some(Value::String(s)) if crate::code_mode::is_queued_event(s) => crate::code_mode::queued_event(s).into_iter().collect(),
         Some(Value::String(s)) => user_text(uid, s),
         Some(Value::Array(items)) => user_blocks(obj, uid, items),
         _ => Vec::new(),

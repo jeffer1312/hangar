@@ -61,7 +61,6 @@ pub(crate) fn queued_event(text: &str) -> Option<ChatEvent> {
 /// O `Poll` só espera: o resultado que ele traz aparece no script, nunca como chamada própria.
 pub(crate) fn is_poll_call(item: &Map<String, Value>) -> bool {
     item.get("name").and_then(Value::as_str) == Some("Poll")
-        && item.get("input").and_then(Value::as_object).is_none_or(Map::is_empty)
 }
 
 /// Chamada feita dentro do script: o `content` vem vazio e o resultado real fica no `toolUseResult`.
@@ -81,8 +80,11 @@ pub(crate) fn virtual_result(obj: &Map<String, Value>) -> Option<String> {
                 .collect::<Vec<_>>()
                 .join("\n"),
         ),
-        Value::Null => None,
-        other => Some(other.to_string()),
+        Value::Object(m) if let Some(files) = m.get("filenames").and_then(Value::as_array) =>
+            Some(files.iter().filter_map(Value::as_str).collect::<Vec<_>>().join("\n")),
+        Value::Object(m) if let Some(text) = ["content", "result"].iter().find_map(|k| m.get(*k).and_then(Value::as_str)) =>
+            Some(text.to_owned()),
+        _ => None,
     }
 }
 
@@ -373,6 +375,50 @@ mod tests {
             "toolUseResult": {"stdout": "nao usar"},
             "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_x", "content": ""}]}})]);
         assert_eq!(evs[0].result.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn the_history_reads_a_delivery_that_came_only_by_the_poll_events_attachment() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.jsonl");
+        let env = "<event nonce=\"Zz9\" kind=\"repl-eval\" at=\"2026-11-20T15:41:44.376Z\" eval=\"2\" ms=\"1594\" status=\"settled\">\n<result>ok</result>\n</event>";
+        // Como a CLI grava o anexo: o leitor do histórico decide pelo começo e pelo fim da linha crua.
+        let attachment = format!(r#"{{"parentUuid":"u-d2","isSidechain":false,"attachment":{{"type":"poll_events","envelopes":[{}],"kinds":["repl-eval"]}},"type":"attachment","uuid":"a1","timestamp":"2026-11-20T15:41:50.000Z"}}"#,
+            serde_json::to_string(env).unwrap());
+        std::fs::write(&path, format!("{}\n{attachment}\n", dispatch(2))).unwrap();
+        let req = crate::HistoryRequest { provider: Provider::Claude, jsonl: path, queue: None, limit: None, tail_window: crate::TAIL_WINDOW };
+        let got: Vec<_> = crate::merged_history(&req).unwrap().into_iter().filter(|e| e.kind == ChatKind::ToolResult)
+            .map(|e| (e.tool_use_id, e.result)).collect();
+        assert_eq!(got, vec![(Some("toolu_repl2".to_string()), Some("ok".to_string()))]);
+    }
+
+    #[test]
+    fn a_delivery_written_as_a_queued_command_or_a_user_message_is_never_a_user_bubble() {
+        let attachment = json!({"type": "attachment", "uuid": "a1", "timestamp": "2026-11-20T15:41:50.000Z",
+            "attachment": {"type": "queued_command", "prompt": [{"type": "text", "text": LATE}]}});
+        let message = json!({"type": "user", "uuid": "u-q", "timestamp": "2026-11-20T15:41:51.000Z",
+            "message": {"role": "user", "content": LATE}});
+        for line in [attachment, message] {
+            let evs = feed_all(&[dispatch(2), line.clone()]);
+            assert!(evs.iter().all(|e| e.kind != ChatKind::UserMsg), "{line}");
+            assert_eq!(results(&evs).into_iter().map(|r| (r.1, r.2)).collect::<Vec<_>>(),
+                vec![(Some("toolu_repl2".to_string()), Some("ok".to_string()))], "{line}");
+        }
+    }
+
+    #[test]
+    fn a_poll_with_arguments_is_hidden_too() {
+        let call = feed_all(&[json!({"type": "assistant", "uuid": "a3", "timestamp": "2026-11-20T15:41:40.000Z",
+            "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_poll", "name": "Poll", "input": {"timeout": 30}}]}})]);
+        assert!(call.is_empty());
+    }
+
+    #[test]
+    fn a_search_made_inside_a_script_shows_the_files_not_the_raw_json() {
+        let evs = feed_all(&[json!({"type": "user", "uuid": "u-g", "timestamp": "2026-11-20T15:41:44.377Z",
+            "isVirtual": true, "toolUseResult": {"mode": "files_with_matches", "filenames": ["a.rs", "b.rs"], "numFiles": 2},
+            "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "repl_g", "content": ""}]}})]);
+        assert_eq!(evs[0].result.as_deref(), Some("a.rs\nb.rs"));
     }
 
     #[test]
