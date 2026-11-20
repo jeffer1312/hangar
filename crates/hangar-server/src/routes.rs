@@ -1705,8 +1705,10 @@ pub(crate) async fn history(
         let before = SKIPPED_LINES.load(Ordering::Relaxed);
         // Já vem com o corte `evs[-limit:]` da rota (Task 9).
         let mut evs = merged_history_with_notices(&hreq)?;
-        if let Some(home) = &handoff_home {
-            crate::speech::history::transfer_history::insert_handoff_divider(home, &log_name, &hreq.jsonl, &mut evs);
+        let mut etag = etag;
+        // O ETag não cobre o registro da troca: lido antes de a troca concluir, a resposta não vira cache.
+        if let Some(home) = &handoff_home && !crate::speech::history::transfer_history::insert_handoff_divider(home, &log_name, &hreq.jsonl, &mut evs) {
+            etag = None;
         }
         tail::log_skipped(&log_name, before);
         Ok((etag, Some(serde_json::to_vec(&evs)?)))

@@ -300,29 +300,37 @@ fn handoff_divider(record: &Value, id: &str) -> ChatEvent {
 
 /// O divisor da troca de agente no `/history` do chat, antes do primeiro evento depois da fronteira (no fim,
 /// sem turno novo ainda). Conversa que não veio de transferência fica igual; registro ilegível também, com
-/// aviso no log: o histórico não falha por causa do divisor.
-pub(crate) fn insert_handoff_divider(home: &Path, name: &str, jsonl: &Path, events: &mut Vec<ChatEvent>) {
+/// aviso no log: o histórico não falha por causa do divisor. `false`: o registro ainda não pôde ser lido (troca
+/// publicando agora), e a resposta não deve valer como cache.
+pub(crate) fn insert_handoff_divider(home: &Path, name: &str, jsonl: &Path, events: &mut Vec<ChatEvent>) -> bool {
     // Um contexto por sessão, como o do chat ao vivo: o prefixo importado só é conferido de novo quando o arquivo muda.
     static CONTEXTS: std::sync::OnceLock<Mutex<HashMap<(PathBuf, String), LiveContext>>> = std::sync::OnceLock::new();
     let contexts = CONTEXTS.get_or_init(Default::default);
     let slot = (home.to_owned(), name.to_owned());
-    let context = contexts.lock().unwrap_or_else(|e| e.into_inner())
-        .entry(slot.clone()).or_insert_with(|| LiveContext::new(home.to_owned(), name.to_owned())).clone();
+    let context = {
+        let mut all = contexts.lock().unwrap_or_else(|e| e.into_inner());
+        // ponytail: sessão fechada não sai sozinha; zerar com muitas só custa reler o registro de cada uma.
+        if all.len() >= 256 && !all.contains_key(&slot) { all.clear(); }
+        all.entry(slot.clone()).or_insert_with(|| LiveContext::new(home.to_owned(), name.to_owned())).clone()
+    };
     let filter = match context.filter(jsonl) {
         Ok(Some(filter)) => filter,
-        // Conversa sem transferência não fica no mapa: ele só guarda as que têm divisor.
-        Ok(None) => { contexts.lock().unwrap_or_else(|e| e.into_inner()).remove(&slot); return; }
+        // Conversa sem transferência não fica no mapa: ele só guarda as que têm divisor. Conferir de novo é
+        // ler o sidecar, perto da leitura do transcript que veio antes.
+        Ok(None) => { contexts.lock().unwrap_or_else(|e| e.into_inner()).remove(&slot); return true; }
         Err(error) => {
             tracing::warn!(session=%name, kind=?error.kind(), code="handoff_divider_unreadable", "divisor da troca de agente fora do histórico");
-            return;
+            return false;
         }
     };
-    // Janela sem nada da conversa de origem (histórico cortado no meio do Codex): o divisor não é desta página.
-    if !events.iter().any(|event| event.offset.is_some_and(|end| end <= filter.offset)) { return; }
-    let at = events.iter().position(|event| event.offset.is_some_and(|end| end > filter.offset)).unwrap_or(events.len());
+    // Offsets são o início da linha. Janela sem nada da conversa de origem (histórico cortado no meio do
+    // Codex): o divisor não é desta página.
+    if !events.iter().any(|event| event.offset.is_some_and(|start| start < filter.offset)) { return true; }
+    let at = events.iter().position(|event| event.offset.is_some_and(|start| start >= filter.offset)).unwrap_or(events.len());
     let mut divider = filter.divider.clone();
     divider.ts = at.checked_sub(1).and_then(|before| events[before].ts).or_else(|| events.get(at).and_then(|after| after.ts));
     events.insert(at, divider);
+    true
 }
 
 fn prefix_event(event: &mut ChatEvent, id: &str, provider: &str) {

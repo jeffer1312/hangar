@@ -385,17 +385,26 @@ fn event(kind: &str, offset: u64, ts: f64) -> ChatEvent {
     ChatEvent { kind: ChatKind::from(kind), id: format!("e{offset}"), offset: Some(offset), ts: Some(ts), ..ChatEvent::default() }
 }
 
+/// O `/history` de verdade: offsets vêm do leitor, não do teste.
+fn real_history(path: &Path) -> Vec<ChatEvent> {
+    crate::transcript::merged_history_with_notices(&crate::transcript::HistoryRequest { provider: Provider::Codex, jsonl: path.to_owned(),
+        queue: None, limit: None, tail_window: crate::transcript::TAIL_WINDOW }).unwrap()
+}
+
 #[test]
 fn handoff_divider_sits_between_the_imported_history_and_the_first_new_turn() {
     let directory = tempfile::tempdir().unwrap();
-    let (path, boundary) = transferred_session(directory.path());
-    let mut events = vec![event("user_msg", boundary, 1.), event("user_msg", boundary + 40, 2.), event("assistant_msg", boundary + 90, 3.)];
+    let (path, _) = transferred_session(directory.path());
+    let turn = |role: &str, kind: &str, text: &str| json!({"timestamp":"2026-11-20T10:00:00Z","type":"response_item",
+        "payload":{"type":"message","role":role,"content":[{"type":kind,"text":text}]}});
+    let mut file = OpenOptions::new().append(true).open(&path).unwrap();
+    writeln!(file, "{}\n{}", turn("user", "input_text", "novo"), turn("assistant", "output_text", "resposta")).unwrap();
+    let mut events = real_history(&path);
     insert_handoff_divider(directory.path(), "session", &path, &mut events);
     let kinds: Vec<_> = events.iter().map(|e| e.kind.as_str().to_owned()).collect();
     assert_eq!(kinds, ["user_msg", "handoff", "user_msg", "assistant_msg"]);
     let divider = &events[1];
     assert_eq!(divider.id, "transfer:51234567-89ab-4cde-8fab-0123456789ab:handoff");
-    assert_eq!(divider.ts, Some(1.));
     let handoff = divider.handoff.as_ref().unwrap();
     assert_eq!((handoff.from_provider.as_deref(), handoff.from_model.as_deref()), (Some("claude"), Some("claude-opus-5-5")));
     assert_eq!((handoff.to_provider.as_deref(), handoff.to_model.as_deref(), handoff.to_effort.as_deref()), (Some("codex"), Some("gpt-6.2-sol"), Some("low")));
@@ -407,10 +416,10 @@ fn handoff_divider_sits_between_the_imported_history_and_the_first_new_turn() {
 fn handoff_divider_closes_the_history_before_any_new_turn_and_skips_other_conversations() {
     let directory = tempfile::tempdir().unwrap();
     let (path, boundary) = transferred_session(directory.path());
-    let mut events = vec![event("user_msg", boundary, 1.)];
+    let mut events = real_history(&path);
     insert_handoff_divider(directory.path(), "session", &path, &mut events);
     assert_eq!(events.last().map(|e| e.kind.as_str()), Some("handoff"));
-    let mut later = vec![event("user_msg", boundary + 40, 2.), event("assistant_msg", boundary + 90, 3.)];
+    let mut later = vec![event("user_msg", boundary, 2.), event("assistant_msg", boundary + 90, 3.)];
     insert_handoff_divider(directory.path(), "session", &path, &mut later);
     assert_eq!(later.len(), 2, "página só com turnos do Codex não leva o divisor");
     let mut untouched = vec![event("user_msg", 10, 1.)];
