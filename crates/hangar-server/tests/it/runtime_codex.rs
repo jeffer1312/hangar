@@ -2494,6 +2494,45 @@ fn headless_sandbox_switch_happens_in_the_conversation_and_counts_only_when_conf
     assert_eq!(frames(&back)[0]["params"]["approvalPolicy"],"never");
 }
 
+/// Turno que saísse com a troca pendente levaria a aprovação de um modo e o sandbox de outro.
+#[test]
+fn no_turn_starts_while_a_sandbox_switch_waits_for_codex() {
+    let (mut engine,sent) = bootstrapped(json!({"name":"session","thread_id":"thread-1","headless":true,"cwd":"/w","permission_mode":"Full Access"}));
+    let resume = find_method(&sent,"thread/resume");
+    line(&mut engine,json!({"id":resume["id"],"result":{"thread":{"id":"thread-1","path":"/r.jsonl","status":{"type":"idle"},"turns":[]}}}),12.0);
+    assert_eq!(engine.control_view()["deliverable"],true);
+    let effects = engine.command(command(OperationKind::SetPermissionMode,json!({"mode":"Ask for approval"})),clock(13.0)).unwrap();
+    assert_eq!(engine.control_view()["deliverable"],false,"a fila espera a confirmação");
+    let done = line(&mut engine,json!({"id":frames(&effects)[0]["id"],"result":{}}),13.5);
+    assert!(done.iter().any(|e|matches!(e,Effect::WakeQueue)));
+    assert_eq!(engine.control_view()["deliverable"],true);
+}
+
+/// A troca que caiu sem confirmação pode ter valido no Codex: na volta, o modo gravado é reaplicado antes de qualquer turno.
+#[test]
+fn a_sandbox_switch_lost_with_the_connection_is_reapplied_from_the_recorded_mode() {
+    let (mut engine,sent) = bootstrapped(json!({"name":"session","thread_id":"thread-1","headless":true,"cwd":"/w","permission_mode":"Full Access"}));
+    let resume = find_method(&sent,"thread/resume");
+    line(&mut engine,json!({"id":resume["id"],"result":{"thread":{"id":"thread-1","path":"/r.jsonl","status":{"type":"idle"},"turns":[]}}}),12.0);
+    let effects = engine.command(command(OperationKind::SetPermissionMode,json!({"mode":"Ask for approval"})),clock(13.0)).unwrap();
+    let handed:std::collections::BTreeSet<String> = ["op-1".to_owned()].into();
+    let lost = engine.transport_lost("a conexão caiu",&handed);
+    assert_eq!(reply_of(&lost,"op-1").map(|(d,_)|d),Some(Disposition::Unknown),"a troca fica incerta");
+    assert!(frames(&effects).len() == 1);
+    let again = engine.bootstrap(true,"op-r".into()).unwrap();
+    let init = line(&mut engine,json!({"id":frames(&again)[0]["id"],"result":{"userAgent":format!("hangar/{} (x)",hangar_codex::version::CHECKED)}}),19.0);
+    let resume = find_method(&frames(&init),"thread/resume");
+    line(&mut engine,json!({"id":resume["id"],"result":{"thread":{"id":"thread-1","path":"/r.jsonl","status":{"type":"idle"},"turns":[]}}}),20.0);
+    assert_eq!(engine.control_view()["deliverable"],false,"nenhum turno antes de reaplicar");
+    let tick = engine.apply(EngineInput::Tick,clock(21.0)).unwrap();
+    let resync = frames(&tick).into_iter().find(|f|f["method"] == "thread/settings/update").expect("reaplica o modo gravado");
+    assert_eq!(resync["params"],json!({"threadId":"thread-1","approvalPolicy":"never","sandboxPolicy":{"type":"dangerFullAccess"}}));
+    let done = line(&mut engine,json!({"id":resync["id"],"result":{}}),21.5);
+    assert!(done.iter().any(|e|matches!(e,Effect::WakeQueue)));
+    assert_eq!(engine.control_view()["deliverable"],true);
+    assert_eq!(engine.control_view()["permission_mode"],"Full Access");
+}
+
 #[test]
 fn transferred_session_without_a_saved_mode_starts_in_the_mode_it_came_with() {
     let meta = |previous:Value|json!({"name":"session","thread_id":"thread-1","headless":false,"cwd":"/work","transfer_id":"t-1","previous_non_plan":previous});

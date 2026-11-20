@@ -194,6 +194,8 @@ pub struct Engine {
     /// A antecipada ficou sem resposta nesta conexão: outra mudança de plugin não pergunta de novo até
     /// o Codex responder ou a conexão ser refeita; a reaprovação pela recusa do hook continua valendo.
     early_trust_unanswered:bool,
+    /// Troca de sandbox caiu sem confirmação: antes do próximo turno o modo gravado volta a ser aplicado.
+    permission_resync:bool,
     /// Saída nova de comando ainda não publicada: sai no Tick deste instante.
     output_due:Option<f64>,
     thinking:LiveBuffer,
@@ -511,7 +513,7 @@ impl Engine {
             // já foi recusado no `new_checked`; em nenhum dos dois vira Full Access.
             permission_mode:headless.then(||super::codex_launch::stored_mode(&metadata).ok()).flatten().map(Into::into),token_usage:Value::Null,rate_limits:Value::Null,usage_limited:false,
             preview:LiveBuffer::default(),response_started:false,first_response_start:None,compacting:false,
-            running_commands:BTreeMap::new(),hook_streaks:BTreeMap::new(),notices_seen:BTreeSet::new(),hook_trust_settled:false,early_trust_unanswered:false,output_due:None,thinking:LiveBuffer::default(),was_working:metadata["in_progress"] == true,
+            running_commands:BTreeMap::new(),hook_streaks:BTreeMap::new(),notices_seen:BTreeSet::new(),hook_trust_settled:false,early_trust_unanswered:false,permission_resync:false,output_due:None,thinking:LiveBuffer::default(),was_working:metadata["in_progress"] == true,
             rpc:BTreeMap::new(),server_requests:Vec::new(),
             request_epochs:BTreeMap::new(),answering:BTreeSet::new(),lost_requests:BTreeSet::new(),wires:BTreeMap::new(),policies:BTreeMap::new(),last_format_request:None,format_gate:FormatGate::default(),reported_formats:BTreeSet::new(),async_questions,subagents:BTreeMap::new(),subagent_revision:0,subagent_epoch:Arc::new(subagents::FamilyEpoch::default()),reservations:Vec::new(),skill_preparations:BTreeMap::new(),skips:BTreeMap::new(),last_event:clock.monotonic_s,mode_write:None,metadata }
     }
@@ -696,9 +698,12 @@ impl Engine {
     }
 
     fn async_transport_ready(&self) -> bool {
+        // Com a troca de sandbox pendente ou incerta, o turno sairia com a aprovação de um modo e o sandbox de outro.
         self.alive && self.sendable() && self.server_requests.is_empty() && self.lost_requests.is_empty() && self.skill_preparations.is_empty()
+            && !self.permission_resync
             && !self.rpc.values().any(|rpc|rpc.params["threadId"] == self.thread_id && matches!(rpc.method.as_str(),"turn/start" | "turn/steer" | "thread/compact/start")
-                || rpc.continuation.as_ref().is_some_and(|next|next["kind"] == "skill_lookup"))
+                || rpc.continuation.as_ref().is_some_and(|next|next["kind"] == "skill_lookup"
+                    || !rpc.timed_out && matches!(next["kind"].as_str(),Some("permission_live" | "permission_resync"))))
     }
 
     fn async_answer_ready(&self, reservation: &ReservedAsyncAnswer) -> bool {
@@ -985,17 +990,23 @@ impl Engine {
     fn permission_reply(&mut self,rpc:&Rpc,line:&Value,effects:&mut Vec<Effect>) {
         let next = rpc.continuation.as_ref().unwrap();
         let mode = next["mode"].as_str().unwrap_or("");
+        // A fila esperou a troca: confirmada ou não, os turnos seguintes já sabem o modo.
+        effects.push(Effect::WakeQueue);
         // Outra conversa: a troca valeu para a anterior e esta segue no modo de antes.
         if next["thread"] != self.thread_id.as_str() {
-            if !rpc.timed_out {
+            if rpc.timed_out {
+                tracing::warn!(session=%self.state.session,mode,"codex: troca de sandbox confirmada tarde para outra conversa");
+            } else {
                 effects.push(Effect::Reply { operation_id:rpc.operation_id.clone(),disposition:Disposition::Unknown,
                     payload:json!({"error":"a conversa mudou antes de confirmar a permissão"}) });
             }
             return;
         }
         if !line["error"].is_null() {
-            if !rpc.timed_out {
-                let why = line["error"]["message"].as_str().unwrap_or("o Codex recusou a troca do sandbox");
+            let why = line["error"]["message"].as_str().unwrap_or("o Codex recusou a troca do sandbox");
+            if rpc.timed_out {
+                tracing::warn!(session=%self.state.session,mode,error=%why,"codex: troca de sandbox recusada depois do prazo");
+            } else {
                 effects.push(Effect::Reply { operation_id:rpc.operation_id.clone(),disposition:Disposition::Rejected,payload:json!({"error":why}) });
             }
             return;
@@ -1180,6 +1191,10 @@ impl Engine {
             self.server_requests.clear(); self.answering.clear(); self.request_epochs.clear();
         }
         self.finish_service_tier(Disposition::Unknown,json!({"error":"O Codex desconectou antes de confirmar Fast"}),&mut effects);
+        // A troca de sandbox que caiu sem confirmação pode ter valido: na volta, o modo gravado é reaplicado.
+        if self.rpc.values().any(|rpc|rpc.continuation.as_ref().is_some_and(|next|matches!(next["kind"].as_str(),Some("permission_live" | "permission_resync")))) {
+            self.permission_resync = true;
+        }
         let mut uncertain = Vec::new();
         for (_,rpc) in std::mem::take(&mut self.rpc) {
             uncertain.extend(reserved_entry(&rpc));
@@ -1973,6 +1988,14 @@ impl Engine {
                 }
             }
             EngineInput::Tick => {
+                if self.permission_resync && self.headless && self.sendable() && !self.in_progress {
+                    self.permission_resync = false;
+                    let mode = self.launch_mode().to_owned();
+                    self.counter += 1;
+                    self.rpc(format!("permission_resync:{}:{}",self.generation,self.counter),"thread/settings/update",
+                        json!({"threadId":self.thread_id,"sandboxPolicy":{"type":sandbox_policy(&mode)},"approvalPolicy":approval(&mode)}),
+                        Some(json!({"kind":"permission_resync","mode":mode})),&mut effects);
+                }
                 if self.output_due.is_some_and(|due|clock.monotonic_s >= due) { self.publish_output(&mut effects); }
                 if let Some(text) = self.preview.tick(clock.monotonic_s) { self.publish(text,&mut effects); }
                 if let Some(text) = self.thinking.tick(clock.monotonic_s) { self.publish_on("thinking",text,&mut effects); }
@@ -2092,6 +2115,15 @@ impl Engine {
             return Ok(());
         }
         if rpc.continuation.as_ref().is_some_and(|next|next["kind"] == "hook_trust") { self.hook_trust_reply(&rpc,&line,effects); return Ok(()); }
+        if rpc.continuation.as_ref().is_some_and(|next|next["kind"] == "permission_resync") {
+            if !line["error"].is_null() {
+                tracing::warn!(session=%self.state.session,error=%line["error"]["message"].as_str().unwrap_or(""),
+                    "codex: o modo gravado não foi reaplicado depois da queda; o sandbox em uso pode ser outro");
+            }
+            effects.push(Effect::WakeQueue);
+            self.changed(effects,true);
+            return Ok(());
+        }
         if rpc.continuation.as_ref().is_some_and(|next|next["kind"] == "permission_live") {
             self.permission_reply(&rpc,&line,effects);
             self.changed(effects,true);
@@ -2773,7 +2805,7 @@ fn skill_parent(rpc:&Rpc) -> Option<String> {
     rpc.continuation.as_ref().filter(|next|next["kind"] == "skill_lookup").and_then(|next|next["parent"].as_str()).map(str::to_owned)
 }
 /// A reaprovação de hooks nasce do motor, sem operação na fila: responder a ela derruba o ator.
-fn in_queue(rpc:&Rpc) -> bool { !rpc.continuation.as_ref().is_some_and(|next|next["kind"] == "hook_trust") }
+fn in_queue(rpc:&Rpc) -> bool { !rpc.continuation.as_ref().is_some_and(|next|matches!(next["kind"].as_str(),Some("hook_trust" | "permission_resync"))) }
 fn reserved_entry(rpc:&Rpc) -> Option<String> {
     rpc.continuation.as_ref().filter(|next|next["kind"] == "async_answer" && next["reserved"] == true)
         .and_then(|next|next["entry_id"].as_str()).map(str::to_owned)
