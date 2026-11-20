@@ -446,6 +446,29 @@ describe('CreateSessionSheet Codex', () => {
     }
   });
 
+  it('motor pedido ausente na primeira leitura segue segurando a criação quando a máquina é renovada', async () => {
+    calls.target = { id: 'server-c', label: 'Servidor C', baseUrl: 'https://c.local', token: 'token-c' };
+    calls.engines.mockResolvedValueOnce({ motores: {} }).mockResolvedValue({ motores: { proxy: { label: 'Proxy', model: 'sol' } } });
+    const container = document.createElement('div');
+    const root = createRoot(container);
+    const sheet = () => createElement(CreateSessionSheet, { initial: { server: 'server-c', engine: 'proxy' } });
+    await act(async () => root.render(sheet()));
+    await act(async () => Promise.resolve());
+    try {
+      await send(container);
+      expect(calls.create).not.toHaveBeenCalled();
+      // Mesma máquina com o token renovado: o formulário não remonta, só relê os motores.
+      calls.target = { ...calls.target, token: 'token-c2' };
+      await act(async () => root.render(sheet()));
+      await act(async () => Promise.resolve());
+      expect(calls.engines).toHaveBeenCalledTimes(2);
+      await send(container);
+      expect(calls.create.mock.calls[0]?.[1]).toEqual(expect.objectContaining({ engine: 'proxy' }));
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
   it('o `/` sem sessão sugere a lista da conta e pasta escolhidas, e a escolha só entra no campo', async () => {
     calls.commands.mockResolvedValue([
       { name: 'global-skill', display: '/global-skill', description: null, argumentHint: null, source: 'skill', destructive: false },

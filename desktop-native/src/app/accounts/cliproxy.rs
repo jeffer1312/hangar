@@ -536,7 +536,7 @@ impl Hangar {
             Some(_) => {}
         }
         let mut body = json!({"label": label, "base_url": base_url, "model": w.model, "subagent_model": w.model,
-            "use_cliproxy_key": true, "experimental_betas": true, "fast": w.fast && allows_fast(&w.model)});
+            "use_cliproxy_key": true, "create_only": true, "experimental_betas": true, "fast": w.fast && allows_fast(&w.model)});
         if let Some(limit) = w.models.as_ref().and_then(|m| m.iter().find(|m| m.id == w.model)).and_then(|m| m.context_length) {
             body["context_window"] = json!(safe_context(limit));
         }
@@ -706,6 +706,8 @@ impl Hangar {
                 w.saving = false;
                 match result {
                     Ok(_) => w.saved = Some((label, id)),
+                    // Outra tela criou o mesmo nome depois da lista lida aqui: o servidor recusa em vez de sobrescrever.
+                    Err(error) if error.code.as_deref() == Some("erro_motor_ja_existe") => w.name_error = Some(tr("accounts_engine_name_taken")),
                     Err(error) => w.save_error = Some(if error.uncertain { tr("accounts_engine_save_uncertain") } else { Self::failure(&error) }),
                 }
             }

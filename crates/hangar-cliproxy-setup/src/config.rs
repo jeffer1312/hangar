@@ -137,10 +137,10 @@ fn describe(data: &Value) -> ProxyConfig {
         Some(tls) => &tls["enable"],
         None => &data["tls"]["enable"],
     };
-    // Na v8 a raiz `api-keys` é grupo de provedor, nunca chave de cliente.
+    // A raiz `api-keys` em mapa é grupo de provedor; em lista, o proxy ainda a lê como chave de cliente, também na v8.
     let keys = match data["access"].as_object().and_then(|o| o.get("api-keys")) {
         Some(keys) => keys,
-        None if format == Format::Legacy => &data["api-keys"],
+        None if data["api-keys"].is_array() => &data["api-keys"],
         None => &Value::Null,
     };
     let secret = field(data, "management", "secret-key", &data["remote-management"]["secret-key"]);
@@ -351,9 +351,14 @@ fn backup(file: &Path, now_unix: u64) -> io::Result<PathBuf> {
 }
 
 fn write(file: &Path, text: &str) -> io::Result<()> {
-    fs::create_dir_all(file.parent().expect("config tem pasta"))?;
-    hangar_core::fs::atomic_write(file, text.as_bytes())?;
-    private(file)
+    // Config que é atalho (dotfiles) é gravado no destino: trocar o atalho por arquivo soltaria o original.
+    let target = match fs::symlink_metadata(file) {
+        Ok(meta) if meta.file_type().is_symlink() => fs::canonicalize(file)?,
+        _ => file.to_owned(),
+    };
+    fs::create_dir_all(target.parent().expect("config tem pasta"))?;
+    hangar_core::fs::atomic_write(&target, text.as_bytes())?;
+    private(&target)
 }
 
 /// Chave de cliente e senha de gerenciamento ficam em texto no arquivo.
@@ -537,8 +542,8 @@ mod tests {
         assert_eq!(config.base_url.as_deref(), Ok("https://127.0.0.1:9000"));
         assert_eq!(config.client_keys, ["k8", "12345678"]);
         assert!(!config.management_key_set, "secret-key vazio desliga o gerenciamento");
-        let dir = home(Some("config-version: 8\napi-keys:\n  - parece-chave\n"));
-        assert!(read(dir.path()).unwrap().unwrap().client_keys.is_empty());
+        let dir = home(Some("config-version: 8\napi-keys:\n  - ainda-vale\n"));
+        assert_eq!(read(dir.path()).unwrap().unwrap().client_keys, ["ainda-vale"], "lista na raiz sem access.api-keys segue valendo");
     }
 
     #[test]
@@ -611,6 +616,28 @@ mod tests {
         let backup = ensured.backup.unwrap();
         assert!(backup.ends_with("config.yaml.hangar-bak-42"));
         assert_eq!(fs::read_to_string(backup).unwrap(), text);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ensure_writes_through_a_symlinked_config() {
+        let dir = home(None);
+        let real = dir.path().join("dotfiles.yaml");
+        fs::write(&real, "config-version: 8\naccess:\n  api-keys:\n    - k\n").unwrap();
+        fs::create_dir_all(dir.path().join(".cli-proxy-api")).unwrap();
+        std::os::unix::fs::symlink(&real, path(dir.path())).unwrap();
+        let ensured = ensure(dir.path(), 1, keep, true).unwrap();
+        assert!(fs::symlink_metadata(path(dir.path())).unwrap().file_type().is_symlink(), "o atalho continua atalho");
+        let management = ensured.management_key.unwrap();
+        assert!(fs::read_to_string(&real).unwrap().contains(&management), "a senha vai para o arquivo de verdade");
+    }
+
+    #[test]
+    fn ensure_also_keeps_a_root_key_list_of_a_v8_config() {
+        let dir = home(Some("config-version: 8\napi-keys:\n  - antiga\nmanagement:\n  secret-key: \"h\"\n"));
+        let ensured = ensure(dir.path(), 1, keep, true).unwrap();
+        assert_eq!(ensured.client_key, "antiga", "não cria outra chave por cima da que os clientes usam");
+        assert!(!fs::read_to_string(path(dir.path())).unwrap().contains("access:"));
     }
 
     #[test]

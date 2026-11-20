@@ -50,7 +50,8 @@ const engineId = (label: string) => label.toLowerCase().normalize('NFD').replace
   .replace(/[^a-z0-9_-]+/g, '-').replace(/^[-_]+/, '').slice(0, 32).replace(/-+$/, '');
 const defaultName = (a: Account) =>
   `${a.provider === 'codex' ? 'GPT' : m.mobile_cliproxy_wizard_claude()} ${a.email.split('@')[0] ?? ''}`.trim();
-const fastFor = (model: string) => /^gpt-\d/.test(model);
+// Como no nativo (`allows_fast`): vale o nome depois da última barra, para o modelo com prefixo de conta (`solo/gpt-5.5`).
+const fastFor = (model: string) => /^gpt-\d/.test(model.split('/').pop() ?? '');
 // Mesma regra do nativo (`default_model`): o primeiro da assinatura (GPT com número, ou Claude); sem ele, o primeiro.
 const defaultModel = (models: string[], p: Provider) =>
   models.find(id => p === 'codex' ? fastFor(id) : /claude/i.test(id)) ?? models[0] ?? '';
@@ -167,12 +168,13 @@ export function CliproxyWizard({ server, names, onSaved, onClose }: {
         // perdeu. Com o pedido ainda em voo, a tarefa só não nasceu.
         if (!job && !posting.current) { haptic.error(); setStage({ k: 'install_failed', at: 0, error: m.mobile_cliproxy_wizard_install_lost() }); return; }
         if (!job) { if (!stop) timer = setTimeout(() => void tick(), 1000); return; }
-        if (job.done) {
+        // Com o pedido ainda em voo, uma tarefa concluída é a da tentativa anterior: só a seguinte é desta.
+        if (job.done && !posting.current) {
           if (job.error) { haptic.error(); setStage({ k: 'install_failed', at: STEP_AT[job.step] ?? 0, error: installError(job.error) }); }
           else { haptic.success(); setStage({ k: 'pick' }); }
           return;
         }
-        if (job) {
+        if (!job.done) {
           const at = STEP_AT[job.step] ?? 0;
           setStage(s => s.k === 'installing' && s.at !== at ? { k: 'installing', at } : s);
         }
@@ -324,12 +326,16 @@ export function CliproxyWizard({ server, names, onSaved, onClose }: {
     const limit = infoNow.current?.models.find(x => x.id === model)?.context_length;
     try {
       await putEngineForServer(server, id, { label, base_url: baseUrl, model, subagent_model: model,
-        use_cliproxy_key: true, experimental_betas: true, fast: wantsFast,
+        use_cliproxy_key: true, create_only: true, experimental_betas: true, fast: wantsFast,
         ...(limit ? { context_window: Math.floor(limit / 100) * 95 } : {}) });
       if (!alive.current) return;
       haptic.success();
       setStage({ k: 'done', account, id, name: label, model, fast: wantsFast });
-    } catch (e) { if (alive.current) fail(message(e)); return; }
+    } catch (e) {
+      // Outra tela criou o mesmo nome depois da lista lida aqui: o servidor recusa em vez de sobrescrever.
+      if (alive.current) fail(failure(e).code === 'erro_motor_ja_existe' ? m.mobile_cliproxy_wizard_name_taken() : message(e));
+      return;
+    }
     // Fora do `try`: o motor já foi gravado; falha de quem chamou não pode virar erro de gravação.
     onSaved();
   });

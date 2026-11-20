@@ -2,7 +2,7 @@
 import { act, createElement, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { CliproxyDeteccao, CliproxyInstalacao, Server } from '@hangar/core';
+import type { CliproxyDeteccao, CliproxyInstalacao, CliproxyTarefa, Server } from '@hangar/core';
 import * as m from '../../paraglide/messages';
 import { overwriteGetLocale } from '../../paraglide/runtime';
 import { CliproxyWizard } from './CliproxyWizard';
@@ -110,7 +110,7 @@ describe('assistente do CLIProxyAPI no celular', () => {
     await click(view.container, 'Concluir');
     expect(calls.put).toHaveBeenCalledExactlyOnceWith(server, 'gpt-novo', {
       label: 'GPT novo', base_url: 'http://127.0.0.1:8317/v1', model: 'gpt-6.1-sol', subagent_model: 'gpt-6.1-sol',
-      use_cliproxy_key: true, experimental_betas: true, fast: true, context_window: 828400,
+      use_cliproxy_key: true, create_only: true, experimental_betas: true, fast: true, context_window: 828400,
     });
     expect(view.onSaved).toHaveBeenCalledTimes(1);
     expect(view.container.textContent).toContain('Tudo pronto');
@@ -169,6 +169,19 @@ describe('assistente do CLIProxyAPI no celular', () => {
     expect(calls.put).not.toHaveBeenCalled();
   });
 
+  it('modelo com prefixo de conta (solo/gpt-…) conta como GPT e grava o Fast com o identificador inteiro', async () => {
+    calls.status.mockResolvedValue({ status: 'ok' });
+    calls.detect.mockResolvedValue(proxy({ models: [{ id: 'solo/gpt-6.1-sol', context_length: 872000, vision: null }] }));
+    const view = await show();
+    await click(view.container, 'ChatGPT, Recomendado');
+    await fill(view.container, 'Endereço da barra do navegador', 'http://127.0.0.1:1455/auth/callback?state=st1');
+    await click(view.container, 'Concluir login');
+    await click(view.container, 'Continuar');
+    await fill(view.container, 'Nome', 'GPT solo');
+    await click(view.container, 'Concluir');
+    expect(calls.put).toHaveBeenCalledExactlyOnceWith(server, 'gpt-solo', expect.objectContaining({ model: 'solo/gpt-6.1-sol', fast: true }));
+  });
+
   it('pede a senha de gerenciamento quando falta e abre o login depois de salvar', async () => {
     calls.login.mockRejectedValueOnce(Object.assign(new Error('409: '), { status: 409, code: 'erro_cliproxy_sem_senha' }));
     calls.key.mockResolvedValue({ unnamed_accounts: 0, management_key_set: true, naming_error: null });
@@ -208,6 +221,29 @@ describe('assistente do CLIProxyAPI no celular', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(1000); await settle(); });
     expect(view.container.textContent).toContain('Não consegui baixar o CLIProxyAPI do GitHub');
     expect(button(view.container, 'Tentar de novo')).toBeTruthy();
+  });
+
+  it('Tentar de novo não toma a tarefa da tentativa anterior como resultado enquanto o pedido está em voo', async () => {
+    vi.useFakeTimers();
+    const failed = { kind: 'install' as const, step: 'download' as const, done: true, error: { code: 'cliproxy_download_failed', detail: 'timeout' }, outcome: null };
+    calls.detect.mockResolvedValueOnce(proxy({ found: false, base_url: null, models: [], connected: [], install: install({ state: 'absent', version: null }) }));
+    calls.install.mockResolvedValueOnce({ job: { kind: 'install', step: 'download', done: false, error: null, outcome: null } });
+    const view = await show();
+    await click(view.container, 'Instalar');
+    calls.detect.mockResolvedValue(proxy({ found: false, install: install({ state: 'absent', job: failed }) }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); await settle(); });
+    expect(button(view.container, 'Tentar de novo')).toBeTruthy();
+
+    let accept: (value: { job: CliproxyTarefa }) => void = () => {};
+    calls.install.mockReturnValueOnce(new Promise((resolve) => { accept = resolve; }));
+    await click(view.container, 'Tentar de novo');
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); await settle(); });
+    expect(button(view.container, 'Tentar de novo')).toBeUndefined();
+
+    await act(async () => { accept({ job: { kind: 'install', step: 'download', done: false, error: null, outcome: null } }); await settle(); });
+    calls.detect.mockResolvedValue(proxy({ install: install({ state: 'managed', job: { kind: 'install', step: 'start', done: true, error: null, outcome: 'installed' } }) }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); await settle(); });
+    expect(view.container.textContent).toContain('Qual conta você quer usar?');
   });
 
   it('proxy de outra origem: Continuar só completa o config e segue para a conta', async () => {

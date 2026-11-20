@@ -32,11 +32,25 @@ pub enum Install {
 }
 
 /// Units que pacotes do proxy instalam (o AUR `cli-proxy-api-bin` usa a de usuário em `/usr/lib`); a de sistema
-/// escrita à mão fica em `/etc/systemd/system`.
+/// escrita à mão fica em `/etc/systemd/system`. Na ordem em que o systemd escolhe: a cópia em `~/.config` ou `/etc`
+/// vence a do pacote, e o primeiro arquivo que existe é o que roda.
 pub fn system_units(home: &Path) -> Vec<PathBuf> {
-    ["/usr/lib/systemd/user/cli-proxy-api.service", "/etc/systemd/user/cli-proxy-api.service", "/usr/lib/systemd/system/cli-proxy-api.service",
-        "/etc/systemd/system/cli-proxy-api.service"]
-        .into_iter().map(PathBuf::from).chain(std::iter::once(home.join(".config/systemd/user/cli-proxy-api.service"))).collect()
+    std::iter::once(home.join(".config/systemd/user/cli-proxy-api.service"))
+        .chain(["/etc/systemd/user/cli-proxy-api.service", "/usr/lib/systemd/user/cli-proxy-api.service",
+            "/etc/systemd/system/cli-proxy-api.service", "/usr/lib/systemd/system/cli-proxy-api.service"].into_iter().map(PathBuf::from))
+        .collect()
+}
+
+/// Unit de sistema: o `%h` dela é a pasta do `User=` (ou do root), não a desta conta.
+pub fn is_system_unit(unit: &Path) -> bool {
+    unit.starts_with("/etc/systemd/system") || unit.starts_with("/usr/lib/systemd/system")
+}
+
+/// Algum `<unit>.d/*.conf` troca o `ExecStart`: o comando que roda não é o do arquivo da unit.
+pub fn exec_overridden(units: &[PathBuf]) -> bool {
+    units.iter().filter_map(|unit| std::fs::read_dir(format!("{}.d", unit.display())).ok()).flatten().flatten()
+        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "conf"))
+        .any(|entry| std::fs::read_to_string(entry.path()).is_ok_and(|text| text.lines().any(|l| l.trim_start().starts_with("ExecStart="))))
 }
 
 /// O `--config` (ou `-config`) que a unit passa ao proxy: outro arquivo que não o lido pelo Hangar.
@@ -120,9 +134,29 @@ mod tests {
     }
 
     #[test]
-    fn the_system_unit_dir_is_searched() {
+    fn units_follow_systemd_precedence() {
         let home = tempfile::tempdir().unwrap();
-        assert!(system_units(home.path()).contains(&PathBuf::from("/etc/systemd/system/cli-proxy-api.service")));
+        let units = system_units(home.path());
+        let at = |p: &str| units.iter().position(|u| u == &PathBuf::from(p)).unwrap();
+        assert_eq!(units[0], home.path().join(".config/systemd/user/cli-proxy-api.service"), "a cópia do usuário vence o pacote");
+        assert!(at("/etc/systemd/user/cli-proxy-api.service") < at("/usr/lib/systemd/user/cli-proxy-api.service"));
+        assert!(at("/etc/systemd/system/cli-proxy-api.service") < at("/usr/lib/systemd/system/cli-proxy-api.service"));
+        assert!(is_system_unit(Path::new("/etc/systemd/system/cli-proxy-api.service")));
+        assert!(!is_system_unit(Path::new("/usr/lib/systemd/user/cli-proxy-api.service")));
+    }
+
+    #[test]
+    fn a_drop_in_that_replaces_exec_start_is_seen() {
+        let home = tempfile::tempdir().unwrap();
+        let unit = home.path().join("cli-proxy-api.service");
+        std::fs::write(&unit, "[Service]\nExecStart=/usr/bin/cli-proxy-api\n").unwrap();
+        assert!(!exec_overridden(std::slice::from_ref(&unit)));
+        let drop_in = home.path().join("cli-proxy-api.service.d");
+        std::fs::create_dir_all(&drop_in).unwrap();
+        std::fs::write(drop_in.join("env.conf"), "[Service]\nEnvironment=A=1\n").unwrap();
+        assert!(!exec_overridden(std::slice::from_ref(&unit)), "drop-in sem ExecStart não muda o comando");
+        std::fs::write(drop_in.join("override.conf"), "[Service]\nExecStart=\nExecStart=/usr/bin/cli-proxy-api --config /srv/c.yaml\n").unwrap();
+        assert!(exec_overridden(&[unit]));
     }
 
     #[test]

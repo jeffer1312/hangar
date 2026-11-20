@@ -382,10 +382,10 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
       .then((r) => {
         if (alive) {
           setMotores(r.motores);
-          // Motor pedido que sumiu segura a criação até a pessoa escolher outro provedor ou motor.
+          // Motor pedido que sumiu segura a criação até a pessoa escolher outro provedor ou motor; a semente fica
+          // para a próxima leitura (outra máquina, nova tentativa) não liberar a criação sem motor.
           const seed = seededEngine.current;
-          seededEngine.current = '';
-          if (seed && r.motores[seed]) { setEngine(seed); setSeedPending(false); }
+          if (seed && r.motores[seed]) { seededEngine.current = ''; setEngine(seed); setSeedPending(false); }
           else if (seed) setEnginesError(m.mobile_create_engine_missing());
           else setSeedPending(false);
           if (r.arquivo_corrompido) setEnginesError(m.criar_motores_erro());
@@ -611,6 +611,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   // Toda escolha feita aqui volta na próxima abertura desta máquina.
   const chooseProvider = (p: Provider) => {
     providerTouched.current = true;
+    seededEngine.current = '';
     setSeedPending(false);
     setProvidersError('');
     if (p === provider) return;
@@ -882,7 +883,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
       <PanelSelect
         value={engine}
         options={[{ value: '', label: m.criar_claude_sua_conta() }, ...Object.entries(motores).map(([k, v]) => ({ value: k, label: (v as any).label ?? k, hint: (v as any).model }))]}
-        onChange={(v) => { choiceTouched.current = false; setSeedPending(false); setEngine(v); }}
+        onChange={(v) => { choiceTouched.current = false; seededEngine.current = ''; setSeedPending(false); setEngine(v); }}
       />
     </View>
   ) : null;

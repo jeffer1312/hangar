@@ -15,12 +15,6 @@ pub struct Github {
     pub download: String,
 }
 
-impl Default for Github {
-    fn default() -> Self {
-        Self { api: "https://api.github.com".into(), download: "https://github.com".into() }
-    }
-}
-
 #[derive(Debug, PartialEq, Eq)]
 pub enum Error {
     Network(String),
@@ -29,6 +23,23 @@ pub enum Error {
     Hash,
     BinaryMissing,
     Write(String),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Platform {
+    pub os: &'static str,
+    pub arch: &'static str,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Release {
+    pub tag: String,
+}
+
+impl Default for Github {
+    fn default() -> Self {
+        Self { api: "https://api.github.com".into(), download: "https://github.com".into() }
+    }
 }
 
 impl Error {
@@ -42,12 +53,6 @@ impl Error {
             Self::Write(_) => "cliproxy_write_failed",
         }
     }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Platform {
-    pub os: &'static str,
-    pub arch: &'static str,
 }
 
 impl Platform {
@@ -70,11 +75,6 @@ impl Platform {
         let ext = if self.os == "windows" { "zip" } else { "tar.gz" };
         Ok(format!("CLIProxyAPI_{version}_{}_{}.{ext}", self.os, self.arch))
     }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Release {
-    pub tag: String,
 }
 
 impl Release {
@@ -163,6 +163,10 @@ pub fn install(data: &[u8], expected_sha256: &str, member: &str, dest: &Path) ->
         return Err(Error::Hash);
     }
     let content = extract(data, member)?;
+    // Mesmo critério do `ready`: programa vazio não conta como baixado.
+    if content.is_empty() {
+        return Err(Error::BinaryMissing);
+    }
     let write = |e: std::io::Error| Error::Write(format!("{}: {e}", dest.display()));
     let parent = dest.parent().expect("destino tem pasta");
     std::fs::create_dir_all(parent).map_err(write)?;
@@ -264,6 +268,9 @@ mod tests {
         }
         let data = tar_gz("outro", b"x");
         assert_eq!(install(&data, &sha256_hex(&data), "cli-proxy-api", &dir.path().join("y")), Err(Error::BinaryMissing));
+        let empty = tar_gz("cli-proxy-api", b"");
+        assert_eq!(install(&empty, &sha256_hex(&empty), "cli-proxy-api", &dir.path().join("z")), Err(Error::BinaryMissing));
+        assert!(!dir.path().join("z").exists(), "programa vazio não é publicado");
     }
 
     #[test]

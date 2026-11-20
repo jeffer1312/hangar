@@ -325,6 +325,13 @@ pub async fn serve(st: &AppState, req: Request) -> Response {
                 }
                 body.insert("api_key".into(),json!(local.api_key));
             }
+            if body.remove("create_only") == Some(Value::Bool(true)) {
+                return match store::create(&env, name, body) {
+                    Ok(true) => (200, json!({"motores":visible(&accounts)})),
+                    Ok(false) => (409, json!({"detail":{"code":"erro_motor_ja_existe","msg":"já existe um motor com esse nome","params":{"name":name}}})),
+                    Err(e) => (400, json!({"detail":e})),
+                };
+            }
             return match store::put(&env, name, body) {
                 Ok(()) => (200, json!({"motores":visible(&accounts)})),
                 Err(e) => (400, json!({"detail":e})),

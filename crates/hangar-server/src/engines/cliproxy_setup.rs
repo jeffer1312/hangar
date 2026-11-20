@@ -12,8 +12,13 @@ use hangar_cliproxy_setup::release::{Github, Platform};
 use serde_json::{Value, json};
 
 use super::{proxy, store};
+use crate::accounts::environment::AccountEnvironment;
+use crate::list::bridge::ListBridge;
 use crate::routes::AppState;
 use crate::session_write::json_response;
+
+const RESET_PROBES: usize = 2;
+const RESET_WAIT: std::time::Duration = std::time::Duration::from_millis(1500);
 
 /// Uma máquina, um proxy: a instalação em andamento é do processo inteiro.
 static INSTALLER: LazyLock<Arc<Installer>> = LazyLock::new(|| Arc::new(Installer::default()));
@@ -24,11 +29,14 @@ fn coded(status: u16, code: &str, msg: &str, params: Value) -> Response {
 
 fn context(st: &AppState) -> Context {
     let env = st.accounts.env.clone();
+    let reader = env.clone();
     Context {
         paths: Paths::new(&env.home),
         platform: Platform::local(),
         github: Github::default(),
         persist: Arc::new(move |key| proxy::set_management_key(&env, key).map_err(std::io::Error::other)),
+        management_key: Arc::new(move || proxy::management_key(&reader)),
+        before_swap: None,
     }
 }
 
@@ -91,16 +99,34 @@ pub fn fill_context(codex_home: &std::path::Path, models: &mut [Value]) {
     }
 }
 
-/// Sessões vivas num motor que aponta para o proxy local: atualizar corta a resposta delas.
-async fn engine_sessions(st: &AppState) -> Result<usize, Response> {
-    let env = &st.accounts.env;
+/// Sessões vivas num motor que aponta para o proxy local: atualizar corta a resposta delas. Motor que já saiu do
+/// catálogo conta também: a sessão aberta nele segue no endereço de quando nasceu, e pode ser o proxy.
+async fn engine_sessions(env: &AccountEnvironment, list: &ListBridge) -> Result<usize, Response> {
     let local = proxy::local(env).ok().flatten();
-    let served: HashSet<String> = store::visible(env).into_iter()
+    let catalog = store::visible(env);
+    let served: HashSet<&str> = catalog.iter()
         .filter(|(_, item)| proxy::serves(local.as_ref(), item["base_url"].as_str().unwrap_or("")))
-        .map(|(name, _)| name).collect();
-    let produced = st.list.snapshot().await
+        .map(|(name, _)| name.as_str()).collect();
+    let produced = list.snapshot().await
         .map_err(|_| coded(503, "erro_lista_indisponivel", "não consegui ler as sessões abertas", json!({})))?;
-    Ok(produced.rows.iter().filter(|row| row.engine.as_ref().is_some_and(|e| served.contains(e))).count())
+    Ok(produced.rows.iter()
+        .filter(|row| row.engine.as_deref().is_some_and(|e| served.contains(e) || !catalog.contains_key(e)))
+        .count())
+}
+
+/// Sem confirmação, a atualização reconfere as sessões depois do download e desiste se alguma abriu no proxy.
+fn recheck_sessions(st: &AppState) -> install::BeforeSwap {
+    let (env, list) = (st.accounts.env.clone(), st.list.clone());
+    Arc::new(move || {
+        let (env, list) = (env.clone(), list.clone());
+        Box::pin(async move {
+            match engine_sessions(&env, &list).await {
+                Ok(0) => Ok(()),
+                Ok(n) => Err(install::Failure { code: "erro_cliproxy_sessoes_ativas", detail: format!("{n} sessões passaram a usar o proxy") }),
+                Err(_) => Err(install::Failure { code: "erro_lista_indisponivel", detail: "não consegui reconferir as sessões abertas".into() }),
+            }
+        })
+    })
 }
 
 fn management(st: &AppState) -> Result<login::Management, Response> {
@@ -146,11 +172,16 @@ pub async fn handle(st: &AppState, method: &Method, path: &str, bytes: &[u8]) ->
     Some(match (method, rest) {
         (&Method::POST, "install") => started(INSTALLER.start("install", context(st))),
         (&Method::POST, "update") => {
-            let sessions = match engine_sessions(st).await { Ok(n) => n, Err(response) => return Some(response) };
-            if sessions > 0 && body(bytes)["confirm"] != true {
+            let sessions = match engine_sessions(&st.accounts.env, &st.list).await { Ok(n) => n, Err(response) => return Some(response) };
+            let confirmed = body(bytes)["confirm"] == true;
+            if sessions > 0 && !confirmed {
                 return Some(coded(409, "erro_cliproxy_sessoes_ativas", "há sessões usando o proxy", json!({"sessions": sessions})));
             }
-            started(INSTALLER.start("update", context(st)))
+            let mut ctx = context(st);
+            if !confirmed {
+                ctx.before_swap = Some(recheck_sessions(st));
+            }
+            started(INSTALLER.start("update", ctx))
         }
         (&Method::POST, "management-key/reset") => {
             let ctx = context(st);
@@ -158,16 +189,23 @@ pub async fn handle(st: &AppState, method: &Method, path: &str, bytes: &[u8]) ->
                 .unwrap_or_else(|e| Err(install::Failure { code: "cliproxy_config_ilegivel", detail: e.to_string() }));
             match reset {
                 Ok(()) => {
-                    // O proxy relê o config sozinho, mas não na hora: o login logo em seguida levaria a senha velha.
+                    // O proxy relê o config em ~150 ms. Cada senha recusada conta para o bloqueio de 30 min do
+                    // 127.0.0.1 (cinco seguidas), então espera a releitura e confere no máximo duas vezes.
+                    let mut applied = false;
                     if let Ok(m) = management(st) {
-                        for _ in 0..20 {
+                        for _ in 0..RESET_PROBES {
+                            tokio::time::sleep(RESET_WAIT).await;
                             match login::status(&m, "hangar-reset-probe").await {
-                                Err(login::Error::Rejected | login::Error::Network(_)) => tokio::time::sleep(std::time::Duration::from_millis(250)).await,
-                                _ => break,
+                                Err(login::Error::Rejected | login::Error::Network(_)) => {}
+                                _ => { applied = true; break; }
                             }
                         }
                     }
-                    json_response(StatusCode::OK, json!({"status": "reset"}))
+                    if !applied {
+                        tracing::warn!("cliproxy: senha nova gravada, mas o proxy ainda não a aceitou");
+                    }
+                    // `applied: false`: a senha já está gravada; o login seguinte usa ela, sem gerar outra.
+                    json_response(StatusCode::OK, json!({"status": "reset", "applied": applied}))
                 }
                 Err(failure) => coded(409, failure.code, &failure.detail, json!({})),
             }
