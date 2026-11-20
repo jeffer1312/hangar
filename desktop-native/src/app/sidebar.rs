@@ -916,6 +916,8 @@ impl Hangar {
             window.open_dialog(cx, move |dialog, window, cx| {
                 let value = input.read(cx).value().trim().to_owned();
                 let (busy, error) = { let s = status.borrow(); (s.sent.is_some(), s.error.clone()) };
+                // Outra troca de nome da mesma sessão em voo (a da sugestão, por exemplo) também segura o Renomear.
+                let busy = busy || weak.upgrade().is_some_and(|this| this.read(cx).sidebar.renaming.contains(&owner));
                 let (commit, cancel, close, owner) = (weak.clone(), weak.clone(), weak.clone(), owner.clone());
                 // Vazio ou igual ao atual não renomeia, e gravando não manda de novo: o botão fica desligado, como o do web.
                 let rename = Button::new("rename-ok").primary().label(tr("sidebar_rename")).disabled(busy || value.is_empty() || value == owner.name)
@@ -953,6 +955,12 @@ impl Hangar {
 
     fn commit_session_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(edit) = self.sidebar.editing.as_ref() else { return };
+        // A mesma regra do `rename_session_to`: com uma troca de nome em voo, outra sairia com o nome antigo. O diálogo fica
+        // aberto com o botão desligado; o campo da linha fecha sem enviar.
+        if self.sidebar.renaming.contains(&edit.target) {
+            if edit.inline { self.sidebar.editing = None; self.root_focus.focus(window, cx); cx.notify(); }
+            return;
+        }
         let new = edit.input.read(cx).value().trim().to_owned();
         let unchanged = new.is_empty() || new == edit.target.name;
         let old = edit.target.clone();

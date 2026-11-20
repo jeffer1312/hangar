@@ -47,7 +47,7 @@ pub(super) fn render(started: Instant, width: Pixels, window: &mut Window, cx: &
         // Miniatura só leitura: os botões da faixa ficam sem clique e fora do Tab.
         let sample = tr_shared("news_rename_sample_name", &[]);
         let strip = app::RenameStrip { weak: true, ..Default::default() };
-        let card = if new { app::beta_rename_strip(&sample, strip, |el| el, |button| button.tab_stop(false), |button| button.tab_stop(false), cx) }
+        let card = if new { app::beta_rename_strip(&sample, strip, |button| button.tab_stop(false), |button| button.tab_stop(false), |button| button.tab_stop(false), cx) }
             else { app::rename_strip(&sample, strip, |button| button.tab_stop(false), |button| button.tab_stop(false), |button| button.tab_stop(false)) };
         stage.child(card).into_any_element()
     })

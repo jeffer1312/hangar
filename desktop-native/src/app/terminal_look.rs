@@ -656,10 +656,13 @@ impl Hangar {
                 // Conversa nova: cada falha leva o "ver saída", que abre a dobra com a saída dela.
                 let beta = crate::appearance::conversation_beta();
                 for (n, tool) in failures.iter().enumerate() {
-                    let open_key = key.clone();
+                    let (open_key, call_key) = (key.clone(), self.chat.events[tool.call].id.clone());
                     let link = beta.then(|| Button::new(SharedString::from(format!("{key}-out-{n}"))).ghost().xsmall().h(px(19.)).px(px(4.))
                         .child(div().font_family(theme::MONO).text_size(px(13.)).text_color(theme::accent_text()).underline().child(tr("beta_see_output")))
-                        .on_click(cx.listener(move |this, _, _, cx| this.toggle(open_key.clone(), cx))).into_any_element());
+                        // Abre a dobra e a chamada da falha num clique só; o que já está aberto fica aberto.
+                        .on_click(cx.listener(move |this, _, _, cx| for key in [&open_key, &call_key] {
+                            if !this.expanded.contains(key.as_str()) { this.toggle(key.clone(), cx); }
+                        })).into_any_element());
                     block.push(fold_sub_with(self.tool_status(*tool).0, if beta { theme::danger_text() } else { theme::danger() }, link));
                 }
             }

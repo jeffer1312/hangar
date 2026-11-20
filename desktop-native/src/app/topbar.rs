@@ -124,6 +124,7 @@ impl Hangar {
             let beta_usage = window.as_ref().filter(|_| beta).map(|(label, pct)| beta_quota_text(label, *pct));
             let label = if proxy { format!("{name} · {quota}") } else { match &window {
                 Some(_) if beta => format!("{beta_name} · {}", beta_usage.clone().unwrap_or_default()),
+                None if beta => format!("{beta_name} · {}", tr("no_data")),
                 Some((label, pct)) => format!("{}% {label} · {name}", pct.round()),
                 None => format!("{} · {name}", tr("no_data")),
             } };
@@ -134,8 +135,10 @@ impl Hangar {
                     .child(chrome::ring(window.as_ref().map(|w| w.1)))
                     .when(proxy, |el| el.child(div().min_w_0().truncate().text_color(theme::muted()).child(name))
                         .child(div().flex_shrink_0().text_color(theme::muted()).child(quota)))
-                    .when(beta, |el| el.child(div().flex_shrink_0().font_family(theme::MONO).text_color(theme::text()).child(beta_name.clone()))
-                        .when_some(beta_usage.clone(), |el, usage| el.child(div().min_w_0().truncate().text_color(theme::muted()).child(format!("· {usage}")))))
+                    .when(beta, |el| el.child(div().min_w_0().truncate().font_family(theme::MONO).text_color(theme::text()).child(beta_name.clone()))
+                        // Sem janela de cota, o "sem dados" fica à vista como no desenho de sempre.
+                        .child(div().min_w_0().truncate().text_color(theme::muted())
+                            .child(format!("· {}", beta_usage.clone().unwrap_or_else(|| tr("no_data"))))))
                     .when(!proxy && !beta, |el| el.child(div().min_w_0().truncate().text_color(theme::muted()).child(label.clone()))))
                 .accessibility_label(format!("{}: {label}", tr("ring_account")))
                 .on_click(cx.listener(|this, _, _, cx| this.toggle_top_usage_card(cx)))

@@ -523,7 +523,8 @@ enum Reply {
     Cost(u64),
     /// Leitura do painel da orquestração, com o número do pedido.
     OrqPanel(u64),
-    GitFiles,
+    /// A geração da leitura (`Side::files_gen`).
+    GitFiles(u64),
     Diff(String),
     /// Rótulo do atalho e se o pedido foi No Hangar.
     Shell(String, bool),
@@ -4435,7 +4436,8 @@ impl Hangar {
         // Conversa nova (pele Terminal): o trilho que liga os passos, interrompido em volta do ponto de cada linha.
         let rail = self.rail_dot(index).map(|dot| Rail {
             top: index > 0 && self.rail_dot(index - 1).is_some(),
-            dot: dot.map(|center| center + if card_gap { 8. } else { 0. }),
+            dot,
+            above: if card_gap { 8. } else { 0. },
         });
         let row = row_frame(inner, message, rail).when(card_gap, |el| el.pt(px(8.)));
         // Pede quadro só para a área da conversa, e só enquanto a linha entra; rolar até ela depois não a anima de novo.
@@ -4468,8 +4470,8 @@ impl Hangar {
         if id.starts_with("queued-") || id.starts_with(PINNED) || [PREVIEW, LIVE_THINKING, LIVE_TOOL, WORKING, landing::OPENING, send_flight::LOCAL_SEND].contains(&id.as_str()) {
             return None;
         }
-        // Linha de ferramenta: 2 px de respiro e a linha de 19 px do cabeçalho.
-        const TOOL_DOT: f32 = 2. + 19. / 2.;
+        // Medido dentro da coluna, sem o respiro da linha: o meio da linha de 19 px do cabeçalho.
+        const TOOL_DOT: f32 = 19. / 2.;
         match self.conversation.items.get(index)? {
             Item::Tool(tool) => {
                 let name = self.chat.events.get(tool.call)?.tool_name.as_deref();
@@ -4479,7 +4481,7 @@ impl Hangar {
             Item::Thinking { .. } => Some(None),
             Item::Event(i) => {
                 let event = self.chat.events.get(*i)?;
-                (event.kind == "assistant_msg" && !notice_line::is_notice_line(event)).then(|| Some(8. + conversation_line(false) / 2.))
+                (event.kind == "assistant_msg" && !notice_line::is_notice_line(event)).then(|| Some(conversation_line(false) / 2.))
             }
             _ => None,
         }
@@ -6210,24 +6212,31 @@ fn after_card(items: &[Item], events: &[ChatEvent], index: usize) -> bool {
     index > 0 && items.get(index).is_some() && card(items.get(index - 1)) && !card(items.get(index))
 }
 
-/// O trilho da linha na conversa nova: `top` liga à linha de cima; `dot` é a altura do centro do ponto, em volta do qual o
-/// traço se interrompe (sem ponto, o traço é contínuo).
+/// O trilho da linha na conversa nova: `top` liga à linha de cima; `dot` é a altura do centro do ponto dentro da coluna
+/// (sem o respiro da linha), em volta do qual o traço se interrompe; sem ponto, o traço é contínuo. `above` é o respiro
+/// extra em cima da linha depois de um cartão.
 #[derive(Clone, Copy)]
-struct Rail { top: bool, dot: Option<f32> }
+struct Rail { top: bool, dot: Option<f32>, above: f32 }
 
 /// Vão do traço em volta do ponto, de cada lado do centro.
 const RAIL_GAP: f32 = 7.;
 
 fn row_frame(inner: AnyElement, message: bool, rail: Option<Rail>) -> Div {
+    let pad = if message { 8. } else { 2. };
+    // O traço mora na coluna, mas cobre também o respiro de cima e de baixo da linha, que fica fora dela: assim o ponto
+    // e o traço usam a mesma origem e duas linhas seguidas se encontram.
     let line = || div().absolute().left(px(column_padding() + 3.)).w(px(1.)).bg(theme::text().alpha(0.10));
-    let rail = rail.map(|rail| match rail.dot {
-        Some(center) => vec![
-            rail.top.then(|| line().top_0().h(px((center - RAIL_GAP).max(0.)))),
-            Some(line().top(px(center + RAIL_GAP)).bottom_0()),
-        ].into_iter().flatten().collect::<Vec<_>>(),
-        None => vec![line().top_0().bottom_0()],
+    let rail = rail.map(|rail| {
+        let top = if rail.top { -(pad + rail.above) } else { 0. };
+        match rail.dot {
+            Some(center) => vec![
+                rail.top.then(|| line().top(px(top)).h(px((center - RAIL_GAP - top).max(0.)))),
+                Some(line().top(px(center + RAIL_GAP)).bottom(px(-pad))),
+            ].into_iter().flatten().collect::<Vec<_>>(),
+            None => vec![line().top(px(top)).bottom(px(-pad))],
+        }
     }).unwrap_or_default();
-    div().w_full().px(px(16.)).when(message, |el| el.py(px(8.))).when(!message, |el| el.py(px(2.)))
+    div().w_full().px(px(16.)).py(px(pad))
         .flex().justify_center()
         .child(column_box(false).relative().px(px(column_padding())).children(rail).child(inner))
 }

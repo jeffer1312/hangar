@@ -658,8 +658,8 @@ impl Hangar {
         appearance::set(next);
         theme::sync_kit(None, cx);
         // Quem muda as linhas ou o desenho delas refaz a conversa: a lista guarda a altura de cada linha.
-        if (before.tool_look, before.task_list, before.thinking_tools, before.thinking_collapsed, before.table_chart, before.code_font, before.code_size)
-            != (next.tool_look, next.task_list, next.thinking_tools, next.thinking_collapsed, next.table_chart, next.code_font, next.code_size) {
+        if (before.tool_look, before.task_list, before.thinking_tools, before.thinking_collapsed, before.table_chart, before.code_font, before.code_size, before.conversation_beta)
+            != (next.tool_look, next.task_list, next.thinking_tools, next.thinking_collapsed, next.table_chart, next.code_font, next.code_size, next.conversation_beta) {
             self.chat.invalidate();
             self.sync_rows(cx);
             self.list_state.remeasure();

@@ -144,6 +144,10 @@ pub(super) struct Side {
     files: Option<(SessionKey, Option<Result<Vec<GitFile>, String>>)>,
     /// Conversa nova: a lista de arquivos do repositório lida sozinha; a assinatura das contagens que a pediu.
     beta_files_sig: Option<(SessionKey, String)>,
+    /// Conversa nova: a última lista lida com sucesso, à vista enquanto a seguinte chega.
+    beta_files_last: Option<(SessionKey, Vec<GitFile>)>,
+    /// Geração da leitura da lista de arquivos: resposta de uma leitura anterior não substitui a mais nova.
+    files_gen: u64,
     /// Conversa nova: subagentes dispensados no painel, pelo id da chamada.
     beta_dismissed: HashSet<String>,
     diff: Option<(SessionKey, String, Option<Result<(String, bool), String>>)>,
@@ -179,7 +183,7 @@ impl Default for Side {
     fn default() -> Self {
         let saved = appearance::get();
         Self { open: true, menu: false, width: saved.side_width, browser_width: saved.side_browser_width, drag: None, shortcuts: None, project: ProjectShortcuts::default(), cost: None, cost_task: None, cost_gen: 0, orq: Default::default(),
-            files: None, beta_files_sig: None, beta_dismissed: HashSet::new(), diff: None, reloading: HashSet::new(), run_code_pending: HashSet::new(), stop_pending: HashSet::new(), git: None, run: None, browsers: HashMap::new(), remote_browsers: HashMap::new(), browser_open: HashSet::new(), tabs: HashMap::new(),
+            files: None, beta_files_sig: None, beta_files_last: None, files_gen: 0, beta_dismissed: HashSet::new(), diff: None, reloading: HashSet::new(), run_code_pending: HashSet::new(), stop_pending: HashSet::new(), git: None, run: None, browsers: HashMap::new(), remote_browsers: HashMap::new(), browser_open: HashSet::new(), tabs: HashMap::new(),
             #[cfg(target_os = "linux")] warm: None,
             shortcut_terms: HashMap::new(), shortcut_focus: HashMap::new(), shortcut_running: HashMap::new(), shortcut_recheck: HashMap::new() }
     }
@@ -204,6 +208,8 @@ impl Side {
     pub fn on_select(&mut self) {
         self.project.reset();
         self.files = None;
+        self.beta_files_sig = None;
+        self.beta_files_last = None;
         self.diff = None;
         self.git = None;
     }
@@ -399,10 +405,12 @@ impl Hangar {
         let (Some(api), Some(key)) = (self.session_api(), self.selected_key()) else { return; };
         self.side.files = Some((key.clone(), None));
         self.side.diff = None;
+        self.side.files_gen += 1;
+        let generation = self.side.files_gen;
         let (connection, tx) = (self.connection, self.tx.clone());
         self.runtime.spawn(async move {
             let result = api.read(&key.name, &["git", "files"], &[], 30).await;
-            let _ = tx.send(Envelope { connection, selection: None, payload: Payload::Reply(key, Reply::GitFiles, result) }).await;
+            let _ = tx.send(Envelope { connection, selection: None, payload: Payload::Reply(key, Reply::GitFiles(generation), result) }).await;
         });
         cx.notify();
     }
@@ -590,7 +598,8 @@ impl Hangar {
                 });
             }
             Reply::OrqPanel(generation) => self.receive_orq_panel(generation, key, result),
-            Reply::GitFiles => {
+            Reply::GitFiles(generation) => {
+                if generation != self.side.files_gen { return; }
                 let Some((owner, slot)) = self.side.files.as_mut() else { return; };
                 if owner != &key { return; }
                 *slot = Some(result.map_err(|error| Self::failure(&error)).map(|value| {
@@ -908,14 +917,24 @@ impl Hangar {
     /// Conversa nova: "+46 −0 em 2 arquivos na working tree" e a lista dos arquivos, lida sozinha quando as contagens
     /// mudam; o clique no arquivo mostra o diff embaixo, como a lista aberta pelo botão.
     fn render_beta_project(&mut self, session: &SessionInfo, key: SessionKey, cx: &mut Context<Self>) -> AnyElement {
-        let sig = format!("{:?}/{:?}/{:?}", session.git_added, session.git_removed, session.git_dirty);
+        // As contagens não dizem quais arquivos mudaram: a branch, os commits e o fim de cada turno também releem.
+        let turn_end = (session.state != "working").then_some(session.last_activity).flatten();
+        let sig = format!("{:?}/{:?}/{:?}/{:?}/{:?}/{:?}/{:?}", session.git_added, session.git_removed, session.git_dirty,
+            session.branch, session.git_ahead, session.git_behind, turn_end);
         let stale = self.side.beta_files_sig.as_ref().is_none_or(|(owner, old)| *owner != key || *old != sig);
         if stale && !self.open_read_only() {
             self.side.beta_files_sig = Some((key.clone(), sig));
             self.load_files(cx);
         }
-        let files = self.side.files.as_ref().filter(|(owner, _)| owner == &key).and_then(|(_, slot)| slot.clone());
-        let count = files.as_ref().and_then(|f| f.as_ref().ok()).map(Vec::len)
+        let slot = self.side.files.as_ref().filter(|(owner, _)| owner == &key).and_then(|(_, slot)| slot.clone());
+        if let Some(Ok(list)) = &slot { self.side.beta_files_last = Some((key.clone(), list.clone())); }
+        // Lendo de novo, a lista anterior fica à vista; falha mostra o motivo e o Tentar de novo.
+        let failure = match &slot { Some(Err(reason)) => Some(reason.clone()), _ => None };
+        let files = match slot {
+            Some(Ok(list)) => Some(list),
+            _ => self.side.beta_files_last.as_ref().filter(|(owner, _)| owner == &key).map(|(_, list)| list.clone()),
+        };
+        let count = files.as_ref().map(Vec::len)
             .or_else(|| session.git_dirty.filter(|n| *n > 0).map(|n| n as usize));
         let (added, removed) = (session.git_added.unwrap_or(0), session.git_removed.unwrap_or(0));
         let summary = match count {
@@ -925,8 +944,13 @@ impl Hangar {
                 .child(div().font_family(crate::theme::MONO).text_size(px(12.)).text_color(theme::danger_text()).child(format!("−{removed}")))
                 .when_some(count, |el, n| el.child(tr(if n == 1 { "beta_side_files_one" } else { "beta_side_files" }).replace("{n}", &n.to_string()))),
         };
+        let reload = |id: &'static str| chrome::icon_button(id, IconName::RefreshCw, tr("side_files_reload"), cx)
+            .on_click(cx.listener(|this, _, _, cx| this.load_files(cx)));
+        let failure = failure.map(|reason| div().mt(px(8.)).flex().items_center().gap(px(8.)).text_size(px(12.5)).text_color(theme::warning())
+            .child(div().flex_1().min_w_0().child(reason))
+            .child(Button::new("side-files-retry").xsmall().outline().label(tr("beta_retry")).on_click(cx.listener(|this, _, _, cx| this.load_files(cx)))));
         let current = self.side.diff.as_ref().map(|(_, path, _)| path.clone());
-        let rows = files.and_then(Result::ok).unwrap_or_default().into_iter().enumerate().map(|(n, file)| {
+        let rows = files.unwrap_or_default().into_iter().enumerate().map(|(n, file)| {
             let (icon, color) = match file.code.trim() {
                 "A" | "??" => (IconName::Plus, theme::success()),
                 "D" => (IconName::Minus, theme::danger_text()),
@@ -943,7 +967,10 @@ impl Hangar {
                     .when_some(file.removed.filter(|r| *r > 0), |el, r| el.child(div().flex_shrink_0().text_size(px(12.)).text_color(theme::danger_text()).child(format!("−{r}")))))
                 .on_click(cx.listener(move |this, _, _, cx| this.open_diff(path.clone(), cx)))
         }).collect::<Vec<_>>();
-        div().flex().flex_col().child(beta_title(tr("side_repository"))).child(summary)
+        div().flex().flex_col()
+            .child(div().flex().items_center().justify_between().child(beta_title(tr("side_repository")).mb_0()).child(reload("side-files-reload")))
+            .child(div().mt(px(4.)).child(summary))
+            .children(failure)
             .when(!rows.is_empty(), |el| el.child(div().id("side-files-list").mt(px(8.)).max_h(px(260.)).overflow_y_scroll().flex().flex_col().gap(px(2.)).children(rows)))
             .children(self.render_side_diff(&key, cx).map(|diff| diff.mt(px(8.))))
             .into_any_element()
@@ -952,8 +979,8 @@ impl Hangar {
     /// Conversa nova: o subagente mais recente da conversa, com o estado, o tipo, o modelo e o tempo; o × o tira do
     /// painel até outro aparecer, e o clique abre a conversa dele.
     fn render_beta_subagent(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let agent = self.conversation.activity.agents.iter().rev()
-            .find(|agent| !self.side.beta_dismissed.contains(&agent.id)).cloned()?;
+        // Só o mais recente: dispensado, o painel fica sem cartão até outro subagente aparecer.
+        let agent = self.conversation.activity.agents.last().filter(|agent| !self.side.beta_dismissed.contains(&agent.id)).cloned()?;
         let call = self.chat.events.get(agent.call)?;
         let request = super::activity::agent_request(call)?;
         let input = |field: &str| call.tool_input.as_ref().and_then(|i| i.get(field)).and_then(Value::as_str)
@@ -965,7 +992,8 @@ impl Hangar {
         });
         let failed = result.is_some_and(|r| r.is_error == Some(true)) || self.agent_failed(agent.call);
         let run = self.effective_agent(agent.call);
-        let running = !failed && run.as_ref().is_some_and(|a| a.running && !a.waiting);
+        // Esperando o próprio trabalho de fundo ainda é execução: mesmo ícone e mesmo "em execução".
+        let running = !failed && run.as_ref().is_some_and(|a| a.running);
         let now = chrono::Utc::now().timestamp_millis() as f64 / 1000.;
         let elapsed = run.as_ref().and_then(|a| a.elapsed(now)).map(chrome::format_ago);
         let status = if running { tr("beta_sub_running") }
