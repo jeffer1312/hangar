@@ -29,7 +29,10 @@ pub fn serves(local: Option<&Local>, base: &str) -> bool { local.is_some_and(|l|
 
 pub fn credentials(env: &AccountEnvironment) -> Result<Vec<(PathBuf, Value)>, String> {
     let error = || "CLIProxyAPI: não consegui ler as credenciais locais".to_string();
-    let mut paths: Vec<_> = match fs::read_dir(env.home.join(".cli-proxy-api")) {
+    // As contas ficam onde o `auth-dir` do config manda; config ilegível já aparece em `local` com a causa.
+    use hangar_cliproxy_setup::config;
+    let dir = config::accounts_dir(&env.home, config::read(&env.home).ok().flatten().as_ref());
+    let mut paths: Vec<_> = match fs::read_dir(&dir) {
         Ok(entries) => entries.map(|e| e.map(|e| e.path())).collect::<Result<Vec<_>, _>>().map_err(|_| error())?,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()), Err(_) => return Err(error()),
     };

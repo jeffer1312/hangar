@@ -939,6 +939,10 @@ fn fast_recognizes_cliproxy_client_keys_in_both_config_formats() {
     std::fs::write(home.join(".claude/engines.json"),
         json!({"gpt": {"base_url": "http://127.0.0.1:8317/v1", "api_key": "k", "model": "gpt-6.1-sol", "fast": false}}).to_string()).unwrap();
     assert_eq!(resolve::resolve_open(&request, &OWNER, &facts).err().map(|e| (e.status, e.code)), Some((400, Some("erro_criacao_sessao"))));
+    // Velocidade normal não depende do Fast: o motor sem Fast continua abrindo nela.
+    let normal = SessionOpenRequest::parse(json!({"name": "s3", "cwd": home.join("work"), "provider": "claude", "headless": false,
+        "engine": "gpt", "model": "gpt-6.1-sol", "service_tier": "default"}).to_string().as_bytes()).unwrap();
+    assert!(resolve::resolve_open(&normal, &OWNER, &facts).is_ok());
 }
 
 /// `model: ""` com Fast cai no modelo do motor como o `or` do Python: o Fast passa, e quem recusa é

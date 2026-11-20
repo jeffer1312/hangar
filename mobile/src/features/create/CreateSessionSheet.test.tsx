@@ -428,6 +428,24 @@ describe('CreateSessionSheet Codex', () => {
     return { container, root };
   }
 
+  it('aberta pelo assistente com um motor, só cria depois de o motor chegar', async () => {
+    let deliver: (value: { motores: Record<string, { label: string; model: string }> }) => void = () => {};
+    calls.engines.mockReturnValue(new Promise((resolve) => { deliver = resolve; }));
+    const container = document.createElement('div');
+    const root = createRoot(container);
+    await act(async () => root.render(createElement(CreateSessionSheet, { initial: { engine: 'proxy' } })));
+    await act(async () => Promise.resolve());
+    try {
+      await send(container);
+      expect(calls.create).not.toHaveBeenCalled();
+      await act(async () => deliver({ motores: { proxy: { label: 'Proxy', model: 'sol' } } }));
+      await send(container);
+      expect(calls.create.mock.calls[0]?.[1]).toEqual(expect.objectContaining({ engine: 'proxy' }));
+    } finally {
+      root.unmount();
+    }
+  });
+
   it('o `/` sem sessão sugere a lista da conta e pasta escolhidas, e a escolha só entra no campo', async () => {
     calls.commands.mockResolvedValue([
       { name: 'global-skill', display: '/global-skill', description: null, argumentHint: null, source: 'skill', destructive: false },

@@ -31,10 +31,26 @@ pub enum Install {
     Managed { tag: String, binary: PathBuf },
 }
 
-/// Units que pacotes do proxy instalam (o AUR `cli-proxy-api-bin` usa a de usuário em `/usr/lib`).
+/// Units que pacotes do proxy instalam (o AUR `cli-proxy-api-bin` usa a de usuário em `/usr/lib`); a de sistema
+/// escrita à mão fica em `/etc/systemd/system`.
 pub fn system_units(home: &Path) -> Vec<PathBuf> {
-    ["/usr/lib/systemd/user/cli-proxy-api.service", "/etc/systemd/user/cli-proxy-api.service", "/usr/lib/systemd/system/cli-proxy-api.service"]
+    ["/usr/lib/systemd/user/cli-proxy-api.service", "/etc/systemd/user/cli-proxy-api.service", "/usr/lib/systemd/system/cli-proxy-api.service",
+        "/etc/systemd/system/cli-proxy-api.service"]
         .into_iter().map(PathBuf::from).chain(std::iter::once(home.join(".config/systemd/user/cli-proxy-api.service"))).collect()
+}
+
+/// O `--config` (ou `-config`) que a unit passa ao proxy: outro arquivo que não o lido pelo Hangar.
+pub fn unit_config(unit: &str) -> Option<PathBuf> {
+    let exec = unit.lines().map(str::trim).find_map(|l| l.strip_prefix("ExecStart="))?;
+    let words: Vec<&str> = exec.split_whitespace().map(|w| w.trim_matches(['"', '\''])).collect();
+    words.iter().enumerate().find_map(|(i, w)| {
+        let flag = w.trim_start_matches('-');
+        match flag.split_once('=') {
+            Some(("config", path)) if w.starts_with('-') => Some(PathBuf::from(path.trim_matches(['"', '\'']))),
+            _ if flag == "config" && w.starts_with('-') => words.get(i + 1).map(PathBuf::from),
+            _ => None,
+        }
+    })
 }
 
 pub fn state(paths: &Paths, path_var: Option<&std::ffi::OsStr>, units: &[PathBuf]) -> Install {
@@ -101,6 +117,21 @@ mod tests {
         let missing = home.path().join("nao-existe.service");
         assert_eq!(state(&Paths::new(home.path()), None, &[missing.clone(), unit.clone()]), Install::External { binary: None, unit: Some(unit) });
         assert_eq!(state(&Paths::new(home.path()), None, &[missing]), Install::Absent);
+    }
+
+    #[test]
+    fn the_system_unit_dir_is_searched() {
+        let home = tempfile::tempdir().unwrap();
+        assert!(system_units(home.path()).contains(&PathBuf::from("/etc/systemd/system/cli-proxy-api.service")));
+    }
+
+    #[test]
+    fn the_config_the_unit_passes_is_read() {
+        let unit = |exec: &str| format!("[Service]\nExecStart={exec}\n");
+        assert_eq!(unit_config(&unit("/usr/bin/cli-proxy-api --config /etc/cliproxy/config.yaml")), Some(PathBuf::from("/etc/cliproxy/config.yaml")));
+        assert_eq!(unit_config(&unit("/usr/bin/cli-proxy-api -config=\"/srv/c.yaml\"")), Some(PathBuf::from("/srv/c.yaml")));
+        assert_eq!(unit_config(&unit("/usr/bin/cli-proxy-api")), None);
+        assert_eq!(unit_config("[Unit]\nDescription=x\n"), None);
     }
 
     #[test]

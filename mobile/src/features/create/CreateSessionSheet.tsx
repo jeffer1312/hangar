@@ -123,6 +123,8 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   });
   // Aplicado uma vez, quando a lista de motores chega; depois a escolha é da pessoa.
   const seededEngine = useRef(initialEngine ?? '');
+  // Aberto pelo assistente com um motor: criar (e reservar) antes de ele chegar abriria na conta Claude direta.
+  const [seedPending, setSeedPending] = useState(!!initialEngine);
   const remember = (patch: NewChatChoices) => rememberChoices(active.id, patch);
 
   const [picked, setPicked] = useState<string | null>(null);
@@ -381,7 +383,9 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
         if (alive) {
           setMotores(r.motores);
           if (seededEngine.current && r.motores[seededEngine.current]) setEngine(seededEngine.current);
+          else if (seededEngine.current) setEnginesError(m.mobile_create_engine_missing());
           seededEngine.current = '';
+          setSeedPending(false);
           if (r.arquivo_corrompido) setEnginesError(m.criar_motores_erro());
         }
       })
@@ -584,7 +588,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
       subagent_model: provider === 'claude' && !engine ? subagente || null : null,
       ...(canHeadless ? { headless } : {}),
     };
-  const body = picked && defaultsReady && !modelsLoading && codexReady && !providersLoading && (!providersError || providerTouched.current) ? { ...settings, ...(fastAvailable && serviceTier ? { service_tier: serviceTier } : {}), cwd: picked, remember_provider: true, ...(name.trim() ? { name: name.trim() } : {}), ...(worktree ?? {}) } : null;
+  const body = picked && defaultsReady && !seedPending && !modelsLoading && codexReady && !providersLoading && (!providersError || providerTouched.current) ? { ...settings, ...(fastAvailable && serviceTier ? { service_tier: serviceTier } : {}), cwd: picked, remember_provider: true, ...(name.trim() ? { name: name.trim() } : {}), ...(worktree ?? {}) } : null;
 
   // Reserva pré-aquecida enquanto a tela está aberta, na frente e compondo; o form remonta por
   // máquina, então desmontar também cobre a troca de servidor.

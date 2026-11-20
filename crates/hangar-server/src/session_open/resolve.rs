@@ -606,7 +606,7 @@ fn validate(request: &SessionOpenRequest, caller: &OpenCaller, provider: AgentPr
             return Err(OpenError::new(403, "claude_customizations_owner_only", "a seleção de plugins pertence ao dono"));
         }
     }
-    if request.service_tier.is_some() && provider != AgentProvider::Codex
+    if request.service_tier.is_some_and(ServiceTier::is_fast) && provider != AgentProvider::Codex
         && !(claude && facts.supports_fast(request.engine.as_deref(), request.model.as_deref()))
     {
         return Err(OpenError::new(400, "erro_criacao_sessao", "Fast exige Codex ou Claude com GPT no CLIProxyAPI local"));

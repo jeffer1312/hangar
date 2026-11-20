@@ -225,7 +225,10 @@ pub fn for_row(
                 .as_str()
                 .ok_or("dictation_organization_failed")?;
             let mut matches = Vec::new();
-            for file in std::fs::read_dir(state.accounts.env.home.join(".cli-proxy-api"))
+            let user_home = &state.accounts.env.home;
+            let proxy_dir = hangar_cliproxy_setup::config::accounts_dir(user_home,
+                hangar_cliproxy_setup::config::read(user_home).ok().flatten().as_ref());
+            for file in std::fs::read_dir(proxy_dir)
                 .map_err(|_| "dictation_organization_failed")?
             {
                 let file = file.map_err(|_| "dictation_organization_failed")?;

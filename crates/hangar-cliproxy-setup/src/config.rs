@@ -27,6 +27,27 @@ pub struct ProxyConfig {
     pub management_key_set: bool,
     /// A regra que troca o pedido marcado com [`SPEED_HEADER`] por `service_tier: ultrafast` está no config.
     pub ultrafast_rule: bool,
+    /// O `auth-dir` como está no arquivo (v8 em `oauth`, legado na raiz); `None` = o padrão do proxy.
+    pub auth_dir: Option<String>,
+}
+
+/// Uma edição do config por vez, da leitura até a senha guardada e o arquivo gravado: duas trocas de senha
+/// cruzadas deixariam o Hangar com uma senha e o proxy com a outra.
+fn edit_turn() -> std::sync::MutexGuard<'static, ()> {
+    static EDIT: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    EDIT.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// A pasta onde o proxy grava as contas: o `auth-dir` do config, com `~` na pasta pessoal; sem ele, `~/.cli-proxy-api`.
+pub fn accounts_dir(home: &Path, config: Option<&ProxyConfig>) -> PathBuf {
+    match config.and_then(|c| c.auth_dir.as_deref()).map(str::trim).filter(|d| !d.is_empty()) {
+        Some("~") => home.to_owned(),
+        Some(dir) => match dir.strip_prefix("~/").or_else(|| dir.strip_prefix("~\\")) {
+            Some(rest) => home.join(rest),
+            None => PathBuf::from(dir),
+        },
+        None => home.join(".cli-proxy-api"),
+    }
 }
 
 /// O tradutor Claude → Codex do proxy descarta `ultrafast`; a regra de `payload` do config o põe de volta só
@@ -129,6 +150,7 @@ fn describe(data: &Value) -> ProxyConfig {
         client_keys: key_list(keys),
         management_key_set: secret.as_str().is_some_and(|s| !s.trim().is_empty()),
         ultrafast_rule: has_ultrafast_rule(payload(data)),
+        auth_dir: field(data, "oauth", "auth-dir", &data["auth-dir"]).as_str().map(str::to_owned),
     }
 }
 
@@ -196,6 +218,7 @@ impl From<io::Error> for EnsureError {
 /// `persist_management` antes do config: depois de gravada o proxy só guarda o hash dela.
 /// `ultrafast_rule`: o proxy entende `headers` nas regras (v8 em diante); num mais velho a regra valeria para todo pedido.
 pub fn ensure(home: &Path, now_unix: u64, persist_management: impl FnOnce(&str) -> io::Result<()>, ultrafast_rule: bool) -> Result<Ensured, EnsureError> {
+    let _turn = edit_turn();
     let file = path(home);
     let text = match fs::read_to_string(&file) {
         Ok(text) => Some(text),
@@ -268,6 +291,7 @@ pub fn ensure(home: &Path, now_unix: u64, persist_management: impl FnOnce(&str) 
 /// Troca a senha de gerenciamento por uma nova: o proxy guarda só o hash, então a antiga não volta.
 /// Mesma ordem do `ensure`: cópia, senha entregue ao Hangar, config gravado. Devolve a cópia.
 pub fn reset_management(home: &Path, now_unix: u64, persist_management: impl FnOnce(&str) -> io::Result<()>) -> Result<PathBuf, EnsureError> {
+    let _turn = edit_turn();
     let file = path(home);
     let text = fs::read_to_string(&file)?;
     let Some((_, data)) = parse(&text).map_err(|_| EnsureError::InvalidYaml)? else { return Err(EnsureError::Unsupported) };
@@ -565,6 +589,16 @@ mod tests {
     }
 
     #[test]
+    fn accounts_live_where_the_config_says() {
+        let home = Path::new("/home/u");
+        let dir = |text: &str| accounts_dir(home, parse(text).unwrap().map(|(c, _)| c).as_ref());
+        assert_eq!(accounts_dir(home, None), home.join(".cli-proxy-api"), "sem config, o padrão do proxy");
+        assert_eq!(dir("port: 8317\n"), home.join(".cli-proxy-api"));
+        assert_eq!(dir("auth-dir: \"~/contas\"\n"), home.join("contas"), "legado na raiz, com ~");
+        assert_eq!(dir("config-version: 8\noauth:\n  auth-dir: '/srv/contas'\nauth-dir: \"~/velho\"\n"), PathBuf::from("/srv/contas"), "v8 vence o legado");
+    }
+
+    #[test]
     fn ensure_completes_a_legacy_config_in_its_own_layout() {
         let text = LEGACY.replace("  secret-key: \"$2a$10$hash\"\n", "");
         let dir = home(Some(&text));
@@ -691,6 +725,20 @@ mod tests {
         reset_management(dir.path(), 8, |key| { given = key.to_owned(); Ok(()) }).unwrap();
         let text = fs::read_to_string(path(dir.path())).unwrap();
         assert!(text.contains(&format!("management:\n  secret-key: \"{given}\"\n")) && text.contains("\"velha\""), "{text}");
+    }
+
+    #[test]
+    fn crossed_resets_leave_hangar_and_proxy_with_the_same_password() {
+        let dir = home(Some("config-version: 8\nmanagement:\n  secret-key: \"$2a$x\"\naccess:\n  api-keys:\n    - \"k\"\n"));
+        let stored = std::sync::Mutex::new(String::new());
+        std::thread::scope(|s| {
+            for n in 0..8 {
+                let (home, stored) = (dir.path(), &stored);
+                s.spawn(move || reset_management(home, n, |key| { *stored.lock().unwrap() = key.to_owned(); Ok(()) }).unwrap());
+            }
+        });
+        let text = fs::read_to_string(path(dir.path())).unwrap();
+        assert!(text.contains(&format!("secret-key: \"{}\"", stored.lock().unwrap())), "a senha guardada é a do arquivo: {text}");
     }
 
     #[test]

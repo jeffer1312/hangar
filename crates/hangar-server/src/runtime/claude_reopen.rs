@@ -269,6 +269,14 @@ fn preflight(env:&crate::accounts::environment::AccountEnvironment,next:&mut Ses
         }
         next.service_tier=None;
     }
+    // Mesma regra da criação e do lançamento sem terminal, antes de parar a sessão atual: com terminal o painel
+    // abre sem passar pelo `plan_for`.
+    if next.service_tier==Some(crate::session_open::ServiceTier::Ultrafast) {
+        let account=match &next.account {Account::Engine { account,.. }=>account.clone(),_=>None};
+        if !facts.supports_ultrafast(engine.as_deref(),next.model.as_deref(),account.as_deref()) {
+            return Err(refused("launch_service_tier",crate::engines::catalog::ULTRAFAST_REFUSED));
+        }
+    }
     if next.service_tier.is_some() {engine_body(env,next.account.config_dir(),std::path::Path::new(&next.cwd),settings)?;}
     Ok(warnings)
 }

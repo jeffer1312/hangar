@@ -113,8 +113,18 @@ pub fn reset_management(ctx: &Context) -> Result<(), Failure> {
     Ok(())
 }
 
-fn base_url(ctx: &Context) -> String {
-    config::read(&ctx.paths.home).ok().flatten().and_then(|c| c.base_url.ok()).unwrap_or_else(|| DEFAULT_BASE.into())
+/// O endereço do config; a porta padrão só quando não há config. Porta inválida para antes de mexer em arquivo
+/// ou serviço: o proxy subiria noutra porta que a tela e o login não acham. YAML ilegível fica para o `ensure`.
+fn base_url(ctx: &Context) -> Result<String, Failure> {
+    match config::read(&ctx.paths.home) {
+        Ok(Some(config)) => config.base_url.map_err(|_| Failure::new("cliproxy_porta_invalida",
+            format!("{}: server.port (ou port) fora de 1–65535", ctx.paths.config().display()))),
+        _ => Ok(DEFAULT_BASE.into()),
+    }
+}
+
+fn tag_version(tag: &str) -> Option<semver::Version> {
+    semver::Version::parse(tag.trim_start_matches('v')).ok()
 }
 
 async fn port_open(base: &str) -> bool {
@@ -122,15 +132,32 @@ async fn port_open(base: &str) -> bool {
     tokio::task::spawn_blocking(move || detect::port_open(&base)).await.unwrap_or(false)
 }
 
-async fn wait_up(base: &str) -> Result<(), Failure> {
+/// Espera o proxy desta versão responder. Outro programa na porta também aceita conexão: com a versão conhecida,
+/// só a versão anunciada pelo proxy confirma; sem ela (tag fora de semver), basta a porta abrir.
+async fn wait_ours(base: &str, expected: Option<&semver::Version>) -> Result<(), Failure> {
     let deadline = Instant::now() + START_TIMEOUT;
     while Instant::now() < deadline {
-        if port_open(base).await {
+        let up = match expected {
+            Some(expected) => running_version(base).await.as_ref() == Some(expected),
+            None => port_open(base).await,
+        };
+        if up {
             return Ok(());
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
-    Err(Failure::new("cliproxy_nao_subiu", format!("o proxy não respondeu em {base} depois de {}s", START_TIMEOUT.as_secs())))
+    let version = expected.map(|v| format!(" na versão {v}")).unwrap_or_default();
+    Err(Failure::new("cliproxy_nao_subiu", format!("o proxy não respondeu em {base}{version} depois de {}s", START_TIMEOUT.as_secs())))
+}
+
+/// O config que a unit externa passa ao proxy, com `%h`/`$HOME` resolvidos; outro que não o lido pelo Hangar
+/// deixa a configuração manual em vez de completar um arquivo que o proxy nem lê.
+fn external_config(unit: Option<&std::path::Path>, home: &std::path::Path) -> Option<std::path::PathBuf> {
+    let text = std::fs::read_to_string(unit?).ok()?;
+    let raw = detect::unit_config(&text)?;
+    let home = home.to_string_lossy();
+    let expanded = raw.to_string_lossy().replace("%h", &home).replace("${HOME}", &home).replace("$HOME", &home);
+    Some(std::path::PathBuf::from(expanded))
 }
 
 pub fn current(paths: &Paths) -> Install {
@@ -138,17 +165,21 @@ pub fn current(paths: &Paths) -> Install {
 }
 
 pub async fn install(ctx: &Context, progress: &(dyn Fn(Step) + Send + Sync)) -> Result<Outcome, Failure> {
+    let base = base_url(ctx)?;
     let (tag, binary) = match current(&ctx.paths) {
-        Install::External { .. } => {
+        Install::External { unit, .. } => {
             progress(Step::Config);
-            let version = running_version(&base_url(ctx)).await;
+            if let Some(other) = external_config(unit.as_deref(), &ctx.paths.home).filter(|c| *c != ctx.paths.config()) {
+                return Err(Failure::new("cliproxy_config_manual",
+                    format!("o serviço do proxy lê {}, não {}", other.display(), ctx.paths.config().display())));
+            }
+            let version = running_version(&base).await;
             ensure(ctx, understands_rule(version.as_ref()))?;
             return Ok(Outcome::Configured);
         }
         Install::Managed { tag, binary } => (tag, binary),
         Install::Absent => {
             // Algo já atende na porta e não é instalação conhecida: subir outro proxy ali falharia calado.
-            let base = base_url(ctx);
             if port_open(&base).await {
                 return Err(Failure::new("cliproxy_porta_ocupada", format!("{base} já responde e não é um proxy instalado nesta máquina")));
             }
@@ -160,12 +191,14 @@ pub async fn install(ctx: &Context, progress: &(dyn Fn(Step) + Send + Sync)) -> 
     };
     progress(Step::Config);
     // O programa é o da release que o Hangar baixou: a tag diz se a regra é entendida.
-    ensure(ctx, understands_rule(semver::Version::parse(tag.trim_start_matches('v')).ok().as_ref()))?;
+    let version = tag_version(&tag);
+    ensure(ctx, understands_rule(version.as_ref()))?;
     progress(Step::Service);
     service::register(&ctx.paths.home, &ctx.paths.dir, &Service { binary: binary.clone(), config: ctx.paths.config() }).await?;
     detect::write_record(&ctx.paths, &tag, &binary).map_err(|e| Failure::new("cliproxy_registro_falhou", e.to_string()))?;
     progress(Step::Start);
-    wait_up(&base_url(ctx)).await?;
+    // O `ensure` pode ter acabado de gravar o config: a porta relida é a que o proxy vai usar.
+    wait_ours(&base_url(ctx)?, version.as_ref()).await?;
     Ok(Outcome::Installed { tag })
 }
 
@@ -183,12 +216,24 @@ pub async fn update(ctx: &Context, progress: &(dyn Fn(Step) + Send + Sync)) -> R
     if !newer(&latest.tag, &installed) {
         return Ok(Outcome::Updated { tag: installed });
     }
+    let base = base_url(ctx)?;
     let binary = release::fetch(&ctx.github, &latest, ctx.platform, &ctx.paths.dir).await?;
+    let version = tag_version(&latest.tag);
+    // A versão nova pode entender a regra do Ultra Fast que a antiga não entendia; `payload` da pessoa fica.
+    ensure(ctx, understands_rule(version.as_ref()))?;
     progress(Step::Service);
-    service::register(&ctx.paths.home, &ctx.paths.dir, &Service { binary: binary.clone(), config: ctx.paths.config() }).await?;
-    detect::write_record(&ctx.paths, &latest.tag, &binary).map_err(|e| Failure::new("cliproxy_registro_falhou", e.to_string()))?;
+    let config = ctx.paths.config();
+    service::register(&ctx.paths.home, &ctx.paths.dir, &Service { binary: binary.clone(), config: config.clone() }).await?;
     progress(Step::Start);
-    wait_up(&base_url(ctx)).await?;
+    // O registro só passa para a versão nova depois de ela responder: senão a próxima tentativa veria as tags
+    // iguais e diria "atualizado" sem nada rodando. Falhou, o serviço volta para o programa anterior.
+    if let Err(failure) = wait_ours(&base, version.as_ref()).await {
+        if let Err(e) = service::register(&ctx.paths.home, &ctx.paths.dir, &Service { binary: old.clone(), config }).await {
+            return Err(Failure::new(failure.code, format!("{}; e o serviço não voltou para {installed}: {}", failure.detail, Failure::from(e).detail)));
+        }
+        return Err(failure);
+    }
+    detect::write_record(&ctx.paths, &latest.tag, &binary).map_err(|e| Failure::new("cliproxy_registro_falhou", e.to_string()))?;
     if let Some(dir) = old.parent().filter(|d| Some(*d) != binary.parent()) {
         std::fs::remove_dir_all(dir).map_err(|e| Failure::new("cliproxy_versao_antiga_ficou", format!("{}: {e}", dir.display())))?;
     }
@@ -275,6 +320,36 @@ mod tests {
         assert!(understands_rule(v("8.0.56").as_ref()));
         assert!(!understands_rule(v("7.9.12").as_ref()));
         assert!(!understands_rule(None), "versão desconhecida não leva a regra");
+    }
+
+    fn context(home: &std::path::Path) -> Context {
+        Context { paths: Paths::new(home), platform: Platform::local(), github: Github::default(), persist: Arc::new(|_| Ok(())) }
+    }
+
+    #[test]
+    fn an_invalid_port_stops_before_anything_changes() {
+        let home = tempfile::tempdir().unwrap();
+        let ctx = context(home.path());
+        assert_eq!(base_url(&ctx), Ok(DEFAULT_BASE.to_owned()), "sem config vale a porta padrão");
+        std::fs::create_dir_all(home.path().join(".cli-proxy-api")).unwrap();
+        std::fs::write(ctx.paths.config(), "port: 70000\napi-keys:\n  - k\n").unwrap();
+        assert_eq!(base_url(&ctx).map_err(|f| f.code), Err("cliproxy_porta_invalida"));
+        std::fs::write(ctx.paths.config(), "port: 9000\napi-keys:\n  - k\n").unwrap();
+        assert_eq!(base_url(&ctx), Ok("http://127.0.0.1:9000".to_owned()));
+    }
+
+    #[test]
+    fn the_unit_config_is_resolved_against_home() {
+        let home = tempfile::tempdir().unwrap();
+        let unit = home.path().join("cli-proxy-api.service");
+        let ours = crate::config::path(home.path());
+        std::fs::write(&unit, "[Service]\nExecStart=/usr/bin/cli-proxy-api --config %h/.cli-proxy-api/config.yaml\n").unwrap();
+        assert_eq!(external_config(Some(&unit), home.path()), Some(ours.clone()), "a unit do AUR lê o mesmo arquivo");
+        std::fs::write(&unit, "[Service]\nExecStart=/usr/bin/cli-proxy-api --config /etc/cliproxy/config.yaml\n").unwrap();
+        assert_eq!(external_config(Some(&unit), home.path()), Some(std::path::PathBuf::from("/etc/cliproxy/config.yaml")));
+        std::fs::write(&unit, "[Service]\nExecStart=/usr/bin/cli-proxy-api\n").unwrap();
+        assert_eq!(external_config(Some(&unit), home.path()), None, "sem --config o proxy lê o padrão");
+        assert_eq!(external_config(None, home.path()), None);
     }
 
     #[test]

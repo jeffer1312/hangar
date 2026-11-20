@@ -117,11 +117,12 @@ fn management(st: &AppState) -> Result<login::Management, Response> {
 fn login_error(error: login::Error) -> Response {
     let status = match error {
         login::Error::BadInput(_) => 400,
-        login::Error::Rejected | login::Error::Disabled | login::Error::PortBusy => 409,
+        login::Error::Rejected | login::Error::Disabled | login::Error::PortBusy | login::Error::Outdated(_) => 409,
         login::Error::Network(_) | login::Error::Proxy(..) => 502,
     };
     let detail = match &error {
         login::Error::BadInput(what) => format!("campo inválido: {what}"),
+        login::Error::Outdated(version) => format!("CLIProxyAPI {version}: o login pelo Hangar exige a versão 8 ou mais nova"),
         login::Error::Network(e) => e.clone(),
         login::Error::Proxy(code, e) => format!("HTTP {code} {e}"),
         _ => String::new(),

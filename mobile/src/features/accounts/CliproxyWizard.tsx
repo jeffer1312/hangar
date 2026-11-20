@@ -65,6 +65,7 @@ function installError(error: NonNullable<CliproxyTarefa['error']>): string {
     case 'cliproxy_download_failed': return m.mobile_cliproxy_wizard_err_download();
     case 'cliproxy_sem_asset': return m.mobile_cliproxy_wizard_err_platform();
     case 'cliproxy_porta_ocupada': return m.mobile_cliproxy_wizard_err_port();
+    case 'cliproxy_porta_invalida': return m.mobile_cliproxy_wizard_err_bad_port();
     case 'cliproxy_nao_subiu': return m.mobile_cliproxy_wizard_err_not_started();
     case 'cliproxy_config_manual': case 'cliproxy_config_yaml_invalido': return m.mobile_cliproxy_wizard_err_config();
     case 'cliproxy_servico_falhou': return m.mobile_cliproxy_wizard_err_service({ detail: error.detail });
@@ -75,6 +76,7 @@ function installError(error: NonNullable<CliproxyTarefa['error']>): string {
 function loginError(e: unknown): string {
   switch (failure(e).code) {
     case 'erro_cliproxy_gerenciamento_desligado': return m.mobile_cliproxy_wizard_err_management_off();
+    case 'erro_cliproxy_versao_antiga': return m.mobile_cliproxy_wizard_err_outdated();
     case 'cliproxy_login_porta_ocupada': return m.mobile_cliproxy_wizard_err_login_port();
     case 'cliproxy_login_sem_resposta': case 'cliproxy_login_falhou':
       return m.mobile_cliproxy_wizard_err_login_unreachable({ erro: detailOf(e) });

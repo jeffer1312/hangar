@@ -164,17 +164,31 @@ pub fn install(data: &[u8], expected_sha256: &str, member: &str, dest: &Path) ->
     }
     let content = extract(data, member)?;
     let write = |e: std::io::Error| Error::Write(format!("{}: {e}", dest.display()));
-    std::fs::create_dir_all(dest.parent().expect("destino tem pasta")).map_err(write)?;
-    hangar_core::fs::atomic_write(dest, &content).map_err(write)?;
+    let parent = dest.parent().expect("destino tem pasta");
+    std::fs::create_dir_all(parent).map_err(write)?;
+    // Permissão posta antes de publicar: o programa só aparece no lugar final já executável e inteiro.
+    let part = parent.join(format!(".{}.part", dest.file_name().expect("destino tem nome").to_string_lossy()));
+    std::fs::write(&part, &content).map_err(write)?;
     #[cfg(unix)]
-    std::fs::set_permissions(dest, std::os::unix::fs::PermissionsExt::from_mode(0o755)).map_err(write)?;
+    std::fs::set_permissions(&part, std::os::unix::fs::PermissionsExt::from_mode(0o755)).map_err(write)?;
+    std::fs::rename(&part, dest).map_err(write)?;
     Ok(())
+}
+
+/// O programa já baixado serve: existe, não está vazio e (no Unix) é executável. Senão, baixa de novo.
+fn ready(dest: &Path) -> bool {
+    let Ok(meta) = std::fs::metadata(dest) else { return false };
+    #[cfg(unix)]
+    if std::os::unix::fs::PermissionsExt::mode(&meta.permissions()) & 0o111 == 0 {
+        return false;
+    }
+    meta.is_file() && meta.len() > 0
 }
 
 /// Baixa uma vez por versão; devolve o caminho do programa em `<dir>/bin/<versão>/`.
 pub async fn fetch(github: &Github, release: &Release, platform: Platform, dir: &Path) -> Result<PathBuf, Error> {
     let dest = dir.join("bin").join(release.version()).join(platform.binary());
-    if dest.exists() {
+    if ready(&dest) {
         return Ok(dest);
     }
     let asset = platform.asset(release.version())?;
@@ -242,8 +256,28 @@ mod tests {
             assert!(!dest.exists(), "hash errado não grava nada");
             install(&data, &sha256_hex(&data), member, &dest).unwrap();
             assert_eq!(std::fs::read(&dest).unwrap(), b"programa");
+            assert!(ready(&dest), "publicado já pronto para rodar");
         }
         let data = tar_gz("outro", b"x");
         assert_eq!(install(&data, &sha256_hex(&data), "cli-proxy-api", &dir.path().join("y")), Err(Error::BinaryMissing));
+    }
+
+    #[test]
+    fn a_half_installed_program_is_downloaded_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("cli-proxy-api");
+        assert!(!ready(&dest), "ausente");
+        std::fs::write(&dest, b"").unwrap();
+        #[cfg(unix)]
+        std::fs::set_permissions(&dest, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        assert!(!ready(&dest), "vazio");
+        std::fs::write(&dest, b"programa").unwrap();
+        #[cfg(unix)]
+        {
+            std::fs::set_permissions(&dest, std::os::unix::fs::PermissionsExt::from_mode(0o600)).unwrap();
+            assert!(!ready(&dest), "sem permissão de execução, como o `atomic_write` deixava");
+            std::fs::set_permissions(&dest, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        }
+        assert!(ready(&dest));
     }
 }

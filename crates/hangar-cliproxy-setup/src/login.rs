@@ -16,6 +16,8 @@ pub enum Error {
     BadInput(&'static str),
     Rejected,
     Disabled,
+    /// Proxy anterior ao v8: as rotas de login que o Hangar usa (`/v8/management/oauth`) não existem nele.
+    Outdated(String),
     /// A escuta da volta (1455 no ChatGPT, 54545 no Claude) já está em uso, em geral por outro login.
     PortBusy,
     Network(String),
@@ -28,6 +30,7 @@ impl Error {
             Self::BadInput(_) => "erro_cliproxy_login_invalido",
             Self::Rejected => "erro_cliproxy_senha_recusada",
             Self::Disabled => "erro_cliproxy_gerenciamento_desligado",
+            Self::Outdated(_) => "erro_cliproxy_versao_antiga",
             Self::PortBusy => "cliproxy_login_porta_ocupada",
             Self::Network(_) => "cliproxy_login_sem_resposta",
             Self::Proxy(..) => "cliproxy_login_falhou",
@@ -61,14 +64,24 @@ async fn call(m: &Management, request: reqwest::RequestBuilder) -> Result<Value,
         .await
         .map_err(|e| Error::Network(e.to_string()))?;
     let status = response.status().as_u16();
+    let version = response.headers().get("x-cpa-version").and_then(|v| v.to_str().ok()).map(str::to_owned);
     let body: Value = response.json().await.unwrap_or(Value::Null);
     let message = body["error"].as_str().unwrap_or("").to_owned();
     match status {
         200..=299 => Ok(body),
         401 | 403 => Err(Error::Rejected),
-        404 => Err(Error::Disabled),
+        404 => Err(not_found(version)),
         500 if message.contains("callback server") => Err(Error::PortBusy),
         code => Err(Error::Proxy(code, message)),
+    }
+}
+
+/// 404 tem duas causas: gerenciamento desligado, ou proxy anterior ao v8 sem a rota. A versão que ele anuncia separa.
+fn not_found(version: Option<String>) -> Error {
+    let major = version.as_deref().and_then(|v| semver::Version::parse(v.trim().trim_start_matches('v')).ok()).map(|v| v.major);
+    match (major, version) {
+        (Some(major), Some(version)) if major < 8 => Error::Outdated(version),
+        _ => Error::Disabled,
     }
 }
 
@@ -136,6 +149,14 @@ mod tests {
         assert!(valid_redirect("http://127.0.0.1:1455/auth/callback?state=abc&code=x"));
         assert!(!valid_redirect("https://evil.example/auth?state=abc"));
         assert!(!valid_state("a&b") && !valid_state("") && valid_state("Ab-9_z"));
+    }
+
+    #[test]
+    fn a_missing_route_on_a_pre_v8_proxy_is_not_management_off() {
+        assert_eq!(not_found(Some("7.4.2".into())), Error::Outdated("7.4.2".into()));
+        assert_eq!(not_found(Some("8.0.79".into())), Error::Disabled);
+        assert_eq!(not_found(None), Error::Disabled, "sem versão não dá para afirmar que é antigo");
+        assert_eq!(Error::Outdated("7.4.2".into()).code(), "erro_cliproxy_versao_antiga");
     }
 
     #[tokio::test]

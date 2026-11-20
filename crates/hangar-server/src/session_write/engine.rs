@@ -208,7 +208,8 @@ pub async fn service_tier(State(st):State<Arc<AppState>>,ConnectInfo(peer):Conne
     let engine=match &spec.account {Account::Engine { name,.. }=>Some(name.clone()),_=>None};
     let in_use=runtime.claude_model_in_use(&name).await.or(spec.model.clone());
     let fast={let (engine,model)=(engine.clone(),in_use);facts(runtime.codex_environment(),move|facts|facts.supports_fast(engine.as_deref(),model.as_deref())).await};
-    if fast!=Some(true) {
+    // Voltar ao Normal vale mesmo com o Fast tirado do motor (`fast: false`): senão a sessão ficava presa nele.
+    if (tier.is_fast() || engine.is_none()) && fast!=Some(true) {
         return reply(Some(&parts.headers),StatusCode::BAD_REQUEST,detail_body("erro_fast_indisponivel","Fast exige GPT no CLIProxyAPI local",json!({})));
     }
     if tier==ServiceTier::Ultrafast {
