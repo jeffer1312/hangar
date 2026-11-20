@@ -154,7 +154,8 @@ impl Hangar {
         } else { label };
         Some(Button::new("topbar-presence").ghost().small().h(px(26.)).px(px(8.)).rounded_full()
             .child(div().flex().items_center().gap(px(6.)).text_size(px(12.5))
-                .child(chrome::small_icon(if pc { IconName::Monitor } else { IconName::Smartphone }, 14., theme::muted()))
+                // Conversa nova: o sino diz que o chip é sobre avisos, nos dois modos.
+                .child(chrome::small_icon(if crate::appearance::conversation_beta() { IconName::Bell } else if pc { IconName::Monitor } else { IconName::Smartphone }, 14., theme::muted()))
                 .child(div().text_color(theme::muted()).child(label.clone())))
             .accessibility_label(format!("{label}. {tip}")).tooltip(tip)
             .on_click(cx.listener(|this, _, _, _| this.toggle_presence())))

@@ -122,6 +122,8 @@ pub(super) fn short_names(names: &[&str]) -> Vec<String> {
 
 /// Toda aba tem a mesma largura; o nome e a linha de baixo cortam com reticências.
 const TAB_WIDTH: f32 = 240.;
+/// Na conversa nova a aba solta leva o estado e a conta dentro dela: cresce para caber o nome inteiro ao lado.
+const BETA_TAB_WIDTH: f32 = 300.;
 const REAR_WIDTH: f32 = 88.;
 const OVERLAP: f32 = 12.;
 
@@ -131,19 +133,36 @@ const OVERLAP: f32 = 12.;
 /// A caixa da aba: medida, borda e as cores de aberta, de grupo ou solta.
 pub(crate) fn tab_frame(on: bool, grouped: bool, compact: bool, waiting: bool) -> Div {
     // Conversa nova: a aba aberta fica neutra com um traço embaixo, e o contorno colorido passa a ser só da que espera
-    // resposta, em ciano: selecionada e "precisa de mim" deixam de se confundir.
+    // resposta, em ciano: selecionada e "precisa de mim" deixam de se confundir. A solta fica mais larga, com o estado
+    // e a conta dentro dela.
     let beta = appearance::conversation_beta();
-    div().flex_shrink_0().w(px(TAB_WIDTH)).h(px(tab_height())).px(px(8.))
+    let roomy = beta && !grouped;
+    div().flex_shrink_0().w(px(if roomy { BETA_TAB_WIDTH } else { TAB_WIDTH })).h(px(tab_height())).px(px(8.))
+        .when(roomy, |el| el.pr(px(12.)))
         .when(compact, |el| el.pl(px(20.)))
-        .flex().items_center().gap(px(if compact { 4. } else { 6. })).rounded(px(6.)).border_1()
+        .flex().items_center().gap(px(if compact { 4. } else if roomy { 10. } else { 6. })).rounded(px(if roomy { 10. } else { 6. })).border_1()
         .map(|el| if beta && on {
-            el.relative().bg(theme::text().alpha(0.07)).border_color(theme::border()).text_color(theme::text()).font_weight(FontWeight::SEMIBOLD)
-                .child(div().absolute().left(px(6.)).right(px(6.)).bottom(px(-1.)).h(px(2.)).rounded_full().bg(theme::accent()))
+            el.relative().bg(theme::text().alpha(0.08)).border_color(transparent_black()).text_color(theme::text()).font_weight(FontWeight::SEMIBOLD)
+                .child(div().absolute().left(px(4.)).right(px(4.)).bottom(px(-1.)).h(px(2.)).rounded_full().bg(theme::accent()))
         } else if beta && waiting { el.bg(theme::waiting().alpha(0.10)).border_color(theme::waiting().alpha(0.55)).text_color(theme::text()) }
+            else if roomy { el.border_color(theme::border()).text_color(theme::text()) }
             else if on { el.bg(theme::accent_dim()).border_color(theme::accent()).text_color(theme::text()).font_weight(FontWeight::SEMIBOLD) }
             else if grouped { el.bg(theme::raised()).border_color(theme::border()).text_color(theme::muted()) }
             // Toda aba tem a borda à vista; a solta fica sem fundo, o que a separa da de grupo.
             else { el.border_color(theme::border_strong()).text_color(theme::muted()) })
+}
+
+/// Conversa nova: o fim da aba, com o ícone do estado e a conta; a que espera resposta diz isso em ciano no lugar da conta.
+pub(crate) fn beta_tab_end(state: &str, waiting: bool, account: Option<String>, mark: Option<AnyElement>) -> Div {
+    let icon = if waiting { Some(chrome::small_icon(IconName::MessageCircle, 14., theme::waiting()).into_any_element()) }
+        else if state == "working" { mark }
+        else if state == "idle" { Some(chrome::small_icon(IconName::CircleCheck, 14., theme::faint()).into_any_element()) }
+        else { None };
+    div().flex_shrink_0().flex().items_center().gap(px(8.)).text_size(px(12.5)).font_weight(FontWeight::NORMAL)
+        .children(icon.map(|icon| div().size(px(16.)).flex().items_center().justify_center().child(icon)))
+        .map(|el| if waiting {
+            el.child(div().font_weight(FontWeight::SEMIBOLD).text_color(theme::waiting()).child(tr("beta_chip_awaiting_input")))
+        } else { el.when_some(account, |el, account| el.child(div().max_w(px(110.)).truncate().text_color(theme::faint()).child(account))) })
 }
 
 /// O nome da aba, com o rótulo do grupo em cima, a marca sem terminal ao lado e a linha de baixo.
@@ -152,7 +171,9 @@ pub(crate) fn tab_title(name: String, group_label: Option<&str>, grouped: bool, 
         .when_some(group_label, |el, text| el.child(div().truncate().text_size(px(9.)).line_height(px(11.))
             .text_color(theme::accent_text()).child(text.to_owned())))
         .child(div().min_w_0().flex().items_center().gap(px(4.))
-            .child(div().min_w_0().truncate().text_size(px(if grouped { 11. } else { 13. })).line_height(px(14.)).child(name))
+            // Conversa nova: o nome da aba solta em 14 px, como no mockup.
+            .child(div().min_w_0().truncate().text_size(px(if grouped { 11. } else if appearance::conversation_beta() { 14. } else { 13. }))
+                .line_height(px(if !grouped && appearance::conversation_beta() { 18. } else { 14. })).child(name))
             .children(terminal))
         .children(meta)
 }
@@ -249,11 +270,25 @@ impl Hangar {
     /// Máquina sem o evento `tags` (servidor antigo) fica como antes: só a máquina, em `legacy`, quando a legenda antiga aparecia.
     fn tab_plate(&self, target: &Target, session: &SessionInfo, on: bool, legacy: Option<String>, machines: &PlateMachines)
         -> Option<(Div, Option<String>)> {
+        self.tab_plate_parts(target, session, on, legacy, machines, true).0
+    }
+
+    /// A placa e, à parte, o nome da conta. Sem `with_account` a placa fica só com a máquina: a conversa nova põe a
+    /// conta dentro da aba.
+    fn tab_plate_parts(&self, target: &Target, session: &SessionInfo, on: bool, legacy: Option<String>, machines: &PlateMachines,
+        with_account: bool) -> (Option<(Div, Option<String>)>, Option<String>) {
         let Some(tags) = self.tags.get(&target.server) else {
-            let name = legacy?;
+            let Some(name) = legacy else { return (None, None) };
             let machine = PlateSegment { mark: PlateMark::Icon(IconName::Monitor), color: if on { theme::accent_text() } else { theme::faint() }, name };
-            return Some((plate(Some(machine), None, on), None));
+            return (Some((plate(Some(machine), None, on), None)), None);
         };
+        let plate_value = self.tab_plate_tags(target, session, on, machines, tags, with_account);
+        let account = session.conta.as_deref().and_then(|conta| tags.accounts.get(conta)).map(|badge| badge.name.clone());
+        (plate_value, account)
+    }
+
+    fn tab_plate_tags(&self, target: &Target, session: &SessionInfo, on: bool, machines: &PlateMachines, tags: &super::tags::Event,
+        with_account: bool) -> Option<(Div, Option<String>)> {
         let loopback = machines.loopback.contains(&target.server);
         let machine = super::tags::shows_machine(tags.machine_id.as_deref(), machines.local_id.as_deref(), loopback).then(|| {
             let entry = self.server_entry(&target.server);
@@ -265,7 +300,7 @@ impl Hangar {
                 name: super::tags::machine_name(tag, entry.map_or("", |e| e.label.as_str()), entry.map_or(target.server.as_str(), |e| e.address.as_str())),
             }
         });
-        let account = session.conta.as_deref().and_then(|conta| tags.accounts.get(conta).map(|badge| {
+        let account = session.conta.as_deref().filter(|_| with_account).and_then(|conta| tags.accounts.get(conta).map(|badge| {
             let provider = conta.split_once(':').map_or(session.provider.as_str(), |(kind, _)| kind);
             PlateSegment {
                 mark: super::tags::account_icon(&badge.icon).map_or_else(|| PlateMark::Provider(provider.to_owned()), PlateMark::Icon),
@@ -680,9 +715,18 @@ impl Hangar {
         let review = self.work_review_badge(&target.server, &target.name);
         if let Some((text, _)) = &review { label.push_str(&format!(" · {text}")); }
         // A aba de trás de um grupo é posicionada pela faixa dele: sem placa.
-        let plate = slot.is_none().then(|| self.tab_plate(target, session, on, self.multi_server().then(|| machine.to_owned()), machines)).flatten();
+        // Conversa nova: a conta entra na aba, ao lado do estado; a placa de cima fica só com a máquina, quando é outra.
+        let beta_end = appearance::conversation_beta() && slot.is_none();
+        let (plate, account_name) = if slot.is_some() { (None, None) }
+            else { self.tab_plate_parts(target, session, on, self.multi_server().then(|| machine.to_owned()), machines, !beta_end) };
         let ctx = context_pct(session);
-        speak_extras(&mut label, plate.as_ref().and_then(|(_, account)| account.clone()), ctx);
+        let spoken_account = plate.as_ref().and_then(|(_, account)| account.clone())
+            .or_else(|| account_name.as_ref().filter(|_| beta_end).map(|name| tr_shared("tags_plate_account", &[("name", name)])));
+        speak_extras(&mut label, spoken_account, ctx);
+        let tab_end = beta_end.then(|| {
+            let mark = (session.state == "working").then(|| self.working_mark_slot(panes::Area::Nav, format!("tab-state-{}", target.id()), 14., theme::accent()));
+            beta_tab_end(&session.state, waits(session), account_name.clone(), mark)
+        });
         let side = if compact { 16. } else { 20. };
         let mark = with_context_ring(self.avatar_slot(panes::Area::Nav, format!("tab-mark-{}", target.id()), sidebar::session_look(session), side), ctx, side);
         let pick = target.clone();
@@ -701,7 +745,8 @@ impl Hangar {
             .role(Role::Tab).aria_selected(on).aria_label(label.clone())
             .when(!appearance::get().tab_preview, |el| el.tooltip(move |window, cx| gpui_kit::component::tooltip::Tooltip::new(label.clone()).build(window, cx)))
             .child(mark).children(self.session_number_badge(target))
-            .child(title)
+            .child(title.when(beta_end && !on, |el| el.font_weight(FontWeight::MEDIUM)))
+            .children(tab_end)
             // A aba estreita de trás da faixa não tem largura para o selo: lá ele fica só na dica.
             .when(session.asleep && !compact, |el| el.child(badge(asleep, theme::muted())))
             // Como o selo de adormecida: a aba estreita só tem a dica.
