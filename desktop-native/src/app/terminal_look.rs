@@ -211,6 +211,7 @@ pub(super) fn assistant_text_row(content: Div, line: f32) -> Div {
 pub(super) fn display_name(name: &str) -> String {
     match name.to_ascii_lowercase().as_str() {
         "edit" | "multiedit" | "notebookedit" | "apply_patch" => "Update".into(),
+        "repl" => crate::i18n::tr_shared("term_script", &[]),
         _ => match mcp_tool(name) {
             Some((server, tool)) => format!("{server} - {tool} (MCP)"),
             None => conversation::tool_display_name(name),
@@ -350,7 +351,7 @@ pub(super) fn diff_body(call: &ChatEvent, edits: &[Edit], limit: Option<usize>, 
 
 /// O que uma chamada conta na linha dobrada; a mesma regra do `terminalFoldKind` do core.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum FoldKind { Search, Read, List, Mcp, Shell }
+pub(super) enum FoldKind { Script, Search, Read, List, Mcp, Shell }
 
 // Os conjuntos do Claude Code: comando de shell cujas partes só usam estes conta como busca, leitura ou listagem; os
 // neutros não decidem nada.
@@ -456,6 +457,8 @@ pub(super) const SHELL_TOOLS: &[&str] = &["bash", "powershell", "shell", "exec",
 /// de ferramentas ficam sempre à vista).
 pub(super) fn fold_kind(name: Option<&str>, input: Option<&serde_json::Map<String, serde_json::Value>>, plugin_servers: &[String]) -> Option<FoldKind> {
     let name = name.unwrap_or_default();
+    // Script do Code Mode do Claude Code: as chamadas de dentro dele vêm logo depois e somam na mesma linha.
+    if name.eq_ignore_ascii_case("repl") { return Some(FoldKind::Script); }
     if is_any(name, &["read", "notebookread"]) { return Some(FoldKind::Read); }
     if is_any(name, &["grep", "glob", "find", "websearch", "webfetch"]) { return Some(FoldKind::Search); }
     if name.eq_ignore_ascii_case("ls") { return Some(FoldKind::List); }
@@ -476,7 +479,7 @@ pub(super) fn fold_kind(name: Option<&str>, input: Option<&serde_json::Map<Strin
 /// A linha dobrada, na ordem e no tempo verbal do Claude Code: "Buscou 1 padrão, leu 2 arquivos, rodou 3 comandos de
 /// shell"; enquanto alguma roda, "Lendo 2 arquivos…". `kinds` é o tipo de cada chamada, já calculado pelo grupo.
 pub(super) fn fold_title(events: &[ChatEvent], tools: &[Tool], kinds: &[FoldKind], running: bool) -> String {
-    let (mut counts, mut files, mut servers) = ([0usize; 5], std::collections::HashSet::new(), Vec::<&str>::new());
+    let (mut counts, mut files, mut servers) = ([0usize; 6], std::collections::HashSet::new(), Vec::<&str>::new());
     let mut pathless_reads = 0;
     for (tool, &kind) in tools.iter().zip(kinds) {
         counts[kind as usize] += 1;
@@ -491,8 +494,9 @@ pub(super) fn fold_title(events: &[ChatEvent], tools: &[Tool], kinds: &[FoldKind
     counts[FoldKind::Read as usize] = files.len() + pathless_reads;
     let names = servers.join(", ");
     // Na ordem de `FoldKind`: a chave da frase concluída e a da que está em andamento.
-    const KEYS: [(&str, &str); 5] = [("term_dobra_buscou", "term_dobra_buscando"), ("term_dobra_leu", "term_dobra_lendo"),
-        ("term_dobra_listou", "term_dobra_listando"), ("term_dobra_chamou", "term_dobra_chamando"), ("term_dobra_rodou", "term_dobra_rodando")];
+    const KEYS: [(&str, &str); 6] = [("term_dobra_scripts", "term_dobra_scripts_rodando"), ("term_dobra_buscou", "term_dobra_buscando"),
+        ("term_dobra_leu", "term_dobra_lendo"), ("term_dobra_listou", "term_dobra_listando"), ("term_dobra_chamou", "term_dobra_chamando"),
+        ("term_dobra_rodou", "term_dobra_rodando")];
     let parts: Vec<String> = KEYS.iter().zip(counts).filter(|(_, n)| *n > 0).map(|(&(done, live), n)| {
         let key = if running { live } else { done };
         count_with(&format!("{key}_1"), key, n, &[("nome", &names)])
@@ -781,6 +785,25 @@ mod tests {
         let tools: Vec<Tool> = (0..events.len()).map(|call| Tool { call, result: None }).collect();
         let expected = crate::app::controls::capitalized(&count_with("term_dobra_leu_1", "term_dobra_leu", 3, &[("nome", "")]));
         assert_eq!(fold_title(&events, &tools, &[FoldKind::Read; 4], false), expected);
+    }
+
+    #[test]
+    fn code_mode_scripts_are_named_script_and_count_first_in_the_fold() {
+        assert_eq!(fold_kind(Some("REPL"), None, &[]), Some(FoldKind::Script));
+        assert_eq!(display_name("REPL"), crate::i18n::tr_shared("term_script", &[]));
+        let script = json!({"code": "await $`ls`", "description": "Conferir a flag"});
+        assert_eq!(header_arg(Some("REPL"), script.as_object()), ("Conferir a flag".to_owned(), None));
+        let bare = json!({"code": "await $`ls`\nconst x = 1"});
+        assert_eq!(header_arg(Some("REPL"), bare.as_object()).0, "await $`ls`");
+        let call = |name: &str, input: serde_json::Value| ChatEvent { kind: "tool_use".into(), tool_name: Some(name.into()),
+            tool_input: input.as_object().cloned(), ..Default::default() };
+        let events = [call("REPL", script.clone()), call("Grep", json!({"pattern": "x"})), call("REPL", script)];
+        let tools: Vec<Tool> = (0..events.len()).map(|call| Tool { call, result: None }).collect();
+        let expected = crate::app::controls::capitalized(&[
+            count_with("term_dobra_scripts_1", "term_dobra_scripts", 2, &[("nome", "")]),
+            count_with("term_dobra_buscou_1", "term_dobra_buscou", 1, &[("nome", "")]),
+        ].join(", "));
+        assert_eq!(fold_title(&events, &tools, &[FoldKind::Script, FoldKind::Search, FoldKind::Script], false), expected);
     }
 
     #[test]
