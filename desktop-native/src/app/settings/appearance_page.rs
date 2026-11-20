@@ -613,8 +613,9 @@ impl Hangar {
                     |this: &mut Hangar, index, _: &mut Window, cx| { let mut next = appearance::get(); next.conversation_beta = index == 1; this.apply_appearance(next, true, cx); }, cx),
                 false))
             .child(self.line("settings_code_mode", Some(tr(if from_settings { "settings_code_mode_settings" } else { "settings_code_mode_hint" })), a.conversation_beta,
-                segmented("code-mode", &[tr("settings_code_mode_off"), tr("settings_code_mode_on")], (a.claude_code_mode || from_settings) as usize,
-                    a.conversation_beta && !from_settings,
+                // Ligado pelos ajustes do Claude: travado, mas com "Ligado" marcado.
+                segments("code-mode", &[tr("settings_code_mode_off"), tr("settings_code_mode_on")], (a.claude_code_mode || from_settings) as usize,
+                    if a.conversation_beta { 2 } else { 0 }, from_settings, tr("settings_next_version"),
                     |this: &mut Hangar, index, _: &mut Window, cx| { let mut next = appearance::get(); next.claude_code_mode = index == 1; this.apply_appearance(next, true, cx); }, cx),
                 false))
             .child(self.sublabel("settings_tool_calls")).child(tool_calls)
