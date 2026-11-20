@@ -217,9 +217,14 @@ pub fn for_row(
             && row.conta.as_deref().is_some_and(|c| c.starts_with("cliproxy:"))
         {
             // Conta que só existe no proxy: credencial e prefixo vêm do próprio proxy, sem raiz Codex.
-            let entry = crate::engines::proxy::resolve(&state.accounts, account, None)
-                .map_err(|_| "dictation_organization_failed")?;
-            let prefix = entry["prefix"].as_str().filter(|s| !s.is_empty()).ok_or("dictation_organization_failed")?;
+            let entry = crate::engines::proxy::resolve(&state.accounts, account, None).map_err(|error| {
+                tracing::warn!(session = name, account, error = %error,"conta do proxy da organização do ditado não resolvida");
+                "dictation_organization_failed"
+            })?;
+            let prefix = entry["prefix"].as_str().filter(|s| !s.is_empty()).ok_or_else(|| {
+                tracing::warn!(session = name, account, "conta do proxy sem prefixo para a organização do ditado");
+                "dictation_organization_failed"
+            })?;
             data["dictation_prefix"] = json!(prefix);
             context.engine = Some(data);
             return Ok(context);

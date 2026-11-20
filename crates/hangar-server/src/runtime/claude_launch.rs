@@ -243,7 +243,8 @@ pub fn plan_for(env: &AccountEnvironment, bridge: Option<&PluginBridge>, spec: &
     let degraded;
     let spec = if spec.service_tier == Some(crate::session_open::ServiceTier::Ultrafast) && !engine.is_some_and(|engine|
         crate::engines::catalog::supports_ultrafast(&crate::accounts::AccountService::new(env.clone()), engine, spec.model.as_deref(), account)) {
-        tracing::warn!(session = %spec.name, "Ultra Fast indisponível agora; a sessão volta em Fast");
+        tracing::warn!(session = %spec.name, engine = engine.unwrap_or(""), account = account.unwrap_or(""),
+            model = spec.model.as_deref().unwrap_or(""), fast, "Ultra Fast indisponível agora; a sessão volta em Fast se o motor permitir");
         let mut copy = spec.clone();
         copy.service_tier = Some(crate::session_open::ServiceTier::Priority);
         degraded = copy;
