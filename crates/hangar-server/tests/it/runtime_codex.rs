@@ -2448,8 +2448,8 @@ fn a_lost_turn_end_is_found_by_reading_the_thread_after_a_silent_minute() {
 
 #[test]
 fn sandbox_change_needs_a_turn_state_the_codex_confirmed() {
-    // Como o Python: depois de religar, sem a conversa dizer ativa ou ociosa, trocar o sandbox (que reinicia
-    // o processo) poderia matar um turno vivo; recusa e mantém a permissão.
+    // Depois de religar, sem a conversa dizer ativa ou ociosa, a troca do sandbox não vale para um turno vivo
+    // que ninguém viu; recusa e mantém a permissão.
     for (status,allowed) in [("notLoaded",false),("idle",true)] {
         let (mut engine,sent) = bootstrapped(json!({"name":"session","thread_id":"thread-1","headless":true,"cwd":"/w","permission_mode":"Full Access"}));
         let resume = find_method(&sent,"thread/resume");
@@ -2457,10 +2457,41 @@ fn sandbox_change_needs_a_turn_state_the_codex_confirmed() {
         assert_eq!(engine.control_view()["ready"],true,"{status}");
         let changed = engine.command(command(OperationKind::SetPermissionMode,json!({"mode":"Ask for approval"})),clock(13.0));
         match changed {
-            Ok(effects) => { assert!(allowed,"{status}"); assert!(effects.iter().any(|e|matches!(e,Effect::Respawn { .. }))); }
+            Ok(effects) => { assert!(allowed,"{status}"); assert_eq!(frames(&effects)[0]["method"],"thread/settings/update"); }
             Err(error) => { assert!(!allowed,"{status}: {}",error.message); assert!(error.message.contains("confirmar o estado do turno")); }
         }
     }
+}
+
+/// Medido no Codex 0.170.0: o `sandboxPolicy` do `thread/settings/update` vale para os turnos seguintes,
+/// sem subir o processo de novo. O modo novo só aparece e só é gravado com a confirmação.
+#[test]
+fn headless_sandbox_switch_happens_in_the_conversation_and_counts_only_when_confirmed() {
+    let (mut engine,sent) = bootstrapped(json!({"name":"session","thread_id":"thread-1","headless":true,"cwd":"/w","permission_mode":"Full Access"}));
+    let resume = find_method(&sent,"thread/resume");
+    line(&mut engine,json!({"id":resume["id"],"result":{"thread":{"id":"thread-1","path":"/r.jsonl","status":{"type":"idle"},"turns":[]}}}),12.0);
+    let effects = engine.command(command(OperationKind::SetPermissionMode,json!({"mode":"Ask for approval"})),clock(13.0)).unwrap();
+    assert!(!effects.iter().any(|e|matches!(e,Effect::Respawn { .. })),"não sobe processo");
+    assert!(reply_of(&effects,"op-1").is_none(),"responde só com a confirmação do Codex");
+    let update = frames(&effects)[0].clone();
+    assert_eq!(update["method"],"thread/settings/update");
+    assert_eq!(update["params"],json!({"threadId":"thread-1","approvalPolicy":"on-request","sandboxPolicy":{"type":"readOnly"}}));
+    // Recusa do Codex: o modo antigo fica e nada é gravado.
+    let refused = line(&mut engine,json!({"id":update["id"],"error":{"code":-32600,"message":"sandbox recusado"}}),13.5);
+    assert_eq!(reply_of(&refused,"op-1"),Some((Disposition::Rejected,json!({"error":"sandbox recusado"}))));
+    assert!(!refused.iter().any(|e|matches!(e,Effect::Policy { kind,.. } if kind == "session.patch_meta")));
+    assert_eq!(engine.control_view()["permission_mode"],"Full Access");
+    // Confirmada: vale, vai ao arquivo da sessão e a próxima troca compara com ela.
+    let effects = engine.command(command(OperationKind::SetPermissionMode,json!({"mode":"Ask for approval"})),clock(14.0)).unwrap();
+    let update = frames(&effects)[0].clone();
+    let done = line(&mut engine,json!({"id":update["id"],"result":{}}),14.5);
+    assert_eq!(reply_of(&done,"op-1"),Some((Disposition::Accepted,json!({"current":"Ask for approval"}))));
+    let patch = done.iter().find_map(|e|match e { Effect::Policy { kind,payload,.. } if kind == "session.patch_meta" => Some(payload.clone()),_=>None });
+    assert_eq!(patch,Some(json!({"permission_mode":"Ask for approval"})));
+    assert_eq!(engine.control_view()["permission_mode"],"Ask for approval");
+    let back = engine.command(command(OperationKind::SetPermissionMode,json!({"mode":"Full Access"})),clock(15.0)).unwrap();
+    assert_eq!(frames(&back)[0]["params"]["sandboxPolicy"],json!({"type":"dangerFullAccess"}));
+    assert_eq!(frames(&back)[0]["params"]["approvalPolicy"],"never");
 }
 
 #[test]

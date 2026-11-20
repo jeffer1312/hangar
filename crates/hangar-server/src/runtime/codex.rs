@@ -266,6 +266,8 @@ fn known_mode(payload:&Value) -> Result<&'static str,RuntimeError> {
 }
 fn approval(mode:&str) -> &'static str { if mode == "Full Access" { "never" } else { "on-request" } }
 fn sandbox(mode:&str) -> &'static str { match mode { "Full Access"=>"danger-full-access","Approve for me"=>"workspace-write",_=>"read-only" } }
+/// O mesmo sandbox no formato da `SandboxPolicy` do `thread/settings/update`.
+fn sandbox_policy(mode:&str) -> &'static str { match mode { "Full Access"=>"dangerFullAccess","Approve for me"=>"workspaceWrite",_=>"readOnly" } }
 
 /// Código do problema pelo `codexErrorInfo` (texto, ou objeto de chave única); None = sem classe própria.
 /// `rateLimitExceeded` é o aperto temporário do provedor, com nova tentativa: não é a cota da conta.
@@ -976,6 +978,33 @@ impl Engine {
         if let Some(tier) = result.get("serviceTier").and_then(service_tier) {
             self.service_tier = Some(tier);
             self.policy("session.patch_meta",json!({"service_tier":self.service_tier}),effects);
+        }
+    }
+
+    /// Troca do sandbox na conversa: o modo novo só vale, e só é gravado, com a confirmação do Codex.
+    fn permission_reply(&mut self,rpc:&Rpc,line:&Value,effects:&mut Vec<Effect>) {
+        let next = rpc.continuation.as_ref().unwrap();
+        let mode = next["mode"].as_str().unwrap_or("");
+        // Outra conversa: a troca valeu para a anterior e esta segue no modo de antes.
+        if next["thread"] != self.thread_id.as_str() {
+            if !rpc.timed_out {
+                effects.push(Effect::Reply { operation_id:rpc.operation_id.clone(),disposition:Disposition::Unknown,
+                    payload:json!({"error":"a conversa mudou antes de confirmar a permissão"}) });
+            }
+            return;
+        }
+        if !line["error"].is_null() {
+            if !rpc.timed_out {
+                let why = line["error"]["message"].as_str().unwrap_or("o Codex recusou a troca do sandbox");
+                effects.push(Effect::Reply { operation_id:rpc.operation_id.clone(),disposition:Disposition::Rejected,payload:json!({"error":why}) });
+            }
+            return;
+        }
+        // Confirmada depois do prazo: o Codex já aplica o modo novo, então a vista e o arquivo da sessão o seguem.
+        self.permission_mode = Some(mode.into());
+        self.policy("session.patch_meta",json!({"permission_mode":mode}),effects);
+        if !rpc.timed_out {
+            effects.push(Effect::Reply { operation_id:rpc.operation_id.clone(),disposition:Disposition::Accepted,payload:json!({"current":mode}) });
         }
     }
 
@@ -1797,15 +1826,20 @@ impl Engine {
             }
             OperationKind::SetPermissionMode => {
                 let mode = known_mode(&payload)?;
-                // O `approvalPolicy` vale no próximo turno; o sandbox só muda subindo o processo de novo.
+                // O `approvalPolicy` vale no próximo turno; o sandbox troca na conversa, sem subir o processo de
+                // novo (o terminal nem chega aqui: `relaunches`). Vale do próximo turno em diante, por isso a troca
+                // com turno rodando é recusada: o turno em andamento seguiria no sandbox antigo.
                 if sandbox(mode) != sandbox(self.launch_mode()) {
                     if !self.ready || !self.turn_known { return Err(error("não foi possível confirmar o estado do turno; permissão mantida")); }
                     if self.in_progress || !self.server_requests.is_empty() {
-                        return Err(RuntimeError::new("erro_permissao_ocupada","a sessão está trabalhando; mudar o sandbox reiniciaria o Codex — espere ela terminar"));
+                        return Err(RuntimeError::new("erro_permissao_ocupada","a sessão está trabalhando; espere ela terminar para mudar o sandbox"));
                     }
-                    // O modo novo entra na vida nova; a falha antes dela deixa tudo como estava.
-                    return Ok(vec![Effect::Respawn { operation_id:id,reason:"permission".into(),
-                        patch:json!({"permission_mode":mode}),reply:json!({"current":mode}) }]);
+                    let request = ClientRequest::ThreadSettingsUpdate(wire::ThreadSettingsUpdateParams { thread_id:self.thread_id.clone(),
+                        approval_policy:Some(approval(mode).into()),sandbox_policy:Some(wire::SandboxPolicyKind { kind:sandbox_policy(mode).into() }),
+                        ..Default::default() });
+                    self.send(id,request,Some(json!({"kind":"permission_live","mode":mode,"thread":self.thread_id})),&mut effects);
+                    self.changed(&mut effects,true);
+                    return Ok(effects);
                 }
                 self.permission_mode = Some(mode.into());
                 self.policy("session.patch_meta",json!({"permission_mode":mode}),&mut effects);
@@ -2058,6 +2092,11 @@ impl Engine {
             return Ok(());
         }
         if rpc.continuation.as_ref().is_some_and(|next|next["kind"] == "hook_trust") { self.hook_trust_reply(&rpc,&line,effects); return Ok(()); }
+        if rpc.continuation.as_ref().is_some_and(|next|next["kind"] == "permission_live") {
+            self.permission_reply(&rpc,&line,effects);
+            self.changed(effects,true);
+            return Ok(());
+        }
         if subscribe_rpc(&rpc) { self.subscribe_reply(&rpc,&line,effects); return Ok(()); }
         // Conversa aberta sem prova segue o caminho da recusa explícita: nunca fica pronta nem acorda a fila.
         let mut opened = None;
