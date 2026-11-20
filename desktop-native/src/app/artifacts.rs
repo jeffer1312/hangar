@@ -115,9 +115,16 @@ impl Hangar {
             self.artifacts.items().map(|items| items.len().to_string()).unwrap_or_else(|| "…".into())
         } else { "…".into() };
         let label = tr("artifacts_count").replace("{n}", &count);
+        // Conversa nova: "Artefatos 0" em 13 px, o número na cor do texto.
+        let beta = crate::appearance::conversation_beta();
+        let button = Button::new("artifacts-toggle").ghost().xsmall().h(px(22.)).px(px(6.));
+        let button = if beta {
+            button.accessibility_label(label).child(div().flex().items_center().gap(px(6.)).text_size(px(13.)).text_color(theme::muted())
+                .child(chrome::small_icon(IconName::ExternalLink, 14., theme::muted())).child(tr("beta_artifacts"))
+                .child(div().text_color(theme::text()).child(count)))
+        } else { button.icon(IconName::ExternalLink).label(label) };
         Some(popup::anchor(div().relative(), "artifacts-toggle")
-            .child(Button::new("artifacts-toggle").ghost().xsmall().h(px(22.)).px(px(6.)).icon(IconName::ExternalLink)
-                .label(label).tooltip(tr("artifacts_open")).selected(self.artifacts.open)
+            .child(button.tooltip(tr("artifacts_open")).selected(self.artifacts.open)
                 .on_click(cx.listener(|this, _, _, cx| {
                     let opening = !this.artifacts.open;
                     this.close_popups();

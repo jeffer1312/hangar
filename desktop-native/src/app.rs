@@ -256,6 +256,61 @@ fn turn_stop_button(stopping: bool, cx: &App) -> Button {
         .tooltip(tr("stop_hint")).accessibility_label(tr("stop")).disabled(stopping)
 }
 
+/// Tecla mostrada dentro de um botão da conversa nova, na cor do texto dele.
+fn beta_button_key(keys: &'static str, ink: Hsla) -> Div {
+    div().flex_shrink_0().px(px(5.)).rounded(px(4.)).border_1().border_color(ink.alpha(0.7)).text_color(ink.alpha(0.75))
+        .font_family(theme::MONO).text_size(px(11.)).line_height(px(15.)).child(keys)
+}
+
+/// Conversa nova: Parar com o nome e a tecla, no tom de perigo, sempre à vista enquanto o turno roda.
+fn beta_stop_button(stopping: bool, cx: &App) -> Button {
+    let ink = theme::danger_text();
+    let fill = theme::danger().alpha(0.12);
+    Button::new("stop").custom(ButtonCustomVariant::new(cx).color(fill).foreground(ink).hover(theme::danger().alpha(0.2)).active(theme::danger().alpha(0.2)))
+        .bg(fill).h(px(32.)).p_0().rounded(px(8.))
+        .child(div().h_full().px(px(10.)).rounded(px(8.)).border_1().border_color(theme::danger().alpha(0.4)).flex().items_center().gap(px(8.)).text_size(px(13.)).font_weight(FontWeight::SEMIBOLD).text_color(ink)
+            .child(div().size(px(10.)).rounded(px(2.)).bg(ink)).child(tr("stop")).child(beta_button_key("Esc", ink)))
+        .tooltip(tr("stop_hint")).accessibility_label(tr("stop")).disabled(stopping)
+}
+
+/// Conversa nova: Enviar com ícone, nome e a tecla, em destaque quando há o que mandar.
+fn beta_send_button(enabled: bool, label: String, cx: &App) -> Button {
+    let (fill, ink) = if enabled { (theme::accent(), theme::on_accent()) } else { (theme::raised(), theme::faint()) };
+    Button::new("send").custom(ButtonCustomVariant::new(cx).color(fill).foreground(ink).hover(fill.opacity(0.88)).active(fill.opacity(0.8)))
+        .bg(fill).h(px(32.)).px(px(12.)).rounded(px(8.)).disabled(!enabled)
+        .child(div().flex().items_center().gap(px(6.)).text_size(px(13.)).font_weight(FontWeight::SEMIBOLD).text_color(ink)
+            .child(chrome::small_icon(IconName::ArrowUp, 14., ink)).child(label.clone()).child(beta_button_key("↵", ink)))
+        .tooltip(tr("send_hint")).accessibility_label(label)
+}
+
+/// Seletor da conversa nova: caixa de 30 px com borda, rótulo apagado, o valor em negrito e a seta do menu.
+pub(crate) fn beta_pill(id: impl Into<ElementId>, prefix: Option<String>, value: String, rest: Option<String>, cx: &App) -> Button {
+    Button::new(id).custom(ButtonCustomVariant::new(cx).color(transparent_black()).foreground(theme::muted()).hover(theme::hover()).active(theme::hover()))
+        .h(px(30.)).p_0().rounded(px(8.))
+        .child(div().h_full().px(px(10.)).rounded(px(8.)).border_1().border_color(theme::border_strong()).flex().items_center().gap(px(6.)).text_size(px(13.)).text_color(theme::muted()).whitespace_nowrap()
+            .when_some(prefix, |el, prefix| el.child(prefix))
+            .child(div().max_w(px(170.)).truncate().font_weight(FontWeight::SEMIBOLD).text_color(theme::text()).child(value))
+            .when_some(rest, |el, rest| el.child(rest))
+            .child(chrome::small_icon(IconName::ChevronDown, 14., theme::muted())))
+}
+
+/// Conversa nova: o modo de permissão sem destaque nenhum, nem no bypass; o valor no tom dos outros rótulos.
+pub(crate) fn beta_mode_pill(id: impl Into<ElementId>, text: String, cx: &App) -> Button {
+    Button::new(id).custom(ButtonCustomVariant::new(cx).color(transparent_black()).foreground(theme::muted()).hover(theme::hover()).active(theme::hover()))
+        .h(px(30.)).p_0().rounded(px(8.))
+        .child(div().h_full().px(px(10.)).rounded(px(8.)).border_1().border_color(theme::border_strong()).flex().items_center().gap(px(6.)).text_size(px(13.)).text_color(theme::muted()).whitespace_nowrap()
+            .child(div().max_w(px(170.)).truncate().child(text)).child(chrome::small_icon(IconName::ChevronDown, 14., theme::muted())))
+}
+
+/// "Opus 5.5 1M" em negrito no nome e normal no tamanho do contexto, como a pílula da conversa nova mostra.
+pub(crate) fn split_model_label(text: &str) -> (String, Option<String>) {
+    match text.rsplit_once(' ') {
+        Some((head, tail)) if tail.len() <= 5 && tail.ends_with(['M', 'K', 'k']) && tail[..tail.len() - 1].chars().all(|c| c.is_ascii_digit()) && !tail[..tail.len() - 1].is_empty() =>
+            (head.to_owned(), Some(tail.to_owned())),
+        _ => (text.to_owned(), None),
+    }
+}
+
 pub(crate) fn composer_control_row(left: impl IntoIterator<Item = AnyElement>, right: impl IntoIterator<Item = AnyElement>, action: impl IntoElement) -> Div {
     div().w_full().flex().flex_wrap().items_center().gap_1().gap_y(px(4.))
         .child(div().flex_shrink_0().flex().items_center().gap_1().children(left))
@@ -4508,20 +4563,27 @@ impl Hangar {
         let mark = if preview { div().size(px(14.)).flex_shrink_0().flex().items_center().justify_center()
                 .child(div().size(px(7.)).rounded_full().bg(theme::accent())).into_any_element() }
             else { self.working_mark_slot(panes::Area::Conversation, "working-line", 14., theme::accent()) };
-        // Conversa nova: o que acontece agora vem primeiro, em português e na cor do texto; o verbo do terminal vai para a dica.
+        // Conversa nova: o que acontece agora vem primeiro, em português e na cor do texto; o verbo do terminal vai para a
+        // dica. Depois o tempo do turno ("· há 12 s") e os tokens ditos como do turno, com um filete separando da conversa.
         let beta = appearance::conversation_beta() && !sending;
         let row = if beta {
             let act = if self.chat.live_thinking.is_empty() { tr("beta_working") } else { tr("beta_thinking") };
-            working_line_box().child(mark)
-                .child(div().id("working-beta").flex_none().text_size(px(14.)).font_weight(FontWeight::SEMIBOLD).text_color(theme::text())
+            let mark = if preview { mark } else { self.working_mark_slot(panes::Area::Conversation, "working-line", 16., theme::accent()) };
+            let ago = since.filter(|_| !preview).map(|since| self.ago_slot(panes::Area::Conversation, "working-ago", since, 84.,
+                chrome::ElapsedLook::Ago { size: 14.5, color: theme::muted(), dot: true }));
+            working_line_box().border_t_1().border_color(theme::border()).gap(px(10.)).child(mark)
+                .child(div().id("working-beta").flex_none().text_size(px(14.5)).font_weight(FontWeight::SEMIBOLD).text_color(theme::text())
                     .child(act).tooltip(move |window, cx| gpui_kit::component::tooltip::Tooltip::new(verb.clone()).build(window, cx)))
-        } else { working_line(mark, verb) };
-        let row = row
-            .map(|el| match since.filter(|_| !preview) {
+                .children(ago)
+                .when_some(tokens.map(|t| turn_tokens_text(&t)), |el, text| el.child(div().min_w_0().truncate().text_size(px(12.5))
+                    .text_color(theme::faint()).child(text)))
+        } else {
+            working_line(mark, verb).map(|el| match since.filter(|_| !preview) {
                 Some(since) => el.child(self.elapsed_slot(panes::Area::Conversation, "working-elapsed", since, tokens)),
                 // Sem começo conhecido não há segundos, mas os tokens do terminal valem sozinhos.
                 None => el.when_some(tokens, |el, tokens| el.child(div().min_w_0().truncate().pt(px(1.)).text_size(px(11.)).text_color(theme::faint()).child(tokens))),
-            });
+            })
+        };
         if cx.reduce_motion() { return row.into_any_element(); }
         row.with_animation("working-line-in", Animation::new(WORKING_FADE).with_easing(motion::ease_out),
             |el, t| el.opacity(t).top(px(6. * (1. - t)))).into_any_element()
@@ -5551,6 +5613,7 @@ impl Hangar {
         // A revisão da branch (PR ou MR), quando o servidor acha uma: o chip abre a aba dela no git.
         let review_chip = if session.is_some() { self.review_chip(cx) } else { None };
         let cache = crate::chat::last_cache(&self.chat.events).filter(|_| readable);
+        let beta = appearance::conversation_beta() && !self.new_chat_screen();
         let footer = (repo.is_some() || ctx_pct.is_some() || session.is_some() || cache.is_some()).then(|| {
             let branch = status.as_ref().and_then(|s| s.branch.clone()).or_else(|| session.as_ref().and_then(|s| s.branch.clone())).unwrap_or_default();
             let dirty = status.as_ref().and_then(|s| s.dirty) == Some(true);
@@ -5579,14 +5642,17 @@ impl Hangar {
                     .child(div().max_w(px(160.)).truncate().text_color(theme::faint()).child(name))
                     .child(div().font_weight(FontWeight::MEDIUM).text_color(chrome::ring_text(pct)).child(percent(pct))));
             let has_git = !branch.is_empty();
-            let place = div().min_w_0().flex().items_center().gap(px(6.)).text_xs().text_color(theme::faint())
-                .when_some(folder, |el, f| el.child(chrome::small_icon(IconName::Folder, 14., theme::faint())).child(div().max_w(px(200.)).truncate().child(f)))
-                .when(has_git, |el| el.child(div().ml(px(4.)).flex().items_center().gap(px(4.)).min_w_0()
-                    .child(chrome::small_icon(IconName::GitBranch, 14., theme::faint()))
-                    .child(div().max_w(px(160.)).truncate().child(branch))
+            // Conversa nova: o lado esquerdo do rodapé em 13 px, branch e contagens em mono, com mais ar entre as partes.
+            let ink = if beta { theme::muted() } else { theme::faint() };
+            let count = |el: Div| if beta { el.font_family(theme::MONO).text_size(px(12.)) } else { el };
+            let place = div().min_w_0().flex().items_center().gap(px(6.)).map(|el| if beta { el.text_size(px(13.)) } else { el.text_xs() }).text_color(ink)
+                .when_some(folder, |el, f| el.child(chrome::small_icon(IconName::Folder, 14., ink)).child(div().max_w(px(200.)).truncate().child(f)))
+                .when(has_git, |el| el.child(div().ml(px(if beta { 10. } else { 4. })).flex().items_center().gap(px(if beta { 6. } else { 4. })).min_w_0()
+                    .child(chrome::small_icon(IconName::GitBranch, 14., ink))
+                    .child(div().max_w(px(160.)).truncate().when(beta, |el| el.font_family(theme::MONO)).child(branch))
                     .when(dirty, |el| el.child(div().text_color(theme::warning()).child("*")))))
-                .when_some(added, |el, a| el.child(div().text_color(theme::success()).child(format!("+{a}"))))
-                .when_some(removed, |el, r| el.child(div().text_color(theme::removed()).child(format!("−{r}"))))
+                .when_some(added, |el, a| el.child(count(div()).text_color(theme::success()).child(format!("+{a}"))))
+                .when_some(removed, |el, r| el.child(count(div()).text_color(theme::removed()).child(format!("−{r}"))))
                 .when_some(ahead, |el, n| el.child(div().text_color(theme::accent()).child(format!("↑{n}"))))
                 .when_some(behind, |el, n| el.child(div().text_color(theme::warning()).child(format!("↓{n}"))));
             // Com repositório, a faixa abre o git da sessão (o `repo-chip` do web); o recuo negativo mantém o texto no lugar.
@@ -5618,24 +5684,28 @@ impl Hangar {
         });
 
         let send_label = tr(if creating { "create_creating" } else if sending && attached || uploading.is_some() || resuming { "sending" } else { "send" });
+        // Conversa nova (fora da tela sem sessão): Parar e Enviar com nome e tecla; com rascunho no meio do turno, os dois
+        // ficam lado a lado, e uma linha diz para onde a mensagem vai antes do clique.
         let action = if editing {
             let payload = key.as_ref().map(|key| self.compose_with_refs(key, &text)).unwrap_or_else(|| text.clone());
             let enabled = crate::queue_panel::can_update(&payload) && !busy && self.chat_online && self.history_installed;
-            self.queue_update_button(enabled, cx)
+            self.queue_update_button(enabled, cx).into_any_element()
+        } else if beta && can_stop {
+            let stop = beta_stop_button(stopping, cx).on_click(cx.listener(|this, _, window, cx| this.request_stop(window, cx)));
+            div().flex().items_center().gap(px(12.)).child(stop)
+                .when(has_input, |el| el.child(beta_send_button(!blocked, send_label.clone(), cx)
+                    .on_click(cx.listener(|this, _, window, cx| this.submit(false, false, window, cx)))))
+                .into_any_element()
+        } else if beta {
+            beta_send_button(!blocked && has_input, send_label, cx)
+                .on_click(cx.listener(|this, _, window, cx| this.submit(false, false, window, cx))).into_any_element()
         } else if can_stop && !has_input {
-            turn_stop_button(stopping, cx).on_click(cx.listener(|this, _, window, cx| this.request_stop(window, cx)))
+            turn_stop_button(stopping, cx).on_click(cx.listener(|this, _, window, cx| this.request_stop(window, cx))).into_any_element()
         } else {
             send_button("send", !blocked && has_input, send_label, cx)
-                .on_click(cx.listener(|this, _, window, cx| this.submit(false, false, window, cx)))
+                .on_click(cx.listener(|this, _, window, cx| this.submit(false, false, window, cx))).into_any_element()
         };
-        // Conversa nova: com rascunho no meio do turno, o Parar continua à vista ao lado do Enviar, e uma linha diz
-        // para onde a mensagem vai antes do clique.
-        let beta_draft = appearance::conversation_beta() && can_stop && has_input && !editing;
-        let action = if beta_draft {
-            div().flex().items_center().gap(px(10.))
-                .child(turn_stop_button(stopping, cx).on_click(cx.listener(|this, _, window, cx| this.request_stop(window, cx))))
-                .child(action).into_any_element()
-        } else { action.into_any_element() };
+        let beta_draft = beta && can_stop && has_input && !editing;
         let draft_hint = beta_draft.then(|| {
             // O mesmo critério do `queue_timing`: sem como entrar no turno, Na conversa e Jev caem na fila.
             let joins = queue::sends_direct(true, &self.chat.state.state, self.provider().0);
@@ -5645,7 +5715,8 @@ impl Hangar {
                 appearance::DeliveryMode::Jev if joins && self.queue_jev_ready() => "beta_draft_jev",
                 _ => "beta_draft_queue",
             };
-            div().pb(px(4.)).text_size(px(12.5)).text_color(theme::faint()).child(tr(key))
+            div().mt(px(-4.)).mb(px(-2.)).text_size(px(12.5)).text_color(theme::faint())
+                .child(format!("{} · {}", tr(key), tr("beta_enter_sends")))
         });
         let [commands, attach, recent] = composer_icons(cx);
         let commands = commands.disabled(!readable).selected(self.command_panel)
@@ -5672,6 +5743,8 @@ impl Hangar {
             [commands.into_any_element(), attach.into_any_element(), recent_btn.into_any_element(), microphone.into_any_element()].into_iter().chain(dictation_style),
             steer_pill.into_iter().chain(pills).chain(mode), action);
         let card = composer_card(focused)
+            // Conversa nova: canto de 16 e o texto recuado como as caixas acima, com o filete da sugestão.
+            .when(beta, |el| el.rounded(px(16.)).pl(px(19.)).pr(px(10.)))
             .children(refs_tray)
             .when_some(tray, |el, tray| el.child(tray))
             .when_some(uploading, |el, (done, total)| el.child(div().text_xs().text_color(theme::accent())
@@ -5692,7 +5765,7 @@ impl Hangar {
                     .occlude().children(floating)))
                 .children(queue_panel)
                 .children(queue_row)
-                .child(chrome::glass_panel(card, px(18.)))
+                .child(chrome::glass_panel(card, px(if beta { 16. } else { 18. })))
                 .children(footer))
             .into_any_element()
     }
@@ -7406,6 +7479,13 @@ fn working_verb(label: Option<&str>) -> String {
         .map(str::to_owned).unwrap_or_else(|| tr("working_line"))
 }
 
+/// "↓ 28.9k tokens" do terminal como a conversa nova diz: "↓ 28,9k tokens neste turno", com a vírgula do português.
+fn turn_tokens_text(tokens: &str) -> String {
+    let count = tokens.trim_end_matches("tokens").trim();
+    let count = if crate::i18n::english() { count.to_owned() } else { count.replace('.', ",") };
+    tr("beta_turn_tokens").replace("{count}", &count)
+}
+
 /// A contagem de tokens dos parênteses do spinner ("… (37s · ↓ 1.4k tokens · thought for 5s)" → "↓ 1.4k tokens").
 fn working_tokens(label: Option<&str>) -> Option<String> {
     let inside = label?.split_once(" (")?.1.trim_end_matches(')');
@@ -8466,6 +8546,7 @@ impl Render for Hangar {
         let limited_now = if self.chat.state.state.is_empty() { self.selected.as_ref().and_then(|s| s.limited) == Some(true) } else { self.chat.state.limited };
         let chip_state = if limited_now && session_chip { "limited".to_owned() } else { header_state.clone() };
         let place = self.selected.as_ref().map(|s| place(s, &self.session_label(cx)));
+        let beta_header = appearance::conversation_beta();
         // O cabeçalho é desenhado pela raiz, fora das áreas guardadas: a animação vai direto nele, numa view própria.
         let header_avatar = self.selected.as_ref().map(|s| {
             let look = sidebar::session_look_as(s, &header_state, limited_now);
@@ -8495,8 +8576,16 @@ impl Render for Hangar {
                 .when_some(opening.as_ref(), |el, o| el.child(chrome::session_avatar(&chrome::AvatarLook::new(&o.provider, None, "", false), 26., None)))
                 // Sem sessão o nome do app já está na barra da janela; repetido aqui só disputava com a tela inicial.
                 .children(selected_name.clone().or_else(|| opening.as_ref().map(|o| o.name.clone()))
-                    .map(|name| div().flex_shrink_0().font_weight(FontWeight::SEMIBOLD).child(name)))
-                .when_some(place, |el, place| el.child(div().id("session-place").min_w_0().flex().items_center().gap(px(4.)).text_color(theme::faint()).aria_label(place)
+                    .map(|name| div().flex_shrink_0().font_weight(FontWeight::SEMIBOLD).when(beta_header, |el| el.text_size(px(17.))).child(name)))
+                // Conversa nova: pasta e máquina em 14 px, cada uma com o próprio ícone, separadas por um ponto.
+                .when_some(place.clone().filter(|_| beta_header), |el, place| el.child(div().id("session-place").min_w_0().flex().items_center().gap(px(6.))
+                    .text_size(px(14.)).text_color(theme::muted()).aria_label(place)
+                    .when_some(self.selected.as_ref().and_then(folder_name), |el, folder| el
+                        .child(chrome::small_icon(IconName::Folder, 14., theme::muted()))
+                        .child(div().min_w_0().truncate().child(folder)).child("·"))
+                    .child(chrome::small_icon(IconName::Server, 14., theme::muted()))
+                    .child(div().min_w_0().truncate().child(self.session_label(cx)))))
+                .when_some(place.filter(|_| !beta_header), |el, place| el.child(div().id("session-place").min_w_0().flex().items_center().gap(px(4.)).text_color(theme::faint()).aria_label(place)
                     .when_some(self.selected.as_ref().and_then(folder_name), |el, folder| el
                         .child(chrome::small_icon(IconName::Folder, 12., theme::faint()))
                         .child(div().min_w_0().truncate().child(folder)).child("@"))
@@ -8504,7 +8593,12 @@ impl Render for Hangar {
                     .child(div().min_w_0().truncate().child(self.session_label(cx)))))
                 .child(div().flex_1())
                 // Sem sessão, o estado da ligação só aparece quando ela não está normal: "Conectado" não diz nada.
-                .when(session_chip || header_state != "connected", |el| el.child(if session_chip { chrome::state_chip(&chip_state, tr(&format!("chip_{chip_state}")), true) }
+                .when(session_chip || header_state != "connected", |el| el.child(if session_chip && appearance::conversation_beta() {
+                        // Rodando, o tempo do turno vem junto; a raiz redesenha a cada batida da marca, e o minuto vira sozinho.
+                        let ago = (chip_state == "working").then(|| self.turn_start()).flatten()
+                            .map(|since| tr("beta_ago").replace("{time}", &chrome::format_ago(since.elapsed())));
+                        chrome::beta_state_chip(&chip_state, tr(&format!("beta_chip_{chip_state}")), ago)
+                    } else if session_chip { chrome::state_chip(&chip_state, tr(&format!("chip_{chip_state}")), true) }
                     else { div().flex_shrink_0().text_xs().text_color(theme::status(&header_state)).child(tr(&header_state)).into_any_element() }))
                 .when_some(self.render_activity_button(window, cx), |el, button| el.child(button))
                 .when(self.selected.is_some(), |el| el.child(chrome::icon_button("side-show", IconName::PanelRight,

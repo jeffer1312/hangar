@@ -398,6 +398,7 @@ pub fn warning() -> Hsla { rgb(if colors().dark { 0xff9f0a } else { 0xb25e00 }).
 pub fn danger() -> Hsla { rgb(if colors().dark { 0xff453a } else { 0xd12c21 }).into() }
 /// Texto sobre fundo tingido da mesma cor (marca, linha de estado, nome em destaque): clareado no escuro, o `--success-text` do web.
 pub fn success_text() -> Hsla { if colors().dark { rgb(mix(0x34c759, 0xffffff, 0.45)).into() } else { success() } }
+pub fn danger_text() -> Hsla { if colors().dark { rgb(mix(0xff453a, 0xffffff, 0.4)).into() } else { danger() } }
 pub fn warning_text() -> Hsla { if colors().dark { rgb(mix(0xff9f0a, 0xffffff, 0.4)).into() } else { warning() } }
 /// Texto (e ponto de seleção) sobre um botão de cor cheia e escura, como o Enviar âmbar e o Salvar índigo.
 pub fn on_press() -> Hsla { hsla(0., 0., 1., 1.) }
