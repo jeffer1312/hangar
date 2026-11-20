@@ -1037,10 +1037,18 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
             let pending = roots.get_mut(&id).unwrap();
             pending.preparing = false;
             if pending.cancelled || pending.timed_out { continue; }
+            // Vale também para o Codex recém-adotado pela troca, até ela concluir.
+            let queue_held = engine.lifecycle.as_ref().and_then(std::sync::Weak::upgrade).is_some_and(|registry|registry.queue_held(&target.name));
+            // Orientar e "Enviar agora" entrariam no turno do agente: com a fila retida, recusam antes de reivindicar.
+            // A guarda da rota não basta, a retenção pode nascer entre ela e aqui.
+            if queue_held && matches!(pending.command.kind,OperationKind::SteerQueue | OperationKind::Steer) {
+                effects.push_back(Effect::Reply { operation_id:id,disposition:Disposition::Rejected,
+                    payload:json!({"error":"a sessão está trocando de agente","code":"session_transfer_busy"}) });
+                continue;
+            }
             // A troca de conta ou de agente segurou a fila (talvez depois de o lote sair dela): a mensagem espera
             // nela e vai ao destino novo, inclusive a "Na conversa".
-            if target.provider=="claude" && pending.command.kind == OperationKind::Input && !rowless(&target.provider,&pending.command)
-                && engine.lifecycle.as_ref().and_then(std::sync::Weak::upgrade).is_some_and(|registry|registry.queue_held(&target.name)) {
+            if queue_held && pending.command.kind == OperationKind::Input && !rowless(&target.provider,&pending.command) {
                 effects.push_back(Effect::Reply { operation_id:id,disposition:Disposition::Deferred,payload:json!({"code":"queue_held"}) });
                 continue;
             }
@@ -1483,7 +1491,9 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
         }
         // Resposta reservada apta sai antes da mensagem comum: ela responde a uma pergunta já feita.
         let limit_held = || engine.lifecycle.as_ref().and_then(std::sync::Weak::upgrade).is_some_and(|registry|registry.queue_held(&target.name));
-        let deliverable = if target.provider=="claude" {claude_delivery_allowed(&target,engine.deliverable(),error.is_some()) && !limit_held()} else {engine.deliverable()};
+        // O Codex que a troca de agente acabou de adotar também espera: a fila só sai depois de a transferência
+        // concluir, senão uma falha no fim restauraria o Claude com um turno já rodado no Codex.
+        let deliverable = (if target.provider=="claude" {claude_delivery_allowed(&target,engine.deliverable(),error.is_some())} else {engine.deliverable()}) && !limit_held();
         let reserved = if target.metadata["lifecycle_pending"]==true { None } else { engine.ready_async_answer_entry() };
         if drain_requested && !drain_active && turn_hold.is_none() && !closed.load(Ordering::Acquire) && (deliverable || reserved.is_some())
             && !roots.values().any(|root|(root.preparing || root.defer_for_batch && root.result.is_none() && root.error.is_none()) && matches!(root.command.kind,OperationKind::Input | OperationKind::Steer)) {
@@ -2043,6 +2053,13 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
                         match result {
                             Ok(payload) => {
                                 for (key,value) in payload.as_object().cloned().unwrap_or_default() { pending.command.payload[key] = value; }
+                                // O recado nativo não passa pela guarda dos prontos: com a fila retida ele volta a ela sem tocar o socket.
+                                if target.provider == "claude" && pending.command.payload["native_candidate"] == true
+                                    && engine.lifecycle.as_ref().and_then(std::sync::Weak::upgrade).is_some_and(|registry|registry.queue_held(&target.name)) {
+                                    pending.preparing = false;
+                                    effects.push_back(Effect::Reply { operation_id:id,disposition:Disposition::Deferred,payload:json!({"code":"queue_held"}) });
+                                    continue;
+                                }
                                 if target.provider == "claude" && pending.command.payload["native_candidate"] == true {
                                     // O recado nativo sai pelo socket, fora de `attempts`: a partir daqui ele pode ter
                                     // sido escrito, e nem o prazo nem uma falha podem devolvê-lo à fila.

@@ -13,7 +13,9 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   ao Claude: mensagem nova ou "Na conversa" fica na fila, orientar e "Enviar agora" recusam, e
   reabrir, `/resume`, outra conta e a troca automática por limite também (`session_transfer_busy`,
   `limit_switch_handoff`). Antes de o Codex nascer a fila é recarimbada com a folga de
-  `pre_transcript`, senão o corte `min_ts` dele a descartaria. `DELETE /conta` cancela só
+  `pre_transcript`, senão o corte `min_ts` dele a descartaria; o Codex adotado só a entrega depois
+  de a transferência concluir, para uma falha no fim não restaurar o Claude com um turno já rodado
+  no Codex. `DELETE /conta` cancela só
   enquanto espera; falha mostra o código na linha da lista por 30 s e devolve a fila ao Claude. O
   `/history` do Codex transferido leva o divisor `kind: handoff` antes do primeiro turno novo. Ver
   [troca de agente com a sessão trabalhando](#troca-de-agente-com-a-sessão-trabalhando-20112026).

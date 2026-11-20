@@ -319,8 +319,6 @@ impl Switcher {
 
     async fn switch(&self,host:&dyn Host,hit:&LimitHit) -> Outcome {
         if hit.provider != "claude" { return Outcome::Stayed("limit_switch_not_claude"); }
-        // Reabrir no Claude agora levaria a fila que a troca de agente segurou para o Codex.
-        if host.handoff_held(&hit.name) { return Outcome::Stayed("limit_switch_handoff"); }
         let spec = match host.spec(&hit.name).await {
             None=>return Outcome::Stayed("limit_switch_not_rust"),
             Some(Err(code))=>return Outcome::Failed(code),
@@ -332,6 +330,9 @@ impl Switcher {
         // Aviso de uma vida que já trocou de conta (o `/conta` passou na frente): a conta de agora não bateu nada.
         if crate::list::discover::real(&host.account_dir(hit.account.as_deref())) != crate::list::discover::real(&current) { return Outcome::Stayed("limit_switch_stale"); }
         self.spent.mark_limit(&current,hit.limit.resets_at.filter(|reset|*reset > now).unwrap_or(now + UNKNOWN_RESET_S),now,&hit.limit.window);
+        // A conta fica gasta para as outras sessões, mas reabrir no Claude agora levaria a fila que a troca de agente
+        // segurou para o Codex.
+        if host.handoff_held(&hit.name) { return Outcome::Stayed("limit_switch_handoff"); }
         self.move_away(host,&hit.name,&spec,&current).await
     }
 
@@ -1079,6 +1080,7 @@ mod tests {
         fake.handoff.store(true,std::sync::atomic::Ordering::Relaxed);
         let switcher = Switcher::default();
         switcher.handle(&fake,hit("/a",2000.0)).await;
+        assert!(switcher.spent.is_spent("/a",1500.0),"a conta que bateu o limite fica gasta para as outras sessões");
         switcher.handle_auth(&fake,refused("/a")).await;
         assert_eq!(fake.log(),vec!["release","release"]);
         assert_eq!(fake.diary(),vec!["limit_switch_handoff","limit_switch_handoff"]);

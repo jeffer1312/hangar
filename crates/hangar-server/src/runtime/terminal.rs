@@ -1597,6 +1597,10 @@ impl Executor {
         if !valid_operation_id(id) {return Err(error("operation_id"));}
         let entry=payload["entry_id"].as_str().filter(|entry|!entry.is_empty() && payload.as_object().is_some_and(|p|p.keys().all(|key|matches!(key.as_str(),"entry_id"|"expected_turn"))))
             .ok_or_else(||error("terminal_payload"))?.to_owned();
+        // Fila retida pela troca: nenhuma tecla, nem a que só promove a "Na conversa" já digitada.
+        if self.options.lifecycle.as_ref().and_then(std::sync::Weak::upgrade).is_some_and(|registry|registry.queue_held(&self.target.name)) {
+            return Ok(reply(id,Disposition::Rejected,json!({"code":"session_transfer_busy","cleanup":"not_needed"})));
+        }
         // A que já saiu (ou nunca esteve) responde antes de ler a tela: nenhuma tecla.
         let state=self.queue.snapshot().await.map_err(|_|error("queue_io"))?;
         if !super::queue::waiting_ids(&state,self.target.created).contains(&entry) {
