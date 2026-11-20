@@ -1435,7 +1435,7 @@ impl Hangar {
     }
 
     fn selected_key(&self) -> Option<SessionKey> {
-        SessionKey::new(&self.session_server()?, self.selected.as_ref()?)
+        SessionKey::for_open_chat(&self.session_server()?, self.selected.as_ref()?)
     }
 
     /// Conexão da máquina da sessão aberta; sem sessão de outra máquina, a do servidor ativo.
@@ -1710,7 +1710,8 @@ impl Hangar {
         // O app responde: o formulário que a lista trouxe já abre o passo a passo (`/answer`), antes do stream.
         if let Some(ask) = list_form(&session) { self.chat.update_ask(Some(ask)); }
         self.error = None;
-        self.loading = session.readable();
+        let opens_chat = session.readable() || session.waiting_for_kimi_input();
+        self.loading = opens_chat;
         self.history_started = false;
         self.history_installed = false;
         self.pending_chat.clear();
@@ -1725,7 +1726,7 @@ impl Hangar {
         row_patch::reset_rows(&mut self.row_ids, &mut self.arrived, &mut self.tree_folds);
         self.list_state.reset(0);
         self.follow_reset();
-        let key = self.session_server().and_then(|server| SessionKey::new(&server, &session));
+        let key = self.session_server().and_then(|server| SessionKey::for_open_chat(&server, &session));
         let draft = key.as_ref().and_then(|key| self.drafts.get(key).cloned()).unwrap_or_default();
         self.expanded = key.as_ref().and_then(|key| self.kept_expanded.get(key).cloned()).unwrap_or_default();
         self.composer.update(cx, |input, cx| input.set_value(draft, window, cx));
@@ -1764,7 +1765,7 @@ impl Hangar {
             self.load_session_accounts(cx);
         }
         self.refresh_shortcut_terms(&session.name);
-        if session.readable() {
+        if opens_chat {
             if let Some(api) = self.session_api() {
                 let tx = self.tx.clone();
                 let connection = self.connection;
@@ -2566,12 +2567,12 @@ impl Hangar {
         self.tour_dirty = true;
     }
 
-    /// Transcript trocado na mesma sessão (`/clear`): envio em voo, espera, campo, anexos e "mandar pro grupo" seguem para a
-    /// chave nova. Devolve a antiga, que a abertura ainda preenche com o campo e deve sair depois.
+    /// O histórico nasceu ou mudou na mesma sessão: envio em voo, rascunho e anexos passam à chave nova.
+    /// Devolve a antiga, que a abertura ainda preenche com o campo e deve sair depois.
     fn follow_transcript(&mut self, old: &SessionInfo, new: &SessionInfo, cx: &mut Context<Self>) -> Option<SessionKey> {
         if new.jsonl == old.jsonl || new.lifecycle_id != old.lifecycle_id { return None; }
         let server = self.session_server()?;
-        let (from, to) = (SessionKey::new(&server, old)?, SessionKey::new(&server, new)?);
+        let (from, to) = (SessionKey::for_open_chat(&server, old)?, SessionKey::new(&server, new)?);
         self.delivery.rekey(&from, &to);
         if let Some(history) = self.input_history.remove(&from) { self.input_history.insert(to.clone(), history); }
         if let Some(list) = self.attachments.remove(&from) { self.attachments.insert(to.clone(), list); }
@@ -2600,7 +2601,9 @@ impl Hangar {
         }
         if let Some(old) = self.selected.clone() {
             match list.iter().find(|s| s.name == old.name).cloned() {
-                Some(new) if new.jsonl != old.jsonl || new.tracked != old.tracked => {
+                Some(new) if new.jsonl != old.jsonl || new.tracked != old.tracked
+                    || new.waiting_for_kimi_input() != old.waiting_for_kimi_input()
+                    || new.waiting_for_kimi_input() && new.lifecycle_id != old.lifecycle_id => {
                     let moved = self.follow_transcript(&old, &new, cx);
                     self.open_session(self.open_api.clone(), new, window, cx);
                     if let Some(from) = moved { self.drafts.remove(&from); }
@@ -3137,9 +3140,9 @@ impl Hangar {
         });
     }
 
-    // O orquestrador recusa mensagem (409): nada que envie pela conversa dele sai daqui.
     fn can_send(&self) -> bool {
-        !self.connection_dialog && self.chat_online && self.history_installed && !self.selected.as_ref().is_some_and(SessionInfo::orq)
+        !self.connection_dialog && self.chat_online && self.history_installed
+            && self.selected.as_ref().is_some_and(SessionInfo::takes_messages)
     }
 
     /// O plugin desta sessão, com ou sem terminal, responde o `/btw` num painel (`caps` do `plugin_ui`).
@@ -5488,14 +5491,15 @@ impl Hangar {
         let steer_text = readable && has_input && !editing && (provider == "codex" || headless) && self.chat.state.state == "working"
             && self.selected_key().is_none_or(|key| self.group_targets(&key, "").is_none());
         // Só o anexo espera o envio em voo; texto sai do campo e vai na vez dele.
-        let blocked = self.dictation.send_pending() || if reopen { resuming || self.reopen_blocked(cx) } else if new_chat { !can_create } else { sending && attached || uploading.is_some() || !self.chat_online || !self.history_installed };
+        let blocked = self.dictation.send_pending() || if reopen { resuming || self.reopen_blocked(cx) } else if new_chat { !can_create } else { sending && attached || uploading.is_some() || !self.can_send() };
         let can_stop = self.can_interrupt();
         let focused = self.composer.read(cx).focus_handle(cx).is_focused(window);
         let paste_target = cx.entity().downgrade();
         // Desenhado na prévia da aba, o campo é o dela: ações e colar chegam antes dos ouvintes de tecla da prévia, que
         // trocam a conversa, e trocam aqui mesmo para não agirem na sessão principal.
         let preview = self.in_tab_preview;
-        let textarea = Textarea::new(&self.composer).accessibility_id("composer-input").appearance(false).disabled((!readable && !new_chat && !reopen) || creating || resuming).on_paste(move |item, window, cx| {
+        let editable = readable || self.selected.as_ref().is_some_and(SessionInfo::waiting_for_kimi_input) || new_chat || reopen;
+        let textarea = Textarea::new(&self.composer).accessibility_id("composer-input").appearance(false).disabled(!editable || creating || resuming).on_paste(move |item, window, cx| {
             paste_target.update(cx, |this, cx| { if preview { this.enter_tab_preview_event(window, cx); } this.paste(item, cx) }).unwrap_or(false)
         });
         let roomy = self.new_chat_screen();
@@ -7664,6 +7668,12 @@ impl Hangar {
                         .on_click(cx.listener(move |this, _, _, cx| this.reopen_target(target.clone(), cx)))));
             } else if let Some(card) = prethread {
                 content = content.child(card);
+            } else if selected.waiting_for_kimi_input() {
+                let sent = self.selected_key().is_some_and(|key| {
+                    matches!(self.delivery.outcome(&key), Some(SendOutcome::Delivered | SendOutcome::Queued))
+                });
+                let hint = if sent { "chat_mensagem_enviada_kimi" } else { "chat_envie_primeira_kimi" };
+                content = content.child(div().flex_1().p_6().text_color(theme::muted()).child(tr_shared(hint, &[])));
             } else if !selected.readable() {
                 content = content.child(div().flex_1().p_6().text_color(theme::muted()).child(tr(if selected.tracked == Some(false) { "untracked" } else { "starting" })));
             } else {
