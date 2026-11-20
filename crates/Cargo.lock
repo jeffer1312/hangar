@@ -1648,6 +1648,7 @@ dependencies = [
  "tar",
  "tempfile",
  "tokio",
+ "tracing",
  "zip",
 ]
 

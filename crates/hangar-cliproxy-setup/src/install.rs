@@ -147,7 +147,8 @@ async fn running_version(base: &str, key: Option<&str>) -> Option<Probe> {
     Some(Probe { version, rejected })
 }
 
-/// O filtro por cabeçalho das regras de `payload` chegou no v8; sem versão conhecida, a regra fica de fora.
+/// Só proxy que filtra regras de `payload` por cabeçalho entende a regra (versão em docs/decisoes); sem versão
+/// conhecida, ela fica de fora.
 fn understands_rule(version: Option<&semver::Version>) -> bool { version.is_some_and(|v| v.major >= 8) }
 
 /// Senha de gerenciamento que o Hangar não conhece: troca por uma nova, guardada por `persist`.
@@ -274,6 +275,13 @@ pub async fn install(ctx: &Context, progress: &(dyn Fn(Step) + Send + Sync)) -> 
             }
             return Ok(Outcome::Configured);
         }
+        // Proxy do Hangar já respondendo: só completa o config, que ele relê sozinho. Reiniciar o serviço aqui cortaria
+        // as sessões no proxy sem a confirmação que a atualização pede; com ele parado, registra e sobe de novo.
+        Install::Managed { tag, .. } if port_open(&base).await => {
+            progress(Step::Config);
+            ensure(ctx, understands_rule(tag_version(&tag).as_ref()))?;
+            return Ok(Outcome::Installed { tag });
+        }
         Install::Managed { tag, binary } => (tag, binary),
         Install::Absent => {
             // Algo já atende na porta e não é instalação conhecida: subir outro proxy ali falharia calado.
@@ -345,12 +353,14 @@ pub async fn update(ctx: &Context, progress: &(dyn Fn(Step) + Send + Sync)) -> R
         return Err(rolled_back(failure, &installed, back.map_err(Failure::from)));
     }
     detect::write_record(&ctx.paths, &latest.tag, &binary).map_err(|e| Failure::new("cliproxy_registro_falhou", e.to_string()))?;
+    // Daqui em diante a versão nova já roda e está registrada: o que falta é arremate, e falha nele não desfaz a troca.
     // `payload` da pessoa fica como está: a regra só entra num config sem ele.
-    if understands_rule(version.as_ref()) {
-        ensure(ctx, true)?;
+    if understands_rule(version.as_ref()) && let Err(failure) = ensure(ctx, true) {
+        tracing::warn!(code = failure.code, detail = %failure.detail, "cliproxy: atualizado, mas a regra do Ultra Fast não entrou no config");
     }
-    if let Some(dir) = old.parent().filter(|d| Some(*d) != binary.parent()) {
-        std::fs::remove_dir_all(dir).map_err(|e| Failure::new("cliproxy_versao_antiga_ficou", format!("{}: {e}", dir.display())))?;
+    if let Some(dir) = old.parent().filter(|d| Some(*d) != binary.parent())
+        && let Err(error) = std::fs::remove_dir_all(dir) {
+        tracing::warn!(dir = %dir.display(), %error, "cliproxy: atualizado, mas a pasta da versão anterior ficou");
     }
     Ok(Outcome::Updated { tag: latest.tag })
 }
@@ -367,12 +377,19 @@ impl Installer {
         let this = self.clone();
         tokio::spawn(async move {
             let progress_owner = this.clone();
-            let progress = move |step: Step| {
-                if let Some(job) = progress_owner.job.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
-                    job.step = step;
-                }
-            };
-            let result = if kind == "update" { update(&ctx, &progress).await } else { install(&ctx, &progress).await };
+            let work = tokio::spawn(async move {
+                let progress = move |step: Step| {
+                    if let Some(job) = progress_owner.job.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+                        job.step = step;
+                    }
+                };
+                if kind == "update" { update(&ctx, &progress).await } else { install(&ctx, &progress).await }
+            });
+            // Tarefa que cai no meio também termina: sem resultado, toda tentativa seguinte veria "ocupado" até o servidor reiniciar.
+            let result = work.await.unwrap_or_else(|error| {
+                tracing::error!(kind, %error, "cliproxy: a tarefa de instalação parou no meio");
+                Err(Failure::new("cliproxy_tarefa_caiu", format!("a tarefa parou no meio: {error}")))
+            });
             if let Some(job) = this.job.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
                 job.result = Some(result);
             }
@@ -445,6 +462,45 @@ mod tests {
         let base = format!("http://{}", listener.local_addr().unwrap());
         assert!(running_version(&base, None).await.is_none());
         assert_eq!(listener.accept().map_err(|e| e.kind()).err(), Some(std::io::ErrorKind::WouldBlock));
+    }
+
+    /// Proxy instalado pelo Hangar e respondendo numa porta deste teste.
+    fn managed_running(home: &std::path::Path) -> (Context, std::net::TcpListener) {
+        let ctx = context(home);
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        std::fs::create_dir_all(home.join(".cli-proxy-api")).unwrap();
+        std::fs::write(ctx.paths.config(), format!("port: {}\napi-keys:\n  - k\n", listener.local_addr().unwrap().port())).unwrap();
+        let binary = ctx.paths.dir.join("bin/8.0.79/cli-proxy-api");
+        std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
+        std::fs::write(&binary, b"x").unwrap();
+        detect::write_record(&ctx.paths, "v8.0.79", &binary).unwrap();
+        (ctx, listener)
+    }
+
+    #[tokio::test]
+    async fn installing_over_a_running_managed_proxy_only_completes_the_config() {
+        // Reiniciar o serviço cortaria as sessões no proxy: com ele respondendo, o pedido não chega ao serviço.
+        let home = tempfile::tempdir().unwrap();
+        let (ctx, _listener) = managed_running(home.path());
+        let steps = Mutex::new(Vec::new());
+        let outcome = install(&ctx, &|step| steps.lock().unwrap().push(step)).await;
+        assert_eq!(outcome, Ok(Outcome::Installed { tag: "v8.0.79".into() }));
+        assert_eq!(*steps.lock().unwrap(), [Step::Config], "sem passo de serviço nem de subida");
+    }
+
+    #[tokio::test]
+    async fn a_task_that_panics_still_ends_the_job() {
+        let installer = Arc::new(Installer::default());
+        let home = tempfile::tempdir().unwrap();
+        let (mut ctx, _listener) = managed_running(home.path());
+        // O `ensure` grava a senha nova de gerenciamento: a gravação que entra em pânico derruba a tarefa no meio.
+        ctx.persist = Arc::new(|_| panic!("persist"));
+        installer.start("install", ctx.clone()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        // estavel: o Installer não expõe sinal de fim; confere o estado publicado com teto de 10 s, que só estoura se travar.
+        while installer.job()["done"] != true && Instant::now() < deadline { tokio::time::sleep(Duration::from_millis(20)).await; }
+        assert_eq!(installer.job()["error"]["code"], "cliproxy_tarefa_caiu");
+        assert!(installer.start("install", ctx).is_ok(), "a próxima tentativa não fica presa em ocupado");
     }
 
     #[test]

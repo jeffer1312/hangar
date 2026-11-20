@@ -386,10 +386,17 @@ fn resolve_with(request: &SessionOpenRequest, caller: &OpenCaller, facts: &dyn O
         },
         (_, None) => config_dir.clone().map_or(Account::Default, |config_dir| Account::Claude { config_dir }),
     };
+    // Velocidade só onde existe: Normal num motor sem Fast não vira `--service-tier default` no corpo do provedor.
+    let service_tier = match provider {
+        AgentProvider::Codex => request.service_tier,
+        AgentProvider::Claude => request.service_tier
+            .filter(|tier| tier.is_fast() || facts.supports_fast(request.engine.as_deref(), request.model.as_deref())),
+        _ => None,
+    };
     let spec = SessionSpec {
         version: SPEC_VERSION, key: facts.new_key(), name, cwd, provider,
         surface: if headless { Surface::Headless } else { Surface::Terminal },
-        account, account_source: source, model, effort: request.effort.clone(), service_tier: request.service_tier,
+        account, account_source: source, model, effort: request.effort.clone(), service_tier,
         permission_mode, subagent_model: request.subagent_model.clone(), customizations: request.claude_customizations.clone(),
         jev: request.jev.unwrap_or_else(|| facts.defaults().jev),
         code_mode: request.code_mode && provider == AgentProvider::Claude, read_only: request.read_only,

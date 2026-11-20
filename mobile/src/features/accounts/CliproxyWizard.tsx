@@ -71,6 +71,7 @@ function installError(error: NonNullable<CliproxyJob['error']>): string {
     case 'cliproxy_porta_ocupada': return m.mobile_cliproxy_wizard_err_port();
     case 'cliproxy_porta_invalida': return m.mobile_cliproxy_wizard_err_bad_port();
     case 'cliproxy_nao_subiu': return m.mobile_cliproxy_wizard_err_not_started();
+    case 'cliproxy_tarefa_caiu': return m.mobile_cliproxy_wizard_err_task_crashed();
     case 'cliproxy_config_manual': case 'cliproxy_config_yaml_invalido': return m.mobile_cliproxy_wizard_err_config();
     case 'cliproxy_servico_falhou': return m.mobile_cliproxy_wizard_err_service({ detail: error.detail });
     default: return m.mobile_cliproxy_wizard_err_generic({ detail: error.detail || error.code });

@@ -942,7 +942,8 @@ fn fast_recognizes_cliproxy_client_keys_in_both_config_formats() {
     // Velocidade normal não depende do Fast: o motor sem Fast continua abrindo nela.
     let normal = SessionOpenRequest::parse(json!({"name": "s3", "cwd": home.join("work"), "provider": "claude", "headless": false,
         "engine": "gpt", "model": "gpt-6.1-sol", "service_tier": "default"}).to_string().as_bytes()).unwrap();
-    assert!(resolve::resolve_open(&normal, &OWNER, &facts).is_ok());
+    let spec = resolve::resolve_open(&normal, &OWNER, &facts).unwrap().spec;
+    assert_eq!(spec.service_tier, None, "Normal num motor sem Fast não vira `service_tier` no provedor");
 }
 
 /// Sessão que já existe e perdeu o suporte volta mais devagar em vez de não voltar: Ultra Fast em Fast, Fast na normal.
@@ -1675,6 +1676,11 @@ fn a_fixed_chatgpt_account_resolves_and_routes_the_engine() {
     let home_text = home.join(".codex-work").to_string_lossy().into_owned();
     assert_eq!(command[..12], ["hangar-engine", "--exec", "gpt", "--account", "work", "--account-home", &home_text,
         "--account-base-url", &format!("http://127.0.0.1:{port}"), "--model", "gpt-5.5", "--context"]);
+    // Normal é a falta do campo: o pane só leva `--service-tier` com Fast ou Ultra Fast.
+    let normal = SessionSpec { service_tier: Some(ServiceTier::Default), ..spec.clone() };
+    assert!(!claude::pane(&normal, "sid", &ctx).command.contains(&"--service-tier".to_owned()));
+    let fast = SessionSpec { service_tier: Some(ServiceTier::Priority), ..spec.clone() };
+    assert!(claude::pane(&fast, "sid", &ctx).command.windows(2).any(|w| w == ["--service-tier", "priority"]));
     assert_eq!(route.credential_id, format!("codex:{}", crate::accounts::catalog::resolved(&home.join(".codex-work")).to_string_lossy()));
     // A `conta` da linha do motor é este id: o evento `tags` tem de nomear a mesma conta.
     let accounts = crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::from_map(

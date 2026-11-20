@@ -17,6 +17,7 @@ serde-saphyr.workspace = true
 serde_json = { workspace = true, features = ["float_roundtrip", "alloc", "unbounded_depth", "arbitrary_precision", "raw_value"] }
 tar = { version = "=0.4.46", default-features = false }
 tokio = { workspace = true, features = ["rt", "macros", "process", "sync", "time"] }
+tracing = { workspace = true }
 zip = { version = "=8.6.0", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]

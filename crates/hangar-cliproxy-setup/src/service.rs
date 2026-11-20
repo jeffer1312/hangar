@@ -25,7 +25,8 @@ impl Error {
 }
 
 pub fn systemd_unit(s: &Service) -> String {
-    let quote = |p: &Path| format!("\"{}\"", p.display().to_string().replace('\\', "\\\\").replace('"', "\\\""));
+    // `%` é especificador do systemd (`%b`, `%h`): no caminho ele vale literal.
+    let quote = |p: &Path| format!("\"{}\"", p.display().to_string().replace('\\', "\\\\").replace('"', "\\\"").replace('%', "%%"));
     format!(
         "[Unit]\nDescription=CLIProxyAPI (instalado pelo Hangar)\nAfter=network.target\n\n\
          [Service]\nType=simple\nExecStart={} --config {}\nRestart=always\nRestartSec=10\n\n\
@@ -140,6 +141,8 @@ mod tests {
         let unit = systemd_unit(&service());
         assert!(unit.contains("ExecStart=\"/home/u/.hangar/cliproxy/bin/8.0.79/cli-proxy-api\" --config \"/home/u/.cli-proxy-api/config.yaml\"\n"), "{unit}");
         assert!(unit.contains("Restart=always\n") && unit.contains("WantedBy=default.target\n"));
+        let odd = Service { binary: "/home/a%b/cli-proxy-api".into(), config: "/home/a%b/config.yaml".into() };
+        assert!(systemd_unit(&odd).contains("ExecStart=\"/home/a%%b/cli-proxy-api\" --config \"/home/a%%b/config.yaml\"\n"), "o `%` do caminho não vira especificador");
     }
 
     #[test]

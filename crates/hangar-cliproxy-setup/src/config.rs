@@ -39,12 +39,13 @@ fn edit_turn() -> std::sync::MutexGuard<'static, ()> {
 }
 
 /// A pasta onde o proxy grava as contas: o `auth-dir` do config, com `~` na pasta pessoal; sem ele, `~/.cli-proxy-api`.
+/// Relativo, o proxy o resolve contra a pasta em que roda, que no serviço de usuário é a pessoal; nunca a do Hangar.
 pub fn accounts_dir(home: &Path, config: Option<&ProxyConfig>) -> PathBuf {
     match config.and_then(|c| c.auth_dir.as_deref()).map(str::trim).filter(|d| !d.is_empty()) {
         Some("~") => home.to_owned(),
         Some(dir) => match dir.strip_prefix("~/").or_else(|| dir.strip_prefix("~\\")) {
             Some(rest) => home.join(rest),
-            None => PathBuf::from(dir),
+            None => home.join(dir),
         },
         None => home.join(".cli-proxy-api"),
     }
@@ -335,7 +336,9 @@ const BACKUPS_KEPT: usize = 3;
 
 /// O backup carrega as mesmas chaves do config: fica só do dono, e só os mais novos ficam.
 fn backup(file: &Path, now_unix: u64) -> io::Result<PathBuf> {
-    let target = file.with_file_name(format!("{BACKUP_PREFIX}{now_unix}"));
+    // Duas edições no mesmo segundo: a segunda vai para o número seguinte, sem cobrir o original da primeira.
+    let name = |n: u64| file.with_file_name(format!("{BACKUP_PREFIX}{n}"));
+    let target = (now_unix..).map(name).find(|p| !p.exists()).expect("sempre há um número livre");
     fs::copy(file, &target)?;
     private(&target)?;
     let dir = file.parent().expect("config tem pasta");
@@ -522,6 +525,16 @@ mod tests {
         assert_eq!(left, ["config.yaml.hangar-bak-3", "config.yaml.hangar-bak-4", "config.yaml.hangar-bak-5"]);
     }
 
+    #[test]
+    fn two_edits_in_the_same_second_keep_the_first_backup() {
+        let dir = home(Some("api-keys:\n  - original\n"));
+        let first = ensure(dir.path(), 7, keep, false).unwrap().backup.unwrap();
+        fs::write(path(dir.path()), "api-keys:\n  - segundo\n").unwrap();
+        let second = ensure(dir.path(), 7, keep, false).unwrap().backup.unwrap();
+        assert_ne!(first, second);
+        assert_eq!(fs::read_to_string(first).unwrap(), "api-keys:\n  - original\n", "o original da pessoa continua guardado");
+    }
+
     const LEGACY: &str = "host: \"127.0.0.1\"\nport: 8317\nauth-dir: \"~/.cli-proxy-api\"\n# comentário do usuário\nremote-management:\n  allow-remote: false\n  secret-key: \"$2a$10$hash\"\napi-keys:\n  - \"k-legado\"\ndebug: true\n";
 
     #[test]
@@ -600,6 +613,7 @@ mod tests {
         assert_eq!(dir("port: 8317\n"), home.join(".cli-proxy-api"));
         assert_eq!(dir("auth-dir: \"~/contas\"\n"), home.join("contas"), "legado na raiz, com ~");
         assert_eq!(dir("config-version: 8\noauth:\n  auth-dir: '/srv/contas'\nauth-dir: \"~/velho\"\n"), PathBuf::from("/srv/contas"), "v8 vence o legado");
+        assert_eq!(dir("auth-dir: ./auths\n"), home.join("./auths"), "relativo: a pasta em que o proxy roda, não a do Hangar");
     }
 
     #[test]
@@ -716,7 +730,7 @@ mod tests {
         let (config, data) = parse(&fs::read_to_string(path(dir.path())).unwrap()).unwrap().unwrap();
         assert!(config.ultrafast_rule && data["requests"]["proxy-url"] == "");
 
-        // Proxy sem versão conhecida (ou anterior ao v8): nenhuma regra, e o config fica como estava.
+        // Proxy sem versão conhecida, ou que não filtra regras por cabeçalho: nenhuma regra, e o config fica como estava.
         let dir = home(Some(LEGACY));
         let ensured = ensure(dir.path(), 4, keep, false).unwrap();
         assert!(!ensured.changed);

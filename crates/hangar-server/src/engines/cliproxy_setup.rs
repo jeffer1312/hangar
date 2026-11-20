@@ -86,7 +86,7 @@ pub fn connected(st: &AppState) -> Value {
         .collect::<Vec<_>>())
 }
 
-/// Limite medido dos GPT 6 quando a máquina não tem catálogo do Codex.
+/// Janela dos GPT 6 quando a máquina não tem catálogo do Codex (a medida está em docs/decisoes).
 const GPT6_CONTEXT: u64 = 872_000;
 
 /// O proxy não informa o limite de contexto; o catálogo do Codex da máquina informa, por modelo. Sem o limite,

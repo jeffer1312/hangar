@@ -9,6 +9,10 @@ const TIMEOUT: Duration = Duration::from_secs(15);
 /// pedido de fundo (versão, nomear contas) não repete uma senha que já falhou.
 static REJECTED: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
+/// Teste que grava ou lê `REJECTED` segura esta vez: o registro guarda uma senha só e é do processo inteiro.
+#[cfg(test)]
+pub(crate) static REJECTED_TESTS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 pub fn rejected(key: &str) -> bool {
     REJECTED.lock().unwrap_or_else(|e| e.into_inner()).as_deref() == Some(key)
 }
@@ -36,7 +40,7 @@ pub enum Error {
     BadInput(&'static str),
     Rejected,
     Disabled,
-    /// Proxy anterior ao v8: as rotas de login que o Hangar usa (`/v8/management/oauth`) não existem nele.
+    /// Proxy antigo, sem as rotas de login que o Hangar usa (`/v8/management/oauth`).
     Outdated(String),
     /// A escuta da volta (1455 no ChatGPT, 54545 no Claude) já está em uso, em geral por outro login.
     PortBusy,
@@ -99,14 +103,19 @@ async fn call(m: &Management, request: reqwest::RequestBuilder) -> Result<Value,
             note_accepted(&m.key);
             Ok(body)
         }
-        401 | 403 => Err(Error::Rejected),
+        // Só o 401 é senha errada e conta para o bloqueio; o 403 é gerenciamento desligado ou IP já bloqueado.
+        401 => {
+            note_rejected(&m.key);
+            Err(Error::Rejected)
+        }
+        403 => Err(Error::Rejected),
         404 => Err(not_found(version)),
         500 if message.contains("callback server") => Err(Error::PortBusy),
         code => Err(Error::Proxy(code, message)),
     }
 }
 
-/// 404 tem duas causas: gerenciamento desligado, ou proxy anterior ao v8 sem a rota. A versão que ele anuncia separa.
+/// 404 tem duas causas: gerenciamento desligado, ou proxy antigo sem a rota. A versão que ele anuncia separa.
 fn not_found(version: Option<String>) -> Error {
     let major = version.as_deref().and_then(|v| semver::Version::parse(v.trim().trim_start_matches('v')).ok()).map(|v| v.major);
     match (major, version) {
@@ -191,6 +200,38 @@ mod tests {
         assert_eq!(not_found(Some("8.0.79".into())), Error::Disabled);
         assert_eq!(not_found(None), Error::Disabled, "sem versão não dá para afirmar que é antigo");
         assert_eq!(Error::Outdated("7.4.2".into()).code(), "erro_cliproxy_versao_antiga");
+    }
+
+    /// Responde um pedido com `status` e termina.
+    fn answer_once(status: &'static str) -> (String, std::thread::JoinHandle<()>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 4096];
+            let _ = stream.read(&mut buf);
+            let body = "{}";
+            write!(stream, "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}", body.len()).unwrap();
+        });
+        (base, server)
+    }
+
+    #[tokio::test]
+    async fn only_a_401_marks_the_key_as_refused() {
+        let _turn = REJECTED_TESTS.lock().await;
+        let (base, server) = answer_once("403 Forbidden");
+        let m = Management { base_url: base, key: "chave-403".into() };
+        assert_eq!(status(&m, "abc").await, Err(Error::Rejected));
+        server.join().unwrap();
+        assert!(!rejected("chave-403"), "403 é gerenciamento desligado ou IP bloqueado, não senha errada");
+        let (base, server) = answer_once("401 Unauthorized");
+        let m = Management { base_url: base, key: "chave-401".into() };
+        assert_eq!(status(&m, "abc").await, Err(Error::Rejected));
+        server.join().unwrap();
+        assert!(rejected("chave-401"), "o pedido de fundo não repete a senha recusada");
+        note_accepted("chave-401");
+        assert!(!rejected("chave-401"), "o registro volta limpo para o teste seguinte");
     }
 
     #[tokio::test]

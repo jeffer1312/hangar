@@ -24,6 +24,7 @@ export function failureText(error: { code: string; detail: string }, install: Cl
   const old = install?.version ?? '';
   if (error.code === 'cliproxy_nao_subiu') return m.mobile_cliproxy_update_failed_back({ new: neu, old });
   if (error.code === 'cliproxy_atualizacao_sem_volta') return m.mobile_cliproxy_update_failed_lost({ old });
+  if (error.code === 'cliproxy_tarefa_caiu') return m.mobile_cliproxy_wizard_err_task_crashed();
   return error.detail || error.code;
 }
 

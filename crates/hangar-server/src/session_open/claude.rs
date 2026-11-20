@@ -172,7 +172,10 @@ pub fn pane(spec: &SessionSpec, sid: &str, ctx: &ClaudeContext) -> PaneSpec {
             command.extend(["--model".into(), model.clone()]);
             if let Some(window) = context_window { command.extend(["--context".into(), window.to_string()]); }
         }
-        if let Some(tier) = spec.service_tier { command.extend(["--service-tier".into(), tier.name().into()]); }
+        // Normal é a falta do campo: só Fast e Ultra Fast (já conferidos na abertura) vão ao provedor.
+        if let Some(tier) = spec.service_tier.filter(|tier| tier.is_fast()) {
+            command.extend(["--service-tier".into(), tier.name().into()]);
+        }
         command.push("--".into());
     }
     command.extend(claude);
