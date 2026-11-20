@@ -162,10 +162,16 @@ impl Hangar {
     /// espera é o desenho do seletor.
     pub(super) fn picker_poll(&mut self, cx: &mut Context<Self>) {
         let Some(key) = self.selected_key() else { return };
-        // Catálogo já pedido nesta sessão: o desenho não refaz contas nem origem.
-        if self.controls.handoff.as_ref().is_some_and(|h| h.key == key) { return; }
+        // A abertura relê as contas: até a leitura chegar, a lista antiga pode trazer uma conta que ficou cheia.
+        if self.session_accounts().loading { return; }
+        let accounts = self.handoff_accounts();
+        if let Some(chosen) = self.controls.handoff.as_ref().filter(|h| h.key == key) {
+            // Catálogo já pedido nesta sessão vale enquanto a conta dele seguir apta; a que saiu da lista leva o catálogo junto.
+            if accounts.as_ref().is_none_or(|list| list.iter().any(|a| a.credential == chosen.account.credential)) { return; }
+            self.controls.handoff = None;
+        }
         if self.handoff_source_now().is_none() { return; }
-        let Some(account) = self.handoff_accounts().and_then(|list| list.into_iter().next()) else { return };
+        let Some(account) = accounts.and_then(|list| list.into_iter().next()) else { return };
         let Some(api) = self.session_api() else { return };
         static READS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let read = READS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
@@ -422,6 +428,8 @@ impl Hangar {
         // (rótulo, ligado, ação): a ação aplica o esforço no agente da sessão ou pede a troca com ele.
         let mut levels: Vec<(String, bool, Pick, Vec<&'static str>, Value)> = Vec::new();
         let mut header = String::new();
+        // Nível de outro modelo troca o modelo junto (Claude e Codex): a resposta precisa refazer o catálogo de modelos.
+        let ctl = if focus.is_some_and(|f| !f.current) { Ctl::Model } else { Ctl::Effort };
         if let Some(focus) = focus {
             header = focus.label.clone();
             match &focus.pick {
@@ -471,11 +479,7 @@ impl Hangar {
                             this.request_handoff(credential, model, effort, cx);
                         }
                         _ if on => {}
-                        // Nível de outro modelo do Claude troca o modelo junto: a resposta precisa refazer o catálogo.
-                        _ => {
-                            let ctl = if path.first() == Some(&"model-effort") && body.get("model").is_some() { Ctl::Model } else { Ctl::Effort };
-                            this.apply_ctl(ctl, path.clone(), body.clone(), label.clone(), cx);
-                        }
+                        _ => { this.apply_ctl(ctl, path.clone(), body.clone(), label.clone(), cx); }
                     }
                 }))
                 .into_any_element()
@@ -557,13 +561,16 @@ impl Hangar {
             .map(|label| div().px(px(8.)).pb(px(4.)).text_xs().text_color(theme::muted()).whitespace_normal()
                 .child(tr("picker_handoff_hint").replace("{account}", &label)));
         let reasoning = (matches!(catalog, Some(Ok(_))) || handoff_tab).then(|| self.picker_reasoning(own, &rows, busy, cx));
+        // Carga ou erro do catálogo do agente: acima das linhas que chegaram, nunca no lugar delas; a lista à vista é a
+        // mesma que o teclado e o clique percorrem.
+        let own_state = (!handoff_tab && !matches!(catalog, Some(Ok(_)))).then(|| self.ctl_load_state(Ctl::Model, catalog, cx)).flatten();
         let list = match catalog {
             _ if handoff_tab && !matches!(handoff_state, Some((Some(Ok(_)), _))) => match handoff_state {
                 Some((Some(Err(reason)), _)) => div().p(px(8.)).text_size(px(12.)).text_color(theme::danger())
                     .child(tr("ctl_failed").replace("{reason}", reason)).into_any_element(),
                 _ => popup::skeleton("picker-handoff-loading", 4).into_any_element(),
             },
-            None | Some(Err(_)) if !handoff_tab => self.ctl_load_state(Ctl::Model, catalog, cx).unwrap_or_else(|| div().into_any_element()),
+            _ if rows.is_empty() && own_state.is_some() => div().into_any_element(),
             _ if rows.is_empty() => div().px(px(8.)).py(px(24.)).text_size(px(12.)).text_color(theme::muted()).text_center()
                 .child(tr(if searching { "ctl_no_results" } else if tab == FAVORITES { "picker_no_favorites" } else { "ctl_empty" })).into_any_element(),
             _ => div().id("ctl-list").flex_1().max_h(px(320.)).overflow_y_scroll().track_scroll(&self.controls.scroll).flex().flex_col()
@@ -576,7 +583,7 @@ impl Hangar {
             .capture_action(cx.listener(|this, _: &MoveDown, _, cx| this.move_ctl(1, false, cx)))
             .child(Input::new(&self.ctl_search).appearance(false).h(px(40.)).text_size(px(16.)).aria_label(tr("picker_search"))
                 .prefix(chrome::small_icon(IconName::Search, 16., theme::faint())));
-        let center = div().flex_1().min_w_0().flex().flex_col().gap(px(2.)).px(px(4.)).child(search).children(hint).child(list);
+        let center = div().flex_1().min_w_0().flex().flex_col().gap(px(2.)).px(px(4.)).child(search).children(hint).children(own_state).child(list);
         let (speed, context) = match catalog {
             Some(Ok(catalog)) => (self.picker_speed(catalog, busy, cx), self.render_context_footer(catalog, busy, cx)),
             _ => (None, None),
