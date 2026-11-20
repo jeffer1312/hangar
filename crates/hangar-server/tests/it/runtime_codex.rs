@@ -2576,6 +2576,7 @@ fn a_sandbox_switch_lost_with_the_connection_is_reapplied_from_the_recorded_mode
     let resume = find_method(&frames(&init),"thread/resume");
     line(&mut engine,json!({"id":resume["id"],"result":{"thread":{"id":"thread-1","path":"/r.jsonl","status":{"type":"idle"},"turns":[]}}}),20.0);
     assert_eq!(engine.control_view()["deliverable"],false,"nenhum turno antes de reaplicar");
+    assert!(engine.next_deadline().is_some_and(|due|due <= 20.0),"sessão parada agenda o Tick da reaplicação");
     let tick = engine.apply(EngineInput::Tick,clock(21.0)).unwrap();
     let resync = frames(&tick).into_iter().find(|f|f["method"] == "thread/settings/update").expect("reaplica o modo gravado");
     assert_eq!(resync["params"],json!({"threadId":"thread-1","approvalPolicy":"never","sandboxPolicy":{"type":"dangerFullAccess"}}));

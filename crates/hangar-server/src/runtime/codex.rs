@@ -2754,7 +2754,12 @@ impl Engine {
     pub fn next_deadline(&self) -> Option<f64> {
         self.preview.deadline().into_iter().chain(self.thinking.deadline()).chain(self.rpc.values().filter(|rpc|!rpc.timed_out).map(|rpc|rpc.deadline))
             .chain(self.service_tier_pending.as_ref().map(|pending|pending.deadline)).chain(self.subscribe_due).chain(self.unsubscribed_turn_due())
-            .chain(self.turn_probe_due()).chain(self.output_due).min_by(f64::total_cmp)
+            .chain(self.turn_probe_due()).chain(self.output_due).chain(self.permission_resync_due()).min_by(f64::total_cmp)
+    }
+
+    /// Reaplicação pendente e enviável vence já: sessão parada não teria outro `Tick` para fazê-la.
+    fn permission_resync_due(&self) -> Option<f64> {
+        (self.permission_resync && self.headless && self.sendable() && !self.in_progress).then_some(self.clock.monotonic_s)
     }
 
     /// Conferência do turno calado: só com a assinatura (ou o cano) entregando eventos e nenhuma em voo.
