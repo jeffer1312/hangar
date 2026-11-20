@@ -312,7 +312,7 @@ impl Hangar {
         let surface = chrome::popover(content?, narrow && !card && !picker && anchor != "machines-tray-toggle");
         // O de contas é mais largo que os outros: o email inteiro e o reset semanal cabem na linha.
         let surface = if card { div().w(px(480.)).child(surface).into_any_element() }
-            else if picker { div().w(px(640.)).max_w(window.viewport_size().width - px(16.)).child(surface).into_any_element() }
+            else if picker { div().w(px(720.)).max_w(window.viewport_size().width - px(16.)).child(surface).into_any_element() }
             else if narrow { surface } else { div().w(trigger.size.width).child(surface).into_any_element() };
         let dismiss = cx.listener(|this, _: &MouseDownEvent, _, cx| {
             this.close_popups();

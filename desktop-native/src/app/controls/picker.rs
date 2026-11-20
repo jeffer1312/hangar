@@ -10,8 +10,8 @@ pub(super) const FAVORITES: &str = "favorites";
 /// Linhas da aba antes do "Mostrar mais".
 const SHORT: usize = 6;
 /// Largura do trilho e da coluna de raciocínio.
-const RAIL: f32 = 44.;
-const REASONING: f32 = 196.;
+const RAIL: f32 = 50.;
+const REASONING: f32 = 240.;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(in crate::app) enum Pick { Apply, Handoff { credential: String, model: String, effort: Option<String> }, More }
@@ -47,12 +47,13 @@ struct PickerView { own: Vec<Choice>, handoff: Vec<Choice>, tab: String, has_fav
 /// Linha de modelo: agente, nome, visto da atual, estrela e atalho. A tela e a animação da novidade usam a mesma.
 pub(crate) fn row_view(id: SharedString, provider: &str, name: AnyElement, current: bool, lit: bool, star: Option<AnyElement>, jump: Option<usize>) -> Button {
     let more = provider.is_empty();
-    popup::row(id, current)
+    // Como no T3: o visto colado no nome, estrela e atalho na ponta.
+    popup::row(id, current).py(px(8.))
         .when(lit && !current, |el| el.bg(theme::text().opacity(0.06)))
-        .child(div().w_full().flex().items_center().gap_2()
-            .when(!more, |el| el.child(chrome::provider_glyph(provider, 16.)))
-            .child(div().flex_1().min_w_0().child(name))
-            .when(current, |el| el.child(chrome::small_icon(IconName::Check, 15., theme::accent())))
+        .child(div().w_full().flex().items_center().gap(px(10.))
+            .when(!more, |el| el.child(chrome::provider_glyph(provider, 18.)))
+            .child(div().flex_1().min_w_0().flex().items_center().gap(px(6.)).child(div().min_w_0().child(name))
+                .when(current, |el| el.child(chrome::small_icon(IconName::Check, 15., theme::muted()))))
             .children(star)
             .children(jump.map(|n| chrome::kbd(jump_label(n)))))
 }
@@ -63,32 +64,33 @@ pub(crate) fn star_icon(favorite: bool) -> Icon { chrome::small_icon(IconName::S
 /// Aba do trilho com a barra de destaque quando está à vista.
 pub(crate) fn rail_tab(button: Button, selected: bool) -> Div {
     div().relative().child(button)
-        .when(selected, |el| el.child(div().absolute().left(px(-5.)).top(px(9.)).w(px(3.)).h(px(16.)).rounded(px(2.)).bg(theme::accent())))
+        .when(selected, |el| el.child(div().absolute().left(px(-5.)).top(px(10.)).w(px(3.)).h(px(18.)).rounded(px(2.)).bg(theme::accent())))
 }
 
 pub(crate) fn rail_button(id: &str, selected: bool, label: String, child: AnyElement) -> Button {
-    Button::new(SharedString::from(format!("picker-tab-{id}"))).ghost().w(px(34.)).h(px(34.)).rounded(px(8.)).selected(selected)
+    Button::new(SharedString::from(format!("picker-tab-{id}"))).ghost().w(px(38.)).h(px(38.)).rounded(px(9.)).selected(selected)
         .tooltip(label.clone()).accessibility_label(label).child(child)
 }
 
 pub(crate) fn rail_view(tabs: Vec<AnyElement>) -> Div {
-    div().w(px(RAIL)).flex_none().flex().flex_col().items_center().gap(px(4.)).py(px(4.)).border_r_1().border_color(theme::border()).children(tabs)
+    div().w(px(RAIL)).flex_none().flex().flex_col().items_center().gap(px(6.)).py(px(6.)).border_r_1().border_color(theme::border()).children(tabs)
 }
 
 /// Nível de raciocínio na coluna ao lado da lista.
 pub(crate) fn effort_row(label: &str, on: bool) -> Button {
-    popup::row(SharedString::from(format!("picker-effort-{label}")), on)
+    popup::row(SharedString::from(format!("picker-effort-{label}")), on).py(px(8.))
         .child(div().w_full().flex().items_center().gap_2()
-            .child(div().flex_1().min_w_0().truncate().text_sm().child(effort_label(label)))
+            .child(div().flex_1().min_w_0().truncate().text_size(px(15.)).child(effort_label(label)))
             .when(on, |el| el.child(chrome::small_icon(IconName::Check, 15., theme::accent()))))
 }
 
 pub(crate) fn reasoning_view(header: String, rows: Vec<AnyElement>) -> Div {
     let empty = rows.is_empty();
     div().w(px(REASONING)).flex_none().flex().flex_col().gap(px(2.)).pl(px(6.)).border_l_1().border_color(theme::border())
-        .child(div().px(px(8.)).pt(px(6.)).pb(px(4.)).flex().items_center().gap_2()
-            .child(div().flex_none().text_size(px(10.)).font_weight(FontWeight::MEDIUM).text_color(theme::faint()).child(tr("new_chat_reasoning").to_uppercase()))
-            .child(div().flex_1().min_w_0().truncate().text_xs().text_color(theme::faint()).text_right().child(header)))
+        // Cabeçalho do T3: "Raciocínio" à esquerda, o modelo em foco à direita, com a linha embaixo.
+        .child(div().mx(px(4.)).px(px(4.)).pt(px(8.)).pb(px(8.)).mb(px(4.)).flex().items_center().gap_2().border_b_1().border_color(theme::border())
+            .child(div().flex_none().text_size(px(15.)).text_color(theme::muted()).child(tr("new_chat_reasoning")))
+            .child(div().flex_1().min_w_0().truncate().text_size(px(13.)).text_color(theme::faint()).text_right().child(header)))
         .when(empty, |el| el.child(div().px(px(8.)).py(px(6.)).text_xs().text_color(theme::muted()).child(tr("picker_no_reasoning"))))
         .children(rows)
 }
@@ -346,7 +348,7 @@ impl Hangar {
         // Só o nome na linha, como no T3; a descrição fica na dica do nome e na busca. A dica mora no nome: a linha já
         // ouve o hover para o destaque, e o GPUI não aceita dois no mesmo elemento.
         let detail = c.detail.clone();
-        let name = div().id(SharedString::from(format!("picker-name-{}", c.key))).min_w_0().truncate().text_sm().font_weight(FontWeight::MEDIUM)
+        let name = div().id(SharedString::from(format!("picker-name-{}", c.key))).min_w_0().truncate().text_size(px(15.5)).font_weight(FontWeight::MEDIUM)
             .text_color(if more { theme::muted() } else { theme::text() }).child(c.label)
             .when(!detail.is_empty(), |el| el.tooltip(move |window, cx| gpui_kit::component::tooltip::Tooltip::new(detail.clone()).build(window, cx)));
         let provider = if more { String::new() } else { c.provider.clone() };
@@ -452,6 +454,29 @@ impl Hangar {
         reasoning_view(header, list)
     }
 
+    /// O acesso da sessão no canto do rodapé, como o "Full access" do T3: a permissão do Codex ou o modo do Claude.
+    /// Abre o painel dele no lugar do seletor.
+    fn picker_access(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let list = self.ctl_list();
+        let ctl = [Ctl::Permission, Ctl::Mode].into_iter().find(|c| list.contains(c))?;
+        let value = self.ctl_label(ctl)?;
+        let shown = match (self.provider().0, ctl) {
+            ("claude", Ctl::Mode) => tr(&format!("mode_{value}")),
+            ("codex", Ctl::Mode) => tr(&format!("codex_mode_{value}")),
+            _ => value,
+        };
+        Some(Button::new("picker-access").ghost().small().disabled(!self.chat_online)
+            .accessibility_label(format!("{}: {shown}", tr(&format!("ctl_{}", ctl.key()))))
+            .child(div().flex().items_center().gap(px(6.)).text_size(px(13.5)).text_color(theme::muted())
+                .child(chrome::small_icon(IconName::KeyRound, 14., theme::faint())).child(shown)
+                .child(chrome::small_icon(IconName::ChevronUp, 13., theme::faint())))
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.open_ctl(ctl, false, cx);
+                this.focus_ctl_panel(window, cx);
+            }))
+            .into_any_element())
+    }
+
     /// Velocidade como no T3: "Padrão" e "Rápido" lado a lado, quando o modelo atual tem o nível rápido.
     fn picker_speed(&self, catalog: &Value, busy: bool, cx: &mut Context<Self>) -> Option<AnyElement> {
         let (on, available) = match self.provider().0 {
@@ -466,7 +491,7 @@ impl Hangar {
         };
         if !available { return None; }
         let option = |id: &'static str, label: String, selected: bool, tier: &'static str, cx: &mut Context<Self>| {
-            Button::new(id).ghost().xsmall().selected(selected).label(label).disabled(busy || !self.chat_online)
+            Button::new(id).ghost().small().selected(selected).label(label).disabled(busy || !self.chat_online)
                 .when(tier == "priority", |b| b.icon(IconName::Zap))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     if selected { return; }
@@ -513,26 +538,30 @@ impl Hangar {
                 .children(rows.into_iter().enumerate().map(|(n, c)| self.picker_row(n, c, n == pick, busy, cx)))
                 .into_any_element(),
         };
-        let search = div().px(px(4.)).pb(px(4.))
+        // Busca do T3: sem caixa, sublinhada na cor de destaque.
+        let search = div().mx(px(4.)).mb(px(6.)).border_b_2().border_color(theme::accent())
             .capture_action(cx.listener(|this, _: &MoveUp, _, cx| this.move_ctl(-1, false, cx)))
             .capture_action(cx.listener(|this, _: &MoveDown, _, cx| this.move_ctl(1, false, cx)))
-            .child(Input::new(&self.ctl_search).h(px(32.)).aria_label(tr("picker_search"))
-                .prefix(chrome::small_icon(IconName::Search, 14., theme::faint())));
+            .child(Input::new(&self.ctl_search).appearance(false).h(px(40.)).text_size(px(16.)).aria_label(tr("picker_search"))
+                .prefix(chrome::small_icon(IconName::Search, 16., theme::faint())));
         let center = div().flex_1().min_w_0().flex().flex_col().gap(px(2.)).px(px(4.)).child(search).children(hint).child(list);
         let (speed, context) = match catalog {
             Some(Ok(catalog)) => (self.picker_speed(catalog, busy, cx), self.render_context_footer(catalog, busy, cx)),
             _ => (None, None),
         };
-        let refresh = (self.provider().0 == "claude" && !handoff_tab).then(|| Button::new("ctl-model-refresh").ghost().xsmall().label(tr("voice_models_refresh")).disabled(busy)
+        let refresh = (self.provider().0 == "claude" && !handoff_tab).then(|| Button::new("ctl-model-refresh").ghost().xsmall()
+            .icon(IconName::RefreshCw).tooltip(tr("voice_models_refresh")).accessibility_label(tr("voice_models_refresh")).disabled(busy)
             .on_click(cx.listener(|this, _, window, cx| {
                 this.open_ctl(Ctl::Model, true, cx);
                 this.focus_ctl_panel(window, cx);
             })));
-        let footer = (speed.is_some() || refresh.is_some()).then(|| div().mt(px(4.)).pt(px(6.)).px(px(4.)).flex().items_center().gap_2()
+        let access = self.picker_access(cx);
+        // Rodapé do T3: velocidade à esquerda, o acesso (permissão) à direita.
+        let footer = (speed.is_some() || refresh.is_some() || access.is_some()).then(|| div().mt(px(4.)).pt(px(8.)).px(px(4.)).flex().items_center().gap_2()
             .border_t_1().border_color(theme::border())
-            .children(speed).child(div().flex_1()).children(refresh));
+            .children(speed).children(refresh).child(div().flex_1()).children(access));
         div().flex().flex_col()
-            .child(div().flex().min_h(px(260.))
+            .child(div().flex().min_h(px(300.))
                 .children(rail)
                 .child(center)
                 .children(reasoning))
