@@ -791,6 +791,13 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   contas; desligado à mão (tela ou fora do Hangar) fica desligado. A entrada do MCP tem um escritor
   só, no crate. Evidência em
   [plataforma.md](docs/decisoes/plataforma.md#computer-use-e-transferência-de-atalhos-são-do-rust-13112026).
+- **CLIProxyAPI é instalado e configurado pelo Hangar (`hangar-cliproxy-setup`), sem a pessoa
+  digitar chave.** Serviço próprio (`hangar-cliproxy`); proxy que já existe é `external` e só tem o
+  config completado, com cópia, nunca reinstalado. Atualiza só pelo botão, confirmando com sessão
+  viva no proxy. Conta logada só no proxy entra no seletor como `cliproxy:cpa-…`, fixa por sessão.
+  O motor do assistente grava `fast`; ausente vale disponível, e a sessão nasce sem Fast. Ultra Fast
+  só com conta fixa Pro/Pro Max e a regra do cabeçalho `X-Hangar-Speed` no config (proxy v8+). Evidência em
+  [plataforma.md](docs/decisoes/plataforma.md#cliproxyapi-instalado-e-configurado-pelo-hangar-19112026).
 - **Nada nasce no Python: o objetivo é tirá-lo do projeto.** Rota, ponte, poller, integração e
   qualquer recurso novo vão para o Rust (`crates/`). Sem pedido explícito do usuário, no
   `backend/app/` só se apaga código. Toda linha que ACRESCENTA no Python — lógica, releitura,

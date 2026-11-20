@@ -45,6 +45,17 @@ async fn engine_crud_preserves_secrets_and_refuses_corruption() {
     assert_eq!(response.status(), 200);
     let body: Value = response.json().await.unwrap();
     assert_ne!(body["motores"]["motor"]["api_key"], "fixture-secret");
+    let response=client.put(&url).bearer_auth("fixture-owner").json(&json!({"base_url":"https://other.invalid/v1/","api_key":"other-secret","model":"x","create_only":true})).send().await.unwrap();
+    assert_eq!(response.status(), 409, "criação exclusiva não sobrescreve o motor que já existe");
+    let body: Value = response.json().await.unwrap();
+    assert_eq!(body["detail"]["code"], "erro_motor_ja_existe");
+    let stored: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!((stored["motor"]["api_key"].as_str(), stored["motor"]["model"].as_str()), (Some("fixture-secret"), Some("m")));
+    let created = client.put(format!("http://{address}/api/engines/novo")).bearer_auth("fixture-owner")
+        .json(&json!({"base_url":"https://provider.invalid/v1/","api_key":"k","model":"m","create_only":true})).send().await.unwrap();
+    assert_eq!(created.status(), 200);
+    let stored: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert!(stored["novo"].get("create_only").is_none(), "a marca não vai para o engines.json");
     let response = client
         .put(&url)
         .bearer_auth("fixture-owner")

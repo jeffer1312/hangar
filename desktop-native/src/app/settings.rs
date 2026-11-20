@@ -1183,33 +1183,64 @@ pub(super) fn segments_with_hints(id: &'static str, labels: &[String], hints: &[
 
 /// `enabled`: quais opções valem, uma a uma, quando a desligada não é a do fim (o Jev entre Direto e Na conversa).
 #[allow(clippy::too_many_arguments)]
-pub(super) fn segments_where(id: &'static str, labels: &[String], hints: &[String], selected: usize, enabled: &[bool], locked: bool,
-    off_note: String, pick: impl Fn(&mut Hangar, usize, &mut Window, &mut Context<Hangar>) + Clone + 'static, cx: &mut Context<Hangar>)
+pub(super) fn segments_where<T: 'static>(id: &'static str, labels: &[String], hints: &[String], selected: usize, enabled: &[bool], locked: bool,
+    off_note: String, pick: impl Fn(&mut T, usize, &mut Window, &mut Context<T>) + Clone + 'static, cx: &mut Context<T>)
+    -> AnyElement {
+    segments_with(id, labels, hints, selected, enabled, locked, off_note, pick, false, cx)
+}
+
+/// O mesmo seletor na largura do pai, com as opções do mesmo tamanho.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn segments_fill<T: 'static>(id: &'static str, labels: &[String], hints: &[String], selected: usize, enabled: &[bool], locked: bool,
+    off_note: String, pick: impl Fn(&mut T, usize, &mut Window, &mut Context<T>) + Clone + 'static, cx: &mut Context<T>)
+    -> AnyElement {
+    segments_with(id, labels, hints, selected, enabled, locked, off_note, pick, true, cx)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn segments_with<T: 'static>(id: &'static str, labels: &[String], hints: &[String], selected: usize, enabled: &[bool], locked: bool,
+    off_note: String, pick: impl Fn(&mut T, usize, &mut Window, &mut Context<T>) + Clone + 'static, fill: bool, cx: &mut Context<T>)
     -> AnyElement {
     let count = labels.len();
     let any = enabled.iter().any(|on| *on);
-    div().flex().rounded(px(6.)).border_1().border_color(theme::border_strong()).overflow_hidden()
-        .when(locked, |el| el.opacity(0.6))
+    segments_row(fill).when(locked, |el| el.opacity(0.6))
         .children(labels.iter().enumerate().map(|(n, label)| {
             // Opção que ainda não chegou não mostra escolha nenhuma: o padrão do web pareceria o estado do app.
             let on = n == selected && (any || locked);
             let enabled = !locked && enabled.get(n).copied().unwrap_or(false);
             let pick = pick.clone();
-            Button::new(SharedString::from(format!("{id}-{n}")))
-                .custom(ButtonCustomVariant::new(cx).color(if on { theme::accent_dim() } else { transparent_black() })
-                    .foreground(if on { theme::accent_text() } else { theme::muted() }).hover(theme::hover()).active(theme::hover()))
-                // `small` dá ao rótulo o tamanho dos outros controles; o kit ignora `text_size` no rótulo.
-                .small().h(px(28.)).px(px(11.)).rounded(px(0.))
-                // Cor e fundo no próprio botão: vencem o estilo de desligado do kit, que apagava o texto a 50%.
-                .text_color(if on { theme::accent_text() } else if enabled { theme::muted() } else { theme::faint() })
-                .when(on, |el| el.bg(theme::accent_dim()))
-                .when(n + 1 < count, |el| el.border_r_1().border_color(theme::border_strong()))
-                .disabled(!enabled).label(label.clone())
+            segment_button(id, n, count, label, on, enabled, fill, cx)
                 .when(!enabled && any && !locked, |el| el.tooltip(off_note.clone()))
                 .when_some(hints.get(n).filter(|_| enabled), |el, hint| el.tooltip(hint.clone()).accessibility_label(hint.clone()))
                 .on_click(cx.listener(move |this, _, window, cx| if enabled && !on { pick(this, n, window, cx) }))
         }))
         .into_any_element()
+}
+
+/// O seletor só para mostrar (as novidades): mesmas peças, sem clique.
+pub(crate) fn segments_preview(id: &'static str, labels: &[String], selected: usize, cx: &App) -> AnyElement {
+    let count = labels.len();
+    segments_row(true)
+        .children(labels.iter().enumerate().map(|(n, label)| segment_button(id, n, count, label, n == selected, true, true, cx).tab_stop(false)))
+        .into_any_element()
+}
+
+fn segments_row(fill: bool) -> Div {
+    div().flex().rounded(px(6.)).border_1().border_color(theme::border_strong()).overflow_hidden().when(fill, |el| el.w_full())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn segment_button(id: &str, n: usize, count: usize, label: &str, on: bool, enabled: bool, fill: bool, cx: &App) -> Button {
+    Button::new(SharedString::from(format!("{id}-{n}")))
+        .custom(ButtonCustomVariant::new(cx).color(if on { theme::accent_dim() } else { transparent_black() })
+            .foreground(if on { theme::accent_text() } else { theme::muted() }).hover(theme::hover()).active(theme::hover()))
+        // `small` dá ao rótulo o tamanho dos outros controles; o kit ignora `text_size` no rótulo.
+        .small().h(px(28.)).px(px(11.)).rounded(px(0.)).when(fill, |el| el.flex_1())
+        // Cor e fundo no próprio botão: vencem o estilo de desligado do kit, que apagava o texto a 50%.
+        .text_color(if on { theme::accent_text() } else if enabled { theme::muted() } else { theme::faint() })
+        .when(on, |el| el.bg(theme::accent_dim()))
+        .when(n + 1 < count, |el| el.border_r_1().border_color(theme::border_strong()))
+        .disabled(!enabled).label(label.to_owned())
 }
 
 #[cfg(test)]

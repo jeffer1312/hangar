@@ -1,9 +1,9 @@
 import type { ReactNode } from 'react';
-import { Text, View, type LayoutChangeEvent } from 'react-native';
+import { ActivityIndicator, Text, View, type LayoutChangeEvent } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Icon, type IconName } from '../../ui/Icon';
 import { superficie } from '../../theme/superficie';
-import { useSettingsColors } from './colors';
+import { useSettingsColors, withAlpha } from './colors';
 
 /**
  * Cartão de seção das Configurações (section_head + settings_box do Rust): quadradinho de destaque
@@ -16,6 +16,8 @@ export function SectionCard({
   extra,
   children,
   onLayout,
+  tone,
+  busy = false,
 }: {
   icon?: IconName;
   title?: string;
@@ -24,9 +26,14 @@ export function SectionCard({
   extra?: ReactNode;
   children?: ReactNode;
   onLayout?: (e: LayoutChangeEvent) => void;
+  /** `danger`: o quadradinho do ícone na cor de erro, para o cartão que conta uma falha. */
+  tone?: 'danger';
+  /** Girando no lugar do ícone: algo em andamento. */
+  busy?: boolean;
 }) {
   const { theme } = useUnistyles();
   const c = useSettingsColors();
+  const danger = tone === 'danger';
   return (
     <View
       onLayout={onLayout}
@@ -34,8 +41,9 @@ export function SectionCard({
     >
       {icon && title ? (
         <View style={styles.head}>
-          <View style={[styles.square, { backgroundColor: c.accentDim }]}>
-            <Icon name={icon} size={17} color={c.accentText} />
+          <View style={[styles.square, { backgroundColor: danger ? withAlpha(theme.tokens.status.error, 0.14) : c.accentDim }]}>
+            {busy ? <ActivityIndicator size="small" color={c.accent} />
+              : <Icon name={icon} size={17} color={danger ? theme.tokens.status.error : c.accentText} />}
           </View>
           <View style={styles.texts}>
             <Text style={[styles.title, { color: c.text }]} accessibilityRole="header">{title}</Text>

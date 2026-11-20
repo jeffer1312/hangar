@@ -33,11 +33,12 @@ pub fn derive(accounts: &AccountService, name: &str, selection: Selection<'_>) -
     let mut env = BTreeMap::new();
     let mut window = if selection.model.is_some_and(|s|!s.is_empty()) { selection.context.clone() } else { record.get("context_window").cloned() };
     if let Some(account) = selection.account {
-        let (Some(home),Some(expected)) = (selection.account_home.filter(|s|!s.is_empty()),selection.account_base.filter(|s|!s.is_empty())) else { return Err("CLIProxyAPI: conta fixa exige raiz Codex e endereço local validados".into()) };
+        let home = selection.account_home.filter(|s|!s.is_empty());
+        let (Some(expected),true) = (selection.account_base.filter(|s|!s.is_empty()),home.is_some() || proxy::is_proxy_only(account)) else { return Err("CLIProxyAPI: conta fixa exige raiz Codex e endereço local validados".into()) };
         let expected = store::base_url(expected)?;
         if !reqwest::Url::parse(&expected).ok().and_then(|u|u.host_str().map(store::local_host)).unwrap_or(false) { return Err("CLIProxyAPI: conta fixa exige um endereço local".into()); }
         if store::base_url(base)? != expected { return Err("CLIProxyAPI: endereço do motor mudou; conta fixa não pode usar outro provedor".into()); }
-        let account = proxy::resolve(accounts,account,Some(home))?;
+        let account = proxy::resolve(accounts,account,home)?;
         let prefix = account["prefix"].as_str().unwrap();
         model = proxy::prefix_model(&model,prefix)?; subagent = proxy::prefix_model(&subagent,prefix)?;
         if window.as_ref().is_none_or(Value::is_null) && model == proxy::prefix_model(record["model"].as_str().unwrap_or(""),prefix)? { window = record.get("context_window").cloned(); }
@@ -69,11 +70,37 @@ pub fn derive(accounts: &AccountService, name: &str, selection: Selection<'_>) -
     Ok(env)
 }
 
-pub fn service_tier(tier: &str, extra: Option<&str>) -> Result<BTreeMap<String,String>,String> {
-    if !matches!(tier,"default"|"priority") { return Err("service_tier: use default ou priority".into()); }
+pub fn service_tier(tier: &str, extra: Option<&str>, headers: Option<&str>) -> Result<BTreeMap<String,String>,String> {
+    use hangar_cliproxy_setup::config::{SPEED_HEADER, ULTRAFAST};
+    if !crate::session_open::ServiceTier::NAMES.contains(&tier) { return Err("service_tier: use default, priority ou ultrafast".into()); }
     let value: Value = serde_json::from_str(extra.unwrap_or("{}")).map_err(|_|"CLAUDE_CODE_EXTRA_BODY: JSON inválido")?;
     let mut body = value.as_object().ok_or("CLAUDE_CODE_EXTRA_BODY: esperado um objeto JSON")?.clone();
-    body.insert("service_tier".into(),json!(tier));
+    // O tradutor Claude → Codex do proxy só repassa `priority`; o Ultra Fast vem do cabeçalho, que a regra do
+    // config do proxy troca por `ultrafast`.
+    body.insert("service_tier".into(),json!(if tier == ULTRAFAST { "priority" } else { tier }));
     if tier == "default" && body.get("speed") == Some(&json!("fast")) { body.remove("speed"); }
-    Ok(BTreeMap::from([("CP_ENGINE_SERVICE_TIER".into(),tier.into()),("CLAUDE_CODE_EXTRA_BODY".into(),Value::Object(body).to_string())]))
+    let mut env = BTreeMap::from([("CP_ENGINE_SERVICE_TIER".into(),tier.into()),("CLAUDE_CODE_EXTRA_BODY".into(),Value::Object(body).to_string())]);
+    let ours = |line: &str| line.split_once(':').is_some_and(|(name, _)| name.trim().eq_ignore_ascii_case(SPEED_HEADER));
+    let mut lines: Vec<String> = headers.unwrap_or("").lines().filter(|l| !l.trim().is_empty() && !ours(l)).map(str::to_owned).collect();
+    if tier == ULTRAFAST { lines.push(format!("{SPEED_HEADER}: {ULTRAFAST}")); }
+    if headers.is_some() || tier == ULTRAFAST { env.insert("ANTHROPIC_CUSTOM_HEADERS".into(), lines.join("\n")); }
+    Ok(env)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ultrafast_rides_the_header_the_proxy_rule_reads() {
+        let env = service_tier("ultrafast", Some(r#"{"speed":"x"}"#), Some("x-api-key: k\nX-Hangar-Speed: priority")).unwrap();
+        assert_eq!(env["CP_ENGINE_SERVICE_TIER"], "ultrafast");
+        assert_eq!(serde_json::from_str::<Value>(&env["CLAUDE_CODE_EXTRA_BODY"]).unwrap()["service_tier"], "priority");
+        assert_eq!(env["ANTHROPIC_CUSTOM_HEADERS"], "x-api-key: k\nX-Hangar-Speed: ultrafast");
+
+        let env = service_tier("default", None, Some("x-api-key: k\nx-hangar-speed: ultrafast")).unwrap();
+        assert_eq!(env["ANTHROPIC_CUSTOM_HEADERS"], "x-api-key: k", "sair do Ultra Fast tira só o cabeçalho dele");
+        assert!(!service_tier("priority", None, None).unwrap().contains_key("ANTHROPIC_CUSTOM_HEADERS"));
+        assert!(service_tier("flex", None, None).is_err());
+    }
 }
