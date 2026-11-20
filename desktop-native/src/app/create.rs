@@ -3231,7 +3231,8 @@ impl Hangar {
     /// Com a criação em voo não há onde pôr: o que já foi anexado segue com ela.
     pub(super) fn composer_key(&self) -> Option<SessionKey> {
         // A conversa fechada aberta não anexa: os anexos sobem para uma sessão, e ela só existe depois do Enviar.
-        self.selected_key().or_else(|| (self.new_chat_screen() && self.opening.is_none() && self.reopen.is_none()).then(new_chat_key))
+        self.selected.as_ref().filter(|session| session.readable()).and_then(|_| self.selected_key())
+            .or_else(|| (self.new_chat_screen() && self.opening.is_none() && self.reopen.is_none()).then(new_chat_key))
     }
 
     /// A máquina escolhida nos chips da tela sem sessão, que é onde a conversa vai nascer.
@@ -3395,7 +3396,7 @@ impl Hangar {
             window.close_dialog(cx);
             None
         };
-        let readable = session.readable();
+        let takes_messages = session.takes_messages();
         let key = SessionKey::new(&server, &session);
         if current { self.select_on(&target, session, window, cx); }
         // Os anexos ficam na tela de nova conversa; o texto volta ao campo.
@@ -3414,7 +3415,7 @@ impl Hangar {
             None => if let Some(home) = home.filter(|_| current && !cx.reduce_motion()) { self.start_landing(home, window); },
         }
         // O fechar devolveu o foco ao botão que abriu; a sessão nova é onde se escreve em seguida, como no clique na aba.
-        if current && readable { self.composer.update(cx, |input, cx| input.focus(window, cx)); }
+        if current && takes_messages { self.composer.update(cx, |input, cx| input.focus(window, cx)); }
         for note in notes { window.push_notification(Notification::info(note), cx); }
         // Fica até ser fechado, como o `alert` do web: quem pediu o resumo do modelo tem de saber que recebeu o do Hangar.
         if let Some(warning) = warning { window.push_notification(Notification::warning(warning).autohide(false), cx); }
