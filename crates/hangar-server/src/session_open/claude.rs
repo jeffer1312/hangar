@@ -11,6 +11,9 @@ use serde_json::{Map, Value, json};
 use super::terminal::{PaneSpec, TerminalEnv};
 use super::{Account, SessionSpec};
 
+/// Variável do Code Mode experimental do Claude Code: valor `1` liga.
+pub const CODE_MODE_ENV: &str = "CLAUDE_CODE_EXPERIMENTAL_CODE_MODE";
+
 /// A rota da conta ChatGPT fixa do motor no `hangar-engine` (`cliproxy.engine_env`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EngineRoute { pub account: String, pub credential_id: String, pub home: String, pub base_url: String, pub prefix: String }
@@ -163,6 +166,7 @@ pub fn pane(spec: &SessionSpec, sid: &str, ctx: &ClaudeContext) -> PaneSpec {
         env.push(("HANGAR_PLUGIN_TOKEN".into(), crate::mods::bridge::mint_keyed(&bridge.secret, &spec.name, ctx.bridge_key)));
     }
     if let Some(model) = &spec.subagent_model { env.push(("CLAUDE_CODE_SUBAGENT_MODEL".into(), model.clone())); }
+    if spec.code_mode { env.push((CODE_MODE_ENV.into(), "1".into())); }
     PaneSpec { name: spec.name.clone(), cwd: spec.cwd.clone(), provider: spec.provider, key: spec.key.clone(), env,
         config_dir: spec.account.config_dir().map(str::to_owned), command }
 }

@@ -356,7 +356,8 @@ fn spec_of(procs:&dyn ProcessView,pid:i64,key:&str,name:&str,cwd:String,created:
         model:flag("--model"),effort:flag("--effort"),service_tier:tier,
         permission_mode:flag("--permission-mode").as_deref().and_then(PermissionMode::claude),
         subagent_model:if engine {None} else {env("CLAUDE_CODE_SUBAGENT_MODEL")},customizations:None,
-        jev:env("HANGAR_JEV").as_deref()==Some("on"),read_only:env("HANGAR_ORQ_READ_ONLY").as_deref()==Some("1"),
+        jev:env("HANGAR_JEV").as_deref()==Some("on"),code_mode:env(crate::session_open::claude::CODE_MODE_ENV).as_deref()==Some("1"),
+        read_only:env("HANGAR_ORQ_READ_ONLY").as_deref()==Some("1"),
         worktree:None,creator:None,created_at:created,conversation:None,name_auto:None,rename_suggestion:None,rename_weak_at:None,rename_dismissed:false,hooks_off:false };
     Ok((spec,settings))
 }
@@ -1202,7 +1203,7 @@ mod tests {
         let spec = |key:&str| SessionSpec { version:crate::session_open::SPEC_VERSION,key:key.into(),name:"s".into(),cwd:"/w".into(),
             provider:crate::session_open::AgentProvider::Claude,surface:Surface::Terminal,account:Account::Default,
             account_source:crate::session_open::AccountSource::Explicit,model:None,effort:None,service_tier:None,permission_mode:None,
-            subagent_model:None,customizations:None,jev:false,read_only:false,worktree:None,creator:None,created_at:0.0,conversation:None,
+            subagent_model:None,customizations:None,jev:false,code_mode:false,read_only:false,worktree:None,creator:None,created_at:0.0,conversation:None,
             name_auto:None,rename_suggestion:None,rename_weak_at:None,rename_dismissed:false,hooks_off:false };
         let adopted = format!("terminal_{}", "e6".repeat(32));
         assert!(SwitchMark::write(home.path(),&spec(&adopted)).unwrap().is_none());

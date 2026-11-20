@@ -294,6 +294,16 @@ impl Hangar {
     }
 
     /// `wide`: a página tem a coluna ao lado com a prévia e o Estilo; sem ela (janela estreita ou ao vivo), ficam no corpo.
+    /// Uma consulta por conexão: o settings.json do servidor diz se o Code Mode já está ligado lá.
+    fn ask_code_mode_settings(&mut self, cx: &mut Context<Self>) {
+        if self.settings_ui.code_mode_asked { return; }
+        self.settings_ui.code_mode_asked = true;
+        self.server_get(vec!["claude".into(), "code-mode".into()], Vec::new(), 10, cx, |this, result, cx| {
+            this.settings_ui.code_mode_settings = result.ok().and_then(|value| value["settings"].as_bool());
+            cx.notify();
+        });
+    }
+
     pub(in crate::app) fn render_appearance(&mut self, wide: bool, cx: &mut Context<Self>) -> AnyElement {
         let a = appearance::get();
         let compact = a == a.compact_style();
@@ -594,10 +604,18 @@ impl Hangar {
             tr("settings_tool_calls_claude_desktop")],
             Vec::from(LOOKS.map(art_tools)), LOOKS.iter().position(|l| *l == a.tool_look).unwrap_or(0), LOOKS.len(), false, tr("settings_next_version"), live,
             |this: &mut Hangar, index, _: &mut Window, cx| { let mut next = appearance::get(); next.tool_look = LOOKS[index]; this.apply_appearance(next, true, cx); }, cx);
+        // O Code Mode já ligado pelo settings.json do Claude vale em toda sessão: a opção aparece marcada e travada.
+        self.ask_code_mode_settings(cx);
+        let from_settings = self.settings_ui.code_mode_settings == Some(true);
         let conversation_body = div().pb(px(4.))
             .child(self.line("settings_conversation_beta", Some(tr("settings_conversation_beta_hint")), true,
                 segmented("conversation-beta", &[tr("settings_conversation_beta_off"), tr("settings_conversation_beta_on")], a.conversation_beta as usize, true,
                     |this: &mut Hangar, index, _: &mut Window, cx| { let mut next = appearance::get(); next.conversation_beta = index == 1; this.apply_appearance(next, true, cx); }, cx),
+                false))
+            .child(self.line("settings_code_mode", Some(tr(if from_settings { "settings_code_mode_settings" } else { "settings_code_mode_hint" })), a.conversation_beta,
+                segmented("code-mode", &[tr("settings_code_mode_off"), tr("settings_code_mode_on")], (a.claude_code_mode || from_settings) as usize,
+                    a.conversation_beta && !from_settings,
+                    |this: &mut Hangar, index, _: &mut Window, cx| { let mut next = appearance::get(); next.claude_code_mode = index == 1; this.apply_appearance(next, true, cx); }, cx),
                 false))
             .child(self.sublabel("settings_tool_calls")).child(tool_calls)
             .child(self.line("settings_thinking", (!thinking_on).then(|| tr("settings_thinking_tree")), thinking_on,

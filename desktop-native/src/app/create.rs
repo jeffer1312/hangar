@@ -1334,6 +1334,9 @@ impl NewSession {
                 if !self.permission.is_empty() { body["permission_mode"] = json!(self.permission); }
                 // O motor exporta o próprio modelo de subagente: com ele, o campo nem aparece.
                 if self.engine.is_empty() && !self.subagent.is_empty() { body["subagent_model"] = json!(self.subagent); }
+                // Code Mode experimental do Claude Code: escolha da conversa nova (beta), só nas sessões que nascem daqui.
+                let look = crate::appearance::get();
+                if look.conversation_beta && look.claude_code_mode { body["code_mode"] = json!(true); }
             }
             "codex" => { body["codex_account"] = json!(self.codex_account); },
             "omp" => { let profile = self.omp.read(cx).value().trim().to_owned(); if !profile.is_empty() { body["omp_profile"] = json!(profile); } }

@@ -656,7 +656,7 @@ mod tests {
     fn spec(account:Account) -> SessionSpec {
         SessionSpec { version:SPEC_VERSION,key:"k".into(),name:"s".into(),cwd:"/w".into(),provider:AgentProvider::Claude,
             surface:Surface::Headless,account,account_source:AccountSource::Default,model:None,effort:None,service_tier:None,
-            permission_mode:None,subagent_model:None,customizations:None,jev:false,read_only:false,worktree:None,creator:None,
+            permission_mode:None,subagent_model:None,customizations:None,jev:false,code_mode:false,read_only:false,worktree:None,creator:None,
             created_at:1.0,conversation:None,name_auto:None,rename_suggestion:None,rename_weak_at:None,rename_dismissed:false,hooks_off:false }
     }
     fn catalog(paths:&[&str]) -> Value { Value::Array(paths.iter().map(|p|json!({"path":p,"label":p.trim_start_matches('/')})).collect()) }

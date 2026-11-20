@@ -112,7 +112,7 @@ fn reopen_keeps_what_the_change_does_not_name() {
         version: SPEC_VERSION, key: "k".into(), name: "s".into(), cwd: "/x".into(), provider: AgentProvider::Claude,
         surface: Surface::Terminal, account: Account::Default, account_source: AccountSource::Default,
         model: Some("opus".into()), effort: Some("high".into()), service_tier: None,
-        permission_mode: Some(PermissionMode::Manual), subagent_model: None, customizations: None, jev: true,
+        permission_mode: Some(PermissionMode::Manual), subagent_model: None, customizations: None, jev: true, code_mode: false,
         read_only: false, worktree: None, creator: None, created_at: 1.0, conversation: None,
         name_auto: None, rename_suggestion: None, rename_weak_at: None, rename_dismissed: false, hooks_off: false,
     };
@@ -1557,6 +1557,29 @@ fn a_tilde_folder_is_absolute_everywhere_in_the_launch() {
     claude::pretrust(&home.join(".claude.json"), &spec.cwd, false).unwrap();
     let trusted: Value = serde_json::from_slice(&std::fs::read(home.join(".claude.json")).unwrap()).unwrap();
     assert_eq!(trusted["projects"][&absolute]["hasTrustDialogAccepted"], true);
+}
+
+/// O Code Mode pedido na abertura chega ao pane do Claude como `CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=1`;
+/// sem o pedido, ou em outro harness, a variável não aparece.
+#[test]
+fn code_mode_reaches_the_claude_pane_only_when_asked() {
+    let runtime = test_runtime();
+    let home = tempfile::tempdir().unwrap();
+    let home = home.path().canonicalize().unwrap();
+    std::fs::create_dir_all(home.join("work/proj")).unwrap();
+    std::fs::create_dir_all(home.join(".claude")).unwrap();
+    let launch = |extra: Value| {
+        let mut body = json!({"name": "s1", "cwd": "~/work/proj", "provider": "claude", "headless": false, "permission_mode": "manual"});
+        body.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        let request = SessionOpenRequest::parse(body.to_string().as_bytes()).unwrap();
+        let spec = resolve::resolve_open(&request, &OWNER, &local_facts(&home, &runtime)).unwrap().spec;
+        let ctx = claude::ClaudeContext { plugin_roots: &[], bridge: None, bridge_key: "k", runtime_config: &Value::Null,
+            server_env: &Default::default(), settings: None, read_only: None, windows: false, initial_prompt: None, engine_route: None, resume: false, allow_bypass: false };
+        let argv = terminal::new_session_argv(&terminal::tests::machine_at(&home.join(".claude").to_string_lossy()), &claude::pane(&spec, "sid", &ctx));
+        (spec.code_mode, argv.iter().any(|a| a == "CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=1"))
+    };
+    assert_eq!(launch(json!({"code_mode": true})), (true, true));
+    assert_eq!(launch(json!({})), (false, false));
 }
 
 /// Conta ChatGPT fixa do motor (`_fixed_engine_account`, `cliproxy.engine_env`): a credencial do
