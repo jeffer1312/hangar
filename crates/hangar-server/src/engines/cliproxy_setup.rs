@@ -63,12 +63,17 @@ pub async fn status(st: &AppState) -> Value {
         _ => None,
     };
     let update_available = matches!((&version, &latest), (Some(v), Some(l)) if install::newer(l, v));
+    // Quantas sessões a atualização cortaria: a confirmação diz o número. Só o proxy do Hangar é atualizado daqui.
+    let sessions = match kind {
+        "managed" => engine_sessions(&st.accounts.env, &st.list).await.ok(),
+        _ => None,
+    };
     let running = match proxy::local(&st.accounts.env).ok().flatten() {
         Some(local) => blocking(move || detect::port_open(&local.base_url), false).await,
         None => false,
     };
     json!({"state": kind, "version": version, "latest": latest, "update_available": update_available,
-        "running": running, "job": INSTALLER.job()})
+        "running": running, "sessions": sessions, "job": INSTALLER.job()})
 }
 
 /// Contas logadas no proxy, de qualquer provedor, para o assistente mostrar antes de existir motor.
@@ -170,6 +175,8 @@ fn started(result: Result<(), install::Busy>) -> Response {
 pub async fn handle(st: &AppState, method: &Method, path: &str, bytes: &[u8]) -> Option<Response> {
     let rest = path.strip_prefix("/api/engines/cliproxy/")?;
     Some(match (method, rest) {
+        // Só o estado da instalação, sem sondar modelos nem contas: é o que a página de Contas lê ao abrir.
+        (&Method::GET, "install") => json_response(StatusCode::OK, status(st).await),
         (&Method::POST, "install") => started(INSTALLER.start("install", context(st))),
         (&Method::POST, "update") => {
             let sessions = match engine_sessions(&st.accounts.env, &st.list).await { Ok(n) => n, Err(response) => return Some(response) };

@@ -5,6 +5,7 @@ import { AutoReportAnimation } from './AutoReportAnimation';
 import { ClaudeNoticesAnimation } from './ClaudeNoticesAnimation';
 import { CliproxyWizardAnimation } from './CliproxyWizardAnimation';
 import { SpeedChoiceAnimation } from './SpeedChoiceAnimation';
+import { ProxyUpdateAnimation } from './ProxyUpdateAnimation';
 import { NoticeActionsAnimation } from './NoticeActionsAnimation';
 import { CodexActivityAnimation } from './CodexActivityAnimation';
 import { CompactIdleAnimation } from './CompactIdleAnimation';
@@ -40,6 +41,7 @@ const animations: Record<string, ComponentType<{ width: number }>> = {
   'branch-no-celular': FolderBranchAnimation,
   'cliproxy-assistente': CliproxyWizardAnimation,
   'velocidade-ultra-fast': SpeedChoiceAnimation,
+  'atualizar-cliproxy': ProxyUpdateAnimation,
   'cofre-de-senhas': VaultAnimation,
   'codex-atividade': CodexActivityAnimation,
   'compactar-parada': CompactIdleAnimation,

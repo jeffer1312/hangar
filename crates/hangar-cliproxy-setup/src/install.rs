@@ -219,8 +219,17 @@ fn external_config(unit: Option<&std::path::Path>, units: &[std::path::PathBuf],
     if detect::exec_overridden(units) {
         return Err(manual(format!("um drop-in troca o comando de {}", unit.display())));
     }
-    let Some(raw) = detect::unit_config(&text) else { return Ok(None) };
-    let raw = raw.to_string_lossy();
+    // Sem `--config` o proxy lê o `config.yaml` da pasta em que roda: a do `WorkingDirectory=`, ou a home do
+    // usuário numa unit de usuário. Numa unit de sistema sem pasta declarada, não dá para saber.
+    let raw = match detect::unit_config(&text) {
+        Some(raw) => raw.to_string_lossy().into_owned(),
+        None => match detect::unit_working_dir(&text) {
+            Some(dir) => format!("{}/config.yaml", dir.replace('~', "%h")),
+            None if detect::is_system_unit(unit) =>
+                return Err(manual(format!("{} não diz em que pasta o proxy roda nem qual config ele lê", unit.display()))),
+            None => "%h/config.yaml".to_owned(),
+        },
+    };
     if detect::is_system_unit(unit) && (raw.contains("%h") || raw.contains("$HOME") || raw.contains("${HOME}")) {
         return Err(manual(format!("{} é de sistema: a pasta do {raw} depende do usuário que a roda", unit.display())));
     }
@@ -292,6 +301,16 @@ pub async fn install(ctx: &Context, progress: &(dyn Fn(Step) + Send + Sync)) -> 
     Ok(Outcome::Installed { tag })
 }
 
+/// A falha da versão nova, ou, se nem a anterior voltou, um código próprio: a tela só diz "segue funcionando"
+/// quando a volta deu certo.
+fn rolled_back(failure: Failure, installed: &str, back: Result<(), Failure>) -> Failure {
+    match back {
+        Ok(()) => failure,
+        Err(e) => Failure::new("cliproxy_atualizacao_sem_volta",
+            format!("{}; e o serviço não voltou para {installed}: {}", failure.detail, e.detail)),
+    }
+}
+
 pub fn newer(candidate: &str, installed: &str) -> bool {
     let parse = |t: &str| semver::Version::parse(t.trim_start_matches('v')).ok();
     matches!((parse(candidate), parse(installed)), (Some(c), Some(i)) if c > i)
@@ -322,10 +341,8 @@ pub async fn update(ctx: &Context, progress: &(dyn Fn(Step) + Send + Sync)) -> R
     // O registro só passa para a versão nova depois de ela responder: senão a próxima tentativa veria as tags
     // iguais e diria "atualizado" sem nada rodando. Falhou, o serviço volta para o programa anterior.
     if let Err(failure) = wait_ours(&base, version.as_ref(), (ctx.management_key)().as_deref()).await {
-        if let Err(e) = service::register(&ctx.paths.home, &ctx.paths.dir, &Service { binary: old.clone(), config }).await {
-            return Err(Failure::new(failure.code, format!("{}; e o serviço não voltou para {installed}: {}", failure.detail, Failure::from(e).detail)));
-        }
-        return Err(failure);
+        let back = service::register(&ctx.paths.home, &ctx.paths.dir, &Service { binary: old.clone(), config }).await;
+        return Err(rolled_back(failure, &installed, back.map_err(Failure::from)));
     }
     detect::write_record(&ctx.paths, &latest.tag, &binary).map_err(|e| Failure::new("cliproxy_registro_falhou", e.to_string()))?;
     // `payload` da pessoa fica como está: a regra só entra num config sem ele.
@@ -406,6 +423,15 @@ mod tests {
         assert!(!understands_rule(None), "versão desconhecida não leva a regra");
     }
 
+    #[test]
+    fn an_update_that_could_not_go_back_has_its_own_code() {
+        let failure = || Failure::new("cliproxy_nao_subiu", "a v8.1.0 não respondeu");
+        assert_eq!(rolled_back(failure(), "v8.0.79", Ok(())).code, "cliproxy_nao_subiu", "voltou: segue funcionando");
+        let lost = rolled_back(failure(), "v8.0.79", Err(Failure::new("cliproxy_servico_falhou", "systemctl")));
+        assert_eq!(lost.code, "cliproxy_atualizacao_sem_volta");
+        assert!(lost.detail.contains("v8.0.79") && lost.detail.contains("systemctl"));
+    }
+
     fn context(home: &std::path::Path) -> Context {
         Context { paths: Paths::new(home), platform: Platform::local(), github: Github::default(), persist: Arc::new(|_| Ok(())),
             management_key: Arc::new(|| None), before_swap: None }
@@ -445,7 +471,9 @@ mod tests {
         std::fs::write(&unit, "[Service]\nExecStart=/usr/bin/cli-proxy-api --config /etc/cliproxy/config.yaml\n").unwrap();
         assert_eq!(read(Some(&unit)), Ok(Some(std::path::PathBuf::from("/etc/cliproxy/config.yaml"))));
         std::fs::write(&unit, "[Service]\nExecStart=/usr/bin/cli-proxy-api\n").unwrap();
-        assert_eq!(read(Some(&unit)), Ok(None), "sem --config o proxy lê o padrão");
+        assert_eq!(read(Some(&unit)), Ok(Some(home.path().join("config.yaml"))), "sem --config: o config.yaml da pasta em que roda, a home");
+        std::fs::write(&unit, "[Service]\nWorkingDirectory=%h/.cli-proxy-api\nExecStart=/usr/bin/cli-proxy-api\n").unwrap();
+        assert_eq!(read(Some(&unit)), Ok(Some(ours.clone())), "a pasta declarada decide o config");
         assert_eq!(read(None), Ok(None));
         let unreadable = read(Some(&home.path().join("sumiu.service")));
         assert_eq!(unreadable.map_err(|f| f.code), Err("cliproxy_config_manual"), "unit ilegível não vira o config padrão");

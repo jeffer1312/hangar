@@ -8,6 +8,7 @@ mod actions;
 mod cliproxy;
 mod codex;
 mod keys;
+mod proxy_update;
 mod usage;
 
 use super::*;
@@ -22,6 +23,8 @@ pub(crate) use cliproxy::{Brand as CliproxyBrand, INSTALL_ITEMS as CLIPROXY_INST
     account_row as cliproxy_account_row, default_name as cliproxy_default_name, fast_field as cliproxy_fast_field,
     install_item as cliproxy_install_item, name_preview as cliproxy_name_preview, wizard_steps as cliproxy_steps};
 pub(crate) use codex::idempotency_key;
+pub(crate) use proxy_update::{update_available_banner as cliproxy_update_available_banner, update_button as cliproxy_update_button,
+    update_done_banner as cliproxy_update_done_banner, update_running_banner as cliproxy_update_running_banner};
 use super::settings::{Page, segments, settings_box};
 use chrono::{Datelike, Local, TimeZone, Timelike};
 use gpui_kit::component::menu::DropdownMenu;
@@ -223,6 +226,8 @@ pub(super) struct Accounts {
     codex: Option<CodexFlow>,
     /// Assistente do CLIProxyAPI aberto no lugar da lista.
     cliproxy: Option<CliproxyWizard>,
+    /// Versão nova do proxy instalado pelo Hangar e a atualização dele.
+    proxy: proxy_update::ProxyUpdate,
     reset: Option<ResetTry>,
     /// Leitura da lista pedida depois de uma redefinição (número dela, se a redefinição valeu): a falha dela entra no aviso.
     reset_refresh: Option<(u64, bool)>,
@@ -253,6 +258,7 @@ pub(super) enum AccountsReply {
     Keys(KeysReply),
     Codex(CodexReply),
     Cliproxy(CliproxyReply),
+    ProxyUpdate(proxy_update::UpdateReply),
 }
 
 fn now() -> f64 { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.) }
@@ -412,6 +418,11 @@ fn group_of(c: &Credential, models: &HashSet<&str>) -> Option<Group> {
 }
 
 fn build_row(c: &Credential, engines: &HashMap<String, Engine>, has_kimi_copy: bool, now: f64) -> Row {
+    build_row_with(c, engines, has_kimi_copy, None, now)
+}
+
+/// `proxy_version`: a do CLIProxyAPI que o Hangar instalou, mostrada na linha do modelo que ele serve.
+fn build_row_with(c: &Credential, engines: &HashMap<String, Engine>, has_kimi_copy: bool, proxy_version: Option<&str>, now: f64) -> Row {
     let engine = c.engine_name().and_then(|name| engines.get(name));
     let logged = c.logged_in();
     let muted = |text: String| (text, Tone::Muted);
@@ -471,6 +482,9 @@ fn build_row(c: &Credential, engines: &HashMap<String, Engine>, has_kimi_copy: b
             // Como no mock: só o que foge do padrão vira ficha; o endereço e o resto ficam no Editar.
             Some(engine) => {
                 subtitle.push(muted(tr("accounts_list_runs_in_claude_code")));
+                if let Some(version) = proxy_version.filter(|_| engine.cliproxy_accounts.is_some()) {
+                    subtitle.push(muted(tr("accounts_proxy_version").replace("{version}", version)));
+                }
                 if has_kimi_copy { subtitle.push(muted(tr("accounts_kimi_copy"))); }
                 if !engine.model.is_empty() { chips.push(engine.model.clone()); }
                 chips.extend(engine.context_window.map(|n| format!("{}k", (n as f64 / 1000.).round())));
@@ -549,12 +563,12 @@ fn build_row(c: &Credential, engines: &HashMap<String, Engine>, has_kimi_copy: b
 }
 
 /// Assinaturas, modelos do Claude Code e outros agentes, nessa ordem; a cópia do Kimi que o sync grava fica de fora.
-fn build_sections(list: &[Credential], engines: &HashMap<String, Engine>, now: f64) -> Vec<Section> {
+fn build_sections(list: &[Credential], engines: &HashMap<String, Engine>, proxy_version: Option<&str>, now: f64) -> Vec<Section> {
     let models = model_names(list, engines);
     [Group::Subscriptions, Group::Models, Group::Others].into_iter().map(|group| {
         let rows: Vec<Row> = list.iter().filter(|c| group_of(c, &models) == Some(group)).map(|c| {
             let copy = c.engine_name().is_some_and(|name| list.iter().any(|x| x.id == format!("kimi:{name}")));
-            build_row(c, engines, copy, now)
+            build_row_with(c, engines, copy, proxy_version, now)
         }).collect();
         Section { rows }
     }).collect()
@@ -697,6 +711,7 @@ impl Hangar {
         self.accounts.outcome = None;
         if !self.accounts.list.loading { self.load_accounts(false, cx); }
         if !self.accounts.engines.loading { self.load_engines(cx); }
+        self.load_proxy_install(cx);
         if self.accounts.clock { return; }
         self.accounts.clock = true;
         // A troca de servidor zera as contas e liga outro relógio: o desta conexão para ali.
@@ -804,6 +819,7 @@ impl Hangar {
             self.accounts.engines_notice = None;
             self.load_engines(cx);
         }
+        self.load_proxy_install(cx);
     }
 
     /// Remonta as linhas: na chegada de uma resposta, na troca de idioma e a cada meio minuto.
@@ -816,7 +832,8 @@ impl Hangar {
             _ => Vec::new(),
         }).collect() };
         let before = bars(&accounts.sections);
-        accounts.sections = accounts.list.ok().map(|list| build_sections(list, engines, now())).unwrap_or_default();
+        let proxy_version = accounts.proxy.install.as_ref().and_then(|i| i.managed_version());
+        accounts.sections = accounts.list.ok().map(|list| build_sections(list, engines, proxy_version, now())).unwrap_or_default();
         let at = Instant::now();
         accounts.bar_moves.retain(|_, (_, start)| *start + motion::FADE_IN.total() > at);
         for (key, pct) in bars(&accounts.sections) {
@@ -923,6 +940,7 @@ impl Hangar {
             AccountsReply::Keys(reply) => self.receive_keys(reply, window, cx),
             AccountsReply::Codex(reply) => self.receive_codex(reply, window, cx),
             AccountsReply::Cliproxy(reply) => self.receive_cliproxy(reply, window, cx),
+            AccountsReply::ProxyUpdate(reply) => self.receive_proxy_update(reply, window, cx),
         }
         self.rebuild_accounts();
         cx.notify();
@@ -981,6 +999,7 @@ impl Hangar {
             let (color, icon) = if *error { (theme::danger(), IconName::CircleAlert) } else { (theme::success(), IconName::CircleCheck) };
             page = page.child(banner(color, icon, text.clone()).mt(px(16.)));
         }
+        if let Some(proxy) = self.proxy_update_banner(cx) { page = page.child(proxy.mt(px(16.))); }
         // Arquivo dos modelos ilegível não é "nenhum modelo": pode estar escondendo modelos de verdade.
         let engines_problem = match &accounts.engines.value {
             Some(Ok(Engines { broken_file: Some(path), .. })) => Some(tr("accounts_engines_broken").replace("{path}", path)),
@@ -1393,10 +1412,15 @@ fn columns_width(labels: &[String]) -> f32 {
 
 /// Aviso numa faixa tingida pela cor do tipo (falha, feito).
 fn banner(color: Hsla, icon: IconName, text: String) -> Div {
+    banner_with(color, chrome::small_icon(icon, 15., color).into_any_element(), text.into_any_element())
+}
+
+/// A mesma faixa com ícone e corpo montados por quem chama (girando, texto com negrito, etapas).
+fn banner_with(color: Hsla, icon: AnyElement, body: AnyElement) -> Div {
     div().w_full().px(px(12.)).py(px(10.)).flex().items_center().gap(px(10.)).rounded(px(10.)).border_1()
         .border_color(color.alpha(0.3)).bg(color.alpha(0.08)).text_size(px(13.))
-        .child(chrome::small_icon(icon, 15., color))
-        .child(div().flex_1().min_w_0().whitespace_normal().child(text))
+        .child(icon)
+        .child(div().flex_1().min_w_0().whitespace_normal().child(body))
 }
 
 /// O que cada cor da barra quer dizer.
@@ -1478,6 +1502,19 @@ mod tests {
     fn credential(value: Value) -> Credential { serde_json::from_value(value).expect("synthetic credential") }
 
     #[test]
+    fn only_the_model_served_by_the_proxy_shows_its_version() {
+        let served: Engine = serde_json::from_value(json!({"base_url": "http://127.0.0.1:8317", "model": "gpt-6.1-sol", "cliproxy_accounts": []})).unwrap();
+        let other: Engine = serde_json::from_value(json!({"base_url": "https://api.example", "model": "m"})).unwrap();
+        let engines = HashMap::from([("gpt".to_owned(), served), ("outro".to_owned(), other)]);
+        let row = |id: &str, version| super::build_row_with(&credential(json!({"id": format!("chave:{id}"), "tipo": "chave", "nome": id})),
+            &engines, false, version, 0.);
+        let shown = tr("accounts_proxy_version").replace("{version}", "v8.0.79");
+        assert!(row("gpt", Some("v8.0.79")).subtitle.0.contains(&shown));
+        assert!(!row("outro", Some("v8.0.79")).subtitle.0.contains(&shown));
+        assert!(!row("gpt", None).subtitle.0.contains(&shown), "proxy de fora não mostra versão");
+    }
+
+    #[test]
     fn proxy_targets_use_exact_credential_ids_and_never_unlisted_accounts() {
         let session = crate::api::dto::SessionInfo { provider: "claude".into(), engine: Some("proxy".into()),
             engine_account: Some("default".into()), conta: Some("codex:/first".into()), ..Default::default() };
@@ -1544,7 +1581,7 @@ mod tests {
         let codex = credential(json!({"id": "codex:/c", "tipo": "codex", "nome": "c", "codex_account": "c", "auth_method": "oauth",
             "cota": {"estado": "lida", "janelas": [{"rotulo": "7d", "pct": 60}], "reset_credits": {"available_count": 2}}}));
         let list = [claude("a", 100., 7200., 14., false), claude("b", 100., 600., 20., true), claude("c", 40., 600., 14., false), codex];
-        let summary = build_summary(&build_sections(&list, &HashMap::new(), now));
+        let summary = build_summary(&build_sections(&list, &HashMap::new(), None, now));
         assert_eq!(summary.week_full.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(), ["b", "a"]);
         assert_eq!(summary.login, Some((14, vec!["a".to_owned(), "c".to_owned()])));
         assert_eq!(summary.in_use, [("claude", "b".to_owned())]);

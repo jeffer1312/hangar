@@ -11,6 +11,7 @@ import { InfoNotice } from '../../src/features/config/InfoNotice';
 import { CodexContaLogin } from '../../src/features/config/CodexContaLogin';
 import { ResetFeedback } from '../../src/features/accounts/CodexReset';
 import { EngineStatus, useEngines } from '../../src/features/accounts/Engines';
+import { ProxyUpdateCard, managedVersion, useProxyUpdate } from '../../src/features/accounts/ProxyUpdate';
 import { ClaudeAccountCreate } from '../../src/features/accounts/ClaudeAccountCreate';
 import { AccountRow, type AccountRowData, type AccountRowHandlers } from '../../src/features/accounts/AccountRow';
 import { AccountSearch, FilterChips, SortControl, type SortOption } from '../../src/features/accounts/AccountsToolbar';
@@ -109,6 +110,11 @@ function ServerAccounts({ server }: { server: Server | null }) {
   }, []);
 
   const engines = useEngines(server, () => load(server));
+  const proxy = useProxyUpdate(server);
+  const proxyVersion = managedVersion(proxy.install);
+  // A versão do proxy do Hangar vai na linha do modelo que ele serve.
+  const proxyNote = (engine: string | undefined) =>
+    proxyVersion && engine && engines.data?.motores[engine]?.cliproxy_accounts ? m.mobile_accounts_proxy_version({ version: proxyVersion }) : '';
   const refreshQuota = useCallback(() => load(server, true), [load, server]);
   const refreshClaude = useCallback(() => load(server, true, true), [load, server]);
   useEffect(() => {
@@ -209,14 +215,17 @@ function ServerAccounts({ server }: { server: Server | null }) {
       const title = account?.name ?? credential.nome ?? credential.nome_natural;
       const group = credentialGroup(credential);
       const status = account ? accountStatus(account, credential) : credentialStatus(credential, title);
+      const engineName = credential.tipo === 'chave' && credential.id.startsWith('chave:') ? credential.id.slice(6) : undefined;
       return {
         key: `credential:${credential.id}`, group, title, ...status,
-        description: group === 'claude_engine' ? [m.accounts_list_runs_in_claude_code(), status.description].filter(Boolean).join(' · ') : status.description,
+        description: group === 'claude_engine'
+          ? [m.accounts_list_runs_in_claude_code(), proxyNote(engineName), status.description].filter(Boolean).join(' · ')
+          : status.description,
         provider: providerOf(credential, account),
         active: credential.ativa,
         account,
         credential,
-        engineName: credential.tipo === 'chave' && credential.id.startsWith('chave:') ? credential.id.slice(6) : undefined,
+        engineName,
         canSignIn: !!account && canSignIn(account),
         subject: { ...credential, nome: title, login: status.email ? { ...credential.login, estado: credential.login?.estado ?? 'ok', email: status.email } : credential.login },
       };
@@ -235,7 +244,7 @@ function ServerAccounts({ server }: { server: Server | null }) {
     ...(engines.ready ? Object.entries(engines.data!.motores)
       .filter(([name]) => !credentials.some(c => c.id === `chave:${name}`))
       .map(([name, engine]): IdentityRow => ({ key: `engine:${name}`, group: 'claude_engine', title: engine.label || name,
-        email: '', plan: '', description: [m.accounts_list_runs_in_claude_code(), engine.model, engine.base_url].filter(Boolean).join(' · '),
+        email: '', plan: '', description: [m.accounts_list_runs_in_claude_code(), proxyNote(name), engine.model, engine.base_url].filter(Boolean).join(' · '),
         provider: '', active: false, account: null, credential: null, engineName: name, canSignIn: false,
         subject: { tipo: 'chave', nome: engine.label || name, nome_natural: name, ativa: false, cota: null, login: null } })) : []),
   ];
@@ -276,7 +285,7 @@ function ServerAccounts({ server }: { server: Server | null }) {
   // Entrada escalonada só na primeira lista pintada; quem aparece depois (filtro, busca) só surge.
   const firstPaint = !painted.current && visible.length > 0;
   useEffect(() => { if (visible.length) painted.current = true; });
-  const actions: PageAction[] = [{ icon: 'RefreshCw', label: m.contas_atualizar(), onPress: () => { load(server); void engines.reload(); } }];
+  const actions: PageAction[] = [{ icon: 'RefreshCw', label: m.contas_atualizar(), onPress: () => { load(server); void engines.reload(); void proxy.reload(); } }];
   if (server && engines.ready) actions.push({ label: m.mobile_accounts_engine_new(), onPress: () => engines.setEditing('') });
   // O rótulo já traz o "+"; ícone repetiria o sinal.
   if (server) {
@@ -292,6 +301,7 @@ function ServerAccounts({ server }: { server: Server | null }) {
       ) : (
         <InfoNotice text={m.maquinas_vazio()} />
       )}
+      {server ? <ProxyUpdateCard state={proxy} /> : null}
       {loading ? <Text style={styles.muted}>{m.comum_carregando()}</Text> : null}
       {error ? <Text accessibilityRole="alert" style={styles.error}>{error}</Text> : null}
       {server ? <EngineStatus state={engines} /> : null}

@@ -3154,7 +3154,19 @@ export interface CliproxyInstall {
   latest: string | null;
   update_available: boolean;
   running: boolean;
+  // Sessões que a atualização cortaria; só no `managed`.
+  sessions?: number | null;
   job: CliproxyJob | null;
+}
+
+/** Só o estado da instalação, sem sondar modelos nem contas do proxy. */
+export function getCliproxyInstallForServer(s: Server, signal?: AbortSignal): Promise<CliproxyInstall> {
+  return apiFetchForServer(s, '/api/engines/cliproxy/install', signal ? { signal } : undefined);
+}
+
+/** Sem `confirm`, sessões no proxy recusam com 409 `erro_cliproxy_sessoes_ativas` (`params.sessions`). */
+export function updateCliproxyForServer(s: Server, confirm = false): Promise<{ job: CliproxyJob | null }> {
+  return apiFetchForServer(s, '/api/engines/cliproxy/update', { method: 'POST', body: JSON.stringify({ confirm }) });
 }
 
 export type CliproxyLoginProvider = 'codex' | 'claude';

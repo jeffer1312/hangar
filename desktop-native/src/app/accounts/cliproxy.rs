@@ -172,7 +172,7 @@ fn known_code(code: &str) -> Option<String> {
     (text != key).then_some(text)
 }
 
-fn code_text(code: &str) -> String {
+pub(super) fn code_text(code: &str) -> String {
     known_code(code).unwrap_or_else(|| tr("cliproxy_wizard_err_unknown").replace("{code}", code))
 }
 
@@ -232,15 +232,20 @@ pub(crate) const INSTALL_ITEMS: usize = INSTALL_STEPS.len();
 
 /// Uma das quatro etapas da instalação, na ordem do `step` do servidor.
 pub(crate) fn install_item(index: usize, state: ItemState) -> Div {
+    step_item(&format!("cliproxy-wizard-item-{index}"), tr(INSTALL_STEPS[index].1), state)
+}
+
+/// Uma etapa com o ícone do estado dela: a da instalação e a da atualização.
+pub(crate) fn step_item(id: &str, label: String, state: ItemState) -> Div {
     let (icon, color): (AnyElement, Hsla) = match state {
         ItemState::Done => (chrome::small_icon(IconName::CircleCheck, 16., theme::success()).into_any_element(), theme::text()),
         ItemState::Failed => (chrome::small_icon(IconName::CircleX, 16., theme::danger()).into_any_element(), theme::text()),
-        ItemState::Running => (chrome::Spinner::new(SharedString::from(format!("cliproxy-wizard-item-{index}")),
-            IconName::LoaderCircle, px(16.), theme::accent()).into_any_element(), theme::text()),
+        ItemState::Running => (chrome::Spinner::new(SharedString::from(id.to_owned()), IconName::LoaderCircle, px(16.), theme::accent())
+            .into_any_element(), theme::text()),
         ItemState::Waiting => (chrome::small_icon(IconName::Circle, 16., theme::faint()).into_any_element(), theme::muted()),
     };
     div().flex().items_center().gap(px(10.)).text_size(px(13.5)).text_color(color)
-        .child(div().size(px(18.)).flex_shrink_0().flex().items_center().justify_center().child(icon)).child(tr(INSTALL_STEPS[index].1))
+        .child(div().size(px(18.)).flex_shrink_0().flex().items_center().justify_center().child(icon)).child(label)
 }
 
 /// Como o motor vai aparecer na criação de sessão.

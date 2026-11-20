@@ -15,7 +15,10 @@ import { Icon } from '../../ui/Icon';
 import { ProviderGlyph } from '../../ui/ProviderGlyph';
 import { haptic } from '../../ui/haptics';
 import { useSettingsColors } from '../config/colors';
+import { InstallItems } from './InstallItems';
 import * as m from '../../paraglide/messages';
+
+export { InstallItems };
 
 type Provider = CliproxyLoginProvider;
 export type Account = { provider: Provider; email: string };
@@ -540,25 +543,6 @@ export function Stepper({ current, allDone }: { current: number; allDone: boolea
   </View>;
 }
 
-export function InstallItems({ at, failed }: { at: number; failed: boolean }) {
-  const c = useSettingsColors();
-  const { theme } = useUnistyles();
-  const items = [m.mobile_cliproxy_wizard_item_download(), m.mobile_cliproxy_wizard_item_key(),
-    m.mobile_cliproxy_wizard_item_service(), m.mobile_cliproxy_wizard_item_check()];
-  return <View style={styles.items}>
-    {items.map((label, i) => {
-      const done = i < at;
-      const now = i === at && !failed;
-      return <View key={label} style={styles.item}>
-        <View style={[styles.itemDot, { borderColor: done ? theme.tokens.status.success : c.borderStrong },
-          done && { backgroundColor: theme.tokens.status.success }]}>
-          {done ? <Icon name="Check" size={11} color={theme.tokens.text.inverse} /> : now ? <ActivityIndicator size="small" color={c.accent} /> : null}
-        </View>
-        <Text style={[styles.itemText, { color: done || now ? c.text : c.muted }]}>{label}</Text>
-      </View>;
-    })}
-  </View>;
-}
 
 function ProviderCard({ provider, title, desc, recommended, disabled, onPress }: {
   provider: Provider; title: string; desc: string; recommended?: boolean; disabled: boolean; onPress: () => void;
@@ -657,10 +641,6 @@ const styles = StyleSheet.create(theme => ({
   small: { fontSize: theme.base.text.xs },
   strong: { fontSize: theme.base.text.sm, fontWeight: theme.base.weight.semibold },
   center: { alignItems: 'center', gap: theme.base.space[2], paddingVertical: theme.base.space[8] },
-  items: { gap: theme.base.space[3], marginVertical: theme.base.space[1] },
-  item: { flexDirection: 'row', alignItems: 'center', gap: theme.base.space[3] },
-  itemDot: { width: 20, height: 20, borderRadius: theme.base.radius.full, borderWidth: 1.5, alignItems: 'center', justifyContent: 'center' },
-  itemText: { fontSize: theme.base.text.sm },
   foot: { flexDirection: 'row', alignItems: 'center', gap: theme.base.space[2], marginTop: theme.base.space[2] },
   button: { minHeight: 44, paddingHorizontal: theme.base.space[4], borderRadius: theme.base.radius.md, borderCurve: 'continuous',
     alignItems: 'center', justifyContent: 'center' },

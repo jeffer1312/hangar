@@ -368,6 +368,7 @@ const ROUTES: &[(&str, &str)] = &[
     ("/api/engines/cliproxy", "GET"),
     ("/api/engines/cliproxy/management-key", "PUT"),
     ("/api/engines/cliproxy/management-key/reset", "POST"),
+    ("/api/engines/cliproxy/install", "GET"),
     ("/api/engines/cliproxy/install", "POST"),
     ("/api/engines/cliproxy/update", "POST"),
     ("/api/engines/cliproxy/login", "POST"),

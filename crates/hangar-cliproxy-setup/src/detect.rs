@@ -67,6 +67,12 @@ pub fn unit_config(unit: &str) -> Option<PathBuf> {
     })
 }
 
+/// O `WorkingDirectory=` da unit, cru (`%h` e `~` ainda por expandir).
+pub fn unit_working_dir(unit: &str) -> Option<String> {
+    unit.lines().map(str::trim).filter_map(|l| l.strip_prefix("WorkingDirectory=")).last()
+        .map(|dir| dir.trim().trim_start_matches('-').trim_matches(['"', '\'']).to_owned()).filter(|dir| !dir.is_empty())
+}
+
 pub fn state(paths: &Paths, path_var: Option<&std::ffi::OsStr>, units: &[PathBuf]) -> Install {
     if let Some((tag, binary)) = managed(paths) {
         return Install::Managed { tag, binary };

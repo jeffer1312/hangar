@@ -103,7 +103,8 @@ pub(crate) use settings::{memory_dream, news_group_heading, news_kind_icon, news
 pub(crate) use plugins::{plugin_meta, plugin_name, plugin_switch, plugin_update_button, reopen_notice as plugins_reopen_notice,
     row_box as plugin_row_box, text_block as plugin_text_block};
 pub(crate) use accounts::{CLIPROXY_INSTALL_ITEMS, CliproxyBrand, CliproxyItem, cliproxy_account_row, cliproxy_default_name, cliproxy_fast_field,
-    cliproxy_install_item, cliproxy_name_preview, cliproxy_steps, login_heading, target_row};
+    cliproxy_install_item, cliproxy_name_preview, cliproxy_steps, cliproxy_update_available_banner, cliproxy_update_button,
+    cliproxy_update_done_banner, cliproxy_update_running_banner, login_heading, target_row};
 pub(crate) use search::{ScopeFound, highlighted as search_highlighted, search_agent_label, search_chat_header, search_chat_sub, search_field, search_filter_chip, search_found_frame,
     search_group_frame, search_group_header, search_group_sub, search_hit_line, search_live_label, search_open_look, search_scope_block,
     search_scope_summary, search_status_line, search_who};
