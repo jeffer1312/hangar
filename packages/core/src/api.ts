@@ -3131,44 +3131,44 @@ export interface CliproxyDeteccao {
   management_key_set?: boolean;
   naming_error?: string | null;
   // Contas já logadas no proxy; `type` é o do registro dele (`codex`, `claude`…).
-  connected?: CliproxyConta[];
-  install?: CliproxyInstalacao;
+  connected?: CliproxyAccount[];
+  install?: CliproxyInstall;
 }
 
-export interface CliproxyConta { type: string; email: string }
+export interface CliproxyAccount { type: string; email: string }
 
-export type CliproxyPassoInstalacao = 'download' | 'config' | 'service' | 'start';
+export type CliproxyInstallStep = 'download' | 'config' | 'service' | 'start';
 
-export interface CliproxyTarefa {
+export interface CliproxyJob {
   kind: 'install' | 'update';
-  step: CliproxyPassoInstalacao;
+  step: CliproxyInstallStep;
   done: boolean;
   error: { code: string; detail: string } | null;
   outcome: 'installed' | 'configured' | 'updated' | null;
 }
 
 // `external` = proxy que o Hangar não instalou; `managed` = instalado por ele.
-export interface CliproxyInstalacao {
+export interface CliproxyInstall {
   state: 'absent' | 'external' | 'managed';
   version: string | null;
   latest: string | null;
   update_available: boolean;
   running: boolean;
-  job: CliproxyTarefa | null;
+  job: CliproxyJob | null;
 }
 
-export type CliproxyProvedorLogin = 'codex' | 'claude';
-export type CliproxyLoginEstado = { status: 'wait' | 'ok' | 'error'; error?: string };
+export type CliproxyLoginProvider = 'codex' | 'claude';
+export type CliproxyLoginState = { status: 'wait' | 'ok' | 'error'; error?: string };
 
-export function installCliproxyForServer(s: Server): Promise<{ job: CliproxyTarefa | null }> {
+export function installCliproxyForServer(s: Server): Promise<{ job: CliproxyJob | null }> {
   return apiFetchForServer(s, '/api/engines/cliproxy/install', { method: 'POST', body: '{}' });
 }
 
-export function startCliproxyLoginForServer(s: Server, provider: CliproxyProvedorLogin): Promise<{ url: string; state: string }> {
+export function startCliproxyLoginForServer(s: Server, provider: CliproxyLoginProvider): Promise<{ url: string; state: string }> {
   return apiFetchForServer(s, '/api/engines/cliproxy/login', { method: 'POST', body: JSON.stringify({ provider }) });
 }
 
-export function getCliproxyLoginForServer(s: Server, state: string, signal?: AbortSignal): Promise<CliproxyLoginEstado> {
+export function getCliproxyLoginForServer(s: Server, state: string, signal?: AbortSignal): Promise<CliproxyLoginState> {
   return apiFetchForServer(s, `/api/engines/cliproxy/login/${encodeURIComponent(state)}`, signal ? { signal } : undefined);
 }
 
@@ -3189,7 +3189,7 @@ export function putCliproxyManagementKeyForServer(s: Server, management_key: str
 }
 
 /** O proxy guarda só o hash da senha de gerenciamento: o servidor troca por uma nova e a guarda. */
-export function resetCliproxyManagementKeyForServer(s: Server): Promise<{ status: 'reset' }> {
+export function resetCliproxyManagementKeyForServer(s: Server): Promise<{ status: 'reset'; applied?: boolean }> {
   return apiFetchForServer(s, '/api/engines/cliproxy/management-key/reset', { method: 'POST' });
 }
 

@@ -216,7 +216,7 @@ impl From<io::Error> for EnsureError {
 
 /// Gera o config que falta ou completa o existente; `now_unix` dá nome ao backup. A senha nova vai a
 /// `persist_management` antes do config: depois de gravada o proxy só guarda o hash dela.
-/// `ultrafast_rule`: o proxy entende `headers` nas regras (v8 em diante); num mais velho a regra valeria para todo pedido.
+/// `ultrafast_rule`: o proxy entende `headers` nas regras; num que não entende, a regra valeria para todo pedido.
 pub fn ensure(home: &Path, now_unix: u64, persist_management: impl FnOnce(&str) -> io::Result<()>, ultrafast_rule: bool) -> Result<Ensured, EnsureError> {
     let _turn = edit_turn();
     let file = path(home);

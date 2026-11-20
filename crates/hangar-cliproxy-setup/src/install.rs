@@ -13,7 +13,7 @@ const DEFAULT_BASE: &str = "http://127.0.0.1:8317";
 const START_TIMEOUT: Duration = Duration::from_secs(30);
 const LATEST_TTL: Duration = Duration::from_secs(3600);
 const LATEST_FAILURE_TTL: Duration = Duration::from_secs(300);
-/// O proxy relê o config em ~150 ms; a folga evita gastar uma tentativa de senha com o config velho.
+/// Espera a releitura do config pelo proxy: perguntar antes gasta uma tentativa de senha com o config velho.
 const RELOAD_WAIT: Duration = Duration::from_millis(1500);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -128,14 +128,23 @@ fn ensure(ctx: &Context, ultrafast_rule: bool) -> Result<config::Ensured, Failur
 }
 
 /// A versão que o proxy em execução anuncia, que só sai na rota de gerenciamento. Ali pedido sem a senha certa conta
-/// como tentativa errada, e cinco bloqueiam o 127.0.0.1 por 30 min, login incluído: só pergunta com a senha guardada.
+/// como tentativa errada, e as erradas seguidas bloqueiam o 127.0.0.1, login incluído: só pergunta com a senha guardada.
 async fn running_version(base: &str, key: Option<&str>) -> Option<Probe> {
     let key = key?;
+    if crate::login::rejected(key) {
+        return Some(Probe { version: None, rejected: true });
+    }
     let client = hangar_core::net::http_client().timeout(Duration::from_secs(5)).build().ok()?;
     let response = client.get(format!("{base}/v0/management/config")).bearer_auth(key).send().await.ok()?;
     let version = response.headers().get("x-cpa-version").and_then(|v| v.to_str().ok())
         .and_then(|v| semver::Version::parse(v.trim().trim_start_matches('v')).ok());
-    Some(Probe { version, rejected: matches!(response.status().as_u16(), 401 | 403) })
+    let rejected = matches!(response.status().as_u16(), 401 | 403);
+    if rejected {
+        crate::login::note_rejected(key);
+    } else if response.status().is_success() {
+        crate::login::note_accepted(key);
+    }
+    Some(Probe { version, rejected })
 }
 
 /// O filtro por cabeçalho das regras de `payload` chegou no v8; sem versão conhecida, a regra fica de fora.
@@ -170,7 +179,7 @@ async fn port_open(base: &str) -> bool {
     tokio::task::spawn_blocking(move || detect::port_open(&base)).await.unwrap_or(false)
 }
 
-/// Recusas que a espera aceita antes de parar de perguntar a versão: abaixo das cinco que bloqueiam o 127.0.0.1.
+/// Recusas que a espera aceita antes de parar de perguntar a versão: abaixo do limite que bloqueia o 127.0.0.1.
 const MAX_REJECTED: u32 = 2;
 
 /// Espera o proxy desta versão responder. Outro programa na porta também aceita conexão: com a versão e a senha
@@ -303,8 +312,9 @@ pub async fn update(ctx: &Context, progress: &(dyn Fn(Step) + Send + Sync)) -> R
         check().await?;
     }
     let version = tag_version(&latest.tag);
-    // A versão nova pode entender a regra do Ultra Fast que a antiga não entendia; `payload` da pessoa fica.
-    ensure(ctx, understands_rule(version.as_ref()))?;
+    // A regra do Ultra Fast só entra depois de a versão nova responder: a antiga, se voltar, aplicaria o tier em
+    // todo pedido por não entender o filtro de cabeçalho.
+    ensure(ctx, false)?;
     progress(Step::Service);
     let config = ctx.paths.config();
     service::register(&ctx.paths.home, &ctx.paths.dir, &Service { binary: binary.clone(), config: config.clone() }).await?;
@@ -318,6 +328,10 @@ pub async fn update(ctx: &Context, progress: &(dyn Fn(Step) + Send + Sync)) -> R
         return Err(failure);
     }
     detect::write_record(&ctx.paths, &latest.tag, &binary).map_err(|e| Failure::new("cliproxy_registro_falhou", e.to_string()))?;
+    // `payload` da pessoa fica como está: a regra só entra num config sem ele.
+    if understands_rule(version.as_ref()) {
+        ensure(ctx, true)?;
+    }
     if let Some(dir) = old.parent().filter(|d| Some(*d) != binary.parent()) {
         std::fs::remove_dir_all(dir).map_err(|e| Failure::new("cliproxy_versao_antiga_ficou", format!("{}: {e}", dir.display())))?;
     }

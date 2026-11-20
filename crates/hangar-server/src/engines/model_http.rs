@@ -94,11 +94,13 @@ pub async fn response(st:&AppState,method:&Method,path:&str,query:Option<&str>) 
             let fast=models.iter().any(|m|m["supports_fast"]==true);
             let ultrafast=models.iter().any(|m|m["supports_ultrafast"]==true);
             let mut result=json!({"kind":"engine","engine":engine,"models":models});
-            if fast {
-                let runtime=st.state.runtime.get();
+            let runtime=st.state.runtime.get();
+            let tier=if let Some(runtime)=runtime {runtime.claude_spec(&name).await.and_then(Result::ok).and_then(|s|s.service_tier).map(|s|s.name())} else {None}.unwrap_or("default");
+            // Sessão ainda em Fast num motor que deixou de oferecê-lo: o tier atual sai igual, para o seletor
+            // mostrar só o Normal e a sessão poder voltar a ele.
+            if fast || tier!="default" {
                 let model=if let Some(runtime)=runtime {runtime.claude_model_in_use(&name).await} else {None}.or_else(||store::state(&st.accounts.env).0.get(engine).and_then(|v|v["model"].as_str()).map(str::to_owned));
-                let tier=if let Some(runtime)=runtime {runtime.claude_spec(&name).await.and_then(Result::ok).and_then(|s|s.service_tier).map(|s|s.name())} else {None}.unwrap_or("default");
-                result["supports_fast"]=json!(true);result["supports_ultrafast"]=json!(ultrafast);result["current"]=json!({"model":model.map(|s|s.rsplit('/').next().unwrap_or("").to_owned()),"service_tier":tier});
+                result["supports_fast"]=json!(fast);result["supports_ultrafast"]=json!(fast&&ultrafast);result["current"]=json!({"model":model.map(|s|s.rsplit('/').next().unwrap_or("").to_owned()),"service_tier":tier});
             }
             json_response(StatusCode::OK,result)
         },

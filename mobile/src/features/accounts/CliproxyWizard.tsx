@@ -8,7 +8,7 @@ import { useRouter } from 'expo-router';
 import {
   engineCliproxyForServer, getCliproxyLoginForServer, installCliproxyForServer, putCliproxyManagementKeyForServer,
   putEngineForServer, resetCliproxyManagementKeyForServer, sendCliproxyLoginCallbackForServer, startCliproxyLoginForServer,
-  type CliproxyDeteccao, type CliproxyPassoInstalacao, type CliproxyProvedorLogin, type CliproxyTarefa, type Server,
+  type CliproxyDeteccao, type CliproxyInstallStep, type CliproxyLoginProvider, type CliproxyJob, type Server,
 } from '@hangar/core';
 import { Sheet } from '../../ui/Sheet';
 import { Icon } from '../../ui/Icon';
@@ -17,7 +17,7 @@ import { haptic } from '../../ui/haptics';
 import { useSettingsColors } from '../config/colors';
 import * as m from '../../paraglide/messages';
 
-type Provider = CliproxyProvedorLogin;
+type Provider = CliproxyLoginProvider;
 export type Account = { provider: Provider; email: string };
 type Stage =
   | { k: 'loading' }
@@ -32,7 +32,7 @@ type Stage =
   | { k: 'name'; account: Account }
   | { k: 'done'; account: Account; id: string; name: string; model: string; fast: boolean };
 
-const STEP_AT: Record<CliproxyPassoInstalacao, number> = { download: 0, config: 1, service: 2, start: 3 };
+const STEP_AT: Record<CliproxyInstallStep, number> = { download: 0, config: 1, service: 2, start: 3 };
 const ENGINE_ID = /^[a-z0-9][a-z0-9_-]{0,31}$/;
 // O login devolve para o loopback da máquina do proxy; no celular essa página não abre e o endereço é colado.
 const CALLBACK = /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?\//;
@@ -61,7 +61,7 @@ const modelsFor = (info: CliproxyDeteccao | null, p: Provider) => {
   return own.length ? own : all;
 };
 
-function installError(error: NonNullable<CliproxyTarefa['error']>): string {
+function installError(error: NonNullable<CliproxyJob['error']>): string {
   switch (error.code) {
     case 'cliproxy_download_failed': return m.mobile_cliproxy_wizard_err_download();
     case 'cliproxy_sem_asset': return m.mobile_cliproxy_wizard_err_platform();

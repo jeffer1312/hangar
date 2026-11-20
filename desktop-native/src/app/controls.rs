@@ -281,8 +281,12 @@ pub(crate) fn speed_label(tier: Option<&str>) -> Option<String> {
 }
 
 fn claude_fast_state(catalog: &Value) -> Option<Speed> {
-    if text(catalog, "kind") != "engine" || catalog.get("supports_fast").and_then(Value::as_bool) != Some(true) { return None; }
+    if text(catalog, "kind") != "engine" { return None; }
     let tier = catalog.pointer("/current/service_tier").and_then(Value::as_str);
+    if catalog.get("supports_fast").and_then(Value::as_bool) != Some(true) {
+        // Motor que deixou de oferecer Fast com a sessão ainda nele: só o Normal, para ela poder voltar.
+        return tier.filter(|t| *t != "default").map(|t| Speed::of(Some(t), true, false, false));
+    }
     let model = claude_context_state(catalog).map(|(id, _)| id);
     let ultrafast = catalog.get("supports_ultrafast").and_then(Value::as_bool) == Some(true)
         && model.and_then(|id| catalog.get("models")?.as_array()?.iter().find(|m| m.get("id").and_then(Value::as_str) == Some(id)))
@@ -1570,7 +1574,10 @@ mod tests {
         assert_eq!(claude(&catalog), Some((2, [true, true, true])));
         catalog["supports_ultrafast"] = serde_json::json!(false);
         assert_eq!(claude(&catalog), Some((2, [true, true, false])));
+        // Motor que deixou de oferecer Fast: a sessão ainda nele vê só o Normal; já no Normal, o seletor some.
         catalog["supports_fast"] = serde_json::json!(false);
+        assert_eq!(claude(&catalog), Some((2, [true, false, false])));
+        catalog["current"]["service_tier"] = serde_json::json!("default");
         assert_eq!(super::claude_fast_state(&catalog), None);
         catalog["supports_fast"] = serde_json::json!(true);
         catalog["kind"] = serde_json::json!("claude");

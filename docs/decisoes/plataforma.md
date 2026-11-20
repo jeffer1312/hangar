@@ -54,6 +54,13 @@ Decisões do usuário:
   catálogo do Codex da máquina (sem catálogo, 872000 nos `gpt-6*`), e o assistente grava 95%.
 - **Pasta das contas explícita no config gerado** (`oauth.auth-dir`): o `~` padrão é o da pasta
   pessoal do processo do proxy, e o Hangar lê as contas da pasta dele.
+- **Senha de gerenciamento poupada (20/11).** No v8.0.79 (`AuthenticateManagementKey`) pedido sem
+  senha ou com a errada conta como falha, e cinco seguidas bloqueiam o IP por 30 min, 127.0.0.1 e
+  login incluídos; a versão (`X-Cpa-Version`) só sai nessa rota. Por isso a versão só é perguntada
+  com a senha guardada, a senha recusada não é repetida por pedido de fundo até ser aceita, e a
+  troca de senha confere no máximo duas vezes, com 1,5 s de espera: o proxy relê o config em
+  ~150 ms (`configReloadDebounce`). Na atualização a regra do Ultra Fast entra só depois de a
+  versão nova responder, para a antiga, se voltar, não aplicar o tier em todo pedido.
 
 Login da conta: `POST /api/engines/cliproxy/login` pede ao proxy a página (`is_webui=true` sobe o
 receptor de volta nas portas 1455 do ChatGPT ou 54545 do Claude; porta ocupada →

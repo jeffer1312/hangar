@@ -1,12 +1,12 @@
 use crate::accounts::{AccountService, environment::AccountEnvironment};
 use serde_json::{Value, json};
-use std::{fs, path::PathBuf, sync::{LazyLock, Mutex}};
+use std::{fs, path::PathBuf, sync::LazyLock};
+use hangar_cliproxy_setup::login::{note_accepted, note_rejected, rejected};
 use super::store;
 use crate::orchestration::truthy;
 
 static PREFIX: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"\A[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\z").unwrap());
 static LEGACY: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"\Ahangar-[0-9a-f]{24}\z").unwrap());
-static REJECTED: Mutex<Option<String>> = Mutex::new(None);
 
 #[derive(Clone)]
 pub struct Local { pub base_url: String, pub api_key: String }
@@ -78,9 +78,16 @@ pub fn entries(visible: Vec<(String,PathBuf)>, records: &[(PathBuf,Value)]) -> R
     let loose: Vec<(String, usize)> = records.iter().enumerate()
         .filter(|(i, (_, r))| !taken.contains(i) && r["type"] == "codex" && r["disabled"] != true)
         .filter_map(|(i, (_, r))| proxy_only_id(r).map(|id| (id, i))).collect();
-    // Credencial solta com defeito fica de fora sozinha: nunca derruba as contas que estão boas.
+    // Credencial solta com defeito fica de fora sozinha: nunca derruba as contas que estão boas. A duplicada vai
+    // ao log e o `resolve` diz o motivo, em vez de a conta só sumir.
+    let mut warned = std::collections::HashSet::new();
     for (id, i) in &loose {
-        if loose.iter().filter(|(other, _)| other == id).count() > 1 { continue; }
+        if loose.iter().filter(|(other, _)| other == id).count() > 1 {
+            if warned.insert(id) {
+                tracing::warn!(account = %id, "CLIProxyAPI: mais de uma credencial ativa para a mesma conta só do proxy; ela fica fora do seletor");
+            }
+            continue;
+        }
         let record = &records[*i].1;
         let email = record["email"].as_str().unwrap_or("");
         let prefix = record["prefix"].as_str().filter(|p| PREFIX.is_match(p)
@@ -134,7 +141,12 @@ pub fn resolve(accounts: &AccountService, account: &str, home: Option<&str>) -> 
         entries.into_iter().map(|(e,_)|e).collect()
     } else if is_proxy_only(account) {
         // Sem contas Codex na conta: a credencial continua achável depois que alguém cadastra a conta Codex dela.
-        entries(Vec::new(), &credentials(&accounts.env)?)?.into_iter().map(|(e, _)| e).collect()
+        let records = credentials(&accounts.env)?;
+        let duplicated = records.iter()
+            .filter(|(_, r)| r["type"] == "codex" && r["disabled"] != true && proxy_only_id(r).as_deref() == Some(account))
+            .count() > 1;
+        if duplicated { return Err(format!("CLIProxyAPI: mais de uma credencial ativa para a conta {account}")); }
+        entries(Vec::new(), &records)?.into_iter().map(|(e, _)| e).collect()
     } else { list_accounts(accounts)? };
     let entry = entries.into_iter().find(|e|e["account"] == account).ok_or_else(||format!("CLIProxyAPI: conta {account} desconhecida, desconectada ou desativada"))?;
     if !truthy(&entry["prefix"]) { return Err("CLIProxyAPI: conta sem prefixo; prepare as contas primeiro".into()); }
@@ -199,7 +211,7 @@ async fn name_accounts(accounts: &AccountService) -> Result<(), String> {
     let Some(key) = management_key(&accounts.env) else { return Ok(()) };
     let Some(local) = local(&accounts.env)? else { return Ok(()) };
     if pending.is_empty() { return Ok(()); }
-    if REJECTED.lock().unwrap().as_ref() == Some(&key) { return Err("CLIProxyAPI recusou a senha de gerenciamento".into()); }
+    if rejected(&key) { return Err("CLIProxyAPI recusou a senha de gerenciamento".into()); }
     let mut taken = credentials(&accounts.env)?.iter().filter_map(|(_,v)| v["prefix"].as_str().map(str::to_owned)).collect();
     let client = reqwest::Client::builder().timeout(std::time::Duration::from_secs(10)).build().map_err(|e| e.to_string())?;
     let mut errors = Vec::new(); let mut named = 0;
@@ -209,9 +221,9 @@ async fn name_accounts(accounts: &AccountService) -> Result<(), String> {
             .json(&json!({"name":path.file_name().unwrap().to_string_lossy(),"prefix":prefix})).send().await
             .map_err(|_| "CLIProxyAPI não respondeu ao nomear as contas".to_owned())?;
         match response.status().as_u16() {
-            401 => { *REJECTED.lock().unwrap() = Some(key); return Err("CLIProxyAPI recusou a senha de gerenciamento".into()); }
+            401 => { note_rejected(&key); return Err("CLIProxyAPI recusou a senha de gerenciamento".into()); }
             403 => return Err("CLIProxyAPI bloqueou o gerenciamento (403): confira o remote-management no config".into()),
-            200..=299 => { taken.insert(prefix); named += 1; }
+            200..=299 => { note_accepted(&key); taken.insert(prefix); named += 1; }
             code => errors.push(format!("{}: HTTP {code}",entry["label"].as_str().unwrap_or(""))),
         }
     }
@@ -227,4 +239,24 @@ pub async fn naming(accounts: &AccountService) -> Value {
     let mut error = name_accounts(accounts).await.err();
     let count = match unnamed(accounts) { Ok(entries) => Some(entries.len()), Err(e) => { if error.is_none() { error = Some(e); } None } };
     json!({"unnamed_accounts":count,"management_key_set":management_key(&accounts.env).is_some(),"naming_error":error})
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_proxy_only_account_with_two_active_credentials_says_why_instead_of_vanishing() {
+        let home = tempfile::tempdir().unwrap();
+        let dir = home.path().join(".cli-proxy-api");
+        fs::create_dir_all(&dir).unwrap();
+        let record = json!({"type":"codex","account_id":"acc-1","email":"ana@example.com","prefix":"ana"});
+        fs::write(dir.join("a.json"), record.to_string()).unwrap();
+        let accounts = AccountService::new(AccountEnvironment::from_map([("HOME".into(), home.path().to_string_lossy().into_owned())].into()));
+        let id = proxy_only_id(&record).unwrap();
+        assert_eq!(resolve(&accounts, &id, None).unwrap()["account"], id.as_str());
+        fs::write(dir.join("b.json"), json!({"type":"codex","account_id":"acc-1","email":"ana@example.com","prefix":"ana2"}).to_string()).unwrap();
+        let error = resolve(&accounts, &id, None).unwrap_err();
+        assert!(error.contains("mais de uma credencial ativa"), "{error}");
+    }
 }

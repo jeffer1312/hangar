@@ -2,7 +2,7 @@
 import { act, createElement, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { CliproxyDeteccao, CliproxyInstalacao, CliproxyTarefa, Server } from '@hangar/core';
+import type { CliproxyDeteccao, CliproxyInstall, CliproxyJob, Server } from '@hangar/core';
 import * as m from '../../paraglide/messages';
 import { overwriteGetLocale } from '../../paraglide/runtime';
 import { CliproxyWizard } from './CliproxyWizard';
@@ -36,7 +36,7 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 overwriteGetLocale(() => 'pt');
 
 const server: Server = { id: 'b', label: 'B', baseUrl: 'https://b.local', token: 'token-b' };
-const install = (patch: Partial<CliproxyInstalacao> = {}): CliproxyInstalacao =>
+const install = (patch: Partial<CliproxyInstall> = {}): CliproxyInstall =>
   ({ state: 'managed', version: 'v1', latest: 'v1', update_available: false, running: true, job: null, ...patch });
 const proxy = (patch: Partial<CliproxyDeteccao> = {}): CliproxyDeteccao => ({
   found: true, base_url: 'http://127.0.0.1:8317/v1', models: [{ id: 'claude-sonnet-x', context_length: null, vision: null }, { id: 'gpt-6.1-sol', context_length: 872000, vision: null }], error: null,
@@ -234,7 +234,7 @@ describe('assistente do CLIProxyAPI no celular', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(1000); await settle(); });
     expect(button(view.container, 'Tentar de novo')).toBeTruthy();
 
-    let accept: (value: { job: CliproxyTarefa }) => void = () => {};
+    let accept: (value: { job: CliproxyJob }) => void = () => {};
     calls.install.mockReturnValueOnce(new Promise((resolve) => { accept = resolve; }));
     await click(view.container, 'Tentar de novo');
     await act(async () => { await vi.advanceTimersByTimeAsync(1000); await settle(); });

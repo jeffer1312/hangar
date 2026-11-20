@@ -15,7 +15,8 @@ interface Args {
 
 export type Tier = 'default' | 'priority' | 'ultrafast';
 // `ultrafast`: o modelo atual também aceita Ultra Fast (Codex Pro; motor com conta fixa Pro).
-type Catalog = { tier: string | null; supported: boolean; ultrafast: boolean; visible: boolean };
+// `offered`: o motor ainda oferece Fast; sem ele, a sessão que ficou em Fast só pode voltar ao Normal.
+type Catalog = { tier: string | null; supported: boolean; ultrafast: boolean; visible: boolean; offered: boolean };
 /// As três velocidades, na ordem do seletor.
 export const SPEED_TIERS = ['default', 'priority', 'ultrafast'] as const satisfies readonly Tier[];
 const TIERS: readonly string[] = SPEED_TIERS;
@@ -87,15 +88,19 @@ export function useServiceTierControl({ serverId, name, provider, model: selecte
           supported: offers('priority'),
           ultrafast: offers('ultrafast'),
           visible: true,
+          offered: true,
         };
       } else {
         const res = await getModelOptions(name, server, { fresh: true });
         const model = res.current?.model?.replace(/\[1m\]$/, '');
+        const offered = res.supports_fast === true;
+        const inFast = (res.current?.service_tier ?? 'default') !== 'default';
         next = {
           tier: res.current?.service_tier ?? null,
-          supported: res.models.some((mo) => mo.id === model && mo.supports_fast === true),
-          ultrafast: res.models.some((mo) => mo.id === model && mo.supports_ultrafast === true),
-          visible: res.kind === 'engine' && res.engine === engine && res.supports_fast === true,
+          supported: offered && res.models.some((mo) => mo.id === model && mo.supports_fast === true),
+          ultrafast: offered && res.models.some((mo) => mo.id === model && mo.supports_ultrafast === true),
+          visible: res.kind === 'engine' && res.engine === engine && (offered || inFast),
+          offered,
         };
       }
       if (my === seq.current) { setCatalog(next); setConfirmed(null); }
@@ -116,12 +121,13 @@ export function useServiceTierControl({ serverId, name, provider, model: selecte
   const hidden = !candidate || catalog?.visible === false;
   const available = !hidden && !!catalog && !loading && !error && (isCodex
     ? known || (tier === 'default' && (catalog.supported || catalog.ultrafast))
-    : catalog.supported && (tier === 'default' || known));
-  // Ultra Fast já ligado continua escolhível para poder desligar.
-  const ultrafast = available && (current === 'ultrafast' || catalog?.ultrafast === true);
+    : catalog.offered ? catalog.supported && (tier === 'default' || known) : known);
+  // Ultra Fast já ligado continua escolhível para poder desligar; motor sem Fast deixa só o Normal.
+  const fast = available && catalog?.offered !== false;
+  const ultrafast = fast && (current === 'ultrafast' || catalog?.ultrafast === true);
 
   const choose = useCallback(async (next: Tier) => {
-    if (busy.current || !available || next === current || (next === 'ultrafast' && !ultrafast)) return;
+    if (busy.current || !available || next === current || (next === 'ultrafast' && !ultrafast) || (next === 'priority' && !fast)) return;
     if (!server) { setNotice(m.servidor_nao_existe()); return; }
     const my = ++seq.current;
     const revision = liveRevision.current;
@@ -144,7 +150,7 @@ export function useServiceTierControl({ serverId, name, provider, model: selecte
     } finally {
       if (my === seq.current) { busy.current = false; setApplying(false); }
     }
-  }, [available, ultrafast, server, name, current, isCodex, liveTier]);
+  }, [available, fast, ultrafast, server, name, current, isCodex, liveTier]);
 
-  return { hidden, tier: current, ultrafast, available, loading, applying, error, notice, load, choose };
+  return { hidden, tier: current, fast, ultrafast, available, loading, applying, error, notice, load, choose };
 }

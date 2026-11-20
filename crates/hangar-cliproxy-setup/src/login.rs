@@ -5,6 +5,26 @@ use serde_json::{Value, json};
 
 const TIMEOUT: Duration = Duration::from_secs(15);
 
+/// A última senha de gerenciamento recusada. Cada recusa conta para o bloqueio do 127.0.0.1, login incluído:
+/// pedido de fundo (versão, nomear contas) não repete uma senha que já falhou.
+static REJECTED: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+pub fn rejected(key: &str) -> bool {
+    REJECTED.lock().unwrap_or_else(|e| e.into_inner()).as_deref() == Some(key)
+}
+
+pub fn note_rejected(key: &str) {
+    *REJECTED.lock().unwrap_or_else(|e| e.into_inner()) = Some(key.to_owned());
+}
+
+/// Senha aceita pelo proxy volta a valer para os pedidos de fundo.
+pub fn note_accepted(key: &str) {
+    let mut rejected = REJECTED.lock().unwrap_or_else(|e| e.into_inner());
+    if rejected.as_deref() == Some(key) {
+        *rejected = None;
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Management {
     pub base_url: String,
@@ -75,7 +95,10 @@ async fn call(m: &Management, request: reqwest::RequestBuilder) -> Result<Value,
     let body: Value = response.json().await.unwrap_or(Value::Null);
     let message = body["error"].as_str().unwrap_or("").to_owned();
     match status {
-        200..=299 => Ok(body),
+        200..=299 => {
+            note_accepted(&m.key);
+            Ok(body)
+        }
         401 | 403 => Err(Error::Rejected),
         404 => Err(not_found(version)),
         500 if message.contains("callback server") => Err(Error::PortBusy),

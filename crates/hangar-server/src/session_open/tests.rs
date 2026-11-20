@@ -945,6 +945,28 @@ fn fast_recognizes_cliproxy_client_keys_in_both_config_formats() {
     assert!(resolve::resolve_open(&normal, &OWNER, &facts).is_ok());
 }
 
+/// Sessão que já existe e perdeu o suporte volta mais devagar em vez de não voltar: Ultra Fast em Fast, Fast na normal.
+#[test]
+fn a_saved_speed_without_support_falls_back_on_relaunch() {
+    let runtime = test_runtime();
+    let home = tempfile::tempdir().unwrap();
+    let home = home.path().canonicalize().unwrap();
+    for dir in ["work", ".claude", ".cli-proxy-api"] { std::fs::create_dir_all(home.join(dir)).unwrap(); }
+    std::fs::write(home.join(".cli-proxy-api/config.yaml"), "access:\n  api-keys:\n    - k\n").unwrap();
+    let engines = |fast: bool| std::fs::write(home.join(".claude/engines.json"),
+        json!({"gpt": {"base_url": "http://127.0.0.1:8317/v1", "api_key": "k", "model": "gpt-6.1-sol", "fast": fast}}).to_string()).unwrap();
+    engines(true);
+    let request = SessionOpenRequest::parse(json!({"name": "s1", "cwd": home.join("work"), "provider": "claude", "headless": false,
+        "engine": "gpt", "model": "gpt-6.1-sol", "service_tier": "priority"}).to_string().as_bytes()).unwrap();
+    let facts = local_facts(&home, &runtime);
+    let mut spec = resolve::resolve_open(&request, &OWNER, &facts).unwrap().spec;
+    assert_eq!(claude::relaunch_tier(&spec, &facts), Some(ServiceTier::Priority));
+    spec.service_tier = Some(ServiceTier::Ultrafast);
+    assert_eq!(claude::relaunch_tier(&spec, &facts), Some(ServiceTier::Priority), "sem conta Pro fixa o Ultra Fast cai em Fast");
+    engines(false);
+    assert_eq!(claude::relaunch_tier(&spec, &facts), None, "motor sem Fast: a sessão volta na velocidade normal");
+}
+
 /// `model: ""` com Fast cai no modelo do motor como o `or` do Python: o Fast passa, e quem recusa é
 /// a regra do modelo, com o código e o texto de lá.
 #[test]

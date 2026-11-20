@@ -237,16 +237,12 @@ pub fn plan_for(env: &AccountEnvironment, bridge: Option<&PluginBridge>, spec: &
             .map_err(|error| refused("launch_engine_account", &error.msg))?),
         _ => None,
     };
-    let fast = spec.service_tier.is_some() && facts.supports_fast(engine, spec.model.as_deref());
-    // Mesma ideia para o Ultra Fast: conta que perdeu o plano ou regra que sumiu do config não impedem a sessão de
-    // voltar; ela volta em Fast (ou na normal, se nem o Fast servir).
+    let tier = crate::session_open::claude::relaunch_tier(spec, facts);
+    let fast = tier.is_some();
     let degraded;
-    let spec = if spec.service_tier == Some(crate::session_open::ServiceTier::Ultrafast) && !engine.is_some_and(|engine|
-        crate::engines::catalog::supports_ultrafast(&crate::accounts::AccountService::new(env.clone()), engine, spec.model.as_deref(), account)) {
-        tracing::warn!(session = %spec.name, engine = engine.unwrap_or(""), account = account.unwrap_or(""),
-            model = spec.model.as_deref().unwrap_or(""), fast, "Ultra Fast indisponível agora; a sessão volta em Fast se o motor permitir");
+    let spec = if tier != spec.service_tier {
         let mut copy = spec.clone();
-        copy.service_tier = Some(crate::session_open::ServiceTier::Priority);
+        copy.service_tier = tier;
         degraded = copy;
         &degraded
     } else { spec };

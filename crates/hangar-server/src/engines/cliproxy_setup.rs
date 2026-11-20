@@ -189,20 +189,22 @@ pub async fn handle(st: &AppState, method: &Method, path: &str, bytes: &[u8]) ->
                 .unwrap_or_else(|e| Err(install::Failure { code: "cliproxy_config_ilegivel", detail: e.to_string() }));
             match reset {
                 Ok(()) => {
-                    // O proxy relê o config em ~150 ms. Cada senha recusada conta para o bloqueio de 30 min do
-                    // 127.0.0.1 (cinco seguidas), então espera a releitura e confere no máximo duas vezes.
+                    // Cada senha recusada conta para o bloqueio do 127.0.0.1, então espera a releitura do config e
+                    // confere no máximo duas vezes. Só vale como aplicada a resposta que passou pela autenticação.
                     let mut applied = false;
                     match management(st) {
                         Ok(m) => {
+                            let mut reason = "o proxy ainda não a aceitou";
                             for _ in 0..RESET_PROBES {
                                 tokio::time::sleep(RESET_WAIT).await;
                                 match login::status(&m, "hangar-reset-probe").await {
                                     Err(login::Error::Rejected | login::Error::Network(_)) => {}
-                                    _ => { applied = true; break; }
+                                    Ok(_) | Err(login::Error::Proxy(400..=499, _)) => { applied = true; break; }
+                                    Err(other) => { reason = other.code(); break; }
                                 }
                             }
                             if !applied {
-                                tracing::warn!("cliproxy: senha nova gravada, mas o proxy ainda não a aceitou");
+                                tracing::warn!(reason, "cliproxy: senha nova gravada, mas a aplicação não foi confirmada");
                             }
                         }
                         Err(_) => tracing::warn!("cliproxy: senha nova gravada, mas não deu para ler o endereço e a senha para conferir"),

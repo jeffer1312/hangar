@@ -118,6 +118,30 @@ pub(crate) fn settings_json(settings: &Value) -> String {
     Value::Object(merged).to_string()
 }
 
+/// A velocidade com que uma sessão que já existe volta agora. A criação e a troca recusam velocidade sem
+/// suporte; acordar, restaurar ou reabrir sozinho não: Ultra Fast que perdeu o suporte volta em Fast, e Fast
+/// sem suporte na normal, em vez de a sessão não voltar.
+pub fn relaunch_tier(spec: &SessionSpec, facts: &dyn super::OpenFacts) -> Option<super::ServiceTier> {
+    let tier = spec.service_tier?;
+    let (engine, account) = match &spec.account {
+        Account::Engine { name, account, .. } => (Some(name.as_str()), account.as_deref()),
+        _ => (None, None),
+    };
+    let model = spec.model.as_deref();
+    if !facts.supports_fast(engine, model) {
+        if tier.is_fast() {
+            tracing::warn!(session = %spec.name, tier = tier.name(), "Fast indisponível agora; a sessão volta na velocidade normal");
+        }
+        return None;
+    }
+    if tier == super::ServiceTier::Ultrafast && !facts.supports_ultrafast(engine, model, account) {
+        tracing::warn!(session = %spec.name, engine = engine.unwrap_or(""), account = account.unwrap_or(""), model = model.unwrap_or(""),
+            "Ultra Fast indisponível agora; a sessão volta em Fast");
+        return Some(super::ServiceTier::Priority);
+    }
+    Some(tier)
+}
+
 /// O pane do Claude: argv do agente (com o motor e o só leitura em volta) e o `-e` da sessão.
 pub fn pane(spec: &SessionSpec, sid: &str, ctx: &ClaudeContext) -> PaneSpec {
     let mut claude: Vec<String> = vec!["claude".into(), (if ctx.resume { "--resume" } else { "--session-id" }).into(), sid.into()];

@@ -194,7 +194,7 @@ function pickModel(model: ModelView, id: string, onSelected: () => void) {
 type EffortView = Pick<ReturnType<typeof useEffortControl>, 'items' | 'select'> &
   Partial<Pick<ReturnType<typeof useEffortControl>, 'hidden' | 'value' | 'loading' | 'applying' | 'error' | 'notice' | 'load'>>;
 export type FastView = Pick<ReturnType<typeof useServiceTierControl>, 'tier' | 'available' | 'choose'> &
-  Partial<Pick<ReturnType<typeof useServiceTierControl>, 'hidden' | 'ultrafast' | 'loading' | 'applying' | 'error' | 'notice' | 'load'>>;
+  Partial<Pick<ReturnType<typeof useServiceTierControl>, 'hidden' | 'fast' | 'ultrafast' | 'loading' | 'applying' | 'error' | 'notice' | 'load'>>;
 
 // A criação entrega escolhas locais; só o controlador do chat conhece uma sessão viva.
 export function SessionSettingsControl({ open, onOpen, onClose, model, effort, fast, plan = false, icon, glyph, modeText, header, children, panel }: {
@@ -266,7 +266,8 @@ export function FastControl({ fast, comfortable = false }: { fast: FastView; com
       <View style={styles.efforts} accessibilityRole="radiogroup" accessibilityLabel={m.native_ctl_speed()}>
         {SPEED_TIERS.map((tier) => {
           const selected = fast.tier === tier;
-          const disabled = !fast.available || !!fast.applying || (tier === 'ultrafast' && !fast.ultrafast);
+          const disabled = !fast.available || !!fast.applying || (tier === 'ultrafast' && !fast.ultrafast)
+            || (tier === 'priority' && fast.fast === false);
           return <Pressable key={tier} disabled={disabled} hitSlop={{ top: 4, bottom: 4 }}
             onPress={() => { if (selected) return; haptic.selection(); void fast.choose(tier); }}
             style={({ pressed }) => [styles.effort, styles.share,
