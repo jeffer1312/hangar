@@ -247,7 +247,6 @@ it('linha nova não puxa ao fim enquanto o dedo arrasta, mesmo perto do fim', ()
   // Soltou perto do fim, mas o impulso leva para cima: a ida ao fim não corta o deslize.
   act(() => latestList().onScrollEndDrag?.(at(1590)));
   act(() => latestList().onMomentumScrollBegin?.(at(1590)));
-  act(() => vi.advanceTimersByTime(300));
   addRow('during-momentum');
   expect(list.scrollToEnd).not.toHaveBeenCalled();
   act(() => latestList().onMomentumScrollEnd?.(at(1200)));
@@ -267,6 +266,39 @@ it('linha nova não puxa ao fim enquanto o dedo arrasta, mesmo perto do fim', ()
   act(() => vi.advanceTimersByTime(150));
   expect(list.scrollToEnd).not.toHaveBeenCalled();
   addRow('back-at-end');
+  expect(list.scrollToEnd).toHaveBeenCalledWith({ animated: false });
+});
+
+it('impulso sem aviso de fim e Ir pro fim não deixam a conversa sem seguir o fim', () => {
+  vi.useFakeTimers();
+  const initial = props([event({ id: 'one' })]);
+  const { root, container } = mount(createElement(MessageList, initial));
+  const at = (y: number) => ({ nativeEvent: {
+    contentOffset: { y }, contentSize: { height: 2000 }, layoutMeasurement: { height: 400 },
+  } } as NativeSyntheticEvent<NativeScrollEvent>);
+  let events = initial.events;
+  const addRow = (id: string) => {
+    events = [...events, event({ id })];
+    act(() => root.render(createElement(MessageList, { ...initial, events })));
+    act(() => vi.advanceTimersByTime(300));
+  };
+  act(() => vi.advanceTimersByTime(300));
+  list.scrollToEnd.mockClear();
+  act(() => latestList().onScrollBeginDrag?.(at(1600)));
+  act(() => latestList().onScrollEndDrag?.(at(1600)));
+  act(() => latestList().onMomentumScrollBegin?.(at(1600)));
+  act(() => vi.advanceTimersByTime(600)); // O impulso parou sem aviso de fim.
+  addRow('after-stall');
+  expect(list.scrollToEnd).toHaveBeenCalledWith({ animated: false });
+  list.scrollToEnd.mockClear();
+  act(() => latestList().onScrollBeginDrag?.(at(1000)));
+  act(() => latestList().onScrollEndDrag?.(at(1000)));
+  act(() => latestList().onMomentumScrollBegin?.(at(1000)));
+  act(() => container.querySelector<HTMLButtonElement>(`[aria-label="${m.msg_ir_ultima()}"]`)!.click());
+  expect(list.scrollToEnd).toHaveBeenCalledWith({ animated: true });
+  list.scrollToEnd.mockClear();
+  act(() => latestList().onScroll(at(1600))); // A rolagem do botão chegou ao fim, sem aviso de fim do impulso.
+  addRow('after-button');
   expect(list.scrollToEnd).toHaveBeenCalledWith({ animated: false });
 });
 

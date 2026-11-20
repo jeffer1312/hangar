@@ -180,6 +180,16 @@ export function MessageList({
   // e, logo depois de abrir a conversa, ainda diz "no fim".
   const dragging = useRef(false);
   const skippedWhileDragging = useRef(false);
+  const coasting = useRef(false);
+  const releaseTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(releaseTimer.current), []);
+  // Rolagem do próprio app interrompe o impulso sem aviso de fim: o gesto acaba ali.
+  const stopGesture = useCallback(() => {
+    clearTimeout(releaseTimer.current);
+    dragging.current = false;
+    coasting.current = false;
+    skippedWhileDragging.current = false;
+  }, []);
   const dataRef = useRef(data);
   useEffect(() => { dataRef.current = data; }, [data]);
   // Medidas lidas na hora do toque, por referência: como dependência, cada mudança de altura do
@@ -194,6 +204,7 @@ export function MessageList({
     if (i < 0 || row?.type !== 'event' || !lista.current) return;
     const source = row.ev.text ?? '';
     flashQuoteSource(ref.source);
+    stopGesture();
     // Começo da resposta no topo (viewPosition 0): com 0.3, resposta mais alta que a tela ficava
     // com o começo, e o trecho, acima da vista.
     void lista.current.scrollToIndex({ index: i, animated: false, viewPosition: 0, viewOffset: quoteGap }).then(() => {
@@ -216,7 +227,7 @@ export function MessageList({
         if (offset > st.scroll + 1) void list.scrollToOffset({ offset, animated: layoutRef.current.animated });
       }, 80);
     });
-  }, []);
+  }, [stopGesture]);
   const working = stateEvent?.state === 'working';
   const desde = !working ? null : projection.lastSent === null ? turnSeen
     : turnSeen === null ? projection.lastSent : Math.max(projection.lastSent, turnSeen);
@@ -306,18 +317,27 @@ export function MessageList({
     if (reading.current.atEnd && toolGroupPausedRef.current) resumeFollowing();
     setLongeDoFim(falta > viewport);
   }, [resumeFollowing]);
-  const releaseTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  useEffect(() => () => clearTimeout(releaseTimer.current), []);
   const settle = useCallback(() => {
     clearTimeout(releaseTimer.current);
     dragging.current = false;
+    coasting.current = false;
     const skipped = skippedWhileDragging.current;
     skippedWhileDragging.current = false;
     // Parou no fim depois de chegar linha durante o gesto: faz a ida ao fim que ficou para trás.
     if (skipped && reading.current.atEnd && !toolGroupPausedRef.current) void lista.current?.scrollToEnd({ animated: false });
   }, []);
+  // Impulso sem notícia por 500 ms acabou, mesmo que o aviso de fim não chegue.
+  const armCoastingStall = useCallback(() => {
+    clearTimeout(releaseTimer.current);
+    releaseTimer.current = setTimeout(settle, 500);
+  }, [settle]);
+  const onListScroll = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
+    if (coasting.current) armCoastingStall();
+    onScroll(e);
+  }, [onScroll, armCoastingStall]);
   const onScrollBeginDrag = useCallback(() => {
     clearTimeout(releaseTimer.current);
+    coasting.current = false;
     dragging.current = true;
     reading.current.atEnd = false;
   }, []);
@@ -328,9 +348,10 @@ export function MessageList({
     releaseTimer.current = setTimeout(settle, 100);
   }, [onScroll, settle]);
   const onMomentumScrollBegin = useCallback(() => {
-    clearTimeout(releaseTimer.current);
     dragging.current = true;
-  }, []);
+    coasting.current = true;
+    armCoastingStall();
+  }, [armCoastingStall]);
   const onMomentumScrollEnd = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
     onScroll(e);
     settle();
@@ -388,10 +409,11 @@ export function MessageList({
     });
   }, [serverId, sessionName]);
   const irProFim = useCallback(() => {
+    stopGesture();
     if (toolGroupPausedRef.current) resumeFollowing();
     setLongeDoFim(false);
     void lista.current?.scrollToEnd({ animated: look !== 'terminal' });
-  }, [resumeFollowing, look]);
+  }, [stopGesture, resumeFollowing, look]);
 
   // Largura da coluna (Aparência › Texto da conversa): abaixo de 100% a conversa estreita no meio.
   const recuo = conversationInset(boxWidth ?? width, theme.conversa.coluna, theme.base.space[4], maxReading);
@@ -408,7 +430,7 @@ export function MessageList({
     ) : null}
     <LegendList
       ref={lista}
-      onScroll={onScroll}
+      onScroll={onListScroll}
       onScrollBeginDrag={onScrollBeginDrag}
       onScrollEndDrag={onScrollEndDrag}
       onMomentumScrollBegin={onMomentumScrollBegin}
