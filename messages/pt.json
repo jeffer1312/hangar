@@ -7906,6 +7906,7 @@
   "native_cliproxy_update_confirm_title": "Atualizar o CLIProxyAPI agora?",
   "native_cliproxy_update_confirm_one": "1 sessão está usando o proxy. Ele reinicia durante a atualização, e a resposta que estiver chegando nela é cortada.",
   "native_cliproxy_update_confirm_many": "{n} sessões estão usando o proxy. Ele reinicia durante a atualização, e a resposta que estiver chegando nelas é cortada.",
+  "native_cliproxy_update_confirm_some": "Há sessões usando o proxy. Ele reinicia durante a atualização, e a resposta que estiver chegando nelas é cortada.",
   "native_cliproxy_update_confirm_ok": "Atualizar mesmo assim",
   "native_cliproxy_wizard_err_cliproxy_porta_ocupada": "Outro programa já usa a porta do CLIProxyAPI nesta máquina.",
   "native_cliproxy_wizard_err_erro_cliproxy_ocupado": "Já existe uma instalação do CLIProxyAPI em andamento.",

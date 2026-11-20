@@ -6,6 +6,8 @@ use super::cliproxy::{ItemState, code_text, step_item};
 
 /// Quanto o "atualizado" fica na tela antes de sumir.
 const DONE_FOR: Duration = Duration::from_secs(4);
+/// Leituras seguidas que falham durante a troca antes de desistir de acompanhar (uma por segundo).
+const POLL_FAILURES: u32 = 60;
 /// As três etapas que a atualização informa, na ordem do `step` do servidor.
 const UPDATE_STEPS: [(&str, &str); 3] = [("download", "cliproxy_update_step_download"), ("service", "cliproxy_update_step_service"),
     ("start", "cliproxy_update_step_start")];
@@ -104,9 +106,15 @@ impl Hangar {
         let done = self.update_send();
         let seq = { let u = &mut self.accounts.proxy; u.seq += 1; u.seq };
         self.accounts.proxy.poll = Some(self.runtime.spawn(async move {
+            let mut failures = 0;
             loop {
                 tokio::time::sleep(Duration::from_secs(1)).await;
                 let read = api.server_read(&["engines", "cliproxy", "install"], &[], 20).await;
+                // O servidor pode reiniciar no meio da troca: leitura que falha espera a próxima volta, até um teto.
+                if read.is_err() {
+                    failures += 1;
+                    if failures < POLL_FAILURES { continue; }
+                } else { failures = 0; }
                 let running = matches!(&read, Ok(v) if v.pointer("/job/done").and_then(Value::as_bool) == Some(false));
                 done(UpdateReply::Read(seq, read)).await;
                 if !running { break; }
@@ -128,9 +136,12 @@ impl Hangar {
         cx.notify();
     }
 
-    fn confirm_proxy_update(&mut self, sessions: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let body = if sessions == 1 { tr("cliproxy_update_confirm_one") }
-            else { tr("cliproxy_update_confirm_many").replace("{n}", &sessions.to_string()) };
+    fn confirm_proxy_update(&mut self, sessions: Option<usize>, window: &mut Window, cx: &mut Context<Self>) {
+        let body = match sessions {
+            Some(1) => tr("cliproxy_update_confirm_one"),
+            Some(n) => tr("cliproxy_update_confirm_many").replace("{n}", &n.to_string()),
+            None => tr("cliproxy_update_confirm_some"),
+        };
         let weak = cx.entity().downgrade();
         window.open_dialog(cx, move |dialog, window, _| {
             let weak = weak.clone();
@@ -160,6 +171,12 @@ impl Hangar {
                         // Leitura em segundo plano: a página segue sem a faixa, e a falha fica no log.
                         eprintln!("[contas] estado do CLIProxyAPI não veio: {error}");
                         u.poll = None;
+                        // Mas a releitura que o clique pediu (confirmação) ou que acompanhava a troca é da ação.
+                        if std::mem::take(&mut u.confirm) || std::mem::take(&mut u.asked) {
+                            u.install = None;
+                            u.outcome = Some(Outcome::Failed(error));
+                        }
+                        cx.notify();
                         return;
                     }
                 };
@@ -188,14 +205,30 @@ impl Hangar {
                             Some(error) => Outcome::Failed(failure_text(&error.code, &install)),
                         });
                     }
+                    // O servidor reiniciou e perdeu a tarefa: a versão em dia diz que a troca entrou.
+                    None if u.asked => {
+                        u.asked = false;
+                        if !install.update_available && let Some(tag) = install.version.clone() {
+                            u.outcome = Some(Outcome::Done(tag, Instant::now()));
+                            let weak = cx.entity().downgrade();
+                            cx.spawn(async move |_, cx| {
+                                cx.background_executor().timer(DONE_FOR).await;
+                                let _ = weak.update(cx, |this, cx| {
+                                    if matches!(this.accounts.proxy.outcome, Some(Outcome::Done(..))) { this.accounts.proxy.outcome = None; }
+                                    cx.notify();
+                                });
+                            }).detach();
+                        }
+                    }
                     _ => {}
                 }
                 u.poll = None;
-                let confirm = std::mem::take(&mut u.confirm).then(|| install.sessions.unwrap_or(0));
+                let confirm = std::mem::take(&mut u.confirm).then_some(install.sessions);
                 u.install = Some(install);
-                // Ninguém mais no proxy desde a recusa: atualiza direto, sem perguntar.
+                // Ninguém mais no proxy desde a recusa: atualiza direto, sem perguntar. Contagem que não veio
+                // pergunta sem número, em vez de reenviar às cegas.
                 match confirm {
-                    Some(0) => self.post_proxy_update(false, cx),
+                    Some(Some(0)) => self.post_proxy_update(false, cx),
                     Some(sessions) => self.confirm_proxy_update(sessions, window, cx),
                     None => {}
                 }

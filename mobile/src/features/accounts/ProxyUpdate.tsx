@@ -42,6 +42,7 @@ export function useProxyUpdate(server: Server | null) {
   const alive = useRef(true);
   const asked = useRef(false);
   const polling = useRef(false);
+  const generation = useRef(0);
   const seq = useRef(0);
   const doneTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
@@ -61,7 +62,19 @@ export function useProxyUpdate(server: Server | null) {
 
   const finish = useCallback((next: CliproxyInstall) => {
     const job = updateJob(next);
-    if (!job?.done || !asked.current) return;
+    if (!asked.current) return;
+    // Servidor que reiniciou perde a tarefa: a versão em dia diz que a troca entrou.
+    if (!job) {
+      asked.current = false;
+      if (next.update_available === false && next.version) {
+        haptic.success();
+        setOutcome({ k: 'done', tag: next.version });
+        clearTimeout(doneTimer.current);
+        doneTimer.current = setTimeout(() => { if (alive.current) setOutcome(o => o?.k === 'done' ? null : o); }, DONE_FOR);
+      }
+      return;
+    }
+    if (!job.done) return;
     asked.current = false;
     if (!job.error) {
       haptic.success();
@@ -75,15 +88,19 @@ export function useProxyUpdate(server: Server | null) {
   const poll = useCallback(async () => {
     if (polling.current) return;
     polling.current = true;
+    // Cada montagem do efeito tem a sua vez: o laço de um servidor anterior não segue no seguinte.
+    const my = generation.current;
+    const mine = () => alive.current && generation.current === my;
     try {
-      while (alive.current) {
+      while (mine()) {
         await new Promise(resolve => setTimeout(resolve, 1000));
-        if (!alive.current) return;
+        if (!mine()) return;
+        // Leitura que falha (o servidor reinicia na troca) só espera a próxima volta.
         const next = await read();
-        if (!next) return;
+        if (!next || !mine()) continue;
         if (!updateJob(next) || updateJob(next)!.done) { finish(next); return; }
       }
-    } finally { polling.current = false; }
+    } finally { if (generation.current === my) polling.current = false; }
   }, [read, finish]);
 
   const reload = useCallback(async () => {
@@ -130,7 +147,7 @@ export function useProxyUpdate(server: Server | null) {
   useEffect(() => {
     alive.current = true;
     void reload();
-    return () => { alive.current = false; seq.current++; clearTimeout(doneTimer.current); };
+    return () => { alive.current = false; seq.current++; generation.current++; polling.current = false; clearTimeout(doneTimer.current); };
   }, [reload]);
 
   return { install, outcome, posting, reload, update };

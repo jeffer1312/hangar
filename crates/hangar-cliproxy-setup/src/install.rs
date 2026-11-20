@@ -224,7 +224,7 @@ fn external_config(unit: Option<&std::path::Path>, units: &[std::path::PathBuf],
     let raw = match detect::unit_config(&text) {
         Some(raw) => raw.to_string_lossy().into_owned(),
         None => match detect::unit_working_dir(&text) {
-            Some(dir) => format!("{}/config.yaml", dir.replace('~', "%h")),
+            Some(dir) => format!("{}/config.yaml", dir.strip_prefix('~').map_or(dir.clone(), |rest| format!("%h{rest}"))),
             None if detect::is_system_unit(unit) =>
                 return Err(manual(format!("{} não diz em que pasta o proxy roda nem qual config ele lê", unit.display()))),
             None => "%h/config.yaml".to_owned(),
