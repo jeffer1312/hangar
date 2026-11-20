@@ -6625,6 +6625,7 @@
   "native_beta_thinking": "Thinking",
   "native_beta_draft_direct": "Goes into the turn in progress",
   "native_beta_draft_queue": "Goes to the queue and is sent when the turn ends",
+  "native_beta_draft_conversation": "Joins the conversation; the agent reads it at the next pause, without stopping",
   "native_beta_draft_jev": "Jev decides whether it joins the turn or waits in the queue",
   "native_beta_cache_left": "Cache expires in {label}",
   "native_beta_cache_expired": "Cache expired",

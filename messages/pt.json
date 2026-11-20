@@ -6625,6 +6625,7 @@
   "native_beta_thinking": "Pensando",
   "native_beta_draft_direct": "Entra no turno em andamento",
   "native_beta_draft_queue": "Vai para a fila e sai quando o turno acabar",
+  "native_beta_draft_conversation": "Entra na conversa e o agente lê na próxima pausa, sem parar",
   "native_beta_draft_jev": "O Jev decide se entra no turno ou vai para a fila",
   "native_beta_cache_left": "Cache expira em {label}",
   "native_beta_cache_expired": "Cache expirou",
