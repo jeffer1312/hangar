@@ -5552,7 +5552,7 @@ impl Hangar {
             && !self.side_menu_shown() && self.side_tab() == appearance::SideTab::Context;
         // Sem o anel, o cartão do contexto ficaria preso a uma âncora que não existe mais.
         if context_in_panel { self.context_card = false; }
-        let footer =(repo.is_some() || ctx_pct.is_some() || session.is_some() || cache.is_some()).then(|| {
+        let footer = (repo.is_some() || ctx_pct.is_some() || session.is_some() || cache.is_some()).then(|| {
             let branch = status.as_ref().and_then(|s| s.branch.clone()).or_else(|| session.as_ref().and_then(|s| s.branch.clone())).unwrap_or_default();
             let dirty = status.as_ref().and_then(|s| s.dirty) == Some(true);
             let (added, removed) = session.as_ref().map(|s| (s.git_added.filter(|n| *n > 0), s.git_removed.filter(|n| *n > 0))).unwrap_or((None, None));
