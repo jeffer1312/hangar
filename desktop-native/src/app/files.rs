@@ -385,7 +385,7 @@ impl Hangar {
                             // Arquivo grande é só leitura e não guarda o texto em `base`: nunca fica "não salvo".
                             doc.dirty = !doc.large() && doc.editor.read(cx).value().as_ref() != doc.base.text;
                             doc.saved = None;
-                            // Qualquer mudança no texto (edição, Descartar, Recarregar) deixa a tabela para ser refeita ao voltar.
+                            // Edição deixa a tabela para ser refeita ao voltar; Descartar marca à parte e Recarregar traz a nova.
                             if doc.table.is_some() && !doc.large() { doc.table_stale = true; }
                             if let Some(view) = &doc.markdown {
                                 let text = doc.editor.read(cx).value().to_string();
@@ -494,6 +494,8 @@ impl Hangar {
         if doc.saving || doc.reloading { return; }
         doc.editor.update(cx, |state, cx| state.set_value(doc.base.text.clone(), window, cx));
         if let Some(markdown) = &doc.markdown { markdown.update(cx, |state, cx| state.set_text(&doc.base.text, cx)); }
+        // `set_value` não avisa a mudança: a tabela montada com a edição descartada fica para ser refeita.
+        doc.table_stale = doc.table.is_some();
         doc.dirty = false;
         (doc.error, doc.saved) = (None, None);
         cx.notify();

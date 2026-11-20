@@ -227,7 +227,7 @@ impl Hangar {
                 doc.large_size = large.then_some(content.text.len());
                 if let Some(markdown) = doc.markdown.as_ref().filter(|_| !large) { markdown.update(cx, |state, cx| state.set_text(&content.text, cx)); }
                 // Cresceu além do teto: a prévia de Markdown sai e a aba mostra o código. O caminho inverso não cria a
-                // prévia: como a linguagem de destaque, ela volta ao reabrir a aba.
+                // prévia: ela volta ao reabrir a aba.
                 if large && doc.markdown.is_some() {
                     (doc.markdown, doc._markdown_changed) = (None, None);
                     tab.reader.set_mode(super::reader::ReaderMode::Source);
