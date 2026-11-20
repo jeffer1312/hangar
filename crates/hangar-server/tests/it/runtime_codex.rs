@@ -2392,6 +2392,20 @@ fn steer_without_a_known_turn_reads_it_first() {
 }
 
 #[test]
+fn full_history_resume_keeps_the_running_turn_id() {
+    // Vida sem perguntas semeadas retoma com o histórico inteiro: a rodada em andamento vem nele.
+    let mut engine = terminal();
+    let resume = resume_of(&connect(&mut engine));
+    assert!(resume["params"].get("excludeTurns").is_none(),"{resume}");
+    line(&mut engine,json!({"id":resume["id"],"result":{"thread":{"id":"thread-1","path":"/r/one.jsonl","status":{"type":"active","activeFlags":[]},
+        "turns":[{"id":"turn-6","status":"completed","items":[]},{"id":"turn-7","status":"inProgress","items":[]}]}}}),12.0);
+    let effects = engine.command(RuntimeCommand { operation_id:"steer".into(),kind:OperationKind::Steer,payload:json!({"text":"mais curto","turn_id":null}) },clock(13.0)).unwrap();
+    let steer = frames(&effects)[0].clone();
+    assert_eq!(steer["method"],"turn/steer");
+    assert_eq!(steer["params"]["expectedTurnId"],"turn-7");
+}
+
+#[test]
 fn unreadable_latest_turn_refuses_steer_and_stop_instead_of_seeing_no_turn() {
     let mut engine = subscribed_terminal();
     line(&mut engine,json!({"method":"thread/status/changed","params":{"threadId":"thread-1","status":{"type":"active"}}}),13.0);

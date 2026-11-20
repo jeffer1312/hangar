@@ -1363,7 +1363,8 @@ impl Engine {
     /// Com a página (mais recente primeiro) a hidratação lê só ela, em ordem; sem, o histórico que veio.
     fn restore_opened(&mut self,response:&wire::ThreadResumeResponse,result:&Value,rpc:&Rpc) {
         if rpc.params["excludeTurns"] != true {
-            self.restore_thread(&response.thread,None,rpc);
+            let turns = &response.thread.turns;
+            self.restore_thread(&response.thread,(!turns.is_empty()).then_some(&turns[..]),rpc);
             self.async_questions.hydrate(&self.thread_id,&result["thread"]);
             self.hydrate_agents(&result["thread"],rpc.subagent_revision);
             return;

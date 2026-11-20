@@ -1435,7 +1435,12 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
             }
         }
         // Os efeitos da parada (diário, estado sem turno) já saíram: o ator termina como fechado.
-        if sidecar_gone { break; }
+        if sidecar_gone {
+            // A vista da parada ia por um `Job::View`, que o fim do ator corta: o canal recebe o estado final aqui.
+            let view = engine.view();
+            live.update(|state|state.public_state = view["public_state"].clone());
+            break;
+        }
         while let Some((attempt,result))=next_current_write(&mut prepared_writes,&mut next_write,&mut attempts,target.generation) {
             let wire=attempt.phase_id.clone();
             let ended = roots.iter().any(|(id,root)|(attempt.logical_id == *id || attempt.logical_id.starts_with(&format!("{id}:")))
@@ -1850,11 +1855,12 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
                         tracing::warn!(key=%target.key,session=%target.name,code=%failure.code,reason=%failure.message,attempt=respawn.failures,"processo da sessão não subiu de novo");
                         let user = respawn.user.take();
                         if let Some((operation_id,_)) = &user { fail_root(&mut roots,operation_id,failure.clone()); }
+                        let waited = !respawn.waiting.is_empty();
                         for (operation_id,_) in std::mem::take(&mut respawn.waiting) { fail_root(&mut roots,&operation_id,failure.clone()); }
                         // Religação sozinha cujo arquivo da sessão sumiu (fechada pelo nome) ou é de outra chave:
                         // outra subida também não teria onde gravar o processo e o mataria de novo. Só com o
                         // arquivo relido: pedido da pessoa e arquivo ainda desta vida seguem o caminho de sempre.
-                        if target.provider == "codex" && failure.code == "session_patch_owner" && user.is_none()
+                        if target.provider == "codex" && failure.code == "session_patch_owner" && user.is_none() && !waited
                             && sidecar_left(engine.launch.as_ref(),&target).await {
                             tracing::warn!(key=%target.key,session=%target.name,"arquivo da sessão sumiu ou é de outra vida; o ator para sem subir o processo de novo");
                             effects.push_back(Effect::Diag { event:DiagEvent::CodexSidecarGone,code:"codex_sidecar_gone".into() });

@@ -1736,6 +1736,7 @@ for line in sys.stdin:
             .with_codex_environment(codex_env(dir.path())).with_diagnostics(fake.diagnostics()));
         registry.open_with_launch(target(dir.path(),&key,no_cano()),dir.path().into()).await.unwrap();
         until_ready(&registry,&key).await;
+        let rx = registry.live("cx");
         std::fs::remove_file(dir.path().join("cx.json")).unwrap();
         std::fs::write(dir.path().join("die"),"").unwrap();
         let first = recorded(dir.path())[0].pid;
@@ -1745,11 +1746,16 @@ for line in sys.stdin:
         let gone = |fake:&crate::fake::Fake|fake.diag().iter().filter(|line|line["codigo"] == "codex_sidecar_gone").count();
         until("a parada vai ao diário",||gone(&fake) == 1).await;
         tokio::time::sleep(base * 3).await;
-        assert_eq!(starts(dir.path()).len(),2,"uma subida só depois da queda: {:?}",starts(dir.path()));
+        // A subida recusada pode morrer antes de o `codex` falso anotar a partida: no máximo uma depois da queda.
+        assert!(starts(dir.path()).len() <= 2,"uma subida só depois da queda: {:?}",starts(dir.path()));
         assert_eq!(gone(&fake),1);
-        assert!(!matches!(process::liveness(recorded(dir.path())[1].pid,&key),process::Liveness::Ours),"o processo sem dono foi encerrado");
+        for cano in recorded(dir.path()).iter().skip(1) {
+            assert!(!matches!(process::liveness(cano.pid,&key),process::Liveness::Ours),"o processo sem dono foi encerrado");
+        }
         let handle = registry.handle(&key,1).await.unwrap();
         assert!(handle.snapshot().await.is_err(),"o ator parou");
+        let last = rx.borrow().clone().expect("o canal guarda o estado da parada");
+        assert_eq!(last.public_state["problema"],"headless_caiu","o canal mostra a parada, não a subida: {}",last.public_state);
         for cano in recorded(dir.path()) { let _ = process::kill(&cano,&key,dir.path()).await; }
     }
 
@@ -1773,7 +1779,15 @@ for line in sys.stdin:
         let first = recorded(dir.path())[0].pid;
         until("o processo caiu",||!matches!(process::liveness(first,&key),process::Liveness::Ours)).await;
         std::fs::remove_file(dir.path().join("die")).unwrap();
-        until("outra tentativa depois da recusa",||starts(dir.path()).len() >= 3).await;
+        // A recusa marca o problema; a subida recusada pode morrer antes de o `codex` falso anotar a partida.
+        let handle = registry.handle(&key,1).await.unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(20),async {
+            while handle.snapshot().await.unwrap()["view"]["public_state"]["problema"] != "codex_headless_nao_subiu" {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        }).await.expect("a subida foi recusada");
+        tokio::time::sleep(base * 3).await;
+        assert!(handle.snapshot().await.is_ok(),"o ator segue tentando");
         assert!(fake.diag().iter().all(|line|line["codigo"] != "codex_sidecar_gone"),"{:?}",fake.diag());
         cleanup(&registry,&key,dir.path()).await;
     }
