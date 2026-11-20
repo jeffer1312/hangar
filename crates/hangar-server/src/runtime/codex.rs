@@ -134,13 +134,17 @@ impl AsyncQuestions {
 
     /// Só as rodadas recentes, em ordem: o item já visto não conta de novo, e a pergunta mais antiga que a
     /// página continua pendente ou respondida como estava.
-    fn hydrate_page(&mut self,thread_id:&str,turns:&[Value]) {
+    /// Devolve quantos itens não se leram.
+    fn hydrate_page(&mut self,thread_id:&str,turns:&[Value]) -> usize {
         let prefix = format!("async:{thread_id}:");
         self.pending.retain(|(id,_)|id.starts_with(&prefix));
         self.during_load = None;
+        let mut unreadable = 0;
         for item in turns.iter().filter_map(|turn|turn["items"].as_array()).flatten() {
-            self.observe(thread_id,&wire::ThreadItem::deserialize(item).unwrap_or(wire::ThreadItem::Unknown),item);
+            let Ok(typed) = wire::ThreadItem::deserialize(item) else { unreadable += 1; continue };
+            self.observe(thread_id,&typed,item);
         }
+        unreadable
     }
 
     fn resolve(&mut self,id:&str) { self.pending.retain(|(key,_)|key != id); self.resolved.insert(id.into()); }
@@ -517,6 +521,7 @@ impl Engine {
             async_questions.during_load = metadata["async_during_load"].as_array().cloned();
             async_questions.seeded = metadata["async_seeded"] == true;
         }
+        let (saved_agents,subagent_revision) = subagents::restored_agents(&metadata["subagents_saved"]);
         let headless = metadata["headless"] != false;
         let subscribed = !headless && metadata["subscribed"] == true;
         Self { interactions:None,generation,clock,counter:metadata["runtime_counter"].as_u64().unwrap_or(0),headless,
@@ -537,7 +542,7 @@ impl Engine {
             preview:LiveBuffer::default(),response_started:false,first_response_start:None,compacting:false,
             running_commands:BTreeMap::new(),hook_streaks:BTreeMap::new(),notices_seen:BTreeSet::new(),hook_trust_settled:false,early_trust_unanswered:false,permission_resync:false,permission_resync_at:0.0,permission_resync_failures:0,permission_restarting:false,output_due:None,thinking:LiveBuffer::default(),was_working:metadata["in_progress"] == true,
             rpc:BTreeMap::new(),server_requests:Vec::new(),
-            request_epochs:BTreeMap::new(),answering:BTreeSet::new(),lost_requests:BTreeSet::new(),wires:BTreeMap::new(),policies:BTreeMap::new(),last_format_request:None,format_gate:FormatGate::default(),reported_formats:BTreeSet::new(),async_questions,subagents:BTreeMap::new(),subagent_revision:0,subagent_epoch:Arc::new(subagents::FamilyEpoch::default()),reservations:Vec::new(),skill_preparations:BTreeMap::new(),skips:BTreeMap::new(),last_event:clock.monotonic_s,mode_write:None,metadata }
+            request_epochs:BTreeMap::new(),answering:BTreeSet::new(),lost_requests:BTreeSet::new(),wires:BTreeMap::new(),policies:BTreeMap::new(),last_format_request:None,format_gate:FormatGate::default(),reported_formats:BTreeSet::new(),async_questions,subagents:saved_agents,subagent_revision,subagent_epoch:Arc::new(subagents::FamilyEpoch::default()),reservations:Vec::new(),skill_preparations:BTreeMap::new(),skips:BTreeMap::new(),last_event:clock.monotonic_s,mode_write:None,metadata }
     }
 
     pub fn view(&self) -> Value {
@@ -667,7 +672,7 @@ impl Engine {
             "async_echoes":self.async_questions.echoes,"async_during_load":self.async_questions.during_load,
             "async_seeded":self.async_questions.seeded,"skipped_async_questions":self.async_questions.skipped,
             "pending_questions":self.async_questions.pending.iter().filter(|(id,_)|!self.answer_queued(id)).count(),
-            "subagents":self.subagent_views()})
+            "subagents":self.subagent_views(),"subagents_saved":self.subagents})
     }
 
     /// Segundos sem evento da conversa, só com nada em aberto: turno, pedido, pergunta, comando de pé,
@@ -816,8 +821,13 @@ impl Engine {
 
     /// Resposta lida pelo tipo sem copiar a linha; fora do formato vai ao diário e segue com o padrão.
     fn decode_reply<T:for<'de> Deserialize<'de> + Default>(&mut self,method:&str,result:&Value,effects:&mut Vec<Effect>) -> T {
+        self.decode_checked(method,result,effects).unwrap_or_default()
+    }
+
+    /// Como `decode_reply`, para quem não pode tomar o padrão por resposta (a falta de rodada não é "nenhum turno").
+    fn decode_checked<T:for<'de> Deserialize<'de>>(&mut self,method:&str,result:&Value,effects:&mut Vec<Effect>) -> Option<T> {
         match T::deserialize(result) {
-            Ok(response) => response,
+            Ok(response) => Some(response),
             Err(failure) => {
                 tracing::warn!(session=%self.state.session,method,error=wire::error_kind(&failure),"resposta do Codex fora do formato");
                 effects.push(Effect::Diag { event:DiagEvent::CodexDecode,code:decode_code(method) });
@@ -831,7 +841,7 @@ impl Engine {
                     Value::Array(_) => json!({"method":method,"result_type":"array"}),
                 };
                 self.report_format(format!("decode:{method}"),||shape,effects);
-                T::default()
+                None
             }
         }
     }
@@ -1358,13 +1368,15 @@ impl Engine {
             self.hydrate_agents(&result["thread"],rpc.subagent_revision);
             return;
         }
-        let mut turns = response.initial_turns_page.as_ref().map(|page|page.data.clone()).unwrap_or_default();
+        // Sem página (só a conferência do Fast) turno, perguntas e filhas ficam como estavam.
+        let Some(page) = &response.initial_turns_page else { return self.restore_thread(&response.thread,None,rpc) };
+        let mut turns = page.data.clone();
         turns.reverse();
         let mut raw = result["initialTurnsPage"]["data"].as_array().cloned().unwrap_or_default();
         raw.reverse();
-        // Sem página (só a conferência do Fast) o turno de agora fica como estava.
-        self.restore_thread(&response.thread,response.initial_turns_page.is_some().then_some(&turns[..]),rpc);
-        self.async_questions.hydrate_page(&self.thread_id,&raw);
+        self.restore_thread(&response.thread,Some(&turns[..]),rpc);
+        let unreadable = self.async_questions.hydrate_page(&self.thread_id,&raw);
+        if unreadable > 0 { tracing::warn!(session=%self.state.session,unreadable,"codex: itens da página da retomada fora do formato; ficaram de fora"); }
         let mut thread = result["thread"].clone();
         thread["turns"] = Value::Array(raw);
         self.hydrate_agents(&thread,rpc.subagent_revision);
@@ -2243,6 +2255,9 @@ impl Engine {
             // Outra recusa do Codex: a reserva acaba e a pergunta continua aberta para outra resposta.
             if let Some(entry) = reserved_entry(&rpc) { self.reservations.retain(|r|r.reservation.entry_id != entry); }
             let message = line["error"]["message"].as_str().unwrap_or("");
+            if rpc.continuation.as_ref().is_some_and(|next|next["kind"] == "cut_check") {
+                tracing::warn!(session=%self.state.session,reason=%message,"codex: a conferência do turno cortado foi recusada; o estado fica como estava");
+            }
             if self.bootstrap_fallback(&rpc,message,effects) { return Ok(()); }
             let transfer = self.metadata["transfer_id"].as_str().is_some_and(|id|!id.is_empty());
             if let Some(parent) = rpc.continuation.as_ref().filter(|next|next["kind"] == "bootstrap_ready" && !transfer).and_then(|next|next["parent"].as_str()) {
@@ -2357,7 +2372,15 @@ impl Engine {
                 if turns { self.hydrate_agents(&result["thread"],rpc.subagent_revision); }
             }
             "thread/turns/list" => {
-                let response:wire::ThreadTurnsListResponse = self.decode_reply(&rpc.method,&result,effects);
+                let Some(response) = self.decode_checked::<wire::ThreadTurnsListResponse>(&rpc.method,&result,effects) else {
+                    // Rodada ilegível não prova turno nenhum: Orientar e Parar recebem a falha, e o corte fica sem conferir.
+                    let parent = rpc.continuation.as_ref().filter(|next|matches!(next["kind"].as_str(),Some("steer" | "interrupt")))
+                        .and_then(|next|next["parent"].as_str()).map_or_else(||rpc.operation_id.clone(),str::to_owned);
+                    effects.push(Effect::Reply { operation_id:parent,disposition:Disposition::Rejected,
+                        payload:json!({"error":"o Codex respondeu a rodada mais recente fora do formato"}) });
+                    self.changed(effects,false);
+                    return Ok(());
+                };
                 let latest = response.data.first();
                 // O estado da conversa já veio da retomada; a rodada só diz o id e se ela foi cortada.
                 cut = !self.in_progress && latest.is_some_and(|turn|turn.status == "interrupted");

@@ -50,6 +50,15 @@ pub(super) struct Agent {
     parent_event:Option<(String,String)>,
 }
 
+/// Filhas gravadas na vista: a vida nova do motor parte delas, e a página da retomada atualiza por cima
+/// (a mais antiga que a página só existe aqui). O detalhe de cada uma é relido nesta vida.
+pub(super) fn restored_agents(saved:&Value) -> (std::collections::BTreeMap<String,Agent>,u64) {
+    let mut agents:std::collections::BTreeMap<String,Agent> = serde_json::from_value(saved.clone()).unwrap_or_default();
+    for agent in agents.values_mut() { agent.hydrated = false; }
+    let revision = agents.values().map(|agent|agent.revision).max().unwrap_or(0);
+    (agents,revision)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -241,6 +250,23 @@ mod tests {
         assert_eq!(engine.subagents["child"].state.as_deref(),Some("completed"));
         assert_eq!(engine.subagents["child"].end_time,ended);
         assert_eq!(engine.subagents["child"].direct_input,Some(true));
+    }
+
+    #[test]
+    fn a_child_older_than_the_page_survives_a_new_engine() {
+        let mut engine=engine();
+        notify(&mut engine,"item/completed",json!({"threadId":"root","item":{"type":"collabAgentToolCall","id":"spawn-item",
+            "tool":"spawnAgent","status":"completed","senderThreadId":"root","receiverThreadIds":["child"],
+            "agentsStates":{"child":{"status":"running"}}}}));
+        child(&mut engine,true);
+        // Vida nova do motor (subida de novo, servidor reiniciado) com a página sem o lançamento da filha.
+        let mut renewed=Engine::new(engine.control_view(),2,clock());
+        renewed.hydrate_agents(&json!({"id":"root","turns":[{"items":[]}]}),renewed.subagent_revision);
+        assert_eq!(renewed.subagent_views()["child"]["state"],"running");
+        assert_eq!(renewed.subagent_views()["child"]["can_message"],true);
+        assert_eq!(renewed.published_subagents()["child"].state.as_deref(),Some("running"));
+        let read=command(&mut renewed,OperationKind::SubagentMessage);
+        assert_eq!(frame(&read)["method"],"thread/read","a mensagem direta segue para a filha restaurada");
     }
 
     #[test]

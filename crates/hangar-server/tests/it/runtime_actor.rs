@@ -1747,9 +1747,35 @@ for line in sys.stdin:
         tokio::time::sleep(base * 3).await;
         assert_eq!(starts(dir.path()).len(),2,"uma subida só depois da queda: {:?}",starts(dir.path()));
         assert_eq!(gone(&fake),1);
+        assert!(!matches!(process::liveness(recorded(dir.path())[1].pid,&key),process::Liveness::Ours),"o processo sem dono foi encerrado");
         let handle = registry.handle(&key,1).await.unwrap();
         assert!(handle.snapshot().await.is_err(),"o ator parou");
         for cano in recorded(dir.path()) { let _ = process::kill(&cano,&key,dir.path()).await; }
+    }
+
+    /// Recusa da gravação com o arquivo ainda lá (ilegível no instante da releitura): não é sessão fechada,
+    /// então a religação continua tentando.
+    #[tokio::test]
+    async fn respawn_refused_with_the_sidecar_still_there_keeps_retrying() {
+        use_cano_bin();
+        let dir = tempfile::tempdir().unwrap();
+        let key = unique_key();
+        let base = std::time::Duration::from_millis(300);
+        lifecycle_codex(dir.path());
+        write_sidecar(dir.path(),&key,json!({}));
+        let (fake,_upstream) = crate::fake::spawn_fake().await;
+        let registry = Arc::new(RuntimeRegistry::new("instance".into()).with_respawn_base(base)
+            .with_codex_environment(codex_env(dir.path())).with_diagnostics(fake.diagnostics()));
+        registry.open_with_launch(target(dir.path(),&key,no_cano()),dir.path().into()).await.unwrap();
+        until_ready(&registry,&key).await;
+        hangar_server::runtime::codex_sidecar::locked(dir.path(),"cx",|path|std::fs::write(path,"{")).unwrap();
+        std::fs::write(dir.path().join("die"),"").unwrap();
+        let first = recorded(dir.path())[0].pid;
+        until("o processo caiu",||!matches!(process::liveness(first,&key),process::Liveness::Ours)).await;
+        std::fs::remove_file(dir.path().join("die")).unwrap();
+        until("outra tentativa depois da recusa",||starts(dir.path()).len() >= 3).await;
+        assert!(fake.diag().iter().all(|line|line["codigo"] != "codex_sidecar_gone"),"{:?}",fake.diag());
+        cleanup(&registry,&key,dir.path()).await;
     }
 
     #[tokio::test]

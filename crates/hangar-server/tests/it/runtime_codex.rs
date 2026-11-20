@@ -952,6 +952,17 @@ fn seeded_resume_reads_only_the_recent_page_in_order_and_keeps_older_questions()
 }
 
 #[test]
+fn resume_answer_without_a_page_leaves_questions_and_children_as_they_were() {
+    let item = async_question("live","Ao vivo");
+    let (mut engine,resume) = live_attach(json!({"name":"s","thread_id":"thread-1","headless":true,"cwd":"/p",
+        "async_seeded":true,"async_questions":[],"async_during_load":[item]}));
+    line(&mut engine,json!({"method":"thread/started","params":{"thread":{"id":"child","parentThreadId":"thread-1","status":{"type":"active"}}}}),11.5);
+    line(&mut engine,json!({"id":resume["id"],"result":{"thread":{"id":"thread-1","status":{"type":"idle"}}}}),12.0);
+    assert_eq!(engine.control_view()["async_during_load"],json!([item]),"sem página nada se hidrata");
+    assert!(engine.control_view()["subagents"].get("child").is_some());
+}
+
+#[test]
 fn terminal_subscription_also_asks_for_the_page() {
     let mut engine = Engine::new(json!({"name":"session","thread_id":"thread-1","headless":false,"cwd":"/work",
         "permission_mode":"Ask for approval","async_seeded":true,"async_questions":[]}),1,clock(10.0));
@@ -2378,6 +2389,20 @@ fn steer_without_a_known_turn_reads_it_first() {
     let effects = line(&mut engine,json!({"id":read["id"],"result":{"data":[{"id":"turn-8","status":"completed","items":[]}]}}),14.0);
     assert!(frames(&effects).is_empty());
     assert_eq!(reply_of(&effects,"steer").map(|(d,_)|d),Some(Disposition::Rejected));
+}
+
+#[test]
+fn unreadable_latest_turn_refuses_steer_and_stop_instead_of_seeing_no_turn() {
+    let mut engine = subscribed_terminal();
+    line(&mut engine,json!({"method":"thread/status/changed","params":{"threadId":"thread-1","status":{"type":"active"}}}),13.0);
+    let read = frames(&engine.command(RuntimeCommand { operation_id:"steer".into(),kind:OperationKind::Steer,payload:json!({"text":"x"}) },clock(13.5)).unwrap())[0].clone();
+    let effects = line(&mut engine,json!({"id":read["id"],"result":{"data":"x"}}),14.0);
+    assert!(frames(&effects).is_empty());
+    assert_eq!(reply_of(&effects,"steer").map(|(d,_)|d),Some(Disposition::Rejected));
+    let read = frames(&engine.command(RuntimeCommand { operation_id:"stop".into(),kind:OperationKind::Interrupt,payload:json!({}) },clock(14.5)).unwrap())[0].clone();
+    let effects = line(&mut engine,json!({"id":read["id"],"result":{"data":"x"}}),15.0);
+    assert_eq!(reply_of(&effects,"stop").map(|(d,_)|d),Some(Disposition::Rejected),"não vira \"nada a parar\"");
+    assert_eq!(engine.control_view()["in_progress"],true);
 }
 
 #[test]
