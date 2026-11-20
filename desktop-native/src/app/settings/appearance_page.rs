@@ -294,14 +294,22 @@ impl Hangar {
     }
 
     /// Uma consulta por conexão: o settings.json do servidor diz se o Code Mode já está ligado lá. Até a resposta, e
-    /// com falha, a opção fica livre.
+    /// com falha, a opção fica livre; a falha não é resposta e libera nova consulta depois de uma espera.
     fn ask_code_mode_settings(&mut self, cx: &mut Context<Self>) {
         if self.settings_ui.code_mode_settings.is_some_and(|(connection, _)| connection == self.connection) { return; }
         let connection = self.connection;
         self.settings_ui.code_mode_settings = Some((connection, false));
         self.server_get(vec!["claude".into(), "code-mode".into()], Vec::new(), 10, cx, move |this, result, cx| {
-            let on = result.ok().and_then(|value| value["settings"].as_bool()).unwrap_or(false);
-            this.settings_ui.code_mode_settings = Some((connection, on));
+            match result.ok().and_then(|value| value["settings"].as_bool()) {
+                Some(on) => this.settings_ui.code_mode_settings = Some((connection, on)),
+                None => cx.spawn(async move |this, cx| {
+                    cx.background_executor().timer(Duration::from_secs(30)).await;
+                    this.update(cx, |this, cx| if this.settings_ui.code_mode_settings == Some((connection, false)) {
+                        this.settings_ui.code_mode_settings = None;
+                        cx.notify();
+                    }).ok();
+                }).detach(),
+            }
             cx.notify();
         });
     }

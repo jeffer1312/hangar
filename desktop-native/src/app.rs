@@ -5594,8 +5594,10 @@ impl Hangar {
                     .on_click(cx.listener(|this, _, window, cx| this.open_git_panel(window, cx)))).into_any_element()
             } else { place.into_any_element() };
             // O recuo negativo põe o texto do último item na mesma borda da faixa da pasta, do outro lado.
-            // Conversa nova: com o painel aberto, contexto e conta já estão nele e no topo; o rodapé não repete.
-            let rings = !(appearance::conversation_beta() && self.side.open);
+            // Conversa nova: com a aba Contexto à vista, o contexto já está nela; o rodapé não repete.
+            let context_shown = self.side.open && !self.subagent_tab_open() && !self.side_menu_shown()
+                && self.side_tab() == appearance::SideTab::Context;
+            let rings = !(appearance::conversation_beta() && context_shown);
             let usage = div().flex_shrink_0().ml_auto().mr(px(-6.)).flex().items_center().gap(px(2.))
                 .when_some(cache, |el, cache| el.child(cache_chip(cache)))
                 .when(rings, |el| el.child(popup::anchor(div(), "composer-ctx").child(ring("composer-ctx", tr("ring_context"), ctx_pct, self.context_card)

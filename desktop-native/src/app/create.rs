@@ -1412,6 +1412,7 @@ impl NewSession {
         if baton.is_some() {
             let claude = provider == "claude";
             let omp = self.omp.read(cx).value().trim().to_owned();
+            let code_mode = body.get("code_mode").cloned();
             body = json!({"name": name, "cwd": cwd, "provider": provider, "model": text(&self.model), "effort": text(&self.effort),
                 "config_dir": if claude { self.requested_config() } else { Value::Null },
                 "engine": if claude { text(&self.engine) } else { Value::Null },
@@ -1423,6 +1424,7 @@ impl NewSession {
             if claude && self.proxy_accounts().is_some() { body["engine_account"] = json!(self.engine_account); }
             if self.headless_inherited() { body.as_object_mut().unwrap().remove("headless"); }
             if let Some(customizations) = self.customization_payload() { body["claude_customizations"] = json!(customizations); }
+            if let Some(on) = code_mode { body["code_mode"] = on; }
         }
         // Sonda falhada deixa o Claude por omissão, e isso não é escolha a lembrar.
         if self.provider_touched || self.providers.ok().is_some() {
