@@ -179,6 +179,7 @@ export function MessageList({
   // Com o dedo na lista ou o impulso andando, nada a leva ao fim: a posição lida chega com atraso
   // e, logo depois de abrir a conversa, ainda diz "no fim".
   const dragging = useRef(false);
+  const skippedWhileDragging = useRef(false);
   const dataRef = useRef(data);
   useEffect(() => { dataRef.current = data; }, [data]);
   // Medidas lidas na hora do toque, por referência: como dependência, cada mudança de altura do
@@ -313,6 +314,10 @@ export function MessageList({
   const settleScroll = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
     dragging.current = false;
     onScroll(e);
+    const skipped = skippedWhileDragging.current;
+    skippedWhileDragging.current = false;
+    // Soltou no fim depois de chegar linha durante o gesto: faz a ida ao fim que ficou para trás.
+    if (skipped && reading.current.atEnd && !toolGroupPausedRef.current) void lista.current?.scrollToEnd({ animated: false });
   }, [onScroll]);
   const onContentSizeChange = useCallback((_width: number, height: number) => {
     if (!toolGroupPausedRef.current || !Number.isFinite(height) || !(height > 0)) return;
@@ -333,9 +338,11 @@ export function MessageList({
   const rowCount = data.length;
   const hasPreview = !!visiblePreview;
   useEffect(() => {
-    if (!reading.current.atEnd || toolGroupPausedRef.current || dragging.current) return;
+    if (dragging.current) { skippedWhileDragging.current = true; return; }
+    if (!reading.current.atEnd || toolGroupPausedRef.current) return;
     const keepAtEnd = () => {
-      if (reading.current.atEnd && !toolGroupPausedRef.current && !dragging.current) void lista.current?.scrollToEnd({ animated: false });
+      if (dragging.current) { skippedWhileDragging.current = true; return; }
+      if (reading.current.atEnd && !toolGroupPausedRef.current) void lista.current?.scrollToEnd({ animated: false });
     };
     const frame = requestAnimationFrame(keepAtEnd);
     const later = setTimeout(keepAtEnd, 250);
