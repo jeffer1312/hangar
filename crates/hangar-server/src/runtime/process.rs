@@ -340,6 +340,25 @@ pub async fn spawn_recipe(spec:PreparedRecipe)->Result<Cano,ProcessError> {
 
 enum Started { UnitMissing(String), Failed(ProcessError) }
 
+#[cfg(unix)]
+fn spawn_outside_job(cmd: &mut tokio::process::Command) -> std::io::Result<tokio::process::Child> { cmd.spawn() }
+
+/// O cano nasce fora do Job do lançador, que mata o grupo ao fechar: senão todo reinício do servidor
+/// (atualização incluída) leva junto a sessão sem terminal, que deveria religar ao mesmo cano.
+/// Job sem `BREAKAWAY_OK` recusa (acesso negado): aí o cano sobe dentro dele, como antes.
+#[cfg(windows)]
+fn spawn_outside_job(cmd: &mut tokio::process::Command) -> std::io::Result<tokio::process::Child> {
+    const BREAKAWAY: u32 = 0x0100_0000;
+    const NEW_GROUP_NO_WINDOW: u32 = 0x0000_0200 | 0x0800_0000;
+    match cmd.creation_flags(BREAKAWAY | NEW_GROUP_NO_WINDOW).spawn() {
+        Err(e) if e.raw_os_error() == Some(5) => {
+            tracing::warn!(code = "cano_breakaway_refused", "o Job do servidor recusou a saída do cano: o reinício do servidor vai derrubar esta sessão");
+            cmd.creation_flags(NEW_GROUP_NO_WINDOW).spawn()
+        }
+        other => other,
+    }
+}
+
 async fn spawn_once(spec:&PreparedRecipe)->Result<Cano,Started> {
     use std::io::{Read,Seek};
     let escuta = new_listen(&spec.key, &spec.sidecar_dir);
@@ -380,9 +399,7 @@ async fn spawn_once(spec:&PreparedRecipe)->Result<Cano,Started> {
     #[cfg(unix)]
     // SAFETY: `setsid` é async-signal-safe e não toca memória do processo pai.
     unsafe { cmd.pre_exec(|| if libc::setsid() < 0 { Err(std::io::Error::last_os_error()) } else { Ok(()) }); }
-    #[cfg(windows)]
-    cmd.creation_flags(0x0000_0200 | 0x0800_0000); // CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
-    let mut child = cmd.spawn().map_err(|e| Started::Failed(ProcessError::Spawn(format!("não subiu: {}", e.kind()))))?;
+    let mut child = spawn_outside_job(&mut cmd).map_err(|e| Started::Failed(ProcessError::Spawn(format!("não subiu: {}", e.kind()))))?;
     let pid = child.id().ok_or_else(|| Started::Failed(ProcessError::Spawn("saiu ao nascer".into())))?;
     let birth=match crate::terminal_facts::agent_birth(pid) {
         Some(birth)=>birth,
