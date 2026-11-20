@@ -26,9 +26,9 @@ fn error(code: &str) -> TransferError {
 }
 fn transfer_error(e: RuntimeError) -> TransferError {
     error(match e.code.as_str() {
-        "erro_sessao_iniciando" | "erro_sessao_esperando_resposta" | "erro_sessao_trabalhando" => {
-            "session_transfer_source_busy"
-        }
+        // O painel de terminal emprestado e a entrega ainda sem confirmação também passam sozinhos.
+        "erro_sessao_iniciando" | "erro_sessao_esperando_resposta" | "erro_sessao_trabalhando"
+        | "lifecycle_busy" | "lifecycle_uncertain" | "terminal_panel_active" => "session_transfer_source_busy",
         "erro_fila_pendente" => "session_transfer_queue_pending",
         _ => "session_transfer_source_changed",
     })
@@ -982,6 +982,16 @@ fn digest(raw: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_source_held_by_the_terminal_or_an_unconfirmed_delivery_is_busy_not_changed() {
+        for code in ["lifecycle_busy", "lifecycle_uncertain", "terminal_panel_active"] {
+            let mapped = transfer_error(RuntimeError { code: code.into(), message: String::new() }).code;
+            assert!(waits(&mapped), "{code} -> {mapped}");
+        }
+        assert_eq!(transfer_error(RuntimeError { code: "erro_sessao_inexistente".into(), message: String::new() }).code,
+            "session_transfer_source_changed");
+    }
 
     #[tokio::test]
     async fn recovery_never_reopens_or_blocks_an_old_life_over_a_new_session() {

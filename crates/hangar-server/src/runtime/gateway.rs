@@ -486,12 +486,15 @@ impl RuntimeRegistry {
     pub fn queue_held(&self,name:&str) -> bool { self.limit_held(name) || self.handoff_held(name) }
     /// A fila segurada por uma troca de agente que ainda vale (nem cancelada nem falha).
     pub fn handoff_held(&self,name:&str) -> bool { self.handoffs.lock().unwrap_or_else(|e|e.into_inner()).get(name).is_some_and(|p|!p.cancelled) }
-    /// Registra a troca de agente à espera; devolve a geração dela. Pedido novo no mesmo nome substitui o anterior.
-    pub fn hold_handoff(&self,name:&str,view:hangar_api::session::Handoff) -> u64 {
+    /// Registra a troca de agente à espera; devolve a geração dela. Pedido novo no mesmo nome substitui o que
+    /// ainda espera; a troca que já transfere segue, e o pedido novo recebe `None`.
+    pub fn hold_handoff(&self,name:&str,view:hangar_api::session::Handoff) -> Option<u64> {
         static NEXT:std::sync::atomic::AtomicU64=std::sync::atomic::AtomicU64::new(1);
+        let mut all=self.handoffs.lock().unwrap_or_else(|e|e.into_inner());
+        if all.get(name).is_some_and(|p|p.view.state==HandoffState::Running) { return None; }
         let generation=NEXT.fetch_add(1,std::sync::atomic::Ordering::Relaxed);
-        self.handoffs.lock().unwrap_or_else(|e|e.into_inner()).insert(name.to_owned(),PendingHandoff { generation,view,cancelled:false });
-        generation
+        all.insert(name.to_owned(),PendingHandoff { generation,view,cancelled:false });
+        Some(generation)
     }
     /// O estado da troca, se ainda é a da geração `generation`.
     pub fn handoff_mark(&self,name:&str,generation:u64,state:HandoffState,code:Option<&str>) -> bool {
@@ -3517,9 +3520,9 @@ pub(crate) mod tests {
     #[test]
     fn a_handoff_holds_the_queue_until_its_own_generation_ends() {
         let registry = RuntimeRegistry::new("instance".into());
-        let first = registry.hold_handoff("s", handoff_view());
+        let first = registry.hold_handoff("s", handoff_view()).unwrap();
         assert!(registry.queue_held("s") && !registry.queue_held("t"));
-        let second = registry.hold_handoff("s", handoff_view());
+        let second = registry.hold_handoff("s", handoff_view()).unwrap();
         assert!(!registry.handoff_live("s", first) && registry.handoff_live("s", second), "o pedido novo substitui o anterior");
         registry.release_handoff("s", first, true);
         assert!(registry.queue_held("s"), "a espera substituída não solta a fila da nova");
@@ -3528,17 +3531,26 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_new_request_never_replaces_a_handoff_already_transferring() {
+        let registry = RuntimeRegistry::new("instance".into());
+        let first = registry.hold_handoff("s", handoff_view()).unwrap();
+        assert!(registry.handoff_mark("s", first, HandoffState::Running, None));
+        assert_eq!(registry.hold_handoff("s", handoff_view()), None);
+        assert!(registry.handoff_live("s", first), "a troca em curso segue com a mesma geração");
+    }
+
+    #[test]
     fn only_a_waiting_handoff_cancels_and_a_failed_one_shows_its_code_without_holding_the_queue() {
         let registry = RuntimeRegistry::new("instance".into());
         assert!(!registry.cancel_handoff("s"), "nada a cancelar");
-        let generation = registry.hold_handoff("s", handoff_view());
+        let generation = registry.hold_handoff("s", handoff_view()).unwrap();
         assert!(registry.handoff_mark("s", generation, HandoffState::Running, None));
         assert!(!registry.cancel_handoff("s"), "a troca em curso segue até o fim");
         assert!(registry.handoff_mark("s", generation, HandoffState::Waiting, None));
         assert!(registry.cancel_handoff("s"));
         assert!(!registry.handoff_live("s", generation) && !registry.queue_held("s"));
         assert!(!registry.handoff_mark("s", generation, HandoffState::Running, None), "cancelada não volta a trocar");
-        let generation = registry.hold_handoff("s", handoff_view());
+        let generation = registry.hold_handoff("s", handoff_view()).unwrap();
         registry.fail_handoff("s", generation, "session_transfer_login_required");
         let shown = registry.handoff_view("s").unwrap();
         assert_eq!((shown.state, shown.code.as_deref()), (HandoffState::Failed, Some("session_transfer_login_required")));

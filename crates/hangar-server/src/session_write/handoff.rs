@@ -29,12 +29,11 @@ const FAILED_SHOWN: Duration = Duration::from_secs(30);
 /// Registra a troca e devolve 202 na hora; a espera e a transferência correm à parte.
 pub(super) async fn start(st: Arc<AppState>, runtime: Arc<RuntimeRegistry>, name: String, request: TransferRequest,
     headers: &axum::http::HeaderMap) -> Response {
-    if runtime.handoff_view(&name).is_some_and(|view| view.state == HandoffState::Running) {
-        return super::account::transfer_refusal(headers, hangar_conversation_transfer::TransferError::new("session_transfer_busy"));
-    }
     let view = hangar_api::session::Handoff { state: HandoffState::Waiting, provider: "codex".into(), model: request.model.clone(),
         effort: request.effort.clone(), account: request.credential_id.clone(), code: None };
-    let generation = runtime.hold_handoff(&name, view.clone());
+    let Some(generation) = runtime.hold_handoff(&name, view.clone()) else {
+        return super::account::transfer_refusal(headers, hangar_conversation_transfer::TransferError::new("session_transfer_busy"));
+    };
     st.list.invalidate();
     tokio::spawn(run(st, runtime, name, request, generation));
     reply(Some(headers), StatusCode::ACCEPTED, json!({"pending": true, "handoff": view}))
