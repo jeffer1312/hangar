@@ -412,6 +412,7 @@ fn source_events(source: &Value, id: &str, limit: usize) -> io::Result<(Vec<Chat
         let mut line = Vec::new();
         let mut old = VecDeque::new();
         let mut seen = HashSet::new();
+        let mut repl = crate::transcript::ReplLinks::default();
         let mut previous = 0.;
         let mut start = 0.;
         for index in selected {
@@ -429,7 +430,9 @@ fn source_events(source: &Value, id: &str, limit: usize) -> io::Result<(Vec<Chat
             if start == 0. {
                 start = previous;
             }
-            for mut event in crate::transcript::parse_claude_object(row.as_object().unwrap()) {
+            let mut events = crate::transcript::parse_claude_object(row.as_object().unwrap());
+            repl.apply(&mut events, None, 0);
+            for mut event in events {
                 if (event.id.starts_with("held:") || event.id.starts_with("delivery:"))
                     && !seen.insert(event.id.clone())
                 {
@@ -758,6 +761,11 @@ pub(crate) fn baton_window(row: &SessionRow, home: &Path, claude: &Path) -> Resu
         };
         let provider = Provider::parse(&row.provider).filter(|provider| *provider != Provider::Orq).unwrap_or(Provider::Claude);
         let mut parser = LineParser::new(provider);
+        // O despacho de script anterior à cauda é procurado no próprio arquivo.
+        if !transferred && let Some(path) = row.jsonl.as_deref() {
+            parser = parser.with_path(Path::new(path));
+        }
+        let mut repl = crate::transcript::ReplLinks::default();
         let (mut parsed, mut position, mut previous, mut start, mut seen) = (Vec::new(), base, 0., 0., HashSet::new());
         for (index, raw) in rows.iter().enumerate() {
             let offset = position;
@@ -766,8 +774,11 @@ pub(crate) fn baton_window(row: &SessionRow, home: &Path, claude: &Path) -> Resu
             let clock = super::timestamp(&value);
             if clock > 0. { previous = clock; if start == 0. { start = clock; } }
             let source = transferred && index < source_len;
-            let mut events = if source { crate::transcript::parse_claude_object(value.as_object().unwrap()) }
-                else { parser.feed(raw.as_bytes(), offset) };
+            let mut events = if source {
+                let mut events = crate::transcript::parse_claude_object(value.as_object().unwrap());
+                repl.apply(&mut events, None, 0);
+                events
+            } else { parser.feed(raw.as_bytes(), offset) };
             events.retain(|event| !(event.id.starts_with("held:") || event.id.starts_with("delivery:")) || seen.insert(event.id.clone()));
             if transferred { for event in &mut events { prefix_event(event, &id, if source {"claude"} else {"codex"}); } }
             for event in events { parsed.push((event.ts.filter(|t| *t != 0.).unwrap_or(previous), event.offset.unwrap_or(offset), event)); }

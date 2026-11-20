@@ -13,6 +13,7 @@ import {
 } from './format';
 import type { ChatEvent, State } from './types';
 import { overwriteGetLocale } from './paraglide/runtime';
+import * as m from './paraglide/messages';
 import { intlLocale } from './i18n';
 import contextRefsFixtures from './contextRefs.fixtures.json';
 
@@ -1372,5 +1373,22 @@ describe('terminalFoldTitle', () => {
 
   it('rodando vai para o gerúndio com reticências', () => {
     expect(terminalFoldTitle([tool('Bash', { command: 'make' }), tool('Bash', { command: 'make' })], true)).toBe('Rodando 2 comandos de shell…');
+  });
+});
+
+
+describe('Code Mode do Claude Code: o REPL é um script', () => {
+  const script = { code: 'await $`ls`\nconst x = 1', description: 'Conferir a flag' };
+  it('mostra o nome Script e a descrição; sem descrição, a primeira linha do código', () => {
+    expect(terminalToolName('REPL')).toBe(m.term_script());
+    expect(summarizeToolInput('REPL', script)).toBe('Conferir a flag');
+    expect(summarizeToolInput('REPL', { code: script.code })).toBe('await $`ls`');
+  });
+  it('soma na dobra antes das chamadas de dentro dele e conta como "rodou" nas outras peles', () => {
+    expect(terminalFoldKind('REPL', script)).toBe('script');
+    expect(familiaTool('REPL')).toBe('rodou');
+    const tools = [{ tool_name: 'REPL', tool_input: script }, { tool_name: 'Grep', tool_input: { pattern: 'x' } }, { tool_name: 'REPL', tool_input: script }];
+    const esperado = [m.term_dobra_scripts({ n: 2 }), m.term_dobra_buscou_1({ nome: '' })].join(', ');
+    expect(terminalFoldTitle(tools, false)).toBe(esperado.charAt(0).toUpperCase() + esperado.slice(1));
   });
 });
