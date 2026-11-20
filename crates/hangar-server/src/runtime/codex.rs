@@ -196,6 +196,10 @@ pub struct Engine {
     early_trust_unanswered:bool,
     /// Troca de sandbox caiu sem confirmação: antes do próximo turno o modo gravado volta a ser aplicado.
     permission_resync:bool,
+    /// Quando a próxima reaplicação pode sair e quantas falharam seguidas; na terceira, o processo sobe de novo.
+    permission_resync_at:f64,
+    permission_resync_failures:u8,
+    permission_restarting:bool,
     /// Saída nova de comando ainda não publicada: sai no Tick deste instante.
     output_due:Option<f64>,
     thinking:LiveBuffer,
@@ -513,7 +517,7 @@ impl Engine {
             // já foi recusado no `new_checked`; em nenhum dos dois vira Full Access.
             permission_mode:headless.then(||super::codex_launch::stored_mode(&metadata).ok()).flatten().map(Into::into),token_usage:Value::Null,rate_limits:Value::Null,usage_limited:false,
             preview:LiveBuffer::default(),response_started:false,first_response_start:None,compacting:false,
-            running_commands:BTreeMap::new(),hook_streaks:BTreeMap::new(),notices_seen:BTreeSet::new(),hook_trust_settled:false,early_trust_unanswered:false,permission_resync:false,output_due:None,thinking:LiveBuffer::default(),was_working:metadata["in_progress"] == true,
+            running_commands:BTreeMap::new(),hook_streaks:BTreeMap::new(),notices_seen:BTreeSet::new(),hook_trust_settled:false,early_trust_unanswered:false,permission_resync:false,permission_resync_at:0.0,permission_resync_failures:0,permission_restarting:false,output_due:None,thinking:LiveBuffer::default(),was_working:metadata["in_progress"] == true,
             rpc:BTreeMap::new(),server_requests:Vec::new(),
             request_epochs:BTreeMap::new(),answering:BTreeSet::new(),lost_requests:BTreeSet::new(),wires:BTreeMap::new(),policies:BTreeMap::new(),last_format_request:None,format_gate:FormatGate::default(),reported_formats:BTreeSet::new(),async_questions,subagents:BTreeMap::new(),subagent_revision:0,subagent_epoch:Arc::new(subagents::FamilyEpoch::default()),reservations:Vec::new(),skill_preparations:BTreeMap::new(),skips:BTreeMap::new(),last_event:clock.monotonic_s,mode_write:None,metadata }
     }
@@ -700,7 +704,7 @@ impl Engine {
     fn async_transport_ready(&self) -> bool {
         // Com a troca de sandbox pendente ou incerta, o turno sairia com a aprovação de um modo e o sandbox de outro.
         self.alive && self.sendable() && self.server_requests.is_empty() && self.lost_requests.is_empty() && self.skill_preparations.is_empty()
-            && !self.permission_resync
+            && !self.permission_resync && !self.permission_restarting
             && !self.rpc.values().any(|rpc|rpc.params["threadId"] == self.thread_id && matches!(rpc.method.as_str(),"turn/start" | "turn/steer" | "thread/compact/start")
                 || rpc.continuation.as_ref().is_some_and(|next|next["kind"] == "skill_lookup"
                     || !rpc.timed_out && matches!(next["kind"].as_str(),Some("permission_live" | "permission_resync"))))
@@ -1196,6 +1200,7 @@ impl Engine {
         // A troca de sandbox que caiu sem confirmação pode ter valido: na volta, o modo gravado é reaplicado.
         if self.rpc.values().any(|rpc|rpc.continuation.as_ref().is_some_and(|next|matches!(next["kind"].as_str(),Some("permission_live" | "permission_resync")))) {
             self.permission_resync = true;
+            self.permission_resync_at = self.clock.monotonic_s;
         }
         let mut uncertain = Vec::new();
         for (_,rpc) in std::mem::take(&mut self.rpc) {
@@ -1999,7 +2004,7 @@ impl Engine {
                 }
             }
             EngineInput::Tick => {
-                if self.permission_resync && self.headless && self.sendable() && !self.in_progress {
+                if self.permission_resync && self.headless && self.sendable() && !self.in_progress && clock.monotonic_s >= self.permission_resync_at {
                     self.permission_resync = false;
                     let mode = self.launch_mode().to_owned();
                     self.counter += 1;
@@ -2015,6 +2020,7 @@ impl Engine {
                 let mut trust_expired = false;
                 let mut early_expired = false;
                 let mut sandbox_uncertain = false;
+                let mut resync_expired = false;
                 for rpc in self.rpc.values_mut() {
                     if !rpc.timed_out && clock.monotonic_s >= rpc.deadline {
                         rpc.timed_out = true;
@@ -2024,7 +2030,8 @@ impl Engine {
                             early_expired = true;
                         }
                         // Troca de sandbox sem resposta pode ter valido: conta como não feita e o modo gravado é reaplicado.
-                        sandbox_uncertain |= rpc.continuation.as_ref().is_some_and(|next|matches!(next["kind"].as_str(),Some("permission_live" | "permission_resync")));
+                        sandbox_uncertain |= rpc.continuation.as_ref().is_some_and(|next|next["kind"] == "permission_live");
+                        resync_expired |= rpc.continuation.as_ref().is_some_and(|next|next["kind"] == "permission_resync");
                         trust_expired |= hook_trust.is_some_and(|next|next["early"] != true);
                         subscribe_lost |= subscribe_rpc(rpc) && rpc.params["threadId"] == self.thread_id.as_str();
                         uncertain.extend(reserved_entry(rpc));
@@ -2038,7 +2045,8 @@ impl Engine {
                 }
                 for entry in uncertain { self.set_reservation(&entry,ReservationState::Uncertain); }
                 if early_expired { self.early_trust_unanswered = true; }
-                if sandbox_uncertain { self.permission_resync = true; }
+                if sandbox_uncertain { self.permission_resync = true; self.permission_resync_at = clock.monotonic_s; }
+                if resync_expired { self.permission_resync_failed(&mut effects); }
                 // Reaprovação sem resposta: o hook que motivou continua recusado, e a conversa precisa saber.
                 if trust_expired && !self.hook_trust_settled {
                     self.hook_trust_settled = true;
@@ -2131,11 +2139,14 @@ impl Engine {
         }
         if rpc.continuation.as_ref().is_some_and(|next|next["kind"] == "hook_trust") { self.hook_trust_reply(&rpc,&line,effects); return Ok(()); }
         if rpc.continuation.as_ref().is_some_and(|next|next["kind"] == "permission_resync") {
-            if !line["error"].is_null() {
+            if line["error"].is_null() {
+                self.permission_resync_failures = 0;
+                effects.push(Effect::WakeQueue);
+            } else {
                 tracing::warn!(session=%self.state.session,error=%line["error"]["message"].as_str().unwrap_or(""),
-                    "codex: o modo gravado não foi reaplicado depois da queda; o sandbox em uso pode ser outro");
+                    "codex: o modo gravado não foi reaplicado; os turnos seguem retidos");
+                self.permission_resync_failed(effects);
             }
-            effects.push(Effect::WakeQueue);
             self.changed(effects,true);
             return Ok(());
         }
@@ -2759,7 +2770,26 @@ impl Engine {
 
     /// Reaplicação pendente e enviável vence já: sessão parada não teria outro `Tick` para fazê-la.
     fn permission_resync_due(&self) -> Option<f64> {
-        (self.permission_resync && self.headless && self.sendable() && !self.in_progress).then_some(self.clock.monotonic_s)
+        (self.permission_resync && self.headless && self.sendable() && !self.in_progress).then_some(self.permission_resync_at)
+    }
+
+    /// Reaplicação que falhou não libera os turnos: tenta de novo com espera crescente e, na terceira, sobe o
+    /// processo de novo, que nasce com o modo gravado no arquivo da sessão.
+    fn permission_resync_failed(&mut self,effects:&mut Vec<Effect>) {
+        self.permission_resync_failures += 1;
+        if self.permission_resync_failures < 3 {
+            self.permission_resync = true;
+            self.permission_resync_at = self.clock.monotonic_s + 2.0 * f64::from(self.permission_resync_failures);
+            return;
+        }
+        tracing::warn!(session=%self.state.session,"codex: modo gravado não reaplicado em 3 tentativas; o processo sobe de novo com ele");
+        // Até o processo novo subir, nenhum turno sai pelo antigo, que segue com o sandbox incerto.
+        self.permission_resync = false;
+        self.permission_resync_failures = 0;
+        self.permission_restarting = true;
+        self.counter += 1;
+        effects.push(Effect::Respawn { operation_id:format!("permission_resync:{}:{}",self.generation,self.counter),reason:"restart".into(),
+            patch:Value::Null,reply:json!({}) });
     }
 
     /// Conferência do turno calado: só com a assinatura (ou o cano) entregando eventos e nenhuma em voo.

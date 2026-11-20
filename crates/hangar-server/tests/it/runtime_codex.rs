@@ -2560,6 +2560,27 @@ fn a_sandbox_switch_without_answer_keeps_turns_held_until_the_recorded_mode_is_r
     assert_eq!(engine.control_view()["permission_mode"],"Full Access");
 }
 
+/// Reaplicação recusada não libera os turnos: tenta de novo com espera e, na terceira falha, sobe o processo com o modo gravado.
+#[test]
+fn a_failed_reapplication_keeps_turns_held_and_ends_in_a_restart() {
+    let (mut engine,sent) = bootstrapped(json!({"name":"session","thread_id":"thread-1","headless":true,"cwd":"/w","permission_mode":"Full Access"}));
+    let resume = find_method(&sent,"thread/resume");
+    line(&mut engine,json!({"id":resume["id"],"result":{"thread":{"id":"thread-1","path":"/r.jsonl","status":{"type":"idle"},"turns":[]}}}),12.0);
+    engine.command(command(OperationKind::SetPermissionMode,json!({"mode":"Ask for approval"})),clock(13.0)).unwrap();
+    engine.apply(EngineInput::Tick,clock(50.0)).unwrap();
+    let mut now = 50.0;
+    for attempt in 1..=3 {
+        now += 10.0;
+        let tick = engine.apply(EngineInput::Tick,clock(now)).unwrap();
+        let resync = frames(&tick).into_iter().find(|f|f["method"] == "thread/settings/update").unwrap_or_else(||panic!("tentativa {attempt}"));
+        let refused = line(&mut engine,json!({"id":resync["id"],"error":{"code":-32600,"message":"recusado"}}),now + 0.5);
+        assert!(!refused.iter().any(|e|matches!(e,Effect::WakeQueue)),"tentativa {attempt}: a fila não é liberada");
+        assert_eq!(engine.control_view()["deliverable"],false);
+        let restart = refused.iter().any(|e|matches!(e,Effect::Respawn { reason,.. } if reason == "restart"));
+        assert_eq!(restart,attempt == 3,"tentativa {attempt}");
+    }
+}
+
 /// A troca que caiu sem confirmação pode ter valido no Codex: na volta, o modo gravado é reaplicado antes de qualquer turno.
 #[test]
 fn a_sandbox_switch_lost_with_the_connection_is_reapplied_from_the_recorded_mode() {

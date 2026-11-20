@@ -370,7 +370,9 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   no arquivo da sessão com a resposta do Codex. Vale do próximo turno em diante, então a troca com
   turno rodando ou pedido pendente continua recusada (`erro_permissao_ocupada`). Nenhum turno sai
   com a troca pendente; troca sem resposta no prazo ou perdida na queda conta como não feita, e o
-  modo gravado é reaplicado antes do próximo turno (confirmação tardia não muda o modo). Ver
+  modo gravado é reaplicado antes do próximo turno (confirmação tardia não muda o modo). Reaplicação
+  que falha segura os turnos e tenta de novo com espera; na terceira falha o processo sobe de novo,
+  já com o modo gravado. Ver
   [permissão do Codex sem terminal troca ao vivo](#permissão-do-codex-sem-terminal-troca-ao-vivo-19112026).
 - **A rota do terminal Claude só recebe sessão Claude.** `route_sync`, `run_admin` e
   `answer_sync` abrem `prepare_session(name, "claude")`, que suspende a escrita sem vínculo
