@@ -368,7 +368,9 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
 - **Codex sem terminal troca o sandbox na conversa, sem subir o processo de novo.** O
   `thread/settings/update` leva `sandboxPolicy` e `approvalPolicy`; o modo só vale e só é gravado
   no arquivo da sessão com a resposta do Codex. Vale do próximo turno em diante, então a troca com
-  turno rodando ou pedido pendente continua recusada (`erro_permissao_ocupada`). Ver
+  turno rodando ou pedido pendente continua recusada (`erro_permissao_ocupada`). Nenhum turno sai
+  com a troca pendente; troca sem resposta no prazo ou perdida na queda conta como não feita, e o
+  modo gravado é reaplicado antes do próximo turno (confirmação tardia não muda o modo). Ver
   [permissão do Codex sem terminal troca ao vivo](#permissão-do-codex-sem-terminal-troca-ao-vivo-19112026).
 - **A rota do terminal Claude só recebe sessão Claude.** `route_sync`, `run_admin` e
   `answer_sync` abrem `prepare_session(name, "claude")`, que suspende a escrita sem vínculo

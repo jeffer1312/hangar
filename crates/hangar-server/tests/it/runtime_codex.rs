@@ -2508,6 +2508,30 @@ fn no_turn_starts_while_a_sandbox_switch_waits_for_codex() {
     assert_eq!(engine.control_view()["deliverable"],true);
 }
 
+/// Troca sem resposta no prazo conta como não feita: nenhum turno sai até o modo gravado ser reaplicado, e a
+/// confirmação tardia não o troca de novo.
+#[test]
+fn a_sandbox_switch_without_answer_keeps_turns_held_until_the_recorded_mode_is_reapplied() {
+    let (mut engine,sent) = bootstrapped(json!({"name":"session","thread_id":"thread-1","headless":true,"cwd":"/w","permission_mode":"Full Access"}));
+    let resume = find_method(&sent,"thread/resume");
+    line(&mut engine,json!({"id":resume["id"],"result":{"thread":{"id":"thread-1","path":"/r.jsonl","status":{"type":"idle"},"turns":[]}}}),12.0);
+    let effects = engine.command(command(OperationKind::SetPermissionMode,json!({"mode":"Ask for approval"})),clock(13.0)).unwrap();
+    let switch = frames(&effects)[0].clone();
+    let expired = engine.apply(EngineInput::Tick,clock(50.0)).unwrap();
+    assert_eq!(reply_of(&expired,"op-1").map(|(d,_)|d),Some(Disposition::Unknown));
+    assert_eq!(engine.control_view()["deliverable"],false,"a troca incerta segura os turnos");
+    let tick = engine.apply(EngineInput::Tick,clock(51.0)).unwrap();
+    let resync = frames(&tick).into_iter().find(|f|f["method"] == "thread/settings/update").expect("reaplica o modo gravado");
+    assert_eq!(resync["params"]["sandboxPolicy"],json!({"type":"dangerFullAccess"}));
+    // A confirmação tardia da troca não muda o modo: ele está sendo reaplicado.
+    line(&mut engine,json!({"id":switch["id"],"result":{}}),52.0);
+    assert_eq!(engine.control_view()["permission_mode"],"Full Access");
+    assert_eq!(engine.control_view()["deliverable"],false);
+    line(&mut engine,json!({"id":resync["id"],"result":{}}),52.5);
+    assert_eq!(engine.control_view()["deliverable"],true);
+    assert_eq!(engine.control_view()["permission_mode"],"Full Access");
+}
+
 /// A troca que caiu sem confirmação pode ter valido no Codex: na volta, o modo gravado é reaplicado antes de qualquer turno.
 #[test]
 fn a_sandbox_switch_lost_with_the_connection_is_reapplied_from_the_recorded_mode() {

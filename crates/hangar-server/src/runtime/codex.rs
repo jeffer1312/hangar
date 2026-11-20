@@ -1011,12 +1011,14 @@ impl Engine {
             }
             return;
         }
-        // Confirmada depois do prazo: o Codex já aplica o modo novo, então a vista e o arquivo da sessão o seguem.
+        // Depois do prazo a troca já foi dada como não feita e o modo gravado está sendo reaplicado: não muda de novo.
+        if rpc.timed_out {
+            tracing::warn!(session=%self.state.session,mode,"codex: troca de sandbox confirmada depois do prazo; vale o modo gravado");
+            return;
+        }
         self.permission_mode = Some(mode.into());
         self.policy("session.patch_meta",json!({"permission_mode":mode}),effects);
-        if !rpc.timed_out {
-            effects.push(Effect::Reply { operation_id:rpc.operation_id.clone(),disposition:Disposition::Accepted,payload:json!({"current":mode}) });
-        }
+        effects.push(Effect::Reply { operation_id:rpc.operation_id.clone(),disposition:Disposition::Accepted,payload:json!({"current":mode}) });
     }
 
     fn service_tier_reply(&mut self,rpc:&Rpc,line:&Value,effects:&mut Vec<Effect>) {
@@ -2003,6 +2005,7 @@ impl Engine {
                 let mut uncertain = Vec::new();
                 let mut trust_expired = false;
                 let mut early_expired = false;
+                let mut sandbox_uncertain = false;
                 for rpc in self.rpc.values_mut() {
                     if !rpc.timed_out && clock.monotonic_s >= rpc.deadline {
                         rpc.timed_out = true;
@@ -2011,6 +2014,8 @@ impl Engine {
                             tracing::warn!(session=%self.state.session,method=%rpc.method,"codex: reaprovação antecipada sem resposta");
                             early_expired = true;
                         }
+                        // Troca de sandbox sem resposta pode ter valido: conta como não feita e o modo gravado é reaplicado.
+                        sandbox_uncertain |= rpc.continuation.as_ref().is_some_and(|next|matches!(next["kind"].as_str(),Some("permission_live" | "permission_resync")));
                         trust_expired |= hook_trust.is_some_and(|next|next["early"] != true);
                         subscribe_lost |= subscribe_rpc(rpc) && rpc.params["threadId"] == self.thread_id.as_str();
                         uncertain.extend(reserved_entry(rpc));
@@ -2024,6 +2029,7 @@ impl Engine {
                 }
                 for entry in uncertain { self.set_reservation(&entry,ReservationState::Uncertain); }
                 if early_expired { self.early_trust_unanswered = true; }
+                if sandbox_uncertain { self.permission_resync = true; }
                 // Reaprovação sem resposta: o hook que motivou continua recusado, e a conversa precisa saber.
                 if trust_expired && !self.hook_trust_settled {
                     self.hook_trust_settled = true;
