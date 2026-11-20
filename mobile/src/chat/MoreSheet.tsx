@@ -19,7 +19,7 @@ interface Props {
   /** Recicla o processo da sessão Claude sem terminal (relê MCP/hooks/settings). Ausente = não se aplica. */
   recarregar?: { bloqueado: boolean; onPress: () => void };
   /** Terminal ⇄ sem terminal na mesma conversa (Claude e Codex); o rótulo é o destino, tirado de `semTerminal`. */
-  trocarModo?: { bloqueado: boolean; onPress: () => void };
+  trocarModo?: { bloqueado: boolean; trocando?: boolean; onPress: () => void };
   /** Linha do orquestrador: sem pane nem entrada, então Terminal, resposta e anexos não têm o que abrir;
    *  o grupo é montado pelo orq, então parear à mão também sai. */
   orq?: boolean;
@@ -75,10 +75,11 @@ export function MoreSheet({ open, onClose, serverId, name, recarregar, trocarMod
     { icon: 'Folder', label: m.arq_aba(), sub: m.ctx_repositorio(), route: 'files' },
     ...(canShare ? [{ icon: 'GitBranch' as IconName, label: m.sessao_git(), sub: m.chat_acao_git_detalhe(), route: 'git' }] : []),
     ...(orq || semTerminal ? [] : [{ icon: 'Terminal' as IconName, label: m.term_titulo(), sub: m.ctx_terminal(), route: 'terminal' }]),
-    ...(!orq && trocarModo ? [{
+    // A rota é só do dono: convidado não troca o modo (como no nativo).
+    ...(!orq && canShare && trocarModo ? [{
       icon: (semTerminal ? 'Terminal' : 'Cloud') as IconName,
       label: semTerminal ? m.modo_abrir_no_terminal() : m.modo_continuar_sem_terminal(),
-      sub: trocarModo.bloqueado ? m.modo_so_ociosa()
+      sub: trocarModo.trocando ? m.modo_trocando() : trocarModo.bloqueado ? m.modo_so_ociosa()
         : semTerminal ? m.modo_abrir_no_terminal_detalhe() : m.modo_continuar_sem_terminal_detalhe(),
       route: 'modo',
       onPress: trocarModo.onPress,

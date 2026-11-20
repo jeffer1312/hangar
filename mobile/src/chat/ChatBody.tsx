@@ -425,6 +425,7 @@ export function ChatBody({ serverId, name, askFallback, onBack, deepStack, onOpe
   // Terminal ⇄ sem terminal na mesma conversa, como no nativo: reinicia o processo, então pergunta antes.
   const modoTrocavel = currentSession?.provider === 'claude' || currentSession?.provider === 'codex';
   const [trocandoModo, setTrocandoModo] = useState(false);
+  const trocandoModoRef = useRef(false);
   const modoBloqueado = stateEvent?.state !== 'idle' || trocandoModo;
   const trocarModo = () => {
     if (modoBloqueado) return;
@@ -434,15 +435,19 @@ export function ChatBody({ serverId, name, askFallback, onBack, deepStack, onOpe
     Alert.alert(label, msg, [
       { text: m.comum_cancelar(), style: 'cancel' },
       { text: label, onPress: () => {
+        // O estado pode ter mudado com a confirmação aberta.
+        if (trocandoModoRef.current) return;
+        if (chat.use.getState().stateEvent?.state !== 'idle') return mostrarAviso(m.modo_so_ociosa());
         const target = destino();
         if (!target) return mostrarAviso(m.chat_servidor_removido());
+        trocandoModoRef.current = true;
         setTrocandoModo(true);
-        toast.passive(m.modo_trocando());
+        const progresso = toast.progress(m.modo_trocando());
         void setModoExecucao(name, paraTerminal, target)
           // Diz o modo que ficou: Codex adormecido acorda no terminal mesmo pedindo o contrário.
           .then((r) => { toast.ok(r.terminal ? m.modo_trocado_terminal() : m.modo_trocado_sem_terminal()); })
           .catch((e) => { haptic.error(); mostrarAviso(e); })
-          .finally(() => setTrocandoModo(false));
+          .finally(() => { toast.dismiss(progresso); trocandoModoRef.current = false; setTrocandoModo(false); });
       } },
     ]);
   };
@@ -553,7 +558,7 @@ export function ChatBody({ serverId, name, askFallback, onBack, deepStack, onOpe
       <MoreSheet open={moreOpen} onClose={() => setMoreOpen(false)} serverId={serverId} name={name} orq={orq}
                  provider={provider} semTerminal={semTerminal} temPergunta={!!askPayload}
                  recarregar={recarregavel ? { bloqueado: recarregarBloqueado, onPress: recarregar } : undefined}
-                 trocarModo={modoTrocavel && !soLeitura && !codexPreThread ? { bloqueado: modoBloqueado, onPress: trocarModo } : undefined} />
+                 trocarModo={modoTrocavel && !soLeitura && !codexPreThread ? { bloqueado: modoBloqueado, trocando: trocandoModo, onPress: trocarModo } : undefined} />
       <SessionPickerSheet open={pickerOpen} onClose={() => setPickerOpen(false)} atual={name} serverId={serverId} />
       {/* Lista e Composer dentro do mesmo KAV: ambos sobem com o teclado e a lista termina acima do composer */}
       <KeyboardAvoidingView behavior="padding" automaticOffset style={styles.body}>

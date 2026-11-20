@@ -251,11 +251,20 @@ test('troca de modo: sessão ocupada mostra o motivo e não age', async () => {
   expect(onPress).not.toHaveBeenCalled();
 });
 
-test('troca de modo: sem a ação ou em orquestração não aparece', async () => {
+test('troca de modo: em andamento diz que está trocando, não que a sessão está ocupada', async () => {
+  const { container } = await render(own.id, false, 'conversation', 'claude',
+    { semTerminal: true, trocarModo: { bloqueado: true, trocando: true, onPress: vi.fn() } });
+  const item = container.querySelector<HTMLButtonElement>(`[aria-label="${m.modo_abrir_no_terminal()}"]`);
+  expect(item!.textContent).toContain(m.modo_trocando());
+  expect(item!.textContent).not.toContain(m.modo_so_ociosa());
+});
+
+test('troca de modo: sem a ação, em orquestração ou em servidor de convite não aparece', async () => {
   const onPress = vi.fn();
   const sem = await render(own.id, false, 'conversation', 'claude', { semTerminal: true });
   const orq = await render(own.id, true, 'orq-run', 'claude', { semTerminal: true, trocarModo: { bloqueado: false, onPress } });
-  for (const { container } of [sem, orq]) {
+  const convidado = await render(guest.id, false, 'conversation', 'claude', { semTerminal: true, trocarModo: { bloqueado: false, onPress } });
+  for (const { container } of [sem, orq, convidado]) {
     expect(container.querySelector(`[aria-label="${m.modo_abrir_no_terminal()}"]`)).toBeNull();
   }
 });
