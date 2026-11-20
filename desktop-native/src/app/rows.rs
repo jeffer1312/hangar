@@ -357,6 +357,8 @@ impl Hangar {
         let ending = failed.then(|| if duration.is_some() { chrome::small_icon(IconName::CircleX, 13., theme::warning()).into_any_element() } else { failed_ending() });
         let card = agent_card(SharedString::from(format!("agent-card-{key}")), name, description, model, failed, timer, mark, ending, cx)
             .on_click(cx.listener(move |this, _, _, cx| this.open_agent(request.clone(), cx)));
+        // Conversa nova: o cartão tem a largura do conteúdo e fica encostado à esquerda da coluna.
+        if crate::appearance::conversation_beta() { return Some(div().w_full().flex().child(card).into_any_element()); }
         Some(card.into_any_element())
     }
 
