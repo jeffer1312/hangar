@@ -2390,7 +2390,9 @@ impl Engine {
                     if self.turn_id.is_some() { self.in_progress = true; self.turn_known = true; }
                     // Rodada mais recente acabada: o fim dela se perdeu. Compactação em curso fica como está: a lista pode não trazê-la.
                     else if latest.is_some() && self.in_progress && !self.compacting {
-                        self.in_progress = false; self.state.codex_buffering = false;
+                        self.in_progress = false; self.state.codex_buffering = false; self.turn_known = true;
+                        // Resposta tardia de antes desta leitura não religa o turno acabado.
+                        self.state_revision += 1;
                         self.changed(effects,true);
                         effects.push(Effect::WakeQueue);
                     }
