@@ -175,6 +175,17 @@ pub(crate) async fn reopen_in(st:&Arc<AppState>,runtime:&Arc<crate::runtime::gat
     super::relaunch::reopen_detached(st,name,async move {runtime.reopen_claude_session(&owned,change,Some(&mover)).await}).await
 }
 
+/// A transferência ao Codex dentro da mesma marca de troca de vida que os convites acompanham.
+pub(super) async fn transfer_now(st:&AppState,runtime:&Arc<crate::runtime::gateway::RuntimeRegistry>,name:&str,
+    request:crate::runtime::claude_reopen::transfer::Request) -> Result<Value,hangar_conversation_transfer::TransferError> {
+    super::relaunch::during_life_change(st,name,runtime.transfer_to_codex(name,request,st.accounts.clone(),st.dictation_models.clone())).await
+}
+
+/// A recusa da transferência no formato que os apps leem: `detail` com o código.
+pub(super) fn transfer_refusal(headers:&axum::http::HeaderMap,error:hangar_conversation_transfer::TransferError) -> Response {
+    reply(Some(headers),StatusCode::from_u16(error.status).unwrap_or(StatusCode::CONFLICT),json!({"detail":error.public()}))
+}
+
 pub async fn targets_route(State(st):State<Arc<AppState>>,ConnectInfo(peer):ConnectInfo<SocketAddr>,req:Request) -> Response {
     let (_,owner)=match gate(&st,peer,&req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     let (true,Some(name))=(owner,session_name(req.uri().path())) else {return super::not_owner(&st,peer,req).await};
@@ -219,16 +230,15 @@ pub async fn switch_route(State(st):State<Arc<AppState>>,ConnectInfo(peer):Conne
             };
             if request.when_idle {
                 if !matches!(runtime.claude_spec(&name).await,Some(Ok(_))) {
-                    return reply(Some(&parts.headers),StatusCode::CONFLICT,json!({"detail":hangar_conversation_transfer::TransferError::new("session_transfer_source_changed").public()}));
+                    return transfer_refusal(&parts.headers,hangar_conversation_transfer::TransferError::new("session_transfer_source_changed"));
                 }
                 return super::handoff::start(st.clone(),runtime,name,request,&parts.headers).await;
             }
             let (st2,owned)=(st.clone(),name.clone());
-            let outcome=tokio::spawn(async move {
-                super::relaunch::during_life_change(&st2,&owned,runtime.transfer_to_codex(&owned,request,st2.accounts.clone(),st2.dictation_models.clone())).await
-            }).await.unwrap_or_else(|_|Err(hangar_conversation_transfer::TransferError::new("session_transfer_failed").with_status(500)));
+            let outcome=tokio::spawn(async move { transfer_now(&st2,&runtime,&owned,request).await })
+                .await.unwrap_or_else(|_|Err(hangar_conversation_transfer::TransferError::new("session_transfer_failed").with_status(500)));
             st.list.invalidate();
-            return match outcome {Ok(body)=>reply(Some(&parts.headers),StatusCode::OK,body),Err(error)=>reply(Some(&parts.headers),StatusCode::from_u16(error.status).unwrap_or(StatusCode::CONFLICT),json!({"detail":error.public()}))};
+            return match outcome {Ok(body)=>reply(Some(&parts.headers),StatusCode::OK,body),Err(error)=>transfer_refusal(&parts.headers,error)};
         },
         None=>return super::invalid_body(&parts.headers),
         Some(Target::EngineAccount(account))=>return super::engine::account_route(st,runtime,name,account,parts.headers).await,

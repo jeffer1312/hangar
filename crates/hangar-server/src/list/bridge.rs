@@ -752,9 +752,10 @@ impl ListBridge {
         }
         let mut targets = pane_targets(&panes, &agent_pids, &children);
         if let Some(registry) = self.plugin_runtime.get() {
-            for row in rows.iter_mut().chain(aside.iter_mut()) { row.handoff = registry.handoff_view(&row.name); }
-        }
-        if let Some(registry) = self.plugin_runtime.get() {
+            let handoffs = registry.handoff_views();
+            if !handoffs.is_empty() {
+                for row in rows.iter_mut().chain(aside.iter_mut()) { row.handoff = handoffs.get(&row.name).cloned(); }
+            }
             for row in rows.iter_mut().filter(|row| row.provider == "claude") {
                 if let Some(Ok(reading)) = plugins.get(&row.name) {
                     row.lifecycle_id = super::links::session_life(Some(&reading.binding.key), None);

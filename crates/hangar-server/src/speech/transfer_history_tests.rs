@@ -397,10 +397,10 @@ fn handoff_divider_sits_between_the_imported_history_and_the_first_new_turn() {
     assert_eq!(divider.id, "transfer:51234567-89ab-4cde-8fab-0123456789ab:handoff");
     assert_eq!(divider.ts, Some(1.));
     let handoff = divider.handoff.as_ref().unwrap();
-    assert_eq!((handoff["from_provider"].as_str(), handoff["from_model"].as_str()), (Some("claude"), Some("claude-opus-5-5")));
-    assert_eq!((handoff["to_provider"].as_str(), handoff["to_model"].as_str(), handoff["to_effort"].as_str()), (Some("codex"), Some("gpt-6.2-sol"), Some("low")));
+    assert_eq!((handoff.from_provider.as_deref(), handoff.from_model.as_deref()), (Some("claude"), Some("claude-opus-5-5")));
+    assert_eq!((handoff.to_provider.as_deref(), handoff.to_model.as_deref(), handoff.to_effort.as_deref()), (Some("codex"), Some("gpt-6.2-sol"), Some("low")));
     let wire = serde_json::to_value(divider).unwrap();
-    assert_eq!(wire["kind"], "handoff");
+    assert_eq!((wire["kind"].as_str(), wire["handoff"]["to_model"].as_str()), (Some("handoff"), Some("gpt-6.2-sol")));
 }
 
 #[test]

@@ -77,6 +77,16 @@ pub struct PatchHunk {
     pub lines: Vec<String>,
 }
 
+/// Os dois lados do divisor da troca de agente: quem respondia antes e quem responde agora.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HandoffDivider {
+    pub from_provider: Option<String>,
+    pub from_model: Option<String>,
+    pub to_provider: Option<String>,
+    pub to_model: Option<String>,
+    pub to_effort: Option<String>,
+}
+
 /// Campos na ordem de models.py: o JSON sai com as chaves na ordem do `model_dump_json`.
 /// Contagens sem sinal porque o Python nunca manda negativo, e são os tipos que o desktop já lia.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -114,10 +124,9 @@ pub struct ChatEvent {
     /// no JSON quando não vale, para cliente e goldens antigos.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub queued_conversation: Option<bool>,
-    /// Só no divisor da troca de agente (`kind: handoff`): `from_provider`, `from_model`, `to_provider`,
-    /// `to_model` e `to_effort`. Ausente no JSON quando não vale.
+    /// Só no divisor da troca de agente (`kind: handoff`). Ausente no JSON quando não vale.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub handoff: Option<Map<String, Value>>,
+    pub handoff: Option<HandoffDivider>,
     /// Byte logo após a linha do transcript: vira o `id:` do SSE e nunca vai no JSON (`exclude=True`).
     #[serde(skip)]
     pub offset: Option<u64>,

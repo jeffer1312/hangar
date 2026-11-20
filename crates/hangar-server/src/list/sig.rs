@@ -150,10 +150,10 @@ mod tests {
     fn a_handoff_and_its_state_change_the_signature() {
         let mut row: SessionRow = serde_json::from_value(json!({"name": "s"})).unwrap();
         let plain = list_sig(&[row.clone()]);
-        row.handoff = Some(hangar_api::session::Handoff { state: "waiting".into(), provider: "codex".into(), conta: "codex:a".into(), ..Default::default() });
+        row.handoff = Some(hangar_api::session::Handoff { provider: "codex".into(), conta: "codex:a".into(), ..Default::default() });
         let waiting = list_sig(&[row.clone()]);
         assert_ne!(plain, waiting);
-        row.handoff.as_mut().unwrap().state = "running".into();
+        row.handoff.as_mut().unwrap().state = hangar_api::session::HandoffState::Running;
         assert_ne!(waiting, list_sig(&[row.clone()]));
         assert!(serde_json::to_value(&row).unwrap()["handoff"]["state"] == "running");
         row.handoff = None;

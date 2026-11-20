@@ -470,9 +470,9 @@ pub fn pill_button(id: impl Into<ElementId>, cx: &App) -> Button {
 }
 
 /// Tecla de atalho mostrada ao lado de uma ação.
-pub fn kbd(keys: &'static str) -> Div {
+pub fn kbd(keys: impl Into<SharedString>) -> Div {
     div().flex_shrink_0().px(px(4.)).rounded(px(4.)).border_1().border_color(theme::border_strong())
-        .font_family(theme::MONO).text_size(px(11.)).text_color(theme::faint()).child(keys)
+        .font_family(theme::MONO).text_size(px(11.)).text_color(theme::faint()).child(keys.into())
 }
 
 /// Selo quadrado do provider na cor da marca, com os mesmos traçados do `ProviderGlyph` do web;

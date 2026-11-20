@@ -63,29 +63,30 @@ impl Target {
     pub(super) fn id(&self) -> String { format!("{}::{}", self.server, self.name) }
 }
 
-/// O servidor confere as guardas novamente; a tela só oferece uma origem identificável e parada.
-/// Origem da troca de agente pelo seletor de modelos: a mesma da transferência, sem exigir a sessão parada. Com ela
-/// trabalhando ou esperando resposta, o servidor segura a fila e troca quando o turno acaba.
-pub(super) fn handoff_source(session: &SessionInfo) -> Option<(&str, &str)> {
+/// Sessão Claude numa conta Anthropic, legível e sem troca em curso: o que a transferência e a troca de agente
+/// exigem da origem, e a identidade dela (vida e transcript) que vai no pedido.
+fn transfer_identity<'a>(session: &'a SessionInfo, phases_ok: &[&str]) -> Option<(&'a str, &'a str)> {
     if session.provider != "claude" || session.engine.as_deref().is_some_and(|e| !e.is_empty()) || session.uses_engine_account()
-        || session.read_only() || session.tracked == Some(false) || session.state == "dead"
+        || session.read_only() || session.tracked == Some(false)
         || !session.conta.as_deref().is_some_and(|c| c.starts_with("claude:"))
-        || session.handoff.as_ref().is_some_and(|h| h.state == "running")
-        || session.transfer_phase.as_deref().is_some_and(|p| !matches!(p, "rejected" | "rolled_back" | "complete")) { return None; }
+        || session.transfer_phase.as_deref().is_some_and(|p| !phases_ok.contains(&p)) { return None; }
     let life = session.lifecycle_id.as_deref().filter(|s| s.len() > 2 && (s.starts_with("k:") || s.starts_with("t:")))?;
     let jsonl = session.jsonl.as_deref().filter(|s| !s.is_empty())?;
     Some((life, jsonl))
 }
 
+/// Origem da troca de agente pelo seletor de modelos: a mesma da transferência, sem exigir a sessão parada. Com ela
+/// trabalhando ou esperando resposta, o servidor segura a fila e troca quando o turno acaba.
+pub(super) fn handoff_source(session: &SessionInfo) -> Option<(&str, &str)> {
+    if session.state == "dead" || session.handoff.as_ref().is_some_and(|h| h.state == hangar_api::session::HandoffState::Running) { return None; }
+    transfer_identity(session, &["rejected", "rolled_back", "complete"])
+}
+
+/// O servidor confere as guardas novamente; a tela só oferece uma origem identificável e parada.
 pub(super) fn transfer_source(session: &SessionInfo) -> Option<(&str, &str)> {
-    if session.provider != "claude" || session.engine.as_deref().is_some_and(|e| !e.is_empty()) || session.uses_engine_account()
-        || session.read_only() || session.tracked == Some(false) || !matches!(session.state.as_str(), "idle" | "dead")
-        || !session.conta.as_deref().is_some_and(|c| c.starts_with("claude:"))
-        || session.pending_questions != 0 || session.question.is_some() || session.options.as_ref().is_some_and(|o| !o.is_empty())
-        || session.transfer_phase.as_deref().is_some_and(|p| !matches!(p, "rejected" | "rolled_back")) { return None; }
-    let life = session.lifecycle_id.as_deref().filter(|s| s.len() > 2 && (s.starts_with("k:") || s.starts_with("t:")))?;
-    let jsonl = session.jsonl.as_deref().filter(|s| !s.is_empty())?;
-    Some((life, jsonl))
+    if !matches!(session.state.as_str(), "idle" | "dead") || session.pending_questions != 0 || session.question.is_some()
+        || session.options.as_ref().is_some_and(|o| !o.is_empty()) { return None; }
+    transfer_identity(session, &["rejected", "rolled_back"])
 }
 
 /// Estado de silenciar da sessão do menu aberto, lido de `GET /api/push/settings`.

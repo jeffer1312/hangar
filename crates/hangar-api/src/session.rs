@@ -19,9 +19,13 @@ pub struct ContextUse {
 
 /// Troca de agente pedida pelo seletor de modelos (`POST /conta` com `when_idle`): espera a sessão
 /// ficar livre (`waiting`), troca (`running`) ou falhou (`failed`, com o código). Só existe no Rust.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HandoffState { #[default] Waiting, Running, Failed }
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Handoff {
-    pub state: String,
+    pub state: HandoffState,
     pub provider: String,
     #[serde(default)]
     pub model: Option<String>,

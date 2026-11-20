@@ -7,7 +7,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use hangar_api::{chat::{ChatEvent, ChatKind}, session::SessionRow};
+use hangar_api::{chat::{ChatEvent, ChatKind, HandoffDivider}, session::SessionRow};
 use serde_json::Value;
 
 use crate::transcript::{InternalInfo, LineParser, Provider, pyjson};
@@ -291,14 +291,10 @@ fn active_events(
 
 /// O divisor entre a conversa de origem e a do agente novo: quem respondia antes e quem responde agora.
 fn handoff_divider(record: &Value, id: &str) -> ChatEvent {
-    let text = |value: &Value| value.as_str().filter(|s| !s.is_empty()).map_or(Value::Null, |s| Value::String(s.to_owned()));
+    let text = |value: &Value| value.as_str().filter(|s| !s.is_empty()).map(str::to_owned);
     let (origin, destination) = (&record["origin_meta"], &record["destination_meta"]);
-    let mut handoff = serde_json::Map::new();
-    handoff.insert("from_provider".into(), text(&record["source"]["provider"]));
-    handoff.insert("from_model".into(), text(&origin["model"]));
-    handoff.insert("to_provider".into(), Value::String("codex".into()));
-    handoff.insert("to_model".into(), text(&destination["model"]));
-    handoff.insert("to_effort".into(), text(&destination["effort"]));
+    let handoff = HandoffDivider { from_provider: text(&record["source"]["provider"]), from_model: text(&origin["model"]),
+        to_provider: Some("codex".into()), to_model: text(&destination["model"]), to_effort: text(&destination["effort"]) };
     ChatEvent { kind: ChatKind::Other("handoff".into()), id: format!("transfer:{id}:handoff"), handoff: Some(handoff), ..ChatEvent::default() }
 }
 
@@ -306,7 +302,11 @@ fn handoff_divider(record: &Value, id: &str) -> ChatEvent {
 /// sem turno novo ainda). Conversa que não veio de transferência fica igual; registro ilegível também, com
 /// aviso no log: o histórico não falha por causa do divisor.
 pub(crate) fn insert_handoff_divider(home: &Path, name: &str, jsonl: &Path, events: &mut Vec<ChatEvent>) {
-    let filter = match LiveContext::new(home.to_owned(), name.to_owned()).filter(jsonl) {
+    // Um contexto por sessão, como o do chat ao vivo: o prefixo importado só é conferido de novo quando o arquivo muda.
+    static CONTEXTS: std::sync::OnceLock<Mutex<HashMap<(PathBuf, String), LiveContext>>> = std::sync::OnceLock::new();
+    let context = CONTEXTS.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner())
+        .entry((home.to_owned(), name.to_owned())).or_insert_with(|| LiveContext::new(home.to_owned(), name.to_owned())).clone();
+    let filter = match context.filter(jsonl) {
         Ok(Some(filter)) => filter,
         Ok(None) => return,
         Err(error) => {

@@ -754,15 +754,12 @@ impl Hangar {
     /// troca de agente do seletor de modelos. `None` enquanto a lista não chegou; a leitura que falhou é lista vazia.
     pub(super) fn handoff_accounts(&self) -> Option<Vec<controls::HandoffAccount>> {
         let list = match self.session_accounts().value.as_ref()? { Ok(list) => list.as_slice(), Err(_) => &[][..] };
-        let (engines, now) = (HashMap::new(), now());
         let mut out: Vec<(f64, controls::HandoffAccount)> = list.iter()
             .filter(|c| c.kind == "codex" && c.id.starts_with("codex:") && c.logged_in() == Some(true))
             .filter_map(|c| {
                 let account = c.codex_account.clone().filter(|a| !a.is_empty())?;
-                let pct = match build_row(c, &engines, false, now).quota {
-                    QuotaView::Bars { bars, .. } => bars.iter().map(|b| b.pct).fold(0., f64::max),
-                    _ => 0.,
-                };
+                // A janela mais cheia da conta, como a lista do backend; sem leitura conta como livre.
+                let pct = c.quota.as_ref().map_or(0., |q| q.windows.iter().filter(|w| !w.por_modelo).map(|w| w.pct).fold(0., f64::max));
                 let label = c.alias.clone().filter(|a| !a.is_empty()).unwrap_or_else(|| c.name.clone());
                 (pct < 99.).then(|| (pct, controls::HandoffAccount { credential: c.id.clone(), account, label }))
             }).collect();

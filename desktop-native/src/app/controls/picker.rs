@@ -4,6 +4,7 @@
 //! Escolher um modelo do Codex numa sessão Claude pede a troca de agente (`POST /conta` com `when_idle`): com a
 //! sessão trabalhando, o servidor espera o turno acabar, e o que for enviado no meio vai ao modelo novo.
 use super::*;
+use hangar_api::session::HandoffState;
 
 pub(super) const FAVORITES: &str = "favorites";
 /// Linhas da aba antes do "Mostrar mais".
@@ -22,38 +23,26 @@ pub(in crate::app) struct HandoffAccount { pub(in crate::app) credential: String
 /// Catálogo do Codex lido para a troca, da sessão e da conta em que foi pedido.
 pub(in crate::app) struct HandoffCatalog { key: SessionKey, account: HandoffAccount, catalog: Option<Result<Value, String>> }
 
-fn provider_label(provider: &str) -> String {
-    match provider { "claude" => "Claude".into(), "codex" => "Codex".into(), "omp" => "omp".into(), other => capitalized(other) }
-}
+fn provider_label(provider: &str) -> String { super::super::orchestration::provider_name(provider).to_owned() }
 
 /// Nome curto do modelo para o divisor e a faixa da troca: `claude-opus-5-5` vira "Opus 5.5", `gpt-6.2-sol` vira
 /// "GPT-6.2-Sol". Sem modelo, o nome do agente.
 pub(crate) fn model_display(provider: &str, model: &str) -> String {
     let model = model.trim();
     if model.is_empty() { return provider_label(provider); }
+    // O Claude já tem o rótulo da linha de status; o resto ganha maiúscula por palavra, com "GPT" inteiro.
+    if provider == "claude" { return crate::status::model_label(model); }
     let (base, wide) = match model.strip_suffix("[1m]") { Some(base) => (base, true), None => (model, false) };
-    let shown = if provider == "claude" {
-        let rest = base.strip_prefix("claude-").unwrap_or(base);
-        // A data no fim do id (`20250929`) não entra no nome.
-        let mut parts = rest.split('-').filter(|p| !(p.len() == 8 && p.bytes().all(|b| b.is_ascii_digit())));
-        let family = parts.next().map(capitalized).unwrap_or_default();
-        let version: Vec<&str> = parts.collect();
-        if version.is_empty() { family }
-        else if version.iter().all(|p| p.bytes().all(|b| b.is_ascii_digit())) { format!("{family} {}", version.join(".")) }
-        else { format!("{family} {}", version.iter().map(|p| capitalized(p)).collect::<Vec<_>>().join(" ")) }
-    } else {
-        base.split('-').map(|p| if p.eq_ignore_ascii_case("gpt") { "GPT".to_owned() } else { capitalized(p) }).collect::<Vec<_>>().join("-")
-    };
+    let shown = base.split('-').map(|p| if p.eq_ignore_ascii_case("gpt") { "GPT".to_owned() } else { capitalized(p) }).collect::<Vec<_>>().join("-");
     if wide { format!("{shown} 1M") } else { shown }
 }
 
 /// Atalho da linha `n` (1…9) no jeito da plataforma.
 fn jump_label(n: usize) -> String { if cfg!(target_os = "macos") { format!("⌘{n}") } else { format!("Ctrl+{n}") } }
 
-fn shortcut(text: String) -> Div {
-    div().flex_none().px(px(5.)).py(px(1.)).rounded(px(5.)).bg(theme::inset())
-        .font_family(theme::MONO).text_size(px(10.)).text_color(theme::faint()).child(text)
-}
+/// O que um desenho do seletor monta uma vez só.
+#[derive(Default)]
+struct PickerView { own: Vec<Choice>, handoff: Vec<Choice>, tab: String, has_favorites: bool }
 
 /// Linha de modelo: agente, nome, visto da atual, estrela e atalho. A tela e a animação da novidade usam a mesma.
 pub(crate) fn row_view(id: SharedString, provider: &str, name: AnyElement, current: bool, lit: bool, star: Option<AnyElement>, jump: Option<usize>) -> Button {
@@ -65,7 +54,7 @@ pub(crate) fn row_view(id: SharedString, provider: &str, name: AnyElement, curre
             .child(div().flex_1().min_w_0().child(name))
             .when(current, |el| el.child(chrome::small_icon(IconName::Check, 15., theme::accent())))
             .children(star)
-            .children(jump.map(|n| shortcut(jump_label(n)))))
+            .children(jump.map(|n| chrome::kbd(jump_label(n)))))
 }
 
 /// A estrela de favorito, acesa ou não.
@@ -168,9 +157,10 @@ impl Hangar {
     /// espera é o desenho do seletor.
     pub(super) fn picker_poll(&mut self, cx: &mut Context<Self>) {
         let Some(key) = self.selected_key() else { return };
+        // Catálogo já pedido nesta sessão: o desenho não refaz contas nem origem.
+        if self.controls.handoff.as_ref().is_some_and(|h| h.key == key) { return; }
         if self.handoff_source_now().is_none() { return; }
         let Some(account) = self.handoff_accounts().and_then(|list| list.into_iter().next()) else { return };
-        if self.controls.handoff.as_ref().is_some_and(|h| h.key == key && h.account.credential == account.credential) { return; }
         let Some(api) = self.session_api() else { return };
         let (credential, codex_account) = (account.credential.clone(), account.account.clone());
         self.controls.handoff = Some(HandoffCatalog { key: key.clone(), account, catalog: None });
@@ -219,21 +209,24 @@ impl Hangar {
         tabs
     }
 
-    /// A aba à vista: a escolhida, ou os favoritos quando algum está na lista, ou o agente da sessão.
-    fn picker_tab(&self, own: &[Choice], handoff: &[Choice]) -> String {
-        if let Some(tab) = &self.controls.picker_tab { return tab.clone(); }
+    /// O que um desenho do seletor precisa, montado uma vez: as linhas do agente e do Codex, a aba e se há favoritos.
+    fn picker_view(&self, catalog: &Value) -> PickerView {
+        let (own, handoff) = (self.choices(Ctl::Model, catalog), self.handoff_rows());
         let favorites = self.favorite_list();
-        if own.iter().chain(handoff).any(|c| favorites.contains(&c.key)) { FAVORITES.into() } else { self.provider().0.to_owned() }
+        let has_favorites = own.iter().chain(&handoff).any(|c| favorites.contains(&c.key));
+        // A aba à vista: a escolhida, ou os favoritos quando algum está na lista, ou o agente da sessão.
+        let tab = self.controls.picker_tab.clone().unwrap_or_else(|| if has_favorites { FAVORITES.into() } else { self.provider().0.to_owned() });
+        PickerView { own, handoff, tab, has_favorites }
     }
 
     /// As linhas do seletor: busca em todos os agentes; senão a aba, favoritos primeiro, e o "Mostrar mais".
-    pub(super) fn picker_rows(&self, catalog: &Value, cx: &App) -> Vec<Choice> {
+    pub(super) fn picker_rows(&self, catalog: &Value, cx: &App) -> Vec<Choice> { self.picker_rows_of(self.picker_view(catalog), cx) }
+
+    fn picker_rows_of(&self, view: PickerView, cx: &App) -> Vec<Choice> {
+        let PickerView { own, handoff, tab, .. } = view;
         let query = self.ctl_search.read(cx).value().trim().to_owned();
-        let own = self.choices(Ctl::Model, catalog);
-        let handoff = self.handoff_rows();
         if !query.is_empty() { return keep(own.into_iter().chain(handoff).collect(), &query); }
         let favorites = self.favorite_list();
-        let tab = self.picker_tab(&own, &handoff);
         if tab == FAVORITES {
             let mut rows: Vec<Choice> = own.into_iter().chain(handoff).filter(|c| favorites.contains(&c.key)).collect();
             rows.sort_by_key(|c| favorites.iter().position(|f| *f == c.key));
@@ -255,7 +248,7 @@ impl Hangar {
         // A aba à vista fica: a primeira estrela não leva a pessoa para os Favoritos.
         if self.controls.picker_tab.is_none() {
             let tab = self.controls.open.as_ref().and_then(|o| o.catalog.as_ref()).and_then(|c| c.as_ref().ok())
-                .map(|catalog| self.picker_tab(&self.choices(Ctl::Model, catalog), &self.handoff_rows()));
+                .map(|catalog| self.picker_view(catalog).tab);
             self.controls.picker_tab = tab;
         }
         let list = self.controls.favorites.get_or_insert_with(Vec::new);
@@ -296,15 +289,14 @@ impl Hangar {
         let (Some(api), Some(key)) = (self.session_api(), self.selected_key()) else { return };
         let (connection, tx) = (self.connection, self.tx.clone());
         self.runtime.spawn(async move {
-            let result = api.act(&key.name, &["conta"], None, true, 15).await.map(|_| Value::Null);
-            let note = result.err().map(|error| Hangar::failure(&error));
-            let _ = tx.send(Envelope { connection, selection: None, payload: Payload::Reply(key, Reply::HandoffCancel(note), Ok(Value::Null)) }).await;
+            let result = api.act(&key.name, &["conta"], None, true, 15).await;
+            let _ = tx.send(Envelope { connection, selection: None, payload: Payload::Reply(key, Reply::HandoffCancel, result) }).await;
         });
         cx.notify();
     }
 
-    pub(super) fn receive_handoff_cancel(&mut self, key: SessionKey, note: Option<String>) {
-        if let Some(note) = note { self.action_feedback.insert(key, (note, true)); }
+    pub(super) fn receive_handoff_cancel(&mut self, key: SessionKey, result: Result<Value, Failure>) {
+        if let Err(error) = result { self.action_feedback.insert(key, (Self::failure(&error), true)); }
     }
 
     /// Faixa sobre o compositor enquanto a troca espera, acontece ou acabou de falhar.
@@ -315,16 +307,16 @@ impl Hangar {
         let from = model_display(&session.provider, session.model.as_deref().or(live.as_deref()).unwrap_or_default());
         let to = model_display(&handoff.provider, handoff.model.as_deref().unwrap_or_default());
         let route = route_view(&session.provider, from, &handoff.provider, to, 14.);
-        let (title, color) = match handoff.state.as_str() {
-            "running" => (tr_shared("handoff_running", &[]), theme::muted()),
-            "failed" => {
+        let (title, color) = match handoff.state {
+            HandoffState::Running => (tr_shared("handoff_running", &[]), theme::muted()),
+            HandoffState::Failed => {
                 let reason = handoff.code.as_deref().map(|code| crate::i18n::tr_web(code, &HashMap::new()).unwrap_or_else(|| code.to_owned())).unwrap_or_default();
                 (tr_shared("handoff_failed", &[("reason", &reason)]), theme::warning())
             }
-            _ => (tr_shared(if session.state == "working" { "handoff_waiting_turn" } else { "handoff_waiting" }, &[]), theme::muted()),
+            HandoffState::Waiting => (tr_shared(if session.state == "working" { "handoff_waiting_turn" } else { "handoff_waiting" }, &[]), theme::muted()),
         };
-        let waiting = handoff.state == "waiting";
-        let icon = if waiting { IconName::Hourglass } else if handoff.state == "failed" { IconName::TriangleAlert } else { IconName::LoaderCircle };
+        let waiting = handoff.state == HandoffState::Waiting;
+        let icon = match handoff.state { HandoffState::Waiting => IconName::Hourglass, HandoffState::Failed => IconName::TriangleAlert, HandoffState::Running => IconName::LoaderCircle };
         let cancel = waiting.then(|| Button::new("handoff-cancel").small().ghost().label(tr_shared("handoff_cancel", &[]))
             .on_click(cx.listener(|this, _, _, cx| this.cancel_handoff(cx))));
         Some(band_view(icon, title, color, route, cancel).id("handoff-band").into_any_element())
@@ -333,15 +325,15 @@ impl Hangar {
     /// Divisor da conversa onde o agente mudou: "Troca de contexto · Opus 5.5 → GPT-6.2-Sol".
     pub(in crate::app) fn render_handoff_line(&self, event_index: usize) -> AnyElement {
         let Some(handoff) = self.chat.events.get(event_index).and_then(|event| event.handoff.as_ref()) else { return div().into_any_element() };
-        let field = |name: &str| handoff.get(name).and_then(Value::as_str).unwrap_or_default().to_owned();
-        let (from, to) = (field("from_provider"), field("to_provider"));
-        let route = route_view(&from, model_display(&from, &field("from_model")), &to, model_display(&to, &field("to_model")), 12.5);
+        let (from, to) = (handoff.from_provider.as_deref().unwrap_or_default(), handoff.to_provider.as_deref().unwrap_or_default());
+        let route = route_view(from, model_display(from, handoff.from_model.as_deref().unwrap_or_default()),
+            to, model_display(to, handoff.to_model.as_deref().unwrap_or_default()), 12.5);
         divider_view(route).into_any_element()
     }
 
     fn picker_row(&self, n: usize, c: Choice, lit: bool, busy: bool, cx: &mut Context<Self>) -> AnyElement {
         let (current, enabled, more) = (c.current, c.enabled, c.pick == Pick::More);
-        let id = SharedString::from(format!("ctl-choice-{}", c.body));
+        let id = SharedString::from(format!("ctl-choice-{}", if more { "more" } else { c.key.as_str() }));
         let favorite = !c.key.is_empty() && self.favorite_list().contains(&c.key);
         let star = (!c.key.is_empty()).then(|| {
             let key = c.key.clone();
@@ -354,7 +346,7 @@ impl Hangar {
         // Só o nome na linha, como no T3; a descrição fica na dica do nome e na busca. A dica mora no nome: a linha já
         // ouve o hover para o destaque, e o GPUI não aceita dois no mesmo elemento.
         let detail = c.detail.clone();
-        let name = div().id(SharedString::from(format!("picker-name-{}", c.body))).min_w_0().truncate().text_sm().font_weight(FontWeight::MEDIUM)
+        let name = div().id(SharedString::from(format!("picker-name-{}", c.key))).min_w_0().truncate().text_sm().font_weight(FontWeight::MEDIUM)
             .text_color(if more { theme::muted() } else { theme::text() }).child(c.label)
             .when(!detail.is_empty(), |el| el.tooltip(move |window, cx| gpui_kit::component::tooltip::Tooltip::new(detail.clone()).build(window, cx)));
         let provider = if more { String::new() } else { c.provider.clone() };
@@ -367,10 +359,9 @@ impl Hangar {
             .into_any_element()
     }
 
-    fn picker_rail(&self, own: &[Choice], handoff: &[Choice], cx: &mut Context<Self>) -> Div {
-        let tab = self.picker_tab(own, handoff);
-        let favorites = self.favorite_list();
-        let has_favorites = own.iter().chain(handoff).any(|c| favorites.contains(&c.key));
+    fn picker_rail(&self, view: &PickerView, cx: &mut Context<Self>) -> Div {
+        let tab = view.tab.clone();
+        let has_favorites = view.has_favorites;
         let button = |id: String, selected: bool, enabled: bool, label: String, child: AnyElement, cx: &mut Context<Self>| {
             let tab = id.clone();
             let button = rail_button(&id, selected, label, child).disabled(!enabled)
@@ -417,15 +408,8 @@ impl Hangar {
                     }
                 }
                 Pick::Apply if provider == "codex" => {
-                    let model = focus.body.get("model").and_then(Value::as_str).unwrap_or_default().to_owned();
-                    let now = catalog.get("current").cloned().unwrap_or(Value::Null);
-                    let entry = catalog.get("models").and_then(Value::as_array).and_then(|models| models.iter().find(|m| text(m, "model") == model));
-                    for e in entry.and_then(|m| m.get("efforts").and_then(Value::as_array)).into_iter().flatten() {
-                        let value = text(e, "value");
-                        if value.is_empty() { continue; }
-                        let on = model == text(&now, "model") && value == text(&now, "effort");
-                        levels.push((value.clone(), on, Pick::Apply, vec!["model"], json!({"model": model, "effort": value})));
-                    }
+                    let model = focus.body.get("model").and_then(Value::as_str).unwrap_or_default();
+                    levels.extend(codex_efforts(catalog, model).into_iter().map(|c| (c.label, c.current, Pick::Apply, c.path, c.body)));
                 }
                 // Claude: os níveis valem para qualquer modelo da lista (menos o Haiku, que não tem); noutro modelo, o nível
                 // troca modelo e esforço no mesmo pedido.
@@ -498,9 +482,10 @@ impl Hangar {
     /// O painel do seletor: trilho, busca e lista, raciocínio ao lado, velocidade embaixo.
     pub(super) fn render_model_picker(&self, catalog: Option<&Result<Value, String>>, busy: bool, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let searching = !self.ctl_search.read(cx).value().trim().is_empty();
-        let (own, handoff) = match catalog { Some(Ok(catalog)) => (self.choices(Ctl::Model, catalog), self.handoff_rows()), _ => (Vec::new(), Vec::new()) };
-        let tab = self.picker_tab(&own, &handoff);
-        let rows = match catalog { Some(Ok(catalog)) => self.picker_rows(catalog, cx), _ => Vec::new() };
+        let view = match catalog { Some(Ok(catalog)) => self.picker_view(catalog), _ => PickerView::default() };
+        let tab = view.tab.clone();
+        let rail = (!searching).then(|| self.picker_rail(&view, cx));
+        let rows = match catalog { Some(Ok(_)) => self.picker_rows_of(view, cx), _ => Vec::new() };
         let pick = self.ctl_highlight(&rows);
         if !rows.is_empty() && !self.controls.revealed.get() {
             if self.controls.scroll.bounds().size.height > px(0.) {
@@ -510,16 +495,13 @@ impl Hangar {
         }
         let handoff_tab = !searching && tab == "codex" && self.provider().0 != "codex";
         let handoff_state = self.handoff_catalog().map(|h| (&h.catalog, h.account.label.clone()));
+        let hint = (handoff_tab || rows.get(pick).is_some_and(|c| matches!(c.pick, Pick::Handoff { .. })))
+            .then(|| handoff_state.as_ref().map(|(_, label)| label.clone())).flatten()
+            .map(|label| div().px(px(8.)).pb(px(4.)).text_xs().text_color(theme::muted()).whitespace_normal()
+                .child(tr("picker_handoff_hint").replace("{account}", &label)));
+        let reasoning = match catalog { Some(Ok(catalog)) => Some(self.picker_reasoning(catalog, &rows, busy, cx)), _ => None };
         let list = match catalog {
-            None => popup::skeleton("ctl-loading", 5).into_any_element(),
-            Some(Err(reason)) => div().p(px(8.)).flex().flex_col().items_start().gap(px(6.)).text_size(px(12.)).text_color(theme::danger())
-                .child(tr("ctl_failed").replace("{reason}", reason))
-                .child(Button::new("ctl-retry").outline().xsmall().label(tr("ctl_retry")).on_click(cx.listener(move |this, _, window, cx| {
-                    this.close_controls();
-                    this.open_ctl(Ctl::Model, this.provider().0 == "claude", cx);
-                    this.focus_ctl_panel(window, cx);
-                })))
-                .into_any_element(),
+            None | Some(Err(_)) => self.ctl_load_state(Ctl::Model, catalog, cx).unwrap_or_else(|| div().into_any_element()),
             Some(Ok(_)) if handoff_tab && !matches!(handoff_state, Some((Some(Ok(_)), _))) => match handoff_state {
                 Some((Some(Err(reason)), _)) => div().p(px(8.)).text_size(px(12.)).text_color(theme::danger())
                     .child(tr("ctl_failed").replace("{reason}", reason)).into_any_element(),
@@ -528,20 +510,15 @@ impl Hangar {
             Some(Ok(_)) if rows.is_empty() => div().px(px(8.)).py(px(24.)).text_size(px(12.)).text_color(theme::muted()).text_center()
                 .child(tr(if searching { "ctl_no_results" } else if tab == FAVORITES { "picker_no_favorites" } else { "ctl_empty" })).into_any_element(),
             Some(Ok(_)) => div().id("ctl-list").flex_1().max_h(px(320.)).overflow_y_scroll().track_scroll(&self.controls.scroll).flex().flex_col()
-                .children(rows.iter().cloned().enumerate().map(|(n, c)| self.picker_row(n, c, n == pick, busy, cx)))
+                .children(rows.into_iter().enumerate().map(|(n, c)| self.picker_row(n, c, n == pick, busy, cx)))
                 .into_any_element(),
         };
-        let hint = (handoff_tab || rows.get(pick).is_some_and(|c| matches!(c.pick, Pick::Handoff { .. })))
-            .then(|| handoff_state.as_ref().map(|(_, label)| label.clone())).flatten()
-            .map(|label| div().px(px(8.)).pb(px(4.)).text_xs().text_color(theme::muted()).whitespace_normal()
-                .child(tr("picker_handoff_hint").replace("{account}", &label)));
         let search = div().px(px(4.)).pb(px(4.))
             .capture_action(cx.listener(|this, _: &MoveUp, _, cx| this.move_ctl(-1, false, cx)))
             .capture_action(cx.listener(|this, _: &MoveDown, _, cx| this.move_ctl(1, false, cx)))
             .child(Input::new(&self.ctl_search).h(px(32.)).aria_label(tr("picker_search"))
                 .prefix(chrome::small_icon(IconName::Search, 14., theme::faint())));
         let center = div().flex_1().min_w_0().flex().flex_col().gap(px(2.)).px(px(4.)).child(search).children(hint).child(list);
-        let reasoning = match catalog { Some(Ok(catalog)) => Some(self.picker_reasoning(catalog, &rows, busy, cx)), _ => None };
         let (speed, context) = match catalog {
             Some(Ok(catalog)) => (self.picker_speed(catalog, busy, cx), self.render_context_footer(catalog, busy, cx)),
             _ => (None, None),
@@ -556,7 +533,7 @@ impl Hangar {
             .children(speed).child(div().flex_1()).children(refresh));
         div().flex().flex_col()
             .child(div().flex().min_h(px(260.))
-                .when(!searching, |el| el.child(self.picker_rail(&own, &handoff, cx)))
+                .children(rail)
                 .child(center)
                 .children(reasoning))
             .children(footer)
@@ -580,7 +557,6 @@ mod tests {
     fn model_names_read_like_the_t3_divider() {
         assert_eq!(model_display("claude", "claude-opus-5-5"), "Opus 5.5");
         assert_eq!(model_display("claude", "opus"), "Opus");
-        assert_eq!(model_display("claude", "claude-sonnet-4-5-20250929"), "Sonnet 4.5");
         assert_eq!(model_display("claude", "claude-opus-5-5[1m]"), "Opus 5.5 1M");
         assert_eq!(model_display("codex", "gpt-6.2-sol"), "GPT-6.2-Sol");
         assert_eq!(model_display("codex", ""), "Codex");

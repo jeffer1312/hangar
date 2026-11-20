@@ -159,9 +159,7 @@ impl Drop for WakingSlot<'_> {
 pub const ASLEEP_WAKING:&str = "session_asleep_waking";
 pub(crate) fn asleep_waking() -> RuntimeError { RuntimeError::new(ASLEEP_WAKING,"a sessão adormecida está sendo reaberta; tente de novo em instantes") }
 
-pub const HANDOFF_WAITING:&str = "waiting";
-pub const HANDOFF_RUNNING:&str = "running";
-pub const HANDOFF_FAILED:&str = "failed";
+use hangar_api::session::HandoffState;
 
 /// Troca de agente registrada: a geração separa um pedido do que o substituiu.
 pub struct PendingHandoff { generation:u64, view:hangar_api::session::Handoff, cancelled:bool }
@@ -494,11 +492,13 @@ impl RuntimeRegistry {
         generation
     }
     /// O estado da troca, se ainda é a da geração `generation`.
-    pub fn handoff_mark(&self,name:&str,generation:u64,state:&str,code:Option<&str>) -> bool {
+    pub fn handoff_mark(&self,name:&str,generation:u64,state:HandoffState,code:Option<&str>) -> bool {
         let mut all=self.handoffs.lock().unwrap_or_else(|e|e.into_inner());
         let Some(pending)=all.get_mut(name).filter(|p|p.generation==generation) else { return false };
-        pending.view.state=state.to_owned();
+        pending.view.state=state;
         pending.view.code=code.map(str::to_owned);
+        // Falha devolve a fila na hora; a linha ainda mostra o motivo.
+        if state==HandoffState::Failed { pending.cancelled=true; }
         true
     }
     /// Cancelada ou substituída, a espera desta geração para.
@@ -508,39 +508,34 @@ impl RuntimeRegistry {
     /// Pede o cancelamento; só a troca que ainda espera aceita. `false`: nada a cancelar ou já trocando.
     pub fn cancel_handoff(&self,name:&str) -> bool {
         let mut all=self.handoffs.lock().unwrap_or_else(|e|e.into_inner());
-        let Some(pending)=all.get_mut(name).filter(|p|p.view.state==HANDOFF_WAITING) else { return false };
+        let Some(pending)=all.get_mut(name).filter(|p|p.view.state==HandoffState::Waiting) else { return false };
         pending.cancelled=true;
         true
     }
-    /// Fim da troca desta geração: a fila volta a entregar, agora a quem ficou com a sessão.
-    pub fn release_handoff(&self,name:&str,generation:u64) {
+    /// Fim da troca desta geração: a entrada sai e, com `drain`, a fila volta a entregar a quem ficou com a sessão.
+    pub fn release_handoff(&self,name:&str,generation:u64,drain:bool) {
         {
             let mut all=self.handoffs.lock().unwrap_or_else(|e|e.into_inner());
             if all.get(name).is_none_or(|p|p.generation!=generation) { return; }
             all.remove(name);
         }
+        if drain { self.drain_later(name,"fila solta depois da troca de agente não drenou agora"); }
+    }
+    /// A troca falhou: a linha mostra o motivo até sair, e a fila já volta a entregar ao Claude.
+    pub fn fail_handoff(&self,name:&str,generation:u64,code:&str) {
+        if self.handoff_mark(name,generation,HandoffState::Failed,Some(code)) { self.drain_later(name,"fila solta depois da troca falha não drenou agora"); }
+    }
+    /// As trocas que a lista mostra, por nome; quase sempre vazio.
+    pub fn handoff_views(&self) -> BTreeMap<String,hangar_api::session::Handoff> {
+        self.handoffs.lock().unwrap_or_else(|e|e.into_inner()).iter().map(|(name,p)|(name.clone(),p.view.clone())).collect()
+    }
+    /// A drenagem corre à parte: ela só responde quando a entrega termina, e quem solta a fila não espera o turno.
+    fn drain_later(&self,name:&str,why:&'static str) {
         let Some(registry) = self.self_ref.get().and_then(std::sync::Weak::upgrade) else { return };
         let name = name.to_owned();
         tokio::spawn(async move {
-            if let Err(error) = registry.drain(&name).await { tracing::debug!(session=%name,code=%error.code,"fila solta depois da troca de agente não drenou agora"); }
+            if let Err(error) = registry.drain(&name).await { tracing::warn!(session=%name,code=%error.code,"{why}"); }
         });
-    }
-    /// A troca falhou: a linha mostra o motivo até o prazo, e a fila já volta a entregar.
-    pub fn fail_handoff(&self,name:&str,generation:u64,code:&str) {
-        let failed={
-            let mut all=self.handoffs.lock().unwrap_or_else(|e|e.into_inner());
-            match all.get_mut(name).filter(|p|p.generation==generation) {
-                Some(pending)=>{ pending.view.state=HANDOFF_FAILED.into(); pending.view.code=Some(code.to_owned()); pending.cancelled=true; true },
-                None=>false,
-            }
-        };
-        if !failed { return; }
-        if let Some(registry) = self.self_ref.get().and_then(std::sync::Weak::upgrade) {
-            let name = name.to_owned();
-            tokio::spawn(async move {
-                if let Err(error) = registry.drain(&name).await { tracing::debug!(session=%name,code=%error.code,"fila solta depois da troca falha não drenou agora"); }
-            });
-        }
     }
     /// A troca que a lista mostra, por nome.
     pub fn handoff_view(&self,name:&str) -> Option<hangar_api::session::Handoff> {
@@ -550,11 +545,7 @@ impl RuntimeRegistry {
     /// A drenagem corre à parte: ela só responde quando a entrega termina, e a troca não espera o turno.
     pub fn release_limit(&self,name:&str) {
         if !self.limit_holds.lock().unwrap_or_else(|e|e.into_inner()).remove(name) { return; }
-        let Some(registry) = self.self_ref.get().and_then(std::sync::Weak::upgrade) else { return };
-        let name = name.to_owned();
-        tokio::spawn(async move {
-            if let Err(error) = registry.drain(&name).await { tracing::warn!(session=%name,code=%error.code,"fila solta depois do limite não drenou agora"); }
-        });
+        self.drain_later(name,"fila solta depois do limite não drenou agora");
     }
     pub fn request_reopen(&self,name:&str) {
         let Some(registry) = self.self_ref.get().and_then(std::sync::Weak::upgrade) else { return };
@@ -3512,9 +3503,10 @@ async fn events(State(state):State<Gateway>) -> Response {
 pub(crate) mod tests {
     use super::*;
     use crate::runtime::queue::acquire_lease;
+    use hangar_api::session::HandoffState;
 
     fn handoff_view() -> hangar_api::session::Handoff {
-        hangar_api::session::Handoff { state: HANDOFF_WAITING.into(), provider: "codex".into(), model: Some("gpt-6.2-sol".into()),
+        hangar_api::session::Handoff { state: HandoffState::Waiting, provider: "codex".into(), model: Some("gpt-6.2-sol".into()),
             effort: Some("low".into()), conta: "codex:a".into(), code: None }
     }
 
@@ -3525,9 +3517,9 @@ pub(crate) mod tests {
         assert!(registry.queue_held("s") && !registry.queue_held("t"));
         let second = registry.hold_handoff("s", handoff_view());
         assert!(!registry.handoff_live("s", first) && registry.handoff_live("s", second), "o pedido novo substitui o anterior");
-        registry.release_handoff("s", first);
+        registry.release_handoff("s", first, true);
         assert!(registry.queue_held("s"), "a espera substituída não solta a fila da nova");
-        registry.release_handoff("s", second);
+        registry.release_handoff("s", second, true);
         assert!(!registry.queue_held("s") && registry.handoff_view("s").is_none());
     }
 
@@ -3536,17 +3528,17 @@ pub(crate) mod tests {
         let registry = RuntimeRegistry::new("instance".into());
         assert!(!registry.cancel_handoff("s"), "nada a cancelar");
         let generation = registry.hold_handoff("s", handoff_view());
-        assert!(registry.handoff_mark("s", generation, HANDOFF_RUNNING, None));
+        assert!(registry.handoff_mark("s", generation, HandoffState::Running, None));
         assert!(!registry.cancel_handoff("s"), "a troca em curso segue até o fim");
-        assert!(registry.handoff_mark("s", generation, HANDOFF_WAITING, None));
+        assert!(registry.handoff_mark("s", generation, HandoffState::Waiting, None));
         assert!(registry.cancel_handoff("s"));
         assert!(!registry.handoff_live("s", generation) && !registry.queue_held("s"));
         let generation = registry.hold_handoff("s", handoff_view());
         registry.fail_handoff("s", generation, "session_transfer_login_required");
         let shown = registry.handoff_view("s").unwrap();
-        assert_eq!((shown.state.as_str(), shown.code.as_deref()), (HANDOFF_FAILED, Some("session_transfer_login_required")));
+        assert_eq!((shown.state, shown.code.as_deref()), (HandoffState::Failed, Some("session_transfer_login_required")));
         assert!(!registry.queue_held("s"), "a falha devolve a fila ao Claude");
-        assert!(!registry.handoff_mark("s", generation + 1, HANDOFF_RUNNING, None), "outra geração não mexe na linha");
+        assert!(!registry.handoff_mark("s", generation + 1, HandoffState::Running, None), "outra geração não mexe na linha");
     }
 
     #[tokio::test]

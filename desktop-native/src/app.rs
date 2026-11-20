@@ -230,10 +230,10 @@ pub(crate) fn composer_icons(cx: &App) -> [Button; 3] {
 /// O microfone parado do compositor.
 pub(crate) fn composer_mic(label: String, cx: &App) -> Button { chrome::icon_button("dictation-toggle", IconName::Mic, label, cx) }
 
-/// Pílula do modelo com o esforço e o Fast ao lado.
 /// As peças do seletor de modelos e da troca de agente, para a animação da novidade.
 pub(crate) use controls::picker as model_picker;
 
+/// Pílula do modelo com o esforço e o Fast ao lado.
 pub(crate) fn model_pill(id: impl Into<ElementId>, text: String, effort: Option<String>, fast: Option<String>, cx: &App) -> Button {
     chrome::pill_button(id, cx).gap(px(6.))
         .child(div().max_w(px(150.)).truncate().text_xs().font_weight(FontWeight::SEMIBOLD).child(text))
@@ -463,8 +463,8 @@ enum Reply {
     HandoffCatalog(String),
     /// Resposta ao pedido de troca de agente pelo seletor de modelos.
     Handoff,
-    /// Cancelamento da troca que esperava; o texto é o motivo da recusa.
-    HandoffCancel(Option<String>),
+    /// Cancelamento da troca que esperava.
+    HandoffCancel,
     // Valor aplicado e o que a fonte ao vivo mostrava no gesto.
     Applied(controls::Ctl, String, Option<String>),
     Cost(u64),

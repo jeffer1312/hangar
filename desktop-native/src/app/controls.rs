@@ -317,6 +317,19 @@ fn claude_effort_current(status: &str) -> Option<&'static str> {
 }
 
 // Como o web, sem caixa, sobre `origem/id nome`: acha pelo nome, pelo provider e pelo id que a statusline mostra.
+/// Os níveis de raciocínio de um modelo do catálogo do Codex; escolher um troca modelo e esforço no mesmo pedido.
+fn codex_efforts(catalog: &Value, model: &str) -> Vec<Choice> {
+    let now = &catalog["current"];
+    let on = |value: &str| model == text(now, "model") && value == text(now, "effort");
+    catalog["models"].as_array().into_iter().flatten().find(|m| text(m, "model") == model)
+        .and_then(|m| m["efforts"].as_array()).into_iter().flatten().filter_map(|e| {
+            let value = text(e, "value");
+            (!value.is_empty()).then(|| Choice { label: value.clone(), detail: text(e, "description"), path: vec!["model"],
+                body: json!({"model": model, "effort": value}), current: on(&value), enabled: true,
+                provider: "codex".into(), key: String::new(), pick: picker::Pick::Apply })
+        }).collect()
+}
+
 fn keep(choices: Vec<Choice>, query: &str) -> Vec<Choice> {
     let query = query.trim().to_lowercase();
     if query.is_empty() { return choices; }
@@ -621,14 +634,7 @@ impl Hangar {
                     keyed(choice(label, text(m, "description"), vec!["model"], body, model == text(&now, "model")), &model)
                 }).collect()
             }
-            ("codex", Ctl::Effort) => {
-                let now = catalog.get("current").cloned().unwrap_or(Value::Null);
-                let model = text(&now, "model");
-                list(catalog, "models").iter().find(|m| text(m, "model") == model).map(|m| list(m, "efforts").iter().map(|e| {
-                    let value = text(e, "value");
-                    choice(value.clone(), text(e, "description"), vec!["model"], json!({"model": model, "effort": value}), value == text(&now, "effort"))
-                }).collect()).unwrap_or_default()
-            }
+            ("codex", Ctl::Effort) => codex_efforts(catalog, &text(&catalog["current"], "model")),
             ("codex", Ctl::Mode) => ["default", "plan"].iter().map(|m| choice(tr(&format!("codex_mode_{m}")), String::new(), vec!["codex", "mode"],
                 json!({"mode": m}), current == *m)).collect(),
             ("codex", Ctl::Permission) => {
@@ -842,7 +848,7 @@ impl Hangar {
             }
             Reply::HandoffCatalog(credential) => self.receive_handoff_catalog(key, credential, result),
             Reply::Handoff => self.receive_handoff(key, result),
-            Reply::HandoffCancel(note) => self.receive_handoff_cancel(key, note),
+            Reply::HandoffCancel => self.receive_handoff_cancel(key, result),
             _ => {}
         }
     }
@@ -1030,6 +1036,22 @@ impl Hangar {
             .into_any_element())
     }
 
+    /// O catálogo ainda lendo (esqueleto) ou que falhou (motivo e tentar de novo); `None` quando já chegou.
+    fn ctl_load_state(&self, ctl: Ctl, catalog: Option<&Result<Value, String>>, cx: &mut Context<Self>) -> Option<AnyElement> {
+        match catalog {
+            None => Some(popup::skeleton("ctl-loading", 5).into_any_element()),
+            Some(Err(reason)) => Some(div().p(px(8.)).flex().flex_col().items_start().gap(px(6.)).text_size(px(12.)).text_color(theme::danger())
+                .child(tr("ctl_failed").replace("{reason}", reason))
+                .child(Button::new("ctl-retry").outline().xsmall().label(tr("ctl_retry")).on_click(cx.listener(move |this, _, window, cx| {
+                    this.close_controls();
+                    this.open_ctl(ctl, ctl == Ctl::Model && this.provider().0 == "claude", cx);
+                    this.focus_ctl_panel(window, cx);
+                })))
+                .into_any_element()),
+            Some(Ok(_)) => None,
+        }
+    }
+
     pub(super) fn render_ctl_panel(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let key = self.selected_key()?;
         let open = self.controls.open.as_ref().filter(|o| o.key == key)?;
@@ -1049,15 +1071,7 @@ impl Hangar {
             _ => None,
         };
         let body = if ctl == Ctl::Model { self.render_model_picker(open.catalog.as_ref(), busy, window, cx) } else { match &open.catalog {
-            None => popup::skeleton("ctl-loading", 5).into_any_element(),
-            Some(Err(reason)) => div().p(px(8.)).flex().flex_col().items_start().gap(px(6.)).text_size(px(12.)).text_color(theme::danger())
-                .child(tr("ctl_failed").replace("{reason}", reason))
-                .child(Button::new("ctl-retry").outline().xsmall().label(tr("ctl_retry")).on_click(cx.listener(move |this, _, window, cx| {
-                    this.close_controls();
-                    this.open_ctl(ctl, ctl == Ctl::Model && this.provider().0 == "claude", cx);
-                    this.focus_ctl_panel(window, cx);
-                })))
-                .into_any_element(),
+            None | Some(Err(_)) => self.ctl_load_state(ctl, open.catalog.as_ref(), cx).unwrap_or_else(|| div().into_any_element()),
             Some(Ok(catalog)) => {
                 let (_, choices, long) = self.open_choices(cx).unwrap_or((ctl, Vec::new(), false));
                 let needs_probe = probe_note.is_some() && (catalog.is_null() || choices.iter().all(|c| !c.enabled) || choices.is_empty());

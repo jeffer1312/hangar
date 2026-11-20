@@ -1,7 +1,7 @@
 import { memo, useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { cancelHandoffForServer, modelDisplay } from '@hangar/core';
+import { cancelHandoffForServer, handoffTitle, modelDisplay } from '@hangar/core';
 import * as m from '../paraglide/messages';
 import { useServers } from '../stores/servers';
 import { useSessions } from '../stores/sessions';
@@ -22,9 +22,7 @@ export const HandoffBand = memo(function HandoffBand({ serverId, name }: { serve
   if (!row || !handoff) return null;
   const from = modelDisplay(row.provider, row.model);
   const to = modelDisplay(handoff.provider, handoff.model);
-  const title = handoff.state === 'running' ? m.handoff_running()
-    : handoff.state === 'failed' ? m.handoff_failed({ reason: handoff.code ?? '' })
-    : row.state === 'working' ? m.handoff_waiting_turn() : m.handoff_waiting();
+  const title = handoffTitle(handoff, row.state);
   const cancel = () => {
     if (!server) return;
     setBusy(true);

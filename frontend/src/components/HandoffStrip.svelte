@@ -2,7 +2,7 @@
   // Faixa da troca de agente pedida pelo seletor de modelos (no app de PC): esperando o turno acabar, em curso
   // ou que falhou. O que for enviado enquanto ela espera vai ao modelo novo.
   import * as m from '../paraglide/messages';
-  import { cancelHandoffForServer, modelDisplay, type Server, type SessionInfo } from '@hangar/core';
+  import { cancelHandoffForServer, handoffTitle, modelDisplay, type Server, type SessionInfo } from '@hangar/core';
 
   let { server, session }: { server: Server; session: SessionInfo } = $props();
 
@@ -11,9 +11,7 @@
   const handoff = $derived(session.handoff);
   const from = $derived(modelDisplay(session.provider, session.model));
   const to = $derived(modelDisplay(handoff?.provider, handoff?.model));
-  const title = $derived(!handoff ? '' : handoff.state === 'running' ? m.handoff_running()
-    : handoff.state === 'failed' ? m.handoff_failed({ reason: handoff.code ?? '' })
-    : session.state === 'working' ? m.handoff_waiting_turn() : m.handoff_waiting());
+  const title = $derived(handoff ? handoffTitle(handoff, session.state) : '');
 
   async function cancel() {
     if (busy) return;

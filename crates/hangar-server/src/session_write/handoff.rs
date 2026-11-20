@@ -14,10 +14,11 @@ use super::{detail_body, session_name};
 use crate::mods::http::reply;
 use crate::routes::{AppState, gate};
 use crate::runtime::claude_reopen::transfer::{Request as TransferRequest, waits};
-use crate::runtime::gateway::{HANDOFF_RUNNING, HANDOFF_WAITING, RuntimeRegistry};
+use crate::runtime::gateway::RuntimeRegistry;
+use hangar_api::session::HandoffState;
 
-/// Entre conferências da origem; o turno costuma durar bem mais.
-const POLL: Duration = Duration::from_secs(1);
+/// Teto entre conferências da origem: o evento do ator acorda antes; sem ele, a conferência periódica vale.
+const POLL: Duration = Duration::from_secs(2);
 /// Teto da espera: sessão esquecida trabalhando não segura a fila para sempre.
 const MAX_WAIT: Duration = Duration::from_secs(2 * 60 * 60);
 /// Quanto a falha fica na linha antes de sair.
@@ -26,10 +27,10 @@ const FAILED_SHOWN: Duration = Duration::from_secs(30);
 /// Registra a troca e devolve 202 na hora; a espera e a transferência correm à parte.
 pub(super) async fn start(st: Arc<AppState>, runtime: Arc<RuntimeRegistry>, name: String, request: TransferRequest,
     headers: &axum::http::HeaderMap) -> Response {
-    if runtime.handoff_view(&name).is_some_and(|view| view.state == HANDOFF_RUNNING) {
-        return reply(Some(headers), StatusCode::CONFLICT, json!({"detail": hangar_conversation_transfer::TransferError::new("session_transfer_busy").public()}));
+    if runtime.handoff_view(&name).is_some_and(|view| view.state == HandoffState::Running) {
+        return super::account::transfer_refusal(headers, hangar_conversation_transfer::TransferError::new("session_transfer_busy"));
     }
-    let view = hangar_api::session::Handoff { state: HANDOFF_WAITING.into(), provider: "codex".into(), model: request.model.clone(),
+    let view = hangar_api::session::Handoff { state: HandoffState::Waiting, provider: "codex".into(), model: request.model.clone(),
         effort: request.effort.clone(), conta: request.credential_id.clone(), code: None };
     let generation = runtime.hold_handoff(&name, view.clone());
     st.list.invalidate();
@@ -37,29 +38,43 @@ pub(super) async fn start(st: Arc<AppState>, runtime: Arc<RuntimeRegistry>, name
     reply(Some(headers), StatusCode::ACCEPTED, json!({"pending": true, "handoff": view}))
 }
 
+/// Espera o próximo evento do ator desta sessão (fim de turno, troca de estado) ou o teto, o que vier antes.
+async fn next_turn_signal(events: &mut tokio::sync::broadcast::Receiver<crate::runtime::protocol::RuntimeEvent>, key: Option<&str>) {
+    let signal = async {
+        loop {
+            match events.recv().await {
+                Ok(event) if key.is_none_or(|key| event.key == key) => return,
+                Ok(_) => {}
+                // Perdeu eventos ou o canal fechou: conferir agora é o seguro.
+                Err(_) => return,
+            }
+        }
+    };
+    let _ = tokio::time::timeout(POLL, signal).await;
+}
+
 async fn run(st: Arc<AppState>, runtime: Arc<RuntimeRegistry>, name: String, request: TransferRequest, generation: u64) {
     let started = tokio::time::Instant::now();
+    let mut events = runtime.subscribe();
+    let key = runtime.claude_spec(&name).await.and_then(Result::ok).map(|spec| spec.key);
     let outcome = loop {
         if !runtime.handoff_live(&name, generation) { break None; }
         if started.elapsed() > MAX_WAIT { break Some(Err("session_transfer_wait_expired".to_owned())); }
         match runtime.transfer_ready(&name).await {
-            Err(error) if waits(&error.code) => { tokio::time::sleep(POLL).await; continue; }
+            Err(error) if waits(&error.code) => { next_turn_signal(&mut events, key.as_deref()).await; continue; }
             Err(error) => break Some(Err(error.code)),
             Ok(()) => {}
         }
         // Cancelar só vale enquanto espera: daqui em diante a troca segue até o fim ou até restaurar a origem.
-        if !runtime.handoff_mark(&name, generation, HANDOFF_RUNNING, None) { break None; }
+        if !runtime.handoff_mark(&name, generation, HandoffState::Running, None) { break None; }
         st.list.invalidate();
-        let (st2, runtime2, owned, request) = (st.clone(), runtime.clone(), name.clone(), request.clone());
-        let result = super::relaunch::during_life_change(&st2, &owned,
-            runtime2.transfer_to_codex(&owned, request, st2.accounts.clone(), st2.dictation_models.clone())).await;
-        match result {
+        match super::account::transfer_now(&st, &runtime, &name, request.clone()).await {
             Ok(_) => break Some(Ok(())),
             // Um turno começou entre a conferência e a troca (mensagem de outro lugar): volta a esperar.
             Err(error) if waits(&error.code) => {
-                if !runtime.handoff_mark(&name, generation, HANDOFF_WAITING, None) { break None; }
+                if !runtime.handoff_mark(&name, generation, HandoffState::Waiting, None) { break None; }
                 st.list.invalidate();
-                tokio::time::sleep(POLL).await;
+                next_turn_signal(&mut events, key.as_deref()).await;
             }
             Err(error) => break Some(Err(error.code)),
         }
@@ -70,10 +85,11 @@ async fn run(st: Arc<AppState>, runtime: Arc<RuntimeRegistry>, name: String, req
             runtime.fail_handoff(&name, generation, &code);
             st.list.invalidate();
             tokio::time::sleep(FAILED_SHOWN).await;
-            runtime.release_handoff(&name, generation);
+            // A fila já voltou ao Claude na falha: aqui só sai a linha.
+            runtime.release_handoff(&name, generation, false);
         }
         // Concluída, cancelada ou substituída: a fila volta a entregar a quem ficou com a sessão.
-        Some(Ok(())) | None => runtime.release_handoff(&name, generation),
+        Some(Ok(())) | None => runtime.release_handoff(&name, generation, true),
     }
     st.list.invalidate();
 }
