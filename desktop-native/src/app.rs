@@ -5547,7 +5547,12 @@ impl Hangar {
         // A revisão da branch (PR ou MR), quando o servidor acha uma: o chip abre a aba dela no git.
         let review_chip = if session.is_some() { self.review_chip(cx) } else { None };
         let cache = crate::chat::last_cache(&self.chat.events).filter(|_| readable);
-        let footer = (repo.is_some() || ctx_pct.is_some() || session.is_some() || cache.is_some()).then(|| {
+        // Conversa nova: com a aba Contexto à vista, o contexto já está nela e o rodapé não repete o anel.
+        let context_in_panel = appearance::conversation_beta() && self.side_shown(window) && !self.subagent_tab_open()
+            && !self.side_menu_shown() && self.side_tab() == appearance::SideTab::Context;
+        // Sem o anel, o cartão do contexto ficaria preso a uma âncora que não existe mais.
+        if context_in_panel { self.context_card = false; }
+        let footer =(repo.is_some() || ctx_pct.is_some() || session.is_some() || cache.is_some()).then(|| {
             let branch = status.as_ref().and_then(|s| s.branch.clone()).or_else(|| session.as_ref().and_then(|s| s.branch.clone())).unwrap_or_default();
             let dirty = status.as_ref().and_then(|s| s.dirty) == Some(true);
             let (added, removed) = session.as_ref().map(|s| (s.git_added.filter(|n| *n > 0), s.git_removed.filter(|n| *n > 0))).unwrap_or((None, None));
@@ -5594,10 +5599,7 @@ impl Hangar {
                     .on_click(cx.listener(|this, _, window, cx| this.open_git_panel(window, cx)))).into_any_element()
             } else { place.into_any_element() };
             // O recuo negativo põe o texto do último item na mesma borda da faixa da pasta, do outro lado.
-            // Conversa nova: com a aba Contexto à vista, o contexto já está nela; o rodapé não repete.
-            let context_shown = self.side.open && !self.subagent_tab_open() && !self.side_menu_shown()
-                && self.side_tab() == appearance::SideTab::Context;
-            let rings = !(appearance::conversation_beta() && context_shown);
+            let rings = !context_in_panel;
             let usage = div().flex_shrink_0().ml_auto().mr(px(-6.)).flex().items_center().gap(px(2.))
                 .when_some(cache, |el, cache| el.child(cache_chip(cache)))
                 .when(rings, |el| el.child(popup::anchor(div(), "composer-ctx").child(ring("composer-ctx", tr("ring_context"), ctx_pct, self.context_card)
@@ -5637,10 +5639,13 @@ impl Hangar {
                 .child(action).into_any_element()
         } else { action.into_any_element() };
         let draft_hint = beta_draft.then(|| {
+            // O mesmo critério do `queue_timing`: sem como entrar no turno, Na conversa e Jev caem na fila.
+            let joins = queue::sends_direct(true, &self.chat.state.state, self.provider().0);
             let key = match appearance::get().delivery_mode() {
                 appearance::DeliveryMode::Direct => "beta_draft_direct",
-                appearance::DeliveryMode::Jev => "beta_draft_jev",
-                appearance::DeliveryMode::Queue | appearance::DeliveryMode::Conversation => "beta_draft_queue",
+                appearance::DeliveryMode::Conversation if joins => "beta_draft_conversation",
+                appearance::DeliveryMode::Jev if joins && self.queue_jev_ready() => "beta_draft_jev",
+                _ => "beta_draft_queue",
             };
             div().pb(px(4.)).text_size(px(12.5)).text_color(theme::faint()).child(tr(key))
         });

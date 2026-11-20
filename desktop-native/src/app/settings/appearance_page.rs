@@ -300,7 +300,12 @@ impl Hangar {
         let connection = self.connection;
         self.settings_ui.code_mode_settings = Some((connection, false));
         self.server_get(vec!["claude".into(), "code-mode".into()], Vec::new(), 10, cx, move |this, result, cx| {
-            match result.ok().and_then(|value| value["settings"].as_bool()) {
+            // 404 é servidor sem a rota (versão antiga): resposta definitiva, não falha a repetir.
+            let answer = match result {
+                Ok(value) => value["settings"].as_bool(),
+                Err(failure) => (failure.status == Some(404)).then_some(false),
+            };
+            match answer {
                 Some(on) => this.settings_ui.code_mode_settings = Some((connection, on)),
                 None => cx.spawn(async move |this, cx| {
                     cx.background_executor().timer(Duration::from_secs(30)).await;
