@@ -1843,6 +1843,11 @@ impl Engine {
             }
             OperationKind::SetPermissionMode => {
                 let mode = known_mode(&payload)?;
+                // Uma troca por vez: a resposta de uma anterior desfaria a escolha mais nova.
+                if self.permission_resync || self.rpc.values().any(|rpc|!rpc.timed_out
+                    && rpc.continuation.as_ref().is_some_and(|next|matches!(next["kind"].as_str(),Some("permission_live" | "permission_resync")))) {
+                    return Err(RuntimeError::new("erro_permissao_ocupada","outra troca de permissão ainda espera a confirmação do Codex"));
+                }
                 // O `approvalPolicy` vale no próximo turno; o sandbox troca na conversa, sem subir o processo de
                 // novo (o terminal nem chega aqui: `relaunches`). Vale do próximo turno em diante, por isso a troca
                 // com turno rodando é recusada: o turno em andamento seguiria no sandbox antigo.

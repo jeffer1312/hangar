@@ -2508,6 +2508,21 @@ fn no_turn_starts_while_a_sandbox_switch_waits_for_codex() {
     assert_eq!(engine.control_view()["deliverable"],true);
 }
 
+/// A resposta de uma troca anterior desfaria a escolha mais nova: uma troca por vez.
+#[test]
+fn a_second_permission_choice_waits_for_the_pending_switch() {
+    let (mut engine,sent) = bootstrapped(json!({"name":"session","thread_id":"thread-1","headless":true,"cwd":"/w","permission_mode":"Ask for approval"}));
+    let resume = find_method(&sent,"thread/resume");
+    line(&mut engine,json!({"id":resume["id"],"result":{"thread":{"id":"thread-1","path":"/r.jsonl","status":{"type":"idle"},"turns":[]}}}),12.0);
+    let first = engine.command(command(OperationKind::SetPermissionMode,json!({"mode":"Full Access"})),clock(13.0)).unwrap();
+    let back = engine.command(command(OperationKind::SetPermissionMode,json!({"mode":"Ask for approval"})),clock(13.2)).unwrap_err();
+    assert_eq!(back.code,"erro_permissao_ocupada","a volta ao modo gravado não é aceita por cima da troca pendente");
+    line(&mut engine,json!({"id":frames(&first)[0]["id"],"result":{}}),13.5);
+    assert_eq!(engine.control_view()["permission_mode"],"Full Access");
+    let back = engine.command(command(OperationKind::SetPermissionMode,json!({"mode":"Ask for approval"})),clock(14.0)).unwrap();
+    assert_eq!(frames(&back)[0]["params"]["sandboxPolicy"],json!({"type":"readOnly"}));
+}
+
 /// Turno pedido e ainda sem resposta começaria no sandbox antigo e ficaria nele: a troca espera.
 #[test]
 fn a_sandbox_switch_is_refused_while_a_turn_start_waits_for_codex() {
