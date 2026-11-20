@@ -10,7 +10,7 @@ use std::time::{Duration, Instant, SystemTime};
 use chrono::{DateTime, Utc};
 use regex::Regex;
 
-use super::{HealthProbe, Reading, ShellRunner, StepRunner};
+use super::{HealthProbe, Reading};
 use crate::diag_report::Scrubber;
 
 const HEAD_LINES: usize = 25;
@@ -315,32 +315,18 @@ fn processes(new: Option<&Path>, old: Option<&Path>) -> Vec<String> {
     out
 }
 
+/// A unit ou a tarefa e quem escuta a porta, pela mesma leitura da tela do servidor parado.
 fn service(home: &Path, port: u16) -> Vec<String> {
-    let runner = ShellRunner { timeout: Duration::from_secs(20) };
-    let command = if cfg!(windows) {
-        // Sem acento nem aspas: o texto passa por cmd e powershell e volta na codepage do console.
-        let script = format!(concat!(
-            "$n='hangar-backend'; $t=Get-ScheduledTask -TaskName $n -EA SilentlyContinue; $i=Get-ScheduledTaskInfo -TaskName $n -EA SilentlyContinue; ",
-            "if($t){{'tarefa: estado=' + $t.State + ' ultima_execucao=' + $i.LastRunTime.ToString('s') + ' ultimo_resultado=0x' + ('{{0:X8}}' -f $i.LastTaskResult) + ' acao=' + $t.Actions[0].Execute + ' ' + $t.Actions[0].Arguments}} else {{'tarefa: ' + $n + ' nao registrada'}}; ",
-            "$l=@(Get-NetTCPConnection -State Listen -LocalPort {port} -EA SilentlyContinue); ",
-            "if($l.Count){{'porta {port}: escutando, pid ' + (($l | ForEach-Object {{ $_.OwningProcess }} | Sort-Object -Unique) -join ',')}} else {{'porta {port}: ninguem escutando'}}"),
-            port = port);
-        let encoded: Vec<u8> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
-        format!("powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand {}",
-            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, encoded))
-    } else if cfg!(target_os = "linux") {
-        format!(concat!("systemctl --user show hangar-backend.service --no-pager -p ActiveState -p SubState -p MainPID -p ExecMainStatus ",
-            "-p ExecMainCode -p NRestarts -p ExecMainStartTimestamp | tr '\\n' ' ' | sed 's/^/unit: /'; echo; ",
-            "l=$(ss -ltnpH 'sport = :{port}' 2>&1); echo \"porta {port}: ${{l:-ninguém escutando}}\""), port = port)
-    } else {
-        return Vec::new();
+    let local = hangar_local_server::LocalServer::new(home, port);
+    let listeners = local.listeners();
+    let holders = listeners.holders.iter().map(|h| format!("pid {} ({})", h.pid, if h.name.is_empty() { "?" } else { h.name.as_str() }))
+        .chain(listeners.hidden.then(|| "processo de outro usuário".to_owned())).collect::<Vec<_>>();
+    let port_line = match listeners.error {
+        Some(error) => format!("porta {port}: {error}"),
+        None if holders.is_empty() => format!("porta {port}: ninguém escutando"),
+        None => format!("porta {port}: escutando, {}", holders.join(", ")),
     };
-    let run = runner.run(&command, home);
-    let lines: Vec<String> = run.output.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_owned).collect();
-    match run.code {
-        Some(0) if !lines.is_empty() => lines,
-        code => vec![format!("serviço: consulta saiu com {code:?}: {}", lines.join(" | "))],
-    }
+    vec![local.service().summary, port_line]
 }
 
 #[cfg(test)]

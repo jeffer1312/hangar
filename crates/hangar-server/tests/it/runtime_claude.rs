@@ -1229,13 +1229,36 @@ fn notice_meta_on_hook_failure() {
     let hooks = fixture("hooks.jsonl");
     let mut engine = turn_engine();
     line(&mut engine,hooks[4].clone(),10.0);
-    assert_eq!(note_meta(&line(&mut engine,hooks[5].clone(),10.2)),vec![json!({"key":"hook:PostToolUse:Bash","subject":"PostToolUse:Bash"})]);
+    assert_eq!(note_meta(&line(&mut engine,hooks[5].clone(),10.2)),vec![json!({"key":"hook:PostToolUse:Bash","subject":"PostToolUse:Bash","action":"fix_hook"})]);
     for at in [11.0,12.0,13.0] {
         line(&mut engine,hooks[4].clone(),at);
         line(&mut engine,hooks[5].clone(),at+0.2);
     }
     let effects = line(&mut engine,turn_end("completed",false),16.0);
-    assert_eq!(note_meta(&effects),vec![json!({"key":"hook:PostToolUse:Bash","subject":"PostToolUse:Bash","count":4})]);
+    assert_eq!(note_meta(&effects),vec![json!({"key":"hook:PostToolUse:Bash","subject":"PostToolUse:Bash","count":4,"action":"fix_hook"})]);
+}
+
+#[test]
+fn notice_hook_from_a_missing_plugin_folder_offers_reinstall() {
+    let missing = std::env::temp_dir().join(format!("hangar-no-plugin-{}",std::process::id())).join(".claude/plugins/cache/mk/pl/1.0");
+    let failure = json!({"type":"system","subtype":"hook_response","hook_id":"s","hook_name":"SessionStart:compact",
+        "hook_event":"SessionStart","stderr":format!("/bin/sh: 1: {}/hooks/run.sh: not found",missing.display()),"outcome":"error","exit_code":127});
+    let meta = note_meta(&line(&mut notice_engine(),failure,10.0)).remove(0);
+    assert_eq!((meta["action"].as_str(),meta["plugin"].as_str()),(Some("reinstall_plugin"),Some("pl@mk")));
+}
+
+#[test]
+fn notice_init_marketplace_plugin_error_is_its_own_note_with_reinstall() {
+    let init = json!({"type":"system","subtype":"init","session_id":FIXTURE_SID,"mcp_servers":[{"name":"quebrado","status":"failed"}],
+        "plugin_errors":[{"plugin":"pl@mk","type":"generic-error","message":"pasta sumiu"},
+                         {"plugin":"inline[0]","type":"generic-error","message":"manifesto quebrado"}]});
+    let effects = line(&mut notice_engine(),init,11.0);
+    assert_eq!(notes(&effects),vec![
+        "⚙️ Servidor MCP que não subiu: `quebrado`\nO plugin `inline[0]` não carregou: manifesto quebrado".to_owned(),
+        "⚙️ O plugin `pl@mk` não carregou: pasta sumiu".to_owned()]);
+    let metas = note_meta(&effects);
+    assert!(metas[0]["key"].as_str().unwrap().starts_with("note:startup:") && metas[0].get("action").is_none(),"{metas:?}");
+    assert_eq!(metas[1],json!({"key":"note:plugin:pl@mk","action":"reinstall_plugin","plugin":"pl@mk"}));
 }
 
 #[test]
@@ -1305,7 +1328,7 @@ fn notice_hook_block_reaches_the_person_when_the_model_would_not_see_it() {
         "hook_event":name.split(':').next().unwrap(),"stderr":"prompt recusado pela regra","outcome":"error","exit_code":2});
     let blocked = line(&mut engine,block("SessionStart:startup","u"),10.0);
     assert_eq!(notes(&blocked),vec!["Hook falhou — SessionStart:startup: prompt recusado pela regra".to_owned()]);
-    assert_eq!(note_meta(&blocked),vec![json!({"subject":"SessionStart:startup"})],"bloqueio não tem chave de ignorar");
+    assert_eq!(note_meta(&blocked),vec![json!({"subject":"SessionStart:startup","action":"fix_hook"})],"bloqueio não tem chave de ignorar");
     assert!(notes(&line(&mut engine,block("UserPromptSubmit","b"),10.5)).is_empty(),"o prompt barrado já é bolha retida");
     assert!(notes(&line(&mut engine,block("PreToolUse:Bash","p"),11.0)).is_empty(),"o motivo vai ao modelo pelo tool_result");
     assert!(notes(&line(&mut engine,block("Stop","s"),12.0)).is_empty(),"o motivo vai ao modelo, que segue o turno");

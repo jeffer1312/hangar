@@ -14,6 +14,8 @@ pub(crate) const APPROVAL: &str = "never";
 pub(crate) const SANDBOX: &str = "danger-full-access";
 /// A checagem de atualização da TUI travava a abertura antes da thread; quem atualiza é o lançador.
 pub(crate) const NO_UPDATE_CHECK: [&str; 2] = ["-c", "check_for_update_on_startup=false"];
+/// A variável de onde a TUI lê o token do app-server.
+pub(crate) const WS_TOKEN_ENV: &str = "HANGAR_CODEX_WS_TOKEN";
 
 /// O que vem do pane e da máquina.
 pub(crate) struct Facts<'a> {
@@ -182,9 +184,13 @@ fn tier_override(tier: Option<&str>) -> Vec<String> {
 }
 
 /// O app-server leva a política: o `thread/resume` que a TUI faz ao reconectar não repassa as flags dela.
-pub(crate) fn server_argv(codex: &str, plan: &Plan, endpoint: &str, tier: Option<&str>, env: &BTreeMap<String, String>) -> Vec<String> {
-    let mut argv: Vec<String> = vec![codex.into(), "app-server".into(), "--listen".into(), endpoint.into(),
-        "-c".into(), format!("sandbox_mode=\"{}\"", plan.sandbox), "-c".into(), format!("approval_policy=\"{}\"", plan.approval)];
+pub(crate) fn server_argv(codex: &str, plan: &Plan, endpoint: &str, tier: Option<&str>, env: &BTreeMap<String, String>,
+    token_file: Option<&Path>) -> Vec<String> {
+    let mut argv: Vec<String> = vec![codex.into(), "app-server".into(), "--listen".into(), endpoint.into()];
+    if let Some(file) = token_file {
+        argv.extend(["--ws-auth".into(), "capability-token".into(), "--ws-token-file".into(), file.to_string_lossy().into_owned()]);
+    }
+    argv.extend(["-c".into(), format!("sandbox_mode=\"{}\"", plan.sandbox), "-c".into(), format!("approval_policy=\"{}\"", plan.approval)]);
     if let Some(limit) = plan.limit {
         argv.extend(["-c".into(), format!("tool_output_token_limit={limit}")]);
     }
@@ -204,8 +210,12 @@ pub(crate) fn prompt_through_app_server(codex: &Path, plan: &Plan) -> Option<Str
 
 /// A TUI: o modelo é `-m`; o esforço é `-c` (o `--effort` matava o Codex no arranque), entre aspas
 /// porque o `-c` é TOML. Retomando, sem `-C` nem política: o `resume --remote` as recusa.
-pub(crate) fn tui_argv(codex: &str, plan: &Plan, endpoint: &str, tier: Option<&str>) -> Vec<String> {
+pub(crate) fn tui_argv(codex: &str, plan: &Plan, endpoint: &str, tier: Option<&str>, token: bool) -> Vec<String> {
     let mut choice: Vec<String> = NO_UPDATE_CHECK.iter().map(|s| (*s).to_owned()).collect();
+    // O token vai pelo ambiente da TUI: no argv ele ficaria visível na lista de processos.
+    if token {
+        choice.extend(["--remote-auth-token-env".into(), WS_TOKEN_ENV.into()]);
+    }
     if let Some(model) = some(&plan.model) {
         choice.extend(["-m".into(), model.into()]);
     }
@@ -355,19 +365,34 @@ mod tests {
             assert_eq!(prompt_through_app_server(Path::new("C:/npm/codex.cmd"), &plan), None, "{single:?}");
         }
         plan.prompt = None;
-        assert!(!tui_argv("C:/npm/codex.cmd", &plan, "ws://127.0.0.1:9", None).iter().any(|arg| arg.contains("linha")));
+        assert!(!tui_argv("C:/npm/codex.cmd", &plan, "ws://127.0.0.1:9", None, false).iter().any(|arg| arg.contains("linha")));
+    }
+
+    /// O app-server só aceita quem traz o token, e a TUI o lê da variável, nunca do argv.
+    #[test]
+    fn the_app_server_requires_the_token_and_the_tui_reads_it_from_the_environment() {
+        let mut plan = decide(args("cx"), None, &facts(Path::new("/h"), None)).unwrap();
+        let server = server_argv("/b/codex", &plan, "ws://127.0.0.1:9", None, &BTreeMap::new(), Some(Path::new("/s/ws-tokens/cx-1.token")));
+        assert_eq!(server[..8], ["/b/codex", "app-server", "--listen", "ws://127.0.0.1:9", "--ws-auth", "capability-token", "--ws-token-file",
+            "/s/ws-tokens/cx-1.token"]);
+        assert!(!server_argv("/b/codex", &plan, "ws://127.0.0.1:9", None, &BTreeMap::new(), None).iter().any(|arg| arg == "--ws-auth"));
+        for resume in [None, Some("t-1".to_owned())] {
+            plan.resume = resume;
+            let tui = tui_argv("/b/codex", &plan, "ws://127.0.0.1:9", None, true);
+            assert!(tui.windows(2).any(|pair| pair == ["--remote-auth-token-env", WS_TOKEN_ENV]), "{tui:?}");
+        }
     }
 
     #[test]
     fn the_tui_argv_differs_between_a_new_and_a_resumed_conversation() {
         let mut plan = decide(args("cx"), None, &facts(Path::new("/h"), None)).unwrap();
         (plan.model, plan.effort, plan.prompt) = (Some("gpt-6".into()), Some("high".into()), Some("olá".into()));
-        assert_eq!(tui_argv("/b/codex", &plan, "ws://127.0.0.1:9", Some("priority")), ["/b/codex", "--remote", "ws://127.0.0.1:9", "--no-alt-screen",
+        assert_eq!(tui_argv("/b/codex", &plan, "ws://127.0.0.1:9", Some("priority"), false), ["/b/codex", "--remote", "ws://127.0.0.1:9", "--no-alt-screen",
             "-C", abs("/w").as_str(), "--sandbox", "danger-full-access", "--ask-for-approval", "never", "-c", "service_tier=\"priority\"",
             "-c", "check_for_update_on_startup=false", "-m", "gpt-6", "-c", "model_reasoning_effort=\"high\"", "olá"]);
         plan.resume = Some("t-1".into());
         (plan.model, plan.effort, plan.prompt) = (None, Some(String::new()), None);
-        assert_eq!(tui_argv("/b/codex", &plan, "ws://127.0.0.1:9", None), ["/b/codex", "resume", "--remote", "ws://127.0.0.1:9", "--no-alt-screen",
+        assert_eq!(tui_argv("/b/codex", &plan, "ws://127.0.0.1:9", None, false), ["/b/codex", "resume", "--remote", "ws://127.0.0.1:9", "--no-alt-screen",
             "-c", "check_for_update_on_startup=false", "t-1"]);
     }
 }

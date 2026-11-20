@@ -37,6 +37,7 @@ vi.mock('./UserBubble', () => ({ UserBubble: ({ text }: { text: string }) => cre
 vi.mock('./AssistantBubble', () => ({ AssistantBubble: () => null, mkMarkdownStyle: () => ({}) }));
 vi.mock('react-native-enriched-markdown', () => ({ EnrichedMarkdownText: ({ markdown }: { markdown: string }) => createElement('article', null, markdown) }));
 vi.mock('../ui/Sheet', () => ({ Sheet: ({ children }: { children: ReactNode }) => createElement('section', null, children) }));
+vi.mock('expo-router', () => ({ useRouter: () => ({ push: vi.fn() }) }));
 vi.mock('../ui/Toast', () => ({ toast: { erro: vi.fn() } }));
 vi.mock('./PreviewBubble', () => ({ PreviewBubble: () => null }));
 vi.mock('./LiveWork', () => ({ AgentesRodando: () => null, PensamentoVivo: () => null, WorkingLine: () => null }));
@@ -59,6 +60,10 @@ type ListProps = {
   nestedScrollEnabled?: boolean;
   recycleItems?: boolean;
   onScroll: (event: NativeSyntheticEvent<NativeScrollEvent>) => void;
+  onScrollBeginDrag?: (event: NativeSyntheticEvent<NativeScrollEvent>) => void;
+  onScrollEndDrag?: (event: NativeSyntheticEvent<NativeScrollEvent>) => void;
+  onMomentumScrollBegin?: (event: NativeSyntheticEvent<NativeScrollEvent>) => void;
+  onMomentumScrollEnd?: (event: NativeSyntheticEvent<NativeScrollEvent>) => void;
   onContentSizeChange?: (width: number, height: number) => void;
   onStartReached?: () => void;
 };
@@ -217,6 +222,85 @@ it('scroll atrasado não desfaz pausa antes nem depois da nova medida', () => {
   list.geometry = { contentLength: 2000, scroll: 1600, scrollLength: 400 };
   scrollList(1600, 2000, 400); // Altura igual à anterior, mas confirmada pelo callback.
   expect(latestList().maintainScrollAtEnd).toBe(true);
+});
+
+it('linha nova não puxa ao fim enquanto o dedo arrasta, mesmo perto do fim', () => {
+  vi.useFakeTimers();
+  const initial = props([event({ id: 'one' })]);
+  const { root } = mount(createElement(MessageList, initial));
+  const at = (y: number) => ({ nativeEvent: {
+    contentOffset: { y }, contentSize: { height: 2000 }, layoutMeasurement: { height: 400 },
+  } } as NativeSyntheticEvent<NativeScrollEvent>);
+  let events = initial.events;
+  const addRow = (id: string) => {
+    events = [...events, event({ id })];
+    act(() => root.render(createElement(MessageList, { ...initial, events })));
+    act(() => vi.advanceTimersByTime(300));
+  };
+  act(() => vi.advanceTimersByTime(300));
+  list.scrollToEnd.mockClear();
+  act(() => latestList().onScrollBeginDrag?.(at(1600)));
+  addRow('during-drag');
+  expect(list.scrollToEnd).not.toHaveBeenCalled();
+  act(() => latestList().onScroll(at(1590))); // Ainda dentro da faixa do fim, com o dedo na tela.
+  addRow('near-end-during-drag');
+  expect(list.scrollToEnd).not.toHaveBeenCalled();
+  // Soltou perto do fim, mas o impulso leva para cima: a ida ao fim não corta o deslize.
+  act(() => latestList().onScrollEndDrag?.(at(1590)));
+  act(() => latestList().onMomentumScrollBegin?.(at(1590)));
+  addRow('during-momentum');
+  expect(list.scrollToEnd).not.toHaveBeenCalled();
+  act(() => latestList().onMomentumScrollEnd?.(at(1200)));
+  addRow('away');
+  expect(list.scrollToEnd).not.toHaveBeenCalled();
+  // Linha chega no gesto e ele para no fim sem impulso: faz a ida que ficou para trás.
+  act(() => latestList().onScrollBeginDrag?.(at(1200)));
+  act(() => latestList().onScroll(at(1590)));
+  addRow('near-end-again');
+  act(() => latestList().onScrollEndDrag?.(at(1590)));
+  expect(list.scrollToEnd).not.toHaveBeenCalled();
+  act(() => vi.advanceTimersByTime(150));
+  expect(list.scrollToEnd).toHaveBeenCalledTimes(1);
+  list.scrollToEnd.mockClear();
+  act(() => latestList().onScrollBeginDrag?.(at(1200)));
+  act(() => latestList().onScrollEndDrag?.(at(1600)));
+  act(() => vi.advanceTimersByTime(150));
+  expect(list.scrollToEnd).not.toHaveBeenCalled();
+  addRow('back-at-end');
+  expect(list.scrollToEnd).toHaveBeenCalledWith({ animated: false });
+});
+
+it('impulso sem aviso de fim e Ir pro fim não deixam a conversa sem seguir o fim', () => {
+  vi.useFakeTimers();
+  const initial = props([event({ id: 'one' })]);
+  const { root, container } = mount(createElement(MessageList, initial));
+  const at = (y: number) => ({ nativeEvent: {
+    contentOffset: { y }, contentSize: { height: 2000 }, layoutMeasurement: { height: 400 },
+  } } as NativeSyntheticEvent<NativeScrollEvent>);
+  let events = initial.events;
+  const addRow = (id: string) => {
+    events = [...events, event({ id })];
+    act(() => root.render(createElement(MessageList, { ...initial, events })));
+    act(() => vi.advanceTimersByTime(300));
+  };
+  act(() => vi.advanceTimersByTime(300));
+  list.scrollToEnd.mockClear();
+  act(() => latestList().onScrollBeginDrag?.(at(1600)));
+  act(() => latestList().onScrollEndDrag?.(at(1600)));
+  act(() => latestList().onMomentumScrollBegin?.(at(1600)));
+  act(() => vi.advanceTimersByTime(600)); // O impulso parou sem aviso de fim.
+  addRow('after-stall');
+  expect(list.scrollToEnd).toHaveBeenCalledWith({ animated: false });
+  list.scrollToEnd.mockClear();
+  act(() => latestList().onScrollBeginDrag?.(at(1000)));
+  act(() => latestList().onScrollEndDrag?.(at(1000)));
+  act(() => latestList().onMomentumScrollBegin?.(at(1000)));
+  act(() => container.querySelector<HTMLButtonElement>(`[aria-label="${m.msg_ir_ultima()}"]`)!.click());
+  expect(list.scrollToEnd).toHaveBeenCalledWith({ animated: true });
+  list.scrollToEnd.mockClear();
+  act(() => latestList().onScroll(at(1600))); // A rolagem do botão chegou ao fim, sem aviso de fim do impulso.
+  addRow('after-button');
+  expect(list.scrollToEnd).toHaveBeenCalledWith({ animated: false });
 });
 
 it('retoma só no fim medido pelo scroll ou pelo botão Ir pro fim', () => {

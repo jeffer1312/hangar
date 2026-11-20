@@ -42,7 +42,9 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
  case 'thread/start': fs.writeFileSync(rollout,JSON.stringify({type:'session_meta',payload:{id:threadId,cwd}})+'\n');result=settings();break;
  case 'thread/resume': result=settings();break;
  case 'thread/read': result={thread:thread()};break;
- case 'thread/settings/update': if(p.effort)effort=p.effort;if(p.collaborationMode)mode=p.collaborationMode.mode;result=settings();break;
+ case 'thread/settings/update': if(p.effort)effort=p.effort;if(p.collaborationMode){mode=p.collaborationMode.mode;
+   process.stdout.write(JSON.stringify({method:'thread/settings/updated',params:{threadId,threadSettings:{collaborationMode:p.collaborationMode}}})+'\n');}
+   result=settings();break;
  case 'skills/list': result={data:[{cwd,skills:[],errors:[]}]};break;
  case 'mcpServerStatus/list': result={data:[],nextCursor:null};break;
  case 'thread/inject_items':
@@ -62,7 +64,7 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
     crate::write_executable(
         &bin.join("codex"),
         format!(
-            "#!/bin/bash\nif [ \"$1\" = --version ]; then echo 'codex-cli 0.159.3'; exit; fi\nexec -a codex '{}' '{}' \"$@\"\n",
+            "#!/bin/bash\nif [ \"$1\" = --version ]; then echo 'codex-cli 0.171.4'; exit; fi\nexec -a codex '{}' '{}' \"$@\"\n",
             node.trim(),
             script.display()
         ),

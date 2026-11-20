@@ -136,6 +136,8 @@ pub fn claude_from_meta(meta: &Value, name: &str, created_at: f64) -> io::Result
         read_only: meta["read_only"] == true, worktree: None, creator: None, created_at,
         conversation: text(meta, "session_id"),
         name_auto: None, rename_suggestion: None, rename_weak_at: None, rename_dismissed: false,
+        // O sidecar guarda o settings da conversa: a sessão sem hooks continua sem hooks reconstruída por ele.
+        hooks_off: meta["claude_settings"]["disableAllHooks"] == true,
     })
 }
 
@@ -171,7 +173,7 @@ pub fn from_sidecars(home: &Path, name: &str) -> io::Result<Option<SessionSpec>>
         permission_mode: text(&meta, "permission_mode").as_deref().and_then(PermissionMode::codex),
         subagent_model: None, customizations: None, jev: meta["jev"] == true, read_only: meta["read_only"] == true,
         worktree: None, creator: None, created_at: created(&codex_path), conversation: text(&meta, "thread_id"),
-        name_auto: None, rename_suggestion: None, rename_weak_at: None, rename_dismissed: false,
+        name_auto: None, rename_suggestion: None, rename_weak_at: None, rename_dismissed: false, hooks_off: false,
     }))
 }
 

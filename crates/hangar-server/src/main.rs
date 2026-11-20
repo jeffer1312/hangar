@@ -253,8 +253,9 @@ async fn run(notifier: hangar_boot::notify::Notifier) {
         }
     };
     // Antes do log desta vida: a queda da anterior sai das últimas linhas dele.
-    let hangar_dir = hangar_server::accounts::environment::AccountEnvironment::capture().home.join(".hangar");
-    hangar_server::diag::record_boot(&hangar_dir, cfg.log_path.as_deref());
+    let env = hangar_server::accounts::environment::AccountEnvironment::capture();
+    let hangar_dir = env.home.join(".hangar");
+    hangar_server::diag::record_boot(&hangar_dir, &env.claude_base, cfg.log_path.as_deref());
     hangar_server::init_log(cfg.log_path.as_deref());
     hangar_server::install_panic_hook();
     if let Some(code) = notifier.rejected {

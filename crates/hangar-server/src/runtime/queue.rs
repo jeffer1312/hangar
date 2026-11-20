@@ -616,8 +616,12 @@ fn unproved_since(operations:&BTreeMap<String,Operation>,uncertain:&BTreeSet<Str
     // Escrita em curso: o desfecho é do ator.
     if operations.iter().any(|(key, op)| !key.starts_with(CALL_PREFIX) && op.entry_id.as_deref() == Some(id)
         && op.status == Status::Dispatching) { return None; }
-    // O prazo é da tentativa: a reenviada não herda o relógio do primeiro despacho.
-    Some(["attempt_ts","dispatched_ts","claimed_ts","ts"].iter().find_map(|key| row[*key].as_f64()).unwrap_or(0.0))
+    Some(row_clock(row).unwrap_or(0.0))
+}
+
+/// O relógio da linha. O prazo é da tentativa: a reenviada não herda o relógio do primeiro despacho.
+fn row_clock(row:&Value)->Option<f64> {
+    ["attempt_ts","dispatched_ts","claimed_ts","ts"].iter().find_map(|key| row[*key].as_f64())
 }
 
 fn terminal_input(state:&State,op:&Operation)->bool {
@@ -678,6 +682,12 @@ fn waiting_index(state:&State,entry:&str)->Result<usize,&'static str> {
 /// drenagem nunca levaria não segura comando nem Orientar.
 pub fn waiting_ids(state:&State,min_ts:f64)->Vec<String> {
     state.rows.iter().filter(|row|current(row,min_ts) && waiting_row(state,row)).map(|row|row_id(row).to_owned()).collect()
+}
+
+/// Desde quando espera a mais antiga das que `waiting_ids` devolve (epoch em segundos), pelo relógio e
+/// não pela ordem de entrega: o painel reordena sem mudar há quanto cada uma espera.
+pub fn oldest_waiting(state:&State,min_ts:f64)->Option<f64> {
+    state.rows.iter().filter(|row|current(row,min_ts) && waiting_row(state,row)).filter_map(row_clock).reduce(f64::min)
 }
 
 /// Texto que a fila aceita como mensagem: comando de barra não tem linha na fila, e controle quebraria a digitação.
@@ -1831,6 +1841,21 @@ mod panel_tests {
         assert_eq!(exec(&mut store,"cancel-a",Action::Cancel { entry_id:"a".into() }),json!("cancelled"));
         assert_eq!(waiting_ids(store.state(),0.0),vec!["b".to_string()]);
         assert_eq!(exec(&mut store,"cancel-x",Action::Cancel { entry_id:"x".into() }),json!("absent"));
+    }
+
+    #[test]
+    fn oldest_waiting_is_the_earliest_clock_not_the_first_in_line() {
+        let dir=tempfile::tempdir().unwrap(); let mut store=store(&dir);
+        assert_eq!(oldest_waiting(store.state(),0.0),None,"fila vazia");
+        for (id,ts) in [("b",30.0),("a",12.0),("c",20.0)] {
+            store.exec(1,&format!("append:{id}"),clock(ts),Action::Append { text:format!("texto {id}"),delivered:false,ts:Some(ts),pre_transcript:false,entry_id:Some(id.into()) }).unwrap();
+        }
+        assert_eq!(waiting_ids(store.state(),0.0),vec!["b","a","c"]);
+        assert_eq!(oldest_waiting(store.state(),0.0),Some(12.0));
+        // A de antes da vida não conta, como no `waiting_ids`.
+        assert_eq!(oldest_waiting(store.state(),15.0),Some(20.0));
+        exec(&mut store,"cancel-a",Action::Cancel { entry_id:"a".into() });
+        assert_eq!(oldest_waiting(store.state(),0.0),Some(20.0),"a que saiu da espera não segura o relógio");
     }
 
     #[test]

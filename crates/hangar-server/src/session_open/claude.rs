@@ -104,7 +104,7 @@ pub fn jev_pairs(on: bool, runtime: &Value) -> Vec<(String, String)> {
 /// `apply_settings` numa linha de comando sem `--settings`: as escolhas da conversa em JSON compacto.
 pub(crate) fn settings_json(settings: &Value) -> String {
     let mut merged = Map::new();
-    for key in ["enabledPlugins", "skillOverrides"] {
+    for key in ["enabledPlugins", "skillOverrides", "disableAllHooks"] {
         if let Some(value) = settings.get(key) { merged.insert(key.into(), value.clone()); }
     }
     if let Some(deny) = settings.get("permissions").map(|p| p["deny"].clone()) {

@@ -92,14 +92,15 @@ fn the_app_server_and_tui_argv_match_the_python_launcher() {
         let codex = format!("{T}/stubs/codex");
         let tier = session.selected_tier();
         let [server] = spawned(&case, "codex app-server")[..] else { panic!("{name}: um app-server") };
-        assert_eq!(plan::server_argv(&codex, &plan, endpoint, tier.as_deref(), &child), strings(&server["argv"]), "{name}: app-server");
+        // A captura do Python é de antes do token do app-server: as flags dele têm teste próprio no `plan`.
+        assert_eq!(plan::server_argv(&codex, &plan, endpoint, tier.as_deref(), &child, None), strings(&server["argv"]), "{name}: app-server");
         // Retomando, a conversa já foi gravada antes da TUI: o Fast da TUI sai do arquivo dela.
         if let Some(resume) = plan.resume.as_deref()
             && let Some(rollout) = session::rollout_of(&plan.codex_home, resume) {
             session.save_thread(resume, &rollout.to_string_lossy(), None, &NoScreen);
         }
         let [tui] = spawned(&case, "codex tui")[..] else { panic!("{name}: uma TUI") };
-        assert_eq!(plan::tui_argv(&codex, &plan, endpoint, session.selected_tier().as_deref()), strings(&tui["argv"]), "{name}: TUI");
+        assert_eq!(plan::tui_argv(&codex, &plan, endpoint, session.selected_tier().as_deref(), false), strings(&tui["argv"]), "{name}: TUI");
     }
 }
 

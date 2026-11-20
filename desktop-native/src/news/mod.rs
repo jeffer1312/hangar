@@ -1,9 +1,11 @@
 //! Animações das novidades da atualização: cada uma é desenhada com as mesmas partes do app que ela mostra.
 
 mod account_tags;
+mod agent_fix;
 mod auto_report;
 mod claude_notices;
 mod cliproxy_wizard;
+mod notice_actions;
 mod codex_activity;
 mod compact_idle;
 mod composer_history;
@@ -21,6 +23,7 @@ mod hide_from_list;
 mod image_reveal;
 mod rename_suggestion;
 mod search_conversations;
+mod server_status;
 mod sleep_hidden;
 mod speech_pause;
 mod speed_choice;
@@ -88,6 +91,9 @@ pub fn animation(name: &str) -> Option<NewsAnimation> {
         "estilo-claude-desktop" => Some(desktop_tool_look::render),
         "sonho-da-memoria" => Some(memory_dream::render),
         "avisos-do-claude" => Some(claude_notices::render),
+        "acoes-dos-avisos" => Some(notice_actions::render),
+        "tela-de-status" => Some(server_status::render),
+        "consertar-com-agente" => Some(agent_fix::render),
         "revisao-do-trabalho" => Some(work_review::render),
         "cliproxy-assistente" => Some(cliproxy_wizard::render),
         "velocidade-ultra-fast" => Some(speed_choice::render),

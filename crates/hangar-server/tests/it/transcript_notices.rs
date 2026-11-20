@@ -48,10 +48,10 @@ fn terminal_hook_failure_is_one_note_per_file_with_the_total_in_history() {
     // O mapa do aviso: chave de ignorar e hook sempre; o total só onde ele é conhecido.
     let meta = |events:Vec<ChatEvent>| events.into_iter().find(|event|event.id == id).unwrap().notice_meta.map(Value::Object);
     let past = merged_history_with_notices(&request(fixture("terminal_hooks.jsonl"),None,TAIL_WINDOW)).unwrap();
-    assert_eq!(meta(past),Some(json!({"key":"hook:PostToolUse:Bash","subject":"PostToolUse:Bash","count":5})));
+    assert_eq!(meta(past),Some(json!({"key":"hook:PostToolUse:Bash","subject":"PostToolUse:Bash","action":"fix_hook","count":5})));
     let mut parser = LineParser::new(Provider::Claude).with_notices();
     let first = parser.feed(format!("{}\n",lines[0]).as_bytes(),0).into_iter().chain(parser.feed(format!("{}\n",lines[1]).as_bytes(),1)).collect();
-    assert_eq!(meta(first),Some(json!({"key":"hook:PostToolUse:Bash","subject":"PostToolUse:Bash"})));
+    assert_eq!(meta(first),Some(json!({"key":"hook:PostToolUse:Bash","subject":"PostToolUse:Bash","action":"fix_hook"})));
     assert!(live("terminal_hooks.jsonl",false).is_empty(),"quem não pede as notas (push, última resposta) não as recebe");
     let plain = merged_history(&request(fixture("terminal_hooks.jsonl"),None,TAIL_WINDOW)).unwrap();
     assert!(notes(plain).is_empty(),"lista, retorno da filha e ditado leem o histórico comum, sem notas");
@@ -269,4 +269,28 @@ fn terminal_refusal_note_only_on_cli_lines() {
     let expected = vec![(format!("refusal:{}",uuid(&lines,1)),"⚙️ O modelo recusou responder".to_owned(),None)];
     assert_eq!(history("terminal_refusal.jsonl",None,TAIL_WINDOW),expected);
     assert_eq!(live("terminal_refusal.jsonl",true),expected);
+}
+
+/// O comando do hook diz de qual plugin ele é: pasta da versão sumida pede reinstalar; o comando não vai ao aviso.
+#[test]
+fn terminal_hook_in_a_missing_plugin_folder_offers_reinstall() {
+    let lines = rows("terminal_hooks.jsonl");
+    let root = std::env::temp_dir().join(format!("hangar-notice-plugin-{}",std::process::id()));
+    let version = root.join("plugins/cache/mk/pl/1.0");
+    let meta_for = |command:&str| {
+        let mut hook = lines[1].clone();
+        hook["attachment"]["command"] = json!(command);
+        let mut parser = LineParser::new(Provider::Claude).with_notices();
+        let events:Vec<ChatEvent> = parser.feed(format!("{}\n",lines[0]).as_bytes(),0).into_iter()
+            .chain(parser.feed(format!("{hook}\n").as_bytes(),1)).collect();
+        Value::Object(events.into_iter().find(|event|event.id.starts_with("hookfail:")).unwrap().notice_meta.unwrap())
+    };
+    let command = format!("bash {}/hooks/run.sh",version.display());
+    let missing = meta_for(&command);
+    assert_eq!((missing["action"].as_str(),missing["plugin"].as_str()),(Some("reinstall_plugin"),Some("pl@mk")));
+    assert!(missing.get("command").is_none(),"o comando pode ter segredo e o aviso chega a convidados");
+    std::fs::create_dir_all(&version).unwrap();
+    let present = meta_for(&command);
+    std::fs::remove_dir_all(&root).unwrap();
+    assert_eq!(present,json!({"key":"hook:PostToolUse:Bash","subject":"PostToolUse:Bash","action":"fix_hook"}));
 }

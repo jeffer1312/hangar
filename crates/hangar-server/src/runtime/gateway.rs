@@ -330,6 +330,7 @@ pub(super) async fn launch_if_needed(policy:&PolicyClient,target:&mut RuntimeTar
 /// sessão já aberta, recusando os hooks dele até a reaprovação; conferidos antes, ele não acha nada
 /// novo. Falha não impede a abertura: o Codex confere depois e o ator reaprova o que mudar.
 async fn upgrade_marketplaces(program:&[String],env:&std::collections::BTreeMap<String,String>) {
+    if !crate::codex_tui::marketplaces_due(env) { return; }
     let Some(codex) = program.first().and_then(|name|process::resolve_program(name,env.iter())) else { return };
     let mut command = tokio::process::Command::new(codex);
     command.args(["plugin","marketplace","upgrade","--json"]).env_clear().envs(env)
@@ -337,7 +338,9 @@ async fn upgrade_marketplaces(program:&[String],env:&std::collections::BTreeMap<
     #[cfg(windows)]
     command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     match tokio::time::timeout(MARKETPLACES_TIMEOUT,command.output()).await {
-        Ok(Ok(out)) if out.status.success() => {}
+        // Código 0 com marketplace que falhou não conta como conferida: a próxima subida tenta de novo.
+        Ok(Ok(out)) if out.status.success() && crate::codex_tui::marketplaces_failed_lines(&String::from_utf8_lossy(&out.stderr)).is_empty() =>
+            crate::codex_tui::marketplaces_done(env),
         Ok(Ok(out)) => {
             let failed = crate::codex_tui::marketplaces_failed_lines(&String::from_utf8_lossy(&out.stderr));
             tracing::warn!(code=?out.status.code(),detail=%failed.first().map_or("",String::as_str),"codex: conferência dos marketplaces falhou");
@@ -346,7 +349,7 @@ async fn upgrade_marketplaces(program:&[String],env:&std::collections::BTreeMap<
         Err(_) => tracing::warn!("codex: conferência dos marketplaces passou do prazo"),
     }
 }
-/// Toda abertura espera a conferência: sem rede, o `git fetch` não pode segurar a sessão; o ator cobre o resto.
+/// Sem rede, o `git fetch` não pode segurar a sessão; o ator cobre o resto.
 const MARKETPLACES_TIMEOUT:Duration = Duration::from_secs(20);
 
 /// Marca da configuração que o `claude -p` leu ao nascer: o botão Recarregar e a adoção da reserva
@@ -589,6 +592,15 @@ impl RuntimeRegistry {
                 let key=meta.get("key").and_then(Value::as_str).filter(|key|!key.is_empty())?.to_owned();
                 Some(AsleepMark { provider,key,wake_surface })
             })
+        }).await.ok().flatten()
+    }
+    /// Chave da fila do Claude sem terminal pelo sidecar dele: a estacionada não tem ator, e quem só deixa
+    /// nota nela escreve na fila sem reabrir o processo.
+    pub async fn claude_headless_key(&self,name:&str) -> Option<String> {
+        let (dir,name)=(self.policy.codex_environment().home.join(".hangar").join("claude-headless"),name.to_owned());
+        tokio::task::spawn_blocking(move||{
+            let meta=super::codex_sidecar::read(&super::codex_sidecar::path(&dir,&name)).ok()??;
+            meta.get("key").and_then(Value::as_str).filter(|key|!key.is_empty()).map(str::to_owned)
         }).await.ok().flatten()
     }
     /// Acordar em curso na sessão: a chave da fila dela.
@@ -1988,7 +2000,8 @@ impl RuntimeRegistry {
                     }
                 }
                 let queue = QueueActor::start(store,lease);
-                let connection = match super::websocket::WebSocketConnection::connect(&target.endpoint).await {
+                let token = { let meta = target.metadata.clone(); tokio::task::spawn_blocking(move||super::codex_sidecar::ws_token(&meta)).await.ok().flatten() };
+                let connection = match super::websocket::WebSocketConnection::connect_with(&target.endpoint,token.as_deref()).await {
                     Ok(connection)=>connection,
                     Err(error)=>{
                         if let Err(stop) = queue.shutdown().await {
@@ -2004,7 +2017,7 @@ impl RuntimeRegistry {
                 if let Some(store) = &self.interactions { engine = engine.with_interactions(target.key.clone(),store.clone())?; }
                 engine = engine.with_live(self.live_sender(&target.name)).with_lifecycle(self.self_ref.get().cloned());
                 let cell = AdoptionCell::new(&target.endpoint,target.app_pid).with_lifecycle(self.codex_wake.clone(),target.sidecar_life());
-                let adoption = Adoption { endpoint:target.endpoint.clone(),app_pid:target.app_pid,cell:cell.clone() };
+                let adoption = Adoption { endpoint:target.endpoint.clone(),token,app_pid:target.app_pid,cell:cell.clone() };
                 let handle = RuntimeActor::spawn_adopted(runtime,queue,connection,engine,adoption);
                 self.entries.lock().await.insert(target.key.clone(),Entry { generation:target.generation,
                     handle:EntryHandle::CodexTerminal { target:Box::new(target.clone()),handle:handle.clone(),cell },

@@ -170,13 +170,29 @@ fn truthy(v: &Value) -> bool {
     }
 }
 
+fn allows_guest_port(v: &Value) -> bool {
+    let suffix = format!(":{FUNNEL_PORT}");
+    v.get("AllowFunnel").and_then(Value::as_object)
+        .is_some_and(|allow| allow.iter().any(|(k, on)| k.ends_with(&suffix) && truthy(on)))
+}
+
 async fn is_on(ts: &dyn Tailscale) -> Result<bool, TunnelError> {
     let p = call(ts, &["funnel", "status", "--json"]).await?;
     let text = if p.stdout.is_empty() { "{}" } else { &p.stdout };
     let Ok(v) = serde_json::from_str::<Value>(text) else { return Ok(false) };
-    let suffix = format!(":{FUNNEL_PORT}");
-    Ok(v.get("AllowFunnel").and_then(Value::as_object)
-        .is_some_and(|allow| allow.iter().any(|(k, on)| k.ends_with(&suffix) && truthy(on))))
+    Ok(allows_guest_port(&v))
+}
+
+/// O Funnel da porta do convidado está ligado agora? Só lê. `Err` traz o `fix` de quando o Tailscale
+/// não respondeu (`confirmed_absent` separa o "não instalado" e o "sem login").
+/// Mais estrito que o `is_on`: comando que falhou ou JSON inválido não é "desligado", é leitura que faltou.
+pub async fn funnel_on(ts: &dyn Tailscale) -> Result<bool, String> {
+    let p = call(ts, &["funnel", "status", "--json"]).await.map_err(|e| e.fix)?;
+    if !p.success { return Err(or_default(&p.stderr, "tailscale funnel status falhou")); }
+    // Sem nada servido o tailscale responde vazio com sucesso: isso confirma desligado.
+    if p.stdout.trim().is_empty() { return Ok(false); }
+    serde_json::from_str::<Value>(&p.stdout).map(|v| allows_guest_port(&v))
+        .map_err(|_| "tailscale funnel status sem JSON".to_owned())
 }
 
 /// Endereço do Funnel desta máquina, conferidos os pré-requisitos; não liga nada.

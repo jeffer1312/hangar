@@ -145,7 +145,8 @@ Claude completo; `hangar-codex-transfer` importa pelo app-server sem iniciar inf
 servidor integra esses crates ao ciclo de vida já existente e conduz a recuperação.
 
 Permanecem os registros de `conversation-transfers`, os códigos de erro, os modos de permissão,
-a restrição ao Codex 0.159.3 e a conferência de capacidade, configuração e conteúdo persistido.
+e a conferência de capacidade, configuração e conteúdo persistido. A restrição ao Codex 0.159.3
+saiu depois: ver [transferência sem versão fixa](harnesses.md#transferência-sem-versão-fixa-do-codex-19112026).
 O digest do snapshot e a fronteira do rollout continuam protegendo o histórico e as imagens.
 Falha após parar a origem exige restaurá-la; registro incompleto não autoriza publicar o destino.
 
@@ -4971,6 +4972,48 @@ Issue #408. O painel que usa os conectores.
   painel, e nada sobe ao Help.
 - **Sessão achada pela chave.** Como o plugin, a sessão da PM é a da branch `PM-XXXXX` ou a de nome que
   começa pela chave; ligar no painel grava o vínculo e libera a tool. Uma sessão, um ticket.
+
+## Tela de Status (17/11/2026)
+
+Substitui a tela de migração. Mock aprovado pelo Jefferson em 17/11/2026, depois de recusar a versão
+em linhas de texto ("só texto jogado na cara do usuário"): resumo de saúde com pontos de atenção,
+curvas, linha do tempo, cartões de máquina, barra dividida, colunas por hora e medidores.
+
+- **Retrato único (`hangar_api::status::StatusSnapshot`, `CLIENT_API` 19).** `GET /api/status` e o
+  SSE `/api/status/events` (evento `status`), só do dono. Bloco ausente = sem fonte; o cliente
+  esconde ou mostra "—", nunca zero. A lista de atenção é montada no servidor
+  (`hangar-status/attention.rs`); o texto sai no cliente por `status_attention_<code>`.
+- **Produtor só com assinante**, no molde do `ListHub`: servidor e máquina a cada 5 s, processos e
+  sessões a cada 15 s, peers a cada 30 s. O amostrador do processo roda sempre (60 pontos, um por
+  minuto) para a média da última hora existir. As rotas da tela não entram na linha `api.servidor`
+  do diário: a espera dela não pode aparecer como lentidão nos números que ela mesma mostra.
+- **Motivo da parada gravado na parada, nunca cruzando horário.** Antes de todo
+  `restarter.restart()` o executor grava `~/.hangar/stop-intent.json` (tipo, causa, pid do servidor
+  substituído); vale só para esse pid e por 10 min, e reinício recusado com o servidor ainda de pé
+  a apaga. A subida seguinte grava `hangar_server.saida` (`crash` / `update` / `requested`). A
+  causa da queda no Linux vem do journal ("Failed with result"), porque o `Result` da unit já foi
+  zerado quando o serviço sobe de novo. Sem marca válida, o `estado.json` do executor no passo
+  `reiniciar` para a versão que sobe, começado há menos de 10 min, explica a saída como `update`,
+  uma vez por passo e só para a vida que já estava de pé quando ele começou: a primeira atualização
+  para esta versão é feita pelo executor antigo, que não grava a marca, e no Windows ele encerra o
+  servidor à força (saída não limpa). Saída explicada não grava `hangar_server.caiu`. O "Reiniciar"
+  zera `versao_de`/`versao_para` no estado. Medido na DELPHI-02 em 19/11/2026: sem isso, cada
+  atualização a partir da 0.1.0.10969 virava uma queda na tela.
+- **Servidor parado não tem API.** O nativo lê e age pelo crate folha `hangar-local-server`
+  (sem `hangar-core`): estado do serviço, motivo, versões e as ações subir, liberar a porta (mesmo
+  usuário e mesmo nascimento conferidos na hora) e apontar o `current` para a versão anterior (com a
+  `UpdateLock`, serviço parado, conferência da versão que responde). As primitivas de link e a
+  `UpdateLock` saíram de `update/mod.rs` para esse crate; o servidor e o `hangar-core` importam de
+  lá. Nenhuma ação ganha rota HTTP. É exceção à regra do crate novo sobre o `hangar-core`: o app nativo é
+  outro workspace (`desktop-native/Cargo.toml`) e só puxa crates folha (`hangar-api`, `hangar-workspace`);
+  depender do core levaria o axum e a pilha HTTP do servidor para o binário do app. Por isso o crate
+  fica abaixo do core, só com std, serde, chrono e sysinfo, e nunca depende do `hangar-core` nem do
+  `hangar-server`. "Reinstalar o serviço" abre o assistente de instalação, porque o
+  `install-package` recusa máquina já instalada.
+- **O ponto na linha "Status" segue só o servidor** (vermelho parado, âmbar subindo, nada de pé):
+  disco quase cheio ou máquina com versão antiga não são ação que falhou, e ficam dentro da tela.
+- **Fora:** "Python vivo" (o Python não sobe mais), `lan` dos peers (o servidor só chama o
+  `base_url`), limpar restos pela tela (só conta).
 
 ## Revisão do trabalho (`work_review/v1`): capacidade do conector, releitura no fim do turno (18/11/2026)
 

@@ -129,6 +129,31 @@ fn the_prompt_and_the_folder_reach_the_open_request_as_json() {
     assert_eq!(shell.log("server.log")[0].split(' ').next(), Some("open"));
 }
 
+/// No Git Bash do Windows o `pwd` dá `/c/...`, que o `hangar-server` nativo não acha ("a pasta
+/// /c/Users/... não existe"): a pasta vai pelo `cygpath -w`.
+#[test]
+fn under_git_bash_the_folder_goes_as_a_windows_path() {
+    let shell = Shell::new();
+    crate::write_executable(&shell.stubs.join("uname"), "#!/bin/sh\necho MINGW64_NT-10.0-26300\n");
+    let cygpath = format!("#!/bin/sh\n[ \"$1\" = -w ] && [ \"$2\" = '{}' ] || exit 1\nprintf '%s\\n' 'C:\\Users\\x\\work'\n", shell.cwd());
+    crate::write_executable(&shell.stubs.join("cygpath"), &cygpath);
+    let output = shell.with_server(&[], &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert_eq!(shell.body()["cwd"], json!(r"C:\Users\x\work"));
+}
+
+/// `cygpath` que falha não pode mandar `"cwd": ""` ao servidor: sai com erro antes do `open`.
+#[test]
+fn under_git_bash_a_failed_cygpath_stops_before_the_server() {
+    let shell = Shell::new();
+    crate::write_executable(&shell.stubs.join("uname"), "#!/bin/sh\necho MINGW64_NT-10.0-26300\n");
+    crate::write_executable(&shell.stubs.join("cygpath"), "#!/bin/sh\nexit 1\n");
+    let output = shell.with_server(&[], &[]);
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    assert!(stderr(&output).contains("cygpath"), "{}", stderr(&output));
+    assert!(shell.log("server.log").is_empty());
+}
+
 /// `hangar-codex__codex-home-*`: a casa padrão não manda conta; `~/.codex-<id>` manda o id; outra recusa.
 #[test]
 fn the_inherited_codex_home_picks_the_account_or_refuses() {

@@ -908,6 +908,10 @@ fn spawn_copy(path: &Path, args: &[&str]) -> std::process::Child {
     command.args(args);
     #[cfg(unix)]
     std::os::unix::process::CommandExt::process_group(&mut command, 0);
+    // O `sleep` multicall (coreutils do Ubuntu 26.04) escolhe o programa pelo argv[0]: chamado de
+    // `frpc` ele sai na hora. O exe continua sendo a cópia, que é o que o `kill_leftover` confere.
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::arg0(&mut command, "sleep");
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         match command.spawn() {

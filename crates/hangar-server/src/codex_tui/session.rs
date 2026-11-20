@@ -37,6 +37,9 @@ pub(crate) struct Session {
     imported: bool,
     key: Option<String>,
     launcher_pid: u32,
+    /// O token do app-server desta vida: o arquivo vai ao sidecar, o valor só à memória e à TUI.
+    ws_token_file: Option<PathBuf>,
+    pub ws_token: Option<String>,
     state: Mutex<State>,
 }
 
@@ -60,9 +63,19 @@ impl Session {
             dir, name: plan.name.clone(), endpoint, cwd: plan.cwd.clone(), resume: plan.resume.clone(), model: plan.model.clone(),
             effort: plan.effort.clone(), limit: plan.limit, service_tier: plan.service_tier.clone(),
             codex_home: plan.codex_home.to_string_lossy().into_owned(), account: plan.account.clone(), mode: plan.mode,
-            imported: plan.imported(), key: key.map(str::to_owned), launcher_pid: std::process::id(), state: Mutex::default(),
+            imported: plan.imported(), key: key.map(str::to_owned), launcher_pid: std::process::id(), ws_token_file: None, ws_token: None,
+            state: Mutex::default(),
         }
     }
+
+    pub fn with_ws_token(mut self, file: PathBuf, token: String) -> Self {
+        (self.ws_token_file, self.ws_token) = (Some(file), Some(token));
+        self
+    }
+
+    pub fn ws_token_file(&self) -> Option<&Path> { self.ws_token_file.as_deref() }
+
+    fn token_field(&self) -> Value { self.ws_token_file.as_ref().map_or(Value::Null, |file| json!(file)) }
 
     fn state(&self) -> std::sync::MutexGuard<'_, State> { self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner) }
 
@@ -120,7 +133,7 @@ impl Session {
         let written = if same {
             let mut fields = object(json!({"headless": false, "cano": null, "launching": false, "endpoint": self.endpoint,
                 "app_pid": state.app_pid, "model": self.model, "effort": self.effort, "rollout_path": rollout,
-                "tool_output_token_limit": self.limit}));
+                "tool_output_token_limit": self.limit, "ws_token_file": self.token_field()}));
             pids(&mut fields);
             if let Some(mode) = self.mode { fields.insert("permission_mode".into(), json!(mode)); }
             if self.imported {
@@ -137,6 +150,7 @@ impl Session {
             if let Some(key) = &self.key { meta.insert("key".into(), json!(key)); }
             if let Some(mode) = self.mode { meta.insert("permission_mode".into(), json!(mode)); }
             if let Some(limit) = self.limit { meta.insert("tool_output_token_limit".into(), json!(limit)); }
+            if self.ws_token_file.is_some() { meta.insert(codex_sidecar::WS_TOKEN_FILE.into(), self.token_field()); }
             pids(&mut meta);
             Some(codex_sidecar::save(&self.dir, &self.name, meta)?)
         };
@@ -177,7 +191,11 @@ impl Session {
         if let Err(error) = codex_sidecar::delete_if_life(&self.dir, &self.name, &self.endpoint, state.app_pid, key.as_deref()) {
             screen.say(&format!("sidecar nao removido: {error}"));
         }
+        self.forget_token();
     }
+
+    /// O arquivo é só desta vida: sai mesmo quando o sidecar já é de outra ou nunca foi gravado.
+    pub fn forget_token(&self) { codex_sidecar::remove_ws_token(&self.dir, self.ws_token_file.as_deref().and_then(Path::to_str)); }
 }
 
 /// O rollout da conversa pelo id, o mais recente: `<CODEX_HOME>/sessions/*/*/*/rollout-*-<id>.jsonl`.
@@ -235,7 +253,9 @@ impl Life {
             return Err(std::io::Error::other("lançador sem sessão"));
         };
         let tier = session.selected_tier();
-        let argv = super::plan::server_argv(&self.codex.to_string_lossy(), plan, &session.endpoint, tier.as_deref(), &self.env);
+        // A ressubida na mesma porta usa o mesmo token: a TUI e o servidor já o têm.
+        let argv = super::plan::server_argv(&self.codex.to_string_lossy(), plan, &session.endpoint, tier.as_deref(), &self.env,
+            session.ws_token_file());
         match Server::spawn(&argv, &plan.cwd, &self.env, tail) {
             Ok(server) => {
                 self.server = Some(server);
@@ -343,7 +363,10 @@ impl Life {
     /// para o servidor morto) e apaga o arquivo desta vida. `budget` é o teto das duas esperas juntas:
     /// metade para o app-server sair, o resto para as escutas; o arquivo sai mesmo se elas estourarem.
     pub async fn finish_within(&mut self, screen: &dyn Screen, budget: Duration) {
-        let Some(server) = self.server.as_mut() else { return };
+        let Some(server) = self.server.as_mut() else {
+            if let Some(session) = &self.session { session.forget_token(); }
+            return;
+        };
         let deadline = Instant::now() + budget;
         server.stop_within(budget / 2).await;
         for mut listener in self.listeners.drain(..) {
@@ -408,6 +431,23 @@ mod tests {
             "tool_output_token_limit": 144000, "launcher_pid": std::process::id(), "tui_pid": 41}));
         assert!(lines.0.lock().unwrap().is_empty());
         assert_eq!(session.selected_tier().as_deref(), Some("priority"), "a conversa do arquivo é a atual");
+    }
+
+    /// O sidecar leva o caminho do token, nunca o valor; a saída apaga o arquivo junto.
+    #[test]
+    fn the_sidecar_records_the_token_file_and_the_exit_removes_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let (file, token) = codex_sidecar::create_ws_token(dir.path(), "cx").unwrap();
+        let session = Session::new(dir.path().to_path_buf(), &plan("cx"), "ws://127.0.0.1:9".into(), Some("k")).with_ws_token(file.clone(), token.clone());
+        session.set_app_pid(40);
+        let lines = Lines(Default::default());
+        session.save_thread("thread-1", "/r/thread-1.jsonl", Some(&thread("thread-1", json!({}))), &lines);
+        let meta = read(dir.path(), "cx");
+        assert_eq!(meta[codex_sidecar::WS_TOKEN_FILE], json!(file));
+        assert!(!meta.to_string().contains(&token), "o token não vai ao sidecar");
+        assert_eq!(codex_sidecar::ws_token(&meta).as_deref(), Some(token.as_str()));
+        session.remove(&lines);
+        assert!(!file.exists());
     }
 
     /// Com um app-server que ignora o pedido de saída e uma escuta que não termina, a limpeza do

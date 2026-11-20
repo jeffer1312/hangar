@@ -1,5 +1,7 @@
 //! Vigia do servidor para o systemd: com `WatchdogSec`, quem parar de avisar é religado.
 use std::net::SocketAddr;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 pub const TIMEOUT: Duration = Duration::from_secs(5);
@@ -73,8 +75,11 @@ impl Verdict {
 pub async fn notify_alive(notifier: hangar_boot::notify::Notifier, every: Duration, probes: Vec<(&'static str, Probe)>, policy: Policy) {
     let limit = TIMEOUT.min(every);
     let mut rounds = Rounds::new(policy, std::time::Instant::now());
+    let diary_pending = Arc::new(AtomicBool::new(false));
     loop {
-        let late = if rounds.in_grace(std::time::Instant::now()) { None } else { Some(late_probe(&probes, limit).await) };
+        let round = std::time::Instant::now();
+        let late = if rounds.in_grace(round) { None } else { Some(late_probe(&probes, limit).await) };
+        let ms = u64::try_from(round.elapsed().as_millis()).unwrap_or(u64::MAX);
         let verdict = rounds.round(std::time::Instant::now(), late.map(|late| late.is_none()));
         let probe = late.flatten();
         match verdict {
@@ -87,8 +92,38 @@ pub async fn notify_alive(notifier: hangar_boot::notify::Notifier, every: Durati
         if verdict.sends() && let Err(error) = notifier.send("WATCHDOG=1") {
             tracing::warn!(code = "systemd_watchdog_send_failed", kind = ?error.kind(), "aviso de vida ao systemd não saiu");
         }
+        // Depois do aviso, e numa thread própria: disco lento não atrasa o aviso nem a rodada, e o pool
+        // bloqueante pode ser justamente a prova que travou.
+        // Uma gravação por vez: com o diário travado, cada rodada atrasada deixaria mais uma thread presa.
+        if let Some(line) = diary_line(verdict, probe, ms) {
+            if diary_pending.swap(true, Ordering::AcqRel) {
+                tracing::warn!(code = "systemd_watchdog_diary_busy", "gravação anterior do watchdog ainda presa; esta rodada não vai ao diário");
+            } else {
+                let pending = diary_pending.clone();
+                let spawned = std::thread::Builder::new().name("watchdog-diary".into()).spawn(move || {
+                    crate::diag::record_blocking(crate::diag::diary_dir().as_deref(), &[line], "watchdog");
+                    pending.store(false, Ordering::Release);
+                });
+                if let Err(error) = spawned {
+                    diary_pending.store(false, Ordering::Release);
+                    tracing::warn!(code = "systemd_watchdog_diary_failed", kind = ?error.kind(), "rodada atrasada do watchdog não foi ao diário");
+                }
+            }
+        }
         tokio::time::sleep(every).await;
     }
+}
+
+/// A rodada atrasada ou retida no diário, para a tela de status contar. `ms`: quanto a rodada levou.
+pub fn diary_line(verdict: Verdict, probe: Option<&str>, ms: u64) -> Option<serde_json::Value> {
+    let kind = match verdict {
+        Verdict::Tolerated(_) => "atrasado",
+        Verdict::Withheld(_) => "retido",
+        Verdict::Grace | Verdict::Passed => return None,
+    };
+    let mut line = serde_json::json!({"evento": "systemd_watchdog", "nivel": "aviso", "tipo": kind, "ms": ms});
+    if let Some(probe) = probe { line["prova"] = serde_json::json!(probe); }
+    Some(line)
 }
 
 /// A primeira prova que não respondeu `true` dentro de `limit`.
@@ -204,6 +239,16 @@ mod tests {
         assert_eq!(probe_address("0.0.0.0:8765".parse().unwrap()), "127.0.0.1:8765".parse().unwrap());
         assert_eq!(probe_address("[::]:8765".parse().unwrap()), "[::1]:8765".parse().unwrap());
         assert_eq!(probe_address("192.168.0.10:8765".parse().unwrap()), "192.168.0.10:8765".parse().unwrap());
+    }
+
+    #[test]
+    fn exit_watchdog_round_goes_to_the_diary_only_when_late() {
+        assert_eq!(diary_line(Verdict::Tolerated(1), Some("health"), 5003),
+            Some(serde_json::json!({"evento": "systemd_watchdog", "nivel": "aviso", "tipo": "atrasado", "ms": 5003, "prova": "health"})));
+        assert_eq!(diary_line(Verdict::Withheld(4), None, 12),
+            Some(serde_json::json!({"evento": "systemd_watchdog", "nivel": "aviso", "tipo": "retido", "ms": 12})));
+        assert_eq!(diary_line(Verdict::Passed, None, 3), None);
+        assert_eq!(diary_line(Verdict::Grace, Some("health"), 3), None);
     }
 
     fn fixed(answer: Option<bool>) -> Probe {

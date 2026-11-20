@@ -538,11 +538,7 @@ async fn version(
         }
     })?;
     let text = std::str::from_utf8(&output).map_err(|_| "dictation_catalog_unavailable")?;
-    text.split_whitespace()
-        .last()
-        .filter(|s| !s.is_empty())
-        .map(str::to_owned)
-        .ok_or("dictation_catalog_unavailable")
+    crate::codex_tui::update::cli_version(text).ok_or("dictation_catalog_unavailable")
 }
 
 async fn claude(

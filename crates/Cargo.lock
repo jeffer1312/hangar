@@ -1784,6 +1784,7 @@ dependencies = [
  "form_urlencoded",
  "futures-util",
  "hangar-auth",
+ "hangar-local-server",
  "http-body-util",
  "hyper-util",
  "libc",
@@ -1898,6 +1899,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-local-server"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "sysinfo",
+ "tempfile",
+ "tracing",
+]
+
+[[package]]
 name = "hangar-mission"
 version = "0.1.0"
 dependencies = [
@@ -1913,6 +1926,16 @@ dependencies = [
  "tokio",
  "tower",
  "tracing",
+]
+
+[[package]]
+name = "hangar-notice-actions"
+version = "0.1.0"
+dependencies = [
+ "hangar-core",
+ "hangar-plugins",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -2119,7 +2142,9 @@ dependencies = [
  "hangar-dream",
  "hangar-http-file",
  "hangar-install-setup",
+ "hangar-local-server",
  "hangar-mission",
+ "hangar-notice-actions",
  "hangar-notice-ignores",
  "hangar-omp-sync",
  "hangar-open-cli",
@@ -2136,6 +2161,7 @@ dependencies = [
  "hangar-session-tools",
  "hangar-shortcut-transfer",
  "hangar-sidecar-prune",
+ "hangar-status",
  "hangar-ticket-actions",
  "hangar-transcript",
  "hangar-update-news",
@@ -2238,6 +2264,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-status"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "hangar-api",
+ "hangar-core",
+ "hangar-usage-diary",
+ "serde",
+ "serde_json",
+ "sysinfo",
+ "tempfile",
+]
+
+[[package]]
 name = "hangar-ticket-actions"
 version = "0.1.0"
 dependencies = [
@@ -2260,6 +2300,7 @@ version = "0.1.0"
 dependencies = [
  "hangar-api",
  "hangar-core",
+ "hangar-notice-actions",
  "memchr",
  "proptest",
  "regex",

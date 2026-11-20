@@ -499,6 +499,12 @@ impl ListBridge {
         Ok(rows.iter().find(|row| row.name == name).cloned().map(|row| (row, pids.get(name).copied())))
     }
 
+    /// O pid do agente de cada sessão descoberta, por nome, numa leitura só da descoberta.
+    pub async fn discovered_agent_pids(&self) -> Result<HashMap<String, u32>, ListError> {
+        let (rows, pids, _, _) = self.discovery(None).await?;
+        Ok(rows.iter().filter_map(|row| pids.get(&row.name).map(|pid| (row.name.clone(), *pid))).collect())
+    }
+
     /// Como `discovered_session`, por uma rodada feita agora, sem descartar o retrato da lista.
     pub async fn fresh_session(&self, name: &str) -> Result<Option<(SessionRow, Option<u32>)>, ListError> {
         let (rows, pids, _, _) = self.discovery(Some(wall_now())).await?;

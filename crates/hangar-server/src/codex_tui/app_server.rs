@@ -141,6 +141,19 @@ impl Diary {
         bytes
     }
 
+    /// Quanto cada etapa da abertura levou: sem isto todas saem no mesmo milissegundo e não se sabe onde ela demora.
+    pub fn stages(&self, stages: &[(&'static str, u64)], opened: bool) {
+        // O diário só guarda texto e número: cada etapa vira um campo `<etapa>_ms`.
+        let mut event = json!({"evento": "codex.abertura.etapas", "nivel": if opened { "info" } else { "aviso" }, "sessao": self.session,
+            "provider": "codex", "abriu": if opened { "sim" } else { "nao" }, "total_ms": stages.iter().map(|(_, ms)| ms).sum::<u64>()});
+        for (stage, ms) in stages { event[format!("{stage}_ms")] = json!(ms); }
+        if !opened {
+            let before = stages.iter().rev().map(|(stage, _)| *stage).find(|stage| *stage != "interrompida").unwrap_or("inicio");
+            event["parou_depois_de"] = json!(before);
+        }
+        self.write(event);
+    }
+
     /// A primeira mensagem que não chegou ao Codex: só o código, nunca o texto dela.
     pub fn first_prompt_failed(&self, code: &'static str) {
         let mut event = Failure::new(code, "entregar_primeira_mensagem").fields(&self.session);

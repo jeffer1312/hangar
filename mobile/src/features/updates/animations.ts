@@ -5,6 +5,7 @@ import { AutoReportAnimation } from './AutoReportAnimation';
 import { ClaudeNoticesAnimation } from './ClaudeNoticesAnimation';
 import { CliproxyWizardAnimation } from './CliproxyWizardAnimation';
 import { SpeedChoiceAnimation } from './SpeedChoiceAnimation';
+import { NoticeActionsAnimation } from './NoticeActionsAnimation';
 import { CodexActivityAnimation } from './CodexActivityAnimation';
 import { CompactIdleAnimation } from './CompactIdleAnimation';
 import { DesktopToolLookAnimation } from './DesktopToolLookAnimation';
@@ -24,6 +25,7 @@ import { UpdatesManualAnimation } from './UpdatesManualAnimation';
 import { VaultAnimation } from './VaultAnimation';
 import { WorktreeFreshAnimation } from './WorktreeFreshAnimation';
 import { SessionSettingsAnimation } from './SessionSettingsAnimation';
+import { StatusAnimation } from './StatusAnimation';
 import { WorkReviewAnimation } from './WorkReviewAnimation';
 
 // Miniaturas feitas dos componentes reais (ex.: src/chat/ComposerField.tsx) entram aqui pelo nome da novidade.
@@ -33,6 +35,7 @@ const animations: Record<string, ComponentType<{ width: number }>> = {
   'scheduled-tasks': ScheduledTasksAnimation,
   'adormecer-ocultas': SleepHiddenAnimation,
   'avisos-do-claude': ClaudeNoticesAnimation,
+  'acoes-dos-avisos': NoticeActionsAnimation,
   'atualizacoes-e-manual': UpdatesManualAnimation,
   'branch-no-celular': FolderBranchAnimation,
   'cliproxy-assistente': CliproxyWizardAnimation,
@@ -53,6 +56,7 @@ const animations: Record<string, ComponentType<{ width: number }>> = {
   'sem-projeto': NoProjectAnimation,
   'sonho-da-memoria': DreamAnimation,
   'sugestao-de-nome': RenameSuggestionAnimation,
+  'tela-de-status': StatusAnimation,
   'worktree-atualizada': WorktreeFreshAnimation,
 };
 

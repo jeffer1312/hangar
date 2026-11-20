@@ -230,6 +230,7 @@ pub(super) struct Device {
     /// Marca do estado lido antes do clique: "pronto" com a mesma marca é o desfecho de uma atualização anterior.
     baseline_ts: Option<String>,
     diary_scroll: ScrollHandle,
+    pub(super) status: super::status::StatusPage,
 }
 
 impl Drop for Device {
@@ -272,6 +273,8 @@ pub(super) enum DeviceReply {
     Channel(u64, bool, Result<Value, Failure>),
     Started(u64, Launch),
     Tick(u64, Result<Value, Failure>),
+    /// Um evento da conexão da página Status, pela geração dela.
+    Status(u64, super::status::Feed),
     Report(Vec<Missed>, Base, Option<String>),
 }
 
@@ -357,6 +360,7 @@ impl Hangar {
         if page != Page::Sync { self.sync_page_left(); }
         if page != Page::Connect { self.connect_page_left(); }
         if page != Page::Devices { self.devices_page_left(); }
+        if page != Page::Status { self.status_left(); }
         match page {
             Page::General if !self.device.rate.loading && self.device.rate_value().is_none() => self.load_rate(cx),
             Page::Diary => {
@@ -386,6 +390,7 @@ impl Hangar {
             Page::Connect => self.connect_opened(cx),
             Page::Devices => self.devices_opened(cx),
             Page::SharedConfig => self.shared_config_opened(cx),
+            Page::Status => self.status_opened(cx),
             _ => {}
         }
     }
@@ -690,6 +695,7 @@ impl Hangar {
             DeviceReply::Report(results, base, token) => {
                 self.device.report = Some(report_done(results, base, token));
             }
+            DeviceReply::Status(generation, feed) => { self.receive_status(generation, feed, cx); return; }
             DeviceReply::Rate(seq, result) => {
                 let parsed = result.map_err(|e| Self::failure(&e))
                     .map(|v| v.get("usd_brl").and_then(Value::as_f64).filter(|r| r.is_finite() && *r > 0.));

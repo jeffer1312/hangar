@@ -22,6 +22,19 @@ const FAILURE_WINDOW: chrono::TimeDelta = chrono::TimeDelta::hours(24);
 /// desistência não roda (campo ocupado por placeholder de colagem ou rascunho).
 pub(crate) const DEFER_CEILING: chrono::TimeDelta = chrono::TimeDelta::hours(24);
 
+/// A última leitura do índice que respondeu, do laço ou da tela de atualização; vale só nesta vida
+/// do servidor.
+static LAST_CHECK: std::sync::Mutex<Option<chrono::DateTime<chrono::Utc>>> = std::sync::Mutex::new(None);
+
+/// Hora da última verificação de versão nova que deu resposta (tela Status).
+pub fn last_check() -> Option<chrono::DateTime<chrono::Utc>> {
+    *LAST_CHECK.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+pub(crate) fn note_check() {
+    *LAST_CHECK.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(chrono::Utc::now());
+}
+
 /// O que um tique pergunta à máquina; o teste troca.
 pub trait Machine {
     /// O canal que o Atualizar segue (`super::channel`); `None` fora do modo pacote.
@@ -212,6 +225,7 @@ impl Machine for Live {
         let installed = manifest.as_ref().filter(|m| m.channel == channel).and_then(|m| m.version.parse().ok());
         let release = Release::github(channel);
         let entry = super::check(&self.client, &release, &super::platform(), installed).await.map_err(|e| e.to_string())?;
+        note_check();
         Ok(entry.map(|e| e.version).filter(|v| manifest.as_ref().is_none_or(|m| *v != m.version)))
     }
 

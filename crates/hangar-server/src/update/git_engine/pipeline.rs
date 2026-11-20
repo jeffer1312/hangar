@@ -5,6 +5,8 @@ use super::{
     tail,
 };
 use serde_json::{Value, json};
+use crate::update::stop_intent::RestartIntent;
+use hangar_api::status::ExitKind;
 fn panic_cause(payload: &(dyn std::any::Any + Send)) -> String {
     payload.downcast_ref::<String>().cloned()
         .or_else(|| payload.downcast_ref::<&str>().map(|text| (*text).to_owned()))
@@ -73,7 +75,7 @@ impl Service {
         if let Err(error) = self
             .restore_dist()
             .and_then(|_| self.prepare(topology, false, None, source, platform))
-            .and_then(|_| self.restart_service(topology, port))
+            .and_then(|_| self.restart_service(topology, port, RestartIntent::new(ExitKind::Update, "rollback").between(None, Some(commit))))
         {
             return self.failed(
                 &format!("{message}; e a volta para a versao anterior tambem falhou: {error}"),
@@ -240,7 +242,9 @@ impl Service {
         }
         let before = self.server_pid(topology, port);
         if let Err(error)=self.step("reiniciar") {return super::super::StateSnapshot::failure(error);}
-        if let Err(error) = self.restart_service(topology, port) {
+        let to = self.state().read().get("commit_para").and_then(Value::as_str).map(str::to_owned);
+        let intent = RestartIntent::new(ExitKind::Update, "checkout").between(Some(from), to.as_deref());
+        if let Err(error) = self.restart_service(topology, port, intent) {
             return self.rollback(
                 from,
                 &format!("o servidor nao reiniciou: {error}"),
@@ -304,7 +308,7 @@ impl Service {
             service.state().try_write(json!({"fase":"rodando","etapa":"reiniciar","passo":2,"total":2,"texto":"Reiniciando o servidor","etapa_inicio":chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%:z").to_string()}))?;
             let topology = service.topology();
             let before = service.server_pid(topology, port);
-            service.restart_service(topology, port)?;
+            service.restart_service(topology, port, RestartIntent::new(ExitKind::Requested, "restart_only"))?;
             if !service.up(port, 30) {
                 return Err("o servidor nao respondeu depois de reiniciar".into());
             }
@@ -328,5 +332,57 @@ impl Service {
             }
         };
         outcome
+    }
+}
+
+#[cfg(test)]
+mod stop_intent_tests {
+    use super::*;
+
+    /// Na mão o reinício só fica pedido: nada para, e a marca não é gravada.
+    #[test]
+    fn stop_intent_is_not_written_by_a_manual_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let hangar = home.join(".hangar");
+        crate::update::stop_intent::mark_this_process_running(&hangar, "agora");
+        let service = Service::new(home, dir.path().join("repo"), dir.path().join("claude"), Default::default());
+        std::fs::create_dir_all(&service.state_dir).unwrap();
+        service.restart_service("manual", 8123, RestartIntent::new(ExitKind::Requested, "restart_only")).unwrap();
+        assert_eq!(service.state().read()["reiniciar_manual"], json!(true));
+        assert!(!hangar.join(crate::update::stop_intent::FILE).exists(), "na mão nada para");
+    }
+
+    /// Com serviço (systemd, Windows, launchd) a marca vai antes do reinício, com `de`/`para`; o
+    /// reinício recusado com o servidor ainda de pé a apaga. Os programas do serviço são falsos, no PATH.
+    #[cfg(unix)]
+    #[test]
+    fn stop_intent_is_written_by_every_service_restart() {
+        for (topology, program, code) in [("systemd", "systemctl", 0), ("windows", "powershell", 0), ("launchd", "launchctl", 0), ("systemd", "systemctl", 1)] {
+            let dir = tempfile::tempdir().unwrap();
+            let (home, root, bin) = (dir.path().join("home"), dir.path().join("repo"), dir.path().join("bin"));
+            let hangar = home.join(".hangar");
+            std::fs::create_dir_all(&root).unwrap();
+            std::fs::create_dir_all(&bin).unwrap();
+            // `install` grava sem deixar descritor de escrita aberto neste processo: sem "text file busy".
+            let source = dir.path().join("programa");
+            std::fs::write(&source, format!("#!/bin/sh\nexit {code}\n")).unwrap();
+            assert!(std::process::Command::new("install").arg("-m").arg("755").arg(&source).arg(bin.join(program)).status().unwrap().success());
+            let pid = crate::update::stop_intent::mark_this_process_running(&hangar, "agora");
+            let environment = [("PATH".to_owned(), bin.display().to_string()), ("HOME".to_owned(), home.display().to_string())].into();
+            let service = Service::new(home, root, dir.path().join("claude"), environment);
+            let intent = RestartIntent::new(ExitKind::Update, "checkout").between(Some("aaa"), Some("bbb"));
+            let restarted = service.restart_service(topology, 8123, intent);
+            let file = hangar.join(crate::update::stop_intent::FILE);
+            if code != 0 {
+                assert!(restarted.is_err());
+                assert!(!file.exists(), "reinício recusado com o servidor ainda de pé");
+                continue;
+            }
+            restarted.unwrap();
+            let written: Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+            assert_eq!((written["tipo"].as_str(), written["causa"].as_str(), written["de"].as_str(), written["para"].as_str(), written["pid"].as_u64()),
+                (Some("update"), Some("checkout"), Some("aaa"), Some("bbb"), Some(u64::from(pid))), "{topology}");
+        }
     }
 }

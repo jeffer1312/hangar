@@ -114,13 +114,39 @@ fn reopen_keeps_what_the_change_does_not_name() {
         model: Some("opus".into()), effort: Some("high".into()), service_tier: None,
         permission_mode: Some(PermissionMode::Manual), subagent_model: None, customizations: None, jev: true,
         read_only: false, worktree: None, creator: None, created_at: 1.0, conversation: None,
-        name_auto: None, rename_suggestion: None, rename_weak_at: None, rename_dismissed: false,
+        name_auto: None, rename_suggestion: None, rename_weak_at: None, rename_dismissed: false, hooks_off: false,
     };
     let change = SessionChange { reason: ChangeReason::Bypass, surface: None, account: None,
         permission_mode: Some(PermissionMode::BypassPermissions), model: None, effort: None, service_tier: None };
     let next = spec.with(&change);
     assert_eq!(next.permission_mode, Some(PermissionMode::BypassPermissions));
     assert_eq!((next.model.as_deref(), next.effort.as_deref(), next.jev), (Some("opus"), Some("high"), true));
+
+    // Sessão sem hooks: o registro antigo lê "com hooks", e a reabertura mantém o que o spec gravou.
+    let mut recorded = serde_json::to_value(&spec).unwrap();
+    assert!(recorded.get("hooks_off").is_none(), "com hooks o campo nem vai ao disco");
+    let old: SessionSpec = serde_json::from_value(recorded.clone()).unwrap();
+    assert!(!old.hooks_off);
+    recorded["hooks_off"] = serde_json::json!(true);
+    let off: SessionSpec = serde_json::from_value(recorded).unwrap();
+    assert!(off.with(&change).hooks_off);
+}
+
+#[test]
+fn hooks_off_is_only_for_the_server() {
+    let refused = serde_json::from_value::<SessionOpenRequest>(serde_json::json!({"cwd": "/x", "disable_hooks": true}));
+    assert!(refused.is_err(), "cliente HTTP não desliga os hooks (nem a trava do cofre)");
+    let chosen = Some(serde_json::json!({"enabledPlugins": {"p@m": true}}));
+    assert_eq!(open::with_hooks_off(chosen.clone(), false), chosen);
+    assert_eq!(open::with_hooks_off(chosen, true), Some(serde_json::json!({"enabledPlugins": {"p@m": true}, "disableAllHooks": true})));
+    assert_eq!(open::with_hooks_off(None, true), Some(serde_json::json!({"disableAllHooks": true})));
+}
+
+#[test]
+fn hooks_off_reaches_the_claude_command_line() {
+    let settings = open::with_hooks_off(Some(serde_json::json!({"enabledPlugins": {"p@m": true}})), true).unwrap();
+    let passed: serde_json::Value = serde_json::from_str(&super::claude::settings_json(&settings)).unwrap();
+    assert_eq!(passed["disableAllHooks"], serde_json::json!(true), "o `--settings` do processo leva o desligar dos hooks");
 }
 
 // ── resolve_open ─────────────────────────────────────────────────────────────────────────────

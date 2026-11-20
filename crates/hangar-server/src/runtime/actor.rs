@@ -969,6 +969,7 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
         queue.exec(target.generation,&format!("prepare:{id}"),clock(start),Action::Prepare { id:id.clone(),payload:json!({"kind":"bootstrap"}),entry_id:None }).await.map_err(io_failure)?;
         effects.extend(engine.initialize(id)?);
     }
+    let mut sidecar_gone = false;
     loop {
         if let Some(rc) = cano_gone.take() {
             reconnect.cancel();
@@ -1433,6 +1434,17 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
                 }
             }
         }
+        // Os efeitos da parada (diário, estado sem turno) já saíram: o ator termina como fechado.
+        if sidecar_gone {
+            // A vista da parada ia por um `Job::View`, que o fim do ator corta: os dois canais recebem o estado final aqui.
+            let view = engine.view();
+            if view != durable_view {
+                live.update(|state|state.public_state = view["public_state"].clone());
+                publish(&events,&target,&mut revision,"view",view.clone());
+                publish(&events,&target,&mut revision,"state",view["public_state"].clone());
+            }
+            break;
+        }
         while let Some((attempt,result))=next_current_write(&mut prepared_writes,&mut next_write,&mut attempts,target.generation) {
             let wire=attempt.phase_id.clone();
             let ended = roots.iter().any(|(id,root)|(attempt.logical_id == *id || attempt.logical_id.starts_with(&format!("{id}:")))
@@ -1847,7 +1859,21 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
                         tracing::warn!(key=%target.key,session=%target.name,code=%failure.code,reason=%failure.message,attempt=respawn.failures,"processo da sessão não subiu de novo");
                         let user = respawn.user.take();
                         if let Some((operation_id,_)) = &user { fail_root(&mut roots,operation_id,failure.clone()); }
+                        let waited = !respawn.waiting.is_empty();
                         for (operation_id,_) in std::mem::take(&mut respawn.waiting) { fail_root(&mut roots,&operation_id,failure.clone()); }
+                        // Religação sozinha cujo arquivo da sessão sumiu (fechada pelo nome) ou é de outra chave:
+                        // outra subida também não teria onde gravar o processo e o mataria de novo. Só com o
+                        // arquivo relido: pedido da pessoa e arquivo ainda desta vida seguem o caminho de sempre.
+                        if target.provider == "codex" && failure.code == "session_patch_owner" && user.is_none() && !waited
+                            && sidecar_left(engine.launch.as_ref(),&target).await {
+                            tracing::warn!(key=%target.key,session=%target.name,"arquivo da sessão sumiu ou é de outra vida; o ator para sem subir o processo de novo");
+                            effects.push_back(Effect::Diag { event:DiagEvent::CodexSidecarGone,code:"codex_sidecar_gone".into() });
+                            effects.extend(engine.apply(EngineInput::Line(json!({"type":"cano_saiu","rc":null})),clock(start))?);
+                            closed.store(true,Ordering::Release);
+                            reconnect.cancel();
+                            sidecar_gone = true;
+                            continue;
+                        }
                         let gone = std::mem::take(&mut respawn.swallowed);
                         if gone {
                             effects.extend(engine.apply(EngineInput::Line(json!({"type":"cano_saiu","rc":null})),clock(start))?);
@@ -2592,6 +2618,18 @@ fn after_exit(respawn:&mut Respawn,engine:&mut RuntimeEngine,target:&RuntimeTarg
         return engine.set_problem("codex_headless_nao_subiu",Some(detail));
     }
     Vec::new()
+}
+
+/// O arquivo da sessão relido: ausente ou de outra chave. Ilegível não conta, para não soltar a sessão por
+/// uma leitura no meio da troca.
+async fn sidecar_left(launch:Option<&LaunchConfig>,target:&RuntimeTarget) -> bool {
+    let Some(path) = launch.map(|launch|super::codex_sidecar::path(&launch.sidecar_dir,&target.name)) else { return false };
+    let key = target.key.clone();
+    tokio::task::spawn_blocking(move||match super::codex_sidecar::read(&path) {
+        Ok(None) => true,
+        Ok(Some(meta)) => meta.get("key").and_then(Value::as_str) != Some(key.as_str()),
+        Err(_) => false,
+    }).await.unwrap_or(false)
 }
 
 fn cano_of(binding:&CanoBinding) -> super::process::Cano {

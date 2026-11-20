@@ -1,0 +1,6 @@
+{"ts":"2026-11-17T09:00:00.000-03:00","evento":"backend.inicio","nivel":"ok","pid":100,"origem":"servidor"}
+{"ts":"2026-11-17T09:30:00.000-03:00","evento":"api.servidor","nivel":"aviso","rota":"/api/sessions","origem":"servidor"}
+{"ts":"2026-11-17T10:00:00.000-03:00","evento":"backend.encerrando","nivel":"ok","causa":"sinal","origem":"servidor"}
+{"ts":"2026-11-17T10:00:05.000-03:00","evento":"lancador.falhou","nivel":"aviso","codigo":"launch_manifest_unreadable_direct","detalhe":"x","origem":"servidor"}
+{"ts":"2026-11-17T10:00:06.000-03:00","evento":"lancador.falhou","nivel":"erro","codigo":"launch_no_server","detalhe":"/home/fulano/.hangar/versions/0.1.0.10824/bin/hangar-server","origem":"servidor"}
+{"ts":"2026-11-17T10:00:07.000-03:00","evento":"diag.teto","nivel":"aviso","origem":"servidor"}

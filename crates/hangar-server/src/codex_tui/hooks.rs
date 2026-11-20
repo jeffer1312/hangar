@@ -31,9 +31,9 @@ fn detail(failure: RpcFailure) -> String {
     }
 }
 
-pub(crate) async fn trust(endpoint: &str, cwd: &str, home: &Path, account: &Path) -> Trust {
+pub(crate) async fn trust(endpoint: &str, token: Option<&str>, cwd: &str, home: &Path, account: &Path) -> Trust {
     let deadline = Instant::now() + DEADLINE;
-    let mut ws = match reload::connect(endpoint).await {
+    let mut ws = match reload::connect(endpoint, token).await {
         Ok(ws) => ws,
         Err(failure) => return Trust::Failed { stage: "conectar", detail: detail(failure) },
     };
@@ -78,12 +78,18 @@ mod tests {
     use tokio_tungstenite::tungstenite::Message;
 
     /// Um app-server falso: responde `initialize`, devolve `hooks/list` e o `batchWrite` pedido, e grava o que recebeu.
-    async fn fake(hooks: Value, batch: Value) -> (String, tokio::task::JoinHandle<Vec<Value>>) {
+    async fn fake(hooks: Value, batch: Value) -> (String, tokio::task::JoinHandle<(Vec<Value>, Option<String>)>) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let endpoint = format!("ws://{}", listener.local_addr().unwrap());
         let task = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
-            let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+            let authorization = std::sync::Arc::new(std::sync::Mutex::new(None));
+            let keep = authorization.clone();
+            let callback = move |request: &tokio_tungstenite::tungstenite::handshake::server::Request, response| {
+                *keep.lock().unwrap() = request.headers().get("authorization").map(|v| v.to_str().unwrap().to_owned());
+                Ok(response)
+            };
+            let mut ws = tokio_tungstenite::accept_hdr_async(stream, callback).await.unwrap();
             let mut seen = Vec::new();
             // Notificações antes da resposta não atrapalham.
             for _ in 0..3 { ws.send(Message::Text(json!({"method": "x/notified", "params": {}}).to_string().into())).await.unwrap(); }
@@ -98,7 +104,8 @@ mod tests {
                 seen.push(request);
                 ws.send(Message::Text(reply.to_string().into())).await.unwrap();
             }
-            seen
+            let authorization = authorization.lock().unwrap().clone();
+            (seen, authorization)
         });
         (endpoint, task)
     }
@@ -121,9 +128,10 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let account = home.path().join(".codex");
         let (endpoint, seen) = fake(hooks(home.path()), json!({"result": {}})).await;
-        let trust = trust(&endpoint, "/w", home.path(), &account).await;
+        let trust = trust(&endpoint, Some("token-da-vida"), "/w", home.path(), &account).await;
         assert_eq!(lines(&trust), ["3 hooks sincronizados pelo Hangar foram aceitos", "1 hooks de outra origem ficam para o Codex perguntar no terminal"]);
-        let seen = seen.await.unwrap();
+        let (seen, authorization) = seen.await.unwrap();
+        assert_eq!(authorization.as_deref(), Some("Bearer token-da-vida"), "o app-server com token recusaria a conexão");
         assert_eq!(seen[0]["params"], json!({"clientInfo": {"name": "hangar", "title": null, "version": "0.1.0"}, "capabilities": null}));
         assert_eq!(seen[1]["params"], json!({"cwds": ["/w"]}));
         let keys: Vec<&str> = seen[2]["params"]["edits"].as_array().unwrap().iter().map(|edit| edit["value"].as_str().unwrap()).collect();
@@ -139,15 +147,15 @@ mod tests {
         for (batch, wanted) in [(json!({"error": {"code": -32603, "message": "segredo interno"}}), "config/batchWrite, código -32603"),
             (json!({"error": {"message": "segredo interno"}}), "config/batchWrite, recusado")] {
             let (endpoint, _seen) = fake(hooks(home.path()), batch).await;
-            let trust = trust(&endpoint, "/w", home.path(), &account).await;
+            let trust = trust(&endpoint, None, "/w", home.path(), &account).await;
             assert_eq!(lines(&trust), [format!("não deu para aceitar os hooks ({wanted}); o Codex vai perguntar no terminal")]);
         }
         // `launcher__hooks-list-with-errors`: entrada com erro recusa a lista inteira.
         let (endpoint, _seen) = fake(json!({"data": [{"cwd": "/w", "errors": ["x"], "hooks": []}]}), json!({"result": {}})).await;
-        assert_eq!(lines(&trust(&endpoint, "/w", home.path(), &account).await),
+        assert_eq!(lines(&trust(&endpoint, None, "/w", home.path(), &account).await),
             ["não deu para aceitar os hooks (hooks/list, ValueError); o Codex vai perguntar no terminal"]);
         // `launcher__hooks-list-empty`: nada a dizer.
         let (endpoint, _seen) = fake(json!({"data": []}), json!({"result": {}})).await;
-        assert!(lines(&trust(&endpoint, "/w", home.path(), &account).await).is_empty());
+        assert!(lines(&trust(&endpoint, None, "/w", home.path(), &account).await).is_empty());
     }
 }

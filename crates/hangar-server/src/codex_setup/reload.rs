@@ -23,9 +23,10 @@ pub(crate) enum RpcFailure {
 }
 
 /// Abre o WebSocket do app-server em até 5 s, sem teto de mensagem.
-pub(crate) async fn connect(endpoint:&str)->Result<Socket,RpcFailure> {
+pub(crate) async fn connect(endpoint:&str,token:Option<&str>)->Result<Socket,RpcFailure> {
     let config=WebSocketConfig::default().max_message_size(None).max_frame_size(None);
-    match timeout(Duration::from_secs(5),tokio_tungstenite::connect_async_with_config(endpoint,Some(config),false)).await {
+    let request=hangar_codex::client::ws_request(endpoint,token).map_err(|_|RpcFailure::Transport)?;
+    match timeout(Duration::from_secs(5),tokio_tungstenite::connect_async_with_config(request,Some(config),false)).await {
         Ok(Ok((ws,_)))=>Ok(ws),
         Ok(Err(_))=>Err(RpcFailure::Transport),
         Err(_)=>Err(RpcFailure::Timeout),
@@ -63,9 +64,9 @@ pub(crate) async fn close(mut ws:Socket,ok:bool) {
 /// O `clientInfo` do `initialize`, o mesmo do lançador.
 pub(crate) fn client_info()->Value { json!({"name":"hangar","title":null,"version":"0.1.0"}) }
 
-pub async fn reload(endpoint:&str,cwd:&str,home:&Path,account:&Path)->bool {
+pub async fn reload(endpoint:&str,token:Option<&str>,cwd:&str,home:&Path,account:&Path)->bool {
     let deadline=Instant::now()+Duration::from_secs(15);
-    let Ok(mut ws)=connect(endpoint).await else{return false;};
+    let Ok(mut ws)=connect(endpoint,token).await else{return false;};
     let result=async {
         request(&mut ws,1,"initialize",json!({"clientInfo":client_info(),"capabilities":null}),deadline).await.map_err(|_|())?;
         let data=ValueGuard(request(&mut ws,2,"hooks/list",json!({"cwds":[cwd]}),deadline).await.map_err(|_|())?);
