@@ -198,6 +198,8 @@ pub struct SessionInfo {
     #[serde(default)] pub hidden_from_list: bool,
     /// Oculta e parada, com o processo fechado pelo servidor; a próxima mensagem a reabre na mesma conversa.
     #[serde(default)] pub asleep: bool,
+    /// Troca de agente pedida pelo seletor de modelos, esperando o turno acabar, em curso ou que falhou.
+    #[serde(default)] pub handoff: Option<hangar_api::session::Handoff>,
     /// Nome do convidado que criou a sessão; `None` = dono do servidor.
     pub owner: Option<String>,
     /// Só na linha `orq`: a sessão do árbitro atual, que o "Falar com o árbitro" abre.

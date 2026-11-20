@@ -231,6 +231,9 @@ pub(crate) fn composer_icons(cx: &App) -> [Button; 3] {
 pub(crate) fn composer_mic(label: String, cx: &App) -> Button { chrome::icon_button("dictation-toggle", IconName::Mic, label, cx) }
 
 /// Pílula do modelo com o esforço e o Fast ao lado.
+/// As peças do seletor de modelos e da troca de agente, para a animação da novidade.
+pub(crate) use controls::picker as model_picker;
+
 pub(crate) fn model_pill(id: impl Into<ElementId>, text: String, effort: Option<String>, fast: Option<String>, cx: &App) -> Button {
     chrome::pill_button(id, cx).gap(px(6.))
         .child(div().max_w(px(150.)).truncate().text_xs().font_weight(FontWeight::SEMIBOLD).child(text))
@@ -456,6 +459,12 @@ enum Payload {
 #[derive(Clone, Debug, PartialEq)]
 enum Reply {
     Catalog(controls::Ctl),
+    /// Catálogo do Codex que recebe a conversa na troca de agente, pela credencial lida.
+    HandoffCatalog(String),
+    /// Resposta ao pedido de troca de agente pelo seletor de modelos.
+    Handoff,
+    /// Cancelamento da troca que esperava; o texto é o motivo da recusa.
+    HandoffCancel(Option<String>),
     // Valor aplicado e o que a fonte ao vivo mostrava no gesto.
     Applied(controls::Ctl, String, Option<String>),
     Cost(u64),
@@ -4336,6 +4345,11 @@ impl Hangar {
             Some(Item::Event(i)) => self.chat.events.get(*i).filter(|event| notice_line::is_notice_line(event)).map(|event| (*i, self.notice_row_hidden(event))),
             _ => None,
         };
+        // Divisor da troca de agente: a conversa seguiu noutro modelo a partir daqui.
+        if let Some(Item::Event(i)) = self.conversation.items.get(index) && self.chat.events.get(*i).is_some_and(|event| event.kind == "handoff") {
+            let line = self.render_handoff_line(*i);
+            return row_frame(line, false).id(SharedString::from(id)).into_any_element();
+        }
         if matches!(notice, Some((_, true))) {
             return div().id(SharedString::from(id)).into_any_element();
         }
@@ -8002,7 +8016,7 @@ impl Hangar {
             self.render_ask(busy, window, cx).or_else(|| if pane_shown { None } else { self.render_options(busy, window, cx) })
         } else { None };
         let plan_bar = if readable && !read_only && card.is_none() {
-            self.render_plan_bar(busy, cx).or_else(|| self.render_headless_plan(cx)).or_else(|| self.render_plan_preview(cx))
+            self.render_handoff_band(cx).or_else(|| self.render_plan_bar(busy, cx)).or_else(|| self.render_headless_plan(cx)).or_else(|| self.render_plan_preview(cx))
                 .or_else(|| self.render_rename_suggestion(cx))
         } else { None };
         let steer = readable && self.steer_offered();

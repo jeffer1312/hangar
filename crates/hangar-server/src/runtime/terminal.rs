@@ -1100,7 +1100,7 @@ impl Executor {
             // Os motivos do `_motivo_ocupada` do Python, com a frase que o app já conhece.
             if facts.open_question {return Err(error("erro_sessao_esperando_resposta"));}
             if !facts.idle {return Err(error("erro_sessao_trabalhando"));}
-            // Na troca por limite a fila foi segurada para ir com a conversa à conta nova.
+            // Na troca por limite ou de agente a fila foi segurada para ir com a conversa ao destino novo.
             if payload["queued_ok"]!=true && state.rows.iter().any(|row|row["delivered"]==false) {return Err(error("erro_fila_pendente"));}
             return Ok(reply(id,Disposition::Accepted,json!({"idle":true,"conversation":self.target.binding.conversation})));
         }
@@ -1476,7 +1476,7 @@ impl Executor {
     async fn drain_once(&mut self,mut entry:Option<String>,steer:bool)->Result<Value,RuntimeError> {
         if self.batch_blocked && entry.is_none() {return Ok(json!({"drained":0,"batch_too_large":true}));}
         if self.loaned() {return Ok(json!({"drained":0,"keyboard_loan":true}));}
-        if self.options.lifecycle.as_ref().and_then(std::sync::Weak::upgrade).is_some_and(|registry|registry.limit_held(&self.target.name)) {
+        if self.options.lifecycle.as_ref().and_then(std::sync::Weak::upgrade).is_some_and(|registry|registry.queue_held(&self.target.name)) {
             return Ok(json!({"drained":0,"limit_held":true}));
         }
         let state=self.queue.snapshot().await.map_err(|_|error("queue_io"))?;

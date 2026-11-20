@@ -11,6 +11,7 @@ import { confirmFirstInput, readFirstInput, useNewConversation } from '../stores
 import { ChatHeader } from './ChatHeader';
 import { LoopChip } from './LoopChip';
 import { RenameSuggestion } from './RenameSuggestion';
+import { HandoffBand } from './HandoffBand';
 import { CodexCommandsChip } from './LiveWork';
 import { useActivity } from '../features/activity/useActivity';
 import { useAgentSubagents } from '../features/activity/useAgentSubagents';
@@ -524,6 +525,7 @@ export function ChatBody({ serverId, name, askFallback, onBack, deepStack, onOpe
         panelOpen={panelOpen}
       />
       <RenameSuggestion serverId={serverId} name={name} userMessages={userMessages} />
+      <HandoffBand serverId={serverId} name={name} />
       <MoreSheet open={moreOpen} onClose={() => setMoreOpen(false)} serverId={serverId} name={name} orq={orq}
                  provider={provider} semTerminal={semTerminal} temPergunta={!!askPayload}
                  recarregar={recarregavel ? { bloqueado: recarregarBloqueado, onPress: recarregar } : undefined} />

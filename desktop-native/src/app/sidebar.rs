@@ -64,6 +64,19 @@ impl Target {
 }
 
 /// O servidor confere as guardas novamente; a tela só oferece uma origem identificável e parada.
+/// Origem da troca de agente pelo seletor de modelos: a mesma da transferência, sem exigir a sessão parada. Com ela
+/// trabalhando ou esperando resposta, o servidor segura a fila e troca quando o turno acaba.
+pub(super) fn handoff_source(session: &SessionInfo) -> Option<(&str, &str)> {
+    if session.provider != "claude" || session.engine.as_deref().is_some_and(|e| !e.is_empty()) || session.uses_engine_account()
+        || session.read_only() || session.tracked == Some(false) || session.state == "dead"
+        || !session.conta.as_deref().is_some_and(|c| c.starts_with("claude:"))
+        || session.handoff.as_ref().is_some_and(|h| h.state == "running")
+        || session.transfer_phase.as_deref().is_some_and(|p| !matches!(p, "rejected" | "rolled_back" | "complete")) { return None; }
+    let life = session.lifecycle_id.as_deref().filter(|s| s.len() > 2 && (s.starts_with("k:") || s.starts_with("t:")))?;
+    let jsonl = session.jsonl.as_deref().filter(|s| !s.is_empty())?;
+    Some((life, jsonl))
+}
+
 pub(super) fn transfer_source(session: &SessionInfo) -> Option<(&str, &str)> {
     if session.provider != "claude" || session.engine.as_deref().is_some_and(|e| !e.is_empty()) || session.uses_engine_account()
         || session.read_only() || session.tracked == Some(false) || !matches!(session.state.as_str(), "idle" | "dead")

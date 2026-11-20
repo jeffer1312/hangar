@@ -11,6 +11,16 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
 
+/// Recusa que passa sozinha quando o turno acaba: a troca pedida com `when_idle` espera em vez de falhar.
+pub(crate) fn waits(code: &str) -> bool {
+    matches!(code, "session_transfer_source_busy" | "session_transfer_queue_pending" | "session_transfer_busy" | "session_transfer_gate_unavailable")
+}
+
+/// A linha da fila que impede a transferência agora.
+fn blocks_transfer(row: &Value, held: bool) -> bool {
+    if held { row["delivered"] == true && row["confirmed"] != true } else { row["delivered"] != true || row["confirmed"] != true }
+}
+
 fn error(code: &str) -> TransferError {
     TransferError::new(code)
 }
@@ -35,6 +45,10 @@ pub(crate) struct Request {
     pub source_jsonl: String,
     pub model: Option<String>,
     pub effort: Option<String>,
+    /// Com a sessão trabalhando, a troca espera ela ficar livre em vez de recusar; o que chegar à fila no meio
+    /// vai ao Codex.
+    #[serde(default)]
+    pub when_idle: bool,
 }
 impl Request {
     pub(crate) fn valid(&self) -> bool {
@@ -533,6 +547,13 @@ impl RuntimeRegistry {
             Err(failure)=>{tracing::warn!(session=%name,code=%failure.code,"identidade da transferência não pôde ser conferida");(None,true)},
         }
     }
+    /// A origem já aceitaria a transferência agora (livre, sem pergunta aberta); só confere, não para nada.
+    pub(crate) async fn transfer_ready(&self, name: &str) -> Result<(), TransferError> {
+        self.claude_current(name, BusyCheck::Refuse, false)
+            .await
+            .map(|_| ())
+            .map_err(transfer_error)
+    }
     pub(crate) async fn transfer_to_codex(
         &self,
         name: &str,
@@ -711,7 +732,10 @@ impl RuntimeRegistry {
         outcome
     }
 
+    /// Com a fila segurada para a troca, só a linha entregue e ainda não confirmada segura: a que espera
+    /// entrega vai ao Codex.
     async fn transfer_queue_empty(&self, name: &str, key: &str) -> Result<(), TransferError> {
+        let held = self.queue_held(name);
         let queue = self.codex_environment().claude_base.join(".hangar-queue");
         let (state, _) = super::super::codex_terminal::queue_files(&queue, key);
         let rows = match super::super::queue::read_replaced(&state) {
@@ -737,7 +761,7 @@ impl RuntimeRegistry {
             .as_array()
             .ok_or_else(|| error("session_transfer_queue_pending"))?
             .iter()
-            .any(|r| r["delivered"] != true || r["confirmed"] != true)
+            .any(|r| blocks_transfer(r, held))
         {
             return Err(error("session_transfer_queue_pending"));
         }
@@ -1185,6 +1209,26 @@ mod tests {
         );
         assert!(runtime.ingress().held("recoverable"));
         assert!(!runtime.transfer_blocked("unrelated").await);
+    }
+
+    #[test]
+    fn a_held_queue_lets_waiting_rows_go_to_codex_but_never_one_in_flight() {
+        let waiting = json!({"delivered":false});
+        let in_flight = json!({"delivered":true,"confirmed":false});
+        let done = json!({"delivered":true,"confirmed":true});
+        assert!(!blocks_transfer(&waiting, true) && blocks_transfer(&in_flight, true) && !blocks_transfer(&done, true));
+        assert!(blocks_transfer(&waiting, false) && blocks_transfer(&in_flight, false) && !blocks_transfer(&done, false));
+        assert!(waits("session_transfer_source_busy") && waits("session_transfer_queue_pending"));
+        assert!(!waits("session_transfer_login_required") && !waits("session_transfer_source_changed"));
+    }
+
+    #[test]
+    fn when_idle_is_optional_in_the_transfer_body() {
+        let base = json!({"credential_id":"codex:/account","source_life":"k:key","source_jsonl":"/source.jsonl"});
+        assert!(!serde_json::from_value::<Request>(base.clone()).unwrap().when_idle);
+        let mut idle = base;
+        idle["when_idle"] = json!(true);
+        assert!(serde_json::from_value::<Request>(idle).unwrap().when_idle);
     }
 
     #[test]

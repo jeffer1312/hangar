@@ -5,6 +5,15 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
 
 ## Regras vigentes
 
+- **Troca de agente pelo seletor de modelos espera o turno e segura a fila.** `POST /conta` com
+  `when_idle` registra a troca (`RuntimeRegistry::hold_handoff`) e responde 202 na hora; a fila
+  para pelo mesmo freio da troca de conta no limite (`queue_held`), e a transferência roda pelo
+  caminho de sempre quando a origem aceita (`transfer_ready`). Linha que ainda espera entrega vai
+  ao Codex; só a entregue sem confirmação segura (`blocks_transfer`). `DELETE /conta` cancela só
+  enquanto espera; falha mostra o código na linha da lista por 30 s e devolve a fila ao Claude. O
+  `/history` do Codex transferido leva o divisor `kind: handoff` antes do primeiro turno novo. Ver
+  [troca de agente com a sessão trabalhando](#troca-de-agente-com-a-sessão-trabalhando-20112026).
+
 - **Fechar o Claude com terminal termina com o processo morto.** Quem passa do prazo depois do
   `kill-session` aceito sai à força, conferido pela identidade, como na reabertura, e o fechamento
   segue normal. Tratar a demora como falha desviava para o fechamento pelo nome, que já não acha o
@@ -1188,6 +1197,25 @@ A religação que achava o arquivo da sessão apagado (`session_patch_owner`, se
 com o processo caindo, visto em 05/11/2026) tentava as 3 subidas, e cada uma subia e matava um
 processo. Agora a primeira recusa para o ator como fechado e vai ao diário como
 `codex_sidecar_gone`.
+
+## Troca de agente com a sessão trabalhando (20/11/2026)
+
+No T3 Code a troca de modelo para outro agente é só escolha do compositor: o histórico recente vai
+junto na próxima mensagem, e por isso ela é aceita com a sessão rodando. No Hangar a transferência
+Claude → Codex recusava sessão ocupada (`session_transfer_source_busy`) e fila com mensagem
+(`session_transfer_queue_pending`), e só era oferecida no cartão de contas.
+
+O seletor de modelos do nativo passa a oferecer o Codex numa aba do trilho. O pedido leva
+`when_idle`; o servidor guarda a troca, para a fila (o Claude não recebe mais nada) e confere a
+origem a cada segundo. Livre, a transferência roda inteira, com a recuperação que já existia. A fila
+não muda de dono: a chave é a mesma, e o Codex adotado entrega o que ficou esperando, que é o
+comportamento do T3 (o que foi mandado depois da escolha vai ao modelo novo). Linha já entregue e
+sem confirmação pode estar no transcript do Claude; ela segura a troca até confirmar. Espera
+maior que 2 h desiste com `session_transfer_wait_expired`.
+
+O divisor fica só no `/history` do chat: o leitor composto da fala (`transfer_history::read`) e
+os goldens dele seguem sem ele. Ao fim da troca a mudança de provedor reinicia o chat ao vivo
+(`reset`), e a releitura do `/history` já traz o divisor.
 
 ## Permissão do Codex sem terminal troca ao vivo (19/11/2026)
 

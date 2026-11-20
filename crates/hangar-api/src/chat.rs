@@ -114,6 +114,10 @@ pub struct ChatEvent {
     /// no JSON quando não vale, para cliente e goldens antigos.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub queued_conversation: Option<bool>,
+    /// Só no divisor da troca de agente (`kind: handoff`): `from_provider`, `from_model`, `to_provider`,
+    /// `to_model` e `to_effort`. Ausente no JSON quando não vale.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handoff: Option<Map<String, Value>>,
     /// Byte logo após a linha do transcript: vira o `id:` do SSE e nunca vai no JSON (`exclude=True`).
     #[serde(skip)]
     pub offset: Option<u64>,

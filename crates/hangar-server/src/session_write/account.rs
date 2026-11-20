@@ -56,7 +56,7 @@ fn target(bytes:&[u8]) -> Option<Target> {
     let present=|field:&str|body.get(field).is_some_and(|v|!v.is_null());
     let chosen=["config_dir","credential_id","engine_account"].into_iter().filter(|f|present(f)).count();
     if chosen!=1 {return None;}
-    let known=["config_dir","credential_id","engine_account","source_life","source_jsonl","model","effort"];
+    let known=["config_dir","credential_id","engine_account","source_life","source_jsonl","model","effort","when_idle"];
     if body.keys().any(|k|!known.contains(&k.as_str())) {return None;}
     if present("credential_id") {return Some(Target::Codex);}
     let field=if present("config_dir") {"config_dir"} else {"engine_account"};
@@ -217,6 +217,12 @@ pub async fn switch_route(State(st):State<Arc<AppState>>,ConnectInfo(peer):Conne
                 Ok(request) if request.valid()=>request,
                 _=>return super::invalid_body(&parts.headers),
             };
+            if request.when_idle {
+                if !matches!(runtime.claude_spec(&name).await,Some(Ok(_))) {
+                    return reply(Some(&parts.headers),StatusCode::CONFLICT,json!({"detail":hangar_conversation_transfer::TransferError::new("session_transfer_source_changed").public()}));
+                }
+                return super::handoff::start(st.clone(),runtime,name,request,&parts.headers).await;
+            }
             let (st2,owned)=(st.clone(),name.clone());
             let outcome=tokio::spawn(async move {
                 super::relaunch::during_life_change(&st2,&owned,runtime.transfer_to_codex(&owned,request,st2.accounts.clone(),st2.dictation_models.clone())).await
@@ -313,6 +319,7 @@ mod tests {
         assert_eq!(target(br#"{"config_dir":"/h/.claude-b"}"#),Some(Target::ConfigDir("/h/.claude-b".into())));
         assert_eq!(target(br#"{"engine_account":"acc"}"#),Some(Target::EngineAccount("acc".into())));
         assert_eq!(target(br#"{"credential_id":"codex:x","source_life":"k:a","source_jsonl":"/j"}"#),Some(Target::Codex));
+        assert_eq!(target(br#"{"credential_id":"codex:x","source_life":"k:a","source_jsonl":"/j","model":"m","when_idle":true}"#),Some(Target::Codex));
         for bad in [&br#"{"config_dir":"/a","engine_account":"b"}"#[..],br#"{"config_dir":"/a","model":"m"}"#,br#"{}"#,br#"{"x":1}"#] {
             assert_eq!(target(bad),None,"{}",String::from_utf8_lossy(bad));
         }

@@ -357,3 +357,62 @@ fn baton_window_reads_only_the_tail_of_a_large_transcript() {
     let said: Vec<_> = window.events.iter().filter_map(|e| e.text.as_deref()).collect();
     assert_eq!(said, ["pedido 1", "pedido 2", "pedido 3"]);
 }
+
+fn transferred_session(home: &Path) -> (PathBuf, u64) {
+    let owner = home.join("account");
+    std::fs::create_dir_all(&owner).unwrap();
+    let path = owner.join("thread.jsonl");
+    let id = "51234567-89ab-4cde-8fab-0123456789ab";
+    let imported = json!({"type":"response_item","payload":{"id":"imported","type":"message","role":"user","content":[{"type":"input_text","text":"origem"}]}});
+    let prefix = format!("{}\n{imported}\n", json!({"type":"session_meta","payload":{"id":"thread"}}));
+    std::fs::write(&path, &prefix).unwrap();
+    let source = home.join("source.jsonl");
+    std::fs::write(&source, b"{}\n").unwrap();
+    let record = json!({"id":id,"name":"session","phase":"complete","source":{"provider":"claude","path":source},
+        "origin_meta":{"model":"claude-opus-5-5"},
+        "destination_meta":{"codex_home":owner,"model":"gpt-6.2-sol","effort":"low"},"boundary":{"thread_id":"thread","rollout_path":path,"min_offset":prefix.len(),
+        "prefix_digest":hangar_conversation_transfer::digest(prefix.as_bytes()),"imported_item_ids":["imported"]}});
+    let base = home.join(".hangar/conversation-transfers");
+    std::fs::create_dir_all(&base).unwrap();
+    std::fs::write(base.join(format!("{id}.json")), record.to_string()).unwrap();
+    let sidecars = crate::runtime::codex_sidecar::dir(home);
+    crate::runtime::codex_sidecar::put(&sidecars, "session",
+        json!({"name":"session","codex_home":owner,"thread_id":"thread","transfer_id":id}).as_object().unwrap()).unwrap();
+    (path, prefix.len() as u64)
+}
+
+fn event(kind: &str, offset: u64, ts: f64) -> ChatEvent {
+    ChatEvent { kind: ChatKind::from(kind), id: format!("e{offset}"), offset: Some(offset), ts: Some(ts), ..ChatEvent::default() }
+}
+
+#[test]
+fn handoff_divider_sits_between_the_imported_history_and_the_first_new_turn() {
+    let directory = tempfile::tempdir().unwrap();
+    let (path, boundary) = transferred_session(directory.path());
+    let mut events = vec![event("user_msg", boundary, 1.), event("user_msg", boundary + 40, 2.), event("assistant_msg", boundary + 90, 3.)];
+    insert_handoff_divider(directory.path(), "session", &path, &mut events);
+    let kinds: Vec<_> = events.iter().map(|e| e.kind.as_str().to_owned()).collect();
+    assert_eq!(kinds, ["user_msg", "handoff", "user_msg", "assistant_msg"]);
+    let divider = &events[1];
+    assert_eq!(divider.id, "transfer:51234567-89ab-4cde-8fab-0123456789ab:handoff");
+    assert_eq!(divider.ts, Some(1.));
+    let handoff = divider.handoff.as_ref().unwrap();
+    assert_eq!((handoff["from_provider"].as_str(), handoff["from_model"].as_str()), (Some("claude"), Some("claude-opus-5-5")));
+    assert_eq!((handoff["to_provider"].as_str(), handoff["to_model"].as_str(), handoff["to_effort"].as_str()), (Some("codex"), Some("gpt-6.2-sol"), Some("low")));
+    let wire = serde_json::to_value(divider).unwrap();
+    assert_eq!(wire["kind"], "handoff");
+}
+
+#[test]
+fn handoff_divider_closes_the_history_before_any_new_turn_and_skips_other_conversations() {
+    let directory = tempfile::tempdir().unwrap();
+    let (path, boundary) = transferred_session(directory.path());
+    let mut events = vec![event("user_msg", boundary, 1.)];
+    insert_handoff_divider(directory.path(), "session", &path, &mut events);
+    assert_eq!(events.last().map(|e| e.kind.as_str()), Some("handoff"));
+    let mut untouched = vec![event("user_msg", 10, 1.)];
+    insert_handoff_divider(directory.path(), "other", &path, &mut untouched);
+    assert_eq!(untouched.len(), 1, "conversa sem transferência fica igual");
+    let wire = serde_json::to_value(&untouched[0]).unwrap();
+    assert!(wire.get("handoff").is_none(), "evento comum não leva o campo");
+}

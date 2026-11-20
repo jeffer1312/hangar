@@ -782,8 +782,8 @@ impl RuntimeRegistry {
                     if let Some(effort)=view["effort"].as_str().filter(|e|EFFORTS.contains(e)) {spec.effort=Some(effort.into());}
                 }
             }
-            // Na troca por limite a fila foi segurada para ir com a conversa à conta nova.
-            if checks_busy && !self.limit_held(name) && self.queue_pending(&spec.key).await {return Err(busy("erro_fila_pendente"));}
+            // Na troca por limite ou de agente a fila foi segurada para ir com a conversa ao destino novo.
+            if checks_busy && !self.queue_held(name) && self.queue_pending(&spec.key).await {return Err(busy("erro_fila_pendente"));}
             if spec.permission_mode.is_none() {
                 spec.permission_mode=Some(super::claude_launch::account_mode(&env,spec.account.config_dir())?);
             }
@@ -820,7 +820,7 @@ impl RuntimeRegistry {
             return Err(refused("permission_mode_unknown","o modo de permissão da sessão não é conhecido; nada foi reaberto"));
         }
         // Parada, sem pergunta, sem fila e sem entrega incerta: os motivos do `_motivo_ocupada`.
-        if checks {handle.control(format!("guard:reopen:{}",crate::mods::state::random_hex(8)),"lifecycle_guard".into(),json!({"queued_ok":self.limit_held(name)})).await?;}
+        if checks {handle.control(format!("guard:reopen:{}",crate::mods::state::random_hex(8)),"lifecycle_guard".into(),json!({"queued_ok":self.queue_held(name)})).await?;}
         Ok(Current { sid:target.binding.conversation.clone(),generation:target.generation,previous_non_plan:observed.map(|v|v.previous_non_plan),
             settings,spec,life:Life::Terminal { target } })
     }

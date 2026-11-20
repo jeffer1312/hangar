@@ -70,6 +70,8 @@ export interface SessionInfo {
   hidden_from_list?: boolean;
   /** Sem processo vivo; acorda na próxima mensagem. O servidor só manda quando é `true`. */
   asleep?: boolean;
+  /** Troca de agente pedida e ainda não concluída; o servidor só manda enquanto existe. */
+  handoff?: SessionHandoff | null;
   /** Onde a sessão adormecida reabre ao acordar. */
   wake_surface?: 'terminal' | 'headless';
   /** Servidores MCP criados por plugin (`$.tool.register`); a pele 'terminal' deixa as chamadas deles fora da dobra. */
@@ -222,7 +224,8 @@ export interface ChatEvent {
   // (settings.json["showThinkingSummaries"]); no Pi e no Kimi o texto é o raciocínio cru.
   // `notice` = aviso de sistema (turno interrompido e afins): o `text` traz um CÓDIGO
   // (`interrupted`, `turn_aborted`), e a frase é da interface — o servidor não manda texto de tela.
-  kind: 'user_msg' | 'assistant_msg' | 'tool_use' | 'tool_result' | 'thinking' | 'notice';
+  // `handoff` = divisor da troca de agente: a conversa seguiu noutro modelo a partir daqui (campos em `handoff`).
+  kind: 'user_msg' | 'assistant_msg' | 'tool_use' | 'tool_result' | 'thinking' | 'notice' | 'handoff';
   id: string;
   /** Só na sessão do orquestrador sem LLM: a linha do tempo enriquecida (recado, avanço, descarte). */
   orq?: OrqEntry | null;
@@ -255,6 +258,28 @@ export interface ChatEvent {
   } | null;
   /** Só em notice `skill_loaded`: a skill que o harness injetou como fala do usuário. */
   skill?: { name: string; path?: string | null; body: string } | null;
+  /** Só no divisor da troca de agente: de qual agente e modelo para qual. */
+  handoff?: HandoffDivider | null;
+}
+
+/** Os dois lados do divisor da troca de agente. */
+export interface HandoffDivider {
+  from_provider?: string | null;
+  from_model?: string | null;
+  to_provider?: string | null;
+  to_model?: string | null;
+  to_effort?: string | null;
+}
+
+/** Troca de agente pedida pelo seletor de modelos: esperando o turno acabar, em curso ou que falhou. */
+export interface SessionHandoff {
+  state: 'waiting' | 'running' | 'failed';
+  provider: string;
+  model?: string | null;
+  effort?: string | null;
+  conta: string;
+  /** Código do motivo, só em `failed`. */
+  code?: string | null;
 }
 
 export interface CodexCommand {

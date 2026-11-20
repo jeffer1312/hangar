@@ -135,6 +135,10 @@ pub fn rust_route(method: &Method, path: &str) -> bool {
     if *method == Method::GET && tail == Some("permission-modes") {
         return true;
     }
+    // Cancelar a troca de agente que espera o turno acabar (`session_write::handoff`).
+    if *method == Method::DELETE && tail == Some("conta") {
+        return true;
+    }
     // Encerrar (o Codex com terminal fecha aqui antes da limpeza do Python), broadcast e a ponte do plugin.
     if *method == Method::DELETE && path.strip_prefix("/api/sessions/").is_some_and(|name| !name.is_empty() && !name.contains('/')) {
         return true;

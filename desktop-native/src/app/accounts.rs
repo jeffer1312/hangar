@@ -745,6 +745,31 @@ impl Hangar {
         if self.open_api.is_some() { &self.accounts.session_list } else { &self.accounts.list }
     }
 
+    /// Lê as contas da máquina da sessão se ainda não chegaram nem estão a caminho.
+    pub(super) fn ensure_session_accounts(&mut self, cx: &mut Context<Self>) {
+        if self.session_accounts().value.is_none() && !self.session_accounts().loading { self.load_session_accounts(cx); }
+    }
+
+    /// Contas Codex conectadas da máquina da sessão, a de mais folga primeiro e sem as cheias: quem recebe a conversa na
+    /// troca de agente do seletor de modelos. `None` enquanto a lista não chegou; a leitura que falhou é lista vazia.
+    pub(super) fn handoff_accounts(&self) -> Option<Vec<controls::HandoffAccount>> {
+        let list = match self.session_accounts().value.as_ref()? { Ok(list) => list.as_slice(), Err(_) => &[][..] };
+        let (engines, now) = (HashMap::new(), now());
+        let mut out: Vec<(f64, controls::HandoffAccount)> = list.iter()
+            .filter(|c| c.kind == "codex" && c.id.starts_with("codex:") && c.logged_in() == Some(true))
+            .filter_map(|c| {
+                let account = c.codex_account.clone().filter(|a| !a.is_empty())?;
+                let pct = match build_row(c, &engines, false, now).quota {
+                    QuotaView::Bars { bars, .. } => bars.iter().map(|b| b.pct).fold(0., f64::max),
+                    _ => 0.,
+                };
+                let label = c.alias.clone().filter(|a| !a.is_empty()).unwrap_or_else(|| c.name.clone());
+                (pct < 99.).then(|| (pct, controls::HandoffAccount { credential: c.id.clone(), account, label }))
+            }).collect();
+        out.sort_by(|a, b| a.0.total_cmp(&b.0));
+        Some(out.into_iter().map(|(_, account)| account).collect())
+    }
+
     /// Contas Claude e se há uma Codex, na lista do anel: o que o anel oferece para levar a conversa. `None` enquanto a lista
     /// não chegou; a leitura que falhou conta como lista vazia, para quem espera por ela não ficar preso.
     pub(super) fn account_kinds(&self) -> Option<(usize, bool)> {

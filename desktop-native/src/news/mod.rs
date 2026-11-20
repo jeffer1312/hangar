@@ -13,6 +13,7 @@ mod desktop_tool_look;
 mod dictation_pill;
 mod login_browser;
 mod memory_dream;
+mod model_handoff;
 mod new_chat_mode;
 mod no_project;
 mod password_vault;
@@ -93,6 +94,7 @@ pub fn animation(name: &str) -> Option<NewsAnimation> {
         "tela-de-status" => Some(server_status::render),
         "consertar-com-agente" => Some(agent_fix::render),
         "revisao-do-trabalho" => Some(work_review::render),
+        "seletor-de-modelos" => Some(model_handoff::render),
         _ => None,
     }
 }

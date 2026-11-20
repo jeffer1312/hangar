@@ -57,6 +57,7 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
   import PairChatModal from '../components/PairChatModal.svelte';
   import LoopSheet from '../components/LoopSheet.svelte';
   import RenameSuggestionStrip from '../components/RenameSuggestionStrip.svelte';
+  import HandoffStrip from '../components/HandoffStrip.svelte';
   import { requestRenameSuggestionOnce, type RenameSuggestionResult } from '@hangar/core';
   import DesktopSessionContext from '../components/DesktopSessionContext.svelte';
   import FileViewer from '../components/files/FileViewer.svelte';
@@ -1773,7 +1774,7 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
   // Sessão de outra pessoa num par "ver e recado": o servidor dela recusa toda escrita.
   const soLeituraPar = $derived(sessaoAtual?.guest_kind === 'pair');
 
-  // Faixa "Renomear para X?" só na vista celular: o desktop web não ganha recurso novo.
+  // Faixas "Renomear para X?" e da troca de agente só na vista celular: o desktop web não ganha recurso novo.
   const renameServer = $derived(desktop || nested || soLeituraPar ? undefined : listServers().find((s) => s.id === chatServerId));
   let renameReturned = $state<RenameSuggestionResult | null>(null);
   let renameHidden = $state(false);
@@ -3555,6 +3556,9 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
         onRenamed={(name) => { if (name !== sessionName) onNavigateToChat(name); }}
         onDismissed={() => (renameHidden = true)}
         onSuggested={renameSuggested} />
+    {/if}
+    {#if renameServer && sessaoAtual?.handoff}
+      <HandoffStrip server={renameServer} session={sessaoAtual} />
     {/if}
     {/if}
   </div>

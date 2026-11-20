@@ -22,7 +22,8 @@ import { conversationInset } from './conversationColumn';
 import { ToolDetailSheet, type ToolDetailHandle } from './tools/ToolDetailSheet';
 import type { ConversationRow } from './tools/fold';
 import { HtmlPageCard } from './tools/HtmlPageCard';
-import { locateInMarkdown, type QuoteRef } from '@hangar/core';
+import { locateInMarkdown, modelDisplay, type QuoteRef } from '@hangar/core';
+import { ProviderGlyph } from '../ui/ProviderGlyph';
 import { useCiteDialog } from '../stores/citeDialog';
 import { contextRefsKey } from '../stores/contextRefs';
 import { flashQuoteSource } from '../stores/quoteFlash';
@@ -245,6 +246,7 @@ export function MessageList({
           if (isFixRunningNote(ev)) return null;
           return <ClaudeNotice event={ev} serverId={serverId} sessionName={sessionName} fix={fixes.get(ev.id)} />;
         }
+        if (ev.kind === 'handoff') return <HandoffLine event={ev} />;
         if (ev.kind === 'assistant_msg') {
           return <AssistantBubble text={ev.text ?? ''} sessionName={sessionName} serverId={serverId} ts={ev.ts} eventId={ev.id} canQuote={canQuote} />;
         }
@@ -467,6 +469,27 @@ function PendingEcho({ echo, route, sessionName, serverId, onQuoteClick }: {
   );
 }
 
+/** Divisor da troca de agente: a conversa seguiu noutro modelo a partir daqui. */
+function HandoffLine({ event }: { event: ChatEvent }) {
+  const { theme } = useUnistyles();
+  const h = event.handoff ?? {};
+  const from = modelDisplay(h.from_provider, h.from_model);
+  const to = modelDisplay(h.to_provider, h.to_model);
+  return (
+    <View style={styles.handoff} accessible accessibilityLabel={`${m.handoff_divider()}: ${from} → ${to}`}>
+      <View style={styles.handoffRule} />
+      <Icon name="RefreshCw" size={13} color={theme.tokens.text.muted} />
+      <Text style={styles.handoffTitle}>{m.handoff_divider()}</Text>
+      <ProviderGlyph provider={h.from_provider ?? ''} size={14} />
+      <Text style={styles.handoffModel}>{from}</Text>
+      <Icon name="ArrowRight" size={12} color={theme.tokens.text.muted} />
+      <ProviderGlyph provider={h.to_provider ?? ''} size={14} />
+      <Text style={styles.handoffModel}>{to}</Text>
+      <View style={styles.handoffRule} />
+    </View>
+  );
+}
+
 /** Aviso do harness no meio da conversa (interrompida, compactada); a miniatura das novidades usa o mesmo. */
 export function NoticeLine({ text }: { text: string }) {
   return <Text style={styles.notice}>{text}</Text>;
@@ -497,6 +520,26 @@ const styles = StyleSheet.create((theme) => ({
     color: theme.tokens.text.muted,
     textAlign: 'center',
     paddingVertical: theme.base.space[1],
+  },
+  handoff: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.base.space[1],
+    paddingVertical: theme.base.space[2],
+  },
+  handoffRule: {
+    flex: 1,
+    height: 1,
+    backgroundColor: theme.tokens.border.default,
+  },
+  handoffTitle: {
+    fontSize: theme.base.text.xs,
+    fontWeight: '600',
+    color: theme.tokens.text.muted,
+  },
+  handoffModel: {
+    fontSize: theme.base.text.xs,
+    color: theme.tokens.text.muted,
   },
   turnNote: {
     fontSize: theme.base.text.xs,
