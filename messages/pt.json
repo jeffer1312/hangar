@@ -6663,6 +6663,8 @@
   "native_beta_mod_settings": "Configurar mods",
   "native_beta_thinking_label": "Pensamento",
   "native_beta_see_output": "ver saída",
+  "native_beta_stop": "Parar",
+  "native_beta_agent_done_in": "Concluído em {time}",
   "native_settings_code_mode": "Code Mode do Claude Code (experimental)",
   "native_settings_code_mode_hint": "Sessões novas do Claude criadas por este app nascem com o Code Mode. Só com a conversa nova ligada; as abertas não mudam.",
   "native_settings_code_mode_off": "Desligado",

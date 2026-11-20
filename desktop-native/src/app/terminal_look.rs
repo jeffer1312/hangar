@@ -198,7 +198,7 @@ pub(super) fn fold_sub(text: String, color: Hsla) -> AnyElement { fold_sub_with(
 
 /// A linha `⎿` com uma ação no fim (o "ver saída" da falha, na conversa nova).
 pub(super) fn fold_sub_with(text: String, color: Hsla, action: Option<AnyElement>) -> AnyElement {
-    div().flex().items_center().gap(px(8.)).pl(px(FOLD_SUB_INDENT)).font_family(theme::MONO).text_size(px(12.5)).line_height(px(19.))
+    div().flex().when(action.is_some(), |el| el.items_center()).gap(px(8.)).pl(px(FOLD_SUB_INDENT)).font_family(theme::MONO).text_size(px(12.5)).line_height(px(19.))
         .child(div().flex_none().text_color(theme::faint()).child("⎿"))
         .child(div().min_w_0().truncate().text_color(color).child(text))
         .children(action).into_any_element()

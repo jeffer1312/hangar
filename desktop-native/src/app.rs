@@ -269,7 +269,7 @@ fn beta_stop_button(stopping: bool, cx: &App) -> Button {
     Button::new("stop").custom(ButtonCustomVariant::new(cx).color(fill).foreground(ink).hover(theme::danger().alpha(0.2)).active(theme::danger().alpha(0.2)))
         .bg(fill).h(px(32.)).p_0().rounded(px(8.))
         .child(div().h_full().px(px(10.)).rounded(px(8.)).border_1().border_color(theme::danger().alpha(0.4)).flex().items_center().gap(px(8.)).text_size(px(13.)).font_weight(FontWeight::SEMIBOLD).text_color(ink)
-            .child(div().size(px(10.)).rounded(px(2.)).bg(ink)).child(tr("stop")).child(beta_button_key("Esc", ink)))
+            .child(div().size(px(10.)).rounded(px(2.)).bg(ink)).child(tr("beta_stop")).child(beta_button_key("Esc", ink)))
         .tooltip(tr("stop_hint")).accessibility_label(tr("stop")).disabled(stopping)
 }
 
@@ -4600,7 +4600,7 @@ impl Hangar {
         let row = if beta {
             let act = if self.chat.live_thinking.is_empty() { tr("beta_working") } else { tr("beta_thinking") };
             let mark = if preview { mark } else { self.working_mark_slot(panes::Area::Conversation, "working-line", 16., theme::accent()) };
-            let ago = since.filter(|_| !preview).map(|since| self.ago_slot(panes::Area::Conversation, "working-ago", since, 84.,
+            let ago = since.filter(|_| !preview).map(|since| self.ago_slot(panes::Area::Conversation, "working-ago", since, 74.,
                 chrome::ElapsedLook::Ago { size: 14.5, color: theme::muted(), dot: true }));
             working_line_box().border_t_1().border_color(theme::border()).gap(px(10.)).child(mark)
                 .child(div().id("working-beta").flex_none().text_size(px(14.5)).font_weight(FontWeight::SEMIBOLD).text_color(theme::text())
@@ -5746,7 +5746,8 @@ impl Hangar {
                 appearance::DeliveryMode::Jev if joins && self.queue_jev_ready() => "beta_draft_jev",
                 _ => "beta_draft_queue",
             };
-            div().mt(px(-4.)).mb(px(-2.)).text_size(px(12.5)).text_color(theme::faint())
+            // O recuo do campo de texto: a dica começa na mesma borda do rascunho.
+            div().mt(px(-4.)).mb(px(-2.)).pl(px(10.)).text_size(px(12.5)).text_color(theme::faint())
                 .child(format!("{} · {}", tr(key), tr("beta_enter_sends")))
         });
         let [commands, attach, recent] = composer_icons(cx);
