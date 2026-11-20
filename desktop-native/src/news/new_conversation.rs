@@ -41,7 +41,7 @@ pub(super) fn render(started: Instant, width: Pixels, window: &mut Window, cx: &
             .bg(linear_gradient(180., linear_color_stop(theme::chrome(), 0.), linear_color_stop(theme::background(), 1.)))
             .flex().flex_col().gap(px(12.)).text_color(theme::text())
             .child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(if new { theme::accent_text() } else { theme::muted() })
-                .child(format!("{} · {label}", tr("settings_conversation_beta"))))
+                .child(format!("{} · {label}", tr("news_conversation_beta"))))
             .child(tabs);
         if compact { return stage.into_any_element(); }
         // Miniatura só leitura: os botões da faixa ficam sem clique e fora do Tab.

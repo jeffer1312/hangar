@@ -148,6 +148,8 @@ pub(super) struct Side {
     beta_files_last: Option<(SessionKey, Vec<GitFile>)>,
     /// Geração da leitura da lista de arquivos: resposta de uma leitura anterior não substitui a mais nova.
     files_gen: u64,
+    /// A leitura em voo foi a automática da conversa nova: falha dela vai ao log, não à tela, e o diff aberto fica.
+    files_auto: bool,
     /// Conversa nova: subagentes dispensados no painel, pelo id da chamada.
     beta_dismissed: HashSet<String>,
     diff: Option<(SessionKey, String, Option<Result<(String, bool), String>>)>,
@@ -183,7 +185,7 @@ impl Default for Side {
     fn default() -> Self {
         let saved = appearance::get();
         Self { open: true, menu: false, width: saved.side_width, browser_width: saved.side_browser_width, drag: None, shortcuts: None, project: ProjectShortcuts::default(), cost: None, cost_task: None, cost_gen: 0, orq: Default::default(),
-            files: None, beta_files_sig: None, beta_files_last: None, files_gen: 0, beta_dismissed: HashSet::new(), diff: None, reloading: HashSet::new(), run_code_pending: HashSet::new(), stop_pending: HashSet::new(), git: None, run: None, browsers: HashMap::new(), remote_browsers: HashMap::new(), browser_open: HashSet::new(), tabs: HashMap::new(),
+            files: None, beta_files_sig: None, beta_files_last: None, files_gen: 0, files_auto: false, beta_dismissed: HashSet::new(), diff: None, reloading: HashSet::new(), run_code_pending: HashSet::new(), stop_pending: HashSet::new(), git: None, run: None, browsers: HashMap::new(), remote_browsers: HashMap::new(), browser_open: HashSet::new(), tabs: HashMap::new(),
             #[cfg(target_os = "linux")] warm: None,
             shortcut_terms: HashMap::new(), shortcut_focus: HashMap::new(), shortcut_running: HashMap::new(), shortcut_recheck: HashMap::new() }
     }
@@ -400,11 +402,16 @@ impl Hangar {
         self.side.cost_task = Some((key, task));
     }
 
-    pub(super) fn load_files(&mut self, cx: &mut Context<Self>) {
-        if self.open_read_only() { return; }
-        let (Some(api), Some(key)) = (self.session_api(), self.selected_key()) else { return; };
+    pub(super) fn load_files(&mut self, cx: &mut Context<Self>) { self.read_files(false, cx); }
+
+    /// Lê a lista de arquivos alterados; diz se a leitura começou. A pedida pela pessoa fecha o diff aberto; a
+    /// automática (conversa nova) só atualiza a lista.
+    fn read_files(&mut self, auto: bool, cx: &mut Context<Self>) -> bool {
+        if self.open_read_only() { return false; }
+        let (Some(api), Some(key)) = (self.session_api(), self.selected_key()) else { return false; };
         self.side.files = Some((key.clone(), None));
-        self.side.diff = None;
+        if !auto { self.side.diff = None; }
+        self.side.files_auto = auto;
         self.side.files_gen += 1;
         let generation = self.side.files_gen;
         let (connection, tx) = (self.connection, self.tx.clone());
@@ -413,6 +420,7 @@ impl Hangar {
             let _ = tx.send(Envelope { connection, selection: None, payload: Payload::Reply(key, Reply::GitFiles(generation), result) }).await;
         });
         cx.notify();
+        true
     }
 
     /// Atalhos do projeto da sessão aberta: lidos ao escolher a sessão e ao abrir a página Atalhos.
@@ -612,6 +620,13 @@ impl Hangar {
                     files.sort_by_key(|f| std::cmp::Reverse(f.added.unwrap_or(0) + f.removed.unwrap_or(0)));
                     files
                 }));
+                // A lista boa fica guardada para a conversa nova mostrar enquanto relê; a falha da leitura automática não
+                // é ação da pessoa: vai ao log, e a lista anterior continua à vista.
+                match slot.as_ref() {
+                    Some(Ok(files)) => self.side.beta_files_last = Some((key.clone(), files.clone())),
+                    Some(Err(reason)) if self.side.files_auto => crate::log_line(&format!("painel: leitura automática dos arquivos alterados falhou: {reason}")),
+                    _ => {}
+                }
             }
             Reply::Diff(path) => {
                 let Some((owner, current, slot)) = self.side.diff.as_mut() else { return; };
@@ -922,19 +937,15 @@ impl Hangar {
         let sig = format!("{:?}/{:?}/{:?}/{:?}/{:?}/{:?}/{:?}", session.git_added, session.git_removed, session.git_dirty,
             session.branch, session.git_ahead, session.git_behind, turn_end);
         let stale = self.side.beta_files_sig.as_ref().is_none_or(|(owner, old)| *owner != key || *old != sig);
-        if stale && !self.open_read_only() {
-            self.side.beta_files_sig = Some((key.clone(), sig));
-            self.load_files(cx);
-        }
-        let slot = self.side.files.as_ref().filter(|(owner, _)| owner == &key).and_then(|(_, slot)| slot.clone());
-        if let Some(Ok(list)) = &slot { self.side.beta_files_last = Some((key.clone(), list.clone())); }
-        // Lendo de novo, a lista anterior fica à vista; falha mostra o motivo e o Tentar de novo.
-        let failure = match &slot { Some(Err(reason)) => Some(reason.clone()), _ => None };
-        let files = match slot {
-            Some(Ok(list)) => Some(list),
-            _ => self.side.beta_files_last.as_ref().filter(|(owner, _)| owner == &key).map(|(_, list)| list.clone()),
+        // A assinatura só vale quando a leitura começou: sem conexão agora, a próxima vez tenta de novo.
+        if stale && self.read_files(true, cx) { self.side.beta_files_sig = Some((key.clone(), sig)); }
+        // A falha só aparece quando a pessoa pediu a leitura; enquanto relê, fica a última lista boa.
+        let failure = match self.side.files.as_ref().filter(|(owner, _)| owner == &key) {
+            Some((_, Some(Err(reason)))) if !self.side.files_auto => Some(reason.clone()),
+            _ => None,
         };
-        let count = files.as_ref().map(Vec::len)
+        let files = self.side.beta_files_last.as_ref().filter(|(owner, _)| owner == &key).map(|(_, list)| list);
+        let count = files.map(Vec::len)
             .or_else(|| session.git_dirty.filter(|n| *n > 0).map(|n| n as usize));
         let (added, removed) = (session.git_added.unwrap_or(0), session.git_removed.unwrap_or(0));
         let summary = match count {
@@ -950,7 +961,7 @@ impl Hangar {
             .child(div().flex_1().min_w_0().child(reason))
             .child(Button::new("side-files-retry").xsmall().outline().label(tr("beta_retry")).on_click(cx.listener(|this, _, _, cx| this.load_files(cx)))));
         let current = self.side.diff.as_ref().map(|(_, path, _)| path.clone());
-        let rows = files.unwrap_or_default().into_iter().enumerate().map(|(n, file)| {
+        let rows = files.into_iter().flatten().enumerate().map(|(n, file)| {
             let (icon, color) = match file.code.trim() {
                 "A" | "??" => (IconName::Plus, theme::success()),
                 "D" => (IconName::Minus, theme::danger_text()),
@@ -987,9 +998,7 @@ impl Hangar {
             .map(str::trim).filter(|v| !v.is_empty()).map(str::to_owned);
         let kind = input("subagent_type").or_else(|| input("agent_type")).unwrap_or_else(|| crate::conversation::tool_display_name("Agent"));
         let model = self.agent_card_model(agent.call, input("model"));
-        let result = self.conversation.activity.agents.iter().find(|a| a.call == agent.call).and_then(|_| {
-            self.chat.events.iter().find(|e| e.kind == "tool_result" && e.tool_use_id.as_deref() == Some(call.id.as_str()))
-        });
+        let result = self.conversation.paired.get(&agent.call).and_then(|&i| self.chat.events.get(i));
         let failed = result.is_some_and(|r| r.is_error == Some(true)) || self.agent_failed(agent.call);
         let run = self.effective_agent(agent.call);
         // Esperando o próprio trabalho de fundo ainda é execução: mesmo ícone e mesmo "em execução".

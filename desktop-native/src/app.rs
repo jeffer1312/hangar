@@ -4440,6 +4440,7 @@ impl Hangar {
         // Conversa nova (pele Terminal): o trilho que liga os passos, interrompido em volta do ponto de cada linha.
         let rail = self.rail_dot(index).map(|dot| Rail {
             top: index > 0 && self.rail_dot(index - 1).is_some(),
+            bottom: self.rail_dot(index + 1).is_some() || self.row_ids.get(index + 1).is_some_and(|id| id == WORKING),
             dot,
             above: if card_gap { 8. } else { 0. },
         });
@@ -4606,14 +4607,16 @@ impl Hangar {
         let row = if beta {
             let act = if self.chat.live_thinking.is_empty() { tr("beta_working") } else { tr("beta_thinking") };
             let mark = if preview { mark } else { self.working_mark_slot(panes::Area::Conversation, "working-line", 16., theme::accent()) };
-            let ago = since.filter(|_| !preview).map(|since| self.ago_slot(panes::Area::Conversation, "working-ago", since, 74.,
-                chrome::ElapsedLook::Ago { size: 14.5, color: theme::muted(), dot: true }));
-            working_line_box().border_t_1().border_color(theme::border()).gap(px(10.)).child(mark)
+            let tokens = tokens.map(|t| SharedString::from(turn_tokens_text(&t)));
+            let row = working_line_box().border_t_1().border_color(theme::border()).gap(px(10.)).child(mark)
                 .child(div().id("working-beta").flex_none().text_size(px(14.5)).font_weight(FontWeight::SEMIBOLD).text_color(theme::text())
-                    .child(act).tooltip(move |window, cx| gpui_kit::component::tooltip::Tooltip::new(verb.clone()).build(window, cx)))
-                .children(ago)
-                .when_some(tokens.map(|t| turn_tokens_text(&t)), |el, text| el.child(div().min_w_0().truncate().text_size(px(12.5))
-                    .text_color(theme::faint()).child(text)))
+                    .child(act).tooltip(move |window, cx| gpui_kit::component::tooltip::Tooltip::new(verb.clone()).build(window, cx)));
+            // O tempo e os tokens no mesmo lugar pintado fora da conversa: o tempo cresce sem invadir os tokens.
+            match since.filter(|_| !preview) {
+                Some(since) => row.child(self.ago_slot(panes::Area::Conversation, "working-ago", since, tokens,
+                    chrome::ElapsedLook::Ago { size: 14.5, color: theme::muted(), dot: true })),
+                None => row.when_some(tokens, |el, text| el.child(div().min_w_0().truncate().text_size(px(12.5)).text_color(theme::faint()).child(text))),
+            }
         } else {
             working_line(mark, verb).map(|el| match since.filter(|_| !preview) {
                 Some(since) => el.child(self.elapsed_slot(panes::Area::Conversation, "working-elapsed", since, tokens)),
@@ -6216,11 +6219,11 @@ fn after_card(items: &[Item], events: &[ChatEvent], index: usize) -> bool {
     index > 0 && items.get(index).is_some() && card(items.get(index - 1)) && !card(items.get(index))
 }
 
-/// O trilho da linha na conversa nova: `top` liga à linha de cima; `dot` é a altura do centro do ponto dentro da coluna
+/// O trilho da linha na conversa nova: `top` liga à linha de cima e `bottom` à de baixo (ou à linha do turno); `dot` é a altura do centro do ponto dentro da coluna
 /// (sem o respiro da linha), em volta do qual o traço se interrompe; sem ponto, o traço é contínuo. `above` é o respiro
 /// extra em cima da linha depois de um cartão.
 #[derive(Clone, Copy)]
-struct Rail { top: bool, dot: Option<f32>, above: f32 }
+struct Rail { top: bool, bottom: bool, dot: Option<f32>, above: f32 }
 
 /// Vão do traço em volta do ponto, de cada lado do centro.
 const RAIL_GAP: f32 = 7.;
@@ -6235,9 +6238,11 @@ fn row_frame(inner: AnyElement, message: bool, rail: Option<Rail>) -> Div {
         match rail.dot {
             Some(center) => vec![
                 rail.top.then(|| line().top(px(top)).h(px((center - RAIL_GAP - top).max(0.)))),
-                Some(line().top(px(center + RAIL_GAP)).bottom(px(-pad))),
+                rail.bottom.then(|| line().top(px(center + RAIL_GAP)).bottom(px(-pad))),
             ].into_iter().flatten().collect::<Vec<_>>(),
-            None => vec![line().top(px(top)).bottom(px(-pad))],
+            // Sem ponto, o traço só existe ligando a linha a uma vizinha do trilho.
+            None if rail.top || rail.bottom => vec![line().top(px(top)).bottom(px(if rail.bottom { -pad } else { 0. }))],
+            None => Vec::new(),
         }
     }).unwrap_or_default();
     div().w_full().px(px(16.)).py(px(pad))

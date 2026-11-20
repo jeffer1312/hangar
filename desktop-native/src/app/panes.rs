@@ -33,7 +33,7 @@ pub(super) struct Panes {
 
 /// O que se pinta num lugar: a marca animada, o avatar trabalhando ou os segundos da linha "trabalhando".
 #[derive(Clone)]
-pub(super) enum Floating { Mark(Hsla), Avatar(super::chrome::AvatarLook), Elapsed(Instant, Option<SharedString>), Ago(Instant, super::chrome::ElapsedLook), Shimmer(SharedString), ThinkingFocus(SharedString) }
+pub(super) enum Floating { Mark(Hsla), Avatar(super::chrome::AvatarLook), Elapsed(Instant, Option<SharedString>), Ago(Instant, Option<SharedString>, super::chrome::ElapsedLook), Shimmer(SharedString), ThinkingFocus(SharedString) }
 
 /// Um lugar vazio deixado por uma área guardada: posição, recorte dela e quando o lugar nasceu. A área que não repinta
 /// deixa os lugares do último desenho, que continuam certos; a que redesenha apaga os seus e grava os que aparecerem.
@@ -203,9 +203,10 @@ impl Hangar {
     }
 
     /// O "· há 12 s" da conversa nova, pintado fora da view guardada como os segundos; `width` reserva o lugar.
-    pub(super) fn ago_slot(&self, area: Area, key: impl Into<SharedString>, since: Instant, width: f32, look: super::chrome::ElapsedLook) -> AnyElement {
-        div().w(px(width)).h_full().flex_shrink_0()
-            .child(mark_place(self.panes.marks.clone(), area, key.into(), Floating::Ago(since, look)))
+    /// `suffix` vem depois do tempo no mesmo texto; o lugar ocupa o resto da linha, e o tempo nunca é cortado.
+    pub(super) fn ago_slot(&self, area: Area, key: impl Into<SharedString>, since: Instant, suffix: Option<SharedString>, look: super::chrome::ElapsedLook) -> AnyElement {
+        div().flex_1().min_w_0().h_full()
+            .child(mark_place(self.panes.marks.clone(), area, key.into(), Floating::Ago(since, suffix, look)))
             .into_any_element()
     }
 
@@ -300,7 +301,7 @@ impl Element for FloatingMark {
                 Floating::Mark(color) => super::chrome::WorkingMark::new(place.key.clone(), width, color).into_any_element(),
                 Floating::Avatar(look) => super::chrome::LiveAvatar::new(place.key.clone(), look, width).into_any_element(),
                 Floating::Elapsed(since, suffix) => super::chrome::Elapsed::new(place.key.clone(), since).suffix(suffix).into_any_element(),
-                Floating::Ago(since, look) => super::chrome::Elapsed::new(place.key.clone(), since).look(look).into_any_element(),
+                Floating::Ago(since, suffix, look) => super::chrome::Elapsed::new(place.key.clone(), since).suffix(suffix).look(look).into_any_element(),
                 Floating::Shimmer(text) => super::chrome::Shimmer::new(place.key.clone(), text).into_any_element(),
                 Floating::ThinkingFocus(label) => super::chrome::ThinkingFocus::new(place.key.clone(), label).into_any_element(),
             };

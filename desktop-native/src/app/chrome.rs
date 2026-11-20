@@ -299,9 +299,13 @@ struct ElapsedView { since: Instant, suffix: Option<SharedString>, look: Elapsed
 impl Render for ElapsedView {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         if let ElapsedLook::Ago { size, color, dot } = self.look {
+            // O tempo inteiro e, depois dele, o resto da linha (os tokens), que é o que corta quando falta lugar: o texto
+            // cresce de "12 s" a "1 h 5 min" sem invadir o vizinho.
             let text = crate::i18n::tr("beta_ago").replace("{time}", &format_ago(self.since.elapsed()));
-            return div().size_full().min_w_0().flex().items_center().whitespace_nowrap().text_size(px(size)).text_color(color)
-                .font_weight(FontWeight::MEDIUM).child(if dot { format!("· {text}") } else { text });
+            return div().size_full().min_w_0().flex().items_center().gap(px(10.)).whitespace_nowrap()
+                .child(div().flex_none().text_size(px(size)).text_color(color).font_weight(FontWeight::MEDIUM)
+                    .child(if dot { format!("· {text}") } else { text }))
+                .when_some(self.suffix.clone(), |el, suffix| el.child(div().min_w_0().truncate().text_size(px(12.5)).text_color(theme::faint()).child(suffix)));
         }
         let elapsed = format_elapsed(self.since.elapsed());
         div().size_full().min_w_0().flex().items_center().pt(px(1.)).text_size(px(11.)).text_color(theme::faint())

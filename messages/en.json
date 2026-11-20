@@ -6780,6 +6780,7 @@
   "native_beta_stop": "Stop",
   "native_beta_agent_done_in": "Done in {time}",
   "native_beta_retry": "Try again",
+  "native_news_conversation_beta": "New conversation (beta)",
   "native_settings_code_mode": "Claude Code Code Mode (experimental)",
   "native_settings_code_mode_hint": "New Claude sessions created by this app start with Code Mode. Only with the new conversation on; open sessions don't change.",
   "native_settings_code_mode_off": "Off",
