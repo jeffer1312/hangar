@@ -2392,6 +2392,18 @@ fn steer_without_a_known_turn_reads_it_first() {
 }
 
 #[test]
+fn stop_that_finds_the_latest_turn_finished_clears_the_stale_working_state() {
+    // O fim da rodada se perdeu: Parar lê a mais recente, acabada, e a sessão deixa de parecer trabalhando.
+    let mut engine = subscribed_terminal();
+    line(&mut engine,json!({"method":"thread/status/changed","params":{"threadId":"thread-1","status":{"type":"active"}}}),13.0);
+    assert_eq!(engine.control_view()["in_progress"],true);
+    let read = frames(&engine.command(RuntimeCommand { operation_id:"stop".into(),kind:OperationKind::Interrupt,payload:json!({}) },clock(13.5)).unwrap())[0].clone();
+    assert_eq!(read["method"],"thread/turns/list");
+    line(&mut engine,json!({"id":read["id"],"result":{"data":[{"id":"turn-8","status":"completed","items":[]}]}}),14.0);
+    assert_eq!(engine.control_view()["in_progress"],false);
+}
+
+#[test]
 fn full_history_resume_keeps_the_running_turn_id() {
     // Vida sem perguntas semeadas retoma com o histórico inteiro: a rodada em andamento vem nele.
     let mut engine = terminal();

@@ -320,9 +320,9 @@ fn input_of(payload:&Value,text:&str) -> Vec<Value> {
     payload["input"].as_array().cloned().unwrap_or_else(||vec![json!({"type":"text","text":text})])
 }
 
-/// Espera crescente da assinatura enquanto a thread não tem rollout, a mesma do adapter Python.
 /// Rodadas da página da retomada: cobre o turno em curso e as filhas recentes sem trazer o histórico.
 pub const RESUME_PAGE:u32 = 20;
+/// Espera crescente da assinatura enquanto a thread não tem rollout, a mesma do adapter Python.
 const SUBSCRIBE_RETRY_BASE:f64 = 1.0;
 const SUBSCRIBE_RETRY_MAX:f64 = 10.0;
 
@@ -2388,6 +2388,12 @@ impl Engine {
                 if rpc.state_revision == self.state_revision && rpc.params["threadId"] == self.thread_id.as_str() {
                     self.turn_id = latest.filter(|turn|turn.status == "inProgress").map(|turn|turn.id.clone());
                     if self.turn_id.is_some() { self.in_progress = true; self.turn_known = true; }
+                    // Rodada mais recente acabada: o fim dela se perdeu. Compactação em curso fica como está: a lista pode não trazê-la.
+                    else if latest.is_some() && self.in_progress && !self.compacting {
+                        self.in_progress = false; self.state.codex_buffering = false;
+                        self.changed(effects,true);
+                        effects.push(Effect::WakeQueue);
+                    }
                 }
             }
             "thread/settings/update" => {
