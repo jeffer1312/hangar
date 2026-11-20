@@ -1174,6 +1174,38 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   prova a parada. Matar pelo pid não é caminho: a árvore de processos muda de um sistema para outro e o
   modelo não fica sabendo. Ver [parar tarefa do Claude](#parar-tarefa-do-claude-13112026).
 
+- **Code Mode do Claude Code: o resultado do script vai para o `REPL` no parser.** O `REPL` responde
+  `(dispatched #n)` e o resultado chega depois, pelo `Poll`, pela fila (`queue-operation`) ou pelo
+  anexo `poll_events`, muitas vezes por mais de um. O `ReplLinks` do leitor do arquivo
+  (`crates/hangar-transcript/src/code_mode.rs`) tira o `(dispatched #n)`, entrega o primeiro
+  resultado ao `REPL` com o `tool_use_id` dele e descarta as repetições; o `Poll` some. Todo leitor que
+  percorre o arquivo (cauda, `/history`, `each_event`, transferência Claude→Codex) passa por ele. Leitor que
+  não viu o despacho procura no arquivo, para trás. Chamada feita dentro do script grava `content`
+  vazio: o resultado sai do `toolUseResult`. Os aparelhos não sabem de Code Mode, só chamam o `REPL`
+  de "Script". Ver [Code Mode](#code-mode-do-claude-code-script-entrega-e-página-20112026).
+
+## Code Mode do Claude Code: script, entrega e página (20/11/2026)
+
+Claude Code 2.1.329 com `CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=1`. No transcript:
+
+- O `REPL` grava `tool_result` `(dispatched #n)` na hora; o resultado do script vem num bloco
+  `<event kind="repl-eval" eval="n" at=… status="settled">` com `<log>`, `<result>` ou `<error>`.
+- A mesma entrega aparece em até três lugares: no resultado do `Poll` (com `nonce` do cabeçalho
+  `<system>authentic event nonces…`), no `queue-operation` (`enqueue` e `remove`, sem `nonce`) e no
+  anexo `poll_events`. Num transcript real de 47 scripts, a entrega 16 estava nos três.
+- Entrega tardia (o turno já tinha acabado) ia pelo `remove` da fila, que o parser lia como mensagem
+  da pessoa: a bolha `<event kind="repl-eval" …>` no lado do usuário.
+- `status="late"` é o aviso do harness de que as chamadas deixadas rodando acabaram; não é resultado.
+- As chamadas de dentro do script (`isVirtual: true`, ids `repl_…`) são gravadas quando o script
+  termina, com `content: ""`; o resultado real fica no `toolUseResult` (string, `stdout`/`stderr`,
+  `file.content` ou `filePath`). A página do `html_render` chamado de dentro do script não abria
+  ("Não foi possível carregar") porque o `hangar_page` estava só ali.
+
+Prova: os dois transcripts reais da sessão (58 e 47 scripts) passaram pelo parser novo sem bolha
+`<event…>`, sem `Poll`, com todo `REPL` concluído pareado ao próprio resultado (só o que rodava na
+hora ficou aberto). No nativo de teste, a sequência de scripts virou uma linha ("Rodou 2 scripts,
+buscou 1 padrão, leu 1 arquivo…") e a página publicada de dentro do script abriu.
+
 ## Retomada Codex paginada (20/11/2026)
 
 O schema do Codex 0.170.0 marca como obsoleta a hidratação do histórico inteiro em conversa

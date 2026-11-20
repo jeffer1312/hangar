@@ -13,6 +13,15 @@ impl SessionKey {
         if !session.readable() { return None; }
         Some(Self { server: server.into(), name: session.name.clone(), jsonl: session.jsonl.clone()? })
     }
+
+    pub fn for_open_chat(server: &str, session: &SessionInfo) -> Option<Self> {
+        Self::new(server, session).or_else(|| {
+            if !session.waiting_for_kimi_input() { return None; }
+            // Cada vida guarda o próprio rascunho até o vínculo com o histórico.
+            let life = session.lifecycle_id.as_deref()?;
+            Some(Self { server: server.into(), name: session.name.clone(), jsonl: format!("kimi-opening:{life}") })
+        })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -216,6 +225,36 @@ mod tests {
 
     fn key(jsonl: &str) -> SessionKey {
         SessionKey { server: "http://fixture/".into(), name: "same-name".into(), jsonl: jsonl.into() }
+    }
+
+    #[test]
+    fn kimi_can_start_with_a_first_message_before_the_transcript_exists() {
+        let mut session = SessionInfo {
+            name: "kimi".into(), provider: "kimi".into(), state: "idle".into(), tracked: Some(false),
+            lifecycle_id: Some("k:first".into()), ..Default::default()
+        };
+        assert!(!session.readable());
+        assert!(session.takes_messages());
+        let before = SessionKey::for_open_chat("http://fixture/", &session).unwrap();
+        let reopened = SessionInfo { lifecycle_id: Some("k:second".into()), ..session.clone() };
+        assert_ne!(SessionKey::for_open_chat("http://fixture/", &reopened).unwrap(), before);
+        let linked = SessionInfo { tracked: Some(true), jsonl: Some("/wire.jsonl".into()), ..session.clone() };
+        let linked_key = SessionKey::for_open_chat("http://fixture/", &linked).unwrap();
+        assert_eq!(linked_key.jsonl, "/wire.jsonl");
+        let mut delivery = DeliveryTracker::default();
+        assert!(delivery.begin(before.clone(), "primeira mensagem".into(), HashSet::new()));
+        delivery.rekey(&before, &linked_key);
+        assert_eq!(delivery.current(before), linked_key);
+        assert!(delivery.pending(&linked_key));
+
+        session.state = "dead".into();
+        assert!(!session.takes_messages());
+        session.state = "idle".into();
+        session.lifecycle_id = Some("t:1".into());
+        assert!(!session.takes_messages());
+        session.lifecycle_id = Some("k:first".into());
+        session.guest_kind = Some("pair".into());
+        assert!(!session.takes_messages());
     }
 
     #[test]

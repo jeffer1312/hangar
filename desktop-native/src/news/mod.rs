@@ -15,6 +15,7 @@ mod login_browser;
 mod memory_dream;
 mod model_handoff;
 mod new_chat_mode;
+mod new_conversation;
 mod no_project;
 mod password_vault;
 mod plugins;
@@ -95,6 +96,7 @@ pub fn animation(name: &str) -> Option<NewsAnimation> {
         "consertar-com-agente" => Some(agent_fix::render),
         "revisao-do-trabalho" => Some(work_review::render),
         "seletor-de-modelos" => Some(model_handoff::render),
+        "conversa-nova" => Some(new_conversation::render),
         _ => None,
     }
 }

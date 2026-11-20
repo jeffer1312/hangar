@@ -1006,6 +1006,7 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/news", get(crate::docs_routes::news))
         .route("/api/manual", get(crate::docs_routes::manual))
         .route("/api/claude/defaults", axum::routing::post(crate::claude_defaults::save).fallback(pass_registered))
+        .route("/api/claude/code-mode", get(crate::claude_defaults::code_mode).fallback(pass_registered))
         .route("/api/session-defaults", axum::routing::get(crate::session_defaults::handle).put(crate::session_defaults::handle))
         // O que já foi visto do tour do nativo: só o dono, nunca repassado (o Python não tem a rota).
         .merge(crate::scheduled_tasks::router())

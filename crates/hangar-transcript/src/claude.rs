@@ -126,7 +126,7 @@ pub(crate) fn silent_attachment_timestamp(line: &str, notices: bool) -> Option<&
         return None;
     }
     let head = ATTACHMENT_HEAD.captures(line)?;
-    if matches!(&head[1], "queued_command" | "hook_additional_context") || (notices && &head[1] == "hook_non_blocking_error") {
+    if matches!(&head[1], "queued_command" | "hook_additional_context" | "poll_events") || (notices && &head[1] == "hook_non_blocking_error") {
         return None;
     }
     let i = line.rfind(ATTACHMENT_TAIL)?;
@@ -473,7 +473,7 @@ fn strip_pasted(text: &str) -> String {
     out
 }
 
-fn attrs(raw: &str) -> HashMap<&str, &str> {
+pub(crate) fn attrs(raw: &str) -> HashMap<&str, &str> {
     PEER_ATTR.captures_iter(raw).map(|c| (c.get(1).unwrap().as_str(), c.get(2).unwrap().as_str())).collect()
 }
 
@@ -608,6 +608,11 @@ fn system(obj: &Map<String, Value>, resolve: PeerResolver) -> Vec<ChatEvent> {
 
 fn queue_operation(obj: &Map<String, Value>, resolve: PeerResolver) -> Vec<ChatEvent> {
     let Some(q) = obj.get("content").and_then(Value::as_str) else { return Vec::new() };
+    // O resultado de script entregue fora do turno: a mesma entrega grava enqueue e remove, só um vale.
+    if crate::code_mode::is_queued_event(q) {
+        let remove = obj.get("operation").and_then(Value::as_str) == Some("remove");
+        return if remove { crate::code_mode::queued_event(q).into_iter().collect() } else { Vec::new() };
+    }
     let queued = obj.get("content");
     let h = md5_8(q);
     if let Some(a) = agent_msg(queued, &format!("queued-agent:{h}")) {
@@ -665,6 +670,10 @@ fn delivery_id(value: Option<&Value>) -> Option<String> {
 fn attachment(obj: &Map<String, Value>, uid: &str) -> Vec<ChatEvent> {
     let Some(att) = obj.get("attachment").and_then(Value::as_object) else { return Vec::new() };
     let atype = att.get("type").and_then(Value::as_str);
+    if atype == Some("poll_events") {
+        return att.get("envelopes").and_then(Value::as_array).into_iter().flatten()
+            .filter_map(Value::as_str).filter(|e| crate::code_mode::is_queued_event(e)).filter_map(crate::code_mode::queued_event).collect();
+    }
     if atype == Some("queued_command") {
         let parts: Vec<&str> = match att.get("prompt") {
             Some(Value::Array(blocks)) => blocks
@@ -677,6 +686,9 @@ fn attachment(obj: &Map<String, Value>, uid: &str) -> Vec<ChatEvent> {
         };
         let joined = parts.join("\n");
         let prompt = att.get("prompt").and_then(Value::as_str).unwrap_or(&joined);
+        if crate::code_mode::is_queued_event(prompt) {
+            return crate::code_mode::queued_event(prompt).into_iter().collect();
+        }
         if let Some(stopped) = stopped_agents(prompt, uid, ts(obj)) {
             return stopped;
         }
@@ -724,11 +736,7 @@ fn user(obj: &Map<String, Value>, uid: &str, content: Option<&Value>, resolve: P
     if obj.get("isMeta") == Some(&Value::Bool(true)) {
         return Vec::new();
     }
-    let first_text = match content {
-        Some(Value::String(_)) => content,
-        Some(Value::Array(items)) => first(items, "text").and_then(|b| b.get("text")),
-        _ => None,
-    };
+    let first_text = first_text(content);
     if let Some(a) = agent_msg(first_text, uid) {
         return a;
     }
@@ -736,6 +744,8 @@ fn user(obj: &Map<String, Value>, uid: &str, content: Option<&Value>, resolve: P
         return c;
     }
     match content {
+        // A entrega de script consumida da fila chega como mensagem do usuário.
+        Some(Value::String(s)) if crate::code_mode::is_queued_event(s) => crate::code_mode::queued_event(s).into_iter().collect(),
         Some(Value::String(s)) => user_text(uid, s),
         Some(Value::Array(items)) => user_blocks(obj, uid, items),
         _ => Vec::new(),
@@ -823,6 +833,16 @@ fn stopped_by_taskstop(obj: &Map<String, Value>) -> Option<String> {
     tur.get("task_id").and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string)
 }
 
+/// Primeiro texto do conteúdo de um `tool_result`, em string ou em blocos.
+/// O texto da mensagem, ou o do primeiro bloco de texto.
+fn first_text(content: Option<&Value>) -> Option<&Value> {
+    match content {
+        Some(Value::String(_)) => content,
+        Some(Value::Array(items)) => first(items, "text").and_then(|b| b.get("text")),
+        _ => None,
+    }
+}
+
 fn user_blocks(obj: &Map<String, Value>, uid: &str, items: &[Value]) -> Vec<ChatEvent> {
     let is_type = |it: &&Map<String, Value>, t: &str| it.get("type").and_then(Value::as_str) == Some(t);
     let trs: Vec<_> = items.iter().filter_map(Value::as_object).filter(|it| is_type(it, "tool_result")).collect();
@@ -830,35 +850,41 @@ fn user_blocks(obj: &Map<String, Value>, uid: &str, items: &[Value]) -> Vec<Chat
         let ts = ts(obj);
         // O `toolUseResult` é um por linha: com dois resultados não dá para saber de quem é.
         let single = trs.len() == 1;
-        let mut out: Vec<ChatEvent> = trs
-            .into_iter()
-            .enumerate()
-            .map(|(k, tr)| {
-                let result = match tr.get("content") {
-                    Some(Value::Array(blocks)) => Some(
-                        blocks
-                            .iter()
-                            .filter_map(Value::as_object)
-                            .map(|b| b.get("text").map_or_else(String::new, py::py_str))
-                            .collect::<Vec<_>>()
-                            .join(" "),
-                    ),
-                    None | Some(Value::Null) => None,
-                    Some(other) => Some(py::py_str(other)),
-                };
-                let failed = py::truthy(tr.get("is_error"));
-                ChatEvent {
-                    tool_use_id: tr.get("tool_use_id").and_then(Value::as_str).map(str::to_string),
-                    result,
-                    is_error: Some(failed),
-                    patch: if single && !failed { patch_hunks(obj) } else { None },
-                    bg_agent_id: if single { bg_agent_id(obj) } else { None },
-                    ts,
-                    ..event(ChatKind::ToolResult, sub_id(uid, k))
-                }
-            })
-            .collect();
-        if single && out[0].is_error != Some(true) {
+        let mut out: Vec<ChatEvent> = Vec::new();
+        let mut deliveries = false;
+        for (k, tr) in trs.into_iter().enumerate() {
+            if let Some(evs) = first_text(tr.get("content")).and_then(Value::as_str).and_then(crate::code_mode::delivery_events) {
+                out.extend(evs);
+                deliveries = true;
+                continue;
+            }
+            let mut result = match tr.get("content") {
+                Some(Value::Array(blocks)) => Some(
+                    blocks
+                        .iter()
+                        .filter_map(Value::as_object)
+                        .map(|b| b.get("text").map_or_else(String::new, py::py_str))
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                ),
+                None | Some(Value::Null) => None,
+                Some(other) => Some(py::py_str(other)),
+            };
+            if single && result.as_deref().is_none_or(str::is_empty) && let Some(real) = crate::code_mode::virtual_result(obj) {
+                result = Some(real);
+            }
+            let failed = py::truthy(tr.get("is_error"));
+            out.push(ChatEvent {
+                tool_use_id: tr.get("tool_use_id").and_then(Value::as_str).map(str::to_string),
+                result,
+                is_error: Some(failed),
+                patch: if single && !failed { patch_hunks(obj) } else { None },
+                bg_agent_id: if single { bg_agent_id(obj) } else { None },
+                ts,
+                ..event(ChatKind::ToolResult, sub_id(uid, k))
+            });
+        }
+        if single && !deliveries && out[0].is_error != Some(true) {
             if let Some(stopped) = stopped_by_taskstop(obj) {
                 out.push(ChatEvent {
                     tool_use_id: Some(format!("task:{stopped}")),
@@ -944,6 +970,7 @@ fn assistant(obj: &Map<String, Value>, msg: &Map<String, Value>, uid: &str, item
     for it in items.iter().filter_map(Value::as_object) {
         let id = sub_id(uid, out.len());
         match it.get("type").and_then(Value::as_str) {
+            Some("tool_use") if crate::code_mode::is_poll_call(it) => {}
             Some("tool_use") => out.push(ChatEvent {
                 tool_name: it.get("name").and_then(Value::as_str).map(str::to_string),
                 tool_use_id: it.get("id").and_then(Value::as_str).map(str::to_string),

@@ -43,7 +43,7 @@ fn segment(mark: PlateMark, color: &str, key: &str) -> PlateSegment {
 /// A aba como a barra a desenha: caixa, avatar do agente com o anel, nome e a placa montada na borda de cima.
 fn tab(name: &str, provider: &str, on: bool, pct: f64, plate: Option<Div>, width: f32) -> Div {
     let avatar = chrome::session_avatar(&chrome::AvatarLook::new(provider, None, "idle", false), 20., None).into_any_element();
-    let card = app::tab_frame(on, false, false).w(px(width)).relative()
+    let card = app::tab_frame(on, false, false, false).w(px(width)).relative()
         .child(app::with_context_ring(avatar, Some(pct), 20.))
         .child(app::tab_title(tr_shared(name, &[]), None, false, false, None, None));
     div().relative().flex_shrink_0().child(card).children(plate)

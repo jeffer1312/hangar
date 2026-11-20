@@ -133,6 +133,7 @@ pub fn claude_from_meta(meta: &Value, name: &str, created_at: f64) -> io::Result
         permission_mode: text(meta, "permission_mode").as_deref().and_then(PermissionMode::claude),
         // A seleção de plugins e skills mora no registro de customizações do Rust, pelo id da conversa.
         subagent_model: text(meta, "subagent_model"), customizations: None, jev: meta["jev"] == true,
+        code_mode: meta["code_mode"] == true,
         read_only: meta["read_only"] == true, worktree: None, creator: None, created_at,
         conversation: text(meta, "session_id"),
         name_auto: None, rename_suggestion: None, rename_weak_at: None, rename_dismissed: false,
@@ -171,7 +172,7 @@ pub fn from_sidecars(home: &Path, name: &str) -> io::Result<Option<SessionSpec>>
         account_source: AccountSource::Explicit, model: text(&meta, "model"), effort: text(&meta, "effort"), service_tier: tier(&meta),
         // Modo gravado fora da lista fica ausente: quem reabre recusa em vez de abrir em Full Access.
         permission_mode: text(&meta, "permission_mode").as_deref().and_then(PermissionMode::codex),
-        subagent_model: None, customizations: None, jev: meta["jev"] == true, read_only: meta["read_only"] == true,
+        subagent_model: None, customizations: None, jev: meta["jev"] == true, code_mode: false, read_only: meta["read_only"] == true,
         worktree: None, creator: None, created_at: created(&codex_path), conversation: text(&meta, "thread_id"),
         name_auto: None, rename_suggestion: None, rename_weak_at: None, rename_dismissed: false, hooks_off: false,
     }))

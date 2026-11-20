@@ -378,6 +378,8 @@ pub(super) struct SettingsUi {
     drag: Option<(Point<Pixels>, [f32; 2])>,
     /// Onde ligar o desfoque, aberto pelo botão da linha (o tooltip não chega pelo teclado).
     blur_hint: bool,
+    /// Code Mode já ligado no settings.json do servidor (`GET /api/claude/code-mode`), por conexão; `None` antes de perguntar.
+    code_mode_settings: Option<(u64, bool)>,
     _subscriptions: Vec<Subscription>,
     _disk_watch: Task<()>,
 }
@@ -505,7 +507,7 @@ impl SettingsUi {
         }));
         Self { sliders, fonts, type_picks, custom_sizes, custom_open: Vec::new(),
             accent_picker, tint_picker, search, found: Vec::new(), pick: 0, hit: None, scroll: ScrollHandle::new(),
-            reveal: Rc::new(Cell::new(false)), jump: None, preview: None, live: false, drag: None, blur_hint: false, _subscriptions: subscriptions,
+            reveal: Rc::new(Cell::new(false)), jump: None, preview: None, live: false, drag: None, blur_hint: false, code_mode_settings: None, _subscriptions: subscriptions,
             _disk_watch: watch_disk(window, cx) }
     }
 
@@ -1188,7 +1190,7 @@ pub(super) fn segments_where(id: &'static str, labels: &[String], hints: &[Strin
         .children(labels.iter().enumerate().map(|(n, label)| {
             // Opção que ainda não chegou não mostra escolha nenhuma: o padrão do web pareceria o estado do app.
             let on = n == selected && (any || locked);
-            let enabled = enabled.get(n).copied().unwrap_or(false);
+            let enabled = !locked && enabled.get(n).copied().unwrap_or(false);
             let pick = pick.clone();
             Button::new(SharedString::from(format!("{id}-{n}")))
                 .custom(ButtonCustomVariant::new(cx).color(if on { theme::accent_dim() } else { transparent_black() })
@@ -1200,7 +1202,7 @@ pub(super) fn segments_where(id: &'static str, labels: &[String], hints: &[Strin
                 .when(on, |el| el.bg(theme::accent_dim()))
                 .when(n + 1 < count, |el| el.border_r_1().border_color(theme::border_strong()))
                 .disabled(!enabled).label(label.clone())
-                .when(!enabled && any, |el| el.tooltip(off_note.clone()))
+                .when(!enabled && any && !locked, |el| el.tooltip(off_note.clone()))
                 .when_some(hints.get(n).filter(|_| enabled), |el, hint| el.tooltip(hint.clone()).accessibility_label(hint.clone()))
                 .on_click(cx.listener(move |this, _, window, cx| if enabled && !on { pick(this, n, window, cx) }))
         }))
