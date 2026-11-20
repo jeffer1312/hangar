@@ -137,8 +137,8 @@ fn body_text(body: &str) -> (String, bool) {
     (parts.join("\n"), failed)
 }
 
-/// Quanto do arquivo, antes da entrega, procurar o `REPL` que o leitor não viu.
-const LOOKBACK: u64 = 8 << 20;
+/// Pedaço lido por vez ao procurar, para trás, o `REPL` que o leitor não viu.
+const BLOCK: u64 = 1 << 20;
 /// Entregas lembradas para descartar a repetição: o `Poll`, a fila e o anexo trazem a mesma em sequência.
 const DELIVERED_MAX: usize = 256;
 
@@ -203,22 +203,24 @@ fn dispatched(result: Option<&str>) -> Option<&str> {
     DISPATCHED.captures(result?.trim()).and_then(|c| c.get(1)).map(|m| m.as_str())
 }
 
-/// O último `REPL` que despachou `n` antes de `at`: de trás para frente, em janelas que crescem até `LOOKBACK`,
-/// lendo a linha como o leitor do arquivo a leria.
+/// O último `REPL` que despachou `n` antes de `at`: de trás para frente, um bloco por vez até o começo do
+/// arquivo, lendo a linha como o leitor do arquivo a leria. A linha cortada pelo começo do bloco volta
+/// inteira no bloco seguinte.
 fn find_dispatch(path: &Path, at: u64, n: &str) -> Option<String> {
     let mut file = std::fs::File::open(path).ok()?;
     let needle = format!("(dispatched #{n})\"");
-    let mut window = 64 << 10;
-    loop {
-        let from = at.saturating_sub(window);
+    let mut to = at;
+    let mut carry = Vec::new();
+    while to > 0 {
+        let from = to.saturating_sub(BLOCK);
         file.seek(SeekFrom::Start(from)).ok()?;
         let mut buf = Vec::new();
-        (&mut file).take(at - from).read_to_end(&mut buf).ok()?;
+        (&mut file).take(to - from).read_to_end(&mut buf).ok()?;
+        buf.append(&mut carry);
         let mut end = buf.len();
         while let Some(hit) = memchr::memmem::rfind(&buf[..end], needle.as_bytes()) {
             let start = buf[..hit].iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
             let stop = buf[hit..].iter().position(|&b| b == b'\n').map_or(buf.len(), |i| hit + i);
-            // Linha cortada pelo começo da janela só vale quando a janela começa no arquivo.
             if start > 0 || from == 0 {
                 let line = String::from_utf8_lossy(&buf[start..stop]);
                 if let Some(Value::Object(obj)) = pyjson::loads_lossless(py::strip(&line)) {
@@ -231,11 +233,11 @@ fn find_dispatch(path: &Path, at: u64, n: &str) -> Option<String> {
             }
             end = hit;
         }
-        if from == 0 || window >= LOOKBACK {
-            return None;
-        }
-        window = (window * 4).min(LOOKBACK);
+        buf.truncate(buf.iter().position(|&b| b == b'\n').unwrap_or(buf.len()));
+        carry = buf;
+        to = from;
     }
+    None
 }
 
 #[cfg(test)]
@@ -328,6 +330,19 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("t.jsonl");
         let head = format!("{}\n{}\n", dispatch(2), json!({"type": "user", "uuid": "x", "message": {"role": "user", "content": "outro turno"}}));
+        std::fs::write(&path, &head).unwrap();
+        let mut parser = LineParser::new(Provider::Claude).with_path(&path);
+        let evs = parser.feed(queued("remove", LATE).to_string().as_bytes(), head.len() as u64);
+        assert_eq!(results(&evs).into_iter().map(|r| r.1).collect::<Vec<_>>(), vec![Some("toolu_repl2".to_string())]);
+    }
+
+    #[test]
+    fn a_dispatch_far_back_in_a_big_file_is_still_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.jsonl");
+        // Prints em base64 enchem o arquivo: o despacho fica mais de 8 MiB antes da entrega.
+        let filler = format!("{}\n", json!({"type": "user", "uuid": "f", "message": {"role": "user", "content": "x".repeat(1 << 20)}}));
+        let head = format!("{}\n{}", dispatch(2), filler.repeat(9));
         std::fs::write(&path, &head).unwrap();
         let mut parser = LineParser::new(Provider::Claude).with_path(&path);
         let evs = parser.feed(queued("remove", LATE).to_string().as_bytes(), head.len() as u64);

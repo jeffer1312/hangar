@@ -761,6 +761,10 @@ pub(crate) fn baton_window(row: &SessionRow, home: &Path, claude: &Path) -> Resu
         };
         let provider = Provider::parse(&row.provider).filter(|provider| *provider != Provider::Orq).unwrap_or(Provider::Claude);
         let mut parser = LineParser::new(provider);
+        // O despacho de script anterior à cauda é procurado no próprio arquivo.
+        if !transferred && let Some(path) = row.jsonl.as_deref() {
+            parser = parser.with_path(Path::new(path));
+        }
         let mut repl = crate::transcript::ReplLinks::default();
         let (mut parsed, mut position, mut previous, mut start, mut seen) = (Vec::new(), base, 0., 0., HashSet::new());
         for (index, raw) in rows.iter().enumerate() {
