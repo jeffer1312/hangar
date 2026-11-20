@@ -1638,6 +1638,9 @@ for line in sys.stdin:
         # Como o Codex: a troca de Fast chega também como aviso da thread, que o motor exige antes de conferir.
         send({{"method": "thread/settings/updated", "params": {{"threadId": "thread-new", "threadSettings": {{"serviceTier": msg["params"].get("serviceTier")}}}}}})
         result = {{}}
+    elif method == "thread/settings/update" and "sandboxPolicy" in msg["params"] and os.path.exists(os.path.join(d, "refuse-sandbox")):
+        send({{"id": msg["id"], "error": {{"code": -32600, "message": "sandbox recusado"}}}})
+        continue
     elif method == "turn/start":
         result = {{"turn": {{"id": "turn-1", "status": "inProgress"}}}}
     elif method == "thread/read" and os.path.exists(os.path.join(d, "cut")):
@@ -1835,7 +1838,7 @@ for line in sys.stdin:
     }
 
     #[tokio::test]
-    async fn permission_other_sandbox_respawns_when_idle_and_refuses_when_busy() {
+    async fn permission_other_sandbox_switches_in_the_conversation_when_idle_and_refuses_when_busy() {
         let dir = tempfile::tempdir().unwrap();
         let key = unique_key();
         let registry = lifecycle_session(dir.path(),&key,"Full Access",std::time::Duration::from_secs(5)).await;
@@ -1852,20 +1855,14 @@ for line in sys.stdin:
         until_idle(&handle).await;
         let reply = handle.command(control("perm-idle",OperationKind::SetPermissionMode,json!({"mode":"Ask for approval"}))).await.unwrap();
         assert_eq!(reply.payload,json!({"current":"Ask for approval"}));
-        until("ocioso: processo novo",||recorded(dir.path()).len() >= 2).await;
-        let canos = recorded(dir.path());
-        assert_eq!(canos.len(),2);
-        assert!(matches!(process::liveness(canos[0].pid,&key),process::Liveness::Dead));
-        // O modo é gravado antes do comando novo: o processo novo já nasce no sandbox dele.
-        assert_eq!(sidecar(dir.path())["permission_mode"],"Ask for approval");
-        let cmdline = String::from_utf8_lossy(&std::fs::read(format!("/proc/{}/cmdline",canos[1].pid)).unwrap()).replace('\0'," ");
-        assert!(cmdline.contains("sandbox_mode=\"read-only\""),"{cmdline}");
-        until_ready(&registry,&key).await;
-        let resumed:Vec<Value> = calls(dir.path()).into_iter().filter(|call|call["method"] == "thread/resume").collect();
-        assert_eq!(resumed.last().unwrap()["params"]["sandbox"],"read-only");
-        assert_eq!(resumed.last().unwrap()["params"]["threadId"],"thread-new");
-        // A lista de modos (`GET /codex-permissions`) lê a vista publicada: a vida nova a mostra com o modo novo.
-        let handle = registry.handle(&key,1).await.unwrap();
+        // Na conversa, sem subir outro processo: o mesmo cano segue vivo.
+        let update = calls(dir.path()).into_iter().rfind(|call|call["method"] == "thread/settings/update").expect("troca na conversa");
+        assert_eq!(update["params"],json!({"threadId":"thread-new","approvalPolicy":"on-request","sandboxPolicy":{"type":"readOnly"}}));
+        assert_eq!(starts(dir.path()).len(),1,"nenhum processo novo");
+        assert!(matches!(process::liveness(recorded(dir.path())[0].pid,&key),process::Liveness::Ours));
+        // Gravado no arquivo da sessão: uma subida futura já nasce no sandbox novo.
+        until("modo gravado no arquivo da sessão",||sidecar(dir.path())["permission_mode"] == "Ask for approval").await;
+        // A lista de modos (`GET /codex-permissions`) lê a vista publicada: ela mostra o modo novo.
         tokio::time::timeout(std::time::Duration::from_secs(5),async {
             while handle.snapshot().await.unwrap()["view"]["permission_mode"] != "Ask for approval" { tokio::time::sleep(std::time::Duration::from_millis(20)).await; }
         }).await.expect("vista publicada com o modo novo");
@@ -1879,28 +1876,18 @@ for line in sys.stdin:
     }
 
     #[tokio::test]
-    async fn sandbox_switch_that_fails_to_start_keeps_the_new_mode_for_the_next_life() {
+    async fn sandbox_switch_refused_by_codex_keeps_the_old_mode() {
         let dir = tempfile::tempdir().unwrap();
         let key = unique_key();
         let registry = lifecycle_session(dir.path(),&key,"Full Access",std::time::Duration::from_millis(300)).await;
         let handle = registry.handle(&key,1).await.unwrap();
-        // Sem o `codex` no PATH a subida falha; ele volta antes da religação automática (300 ms).
-        let (codex,hidden) = (dir.path().join("codex"),dir.path().join("codex.off"));
-        std::fs::rename(&codex,&hidden).unwrap();
-        let failed = handle.command(control("perm-1",OperationKind::SetPermissionMode,json!({"mode":"Ask for approval"}))).await;
-        std::fs::rename(&hidden,&codex).unwrap();
-        // `codex_ausente` volta quando o 7l expuser `process::resolve_program`.
-        assert_eq!(failed.err().unwrap().code,"cano_nao_subiu");
-        assert_eq!(sidecar(dir.path())["permission_mode"],"Ask for approval","o modo novo fica gravado para a próxima vida");
-        assert!(matches!(process::liveness(recorded(dir.path())[0].pid,&key),process::Liveness::Dead),"o processo antigo já tinha morrido");
-        // A religação automática sobe com o modo gravado no arquivo, no comando e no `thread/resume`.
-        until("religou depois da falha",||recorded(dir.path()).len() >= 2).await;
-        until_ready(&registry,&key).await;
-        let resumed:Vec<Value> = calls(dir.path()).into_iter().filter(|call|call["method"] == "thread/resume").collect();
-        assert_eq!(resumed.last().unwrap()["params"]["sandbox"],"read-only");
-        let view = handle_view(&registry,&key).await;
-        assert_eq!(view["permission_mode"],"Ask for approval");
-        assert!(view["public_state"]["problema"].is_null(),"a vida nova pronta não carrega o problema da subida que falhou: {}",view["public_state"]);
+        std::fs::write(dir.path().join("refuse-sandbox"),"").unwrap();
+        let reply = handle.command(control("perm-1",OperationKind::SetPermissionMode,json!({"mode":"Ask for approval"}))).await.unwrap();
+        assert!(reply.disposition == Disposition::Rejected,"{:?}",reply.payload);
+        assert_eq!(reply.payload,json!({"error":"sandbox recusado"}));
+        assert!(sidecar(dir.path()).get("permission_mode").is_none_or(|mode|mode == "Full Access"),"nada novo gravado");
+        assert_eq!(handle_view(&registry,&key).await["permission_mode"],"Full Access");
+        assert_eq!(starts(dir.path()).len(),1,"nenhum processo novo");
         cleanup(&registry,&key,dir.path()).await;
     }
 

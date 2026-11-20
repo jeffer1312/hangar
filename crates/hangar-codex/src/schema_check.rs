@@ -12,6 +12,7 @@ fn slice_path() -> std::path::PathBuf {
 /// Tipos nossos sem nome no schema → definições do schema que eles representam.
 const LOCAL_NAMES:&[(&str,&[&str])] = &[
     ("CollaborationSettings",&["Settings"]),
+    ("SandboxPolicyKind",&["SandboxPolicy"]),
 ];
 
 fn schema_names(ours:&str) -> Vec<String> {

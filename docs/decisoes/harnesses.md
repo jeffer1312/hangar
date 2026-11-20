@@ -365,6 +365,15 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   entram no mesmo workflow `codex-schema` (`hangar-codex-transfer/src/schema_check.rs`). O
   catálogo de modelos é pedido com a versão instalada (`client_version`), nunca com uma fixa: a
   lista muda com ela. Ver [transferência sem versão fixa](#transferência-sem-versão-fixa-do-codex-19112026).
+- **Codex sem terminal troca o sandbox na conversa, sem subir o processo de novo.** O
+  `thread/settings/update` leva `sandboxPolicy` e `approvalPolicy`; o modo só vale e só é gravado
+  no arquivo da sessão com a resposta do Codex. Vale do próximo turno em diante, então a troca com
+  turno rodando ou pedido pendente continua recusada (`erro_permissao_ocupada`). Nenhum turno sai
+  com a troca pendente; troca sem resposta no prazo ou perdida na queda conta como não feita, e o
+  modo gravado é reaplicado antes do próximo turno (confirmação tardia não muda o modo). Reaplicação
+  que falha segura os turnos e tenta de novo com espera; na terceira falha o processo sobe de novo,
+  já com o modo gravado. Ver
+  [permissão do Codex sem terminal troca ao vivo](#permissão-do-codex-sem-terminal-troca-ao-vivo-19112026).
 - **A rota do terminal Claude só recebe sessão Claude.** `route_sync`, `run_admin` e
   `answer_sync` abrem `prepare_session(name, "claude")`, que suspende a escrita sem vínculo
   Claude nem pane. Rota que atende outros provedores filtra pelo provedor antes (`/answer`,
@@ -1144,6 +1153,21 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   também recebe `success`. Só o `task_updated` (`killed`) ou o `task_notification` (`stopped`) daquele id
   prova a parada. Matar pelo pid não é caminho: a árvore de processos muda de um sistema para outro e o
   modelo não fica sabendo. Ver [parar tarefa do Claude](#parar-tarefa-do-claude-13112026).
+
+## Permissão do Codex sem terminal troca ao vivo (19/11/2026)
+
+Antes, trocar o sandbox de uma sessão sem terminal reiniciava o processo (`Effect::Respawn`): a
+medição de setembro, na 0.153, dizia que ele não trocava por RPC. Medido no Codex 0.170.0 com a
+conta padrão real, numa pasta temporária e numa thread `ephemeral` (fora do histórico), com
+plugins e hooks desligados: thread iniciada em só leitura não criou `a.txt`; depois de
+`thread/settings/update {sandboxPolicy:{type:"dangerFullAccess"}, approvalPolicy:"never"}` o turno
+seguinte criou `b.txt` (comando com código 0); de volta a `{type:"readOnly"}`, o turno seguinte não
+criou `c.txt`. A resposta do `thread/settings/update` vem vazia.
+
+A troca vale para os turnos que começam depois dela, não para o que está rodando: na primeira
+tentativa, um turno começado com acesso total continuou com ele depois da volta a só leitura e
+criou o arquivo. Por isso a recusa com turno rodando ou pedido pendente continua. O terminal não
+passa por aqui: a TUI manda o próprio sandbox e o relançamento dele é outro caminho.
 
 ## Token no app-server do Codex com terminal (19/11/2026)
 
@@ -4197,9 +4221,10 @@ restart do backend. Medido:
   sidecar.
 - `approval_policy = "untrusted"` foi removido na 0.154: o app-server sai na hora com `Error:
   approval_policy = "untrusted" is no longer supported`. Só restam `on-request` e `never`, por
-  isso os três modos do app se distinguem pelo sandbox — e sandbox não troca ao vivo por RPC
-  (`codex_permissions.py`): fica no `-c` da subida e trocar de modo reabre o app-server ocioso
-  com `thread/resume`. `approvalPolicy` vai em cada `turn/start`.
+  isso os três modos do app se distinguem pelo sandbox. Nesta medição (0.153) o sandbox não trocava
+  ao vivo por RPC e trocar de modo reabria o app-server ocioso; desde 19/11/2026 a troca é pelo
+  `thread/settings/update` (ver [permissão do Codex sem terminal troca ao vivo](#permissão-do-codex-sem-terminal-troca-ao-vivo-19112026)).
+  `approvalPolicy` vai em cada `turn/start`.
 - Sonda real: turno com aprovação pendente → `kill -9` no backend → religou no mesmo cano
   (`pendentes=1` no snapshot) → `Permitir` pelo app → o comando rodou e o turno fechou. Sem
   resposta, o pedido ficou em aberto por 16s sem ninguém decidir por ele.
