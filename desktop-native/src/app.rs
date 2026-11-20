@@ -5551,11 +5551,6 @@ impl Hangar {
         // A revisão da branch (PR ou MR), quando o servidor acha uma: o chip abre a aba dela no git.
         let review_chip = if session.is_some() { self.review_chip(cx) } else { None };
         let cache = crate::chat::last_cache(&self.chat.events).filter(|_| readable);
-        // Conversa nova: com a aba Contexto à vista, o contexto já está nela e o rodapé não repete o anel.
-        let context_in_panel = appearance::conversation_beta() && self.side_shown(window) && !self.subagent_tab_open()
-            && !self.side_menu_shown() && self.side_tab() == appearance::SideTab::Context;
-        // Sem o anel, o cartão do contexto ficaria preso a uma âncora que não existe mais.
-        if context_in_panel { self.context_card = false; }
         let footer = (repo.is_some() || ctx_pct.is_some() || session.is_some() || cache.is_some()).then(|| {
             let branch = status.as_ref().and_then(|s| s.branch.clone()).or_else(|| session.as_ref().and_then(|s| s.branch.clone())).unwrap_or_default();
             let dirty = status.as_ref().and_then(|s| s.dirty) == Some(true);
@@ -5603,13 +5598,12 @@ impl Hangar {
                     .on_click(cx.listener(|this, _, window, cx| this.open_git_panel(window, cx)))).into_any_element()
             } else { place.into_any_element() };
             // O recuo negativo põe o texto do último item na mesma borda da faixa da pasta, do outro lado.
-            let rings = !context_in_panel;
             let usage = div().flex_shrink_0().ml_auto().mr(px(-6.)).flex().items_center().gap(px(2.))
                 .when_some(cache, |el, cache| el.child(cache_chip(cache)))
-                .when(rings, |el| el.child(popup::anchor(div(), "composer-ctx").child(ring("composer-ctx", tr("ring_context"), ctx_pct, self.context_card)
+                .child(popup::anchor(div(), "composer-ctx").child(ring("composer-ctx", tr("ring_context"), ctx_pct, self.context_card)
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_context_card(cx)))))
                 .child(popup::anchor(div(), crate::tour::anchors::COMPOSER_ACCOUNT).child(ring("composer-account", self.focused_account().map(|(_, name, _)| name).unwrap_or_else(|| tr("ring_account")), account, self.accounts.card)
-                    .on_click(cx.listener(|this, _, _, cx| this.toggle_usage_card(cx))))))
+                    .on_click(cx.listener(|this, _, _, cx| this.toggle_usage_card(cx)))))
                 .when_some(cost, |el, cost| el.child(div().text_color(theme::faint()).opacity(0.6).child("·"))
                     .child(div().h(px(22.)).px(px(6.)).flex().items_center().text_color(theme::muted()).child(cost)));
             // Coluna estreita (painel direito aberto): os anéis descem para a linha de baixo em vez de vazar para baixo do
@@ -7286,18 +7280,11 @@ pub(crate) fn cache_chip_at(cache: crate::chat::LastCache, now: f64) -> Stateful
         (Some(_), true) => (theme::warning(), theme::warning()),
         (Some(_), false) => (theme::muted(), theme::success()),
     };
-    // Conversa nova: a frase diz o que o tempo é, sem o ponto verde que lia como "saudável"; âmbar só perto do fim.
-    let beta = crate::appearance::conversation_beta();
-    let text = match (&label, beta) {
-        (Some(label), true) => tr("beta_cache_left").replace("{label}", label),
-        (None, true) => tr("beta_cache_expired"),
-        (label, false) => label.clone().unwrap_or_else(|| web("composer_expirou", &[])),
-    };
     div().id("composer-cache").flex_shrink_0().h(px(22.)).px(px(6.)).flex().items_center().gap(px(4.))
-        .when(!beta, |el| el.font_family(theme::MONO)).text_xs().text_color(ink)
+        .font_family(theme::MONO).text_xs().text_color(ink)
         .tooltip(move |window, cx| gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(window, cx))
-        .when(!beta, |el| el.child(div().size(px(6.)).rounded_full().bg(dot)))
-        .child(text)
+        .child(div().size(px(6.)).rounded_full().bg(dot))
+        .child(label.unwrap_or_else(|| web("composer_expirou", &[])))
 }
 
 /// "Trabalhou por 7s · 14:59"; conversa aberta no meio do turno não sabe quando ele começou, e fica só a hora.
