@@ -829,6 +829,8 @@ impl Hangar {
         let repo = status.and_then(|s| s.repo.clone());
         if repo.is_none() && session.git_dirty.is_none() && session.git_added.is_none() { return None; }
         if appearance::conversation_beta() { return Some(self.render_beta_project(&session, key, cx)); }
+        // Desligada a conversa nova, a lista que ela leu sozinha não vira a lista aberta pelo botão.
+        if self.side.beta_files_sig.take().is_some() { self.side.files = None; self.side.diff = None; }
         let mut body = div().flex().flex_col().gap_2().child(chrome::section_label(tr("side_repository")));
         if let Some(repo) = repo {
             let branch = status.and_then(|s| s.branch.clone()).unwrap_or_default();
