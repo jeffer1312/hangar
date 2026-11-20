@@ -168,11 +168,15 @@ pub fn install(data: &[u8], expected_sha256: &str, member: &str, dest: &Path) ->
     std::fs::create_dir_all(parent).map_err(write)?;
     // Permissão posta antes de publicar: o programa só aparece no lugar final já executável e inteiro.
     let part = parent.join(format!(".{}.part", dest.file_name().expect("destino tem nome").to_string_lossy()));
-    std::fs::write(&part, &content).map_err(write)?;
-    #[cfg(unix)]
-    std::fs::set_permissions(&part, std::os::unix::fs::PermissionsExt::from_mode(0o755)).map_err(write)?;
-    std::fs::rename(&part, dest).map_err(write)?;
-    Ok(())
+    let published = (|| {
+        std::fs::write(&part, &content)?;
+        #[cfg(unix)]
+        std::fs::set_permissions(&part, std::os::unix::fs::PermissionsExt::from_mode(0o755))?;
+        std::fs::rename(&part, dest)
+    })();
+    // Falhou no meio: o `.part` não fica para trás ocupando disco.
+    if published.is_err() { let _ = std::fs::remove_file(&part); }
+    published.map_err(write)
 }
 
 /// O programa já baixado serve: existe, não está vazio e (no Unix) é executável. Senão, baixa de novo.

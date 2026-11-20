@@ -119,7 +119,10 @@ fn base_url(ctx: &Context) -> Result<String, Failure> {
     match config::read(&ctx.paths.home) {
         Ok(Some(config)) => config.base_url.map_err(|_| Failure::new("cliproxy_porta_invalida",
             format!("{}: server.port (ou port) fora de 1–65535", ctx.paths.config().display()))),
-        _ => Ok(DEFAULT_BASE.into()),
+        Ok(None) => Ok(DEFAULT_BASE.into()),
+        // Config que existe e não se lê não vira a porta padrão: a instalação olharia a porta errada.
+        Err(config::ReadError::Io(e)) => Err(Failure::new("cliproxy_config_ilegivel", e.to_string())),
+        Err(config::ReadError::InvalidYaml) => Err(Failure::new("cliproxy_config_yaml_invalido", "config.yaml com YAML inválido")),
     }
 }
 
@@ -152,12 +155,23 @@ async fn wait_ours(base: &str, expected: Option<&semver::Version>) -> Result<(),
 
 /// O config que a unit externa passa ao proxy, com `%h`/`$HOME` resolvidos; outro que não o lido pelo Hangar
 /// deixa a configuração manual em vez de completar um arquivo que o proxy nem lê.
-fn external_config(unit: Option<&std::path::Path>, home: &std::path::Path) -> Option<std::path::PathBuf> {
-    let text = std::fs::read_to_string(unit?).ok()?;
-    let raw = detect::unit_config(&text)?;
+fn external_config(unit: Option<&std::path::Path>, home: &std::path::Path) -> Result<Option<std::path::PathBuf>, Failure> {
+    let Some(unit) = unit else { return Ok(None) };
+    // Unit que não se lê: não dá para saber qual config o proxy usa, e completar o nosso seria às cegas.
+    let text = std::fs::read_to_string(unit)
+        .map_err(|e| Failure::new("cliproxy_config_manual", format!("não consegui ler {}: {e}", unit.display())))?;
+    let Some(raw) = detect::unit_config(&text) else { return Ok(None) };
     let home = home.to_string_lossy();
     let expanded = raw.to_string_lossy().replace("%h", &home).replace("${HOME}", &home).replace("$HOME", &home);
-    Some(std::path::PathBuf::from(expanded))
+    Ok(Some(std::path::PathBuf::from(expanded)))
+}
+
+/// Mesmo arquivo, mesmo por atalho: compara os caminhos resolvidos quando os dois existem.
+fn same_file(a: &std::path::Path, b: &std::path::Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
+    }
 }
 
 pub fn current(paths: &Paths) -> Install {
@@ -169,7 +183,7 @@ pub async fn install(ctx: &Context, progress: &(dyn Fn(Step) + Send + Sync)) -> 
     let (tag, binary) = match current(&ctx.paths) {
         Install::External { unit, .. } => {
             progress(Step::Config);
-            if let Some(other) = external_config(unit.as_deref(), &ctx.paths.home).filter(|c| *c != ctx.paths.config()) {
+            if let Some(other) = external_config(unit.as_deref(), &ctx.paths.home)?.filter(|c| !same_file(c, &ctx.paths.config())) {
                 return Err(Failure::new("cliproxy_config_manual",
                     format!("o serviço do proxy lê {}, não {}", other.display(), ctx.paths.config().display())));
             }
@@ -344,12 +358,22 @@ mod tests {
         let unit = home.path().join("cli-proxy-api.service");
         let ours = crate::config::path(home.path());
         std::fs::write(&unit, "[Service]\nExecStart=/usr/bin/cli-proxy-api --config %h/.cli-proxy-api/config.yaml\n").unwrap();
-        assert_eq!(external_config(Some(&unit), home.path()), Some(ours.clone()), "a unit do AUR lê o mesmo arquivo");
+        assert_eq!(external_config(Some(&unit), home.path()), Ok(Some(ours.clone())), "a unit do AUR lê o mesmo arquivo");
         std::fs::write(&unit, "[Service]\nExecStart=/usr/bin/cli-proxy-api --config /etc/cliproxy/config.yaml\n").unwrap();
-        assert_eq!(external_config(Some(&unit), home.path()), Some(std::path::PathBuf::from("/etc/cliproxy/config.yaml")));
+        assert_eq!(external_config(Some(&unit), home.path()), Ok(Some(std::path::PathBuf::from("/etc/cliproxy/config.yaml"))));
         std::fs::write(&unit, "[Service]\nExecStart=/usr/bin/cli-proxy-api\n").unwrap();
-        assert_eq!(external_config(Some(&unit), home.path()), None, "sem --config o proxy lê o padrão");
-        assert_eq!(external_config(None, home.path()), None);
+        assert_eq!(external_config(Some(&unit), home.path()), Ok(None), "sem --config o proxy lê o padrão");
+        assert_eq!(external_config(None, home.path()), Ok(None));
+        let unreadable = external_config(Some(&home.path().join("sumiu.service")), home.path());
+        assert_eq!(unreadable.map_err(|f| f.code), Err("cliproxy_config_manual"), "unit ilegível não vira o config padrão");
+    }
+
+    #[test]
+    fn an_unreadable_config_never_becomes_the_default_port() {
+        let home = tempfile::tempdir().unwrap();
+        // Uma pasta no lugar do config.yaml: existe e não se lê.
+        std::fs::create_dir_all(crate::config::path(home.path())).unwrap();
+        assert_eq!(base_url(&context(home.path())).map_err(|f| f.code), Err("cliproxy_config_ilegivel"));
     }
 
     #[test]
