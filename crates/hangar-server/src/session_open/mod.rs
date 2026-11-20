@@ -194,6 +194,9 @@ pub struct SessionOpenRequest {
     pub permission_mode: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subagent_model: Option<String>,
+    /// Liga o Code Mode experimental do Claude Code (`CLAUDE_CODE_EXPERIMENTAL_CODE_MODE`); só vale para o Claude.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub code_mode: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claude_customizations: Option<ClaudeCustomizations>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -349,6 +352,9 @@ pub struct SessionSpec {
     pub subagent_model: Option<String>,
     pub customizations: Option<ClaudeCustomizations>,
     pub jev: bool,
+    /// Code Mode experimental do Claude Code; registro anterior ao campo = desligado.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub code_mode: bool,
     pub read_only: bool,
     pub worktree: Option<WorktreeSpec>,
     pub creator: Option<String>,

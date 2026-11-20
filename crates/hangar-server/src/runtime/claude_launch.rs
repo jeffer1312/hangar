@@ -176,6 +176,7 @@ pub fn plan(spec: &SessionSpec, meta: &Value, ctx: &Context) -> Result<Launch, R
         env.insert("CLAUDE_CONFIG_DIR".into(), dir);
     }
     if let Some(model) = &spec.subagent_model { env.insert("CLAUDE_CODE_SUBAGENT_MODEL".into(), model.clone()); }
+    if spec.code_mode { env.insert(crate::session_open::claude::CODE_MODE_ENV.into(), "1".into()); }
     env.extend(crate::session_open::claude::jev_pairs(spec.jev, ctx.runtime_config));
     if hooks { env.insert("CLAUDE_CODE_ENABLE_FUNCTION_HOOKS".into(), "1".into()); }
     Ok(Launch { program, env })

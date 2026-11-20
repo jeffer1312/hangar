@@ -15,6 +15,7 @@ mod dictation_pill;
 mod login_browser;
 mod memory_dream;
 mod new_chat_mode;
+mod new_conversation;
 mod no_project;
 mod password_vault;
 mod plugins;
@@ -97,6 +98,7 @@ pub fn animation(name: &str) -> Option<NewsAnimation> {
         "revisao-do-trabalho" => Some(work_review::render),
         "cliproxy-assistente" => Some(cliproxy_wizard::render),
         "velocidade-ultra-fast" => Some(speed_choice::render),
+        "conversa-nova" => Some(new_conversation::render),
         _ => None,
     }
 }

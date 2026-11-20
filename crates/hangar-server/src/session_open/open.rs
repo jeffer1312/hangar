@@ -646,7 +646,7 @@ pub(crate) fn headless_sidecar(spec: &SessionSpec, sid: &str, previous_non_plan:
         "name": spec.name, "provider": "claude", "headless": true, "key": spec.key, "cwd": spec.cwd, "session_id": sid,
         "config_dir": spec.account.config_dir(), "engine": engine, "model": spec.model, "effort": spec.effort,
         "context_window": context_window, "permission_mode": spec.permission_mode.map(PermissionMode::name),
-        "previous_non_plan": previous_non_plan.map(PermissionMode::name), "subagent_model": spec.subagent_model, "jev": spec.jev,
+        "previous_non_plan": previous_non_plan.map(PermissionMode::name), "subagent_model": spec.subagent_model, "code_mode": spec.code_mode, "jev": spec.jev,
     });
     if let Some(tier) = spec.service_tier { meta["service_tier"] = json!(tier.name()); }
     if let Some(settings) = settings { meta["claude_settings"] = settings.clone(); }

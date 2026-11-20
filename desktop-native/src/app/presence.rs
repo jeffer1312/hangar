@@ -148,6 +148,10 @@ impl Hangar {
         };
         let pc = mode == "pc";
         let (label, tip) = if pc { (tr("presence_pc"), tr("presence_tip_pc")) } else { (tr("presence_away"), tr("presence_tip_away")) };
+        // Conversa nova: o chip diz que é sobre avisos, e não sobre a máquina da sessão.
+        let label = if crate::appearance::conversation_beta() {
+            tr(if pc { "beta_presence_pc" } else { "beta_presence_away" })
+        } else { label };
         Some(Button::new("topbar-presence").ghost().small().h(px(26.)).px(px(8.)).rounded_full()
             .child(div().flex().items_center().gap(px(6.)).text_size(px(12.5))
                 .child(chrome::small_icon(if pc { IconName::Monitor } else { IconName::Smartphone }, 14., theme::muted()))

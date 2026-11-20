@@ -441,7 +441,8 @@ impl SubConversation {
             let live = folded.iter().rev().find(|t| running(t));
             let title = term::fold_title(&self.events, &calls, &folded_kinds, live.is_some());
             let toggle = key.clone();
-            let mut block = vec![term::fold_header(SharedString::from(format!("sub-{key}")), title, open, live.is_some(),
+            let failed = folded.iter().filter(|t| t.result.is_some_and(|r| self.events[r].is_error == Some(true))).count();
+            let mut block = vec![term::fold_header(SharedString::from(format!("sub-{key}")), title, open, live.is_some(), failed,
                 cx.listener(move |this, _, _, cx| this.toggle(toggle.clone(), cx)))];
             if !open {
                 if let Some(tool) = live {

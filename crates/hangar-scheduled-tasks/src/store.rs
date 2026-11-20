@@ -481,6 +481,7 @@ fn validate(input: &TaskInput) -> Result<(), Error> {
                 "subagent_model",
                 "claude_customizations",
                 "jev",
+                "code_mode",
                 "omp_profile",
                 "read_only",
                 "headless",
