@@ -29,6 +29,8 @@ vi.mock('./FolderBranchAnimation', () => ({ FolderBranchAnimation: () => null })
 vi.mock('./NoProjectAnimation', () => ({ NoProjectAnimation: () => null }));
 vi.mock('./SessionVaultAnimation', () => ({ SessionVaultAnimation: () => null }));
 vi.mock('./ConnectAnimation', () => ({ ConnectAnimation: () => null }));
+vi.mock('./CliproxyWizardAnimation', () => ({ CliproxyWizardAnimation: () => null }));
+vi.mock('./SpeedChoiceAnimation', () => ({ SpeedChoiceAnimation: () => null }));
 vi.mock('./WorktreeFreshAnimation', () => ({ WorktreeFreshAnimation: () => null }));
 vi.mock('./ScheduledTasksAnimation', () => ({ ScheduledTasksAnimation: () => null }));
 vi.mock('./PluginsAnimation', () => ({ PluginsAnimation: () => null }));
