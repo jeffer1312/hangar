@@ -1436,9 +1436,13 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
         }
         // Os efeitos da parada (diário, estado sem turno) já saíram: o ator termina como fechado.
         if sidecar_gone {
-            // A vista da parada ia por um `Job::View`, que o fim do ator corta: o canal recebe o estado final aqui.
+            // A vista da parada ia por um `Job::View`, que o fim do ator corta: os dois canais recebem o estado final aqui.
             let view = engine.view();
-            live.update(|state|state.public_state = view["public_state"].clone());
+            if view != durable_view {
+                live.update(|state|state.public_state = view["public_state"].clone());
+                publish(&events,&target,&mut revision,"view",view.clone());
+                publish(&events,&target,&mut revision,"state",view["public_state"].clone());
+            }
             break;
         }
         while let Some((attempt,result))=next_current_write(&mut prepared_writes,&mut next_write,&mut attempts,target.generation) {
