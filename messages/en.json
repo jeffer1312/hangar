@@ -5168,6 +5168,7 @@
   "native_news_code_comment_sample": "could this be a constant?",
   "native_file_show_code": "Code",
   "native_file_show_table": "Table",
+  "native_file_table_truncated": "The table shows the first 200,000 rows; the code view has the whole file.",
   "native_file_table_empty": "This table is empty.",
   "native_artifacts_title": "Conversation artifacts",
   "native_artifacts_count": "Artifacts · {n}",

@@ -6,10 +6,12 @@ const MAX_COLUMNS: usize = 1024;
 const MAX_CELL: usize = 1024;
 const ROW_HEIGHT: f32 = 29.;
 const NUMBER_WIDTH: f32 = 56.;
+/// Linhas de dados que a tabela guarda: além disso a memória cresceria por registro; o código tem o arquivo inteiro.
+const MAX_ROWS: usize = 200_000;
 /// Acima disso a tabela não é montada: o arquivo abre como texto, que é leve.
 pub(super) const TABLE_MAX_BYTES: usize = 32 * 1024 * 1024;
 
-pub(super) struct TableData { header: Vec<String>, rows: Vec<Vec<String>>, widths: Vec<f32>, numeric: Vec<bool> }
+pub(super) struct TableData { header: Vec<String>, rows: Vec<Vec<String>>, widths: Vec<f32>, numeric: Vec<bool>, truncated: bool }
 
 pub(super) fn delimiter(path: &str) -> Option<char> {
     match crate::composer::extension(path).as_str() {
@@ -24,11 +26,15 @@ pub(super) fn delimiter(path: &str) -> Option<char> {
 pub(super) fn parse(text: &str, delim: char) -> TableData {
     let (mut rows, mut row, mut field) = (Vec::new(), Vec::new(), String::new());
     let (mut quoted, mut chars, mut len) = (false, text.chars().peekable(), 0usize);
+    // Um registro começou mesmo que o campo fique vazio (`""`): o último registro sem quebra final não se perde.
+    let (mut started, mut truncated) = (false, false);
     let push = |field: &mut String, row: &mut Vec<String>, len: &mut usize| {
         if row.len() < MAX_COLUMNS { row.push(std::mem::take(field)); } else { field.clear(); }
         *len = 0;
     };
     while let Some(ch) = chars.next() {
+        if rows.len() > MAX_ROWS { truncated = true; break; }
+        started = true;
         if quoted {
             if ch == '"' {
                 if chars.peek() == Some(&'"') { chars.next(); } else { quoted = false; continue; }
@@ -39,12 +45,13 @@ pub(super) fn parse(text: &str, delim: char) -> TableData {
             if ch == '\r' && chars.peek() == Some(&'\n') { chars.next(); }
             push(&mut field, &mut row, &mut len);
             rows.push(std::mem::take(&mut row));
+            started = false;
             continue;
         }
         if len < MAX_CELL { field.push(if ch == '\n' || ch == '\r' { ' ' } else { ch }); }
         len += 1;
     }
-    if !field.is_empty() || !row.is_empty() { push(&mut field, &mut row, &mut len); rows.push(row); }
+    if started && !truncated { push(&mut field, &mut row, &mut len); rows.push(row); }
     let mut rows = rows.into_iter();
     let header = rows.next().unwrap_or_default();
     let rows: Vec<Vec<String>> = rows.collect();
@@ -59,7 +66,7 @@ pub(super) fn parse(text: &str, delim: char) -> TableData {
         let mut cells = rows.iter().take(200).filter_map(|row| row.get(col)).map(|cell| cell.trim()).filter(|cell| !cell.is_empty()).peekable();
         cells.peek().is_some() && cells.all(|cell| cell.parse::<f64>().is_ok())
     }).collect();
-    TableData { header, rows, widths, numeric }
+    TableData { header, rows, widths, numeric, truncated }
 }
 
 fn cell(text: &str, width: f32, numeric: bool) -> Div {
@@ -86,8 +93,13 @@ impl Hangar {
                 .children(rows.widths.iter().enumerate().map(|(col, width)| cell(rows.rows[ix].get(col).map_or("", String::as_str), *width, rows.numeric[col]))))
                 .collect::<Vec<_>>()
         })).flex_1();
-        div().id("file-table").size_full().overflow_x_scroll().text_size(px(12.))
-            .child(div().w(px(total)).h_full().flex().flex_col().child(header).child(list))
+        let table = div().id("file-table").flex_1().min_h_0().overflow_x_scroll().text_size(px(12.))
+            .child(div().w(px(total)).h_full().flex().flex_col().child(header).child(list));
+        div().size_full().flex().flex_col()
+            .when(data.truncated, |el| el.child(div().flex_shrink_0().px_3().py(px(6.)).border_b_1()
+                .border_color(theme::warning().opacity(0.2)).bg(theme::warning().opacity(0.08))
+                .text_size(px(11.)).text_color(theme::warning_text()).child(tr("file_table_truncated"))))
+            .child(table)
             .into_any_element()
     }
 }
@@ -103,6 +115,16 @@ mod tests {
         assert_eq!(data.rows, [vec!["Silva, Ana".to_owned(), "disse \"oi\" de novo".to_owned()], vec!["B".to_owned(), String::new()]]);
         assert_eq!(data.widths.len(), 2);
         assert_eq!(parse("a,b\n1.5,x\n,y\n20,z", ',').numeric, [true, false]);
+    }
+
+    #[test]
+    fn last_record_with_an_empty_quoted_field_is_kept_once() {
+        assert_eq!(parse("a\n\"\"", ',').rows, [vec![String::new()]]);
+        assert_eq!(parse("a\n\"\"\n", ',').rows, [vec![String::new()]]);
+        assert!(!parse("a\n1", ',').truncated);
+        let big = parse(&"x\n".repeat(super::MAX_ROWS + 10), ',');
+        assert!(big.truncated);
+        assert!(big.rows.len() <= super::MAX_ROWS + 1);
     }
 
     #[test]

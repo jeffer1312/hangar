@@ -18,7 +18,8 @@ pub(super) struct LineComments {
     area: Rc<Cell<Bounds<Pixels>>>,
 }
 
-struct Draft { start: u32, end: u32, input: Entity<TextareaState>, _keys: Subscription }
+/// `text` é o trecho como estava ao abrir o cartão: recarregar o arquivo antes de enviar não troca o que foi comentado.
+struct Draft { start: u32, end: u32, text: String, input: Entity<TextareaState>, _keys: Subscription }
 
 impl LineComments {
     pub(super) fn new(editor: &Entity<EditorState>, cx: &mut App) -> Self {
@@ -45,7 +46,11 @@ fn in_gutter(editor: &EditorState, position: Point<Pixels>, line: u32) -> bool {
     let Some(bounds) = editor.text_bounds() else { return false };
     let start = editor.text().line_start_offset(line as usize);
     let Some(text_x) = editor.range_to_bounds(&(start..start)).map(|b| b.origin.x) else { return false };
-    position.x >= bounds.origin.x && position.x < text_x - px(FOLD_STRIP)
+    // O texto rola na horizontal e a margem fica parada: a margem começa onde o texto estaria sem a rolagem (o
+    // deslocamento é negativo quando rolado), e a largura dela não muda com a rolagem.
+    let left = bounds.origin.x - editor.scroll_offset().x;
+    let gutter = text_x - bounds.origin.x;
+    position.x >= left && position.x < left + gutter - px(FOLD_STRIP)
 }
 
 /// Do começo da primeira linha ao fim da última, sem a quebra final.
@@ -115,6 +120,7 @@ impl Hangar {
         let (start, end) = (anchor.min(line), anchor.max(line));
         select_lines(&editor, start, end, cx);
         let range = lines_range(editor.read(cx), start, end);
+        let text = editor.read(cx).text().slice(range.clone()).to_string();
         if let Some(doc) = self.comment_doc(id) {
             doc.comment.selected.set(vec![RangeDecoration::new(range).with_style(RangeDecorationStyle::Fill).with_color(theme::accent().opacity(0.18))], cx);
         }
@@ -123,7 +129,7 @@ impl Hangar {
             if let InputEvent::PressEnter { secondary: true, .. } = event { this.submit_line_comment(id, window, cx); }
         });
         input.update(cx, |state, cx| state.focus(window, cx));
-        if let Some(doc) = self.comment_doc(id) { doc.comment.draft = Some(Draft { start, end, input, _keys: keys }); }
+        if let Some(doc) = self.comment_doc(id) { doc.comment.draft = Some(Draft { start, end, text, input, _keys: keys }); }
         cx.notify();
     }
 
@@ -148,8 +154,7 @@ impl Hangar {
         let Some(draft) = doc.comment.draft.as_ref() else { return };
         let comment = draft.input.read(cx).value().trim().to_owned();
         if comment.is_empty() { return; }
-        let (start, end) = (draft.start, draft.end);
-        let text = { let state = doc.editor.read(cx); state.text().slice(lines_range(state, start, end)).to_string() };
+        let (start, end, text) = (draft.start, draft.end, draft.text.clone());
         doc.comment.draft = None;
         doc.comment.selected.clear(cx);
         let editor = doc.editor.clone();

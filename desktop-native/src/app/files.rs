@@ -97,6 +97,8 @@ struct Document {
     comment: comments::LineComments,
     /// CSV e TSV: a tabela da leitura; o código fica no editor.
     table: Option<Arc<table::TableData>>,
+    /// O texto mudou no editor depois de a tabela ser montada: ela é refeita ao voltar para a tabela.
+    table_stale: bool,
 }
 
 impl Document {
@@ -377,8 +379,10 @@ impl Hangar {
                 if matches!(event, InputEvent::Change) {
                     if let Some(tab) = this.files.tabs.iter_mut().find(|tab| tab.id == id) {
                         if let Some(Ok(doc)) = &mut tab.content {
-                            doc.dirty = doc.editor.read(cx).value().as_ref() != doc.base.text;
+                            // Arquivo grande é só leitura e não guarda o texto em `base`: nunca fica "não salvo".
+                            doc.dirty = !doc.large() && doc.editor.read(cx).value().as_ref() != doc.base.text;
                             doc.saved = None;
+                            if doc.table.is_some() && doc.dirty { doc.table_stale = true; }
                             if let Some(view) = &doc.markdown {
                                 let text = doc.editor.read(cx).value().to_string();
                                 view.update(cx, |view, cx| view.set_text(&text, cx));
@@ -405,7 +409,7 @@ impl Hangar {
             });
             let doc = Document { editor, base: content, saving: false, dirty: false, saved: None, error: None, markdown, _changed: changed,
                 reader_images: Default::default(), _cursor: cursor, _markdown_changed: markdown_changed, cursor: Position::new(0, 0), poll_error: None,
-                read_seq: 0, checking: false, reloading: false, disk_changed: false, close_after_save: false, large_size, comment, table };
+                read_seq: 0, checking: false, reloading: false, disk_changed: false, close_after_save: false, large_size, comment, table, table_stale: false };
             doc.editor.update(cx, |state, cx| state.set_readonly(!doc.editable(), cx));
             doc
         }).map_err(|error| match error.status {
@@ -755,7 +759,14 @@ impl Hangar {
                 .when(doc.table.is_some(), |el| el.child(Button::new("file-table-toggle").ghost().xsmall()
                     .label(tr(if tab.reader.mode.reading() { "file_show_code" } else { "file_show_table" }))
                     .on_click(cx.listener(|this, _, window, cx| {
-                        let reading = this.files.tabs[this.files.active].reader.mode.reading();
+                        let tab = &mut this.files.tabs[this.files.active];
+                        let reading = tab.reader.mode.reading();
+                        // Voltando para a tabela depois de editar: ela é montada de novo com o texto atual.
+                        if let (false, Some(Ok(doc))) = (reading, tab.content.as_mut()) && doc.table_stale {
+                            let text = doc.editor.read(cx).value().to_string();
+                            doc.table = table::delimiter(&tab.path).map(|delim| Arc::new(table::parse(&text, delim)));
+                            doc.table_stale = false;
+                        }
                         this.set_reader_mode(if reading { reader::ReaderMode::Source } else { reader::ReaderMode::Reading }, window, cx);
                     })))))
             .when(tab.zoomable(), |el| el

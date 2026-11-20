@@ -5168,6 +5168,7 @@
   "native_news_code_comment_sample": "isso pode virar uma constante?",
   "native_file_show_code": "Código",
   "native_file_show_table": "Tabela",
+  "native_file_table_truncated": "A tabela mostra as primeiras 200 mil linhas; o código tem o arquivo inteiro.",
   "native_file_table_empty": "Esta tabela está vazia.",
   "native_artifacts_title": "Artefatos da conversa",
   "native_artifacts_count": "Artefatos · {n}",

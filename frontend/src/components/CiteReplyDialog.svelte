@@ -106,7 +106,7 @@
   .cr-trecho :global(pre) { white-space: pre-wrap; font-size: 0.875em; margin: var(--space-1) 0; }
   .cr-trecho :global(code) { font-family: var(--font-mono); font-size: 0.875em; }
   .cr-el { font-weight: 600; color: var(--text-primary); }
-  .cr-code { margin: var(--space-1) 0 0; font-family: var(--font-mono); font-size: var(--text-xs); white-space: pre; overflow-x: auto; }
+  .cr-trecho .cr-code { margin: var(--space-1) 0 0; font-family: var(--font-mono); font-size: var(--text-xs); white-space: pre; overflow-x: auto; }
   .cr-url { font-size: var(--text-xs); color: var(--text-muted); }
   /* 16px: abaixo disso o Safari do iPhone dá zoom na página ao focar. */
   .cr-campo {

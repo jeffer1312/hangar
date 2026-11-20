@@ -212,6 +212,7 @@ impl Hangar {
         cx: &mut Context<Self>) {
         let restore_cursor = self.files_visible() && self.files.tabs.get(self.files.active).is_some_and(|tab| tab.id == id)
             && self.files.focus.contains_focused(window, cx);
+        let word_wrap = self.files.word_wrap;
         let Some(tab) = self.files.tabs.iter_mut().find(|tab| tab.id == id) else { return };
         let Some(Ok(doc)) = &mut tab.content else { return };
         if doc.read_seq != seq || doc.saving { return; }
@@ -219,20 +220,22 @@ impl Hangar {
         (doc.checking, doc.reloading) = (false, false);
         match result {
             Ok(mut content) if reload => {
-                // Arquivo grande: o texto vai para o editor sem ficar uma cópia em `base`.
-                let text = if doc.large() {
-                    doc.large_size = Some(content.text.len());
-                    std::mem::take(&mut content.text)
-                } else { content.text.clone() };
+                // A classificação de arquivo grande vale para o texto relido: ele pode ter crescido ou diminuído. Grande,
+                // o texto vai para o editor sem ficar uma cópia em `base`.
+                let large = content.text.len() > hangar_workspace::files::MAX_BYTES;
+                doc.large_size = large.then_some(content.text.len());
+                if let Some(markdown) = doc.markdown.as_ref().filter(|_| !large) { markdown.update(cx, |state, cx| state.set_text(&content.text, cx)); }
+                if doc.table.is_some() { doc.table = content.table.take(); doc.table_stale = false; }
+                let text = if large { std::mem::take(&mut content.text) } else { content.text.clone() };
                 doc.editor.update(cx, |state, cx| {
                     let cursor = state.cursor_position();
                     state.set_value(text, window, cx);
+                    state.set_soft_wrap(word_wrap && !large, window, cx);
                     if restore_cursor {
                         let row = cursor.line.min(state.text().lines_len().saturating_sub(1) as u32);
                         state.set_cursor_position(Position::new(row, cursor.character), window, cx);
                     }
                 });
-                if let Some(markdown) = &doc.markdown { markdown.update(cx, |state, cx| state.set_text(&content.text, cx)); }
                 doc.base = content;
                 (doc.dirty, doc.disk_changed, doc.close_after_save) = (false, false, false);
                 (doc.error, doc.saved) = (None, None);
@@ -250,13 +253,16 @@ impl Hangar {
     }
 }
 
+/// A tabela do CSV só é remontada no Recarregar; a verificação a cada 5 s não precisa dela.
+fn table_on_reload(content: Content, reload: bool) -> Content { if reload { super::with_table(content) } else { content } }
+
 /// `large` só no Recarregar: a verificação a cada 5 s lê até 512 KB, e um arquivo que cresceu além disso aparece como
 /// mudado no disco em vez de ser relido inteiro.
 async fn read_open_file(api: Api, name: String, path: String, external: bool, local: Option<PathBuf>, here: bool, large: bool) -> Result<Content, Failure> {
     if !external {
         if let Some(root) = local {
             return tokio::task::spawn_blocking(move || super::super::tree::read_local(&root, &path, large).map(|read|
-                Content { path, text: read.text, truncated: read.truncated, digest: read.digest, external: false, table: None }))
+                table_on_reload(Content { path, text: read.text, truncated: read.truncated, digest: read.digest, external: false, table: None }, large)))
                 .await.unwrap_or_else(|_| Err(Failure::local("invalid_response")));
         }
     } else if here {
@@ -269,7 +275,7 @@ async fn read_open_file(api: Api, name: String, path: String, external: bool, lo
                 let (Some(folder), Some(file_name)) = (real.parent(), real.file_name().and_then(|name| name.to_str()))
                     else { return Err(Failure::local("erro_arq_inexistente")) };
                 super::super::tree::read_local(folder, file_name, large).map(|read|
-                    Content { path, text: read.text, truncated: read.truncated, digest: read.digest, external: true, table: None })
+                    table_on_reload(Content { path, text: read.text, truncated: read.truncated, digest: read.digest, external: true, table: None }, large))
             }).await.unwrap_or_else(|_| Err(Failure::local("invalid_response")));
         }
     }
@@ -279,5 +285,5 @@ async fn read_open_file(api: Api, name: String, path: String, external: bool, lo
         .map_err(|_| Failure::local("invalid_response"))?;
     if content.path != path { return Err(Failure::local("invalid_response")); }
     content.external = external;
-    Ok(content)
+    Ok(table_on_reload(content, large == "1"))
 }
