@@ -745,9 +745,10 @@ impl Hangar {
         if self.open_api.is_some() { &self.accounts.session_list } else { &self.accounts.list }
     }
 
-    /// Lê as contas da máquina da sessão se ainda não chegaram nem estão a caminho.
+    /// Relê as contas da máquina da sessão, salvo com uma leitura a caminho: a lista que já chegou fica à vista
+    /// até a nova, e a leitura que falhou não fica presa.
     pub(super) fn ensure_session_accounts(&mut self, cx: &mut Context<Self>) {
-        if self.session_accounts().value.is_none() && !self.session_accounts().loading { self.load_session_accounts(cx); }
+        if !self.session_accounts().loading { self.load_session_accounts(cx); }
     }
 
     /// Contas Codex conectadas da máquina da sessão, a de mais folga primeiro e sem as cheias: quem recebe a conversa na

@@ -101,6 +101,8 @@ pub(crate) use settings::{memory_dream, news_group_heading, news_kind_icon, news
 pub(crate) use plugins::{plugin_meta, plugin_name, plugin_switch, plugin_update_button, reopen_notice as plugins_reopen_notice,
     row_box as plugin_row_box, text_block as plugin_text_block};
 pub(crate) use accounts::{login_heading, target_row};
+/// As peças do seletor de modelos e da troca de agente, para a animação da novidade.
+pub(crate) use controls::picker as model_picker;
 pub(crate) use search::{ScopeFound, highlighted as search_highlighted, search_agent_label, search_chat_header, search_chat_sub, search_field, search_filter_chip, search_found_frame,
     search_group_frame, search_group_header, search_group_sub, search_hit_line, search_live_label, search_open_look, search_scope_block,
     search_scope_summary, search_status_line, search_who};
@@ -229,9 +231,6 @@ pub(crate) fn composer_icons(cx: &App) -> [Button; 3] {
 
 /// O microfone parado do compositor.
 pub(crate) fn composer_mic(label: String, cx: &App) -> Button { chrome::icon_button("dictation-toggle", IconName::Mic, label, cx) }
-
-/// As peças do seletor de modelos e da troca de agente, para a animação da novidade.
-pub(crate) use controls::picker as model_picker;
 
 /// Pílula do modelo com o símbolo do agente antes do nome (como no T3 Code) e o esforço e o Fast ao lado.
 pub(crate) fn model_pill(id: impl Into<ElementId>, provider: &str, text: String, effort: Option<String>, fast: Option<String>, cx: &App) -> Button {
@@ -467,8 +466,8 @@ enum Payload {
 #[derive(Clone, Debug, PartialEq)]
 enum Reply {
     Catalog(controls::Ctl),
-    /// Catálogo do Codex que recebe a conversa na troca de agente, pela credencial lida.
-    HandoffCatalog(String),
+    /// Catálogo do Codex que recebe a conversa na troca de agente, com o número da leitura: só a da abertura atual vale.
+    HandoffCatalog(u64),
     /// Resposta ao pedido de troca de agente pelo seletor de modelos.
     Handoff,
     /// Cancelamento da troca que esperava.
@@ -1649,7 +1648,7 @@ impl Hangar {
         self.connect_reset();
         self.devices = devices::Devices::default();
         self.shared = shared_config::SharedConfig::default();
-        self.controls = controls::Controls::default();
+        self.controls = std::mem::take(&mut self.controls).after_connection();
         self.accounts = accounts::Accounts::default();
         self.orchestration = orchestration::Orchestration::default();
         self.shortcuts = shortcuts::Shortcuts::default();
@@ -8071,8 +8070,11 @@ impl Hangar {
         let card = if readable && !read_only {
             self.render_ask(busy, window, cx).or_else(|| if pane_shown { None } else { self.render_options(busy, window, cx) })
         } else { None };
+        // A faixa da troca não cede ao cartão nem ao plano: o Cancelar segue à vista com a pergunta aberta, e a falha
+        // aparece acima das ações do plano.
+        let handoff_band = if readable && !read_only { self.render_handoff_band(cx) } else { None };
         let plan_bar = if readable && !read_only && card.is_none() {
-            self.render_handoff_band(cx).or_else(|| self.render_plan_bar(busy, cx)).or_else(|| self.render_headless_plan(cx)).or_else(|| self.render_plan_preview(cx))
+            self.render_plan_bar(busy, cx).or_else(|| self.render_headless_plan(cx)).or_else(|| self.render_plan_preview(cx))
                 .or_else(|| self.render_rename_suggestion(cx))
         } else { None };
         let steer = readable && self.steer_offered();
@@ -8113,6 +8115,7 @@ impl Hangar {
             .children(outgoing.into_iter().map(|text| in_column(div().w_full().flex().flex_col().items_end().gap_1().py_1()
                 .child(user_bubble(conversation_text(div().whitespace_normal().line_clamp(6).text_ellipsis(), true).child(text)).opacity(0.6))
                 .child(div().text_xs().text_color(theme::muted()).child(tr("sending"))))))
+            .when_some(handoff_band, |el, band| el.child(in_column(band)))
             .when_some(plan_bar, |el, bar| el.child(in_column(bar)))
             .when_some(action_note, |el, note| el.child(note))
             .when_some(problem_banner(&self.chat.state, panel_stalled), |el, problem| el.child(in_column(div().text_sm().text_color(theme::warning()).child(problem))))

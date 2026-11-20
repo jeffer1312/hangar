@@ -149,8 +149,14 @@ impl Controls {
         self.known.get(&(key.clone(), Ctl::Model)).filter(|catalog| catalog_engine_matches(catalog, session.engine.as_deref()))
     }
 
+    /// Conexão nova: tudo da anterior sai, menos os favoritos do seletor, que são do aparelho e podem ter uma estrela
+    /// ainda sem gravar no disco.
+    pub fn after_connection(self) -> Self { Self { favorites: self.favorites, ..Self::default() } }
+
     pub fn clear_plan_preview(&mut self) { self.plan = None; }
     pub fn picker_open(&self) -> bool { self.open.is_some() }
+    /// O seletor de modelos aberto: Ctrl+1…9 é dele, não da troca de sessão.
+    pub fn model_picker_open(&self) -> bool { self.open.as_ref().is_some_and(|o| o.ctl == Ctl::Model) }
 
     fn remember_model_catalog(&mut self, key: &SessionKey, catalog: Option<&Value>) {
         self.known.remove(&(key.clone(), Ctl::Model));
@@ -334,7 +340,8 @@ fn keep(choices: Vec<Choice>, query: &str) -> Vec<Choice> {
     let query = query.trim().to_lowercase();
     if query.is_empty() { return choices; }
     choices.into_iter().filter(|c| {
-        let model = c.body.get("model").and_then(Value::as_str).unwrap_or_default();
+        // A linha da troca guarda o id do Codex em `handoff`: a busca pelo id também a acha.
+        let model = c.body.get("model").or_else(|| c.body.get("handoff")).and_then(Value::as_str).unwrap_or_default();
         format!("{}/{} {}", c.detail, model, c.label).to_lowercase().contains(&query)
     }).collect()
 }
@@ -846,7 +853,7 @@ impl Hangar {
                 };
                 self.action_feedback.insert(key, note);
             }
-            Reply::HandoffCatalog(credential) => self.receive_handoff_catalog(key, credential, result),
+            Reply::HandoffCatalog(read) => self.receive_handoff_catalog(key, read, result),
             Reply::Handoff => self.receive_handoff(key, result),
             Reply::HandoffCancel => self.receive_handoff_cancel(key, result),
             _ => {}
@@ -937,8 +944,13 @@ impl Hangar {
     /// Opções do painel aberto, quando a lista já chegou; na lista longa, só as que passam na busca.
     fn open_choices(&self, cx: &App) -> Option<(Ctl, Vec<Choice>, bool)> {
         let open = self.controls.open.as_ref()?;
+        // No seletor de modelos o catálogo do agente que falhou ou não chegou não tira as linhas do Codex da troca.
+        if open.ctl == Ctl::Model {
+            let none = Value::Null;
+            let catalog = match &open.catalog { Some(Ok(catalog)) => catalog, _ => &none };
+            return Some((Ctl::Model, self.picker_rows(catalog, cx), false));
+        }
         let Some(Ok(catalog)) = &open.catalog else { return None; };
-        if open.ctl == Ctl::Model { return Some((Ctl::Model, self.picker_rows(catalog, cx), false)); }
         let all = self.choices(open.ctl, catalog);
         let long = all.len() > LONG_LIST;
         let query = if long { self.ctl_search.read(cx).value().to_string() } else { String::new() };

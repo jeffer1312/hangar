@@ -589,7 +589,10 @@ pub fn favorite_models() -> Vec<String> {
 /// Grava os favoritos do seletor; falha de disco só os esquece, com o motivo no log.
 pub fn save_favorite_models(list: &[String]) {
     let Some(dir) = dir() else { return };
-    if let Ok(bytes) = serde_json::to_vec(list) && let Err(error) = std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(dir.join("favorite-models.json"), bytes)) {
+    // Temporário e troca: disco cheio no meio da escrita não apaga os favoritos já gravados.
+    let (file, tmp) = (dir.join("favorite-models.json"), dir.join("favorite-models.json.tmp"));
+    if let Ok(bytes) = serde_json::to_vec(list)
+        && let Err(error) = std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(&tmp, bytes)).and_then(|_| std::fs::rename(&tmp, &file)) {
         eprintln!("favoritos do seletor não gravaram: {error}");
     }
 }

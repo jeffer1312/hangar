@@ -20,8 +20,9 @@ pub(in crate::app) enum Pick { Apply, Handoff { credential: String, model: Strin
 #[derive(Clone, Debug, PartialEq)]
 pub(in crate::app) struct HandoffAccount { pub(in crate::app) credential: String, pub(in crate::app) account: String, pub(in crate::app) label: String }
 
-/// Catálogo do Codex lido para a troca, da sessão e da conta em que foi pedido.
-pub(in crate::app) struct HandoffCatalog { key: SessionKey, account: HandoffAccount, catalog: Option<Result<Value, String>> }
+/// Catálogo do Codex lido para a troca, da sessão e da conta em que foi pedido; `read` separa a leitura desta
+/// abertura da de uma abertura anterior que ainda volta.
+pub(in crate::app) struct HandoffCatalog { key: SessionKey, account: HandoffAccount, read: u64, catalog: Option<Result<Value, String>> }
 
 fn provider_label(provider: &str) -> String { super::super::orchestration::provider_name(provider).to_owned() }
 
@@ -151,7 +152,7 @@ impl Hangar {
     pub(super) fn picker_opened(&mut self, cx: &mut Context<Self>) {
         self.controls.picker_tab = None;
         self.controls.picker_more = false;
-        // Cada abertura relê o catálogo do Codex: uma falha não fica presa, e a conta de mais folga é a de agora.
+        // Cada abertura relê as contas e o catálogo do Codex: uma falha não fica presa, e a conta de mais folga é a de agora.
         self.controls.handoff = None;
         if self.controls.favorites.is_none() { self.controls.favorites = Some(crate::appearance::favorite_models()); }
         if self.handoff_source_now().is_some() { self.ensure_session_accounts(cx); }
@@ -166,18 +167,20 @@ impl Hangar {
         if self.handoff_source_now().is_none() { return; }
         let Some(account) = self.handoff_accounts().and_then(|list| list.into_iter().next()) else { return };
         let Some(api) = self.session_api() else { return };
-        let (credential, codex_account) = (account.credential.clone(), account.account.clone());
-        self.controls.handoff = Some(HandoffCatalog { key: key.clone(), account, catalog: None });
+        static READS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let read = READS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        let codex_account = account.account.clone();
+        self.controls.handoff = Some(HandoffCatalog { key: key.clone(), account, read, catalog: None });
         let (connection, tx) = (self.connection, self.tx.clone());
         self.runtime.spawn(async move {
             let result = api.server_read(&["model-options"], &[("provider", "codex"), ("codex_account", codex_account.as_str())], 30).await;
-            let _ = tx.send(Envelope { connection, selection: None, payload: Payload::Reply(key, Reply::HandoffCatalog(credential), result) }).await;
+            let _ = tx.send(Envelope { connection, selection: None, payload: Payload::Reply(key, Reply::HandoffCatalog(read), result) }).await;
         });
         cx.notify();
     }
 
-    pub(super) fn receive_handoff_catalog(&mut self, key: SessionKey, credential: String, result: Result<Value, Failure>) {
-        let Some(handoff) = self.controls.handoff.as_mut().filter(|h| h.key == key && h.account.credential == credential) else { return };
+    pub(super) fn receive_handoff_catalog(&mut self, key: SessionKey, read: u64, result: Result<Value, Failure>) {
+        let Some(handoff) = self.controls.handoff.as_mut().filter(|h| h.key == key && h.read == read) else { return };
         handoff.catalog = Some(result.map_err(|error| Self::failure(&error)));
     }
 
@@ -231,16 +234,18 @@ impl Hangar {
     fn picker_rows_of(&self, view: PickerView, cx: &App) -> Vec<Choice> {
         let PickerView { own, handoff, tab, .. } = view;
         let query = self.ctl_search.read(cx).value().trim().to_owned();
-        if !query.is_empty() { return keep(own.into_iter().chain(handoff).collect(), &query); }
         let favorites = self.favorite_list();
-        if tab == FAVORITES {
+        if !query.is_empty() {
+            keep(own.into_iter().chain(handoff).collect(), &query)
+        } else if tab == FAVORITES {
             let mut rows: Vec<Choice> = own.into_iter().chain(handoff).filter(|c| favorites.contains(&c.key)).collect();
             rows.sort_by_key(|c| favorites.iter().position(|f| *f == c.key));
-            return rows;
+            rows
+        } else {
+            let mut rows = if tab == "codex" && self.provider().0 != "codex" { handoff } else { own };
+            favorites_first(&mut rows, favorites);
+            shortened(rows, self.controls.picker_more)
         }
-        let mut rows = if tab == "codex" && self.provider().0 != "codex" { handoff } else { own };
-        favorites_first(&mut rows, favorites);
-        shortened(rows, self.controls.picker_more)
     }
 
     /// Ctrl+N: a linha `n` da lista à vista.
@@ -347,6 +352,8 @@ impl Hangar {
     fn picker_row(&self, n: usize, c: Choice, lit: bool, busy: bool, cx: &mut Context<Self>) -> AnyElement {
         let (current, enabled, more) = (c.current, c.enabled, c.pick == Pick::More);
         let id = SharedString::from(format!("ctl-choice-{}", if more { "more" } else { c.key.as_str() }));
+        // O clique leva a chave da linha desenhada: a lista pode ter mudado (favorito chegando muda a aba) até ele.
+        let picked = c.key.clone();
         let favorite = !c.key.is_empty() && self.favorite_list().contains(&c.key);
         let star = (!c.key.is_empty()).then(|| {
             let key = c.key.clone();
@@ -368,8 +375,15 @@ impl Hangar {
             .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                 if *hovered && enabled && this.controls.highlight != Some(n) { this.controls.highlight = Some(n); cx.notify(); }
             }))
-            .on_click(cx.listener(move |this, _, window, cx| this.pick_ctl(Some(n), window, cx)))
+            .on_click(cx.listener(move |this, _, window, cx| this.pick_picker_row(&picked, window, cx)))
             .into_any_element()
+    }
+
+    /// A linha desenhada com a chave `key` (vazia = o "Mostrar mais"), procurada na lista de agora; sumida, nada.
+    fn pick_picker_row(&mut self, key: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((_, choices, _)) = self.open_choices(cx) else { return };
+        let found = choices.iter().position(|c| if key.is_empty() { c.pick == Pick::More } else { c.key == key });
+        if let Some(n) = found { self.pick_ctl(Some(n), window, cx); }
     }
 
     fn picker_rail(&self, view: &PickerView, cx: &mut Context<Self>) -> Div {
@@ -457,7 +471,11 @@ impl Hangar {
                             this.request_handoff(credential, model, effort, cx);
                         }
                         _ if on => {}
-                        _ => { this.apply_ctl(Ctl::Effort, path.clone(), body.clone(), label.clone(), cx); }
+                        // Nível de outro modelo do Claude troca o modelo junto: a resposta precisa refazer o catálogo.
+                        _ => {
+                            let ctl = if path.first() == Some(&"model-effort") && body.get("model").is_some() { Ctl::Model } else { Ctl::Effort };
+                            this.apply_ctl(ctl, path.clone(), body.clone(), label.clone(), cx);
+                        }
                     }
                 }))
                 .into_any_element()
@@ -518,10 +536,13 @@ impl Hangar {
     /// O painel do seletor: trilho, busca e lista, raciocínio ao lado, velocidade embaixo.
     pub(super) fn render_model_picker(&self, catalog: Option<&Result<Value, String>>, busy: bool, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let searching = !self.ctl_search.read(cx).value().trim().is_empty();
-        let view = match catalog { Some(Ok(catalog)) => self.picker_view(catalog), _ => PickerView::default() };
+        // O catálogo do agente que falhou ou não chegou afeta só as linhas dele: as do Codex da troca seguem.
+        let none = Value::Null;
+        let own = match catalog { Some(Ok(catalog)) => catalog, _ => &none };
+        let view = self.picker_view(own);
         let tab = view.tab.clone();
         let rail = (!searching).then(|| self.picker_rail(&view, cx));
-        let rows = match catalog { Some(Ok(_)) => self.picker_rows_of(view, cx), _ => Vec::new() };
+        let rows = self.picker_rows_of(view, cx);
         let pick = self.ctl_highlight(&rows);
         if !rows.is_empty() && !self.controls.revealed.get() {
             if self.controls.scroll.bounds().size.height > px(0.) {
@@ -535,17 +556,17 @@ impl Hangar {
             .then(|| handoff_state.as_ref().map(|(_, label)| label.clone())).flatten()
             .map(|label| div().px(px(8.)).pb(px(4.)).text_xs().text_color(theme::muted()).whitespace_normal()
                 .child(tr("picker_handoff_hint").replace("{account}", &label)));
-        let reasoning = match catalog { Some(Ok(catalog)) => Some(self.picker_reasoning(catalog, &rows, busy, cx)), _ => None };
+        let reasoning = (matches!(catalog, Some(Ok(_))) || handoff_tab).then(|| self.picker_reasoning(own, &rows, busy, cx));
         let list = match catalog {
-            None | Some(Err(_)) => self.ctl_load_state(Ctl::Model, catalog, cx).unwrap_or_else(|| div().into_any_element()),
-            Some(Ok(_)) if handoff_tab && !matches!(handoff_state, Some((Some(Ok(_)), _))) => match handoff_state {
+            _ if handoff_tab && !matches!(handoff_state, Some((Some(Ok(_)), _))) => match handoff_state {
                 Some((Some(Err(reason)), _)) => div().p(px(8.)).text_size(px(12.)).text_color(theme::danger())
                     .child(tr("ctl_failed").replace("{reason}", reason)).into_any_element(),
                 _ => popup::skeleton("picker-handoff-loading", 4).into_any_element(),
             },
-            Some(Ok(_)) if rows.is_empty() => div().px(px(8.)).py(px(24.)).text_size(px(12.)).text_color(theme::muted()).text_center()
+            None | Some(Err(_)) if !handoff_tab => self.ctl_load_state(Ctl::Model, catalog, cx).unwrap_or_else(|| div().into_any_element()),
+            _ if rows.is_empty() => div().px(px(8.)).py(px(24.)).text_size(px(12.)).text_color(theme::muted()).text_center()
                 .child(tr(if searching { "ctl_no_results" } else if tab == FAVORITES { "picker_no_favorites" } else { "ctl_empty" })).into_any_element(),
-            Some(Ok(_)) => div().id("ctl-list").flex_1().max_h(px(320.)).overflow_y_scroll().track_scroll(&self.controls.scroll).flex().flex_col()
+            _ => div().id("ctl-list").flex_1().max_h(px(320.)).overflow_y_scroll().track_scroll(&self.controls.scroll).flex().flex_col()
                 .children(rows.into_iter().enumerate().map(|(n, c)| self.picker_row(n, c, n == pick, busy, cx)))
                 .into_any_element(),
         };
