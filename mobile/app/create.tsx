@@ -1,6 +1,6 @@
 import { Platform, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
-import { useRouter, useSegments } from 'expo-router';
+import { useLocalSearchParams, useRouter, useSegments } from 'expo-router';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { Screen } from '../src/ui/Screen';
 import { CreateSessionSheet } from '../src/features/create/CreateSessionSheet';
@@ -9,6 +9,8 @@ import { CreateSessionSheet } from '../src/features/create/CreateSessionSheet';
 export default function CreateRoute() {
   const router = useRouter();
   const segments = useSegments();
+  // `?server=&engine=`: o assistente do CLIProxyAPI abre a conversa já no motor que acabou de criar.
+  const { server, engine } = useLocalSearchParams<{ server?: string; engine?: string }>();
   const close = () => {
     if (router.canGoBack()) router.back();
     else router.replace('/');
@@ -16,7 +18,7 @@ export default function CreateRoute() {
   return (
     <Screen independent={Platform.OS !== 'android'}>
       <KeyboardAvoidingView behavior="padding" automaticOffset style={styles.wrap}>
-        {segments[0] === 'create' ? <CreateSessionSheet layout="form" onClose={close} /> : <View />}
+        {segments[0] === 'create' ? <CreateSessionSheet layout="form" onClose={close} initial={{ server, engine }} /> : <View />}
       </KeyboardAvoidingView>
     </Screen>
   );

@@ -8,7 +8,7 @@ import { Platform } from 'react-native';
 vi.mock('expo-blur', () => ({ BlurTargetView: ({ children, ref }: { children: ReactNode; ref: React.Ref<HTMLDivElement> }) =>
   createElement('div', { ref }, children) }));
 vi.mock('../../ui/Background', () => ({ Background: () => createElement('div', { 'data-wallpaper': true }) }));
-vi.mock('expo-router', () => ({ useRouter: () => ({}), useSegments: () => ['create'] }));
+vi.mock('expo-router', () => ({ useRouter: () => ({}), useSegments: () => ['create'], useLocalSearchParams: () => ({}) }));
 vi.mock('react-native-keyboard-controller', () => ({ KeyboardAvoidingView: ({ children }: { children: ReactNode }) => children }));
 vi.mock('../create/CreateSessionSheet', () => ({ CreateSessionSheet: () => createElement('textarea') }));
 

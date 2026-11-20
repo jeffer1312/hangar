@@ -30,7 +30,7 @@ options:
 
 const APPROVALS: [&str; 2] = ["never", "on-request"];
 const SANDBOXES: [&str; 3] = ["read-only", "workspace-write", "danger-full-access"];
-const TIERS: [&str; 2] = ["default", "priority"];
+const TIERS: [&str; 3] = crate::session_open::ServiceTier::NAMES;
 
 /// O que o pane recebeu, sem interpretar.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

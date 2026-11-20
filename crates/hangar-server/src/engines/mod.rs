@@ -6,6 +6,7 @@ pub mod environment;
 pub mod cli;
 pub mod settings;
 mod routes;
+mod cliproxy_setup;
 pub use routes::{cors_layer, matches, serve};
 
 pub mod mirrors;

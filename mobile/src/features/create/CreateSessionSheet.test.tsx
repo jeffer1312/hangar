@@ -271,6 +271,8 @@ vi.mock('../../paraglide/messages', () => ({
     'composer_session_settings composer_session_settings_hint native_ctl_model_title native_ctl_search native_ctl_no_results ' +
     'comum_nenhum_modelo native_new_chat_reasoning modelo_sem_niveis native_ctl_loading native_ctl_retry native_ctl_failed ' +
     'native_ctl_fast native_ctl_fast_on native_ctl_fast_off native_ctl_fast_hint native_ctl_fast_unavailable ' +
+    'native_ctl_speed native_ctl_speed_normal native_ctl_speed_ultrafast native_ctl_speed_normal_hint native_ctl_speed_fast_hint ' +
+    'native_ctl_speed_ultrafast_hint native_ctl_speed_ultrafast_unavailable ' +
     'reasoning_level_low reasoning_level_medium reasoning_level_high reasoning_level_xhigh reasoning_level_max reasoning_level_ultra ' +
     'native_mode_plan native_mode_manual native_mode_auto native_mode_acceptEdits native_mode_bypassPermissions native_mode_dontAsk chat_mode_plan config_motores_modelo_padrao ' +
     'codex_contexto_titulo codex_contexto_padrao codex_contexto_salvando comum_falha_aplicar config_server_tentar_de_novo home_new_conversation ' +
@@ -359,6 +361,8 @@ describe('CreateSessionSheet Codex', () => {
     const buttons = [...container.querySelectorAll('button')];
     return buttons.find((b) => b.getAttribute('aria-label') === text) ?? buttons.find((b) => b.textContent === text);
   };
+  // Escolha de velocidade do painel: Normal, Fast e Ultra Fast.
+  const speedRadio = (container: HTMLElement, label: string) => container.querySelector<HTMLButtonElement>(`[role="radio"][aria-label="${label}"]`);
 
   function type(container: HTMLElement, text: string) {
     const input = container.querySelector('textarea[aria-label="nova_conversa_placeholder"]') as HTMLTextAreaElement;
@@ -423,6 +427,66 @@ describe('CreateSessionSheet Codex', () => {
     await act(async () => Promise.resolve());
     return { container, root };
   }
+
+  it('aberta pelo assistente com um motor, só cria depois de o motor chegar', async () => {
+    let deliver: (value: { motores: Record<string, { label: string; model: string }> }) => void = () => {};
+    calls.engines.mockReturnValue(new Promise((resolve) => { deliver = resolve; }));
+    const container = document.createElement('div');
+    const root = createRoot(container);
+    await act(async () => root.render(createElement(CreateSessionSheet, { initial: { engine: 'proxy' } })));
+    await act(async () => Promise.resolve());
+    try {
+      await send(container);
+      expect(calls.create).not.toHaveBeenCalled();
+      await act(async () => deliver({ motores: { proxy: { label: 'Proxy', model: 'sol' } } }));
+      await send(container);
+      expect(calls.create.mock.calls[0]?.[1]).toEqual(expect.objectContaining({ engine: 'proxy' }));
+    } finally {
+      root.unmount();
+    }
+  });
+
+  it('motor pedido ausente na primeira leitura segue segurando a criação quando a máquina é renovada', async () => {
+    calls.target = { id: 'server-c', label: 'Servidor C', baseUrl: 'https://c.local', token: 'token-c' };
+    calls.engines.mockResolvedValueOnce({ motores: {} }).mockResolvedValue({ motores: { proxy: { label: 'Proxy', model: 'sol' } } });
+    const container = document.createElement('div');
+    const root = createRoot(container);
+    const sheet = () => createElement(CreateSessionSheet, { initial: { server: 'server-c', engine: 'proxy' } });
+    await act(async () => root.render(sheet()));
+    await act(async () => Promise.resolve());
+    try {
+      await send(container);
+      expect(calls.create).not.toHaveBeenCalled();
+      // Mesma máquina com o token renovado: o formulário não remonta, só relê os motores.
+      calls.target = { ...calls.target, token: 'token-c2' };
+      await act(async () => root.render(sheet()));
+      await act(async () => Promise.resolve());
+      expect(calls.engines).toHaveBeenCalledTimes(2);
+      await send(container);
+      expect(calls.create.mock.calls[0]?.[1]).toEqual(expect.objectContaining({ engine: 'proxy' }));
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
+  it('motor pedido já resolvido continua escolhido quando a máquina é renovada', async () => {
+    calls.target = { id: 'server-c', label: 'Servidor C', baseUrl: 'https://c.local', token: 'token-c' };
+    calls.engines.mockResolvedValue({ motores: { proxy: { label: 'Proxy', model: 'sol' } } });
+    const container = document.createElement('div');
+    const root = createRoot(container);
+    const sheet = () => createElement(CreateSessionSheet, { initial: { server: 'server-c', engine: 'proxy' } });
+    await act(async () => root.render(sheet()));
+    await act(async () => Promise.resolve());
+    try {
+      calls.target = { ...calls.target, token: 'token-c2' };
+      await act(async () => root.render(sheet()));
+      await act(async () => Promise.resolve());
+      await send(container);
+      expect(calls.create.mock.calls[0]?.[1]).toEqual(expect.objectContaining({ engine: 'proxy' }));
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
 
   it('o `/` sem sessão sugere a lista da conta e pasta escolhidas, e a escolha só entra no campo', async () => {
     calls.commands.mockResolvedValue([
@@ -1092,7 +1156,7 @@ describe('CreateSessionSheet Codex', () => {
     ] });
     const { container, root } = await renderSheet(false, false);
     await openSettings(container);
-    const fast = container.querySelector<HTMLButtonElement>('[role="switch"][aria-label="native_ctl_fast"]')!;
+    const fast = speedRadio(container, 'native_ctl_fast')!;
     expect(fast.disabled).toBe(!available);
     await act(async () => fast.click());
     expect(calls.create).not.toHaveBeenCalled();
@@ -1117,11 +1181,11 @@ describe('CreateSessionSheet Codex', () => {
     await openSettings(container);
     await act(async () => button(container, 'Sol')!.click());
     await act(async () => button(container, 'reasoning_level_high')!.click());
-    await act(async () => container.querySelector<HTMLButtonElement>('[role="switch"][aria-label="native_ctl_fast"]')!.click());
+    await act(async () => speedRadio(container, 'native_ctl_fast')!.click());
     const codexReads = calls.models.mock.calls.filter((call) => call[1] === 'codex').length;
     await act(async () => configs.resolve([{ path: '/late-claude', label: 'Conta tardia', active: true }]));
     expect(calls.models.mock.calls.filter((call) => call[1] === 'codex')).toHaveLength(codexReads);
-    expect(container.querySelector('[role="switch"][aria-label="native_ctl_fast"]')!.getAttribute('aria-checked')).toBe('true');
+    expect(speedRadio(container, 'native_ctl_fast')!.getAttribute('aria-checked')).toBe('true');
     expect(button(container, 'composer_session_settings')!.getAttribute('aria-valuetext')).toContain('Sol, high');
     await send(container);
     expect(calls.create).toHaveBeenCalledExactlyOnceWith(server, expect.objectContaining({
@@ -1188,7 +1252,7 @@ describe('CreateSessionSheet Codex', () => {
     ] });
     const { container, root } = await renderSheet(false, false);
     await openSettings(container);
-    await act(async () => container.querySelector<HTMLButtonElement>('[role="switch"][aria-label="native_ctl_fast"]')!.click());
+    await act(async () => speedRadio(container, 'native_ctl_fast')!.click());
     await act(async () => button(container, 'criar_padrao')!.click());
     await send(container);
     expect(calls.create.mock.calls[0][1].model).toBeNull();
@@ -1196,7 +1260,7 @@ describe('CreateSessionSheet Codex', () => {
     root.unmount();
   });
 
-  it.each([false, true])('desligar Fast omite service_tier sem desfazer o modelo escolhido (mesmo lote: %s)', async (batched) => {
+  it('voltar a Normal omite service_tier sem desfazer o modelo escolhido', async () => {
     calls.providers.mockResolvedValue({ codex: { disponivel: true, default: true } });
     calls.models.mockResolvedValue({ kind: 'codex', reduced: false, models: [
       { id: 'sol', name: 'Sol', efforts: ['high'], service_tiers: [{ id: 'priority' }] },
@@ -1204,13 +1268,11 @@ describe('CreateSessionSheet Codex', () => {
     const { container, root } = await renderSheet(false, false);
     await openSettings(container);
     await act(async () => button(container, 'Sol')!.click());
-    const fast = () => container.querySelector<HTMLButtonElement>('[role="switch"][aria-label="native_ctl_fast"]')!;
-    if (batched) await act(async () => { fast().click(); fast().click(); });
-    else {
-      await act(async () => fast().click());
-      expect(fast().getAttribute('aria-checked')).toBe('true');
-      await act(async () => fast().click());
-    }
+    const fast = () => speedRadio(container, 'native_ctl_fast')!;
+    const normal = () => speedRadio(container, 'native_ctl_speed_normal')!;
+    await act(async () => fast().click());
+    expect(fast().getAttribute('aria-checked')).toBe('true');
+    await act(async () => normal().click());
     expect(fast().getAttribute('aria-checked')).toBe('false');
     await send(container);
     expect(calls.create.mock.calls[0][1].model).toBe('sol');
@@ -1231,7 +1293,7 @@ describe('CreateSessionSheet Codex', () => {
     await act(async () => button(container, 'Codex')!.click());
     await act(async () => button(container, 'Sol')!.click());
     await act(async () => button(container, 'reasoning_level_high')!.click());
-    const fast = container.querySelector<HTMLButtonElement>('[role="switch"][aria-label="native_ctl_fast"]');
+    const fast = speedRadio(container, 'native_ctl_fast');
     expect(fast).not.toBeNull();
     await act(async () => fast!.click());
     expect(button(container, 'composer_session_settings')!.getAttribute('aria-valuetext')).toBe('Sol · 272K, high, native_ctl_fast');
@@ -1261,7 +1323,7 @@ describe('CreateSessionSheet Codex', () => {
     expect(button(container, 'composer_session_settings')).toBeTruthy();
     await act(async () => button(container, 'composer_session_settings')!.click());
     await act(async () => button(container, 'Sol')!.click());
-    const fast = container.querySelector<HTMLButtonElement>('[role="switch"][aria-label="native_ctl_fast"]');
+    const fast = speedRadio(container, 'native_ctl_fast');
     expect(fast).not.toBeNull();
     expect(fast!.disabled).toBe(!available);
     await act(async () => fast!.click());
@@ -1414,7 +1476,7 @@ describe('CreateSessionSheet Codex', () => {
     await closePanel(container, 'composer_session_settings');
     await openSettings(container);
     await act(async () => button(container, 'Sol')!.click());
-    const fast = container.querySelector<HTMLButtonElement>('[role="switch"][aria-label="native_ctl_fast"]');
+    const fast = speedRadio(container, 'native_ctl_fast');
     expect(!!fast).toBe(visible);
     if (fast) { expect(fast.disabled).toBe(!available); await act(async () => fast.click()); }
     expect(calls.mutate).not.toHaveBeenCalled();
@@ -1422,6 +1484,49 @@ describe('CreateSessionSheet Codex', () => {
     const payload = calls.create.mock.calls[0][1];
     expect(payload.engine).toBe('local');
     if (available) expect(payload.service_tier).toBe('priority');
+    else expect(payload).not.toHaveProperty('service_tier');
+    root.unmount();
+  });
+
+  it.each([
+    { tiers: [{ id: 'priority' }, { id: 'ultrafast' }], available: true },
+    { tiers: [{ id: 'priority' }, { id: 'ultrafast', hidden: true }], available: false },
+    { tiers: [{ id: 'priority' }], available: false },
+  ])('Ultra Fast na criação segue o tier do modelo Codex: $tiers', async ({ tiers, available }) => {
+    calls.providers.mockResolvedValue({ codex: { disponivel: true, default: true } });
+    calls.models.mockResolvedValue({ kind: 'codex', reduced: false, models: [{ id: 'sol', name: 'Sol', efforts: ['high'], service_tiers: tiers }] });
+    const { container, root } = await renderSheet(false, false);
+    await openSettings(container);
+    await act(async () => button(container, 'Sol')!.click());
+    const ultra = speedRadio(container, 'native_ctl_speed_ultrafast')!;
+    expect(ultra.disabled).toBe(!available);
+    expect(container.textContent?.includes('native_ctl_speed_ultrafast_unavailable')).toBe(!available);
+    await act(async () => ultra.click());
+    expect(calls.mutate).not.toHaveBeenCalled();
+    await send(container);
+    const payload = calls.create.mock.calls[0][1];
+    if (available) expect(payload).toMatchObject({ model: 'sol', service_tier: 'ultrafast' });
+    else expect(payload).not.toHaveProperty('service_tier');
+    root.unmount();
+  });
+
+  it.each([true, false])('Ultra Fast Claude com motor segue supports_ultrafast do modelo (%s)', async (ultrafast) => {
+    calls.engines.mockResolvedValue({ motores: { local: { label: 'Motor local', model: 'sol' } } });
+    calls.models.mockResolvedValue({ kind: 'engine', reduced: false, supports_fast: true, supports_ultrafast: ultrafast,
+      models: [{ id: 'sol', name: 'Sol', supports_fast: true, supports_ultrafast: ultrafast }] });
+    const { container, root } = await renderSheet(false, false);
+    await openOptions(container);
+    await act(async () => button(container, 'criar_claude_sua_conta')!.click());
+    await act(async () => button(container, 'Motor local')!.click());
+    await closePanel(container, 'composer_session_settings');
+    await openSettings(container);
+    await act(async () => button(container, 'Sol')!.click());
+    const ultra = speedRadio(container, 'native_ctl_speed_ultrafast')!;
+    expect(ultra.disabled).toBe(!ultrafast);
+    await act(async () => ultra.click());
+    await send(container);
+    const payload = calls.create.mock.calls[0][1];
+    if (ultrafast) expect(payload.service_tier).toBe('ultrafast');
     else expect(payload).not.toHaveProperty('service_tier');
     root.unmount();
   });
@@ -1435,9 +1540,9 @@ describe('CreateSessionSheet Codex', () => {
     const { container, root } = await renderSheet(false, false);
     await openSettings(container);
     await act(async () => button(container, 'Sol')!.click());
-    const fast = () => container.querySelector<HTMLButtonElement>('[role="switch"][aria-label="native_ctl_fast"]')!;
+    const fast = () => speedRadio(container, 'native_ctl_fast')!;
     await act(async () => fast().click());
-    if (tier === 'default') await act(async () => fast().click());
+    if (tier === 'default') await act(async () => speedRadio(container, 'native_ctl_speed_normal')!.click());
     await act(async () => button(container, 'Mini')!.click());
     expect(fast().disabled).toBe(true);
     expect(fast().getAttribute('aria-checked')).toBe('false');

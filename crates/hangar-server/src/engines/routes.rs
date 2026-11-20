@@ -23,7 +23,7 @@ fn visible(st: &crate::accounts::AccountService) -> Value {
                 match accounts.get_or_insert_with(|| proxy::list_accounts(st)) {
                     Ok(accounts) if accounts.is_empty() => {
                         item["cliproxy_error"] = json!(
-                            "nenhuma conta ChatGPT do proxy corresponde às contas cadastradas no Hangar"
+                            "nenhuma conta ChatGPT conectada no proxy"
                         )
                     }
                     Ok(accounts) => item["cliproxy_accounts"] = json!(accounts),
@@ -260,13 +260,17 @@ pub async fn serve(st: &AppState, req: Request) -> Response {
         }
         return json_response(StatusCode::OK, proxy::naming(&st.accounts).await);
     }
+    if let Some(response) = super::cliproxy_setup::handle(st, &method, &path, &bytes).await {
+        return response;
+    }
     if path == "/api/engines/cliproxy" && method == Method::GET {
+        let install = super::cliproxy_setup::status(st).await;
         let local = match proxy::local(&env) {
             Ok(Some(local)) => local,
             result => {
                 return json_response(
                     StatusCode::OK,
-                    json!({"found":false,"base_url":null,"models":[],"error":result.err()}),
+                    json!({"found":false,"base_url":null,"models":[],"error":result.err(),"install":install}),
                 );
             }
         };
@@ -275,22 +279,22 @@ pub async fn serve(st: &AppState, req: Request) -> Response {
             Err(e) => {
                 return json_response(
                     StatusCode::OK,
-                    json!({"found":true,"base_url":local.base_url,"models":[],"error":e.detail.as_str().unwrap_or("").replace(&local.api_key,"***")}),
+                    json!({"found":true,"base_url":local.base_url,"models":[],"error":e.detail.as_str().unwrap_or("").replace(&local.api_key,"***"),"install":install}),
                 );
             }
         };
         let mut result = proxy::naming(&st.accounts).await;
+        result["install"] = install;
+        result["connected"] = super::cliproxy_setup::connected(st);
         result["found"] = json!(true);
         result["base_url"] = json!(local.base_url);
         result["error"] = Value::Null;
-        result["models"] = json!(
-            models
-                .into_iter()
-                .filter(|m| m["id"]
-                    .as_str()
-                    .is_some_and(|s| !s.starts_with("gpt-image-")))
-                .collect::<Vec<_>>()
-        );
+        let mut models: Vec<_> = models
+            .into_iter()
+            .filter(|m| m["id"].as_str().is_some_and(|s| !s.starts_with("gpt-image-")))
+            .collect();
+        super::cliproxy_setup::fill_context(&env.codex_default, &mut models);
+        result["models"] = json!(models);
         return json_response(StatusCode::OK, result);
     }
     let raw_body = if method == Method::PUT {
@@ -320,6 +324,13 @@ pub async fn serve(st: &AppState, req: Request) -> Response {
                     return (400,json!({"detail":{"code":"erro_cliproxy_endereco","msg":"endereço diferente do CLIProxyAPI local","params":{}}}));
                 }
                 body.insert("api_key".into(),json!(local.api_key));
+            }
+            if body.remove("create_only") == Some(Value::Bool(true)) {
+                return match store::create(&env, name, body) {
+                    Ok(true) => (200, json!({"motores":visible(&accounts)})),
+                    Ok(false) => (409, json!({"detail":{"code":"erro_motor_ja_existe","msg":"já existe um motor com esse nome","params":{"name":name}}})),
+                    Err(e) => (400, json!({"detail":e})),
+                };
             }
             return match store::put(&env, name, body) {
                 Ok(()) => (200, json!({"motores":visible(&accounts)})),
@@ -356,6 +367,13 @@ const ROUTES: &[(&str, &str)] = &[
     ("/api/engines/modelos", "POST"),
     ("/api/engines/cliproxy", "GET"),
     ("/api/engines/cliproxy/management-key", "PUT"),
+    ("/api/engines/cliproxy/management-key/reset", "POST"),
+    ("/api/engines/cliproxy/install", "GET"),
+    ("/api/engines/cliproxy/install", "POST"),
+    ("/api/engines/cliproxy/update", "POST"),
+    ("/api/engines/cliproxy/login", "POST"),
+    ("/api/engines/cliproxy/login/{state}", "GET"),
+    ("/api/engines/cliproxy/login/{state}/callback", "POST"),
     ("/api/credenciais/apelido", "PUT"),
     ("/api/credenciais/sincronizar", "POST"),
     ("/api/credenciais/kimi/{nome}", "DELETE"),

@@ -24,6 +24,7 @@ pub const FIELDS: &[(&str, char)] = &[
     ("adaptive_thinking", 'b'),
     ("gateway_model_discovery", 'b'),
     ("fine_grained_tool_streaming", 'b'),
+    ("fast", 'b'),
     ("auto_compact_window", 'i'),
     ("max_output_tokens", 'i'),
 ];
@@ -289,6 +290,21 @@ pub fn put(
         Ok(true)
     })
     .map(|_| super::catalog::invalidate(env, name))
+}
+
+/// Motor novo: nome que já existe fica como está (`false`), conferido sob a mesma trava da gravação.
+pub fn create(env: &AccountEnvironment, name: &str, body: Map<String, Value>) -> Result<bool, String> {
+    let created = change(env, |map| {
+        if map.contains_key(name) {
+            return Ok(false);
+        }
+        map.insert(name.into(), Value::Object(normalize(name, &body)?));
+        Ok(true)
+    })?;
+    if created {
+        super::catalog::invalidate(env, name);
+    }
+    Ok(created)
 }
 
 pub fn remove(env: &AccountEnvironment, name: &str) -> Result<bool, String> {
