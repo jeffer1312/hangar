@@ -259,6 +259,9 @@ pub struct Appearance {
     pub thinking_collapsed: bool,
     /// Botão Gráfico sobre as tabelas numéricas das respostas.
     pub table_chart: bool,
+    /// Conversa nova (beta): faixa do que o agente faz agora, cartão de sugestão, composer e abas redesenhados.
+    /// Desligada, a conversa segue o desenho anterior; os dois convivem até o beta virar o padrão.
+    pub conversation_beta: bool,
     pub ask_highlight: AskHighlight,
     /// Geral: também deste computador, no mesmo arquivo; o "Voltar ao padrão" da Aparência não mexe nelas.
     pub language: Language,
@@ -300,9 +303,12 @@ const DEFAULT: Appearance = Appearance { panels: Panels::Attached, theme: ThemeM
     font: Font::System, text_size: 100, line_height: 100, column: 100, sidebar_height: SidebarHeight::Full,
     navigation: Navigation::Sidebar, show_remote_tabs: true, sidebar_width: None, ticket_detail_width: None, sidebar_compact: false, tabs_full: false, tab_preview: false, tabs_working_first: false, tabs_recent_first: false, live_corner: [16., 16.],
     side_width: 300., side_browser_width: None, terminal_height: 260.,
-    tool_look: ToolLook::Classic, task_list: false, thinking_tools: ThinkingTools::Search, thinking_collapsed: false, table_chart: false, ask_highlight: AskHighlight::Accent,
+    tool_look: ToolLook::Classic, task_list: false, thinking_tools: ThinkingTools::Search, thinking_collapsed: false, table_chart: false, conversation_beta: false, ask_highlight: AskHighlight::Accent,
     language: Language::System, currency: Currency::Usd, hands_free: false, skip_chat_confirmations: false, delivery: None, steer_while_working: false, jev_delivery: false, accounts_compact: false, machines_tray_compact: false, sidebar_group: SidebarGroup::None, side_tab: SideTab::Context,
     terminal_font: CodeFont::JetBrainsMono, terminal_size: 12, code_font: CodeFont::JetBrainsMono, code_size: 25, keep_in_tray: false, chrome_autofill: false, full_chrome: false };
+
+/// A conversa nova (beta) está ligada: os desenhos que mudaram consultam isto e caem no anterior quando desligada.
+pub fn conversation_beta() -> bool { get().conversation_beta }
 
 impl Default for Appearance {
     fn default() -> Self { DEFAULT }
@@ -321,7 +327,7 @@ impl Appearance {
         Self { panels: self.panels, font: self.font, theme: self.theme, palette: self.palette, desktop_text: self.desktop_text,
             surface_material: self.surface_material,
             background: self.background, background_effect: self.background_effect, background_scope: self.background_scope, wallpaper: self.wallpaper, tool_look: self.tool_look, task_list: self.task_list,
-            thinking_tools: self.thinking_tools, table_chart: self.table_chart, navigation: self.navigation, show_remote_tabs: self.show_remote_tabs, sidebar_width: self.sidebar_width, ticket_detail_width: self.ticket_detail_width, sidebar_compact: self.sidebar_compact, live_corner: self.live_corner,
+            thinking_tools: self.thinking_tools, table_chart: self.table_chart, conversation_beta: self.conversation_beta, navigation: self.navigation, show_remote_tabs: self.show_remote_tabs, sidebar_width: self.sidebar_width, ticket_detail_width: self.ticket_detail_width, sidebar_compact: self.sidebar_compact, live_corner: self.live_corner,
             side_width: self.side_width, side_browser_width: self.side_browser_width, terminal_height: self.terminal_height,
             language: self.language, currency: self.currency, hands_free: self.hands_free, skip_chat_confirmations: self.skip_chat_confirmations,
             delivery: self.delivery, steer_while_working: self.steer_while_working, jev_delivery: self.jev_delivery, accounts_compact: self.accounts_compact, machines_tray_compact: self.machines_tray_compact, sidebar_group: self.sidebar_group, side_tab: self.side_tab,

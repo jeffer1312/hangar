@@ -119,6 +119,9 @@ impl Hangar {
             let quota = self.focused_proxy_quota();
             let quota = if quota.is_empty() { tr("no_data") } else { quota };
             let label = if proxy { format!("{name} · {quota}") } else { match &window {
+                // Conversa nova: conta primeiro e o percentual dito como uso da janela, sem ambiguidade com saldo.
+                Some((label, pct)) if crate::appearance::conversation_beta() =>
+                    format!("{name} · {}", tr("beta_quota_used").replace("{pct}", &pct.round().to_string()).replace("{window}", label)),
                 Some((label, pct)) => format!("{}% {label} · {name}", pct.round()),
                 None => format!("{} · {name}", tr("no_data")),
             } };

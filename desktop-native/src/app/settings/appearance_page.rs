@@ -595,6 +595,10 @@ impl Hangar {
             Vec::from(LOOKS.map(art_tools)), LOOKS.iter().position(|l| *l == a.tool_look).unwrap_or(0), LOOKS.len(), false, tr("settings_next_version"), live,
             |this: &mut Hangar, index, _: &mut Window, cx| { let mut next = appearance::get(); next.tool_look = LOOKS[index]; this.apply_appearance(next, true, cx); }, cx);
         let conversation_body = div().pb(px(4.))
+            .child(self.line("settings_conversation_beta", Some(tr("settings_conversation_beta_hint")), true,
+                segmented("conversation-beta", &[tr("settings_conversation_beta_off"), tr("settings_conversation_beta_on")], a.conversation_beta as usize, true,
+                    |this: &mut Hangar, index, _: &mut Window, cx| { let mut next = appearance::get(); next.conversation_beta = index == 1; this.apply_appearance(next, true, cx); }, cx),
+                false))
             .child(self.sublabel("settings_tool_calls")).child(tool_calls)
             .child(self.line("settings_thinking", (!thinking_on).then(|| tr("settings_thinking_tree")), thinking_on,
                 segmented("thinking", &[tr("settings_thinking_none"), tr("settings_thinking_search"), tr("settings_thinking_all")],

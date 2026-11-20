@@ -686,7 +686,15 @@ impl Hangar {
         // A aba estreita de trás da faixa fica só com a máquina: pasta e branch não cabem nela.
         let full = appearance::get().tabs_full && !compact;
         let title = tab_title(session.name.clone(), group_label, grouped, full, terminal_mark(session).filter(|_| !compact), meta_line(session, full));
-        let tab = tab_frame(on, grouped, compact).id(SharedString::from(format!("tab-{}", target.id()))).relative().track_focus(&focus)
+        // Conversa nova: a aba aberta fica neutra com um traço embaixo, e o contorno colorido passa a ser só da que espera
+        // resposta, em ciano: selecionada e "precisa de mim" deixam de se confundir.
+        let beta = appearance::conversation_beta();
+        let waiting = beta && !on && state == "awaiting_input";
+        let tab = tab_frame(on, grouped, compact)
+            .when(beta && on, |el| el.bg(theme::text().alpha(0.07)).border_color(theme::border())
+                .child(div().absolute().left(px(6.)).right(px(6.)).bottom(px(-1.)).h(px(2.)).rounded_full().bg(theme::accent())))
+            .when(waiting, |el| el.bg(theme::waiting().alpha(0.10)).border_color(theme::waiting().alpha(0.55)))
+            .id(SharedString::from(format!("tab-{}", target.id()))).relative().track_focus(&focus)
             .when_some(slot, |el, (left, width)| el.absolute().top_0().left(px(left)).w(px(width)).block_mouse_except_scroll())
             .cursor_pointer().when(!on, |el| el.hover(|el| el.border_color(theme::accent())))
             .when(focus.is_focused(window), |el| el.focus_ring_style(window, cx))
