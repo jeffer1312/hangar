@@ -18,8 +18,8 @@ const TICK: Duration = Duration::from_secs(2);
 const SETTLE_S: f64 = 20.0;
 /// Conserto que não respondeu nisso vira falha: a linha não fica "consertando" para sempre.
 const MAX_AGE_MS: u64 = 2 * 3600 * 1000;
-/// `dead` antes disso pode ser a abertura em curso; depois, a sessão de conserto caiu.
-const DEAD_GRACE_MS: u64 = 60 * 1000;
+/// Morta ou fora da lista antes disso pode ser a abertura em curso (conta fria demora); depois, caiu ou foi fechada.
+const DEAD_GRACE_MS: u64 = 5 * 60 * 1000;
 const MAX_DETAIL: usize = 4000;
 const MAX_SUBJECT: usize = 200;
 const MAX_READ: u64 = 8 * 1024 * 1024;
@@ -208,12 +208,16 @@ async fn note(st: &AppState, parent: &str, entry_id: &str, text: &str, meta: Val
     if let Some(mark) = runtime.asleep(parent).await {
         return runtime.asleep_queue_action(parent, &mark.key, &call(), action()).await.map(|_| ()).map_err(|e| e.code);
     }
-    // Sem terminal e estacionada (parada há mais de uma hora): fila dela pelo arquivo, sem subir o processo.
-    if let Some(key) = runtime.claude_headless_key(parent).await {
-        return runtime.asleep_queue_action(parent, &key, &call(), action()).await.map(|_| ()).map_err(|e| e.code);
-    }
     runtime.adopt_claude_terminal(parent).await.map_err(|e| e.code)?;
-    runtime.queue_action(parent, call(), action()).await.map(|_| ()).map_err(|e| e.code)
+    match runtime.queue_action(parent, call(), action()).await {
+        Ok(_) => Ok(()),
+        // Sem terminal e estacionada (parada há mais de uma hora): fila dela pelo arquivo, sem subir o processo.
+        Err(error) if error.code == "runtime_binding" => match runtime.claude_headless_key(parent).await {
+            Some(key) => runtime.asleep_queue_action(parent, &key, &call(), action()).await.map(|_| ()).map_err(|e| e.code),
+            None => Err(error.code),
+        },
+        Err(error) => Err(error.code),
+    }
 }
 
 fn report(st: &AppState, session: &str, code: &str, reason: &'static str) {
