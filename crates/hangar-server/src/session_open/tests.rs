@@ -1674,6 +1674,8 @@ fn a_fixed_chatgpt_account_resolves_and_routes_the_engine() {
         server_env: &Default::default(), settings: None, read_only: None, windows: false, initial_prompt: None, engine_route: None, resume: false, allow_bypass: false };
     let command = claude::pane(&spec, "sid", &claude::ClaudeContext { engine_route: Some(&route), ..ctx }).command;
     let home_text = home.join(".codex-work").to_string_lossy().into_owned();
+    // No Windows o `canonicalize` do teste dá `\\?\C:\…`; a conta vai ao `hangar-engine` no caminho comum.
+    let home_text = home_text.strip_prefix(r"\\?\").unwrap_or(&home_text).to_owned();
     assert_eq!(command[..12], ["hangar-engine", "--exec", "gpt", "--account", "work", "--account-home", &home_text,
         "--account-base-url", &format!("http://127.0.0.1:{port}"), "--model", "gpt-5.5", "--context"]);
     // Normal é a falta do campo: o pane só leva `--service-tier` com Fast ou Ultra Fast.

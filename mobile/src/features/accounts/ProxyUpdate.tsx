@@ -56,7 +56,7 @@ export function useProxyUpdate(server: Server | null) {
       setInstall(next);
       return next;
     } catch (cause) {
-      console.warn('[contas] estado do CLIProxyAPI não veio', cause);
+      console.warn('cliproxy_install_read_failed', cause);
       return null;
     }
   }, [server?.id, server?.baseUrl, server?.token]);
