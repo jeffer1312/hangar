@@ -879,7 +879,7 @@ impl Hangar {
                 let aria = [Some(format!("{name}: {text}")), effort.clone().map(|e| format!("{}: {e}", tr("ctl_effort"))), fast.then(|| tr("ctl_fast"))]
                     .into_iter().flatten().collect::<Vec<_>>().join(" · ");
                 let id = SharedString::from(format!("ctl-{}", ctl.key()));
-                pills.push(popup::anchor(div(), id.clone()).child(super::model_pill(id, text, effort.filter(|_| busy.is_none()), (fast && busy.is_none()).then(|| tr("ctl_fast")), cx)
+                pills.push(popup::anchor(div(), id.clone()).child(super::model_pill(id, self.provider().0, text, effort.filter(|_| busy.is_none()), (fast && busy.is_none()).then(|| tr("ctl_fast")), cx)
                     .selected(open == Some(ctl)).disabled(!self.chat_online)
                     .tooltip(format!("{name} · {}", tr("ctl_effort"))).accessibility_label(aria)
                     .on_click(cx.listener(move |this, _, window, cx| {
@@ -908,6 +908,8 @@ impl Hangar {
             pills.push(popup::anchor(div(), id.clone()).child(chrome::pill_button(id, cx).gap(px(4.)).selected(open == Some(ctl)).disabled(!self.chat_online)
                 .tooltip(name.clone()).accessibility_label(format!("{name}: {text}"))
                 .when(glyph, |el| el.child(div().text_size(px(10.)).text_color(theme::faint()).child("✦")))
+                // A pílula do modelo sem esforço (Haiku, Pi sem níveis) também leva o símbolo do agente.
+                .when(ctl == Ctl::Model, |el| el.child(chrome::provider_glyph(self.provider().0, 14.)))
                 .child(div().max_w(px(130.)).truncate().text_xs().font_weight(FontWeight::SEMIBOLD).child(text))
                 .on_click(listener)).into_any_element());
         }

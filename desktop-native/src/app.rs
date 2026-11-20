@@ -233,9 +233,10 @@ pub(crate) fn composer_mic(label: String, cx: &App) -> Button { chrome::icon_but
 /// As peças do seletor de modelos e da troca de agente, para a animação da novidade.
 pub(crate) use controls::picker as model_picker;
 
-/// Pílula do modelo com o esforço e o Fast ao lado.
-pub(crate) fn model_pill(id: impl Into<ElementId>, text: String, effort: Option<String>, fast: Option<String>, cx: &App) -> Button {
+/// Pílula do modelo com o símbolo do agente antes do nome (como no T3 Code) e o esforço e o Fast ao lado.
+pub(crate) fn model_pill(id: impl Into<ElementId>, provider: &str, text: String, effort: Option<String>, fast: Option<String>, cx: &App) -> Button {
     chrome::pill_button(id, cx).gap(px(6.))
+        .when(!provider.is_empty(), |el| el.child(chrome::provider_glyph(provider, 14.)))
         .child(div().max_w(px(150.)).truncate().text_xs().font_weight(FontWeight::SEMIBOLD).child(text))
         .when_some(effort, |el, effort| el.child(div().flex_shrink_0().text_xs().text_color(theme::muted()).child(effort)))
         .when_some(fast, |el, fast| el.child(div().id("ctl-fast-active").flex_shrink_0().text_xs().text_color(theme::muted()).child(fast)))
