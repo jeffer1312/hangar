@@ -566,12 +566,36 @@ fn other_cano_alive(key: &str, except: u32) -> bool {
 }
 
 /// Canos deste dono cuja sessão já não existe; `SIGTERM` por pid, como o Python. Dono é
-/// `HANGAR_CANO_OWNER`, ou o `HOME` em cano antigo sem ele. Só Linux (`/proc`).
+/// `HANGAR_CANO_OWNER`, ou o `HOME` em cano antigo sem ele. Linux (`/proc`) e Windows, onde o cano
+/// nasce fora do Job do servidor e ninguém mais o recolhe.
 pub fn kill_orphans(live: &HashSet<String>, owner: &str) -> usize {
     #[cfg(target_os = "linux")]
     { linux_orphans(live, owner) }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(windows)]
+    { windows_orphans(live, owner) }
+    #[cfg(not(any(target_os = "linux", windows)))]
     { let _ = (live, owner); 0 }
+}
+
+/// O mesmo critério do Linux pelo ambiente de cada processo; cano antigo sem `HANGAR_CANO_OWNER` fica.
+#[cfg(windows)]
+fn windows_orphans(live: &HashSet<String>, owner: &str) -> usize {
+    use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
+    let mut system = System::new();
+    system.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing().with_environ(UpdateKind::Always));
+    let me = std::process::id();
+    let (mut killed, mut foreign) = (0usize, 0usize);
+    for (pid, process) in system.processes() {
+        if pid.as_u32() == me { continue; }
+        let var = |wanted: &str| process.environ().iter()
+            .find_map(|item| item.to_str()?.strip_prefix(wanted)?.strip_prefix('=').map(str::to_owned));
+        let Some(key) = var("HANGAR_CANO_KEY").filter(|k| !k.is_empty()) else { continue };
+        if live.contains(&key) { continue; }
+        if var("HANGAR_CANO_OWNER").as_deref() != Some(owner) { foreign += 1; continue; }
+        if process.kill() { killed += 1; } else { tracing::warn!(pid = pid.as_u32(), "órfão do cano não foi encerrado"); }
+    }
+    if foreign > 0 { tracing::info!(foreign, "processos de cano sem prova de que são deste servidor ficaram"); }
+    killed
 }
 
 /// Varredura da subida do Rust (regra 10): vivas são as chaves de `claude-headless/`, as do Codex sem
