@@ -494,6 +494,11 @@ impl RuntimeRegistry {
         if all.get(name).is_some_and(|p|p.view.state==HandoffState::Running) { return None; }
         let generation=NEXT.fetch_add(1,std::sync::atomic::Ordering::Relaxed);
         all.insert(name.to_owned(),PendingHandoff { generation,view,cancelled:false });
+        drop(all);
+        // ponytail: a troca vive só na memória; servidor reiniciado no meio a perde, e o diário e o log mostram o
+        // início sem o "encerrada". Gravar em disco se isso acontecer de fato.
+        tracing::info!(session=%name,generation,"troca de agente à espera do turno");
+        self.diag.report("runtime.handoff_waiting",name,"handoff_waiting","troca de agente à espera do turno; vive só na memória do servidor");
         Some(generation)
     }
     /// O estado da troca, se ainda é a da geração `generation`.
@@ -526,6 +531,7 @@ impl RuntimeRegistry {
             if all.get(name).is_none_or(|p|p.generation!=generation) { return; }
             all.remove(name);
         }
+        tracing::info!(session=%name,generation,"troca de agente encerrada");
         if drain { self.drain_later(name,"fila solta depois da troca de agente não drenou agora"); }
     }
     /// A troca falhou: a linha mostra o motivo até sair, e a fila já volta a entregar ao Claude.
@@ -758,8 +764,9 @@ impl RuntimeRegistry {
     }
     /// Antes da vida nova da adormecida: o texto guardado desde `since` que ainda espera volta à fila com a
     /// hora de agora, na mesma ordem. A vida nova só entrega o que tem até 15 min antes do nascimento dela, e
-    /// um acordar que falhou deixaria o texto antigo de fora para sempre.
-    pub(super) async fn restamp_asleep(&self,key:&str,since:f64) -> Result<usize,RuntimeError> {
+    /// um acordar que falhou deixaria o texto antigo de fora para sempre. `carried`: a fila vai a uma vida que
+    /// nasce depois (a troca de agente), e as linhas ganham a folga de quem chegou antes do terminal novo.
+    pub(super) async fn restamp_asleep(&self,key:&str,since:f64,carried:bool) -> Result<usize,RuntimeError> {
         let queue_dir = self.claude_dirs().1;
         let key = key.to_owned();
         tokio::task::spawn_blocking(move || -> Result<usize,RuntimeError> {
@@ -777,7 +784,7 @@ impl RuntimeRegistry {
                 if old.is_empty() || text.is_empty() { continue; }
                 // A nova entra antes de a antiga sair: falha no meio deixa o texto em dobro, nunca sem ele.
                 let id = crate::mods::state::random_hex(16);
-                let pre_transcript = row["pre_transcript"]==true;
+                let pre_transcript = carried || row["pre_transcript"]==true;
                 let action = if row["conversation"]==true { Action::AppendConversation { text,pre_transcript,entry_id:Some(id.clone()) } }
                     else { Action::Append { text,delivered:false,ts:None,pre_transcript,entry_id:Some(id.clone()) } };
                 store.exec(generation,&format!("restamp:{id}"),clock(),action).map_err(|_|failure("queue_io"))?;

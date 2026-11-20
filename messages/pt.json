@@ -9553,6 +9553,7 @@
   "session_transfer_source_busy": "A sessão tem trabalho em execução ou uma pergunta ou permissão pendente.",
   "session_transfer_busy": "A sessão está trocando de agente; tente novamente quando terminar.",
   "session_transfer_wait_expired": "A sessão ficou trabalhando tempo demais e a troca de contexto foi cancelada.",
+  "session_transfer_queue_unavailable": "As mensagens na fila não puderam ir para o Codex; a conversa continua no Claude.",
   "session_handoff_not_waiting": "Não há troca de contexto esperando nesta sessão.",
   "handoff_divider": "Troca de contexto",
   "handoff_waiting": "Troca de contexto pendente",

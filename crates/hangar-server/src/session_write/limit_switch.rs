@@ -279,6 +279,8 @@ pub trait Host: Send + Sync {
     fn send_continue<'a>(&'a self,name:&'a str) -> BoxFuture<'a,Result<bool,String>>;
     /// Fecha com Esc o menu do Claude Code ao bater o limite, se ele está na tela. `Ok(true)`: fechou.
     fn dismiss_limit_menu<'a>(&'a self,name:&'a str) -> BoxFuture<'a,Result<bool,String>>;
+    /// Uma troca de agente pedida pelo seletor espera esta sessão: ela leva a conversa ao Codex.
+    fn handoff_held(&self,name:&str) -> bool;
 }
 
 /// O menu "What do you want to do?" do Claude Code ao bater o limite, no rodapé do pane.
@@ -317,6 +319,8 @@ impl Switcher {
 
     async fn switch(&self,host:&dyn Host,hit:&LimitHit) -> Outcome {
         if hit.provider != "claude" { return Outcome::Stayed("limit_switch_not_claude"); }
+        // Reabrir no Claude agora levaria a fila que a troca de agente segurou para o Codex.
+        if host.handoff_held(&hit.name) { return Outcome::Stayed("limit_switch_handoff"); }
         let spec = match host.spec(&hit.name).await {
             None=>return Outcome::Stayed("limit_switch_not_rust"),
             Some(Err(code))=>return Outcome::Failed(code),
@@ -383,6 +387,7 @@ impl Switcher {
     /// `None`: reabriu na mesma conta. Reabrir só resolve token velho na memória com um bom no disco: login
     /// apagado vai direto para outra conta.
     async fn recover_login(&self,host:&dyn Host,hit:&AuthHit) -> Option<Outcome> {
+        if host.handoff_held(&hit.name) { return Some(Outcome::Stayed("limit_switch_handoff")); }
         let spec = match host.spec(&hit.name).await {
             None=>return Some(Outcome::Stayed("limit_switch_not_rust")),
             Some(Err(code))=>return Some(Outcome::Failed(code)),
@@ -471,7 +476,7 @@ impl Switcher {
         // arredondado); a troca que falhou, sem folga ou ocupada tenta de novo no próximo turno parado, e o aviso
         // velho relido é barrado pela conta gasta e pelo `limit_switch_stale`.
         // A conta trocada pela pessoa no meio da espera também esquece: o limite dela é outro.
-        if !matches!(outcome,Outcome::Stayed(code) if !matches!(code,"limit_switch_no_room" | "limit_switch_stale"))
+        if !matches!(outcome,Outcome::Stayed(code) if !matches!(code,"limit_switch_no_room" | "limit_switch_stale" | "limit_switch_handoff"))
             && let Ok(mut handled) = self.handled.lock() {
             handled.remove(&hit.name);
         }
@@ -574,6 +579,7 @@ impl Host for Native {
         })
     }
     fn logged_in(&self,path:&str) -> bool { crate::accounts::claude_refresh::has_login(std::path::Path::new(path)) }
+    fn handoff_held(&self,name:&str) -> bool { self.runtime.handoff_held(name) }
     fn release<'a>(&'a self,name:&'a str) -> BoxFuture<'a,()> { self.runtime.release_limit(name); Box::pin(async {}) }
     fn pause(&self) -> BoxFuture<'_,()> { Box::pin(tokio::time::sleep(std::time::Duration::from_secs(3))) }
     fn show_problem<'a>(&'a self,name:&'a str,problem:LimitProblem) -> BoxFuture<'a,()> {
@@ -924,13 +930,15 @@ mod tests {
         screen:Mutex<String>,
         /// Contas cujo login foi apagado.
         no_login:Mutex<Vec<String>>,
+        /// Uma troca de agente espera a sessão.
+        handoff:std::sync::atomic::AtomicBool,
     }
 
     impl Fake {
         fn new(dir:&str,quotas:Vec<Value>) -> Self {
             Fake { spec:Mutex::new(spec(claude(dir))),catalog:catalog(&["/a","/b","/c"]),quotas:Mutex::new(Ok(quotas)),
                 reopens:Mutex::new(Vec::new()),log:Mutex::new(Vec::new()),diary:Mutex::new(Vec::new()),problems:Mutex::new(Vec::new()),gone:Default::default(),
-                on_pause:Mutex::new(None),undelivered:Default::default(),continue_fails:Default::default(),screen:Mutex::new(String::new()),no_login:Mutex::new(Vec::new()) }
+                on_pause:Mutex::new(None),undelivered:Default::default(),continue_fails:Default::default(),screen:Mutex::new(String::new()),no_login:Mutex::new(Vec::new()),handoff:Default::default() }
         }
         fn log(&self) -> Vec<String> { self.log.lock().unwrap().clone() }
         fn diary(&self) -> Vec<String> { self.diary.lock().unwrap().clone() }
@@ -960,6 +968,7 @@ mod tests {
             })
         }
         fn logged_in(&self,path:&str) -> bool { !self.no_login.lock().unwrap().iter().any(|dead|dead == path) }
+        fn handoff_held(&self,_:&str) -> bool { self.handoff.load(std::sync::atomic::Ordering::Relaxed) }
         fn release<'a>(&'a self,_:&'a str) -> BoxFuture<'a,()> { Box::pin(async move { self.log.lock().unwrap().push("release".into()); }) }
         fn pause(&self) -> BoxFuture<'_,()> {
             Box::pin(async move {
@@ -1061,6 +1070,21 @@ mod tests {
         Switcher::default().handle(&fake,hit("/a",2000.0)).await;
         assert_eq!(fake.log(),vec!["reopen /c","release","continue"],"reabre, solta a fila e só então manda o recado");
         assert_eq!(fake.diary(),vec!["switched","limit_switch_continue_delivered"]);
+    }
+
+    /// A troca de agente à espera leva a conversa ao Codex: nem o limite nem o login recusado reabrem o Claude.
+    #[tokio::test]
+    async fn a_held_handoff_keeps_the_session_out_of_any_reopen() {
+        let fake = Fake::new("/a",vec![quota("/a",100.0),quota("/b",60.0),quota("/c",20.0)]);
+        fake.handoff.store(true,std::sync::atomic::Ordering::Relaxed);
+        let switcher = Switcher::default();
+        switcher.handle(&fake,hit("/a",2000.0)).await;
+        switcher.handle_auth(&fake,refused("/a")).await;
+        assert_eq!(fake.log(),vec!["release","release"]);
+        assert_eq!(fake.diary(),vec!["limit_switch_handoff","limit_switch_handoff"]);
+        fake.handoff.store(false,std::sync::atomic::Ordering::Relaxed);
+        switcher.handle(&fake,hit("/a",2000.0)).await;
+        assert_eq!(fake.log()[2..],["reopen /c","release","continue"],"o mesmo aviso vale de novo depois da troca desfeita");
     }
 
     /// "Recebeu o recado" só com a entrega confirmada; sem ela, o diário diz que está na fila da vida nova.

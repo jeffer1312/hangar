@@ -1193,6 +1193,11 @@ impl Executor {
             self.action(Action::Finish {id:id.into(),status,result:serde_json::to_value(&result).unwrap()}).await?;
             return Ok(result);
         }
+        // A troca de conta ou de agente segurou a fila: a mensagem, "Na conversa" incluída, espera nela na ordem e vai
+        // ao destino novo, mesmo com o Claude parado ou com canal nativo.
+        if row_id.is_some() && self.options.lifecycle.as_ref().and_then(std::sync::Weak::upgrade).is_some_and(|registry|registry.queue_held(&self.target.name)) {
+            return self.defer(id,json!({"code":"queue_held","queued":true,"cleanup":"not_needed"})).await;
+        }
         // Mensagem nova não passa à frente de outra que ficou adiada: espera na fila e a drenagem entrega na ordem.
         // A "Na conversa" entra no turno como o Orientar, à frente das comuns, mas nunca de outra "Na conversa".
         let marked_ahead=conversation && super::queue::waiting_ids(&state,self.target.created).iter()

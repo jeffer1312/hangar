@@ -9553,6 +9553,7 @@
   "session_transfer_source_busy": "The session has work in progress or a pending question or approval.",
   "session_transfer_busy": "The session is switching agents; try again when it finishes.",
   "session_transfer_wait_expired": "The session kept working for too long and the context handoff was cancelled.",
+  "session_transfer_queue_unavailable": "The queued messages could not move to Codex; the conversation stays in Claude.",
   "session_handoff_not_waiting": "There is no context handoff waiting in this session.",
   "handoff_divider": "Context handoff",
   "handoff_waiting": "Context handoff pending",

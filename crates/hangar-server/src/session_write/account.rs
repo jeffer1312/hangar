@@ -215,6 +215,10 @@ pub async fn switch_route(State(st):State<Arc<AppState>>,ConnectInfo(peer):Conne
     let (parts,body)=req.into_parts();
     let Ok(bytes)=to_bytes(body,BODY_LIMIT).await else {return too_large(&parts.headers)};
     let asked=target(&bytes);
+    // A troca de agente à espera leva a conversa ao Codex: outra conta do Claude agora passaria por cima dela.
+    if matches!(asked,Some(Target::ConfigDir(_) | Target::EngineAccount(_))) && runtime.handoff_held(&name) {
+        return transfer_refusal(&parts.headers,hangar_conversation_transfer::TransferError::new("session_transfer_busy"));
+    }
     // A transferência exige uma origem acordada e confirmada.
     if asked==Some(Target::Codex) && runtime.asleep(&name).await.is_some() {
         return reply(Some(&parts.headers),StatusCode::CONFLICT,detail_body("erro_sessao_adormecida",

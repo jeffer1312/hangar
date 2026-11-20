@@ -568,6 +568,10 @@ impl RuntimeRegistry {
         if self.transfer_blocked(name).await {
             return Err(error("session_transfer_busy"));
         }
+        // A troca do seletor à espera só deixa passar a transferência dela: a direta levaria a fila segurada a outro destino.
+        if !request.when_idle && self.handoff_held(name) {
+            return Err(error("session_transfer_busy"));
+        }
         self.ingress()
             .hold_transfer(name, Duration::from_secs(60))
             .await
@@ -631,7 +635,8 @@ impl RuntimeRegistry {
             None,
         )
         .map_err(|_| error("session_transfer_invalid_model_choice"))?;
-        self.transfer_queue_empty(name, &current.spec.key).await?;
+        let handoff = request.when_idle && self.handoff_held(name);
+        self.transfer_queue_empty(name, &current.spec.key, handoff).await?;
         // Reconfere sob a mesma porta depois das consultas à conta.
         let fresh = self
             .claude_current(name, BusyCheck::Refuse, false)
@@ -685,6 +690,12 @@ impl RuntimeRegistry {
             self.stop_claude(name,&current,Surface::Terminal).await.map_err(|_|error("session_transfer_source_not_stopped"))?;
             private["source_stopped"]=json!(true);store.write_runtime(&record.id,&private)?;
             record.phase=TransferPhase::SourceStopped;store.save(&record)?;
+            // O que chegou à fila na espera é mais velho que o terminal do Codex, que só entrega o que nasceu depois dele.
+            // A vida sem terminal já podou o que era de antes dela; a com terminal, não: o corte é o da folga dela.
+            if handoff {
+                let since=match &current.life {Life::Terminal{target}=>target.created-900.0,_=>0.0};
+                self.restamp_asleep(&current.spec.key,since,true).await.map_err(|_|error("session_transfer_queue_unavailable"))?;
+            }
             record=store.capture_snapshot(&record,&source,Vec::new())?;
             let context=convert_snapshot(Path::new(&record.source.as_ref().ok_or_else(||error("session_transfer_invalid_record"))?.path))?;
             if record.source.as_ref().is_none_or(|source|source.digest!=context.source_digest) {return Err(error("session_transfer_source_changed"));}
@@ -734,8 +745,7 @@ impl RuntimeRegistry {
 
     /// Com a fila segurada para a troca, só a linha entregue e ainda não confirmada segura: a que espera
     /// entrega vai ao Codex.
-    async fn transfer_queue_empty(&self, name: &str, key: &str) -> Result<(), TransferError> {
-        let held = self.handoff_held(name);
+    async fn transfer_queue_empty(&self, name: &str, key: &str, held: bool) -> Result<(), TransferError> {
         let queue = self.codex_environment().claude_base.join(".hangar-queue");
         let (state, _) = super::super::codex_terminal::queue_files(&queue, key);
         let rows = match super::super::queue::read_replaced(&state) {

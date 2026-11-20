@@ -564,7 +564,7 @@ impl RuntimeRegistry {
         let Ok(_ingress)=super::lifecycle::ClosedIngress::acquire_within(self.ingress(),name,Duration::from_secs(1)).await else {return Ok(false)};
         let home=self.codex_environment().home;
         // A porta fechada não exclui a troca de agente nem o acordar: os dois são conferidos aqui.
-        if super::codex_relaunch::transfer_open(&home,name,None,None) || self.waking_key(name).is_some() || self.claude_sidecar(name).await?.is_some() {
+        if self.handoff_held(name) || super::codex_relaunch::transfer_open(&home,name,None,None) || self.waking_key(name).is_some() || self.claude_sidecar(name).await?.is_some() {
             return Ok(false);
         }
         // Pergunta, fila, entrega incerta, turno e painel: a guarda da reabertura.
@@ -643,7 +643,8 @@ impl RuntimeRegistry {
 
     async fn reopen_by_spec(&self,name:&str,change:SessionChange,between:Option<&dyn Between>,resume:Option<&str>) -> Result<Reopened,ReopenFailure> {
         let transfer=|| {
-            let open=super::codex_relaunch::transfer_open(&self.codex_environment().home,name,None,None);
+            // A troca de agente à espera também conta: a vida nova do Claude levaria a fila que ela segurou para o Codex.
+            let open=self.handoff_held(name) || super::codex_relaunch::transfer_open(&self.codex_environment().home,name,None,None);
             if open {Err(ReopenFailure::refused(RuntimeError::new("session_transfer_busy","a sessão está trocando de agente")))} else {Ok(())}
         };
         transfer()?;
@@ -679,7 +680,7 @@ impl RuntimeRegistry {
         let mut current=self.claude_current(name,check,resume.is_some()).await.map_err(ReopenFailure::refused)?;
         // A vida nova só entrega o que tem até 15 min antes de nascer: o texto guardado no sono vem com ela.
         if let Some(meta)=meta.as_ref().filter(|meta|asleep_of(meta).is_some()) && let Some(key)=meta["key"].as_str() {
-            self.restamp_asleep(key,meta["asleep"]["since"].as_f64().unwrap_or(0.0)).await.map_err(ReopenFailure::refused)?;
+            self.restamp_asleep(key,meta["asleep"]["since"].as_f64().unwrap_or(0.0),false).await.map_err(ReopenFailure::refused)?;
         }
         // Outra conversa leva as escolhas de plugins e skills guardadas dela, não as do processo de agora.
         if let Some(sid)=resume.filter(|sid|*sid!=current.sid) {

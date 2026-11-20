@@ -1037,6 +1037,13 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
             let pending = roots.get_mut(&id).unwrap();
             pending.preparing = false;
             if pending.cancelled || pending.timed_out { continue; }
+            // A troca de conta ou de agente segurou a fila (talvez depois de o lote sair dela): a mensagem espera
+            // nela e vai ao destino novo, inclusive a "Na conversa".
+            if target.provider=="claude" && pending.command.kind == OperationKind::Input && !rowless(&target.provider,&pending.command)
+                && engine.lifecycle.as_ref().and_then(std::sync::Weak::upgrade).is_some_and(|registry|registry.queue_held(&target.name)) {
+                effects.push_back(Effect::Reply { operation_id:id,disposition:Disposition::Deferred,payload:json!({"code":"queue_held"}) });
+                continue;
+            }
             if matches!(pending.command.kind,OperationKind::SteerQueue | OperationKind::Steer)
                 && pending.command.payload.get("expected_turn").is_some_and(|expected|turn_marker(&engine.view()).as_ref()!=Some(expected)) {
                 effects.push_back(Effect::Reply { operation_id:id,disposition:Disposition::Rejected,payload:json!({"code":"queue_steer_work_changed"}) });
