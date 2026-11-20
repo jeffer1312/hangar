@@ -122,8 +122,6 @@ pub fn conversation_status(state: &str) -> Hsla {
     let dark = is_dark();
     if state == "idle" { return faint(); }
     rgb(match state {
-        // Conversa nova: "esperando você" em ciano, o mesmo das abas.
-        "input" if appearance::conversation_beta() => return waiting(),
         "input" => if dark { 0x70b0ff } else { 0x155eae },
         "failed" | "problem" | "dead" => if dark { 0xff8585 } else { 0xb42323 },
         "queued" | "uncertain" => if dark { 0xfbbf24 } else { 0x874b00 },
@@ -422,10 +420,10 @@ pub fn selected_row() -> Hsla { if see_through() { accent_dim() } else { rgb(col
 pub fn status(state: &str) -> Hsla {
     match state { "working" => accent(), "awaiting_input" => warning(), "idle" => success(), "dead" => danger(), _ => muted() }
 }
-/// Pílula de estado (`--pill-*`): fundo e texto.
 /// Ciano de "esperando você" da conversa nova: longe do lilás de execução sem depender do texto.
 pub fn waiting() -> Hsla { rgb(if is_dark() { 0x45c8dc } else { 0x0b7285 }).into() }
 
+/// Pílula de estado (`--pill-*`): fundo e texto.
 pub fn pill(state: &str) -> (Hsla, Hsla) {
     match state {
         "working" => (accent_dim(), accent_text()),

@@ -6618,7 +6618,6 @@
   "native_rename_beta_weak": "Feita com pouco contexto; outra pode vir na próxima mensagem.",
   "native_beta_working": "Trabalhando",
   "native_beta_thinking": "Pensando",
-  "term_beta_failed": "{n} falhou",
   "native_beta_draft_direct": "Entra no turno em andamento",
   "native_beta_draft_queue": "Vai para a fila e sai quando o turno acabar",
   "native_beta_draft_jev": "O Jev decide se entra no turno ou vai para a fila",

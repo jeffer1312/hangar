@@ -129,11 +129,18 @@ const OVERLAP: f32 = 12.;
 // usa as mesmas sem nenhum.
 
 /// A caixa da aba: medida, borda e as cores de aberta, de grupo ou solta.
-pub(crate) fn tab_frame(on: bool, grouped: bool, compact: bool) -> Div {
+pub(crate) fn tab_frame(on: bool, grouped: bool, compact: bool, waiting: bool) -> Div {
+    // Conversa nova: a aba aberta fica neutra com um traço embaixo, e o contorno colorido passa a ser só da que espera
+    // resposta, em ciano: selecionada e "precisa de mim" deixam de se confundir.
+    let beta = appearance::conversation_beta();
     div().flex_shrink_0().w(px(TAB_WIDTH)).h(px(tab_height())).px(px(8.))
         .when(compact, |el| el.pl(px(20.)))
         .flex().items_center().gap(px(if compact { 4. } else { 6. })).rounded(px(6.)).border_1()
-        .map(|el| if on { el.bg(theme::accent_dim()).border_color(theme::accent()).text_color(theme::text()).font_weight(FontWeight::SEMIBOLD) }
+        .map(|el| if beta && on {
+            el.relative().bg(theme::text().alpha(0.07)).border_color(theme::border()).text_color(theme::text()).font_weight(FontWeight::SEMIBOLD)
+                .child(div().absolute().left(px(6.)).right(px(6.)).bottom(px(-1.)).h(px(2.)).rounded_full().bg(theme::accent()))
+        } else if beta && waiting { el.bg(theme::waiting().alpha(0.10)).border_color(theme::waiting().alpha(0.55)).text_color(theme::text()) }
+            else if on { el.bg(theme::accent_dim()).border_color(theme::accent()).text_color(theme::text()).font_weight(FontWeight::SEMIBOLD) }
             else if grouped { el.bg(theme::raised()).border_color(theme::border()).text_color(theme::muted()) }
             // Toda aba tem a borda à vista; a solta fica sem fundo, o que a separa da de grupo.
             else { el.border_color(theme::border_strong()).text_color(theme::muted()) })
@@ -686,14 +693,7 @@ impl Hangar {
         // A aba estreita de trás da faixa fica só com a máquina: pasta e branch não cabem nela.
         let full = appearance::get().tabs_full && !compact;
         let title = tab_title(session.name.clone(), group_label, grouped, full, terminal_mark(session).filter(|_| !compact), meta_line(session, full));
-        // Conversa nova: a aba aberta fica neutra com um traço embaixo, e o contorno colorido passa a ser só da que espera
-        // resposta, em ciano: selecionada e "precisa de mim" deixam de se confundir.
-        let beta = appearance::conversation_beta();
-        let waiting = beta && !on && state == "awaiting_input";
-        let tab = tab_frame(on, grouped, compact)
-            .when(beta && on, |el| el.bg(theme::text().alpha(0.07)).border_color(theme::border())
-                .child(div().absolute().left(px(6.)).right(px(6.)).bottom(px(-1.)).h(px(2.)).rounded_full().bg(theme::accent())))
-            .when(waiting, |el| el.bg(theme::waiting().alpha(0.10)).border_color(theme::waiting().alpha(0.55)))
+        let tab = tab_frame(on, grouped, compact, waits(session))
             .id(SharedString::from(format!("tab-{}", target.id()))).relative().track_focus(&focus)
             .when_some(slot, |el, (left, width)| el.absolute().top_0().left(px(left)).w(px(width)).block_mouse_except_scroll())
             .cursor_pointer().when(!on, |el| el.hover(|el| el.border_color(theme::accent())))

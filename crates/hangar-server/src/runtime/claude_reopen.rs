@@ -356,7 +356,7 @@ fn spec_of(procs:&dyn ProcessView,pid:i64,key:&str,name:&str,cwd:String,created:
         model:flag("--model"),effort:flag("--effort"),service_tier:tier,
         permission_mode:flag("--permission-mode").as_deref().and_then(PermissionMode::claude),
         subagent_model:if engine {None} else {env("CLAUDE_CODE_SUBAGENT_MODEL")},customizations:None,
-        jev:env("HANGAR_JEV").as_deref()==Some("on"),code_mode:env(crate::session_open::claude::CODE_MODE_ENV).as_deref()==Some("1"),
+        jev:env("HANGAR_JEV").as_deref()==Some("on"),code_mode:env(crate::session_open::claude::CODE_MODE_ENV).is_some_and(|v|crate::config_sync::runtime::env_value_on(&Value::from(v))),
         read_only:env("HANGAR_ORQ_READ_ONLY").as_deref()==Some("1"),
         worktree:None,creator:None,created_at:created,conversation:None,name_auto:None,rename_suggestion:None,rename_weak_at:None,rename_dismissed:false,hooks_off:false };
     Ok((spec,settings))

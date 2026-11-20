@@ -293,17 +293,20 @@ impl Hangar {
             .into_any_element()
     }
 
-    /// `wide`: a página tem a coluna ao lado com a prévia e o Estilo; sem ela (janela estreita ou ao vivo), ficam no corpo.
-    /// Uma consulta por conexão: o settings.json do servidor diz se o Code Mode já está ligado lá.
+    /// Uma consulta por conexão: o settings.json do servidor diz se o Code Mode já está ligado lá. Até a resposta, e
+    /// com falha, a opção fica livre.
     fn ask_code_mode_settings(&mut self, cx: &mut Context<Self>) {
-        if self.settings_ui.code_mode_asked { return; }
-        self.settings_ui.code_mode_asked = true;
-        self.server_get(vec!["claude".into(), "code-mode".into()], Vec::new(), 10, cx, |this, result, cx| {
-            this.settings_ui.code_mode_settings = result.ok().and_then(|value| value["settings"].as_bool());
+        if self.settings_ui.code_mode_settings.is_some_and(|(connection, _)| connection == self.connection) { return; }
+        let connection = self.connection;
+        self.settings_ui.code_mode_settings = Some((connection, false));
+        self.server_get(vec!["claude".into(), "code-mode".into()], Vec::new(), 10, cx, move |this, result, cx| {
+            let on = result.ok().and_then(|value| value["settings"].as_bool()).unwrap_or(false);
+            this.settings_ui.code_mode_settings = Some((connection, on));
             cx.notify();
         });
     }
 
+    /// `wide`: a página tem a coluna ao lado com a prévia e o Estilo; sem ela (janela estreita ou ao vivo), ficam no corpo.
     pub(in crate::app) fn render_appearance(&mut self, wide: bool, cx: &mut Context<Self>) -> AnyElement {
         let a = appearance::get();
         let compact = a == a.compact_style();
@@ -606,7 +609,7 @@ impl Hangar {
             |this: &mut Hangar, index, _: &mut Window, cx| { let mut next = appearance::get(); next.tool_look = LOOKS[index]; this.apply_appearance(next, true, cx); }, cx);
         // O Code Mode já ligado pelo settings.json do Claude vale em toda sessão: a opção aparece marcada e travada.
         self.ask_code_mode_settings(cx);
-        let from_settings = self.settings_ui.code_mode_settings == Some(true);
+        let from_settings = self.settings_ui.code_mode_settings.is_some_and(|(_, on)| on);
         let conversation_body = div().pb(px(4.))
             .child(self.line("settings_conversation_beta", Some(tr("settings_conversation_beta_hint")), true,
                 segmented("conversation-beta", &[tr("settings_conversation_beta_off"), tr("settings_conversation_beta_on")], a.conversation_beta as usize, true,

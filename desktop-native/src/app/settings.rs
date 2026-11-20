@@ -378,9 +378,8 @@ pub(super) struct SettingsUi {
     drag: Option<(Point<Pixels>, [f32; 2])>,
     /// Onde ligar o desfoque, aberto pelo botão da linha (o tooltip não chega pelo teclado).
     blur_hint: bool,
-    /// Code Mode já ligado no settings.json do servidor (`GET /api/claude/code-mode`); `None` até a resposta.
-    pub code_mode_settings: Option<bool>,
-    code_mode_asked: bool,
+    /// Code Mode já ligado no settings.json do servidor (`GET /api/claude/code-mode`), por conexão; `None` antes de perguntar.
+    code_mode_settings: Option<(u64, bool)>,
     _subscriptions: Vec<Subscription>,
     _disk_watch: Task<()>,
 }
@@ -508,7 +507,7 @@ impl SettingsUi {
         }));
         Self { sliders, fonts, type_picks, custom_sizes, custom_open: Vec::new(),
             accent_picker, tint_picker, search, found: Vec::new(), pick: 0, hit: None, scroll: ScrollHandle::new(),
-            reveal: Rc::new(Cell::new(false)), jump: None, preview: None, live: false, drag: None, blur_hint: false, code_mode_settings: None, code_mode_asked: false, _subscriptions: subscriptions,
+            reveal: Rc::new(Cell::new(false)), jump: None, preview: None, live: false, drag: None, blur_hint: false, code_mode_settings: None, _subscriptions: subscriptions,
             _disk_watch: watch_disk(window, cx) }
     }
 

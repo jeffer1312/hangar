@@ -23,7 +23,7 @@ fn frame(t: f32) -> Option<f32> {
 /// A aba como a barra a desenha, sem foco nem clique.
 fn tab(key: &str, provider: &str, on: bool, width: f32) -> Div {
     let avatar = chrome::session_avatar(&chrome::AvatarLook::new(provider, None, "idle", false), 20., None);
-    app::tab_frame(on, false, false).w(px(width)).child(avatar)
+    app::tab_frame(on, false, false, false).w(px(width)).child(avatar)
         .child(app::tab_title(tr_shared(key, &[]), None, false, false, None, None))
 }
 

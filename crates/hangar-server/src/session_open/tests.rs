@@ -1576,7 +1576,7 @@ fn code_mode_reaches_the_claude_pane_only_when_asked() {
         let ctx = claude::ClaudeContext { plugin_roots: &[], bridge: None, bridge_key: "k", runtime_config: &Value::Null,
             server_env: &Default::default(), settings: None, read_only: None, windows: false, initial_prompt: None, engine_route: None, resume: false, allow_bypass: false };
         let argv = terminal::new_session_argv(&terminal::tests::machine_at(&home.join(".claude").to_string_lossy()), &claude::pane(&spec, "sid", &ctx));
-        (spec.code_mode, argv.iter().any(|a| a == "CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=1"))
+        (spec.code_mode, argv.iter().any(|a| *a == format!("{}=1", claude::CODE_MODE_ENV)))
     };
     assert_eq!(launch(json!({"code_mode": true})), (true, true));
     assert_eq!(launch(json!({})), (false, false));

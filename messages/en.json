@@ -6618,7 +6618,6 @@
   "native_rename_beta_weak": "Made with little context; another may come with the next message.",
   "native_beta_working": "Working",
   "native_beta_thinking": "Thinking",
-  "term_beta_failed": "{n} failed",
   "native_beta_draft_direct": "Goes into the turn in progress",
   "native_beta_draft_queue": "Goes to the queue and is sent when the turn ends",
   "native_beta_draft_jev": "Jev decides whether it joins the turn or waits in the queue",

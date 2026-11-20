@@ -249,6 +249,13 @@ pub(crate) fn menu_pill(id: impl Into<ElementId>, text: String, accent: bool, cx
 /// Linha de baixo do cartão: ícones à esquerda; seletores e a ação à direita. Coluna estreita (painel direito aberto):
 /// os seletores e o Enviar descem para a linha de baixo, e entre si quebram de novo se ainda não couberem, em vez de
 /// passar da borda do cartão por cima do painel.
+/// Parar o turno: o quadrado vermelho no botão redondo, o mesmo com o campo vazio e ao lado do Enviar.
+fn turn_stop_button(stopping: bool, cx: &App) -> Button {
+    Button::new("stop").custom(ButtonCustomVariant::new(cx).color(theme::elevated()).foreground(theme::danger()).hover(theme::raised()).active(theme::raised()))
+        .bg(theme::elevated()).child(div().size(px(10.)).rounded(px(2.)).bg(theme::danger())).size(px(30.)).rounded_full()
+        .tooltip(tr("stop_hint")).accessibility_label(tr("stop")).disabled(stopping)
+}
+
 pub(crate) fn composer_control_row(left: impl IntoIterator<Item = AnyElement>, right: impl IntoIterator<Item = AnyElement>, action: impl IntoElement) -> Div {
     div().w_full().flex().flex_wrap().items_center().gap_1().gap_y(px(4.))
         .child(div().flex_shrink_0().flex().items_center().gap_1().children(left))
@@ -5614,10 +5621,7 @@ impl Hangar {
             let enabled = crate::queue_panel::can_update(&payload) && !busy && self.chat_online && self.history_installed;
             self.queue_update_button(enabled, cx)
         } else if can_stop && !has_input {
-            Button::new("stop").custom(ButtonCustomVariant::new(cx).color(theme::elevated()).foreground(theme::danger()).hover(theme::raised()).active(theme::raised()))
-                .bg(theme::elevated()).child(div().size(px(10.)).rounded(px(2.)).bg(theme::danger())).size(px(30.)).rounded_full()
-                .tooltip(tr("stop_hint")).accessibility_label(tr("stop")).disabled(stopping)
-                .on_click(cx.listener(|this, _, window, cx| this.request_stop(window, cx)))
+            turn_stop_button(stopping, cx).on_click(cx.listener(|this, _, window, cx| this.request_stop(window, cx)))
         } else {
             send_button("send", !blocked && has_input, send_label, cx)
                 .on_click(cx.listener(|this, _, window, cx| this.submit(false, false, window, cx)))
@@ -5627,10 +5631,7 @@ impl Hangar {
         let beta_draft = appearance::conversation_beta() && can_stop && has_input && !editing;
         let action = if beta_draft {
             div().flex().items_center().gap(px(10.))
-                .child(Button::new("stop").custom(ButtonCustomVariant::new(cx).color(theme::elevated()).foreground(theme::danger()).hover(theme::raised()).active(theme::raised()))
-                    .bg(theme::elevated()).child(div().size(px(10.)).rounded(px(2.)).bg(theme::danger())).size(px(30.)).rounded_full()
-                    .tooltip(tr("stop_hint")).accessibility_label(tr("stop")).disabled(stopping)
-                    .on_click(cx.listener(|this, _, window, cx| this.request_stop(window, cx))))
+                .child(turn_stop_button(stopping, cx).on_click(cx.listener(|this, _, window, cx| this.request_stop(window, cx))))
                 .child(action).into_any_element()
         } else { action.into_any_element() };
         let draft_hint = beta_draft.then(|| {
@@ -7275,18 +7276,17 @@ pub(crate) fn cache_chip_at(cache: crate::chat::LastCache, now: f64) -> Stateful
         (Some(_), false) => (theme::muted(), theme::success()),
     };
     // Conversa nova: a frase diz o que o tempo é, sem o ponto verde que lia como "saudável"; âmbar só perto do fim.
-    if crate::appearance::conversation_beta() {
-        let text = match &label { Some(label) => tr("beta_cache_left").replace("{label}", label), None => tr("beta_cache_expired") };
-        return div().id("composer-cache").flex_shrink_0().h(px(22.)).px(px(6.)).flex().items_center().text_xs()
-            .text_color(if ending { theme::warning() } else { theme::muted() })
-            .tooltip(move |window, cx| gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(window, cx))
-            .child(text);
-    }
+    let beta = crate::appearance::conversation_beta();
+    let text = match (&label, beta) {
+        (Some(label), true) => tr("beta_cache_left").replace("{label}", label),
+        (None, true) => tr("beta_cache_expired"),
+        (label, false) => label.clone().unwrap_or_else(|| web("composer_expirou", &[])),
+    };
     div().id("composer-cache").flex_shrink_0().h(px(22.)).px(px(6.)).flex().items_center().gap(px(4.))
-        .font_family(theme::MONO).text_xs().text_color(ink)
+        .when(!beta, |el| el.font_family(theme::MONO)).text_xs().text_color(ink)
         .tooltip(move |window, cx| gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(window, cx))
-        .child(div().size(px(6.)).rounded_full().bg(dot))
-        .child(label.unwrap_or_else(|| web("composer_expirou", &[])))
+        .when(!beta, |el| el.child(div().size(px(6.)).rounded_full().bg(dot)))
+        .child(text)
 }
 
 /// "Trabalhou por 7s · 14:59"; conversa aberta no meio do turno não sabe quando ele começou, e fica só a hora.
