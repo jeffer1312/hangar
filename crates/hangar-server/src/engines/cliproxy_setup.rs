@@ -33,7 +33,10 @@ fn context(st: &AppState) -> Context {
 }
 
 async fn blocking<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static, fallback: T) -> T {
-    tokio::task::spawn_blocking(work).await.unwrap_or(fallback)
+    tokio::task::spawn_blocking(work).await.unwrap_or_else(|error| {
+        tracing::error!(%error, "cliproxy: leitura da instalação caiu; a tela recebe o valor de reserva");
+        fallback
+    })
 }
 
 /// O campo `install` do `GET /api/engines/cliproxy`.
@@ -46,7 +49,9 @@ pub async fn status(st: &AppState) -> Value {
         Install::Managed { tag, .. } => ("managed", Some(tag.clone())),
     };
     let latest = match kind {
-        "managed" => INSTALLER.latest(&Github::default()).await.ok().map(|r| r.tag),
+        "managed" => INSTALLER.latest(&Github::default()).await
+            .inspect_err(|code| tracing::warn!(code, "cliproxy: não consegui ler a versão mais nova no GitHub"))
+            .ok().map(|r| r.tag),
         _ => None,
     };
     let update_available = matches!((&version, &latest), (Some(v), Some(l)) if install::newer(l, v));
@@ -60,7 +65,9 @@ pub async fn status(st: &AppState) -> Value {
 
 /// Contas logadas no proxy, de qualquer provedor, para o assistente mostrar antes de existir motor.
 pub fn connected(st: &AppState) -> Value {
-    let records = proxy::credentials(&st.accounts.env).unwrap_or_default();
+    let records = proxy::credentials(&st.accounts.env)
+        .inspect_err(|error| tracing::warn!(%error, "cliproxy: contas do proxy ilegíveis; o assistente mostra nenhuma"))
+        .unwrap_or_default();
     json!(records.iter().filter(|(_, r)| r["disabled"] != true && r["type"].is_string())
         .map(|(_, r)| json!({"type": r["type"], "email": r["email"].as_str().unwrap_or("")}))
         .collect::<Vec<_>>())

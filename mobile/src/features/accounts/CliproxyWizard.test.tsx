@@ -120,6 +120,22 @@ describe('assistente do CLIProxyAPI no celular', () => {
     expect(calls.push).toHaveBeenCalledExactlyOnceWith({ pathname: '/create', params: { server: 'b', engine: 'gpt-novo' } });
   });
 
+  it('login com erro para de consultar; colar o endereço volta a consultar e conecta', async () => {
+    vi.useFakeTimers();
+    calls.status.mockResolvedValue({ status: 'error', error: 'negado' });
+    const view = await show();
+    await click(view.container, 'ChatGPT, Recomendado');
+    await act(async () => { await vi.advanceTimersByTimeAsync(2000); await settle(); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(6000); await settle(); });
+    expect(calls.status).toHaveBeenCalledTimes(1);
+
+    calls.status.mockResolvedValue({ status: 'ok' });
+    calls.detect.mockResolvedValue(proxy({ connected: [{ type: 'codex', email: 'velho@x.com' }, { type: 'codex', email: 'novo@x.com' }] }));
+    await fill(view.container, 'Endereço da barra do navegador', 'http://localhost:1455/auth/callback?code=abc&state=st1');
+    await click(view.container, 'Concluir login');
+    expect(view.container.textContent).toContain('Conta conectada.');
+  });
+
   it('conta que já está no proxy segue para o nome sem abrir login', async () => {
     const view = await show();
     expect(view.container.textContent).toContain('velho@x.com');

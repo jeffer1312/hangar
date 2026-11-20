@@ -214,7 +214,13 @@ pub async fn service_tier(State(st):State<Arc<AppState>>,ConnectInfo(peer):Conne
     if tier==ServiceTier::Ultrafast {
         let (account,model)=(match &spec.account {Account::Engine { account,.. }=>account.clone(),_=>None},runtime.claude_model_in_use(&name).await.or(spec.model.clone()));
         let accounts=st.accounts.clone();
-        let ultrafast=tokio::task::spawn_blocking(move||crate::engines::catalog::supports_ultrafast(&accounts,engine.as_deref().unwrap_or(""),model.as_deref(),account.as_deref())).await.unwrap_or(false);
+        let ultrafast=match tokio::task::spawn_blocking(move||crate::engines::catalog::supports_ultrafast(&accounts,engine.as_deref().unwrap_or(""),model.as_deref(),account.as_deref())).await {
+            Ok(ultrafast)=>ultrafast,
+            Err(error)=>{
+                tracing::error!(%error,session=%name,"Ultra Fast: a conferência da conta caiu");
+                return reply(Some(&parts.headers),StatusCode::INTERNAL_SERVER_ERROR,detail_body("erro_ultrafast_conferencia","não consegui conferir o plano da conta",json!({})));
+            }
+        };
         if !ultrafast {
             return reply(Some(&parts.headers),StatusCode::BAD_REQUEST,detail_body("erro_ultrafast_indisponivel",crate::engines::catalog::ULTRAFAST_REFUSED,json!({})));
         }

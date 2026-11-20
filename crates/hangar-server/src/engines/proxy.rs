@@ -143,7 +143,10 @@ const ULTRAFAST_PLANS: [&str; 2] = ["pro", "promax"];
 
 /// A conta fixa pode pedir Ultra Fast: plano dela e a regra que repõe o `ultrafast` no config do proxy.
 pub fn ultrafast(accounts: &AccountService, account: &str) -> bool {
-    let rule = hangar_cliproxy_setup::config::read(&accounts.env.home).ok().flatten().is_some_and(|c| c.ultrafast_rule);
+    let rule = match hangar_cliproxy_setup::config::read(&accounts.env.home) {
+        Ok(config) => config.is_some_and(|c| c.ultrafast_rule),
+        Err(error) => { tracing::warn!(?error, "cliproxy: config ilegível; Ultra Fast fica de fora"); false }
+    };
     rule && resolve(accounts, account, None).is_ok_and(|e| e["plan"].as_str().is_some_and(|p| ULTRAFAST_PLANS.contains(&p)))
 }
 

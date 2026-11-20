@@ -104,6 +104,7 @@ export function CliproxyWizard({ server, names, onSaved, onClose }: {
   const infoNow = useRef<CliproxyDeteccao | null>(null);
   const before = useRef(new Set<string>());
   const pollNow = useRef<() => void>(() => {});
+  const posting = useRef(false);
   const stageNow = useRef(stage);
   stageNow.current = stage;
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
@@ -141,12 +142,13 @@ export function CliproxyWizard({ server, names, onSaved, onClose }: {
   const install = () => run(async () => {
     haptic.selection();
     setStage({ k: 'installing', at: 0 });
+    posting.current = true;
     try { await installCliproxyForServer(server); }
     catch (e) {
       if (failure(e).code === 'erro_cliproxy_ocupado' || !alive.current) return;
       haptic.error();
       setStage({ k: 'install_failed', at: 0, error: message(e) });
-    }
+    } finally { posting.current = false; }
   });
 
   const installing = stage.k === 'installing';
@@ -159,8 +161,10 @@ export function CliproxyWizard({ server, names, onSaved, onClose }: {
         const next = await refresh();
         if (stop) return;
         const job = next.install?.job;
-        // Sem tarefa: o servidor reiniciou no meio e o andamento, que era da memória dele, se perdeu.
-        if (!job) { haptic.error(); setStage({ k: 'install_failed', at: 0, error: m.mobile_cliproxy_wizard_install_lost() }); return; }
+        // Sem tarefa depois do pedido aceito: o servidor reiniciou no meio e o andamento, que era da memória dele, se
+        // perdeu. Com o pedido ainda em voo, a tarefa só não nasceu.
+        if (!job && !posting.current) { haptic.error(); setStage({ k: 'install_failed', at: 0, error: m.mobile_cliproxy_wizard_install_lost() }); return; }
+        if (!job) { if (!stop) timer = setTimeout(() => void tick(), 1000); return; }
         if (job.done) {
           if (job.error) { haptic.error(); setStage({ k: 'install_failed', at: STEP_AT[job.step] ?? 0, error: installError(job.error) }); }
           else { haptic.success(); setStage({ k: 'pick' }); }
@@ -232,26 +236,31 @@ export function CliproxyWizard({ server, names, onSaved, onClose }: {
   const loginProvider = stage.k === 'login' ? stage.provider : null;
   useEffect(() => {
     if (!loginState || !loginProvider) return;
-    let stop = false, reading = false;
+    // `paused`: erro do login ou recusa que não passa sozinha; a consulta só volta quando a pessoa cola o endereço
+    // (ou o app volta à frente). `stop`: este login acabou ou a tela saiu dele.
+    let stop = false, reading = false, paused = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     // O login pode terminar no PC: a consulta segue sozinha, não só depois de colar.
     const poll = async () => {
       if (stop || reading) return;
       clearTimeout(timer);
-      reading = true;
+      reading = true; paused = false;
       try {
         const result = await getCliproxyLoginForServer(server, loginState);
         if (stop) return;
         if (result.status === 'ok') { stop = true; await connected(loginProvider, loginState); return; }
         if (result.status === 'error') {
-          stop = true; haptic.error();
+          paused = true; haptic.error();
           setLoginNote(m.mobile_cliproxy_wizard_login_failed({ erro: result.error ?? '' }));
           return;
         }
       } catch (e) {
-        if (!stop) setLoginNote(loginError(e));
+        if (stop) return;
+        setLoginNote(loginError(e));
+        const status = failure(e).status;
+        if (status !== undefined && status >= 400 && status < 500 && status !== 408 && status !== 429) paused = true;
       } finally { reading = false; }
-      if (!stop) timer = setTimeout(() => void poll(), 2000);
+      if (!stop && !paused) timer = setTimeout(() => void poll(), 2000);
     };
     pollNow.current = () => void poll();
     timer = setTimeout(() => void poll(), 2000);
@@ -318,8 +327,9 @@ export function CliproxyWizard({ server, names, onSaved, onClose }: {
       if (!alive.current) return;
       haptic.success();
       setStage({ k: 'done', account, id, name: label, model, fast: wantsFast });
-      onSaved();
-    } catch (e) { if (alive.current) fail(message(e)); }
+    } catch (e) { if (alive.current) fail(message(e)); return; }
+    // Fora do `try`: o motor já foi gravado; falha de quem chamou não pode virar erro de gravação.
+    onSaved();
   });
 
   const step = stepOf(stage);
