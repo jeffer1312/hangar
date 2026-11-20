@@ -266,6 +266,7 @@ impl resolve::OpenFacts for FixtureFacts {
     }
 
     fn supports_fast(&self, _engine: Option<&str>, _model: Option<&str>) -> bool { false }
+    fn supports_ultrafast(&self, _engine: Option<&str>, _model: Option<&str>, _account: Option<&str>) -> bool { false }
 
     // Nenhum cenário fixa conta ChatGPT; o gerador do proptest pode pedir.
     fn fixed_engine_model(&self, _engine: &str, _account: &str, _model: Option<&str>) -> Result<String, OpenError> {
@@ -890,7 +891,8 @@ fn fast_recognizes_cliproxy_client_keys_in_both_config_formats() {
         ("access:\n  api-keys:\n    - k\n", true),
         ("access:\n  api-keys:\n    - k\napi-keys:\n  codex: []\n", true),
         ("api-keys:\n  - k\n", true),
-        ("access:\n  api-keys: []\napi-keys:\n  - k\n", true),
+        // O campo v8 presente vence o legado mesmo vazio (regra do proxy): sem chave de cliente, sem Fast.
+        ("access:\n  api-keys: []\napi-keys:\n  - k\n", false),
         ("access:\n  api-keys:\n    - ' '\n", false),
     ] {
         std::fs::write(home.join(".cli-proxy-api/config.yaml"), config).unwrap();
@@ -902,6 +904,15 @@ fn fast_recognizes_cliproxy_client_keys_in_both_config_formats() {
             assert_eq!(resolved.err().map(|e| (e.status, e.code)), Some((400, Some("erro_criacao_sessao"))), "{config}");
         }
     }
+    // Fast aceito, Ultra Fast não: sem conta fixa Pro e sem a regra no config, o pedido iria a qualquer conta.
+    std::fs::write(home.join(".cli-proxy-api/config.yaml"), "access:\n  api-keys:\n    - k\n").unwrap();
+    let ultra = SessionOpenRequest::parse(json!({"name": "s2", "cwd": home.join("work"), "provider": "claude", "headless": false,
+        "engine": "gpt", "model": "gpt-6.1-sol", "service_tier": "ultrafast"}).to_string().as_bytes()).unwrap();
+    assert_eq!(resolve::resolve_open(&ultra, &OWNER, &facts).err().map(|e| (e.status, e.code)), Some((400, Some("erro_criacao_sessao"))));
+    // `fast: false` no motor tira o Fast também na criação, como no seletor.
+    std::fs::write(home.join(".claude/engines.json"),
+        json!({"gpt": {"base_url": "http://127.0.0.1:8317/v1", "api_key": "k", "model": "gpt-6.1-sol", "fast": false}}).to_string()).unwrap();
+    assert_eq!(resolve::resolve_open(&request, &OWNER, &facts).err().map(|e| (e.status, e.code)), Some((400, Some("erro_criacao_sessao"))));
 }
 
 /// `model: ""` com Fast cai no modelo do motor como o `or` do Python: o Fast passa, e quem recusa é
@@ -1553,6 +1564,10 @@ fn a_fixed_chatgpt_account_resolves_and_routes_the_engine() {
     std::fs::write(home.join(".cli-proxy-api/codex-work.json"), json!({"type": "codex", "account_id": "acc1", "prefix": "work"}).to_string()).unwrap();
     std::fs::write(home.join(".codex-work/.hangar-codex-conta"), json!({"version": 1, "id": "work"}).to_string()).unwrap();
     std::fs::write(home.join(".codex-work/auth.json"), json!({"tokens": {"account_id": "acc1"}}).to_string()).unwrap();
+    // Credencial solta duplicada: fica de fora sem derrubar a conta boa.
+    for file in ["codex-copia-1.json", "codex-copia-2.json"] {
+        std::fs::write(home.join(".cli-proxy-api").join(file), json!({"type": "codex", "account_id": "acc9", "email": "x@y.z", "prefix": "dup"}).to_string()).unwrap();
+    }
     std::fs::write(home.join(".claude/engines.json"),
         json!({"gpt": {"base_url": format!("http://127.0.0.1:{port}/v1"), "api_key": "k", "model": "gpt-5.5"}}).to_string()).unwrap();
     let open = |account: &str| {
@@ -1580,6 +1595,53 @@ fn a_fixed_chatgpt_account_resolves_and_routes_the_engine() {
         [("HOME".to_owned(), home.to_string_lossy().into_owned())].into()));
     let tags = crate::tags::event(&accounts, "").unwrap();
     assert!(tags["accounts"].get(&route.credential_id).is_some(), "{} fora de {}", route.credential_id, tags["accounts"]);
+}
+
+/// Conta ChatGPT conectada só no proxy: abre sem raiz Codex e continua a mesma depois que a conta
+/// Codex dela é cadastrada no Hangar.
+#[test]
+fn a_proxy_only_chatgpt_account_resolves_without_a_codex_home() {
+    let runtime = test_runtime();
+    let catalog = json!({"data": [{"id": "solo/gpt-5.5", "context_length": 400000}]});
+    let listener = runtime.block_on(tokio::net::TcpListener::bind("127.0.0.1:0")).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let app = axum::Router::new().route("/v1/models", axum::routing::get(move || async move {
+        ([(axum::http::header::CONTENT_TYPE, "application/json")], catalog.to_string())
+    }));
+    runtime.spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let home = tempfile::tempdir().unwrap();
+    let home = home.path().canonicalize().unwrap();
+    for dir in ["work", ".claude", ".cli-proxy-api", ".codex"] { std::fs::create_dir_all(home.join(dir)).unwrap(); }
+    std::fs::write(home.join(".cli-proxy-api/config.yaml"), format!("config-version: 8\nserver:\n  port: {port}\naccess:\n  api-keys:\n    - k\n")).unwrap();
+    std::fs::write(home.join(".cli-proxy-api/codex-a@b.c-plus.json"),
+        json!({"type": "codex", "account_id": "acc2", "email": "a@b.c", "prefix": "solo"}).to_string()).unwrap();
+    std::fs::write(home.join(".claude/engines.json"),
+        json!({"gpt": {"base_url": format!("http://127.0.0.1:{port}/v1"), "api_key": "k", "model": "gpt-5.5"}}).to_string()).unwrap();
+    let accounts = || crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::from_map(
+        [("HOME".to_owned(), home.to_string_lossy().into_owned())].into()));
+    let id = "cpa-a-cceab3d142e2";
+    let listed = crate::engines::proxy::list_accounts(&accounts()).unwrap();
+    assert_eq!(listed, [json!({"account": id, "credential_id": format!("cliproxy:{id}"), "email": "a@b.c", "label": "a@b.c", "prefix": "solo", "plan": null})]);
+    let open = || {
+        let body = json!({"name": "s1", "cwd": home.join("work"), "provider": "claude", "headless": false, "engine": "gpt",
+            "engine_account": id, "model": "solo/gpt-5.5", "permission_mode": "manual"});
+        resolve::resolve_open(&SessionOpenRequest::parse(body.to_string().as_bytes()).unwrap(), &OWNER, &local_facts(&home, &runtime))
+    };
+    assert_eq!(open().unwrap().spec.model.as_deref(), Some("gpt-5.5"));
+    let route = facts::fixed_account(&accounts(), "gpt", id).unwrap();
+    assert_eq!((route.home.as_deref(), route.credential_id.as_str(), route.prefix.as_str()), (None, format!("cliproxy:{id}").as_str(), "solo"));
+    let ctx = claude::ClaudeContext { plugin_roots: &[], bridge: None, bridge_key: "k", runtime_config: &Value::Null,
+        server_env: &Default::default(), settings: None, read_only: None, windows: false, initial_prompt: None, engine_route: Some(&route), resume: false, allow_bypass: false };
+    let command = claude::pane(&open().unwrap().spec, "sid", &ctx).command;
+    assert_eq!(command[..8], ["hangar-engine", "--exec", "gpt", "--account", id, "--account-base-url", &format!("http://127.0.0.1:{port}"), "--model"]);
+    // Cadastrar depois a conta Codex da mesma credencial não tira a sessão da conta que ela já usa.
+    std::fs::create_dir_all(home.join(".codex-a")).unwrap();
+    std::fs::write(home.join(".codex-a/.hangar-codex-conta"), json!({"version": 1, "id": "a"}).to_string()).unwrap();
+    std::fs::write(home.join(".codex-a/auth.json"), json!({"tokens": {"account_id": "acc2"}}).to_string()).unwrap();
+    assert_eq!(facts::fixed_account(&accounts(), "gpt", id).unwrap().prefix, "solo");
+    let env = crate::engines::environment::derive(&accounts(), "gpt", crate::engines::environment::Selection {
+        account: Some(id), account_base: Some(&format!("http://127.0.0.1:{port}")), ..Default::default() }).unwrap();
+    assert_eq!((env["CP_ENGINE_ACCOUNT"].as_str(), env["ANTHROPIC_MODEL"].as_str()), (id, "solo/gpt-5.5"));
 }
 
 /// A abertura inteira: nasceu, a ordem do diário é a esperada e o spec fica gravado; o pane recusado

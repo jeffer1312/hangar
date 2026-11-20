@@ -33,7 +33,7 @@ impl Provider {
 }
 
 /// Selo do provedor: a cor da marca quando o app a conhece, e duas letras.
-fn provider_badge(url: &str, name: &str, size: f32) -> Div {
+pub(super) fn provider_badge(url: &str, name: &str, size: f32) -> Div {
     let provider = if url.contains("kimi") { "kimi" } else { "" };
     let (color, _) = theme::provider(provider);
     let letters: String = name.chars().filter(|c| c.is_alphanumeric()).take(2).collect::<String>().to_uppercase();
@@ -65,7 +65,7 @@ fn coded(text: &str) -> StyledText {
 }
 
 /// Nome digitado → id no `engines.json` (minúsculas, números, `-`, `_`), como o `idDe` do web.
-fn engine_id(text: &str) -> String {
+pub(super) fn engine_id(text: &str) -> String {
     let id = actions::account_slug(text);
     if id.is_empty() { "chave".into() } else { id }
 }
@@ -260,19 +260,19 @@ fn input(window: &mut Window, cx: &mut Context<Hangar>, value: String, placehold
     cx.new(|cx| InputState::new(window, cx).placeholder(placeholder).default_value(value))
 }
 
-fn field(label: String, control: impl IntoElement) -> Div {
+pub(super) fn field(label: String, control: impl IntoElement) -> Div {
     div().flex().flex_col().gap(px(6.)).child(div().text_size(px(13.)).font_weight(FontWeight::MEDIUM).child(label)).child(control)
 }
 
-fn help(text: impl IntoElement) -> Div { div().text_size(px(12.5)).text_color(theme::muted()).whitespace_normal().child(text) }
+pub(super) fn help(text: impl IntoElement) -> Div { div().text_size(px(12.5)).text_color(theme::muted()).whitespace_normal().child(text) }
 
 /// Linha de aviso ou de erro: a cor mora num filho, a caixa pinta o texto de cinza por cima.
-fn tone(text: String, color: Hsla) -> Div { div().text_size(px(12.5)).whitespace_normal().child(div().text_color(color).child(text)) }
+pub(super) fn tone(text: String, color: Hsla) -> Div { div().text_size(px(12.5)).whitespace_normal().child(div().text_color(color).child(text)) }
 
 impl Hangar {
     /// Nomes já no disco; `None` quando a lista não chegou ou o arquivo está ilegível: aí não dá para saber se um
     /// nome novo pisaria em outro modelo.
-    fn engine_names(&self) -> Option<HashSet<String>> {
+    pub(super) fn engine_names(&self) -> Option<HashSet<String>> {
         self.accounts.engines.ok().filter(|e| e.broken_file.is_none()).map(|e| e.map.keys().cloned().collect())
     }
 

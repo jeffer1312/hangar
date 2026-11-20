@@ -88,6 +88,8 @@ pub(crate) use tags::{account_icon, machine_icon};
 pub(crate) use notice_line::{api_error_box, ignore_button, ignored_text, notice_body, notice_head, notice_rule_line, undo_button};
 pub(crate) use voice_ui::{call_actions, call_footer, call_header, call_status, equalizer as voice_equalizer, mute_button, speech_pause_button, stop_button};
 pub(crate) use rename_suggest::{Strip as RenameStrip, rename_strip};
+pub(crate) use controls::{SPEED_TIERS, speed_label, speed_texts};
+pub(crate) use settings::segments_preview;
 pub(crate) use vault_requests::{approve_body, approve_title, request_button, request_card, request_command, request_pair};
 pub(crate) use create::{base_button, base_row, mode_row, quiet_button, worktree_field_label, worktree_warning};
 pub(crate) use reviews::{Comment as ReviewComment, Summary as ReviewSummary, Thread as ReviewThread,
@@ -97,7 +99,8 @@ pub(crate) use scheduled::{row_frame as scheduled_row_frame, row_text as schedul
 pub(crate) use settings::{memory_dream, news_group_heading, news_kind_icon, news_kind_pill, news_markdown_block, setting_row, settings_box};
 pub(crate) use plugins::{plugin_meta, plugin_name, plugin_switch, plugin_update_button, reopen_notice as plugins_reopen_notice,
     row_box as plugin_row_box, text_block as plugin_text_block};
-pub(crate) use accounts::{login_heading, target_row};
+pub(crate) use accounts::{CLIPROXY_INSTALL_ITEMS, CliproxyBrand, CliproxyItem, cliproxy_account_row, cliproxy_default_name, cliproxy_fast_field,
+    cliproxy_install_item, cliproxy_name_preview, cliproxy_steps, login_heading, target_row};
 pub(crate) use search::{ScopeFound, highlighted as search_highlighted, search_agent_label, search_chat_header, search_chat_sub, search_field, search_filter_chip, search_found_frame,
     search_group_frame, search_group_header, search_group_sub, search_hit_line, search_live_label, search_open_look, search_scope_block,
     search_scope_summary, search_status_line, search_who};

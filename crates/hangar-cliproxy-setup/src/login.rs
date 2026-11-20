@@ -1,0 +1,147 @@
+//! Login das contas pela API de gerenciamento v8 do proxy (`/v8/management/oauth/*`).
+use std::time::Duration;
+
+use serde_json::{Value, json};
+
+const TIMEOUT: Duration = Duration::from_secs(15);
+
+#[derive(Clone, Debug)]
+pub struct Management {
+    pub base_url: String,
+    pub key: String,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum Error {
+    BadInput(&'static str),
+    Rejected,
+    Disabled,
+    /// A escuta da volta (1455 no ChatGPT, 54545 no Claude) já está em uso, em geral por outro login.
+    PortBusy,
+    Network(String),
+    Proxy(u16, String),
+}
+
+impl Error {
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::BadInput(_) => "erro_cliproxy_login_invalido",
+            Self::Rejected => "erro_cliproxy_senha_recusada",
+            Self::Disabled => "erro_cliproxy_gerenciamento_desligado",
+            Self::PortBusy => "cliproxy_login_porta_ocupada",
+            Self::Network(_) => "cliproxy_login_sem_resposta",
+            Self::Proxy(..) => "cliproxy_login_falhou",
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum Status {
+    Wait,
+    Ok,
+    Failed(String),
+}
+
+pub const PROVIDERS: [&str; 2] = ["codex", "claude"];
+
+fn valid_state(state: &str) -> bool {
+    !state.is_empty() && state.len() <= 128 && state.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+/// Só o endereço local que o provedor usa de volta; qualquer outro não vai ao proxy.
+fn valid_redirect(url: &str) -> bool {
+    url.len() <= 4096 && ["http://127.0.0.1:", "http://localhost:"].iter().any(|p| url.starts_with(p))
+}
+
+async fn call(m: &Management, request: reqwest::RequestBuilder) -> Result<Value, Error> {
+    let response = request
+        .header("Authorization", format!("Bearer {}", m.key))
+        .timeout(TIMEOUT)
+        .send()
+        .await
+        .map_err(|e| Error::Network(e.to_string()))?;
+    let status = response.status().as_u16();
+    let body: Value = response.json().await.unwrap_or(Value::Null);
+    let message = body["error"].as_str().unwrap_or("").to_owned();
+    match status {
+        200..=299 => Ok(body),
+        401 | 403 => Err(Error::Rejected),
+        404 => Err(Error::Disabled),
+        500 if message.contains("callback server") => Err(Error::PortBusy),
+        code => Err(Error::Proxy(code, message)),
+    }
+}
+
+fn client() -> Result<reqwest::Client, Error> {
+    hangar_core::net::http_client().build().map_err(|e| Error::Network(e.to_string()))
+}
+
+/// Abre o login no proxy. `is_webui` faz o proxy escutar a volta sozinho: no mesmo computador o
+/// login fecha sem colar nada.
+pub async fn start(m: &Management, provider: &str) -> Result<(String, String), Error> {
+    if !PROVIDERS.contains(&provider) {
+        return Err(Error::BadInput("provedor"));
+    }
+    let url = format!("{}/v8/management/oauth/auth-url?provider={provider}&is_webui=true", m.base_url);
+    let body = call(m, client()?.get(url)).await?;
+    let (Some(link), Some(state)) = (body["url"].as_str(), body["state"].as_str().filter(|s| valid_state(s))) else {
+        return Err(Error::Proxy(200, "resposta sem url ou state".into()));
+    };
+    Ok((link.to_owned(), state.to_owned()))
+}
+
+pub async fn status(m: &Management, state: &str) -> Result<Status, Error> {
+    if !valid_state(state) {
+        return Err(Error::BadInput("state"));
+    }
+    // `state` já passou por `valid_state`: vai na URL sem escape.
+    let url = format!("{}/v8/management/oauth/status?state={state}", m.base_url);
+    let body = call(m, client()?.get(url)).await?;
+    Ok(parse_status(&body))
+}
+
+pub fn parse_status(body: &Value) -> Status {
+    match body["status"].as_str() {
+        Some("ok") => Status::Ok,
+        Some("error") => Status::Failed(body["error"].as_str().unwrap_or("").to_owned()),
+        _ => Status::Wait,
+    }
+}
+
+/// O celular não alcança o `127.0.0.1` da máquina: a pessoa cola o endereço em que o navegador parou.
+pub async fn callback(m: &Management, state: &str, redirect_url: &str) -> Result<(), Error> {
+    if !valid_state(state) {
+        return Err(Error::BadInput("state"));
+    }
+    if !valid_redirect(redirect_url) || !redirect_url.contains(&format!("state={state}")) {
+        return Err(Error::BadInput("endereço de volta"));
+    }
+    let url = format!("{}/v8/management/oauth/callback", m.base_url);
+    call(m, client()?.post(url).json(&json!({ "redirect_url": redirect_url }))).await.map(|_| ())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn status_reads_the_three_answers() {
+        assert_eq!(parse_status(&json!({"status": "ok"})), Status::Ok);
+        assert_eq!(parse_status(&json!({"status": "wait"})), Status::Wait);
+        assert_eq!(parse_status(&json!({"status": "error", "error": "negado"})), Status::Failed("negado".into()));
+    }
+
+    #[test]
+    fn only_a_local_return_address_of_the_same_login_is_accepted() {
+        assert!(valid_redirect("http://127.0.0.1:1455/auth/callback?state=abc&code=x"));
+        assert!(!valid_redirect("https://evil.example/auth?state=abc"));
+        assert!(!valid_state("a&b") && !valid_state("") && valid_state("Ab-9_z"));
+    }
+
+    #[tokio::test]
+    async fn bad_input_never_reaches_the_proxy() {
+        let m = Management { base_url: "http://127.0.0.1:9".into(), key: "k".into() };
+        assert_eq!(start(&m, "gemini").await, Err(Error::BadInput("provedor")));
+        assert_eq!(callback(&m, "abc", "http://127.0.0.1:1455/auth/callback?state=outro").await, Err(Error::BadInput("endereço de volta")));
+    }
+}

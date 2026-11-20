@@ -54,10 +54,14 @@ pub enum Surface { Terminal, Headless }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum ServiceTier { Default, Priority }
+pub enum ServiceTier { Default, Priority, Ultrafast }
 
 impl ServiceTier {
-    pub fn name(self) -> &'static str { match self { Self::Default => "default", Self::Priority => "priority" } }
+    /// Os valores aceitos onde o tier chega como texto (CLI, corpo de rota, catálogo).
+    pub const NAMES: [&'static str; 3] = ["default", "priority", "ultrafast"];
+    pub fn name(self) -> &'static str { match self { Self::Default => "default", Self::Priority => "priority", Self::Ultrafast => "ultrafast" } }
+    /// Fast ou Ultra Fast: os dois só valem em modelo que aceita Fast.
+    pub fn is_fast(self) -> bool { self != Self::Default }
 }
 
 /// Modo de permissão: os do `claude --help` e os do picker `/permissions` do Codex.

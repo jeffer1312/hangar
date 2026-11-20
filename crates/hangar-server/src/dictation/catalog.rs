@@ -348,7 +348,7 @@ impl Models {
                 .into_iter()
                 .map(|mut model| {
                     if let Some(services) = model["service_tiers"].as_array_mut() {
-                        services.retain(|s| s["id"] != "priority");
+                        services.retain(|s| s["id"] != "priority" && s["id"] != "ultrafast");
                     }
                     model
                 })
@@ -864,14 +864,14 @@ pub fn validate(
     effort: Option<&str>,
     tier: Option<&str>,
 ) -> Result<(), String> {
-    if tier.is_some_and(|t| !matches!(t, "default" | "priority")) {
-        return Err("service_tier: use default ou priority".into());
+    if tier.is_some_and(|t| !crate::session_open::ServiceTier::NAMES.contains(&t)) {
+        return Err("service_tier: use default, priority ou ultrafast".into());
     }
+    let fast = tier.filter(|t| *t != "default");
     let Some(model) = model else {
-        return if tier == Some("priority") {
-            Err("service_tier priority exige modelo explícito do catálogo do Codex".into())
-        } else {
-            Ok(())
+        return match fast {
+            Some(tier) => Err(format!("service_tier {tier} exige modelo explícito do catálogo do Codex")),
+            None => Ok(()),
         };
     };
     let row = models
@@ -885,12 +885,13 @@ pub fn validate(
     {
         return Err(format!("Nível fora do suporte de {model}: {effort}"));
     }
-    if tier == Some("priority")
+    // O Ultra Fast só aparece no catálogo das contas que o têm (Pro e Pro Max).
+    if let Some(tier) = fast
         && !row["service_tiers"]
             .as_array()
-            .is_some_and(|rows| rows.iter().any(|s| s["id"] == "priority"))
+            .is_some_and(|rows| rows.iter().any(|s| s["id"] == tier))
     {
-        return Err(format!("service_tier priority indisponível para {model}"));
+        return Err(format!("service_tier {tier} indisponível para {model}"));
     }
     Ok(())
 }
@@ -1146,5 +1147,10 @@ mod parse_tests {
         assert!(validate(&models, Some("fora"), Some("low"), None).is_err());
         assert!(validate(&models, Some("modelo-real"), Some("low"), None).is_ok());
         assert!(validate(&models, None, None, Some("priority")).is_err(), "priority exige modelo explícito");
+        let pro = [json!({"id":"m","efforts":[],"service_tiers":[{"id":"priority"},{"id":"ultrafast"}]})];
+        let plus = [json!({"id":"m","efforts":[],"service_tiers":[{"id":"priority"}]})];
+        assert!(validate(&pro, Some("m"), None, Some("ultrafast")).is_ok());
+        assert!(validate(&plus, Some("m"), None, Some("ultrafast")).is_err(), "Ultra Fast só onde o catálogo da conta o lista");
+        assert!(validate(&plus, Some("m"), None, Some("flex")).is_err());
     }
 }

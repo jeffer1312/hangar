@@ -24,6 +24,7 @@ pub const FIELDS: &[(&str, char)] = &[
     ("adaptive_thinking", 'b'),
     ("gateway_model_discovery", 'b'),
     ("fine_grained_tool_streaming", 'b'),
+    ("fast", 'b'),
     ("auto_compact_window", 'i'),
     ("max_output_tokens", 'i'),
 ];

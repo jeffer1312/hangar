@@ -264,7 +264,7 @@ fn preflight(env:&crate::accounts::environment::AccountEnvironment,next:&mut Ses
         next.model=None;
     }
     if let Some(tier)=next.service_tier && !facts.supports_fast(engine.as_deref(),next.model.as_deref()) {
-        if tier==crate::session_open::ServiceTier::Priority {
+        if tier.is_fast() {
             return Err(refused("launch_service_tier","service_tier exige Claude com motor GPT no CLIProxyAPI local"));
         }
         next.service_tier=None;

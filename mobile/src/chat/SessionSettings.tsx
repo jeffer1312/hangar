@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Pressable, ScrollView, Switch, Text, View, useWindowDimensions } from 'react-native';
+import { Pressable, ScrollView, Text, View, useWindowDimensions } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useRouter } from 'expo-router';
 import { parseStatusLine } from '@hangar/core';
@@ -17,7 +17,8 @@ import { Icon, type IconName } from '../ui/Icon';
 import * as m from '../paraglide/messages';
 import { useModelControl } from '../features/pills/modelControl';
 import { useEffortControl } from '../features/pills/effortControl';
-import { useServiceTierControl } from '../features/pills/serviceTierControl';
+import { SPEED_TIERS, speedHint, speedLabel, useServiceTierControl } from '../features/pills/serviceTierControl';
+import { haptic } from '../ui/haptics';
 import { usePermissionControl } from '../features/pills/permissionControl';
 import { approvalShortLabel, useCodexApproval } from '../features/pills/codexApproval';
 import { permissionLabel } from '../features/pills/permissionLabel';
@@ -192,8 +193,8 @@ function pickModel(model: ModelView, id: string, onSelected: () => void) {
 }
 type EffortView = Pick<ReturnType<typeof useEffortControl>, 'items' | 'select'> &
   Partial<Pick<ReturnType<typeof useEffortControl>, 'hidden' | 'value' | 'loading' | 'applying' | 'error' | 'notice' | 'load'>>;
-type FastView = Pick<ReturnType<typeof useServiceTierControl>, 'on' | 'available' | 'toggle'> &
-  Partial<Pick<ReturnType<typeof useServiceTierControl>, 'hidden' | 'loading' | 'applying' | 'error' | 'notice' | 'load'>>;
+export type FastView = Pick<ReturnType<typeof useServiceTierControl>, 'tier' | 'available' | 'choose'> &
+  Partial<Pick<ReturnType<typeof useServiceTierControl>, 'hidden' | 'ultrafast' | 'loading' | 'applying' | 'error' | 'notice' | 'load'>>;
 
 // A criação entrega escolhas locais; só o controlador do chat conhece uma sessão viva.
 export function SessionSettingsControl({ open, onOpen, onClose, model, effort, fast, plan = false, icon, glyph, modeText, header, children, panel }: {
@@ -210,13 +211,13 @@ export function SessionSettingsControl({ open, onOpen, onClose, model, effort, f
     <Pressable ref={anchor} onPress={onOpen} hitSlop={{ top: 7, bottom: 7 }}
       style={({ pressed }) => [styles.chip, { backgroundColor: plan ? theme.tokens.accent.dim : pressed ? theme.tokens.bg.hover : theme.tokens.fillSubtle }]}
       accessibilityRole="button" accessibilityLabel={m.composer_session_settings()} accessibilityHint={m.composer_session_settings_hint()}
-      accessibilityValue={{ text: [modeText, model.display, effortText, fast.on ? m.native_ctl_fast() : null].filter(Boolean).join(', ') }}>
+      accessibilityValue={{ text: [modeText, model.display, effortText, fast.tier !== 'default' ? speedLabel(fast.tier) : null].filter(Boolean).join(', ') }}>
       {icon ? <Icon name={icon} size={13} color={tint} /> : null}
       {glyph ?? <Text style={styles.chipText} numberOfLines={1}>
         {plan ? <Text style={[styles.chipStrong, { color: tint }]}>{`${m.chat_mode_plan()} · `}</Text> : null}
         <Text style={[plan ? { color: tint } : styles.chipStrong, !plan && { color: model.failed ? theme.tokens.status.error : theme.tokens.text.primary }]}>{model.display}</Text>
         {effortText ? <Text style={{ color: theme.tokens.text.secondary }}>{` ${effortText}`}</Text> : null}
-        {fast.on ? <Text style={{ color: theme.tokens.text.secondary }}>{` · ${m.native_ctl_fast()}`}</Text> : null}
+        {fast.tier !== 'default' ? <Text style={{ color: theme.tokens.text.secondary }}>{` · ${speedLabel(fast.tier)}`}</Text> : null}
       </Text>}
       <Icon name="ChevronDown" size={13} color={tint} />
     </Pressable>
@@ -254,23 +255,30 @@ export function SessionSettingsControl({ open, onOpen, onClose, model, effort, f
   </>;
 }
 
-function FastControl({ fast, comfortable = false }: { fast: FastView; comfortable?: boolean }) {
+export function FastControl({ fast, comfortable = false }: { fast: FastView; comfortable?: boolean }) {
   const { theme } = useUnistyles();
   if (fast.hidden) return null;
+  const hint = !fast.available ? m.native_ctl_fast_unavailable()
+    : [speedHint(fast.tier), fast.ultrafast ? null : m.native_ctl_speed_ultrafast_unavailable()].filter(Boolean).join(' ');
   return <>
-    {comfortable ? null : <><Separator /><Title text={m.native_ctl_fast()} /></>}
-    {fast.loading ? <Skeleton rows={1} /> : fast.error ? <Failure text={fast.error} onRetry={() => void fast.load?.()} /> :
-      <View style={comfortable ? styles.settingRow : styles.fastRow}>
-        <View style={styles.grow}>
-          {comfortable ? <Text style={styles.settingText}>{m.native_ctl_fast()}</Text> : null}
-          <Text style={styles.note}>{fast.available ? m.native_ctl_fast_hint() : m.native_ctl_fast_unavailable()}</Text>
-        </View>
-        <Text style={styles.effortText}>{fast.on ? m.native_ctl_fast_on() : m.native_ctl_fast_off()}</Text>
-        <Switch value={fast.on} onValueChange={() => void fast.toggle()} disabled={!fast.available || fast.applying}
-          trackColor={{ true: theme.tokens.accent.base }} accessibilityLabel={m.native_ctl_fast()} accessibilityHint={m.native_ctl_fast_hint()}
-          accessibilityValue={{ text: fast.on ? m.native_ctl_fast_on() : m.native_ctl_fast_off() }}
-          accessibilityState={{ checked: fast.on, disabled: !fast.available || fast.applying, busy: fast.applying }} />
-      </View>}
+    {comfortable ? <Text style={styles.settingText}>{m.native_ctl_speed()}</Text> : <><Separator /><Title text={m.native_ctl_speed()} /></>}
+    {fast.loading ? <Skeleton rows={1} /> : fast.error ? <Failure text={fast.error} onRetry={() => void fast.load?.()} /> : <>
+      <View style={styles.efforts} accessibilityRole="radiogroup" accessibilityLabel={m.native_ctl_speed()}>
+        {SPEED_TIERS.map((tier) => {
+          const selected = fast.tier === tier;
+          const disabled = !fast.available || !!fast.applying || (tier === 'ultrafast' && !fast.ultrafast);
+          return <Pressable key={tier} disabled={disabled} hitSlop={{ top: 4, bottom: 4 }}
+            onPress={() => { if (selected) return; haptic.selection(); void fast.choose(tier); }}
+            style={({ pressed }) => [styles.effort, styles.share,
+              { backgroundColor: selected ? theme.tokens.accent.dim : pressed ? theme.tokens.fillSubtle : 'transparent' }, disabled && styles.busy]}
+            accessibilityRole="radio" accessibilityLabel={speedLabel(tier)}
+            accessibilityState={{ selected, checked: selected, disabled, busy: selected && !!fast.applying }}>
+            <Text style={[styles.effortText, selected && styles.effortOn]} numberOfLines={1}>{speedLabel(tier)}</Text>
+          </Pressable>;
+        })}
+      </View>
+      <Text style={styles.note}>{hint}</Text>
+    </>}
     {fast.applying ? <Skeleton rows={1} /> : null}<Notice text={fast.notice} />
   </>;
 }
@@ -296,7 +304,6 @@ function SmallButton({ label, onPress }: { label: string; onPress: () => void })
     style={({ pressed }) => [styles.small, pressed && { backgroundColor: theme.tokens.fillSubtle }]}><Text style={styles.smallText}>{label}</Text></Pressable>;
 }
 const styles = StyleSheet.create((theme) => ({
-  settingRow: { minHeight: 56, flexDirection: 'row', alignItems: 'center', gap: theme.base.space[2], justifyContent: 'space-between' },
   settingText: { flex: 1, fontSize: theme.base.text.sm, color: theme.tokens.text.primary },
   chip: { flexShrink: 1, minWidth: 0, height: 30, flexDirection: 'row', alignItems: 'center', gap: theme.base.space[1], borderRadius: theme.base.radius.full, paddingHorizontal: theme.base.space[2] },
   chipText: { flexShrink: 1, fontSize: theme.base.text.xs, color: theme.tokens.text.secondary },
@@ -312,7 +319,6 @@ const styles = StyleSheet.create((theme) => ({
   effortText: { fontSize: theme.base.text.xxs, color: theme.tokens.text.secondary },
   effortOn: { color: theme.tokens.text.primary, fontWeight: theme.base.weight.semibold },
   busy: { opacity: 0.6 },
-  fastRow: { flexDirection: 'row', alignItems: 'center', paddingRight: theme.base.space[2] },
   skeleton: { gap: theme.base.space[1.5], paddingHorizontal: theme.base.space[2], paddingVertical: theme.base.space[1] },
   bone: { height: 22, borderRadius: theme.base.radius.sm, backgroundColor: theme.tokens.fillSubtle },
   empty: { paddingHorizontal: theme.base.space[2], paddingVertical: theme.base.space[4], fontSize: theme.base.text.xxs, textAlign: 'center', color: theme.tokens.text.muted },

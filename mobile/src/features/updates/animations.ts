@@ -3,6 +3,8 @@ import { ReviewsAnimation } from './reviews-animation';
 import type { ComponentType } from 'react';
 import { AutoReportAnimation } from './AutoReportAnimation';
 import { ClaudeNoticesAnimation } from './ClaudeNoticesAnimation';
+import { CliproxyWizardAnimation } from './CliproxyWizardAnimation';
+import { SpeedChoiceAnimation } from './SpeedChoiceAnimation';
 import { CodexActivityAnimation } from './CodexActivityAnimation';
 import { CompactIdleAnimation } from './CompactIdleAnimation';
 import { DesktopToolLookAnimation } from './DesktopToolLookAnimation';
@@ -33,6 +35,8 @@ const animations: Record<string, ComponentType<{ width: number }>> = {
   'avisos-do-claude': ClaudeNoticesAnimation,
   'atualizacoes-e-manual': UpdatesManualAnimation,
   'branch-no-celular': FolderBranchAnimation,
+  'cliproxy-assistente': CliproxyWizardAnimation,
+  'velocidade-ultra-fast': SpeedChoiceAnimation,
   'cofre-de-senhas': VaultAnimation,
   'codex-atividade': CodexActivityAnimation,
   'compactar-parada': CompactIdleAnimation,

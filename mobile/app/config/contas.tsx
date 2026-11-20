@@ -22,6 +22,7 @@ type CredentialGroup = ReturnType<typeof credentialGroup>;
 type Subject = Pick<Credencial, 'tipo' | 'nome' | 'nome_natural' | 'login' | 'cota' | 'ativa'>;
 type IdentityRow = AccountRowData & { group: CredentialGroup; subject: Subject };
 const EngineEditor = lazy(() => import('../../src/features/accounts/EngineEditor').then(module => ({ default: module.EngineEditor })));
+const CliproxyWizard = lazy(() => import('../../src/features/accounts/CliproxyWizard').then(module => ({ default: module.CliproxyWizard })));
 const capitalize = (plan: string | null | undefined) => plan ? `${plan.charAt(0).toUpperCase()}${plan.slice(1)}` : '';
 const SORT_KEY = 'accounts_sort';
 // A ordem dos grupos de antes vira a ordem recebida da lista única.
@@ -51,6 +52,7 @@ function ServerAccounts({ server }: { server: Server | null }) {
   const [loginAccount, setLoginAccount] = useState<string | null>(null);
   const [newLogin, setNewLogin] = useState(false);
   const [newClaude, setNewClaude] = useState(false);
+  const [cliproxyWizard, setCliproxyWizard] = useState(false);
   const [deleting, setDeleting] = useState<ReadonlySet<string>>(new Set());
   // Trava síncrona: dois alertas abertos antes do primeiro sim ainda veem o `deleting` antigo.
   const deletingNow = useRef(new Set<string>());
@@ -321,7 +323,14 @@ function ServerAccounts({ server }: { server: Server | null }) {
         <Suspense fallback={<Text style={styles.muted}>{m.comum_carregando()}</Text>}>
           <EngineEditor key={engines.editing} server={server} name={engines.editing || undefined}
             engine={engines.editing ? engines.data.motores[engines.editing] : undefined} names={Object.keys(engines.data.motores)}
-            onSaved={engines.saved} onClose={() => engines.setEditing(null)} />
+            onSaved={engines.saved} onClose={() => engines.setEditing(null)}
+            onCliproxy={() => { engines.setEditing(null); setCliproxyWizard(true); }} />
+        </Suspense>
+      ) : null}
+      {server && cliproxyWizard ? (
+        <Suspense fallback={<Text style={styles.muted}>{m.comum_carregando()}</Text>}>
+          <CliproxyWizard server={server} names={Object.keys(engines.data?.motores ?? {})}
+            onSaved={engines.saved} onClose={() => setCliproxyWizard(false)} />
         </Suspense>
       ) : null}
 

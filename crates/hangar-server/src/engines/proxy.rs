@@ -12,24 +12,16 @@ static REJECTED: Mutex<Option<String>> = Mutex::new(None);
 pub struct Local { pub base_url: String, pub api_key: String }
 
 pub fn local(env: &AccountEnvironment) -> Result<Option<Local>, String> {
-    let path = env.home.join(".cli-proxy-api/config.yaml");
-    let text = match fs::read_to_string(&path) {
-        Ok(t) => t, Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(format!("{}: {e}", path.display())),
+    use hangar_cliproxy_setup::config::{self, ReadError};
+    let path = config::path(&env.home);
+    let config = match config::read(&env.home) {
+        Ok(Some(config)) => config, Ok(None) => return Ok(None),
+        Err(ReadError::Io(e)) => return Err(format!("{}: {e}", path.display())),
+        Err(ReadError::InvalidYaml) => return Err(format!("{}: YAML inválido", path.display())),
     };
-    let data: Value = serde_saphyr::from_str(&text).map_err(|_| format!("{}: YAML inválido", path.display()))?;
-    if !data.is_object() { return Ok(None); }
-    let keys = if truthy(&data["access"]["api-keys"]) { &data["access"]["api-keys"] } else { &data["api-keys"] };
-    if !keys.is_null() && !keys.is_array() { return Err(format!("{}: api-keys deve ser uma lista", path.display())); }
-    let key = keys.as_array().into_iter().flatten().filter_map(Value::as_str).map(str::trim).find(|s| !s.is_empty())
-        .ok_or_else(|| format!("{}: sem api-keys", path.display()))?;
-    let mut host = data["host"].as_str().unwrap_or("").trim().to_owned();
-    if matches!(host.as_str(), ""|"0.0.0.0"|"::") { host = "127.0.0.1".into(); }
-    if host.contains(':') && !host.starts_with('[') { host = format!("[{host}]"); }
-    let port = if !truthy(&data["port"]) { 8317 } else if data["port"] == true { 1 }
-        else { store::positive("port", &data["port"]).ok().and_then(|v| v.as_u64()).unwrap_or(0) };
-    if !(1..65536).contains(&port) { return Err(format!("{}: port inválida", path.display())); }
-    Ok(Some(Local { base_url: format!("{}://{host}:{port}", if data["tls"]["enable"] == true { "https" } else { "http" }), api_key:key.into() }))
+    let api_key = config.client_keys.into_iter().next().ok_or_else(|| format!("{}: sem api-keys", path.display()))?;
+    let base_url = config.base_url.map_err(|_| format!("{}: port inválida", path.display()))?;
+    Ok(Some(Local { base_url, api_key }))
 }
 
 pub fn is_local(env: &AccountEnvironment, base: &str) -> Result<bool, String> { Ok(serves(local(env)?.as_ref(), base)) }
@@ -53,7 +45,55 @@ pub fn credentials(env: &AccountEnvironment) -> Result<Vec<(PathBuf, Value)>, St
 
 pub fn associated(accounts: &AccountService, records: &[(PathBuf, Value)]) -> Result<Vec<(Value, usize)>, String> {
     let visible = accounts.visible_codex_accounts().map_err(|e| e.message)?.into_iter().map(|a| (a.id,a.home)).collect();
-    associate(visible, records)
+    entries(visible, records)
+}
+
+/// Conta ChatGPT conectada só no proxy, sem conta Codex no Hangar.
+pub const PROXY_ONLY: &str = "cpa-";
+/// Só a forma que `proxy_only_id` gera: uma conta Codex chamada `cpa-x` continua sendo Codex.
+pub fn is_proxy_only(account: &str) -> bool {
+    static ID: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"\Acpa-(?:[a-z0-9]{1,12}-)?[0-9a-f]{12}\z").unwrap());
+    ID.is_match(account)
+}
+
+/// Sai de dentro da credencial, não do nome do arquivo: refazer o login troca o arquivo e não a conta.
+/// O começo do e-mail vai junto porque o id aparece cru no rótulo da sessão.
+fn proxy_only_id(record: &Value) -> Option<String> {
+    let id = record["account_id"].as_str().filter(|s| !s.is_empty())?;
+    let email = record["email"].as_str().unwrap_or("");
+    let digest = ring::digest::digest(&ring::digest::SHA256, format!("{id}\n{email}").as_bytes());
+    let hash: String = digest.as_ref()[..6].iter().map(|b| format!("{b:02x}")).collect();
+    let local: String = email.split('@').next().unwrap_or("").to_lowercase().chars()
+        .filter(|c| c.is_ascii_lowercase() || c.is_ascii_digit()).take(12).collect();
+    Some(if local.is_empty() { format!("{PROXY_ONLY}{hash}") } else { format!("{PROXY_ONLY}{local}-{hash}") })
+}
+
+/// As contas Codex do Hangar que casam com uma credencial, e as credenciais que sobram como contas só do proxy.
+pub fn entries(visible: Vec<(String,PathBuf)>, records: &[(PathBuf,Value)]) -> Result<Vec<(Value,usize)>,String> {
+    let mut result = associate(visible, records)?;
+    let taken: std::collections::HashSet<usize> = result.iter().map(|(_, i)| *i).collect();
+    let loose: Vec<(String, usize)> = records.iter().enumerate()
+        .filter(|(i, (_, r))| !taken.contains(i) && r["type"] == "codex" && r["disabled"] != true)
+        .filter_map(|(i, (_, r))| proxy_only_id(r).map(|id| (id, i))).collect();
+    // Credencial solta com defeito fica de fora sozinha: nunca derruba as contas que estão boas.
+    for (id, i) in &loose {
+        if loose.iter().filter(|(other, _)| other == id).count() > 1 { continue; }
+        let record = &records[*i].1;
+        let email = record["email"].as_str().unwrap_or("");
+        let prefix = record["prefix"].as_str().filter(|p| PREFIX.is_match(p)
+            && !records.iter().enumerate().any(|(j, (_, r))| j != *i && r["prefix"] == *p));
+        result.push((json!({"account":id,"credential_id":format!("cliproxy:{id}"),"email":email,"label":if email.is_empty() { id.as_str() } else { email },"prefix":prefix,"plan":record["plan_type"]}), *i));
+    }
+    Ok(result)
+}
+
+fn checked_prefixes(entries: &[(Value, usize)], records: &[(PathBuf, Value)]) -> Result<(), String> {
+    for (entry, index) in entries {
+        if entry["prefix"].is_null() || entry["credential_id"].as_str().is_some_and(|c| c.starts_with("cliproxy:")) { continue; }
+        let prefix = entry["prefix"].as_str().filter(|s| PREFIX.is_match(s)).ok_or("CLIProxyAPI: conta sem prefixo válido; prepare as contas primeiro")?;
+        if records.iter().enumerate().any(|(i, (_, r))| i != *index && r["prefix"] == prefix) { return Err("CLIProxyAPI: prefixo compartilhado entre credenciais; prepare as contas primeiro".into()); }
+    }
+    Ok(())
 }
 
 fn associate(visible: Vec<(String,PathBuf)>, records: &[(PathBuf,Value)]) -> Result<Vec<(Value,usize)>,String> {
@@ -72,7 +112,7 @@ fn associate(visible: Vec<(String,PathBuf)>, records: &[(PathBuf,Value)]) -> Res
         let email = record["email"].as_str().unwrap_or("");
         let prefix = if truthy(&record["prefix"]) { record["prefix"].clone() } else { Value::Null };
         let home = crate::accounts::catalog::resolved(&account_home);
-        result.push((json!({"account":account_id,"credential_id":format!("codex:{}",home.display()),"email":email,"label":if email.is_empty() { &account_id } else { email },"prefix":prefix}), i));
+        result.push((json!({"account":account_id,"credential_id":format!("codex:{}",home.display()),"email":email,"label":if email.is_empty() { &account_id } else { email },"prefix":prefix,"plan":record["plan_type"]}), i));
     }
     Ok(result)
 }
@@ -89,10 +129,22 @@ pub fn resolve(accounts: &AccountService, account: &str, home: Option<&str>) -> 
             if records.iter().enumerate().any(|(i,(_,r))| i != *index && r["prefix"] == prefix) { return Err("CLIProxyAPI: prefixo compartilhado entre credenciais; prepare as contas primeiro".into()); }
         }
         entries.into_iter().map(|(e,_)|e).collect()
+    } else if is_proxy_only(account) {
+        // Sem contas Codex na conta: a credencial continua achável depois que alguém cadastra a conta Codex dela.
+        entries(Vec::new(), &credentials(&accounts.env)?)?.into_iter().map(|(e, _)| e).collect()
     } else { list_accounts(accounts)? };
     let entry = entries.into_iter().find(|e|e["account"] == account).ok_or_else(||format!("CLIProxyAPI: conta {account} desconhecida, desconectada ou desativada"))?;
     if !truthy(&entry["prefix"]) { return Err("CLIProxyAPI: conta sem prefixo; prepare as contas primeiro".into()); }
     Ok(entry)
+}
+
+/// Planos que o ChatGPT atende em Ultra Fast (os mesmos que o proxy aceita para `ultrafast`).
+const ULTRAFAST_PLANS: [&str; 2] = ["pro", "promax"];
+
+/// A conta fixa pode pedir Ultra Fast: plano dela e a regra que repõe o `ultrafast` no config do proxy.
+pub fn ultrafast(accounts: &AccountService, account: &str) -> bool {
+    let rule = hangar_cliproxy_setup::config::read(&accounts.env.home).ok().flatten().is_some_and(|c| c.ultrafast_rule);
+    rule && resolve(accounts, account, None).is_ok_and(|e| e["plan"].as_str().is_some_and(|p| ULTRAFAST_PLANS.contains(&p)))
 }
 
 pub fn prefix_model(model: &str, prefix: &str) -> Result<String,String> {
@@ -106,11 +158,7 @@ pub fn prefix_model(model: &str, prefix: &str) -> Result<String,String> {
 pub fn list_accounts(accounts: &AccountService) -> Result<Vec<Value>, String> {
     let records = credentials(&accounts.env)?;
     let associated = associated(accounts, &records)?;
-    for (entry, index) in &associated {
-        if entry["prefix"].is_null() { continue; }
-        let prefix = entry["prefix"].as_str().filter(|s| PREFIX.is_match(s)).ok_or("CLIProxyAPI: conta sem prefixo válido; prepare as contas primeiro")?;
-        if records.iter().enumerate().any(|(i, (_, r))| i != *index && r["prefix"] == prefix) { return Err("CLIProxyAPI: prefixo compartilhado entre credenciais; prepare as contas primeiro".into()); }
-    }
+    checked_prefixes(&associated, &records)?;
     Ok(associated.into_iter().map(|(e, _)| e).collect())
 }
 

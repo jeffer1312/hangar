@@ -137,7 +137,7 @@ pub async fn model(State(st):State<Arc<AppState>>,ConnectInfo(peer):ConnectInfo<
     }
     let (Ok(Some(model)),Ok(effort))=(text(&body,"model"),text(&body,"effort")) else {return super::invalid_body(&headers)};
     // Fast ligado não vai para um modelo que não o aceita.
-    if spec.service_tier==Some(ServiceTier::Priority) {
+    if spec.service_tier.is_some_and(ServiceTier::is_fast) {
         let engine=match &spec.account {Account::Engine { name,.. }=>name.clone(),_=>String::new()};
         let fast={let model=model.clone();facts(runtime.codex_environment(),move|facts|facts.supports_fast(Some(&engine),Some(&model))).await};
         if fast!=Some(true) {
@@ -211,6 +211,14 @@ pub async fn service_tier(State(st):State<Arc<AppState>>,ConnectInfo(peer):Conne
     if fast!=Some(true) {
         return reply(Some(&parts.headers),StatusCode::BAD_REQUEST,detail_body("erro_fast_indisponivel","Fast exige GPT no CLIProxyAPI local",json!({})));
     }
+    if tier==ServiceTier::Ultrafast {
+        let (account,model)=(match &spec.account {Account::Engine { account,.. }=>account.clone(),_=>None},runtime.claude_model_in_use(&name).await.or(spec.model.clone()));
+        let accounts=st.accounts.clone();
+        let ultrafast=tokio::task::spawn_blocking(move||crate::engines::catalog::supports_ultrafast(&accounts,engine.as_deref().unwrap_or(""),model.as_deref(),account.as_deref())).await.unwrap_or(false);
+        if !ultrafast {
+            return reply(Some(&parts.headers),StatusCode::BAD_REQUEST,detail_body("erro_ultrafast_indisponivel",crate::engines::catalog::ULTRAFAST_REFUSED,json!({})));
+        }
+    }
     if st.term.is_active(&name) {
         return reply(Some(&parts.headers),StatusCode::CONFLICT,detail_body("erro_terminal_aberto","Terminal aberto nesta sessao. Feche o painel pra responder por aqui.",json!({})));
     }
@@ -257,7 +265,7 @@ async fn unfixed_model(st:&Arc<AppState>,runtime:Arc<RuntimeRegistry>,name:&str,
         let quoted=crate::model_picker::py_repr(engine);
         return reply(Some(headers),StatusCode::UNPROCESSABLE_ENTITY,detail_body("erro_modelo_fora_catalogo",&format!("modelo fora do catalogo do motor {quoted}: {model}"),json!({"motor":engine,"modelo":model})));
     }
-    if spec.service_tier==Some(ServiceTier::Priority) && !crate::engines::catalog::supports_fast(&st.accounts,engine,Some(model)) {
+    if spec.service_tier.is_some_and(ServiceTier::is_fast) && !crate::engines::catalog::supports_fast(&st.accounts,engine,Some(model)) {
         return reply(Some(headers),StatusCode::CONFLICT,detail_body("erro_fast_indisponivel","Desligue Fast antes de escolher um modelo que não o suporta",json!({})));
     }
     let id=crate::mods::state::random_hex(16);

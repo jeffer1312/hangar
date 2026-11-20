@@ -1085,9 +1085,9 @@ export interface CreateSessionBody {
   // Jev no `hangar-preview objetivo`: ligado, a sessão nasce com a chave no ambiente. Escolha da
   // abertura — é assim que se roda a mesma tarefa com e sem, sem apagar a configuração.
   jev?: boolean;
-  // Conta ChatGPT do CLIProxyAPI local (só Claude com motor) e Fast (`priority`) da sessão nova.
+  // Conta ChatGPT do CLIProxyAPI local (só Claude com motor) e Fast (`priority`) ou Ultra Fast da sessão nova.
   engine_account?: string;
-  service_tier?: 'default' | 'priority';
+  service_tier?: ServiceTier;
   // Plugins e skills só desta sessão: a diferença do padrão do catálogo (só Claude, sessão nova).
   claude_customizations?: ClaudeCustomizationDelta;
   // Branch já existente (local ou remota) em que a sessão nasce; vazio = a atual da pasta.
@@ -1517,9 +1517,13 @@ export interface ModelOption {
   efforts?: string[];
   default_effort?: string | null;
   // Fast: no Codex vem como tier `priority`; no motor GPT do CLIProxyAPI local, como `supports_fast`.
+  // Ultra Fast: tier `ultrafast` no Codex (contas Pro); `supports_ultrafast` no motor com conta fixa Pro.
   service_tiers?: { id: string; hidden?: boolean }[];
   supports_fast?: boolean;
+  supports_ultrafast?: boolean;
 }
+
+export type ServiceTier = 'default' | 'priority' | 'ultrafast';
 
 // Orquestração: política de contas da máquina e papéis do grupo (tipos em ./orquestracao.ts).
 export async function getOrqPolitica(server?: Server | null): Promise<import('./orquestracao').OrqPolitica> {
@@ -1570,7 +1574,7 @@ export async function removerPapel(
 export async function modelOptions(
   provider: string, engine?: string | null, configDir?: string | null,
   codexAccount?: string | null, engineAccount?: string | null,
-): Promise<{ kind: string; reduced: boolean; models: ModelOption[]; supports_fast?: boolean; default?: string | null }> {
+): Promise<{ kind: string; reduced: boolean; models: ModelOption[]; supports_fast?: boolean; supports_ultrafast?: boolean; default?: string | null }> {
   return apiFetch(modelOptionsPath(provider, engine, configDir, codexAccount, engineAccount));
 }
 
@@ -3126,6 +3130,52 @@ export interface CliproxyDeteccao {
   unnamed_accounts?: number | null;
   management_key_set?: boolean;
   naming_error?: string | null;
+  // Contas já logadas no proxy; `type` é o do registro dele (`codex`, `claude`…).
+  connected?: CliproxyConta[];
+  install?: CliproxyInstalacao;
+}
+
+export interface CliproxyConta { type: string; email: string }
+
+export type CliproxyPassoInstalacao = 'download' | 'config' | 'service' | 'start';
+
+export interface CliproxyTarefa {
+  kind: 'install' | 'update';
+  step: CliproxyPassoInstalacao;
+  done: boolean;
+  error: { code: string; detail: string } | null;
+  outcome: 'installed' | 'configured' | 'updated' | null;
+}
+
+// `external` = proxy que o Hangar não instalou; `managed` = instalado por ele.
+export interface CliproxyInstalacao {
+  state: 'absent' | 'external' | 'managed';
+  version: string | null;
+  latest: string | null;
+  update_available: boolean;
+  running: boolean;
+  job: CliproxyTarefa | null;
+}
+
+export type CliproxyProvedorLogin = 'codex' | 'claude';
+export type CliproxyLoginEstado = { status: 'wait' | 'ok' | 'error'; error?: string };
+
+export function installCliproxyForServer(s: Server): Promise<{ job: CliproxyTarefa | null }> {
+  return apiFetchForServer(s, '/api/engines/cliproxy/install', { method: 'POST', body: '{}' });
+}
+
+export function startCliproxyLoginForServer(s: Server, provider: CliproxyProvedorLogin): Promise<{ url: string; state: string }> {
+  return apiFetchForServer(s, '/api/engines/cliproxy/login', { method: 'POST', body: JSON.stringify({ provider }) });
+}
+
+export function getCliproxyLoginForServer(s: Server, state: string, signal?: AbortSignal): Promise<CliproxyLoginEstado> {
+  return apiFetchForServer(s, `/api/engines/cliproxy/login/${encodeURIComponent(state)}`, signal ? { signal } : undefined);
+}
+
+export function sendCliproxyLoginCallbackForServer(s: Server, state: string, redirect_url: string): Promise<{ status: 'sent' }> {
+  return apiFetchForServer(s, `/api/engines/cliproxy/login/${encodeURIComponent(state)}/callback`, {
+    method: 'POST', body: JSON.stringify({ redirect_url }),
+  });
 }
 
 export type CliproxyNomeacao = Required<Pick<CliproxyDeteccao, 'unnamed_accounts' | 'management_key_set' | 'naming_error'>>;
@@ -3136,6 +3186,11 @@ export function putCliproxyManagementKey(management_key: string): Promise<Clipro
 
 export function putCliproxyManagementKeyForServer(s: Server, management_key: string): Promise<CliproxyNomeacao> {
   return apiFetchForServer(s, '/api/engines/cliproxy/management-key', { method: 'PUT', body: JSON.stringify({ management_key }) });
+}
+
+/** O proxy guarda só o hash da senha de gerenciamento: o servidor troca por uma nova e a guarda. */
+export function resetCliproxyManagementKeyForServer(s: Server): Promise<{ status: 'reset' }> {
+  return apiFetchForServer(s, '/api/engines/cliproxy/management-key/reset', { method: 'POST' });
 }
 
 export function engineCliproxy(): Promise<CliproxyDeteccao> {
@@ -3765,12 +3820,14 @@ export interface ModelOption {
   context_length?: number | null;  // so no motor
   vision?: boolean | null;         // so no motor
   supports_fast?: boolean;
+  supports_ultrafast?: boolean;
 }
 
 export interface ModelOptionsResponse {
   kind: 'claude' | 'engine';
   engine: string | null;
   supports_fast?: boolean;
+  supports_ultrafast?: boolean;
   effort?: string | null;
   models: ModelOption[];
   // O que vale na sessão agora: o sufixo `[1m]` do model diz se a janela de 1M está ligada.
@@ -3858,7 +3915,7 @@ export function setEngineModel(
 }
 
 // Fast da sessão viva (POST .../service-tier); `priority` liga, `default` volta ao padrão da conta.
-export function setServiceTier(name: string, tier: 'default' | 'priority', server?: Server | null): Promise<{ ok: boolean; service_tier: string }> {
+export function setServiceTier(name: string, tier: ServiceTier, server?: Server | null): Promise<{ ok: boolean; service_tier: string }> {
   _invalidarCatalogo(name);
   return sessionFetch<{ ok: boolean; service_tier: string }>(server, `/api/sessions/${encodeURIComponent(name)}/service-tier`, {
     method: 'POST',

@@ -2,8 +2,10 @@
 //! com a cota de cada uma, e os modelos do Claude Code (`GET /api/engines`). O que a tela mostra é
 //! montado na chegada da resposta e a cada meio minuto (o "há X" e os prazos envelhecem); o desenho só lê.
 //! Renomear escreve daqui; entrar, sair, remover e adicionar conta Claude moram em `actions`; o formulário do modelo, a
-//! chave de outro agente e o cookie do OpenCode, em `keys`; entrar no Codex, importar ou herdar e usar a redefinição, em `codex`.
+//! chave de outro agente e o cookie do OpenCode, em `keys`; entrar no Codex, importar ou herdar e usar a redefinição, em `codex`;
+//! instalar o CLIProxyAPI, conectar a conta e criar o modelo dele, em `cliproxy`.
 mod actions;
+mod cliproxy;
 mod codex;
 mod keys;
 mod usage;
@@ -11,10 +13,14 @@ mod usage;
 use super::*;
 use super::device::Remote;
 use actions::{ActionReply, AddAccount, Change, ChangeKind, SignIn};
+use cliproxy::{CliproxyReply, CliproxyWizard};
 use codex::{CodexFlow, CodexReply, ResetOffer, ResetTry};
 use keys::{CookieForm, EngineForm, KeysReply};
 pub(super) use keys::ModelChoice;
 pub(crate) use actions::{login_heading, target_row};
+pub(crate) use cliproxy::{Brand as CliproxyBrand, INSTALL_ITEMS as CLIPROXY_INSTALL_ITEMS, ItemState as CliproxyItem,
+    account_row as cliproxy_account_row, default_name as cliproxy_default_name, fast_field as cliproxy_fast_field,
+    install_item as cliproxy_install_item, name_preview as cliproxy_name_preview, wizard_steps as cliproxy_steps};
 pub(crate) use codex::idempotency_key;
 use super::settings::{Page, segments, settings_box};
 use chrono::{Datelike, Local, TimeZone, Timelike};
@@ -215,6 +221,8 @@ pub(super) struct Accounts {
     /// Número de cada pedido do formulário, do cookie e do painel do Codex: resposta de outro pedido não mexe no atual.
     keys_seq: u64,
     codex: Option<CodexFlow>,
+    /// Assistente do CLIProxyAPI aberto no lugar da lista.
+    cliproxy: Option<CliproxyWizard>,
     reset: Option<ResetTry>,
     /// Leitura da lista pedida depois de uma redefinição (número dela, se a redefinição valeu): a falha dela entra no aviso.
     reset_refresh: Option<(u64, bool)>,
@@ -244,6 +252,7 @@ pub(super) enum AccountsReply {
     Action(ActionReply),
     Keys(KeysReply),
     Codex(CodexReply),
+    Cliproxy(CliproxyReply),
 }
 
 fn now() -> f64 { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.) }
@@ -600,6 +609,13 @@ fn parse_engines(value: &Value) -> Result<Engines, String> {
 fn proxy_account_targets(session: &SessionInfo, list: &[Credential], engine: &Engine) -> Vec<super::sidebar::AccountTarget> {
     if engine.cliproxy_error.is_some() { return Vec::new(); }
     engine.cliproxy_accounts.as_deref().unwrap_or_default().iter().filter_map(|a| {
+        // Conta só do proxy não tem credencial Codex no Hangar nem cota para mostrar.
+        if a.credential_id.strip_prefix("cliproxy:").is_some_and(|id| !id.is_empty()) {
+            if session.engine_account.as_deref() == Some(a.account.as_str()) { return None; }
+            let label = if a.label.is_empty() { a.email.clone() } else { a.label.clone() };
+            return Some(super::sidebar::AccountTarget { path: String::new(), label, pct: None, low: false, full: false,
+                engine_account: Some(a.account.clone()), login: None });
+        }
         let c = list.iter().find(|c| c.kind == "codex" && c.id == a.credential_id && c.id.starts_with("codex:")
             && c.codex_account.as_deref() == Some(a.account.as_str()) && c.logged_in() == Some(true))?;
         if session.engine_account.as_deref() == Some(a.account.as_str()) && session.conta.as_deref() == Some(c.id.as_str()) { return None; }
@@ -906,6 +922,7 @@ impl Hangar {
             AccountsReply::Action(reply) => self.receive_action(reply, window, cx),
             AccountsReply::Keys(reply) => self.receive_keys(reply, window, cx),
             AccountsReply::Codex(reply) => self.receive_codex(reply, window, cx),
+            AccountsReply::Cliproxy(reply) => self.receive_cliproxy(reply, window, cx),
         }
         self.rebuild_accounts();
         cx.notify();
@@ -941,6 +958,7 @@ impl Hangar {
         }
         if let Some(panel) = self.render_engine_form(cx) { return page.child(top(None)).child(panel).into_any_element(); }
         if let Some(panel) = self.render_codex(cx) { return page.child(top(None)).child(panel).into_any_element(); }
+        if let Some(panel) = self.render_cliproxy_wizard(cx) { return page.child(top(None)).child(panel).into_any_element(); }
         match (&accounts.list.value, accounts.list.loading) {
             (None, _) => return page.child(top(None)).child(settings_box().mt(px(20.))
                 .child(div().px_4().py(px(18.)).flex().items_center().gap(px(10.)).text_size(px(13.)).text_color(theme::muted())
@@ -1479,6 +1497,19 @@ mod tests {
         assert_eq!(targets[0].label, "Second");
         let invalid = Engine { cliproxy_error: Some("invalid discovery".into()), ..engine };
         assert!(super::proxy_account_targets(&session, &list, &invalid).is_empty());
+    }
+
+    #[test]
+    fn proxy_only_accounts_are_targets_without_quota() {
+        let session = crate::api::dto::SessionInfo { provider: "claude".into(), engine: Some("proxy".into()),
+            engine_account: Some("cpa-000000000001".into()), conta: Some("cliproxy:cpa-000000000001".into()), ..Default::default() };
+        let engine: Engine = serde_json::from_value(json!({"cliproxy_accounts":[
+            {"account":"cpa-000000000001", "credential_id":"cliproxy:cpa-000000000001", "email":"a@example.com", "label":"a@example.com"},
+            {"account":"cpa-000000000002", "credential_id":"cliproxy:cpa-000000000002", "email":"b@example.com", "label":""}
+        ]})).unwrap();
+        let targets = super::proxy_account_targets(&session, &[], &engine);
+        assert_eq!(targets.len(), 1, "a conta em uso não é destino");
+        assert_eq!((targets[0].engine_account.as_deref(), targets[0].label.as_str(), targets[0].pct), (Some("cpa-000000000002"), "b@example.com", None));
     }
 
     #[test]

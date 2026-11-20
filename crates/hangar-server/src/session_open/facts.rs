@@ -138,7 +138,6 @@ impl LocalFacts {
     }
 }
 
-static SAFE_PREFIX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\A[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\z").unwrap());
 static SAFE_MODEL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\A[A-Za-z0-9][A-Za-z0-9_.:\[\]-]*\z").unwrap());
 
 fn cliproxy(msg: impl Into<String>) -> OpenError { OpenError::new(400, "erro_cliproxy_conta", msg) }
@@ -162,68 +161,25 @@ fn engines_of(env: &AccountEnvironment) -> Value {
     read_json(&path).ok().flatten().filter(Value::is_object).unwrap_or(Value::Null)
 }
 
-/// `cliproxy_accounts._credentials`: as credenciais OAuth do CLIProxyAPI desta máquina.
-fn credentials(home: &Path) -> Result<Vec<(PathBuf, Value)>, OpenError> {
-    let unreadable = || cliproxy("CLIProxyAPI: não consegui ler as credenciais locais");
-    let mut paths: Vec<PathBuf> = match std::fs::read_dir(home.join(".cli-proxy-api")) {
-        Ok(entries) => entries.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "json")).collect(),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-        Err(_) => return Err(unreadable()),
-    };
-    paths.sort();
-    let mut out = Vec::new();
-    for path in paths {
-        if path.symlink_metadata().map_err(|_| unreadable())?.file_type().is_symlink() {
-            return Err(cliproxy("CLIProxyAPI: credencial por link não é permitida"));
-        }
-        let data: Value = serde_json::from_slice(&std::fs::read(&path).map_err(|_| unreadable())?).map_err(|_| unreadable())?;
-        if !data.is_object() { return Err(cliproxy("CLIProxyAPI: arquivo de credencial inválido")); }
-        if data.get("disabled").is_some_and(|d| !d.is_boolean()) { return Err(cliproxy("CLIProxyAPI: campo disabled inválido")); }
-        out.push((path, data));
-    }
-    Ok(out)
-}
-
-/// `cliproxy.account_for_engine` + `cliproxy_accounts.resolve`: a credencial ativa da conta Codex
-/// pedida no CLIProxyAPI local, com prefixo exclusivo, e a rota que o `hangar-engine` recebe.
+/// `cliproxy.account_for_engine` + `cliproxy_accounts.resolve`: a credencial ativa da conta pedida no
+/// CLIProxyAPI local (conta Codex do Hangar ou só do proxy), com prefixo exclusivo, e a rota que o
+/// `hangar-engine` recebe.
 pub fn fixed_account(accounts: &AccountService, engine: &str, account: &str) -> Result<super::claude::EngineRoute, OpenError> {
+    use crate::engines::proxy;
     let env = &accounts.env;
     let cfg = &engines_of(env)[engine];
     let local = cliproxy_base(&env.home).filter(|local| crate::engines::store::normalize_base(cfg["base_url"].as_str().unwrap_or("").trim()) == *local)
         .ok_or_else(|| cliproxy("a conta ChatGPT só pode ser fixada no CLIProxyAPI local"))?;
     if !crate::accounts::catalog::valid_name(account) { return Err(cliproxy("CLIProxyAPI: identificador de conta inválido")); }
-    let creds = credentials(&env.home)?;
-    let visible = accounts.visible_codex_accounts().map_err(|e| OpenError::new(e.status, e.code, e.message))?;
-    let mut entries: Vec<(String, String, Option<String>, usize)> = Vec::new();
-    for codex in visible {
-        let raw = match std::fs::read(codex.home.join("auth.json")) {
-            Ok(raw) => raw,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(_) => return Err(cliproxy(format!("CLIProxyAPI: login Codex ilegível na conta {}", codex.id))),
-        };
-        let data: Value = serde_json::from_slice(&raw).map_err(|_| cliproxy(format!("CLIProxyAPI: login Codex ilegível na conta {}", codex.id)))?;
-        let Some(id) = data["tokens"]["account_id"].as_str().filter(|i| !i.is_empty()) else { continue };
-        let matches: Vec<usize> = creds.iter().enumerate()
-            .filter(|(_, (_, c))| c["type"] == "codex" && c["account_id"] == id && c["disabled"] != true).map(|(i, _)| i).collect();
-        if matches.len() > 1 { return Err(cliproxy(format!("CLIProxyAPI: mais de uma credencial ativa para a conta {}", codex.id))); }
-        let Some(&found) = matches.first() else { continue };
-        if entries.iter().any(|e| e.3 == found) { return Err(cliproxy("CLIProxyAPI: a mesma credencial corresponde a mais de uma conta Hangar")); }
-        let home = codex.home.canonicalize().unwrap_or(codex.home.clone()).to_string_lossy().into_owned();
-        entries.push((codex.id, home, text(&creds[found].1["prefix"]), found));
+    if !proxy::is_proxy_only(account) {
+        // Erro da lista de contas Codex mantém o código dela, não vira erro do proxy.
+        accounts.visible_codex_accounts().map_err(|e| OpenError::new(e.status, e.code, e.message))?;
     }
-    for (_, _, prefix, at) in &entries {
-        let Some(prefix) = prefix else { continue };
-        if !SAFE_PREFIX.is_match(prefix) { return Err(cliproxy("CLIProxyAPI: conta sem prefixo válido; prepare as contas primeiro")); }
-        if creds.iter().enumerate().any(|(i, (_, c))| i != *at && c["prefix"].as_str() == Some(prefix)) {
-            return Err(cliproxy("CLIProxyAPI: prefixo compartilhado entre credenciais; prepare as contas primeiro"));
-        }
-    }
-    let (id, home, prefix, _) = entries.into_iter().find(|e| e.0 == account)
-        .ok_or_else(|| cliproxy(format!("CLIProxyAPI: conta {account} desconhecida, desconectada ou desativada")))?;
-    let prefix = prefix.ok_or_else(|| cliproxy("CLIProxyAPI: conta sem prefixo; prepare as contas primeiro"))?;
-    // O id na forma dos ids de conta (cota, tela de Contas, etiquetas): sem o `\\?\` do Windows.
-    let credential_id = format!("codex:{}", crate::accounts::catalog::resolved(std::path::Path::new(&home)).to_string_lossy());
-    Ok(super::claude::EngineRoute { account: id, credential_id, home, base_url: local, prefix })
+    let entry = proxy::resolve(accounts, account, None).map_err(cliproxy)?;
+    let credential_id = entry["credential_id"].as_str().unwrap_or_default().to_owned();
+    let home = credential_id.strip_prefix("codex:").map(str::to_owned);
+    let prefix = entry["prefix"].as_str().unwrap_or_default().to_owned();
+    Ok(super::claude::EngineRoute { account: account.to_owned(), credential_id, home, base_url: local, prefix })
 }
 
 /// `cliproxy_accounts.prefix_model` sem o prefixo: o modelo como a conta o expõe.
@@ -322,21 +278,9 @@ pub(crate) fn local_engine(env: &AccountEnvironment, engine: &str) -> bool {
 }
 
 fn cliproxy_base(home: &Path) -> Option<String> {
-    let text = std::fs::read_to_string(home.join(".cli-proxy-api").join("config.yaml")).ok()?;
-    let config: Value = serde_saphyr::from_str(&text).ok()?;
-    let keys = config["access"]["api-keys"].as_array().filter(|keys| !keys.is_empty())
-        .or_else(|| config["api-keys"].as_array())?;
-    keys.iter().filter_map(Value::as_str).any(|k| !k.trim().is_empty()).then_some(())?;
-    let mut host = config["host"].as_str().unwrap_or("").trim().to_owned();
-    if matches!(host.as_str(), "" | "0.0.0.0" | "::") { host = "127.0.0.1".into(); }
-    if host.contains(':') && !host.starts_with('[') { host = format!("[{host}]"); }
-    let port = match &config["port"] {
-        Value::Null => 8317,
-        value => value.as_u64().or_else(|| value.as_str()?.trim().parse().ok())?,
-    };
-    (1..65536).contains(&port).then_some(())?;
-    let scheme = if config["tls"]["enable"] == true { "https" } else { "http" };
-    Some(format!("{scheme}://{host}:{port}"))
+    let config = hangar_cliproxy_setup::config::read(home).ok()??;
+    if config.client_keys.is_empty() { return None; }
+    config.base_url.ok()
 }
 
 impl OpenFacts for LocalFacts {
@@ -440,8 +384,14 @@ impl OpenFacts for LocalFacts {
         let Some(cfg) = engine.filter(|e| self.engines().iter().any(|n| n == e)).map(|e| &engines[e]) else { return false };
         // `model or cfg.model`: texto vazio também cai no modelo do motor.
         let base = model.filter(|m| !m.is_empty()).or_else(|| cfg["model"].as_str()).unwrap_or("").rsplit('/').next().unwrap_or("");
-        GPT_MODEL.is_match(base)
+        // `fast: false` no motor tira a opção, como no seletor (`engines::catalog`).
+        GPT_MODEL.is_match(base) && cfg["fast"] != false
             && cliproxy_base(&self.env().home).is_some_and(|local| crate::engines::store::normalize_base(cfg["base_url"].as_str().unwrap_or("").trim()) == local)
+    }
+
+    fn supports_ultrafast(&self, engine: Option<&str>, model: Option<&str>, account: Option<&str>) -> bool {
+        engine.filter(|e| self.engines().iter().any(|n| n == e))
+            .is_some_and(|engine| crate::engines::catalog::supports_ultrafast(&self.accounts, engine, model, account))
     }
 
     /// `create_session` com `engine_account`: a credencial da conta, o catálogo dela (o do motor só com

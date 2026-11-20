@@ -67,6 +67,8 @@ vi.mock('../../paraglide/messages', async original => ({
     + 'chat_mode_plan chat_mode_normal native_codex_permission_probe_hint composer_codex_approval '
     + 'native_mode_plan native_mode_auto native_mode_manual native_mode_acceptEdits native_mode_bypassPermissions native_mode_dontAsk '
     + 'native_ctl_fast native_ctl_fast_on native_ctl_fast_off native_ctl_fast_hint native_ctl_fast_unavailable '
+    + 'native_ctl_speed native_ctl_speed_normal native_ctl_speed_ultrafast native_ctl_speed_normal_hint native_ctl_speed_fast_hint '
+    + 'native_ctl_speed_ultrafast_hint native_ctl_speed_ultrafast_unavailable '
     + 'native_invalid_response servidor_nao_existe chat_servidor_removido cota_conta_ativa accounts_switch_title conta_padrao '
     + 'native_ctl_all_models native_ctl_featured_models comum_voltar codex_ui_concluir native_usage_card_session live_voice_action_usage_label codex_limites_titulo'
   ).split(' ').map((key) => [key, () => key])),
@@ -113,7 +115,7 @@ async function mount(provider = 'codex', serverId = 'a', openRequest?: { which: 
   const close = async () => { await act(async () => { container.querySelector<HTMLButtonElement>('[aria-label="native_close"]')!.click(); nativeSheet.finishDismiss?.(); }); };
   await act(async () => { syncStores(serverId); root.render(element()); });
   if (!openRequest) {
-    expect(container.querySelector('[role="switch"]')).toBeNull();
+    expect(fastButton(container)).toBeNull();
     await open();
   }
   return { container, open, close, refresh: async () => { await act(async () => { syncStores(serverId); root.render(element()); }); } };
@@ -123,8 +125,13 @@ function syncStores(serverId: string) {
   useSessions.setState({ rows: state.rows.map(row => ({ serverLabel: row.serverId, serverColor: '#7c87e8', ...row })), byServerRecord: {} });
   chatStore(serverId, 'sess').use.setState({ statusLine: state.statusLine, stateEvent: state.stateEvent, stats: null });
 }
-const toggle = (container: HTMLElement) => container.querySelector<HTMLButtonElement>('[role="switch"]')!;
-const checked = (container: HTMLElement) => toggle(container).getAttribute('aria-checked');
+const speedButton = (container: HTMLElement, label: string) => container.querySelector<HTMLButtonElement>(`[role="radio"][aria-label="${label}"]`)!;
+const fastButton = (container: HTMLElement) => speedButton(container, 'native_ctl_fast');
+const ultraButton = (container: HTMLElement) => speedButton(container, 'native_ctl_speed_ultrafast');
+const checked = (container: HTMLElement) => fastButton(container).getAttribute('aria-checked');
+// Ligar/desligar Fast pela escolha de velocidade: Fast marcado volta a Normal, senão marca Fast.
+const toggle = (container: HTMLElement) => fastButton(container) && checked(container) === 'true'
+  ? speedButton(container, 'native_ctl_speed_normal') : fastButton(container);
 
 it('layout A separa as abas e mostra três modelos incluindo o atual', async () => {
   const catalog = codex();
@@ -137,7 +144,7 @@ it('layout A separa as abas e mostra três modelos incluindo o atual', async () 
   expect(tabs).toHaveLength(3);
   const models = [...container.querySelectorAll('[role="radio"]')].map(row => row.textContent);
   expect(models).toEqual(['first', 'second', 'gpt-current']);
-  expect(container.querySelector('[role="switch"]')).toBeNull();
+  expect(fastButton(container)).toBeNull();
 });
 
 it('layout A abre todos os modelos e o raciocínio e volta ao resumo após aplicar', async () => {
@@ -188,15 +195,15 @@ it('layout A agrupa modo Fast e aprovação na aba Sessão', async () => {
   api.codex.mockResolvedValue(catalog);
   api.modeWrite.mockResolvedValue({ mode: 'plan' });
   const { container } = await mount('codex', 'a', { which: 'account', n: 1 });
-  expect(container.querySelector('[role="switch"]')).not.toBeNull();
-  const mode = container.querySelector<HTMLButtonElement>('[aria-label="native_ctl_mode_title"]');
+  expect(fastButton(container)).not.toBeNull();
+  const mode =container.querySelector<HTMLButtonElement>('[aria-label="native_ctl_mode_title"]');
   expect(mode).not.toBeNull();
   expect(container.querySelector('[aria-label="composer_codex_approval"]')).not.toBeNull();
   await act(async () => mode!.click());
   await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="chat_mode_plan"]')!.click());
   expect(api.modeWrite).toHaveBeenCalledExactlyOnceWith('sess', 'plan', state.servers[0]);
   expect(container.querySelectorAll('[role="tab"]')).toHaveLength(3);
-  expect(container.querySelector('[role="switch"]')).not.toBeNull();
+  expect(fastButton(container)).not.toBeNull();
   await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="composer_codex_approval"]')!.click());
   expect(container.textContent).toContain('native_codex_permission_probe_hint');
 });
@@ -455,7 +462,7 @@ describe('Modelos na folha de ajustes real', () => {
       open: true, onOpen: () => {}, onClose: () => {},
       model: { display: 'modelo', items: catalog, select },
       effort: { hidden: true, items: [], select: async () => {} },
-      fast: { hidden: true, on: false, available: false, toggle: async () => {} },
+      fast: { hidden: true, tier: 'default', available: false, choose: async () => {} },
     });
     await act(async () => root.render(render(items)));
     const firstModel = container.querySelector<HTMLButtonElement>('[role="radio"]')!;
@@ -488,7 +495,7 @@ describe('Fast na folha de ajustes real', () => {
     const { container } = await mount();
     expect(checked(container)).toBe('false');
     expect(toggle(container).disabled).toBe(!available);
-    expect(container.textContent).toContain(available ? 'native_ctl_fast_hint' : 'native_ctl_fast_unavailable');
+    expect(container.textContent).toContain(available ? 'native_ctl_speed_normal_hint' : 'native_ctl_fast_unavailable');
     await act(async () => toggle(container).click());
     expect(api.tier).toHaveBeenCalledTimes(available ? 1 : 0);
   });
@@ -715,6 +722,52 @@ describe('Fast na folha de ajustes real', () => {
     await act(async () => toggle(container).click());
     expect(checked(container)).toBe('false');
     expect(container.querySelector('[role="alert"]')?.textContent).toBe('native_invalid_response');
+  });
+
+  it('Codex Pro oferece Ultra Fast, grava ultrafast e mostra no chip', async () => {
+    api.codex.mockResolvedValue(codex([{ id: 'priority' }, { id: 'ultrafast' }]));
+    api.tier.mockResolvedValue({ ok: true, service_tier: 'ultrafast' });
+    const { container, close } = await mount();
+    expect(ultraButton(container).disabled).toBe(false);
+    expect(container.textContent).not.toContain('native_ctl_speed_ultrafast_unavailable');
+    await act(async () => ultraButton(container).click());
+    expect(api.tier).toHaveBeenCalledExactlyOnceWith('sess', 'ultrafast', state.servers[0]);
+    expect(ultraButton(container).getAttribute('aria-checked')).toBe('true');
+    expect(checked(container)).toBe('false');
+    expect(container.textContent).toContain('native_ctl_speed_ultrafast_hint');
+    await close();
+    expect(container.querySelector('[aria-label="composer_session_settings"]')?.textContent).toContain('native_ctl_speed_ultrafast');
+  });
+
+  it('sem ultrafast no catálogo o Ultra Fast fica indisponível e explica', async () => {
+    const { container } = await mount();
+    expect(ultraButton(container).disabled).toBe(true);
+    expect(container.textContent).toContain('native_ctl_speed_ultrafast_unavailable');
+    await act(async () => ultraButton(container).click());
+    expect(api.tier).not.toHaveBeenCalled();
+  });
+
+  it('ACK de outro tier mostra o que o servidor confirmou, não o pedido', async () => {
+    api.codex.mockResolvedValue(codex([{ id: 'priority' }, { id: 'ultrafast' }]));
+    const { container } = await mount();
+    await act(async () => ultraButton(container).click());
+    expect(ultraButton(container).getAttribute('aria-checked')).toBe('false');
+    expect(fastButton(container).getAttribute('aria-checked')).toBe('true');
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it.each([true, false])('Claude com motor segue supports_ultrafast do modelo (%s)', async (supports) => {
+    state.rows[0].engine = 'local-gpt';
+    const catalog = engine();
+    catalog.supports_ultrafast = supports;
+    catalog.models[0].supports_ultrafast = supports;
+    api.models.mockResolvedValue(catalog);
+    api.tier.mockResolvedValue({ ok: true, service_tier: 'ultrafast' });
+    const { container } = await mount('claude');
+    expect(ultraButton(container).disabled).toBe(!supports);
+    await act(async () => ultraButton(container).click());
+    expect(api.tier).toHaveBeenCalledTimes(supports ? 1 : 0);
+    if (supports) expect(api.tier).toHaveBeenCalledWith('sess', 'ultrafast', state.servers[0]);
   });
 
   it('sem A na lista não consulta nem grava no B ativo', async () => {

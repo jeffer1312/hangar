@@ -107,7 +107,7 @@ pub fn plan(spec: &SessionSpec, meta: &Value, ctx: &Context) -> Result<Launch, R
     };
     let engine = match &spec.account { Account::Engine { name, context_window, .. } => Some((name, context_window)), _ => None };
     let tier = match spec.service_tier {
-        Some(crate::session_open::ServiceTier::Priority) if !ctx.fast =>
+        Some(tier) if tier.is_fast() && !ctx.fast =>
             return Err(refused("launch_service_tier", "service_tier exige Claude com motor GPT no CLIProxyAPI local")),
         Some(tier) if ctx.fast => Some(tier),
         _ => None,
@@ -138,8 +138,9 @@ pub fn plan(spec: &SessionSpec, meta: &Value, ctx: &Context) -> Result<Launch, R
     if let Some((name, context_window)) = engine {
         program.extend(["hangar-engine".into(), "--exec".into(), name.clone()]);
         if let Some(route) = ctx.engine_route {
-            program.extend(["--account".into(), route.account.clone(), "--account-home".into(), route.home.clone(),
-                "--account-base-url".into(), route.base_url.clone()]);
+            program.extend(["--account".into(), route.account.clone()]);
+            if let Some(home) = &route.home { program.extend(["--account-home".into(), home.clone()]); }
+            program.extend(["--account-base-url".into(), route.base_url.clone()]);
         }
         if let Some(model) = spec.model.as_deref().filter(|m| !m.is_empty()) {
             program.extend(["--model".into(), model.into()]);
@@ -232,6 +233,10 @@ pub fn plan_for(env: &AccountEnvironment, bridge: Option<&PluginBridge>, spec: &
         _ => None,
     };
     let fast = spec.service_tier.is_some() && facts.supports_fast(engine, spec.model.as_deref());
+    if spec.service_tier == Some(crate::session_open::ServiceTier::Ultrafast) && !engine.is_some_and(|engine|
+        crate::engines::catalog::supports_ultrafast(&crate::accounts::AccountService::new(env.clone()), engine, spec.model.as_deref(), account)) {
+        return Err(refused("launch_service_tier", crate::engines::catalog::ULTRAFAST_REFUSED));
+    }
     let display = crate::display_env::for_launch(|name| env.base.get(name).filter(|v| !v.is_empty()).cloned());
     plan(spec, meta, &Context { env, runtime_config: &config, plugin_roots: &roots, bridge, engine_route: route.as_ref(), fast, display: &display })
 }

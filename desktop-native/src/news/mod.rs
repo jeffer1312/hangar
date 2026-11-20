@@ -3,6 +3,7 @@
 mod account_tags;
 mod auto_report;
 mod claude_notices;
+mod cliproxy_wizard;
 mod codex_activity;
 mod compact_idle;
 mod composer_history;
@@ -22,6 +23,7 @@ mod rename_suggestion;
 mod search_conversations;
 mod sleep_hidden;
 mod speech_pause;
+mod speed_choice;
 mod session_vault;
 mod tour;
 mod updates_manual;
@@ -87,6 +89,8 @@ pub fn animation(name: &str) -> Option<NewsAnimation> {
         "sonho-da-memoria" => Some(memory_dream::render),
         "avisos-do-claude" => Some(claude_notices::render),
         "revisao-do-trabalho" => Some(work_review::render),
+        "cliproxy-assistente" => Some(cliproxy_wizard::render),
+        "velocidade-ultra-fast" => Some(speed_choice::render),
         _ => None,
     }
 }

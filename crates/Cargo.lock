@@ -1634,6 +1634,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-cliproxy-setup"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "flate2",
+ "hangar-core",
+ "reqwest",
+ "ring",
+ "semver",
+ "serde-saphyr",
+ "serde_json",
+ "tar",
+ "tempfile",
+ "tokio",
+ "zip",
+]
+
+[[package]]
 name = "hangar-codex"
 version = "0.1.0"
 dependencies = [
@@ -2086,6 +2104,7 @@ dependencies = [
  "hangar-api",
  "hangar-auth",
  "hangar-boot",
+ "hangar-cliproxy-setup",
  "hangar-codex",
  "hangar-codex-account-sync",
  "hangar-codex-transfer",

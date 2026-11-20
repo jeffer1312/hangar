@@ -107,7 +107,14 @@ export function SessionAccount({ serverId, name }: { serverId: string; name: str
       const credentials = await getCredentialsForServer(server);
       const targets: SwitchTarget[] = [];
       for (const account of engine.cliproxy_accounts) {
-        if (!account.account.trim() || !/^codex:./.test(account.credential_id)) continue;
+        if (!account.account.trim()) continue;
+        // Conta só do proxy: sem credencial Codex no Hangar e sem cota.
+        if (/^cliproxy:./.test(account.credential_id)) {
+          targets.push({ path: account.credential_id, engineAccount: account.account,
+            label: account.label || account.email || account.account, pct: null, full: false, low: false });
+          continue;
+        }
+        if (!/^codex:./.test(account.credential_id)) continue;
         const credential = credentials.find(c => c.id === account.credential_id && c.tipo === 'codex');
         if (!credential) continue;
         const windows = credential.cota?.estado === 'lida' ? credential.cota.janelas.filter(w => Number.isFinite(w.pct)).map(w => w.pct) : [];

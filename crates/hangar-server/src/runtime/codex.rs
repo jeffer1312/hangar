@@ -250,7 +250,7 @@ fn terminal_operation(kind:OperationKind) -> bool {
 fn string(value:&Value) -> Option<String> { value.as_str().map(str::to_owned) }
 fn service_tier(value:&Value) -> Option<String> {
     if value.is_null() { Some("default".into()) }
-    else { value.as_str().filter(|tier|["priority","default"].contains(tier)).map(str::to_owned) }
+    else { value.as_str().filter(|tier|crate::session_open::ServiceTier::NAMES.contains(tier)).map(str::to_owned) }
 }
 /// Os modos da tela, como em `sem_terminal.MODOS`.
 const MODES:[&str;3] = ["Ask for approval","Approve for me","Full Access"];
@@ -1007,10 +1007,12 @@ impl Engine {
             Some("service_tier_catalog") => {
                 let catalog:wire::ModelListResponse = self.decode_reply("model/list",result,effects);
                 let pending = self.service_tier_pending.as_ref().unwrap();
+                let wanted = pending.tier.clone();
                 let supported = pending.model == self.model && self.model.is_some() && catalog.data.iter()
                     .any(|model|Some(model.model.as_str()) == self.model.as_deref() && !model.hidden
-                        && model.service_tiers.as_ref().is_some_and(|tiers|tiers.iter().any(|tier|tier["id"] == "priority" && tier["hidden"] != true)));
-                if !supported { self.finish_service_tier(Disposition::Rejected,json!({"error":"Fast não está disponível para o modelo atual"}),effects); }
+                        && model.service_tiers.as_ref().is_some_and(|tiers|tiers.iter().any(|tier|tier["id"] == wanted.as_str() && tier["hidden"] != true)));
+                let name = if wanted == "ultrafast" { "Ultra Fast" } else { "Fast" };
+                if !supported { self.finish_service_tier(Disposition::Rejected,json!({"error":format!("{name} não está disponível para o modelo atual")}),effects); }
                 else { self.send_service_tier(effects); }
             }
             Some("service_tier_update") => {
@@ -1660,7 +1662,7 @@ impl Engine {
                 }
                 self.service_tier_pending = Some(ServiceTierChange { operation_id:id.clone(),thread_id:self.thread_id.clone(),model:self.model.clone(),
                     tier:tier.into(),deadline:clock.monotonic_s+10.0,acknowledged:false,candidate:false,verifying:false });
-                if tier == "priority" {
+                if tier != "default" {
                     self.send(format!("{id}:catalog"),ClientRequest::ModelList(Default::default()),Some(json!({"kind":"service_tier_catalog","parent":id})),&mut effects);
                 } else { self.send_service_tier(&mut effects); }
             }

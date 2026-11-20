@@ -13,7 +13,7 @@ use super::{Account, SessionSpec};
 
 /// A rota da conta ChatGPT fixa do motor no `hangar-engine` (`cliproxy.engine_env`).
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct EngineRoute { pub account: String, pub credential_id: String, pub home: String, pub base_url: String, pub prefix: String }
+pub struct EngineRoute { pub account: String, pub credential_id: String, pub home: Option<String>, pub base_url: String, pub prefix: String }
 
 /// Endereço e segredo da ponte do plugin do Hangar.
 #[derive(Clone, Debug)]
@@ -137,8 +137,9 @@ pub fn pane(spec: &SessionSpec, sid: &str, ctx: &ClaudeContext) -> PaneSpec {
     if let Account::Engine { name, context_window, .. } = &spec.account {
         command.extend(["hangar-engine".into(), "--exec".into(), name.clone()]);
         if let Some(route) = ctx.engine_route {
-            command.extend(["--account".into(), route.account.clone(), "--account-home".into(), route.home.clone(),
-                "--account-base-url".into(), route.base_url.clone()]);
+            command.extend(["--account".into(), route.account.clone()]);
+            if let Some(home) = &route.home { command.extend(["--account-home".into(), home.clone()]); }
+            command.extend(["--account-base-url".into(), route.base_url.clone()]);
         }
         if let Some(model) = &spec.model {
             command.extend(["--model".into(), model.clone()]);
