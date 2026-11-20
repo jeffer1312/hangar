@@ -306,19 +306,35 @@ export function MessageList({
     if (reading.current.atEnd && toolGroupPausedRef.current) resumeFollowing();
     setLongeDoFim(falta > viewport);
   }, [resumeFollowing]);
+  const releaseTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(releaseTimer.current), []);
+  const settle = useCallback(() => {
+    clearTimeout(releaseTimer.current);
+    dragging.current = false;
+    const skipped = skippedWhileDragging.current;
+    skippedWhileDragging.current = false;
+    // Parou no fim depois de chegar linha durante o gesto: faz a ida ao fim que ficou para trás.
+    if (skipped && reading.current.atEnd && !toolGroupPausedRef.current) void lista.current?.scrollToEnd({ animated: false });
+  }, []);
   const onScrollBeginDrag = useCallback(() => {
+    clearTimeout(releaseTimer.current);
     dragging.current = true;
     reading.current.atEnd = false;
   }, []);
-  const onMomentumScrollBegin = useCallback(() => { dragging.current = true; }, []);
-  const settleScroll = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
-    dragging.current = false;
+  // O impulso, quando há, começa logo depois de soltar; só sem ele o gesto termina aqui.
+  const onScrollEndDrag = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
     onScroll(e);
-    const skipped = skippedWhileDragging.current;
-    skippedWhileDragging.current = false;
-    // Soltou no fim depois de chegar linha durante o gesto: faz a ida ao fim que ficou para trás.
-    if (skipped && reading.current.atEnd && !toolGroupPausedRef.current) void lista.current?.scrollToEnd({ animated: false });
-  }, [onScroll]);
+    clearTimeout(releaseTimer.current);
+    releaseTimer.current = setTimeout(settle, 100);
+  }, [onScroll, settle]);
+  const onMomentumScrollBegin = useCallback(() => {
+    clearTimeout(releaseTimer.current);
+    dragging.current = true;
+  }, []);
+  const onMomentumScrollEnd = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
+    onScroll(e);
+    settle();
+  }, [onScroll, settle]);
   const onContentSizeChange = useCallback((_width: number, height: number) => {
     if (!toolGroupPausedRef.current || !Number.isFinite(height) || !(height > 0)) return;
     toolGroupMeasurement.current.height = height;
@@ -394,9 +410,9 @@ export function MessageList({
       ref={lista}
       onScroll={onScroll}
       onScrollBeginDrag={onScrollBeginDrag}
-      onScrollEndDrag={settleScroll}
+      onScrollEndDrag={onScrollEndDrag}
       onMomentumScrollBegin={onMomentumScrollBegin}
-      onMomentumScrollEnd={settleScroll}
+      onMomentumScrollEnd={onMomentumScrollEnd}
       onContentSizeChange={preserveExpansion ? onContentSizeChange : undefined}
       scrollEventThrottle={100}
       nestedScrollEnabled={nestedScrollEnabled}

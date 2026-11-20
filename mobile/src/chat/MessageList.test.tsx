@@ -244,20 +244,28 @@ it('linha nova não puxa ao fim enquanto o dedo arrasta, mesmo perto do fim', ()
   act(() => latestList().onScroll(at(1590))); // Ainda dentro da faixa do fim, com o dedo na tela.
   addRow('near-end-during-drag');
   expect(list.scrollToEnd).not.toHaveBeenCalled();
-  act(() => latestList().onScrollEndDrag?.(at(1590))); // Soltou no fim: faz a ida que ficou para trás.
-  expect(list.scrollToEnd).toHaveBeenCalledTimes(1);
-  list.scrollToEnd.mockClear();
-  act(() => latestList().onScrollBeginDrag?.(at(1590)));
+  // Soltou perto do fim, mas o impulso leva para cima: a ida ao fim não corta o deslize.
   act(() => latestList().onScrollEndDrag?.(at(1590)));
-  expect(list.scrollToEnd).not.toHaveBeenCalled();
   act(() => latestList().onMomentumScrollBegin?.(at(1590)));
+  act(() => vi.advanceTimersByTime(300));
   addRow('during-momentum');
   expect(list.scrollToEnd).not.toHaveBeenCalled();
   act(() => latestList().onMomentumScrollEnd?.(at(1200)));
   addRow('away');
   expect(list.scrollToEnd).not.toHaveBeenCalled();
+  // Linha chega no gesto e ele para no fim sem impulso: faz a ida que ficou para trás.
+  act(() => latestList().onScrollBeginDrag?.(at(1200)));
+  act(() => latestList().onScroll(at(1590)));
+  addRow('near-end-again');
+  act(() => latestList().onScrollEndDrag?.(at(1590)));
+  expect(list.scrollToEnd).not.toHaveBeenCalled();
+  act(() => vi.advanceTimersByTime(150));
+  expect(list.scrollToEnd).toHaveBeenCalledTimes(1);
+  list.scrollToEnd.mockClear();
   act(() => latestList().onScrollBeginDrag?.(at(1200)));
   act(() => latestList().onScrollEndDrag?.(at(1600)));
+  act(() => vi.advanceTimersByTime(150));
+  expect(list.scrollToEnd).not.toHaveBeenCalled();
   addRow('back-at-end');
   expect(list.scrollToEnd).toHaveBeenCalledWith({ animated: false });
 });
