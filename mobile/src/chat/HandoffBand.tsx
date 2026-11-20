@@ -1,5 +1,5 @@
-import { memo, useState } from 'react';
-import { Pressable, Text, View } from 'react-native';
+import { memo, useEffect, useRef, useState } from 'react';
+import { AccessibilityInfo, Platform, Pressable, Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { cancelHandoffForServer, handoffTitle, modelDisplay } from '@hangar/core';
 import * as m from '../paraglide/messages';
@@ -19,10 +19,19 @@ export const HandoffBand = memo(function HandoffBand({ serverId, name }: { serve
   const row = useSessions((s) => s.rows.find((r) => r.serverId === serverId && r.name === name) ?? null);
   const [busy, setBusy] = useState(false);
   const handoff = row?.handoff;
+  const from = row ? modelDisplay(row.provider, row.model) : '';
+  const to = handoff ? modelDisplay(handoff.provider, handoff.model) : '';
+  const title = row && handoff ? handoffTitle(handoff, row.state) : '';
+  const spoken = `${title}: ${from} → ${to}`;
+  // No iOS a região viva não fala sozinha: a passagem de esperando para falhou é anunciada, sem cortar a fala.
+  const announced = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (handoff?.state && handoff.state !== announced.current && announced.current !== undefined && Platform.OS === 'ios') {
+      AccessibilityInfo.announceForAccessibilityWithOptions(spoken, { queue: true });
+    }
+    announced.current = handoff?.state;
+  }, [handoff?.state, spoken]);
   if (!row || !handoff) return null;
-  const from = modelDisplay(row.provider, row.model);
-  const to = modelDisplay(handoff.provider, handoff.model);
-  const title = handoffTitle(handoff, row.state);
   const cancel = () => {
     if (!server) return;
     setBusy(true);
@@ -31,8 +40,9 @@ export const HandoffBand = memo(function HandoffBand({ serverId, name }: { serve
       .finally(() => setBusy(false));
   };
   return (
-    <View style={styles.wrap} accessibilityLabel={`${title}: ${from} → ${to}`} accessibilityLiveRegion="polite">
-      <View style={styles.head}>
+    <View style={styles.wrap}>
+      {/* O texto anunciado fica só no cabeçalho: o Cancelar segue um botão à parte. */}
+      <View style={styles.head} accessible accessibilityLabel={spoken} accessibilityLiveRegion="polite">
         <Text style={[styles.title, handoff.state === 'failed' && styles.failed]} numberOfLines={2}>{title}</Text>
         <View style={styles.route}>
           <ProviderGlyph provider={row.provider ?? ''} size={14} />

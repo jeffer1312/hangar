@@ -537,16 +537,21 @@ function HandoffLine({ event }: { event: ChatEvent }) {
   const from = modelDisplay(h.from_provider, h.from_model);
   const to = modelDisplay(h.to_provider, h.to_model);
   return (
+    // Título e rota em linhas separadas: nome longo de modelo ou texto ampliado não passa da largura da conversa.
     <View style={styles.handoff} accessible accessibilityLabel={`${m.handoff_divider()}: ${from} → ${to}`}>
-      <View style={styles.handoffRule} />
-      <Icon name="RefreshCw" size={13} color={theme.tokens.text.muted} />
-      <Text style={styles.handoffTitle}>{m.handoff_divider()}</Text>
-      <ProviderGlyph provider={h.from_provider ?? ''} size={14} />
-      <Text style={styles.handoffModel}>{from}</Text>
-      <Icon name="ArrowRight" size={12} color={theme.tokens.text.muted} />
-      <ProviderGlyph provider={h.to_provider ?? ''} size={14} />
-      <Text style={styles.handoffModel}>{to}</Text>
-      <View style={styles.handoffRule} />
+      <View style={styles.handoffRow}>
+        <View style={styles.handoffRule} />
+        <Icon name="RefreshCw" size={13} color={theme.tokens.text.muted} />
+        <Text style={styles.handoffTitle} numberOfLines={1}>{m.handoff_divider()}</Text>
+        <View style={styles.handoffRule} />
+      </View>
+      <View style={[styles.handoffRow, styles.handoffRoute]}>
+        <ProviderGlyph provider={h.from_provider ?? ''} size={14} />
+        <Text style={styles.handoffModel} numberOfLines={1}>{from}</Text>
+        <Icon name="ArrowRight" size={12} color={theme.tokens.text.muted} />
+        <ProviderGlyph provider={h.to_provider ?? ''} size={14} />
+        <Text style={styles.handoffModel} numberOfLines={1}>{to}</Text>
+      </View>
     </View>
   );
 }
@@ -583,10 +588,16 @@ const styles = StyleSheet.create((theme) => ({
     paddingVertical: theme.base.space[1],
   },
   handoff: {
+    gap: theme.base.space[1],
+    paddingVertical: theme.base.space[2],
+  },
+  handoffRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: theme.base.space[1],
-    paddingVertical: theme.base.space[2],
+  },
+  handoffRoute: {
+    justifyContent: 'center',
   },
   handoffRule: {
     flex: 1,
@@ -594,11 +605,13 @@ const styles = StyleSheet.create((theme) => ({
     backgroundColor: theme.tokens.border.default,
   },
   handoffTitle: {
+    flexShrink: 1,
     fontSize: theme.base.text.xs,
     fontWeight: '600',
     color: theme.tokens.text.muted,
   },
   handoffModel: {
+    flexShrink: 1,
     fontSize: theme.base.text.xs,
     color: theme.tokens.text.muted,
   },
