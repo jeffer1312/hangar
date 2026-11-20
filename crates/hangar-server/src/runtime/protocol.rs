@@ -168,13 +168,14 @@ impl UsageLimit {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum DiagEvent { CodexDecode, CodexBootstrap, CodexConnectionClosed, ClaudeSidecarAbsent, CanoProtocolInvalid, CanoReconnectStopped, CanoOutputLost }
+pub enum DiagEvent { CodexDecode, CodexBootstrap, CodexConnectionClosed, CodexSidecarGone, ClaudeSidecarAbsent, CanoProtocolInvalid, CanoReconnectStopped, CanoOutputLost }
 
 impl DiagEvent {
     pub fn event(self) -> &'static str {
         match self {
             Self::CodexDecode => "rust.codex_decode", Self::CodexBootstrap => "rust.codex_bootstrap",
-            Self::CodexConnectionClosed => "rust.codex_connection_closed", Self::ClaudeSidecarAbsent => "rust.claude_sidecar_absent",
+            Self::CodexConnectionClosed => "rust.codex_connection_closed", Self::CodexSidecarGone => "rust.codex_sidecar_gone",
+            Self::ClaudeSidecarAbsent => "rust.claude_sidecar_absent",
             Self::CanoProtocolInvalid => "rust.cano_protocol_invalid", Self::CanoReconnectStopped => "rust.cano_reconnect_stopped",
             Self::CanoOutputLost => "rust.cano_output_lost",
         }
@@ -184,6 +185,7 @@ impl DiagEvent {
             Self::CodexDecode => "formato inesperado do Codex: notificação ignorada (ciclo de vida lido cru), resposta com o padrão, pedido mostrado pela linha crua",
             Self::CodexBootstrap => "o Codex recusou abrir a conversa na subida; a sessão não fica pronta e mostra o problema",
             Self::CodexConnectionClosed => "a conexão de controle com o app-server do Codex com terminal caiu; o ator reconecta ao mesmo processo",
+            Self::CodexSidecarGone => "o arquivo da sessão Codex sumiu ou é de outra vida; o ator parou sem subir o processo de novo",
             Self::ClaudeSidecarAbsent => "o sidecar da sessão sumiu (fechada pelo nome); a gravação do estado não foi feita",
             Self::CanoProtocolInvalid => "o cano mandou um envelope que o servidor não conhece; o ator religou ao mesmo processo",
             Self::CanoReconnectStopped => "a religação ao cano parou: falta o que prova que o processo é o desta vida",

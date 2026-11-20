@@ -111,8 +111,10 @@ impl FirstPrompt {
             // Retomando, o `thread/started` não vem: assina a thread logo depois do `initialize`.
             Stage::Waiting if self.resume.is_some() && id == Some(&json!(1)) => {
                 self.stage = Stage::Resuming;
+                // Só assina para mandar o primeiro turno: as rodadas de antes não servem aqui.
                 let (method, params) = ClientRequest::ThreadResume(wire::ThreadResumeParams {
                     thread_id: self.resume.clone().unwrap_or_default(),
+                    exclude_turns: true,
                     ..Default::default()
                 })
                 .into_parts();
@@ -263,6 +265,7 @@ mod tests {
         let outs = first.message(&json!({"id": 1, "result": {}}), None);
         assert_eq!(sent(&outs)[0]["method"], "thread/resume");
         assert_eq!(sent(&outs)[0]["params"]["threadId"], "t-9");
+        assert_eq!(sent(&outs)[0]["params"]["excludeTurns"], true, "sem trazer o histórico");
         let outs = first.message(&json!({"id": FIRST_RESUME_ID, "result": {}}), None);
         assert_eq!(sent(&outs)[0]["method"], "turn/start");
         assert_eq!(sent(&outs)[0]["params"]["threadId"], "t-9");

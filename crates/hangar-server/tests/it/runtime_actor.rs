@@ -60,8 +60,8 @@ async fn setup_recovered(reply_before_ack:bool,blocked_rpc:bool,compound:bool,pr
             assert!(state.operations[wire].status == Status::Dispatching,"journal precisa preceder os bytes");
             let frame:Value = serde_json::from_str(envelope["frame"].as_str().unwrap()).unwrap();
             sent += 1;
-            let result = if compound && frame["method"] == "thread/read" {
-                json!({"thread":{"id":"thread-1","status":{"type":"active"},"turns":[{"id":"turn-1","status":"inProgress"}]}})
+            let result = if compound && frame["method"] == "thread/turns/list" {
+                json!({"data":[{"id":"turn-1","status":"inProgress"}]})
             } else if frame["method"] == "turn/start" { json!({"turn":{"id":"turn-1","status":"inProgress"}}) }
             else { json!({"data":[]}) };
             let reply = json!({"type":"cano_output","frame":json!({"id":frame["id"],"result":result}).to_string()});
@@ -1643,8 +1643,8 @@ for line in sys.stdin:
         continue
     elif method == "turn/start":
         result = {{"turn": {{"id": "turn-1", "status": "inProgress"}}}}
-    elif method == "thread/read" and os.path.exists(os.path.join(d, "cut")):
-        result = {{"thread": {{"id": "thread-new", "status": {{"type": "idle"}}, "turns": [{{"id": "turn-1", "status": "interrupted", "items": []}}]}}}}
+    elif method == "thread/turns/list" and os.path.exists(os.path.join(d, "cut")):
+        result = {{"data": [{{"id": "turn-1", "status": "interrupted", "items": []}}]}}
     elif method == "turn/interrupt":
         send({{"id": msg["id"], "result": {{}}}})
         send({{"method": "turn/completed", "params": {{"threadId": "thread-new", "turn": {{"id": "turn-1", "status": "interrupted"}}}}}})
@@ -1718,6 +1718,77 @@ for line in sys.stdin:
         assert_eq!(snapshot["view"]["public_state"]["problema"],"codex_headless_nao_subiu",
             "teto esgotado deixa a sessão com o problema: {}",snapshot["view"]["public_state"]);
         assert_eq!(sidecar(dir.path())["cano"]["pid"],recorded(dir.path())[3].pid,"cada subida grava o cano novo no arquivo da sessão");
+        cleanup(&registry,&key,dir.path()).await;
+    }
+
+    /// Sessão fechada pelo nome com o processo caindo: o sidecar sumiu, a subida não tem onde gravar o
+    /// processo novo, e o ator para na primeira recusa em vez de gastar as 3 subidas.
+    #[tokio::test]
+    async fn respawn_without_the_sidecar_stops_the_actor_after_one_spawn() {
+        use_cano_bin();
+        let dir = tempfile::tempdir().unwrap();
+        let key = unique_key();
+        let base = std::time::Duration::from_secs(1);
+        lifecycle_codex(dir.path());
+        write_sidecar(dir.path(),&key,json!({}));
+        let (fake,_upstream) = crate::fake::spawn_fake().await;
+        let registry = Arc::new(RuntimeRegistry::new("instance".into()).with_respawn_base(base)
+            .with_codex_environment(codex_env(dir.path())).with_diagnostics(fake.diagnostics()));
+        registry.open_with_launch(target(dir.path(),&key,no_cano()),dir.path().into()).await.unwrap();
+        until_ready(&registry,&key).await;
+        let rx = registry.live("cx");
+        std::fs::remove_file(dir.path().join("cx.json")).unwrap();
+        std::fs::write(dir.path().join("die"),"").unwrap();
+        let first = recorded(dir.path())[0].pid;
+        until("o processo caiu",||!matches!(process::liveness(first,&key),process::Liveness::Ours)).await;
+        // A subida seguinte fica de pé: só a gravação no arquivo da sessão a recusa.
+        std::fs::remove_file(dir.path().join("die")).unwrap();
+        let gone = |fake:&crate::fake::Fake|fake.diag().iter().filter(|line|line["codigo"] == "codex_sidecar_gone").count();
+        until("a parada vai ao diário",||gone(&fake) == 1).await;
+        tokio::time::sleep(base * 3).await;
+        // A subida recusada pode morrer antes de o `codex` falso anotar a partida: no máximo uma depois da queda.
+        assert!(starts(dir.path()).len() <= 2,"uma subida só depois da queda: {:?}",starts(dir.path()));
+        assert_eq!(gone(&fake),1);
+        for cano in recorded(dir.path()).iter().skip(1) {
+            assert!(!matches!(process::liveness(cano.pid,&key),process::Liveness::Ours),"o processo sem dono foi encerrado");
+        }
+        let handle = registry.handle(&key,1).await.unwrap();
+        assert!(handle.snapshot().await.is_err(),"o ator parou");
+        let last = rx.borrow().clone().expect("o canal guarda o estado da parada");
+        assert_eq!(last.public_state["problema"],"headless_caiu","o canal mostra a parada, não a subida: {}",last.public_state);
+        for cano in recorded(dir.path()) { let _ = process::kill(&cano,&key,dir.path()).await; }
+    }
+
+    /// Recusa da gravação com o arquivo ainda lá (ilegível no instante da releitura): não é sessão fechada,
+    /// então a religação continua tentando.
+    #[tokio::test]
+    async fn respawn_refused_with_the_sidecar_still_there_keeps_retrying() {
+        use_cano_bin();
+        let dir = tempfile::tempdir().unwrap();
+        let key = unique_key();
+        let base = std::time::Duration::from_millis(300);
+        lifecycle_codex(dir.path());
+        write_sidecar(dir.path(),&key,json!({}));
+        let (fake,_upstream) = crate::fake::spawn_fake().await;
+        let registry = Arc::new(RuntimeRegistry::new("instance".into()).with_respawn_base(base)
+            .with_codex_environment(codex_env(dir.path())).with_diagnostics(fake.diagnostics()));
+        registry.open_with_launch(target(dir.path(),&key,no_cano()),dir.path().into()).await.unwrap();
+        until_ready(&registry,&key).await;
+        hangar_server::runtime::codex_sidecar::locked(dir.path(),"cx",|path|std::fs::write(path,"{")).unwrap();
+        std::fs::write(dir.path().join("die"),"").unwrap();
+        let first = recorded(dir.path())[0].pid;
+        until("o processo caiu",||!matches!(process::liveness(first,&key),process::Liveness::Ours)).await;
+        std::fs::remove_file(dir.path().join("die")).unwrap();
+        // A recusa marca o problema; a subida recusada pode morrer antes de o `codex` falso anotar a partida.
+        let handle = registry.handle(&key,1).await.unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(20),async {
+            while handle.snapshot().await.unwrap()["view"]["public_state"]["problema"] != "codex_headless_nao_subiu" {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        }).await.expect("a subida foi recusada");
+        tokio::time::sleep(base * 3).await;
+        assert!(handle.snapshot().await.is_ok(),"o ator segue tentando");
+        assert!(fake.diag().iter().all(|line|line["codigo"] != "codex_sidecar_gone"),"{:?}",fake.diag());
         cleanup(&registry,&key,dir.path()).await;
     }
 

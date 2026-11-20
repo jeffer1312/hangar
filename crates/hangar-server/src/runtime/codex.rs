@@ -65,6 +65,9 @@ struct AsyncQuestions {
     local_answers:BTreeMap<String,String>,
     echoes:BTreeMap<String,usize>,
     during_load:Option<Vec<Value>>,
+    /// O estado já saiu de uma leitura do histórico inteiro desta conversa: dali em diante a retomada
+    /// lê só a página recente, e o mais antigo que ela fica como o Hangar guardou.
+    seeded:bool,
 }
 
 impl AsyncQuestions {
@@ -125,7 +128,23 @@ impl AsyncQuestions {
         }
         for item in self.during_load.take().unwrap_or_default() { restored.observe(thread_id,&typed(&item),&item); }
         for (id,text) in &self.local_answers { restored.record_answer(id,text); }
+        restored.seeded = true;
         *self = restored;
+    }
+
+    /// Só as rodadas recentes, em ordem: o item já visto não conta de novo, e a pergunta mais antiga que a
+    /// página continua pendente ou respondida como estava.
+    /// Devolve quantos itens não se leram.
+    fn hydrate_page(&mut self,thread_id:&str,turns:&[Value]) -> usize {
+        let prefix = format!("async:{thread_id}:");
+        self.pending.retain(|(id,_)|id.starts_with(&prefix));
+        self.during_load = None;
+        let mut unreadable = 0;
+        for item in turns.iter().filter_map(|turn|turn["items"].as_array()).flatten() {
+            let Ok(typed) = wire::ThreadItem::deserialize(item) else { unreadable += 1; continue };
+            self.observe(thread_id,&typed,item);
+        }
+        unreadable
     }
 
     fn resolve(&mut self,id:&str) { self.pending.retain(|(key,_)|key != id); self.resolved.insert(id.into()); }
@@ -301,6 +320,8 @@ fn input_of(payload:&Value,text:&str) -> Vec<Value> {
     payload["input"].as_array().cloned().unwrap_or_else(||vec![json!({"type":"text","text":text})])
 }
 
+/// Rodadas da página da retomada: cobre o turno em curso e as filhas recentes sem trazer o histórico.
+pub const RESUME_PAGE:u32 = 20;
 /// Espera crescente da assinatura enquanto a thread não tem rollout, a mesma do adapter Python.
 const SUBSCRIBE_RETRY_BASE:f64 = 1.0;
 const SUBSCRIBE_RETRY_MAX:f64 = 10.0;
@@ -498,7 +519,9 @@ impl Engine {
             async_questions.echoes = metadata["async_echoes"].as_object().into_iter().flatten()
                 .filter_map(|(text,count)|Some((text.clone(),usize::try_from(count.as_u64()?).ok()?))).collect();
             async_questions.during_load = metadata["async_during_load"].as_array().cloned();
+            async_questions.seeded = metadata["async_seeded"] == true;
         }
+        let (saved_agents,subagent_revision) = subagents::restored_agents(&metadata["subagents_saved"]);
         let headless = metadata["headless"] != false;
         let subscribed = !headless && metadata["subscribed"] == true;
         Self { interactions:None,generation,clock,counter:metadata["runtime_counter"].as_u64().unwrap_or(0),headless,
@@ -519,7 +542,7 @@ impl Engine {
             preview:LiveBuffer::default(),response_started:false,first_response_start:None,compacting:false,
             running_commands:BTreeMap::new(),hook_streaks:BTreeMap::new(),notices_seen:BTreeSet::new(),hook_trust_settled:false,early_trust_unanswered:false,permission_resync:false,permission_resync_at:0.0,permission_resync_failures:0,permission_restarting:false,output_due:None,thinking:LiveBuffer::default(),was_working:metadata["in_progress"] == true,
             rpc:BTreeMap::new(),server_requests:Vec::new(),
-            request_epochs:BTreeMap::new(),answering:BTreeSet::new(),lost_requests:BTreeSet::new(),wires:BTreeMap::new(),policies:BTreeMap::new(),last_format_request:None,format_gate:FormatGate::default(),reported_formats:BTreeSet::new(),async_questions,subagents:BTreeMap::new(),subagent_revision:0,subagent_epoch:Arc::new(subagents::FamilyEpoch::default()),reservations:Vec::new(),skill_preparations:BTreeMap::new(),skips:BTreeMap::new(),last_event:clock.monotonic_s,mode_write:None,metadata }
+            request_epochs:BTreeMap::new(),answering:BTreeSet::new(),lost_requests:BTreeSet::new(),wires:BTreeMap::new(),policies:BTreeMap::new(),last_format_request:None,format_gate:FormatGate::default(),reported_formats:BTreeSet::new(),async_questions,subagents:saved_agents,subagent_revision,subagent_epoch:Arc::new(subagents::FamilyEpoch::default()),reservations:Vec::new(),skill_preparations:BTreeMap::new(),skips:BTreeMap::new(),last_event:clock.monotonic_s,mode_write:None,metadata }
     }
 
     pub fn view(&self) -> Value {
@@ -647,9 +670,9 @@ impl Engine {
             "async_questions":self.async_questions.pending,"async_local_answers":self.async_questions.local_answers,
             "async_seen":self.async_questions.seen,"async_resolved":self.async_questions.resolved,
             "async_echoes":self.async_questions.echoes,"async_during_load":self.async_questions.during_load,
-            "skipped_async_questions":self.async_questions.skipped,
+            "async_seeded":self.async_questions.seeded,"skipped_async_questions":self.async_questions.skipped,
             "pending_questions":self.async_questions.pending.iter().filter(|(id,_)|!self.answer_queued(id)).count(),
-            "subagents":self.subagent_views()})
+            "subagents":self.subagent_views(),"subagents_saved":self.subagents})
     }
 
     /// Segundos sem evento da conversa, só com nada em aberto: turno, pedido, pergunta, comando de pé,
@@ -798,8 +821,13 @@ impl Engine {
 
     /// Resposta lida pelo tipo sem copiar a linha; fora do formato vai ao diário e segue com o padrão.
     fn decode_reply<T:for<'de> Deserialize<'de> + Default>(&mut self,method:&str,result:&Value,effects:&mut Vec<Effect>) -> T {
+        self.decode_checked(method,result,effects).unwrap_or_default()
+    }
+
+    /// Como `decode_reply`, para quem não pode tomar o padrão por resposta (a falta de rodada não é "nenhum turno").
+    fn decode_checked<T:for<'de> Deserialize<'de>>(&mut self,method:&str,result:&Value,effects:&mut Vec<Effect>) -> Option<T> {
         match T::deserialize(result) {
-            Ok(response) => response,
+            Ok(response) => Some(response),
             Err(failure) => {
                 tracing::warn!(session=%self.state.session,method,error=wire::error_kind(&failure),"resposta do Codex fora do formato");
                 effects.push(Effect::Diag { event:DiagEvent::CodexDecode,code:decode_code(method) });
@@ -813,7 +841,7 @@ impl Engine {
                     Value::Array(_) => json!({"method":method,"result_type":"array"}),
                 };
                 self.report_format(format!("decode:{method}"),||shape,effects);
-                T::default()
+                None
             }
         }
     }
@@ -970,7 +998,8 @@ impl Engine {
         if !pending.acknowledged || !pending.candidate || pending.verifying { return; }
         pending.candidate = false; pending.verifying = true;
         let parent = pending.operation_id.clone(); let thread = pending.thread_id.clone();
-        self.send(format!("{parent}:verify:{}",self.counter+1),ClientRequest::ThreadResume(wire::ThreadResumeParams { thread_id:thread,..Default::default() }),
+        // Só confere o Fast: nenhuma rodada vem, e o estado das perguntas fica como estava.
+        self.send(format!("{parent}:verify:{}",self.counter+1),ClientRequest::ThreadResume(wire::ThreadResumeParams { thread_id:thread,exclude_turns:true,..Default::default() }),
             Some(json!({"kind":"service_tier_confirm","parent":parent})),effects);
     }
 
@@ -1263,8 +1292,8 @@ impl Engine {
         if self.headless || !self.connected || self.subscribed
             || self.rpc.values().any(|rpc|subscribe_rpc(rpc) && !rpc.timed_out && rpc.params["threadId"] == self.thread_id.as_str()) { return; }
         let transfer = self.metadata["transfer_id"].as_str().is_some_and(|id|!id.is_empty());
-        let request = ClientRequest::ThreadResume(wire::ThreadResumeParams { thread_id:self.thread_id.clone(),
-            cwd:if transfer { None } else { string(&self.metadata["cwd"]) },..Default::default() });
+        let request = ClientRequest::ThreadResume(self.paged(wire::ThreadResumeParams { thread_id:self.thread_id.clone(),
+            cwd:if transfer { None } else { string(&self.metadata["cwd"]) },..Default::default() }));
         self.counter += 1;
         self.send(format!("subscribe:{}:{}",self.generation,self.counter),request,Some(json!({"kind":"subscribe"})),effects);
     }
@@ -1289,9 +1318,10 @@ impl Engine {
 
     /// Abrir conversa só vale comprovado: objeto legível com `thread.id`, e no `resume` exatamente a pedida.
     /// Sem erro não basta, e o padrão de uma decodificação falha nunca passa.
-    fn opened_thread(&mut self,rpc:&Rpc,line:&Value,effects:&mut Vec<Effect>) -> Option<wire::ThreadStartResponse> {
+    fn opened_thread(&mut self,rpc:&Rpc,line:&Value,effects:&mut Vec<Effect>) -> Option<wire::ThreadResumeResponse> {
         let result = &line["result"];
-        let response:wire::ThreadStartResponse = self.decode_reply(&rpc.method,result,effects);
+        // O `thread/start` vem no mesmo formato, sem página.
+        let response:wire::ThreadResumeResponse = self.decode_reply(&rpc.method,result,effects);
         let expected = if rpc.method == "thread/resume" { rpc.params["threadId"].as_str() } else { Some(response.thread.id.as_str()) };
         (result.is_object() && !response.thread.id.is_empty() && expected == Some(response.thread.id.as_str())).then_some(response)
     }
@@ -1325,11 +1355,32 @@ impl Engine {
             self.model = self.model.clone().or(response.model.clone());
             self.effort = self.effort.clone().or(response.reasoning_effort.clone());
         }
-        self.restore_thread(&response.thread,rpc);
-        self.async_questions.hydrate(&self.thread_id,&result["thread"]);
-        self.hydrate_agents(&result["thread"],rpc.subagent_revision);
+        self.restore_opened(&response,&result,rpc);
         self.changed(effects,true);
         effects.push(Effect::WakeQueue);
+    }
+
+    /// Com a página (mais recente primeiro) a hidratação lê só ela, em ordem; sem, o histórico que veio.
+    fn restore_opened(&mut self,response:&wire::ThreadResumeResponse,result:&Value,rpc:&Rpc) {
+        if rpc.params["excludeTurns"] != true {
+            let turns = &response.thread.turns;
+            self.restore_thread(&response.thread,(!turns.is_empty()).then_some(&turns[..]),rpc);
+            self.async_questions.hydrate(&self.thread_id,&result["thread"]);
+            self.hydrate_agents(&result["thread"],rpc.subagent_revision);
+            return;
+        }
+        // Sem página (só a conferência do Fast) turno, perguntas e filhas ficam como estavam.
+        let Some(page) = &response.initial_turns_page else { return self.restore_thread(&response.thread,None,rpc) };
+        let mut turns = page.data.clone();
+        turns.reverse();
+        let mut raw = result["initialTurnsPage"]["data"].as_array().cloned().unwrap_or_default();
+        raw.reverse();
+        self.restore_thread(&response.thread,Some(&turns[..]),rpc);
+        let unreadable = self.async_questions.hydrate_page(&self.thread_id,&raw);
+        if unreadable > 0 { tracing::warn!(session=%self.state.session,unreadable,"codex: itens da página da retomada fora do formato; ficaram de fora"); }
+        let mut thread = result["thread"].clone();
+        thread["turns"] = Value::Array(raw);
+        self.hydrate_agents(&thread,rpc.subagent_revision);
     }
 
     /// A TUI abriu outra conversa principal: o vínculo a segue, e pedidos, perguntas e turno da anterior perdem a validade.
@@ -1464,7 +1515,7 @@ impl Engine {
             // A vida anterior estava no meio de um turno: se ele voltou `interrupted`, foi cortado.
             self.counter += 1;
             let operation_id = format!("cut-check:{}:{}",self.generation,self.counter);
-            self.send(operation_id,self.thread_read(true),Some(json!({"kind":"cut_check"})),effects);
+            self.send(operation_id,self.latest_turn(),Some(json!({"kind":"cut_check"})),effects);
         }
         // Cano vivo já tem o esforço que a vida anterior aplicou: como no Python, religar não o reenvia.
         if let Some(effort) = self.metadata["effort"].as_str().filter(|_|self.fresh_process).map(str::to_owned) {
@@ -1513,6 +1564,20 @@ impl Engine {
 
     fn thread_read(&self,include_turns:bool) -> ClientRequest {
         ClientRequest::ThreadRead(wire::ThreadReadParams { thread_id:self.thread_id.clone(),include_turns })
+    }
+
+    /// Só a rodada mais recente, sem itens: id e estado bastam para Orientar, Interromper e o corte.
+    fn latest_turn(&self) -> ClientRequest {
+        ClientRequest::ThreadTurnsList(wire::ThreadTurnsListParams { thread_id:self.thread_id.clone(),limit:Some(1),
+            sort_direction:Some("desc".into()),items_view:Some("notLoaded".into()) })
+    }
+
+    /// O histórico inteiro na retomada está obsoleto no Codex: vai a página recente, que o motor hidrata.
+    /// Sem estado das perguntas vindo de uma leitura inteira (vida de antes desta versão), lê tudo uma vez.
+    fn paged(&self,params:wire::ThreadResumeParams) -> wire::ThreadResumeParams {
+        if !self.async_questions.seeded { return params; }
+        let page = wire::ThreadResumeInitialTurnsPageParams { limit:Some(RESUME_PAGE),items_view:Some("full".into()),sort_direction:Some("desc".into()) };
+        wire::ThreadResumeParams { exclude_turns:true,initial_turns_page:Some(page),..params }
     }
 
     /// Sem `cwd` a lista vai vazia, e o Codex usa a pasta da sessão.
@@ -1647,10 +1712,10 @@ impl Engine {
                 }
                 let text = payload["text"].as_str().filter(|s|!s.trim().is_empty()).ok_or_else(||error("a orientação não pode estar vazia"))?;
                 let Some(turn) = payload["turn_id"].as_str().or(self.turn_id.as_deref()) else {
-                    // Adotada no meio do turno o `resume` vem sem turnos: o id sai do `thread/read`, como no Python.
+                    // Adotada no meio do turno o `resume` pode vir sem o id: ele sai da rodada mais recente.
                     if !self.in_progress || payload["turn_read"] == true { return Err(error("não há turno em andamento para orientar")); }
                     let next = json!({"kind":"steer","parent":id,"command":{"operation_id":id,"kind":"steer","payload":payload}});
-                    self.send(format!("{id}:read"),self.thread_read(true),Some(next),&mut effects);
+                    self.send(format!("{id}:read"),self.latest_turn(),Some(next),&mut effects);
                     self.changed(&mut effects,false);
                     return Ok(effects);
                 };
@@ -1664,7 +1729,7 @@ impl Engine {
                     let next = self.terminate_after(&turn);
                     self.send(id,ClientRequest::TurnInterrupt(wire::TurnInterruptParams { thread_id:self.thread_id.clone(),turn_id:turn }),next,&mut effects);
                 } else {
-                    self.send(format!("{id}:read"),self.thread_read(true),Some(json!({"kind":"interrupt","parent":id})),&mut effects);
+                    self.send(format!("{id}:read"),self.latest_turn(),Some(json!({"kind":"interrupt","parent":id})),&mut effects);
                 }
             }
             OperationKind::TerminateTerminal => {
@@ -2191,6 +2256,9 @@ impl Engine {
             // Outra recusa do Codex: a reserva acaba e a pergunta continua aberta para outra resposta.
             if let Some(entry) = reserved_entry(&rpc) { self.reservations.retain(|r|r.reservation.entry_id != entry); }
             let message = line["error"]["message"].as_str().unwrap_or("");
+            if rpc.continuation.as_ref().is_some_and(|next|next["kind"] == "cut_check") {
+                tracing::warn!(session=%self.state.session,reason=%message,"codex: a conferência do turno cortado foi recusada; o estado fica como estava");
+            }
             if self.bootstrap_fallback(&rpc,message,effects) { return Ok(()); }
             let transfer = self.metadata["transfer_id"].as_str().is_some_and(|id|!id.is_empty());
             if let Some(parent) = rpc.continuation.as_ref().filter(|next|next["kind"] == "bootstrap_ready" && !transfer).and_then(|next|next["parent"].as_str()) {
@@ -2231,7 +2299,7 @@ impl Engine {
             return Ok(());
         }
         let result = line.get("result").cloned().unwrap_or_else(||json!({}));
-        // Turno cortado: lido da mesma decodificação do `thread/read`, uma só por linha.
+        // Turno cortado: lido da mesma decodificação do `thread/turns/list`, uma só por linha.
         let mut cut = false;
         match rpc.method.as_str() {
             "initialize" => {
@@ -2278,9 +2346,7 @@ impl Engine {
                         patch["service_tier"] = json!(tier); self.service_tier = Some(tier);
                     }
                 }
-                self.restore_thread(&response.thread,&rpc);
-                self.async_questions.hydrate(&self.thread_id,&result["thread"]);
-                self.hydrate_agents(&result["thread"],rpc.subagent_revision);
+                self.restore_opened(&response,&result,&rpc);
                 self.policy("session.patch_meta",patch,effects);
             }
             "turn/start" => {
@@ -2301,10 +2367,36 @@ impl Engine {
             }
             "thread/read" => {
                 let response:wire::ThreadReadResponse = self.decode_reply(&rpc.method,&result,effects);
-                cut = response.thread.status == wire::ThreadStatus::Idle && response.thread.turns.last().is_some_and(|turn|turn.status == "interrupted");
-                self.restore_thread(&response.thread,&rpc);
-                if rpc.params["includeTurns"] == true { self.async_questions.hydrate(&self.thread_id,&result["thread"]); }
-                if rpc.params["includeTurns"] == true { self.hydrate_agents(&result["thread"],rpc.subagent_revision); }
+                let turns = rpc.params["includeTurns"] == true;
+                self.restore_thread(&response.thread,turns.then_some(&response.thread.turns[..]),&rpc);
+                if turns { self.async_questions.hydrate(&self.thread_id,&result["thread"]); }
+                if turns { self.hydrate_agents(&result["thread"],rpc.subagent_revision); }
+            }
+            "thread/turns/list" => {
+                let Some(response) = self.decode_checked::<wire::ThreadTurnsListResponse>(&rpc.method,&result,effects) else {
+                    // Rodada ilegível não prova turno nenhum: Orientar e Parar recebem a falha, e o corte fica sem conferir.
+                    let parent = rpc.continuation.as_ref().filter(|next|matches!(next["kind"].as_str(),Some("steer" | "interrupt")))
+                        .and_then(|next|next["parent"].as_str()).map_or_else(||rpc.operation_id.clone(),str::to_owned);
+                    effects.push(Effect::Reply { operation_id:parent,disposition:Disposition::Rejected,
+                        payload:json!({"error":"o Codex respondeu a rodada mais recente fora do formato"}) });
+                    self.changed(effects,false);
+                    return Ok(());
+                };
+                let latest = response.data.first();
+                // O estado da conversa já veio da retomada; a rodada só diz o id e se ela foi cortada.
+                cut = !self.in_progress && latest.is_some_and(|turn|turn.status == "interrupted");
+                if rpc.state_revision == self.state_revision && rpc.params["threadId"] == self.thread_id.as_str() {
+                    self.turn_id = latest.filter(|turn|turn.status == "inProgress").map(|turn|turn.id.clone());
+                    if self.turn_id.is_some() { self.in_progress = true; self.turn_known = true; }
+                    // Rodada mais recente acabada: o fim dela se perdeu. Compactação em curso fica como está: a lista pode não trazê-la.
+                    else if latest.is_some() && self.in_progress && !self.compacting {
+                        self.in_progress = false; self.state.codex_buffering = false; self.turn_known = true;
+                        // Resposta tardia de antes desta leitura não religa o turno acabado.
+                        self.state_revision += 1;
+                        self.changed(effects,true);
+                        effects.push(Effect::WakeQueue);
+                    }
+                }
             }
             "thread/settings/update" => {
                 if rpc.settings_revision == self.settings_revision {
@@ -2355,11 +2447,12 @@ impl Engine {
                     effects.push(Effect::Write { operation_id:Some(notification),
                         frame:json!({"jsonrpc":"2.0","method":"initialized","params":{}}) });
                     let request = if self.reconnect && !self.thread_id.is_empty() {
-                        if self.fresh_process {
-                            ClientRequest::ThreadResume(wire::ThreadResumeParams { thread_id:self.thread_id.clone(),cwd:string(&self.metadata["cwd"]),
+                        let params = if self.fresh_process {
+                            wire::ThreadResumeParams { thread_id:self.thread_id.clone(),cwd:string(&self.metadata["cwd"]),
                                 approval_policy:Some(approval(self.launch_mode()).into()),sandbox:Some(sandbox(self.launch_mode()).into()),
-                                service_tier:self.service_tier.clone(),model_provider:None })
-                        } else { ClientRequest::ThreadResume(wire::ThreadResumeParams { thread_id:self.thread_id.clone(),..Default::default() }) }
+                                service_tier:self.service_tier.clone(),..Default::default() }
+                        } else { wire::ThreadResumeParams { thread_id:self.thread_id.clone(),..Default::default() } };
+                        ClientRequest::ThreadResume(self.paged(params))
                     } else { self.bootstrap_start() };
                     self.send(format!("{parent}:thread"),request,Some(json!({"kind":"bootstrap_thread","parent":parent})),effects);
                 }
@@ -2455,14 +2548,15 @@ impl Engine {
         Ok(())
     }
 
-    fn restore_thread(&mut self,thread:&wire::Thread,rpc:&Rpc) {
+    /// `turns` em ordem, só quando a resposta trouxe as rodadas: sem elas o id do turno fica como estava.
+    fn restore_thread(&mut self,thread:&wire::Thread,turns:Option<&[wire::Turn]>,rpc:&Rpc) {
         if rpc.state_revision == self.state_revision {
             if matches!(thread.status,wire::ThreadStatus::Active | wire::ThreadStatus::Idle) { self.turn_known = true; }
             match thread.status {
                 wire::ThreadStatus::Active => {
                     self.in_progress = true;
-                    if rpc.params["includeTurns"] == true {
-                        self.turn_id = thread.turns.iter().rev().find(|turn|turn.status == "inProgress").map(|turn|turn.id.clone());
+                    if let Some(turns) = turns {
+                        self.turn_id = turns.iter().rev().find(|turn|turn.status == "inProgress").map(|turn|turn.id.clone());
                     }
                 }
                 wire::ThreadStatus::Idle => { self.in_progress = false; self.turn_id = None; self.state.codex_buffering = false; },
