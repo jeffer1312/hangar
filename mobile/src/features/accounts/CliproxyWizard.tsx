@@ -161,15 +161,17 @@ export function CliproxyWizard({ server, names, onSaved, onClose }: {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const tick = async () => {
       try {
+        // Lido antes da leitura: a resposta que sai com o pedido em voo pode chegar depois de ele terminar.
+        const inFlight = posting.current;
         const next = await refresh();
         if (stop) return;
         const job = next.install?.job;
         // Sem tarefa depois do pedido aceito: o servidor reiniciou no meio e o andamento, que era da memória dele, se
         // perdeu. Com o pedido ainda em voo, a tarefa só não nasceu.
-        if (!job && !posting.current) { haptic.error(); setStage({ k: 'install_failed', at: 0, error: m.mobile_cliproxy_wizard_install_lost() }); return; }
+        if (!job && !inFlight && !posting.current) { haptic.error(); setStage({ k: 'install_failed', at: 0, error: m.mobile_cliproxy_wizard_install_lost() }); return; }
         if (!job) { if (!stop) timer = setTimeout(() => void tick(), 1000); return; }
         // Com o pedido ainda em voo, uma tarefa concluída é a da tentativa anterior: só a seguinte é desta.
-        if (job.done && !posting.current) {
+        if (job.done && !inFlight && !posting.current) {
           if (job.error) { haptic.error(); setStage({ k: 'install_failed', at: STEP_AT[job.step] ?? 0, error: installError(job.error) }); }
           else { haptic.success(); setStage({ k: 'pick' }); }
           return;

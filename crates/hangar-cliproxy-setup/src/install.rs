@@ -13,6 +13,8 @@ const DEFAULT_BASE: &str = "http://127.0.0.1:8317";
 const START_TIMEOUT: Duration = Duration::from_secs(30);
 const LATEST_TTL: Duration = Duration::from_secs(3600);
 const LATEST_FAILURE_TTL: Duration = Duration::from_secs(300);
+/// O proxy relê o config em ~150 ms; a folga evita gastar uma tentativa de senha com o config velho.
+const RELOAD_WAIT: Duration = Duration::from_millis(1500);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Step {
@@ -240,10 +242,18 @@ pub async fn install(ctx: &Context, progress: &(dyn Fn(Step) + Send + Sync)) -> 
                 return Err(Failure::new("cliproxy_config_manual",
                     format!("o serviço do proxy lê {}, não {}", other.display(), ctx.paths.config().display())));
             }
-            // Sem a senha guardada a versão fica desconhecida e a regra do Ultra Fast fica de fora.
-            let key = (ctx.management_key)();
-            let version = running_version(&base, key.as_deref()).await.and_then(|probe| probe.version);
-            ensure(ctx, understands_rule(version.as_ref()))?;
+            // A versão só se pergunta com a senha guardada; sem ela, a regra do Ultra Fast fica de fora por ora.
+            let version = running_version(&base, (ctx.management_key)().as_deref()).await.and_then(|probe| probe.version);
+            let ensured = ensure(ctx, understands_rule(version.as_ref()))?;
+            // Primeira configuração: a senha acabou de nascer no `ensure`. Depois da releitura do config pelo
+            // proxy, uma pergunta com ela decide a regra; ela só entra quando o config ainda não tem `payload`.
+            if version.is_none() && ensured.management_key.is_some() {
+                tokio::time::sleep(RELOAD_WAIT).await;
+                let version = running_version(&base, (ctx.management_key)().as_deref()).await.and_then(|probe| probe.version);
+                if understands_rule(version.as_ref()) {
+                    ensure(ctx, true)?;
+                }
+            }
             return Ok(Outcome::Configured);
         }
         Install::Managed { tag, binary } => (tag, binary),

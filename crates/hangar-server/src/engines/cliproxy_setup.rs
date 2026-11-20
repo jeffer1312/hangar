@@ -192,17 +192,20 @@ pub async fn handle(st: &AppState, method: &Method, path: &str, bytes: &[u8]) ->
                     // O proxy relê o config em ~150 ms. Cada senha recusada conta para o bloqueio de 30 min do
                     // 127.0.0.1 (cinco seguidas), então espera a releitura e confere no máximo duas vezes.
                     let mut applied = false;
-                    if let Ok(m) = management(st) {
-                        for _ in 0..RESET_PROBES {
-                            tokio::time::sleep(RESET_WAIT).await;
-                            match login::status(&m, "hangar-reset-probe").await {
-                                Err(login::Error::Rejected | login::Error::Network(_)) => {}
-                                _ => { applied = true; break; }
+                    match management(st) {
+                        Ok(m) => {
+                            for _ in 0..RESET_PROBES {
+                                tokio::time::sleep(RESET_WAIT).await;
+                                match login::status(&m, "hangar-reset-probe").await {
+                                    Err(login::Error::Rejected | login::Error::Network(_)) => {}
+                                    _ => { applied = true; break; }
+                                }
+                            }
+                            if !applied {
+                                tracing::warn!("cliproxy: senha nova gravada, mas o proxy ainda não a aceitou");
                             }
                         }
-                    }
-                    if !applied {
-                        tracing::warn!("cliproxy: senha nova gravada, mas o proxy ainda não a aceitou");
+                        Err(_) => tracing::warn!("cliproxy: senha nova gravada, mas não deu para ler o endereço e a senha para conferir"),
                     }
                     // `applied: false`: a senha já está gravada; o login seguinte usa ela, sem gerar outra.
                     json_response(StatusCode::OK, json!({"status": "reset", "applied": applied}))
