@@ -74,8 +74,22 @@ wire!(pub struct ThreadResumeParams {
     #[serde(skip_serializing_if = "Option::is_none")] pub sandbox:Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")] pub service_tier:Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")] pub model_provider:Option<String>,
+    /// O histórico inteiro na retomada está obsoleto no Codex; a página traz só as rodadas recentes.
+    #[serde(skip_serializing_if = "std::ops::Not::not")] pub exclude_turns:bool,
+    #[serde(skip_serializing_if = "Option::is_none")] pub initial_turns_page:Option<ThreadResumeInitialTurnsPageParams>,
+});
+wire!(pub struct ThreadResumeInitialTurnsPageParams {
+    #[serde(skip_serializing_if = "Option::is_none")] pub limit:Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")] pub items_view:Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")] pub sort_direction:Option<String>,
 });
 wire!(pub struct ThreadReadParams { pub thread_id:String, pub include_turns:bool });
+wire!(pub struct ThreadTurnsListParams {
+    pub thread_id:String,
+    #[serde(skip_serializing_if = "Option::is_none")] pub limit:Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")] pub sort_direction:Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")] pub items_view:Option<String>,
+});
 wire!(pub struct ThreadCompactStartParams { pub thread_id:String });
 wire!(pub struct ThreadUnsubscribeParams { pub thread_id:String });
 wire!(pub struct ThreadBackgroundTerminalsTerminateParams { pub thread_id:String, pub process_id:String });
@@ -117,6 +131,7 @@ pub enum ClientRequest {
     #[serde(rename = "thread/start")] ThreadStart(ThreadStartParams),
     #[serde(rename = "thread/resume")] ThreadResume(ThreadResumeParams),
     #[serde(rename = "thread/read")] ThreadRead(ThreadReadParams),
+    #[serde(rename = "thread/turns/list")] ThreadTurnsList(ThreadTurnsListParams),
     #[serde(rename = "thread/settings/update")] ThreadSettingsUpdate(ThreadSettingsUpdateParams),
     #[serde(rename = "thread/compact/start")] ThreadCompactStart(ThreadCompactStartParams),
     #[serde(rename = "thread/unsubscribe")] ThreadUnsubscribe(ThreadUnsubscribeParams),
@@ -133,7 +148,7 @@ pub enum ClientRequest {
 }
 
 impl ClientRequest {
-    pub const METHODS:&[&str] = &["initialize","thread/start","thread/resume","thread/read","thread/settings/update",
+    pub const METHODS:&[&str] = &["initialize","thread/start","thread/resume","thread/read","thread/turns/list","thread/settings/update",
         "thread/compact/start","thread/unsubscribe","thread/backgroundTerminals/terminate","turn/start","turn/steer",
         "turn/interrupt","model/list","skills/list","account/rateLimits/read","account/read","account/login/start","account/login/cancel"];
 
@@ -186,8 +201,20 @@ pub struct ThreadStartResponse {
     pub reasoning_effort:Option<String>,
     #[serde(deserialize_with = "present")] pub service_tier:Option<Option<String>>,
 }
-pub type ThreadResumeResponse = ThreadStartResponse;
+#[derive(Clone,Debug,Default,PartialEq,Serialize,Deserialize)]
+#[cfg_attr(test,derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", default)]
+pub struct ThreadResumeResponse {
+    pub thread:Thread,
+    pub model:Option<String>,
+    pub reasoning_effort:Option<String>,
+    #[serde(deserialize_with = "present")] pub service_tier:Option<Option<String>>,
+    /// Mais recente primeiro (`sortDirection: desc`).
+    pub initial_turns_page:Option<TurnsPage>,
+}
+wire!(pub struct TurnsPage { pub data:Vec<Turn> });
 wire!(pub struct ThreadReadResponse { pub thread:Thread });
+wire!(pub struct ThreadTurnsListResponse { pub data:Vec<Turn> });
 wire!(pub struct TurnStartResponse { pub turn:Turn });
 wire!(pub struct ReasoningEffortOption { pub reasoning_effort:String, pub description:String });
 #[derive(Clone,Debug,Default,PartialEq,Serialize,Deserialize)]
@@ -493,20 +520,29 @@ mod tests {
         assert_eq!(params,json!({"threadId":"t","input":[{"type":"text","text":"oi"}]}));
         let (method,params) = ClientRequest::AccountRateLimitsRead.into_parts();
         assert_eq!((method,params),("account/rateLimits/read",json!({})));
+        let (_,params) = ClientRequest::ThreadResume(ThreadResumeParams { thread_id:"t".into(),..Default::default() }).into_parts();
+        assert_eq!(params,json!({"threadId":"t"}),"sem paginação, o pedido de antes");
+        let page = ThreadResumeInitialTurnsPageParams { limit:Some(20),items_view:Some("full".into()),sort_direction:Some("desc".into()) };
+        let (_,params) = ClientRequest::ThreadResume(ThreadResumeParams { thread_id:"t".into(),exclude_turns:true,
+            initial_turns_page:Some(page),..Default::default() }).into_parts();
+        assert_eq!(params,json!({"threadId":"t","excludeTurns":true,"initialTurnsPage":{"limit":20,"itemsView":"full","sortDirection":"desc"}}));
+        let (method,params) = ClientRequest::ThreadTurnsList(ThreadTurnsListParams { thread_id:"t".into(),limit:Some(1),
+            sort_direction:Some("desc".into()),items_view:Some("notLoaded".into()) }).into_parts();
+        assert_eq!((method,params),("thread/turns/list",json!({"threadId":"t","limit":1,"sortDirection":"desc","itemsView":"notLoaded"})));
     }
 
     #[test]
     fn client_request_methods_match_the_variants() {
         use ClientRequest as C;
         let all = vec![C::Initialize(Default::default()),C::ThreadStart(Default::default()),C::ThreadResume(Default::default()),
-            C::ThreadRead(Default::default()),C::ThreadSettingsUpdate(Default::default()),C::ThreadCompactStart(Default::default()),
+            C::ThreadRead(Default::default()),C::ThreadTurnsList(Default::default()),C::ThreadSettingsUpdate(Default::default()),C::ThreadCompactStart(Default::default()),
             C::ThreadUnsubscribe(Default::default()),C::ThreadBackgroundTerminalsTerminate(Default::default()),C::TurnStart(Default::default()),
             C::TurnSteer(Default::default()),C::TurnInterrupt(Default::default()),C::ModelList(Default::default()),
             C::SkillsList(Default::default()),C::AccountRateLimitsRead,C::AccountRead(Default::default()),
             C::AccountLoginStart(LoginAccountParams::ChatgptDeviceCode),C::AccountLoginCancel(Default::default())];
         // Sem curinga: variante nova não compila até entrar na lista acima.
         for request in &all {
-            match request { C::Initialize(_)|C::ThreadStart(_)|C::ThreadResume(_)|C::ThreadRead(_)|C::ThreadSettingsUpdate(_)
+            match request { C::Initialize(_)|C::ThreadStart(_)|C::ThreadResume(_)|C::ThreadRead(_)|C::ThreadTurnsList(_)|C::ThreadSettingsUpdate(_)
                 |C::ThreadCompactStart(_)|C::ThreadUnsubscribe(_)|C::ThreadBackgroundTerminalsTerminate(_)|C::TurnStart(_)
                 |C::TurnSteer(_)|C::TurnInterrupt(_)|C::ModelList(_)|C::SkillsList(_)|C::AccountRateLimitsRead|C::AccountRead(_)
                 |C::AccountLoginStart(_)|C::AccountLoginCancel(_) => {} }

@@ -87,7 +87,15 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   Ferramentas, plugins, skills, hooks, MCP, histórico e instruções globais/do projeto ficam fora.
   Prova: [organização mínima do ditado](#organização-mínima-do-ditado).
 
-- **Retomada Codex pelo WebSocket local recebe o histórico inteiro, sem teto de 8 MB.**
+- **Retomada Codex lê só a página recente; Orientar, Parar e o corte leem só a última rodada.**
+  `thread/resume` vai com `excludeTurns` e `initialTurnsPage` (20 rodadas, itens completos, mais
+  recente primeiro), e o motor hidrata a página em ordem. Aprovação pendente vem do retrato do cano
+  (`pendentes`); pergunta assíncrona mais antiga que a página fica no estado que o Hangar grava na
+  vista (`async_*`). Sem `async_seeded` na vista (vida anterior a esta regra, conversa nova da TUI)
+  lê o histórico inteiro uma vez. Turno sem id e turno cortado saem de
+  `thread/turns/list {limit:1, itemsView:"notLoaded"}`, nunca de `thread/read` com turnos. Ver
+  [retomada paginada](#retomada-codex-paginada-20112026).
+- **WebSocket local do Codex sem teto de 8 MB.**
   A fila reserva a entrada antes do envio; perda de resposta ou cancelamento conserva a
   tentativa como incerta. Só recusa explícita ou ausência de escrita permite reenviar
   automaticamente. Estar idle não prova ausência de entrega; o transcript confirma a entrada.
@@ -1153,6 +1161,30 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   também recebe `success`. Só o `task_updated` (`killed`) ou o `task_notification` (`stopped`) daquele id
   prova a parada. Matar pelo pid não é caminho: a árvore de processos muda de um sistema para outro e o
   modelo não fica sabendo. Ver [parar tarefa do Claude](#parar-tarefa-do-claude-13112026).
+
+## Retomada Codex paginada (20/11/2026)
+
+O schema do Codex 0.170.0 marca como obsoleta a hidratação do histórico inteiro em conversa
+paginada e indica `excludeTurns` com `thread/turns/list`. Medido numa conversa de 80 MB: o
+`thread/resume` com o histórico inteiro devolveu 5,1 MB em 0,53 s; com `excludeTurns`, 2 KB em
+0,48 s. Orientar e Parar sem o id do turno liam a conversa por `thread/read` com turnos (5,1 MB,
+0,17 s); a última rodada por `thread/turns/list` com `limit: 1` sai com cerca de 1 KB em 0,01 s.
+
+O que a retomada precisava do histórico tem outra fonte. Aprovação pendente o cano reentrega no
+retrato (`pendentes`). Pergunta assíncrona (`delivery: "async"`) não tem pedido do servidor: o motor
+a guarda na vista gravada no arquivo da fila, que a vida seguinte do ator e a subida nova do
+processo herdam. A página de 20 rodadas cobre o turno em curso, as filhas recentes e respostas
+dadas com o Hangar fora. A vista agora diz se o estado das perguntas saiu de uma leitura inteira
+(`async_seeded`); a vista gravada antes disto não diz, e por isso a primeira retomada depois da
+atualização lê tudo uma vez.
+
+Limite conhecido: pergunta guardada como pendente e respondida na TUI com o Hangar fora, mais de 20
+rodadas antes da religação, volta como pendente; dá para pular.
+
+A religação que achava o arquivo da sessão apagado (`session_patch_owner`, sessão fechada pelo nome
+com o processo caindo, visto em 05/11/2026) tentava as 3 subidas, e cada uma subia e matava um
+processo. Agora a primeira recusa para o ator como fechado e vai ao diário como
+`codex_sidecar_gone`.
 
 ## Permissão do Codex sem terminal troca ao vivo (19/11/2026)
 

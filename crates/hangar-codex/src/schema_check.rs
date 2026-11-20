@@ -21,8 +21,8 @@ fn schema_names(ours:&str) -> Vec<String> {
 
 fn ours() -> Vec<Value> {
     macro_rules! s { ($($t:ty),*) => { vec![$(serde_json::to_value(schemars::schema_for!($t)).unwrap()),*] } }
-    s!(ClientRequest,ServerNotification,ServerRequest,InitializeResponse,ThreadStartResponse,ThreadReadResponse,
-       TurnStartResponse,ModelListResponse,GetAccountRateLimitsResponse,LoginAccountResponse,CancelLoginAccountResponse)
+    s!(ClientRequest,ServerNotification,ServerRequest,InitializeResponse,ThreadStartResponse,ThreadResumeResponse,ThreadReadResponse,
+       ThreadTurnsListResponse,TurnStartResponse,ModelListResponse,GetAccountRateLimitsResponse,LoginAccountResponse,CancelLoginAccountResponse)
 }
 
 /// Definições nomeadas dos nossos tipos: nome → propriedades usadas.

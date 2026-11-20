@@ -1848,6 +1848,14 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
                         let user = respawn.user.take();
                         if let Some((operation_id,_)) = &user { fail_root(&mut roots,operation_id,failure.clone()); }
                         for (operation_id,_) in std::mem::take(&mut respawn.waiting) { fail_root(&mut roots,&operation_id,failure.clone()); }
+                        // Arquivo da sessão apagado (fechada pelo nome) ou de outra vida: outra subida também não
+                        // teria onde gravar o processo e o mataria de novo. O ator para como fechado.
+                        if target.provider == "codex" && failure.code == "session_patch_owner" {
+                            tracing::warn!(key=%target.key,session=%target.name,"arquivo da sessão sumiu ou é de outra vida; o ator para sem subir o processo de novo");
+                            let event = DiagEvent::CodexSidecarGone;
+                            if let Some(policy) = &engine.policy { policy.diag.report(event.event(),&target.name,"codex_sidecar_gone",event.reason()); }
+                            break;
+                        }
                         let gone = std::mem::take(&mut respawn.swallowed);
                         if gone {
                             effects.extend(engine.apply(EngineInput::Line(json!({"type":"cano_saiu","rc":null})),clock(start))?);
