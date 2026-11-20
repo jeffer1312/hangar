@@ -24,12 +24,6 @@ pub fn matches(_method: &Method, path: &str) -> bool {
     path == "/api/reviews" || path.starts_with("/api/reviews/")
 }
 
-pub(crate) async fn serve_forwarded(st: Arc<AppState>, peer: std::net::SocketAddr, mut req: Request, guest: bool) -> Response {
-    if guest { return error(403, "guest_forbidden", "convidado não acessa revisões"); }
-    req.extensions_mut().insert(crate::session_write::bridge::BridgedOwner);
-    route(st, peer, req).await
-}
-
 pub async fn route(st: Arc<AppState>, peer: std::net::SocketAddr, req: Request) -> Response {
     let headers = req.headers().clone();
     let method = req.method().clone();

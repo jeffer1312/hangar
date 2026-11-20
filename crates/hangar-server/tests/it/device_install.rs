@@ -50,26 +50,21 @@ struct Server {
     link: Arc<FakeLink>,
     signer: Arc<FakeSigner>,
     dir: tempfile::TempDir,
-    python: Arc<Fake>,
 }
 
 async fn serve_with(link: FakeLink, signer: FakeSigner, pinned: Pinned, config: Value, code_wait: Duration) -> Server {
-    let (python, upstream) = spawn_fake().await;
+    let (python, _) = spawn_fake().await;
     let dir = tempfile::tempdir().unwrap();
     let (link, signer) = (Arc::new(link), Arc::new(signer));
-    let mut state = hangar_server::routes::AppState::new(config_for(upstream));
+    let mut state = hangar_server::routes::AppState::new(crate::fake::config("127.0.0.1"));
     state.device_install = Arc::new(
         DeviceInstall::new(link.clone(), signer.clone(), dir.path())
             .with_pinned(pinned)
             .with_config(Arc::new(move || config.clone()))
             .with_code_wait(code_wait),
     );
-    let addr = spawn_state(state).await;
-    Server { url: format!("http://{addr}/api/device-install"), link, signer, dir, python }
-}
-
-fn config_for(upstream: std::net::SocketAddr) -> hangar_server::config::Config {
-    config(upstream, "127.0.0.1")
+    let addr = spawn_state_for(&python, state).await;
+    Server { url: format!("http://{addr}/api/device-install"), link, signer, dir }
 }
 
 async fn serve(link: FakeLink, signer: FakeSigner) -> Server {
@@ -147,7 +142,6 @@ async fn happy_path_reaches_done_after_the_device_confirms_the_install() {
     assert_eq!(*s.link.pairings.lock().unwrap(), [(UDID.to_string(), BUNDLE.to_string())]);
     assert_eq!(*s.link.prefs.lock().unwrap(), [(UDID.to_string(), BUNDLE.to_string())]);
     assert_no_password_on_disk(s.dir.path());
-    assert_eq!(s.python.hits_to("/api/device-install/start"), 0, "nada vai ao Python");
 }
 
 #[tokio::test]
@@ -267,7 +261,6 @@ async fn only_the_owner_token_and_never_a_forwarded_request() {
     assert_eq!(r.status(), 403);
     assert!(!r.text().await.unwrap().contains(PASSWORD));
     assert!(s.signer.logins.lock().unwrap().is_empty());
-    assert_eq!(s.python.hits_to("/api/device-install/devices"), 0);
 }
 
 /// Onde o fake extrai o IPA do trabalho (o isideload extrai no temp do sistema).

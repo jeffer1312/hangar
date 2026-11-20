@@ -46,8 +46,11 @@ function render(status: 'ready' | 'setup' | 'error', sendDisabled: boolean) {
 it('toque longo no Enviar troca o modo sem enviar; o Enviar continua desativado com o campo vazio', () => {
   const { container, root, onPick, onSend } = render('ready', true);
   // O PopupMenu do Android não marca a opção (state é só iOS): a atual vem dita no título.
-  expect(menu.last!.actions.map((a) => a.title)).toEqual([m.mobile_queue_mode_queued(),
-    m.mobile_queue_mode_selected({ mode: m.mobile_queue_mode_direct() }), m.mobile_queue_mode_jev()]);
+  expect(menu.last!.actions.map((a) => a.title)).toEqual([m.delivery_mode_queue(),
+    m.mobile_queue_mode_selected({ mode: m.delivery_mode_direct() }), m.delivery_mode_jev(), m.delivery_mode_conversation()]);
+  act(() => menu.last!.onPressAction({ nativeEvent: { event: 'conversation' } }));
+  expect(onPick).toHaveBeenLastCalledWith('conversation');
+  onPick.mockClear();
   act(() => menu.last!.onPressAction({ nativeEvent: { event: 'jev' } }));
   expect(onPick).toHaveBeenCalledWith('jev');
   act(() => menu.last!.onPressAction({ nativeEvent: { event: 'direct' } }));
@@ -79,11 +82,11 @@ it('iOS: folha de ações só com os modos possíveis, a atual e a causa do Jev 
   const onPick = vi.fn();
   modeMenuHandlers({ delivery: { mode: 'jev', status: 'error', help: 'jev-help' }, onPick })!.openIOS();
   const [options, done] = sheet.mock.calls[0] as [{ options: string[]; cancelButtonIndex: number; message: string }, (i: number) => void];
-  expect(options.options).toEqual([m.mobile_queue_mode_queued(), m.mobile_queue_mode_direct(), m.comum_cancelar()]);
-  expect(options.cancelButtonIndex).toBe(2);
-  expect(options.message).toContain(m.mobile_queue_mode_current({ mode: m.mobile_queue_mode_queued() }));
+  expect(options.options).toEqual([m.delivery_mode_queue(), m.delivery_mode_direct(), m.delivery_mode_conversation(), m.comum_cancelar()]);
+  expect(options.cancelButtonIndex).toBe(3);
+  expect(options.message).toContain(m.mobile_queue_mode_current({ mode: m.delivery_mode_queue() }));
   expect(options.message).toContain('jev-help');
-  done(2);
+  done(3);
   expect(onPick).not.toHaveBeenCalled();
   // Fila aparece como a atual, mas o salvo é Jev: escolher Fila grava a troca.
   done(0);
@@ -95,7 +98,8 @@ it('iOS: folha de ações só com os modos possíveis, a atual e a causa do Jev 
 it('leitor de tela: uma ação por modo possível, nas duas plataformas', () => {
   const onPick = vi.fn();
   const handlers = modeMenuHandlers({ delivery: { mode: 'queued', status: 'setup', help: 'jev-help' }, onPick })!;
-  expect(handlers.a11yActions).toEqual([{ name: 'queued', label: m.mobile_queue_mode_queued() }, { name: 'direct', label: m.mobile_queue_mode_direct() }]);
+  expect(handlers.a11yActions).toEqual([{ name: 'queued', label: m.delivery_mode_queue() }, { name: 'direct', label: m.delivery_mode_direct() },
+    { name: 'conversation', label: m.delivery_mode_conversation() }]);
   handlers.pick('direct');
   expect(onPick).toHaveBeenCalledWith('direct');
 });
@@ -107,8 +111,9 @@ it.each([['android'], ['ios']])('%s: Enviar desativado deixa os modos num elemen
     const { root, onPick } = render('setup', true);
     const group = a11y.groups.at(-1)!;
     expect(group.accessibilityLabel).toBe(m.mobile_queue_mode_label());
-    expect(group.accessibilityValue?.text).toBe(m.mobile_queue_mode_direct());
-    expect(group.accessibilityActions).toEqual([{ name: 'queued', label: m.mobile_queue_mode_queued() }, { name: 'direct', label: m.mobile_queue_mode_direct() }]);
+    expect(group.accessibilityValue?.text).toBe(m.delivery_mode_direct());
+    expect(group.accessibilityActions).toEqual([{ name: 'queued', label: m.delivery_mode_queue() }, { name: 'direct', label: m.delivery_mode_direct() },
+      { name: 'conversation', label: m.delivery_mode_conversation() }]);
     act(() => group.onAccessibilityAction!({ nativeEvent: { actionName: 'queued' } }));
     expect(onPick).toHaveBeenCalledWith('queued');
     act(() => root.unmount());

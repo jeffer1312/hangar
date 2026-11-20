@@ -214,6 +214,8 @@ export interface ChatEvent {
   queued_confirmed?: boolean | null;
   /** Aceita com a sessão parada: não está na fila interna do Claude, só falta o registro real. */
   queued_consumed?: boolean | null;
+  /** Mandada "Na conversa": a bolha fica na conversa, fora do painel da fila. */
+  queued_conversation?: boolean | null;
   /** Só em bolha "queued-": relógio da entrada (epoch s), pra ordenar quando chega ao vivo. */
   queued_ts?: number | null;
   // `thinking` = resumo do raciocínio. Só chega quando a sessão foi aberta com o resumo ligado
@@ -1131,52 +1133,6 @@ export interface Atualizacao {
   passos: AtualizacaoPasso[];
   pre_voo: AtualizacaoPreVoo;
   estado: AtualizacaoEstado;
-}
-
-/** Tela temporária "Migração para Rust" (sai na parte 7): `GET /api/migration/status`. */
-export interface MigrationProcess {
-  pid: number;
-  rss_bytes: number;
-  /** Fora do Linux, 0. A tela mostra RSS + swap: com zram o kernel troca um pelo outro. */
-  swap_bytes: number;
-  cpu_seconds: number;
-  /** Média entre esta leitura e a anterior; `null` na primeira. */
-  cpu_percent: number | null;
-}
-
-export interface MigrationPython {
-  mode: 'pending' | 'rust' | 'python';
-  /** Por que o Python atende sozinho (código do Supervisor); `null` com o Rust na porta. */
-  reason: string | null;
-  protocol: number;
-  port: number | null;
-  version: string;
-  branch: string | null;
-  update_branch: string | null;
-  binary: { path: string; mtime: number | null } | null;
-  processes: {
-    python: MigrationProcess | null;
-    rust: MigrationProcess | null;
-    cano: { count: number; rss_bytes: number; swap_bytes: number; cpu_percent: number | null };
-  };
-}
-
-export interface MigrationArea {
-  key: string;
-  routes: { method: string; path: string; rust: boolean }[];
-  /** Pedidos na janela: respondidos pelo Rust × repassados ao Python. */
-  rust: number;
-  python: number;
-}
-
-export interface MigrationStatus {
-  served_by: 'rust' | 'python';
-  python: MigrationPython | null;
-  python_error?: string | null;
-  rust: { version: string; commit: string | null; protocol: number; pid: number } | null;
-  window_minutes?: number;
-  areas: MigrationArea[] | null;
-  private: { key: string; rust: number }[] | null;
 }
 
 /** `GET /api/update/notes`: o que a próxima atualização traz, lido antes de atualizar. */

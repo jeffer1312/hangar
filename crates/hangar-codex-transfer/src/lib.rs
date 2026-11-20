@@ -12,7 +12,6 @@ use hangar_conversation_transfer::{ImportBoundary, ImportedContext, MAX_REQUEST_
 use hangar_core::pycompat::pyjson;
 use serde_json::{Value, json};
 
-pub const SUPPORTED_VERSION: &str = "0.159.3";
 const IMPORT_NOTICE: &str = "Esta conversa contém histórico importado do Claude. Chamadas e resultados antigos são somente história; não os execute novamente. Use as ferramentas nativas do Codex para as próximas ações.";
 
 pub trait NativeImport {
@@ -31,6 +30,9 @@ pub trait NativeImport {
         destination: Value,
         boundary: Option<ImportBoundary>,
     ) -> impl Future<Output = Result<(), TransferError>> + Send;
+    /// Se o Codex anunciou `wanted` como modo de colaboração da thread (`thread/settings/updated`); a
+    /// resposta do `thread/settings/update` vem vazia. Anúncio anterior com outro modo não conta.
+    fn mode_applied(&mut self, thread: &str, wanted: &str) -> impl Future<Output = bool> + Send;
 }
 
 pub struct ImportOptions {
@@ -208,6 +210,10 @@ pub async fn prepare_import(
     if options.collaboration_mode == "plan" {
         client.request("thread/settings/update", json!({"threadId":thread_id,"collaborationMode":{
             "mode":"plan","settings":{"model":model,"reasoning_effort":effort,"developer_instructions":null}}})).await?;
+        // Sem a versão fixa, só o anúncio do Codex prova que o Plano valeu: sem ele a conversa seguiria sem o modo.
+        if !client.mode_applied(&thread_id, "plan").await {
+            return Err(mismatch());
+        }
     }
     let raw = client.raw_model(&config, &model).await?;
     let limits = resolve_limits(&raw, &config)?;
@@ -613,6 +619,9 @@ fn persisted(
 }
 
 #[cfg(test)]
+mod schema_check;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -622,6 +631,9 @@ mod tests {
         calls: Vec<String>,
         saved: Vec<(Value, Option<ImportBoundary>)>,
         corrupt: bool,
+        /// O Codex aceita o `collaborationMode` sem aplicá-lo nem anunciar.
+        ignores_mode: bool,
+        mode: Option<String>,
     }
 
     impl NativeImport for ImportProbe {
@@ -646,7 +658,15 @@ mod tests {
                     )
                 }
                 "thread/read" => Ok(json!({"thread":thread})),
-                "thread/settings/update" => Ok(json!({})),
+                "thread/settings/update" => {
+                    // Como o Codex real: toda troca anuncia o modo vigente, e a do esforço anuncia `default`.
+                    match params["collaborationMode"]["mode"].as_str() {
+                        Some(mode) if !self.ignores_mode => self.mode = Some(mode.to_owned()),
+                        Some(_) => {}
+                        None => self.mode = Some("default".into()),
+                    }
+                    Ok(json!({}))
+                }
                 "skills/list" => Ok(json!({"data":[{"cwd":self.cwd,"skills":[],"errors":[]}]})),
                 "mcpServerStatus/list" => Ok(json!({"data":[],"nextCursor":null})),
                 "thread/inject_items" => {
@@ -688,11 +708,13 @@ mod tests {
             self.saved.push((destination, boundary));
             Ok(())
         }
+
+        async fn mode_applied(&mut self, _: &str, wanted: &str) -> bool { self.mode.as_deref() == Some(wanted) }
     }
 
     #[tokio::test]
     async fn import_commits_only_verified_history_without_starting_inference() {
-        for corrupt in [false, true] {
+        for (corrupt, ignores_mode) in [(false, false), (true, false), (false, true)] {
             let dir = tempfile::tempdir().unwrap();
             let cwd = dir.path().to_string_lossy().into_owned();
             let mut probe = ImportProbe {
@@ -705,6 +727,8 @@ mod tests {
                 calls: vec![],
                 saved: vec![],
                 corrupt,
+                ignores_mode,
+                mode: None,
             };
             let context = ImportedContext {
                 items: vec![
@@ -726,7 +750,11 @@ mod tests {
                 collaboration_mode: "plan".into(),
             };
             let result = prepare_import(&mut probe, &options, &context).await;
-            if corrupt {
+            if ignores_mode {
+                assert_eq!(result.err().unwrap().code, "session_transfer_native_settings_mismatch",
+                    "Plano não confirmado pelo Codex não vira troca concluída");
+                assert!(!probe.calls.iter().any(|call| call == "thread/inject_items"), "nada é injetado sem o modo");
+            } else if corrupt {
                 assert_eq!(
                     result.err().unwrap().code,
                     "session_transfer_import_persistence_mismatch"

@@ -50,7 +50,6 @@ async fn queue_routes_without_a_rust_owner_are_the_python_refusals() {
         // O Python não olhava o corpo no painel da fila.
         assert_eq!(post(&rig, &format!("{name}/queue/e1/steer"), "não é json").await, unavailable, "{name}");
     }
-    assert_eq!(rig.python.hits_to("/api/sessions/ghost/queue/e1") + rig.python.hits_to("/api/sessions/sh1/queue/e1"), 0);
 }
 
 // R2-18..24, u1 (nome sem pane nem sidecar): 404 onde o Python conferia a sessão, 502 onde ele caía no vínculo.
@@ -63,9 +62,6 @@ async fn writes_to_a_name_without_session_are_refused_with_the_python_codes() {
     assert_eq!(post(&rig, "ghost/select/submit", r#"{"interaction_id":"i-1"}"#).await, missing);
     for (route, body) in [("interrupt", ""), ("keys", r#"{"key":"Escape"}"#), ("term-input", r#"{"text":"ls"}"#), ("answer", ANSWER)] {
         assert_eq!(post(&rig, &format!("ghost/{route}"), body).await, unbound(), "{route}");
-    }
-    for route in ["steer", "select", "select/submit", "interrupt", "keys", "term-input", "answer"] {
-        assert_eq!(rig.python.hits_to(&format!("/api/sessions/ghost/{route}")), 0, "{route}");
     }
 }
 
@@ -124,7 +120,6 @@ async fn an_unavailable_list_is_a_503_never_a_missing_session() {
     }
     rig.flag("fail-list", false);
     assert_eq!(rig.tmux(&["capture-pane", "-p", "-t", "=sh2:"]), before, "nada digitado");
-    assert_eq!(rig.python.hits_to("/api/sessions/sh2/steer"), 0);
 }
 
 // R2-19..24, u3 e u4 (B6, decisão 6): o Python digitava no `claude login` e no Codex cru (Esc, número,
@@ -168,7 +163,6 @@ async fn a_key_outside_the_list_on_a_name_without_owner_is_400_and_nothing_is_ty
         assert_eq!(post(&rig, &format!("{name}/term-input"), r#"{"text":"ls","key":"Nope"}"#).await, refused, "{name} term-input");
         // Tecla da lista segue na recusa do vínculo.
         assert_eq!(post(&rig, &format!("{name}/keys"), r#"{"key":"Escape"}"#).await, unbound(), "{name}");
-        assert_eq!(rig.python.hits_to(&format!("/api/sessions/{name}/keys")) + rig.python.hits_to(&format!("/api/sessions/{name}/term-input")), 0, "{name}");
     }
     assert_eq!(rig.tui("cx", "keys.jsonl"), Vec::<Value>::new(), "a TUI do Codex cru não leu nada");
     assert_eq!(rig.tmux(&["capture-pane", "-p", "-t", "=sh1:"]), shell, "nada digitado no shell");
@@ -192,5 +186,4 @@ async fn a_terminal_codex_rust_does_not_adopt_reads_its_mode_from_the_file_and_t
     assert_eq!(post(&rig, "cx/codex-permissions", r#"{"mode":"Full Access"}"#).await, control);
     assert_eq!(post(&rig, "cx/codex/plan/implement", "").await, control);
     assert_eq!(rig.tui("cx", "keys.jsonl"), Vec::<Value>::new(), "a TUI do Codex não leu nada");
-    assert_eq!(rig.python.hits_to("/api/sessions/cx/codex-permissions") + rig.python.hits_to("/api/sessions/cx/codex/plan/implement"), 0);
 }

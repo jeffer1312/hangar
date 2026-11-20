@@ -1,0 +1,88 @@
+{
+ "case": "preview/stdin-broken",
+ "source_commit": "2ad8e335e8d9118e74bc5b33f2efb4ac3bbd8eba",
+ "python": "3.14.9 websockets 16.0",
+ "capture_cmdline": "/usr/bin/python3 capture.py -j 8",
+ "route": "R1",
+ "hook": "preview_hook.py",
+ "contract_refs": [
+  "R1-S09",
+  "H-23"
+ ],
+ "description": "",
+ "harness": {
+  "how": "$PY -B -s $REF/backend/hooks/preview_hook.py, one process per step, stdin = step"
+ },
+ "input": {
+  "env": {
+   "HOME": "$T/home",
+   "USERPROFILE": "$T/home",
+   "LOCALAPPDATA": "$T/local",
+   "TMUX_TMPDIR": "$T/tmux",
+   "PATH": "$T/stubs:/usr/bin:/bin",
+   "CLAUDE_CONFIG_DIR": "$T/cfg"
+  },
+  "files_before": {}
+ },
+ "steps": [
+  {
+   "stdin": {
+    "text": "{nao json"
+   },
+   "code": 0,
+   "stdout": {
+    "text": ""
+   },
+   "stderr": {
+    "text": "hangar: preview_hook falhou (JSONDecodeError)\n"
+   },
+   "duration_ms": 30,
+   "files": {
+    "created": {},
+    "changed": {},
+    "removed": []
+   }
+  },
+  {
+   "stdin": {
+    "text": ""
+   },
+   "code": 0,
+   "stdout": {
+    "text": ""
+   },
+   "stderr": {
+    "text": "hangar: preview_hook falhou (JSONDecodeError)\n"
+   },
+   "duration_ms": 30,
+   "files": {
+    "created": {},
+    "changed": {},
+    "removed": []
+   }
+  },
+  {
+   "stdin": {
+    "text": "[]"
+   },
+   "code": 0,
+   "stdout": {
+    "text": ""
+   },
+   "stderr": {
+    "text": "hangar: preview_hook falhou (AttributeError)\n"
+   },
+   "duration_ms": 37,
+   "files": {
+    "created": {},
+    "changed": {},
+    "removed": []
+   }
+  }
+ ],
+ "files_final": {},
+ "window": {
+  "t_start": 1794910460.0848336,
+  "t_end": 1794910460.1845808
+ }
+}

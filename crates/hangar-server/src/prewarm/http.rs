@@ -1,5 +1,4 @@
-//! `PUT /api/sessions/prewarm` e `DELETE /api/sessions/prewarm/{id}`: só o dono. Na 8765 o Rust
-//! atende; o dono do Connect chega pela ponte `forwarded`; quem não é o dono segue ao Python, que recusa.
+//! `PUT /api/sessions/prewarm` e `DELETE /api/sessions/prewarm/{id}`: só o dono.
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -39,14 +38,6 @@ pub async fn delete(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
 /// As duas rotas, no caminho que o Python repassa (segmentos escapados pela ponte).
 pub(crate) fn matches(method: &Method, path: &str) -> bool {
     (method == Method::PUT && path == PATH) || (method == Method::DELETE && reserve_id(path).is_some())
-}
-
-/// O dono do Connect, já autenticado pelo Python.
-pub(crate) async fn serve(st: &Arc<AppState>, req: Request) -> Response {
-    match reserve_id(req.uri().path()) {
-        Some(id) if req.method() == Method::DELETE => discard(st, &id, req.uri()).await,
-        _ => reserve(st, req).await,
-    }
 }
 
 fn reserve_id(path: &str) -> Option<String> {

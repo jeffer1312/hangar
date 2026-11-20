@@ -42,7 +42,7 @@ fn claude_login_routes_are_owned() {
         (Method::POST, "/api/claude-configs/work/logout"),
     ] {
         assert!(
-            hangar_server::migration_status::rust_route(&method, path),
+            hangar_server::owned_routes::rust_route(&method, path),
             "login Claude ainda passa pelo Python: {path}"
         );
     }
@@ -57,7 +57,6 @@ async fn login_routes_reach_the_window_with_the_decoded_label() {
     let addr = listener.local_addr().unwrap();
     let mut state = AppState::new(Config {
         listen: addr,
-        upstream: "127.0.0.1:9".parse().unwrap(),
         internal_secret: "contract-internal".into(),
         auth_token: "contract-only".into(),
         log_path: None,
@@ -96,29 +95,6 @@ async fn login_routes_reach_the_window_with_the_decoded_label() {
     assert_eq!(cancelled.json::<Value>().await.unwrap(), json!({"ok":true}));
     assert_eq!(observed.recv().await.as_deref(), Some("close"));
     server.abort();
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn http_probe_process() {
-    let Ok(upstream) = std::env::var("ACCOUNT_HTTP_UPSTREAM") else {
-        return;
-    };
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let state = AppState::new(Config {
-        listen: addr,
-        upstream: upstream.parse().unwrap(),
-        internal_secret: "contract-internal".into(),
-        auth_token: "contract-only".into(),
-        log_path: None,
-        trusted: TrustedHosts::parse("127.0.0.1"),
-    });
-    println!("ACCOUNT_HTTP:{addr}");
-    use std::io::Write;
-    std::io::stdout().flush().unwrap();
-    hangar_server::serve_until_with_state(listener, state, std::future::pending::<()>())
-        .await
-        .unwrap();
 }
 
 #[tokio::test]

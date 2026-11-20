@@ -97,7 +97,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (handle, dispatcher) = Dispatcher::new(engine.clone(), true);
     let mut state = AppState::new(Config {
         listen: address,
-        upstream: "127.0.0.1:1".parse()?,
         internal_secret: "proof-internal".into(),
         auth_token: token,
         log_path: None,

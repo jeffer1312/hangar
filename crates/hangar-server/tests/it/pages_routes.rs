@@ -13,13 +13,13 @@ struct Scene { python: Arc<Fake>, public: SocketAddr, state: Arc<AppState>, _dir
 
 /// Servidor com a sessão `s1` (chave `k`), páginas numa pasta temporária e sem Chromium.
 async fn scene() -> Scene {
-    let (python, upstream) = spawn_fake().await;
+    let (python, _) = spawn_fake().await;
     python.set_info(json!({"provider": "claude", "jsonl": "/t/k.jsonl", "session_key": "k", "history": {}}));
     let dir = tempfile::tempdir().unwrap();
-    let mut state = AppState::new(config(upstream, "127.0.0.1"));
+    let mut state = AppState::new(config("127.0.0.1"));
     state.pages = Arc::new(Store::new(dir.path().into()));
     state.chromium = || None;
-    state.side.locate = fake_locate(upstream);
+    state.side.locate = python.locate();
     let state = Arc::new(state);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let public = listener.local_addr().unwrap();
@@ -67,7 +67,6 @@ async fn publish_then_get_raw_and_isolated_shell() {
     let text = shell.text().await.unwrap();
     assert!(text.contains("URL.createObjectURL") && text.contains("<title>Oi</title>"));
     assert!(!text.contains(OWNER), "o token nunca entra na casca");
-    assert_eq!(s.python.hits_to(&format!("/api/sessions/s1/pages/{id}")), 0, "o dono é atendido no Rust");
 }
 
 #[tokio::test]
@@ -147,7 +146,6 @@ async fn stranger_gets_401_from_rust() {
     let s = scene().await;
     let r = client().get(format!("http://{}/api/sessions/s1/pages/abc", s.public)).send().await.unwrap();
     assert_eq!(r.status().as_u16(), 401);
-    assert_eq!(s.python.hits_to("/api/sessions/s1/pages/abc"), 0);
 }
 
 #[tokio::test]
@@ -164,12 +162,10 @@ async fn nav_ticket_opens_only_its_page() {
     let shell = open(&page, &ticket).await.unwrap();
     assert_eq!(shell.status(), 200);
     assert!(shell.text().await.unwrap().contains("<title>A</title>"));
-    assert_eq!(s.python.hits_to(&format!("/api/sessions/s1/pages/{page}")), 0, "atendida no Rust, sem senha");
 
     assert_eq!(open(&other, &ticket).await.unwrap().status().as_u16(), 401, "outra página segue sem dono");
     let expired = tickets.issue("s1", &page, now - hangar_server::nav_requests::TTL_SECS as u64 - 1);
     assert_eq!(open(&page, &expired).await.unwrap().status().as_u16(), 401, "vencido");
-    assert_eq!(s.python.hits_to(&format!("/api/sessions/s1/pages/{other}")), 0);
 }
 
 #[tokio::test]

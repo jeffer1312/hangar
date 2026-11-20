@@ -22,7 +22,8 @@ use hangar_package::Manifest;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::{HealthProbe, Layout, Reading, Release, Settings, UpdateError, UpdateLock};
+use super::stop_intent::RestartIntent;
+use super::{HealthProbe, Layout, Reading, Release, Settings, StepRunner, UpdateError, UpdateLock};
 
 pub const MARKER: &str = "migration.json";
 /// O passo de `docs/atualizacoes` que roda esta migração: ela para o backend antes de o motor `git`
@@ -57,7 +58,8 @@ fn channel(f: &Facts) -> &'static str { if f.branch == "beta" { "beta" } else { 
 
 /// Para e sobe o backend desta máquina (unit do systemd ou tarefa agendada).
 pub trait Service: Sync {
-    fn stop(&self) -> Result<(), String>;
+    /// Quem para de fato grava antes a marca de intenção com `why`, e a desfaz se a parada falhar.
+    fn stop(&self, why: RestartIntent) -> Result<(), String>;
     fn start(&self) -> Result<(), String>;
     /// Liga ou desliga o serviço do front (`vite preview`); sem ele, não faz nada.
     fn front(&self, on: bool) -> Result<(), String>;
@@ -399,7 +401,7 @@ fn plan(m: &Machine<'_>, mode: Mode, why: Option<&str>, channel: &str, service: 
     lines.push(format!("tirar do Kimi e do Codex os hooks de {}", m.hooks_needle(&m.checkout)));
     lines.push(if m.windows { "apontar os atalhos .cmd para %USERPROFILE%\\.hangar\\current".to_owned() }
         else { format!("apontar para {} os links de {} que vão ao checkout", m.layout().current().display(), LINK_DIRS.join(", ")) });
-    lines.push("regravar ~/.hangar/backend-dir e ~/.hangar/plugin-dir".to_owned());
+    lines.push("regravar ~/.hangar/backend-dir, ~/.hangar/install-root-dir e ~/.hangar/plugin-dir".to_owned());
     lines.push("tirar o serviço do front (vite), se houver, guardado em ~/.hangar: a porta dele passa a ser do servidor".to_owned());
     lines.push("subir o backend e provar o servidor em modo rust".to_owned());
     lines.push(format!("gravar {}", m.marker().display()));
@@ -433,19 +435,67 @@ fn rewrite(m: &Machine<'_>, record: &mut Record, path: &Path, new: &[u8]) -> Res
 }
 
 /// `~/.hangar/bin/hangar-launcher`: o lançador estável que a unit e as tarefas chamam.
-pub(super) fn launcher_path(home: &Path, windows: bool) -> PathBuf {
+pub(crate) fn launcher_path(home: &Path, windows: bool) -> PathBuf {
     home.join(".hangar").join("bin").join(if windows { "hangar-launcher.exe" } else { "hangar-launcher" })
 }
 
+/// Nome temporário próprio de cada escrita, ao lado do alvo: duas escritas ao mesmo tempo (a subida e
+/// o instalador) não gravam no mesmo arquivo nem renomeiam o pela metade da outra.
+pub(crate) fn temp_path(target: &Path) -> PathBuf {
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let name = target.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or_default();
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    target.with_file_name(format!(".{name}.{}-{nanos}-{seq}.new", std::process::id()))
+}
+
 /// Copia o lançador com nome temporário e `rename`: um lançador pela metade nunca tem o nome final.
-pub(super) fn write_launcher(source: &Path, launcher: &Path) -> Result<(), String> {
+pub(crate) fn write_launcher(source: &Path, launcher: &Path) -> Result<(), String> {
     let bytes = std::fs::read(source).map_err(|e| format!("não consegui ler o lançador {}: {e}", source.display()))?;
-    let tmp = launcher.with_extension("new");
+    let tmp = temp_path(launcher);
     std::fs::write(&tmp, &bytes).and_then(|()| {
         #[cfg(unix)]
         { use std::os::unix::fs::PermissionsExt; std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755))?; }
-        std::fs::rename(&tmp, launcher)
+        std::fs::rename(&tmp, launcher).or_else(|error| {
+            if !cfg!(windows) || !launcher.exists() { return Err(error); }
+            replace_aside(&tmp, launcher, &mut |from, to| std::fs::rename(from, to))
+        })
     }).map_err(|e| { let _ = std::fs::remove_file(&tmp); format!("não consegui gravar o lançador {}: {e}", launcher.display()) })
+}
+
+/// No Windows o lançador em execução não pode ser substituído, mas pode mudar de nome: ele vai para
+/// `.old` e o novo entra. Se o novo não entra, o de antes volta ao nome: a tarefa nunca fica sem lançador.
+pub(super) fn replace_aside(tmp: &Path, target: &Path, rename: &mut dyn FnMut(&Path, &Path) -> std::io::Result<()>) -> std::io::Result<()> {
+    let aside = target.with_extension("old");
+    let _ = std::fs::remove_file(&aside);
+    rename(target, &aside)?;
+    rename(tmp, target).map_err(|error| match rename(&aside, target) {
+        Ok(()) => error,
+        Err(back) => std::io::Error::other(format!("{error}; e o lançador anterior não voltou de {}: {back}", aside.display())),
+    })
+}
+
+/// Renova o lançador estável com o `hangar-server` da versão `version`. Máquina sem o lançador
+/// (checkout, Windows sem pacote) ou versão sem `bin/` (modo desenvolvedor) fica como está.
+/// Devolve se trocou. Versão que sobe direto (`boot: direct`) sem o binário é erro: o lançador
+/// antigo ficaria sem saber subi-la.
+pub fn refresh_launcher(home: &Path, version: &Path, windows: bool) -> Result<bool, String> {
+    let launcher = launcher_path(home, windows);
+    let source = version.join("bin").join(if windows { "hangar-server.exe" } else { "hangar-server" });
+    if !launcher.exists() { return Ok(false); }
+    if !source.is_file() {
+        let manifest = std::fs::read(version.join("manifest.json")).ok().and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
+        if manifest.as_ref().and_then(|manifest| manifest.get("boot")).and_then(Value::as_str) == Some("direct") {
+            tracing::warn!(code = "launcher_source_missing", version = %version.display(), "versão que sobe direto sem bin/hangar-server: lançador não renovado");
+            return Err(format!("launcher_source_missing: a versão sobe direto (boot: direct) e não tem {}", source.display()));
+        }
+        return Ok(false);
+    }
+    let len = |p: &Path| std::fs::metadata(p).map(|m| m.len()).ok();
+    let same = len(&launcher) == len(&source)
+        && std::fs::read(&launcher).ok().zip(std::fs::read(&source).ok()).is_some_and(|(a, b)| a == b);
+    if same { return Ok(false); }
+    write_launcher(&source, &launcher).map(|()| true)
 }
 
 /// Os efeitos, na ordem; cada um entra no registro assim que feito.
@@ -578,7 +628,49 @@ fn apply(m: &Machine<'_>, record: &mut Record, target: &Path, service: &Path) ->
             Err(_) => {}
         }
     }
+    // O ponteiro novo leva a raiz; o servidor o regrava ao subir.
+    rewrite(m, record, &m.hangar().join("install-root-dir"), format!("{}\n", current.display()).as_bytes())?;
     Ok(())
+}
+
+/// Tira do Kimi e de cada Codex os hooks que chamam o lançador estável. O caminho vai cru e com a
+/// barra invertida dobrada (o TOML do Kimi o grava como texto JSON). Devolve o que não deu.
+fn drop_launcher_hooks(m: &Machine<'_>) -> Vec<String> {
+    let copy = crate::codex_setup::hook_command::hooks_path(&m.home, m.windows);
+    [m.launcher(), copy].iter().flat_map(|program| drop_program_hooks(m, program)).collect()
+}
+
+fn drop_program_hooks(m: &Machine<'_>, program: &Path) -> Vec<String> {
+    let mut problems = Vec::new();
+    let raw = program.display().to_string();
+    let needles = [raw.clone(), raw.replace('\\', "\\\\")];
+    let kimi = m.kimi_home.join("config.toml");
+    match std::fs::read_to_string(&kimi) {
+        Ok(text) => {
+            let mut new = text.clone();
+            for needle in &needles { new = kimi_drop(&new, needle, m.windows).0; }
+            if new != text && let Err(e) = crate::runtime::queue::atomic_write(&kimi, new.as_bytes()) {
+                problems.push(format!("{}: os hooks do lançador não saíram: {e}", kimi.display()));
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => problems.push(format!("{}: ilegível ({e}); os hooks do lançador ficaram", kimi.display())),
+    }
+    for home in &m.codex_homes {
+        let path = home.join("hooks.json");
+        let mut doc = match std::fs::read(&path) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => { problems.push(format!("{}: ilegível ({e}); os hooks do lançador ficaram", path.display())); continue; }
+            Ok(bytes) => match serde_json::from_slice::<Value>(&bytes) {
+                Ok(doc) => doc,
+                Err(e) => { problems.push(format!("{}: ilegível ({e}); os hooks do lançador ficaram", path.display())); continue; }
+            },
+        };
+        if !codex_drop(&mut doc, &raw, m.windows).is_empty() && let Err(e) = write_json(&path, &doc) {
+            problems.push(format!("{}: os hooks do lançador não saíram: {e}", path.display()));
+        }
+    }
+    problems
 }
 
 /// Arquivo apagado depois da migração volta só com o que ela tirou.
@@ -611,8 +703,17 @@ fn revert(m: &Machine<'_>, done: &[Done]) -> Vec<String> {
                     if *copied && let Err(e) = remove_tree(&new) { fail(format!("{} não saiu: {e}", new.display())); }
                 }
             }
-            Done::Launcher { existed } => if !existed && let Err(e) = remove_tree(&m.launcher()) {
-                fail(format!("{} não saiu: {e}", m.launcher().display()));
+            Done::Launcher { existed } => if !existed {
+                // Os hooks gravados depois da migração chamam o lançador; sem ele, falhariam a cada
+                // evento. O servidor do checkout grava os dele na subida.
+                for problem in drop_launcher_hooks(m) { fail(problem); }
+                if let Err(e) = remove_tree(&m.launcher()) {
+                    fail(format!("{} não saiu: {e}", m.launcher().display()));
+                }
+                let copy = crate::codex_setup::hook_command::hooks_path(&m.home, m.windows);
+                for path in [copy.with_extension("version"), copy] {
+                    if let Err(e) = remove_tree(&path) { fail(format!("{} não saiu: {e}", path.display())); }
+                }
             },
             Done::Current => if let Err(e) = super::remove_link(&current) { fail(format!("{} não saiu: {e}", current.display())); },
             Done::Front => if let Err(e) = m.service.front(true) { fail(format!("o serviço do front não voltou: {e}")); },
@@ -657,10 +758,13 @@ fn revert(m: &Machine<'_>, done: &[Done]) -> Vec<String> {
     failures
 }
 
+/// A parada da migração: a subida seguinte diz que a saída foi ela (`migrate`) ou a volta dela (`rollback`).
+fn intent(cause: &'static str) -> RestartIntent { RestartIntent::new(hangar_api::status::ExitKind::Update, cause) }
+
 /// Volta a máquina como estava e sobe o backend de antes. `running`: o backend novo está de pé.
 fn roll_back(m: &Machine<'_>, record: &Record, running: bool, why: String) -> String {
     // Desfazer com o backend novo de pé trocaria os dados e o `current` debaixo dele.
-    if running && let Err(e) = m.service.stop() {
+    if running && let Err(e) = m.service.stop(intent("rollback")) {
         return format!("{why}; e o backend novo não parou ({e}), então a volta não mexeu em nada: a máquina segue migrada \
             pela metade, com o registro em {}; pare o backend e rode `hangar-server migrate-package --undo`", m.partial().display());
     }
@@ -694,7 +798,7 @@ fn lock(m: &Machine<'_>) -> Result<UpdateLock, String> {
 fn undo_interrupted(m: &Machine<'_>) -> Result<bool, String> {
     if !m.partial().exists() { return Ok(false); }
     let record = read_record(&m.partial()).ok_or_else(|| format!("o registro {} está ilegível; confira à mão", m.partial().display()))?;
-    m.service.stop().map_err(|e| format!("o backend não parou para desfazer a migração interrompida: {e}"))?;
+    m.service.stop(intent("migrate")).map_err(|e| format!("o backend não parou para desfazer a migração interrompida: {e}"))?;
     let failures = revert(m, &record.done);
     let started = m.service.start();
     if !failures.is_empty() {
@@ -771,7 +875,7 @@ pub async fn migrate<H: HealthProbe>(m: &Machine<'_>, health: &H, dry_run: bool)
         reason: why, notes, done: Vec::new() };
     // O registro nasce antes de parar: morte daqui em diante sempre deixa o que desfazer.
     save(&m.partial(), &record)?;
-    if let Err(e) = m.service.stop() {
+    if let Err(e) = m.service.stop(intent("migrate")) {
         let _ = m.service.start();
         let _ = std::fs::remove_file(m.partial());
         return Err(format!("o backend não parou: {e}; nada foi mudado"));
@@ -807,7 +911,7 @@ pub async fn undo<H: HealthProbe>(m: &Machine<'_>, health: &H) -> Result<(), Str
     refuse_inside_service(m)?;
     let _lock = lock(m)?;
     let before = match health.read().await { Reading::Rust { pid, .. } => pid, _ => None };
-    m.service.stop().map_err(|e| format!("o backend não parou: {e}; nada foi desfeito"))?;
+    m.service.stop(intent("migrate")).map_err(|e| format!("o backend não parou: {e}; nada foi desfeito"))?;
     let failures = revert(m, &record.done);
     if failures.is_empty() {
         let _ = std::fs::remove_file(&path);
@@ -819,15 +923,17 @@ pub async fn undo<H: HealthProbe>(m: &Machine<'_>, health: &H) -> Result<(), Str
 
 /// A unit do systemd ou as tarefas agendadas, pelo shell do sistema.
 pub struct SystemService {
-    pub runner: super::ShellRunner,
+    pub runner: std::sync::Arc<dyn StepRunner + Send + Sync>,
     pub windows: bool,
     pub checkout: PathBuf,
     pub port: u16,
+    /// A pasta da marca de intenção é o `~/.hangar` daqui.
+    pub home: PathBuf,
 }
 
 impl SystemService {
     fn run(&self, command: &str) -> Result<(), String> {
-        let run = super::StepRunner::run(&self.runner, command, &self.checkout);
+        let run = self.runner.run(command, &self.checkout);
         match run.code {
             Some(0) => Ok(()),
             code => Err(format!("{command} saiu com {code:?}: {}", run.output.trim())),
@@ -840,12 +946,21 @@ fn ps_quote(path: &Path) -> String {
     path.display().to_string().chars().flat_map(|c| if matches!(c, '\'' | '‘' | '’' | '‚' | '‛') { vec![c, c] } else { vec![c] }).collect()
 }
 
-impl Service for SystemService {
-    fn stop(&self) -> Result<(), String> {
+impl SystemService {
+    fn stop_unit(&self) -> Result<(), String> {
         if !self.windows { return self.run("systemctl --user stop hangar-backend.service"); }
         let helper = self.checkout.join("scripts").join("windows-tasks.ps1");
         self.run(&format!("powershell -NoProfile -ExecutionPolicy Bypass -Command \"{}\"", super::restart::guarded_ps(&format!(
             ". '{}'; Restart-HangarTask 'hangar-backend' {} '{}' -NoStart", ps_quote(&helper), self.port, ps_quote(&self.checkout.join("backend"))))))
+    }
+}
+
+impl Service for SystemService {
+    fn stop(&self, why: RestartIntent) -> Result<(), String> {
+        let marked = why.mark(&Layout::new(&self.home).hangar);
+        let stopped = self.stop_unit();
+        marked.settle(&stopped);
+        stopped
     }
 
     fn start(&self) -> Result<(), String> {
@@ -1036,7 +1151,7 @@ pub fn run(args: &[String]) -> Result<Vec<String>, (u8, String)> {
             let read = read_record(&home.join(".hangar").join(MARKER)).or_else(|| read_record(&home.join(".hangar").join(PARTIAL)));
             read.map(|r| r.checkout)
         })
-        .or_else(|| Some(PathBuf::from(std::fs::read_to_string(home.join(".hangar").join("backend-dir")).ok()?.trim()).parent()?.to_path_buf()))
+        .or_else(|| hangar_core::install_root::noted_root(&home))
         .filter(|d| is_checkout(d));
     let Some(checkout) = checkout else {
         return Err((2, "##HANGAR-FALHA## não achei o checkout do Hangar; rode de dentro dele ou passe --checkout".to_owned()));
@@ -1048,7 +1163,7 @@ pub fn run(args: &[String]) -> Result<Vec<String>, (u8, String)> {
         .filter(|p| p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n == ".codex" || n.starts_with(".codex-")) && p.join("hooks.json").is_file()));
     codex_homes.dedup();
     let launcher_source = std::env::current_exe().and_then(|exe| super::executor::executor_path(&exe)).unwrap_or_default();
-    let runner = super::ShellRunner { timeout: Duration::from_secs(180) };
+    let runner = std::sync::Arc::new(super::ShellRunner { timeout: Duration::from_secs(180) });
     let probe = Machine {
         home: home.clone(), checkout: checkout.clone(), windows,
         systemd_dir: var("XDG_CONFIG_HOME").unwrap_or_else(|| home.join(".config")).join("systemd").join("user"),
@@ -1060,7 +1175,7 @@ pub fn run(args: &[String]) -> Result<Vec<String>, (u8, String)> {
         settings: Settings { download_deadline: Duration::from_secs(300), ..Settings::default() },
     };
     let port = probe.env_port("CP_PORT").map_err(|e| (1, e))?.unwrap_or(8765);
-    let service = SystemService { runner, windows, checkout, port };
+    let service = SystemService { runner, windows, checkout, port, home: home.clone() };
     let client = crate::http_client().build().map_err(|e| (1, format!("cliente http: {e}")))?;
     let fetcher = ReleaseFetcher { client, platform: super::platform(), home: home.clone(), deadline: probe.settings.download_deadline,
         base_url: super::RELEASE_BASE.to_owned() };
@@ -1086,7 +1201,7 @@ pub fn run(args: &[String]) -> Result<Vec<String>, (u8, String)> {
 struct Unused;
 
 impl Service for Unused {
-    fn stop(&self) -> Result<(), String> { Err("sem serviço".into()) }
+    fn stop(&self, _why: RestartIntent) -> Result<(), String> { Err("sem serviço".into()) }
     fn start(&self) -> Result<(), String> { Err("sem serviço".into()) }
     fn front(&self, _on: bool) -> Result<(), String> { Err("sem serviço".into()) }
 }

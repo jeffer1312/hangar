@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { configureApi, type Server } from '@hangar/core';
 import { setQueueDeliveryForeground, useDeliveryMode, useQueueDelivery } from './useQueueDelivery';
-import { QueuePanel } from './QueuePanel';
+import { DeliveryModeRow } from '../features/config/DeliveryModeRow';
 import * as m from '../paraglide/messages';
 
 const disk = vi.hoisted(() => new Map<string, string>());
@@ -13,42 +13,61 @@ vi.mock('../stores/prefs', () => ({ prefs: { getString: (key: string) => disk.ge
   if (diskFull.on) throw new Error('disk full');
   disk.set(key, value);
 } } }));
-vi.mock('@react-native-menu/menu', () => ({ MenuView: () => null }));
+// Cada opção do menu nativo vira um botão: o teste escolhe como a pessoa escolheria no menu.
+vi.mock('@react-native-menu/menu', async () => {
+  const { createElement: h } = await import('react');
+  type Action = { id: string; title: string; subtitle?: string; state?: string; attributes?: { disabled?: boolean } };
+  return { MenuView: ({ actions, onPressAction, children }: { actions: Action[]; onPressAction: (e: { nativeEvent: { event: string } }) => void; children: import('react').ReactNode }) =>
+    h('div', null, ...actions.map((a) => h('button', { key: a.id, 'aria-label': a.title, 'data-subtitle': a.subtitle, 'aria-pressed': a.state === 'on',
+      disabled: !!a.attributes?.disabled, onClick: () => onPressAction({ nativeEvent: { event: a.id } }) })), children) };
+});
+vi.mock('expo-router', () => ({ useFocusEffect: () => {} }));
 vi.mock('expo-secure-store', () => ({ getItemAsync: async () => null, setItemAsync: async () => {} }));
 vi.mock('../ui/Icon', () => ({ Icon: () => null }));
+vi.mock('../ui/haptics', () => ({ haptic: { selection: () => {}, success: () => {}, error: () => {} } }));
+const active = vi.hoisted(() => ({ server: null as Server | null }));
+vi.mock('../stores/servers', () => ({ useServers: (selector: (s: { active: () => Server | null }) => unknown) => selector({ active: () => active.server }) }));
 const toastErro = vi.hoisted(() => vi.fn());
 vi.mock('../ui/Toast', () => ({ toast: { erro: toastErro } }));
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const first: Server = { id: 'one', label: 'one', baseUrl: 'https://one.test', token: 'one-token' };
 const second: Server = { id: 'two', label: 'two', baseUrl: 'https://two.test', token: 'two-token' };
+// A linha das Configurações > Geral, no servidor ativo dado.
 function Controls({ server = first }: { server?: Server }) {
-  const delivery = useQueueDelivery(server, true);
-  return createElement(QueuePanel, { panel: { entries: [{ id: 'a', text: 'primeira', ts: 1 }], actions: true }, delivery, editingId: null, busy: false,
-    onModeChange: useDeliveryMode.getState().setMode, onEdit: vi.fn(), onCancelEdit: vi.fn(), onSteer: vi.fn(), onRemove: vi.fn(), onMove: vi.fn() });
+  active.server = server;
+  return createElement(DeliveryModeRow);
 }
 let root: Root;
 let container: HTMLDivElement;
-const button = (name: string) => container.querySelector<HTMLButtonElement>(`[aria-label="${name}"]`)!;
+const button = (name: string) => container.querySelector<HTMLButtonElement>(`button[aria-label="${name}"]`)!;
 beforeEach(() => {
-  useDeliveryMode.setState({ mode: 'queued' }); disk.clear(); diskFull.on = false; toastErro.mockClear();
+  useDeliveryMode.setState({ mode: 'queued' }); disk.clear(); diskFull.on = false; toastErro.mockClear(); active.server = null;
   configureApi({ getBaseUrl: () => 'https://wrong.test', getToken: () => 'wrong', onUnauthorized: vi.fn(), origin: null, createEventSource: vi.fn() });
   vi.stubGlobal('fetch', vi.fn());
   container = document.createElement('div'); root = createRoot(container);
 });
 afterEach(() => { act(() => root.unmount()); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
-it('troca Fila/Direto/Jev sem fechar o painel e grava uma única escolha', async () => {
+it('troca Fila/Direto/Jev/Na conversa na linha das Configurações e grava uma única escolha', async () => {
   vi.mocked(fetch).mockResolvedValue(new Response('{"available":true}'));
   await act(async () => root.render(createElement(Controls)));
-  act(() => button(m.mobile_queue_mode_direct()).click());
+  expect(container.textContent).toContain(m.delivery_mode_title());
+  expect(container.textContent).toContain(m.delivery_mode_queue_desc());
+  act(() => button(m.delivery_mode_direct()).click());
   expect(useDeliveryMode.getState().mode).toBe('direct');
-  act(() => button(m.mobile_queue_mode_jev()).click());
+  act(() => button(m.delivery_mode_jev()).click());
   expect(useDeliveryMode.getState().mode).toBe('jev');
   expect(disk.get('queue.deliveryMode')).toBe('jev');
-  act(() => button(m.mobile_queue_mode_queued()).click());
+  act(() => button(m.delivery_mode_conversation()).click());
+  expect(useDeliveryMode.getState().mode).toBe('conversation');
+  expect(disk.get('queue.deliveryMode')).toBe('conversation');
+  // A descrição acompanha a escolha; o menu traz a de cada opção.
+  expect(container.textContent).toContain(m.mobile_delivery_mode_conversation_desc());
+  expect(button(m.delivery_mode_direct()).getAttribute('data-subtitle')).toBe(m.delivery_mode_direct_desc());
+  expect(button(m.delivery_mode_conversation()).getAttribute('aria-pressed')).toBe('true');
+  act(() => button(m.delivery_mode_queue()).click());
   expect(useDeliveryMode.getState().mode).toBe('queued');
-  expect(container.textContent).toContain(m.queue_panel_title());
 });
 
 it('mudança de servidor invalida disponibilidade e ignora a resposta antiga', async () => {
@@ -60,14 +79,14 @@ it('mudança de servidor invalida disponibilidade e ignora a resposta antiga', a
   }));
   useDeliveryMode.setState({ mode: 'jev' });
   await act(async () => root.render(createElement(Controls)));
-  expect(button(m.mobile_queue_mode_jev()).disabled).toBe(true);
+  expect(button(m.delivery_mode_jev()).disabled).toBe(true);
   expect(container.textContent).toContain(m.native_queue_jev_loading().replace(/…$/, ''));
   await act(async () => root.render(createElement(Controls, { server: second })));
   await act(async () => resolveSecond(new Response('{"available":false}')));
   expect(container.textContent).toContain(m.native_queue_jev_setup());
   await act(async () => resolveFirst(new Response('{"available":true}')));
   // A resposta velha (disponível) não ressuscita o Jev, que sem configuração nem aparece.
-  expect(button(m.mobile_queue_mode_jev())).toBeNull();
+  expect(button(m.delivery_mode_jev())).toBeNull();
   expect(container.textContent).toContain(m.native_queue_jev_setup());
 });
 
@@ -75,8 +94,8 @@ it.each([404, 503])('explica falha %s e deixa Direto disponível', async (status
   vi.mocked(fetch).mockResolvedValue(new Response('{"detail":"fixture-error"}', { status }));
   useDeliveryMode.setState({ mode: 'jev' });
   await act(async () => root.render(createElement(Controls)));
-  expect(button(m.mobile_queue_mode_jev()).disabled).toBe(true);
-  expect(button(m.mobile_queue_mode_direct()).disabled).toBe(false);
+  expect(button(m.delivery_mode_jev()).disabled).toBe(true);
+  expect(button(m.delivery_mode_direct()).disabled).toBe(false);
   expect(container.textContent).toContain(status === 404 ? m.native_queue_jev_unsupported() : 'fixture-error');
 });
 

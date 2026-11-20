@@ -25,9 +25,12 @@ pub(crate) const PROBE_WAIT: Duration = Duration::from_secs(5);
 /// Leitura do alvo do terminal de uma sessão: lock do registro e um arquivo.
 const TARGET_WAIT: Duration = Duration::from_secs(2);
 
-/// Subidas e quedas do backend e do `hangar-server`, conferidas no diário real.
-const RESTARTS: [&str; 6] = ["backend.inicio", "backend.encerrando", "hangar_server.de_pe", "hangar_server.caiu",
-    "hangar_server.partida", "hangar_server.reserva"];
+/// Subidas e quedas do backend e do `hangar-server`, conferidas no diário real. O lançador que não
+/// achou o servidor é religado sem fim pelo gerenciador: a causa só aparece por esta linha. No
+/// Windows quem religa o servidor que cai é o lançador (`lancador.queda`, com o código de saída).
+/// `hangar_server.saida` diz por que a vida anterior saiu (queda, atualização ou pedido).
+const RESTARTS: [&str; 9] = ["backend.inicio", "backend.encerrando", "hangar_server.de_pe", "hangar_server.caiu",
+    "hangar_server.saida", "hangar_server.partida", "hangar_server.reserva", "lancador.falhou", "lancador.queda"];
 /// Campos do `hangar-server.log` que podem sair: os que dizem o que caiu e onde. Valores passam pelo
 /// `scrub`, caminho vira o último segmento e cada um é cortado em `VALUE_MAX`.
 const LOG_FIELDS: [&str; 21] = ["code", "session", "account", "reason", "stage", "step", "kind", "io_kind", "os_error", "error",
@@ -184,12 +187,9 @@ pub(crate) fn read_diary(paths: &[(String, PathBuf)], now: DateTime<Local>, s: &
     let since = now - window();
     let days = [now.date_naive(), since.date_naive()].map(|d| d.format("%Y-%m-%d").to_string());
     let (mut problems, mut restarts) = (Vec::new(), Vec::new());
-    let mut versions = crate::boot_version::PythonDiary::for_paths(paths);
     for (_, path) in paths.iter().filter(|(date, _)| days.contains(date)) {
         each_line(path, |line| {
-            let Ok(mut value) = serde_json::from_str::<Value>(line) else { return };
-            if let Err(error) = versions.bind(&value) { tracing::warn!(kind = ?error.kind(), "relatório: identidade Python não persistida"); }
-            versions.enrich(&mut value);
+            let Ok(value) = serde_json::from_str::<Value>(line) else { return };
             let Some(at) = value["ts"].as_str().and_then(|t| DateTime::parse_from_rfc3339(t).ok()) else { return };
             let at = at.with_timezone(&Local);
             if at < since { return; }
@@ -346,7 +346,6 @@ fn gzip(data: impl FnOnce(&mut flate2::write::GzEncoder<Vec<u8>>) -> std::io::Re
 /// primeiro que não cabe em `max`; a primeira linha diz quantos dias ficaram fora.
 pub(crate) fn diary_gz(paths: &[(String, PathBuf)], scrubber: &Scrubber, max: usize) -> Vec<u8> {
     const NOTE_ROOM: usize = 256;
-    let mut versions = crate::boot_version::PythonDiary::for_paths(paths);
     let mut days: BTreeMap<&str, Vec<&Path>> = BTreeMap::new();
     for (date, path) in paths { days.entry(date.as_str()).or_default().push(path.as_path()); }
     let mut members: Vec<Vec<u8>> = Vec::new();
@@ -357,10 +356,7 @@ pub(crate) fn diary_gz(paths: &[(String, PathBuf)], scrubber: &Scrubber, max: us
             for path in paths {
                 each_line(path, |line| {
                     if result.is_err() || line.trim().is_empty() { return; }
-                    if let Ok(value) = serde_json::from_str(line) {
-                        if let Err(error) = versions.bind(&value) { tracing::warn!(kind = ?error.kind(), "diário compactado: identidade Python não persistida"); }
-                    }
-                    result = out.write_all(scrubber.scrub(&versions.enrich_line(line)).as_bytes()).and_then(|()| out.write_all(b"\n"));
+                    result = out.write_all(scrubber.scrub(line).as_bytes()).and_then(|()| out.write_all(b"\n"));
                 });
             }
             result
@@ -683,40 +679,25 @@ pub(crate) async fn versions(st: &crate::routes::AppState, s: &Scrubber) -> Vers
 }
 
 #[cfg(test)]
-mod version_tests {
+mod exit_tests {
     use super::*;
 
+    /// O motivo da saída da vida anterior entra nos reinícios do pacote, com tipo, causa e versões.
     #[test]
-    fn diary_readers_and_gzip_keep_two_lives_and_unknown_history_separate() {
-        use std::io::Read;
-        let temp = tempfile::tempdir().unwrap();
-        let base = temp.path();
-        let versions = base.join("privado/python-versions");
-        std::fs::create_dir_all(&versions).unwrap();
-        let now = Local.with_ymd_and_hms(2026, 11, 6, 13, 0, 0).unwrap();
-        let first = "2026-11-06T12:00:00+00:00";
-        let second = "2026-11-06T12:30:00+00:00";
-        for (name, birth, start, version) in [("first", 1.0, first, "original"), ("second", 2.0, second, "replacement")] {
-            std::fs::write(versions.join(format!("{name}.json")), json!({"pid":42,"birth":birth,"root":"fixture","executable":"fixture/python",
-                "version":{"describe":version,"readable":null},"started":start}).to_string()).unwrap();
-        }
-        let path = base.join(format!("diario/uso-{}.jsonl", now.format("%Y-%m-%d")));
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let rows = [
-            json!({"ts":now.to_rfc3339(),"evento":"backend.inicio","nivel":"ok","origem":"servidor","pid_backend":42,"inicio_backend":first}),
-            json!({"ts":now.to_rfc3339(),"evento":"backend.inicio","nivel":"ok","origem":"servidor","pid_backend":42,"inicio_backend":second}),
-            json!({"ts":now.to_rfc3339(),"evento":"backend.inicio","nivel":"ok","origem":"servidor","pid_backend":42,"inicio_backend":"unknown-life"}),
-        ];
-        std::fs::write(&path, rows.iter().map(|row| format!("{row}\n")).collect::<String>()).unwrap();
-        let paths = diary_files(base);
-        let scrubber = Scrubber::new(None, None);
-        let diary = read_diary(&paths, now, &scrubber);
-        assert_eq!(diary.restarts.iter().map(|row| row.backend.as_str()).collect::<Vec<_>>(), ["original", "replacement", "indisponivel"]);
-        let compressed = diary_gz(&paths, &scrubber, DIARY_GZ_MAX);
-        let mut text = String::new();
-        flate2::read::MultiGzDecoder::new(compressed.as_slice()).read_to_string(&mut text).unwrap();
-        let result: Vec<Value> = text.lines().map(|line| serde_json::from_str(line).unwrap()).collect();
-        assert_eq!(result.iter().map(|row| row["backend"].as_str().unwrap()).collect::<Vec<_>>(), ["original", "replacement", "indisponivel"]);
-        assert!(!text.contains("python-versions") && !text.contains("executable"), "snapshot privado não é exportado");
+    fn exit_line_is_listed_among_the_restarts() {
+        let dir = tempfile::tempdir().unwrap();
+        let now = Local::now();
+        let ts = (now - chrono::TimeDelta::hours(1)).to_rfc3339();
+        let file = dir.path().join(format!("diario/servidor-rust/uso-{}.jsonl", now.format("%Y-%m-%d")));
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, format!("{}\n", json!({"ts": ts, "evento": "hangar_server.saida", "nivel": "aviso", "tipo": "update",
+            "causa": "package", "de": "0.1.0.9000", "para": "0.1.0.9010"}))).unwrap();
+        let scrubber = Scrubber::new(Some("/home/fulano".into()), None);
+        let Diary { restarts, .. } = read_diary(&diary_files(dir.path()), now, &scrubber);
+        assert_eq!(restarts.len(), 1);
+        let line = restarts[0].restart_line();
+        assert!(line.contains("hangar_server.saida aviso") && line.contains("tipo=update") && line.contains("causa=package")
+            && line.contains("de=0.1.0.9000") && line.contains("para=0.1.0.9010"), "{line}");
     }
 }
+

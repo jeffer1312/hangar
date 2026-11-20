@@ -1,16 +1,17 @@
 import { create } from 'zustand';
 import {
   basename, createSessionForServer, fetchSessionsForServer, getCreationProgress, getHistory,
-  sanitizeSessionName, sendInputForServer, transitionFirstConversation, uniqueSessionName, uploadFileForServer,
+  sanitizeSessionName, sendInputForServer, transitionFirstConversation, uniqueSessionName,
 } from '@hangar/core';
 import type {
   ChatEvent, CreateSessionBody, FirstConversationAttempt, FirstConversationEvent, Server, SessionInfo,
 } from '@hangar/core';
 import { prefs } from './prefs';
 import { useServers } from './servers';
-import { clearDraft, readDraft, withoutUpload, writeDraft, type DraftAttachment } from './drafts';
+import { clearDraft, pendingMediaUpload, readDraft, withoutUpload, writeDraft, type DraftAttachment } from './drafts';
 import { resetCreatedChat, submitConversationDraft } from './chat';
 import * as m from '../paraglide/messages';
+import { uploadAttachment } from './attachmentUpload';
 
 // O servidor expande na abertura: o app não sabe a pasta do usuário e ela costuma estar fora das raízes.
 export const NO_PROJECT_CWD = '~';
@@ -35,8 +36,12 @@ export type NewConversationInput = {
   attachment?: DraftAttachment | null;
 };
 
-export const attachInsert = (attach: DraftAttachment, path: string) =>
-  `📎 ${attach.kind === 'image' ? m.board_imagem() : m.board_arquivo()}: ${path}`;
+// Vídeo leva os quadros e a fala, como no desktop; o envio por terminal recusa quebra de linha.
+export const attachInsert = (attach: DraftAttachment, path: string) => [
+  `📎 ${attach.kind === 'image' ? m.board_imagem() : m.board_arquivo()}: ${path}`,
+  ...(attach.uploadedFrames ?? []).map((frame) => `📎 ${m.board_imagem()}: ${frame}`),
+  ...(attach.uploadedSpeech?.trim() ? [m.composer_fala_video({ texto: attach.uploadedSpeech.replace(/\s+/g, ' ').trim() })] : []),
+].join(' ');
 export const withAttach = (text: string, insert: string) => (text ? `${text} — ${insert}` : insert);
 
 // Campo extra da tentativa: as transições do core espalham o objeto e o preservam.
@@ -46,21 +51,22 @@ export function attemptAttachment(attempt: FirstConversationAttempt): DraftAttac
     && (a.kind === 'image' || a.kind === 'file') ? a as DraftAttachment : null;
 }
 
-// O caminho do upload mora no rascunho da sessão, onde o composer da conversa também o grava.
-function uploadedPath(attempt: FirstConversationAttempt, attach: DraftAttachment): string | null {
+// O upload mora no rascunho da sessão, onde o composer da conversa também o grava: caminho e, no
+// vídeo, quadros e fala ou o id da mídia ainda pendente.
+function uploadedCopy(attempt: FirstConversationAttempt, attach: DraftAttachment): DraftAttachment | null {
   if (!attempt.sessionName) return null;
   let kept: DraftAttachment | null | undefined;
   try { kept = readDraft(attempt.serverId, attempt.sessionName)?.attachments.find((a) => a.uri === attach.uri); } catch { return null; }
   const done = kept?.uploadedFor;
   return kept?.uri === attach.uri && kept.uploadedPath && done?.serverId === attempt.serverId
-    && done.name === attempt.sessionName ? kept.uploadedPath : null;
+    && done.name === attempt.sessionName ? kept : null;
 }
 
 // A primeira mensagem como ela sai: o texto digitado e, com o anexo já enviado, a citação dele.
 export function firstInputMessage(attempt: FirstConversationAttempt): string {
   const attach = attemptAttachment(attempt);
-  const path = attach && uploadedPath(attempt, attach);
-  return attach && path ? withAttach(attempt.text.trim(), attachInsert(attach, path)) : attempt.text;
+  const kept = attach && uploadedCopy(attempt, attach);
+  return kept?.uploadedPath ? withAttach(attempt.text.trim(), attachInsert(kept, kept.uploadedPath)) : attempt.text;
 }
 
 type State = {
@@ -258,30 +264,43 @@ export function sendFirstInput(serverId: string, attemptId: string): Promise<voi
     if (!server) { setIssue(serverId, { kind: 'local', message: m.nova_conversa_servidor_ausente() }); return; }
     const sessionName = attempt.sessionName;
     const attach = attemptAttachment(attempt);
-    let path = attach && uploadedPath(attempt, attach);
-    if (attach && !path) {
+    const kept = attach && uploadedCopy(attempt, attach);
+    // O anexo como vai na mensagem: já subido e pronto, ou o que o upload devolver.
+    let sent = kept && !kept.uploadedMediaId ? kept : attach;
+    // Grava o upload no rascunho da sessão; removido na conversa antes do upload, não volta à lista.
+    // `create`: só o upload pode criar o rascunho; sem ele na chegada da mídia, o anexo foi removido.
+    const keep = (uploaded: DraftAttachment, create: boolean): boolean => {
       try {
-        const blob = await (await fetch(attach.uri)).blob();
-        path = (await uploadFileForServer(server, sessionName, new File([blob], attach.name, { type: attach.mime }))).path;
+        const draft = readDraft(serverId, sessionName);
+        if (!draft && !create) return true;
+        const base = draft ?? { version: 1 as const, text: attempt.text, revision: 1, transcript: null, attachments: [uploaded], submission: null };
+        if (base.attachments.some((a) => a.uri === uploaded.uri)) {
+          writeDraft(serverId, sessionName, { ...base, attachments: base.attachments.map((a) => (a.uri === uploaded.uri ? uploaded : a)) });
+        }
+        return true;
+      } catch {
+        setIssue(serverId, { kind: 'local', message: m.nova_conversa_salvar_erro() });
+        return false;
+      }
+    };
+    if (attach && sent === attach) {
+      const uploadedFor = { serverId, name: sessionName, transcript: null };
+      const pending = kept && pendingMediaUpload(kept, uploadedFor);
+      // Rascunho que não grava para na hora (o aviso já saiu do `keep`), sem esperar a mídia.
+      const saveFailed = new Error('draft_save_failed');
+      try {
+        const fields = await uploadAttachment(server, sessionName, attach, (f) => {
+          if (!keep({ ...withoutUpload(attach), ...f, uploadedFor }, f.uploadedFrames === undefined)) throw saveFailed;
+        }, { pending });
+        sent = { ...withoutUpload(attach), ...fields, uploadedFor };
       } catch (cause) {
+        if (cause === saveFailed) return;
         // A sessão existe; o anexo segue na tentativa e no rascunho dela, para reenviar aqui ou na conversa.
         setIssue(serverId, { kind: 'local', message: m.nova_conversa_anexo_falhou({ erro: messageOf(cause) }) });
         return;
       }
-      try {
-        const kept = readDraft(serverId, sessionName);
-        // Removido na conversa antes do upload: não volta à lista.
-        const base = kept ?? { version: 1 as const, text: attempt.text, revision: 1, transcript: null, attachments: [attach], submission: null };
-        const uploaded = { ...withoutUpload(attach), uploadedPath: path, uploadedFor: { serverId, name: sessionName, transcript: null } };
-        if (base.attachments.some((a) => a.uri === attach.uri)) {
-          writeDraft(serverId, sessionName, { ...base, attachments: base.attachments.map((a) => (a.uri === attach.uri ? uploaded : a)) });
-        }
-      } catch {
-        setIssue(serverId, { kind: 'local', message: m.nova_conversa_salvar_erro() });
-        return;
-      }
     }
-    const message = attach && path ? withAttach(attempt.text.trim(), attachInsert(attach, path)) : attempt.text;
+    const message = sent?.uploadedPath ? withAttach(attempt.text.trim(), attachInsert(sent, sent.uploadedPath)) : attempt.text;
     // Com anexo o texto enviado difere do rascunho; a revisão explícita deixa o ACK limpar o campo.
     let draftRevision: number | undefined;
     if (attach) {

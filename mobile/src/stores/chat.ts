@@ -4,6 +4,10 @@ import {
   getHistory,
   getHistoryDesde,
   openEventStreamForServer,
+  baseOf,
+  decidirRota,
+  esquecerRota,
+  UNCONFIRMED_BASE,
   prependOlder,
   mergeHistoryWithLiveRetiring,
   hasSeam,
@@ -45,7 +49,7 @@ import * as m from '../paraglide/messages';
 import { bindQueued, ECHO_SETTLE_MS, QUEUE_APPEAR_MS, reconcilePending, sameMessage, settleQueued, type PendingMsg } from '../chat/pending';
 import { useServers } from './servers';
 import { clearDraft, deliveredDraft, readDictation, readDraft, writeDraft, type ConversationDraft } from './drafts';
-import { sendWithDelivery, type DeliveryFeedback, type QueueSendMode } from '../chat/queueDelivery';
+import { QUEUED_INSTEAD, sendWithDelivery, type DeliveryFeedback, type QueueSendMode } from '../chat/queueDelivery';
 
 // Store vivo do chat de UMA sessão — porte do núcleo de frontend/src/screens/Chat.svelte
 // para zustand. Histórico janelado (cauda primeiro), merge SSE com dedup por id, preview ao
@@ -66,6 +70,8 @@ let releaseGraceMs = process.env.VITEST ? 0 : 1_000;
 // Prazo para o `queue` do retrato chegar depois de a conexão abrir.
 const QUEUE_SNAPSHOT_MS = 3_000;
 const SSE_RETRY_MAX_MS = 30_000;
+// Mesmo teto da lista de sessões para esperar a decisão de rota.
+const ROUTE_WAIT_MS = 6_000;
 
 // Edição da fila com as citações da mensagem: o campo mostra só o texto digitado e elas voltam na
 // frente ao gravar (com elas o Atualizar vale mesmo com o campo vazio).
@@ -213,6 +219,8 @@ function criarChatStore(serverId: string, name: string): ChatApi {
   // Conexão aberta sem o evento `queue` no retrato (a sessão voltou ao Python): a lista antiga do servidor sai.
   let queueAbsentTimer: ReturnType<typeof setTimeout> | undefined;
   let retryDelay = SSE_RETRY_MIN_MS;
+  // Decisão de rota que termina depois de outra abertura (ou de soltar a tela) não reabre nada.
+  let sseAttempt = 0;
   let alive = false;
   let refs = 0;
   let identity: { jsonl?: string | null; lifecycle_id?: string | null; provider?: string | null } | undefined;
@@ -221,6 +229,7 @@ function criarChatStore(serverId: string, name: string): ChatApi {
     releaseTimer = null;
     alive = false;
     histGen++;
+    sseAttempt++;
     histAbort?.abort();
     es?.close();
     es = null;
@@ -592,6 +601,26 @@ function criarChatStore(serverId: string, name: string): ChatApi {
     es?.close();
     es = null;
     if (!target) return;
+    const attempt = ++sseAttempt;
+    // Sem a máquina provada a abertura lança, e a reconexão pararia ali até o app voltar do fundo.
+    if (baseOf(target) === UNCONFIRMED_BASE) {
+      // O fetch pode ignorar o abort: sem prazo, uma decisão presa pararia a reconexão do mesmo jeito.
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const late = new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(true), ROUTE_WAIT_MS); });
+      void Promise.race([decidirRota(target).then(() => false), late]).then((timedOut) => {
+        clearTimeout(timer);
+        if (attempt !== sseAttempt || !alive || !foreground) return;
+        if (timedOut) esquecerRota(target.id);
+        const current = destino();
+        // O histórico falhou pela mesma rota: recarregar tira o erro da tela antes de reabrir o SSE.
+        if (current && baseOf(current) !== UNCONFIRMED_BASE) {
+          sincronizar();
+          return;
+        }
+        scheduleReconnect(target.baseUrl, 'server_identity_unconfirmed');
+      });
+      return;
+    }
 
     const opened = openEventStreamForServer(target, name, undefined, lastEventId);
     // O adapter pode entregar um quadro já enfileirado depois do close.
@@ -889,12 +918,17 @@ function criarChatStore(serverId: string, name: string): ChatApi {
         useChatStore.setState({ sseRecusado: true });
         return;
       }
-      retryTimer = setTimeout(connectSSE, retryDelay);
-      if (base !== undefined) registrarDiag({ evento: 'sse.retentativa', tela: 'chat',
-        espera_ms: retryDelay }, base);
-      retryDelay = Math.min(retryDelay * 2, SSE_RETRY_MAX_MS);
+      scheduleReconnect(base);
     }
     es.onerror = onStreamError;
+  }
+
+  function scheduleReconnect(base: string | undefined, codigo?: string): void {
+    clearTimeout(retryTimer);
+    retryTimer = setTimeout(connectSSE, retryDelay);
+    if (base !== undefined) registrarDiag({ evento: 'sse.retentativa', tela: 'chat', espera_ms: retryDelay,
+      ...(codigo ? { codigo } : {}) }, base);
+    retryDelay = Math.min(retryDelay * 2, SSE_RETRY_MAX_MS);
   }
 
   // Aviso de falha da fila: some sozinho, como o aviso do PWA, sem ficar sobre uma fila que já mudou.
@@ -1090,6 +1124,7 @@ function criarChatStore(serverId: string, name: string): ChatApi {
       if (!active) {
         // Só GET é descartável: POST em voo segue, e transcript, pergunta, pending e cursor ficam.
         histGen++;
+        sseAttempt++;
         histAbort?.abort();
         histAbort = null;
         clearTimeout(retryTimer);
@@ -1144,15 +1179,25 @@ function criarChatStore(serverId: string, name: string): ChatApi {
         // Em idle a mensagem é digitada na hora: o eco atenuado parecia mensagem entrando na fila.
         const state = useChatStore.getState().stateEvent?.state;
         const solid = state === 'idle';
-        // Trabalhando, tudo que não é Direto espera a vez na fila: o eco nasce no painel.
-        const queue = state === 'working' && mode !== 'steer' && !(typeof mode === 'object' && mode.kind === 'direct');
+        // "Na conversa" fica no fim da conversa, inteiro; trabalhando, o resto que não é Direto espera no painel.
+        const conversation = typeof mode === 'object' && mode.kind === 'conversation';
+        const queue = state === 'working' && mode !== 'steer' && !conversation && !(typeof mode === 'object' && mode.kind === 'direct');
         // A bolha `queued-` da fila durável sai depois, e o registro real chega com outro id.
         const afterId = useChatStore.getState().events.findLast((e) => e.kind === 'user_msg' && !e.id.startsWith('queued-'))?.id;
-        useChatStore.setState((s) => ({ pending: [...s.pending, { id, text: trimmed, solid, afterId,
-          ...(queue && { queue, known: s.queuePanel?.entries.map((entry) => entry.id) ?? [] }) }] }));
+        const known = useChatStore.getState().queuePanel?.entries.map((entry) => entry.id) ?? [];
+        useChatStore.setState((s) => ({ pending: [...s.pending, { id, text: trimmed, solid, afterId, ...(conversation && { conversation }),
+          ...(queue && { queue, known }) }] }));
         try {
           if (mode === 'steer') await steerSession(name, trimmed, target);
-          else if (mode) showDeliveryFeedback(await sendWithDelivery(target, name, trimmed, mode));
+          else if (mode) {
+            const sent = await sendWithDelivery(target, name, trimmed, mode);
+            // Servidor que não leva "Na conversa" a esta sessão a pôs na fila comum: o eco vai para o painel.
+            if (sent === QUEUED_INSTEAD) {
+              // O evento da fila pode ter chegado antes da resposta: a entrada já listada leva o eco agora.
+              const listed = useChatStore.getState().queuePanel?.entries ?? [];
+              useChatStore.setState((s) => ({ pending: settleQueued(s.pending.map((p) => p.id === id ? { ...p, conversation: undefined, queue: true, known } : p), listed, []) }));
+            } else showDeliveryFeedback(sent);
+          }
           else await sendInputForServer(target, name, trimmed);
         } catch (err) {
           // O /steer também usa 409 quando escreveu sem confirmar: não presumir recusa.

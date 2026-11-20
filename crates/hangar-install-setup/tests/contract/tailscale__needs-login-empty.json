@@ -1,0 +1,95 @@
+{
+ "case": "tailscale/needs-login-empty",
+ "source_commit": "2ad8e335e8d9118e74bc5b33f2efb4ac3bbd8eba",
+ "python": "3.14.9 websockets 16.0",
+ "capture_cmdline": "/usr/bin/python3 capture.py --only pacote/ -j 8",
+ "route": "R4",
+ "script": "install.sh publica_tailscale (DNSName)",
+ "contract_refs": [
+  "R4-S04",
+  "P-19"
+ ],
+ "description": "",
+ "harness": {
+  "how": "the two DNSName lines of install.sh run inside a function; `falta` prints; fake tailscale on PATH",
+  "inst_root": "$T/inst",
+  "inst_files_copied_from_ref": [],
+  "stub_config": {
+   "tailscale": {
+    "status": {
+     "rc": 0,
+     "stdout": "{\"BackendState\": \"NeedsLogin\", \"Self\": {\"DNSName\": \"\"}}",
+     "stderr": ""
+    }
+   }
+  },
+  "notes": {
+   "extracted_lines": [
+    "install.sh:1008",
+    "install.sh:1009"
+   ]
+  }
+ },
+ "input": {
+  "argv": [
+   "/usr/bin/bash",
+   "$T/harness/tailscale.sh"
+  ],
+  "env": {
+   "HOME": "$T/home",
+   "USERPROFILE": "$T/home",
+   "LOCALAPPDATA": "$T/local",
+   "TMUX_TMPDIR": "$T/tmux",
+   "PATH": "$T/stubs:/usr/bin:/bin"
+  },
+  "stdin": {
+   "text": ""
+  },
+  "cwd": "$T/work",
+  "files_before": {}
+ },
+ "output": {
+  "code": 0,
+  "stdout": {
+   "text": "FALTA: Tailscale sem login — sudo tailscale up e ./install.sh de novo\nrc=1\n"
+  },
+  "stderr": {
+   "text": ""
+  },
+  "duration_ms": 41,
+  "files": {
+   "created": {},
+   "changed": {},
+   "removed": []
+  }
+ },
+ "spawns": [
+  {
+   "role": "tailscale",
+   "argv": [
+    "$T/stubs/tailscale",
+    "status",
+    "--json"
+   ],
+   "cwd": "$T/work",
+   "t": 1794912840.0468752,
+   "call": 1,
+   "env_delta": {
+    "added_or_changed": {
+     "PWD": "$T/work",
+     "SHLVL": "1",
+     "_": "$T/stubs/tailscale",
+     "LC_CTYPE": "C.UTF-8"
+    },
+    "removed": []
+   }
+  }
+ ],
+ "python_shim_calls": [
+  {
+   "shim": "python3",
+   "first_arg": "-c"
+  }
+ ],
+ "http": {}
+}

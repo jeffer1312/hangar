@@ -1052,7 +1052,7 @@
     "detail": {
      "code": "erro_permissao_ocupada",
      "params": {},
-     "msg": "a sess\u00e3o est\u00e1 trabalhando; mudar o sandbox reiniciaria o Codex \u2014 espere ela terminar"
+     "msg": "a sess\u00e3o est\u00e1 trabalhando; espere ela terminar para mudar o sandbox"
     }
    }
   }
@@ -1126,7 +1126,7 @@
     "detail": {
      "code": "erro_permissao_picker",
      "params": {},
-     "msg": "n\u00e3o consegui reabrir o Codex: o Codex n\u00e3o subiu"
+     "msg": "n\u00e3o consegui trocar a permiss\u00e3o do Codex: o Codex n\u00e3o subiu"
     }
    }
   }

@@ -187,9 +187,3 @@ def test_condutor_valida_caminho_sem_exigir_eventos(monkeypatch, tmp_path):
         assert answer.json()["detail"]["code"] == "erro_nao_encontrado"
 
 
-def test_fato_interno_recusa_sem_segredo():
-    from fastapi import FastAPI
-    from app import internal_api
-    app = FastAPI()
-    app.include_router(internal_api.router)
-    assert TestClient(app).get("/internal/orq/x/conductor-facts").status_code == 404

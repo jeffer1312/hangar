@@ -52,7 +52,6 @@ async fn pane_r3_01_02_06_text_is_the_raw_capture_with_the_clamped_scrollback() 
     assert_ne!(text(&short), text(&default), "50 linhas não são as 200");
     let (_, whole) = get(&rig, "p1/pane?lines=99999").await;
     assert_eq!(text(&whole).lines().next(), Some("linha-1"), "5000 alcança o histórico inteiro");
-    assert_eq!(rig.python.hits_to("/api/sessions/p1/pane"), 0);
 }
 
 // R3-03 (`lines: int` do FastAPI): o 422 `int_parsing` com o valor que veio.
@@ -65,7 +64,6 @@ async fn pane_r3_03_a_non_integer_lines_is_the_fastapi_422() {
         assert_eq!(get(&rig, &format!("p1/pane?lines={raw}")).await, (422, json!({"detail": [{"type": "int_parsing", "loc": ["query", "lines"],
             "msg": "Input should be a valid integer, unable to parse string as an integer", "input": raw}]})), "{raw:?}");
     }
-    assert_eq!(rig.python.hits_to("/api/sessions/p1/pane"), 0);
 }
 
 // R3-04 (`api.py:2738`, `tmux.py:550-557`): sem sessão no tmux é 404; o alvo é exato, nunca o prefixo de outra.
@@ -75,7 +73,6 @@ async fn pane_r3_04_a_name_without_tmux_session_is_404_even_with_a_prefix_siblin
     rig.pane("pfx-2", "bash --norc --noprofile");
     for name in ["ghost", "pfx"] {
         assert_eq!(get(&rig, &format!("{name}/pane")).await, (404, detail("erro_sessao_inexistente", "sessao nao encontrada")), "{name}");
-        assert_eq!(rig.python.hits_to(&format!("/api/sessions/{name}/pane")), 0);
     }
 }
 
@@ -115,7 +112,6 @@ async fn pane_r3_08_a_failed_capture_is_an_error_with_a_code() {
     let (status, reply) = get(&rig, "p1/pane").await;
     assert_eq!((status, reply["detail"]["code"].as_str(), reply["detail"]["params"]["detalhe"].as_str()),
         (503, Some("erro_espelho_indisponivel"), Some("capture_refused")), "{reply}");
-    assert_eq!(rig.python.hits_to("/api/sessions/p1/pane"), 0);
 }
 
 // R3-08 (`tmux.py:1086-1090`): o `display` do histórico que falha não derruba a leitura: 200 com o texto,
@@ -143,7 +139,6 @@ async fn pane_r3_08_a_failed_scrollback_read_is_zero_and_logged() {
     assert!(reply["text"].as_str().unwrap().contains("HISTORICO-FALHOU"), "{reply}");
     let text = String::from_utf8(log.0.lock().unwrap().clone()).unwrap();
     assert!(text.contains("pane_scrollback_failed"), "{text}");
-    assert_eq!(rig.python.hits_to("/api/sessions/sb-r308/pane"), 0);
 }
 
 // R3-09 (bug 2 do inventário; decisão 9): multiplexador que não responde é 503 com código, não "sessão não encontrada".
@@ -156,7 +151,6 @@ async fn pane_r3_09_a_silent_multiplexer_is_503_not_404() {
     mute(&rig, false);
     assert_eq!((status, reply["detail"]["code"].as_str(), reply["detail"]["params"]["detalhe"].as_str()),
         (503, Some("erro_espelho_indisponivel"), Some("capture_mux_no_answer")), "{reply}");
-    assert_eq!(rig.python.hits_to("/api/sessions/p1/pane"), 0);
 }
 
 // R3-11 (decisão 1): o convidado que vê a sessão lê o espelho pelo mesmo caminho; quem não vê leva 403, e
@@ -171,7 +165,6 @@ async fn pane_r3_11_guest_reads_through_the_owner_path() {
     assert!(reply["text"].as_str().unwrap().contains("CONVIDADO-VE"));
     assert_eq!(call(&rig, reqwest::Method::GET, "p1/pane", BLIND).await, (403, detail("erro_fora_do_convidado", "fora do acesso do convidado")));
     assert_eq!(call(&rig, reqwest::Method::GET, "p1/pane", "errado").await, (401, detail("erro_nao_autorizado", "unauthorized")));
-    assert_eq!(rig.python.hits_to("/api/sessions/p1/pane"), 0);
 }
 
 /// Pedido com o convidado de par já decidido, como o porteiro da 8766 o entrega ao roteador.
@@ -200,7 +193,6 @@ async fn pane_r3_11_a_pair_guest_reads_but_never_reloads() {
     assert_eq!(status, 200, "{reply}");
     assert!(reply["text"].as_str().unwrap().contains("PAR-VE"));
     assert_eq!(as_pair(&rig, "POST", "p1/recarregar").await, (403, detail("erro_fora_do_convidado", "fora do acesso do convidado")));
-    assert_eq!(rig.python.hits_to("/api/sessions/p1/pane") + rig.python.hits_to("/api/sessions/p1/recarregar"), 0);
 }
 
 // R3-12..17 (decisão 9): `peer-address` saiu; quem alcança a sessão recebe o 404 de rota inexistente.
@@ -211,7 +203,6 @@ async fn peer_address_r3_12_17_is_a_gone_route() {
     let gone = (404, json!({"detail": "Not Found"}));
     for name in ["p1", "ghost"] {
         assert_eq!(get(&rig, &format!("{name}/peer-address")).await, gone, "{name}");
-        assert_eq!(rig.python.hits_to(&format!("/api/sessions/{name}/peer-address")), 0);
     }
     assert_eq!(call(&rig, reqwest::Method::GET, "p1/peer-address", GUEST).await, gone);
     assert_eq!(call(&rig, reqwest::Method::GET, "p1/peer-address", "errado").await.0, 401);
@@ -225,7 +216,6 @@ async fn limits_r3_19_20_not_codex_is_400_and_a_missing_name_is_404() {
     rig.pane("sh1", "bash --norc --noprofile");
     assert_eq!(get(&rig, "sh1/limits").await, (400, detail("erro_limits_so_codex", "limits so existe pra sessoes Codex")));
     assert_eq!(get(&rig, "ghost/limits").await, (404, detail("erro_sessao_inexistente", "sessão não encontrada")));
-    assert_eq!(rig.python.hits_to("/api/sessions/sh1/limits") + rig.python.hits_to("/api/sessions/ghost/limits"), 0);
 }
 
 // R2-06, R2-10 (golden `models_unknown_session`; `limits` de nome inexistente pela decisão 9): num nome sem
@@ -235,7 +225,6 @@ async fn models_and_limits_of_a_missing_name_answer_in_rust() {
     let rig = Rig::new().await;
     assert_eq!(get(&rig, "ghost/models").await, (400, detail("erro_models_so_codex", "models so existe pra sessoes Codex")));
     assert_eq!(get(&rig, "ghost/limits").await, (404, detail("erro_sessao_inexistente", "sessão não encontrada")));
-    assert_eq!(rig.python.hits_to("/api/sessions/ghost/models") + rig.python.hits_to("/api/sessions/ghost/limits"), 0);
 }
 
 // R3-24: o convidado nunca arma nem limpa o `then` (alcança outra sessão do dono).
@@ -246,7 +235,6 @@ async fn then_r3_24_the_guest_never_sets_nor_clears_the_link() {
     for method in [reqwest::Method::PUT, reqwest::Method::DELETE] {
         assert_eq!(call(&rig, method.clone(), "p1/then", GUEST).await.0, 403, "{method}");
     }
-    assert_eq!(rig.python.hits_to("/api/sessions/p1/then"), 0);
 }
 
 // R3-27, R3-28 (`test_reload_route_is_rust_only`): nome sem sessão é 404; pane de outro agente ou shell é o
@@ -263,7 +251,6 @@ async fn reload_r3_27_28_30_what_no_rust_agent_serves_is_answered_in_rust() {
     let (status, reply) = post("sh1/recarregar").await;
     mute(&rig, false);
     assert_eq!((status, reply["detail"]["code"].as_str()), (503, Some("erro_mux_indisponivel")), "{reply}");
-    assert_eq!(rig.python.hits_to("/api/sessions/ghost/recarregar") + rig.python.hits_to("/api/sessions/sh1/recarregar"), 0);
 }
 
 // R3-28 (`api.py:1298-1300`): pane de Pi, omp e Kimi não recarrega: o 409 que o nativo traduz.
@@ -276,7 +263,6 @@ async fn reload_r3_28_pi_omp_and_kimi_panes_are_the_reload_409() {
         rig.agent_runs(&name, program).await;
         assert_eq!(call(&rig, reqwest::Method::POST, &format!("{name}/recarregar"), OWNER).await,
             (409, detail("erro_recarregar_so_sem_terminal", "recarregar só vale para sessão Claude sem terminal")), "{program}");
-        assert_eq!(rig.python.hits_to(&format!("/api/sessions/{name}/recarregar")), 0, "{program}");
     }
 }
 
@@ -292,7 +278,6 @@ async fn reload_r3_29_an_unproven_claude_pane_answers_with_the_real_code() {
         assert_eq!((status, reply["detail"]["code"].as_str(), reply["detail"]["params"]["code"].as_str()),
             (409, Some("erro_recarregar"), Some("claude_terminal_conversation_unproved")), "{token}: {reply}");
     }
-    assert_eq!(rig.python.hits_to("/api/sessions/cl1/recarregar"), 0);
 }
 
 // R3-31, R3-32 (decisão 2): o convidado completo recarrega pelo caminho do dono, e o diário diz quem pediu;
@@ -312,5 +297,4 @@ async fn reload_r3_31_32_the_guest_reloads_through_the_owner_path_and_the_diary_
     crate::fake::wait_until(move || python.diag().iter().any(|line| line["evento"] == "sessao.recarga_pedida"
         && line["codigo"] == "session_reload_requested_by_guest" && line["sessao"] == "cl1")).await;
     assert!(!rig.python.diag().iter().any(|line| line["evento"] == "sessao.recarga_pedida" && line["sessao"] == "sh1"), "recusa não é recarga");
-    assert_eq!(rig.python.hits_to("/api/sessions/sh1/recarregar") + rig.python.hits_to("/api/sessions/cl1/recarregar"), 0);
 }

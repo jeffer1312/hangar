@@ -11,16 +11,25 @@ pub const INITIALIZE: &str = "initialize";
 pub const SHUTDOWN: &str = "shutdown";
 
 /// Capacidades conhecidas e a versão de cada uma que o host entende.
-pub const CAPABILITIES: [(&str, u32); 2] = [
+pub const CAPABILITIES: [(&str, u32); 3] = [
     (crate::work_tracking::CAPABILITY, crate::work_tracking::VERSION),
     (crate::work_actions::CAPABILITY, crate::work_actions::VERSION),
+    (crate::work_review::CAPABILITY, crate::work_review::VERSION),
 ];
+
+/// As capacidades aceitas, como o conector as declara no manifesto: quem instala confere antes de
+/// cadastrar uma que o servidor ainda não conhece.
+pub fn capabilities_json() -> Value {
+    Value::Object(CAPABILITIES.iter().map(|(name, version)| ((*name).to_owned(), json!(version))).collect())
+}
 
 /// Erros públicos do contrato. O nome em `snake_case` é o que viaja em `error.data.code` e nas
 /// respostas HTTP.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorCode {
+    /// `invalid_decision` é o nome do contrato da revisão para a mesma recusa.
+    #[serde(alias = "invalid_decision")]
     InvalidParams,
     UnsupportedCapability,
     UnsupportedVersion,
@@ -32,6 +41,8 @@ pub enum ErrorCode {
     Timeout,
     ProtocolError,
     PayloadTooLarge,
+    /// A revisão mudou de rodada depois da leitura: quem decide relê antes.
+    StaleReview,
 }
 
 impl ErrorCode {
@@ -48,6 +59,7 @@ impl ErrorCode {
             ErrorCode::Timeout => "timeout",
             ErrorCode::ProtocolError => "protocol_error",
             ErrorCode::PayloadTooLarge => "payload_too_large",
+            ErrorCode::StaleReview => "stale_review",
         }
     }
 

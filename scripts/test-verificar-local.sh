@@ -40,7 +40,7 @@ falhou=0
     # Plano só de backend: o cargo muitas vezes não tem o que compilar, e o preparo não espera memória.
     PLANO='backend_rapido'
     passo_preparo || { echo 'FALHOU: preparo de backend esperou memória'; exit 1; }
-    [[ "$(cat "$preparation_log")" == 'build --locked -p hangar-server -p hangar-auth' ]] || {
+    [[ "$(cat "$preparation_log")" == $'build --locked -p hangar-server -p hangar-auth\nbuild --locked -p hangar-server --example orq_contract' ]] || {
         echo 'FALHOU: preparo de backend não compilou o par'; cat "$preparation_log"; exit 1; }
 ) || falhou=1
 
@@ -87,8 +87,8 @@ caso() {   # $1 = arquivos (um por linha), $2 = linux esperado, $3 = windows esp
 
 caso "crates/hangar-server/src/main.rs" "rust backend" "rust"
 caso "crates/hangar-api/src/lib.rs" "rust backend nativo" "rust"
-caso "backend/app/config.py" "backend" "runtime"
-caso "backend/app/runtime_process.py" "rust backend" "rust"
+caso "backend/app/config.py" "backend" ""
+caso "crates/hangar-cano/tests/contract.rs" "rust backend" "rust"
 caso "frontend/src/App.svelte" "backend front" ""
 caso "packages/core/src/api.ts" "backend front" ""
 caso "messages/pt.json" "backend front nativo" ""
@@ -119,7 +119,8 @@ rapido() {   # $1 = arquivos, $2 = linux esperado, $3 = windows esperado
 rapido "crates/hangar-server/src/main.rs" "rust_rapido" ""
 rapido "crates/hangar-api/src/lib.rs" "rust_rapido nativo" ""
 rapido "backend/app/config.py" "backend_rapido" ""
-rapido "backend/app/atomico.py" "backend_rapido" "runtime"
+rapido "backend/app/atomico.py" "backend_rapido" ""
+rapido "crates/hangar-core/src/fs.rs" "rust_rapido" "runtime"
 rapido "frontend/src/App.svelte" "front_rapido" ""
 rapido "packages/core/src/api.ts" "front_rapido" ""
 rapido "messages/pt.json" "front_rapido nativo" ""

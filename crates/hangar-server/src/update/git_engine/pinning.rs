@@ -5,7 +5,8 @@ use super::{
     switches, tail,
 };
 use serde_json::Value;
-const PROTOCOL: &str = "backend/app/rust_server.py";
+// O número que o Python repetia em `RUST_SERVER_PROTOCOL` andou sempre igual a este.
+const PROTOCOL: &str = "crates/hangar-server/src/lib.rs";
 impl Service {
     pub fn protocol_at(&self, rev: &str) -> Option<u64> {
         let output = self.git(&["show", &format!("{rev}:{PROTOCOL}")], 30).ok()?;
@@ -13,8 +14,8 @@ impl Service {
             return None;
         }
         output.stdout.lines().find_map(|line| {
-            line.strip_prefix("RUST_SERVER_PROTOCOL = ")
-                .and_then(|s| s.split_whitespace().next()?.parse().ok())
+            line.strip_prefix("pub const INTERNAL_PROTOCOL: u32 = ")
+                .and_then(|s| s.trim_end().strip_suffix(';')?.parse().ok())
         })
     }
     pub fn release_binary(&self, release: &Release, platform: &str) -> Option<(String, u64)> {
@@ -55,7 +56,7 @@ impl Service {
                     "--no-patch",
                     "--format=%H",
                     "-G",
-                    "^RUST_SERVER_PROTOCOL = ",
+                    "^pub const INTERNAL_PROTOCOL: u32 = ",
                     top,
                     "--",
                     PROTOCOL,

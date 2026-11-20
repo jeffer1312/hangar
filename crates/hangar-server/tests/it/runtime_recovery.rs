@@ -92,7 +92,7 @@ mod adopted_socket {
         let server = fake_app_server(true).await;
         let mut child = app_server_process(&server.endpoint);
         let cell = AdoptionCell::new(&server.endpoint,child.id());
-        let adoption = Adoption { endpoint:server.endpoint.clone(),app_pid:child.id(),cell:cell.clone() };
+        let adoption = Adoption { endpoint:server.endpoint.clone(),token:None,app_pid:child.id(),cell:cell.clone() };
         // Endereço trocado no registro durante a espera.
         let moved = Adoption { endpoint:"ws://127.0.0.1:1".into(),..adoption.clone() };
         assert!(matches!(reconnect(&moved).await,Attempt::Gone(error) if error.code == "codex_adoption_changed"));
@@ -151,21 +151,6 @@ fn projection_failure_preserves_definitive_reply() {
     std::fs::remove_dir(projection.join("session.jsonl")).unwrap();
     let store = Store::open(&path,&projection,State::new("key",1,"session",vec![])).unwrap();
     assert!(matches!(store.state().operations["op"].status,Status::Accepted));
-}
-
-#[test]
-#[ignore = "exige HANGAR_TEST_PYTHON apontando ao Python do backend; conferir também no Windows"]
-fn python_and_rust_share_the_lease() {
-    let python = std::env::var_os("HANGAR_TEST_PYTHON").expect("HANGAR_TEST_PYTHON ausente");
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("lease-á.lock");
-    let lease = acquire_lease(&path).unwrap();
-    let script = "import sys\nfrom app.writer_lease import WriterLease\ntry:\n WriterLease(sys.argv[1])\nexcept BlockingIOError:\n sys.exit(0)\nsys.exit(1)";
-    let backend = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../backend");
-    let result = std::process::Command::new(python).args(["-c",script]).arg(&path)
-        .env("PYTHONPATH",backend).output().unwrap();
-    assert!(result.status.success());
-    drop(lease);
 }
 
 #[test]

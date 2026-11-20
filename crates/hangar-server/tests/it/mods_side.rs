@@ -87,9 +87,9 @@ async fn the_band_of_a_session_rust_does_not_own_comes_from_the_rust_bridge_not_
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("conversation.jsonl");
     append_lines(&path, 0..1);
-    let (python, upstream) = spawn_fake().await;
+    let (python, _) = spawn_fake().await;
     python.set_info(info_json("claude-headless", &path));
-    let server = spawn_state(AppState::new(config(upstream, "127.0.0.1"))).await;
+    let server = spawn_state_for(&python, AppState::new(config("127.0.0.1"))).await;
     let mut events = sse(open_events(server, "s", "", &[]).await);
     let post = |route: &str, body: Value| client().post(format!("http://{server}/api/plugin/{route}"))
         .header("content-type", "application/json").body(body.to_string()).send();
@@ -100,5 +100,4 @@ async fn the_band_of_a_session_rust_does_not_own_comes_from_the_rust_bridge_not_
     assert_eq!(ui, json!({"above": null, "panes": []}));
     let toast: Value = serde_json::from_str(&next_named(&mut events, "plugin_toast").await.data).unwrap();
     assert_eq!(toast["text"], "do rust");
-    assert_eq!(python.hits_to("/api/plugin/ui") + python.hits_to("/api/plugin/toast"), 0);
 }

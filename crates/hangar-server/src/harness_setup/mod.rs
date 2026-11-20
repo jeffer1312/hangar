@@ -22,7 +22,8 @@ pub fn sync_startup(service: &AccountService) {
     if !report.errors.is_empty() {
         tracing::warn!(code = "harness_startup_skills_failed", errors = ?report.errors, "ponte de skills não conferida na subida");
     }
-    // Os do pós-aplicar da configuração compartilhada, menos a trava do tmux, que não é da subida.
+    // Os do pós-aplicar da configuração compartilhada, menos a instalação da trava do tmux, que não é
+    // da subida (a que já existe é consertada pelo próprio `reconcile`).
     let names: Vec<&str> = crate::config_sync::after::HOOKS
         .iter()
         .copied()
@@ -31,8 +32,13 @@ pub fn sync_startup(service: &AccountService) {
     if let Err(errors) = hooks::sync_installers(service, &repo, &names) {
         tracing::warn!(code = "harness_startup_hooks_failed", ?errors, "hooks do Claude não conferidos na subida");
     }
-    if let Err(error) = codex_hooks::sync(&service.env.codex_default, &repo, cfg!(windows)) {
+    if let Err(error) = codex_hooks::sync(&service.env.codex_default, &service.env.home, cfg!(windows)) {
         tracing::warn!(code = "harness_startup_codex_hooks_failed", %error, "hooks do Codex não conferidos na subida");
+    }
+    // As entradas antigas do Kimi (uma por raiz de venv) viram uma por evento já na subida; o que
+    // não havia continua sendo do `harness-setup`.
+    if let Err(error) = kimi_hooks::repair(&service.env) {
+        tracing::warn!(code = "harness_startup_kimi_hooks_failed", %error, "hooks do Kimi não conferidos na subida");
     }
 }
 
@@ -45,7 +51,7 @@ pub fn sync_hooks(service: &AccountService, repo: &Path) -> Value {
             result["kimi"] = serde_json::json!([]);
         }
     }
-    match codex_hooks::sync(&service.env.codex_default, repo, cfg!(windows)) {
+    match codex_hooks::sync(&service.env.codex_default, &service.env.home, cfg!(windows)) {
         Ok(events) => result["codex"] = serde_json::json!(events),
         Err(error) => {
             tracing::warn!(%error,"Hooks Codex não atualizados");

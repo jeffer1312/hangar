@@ -11,7 +11,6 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
 
-const VERSION: &str = hangar_codex_transfer::SUPPORTED_VERSION;
 fn error(code: &str) -> TransferError {
     TransferError::new(code)
 }
@@ -170,6 +169,10 @@ struct ImportClient {
     service: AccountService,
     models: Arc<crate::dictation::catalog::Models>,
     account_home: PathBuf,
+    // O catálogo de modelos muda com a versão do cliente; vale a do Codex que importa.
+    codex_version: String,
+    /// Modo de colaboração anunciado por thread, e o aviso para quem espera por ele.
+    modes: Arc<(Mutex<HashMap<String, String>>, tokio::sync::Notify)>,
 }
 impl NativeImport for ImportClient {
     async fn request(&mut self, method: &str, params: Value) -> Result<Value, TransferError> {
@@ -180,7 +183,13 @@ impl NativeImport for ImportClient {
     }
     async fn raw_model(&mut self, config: &Value, model: &str) -> Result<Value, TransferError> {
         self.models
-            .raw_model(&self.service, &self.account_home, config, model, VERSION)
+            .raw_model(
+                &self.service,
+                &self.account_home,
+                config,
+                model,
+                &self.codex_version,
+            )
             .await
             .map_err(error)
     }
@@ -193,6 +202,27 @@ impl NativeImport for ImportClient {
         self.record.boundary = boundary;
         self.store.save(&self.record)
     }
+    async fn mode_applied(&mut self, thread: &str, wanted: &str) -> bool {
+        let (modes, changed) = &*self.modes;
+        let current = || modes.lock().unwrap_or_else(|e| e.into_inner()).get(thread).cloned();
+        let wait = async {
+            loop {
+                // Inscrito antes de olhar o mapa: um anúncio entre a leitura e a espera não se perde.
+                let notified = changed.notified();
+                tokio::pin!(notified);
+                notified.as_mut().enable();
+                if current().as_deref() == Some(wanted) {
+                    return;
+                }
+                notified.await;
+            }
+        };
+        if tokio::time::timeout(Duration::from_secs(10), wait).await.is_ok() {
+            return true;
+        }
+        tracing::warn!(transfer=%self.record.id,wanted,announced=?current(),"o Codex não anunciou o modo pedido na importação");
+        false
+    }
 }
 impl ImportClient {
     async fn open(
@@ -201,6 +231,7 @@ impl ImportClient {
         account: &crate::accounts::catalog::Account,
         record: &TransferRecord,
         limit: usize,
+        codex_version: String,
     ) -> Result<Self, TransferError> {
         let store = store(&service.env.home);
         let mut private = store.runtime(&record.id)?;
@@ -275,15 +306,30 @@ impl ImportClient {
             return Err(e);
         }
         let responder = client.clone();
+        let modes: Arc<(Mutex<HashMap<String, String>>, tokio::sync::Notify)> = Arc::default();
+        let announced = modes.clone();
         let drain = tokio::spawn(async move {
             while let Some(event) = incoming.recv().await {
-                if let Incoming::Request { id, .. } = event {
-                    let _ = responder
-                        .respond(
-                            id,
-                            Err((-32601, "a importação não executa ferramentas".into())),
-                        )
-                        .await;
+                match event {
+                    Incoming::Request { id, .. } => {
+                        let _ = responder
+                            .respond(
+                                id,
+                                Err((-32601, "a importação não executa ferramentas".into())),
+                            )
+                            .await;
+                    }
+                    Incoming::Notification { method, params } if method == "thread/settings/updated" => {
+                        let mode = params["threadSettings"]["collaborationMode"]["mode"].as_str();
+                        if let (Some(thread), Some(mode)) = (params["threadId"].as_str(), mode) {
+                            let (map, changed) = &*announced;
+                            map.lock().unwrap_or_else(|e| e.into_inner()).insert(thread.to_owned(), mode.to_owned());
+                            changed.notify_waiters();
+                        } else {
+                            tracing::warn!("thread/settings/updated sem threadId ou modo de colaboração na importação");
+                        }
+                    }
+                    Incoming::Notification { .. } => {}
                 }
             }
         });
@@ -297,6 +343,8 @@ impl ImportClient {
             service,
             models,
             account_home: account.home.clone(),
+            codex_version,
+            modes,
         })
     }
     async fn close(&mut self) -> Result<(), TransferError> {
@@ -324,10 +372,12 @@ impl ImportClient {
     }
 }
 
+/// A conta de destino e a versão do Codex que vai importar. A versão não é comparada com nenhuma:
+/// a importação confere cada resposta que usa, e o workflow `codex-schema` confere o Codex novo.
 async fn check_target(
     service: &AccountService,
     id: &str,
-) -> Result<crate::accounts::catalog::Account, TransferError> {
+) -> Result<(crate::accounts::catalog::Account, String), TransferError> {
     let accounts = service
         .visible_codex_accounts()
         .map_err(|_| error("session_transfer_unknown_account").with_status(400))?;
@@ -377,13 +427,10 @@ async fn check_target(
         .and_then(Result::ok)
         .filter(|o| o.status.success())
         .ok_or_else(|| error("session_transfer_native_unavailable"))?;
-    if !String::from_utf8_lossy(&output.stdout)
-        .split_whitespace()
-        .any(|s| s == VERSION)
-    {
-        return Err(error("session_transfer_codex_version_unsupported"));
-    }
-    Ok(account)
+    // O mesmo leitor do catálogo: os dois pedem a lista de modelos com a mesma versão.
+    let version = crate::codex_tui::update::cli_version(&String::from_utf8_lossy(&output.stdout))
+        .ok_or_else(|| error("session_transfer_native_unavailable"))?;
+    Ok((account, version))
 }
 
 impl RuntimeRegistry {
@@ -545,7 +592,7 @@ impl RuntimeRegistry {
             return Err(error("session_transfer_source_changed"));
         }
         let (permission, collaboration) = permission(&current)?;
-        let account = check_target(&service, &request.credential_id).await?;
+        let (account, codex_version) = check_target(&service, &request.credential_id).await?;
         let (catalog, _) = models
             .get(
                 &service,
@@ -623,7 +670,7 @@ impl RuntimeRegistry {
             hangar_conversation_transfer::verify_source(record.source.as_ref().unwrap())?;
             record.source.as_mut().unwrap().selected_uuids=context.selected_uuids.iter().cloned().collect();store.save(&record)?;
             let options=ImportOptions{cwd:current.spec.cwd.clone(),account_home:account.home.to_string_lossy().into_owned(),account_id:account.id.clone(),transfer_id:record.id.clone(),model:request.model,effort:request.effort,permission_mode:permission.into(),collaboration_mode:collaboration.into()};
-            let mut client=ImportClient::open(service,models,&account,&record,hangar_codex_transfer::import_output_limit(&context)).await?;
+            let mut client=ImportClient::open(service,models,&account,&record,hangar_codex_transfer::import_output_limit(&context),codex_version).await?;
             let imported=async {
                 client.request("initialize",json!({"clientInfo":{"name":"hangar","title":null,"version":"0.1.0"},"capabilities":{"experimentalApi":true}})).await?;
                 client.client.notify("initialized",json!({})).await.map_err(|_|error("session_transfer_native_unavailable"))?;
@@ -919,11 +966,7 @@ mod tests {
         let env = crate::accounts::environment::AccountEnvironment::from_map(
             [("HOME".into(), home.to_string_lossy().into_owned())].into(),
         );
-        let runtime = RuntimeRegistry::new(
-            "127.0.0.1:9".parse().unwrap(),
-            "fixture".into(),
-            "fixture".into(),
-        )
+        let runtime = RuntimeRegistry::new("fixture".into())
         .with_codex_environment(env);
         let origin = json!({"name":"session","provider":"claude","key":"11111111111111111111111111111111","cwd":home,"config_dir":home.join(".claude"),"session_id":"original","jsonl":home.join("original.jsonl"),"headless":true,"permission_mode":"default"});
         let original =
@@ -988,11 +1031,7 @@ mod tests {
         let env = crate::accounts::environment::AccountEnvironment::from_map(
             [("HOME".into(), home.to_string_lossy().into_owned())].into(),
         );
-        let runtime = RuntimeRegistry::new(
-            "127.0.0.1:9".parse().unwrap(),
-            "fixture".into(),
-            "fixture".into(),
-        )
+        let runtime = RuntimeRegistry::new("fixture".into())
         .with_codex_environment(env);
         let record = TransferRecord {
             id: "11234567-89ab-4cde-8fab-0123456789ab".into(),
@@ -1050,7 +1089,7 @@ mod tests {
             home: home.join(".codex"),
             is_default: true,
         };
-        let failure = ImportClient::open(service, Default::default(), &account, &record, 1)
+        let failure = ImportClient::open(service, Default::default(), &account, &record, 1, "0.0.0".into())
             .await
             .err()
             .unwrap();
@@ -1066,11 +1105,7 @@ mod tests {
         let env = crate::accounts::environment::AccountEnvironment::from_map(
             [("HOME".into(), home.to_string_lossy().into_owned())].into(),
         );
-        let runtime = RuntimeRegistry::new(
-            "127.0.0.1:9".parse().unwrap(),
-            "fixture".into(),
-            "fixture".into(),
-        )
+        let runtime = RuntimeRegistry::new("fixture".into())
         .with_codex_environment(env);
         let mut source = std::process::Command::new("sleep").arg("30").spawn().unwrap();
         let root = i64::from(source.id());
@@ -1110,11 +1145,7 @@ mod tests {
         let env = crate::accounts::environment::AccountEnvironment::from_map(
             [("HOME".into(), home.to_string_lossy().into_owned())].into(),
         );
-        let runtime = RuntimeRegistry::new(
-            "127.0.0.1:9".parse().unwrap(),
-            "fixture".into(),
-            "fixture".into(),
-        )
+        let runtime = RuntimeRegistry::new("fixture".into())
         .with_codex_environment(env);
         let store = store(home);
         let record = |id: &str, name: &str| TransferRecord {

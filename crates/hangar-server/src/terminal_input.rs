@@ -47,6 +47,24 @@ pub struct InputFacts {
     #[serde(skip)]
     pub screen: Option<String>,
 }
+
+impl InputFacts {
+    /// A espera só por subagentes mantém o registro nativo ocupado, mas o Claude aceita
+    /// um novo prompt de primeiro plano. A exceção vale apenas para a entrega.
+    pub(crate) fn foreground_idle(&self) -> bool {
+        self.idle || self.ready && !self.open_question && self.screen.as_deref().is_some_and(|screen| {
+            let state = crate::terminal_state::analyze(screen);
+            state.label.as_deref()
+                .and_then(|label| label.strip_prefix("Waiting for "))
+                .and_then(|label| label.split_once(" background "))
+                .is_some_and(|(count, suffix)| {
+                    count.parse::<u32>().is_ok_and(|count| count > 0)
+                        // O rótulo pode trazer reticências e tempo depois do texto.
+                        && (suffix.starts_with("agent to finish") || suffix.starts_with("agents to finish"))
+                })
+        })
+    }
+}
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 /// `Focus` não entrega texto: o plugin devolve o teclado ao prompt, de onde estiver nos mods, sem mexer no
@@ -534,7 +552,8 @@ impl PaneFormats {
     }
 }
 /// As teclas da reserva por teclado (T5): uma por chamada, e só os dois acordes medidos juntos.
-const MODS_KEYS: [&[&str]; 4] = [&["C-x", "Tab"], &["Tab"], &["Enter"], &["C-x", "x"]];
+const SEND_NOW_HINTS: [&str; 2] = ["ctrl+x ctrl+s to send now", "ctrl+enter to send now"];
+const MODS_KEYS: [&[&str]; 4] =[&["C-x", "Tab"], &["Tab"], &["Enter"], &["C-x", "x"]];
 
 /// Retrato comparável do menu: mover cursor e marcar caixas não troca a pergunta.
 pub fn interaction_pane(screen: &str) -> Result<Value, InteractionError> {
@@ -1366,7 +1385,9 @@ impl TerminalDriver {
         let _serial = self.serial.lock().await;
         let screen = match self.capture_inner().await { Ok(s) => s, Err(e) => return Self::failed(e, DeliveryStage::Steer) };
         // Sem a marca não se sabe se a TUI nunca teve fila ou já a consumiu: adiado com o código, nunca sucesso.
-        if !screen.contains("ctrl+x ctrl+s to send now") { return DeliveryResult::new(Disposition::Deferred, DeliveryStage::Steer, "no_queued_input"); }
+        // O Claude Code mostra o atalho que o terminal consegue mandar; os dois são o mesmo `chat:sendNow`, e o
+        // `ctrl+x ctrl+s` passa em qualquer terminal.
+        if !SEND_NOW_HINTS.iter().any(|hint| screen.contains(hint)) { return DeliveryResult::new(Disposition::Deferred, DeliveryStage::Steer, "no_queued_input"); }
         for key in ["C-x", "C-s"] { if let Err(e) = self.key_inner(key).await { return DeliveryResult::new(Disposition::Unknown, DeliveryStage::Steer, e.code); } }
         DeliveryResult::new(Disposition::Accepted, DeliveryStage::Steer, "steered")
     }

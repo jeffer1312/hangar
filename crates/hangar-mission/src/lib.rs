@@ -2,6 +2,7 @@
 //!
 //! Não conhece fornecedor nem conector: guarda o que o dono e as sessões informam sobre cada ticket.
 pub mod http;
+pub mod link;
 pub mod model;
 pub mod store;
 

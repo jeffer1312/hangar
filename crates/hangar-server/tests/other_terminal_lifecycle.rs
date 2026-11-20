@@ -239,11 +239,7 @@ fn registry_with_interactions(
         ]),
     );
     let registry = Arc::new(
-        RuntimeRegistry::new(
-            "127.0.0.1:9".parse().unwrap(),
-            "test-only".into(),
-            "lifecycle-test".into(),
-        )
+        RuntimeRegistry::new("lifecycle-test".into())
         .with_interactions(interactions)
         .with_codex_environment(env),
     );
@@ -515,10 +511,7 @@ fn raw_list(root: &Path, agent: bool) -> Arc<hangar_server::list::bridge::ListBr
             procs: Arc::new(Processes { root: root.into() }),
             dirs: Some(dirs(root)),
         },
-        hangar_server::list::facts::FactsClient::new(
-            "127.0.0.1:9".parse().unwrap(),
-            "test-only".into(),
-        ),
+        hangar_server::list::facts::FactsClient::new(),
     ))
 }
 #[cfg(unix)]
@@ -597,7 +590,7 @@ async fn other_lifecycle_list_tick_does_not_rediscover_an_adopted_session() {
     );
     options.io_override = Some(Io::live());
     options.tick = Duration::from_secs(3600);
-    let registry = Arc::new(RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(), "test-only".into(), "lifecycle-test".into()));
+    let registry = Arc::new(RuntimeRegistry::new("lifecycle-test".into()));
     let (counted, ready) = (finds.clone(), target.clone());
     registry
         .bind_other(
@@ -1095,7 +1088,7 @@ async fn other_lifecycle_list_and_history_share_the_proven_actor_without_python(
     assert_eq!(row.jsonl.as_deref(), Some(target.transcript.to_str().unwrap()));
     assert_eq!(row.last_reply.as_deref(), Some("oi!"));
     let mut state = AppState::new(Config {
-        listen:"127.0.0.1:0".parse().unwrap(), upstream:"127.0.0.1:9".parse().unwrap(),
+        listen:"127.0.0.1:0".parse().unwrap(),
         internal_secret:"test-only".into(), auth_token:"owner-test".into(), log_path:None, trusted:TrustedHosts::parse(""),
     });
     state.origins_home = root.path().to_owned();
@@ -1166,7 +1159,7 @@ async fn other_lifecycle_public_select_and_answer_refuse_an_open_terminal_panel(
                 }
             }).await.unwrap();
             let mut state = AppState::new(Config {
-                listen: "127.0.0.1:0".parse().unwrap(), upstream: "127.0.0.1:9".parse().unwrap(),
+                listen: "127.0.0.1:0".parse().unwrap(),
                 internal_secret: "test-only".into(), auth_token: "owner-test".into(),
                 log_path: None, trusted: TrustedHosts::parse(""),
             });

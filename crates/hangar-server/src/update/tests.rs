@@ -24,7 +24,7 @@ fn package(version: &str, commit: &str, files: &[(&str, &str)]) -> Vec<u8> { pac
 fn package_keyed(version: &str, commit: &str, dist_key: Option<&str>, files: &[(&str, &str)]) -> Vec<u8> {
     let manifest = Manifest {
         version: version.into(), commit: commit.into(), channel: "latest".into(), protocol: PROTOCOL, api: 1,
-        os: PLATFORM.into(), dist_key: dist_key.map(str::to_owned),
+        os: PLATFORM.into(), dist_key: dist_key.map(str::to_owned), boot: None,
         files: files.iter().map(|(p, c)| (p.to_string(), sha(c.as_bytes()))).collect(),
     };
     let mut builder = tar::Builder::new(flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast()));
@@ -91,7 +91,7 @@ fn version_dir(layout: &Layout, version: &str) -> PathBuf {
     let dir = layout.versions().join(version);
     std::fs::create_dir_all(&dir).unwrap();
     let manifest = Manifest { version: version.into(), commit: format!("commit-{version}"), channel: "latest".into(), protocol: PROTOCOL,
-        api: 1, os: PLATFORM.into(), dist_key: None, files: BTreeMap::new() };
+        api: 1, os: PLATFORM.into(), dist_key: None, boot: None, files: BTreeMap::new() };
     std::fs::write(dir.join("manifest.json"), serde_json::to_vec(&manifest).unwrap()).unwrap();
     dir
 }
@@ -125,7 +125,7 @@ struct FakeRestart {
 }
 
 impl Restarter for FakeRestart {
-    async fn restart(&self) -> Result<(), String> {
+    async fn restart(&self, _why: stop_intent::RestartIntent) -> Result<(), String> {
         let n = self.count.fetch_add(1, Ordering::SeqCst) + 1;
         if self.fail_first && n == 1 { return Err("systemctl saiu com 1".into()); }
         Ok(())
@@ -217,6 +217,38 @@ async fn update_check_returns_the_entry_only_when_newer() {
     assert_eq!(check(&client, &release, "outro-os", None).await.unwrap_err().code(), "update_no_platform");
     let missing = Release { channel: "beta".into(), ..release };
     assert_eq!(check(&client, &missing, PLATFORM, None).await.unwrap_err().code(), "update_index_unavailable");
+}
+
+/// Conexão que cai no meio do corpo do índice não vira atualização falha:
+/// a leitura tenta de novo e a segunda resposta, inteira, vale.
+#[tokio::test]
+async fn update_index_cut_mid_body_is_read_again() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let fake = FakeRelease::new().await;
+    let entry = fake.publish(NEW, b"qualquer", None);
+    let index = std::fs::read(fake.root.path().join("package-latest/package-latest.json")).unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        for cut in [true, false] {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            // A requisição inteira antes da resposta: fechar com bytes por ler manda RST e perde a resposta.
+            let mut request = Vec::new();
+            let mut chunk = [0u8; 1024];
+            while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+                let n = socket.read(&mut chunk).await.unwrap();
+                if n == 0 { break; }
+                request.extend_from_slice(&chunk[..n]);
+            }
+            let head = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", index.len());
+            socket.write_all(head.as_bytes()).await.unwrap();
+            socket.write_all(if cut { &index[..index.len() / 2] } else { &index }).await.unwrap();
+        }
+    });
+    let release = Release { base_url: base, channel: "latest".into() };
+    let client = crate::http_client().no_proxy().build().unwrap();
+    assert_eq!(super::entry(&client, &release, PLATFORM).await.unwrap(), entry);
+    server.await.unwrap();
 }
 
 #[tokio::test]
@@ -449,7 +481,7 @@ async fn update_old_server_answering_after_restart_fails_even_without_a_known_pi
     let restart = FakeRestart::default();
     // Antes do reinício ninguém diz o pid; depois, um processo novo, mas da versão de antes.
     let health = FakeHealth { restarts: restart.count.clone(), reading: Box::new(|n| match n {
-        0 => Reading::NotRust("sem health".into()),
+        0 => Reading::Down("sem health".into()),
         n => rust(100 + n as u32, OLD),
     }) };
 
@@ -517,7 +549,7 @@ fn update_running_package_comes_from_the_root_above_the_binary() {
 }
 
 #[tokio::test]
-async fn update_python_only_health_is_a_failure() {
+async fn update_health_404_after_restart_is_a_failure() {
     let fake = FakeRelease::new().await;
     let machine = Machine::new();
     let old = machine.current();
@@ -526,7 +558,7 @@ async fn update_python_only_health_is_a_failure() {
     let release = fake.release();
     let restart = FakeRestart::default();
     let health = FakeHealth { restarts: restart.count.clone(), reading: Box::new(|n| match n {
-        1 => Reading::NotRust("404 em /__hangar_server/health".into()),
+        1 => Reading::Down("404 em /__hangar_server/health sem o hangar-server".into()),
         n => served(n),
     }) };
 
@@ -534,7 +566,7 @@ async fn update_python_only_health_is_a_failure() {
 
     let Outcome::Failed { voltou, erro, .. } = outcome else { panic!("{outcome:?}") };
     assert!(voltou, "{erro}");
-    assert!(erro.contains("rust"), "{erro}");
+    assert!(erro.contains("404 em /__hangar_server/health"), "{erro}");
     assert_eq!(machine.current(), old);
 }
 
@@ -793,6 +825,35 @@ fn update_steps_read_like_python_and_register_after_the_proof() {
     assert!(!steps::applied(&state_dir).unwrap().contains("2026-01-07-c"));
 }
 
+/// P-44: o vizinho com o mesmo comando não roda de novo, salvo quando a prova dele falta: aí roda
+/// para ele, e só registra se a prova aparecer.
+#[test]
+fn update_steps_rerun_the_shared_command_when_the_neighbours_proof_is_missing() {
+    let home = tempfile::tempdir().unwrap();
+    let root = home.path().join("versao");
+    let docs = root.join("docs/atualizacoes");
+    std::fs::create_dir_all(&docs).unwrap();
+    let state_dir = home.path().join(".hangar-update");
+    std::fs::write(docs.join("2026-02-01-a.md"), step_doc("2026-02-01-a", "maquina", "instalar", "prova-a")).unwrap();
+    std::fs::write(docs.join("2026-02-02-b.md"), step_doc("2026-02-02-b", "maquina", "instalar", "prova-b")).unwrap();
+
+    // A primeira rodada deixa só a prova do primeiro; a segunda, a do vizinho.
+    struct Proofs { root: PathBuf, calls: Mutex<Vec<PathBuf>> }
+    impl StepRunner for Proofs {
+        fn run(&self, _command: &str, cwd: &Path) -> StepRun {
+            let mut calls = self.calls.lock().unwrap();
+            calls.push(cwd.to_path_buf());
+            std::fs::write(self.root.join(if calls.len() == 1 { "prova-a" } else { "prova-b" }), "").unwrap();
+            StepRun { code: Some(0), output: String::new() }
+        }
+    }
+    let runner = Proofs { root: root.clone(), calls: Mutex::new(Vec::new()) };
+    let state = StateFile::new(&state_dir);
+    let done = apply_machine_steps(&root, home.path(), &state_dir, &runner, &state).unwrap();
+    assert_eq!(done, ["2026-02-01-a", "2026-02-02-b"]);
+    assert_eq!(*runner.calls.lock().unwrap(), vec![root.clone(), root.clone()], "roda de novo, na raiz da versão, para o vizinho sem prova");
+}
+
 /// Registro ilegível é erro, nunca "nada aplicado": nem some o histórico nem se roda tudo de novo.
 #[test]
 fn update_steps_unreadable_registry_is_an_error_and_is_kept() {
@@ -867,10 +928,10 @@ fn update_shell_runner_does_not_wait_for_a_grandchild_and_kills_the_tree_on_time
 }
 
 #[tokio::test]
-async fn update_http_health_tells_rust_from_python_and_down() {
+async fn update_http_health_tells_the_server_from_another_program_and_down() {
     let root = tempfile::tempdir().unwrap();
     let (python, server) = serve(root.path().to_path_buf()).await;
-    assert!(matches!(HttpHealth::new(&python).read().await, Reading::NotRust(_)), "404 no health = só o Python");
+    assert!(matches!(HttpHealth::new(&python).read().await, Reading::Down(d) if d.contains("404")), "404 no health = não é o hangar-server");
     std::fs::create_dir_all(root.path().join("__hangar_server")).unwrap();
     std::fs::write(root.path().join("__hangar_server/health"), r#"{"ok":true,"protocol":89,"pid":4321}"#).unwrap();
     assert_eq!(HttpHealth::new(&python).read().await, Reading::Rust { protocol: 89, pid: Some(4321), commit: None }, "modo desenvolvedor");

@@ -34,7 +34,7 @@ const VOICE_NEEDS_SESSION: &str = "a assistente de voz não é uma sessão: pass
 quem agir (tool `sessions`)";
 const JEV_OFF: &str = "o Jev não chegou ligado nesta chamada: ou a sessão nasceu sem ele (abra uma com \
 `hangar-send --new <nome> <cwd> --jev`, ou marque o Jev em \"Mais opções\" ao criar), ou o MCP hangar desta \
-conta foi registrado antes do cabeçalho X-Hangar-Jev (rode scripts/registrar-mcp.py e abra a sessão de novo). \
+conta foi registrado antes do cabeçalho X-Hangar-Jev (rode hangar-server mcp-register e abra a sessão de novo). \
 Sem ele, use browser e browser_batch.";
 const JEV_UNCONFIGURED: &str = "o Jev não está configurado neste servidor: cadastre a chave em Configurações do servidor > Jev.";
 const NAV_VERBS: [&str; 26] = ["snapshot", "click", "fill", "type", "press", "hover", "wait", "eval", "tema", "layout", "console",
@@ -129,7 +129,7 @@ struct VaultFile { entry: String, reason: String }
 struct VaultFill { entry: String, field: String, #[serde(rename = "ref")] target: String, reason: String }
 
 const VAULT_NO_KEY: &str = "erro_cofre_sem_chave_sessao: o cofre só atende uma sessão identificada pela chave dela (X-Hangar-Key, \
-a CP_SESSION_KEY); registre o MCP de novo (scripts/registrar-mcp.py) e reabra a sessão";
+a CP_SESSION_KEY); registre o MCP de novo (hangar-server mcp-register) e reabra a sessão";
 /// O alvo que o cartão mostra cabe no limite da dona.
 const TARGET_CHARS: usize = 2000;
 
@@ -640,7 +640,11 @@ impl Tools {
                     Err(_)=>return Err("ticket_remote_unavailable: não foi possível conferir o ticket na outra máquina".into()),
                 }
             }
-            if owner.is_none() && status==404 {return Err(coded(status,&value));}
+            if owner.is_none() && status==404 {
+                // Sem vínculo, a revisão ainda pode vir pela branch.
+                crate::work_review_watch::refresh_session(&self.st,&me);
+                return Err(coded(status,&value));
+            }
         }
         if let Some((owner,life))=owner.as_ref().zip(life.as_ref()) {
             let (store,name,life,owner,gid)=(self.st.mission.clone(),me.clone(),life.clone(),owner.clone(),group.as_ref().map(|group|group.gid.clone()));
@@ -650,7 +654,11 @@ impl Tools {
                 Ok::<_,hangar_mission::store::Error>(())
             }).await.map_err(|_|"ticket_remote_unavailable: gravação do vínculo interrompida")?.map_err(|_|"ticket_remote_unavailable: não foi possível guardar o vínculo")?;
         }
-        if a.etapa.is_none() && a.nota.is_none() && a.evidencias.is_empty() {return Ok(dict(value));}
+        if a.etapa.is_none() && a.nota.is_none() && a.evidencias.is_empty() {
+            // A skill chama a leitura no meio do turno para a revisão andar; ticket de outra máquina fica fora.
+            if owner.is_none() {crate::work_review_watch::refresh_session(&self.st,&me);}
+            return Ok(dict(value));
+        }
         let evidence:Vec<Value>=a.evidencias.into_iter().map(|e|json!({"path":e.caminho,"caption":e.legenda})).collect();
         let mut body=json!({"session":session,"key":key,"group_id":group.map(|group|group.gid),"connector":value["item"]["connector"],"ticket_id":value["item"]["ticket_id"],"history_revision":value["item"]["history"].as_array().map(Vec::len),"stage":a.etapa,"note":a.nota,"evidence":evidence});
         if let Some(owner)=owner {
@@ -664,6 +672,7 @@ impl Tools {
             return Ok(dict(value));
         }
         let (status,value)=self.route_from(Some(&me),Method::POST,"/api/mission/report",Some(body)).await;
+        crate::work_review_watch::refresh_session(&self.st,&me);
         if (200..300).contains(&status) {Ok(dict(value))} else {Err(coded(status,&value))}
     }
 
@@ -768,9 +777,9 @@ impl Tools {
         if !env.iter().any(|(k, v)| k == "TYPESAFE_API_KEY" && !v.is_empty()) { return Err(JEV_UNCONFIGURED.into()); }
         let node = crate::runtime::process::resolve_program("node", env.iter().map(|(k, v)| (k, v)))
             .ok_or("node não encontrado no PATH do backend: o objetivo roda pelo hangar-preview")?;
-        // A raiz da instalação; sem ela, o pai da pasta de trabalho (`backend/`), herdada do Python.
+        // A raiz da instalação; sem ela, a da cópia onde o servidor roda.
         let home = crate::accounts::environment::AccountEnvironment::capture().home;
-        let script = crate::install_root::root(&home).unwrap_or_else(|| std::env::current_dir().unwrap_or_default().join(".."))
+        let script = crate::install_root::root(&home).or_else(crate::session_open::cli::server_root).unwrap_or_default()
             .join("scripts").join("hangar-preview");
         // Mesma trava dos verbos: um `browser` no meio refaria o snapshot e trocaria as refs do Jev.
         let lock = self.nav_lock(&target);

@@ -1,5 +1,3 @@
-use hangar_server::{auth::TrustedHosts, config::Config, routes::AppState};
-
 #[test]
 fn native_storage_parses_quoted_keys_tables_and_duplicates() {
     use hangar_server::accounts::{catalog::Account, codex_login::validate_storage};
@@ -50,7 +48,7 @@ fn codex_login_routes_are_owned() {
     use axum::http::Method;
     for method in [Method::POST, Method::GET, Method::DELETE] {
         assert!(
-            hangar_server::migration_status::rust_route(&method, "/api/codex-contas/alpha/login"),
+            hangar_server::owned_routes::rust_route(&method, "/api/codex-contas/alpha/login"),
             "login Codex ainda passa pelo Python: {method}"
         );
     }
@@ -60,42 +58,10 @@ fn codex_login_routes_are_owned() {
 fn legacy_device_routes_are_owned() {
     use axum::http::Method;
     for method in [Method::POST, Method::GET, Method::DELETE] {
-        assert!(hangar_server::migration_status::rust_route(&method, "/api/credenciais/codex/login"),
+        assert!(hangar_server::owned_routes::rust_route(&method, "/api/credenciais/codex/login"),
             "device flow legado ainda passa pelo Python: {method}");
     }
-    assert!(hangar_server::migration_status::rust_route(&Method::GET, "/api/credenciais/codex"));
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn http_probe_process() {
-    let Ok(upstream) = std::env::var("ACCOUNT_HTTP_UPSTREAM") else {
-        return;
-    };
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let mut state = AppState::new(Config {
-        listen: addr,
-        upstream: upstream.parse().unwrap(),
-        internal_secret: "contract-internal".into(),
-        auth_token: "contract-only".into(),
-        log_path: None,
-        trusted: TrustedHosts::parse("127.0.0.1"),
-    });
-    state.accounts.env.terminal_fixture = Some(super::accounts_catalog::reference_mux(upstream));
-    if let Ok(base) = std::env::var("ACCOUNT_DEVICE_UPSTREAM") {
-        use hangar_server::accounts::codex_device_login::{DeviceOAuth,DeviceLogins};
-        state.accounts.device_logins=DeviceLogins::new(DeviceOAuth::new(&base).unwrap());
-    }
-    println!("ACCOUNT_HTTP:{addr}");
-    use std::io::Write;
-    std::io::stdout().flush().unwrap();
-    hangar_server::serve_until_with_state(
-        listener,
-        state,
-        hangar_server::parent_gone(tokio::io::stdin()),
-    )
-    .await
-    .unwrap();
+    assert!(hangar_server::owned_routes::rust_route(&Method::GET, "/api/credenciais/codex"));
 }
 
 #[tokio::test]
@@ -148,13 +114,8 @@ process.stdout.write(JSON.stringify({id:m.id,result})+'\n');});"#;
     )
     .unwrap();
     let key = AccountKey::new(Provider::Codex, &account.home).unwrap();
-    let address = "127.0.0.1:9".parse().unwrap();
     let invalidator = CodexInvalidator::new(Arc::default());
-    let runtime = Arc::new(hangar_server::runtime::gateway::RuntimeRegistry::new(
-        address,
-        "synthetic".into(),
-        "test".into(),
-    ));
+    let runtime = Arc::new(hangar_server::runtime::gateway::RuntimeRegistry::new("test".into()));
     let attempt = service
         .start_codex_login(
             &account,
@@ -262,7 +223,7 @@ async fn native_secondary_writer_retains_ownership(start: bool) {
         }
     }));
     let key = AccountKey::new(Provider::Codex, &root.path().join(".codex")).unwrap();
-    let runtime = Arc::new(hangar_server::runtime::gateway::RuntimeRegistry::new(address,"synthetic".into(),"fixture".into()));
+    let runtime = Arc::new(hangar_server::runtime::gateway::RuntimeRegistry::new("fixture".into()));
     let invalidator = CodexInvalidator::new(Arc::default());
     let operation = |service: AccountService| { let (runtime, invalidator) = (runtime.clone(), invalidator.clone());
         async move {
@@ -334,7 +295,7 @@ async fn device_state_reads_destinations_locally_and_keeps_strict_profile_error(
 
 #[test]
 fn codex_sign_out_route_is_owned() {
-    assert!(hangar_server::migration_status::rust_route(
+    assert!(hangar_server::owned_routes::rust_route(
         &axum::http::Method::POST,
         "/api/codex-contas/alpha/logout"
     ));
@@ -371,10 +332,9 @@ process.stdout.write(JSON.stringify({id:m.id,result})+'\n');});"#;
     }
     environment.remove("CODEX_HOME");
     let service = AccountService::new(AccountEnvironment::from_map(environment));
-    let address = "127.0.0.1:9".parse().unwrap();
     let models = Arc::new(hangar_server::dictation::catalog::Models::default());
     let invalidator = CodexInvalidator::new(models.clone());
-    let runtime = Arc::new(hangar_server::runtime::gateway::RuntimeRegistry::new(address, "synthetic".into(), "test".into()));
+    let runtime = Arc::new(hangar_server::runtime::gateway::RuntimeRegistry::new("test".into()));
 
     let account = service.create(Provider::Codex, "work", |_| Ok(())).unwrap();
     let slots = tokio::sync::Semaphore::new(1);
@@ -402,4 +362,39 @@ process.stdout.write(JSON.stringify({id:m.id,result})+'\n');});"#;
         .unwrap_err();
     assert_eq!((error.status, error.code), (502, "codex_account_sign_out_unconfirmed"));
     service.codex_readers.close().await;
+}
+
+/// Ler o login sobe um app-server efêmero: sem plugins ele não confere os marketplaces pela rede.
+#[cfg(unix)]
+#[tokio::test]
+async fn login_read_starts_the_app_server_without_plugins() {
+    use hangar_server::accounts::{AccountService, Provider, environment::AccountEnvironment};
+    let root = tempfile::tempdir().unwrap();
+    let fixture = root.path().join("cli");
+    std::fs::create_dir_all(&fixture).unwrap();
+    let source = r#"const fs=require('fs'),p=require('path');
+fs.appendFileSync(p.join(process.env.CODEX_HOME,'argv.jsonl'),JSON.stringify(process.argv.slice(2))+'\n');
+require('readline').createInterface({input:process.stdin}).on('line', text=>{const m=JSON.parse(text);if(!m.id)return;
+const result=m.method==='account/read'?{account:{type:'chatgpt',email:'pessoa@exemplo.com',planType:'plus'}}:{};
+process.stdout.write(JSON.stringify({id:m.id,result})+'\n');});"#;
+    crate::write_executable(&fixture.join("codex"), format!("#!/usr/bin/env node\n{source}"));
+    let mut environment: std::collections::BTreeMap<String, String> = std::env::vars().collect();
+    let path = environment.iter().find(|(k, _)| k.eq_ignore_ascii_case("PATH")).unwrap().1.clone();
+    let dirs = std::iter::once(fixture.clone()).chain(std::env::split_paths(&path));
+    environment.insert("PATH".into(), std::env::join_paths(dirs).unwrap().to_string_lossy().into());
+    for name in ["HOME", "USERPROFILE"] {
+        environment.insert(name.into(), root.path().to_string_lossy().into());
+    }
+    environment.remove("CODEX_HOME");
+    let service = AccountService::new(AccountEnvironment::from_map(environment));
+    let account = service.create(Provider::Codex, "work", |_| Ok(())).unwrap();
+    assert_eq!(service.read_codex_auth(&account).await["status"], "connected");
+    service.codex_readers.close().await;
+    let starts = std::fs::read_to_string(account.home.join("argv.jsonl")).unwrap();
+    let argv: Vec<String> = serde_json::from_str(starts.lines().next().unwrap()).unwrap();
+    assert!(argv.contains(&"app-server".to_owned()), "{argv:?}");
+    assert!(
+        argv.windows(2).any(|w| w == ["-c", "features.plugins=false"]),
+        "leitura de login subiu o app-server com plugins: {argv:?}"
+    );
 }

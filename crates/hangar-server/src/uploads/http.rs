@@ -24,7 +24,7 @@ pub struct Facts {
 fn response(value: Value, status: u16) -> Response {
     crate::session_write::json_response(StatusCode::from_u16(status).unwrap(), value)
 }
-pub(super) fn failure(status: u16, code: &'static str, message: &str) -> Response {
+pub(crate) fn failure(status: u16, code: &'static str, message: &str) -> Response {
     crate::diag::coded(
         crate::session_write::detail(
             StatusCode::from_u16(status).unwrap(),
@@ -67,6 +67,7 @@ pub fn matches(method: &Method, path: &str) -> bool {
         return false;
     };
     (*method == Method::POST && tail == "upload")
+        || (*method == Method::GET && tail == "upload-media")
         || (matches!(*method, Method::GET | Method::HEAD)
             && (tail == "uploads"
                 || tail
@@ -155,7 +156,7 @@ pub async fn public(st: Arc<AppState>, req: Request) -> Response {
     handle(&st, &name, &tail, req).await
 }
 
-async fn handle(st: &AppState, name: &str, tail: &str, req: Request) -> Response {
+async fn handle(st: &Arc<AppState>, name: &str, tail: &str, req: Request) -> Response {
     let query: HashMap<String, String> =
         form_urlencoded::parse(req.uri().query().unwrap_or("").as_bytes())
             .into_owned()
@@ -175,6 +176,15 @@ async fn handle(st: &AppState, name: &str, tail: &str, req: Request) -> Response
             Err(_) => return StatusCode::BAD_REQUEST.into_response(),
         }
     };
+    // Só pelo id: a sessão do nome na URL pode ter sido renomeada enquanto o vídeo era processado.
+    if tail == "upload-media" {
+        let id = query.get("id").map(String::as_str).unwrap_or_default();
+        return match st.upload_media.wait(id, media::WAIT_CAP).await {
+            media::Waited::Done(m) => response(json!({"status":"done","frames":m.frames,"transcript":m.transcript}), 200),
+            media::Waited::Pending => response(json!({"status":"pending"}), 200),
+            media::Waited::Unknown => failure(404, "upload_media_unknown", "nenhuma mídia em processamento com esse id"),
+        };
+    }
     let facts = match facts(st, name, &filename, writing).await {
         Ok(f) => f,
         Err(r) => return *r,
@@ -221,7 +231,7 @@ pub(super) async fn resolve_audio(store: &UploadStore, project: &str, facts: &Fa
 }
 
 async fn execute(
-    st: &AppState,
+    st: &Arc<AppState>,
     tail: &str,
     req: Request,
     facts: Facts,
@@ -238,6 +248,11 @@ async fn execute(
             Ok(value) => value,
             Err(()) => return response(json!({"detail":"valor booleano inválido"}), 422),
         };
+        let media_later = match query.get("media").map(String::as_str) {
+            None => false,
+            Some("later") => true,
+            Some(_) => return response(json!({"detail":"valor de media inválido"}), 422),
+        };
         let length = req
             .headers()
             .get("content-length")
@@ -246,24 +261,32 @@ async fn execute(
         let stream = req
             .into_body()
             .into_data_stream()
-            .map(|item| item.map_err(std::io::Error::other));
+            // O teto do corpo da borda (`edge_rules`) é o mesmo do arquivo: estourar é 413, não falha do disco.
+            .map(|item| item.map_err(|error| if crate::http_body_limit::is_limit(&error) {
+                std::io::ErrorKind::FileTooLarge.into()
+            } else {
+                std::io::Error::other(error)
+            }));
         let path = match publish(st, &store, &project, &facts, filename, length, stream).await {
             Ok(path) => path,
             Err(r) => return r,
         };
-        let (frames, audio) = if audio_only {
-            (vec![], None)
+        // O envio nativo do celular desiste antes de quadros e fala ficarem prontos.
+        if media_later && !audio_only && media::is_video(&path) {
+            let id = hangar_core::ids::random_hex(16);
+            let work = {
+                let (st, store, project, session, file) = (st.clone(), store.clone(), project.clone(), facts.session.clone(), path.clone());
+                async move { media::process(&st, &store, &project, &session, &file).await }
+            };
+            st.upload_media.start(id.clone(), work);
+            return response(json!({"path":path,"frames":[],"transcript":"","media":"pending","media_id":id}), 200);
+        }
+        let media = if audio_only {
+            media::Media::default()
         } else {
-            media::extract(&store, &project, &facts.session, &path).await
+            media::process(st, &store, &project, &facts.session, &path).await
         };
-        let transcript = match audio {
-            Some(audio) => media::transcribe(st, audio).await,
-            None => String::new(),
-        };
-        return response(
-            json!({"path":path,"frames":frames,"transcript":transcript.trim()}),
-            200,
-        );
+        return response(json!({"path":path,"frames":media.frames,"transcript":media.transcript}), 200);
     }
     if tail == "uploads" {
         let (session, retention, now) = (facts.session.clone(), facts.retention, now());
@@ -314,15 +337,14 @@ mod tests {
         body::{Body, to_bytes},
         http::header,
     };
-    fn state() -> AppState {
-        AppState::new(crate::config::Config {
+    fn state() -> Arc<AppState> {
+        Arc::new(AppState::new(crate::config::Config {
             listen: "127.0.0.1:0".parse().unwrap(),
-            upstream: "127.0.0.1:9".parse().unwrap(),
             internal_secret: "synthetic".into(),
             auth_token: "synthetic".into(),
             log_path: None,
             trusted: crate::auth::TrustedHosts::parse("127.0.0.1"),
-        })
+        }))
     }
     fn facts(root: &std::path::Path) -> Facts {
         Facts {
@@ -404,6 +426,19 @@ mod tests {
                 .to_string_lossy()
                 .starts_with(".upload-")
         }));
+    }
+    /// Corpo em partes acima do teto, com o mesmo `Limited` que a borda (`routes::edge_rules`) põe em todo
+    /// pedido: 413 `erro_arquivo_grande`, nunca o 503 de disco. O corpo é gerado aos poucos, sem alocar 101 MiB.
+    #[tokio::test]
+    async fn chunked_upload_over_the_edge_cap_is_413() {
+        let tmp = tempfile::tempdir().unwrap();
+        let st = state();
+        let chunks = futures_util::stream::iter((0..101).map(|_| Ok::<_, std::io::Error>(bytes::Bytes::from(vec![0u8; 1 << 20]))));
+        let body = Body::new(http_body_util::Limited::new(Body::from_stream(chunks), crate::http_body_limit::MAX_BYTES));
+        let response = execute(&st, "upload", Request::new(body), facts(tmp.path()), "grande.bin", Default::default()).await;
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        let body: Value = serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
+        assert_eq!(body["detail"]["code"], "erro_arquivo_grande", "{body}");
     }
     #[tokio::test]
     async fn file_response_keeps_range_download_and_html_isolation() {

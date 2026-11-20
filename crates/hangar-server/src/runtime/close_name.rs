@@ -203,7 +203,7 @@ mod tests {
     #[tokio::test]
     async fn r1_19_an_opening_and_a_close_of_one_name_exclude_each_other() {
         let home = tempfile::tempdir().unwrap();
-        let registry = RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(),"s".into(),"i".into());
+        let registry = RuntimeRegistry::new("i".into());
         let opening = NameClaim::take(home.path(),"s1").unwrap();
         let refused = registry.begin_close(Some(home.path().to_owned()),"s1").await.err().map(|error|error.code);
         assert_eq!(refused.as_deref(),Some(NAME_BUSY));

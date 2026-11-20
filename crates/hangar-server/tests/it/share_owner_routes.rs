@@ -416,3 +416,71 @@ async fn sweep_once_revokes_reborn_session_and_keeps_funnel_in_grace() {
     assert!(!e.share.store.has_active(false));
     assert!(e.ts.on(), "carência do funnel");
 }
+
+/// O servidor inteiro, com o portão do dono e o CORS na frente das rotas de convite.
+async fn full_server(dir: &std::path::Path) -> (SocketAddr, Arc<ShareState>) {
+    let mut state = hangar_server::routes::AppState::new(crate::fake::config(""));
+    state.login_guests = Arc::new(hangar_server::login_guests::Service::new(hangar_server::login_guests::Settings {
+        guests: dir.join("guests.json"), vault: dir.join("vault.json"), runtime_config: dir.join("runtime-config.json"),
+        sync_enabled: false, bootstrap: String::new(), secret: b"fixture".to_vec(), secure: false, rate_max: 10.into(), rate_window: 300.into(),
+    }));
+    let share = Arc::new(ShareState {
+        store: ShareStore::open(dir.join("shares.json"), Arc::new(|| 100.0)),
+        pairs: PairStore::open(dir.join("external_pairs.json")),
+        lives: Lives::new(Arc::new(FakeLife::default()), Arc::new(LifeFacts::default())),
+        tailscale: Arc::new(FakeTs::default()),
+        tunnel: Default::default(),
+        connect: None,
+    });
+    state.share = Some(share.clone());
+    let app = hangar_server::routes::router(Arc::new(state));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await.unwrap() });
+    (addr, share)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn owner_invite_routes_on_the_public_port_are_answered_by_rust() {
+    use crate::fake::{OWNER, client};
+    let dir = tempfile::tempdir().unwrap();
+    let (public, share) = full_server(dir.path()).await;
+    share.store.create("s", Some("k:A".into()), Kind::Share, false).unwrap();
+    let url = format!("http://{public}/api/sessions/s/share");
+    let resp = client().get(&url).bearer_auth(OWNER).header("origin", "http://outro").send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+    assert!(resp.headers().contains_key("access-control-allow-origin"), "o PWA de outra origem lê a resposta");
+    assert_eq!(resp.json::<Value>().await.unwrap()["shares"].as_array().unwrap().len(), 1);
+    // R5-09: quem não é o dono recebe o 401 contado.
+    let refused = client().get(&url).send().await.unwrap();
+    assert_eq!(refused.status().as_u16(), 401);
+    assert_eq!(refused.json::<Value>().await.unwrap()["detail"]["code"], "erro_nao_autorizado");
+    // R5-06: o preflight do CORS, inclusive a recusa de rede privada.
+    let preflight = |private: bool| {
+        let request = client().request(reqwest::Method::OPTIONS, &url).header("origin", "http://outro").header("access-control-request-method", "GET");
+        if private { request.header("access-control-request-private-network", "true") } else { request }
+    };
+    let ok = preflight(false).send().await.unwrap();
+    assert_eq!((ok.status().as_u16(), ok.headers()["access-control-allow-origin"].to_str().unwrap().to_owned()), (200, "*".to_owned()));
+    assert_eq!(ok.text().await.unwrap(), "OK");
+    let private = preflight(true).send().await.unwrap();
+    assert_eq!((private.status().as_u16(), private.text().await.unwrap()), (400, "Disallowed CORS private-network".to_owned()));
+    let pairs = client().get(format!("http://{public}/api/external-pairs")).bearer_auth(OWNER).send().await.unwrap();
+    assert_eq!(pairs.json::<Value>().await.unwrap(), json!([]));
+}
+
+#[test]
+fn shared_mark_comes_from_the_share_store() {
+    use hangar_api::session::SessionRow;
+    use hangar_server::list::facts;
+    let dir = tempfile::tempdir().unwrap();
+    let store = ShareStore::open(dir.path().join("shares.json"), Arc::new(|| 100.0));
+    store.create("a", Some("k:A".into()), Kind::Share, false).unwrap();
+    store.create("p", Some("k:P".into()), Kind::Pair, false).unwrap();
+    let list = facts::ListFacts { unknown: false, ..Default::default() };
+    let row = |n: &str| -> SessionRow { serde_json::from_value(json!({"name": n, "provider": "claude"})).unwrap() };
+    let (mut work, _) = facts::apply(vec![row("a"), row("p"), row("z")], &list, true);
+    facts::mark_shared(&mut work, &store.active_sessions());
+    let shared: HashSet<&str> = work.iter().filter(|r| r.shared).map(|r| r.name.as_str()).collect();
+    assert_eq!(shared, HashSet::from(["a"]), "o par não marca compartilhada");
+}

@@ -504,7 +504,7 @@ pub(super) struct Dictation {
     field: Option<AnyInputState>,
 }
 
-struct SendIntent { owner: Option<SessionOwner>, draft: String, attachments: Vec<String>, steer: bool, recipients: Option<(bool, Vec<String>)> }
+struct SendIntent { owner: Option<SessionOwner>, draft: String, attachments: Vec<String>, steer: bool, queue_only: bool, recipients: Option<(bool, Vec<String>)> }
 
 #[derive(Debug, PartialEq, Eq)]
 enum SendPreparation { Ready, Stop, Wait }
@@ -528,7 +528,7 @@ impl Dictation {
     fn prepare_send(&mut self, owner: Option<SessionOwner>, draft: String, attachments: Vec<String>,
         steer: bool, recording: bool, transcribing: bool) -> SendPreparation {
         if !recording && !transcribing { return SendPreparation::Ready; }
-        if self.pending_send.is_none() { self.pending_send = Some(SendIntent { owner, draft, attachments, steer, recipients: None }); }
+        if self.pending_send.is_none() { self.pending_send = Some(SendIntent { owner, draft, attachments, steer, queue_only: false, recipients: None }); }
         self.auto_send = false;
         self.countdown = None;
         if recording { SendPreparation::Stop } else { SendPreparation::Wait }
@@ -696,7 +696,7 @@ impl Hangar {
             .map(|items| items.iter().map(|item| item.id.to_string()).collect()).unwrap_or_default()
     }
 
-    pub(super) fn defer_dictation_send(&mut self, steer: bool, cx: &mut Context<Self>) -> bool {
+    pub(super) fn defer_dictation_send(&mut self, steer: bool, queue_only: bool, cx: &mut Context<Self>) -> bool {
         let recording = self.dictation.recording();
         if !self.dictation_here(cx) {
             if recording { self.stop_dictation(false, false, cx); }
@@ -713,7 +713,7 @@ impl Hangar {
         let preparation = self.dictation.prepare_send(owner, draft, attachments, steer, recording, self.dictation.processing());
         if first_send {
             let recipients = self.dictation_recipients();
-            if let Some(intent) = self.dictation.pending_send.as_mut() { intent.recipients = recipients; }
+            if let Some(intent) = self.dictation.pending_send.as_mut() { intent.recipients = recipients; intent.queue_only = queue_only; }
         }
         match preparation {
             SendPreparation::Ready => false,
@@ -1304,7 +1304,8 @@ impl Hangar {
         if here && result_ready && self.dictation.result_error.is_none() {
             if let Some(intent) = pending_send {
                 // O texto completo passa novamente pela confirmação de comandos destrutivos.
-                self.submit(intent.steer, false, window, cx);
+                // O Ctrl+Enter do primeiro clique (só fila) vale também depois do ditado.
+                self.submit_as(intent.steer, false, intent.queue_only, window, cx);
             } else if requested_send {
                 self.dictation.result_error = Some(tr("dictation_send_changed"));
             }

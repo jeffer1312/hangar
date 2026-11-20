@@ -330,6 +330,7 @@ pub(super) async fn launch_if_needed(policy:&PolicyClient,target:&mut RuntimeTar
 /// sessão já aberta, recusando os hooks dele até a reaprovação; conferidos antes, ele não acha nada
 /// novo. Falha não impede a abertura: o Codex confere depois e o ator reaprova o que mudar.
 async fn upgrade_marketplaces(program:&[String],env:&std::collections::BTreeMap<String,String>) {
+    if !crate::codex_tui::marketplaces_due(env) { return; }
     let Some(codex) = program.first().and_then(|name|process::resolve_program(name,env.iter())) else { return };
     let mut command = tokio::process::Command::new(codex);
     command.args(["plugin","marketplace","upgrade","--json"]).env_clear().envs(env)
@@ -337,17 +338,18 @@ async fn upgrade_marketplaces(program:&[String],env:&std::collections::BTreeMap<
     #[cfg(windows)]
     command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     match tokio::time::timeout(MARKETPLACES_TIMEOUT,command.output()).await {
-        Ok(Ok(out)) if out.status.success() => {}
+        // Código 0 com marketplace que falhou não conta como conferida: a próxima subida tenta de novo.
+        Ok(Ok(out)) if out.status.success() && crate::codex_tui::marketplaces_failed_lines(&String::from_utf8_lossy(&out.stderr)).is_empty() =>
+            crate::codex_tui::marketplaces_done(env),
         Ok(Ok(out)) => {
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            let detail = stderr.lines().find(|line|line.starts_with("Failed to upgrade marketplace")).unwrap_or("");
-            tracing::warn!(code=?out.status.code(),detail=%detail.chars().take(200).collect::<String>(),"codex: conferência dos marketplaces falhou");
+            let failed = crate::codex_tui::marketplaces_failed_lines(&String::from_utf8_lossy(&out.stderr));
+            tracing::warn!(code=?out.status.code(),detail=%failed.first().map_or("",String::as_str),"codex: conferência dos marketplaces falhou");
         }
         Ok(Err(err)) => tracing::warn!(kind=?err.kind(),"codex: conferência dos marketplaces não rodou"),
         Err(_) => tracing::warn!("codex: conferência dos marketplaces passou do prazo"),
     }
 }
-/// Toda abertura espera a conferência: sem rede, o `git fetch` não pode segurar a sessão; o ator cobre o resto.
+/// Sem rede, o `git fetch` não pode segurar a sessão; o ator cobre o resto.
 const MARKETPLACES_TIMEOUT:Duration = Duration::from_secs(20);
 
 /// Marca da configuração que o `claude -p` leu ao nascer: o botão Recarregar e a adoção da reserva
@@ -430,12 +432,16 @@ async fn attach_terminal_mods(mods:&crate::mods::state::Mods,target:&super::term
 }
 
 impl RuntimeRegistry {
-    pub fn new(upstream:SocketAddr,secret:String,instance:String) -> Self {
+    pub fn new(instance:String) -> Self {
         let preparation = Some(crate::accounts::bridge::AccountsBridge::new(instance.clone()));
-        Self { startup: Default::default(), other:std::sync::OnceLock::new(), diag:crate::diag::DiagClient::new(upstream,secret.clone()),reopening:Default::default(),terminal_problems:Default::default(),terminal_status:Default::default(),heal_attempts:Default::default(),interactions:None,entries:Arc::new(Mutex::new(BTreeMap::new())),terminal_states:None,terms:None,events:broadcast::channel(1024).0,
-            policy:PolicyClient::new(upstream,secret).with_preparation(preparation),instance,lifecycle:Mutex::new(BTreeMap::new()),revisions:Mutex::new(BTreeMap::new()),mods:None,plugin:None,ingress:Default::default(),
+        Self { startup: Default::default(), other:std::sync::OnceLock::new(), diag:crate::diag::DiagClient::new(),reopening:Default::default(),terminal_problems:Default::default(),terminal_status:Default::default(),heal_attempts:Default::default(),interactions:None,entries:Arc::new(Mutex::new(BTreeMap::new())),terminal_states:None,terms:None,events:broadcast::channel(1024).0,
+            policy:PolicyClient::new().with_preparation(preparation),instance,lifecycle:Mutex::new(BTreeMap::new()),revisions:Mutex::new(BTreeMap::new()),mods:None,plugin:None,ingress:Default::default(),
             respawn_base:Duration::from_secs(5),reconnect_waits:Default::default(),permissions:None,processes:Arc::new(crate::list::procs::SystemProcs::default()),live:Default::default(),codex_owned:Default::default(),hubs:std::sync::OnceLock::new(),self_ref:std::sync::OnceLock::new(),
             watcher:std::sync::OnceLock::new(),watcher_pending:tokio::sync::watch::channel(false).0,codex_wake:Arc::new(tokio::sync::Notify::new()),native:Default::default(),limits:std::sync::OnceLock::new(),auth_refusals:std::sync::OnceLock::new(),limit_holds:Default::default(),waking:Default::default(),rewake:Default::default() }
+    }
+    /// Prova de vida para o watchdog do systemd: o mapa das entradas não está preso por ninguém.
+    pub async fn responsive(&self) {
+        drop(self.entries.lock().await);
     }
     pub fn with_diagnostics(mut self, diag: crate::diag::DiagClient) -> Self {
         self.diag = diag.clone();
@@ -692,8 +698,10 @@ impl RuntimeRegistry {
                 if old.is_empty() || text.is_empty() { continue; }
                 // A nova entra antes de a antiga sair: falha no meio deixa o texto em dobro, nunca sem ele.
                 let id = crate::mods::state::random_hex(16);
-                store.exec(generation,&format!("restamp:{id}"),clock(),Action::Append { text,delivered:false,ts:None,
-                    pre_transcript:row["pre_transcript"]==true,entry_id:Some(id.clone()) }).map_err(|_|failure("queue_io"))?;
+                let pre_transcript = row["pre_transcript"]==true;
+                let action = if row["conversation"]==true { Action::AppendConversation { text,pre_transcript,entry_id:Some(id.clone()) } }
+                    else { Action::Append { text,delivered:false,ts:None,pre_transcript,entry_id:Some(id.clone()) } };
+                store.exec(generation,&format!("restamp:{id}"),clock(),action).map_err(|_|failure("queue_io"))?;
                 let cancelled = store.exec(generation,&format!("restamp-cancel:{id}"),clock(),Action::Cancel { entry_id:old }).map_err(|_|failure("queue_io"))?;
                 // A antiga em voo fica onde está: a cópia sai, para não entregar duas vezes.
                 if cancelled != json!("cancelled") {
@@ -1983,7 +1991,8 @@ impl RuntimeRegistry {
                     }
                 }
                 let queue = QueueActor::start(store,lease);
-                let connection = match super::websocket::WebSocketConnection::connect(&target.endpoint).await {
+                let token = { let meta = target.metadata.clone(); tokio::task::spawn_blocking(move||super::codex_sidecar::ws_token(&meta)).await.ok().flatten() };
+                let connection = match super::websocket::WebSocketConnection::connect_with(&target.endpoint,token.as_deref()).await {
                     Ok(connection)=>connection,
                     Err(error)=>{
                         if let Err(stop) = queue.shutdown().await {
@@ -1999,7 +2008,7 @@ impl RuntimeRegistry {
                 if let Some(store) = &self.interactions { engine = engine.with_interactions(target.key.clone(),store.clone())?; }
                 engine = engine.with_live(self.live_sender(&target.name)).with_lifecycle(self.self_ref.get().cloned());
                 let cell = AdoptionCell::new(&target.endpoint,target.app_pid).with_lifecycle(self.codex_wake.clone(),target.sidecar_life());
-                let adoption = Adoption { endpoint:target.endpoint.clone(),app_pid:target.app_pid,cell:cell.clone() };
+                let adoption = Adoption { endpoint:target.endpoint.clone(),token,app_pid:target.app_pid,cell:cell.clone() };
                 let handle = RuntimeActor::spawn_adopted(runtime,queue,connection,engine,adoption);
                 self.entries.lock().await.insert(target.key.clone(),Entry { generation:target.generation,
                     handle:EntryHandle::CodexTerminal { target:Box::new(target.clone()),handle:handle.clone(),cell },
@@ -3320,8 +3329,6 @@ async fn dispatch(registry:&RuntimeRegistry,envelope:&Envelope) -> Result<Value,
     };
     match kind {
         "submit"=> {
-            // Só envios: as consultas que o Python repete (confirm, snapshot) inflariam a conta.
-            crate::migration_status::count_private(if matches!(&handle,EntryHandle::Terminal {..}) {"send_terminal"} else {"send_headless"});
             if matches!(&handle,EntryHandle::Terminal {..}) && (command.get("steer").is_some_and(|value|!value.is_boolean())
                 || command.get("pre_transcript").is_some_and(|value|!value.is_boolean())) {return Err(failure("terminal_payload"));}
             let kind = if command["steer"] == true && !matches!(&handle,EntryHandle::Terminal {..}) { OperationKind::Steer } else { OperationKind::Input };
@@ -3427,7 +3434,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn a_subagent_message_checks_ingress_before_choosing_an_actor() {
-        let registry = RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(), "fixture".into(), "instance".into());
+        let registry = RuntimeRegistry::new("instance".into());
         registry.ingress.hold("session", Duration::from_secs(1)).await.unwrap();
         let _entries = registry.entries.lock().await;
         let error = tokio::time::timeout(Duration::from_secs(1), registry.codex_subagent_message("session", "parent", "child", "continue"))
@@ -3494,7 +3501,7 @@ pub(crate) mod tests {
         let dir=home.join(".hangar/claude-headless");std::fs::create_dir_all(&dir).unwrap();
         for meta in sidecars { std::fs::write(dir.join(format!("{}.json",meta["name"].as_str().unwrap())),meta.to_string()).unwrap(); }
         let env=crate::accounts::environment::AccountEnvironment::from_map([("HOME".to_owned(),home.to_string_lossy().into_owned())].into());
-        let registry=Arc::new(RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(),"fixture".into(),"instance".into())
+        let registry=Arc::new(RuntimeRegistry::new("instance".into())
             .with_processes(Arc::new(SidRecipeProcesses {dir:home.into()})).with_codex_environment(env));
         registry.bind_lifecycle();
         let hubs=crate::side::Hubs::default();registry.bind_hubs(hubs.downgrade());
@@ -3527,7 +3534,7 @@ pub(crate) mod tests {
         }
         let env=crate::accounts::environment::AccountEnvironment::from_map([("HOME".to_owned(),home.path().to_string_lossy().into_owned())].into());
         let plugin=Arc::new(crate::plugin::Store::new(Arc::new(crate::interactions::InteractionStore::default())));
-        let registry=Arc::new(RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(),"fixture".into(),"instance".into())
+        let registry=Arc::new(RuntimeRegistry::new("instance".into())
             .with_processes(Arc::new(SidRecipeProcesses {dir:home.path().into()})).with_codex_environment(env).with_plugin(plugin.clone()));
         registry.bind_lifecycle();
         let hubs=crate::side::Hubs::default();registry.bind_hubs(hubs.downgrade());
@@ -3691,7 +3698,7 @@ pub(crate) mod tests {
             "cano":{"pid":42,"escuta":format!("tcp:{address}"),"token":"fixture","versao":2}});
         let descriptor=json!({"name":"cl","key":"key","provider":"claude","headless":true,"meta":meta,"jsonl":dir.path().join("a.jsonl"),
             "projection_dir":dir.path().join("projection"),"state_path":dir.path().join("state"),"lock_path":dir.path().join("lease"),"generation":1,"sidecar_dir":dir.path()});
-        let registry=Arc::new(RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(),"fixture".into(),"instance".into()).with_processes(Arc::new(SidRecipeProcesses {dir:dir.path().into()})));
+        let registry=Arc::new(RuntimeRegistry::new("instance".into()).with_processes(Arc::new(SidRecipeProcesses {dir:dir.path().into()})));
         let hubs=crate::side::Hubs::default();registry.bind_hubs(hubs.downgrade());
         let envelope=Envelope {protocol:0,instance:"instance".into(),key:"key".into(),generation:1,operation_id:"op".into(),clock:ClockSample {monotonic_s:0.0,epoch_s:0.0},
             command:json!({"kind":"open","descriptor":descriptor})};
@@ -3717,7 +3724,7 @@ pub(crate) mod tests {
         let sidecar_path=crate::runtime::lifecycle::claude_sidecar_dir().unwrap().join(format!("{name}.json"));std::fs::create_dir_all(sidecar_path.parent().unwrap()).unwrap();assert!(!sidecar_path.exists());std::fs::write(&sidecar_path,serde_json::to_vec(&meta).unwrap()).unwrap();let _sidecar=OwnSidecar(sidecar_path);
         let target=RuntimeTarget {key:"key".into(),generation:1,name:name.clone(),provider:"claude".into(),metadata:meta,binding:CanoBinding {pid:42,escuta:format!("tcp:{address}"),token:"fixture".into(),versao:2},lease_path:dir.path().join("lease"),state_path:dir.path().join("state"),projection_dir:dir.path().join("projection"),transcript:dir.path().join("a.jsonl"),created:0.0};std::fs::write(&target.transcript,b"").unwrap();
         let held_lease=acquire_lease(&target.lease_path).unwrap();let mut initial=QueueState::new("key",1,&name,vec![json!({"id":"a-row","text":"only-a","ts":1.0,"delivered":false})]);initial.runtime_state["view"]=json!({"conversation":"a","initialized":true});Store::open(&target.state_path,&target.projection_dir,initial).unwrap();drop(held_lease);
-        let registry=Arc::new(RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(),"fixture".into(),"instance".into()).with_processes(Arc::new(SidRecipeProcesses {dir:dir.path().into()})).with_interactions(Arc::default()));let hubs=crate::side::Hubs::default();registry.bind_lifecycle();registry.bind_hubs(hubs.downgrade());
+        let registry=Arc::new(RuntimeRegistry::new("instance".into()).with_processes(Arc::new(SidRecipeProcesses {dir:dir.path().into()})).with_interactions(Arc::default()));let hubs=crate::side::Hubs::default();registry.bind_lifecycle();registry.bind_hubs(hubs.downgrade());
         let barrier=registry.barrier("key").await;let open_guard=barrier.lock().await;
         let opened=registry.open_headless_locked(target.clone(),None,false,true).await.unwrap();assert_eq!(opened["opened"],true);
         tokio::time::sleep(Duration::from_millis(100)).await;let pending=registry.handle("key",1).await.unwrap().snapshot().await.unwrap();assert!(pending["error"].is_null());assert_eq!(pending["view"]["lifecycle_pending"],true);assert_eq!(users.load(std::sync::atomic::Ordering::Relaxed),0);
@@ -3747,7 +3754,7 @@ pub(crate) mod tests {
     async fn open_of_adopted_terminal_accepts_the_python_birth_of_the_same_agent() {
         use crate::terminal_input::TerminalBinding;
         let dir=tempfile::tempdir().unwrap();
-        let registry=RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(),"test".into(),"instance".into());
+        let registry=RuntimeRegistry::new("instance".into());
         // O mesmo agente: nascimento lido pelo Rust em f64 e pelo psutil do Python em inteiro.
         let target=|birth:f64|super::super::terminal::TerminalTarget {key:"K".into(),generation:1,name:"hangar".into(),
             binding:TerminalBinding {name:"hangar".into(),pane:"=hangar:0.0".into(),conversation:"sid".into(),generation:1,created:1,mux_argv:vec!["fixture-mux".into()],windows:true,clipboard_lock_path:None},
@@ -3769,7 +3776,7 @@ pub(crate) mod tests {
         use crate::terminal_input::TerminalBinding;
         let dir=tempfile::tempdir().unwrap();
         let interactions=Arc::new(InteractionStore::default());
-        let registry=RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(),"test".into(),"instance".into()).with_interactions(interactions.clone());
+        let registry=RuntimeRegistry::new("instance".into()).with_interactions(interactions.clone());
         let binding=InteractionBinding {key:"B".into(),conversation:"new-sid".into(),generation:7};interactions.bind(&binding).unwrap();
         let target=super::super::terminal::TerminalTarget {key:"B".into(),generation:7,name:"same".into(),
             binding:TerminalBinding {name:"same".into(),pane:"%77".into(),conversation:"new-sid".into(),generation:7,created:1,mux_argv:vec!["fixture-mux".into()],windows:false,clipboard_lock_path:None},
@@ -3843,7 +3850,7 @@ pub(crate) mod tests {
         use crate::interactions::InteractionBinding;
         use crate::terminal_input::TerminalBinding;
         let dir=tempfile::tempdir().unwrap();
-        let registry=Arc::new(RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(),"test".into(),"instance".into()));registry.bind_lifecycle();
+        let registry=Arc::new(RuntimeRegistry::new("instance".into()));registry.bind_lifecycle();
         let pid=std::process::id();
         let target=super::super::terminal::TerminalTarget {key:"H".into(),generation:3,name:"heal".into(),
             binding:TerminalBinding {name:"heal".into(),pane:"%9".into(),conversation:"sid".into(),generation:3,created:1,mux_argv:vec!["hangar-fixture-no-such-mux".into()],windows:false,clipboard_lock_path:None},
@@ -3881,7 +3888,7 @@ pub(crate) mod tests {
     /// e a vida fechada com o processo vivo seguem com o código, sem parecer saudáveis.
     #[tokio::test]
     async fn failed_or_closed_rust_session_is_not_hand_opened() {
-        let registry=RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(),"test".into(),"instance".into());
+        let registry=RuntimeRegistry::new("instance".into());
         assert!(registry.hand_opened("solta").await);
         super::super::actor::mark_live_error(&registry.live_sender("falhou"),"cano_exited","o cano caiu ao abrir");
         assert!(!registry.hand_opened("falhou").await);
@@ -3917,7 +3924,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn missing_native_record_is_no_conversation_change() {
         let dir=tempfile::tempdir().unwrap();
-        let registry=RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(),"test".into(),"instance".into());
+        let registry=RuntimeRegistry::new("instance".into());
         let (_,handle)=claude_terminal_entry(&registry,dir.path(),77).await;
         assert_eq!(registry.reconcile_claude("same","B","new-sid",7).await.unwrap(),json!({"changed":false}));
         std::fs::create_dir_all(dir.path().join("sessions")).unwrap();
@@ -3930,7 +3937,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn a_moved_transcript_is_followed_in_the_same_life() {
         let dir=tempfile::tempdir().unwrap();
-        let registry=Arc::new(RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(),"test".into(),"instance".into()));
+        let registry=Arc::new(RuntimeRegistry::new("instance".into()));
         let ctx=crate::side::test_ctx();registry.bind_hubs(ctx.hubs.downgrade());
         let (start,handle)=claude_terminal_entry(&registry,dir.path(),77).await;
         let _lease=ctx.hubs.acquire("same",crate::side::Binding {provider:crate::transcript::Provider::Claude,jsonl:start.transcript.clone(),key:"new-sid".into(),headless:false,life:None},&ctx);
@@ -3953,7 +3960,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn the_native_record_names_the_folder_of_a_moved_transcript() {
         let dir=tempfile::tempdir().unwrap();
-        let registry=Arc::new(RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(),"test".into(),"instance".into()));
+        let registry=Arc::new(RuntimeRegistry::new("instance".into()));
         let hubs=crate::side::Hubs::default();registry.bind_hubs(hubs.downgrade());
         claude_terminal_entry(&registry,dir.path(),77).await;
         let project=dir.path().join("projects").join(hangar_workspace::worktrees::sanitize_cwd("/worktree"));
@@ -3972,7 +3979,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn a_conversation_change_is_not_followed_as_a_move() {
         let dir=tempfile::tempdir().unwrap();
-        let registry=RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(),"test".into(),"instance".into());
+        let registry=RuntimeRegistry::new("instance".into());
         let (target,handle)=claude_terminal_entry(&registry,dir.path(),77).await;
         let project=dir.path().join("projects").join(hangar_workspace::worktrees::sanitize_cwd("/worktree"));
         std::fs::create_dir_all(&project).unwrap();
@@ -3992,7 +3999,7 @@ pub(crate) mod tests {
     async fn guessed_plan_base_does_not_decide_the_message_class() {
         let dir=tempfile::tempdir().unwrap();
         let memory=Arc::new(std::sync::Mutex::new(crate::state::permission::PermissionMemory::default()));
-        let registry=RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(),"test".into(),"instance".into()).with_permissions(memory.clone());
+        let registry=RuntimeRegistry::new("instance".into()).with_permissions(memory.clone());
         let (_,handle)=claude_terminal_entry(&registry,dir.path(),77).await;
         let read=registry.terminal_mode_reader();
         memory.lock().unwrap().observe("new-sid","plan");
@@ -4027,7 +4034,7 @@ pub(crate) mod tests {
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
         let memory=Arc::new(std::sync::Mutex::new(crate::state::permission::PermissionMemory::default()));
-        let registry=RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(),"test".into(),"instance".into()).with_permissions(memory);
+        let registry=RuntimeRegistry::new("instance".into()).with_permissions(memory);
         let (target,handle)=claude_terminal_entry(&registry,dir.path(),agent.id()).await;
         let class=registry.message_class(None,"same").await;
         // O transcript, quando já traz o modo, é mais novo que o argv e vence.
@@ -4046,7 +4053,7 @@ pub(crate) mod tests {
         use crate::interactions::InteractionBinding;
         use crate::terminal_input::TerminalBinding;
         let dir=tempfile::tempdir().unwrap();
-        let registry=Arc::new(RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(),"test".into(),"instance".into()));
+        let registry=Arc::new(RuntimeRegistry::new("instance".into()));
         for (key,name) in [("A","a"),("B","b")] {
             let binding=InteractionBinding {key:key.into(),conversation:format!("{name}-sid"),generation:1};
             let target=super::super::terminal::TerminalTarget {key:key.into(),generation:1,name:name.into(),
@@ -4070,7 +4077,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn terminal_status_is_independent_from_global_events_and_cleans_healthy_names() {
-        let registry = RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(), "test".into(), "instance".into());
+        let registry = RuntimeRegistry::new("instance".into());
         let sender = registry.terminal_status_sender("a");
         let _other = registry.terminal_status("b");
         let mut receiver = registry.terminal_status("a");
@@ -4093,7 +4100,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn terminal_status_failed_close_keeps_error_detail_for_reconnection() {
-        let registry = RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(), "test".into(), "instance".into());
+        let registry = RuntimeRegistry::new("instance".into());
         let sender = registry.terminal_status_sender("a");
         super::super::terminal_status::publish_problem(&sender, "queue_io", "fila indisponível");
         registry.clear_live("a").await;
@@ -4104,7 +4111,7 @@ pub(crate) mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn terminal_status_concurrent_updates_stay_with_their_ten_sessions() {
-        let registry = RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(), "test".into(), "instance".into());
+        let registry = RuntimeRegistry::new("instance".into());
         let barrier = Arc::new(tokio::sync::Barrier::new(10));
         let mut receivers = Vec::new();
         let mut publishers = tokio::task::JoinSet::new();
@@ -4164,7 +4171,7 @@ pub(crate) mod tests {
 
     #[test]
     fn closing_an_old_life_does_not_unmark_the_live_owner_of_the_same_name() {
-        let registry = RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(),"test".into(),"instance".into());
+        let registry = RuntimeRegistry::new("instance".into());
         registry.mark_codex_owner("cx","old-key",1,true);
         registry.mark_codex_owner("cx","new-key",1,true);
         registry.mark_codex_owner("cx","old-key",1,false);
@@ -4197,7 +4204,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn sidecar_launch_policies_never_reach_python() {
         let dir = tempfile::tempdir().unwrap();
-        let policy = PolicyClient::new("127.0.0.1:9".parse().unwrap(),"test".into())
+        let policy = PolicyClient::new()
             .with_codex_environment(crate::accounts::environment::AccountEnvironment::from_map(
                 [("HOME".to_owned(),dir.path().to_string_lossy().into_owned()),("PATH".to_owned(),dir.path().join("bin").to_string_lossy().into_owned())].into()));
         std::fs::write(super::super::codex_sidecar::path(dir.path(),"cx"),json!({"name":"cx","key":"k","headless":true,"cano":{"pid":7}}).to_string()).unwrap();
@@ -4235,7 +4242,7 @@ pub(crate) mod tests {
     #[test]
     fn held_empty_live_channel_survives_another_lookup() {
         // O `open` pega o canal e o ator só escreve no primeiro passo: outra procura no meio não o apaga.
-        let registry = RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(),"test".into(),"instance".into());
+        let registry = RuntimeRegistry::new("instance".into());
         let held = registry.live_sender("a");
         let _other = registry.live_sender("b");
         held.send_replace(Some(Arc::new(LiveState::default())));
@@ -4249,7 +4256,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn failed_codex_open_shows_its_error_until_the_next_open() {
         let dir = tempfile::tempdir().unwrap();
-        let registry = RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(),"test".into(),"instance".into());
+        let registry = RuntimeRegistry::new("instance".into());
         let rx = registry.live("cx");
         // Cano gravado que não atende: a conexão falha.
         let target = RuntimeTarget { key:"k".into(),generation:1,name:"cx".into(),provider:"codex".into(),
@@ -4268,7 +4275,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn close_keeps_the_error_of_a_life_that_failed() {
-        let registry = RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(),"test".into(),"instance".into());
+        let registry = RuntimeRegistry::new("instance".into());
         let rx = registry.live("a");
         let failed = LiveState { error:Some(("queue_io".into(),"fila recusou".into())),..Default::default() };
         registry.live_sender("a").send_replace(Some(Arc::new(failed)));
@@ -4281,7 +4288,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn close_leaves_the_channels_of_a_new_life_with_the_same_name() {
-        let registry = RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(),"test".into(),"instance".into());
+        let registry = RuntimeRegistry::new("instance".into());
         // A vida nova já pegou os canais e escreveu, mas ainda não entrou em `entries`.
         let status = registry.terminal_status_sender("a");
         status.send_replace(super::super::terminal_status::TerminalStatus { input_stalled:Some("delivery_unproved".into()),..Default::default() });
@@ -4294,7 +4301,7 @@ pub(crate) mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn subscribing_readers_do_not_prevent_closed_channels_from_clearing() {
-        let registry = Arc::new(RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(),"test".into(),"instance".into()));
+        let registry = Arc::new(RuntimeRegistry::new("instance".into()));
         let status = registry.terminal_status("a");
         let live = registry.live("a");
         let reader_registry = registry.clone();
@@ -4318,7 +4325,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn one_sse_reader_multiple_keys() {
-        let registry = RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(),"test".into(),"instance".into());
+        let registry = RuntimeRegistry::new("instance".into());
         let mut receiver = registry.subscribe();
         assert_eq!(registry.events.receiver_count(),1);
         for key in ["claude-key","codex-key"] {
@@ -4402,7 +4409,7 @@ pub(crate) mod tests {
         std::fs::write(dir.join("cl.json"),sidecar.to_string()).unwrap();
         let processes=Arc::new(ParkProcesses {canos:std::sync::Mutex::new(vec![i64::from(first.0.id())]),dir:home.path().into(),agent:Default::default()});
         let env=crate::accounts::environment::AccountEnvironment::from_map([("HOME".to_owned(),home.path().to_string_lossy().into_owned())].into());
-        let registry=Arc::new(RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(),"fixture".into(),"instance".into()).with_processes(processes.clone()).with_codex_environment(env));
+        let registry=Arc::new(RuntimeRegistry::new("instance".into()).with_processes(processes.clone()).with_codex_environment(env));
         registry.bind_lifecycle();
         let hubs=crate::side::Hubs::default();registry.bind_hubs(hubs.downgrade());
         registry.open_claude_headless("cl",false).await.unwrap().unwrap();
@@ -4480,7 +4487,7 @@ pub(crate) mod tests {
         std::fs::write(dir.join("cl.json"),sidecar.to_string()).unwrap();
         let processes=Arc::new(ParkProcesses {canos:std::sync::Mutex::new(vec![i64::from(first.0.id())]),dir:home.path().into(),agent:Default::default()});
         let env=crate::accounts::environment::AccountEnvironment::from_map([("HOME".to_owned(),home.path().to_string_lossy().into_owned())].into());
-        let registry=Arc::new(RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(),"fixture".into(),"instance".into()).with_processes(processes.clone()).with_codex_environment(env));
+        let registry=Arc::new(RuntimeRegistry::new("instance".into()).with_processes(processes.clone()).with_codex_environment(env));
         registry.bind_lifecycle();
         let hubs=crate::side::Hubs::default();registry.bind_hubs(hubs.downgrade());
         registry.open_claude_headless("cl",false).await.unwrap().unwrap();
@@ -4533,7 +4540,7 @@ pub(crate) mod tests {
         std::fs::write(dir.join("cl.json"),sidecar.to_string()).unwrap();
         let processes=Arc::new(ParkProcesses {canos:std::sync::Mutex::new(vec![i64::from(first.0.id())]),dir:home.path().into(),agent:Default::default()});
         let env=crate::accounts::environment::AccountEnvironment::from_map([("HOME".to_owned(),home.path().to_string_lossy().into_owned())].into());
-        let registry=Arc::new(RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(),"fixture".into(),"instance".into()).with_processes(processes.clone()).with_codex_environment(env));
+        let registry=Arc::new(RuntimeRegistry::new("instance".into()).with_processes(processes.clone()).with_codex_environment(env));
         registry.bind_lifecycle();
         let hubs=crate::side::Hubs::default();registry.bind_hubs(hubs.downgrade());
         let agent=Reaped(std::process::Command::new("sleep").arg("300").spawn().unwrap());
@@ -4554,12 +4561,8 @@ pub(crate) mod tests {
     /// Registro de teste sobre os processos falsos do cano, com a espera da reabertura automática curta.
     #[cfg(target_os="linux")]
     fn park_registry(home:&std::path::Path,processes:Arc<ParkProcesses>,configure:impl FnOnce(RuntimeRegistry)->RuntimeRegistry) -> (Arc<RuntimeRegistry>,crate::side::Hubs) {
-        park_registry_at("127.0.0.1:9".parse().unwrap(),home,processes,configure)
-    }
-    #[cfg(target_os="linux")]
-    fn park_registry_at(upstream:SocketAddr,home:&std::path::Path,processes:Arc<ParkProcesses>,configure:impl FnOnce(RuntimeRegistry)->RuntimeRegistry) -> (Arc<RuntimeRegistry>,crate::side::Hubs) {
         let env=crate::accounts::environment::AccountEnvironment::from_map([("HOME".to_owned(),home.to_string_lossy().into_owned())].into());
-        let registry=Arc::new(configure(RuntimeRegistry::new(upstream,"fixture".into(),"instance".into()).with_processes(processes).with_codex_environment(env)));
+        let registry=Arc::new(configure(RuntimeRegistry::new("instance".into()).with_processes(processes).with_codex_environment(env)));
         registry.bind_lifecycle();
         let hubs=crate::side::Hubs::default();registry.bind_hubs(hubs.downgrade());
         (registry,hubs)
@@ -4581,7 +4584,7 @@ pub(crate) mod tests {
         });
         let processes=Arc::new(ParkProcesses {canos:std::sync::Mutex::new(vec![i64::from(cano.0.id())]),dir:home.path().into(),agent:Default::default()});
         let (diag,reports)=diag_sink().await;
-        let (registry,_hubs)=park_registry_at("127.0.0.1:9".parse().unwrap(),home.path(),processes,|registry|registry.with_diagnostics(diag).with_respawn_base(Duration::from_millis(20)));
+        let (registry,_hubs)=park_registry(home.path(),processes,|registry|registry.with_diagnostics(diag).with_respawn_base(Duration::from_millis(20)));
         registry.open_claude_headless(name,false).await.unwrap().unwrap();
 
         for file in &files { std::fs::remove_file(file).unwrap(); }
@@ -4606,7 +4609,7 @@ pub(crate) mod tests {
     #[cfg(target_os="linux")]
     pub(crate) async fn diag_sink() -> (crate::diag::DiagClient,Arc<tempfile::TempDir>) {
         let reports = Arc::new(tempfile::tempdir().unwrap());
-        let diag = crate::diag::DiagClient::new("127.0.0.1:9".parse().unwrap(), String::new()).with_diary(Some(reports.path().to_owned()));
+        let diag = crate::diag::DiagClient::new().with_diary(Some(reports.path().to_owned()));
         (diag,reports)
     }
 
@@ -4735,7 +4738,7 @@ pub(crate) mod tests {
     /// D2 vale para o Codex sem terminal também: abrir a conversa acorda a religação marcada do ator dele.
     #[tokio::test]
     async fn request_reopen_wakes_the_reconnect_of_a_headless_codex() {
-        let registry=Arc::new(RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(),"test".into(),"instance".into()));registry.bind_lifecycle();
+        let registry=Arc::new(RuntimeRegistry::new("instance".into()));registry.bind_lifecycle();
         let (handle,wakes)=super::super::actor::RuntimeHandle::counting_wakes("CX",1);
         let binding=crate::interactions::InteractionBinding {key:"CX".into(),conversation:"thread".into(),generation:1};
         let dir=tempfile::tempdir().unwrap();

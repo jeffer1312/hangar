@@ -6,6 +6,7 @@ use super::*;
 use crate::appearance::SideTab;
 use crate::browser::{Engine, Pointer, model};
 
+mod nav_route;
 #[cfg(not(target_os = "macos"))]
 mod pick;
 
@@ -2093,6 +2094,20 @@ impl Hangar {
         self.show_browser_tab(window, cx);
     }
 
+    /// HTML citado aberto como página isolada (`file/page`) no navegador da sessão `session`. Se a pessoa já trocou de
+    /// sessão quando a resposta chegou, a página fica na aba Navegador da sessão dela, sem roubar a tela.
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    pub(super) fn open_page_for(&mut self, session: &SessionKey, url: String, window: &mut Window, cx: &mut Context<Self>) {
+        let key = format!("{}::{}", super::servers::norm(&session.server), session.name);
+        let shown = self.browser_key().as_deref() == Some(key.as_str());
+        let browser = self.browser_for(key.clone(), window, cx);
+        browser.update(cx, |panel, cx| panel.go(url, By::User, window, cx));
+        if shown { self.show_browser_tab(window, cx); } else {
+            self.side.browser_open.insert(key.clone());
+            self.side.tabs.insert(key, SideTab::Browser);
+        }
+    }
+
     /// Painel aberto com a aba Navegador da sessão aberta à frente.
     fn show_browser_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(key) = self.side_key() else { return };
@@ -2165,8 +2180,9 @@ impl Hangar {
             let mine = current.as_deref() == Some(key.as_str());
             #[cfg(not(target_os = "macos"))]
             {
-                let name = key.rsplit("::").next().unwrap_or(&key);
-                let working = self.sessions.iter().any(|s| s.name == name && s.state == "working");
+                // A lista da máquina dona da sessão, não a do servidor ativo.
+                let (server, name) = key.rsplit_once("::").unwrap_or(("", key.as_str()));
+                let working = self.sessions_of(server).iter().any(|s| s.name == name && s.state == "working");
                 if browser.read(cx).session_working != working { browser.update(cx, |panel, cx| panel.set_session_working(working, cx)); }
             }
             let shown = visible && mine;
@@ -2216,7 +2232,10 @@ impl Hangar {
 
     /// O campo de mensagem que recebe o que veio do navegador de `owner` (`what`, para o diário): só o da sessão dele.
     fn page_composer(&self, owner: &str, what: &str) -> Option<SessionKey> {
-        if self.browser_key().as_deref() != Some(owner) { eprintln!("[nav] {what} de {owner} descartado: outra sessao aberta"); return None; }
+        if self.browser_key().as_deref() != Some(owner) {
+            crate::log_line(&format!("nav: page_attach_dropped: {what} de {owner} descartado, outra sessão aberta"));
+            return None;
+        }
         self.composer_key()
     }
 
@@ -2229,46 +2248,47 @@ impl Hangar {
         }
     }
 
-    /// `hangar-preview open` → backend → evento `nav` na lista. Com a sessão na tela a aba Navegador vem à frente; fora
-    /// dela o navegador nasce escondido, o CLI já o dirige, e a aba aparece quando a sessão for aberta. Só do servidor
-    /// desta máquina: o CLI que pediu roda nela.
-    pub(super) fn receive_nav(&mut self, data: serde_json::Value, window: &mut Window, cx: &mut Context<Self>) {
+    /// `hangar-preview open` → backend → evento `nav` na lista da máquina `server` (chave normalizada), ativa ou não.
+    /// Com a sessão na tela a aba Navegador vem à frente; fora dela o navegador nasce escondido, o CLI já o dirige, e a
+    /// aba aparece quando a sessão for aberta.
+    pub(super) fn receive_nav(&mut self, server: &str, data: serde_json::Value, window: &mut Window, cx: &mut Context<Self>) {
         if cfg!(target_os = "macos") { return; }
-        if !self.api.as_ref().is_some_and(|api| api.is_loopback()) { eprintln!("[nav] nav ignorado: servidor ativo nao e desta maquina"); return; }
-        let (Some(name), Some(url)) = (data["name"].as_str(), data["url"].as_str()) else { eprintln!("[nav] nav ignorado: sem name/url: {data}"); return };
-        // Mesma chave de `browser_key` com essa sessão aberta: a lista que traz o evento é a do servidor ativo.
-        let Some(server) = self.server.as_deref() else { eprintln!("[nav] nav ignorado: sem servidor ativo"); return };
-        let key = format!("{}::{name}", super::servers::norm(server));
+        let owner = self.machine_api(server);
+        let (key, name, url) = match nav_route::nav_target(server, owner.as_ref().map(Api::is_loopback), &data) {
+            nav_route::Nav::Open { key, name, url } => (key, name, url),
+            // Sessão de outra máquina: o app de lá abre; aqui só fica registrado, sem a url (pode levar bilhete).
+            nav_route::Nav::Skip(code) => {
+                let name = data["name"].as_str().unwrap_or("");
+                return crate::log_line(&format!("nav: {code}: pedido de {name} na máquina {server} não abre neste app"));
+            }
+        };
         let browser = self.browser_for(key.clone(), window, cx);
         // Pausado pela pessoa, o agente não troca a página dela; o `open` do CLI pergunta o `estado` e devolve o erro.
-        browser.update(cx, |panel, cx| if panel.agent_paused() { eprintln!("[nav] nav ignorado: navegador pausado pelo usuario") } else { panel.go(url.to_owned(), By::Agent, window, cx) });
+        browser.update(cx, |panel, cx| if panel.agent_paused() {
+            crate::log_line(&format!("nav: nav_paused: pedido de {name} ignorado, navegador pausado pela pessoa"));
+        } else { panel.go(url, By::Agent, window, cx) });
         if self.browser_key().as_deref() == Some(key.as_str()) { self.show_browser_tab(window, cx); } else {
             self.side.browser_open.insert(key.clone());
             self.side.tabs.insert(key, SideTab::Browser);
         }
-        if let Some(api) = self.api.clone() {
-            let name = name.to_owned();
+        if let Some(api) = owner {
             // Sem a confirmação o backend manda o mesmo `nav` de novo na próxima conexão, que renavega e traz a aba de volta.
             self.runtime.spawn(async move {
                 if let Err(e) = api.server_send(reqwest::Method::DELETE, &["sessions", &name, "nav"], None, 15).await {
-                    eprintln!("[nav] confirmação do nav de {name} falhou, ele volta na próxima conexão: {e:?}");
+                    crate::log_line(&format!("nav: nav_confirm_failed: confirmação do pedido de {name} falhou (status {:?}), ele volta na próxima conexão", e.status));
                 }
             });
         }
     }
 
-    /// `/cdp/browser/<nome>` sem token: a sessão é do servidor desta máquina, e o navegador dela nasce (escondido, como
-    /// no `hangar-preview open` fora da tela) se ainda não existir. Devolve a chave.
+    /// `/cdp/browser/<nome>` sem token: a sessão é de um servidor desta máquina (ativo ou não), e o navegador dela nasce
+    /// (escondido, como no `hangar-preview open` fora da tela) se ainda não existir. Devolve a chave.
     #[cfg(target_os = "linux")]
     fn open_for_cdp(&mut self, name: &str, window: &mut Window, cx: &mut Context<Self>) -> Result<String, (u16, String)> {
-        let local = self.api.as_ref().is_some_and(|api| api.is_loopback());
-        let Some(server) = self.server.as_deref().filter(|_| local) else {
-            return Err((503, "erro: no_local_server: o servidor ativo do app nao e o desta maquina".into()));
-        };
-        if !self.sessions.iter().any(|s| s.name == name) {
-            return Err((404, format!("erro: session_not_found: a sessao {name} nao existe no servidor desta maquina")));
-        }
-        let key = format!("{}::{name}", super::servers::norm(server));
+        let listed = |sessions: &[SessionInfo]| sessions.iter().any(|s| s.name == name);
+        let active = (self.active_key(), self.api.as_ref().is_some_and(Api::is_loopback), listed(&self.sessions));
+        let others = self.remote.iter().map(|(key, list)| (key.clone(), list.api.as_ref().is_some_and(Api::is_loopback), listed(&list.sessions)));
+        let key = nav_route::cdp_owner(name, std::iter::once(active).chain(others).collect::<Vec<_>>())?;
         let browser = self.browser_for(key.clone(), window, cx);
         browser.update(cx, |panel, cx| if panel.starting.is_none() && panel.engine().is_none_or(|e| !e.alive()) {
             panel.go("about:blank".into(), By::Agent, window, cx);

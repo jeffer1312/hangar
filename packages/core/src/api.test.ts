@@ -11,10 +11,10 @@ function overwriteGetLocale(fn: () => 'en' | 'pt') {
 }
 import { configureApi } from './apiEnv';
 // `getHistoryDesde` veio da main junto com o histórico condicional (304 + ETag).
-import { getConfig, getConfigForServer, patchConfig, patchConfigForServer, createSession, getHistory, getHistoryDesde, isAbortError, transcribeFile, transcribeFileForServer, transcribeUploaded, transcribeUploadedForServer, uploadFile, uploadFileForServer, getModelOptions, setEngineModel, rotaGenerica, pairSession } from './api';
+import { getConfig, getConfigForServer, patchConfig, patchConfigForServer, createSession, getHistory, getHistoryDesde, isAbortError, transcribeFile, transcribeFileForServer, transcribeUploaded, transcribeUploadedForServer, uploadFile, uploadFileForServer, uploadFromDiskForServer, uploadTimeoutMs, waitUploadMediaForServer, getModelOptions, setEngineModel, rotaGenerica, pairSession } from './api';
 import { createSessionForServer, getSessionDefaultsForServer, getFolderGitForServer, folderGitActionForServer, defaultBase, freshBase, baseChoices, commitsLeftOut, resumeArchivedConversation } from './api';
 import { mensagemDeErro, formataErro } from './errosApi';
-import { passarBastao, getSyncSetupForServer, setupSyncForServer, disableSyncForServer } from './api';
+import { passarBastao, getSyncSetupForServer, setupSyncForServer, disableSyncForServer, getNewChatCommandsForServer } from './api';
 import { fetchSessionsForServer, getSessions, openSessionsStream, probeServerResponse } from './api';
 import { scanDir, scanDirForServer, listClaudeConfigs, listClaudeConfigsForServer } from './api';
 import { answerQuestions, closePluginPane, inputPluginField, interrupt, openEventStreamForServer, pressPluginButton, selectOption, selectOptionForServer, sendInputForServer, showPluginPane, skipQuestion, submitSelected, submitSelectedForServer } from './api';
@@ -161,6 +161,17 @@ it('configura sincronização no servidor escolhido sem trocar nem apagar o serv
   fetchMock.mockResolvedValue(new Response('{}', { status: 401 }));
   await expect(disableSyncForServer(b)).rejects.toThrow();
   expect(onUnauthorizedSpy).not.toHaveBeenCalled();
+});
+it('lista do `/` da conversa por nascer vai à máquina escolhida, só com as escolhas feitas', async () => {
+  const b = { id: 'b', label: 'B', baseUrl: 'https://b.test', token: 'token-b' };
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response('[{"name":"help"}]'));
+  await expect(getNewChatCommandsForServer(b)).resolves.toEqual([{ name: 'help' }]);
+  await getNewChatCommandsForServer(b, '/p/a b', '/home/u/.claude-x', true);
+  expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+    'https://b.test/api/claude/commands',
+    'https://b.test/api/claude/commands?cwd=%2Fp%2Fa+b&config_dir=%2Fhome%2Fu%2F.claude-x&headless=1',
+  ]);
+  expect(fetchMock.mock.calls[0][1]?.headers).toEqual(expect.objectContaining({ Authorization: 'Bearer token-b' }));
 });
 it('bastão captura servidor B e preserva a chamada antiga em A', async () => {
   const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response('{}', { status: 200 }));
@@ -648,6 +659,34 @@ describe('contratos de conversa com servidor explícito', () => {
     expect(onUnauthorizedSpy).not.toHaveBeenCalled();
   });
 
+  it('"Na conversa" manda delivery e, no 422 do servidor antigo, reenvia como fila comum', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({ detail: [{ type: 'extra_forbidden', loc: ['body', 'delivery'],
+        msg: 'Extra inputs are not permitted', input: 'conversation' }] }), { status: 422 }))
+      .mockResolvedValueOnce(new Response('{"ok":true}', { status: 200 }));
+    await sendInputForServer(target, 'sessao', 'texto', 'conversation');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({ text: 'texto', delivery: 'conversation' });
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({ text: 'texto' });
+  });
+
+  it('"Na conversa" com outro 422 do servidor novo aparece como erro, sem reenviar pela fila', async () => {
+    const refused = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(
+      JSON.stringify({ detail: { code: 'erro_corpo_invalido', msg: 'delivery não combina com steer' } }), { status: 422 }));
+    await expect(sendInputForServer(target, 'sessao', 'texto', 'conversation')).rejects.toMatchObject({ status: 422 });
+    expect(refused).toHaveBeenCalledTimes(1);
+  });
+
+  it('"Na conversa" aceita de primeira não repete, e outro erro não vira fila', async () => {
+    const ok = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('{"ok":true}', { status: 200 }));
+    await sendInputForServer(target, 'sessao', 'texto', 'conversation');
+    expect(ok).toHaveBeenCalledTimes(1);
+    ok.mockRestore();
+    const refused = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('{"detail":"recusado"}', { status: 409 }));
+    await expect(sendInputForServer(target, 'sessao', 'texto', 'conversation')).rejects.toMatchObject({ status: 409 });
+    expect(refused).toHaveBeenCalledTimes(1);
+  });
+
   it.each([400, 408, 409, 502])('criação em B preserva status %i numérico e não repete o POST', async (status) => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('{"detail":"recusado"}', { status }));
     await expect(createSessionForServer(target, { name: 'repo', cwd: '/repo', provider: 'codex' }))
@@ -970,6 +1009,98 @@ describe('transcribeFile', () => {
       'https://a.test/api/sessions/sessao/upload?audio_only=1',
       'https://a.test/api/sessions/sessao/upload',
     ]);
+  });
+
+  it('prazo do upload cresce com o tamanho, a partir de 180 s', () => {
+    expect(uploadTimeoutMs(undefined)).toBe(180_000);
+    expect(uploadTimeoutMs(1_000_000)).toBe(180_000);
+    expect(uploadTimeoutMs(100_000_000)).toBe(2_000_000);
+  });
+
+  it('upload do disco pede a mídia para depois e devolve o id dela', async () => {
+    const send = vi.fn<typeof fetch>(async () => new Response(JSON.stringify(
+      { path: '/up/v.mp4', frames: [], transcript: '', media: 'pending', media_id: 'm1' }), { status: 200 }));
+    const saved = await uploadFromDiskForServer(server, 'sessao', { name: 'v.mp4', type: 'video/mp4', size: 10 }, send);
+    expect(send.mock.calls[0][0]).toBe('https://a.test/api/sessions/sessao/upload?media=later');
+    expect(saved).toMatchObject({ path: '/up/v.mp4', media: 'pending', media_id: 'm1' });
+  });
+
+  it('espera da mídia repete enquanto pendente e devolve quadros e fala', async () => {
+    const replies = [{ status: 'pending' }, { status: 'done', frames: ['/up/q1.jpg'], transcript: 'ola' }];
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      new Response(JSON.stringify(replies.shift()), { status: 200 }));
+    expect(await waitUploadMediaForServer(server, 'sessao', 'm1')).toEqual({ frames: ['/up/q1.jpg'], transcript: 'ola' });
+    expect(fetchMock.mock.calls.map((c) => c[0])).toEqual([
+      'https://a.test/api/sessions/sessao/upload-media?id=m1',
+      'https://a.test/api/sessions/sessao/upload-media?id=m1',
+    ]);
+  });
+
+  it('espera da mídia tenta de novo depois de queda de rede e de erro do servidor', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout'] });
+    try {
+      let calls = 0;
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+        calls += 1;
+        if (calls === 1) throw new TypeError('Network request failed');
+        if (calls === 2) return new Response(JSON.stringify({ detail: { code: 'upload_facts_unavailable' } }), { status: 503 });
+        return new Response(JSON.stringify({ status: 'done', frames: [], transcript: 'ola' }), { status: 200 });
+      });
+      const waiting = waitUploadMediaForServer(server, 'sessao', 'm1');
+      await vi.runAllTimersAsync();
+      expect(await waiting).toEqual({ frames: [], transcript: 'ola' });
+      expect(calls).toBe(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('espera da mídia cancelada para o pedido em andamento e rejeita com o motivo', async () => {
+    const abort = new AbortController();
+    vi.spyOn(globalThis, 'fetch').mockImplementation((_url, init) => new Promise((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(init.signal!.reason), { once: true });
+    }));
+    const waiting = waitUploadMediaForServer(server, 'sessao', 'm1', abort.signal);
+    const reason = new DOMException('removido', 'AbortError');
+    abort.abort(reason);
+    await expect(waiting).rejects.toBe(reason);
+  });
+
+  it('espera da mídia para na hora em convite encerrado (410) e outros 4xx definitivos', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      new Response(JSON.stringify({ detail: 'encerrado' }), { status: 410 }));
+    expect(await waitUploadMediaForServer(server, 'sessao', 'm1')).toBeNull();
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it('espera da mídia devolve null para mídia desconhecida e para servidor sem responder além do teto', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      new Response(JSON.stringify({ detail: { code: 'upload_media_unknown' } }), { status: 404 }));
+    expect(await waitUploadMediaForServer(server, 'sessao', 'm1')).toBeNull();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+        vi.setSystemTime(Date.now() + 4 * 60_000);
+        throw new TypeError('Network request failed');
+      });
+      expect(await waitUploadMediaForServer(server, 'sessao', 'm1')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('espera da mídia não desiste enquanto o servidor responde que ainda processa (fila de vídeos)', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const replies = [{ status: 'pending' }, { status: 'pending' }, { status: 'done', frames: [], transcript: 'ola' }];
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+        vi.setSystemTime(Date.now() + 2 * 60_000);
+        return new Response(JSON.stringify(replies.shift()), { status: 200 });
+      });
+      expect(await waitUploadMediaForServer(server, 'sessao', 'm1')).toEqual({ frames: [], transcript: 'ola' });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('falha de ?arquivo= leva o status', async () => {

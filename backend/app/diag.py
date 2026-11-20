@@ -31,21 +31,17 @@ import inspect
 import json
 import logging
 import os
-import platform
 import re
 import secrets
-import subprocess
-import sys
 import threading
 import time
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from functools import wraps
-from itertools import groupby
 from pathlib import Path
 from typing import Any
 
-from app import atomico, log_paths
+from app import log_paths
 
 _log = logging.getLogger("hangar.diag")
 
@@ -202,7 +198,6 @@ INICIO_EM_EXECUCAO = datetime.now().astimezone().isoformat(timespec="millisecond
 
 _NIVEIS = ("ok", "aviso", "erro")
 _TETO_DETALHE = 300
-_TETO_LOTE = 50        # linhas por POST: acima disso é ruído ou cliente com defeito
 # Quanto o relógio do aparelho pode estar à frente do servidor e o horário dele ainda valer. Não é
 # tolerância a relógio errado — é o trânsito do POST mais a diferença de arredondamento. Ver
 # `_ts_da_tela`.
@@ -214,65 +209,6 @@ _LOCK = threading.Lock()
 
 def _base() -> Path:
     return log_paths.base() / "diario"
-
-
-def _pastas_legadas() -> list[Path]:
-    from app.config import list_config_dirs
-    roots = {Path.home() / ".claude", Path(os.environ.get("CLAUDE_CONFIG_DIR") or (Path.home() / ".claude"))}
-    roots.update(Path(c.path) for c in list_config_dirs(ordered=False))
-    return sorted({(root / ".hangar-diag").resolve() for root in roots})
-
-
-def _logs_legados() -> set[Path]:
-    roots = {Path.home() / ".hangar"}
-    if os.environ.get("LOCALAPPDATA"):
-        roots.add(Path(os.environ["LOCALAPPDATA"]) / "hangar")
-    return roots
-
-
-def migrar_legados(*, privados: bool = False) -> None:
-    """Copia por origem, sem mesclar dias nem apagar arquivos usados por versões anteriores."""
-    try:
-        old_diaries = _pastas_legadas()
-        sources = [(p, _base() / "legado" / conta_id(p), "uso-*.jsonl") for p in old_diaries]
-        if privados:
-            sources.extend((p, log_paths.base() / "privado" / "legado" / conta_id(p), "*.log") for p in _logs_legados())
-            for diary in old_diaries:
-                for name in ("guard_tmux-falhas.log", "kimi_hook_error.log"):
-                    sources.append((diary.parent, log_paths.base() / "privado" / "legado" / conta_id(diary.parent), name))
-        oldest = (date.today() - timedelta(days=DIAS_GUARDADOS - 1)).isoformat()
-        for source, target, pattern in sources:
-            for original in source.glob(pattern):
-                if original.is_symlink():
-                    registrar("diag.migracao", "aviso", codigo="link_ignorado", conta_id=conta_id(source))
-                    continue
-                if pattern == "uso-*.jsonl":
-                    match = _NOME.fullmatch(original.name)
-                    if not match or not oldest <= match.group(1) <= date.today().isoformat():
-                        continue
-                destination = target / original.name
-                try:
-                    info = original.stat()
-                    size = min(info.st_size, _TETO_DIA) if pattern != "uso-*.jsonl" else info.st_size
-                    if destination.exists() and destination.stat().st_size == size and destination.stat().st_mtime_ns == info.st_mtime_ns:
-                        continue
-                    target.mkdir(parents=True, exist_ok=True, mode=0o700)
-                    temporary = target / f".{original.name}.{secrets.token_hex(8)}.tmp"
-                    try:
-                        with os.fdopen(os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as out:
-                            with original.open("rb") as inp:
-                                if size < info.st_size:
-                                    inp.seek(info.st_size - size)
-                                import shutil
-                                shutil.copyfileobj(inp, out)
-                        os.utime(temporary, ns=(info.st_atime_ns, info.st_mtime_ns))
-                        atomico.substituir(temporary, destination)
-                    finally:
-                        temporary.unlink(missing_ok=True)
-                except OSError as exc:
-                    registrar("diag.migracao", "aviso", etapa="copiar", conta_id=conta_id(source), **erro_campos(exc))
-    except Exception as exc:
-        registrar("diag.migracao", "aviso", etapa="descobrir", **erro_campos(exc))
 
 
 def caminho_do_dia(quando: date | None = None) -> Path:
@@ -424,132 +360,3 @@ def _escrever(linhas: list[dict[str, Any]]) -> bool:
     return True
 
 
-def anotar_da_tela(lote: Any) -> int:
-    """Grava um lote vindo do navegador. Devolve quantas linhas foram tratadas: a tela reenvia o
-    lote quando o número não bate, então linha descartada (teto, evento inválido) conta como
-    tratada; só o disco recusando devolve 0."""
-    if not isinstance(lote, list):
-        return 0
-    recebidas = lote[:_TETO_LOTE]
-    limpas = [d for d in (_limpar(x) for x in recebidas) if d]
-    for d in limpas:
-        d["origem"] = "tela"
-    return len(recebidas) if _escrever(limpas) else 0
-
-
-def _versao_mux() -> str:
-    try:
-        cp = subprocess.run(["tmux", "-V"], capture_output=True, text=True,
-                            encoding="utf-8", errors="replace", timeout=2)
-        if cp.returncode:
-            return f"retorno:{cp.returncode}"
-        version = cp.stdout.strip()
-        if re.fullmatch(r"(?:psmux|tmux|pmux) [0-9][0-9A-Za-z.+_-]*", version):
-            return version
-        return "resposta_nao_reconhecida"
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return type(exc).__name__
-
-
-def recursos() -> dict[str, Any]:
-    """Foto barata no erro/download; não dispara processo nem espera amostra de CPU."""
-    result: dict[str, Any] = {"threads_backend": threading.active_count()}
-    try:
-        if sys.platform == "linux":
-            with open("/proc/meminfo", encoding="ascii") as f:
-                values = {key: int(value.split()[0]) for line in f
-                          for key, value in [line.split(":", 1)]
-                          if key in ("MemTotal", "MemAvailable")}
-            result.update(memoria_total_mb=values["MemTotal"] // 1024,
-                          memoria_disponivel_mb=values["MemAvailable"] // 1024)
-        else:
-            import psutil
-            memory = psutil.virtual_memory()
-            result.update(memoria_total_mb=memory.total // (1024 * 1024),
-                          memoria_disponivel_mb=memory.available // (1024 * 1024))
-    except Exception as exc:
-        result["recursos_erro"] = type(exc).__name__
-    return result
-
-
-def _cabecalho() -> str:
-    """Primeira linha do download: o que o REPOSITÓRIO não pode contar.
-    """
-    return json.dumps({
-        "evento": "diag.formato",
-        "ts": datetime.now().astimezone().isoformat(timespec="milliseconds"),
-        "so_servidor": f"{os.name}/{sys.platform}",
-        "formato": 2,
-        "python": platform.python_version(),
-        "sistema": f"{platform.system()} {platform.release()} {platform.version()}",
-        "arquitetura": platform.machine(),
-        "cpus": os.cpu_count(),
-        "mux": _versao_mux(),
-        "mux_fonte": "tmux -V no momento do download (versão do CLI)",
-        "inicio_backend": INICIO_EM_EXECUCAO,
-        "pid_backend": os.getpid(),
-        "recursos_no_download": recursos(),
-        "dias_guardados": DIAS_GUARDADOS,
-        "ordem": "por dia; use ts e seq para ordenar eventos de origens distintas",
-        "campos_documentados_em": "backend/app/diag.py (_CAMPOS) e frontend/src/lib/diag.ts",
-        "nao_contem": "conversa, prompt, resposta do agente, chave de API, conteúdo de arquivo",
-    }, ensure_ascii=False)
-
-
-def ler_tudo() -> str:
-    """Os sete dias concatenados, mais antigo primeiro — o corpo do download."""
-    migrar_legados()
-    partes = [_cabecalho() + "\n"]
-    for p in arquivos():
-        try:
-            partes.append(p.read_text(encoding="utf-8", errors="replace"))
-        except OSError:
-            continue
-    return "".join(partes)
-
-
-def ultimas(n: int = 60) -> list[dict[str, Any]]:
-    """As N linhas mais RECENTES, já parseadas, mais novas primeiro.
-
-    É o que a tela mostra pra pessoa conferir que o diário está mesmo gravando — sem isso o botão
-    de baixar é fé: ela envia o arquivo e só quem recebe descobre que veio vazio. Lê de trás pra
-    frente, arquivo por arquivo, e para assim que junta N: numa semana movimentada, parsear os sete
-    dias inteiros pra mostrar sessenta linhas é trabalho jogado fora.
-    """
-    fora: list[dict[str, Any]] = []
-    for _, day_files in groupby(reversed(arquivos()), key=lambda p: p.name):
-        day: list[dict[str, Any]] = []
-        for p in day_files:
-            try:
-                linhas = p.read_text(encoding="utf-8", errors="replace").splitlines()
-            except OSError:
-                continue
-            collected = 0
-            for bruto in reversed(linhas):
-                try:
-                    obj = json.loads(bruto)
-                except (json.JSONDecodeError, ValueError):
-                    continue
-                if isinstance(obj, dict):
-                    day.append(obj)
-                    collected += 1
-                if collected >= n:
-                    break
-        day.sort(key=lambda row: (str(row.get("ts", "")), row.get("seq", 0)), reverse=True)
-        fora.extend(day)
-        if len(fora) >= n:
-            return fora[:n]
-    return fora
-
-
-def resumo() -> dict[str, Any]:
-    """Números pra tela decidir o que mostrar no botão (sem baixar o arquivo inteiro)."""
-    total = 0
-    for p in arquivos():
-        try:
-            total += p.stat().st_size
-        except OSError:
-            continue
-    nomes = [p.name for p in arquivos()]
-    return {"dias": len(set(nomes)), "bytes": total, "arquivos": nomes,
-            "dias_guardados": DIAS_GUARDADOS}

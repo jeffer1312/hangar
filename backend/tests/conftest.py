@@ -9,6 +9,8 @@ import pytest
 # No import, antes de qualquer teste importar o `app.config`: o `settings` nasce na importação, e
 # um `.env` de desenvolvimento com a branch de teste mudaria o alvo de toda a suíte do Atualizar.
 os.environ["CP_UPDATE_BRANCH"] = ""
+# `rust_bins` e `providers_bridge` moraram em `app/` e mudaram para o motor da orquestração.
+sys.path.append(str(Path(__file__).resolve().parents[2] / "skills" / "orquestrar" / "scripts"))
 
 
 def _instalar_home_do_windows() -> None:
@@ -116,20 +118,6 @@ def _sem_integracao_codex_real():
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _sem_sessoes_sem_terminal_reais(tmp_path_factory):
-    # Os sidecars REAIS são das sessões vivas desta máquina. Session-scoped: os testes que trocam
-    # `_dir` pelo monkeypatch voltam pra este diretório, nunca pro real.
-    from app.adapters.claude_headless import sessions
-    original = sessions._dir
-    pasta = tmp_path_factory.mktemp("claude-headless")
-    sessions._dir = lambda: pasta
-    try:
-        yield
-    finally:
-        sessions._dir = original
-
-
-@pytest.fixture(scope="session", autouse=True)
 def _isolated_runtime_storage(tmp_path_factory):
     # O novo cadastro do lifespan não pode adquirir a posse das sessões da máquina.
     from app.config import settings
@@ -200,17 +188,6 @@ def _sem_servidor_de_teste_vazado():
     )
 
 
-@pytest.fixture(autouse=True)
-def _reset_auth_backoff():
-    # O backoff de token errado (app.auth) e um dict de MODULO: sem este reset, os varios testes que
-    # mandam token errado de proposito somariam entre si e o proximo caso levaria 429 em vez do 401
-    # que ele testa.
-    from app import auth
-    auth.reset_backoff()
-    yield
-    auth.reset_backoff()
-
-
 _DIARIO_DE_TESTE = Path(tempfile.mkdtemp(prefix="hangar-diag-")) / ".hangar-diag"
 # O CLAUDE_CONFIG_DIR que a suíte HERDOU é o da conta de quem roda (sessão em `--conta` tem um):
 # esse é o real, e vale tanto quanto `~/.claude`. Só um valor DIFERENTE, posto por um teste, isola.
@@ -226,8 +203,6 @@ def _diario_isolado():
     import logging
     from app import diag, log_paths
     original = log_paths.base
-    old_sources = diag._pastas_legadas
-    old_logs = diag._logs_legados
     loggers = [logging.getLogger(name) for name in ("hangar", "app", "uvicorn.error", "asyncio")]
     handlers = {logger: set(logger.handlers) for logger in loggers}
     levels = {logger: logger.level for logger in loggers}
@@ -235,8 +210,6 @@ def _diario_isolado():
         v = os.environ.get("CLAUDE_CONFIG_DIR")
         return Path(v) / "logs" if v and v != _CONFIG_DIR_HERDADO else _DIARIO_DE_TESTE
     log_paths.base = _base_de_teste
-    diag._pastas_legadas = lambda: []
-    diag._logs_legados = lambda: set()
     yield
     for logger in loggers:
         logger.setLevel(levels[logger])
@@ -244,8 +217,6 @@ def _diario_isolado():
             logger.removeHandler(handler)
             handler.close()
     log_paths.base = original
-    diag._pastas_legadas = old_sources
-    diag._logs_legados = old_logs
 
 
 @pytest.fixture
@@ -262,17 +233,3 @@ def hangar_server_bin(monkeypatch, tmp_path):
     # No Windows o diário do subprocesso sai do LOCALAPPDATA, que o HOME de teste não troca.
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
     return binary
-
-
-@pytest.fixture
-def forwarded_guest():
-    """Identidade já verificada na borda; a assinatura tem prova em test_guest_header."""
-    from contextlib import contextmanager
-    from app import guest_header
-
-    @contextmanager
-    def scope():
-        with pytest.MonkeyPatch.context() as patch:
-            patch.setattr(guest_header, "_verify", lambda request: guest_header.GuestView({"s": "share"}))
-            yield
-    return scope

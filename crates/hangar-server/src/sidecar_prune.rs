@@ -327,7 +327,7 @@ mod tests {
     /// Estado do servidor com a conta em `home`, a lista pelo multiplexador `mux` e o diário em `diary`.
     fn state_for(home: &Path, mux: &std::ffi::OsStr, diary: &Path) -> AppState {
         use crate::list::bridge::{ListBridge, ListEnv, parse_dirs};
-        let cfg = crate::config::Config { listen: "127.0.0.1:0".parse().unwrap(), upstream: "127.0.0.1:9".parse().unwrap(),
+        let cfg = crate::config::Config { listen: "127.0.0.1:0".parse().unwrap(),
             internal_secret: "s".into(), auth_token: "dono".into(), log_path: None, trusted: crate::auth::TrustedHosts::parse("127.0.0.1") };
         let mut state = AppState::new(cfg);
         let text = home.to_string_lossy().into_owned();
@@ -338,7 +338,7 @@ mod tests {
             "kimi_home": home.join(".kimi-code")}).to_string());
         state.list = Arc::new(ListBridge::new(ListEnv { mux: crate::list::mux::Mux::with_program(mux, Duration::from_secs(5)),
             capture_program: mux.to_owned(), procs: Arc::new(crate::list::procs::SystemProcs::default()), dirs },
-            crate::list::facts::FactsClient::new("127.0.0.1:9".parse().unwrap(), "s".into())));
+            crate::list::facts::FactsClient::new()));
         state.diag = state.diag.clone().with_diary(Some(diary.to_owned()));
         state
     }
@@ -396,5 +396,21 @@ mod tests {
         let diag = state.diag.clone();
         assert!(!round(Arc::new(state)).await);
         assert_eq!(prune_lines(&diag, &failed).await[0]["codigo"], "mux_unavailable");
+    }
+
+    /// Trava do sidecar do Codex sem o `.json`, mesmo velha, fica: outro processo pode ter acabado de
+    /// abri-la para o mesmo nome, e apagá-la deixaria dois escritores com travas em inodes diferentes.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_old_orphan_codex_lock_stays_after_a_round() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let lock = crate::runtime::codex_sidecar::dir(&home).join("orfa.lock");
+        fs::create_dir_all(lock.parent().unwrap()).unwrap();
+        fs::write(&lock, "").unwrap();
+        fs::File::options().write(true).open(&lock).unwrap().set_modified(SystemTime::now() - Duration::from_secs(30 * 86_400)).unwrap();
+        let state = state_for(&home, std::ffi::OsStr::new("true"), &dir.path().join("diario"));
+        assert!(round(Arc::new(state)).await);
+        assert!(lock.exists());
     }
 }

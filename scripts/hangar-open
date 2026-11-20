@@ -1,111 +1,29 @@
-#!/usr/bin/env -S sh -c 'exec "$(command -v hangar-python || command -v python3)" "$0" "$@"'
-"""`hangar-open <claude|pi|omp|kimi> [args do CLI]`: chamado pelos wrappers de shell fora do tmux e em
-terminal. Pede a sessão ao lançador do Hangar (`hangar-server open`, o mesmo do app) e anexa o
-terminal a ela. Saída 100 = os argumentos não cabem no pedido, ou não há `hangar-server` que abra (ausente, antigo ou sem token): o wrapper
-roda o CLI cru. Qualquer outra saída diferente de 0 é erro já mostrado; não se abre uma segunda vez.
-"""
-import importlib.machinery
-import importlib.util
-import json
-import os
-import shutil
-import subprocess
-import sys
-from pathlib import Path
-
-RAW = 100
-
-# Flag do CLI -> chave do pedido (`POST /api/sessions`). O que não estiver aqui vai cru.
-FLAGS = {
-    "claude": {"--model": "model", "--effort": "effort", "--permission-mode": "permission_mode"},
-    "pi": {"--model": "model", "--thinking": "effort"},
-    "omp": {"--model": "model", "--thinking": "effort", "--profile": "omp_profile"},
-    "kimi": {"--model": "model"},
-}
-
-# Subcomando do claude (`claude --help`, seção Commands): só vale como PRIMEIRO argumento e roda cru;
-# virar sessão faria dele o prompt inicial. pi/omp/kimi já saem crus no próprio wrapper.
-SUBCOMMANDS = {
-    "claude": {"agents", "attach", "auth", "auto-mode", "doctor", "gateway", "import", "install", "logs", "mcp",
-               "plugin", "plugins", "purge", "respawn", "rm", "setup-token", "stop", "kill", "ultrareview",
-               "update", "upgrade"},
-}
-
-
-def uncovered(provider: str, arg: str) -> None:
-    print(f"hangar: o argumento '{arg}' não cabe no pedido do Hangar; abrindo o {provider} sem o Hangar", file=sys.stderr)
-
-
-def request(provider: str, args: list[str]) -> dict | None:
-    if args and args[0] in SUBCOMMANDS.get(provider, ()):
-        return None
-    body: dict = {"provider": provider, "cwd": os.environ.get("PWD") or os.getcwd(), "headless": False}
-    env = {"claude": {"CLAUDE_CONFIG_DIR": "config_dir", "CP_ENGINE": "engine"},
-           "omp": {"OMP_PROFILE": "omp_profile"}}.get(provider, {})
-    body.update({key: os.environ[var] for var, key in env.items() if os.environ.get(var)})
-    flags = FLAGS[provider]
-    rest = iter(args)
-    for arg in rest:
-        flag, eq, value = arg.partition("=")
-        if flag in flags:
-            if not eq:
-                value = next(rest, None)
-                if value is None:
-                    return uncovered(provider, arg)
-            body[flags[flag]] = value
-        elif provider == "claude" and arg == "--dangerously-skip-permissions":
-            body["permission_mode"] = "bypassPermissions"
-        elif arg.startswith("-") or "initial_prompt" in body:
-            return uncovered(provider, arg)
-        else:
-            body["initial_prompt"] = arg
-    return body
-
-
-def server_bin() -> str | None:
-    """O `hangar-server` que o Supervisor subiria (`rust_bins.find_bin` desta cópia); o PATH só sem
-    a cópia ou sem nenhum dos dois, e nunca contra um `CP_RUST_SERVER_BIN` explícito."""
-    # `~/.local/bin/hangar-open` é link: o resolve chega à cópia.
-    caminho = Path(__file__).resolve().parent.parent / "backend" / "app" / "rust_bins.py"
-    try:
-        loader = importlib.machinery.SourceFileLoader("hangar_rust_bins", str(caminho))
-        mod = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
-        loader.exec_module(mod)
-        found = mod.find_bin("hangar-server", "CP_RUST_SERVER_BIN")
-    except (ImportError, OSError):
-        found = None
-    if found:
-        return str(found)
-    return None if os.environ.get("CP_RUST_SERVER_BIN", "").strip() else shutil.which("hangar-server")
-
-
-def main() -> int:
-    provider, args = sys.argv[1], sys.argv[2:]
-    body = request(provider, args)
-    if body is None:
-        return RAW
-    exe = server_bin()
-    if not exe:
-        print(f"hangar: hangar-server não encontrado; abrindo o {provider} sem o Hangar", file=sys.stderr)
-        return RAW
-    opened = subprocess.run([exe, "open", json.dumps(body)], stdout=subprocess.PIPE, text=True)
-    # 2 = hangar-server antigo, sem `open`; 4 = sem token no .env. Nada foi enviado: segue cru.
-    if opened.returncode in (2, 4):
-        print(f"hangar: o hangar-server não abriu a sessão (saída {opened.returncode}); abrindo o {provider} sem o Hangar",
-              file=sys.stderr)
-        return RAW
-    if opened.returncode != 0:
-        # Saída 3 (resolvido mas não aberto aqui) traz o spec no stdout.
-        if opened.stdout.strip():
-            print(opened.stdout.strip(), file=sys.stderr)
-        return opened.returncode if 0 < opened.returncode != RAW else 1
-    try:
-        name = json.loads(opened.stdout)["name"]
-    except (ValueError, KeyError, TypeError):
-        print(f"hangar: resposta do hangar-server sem o nome da sessão: {opened.stdout.strip()}", file=sys.stderr)
-        return 1
-    os.execvp("tmux", ["tmux", "attach-session", "-t", f"={name}"])
-
-
-if __name__ == "__main__":
-    sys.exit(main())
+#!/bin/sh
+# `hangar-open <claude|pi|omp|kimi> [args do CLI]`: chamado pelos wrappers de shell fora do tmux e em
+# terminal. O `hangar-server open-cli` monta o pedido, abre a sessão pelo lançador do Hangar (o mesmo
+# do app) e imprime o nome; aqui só se anexa o terminal a ela. Saída 100 = os argumentos não cabem no
+# pedido, ou não há `hangar-server` que abra (ausente, antigo ou sem token): o wrapper roda o CLI cru.
+# Qualquer outra saída diferente de 0 é erro já mostrado; não se abre uma segunda vez.
+set -u
+self=$0
+while [ -L "$self" ]; do
+    dir=$(CDPATH= cd -- "$(dirname -- "$self")" && pwd)
+    link=$(readlink -- "$self")
+    case $link in /*) self=$link ;; *) self=$dir/$link ;; esac
+done
+root=$(CDPATH= cd -P -- "$(dirname -- "$self")/.." && pwd -P)
+. "$root/scripts/hangar-server-lookup"
+if ! hangar_server_find "$root"; then
+    echo "hangar: hangar-server não encontrado; abrindo o ${1:-cli} sem o Hangar" >&2
+    exit 100
+fi
+name=$("$HANGAR_SERVER_BIN" open-cli "$@")
+rc=$?
+# O `open-cli` nunca sai 2: 2 é o binário antigo, sem o subcomando, e nada foi enviado.
+if [ "$rc" -eq 2 ]; then
+    echo "hangar: o hangar-server não abriu a sessão (saída 2); abrindo o ${1:-cli} sem o Hangar" >&2
+    exit 100
+fi
+[ "$rc" -eq 0 ] || exit "$rc"
+# `=`: nome exato; sem ele o tmux cai no prefixo e `proj` anexaria em `proj-2`.
+exec tmux attach-session -t "=$name"

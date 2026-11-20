@@ -3,7 +3,7 @@
 //! ao último é descartada. O que a tela mostra é preparado na chegada da resposta, nunca no desenho.
 use super::*;
 use super::settings::{Page, segments, settings_box};
-use crate::appearance::{self, Currency, Language};
+use crate::appearance::{self, Currency, DeliveryMode, Language};
 use gpui_kit::component::progress::Progress;
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::checkbox::Checkbox;
@@ -230,8 +230,7 @@ pub(super) struct Device {
     /// Marca do estado lido antes do clique: "pronto" com a mesma marca é o desfecho de uma atualização anterior.
     baseline_ts: Option<String>,
     diary_scroll: ScrollHandle,
-    pub(super) migration: Remote<Option<super::migration::MigrationView>>,
-    pub(super) migration_poll: Option<Task<()>>,
+    pub(super) status: super::status::StatusPage,
 }
 
 impl Drop for Device {
@@ -274,7 +273,8 @@ pub(super) enum DeviceReply {
     Channel(u64, bool, Result<Value, Failure>),
     Started(u64, Launch),
     Tick(u64, Result<Value, Failure>),
-    Migration(u64, Result<Value, Failure>),
+    /// Um evento da conexão da página Status, pela geração dela.
+    Status(u64, super::status::Feed),
     Report(Vec<Missed>, Base, Option<String>),
 }
 
@@ -351,8 +351,6 @@ impl Hangar {
         self.device = Device::new(window, cx);
         self.sync_channel_update_guard(cx);
         self.load_rate(cx);
-        // A troca levou a leitura periódica junto; com a página aberta, ela recomeça no servidor novo.
-        if self.settings == Some(Page::Migration) { self.migration_opened(cx); }
     }
 
     /// Página aberta: pede o que ela mostra do servidor.
@@ -362,6 +360,7 @@ impl Hangar {
         if page != Page::Sync { self.sync_page_left(); }
         if page != Page::Connect { self.connect_page_left(); }
         if page != Page::Devices { self.devices_page_left(); }
+        if page != Page::Status { self.status_left(); }
         match page {
             Page::General if !self.device.rate.loading && self.device.rate_value().is_none() => self.load_rate(cx),
             Page::Diary => {
@@ -391,7 +390,7 @@ impl Hangar {
             Page::Connect => self.connect_opened(cx),
             Page::Devices => self.devices_opened(cx),
             Page::SharedConfig => self.shared_config_opened(cx),
-            Page::Migration => self.migration_opened(cx),
+            Page::Status => self.status_opened(cx),
             _ => {}
         }
     }
@@ -696,9 +695,7 @@ impl Hangar {
             DeviceReply::Report(results, base, token) => {
                 self.device.report = Some(report_done(results, base, token));
             }
-            DeviceReply::Migration(seq, result) => {
-                self.device.migration.finish(seq, result.map(|v| super::migration::parse(&v)).map_err(|e| Self::failure(&e)));
-            }
+            DeviceReply::Status(generation, feed) => { self.receive_status(generation, feed, cx); return; }
             DeviceReply::Rate(seq, result) => {
                 let parsed = result.map_err(|e| Self::failure(&e))
                     .map(|v| v.get("usd_brl").and_then(Value::as_f64).filter(|r| r.is_finite() && *r > 0.));
@@ -900,6 +897,7 @@ impl Hangar {
             settings_box().child(self.row(IconName::Key, "settings_chrome_autofill", Some(tr("settings_chrome_autofill_desc")), true, toggle.into_any_element()))
                 .child(self.row(IconName::Globe, "settings_full_chrome", Some(tr("settings_full_chrome_desc")), true, full.into_any_element()))
         });
+        let delivery = self.render_delivery_mode(cx);
         let lead = tr(if crate::tray::SUPPORTED { "settings_general_lead_window" } else { "settings_general_lead" });
         div().flex().flex_col()
             .child(self.page_top("settings_page_general", lead))
@@ -907,9 +905,33 @@ impl Hangar {
             .child(settings_box()
                 .child(self.row(IconName::Languages, "settings_language", Some(tr("settings_language_desc")), true, language))
                 .child(self.row(IconName::Banknote, "settings_currency", Some(rate_note), true, currency)))
+            .child(self.heading("settings_conversation_group"))
+            .child(settings_box().child(delivery))
             .when_some(tray, |el, tray| el.child(self.heading("settings_window_group")).child(tray))
             .when_some(autofill, |el, autofill| el.child(self.heading("settings_browser_group")).child(autofill))
             .into_any_element()
+    }
+
+    /// "Mensagem enviada com a sessão trabalhando": as quatro escolhas, com a explicação da que vale.
+    fn render_delivery_mode(&mut self, cx: &mut Context<Self>) -> Div {
+        const MODES: [DeliveryMode; 4] = [DeliveryMode::Queue, DeliveryMode::Direct, DeliveryMode::Jev, DeliveryMode::Conversation];
+        self.refresh_queue_jev(cx);
+        let mode = appearance::get().delivery_mode();
+        let jev_help = self.queue_jev_help();
+        let labels = ["delivery_mode_queue", "delivery_mode_direct", "delivery_mode_jev", "delivery_mode_conversation"]
+            .map(|key| tr_shared(key, &[]));
+        let desc = tr_shared(match mode {
+            DeliveryMode::Queue => "delivery_mode_queue_desc",
+            DeliveryMode::Direct => "delivery_mode_direct_desc",
+            DeliveryMode::Jev => "delivery_mode_jev_desc",
+            DeliveryMode::Conversation => "delivery_mode_conversation_desc",
+        }, &[]);
+        let enabled = MODES.map(|m| m != DeliveryMode::Jev || self.queue_jev_ready());
+        let control = super::settings::segments_where("delivery-mode", &labels, &[], MODES.iter().position(|m| *m == mode).unwrap_or(0),
+            &enabled, false, jev_help, |this: &mut Hangar, index, _: &mut Window, cx| this.set_delivery_mode(MODES[index], cx), cx);
+        // As quatro opções não cabem ao lado do título sem espremê-lo: vão embaixo da descrição, como no mock.
+        let below = div().flex().flex_col().gap(px(10.)).child(desc).child(div().flex().child(control));
+        self.row_with(IconName::MessageSquare, "settings_delivery_mode", below, true, div().into_any_element())
     }
 
     pub(super) fn render_diary(&mut self, cx: &mut Context<Self>) -> AnyElement {
@@ -1174,9 +1196,6 @@ impl Hangar {
             .child(self.heading("settings_about_server_group"))
             .child(settings_box().child(server_row).child(update_row).children(progress))
             .children(self.render_dev_mode(cx).map(|row| row.mt(px(12.))))
-            .when(!self.active_invite() && self.api.is_some(), |el| el.child(div().mt(px(12.)).child(Button::new("migration-open").outline().small()
-                .icon(IconName::Activity).label(tr_shared("migration_open", &[]))
-                .on_click(cx.listener(|this, _, window, cx| this.open_settings(Page::Migration, window, cx))))))
             .when(!self.active_invite() && !self.device.channel.unsupported, |el| el.child(self.heading("settings_channel_title")).child(self.render_channel(cx)))
             .into_any_element()
     }

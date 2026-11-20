@@ -191,6 +191,15 @@ pub struct Engine {
     notices_seen:BTreeSet<String>,
     /// A rodada de reaprovação deste turno já terminou (aprovou, falhou ou não tinha o que aprovar).
     hook_trust_settled:bool,
+    /// A antecipada ficou sem resposta nesta conexão: outra mudança de plugin não pergunta de novo até
+    /// o Codex responder ou a conexão ser refeita; a reaprovação pela recusa do hook continua valendo.
+    early_trust_unanswered:bool,
+    /// Troca de sandbox caiu sem confirmação: antes do próximo turno o modo gravado volta a ser aplicado.
+    permission_resync:bool,
+    /// Quando a próxima reaplicação pode sair e quantas falharam seguidas; na terceira, o processo sobe de novo.
+    permission_resync_at:f64,
+    permission_resync_failures:u8,
+    permission_restarting:bool,
     /// Saída nova de comando ainda não publicada: sai no Tick deste instante.
     output_due:Option<f64>,
     thinking:LiveBuffer,
@@ -263,6 +272,8 @@ fn known_mode(payload:&Value) -> Result<&'static str,RuntimeError> {
 }
 fn approval(mode:&str) -> &'static str { if mode == "Full Access" { "never" } else { "on-request" } }
 fn sandbox(mode:&str) -> &'static str { match mode { "Full Access"=>"danger-full-access","Approve for me"=>"workspace-write",_=>"read-only" } }
+/// O mesmo sandbox no formato da `SandboxPolicy` do `thread/settings/update`.
+fn sandbox_policy(mode:&str) -> &'static str { match mode { "Full Access"=>"dangerFullAccess","Approve for me"=>"workspaceWrite",_=>"readOnly" } }
 
 /// Código do problema pelo `codexErrorInfo` (texto, ou objeto de chave única); None = sem classe própria.
 /// `rateLimitExceeded` é o aperto temporário do provedor, com nova tentativa: não é a cota da conta.
@@ -329,7 +340,7 @@ fn hook_origin(source:&str) -> String {
 }
 
 /// Thread principal aberta pela TUI, como `sessions.primary_thread` do Python: subagente e outra pasta não trocam o vínculo.
-fn primary_thread(thread:&Value,cwd:Option<&str>) -> bool {
+pub(crate) fn primary_thread(thread:&Value,cwd:Option<&str>) -> bool {
     cwd.is_some() && thread["cwd"].as_str() == cwd && matches!(thread["source"].as_str(),Some("cli" | "vscode"))
         && thread["parentThreadId"].as_str().is_none_or(str::is_empty) && thread["threadSource"] != "subagent"
         && thread["canAcceptDirectInput"] != false
@@ -506,7 +517,7 @@ impl Engine {
             // já foi recusado no `new_checked`; em nenhum dos dois vira Full Access.
             permission_mode:headless.then(||super::codex_launch::stored_mode(&metadata).ok()).flatten().map(Into::into),token_usage:Value::Null,rate_limits:Value::Null,usage_limited:false,
             preview:LiveBuffer::default(),response_started:false,first_response_start:None,compacting:false,
-            running_commands:BTreeMap::new(),hook_streaks:BTreeMap::new(),notices_seen:BTreeSet::new(),hook_trust_settled:false,output_due:None,thinking:LiveBuffer::default(),was_working:metadata["in_progress"] == true,
+            running_commands:BTreeMap::new(),hook_streaks:BTreeMap::new(),notices_seen:BTreeSet::new(),hook_trust_settled:false,early_trust_unanswered:false,permission_resync:false,permission_resync_at:0.0,permission_resync_failures:0,permission_restarting:false,output_due:None,thinking:LiveBuffer::default(),was_working:metadata["in_progress"] == true,
             rpc:BTreeMap::new(),server_requests:Vec::new(),
             request_epochs:BTreeMap::new(),answering:BTreeSet::new(),lost_requests:BTreeSet::new(),wires:BTreeMap::new(),policies:BTreeMap::new(),last_format_request:None,format_gate:FormatGate::default(),reported_formats:BTreeSet::new(),async_questions,subagents:BTreeMap::new(),subagent_revision:0,subagent_epoch:Arc::new(subagents::FamilyEpoch::default()),reservations:Vec::new(),skill_preparations:BTreeMap::new(),skips:BTreeMap::new(),last_event:clock.monotonic_s,mode_write:None,metadata }
     }
@@ -691,9 +702,12 @@ impl Engine {
     }
 
     fn async_transport_ready(&self) -> bool {
+        // Com a troca de sandbox pendente ou incerta, o turno sairia com a aprovação de um modo e o sandbox de outro.
         self.alive && self.sendable() && self.server_requests.is_empty() && self.lost_requests.is_empty() && self.skill_preparations.is_empty()
+            && !self.permission_resync && !self.permission_restarting
             && !self.rpc.values().any(|rpc|rpc.params["threadId"] == self.thread_id && matches!(rpc.method.as_str(),"turn/start" | "turn/steer" | "thread/compact/start")
-                || rpc.continuation.as_ref().is_some_and(|next|next["kind"] == "skill_lookup"))
+                || rpc.continuation.as_ref().is_some_and(|next|next["kind"] == "skill_lookup"
+                    || !rpc.timed_out && matches!(next["kind"].as_str(),Some("permission_live" | "permission_resync"))))
     }
 
     fn async_answer_ready(&self, reservation: &ReservedAsyncAnswer) -> bool {
@@ -813,7 +827,7 @@ impl Engine {
     /// Plugin reinstalado no disco: reaprova antes do próximo hook, sem esperar a recusa dele.
     pub fn plugins_changed(&mut self) -> Vec<Effect> {
         let mut effects = Vec::new();
-        if self.sendable() { self.trust_synced_hooks(None,true,&mut effects); }
+        if self.sendable() && !self.early_trust_unanswered { self.trust_synced_hooks(None,true,&mut effects); }
         effects
     }
 
@@ -836,6 +850,7 @@ impl Engine {
     }
 
     fn hook_trust_reply(&mut self,rpc:&Rpc,line:&Value,effects:&mut Vec<Effect>) {
+        self.early_trust_unanswered = false;
         let parent = rpc.continuation.as_ref().and_then(|next|next["parent"].as_str());
         // A antecipada não gasta a rodada do turno nem avisa: se falhar, a recusa do hook dispara a reativa.
         let early = rpc.continuation.as_ref().is_some_and(|next|next["early"] == true);
@@ -973,6 +988,41 @@ impl Engine {
             self.service_tier = Some(tier);
             self.policy("session.patch_meta",json!({"service_tier":self.service_tier}),effects);
         }
+    }
+
+    /// Troca do sandbox na conversa: o modo novo só vale, e só é gravado, com a confirmação do Codex.
+    fn permission_reply(&mut self,rpc:&Rpc,line:&Value,effects:&mut Vec<Effect>) {
+        let next = rpc.continuation.as_ref().unwrap();
+        let mode = next["mode"].as_str().unwrap_or("");
+        // A fila esperou a troca: confirmada ou não, os turnos seguintes já sabem o modo.
+        effects.push(Effect::WakeQueue);
+        // Outra conversa: a troca valeu para a anterior e esta segue no modo de antes.
+        if next["thread"] != self.thread_id.as_str() {
+            if rpc.timed_out {
+                tracing::warn!(session=%self.state.session,mode,"codex: troca de sandbox confirmada tarde para outra conversa");
+            } else {
+                effects.push(Effect::Reply { operation_id:rpc.operation_id.clone(),disposition:Disposition::Unknown,
+                    payload:json!({"error":"a conversa mudou antes de confirmar a permissão"}) });
+            }
+            return;
+        }
+        if !line["error"].is_null() {
+            let why = line["error"]["message"].as_str().unwrap_or("o Codex recusou a troca do sandbox");
+            if rpc.timed_out {
+                tracing::warn!(session=%self.state.session,mode,error=%why,"codex: troca de sandbox recusada depois do prazo");
+            } else {
+                effects.push(Effect::Reply { operation_id:rpc.operation_id.clone(),disposition:Disposition::Rejected,payload:json!({"error":why}) });
+            }
+            return;
+        }
+        // Depois do prazo a troca já foi dada como não feita e o modo gravado está sendo reaplicado: não muda de novo.
+        if rpc.timed_out {
+            tracing::warn!(session=%self.state.session,mode,"codex: troca de sandbox confirmada depois do prazo; vale o modo gravado");
+            return;
+        }
+        self.permission_mode = Some(mode.into());
+        self.policy("session.patch_meta",json!({"permission_mode":mode}),effects);
+        effects.push(Effect::Reply { operation_id:rpc.operation_id.clone(),disposition:Disposition::Accepted,payload:json!({"current":mode}) });
     }
 
     fn service_tier_reply(&mut self,rpc:&Rpc,line:&Value,effects:&mut Vec<Effect>) {
@@ -1147,6 +1197,11 @@ impl Engine {
             self.server_requests.clear(); self.answering.clear(); self.request_epochs.clear();
         }
         self.finish_service_tier(Disposition::Unknown,json!({"error":"O Codex desconectou antes de confirmar Fast"}),&mut effects);
+        // A troca de sandbox que caiu sem confirmação pode ter valido: na volta, o modo gravado é reaplicado.
+        if self.rpc.values().any(|rpc|rpc.continuation.as_ref().is_some_and(|next|matches!(next["kind"].as_str(),Some("permission_live" | "permission_resync")))) {
+            self.permission_resync = true;
+            self.permission_resync_at = self.clock.monotonic_s;
+        }
         let mut uncertain = Vec::new();
         for (_,rpc) in std::mem::take(&mut self.rpc) {
             uncertain.extend(reserved_entry(&rpc));
@@ -1188,7 +1243,7 @@ impl Engine {
         // Terminal adota a thread que a TUI abriu: nunca cria conversa nem sobe outro processo.
         if !self.headless && self.thread_id.is_empty() { return Err(error("Codex com terminal sem conversa identificada")); }
         self.reconnect = reconnect;
-        self.ready = false;
+        self.ready = false; self.early_trust_unanswered = false;
         self.connected = false; self.subscribed = false; self.subscribe_due = None; self.subscribe_wait = SUBSCRIBE_RETRY_BASE;
         self.turn_known = false;
         let mut effects = Vec::new();
@@ -1793,15 +1848,29 @@ impl Engine {
             }
             OperationKind::SetPermissionMode => {
                 let mode = known_mode(&payload)?;
-                // O `approvalPolicy` vale no próximo turno; o sandbox só muda subindo o processo de novo.
+                // Uma troca por vez: a resposta de uma anterior desfaria a escolha mais nova.
+                if self.permission_resync || self.rpc.values().any(|rpc|!rpc.timed_out
+                    && rpc.continuation.as_ref().is_some_and(|next|matches!(next["kind"].as_str(),Some("permission_live" | "permission_resync")))) {
+                    return Err(RuntimeError::new("erro_permissao_ocupada","outra troca de permissão ainda espera a confirmação do Codex"));
+                }
+                // O `approvalPolicy` vale no próximo turno; o sandbox troca na conversa, sem subir o processo de
+                // novo (o terminal nem chega aqui: `relaunches`). Vale do próximo turno em diante, por isso a troca
+                // com turno rodando é recusada: o turno em andamento seguiria no sandbox antigo.
                 if sandbox(mode) != sandbox(self.launch_mode()) {
                     if !self.ready || !self.turn_known { return Err(error("não foi possível confirmar o estado do turno; permissão mantida")); }
-                    if self.in_progress || !self.server_requests.is_empty() {
-                        return Err(RuntimeError::new("erro_permissao_ocupada","a sessão está trabalhando; mudar o sandbox reiniciaria o Codex — espere ela terminar"));
+                    // Turno pedido e ainda sem resposta também conta: ele começaria no sandbox antigo e ficaria nele.
+                    let starting = self.rpc.values().any(|rpc|!rpc.timed_out && (rpc.params["threadId"] == self.thread_id
+                        && matches!(rpc.method.as_str(),"turn/start" | "turn/steer" | "thread/compact/start")
+                        || rpc.continuation.as_ref().is_some_and(|next|next["kind"] == "skill_lookup")));
+                    if self.in_progress || starting || !self.server_requests.is_empty() || !self.skill_preparations.is_empty() {
+                        return Err(RuntimeError::new("erro_permissao_ocupada","a sessão está trabalhando; espere ela terminar para mudar o sandbox"));
                     }
-                    // O modo novo entra na vida nova; a falha antes dela deixa tudo como estava.
-                    return Ok(vec![Effect::Respawn { operation_id:id,reason:"permission".into(),
-                        patch:json!({"permission_mode":mode}),reply:json!({"current":mode}) }]);
+                    let request = ClientRequest::ThreadSettingsUpdate(wire::ThreadSettingsUpdateParams { thread_id:self.thread_id.clone(),
+                        approval_policy:Some(approval(mode).into()),sandbox_policy:Some(wire::SandboxPolicyKind { kind:sandbox_policy(mode).into() }),
+                        ..Default::default() });
+                    self.send(id,request,Some(json!({"kind":"permission_live","mode":mode,"thread":self.thread_id})),&mut effects);
+                    self.changed(&mut effects,true);
+                    return Ok(effects);
                 }
                 self.permission_mode = Some(mode.into());
                 self.policy("session.patch_meta",json!({"permission_mode":mode}),&mut effects);
@@ -1935,19 +2004,34 @@ impl Engine {
                 }
             }
             EngineInput::Tick => {
+                if self.permission_resync && self.headless && self.sendable() && !self.in_progress && clock.monotonic_s >= self.permission_resync_at {
+                    self.permission_resync = false;
+                    let mode = self.launch_mode().to_owned();
+                    self.counter += 1;
+                    self.rpc(format!("permission_resync:{}:{}",self.generation,self.counter),"thread/settings/update",
+                        json!({"threadId":self.thread_id,"sandboxPolicy":{"type":sandbox_policy(&mode)},"approvalPolicy":approval(&mode)}),
+                        Some(json!({"kind":"permission_resync","mode":mode})),&mut effects);
+                }
                 if self.output_due.is_some_and(|due|clock.monotonic_s >= due) { self.publish_output(&mut effects); }
                 if let Some(text) = self.preview.tick(clock.monotonic_s) { self.publish(text,&mut effects); }
                 if let Some(text) = self.thinking.tick(clock.monotonic_s) { self.publish_on("thinking",text,&mut effects); }
                 let mut subscribe_lost = false;
                 let mut uncertain = Vec::new();
                 let mut trust_expired = false;
+                let mut early_expired = false;
+                let mut sandbox_uncertain = false;
+                let mut resync_expired = false;
                 for rpc in self.rpc.values_mut() {
                     if !rpc.timed_out && clock.monotonic_s >= rpc.deadline {
                         rpc.timed_out = true;
                         let hook_trust = rpc.continuation.as_ref().filter(|next|next["kind"] == "hook_trust");
                         if hook_trust.is_some_and(|next|next["early"] == true) {
                             tracing::warn!(session=%self.state.session,method=%rpc.method,"codex: reaprovação antecipada sem resposta");
+                            early_expired = true;
                         }
+                        // Troca de sandbox sem resposta pode ter valido: conta como não feita e o modo gravado é reaplicado.
+                        sandbox_uncertain |= rpc.continuation.as_ref().is_some_and(|next|next["kind"] == "permission_live");
+                        resync_expired |= rpc.continuation.as_ref().is_some_and(|next|next["kind"] == "permission_resync");
                         trust_expired |= hook_trust.is_some_and(|next|next["early"] != true);
                         subscribe_lost |= subscribe_rpc(rpc) && rpc.params["threadId"] == self.thread_id.as_str();
                         uncertain.extend(reserved_entry(rpc));
@@ -1960,6 +2044,9 @@ impl Engine {
                     }
                 }
                 for entry in uncertain { self.set_reservation(&entry,ReservationState::Uncertain); }
+                if early_expired { self.early_trust_unanswered = true; }
+                if sandbox_uncertain { self.permission_resync = true; self.permission_resync_at = clock.monotonic_s; }
+                if resync_expired { self.permission_resync_failed(&mut effects); }
                 // Reaprovação sem resposta: o hook que motivou continua recusado, e a conversa precisa saber.
                 if trust_expired && !self.hook_trust_settled {
                     self.hook_trust_settled = true;
@@ -2051,6 +2138,23 @@ impl Engine {
             return Ok(());
         }
         if rpc.continuation.as_ref().is_some_and(|next|next["kind"] == "hook_trust") { self.hook_trust_reply(&rpc,&line,effects); return Ok(()); }
+        if rpc.continuation.as_ref().is_some_and(|next|next["kind"] == "permission_resync") {
+            if line["error"].is_null() {
+                self.permission_resync_failures = 0;
+                effects.push(Effect::WakeQueue);
+            } else {
+                tracing::warn!(session=%self.state.session,error=%line["error"]["message"].as_str().unwrap_or(""),
+                    "codex: o modo gravado não foi reaplicado; os turnos seguem retidos");
+                self.permission_resync_failed(effects);
+            }
+            self.changed(effects,true);
+            return Ok(());
+        }
+        if rpc.continuation.as_ref().is_some_and(|next|next["kind"] == "permission_live") {
+            self.permission_reply(&rpc,&line,effects);
+            self.changed(effects,true);
+            return Ok(());
+        }
         if subscribe_rpc(&rpc) { self.subscribe_reply(&rpc,&line,effects); return Ok(()); }
         // Conversa aberta sem prova segue o caminho da recusa explícita: nunca fica pronta nem acorda a fila.
         let mut opened = None;
@@ -2661,7 +2765,31 @@ impl Engine {
     pub fn next_deadline(&self) -> Option<f64> {
         self.preview.deadline().into_iter().chain(self.thinking.deadline()).chain(self.rpc.values().filter(|rpc|!rpc.timed_out).map(|rpc|rpc.deadline))
             .chain(self.service_tier_pending.as_ref().map(|pending|pending.deadline)).chain(self.subscribe_due).chain(self.unsubscribed_turn_due())
-            .chain(self.turn_probe_due()).chain(self.output_due).min_by(f64::total_cmp)
+            .chain(self.turn_probe_due()).chain(self.output_due).chain(self.permission_resync_due()).min_by(f64::total_cmp)
+    }
+
+    /// Reaplicação pendente e enviável vence já: sessão parada não teria outro `Tick` para fazê-la.
+    fn permission_resync_due(&self) -> Option<f64> {
+        (self.permission_resync && self.headless && self.sendable() && !self.in_progress).then_some(self.permission_resync_at)
+    }
+
+    /// Reaplicação que falhou não libera os turnos: tenta de novo com espera crescente e, na terceira, sobe o
+    /// processo de novo, que nasce com o modo gravado no arquivo da sessão.
+    fn permission_resync_failed(&mut self,effects:&mut Vec<Effect>) {
+        self.permission_resync_failures += 1;
+        if self.permission_resync_failures < 3 {
+            self.permission_resync = true;
+            self.permission_resync_at = self.clock.monotonic_s + 2.0 * f64::from(self.permission_resync_failures);
+            return;
+        }
+        tracing::warn!(session=%self.state.session,"codex: modo gravado não reaplicado em 3 tentativas; o processo sobe de novo com ele");
+        // Até o processo novo subir, nenhum turno sai pelo antigo, que segue com o sandbox incerto.
+        self.permission_resync = false;
+        self.permission_resync_failures = 0;
+        self.permission_restarting = true;
+        self.counter += 1;
+        effects.push(Effect::Respawn { operation_id:format!("permission_resync:{}:{}",self.generation,self.counter),reason:"restart".into(),
+            patch:Value::Null,reply:json!({}) });
     }
 
     /// Conferência do turno calado: só com a assinatura (ou o cano) entregando eventos e nenhuma em voo.
@@ -2727,7 +2855,7 @@ fn skill_parent(rpc:&Rpc) -> Option<String> {
     rpc.continuation.as_ref().filter(|next|next["kind"] == "skill_lookup").and_then(|next|next["parent"].as_str()).map(str::to_owned)
 }
 /// A reaprovação de hooks nasce do motor, sem operação na fila: responder a ela derruba o ator.
-fn in_queue(rpc:&Rpc) -> bool { !rpc.continuation.as_ref().is_some_and(|next|next["kind"] == "hook_trust") }
+fn in_queue(rpc:&Rpc) -> bool { !rpc.continuation.as_ref().is_some_and(|next|matches!(next["kind"].as_str(),Some("hook_trust" | "permission_resync"))) }
 fn reserved_entry(rpc:&Rpc) -> Option<String> {
     rpc.continuation.as_ref().filter(|next|next["kind"] == "async_answer" && next["reserved"] == true)
         .and_then(|next|next["entry_id"].as_str()).map(str::to_owned)

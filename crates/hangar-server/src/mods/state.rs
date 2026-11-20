@@ -266,12 +266,11 @@ struct Loose {
 }
 
 /// O aviso com o número `seq`, guardado em `toasts` com o vencimento, até `TOASTS_KEPT` vivos.
-fn push_toast(toasts: &mut Vec<(Instant, Value)>, seq: u64, plugin: &str, text: &str, timeout_ms: u64) -> Value {
+fn push_toast(toasts: &mut Vec<(Instant, Value)>, now: Instant, seq: u64, plugin: &str, text: &str, timeout_ms: u64) -> Value {
     let ms = if timeout_ms == 0 { TOAST_DEFAULT_MS } else { timeout_ms }.clamp(TOAST_MIN_MS, TOAST_MAX_MS);
     let toast = json!({"id": format!("rs-{}-{seq}", boot()),
         "text": text.chars().take(TOAST_MAX_CHARS).collect::<String>(),
         "plugin": plugin.chars().take(TOAST_PLUGIN_CHARS).collect::<String>(), "timeoutMs": ms});
-    let now = Instant::now();
     toasts.retain(|(until, _)| *until > now);
     toasts.push((now + Duration::from_millis(ms), toast.clone()));
     if toasts.len() > TOASTS_KEPT {
@@ -288,7 +287,13 @@ pub struct Mods {
     lives: Arc<std::sync::atomic::AtomicU64>,
     /// Acorda quem espera press, fechar, foco e rolagem da sessão com terminal.
     notify: Arc<Notify>,
+    /// O relógio da janela do clique e do prazo dos avisos (`set_clock`).
+    clock: Arc<OnceLock<Clock>>,
 }
+
+/// Troca o relógio de parede: os testes param o tempo para a janela do clique e o prazo dos avisos não
+/// dependerem da carga da máquina.
+pub type Clock = Arc<dyn Fn() -> Instant + Send + Sync>;
 
 pub(crate) use hangar_core::ids::random_hex;
 
@@ -307,6 +312,15 @@ fn empty_ui(source: &str) -> Value {
 impl Mods {
     pub fn bind_hubs(&self, hubs: WeakHubs) {
         let _ = self.hubs.set(hubs);
+    }
+
+    /// Vale para todas as cópias deste `Mods`; só o primeiro relógio fica.
+    pub fn set_clock(&self, clock: Clock) {
+        let _ = self.clock.set(clock);
+    }
+
+    fn now(&self) -> Instant {
+        self.clock.get().map_or_else(Instant::now, |clock| clock())
     }
 
     /// Identificador de uma vida de ator, único no servidor. A geração da sessão não serve: ela conta por
@@ -492,7 +506,7 @@ impl Mods {
             inner.toast_seq += 1;
             let seq = inner.toast_seq;
             let Some(session) = inner.sessions.get_mut(name).filter(|session| session.life == life) else { return };
-            push_toast(&mut session.toasts, seq, plugin, text, timeout_ms)
+            push_toast(&mut session.toasts, self.now(), seq, plugin, text, timeout_ms)
         };
         self.deliver(name, "plugin_toast", &toast.to_string());
     }
@@ -508,7 +522,7 @@ impl Mods {
             if inner.sessions.contains_key(name) { return; }
             inner.toast_seq += 1;
             let seq = inner.toast_seq;
-            push_toast(&mut inner.loose.entry(name.to_owned()).or_default().toasts, seq, plugin, text, timeout_ms)
+            push_toast(&mut inner.loose.entry(name.to_owned()).or_default().toasts, self.now(), seq, plugin, text, timeout_ms)
         };
         self.deliver(name, "plugin_toast", &toast.to_string());
     }
@@ -533,10 +547,11 @@ impl Mods {
     /// O mod copiou um texto. Com clique do app em aberto, o texto volta na resposta do clique, para o
     /// aparelho de quem clicou; sem clique, vira aviso (spec, "Fonte superfície", passo 6).
     pub fn copied(&self, name: &str, life: u64, plugin: &str, text: &str) {
+        let now = self.now();
         let taken = {
             let mut inner = self.inner.lock().unwrap();
             let Some(session) = inner.sessions.get_mut(name).filter(|session| session.life == life) else { return };
-            match session.click.as_mut().filter(|click| click.until > Instant::now() && click.plugin == plugin) {
+            match session.click.as_mut().filter(|click| click.until > now && click.plugin == plugin) {
                 Some(click) => {
                     click.copied = Some(text.to_owned());
                     click.effect.notify_one();
@@ -566,10 +581,11 @@ impl Mods {
     /// para quem clicou.
     pub fn begin_click(&self, name: &str, site: &str, plugin: &str, key: &str) -> String {
         let attempt = random_hex(8);
+        let now = self.now();
         if let Some(session) = self.inner.lock().unwrap().sessions.get_mut(name) {
             let window = if session.terminal.is_some() { TERMINAL_CLICK_WINDOW } else { CLICK_WINDOW };
             session.click = Some(Click { site: site.to_owned(), key: key.to_owned(), plugin: plugin.to_owned(), attempt: attempt.clone(),
-                until: Instant::now() + window, matched: false, copied: None, opened: None, effect: Arc::default() });
+                until: now + window, matched: false, copied: None, opened: None, effect: Arc::default() });
         }
         attempt
     }
@@ -577,9 +593,10 @@ impl Mods {
     /// O press é o clique que o app pediu? Sim uma vez só, como o `_do_app` do Python. `plugin`: o mod do
     /// press, que o plugin do Hangar carregado antes desta versão não manda.
     pub fn match_click(&self, name: &str, site: &str, plugin: Option<&str>, key: &str) -> Option<String> {
+        let now = self.now();
         let mut inner = self.inner.lock().unwrap();
         let click = inner.sessions.get_mut(name)?.click.as_mut()?;
-        if click.matched || click.site != site || click.key != key || !same_mod(plugin, &click.plugin) || click.until <= Instant::now() {
+        if click.matched || click.site != site || click.key != key || !same_mod(plugin, &click.plugin) || click.until <= now {
             return None;
         }
         click.matched = true;
@@ -589,9 +606,10 @@ impl Mods {
     /// A URL que o mod abriria, para o aparelho de quem clicou. Fora do clique, `false`: o plugin deixa
     /// o mod abrir na máquina do servidor.
     pub fn opened(&self, name: &str, attempt: &str, url: &str) -> bool {
+        let now = self.now();
         let mut inner = self.inner.lock().unwrap();
         let Some(click) = inner.sessions.get_mut(name).and_then(|session| session.click.as_mut()) else { return false };
-        if click.attempt != attempt || click.until <= Instant::now() {
+        if click.attempt != attempt || click.until <= now {
             return false;
         }
         click.opened = Some(url.to_owned());
@@ -636,7 +654,7 @@ impl Mods {
                 (None, None) => return Vec::new(),
             }
         };
-        let now = Instant::now();
+        let now = self.now();
         let mut frames: Vec<(&'static str, String)> = ui.iter().map(|ui| ("plugin_ui", ui.to_string())).collect();
         for (until, toast) in toasts.iter().filter(|(until, _)| *until > now) {
             let mut toast = toast.clone();
@@ -893,9 +911,10 @@ impl Mods {
     /// O mod copiou um texto num clique do app com terminal (`/api/plugin/copied`); fora do clique, `false`
     /// e o plugin deixa a cópia acontecer no terminal. Acorda o `finish_click`, como o `copied` e o `opened`.
     pub fn click_copied(&self, name: &str, attempt: &str, text: &str) -> bool {
+        let now = self.now();
         let mut inner = self.inner.lock().unwrap();
         let Some(click) = inner.sessions.get_mut(name).and_then(|session| session.click.as_mut()) else { return false };
-        if click.attempt != attempt || click.until <= Instant::now() {
+        if click.attempt != attempt || click.until <= now {
             return false;
         }
         click.copied = Some(text.to_owned());

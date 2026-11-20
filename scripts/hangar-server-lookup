@@ -1,0 +1,67 @@
+# Lido com `.` pelos atalhos (hangar-send, hangar-open, hangar-conta, hangar-mcp-headers,
+# hangar-server-command, hangar-engine): a única regra de qual `hangar-server` rodar.
+#
+# hangar_server_find <raiz da cópia>: põe o caminho em HANGAR_SERVER_BIN e devolve 0. Sem binário
+# devolve 1 com HANGAR_SERVER_MISSING=env (CP_RUST_SERVER_BIN aponta para o que não executa) ou none.
+# Ordem: a variável vence e nunca cai para outro (escolha explícita errada não vira outro binário
+# calado); o `bin/` da versão em uso, pelo caminho real do `current`; o mais novo entre o build da
+# cópia e o baixado em ~/.hangar/bin, com empate para a cópia (um build esquecido depois do pull
+# fala o protocolo antigo).
+
+hangar_server_executable() {
+    [ -f "$1" ] && [ -x "$1" ]
+}
+
+hangar_server_find() {
+    hangar_server_root=$1
+    HANGAR_SERVER_BIN=
+    HANGAR_SERVER_MISSING=
+    hangar_server_choice=$(printf '%s' "${CP_RUST_SERVER_BIN:-}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+    if [ -n "$hangar_server_choice" ]; then
+        case $hangar_server_choice in
+            "~") hangar_server_choice=$HOME ;;
+            "~/"*) hangar_server_choice=$HOME/${hangar_server_choice#"~/"} ;;
+        esac
+        if hangar_server_executable "$hangar_server_choice"; then
+            HANGAR_SERVER_BIN=$hangar_server_choice
+            return 0
+        fi
+        HANGAR_SERVER_MISSING=env
+        return 1
+    fi
+    hangar_server_current=$HOME/.hangar/current
+    # A troca no Windows deixa só o `current.old` por um instante: espera o link novo até 1 s.
+    hangar_server_wait=0
+    while [ ! -e "$hangar_server_current" ] && [ ! -L "$hangar_server_current" ] \
+        && { [ -e "$hangar_server_current.old" ] || [ -L "$hangar_server_current.old" ]; } \
+        && [ "$hangar_server_wait" -lt 20 ]; do
+        sleep 0.05 2>/dev/null || sleep 1
+        hangar_server_wait=$((hangar_server_wait + 1))
+    done
+    # Pelo caminho real: o processo de pé não troca de arquivo quando o `current` muda.
+    if hangar_server_version=$(CDPATH= cd -P -- "$hangar_server_current" 2>/dev/null && pwd -P); then
+        for hangar_server_name in hangar-server hangar-server.exe; do
+            if hangar_server_executable "$hangar_server_version/bin/$hangar_server_name"; then
+                HANGAR_SERVER_BIN=$hangar_server_version/bin/$hangar_server_name
+                return 0
+            fi
+        done
+    fi
+    for hangar_server_name in hangar-server hangar-server.exe; do
+        hangar_server_build=$hangar_server_root/crates/target/release/$hangar_server_name
+        hangar_server_home=$HOME/.hangar/bin/$hangar_server_name
+        if hangar_server_executable "$hangar_server_build"; then
+            HANGAR_SERVER_BIN=$hangar_server_build
+            if hangar_server_executable "$hangar_server_home" && [ "$hangar_server_home" -nt "$hangar_server_build" ]; then
+                HANGAR_SERVER_BIN=$hangar_server_home
+            fi
+            return 0
+        fi
+        if hangar_server_executable "$hangar_server_home"; then
+            HANGAR_SERVER_BIN=$hangar_server_home
+            return 0
+        fi
+    done
+    HANGAR_SERVER_MISSING=none
+    return 1
+}

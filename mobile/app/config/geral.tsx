@@ -3,6 +3,7 @@ import { Pagina } from '../../src/features/config/Pagina';
 import { PageHeader } from '../../src/features/config/PageHeader';
 import { SectionCard } from '../../src/features/config/SectionCard';
 import { SettingsRow } from '../../src/features/config/SettingsRow';
+import { DeliveryModeRow } from '../../src/features/config/DeliveryModeRow';
 import { Segmented, type Option } from '../../src/features/config/Segmented';
 import { useAparencia, type Idioma } from '../../src/stores/aparencia';
 import { toast } from '../../src/ui/Toast';
@@ -43,6 +44,9 @@ export default function Geral() {
         <SettingsRow icon="ListTree" title={m.lista_agrupar()}>
           <Segmented options={AGRUPAR} value={agrupar} onChange={(v) => useAparencia.getState().setAgrupar(v)} label={m.lista_agrupar()} />
         </SettingsRow>
+      </SectionCard>
+      <SectionCard icon="MessageSquare" title={m.native_settings_conversation_group()}>
+        <DeliveryModeRow />
       </SectionCard>
     </Pagina>
   );

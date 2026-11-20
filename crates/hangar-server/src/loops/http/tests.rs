@@ -93,7 +93,7 @@ fn op_reads_the_routes_and_the_escaped_name() {
     assert_eq!(op(&Method::GET, "/api/sessions/s/then"), None);
     assert_eq!(op(&Method::POST, "/api/sessions//loop"), None);
     assert_eq!(op(&Method::POST, "/api/sessions/s/loop/x"), None);
-    assert!(crate::migration_status::rust_route(&Method::DELETE, "/api/sessions/s/loop"));
+    assert!(crate::owned_routes::rust_route(&Method::DELETE, "/api/sessions/s/loop"));
 }
 
 /// B3: a trava de branch lê a worktree onde o agente trabalha, na criação e em cada volta.
@@ -148,7 +148,7 @@ async fn guest_loop_http_reuses_the_pass_while_rename_waits() {
     use std::time::Duration;
     let home = tempfile::tempdir().unwrap();
     let st = super::super::tests::invalid_config_state(home.path());
-    let runtime = Arc::new(RuntimeRegistry::new("127.0.0.1:1".parse().unwrap(), "fixture".into(), "fixture".into()));
+    let runtime = Arc::new(RuntimeRegistry::new("fixture".into()));
     let program = home.path().join("mux");
     std::fs::write(&program, "#!/bin/sh\nexit 0\n").unwrap();
     use std::os::unix::fs::PermissionsExt;

@@ -5,7 +5,7 @@ use std::sync::Arc;
 async fn wrong_secret_instance_or_generation_denied() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
-    let registry = Arc::new(RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(),"secret-test".into(),"instance-test".into()));
+    let registry = Arc::new(RuntimeRegistry::new("instance-test".into()));
     let server = tokio::spawn(gateway::serve(listener,registry,"secret-test".into(),"instance-test".into(),hangar_server::INTERNAL_PROTOCOL));
     let client = reqwest::Client::new();
     for (secret,instance) in [("wrong","instance-test"),("secret-test","wrong")] {
@@ -20,7 +20,7 @@ async fn wrong_secret_instance_or_generation_denied() {
 #[tokio::test]
 async fn private_port_loopback_only() {
     let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-    let registry = Arc::new(RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(),"secret-test".into(),"instance-test".into()));
+    let registry = Arc::new(RuntimeRegistry::new("instance-test".into()));
     assert!(gateway::serve(listener,registry,"secret-test".into(),"instance-test".into(),hangar_server::INTERNAL_PROTOCOL).await.is_err());
 }
 
@@ -38,7 +38,7 @@ fn startup_one_line_no_secret() {
 async fn unknown_command_fields_are_rejected() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
-    let registry = Arc::new(RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(),"secret-test".into(),"instance-test".into()));
+    let registry = Arc::new(RuntimeRegistry::new("instance-test".into()));
     let server = tokio::spawn(gateway::serve(listener,registry,"secret-test".into(),"instance-test".into(),hangar_server::INTERNAL_PROTOCOL));
     let response = reqwest::Client::new().post(format!("http://{address}/runtime/op"))
         .header("x-hangar-internal","secret-test").header("x-hangar-runtime-instance","instance-test")
@@ -54,7 +54,7 @@ async fn unknown_command_fields_are_rejected() {
 async fn open_refuses_carry() {
     let dir=tempfile::tempdir().unwrap();
     let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap(); let address=listener.local_addr().unwrap();
-    let registry=Arc::new(RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(),"secret-test".into(),"instance-test".into()));
+    let registry=Arc::new(RuntimeRegistry::new("instance-test".into()));
     let server=tokio::spawn(gateway::serve(listener,registry,"secret-test".into(),"instance-test".into(),hangar_server::INTERNAL_PROTOCOL));
     let binding=serde_json::json!({"name":"session","pane":"%1","conversation":"sid","generation":1,"created":1,"mux_argv":["fake"],"windows":false,"clipboard_lock_path":null});
     let descriptor=serde_json::json!({"name":"session","key":"key","provider":"claude","headless":false,"meta":{"key":"key","terminal":binding,"config_dir":dir.path(),"agent_pid":std::process::id(),"agent_birth":hangar_server::terminal_facts::agent_birth(std::process::id()).unwrap(),"fingerprint":"fixture-life","message_origin":"uds:fixture"},"jsonl":dir.path().join("chat.jsonl"),"projection_dir":dir.path().join("projection"),"state_path":dir.path().join("state"),"lock_path":dir.path().join("lease"),"generation":1});
@@ -74,7 +74,7 @@ async fn terminal_runtime_gateway_opens_without_cano_and_fences_generation() {
     let dir=tempfile::tempdir().unwrap();
     let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap(); let address=listener.local_addr().unwrap();
     // Ligado aos hubs como o servidor monta: fechar a vida do terminal esquece a cota pelo hub.
-    let registry=crate::runtime_open::with_hubs(RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(),"secret-test".into(),"instance-test".into()));
+    let registry=crate::runtime_open::with_hubs(RuntimeRegistry::new("instance-test".into()));
     let server=tokio::spawn(gateway::serve(listener,registry.clone(),"secret-test".into(),"instance-test".into(),hangar_server::INTERNAL_PROTOCOL));
     let binding=serde_json::json!({"name":"session","pane":"%1","conversation":"sid","generation":1,"created":1,"mux_argv":["fake"],"windows":false,"clipboard_lock_path":null});
     let descriptor=serde_json::json!({"name":"session","key":"key","provider":"claude","headless":false,"meta":{"key":"key","terminal":binding,"config_dir":dir.path(),"agent_pid":std::process::id(),"agent_birth":hangar_server::terminal_facts::agent_birth(std::process::id()).unwrap(),"fingerprint":"fixture-life","message_origin":"uds:fixture"},"jsonl":dir.path().join("chat.jsonl"),"projection_dir":dir.path().join("projection"),"state_path":dir.path().join("state"),"lock_path":dir.path().join("lease"),"generation":1});
@@ -110,7 +110,7 @@ async fn opened(dir:&std::path::Path) -> (Arc<RuntimeRegistry>,serde_json::Value
         let mut raw = String::new();
         while reader.read_line(&mut raw).await.unwrap_or(0) > 0 { raw.clear(); }
     });
-    let registry = crate::runtime_open::with_hubs(RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(),"secret-test".into(),"instance-test".into()).with_processes(Arc::new(crate::runtime_open::RecipeProcesses("sid-1"))));
+    let registry = crate::runtime_open::with_hubs(RuntimeRegistry::new("instance-test".into()).with_processes(Arc::new(crate::runtime_open::RecipeProcesses("sid-1"))));
     let target = RuntimeTarget { key:"key".into(),generation:1,name:"session".into(),provider:"claude".into(),
         metadata:json!({"name":"session","headless":true,"session_id":"sid-1","initialized":true}),
         binding:CanoBinding { pid:42,escuta:format!("tcp:{address}"),token:"secret-test".into(),versao:2 },
@@ -138,7 +138,7 @@ async fn opened_recording(dir:&std::path::Path) -> (Arc<RuntimeRegistry>,tokio::
         let mut raw = String::new();
         while reader.read_line(&mut raw).await.unwrap_or(0) > 0 { let _ = lines.send(std::mem::take(&mut raw)); }
     });
-    let registry = crate::runtime_open::with_hubs(RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(),"secret-test".into(),"instance-test".into()).with_processes(Arc::new(crate::runtime_open::RecipeProcesses("sid-1"))));
+    let registry = crate::runtime_open::with_hubs(RuntimeRegistry::new("instance-test".into()).with_processes(Arc::new(crate::runtime_open::RecipeProcesses("sid-1"))));
     let target = RuntimeTarget { key:"key".into(),generation:1,name:"session".into(),provider:"claude".into(),
         metadata:json!({"name":"session","headless":true,"session_id":"sid-1","initialized":true}),
         binding:CanoBinding { pid:42,escuta:format!("tcp:{address}"),token:"secret-test".into(),versao:2 },
@@ -258,7 +258,7 @@ async fn one_bad_message_from_the_cli_does_not_end_the_actor() {
         let mut raw = String::new();
         while reader.read_line(&mut raw).await.unwrap_or(0) > 0 { raw.clear(); }
     });
-    let registry = crate::runtime_open::with_hubs(RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(),"secret-test".into(),"instance-test".into()).with_processes(Arc::new(crate::runtime_open::RecipeProcesses("sid-1"))));
+    let registry = crate::runtime_open::with_hubs(RuntimeRegistry::new("instance-test".into()).with_processes(Arc::new(crate::runtime_open::RecipeProcesses("sid-1"))));
     let target = RuntimeTarget { key:"key".into(),generation:1,name:"session".into(),provider:"claude".into(),
         metadata:json!({"name":"session","headless":true,"session_id":"sid-1","initialized":true}),
         binding:CanoBinding { pid:42,escuta:format!("tcp:{address}"),token:"secret-test".into(),versao:2 },
@@ -275,7 +275,7 @@ async fn one_bad_message_from_the_cli_does_not_end_the_actor() {
 async fn opening_refused_by_the_queue_says_why() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("key.queue-state.json"),"{}").unwrap();
-    let registry = RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(),"secret-test".into(),"instance-test".into());
+    let registry = RuntimeRegistry::new("instance-test".into());
     let target = hangar_server::runtime::protocol::RuntimeTarget { key:"key".into(),generation:1,name:"session".into(),provider:"claude".into(),
         metadata:serde_json::json!({"name":"session","headless":true,"session_id":"sid-1","initialized":true}),
         binding:hangar_server::runtime::protocol::CanoBinding { pid:42,escuta:"tcp:127.0.0.1:9".into(),token:"secret-test".into(),versao:2 },
@@ -316,7 +316,7 @@ async fn codex_cano_without_version_reopens_without_launch() {
         while reader.read_line(&mut raw).await.unwrap_or(0) > 0 { raw.clear(); }
     });
     let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap(); let address=listener.local_addr().unwrap();
-    let registry=Arc::new(RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(),"secret-test".into(),"instance-test".into()));
+    let registry=Arc::new(RuntimeRegistry::new("instance-test".into()));
     let server=tokio::spawn(gateway::serve(listener,registry.clone(),"secret-test".into(),"instance-test".into(),hangar_server::INTERNAL_PROTOCOL));
     let meta=json!({"name":"cx","key":"key","headless":true,"thread_id":"thread-1",
         "cano":{"pid":42,"escuta":format!("tcp:{cano_address}"),"token":"secret-test","ts":1.0}});

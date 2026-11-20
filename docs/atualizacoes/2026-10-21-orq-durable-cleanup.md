@@ -1,7 +1,8 @@
 ---
 id: 2026-10-21-orq-durable-cleanup
 titulo: Orquestrações encerradas liberam builds e caches, preservando os relatórios
-comando: uv run --project backend --no-sync python -c "from pathlib import Path; p = Path.home() / '.hangar' / 'orq-prune-request-v1'; p.parent.mkdir(parents=True, exist_ok=True); p.touch()"
+comando_posix: mkdir -p ~/.hangar && touch ~/.hangar/orq-prune-request-v1
+comando_windows: (if not exist "%USERPROFILE%\.hangar\" mkdir "%USERPROFILE%\.hangar") && type nul >> "%USERPROFILE%\.hangar\orq-prune-request-v1"
 prova: ~/.hangar/orq-prune-request-v1
 destrutivo: true
 tipo: maquina

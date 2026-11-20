@@ -284,6 +284,9 @@ impl State {
 pub enum Action {
     Load,
     Append { text:String, delivered:bool, ts:Option<f64>, pre_transcript:bool, entry_id:Option<String> },
+    /// Mensagem mandada "Na conversa": espera como a do `Append`, mas a marca a tira do painel da fila e a
+    /// deixa como bolha na conversa.
+    AppendConversation { text:String, pre_transcript:bool, entry_id:Option<String> },
     /// `confirms`: o comando que a CLI respondeu sozinha, sem linha no transcript.
     AppendLocal { text:String, entry_id:Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")] confirms:Option<String>,
@@ -613,8 +616,12 @@ fn unproved_since(operations:&BTreeMap<String,Operation>,uncertain:&BTreeSet<Str
     // Escrita em curso: o desfecho é do ator.
     if operations.iter().any(|(key, op)| !key.starts_with(CALL_PREFIX) && op.entry_id.as_deref() == Some(id)
         && op.status == Status::Dispatching) { return None; }
-    // O prazo é da tentativa: a reenviada não herda o relógio do primeiro despacho.
-    Some(["attempt_ts","dispatched_ts","claimed_ts","ts"].iter().find_map(|key| row[*key].as_f64()).unwrap_or(0.0))
+    Some(row_clock(row).unwrap_or(0.0))
+}
+
+/// O relógio da linha. O prazo é da tentativa: a reenviada não herda o relógio do primeiro despacho.
+fn row_clock(row:&Value)->Option<f64> {
+    ["attempt_ts","dispatched_ts","claimed_ts","ts"].iter().find_map(|key| row[*key].as_f64())
 }
 
 fn terminal_input(state:&State,op:&Operation)->bool {
@@ -675,6 +682,12 @@ fn waiting_index(state:&State,entry:&str)->Result<usize,&'static str> {
 /// drenagem nunca levaria não segura comando nem Orientar.
 pub fn waiting_ids(state:&State,min_ts:f64)->Vec<String> {
     state.rows.iter().filter(|row|current(row,min_ts) && waiting_row(state,row)).map(|row|row_id(row).to_owned()).collect()
+}
+
+/// Desde quando espera a mais antiga das que `waiting_ids` devolve (epoch em segundos), pelo relógio e
+/// não pela ordem de entrega: o painel reordena sem mudar há quanto cada uma espera.
+pub fn oldest_waiting(state:&State,min_ts:f64)->Option<f64> {
+    state.rows.iter().filter(|row|current(row,min_ts) && waiting_row(state,row)).filter_map(row_clock).reduce(f64::min)
 }
 
 /// Texto que a fila aceita como mensagem: comando de barra não tem linha na fila, e controle quebraria a digitação.
@@ -840,6 +853,7 @@ fn recover_terminal(state:&mut State,clock:ClockSample)->io::Result<()> {
         if !queue_text_ok(text) {return Err(invalid("intenção terminal inválida"));}
         let mut row=json!({"id":entry,"text":text,"ts":clock.epoch_s,"delivered":false});
         if op.payload["payload"]["pre_transcript"]==true {row["pre_transcript"]=json!(true);}
+        if op.payload["payload"]["conversation"]==true {row["conversation"]=json!(true);}
         append_row(state,row)?;
     }
     let mut finished:Vec<_>=state.operations.values().filter(|op|terminal_input(state,op) && matches!(op.status,Status::Deferred|Status::Rejected))
@@ -856,6 +870,11 @@ fn apply(state: &mut State, action: Action, clock: ClockSample, call_id: &str) -
         Action::EnsureProjection => Value::Null,
         Action::Append { text, delivered, ts, pre_transcript, entry_id } => {
             let mut row = json!({"id":entry_id.unwrap_or_else(||call_id.into()),"text":text,"ts":ts.unwrap_or(clock.epoch_s),"delivered":delivered});
+            if pre_transcript { row["pre_transcript"] = json!(true); }
+            append_row(state,row)?
+        }
+        Action::AppendConversation { text, pre_transcript, entry_id } => {
+            let mut row = json!({"id":entry_id.unwrap_or_else(||call_id.into()),"text":text,"ts":clock.epoch_s,"delivered":false,"conversation":true});
             if pre_transcript { row["pre_transcript"] = json!(true); }
             append_row(state,row)?
         }
@@ -1497,6 +1516,21 @@ mod headless_delivery_tests {
     }
     fn row(store:&Store,id:&str) -> Value { store.state().rows.iter().find(|r|r["id"] == id).unwrap().clone() }
 
+    /// A mesma chamada repetida (retomada do ator) não duplica a linha nem perde a marca; a orientação a mantém.
+    #[test]
+    fn conversation_append_is_idempotent_and_keeps_its_mark() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = store(&dir);
+        let action = || Action::AppendConversation { text:"olha".into(),pre_transcript:false,entry_id:Some("c".into()) };
+        let first = store.exec(1,"append:c",clock(10.0),action()).unwrap();
+        assert_eq!(store.exec(1,"append:c",clock(11.0),action()).unwrap(),first);
+        assert_eq!(store.state().rows.iter().filter(|r|r["id"] == "c").count(),1);
+        assert_eq!((row(&store,"c")["conversation"].clone(),row(&store,"c")["delivered"].clone()),(json!(true),json!(false)));
+        store.exec(1,"claim",clock(12.0),Action::Claim { min_ts:0.0,limit:None,entry_id:Some("c".into()) }).unwrap();
+        store.exec(1,"steered",clock(12.0),Action::SetDelivered { entry_id:"c".into(),value:true,steered:true }).unwrap();
+        assert_eq!((row(&store,"c")["conversation"].clone(),row(&store,"c")["steered"].clone()),(json!(true),json!(true)));
+    }
+
     /// A nota de hook tem id fixo: voltar com o total troca o texto da linha; id que a fila não tem (linha
     /// cortada pelo teto) nasce como linha nova, uma só.
     #[test]
@@ -1807,6 +1841,21 @@ mod panel_tests {
         assert_eq!(exec(&mut store,"cancel-a",Action::Cancel { entry_id:"a".into() }),json!("cancelled"));
         assert_eq!(waiting_ids(store.state(),0.0),vec!["b".to_string()]);
         assert_eq!(exec(&mut store,"cancel-x",Action::Cancel { entry_id:"x".into() }),json!("absent"));
+    }
+
+    #[test]
+    fn oldest_waiting_is_the_earliest_clock_not_the_first_in_line() {
+        let dir=tempfile::tempdir().unwrap(); let mut store=store(&dir);
+        assert_eq!(oldest_waiting(store.state(),0.0),None,"fila vazia");
+        for (id,ts) in [("b",30.0),("a",12.0),("c",20.0)] {
+            store.exec(1,&format!("append:{id}"),clock(ts),Action::Append { text:format!("texto {id}"),delivered:false,ts:Some(ts),pre_transcript:false,entry_id:Some(id.into()) }).unwrap();
+        }
+        assert_eq!(waiting_ids(store.state(),0.0),vec!["b","a","c"]);
+        assert_eq!(oldest_waiting(store.state(),0.0),Some(12.0));
+        // A de antes da vida não conta, como no `waiting_ids`.
+        assert_eq!(oldest_waiting(store.state(),15.0),Some(20.0));
+        exec(&mut store,"cancel-a",Action::Cancel { entry_id:"a".into() });
+        assert_eq!(oldest_waiting(store.state(),0.0),Some(20.0),"a que saiu da espera não segura o relógio");
     }
 
     #[test]

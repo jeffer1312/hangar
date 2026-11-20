@@ -5,6 +5,15 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
 
 ## Regras vigentes
 
+- **Atualização real antes do merge.** PR que muda como o servidor sobe, se instala, se atualiza
+  ou volta de versão (lançador, `install.sh`/`install.ps1`, `scripts/windows-tasks.ps1`, unit ou
+  tarefa, passo `tipo: maquina`, `crates/hangar-server/src/update/`, `crates/hangar-boot`) só é
+  mesclado na `main` depois de, numa máquina de teste de cada sistema afetado, partindo da versão
+  publicada: atualizar pelo botão para o pacote do PR (a branch do PR enviada à `beta`, que publica
+  o `package-beta`; a máquina de teste fica no canal `beta`), conferir o servidor novo de
+  pé, criar uma sessão de cada provedor instalado, voltar para a versão anterior e atualizar de
+  novo. O PR lista o que foi feito e o resultado de cada etapa; etapa não feita é item desmarcado
+  e impede o merge. [Motivo](#atualização-real-antes-do-merge-17112026).
 - **Quem serve a interface é o BACKEND; o `frontend/dist` chega pronto do CI.** Gate que pergunta
   "o front mudou?" tem que conhecer TODAS as entradas de onde o front é compilado (`frontend`,
   `packages`, `messages`, `project.inlang` e o `package.json`/`package-lock.json` da raiz) — senão
@@ -39,13 +48,12 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   registro é do que JÁ RODOU aqui — não do intervalo de commits.
 - **A volta da atualização devolve o binário do Rust junto com o código.** Antes de gravar o
   binário novo, a atualização guarda o anterior em `~/.hangar/bin/<nome>.prev`; a volta o
-  devolve antes de reiniciar. Sem isso, código antigo com binário novo é contrato diferente e o
-  Python atende sozinho. A cópia de outra rodada é descartada antes de instalar e ao terminar bem.
+  devolve antes de reiniciar. Sem isso, código antigo com binário novo é contrato diferente. A cópia de outra rodada é descartada antes de instalar e ao terminar bem.
 - **Falha depois do código novo volta tudo, mesmo antes do reinício.** Passo ou instalação que
   falha com o checkout já trocado passa pela mesma volta do reinício (código, binário, tela e
   reinício): o próximo reinício, de qualquer origem, subiria versões que não se entendem.
 - **Dentro do Atualizar, só ele baixa o binário do Rust.** Ele marca o ambiente
-  (`HANGAR_UPDATE_OWNS_RUST=1`) e o `python -m app.rust_release` dos instaladores chamados pelos
+  (`HANGAR_UPDATE_OWNS_RUST=1`) e o `install-server-binaries` dos instaladores chamados pelos
   passos não baixa; senão vinha o binário do topo da release, sem a cópia que a volta devolve.
   Passo que falha mostra as linhas `##HANGAR-FALHA##` do instalador, não as últimas linhas.
 - **O Atualizar segue a main, ou a branch de `CP_UPDATE_BRANCH`.** Só ela e a branch em que a
@@ -287,12 +295,42 @@ desenvolvedor e para a máquina ainda não migrada. Evidência em
   quem grava grava no caminho que leu. Instaladores e `services-setup.sh` seguem a mesma regra.
 - **Serviço e processo longo rodam do caminho real da versão; o que é gravado fora do Hangar
   aponta para o `current`.** Unit e tarefa chamam o lançador estável
-  (`~/.hangar/bin/hangar-launcher launch backend`), que lê o `current` uma vez; o `rust_bins` e todo
+  (`~/.hangar/bin/hangar-launcher launch backend`), que lê o `current` uma vez e abre o
+  `hangar-server` da versão quando o manifesto diz `boot: direct` (versão sem o campo, inclusive na
+  volta, sobe pelo Python). O lançador é cópia do `hangar-server` e a atualização o renova a cada
+  versão. A unit nunca desiste (`StartLimitIntervalSec=0`; espera crescente até 10 min só no systemd
+  254+, nos mais velhos 10 s fixos) e espera 120 s na parada. Ela é `Type=notify` com `WatchdogSec`
+  e `TimeoutStartSec=300` só quando o manifesto da versão diz `boot: direct` e o lançador é igual ao
+  `hangar-server` dela; o resto fica `Type=simple`. O servidor avisa pronto quando a porta pública
+  atende, antes de preparar as sessões; o `WATCHDOG=1` sai sempre nos 180 s seguintes e depois só é
+  retido na quarta rodada de provas falha seguida. Se a unit de notify cair numa versão que sobe pelo
+  Python (volta da atualização), o lançador avisa pronto e desliga o watchdog. A tarefa do Windows
+  religa até 999 vezes; o `rust_bins` e todo
   `sys.executable` gravado usam o caminho real. Hooks, atalhos, `plugin-dir`, skills e `⟦HANGAR⟧`
   gravam `~/.hangar/current` sem resolver o link, e toleram a pasta ausente por um instante.
-- **Script do Hangar roda o Python pelo atalho `hangar-python`**: o embutido do pacote, senão o venv
-  do backend, senão o `python3` da máquina. O pacote não leva Node nem pip; Node é dependência da
-  máquina, garantida por passo de máquina.
+- **Hooks e atalhos chamam a cópia dos hooks, que a volta de versão não troca.** No pacote, o
+  servidor copia a si mesmo para `~/.hangar/bin/hangar-hooks` (`.exe` no Windows) ao gravar os
+  hooks, e é ela que os hooks dos agentes e os atalhos `.cmd` do Windows chamam. A versão anterior
+  troca o `hangar-launcher` pelo binário dela, mas não conhece a cópia. A cópia nunca desce de
+  versão (`hangar-hooks.version` ao lado). [Motivo](#a-cópia-dos-hooks-sobrevive-à-volta-de-versão-18112026).
+- **Instaladores sem Python nem `uv`.** `install.sh` e `install.ps1` não instalam nem exigem
+  Python, `uv` ou `uv sync`, e não criam atalho de Python (`hangar-python`, `python3`,
+  `hangar-python.cmd`); os antigos ficam (a versão anterior, na volta, usa) e saem com a `python/`
+  do pacote, no PR seguinte. Chaves do
+  push (`vapid-setup`, depois dos binários Rust), token sem `openssl` (`install-token`, senão o
+  `/dev/urandom`; nenhum gerador = a instalação para), nome do Tailscale (`tailscale-dns-name`) e a
+  fumaça 8/8 (o `hangar-server` executa) são do `hangar-server`, achado por
+  `scripts/hangar-server-command`. Instalação do zero pelo checkout marca os passos com
+  `install-package --mark-steps --root <checkout>`; `--update` não marca. O pacote não leva Node
+  nem pip; Node é dependência da máquina, garantida por passo de máquina. No `--update` do
+  checkout, subcomando que o `hangar-server` achado não conhece (binário anterior ao código) vira
+  aviso com o motivo; no pacote e na instalação nova é erro. Sem `python3` 3.10 ou mais novo e com
+  a skill `orquestrar`, os instaladores avisam que a orquestração não roda até o PR dela.
+- **`backend/` continua no pacote por uma versão, e duas coisas ainda dependem dela.** O lançador
+  põe o servidor na `backend/` da versão quando ela existe (a versão anterior, na volta, só acha o
+  `backend/.env` da máquina não migrada pelo cwd), senão na raiz; e a tarefa do Windows nasce com
+  `Dir = "$raiz\backend"` (`install.ps1`). O PR que tirar `backend/` do pacote troca a pasta de
+  trabalho da tarefa para a raiz junto.
 - **O pacote só sai de commit com o `ci.yml` (job `backend`) e os testes do `server.yml` daquele
   sistema verdes.** O `package.yml` publica em `package-latest` (main) ou `package-<branch>`, com o
   índice `package-<canal>.json` por último; sistema não pronto fica com a entrada anterior.
@@ -349,8 +387,7 @@ desenvolvedor e para a máquina ainda não migrada. Evidência em
   `server-<canal>` não tem o `install-package`, e o binário recusa subcomando desconhecido (código 2)
   em vez de subir como servidor. O bootstrap também recusa checkout do Hangar na pasta padrão e, com o pacote no lugar,
   qualquer entrada pelo git (o caminho é o `dev-mode on`). O `install.sh` com `manifest.json` e sem
-  `.git` pula git, `uv`, venv, build da tela e binários Rust, grava o `.env` em `~/.hangar/config`,
-  põe um `python3` que é o `hangar-python` à frente do PATH dos sub-scripts, confere a tela da
+  `.git` pula git, build da tela e binários Rust, grava o `.env` em `~/.hangar/config`, confere a tela da
   `dist_key` em `~/.hangar/ui` (ausente com a tela web ligada é pendência) e, só ao chegar ao fim,
   registra os passos como aplicados (`install-package --mark-steps`, malformado vira aviso). Marca
   só com `HANGAR_FRESH_PACKAGE=1`, que o bootstrap põe quando o `install-package` acabou de criar a
@@ -362,9 +399,7 @@ desenvolvedor e para a máquina ainda não migrada. Evidência em
   `-Destino` do app são o git. O sha256 do `hangar-server.exe` vem do `server-latest.json` e é
   conferido por `Get-FileHash`; https nunca segue redirecionamento para http. O `install-package`
   recusa (4) também com a tarefa já gravada (`%LOCALAPPDATA%\hangar\hangar-backend.vbs`). O
-  `install.ps1` do pacote pula Python, `uv`, `uv sync`, build da tela, `rust_release` e o hook de
-  `git pull`; roda o backend pelo `python\python.exe` do pacote e os lançadores pelo Python do
-  `current`; marca os passos com `install-package --mark-steps` depois da fumaça, com a mesma
+  `install.ps1` do pacote pula build da tela, `rust_release` e o hook de `git pull`; marca os passos com `install-package --mark-steps` depois da fumaça, com a mesma
   condição do `HANGAR_FRESH_PACKAGE`. O download do `bootstrap.ps1` tem teto total (o
   `--max-time` do curl), não só por leitura. A barra de status do
   Claude grava o caminho pelo `current` (`configure-statusline.cjs`), nos dois sistemas.
@@ -386,6 +421,18 @@ desenvolvedor e para a máquina ainda não migrada. Evidência em
   `"mode": "package"`, também rodando de um checkout. No Linux e no macOS o servidor abre o Codex
   pelo `current/scripts/hangar-codex-tui`, e não pelo nome no PATH. Ver
   [a entrada](#links-que-voltaram-ao-checkout-depois-da-migração-31102026).
+
+## A cópia dos hooks sobrevive à volta de versão (18/11/2026)
+
+Na DELPHI-02, depois de atualizar para a versão sem Python e voltar para a publicada (0.1.0.10869), a
+versão antiga trocou o `~/.hangar/bin/hangar-launcher.exe` pelo binário dela. Os hooks gravados pelo
+lançador (`state-hook`, `nav-hook`) passaram a sair 2 ("subcomando desconhecido"), e o do
+`UserPromptSubmit` pedia ao modelo que avisasse a pessoa a cada mensagem. Os atalhos
+`hangar-send.cmd`, `hangar-conta.cmd` e `hangar-mcp-headers.cmd` chamavam o
+`current\scripts\hangar-server-lookup.cmd`, que a versão antiga não tem, e o `hangar-codex-tui.cmd`
+chamava um `codex-tui` que o binário antigo não conhece. Atualizar de novo consertava tudo. A cópia
+`hangar-hooks` tem nome que versão anterior não conhece, então fica; e só versão igual ou mais nova a
+troca, para a volta entre duas versões que já a têm não perder subcomandos.
 
 ## Links que voltaram ao checkout depois da migração (31/10/2026)
 
@@ -1456,3 +1503,22 @@ Jefferson-batis falhou duas vezes (9615→9620 em 07/11, 9615→9717 em 08/11, r
 O `Start-Process -Verb RunAs` fica preso até alguém responder ao UAC, então o `WaitForExit(120000)`
 nunca começava a contar; e o pedido vem de um processo escondido, que o Windows mostra só piscando
 na barra de tarefas, nem com a pessoa na frente ele aparece.
+
+## Atualização real antes do merge (17/11/2026)
+
+O PR #435 (0.1.0.10824, servidor sem o Python) passou pelos testes do Windows na DELPHI-02 e por uma
+tarefa agendada isolada, mas ninguém atualizou uma máquina da versão publicada para ele. Na primeira
+atualização real, todas as máquinas Windows falharam (relatórios `7io3oihu`, `pg3xnwua`, `tqeswo2z`,
+`mloswr6a`):
+
+- a prova do passo `2026-11-16-servidor-sobe-sem-python-windows` lia o `.vbs` em UTF-16 sem BOM como
+  UTF-8 e reprovava toda máquina com a tarefa;
+- a volta rodava o `windows-tasks.ps1` da versão anterior, que não reconhece o servidor direto;
+- o reinício parava o executor da atualização, filho do servidor direto (item que o próprio PR
+  deixou desmarcado);
+- aberto direto pelo lançador, o servidor recebia `Path` em vez do `PATH` que o Python lhe passava, e
+  nenhuma máquina conseguia criar sessão de Claude ou de Codex.
+
+Os quatro apareceriam na primeira tentativa de atualizar uma máquina de teste e criar uma sessão. Os
+testes automáticos do Windows (`verificar-local` roda só o runtime; o `test-windows-tasks.ps1` não
+está no CI) não exercitam a atualização nem a criação de sessão.

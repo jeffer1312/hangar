@@ -10,8 +10,11 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use hangar_local_server::link::{self, real};
 use hangar_package::{ExtractError, Manifest, PackageIndex, PlatformEntry, Version, MANIFEST_FILE};
 use serde_json::{json, Value};
+
+pub(crate) use hangar_local_server::link::remove_link;
 
 pub mod dev;
 pub mod dev_mode;
@@ -26,6 +29,7 @@ pub mod restart;
 pub mod startup_output;
 pub mod state;
 pub mod steps;
+pub mod stop_intent;
 
 #[cfg(test)]
 mod tests;
@@ -44,11 +48,11 @@ impl Layout {
     pub fn versions(&self) -> PathBuf { self.hangar.join("versions") }
     pub fn current(&self) -> PathBuf { self.hangar.join("current") }
     /// Onde a troca do Windows põe o `current` velho entre os dois `rename`.
-    pub fn aside(&self) -> PathBuf { self.hangar.join("current.old") }
+    pub fn aside(&self) -> PathBuf { link::aside(&self.hangar) }
     pub fn downloads(&self) -> PathBuf { self.hangar.join("downloads") }
-    pub fn lock_file(&self) -> PathBuf { self.hangar.join("update.lock") }
-    /// A troca feita e ainda sem prova (`Unproven`).
-    pub fn unproven(&self) -> PathBuf { self.hangar.join("update-swap.json") }
+    pub fn lock_file(&self) -> PathBuf { hangar_local_server::lock::lock_file(&self.hangar) }
+    /// A troca feita e ainda sem prova (`link::Unproven`).
+    pub fn unproven(&self) -> PathBuf { link::unproven_file(&self.hangar) }
 }
 
 /// A release do pacote: `<base>/package-<canal>/package-<canal>.json` e os `.tar.gz` ao lado.
@@ -120,44 +124,26 @@ impl std::fmt::Display for UpdateError {
 
 impl std::error::Error for UpdateError {}
 
-/// Quanto a trava pode seguir ocupada por um fork em andamento antes de valer como outra rodada.
-const LOCK_GRACE: Duration = Duration::from_millis(500);
-
-/// Uma atualização por vez na máquina: trava de arquivo em `~/.hangar/update.lock`, solta sozinha
-/// quando o processo morre.
+/// Uma atualização por vez na máquina: a trava de `~/.hangar/update.lock`, a mesma que a troca de
+/// versão do app nativo segura (`hangar_local_server::lock`).
 pub struct UpdateLock {
-    _file: std::fs::File,
+    _lock: hangar_local_server::UpdateLock,
 }
 
 impl UpdateLock {
     pub fn try_acquire(layout: &Layout) -> Result<UpdateLock, UpdateError> {
-        let io = |e: std::io::Error| UpdateError::Io(format!("trava da atualização ({}): {e}", layout.lock_file().display()));
-        std::fs::create_dir_all(&layout.hangar).map_err(io)?;
-        let file = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(layout.lock_file()).map_err(io)?;
-        // O `flock` é do arquivo aberto: um filho que este processo cria entre o fork e o exec leva a
-        // trava junto por um instante. Ocupada por mais que isso é outra rodada.
-        let deadline = Instant::now() + LOCK_GRACE;
-        loop {
-            match file.try_lock() {
-                Ok(()) => return Ok(UpdateLock { _file: file }),
-                Err(std::fs::TryLockError::WouldBlock) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
-                Err(std::fs::TryLockError::WouldBlock) => return Err(UpdateError::Locked),
-                Err(std::fs::TryLockError::Error(e)) => return Err(io(e)),
-            }
+        match hangar_local_server::UpdateLock::try_acquire(&layout.hangar) {
+            Ok(lock) => Ok(UpdateLock { _lock: lock }),
+            Err(hangar_local_server::LockError::Locked) => Err(UpdateError::Locked),
+            Err(hangar_local_server::LockError::Io(e)) => Err(UpdateError::Io(format!("trava da atualização ({}): {e}", layout.lock_file().display()))),
         }
     }
 }
 
 fn read_manifest(dir: &Path) -> Option<Manifest> { Manifest::parse(&std::fs::read(dir.join(MANIFEST_FILE)).ok()?).ok() }
 
-/// É pacote pelo mesmo critério do `diag.install_manifest()` do Python: `version`, `commit` e
-/// `channel` presentes e não vazios. O resto não decide o modo: os dois lados têm que concordar,
-/// senão um manifesto aceito por um e recusado pelo outro deixa a máquina sem quem a atualize.
-pub fn package_manifest(dir: &Path) -> Option<Value> {
-    let value = std::fs::read(dir.join(MANIFEST_FILE)).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok())?;
-    ["version", "commit", "channel"].iter().all(|k| value.get(k).and_then(Value::as_str).is_some_and(|s| !s.is_empty())).then_some(value)
-}
-pub fn is_package(dir: &Path) -> bool { package_manifest(dir).is_some() }
+/// É pacote: o critério mora no crate do servidor parado, que o app nativo também usa.
+pub use hangar_local_server::versions::{is_package, package_manifest};
 
 /// O manifesto em uso marca pacote mas não serve ao atualizador: o motivo, para o estado e a tela.
 pub fn broken_manifest(layout: &Layout) -> Option<String> {
@@ -219,9 +205,6 @@ pub fn channel(layout: &Layout) -> String {
     chosen_channel(layout).map(|(c, _)| c).or_else(|| installed(layout).map(|m| m.channel)).unwrap_or_else(|| "latest".to_owned())
 }
 
-/// Caminho real, sem o `\\?\` que o Windows devolve (o `mklink` e o Python não o entendem).
-fn real(path: &Path) -> std::io::Result<PathBuf> { std::fs::canonicalize(path).map(crate::list::links::without_verbatim) }
-
 /// A entrada deste sistema quando é mais nova que a instalada (ou quando não há instalada).
 pub async fn check(client: &reqwest::Client, release: &Release, platform: &str, installed: Option<Version>)
     -> Result<Option<PlatformEntry>, UpdateError> {
@@ -232,14 +215,38 @@ pub async fn check(client: &reqwest::Client, release: &Release, platform: &str, 
 
 /// A entrada deste sistema no índice publicado, mais nova ou não.
 pub async fn entry(client: &reqwest::Client, release: &Release, platform: &str) -> Result<PlatformEntry, UpdateError> {
-    let url = release.index_url();
-    let response = client.get(&url).timeout(Duration::from_secs(60)).send().await.map_err(|e| UpdateError::Index(e.to_string()))?;
-    if !response.status().is_success() {
-        return Err(UpdateError::Index(format!("{} em {url}", response.status())));
-    }
-    let bytes = response.bytes().await.map_err(|e| UpdateError::Index(e.to_string()))?;
-    let index: PackageIndex = serde_json::from_slice(&bytes).map_err(|e| UpdateError::Index(e.to_string()))?;
+    // Queda de rede no meio do corpo não vira atualização falha; recusa do servidor (4xx) não muda tentando de novo.
+    // O total cabe nos 120 s em que a tela desiste do `?procurar=1`, com folga para a resposta.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(110);
+    let mut waits = [Duration::from_secs(2), Duration::from_secs(5)].into_iter();
+    let index = loop {
+        let limit = deadline.saturating_duration_since(tokio::time::Instant::now()).min(Duration::from_secs(60));
+        match read_index(client, release, limit).await {
+            Ok(index) => break index,
+            Err((error, retry)) => match waits.next()
+                .filter(|wait| retry && deadline.saturating_duration_since(tokio::time::Instant::now()) > *wait + Duration::from_secs(5)) {
+                Some(wait) => {
+                    tracing::warn!(code = "update_index_retry", error = %error, wait_s = wait.as_secs(), "índice da release não lido; tentando de novo");
+                    tokio::time::sleep(wait).await;
+                }
+                None => return Err(error),
+            },
+        }
+    };
     index.platforms.get(platform).cloned().ok_or_else(|| UpdateError::NoPlatform(platform.to_owned()))
+}
+
+/// O índice publicado; o erro diz se vale tentar de novo. Só a rede falha passageira: laço de
+/// redirecionamento e índice fora do formato dão o mesmo resultado na tentativa seguinte, mas o
+/// JSON que acaba no meio é corpo cortado sem `Content-Length`.
+async fn read_index(client: &reqwest::Client, release: &Release, limit: Duration) -> Result<PackageIndex, (UpdateError, bool)> {
+    let url = release.index_url();
+    let response = client.get(&url).timeout(limit).send().await.map_err(|e| { let retry = !e.is_redirect(); (UpdateError::Index(e.to_string()), retry) })?;
+    if !response.status().is_success() {
+        return Err((UpdateError::Index(format!("{} em {url}", response.status())), !response.status().is_client_error()));
+    }
+    let bytes = response.bytes().await.map_err(|e| (UpdateError::Index(e.to_string()), true))?;
+    serde_json::from_slice(&bytes).map_err(|e| { let retry = e.is_eof(); (UpdateError::Index(e.to_string()), retry) })
 }
 
 /// Baixa com prazo, gravando e calculando o sha256 ao mesmo tempo.
@@ -321,39 +328,15 @@ fn to_trash(layout: &Layout, dir: &Path) -> std::io::Result<PathBuf> {
 /// Linux: link novo e `rename` atômico por cima. Windows: junction nova ao lado, a velha renomeada
 /// para o lado e a nova renomeada para o lugar.
 pub fn swap(layout: &Layout, target: &Path) -> Result<Option<PathBuf>, UpdateError> {
-    let fail = |e: &dyn std::fmt::Display| UpdateError::Swap(e.to_string());
-    let target = real(target).map_err(|e| fail(&format!("{}: {e}", target.display())))?;
-    recover_aside(layout).map_err(|e| fail(&e))?;
-    let current = layout.current();
-    let previous = real(&current).ok();
-    let fresh = layout.hangar.join("current.new");
-    let _ = remove_link(&fresh);
-    make_link(&target, &fresh).map_err(|e| fail(&e))?;
-    replace_link(&fresh, &current).map_err(|e| {
-        let _ = remove_link(&fresh);
-        fail(&e)
-    })?;
-    // O link de antes só sai depois de conferido o novo no lugar.
-    if real(&current).ok().as_ref() != Some(&target) {
-        return Err(fail(&format!("{} não aponta para {} depois da troca", current.display(), target.display())));
-    }
-    // Sobra ao lado não atrapalha: a troca seguinte a tira antes de usar o nome.
-    let _ = remove_link(&layout.aside());
-    Ok(previous)
+    link::swap(&layout.hangar, target).map_err(|e| UpdateError::Swap(e.to_string()))
 }
 
 /// Rodada interrompida no meio: a troca do Windows entre os dois `rename` (o link de antes volta
 /// ao lugar) ou a troca feita e nunca provada (o `current` volta para a versão anterior, como a
 /// volta da rodada faria). `true` quando havia o que recuperar.
 pub fn recover(layout: &Layout) -> std::io::Result<bool> {
-    let aside = recover_aside(layout)?;
-    let bytes = match std::fs::read(layout.unproven()) {
-        Ok(bytes) => bytes,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(aside),
-        Err(e) => return Err(e),
-    };
-    let record: Unproven = serde_json::from_slice(&bytes)
-        .map_err(|e| std::io::Error::other(format!("{} ilegível ({e}); confira o current à mão e apague o arquivo", layout.unproven().display())))?;
+    let aside = link::recover_aside(&layout.hangar)?;
+    let Some(record) = link::read_unproven(&layout.hangar)? else { return Ok(aside) };
     // O `current` em outra versão: a troca não chegou a acontecer, ou alguém já a desfez.
     if real(&layout.current()).ok() != Some(record.target) {
         clear_unproven(layout)?;
@@ -367,79 +350,16 @@ pub fn recover(layout: &Layout) -> std::io::Result<bool> {
     Ok(true)
 }
 
-fn recover_aside(layout: &Layout) -> std::io::Result<bool> {
-    if std::fs::symlink_metadata(layout.current()).is_ok() || std::fs::symlink_metadata(layout.aside()).is_err() {
-        return Ok(false);
-    }
-    std::fs::rename(layout.aside(), layout.current())?;
-    Ok(true)
-}
-
 /// A troca que a rodada fez e ainda não provou, gravada antes dela: a rodada que morre (executor
-/// morto, queda de energia, passo travado) deixa o que desfazer.
-#[derive(serde::Serialize, serde::Deserialize)]
-struct Unproven {
-    previous: Option<PathBuf>,
-    target: PathBuf,
-}
-
+/// morto, queda de energia, passo travado) deixa o que desfazer. A tela do servidor parado lê o
+/// mesmo registro para não oferecer a versão que falhou.
 fn note_unproven(layout: &Layout, target: &Path) -> Result<(), UpdateError> {
     let io = |e: &dyn std::fmt::Display| UpdateError::Io(format!("não consegui gravar {}: {e}", layout.unproven().display()));
-    let record = Unproven { previous: real(&layout.current()).ok(), target: real(target).map_err(|e| io(&e))? };
+    let record = link::Unproven { previous: real(&layout.current()).ok(), target: real(target).map_err(|e| io(&e))? };
     crate::runtime::queue::atomic_write(&layout.unproven(), &serde_json::to_vec(&record).map_err(|e| io(&e))?).map_err(|e| io(&e))
 }
 
-fn clear_unproven(layout: &Layout) -> std::io::Result<()> { absent_ok(std::fs::remove_file(layout.unproven())) }
-
-#[cfg(unix)]
-fn make_link(target: &Path, link: &Path) -> std::io::Result<()> { std::os::unix::fs::symlink(target, link) }
-
-/// Link ausente já é o resultado pedido.
-fn absent_ok(result: std::io::Result<()>) -> std::io::Result<()> {
-    match result {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        other => other,
-    }
-}
-
-#[cfg(unix)]
-pub(crate) fn remove_link(link: &Path) -> std::io::Result<()> { absent_ok(std::fs::remove_file(link)) }
-
-/// `rename` de link por cima de link é atômico: não há instante sem `current`.
-#[cfg(unix)]
-fn replace_link(fresh: &Path, current: &Path) -> std::io::Result<()> { std::fs::rename(fresh, current) }
-
-/// Junction (não precisa de administrador, ao contrário do symlink de pasta).
-#[cfg(windows)]
-pub(crate) fn make_link(target: &Path, link: &Path) -> std::io::Result<()> {
-    use std::os::windows::process::CommandExt;
-    let out = std::process::Command::new(std::env::var_os("COMSPEC").unwrap_or_else(|| "cmd.exe".into()))
-        .raw_arg(format!("/c mklink /J \"{}\" \"{}\"", link.display(), target.display()))
-        .creation_flags(0x0800_0000).output()?;
-    if out.status.success() { return Ok(()); }
-    Err(std::io::Error::other(format!("mklink /J: {}{}", String::from_utf8_lossy(&out.stdout).trim(), String::from_utf8_lossy(&out.stderr).trim())))
-}
-
-/// `remove_dir` numa junction tira só o link, nunca o conteúdo do alvo.
-#[cfg(windows)]
-pub(crate) fn remove_link(link: &Path) -> std::io::Result<()> { absent_ok(std::fs::remove_dir(link)) }
-
-/// No Windows não há troca atômica de junction: a velha vai para o lado, a nova entra, e a velha
-/// volta se a nova não entrar. Hooks toleram o instante sem `current`; queda nesse instante é
-/// recuperada por `recover`. Quem apaga o link ao lado é o `swap`, depois de conferir o novo.
-#[cfg(windows)]
-fn replace_link(fresh: &Path, current: &Path) -> std::io::Result<()> {
-    let aside = current.with_file_name("current.old");
-    // Com o `current` presente (o `swap` recuperou antes), o que sobrou ao lado é de troca concluída.
-    let _ = remove_link(&aside);
-    let had = std::fs::symlink_metadata(current).is_ok();
-    if had { std::fs::rename(current, &aside)?; }
-    if let Err(e) = std::fs::rename(fresh, current) {
-        if had { let _ = std::fs::rename(&aside, current); }
-        return Err(e);
-    }
-    Ok(())
-}
+fn clear_unproven(layout: &Layout) -> std::io::Result<()> { link::remove_unproven(&layout.hangar) }
 
 /// Diz se algum processo vivo usa a pasta.
 pub trait InUse {
@@ -519,8 +439,6 @@ pub fn prune(layout: &Layout, previous: Option<&Path>, in_use: &dyn InUse) -> Pr
 pub enum Reading {
     /// Ninguém respondeu.
     Down(String),
-    /// Respondeu, mas não é o Rust (o Python sozinho na porta).
-    NotRust(String),
     /// O `hangar-server` respondeu, com o contrato e o pid dele.
     Rust { protocol: u32, pid: Option<u32>, commit: Option<String> },
 }
@@ -530,7 +448,9 @@ pub trait HealthProbe {
 }
 
 pub trait Restarter {
-    fn restart(&self) -> impl Future<Output = Result<(), String>> + Send;
+    /// O reiniciador real grava a marca de intenção com `why` antes de derrubar o servidor e a
+    /// acerta se o reinício falhar.
+    fn restart(&self, why: stop_intent::RestartIntent) -> impl Future<Output = Result<(), String>> + Send;
     /// Instalação na mão: não há serviço a reiniciar; a versão nova entra no próximo reinício dela.
     fn manual(&self) -> bool { false }
 }
@@ -564,8 +484,7 @@ impl UiFetcher for ReleaseUi {
     }
 }
 
-/// A prova de vida real: `GET <base>/__hangar_server/health`, que só o Rust atende (no modo
-/// `python` a porta é do Python, que responde 404 ali).
+/// A prova de vida real: `GET <base>/__hangar_server/health`, que só o `hangar-server` atende.
 pub struct HttpHealth {
     pub client: reqwest::Client,
     pub url: String,
@@ -590,7 +509,8 @@ impl HealthProbe for HttpHealth {
         match body["protocol"].as_u64().and_then(|p| u32::try_from(p).ok()) {
             Some(protocol) if status.is_success() => Reading::Rust { protocol, pid: body["pid"].as_u64().and_then(|p| u32::try_from(p).ok()),
                 commit: body["package_commit"].as_str().map(str::to_owned) },
-            _ => Reading::NotRust(format!("{status} em {}", self.url)),
+            // Outro programa na porta: para a prova de vida, o servidor não respondeu.
+            _ => Reading::Down(format!("{status} em {} sem o hangar-server", self.url)),
         }
     }
 }
@@ -681,7 +601,6 @@ async fn wait_version<H: HealthProbe>(health: &H, manifest: &Manifest, before: O
             Reading::Rust { commit: Some(c), .. } if c != commit => format!("o servidor de pé é do commit {c}, e {what} é {commit}"),
             Reading::Rust { pid: Some(pid), .. } if Some(pid) == before => format!("o processo na porta é o mesmo de antes (pid {pid})"),
             Reading::Rust { .. } => return Ok(()),
-            Reading::NotRust(d) => format!("só o Python respondeu ({d}); o servidor não está no modo rust"),
             Reading::Down(d) => format!("o servidor não respondeu ({d})"),
         };
         if Instant::now() >= deadline { return Err(format!("o servidor não voltou depois de reiniciar: {why}")); }
@@ -697,7 +616,6 @@ pub(crate) async fn wait_new<H: HealthProbe>(health: &H, before: Option<u32>, se
         let why = match health.read().await {
             Reading::Rust { pid: Some(pid), .. } if Some(pid) == before => format!("o processo na porta é o mesmo de antes (pid {pid})"),
             Reading::Rust { .. } => return Ok(()),
-            Reading::NotRust(d) => format!("só o Python respondeu ({d}); o servidor não está no modo rust"),
             Reading::Down(d) => format!("o servidor não respondeu ({d})"),
         };
         if Instant::now() >= deadline { return Err(format!("o servidor não voltou depois de reiniciar: {why}")); }
@@ -715,7 +633,10 @@ async fn put_back(layout: &Layout, previous: Option<PathBuf>) -> Result<(), Upda
             None => remove_link(&layout.current()).map_err(|e| UpdateError::Swap(format!("{} não saiu: {e}", layout.current().display())))?,
         }
         // Sobra com o `current` fora do alvo é apagada pela próxima recuperação.
-        let _ = clear_unproven(&layout);
+        if let Err(e) = clear_unproven(&layout) {
+            tracing::warn!(code = "update_unproven_not_cleared", path = %layout.unproven().display(), error = %e,
+                "registro da troca sem prova ficou depois da volta");
+        }
         Ok(())
     }).await
 }
@@ -772,7 +693,11 @@ async fn roll_back<R: Restarter, H: HealthProbe>(job: &Job<'_>, state: &StateFil
     let back = Instant::now();
     let failure = match put_back(job.layout, previous).await {
         Err(e) => Some(format!("{why}; e não consegui voltar para a versão anterior: {e}")),
-        Ok(()) => restarter.restart().await.err().map(|e| format!("{why}; e a volta para a versão anterior também falhou: {e}")),
+        Ok(()) => {
+            let intent = stop_intent::RestartIntent::new(hangar_api::status::ExitKind::Update, "rollback")
+                .between(None, expected.map(|m| m.version.as_str()));
+            restarter.restart(intent).await.err().map(|e| format!("{why}; e a volta para a versão anterior também falhou: {e}"))
+        }
     };
     // A máquina pode ficar fora do ar: o retrato da volta é o que diz por quê.
     let trail = startup_output::Trail::new(health);
@@ -1002,8 +927,6 @@ pub async fn run<R: Restarter, H: HealthProbe>(job: &Job<'_>, steps: std::sync::
                         (new_commit && commit.as_deref() == Some(manifest.commit.as_str())) || (pid_before.is_some() && pid != pid_before),
                     // Saúde fora com o processo de antes vivo é tropeço da leitura, não reinício.
                     Reading::Down(_) => pid_before.is_some_and(|pid| !pid_alive(pid)),
-                    // O Python só fica sozinho na porta depois que o Rust de antes caiu.
-                    Reading::NotRust(_) => pid_before.is_some(),
                 };
                 if restarted && !restarter.manual() {
                     let applied_now: Vec<String> = self::steps::applied(job.state_dir).unwrap_or_default().difference(&applied_before).cloned().collect();
@@ -1018,6 +941,15 @@ pub async fn run<R: Restarter, H: HealthProbe>(job: &Job<'_>, steps: std::sync::
         }
     };
 
+    // O lançador estável é cópia do `hangar-server`: renovado a cada versão, ele sabe subir a nova.
+    // Falha é aviso: o de antes ainda sobe a versão anterior, e a prova devolve o `current` se a nova não subir.
+    {
+        let (home, source) = (job.home.to_path_buf(), dir.clone());
+        if let Err(e) = blocking(move || migrate::refresh_launcher(&home, &source, cfg!(windows)).map_err(UpdateError::Io)).await {
+            state.warn(&format!("o lançador do serviço não foi renovado: {e}"));
+        }
+    }
+
     // Na mão não há reinício nem prova: o servidor de antes segue no ar até alguém reiniciá-lo.
     if restarter.manual() {
         keep_swap(job.layout, &state);
@@ -1029,7 +961,9 @@ pub async fn run<R: Restarter, H: HealthProbe>(job: &Job<'_>, steps: std::sync::
     let restarting = Instant::now();
     let mark = job.startup_output.map(|_| startup_output::Mark::take(false));
     let trail = startup_output::Trail::new(health);
-    let restarted = restarter.restart().await;
+    let intent = stop_intent::RestartIntent::new(hangar_api::status::ExitKind::Update, "package")
+        .between(before.as_ref().map(|m| m.version.as_str()), Some(manifest.version.as_str()));
+    let restarted = restarter.restart(intent).await;
     let restart_took = restarting.elapsed();
     let proved = match restarted {
         Err(e) => Err(format!("o servidor não reiniciou: {e}")),

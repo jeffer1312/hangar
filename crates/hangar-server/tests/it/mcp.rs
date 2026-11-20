@@ -17,7 +17,7 @@ use serde_json::{Value, json};
 const PYTHON_CATALOG: &str = include_str!("fixtures/mcp_catalog_python.json");
 const PYTHON_INSTRUCTIONS: &str = "Hangar: sessões vizinhas e o navegador embutido desta sessão. Mostrar algo que você montou ao usuário (desenho, mock de tela, comparação, gráfico, tabela, diagrama): html_render, sem esperar pedido; imagem por caminho só para print real de tela. Ver ou testar uma página: browser_open e depois browser (um verbo) ou browser_batch (vários já conhecidos); tela desconhecida com várias ações: browser_goal, quando a sessão tem o Jev. Falar com outra sessão: sessions, send, group, pair; abrir ou fechar: new_session, close_session.";
 
-struct Scene { addr: SocketAddr, python: Arc<fake::Fake>, home: PathBuf, sink: crate::sink::Sink, state: Arc<AppState>, _dir: tempfile::TempDir }
+struct Scene { addr: SocketAddr, home: PathBuf, sink: crate::sink::Sink, state: Arc<AppState>, _dir: tempfile::TempDir }
 
 /// Sessões `s0` (pane `%0`) e `s1` (`%1`) com conversa; `beta` com os panes `%1` (repetido, como no
 /// psmux) e `%7`; `sem-term` sem terminal, de chave `k123`; o Python falso atrás.
@@ -49,8 +49,7 @@ async fn scene_named(groups: bool, peers: Option<hangar_server::groups::peers::P
     let dirs = parse_dirs(&json!({"home": home, "claude": home.join(".claude"), "codex_home": home.join(".codex"),
         "pi_sessions": home.join(".pi/agent/sessions"), "omp_config": home.join(".omp"),
         "omp_agent": home.join(".omp/agent"), "kimi_home": home.join(".kimi-code")}).to_string());
-    let (python, upstream) = fake::spawn_fake().await;
-    let mut state = AppState::new(fake::config(upstream, "127.0.0.1"));
+    let mut state = AppState::new(fake::config("127.0.0.1"));
     state.server_id=server.to_owned();
     let sink = crate::sink::Sink::default();
     if owned {
@@ -61,7 +60,7 @@ async fn scene_named(groups: bool, peers: Option<hangar_server::groups::peers::P
     }
     let list = Arc::new(ListBridge::new(ListEnv { mux: Mux::with_program(&script, Duration::from_secs(5)),
         capture_program: script.into_os_string(), procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs },
-        FactsClient::new(upstream, SECRET.into())));
+        FactsClient::new()));
     state.list = list.clone();
     if let Some(runtime)=state.state.runtime.get() {list.set_runtime(runtime.clone());list.set_plugin_runtime(runtime.clone());}
     state.side.locate = Arc::new(hangar_server::locate::ListLocate { list });
@@ -71,16 +70,16 @@ async fn scene_named(groups: bool, peers: Option<hangar_server::groups::peers::P
     state.origins_home = home.clone();
     if let Some(peers) = peers { state.peers = Arc::new(peers); }
     if groups {
-        use hangar_server::groups::{orq::PythonOrq, service::GroupService, store::PairDir};
+        use hangar_server::groups::{orq::OrqVault, service::GroupService, store::PairDir};
         let pair = PairDir::new(home.join(".claude/.hangar-pair"), root.join("arquivo"));
-        state.groups = Some(Arc::new(GroupService::new(pair, Arc::new(PythonOrq::from_state(&state)), if server.is_empty() {"casa"} else {server}.into())));
+        state.groups = Some(Arc::new(GroupService::new(pair, Arc::new(OrqVault::from_state(&state)), if server.is_empty() {"casa"} else {server}.into())));
     }
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let state=Arc::new(state);
     let app = router(state.clone()).into_make_service_with_connect_info::<SocketAddr>();
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    Scene { addr, python, home, sink, state, _dir: dir }
+    Scene { addr, home, sink, state, _dir: dir }
 }
 
 fn write_json(path: &Path, value: Value) {
@@ -161,7 +160,6 @@ async fn stateless_lists_include_required_cache_metadata() {
             assert!(items.is_empty(), "{method}: {reply}");
         }
     }
-    assert_eq!(s.python.hits_to("/mcp/"), 0);
 }
 
 fn failed(result: &Value) -> bool { result["isError"] == true }
@@ -180,7 +178,6 @@ async fn bearer_and_this_machine_only() {
     assert_eq!(post().send().await.unwrap().status(), 401);
     assert_eq!(post().bearer_auth("outro").send().await.unwrap().status(), 401);
     assert_eq!(post().bearer_auth(OWNER).header("x-forwarded-for", "10.0.0.5").send().await.unwrap().status(), 403);
-    assert_eq!(s.python.hits_to("/mcp/"), 0, "o /mcp não segue ao Python");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -298,7 +295,7 @@ async fn send_goes_through_the_input_route_as_the_caller() {
     }
     let remote = mcp.call("send", json!({"alvo": "srv2::outra", "texto": "oi"})).await;
     assert!(failed(&remote) && first_text(&remote).contains("CP_SERVER_ID ausente"), "{remote}");
-    assert_eq!((s.sink.count("s0"), s.python.hits_to("/api/sessions/s0/input")), (1, 0));
+    assert_eq!(s.sink.count("s0"), 1);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -314,9 +311,6 @@ async fn group_pair_unpair_call_the_routes_as_the_caller() {
     assert!(!failed(&notice) && notice["structuredContent"]["peers"] == json!(["s0"]), "{notice}");
     assert!(!failed(&mcp.call("desparear", json!({})).await));
     assert!(!pair.join("beta.json").exists());
-    for path in ["/api/sessions/beta/group-message", "/api/sessions/beta/pair"] {
-        assert_eq!(s.python.hits_to(path), 0, "{path}");
-    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -334,7 +328,6 @@ async fn new_session_opens_with_the_caller_as_creator_and_the_whole_request() {
     let mut voz = Mcp::open(s.addr, &[("x-hangar-voice", &voice)]).await;
     let voiced = voz.call("new_session", json!({"nome": "n3", "cwd": "/nao/existe", "provider": "codex"})).await;
     assert!(failed(&voiced) && first_text(&voiced).contains("não existe"), "{voiced}");
-    assert_eq!(s.python.hits_to("/api/sessions"), 0, "a abertura não passa pelo Python");
 }
 
 /// `resume` retoma uma conversa que existe no disco pela rota do Arquivo: a pasta vem da conversa;
@@ -349,7 +342,6 @@ async fn new_session_with_resume_goes_through_the_archive_resume() {
     let mixed = mcp.call("new_session", json!({"nome": "volta", "cwd": "", "resume": "11111111-1111-4111-8111-111111111111",
         "permissao": "plan"})).await;
     assert!(failed(&mixed) && first_text(&mixed).contains("permissao"), "{mixed}");
-    assert_eq!(s.python.hits_to("/api/sessions"), 0);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -364,7 +356,6 @@ async fn close_session_refuses_itself_unknown_server_and_unknown() {
     // Sem o registro das sessões (servidor subindo) o fechamento falha com código, nunca vai ao Python.
     let closed = mcp.call("close_session", json!({"alvo": "outra"})).await;
     assert!(failed(&closed), "{closed}");
-    assert_eq!(s.python.hits_to("/api/sessions/outra"), 0);
     let voice = hangar_server::voice::machines::voice_signature(SECRET).unwrap();
     let refused = Mcp::open(s.addr, &[("x-hangar-voice", &voice)]).await.call("close_session", json!({"alvo": "outra"})).await;
     assert!(failed(&refused) && first_text(&refused).contains("sim"), "fechar pela voz só com o sim falado");
@@ -402,7 +393,6 @@ async fn close_session_reaches_the_peer() {
     let (auth, agent, path) = seen.lock().unwrap().pop().expect("DELETE lá");
     assert_eq!((auth.as_str(), path.as_str()), ("Bearer tok-lab", "/api/sessions/filha"));
     assert!(agent.contains("beta"), "{agent}");
-    assert_eq!(s.python.hits_to("/api/sessions/filha"), 0, "nada fecha aqui");
 }
 
 /// `contract` lê e grava pela rota `/pair/contract` da sessão que chama; gravar exige o `mtime` lido.
@@ -441,12 +431,10 @@ async fn interrupt_only_reaches_a_linked_child() {
     write_json(&sidecar, json!({"peers": ["s0"], "task": "", "gid": "g1", "harness": {}, "linked_by": "s0"}));
     let other = mcp.call("interrupt", json!({"alvo": "outra"})).await;
     assert!(failed(&other) && first_text(&other).starts_with("erro_interromper_nao_ligada"), "filha de outro pai: {other}");
-    assert_eq!(s.python.hits_to("/api/sessions/outra/interrupt"), 0);
     write_json(&sidecar, json!({"peers": ["beta"], "task": "", "gid": "g1", "harness": {}, "linked_by": "beta"}));
     // Ligada, passa a guarda e a rota responde no Rust (cena sem registro: `runtime_unavailable`), nunca o Python.
     let done = mcp.call("interrupt", json!({"alvo": "outra"})).await;
     assert!(!first_text(&done).starts_with("erro_interromper_nao_ligada"), "{done}");
-    assert_eq!(s.python.hits_to("/api/sessions/outra/interrupt"), 0);
 }
 
 /// O servidor do app desktop (`POST /cmd`): anota cada pedido e responde por verbo.
@@ -529,8 +517,7 @@ async fn browser_open_records_the_request_in_rust_and_waits_for_the_page() {
     let mut mcp = Mcp::open(s.addr, &[("x-hangar-pane", "%7")]).await;
     let result = mcp.call("browser_open", json!({"url": "http://x"})).await;
     assert_eq!(result["structuredContent"], json!({"ok": true, "url": "http://x/"}), "{result}");
-    // O pedido é do Rust: nada vai ao Python, e o arquivo dos pendentes leva a url.
-    assert_eq!(s.python.hits_to("/api/sessions/beta/nav"), 0);
+    // O arquivo dos pendentes leva a url.
     let file = s.home.join(".hangar/nav/_pendentes.json");
     fake::wait_until(move || std::fs::read(&file).ok()
         .and_then(|raw| serde_json::from_slice::<Value>(&raw).ok())
@@ -622,7 +609,6 @@ async fn mission_reads_and_reports_as_the_linked_caller() {
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
     assert_eq!(s.sink.count("beta"),1,"a vida associada recebe o aviso pela entrada real");
-    assert_eq!(s.python.hits_to("/api/sessions/beta/input"),0);
     let read = mcp.call("mission", json!({})).await;
     assert!(!failed(&read), "{read}");
     assert_eq!(read["structuredContent"]["item"]["key"], "PM-7");
@@ -637,7 +623,6 @@ async fn mission_reads_and_reports_as_the_linked_caller() {
     assert_eq!(reported["structuredContent"]["item"]["evidence"][0]["by"], "beta");
     let gated = mcp.call("mission", json!({"etapa": "entrega"})).await;
     assert!(failed(&gated) && first_text(&gated).starts_with("mission_gate_pending"), "{gated}");
-    assert_eq!(s.python.hits_to("/api/mission/report"), 0, "o Mission Control não vai ao Python");
 }
 
 #[tokio::test(flavor="multi_thread")]
@@ -679,9 +664,167 @@ async fn mission_follows_a_federated_group_and_copies_remote_evidence_to_its_own
 async fn the_router_does_not_keep_the_state_alive() {
     // O entregador de avisos do Mission Control mora no estado; prender o roteador nele seguraria o estado (e os
     // arquivos abertos) depois do fim do servidor.
-    let state = Arc::new(AppState::new(fake::config("127.0.0.1:9".parse().unwrap(), "127.0.0.1")));
+    let state = Arc::new(AppState::new(fake::config("127.0.0.1")));
     let before = Arc::strong_count(&state);
     let app = router(state.clone());
     drop(app);
     assert_eq!(Arc::strong_count(&state), before);
+}
+
+// `GET /api/whoami`: a mesma identidade do `who_am_i`, pela rota HTTP do dono. O esperado vem da
+// captura do Python (`quem_chama.py`, commit 1504c6c53).
+const UNKNOWN_KEY: &str = "chave de sessão sem terminal não corresponde a nenhum sidecar";
+const BAD_VOICE: &str = "assinatura da voz inválida (o hangar-server reiniciou ou não é a voz)";
+
+async fn whoami(s: &Scene, token: Option<&str>, headers: &[(&str, &str)]) -> (u16, Value) {
+    let mut req = client().get(format!("http://{}/api/whoami", s.addr));
+    if let Some(token) = token { req = req.bearer_auth(token); }
+    for (k, v) in headers { req = req.header(*k, *v); }
+    let resp = req.send().await.unwrap();
+    let status = resp.status().as_u16();
+    (status, resp.json().await.unwrap_or(Value::Null))
+}
+
+fn found(name: &str, origin: &str) -> (u16, Value) { (200, json!({"name": name, "origem": origin})) }
+
+fn unknown(msg: &str) -> (u16, Value) {
+    (404, json!({"detail": {"code": "erro_sessao_desconhecida", "params": {}, "msg": msg}}))
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn whoami_w01_voice_signature_wins_and_a_bad_one_never_falls_through() {
+    let s = scene().await;
+    let voice = hangar_server::voice::machines::voice_signature(SECRET).unwrap();
+    assert_eq!(whoami(&s, Some(OWNER), &[("x-hangar-voice", &voice), ("x-hangar-session", "s0")]).await, found("voz", "voz"));
+    let forged = hangar_server::voice::machines::voice_signature("outro").unwrap();
+    for bad in [forged.as_str(), "n1.dead", "semponto"] {
+        assert_eq!(whoami(&s, Some(OWNER), &[("x-hangar-voice", bad), ("x-hangar-session", "s0")]).await, unknown(BAD_VOICE), "{bad}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn whoami_w02_key_of_a_sidecar_beats_the_inherited_pane() {
+    let s = scene().await;
+    write_json(&s.home.join(".hangar/codex-sessions/cx-1.json"), json!({"name": "cx-1", "key": "cccccccccccccccccccccccccccccccc"}));
+    assert_eq!(whoami(&s, Some(OWNER), &[("x-hangar-key", "k123"), ("x-hangar-pane", "%7")]).await, found("sem-term", "chave"));
+    assert_eq!(whoami(&s, Some(OWNER), &[("x-hangar-key", "cccccccccccccccccccccccccccccccc")]).await, found("cx-1", "chave"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn whoami_w03_key_without_sidecar_or_record_is_404_and_never_the_pane() {
+    let s = scene().await;
+    assert_eq!(whoami(&s, Some(OWNER), &[("x-hangar-key", "nada"), ("x-hangar-pane", "%7")]).await, unknown(UNKNOWN_KEY));
+    // O registro existe em minúsculas; a chave em maiúsculas não o acha (a captura do Python).
+    let key = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+    write_json(&s.home.join(format!(".hangar/session-specs/{key}.json")), json!({}));
+    assert_eq!(whoami(&s, Some(OWNER), &[("x-hangar-key", &key.to_uppercase()), ("x-hangar-pane", "%7")]).await, unknown(UNKNOWN_KEY));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn whoami_w04_key_of_a_terminal_session_goes_on_to_the_pane() {
+    let s = scene().await;
+    let key = "0123456789abcdef0123456789abcdef";
+    write_json(&s.home.join(format!(".hangar/session-specs/{key}.json")), json!({}));
+    assert_eq!(whoami(&s, Some(OWNER), &[("x-hangar-key", key), ("x-hangar-pane", "%7")]).await, found("beta", "pane"));
+    // Diferença aceita (decisão 14): a chave no ambiente da sessão resolve antes do pane repetido.
+    let renamed = "fedcba9876543210fedcba9876543210";
+    write_json(&s.home.join(format!(".hangar/session-specs/{renamed}.json")), json!({}));
+    assert_eq!(whoami(&s, Some(OWNER), &[("x-hangar-key", renamed), ("x-hangar-pane", "%1")]).await, found("s1", "chave"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn whoami_w05_only_a_unique_pane_resolves() {
+    let s = scene().await;
+    assert_eq!(whoami(&s, Some(OWNER), &[("x-hangar-pane", "%7")]).await, found("beta", "pane"));
+    assert_eq!(whoami(&s, Some(OWNER), &[("x-hangar-pane", "%1"), ("x-hangar-session", "s0")]).await, found("s0", "nome"));
+    assert_eq!(whoami(&s, Some(OWNER), &[("x-hangar-pane", "%1")]).await, unknown(hangar_server::mcp::identity::HINT));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn whoami_w06_name_only_of_a_live_session() {
+    let s = scene().await;
+    assert_eq!(whoami(&s, Some(OWNER), &[("x-hangar-session", "sem-term")]).await, found("sem-term", "nome"));
+    assert_eq!(whoami(&s, Some(OWNER), &[("x-hangar-session", "s1")]).await, found("s1", "nome"));
+    for dead in ["zeta", "ção"] {
+        assert_eq!(whoami(&s, Some(OWNER), &[("x-hangar-session", dead)]).await, unknown(hangar_server::mcp::identity::HINT), "{dead}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn whoami_w07_nothing_resolved_is_the_404_with_the_hint() {
+    let s = scene().await;
+    assert_eq!(whoami(&s, Some(OWNER), &[]).await, unknown(hangar_server::mcp::identity::HINT));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn whoami_w08_blank_headers_are_absent_and_values_are_trimmed() {
+    let s = scene().await;
+    assert_eq!(whoami(&s, Some(OWNER), &[("x-hangar-key", "   "), ("x-hangar-session", "s0")]).await, found("s0", "nome"));
+    assert_eq!(whoami(&s, Some(OWNER), &[("X-Hangar-Session", "  s0  ")]).await, found("s0", "nome"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn whoami_w09_only_who_has_access_and_never_forwarded() {
+    let s = scene().await;
+    let refused = json!({"detail": {"code": "erro_nao_autorizado", "params": {}, "msg": "unauthorized"}});
+    for token in [None, Some("outro")] {
+        assert_eq!(whoami(&s, token, &[("x-hangar-session", "s0")]).await, (401, refused.clone()), "{token:?}");
+    }
+    // Cabeçalho de convidado forjado por quem não é loopback não vale como convidado.
+    let (status, _) = whoami(&s, None, &[("x-hangar-guest", "eyJzIjoge319.00"), ("x-hangar-session", "s0")]).await;
+    assert_eq!(status, 401);
+    let by_query = client().get(format!("http://{}/api/whoami?token={OWNER}", s.addr)).header("x-hangar-session", "s0").send().await.unwrap();
+    assert_eq!(by_query.status(), 200);
+    let by_cookie = client().get(format!("http://{}/api/whoami", s.addr)).header("cookie", format!("cp_token={OWNER}"))
+        .header("x-hangar-session", "s0").send().await.unwrap();
+    assert_eq!(by_cookie.status(), 200);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn whoami_w10_a_mux_that_does_not_answer_is_no_pane_not_a_500() {
+    let s = scene().await;
+    crate::write_executable(&s._dir.path().join("tmux"), "#!/bin/sh\nexit 1\n");
+    assert_eq!(whoami(&s, Some(OWNER), &[("x-hangar-pane", "%7")]).await, unknown(hangar_server::mcp::identity::HINT));
+    assert_eq!(whoami(&s, Some(OWNER), &[("x-hangar-pane", "%7"), ("x-hangar-session", "sem-term")]).await, found("sem-term", "nome"));
+}
+
+/// W-09: `x-hangar-guest` não vale nada na 8765; quem chega com ele e sem token é recusado como estranho.
+#[tokio::test(flavor = "multi_thread")]
+async fn whoami_w09_a_signed_guest_header_alone_is_refused() {
+    let s = scene().await;
+    // O formato que o Rust assinava para o Python (`<payload>.<hmac>`): ninguém mais o honra.
+    let header = "eyJzIjp7InMwIjoic2hhcmUifSwiZXhwIjo0MTAyNDQ0ODAwfQ.00";
+    let refused = json!({"detail": {"code": "erro_nao_autorizado", "params": {}, "msg": "unauthorized"}});
+    assert_eq!(whoami(&s, None, &[("x-hangar-guest", header), ("x-hangar-session", "s0")]).await, (401, refused));
+    let (status, _) = whoami(&s, None, &[("x-hangar-guest", header), ("x-forwarded-for", "203.0.113.5"),
+        ("x-hangar-session", "s0")]).await;
+    assert_eq!(status, 401);
+}
+
+/// O `whoami` com o convidado já decidido (convite ou login), como o porteiro o entrega ao roteador.
+async fn whoami_as_guest(s: &Scene, sessions: &[(&str, hangar_core::guest::Kind)], session: &str) -> (u16, Value) {
+    use tower::ServiceExt;
+    let mut request = axum::http::Request::builder().uri("/api/whoami").header("x-hangar-session", session)
+        .body(axum::body::Body::empty()).unwrap();
+    request.extensions_mut().insert(axum::extract::ConnectInfo::<SocketAddr>("127.0.0.1:1234".parse().unwrap()));
+    request.extensions_mut().insert(hangar_core::guest::Caller::Guest(Arc::new(hangar_core::guest::GuestGrant {
+        token: "convidado".into(), token_hash: "convidado-hash".into(), pair_roots: vec![], invite: true,
+        sessions: sessions.iter().map(|(name, kind)| ((*name).to_owned(), *kind)).collect() })));
+    let response = router(s.state.clone()).oneshot(request).await.unwrap();
+    let status = response.status().as_u16();
+    let body = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+    (status, serde_json::from_slice(&body).unwrap_or(Value::Null))
+}
+
+/// W-09: o convidado só fica sabendo do nome das sessões que alcança; a viva fora do convite leva o
+/// mesmo 404 da que não existe, sem revelar que existe.
+#[tokio::test(flavor = "multi_thread")]
+async fn whoami_w09_a_guest_learns_only_the_sessions_it_reaches() {
+    use hangar_core::guest::Kind;
+    let s = scene().await;
+    let hint = hangar_server::mcp::identity::HINT;
+    assert_eq!(whoami_as_guest(&s, &[("s1", Kind::Share)], "s0").await, unknown(hint), "viva, mas fora do convite");
+    assert_eq!(whoami_as_guest(&s, &[("s1", Kind::Share)], "zeta").await, unknown(hint), "inexistente: a mesma resposta");
+    assert_eq!(whoami_as_guest(&s, &[("s0", Kind::Share)], "s0").await, found("s0", "nome"));
+    assert_eq!(whoami_as_guest(&s, &[("s0", Kind::Pair)], "s0").await, found("s0", "nome"), "o par lê");
 }

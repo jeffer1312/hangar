@@ -1,5 +1,5 @@
 //! `/api/atualizacao` no Rust: pacote, modo desenvolvedor e checkout têm resposta nativa;
-//! quem não é dono é recusado, sem encaminhamento ao Python.
+//! quem não é dono é recusado.
 use hangar_server::{accounts::{AccountService, environment::AccountEnvironment}, auth::TrustedHosts, config::Config, routes::AppState};
 use serde_json::{Value, json};
 use std::path::Path;
@@ -9,7 +9,6 @@ struct Fixture {
     home: tempfile::TempDir,
     base: String,
     tasks: Vec<tokio::task::JoinHandle<()>>,
-    python_calls: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl Drop for Fixture { fn drop(&mut self) { for task in &self.tasks { task.abort(); } } }
@@ -21,18 +20,12 @@ async fn serve(router: axum::Router) -> (std::net::SocketAddr, tokio::task::Join
 }
 
 impl Fixture {
-    /// O Python falso responde `python` a tudo; o índice falso publica `remote` para este sistema.
+    /// O índice falso publica `remote` para este sistema.
     async fn start(remote: &str) -> Self { Self::with_entry(Some(entry(remote))).await }
 
     /// `entry` é a entrada deste sistema no índice falso; `None` = o índice responde 503.
     async fn with_entry(entry: Option<Value>) -> Self {
         let home = tempfile::tempdir().unwrap();
-        let python_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let calls = python_calls.clone();
-        let (upstream, python) = serve(axum::Router::new().fallback(move || {
-            calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            async { "python" }
-        })).await;
         let index = entry.map(|entry| json!({"platforms": {hangar_server::update::platform(): entry}}).to_string());
         let (release, index_task) = serve(axum::Router::new().fallback(move || {
             let index = index.clone();
@@ -41,7 +34,7 @@ impl Fixture {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let mut state = AppState::new(Config {
-            listen: address, upstream, internal_secret: "fixture-internal".into(),
+            listen: address, internal_secret: "fixture-internal".into(),
             auth_token: "fixture-owner".into(), log_path: None, trusted: TrustedHosts::parse("127.0.0.1"),
         });
         state.accounts = AccountService::new(AccountEnvironment::from_map([
@@ -54,7 +47,7 @@ impl Fixture {
         let server = tokio::spawn(async move {
             axum::serve(listener, router.into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap();
         });
-        Self { home, base: format!("http://{address}"), tasks: vec![python, index_task, server], python_calls }
+        Self { home, base: format!("http://{address}"), tasks: vec![index_task, server] }
     }
 
     /// `~/.hangar/current` → `target`.
@@ -136,7 +129,6 @@ async fn update_routes_unmigrated_and_unauthorized_never_return_to_python() {
     for (method,path) in [(reqwest::Method::GET,"/api/atualizacao"),(reqwest::Method::POST,"/api/atualizacao/iniciar"),(reqwest::Method::POST,"/api/atualizacao/reiniciar")] {
         assert_eq!(fixture.call(method,path,false).await.status(),401);
     }
-    assert_eq!(fixture.python_calls.load(std::sync::atomic::Ordering::Relaxed), 0);
 }
 
 fn sh(dir: &Path, script: &str) {
@@ -248,7 +240,7 @@ async fn update_routes_dev_mode_refuses_with_a_code_and_launches_nothing() {
     assert_eq!((value["ok"].clone(), value["nada_a_fazer"].clone()), (json!(true), json!(true)), "{value}");
     assert!(!fixture.state().exists(), "nada lançado");
 
-    // Sem o token do dono: o Python decide, nunca o Rust.
+    // Sem o token do dono: recusado.
     assert_eq!(fixture.dev_mode(on, false).await.status(),401);
 }
 
@@ -349,49 +341,60 @@ async fn update_notes_developer_mode_keeps_the_git_engine() {
 #[tokio::test]
 async fn update_routes_front_port_answers_like_the_public_one_on_a_migrated_machine() {
     let home = tempfile::tempdir().unwrap();
-    let front_port = std::net::TcpListener::bind("127.0.0.2:0").unwrap().local_addr().unwrap().port();
     let dir = home.path().join(".hangar/versions/0.1.0.1");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("manifest.json"), json!({"version": "0.1.0.1", "commit": "c", "channel": "latest", "protocol": 1,
         "api": 5, "os": hangar_server::update::platform(), "files": {}}).to_string()).unwrap();
     hangar_server::update::swap(&hangar_server::update::Layout::new(home.path()), &dir).unwrap();
     std::fs::create_dir_all(home.path().join(".hangar/config")).unwrap();
-    std::fs::write(home.path().join(".hangar/config/.env"), format!("CP_AUTH_TOKEN=x\nCP_FRONT_PORT={front_port}\n")).unwrap();
-
-    let listener = tokio::net::TcpListener::bind("127.0.0.2:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    let front = hangar_server::routes::front_address(home.path(), address);
-    assert_eq!(front, Some(std::net::SocketAddr::new(address.ip(), front_port)));
-    assert_eq!(hangar_server::routes::front_address(home.path(), std::net::SocketAddr::new(address.ip(), front_port)), None,
-        "a porta do front igual à principal não abre duas vezes");
-
-    let (upstream, python) = serve(axum::Router::new().fallback(|| async { "python" })).await;
-    let mut state = AppState::new(Config {
-        listen: address, upstream, internal_secret: "fixture-internal".into(),
-        auth_token: "fixture-owner".into(), log_path: None, trusted: TrustedHosts::parse("127.0.0.1"),
-    });
-    state.accounts = AccountService::new(AccountEnvironment::from_map([
-        ("HOME".into(), home.path().to_string_lossy().into_owned()),
-        ("USERPROFILE".into(), home.path().to_string_lossy().into_owned()),
-    ].into()));
-    state.update_release_base = "http://127.0.0.1:9".into();
-    state.front = front;
-    let server = tokio::spawn(hangar_server::serve_until_with_guest(listener, state, None, std::future::pending()));
 
     let client = reqwest::Client::new();
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(20);
-    let health = loop {
-        if let Ok(r) = client.get(format!("http://127.0.0.2:{front_port}/__hangar_server/health")).send().await { break r; }
-        assert!(!server.is_finished(), "o servidor saiu: {:?}", server.await);
-        assert!(tokio::time::Instant::now() < deadline, "a porta do front não abriu em 20 s");
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    };
+    // Portas novas a cada tentativa: em paralelo, outro teste pode estar na porta da ponte do plugin
+    // (127.0.0.1 na mesma porta da principal) ou na do front, e o servidor sai com `AddrInUse`.
+    let mut started = None;
+    for _ in 0..5 {
+        let front_port = std::net::TcpListener::bind("127.0.0.2:0").unwrap().local_addr().unwrap().port();
+        std::fs::write(home.path().join(".hangar/config/.env"), format!("CP_AUTH_TOKEN=x\nCP_FRONT_PORT={front_port}\n")).unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.2:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let front = hangar_server::routes::front_address(home.path(), address);
+        assert_eq!(front, Some(std::net::SocketAddr::new(address.ip(), front_port)));
+        assert_eq!(hangar_server::routes::front_address(home.path(), std::net::SocketAddr::new(address.ip(), front_port)), None,
+            "a porta do front igual à principal não abre duas vezes");
+
+        let mut state = AppState::new(Config {
+            listen: address, internal_secret: "fixture-internal".into(),
+            auth_token: "fixture-owner".into(), log_path: None, trusted: TrustedHosts::parse("127.0.0.1"),
+        });
+        state.accounts = AccountService::new(AccountEnvironment::from_map([
+            ("HOME".into(), home.path().to_string_lossy().into_owned()),
+            ("USERPROFILE".into(), home.path().to_string_lossy().into_owned()),
+        ].into()));
+        state.update_release_base = "http://127.0.0.1:9".into();
+        state.front = front;
+        let server = tokio::spawn(hangar_server::serve_until_with_guest(listener, state, None, std::future::pending()));
+
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(20);
+        let health = loop {
+            if let Ok(r) = client.get(format!("http://127.0.0.2:{front_port}/__hangar_server/health")).send().await { break Some(r); }
+            if server.is_finished() { break None; }
+            assert!(tokio::time::Instant::now() < deadline, "a porta do front não abriu em 20 s");
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        };
+        match health {
+            Some(health) => { started = Some((front_port, server, health)); break; }
+            None => {
+                let error = server.await.unwrap().expect_err("o servidor saiu sem erro antes da saúde");
+                assert_eq!(error.kind(), std::io::ErrorKind::AddrInUse, "{error}");
+            }
+        }
+    }
+    let (front_port, server, health) = started.expect("nenhuma porta livre para a ponte e o front");
     assert_eq!(health.status(), 200);
     let status = client.get(format!("http://127.0.0.2:{front_port}/api/atualizacao")).bearer_auth("fixture-owner").send().await.unwrap();
     assert_eq!(status.status(), 200);
     assert_eq!(body(status).await["modo"], "pacote", "o dono pela porta do front é atendido pelo mesmo servidor");
     server.abort();
-    python.abort();
 }
 
 /// A máquina que migrou sem ver o aviso (antes da trava do aceite) o recebe de novo, com a escolha do

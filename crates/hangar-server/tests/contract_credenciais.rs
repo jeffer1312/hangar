@@ -6,15 +6,12 @@
 #![cfg(unix)]
 mod contract_credenciais_cases;
 
-use axum::{Router, http::StatusCode};
+use axum::Router;
 use contract_credenciais_cases::{CASES, Case};
 use hangar_server::{auth::TrustedHosts, config::Config, routes::AppState};
 use serde_json::{Value, json};
 use std::path::Path;
-use std::sync::{
-    Arc,
-    atomic::{AtomicUsize, Ordering},
-};
+use std::sync::Arc;
 
 const HOME: &str = "⟦HOME⟧";
 
@@ -76,8 +73,8 @@ async fn answer(request: reqwest::RequestBuilder, home: &str) -> Answer {
     (status, kind, serde_json::from_str(&body.to_string().replace(home, HOME)).unwrap())
 }
 
-/// A mesma lista pelo dono (8765) e pela ponte do Connect (8768 → `/__hangar_server/accounts/public`).
-async fn run(case: &Case, python: std::net::SocketAddr) -> (Answer, Answer) {
+/// A lista pelo dono (8765).
+async fn run(case: &Case) -> Answer {
     let root = tempfile::tempdir().unwrap();
     let home = root.path().canonicalize().unwrap();
     let home_text = home.to_string_lossy().into_owned();
@@ -108,7 +105,6 @@ async fn run(case: &Case, python: std::net::SocketAddr) -> (Answer, Answer) {
     let state = |listen| {
         let mut state = AppState::new(Config {
             listen,
-            upstream: python,
             internal_secret: "contract-internal".into(),
             auth_token: "contract-only".into(),
             log_path: None,
@@ -135,22 +131,10 @@ async fn run(case: &Case, python: std::net::SocketAddr) -> (Answer, Answer) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(hangar_server::routes::serve_with_state(listener, state(addr)));
-    let private = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let private_addr = private.local_addr().unwrap();
-    let app = hangar_server::routes::terminal_router(Arc::new(state(private_addr)));
-    let bridge = tokio::spawn(async move {
-        axum::serve(private, app.into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap()
-    });
-    let client = reqwest::Client::new();
     let query = case.query;
-    let (owner, connect) = tokio::join!(
-        answer(client.get(format!("http://{addr}/api/credenciais{query}")).bearer_auth("contract-only"), &home_text),
-        answer(client.get(format!("http://{private_addr}/__hangar_server/accounts/public{query}"))
-            .header("x-hangar-internal", "contract-internal").header("x-hangar-path", "/api/credenciais"), &home_text),
-    );
+    let owner = answer(reqwest::Client::new().get(format!("http://{addr}/api/credenciais{query}")).bearer_auth("contract-only"), &home_text).await;
     server.abort();
-    bridge.abort();
-    (owner, connect)
+    owner
 }
 
 /// A ponte das rotas de contas exige a identidade do runtime no ambiente.
@@ -163,31 +147,11 @@ fn runtime_instance() {
 #[tokio::test(flavor = "multi_thread")]
 async fn credentials_answer_each_case() {
     runtime_instance();
-    let hits = Arc::new(AtomicUsize::new(0));
-    let recorded = hits.clone();
-    let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let python = upstream.local_addr().unwrap();
-    tokio::spawn(async move {
-        axum::serve(upstream, Router::new().fallback(move |request: axum::extract::Request| {
-            let uri = request.uri().clone();
-            // O diário exportável é do Python, e o `HEAD /` é a sonda de subida do servidor: fora disso, nada.
-            if !(request.method() == axum::http::Method::HEAD && uri.path() == "/") {
-                eprintln!("pedido ao Python: {} {uri} {:?}", request.method(), request.headers());
-                recorded.fetch_add(1, Ordering::SeqCst);
-            }
-            async { (StatusCode::SERVICE_UNAVAILABLE, "handler Python bloqueado") }
-        }))
-        .await
-        .unwrap();
-    });
     assert_eq!(CASES.len(), 12);
     let mut failures = vec![];
     for case in CASES {
         let name = case.name;
-        let ((status, kind, body), connect) = run(case, python).await;
-        if connect != (status, kind.clone(), body.clone()) {
-            failures.push(format!("{name}: a ponte do Connect respondeu diferente do dono: {connect:?}"));
-        }
+        let (status, kind, body) = run(case).await;
         let expected = &case.expected;
         if status != expected.status {
             failures.push(format!("{name}: status {status} != {}: {body}", expected.status));
@@ -202,14 +166,13 @@ async fn credentials_answer_each_case() {
             failures.push(format!("{name}:\n rust   {body}\n esperado {expected_body}"));
         }
     }
-    assert_eq!(hits.load(Ordering::SeqCst), 0, "a lista chegou ao Python");
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 #[test]
 fn credentials_list_and_cookie_are_rust_owned() {
     use axum::http::Method;
-    use hangar_server::migration_status::rust_route;
+    use hangar_server::owned_routes::rust_route;
     assert!(rust_route(&Method::GET, "/api/credenciais"));
     assert!(rust_route(&Method::PUT, "/api/credenciais/cookie"));
     for (method, path) in [(Method::PUT, "/api/credenciais/apelido"),
@@ -240,11 +203,6 @@ async fn quota_routes_answer_from_cache_while_a_read_is_slow() {
         };
         axum::serve(source, Router::new().route("/v1/usages", axum::routing::get(slow))).await.unwrap()
     });
-    let python = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let python_addr = python.local_addr().unwrap();
-    tokio::spawn(async move {
-        axum::serve(python, Router::new().fallback(|| async { StatusCode::SERVICE_UNAVAILABLE })).await.unwrap()
-    });
     let root = tempfile::tempdir().unwrap();
     let home = root.path().canonicalize().unwrap();
     std::fs::create_dir_all(home.join(".claude")).unwrap();
@@ -254,7 +212,6 @@ async fn quota_routes_answer_from_cache_while_a_read_is_slow() {
     let addr = listener.local_addr().unwrap();
     let mut state = AppState::new(Config {
         listen: addr,
-        upstream: python_addr,
         internal_secret: "contract-internal".into(),
         auth_token: "contract-only".into(),
         log_path: None,

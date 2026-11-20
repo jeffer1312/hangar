@@ -38,9 +38,24 @@ pub fn waits_in_queue(e: &ChatEvent, process: bool) -> bool {
         && !(process && e.queued_delivered == Some(true))
 }
 
-/// Bolha que entra no painel derivado: espera e ainda não foi entregue.
+/// Bolha que entra no painel derivado: espera e ainda não foi entregue. A "Na conversa" não escrita também: ali
+/// ela pode ser cancelada.
 fn derived_entry(e: &ChatEvent) -> bool {
     waits_in_queue(e, false) && e.queued_delivered == Some(false) && e.queued_confirmed != Some(true)
+}
+
+/// Mandada "Na conversa" e já escrita: bolha no fim da conversa, nunca linha do painel. Antes da escrita (limite,
+/// escrita incerta, adiada) ela espera como a da Fila.
+pub fn in_conversation(e: &ChatEvent) -> bool { e.queued() && e.queued_conversation == Some(true) && e.queued_delivered == Some(true) }
+
+/// A bolha "Em espera": a mandada "Na conversa" que a CLI ainda não leu.
+pub fn conversation_waiting(e: &ChatEvent) -> bool {
+    in_conversation(e) && e.kind == "user_msg" && e.queued_confirmed != Some(true) && e.queued_consumed != Some(true) && e.desistiu != Some(true)
+}
+
+/// Trecho que identifica a mensagem no rótulo de acessibilidade do "Enviar agora", como o do descarte no Expo.
+pub fn label_excerpt(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(80).collect()
 }
 
 /// Sem o evento (Pi, omp, Kimi, modo `python`): as bolhas da fila que ainda esperam, sem ações.
@@ -124,6 +139,38 @@ mod tests {
         assert_eq!(current(Some(&panel(&["z"])), &[queued("a", Some(false))]).entries[0].id, "z");
         let events = [queued("a", Some(false)), queued("b", Some(true))];
         assert_eq!((len(None, &events), len(Some(&panel(&["y", "z"])), &events)), (1, 2));
+    }
+
+    #[test]
+    fn written_conversation_rows_wait_in_the_conversation_and_unwritten_ones_in_the_panel() {
+        let mut row = queued("c", Some(true));
+        row.queued_conversation = Some(true);
+        let panel = derived(&[queued("a", Some(false)), row.clone()]);
+        assert_eq!(panel.entries.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(), vec!["a"]);
+        assert_eq!(len(None, &[row.clone()]), 0);
+        assert!(!hidden("queued-c", &panel));
+        assert!(conversation_waiting(&row), "escrita mas ainda não lida pela CLI");
+        let ends: [fn(&mut ChatEvent); 3] = [|e| e.queued_confirmed = Some(true), |e| e.queued_consumed = Some(true), |e| e.desistiu = Some(true)];
+        for done in ends {
+            let mut ended = row.clone();
+            done(&mut ended);
+            assert!(!conversation_waiting(&ended));
+        }
+        assert!(!conversation_waiting(&queued("a", Some(false))), "linha comum da fila");
+        // Não escrita (limite, escrita incerta, adiada): fica no painel, onde pode ser cancelada.
+        let mut unwritten = row.clone();
+        unwritten.queued_delivered = Some(false);
+        assert!(!conversation_waiting(&unwritten));
+        let panel = derived(&[unwritten.clone()]);
+        assert_eq!(panel.entries.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(), vec!["c"]);
+        assert!(hidden("queued-c", &panel));
+        assert_eq!(len(None, &[unwritten]), 1);
+    }
+
+    #[test]
+    fn send_now_label_excerpt_is_one_short_line() {
+        assert_eq!(label_excerpt("  olha\n\tisso  aqui "), "olha isso aqui");
+        assert_eq!(label_excerpt(&"é".repeat(90)).chars().count(), 80);
     }
 
     #[test]

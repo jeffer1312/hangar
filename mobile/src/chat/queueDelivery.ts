@@ -1,25 +1,30 @@
 import {
   comTeto, splitContextRefs, errorDetail, parseImageMessage, parsePeerMessage,
-  probeServerResponse, type AnswerItem, type AskQuestionPayload, type ChatEvent, type Server,
+  probeServerResponse, sendInputForServer, type AnswerItem, type AskQuestionPayload, type ChatEvent, type Server,
 } from '@hangar/core';
 import * as m from '../paraglide/messages';
 
-export type DeliveryMode = 'queued' | 'direct' | 'jev';
-export type QueueSendMode = 'steer' | { kind: 'direct'; terminalClaude: boolean } | { kind: 'jev'; task: string; message: string };
+export type DeliveryMode = 'queued' | 'direct' | 'jev' | 'conversation';
+export type QueueSendMode = 'steer' | { kind: 'direct'; terminalClaude: boolean } | { kind: 'jev'; task: string; message: string }
+  | { kind: 'conversation' };
 export type DeliveryFeedback = { text: string; warning: boolean };
 export type JevStatus = 'loading' | 'ready' | 'setup' | 'unsupported' | 'error';
 export type DeliveryControls = { mode: DeliveryMode; status: JevStatus; help: string };
 
 // Lido na hora do uso: quem só importa o módulo (telas e testes com mensagens simuladas) não depende destas chaves.
 export const deliveryModeLabel = (mode: DeliveryMode) =>
-  mode === 'queued' ? m.mobile_queue_mode_queued() : mode === 'direct' ? m.mobile_queue_mode_direct() : m.mobile_queue_mode_jev();
+  mode === 'queued' ? m.delivery_mode_queue() : mode === 'direct' ? m.delivery_mode_direct()
+    : mode === 'jev' ? m.delivery_mode_jev() : m.delivery_mode_conversation();
+export const deliveryModeDescription = (mode: DeliveryMode) =>
+  mode === 'queued' ? m.delivery_mode_queue_desc() : mode === 'direct' ? m.delivery_mode_direct_desc()
+    : mode === 'jev' ? m.delivery_mode_jev_desc() : m.mobile_delivery_mode_conversation_desc();
 export type DeliveryOption = { mode: DeliveryMode; checked: boolean; disabled: boolean };
 // Jev salvo e indisponível envia pela fila (queueSendMode), então é a Fila que aparece marcada.
 // Servidor sem o Jev configurado não oferece a opção.
 export function deliveryOptions(d: DeliveryControls): DeliveryOption[] {
   const ready = d.status === 'ready';
   const effective = d.mode === 'jev' && !ready ? 'queued' : d.mode;
-  const modes = d.status === 'setup' ? (['queued', 'direct'] as const) : (['queued', 'direct', 'jev'] as const);
+  const modes = d.status === 'setup' ? (['queued', 'direct', 'conversation'] as const) : (['queued', 'direct', 'jev', 'conversation'] as const);
   return modes.map((mode) => ({ mode, checked: effective === mode, disabled: mode === 'jev' && !ready }));
 }
 
@@ -33,6 +38,7 @@ export function queueSendMode(mode: DeliveryMode, ready: boolean, state: string,
   headless: boolean, message: string, events: ChatEvent[], ask: AskQuestionPayload | null): QueueSendMode | undefined {
   if (state !== 'working' || (provider !== 'claude' && provider !== 'codex') || message.trimStart().startsWith('/')) return;
   if (mode === 'direct') return { kind: 'direct', terminalClaude: provider === 'claude' && !headless };
+  if (mode === 'conversation') return { kind: 'conversation' };
   if (mode !== 'jev' || !ready) return;
   let latest = -1;
   for (let i = events.length - 1; i >= 0; i--) {
@@ -77,7 +83,14 @@ export async function readQueueJev(server: Server, signal: AbortSignal): Promise
   return (value as { available: boolean }).available;
 }
 
-export async function sendWithDelivery(server: Server, name: string, text: string, mode: Exclude<QueueSendMode, 'steer'>): Promise<DeliveryFeedback | null> {
+/** O "Na conversa" que o servidor mandou para a fila comum: o eco passa para o painel "Na fila". */
+export const QUEUED_INSTEAD = Symbol('queued-instead');
+
+export async function sendWithDelivery(server: Server, name: string, text: string, mode: Exclude<QueueSendMode, 'steer'>): Promise<DeliveryFeedback | null | typeof QUEUED_INSTEAD> {
+  if (mode.kind === 'conversation') {
+    // A bolha "Em espera" na conversa já descreve o envio.
+    return await sendInputForServer(server, name, text, 'conversation') ? null : QUEUED_INSTEAD;
+  }
   const steer = mode.kind === 'direct' && !mode.terminalClaude;
   const body = mode.kind === 'jev' ? { text, jev_task: mode.task, jev_message: mode.message }
     : steer ? { text } : { text, steer: true };

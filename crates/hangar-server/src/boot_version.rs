@@ -25,21 +25,33 @@ pub fn capture(root:&Path,environment:&BTreeMap<String,String>)->Snapshot{
     })
 }
 /// A fonte injetada conserva os argumentos e prazos do subprocesso, sem exigir git nas provas.
+/// Falha do `git describe` ou do `rev-list` não fica guardada: um engasgo do disco na subida
+/// congelaria "indisponivel" até o próximo reinício. A próxima chamada tenta de novo.
 #[doc(hidden)]
 pub fn capture_with(root:&Path,mut git:impl FnMut(&[&str],Duration)->Result<String,()>)->Snapshot{
-    slot(root).get_or_init(||{
-        let manifest=crate::update::package_manifest(root);
-        if let Some(manifest)=manifest{return Snapshot{describe:format!("{}-g{}",manifest["version"].as_str().unwrap(),manifest["commit"].as_str().unwrap().chars().take(12).collect::<String>()),readable:Some(manifest["version"].as_str().unwrap().into())};}
-        let describe=git(&["describe","--tags","--match","dist-latest","--long","--always","--dirty"],Duration::from_secs(5)).ok().map(|s|crate::transcript::py::strip(&s).to_owned()).filter(|s|!s.is_empty()).unwrap_or_else(||"indisponivel".into());
-        let readable=(||{
-            let count=git(&["rev-list","--count","HEAD"],Duration::from_secs(5)).ok().map(|s|crate::transcript::py::strip(&s).to_owned())?;
-            if count.is_empty()||!count.chars().all(crate::accounts::claude_config::py_isdigit){return None;}
-            let mut version=git(&["show","HEAD:VERSION"],Duration::from_secs(5)).ok().map(|s|crate::transcript::py::strip(&s).to_owned())?;
-            if version.is_empty(){version=std::fs::read_to_string(root.join("VERSION")).ok().map(|s|crate::transcript::py::strip(&s).to_owned())?;}
-            (!version.is_empty()).then(||format!("{version}.{count}"))
-        })();
-        Snapshot{describe,readable}
-    }).clone()
+    let slot=slot(root);
+    if let Some(snapshot)=slot.get(){return snapshot.clone();}
+    let manifest=crate::update::package_manifest(root);
+    if let Some(manifest)=manifest{return slot.get_or_init(||Snapshot{describe:format!("{}-g{}",manifest["version"].as_str().unwrap(),manifest["commit"].as_str().unwrap().chars().take(12).collect::<String>()),readable:Some(manifest["version"].as_str().unwrap().into())}).clone();}
+    let described=git(&["describe","--tags","--match","dist-latest","--long","--always","--dirty"],Duration::from_secs(5));
+    let mut failed=described.is_err();
+    let describe=described.ok().map(|s|crate::transcript::py::strip(&s).to_owned()).filter(|s|!s.is_empty()).unwrap_or_else(||"indisponivel".into());
+    let readable=(||{
+        let counted=git(&["rev-list","--count","HEAD"],Duration::from_secs(5));
+        failed|=counted.is_err();
+        let count=counted.ok().map(|s|crate::transcript::py::strip(&s).to_owned())?;
+        if count.is_empty()||!count.chars().all(crate::accounts::claude_config::py_isdigit){return None;}
+        // `show` falha de verdade quando o commit não tem VERSION: não conta como falha passageira.
+        let mut version=git(&["show","HEAD:VERSION"],Duration::from_secs(5)).ok().map(|s|crate::transcript::py::strip(&s).to_owned())?;
+        if version.is_empty(){version=std::fs::read_to_string(root.join("VERSION")).ok().map(|s|crate::transcript::py::strip(&s).to_owned())?;}
+        (!version.is_empty()).then(||format!("{version}.{count}"))
+    })();
+    let snapshot=Snapshot{describe,readable};
+    if failed{
+        tracing::warn!(code="boot_version_git_failed",root=%root.display(),"git não respondeu ao ler a versão em execução; tenta de novo na próxima leitura");
+        return snapshot;
+    }
+    slot.get_or_init(||snapshot).clone()
 }
 
 /// Só identidade e versão: a receita com argv/ambiente nunca sai da memória.
@@ -92,125 +104,12 @@ impl PythonLife {
         #[cfg(unix)] { use std::os::unix::fs::PermissionsExt; std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?; }
         crate::runtime::queue::atomic_write(&python_path(base, self.pid, self.birth), &serde_json::to_vec(self)?)
     }
-
-    fn confirmed(&self, procs: &dyn crate::list::procs::ProcessView) -> bool {
-        let Ok(recipe) = procs.recipe(i64::from(self.pid)) else { return false };
-        crate::terminal_facts::same_birth(recipe.birth, self.birth)
-            && recipe.executable == self.executable && recipe.cwd == self.root.join("backend")
-            && backend_module(&recipe)
-            && (!cfg!(windows) || python_runtime(self.pid))
-            && crate::terminal_facts::agent_birth(self.pid).is_some_and(|birth| crate::terminal_facts::same_birth(birth, self.birth))
-    }
 }
 
+#[cfg(any(windows, test))]
 fn backend_module(recipe: &crate::list::procs::ProcessRecipe) -> bool {
     recipe.argv.get(1).is_some_and(|arg| arg == "-m") && recipe.argv.get(2).is_some_and(|arg| arg == "app.main")
 }
-
-fn current_python(base: &Path, pid: u32) -> Option<PythonLife> {
-    let birth = crate::terminal_facts::agent_birth(pid)?;
-    let life: PythonLife = serde_json::from_slice(&crate::runtime::queue::read_replaced(&python_path(base, pid, birth)).ok()?).ok()?;
-    (life.pid == pid && crate::terminal_facts::same_birth(life.birth, birth)
-        && life.confirmed(&crate::list::procs::SystemProcs::default())).then_some(life)
-}
-
-/// Não guarda ausência: o Python do Windows pode publicar depois do primeiro pedido.
-pub(crate) fn python_version(env: &crate::accounts::environment::AccountEnvironment, pid: u32) -> Option<Snapshot> {
-    current_python(&crate::runtime::local_policy::log_base_in(env)?, pid).map(|life| life.version)
-}
-
-/// As associações já confirmadas sobrevivem ao processo. Sem associação, histórico não herda a vida atual.
-pub(crate) struct PythonDiary { base: Option<PathBuf>, lives: HashMap<(u32, String), Snapshot> }
-impl PythonDiary {
-    pub(crate) fn load(base: Option<PathBuf>) -> Self {
-        let mut lives = HashMap::new();
-        if let Some(base) = &base {
-            for entry in std::fs::read_dir(python_dir(base)).into_iter().flatten().flatten() {
-                if entry.path().extension().is_none_or(|ext| ext != "json") { continue; }
-                let life = crate::runtime::queue::read_replaced(&entry.path()).ok()
-                    .and_then(|raw| serde_json::from_slice::<PythonLife>(&raw).ok());
-                if let Some(PythonLife { pid, started: Some(started), version, .. }) = life { lives.insert((pid, started), version); }
-            }
-        }
-        Self { base, lives }
-    }
-
-    pub(crate) fn for_paths(paths: &[(String, PathBuf)]) -> Self {
-        let base = paths.iter().find_map(|(_, path)| path.ancestors()
-            .find(|dir| dir.file_name().is_some_and(|name| name == "diario")).and_then(Path::parent).map(Path::to_owned));
-        Self::load(base)
-    }
-
-    pub(crate) fn bind(&mut self, value: &serde_json::Value) -> std::io::Result<()> {
-        if value["evento"] != "diag.formato" && value["origem"] != "servidor" { return Ok(()); }
-        let Some(base) = &self.base else { return Ok(()) };
-        let Some(pid) = value["pid_backend"].as_u64().and_then(|pid| u32::try_from(pid).ok()) else { return Ok(()) };
-        let Some(started) = value["inicio_backend"].as_str() else { return Ok(()) };
-        if self.lives.contains_key(&(pid, started.to_owned())) { return Ok(()); }
-        let Some(at) = chrono::DateTime::parse_from_rfc3339(started).ok().map(|at| at.timestamp() as f64 + f64::from(at.timestamp_subsec_nanos()) / 1e9) else { return Ok(()) };
-        let Some(mut life) = current_python(base, pid) else { return Ok(()) };
-        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(std::io::Error::other)?.as_secs_f64();
-        // INICIO_EM_EXECUCAO é o instante de importação, não o nascimento do sistema operacional.
-        if at < life.birth || at > now || life.started.as_deref().is_some_and(|old| old != started) { return Ok(()); }
-        life.started = Some(started.to_owned());
-        life.save(base)?;
-        self.lives.insert((pid, started.to_owned()), life.version);
-        Ok(())
-    }
-
-    pub(crate) fn enrich(&self, value: &mut serde_json::Value) {
-        let header = value["evento"] == "diag.formato";
-        if !header && (value["origem"] != "servidor" || value["pid_backend"].as_u64().is_none()) { return; }
-        let identity = value["pid_backend"].as_u64().and_then(|pid| u32::try_from(pid).ok()).zip(value["inicio_backend"].as_str());
-        let live = if header {
-            identity.and_then(|(pid, started)| current_python(self.base.as_deref()?, pid)
-                .filter(|life| life.started.as_deref() == Some(started)).map(|life| life.version))
-        } else { None };
-        let version = if header { live.as_ref() } else {
-            identity.and_then(|(pid, started)| self.lives.get(&(pid, started.to_owned())))
-        };
-        if let Some(version) = version { value["backend"] = serde_json::json!(version.describe); }
-        else if header || value.get("backend").is_none() { value["backend"] = serde_json::json!("indisponivel"); }
-    }
-
-    pub(crate) fn enrich_summary(&mut self, text: &str) -> Result<String, serde_json::Error> {
-        let fields: HashMap<String, &serde_json::value::RawValue> = serde_json::from_str(text)?;
-        let Some(rows) = fields.get("ultimas") else { return Ok(text.to_owned()) };
-        let rows: Vec<&serde_json::value::RawValue> = serde_json::from_str(rows.get())?;
-        let mut edits = Vec::new();
-        for row in rows {
-            let value = serde_json::from_str(row.get())?;
-            if let Err(error) = self.bind(&value) { tracing::warn!(kind = ?error.kind(), "diário: identidade Python não persistida"); }
-            let start = row.get().as_ptr() as usize - text.as_ptr() as usize;
-            edits.push((start..start + row.get().len(), self.enrich_line(row.get())));
-        }
-        let mut output = text.to_owned();
-        for (range, replacement) in edits.into_iter().rev() { output.replace_range(range, &replacement); }
-        Ok(output)
-    }
-
-    pub(crate) fn enrich_line(&self, line: &str) -> String {
-        let Ok(mut value) = serde_json::from_str::<serde_json::Value>(line) else { return line.to_owned() };
-        let before = value["backend"].clone();
-        self.enrich(&mut value);
-        if value["backend"] == before { return line.to_owned(); }
-        put_backend(line, &value["backend"])
-    }
-}
-
-/// Troca só o campo de versão; RawValue conserva os bytes dos outros campos.
-fn put_backend(line: &str, version: &serde_json::Value) -> String {
-    let Ok(fields) = serde_json::from_str::<HashMap<String, &serde_json::value::RawValue>>(line) else { return line.to_owned() };
-    if let Some(old) = fields.get("backend") {
-        let start = old.get().as_ptr() as usize - line.as_ptr() as usize;
-        return format!("{}{}{}", &line[..start], version, &line[start + old.get().len()..]);
-    }
-    let Some(end) = line.rfind('}') else { return line.to_owned() };
-    format!("{},\"backend\":{}{}", &line[..end], version, &line[end..])
-}
-
-#[cfg(not(windows))]
-fn python_runtime(_: u32) -> bool { true }
 
 /// O redirector do venv tem nome e argv de Python, mas não carrega o interpretador.
 #[cfg(windows)]
@@ -299,34 +198,6 @@ mod python_tests {
         assert_eq!(launch.root, first);
         assert_eq!(launch.version, Snapshot { describe:"0.1.0.8207-gabc1234def56".into(), readable:Some("0.1.0.8207".into()) });
         assert_eq!(capture_with(&second, |_, _| panic!("manifesto prioritário não executa Git")).readable.as_deref(), Some("0.1.0.8207"));
-    }
-
-    #[test]
-    fn history_joins_exact_startup_identity_and_never_relabels_a_reused_pid() {
-        let temp = tempfile::tempdir().unwrap();
-        let base = temp.path();
-        let started = "2026-11-06T09:00:00.123-03:00";
-        let newer = "2026-11-06T10:00:00.456-03:00";
-        let root = base.join("root");
-        for (birth, start, describe) in [(1.0, started, "first"), (2.0, newer, "second")] {
-            PythonLife { pid:42, birth, root:root.clone(), executable:root.join("python"),
-                version:Snapshot { describe:describe.into(), readable:None }, started:Some(start.into()) }.save(base).unwrap();
-        }
-        let mut versions = PythonDiary::load(Some(base.to_owned()));
-        for (start, expected) in [(started, "first"), (newer, "second"), ("2026-11-06T11:00:00-03:00", "indisponivel")] {
-            let mut row = json!({"evento":"backend.inicio","origem":"servidor","pid_backend":42,"inicio_backend":start});
-            versions.enrich(&mut row);
-            assert_eq!(row["backend"], expected);
-        }
-        let mut header = json!({"evento":"diag.formato","pid_backend":42,"inicio_backend":started,"backend":"must-not-reuse-history"});
-        versions.enrich(&mut header);
-        assert_eq!(header["backend"], "indisponivel", "histórico não confirma uma vida atualmente ausente");
-        let raw = format!("{{\"unknown\":{{\"literal\":1.00,\"s\":\"backend\"}}, \"backend\":\"old\",\"evento\":\"backend.inicio\",\"origem\":\"servidor\",\"pid_backend\":42,\"inicio_backend\":{started:?}}}\n");
-        assert_eq!(versions.enrich_line(&raw), raw.replace("\"backend\":\"old\"", "\"backend\":\"first\""));
-        let summary = format!("{{\"bytes\":5.00, \"ultimas\":[{}],\"unknown\":1.00}}", raw.trim());
-        assert_eq!(versions.enrich_summary(&summary).unwrap(), summary.replace("\"backend\":\"old\"", "\"backend\":\"first\""));
-        let old = "{\"evento\":\"backend.inicio\",\"origem\":\"servidor\",\"pid_backend\":99,\"backend\":\"legacy-confirmed\"}";
-        assert_eq!(versions.enrich_line(old), old, "versões históricas já registradas são conservadas");
     }
 
     struct Processes { recipes: HashMap<i64, ProcessRecipe>, children: ChildrenMap }

@@ -42,7 +42,9 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
  case 'thread/start': fs.writeFileSync(rollout,JSON.stringify({type:'session_meta',payload:{id:threadId,cwd}})+'\n');result=settings();break;
  case 'thread/resume': result=settings();break;
  case 'thread/read': result={thread:thread()};break;
- case 'thread/settings/update': if(p.effort)effort=p.effort;if(p.collaborationMode)mode=p.collaborationMode.mode;result=settings();break;
+ case 'thread/settings/update': if(p.effort)effort=p.effort;if(p.collaborationMode){mode=p.collaborationMode.mode;
+   process.stdout.write(JSON.stringify({method:'thread/settings/updated',params:{threadId,threadSettings:{collaborationMode:p.collaborationMode}}})+'\n');}
+   result=settings();break;
  case 'skills/list': result={data:[{cwd,skills:[],errors:[]}]};break;
  case 'mcpServerStatus/list': result={data:[],nextCursor:null};break;
  case 'thread/inject_items':
@@ -62,7 +64,7 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
     crate::write_executable(
         &bin.join("codex"),
         format!(
-            "#!/bin/bash\nif [ \"$1\" = --version ]; then echo 'codex-cli 0.159.3'; exit; fi\nexec -a codex '{}' '{}' \"$@\"\n",
+            "#!/bin/bash\nif [ \"$1\" = --version ]; then echo 'codex-cli 0.171.4'; exit; fi\nexec -a codex '{}' '{}' \"$@\"\n",
             node.trim(),
             script.display()
         ),
@@ -151,9 +153,8 @@ async fn transfer_route_publishes_imported_thread_and_restores_source_on_import_
                 .map_err(|error| error.code)
                 .unwrap();
         }
-        let (python, upstream) = crate::fake::spawn_fake().await;
         let mut state =
-            hangar_server::routes::AppState::new(crate::fake::config(upstream, "127.0.0.1"));
+            hangar_server::routes::AppState::new(crate::fake::config("127.0.0.1"));
         state.accounts = hangar_server::accounts::AccountService::new(env);
         assert!(state.state.runtime.set(registry.clone()).is_ok());
         let server = crate::fake::spawn_state(state).await;
@@ -178,7 +179,6 @@ async fn transfer_route_publishes_imported_thread_and_restores_source_on_import_
         assert_eq!(records.len(), 1, "status={status} body={body}");
         let record = &records[0];
         assert_eq!(std::fs::read_to_string(&source).unwrap(), original);
-        assert_eq!(python.hits_to("/api/sessions/s1/conta"), 0);
         if fail {
             assert_eq!(status, 409, "{body}");
             assert_eq!(

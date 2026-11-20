@@ -53,14 +53,6 @@ fn session(path: &str) -> Option<String> {
     percent_encoding::percent_decode_str(name).decode_utf8().ok().map(|s|s.into_owned())
 }
 
-/// A autenticação e o filtro da borda Python já aconteceram; ela nunca oferece motor de reserva.
-pub(crate) async fn serve_forwarded(st: &Arc<AppState>, req: Request, guest: bool) -> Response {
-    if guest {
-        return json_response(StatusCode::FORBIDDEN,detail_body("erro_fora_do_convidado","fora do acesso do convidado",json!({})));
-    }
-    serve(st,req.uri().path()).await
-}
-
 async fn serve(st: &AppState, path: &str) -> Response {
     let Some(name) = session(path) else { return json_response(StatusCode::NOT_FOUND,json!({"detail":"Not Found"})) };
     match read(&st.hangar_dir.join("nav"),&name).await {

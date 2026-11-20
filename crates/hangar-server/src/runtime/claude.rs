@@ -90,6 +90,9 @@ pub struct ClaudeEngine {
     active_input: Option<String>,
     /// Orientação escrita com `now` no meio do turno: o próximo `result` é o do corte, e ela vira o turno seguinte.
     steer_now: Option<String>,
+    /// Entrada da fila → operação escrita sem `now` no meio do turno, que a CLI guarda até a próxima pausa entre
+    /// ferramentas. "Enviar agora" corta o turno por ela sem reescrever o texto.
+    gentle: BTreeMap<String,String>,
     /// Último `/comando` escrito no processo: a CLI responde alguns sozinha, sem linha no transcript.
     slash_input: Option<String>,
     /// O que já foi avisado nesta vida do processo: tipos desconhecidos e as chaves de `notice_once`.
@@ -190,7 +193,7 @@ impl ClaudeEngine {
             preview:LiveBuffer::default(),thinking:LiveBuffer::default(),tool_input:LiveBuffer::default(),tool_name:None,tool_visible:false,
             label:None,retry_label:None,hooks_running:BTreeMap::new(),hook_fails:BTreeMap::new(),stop_label:None,diary_counts:BTreeMap::new(),compacting:false,turn_start:None,label_deadline:None,tokens_closed:0,tokens_message:None,gen_start:None,
             token_chars:0,thinking_start:None,thought_s:0.0,tasks:Vec::new(),usage:metadata.get("usage").cloned().unwrap_or(Value::Null),
-            context_window:metadata["context_window"].as_u64(),cost:metadata["cost"].as_f64(),effort_intent,effort_deadline:None,active_input:None,steer_now:None,slash_input:None,unknown:BTreeSet::new(),replaying:false,surface:None,stderr_tail:Vec::new(),problem_persisted,subagents:BTreeMap::new(),echoes:std::collections::VecDeque::new(),background:BTreeSet::new(),active_at:clock.monotonic_s,deaf:false,idle_compact:IdleCompact::default(),metadata };
+            context_window:metadata["context_window"].as_u64(),cost:metadata["cost"].as_f64(),effort_intent,effort_deadline:None,active_input:None,steer_now:None,gentle:BTreeMap::new(),slash_input:None,unknown:BTreeSet::new(),replaying:false,surface:None,stderr_tail:Vec::new(),problem_persisted,subagents:BTreeMap::new(),echoes:std::collections::VecDeque::new(),background:BTreeSet::new(),active_at:clock.monotonic_s,deaf:false,idle_compact:IdleCompact::default(),metadata };
         if let Some(controls) = engine.metadata["control_carry"].as_array() {
             for control in controls {
                 let Ok(request_id) = serde_json::from_value::<RequestId>(control["request_id"].clone()) else { continue };
@@ -274,7 +277,7 @@ impl ClaudeEngine {
         self.tasks.clear(); self.background.clear(); self.label = None; self.drop_turn_notices();
         // A nota ficou na conversa anterior: a nova avisa de novo.
         self.hook_fails.clear();
-        self.effort_deadline = None; self.active_input = None; self.steer_now = None; self.restore_plan = None;
+        self.effort_deadline = None; self.active_input = None; self.steer_now = None; self.gentle.clear(); self.restore_plan = None;
         self.in_progress = false; self.turn_start = None; self.label_deadline = None;
         self.clear_streams(effects);
     }
@@ -421,7 +424,7 @@ impl ClaudeEngine {
     /// resposta inventada (a CLI já a gravou), e daqui em diante o fim de cada turno desta vida vem do transcript.
     pub fn transcript_turn_end(&mut self) -> Vec<Effect> {
         let mut effects = Vec::new();
-        self.deaf = true; self.steer_now = None;
+        self.deaf = true; self.steer_now = None; self.gentle.clear();
         self.in_progress = false; self.turn_start = None; self.label_deadline = None; self.label = None;
         self.end_turn_notices(&mut effects);
         self.pending.clear(); self.question = None;
@@ -454,7 +457,7 @@ impl ClaudeEngine {
     /// como não escrito; o que pode ter saído (`handed`) fica incerto e a conferência pelo transcript decide.
     pub fn transport_lost(&mut self,handed:&BTreeSet<String>) -> Vec<Effect> {
         let mut effects = Vec::new();
-        self.transport_up = false; self.steer_now = None;
+        self.transport_up = false; self.steer_now = None; self.gentle.clear();
         let open:Vec<String> = self.wires.iter().filter(|(_,wire)|!wire.final_result).map(|(id,_)|id.clone()).collect();
         for operation_id in open {
             if handed.contains(&operation_id) { self.uncertain_wire(operation_id,&mut effects); }
@@ -474,6 +477,7 @@ impl ClaudeEngine {
         self.waiters.clear();
         self.transport_up = true;
         self.in_progress = false; self.turn_start = None; self.label_deadline = None; self.active_input = None; self.steer_now = None;
+        self.gentle.clear();
         self.drop_turn_notices();
         self.pending.clear(); self.question = None; self.clear_streams(&mut effects);
         effects.extend(self.hydrate(snapshot)?);
@@ -677,6 +681,9 @@ impl ClaudeEngine {
                 self.wires.insert(operation_id.clone(),Wire { interaction:None,kind:"input".into(),request_id:None,final_result:false });
                 // Só o Orientar do botão corta o turno, como o ctrl+x ctrl+s; recado com `steer:true` espera a ferramenta acabar.
                 let cut = command.kind == OperationKind::Steer && payload["now"] == true && self.in_progress && self.steer_now.is_none();
+                // Só a escrita no meio do turno fica guardada na CLI; sem turno ela já o abre.
+                let held = (command.kind == OperationKind::Steer && !cut && self.in_progress)
+                    .then(||payload["entry_id"].as_str().map(str::to_owned)).flatten();
                 if !self.in_progress {
                     self.active_input = Some(operation_id.clone());
                     self.start_turn();
@@ -684,7 +691,23 @@ impl ClaudeEngine {
                 self.expect_echo(&operation_id);
                 let mut frame=Self::input_frame(&operation_id,&payload);
                 if cut { frame["priority"]=json!("now"); self.steer_now = Some(operation_id.clone()); }
+                if let Some(entry) = held { self.gentle.insert(entry,operation_id.clone()); }
                 effects.push(Effect::Write { operation_id:Some(operation_id),frame });
+            }
+            OperationKind::SteerWritten => {
+                let refuse = |code:&str| Ok(vec![Effect::Reply { operation_id:operation_id.clone(),disposition:Disposition::Rejected,payload:json!({"code":code}) }]);
+                let Some(entry) = payload["entry_id"].as_str() else { return Err(error("entry_id não informado")) };
+                let Some(written) = self.gentle.get(entry).cloned() else { return refuse("steer_not_pending") };
+                if !self.in_progress { return refuse("steer_no_turn"); }
+                if !self.pending.is_empty() || self.question.is_some() { return refuse("steer_question_open"); }
+                if self.steer_now.is_some() { return refuse("steer_in_flight"); }
+                // Ela continua em `gentle` até o `started`/`cancelled` dela: corte não escrito ou recusado deixa
+                // o "Enviar agora" valer de novo.
+                // A mensagem já está na CLI: o corte só tira a espera pela pausa, e ela vira o turno seguinte como no Orientar.
+                self.steer_now = Some(written);
+                self.control(operation_id.clone(),"interrupt",json!({}),&mut effects);
+                if let Some(wire) = self.wires.get_mut(&operation_id) { wire.kind = "steer_written".into(); }
+                self.clear_streams(&mut effects);
             }
             OperationKind::Interrupt => {
                 // Sem turno não há o que interromper: dizer isso, e não fingir um Parar que aconteceu.
@@ -840,7 +863,9 @@ impl ClaudeEngine {
         if wire.kind == "effort" && outcome == WriteOutcome::Written { return; }
         let kind = wire.kind.clone();
         let request_id = wire.request_id.clone();
-        if matches!(kind.as_str(),"interrupt" | "stop_task") && let Some(id) = &request_id { self.waiters.remove(id); }
+        if matches!(kind.as_str(),"interrupt" | "stop_task" | "steer_written") && let Some(id) = &request_id { self.waiters.remove(id); }
+        // O corte não saiu: nenhum `result` vai ser de corte.
+        if kind == "steer_written" && outcome != WriteOutcome::Written { self.steer_now = None; }
         let disposition = match outcome { WriteOutcome::Written => Disposition::Accepted,
             WriteOutcome::NotWritten => Disposition::Rejected,WriteOutcome::Unknown => Disposition::Unknown };
         wire.final_result = outcome != WriteOutcome::Unknown;
@@ -952,6 +977,8 @@ impl ClaudeEngine {
                     tracing::warn!(request_id = ?id, operation_id = wire.map(|(op,_)|op.as_str()).unwrap_or(""),
                         kind = wire.map(|(_,wire)|wire.kind.as_str()).unwrap_or(""), error = %response["error"],
                         "a CLI recusou um pedido de controle que já não tinha quem esperasse");
+                    // Corte do "Enviar agora" recusado: o turno segue, e o próximo `result` é parada de verdade.
+                    if wire.is_some_and(|(_,wire)|wire.kind == "steer_written") { self.steer_now = None; }
                 }
             }
             "system" => {
@@ -962,11 +989,21 @@ impl ClaudeEngine {
             },
             "stream_event" => self.on_stream(&event["event"],effects),
             "command_lifecycle" => {
-                let steer = self.steer_now.clone().filter(|id|event["command_uuid"].as_str() == Some(echo_uuid(id).as_str()));
+                let uuid = event["command_uuid"].as_str();
+                let steer = self.steer_now.clone().filter(|id|uuid == Some(echo_uuid(id).as_str()));
+                let held = self.gentle.values().find(|id|uuid == Some(echo_uuid(id).as_str())).cloned();
+                // A guardada começou (ou a CLI a descartou): já não há o que adiantar.
+                if matches!(event["state"].as_str(),Some("started" | "cancelled")) {
+                    self.gentle.retain(|_,id|uuid != Some(echo_uuid(id).as_str()));
+                }
                 match event["state"].as_str() {
                     Some("started") => {
-                        // A orientação que cortou vira o turno, e o `result` dele é a resposta dela.
-                        if let Some(id) = steer { self.steer_now = None; if self.active_input.is_none() { self.active_input = Some(id); } }
+                        // A orientação que cortou vira o turno, e o `result` dele é a resposta dela. A CLI roda as
+                        // guardadas em ordem: outra que começa depois do corte, antes da escolhida, também o encerra,
+                        // senão o `result` dela seria lido como mais um corte e o turno não acabaria.
+                        if let Some(id) = steer.or(held.filter(|_|self.active_input.is_none())) {
+                            self.steer_now = None; if self.active_input.is_none() { self.active_input = Some(id); }
+                        }
                         if !self.in_progress { self.start_turn(); self.changed(effects,true); }
                     }
                     Some("cancelled") if steer.is_some() => {
@@ -1148,6 +1185,8 @@ impl ClaudeEngine {
                 if cut { self.start_turn(); }
                 self.clear_streams(effects); self.changed(effects,true);
                 if !cut {
+                    // Sem turno não há o que cortar: a guardada que sobrou sai sozinha como o turno seguinte.
+                    self.gentle.clear();
                     if self.effort_intent.as_ref().is_some_and(|intent|intent["status"] == "prepared") { self.dispatch_effort(effects); }
                     else { effects.push(Effect::WakeQueue); }
                 }
@@ -1166,7 +1205,7 @@ impl ClaudeEngine {
                 let working = self.in_progress || !self.pending.is_empty() || self.question.is_some();
                 self.alive = false; self.in_progress = false; self.initializing = false;
                 self.turn_start = None; self.label_deadline = None; self.init_warning = None; self.effort_deadline = None;
-                self.pending.clear(); self.question = None; self.steer_now = None; self.clear_streams(effects);
+                self.pending.clear(); self.question = None; self.steer_now = None; self.gentle.clear(); self.clear_streams(effects);
                 // O trabalho de fundo morre com o processo.
                 self.tasks.clear(); self.background.clear(); self.label = None; self.drop_turn_notices();
                 self.hook_fails.clear();
@@ -1201,8 +1240,13 @@ impl ClaudeEngine {
                 if event["isReplay"] == true && let Some(uuid) = event["uuid"].as_str()
                     && let Some(index) = self.echoes.iter().position(|(known,_)|known == uuid) {
                     let (_,operation_id) = self.echoes.remove(index).unwrap();
-                    effects.push(Effect::InputEchoed { operation_id });
+                    // A guardada no meio do turno é confirmada pelo recibo do transcript; a "Na conversa" que abriu
+                    // o turno (sessão parada) é uma mensagem comum e o eco a confirma.
+                    if self.gentle.values().any(|id|*id == operation_id) { effects.push(Effect::RecheckInputs); }
+                    else { effects.push(Effect::InputEchoed { operation_id }); }
                 }
+                // A guardada entra na pausa depois de uma ferramenta: o recibo dela está no transcript logo ali.
+                else if !self.gentle.is_empty() { effects.push(Effect::RecheckInputs); }
                 self.label = None; self.changed(effects,true);
             }
             "cano_stderr" => {

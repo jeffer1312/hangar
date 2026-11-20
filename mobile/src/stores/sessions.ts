@@ -1,11 +1,12 @@
 import { create } from 'zustand';
-import { openSessionsStream, deviceIdentityReady, aggregateSessions, jsonlDaSessao, sweepHidden, registrarDiag, decidirRota, discoverConnectRoute, discoverRemoteRoute, upgradeToDevice, esquecerRota, rotaDecidida, baseOf, UNCONFIRMED_BASE, probeServerResponse, comTeto, parseTagsEvent, patchSlot, placeExternalRows, listExternalPairs, attachGuest, createExternalPairSync } from '@hangar/core';
+import { openSessionsStream, deviceIdentityReady, aggregateSessions, jsonlDaSessao, sweepHidden, registrarDiag, decidirRota, discoverConnectRoute, discoverRemoteRoute, upgradeToDevice, esquecerRota, rotaDecidida, baseOf, UNCONFIRMED_BASE, probeServerResponse, comTeto, parseTagsEvent, parseWorkReviewsEvent, patchSlot, placeExternalRows, listExternalPairs, attachGuest, createExternalPairSync } from '@hangar/core';
 import type { SessionInfo, Server, AggSession, ExternalPair, TagsEvent, VaultEvent, VaultRequest } from '@hangar/core';
 import { sortSessions, definirArmazem, definirProtegido, definirSemPrazo, isServerParked, parkServer, registrarFalha, registrarSucesso, retryAfterMs, estaDesligado, startOutage, endOutage, respondeuRecentemente, retentarAgora, esquecerServidor, onServerRecovered, _limparEsfriamentoParaTestes } from '@hangar/core';
 import type { Slot, ServerBucket, Aggregate } from '@hangar/core';
 import { useServers } from './servers';
 import { checkPeer } from '../features/machines/api';
 import { parseNoticeIgnores } from '../features/notices/notices';
+import { clearWorkReviewSummaries, setWorkReviewSummaries } from '../features/workReview/summaries';
 import * as m from '../paraglide/messages';
 
 // Store vivo da lista de sessões — porte de frontend/src/lib/sessionsStore.svelte.ts
@@ -48,6 +49,7 @@ const slots = new Map<string, Slot>();
 const failedSlot = (id: string, error: string) => patchSlot(slots, id, { error, keyring: undefined, offlineSince: startOutage(id) });
 const streams = new Map<string, ReturnType<typeof openSessionsStream>>();
 const vaultRaw = new Map<string, string>();
+const workReviewsRaw = new Map<string, string>();
 const VAULT_STATES = new Set(['open', 'locked', 'absent', 'offline', 'key_lost']);
 
 /** Evento `vault` torto devolve `null`; cartão sem id, interação ou tipo conhecido sai da lista. */
@@ -599,6 +601,17 @@ async function synchronize(attempt: ConnectionAttempt, get: () => SessionsState,
       const keys = parseNoticeIgnores(e.data);
       if (keys) setNoticeIgnores(s.id, keys);
     });
+    // Revisões do trabalho da máquina: o mapa inteiro a cada troca. Repetido ou torto mantém o último.
+    es.addEventListener('work_reviews', (e) => {
+      if (!active()) return;
+      answered();
+      const data: string = e.data;
+      if (workReviewsRaw.get(s.id) === data) return;
+      const event = parseWorkReviewsEvent(data);
+      if (!event) return;
+      workReviewsRaw.set(s.id, data);
+      setWorkReviewSummaries(s.id, event.reviews);
+    });
     es.onerror = (event) => {
       if (!active()) return;
       const status = (event as { xhrStatus?: number } | null)?.xhrStatus ?? 0;
@@ -721,6 +734,8 @@ function stop(set: (p: Partial<SessionsState>) => void) {
   pause();
   slots.clear();
   vaultRaw.clear();
+  workReviewsRaw.clear();
+  clearWorkReviewSummaries();
   set({ vault: {} });
   for (const [id, status] of refused) slots.set(id, { sessions: null, error: refusedError(status) });
   // hidden mantém? Não — limpa ao parar para próximo retain começar limpo
@@ -818,6 +833,8 @@ export function _resetSessionsForTests() {
   streams.clear();
   slots.clear();
   vaultRaw.clear();
+  workReviewsRaw.clear();
+  clearWorkReviewSummaries();
   hidden = new Map<string, string | null>();
   serversCache = [];
   aggCache = { rows: [], byServer: [], loading: false };

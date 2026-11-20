@@ -4,7 +4,7 @@ use std::sync::Arc;
 async fn serve() -> (std::net::SocketAddr,tokio::task::JoinHandle<std::io::Result<()>>) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
-    let registry = Arc::new(RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(),"secret-test".into(),"instance-test".into()));
+    let registry = Arc::new(RuntimeRegistry::new("instance-test".into()));
     (address,tokio::spawn(gateway::serve(listener,registry,"secret-test".into(),"instance-test".into(),hangar_server::INTERNAL_PROTOCOL)))
 }
 
@@ -55,6 +55,6 @@ async fn ingress_command_rejects_extra_field_and_bad_payload() {
 
 #[tokio::test]
 async fn writable_is_none_without_an_entry() {
-    let registry = RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(),"s".into(),"i".into());
+    let registry = RuntimeRegistry::new("i".into());
     assert!(registry.writable("s").await.is_none());
 }

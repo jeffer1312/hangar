@@ -50,7 +50,7 @@ mod presence;
 mod disk;
 mod player;
 mod machines;
-mod migration;
+mod status;
 mod orchestration;
 mod orq_roles;
 mod orq_panel;
@@ -96,6 +96,7 @@ pub(crate) use reviews::{Comment as ReviewComment, Summary as ReviewSummary, Thr
     row_view as review_row_view, thread_actions as review_thread_actions, thread_box as review_thread_box, thread_buttons as review_thread_buttons};
 pub(crate) use connect::device_card;
 pub(crate) use scheduled::{row_frame as scheduled_row_frame, row_text as scheduled_row_text};
+pub(crate) use status::parts as status_parts;
 pub(crate) use settings::{memory_dream, news_group_heading, news_kind_icon, news_kind_pill, news_markdown_block, setting_row, settings_box};
 pub(crate) use plugins::{plugin_meta, plugin_name, plugin_switch, plugin_update_button, reopen_notice as plugins_reopen_notice,
     row_box as plugin_row_box, text_block as plugin_text_block};
@@ -126,6 +127,11 @@ mod find;
 mod costs;
 mod mission;
 pub(crate) use mission::ticket_card_view;
+pub(crate) use activity::{side_tab_button, side_tab_slot};
+pub(crate) use work_review::{choice_button as review_choice_button, decision_card as review_decision_card, decision_frame_width as review_frame_width,
+    decision_nav as review_decision_nav, decision_nav_row as review_decision_nav_row, frames_row as review_frames_row, render_band as review_band,
+    side_frame as review_side_frame, tab_pill as review_tab_pill};
+mod work_review;
 mod worktrees;
 mod reviews;
 mod artifacts;
@@ -359,6 +365,8 @@ enum Payload {
     Media(SessionKey, Source, Result<Option<(Arc<RenderImage>, Vec<Arc<RenderImage>>)>, Failure>),
     /// Resultado de Abrir/Salvar: o arquivo gravado e se veio vazio, ou a falha e se ele não existe no servidor.
     Saved(SessionKey, Source, bool, Result<(PathBuf, bool), (String, bool)>),
+    /// "Abrir no navegador" do HTML citado: o endereço da página com o bilhete dela, ou a falha já em frase.
+    PageOpened(SessionKey, Source, Result<String, String>),
     ConnectionNotSaved(String),
     // Rede local ou Connect aprendidos para a máquina deste endereço salvo.
     Route(String, api::route::Learned),
@@ -559,7 +567,7 @@ struct CiteCheck { owner: Option<SessionKey>, scanned: HashSet<String>, checked:
 
 /// Cartão de um arquivo citado depois de Abrir ou Baixar: baixando, baixado, vazio, inexistente ou a falha.
 #[derive(Clone)]
-enum FileCard { Busy, Saved, Empty, Missing, Failed(String) }
+enum FileCard { Busy, Saved, Empty, Missing, Failed(String), PageFailed(String) }
 
 /// Texto preparado de uma linha: a mensagem pronta para o `TextView`, as linhas do resultado de uma chamada ou o
 /// detalhe aberto (entrada/saída) de uma chamada.
@@ -648,6 +656,8 @@ pub struct Hangar {
     etag: Option<String>,
     error: Option<String>,
     list_error: Option<String>,
+    /// Quando a lista do servidor selecionado deixou de responder: a página Status mostra "há N min".
+    list_down_since: Option<Instant>,
     delivery: DeliveryTracker,
     stopping: HashSet<SessionKey>,
     stop_feedback: HashMap<SessionKey, (String, bool)>,
@@ -692,6 +702,10 @@ pub struct Hangar {
     tags: HashMap<String, tags::Event>,
     /// Avisos da CLI ignorados em cada máquina (chave `servers::norm`), do evento `notice_ignores` da lista.
     notice_ignores: HashMap<String, std::collections::BTreeSet<String>>,
+    /// Revisão do trabalho de cada sessão por máquina (chave `servers::norm`, depois o nome), do evento `work_reviews`.
+    work_reviews: HashMap<String, HashMap<String, WorkReviewSummary>>,
+    /// Seção da revisão do trabalho da sessão aberta, na aba Contexto.
+    work_review: work_review::Panel,
     /// Avisos em que a pessoa agiu nesta janela (id do evento): seguem na tela com Desfazer ou com o erro.
     notice_acted: HashMap<String, notice_line::Acted>,
     /// Cartão da pergunta aberto: (máquina, dono — vazio = No Hangar, terminal) e o diálogo que o mostra.
@@ -764,6 +778,8 @@ pub struct Hangar {
     commands_latest: HashMap<String, u64>,
     commands_seq: u64,
     suggest_pick: usize,
+    /// Origem da lista do `/` da tela sem sessão buscada por último; outra (ou a volta a uma já vista) busca de novo.
+    new_chat_commands_seen: Option<String>,
     /// O campo já mostrava sugestões do `/`: a lista é revalidada só quando elas abrem.
     slash_open: bool,
     suggest_dismissed: Option<String>,
@@ -1198,10 +1214,10 @@ impl Hangar {
             address, token, unsaved_connection: None, connection_focus, root_focus, composer, composer_placeholder: String::new(), _input_subscription: input_subscription, _keyboard_subscription: keyboard_subscription,
             connection_dialog: true, list_online: false, chat_online: false, loading: false, history_started: false,
             history_installed: false, pending_chat: Vec::new(),
-            history_limit: 400, has_older: false, etag: None, error: None, list_error: None,
+            history_limit: 400, has_older: false, etag: None, error: None, list_error: None, list_down_since: None,
             delivery: DeliveryTracker::default(), stopping: HashSet::new(), stop_feedback: HashMap::new(), drafts: HashMap::new(), input_history: HashMap::new(),
             flight: InFlight::default(), action_feedback: HashMap::new(), jev_note_at: HashMap::new(), file_cards: HashMap::new(), queue: Default::default(), send_flight: None, local_send: None, local_queue: None, idle_sends: Vec::new(), send_landed: Vec::new(),
-            note_slide: Default::default(), note_last: None, flight_places: Default::default(), live_terms: Vec::new(), keyring: HashMap::new(), vault: HashMap::new(), vault_page: None, plugins_page: None, guide: Default::default(), rename_suggest: Default::default(), tags: HashMap::new(), notice_ignores: HashMap::new(), notice_acted: HashMap::new(), question_open: None, question_card: None,
+            note_slide: Default::default(), note_last: None, flight_places: Default::default(), live_terms: Vec::new(), keyring: HashMap::new(), vault: HashMap::new(), vault_page: None, plugins_page: None, guide: Default::default(), rename_suggest: Default::default(), tags: HashMap::new(), notice_ignores: HashMap::new(), work_reviews: HashMap::new(), work_review: Default::default(), notice_acted: HashMap::new(), question_open: None, question_card: None,
             hangar_open: false, hangar_focus: cx.focus_handle(), hangar_error: None, live_clock: None, ask_form: AskForm::default(), ask_drafts: HashMap::new(), plans_dismissed: HashSet::new(), answered_tools: HashSet::new(), answering: HashMap::new(), ask_scroll: Default::default(), plan_scroll: Default::default(), plan_view: None,
             plan_review: Default::default(),
             list_state, rail_hover: None, follow: Default::default(), row_ids: Vec::new(), row_signatures: Vec::new(), conversation: Default::default(), row_assets: Vec::new(), expanded: HashSet::new(), kept_expanded: HashMap::new(), orq_days: HashSet::new(),
@@ -1211,7 +1227,7 @@ impl Hangar {
             preview_last_tick: None, preview_carry: 0., preview_deadline: None,
             attachments: HashMap::new(), quotes: Default::default(), mermaid: Default::default(), attach_seq: 0, uploading: HashMap::new(), commands: HashMap::new(), commands_latest: HashMap::new(), commands_seq: 0,
             plugin_question_seen: None,
-            suggest_pick: 0, slash_open: false, suggest_dismissed: None, command_panel: false, context_card: false, command_search, confirm: None, confirm_no_ask: false,
+            suggest_pick: 0, new_chat_commands_seen: None, slash_open: false, suggest_dismissed: None, command_panel: false, context_card: false, command_search, confirm: None, confirm_no_ask: false,
             mention: Default::default(),
             terminal_suggestion: String::new(), plugin_band: Value::Null, plugin_panes: Vec::new(), plugin_shown: None, plugin_columns: None, plugin_source: None, plugin_caps: Vec::new(), plugin_local_tab: None, plugin_presentations: HashMap::new(), linked_children_open: HashSet::new(), plugin_body_scrolls: HashMap::new(), plugin_question_focus: cx.focus_handle(), plugin_tabs_scroll: ScrollHandle::new(), plugin_tabs_seen: None, plugin_tabs_waits: 0, plugin_hovered: HashSet::new(), plugin_fields: HashMap::new(), plugin_draws: 0, plugin_toasts_seen: Default::default(), plugin_toasts_shown: Default::default(), recent: None, media: MediaCache::new(), media_reveal: HashMap::new(), pages: page_card::Pages::new(window.window_handle()), full_images: viewer::full_images(), stats: None,
             side: side::Side::default(), controls: controls::Controls::default(),
@@ -1575,6 +1591,8 @@ impl Hangar {
         self.mention.close();
         self.active_token.clear();
         self.connection += 1;
+        // A resposta em voo da conexão anterior é descartada: com o `/` aberto, a próxima pintura busca de novo.
+        self.new_chat_commands_seen = None;
         self.files_connection_dropped(cx);
         self.selection += 1;
         self.revision += 1;
@@ -1597,6 +1615,7 @@ impl Hangar {
         for (_, (_, _, frames)) in self.media_reveal.drain() { for frame in frames { cx.drop_image(frame, Some(window)); } }
         self.error = None;
         self.list_error = None;
+        self.list_down_since = None;
         self.list_online = false;
         self.chat_online = false;
         self.loading = false;
@@ -1902,6 +1921,23 @@ impl Hangar {
                 cx.notify();
                 return;
             }
+            Payload::PageOpened(key, source, result) => {
+                match result {
+                    Ok(url) => {
+                        self.file_cards.remove(&(key.clone(), source));
+                        #[cfg(any(target_os = "linux", target_os = "windows"))]
+                        self.open_page_for(&key, url, window, cx);
+                        #[cfg(target_os = "macos")]
+                        let _ = url;
+                    }
+                    Err(error) => {
+                        self.file_cards.insert((key.clone(), source), FileCard::PageFailed(error.clone()));
+                        self.action_feedback.insert(key, (error, true));
+                    }
+                }
+                cx.notify();
+                return;
+            }
             Payload::AppearanceSaved(result) => {
                 // O arquivo é deste computador, não da conexão: vale mesmo depois de trocar de servidor.
                 self.appearance_note = result.err().map(|error| tr("settings_not_saved").replace("{error}", &error));
@@ -1974,11 +2010,18 @@ impl Hangar {
                         servers::RemoteUpdate::Stream(Update::Frame(frame)) if frame.event == "vault" => Some(Some(frame.data.clone())),
                         _ => None,
                     };
+                    // Pedido de navegador de uma sessão desta máquina chega pela lista dela, seja ela a ativa ou não.
+                    let nav = match &update {
+                        servers::RemoteUpdate::Stream(Update::Frame(frame)) if frame.event == "nav" => Some(frame.data.clone()),
+                        _ => None,
+                    };
                     // Menu, renomear, fechar e grupo das linhas desta máquina acompanham a lista dela como os da ativa.
                     let (changed, gone) = self.receive_remote(generation, key.clone(), update, cx);
                     if changed {
                         self.tour_dirty = true;
                         self.sidebar_sessions_changed(window, cx);
+                        // Servidor desta máquina fora do ativo: as pastas das sessões dele também vão direto ao disco.
+                        self.resolve_local_dirs(cx);
                     }
                     self.remote_changed(&key, window, cx);
                     // Depois do `follow_open`: a aberta que fechou de vez já saiu da seleção.
@@ -1992,6 +2035,7 @@ impl Hangar {
                         self.redraw(panes::Area::Nav, cx);
                         cx.notify();
                     }
+                    if let Some(data) = nav { self.receive_nav(&key, data, window, cx); }
                 }
                 return;
             }
@@ -2012,6 +2056,7 @@ impl Hangar {
             Payload::Mentions(seq, result) => { self.receive_mentions(seq, result, cx); }
             Payload::Sessions(Ok(sessions)) => {
                 self.list_error = None;
+                self.list_down_since = None;
                 if let Some((address, token)) = self.unsaved_connection.take() {
                     let known = self.servers.iter().any(|s| servers::norm(&s.address) == servers::norm(&address));
                     let label = if known { String::new() } else { servers::default_label(&address) };
@@ -2039,6 +2084,7 @@ impl Hangar {
                     self.error = Some(Self::failure(&error));
                 }
                 self.list_error = Some(self.active_failure(&error));
+                self.list_down_since.get_or_insert_with(Instant::now);
             }
             Payload::Stream(Update::Online) => {
                 if is_chat {
@@ -2051,6 +2097,7 @@ impl Hangar {
                 } else {
                     let back = !self.list_online;
                     self.list_online = true;
+                    self.list_down_since = None;
                     if back { self.server_back(window, cx); }
                     // A lista pode chegar só pelo stream (a primeira leitura falhou com o backend subindo): sem esta leitura
                     // o botão da voz nasce escondido e nenhuma reconexão o traz de volta.
@@ -2066,6 +2113,7 @@ impl Hangar {
                 else {
                     self.list_online = false;
                     self.list_error = Some(self.active_failure(&error));
+                    self.list_down_since.get_or_insert_with(Instant::now);
                     let server = self.active_key();
                     if self.set_keyring(&server, false, window, cx) { self.redraw(panes::Area::Nav, cx); }
                     if self.set_vault_requests(&server, None, window, cx) { self.redraw(panes::Area::Nav, cx); }
@@ -2097,7 +2145,7 @@ impl Hangar {
                     visible = apply_list_error(!self.sessions.is_empty(), &mut self.list_error, &frame.data, crate::log_line);
                     true
                 }
-                else if frame.event == "nav" { self.receive_nav(frame.data, window, cx); true }
+                else if frame.event == "nav" { let server = self.active_key(); self.receive_nav(&server, frame.data, window, cx); true }
                 else if frame.event == "keyring" {
                     let server = self.active_key();
                     let state = keyring::locked(&frame.data);
@@ -2123,6 +2171,14 @@ impl Hangar {
                     let stored = notice_line::store(&mut self.notice_ignores, &server, &frame.data);
                     visible = stored == Some(true);
                     if visible { self.notice_ignores_changed(&server, cx); }
+                    stored.is_some()
+                }
+                // Chip das linhas e releitura da revisão da sessão aberta (no desenho do painel lateral, pedido aqui).
+                else if frame.event == "work_reviews" {
+                    let server = self.active_key();
+                    let stored = work_review::store(&mut self.work_reviews, &server, &frame.data);
+                    visible = stored == Some(true);
+                    if visible { self.redraw(panes::Area::Nav, cx); self.work_reviews_changed(&server, cx); }
                     stored.is_some()
                 }
                 // Celular que ainda não tinha aparecido: a dica do "No PC / Fora", uma vez por aparelho.
@@ -2172,7 +2228,7 @@ impl Hangar {
                         for update in std::mem::take(&mut self.pending_chat) { self.apply_chat_update(update, window, cx); }
                         api::open_trace(|| "pending applied".into());
                         self.error = None;
-                        self.ensure_commands(false);
+                        self.ensure_commands(false, cx);
                         self.discover_plan();
                         // A primeira conta de subagentes espera a conversa chegar, como o `aoAquecer` do web.
                         if first { self.restart_subagent_count(cx); }
@@ -2334,7 +2390,7 @@ impl Hangar {
             Payload::Dossier(key, seq, result) => { self.receive_dossier(key, seq, result, cx); return; }
             Payload::DesktopPalette(seq, result) => { self.receive_desktop_palette(seq, result, window, cx); return; }
             Payload::Sent(..) | Payload::Interrupted(..) | Payload::Acted(..) | Payload::Files(..) | Payload::UploadStep(..)
-                | Payload::UploadsDone(..) | Payload::Saved(..) | Payload::ConnectionNotSaved(..) | Payload::Reply(..) | Payload::HeadlessPlan(..)
+                | Payload::UploadsDone(..) | Payload::Saved(..) | Payload::PageOpened(..) | Payload::ConnectionNotSaved(..) | Payload::Reply(..) | Payload::HeadlessPlan(..)
                 | Payload::AppearanceSaved(..) | Payload::Backdrop(..) | Payload::BackdropPicked(..) | Payload::BackdropRemoved(..)
                 | Payload::Remote(..) | Payload::Route(..) | Payload::Keyring(..) | Payload::ConnectNotice(..) | Payload::Presence(..) | Payload::Voice(..) | Payload::VoiceGate(..) | Payload::VoiceMemory(..) | Payload::VoiceModels(..) | Payload::QueueJev(..)
                 | Payload::Mermaid(..) | Payload::TourProgress(..) => unreachable!(),
@@ -2366,6 +2422,8 @@ impl Hangar {
         if let Ok(delivery) = &result {
             // Entregue sem fila pelo que o servidor diz, com ou sem o Jev: a nota dele só existe quando ele decidiu.
             let delivered = delivery.delivered || matches!(delivery.timing_note.as_deref(), Some("direct" | "delivered"));
+            // "Na conversa" que o servidor pôs na fila comum: o destino local passa do fim da conversa ao painel.
+            if delivery.conversation == Some(false) { self.send_queued_instead(&key, &text); }
             self.send_settled(&key, &text, delivered, cx);
         }
         if !self.delivery.complete(&key, &text, outcome) { return; }
@@ -2866,7 +2924,19 @@ impl Hangar {
     fn composer_event(&mut self, event: &InputEvent, window: &mut Window, cx: &mut Context<Self>) {
         match event {
             InputEvent::PressEnter { secondary: false, shift: false } if !self.connection_dialog => {
-                if !self.accept_mention(window, cx) { self.submit(false, false, window, cx); }
+                if self.accept_mention(window, cx) { return; }
+                // Lista do `/` aberta: o Enter é o clique no item marcado, como no Claude Desktop.
+                let suggestions = self.visible_suggestions(cx);
+                if let Some(command) = suggestions.get(self.suggest_pick.min(suggestions.len().saturating_sub(1))) {
+                    self.pick_command(command.clone(), false, window, cx);
+                    return;
+                }
+                self.submit(false, false, window, cx);
+            }
+            // Com "Na conversa" escolhido, o Ctrl+Enter é a saída para a Fila; nos outros modos ele segue sem ação.
+            InputEvent::PressEnter { secondary: true, shift: false } if !self.connection_dialog
+                && appearance::get().delivery_mode() == appearance::DeliveryMode::Conversation => {
+                self.submit_as(false, false, true, window, cx);
             }
             // A lista de comandos acompanha o que se digita.
             // Texto e sugestões só aparecem na faixa de baixo.
@@ -2876,7 +2946,7 @@ impl Hangar {
                 // Abertas = há `/nome` sob o cursor e o Esc não as fechou neste texto.
                 let open = self.composer_cursor(cx).is_some_and(|(text, cursor)| composer::slash_token(&text, cursor).is_some()
                     && self.suggest_dismissed.as_deref() != Some(text.as_str()));
-                if open && !self.slash_open { self.ensure_commands(true); }
+                if open && !self.slash_open { self.ensure_commands(true, cx); }
                 self.slash_open = open;
                 // A prévia é desenhada na raiz, fora da área de baixo.
                 if self.in_tab_preview { cx.notify(); } else { self.redraw(panes::Area::Bottom, cx); }
@@ -3015,19 +3085,40 @@ impl Hangar {
         }
     }
 
-    fn commands_key(&self) -> Option<String> {
+    fn commands_key(&self, cx: &App) -> Option<String> {
+        if self.selected.is_none() { return self.new_chat_commands(cx).map(|source| source.key); }
         let (server, session) = (self.session_server()?, self.selected.as_ref()?);
         Some(format!("{server}|{}|{}", session.provider, session.name))
     }
 
-    fn command_list(&self) -> &[CommandInfo] {
-        self.commands_key().and_then(|key| self.commands.get(&key)).and_then(|r| r.as_ref().ok()).map(Vec::as_slice).unwrap_or(&[])
+    /// A tela sem sessão (nem conversa fechada aberta, nem criação em voo) busca a lista da conversa que vai nascer.
+    fn new_chat_commands(&self, cx: &App) -> Option<create::NewChatCommands> {
+        if !self.new_chat_screen() || self.reopen.is_some() || self.opening.is_some() { return None; }
+        self.new_chat.as_ref()?.read(cx).command_source()
+    }
+
+    fn command_list(&self, cx: &App) -> &[CommandInfo] {
+        self.commands_key(cx).and_then(|key| self.commands.get(&key)).and_then(|r| r.as_ref().ok()).map(Vec::as_slice).unwrap_or(&[])
     }
 
     // Codex muda a lista conforme o modo: sempre relê. Os demais usam a lista já buscada, salvo `force`
     // (abrir o `/` ou o painel), que mantém a guardada na tela enquanto a nova chega.
-    fn ensure_commands(&mut self, force: bool) {
-        let (Some(api), Some(session), Some(cache)) = (self.session_api(), self.selected.clone(), self.commands_key()) else { return; };
+    fn ensure_commands(&mut self, force: bool, cx: &App) {
+        if self.selected.is_none() {
+            let Some(source) = self.new_chat_commands(cx) else { return; };
+            if !force && self.commands.get(&source.key).is_some_and(|r| r.is_ok()) { return; }
+            self.new_chat_commands_seen = Some(source.key.clone());
+            self.commands_seq += 1;
+            let seq = self.commands_seq;
+            self.commands_latest.insert(source.key.clone(), seq);
+            let (connection, tx) = (self.connection, self.tx.clone());
+            self.runtime.spawn(async move {
+                let result = source.api.new_chat_commands(source.cwd.as_deref(), source.config.as_deref(), source.headless).await;
+                let _ = tx.send(Envelope { connection, selection: None, payload: Payload::Commands(source.key, seq, result) }).await;
+            });
+            return;
+        }
+        let (Some(api), Some(session), Some(cache)) = (self.session_api(), self.selected.clone(), self.commands_key(cx)) else { return; };
         if !force && session.provider != "codex" && self.commands.get(&cache).is_some_and(|r| r.is_ok()) { return; }
         self.commands_seq += 1;
         let seq = self.commands_seq;
@@ -3051,7 +3142,12 @@ impl Hangar {
 
     // `confirmed` = a pessoa já aceitou o aviso de comando destrutivo para este mesmo texto.
     fn submit(&mut self, steer: bool, confirmed: bool, window: &mut Window, cx: &mut Context<Self>) {
-        if self.defer_dictation_send(steer, cx) { return; }
+        self.submit_as(steer, confirmed, false, window, cx);
+    }
+
+    /// `queue_only`: o Ctrl+Enter com "Na conversa" escolhido deixa a mensagem no painel "Na fila".
+    fn submit_as(&mut self, steer: bool, confirmed: bool, queue_only: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.defer_dictation_send(steer, queue_only, cx) { return; }
         // Em edição, o Enter e o Enviar atualizam a mensagem da fila em vez de mandar outra.
         if self.selected.is_some() && self.queue_edit_active() { self.submit_queue_edit(window, cx); return; }
         if self.selected.is_none() && self.reopen.is_some() { self.send_reopen(window, cx); return; }
@@ -3076,7 +3172,7 @@ impl Hangar {
         let attached = self.attachments.get(&key).is_some_and(|list| !list.is_empty());
         // Comando digitado (`/compact`, `/btw …`) vai sozinho: blocos na frente o desfariam, e a bandeja fica para a
         // próxima mensagem.
-        let command = composer::typed_command(self.command_list(), &text).is_some() || composer::side_question(&text);
+        let command = composer::typed_command(self.command_list(cx), &text).is_some() || composer::side_question(&text);
         let referenced = !command && self.has_context_refs(&key);
         if text.trim().is_empty() && !attached && !referenced { return; }
         let flying = self.delivery.pending(&key);
@@ -3090,7 +3186,7 @@ impl Hangar {
         let refs = if referenced { self.context_refs_snapshot(&key) } else { Vec::new() };
         // Com anexo a legenda vai na frente do prompt: o comando do campo continua sendo o da mensagem.
         let provider = self.provider().0.to_owned();
-        if let Some(command) = composer::typed_command(self.command_list(), &text).cloned() {
+        if let Some(command) = composer::typed_command(self.command_list(cx), &text).cloned() {
             if let Some(warning) = composer::blocked_command(&provider, &command, self.btw_ready()) {
                 self.action_feedback.insert(key, (tr(warning).replace("{cmd}", &format!("/{}", command.name)), true));
                 cx.notify();
@@ -3107,8 +3203,10 @@ impl Hangar {
         self.action_feedback.remove(&key);
         // O grupo é o da hora do Enter: o texto pode sair depois, com outra conversa aberta ou o grupo mudado.
         let group = if steer { None } else { self.group_targets(&key, &text) };
-        let steer = steer || group.is_none() && !command && self.queue_sends_direct();
-        let steer = self.queue_timing(steer, group.is_none() && !command, &text);
+        let steer = if queue_only { SendTiming::Queued } else {
+            let steer = steer || group.is_none() && !command && self.queue_sends_direct();
+            self.queue_timing(steer, group.is_none() && !command, &text)
+        };
         let steer = if flying || attached { steer.after_wait() } else { steer };
         // Sem terminal, o `/btw` só sai traduzido e com o plugin anunciando que o atende; mesmo com a lista de
         // comandos ainda vazia (sem `blocked_command`), nunca vai cru ao Claude Code.
@@ -3138,13 +3236,13 @@ impl Hangar {
         // As referências da bandeja vão antes do digitado; o que volta ao campo numa falha é só o digitado.
         let message = quotes::compose_refs(&refs, &text);
         // Só o texto digitado, sozinho, ganha o destino local e viaja até ele; o resto entra como sempre. Com a sessão
-        // trabalhando e sem "mandar direto", o destino é o painel "Na fila"; senão, o fim da conversa.
+        // trabalhando e sem "mandar direto" nem "Na conversa", o destino é o painel "Na fila"; senão, o fim da conversa.
         // Texto longo fica no caminho de sempre: a bolha local o mostraria inteiro, sem o corte da mensagem gravada.
         let flies = refs.is_empty() && !command && group.is_none() && send_flight::flies(&field);
         let idle = self.chat.state.state != "working";
         // Com a entrega parada a mensagem fica no painel mesmo com a sessão parada: é para lá que ela viaja.
         let stalled = self.chat.state.problema.as_deref() == Some(STALLED);
-        let to_queue = (!idle || stalled) && steer != SendTiming::Direct;
+        let to_queue = (!idle || stalled) && !matches!(steer, SendTiming::Direct | SendTiming::Conversation);
         let known_before = if flies { known.clone() } else { HashSet::new() };
         if self.deliver(key.clone(), message, field.clone(), steer, known, group, cx) {
             if flies { self.send_takeoff(&field, idle, to_queue, known_before, window, cx); }
@@ -3202,6 +3300,7 @@ impl Hangar {
                 Some(names) => api.broadcast(&names, &text).await.and_then(|results| group_sheet::group_delivery(&key.name, results)),
                 None if terminal_claude => api.send_direct(&key.name, &text).await,
                 None if steer == SendTiming::Direct => api.steer_text(&key.name, &text).await,
+                None if steer == SendTiming::Conversation => api.send_conversation(&key.name, &text).await,
                 None if matches!(steer, SendTiming::Jev { .. }) => {
                     let SendTiming::Jev { task, message } = steer else { unreachable!() };
                     api.send_decided(&key.name, &text, &task, &message).await
@@ -3487,6 +3586,34 @@ impl Hangar {
         });
     }
 
+    /// "Abrir no navegador" aparece só no HTML citado de sessão desta máquina: o endereço da página é o 127.0.0.1 do
+    /// servidor dela, e só o navegador da sessão (Linux e Windows) o abre.
+    fn page_openable(&self, key: Option<&SessionKey>, source: &Source, name: &str) -> bool {
+        cfg!(any(target_os = "linux", target_os = "windows"))
+            && matches!(source, Source::Cited(_))
+            && matches!(composer::extension(name).as_str(), "html" | "htm")
+            && key.and_then(|key| self.api_for(&key.server)).is_some_and(|api| api.is_loopback())
+    }
+
+    /// O servidor guarda o HTML citado como página isolada da conversa (`file/page`, mesma autorização do `/file`) e
+    /// devolve o endereço com o bilhete dela, que só abre essa página; o token do dono nunca entra na URL.
+    // A sessão é a do cartão: na prévia de outra aba ela não é a selecionada.
+    fn open_html_page(&mut self, key: SessionKey, source: Source, cx: &mut Context<Self>) {
+        let Source::Cited(path) = &source else { return };
+        let Some(api) = self.api_for(&key.server) else { return };
+        if !api.is_loopback() { return; }
+        let (connection, tx, path) = (self.connection, self.tx.clone(), path.clone());
+        self.file_cards.insert((key.clone(), source.clone()), FileCard::Busy);
+        self.runtime.spawn(async move {
+            let result = match api.server_send(reqwest::Method::POST, &["sessions", &key.name, "file", "page"], Some(json!({"path": path})), 30).await {
+                Ok(body) => body["open_url"].as_str().map(str::to_owned).ok_or_else(|| tr("invalid_response")),
+                Err(error) => Err(Self::fetch_failure(&error)),
+            };
+            let _ = tx.send(Envelope { connection, selection: None, payload: Payload::PageOpened(key, source, result) }).await;
+        });
+        cx.notify();
+    }
+
     // Abrir grava uma cópia privada e entrega ao programa do sistema; salvar pergunta o destino. Nunca há token em URL.
     fn keep_file(&mut self, source: Source, name: String, open: bool, cx: &mut Context<Self>) {
         let (Some(api), Some(key)) = (self.session_api(), self.selected_key()) else { return; };
@@ -3603,6 +3730,8 @@ impl Hangar {
             let whole = self.composer_cursor(cx).and_then(|(text, cursor)| composer::slash_token(&text, cursor).map(|t| t.whole));
             if whole == Some(false) { self.complete_slash(&command.name, window, cx); return; }
         }
+        // Sem sessão ainda não há para onde enviar: a escolha vira o texto do campo, e o Enviar cria a conversa com ele.
+        if self.selected.is_none() { self.fill_command(&command.name, from_panel, window, cx); return; }
         if let Some(warning) = composer::blocked_command(&provider, &command, self.btw_ready()) {
             if let Some(key) = self.selected_key() {
                 self.action_feedback.insert(key, (tr(warning).replace("{cmd}", &format!("/{}", command.name)), true));
@@ -3629,7 +3758,7 @@ impl Hangar {
         let Some((text, cursor)) = self.composer_cursor(cx) else { return Vec::new(); };
         if self.suggest_dismissed.as_deref() == Some(text.as_str()) { return Vec::new(); }
         let Some(token) = composer::slash_token(&text, cursor) else { return Vec::new(); };
-        composer::suggestions(self.command_list(), token.query).into_iter().cloned().collect()
+        composer::suggestions(self.command_list(cx), token.query).into_iter().cloned().collect()
     }
 
     /// Texto do campo e posição do cursor; com trecho selecionado não há cursor.
@@ -3707,6 +3836,9 @@ impl Hangar {
             Action::Discard(id) => self.chat.events.iter().any(|e| e.id == format!("queued-{id}")
                 && (e.desistiu == Some(true) || discardable(e, self.chat.state.problema.as_deref()))).then(|| id.clone()),
             Action::Cancel | Action::Steer => Some(String::new()),
+            // O "Enviar agora" da bolha "Em espera" orienta uma entrada que nunca está no painel.
+            Action::QueueSteer(id) if self.chat.events.iter().any(|e| e.id == format!("queued-{id}") && crate::queue_panel::conversation_waiting(e)) =>
+                Some(id.clone()),
             // O instantâneo é o id: a entrada ainda tem de estar no painel.
             Action::QueueCancel(id) | Action::QueueEdit(id, _) | Action::QueueSteer(id) | Action::QueueReorder(id, _) =>
                 self.chat.queue_panel().entries.iter().any(|e| &e.id == id).then(|| id.clone()),
@@ -3717,10 +3849,14 @@ impl Hangar {
         let ask = self.chat.ask.as_ref()?;
         if self.ask_form.fingerprint != ask.fingerprint { return None; }
         let mut body = interaction::answer_body(ask, &self.ask_picks(cx))?;
-        let preferences = appearance::get();
-        // A identidade da pergunta já comprova a relação com o trabalho: o Jev não precisa inferi-la.
-        if ask.payload.is_async && ask.payload.provider.as_deref() == Some("codex")
-            && (preferences.steer_while_working || preferences.jev_delivery && self.queue_jev_ready()) {
+        // A identidade da pergunta já comprova a relação com o trabalho: o Jev não precisa inferi-la. No Codex o
+        // `turn/steer` não corta o turno, então "Na conversa" também orienta.
+        let steers = match appearance::get().delivery_mode() {
+            appearance::DeliveryMode::Direct | appearance::DeliveryMode::Conversation => true,
+            appearance::DeliveryMode::Jev => self.queue_jev_ready(),
+            appearance::DeliveryMode::Queue => false,
+        };
+        if ask.payload.is_async && ask.payload.provider.as_deref() == Some("codex") && steers {
             body["steer"] = json!(true);
         }
         Some(body)
@@ -5003,8 +5139,12 @@ impl Hangar {
             let (save_source, save_name) = (source.clone(), name.clone());
             let openable = composer::openable(&composer::safe_name(&name));
             if !image && player.is_none() {
-                let state = key.as_ref().and_then(|key| self.file_cards.get(&(key.clone(), source))).cloned();
-                list = list.child(file_card(row, n, &name, state, openable,
+                let state = key.as_ref().and_then(|key| self.file_cards.get(&(key.clone(), source.clone()))).cloned();
+                let page = key.clone().filter(|key| self.page_openable(Some(key), &source, &name)).map(|page_key| {
+                    let page_source = source.clone();
+                    Box::new(cx.listener(move |this, _, _, cx| this.open_html_page(page_key.clone(), page_source.clone(), cx))) as Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>
+                });
+                list = list.child(file_card(row, n, &name, state, openable, page,
                     cx.listener(move |this, _, _, cx| this.keep_file(open_source.clone(), open_name.clone(), true, cx)),
                     cx.listener(move |this, _, _, cx| this.keep_file(save_source.clone(), save_name.clone(), false, cx))));
                 continue;
@@ -5166,12 +5306,12 @@ impl Hangar {
 
     fn render_command_panel(&self, cx: &mut Context<Self>) -> AnyElement {
         let query = self.command_search.read(cx).value().to_lowercase();
-        let cache = self.commands_key().and_then(|key| self.commands.get(&key));
+        let cache = self.commands_key(cx).and_then(|key| self.commands.get(&key));
         let body = match cache {
             None => popup::skeleton("commands-loading", 4).into_any_element(),
             Some(Err(reason)) => div().px(px(8.)).flex().items_center().gap_2().text_sm().text_color(theme::warning())
                 .child(div().flex_1().min_w_0().child(tr("commands_failed").replace("{reason}", reason)))
-                .child(Button::new("commands-retry").ghost().xsmall().flex_shrink_0().label(tr("retry")).on_click(cx.listener(|this, _, _, cx| { this.ensure_commands(true); cx.notify(); })))
+                .child(Button::new("commands-retry").ghost().xsmall().flex_shrink_0().label(tr("retry")).on_click(cx.listener(|this, _, _, cx| { this.ensure_commands(true, cx); cx.notify(); })))
                 .into_any_element(),
             Some(Ok(list)) => {
                 let matches: Vec<&CommandInfo> = list.iter().filter(|c| query.is_empty() || c.name.to_lowercase().contains(&query)
@@ -5267,11 +5407,15 @@ impl Hangar {
         div().flex().flex_col().rounded_md().bg(theme::popup_content_fill()).p_1()
             .children(suggestions.iter().enumerate().map(|(n, command)| {
                 let picked = command.clone();
-                Button::new(SharedString::from(format!("suggest-{}", command.name))).ghost().small().w_full().selected(n == active)
-                    .child(div().flex_shrink_0().font_family(crate::theme::MONO).child(format!("/{}", command.name)))
-                    .when_some(command.argument_hint.clone(), |el, hint| el.child(div().flex_shrink_0().text_xs().text_color(theme::muted()).child(hint)))
-                    .child(div().flex_1().min_w_0().truncate().text_xs().text_color(theme::muted()).child(command.description.clone().unwrap_or_default()))
-                    .on_click(cx.listener(move |this, _, window, cx| this.pick_command(picked.clone(), false, window, cx)))
+                let marked = n == active;
+                // O "selecionado" do botão fantasma some no vidro: o marcado leva o tom de destaque e o traço.
+                div().relative().w_full().rounded_md().when(marked, |el| el.bg(theme::accent_dim()))
+                    .child(Button::new(SharedString::from(format!("suggest-{}", command.name))).ghost().small().w_full()
+                        .child(div().flex_shrink_0().font_family(crate::theme::MONO).child(format!("/{}", command.name)))
+                        .when_some(command.argument_hint.clone(), |el, hint| el.child(div().flex_shrink_0().text_xs().text_color(theme::muted()).child(hint)))
+                        .child(div().flex_1().min_w_0().truncate().text_xs().text_color(theme::muted()).child(command.description.clone().unwrap_or_default()))
+                        .on_click(cx.listener(move |this, _, window, cx| this.pick_command(picked.clone(), false, window, cx))))
+                    .when(marked, |el| el.child(div().absolute().left_0().top(px(4.)).bottom(px(4.)).w(px(3.)).rounded(px(2.)).bg(theme::accent())))
             }))
             .into_any_element()
     }
@@ -5297,7 +5441,11 @@ impl Hangar {
         let referenced = key.as_ref().is_some_and(|key| self.has_context_refs(key));
         let dictated = self.dictation_here(cx) && (self.dictation.recording() || self.dictation.processing());
         let has_input = !text.trim().is_empty() || attached || referenced || dictated;
-        let suggestions = if readable { self.visible_suggestions(cx) } else { Vec::new() };
+        // Pasta ou conta trocada com o `/` aberto: busca a origem nova, e a guardada fica na tela até a resposta.
+        if new_chat && self.slash_open && self.commands_key(cx).is_some_and(|key| self.new_chat_commands_seen.as_deref() != Some(key.as_str())) {
+            self.ensure_commands(true, cx);
+        }
+        let suggestions = if readable || new_chat { self.visible_suggestions(cx) } else { Vec::new() };
         if self.suggest_pick >= suggestions.len() { self.suggest_pick = 0; }
         let tray = key.as_ref().and_then(|key| self.render_attachments(key, cx));
         let refs_tray = key.as_ref().and_then(|key| self.render_context_tray(key, cx));
@@ -5471,7 +5619,7 @@ impl Hangar {
                 if this.command_panel {
                     this.close_controls();
                     this.close_recent();
-                    this.ensure_commands(true);
+                    this.ensure_commands(true, cx);
                     this.command_search.update(cx, |input, cx| { input.set_value("", window, cx); input.focus(window, cx); });
                 }
                 cx.notify();
@@ -5656,6 +5804,9 @@ impl Hangar {
         let mut discard = None;
         let mut baton = None;
         let mut segments = None;
+        // "Na conversa" ainda não lida pela CLI: a entrada, se o "Enviar agora" vale (o Codex não corta o turno) e o
+        // trecho que identifica a mensagem no rótulo de acessibilidade.
+        let mut waiting: Option<(String, bool, String)> = None;
         // Sessão orq: linha do tempo do orquestrador já interpretada pelo backend, desenhada à parte.
         if let Some(&Item::Event(event_index)) = self.conversation.items.get(index).filter(|_| id != PREVIEW) {
             if self.chat.events.get(event_index).is_some_and(|event| event.orq.is_some()) { return self.render_orq_event(&id, event_index, cx); }
@@ -5706,6 +5857,10 @@ impl Hangar {
                 if discardable(event, self.chat.state.problema.as_deref()) { discard = event.id.strip_prefix("queued-").map(str::to_owned); }
             }
             else if let Some(note) = stuck_note(event, self.chat.state.problema.as_deref()) { notes.push(tr(note)); }
+            else if crate::queue_panel::conversation_waiting(event) {
+                waiting = event.id.strip_prefix("queued-").map(|entry| (entry.to_owned(), self.provider().0 != "codex",
+                    crate::queue_panel::label_excerpt(event.text.as_deref().unwrap_or(""))));
+            }
             else if event.queued() && event.queued_consumed != Some(true) { notes.push(tr(if event.queued_delivered == Some(true) { "delivering" } else { "queued" })); }
             if event.is_error == Some(true) { notes.push(tr("tool_error")); }
             (label, (!notes.is_empty()).then(|| notes.join(" · ")), event.kind == "user_msg", event.is_error == Some(true))
@@ -5795,7 +5950,14 @@ impl Hangar {
         let landing = self.send_targets_bubble(&id).then(|| self.flight_places.clone());
         // Na linha do usuário o aviso ocupa a faixa de ações: a bolha local, a da fila e a gravada têm a mesma altura,
         // e a troca de uma pela outra não mexe a conversa.
-        let note_in_strip = user && note.is_some();
+        let note_in_strip = user && (note.is_some() || waiting.is_some());
+        let waiting = waiting.map(|(entry, send_now, excerpt)| div().flex().items_center().justify_end().gap_1().min_h(px(24.))
+            .text_sm().text_color(theme::muted()).child(tr_shared("queued_conversation_waiting", &[]))
+            .when(send_now, |el| el.child("·").child(Button::new(format!("send-now-{id}")).ghost().xsmall()
+                .label(tr_shared("queued_conversation_send_now", &[]))
+                .accessibility_label(tr_shared("queued_conversation_send_now_message", &[("text", &excerpt)]))
+                .text_color(theme::muted()).disabled(busy)
+                .on_click(cx.listener(move |this, _, _, cx| this.act(Action::QueueSteer(entry.clone()), entry.clone(), cx))))));
         let row = div().id(SharedString::from(format!("message-{id}"))).group(ROW_GROUP).w_full().flex().flex_col().gap_2()
             .map(|el| if user { el.items_end().child(match peer_scope {
                     Some(scope) => peer_bubble(content, scope),
@@ -5807,6 +5969,7 @@ impl Hangar {
             .when_some(note, |el, note| el.child(div().flex().items_center().gap_2().when(user, |el| el.justify_end().min_h(px(24.)))
                 .child(div().min_w_0().text_sm().text_color(theme::warning()).child(note))
                 .when_some(discard, |el, button| el.child(button))))
+            .when_some(waiting, |el, waiting| el.child(waiting))
             .when_some(actions.filter(|_| !note_in_strip), |el, actions| el.child(actions))
             // A prévia guarda o lugar da faixa de ações: virar a resposta gravada não muda a altura da linha.
             .when(id == PREVIEW, |el| el.child(div().h(px(24.))));
@@ -6119,8 +6282,10 @@ pub(crate) fn loading_thumb(id: &str, still: bool) -> AnyElement {
 }
 
 /// Cartão de um arquivo que não tem prévia (pdf, planilha, zip, texto): ícone, nome, extensão ou o estado do último
-/// Abrir/Baixar, e os dois botões. Enquanto baixa, os botões param; na falha, Baixar vira Tentar de novo.
+/// Abrir/Baixar, e os dois botões. Enquanto baixa, os botões param; na falha, Baixar vira Tentar de novo. `page`: o
+/// "Abrir no navegador" do HTML citado, que vai ao navegador da sessão, nunca ao do sistema.
 fn file_card(row: &str, n: usize, name: &str, state: Option<FileCard>, openable: bool,
+    page: Option<Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>>,
     open: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static, save: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> AnyElement {
     let web = activity::web;
     let busy = matches!(state, Some(FileCard::Busy));
@@ -6133,6 +6298,7 @@ fn file_card(row: &str, n: usize, name: &str, state: Option<FileCard>, openable:
         Some(FileCard::Empty) => (web("file_card_empty"), theme::warning_text(), Some(Role::Status)),
         Some(FileCard::Missing) => (web("file_card_missing"), theme::warning_text(), Some(Role::Alert)),
         Some(FileCard::Failed(error)) => (format!("{} · {error}", web("file_card_failed")), theme::warning_text(), Some(Role::Alert)),
+        Some(FileCard::PageFailed(error)) => (format!("{} · {error}", tr("file_card_page_failed")), theme::warning_text(), Some(Role::Alert)),
     };
     let save_label = web(if failed { "file_card_retry" } else { "file_card_download" });
     // Largura do pai, com teto: na bolha do usuário o nome trunca em vez de empurrar o botão para fora.
@@ -6145,6 +6311,8 @@ fn file_card(row: &str, n: usize, name: &str, state: Option<FileCard>, openable:
                 .when_some(role, |el, role| el.role(role)).child(detail)))
         .when(openable, |el| el.child(Button::new(SharedString::from(format!("open-{row}-{n}"))).ghost().xsmall()
             .label(web("file_card_open")).disabled(busy).on_click(open)))
+        .when_some(page, |el, page| el.child(Button::new(SharedString::from(format!("page-{row}-{n}"))).ghost().xsmall()
+            .label(tr("file_card_open_browser")).disabled(busy).on_click(page)))
         .child(Button::new(SharedString::from(format!("save-{row}-{n}"))).outline().xsmall().icon(IconName::Download)
             .label(save_label).disabled(busy).on_click(save))
         .into_any_element()
@@ -6733,6 +6901,7 @@ impl Hangar {
                     .child(chrome::small_icon(IconName::Link, 12., theme::accent()))))
                 .when_some(session.owner.clone(), |el, owner| el.child(badge(format!("👤 {owner}"), theme::muted())))
                 .children(pair_badges(&session))
+                .children(self.work_review_chip_button(&target, false, cx))
                 .children(seal.map(|seal| self.render_seal(&target, seal, cx)))
                 .when(questions > 0, |el| el.child(div().flex_shrink_0().text_xs().text_color(theme::warning()).child(format!("? {questions}"))))
                 .when(untracked, |el| el.child(badge(tr("untracked_badge"), theme::faint()))).into_any_element(),
@@ -6744,6 +6913,7 @@ impl Hangar {
         spoken.push(state_label);
         if session.asleep { spoken.push(tr_shared("session_asleep_badge", &[])); }
         if session.headless { spoken.push(tr("create_mode_headless")); }
+        if let Some((text, _)) = self.work_review_badge(&target.server, &session.name) { spoken.push(text); }
         session_row_frame(SharedString::from(row_id), selected)
             .when_some(focus.as_ref(), |el, focus| el.track_focus(focus))
             .when(focus.as_ref().is_some_and(|f| f.is_focused(window)), |el| el.focus_ring_style(window, cx))
@@ -8113,8 +8283,9 @@ impl Hangar {
     /// prévia da aba, que depende de uma opção desligada.
     fn offer_root_tips(&mut self) {
         for tip in crate::tour::steps::TIPS.iter().filter(|tip| tip.on_sight).map(|tip| tip.step) {
-            // O painel "Na fila" aparece também com o Mandar direto ligado; aí não há o que ensinar.
-            if tip.id == "queue-direct" && (appearance::get().steer_while_working || !matches!(self.provider().0, "claude" | "codex")) { continue; }
+            // Com o envio Direto escolhido não há o que ensinar no painel.
+            if tip.id == "queue-direct" && (appearance::get().delivery_mode() == appearance::DeliveryMode::Direct
+                || !matches!(self.provider().0, "claude" | "codex")) { continue; }
             // Antes da âncora: lida, ela pediria outro quadro a cada movimento, mesmo de dica já vista.
             if self.tour.may_offer(tip.id) && popup::anchor_bounds(tip.anchor).is_some() { self.offer_step_tip(tip); }
         }

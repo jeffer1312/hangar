@@ -1,0 +1,95 @@
+{
+ "case": "guard/stdin-junk",
+ "source_commit": "2ad8e335e8d9118e74bc5b33f2efb4ac3bbd8eba",
+ "python": "3.14.9 websockets 16.0",
+ "capture_cmdline": "/usr/bin/python3 capture.py -j 8",
+ "route": "R1",
+ "hook": "guard_tmux.py",
+ "contract_refs": [
+  "R1-S18",
+  "H-53"
+ ],
+ "description": "",
+ "harness": {
+  "how": "$PY -B -s $REF/backend/hooks/guard_tmux.py, one process per step, stdin = step"
+ },
+ "input": {
+  "env": {
+   "HOME": "$T/home",
+   "USERPROFILE": "$T/home",
+   "LOCALAPPDATA": "$T/local",
+   "TMUX_TMPDIR": "$T/tmux",
+   "PATH": "$T/stubs:/usr/bin:/bin"
+  },
+  "files_before": {}
+ },
+ "steps": [
+  {
+   "stdin": {
+    "text": "nao e json"
+   },
+   "code": 0,
+   "stdout": {
+    "text": ""
+   },
+   "stderr": {
+    "text": ""
+   },
+   "duration_ms": 33,
+   "files": {
+    "created": {
+     "home/.hangar": {
+      "type": "dir",
+      "mode": "0o755"
+     },
+     "home/.hangar/logs": {
+      "type": "dir",
+      "mode": "0o755"
+     },
+     "home/.hangar/logs/privado": {
+      "type": "dir",
+      "mode": "0o700"
+     },
+     "home/.hangar/logs/privado/guard_tmux-falhas.log": {
+      "type": "file",
+      "mode": "0o600",
+      "size": 79,
+      "sha256": "8f60d1a0d85cf38f9443d2d6fa245e5116c21536a73440c86074e8aa093b53f3",
+      "content": {
+       "text": "2026-11-17 07:14:22 JSONDecodeError: Expecting value: line 1 column 1 (char 0)\n"
+      }
+     }
+    },
+    "changed": {},
+    "removed": []
+   }
+  }
+ ],
+ "files_final": {
+  "home/.hangar": {
+   "type": "dir",
+   "mode": "0o755"
+  },
+  "home/.hangar/logs": {
+   "type": "dir",
+   "mode": "0o755"
+  },
+  "home/.hangar/logs/privado": {
+   "type": "dir",
+   "mode": "0o700"
+  },
+  "home/.hangar/logs/privado/guard_tmux-falhas.log": {
+   "type": "file",
+   "mode": "0o600",
+   "size": 79,
+   "sha256": "8f60d1a0d85cf38f9443d2d6fa245e5116c21536a73440c86074e8aa093b53f3",
+   "content": {
+    "text": "2026-11-17 07:14:22 JSONDecodeError: Expecting value: line 1 column 1 (char 0)\n"
+   }
+  }
+ },
+ "window": {
+  "t_start": 1794910462.9149332,
+  "t_end": 1794910462.9488745
+ }
+}

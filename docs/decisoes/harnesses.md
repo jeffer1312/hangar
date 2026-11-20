@@ -305,6 +305,12 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   cartão fecha sem autoria e o app recebe 409 `erro_sem_confirmacao_resposta`. Pedido sem
   resposta do app fica para a TUI; nunca recusar automaticamente como no sem terminal. Ver
   [Codex com terminal no Rust](#codex-com-terminal-no-rust-adoção-e-dono-único).
+- **O WebSocket do app-server do Codex com terminal exige o token da vida.** O lançador sobe com
+  `--ws-auth capability-token --ws-token-file <arquivo 0600 em codex-sessions/ws-tokens/>`, a TUI
+  lê o token de `HANGAR_CODEX_WS_TOKEN` (`--remote-auth-token-env`) e todo cliente do Hangar manda
+  `Authorization: Bearer`. O sidecar guarda só o caminho (`ws_token_file`), nunca o token; sem o
+  campo (lançador antigo ainda vivo) conecta sem ele. Sem conseguir criar o token, a sessão não
+  abre. Ver [token no app-server do Codex com terminal](#token-no-app-server-do-codex-com-terminal-19112026).
 - **Codex com terminal abrindo a conversa (pane Codex sem sidecar, ou sidecar `launching`) é do
   Rust.** Texto (`/input`, pontes do Python, broadcast) entra na fila da chave da vida
   (`CP_SESSION_KEY` do pane ou `key` do sidecar) como `pre_transcript` e responde
@@ -356,7 +362,21 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   (`rust.codex_decode`); item ruim do histórico vira desconhecido sem derrubar o turno. A versão
   do Codex instalado não é comparada com a do recorte: o workflow semanal `codex-schema` instala
   o Codex mais novo e falha só se um campo usado sumiu. Atualizar o recorte guardado:
-  `scripts/conferir-codex-schema`.
+  `scripts/conferir-codex-schema`, que passa a versão conferida para a instalada.
+- **A transferência Claude → Codex não compara a versão do Codex.** Cada resposta do app-server
+  que a importação usa é conferida na hora, e falha restaura o Claude; os métodos e campos dela
+  entram no mesmo workflow `codex-schema` (`hangar-codex-transfer/src/schema_check.rs`). O
+  catálogo de modelos é pedido com a versão instalada (`client_version`), nunca com uma fixa: a
+  lista muda com ela. Ver [transferência sem versão fixa](#transferência-sem-versão-fixa-do-codex-19112026).
+- **Codex sem terminal troca o sandbox na conversa, sem subir o processo de novo.** O
+  `thread/settings/update` leva `sandboxPolicy` e `approvalPolicy`; o modo só vale e só é gravado
+  no arquivo da sessão com a resposta do Codex. Vale do próximo turno em diante, então a troca com
+  turno rodando ou pedido pendente continua recusada (`erro_permissao_ocupada`). Nenhum turno sai
+  com a troca pendente; troca sem resposta no prazo ou perdida na queda conta como não feita, e o
+  modo gravado é reaplicado antes do próximo turno (confirmação tardia não muda o modo). Reaplicação
+  que falha segura os turnos e tenta de novo com espera; na terceira falha o processo sobe de novo,
+  já com o modo gravado. Ver
+  [permissão do Codex sem terminal troca ao vivo](#permissão-do-codex-sem-terminal-troca-ao-vivo-19112026).
 - **A rota do terminal Claude só recebe sessão Claude.** `route_sync`, `run_admin` e
   `answer_sync` abrem `prepare_session(name, "claude")`, que suspende a escrita sem vínculo
   Claude nem pane. Rota que atende outros provedores filtra pelo provedor antes (`/answer`,
@@ -427,6 +447,21 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   `result` não é parada (a vista segue trabalhando e a fila não acorda) até o `command_lifecycle`
   da orientação dizer `started` (ela vira o turno) ou `cancelled` (o turno acaba). Ver
   [Orientar corta o turno](#orientar-corta-o-turno-do-claude-sem-terminal-14112026).
+- **"Na conversa" entra no turno sem cortá-lo, só onde o turno é do processo.** O `/input` com
+  `"delivery":"conversation"` (nunca junto de `steer:true` nem do Jev: 422) grava a linha com a marca
+  `conversation` (`AppendConversation`) e, com turno, a orienta sem `now`: no Claude sem terminal a CLI
+  a guarda até a pausa entre ferramentas; no Codex, com e sem terminal, vai pelo `turn/steer`. No
+  Claude com terminal (o Orientar ali é `ctrl+x ctrl+s`, que corta), em Pi, omp e Kimi e em comando
+  de barra, o pedido vira a fila comum, sem marca, e a resposta diz `conversation: false`. O eco
+  `isReplay` confirma a linha marcada que abriu o turno (sessão parada), como qualquer entrada; a
+  guardada à espera da pausa é confirmada pelo recibo do transcript (`queued_command`,
+  `dequeue`/`remove`), relido a cada resultado de ferramenta enquanto houver mensagem guardada. A
+  linha marcada já entregue (`queued_delivered`) sai do painel da fila e vai aos aparelhos com
+  `queued_conversation`; a ainda não entregue fica no painel, onde pode ser cancelada. "Enviar agora" é o `queue/<id>/steer` de sempre: linha
+  ainda esperando segue o Orientar; já escrita no Claude sem terminal, vira `SteerWritten`, que
+  manda o `interrupt` e guarda a escrita em `steer_now`, sem reescrever o texto. Codex não tem
+  "Enviar agora". Servidor antigo recusa a chave com 422 antes de gravar; os aparelhos reenviam
+  como fila. Ver [mensagem na conversa](#mensagem-na-conversa-sem-cortar-o-turno-16112026).
 - **Modo de permissão troca COM a sessão trabalhando** — é tecla, não texto. O guard de "está
   trabalhando" existe para o `/model`, que é texto.
 - **Depois do BTab, o rodapé é lido na hora, sem pausa fixa**, e o Shift+Tab do app mostra o modo
@@ -504,7 +539,8 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   standalone (nunca o da conta), antes do app-server (versão publicada consultada no máximo
   uma vez por hora, a tela mostra
   "atualizando o Codex"), confere os marketplaces de plugins (`codex plugin marketplace upgrade`,
-  em toda abertura, também no sem terminal) e confia nos hooks pendentes pelo app-server (`hooks/list` +
+  no máximo uma vez por hora por conta, também no sem terminal; só a que terminou bem conta) e
+  confia nos hooks pendentes pelo app-server (`hooks/list` +
   `config/batchWrite` do `trusted_hash`), porque eles vêm da sincronização do próprio Hangar.
   Falha em qualquer dos dois só registra na tela e a abertura segue. O cartão pré-thread
   reconhece o rodapé curto (`enter continue · esc skip`) além do antigo.
@@ -671,12 +707,16 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   entrada na fila do Hangar (`terminal_turn_hold`, `delivered:false`) em vez de digitá-la. A fila
   drena com o Claude parado, composer legível e sem pergunta, um lote por vez, no tique do ator; a
   entrega que encontrou o Claude parado faz a próxima esperar até 3 s (`turn_start_wait`) pelo
-  turno que ela abriu. Recado com socket nativo (`[de: …]`, `[grupo: …]`, `[painel: …]`) e comando
-  de barra não são segurados, e o recado passa no meio do turno mesmo atrás de mensagem segurada. Com
-  mensagem esperando, comando de barra é recusado na tela (`queue_waiting`): não passa à frente nem
+  turno que ela abriu. Para despachar, a indicação de que a CLI só espera subagentes em segundo
+  plano também libera o prompt legível e sem pergunta. Recado com socket nativo (`[de: …]`,
+  `[grupo: …]`, `[painel: …]`) e comando de barra não são segurados, e o recado passa no meio do turno
+  mesmo atrás de mensagem segurada. Com mensagem esperando, comando de barra é recusado na tela
+  (`queue_waiting`): não passa à frente nem
   some na troca de conversa do `/clear`. "Orientar" de uma entrada (`steer_entry`) digita só ela e
   aperta `ctrl+x ctrl+s`, que leva junto o que já estava na fila interna do Claude Code e interrompe
-  o turno; parado, ela vai para a frente e sai na entrega comum. As ações do painel (apagar,
+  o turno; parado, ela vai para a frente e sai na entrega comum. Se o transcript já confirmou a
+  entrada, o ator pode responder sem o atalho. No retorno de `/input`, `delivered` informa que a
+  CLI aceitou o texto e `steered` informa se o atalho foi aplicado. As ações do painel (apagar,
   editar, reordenar, Orientar) valem só para a entrada que ainda espera e passam pelo ator da
   sessão; a que a drenagem já reivindicou responde 409 `queue_entry_gone`. Com uma entrega incerta
   segurando a escrita, o Orientar responde 409 `queue_steer_delivery_unproved` sem tecla nem troca
@@ -1117,6 +1157,75 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   prova a parada. Matar pelo pid não é caminho: a árvore de processos muda de um sistema para outro e o
   modelo não fica sabendo. Ver [parar tarefa do Claude](#parar-tarefa-do-claude-13112026).
 
+## Permissão do Codex sem terminal troca ao vivo (19/11/2026)
+
+Antes, trocar o sandbox de uma sessão sem terminal reiniciava o processo (`Effect::Respawn`): a
+medição de setembro, na 0.153, dizia que ele não trocava por RPC. Medido no Codex 0.170.0 com a
+conta padrão real, numa pasta temporária e numa thread `ephemeral` (fora do histórico), com
+plugins e hooks desligados: thread iniciada em só leitura não criou `a.txt`; depois de
+`thread/settings/update {sandboxPolicy:{type:"dangerFullAccess"}, approvalPolicy:"never"}` o turno
+seguinte criou `b.txt` (comando com código 0); de volta a `{type:"readOnly"}`, o turno seguinte não
+criou `c.txt`. A resposta do `thread/settings/update` vem vazia.
+
+A troca vale para os turnos que começam depois dela, não para o que está rodando: na primeira
+tentativa, um turno começado com acesso total continuou com ele depois da volta a só leitura e
+criou o arquivo. Por isso a recusa com turno rodando ou pedido pendente continua. O terminal não
+passa por aqui: a TUI manda o próprio sandbox e o relançamento dele é outro caminho.
+
+## Token no app-server do Codex com terminal (19/11/2026)
+
+O app-server das sessões com terminal subia com `--listen ws://127.0.0.1:<porta>` e nada mais.
+Medido com o Codex 0.170.0 em `CODEX_HOME` descartável: um processo qualquer da máquina conectou
+sem credencial, recebeu o `initialize` e listou as conversas (`thread/list`). Conexão com
+cabeçalho `Origin` (o que um navegador manda) levou 403, então página web não alcança; o risco é
+qualquer processo local, de qualquer usuário do sistema, dirigir uma sessão, inclusive em acesso
+total.
+
+Com `--ws-auth capability-token --ws-token-file <arquivo>`: sem token e com token errado, 401;
+com `Authorization: Bearer <token>`, 101. A TUI `codex --remote … --remote-auth-token-env VAR`
+conectou com o token e, sem ele, saiu com "failed to connect to remote app server …: HTTP error:
+401 Unauthorized". As duas flags existem na 0.159.3 e na 0.170.0. O token vai pelo ambiente da
+TUI, não pelo argv, que aparece na lista de processos. Não comprovado: Windows.
+
+## Mensagem na conversa sem cortar o turno (16/11/2026)
+
+O pedido foi o comportamento do Claude Desktop: a mensagem mandada com a sessão trabalhando aparece
+na conversa na hora e o Claude a lê na próxima pausa entre ferramentas, sem parar o que faz. A
+configuração "Mensagem enviada com a sessão trabalhando" (nativo em Geral, Expo em Configurações)
+junta os modos que já existiam (Fila, Direto, Jev decide) e acrescenta "Na conversa".
+
+O caminho sem corte já existia para o recado entre sessões: a escrita sem `"priority":"now"` só
+entra quando a ferramenta em curso acaba (medido na entrada de 14/11 com um `ssh` de 590 s). "Na
+conversa" reusa esse caminho, com uma marca própria na linha da fila para a bolha não ir ao painel
+depois de escrita; antes disso (limite, escrita incerta, adiada) ela espera no painel como a da Fila,
+onde pode ser cancelada.
+Não reusa `steer:true` porque no Claude com terminal ele vira o `steer_entry`, que aperta
+`ctrl+x ctrl+s` e corta o turno. Com terminal, o ator digita a mensagem marcada com o turno em curso
+e não aperta nada além do Enter: o Claude Code a guarda e a lê na pausa seguinte. O "Enviar agora"
+dela, já digitada, só aperta `ctrl+x ctrl+s`. Em 17/11/2026 o usuário pediu os dois modos iguais
+(a primeira versão deixava o Claude com terminal na Fila, e no uso pareceu quebrado).
+
+Medido em 17/11/2026 com a CLI 2.1.326 no terminal (tmux à parte, Haiku, turno com cinco `sleep 4` em
+chamadas separadas): o texto digitado com Enter aos ~9 s mostrou "Queued · ctrl+enter to send now",
+entrou na conversa logo depois do primeiro `sleep` e o turno seguiu até o fim, respondendo também à
+mensagem. No transcript: `queue-operation` `enqueue`/`remove` e o anexo `queued_command` depois do
+primeiro `tool_result`, o mesmo que o recibo de entrega já reconhece.
+
+Medido em 16/11/2026 com a CLI 2.1.326 (`claude -p --safe-mode --model haiku --input-format
+stream-json --replay-user-messages`, pasta vazia, turno com três `sleep 4` em chamadas separadas):
+- Mensagem sem prioridade escrita aos 3,1 s, durante o primeiro `sleep`: o eco `isReplay` dela saiu
+  aos 8,9 s, logo depois do primeiro `tool_result`. O turno seguiu com os outros dois comandos e
+  terminou num `result` só, com o pedido da mensagem atendido. O eco marca quando a CLI lê, não
+  quando recebe.
+- Mensagem sem prioridade e, 0,5 s depois, `control_request` `interrupt`: a resposta do controle trouxe
+  `still_queued` com o uuid da mensagem; o comando foi cortado (`result` `error_during_execution`,
+  `terminal_reason` `aborted_tools`) e a mensagem guardada rodou como turno seguinte, com o eco e
+  um `result` `success` próprios. O "Enviar agora" pelo `interrupt` não perde nem duplica o texto.
+- O `command_lifecycle` só sai com as flags do lançamento do Hangar (`--include-partial-messages`,
+  `--include-hook-events`); sem elas não veio nenhum. Com elas: `queued` da guardada ao ser escrita,
+  e no corte `cancelled` do turno cortado seguido de `started` da guardada, cujo `command_uuid` é o
+  `uuid` escrito. É o que o motor espera para soltar o `steer_now`.
+
 ## Orientar corta o turno do Claude sem terminal (14/11/2026)
 
 Sem prioridade, a mensagem escrita no stdin no meio do turno só entra quando a ferramenta em curso
@@ -1481,9 +1590,12 @@ primeiras ferramentas; a reaprovação reativa gravou o `config.toml` às 08:23:
   `config/batchWrite` sem aviso e sem gastar a rodada reativa do turno. Leitura de arquivo e
   bytecode Python não acordam: o próprio hook rodando abriria os arquivos sem fim.
 - Os dois lançadores (`scripts/hangar-codex-tui` e `launch_if_needed` do sem terminal) rodam
-  `codex plugin marketplace upgrade --json` no `CODEX_HOME` da conta antes do app-server, em toda
-  abertura (decisão do dono): é a mesma função da atualização automática (`marketplace_cmd.rs` →
-  `manager.rs`), que também reinstala o cache dos plugins, então a do app-server não acha nada novo.
+  `codex plugin marketplace upgrade --json` no `CODEX_HOME` da conta antes do app-server, no
+  máximo uma vez por hora por conta (decisão do dono em 19/11/2026; antes era em toda abertura):
+  é a mesma função da atualização automática (`marketplace_cmd.rs` → `manager.rs`), que também
+  reinstala o cache dos plugins, então a do app-server não acha nada novo. A marca
+  `.hangar-marketplaces-upgraded` na pasta da conta só é gravada quando a conferência termina bem;
+  dentro da hora, o plugin que mudar é reinstalado pelo app-server e reaprovado pelo observador.
   Custa ~5 s com 10 marketplaces e nada a atualizar (medido duas vezes: 5,6 s e 5,2 s); roda depois
   da atualização do Codex porque no Windows o binário não troca com outro `codex` aberto. Falha ou
   prazo de 20 s só registram e a abertura segue (sem rede, o `git fetch` não segura a sessão; o
@@ -1850,6 +1962,28 @@ comando original voltou com a mesma recusa. Após a correção, texto e Enter ch
 processo `cat`, que devolveu a linha submetida. O observador continuou somente de leitura,
 e o servidor de teste foi encerrado. Os testes também cobrem retorno de erro após a única
 tentativa de recuperação, envio literal de `-c`, cliente explícito e isolamento do psmux.
+
+## Transferência sem versão fixa do Codex (19/11/2026)
+
+A transferência recusava todo Codex diferente de 0.159.3 (`session_transfer_codex_version_unsupported`)
+e, com a 0.170.0 instalada, não abria mais. Comparado com os binários 0.159.3 e 0.170.0:
+
+- `generate-json-schema --experimental` das duas: nos oito métodos que a importação chama, só
+  houve campo acrescentado (`attachedToThreadId`, `environments`, `client_search_provider`,
+  `toolListMeta`); nenhum campo lido sumiu ou mudou de tipo.
+- A sequência da importação, em `CODEX_HOME` descartável, sem conta nem inferência, deu o mesmo
+  resultado nas duas: thread criada com `path` e `cwd`, esforço e modo Plano aplicados, quatro
+  itens injetados e um resultado de 144.000 caracteres inteiro no rollout (2,15 s e 2,01 s).
+- `model/list` sem conta: a 0.159.3 não tem `gpt-6.2-sol` (padrão da 0.170.0), `gpt-6.2-astra`
+  nem `gpt-6.1-terra`. Como o catálogo HTTP também muda com `client_version`, a versão fixa
+  enviada pela transferência faria esses modelos caírem em `session_transfer_model_capacity_unknown`,
+  e o cache do catálogo (guardado com a versão instalada) nunca servia: uma chamada HTTP a mais
+  por transferência.
+
+Segue o caminho do aviso de versão retirado em 24/10: nada compara versão em tempo de execução, e
+o workflow semanal confere os campos no Codex mais novo. Codex antigo sem `thread/inject_items`
+falha na importação e a origem é restaurada, como em qualquer falha dela. Não comprovado: troca
+real com conta e modelo reais na 0.170.0.
 
 ## Transferência Claude → Codex: captura nativa em validação
 
@@ -4124,9 +4258,10 @@ restart do backend. Medido:
   sidecar.
 - `approval_policy = "untrusted"` foi removido na 0.154: o app-server sai na hora com `Error:
   approval_policy = "untrusted" is no longer supported`. Só restam `on-request` e `never`, por
-  isso os três modos do app se distinguem pelo sandbox — e sandbox não troca ao vivo por RPC
-  (`codex_permissions.py`): fica no `-c` da subida e trocar de modo reabre o app-server ocioso
-  com `thread/resume`. `approvalPolicy` vai em cada `turn/start`.
+  isso os três modos do app se distinguem pelo sandbox. Nesta medição (0.153) o sandbox não trocava
+  ao vivo por RPC e trocar de modo reabria o app-server ocioso; desde 19/11/2026 a troca é pelo
+  `thread/settings/update` (ver [permissão do Codex sem terminal troca ao vivo](#permissão-do-codex-sem-terminal-troca-ao-vivo-19112026)).
+  `approvalPolicy` vai em cada `turn/start`.
 - Sonda real: turno com aprovação pendente → `kill -9` no backend → religou no mesmo cano
   (`pendentes=1` no snapshot) → `Permitir` pelo app → o comando rodou e o turno fechou. Sem
   resposta, o pedido ficou em aberto por 16s sem ninguém decidir por ele.
@@ -5342,6 +5477,14 @@ O corte do painel de agentes do #137 continua valendo.
 - O `/steer` sem corpo, que o chip "mandar agora" de um app antigo ainda manda, vira o Orientar da
   primeira entrada esperando (`steer_first` no ator): só promover a fila interna do Claude Code
   deixaria a mensagem do Hangar para trás. Sem entrada esperando, o comportamento é o de antes.
+
+Em 18/11/2026, o Claude Code 2.1.327 manteve o registro nativo ocupado enquanto a tela avisava que
+esperava um subagente em segundo plano. O Hangar reteve uma entrada por 10 min e 10 s.
+Em um tmux isolado, o mesmo Claude Code aceitou outro prompt com Enter e o registrou no
+transcript em 0,2 s. O subagente terminou depois da entrada do novo prompt. Em outro caso, a entrada
+já constava no transcript cinco segundos antes de o Hangar avisar que ela continuava esperando.
+O recibo da própria entrada agora encerra a tentativa de antecipação. A indicação de subagentes
+em segundo plano só é usada para liberar o despacho de prompts.
 
 ## Catálogo de comandos e reload-plugins
 

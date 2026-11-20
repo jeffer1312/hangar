@@ -29,7 +29,6 @@ import type {
   UpdateNews,
   NewsHistory,
   Manual,
-  MigrationStatus,
   SessionInfo,
   Provider,
   ChatEvent,
@@ -271,13 +270,14 @@ async function sessionFetch<T>(server: Server | null | undefined, path: string, 
 // quem precisa do STATUS ou de um header — hoje o histórico condicional (304 + ETag), que não tem
 // corpo pra desserializar e cujo status não é erro. O diário e o rastreio de "sem rede/voltou"
 // ficam aqui: um fetch escrito à mão sairia do registro sem ninguém notar.
-function ensureConfirmedRoute(base: string): void {
+export function ensureConfirmedRoute(base: string): void {
   if (base === UNCONFIRMED_BASE) {
     throw Object.assign(new Error(m.mobile_machines_identity_unconfirmed()), { status: 409, code: 'server_identity_unconfirmed' });
   }
 }
 
-async function apiFetchRes(path: string, init?: RequestInit, server?: Server, probe = false, countsOutage = true, fetcher: typeof fetch = fetch): Promise<Response> {
+// `countsOutage: 'network'`: só a falha de rede esfria; o prazo estourado é o link lento de quem envia.
+async function apiFetchRes(path: string, init?: RequestInit, server?: Server, probe = false, countsOutage: boolean | 'network' = true, fetcher: typeof fetch = fetch): Promise<Response> {
   // Durante a espera, só uma verificação explícita pode antecipar a nova tentativa. O ativo e a
   // máquina de um chat aberto não esperam: o prazo pode ter sido gravado antes de o chat abrir.
   // Vem antes da rota: decidir a rota já sonda todos os endereços da máquina.
@@ -351,7 +351,7 @@ async function apiFetchRes(path: string, init?: RequestInit, server?: Server, pr
       if (poll) _semRede.add(`${destino}|${rota}`);
       if (typeof e === 'object' && e !== null) _semResposta.add(e);
       // Só falha de REDE esfria (o `isAbortError` acima já tirou o cancelamento de quem chamou).
-      if (server && countsOutage) registrarFalha(server.id);
+      if (server && countsOutage && !(countsOutage === 'network' && timedOut)) registrarFalha(server.id);
     }
     throw e;
   }
@@ -797,19 +797,93 @@ export async function uploadFileForServer(
   // Ditado: mesmo motivo do `audioOnly` do `uploadFile`.
   opts?: { audioOnly?: boolean },
 ): Promise<{ path: string }> {
-  const res = await apiFetchRes(`/api/sessions/${encodeURIComponent(name)}/upload${opts?.audioOnly ? '?audio_only=1' : ''}`, {
+  return postUpload(s, name, file, opts?.audioOnly ? '?audio_only=1' : '', file);
+}
+
+export type DiskUpload = { path: string; media?: 'pending'; media_id?: string };
+
+// Arquivo que já está no disco do aparelho: `send` o sobe direto de lá. No celular o fetch leria o
+// arquivo inteiro para a memória do JS, e um arquivo grande derruba o app. Vídeo volta com
+// `media_id`: o envio nativo desiste com 60 s sem resposta, e quadros mais fala passam disso.
+export function uploadFromDiskForServer(
+  s: Server,
+  name: string,
+  file: { name: string; type: string; size?: number },
+  send: typeof fetch,
+): Promise<DiskUpload> {
+  return postUpload(s, name, file, '?media=later', undefined, send);
+}
+
+// Sem teto, uma foto grande num link ruim (tablet em relay) deixava o composer preso em "enviando…"
+// pra sempre; teto fixo cortava arquivo grande legítimo. O piso de velocidade é o de um link móvel ruim.
+export function uploadTimeoutMs(size: number | undefined): number {
+  return Math.max(180_000, Math.ceil((size ?? 0) / 50_000) * 1000);
+}
+
+async function postUpload(
+  s: Server,
+  name: string,
+  file: { name: string; type: string; size?: number },
+  query: string,
+  body: RequestInit['body'],
+  send?: typeof fetch,
+): Promise<DiskUpload> {
+  const res = await apiFetchRes(`/api/sessions/${encodeURIComponent(name)}/upload${query}`, {
     method: 'POST',
     headers: {
       'Content-Type': file.type || 'application/octet-stream',
       'X-Filename': encodeURIComponent(file.name || 'arquivo'),
     },
-    body: file,
-    // Sem teto, uma foto grande num link ruim (tablet em relay) deixava o composer preso em
-    // "enviando…" pra sempre. 3min cobre upload legítimo lento; estourou -> erro visível + retry.
-    signal: AbortSignal.timeout(180_000),
-  }, s);
+    body,
+    signal: AbortSignal.timeout(uploadTimeoutMs(file.size)),
+  }, s, false, 'network', send);
   if (!res.ok) throw new Error(`${res.status}: ${await errorDetail(res)}`);
-  return res.json() as Promise<{ path: string }>;
+  return res.json() as Promise<DiskUpload>;
+}
+
+// Teto do tempo SEM resposta do servidor. `pending` renova: a fila de vídeos no servidor é finita, e
+// contá-la deixava o segundo vídeo longo sem quadros nem fala.
+const MEDIA_UNANSWERED_MS = 3 * 60_000;
+
+/** Quadros e fala de um vídeo subido com `media_id`. `null` quando não vêm (falha, servidor
+ *  reiniciado, servidor sem responder): quem chama segue só com o vídeo, como o desktop quando a
+ *  transcrição falha. `signal` abortado (anexo removido, tela fechada) rejeita com o motivo dele. */
+export async function waitUploadMediaForServer(
+  s: Server,
+  name: string,
+  mediaId: string,
+  signal?: AbortSignal,
+): Promise<{ frames: string[]; transcript: string } | null> {
+  let deadline = Date.now() + MEDIA_UNANSWERED_MS;
+  // Sinal sem motivo (polyfill antigo) ainda tem que chegar como AbortError a quem decide pelo nome.
+  const cancelled = () => signal?.reason ?? new DOMException(undefined, 'AbortError');
+  // Cada pedido fica no servidor até a mídia ficar pronta ou ~45 s; só a falha espera do lado de cá.
+  while (Date.now() < deadline) {
+    if (signal?.aborted) throw cancelled();
+    // O teto vale para o pedido e para a pausa, não só para o começo de cada volta.
+    const res = await apiFetchRes(`/api/sessions/${encodeURIComponent(name)}/upload-media?id=${encodeURIComponent(mediaId)}`, {
+      signal: comTeto(signal, Math.max(1, Math.min(60_000, deadline - Date.now()))),
+    }, s, false, false).catch(() => null);
+    // 4xx (sem registro, sem acesso, convite encerrado) não muda tentando de novo; rede caída, 5xx,
+    // 408 e 429 passam (app em segundo plano, troca de rede) enquanto o servidor guarda o resultado.
+    if (res && res.status >= 400 && res.status < 500 && res.status !== 408 && res.status !== 429) return null;
+    const body = res?.ok ? await res.json().catch(() => null) as { status?: string; frames?: string[]; transcript?: string } | null : null;
+    if (signal?.aborted) throw cancelled();
+    if (body?.status === 'done') return { frames: body.frames ?? [], transcript: body.transcript ?? '' };
+    if (body?.status === 'pending') {
+      deadline = Date.now() + MEDIA_UNANSWERED_MS;
+      continue;
+    }
+    const left = deadline - Date.now();
+    if (left > 0) {
+      await new Promise<void>((resolve) => {
+        const stop = () => { clearTimeout(timer); resolve(); };
+        const timer = setTimeout(() => { signal?.removeEventListener('abort', stop); resolve(); }, Math.min(2000, left));
+        signal?.addEventListener('abort', stop, { once: true });
+      });
+    }
+  }
+  return null;
 }
 
 // Opções do ditado que viajam na query do /transcribe. `estilo` é o que a PILL mostrava na hora de
@@ -929,12 +1003,30 @@ export async function transcribePiece(
 // o chamador REMOVE o eco pendente e sinaliza — mensagem nunca "some" calada (mesmo contrato do
 // feedback de entrega do Chat). SEM timeout de propósito (igual ao sendInput por-servidor-ativo):
 // abortar um POST já em voo não desfaz o envio, e reportaria "não entregue" pra recado entregue.
-export async function sendInputForServer(s: Server, name: string, text: string): Promise<void> {
-  const res = await apiFetchRes(`/api/sessions/${encodeURIComponent(name)}/input`, {
+/** A recusa de campo desconhecido do `/input` antigo: `extra_forbidden` em `body.delivery`. */
+export async function rejectsDeliveryField(res: Response): Promise<boolean> {
+  const body = await res.clone().json().catch(() => null) as { detail?: unknown } | null;
+  return Array.isArray(body?.detail) && body.detail.some((d: { type?: unknown; loc?: unknown }) =>
+    d?.type === 'extra_forbidden' && Array.isArray(d.loc) && d.loc[d.loc.length - 1] === 'delivery');
+}
+
+/** Com `delivery`, devolve se o servidor a pôs "Na conversa"; `false` é a fila comum (servidor que não leva o modo a
+ *  esta sessão ou anterior a ele). */
+export async function sendInputForServer(s: Server, name: string, text: string, delivery?: 'conversation'): Promise<boolean> {
+  const post = (body: Record<string, string>) => apiFetchRes(`/api/sessions/${encodeURIComponent(name)}/input`, {
     method: 'POST',
-    body: JSON.stringify({ text }),
+    body: JSON.stringify(body),
   }, s);
+  let res = await post(delivery ? { text, delivery } : { text });
+  let accepted = !!delivery;
+  // Só o servidor anterior ao "Na conversa" vai pela fila comum: ele recusa a chave nova antes de gravar.
+  // Outro 422 é recusa de verdade e aparece, sem trocar o modo calado.
+  if (delivery && res.status === 422 && await rejectsDeliveryField(res)) { res = await post({ text }); accepted = false; }
   if (!res.ok) throw Object.assign(new Error(`${res.status}: ${await errorDetail(res)}`), { status: res.status });
+  if (!accepted) return false;
+  // Só o `false` dito pelo servidor é fila comum: corpo ilegível não prova nada, e a mensagem segue na conversa.
+  const body = await res.json().catch(() => null) as { conversation?: unknown } | null;
+  return body?.conversation !== false;
 }
 
 // Responde uma opção do picker (awaiting_input) direto do card. Mesma convenção de índice do
@@ -1213,6 +1305,19 @@ export interface ClaudeCustomizationDelta { plugins: Record<string, boolean>; sk
 export function getClaudeCustomizationsForServer(s: Server, cwd: string, configDir?: string | null): Promise<ClaudeCustomizations> {
   const q = new URLSearchParams({ cwd, ...(configDir ? { config_dir: configDir } : {}) });
   return apiFetchForServer(s, `/api/claude/customizations?${q}`, undefined, 20_000);
+}
+
+// GET /api/claude/commands (Rust, commands/service.rs): a lista do `/` da conversa que ainda vai
+// nascer, no formato de getCommands. Sem pasta nem conta, a lista da conta padrão.
+export function getNewChatCommandsForServer(s: Server, cwd?: string | null, configDir?: string | null,
+  headless = false): Promise<CommandInfo[]> {
+  const q = new URLSearchParams({
+    ...(cwd ? { cwd } : {}),
+    ...(configDir ? { config_dir: configDir } : {}),
+    ...(headless ? { headless: '1' } : {}),
+  });
+  const query = q.toString();
+  return apiFetchForServer(s, `/api/claude/commands${query ? `?${query}` : ''}`, undefined, 30_000);
 }
 
 // POST /api/claude/defaults (Rust, claude_defaults.rs): grava no settings.json do principal da máquina.
@@ -2659,12 +2764,6 @@ export function getAtualizacao(procurar = false, fetcher?: typeof fetch): Promis
                   { signal: AbortSignal.timeout(procurar ? 120000 : 20000) }, fetcher);
 }
 
-/** Tela temporária "Migração para Rust": quem atende cada área, versões e consumo. */
-export function getMigrationStatus(s: Server | null = null): Promise<MigrationStatus> {
-  return s ? apiFetchForServer(s, '/api/migration/status', {}, 10000)
-           : apiFetch('/api/migration/status', { signal: AbortSignal.timeout(10000) });
-}
-
 function confirmUpdateStarted(value: unknown): { ok: boolean; pid: number; request_id?: string } {
   const response = value as { ok?: unknown; pid?: unknown; request_id?: unknown } | null;
   if (response?.ok !== true || typeof response.pid !== 'number' || !Number.isSafeInteger(response.pid) || response.pid <= 0) {
@@ -3081,9 +3180,7 @@ export function uploadFile(
     xhr.setRequestHeader('X-Hangar-Req', req);
     xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
     xhr.setRequestHeader('X-Filename', encodeURIComponent(file.name || 'arquivo'));
-    // Mesmo teto do uploadFileForServer: sem ele, uma foto grande num link ruim deixava o composer
-    // presto em "enviando…" pra sempre.
-    xhr.timeout = 180_000;
+    xhr.timeout = uploadTimeoutMs(file.size);
     xhr.upload.onprogress = (e) => {
       // `lengthComputable` é falso em algumas pontes (proxy que recodifica): aí não há fração pra
       // mostrar, e quem chama decide o que fazer com a ausência.

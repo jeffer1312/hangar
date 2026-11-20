@@ -11,6 +11,7 @@ interface nem à abertura de sessões.
 
 - [Contrato `work_tracking/v1`](work-tracking-v1.md)
 - [Catálogo de ações `work_actions/v1`](work-actions-v1.md)
+- [Revisão do trabalho `work_review/v1`](work-review-v1.md)
 - [Testar um conector](testing.md), inclusive em outra máquina
 
 ## Manifesto
@@ -55,18 +56,19 @@ por um programa interno ou acrescentar capacidades. Credenciais e login ficam co
 - JSON-RPC 2.0, uma mensagem UTF-8 por linha. O stdout é só do protocolo; log vai ao stderr (o host
   o descarta).
 - O host abre a vida com `initialize` (`{"protocol_version": 1, "host": {"name": "hangar"}}`).
-  Quando o manifesto declara `work_actions/v1`, o pedido acrescenta `capabilities` com todas as
-  capacidades cadastradas, para ativar a extensão. Sem esse campo, a negociação é somente
-  `work_tracking/v1`; o conector deve aceitar essa forma básica. O
+  Quando o manifesto declara qualquer capacidade além de `work_tracking/v1` (`work_actions/v1`,
+  `work_review/v1`), o pedido acrescenta `capabilities` com todas as capacidades cadastradas, para
+  ativar as extensões. Sem esse campo, a negociação é somente `work_tracking/v1`; o conector deve
+  aceitar essa forma básica. O
   conector responde `{"protocol_version": 1, "id": "<id do manifesto>", "capabilities": {...}}`;
   versão, `id` ou capacidades diferentes do manifesto recusam o conector.
 - Métodos: `initialize`, `work_tracking.list`, `work_tracking.get`, o catálogo opcional
-  `work_actions.list` e `shutdown`. Um
-  pedido por vez; responda cada um com o mesmo `id`.
+  `work_actions.list`, a revisão opcional `work_review.get`, `work_review.asset` e
+  `work_review.decide`, e `shutdown`. Um pedido por vez; responda cada um com o mesmo `id`.
 - Erro: `{"code": <número>, "message": "...", "data": {"code": "<código>"}}`. Códigos:
   `invalid_params`, `unsupported_capability`, `unsupported_version`, `invalid_cursor`,
-  `auth_required`, `permission_denied`, `not_found`, `unavailable`, `timeout`, `protocol_error` e
-  `payload_too_large`.
+  `auth_required`, `permission_denied`, `not_found`, `unavailable`, `timeout`, `protocol_error`,
+  `payload_too_large` e `stale_review` (a revisão mudou de rodada; HTTP 409).
 - Teto de 4 MiB por mensagem; maior é `payload_too_large`, nunca cortada.
 
 ## Ciclo de vida
@@ -93,7 +95,7 @@ Rotas exclusivas do dono (convidado e token errado são recusados antes de ler o
 
 | Método | Rota | Resultado |
 |---|---|---|
-| GET | `/api/connectors` | Cadastrados e `running`, sem iniciar processos |
+| GET | `/api/connectors` | Cadastrados e `running`, sem iniciar processos, e `capabilities`: as capacidades e versões que este servidor aceita no manifesto (ausente num servidor antigo, que só conhece `work_tracking` e `work_actions`). O instalador do conector confere antes de declarar uma capacidade nova; `hangar-server connectors list` devolve o mesmo |
 | POST | `/api/connectors` | `{"manifest": "<caminho absoluto no servidor>"}` |
 | PATCH | `/api/connectors/{id}` | `{"enabled": false}` desliga e encerra |
 | DELETE | `/api/connectors/{id}` | Para e remove |
@@ -101,7 +103,8 @@ Rotas exclusivas do dono (convidado e token errado são recusados antes de ler o
 | GET | `/api/connectors/{id}/tickets/{ticket_id}` | Detalhe, com `start_prompt` já preenchido quando o manifesto o tem; o ID vai codificado como um componente |
 
 Erros saem como `{"detail": {"code": "...", "msg": "..."}}`. Falta de login no fornecedor
-(`auth_required`, `permission_denied`) volta 424, nunca 401, para não parecer senha do Hangar errada.
+(`auth_required`, `permission_denied`) volta 424, nunca 401, para não parecer senha do Hangar errada;
+`stale_review` volta 409.
 
 O mesmo pelo terminal, falando com o servidor desta máquina:
 

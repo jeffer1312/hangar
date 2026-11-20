@@ -127,38 +127,8 @@ async fn cano(outcome: &'static str) -> String {
     format!("tcp:{address}")
 }
 
-async fn policy() -> std::net::SocketAddr {
-    hangar_server::diag::disable_diary();
-    use tokio::io::AsyncReadExt;
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    tokio::spawn(async move {
-        loop {
-            let Ok((stream, _)) = listener.accept().await else { return };
-            tokio::spawn(async move {
-                let mut reader = BufReader::new(stream);
-                loop {
-                    let mut length = 0usize;
-                    loop {
-                        let mut line = String::new();
-                        if reader.read_line(&mut line).await.unwrap_or(0) == 0 { return; }
-                        if line == "\r\n" { break; }
-                        if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") { length = value.trim().parse().unwrap(); }
-                    }
-                    let mut body = vec![0; length];
-                    reader.read_exact(&mut body).await.unwrap();
-                    let reply = json!({"ok":true,"data":{}}).to_string();
-                    let response = format!("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{reply}", reply.len());
-                    reader.get_mut().write_all(response.as_bytes()).await.unwrap();
-                }
-            });
-        }
-    });
-    address
-}
-
 pub(crate) async fn registry() -> Arc<RuntimeRegistry> {
-    Arc::new(RuntimeRegistry::new(policy().await, "secret-test".into(), "instance-test".into()).with_processes(Arc::new(crate::runtime_open::RecipeProcesses("sid-1"))))
+    Arc::new(RuntimeRegistry::new("instance-test".into()).with_processes(Arc::new(crate::runtime_open::RecipeProcesses("sid-1"))))
 }
 
 pub(crate) async fn open_headless(registry: &RuntimeRegistry, dir: &Path, name: &str, outcome: &'static str) {
@@ -192,12 +162,13 @@ pub(crate) async fn open_sick_terminal(registry: &RuntimeRegistry, dir: &Path, n
 }
 
 async fn serve(registry: Arc<RuntimeRegistry>, wait: Duration) -> (Arc<Fake>, std::net::SocketAddr) {
-    let (python, upstream) = spawn_fake().await;
-    let mut state = AppState::new(config(upstream, "127.0.0.1"));
+    let (python, _) = spawn_fake().await;
+    let mut state = AppState::new(config("127.0.0.1"));
     state.diag = python.bind_diary(state.diag.clone());
     state.write_gate_wait = wait;
     assert!(state.state.runtime.set(registry).is_ok());
-    (python, spawn_state(state).await)
+    let addr = spawn_state_for(&python, state).await;
+    (python, addr)
 }
 
 async fn post(server: std::net::SocketAddr, name: &str, route: &str, body: &str) -> (u16, Value) {
@@ -217,10 +188,9 @@ async fn diary_of(python: &Fake, event: &str) -> Vec<Value> {
 async fn headless_input_is_served_in_rust_without_reaching_python() {
     let (dir, registry) = (tempfile::tempdir().unwrap(), registry().await);
     open_headless(&registry, dir.path(), "s", "written").await;
-    let (python, server) = serve(registry, Duration::from_secs(5)).await;
+    let (_, server) = serve(registry, Duration::from_secs(5)).await;
     let (status, body) = post(server, "s", "input", r#"{"text":"oi"}"#).await;
     assert_eq!((status, body), (200, json!({"ok": true, "delivered": true, "steered": false, "native": false})));
-    assert_eq!(python.hits_to("/api/sessions/s/input"), 0);
 }
 
 /// Recado `[de: …]` para sessão sem terminal: o Rust o escreve no socket de mensagens do próprio Claude,
@@ -233,7 +203,7 @@ async fn headless_native_message_goes_to_the_claude_socket_without_python() {
     let memory = Arc::new(std::sync::Mutex::new(hangar_server::state::permission::PermissionMemory::default()));
     memory.lock().unwrap().observe("sid-1", "bypassPermissions");
     let dir = tempfile::tempdir().unwrap();
-    let registry = Arc::new(RuntimeRegistry::new(policy().await, "secret-test".into(), "instance-test".into())
+    let registry = Arc::new(RuntimeRegistry::new("instance-test".into())
         .with_processes(Arc::new(crate::runtime_open::RecipeProcesses("sid-1"))).with_permissions(memory)
         .with_native_inbox_dir(dir.path().into()));
     registry.bind_lifecycle();
@@ -304,7 +274,6 @@ async fn headless_input_the_cano_never_confirmed_is_an_error_with_a_code_and_a_d
     let diary = diary_of(&python, "runtime.send_failed").await;
     assert_eq!(diary.len(), 1, "{:?}", python.diag());
     assert_eq!(diary[0]["sessao"], "s");
-    assert_eq!(python.hits_to("/api/sessions/s/input"), 0, "dono único: a falha não vira repasse");
 }
 
 #[tokio::test]
@@ -321,7 +290,7 @@ async fn headless_input_the_cano_refused_is_a_400() {
 async fn bodies_the_route_refuses_are_a_rust_422_never_python() {
     let (dir, registry) = (tempfile::tempdir().unwrap(), registry().await);
     open_headless(&registry, dir.path(), "s", "written").await;
-    let (python, server) = serve(registry, Duration::from_secs(5)).await;
+    let (_, server) = serve(registry, Duration::from_secs(5)).await;
     for body in [r#"{"text":"oi","extra":1}"#, r#"{"steer":true}"#, r#"{"text":5}"#, r#"{"text":"oi","steer":"sim"}"#] {
         let (status, reply) = post(server, "s", "input", body).await;
         assert_eq!((status, reply["detail"]["code"].as_str()), (422, Some("erro_corpo_invalido")), "{body}");
@@ -330,19 +299,62 @@ async fn bodies_the_route_refuses_are_a_rust_422_never_python() {
     let response = client().post(format!("http://{server}/api/sessions/s/input")).header("content-type", "text/plain")
         .header("authorization", format!("Bearer {OWNER}")).body(r#"{"text":"oi"}"#).send().await.unwrap();
     assert_eq!(response.status().as_u16(), 422);
-    assert_eq!(python.hits_to("/api/sessions/s/input"), 0);
 }
 
 #[tokio::test]
 async fn deferred_submit_with_steer_promotes_that_very_entry() {
     let (dir, registry) = (tempfile::tempdir().unwrap(), registry().await);
     open_headless(&registry, dir.path(), "s", "written").await;
-    let (python, server) = serve(registry, Duration::from_secs(5)).await;
+    let (_, server) = serve(registry, Duration::from_secs(5)).await;
     // O primeiro envio abre o turno e o cano nunca o termina: o segundo fica adiado na fila.
     assert_eq!(post(server, "s", "input", r#"{"text":"um"}"#).await.1["delivered"], true);
     let (status, body) = post(server, "s", "input", r#"{"text":"dois","steer":true}"#).await;
     assert_eq!((status, &body), (200, &json!({"ok": true, "delivered": true, "steered": true, "native": false})), "{body}");
+}
+
+#[tokio::test]
+async fn conversation_during_a_turn_enters_it_without_cutting_and_keeps_its_mark() {
+    let (dir, registry) = (tempfile::tempdir().unwrap(), registry().await);
+    open_headless(&registry, dir.path(), "s", "written").await;
+    let (python, server) = serve(registry.clone(), Duration::from_secs(5)).await;
+    assert_eq!(post(server, "s", "input", r#"{"text":"um"}"#).await.1["delivered"], true);
+    let (status, body) = post(server, "s", "input", r#"{"text":"dois","delivery":"conversation"}"#).await;
+    assert_eq!((status, &body), (200, &json!({"ok": true, "delivered": true, "steered": true, "native": false, "conversation": true})), "{body}");
+    let rows = registry.queue_action("s", "load".into(), Action::Load).await.unwrap();
+    let row = rows.as_array().unwrap().iter().find(|row| row["text"] == "dois").cloned().unwrap();
+    assert_eq!((row["conversation"].clone(), row["steered"].clone()), (json!(true), json!(true)), "{row}");
     assert_eq!(python.hits_to("/api/sessions/s/input"), 0);
+}
+
+#[tokio::test]
+async fn conversation_with_steer_or_an_unknown_mode_is_a_rust_422() {
+    let (dir, registry) = (tempfile::tempdir().unwrap(), registry().await);
+    open_headless(&registry, dir.path(), "s", "written").await;
+    let (python, server) = serve(registry, Duration::from_secs(5)).await;
+    for body in [r#"{"text":"oi","steer":true,"delivery":"conversation"}"#, r#"{"text":"oi","delivery":"agora"}"#] {
+        let (status, reply) = post(server, "s", "input", body).await;
+        assert_eq!((status, reply["detail"]["code"].as_str()), (422, Some("erro_corpo_invalido")), "{body}");
+    }
+    assert_eq!(python.hits_to("/api/sessions/s/input"), 0);
+}
+
+/// Claude com terminal: a mensagem nasce marcada e é digitada pelo ator, sem o `ctrl+x ctrl+s` do Orientar,
+/// que cortaria o turno.
+#[tokio::test]
+#[cfg(unix)]
+async fn conversation_on_a_terminal_session_is_marked_and_never_cuts_the_turn() {
+    let (dir, interactions) = (tempfile::tempdir().unwrap(), Arc::new(hangar_server::interactions::InteractionStore::default()));
+    let (registry, _plugin) = crate::session_write_control::registry_with_plugin(&interactions).await;
+    crate::session_write_control::open_terminal(&registry, dir.path(), "t").await;
+    let (python, server) = serve(registry.clone(), Duration::from_secs(5)).await;
+    let (status, reply) = post(server, "t", "input", r#"{"text":"oi","delivery":"conversation"}"#).await;
+    assert_ne!(status, 422, "{reply}");
+    assert_eq!(reply["conversation"], true, "{reply}");
+    assert_ne!(reply["steered"], true, "nada de ctrl+x ctrl+s: {reply}");
+    let rows = registry.queue_action("t", "load".into(), Action::Load).await.unwrap();
+    let row = rows.as_array().unwrap().iter().find(|row| row["text"] == "oi").cloned().unwrap();
+    assert_eq!(row["conversation"], true, "{row}");
+    assert_eq!(python.hits_to("/api/sessions/t/input"), 0);
 }
 
 #[test]
@@ -369,33 +381,30 @@ fn steer_without_body_that_steered_an_entry_keeps_the_fields_old_clients_read() 
 async fn headless_steer_with_text_is_served_in_rust() {
     let (dir, registry) = (tempfile::tempdir().unwrap(), registry().await);
     open_headless(&registry, dir.path(), "s", "written").await;
-    let (python, server) = serve(registry, Duration::from_secs(5)).await;
+    let (_, server) = serve(registry, Duration::from_secs(5)).await;
     assert_eq!(post(server, "s", "steer", r#"{"text":"vira"}"#).await, (200, json!({"ok": true, "promoted": false})));
-    assert_eq!(python.hits_to("/api/sessions/s/steer"), 0);
 }
 
 #[tokio::test]
 async fn headless_steer_of_the_queue_without_a_turn_is_409_erro_sem_turno() {
     let (dir, registry) = (tempfile::tempdir().unwrap(), registry().await);
     open_headless(&registry, dir.path(), "s", "written").await;
-    let (python, server) = serve(registry, Duration::from_secs(5)).await;
+    let (_, server) = serve(registry, Duration::from_secs(5)).await;
     let (status, body) = post(server, "s", "steer", "").await;
     // O ator recusa (sem turno em voo): o Python respondia 500; aqui é o 409 que a rota passou a ter.
     assert_eq!((status, body["detail"]["code"].as_str(), body["detail"]["msg"].as_str()),
         (409, Some("erro_sem_turno"), Some("Não há turno em andamento para orientar")), "{body}");
-    assert_eq!(python.hits_to("/api/sessions/s/steer"), 0);
 }
 
 #[tokio::test]
 async fn steer_with_a_body_the_route_refuses_is_a_rust_422() {
     let (dir, registry) = (tempfile::tempdir().unwrap(), registry().await);
     open_headless(&registry, dir.path(), "s", "written").await;
-    let (python, server) = serve(registry, Duration::from_secs(5)).await;
+    let (_, server) = serve(registry, Duration::from_secs(5)).await;
     for body in [r#"{}"#, r#"{"text":"a","x":1}"#] {
         let (status, reply) = post(server, "s", "steer", body).await;
         assert_eq!((status, reply["detail"]["code"].as_str()), (422, Some("erro_corpo_invalido")), "{body}");
     }
-    assert_eq!(python.hits_to("/api/sessions/s/steer"), 0);
 }
 
 #[tokio::test]
@@ -406,10 +415,9 @@ async fn unhealthy_terminal_entry_is_a_rust_error_never_python() {
     assert!(target.terminal && !target.healthy, "a entrada com o vínculo trocado está doente");
     let snapshot = registry.snapshots().await.unwrap().into_iter().find(|e| e.key == "k-t").unwrap();
     assert_eq!(snapshot.data["error"], "terminal_facts", "doente pelo motivo do vínculo, não por outro");
-    let (python, server) = serve(registry, Duration::from_secs(5)).await;
+    let (_, server) = serve(registry, Duration::from_secs(5)).await;
     let (status, reply) = post(server, "t", "input", r#"{"text":"oi"}"#).await;
     assert_eq!((status, reply["detail"]["code"].as_str()), (503, Some("runtime_unhealthy")));
-    assert_eq!(python.hits_to("/api/sessions/t/input"), 0, "o Python não relança nem responde pela entrada doente");
 }
 
 #[tokio::test]
@@ -420,17 +428,15 @@ async fn clear_on_a_terminal_session_goes_to_the_rust_actor_never_python() {
     let log = crate::session_write_control::open_terminal(&registry, dir.path(), "t").await;
     open_headless(&registry, dir.path(), "h", "written").await;
     for name in ["t", "h"] { registry.ingress().close(name, Duration::from_secs(1)).await.unwrap(); }
-    let (python, server) = serve(registry.clone(), Duration::from_millis(100)).await;
-    // Porta fechada: o /clear espera como qualquer texto, com e sem terminal; nenhum atalho ao Python.
+    let (_, server) = serve(registry.clone(), Duration::from_millis(100)).await;
+    // Porta fechada: o /clear espera como qualquer texto, com e sem terminal.
     for name in ["t", "h"] {
         assert_eq!(post(server, name, "input", r#"{"text":"  /clear tudo"}"#).await.0, 409, "{name}");
     }
     // Porta aberta: o ator do terminal digita o /clear (a barreira e a conversa nova são dele).
     registry.ingress().open("t");
-    let (status, reply) = post(server, "t", "input", r#"{"text":"/clear"}"#).await;
-    assert_ne!(reply, Value::String("from-python".into()), "{status}");
+    post(server, "t", "input", r#"{"text":"/clear"}"#).await;
     assert!(std::fs::read_to_string(&log).unwrap_or_default().contains("/clear"), "o /clear chegou ao pane pelo ator");
-    assert_eq!(python.hits_to("/api/sessions/t/input") + python.hits_to("/api/sessions/h/input"), 0, "nada passa pelo Python");
 }
 
 #[test]

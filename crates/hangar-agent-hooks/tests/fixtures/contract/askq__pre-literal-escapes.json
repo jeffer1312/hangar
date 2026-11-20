@@ -1,0 +1,79 @@
+{
+ "case": "askq/pre-literal-escapes",
+ "source_commit": "2ad8e335e8d9118e74bc5b33f2efb4ac3bbd8eba",
+ "python": "3.14.9 websockets 16.0",
+ "capture_cmdline": "/usr/bin/python3 capture.py -j 8",
+ "route": "R1",
+ "hook": "askq_capture.py",
+ "contract_refs": [
+  "R1-S17"
+ ],
+ "description": "escapes stay escaped: the raw text is written, not a re-dump",
+ "harness": {
+  "how": "$PY -B -s $REF/backend/hooks/askq_capture.py, one process per step, stdin = step"
+ },
+ "input": {
+  "env": {
+   "HOME": "$T/home",
+   "USERPROFILE": "$T/home",
+   "LOCALAPPDATA": "$T/local",
+   "TMUX_TMPDIR": "$T/tmux",
+   "PATH": "$T/stubs:/usr/bin:/bin",
+   "CLAUDE_CONFIG_DIR": "$T/cfg"
+  },
+  "files_before": {}
+ },
+ "steps": [
+  {
+   "stdin": {
+    "text": "{\"session_id\":\"11111111-2222-4333-8444-555555555555\",\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"AskUserQuestion\",\"tool_use_id\":\"t\",\"tool_input\":{\"questions\":[{\"question\":\"linha\\nnova \\u00e9 \\ud83d\\ude00\"}]}}"
+   },
+   "code": 0,
+   "stdout": {
+    "text": ""
+   },
+   "stderr": {
+    "text": ""
+   },
+   "duration_ms": 28,
+   "files": {
+    "created": {
+     "cfg/.hangar-askq": {
+      "type": "dir",
+      "mode": "0o755"
+     },
+     "cfg/.hangar-askq/11111111-2222-4333-8444-555555555555.json": {
+      "type": "file",
+      "mode": "0o644",
+      "size": 208,
+      "sha256": "7df30c17dbfbc1630ec1fb1e752dd8be1024bdf47bffebe413ab829709b33ca9",
+      "content": {
+       "text": "{\"session_id\":\"11111111-2222-4333-8444-555555555555\",\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"AskUserQuestion\",\"tool_use_id\":\"t\",\"tool_input\":{\"questions\":[{\"question\":\"linha\\nnova \\u00e9 \\ud83d\\ude00\"}]}}"
+      }
+     }
+    },
+    "changed": {},
+    "removed": []
+   }
+  }
+ ],
+ "files_final": {
+  "cfg/.hangar-askq": {
+   "type": "dir",
+   "mode": "0o755"
+  },
+  "cfg/.hangar-askq/11111111-2222-4333-8444-555555555555.json": {
+   "type": "file",
+   "mode": "0o644",
+   "size": 208,
+   "sha256": "7df30c17dbfbc1630ec1fb1e752dd8be1024bdf47bffebe413ab829709b33ca9",
+   "content": {
+    "text": "{\"session_id\":\"11111111-2222-4333-8444-555555555555\",\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"AskUserQuestion\",\"tool_use_id\":\"t\",\"tool_input\":{\"questions\":[{\"question\":\"linha\\nnova \\u00e9 \\ud83d\\ude00\"}]}}"
+   }
+  }
+ },
+ "window": {
+  "t_start": 1794910462.2660596,
+  "t_end": 1794910462.295041
+ }
+}

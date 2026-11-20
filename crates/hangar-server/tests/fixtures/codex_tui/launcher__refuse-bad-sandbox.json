@@ -1,0 +1,113 @@
+{
+ "case": "launcher/refuse-bad-sandbox",
+ "source_commit": "2ad8e335e8d9118e74bc5b33f2efb4ac3bbd8eba",
+ "python": "3.14.9 websockets 16.0",
+ "capture_cmdline": "/usr/bin/python3 capture.py -j 8",
+ "route": "R2",
+ "script": "scripts/hangar-codex-tui",
+ "contract_refs": [
+  "R2-S01",
+  "C-02"
+ ],
+ "description": "",
+ "harness": {
+  "how": "direct: $PY -B -s $REF/scripts/hangar-codex-tui",
+  "codex_layout": "plain",
+  "codex_path": "$T/stubs/codex",
+  "codex_fake_config": {
+   "app_server": {
+    "threads": [
+     {
+      "id": "thread-1",
+      "path": "$T/home/.codex/sessions/2026/11/17/rollout-2026-11-17T10-00-00-thread-1.jsonl",
+      "cwd": "$T/work",
+      "source": "cli",
+      "threadSource": "user"
+     }
+    ]
+   }
+  },
+  "npm_stub_config": null,
+  "lock_busy": false,
+  "signal": null,
+  "no_tty": "stdin=/dev/null, stdout/stderr pipes (no script -q)"
+ },
+ "input": {
+  "argv": [
+   "$PY",
+   "-B",
+   "-s",
+   "$REF/scripts/hangar-codex-tui",
+   "--sandbox",
+   "none"
+  ],
+  "env": {
+   "HOME": "$T/home",
+   "USERPROFILE": "$T/home",
+   "LOCALAPPDATA": "$T/local",
+   "TMUX_TMPDIR": "$T/tmux",
+   "PATH": "$T/stubs:/usr/bin:/bin",
+   "CP_SESSION_NAME": "codex-proj",
+   "CP_SESSION_KEY": "key-0001",
+   "CP_PROVIDER": "codex",
+   "HANGAR_CLAUDE_SETTINGS": "",
+   "TMUX": "/tmp/tmux-1000/default,1234,5",
+   "TMUX_PANE": "%7",
+   "CP_CODEX_SYNC_ENABLED": "0"
+  },
+  "cwd": "$T/work",
+  "files_before": {
+   "home/.hangar": {
+    "type": "dir",
+    "mode": "0o755"
+   },
+   "home/.codex": {
+    "type": "dir",
+    "mode": "0o755"
+   },
+   "home/.hangar/config": {
+    "type": "dir",
+    "mode": "0o755"
+   },
+   "home/.hangar/codex-atualizacao.json": {
+    "type": "file",
+    "mode": "0o644",
+    "size": 33,
+    "sha256": "1f231cdab927030fcd5dd7d5e2c52370cfa5e01954f6ce57566710813fc541d9",
+    "content": {
+     "text": "{\"proxima_em\": 1794913462.981955}"
+    }
+   },
+   "home/.hangar/config/.env": {
+    "type": "file",
+    "mode": "0o644",
+    "size": 56,
+    "sha256": "7e17dbcffab6b87b5bbc8263d6678cafd6a86aec988db8e98fa95d83297b6fa5",
+    "content": {
+     "text": "# servidor\nCP_AUTH_TOKEN=fake-owner-token\nCP_PORT=41411\n"
+    }
+   }
+  }
+ },
+ "output": {
+  "code": 2,
+  "stdout": {
+   "text": ""
+  },
+  "stderr": {
+   "text": "usage: hangar-codex-tui [-h] [--name NAME] [--cwd CWD] [--prompt PROMPT]\n                        [--resume RESUME] [--model MODEL] [--effort EFFORT]\n                        [--approval-policy {never,on-request}]\n                        [--sandbox {read-only,workspace-write,danger-full-access}]\n                        [--tool-output-token-limit TOOL_OUTPUT_TOKEN_LIMIT]\nhangar-codex-tui: error: argument --sandbox: invalid choice: 'none' (choose from 'read-only', 'workspace-write', 'danger-full-access')\n"
+  },
+  "duration_ms": 128,
+  "files": {
+   "created": {},
+   "changed": {},
+   "removed": []
+  }
+ },
+ "spawns": [],
+ "processes_alive_after_exit": {},
+ "window": {
+  "t_start": 1794910462.9837158,
+  "t_end": 1794910463.1123338
+ }
+}

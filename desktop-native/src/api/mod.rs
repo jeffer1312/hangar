@@ -288,6 +288,11 @@ fn failure_detail(body: Option<Value>, status: u16) -> String {
                 let params = std::collections::HashMap::from([("message".to_owned(), message.unwrap_or("").to_owned())]);
                 if let Some(text) = crate::i18n::tr_web(key, &params) { return Some(text); }
             }
+            // HTML citado aberto como página: a frase do código, no idioma do app.
+            if let Some(message) = fields.get("code").and_then(Value::as_str).filter(|code| code.starts_with("file_page_"))
+                .and_then(|code| crate::i18n::tr_web(code, &std::collections::HashMap::new())) {
+                return Some(message);
+            }
             if let Some(code) = fields.get("code").and_then(Value::as_str).filter(|code| code.starts_with("erro_run_code_")) {
                 let params = fields.get("params").and_then(Value::as_object).map(|p| p.iter()
                     .map(|(k, v)| (k.clone(), v.as_str().map_or_else(|| v.to_string(), str::to_owned))).collect()).unwrap_or_default();
@@ -418,14 +423,35 @@ impl Api {
         Ok(Delivery { ok: true, delivered: true, ..Default::default() })
     }
 
+    /// "Na conversa". Servidor anterior recusa o campo antes de gravar: a mensagem vai pela fila comum. Outro 422 é
+    /// recusa de verdade e volta como erro, sem trocar o modo calado.
+    pub async fn send_conversation(&self, name: &str, text: &str) -> Result<Delivery, Failure> {
+        let r = self.post_input(name, &json!({"text": text, "delivery": "conversation"})).await?;
+        if r.status() == StatusCode::UNPROCESSABLE_ENTITY {
+            let (body, failure) = failed_response(r, true, "POST", Some(self.base.as_str())).await;
+            return if rejects_delivery_field(body.as_ref()) {
+                self.send(name, text).await.map(|delivery| Delivery { conversation: Some(false), ..delivery })
+            } else { Err(failure) };
+        }
+        self.delivery(r).await
+    }
+
     pub async fn send_decided(&self, name: &str, text: &str, task: &str, message: &str) -> Result<Delivery, Failure> {
         self.send_input(name, json!({"text": text, "jev_task": task, "jev_message": message})).await
     }
 
     async fn send_input(&self, name: &str, body: Value) -> Result<Delivery, Failure> {
-        let r = self.client.post(self.endpoint(Some(name), Some("input")))
-            .json(&body).timeout(Duration::from_secs(60))
-            .send().await.map_err(|_| Failure::transport(true))?;
+        let r = self.post_input(name, &body).await?;
+        self.delivery(r).await
+    }
+
+    async fn post_input(&self, name: &str, body: &Value) -> Result<Response, Failure> {
+        self.client.post(self.endpoint(Some(name), Some("input")))
+            .json(body).timeout(Duration::from_secs(60))
+            .send().await.map_err(|_| Failure::transport(true))
+    }
+
+    async fn delivery(&self, r: Response) -> Result<Delivery, Failure> {
         let delivery: Delivery = self.checked(r, true).await?.json().await.map_err(|_| Failure::transport(true))?;
         if !delivery.ok { return Err(Failure::transport(true)); }
         Ok(delivery)
@@ -433,6 +459,17 @@ impl Api {
 
     pub async fn commands(&self, name: &str) -> Result<Vec<CommandInfo>, Failure> {
         let r = self.client.get(self.endpoint(Some(name), Some("commands"))).timeout(Duration::from_secs(30))
+            .send().await.map_err(|_| Failure::transport(false))?;
+        self.checked(r, false).await?.json().await.map_err(|_| Failure::local("invalid_response"))
+    }
+
+    /// A lista do `/` da conversa que ainda vai nascer: Claude, na pasta e conta escolhidas (sem elas, as da conta padrão).
+    pub async fn new_chat_commands(&self, cwd: Option<&str>, config_dir: Option<&str>, headless: bool) -> Result<Vec<CommandInfo>, Failure> {
+        let mut query = Vec::new();
+        if let Some(cwd) = cwd { query.push(("cwd", cwd)); }
+        if let Some(config) = config_dir { query.push(("config_dir", config)); }
+        if headless { query.push(("headless", "1")); }
+        let r = self.client.get(self.server_url(&["claude", "commands"], &query)).timeout(Duration::from_secs(30))
             .send().await.map_err(|_| Failure::transport(false))?;
         self.checked(r, false).await?.json().await.map_err(|_| Failure::local("invalid_response"))
     }
@@ -804,11 +841,24 @@ impl Api {
     pub async fn server_bytes(&self, path: &[&str], seconds: u64) -> Result<Vec<u8>, Failure> {
         let r = self.client.get(self.server_url(path, &[])).timeout(Duration::from_secs(seconds)).send().await
             .map_err(|_| Failure::transport(false))?;
-        let r = self.checked(r, false).await?;
+        Self::capped_bytes(self.checked(r, false).await?).await
+    }
+
+    /// Corpo inteiro com o teto dos anexos: o tamanho declarado recusa antes de ler, e o lido confere de novo.
+    async fn capped_bytes(r: Response) -> Result<Vec<u8>, Failure> {
         if r.content_length().is_some_and(|n| n > MAX_BYTES) { return Err(Failure::local("attach_too_big")); }
         let bytes = r.bytes().await.map_err(|_| Failure::transport(false))?;
         if bytes.len() as u64 > MAX_BYTES { return Err(Failure::local("attach_too_big")); }
         Ok(bytes.to_vec())
+    }
+
+    /// Bytes de uma rota da sessão (as imagens da revisão do trabalho), com consulta e o mesmo teto.
+    pub async fn session_bytes(&self, name: &str, path: &[&str], query: &[(&str, &str)], seconds: u64) -> Result<Vec<u8>, Failure> {
+        let mut url = self.endpoint(Some(name), None);
+        url.path_segments_mut().expect("validated HTTP base").extend(path);
+        if !query.is_empty() { url.query_pairs_mut().extend_pairs(query); }
+        let r = self.client.get(url).timeout(Duration::from_secs(seconds)).send().await.map_err(|_| Failure::transport(false))?;
+        Self::capped_bytes(self.checked(r, false).await?).await
     }
 
     /// Mutação no servidor, sem retry: queda depois de enviar é incerteza.
@@ -910,11 +960,7 @@ impl Api {
         if let Some(keys) = keys { query.push(("keys", keys)); }
         let r = self.client.get(self.server_url(&["config-sync", "bundle"], &query)).timeout(Duration::from_secs(180)).send().await
             .map_err(|_| Failure::transport(false))?;
-        let r = self.checked(r, false).await?;
-        if r.content_length().is_some_and(|n| n > MAX_BYTES) { return Err(Failure::local("attach_too_big")); }
-        let bytes = r.bytes().await.map_err(|_| Failure::transport(false))?;
-        if bytes.len() as u64 > MAX_BYTES { return Err(Failure::local("attach_too_big")); }
-        Ok(bytes.to_vec())
+        Self::capped_bytes(self.checked(r, false).await?).await
     }
 
     /// Aplica o pacote no destino; o envio e a aplicação são o mesmo pedido, e as etapas chegam em `on`.
@@ -1129,6 +1175,11 @@ pub async fn redeem_invite(address: &str, code: &str, device: &str, token: Optio
 /// `identity`: a entrada que fez o pedido; só ela perde o Connect num 401 (sem entrada, nada a recusar).
 async fn checked_response(response: Response, post: bool, method: &str, identity: Option<&str>) -> Result<Response, Failure> {
     if response.status().is_success() || response.status() == StatusCode::NOT_MODIFIED { return Ok(response); }
+    Err(failed_response(response, post, method, identity).await.1)
+}
+
+/// A falha de uma resposta sem sucesso, com o corpo lido para quem precisa decidir por ele.
+async fn failed_response(response: Response, post: bool, method: &str, identity: Option<&str>) -> (Option<Value>, Failure) {
     let status = response.status().as_u16();
     let url = response.url().clone();
     let retry_after = response.headers().get(header::RETRY_AFTER).and_then(|s| s.to_str().ok()).and_then(|s| s.parse().ok());
@@ -1136,8 +1187,15 @@ async fn checked_response(response: Response, post: bool, method: &str, identity
     let code = envelope_code(body.as_ref());
     recent::record(method, &url, status, code.as_deref());
     if status == 401 && let Some(identity) = identity { route::refused_at(identity, &url); }
-    let detail = failure_detail(body, status);
-    Err(Failure { status: Some(status), detail: detail.chars().take(500).collect(), retry_after, uncertain: post && status >= 500, code })
+    let detail = failure_detail(body.clone(), status);
+    (body, Failure { status: Some(status), detail: detail.chars().take(500).collect(), retry_after, uncertain: post && status >= 500, code })
+}
+
+/// A recusa do `/input` anterior ao "Na conversa": campo desconhecido `delivery` (`extra_forbidden`).
+fn rejects_delivery_field(body: Option<&Value>) -> bool {
+    body.and_then(|b| b.get("detail")).and_then(Value::as_array).is_some_and(|items| items.iter().any(|item|
+        item.get("type").and_then(Value::as_str) == Some("extra_forbidden")
+            && item.get("loc").and_then(Value::as_array).and_then(|loc| loc.last()).and_then(Value::as_str) == Some("delivery")))
 }
 
 #[derive(Clone, serde::Deserialize, PartialEq)]
@@ -1168,6 +1226,29 @@ mod tests {
     use super::*;
     // O glob pode trazer o `test` da gpui, que colide com o atributo padrão; o nome explícito vence o glob.
     use core::prelude::v1::test;
+
+    #[test]
+    fn only_the_old_server_refusal_of_delivery_falls_back_to_the_queue() {
+        let old = json!({"detail":[{"type":"extra_forbidden","loc":["body","delivery"],"msg":"Extra inputs are not permitted","input":"conversation"}]});
+        assert!(rejects_delivery_field(Some(&old)));
+        for other in [
+            json!({"detail":[{"type":"missing","loc":["body","text"],"msg":"Field required"}]}),
+            json!({"detail":[{"type":"extra_forbidden","loc":["body","jev_task"]}]}),
+            json!({"detail":{"code":"erro_corpo_invalido","msg":"x"}}),
+            json!({"detail":"Unprocessable Entity"}),
+        ] {
+            assert!(!rejects_delivery_field(Some(&other)), "{other}");
+        }
+        assert!(!rejects_delivery_field(None));
+    }
+
+    #[test]
+    fn delivery_reads_whether_the_server_took_it_into_the_conversation() {
+        let queued: Delivery = serde_json::from_value(json!({"ok": true, "delivered": true, "conversation": false})).unwrap();
+        assert_eq!(queued.conversation, Some(false));
+        let plain: Delivery = serde_json::from_value(json!({"ok": true})).unwrap();
+        assert_eq!(plain.conversation, None);
+    }
 
     #[test]
     fn coded_not_found_is_not_needs_rust() {
@@ -1212,6 +1293,15 @@ mod tests {
         assert!(message.contains("test/channel"), "{message}");
         assert!(!message.contains("{branch}"));
         assert_ne!(message, "server fallback");
+    }
+
+    #[test]
+    fn file_page_refusals_use_the_app_sentence() {
+        for code in ["file_page_too_large", "file_page_not_utf8", "file_page_not_html", "file_page_empty"] {
+            let message = failure_detail(Some(json!({"detail": {"code": code, "params": {}, "msg": "pt cru"}})), 413);
+            assert_eq!(message, crate::i18n::tr_shared(code, &[]), "{code}");
+            assert_ne!(message, code, "{code} sem frase em messages/*.json");
+        }
     }
 
     #[test]

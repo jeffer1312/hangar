@@ -55,13 +55,14 @@ export function SwitchRow({ title, description, value, disabled, onChange }: {
   </View>;
 }
 
-export type PickerOption = { id: string; title: string; selected?: boolean; disabled?: boolean };
+/** `subtitle` só aparece no menu do iOS; o Android mostra o título. */
+export type PickerOption = { id: string; title: string; subtitle?: string; selected?: boolean; disabled?: boolean };
 /** Menu nativo preso à linha, como o seletor de servidor das Configurações. */
 export function PickerRow({ title, value, description, error, options, disabled, onPick }: {
   title: string; value: string; description?: string; error?: string; options: PickerOption[]; disabled?: boolean; onPick: (id: string) => void;
 }) {
   const c = useSettingsColors();
-  return <MenuView title={title} actions={options.map((o) => ({ id: o.id, title: o.title, state: o.selected ? 'on' as const : 'off' as const, attributes: { disabled: !!o.disabled } }))}
+  return <MenuView title={title} actions={options.map((o) => ({ id: o.id, title: o.title, subtitle: o.subtitle, state: o.selected ? 'on' as const : 'off' as const, attributes: { disabled: !!o.disabled } }))}
     onPressAction={({ nativeEvent }) => { if (!disabled) onPick(nativeEvent.event); }}>
     <Pressable accessibilityRole="button" accessibilityLabel={title} accessibilityValue={{ text: value }} accessibilityHint={hintOf(description, error)}
       accessibilityState={{ disabled }} disabled={disabled} style={[styles.row, { borderTopColor: c.border, opacity: disabled ? 0.5 : 1 }]}>

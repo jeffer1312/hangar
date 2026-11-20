@@ -32,22 +32,43 @@ type Signature = (Option<bool>, Option<bool>, bool, Option<bool>, Option<String>
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Marker(u64, u64, u64, i128);
 
+#[cfg(unix)]
 fn marker(path: &Path) -> io::Result<Option<Marker>> {
+    use std::os::unix::fs::MetadataExt;
     let meta = match std::fs::metadata(path) {
         Ok(meta) => meta,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(e),
     };
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        Ok(Some(Marker(meta.dev(), meta.ino(), meta.size(), i128::from(meta.mtime()) * 1_000_000_000 + i128::from(meta.mtime_nsec()))))
+    Ok(Some(Marker(meta.dev(), meta.ino(), meta.size(), i128::from(meta.mtime()) * 1_000_000_000 + i128::from(meta.mtime_nsec()))))
+}
+
+/// O índice do arquivo no NTFS faz o papel do inode: na troca rápida, a criação é herdada do arquivo
+/// anterior com o mesmo nome e a hora da escrita pode não andar, e mesmo tamanho passaria calado.
+#[cfg(windows)]
+fn marker(path: &Path) -> io::Result<Option<Marker>> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        BY_HANDLE_FILE_INFORMATION, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, GetFileInformationByHandle,
+    };
+    // Como o `metadata` da std: sem acesso ao conteúdo e sem impedir a troca do arquivo por quem grava.
+    let file = match std::fs::OpenOptions::new().access_mode(0)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE).open(path) {
+        Ok(file) => file,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    let mut info = BY_HANDLE_FILE_INFORMATION::default();
+    // SAFETY: o handle é do `file`, aberto e vivo até o fim da função; `info` é uma struct nossa,
+    // inicializada, que a chamada só preenche.
+    if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0 {
+        return Err(io::Error::last_os_error());
     }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt;
-        Ok(Some(Marker(0, meta.creation_time(), meta.file_size(), i128::from(meta.last_write_time()))))
-    }
+    let pair = |high: u32, low: u32| (u64::from(high) << 32) | u64::from(low);
+    Ok(Some(Marker(u64::from(info.dwVolumeSerialNumber), pair(info.nFileIndexHigh, info.nFileIndexLow),
+        pair(info.nFileSizeHigh, info.nFileSizeLow),
+        i128::from(pair(info.ftLastWriteTime.dwHighDateTime, info.ftLastWriteTime.dwLowDateTime)))))
 }
 
 /// `float(v or 0.0)` do Python. `Err`: valor que o Python recusaria (a linha é pulada).

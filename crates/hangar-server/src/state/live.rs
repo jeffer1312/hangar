@@ -656,7 +656,7 @@ mod tests {
 
     #[tokio::test]
     async fn terminal_status_monitor_reads_initial_state_and_ignores_other_sessions() {
-        let registry = Arc::new(RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(), "test".into(), "instance".into()));
+        let registry = Arc::new(RuntimeRegistry::new("instance".into()));
         let sender = registry.terminal_status_sender("a");
         let initial = RuntimeView { error: Some("queue_io".into()), message: Some("fila indisponível".into()), input_stalled: None, limit: None };
         sender.send_replace(initial.clone());
@@ -679,7 +679,7 @@ mod tests {
 
     #[tokio::test]
     async fn terminal_status_monitor_reconnects_to_the_latest_of_ten_updates() {
-        let registry = Arc::new(RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(), "test".into(), "instance".into()));
+        let registry = Arc::new(RuntimeRegistry::new("instance".into()));
         let sender = registry.terminal_status_sender("a");
         for i in 0..10 {
             sender.send_replace(RuntimeView { input_stalled: Some(format!("reason-{i}")), ..Default::default() });

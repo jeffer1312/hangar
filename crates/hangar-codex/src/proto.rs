@@ -85,8 +85,12 @@ wire!(pub struct ThreadBackgroundTerminalsTerminateParams { pub thread_id:String
 #[serde(default)]
 pub struct CollaborationSettings { pub model:String, pub reasoning_effort:Option<String>, pub developer_instructions:Option<String> }
 wire!(pub struct CollaborationMode { pub mode:String, pub settings:CollaborationSettings });
+// Só o `type` da união `SandboxPolicy`: o padrão de cada modo basta para o Hangar.
+wire!(pub struct SandboxPolicyKind { #[serde(rename = "type")] pub kind:String });
 wire!(pub struct ThreadSettingsUpdateParams {
     pub thread_id:String,
+    #[serde(skip_serializing_if = "Option::is_none")] pub approval_policy:Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")] pub sandbox_policy:Option<SandboxPolicyKind>,
     #[serde(skip_serializing_if = "Option::is_none")] pub model:Option<Option<String>>,
     #[serde(skip_serializing_if = "Option::is_none")] pub effort:Option<Option<String>>,
     #[serde(skip_serializing_if = "Option::is_none")] pub collaboration_mode:Option<CollaborationMode>,

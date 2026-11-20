@@ -189,6 +189,14 @@ impl Hangar {
                         if stored == Some(true) { self.notice_ignores_changed(&key, cx); }
                         stored.is_some()
                     }
+                    // O chip das linhas dessa máquina e a seção da sessão aberta nela.
+                    "work_reviews" => {
+                        let stored = super::work_review::store(&mut self.work_reviews, &key, &frame.data);
+                        changed = stored == Some(true);
+                        if changed { self.work_reviews_changed(&key, cx); }
+                        stored.is_some()
+                    }
+                    // `nav` é aberto por quem chama, que tem a janela: a lista não muda.
                     _ => { changed = false; true }
                 };
                 let _ = frame.applied.send(applied);
@@ -464,6 +472,19 @@ mod tests {
         assert!(!closed("https://notebook.ts.net/|claude|api", None), "mesmo nome em outra máquina fica");
         assert!(!closed("http://127.0.0.1:8765/|claude|web", Some("web")), "a aberta fica");
         assert!(!closed("sem-separador", None));
+    }
+
+    #[test]
+    fn new_chat_commands_are_keyed_by_choice_and_never_taken_for_a_closed_session() {
+        use crate::app::create::new_chat_commands_key as key;
+        let (server, gone) = (norm("http://127.0.0.1:8765"), vec!["api".to_owned()]);
+        let tricky = key("http://127.0.0.1:8765/", None, Some("/p/a|claude|api"), false);
+        assert!(!commands_of_closed(&tricky, &server, &gone, None), "pasta com `|` não vira sessão fechada");
+        let base = key("m", Some("/home/u/.claude"), Some("/p"), false);
+        assert_ne!(base, key("m", Some("/home/u/.claude-b"), Some("/p"), false), "outra conta, outra lista");
+        assert_ne!(base, key("m", Some("/home/u/.claude"), None, false), "sem pasta, a lista da conta");
+        assert_ne!(base, key("m", Some("/home/u/.claude"), Some("/p"), true), "sem terminal some o que é da TUI");
+        assert_ne!(base, key("n", Some("/home/u/.claude"), Some("/p"), false), "outra máquina");
     }
 
     #[test]

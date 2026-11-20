@@ -1,4 +1,4 @@
-//! Configuração vinda do ambiente que o Python monta ao subir o filho.
+//! Configuração vinda do ambiente que a subida do servidor monta a partir do `.env` (`hangar-boot`).
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
@@ -7,7 +7,6 @@ use crate::auth::TrustedHosts;
 #[derive(Clone)]
 pub struct Config {
     pub listen: SocketAddr,
-    pub upstream: SocketAddr,
     pub internal_secret: String,
     pub auth_token: String,
     pub log_path: Option<PathBuf>,
@@ -19,7 +18,6 @@ impl std::fmt::Debug for Config {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Config")
             .field("listen", &self.listen)
-            .field("upstream", &self.upstream)
             .field("internal_secret", &"<oculto>")
             .field("auth_token", &"<oculto>")
             .field("log_path", &self.log_path)
@@ -39,6 +37,7 @@ impl Config {
     }
 
     pub fn from_env() -> Result<Config, String> {
+        // Contexto herdado inválido não sobe: aberto, o servidor responderia 503 a toda autenticação.
         if let Some(raw) = std::env::var_os("HANGAR_AUTH_CONTEXT") {
             let raw = raw.to_str().ok_or_else(|| "auth_store_invalid".to_owned())?;
             let config = serde_json::from_str::<hangar_auth::AuthConfig>(raw).map_err(|_| "auth_store_invalid".to_owned())?;
@@ -59,11 +58,10 @@ impl Config {
         };
         Ok(Config {
             listen: addr("HANGAR_SERVER_LISTEN")?,
-            upstream: addr("HANGAR_SERVER_UPSTREAM")?,
             internal_secret: required("HANGAR_INTERNAL_SECRET")?,
             auth_token: required("CP_AUTH_TOKEN")?,
             log_path: get("HANGAR_SERVER_LOG").filter(|v| !v.is_empty()).map(PathBuf::from),
-            // Mesmo padrão do Python: só um proxy desta máquina reescreve o cliente.
+            // Só um proxy desta máquina reescreve o cliente.
             trusted: TrustedHosts::parse(
                 &get("CP_FORWARDED_ALLOW_IPS").unwrap_or_else(|| "127.0.0.1".into()),
             ),
@@ -106,9 +104,8 @@ mod tests {
         move |k| m.get(k).cloned()
     }
 
-    const BASE: [(&str, &str); 4] = [
+    const BASE: [(&str, &str); 3] = [
         ("HANGAR_SERVER_LISTEN", "0.0.0.0:8765"),
-        ("HANGAR_SERVER_UPSTREAM", "127.0.0.1:41234"),
         ("HANGAR_INTERNAL_SECRET", "ab12"),
         ("CP_AUTH_TOKEN", "tok"),
     ];
@@ -117,7 +114,6 @@ mod tests {
     fn reads_env_with_defaults() {
         let cfg = Config::from_lookup(env(&BASE)).unwrap();
         assert_eq!(cfg.listen, "0.0.0.0:8765".parse().unwrap());
-        assert_eq!(cfg.upstream, "127.0.0.1:41234".parse().unwrap());
         assert_eq!(cfg.log_path, None);
         assert!(cfg.trusted.contains("127.0.0.1"));
         assert!(!cfg.trusted.contains("192.0.2.1"));
@@ -127,7 +123,7 @@ mod tests {
     fn debug_hides_token_and_secret() {
         let shown = format!("{:?}", Config::from_lookup(env(&BASE)).unwrap());
         assert!(!shown.contains("ab12") && !shown.contains("\"tok\""), "{shown}");
-        assert!(shown.contains("41234"));
+        assert!(shown.contains("8765"));
     }
 
     #[test]

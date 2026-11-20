@@ -41,9 +41,9 @@ pub mod locate;
 pub mod loops;
 pub mod mcp;
 pub mod mermaid;
-pub mod migration_status;
 pub mod mods;
 pub mod nav_requests;
+pub mod owned_routes;
 pub mod pages;
 pub mod prewarm;
 pub(crate) mod queue_feed;
@@ -80,7 +80,9 @@ pub mod share;
 pub mod state;
 pub mod speech;
 pub mod stats;
+pub mod status;
 pub mod usage_cli;
+pub mod send_cli;
 pub mod subagents;
 pub mod tail;
 pub mod term;
@@ -98,7 +100,6 @@ pub mod model_picker;
 pub mod terminal_facts;
 use hangar_core::terminal_process;
 mod thumbnail;
-pub mod terminal_routes;
 pub use hangar_transcript as transcript;
 pub mod transcription;
 pub mod update_notes;
@@ -109,6 +110,7 @@ pub mod uploads;
 pub use hangar_core::user_data;
 pub mod connectors_cli;
 pub mod mission_notify;
+pub mod work_review_watch;
 pub mod machine_peers;
 pub mod install_root;
 pub mod update;
@@ -116,7 +118,6 @@ pub mod ui;
 pub mod vault;
 pub mod voice;
 pub mod plans;
-mod forwarded;
 pub mod worktree_routes;
 pub mod reviews;
 pub mod dream;
@@ -127,20 +128,67 @@ mod worktree_fetch;
 pub mod worktree_policy;
 use hangar_core::warn_limit;
 
-/// Versão do contrato com o Python (rotas `/internal`, canal privado do estado, ambiente). O
-/// Python (`RUST_SERVER_PROTOCOL`) recusa um binário de outra versão e atende sozinho.
-pub const INTERNAL_PROTOCOL: u32 = 111;
+/// Versão do contrato da porta privada (canal do estado, runtime) anunciada na saúde.
+pub const INTERNAL_PROTOCOL: u32 = 113;
 
 pub use hangar_core::net::http_client;
 pub(crate) use hangar_core::net::{AbortOnDrop, nodelay};
 
-/// Lê o cano até o fim ou erro. O Python segura a outra ponta; fechou = pai morreu.
+/// Lê o cano até o fim ou erro: quem segura a outra ponta fechou.
 pub async fn parent_gone<R: tokio::io::AsyncRead + Unpin>(mut pipe: R) {
     use tokio::io::AsyncReadExt;
     let mut buf = [0u8; 64];
     while let Ok(n) = pipe.read(&mut buf).await {
         if n == 0 {
             return;
+        }
+    }
+}
+
+/// O que pede a parada ordenada: sinal do sistema (systemd, Ctrl+C, fechamento no Windows). O stdin
+/// não diz nada: sob o systemd é `/dev/null` e acabaria na hora. Os tratadores entram na chamada,
+/// não no primeiro `await`: sinal que chega antes de o servidor atender ainda é parada pedida.
+pub fn stop_requested() -> impl std::future::Future<Output = &'static str> + Send + 'static {
+    shutdown_signal()
+}
+
+#[cfg(unix)]
+fn shutdown_signal() -> impl std::future::Future<Output = &'static str> + Send + 'static {
+    use tokio::signal::unix::{signal, SignalKind};
+    let streams = match (signal(SignalKind::terminate()), signal(SignalKind::interrupt())) {
+        (Ok(term), Ok(interrupt)) => Some((term, interrupt)),
+        _ => {
+            tracing::error!(code = "stop_signal_unavailable", "sem os sinais de parada: só o kill encerra o servidor");
+            None
+        }
+    };
+    async move {
+        let Some((mut term, mut interrupt)) = streams else { return std::future::pending().await };
+        tokio::select! {
+            _ = term.recv() => "SIGTERM",
+            _ = interrupt.recv() => "SIGINT",
+        }
+    }
+}
+
+#[cfg(windows)]
+fn shutdown_signal() -> impl std::future::Future<Output = &'static str> + Send + 'static {
+    use tokio::signal::windows::{ctrl_break, ctrl_c, ctrl_close, ctrl_logoff, ctrl_shutdown};
+    let streams = match (ctrl_c(), ctrl_break(), ctrl_close(), ctrl_logoff(), ctrl_shutdown()) {
+        (Ok(c), Ok(brk), Ok(close), Ok(logoff), Ok(shutdown)) => Some((c, brk, close, logoff, shutdown)),
+        _ => {
+            tracing::error!(code = "stop_signal_unavailable", "sem os eventos de parada do console: só o kill encerra o servidor");
+            None
+        }
+    };
+    async move {
+        let Some((mut c, mut brk, mut close, mut logoff, mut shutdown)) = streams else { return std::future::pending().await };
+        tokio::select! {
+            _ = c.recv() => "ctrl_c",
+            _ = brk.recv() => "ctrl_break",
+            _ = close.recv() => "ctrl_close",
+            _ = logoff.recv() => "ctrl_logoff",
+            _ = shutdown.recv() => "ctrl_shutdown",
         }
     }
 }
@@ -208,8 +256,7 @@ pub async fn serve_until_with_guest(
     if let Some(instance) = config::Config::runtime_instance().map_err(std::io::Error::other)? {
         let private = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
         let port = private.local_addr()?.port();
-        let registry = std::sync::Arc::new(runtime::gateway::RuntimeRegistry::new(cfg.upstream,
-            cfg.internal_secret.clone(),instance.clone()).with_diagnostics(state.diag.clone()).with_startup(state.startup.clone()).with_mods(state.mods.clone()).with_accounts(state.accounts.clone())
+        let registry = std::sync::Arc::new(runtime::gateway::RuntimeRegistry::new(instance.clone()).with_diagnostics(state.diag.clone()).with_startup(state.startup.clone()).with_mods(state.mods.clone()).with_accounts(state.accounts.clone())
             .with_interactions(state.interactions.clone()).with_plugin(state.plugin.clone())
             .with_terminal_states(state.list.published.clone()).with_terms(state.term.clone())
             .with_permissions(state.state.permissions.clone())
@@ -233,8 +280,6 @@ pub async fn serve_until_with_guest(
             let readiness = state.startup.clone();
             let refresh_loop = refresh_loop.clone();
             let accounts = state.accounts.clone();
-            let http = state.http.clone();
-            let runtime_cfg = cfg.clone();
             let dirs = state.list.env().dirs.clone();
             let capture_program = state.list.env().capture_program.clone();
             let transfer_share = state.share.clone();
@@ -245,8 +290,6 @@ pub async fn serve_until_with_guest(
             tracing::warn!(code = "claude_login_recovery_failed", reason = error.code, "catálogo de contas ilegível na subida");
         }
         *refresh_loop.lock().unwrap() = Some(accounts::claude_refresh::start(accounts, registry.clone()));
-        let _watchdog = std::env::home_dir().map(|home| AbortOnDrop(tokio::spawn(
-            watchdog::run(http.clone(), runtime_cfg.upstream, runtime_cfg.internal_secret.clone(), home))));
 
         if !readiness.prepares() {
         // A troca de conta que o Rust anterior deixou no meio, antes de qualquer sessão subir pelo spec.
@@ -449,6 +492,7 @@ pub(crate) fn write_test_executable(path: &std::path::Path, content: impl AsRef<
 }
 
 pub mod codex_setup;
+pub mod codex_tui;
 
 pub mod harness_setup;
 pub mod provider_hooks;
@@ -462,7 +506,6 @@ pub use hangar_core::http_cors;
 pub use hangar_core::http_body_limit;
 pub use hangar_core::http_route_response;
 pub mod boot_version;
-pub mod migration_branch;
 pub mod login_guests;
 
 pub mod shortcuts;

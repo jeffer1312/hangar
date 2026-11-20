@@ -49,6 +49,13 @@ export function stampOwn(tree: unknown, plugin: string): unknown {
   return node;
 }
 
+/** A faixa como o terminal a empilha: a linha de cada mod, cada uma com o dono nos botões. Sem linha, vazia. */
+export function bandTree(rows: readonly { plugin: string; tree: unknown }[]): unknown {
+  const trees = rows.map((r) => stampOwn(r.tree, r.plugin));
+  if (!trees.length) return null;
+  return trees.length === 1 ? trees[0] : { type: "Box", props: { flexDirection: "column" }, children: trees };
+}
+
 /** O painel na frente depois que `closed` fecha: no terminal aparece o vizinho anterior ((d)). */
 export function shownAfterClose(ids: readonly string[], shown: string | null, closed: string): string | null {
   if (shown !== closed) return shown;

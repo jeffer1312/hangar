@@ -21,15 +21,15 @@ pub(crate) use guide::{group_heading as news_group_heading, kind_icon as news_ki
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Page {
-    General, Appearance, Sessions, Updates, Manual, Diary, About, Migration,
-    Servers, Sync, Connect, Devices, SharedConfig, Accounts, Plugins, Scheduled, Memory, Vault, Orchestration, Harnesses, Voice, Jev, Windows, Notifications, Shortcuts, Attachments, Worktrees, Advanced,
+    General, Appearance, Sessions, Updates, Manual, Diary, About,
+    Servers, Sync, Connect, Devices, SharedConfig, Accounts, Status, Plugins, Scheduled, Memory, Vault, Orchestration, Harnesses, Voice, Jev, Windows, Notifications, Shortcuts, Attachments, Worktrees, Advanced,
 }
 
 impl Page {
     // Sessões fica no geral: a configuração vale para todas as máquinas, sem seletor.
     const DEVICE: [Page; 6] = [Page::General, Page::Appearance, Page::Sessions, Page::Updates, Page::Manual, Page::About];
     // O diário é do servidor escolhido no seletor ("O registro de uso de <servidor>"), não do aparelho.
-    const SERVER: [Page; 21] = [Page::Diary, Page::Servers, Page::Sync, Page::Connect, Page::Devices, Page::SharedConfig, Page::Accounts, Page::Plugins, Page::Scheduled, Page::Memory, Page::Vault, Page::Orchestration, Page::Harnesses,
+    const SERVER: [Page; 22] = [Page::Diary, Page::Servers, Page::Sync, Page::Connect, Page::Devices, Page::SharedConfig, Page::Accounts, Page::Status, Page::Plugins, Page::Scheduled, Page::Memory, Page::Vault, Page::Orchestration, Page::Harnesses,
         Page::Voice, Page::Jev, Page::Windows, Page::Notifications, Page::Shortcuts, Page::Attachments, Page::Worktrees, Page::Advanced];
 
     /// As seções da navegação, na ordem dela; a voz abre uma pelo `key`.
@@ -43,8 +43,8 @@ impl Page {
 
     pub(super) fn key(self) -> &'static str {
         match self {
-            Page::General => "general", Page::Appearance => "appearance", Page::Sessions => "sessions", Page::Updates => "updates", Page::Manual => "manual", Page::Diary => "diary", Page::About => "about", Page::Migration => "migration",
-            Page::Servers => "servers", Page::Sync => "sync", Page::Connect => "connect", Page::Devices => "devices", Page::SharedConfig => "shared_config", Page::Accounts => "accounts", Page::Plugins => "plugins", Page::Scheduled => "scheduled", Page::Memory => "memory", Page::Vault => "vault", Page::Orchestration => "orchestration",
+            Page::General => "general", Page::Appearance => "appearance", Page::Sessions => "sessions", Page::Updates => "updates", Page::Manual => "manual", Page::Diary => "diary", Page::About => "about",
+            Page::Servers => "servers", Page::Sync => "sync", Page::Connect => "connect", Page::Devices => "devices", Page::SharedConfig => "shared_config", Page::Accounts => "accounts", Page::Status => "status", Page::Plugins => "plugins", Page::Scheduled => "scheduled", Page::Memory => "memory", Page::Vault => "vault", Page::Orchestration => "orchestration",
             Page::Harnesses => "harnesses", Page::Voice => "voice", Page::Jev => "jev", Page::Windows => "windows", Page::Notifications => "notifications",
             Page::Shortcuts => "shortcuts", Page::Attachments => "attachments", Page::Worktrees => "worktrees", Page::Advanced => "advanced",
         }
@@ -54,21 +54,23 @@ impl Page {
         match self {
             Page::General => IconName::Globe, Page::Appearance => IconName::Palette, Page::Sessions => IconName::EyeOff, Page::Diary => IconName::FileText,
             Page::Updates => IconName::Sparkles, Page::Manual => IconName::BookOpen,
-            Page::About => IconName::Info, Page::Migration => IconName::Activity, Page::Servers => IconName::Server, Page::Sync => IconName::RefreshCw, Page::Connect => IconName::Globe, Page::Devices => IconName::Smartphone, Page::SharedConfig => IconName::Layers,
-            Page::Accounts => IconName::User, Page::Plugins => IconName::Package, Page::Scheduled => IconName::Clock, Page::Memory => IconName::Moon, Page::Vault => IconName::KeyRound, Page::Orchestration => IconName::Users, Page::Harnesses => IconName::Activity,
+            Page::About => IconName::Info, Page::Servers => IconName::Server, Page::Sync => IconName::RefreshCw, Page::Connect => IconName::Globe, Page::Devices => IconName::Smartphone, Page::SharedConfig => IconName::Layers,
+            Page::Accounts => IconName::User, Page::Status => IconName::Gauge, Page::Plugins => IconName::Package, Page::Scheduled => IconName::Clock, Page::Memory => IconName::Moon, Page::Vault => IconName::KeyRound, Page::Orchestration => IconName::Users, Page::Harnesses => IconName::Activity,
             Page::Voice => IconName::Mic, Page::Jev => IconName::Zap, Page::Windows => IconName::Monitor, Page::Notifications => IconName::Bell,
             Page::Shortcuts => IconName::Keyboard, Page::Attachments => IconName::Paperclip, Page::Worktrees => IconName::GitBranch, Page::Advanced => IconName::SlidersHorizontal,
         }
     }
 
     pub(super) fn title(self) -> String {
-        // O nome é o do web: uma frase, um dicionário.
-        if self == Page::Scheduled { return tr_shared("scheduled_title", &[]); }
-        if self == Page::Memory { return tr_shared("dream_title", &[]); }
-        if self == Page::Jev { return tr_shared("jev_title", &[]); }
-        if self == Page::SharedConfig { return tr_shared("shared_config_title", &[]); }
-        if self == Page::Migration { return tr_shared("migration_title", &[]); }
-        tr(&format!("settings_page_{}", self.key()))
+        match self {
+            // O nome é o do web: uma frase, um dicionário.
+            Page::Scheduled => tr_shared("scheduled_title", &[]),
+            Page::Memory => tr_shared("dream_title", &[]),
+            Page::Jev => tr_shared("jev_title", &[]),
+            Page::SharedConfig => tr_shared("shared_config_title", &[]),
+            Page::Status => tr("status_title"),
+            _ => tr(&format!("settings_page_{}", self.key())),
+        }
     }
 }
 
@@ -106,6 +108,7 @@ const PAGE_ROWS: &[(Page, &[(&str, Option<&str>)])] = &[
         ("connect_preview_title", Some("connect_preview_help"))]),
     (Page::Appearance, &APPEARANCE_ROWS),
     (Page::General, &[("settings_language", Some("settings_language_desc")), ("settings_currency", Some("settings_currency_search")),
+        ("settings_delivery_mode", Some("settings_delivery_mode_search")),
         ("settings_tray", Some("settings_tray_desc")), ("settings_chrome_autofill", Some("settings_chrome_autofill_desc")),
         ("settings_full_chrome", Some("settings_full_chrome_desc"))]),
     (Page::Sessions, &[("settings_auto_hide_label", None), ("settings_sleep_title", Some("settings_sleep_hint"))]),
@@ -123,6 +126,10 @@ const PAGE_ROWS: &[(Page, &[(&str, Option<&str>)])] = &[
     (Page::Shortcuts, &[("shortcuts_add", Some("shortcuts_lead")), ("shortcuts_restore", Some("shortcuts_restore_help")),
         ("keyboard_title", Some("keyboard_lead")), ("keyboard_hold_title", Some("keyboard_hold_help"))]),
     (Page::Harnesses, &[("harness_legend", None)]),
+    // Cada bloco da Status: a busca rola até ele, pela mesma marca do pulo da lista de atenção.
+    (Page::Status, &[("status_memory", None), ("status_cpu", None), ("status_days_title", Some("status_legend_crash")),
+        ("status_machines_title", Some("status_machines_hint")), ("status_sessions_title", None), ("status_slow_title", Some("status_slow_legend")),
+        ("status_host_title", Some("status_disk_usage")), ("status_outside_title", Some("status_keyring"))]),
     (Page::Voice, &[("voice_transcribe", Some("voice_transcribe_help")), ("voice_groq", Some("voice_groq_help")),
         ("voice_transcription_endpoint", Some("voice_transcription_endpoint_help")), ("voice_transcription_model", Some("voice_transcription_model_help")),
         ("voice_hands_free", Some("voice_hands_free_help")), ("voice_style", Some("voice_style_help")), ("voice_vocabulary", Some("voice_vocabulary_help")),
@@ -557,6 +564,7 @@ impl Hangar {
             self.sync_page_left();
             self.connect_page_left();
             self.devices_page_left();
+            self.status_left();
             let ui = &mut self.settings_ui;
             (ui.live, ui.hit, ui.drag) = (false, None, None);
             self.root_focus.focus(window, cx);
@@ -842,6 +850,7 @@ impl Hangar {
         // Na caixa solta o destaque suave some sobre o vidro; o item da página aberta leva mais cor.
         let selected = if floating { theme::accent().alpha(0.26) } else { theme::selected_row() };
         let new_count = self.guide.new_count();
+        let status_dot = self.status_nav_dot();
         let nav_item = |page_item: Page, current: Page, cx: &mut Context<Self>| {
             let on = page_item == current;
             Button::new(SharedString::from(format!("settings-nav-{}", page_item.key())))
@@ -858,7 +867,11 @@ impl Hangar {
                     // Não vistas desde a última visita; some com a página aberta, que as marca vistas.
                     .when(page_item == Page::Updates && !on && new_count > 0, |el| el.child(div().ml_auto()
                         .child(super::vault::chip(if new_count == 1 { tr("updates_new_one") } else { tr("updates_new_count").replace("{n}", &new_count.to_string()) },
-                            theme::on_accent(), theme::accent()).rounded_full()))))
+                            theme::on_accent(), theme::accent()).rounded_full())))
+                    // Só o estado do servidor selecionado; de pé, sem ponto.
+                    .when_some(status_dot.clone().filter(|_| page_item == Page::Status), |el, (color, _)| el.child(div().ml_auto()
+                        .size(px(7.)).flex_shrink_0().rounded_full().bg(color))))
+                .when_some(status_dot.clone().filter(|_| page_item == Page::Status), |el, (_, text)| el.tooltip(text))
                 .on_click(cx.listener(move |this, _, window, cx| this.open_settings(page_item, window, cx)))
                 .map(|button| div().when(page_item == Page::Scheduled, |el| popup::anchor(el, crate::tour::anchors::SCHEDULED_TASKS)).child(button))
         };
@@ -900,6 +913,8 @@ impl Hangar {
         let servers_wide = page == Page::Servers;
         // O artigo do Manual leva o "Nesta página" ao lado do texto.
         let article_wide = page == Page::Manual && self.article_wide(window);
+        // Status é um painel de gráficos: ocupa a largura toda ao lado da navegação.
+        let status_wide = page == Page::Status;
         let body = match page {
             Page::Updates => self.render_updates(window, cx),
             Page::Manual => self.render_manual(window, cx),
@@ -908,7 +923,7 @@ impl Hangar {
             Page::Sessions => self.render_sessions_settings(window, cx),
             Page::Diary => self.render_diary(cx),
             Page::About => self.render_about(cx),
-            Page::Migration => self.render_migration(cx),
+            Page::Status => self.render_status(window, cx),
             Page::Accounts => self.render_accounts(accounts_wide, window, cx),
             Page::Vault => self.render_vault(window, cx),
             Page::Plugins => self.render_plugins(window, cx),
@@ -928,8 +943,10 @@ impl Hangar {
         };
         let scroll = div().id("settings-content").role(Role::TabPanel).aria_label(page.title())
             .accessibility_id(format!("settings-page-{}", page.key())).flex_1().min_h_0().overflow_y_scroll().track_scroll(&self.settings_ui.scroll)
-            .child(div().w_full().flex().justify_center().child(motion::fade_quick(div().w(px(if accounts_wide || servers_wide { 1040. }
-                else if article_wide { 960. } else { 720. })).max_w_full().px_4().pt(px(44.)).pb(px(40.)), body_in).child(body)));
+            .child(div().w_full().flex().justify_center().child(motion::fade_quick(div()
+                .when(status_wide, |el| el.w_full().px(px(20.)))
+                .when(!status_wide, |el| el.w(px(if accounts_wide || servers_wide { 1040. } else if article_wide { 960. } else { 720. })).px_4())
+                .max_w_full().pt(px(44.)).pb(px(40.)), body_in).child(body)));
         let strip = match page { Page::Appearance => Some(self.section_tabs(cx)), Page::Manual => self.manual_tabs(cx), _ => None };
         let tabs = strip.map(|strip| div().w_full().flex_shrink_0().flex().justify_center().px_4().pt(px(14.)).pb(px(6.))
             .child(div().w(px(720.)).max_w_full().when(page == Page::Manual, |el| el.flex().justify_center()).child(strip)));
@@ -1155,13 +1172,23 @@ pub(super) fn segments(id: &'static str, labels: &[String], selected: usize, ava
 pub(super) fn segments_with_hints(id: &'static str, labels: &[String], hints: &[String], selected: usize, available: usize, locked: bool,
     off_note: String, pick: impl Fn(&mut Hangar, usize, &mut Window, &mut Context<Hangar>) + Clone + 'static, cx: &mut Context<Hangar>)
     -> AnyElement {
+    let enabled: Vec<bool> = (0..labels.len()).map(|n| n < available).collect();
+    segments_where(id, labels, hints, selected, &enabled, locked, off_note, pick, cx)
+}
+
+/// `enabled`: quais opções valem, uma a uma, quando a desligada não é a do fim (o Jev entre Direto e Na conversa).
+#[allow(clippy::too_many_arguments)]
+pub(super) fn segments_where(id: &'static str, labels: &[String], hints: &[String], selected: usize, enabled: &[bool], locked: bool,
+    off_note: String, pick: impl Fn(&mut Hangar, usize, &mut Window, &mut Context<Hangar>) + Clone + 'static, cx: &mut Context<Hangar>)
+    -> AnyElement {
     let count = labels.len();
+    let any = enabled.iter().any(|on| *on);
     div().flex().rounded(px(6.)).border_1().border_color(theme::border_strong()).overflow_hidden()
         .when(locked, |el| el.opacity(0.6))
         .children(labels.iter().enumerate().map(|(n, label)| {
             // Opção que ainda não chegou não mostra escolha nenhuma: o padrão do web pareceria o estado do app.
-            let on = n == selected && (available > 0 || locked);
-            let enabled = n < available;
+            let on = n == selected && (any || locked);
+            let enabled = enabled.get(n).copied().unwrap_or(false);
             let pick = pick.clone();
             Button::new(SharedString::from(format!("{id}-{n}")))
                 .custom(ButtonCustomVariant::new(cx).color(if on { theme::accent_dim() } else { transparent_black() })
@@ -1173,7 +1200,7 @@ pub(super) fn segments_with_hints(id: &'static str, labels: &[String], hints: &[
                 .when(on, |el| el.bg(theme::accent_dim()))
                 .when(n + 1 < count, |el| el.border_r_1().border_color(theme::border_strong()))
                 .disabled(!enabled).label(label.clone())
-                .when(!enabled && available > 0, |el| el.tooltip(off_note.clone()))
+                .when(!enabled && any, |el| el.tooltip(off_note.clone()))
                 .when_some(hints.get(n).filter(|_| enabled), |el, hint| el.tooltip(hint.clone()).accessibility_label(hint.clone()))
                 .on_click(cx.listener(move |this, _, window, cx| if enabled && !on { pick(this, n, window, cx) }))
         }))

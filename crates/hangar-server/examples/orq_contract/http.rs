@@ -52,7 +52,7 @@ fn request(input: &Value, public: bool) -> Result<Value, String> {
         let upstream_addr = listener.local_addr().map_err(|e| e.to_string())?;
         let server = tokio::spawn(async move { axum::serve(listener, upstream).await });
         let mut state = AppState::new(hangar_server::config::Config {
-            listen: "127.0.0.1:0".parse().unwrap(), upstream: upstream_addr,
+            listen: "127.0.0.1:0".parse().unwrap(),
             internal_secret: "fixture-internal".into(), auth_token: "fixture-owner".into(),
             log_path: None, trusted: hangar_server::auth::TrustedHosts::parse("127.0.0.1"),
         });
@@ -64,7 +64,7 @@ fn request(input: &Value, public: bool) -> Result<Value, String> {
             mux: Mux::with_program(mux, Duration::from_secs(2)), capture_program: mux.into(),
             procs: Arc::new(SystemProcs::default()), dirs: parse_dirs(&input["dirs"].to_string()),
         };
-        state.list = Arc::new(ListBridge::new(list_env, FactsClient::new(upstream_addr, "fixture-internal".into())));
+        state.list = Arc::new(ListBridge::new(list_env, FactsClient::new()));
         state.side.locate = Arc::new(hangar_server::locate::ListLocate { list: state.list.clone() });
         // O kick-off é entregue pelo Rust: no "Começar", cada sessão da prova é um Claude sem terminal
         // dele, e o que chega ao cano falso sai em `deliveries` na forma do `/input`.
@@ -90,19 +90,7 @@ fn request(input: &Value, public: bool) -> Result<Value, String> {
             request.extensions_mut().insert(axum::extract::ConnectInfo("127.0.0.1:5000".parse::<std::net::SocketAddr>().unwrap()));
             request.headers_mut().insert("x-forwarded-for", "198.51.100.80".parse().unwrap());
             if input["authenticated"] != false { request.headers_mut().insert("authorization", "Bearer fixture-owner".parse().unwrap()); }
-            if input["forwarded"] == true {
-                let path = request.uri().path().to_owned();
-                let query = request.uri().query().map(|q|format!("?{q}")).unwrap_or_default();
-                request.headers_mut().remove("x-forwarded-for");
-                request.headers_mut().insert("x-hangar-path", path.parse().unwrap());
-                request.headers_mut().insert("x-hangar-internal", "fixture-internal".parse().unwrap());
-                *request.uri_mut() = format!("/__hangar_server/forwarded{query}").parse().unwrap();
-            }
-            let mut router = if input["forwarded"] == true {
-                hangar_server::routes::terminal_router(state.clone())
-            } else {
-                hangar_server::routes::router(state.clone())
-            };
+            let mut router = hangar_server::routes::router(state.clone());
             router.call(request).await.map_err(|e|e.to_string())?
         } else { orq::serve(&state, request).await };
         let status = response.status().as_u16();

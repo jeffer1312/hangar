@@ -27,6 +27,24 @@ $pacote = @(
 )
 Assert (((Get-HangarTaskProcesses $pacote 'hangar-backend' 'C:\Users\u\.hangar\versions\0.1.0.6\backend').ProcessId -join ',') -eq '61') 'Backend do lancador nao identificado (ou o atualizador entrou junto)'
 Assert (-not (Get-HangarTaskProcesses $pacote 'hangar-frontend' 'C:\repo\frontend')) 'Lancador do backend tomado pelo front'
+# Decisao 9: versao sem o Python, o hangar-server filho do lancador e o backend; o de outro pai, nao.
+$direto = @(
+    (Row 70 1 'hangar-launcher.exe' '"C:\Users\u\.hangar\bin\hangar-launcher.exe" launch backend --log "C:\l.log"'),
+    (Row 71 70 'hangar-server.exe' '"C:\Users\u\.hangar\versions\0.1.0.7\bin\hangar-server.exe"'),
+    (Row 72 1 'hangar-server.exe' '"C:\Users\u\.hangar\versions\0.1.0.7\bin\hangar-server.exe" update --run'),
+    (Row 73 71 'hangar-server.exe' '"C:\Users\u\.hangar\versions\0.1.0.7\bin\hangar-server.exe" open claude')
+)
+Assert (((Get-HangarTaskProcesses $direto 'hangar-backend' 'C:\Users\u\.hangar\versions\0.1.0.8\backend').ProcessId -join ',') -eq '71') 'hangar-server do lancador nao identificado (ou outro hangar-server entrou junto)'
+# Decisao 38: o lancador religa o servidor que cai e entra na parada; o de outra instalacao, nao.
+Assert (((Get-HangarBackendLaunchers $direto @($direto[1]) 'hangar-backend').ProcessId -join ',') -eq '70') 'Lancador pai do hangar-server fora da parada'
+$vbs = Join-Path $env:LOCALAPPDATA 'hangar\hangar-backend.vbs'
+$espera = @(
+    (Row 80 1 'wscript.exe' "wscript.exe `"$vbs`""),
+    (Row 81 80 'hangar-launcher.exe' '"C:\Users\u\.hangar\bin\hangar-launcher.exe" launch backend --log "C:\l.log"'),
+    (Row 82 1 'hangar-launcher.exe' '"C:\outro\hangar-launcher.exe" launch backend --log "C:\outro.log"')
+)
+Assert (((Get-HangarBackendLaunchers $espera @() 'hangar-backend').ProcessId -join ',') -eq '81') 'Lancador na espera da religada nao identificado (ou o de outra instalacao entrou junto)'
+Assert (-not (Get-HangarBackendLaunchers $espera @() 'hangar-frontend')) 'Lancador do backend tomado pelo front'
 
 $script:events = @()
 function Reset-State {
@@ -40,6 +58,7 @@ function Reset-State {
     }
     $script:owner = 11
     $script:stuckLauncher = $false
+    $script:apart = @()
     $script:lateOwner = $null
     $script:frontOwner = $null
     $script:slowRelease = 0
@@ -56,10 +75,9 @@ function Reset-State {
     $script:tableFails = $false
     $script:processRows = $rows
     $script:lastRun = $old
-    $script:httpReplies = [Collections.Generic.Queue[bool]]::new()
-    $script:httpReplies.Enqueue($false)
-    $script:httpReplies.Enqueue($false)
 }
+# Processo vivo que nao e da tarefa (o executor da atualizacao sai do Job): nao a segura em Running.
+function Get-TaskLive { @($script:live.Keys | Where-Object { [int]$_ -notin $script:apart }).Count }
 function Get-HangarProcessTable {
     if ($script:tableFails) { throw 'WMI indisponivel' }
     $script:tableReads++
@@ -86,17 +104,17 @@ function Stop-Process { param($InputObject, [switch]$Force, $ErrorAction)
     if ($script:exitsBeforeStop -eq $InputObject.Id) {
         $script:live.Remove([int]$InputObject.Id)
         if ($script:owner -eq $InputObject.Id) { $script:owner = $null }
-        if (-not $script:live.Count -and -not $script:stuckLauncher) { $script:task.State = 'Ready' }
+        if (-not (Get-TaskLive) -and -not $script:stuckLauncher) { $script:task.State = 'Ready' }
         $InputObject | Add-Member -NotePropertyName HasExited -NotePropertyValue $true -Force
         throw [InvalidOperationException]'Process has exited, so the requested information is not available.'
     }
     $script:events += "stop:$($InputObject.Id)"
     $script:live.Remove([int]$InputObject.Id)
     if ($script:owner -eq $InputObject.Id) { $script:owner = $null }
-    if (-not $script:live.Count -and -not $script:stuckLauncher) { $script:task.State = 'Ready' }
+    if (-not (Get-TaskLive) -and -not $script:stuckLauncher) { $script:task.State = 'Ready' }
 }
 function Start-ScheduledTask { param($TaskName, $ErrorAction)
-    Assert (-not $script:live.Count -and -not $script:owner) 'Nova instancia iniciada antes de encerrar a antiga'
+    Assert (-not (Get-TaskLive) -and -not $script:owner) 'Nova instancia iniciada antes de encerrar a antiga'
     $script:events += 'start'
     if ($script:ignoredStarts -gt 0) { $script:ignoredStarts--; return }
     if (-not $script:frozenLastRun) { $script:lastRun = $script:lastRun.AddSeconds(1) }
@@ -105,7 +123,6 @@ function Start-ScheduledTask { param($TaskName, $ErrorAction)
     $script:listening = -not $script:noPort
 }
 function Start-Sleep { param($Seconds, $Milliseconds) }
-function Test-HangarHttp { param($port) return $script:httpReplies.Dequeue() }
 
 try {
     Reset-State
@@ -115,6 +132,15 @@ try {
     # comentario no windows-tasks.ps1 e o scripts/test-windows-tasks-reais.ps1).
     Assert (($script:events -join ',') -eq 'stop:10,stop:11,start') 'Parada/reinicio fora de ordem'
     Assert ('settings:0' -notin $script:events) 'Voltou a pausar a recuperacao por Set-ScheduledTask (o Agendador recusa)'
+    # Decisao 38: entre a queda e a religada so o lancador esta de pe; o reinicio o para e sobe outro.
+    Reset-State
+    $script:processRows = $espera
+    $waiting = [pscustomobject]@{ Id = 81; StartTime = $old }
+    $waiting | Add-Member ScriptMethod WaitForExit { param($timeout) return $true }
+    $script:live = @{ 81 = $waiting }
+    $script:owner = $null
+    Restart-HangarTask 'hangar-backend' 8765 'C:\Users\u\.hangar\versions\0.1.0.8\backend' | Out-Null
+    Assert (($script:events -join ',') -eq 'stop:81,start') "Lancador na espera da religada nao foi parado: $($script:events -join ',')"
     # O Agendador pode aceitar o pedido sem abrir instancia: nao vale como reinicio feito.
     Reset-State
     $script:ignoredStarts = 1
@@ -258,6 +284,20 @@ try {
     $script:owner = 12
     Restart-HangarTask 'hangar-backend' 8765 'C:\repo\backend'
     Assert (($script:events -join ',') -eq 'stop:10,stop:11,stop:12,start') 'hangar-server do backend travou ou desordenou o reinicio'
+    # Versao direta: o executor da atualizacao e filho do hangar-server e e quem pediu o reinicio.
+    Reset-State
+    $script:processRows = @($direto[0], $direto[1],
+        (Row 74 71 'hangar-server.exe' '"C:\Users\u\.hangar\versions\0.1.0.7\bin\hangar-server.exe" update --run --listen 0.0.0.0:8765'))
+    $script:live = @{}
+    foreach ($id in @(70, 71, 74)) {
+        $process = [pscustomobject]@{ Id = $id; StartTime = $old }
+        $process | Add-Member ScriptMethod WaitForExit { param($timeout) return $true }
+        $script:live[$id] = $process
+    }
+    $script:apart = @(74)
+    $script:owner = 71
+    Restart-HangarTask 'hangar-backend' 8765 'C:\Users\u\.hangar\versions\0.1.0.8\backend' | Out-Null
+    Assert (($script:events -join ',') -eq 'stop:71,stop:70,start') "Reinicio da versao direta parou o executor da atualizacao: $($script:events -join ',')"
     Reset-State
     $script:processRows = @($rows) + @(Row 13 40 'hangar-server.exe' 'C:\other\hangar-server.exe')
     $script:owner = 13
@@ -280,27 +320,6 @@ try {
         Assert ('start' -notin $script:events) "Duplicou processo: $scenario"
         Assert ($script:task.Settings.RestartCount -eq 3) "Perdeu recuperacao automatica: $scenario"
     }
-    foreach ($scenario in @('healthy', 'transient', 'recent', 'updating', 'rust-updating', 'checkout-updating', 'migrating', 'dev-mode', 'installing')) {
-        Reset-State
-        switch ($scenario) {
-            healthy { $script:httpReplies.Clear(); $script:httpReplies.Enqueue($true) }
-            transient { $script:httpReplies.Clear(); $script:httpReplies.Enqueue($false); $script:httpReplies.Enqueue($true) }
-            recent { $script:lastRun = Get-Date }
-            updating { }
-            'rust-updating' { $script:processRows = @($rows[0], $rows[1], $pacote[2]) }
-            'checkout-updating' { $script:processRows = @($rows[0], $rows[1], (Row 53 11 'hangar-server.exe' 'C:\repo\hangar-server.exe checkout-update --run --port 8765')) }
-            migrating { $script:processRows = @($rows[0], $rows[1], (Row 51 1 'hangar-server.exe' 'C:\Users\u\.hangar\migrate\hangar-server.exe migrate-package')) }
-            'dev-mode' { $script:processRows = @($rows[0], $rows[1], (Row 52 1 'hangar-server.exe' 'C:\Users\u\.hangar\current\bin\hangar-server.exe dev-mode off')) }
-            installing { $script:processRows = @($rows[0], $rows[1], (Row 50 1 'powershell.exe' 'powershell -File install.ps1 -Update')) }
-        }
-        Repair-HangarTask 'hangar-backend' 8765 'C:\repo\backend'
-        Assert (-not $script:events.Count) "Vigia interferiu: $scenario"
-    }
-    Reset-State
-    $script:processRows = @($rows[0], $rows[1], $rows[4], $rows[5], $rows[6])
-    Repair-HangarTask 'hangar-backend' 8765 'C:\repo\backend' | Out-Null
-    Assert ('start' -in $script:events) 'Vigia nao recuperou travamento confirmado'
-
     $lockJob = Start-Job {
         $mutex = New-Object Threading.Mutex($false, 'Local\HangarInstall')
         try {
@@ -316,8 +335,9 @@ try {
         }
         Assert ('locked' -in @(Receive-Job $lockJob -Keep)) 'Processo de teste nao adquiriu a exclusao'
         Reset-State
-        Repair-HangarTask 'hangar-backend' 8765 'C:\repo\backend'
-        Assert (-not $script:events.Count -and $script:httpReplies.Count -eq 2) 'Vigia interferiu com instalacao em outro processo'
+        $failed = $null
+        try { Restart-HangarTasks 'C:\repo' 8765 0 } catch { $failed = "$_" }
+        Assert ($failed -match 'em andamento' -and -not $script:events.Count) "Reinicio do atualizador interferiu com instalacao em outro processo: $failed"
     } finally { Remove-Job $lockJob -Force }
 
     $tokens = $null; $errors = $null
@@ -350,7 +370,7 @@ try {
         $node -is [Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -eq '$cfg'
     }, $true)
     . ([scriptblock]::Create($assignment.Extent.Text))
-    Assert ($cfg.MultipleInstances -eq 'IgnoreNew' -and $cfg.RestartCount -eq 3 -and $cfg.RestartInterval.TotalMinutes -eq 1) 'Agendador perdeu protecao de instancia ou recuperacao'
+    Assert ($cfg.MultipleInstances -eq 'IgnoreNew' -and $cfg.RestartCount -eq 999 -and $cfg.RestartInterval.TotalMinutes -eq 1) 'Agendador perdeu protecao de instancia ou recuperacao'
     Assert ($cfg.Priority -eq 4) 'Tarefa voltou a prioridade padrao do Agendador (7, abaixo do normal)'
     # Tarefa do backend: na maquina migrada, o lancador e o padrao que acha o Python do pacote.
     $assignment = $ast.Find({ param($node)
@@ -364,11 +384,20 @@ try {
     $python = '"C:\Users\u\.hangar\versions\0.1.0.5\python\python.exe" -m app.main'
     Assert ($python -match $b.Padrao -and 'python.exe' -match $b.ExeProc) 'Pare-Servico nao acha o Python do pacote'
     Assert ('"C:\Users\u\.hangar\bin\hangar-launcher.exe" launch backend --log x' -match $b.Padrao -and 'hangar-launcher.exe' -match $b.ExeProc) 'Pare-Servico nao acha o lancador'
+    Assert (-not ('"D:\outra\hangar-launcher.exe" launch backend --log x' -match $b.Padrao)) 'Pare-Servico pegou o lancador de outra instalacao'
     Assert (-not ('C:\repo\backend\.venv\Scripts\python.exe -m app.atualizar' -match $b.Padrao)) 'Padrao do pacote pegou o checkout'
     $lancadorPacote = $null
     . ([scriptblock]::Create($assignment.Extent.Text))
     $b = $tarefas[0]
     Assert ($b.Padrao -eq [regex]::Escape('C:\repo\backend') -and $b.ExeProc -eq 'uv|python') 'Maquina nao migrada mudou de padrao'
+    # Decisao 7: checkout sem o app\main.py, a tarefa sobe o hangar-server pelo `launch backend`.
+    $servidorCheckout = 'C:\repo\crates\target\release\hangar-server.exe'
+    . ([scriptblock]::Create($assignment.Extent.Text))
+    $b = $tarefas[0]
+    Assert ($b.Exe -eq $servidorCheckout -and $b.Args -eq 'launch backend' -and $b.ExeProc -eq 'hangar-server') "Checkout sem Python fora do hangar-server: $($b.Exe) $($b.Args)"
+    Assert ('"C:\repo\crates\target\release\hangar-server.exe" launch backend --log x' -match $b.Padrao) 'Pare-Servico nao acha o hangar-server do checkout'
+    Assert (-not ('"D:\outra\crates\target\release\hangar-server.exe" launch backend --log x' -match $b.Padrao)) 'Pare-Servico pegou o hangar-server de outra worktree'
+    $servidorCheckout = $null
     $releaseFunction = $ast.Find({ param($node)
         $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Liberar-Instalacao'
     }, $true)
@@ -387,5 +416,27 @@ try {
     catch { }
     finally { & ([scriptblock]::Create($outerTry.Finally.Extent.Text.TrimStart('{').TrimEnd('}'))) }
     Assert ($script:reposto['hangar-backend'] -eq $bloco) 'Falha da instalacao deixou recuperacao desativada'
-    Write-Output 'OK: selecao de processos, recuperacao, falhas, espera, atualizacao, vigia e lancador'
+    # Prova do passo de maquina: o .vbs com os mesmos bytes que o Escrever-Lancador grava (sem BOM).
+    $pasta = Join-Path ([IO.Path]::GetTempPath()) "hangar-vbs-$PID"
+    New-Item -ItemType Directory -Force $pasta | Out-Null
+    try {
+        $semBom = New-Object System.Text.UnicodeEncoding $false, $true
+        $vbsDireto = Join-Path $pasta 'direto.vbs'
+        [IO.File]::WriteAllBytes($vbsDireto, $semBom.GetBytes('WScript.Quit CreateObject("WScript.Shell").Run("""C:\Users\u\.hangar\bin\hangar-launcher.exe"" launch backend --log ""C:\l.log""", 0, True)'))
+        $comBom = Join-Path $pasta 'bom.vbs'
+        [IO.File]::WriteAllBytes($comBom, $semBom.GetPreamble() + $semBom.GetBytes('Run("""C:\h\hangar-launcher.exe"" launch backend", 0, True)'))
+        $python = Join-Path $pasta 'python.vbs'
+        [IO.File]::WriteAllBytes($python, $semBom.GetBytes('Run("cmd /c ""C:\repo\.venv\Scripts\python.exe"" -m app.main", 0, True)'))
+        Reset-State
+        $script:task.Settings.RestartCount = 999
+        Assert (-not (Get-HangarBackendTaskProblem $vbsDireto)) '.vbs UTF-16 sem BOM com o launch backend reprovado'
+        Assert (-not (Get-HangarBackendTaskProblem $comBom)) '.vbs UTF-16 com BOM reprovado'
+        Assert ((Get-HangarBackendTaskProblem $python) -match 'launch backend') '.vbs sem o launch backend aprovado'
+        Assert ((Get-HangarBackendTaskProblem (Join-Path $pasta 'falta.vbs')) -match 'nao existe') '.vbs ausente aprovado'
+        $script:task.Settings.RestartCount = 3
+        Assert ((Get-HangarBackendTaskProblem $vbsDireto) -match 'religa 3 vezes') 'Tarefa sem os reinicios automaticos aprovada'
+        $script:task = $null
+        Assert (-not (Get-HangarBackendTaskProblem $python)) 'Maquina sem a tarefa reprovada'
+    } finally { Remove-Item -Recurse -Force $pasta -ErrorAction SilentlyContinue }
+    Write-Output 'OK: selecao de processos, recuperacao, falhas, espera, atualizacao e lancador'
 } finally { $env:LOCALAPPDATA = $testLocalData }

@@ -61,6 +61,11 @@ observáveis, não funções. Fontes, todas obrigatórias:
 - **Uso real:** diário e logs (`log_paths.base()`; no Windows `%LOCALAPPDATA%\hangar\logs\diario`):
   códigos de erro da área, `pool.espera`, `loop.atraso`, rotas com 1 s ou mais.
 - **Plataforma:** ramos `os.name`, Windows, psmux, encoding, conexão recusada.
+- **Processo:** o que o interpretador Python fazia sem linha no código, quando o filho nascia dele
+  ou recebia algo dele: caixa das chaves do ambiente (no Windows o `os.environ` as entrega em
+  maiúsculas, `Path` vira `PATH`), diretório de trabalho, entrada e saída padrão, encoding,
+  sinais, handles e Job herdados. Confira no processo real do filho, nos dois sistemas: o
+  inventário pelo código não vê esses itens.
 
 Linha: `ID | comportamento que precisa ficar | mecanismo do Python | fonte (arquivo:linha, teste,
 commit, decisão) | plataforma`. Mostre a contagem por área e peça a aprovação do inventário.
@@ -188,7 +193,10 @@ Todos passam antes de dizer "migrado":
    o Python, nenhuma volta entre os dois. Antes de apagar o Python, cada pytest da área tem par
    Rust no `conferencia.md`.
 5. **Uso real:** release compilado de checkout limpo do commit, com o Python na mesma versão do
-   contrato, no Linux e no Windows (DELPHI-02) quando a área tem ramo de plataforma.
+   contrato, no Linux e no Windows (DELPHI-02) quando a área tem ramo de plataforma. Inclui criar
+   uma sessão de cada provedor instalado. Migração que muda como o servidor sobe, se instala ou
+   se atualiza também cumpre a regra "Atualização real antes do merge" de
+   `docs/decisoes/instalacao.md`, registrada no `conferencia.md`.
 6. **Desempenho** (`medicao.md`): o mesmo roteiro antes e depois, p50/p95 das rotas, CPU e
    memória, também numa máquina Windows fraca como a DELPHI-02 (4 vCPU), e os marcadores do
    diário (`pool.espera`, `loop.atraso`, rotas ≥ 1 s). Procure volta Python → Rust → Python

@@ -32,7 +32,7 @@ vi.mock('../../net/configureCore', () => ({ configureCore: () => {} }));
 vi.mock('../../stores/prefs', () => ({ prefs: { getString: () => mocks.savedFatal, getBoolean: () => undefined, set: (_k: string, v: string) => { mocks.savedFatal = v; } } }));
 vi.mock('../../stores/chat', () => ({ setChatsForeground: () => {}, syncChatTranscripts: () => {} }));
 vi.mock('../../stores/sessions', () => ({
-  useSessions: { getState: () => ({ rows: [], setForeground: () => {} }), subscribe: () => () => {} },
+  useSessions: { getState: () => ({ setForeground: () => {}, rows: [] }), subscribe: () => () => {} },
   setMachineDiscovery: (fn: typeof mocks.connected) => { mocks.connected = fn; },
 }));
 vi.mock('../../stores/aparencia', () => ({ aplicarTemaSalvo: () => {}, setTabletTextScale: () => {}, useAparencia: Object.assign((select: (s: object) => unknown) => select({}), { getState: () => ({}) }) }));

@@ -11,7 +11,8 @@
 #   ./scripts/services-launchd.sh --ativo     # sai 0 só com o backend de pé (prova do instalador)
 #   ./scripts/services-launchd.sh --uninstall # para e remove o serviço
 #
-# A configuração continua no backend/.env, como no `uv run python -m app.main` na mão.
+# A configuração fica no ~/.hangar/config/.env (ou no backend/.env de máquina não migrada), lida
+# pelo próprio hangar-server.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -25,7 +26,10 @@ log() { printf '\033[36m==>\033[0m %s\n' "$*"; }
 
 carregado() { launchctl print "$ALVO" >/dev/null 2>&1; }
 pid_atual() { launchctl print "$ALVO" 2>/dev/null | awk '$1 == "pid" && $2 == "=" {print $3; exit}'; }
-PORTA=$(grep '^CP_PORT=' "$REPO/backend/.env" 2>/dev/null | tail -1 | cut -d= -f2- || true)
+# O mesmo `.env` que o servidor lê: o de ~/.hangar/config numa máquina migrada.
+ENV_FILE="$REPO/backend/.env"
+if [[ -f "$HOME/.hangar/config/.env" ]]; then ENV_FILE="$HOME/.hangar/config/.env"; fi
+PORTA=$(grep '^CP_PORT=' "$ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2- || true)
 PORTA=${PORTA:-8765}
 # Pid sozinho não prova nada: num ciclo de queda o launchd sempre tem um processo novo subindo.
 # De pé = o serviço tem processo E o backend responde, por até 60 s (a subida leva uns segundos).
@@ -57,10 +61,9 @@ case "${1:-}" in
   *) echo "uso: $0 [--restart|--status|--ativo|--uninstall]" >&2; exit 2 ;;
 esac
 
-# O Python do venv direto, sem `uv run` no meio: o sinal de parar do launchd chega ao próprio
-# backend, que encerra o hangar-server filho. Com o uv no meio, matar o uv deixava o backend órfão.
-PY_BIN="$REPO/backend/.venv/bin/python"
-[ -x "$PY_BIN" ] || { echo "venv do backend não encontrado — rode: cd backend && uv sync" >&2; exit 1; }
+xml() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
+# O hangar-server sobe sozinho, com a mesma escolha de binário do CLI.
+PROGRAMA="<string>$(xml "$REPO/scripts/hangar-server-command")</string>"
 # O agente nasce sem o PATH do shell: o backend abre `claude`, `tmux`, `node` e `tailscale`.
 PATH_SERVICO="$HOME/.local/bin"
 if command -v node >/dev/null; then PATH_SERVICO="$PATH_SERVICO:$(dirname "$(command -v node)")"; fi
@@ -68,7 +71,6 @@ PATH_SERVICO="$PATH_SERVICO:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/
 # Sem locale o tmux e o Claude desenham acento e símbolo como `_`.
 LOCALE="${LC_ALL:-${LANG:-en_US.UTF-8}}"
 
-xml() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
 
 plist() {
   cat <<EOF
@@ -79,7 +81,7 @@ plist() {
   <key>Label</key><string>$LABEL</string>
   <key>ProgramArguments</key>
   <array>
-    <string>$(xml "$PY_BIN")</string><string>-m</string><string>app.main</string>
+    $PROGRAMA
   </array>
   <key>WorkingDirectory</key><string>$(xml "$REPO/backend")</string>
   <key>EnvironmentVariables</key>

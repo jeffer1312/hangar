@@ -80,6 +80,9 @@ struct Published {
     /// Avisos da CLI ignorados nesta máquina; só o dono recebe.
     notice_ignores: Option<Bytes>,
     notice_ignores_seq: u64,
+    /// Resumo da revisão do trabalho de cada sessão atual; só o dono recebe.
+    work_reviews: Option<Bytes>,
+    work_reviews_seq: u64,
     /// Aparelhos que já abriram a lista; só o dono recebe.
     devices: Option<Bytes>,
     devices_seq: u64,
@@ -156,7 +159,9 @@ impl InternalSubscription {
 struct Last { sig: Option<String>, nav: Vec<(String, crate::nav_requests::Marker)>, shortcuts: Option<String>,
     keyring: Option<crate::keyring::KeyringState>, tags: Option<Arc<str>>, tags_error: Option<&'static str>,
     devices: Option<Arc<str>>, vault: Option<Arc<crate::vault::requests::Feed>>,
-    notice_ignores: Option<Arc<str>>, notice_ignores_failed: bool }
+    notice_ignores: Option<Arc<str>>, notice_ignores_failed: bool, work_reviews: Option<Value>,
+    /// Versão do motor e linhas da última leitura dos resumos: iguais, o corpo não mudou.
+    work_reviews_read: Option<(u64, Arc<Vec<SessionRow>>, Arc<crate::list::facts::ListFacts>)> }
 
 /// Pânico fora da produção (assinatura, publicação) não deixa o hub sem produtor: as listas abertas
 /// ficariam só com `ping`, e nenhuma nova religaria.
@@ -191,6 +196,7 @@ async fn produce(hub: Arc<ListHub>, list: Arc<ListBridge>, devices: Arc<Registry
         }
     });
     let mut vault = hub.vault.clone();
+    let review = list.work_review.get().cloned();
     loop {
         let clients = {
             let mut r = lock(&hub.refs);
@@ -226,6 +232,7 @@ async fn produce(hub: Arc<ListHub>, list: Arc<ListBridge>, devices: Arc<Registry
         if clients > 0 {
             publish_tags(&hub.tx, &mut last, list.tags.read().await, &diag);
             publish_notice_ignores(&hub.tx, &mut last, list.notice_ignores.read().await, &diag);
+            publish_engine_reviews(&hub.tx, &mut last, review.as_deref());
             // Aparelho novo acorda pelo `changed`; aqui a primeira publicação e o aviso lido com a trava ocupada (o
             // retrato igual não sai de novo).
             if let Some(json) = devices.current() { publish_devices(&hub.tx, &mut last, json); }
@@ -255,6 +262,11 @@ async fn produce(hub: Arc<ListHub>, list: Arc<ListBridge>, devices: Arc<Registry
                     publish_notice_ignores(&hub.tx, &mut last, list.notice_ignores.read().await, &diag);
                     continue;
                 }
+                // Único consumidor do `changed` do motor (`notify_one`).
+                () = work_review_changed(review.as_deref()), if clients > 0 => {
+                    publish_engine_reviews(&hub.tx, &mut last, review.as_deref());
+                    continue;
+                }
                 () = devices.changed.notified(), if clients > 0 => {
                     if let Some(json) = devices.current() { publish_devices(&hub.tx, &mut last, json); }
                     continue;
@@ -264,7 +276,10 @@ async fn produce(hub: Arc<ListHub>, list: Arc<ListBridge>, devices: Arc<Registry
             tokio::time::sleep(COALESCE).await;
             let Some(asked) = files.drain(first, &diag) else { break };
             match list.reclassify(asked).await {
-                Ok(Partial::Done(p)) => publish(&hub.tx, &mut last, Ok(p), &diag, list.env().dirs.as_ref().map(|dirs| dirs.home.as_path())),
+                Ok(Partial::Done(p)) => {
+                    publish(&hub.tx, &mut last, Ok(p), &diag, list.env().dirs.as_ref().map(|dirs| dirs.home.as_path()));
+                    if clients > 0 { publish_engine_reviews(&hub.tx, &mut last, review.as_deref()); }
+                }
                 // Sem produção guardada (fatos desconhecidos, invalidada) quem resolve é o tique: rodar a
                 // inteira a cada escrita tiraria o teto de frequência.
                 Ok(Partial::Unchanged | Partial::NeedsFull) => {}
@@ -569,6 +584,39 @@ fn publish_notice_ignores(tx: &watch::Sender<Arc<Published>>, last: &mut Last, r
     }
 }
 
+async fn work_review_changed(engine: Option<&hangar_work_review::Engine>) {
+    match engine {
+        Some(engine) => engine.changed().notified().await,
+        None => std::future::pending().await,
+    }
+}
+
+/// Fora da rodada: segue o `changed` do motor e as linhas publicadas, porque sessão renomeada ou fechada
+/// sai do evento. Sai só quando o JSON muda; antes da primeira lista boa não há sessões a resumir.
+fn publish_engine_reviews(tx: &watch::Sender<Arc<Published>>, last: &mut Last, engine: Option<&hangar_work_review::Engine>) {
+    if let Some(engine) = engine {
+        publish_work_reviews(tx, last, engine.summaries_version(), |current| engine.summaries_for(current));
+    }
+}
+
+/// `version` lida antes de `summaries`: mesma versão e mesmas linhas publicadas não releem o motor.
+fn publish_work_reviews(tx: &watch::Sender<Arc<Published>>, last: &mut Last, version: u64, summaries: impl FnOnce(&[(&str, Option<&str>)]) -> Value) {
+    let Some(produced) = tx.borrow().rows.clone() else { return };
+    let same = last.work_reviews_read.as_ref()
+        .is_some_and(|(seen, rows, facts)| *seen == version && Arc::ptr_eq(rows, &produced.rows) && Arc::ptr_eq(facts, &produced.facts));
+    if same { return; }
+    last.work_reviews_read = Some((version, produced.rows.clone(), produced.facts.clone()));
+    let current: Vec<(&str, Option<&str>)> = visible(&produced).into_iter().map(|row| (row.name.as_str(), row.lifecycle_id.as_deref())).collect();
+    let body = summaries(&current);
+    // Igualdade de `Value`, não de texto: a ordem das chaves segue a das linhas.
+    if last.work_reviews.as_ref() == Some(&body) { return; }
+    let mut next = (**tx.borrow()).clone();
+    next.work_reviews = Some(sse_frame("work_reviews", &body.to_string(), None));
+    next.work_reviews_seq += 1;
+    last.work_reviews = Some(body);
+    tx.send_replace(Arc::new(next));
+}
+
 /// Fora da rodada, como `tags`: sai só quando um aparelho entra (o registro troca o `Arc`).
 fn publish_devices(tx: &watch::Sender<Arc<Published>>, last: &mut Last, json: Arc<str>) {
     if last.devices.as_ref().is_some_and(|prev| Arc::ptr_eq(prev, &json)) { return; }
@@ -596,7 +644,7 @@ fn nav_entries(nav: &[(String, crate::nav_requests::Marker)]) -> Vec<(String, f6
 
 /// O que uma conexão já entregou.
 #[derive(Default)]
-struct Sent { sessions: u64, error: u64, shortcuts: u64, keyring: u64, tags: u64, notice_ignores: u64, devices: u64, vault: u64, nav: HashMap<String, f64> }
+struct Sent { sessions: u64, error: u64, shortcuts: u64, keyring: u64, tags: u64, notice_ignores: u64, work_reviews: u64, devices: u64, vault: u64, nav: HashMap<String, f64> }
 
 /// Quadros que esta conexão ainda não mandou do que está publicado.
 fn frames(p: &Published, sent: &mut Sent) -> Vec<Bytes> {
@@ -625,6 +673,10 @@ fn frames(p: &Published, sent: &mut Sent) -> Vec<Bytes> {
     if let Some(n) = p.notice_ignores.as_ref().filter(|_| sent.notice_ignores != p.notice_ignores_seq) {
         sent.notice_ignores = p.notice_ignores_seq;
         out.push(n.clone());
+    }
+    if let Some(w) = p.work_reviews.as_ref().filter(|_| sent.work_reviews != p.work_reviews_seq) {
+        sent.work_reviews = p.work_reviews_seq;
+        out.push(w.clone());
     }
     if let Some(d) = p.devices.as_ref().filter(|_| sent.devices != p.devices_seq) {
         sent.devices = p.devices_seq;
@@ -885,7 +937,7 @@ mod tests {
     #[tokio::test]
     async fn notice_ignores_event_follows_what_the_route_published() {
         let (tx, _rx) = watch::channel(Arc::new(Published::default()));
-        let (mut last, mut sent, diag) = (Last::default(), Sent::default(), DiagClient::new("127.0.0.1:9".parse().unwrap(), String::new()));
+        let (mut last, mut sent, diag) = (Last::default(), Sent::default(), DiagClient::new());
         let read = |json: &str| Some(Ok(Arc::<str>::from(json)));
         publish_notice_ignores(&tx, &mut last, read(r#"{"keys":[]}"#), &diag);
         let first = frames(&tx.borrow(), &mut sent);
@@ -898,6 +950,77 @@ mod tests {
         publish_notice_ignores(&tx, &mut last, read(r#"{"keys":["hook:Stop"]}"#), &diag);
         let changed = frames(&tx.borrow(), &mut sent);
         assert!(changed.len() == 1 && std::str::from_utf8(&changed[0]).unwrap().contains("hook:Stop"));
+    }
+
+    fn with_rows(tx: &watch::Sender<Arc<Published>>, rows: &[(&str, &str)]) {
+        let rows = rows.iter().map(|(name, life)| serde_json::from_value(json!({"name": name, "lifecycle_id": life})).unwrap()).collect();
+        let produced = Produced { rows: Arc::new(rows), facts: Arc::new(crate::list::facts::ListFacts { unknown: false, ..Default::default() }), facts_ok: true };
+        let mut next = (**tx.borrow()).clone();
+        next.rows = Some(produced);
+        tx.send_replace(Arc::new(next));
+    }
+
+    /// Resumos guardados por (nome, vida), filtrados pelas linhas atuais como o motor faz.
+    fn summaries(stored: &'static [(&'static str, &'static str, &'static str)]) -> impl Fn(&[(&str, Option<&str>)]) -> Value {
+        move |current| {
+            let reviews: serde_json::Map<String, Value> = stored.iter()
+                .filter(|(name, life, _)| current.iter().any(|(n, l)| n == name && *l == Some(*life)))
+                .map(|(name, _, state)| ((*name).to_owned(), json!({"review_id": "r-1", "state": state, "badge": null, "updated_at": "2026-11-18T10:00:00Z"})))
+                .collect();
+            json!({"reviews": reviews})
+        }
+    }
+
+    fn work_reviews_body(frames: &[Bytes]) -> Option<Value> {
+        let frame = std::str::from_utf8(frames.iter().find(|f| f.starts_with(b"event: work_reviews\r\n"))?).unwrap();
+        let data = frame.lines().find_map(|line| line.strip_prefix("data: "))?;
+        Some(serde_json::from_str(data).unwrap())
+    }
+
+    /// O evento sai na primeira lista, de novo só quando o resumo muda, e perde a sessão que saiu das linhas.
+    #[test]
+    fn work_reviews_event_follows_the_summaries_and_the_rows() {
+        let (tx, _rx) = watch::channel(Arc::new(Published::default()));
+        let (mut last, mut sent) = (Last::default(), Sent::default());
+        publish_work_reviews(&tx, &mut last, 0, summaries(&[("a", "l1", "waiting")]));
+        assert!(frames(&tx.borrow(), &mut sent).is_empty(), "sem lista boa não há o que resumir");
+        with_rows(&tx, &[("a", "l1"), ("b", "l2")]);
+        frames(&tx.borrow(), &mut sent);
+        publish_work_reviews(&tx, &mut last, 0, summaries(&[("a", "l1", "waiting")]));
+        let first = work_reviews_body(&frames(&tx.borrow(), &mut sent)).expect("primeira publicação");
+        assert_eq!(first["reviews"]["a"]["state"], "waiting");
+        assert!(first["reviews"].get("b").is_none(), "sessão sem revisão fica fora");
+        publish_work_reviews(&tx, &mut last, 0, |_| panic!("mesma versão e mesmas linhas não releem o motor"));
+        publish_work_reviews(&tx, &mut last, 1, summaries(&[("a", "l1", "waiting")]));
+        assert!(frames(&tx.borrow(), &mut sent).is_empty(), "o mesmo resumo não sai de novo");
+        publish_work_reviews(&tx, &mut last, 2, summaries(&[("a", "l1", "done")]));
+        let changed = work_reviews_body(&frames(&tx.borrow(), &mut sent)).expect("resumo mudou");
+        assert_eq!(changed["reviews"]["a"]["state"], "done");
+        // Renomeada: o nome antigo sai das linhas, e o resumo dele com ele, mesmo sem versão nova.
+        with_rows(&tx, &[("a2", "l1"), ("b", "l2")]);
+        frames(&tx.borrow(), &mut sent);
+        publish_work_reviews(&tx, &mut last, 2, summaries(&[("a", "l1", "done")]));
+        let renamed = work_reviews_body(&frames(&tx.borrow(), &mut sent)).expect("linhas mudaram");
+        assert_eq!(renamed, json!({"reviews": {}}));
+    }
+
+    #[tokio::test]
+    async fn the_work_reviews_event_reaches_the_owner_list_and_never_a_guest() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dirs = crate::list::discover_other::Dirs { home: tmp.path().into(), claude: tmp.path().join(".claude"),
+            codex_home: tmp.path().join(".codex"), pi_sessions: tmp.path().join("pi"), omp_config: tmp.path().join("omp"),
+            omp_agent: tmp.path().join("omp/agent"), kimi_home: tmp.path().join("kimi") };
+        let share = crate::share::from_env(Some(tmp.path().join("shares.json")), Some(&dirs), "missing-test-mux".into(), None).unwrap();
+        let hub = Arc::new(ListHub::default());
+        with_rows(&hub.tx, &[("a", "l1")]);
+        publish_work_reviews(&hub.tx, &mut Last::default(), 0, summaries(&[("a", "l1", "waiting")]));
+        let (owner_tx, owner_rx) = mpsc::channel(16);
+        tokio::spawn(client_loop(Subscription { hub: hub.clone(), rx: hub.tx.subscribe(), owner: true }, owner_tx));
+        let (guest_tx, guest_rx) = mpsc::channel(16);
+        let rx = hub.tx.subscribe();
+        tokio::spawn(guest_loop(Subscription { hub, rx, owner: false }, share, "tok".into(), guest_tx));
+        assert!(work_reviews_body(&drain(owner_rx).await).is_some());
+        assert!(work_reviews_body(&drain(guest_rx).await).is_none());
     }
 
     #[test]

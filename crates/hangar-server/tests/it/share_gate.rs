@@ -550,14 +550,25 @@ async fn inbound_guest_header_never_reaches_the_handler() {
     assert_eq!(v["x_guest"], false);
 }
 
+/// O cabeçalho de convidado vindo de fora não faz de ninguém convidado: sem token, a rota do Rust
+/// recusa como recusaria qualquer estranho, e nada chega ao Python.
 #[tokio::test]
-async fn proxy_strips_inbound_guest_header() {
+async fn inbound_guest_header_grants_nothing() {
     use crate::fake::*;
-    let (fake, up) = spawn_fake().await;
-    let srv = spawn_server(config(up, "127.0.0.1")).await;
-    let r = client().get(format!("http://{srv}/api/qualquer")).header("x-hangar-guest", "forjado")
+    let (fake, _) = spawn_fake().await;
+    let srv = spawn_server_for(&fake, config("127.0.0.1")).await;
+    let r = client().get(format!("http://{srv}/api/diag/arquivo")).header("x-hangar-guest", "forjado")
         .send().await.unwrap();
-    assert_eq!(r.text().await.unwrap(), "from-python");
-    let (_, headers) = fake.last_hit();
-    assert!(!headers.contains_key("x-hangar-guest"));
+    assert_eq!(r.status(), 401);
+    assert_eq!(json_of(r).await["detail"]["code"], "erro_nao_autorizado");
+}
+
+/// W-09 na 8766: o convidado de convite não pergunta quem é a sessão; o porteiro recusa antes da rota.
+#[tokio::test]
+async fn invite_guest_whoami_is_refused_by_the_gate() {
+    let h = harness().await;
+    let t = h.token("cc", Kind::Share);
+    let r = client().get(h.url("/api/whoami")).bearer_auth(&t).header("x-hangar-session", "cc").send().await.unwrap();
+    assert_eq!(r.status(), 403);
+    assert_eq!(json_of(r).await["detail"], json!({"code": "erro_fora_do_convite", "params": {}, "msg": "fora da sessao compartilhada"}));
 }

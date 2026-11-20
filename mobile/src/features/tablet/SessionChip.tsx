@@ -8,6 +8,8 @@ import { Icon } from '../../ui/Icon';
 import { Sheet } from '../../ui/Sheet';
 import { MACHINE_ICON_NAME } from '../tags/tagVisuals';
 import { superficie } from '../../theme/superficie';
+import { useWorkReviewSummary } from '../workReview/summaries';
+import { badgeColor } from '../workReview/tones';
 import * as m from '../../paraglide/messages';
 
 type Props = {
@@ -17,7 +19,11 @@ type Props = {
   full?: boolean;
   selected?: { serverId: string; name: string };
   onPick(session: AggSession): void;
+  onWorkReview?(session: AggSession): void;
 };
+
+// O texto mede uns 16 pt: a folga completa os 44 do toque dentro dos 74 da barra.
+const REVIEW_HIT_SLOP = { top: 14, bottom: 14, left: 6, right: 6 };
 
 const keyOf = (s: { serverId: string; name: string }) => `${s.serverId}::${s.name}`;
 const waits = (s: AggSession) => s.state === 'awaiting_input' || !!s.pending_questions || !!s.limited;
@@ -36,7 +42,7 @@ function shortName(name: string, names: string[]): string {
   return rest.length > 12 ? `${rest.slice(0, 11).join('')}…` : rest.join('');
 }
 
-export const SessionChip = memo(function SessionChip({ session, members = [], label, full = false, selected, onPick }: Props) {
+export const SessionChip = memo(function SessionChip({ session, members = [], label, full = false, selected, onPick, onWorkReview }: Props) {
   const { theme } = useUnistyles();
   const [open, setOpen] = useState(false);
   const children = [...members].sort((a, b) => Number(waits(b)) - Number(waits(a)));
@@ -44,6 +50,7 @@ export const SessionChip = memo(function SessionChip({ session, members = [], la
   const on = [session, ...members].some(s => keyOf(s) === selectedKey);
   const grouped = members.length > 0;
   const pendingQuestions = (session.pending_questions ?? 0) + children.filter(waits).length;
+  const review = useWorkReviewSummary(session.serverId, session.name);
   const names = [session, ...members].map(s => s.name);
   const agents = new Map<AggSession['provider'], number>();
   for (const child of children) {
@@ -58,7 +65,7 @@ export const SessionChip = memo(function SessionChip({ session, members = [], la
   const ahead = full ? session.git_ahead ?? 0 : 0;
   const behind = full ? session.git_behind ?? 0 : 0;
   const meta = [showFolder ? folder : null, branch, ahead > 0 || behind > 0 ? m.git_sync_titulo({ ahead, behind }) : null].filter(Boolean).join(', ');
-  const aria = `${session.name}, ${description(session)}${label ? `, ${label.trim()}` : ''}${meta ? `, ${meta}` : ''}${pendingQuestions > 0 ? `, ${m.ask_perguntas()}: ${pendingQuestions}` : ''}${full && session.headless ? `, ${m.criar_modo_exec_headless()}` : ''}`;
+  const aria = `${session.name}, ${description(session)}${label ? `, ${label.trim()}` : ''}${meta ? `, ${meta}` : ''}${pendingQuestions > 0 ? `, ${m.ask_perguntas()}: ${pendingQuestions}` : ''}${review?.badge ? `, ${review.badge.text}` : ''}${full && session.headless ? `, ${m.criar_modo_exec_headless()}` : ''}`;
   const pick = (s: AggSession) => { setOpen(false); onPick(s); };
   const showName = (s: AggSession) => Alert.alert(s.name, description(s));
   return (
@@ -84,6 +91,13 @@ export const SessionChip = memo(function SessionChip({ session, members = [], la
                 {behind > 0 ? <Text style={[styles.metaText, styles.sync, { color: theme.tokens.status.warning }]}>{`↓${behind}`}</Text> : null}
               </View> : null}
             </View>
+            {review?.badge ? onWorkReview ? (
+              // Toque no texto abre a sessão já na aba Revisão; no resto da aba, a sessão como sempre.
+              <Pressable testID="review-chip" onPress={() => { setOpen(false); onWorkReview(session); }} hitSlop={REVIEW_HIT_SLOP}
+                accessibilityRole="button" accessibilityLabel={review.badge.text} style={styles.reviewTarget}>
+                <Text numberOfLines={1} style={[styles.review, { color: badgeColor(theme, review.badge.tone) }]}>{review.badge.text}</Text>
+              </Pressable>
+            ) : <Text numberOfLines={1} style={[styles.review, { color: badgeColor(theme, review.badge.tone) }]}>{review.badge.text}</Text> : null}
             {pendingQuestions > 0 ? <Text style={styles.pending}>{`? ${pendingQuestions}`}</Text> : null}
           </Pressable>
           {grouped ? <Pressable testID="agent-count" onPress={() => setOpen(true)} accessibilityRole="button"
@@ -144,6 +158,8 @@ const styles = StyleSheet.create((theme) => ({
   title: { flexDirection: 'row', alignItems: 'center', gap: theme.base.space[1] },
   titleName: { flexShrink: 1 },
   pending: { flexShrink: 0, fontSize: theme.base.text.xxs, color: theme.tokens.status.warning },
+  review: { flexShrink: 1, maxWidth: 96, fontSize: theme.base.text.xxs, fontWeight: theme.base.weight.semibold },
+  reviewTarget: { flexShrink: 1, maxWidth: 96 },
   name: { fontSize: theme.base.text.sm, fontWeight: theme.base.weight.semibold, color: theme.tokens.text.primary },
   machine: { position: 'absolute', top: -8, right: 8, maxWidth: 160, flexDirection: 'row', alignItems: 'center', gap: theme.base.space[1], paddingHorizontal: theme.base.space[1], borderRadius: theme.base.radius.sm, backgroundColor: theme.tokens.bg.base },
   meta: { flexDirection: 'row', alignItems: 'center', gap: theme.base.space[1], overflow: 'hidden' },

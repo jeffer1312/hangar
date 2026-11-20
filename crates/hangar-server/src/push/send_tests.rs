@@ -60,7 +60,6 @@ async fn guest_push_gate_uses_shared_last_good_owner_and_current_life() {
     assert!(service.lives.set(lives.clone()).is_ok());
     let mut state = AppState::new(Config {
         listen: "127.0.0.1:1".parse().unwrap(),
-        upstream: "127.0.0.1:2".parse().unwrap(),
         internal_secret: "fixture".into(),
         auth_token: "owner".into(),
         log_path: None,

@@ -1,7 +1,7 @@
 import { memo, useEffect, useState } from 'react';
 import { ActivityIndicator, Pressable, Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { discardsHeld, holdsQueue, waitsInQueue, writeHeld, type ChatEvent, type QuoteRef, type SessionInfo } from '@hangar/core';
+import { discardsHeld, holdsQueue, waitsInConversation, waitsInQueue, writeHeld, type ChatEvent, type QuoteRef, type SessionInfo } from '@hangar/core';
 import { chatStore } from '../stores/chat';
 import { UserBubble } from './UserBubble';
 import * as m from '../paraglide/messages';
@@ -37,6 +37,31 @@ function DiscardQueued({ id, text, sessionName, serverId }: { id: string; text: 
   );
 }
 
+// "Enviar agora" corta o turno, como o Orientar do painel, e usa a mesma ação (os erros aparecem no composer).
+function SendNow({ id, text, sessionName, serverId }: { id: string; text: string; sessionName: string; serverId: string }) {
+  const chat = chatStore(serverId, sessionName);
+  const busy = chat.use((s) => s.queueBusy);
+  return (
+    <Pressable accessibilityRole="button" accessibilityLabel={m.queued_conversation_send_now_message({ text: text.replace(/\s+/g, ' ').trim().slice(0, 80) })}
+      accessibilityState={{ disabled: busy }} disabled={busy} onPress={() => void chat.steerQueued(id)} style={styles.sendNowButton}>
+      <Text style={[styles.sendNow, busy && styles.dim]}>{m.queued_conversation_send_now()}</Text>
+    </Pressable>
+  );
+}
+
+// O Codex não tem como cortar a vez dela: lá só "Em espera".
+function ConversationWaiting({ id, text, sessionName, serverId, sendNow }: { id: string; text: string; sessionName?: string; serverId?: string; sendNow: boolean }) {
+  return (
+    <View style={styles.waiting}>
+      <Text style={styles.muted}>{m.queued_conversation_waiting()}</Text>
+      {sendNow && sessionName && serverId ? <>
+        <Text style={styles.muted}> · </Text>
+        <SendNow id={id} text={text} sessionName={sessionName} serverId={serverId} />
+      </> : null}
+    </View>
+  );
+}
+
 export const QueuedBubble = memo(function QueuedBubble({ event, working, problem, provider, headless, sessionName, serverId, onQuoteClick }: {
   event: ChatEvent;
   onQuoteClick?: (ref: QuoteRef) => void;
@@ -50,6 +75,7 @@ export const QueuedBubble = memo(function QueuedBubble({ event, working, problem
   const queued = event.id.startsWith('queued-');
   const failed = event.desistiu === true;
   const held = holdsQueue(event, problem);
+  const conversation = waitsInConversation(event);
   const notes: string[] = [];
   if (!event.queued_consumed) {
     if (failed || event.id.startsWith('held:') || event.hook_error != null) {
@@ -59,8 +85,9 @@ export const QueuedBubble = memo(function QueuedBubble({ event, working, problem
     else if (held) notes.push(m.native_delivery_unproved());
     else if (queued && event.queued_delivered !== true && writeHeld(problem)) notes.push(m.native_queue_held());
     else if (queued && event.queued_delivered !== true && problem === 'terminal_input_no_safe_delivery') notes.push(m.native_no_safe_delivery());
-    else if (queued) notes.push(event.queued_delivered === true ? m.native_delivering() : m.native_queued());
+    else if (queued && !conversation) notes.push(event.queued_delivered === true ? m.native_delivering() : m.native_queued());
   }
+  const waiting = conversation && !held && !notes.length;
 
   return (
     <View>
@@ -69,6 +96,8 @@ export const QueuedBubble = memo(function QueuedBubble({ event, working, problem
           eventId={event.id} imageCount={event.image_count ?? 0} onQuoteClick={onQuoteClick} />
       </View>
       {notes.length ? <Text style={styles.note}>{notes.join(' · ')}</Text> : null}
+      {waiting ? <ConversationWaiting id={event.id.slice('queued-'.length)} text={event.text ?? ''} sessionName={sessionName} serverId={serverId}
+        sendNow={provider !== 'codex'} /> : null}
       {queued && !event.queued_consumed && (failed || discardsHeld(event, problem)) && sessionName && serverId
         ? <DiscardQueued id={event.id.slice('queued-'.length)} text={event.text ?? ''} sessionName={sessionName} serverId={serverId} /> : null}
     </View>
@@ -78,6 +107,10 @@ export const QueuedBubble = memo(function QueuedBubble({ event, working, problem
 const styles = StyleSheet.create((theme) => ({
   dim: { opacity: 0.5 },
   note: { fontSize: theme.base.text.xs, color: theme.tokens.status.warning, textAlign: 'right', marginTop: theme.base.space[1] },
+  waiting: { flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'center', marginTop: theme.base.space[1] },
+  muted: { fontSize: theme.base.text.xs, color: theme.tokens.text.muted },
+  sendNowButton: { minHeight: 44, minWidth: 44, justifyContent: 'center', paddingHorizontal: theme.base.space[2] },
+  sendNow: { fontSize: theme.base.text.xs, fontWeight: theme.base.weight.semibold, color: theme.tokens.accent.base },
   action: { alignItems: 'flex-end' },
   button: { minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: theme.base.space[2], paddingHorizontal: theme.base.space[2] },
   label: { fontSize: theme.base.text.xs, color: theme.tokens.text.secondary },

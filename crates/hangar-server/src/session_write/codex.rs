@@ -219,10 +219,10 @@ pub fn permission_answer(sent: &Result<RuntimeReply, RuntimeError>) -> Answer {
         Ok(reply) if reply.disposition == Disposition::Accepted => (StatusCode::OK, reply.payload.clone()),
         Err(error) if error.code == "erro_modo_desconhecido" => picker(StatusCode::BAD_REQUEST, &error.message),
         Err(error) if error.code == "erro_permissao_ocupada" => (StatusCode::CONFLICT, detail_body("erro_permissao_ocupada", &error.message, json!({}))),
-        Err(error) => picker(StatusCode::SERVICE_UNAVAILABLE, &format!("não consegui reabrir o Codex: {}", error.message)),
+        Err(error) => picker(StatusCode::SERVICE_UNAVAILABLE, &format!("não consegui trocar a permissão do Codex: {}", error.message)),
         Ok(reply) => {
             let why = reply.payload["error"].as_str().unwrap_or("operação recusada pelo runtime");
-            picker(StatusCode::SERVICE_UNAVAILABLE, &format!("não consegui reabrir o Codex: {why}"))
+            picker(StatusCode::SERVICE_UNAVAILABLE, &format!("não consegui trocar a permissão do Codex: {why}"))
         }
     }
 }

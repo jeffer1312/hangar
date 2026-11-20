@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use fake::*;
 use hangar_server::groups::text::{ContractLine, Kind, TextArgs, protocol_text};
-use hangar_server::groups::orq::{PythonOrq, is_orchestrator};
+use hangar_server::groups::orq::{OrqVault, is_orchestrator};
 use hangar_server::groups::service::{OrqFacts, OrqPhase, PromoteError};
 use hangar_server::routes::AppState;
 use hangar_server::runtime::gateway::RuntimeRegistry;
@@ -47,37 +47,8 @@ async fn cano() -> String {
     format!("tcp:{address}")
 }
 
-async fn policy() -> std::net::SocketAddr {
-    use tokio::io::AsyncReadExt;
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    tokio::spawn(async move {
-        loop {
-            let Ok((stream, _)) = listener.accept().await else { return };
-            tokio::spawn(async move {
-                let mut reader = BufReader::new(stream);
-                loop {
-                    let mut length = 0usize;
-                    loop {
-                        let mut line = String::new();
-                        if reader.read_line(&mut line).await.unwrap_or(0) == 0 { return; }
-                        if line == "\r\n" { break; }
-                        if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") { length = value.trim().parse().unwrap(); }
-                    }
-                    let mut body = vec![0; length];
-                    reader.read_exact(&mut body).await.unwrap();
-                    let reply = json!({"ok":true,"data":{}}).to_string();
-                    let response = format!("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{reply}", reply.len());
-                    reader.get_mut().write_all(response.as_bytes()).await.unwrap();
-                }
-            });
-        }
-    });
-    address
-}
-
 async fn registry() -> Arc<RuntimeRegistry> {
-    Arc::new(RuntimeRegistry::new(policy().await, "secret-test".into(), "instance-test".into()).with_processes(Arc::new(crate::runtime_open::RecipeProcesses("sid-1"))))
+    Arc::new(RuntimeRegistry::new("instance-test".into()).with_processes(Arc::new(crate::runtime_open::RecipeProcesses("sid-1"))))
 }
 
 async fn open_headless(registry: &RuntimeRegistry, dir: &Path, name: &str) {
@@ -145,21 +116,19 @@ async fn open_terminal(registry: &RuntimeRegistry, dir: &Path, name: &str) {
     assert!(target.terminal && target.healthy, "entrada de terminal saudável");
 }
 
-async fn state(registry: Option<Arc<RuntimeRegistry>>, wait: Duration) -> (Arc<Fake>, AppState) {
-    let (python, upstream) = spawn_fake().await;
-    let mut state = AppState::new(config(upstream, "127.0.0.1"));
+async fn state(registry: Option<Arc<RuntimeRegistry>>, wait: Duration) -> AppState {
+    let mut state = AppState::new(config("127.0.0.1"));
     state.write_gate_wait = wait;
     if let Some(registry) = registry { assert!(state.state.runtime.set(registry).is_ok()); }
-    (python, state)
+    state
 }
 
 #[tokio::test]
 async fn notice_to_a_headless_claude_session_goes_through_rust() {
     let (dir, registry) = (tempfile::tempdir().unwrap(), registry().await);
     open_headless(&registry, dir.path(), "s").await;
-    let (python, st) = state(Some(registry), Duration::from_secs(5)).await;
+    let st = state(Some(registry), Duration::from_secs(5)).await;
     assert_eq!(deliver_text(&st, "s", "aviso").await, Ok(()));
-    assert_eq!(python.input_calls(), 0);
 }
 
 #[cfg(unix)]
@@ -167,9 +136,8 @@ async fn notice_to_a_headless_claude_session_goes_through_rust() {
 async fn notice_to_a_claude_terminal_session_goes_through_rust() {
     let (dir, registry) = (tempfile::tempdir().unwrap(), registry().await);
     open_terminal(&registry, dir.path(), "t").await;
-    let (python, st) = state(Some(registry), Duration::from_secs(5)).await;
+    let st = state(Some(registry), Duration::from_secs(5)).await;
     assert_eq!(deliver_text(&st, "t", "aviso").await, Ok(()));
-    assert_eq!(python.input_calls(), 0);
     // Sem pane de verdade o ator deixa o recado na fila dele: a prova de que foi o Rust que recebeu.
     let queued = hangar_server::runtime::queue::read_replaced_to_string(&dir.path().join("t.projection").join("t.jsonl")).unwrap();
     assert!(queued.contains("\"aviso\""), "{queued}");
@@ -180,9 +148,8 @@ async fn notice_to_a_headless_codex_session_goes_through_rust() {
     let (dir, registry) = (tempfile::tempdir().unwrap(), registry().await);
     let methods = Arc::new(std::sync::Mutex::new(Vec::new()));
     open_codex_headless(&registry, dir.path(), "c", methods.clone()).await;
-    let (python, st) = state(Some(registry), Duration::from_secs(5)).await;
+    let st = state(Some(registry), Duration::from_secs(5)).await;
     assert_eq!(deliver_text(&st, "c", "aviso").await, Ok(()));
-    assert_eq!(python.input_calls(), 0);
     assert!(methods.lock().unwrap().iter().any(|m| m == "turn/start"), "{:?}", methods.lock().unwrap());
 }
 
@@ -192,9 +159,8 @@ async fn codex_compact_notice_is_an_engine_control_in_rust() {
     let (dir, registry) = (tempfile::tempdir().unwrap(), registry().await);
     let methods = Arc::new(std::sync::Mutex::new(Vec::new()));
     open_codex_headless(&registry, dir.path(), "c", methods.clone()).await;
-    let (python, st) = state(Some(registry.clone()), Duration::from_secs(5)).await;
+    let st = state(Some(registry.clone()), Duration::from_secs(5)).await;
     assert_eq!(deliver_text(&st, "c", "/compact").await, Ok(()));
-    assert_eq!(python.input_calls(), 0, "o aviso não passa pelo Python");
     let seen = methods.lock().unwrap().clone();
     assert!(seen.iter().any(|m| m == "thread/compact/start") && !seen.iter().any(|m| m == "turn/start"), "{seen:?}");
     assert!(registry.ingress().enter("c", Duration::ZERO).await.is_ok(), "o passe foi solto");
@@ -205,10 +171,9 @@ async fn notice_waits_the_ingress_gate_and_answers_busy() {
     let (dir, registry) = (tempfile::tempdir().unwrap(), registry().await);
     open_headless(&registry, dir.path(), "s").await;
     registry.ingress().close("s", Duration::from_secs(1)).await.unwrap();
-    let (python, st) = state(Some(registry), Duration::from_millis(100)).await;
+    let st = state(Some(registry), Duration::from_millis(100)).await;
     let err = deliver_text(&st, "s", "aviso").await.unwrap_err();
     assert_eq!(err["code"], "session_transfer_busy");
-    assert_eq!(python.input_calls(), 0);
 }
 
 #[test]
@@ -243,9 +208,9 @@ fn native_run(home: &Path, ended: bool) {
 async fn orq_phase_maps_every_answer_and_failure_is_unknown() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().join("home");
-    let (python, mut st) = state(None, Duration::from_secs(5)).await;
+    let mut st = state(None, Duration::from_secs(5)).await;
     isolated_accounts(&mut st,&home);
-    let orq = PythonOrq::from_state(&st).with_paths(home.clone(),dir.path().join("pair"));
+    let orq = OrqVault::from_state(&st).with_paths(home.clone(),dir.path().join("pair"));
     assert_eq!(orq.phase("g1").await,OrqPhase::NotStarted);
     native_run(&home,false);
     assert_eq!(orq.phase("g1").await,OrqPhase::Live);
@@ -262,7 +227,6 @@ async fn orq_phase_maps_every_answer_and_failure_is_unknown() {
     std::fs::remove_dir_all(home.join(".hangar/orq")).unwrap();
     std::fs::write(home.join(".hangar/orq"),"ilegível").unwrap();
     assert_eq!(orq.phase("g1").await,OrqPhase::Unknown);
-    assert!(python.internal_bodies("orq/group-phase").is_empty());
 }
 
 #[tokio::test]
@@ -270,13 +234,13 @@ async fn orq_promote_ok_and_conflict_text() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().join("home");
     let pair = dir.path().join("pair");
-    let (python, mut st) = state(None, Duration::from_secs(5)).await;
+    let mut st = state(None, Duration::from_secs(5)).await;
     isolated_accounts(&mut st,&home);
     let root = home.join(".hangar/claude-headless");
     std::fs::create_dir_all(&root).unwrap();
     std::fs::create_dir_all(&pair).unwrap();
     std::fs::write(root.join("a.json"),"{\"key\":\"life-a\"}").unwrap();
-    let orq = PythonOrq::from_state(&st).with_paths(home.clone(),pair.clone());
+    let orq = OrqVault::from_state(&st).with_paths(home.clone(),pair.clone());
     assert_eq!(orq.promote("a","g1").await,Ok(()));
     let gid = hangar_server::orchestration::context::draft(&home,"a","unused").unwrap();
     let source = pair.join(format!("regras-{gid}.md"));
@@ -285,19 +249,17 @@ async fn orq_promote_ok_and_conflict_text() {
     std::fs::remove_file(&source).unwrap();
     std::fs::create_dir(&source).unwrap();
     assert!(matches!(orq.promote("a","g1").await,Err(PromoteError::Conflict(_))),"falha local de disco é conflito com restauração");
-    assert!(python.internal_bodies("orq/promote").is_empty());
 }
 
 #[tokio::test]
 async fn orchestrator_names_come_from_the_native_vault() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().join("home");
-    let (python, mut st) = state(None, Duration::from_secs(5)).await;
+    let mut st = state(None, Duration::from_secs(5)).await;
     isolated_accounts(&mut st,&home);
     let names = vec!["a".to_owned(), "g1-orq".to_owned()];
     native_run(&home,false);
     assert_eq!(is_orchestrator(&st,&names).await,Ok(vec!["g1-orq".into()]));
-    assert!(python.internal_bodies("orq/is-orchestrator").is_empty());
     std::fs::remove_dir_all(home.join(".hangar/orq")).unwrap();
     std::fs::write(home.join(".hangar/orq"),"ilegível").unwrap();
     assert!(is_orchestrator(&st,&names).await.is_err());

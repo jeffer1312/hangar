@@ -8,7 +8,9 @@ use std::time::SystemTime;
 use indexmap::IndexMap;
 use serde_json::{Map, Value};
 
-const SNAPSHOT: &str = include_str!("../../../../backend/app/pricing_data.json");
+const SNAPSHOT: &str = include_str!("../../data/pricing_data.json");
+/// Onde o snapshot embutido mora, relativo à raiz do repositório (`pricing-snapshot` o regrava).
+pub const SNAPSHOT_PATH: &str = "crates/hangar-server/data/pricing_data.json";
 const PREFIXES: [&str; 13] = [
     "anthropic/", "openai/", "moonshot/", "moonshotai/", "deepseek/", "cline-pass/",
     "clinepass/", "openrouter/", "zhipuai/", "google/", "cx/", "apikey/", "kimi-code/",

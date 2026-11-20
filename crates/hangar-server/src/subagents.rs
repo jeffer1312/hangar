@@ -43,17 +43,6 @@ pub async fn public(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
     serve(&st, target, req.uri().query(), req.headers()).await
 }
 
-/// Ponte das portas do Python (convidado 8766, Connect 8768): pedido já autenticado lá.
-pub async fn private(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    if !crate::workspace_routes::private_ok(&st, peer, req.headers()) {
-        return StatusCode::NOT_FOUND.into_response();
-    }
-    let Some(target) = req.headers().get("x-hangar-path").and_then(|v| v.to_str().ok()).and_then(target_of) else {
-        return StatusCode::BAD_REQUEST.into_response();
-    };
-    serve(&st, target, req.uri().query(), req.headers()).await
-}
-
 /// `(sessão, subagente)` de `/api/sessions/{name}/subagents[/{id}]`, já decodificado.
 fn target_of(path: &str) -> Option<(String, Option<String>)> {
     let decoded = percent_encoding::percent_decode_str(path).decode_utf8().ok()?;

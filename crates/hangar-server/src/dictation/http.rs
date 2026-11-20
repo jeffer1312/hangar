@@ -388,7 +388,16 @@ async fn limited_body(mut body: axum::body::Body) -> Result<bytes::Bytes, BodyEr
     use http_body_util::BodyExt;
     let mut data = bytes::BytesMut::new();
     while let Some(frame) = body.frame().await {
-        let Ok(chunk) = frame.map_err(|_| BodyError::Read)?.into_data() else { continue };
+        // O teto da borda (`edge_rules`) é o mesmo: chegar a ele é corpo grande, não leitura que falhou.
+        let frame = match frame {
+            Ok(frame) => frame,
+            Err(error) if crate::http_body_limit::is_limit(&error) => {
+                drain_later(body);
+                return Err(BodyError::TooLarge);
+            }
+            Err(_) => return Err(BodyError::Read),
+        };
+        let Ok(chunk) = frame.into_data() else { continue };
         if data.len() + chunk.len() > AUDIO_LIMIT {
             drain_later(body);
             return Err(BodyError::TooLarge);
@@ -400,8 +409,11 @@ async fn limited_body(mut body: axum::body::Body) -> Result<bytes::Bytes, BodyEr
 
 fn drain_later(mut body: axum::body::Body) {
     use http_body_util::BodyExt;
+    // Passado o teto da borda, cada pedaço volta como erro de limite: o descarte segue até o fim.
     tokio::spawn(tokio::time::timeout(std::time::Duration::from_secs(2), async move {
-        while let Some(Ok(_)) = body.frame().await {}
+        while let Some(frame) = body.frame().await {
+            if frame.as_ref().is_err_and(|error| !crate::http_body_limit::is_limit(error)) { break; }
+        }
     }));
 }
 

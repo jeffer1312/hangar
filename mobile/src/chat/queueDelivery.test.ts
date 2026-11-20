@@ -1,13 +1,13 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { configureApi, type ChatEvent } from '@hangar/core';
-import { answerWithDelivery, deliveryOptions, queueSendMode, readQueueJev, sendWithDelivery, timingFeedback } from './queueDelivery';
+import { answerWithDelivery, deliveryOptions, QUEUED_INSTEAD, queueSendMode, readQueueJev, sendWithDelivery, timingFeedback } from './queueDelivery';
 import * as m from '../paraglide/messages';
 
 const server = { id: 'owner', label: 'fixture', baseUrl: 'https://owner.test', token: 'owner-token' };
 const event = (id: string, kind: ChatEvent['kind'], text: string): ChatEvent => ({ id, kind, text });
 const events = [event('u', 'user_msg', 'criar tela'), event('a', 'assistant_msg', 'Posso usar azul?'),
   event('queued-q', 'user_msg', 'próxima tarefa'), event('pending-p', 'user_msg', 'pendente'), event('peer', 'user_msg', '[de: par] recado')];
-const select = (text = 'sim', changes: Partial<{ mode: 'queued' | 'direct' | 'jev'; ready: boolean; state: string; provider: string; headless: boolean }> = {}) => {
+const select = (text = 'sim', changes: Partial<{ mode: 'queued' | 'direct' | 'jev' | 'conversation'; ready: boolean; state: string; provider: string; headless: boolean }> = {}) => {
   const { mode = 'jev', ready = true, state = 'working', provider = 'codex', headless = false } = changes;
   return queueSendMode(mode, ready, state, provider, headless, text, events, null);
 };
@@ -101,11 +101,52 @@ it.each([
 });
 
 it('opções do modo: a salva vem marcada; Jev indisponível fica desativado e marca a Fila; sem Jev configurado some', () => {
-  const pick = (mode: 'queued' | 'direct' | 'jev', status: 'loading' | 'ready' | 'setup' | 'unsupported' | 'error') =>
+  const pick = (mode: 'queued' | 'direct' | 'jev' | 'conversation', status: 'loading' | 'ready' | 'setup' | 'unsupported' | 'error') =>
     deliveryOptions({ mode, status, help: 'h' }).map((o) => `${o.mode}:${o.checked ? 'on' : 'off'}:${o.disabled ? 'dis' : 'ok'}`);
-  expect(pick('direct', 'ready')).toEqual(['queued:off:ok', 'direct:on:ok', 'jev:off:ok']);
-  expect(pick('jev', 'ready')).toEqual(['queued:off:ok', 'direct:off:ok', 'jev:on:ok']);
-  expect(pick('jev', 'setup')).toEqual(['queued:on:ok', 'direct:off:ok']);
-  expect(pick('jev', 'error')).toEqual(['queued:on:ok', 'direct:off:ok', 'jev:off:dis']);
-  expect(pick('direct', 'loading')).toEqual(['queued:off:ok', 'direct:on:ok', 'jev:off:dis']);
+  expect(pick('direct', 'ready')).toEqual(['queued:off:ok', 'direct:on:ok', 'jev:off:ok', 'conversation:off:ok']);
+  expect(pick('jev', 'ready')).toEqual(['queued:off:ok', 'direct:off:ok', 'jev:on:ok', 'conversation:off:ok']);
+  expect(pick('jev', 'setup')).toEqual(['queued:on:ok', 'direct:off:ok', 'conversation:off:ok']);
+  expect(pick('jev', 'error')).toEqual(['queued:on:ok', 'direct:off:ok', 'jev:off:dis', 'conversation:off:ok']);
+  expect(pick('direct', 'loading')).toEqual(['queued:off:ok', 'direct:on:ok', 'jev:off:dis', 'conversation:off:ok']);
+  expect(pick('conversation', 'setup')).toEqual(['queued:off:ok', 'direct:off:ok', 'conversation:on:ok']);
+});
+
+it('"Na conversa" vale só com a sessão trabalhando, em Claude e Codex, e nunca para comando', () => {
+  const pick = (changes: Partial<{ state: string; provider: string; headless: boolean }>, text = 'oi') => {
+    const { state = 'working', provider = 'claude', headless = true } = changes;
+    return queueSendMode('conversation', false, state, provider, headless, text, events, null);
+  };
+  expect(pick({})).toEqual({ kind: 'conversation' });
+  // Com e sem terminal: o Claude Code lê a mensagem na pausa seguinte nos dois.
+  expect(pick({ headless: false })).toEqual({ kind: 'conversation' });
+  expect(pick({ provider: 'codex', headless: false })).toEqual({ kind: 'conversation' });
+  expect(pick({ provider: 'codex', headless: true })).toEqual({ kind: 'conversation' });
+  expect(pick({ state: 'idle' })).toBeUndefined();
+  expect(pick({ provider: 'kimi' })).toBeUndefined();
+  expect(pick({}, '/clear')).toBeUndefined();
+});
+
+it('"Na conversa" manda delivery; o servidor antigo recusa com 422 e a mensagem vai pela fila comum', async () => {
+  vi.mocked(fetch)
+    .mockResolvedValueOnce(new Response(JSON.stringify({ detail: [{ type: 'extra_forbidden', loc: ['body', 'delivery'],
+      msg: 'Extra inputs are not permitted', input: 'conversation' }] }), { status: 422 }))
+    .mockResolvedValueOnce(new Response('{"ok":true,"delivered":false}'));
+  await expect(sendWithDelivery(server, 'sess', 'oi', { kind: 'conversation' })).resolves.toBe(QUEUED_INSTEAD);
+  const calls = vi.mocked(fetch).mock.calls;
+  expect(calls).toHaveLength(2);
+  expect(calls[0][0]).toBe('https://owner.test/api/sessions/sess/input');
+  expect(JSON.parse(calls[0][1]!.body as string)).toEqual({ text: 'oi', delivery: 'conversation' });
+  expect(JSON.parse(calls[1][1]!.body as string)).toEqual({ text: 'oi' });
+});
+
+it('"Na conversa" que o servidor pôs na fila comum avisa, para o eco ir ao painel', async () => {
+  vi.mocked(fetch).mockResolvedValue(new Response('{"ok":true,"delivered":false,"conversation":false}'));
+  await expect(sendWithDelivery(server, 'sess', 'oi', { kind: 'conversation' })).resolves.toBe(QUEUED_INSTEAD);
+  expect(fetch).toHaveBeenCalledTimes(1);
+});
+
+it('"Na conversa" aceita de primeira não repete o envio', async () => {
+  vi.mocked(fetch).mockResolvedValue(new Response('{"ok":true,"delivered":false,"conversation":true}'));
+  await expect(sendWithDelivery(server, 'sess', 'oi', { kind: 'conversation' })).resolves.toBeNull();
+  expect(fetch).toHaveBeenCalledTimes(1);
 });

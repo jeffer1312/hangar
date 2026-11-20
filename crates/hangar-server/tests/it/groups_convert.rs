@@ -118,8 +118,6 @@ async fn both_sides_convert_to_the_same_group() {
     legacy(&n.lab, "s1", "casa::s0");
     tokio::join!(start(&n.casa), start(&n.lab));
     assert_converted(&n);
-    // As sessões já estavam pareadas: nenhum protocolo novo.
-    assert_eq!(n.casa.python.input_calls() + n.lab.python.input_calls(), 0);
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -1,134 +1,14 @@
-//! Pontes privadas do Rust para o que entra pelo Python (convidado 8766, Connect 8768, broadcast, grupo,
-//! par, MCP): a do Codex (com e sem terminal), que também recebe o `DELETE` que ele administra, e a das
-//! entrada, respostas de pergunta e painel da fila do Claude. O Python já autenticou e só repassa, num sentido: aqui a escrita roda
-//! como a do dono, com o corpo intacto, e o que o Rust não atende volta como 421, para o Python tratar
-//! sozinho (nunca outro repasse ao Rust).
+//! Fechamento de sessão (`DELETE /api/sessions/{name}`) e a limpeza depois dele.
 use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::extract::{ConnectInfo, Request, State};
-use axum::http::{Method, StatusCode, Uri};
-use axum::response::{IntoResponse, Response};
-use percent_encoding::{NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
+use axum::http::StatusCode;
+use axum::response::Response;
 use axum::body::Body;
 use serde_json::{Value, json};
 
 use crate::routes::AppState;
-
-pub(crate) use hangar_core::edge::BridgedOwner;
-
-fn not_ours() -> Response { StatusCode::MISDIRECTED_REQUEST.into_response() }
-
-/// Nome (sem o escape) e rota de `<prefixo><nome>/<rota>`.
-fn split(req: &Request, prefix: &str) -> Option<(String, String)> {
-    let (raw, rest) = req.uri().path().strip_prefix(prefix)?.split_once('/')?;
-    Some((percent_decode_str(raw).decode_utf8().ok()?.into_owned(), rest.to_owned()))
-}
-
-/// Vira o pedido do dono em `/api/sessions/<nome>/<rota>`, com a mesma consulta e sem as credenciais de
-/// quem chegou ao Python.
-fn as_owner(req: &mut Request, name: &str, rest: &str) -> bool {
-    let query = req.uri().query().map(|q| format!("?{q}")).unwrap_or_default();
-    let Ok(uri) = format!("/api/sessions/{}/{rest}{query}", utf8_percent_encode(name, NON_ALPHANUMERIC)).parse::<Uri>() else { return false };
-    *req.uri_mut() = uri;
-    for header in ["x-hangar-internal", "x-forwarded-for", "authorization", "cookie"] { req.headers_mut().remove(header); }
-    req.extensions_mut().insert(BridgedOwner);
-    true
-}
-
-/// `/__hangar_server/claude/<nome>/<rota>`: `POST` em `input`, `answer`, `select` e `select/submit`,
-/// e as rotas do painel da fila (`DELETE`/`PATCH
-/// queue/<id>`, `POST queue/reorder` e `queue/<id>/steer`), de sessão Claude com entrada no Rust, pela
-/// mesma rota do dono; `POST`/`GET btw` de qualquer sessão (a rota decide). Outra rota, método ou sessão: 421.
-pub async fn claude(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, mut req: Request) -> Response {
-    use super::{answer, control, input};
-    if !crate::workspace_routes::private_ok(&st, peer, req.headers()) { return StatusCode::NOT_FOUND.into_response(); }
-    let Some((name, rest)) = split(&req, "/__hangar_server/claude/") else { return not_ours() };
-    // Abrir Claude com terminal pelo que entrou direto no Python (Connect, MCP): o nome vem no corpo.
-    if rest == "open" && req.method() == Method::POST {
-        return crate::session_open::server::bridge(State(st), ConnectInfo(peer), req).await;
-    }
-    // Trocar o nome pelo que entrou no Python (Connect, convidado com conta): a rota inteira é do Rust.
-    if rest == "rename" && req.method() == Method::POST {
-        if !as_owner(&mut req, &name, &rest) { return not_ours(); }
-        return crate::session_rename::route(State(st), ConnectInfo(peer), req).await;
-    }
-    // Pergunta lateral (`POST`/`GET btw`): a própria rota decide sessão, provedor e modo, inclusive o
-    // Claude sem terminal parado, que ainda não tem entrada.
-    if rest == "btw" && matches!(*req.method(), Method::POST | Method::GET) {
-        if !as_owner(&mut req, &name, &rest) { return not_ours(); }
-        let (s, c) = (State(st), ConnectInfo(peer));
-        return if req.method() == Method::POST { super::btw::ask(s, c, req).await } else { super::btw::list(s, c, req).await };
-    }
-    let queue = control::queue_route(req.method(), &rest);
-    let allowed = queue.is_some() || match *req.method() {
-        Method::POST => matches!(rest.as_str(), "input" | "answer" | "select" | "select/submit"),
-        _ => false,
-    };
-    if !allowed { return not_ours(); }
-    let Some(runtime) = st.state.runtime.get().cloned() else { return not_ours() };
-    // Texto que nasce no Python (grupo, par, MCP) para o Claude com terminal: o Rust o adota aqui, e a
-    // fila da sessão é uma só.
-    if rest == "input" && !runtime.has_entry(None, &name).await {
-        match runtime.adopt_now(&name).await {
-            None => return not_ours(),
-            // Sem sidecar o Python toma o Codex que ainda abre por Claude: o `/input` o guarda na fila dele.
-            // A adormecida também: o `/input` guarda o texto na fila dela, e o acordar já corre à parte.
-            Some(Err(error)) if (error.code == crate::runtime::codex_relaunch::STARTING || error.code == crate::runtime::gateway::ASLEEP_WAKING) && rest == "input" => {
-                if !as_owner(&mut req, &name, &rest) { return not_ours(); }
-                return input::input(State(st), ConnectInfo(peer), req).await;
-            }
-            Some(Err(error)) => return super::detail(super::failed_status(&error), &error.code, &error.message, json!({})),
-            Some(Ok(())) => {}
-        }
-    }
-    if !runtime.writable(&name).await.is_some_and(|target| target.provider == "claude") { return not_ours(); }
-    if !as_owner(&mut req, &name, &rest) { return not_ours(); }
-    if let Some(route) = queue { return control::queue_dispatch(route, st, peer, req).await; }
-    let (s, c) = (State(st), ConnectInfo(peer));
-    match rest.as_str() {
-        "input" => input::input(s, c, req).await,
-        "answer" => answer::answer(s, c, req).await,
-        "select" => control::select(s, c, req).await,
-        _ => control::select_submit(s, c, req).await,
-    }
-}
-
-/// `/__hangar_server/codex/<nome>/<rota>`: `kill` (POST) encerra a vida; o resto é a rota de
-/// `/api/sessions/<nome>/<rota>`, com o mesmo método, corpo e consulta.
-pub async fn codex(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, mut req: Request) -> Response {
-    if !crate::workspace_routes::private_ok(&st, peer, req.headers()) { return StatusCode::NOT_FOUND.into_response(); }
-    let Some((name, rest)) = split(&req, "/__hangar_server/codex/") else { return not_ours() };
-    let Some(runtime) = st.state.runtime.get().cloned() else { return not_ours() };
-    let method = req.method().as_str().to_owned();
-    let outcome = match (method.as_str(), rest.as_str()) {
-        ("POST", "kill") => runtime.kill_codex_terminal(&name).await,
-        _ => {
-            // Leitura não acorda a adormecida: a rota responde por ela.
-            let asleep = if method == "GET" { runtime.asleep(&name).await } else { None };
-            // Adormecida de outro agente não é desta rota, e ler não a acorda.
-            if asleep.as_ref().is_some_and(|mark| mark.provider != "codex") { return not_ours(); }
-            let reading = asleep.is_some();
-            if !reading && !runtime.owns_codex_terminal(&name) && !runtime.owns_codex_headless(&name).await {
-                match runtime.adopt_now(&name).await {
-                    None => return not_ours(),
-                    // Conversa ainda abrindo ou adormecida acordando: a rota decide (texto vai à fila, o resto espera).
-                    Some(Err(error)) if error.code == crate::runtime::codex_relaunch::STARTING
-                        || error.code == crate::runtime::gateway::ASLEEP_WAKING => {}
-                    Some(Err(error)) => return super::detail(super::failed_status(&error), &error.code, &error.message, json!({})),
-                    Some(Ok(())) => {}
-                }
-            }
-            if !as_owner(&mut req, &name, &rest) { return not_ours(); }
-            return dispatch(st, peer, &method, &rest, req).await;
-        }
-    };
-    match outcome {
-        None => not_ours(),
-        Some(Ok(value)) => super::json_response(StatusCode::OK, value),
-        Some(Err(error)) => super::detail(StatusCode::CONFLICT, &error.code, &error.message, json!({})),
-    }
-}
 
 /// `DELETE /api/sessions/{name}` do dono e do convidado que alcança a sessão (`caller.can`). Toda sessão
 /// encerra aqui: Pi/omp/Kimi pelo ator; Codex e Claude abertos no Rust pela vida guardada; o resto (sem
@@ -363,36 +243,6 @@ async fn close_shortcuts(st: &AppState, name: &str) -> Vec<Value> {
         tracing::warn!(session = %name, code = %code, "terminal de atalho da sessão encerrada não fechou");
         cleanup_failed(st, name, &code, "terminal de atalho da sessão encerrada não fechou")
     }).collect()
-}
-
-/// As rotas que o Rust atende para o Codex dele; outra cai no Python (421).
-async fn dispatch(st: Arc<AppState>, peer: SocketAddr, method: &str, rest: &str, req: Request) -> Response {
-    use super::{answer, codex, control, input, relaunch};
-    if let Some(route) = control::queue_route(req.method(), rest) { return control::queue_dispatch(route, st, peer, req).await; }
-    let (s, c) = (State(st), ConnectInfo(peer));
-    match (method, rest) {
-        ("POST", "input") => input::input(s, c, req).await,
-        ("POST", "steer") => input::steer(s, c, req).await,
-        ("POST", "interrupt") => control::interrupt(s, c, req).await,
-        ("POST", "select") => control::select(s, c, req).await,
-        ("POST", "select/submit") => control::select_submit(s, c, req).await,
-        ("POST", "answer") => answer::answer(s, c, req).await,
-        ("POST", "keys") => control::keys(s, c, req).await,
-        ("POST", "term-input") => control::term_input(s, c, req).await,
-        ("GET", "models") => codex::models(s, c, req).await,
-        ("POST", "model") => codex::model(s, c, req).await,
-        ("POST", "service-tier") => codex::service_tier(s, c, req).await,
-        ("POST", "codex/mode") => codex::mode(s, c, req).await,
-        ("POST", "codex/plan/implement") => codex::plan_implement(s, c, req).await,
-        ("GET", "limits") => codex::limits(s, c, req).await,
-        ("POST", "question/skip") => codex::skip_question(s, c, req).await,
-        ("POST", "codex/terminate") => codex::terminate(s, c, req).await,
-        ("GET", "commands") => codex::commands(s, c, req).await,
-        ("GET", "codex-permissions") => codex::permissions(s, c, req).await,
-        ("POST", "codex-permissions") => codex::set_permission(s, c, req).await,
-        ("POST", "modo-execucao") => relaunch::mode(s, c, req).await,
-        _ => not_ours(),
-    }
 }
 
 /// Quem pediu o fechamento: o cliente e a origem que a requisição traz (o dono não manda identidade própria).

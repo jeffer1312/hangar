@@ -69,7 +69,8 @@ Claude completo; `hangar-codex-transfer` importa pelo app-server sem iniciar inf
 servidor integra esses crates ao ciclo de vida já existente e conduz a recuperação.
 
 Permanecem os registros de `conversation-transfers`, os códigos de erro, os modos de permissão,
-a restrição ao Codex 0.159.3 e a conferência de capacidade, configuração e conteúdo persistido.
+e a conferência de capacidade, configuração e conteúdo persistido. A restrição ao Codex 0.159.3
+saiu depois: ver [transferência sem versão fixa](harnesses.md#transferência-sem-versão-fixa-do-codex-19112026).
 O digest do snapshot e a fronteira do rollout continuam protegendo o histórico e as imagens.
 Falha após parar a origem exige restaurá-la; registro incompleto não autoriza publicar o destino.
 
@@ -1371,6 +1372,11 @@ de integração também conferiu os imports Python após as exclusões.
 
 ## Configuração compartilhada: leva o conteúdo, o destino resolve caminho e programa
 
+**Preferências de worktrees (17/11/2026):** a cópia de preferências inclui a configuração de
+criação e limpeza, com caminho portável, validação e backup no destino. A seleção parcial
+respeita a entrada `worktrees`; pacote sem essa entrada conserva a configuração local. Antes,
+uma cópia bem-sucedida das preferências podia deixar a limpeza desligada na outra máquina.
+
 (30/10/2026.) A migração dos motores inclui os leitores e escritores do pacote de configuração.
 As rotas `/api/config-sync/*` executam no Rust, assim como exportação, tradução, aplicação e
 pós-aplicar. A tradução usa o serviço `speech` já incorporado à branch principal, incluindo suas
@@ -1944,7 +1950,7 @@ Anotar valor e unidade, a sessão de cada `/history`, e o que não deu para medi
 | Threads e inotify do Python com 4 chats abertos, contra 0 abertos | |
 
 **Terminal real do dono (parte 4, Task 8, 06/10/2026).** Fora do Windows, o `WS .../term` do
-dono (`?token=` só; Bearer e cookie seguem ao Python, como no `termsock`) abre o PTY no Rust
+dono (`?token=` só; Bearer e cookie são recusados) abre o PTY no Rust
 (`term/`, `portable-pty`). A Origin era perguntada ao Python em `/internal/term/origin`; desde
 17/10/2026 o dono com token não a confere mais (entrada "WebSocket do dono com token não confere
 Origin").
@@ -1956,18 +1962,15 @@ sessões que um Rust anterior deixou no tamanho do painel. Medidas em
 no Rust (ConPTY do `portable-pty`); as regras de lá estão em `windows.md`, "Terminal real do
 dono no Windows é do Rust".
 
-**Porteiro do terminal (parte 4, Task 9, contrato 30).** Com o modo `rust` (ou `pending`, que
-espera o desfecho), o `termsock` não abre PTY em nenhuma plataforma: depois da porta de entrada
-de hoje (convidado de convite, convidado com login, dono pelo Connect) ele liga os bytes a
-`/__hangar_server/term` na porta privada (segredo e loopback; alvo conferido de novo lá, `cols`/`rows`).
-O painel é o mesmo `Terms` da 8765, então dono e convidado se derrubam com 1000 "outra conexao
-assumiu" como dois donos. Revogação pelo `share_gate` cancela o repasse, que fecha o lado do
-Rust; o código de fechamento do Rust chega igual ao cliente, queda sem fechamento vira 1011.
-Ponte desligada, Rust subindo ou recusa do aperto de mão: 1013 (sessão morta: 1008) e
-`terminal.ponte` no diário com o código. O 409 (`_recusa_se_painel_aberto`) pergunta
-`term.active` pela ponte da lista, fora do laço de eventos; erro é 503
-`erro_terminal_indisponivel`. `/api/config.terminal_panel` e `/run-code` leem o `terminal_panel`
-da saúde no modo `rust`; saúde sem o campo booleano é falha de partida.
+**Porteiro do terminal (parte 4, Task 9, contrato 30; 16/11/2026 sem o Python).** A porta de
+entrada é só do Rust (`term/mod.rs`), em todas as portas: convidado de convite (8766), convidado
+com login e aparelho do Connect chegam já decididos pelos porteiros, e o painel é o mesmo `Terms`,
+então dono e convidado se derrubam com 1000 "outra conexao assumiu" como dois donos. Quem não é
+dono nem convidado leva 403 vazio no aperto de mão, com a falha contada uma vez pelo perfil
+`TerminalWebSocket` do contador (só o `?token=` vale; origem bloqueada recusa sem nova falha;
+loopback nunca conta); convidado sem `Share` na sessão leva 403. GET sem aperto de mão, outro
+método e o convidado nos terminais do Hangar são o caminho sem rota (404 do Rust). Saíram a porta
+de entrada `termsock.py`, a ponte `list_bridge.py` e a rota privada `/__hangar_server/term`.
 
 ## Lista do dono no hangar-server
 
@@ -2562,6 +2565,13 @@ componentes dos três clientes. Cobrem confirmação, preservação da branch, r
 locks, sessões e revalidação. Nenhuma prova apaga uma pasta residual do ambiente em uso.
 
 ### Diretórios ignorados e submódulos na confirmação
+
+**Caches Rust grandes (17/11/2026):** a impressão dos arquivos não percorre `target` ignorado
+pelo Git, assim como já não percorria dependências instaladas. Uma pasta `target` com identidade
+Git própria ou sem regra de exclusão continua lida. A confirmação dos arquivos perdidos e as
+guardas de sessão, branch e alterações locais continuam valendo. Uma worktree com mais de
+100 mil artefatos atingia o limite da leitura e recusava até a remoção manual com confirmação;
+a regressão cria esse cache e chama a remoção pública, com Git e disco descartáveis.
 
 **Regra:** a lista do que será perdido inclui os diretórios ignorados inteiros e cada
 submódulo inicializado (`<caminho>/`); a confirmação existente autoriza o descarte deles.
@@ -3438,16 +3448,15 @@ defeitos achados nele (todos consertados no Rust, decisão do usuário) estão n
 ## WebSocket do dono com token não confere Origin (17/10/2026)
 
 - Regra: a conexão WebSocket autenticada pelo token do dono na query (`?token=`) não consulta a
-  Origin. Vale para o terminal (`term/mod.rs` no Rust, `termsock._porta_de_entrada` no Python), a
-  voz (`voice/routes.rs`, `voicesock._owner_only`) e o navegador remoto (`navsock._autorizado`).
+  Origin. Vale para o terminal (`term/mod.rs`), a voz (`voice/routes.rs`) e o navegador remoto.
 - Motivo: WebSocket não passa por CORS, e a Origin existe para impedir que uma página qualquer
   aberta no navegador use uma credencial AMBIENTE (cookie, login guardado) que o navegador manda
   sozinho. O token na query não é ambiente: uma página estranha não o tem. Conferir a Origin nesse
   caso não acrescenta proteção e só barra quem entrou de verdade.
 - Caso real: o app iOS pelo Hangar Connect (`https://app.hangar.dev.br/casa`) levava
   `voice origin refused` e precisou de `CP_TERM_ORIGINS` declarado em cada máquina.
-- O que continua: o login de convidado do `termsock` (`guest_users.current`, sessão por cookie)
-  segue com a Origin conferida por `_origem_aceita`, e `CP_TERM_ORIGINS`/`term_origins` seguem
+- O que continua: o convidado com login no terminal segue com a Origin conferida no Rust
+  (`login_guests::gate::terminal_origin_allowed`), e `CP_TERM_ORIGINS`/`term_origins` seguem
   valendo para ele. Convidado da 8766 continua decidido pelo porteiro, sem Origin, como antes.
 - Removidos por ficarem sem chamador: `crates/hangar-server/src/term/origin.rs` e a rota interna
   `POST /internal/term/origin`; contrato interno 74 → 75.
@@ -4887,3 +4896,126 @@ Issue #408. O painel que usa os conectores.
   painel, e nada sobe ao Help.
 - **Sessão achada pela chave.** Como o plugin, a sessão da PM é a da branch `PM-XXXXX` ou a de nome que
   começa pela chave; ligar no painel grava o vínculo e libera a tool. Uma sessão, um ticket.
+
+## Tela de Status (17/11/2026)
+
+Substitui a tela de migração. Mock aprovado pelo Jefferson em 17/11/2026, depois de recusar a versão
+em linhas de texto ("só texto jogado na cara do usuário"): resumo de saúde com pontos de atenção,
+curvas, linha do tempo, cartões de máquina, barra dividida, colunas por hora e medidores.
+
+- **Retrato único (`hangar_api::status::StatusSnapshot`, `CLIENT_API` 19).** `GET /api/status` e o
+  SSE `/api/status/events` (evento `status`), só do dono. Bloco ausente = sem fonte; o cliente
+  esconde ou mostra "—", nunca zero. A lista de atenção é montada no servidor
+  (`hangar-status/attention.rs`); o texto sai no cliente por `status_attention_<code>`.
+- **Produtor só com assinante**, no molde do `ListHub`: servidor e máquina a cada 5 s, processos e
+  sessões a cada 15 s, peers a cada 30 s. O amostrador do processo roda sempre (60 pontos, um por
+  minuto) para a média da última hora existir. As rotas da tela não entram na linha `api.servidor`
+  do diário: a espera dela não pode aparecer como lentidão nos números que ela mesma mostra.
+- **Motivo da parada gravado na parada, nunca cruzando horário.** Antes de todo
+  `restarter.restart()` o executor grava `~/.hangar/stop-intent.json` (tipo, causa, pid do servidor
+  substituído); vale só para esse pid e por 10 min, e reinício recusado com o servidor ainda de pé
+  a apaga. A subida seguinte grava `hangar_server.saida` (`crash` / `update` / `requested`). A
+  causa da queda no Linux vem do journal ("Failed with result"), porque o `Result` da unit já foi
+  zerado quando o serviço sobe de novo. Sem marca válida, o `estado.json` do executor no passo
+  `reiniciar` para a versão que sobe, começado há menos de 10 min, explica a saída como `update`,
+  uma vez por passo e só para a vida que já estava de pé quando ele começou: a primeira atualização
+  para esta versão é feita pelo executor antigo, que não grava a marca, e no Windows ele encerra o
+  servidor à força (saída não limpa). Saída explicada não grava `hangar_server.caiu`. O "Reiniciar"
+  zera `versao_de`/`versao_para` no estado. Medido na DELPHI-02 em 19/11/2026: sem isso, cada
+  atualização a partir da 0.1.0.10969 virava uma queda na tela.
+- **Servidor parado não tem API.** O nativo lê e age pelo crate folha `hangar-local-server`
+  (sem `hangar-core`): estado do serviço, motivo, versões e as ações subir, liberar a porta (mesmo
+  usuário e mesmo nascimento conferidos na hora) e apontar o `current` para a versão anterior (com a
+  `UpdateLock`, serviço parado, conferência da versão que responde). As primitivas de link e a
+  `UpdateLock` saíram de `update/mod.rs` para esse crate; o servidor e o `hangar-core` importam de
+  lá. Nenhuma ação ganha rota HTTP. É exceção à regra do crate novo sobre o `hangar-core`: o app nativo é
+  outro workspace (`desktop-native/Cargo.toml`) e só puxa crates folha (`hangar-api`, `hangar-workspace`);
+  depender do core levaria o axum e a pilha HTTP do servidor para o binário do app. Por isso o crate
+  fica abaixo do core, só com std, serde, chrono e sysinfo, e nunca depende do `hangar-core` nem do
+  `hangar-server`. "Reinstalar o serviço" abre o assistente de instalação, porque o
+  `install-package` recusa máquina já instalada.
+- **O ponto na linha "Status" segue só o servidor** (vermelho parado, âmbar subindo, nada de pé):
+  disco quase cheio ou máquina com versão antiga não são ação que falhou, e ficam dentro da tela.
+- **Fora:** "Python vivo" (o Python não sobe mais), `lan` dos peers (o servidor só chama o
+  `base_url`), limpar restos pela tela (só conta).
+
+## Revisão do trabalho (`work_review/v1`): capacidade do conector, releitura no fim do turno (18/11/2026)
+
+A sessão ligada a um ticket mostra numa aba própria do painel, "Revisão", a revisão que o
+conector oferece (comparação com o mock, no primeiro conector que a usa) e devolve as decisões ao agente
+pelo conector. Contrato em [`docs/connectors/work-review-v1.md`](../connectors/work-review-v1.md);
+motor no crate `hangar-work-review`, ligado em `crates/hangar-server/src/work_review_watch.rs`.
+
+- **Aba própria, não seção do Contexto.** No teste de uso real, a revisão dentro do Contexto ficava
+  espremida entre o medidor e as Ações, com os quadros do mock pequenos. A aba só existe quando a
+  sessão tem revisão, leva o número do que falta, e o chip do card abre a sessão já nela.
+- **Capacidade, não fornecedor.** `work_review/v1` exige `work_tracking/v1`. O Hangar não conhece
+  mock nem fornecedor: título, etapas, escolhas e motivos vêm do conector; o texto genérico (enviar,
+  anterior e próxima, "falta N") é do Hangar.
+- **O Hangar relê; o conector não avisa.** O host lê só a resposta do pedido que fez, um por vez, e a
+  vida morre após 60 s sem pedido: uma notificação `work_review.changed` quebraria a vida. A revisão é
+  relida (a) ao abrir a aba Revisão, (b) no fim de cada turno, pelas linhas da lista, mesmo sem painel
+  aberto (é o que alimenta o chip), (c) depois do envio das decisões e (d) a cada chamada da tool
+  `mission` nesta máquina, inclusive a sem argumentos, que a skill usa para a barra andar no meio de
+  um turno longo. A releitura pela tool roda em tarefa própria: a tool tem corte de ~60 s.
+- **Fim do turno pelas linhas da lista.** Passagem de `working` para outro estado, `last_reply_at`
+  novo fora de `working`, branch trocada ou primeira vista (esta só relê quem ainda não tem resumo).
+  Lista em erro não conta nada. O vigia só assina a lista (assinatura interna, que não conta como app
+  aberto) enquanto houver conector ligado com a capacidade, conferido a cada 60 s; sem ele, o produtor
+  da lista para quando nenhum app está aberto.
+- **Fila por conector.** A releitura em segundo plano tem no máximo uma chamada em voo por conector;
+  o pedido da pessoa (painel, imagem, envio) não entra na fila e espera no máximo a chamada em voo.
+  Por sessão, uma leitura por vez, com uma releitura marcada para o fim. O envio sobe a geração da
+  sessão: leitura começada antes dele não grava.
+- **Ticket da sessão.** Primeiro o vínculo do Tickets, pela mesma regra da tool `mission`
+  (`hangar_mission::link::resolve`: sessão ou grupo, com a chave da vida conferida). Sem vínculo, cada
+  conector com a capacidade recebe `work_tracking.get(<branch da sessão>)`, aceito só com `key` igual
+  à branch ("achado pela branch"); o resultado, inclusive o negativo, fica guardado por conector e
+  branch até a branch mudar, e erro não vira negativo. Resumo e cache são por nome e vida: sessão
+  recriada com o mesmo nome não herda a revisão.
+- **Fora do escopo: ticket de outra máquina.** O vínculo remoto que a tool `mission` resolve pelos
+  peers não é seguido; a seção não aparece nessa sessão.
+- **Imagens em cache no disco.** `<cache>/hangar/work-review/<conector>/<ticket>/<rodada>/<asset>`,
+  imutáveis dentro do `review_id`; a pasta do ticket sai quando a rodada muda, e o total tem teto de
+  256 MiB (saem os tickets mais antigos). A rota responde `Cache-Control: private, max-age=86400, immutable`.
+- **Só o dono.** As rotas `/api/sessions/{nome}/work-review*` usam `owner_only`; o evento
+  `work_reviews` sai só pelo laço da lista do dono, nunca pelo do convidado (teste em `list/hub.rs`).
+  Corpo: `{"reviews": {"<sessão>": {"review_id", "state", "badge": {"text","tone"}|null, "updated_at"}}}`,
+  só com as sessões atuais que têm revisão, publicado quando muda o resumo ou as linhas.
+- **Falha em segundo plano vai ao diário.** Releitura que falha mantém o resumo anterior e registra
+  `rust.work_review` com o código, uma vez por minuto por sessão e código; a tela não vê. Falha da
+  leitura que a pessoa pediu (abrir o painel, enviar) aparece na seção.
+
+## Vídeo do celular: upload responde ao gravar, quadros e fala por pedido que espera (17/11/2026)
+
+- **Motivo.** O envio nativo do Expo (`File.upload`) desiste com 60 s sem resposta (Android OkHttp
+  `readTimeout(60)`, iOS sessão padrão). O `/upload` de vídeo só respondia depois de `media::extract`
+  (ffprobe 30 s, até 6 quadros de 25 s, áudio 90 s) e da transcrição (até 120 s). Vídeo com fala longa
+  aparecia como falha no celular, embora o arquivo já estivesse no servidor; e o app jogava fora quadros
+  e fala, que o desktop põe na mensagem.
+- **Contrato.** `POST …/upload?media=later` com vídeo responde na hora com `"media":"pending"` e um
+  `media_id` aleatório; o processamento roda numa tarefa e o resultado fica num registro em memória
+  (`uploads::media::MediaJobs`). `GET …/upload-media?id=<media_id>` segura o pedido até ficar
+  pronto ou 45 s (`status: pending`), e devolve `{"status":"done","frames","transcript"}`. Id
+  desconhecido, expirado (10 min depois de pronto), de tarefa que caiu ou perdido por
+  reinício é 404 `upload_media_unknown`: o app segue só com o vídeo, como o desktop quando a
+  transcrição falha. Sem `media=later` nada muda: desktop e web continuam recebendo quadros e fala na
+  resposta.
+- **Chave pelo id, não pela sessão.** `/clear`, troca de nome e a conversa nova (que sobe antes do
+  primeiro envio) mudam a sessão entre o upload e a espera.
+- **Uma tarefa de mídia por vez, no caminho `media=later`.** Cada uma roda ffmpeg e ocupa uma vaga de
+  transcrição até o fim; o cliente não segura mais a resposta, então várias em paralelo tirariam as
+  vagas do ditado (`transcription_busy`). O caminho sem o parâmetro (desktop e web) continua como era.
+  A tarefa não é cancelada quando o anexo é removido.
+- **Pedido que espera, não evento no chat.** Sem formato novo de evento nos três clientes; o app repete
+  o pedido quando o servidor devolve `pending`. O teto do core (3 min) conta só o tempo SEM resposta:
+  cada `pending` o renova, porque a fila de vídeos é finita e contá-la deixava o segundo vídeo longo
+  sem quadros nem fala (revisão local do PR #443).
+- **A espera acha a mídia só pelo id**, sem procurar a sessão do nome na URL: a sessão renomeada no meio
+  dava 404. O id aleatório vale como chave de acesso.
+- **No módulo `uploads/`, não crate próprio.** É o mesmo recurso do upload: usa o `UploadStore`, o
+  `extract` e a transcrição do servidor; separar exigiria descer os três para o `hangar-core`.
+- **Prazo do upload pelo tamanho.** `max(180 s, tamanho / 50 kB/s)`; o prazo estourado não marca a
+  máquina como fora do ar, a queda de rede continua marcando (`countsOutage: 'network'`). Vale para o
+  app e para a web, que compartilham o core. Sem teto: um link que trava num arquivo grande deixa o
+  envio esperando até o prazo dele.

@@ -29,14 +29,10 @@ impl OtherIo for BusyIo {
 async fn other_deferred_actor_reports_thresholds_from_real_drains() {
     let root = tempfile::tempdir().unwrap();
     let diary = tempfile::tempdir().unwrap();
-    let diag = crate::diag::DiagClient::new("127.0.0.1:9".parse().unwrap(), String::new())
+    let diag = crate::diag::DiagClient::new()
         .with_diary(Some(diary.path().to_owned()));
     let registry = Arc::new(
-        super::super::gateway::RuntimeRegistry::new(
-            "127.0.0.1:9".parse().unwrap(),
-            String::new(),
-            "test".into(),
-        )
+        super::super::gateway::RuntimeRegistry::new("test".into())
         .with_diagnostics(diag.clone()),
     );
     let mut target = tests::target();

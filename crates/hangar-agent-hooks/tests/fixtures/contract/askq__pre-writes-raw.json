@@ -1,0 +1,80 @@
+{
+ "case": "askq/pre-writes-raw",
+ "source_commit": "2ad8e335e8d9118e74bc5b33f2efb4ac3bbd8eba",
+ "python": "3.14.9 websockets 16.0",
+ "capture_cmdline": "/usr/bin/python3 capture.py -j 8",
+ "route": "R1",
+ "hook": "askq_capture.py",
+ "contract_refs": [
+  "R1-S17",
+  "H-44"
+ ],
+ "description": "",
+ "harness": {
+  "how": "$PY -B -s $REF/backend/hooks/askq_capture.py, one process per step, stdin = step"
+ },
+ "input": {
+  "env": {
+   "HOME": "$T/home",
+   "USERPROFILE": "$T/home",
+   "LOCALAPPDATA": "$T/local",
+   "TMUX_TMPDIR": "$T/tmux",
+   "PATH": "$T/stubs:/usr/bin:/bin",
+   "CLAUDE_CONFIG_DIR": "$T/cfg"
+  },
+  "files_before": {}
+ },
+ "steps": [
+  {
+   "stdin": {
+    "text": "{\"session_id\": \"11111111-2222-4333-8444-555555555555\", \"transcript_path\": \"/home/u/.claude/projects/p/11111111-2222-4333-8444-555555555555.jsonl\", \"cwd\": \"/home/u/proj\", \"permission_mode\": \"default\", \"hook_event_name\": \"PreToolUse\", \"tool_name\": \"AskUserQuestion\", \"tool_input\": {\"questions\": [{\"question\": \"Qual opção?\", \"header\": \"Opção\", \"options\": [{\"label\": \"A\", \"description\": \"ação\"}, {\"label\": \"B\", \"description\": \"não\"}], \"multiSelect\": false}]}, \"tool_use_id\": \"toolu_A\"}"
+   },
+   "code": 0,
+   "stdout": {
+    "text": ""
+   },
+   "stderr": {
+    "text": ""
+   },
+   "duration_ms": 21,
+   "files": {
+    "created": {
+     "cfg/.hangar-askq": {
+      "type": "dir",
+      "mode": "0o755"
+     },
+     "cfg/.hangar-askq/11111111-2222-4333-8444-555555555555.json": {
+      "type": "file",
+      "mode": "0o644",
+      "size": 488,
+      "sha256": "94dcca195518002702cbd0e93d9e4d2bcb042c44c999ff327e453cfcab857480",
+      "content": {
+       "text": "{\"session_id\": \"11111111-2222-4333-8444-555555555555\", \"transcript_path\": \"/home/u/.claude/projects/p/11111111-2222-4333-8444-555555555555.jsonl\", \"cwd\": \"/home/u/proj\", \"permission_mode\": \"default\", \"hook_event_name\": \"PreToolUse\", \"tool_name\": \"AskUserQuestion\", \"tool_input\": {\"questions\": [{\"question\": \"Qual opção?\", \"header\": \"Opção\", \"options\": [{\"label\": \"A\", \"description\": \"ação\"}, {\"label\": \"B\", \"description\": \"não\"}], \"multiSelect\": false}]}, \"tool_use_id\": \"toolu_A\"}"
+      }
+     }
+    },
+    "changed": {},
+    "removed": []
+   }
+  }
+ ],
+ "files_final": {
+  "cfg/.hangar-askq": {
+   "type": "dir",
+   "mode": "0o755"
+  },
+  "cfg/.hangar-askq/11111111-2222-4333-8444-555555555555.json": {
+   "type": "file",
+   "mode": "0o644",
+   "size": 488,
+   "sha256": "94dcca195518002702cbd0e93d9e4d2bcb042c44c999ff327e453cfcab857480",
+   "content": {
+    "text": "{\"session_id\": \"11111111-2222-4333-8444-555555555555\", \"transcript_path\": \"/home/u/.claude/projects/p/11111111-2222-4333-8444-555555555555.jsonl\", \"cwd\": \"/home/u/proj\", \"permission_mode\": \"default\", \"hook_event_name\": \"PreToolUse\", \"tool_name\": \"AskUserQuestion\", \"tool_input\": {\"questions\": [{\"question\": \"Qual opção?\", \"header\": \"Opção\", \"options\": [{\"label\": \"A\", \"description\": \"ação\"}, {\"label\": \"B\", \"description\": \"não\"}], \"multiSelect\": false}]}, \"tool_use_id\": \"toolu_A\"}"
+   }
+  }
+ },
+ "window": {
+  "t_start": 1794910462.2529395,
+  "t_end": 1794910462.275555
+ }
+}

@@ -9,7 +9,7 @@ import { readQueueJev, type DeliveryControls, type DeliveryMode, type JevStatus 
 const KEY = 'queue.deliveryMode';
 const saved = prefs.getString(KEY);
 export const useDeliveryMode = create<{ mode: DeliveryMode; setMode: (mode: DeliveryMode) => void }>((set) => ({
-  mode: saved === 'direct' || saved === 'jev' ? saved : 'queued',
+  mode: saved === 'direct' || saved === 'jev' || saved === 'conversation' ? saved : 'queued',
   // Sem gravar no aparelho a escolha ainda vale até fechar o app, e quem escolheu precisa saber disso.
   setMode: (mode) => {
     try { prefs.set(KEY, mode); } catch { toast.erro(m.mobile_queue_mode_save_failed()); }

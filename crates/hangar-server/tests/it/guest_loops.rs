@@ -5,7 +5,7 @@ use serde_json::Value;
 use std::{net::SocketAddr,sync::Arc};
 use tower::ServiceExt;
 fn state(home:&std::path::Path)->Arc<AppState> {
-    let mut state=AppState::new(Config{listen:"127.0.0.1:1".parse().unwrap(),upstream:crate::refused_address(),internal_secret:"fixture".into(),auth_token:"owner".into(),log_path:None,trusted:TrustedHosts::parse("")});
+    let mut state=AppState::new(Config{listen:"127.0.0.1:1".parse().unwrap(),internal_secret:"fixture".into(),auth_token:"owner".into(),log_path:None,trusted:TrustedHosts::parse("")});
     state.accounts=AccountService::new(AccountEnvironment::from_pairs([("HOME",home.to_str().unwrap()),("USERPROFILE",home.to_str().unwrap())]));
     state.login_guests=Arc::new(hangar_server::login_guests::Service::new(hangar_server::login_guests::Settings {
         guests:home.join("guests.json"),vault:home.join("vault.json"),runtime_config:home.join("config.json"),sync_enabled:false,
@@ -25,9 +25,9 @@ async fn guest_loop_selected_before_transfer_cannot_run_after_its_life_disappear
         let program=crate::list_support::sessions(home.path(),0);
         let mut st=Arc::try_unwrap(state(home.path())).ok().unwrap();
         let dirs=parse_dirs(&serde_json::json!({"home":home.path(),"claude":home.path().join(".claude"),"codex_home":home.path().join(".codex"),"pi_sessions":home.path().join(".pi"),"omp_config":home.path().join(".omp"),"omp_agent":home.path().join(".omp/agent"),"kimi_home":home.path().join(".kimi")}).to_string());
-        st.list=Arc::new(ListBridge::new(ListEnv {mux:Mux::with_program(&program,std::time::Duration::from_secs(5)),capture_program:program.into_os_string(),procs:Arc::new(hangar_server::list::procs::SystemProcs::default()),dirs},FactsClient::new(crate::refused_address(),"fixture".into())));
+        st.list=Arc::new(ListBridge::new(ListEnv {mux:Mux::with_program(&program,std::time::Duration::from_secs(5)),capture_program:program.into_os_string(),procs:Arc::new(hangar_server::list::procs::SystemProcs::default()),dirs},FactsClient::new()));
         let st=Arc::new(st);
-        let runtime=Arc::new(hangar_server::runtime::gateway::RuntimeRegistry::new(crate::refused_address(),"fixture".into(),"fixture-instance".into()));
+        let runtime=Arc::new(hangar_server::runtime::gateway::RuntimeRegistry::new("fixture-instance".into()));
         if held {runtime.ingress().hold("fixture",std::time::Duration::from_secs(1)).await.unwrap();}
         assert!(st.state.runtime.set(runtime).is_ok());
         let command=home.path().join("check");
@@ -60,9 +60,9 @@ async fn guest_loop_live_tick_revalidates_life_and_keeps_the_valid_cycle() {
         std::fs::write(&program,&script).unwrap();
         let mut st=Arc::try_unwrap(state(&home)).ok().unwrap();
         let dirs=parse_dirs(&serde_json::json!({"home":home,"claude":home.join(".claude"),"codex_home":home.join(".codex"),"pi_sessions":home.join(".pi"),"omp_config":home.join(".omp"),"omp_agent":home.join(".omp/agent"),"kimi_home":home.join(".kimi")}).to_string());
-        st.list=Arc::new(ListBridge::new(ListEnv {mux:Mux::with_program(&program,std::time::Duration::from_secs(5)),capture_program:program.clone().into_os_string(),procs:Arc::new(hangar_server::list::procs::SystemProcs::default()),dirs},FactsClient::new(crate::refused_address(),"fixture".into())));
+        st.list=Arc::new(ListBridge::new(ListEnv {mux:Mux::with_program(&program,std::time::Duration::from_secs(5)),capture_program:program.clone().into_os_string(),procs:Arc::new(hangar_server::list::procs::SystemProcs::default()),dirs},FactsClient::new()));
         let st=Arc::new(st);
-        let runtime=Arc::new(hangar_server::runtime::gateway::RuntimeRegistry::new(crate::refused_address(),"fixture".into(),"fixture-instance".into()));
+        let runtime=Arc::new(hangar_server::runtime::gateway::RuntimeRegistry::new("fixture-instance".into()));
         assert!(st.state.runtime.set(runtime).is_ok());
         let selected=st.list.refresh().await.unwrap().rows.iter().find(|r|r.name=="s0").cloned().expect("sessão sintética descoberta");
         assert_eq!(selected.lifecycle_id.as_deref(),Some("t:100"));
@@ -96,9 +96,9 @@ async fn guest_loop_http_rechecks_provider_after_transfer_before_any_effect() {
         std::fs::write(&program,&script).unwrap();
         let mut st=Arc::try_unwrap(state(&home)).ok().unwrap();
         let dirs=parse_dirs(&serde_json::json!({"home":home,"claude":home.join(".claude"),"codex_home":home.join(".codex"),"pi_sessions":home.join(".pi"),"omp_config":home.join(".omp"),"omp_agent":home.join(".omp/agent"),"kimi_home":home.join(".kimi")}).to_string());
-        st.list=Arc::new(ListBridge::new(ListEnv {mux:Mux::with_program(&program,std::time::Duration::from_secs(5)),capture_program:program.clone().into_os_string(),procs:Arc::new(hangar_server::list::procs::SystemProcs::default()),dirs},FactsClient::new(crate::refused_address(),"fixture".into())));
+        st.list=Arc::new(ListBridge::new(ListEnv {mux:Mux::with_program(&program,std::time::Duration::from_secs(5)),capture_program:program.clone().into_os_string(),procs:Arc::new(hangar_server::list::procs::SystemProcs::default()),dirs},FactsClient::new()));
         let st=Arc::new(st);
-        let runtime=Arc::new(hangar_server::runtime::gateway::RuntimeRegistry::new(crate::refused_address(),"fixture".into(),"fixture-instance".into()));
+        let runtime=Arc::new(hangar_server::runtime::gateway::RuntimeRegistry::new("fixture-instance".into()));
         assert!(st.state.runtime.set(runtime).is_ok());
         assert_eq!(st.list.refresh().await.unwrap().rows.iter().find(|r|r.name=="s0").unwrap().provider,"claude");
         std::fs::write(&program,script.replace("\\tclaude\\t", "\\tcodex\\t")).unwrap();
@@ -130,9 +130,9 @@ async fn guest_loop_http_discovery_failure_preserves_waiting_confirmation() {
         std::fs::write(&program,&script).unwrap();
         let mut st=Arc::try_unwrap(state(&home)).ok().unwrap();
         let dirs=parse_dirs(&serde_json::json!({"home":home,"claude":home.join(".claude"),"codex_home":home.join(".codex"),"pi_sessions":home.join(".pi"),"omp_config":home.join(".omp"),"omp_agent":home.join(".omp/agent"),"kimi_home":home.join(".kimi")}).to_string());
-        st.list=Arc::new(ListBridge::new(ListEnv {mux:Mux::with_program(&program,std::time::Duration::from_secs(5)),capture_program:program.clone().into_os_string(),procs:Arc::new(hangar_server::list::procs::SystemProcs::default()),dirs},FactsClient::new(crate::refused_address(),"fixture".into())));
+        st.list=Arc::new(ListBridge::new(ListEnv {mux:Mux::with_program(&program,std::time::Duration::from_secs(5)),capture_program:program.clone().into_os_string(),procs:Arc::new(hangar_server::list::procs::SystemProcs::default()),dirs},FactsClient::new()));
         let st=Arc::new(st);
-        let runtime=Arc::new(hangar_server::runtime::gateway::RuntimeRegistry::new(crate::refused_address(),"fixture".into(),"fixture-instance".into()));
+        let runtime=Arc::new(hangar_server::runtime::gateway::RuntimeRegistry::new("fixture-instance".into()));
         assert!(st.state.runtime.set(runtime).is_ok());
         assert_eq!(st.list.refresh().await.unwrap().rows.iter().find(|r|r.name=="s0").unwrap().provider,"claude");
         std::fs::write(root.path().join("fail"), "fixture").unwrap();

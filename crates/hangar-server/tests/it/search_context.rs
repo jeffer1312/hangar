@@ -1,7 +1,7 @@
 //! `GET /api/search/context` (R3, CTX-01..16): o trecho em volta de um achado da busca. O esperado de
 //! cada caso vem da captura do Python (`contract/context/` da migração) sobre as fixtures de
 //! `tests/fixtures/search/home`, copiadas para uma pasta temporária.
-use super::fake::{Fake, OWNER, client, spawn_fake};
+use super::fake::{OWNER, client};
 use axum::http::StatusCode;
 use hangar_server::{
     accounts::{AccountService, environment::AccountEnvironment},
@@ -29,7 +29,6 @@ const NORMAL: [&str; 12] = [
 struct Scene {
     _dir: tempfile::TempDir,
     home: PathBuf,
-    python: Arc<Fake>,
     address: SocketAddr,
     /// O diário do índice da busca: (código, detalhe).
     reports: Arc<std::sync::Mutex<Vec<(&'static str, String)>>>,
@@ -57,10 +56,8 @@ impl Scene {
         // Escapado como texto JSON: o `\` do caminho do Windows quebrava a linha do índice do Kimi.
         let escaped = serde_json::to_string(&*home.to_string_lossy()).unwrap();
         std::fs::write(&kimi, std::fs::read_to_string(&kimi).unwrap().replace("{HOME}", escaped.trim_matches('"'))).unwrap();
-        let (python, upstream) = spawn_fake().await;
         let cfg = Config {
             listen: "127.0.0.1:0".parse().unwrap(),
-            upstream,
             auth_token: OWNER.into(),
             internal_secret: "isolated".into(),
             log_path: None,
@@ -86,7 +83,7 @@ impl Scene {
         let task = tokio::spawn(async move {
             axum::serve(listener, router(Arc::new(state)).into_make_service_with_connect_info::<SocketAddr>()).await.unwrap();
         });
-        Self { _dir: dir, home, python, address, reports, task }
+        Self { _dir: dir, home, address, reports, task }
     }
 
     async fn get(&self, query: &str) -> (StatusCode, Value) {
@@ -323,10 +320,8 @@ async fn search_context_is_answered_by_rust_only_for_the_owner() {
     let response = client().get(format!("http://{}/api/search/context?project={NORMAL_P}&session_id={NORMAL_S}&event_id={MID}", scene.address))
         .send().await.unwrap();
     assert_eq!(response.status().as_u16(), 401);
-    assert_eq!(scene.python.hits_to("/api/search/context"), 0);
     scene.ctx(NORMAL_P, NORMAL_S, MID, None).await;
-    assert_eq!(scene.python.hits_to("/api/search/context"), 0);
-    assert!(hangar_server::migration_status::rust_route(&axum::http::Method::GET, "/api/search/context"));
+    assert!(hangar_server::owned_routes::rust_route(&axum::http::Method::GET, "/api/search/context"));
 }
 
 #[tokio::test]
@@ -367,5 +362,4 @@ async fn search_context_opens_agent_conversations_at_the_event() {
     // Sem `provider` continua Claude (CTX-08): a conversa Pi não é achada como Claude.
     let (status, body) = scene.get(&pi.replace("&provider=pi", "")).await;
     assert_eq!((status, body["detail"]["code"].as_str()), (StatusCode::NOT_FOUND, Some("erro_transcript_nao_encontrado")));
-    assert_eq!(scene.python.hits_to("/api/search/context"), 0);
 }

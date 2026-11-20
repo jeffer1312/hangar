@@ -15,16 +15,6 @@ on:
     paths:
       - "crates/**"
       - "backend/tests/fixtures/**"
-      # A suíte de contrato do cano roda aqui contra o binário.
-      - "backend/tests/test_claude_headless_cano.py"
-      - "backend/app/runtime_process.py"
-      - "backend/app/rust_server.py"
-      - "backend/tests/test_runtime_process.py"
-      # Trava e leitura dos sidecars que o Rust também grava: o defeito que elas evitam é do Windows.
-      - "backend/app/atomico.py"
-      - "backend/app/adapters/claude_headless/sessions.py"
-      - "backend/app/adapters/codex/sessions.py"
-      - "backend/tests/test_sidecar_coordination.py"
       - "plugins/hangar/hooks/**"
       - ".github/workflows/server.yml"
       - ".github/workflows/server-jobs.yml"

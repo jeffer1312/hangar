@@ -1,0 +1,2 @@
+LISTEN 0      1024         0.0.0.0:8765      0.0.0.0:*    users:(("python3",pid=48211,fd=7))
+LISTEN 0      1024            [::]:8765         [::]:*    users:(("python3",pid=48211,fd=8))

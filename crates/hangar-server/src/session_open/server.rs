@@ -1,6 +1,5 @@
-//! A abertura no servidor: o `POST /api/sessions` do dono e do convidado com login, o bastão do dono,
-//! a ponte privada por onde o Python repassa o que entrou direto nele (Connect) e o `OpenHost`
-//! com os serviços do Rust.
+//! A abertura no servidor: o `POST /api/sessions` do dono e do convidado com login, o bastão do dono
+//! e o `OpenHost` com os serviços do Rust.
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -10,7 +9,7 @@ use std::time::{Duration, Instant};
 use axum::body::{Body, to_bytes};
 use axum::extract::{ConnectInfo, Request, State};
 use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
+use axum::response::Response;
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
 
@@ -131,7 +130,7 @@ impl ServerHost {
     pub async fn new(st: Arc<AppState>) -> Self {
         // `TerminalEnv::local` pode esperar o `systemctl --user` (até 3 s): fora das threads do runtime.
         let (env, terminal) = tokio::task::spawn_blocking(|| {
-            let dotenv = crate::user_data::env_file(std::env::current_dir().ok().as_deref())
+            let dotenv = crate::user_data::env_file(super::cli::server_backend().as_deref())
                 .inspect_err(|e| tracing::warn!(code = "user_data_env_unreadable", "abertura: .env dos dados do usuário ilegível, segue sem ele: {e}"))
                 .ok().flatten().unwrap_or_default();
             let env = AccountEnvironment::from_map(server_env(std::env::vars().collect(), &dotenv));
@@ -235,8 +234,8 @@ impl OpenHost for ServerHost {
     fn mux(&self) -> &dyn Mux { &self.mux }
     fn bridge(&self) -> Option<PluginBridge> { Some(PluginBridge { port: self.st.cfg.listen.port(), secret: self.st.cfg.auth_token.clone() }) }
     fn server_projects(&self) -> PathBuf { self.env.claude_base.join("projects") }
-    /// O servidor roda na `backend/` (é de lá que ele lê o `.env`).
-    fn backend_dir(&self) -> Option<PathBuf> { std::env::current_dir().ok() }
+    /// A `backend/` da cópia onde o servidor roda (a raiz da versão; lançamento antigo, a própria).
+    fn backend_dir(&self) -> Option<PathBuf> { super::cli::server_backend() }
 
     fn run(&self, argv: Vec<String>, timeout: Duration) -> BoxFuture<'_, MuxOutput> {
         Box::pin(run_program(&self.env.base, argv, timeout))
@@ -645,30 +644,6 @@ pub async fn bastao(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
     };
     crate::routes::cors(&headers, response.headers_mut());
     response
-}
-
-/// A abertura do dono que entrou diretamente pelo Connect usa o mesmo lançador.
-/// Login próprio só entra pela rota pública, com a identidade decidida no Rust.
-pub async fn bridge(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    if !crate::workspace_routes::private_ok(&st, peer, req.headers()) { return StatusCode::NOT_FOUND.into_response(); }
-    let Ok(bytes) = to_bytes(req.into_body(), crate::session_write::BODY_LIMIT).await else { return StatusCode::PAYLOAD_TOO_LARGE.into_response() };
-    // Pedido torto é recusa de validação; o 421 fica só para o que o Rust não atende.
-    let envelope = match serde_json::from_slice::<Value>(&bytes) {
-        Ok(envelope) => envelope,
-        Err(error) => return reply(&OpenError::invalid_body(&error.to_string())),
-    };
-    if envelope.get("guest").is_some_and(|value| !value.is_null()) || envelope.get("guest_root").is_some() {
-        return reply(&OpenError::new(400,"erro_corpo_invalido","a ponte de abertura não aceita identidade de convidado"));
-    }
-    let request = match SessionOpenRequest::parse(envelope["request"].to_string().as_bytes()) {
-        Ok(request) => request,
-        Err(error) => return reply(&error),
-    };
-    match decide_detached(&st, request, OpenCaller::Owner, None, None).await {
-        Decision::Opened(opened) => crate::session_write::json_response(StatusCode::OK, json!({"info": opened.body})),
-        Decision::Refused(error) => reply(&error),
-        Decision::NotOurs => StatusCode::MISDIRECTED_REQUEST.into_response(),
-    }
 }
 
 /// `POST /api/archive/{project}/{session_id}/resume`: a conversa do Arquivo volta numa sessão nova, pela

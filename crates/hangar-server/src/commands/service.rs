@@ -24,6 +24,9 @@ pub struct Context {
     pub terminal: bool,
     pub cli: Vec<Value>,
     pub terminal_commands: Value,
+    /// Sem a sondagem guardada, espera por ela (sessão aberta) ou responde já com a lista do disco
+    /// (tela sem sessão), e a próxima abertura do `/` pega a da CLI.
+    pub wait_probe: bool,
 }
 
 impl Default for Context {
@@ -35,6 +38,7 @@ impl Default for Context {
             terminal: true,
             cli: Vec::new(),
             terminal_commands: Value::Null,
+            wait_probe: true,
         }
     }
 }
@@ -54,6 +58,7 @@ impl Context {
             terminal: false,
             cli: valid_commands(&view["commands"]),
             terminal_commands: view["terminal_commands"].clone(),
+            wait_probe: true,
         }
     }
 }
@@ -82,27 +87,28 @@ impl Service {
             .clone()
             .unwrap_or_else(|| accounts.env.claude_base.clone());
         let cli = if context.cli.is_empty() {
-            cache
-                .get_ready(
-                    Arc::new(NativeProbe {
-                        accounts: accounts.clone(),
-                        // Pasta apagada: a consulta volta à pasta temporária em vez de falhar.
-                        cwd: context.cwd.clone().filter(|cwd| {
-                            let usable = cwd.is_dir();
-                            if !usable {
-                                tracing::warn!(
-                                    code = "claude_commands_cwd_unavailable",
-                                    "pasta da sessão inacessível; catálogo sem as configurações do projeto"
-                                );
-                            }
-                            usable
-                        }),
-                        settings: context.settings.clone(),
-                    }),
-                    // A conta padrão roda sem CLAUDE_CONFIG_DIR, como o pane da sessão.
-                    context.config_dir.clone(),
-                )
-                .await
+            let probe = Arc::new(NativeProbe {
+                accounts: accounts.clone(),
+                // Pasta apagada: a consulta volta à pasta temporária em vez de falhar.
+                cwd: context.cwd.clone().filter(|cwd| {
+                    let usable = cwd.is_dir();
+                    if !usable {
+                        tracing::warn!(
+                            code = "claude_commands_cwd_unavailable",
+                            "pasta da sessão inacessível; catálogo sem as configurações do projeto"
+                        );
+                    }
+                    usable
+                }),
+                settings: context.settings.clone(),
+            });
+            // A conta padrão roda sem CLAUDE_CONFIG_DIR, como o pane da sessão.
+            let account = context.config_dir.clone();
+            if context.wait_probe {
+                cache.get_ready(probe, account).await
+            } else {
+                cache.get(probe, account).await
+            }
         } else {
             Some(context.cli.clone())
         };
@@ -211,10 +217,110 @@ pub async fn serve(st: &Arc<AppState>, req: Request) -> Response {
     }
 }
 
-pub(crate) fn matches(path: &str) -> bool {
-    path.strip_prefix("/api/sessions/")
-        .and_then(|tail| tail.split_once('/'))
-        .is_some_and(|(name, route)| !name.is_empty() && route == "commands")
+pub(crate) const NEW_CHAT_PATH: &str = "/api/claude/commands";
+
+/// `GET /api/claude/commands`: a lista do `/` da conversa que ainda vai nascer, na pasta e conta
+/// escolhidas. Só o dono.
+pub async fn new_chat_route(
+    State(st): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    req: Request,
+) -> Response {
+    let (forward, owner) = match crate::routes::gate(&st, peer, &req).await {
+        Ok(value) => value,
+        Err(e) => return crate::auth::unavailable(e),
+    };
+    if !owner {
+        return crate::routes::pass(&st, req, &forward).await;
+    }
+    let headers = req.headers().clone();
+    let mut response = serve_new_chat(&st, req).await;
+    crate::routes::cors(&headers, response.headers_mut());
+    response
+}
+
+fn refused(status: StatusCode, code: &'static str, msg: &str, params: Value) -> Response {
+    crate::diag::coded(
+        crate::session_write::json_response(
+            status,
+            crate::session_write::detail_body(code, msg, params),
+        ),
+        code,
+    )
+}
+
+/// Pasta e conta opcionais: sem pasta, só o que é da conta (comandos, skills e plugins dela).
+pub async fn serve_new_chat(st: &Arc<AppState>, req: Request) -> Response {
+    let query: HashMap<String, String> =
+        form_urlencoded::parse(req.uri().query().unwrap_or("").as_bytes())
+            .into_owned()
+            .collect();
+    let raw_cwd = query.get("cwd").filter(|v| !v.is_empty()).cloned();
+    let chosen = query.get("config_dir").filter(|v| !v.is_empty()).cloned();
+    let terminal = !query
+        .get("headless")
+        .is_some_and(|v| v == "1" || v == "true");
+    let accounts = st.accounts.clone();
+    let checked = tokio::task::spawn_blocking(
+        move || -> Result<(Option<PathBuf>, Option<PathBuf>), Response> {
+            let config_dir = match chosen {
+                None => None,
+                Some(dir) => {
+                    let known = accounts.claude_catalog().map_err(|e| {
+                        refused(StatusCode::SERVICE_UNAVAILABLE, e.code, &e.message, json!({}))
+                    })?;
+                    let Some(entry) = known
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .find(|a| a["path"].as_str() == Some(dir.as_str()))
+                    else {
+                        return Err(refused(
+                            StatusCode::BAD_REQUEST,
+                            "erro_config_dir_invalido",
+                            "config_dir inválido",
+                            json!({}),
+                        ));
+                    };
+                    // A conta ativa do servidor nasce sem CLAUDE_CONFIG_DIR: a mesma sondagem guardada das sessões dela.
+                    (entry["active"] != json!(true)).then(|| PathBuf::from(dir))
+                }
+            };
+            let cwd = match raw_cwd {
+                None => None,
+                Some(raw) => {
+                    let path = hangar_workspace::real(Path::new(&raw));
+                    if !path.is_dir() {
+                        return Err(refused(
+                            StatusCode::BAD_REQUEST,
+                            "erro_cwd_inexistente",
+                            "a pasta não existe",
+                            json!({"cwd": raw}),
+                        ));
+                    }
+                    Some(path)
+                }
+            };
+            Ok((cwd, config_dir))
+        },
+    )
+    .await;
+    let (cwd, config_dir) = match checked {
+        Ok(Ok(value)) => value,
+        Ok(Err(response)) => return response,
+        Err(_) => return failed(st, "", "claude_commands_context_failed"),
+    };
+    let context = Context {
+        cwd,
+        config_dir,
+        terminal,
+        wait_probe: false,
+        ..Default::default()
+    };
+    match st.command_catalog.list(st.accounts.clone(), context).await {
+        Ok(commands) => crate::session_write::json_response(StatusCode::OK, json!(commands)),
+        Err(code) => failed(st, "", code),
+    }
 }
 
 fn failed(st: &AppState, name: &str, code: &'static str) -> Response {

@@ -3,15 +3,16 @@ import * as Haptics from 'expo-haptics';
 import { AccessibilityInfo, ActivityIndicator, Alert, AppState, Keyboard, Platform, Pressable, ScrollView, Text, View, type NativeSyntheticEvent, type TextInput, type TextInputKeyPressEventData } from 'react-native';
 import type { NativeStackNavigationProp } from 'expo-router';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { broadcast, formataErro, uploadFileForServer, steerSession, podeEnviarSozinho, providerName, sendInputForServer, sideQuestionOf, slashMatches, slashTokenAt, replaceSlashToken, relimparDitado, estilosDitado, canUpdateQueueEdit, queueEditLeft, DELIVERY_STALLED } from '@hangar/core';
+import { broadcast, formataErro, isAbortError, steerSession, podeEnviarSozinho, providerName, sendInputForServer, sideQuestionOf, slashMatches, slashTokenAt, replaceSlashToken, relimparDitado, estilosDitado, canUpdateQueueEdit, queueEditLeft, DELIVERY_STALLED } from '@hangar/core';
 import type { CommandInfo, MotivoFim, Provider, QueueEdit, QueuePanel as QueuePanelModel, Server } from '@hangar/core';
 import { ComposerActions, ComposerBox, ComposerInput } from './ComposerField';
+import { DraftSaveError, uploadAttachment, type UploadedFields } from '../stores/attachmentUpload';
 import { Icon } from '../ui/Icon';
 import * as m from '../paraglide/messages';
 import { chatStore, filaCount as filaCountOf, submitConversationDraft, isSubmitting, settleDelivered } from '../stores/chat';
 import { abandonUnknownAttempt, attachInsert, confirmFirstInput, firstInputMessage, readFirstInput, sendFirstInput, useNewConversation, withAttach } from '../stores/newConversation';
 import { useSessions } from '../stores/sessions';
-import { clearDraft, clearRecoverableDraft, readDraft, readRecoverableDraft, resolveDraftTranscript, removeDraftRecording, reusableUploadPath, withoutUpload, writeDraft, writeRecoverableDraft, clearDictation, readDictation, writeDictation, recoverDictation, applyReadyDictation, associateDictationTranscript, type ConversationDraft, type DraftAttachment, type DictationDraft, type UploadTarget } from '../stores/drafts';
+import { clearDraft, clearRecoverableDraft, readDraft, readRecoverableDraft, resolveDraftTranscript, removeDraftRecording, pendingMediaUpload, reusableUploadPath, withoutUpload, writeDraft, writeRecoverableDraft, clearDictation, readDictation, writeDictation, recoverDictation, applyReadyDictation, associateDictationTranscript, type ConversationDraft, type DraftAttachment, type DictationDraft } from '../stores/drafts';
 import { useServers } from '../stores/servers';
 import { revealOnSend } from '../features/sessions/revealOnSend';
 import { removeDraftAttachment, retainDraftAttachment } from './draftAttachments';
@@ -65,6 +66,7 @@ interface Props {
 }
 
 type PendingAttach = PickedAttachment;
+type UploadPatch = Partial<Pick<DraftAttachment, 'uploadedPath' | 'uploadedFor' | 'uploadedMediaId' | 'uploadedFrames' | 'uploadedSpeech'>>;
 
 // Como o PWA: os caminhos de todos os anexos numa linha só (o envio por terminal recusa quebra de linha).
 const attachLine = (list: readonly PendingAttach[]) => list.map((a) => attachInsert(a, a.uploadedPath!)).join(' ');
@@ -306,35 +308,58 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
 
   // Cada anexo sobe assim que entra no campo; o Enviar só espera o que ainda está no ar. A chave é a
   // uri: anexo removido sai do mapa e o resultado que chegar depois não volta para a lista.
-  const uploadsRef = useRef(new Map<string, Promise<string>>());
+  const uploadsRef = useRef(new Map<string, Promise<UploadedFields>>());
+  // A espera dos quadros e da fala do vídeo para quando o anexo sai do mapa ou a tela fecha.
+  const abortsRef = useRef(new Map<string, AbortController>());
   const failedUploadsRef = useRef(new Set<string>());
-  const recordUpload = useCallback((uri: string, path: string, target: UploadTarget): boolean => {
+  const dropUpload = useCallback((uri?: string) => {
+    for (const [key, abort] of abortsRef.current) {
+      if (uri !== undefined && key !== uri) continue;
+      abort.abort();
+      abortsRef.current.delete(key);
+      uploadsRef.current.delete(key);
+    }
+    if (uri === undefined) uploadsRef.current.clear();
+    else uploadsRef.current.delete(uri);
+  }, []);
+  useEffect(() => () => dropUpload(), [dropUpload]);
+  const recordUpload = useCallback((uri: string, patch: UploadPatch): boolean => {
     // Desmontado, a lista em memória é velha: gravá-la apagaria o que outra montagem pôs no rascunho.
     if (!mountedRef.current) return true;
     const list = attachmentsRef.current;
-    if (!list.some((a) => a.uri === uri && a.uploadedPath !== path)) return true;
-    const next = list.map((a) => (a.uri === uri ? { ...a, uploadedPath: path, uploadedFor: target } : a));
+    const current = list.find((a) => a.uri === uri);
+    if (!current || (Object.keys(patch) as (keyof UploadPatch)[])
+      .every((key) => JSON.stringify(current[key]) === JSON.stringify(patch[key]))) return true;
+    const next = list.map((a) => (a.uri === uri ? { ...a, ...patch } : a));
     if (!persistDraft({ attachments: next })) return false;
     setPendingAttachments(next);
     return true;
   }, [persistDraft, setPendingAttachments]);
-  const startUpload = useCallback((attach: PendingAttach): Promise<string> => {
+  const startUpload = useCallback((attach: PendingAttach): Promise<UploadedFields> => {
     const running = uploadsRef.current.get(attach.uri);
     if (running) return running;
     const target = { serverId: origin.serverId, name: origin.name, transcript: transcriptRef.current };
+    const abort = new AbortController();
     // O corpo só lê `upload` depois do primeiro await, quando ele já foi atribuído.
-    let upload!: Promise<string>;
+    let upload!: Promise<UploadedFields>;
     upload = (async () => {
       const server = useServers.getState().servers.find((s) => s.id === origin.serverId);
       if (!server) throw new Error(m.chat_servidor_removido());
-      const blob = await (await fetch(attach.uri)).blob();
-      const path = (await uploadFileForServer(server, origin.name, new File([blob], attach.name, { type: attach.mime }))).path;
-      if (uploadsRef.current.get(attach.uri) === upload) recordUpload(attach.uri, path, target);
-      return path;
+      return uploadAttachment(server, origin.name, attach, (fields) => {
+        // Caminho sem gravar no rascunho: esperar a mídia faria o app fechado subir o vídeo de novo.
+        if (uploadsRef.current.get(attach.uri) === upload && !recordUpload(attach.uri, { ...fields, uploadedFor: target })) {
+          throw new DraftSaveError(m.draft_write_error());
+        }
+      }, { pending: pendingMediaUpload(attach, target), signal: abort.signal });
     })();
     uploadsRef.current.set(attach.uri, upload);
+    abortsRef.current.set(attach.uri, abort);
     // Falhou, sai do mapa: o próximo pedido sobe de novo em vez de repetir o erro.
-    upload.catch(() => { if (uploadsRef.current.get(attach.uri) === upload) uploadsRef.current.delete(attach.uri); });
+    upload.catch(() => {
+      if (uploadsRef.current.get(attach.uri) !== upload) return;
+      uploadsRef.current.delete(attach.uri);
+      abortsRef.current.delete(attach.uri);
+    });
     return upload;
   }, [origin, recordUpload]);
 
@@ -450,7 +475,7 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
         setSubmission(null);
         setRecoverable(kept);
         // Upload no ar é da sessão que morreu: o anexo recuperado sobe de novo para a recriada.
-        uploadsRef.current.clear();
+        dropUpload();
         setPendingAttachments([]);
         setText('');
       } else {
@@ -469,7 +494,8 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
     for (const a of pendingAttachments) {
       // A falha fica para o Enviar, que tenta de novo e mostra o motivo; aqui não sobe o mesmo arquivo de novo.
       if (!reusableUploadPath(a, target) && !failedUploadsRef.current.has(a.uri)) {
-        startUpload(a).catch(() => { failedUploadsRef.current.add(a.uri); });
+        // Cancelado (anexo removido, tela fechada) não é falha: voltando ao rascunho, sobe de novo.
+        startUpload(a).catch((e: unknown) => { if (!isAbortError(e)) failedUploadsRef.current.add(a.uri); });
       }
     }
   }, [pendingAttachments, origin, startUpload]);
@@ -774,8 +800,9 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
       setUploading(true);
       try {
         for (const attach of sentAttachments) {
-          let path = reusableUploadPath(attach, target);
-          if (!path) {
+          const ready = reusableUploadPath(attach, target);
+          let sent = ready ? { ...attach, uploadedPath: ready } : null;
+          if (!sent) {
             if (!useServers.getState().servers.some((s) => s.id === origin.serverId)) {
               setError(m.chat_servidor_removido());
               stop();
@@ -783,24 +810,30 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
             }
             // Reaproveita o upload no ar e, se ele falhar, tenta uma vez mais; falha anterior já saiu do mapa.
             const inFlight = uploadsRef.current.get(attach.uri);
+            let uploaded: UploadedFields;
             try {
-              path = await startUpload(attach).catch((e: unknown) => {
-                if (!inFlight) throw e;
+              uploaded = await startUpload(attach).catch((e: unknown) => {
+                if (!inFlight || isAbortError(e) || e instanceof DraftSaveError) throw e;
                 return startUpload(attach);
               });
             } catch (e) {
-              // O backend diz o motivo (tamanho, formato); o texto e os anexos continuam no rascunho, e
-              // os que já subiram guardam o caminho para não subir de novo.
-              setError(e instanceof Error && e.message ? `${m.board_falha_upload()}: ${e.message}` : m.board_falha_upload());
+              // Cancelado pela tela fechando ou pela sessão recriada, ou rascunho que não gravou (o aviso
+              // dele já está na tela): não é falha de upload.
+              if (!isAbortError(e) && !(e instanceof DraftSaveError)) {
+                // O backend diz o motivo (tamanho, formato); o texto e os anexos continuam no rascunho, e
+                // os que já subiram guardam o caminho para não subir de novo.
+                setError(e instanceof Error && e.message ? `${m.board_falha_upload()}: ${e.message}` : m.board_falha_upload());
+              }
               stop();
               return;
             }
-            if (!recordUpload(attach.uri, path, target)) {
+            sent = { ...attach, ...uploaded, uploadedFor: target };
+            if (!recordUpload(attach.uri, { ...uploaded, uploadedFor: target })) {
               stop();
               return;
             }
           }
-          inserts.push(attachInsert(attach, path));
+          inserts.push(attachInsert(sent, sent.uploadedPath));
         }
       } finally {
         setUploading(false);
@@ -851,7 +884,7 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
       const rest = attachmentsRef.current.filter((a) => !sentAttachments.some((x) => x.uri === a.uri));
       if (sentAttachments.length && persistDraft({ attachments: rest })) {
         for (const a of sentAttachments) {
-          uploadsRef.current.delete(a.uri);
+          dropUpload(a.uri);
           dropCopy(a.uri);
         }
         setPendingAttachments(rest);
@@ -1636,10 +1669,10 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
   const handleRemoveAttach = useCallback((uri: string) => {
     const next = attachmentsRef.current.filter((a) => a.uri !== uri);
     if (next.length === attachmentsRef.current.length || !persistDraft({ attachments: next })) return;
-    uploadsRef.current.delete(uri);
+    dropUpload(uri);
     dropCopy(uri);
     setPendingAttachments(next);
-  }, [persistDraft, setPendingAttachments]);
+  }, [persistDraft, setPendingAttachments, dropUpload]);
 
   useEffect(() => {
     return () => {
@@ -1701,11 +1734,10 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
   return (
     <>
     <ComposerBox focused={focado} footer={actions}>
-        {/* Faixa de cima da caixa: o que espera a vez no Hangar, as ações por mensagem e o modo de envio. */}
+        {/* Faixa de cima da caixa: o que espera a vez no Hangar e as ações por mensagem. */}
         <QueuePanel panel={queueList} locals={queueLocals} route={flightRoute(serverId, name)}
           editingId={queueEdit?.entryId ?? null} busy={queueBusy}
           onEdit={handleQueueEdit} onCancelEdit={chat.cancelQueueEdit}
-          delivery={supportsDelivery ? delivery : undefined} onModeChange={useDeliveryMode.getState().setMode}
           onSteer={chat.steerQueued} onRemove={chat.removeQueued} onMove={chat.moveQueued}
           reopen={deliveryStalled ? { serverId, name } : undefined} />
         {/* Fila da TUI do Kimi esperando o turno: diz quantas e dá a saída de mandar agora. */}

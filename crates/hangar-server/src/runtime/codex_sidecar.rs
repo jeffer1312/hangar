@@ -52,7 +52,7 @@ pub fn read(path:&Path) -> io::Result<Option<Meta>> {
     }
 }
 
-pub(super) fn write(path:&Path,meta:&Meta) -> io::Result<()> { super::queue::atomic_write(path,&serde_json::to_vec(meta)?) }
+pub(crate) fn write(path:&Path,meta:&Meta) -> io::Result<()> { super::queue::atomic_write(path,&serde_json::to_vec(meta)?) }
 
 fn text<'a>(meta:&'a Meta,field:&str) -> Option<&'a str> { meta.get(field).and_then(Value::as_str).filter(|s|!s.is_empty()) }
 
@@ -87,16 +87,78 @@ pub fn swap_key(dir:&Path,name:&str,endpoint:&str,app_pid:u32,expected:Option<&s
 /// reescreveu, a mesma regra do `finally` do `hangar-codex-tui`.
 pub fn delete_if_life(dir:&Path,name:&str,endpoint:&str,app_pid:u32,key:Option<&str>) -> io::Result<bool> {
     locked(dir,name,|path| {
-        match load(path) {
-            Some(meta) if same_process(&meta,endpoint,app_pid) && text(&meta,"key") == key => {}
+        let meta = match load(path) {
+            Some(meta) if same_process(&meta,endpoint,app_pid) && text(&meta,"key") == key => meta,
             _ => return Ok(false),
-        }
+        };
         match std::fs::remove_file(path) {
-            Ok(()) => Ok(true),
+            Ok(()) => { remove_ws_token(dir,text(&meta,WS_TOKEN_FILE)); Ok(true) }
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
             Err(error) => Err(error),
         }
     })
+}
+
+/// Campo do sidecar com o caminho do token do WebSocket do app-server; o token nunca vai ao sidecar.
+pub const WS_TOKEN_FILE:&str = "ws_token_file";
+
+fn ws_tokens(dir:&Path) -> PathBuf { dir.join("ws-tokens") }
+
+/// O token do app-server desta vida (`--ws-auth capability-token`): sem ele qualquer processo da máquina
+/// dirigiria a sessão pela porta de loopback. Arquivo novo por vida, legível só pelo dono.
+pub fn create_ws_token(dir:&Path,name:&str) -> io::Result<(PathBuf,String)> {
+    use std::io::Write;
+    let random = |bytes:&mut [u8]| ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(),bytes).map_err(|_|io::Error::other("sem fonte aleatória"));
+    let hex = |bytes:&[u8]| bytes.iter().map(|b|format!("{b:02x}")).collect::<String>();
+    let (mut token,mut suffix) = ([0u8;32],[0u8;6]);
+    random(&mut token)?;
+    random(&mut suffix)?;
+    let tokens = ws_tokens(dir);
+    std::fs::create_dir_all(&tokens)?;
+    #[cfg(unix)] { use std::os::unix::fs::PermissionsExt; std::fs::set_permissions(&tokens,std::fs::Permissions::from_mode(0o700))?; }
+    let stem = sanitize_session_name(name);
+    // Vida nova da sessão: o token que um lançador morto à força deixou não serve a mais ninguém.
+    for entry in std::fs::read_dir(&tokens)?.flatten() {
+        let old = entry.file_name();
+        let rest = old.to_str().and_then(|old|old.strip_prefix(&format!("{stem}-"))).and_then(|rest|rest.strip_suffix(".token"));
+        if rest.is_some_and(|rest|rest.len() == 12 && rest.bytes().all(|b|b.is_ascii_hexdigit())) { let _ = std::fs::remove_file(entry.path()); }
+    }
+    let file = std::path::absolute(tokens.join(format!("{stem}-{}.token",hex(&suffix))))?;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)] { use std::os::unix::fs::OpenOptionsExt; options.mode(0o600); }
+    let token = hex(&token);
+    options.open(&file)?.write_all(token.as_bytes())?;
+    Ok((file,token))
+}
+
+/// O token da vida gravada no sidecar; sem o campo (app-server de um lançador antigo), conecta sem ele.
+pub fn ws_token(meta:&Value) -> Option<String> {
+    let path = meta.get(WS_TOKEN_FILE).and_then(Value::as_str).filter(|s|!s.is_empty())?;
+    let token = std::fs::read_to_string(path).map(|token|token.trim().to_owned());
+    match token {
+        Ok(token) if !token.is_empty() => Some(token),
+        // A vida tem token e ele não foi lido: a conexão sem ele vai levar 401, e o motivo fica aqui.
+        failed => {
+            tracing::warn!(code="codex_ws_token_unreadable",io_kind=?failed.err().map(|e|e.kind()),"token do app-server do Codex não foi lido");
+            None
+        }
+    }
+}
+
+/// Só apaga dentro da pasta dos tokens: o caminho vem do sidecar.
+pub fn remove_ws_token(dir:&Path,file:Option<&str>) {
+    let Some(file) = file.map(Path::new).filter(|file|file.exists()) else { return };
+    // Comparados já resolvidos: o lançador e o servidor podem escrever o HOME de jeitos diferentes.
+    let parent = file.parent().and_then(|parent|std::fs::canonicalize(parent).ok());
+    let inside = parent.is_some_and(|parent|std::fs::canonicalize(ws_tokens(dir)).is_ok_and(|tokens|tokens == parent));
+    if !inside {
+        tracing::warn!(code="codex_ws_token_outside","token do app-server do Codex fora da pasta dos tokens; não foi apagado");
+        return;
+    }
+    if let Err(error) = std::fs::remove_file(file) && error.kind() != io::ErrorKind::NotFound {
+        tracing::warn!(code="codex_ws_token_remove_failed",io_kind=?error.kind(),"token do app-server do Codex não foi apagado");
+    }
 }
 
 /// Funde `patch` no sidecar só se cada campo de `expect` ainda tem o valor esperado (ausente = nulo).
@@ -129,6 +191,51 @@ pub const PERMISSION_UNKNOWN:&str = "permission_unknown";
 
 /// Grava o sidecar inteiro sob a trava: a volta da troca de modo cobre o lançador que o apagou ao sair.
 pub fn put(dir:&Path,name:&str,meta:&Meta) -> io::Result<()> { locked(dir,name,|path|write(path,meta)) }
+
+/// O que regravar o sidecar conserva do anterior: a chave sempre (sem ela a adoção sorteia outra); o
+/// resto só na mesma conversa.
+const SAVE_KEEPS:&[&str] = &["key","transfer_id","tool_output_token_limit","codex_home","codex_account","permission_mode","previous_non_plan","jev","service_tier"];
+
+/// `sessions.save`: o sidecar inteiro da conversa nova, com o que o anterior tinha da sessão. Devolve o gravado.
+pub fn save(dir:&Path,name:&str,mut meta:Meta) -> io::Result<Meta> {
+    locked(dir,name,|path| {
+        let previous = load(path).unwrap_or_default();
+        let same_thread = previous.get("thread_id").unwrap_or(&Value::Null) == meta.get("thread_id").unwrap_or(&Value::Null);
+        for field in SAVE_KEEPS {
+            if !meta.contains_key(*field) && let Some(value) = previous.get(*field) && (*field == "key" || same_thread) {
+                meta.insert((*field).to_owned(),value.clone());
+            }
+        }
+        write(path,&meta)?;
+        Ok(meta)
+    })
+}
+
+/// `sessions.update`: funde campos no sidecar que existe (thread nova descarta o que era da anterior).
+/// `None`: não há sidecar, e nada foi gravado.
+pub fn update(dir:&Path,name:&str,fields:&Meta) -> io::Result<Option<Meta>> {
+    locked(dir,name,|path| {
+        let Some(meta) = load(path) else { return Ok(None) };
+        let merged = merge_conversation(meta,fields);
+        write(path,&merged)?;
+        Ok(Some(merged))
+    })
+}
+
+/// `sessions.switch_thread`: a TUI abriu outra conversa principal (`/new`). Só no sidecar desta vida
+/// (endpoint e pid do app-server) e só a partir da conversa anterior; subagente nunca entra.
+pub fn switch_thread(dir:&Path,name:&str,thread:&Value,previous:&str,endpoint:&str,app_pid:u32) -> io::Result<bool> {
+    locked(dir,name,|path| {
+        let Some(meta) = load(path) else { return Ok(false) };
+        if !same_process(&meta,endpoint,app_pid) || !super::codex::primary_thread(thread,text(&meta,"cwd")) { return Ok(false); }
+        let recorded = meta.get("thread_id").and_then(Value::as_str);
+        if recorded == thread["id"].as_str() { return Ok(true); }
+        if recorded != Some(previous) { return Ok(false); }
+        let fields:Meta = [("thread_id".to_owned(),thread["id"].clone()),("rollout_path".to_owned(),thread["path"].clone())].into_iter().collect();
+        write(path,&merge_conversation(meta,&fields))?;
+        Ok(true)
+    })
+}
 
 /// O que o ator do Codex com terminal precisa para gravar o sidecar sem o Python.
 #[derive(Clone,Debug)]
@@ -365,6 +472,53 @@ mod tests {
         assert!(other.try_lock().is_ok(),"fechar solta");
     }
 
+    /// `sessions.save`: a chave fica sempre; o que é da conversa só na mesma thread.
+    #[test]
+    fn save_keeps_the_key_always_and_the_conversation_fields_on_the_same_thread() {
+        let dir = tempfile::tempdir().unwrap();
+        sidecar(dir.path(),json!({"permission_mode":"Ask for approval","codex_account":"x","jev":true}));
+        let fresh = |thread:&str| json!({"name":"cx","provider":"codex","thread_id":thread,"rollout_path":"/r","cwd":"/w"}).as_object().unwrap().clone();
+        let same = save(dir.path(),"cx",fresh("t1")).unwrap();
+        for kept in ["key","transfer_id","tool_output_token_limit","service_tier","permission_mode","codex_account","jev"] {
+            assert_eq!(same.get(kept),read(dir.path()).get(kept),"{kept}");
+            assert!(same.contains_key(kept),"{kept} é da mesma conversa");
+        }
+        assert!(same.get("endpoint").is_none(),"o resto é o que a gravação trouxe");
+        let other = save(dir.path(),"cx",fresh("t2")).unwrap();
+        assert_eq!(other["key"],"k1","a chave fica mesmo noutra conversa");
+        for gone in ["transfer_id","tool_output_token_limit","service_tier","permission_mode","codex_account","jev"] {
+            assert!(!other.contains_key(gone),"{gone} era da conversa anterior");
+        }
+        // Campo dado vence o anterior.
+        let mut own = fresh("t2");
+        own.insert("key".into(),json!("k9"));
+        assert_eq!(save(dir.path(),"cx",own).unwrap()["key"],"k9");
+    }
+
+    /// `sessions.switch_thread`: só a vida deste app-server, a partir da conversa anterior, e nunca subagente.
+    #[test]
+    fn switch_thread_follows_a_new_primary_only_from_the_previous_one() {
+        let dir = tempfile::tempdir().unwrap();
+        sidecar(dir.path(),json!({}));
+        let thread = |id:&str,extra:Value| { let mut t = json!({"id":id,"path":format!("/r/{id}"),"cwd":"/w","source":"cli"});
+            for (k,v) in extra.as_object().unwrap() { t[k] = v.clone(); } t };
+        let (endpoint,pid) = ("ws://127.0.0.1:4000",40);
+        assert!(!switch_thread(dir.path(),"cx",&thread("t2",json!({"parentThreadId":"t1"})),"t1",endpoint,pid).unwrap(),"subagente");
+        assert!(!switch_thread(dir.path(),"cx",&thread("t2",json!({"cwd":"/outra"})),"t1",endpoint,pid).unwrap(),"outra pasta");
+        assert!(!switch_thread(dir.path(),"cx",&thread("t2",json!({})),"t1",endpoint,41).unwrap(),"outro app-server");
+        assert!(!switch_thread(dir.path(),"cx",&thread("t2",json!({})),"t0",endpoint,pid).unwrap(),"não era a anterior");
+        assert_eq!(read(dir.path())["thread_id"],"t1");
+        assert!(switch_thread(dir.path(),"cx",&thread("t2",json!({})),"t1",endpoint,pid).unwrap());
+        let meta = read(dir.path());
+        assert_eq!((meta["thread_id"].as_str(),meta["rollout_path"].as_str()),(Some("t2"),Some("/r/t2")));
+        assert!(meta.get("transfer_id").is_none() && meta.get("service_tier").is_none(),"o que era da conversa anterior sai");
+        assert!(switch_thread(dir.path(),"cx",&thread("t2",json!({})),"t1",endpoint,pid).unwrap(),"já trocada");
+        // `update` sem sidecar não cria nada.
+        std::fs::remove_file(path(dir.path(),"cx")).unwrap();
+        assert!(update(dir.path(),"cx",&json!({"tui_pid":1}).as_object().unwrap().clone()).unwrap().is_none());
+        assert!(!path(dir.path(),"cx").exists());
+    }
+
     #[test]
     fn update_if_writes_only_over_the_expected_life() {
         let dir = tempfile::tempdir().unwrap();
@@ -383,5 +537,40 @@ mod tests {
         assert!(update_if(dir.path(),"cx",&[],&back).unwrap().is_none(),"arquivo apagado continua apagado");
         put(dir.path(),"cx",&back).unwrap();
         assert_eq!(read(dir.path()),json!({"app_pid":40}),"`put` regrava inteiro, mesmo sem arquivo");
+    }
+
+    #[test]
+    fn the_app_server_token_lives_outside_the_sidecar_and_leaves_with_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let (file,token) = create_ws_token(dir.path(),"cx").unwrap();
+        assert!(file.is_absolute() && token.len() == 64);
+        assert!(!file.to_string_lossy().contains(&token),"o token não pode ir no nome do arquivo");
+        #[cfg(unix)] {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777,0o600);
+            assert_eq!(std::fs::metadata(file.parent().unwrap()).unwrap().permissions().mode() & 0o777,0o700);
+        }
+        let (other,_) = create_ws_token(dir.path(),"cx-a").unwrap();
+        sidecar(dir.path(),json!({"ws_token_file":file}));
+        assert_eq!(ws_token(&serde_json::to_value(load(&path(dir.path(),"cx")).unwrap()).unwrap()).as_deref(),Some(token.as_str()));
+        assert_eq!(ws_token(&json!({})),None,"sidecar de lançador antigo conecta sem token");
+        assert!(delete_if_life(dir.path(),"cx","ws://127.0.0.1:4000",40,Some("k1")).unwrap());
+        assert!(!file.exists(),"o token sai com o sidecar");
+        assert!(other.exists(),"o de outra sessão fica");
+        let outside = dir.path().join("fora.token");
+        std::fs::write(&outside,"x").unwrap();
+        remove_ws_token(dir.path(),outside.to_str());
+        assert!(outside.exists(),"caminho fora da pasta dos tokens não é apagado");
+    }
+
+    /// Lançador morto à força não apaga o seu token: a vida seguinte da mesma sessão apaga.
+    #[test]
+    fn a_new_life_removes_the_tokens_left_by_dead_lives_of_the_same_session_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let (left,_) = create_ws_token(dir.path(),"cx").unwrap();
+        let (neighbour,_) = create_ws_token(dir.path(),"cx-a").unwrap();
+        let (current,_) = create_ws_token(dir.path(),"cx").unwrap();
+        assert!(!left.exists(),"token de vida morta da mesma sessão");
+        assert!(current.exists() && neighbour.exists(),"a vida nova e a sessão de nome parecido ficam");
     }
 }

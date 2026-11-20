@@ -113,6 +113,20 @@ pub fn input_answer(sent: &Sent, steered: bool) -> (StatusCode, Value) {
     }
 }
 
+fn terminal_input_answer(sent: &Sent, result: &Result<RuntimeReply, RuntimeError>) -> (StatusCode, Value) {
+    let reply = result.as_ref().ok();
+    let steered = reply.is_some_and(|reply| reply.disposition == Disposition::Accepted && reply.payload["steered"] == true);
+    let (status, mut body) = input_answer(sent, steered);
+    // O ator só informa que drenou a entrada depois de a CLI aceitar o texto.
+    if status.is_success() && reply.is_some_and(|reply| {
+        matches!(reply.disposition, Disposition::Accepted | Disposition::Unknown)
+            && reply.payload["drained"] == 1
+    }) {
+        body["delivered"] = json!(true);
+    }
+    (status, body)
+}
+
 pub(super) fn sem_turno(msg: &str) -> (StatusCode, Value) { (StatusCode::CONFLICT, detail_body("erro_sem_turno", msg, json!({}))) }
 
 pub(super) const MSG_CODEX_CONTROL: &str = "O Codex não aceitou a alteração; atualize a sessão e tente novamente.";
@@ -219,11 +233,22 @@ pub(crate) fn scrub_lone_surrogates(bytes: &[u8]) -> std::borrow::Cow<'_, [u8]> 
     out.map_or(std::borrow::Cow::Borrowed(bytes), std::borrow::Cow::Owned)
 }
 
-/// `jev_task` e `jev_message` pedem a decisão automática; não se combinam com orientação explícita.
-fn parse_input(bytes: &Bytes) -> Option<(String, bool, Option<(String, String)>)> {
+#[derive(Debug, PartialEq)]
+struct InputBody {
+    text: String,
+    steer: bool,
+    task: Option<(String, String)>,
+    /// `"delivery":"conversation"`: com a sessão trabalhando a mensagem fica na conversa e a CLI a lê na próxima
+    /// pausa entre ferramentas, sem cortar o turno.
+    conversation: bool,
+}
+
+/// `jev_task` e `jev_message` pedem a decisão automática; `delivery` pede a entrega na conversa. Nenhum dos
+/// dois se combina com orientação explícita nem com o outro.
+fn parse_input(bytes: &Bytes) -> Option<InputBody> {
     let object = serde_json::from_slice::<Value>(&scrub_lone_surrogates(bytes)).ok()?;
     let object = object.as_object()?;
-    if object.keys().any(|k| !matches!(k.as_str(), "text" | "steer" | "jev_task" | "jev_message")) { return None; }
+    if object.keys().any(|k| !matches!(k.as_str(), "text" | "steer" | "jev_task" | "jev_message" | "delivery")) { return None; }
     let steer = match object.get("steer") { None => false, Some(Value::Bool(b)) => *b, Some(_) => return None };
     let task = match object.get("jev_task") {
         None if !object.contains_key("jev_message") => None,
@@ -234,12 +259,33 @@ fn parse_input(bytes: &Bytes) -> Option<(String, bool, Option<(String, String)>)
         }
         _ => return None,
     };
-    Some((object.get("text")?.as_str()?.to_owned(), steer, task))
+    let conversation = match object.get("delivery") {
+        None => false,
+        Some(Value::String(mode)) if mode == "conversation" && !steer && task.is_none() => true,
+        Some(_) => return None,
+    };
+    Some(InputBody { text: object.get("text")?.as_str()?.to_owned(), steer, task, conversation })
 }
 
 fn parse_body(bytes: &Bytes) -> Option<(String, bool)> {
-    let (text, steer, task) = parse_input(bytes)?;
-    task.is_none().then_some((text, steer))
+    let body = parse_input(bytes)?;
+    (body.task.is_none() && !body.conversation).then_some((body.text, body.steer))
+}
+
+/// Na conversa onde a mensagem entra no turno sem cortá-lo: Claude e Codex sem terminal, Codex com terminal
+/// (`turn/steer`) e Claude com terminal, onde o ator digita com o turno em curso e o Claude Code a lê na pausa
+/// seguinte. Pi, omp e Kimi seguem o caminho da fila.
+fn gentle(target: &WriteTarget) -> bool {
+    use crate::runtime::gateway::EntryHandle;
+    gentle_surface(matches!(target.handle, EntryHandle::Headless(_) | EntryHandle::CodexTerminal { .. } | EntryHandle::Terminal { .. }),
+        &target.provider)
+}
+
+fn gentle_surface(own_process: bool, provider: &str) -> bool { own_process && matches!(provider, "claude" | "codex") }
+
+/// Comando de barra não é mensagem da conversa: segue o caminho dele.
+fn conversation_route(wanted: bool, target: &WriteTarget, text: &str) -> bool {
+    wanted && queued(text) && gentle(target)
 }
 
 /// O FastAPI só lê o corpo como JSON sem `Content-Type` ou com `application/json`; outro tipo é 422 dele.
@@ -268,14 +314,22 @@ fn report(st: &AppState, name: &str, diary: Diary) {
 
 /// O miolo do `/input` depois da admissão: envia ao ator, orienta se pedido e responde como o Python.
 async fn send(st: &AppState, name: &str, target: &WriteTarget, text: &str, steer: bool, expected_turn: Option<Value>) -> (StatusCode, Value) {
-    send_with_receipt(st,name,target,text,steer,expected_turn,false).await
+    send_with_receipt(st,name,target,text,steer,false,expected_turn,false).await
 }
 
-async fn send_with_receipt(st: &AppState, name: &str, target: &WriteTarget, text: &str, steer: bool, expected_turn: Option<Value>, include_uncertain: bool) -> (StatusCode, Value) {
+/// `conversation` só chega `true` onde `gentle` vale: a linha nasce marcada e, com turno, entra nele pela
+/// orientação sem `now`, que espera a ferramenta em curso acabar.
+#[allow(clippy::too_many_arguments)]
+async fn send_with_receipt(st: &AppState, name: &str, target: &WriteTarget, text: &str, steer: bool, conversation: bool, expected_turn: Option<Value>, include_uncertain: bool) -> (StatusCode, Value) {
     let operation_id = random_hex(16);
+    // No Claude com terminal o Orientar aperta `ctrl+x ctrl+s`, que corta o turno: lá o próprio ator digita a
+    // mensagem marcada mesmo com o Claude trabalhando.
+    let claude_terminal = matches!(target.handle, crate::runtime::gateway::EntryHandle::Terminal { .. });
+    let steer = steer || (conversation && !claude_terminal);
     let params = Params { text, steer, terminal: target.terminal, codex: target.provider == "codex", operation_id: &operation_id };
-    let sent = target.handle.command(RuntimeCommand { operation_id: operation_id.clone(), kind: OperationKind::Input,
-        payload: json!({"text": text, "pre_transcript": false}) }).await;
+    let mut payload = json!({"text": text, "pre_transcript": false});
+    if conversation { payload["conversation"] = json!(true); }
+    let sent = target.handle.command(RuntimeCommand { operation_id: operation_id.clone(), kind: OperationKind::Input, payload }).await;
     let uncertain = include_uncertain && unproven(&sent);
     let (sent, diary) = classify(&params, &sent);
     report(st, name, diary);
@@ -285,8 +339,9 @@ async fn send_with_receipt(st: &AppState, name: &str, target: &WriteTarget, text
         if let Some(expected) = expected_turn { payload["expected_turn"] = expected; }
         if let crate::runtime::gateway::EntryHandle::Terminal { handle, .. } = &target.handle {
             let result = handle.control(random_hex(16), "steer_entry".into(), payload).await;
-            let (status, reply) = super::control::queue_steer_terminal(&result);
-            return input_answer(&sent, status.is_success() && reply["steered"] == true);
+            let mut answer = terminal_input_answer(&sent, &result);
+            if uncertain { answer.1["uncertain"] = json!(true); }
+            return answer;
         }
         let promoted = target.handle.command(RuntimeCommand { operation_id: random_hex(16), kind: OperationKind::SteerQueue,
             payload }).await;
@@ -305,7 +360,8 @@ pub async fn input(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
         Ok(admitted) => admitted,
         Err(response) => return response,
     };
-    let Some((text, steer, task)) = parse_input(&bytes).filter(|_| json_content_type(ctx.headers())) else { return invalid_body(ctx.headers()) };
+    let Some(InputBody { text, steer, task, conversation: wants_conversation }) = parse_input(&bytes).filter(|_| json_content_type(ctx.headers()))
+        else { return invalid_body(ctx.headers()) };
     if is_codex_clear(&ctx.target.provider, &text) {
         return answer(&ctx, super::codex::clear(&ctx.target, &text, Some(ctx.st.term.clone())).await);
     }
@@ -323,7 +379,10 @@ pub async fn input(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
         let expected = direct.then(|| before.as_ref().and_then(|snapshot| crate::runtime::protocol::turn_marker(&snapshot["view"]))).flatten();
         (direct, Some(note), expected)
     } else { (steer, None, None) };
-    let mut result = send(&ctx.st, &ctx.name, &ctx.target, &text, steer, expected_turn).await;
+    let conversation = conversation_route(wants_conversation, &ctx.target, &text);
+    let mut result = send_with_receipt(&ctx.st, &ctx.name, &ctx.target, &text, steer, conversation, expected_turn, false).await;
+    // `false`: o pedido foi para a fila comum (Claude com terminal, Pi, omp, Kimi, comando de barra).
+    if wants_conversation && result.0.is_success() { result.1["conversation"] = json!(conversation); }
     if let Some(note) = note {
         let outcome = if steer && result.1["delivered"] != true { "refused" }
             else if !steer && result.1["delivered"] == true { "delivered" } else { note };
@@ -385,7 +444,8 @@ async fn queue_opening(st: &AppState, name: &str, key: &str, text: &str, steer: 
 
 /// `/input` do dono (ou pela ponte) para o Codex com terminal que ainda abre a conversa.
 pub(super) async fn opening_response(st: &Arc<AppState>, name: &str, key: &str, headers: &HeaderMap, bytes: &Bytes) -> Response {
-    let Some((text, steer, _)) = parse_input(bytes).filter(|_| json_content_type(headers)) else { return invalid_body(headers) };
+    // Sem turno na conversa que abre, "Na conversa" é só fila.
+    let Some(InputBody { text, steer, .. }) = parse_input(bytes).filter(|_| json_content_type(headers)) else { return invalid_body(headers) };
     let (status, body) = queue_opening(st, name, key, &text, steer).await;
     let mut response = json_response(status, body);
     cors(headers, response.headers_mut());
@@ -394,7 +454,7 @@ pub(super) async fn opening_response(st: &Arc<AppState>, name: &str, key: &str, 
 
 /// `/input` do dono para a sessão que o Rust não adotou (`unowned`), com a linha do diário do handler.
 pub(super) async fn unowned_response(st: &AppState, name: &str, peer: SocketAddr, headers: &HeaderMap, bytes: &Bytes) -> Response {
-    let Some((text, steer, _)) = parse_input(bytes).filter(|_| json_content_type(headers)) else { return invalid_body(headers) };
+    let Some(InputBody { text, steer, .. }) = parse_input(bytes).filter(|_| json_content_type(headers)) else { return invalid_body(headers) };
     let result = super::unowned::input_answer(super::unowned::send(st, name, &text).await);
     crate::diag::record(crate::diag::diary_dir(), vec![received_line(name, headers, peer, &text, steer, &result)], "mensagem recebida");
     let mut response = json_response(result.0, result.1);
@@ -428,7 +488,7 @@ async fn queue_while_asleep(st: &AppState, name: &str, key: &str, text: &str) ->
 
 /// `/input` do dono (ou pela ponte) para a sessão adormecida.
 pub(super) async fn asleep_response(st: &Arc<AppState>, name: &str, key: &str, headers: &HeaderMap, bytes: &Bytes) -> Response {
-    let Some((text, _, _)) = parse_input(bytes).filter(|_| json_content_type(headers)) else { return invalid_body(headers) };
+    let Some(InputBody { text, .. }) = parse_input(bytes).filter(|_| json_content_type(headers)) else { return invalid_body(headers) };
     let (status, body) = queue_while_asleep(st, name, key, &text).await;
     let mut response = json_response(status, body);
     cors(headers, response.headers_mut());
@@ -513,7 +573,7 @@ async fn send_bound_target(st:&AppState,name:&str,key:&str,conversation:Option<&
         let sent=super::codex::compact_sent(target,text).await;
         with_receipt(super::codex::compact_answer(&sent),unproven(&sent))
     }
-    else {send_with_receipt(st,name,target,text,false,None,true).await}
+    else {send_with_receipt(st,name,target,text,false,false,None,true).await}
 }
 
 async fn queue_bound_input(st:&AppState,runtime:&crate::runtime::gateway::RuntimeRegistry,name:&str,key:&str,conversation:Option<&str>,text:&str,opening:bool)->(StatusCode,Value) {
@@ -708,10 +768,33 @@ mod broadcast_tests {
     use super::*;
 
     #[test]
+    fn direct_delivery_reports_when_the_claude_terminal_accepted_the_message() {
+        let queued = Sent::Done { delivered: false, native: false, entry: true };
+        for (disposition, payload, delivered, steered) in [
+            (Disposition::Accepted, json!({"drained": 1, "steered": false}), true, false),
+            (Disposition::Accepted, json!({"drained": 1, "steered": false, "code": "queue_steer_hint_missing"}), true, false),
+            (Disposition::Accepted, json!({"drained": 1, "steered": true}), true, true),
+            (Disposition::Accepted, json!({"drained": 0, "steered": false}), false, false),
+            (Disposition::Unknown, json!({"code": "queue_steer_uncertain", "drained": 1}), true, false),
+            (Disposition::Unknown, json!({"code": "queue_steer_uncertain"}), false, false),
+        ] {
+            let result = Ok(RuntimeReply {
+                operation_id: "steer".into(),
+                disposition,
+                payload,
+            });
+            let (status, body) = terminal_input_answer(&queued, &result);
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(body["delivered"], delivered);
+            assert_eq!(body["steered"], steered);
+        }
+    }
+
+    #[test]
     fn automatic_delivery_requires_bounded_context_and_cannot_override_explicit_steering() {
         let b = |s: &str| Bytes::copy_from_slice(s.as_bytes());
         assert_eq!(parse_input(&b(r#"{"text":"oi","jev_task":"Criar a tela","jev_message":"Use azul"}"#)),
-            Some(("oi".into(), false, Some(("Criar a tela".into(), "Use azul".into())))));
+            Some(InputBody { text: "oi".into(), steer: false, task: Some(("Criar a tela".into(), "Use azul".into())), conversation: false }));
         for refused in [r#"{"text":"oi","jev_task":"Criar a tela"}"#,
             r#"{"text":"oi","jev_message":"Use azul"}"#,
             r#"{"text":"oi","steer":true,"jev_task":"t","jev_message":"m"}"#,
@@ -721,6 +804,33 @@ mod broadcast_tests {
         assert!(parse_input(&b(&json!({"text":"oi","jev_task":"t","jev_message":"á".repeat(2001)}).to_string())).is_none());
         assert!(parse_input(&b(&json!({"text":"oi","jev_task":"á".repeat(1001),"jev_message":"m"}).to_string())).is_none());
         assert!(parse_body(&b(r#"{"text":"oi","jev_task":"t","jev_message":"m"}"#)).is_none(), "Orientar explícito não aceita contexto automático");
+    }
+
+    #[test]
+    fn conversation_delivery_is_its_own_choice() {
+        let b = |s: &str| Bytes::copy_from_slice(s.as_bytes());
+        assert_eq!(parse_input(&b(r#"{"text":"oi","delivery":"conversation"}"#)),
+            Some(InputBody { text: "oi".into(), steer: false, task: None, conversation: true }));
+        assert_eq!(parse_input(&b(r#"{"text":"oi","steer":false,"delivery":"conversation"}"#)).map(|body| body.conversation), Some(true));
+        // Com `steer:true` o Claude com terminal cortaria o turno; com o Jev seriam duas decisões para a mesma mensagem.
+        for refused in [r#"{"text":"oi","steer":true,"delivery":"conversation"}"#,
+            r#"{"text":"oi","delivery":"conversation","jev_task":"t","jev_message":"m"}"#,
+            r#"{"text":"oi","delivery":"queue"}"#,
+            r#"{"text":"oi","delivery":true}"#,
+            r#"{"text":"oi","delivery":null}"#] {
+            assert!(parse_input(&b(refused)).is_none(), "{refused}");
+        }
+        assert!(parse_body(&b(r#"{"text":"oi","delivery":"conversation"}"#)).is_none(), "/steer não leva modo de entrega");
+    }
+
+    #[test]
+    fn conversation_is_gentle_only_where_the_turn_belongs_to_the_process() {
+        // Sem terminal (Claude e Codex) e Codex com terminal: entrega sem corte.
+        assert!(gentle_surface(true, "claude"));
+        assert!(gentle_surface(true, "codex"));
+        // Claude com terminal, Pi, omp e Kimi: o pedido vira a fila comum.
+        assert!(!gentle_surface(false, "claude"));
+        for other in ["pi", "omp", "kimi"] { assert!(!gentle_surface(false, other), "{other}"); }
     }
 
     #[test]

@@ -11,14 +11,14 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use axum::http::Method;
-use fake::{OWNER, SECRET, client};
-use hangar_server::groups::orq::PythonOrq;
+use fake::{OWNER, client};
+use hangar_server::groups::orq::OrqVault;
 use hangar_server::groups::service::GroupService;
 use hangar_server::groups::store::PairDir;
 use hangar_server::list::bridge::{ListBridge, ListEnv, parse_dirs};
 use hangar_server::list::facts::FactsClient;
 use hangar_server::list::mux::Mux;
-use hangar_server::routes::{AppState, guest_router, router, terminal_router};
+use hangar_server::routes::{AppState, guest_router, router};
 use hangar_server::share::ShareState;
 use hangar_server::share::caller::{GuestGrant, guest_allowed};
 use hangar_server::share::gate::GuestConn;
@@ -30,7 +30,6 @@ use serde_json::{Value, json};
 struct Srv {
     _dir: tempfile::TempDir,
     public: SocketAddr,
-    private: SocketAddr,
     guest: SocketAddr,
     app: Arc<AppState>,
     share: Arc<ShareState>,
@@ -48,8 +47,7 @@ async fn server() -> Srv {
     let dirs = parse_dirs(&json!({"home": home, "claude": home.join(".claude"), "codex_home": home.join(".codex"),
         "pi_sessions": home.join(".pi/agent/sessions"), "omp_config": home.join(".omp"),
         "omp_agent": home.join(".omp/agent"), "kimi_home": home.join(".kimi-code")}).to_string());
-    let (_python, upstream) = fake::spawn_fake().await;
-    let mut state = AppState::new(fake::config(upstream, ""));
+    let mut state = AppState::new(fake::config(""));
     // Cada sessão é um Claude sem terminal do Rust: o aviso do grupo chega ao cano falso dela.
     let runtime = Arc::new(crate::sink::registry().await);
     let sink = crate::sink::Sink::default();
@@ -58,22 +56,21 @@ async fn server() -> Srv {
     assert!(state.state.runtime.set(runtime).is_ok());
     state.list = Arc::new(ListBridge::new(ListEnv { mux: Mux::with_program(&script, Duration::from_secs(5)),
         capture_program: script.into_os_string(), procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs },
-        FactsClient::new(upstream, SECRET.into())));
+        FactsClient::new()));
     let pair = home.join(".claude/.hangar-pair");
     state.groups = Some(Arc::new(GroupService::new(PairDir::new(pair.clone(), root.join("arquivo")),
-        Arc::new(PythonOrq::from_state(&state)), "casa".into())));
+        Arc::new(OrqVault::from_state(&state)), "casa".into())));
     let share = share_state(&root.join("shares.json"), &pair, Arc::new(Mutex::new(1_000.0)));
     state.share = Some(share.clone());
     let app = Arc::new(state);
     let bind = || async { tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap() };
-    let (l1, l2, l3) = (bind().await, bind().await, bind().await);
-    let (public, private, guest) = (l1.local_addr().unwrap(), l2.local_addr().unwrap(), l3.local_addr().unwrap());
-    let (r1, r2, r3) = (router(app.clone()), terminal_router(app.clone()), guest_router(app.clone()));
+    let (l1, l3) = (bind().await, bind().await);
+    let (public, guest) = (l1.local_addr().unwrap(), l3.local_addr().unwrap());
+    let (r1, r3) = (router(app.clone()), guest_router(app.clone()));
     tokio::spawn(async move { axum::serve(l1, r1.into_make_service_with_connect_info::<SocketAddr>()).await.unwrap() });
-    tokio::spawn(async move { axum::serve(l2, r2.into_make_service_with_connect_info::<SocketAddr>()).await.unwrap() });
     tokio::spawn(async move { axum::serve(l3, r3.into_make_service_with_connect_info::<GuestConn>()).await.unwrap() });
     let (other, other_base) = other_machine().await;
-    Srv { _dir: dir, public, private, guest, app, share, pair, other, other_base, _sink: sink }
+    Srv { _dir: dir, public, guest, app, share, pair, other, other_base, _sink: sink }
 }
 
 impl Srv {
@@ -143,22 +140,6 @@ async fn owner_releases_full_access_and_the_guest_cannot() {
     assert_eq!(s.kind(&token, "s1"), Some(Kind::Pair));
     let (status, body) = s.owner("POST", "/api/sessions/s1/pair-access", Some(json!({"alias": "bia", "level": "full"}))).await;
     assert_eq!((status, &body["detail"]["code"]), (404, &json!("erro_par_inexistente")));
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn connect_reaches_pair_access_and_undo_by_private_routes() {
-    let s = server().await;
-    let (root, token) = s.full_pair().await;
-    s.join_s1().await;
-    let private = |path: &str| client().post(format!("http://{}/__hangar_server/share/owner/{path}", s.private))
-        .header("x-hangar-internal", SECRET).header("content-type", "application/json");
-    let r = private("pair_access/s1").body(json!({"alias": "ana", "level": "full"}).to_string()).send().await.unwrap();
-    assert_eq!(r.status(), 200);
-    assert_eq!(s.kind(&token, "s1"), Some(Kind::Share));
-    let r = client().delete(format!("http://{}/__hangar_server/share/owner/pairs_undo/ana?session=Y", s.private))
-        .header("x-hangar-internal", SECRET).send().await.unwrap();
-    assert_eq!(r.status(), 200);
-    assert!(s.revoked(&root));
 }
 
 #[tokio::test(flavor = "multi_thread")]

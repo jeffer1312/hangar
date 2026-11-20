@@ -404,8 +404,8 @@ if s.get("pair_gid"):
         print(f"other-group {s['pair_gid']}")
         sys.exit()
 if identities.get(name):
-    sys.path.insert(0, str(Path(sys.argv[4]).resolve().parents[3] / "backend"))
-    from app.providers_bridge import local
+    sys.path.insert(0, str(Path(sys.argv[4]).resolve().parent))
+    from providers_bridge import local
     if local("orq-info", "identity", name=name) != identities[name]:
         print("other-identity")
         sys.exit()

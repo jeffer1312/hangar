@@ -1156,8 +1156,11 @@ impl RuntimeRegistry {
                 let (text,id)=(row["text"].as_str().unwrap_or("").trim().to_owned(),row["id"].as_str().unwrap_or("").to_owned());
                 if !text.is_empty() && !committed.contains(&text) {
                     let entry=crate::mods::state::random_hex(16);
-                    store.exec(generation,&format!("requeue:{entry}"),clock(),super::queue::Action::Append { text,delivered:false,ts:None,
-                        pre_transcript:row["pre_transcript"]==true,entry_id:Some(entry.clone()) }).map_err(|_|refused("queue_io","fila da sessão inacessível"))?;
+                    let pre_transcript=row["pre_transcript"]==true;
+                    // A "Na conversa" volta marcada: segue entrando no turno, sem esperar o fim dele no painel.
+                    let action=if row["conversation"]==true {super::queue::Action::AppendConversation { text,pre_transcript,entry_id:Some(entry.clone()) }}
+                        else {super::queue::Action::Append { text,delivered:false,ts:None,pre_transcript,entry_id:Some(entry.clone()) }};
+                    store.exec(generation,&format!("requeue:{entry}"),clock(),action).map_err(|_|refused("queue_io","fila da sessão inacessível"))?;
                     requeued+=1;
                 }
                 store.exec(generation,&format!("requeue-confirm:{}",crate::mods::state::random_hex(8)),clock(),super::queue::Action::Confirm { entry_ids:vec![id] })
