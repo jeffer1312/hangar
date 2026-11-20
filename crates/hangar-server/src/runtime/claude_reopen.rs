@@ -238,7 +238,7 @@ static ANTHROPIC:std::sync::LazyLock<regex::Regex>=std::sync::LazyLock::new(||re
 /// `para_headless` do Python): o motor que sumiu, o modelo malformado ou de outro provedor, o Fast sem
 /// suporte e o corpo do motor ilegível. Bloqueante. Devolve os avisos para a pessoa (o motor que sumiu).
 fn preflight(env:&crate::accounts::environment::AccountEnvironment,next:&mut SessionSpec,settings:Option<&Value>,
-             runtime:tokio::runtime::Handle) -> Result<Vec<String>,RuntimeError> {
+             runtime:tokio::runtime::Handle,automatic:bool) -> Result<Vec<String>,RuntimeError> {
     use crate::session_open::OpenFacts;
     let facts=crate::session_open::facts::LocalFacts::new(env.clone(),runtime);
     let mut warnings=Vec::new();
@@ -263,11 +263,22 @@ fn preflight(env:&crate::accounts::environment::AccountEnvironment,next:&mut Ses
         tracing::warn!(session=%next.name,"modelo que não é da Anthropic; a sessão volta no padrão da conta");
         next.model=None;
     }
+    // Acordar, restaurar e a troca de conta do limite não são pedido da pessoa: a velocidade que perdeu o suporte
+    // cai (Ultra Fast em Fast, Fast na normal) em vez de a sessão não voltar.
+    if automatic {next.service_tier=crate::session_open::claude::relaunch_tier(next,&facts);}
     if let Some(tier)=next.service_tier && !facts.supports_fast(engine.as_deref(),next.model.as_deref()) {
-        if tier==crate::session_open::ServiceTier::Priority {
+        if tier.is_fast() {
             return Err(refused("launch_service_tier","service_tier exige Claude com motor GPT no CLIProxyAPI local"));
         }
         next.service_tier=None;
+    }
+    // Mesma regra da criação e do lançamento sem terminal, antes de parar a sessão atual: com terminal o painel
+    // abre sem passar pelo `plan_for`.
+    if next.service_tier==Some(crate::session_open::ServiceTier::Ultrafast) {
+        let account=match &next.account {Account::Engine { account,.. }=>account.clone(),_=>None};
+        if !facts.supports_ultrafast(engine.as_deref(),next.model.as_deref(),account.as_deref()) {
+            return Err(refused("launch_service_tier",crate::engines::catalog::ULTRAFAST_REFUSED));
+        }
     }
     if next.service_tier.is_some() {engine_body(env,next.account.config_dir(),std::path::Path::new(&next.cwd),settings)?;}
     Ok(warnings)
@@ -694,8 +705,9 @@ impl RuntimeRegistry {
         next.conversation=Some(sid.clone());
         if let Some(between)=between {between.adjust(&mut next);}
         let mut warnings;
+        let automatic=matches!(change.reason,ChangeReason::RebootRestore|ChangeReason::ParkWake|ChangeReason::LimitSwitch|ChangeReason::Sleep);
         {let (env,mut spec,settings,handle)=(self.codex_environment(),next,current.settings.clone(),tokio::runtime::Handle::current());
-            (next,warnings)=tokio::task::spawn_blocking(move||preflight(&env,&mut spec,settings.as_ref(),handle).map(|w|(spec,w))).await
+            (next,warnings)=tokio::task::spawn_blocking(move||preflight(&env,&mut spec,settings.as_ref(),handle,automatic).map(|w|(spec,w))).await
                 .map_err(|_|ReopenFailure::refused(refused("reopen_preflight","a subida nova não pôde ser conferida")))?.map_err(ReopenFailure::refused)?;}
         // O único aviso do pré-voo é o motor que sumiu.
         if !warnings.is_empty() {self.diag.report("runtime.reopen_engine_gone",name,"reopen_engine_gone","o motor saiu do catálogo e a sessão volta na conta Anthropic");}

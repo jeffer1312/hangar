@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from 'react';
-import { AccessibilityInfo, ActivityIndicator, AppState, Platform, ScrollView, Text, View } from 'react-native';
+import { AccessibilityInfo, ActivityIndicator, Alert, AppState, Platform, ScrollView, Text, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import { useRouter } from 'expo-router';
 import { useShallow } from 'zustand/react/shallow';
@@ -33,11 +33,13 @@ import { SessionProblem, showsSessionProblem } from './SessionProblem';
 import { SessionPickerSheet } from './SessionPickerSheet';
 import { useLiveVoice } from '../features/voice/liveVoiceStore';
 import { PlanActions } from './PlanActions';
-import { askPayloadFromToolUse, codexSubagentState, fetchSessionsForServer, isOrq, matchAgentSubagent, selectOptionForServer, submitSelectedForServer, interrupt, recarregarSessao, implementCodexPlan, setPermissionMode, projectSubagentActivity, subagentEnded } from '@hangar/core';
+import { askPayloadFromToolUse, codexSubagentState, fetchSessionsForServer, isOrq, matchAgentSubagent, selectOptionForServer, submitSelectedForServer, interrupt, recarregarSessao, setModoExecucao, implementCodexPlan, setPermissionMode, projectSubagentActivity, subagentEnded } from '@hangar/core';
 import { agentIdentities } from '../features/activity/agentModel';
 import { createEventProjection } from './eventProjection';
 import type { Provider, SessionInfo } from '@hangar/core';
 import * as m from '../paraglide/messages';
+import { toast } from '../ui/Toast';
+import { haptic } from '../ui/haptics';
 
 // Tela de chat de uma sessão: histórico janelado + SSE ao vivo (store chat.ts).
 // A conversa para antes da curva de baixo da caixa: senão o texto vaza pelos cantos arredondados.
@@ -422,6 +424,35 @@ export function ChatBody({ serverId, name, askFallback, onBack, deepStack, onOpe
     setRecarregando(true);
     void recarregarSessao(name, target).catch((e) => mostrarAviso(e)).finally(() => setRecarregando(false));
   };
+  // Terminal ⇄ sem terminal na mesma conversa, como no nativo: reinicia o processo, então pergunta antes.
+  const modoTrocavel = currentSession?.provider === 'claude' || currentSession?.provider === 'codex';
+  const [trocandoModo, setTrocandoModo] = useState(false);
+  const trocandoModoRef = useRef(false);
+  const modoBloqueado = stateEvent?.state !== 'idle' || trocandoModo;
+  const trocarModo = () => {
+    if (modoBloqueado) return;
+    const paraTerminal = semTerminal;
+    const label = paraTerminal ? m.modo_abrir_no_terminal() : m.modo_continuar_sem_terminal();
+    const msg = paraTerminal ? m.modo_confirmar_terminal_msg() : m.modo_confirmar_sem_terminal_msg();
+    Alert.alert(label, msg, [
+      { text: m.comum_cancelar(), style: 'cancel' },
+      { text: label, onPress: () => {
+        // O estado pode ter mudado com a confirmação aberta.
+        if (trocandoModoRef.current) return;
+        if (chat.use.getState().stateEvent?.state !== 'idle') return mostrarAviso(m.modo_so_ociosa());
+        const target = destino();
+        if (!target) return mostrarAviso(m.chat_servidor_removido());
+        trocandoModoRef.current = true;
+        setTrocandoModo(true);
+        const progresso = toast.progress(m.modo_trocando());
+        void setModoExecucao(name, paraTerminal, target)
+          // Diz o modo que ficou: Codex adormecido acorda no terminal mesmo pedindo o contrário.
+          .then((r) => { toast.ok(r.terminal ? m.modo_trocado_terminal() : m.modo_trocado_sem_terminal()); })
+          .catch((e) => { haptic.error(); mostrarAviso(e); })
+          .finally(() => { toast.dismiss(progresso); trocandoModoRef.current = false; setTrocandoModo(false); });
+      } },
+    ]);
+  };
   const handleCancelOptions = async () => {
     if (!optionCurrent()) return;
     const target = destino();
@@ -529,7 +560,8 @@ export function ChatBody({ serverId, name, askFallback, onBack, deepStack, onOpe
       <HandoffBand serverId={serverId} name={name} />
       <MoreSheet open={moreOpen} onClose={() => setMoreOpen(false)} serverId={serverId} name={name} orq={orq}
                  provider={provider} semTerminal={semTerminal} temPergunta={!!askPayload}
-                 recarregar={recarregavel ? { bloqueado: recarregarBloqueado, onPress: recarregar } : undefined} />
+                 recarregar={recarregavel ? { bloqueado: recarregarBloqueado, onPress: recarregar } : undefined}
+                 trocarModo={modoTrocavel && !soLeitura && !codexPreThread ? { bloqueado: modoBloqueado, trocando: trocandoModo, onPress: trocarModo } : undefined} />
       <SessionPickerSheet open={pickerOpen} onClose={() => setPickerOpen(false)} atual={name} serverId={serverId} />
       {/* Lista e Composer dentro do mesmo KAV: ambos sobem com o teclado e a lista termina acima do composer */}
       <KeyboardAvoidingView behavior="padding" automaticOffset style={styles.body}>

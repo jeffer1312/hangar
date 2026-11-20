@@ -510,9 +510,9 @@ impl Hangar {
             .into_any_element())
     }
 
-    /// Velocidade como no T3: "Padrão" e "Rápido" lado a lado, quando o modelo atual tem o nível rápido.
+    /// Velocidade: Normal, Fast e Ultra Fast, cada uma liberada só quando o modelo atual a aceita.
     fn picker_speed(&self, catalog: &Value, busy: bool, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let (on, available) = match self.provider().0 {
+        let speed = match self.provider().0 {
             "codex" => codex_fast_state(catalog, self.ctl_label(Ctl::Fast).as_deref()),
             "claude" => {
                 let (Some(key), Some(session)) = (self.selected_key(), self.selected.as_ref()) else { return None; };
@@ -522,18 +522,21 @@ impl Hangar {
             }
             _ => return None,
         };
-        if !available { return None; }
-        let option = |id: &'static str, label: String, selected: bool, tier: &'static str, cx: &mut Context<Self>| {
-            Button::new(id).ghost().small().selected(selected).label(label).disabled(busy || !self.chat_online)
-                .when(tier == "priority", |b| b.icon(IconName::Zap))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    if selected { return; }
+        let (labels, hints) = speed_texts();
+        let hint = if !speed.available() { tr("ctl_fast_unavailable") } else if speed.ultrafast || speed.tier == Some("ultrafast") {
+            hints[speed.selected()].clone()
+        } else { format!("{} {}", hints[speed.selected()], tr("ctl_speed_ultrafast_unavailable")) };
+        let locked = busy || !self.chat_online;
+        let enabled = if locked { [false; 3] } else { speed.enabled() };
+        let off_note = tr(if speed.fast { "ctl_speed_ultrafast_unavailable" } else { "ctl_fast_unavailable" });
+        // Escolha que não pode mudar agora continua à vista, apagada; desconhecida não mostra nenhuma.
+        Some(div().min_w_0().max_w(px(320.)).flex().flex_col().gap_1()
+            .child(crate::app::settings::segments_where("ctl-speed", &labels, &hints, speed.selected(), &enabled,
+                (locked || !speed.available()) && speed.tier.is_some(), off_note, |this, n, _, cx| {
+                    let tier = SPEED_TIERS[n];
                     this.apply_ctl(Ctl::Fast, vec!["service-tier"], json!({"service_tier": tier}), tier.into(), cx);
-                }))
-        };
-        Some(div().flex().items_center().gap(px(2.)).p(px(2.)).rounded(px(8.)).bg(theme::inset())
-            .child(option("picker-speed-default", tr("picker_speed_standard"), !on, "default", cx))
-            .child(option("picker-speed-fast", tr("ctl_fast"), on, "priority", cx))
+                }, cx))
+            .child(div().text_xs().text_color(theme::muted()).whitespace_normal().child(hint))
             .into_any_element())
     }
 

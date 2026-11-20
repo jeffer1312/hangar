@@ -186,6 +186,7 @@ fn shown(ctl: Ctl, value: String) -> String {
     match ctl {
         Ctl::Effort => effort_label(&value),
         Ctl::Fast if value == "priority" => tr("ctl_fast_on"),
+        Ctl::Fast if value == "ultrafast" => format!("{} {}", tr("ctl_speed_ultrafast"), tr("ctl_fast_on")),
         Ctl::Fast if value == "default" => tr("ctl_fast_off"),
         Ctl::Mode if CLAUDE_MODES.contains(&value.as_str()) => tr(&format!("mode_{value}")),
         Ctl::Mode if value == "default" => tr("codex_mode_default"),
@@ -263,28 +264,71 @@ fn engine_model_choice(catalog: &Value, id: &str) -> String {
     } else { id.to_owned() }
 }
 
-fn claude_fast_state(catalog: &Value) -> Option<(bool, bool)> {
-    if text(catalog, "kind") != "engine" || catalog.get("supports_fast").and_then(Value::as_bool) != Some(true) { return None; }
+/// As três velocidades, na ordem do seletor.
+pub(crate) const SPEED_TIERS: [&str; 3] = ["default", "priority", "ultrafast"];
+
+/// A velocidade da sessão e as que ela aceita; `tier` desconhecido desliga a escolha toda.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Speed { tier: Option<&'static str>, normal: bool, fast: bool, ultrafast: bool }
+
+impl Speed {
+    fn of(tier: Option<&str>, normal: bool, fast: bool, ultrafast: bool) -> Self {
+        Self { tier: SPEED_TIERS.into_iter().find(|t| Some(*t) == tier), normal, fast, ultrafast }
+    }
+    fn selected(self) -> usize { SPEED_TIERS.iter().position(|t| Some(*t) == self.tier).unwrap_or(0) }
+    fn enabled(self) -> [bool; 3] {
+        let known = self.tier.is_some();
+        [known && self.normal, known && self.fast, known && self.ultrafast]
+    }
+    fn available(self) -> bool { self.enabled().iter().any(|on| *on) }
+}
+
+/// Rótulos e dicas do seletor "Velocidade", na ordem de [`SPEED_TIERS`].
+pub(crate) fn speed_texts() -> ([String; 3], [String; 3]) {
+    ([tr("ctl_speed_normal"), tr("ctl_fast"), tr("ctl_speed_ultrafast")],
+        [tr("ctl_speed_normal_hint"), tr("ctl_speed_fast_hint"), tr("ctl_speed_ultrafast_hint")])
+}
+
+/// O selo da pílula do modelo: nada na velocidade normal.
+pub(crate) fn speed_label(tier: Option<&str>) -> Option<String> {
+    match tier {
+        Some("priority") => Some(tr("ctl_fast")),
+        Some("ultrafast") => Some(tr("ctl_speed_ultrafast")),
+        _ => None,
+    }
+}
+
+fn claude_fast_state(catalog: &Value) -> Option<Speed> {
+    if text(catalog, "kind") != "engine" { return None; }
     let tier = catalog.pointer("/current/service_tier").and_then(Value::as_str);
-    let supported = claude_context_state(catalog).is_some();
-    Some((tier == Some("priority"), supported && matches!(tier, Some("default" | "priority"))))
+    if catalog.get("supports_fast").and_then(Value::as_bool) != Some(true) {
+        // Motor que deixou de oferecer Fast com a sessão ainda nele: só o Normal, para ela poder voltar.
+        return tier.filter(|t| *t != "default").map(|t| Speed::of(Some(t), true, false, false));
+    }
+    let model = claude_context_state(catalog).map(|(id, _)| id);
+    let ultrafast = catalog.get("supports_ultrafast").and_then(Value::as_bool) == Some(true)
+        && model.and_then(|id| catalog.get("models")?.as_array()?.iter().find(|m| m.get("id").and_then(Value::as_str) == Some(id)))
+            .is_some_and(|m| m.get("supports_ultrafast").and_then(Value::as_bool) == Some(true));
+    // O servidor recusa qualquer troca, até voltar ao Normal, num modelo sem Fast.
+    Some(Speed::of(tier, model.is_some(), model.is_some(), ultrafast))
 }
 
 fn confirmed_fast_tier(response: &Value) -> Option<&str> {
     response.get("service_tier").and_then(Value::as_str)
-        .filter(|tier| response.get("ok").and_then(Value::as_bool) == Some(true) && matches!(*tier, "default" | "priority"))
+        .filter(|tier| response.get("ok").and_then(Value::as_bool) == Some(true) && SPEED_TIERS.contains(tier))
 }
 
-fn codex_fast_state(catalog: &Value, live: Option<&str>) -> (bool, bool) {
+fn codex_fast_state(catalog: &Value, live: Option<&str>) -> Speed {
     let tier = live.or_else(|| catalog.pointer("/current/service_tier").and_then(Value::as_str));
-    let on = tier == Some("priority");
     let model = catalog.pointer("/current/model").and_then(Value::as_str);
-    let supported = catalog.get("models").and_then(Value::as_array).is_some_and(|models| models.iter()
-        .find(|m| model.is_some() && m.get("model").and_then(Value::as_str) == model)
-        .and_then(|m| m.get("serviceTiers")).and_then(Value::as_array)
-        .is_some_and(|tiers| tiers.iter().any(|t| t.get("id").and_then(Value::as_str) == Some("priority")
-            && t.get("hidden").and_then(Value::as_bool) != Some(true))));
-    (on, on || (tier == Some("default") && supported))
+    let tiers = catalog.get("models").and_then(Value::as_array).and_then(|models| models.iter()
+        .find(|m| model.is_some() && m.get("model").and_then(Value::as_str) == model))
+        .and_then(|m| m.get("serviceTiers")).and_then(Value::as_array);
+    let offers = |id: &str| tiers.is_some_and(|tiers| tiers.iter().any(|t| t.get("id").and_then(Value::as_str) == Some(id)
+        && t.get("hidden").and_then(Value::as_bool) != Some(true)));
+    // Em Fast ou Ultra Fast dá sempre para voltar ao Normal, mesmo num modelo que deixou de oferecê-los.
+    let (fast, ultrafast) = (offers("priority"), offers("ultrafast"));
+    Speed::of(tier, fast || ultrafast || tier.is_some_and(|t| t != "default"), fast, ultrafast)
 }
 
 // A única linha com o nome exato; nome repetido entre providers não diz qual é a atual.
@@ -694,7 +738,7 @@ impl Hangar {
             self.controls.on_session_update(&key, &session);
             let catalog = self.controls.model_catalog(&key, &session);
             if (path.first() == Some(&"engine") && catalog.is_none())
-                || (ctl == Ctl::Fast && !catalog.and_then(claude_fast_state).is_some_and(|(_, available)| available)) { return false; }
+                || (ctl == Ctl::Fast && !catalog.and_then(claude_fast_state).is_some_and(Speed::available)) { return false; }
             self.controls.model_reads.remove(&key);
             self.controls.model_actions.insert(key.clone(), Some(ModelIdentity::of(&session)));
         }
@@ -880,13 +924,13 @@ impl Hangar {
             let value = self.ctl_label(ctl).map(|v| shown(ctl, v)).map(|v| if claude && ctl == Ctl::Model { spaced(&v) } else { v });
             if paired && ctl == Ctl::Model {
                 let effort = self.ctl_label(Ctl::Effort).map(|e| effort_label(&e));
-                let fast = self.ctl_label(Ctl::Fast).as_deref() == Some("priority");
-                let applying = match busy { Some(Ctl::Model) => Some(name.clone()), Some(Ctl::Effort) => Some(tr("ctl_effort")), Some(Ctl::Fast) => Some(tr("ctl_fast")), _ => None };
+                let fast = speed_label(self.ctl_label(Ctl::Fast).as_deref());
+                let applying = match busy { Some(Ctl::Model) => Some(name.clone()), Some(Ctl::Effort) => Some(tr("ctl_effort")), Some(Ctl::Fast) => Some(tr("ctl_speed")), _ => None };
                 let text = applying.map(|what| tr("ctl_applying").replace("{what}", &what)).or(value.clone()).unwrap_or_else(|| name.clone());
-                let aria = [Some(format!("{name}: {text}")), effort.clone().map(|e| format!("{}: {e}", tr("ctl_effort"))), fast.then(|| tr("ctl_fast"))]
+                let aria = [Some(format!("{name}: {text}")), effort.clone().map(|e| format!("{}: {e}", tr("ctl_effort"))), fast.clone()]
                     .into_iter().flatten().collect::<Vec<_>>().join(" · ");
                 let id = SharedString::from(format!("ctl-{}", ctl.key()));
-                pills.push(popup::anchor(div(), id.clone()).child(super::model_pill(id, self.provider().0, text, effort.filter(|_| busy.is_none()), (fast && busy.is_none()).then(|| tr("ctl_fast")), cx)
+                pills.push(popup::anchor(div(), id.clone()).child(super::model_pill(id, self.provider().0, text, effort.filter(|_| busy.is_none()), fast.filter(|_| busy.is_none()), cx)
                     .selected(open == Some(ctl)).disabled(!self.chat_online)
                     .tooltip(format!("{name} · {}", tr("ctl_effort"))).accessibility_label(aria)
                     .on_click(cx.listener(move |this, _, window, cx| {
@@ -1467,13 +1511,23 @@ mod tests {
                 {"model": "gpt-standard", "serviceTiers": []}
             ]
         });
-        assert_eq!(codex_fast_state(&catalog, None), (false, true));
-        assert_eq!(codex_fast_state(&catalog, Some("priority")), (true, true));
+        assert_eq!(view(codex_fast_state(&catalog, None)), (0, [true, true, false]));
+        assert_eq!(view(codex_fast_state(&catalog, Some("priority"))), (1, [true, true, false]));
         catalog["current"]["model"] = serde_json::json!("gpt-standard");
-        assert_eq!(codex_fast_state(&catalog, None), (false, false));
-        assert_eq!(codex_fast_state(&catalog, Some("priority")), (true, true));
+        assert_eq!(view(codex_fast_state(&catalog, None)), (0, [false, false, false]));
+        assert_eq!(view(codex_fast_state(&catalog, Some("priority"))), (1, [true, false, false]), "Fast ligado sempre volta ao Normal");
         catalog["current"]["service_tier"] = serde_json::json!("priority");
-        assert_eq!(codex_fast_state(&catalog, Some("default")), (false, false));
+        assert_eq!(view(codex_fast_state(&catalog, Some("default"))), (0, [false, false, false]));
+    }
+
+    #[test]
+    fn codex_ultrafast_follows_the_model_tiers_of_the_account() {
+        let catalog = serde_json::json!({
+            "current": {"model": "gpt-pro"},
+            "models": [{"model": "gpt-pro", "serviceTiers": [{"id": "priority"}, {"id": "ultrafast"}]}]
+        });
+        assert_eq!(view(codex_fast_state(&catalog, Some("ultrafast"))), (2, [true, true, true]));
+        assert_eq!(view(codex_fast_state(&catalog, Some("default"))), (0, [true, true, true]));
     }
 
     #[test]
@@ -1482,11 +1536,17 @@ mod tests {
             "current": {"model": "gpt-supported"},
             "models": [{"model": "gpt-supported", "serviceTiers": [{"id": "priority"}]}]
         });
-        assert_eq!(codex_fast_state(&catalog, None), (false, false));
-        assert_eq!(codex_fast_state(&catalog, Some("default")), (false, true));
-        assert_eq!(codex_fast_state(&serde_json::json!({}), Some("priority")), (true, true));
+        assert_eq!(view(codex_fast_state(&catalog, None)), (0, [false, false, false]));
+        assert_eq!(view(codex_fast_state(&catalog, Some("default"))), (0, [true, true, false]));
+        assert_eq!(view(codex_fast_state(&serde_json::json!({}), Some("priority"))), (1, [true, false, false]));
         let hidden = serde_json::json!({"current": {"model": "m"}, "models": [{"model": "m", "serviceTiers": [{"id": "priority", "hidden": true}]}]});
-        assert_eq!(codex_fast_state(&hidden, Some("default")), (false, false));
+        assert_eq!(view(codex_fast_state(&hidden, Some("default"))), (0, [false, false, false]));
+    }
+
+    fn view(speed: super::Speed) -> (usize, [bool; 3]) { (speed.selected(), speed.enabled()) }
+    /// (Fast ou Ultra Fast ligado, alguma velocidade pode ser escolhida).
+    fn fast_on(catalog: &serde_json::Value) -> Option<(bool, bool)> {
+        super::claude_fast_state(catalog).map(|s| (s.selected() > 0, s.available()))
     }
 
     #[test]
@@ -1496,17 +1556,29 @@ mod tests {
             "current": {"model": "gpt-supported", "service_tier": "default"},
             "models": [{"id": "gpt-supported", "supports_fast": true}, {"id": "other", "supports_fast": false}]
         });
-        assert_eq!(super::claude_fast_state(&catalog), Some((false, true)));
+        let claude = |catalog: &serde_json::Value| super::claude_fast_state(catalog).map(view);
+        assert_eq!(claude(&catalog), Some((0, [true, true, false])));
         catalog["current"]["service_tier"] = serde_json::json!("priority");
-        assert_eq!(super::claude_fast_state(&catalog), Some((true, true)));
+        assert_eq!(claude(&catalog), Some((1, [true, true, false])));
         catalog["current"]["model"] = serde_json::json!("other");
-        assert_eq!(super::claude_fast_state(&catalog), Some((true, false)));
+        assert_eq!(claude(&catalog), Some((1, [false, false, false])));
         catalog["current"]["model"] = serde_json::json!("account/gpt-supported");
-        assert_eq!(super::claude_fast_state(&catalog), Some((true, false)));
+        assert_eq!(claude(&catalog), Some((1, [false, false, false])));
         catalog["current"]["model"] = serde_json::json!("gpt-supported");
         catalog["current"]["service_tier"] = serde_json::Value::Null;
-        assert_eq!(super::claude_fast_state(&catalog), Some((false, false)));
+        assert_eq!(claude(&catalog), Some((0, [false, false, false])));
+        // Ultra Fast: a conta fixa (topo) e o modelo atual precisam aceitar.
+        catalog["current"]["service_tier"] = serde_json::json!("ultrafast");
+        catalog["supports_ultrafast"] = serde_json::json!(true);
+        assert_eq!(claude(&catalog), Some((2, [true, true, false])));
+        catalog["models"][0]["supports_ultrafast"] = serde_json::json!(true);
+        assert_eq!(claude(&catalog), Some((2, [true, true, true])));
+        catalog["supports_ultrafast"] = serde_json::json!(false);
+        assert_eq!(claude(&catalog), Some((2, [true, true, false])));
+        // Motor que deixou de oferecer Fast: a sessão ainda nele vê só o Normal; já no Normal, o seletor some.
         catalog["supports_fast"] = serde_json::json!(false);
+        assert_eq!(claude(&catalog), Some((2, [true, false, false])));
+        catalog["current"]["service_tier"] = serde_json::json!("default");
         assert_eq!(super::claude_fast_state(&catalog), None);
         catalog["supports_fast"] = serde_json::json!(true);
         catalog["kind"] = serde_json::json!("claude");
@@ -1522,7 +1594,7 @@ mod tests {
                 {"id":"other", "supports_fast":false}, {"id":"opus"}, {"id":"opus[1m]"}]
         });
         assert_eq!(super::claude_context_state(&catalog), Some(("gpt-one", true)));
-        assert_eq!(super::claude_fast_state(&catalog), Some((true, true)));
+        assert_eq!(fast_on(&catalog), Some((true, true)));
         assert_eq!(super::engine_model_choice(&catalog, "gpt-two"), "gpt-two[1m]");
         assert_eq!(serde_json::json!({"model":super::engine_model_choice(&catalog, "gpt-two")}), serde_json::json!({"model":"gpt-two[1m]"}));
         assert_eq!(super::engine_model_choice(&catalog, "other"), "other");
@@ -1534,7 +1606,7 @@ mod tests {
         for invalid in ["account/gpt-one[1m]", "other[1m]", "gpt-one[1m][1m]"] {
             catalog["current"]["model"] = serde_json::json!(invalid);
             assert_eq!(super::claude_context_state(&catalog), None);
-            assert_eq!(super::claude_fast_state(&catalog), Some((true, false)));
+            assert_eq!(fast_on(&catalog), Some((true, false)));
         }
         catalog["current"]["model"] = serde_json::json!("gpt-one[1m]");
         catalog["supports_fast"] = serde_json::json!(false);
@@ -1561,12 +1633,12 @@ mod tests {
         controls.open = Some(super::Open { key: key.clone(), ctl: super::Ctl::Model, catalog: Some(Ok(catalog.clone())) });
         let response = serde_json::json!({"ok":true, "service_tier":"priority"});
         controls.confirm_claude_fast(&key, super::confirmed_fast_tier(&response).unwrap());
-        assert_eq!(super::claude_fast_state(&controls.known[&(key.clone(), super::Ctl::Model)]), Some((true, true)));
-        assert_eq!(super::claude_fast_state(controls.open.as_ref().unwrap().catalog.as_ref().unwrap().as_ref().unwrap()), Some((true, true)));
+        assert_eq!(fast_on(&controls.known[&(key.clone(), super::Ctl::Model)]), Some((true, true)));
+        assert_eq!(fast_on(controls.open.as_ref().unwrap().catalog.as_ref().unwrap().as_ref().unwrap()), Some((true, true)));
         assert_eq!(controls.known[&(other, super::Ctl::Model)], catalog);
         assert!(controls.applied.is_empty());
         controls.remember_model_catalog(&key, Some(&catalog));
-        assert_eq!(super::claude_fast_state(&controls.known[&(key.clone(), super::Ctl::Model)]), Some((false, true)));
+        assert_eq!(fast_on(&controls.known[&(key.clone(), super::Ctl::Model)]), Some((false, true)));
         controls.remember_model_catalog(&key, None);
         assert!(!controls.known.contains_key(&(key, super::Ctl::Model)));
         for invalid in [serde_json::json!({"ok":true}), serde_json::json!({"service_tier":"priority"}),
@@ -1612,18 +1684,18 @@ mod tests {
         let (send, receive) = tokio::sync::oneshot::channel();
         controls.model_reads.insert(key.clone(), (identity.clone(), receive));
         controls.on_session_update(&key, &session);
-        assert_eq!(super::claude_fast_state(controls.model_catalog(&key, &session).unwrap()), Some((true, true)));
+        assert_eq!(fast_on(controls.model_catalog(&key, &session).unwrap()), Some((true, true)));
         assert!(controls.take_model_catalog(&key, &identity).is_none());
         catalog["current"]["model"] = serde_json::json!("gpt-two");
         send.send(Ok(catalog)).unwrap();
         let refreshed = controls.take_model_catalog(&key, &identity).unwrap().unwrap();
         controls.remember_model_catalog(&key, Some(&refreshed));
         assert_eq!(controls.model_catalog(&key, &session).unwrap().pointer("/current/model"), Some(&serde_json::json!("gpt-two")));
-        assert_eq!(super::claude_fast_state(controls.model_catalog(&key, &session).unwrap()), Some((true, true)));
+        assert_eq!(fast_on(controls.model_catalog(&key, &session).unwrap()), Some((true, true)));
         let mut unknown = refreshed;
         unknown["current"]["service_tier"] = serde_json::Value::Null;
         controls.remember_model_catalog(&key, Some(&unknown));
-        assert_eq!(super::claude_fast_state(controls.model_catalog(&key, &session).unwrap()), Some((false, false)));
+        assert_eq!(fast_on(controls.model_catalog(&key, &session).unwrap()), Some((false, false)));
         assert!(controls.model_catalog(&key, &session).unwrap().pointer("/current/service_tier").unwrap().is_null());
     }
 
@@ -1706,7 +1778,7 @@ mod tests {
             assert!(controls.model_catalog(&key, &session).is_none());
             catalog["current"]["service_tier"] = serde_json::json!("default");
             controls.remember_model_catalog(&key, Some(&catalog));
-            assert_eq!(super::claude_fast_state(controls.model_catalog(&key, &session).unwrap()), Some((false, true)));
+            assert_eq!(fast_on(controls.model_catalog(&key, &session).unwrap()), Some((false, true)));
         }
     }
 

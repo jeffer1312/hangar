@@ -3313,6 +3313,18 @@ impl Hangar {
         self.new_chat.clone().unwrap()
     }
 
+    /// O diálogo de nova sessão já no Claude com o motor `engine`, como o `open_launch_picker` preenche: os campos entram
+    /// antes de os motores chegarem, e a chegada deles monta o seletor nessa escolha.
+    pub(super) fn open_new_session_with_engine(&mut self, engine: String, window: &mut Window, cx: &mut Context<Self>) {
+        let before = self.new_session.as_ref().map(|d| d.entity_id());
+        self.open_new_session(None, window, cx);
+        let Some(dialog) = self.new_session.clone().filter(|d| Some(d.entity_id()) != before) else { return };
+        dialog.update(cx, |d, cx| {
+            (d.provider, d.provider_touched, d.engine) = ("claude", true, engine);
+            cx.notify();
+        });
+    }
+
     /// Com `baton`, o mesmo diálogo cria a sessão que continua aquela (o "Continuar em outra conta" do menu da sessão).
     pub(super) fn open_new_session(&mut self, baton: Option<Baton>, window: &mut Window, cx: &mut Context<Self>) {
         let api = match &baton {

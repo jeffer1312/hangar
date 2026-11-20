@@ -31,6 +31,7 @@ import { ProviderPicker } from './ProviderPicker';
 import { BranchPicker, samePath } from './BranchPicker';
 import { CodexContextControl, useCodexContextControl } from './CodexContextControl';
 import { NewConversation, type HomePresentation } from './NewConversation';
+import { SPEED_TIERS, speedHint, speedLabel, type Tier } from '../pills/serviceTierControl';
 import { QuietPill } from './QuietPill';
 import { SettingRow } from './SettingRow';
 import { readChoices, readMachine, rememberChoices, rememberMachine, type NewChatChoices } from './choicesPrefs';
@@ -74,15 +75,18 @@ function PanelSelect({
 }
 
 // `layout: 'form'`: o formulário completo em linhas (Nova sessão do menu); o padrão é a conversa nova da inicial.
-export function CreateSessionSheet({ onClose, keyboardOffset, home, layout = 'conversation' }: {
+export function CreateSessionSheet({ onClose, keyboardOffset, home, layout = 'conversation', initial }: {
   onClose?: () => void; keyboardOffset?: number; home?: HomePresentation; layout?: 'conversation' | 'form';
+  /** Quem abre já sabendo onde e com qual motor do Claude (o assistente do CLIProxyAPI); não vira escolha lembrada. */
+  initial?: { server?: string; engine?: string };
 }) {
   const servers = useServers((s) => s.servers);
   const activeId = useServers((s) => s.activeId);
   // A máquina escolhida na pílula vale só para onde a conversa nasce; o servidor ativo é das Configurações.
   const [machine, setMachine] = useState(() => {
     const remembered = readMachine();
-    return servers.find((s) => s.id === remembered)?.id ?? servers.find((s) => s.id === activeId)?.id ?? servers[0]?.id ?? null;
+    return servers.find((s) => s.id === initial?.server)?.id ?? servers.find((s) => s.id === remembered)?.id
+      ?? servers.find((s) => s.id === activeId)?.id ?? servers[0]?.id ?? null;
   });
   const target = servers.find((s) => s.id === machine) ?? servers.find((s) => s.id === activeId) ?? servers[0];
   // Fixa também o destino que apareceu após a carga das máquinas ou a remoção da escolhida.
@@ -91,14 +95,16 @@ export function CreateSessionSheet({ onClose, keyboardOffset, home, layout = 'co
     rememberMachine(id);
     setMachine(id);
   }, []);
-  return target ? <CreateSessionForm key={`${target.id}:${target.baseUrl}`} active={target} machines={servers} onPickMachine={pickMachine} onClose={onClose} keyboardOffset={keyboardOffset} home={home} layout={layout} />
+  // O motor é de uma máquina: trocar a pílula de máquina descarta o pedido.
+  const initialEngine = initial?.engine && (!initial.server || initial.server === target?.id) ? initial.engine : undefined;
+  return target ? <CreateSessionForm key={`${target.id}:${target.baseUrl}`} active={target} machines={servers} onPickMachine={pickMachine} onClose={onClose} keyboardOffset={keyboardOffset} home={home} layout={layout} initialEngine={initialEngine} />
     : home?.mode === 'sessions' ? <View style={{ flex: 1 }}>{home.sessions}</View>
       : <Text accessibilityRole="alert">{m.servidor_nao_existe()}</Text>;
 }
 
-function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardOffset, home, layout }: {
+function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardOffset, home, layout, initialEngine }: {
   active: Server; machines: Server[]; onPickMachine: (id: string) => void; onClose?: () => void; keyboardOffset?: number; home?: HomePresentation;
-  layout: 'conversation' | 'form';
+  layout: 'conversation' | 'form'; initialEngine?: string;
 }) {
   const router = useRouter();
   const { theme } = useUnistyles();
@@ -112,9 +118,13 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   // O form remonta por máquina: estas são as escolhas guardadas para ela.
   const [remembered] = useState(() => readChoices(active.id));
   // O que a pessoa quer de modelo e nível; reaplicado sempre que a lista do provider recarrega.
-  const desired = useRef<Required<Pick<NewChatChoices, 'model' | 'effort'>>>({
+  const desired = useRef<Required<Pick<NewChatChoices, 'model' | 'effort'>>>(initialEngine ? { model: '', effort: '' } : {
     model: remembered.model ?? '', effort: remembered.effort ?? '',
   });
+  // Aplicado uma vez, quando a lista de motores chega; depois a escolha é da pessoa.
+  const seededEngine = useRef(initialEngine ?? '');
+  // Aberto pelo assistente com um motor: criar (e reservar) antes de ele chegar abriria na conta Claude direta.
+  const [seedPending, setSeedPending] = useState(!!initialEngine);
   const remember = (patch: NewChatChoices) => rememberChoices(active.id, patch);
 
   const [picked, setPicked] = useState<string | null>(null);
@@ -148,8 +158,8 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   const [projectWarning, setProjectWarning] = useState('');
   const pickGeneration = useRef(0);
 
-  const [provider, setProvider] = useState<Provider>(() =>
-    remembered.provider && SESSION_PROVIDERS.includes(remembered.provider) ? remembered.provider : 'claude');
+  const [provider, setProvider] = useState<Provider>(() => initialEngine ? 'claude'
+    : remembered.provider && SESSION_PROVIDERS.includes(remembered.provider) ? remembered.provider : 'claude');
   // Padrão sem terminal; só Claude e Codex rodam assim.
   const [headless, setHeadless] = useState(remembered.headless ?? true);
   const [providerProbe, setProviderProbe] = useState<ProviderProbe | null>(null);
@@ -164,7 +174,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   const contextBusy = context.busy;
   const [catalogFast, setCatalogFast] = useState(false);
   const [catalogDefault, setCatalogDefault] = useState('');
-  const [serviceTier, setServiceTier] = useState<'priority' | undefined>();
+  const [serviceTier, setServiceTier] = useState<'priority' | 'ultrafast' | undefined>();
 
   const [codexAccounts, setCodexAccounts] = useState<CodexAccount[]>([]);
   const [codexAccount, setCodexAccount] = useState('');
@@ -224,7 +234,13 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   const fastAvailable = !modelsLoading && (provider === 'codex'
     ? codexFastModel?.id !== 'default' && codexFastModel?.service_tiers?.some((tier) => tier.id === 'priority' && tier.hidden !== true) === true
     : fastVisible && selectedModel?.supports_fast === true);
+  // Ultra Fast: tier do modelo no Codex (contas Pro); no motor, a conta fixa escolhida precisa ser Pro.
+  const ultrafastAvailable = fastAvailable && (provider === 'codex'
+    ? codexFastModel?.service_tiers?.some((tier) => tier.id === 'ultrafast' && tier.hidden !== true) === true
+    : selectedModel?.supports_ultrafast === true);
   useEffect(() => { if (!fastAvailable) setServiceTier(undefined); }, [fastAvailable]);
+  useEffect(() => { if (!ultrafastAvailable) setServiceTier((cur) => cur === 'ultrafast' ? undefined : cur); }, [ultrafastAvailable]);
+  const speed = fastAvailable && serviceTier ? serviceTier : 'default';
 
   useEffect(() => {
     mounted.current = true;
@@ -288,7 +304,8 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     setEngine('');
     setCotas([]);
     setProviderProbe(null);
-  }, [active]);
+    // Pela identidade da máquina: renovar o token (novo objeto, mesmo destino) não desfaz o motor escolhido.
+  }, [active?.id, active?.baseUrl]);
 
   useEffect(() => {
     if (!enabled) return;
@@ -328,7 +345,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
         if (!alive) return;
         setProviderProbe(probe);
         const preferred = SESSION_PROVIDERS.find((p) => probe[p]?.default && probe[p]?.disponivel);
-        if (!providerTouched.current && preferred && preferred !== provider && (providersTry === 0 || !probe[provider]?.disponivel)) {
+        if (!providerTouched.current && !initialEngine && preferred && preferred !== provider && (providersTry === 0 || !probe[provider]?.disponivel)) {
           desired.current = { model: '', effort: '' };
           setProvider(preferred);
         }
@@ -366,6 +383,12 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
       .then((r) => {
         if (alive) {
           setMotores(r.motores);
+          // Motor pedido que sumiu segura a criação até a pessoa escolher outro provedor ou motor; a semente fica
+          // para a próxima leitura (outra máquina, nova tentativa) não liberar a criação sem motor.
+          const seed = seededEngine.current;
+          if (seed && r.motores[seed]) { seededEngine.current = ''; setEngine(seed); setSeedPending(false); }
+          else if (seed) setEnginesError(m.mobile_create_engine_missing());
+          else setSeedPending(false);
           if (r.arquivo_corrompido) setEnginesError(m.criar_motores_erro());
         }
       })
@@ -568,7 +591,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
       subagent_model: provider === 'claude' && !engine ? subagente || null : null,
       ...(canHeadless ? { headless } : {}),
     };
-  const body = picked && defaultsReady && !modelsLoading && codexReady && !providersLoading && (!providersError || providerTouched.current) ? { ...settings, ...(fastAvailable && serviceTier ? { service_tier: serviceTier } : {}), cwd: picked, remember_provider: true, ...(name.trim() ? { name: name.trim() } : {}), ...(worktree ?? {}) } : null;
+  const body = picked && defaultsReady && !seedPending && !modelsLoading && codexReady && !providersLoading && (!providersError || providerTouched.current) ? { ...settings, ...(fastAvailable && serviceTier ? { service_tier: serviceTier } : {}), cwd: picked, remember_provider: true, ...(name.trim() ? { name: name.trim() } : {}), ...(worktree ?? {}) } : null;
 
   // Reserva pré-aquecida enquanto a tela está aberta, na frente e compondo; o form remonta por
   // máquina, então desmontar também cobre a troca de servidor.
@@ -589,6 +612,8 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   // Toda escolha feita aqui volta na próxima abertura desta máquina.
   const chooseProvider = (p: Provider) => {
     providerTouched.current = true;
+    seededEngine.current = '';
+    setSeedPending(false);
     setProvidersError('');
     if (p === provider) return;
     choiceTouched.current = false;
@@ -859,7 +884,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
       <PanelSelect
         value={engine}
         options={[{ value: '', label: m.criar_claude_sua_conta() }, ...Object.entries(motores).map(([k, v]) => ({ value: k, label: (v as any).label ?? k, hint: (v as any).model }))]}
-        onChange={(v) => { choiceTouched.current = false; setEngine(v); }}
+        onChange={(v) => { choiceTouched.current = false; seededEngine.current = ''; setSeedPending(false); setEngine(v); }}
       />
     </View>
   ) : null;
@@ -926,10 +951,10 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     </>
   );
 
-  const toggleFast = async () => {
-    if (!fastAvailable) return;
-    if (provider === 'codex' && !modelo && codexFastModel) chooseModel(valorModelo(codexFastModel));
-    setServiceTier((cur) => cur === 'priority' ? undefined : 'priority');
+  const chooseSpeed = async (tier: Tier) => {
+    if (!fastAvailable || (tier === 'ultrafast' && !ultrafastAvailable)) return;
+    if (tier !== 'default' && provider === 'codex' && !modelo && codexFastModel) chooseModel(valorModelo(codexFastModel));
+    setServiceTier(tier === 'default' ? undefined : tier);
   };
 
   // Mesmo seletor de branch/worktree nas duas apresentações: linha no formulário, pílula acima da caixa na conversa nova.
@@ -1117,9 +1142,12 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
                 {subagentField}
                 {fastVisible && !retomavel ? (
                   <View style={styles.group}>
-                    <SettingRow icon="Zap" label={m.native_ctl_fast()} disabled={!fastAvailable}
-                      value={fastAvailable && serviceTier === 'priority' ? m.native_ctl_fast_on() : m.native_ctl_fast_off()}
-                      onPress={() => void toggleFast()} />
+                    <SettingRow icon="Zap" label={m.native_ctl_speed()} disabled={!fastAvailable} value={speedLabel(speed)}
+                      menuTitle={m.native_ctl_speed()}
+                      actions={SPEED_TIERS.map((tier) => ({ id: tier, title: speedLabel(tier), state: on(speed === tier),
+                        subtitle: tier === 'ultrafast' && !ultrafastAvailable ? m.native_ctl_speed_ultrafast_unavailable() : speedHint(tier),
+                        attributes: { disabled: tier === 'ultrafast' && !ultrafastAvailable } }))}
+                      onAction={(id) => void chooseSpeed(id as Tier)} />
                   </View>
                 ) : null}
                 {resumeField}
@@ -1199,8 +1227,8 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
           effort={{ value: esforco, hidden: !!retomavel || !niveisEsforco.length,
             items: [{ id: '', label: m.criar_padrao(), selected: !esforco }, ...niveisEsforco.map((lv) => ({ label: lv, selected: lv === esforco }))],
             select: async (value) => chooseEffort(value) }}
-          fast={{ hidden: !!retomavel || !fastVisible, on: fastAvailable && serviceTier === 'priority', available: fastAvailable,
-            toggle: toggleFast }}>
+          fast={{ hidden: !!retomavel || !fastVisible, tier: speed, available: fastAvailable, ultrafast: ultrafastAvailable,
+            choose: chooseSpeed }}>
           <Pressable accessibilityRole="button" accessibilityState={{ expanded: extrasOpen }}
             onPress={() => setExtrasOpen((value) => !value)} style={styles.more}>
             <Text style={styles.hint}>{m.criar_mais_opcoes()}</Text>
