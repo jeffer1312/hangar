@@ -12,6 +12,33 @@ const LONG: usize = 40;
 #[derive(Clone)]
 struct Cited { raw: String, real: String, relative: Option<String> }
 
+/// O filtro por tipo da seção: um por vez, somado à busca.
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+pub(in crate::app) enum CitedKind { #[default] All, Images, Html, Markdown, Other }
+
+impl CitedKind {
+    const CHIPS: [CitedKind; 5] = [CitedKind::All, CitedKind::Images, CitedKind::Html, CitedKind::Markdown, CitedKind::Other];
+
+    fn of(path: &str) -> Self {
+        let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
+        match name.rsplit_once('.').map(|(_, ext)| ext.to_ascii_lowercase()).as_deref() {
+            Some("png" | "jpg" | "jpeg" | "gif" | "webp" | "avif" | "svg" | "bmp" | "ico") => Self::Images,
+            Some("html" | "htm") => Self::Html,
+            Some("md" | "mdx" | "markdown") => Self::Markdown,
+            _ => Self::Other,
+        }
+    }
+
+    fn matches(self, item: &Cited) -> bool { self == Self::All || Self::of(&item.real) == self }
+
+    fn label(self) -> String {
+        tr(match self {
+            Self::All => "tree_cited_all", Self::Images => "tree_cited_images", Self::Html => "tree_cited_html",
+            Self::Markdown => "tree_cited_markdown", Self::Other => "tree_cited_other",
+        })
+    }
+}
+
 #[derive(Default)]
 pub(in crate::app) struct CitedView {
     list: Option<Result<Vec<Cited>, String>>,
@@ -118,13 +145,19 @@ impl Hangar {
     pub(super) fn render_cited_section(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
         self.cited_sync(cx);
         let query = self.tree.query.to_lowercase();
-        let (rows, failed) = match &self.tree.cited.list {
+        let (all, failed) = match &self.tree.cited.list {
             None => return None,
             Some(Err(reason)) => (Vec::new(), Some(reason.clone())),
-            Some(Ok(list)) => (list.iter().filter(|c| query.is_empty() || c.relative.as_deref().unwrap_or(&c.real).to_lowercase().contains(&query))
-                .cloned().collect::<Vec<_>>(), None),
+            Some(Ok(list)) => (list.clone(), None),
         };
-        if rows.is_empty() && failed.is_none() { return None; }
+        let found: Vec<Cited> = all.iter().filter(|c| query.is_empty() || c.relative.as_deref().unwrap_or(&c.real).to_lowercase().contains(&query))
+            .cloned().collect();
+        if found.is_empty() && failed.is_none() { return None; }
+        let kind = self.tree.cited_kind;
+        let rows: Vec<Cited> = found.into_iter().filter(|c| kind.matches(c)).collect();
+        // As contagens dos chips são da lista inteira: não mudam com a busca, e os chips não pulam.
+        let counts = CitedKind::CHIPS.map(|k| all.iter().filter(|c| k.matches(c)).count());
+        let kinds = counts[1..].iter().filter(|n| **n > 0).count();
         let open = self.tree.cited_open;
         let limit = if self.tree.cited_more || !query.is_empty() { LONG } else { SHORT };
         let hidden = rows.len().saturating_sub(limit);
@@ -134,7 +167,26 @@ impl Hangar {
             .on_click(cx.listener(|this, _, _, cx| { this.tree.cited_open = !this.tree.cited_open; this.redraw(Area::Side, cx); }))
             .child(chrome::small_icon(if open { IconName::ChevronDown } else { IconName::ChevronRight }, 11., theme::faint()))
             .child(div().text_size(px(11.5)).font_weight(FontWeight::SEMIBOLD).text_color(theme::muted()).child(tr("tree_cited_section").to_uppercase()))
-            .child(div().text_size(px(11.5)).text_color(theme::faint()).child(rows.len().to_string()));
+            .child(div().text_size(px(11.5)).text_color(theme::faint()).child(if kind == CitedKind::All { rows.len().to_string() } else {
+                tr("tree_cited_of").replace("{n}", &rows.len().to_string()).replace("{total}", &all.len().to_string())
+            }));
+        // Com um tipo só não há o que filtrar; filtro já escolhido fica à vista para poder voltar.
+        let chips = (open && (kinds >= 2 || kind != CitedKind::All)).then(|| div().flex().flex_wrap().gap(px(4.)).pl(px(31.)).pr(px(14.)).pt(px(2.)).pb(px(6.))
+            .children(CitedKind::CHIPS.into_iter().zip(counts).map(|(chip, n)| {
+                let (on, off) = (chip == kind, n == 0 && chip != kind);
+                div().id(SharedString::from(format!("tree-cited-kind-{}", chip as u8))).role(Role::Button).aria_selected(on).aria_label(chip.label())
+                    .flex().items_center().gap(px(4.)).px(px(8.)).py(px(2.)).rounded_full().border_1()
+                    .border_color(if on { gpui::transparent_black() } else { theme::border() })
+                    .text_size(px(11.5)).text_color(if on { theme::text() } else { theme::muted() })
+                    .when(on, |el| el.bg(theme::accent_dim()))
+                    .when(off, |el| el.opacity(0.38))
+                    .when(!off, |el| el.cursor_pointer().hover(|el| el.bg(theme::hover()))
+                        .on_click(cx.listener(move |this, _, _, cx| { this.tree.cited_kind = chip; this.redraw(Area::Side, cx); })))
+                    .child(chip.label())
+                    .child(div().text_size(px(10.5)).text_color(if on { theme::accent() } else { theme::faint() }).child(n.to_string()))
+            })));
+        let none = (open && rows.is_empty() && failed.is_none())
+            .then(|| div().pl(px(36.)).pr_4().py_1().text_xs().text_color(theme::muted()).child(activity::web("arq_sem_nome")));
         let more = (open && (hidden > 0 || (self.tree.cited_more && rows.len() > SHORT && query.is_empty()))).then(|| {
             let label = if hidden > 0 { tr("tree_more").replace("{n}", &hidden.to_string()) } else { tr("tree_less") };
             div().id("tree-cited-more").h(px(24.)).pl(px(36.)).flex().items_center().text_size(px(12.)).text_color(theme::faint())
@@ -144,7 +196,9 @@ impl Hangar {
         });
         Some(div().flex_shrink_0().flex().flex_col().pb_1().border_b_1().border_color(theme::border())
             .child(header)
+            .children(chips)
             .when(open, |el| el
+                .children(none)
                 .when_some(failed, |el, reason| el.child(div().px_4().py_1().text_xs().text_color(theme::warning()).whitespace_normal().child(reason)))
                 .children(rows.into_iter().take(limit).map(|item| self.cited_row(item, cx)))
                 .children(more))

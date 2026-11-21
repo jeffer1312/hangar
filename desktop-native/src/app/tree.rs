@@ -66,6 +66,8 @@ pub(super) struct Tree {
     /// Seção dos citados aberta, e com a lista inteira em vez das primeiras.
     cited_open: bool,
     cited_more: bool,
+    /// O tipo escolhido nos chips da seção; volta para todos ao trocar de sessão.
+    cited_kind: cited::CitedKind,
     /// O campo do diálogo de nome (renomear, novo arquivo ou pasta) enquanto ele está aberto.
     name_dialog: Option<Subscription>,
 }
@@ -81,7 +83,7 @@ impl Tree {
             selected: None, reveal: None, rows: Vec::new(), scroll: UniformListScrollHandle::new(), focus: cx.focus_handle(), search,
             query: String::new(), search_mode: SearchMode::Names, search_generation: 0, results: None, active: 0, search_task: None, reloading: false, reload_again: false,
             watcher: None, watched: HashSet::new(), watch_error: false, _watch_task: None, cited: Default::default(),
-            cited_open: true, cited_more: false, name_dialog: None }
+            cited_open: true, cited_more: false, cited_kind: Default::default(), name_dialog: None }
     }
 
     /// Linhas à vista: a raiz e, dentro de cada pasta aberta, o que ela tem, com a linha de estado quando falta conteúdo.
@@ -170,6 +172,7 @@ impl Hangar {
         (tree.watcher, tree._watch_task, tree.search_task) = (None, None, None);
         tree.watched.clear();
         tree.cited.reset();
+        tree.cited_kind = Default::default();
         (tree.source, tree.picking, tree.reloading, tree.reload_again, tree.watch_error) = (None, None, false, false, false);
         tree.dirs.clear();
         tree.expanded.clear();
