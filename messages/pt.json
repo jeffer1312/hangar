@@ -5717,7 +5717,7 @@
   "native_ask_minimize": "Minimizar",
   "native_ask_reopen": "Reabrir perguntas",
   "native_ask_progress": "{done} de {total} respondidas",
-  "native_ask_write": "Ou escreva sua resposta",
+  "native_ask_write": "Outro (Other): escreva sua resposta",
   "native_ask_written": "Resposta digitada selecionada",
   "native_ask_draft_kept": "O rascunho e as escolhas ficam guardados até você enviar, mesmo trocando de sessão.",
   "native_ask_dictate": "Ditar a resposta",

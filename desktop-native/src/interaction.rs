@@ -176,6 +176,23 @@ pub fn answer(ask: &Ask, item: &AskItem, pick: &Pick) -> Option<Value> {
     Some(answer)
 }
 
+/// A opção que pede o complemento no campo livre, como o agente costuma escrever: "Canal (digite qual)",
+/// "Outro monitor — você diz qual no campo de texto", "informe a chave em Other".
+pub fn asks_for_text(option: &AskOption) -> bool {
+    let label = option.label.to_lowercase();
+    let both = format!("{label} {}", option.description.to_lowercase());
+    ["(digite", "(informe", "(descreva", "(escreva", "(diga"].iter().any(|k| label.contains(k))
+        || ["em other", "no other", "in other", "em outro", "em outros", "campo outro", "campo de texto", "campo livre",
+            "digite no campo", "escreva no campo", "informe no campo"].iter().any(|k| both.contains(k))
+}
+
+/// O começo da resposta escrita a partir da opção: o nome dela sem o parêntese do fim, e dois-pontos.
+pub fn text_prefix(option: &AskOption) -> String {
+    let label = option.label.trim();
+    let base = match label.rfind(" (") { Some(at) if label.ends_with(')') => &label[..at], _ => label };
+    format!("{}: ", base.trim())
+}
+
 /// Seletor com as linhas "Type something." e "Chat about this": o do AskUserQuestion, mas também menus do próprio
 /// Claude Code (mods). Quem decide se o card nativo responde é `Chat::ask_pane`.
 pub fn ask_picker(options: &[String]) -> bool {
@@ -344,6 +361,17 @@ pub fn question_links(question: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn an_option_that_asks_for_text_leads_to_the_free_field_with_its_name() {
+        let opt = |label: &str, description: &str| crate::api::dto::AskOption { label: label.into(), description: description.into(), preview: None };
+        assert!(super::asks_for_text(&opt("Canal (digite qual)", "Poste num canal; informe o nome em Other.")));
+        assert!(super::asks_for_text(&opt("Outro monitor", "Você diz qual no campo de texto.")));
+        assert!(super::asks_for_text(&opt("Já tenho a PM", "Informe a chave em Other.")));
+        assert!(!super::asks_for_text(&opt("Inline nesta sessão (Recomendado)", "Executo tudo aqui, em sequência.")));
+        assert_eq!(super::text_prefix(&opt("Canal (digite qual)", "")), "Canal: ");
+        assert_eq!(super::text_prefix(&opt("Já tenho a PM", "")), "Já tenho a PM: ");
+    }
+
     use super::*;
     #[test]
     fn question_links_keeps_only_http_urls_without_trailing_punctuation() {
