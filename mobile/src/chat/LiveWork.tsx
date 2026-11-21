@@ -77,7 +77,7 @@ export function PensamentoVivo({ texto }: { texto: string }) {
   return (
     <View style={styles.pensamento} accessibilityLiveRegion="none">
       <View style={styles.linha}>
-        <Pulso><Icon name="Brain" size={THOUGHT_ICON}color={theme.tokens.accent.base} /></Pulso>
+        <Pulso><Icon name="Brain" size={THOUGHT_ICON} color={theme.tokens.accent.base} /></Pulso>
         <Text style={[styles.verbo, { color: theme.tokens.text.secondary }]}>{m.pensamento_vivo()}</Text>
         <Text style={[styles.tempo, { color: theme.tokens.text.muted }]}>
           {formatElapsed(Math.max(0, agora - inicio) / 1000)}
