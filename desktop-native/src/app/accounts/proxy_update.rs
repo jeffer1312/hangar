@@ -364,9 +364,10 @@ pub(crate) fn proxy_card_view(view: &CardView, actions: Vec<AnyElement>, body: O
         .child(status)
         .children(view.accounts.map(|n| count(n, "cliproxy_card_accounts_one", "cliproxy_card_accounts_many")))
         .children(view.sessions.filter(|n| *n > 0).map(|n| count(n, "cliproxy_card_sessions_one", "cliproxy_card_sessions_many")));
-    let head = div().flex().items_center().gap(px(12.))
+    // Sem largura para nome, selos e botões na mesma linha, os botões descem: o texto nunca fica por baixo deles.
+    let head = div().flex().flex_wrap().items_center().gap(px(12.))
         .child(provider_badge("http://127.0.0.1:8317", "CLIProxyAPI", 36.))
-        .child(div().flex_1().min_w_0().flex().flex_col().gap(px(5.)).child(title).child(meta))
+        .child(div().flex_1().min_w(px(240.)).flex().flex_col().gap(px(5.)).child(title).child(meta))
         .child(div().flex_shrink_0().flex().items_center().gap(px(8.)).children(actions));
     settings_box().p(px(16.)).gap(px(12.)).child(head).children(body)
 }
