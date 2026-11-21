@@ -190,6 +190,18 @@ describe('atualizar todas as máquinas', () => {
     expect(el.textContent).not.toContain(m.update_all_close_background());
   });
 
+  it('máquina que cai durante a rodada conta como problema; uma máquina usa o singular no andamento', async () => {
+    mocks.prepare.mockResolvedValue({ run: [{ server: first, notes: null }], failed: [], offline: [] });
+    let finish!: (results: UpdateAllResult[]) => void;
+    mocks.updateAll.mockImplementation(() => new Promise<UpdateAllResult[]>((resolve) => { finish = resolve; }));
+    await render();
+    await click(m.update_all_button({ n: '2' }));
+    expect(el.textContent).toContain(m.update_all_summary_progress_one({ done: '0' }));
+    await act(async () => finish([{ server: first, state: { status: 'fora_do_ar', warnings: [] } }]));
+    expect(el.textContent).toContain(`${m.update_all_done_issues()} · ${m.update_all_count_issue_one()}`);
+    expect(el.textContent).not.toContain(m.update_all_count_offline_one());
+  });
+
   it('quem falhou antes da folha aparece na lista com o motivo e conta como problema no fim', async () => {
     const broken = { ...first, id: 'broken', label: 'fixture-broken' };
     const quiet = { ...first, id: 'quiet', label: 'fixture-quiet' };

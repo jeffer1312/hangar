@@ -1086,6 +1086,9 @@ impl Updater {
         let Some(api) = self.local.clone() else { return };
         if !self.run.begin_server_search() {
             window.push_notification(Notification::error(tr("app_restart_busy")), cx);
+            // No lote a linha desta máquina já estava "iniciando": fica com a recusa, senão a rodada nunca acaba.
+            self.local_batch_status(all::Status::Failed(tr("app_restart_busy")), cx);
+            self.app_not_now(cx);
             return;
         }
         // Atualização só desta máquina: a linha dela na tela de Servidores reconsulta quando terminar.

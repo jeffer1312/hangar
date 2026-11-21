@@ -10774,6 +10774,8 @@
   "update_all_timeout": "A atualização ultrapassou o limite de 30 minutos.",
   "update_all_warnings": "Avisos",
   "update_all_summary_checking": "Conferindo {n} máquinas no ar…",
+  "update_all_summary_checking_one": "Conferindo 1 máquina no ar…",
+  "update_all_summary_progress_one": "{done} de 1 máquina pronta",
   "update_all_summary_ready": "Pronto para atualizar",
   "update_all_summary_none": "Nenhuma máquina pode ser atualizada agora",
   "update_all_summary_progress": "{done} de {total} máquinas prontas",

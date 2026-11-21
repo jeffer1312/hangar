@@ -224,6 +224,15 @@ export function ChatBody({ serverId, name, askFallback, onBack, deepStack, onOpe
   }
   const followedProvider = rowsProvider ?? knownProvider.current.provider;
   const reappeared = knownProvider.current.epoch;
+  // Fora da lista por ~2 s confirma com uma leitura: a sessão fechada em outro lugar mostra "encerrada", e a piscada
+  // rápida da lista não relê.
+  const leftList = rowsProvider === null && knownProvider.current.provider !== null;
+  const [absentConfirmed, setAbsentConfirmed] = useState(0);
+  useEffect(() => {
+    if (!leftList) return;
+    const timer = setTimeout(() => setAbsentConfirmed((n) => n + 1), 2000);
+    return () => clearTimeout(timer);
+  }, [leftList, sessionKey]);
   // Relida também quando o provedor da lista muda: a troca de agente faz a sessão Claude virar Codex.
   useEffect(() => {
     if (!ready || servidorSumiu) return;
@@ -264,7 +273,7 @@ export function ChatBody({ serverId, name, askFallback, onBack, deepStack, onOpe
       clearTimeout(timer);
       subscription.remove();
     };
-  }, [ready, servidorSumiu, serverId, name, followedProvider, reappeared]);
+  }, [ready, servidorSumiu, serverId, name, followedProvider, reappeared, absentConfirmed]);
   const provider: Provider | null = codexPreThread ? 'codex' : rowsProvider ?? fetchedSession?.provider ?? null;
   const agentConversation = useMemo(() => events.find(event => event.kind !== 'notice' && !event.id.startsWith('queued-'))?.id,
     [events, eventsRevision]);

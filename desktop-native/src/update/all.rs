@@ -132,7 +132,7 @@ impl Machine {
     }
 }
 
-/// A identidade da máquina; `None` quando ela não respondeu nada (fora do ar). Erro do servidor dá identidade vazia.
+/// A identidade da máquina; `None` quando outra máquina não respondeu nada (fora do ar). Erro do servidor dá identidade vazia.
 async fn identify(machine: &Machine) -> Option<String> {
     let result = match &machine.api {
         Ok(api) => api.server_read(&["peers", "identificador"], &[], IDENTIFY_SECS).await,
@@ -142,7 +142,8 @@ async fn identify(machine: &Machine) -> Option<String> {
         Ok(value) => Some(value["identificador"].as_str().unwrap_or("").trim().to_owned()),
         Err(error) => {
             crate::log_line(&format!("update_all: identificador indisponível ({:?})", error.status));
-            (error.status.is_some() || machine.api.is_err()).then(String::new)
+            // Esta máquina nunca fica "fora do ar": ela é lida e, sem resposta, mostra a falha.
+            (error.status.is_some() || machine.api.is_err() || machine.local).then(String::new)
         }
     }
 }
@@ -366,7 +367,10 @@ impl Progress {
 
     fn summary(&self) -> String {
         match self.phase {
-            Phase::Review if !self.loaded() => tr_shared("update_all_summary_checking", &[("n", &self.counted().1.to_string())]),
+            Phase::Review if !self.loaded() => match self.counted().1 {
+                1 => tr_shared("update_all_summary_checking_one", &[]),
+                n => tr_shared("update_all_summary_checking", &[("n", &n.to_string())]),
+            },
             Phase::Review if self.actionable() => tr_shared("update_all_summary_ready", &[]),
             // "Em dia" só com todas as que responderam confirmando; falha ou trava não é sucesso.
             Phase::Review if self.rows.iter().all(|row| matches!(row.status, Status::Current | Status::Offline(_))) =>
@@ -376,7 +380,8 @@ impl Progress {
             Phase::Running if !self.rows.iter().any(|row| row.status.busy()) => tr_shared("update_all_summary_app", &[]),
             Phase::Running => {
                 let (done, total) = self.counted();
-                tr_shared("update_all_summary_progress", &[("done", &done.to_string()), ("total", &total.to_string())])
+                let key = if total == 1 { "update_all_summary_progress_one" } else { "update_all_summary_progress" };
+                tr_shared(key, &[("done", &done.to_string()), ("total", &total.to_string())])
             }
         }
     }
@@ -787,13 +792,18 @@ impl Updater {
             .filter(|m| snapshots.get(&m.key).is_some_and(|s| classify(s) == Classification::Start))
             .map(|m| (m.clone(), accepted.get(&m.key).cloned().unwrap_or_default())).collect();
         let local = machines.iter().find(|m| m.local).cloned();
+        let local_status = local.as_ref().and_then(|m| progress.read(cx).rows.iter().find(|row| row.key == m.key).map(|row| row.status.clone()));
+        // Esta máquina que vai atualizar já conta como em andamento: o modal não diz que acabou enquanto ela relê o estado.
+        let local_starts = local.as_ref().filter(|_| local_status == Some(Status::Available)).map(|m| m.key.clone());
         let plan_app = self.plan().app;
         progress.update(cx, |p, cx| {
             p.phase = Phase::Running;
             for row in &mut p.rows {
                 if excluded.contains(&row.key) && !matches!(row.status, Status::Offline(_)) {
                     row.status = Status::Failed(tr_shared("update_notes_failed", &[]));
-                } else if runs.iter().any(|(m, _)| m.key == row.key) { row.status = Status::Starting; }
+                } else if runs.iter().any(|(m, _)| m.key == row.key) || local_starts.as_ref() == Some(&row.key) {
+                    row.status = Status::Starting;
+                }
             }
             p.app = Some(if plan_app { AppStep::Waiting } else { AppStep::Current });
             cx.notify();
@@ -821,7 +831,6 @@ impl Updater {
                 }); });
             }
         }).detach();
-        let local_status = local.as_ref().and_then(|m| progress.read(cx).rows.iter().find(|row| row.key == m.key).map(|row| row.status.clone()));
         let no_local_server = self.local.is_none();
         match (local, local_status) {
             (Some(machine), Some(Status::Available)) => {
@@ -1058,7 +1067,7 @@ mod tests {
             let dict: Value = serde_json::from_str(source).unwrap();
             for key in ["button", "title", "short", "available", "checking", "starting", "running", "waiting", "up_to_date", "held_branch",
                 "held_changes", "held_running", "held_missing", "offline", "updated", "updated_manual", "failed", "silent", "timeout", "warnings",
-                "summary_checking", "summary_ready", "summary_none", "summary_progress", "summary_app", "done_title", "done_ok", "done_issues",
+                "summary_checking", "summary_checking_one", "summary_ready", "summary_none", "summary_progress", "summary_progress_one", "summary_app", "done_title", "done_ok", "done_issues",
                 "count_updated_one", "count_updated_other", "count_current_one", "count_current_other", "count_offline_one",
                 "count_offline_other", "count_issue_one", "count_issue_other", "offline_skip", "offline_skipped", "close_background",
                 "close", "cancel", "start", "app_label", "app_waiting", "app_downloading", "app_downloading_plain", "app_installing", "app_current", "app_later"] {
@@ -1366,6 +1375,7 @@ mod tests {
         p.identified(vec![a.clone(), b.clone()], HashMap::new(), &[b.key.clone()].into());
         assert_eq!(p.rows.iter().map(|r| r.key.as_str()).collect::<Vec<_>>(), [a.key.as_str(), b.key.as_str(), "known-down"]);
         assert_eq!(row_text(&p.rows[1], Phase::Review), "Fora do ar · fica de fora");
+        assert_eq!(p.summary(), "Conferindo 1 máquina no ar…");
         assert!(!p.can_start(), "a leitura de a ainda não voltou");
         p.record(a.key.clone(), Ok(json!({"atualizacao_disponivel": true})), Notes::default(), Status::Available);
         assert!(p.loaded() && p.can_start());

@@ -10774,6 +10774,8 @@
   "update_all_timeout": "The update exceeded the 30-minute limit.",
   "update_all_warnings": "Warnings",
   "update_all_summary_checking": "Checking {n} online machines…",
+  "update_all_summary_checking_one": "Checking 1 online machine…",
+  "update_all_summary_progress_one": "{done} of 1 machine done",
   "update_all_summary_ready": "Ready to update",
   "update_all_summary_none": "No machine can be updated right now",
   "update_all_summary_progress": "{done} of {total} machines done",

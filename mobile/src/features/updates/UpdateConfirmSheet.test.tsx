@@ -182,6 +182,26 @@ describe('folha "Atualizar?"', () => {
     expect(el.textContent).not.toContain(m.update_all_warnings_failed({ server: off.label }));
   });
 
+  it('consulta com todas em dia diz em dia, não "pronto"; uma máquina usa o singular', async () => {
+    const other = { ...server, id: 'other', label: 'fixture-other' };
+    const checks = createMachineChecks([server, other]);
+    let answer!: (value: Awaited<NonNullable<ConfirmRequest['machines']>>) => void;
+    const request: ConfirmRequest = { server, count: 2, resolve: vi.fn(), checks, machines: new Promise((resolve) => { answer = resolve; }) };
+    await act(async () => root.render(<UpdateConfirmSheet request={request} onClose={vi.fn()} />));
+    expect(el.textContent).toContain(m.update_all_summary_checking({ n: '2' }));
+    await act(async () => { checks.set('srv', { status: 'em_dia' }); checks.set('other', { status: 'em_dia' }); });
+    await act(async () => { answer({ run: [{ server, notes: null }, { server: other, notes: null }], failed: [], offline: [] }); });
+    await act(async () => { await Promise.resolve(); });
+    expect(el.textContent).toContain(m.update_all_up_to_date());
+    expect(el.textContent).not.toContain(m.update_all_summary_ready());
+    await act(async () => root.unmount());
+    root = createRoot(el);
+    const single = createMachineChecks([server]);
+    await act(async () => root.render(<UpdateConfirmSheet request={{ server, count: 1, resolve: vi.fn(), checks: single,
+      machines: new Promise(() => {}) }} onClose={vi.fn()} />));
+    expect(el.textContent).toContain(m.update_all_summary_checking_one());
+  });
+
   it('no "Atualizar todas" a versão vem do preparo, sem outra busca na ativa', async () => {
     const checks = createMachineChecks([server]);
     const request: ConfirmRequest = { server, count: 2, resolve: vi.fn(), checks,

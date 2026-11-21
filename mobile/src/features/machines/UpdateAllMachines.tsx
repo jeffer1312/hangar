@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { InteractionManager, Pressable, Text, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
-import { estaDesligado, isServerParked, ownUpdatableServers, prepareUpdateAll, updateAll, updateReportLine } from '@hangar/core';
+import { retryAfterMs, ownUpdatableServers, prepareUpdateAll, updateAll, updateReportLine } from '@hangar/core';
 import type { Server, UpdateAllResult, UpdateAllState } from '@hangar/core';
 import { SectionCard } from '../config/SectionCard';
 import { useSettingsColors } from '../config/colors';
@@ -51,25 +51,27 @@ function rowTone(value: UpdateAllState): RowTone {
 
 const plural = (n: number, one: () => string, other: (p: { n: string }) => string) => n === 1 ? one() : other({ n: String(n) });
 
-/** "Tudo pronto · 2 atualizadas, 1 fora do ar": a máquina deixada de fora antes não conta como problema. */
+/** "Tudo pronto · 2 atualizadas, 1 fora do ar": a máquina deixada de fora antes não conta como problema; a que caiu
+ *  durante a rodada conta. */
 function doneSummary(rows: readonly UpdateAllResult[], skipped: number): string {
   const count = (statuses: string[]) => rows.filter((row) => statuses.includes(row.state.status)).length;
   const updated = count(['atualizado', 'atualizado_manual']);
   const current = count(['em_dia']);
-  const offline = count(['fora_do_ar']) + skipped;
-  const issues = count(['falhou', 'travado']);
+  const offline = skipped;
+  const issues = count(['falhou', 'travado', 'fora_do_ar']);
   const parts = [
     updated ? plural(updated, m.update_all_count_updated_one, m.update_all_count_updated_other) : '',
     current ? plural(current, m.update_all_count_current_one, m.update_all_count_current_other) : '',
     offline ? plural(offline, m.update_all_count_offline_one, m.update_all_count_offline_other) : '',
     issues ? plural(issues, m.update_all_count_issue_one, m.update_all_count_issue_other) : '',
   ].filter(Boolean).join(', ');
-  const head = issues || count(['fora_do_ar']) ? m.update_all_done_issues() : m.update_all_done_ok();
+  const head = issues ? m.update_all_done_issues() : m.update_all_done_ok();
   return parts ? `${head} · ${parts}` : head;
 }
 
-// Já sabida fora do ar: fica de fora sem esperar o prazo da identidade.
-const knownOffline = (id: string) => estaDesligado(id) || isServerParked(id);
+// Fora do ar agora, com a espera da última falha ainda correndo: fica de fora sem pedido. Parada ou marcada há mais
+// tempo pode ter voltado sem ninguém perguntar; essa passa pela identidade, que tem prazo curto.
+const knownOffline = (id: string) => retryAfterMs(id) > 0;
 
 // A rodada vive fora do componente: sair da tela não a para, e voltar mostra a mesma em vez de abrir outra.
 // `left`: as que falharam antes da folha (sem a busca ou sem os avisos) e ficaram de fora; contam como problema.
@@ -169,7 +171,9 @@ export function UpdateAllMachines({ servers, compact = false }: { servers: reado
       <Notice text={error} error />
       {!busy && !error && rows.length === 0 ? <Notice text={m.maquinas_vazio()} /> : null}
       {rows.length ? <UpdateSummary progress={done ? 1 : finished / rows.length}
-        text={done ? doneSummary([...rows, ...left], skipped.length) : m.update_all_summary_progress({ done: String(finished), total: String(rows.length) })} /> : null}
+        text={done ? doneSummary([...rows, ...left], skipped.length) : rows.length === 1
+          ? m.update_all_summary_progress_one({ done: String(finished) })
+          : m.update_all_summary_progress({ done: String(finished), total: String(rows.length) })} /> : null}
       {rows.length || left.length || skipped.length ? <SectionCard>
         {rows.map(({ server, state }) => <View key={server.id} style={styles.row}>
           <UpdateRow label={server.label} text={statusText(state)} tone={rowTone(state)}

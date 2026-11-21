@@ -132,9 +132,13 @@ function MachineCheckList({ checks, loaded }: { checks: MachineChecks; loaded: L
   const online = rows.filter((row) => row.check.status !== 'fora_do_ar');
   const answered = online.filter((row) => row.check.status !== 'consultando').length;
   const finished = !!loaded && answered === online.length;
-  // Sem nenhuma máquina para rodar, o fim da consulta não é "pronto".
-  const summary = !finished ? m.update_all_summary_checking({ n: String(online.length) })
-    : loaded.runnable > 0 ? m.update_all_summary_ready() : m.update_all_summary_none();
+  // "Pronto" só com versão nova a puxar; em dia só quando todas as do ar estão em dia (uma falha não some no resumo);
+  // o resto é que nenhuma pode atualizar. A linha "disponível" só sai depois dos avisos lidos: ela está entre as que rodam.
+  const summary = !finished
+    ? online.length === 1 ? m.update_all_summary_checking_one() : m.update_all_summary_checking({ n: String(online.length) })
+    : loaded.runnable > 0 && rows.some((row) => row.check.status === 'disponivel') ? m.update_all_summary_ready()
+    : online.length > 0 && online.every((row) => row.check.status === 'em_dia') ? m.update_all_up_to_date()
+    : m.update_all_summary_none();
   return <View>
     <UpdateSummary text={summary} progress={online.length ? answered / online.length : 1} />
     {rows.map(({ server, check }) => <UpdateRow key={server.id} label={server.label} text={checkText(check)} tone={checkTone(check)} />)}
