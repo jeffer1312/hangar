@@ -21,6 +21,9 @@ function useNow(running: boolean) {
   return now;
 }
 
+// Alvo de toque mínimo; o raio é a metade para o botão de uma linha sair em pílula.
+const BUTTON = 44;
+
 function Button({ title, primary, disabled, onPress }: { title: string; primary?: boolean; disabled?: boolean; onPress: () => void }) {
   const c = useSettingsColors();
   const { theme } = useUnistyles();
@@ -94,8 +97,8 @@ const styles = StyleSheet.create((theme) => ({
   title: { fontSize: theme.base.text.base, fontWeight: theme.base.weight.semibold },
   sub: { fontSize: theme.base.text.sm },
   foot: { fontSize: theme.base.text.xs, marginTop: theme.base.space[2] },
-  track: { height: 5, borderRadius: 3, overflow: 'hidden', marginTop: theme.base.space[3] },
-  fill: { height: '100%', borderRadius: 3 },
-  button: { minHeight: 44, minWidth: 44, paddingHorizontal: theme.base.space[4], borderRadius: 22, borderWidth: 1, justifyContent: 'center', alignItems: 'center' },
+  track: { height: 5, borderRadius: theme.base.radius.full, overflow: 'hidden', marginTop: theme.base.space[3] },
+  fill: { height: '100%', borderRadius: theme.base.radius.full },
+  button: { minHeight: BUTTON, minWidth: BUTTON, paddingHorizontal: theme.base.space[4], borderRadius: BUTTON / 2, borderWidth: 1, justifyContent: 'center', alignItems: 'center' },
   buttonText: { fontSize: theme.base.text.sm, fontWeight: theme.base.weight.semibold },
 }));

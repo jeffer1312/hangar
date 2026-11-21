@@ -751,7 +751,7 @@ const styles = StyleSheet.create((theme) => ({
   cWhen: { marginLeft: 'auto', paddingLeft: theme.base.space[2], fontSize: theme.base.text.xs, fontVariant: ['tabular-nums'] },
   cDrill: { width: 40, height: 44, borderRadius: theme.base.radius.sm, alignItems: 'center', justifyContent: 'center' },
   // Recuo até o texto: 8 de margem + ícone 16 + gap 10.
-  cSep: { height: StyleSheet.hairlineWidth, marginLeft: 34 },
+  cSep: { height: StyleSheet.hairlineWidth, marginLeft: theme.base.space[8] + theme.base.space[0.5] },
   cFooter: { flexDirection: 'row', alignItems: 'center', gap: theme.base.space[3], paddingTop: theme.base.space[0.5] },
   cPill: { height: 32, paddingHorizontal: theme.base.space[3], borderRadius: theme.base.radius.full, borderWidth: 1, justifyContent: 'center' },
   cPillTxt: { fontSize: theme.base.text.sm, fontWeight: theme.base.weight.medium },
@@ -759,7 +759,7 @@ const styles = StyleSheet.create((theme) => ({
   group: { minWidth: 44, height: 44, borderRadius: theme.base.radius.sm, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: theme.base.space[0.5], paddingHorizontal: theme.base.space[1] },
   groupTxt: { fontSize: theme.base.text.xs, fontVariant: ['tabular-nums'] },
   // Recuo de um nível: a worktree mora dentro do repositório da linha de cima.
-  wtRow: { minHeight: 44, marginLeft: 26, flexDirection: 'row', alignItems: 'center', gap: theme.base.space[2], paddingHorizontal: theme.base.space[2], borderRadius: theme.base.radius.sm },
+  wtRow: { minHeight: 44, marginLeft: theme.base.space[6] + theme.base.space[0.5], flexDirection: 'row', alignItems: 'center', gap: theme.base.space[2], paddingHorizontal: theme.base.space[2], borderRadius: theme.base.radius.sm },
   wtName: { flexShrink: 1, fontSize: theme.base.text.sm },
   wtBranch: { flex: 1, minWidth: 0, fontSize: theme.base.text.xs, fontFamily: theme.base.fontMono },
   wtChip: { fontSize: theme.base.text.xs, fontWeight: theme.base.weight.semibold },

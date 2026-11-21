@@ -290,7 +290,7 @@ const styles = StyleSheet.create((theme) => ({
   videoWrap: {
     width: '100%',
     flex: 1,
-    paddingBottom: 72,
+    paddingBottom: theme.base.space[10] + theme.base.space[8],
     justifyContent: 'center',
   },
   video: {

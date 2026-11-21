@@ -607,7 +607,7 @@ const styles = StyleSheet.create((theme) => ({
   handoffTitle: {
     flexShrink: 1,
     fontSize: theme.base.text.xs,
-    fontWeight: '600',
+    fontWeight: theme.base.weight.semibold,
     color: theme.tokens.text.muted,
   },
   handoffModel: {

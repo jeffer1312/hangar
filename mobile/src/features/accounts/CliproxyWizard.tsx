@@ -720,7 +720,7 @@ const styles = StyleSheet.create(theme => ({
   cardTitle: { flexDirection: 'row', alignItems: 'center', gap: theme.base.space[2] },
   radio: { width: 18, height: 18, borderRadius: theme.base.radius.full, borderWidth: 1.5, alignItems: 'center', justifyContent: 'center' },
   radioDot: { width: 8, height: 8, borderRadius: theme.base.radius.full },
-  rec: { fontSize: theme.base.text.xxs, fontWeight: theme.base.weight.medium, paddingHorizontal: theme.base.space[2], paddingVertical: 2,
+  rec: { fontSize: theme.base.text.xxs, fontWeight: theme.base.weight.medium, paddingHorizontal: theme.base.space[2], paddingVertical: theme.base.space[0.5],
     borderRadius: theme.base.radius.full, overflow: 'hidden' },
   box: { borderWidth: 1, borderRadius: theme.base.radius.md, borderCurve: 'continuous', padding: theme.base.space[3], gap: theme.base.space[3] },
   boxHead: { flexDirection: 'row', alignItems: 'flex-start', gap: theme.base.space[3] },
