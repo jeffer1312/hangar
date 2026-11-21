@@ -1,9 +1,8 @@
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Pressable, Text, View } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import type { UnistylesThemes } from 'react-native-unistyles';
 import { Image } from 'expo-image';
-import Svg, { Circle, Path } from 'react-native-svg';
 import type { File } from 'expo-file-system';
 import { attachmentFolder, fmtBytes, registrarDiag, type ConversationAttachment, type Server } from '@hangar/core';
 import * as m from '../../paraglide/messages';
@@ -14,7 +13,9 @@ import { superficie } from '../../theme/superficie';
 import { AudioChip } from '../../chat/AudioChip';
 import { useRouteBase } from '../../net/routeBase';
 import { attachmentHeaders, attachmentName, attachmentThumbUri, attachmentUri, keptKey, type KeptVersion } from './attachmentUrls';
-import { deliverLocalFile, downloadKept, keptCopy } from './mediaCache';
+import { deliverLocalFile, downloadKept, isAbort, isMissing, keptCopy, type DownloadProgress } from './mediaCache';
+import { DownloadRing } from './DownloadRing';
+import { percentOf, progressText, useDownload } from './useDownload';
 import { expiryText } from './gallery';
 import { originLabel } from './origin';
 import { MediaCellFrame } from './MediaFilesParts';
@@ -82,22 +83,19 @@ export function fileDetails(item: MediaFileItem, folder = true): string {
   ].filter(Boolean).join(' · ');
 }
 
+// O download em andamento não é estado daqui: é o `progress` do `useDownload`, o mesmo da conversa.
 type DownloadState =
   | { kind: 'idle' }
-  | { kind: 'loading'; progress: number | null }
   | { kind: 'done'; file: File }
   | { kind: 'error'; reason: string };
-
-const missing = (e: unknown) => /status:? 404\b|HTTP 404\b/.test(e instanceof Error ? e.message : String(e));
-const aborted = (e: unknown) => e instanceof Error && (e.name === 'AbortError' || /cancel/i.test(e.message));
 
 function keptState(key: string, name: string, version: KeptVersion): DownloadState {
   const kept = keptCopy(key, name, version);
   return kept ? { kind: 'done', file: kept } : { kind: 'idle' };
 }
 
-/** Baixar → progresso (tocar cancela) → abre; o já baixado abre na hora, sem rede. */
-function useDownload(item: MediaFileItem, server: Server, sessionName: string, serverId: string) {
+/** Baixar → progresso (o anel cancela) → abre; o já baixado abre na hora, sem rede. */
+function useKeptFile(item: MediaFileItem, server: Server, sessionName: string, serverId: string) {
   const name = attachmentName(item);
   const keepKey = keptKey(serverId, sessionName, item);
   const size = item.size ?? null;
@@ -112,11 +110,12 @@ function useDownload(item: MediaFileItem, server: Server, sessionName: string, s
   useEffect(() => {
     if (shownRef.current === shown) return;
     shownRef.current = shown;
-    setState((s) => (s.kind === 'loading' ? s : keptState(keepKey, name, { size, mtime })));
+    setState(keptState(keepKey, name, { size, mtime }));
   }, [shown, keepKey, name, size, mtime]);
-  const abort = useRef<AbortController | null>(null);
+  // Sair da tela cancela o download (o `useDownload` aborta ao desmontar).
+  const dl = useDownload();
   const alive = useRef(true);
-  useEffect(() => { alive.current = true; return () => { alive.current = false; abort.current?.abort(); }; }, []);
+  useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
 
   const open = useCallback(async (file: File) => {
     try {
@@ -135,9 +134,9 @@ function useDownload(item: MediaFileItem, server: Server, sessionName: string, s
   const busy = useRef(false);
 
   const press = useCallback(() => {
-    if (state.kind === 'loading') {
+    if (dl.busy) {
       haptic.selection();
-      abort.current?.abort();
+      dl.cancel();
       return;
     }
     if (busy.current) return;
@@ -151,17 +150,8 @@ function useDownload(item: MediaFileItem, server: Server, sessionName: string, s
     if (!server.token) { toast.erro(m.sessao_expirada()); return; }
     haptic.selection();
     busy.current = true;
-    const ctrl = new AbortController();
-    abort.current = ctrl;
-    setState({ kind: 'loading', progress: null });
-    let last = -1;
-    downloadKept(keepKey, attachmentUri(item, sessionName, server), attachmentHeaders(item, server), name, () => version.current, (p) => {
-      // Um redesenho por ponto percentual, não por pedaço recebido.
-      const pct = p === null ? -1 : Math.floor(p * 100);
-      if (pct === last || !alive.current) return;
-      last = pct;
-      setState({ kind: 'loading', progress: p });
-    }, ctrl.signal)
+    setState({ kind: 'idle' });
+    dl.run((o) => downloadKept(keepKey, attachmentUri(item, sessionName, server), attachmentHeaders(item, server), name, () => version.current, o))
       .then(() => {
         if (!alive.current) return;
         // Conferida contra a medida de agora: o arquivo pode ter mudado no servidor durante o download.
@@ -176,49 +166,26 @@ function useDownload(item: MediaFileItem, server: Server, sessionName: string, s
       })
       .catch((e: unknown) => {
         if (!alive.current) return;
-        if (ctrl.signal.aborted || aborted(e)) { setState({ kind: 'idle' }); return; }
+        if (isAbort(e)) { setState({ kind: 'idle' }); return; }
         haptic.error();
         // O download do expo-file-system só diz o status no texto; erro do core traz o número.
         const typed = typeof (e as { status?: unknown } | null)?.status === 'number' ? (e as { status: number }).status : null;
-        const gone = typed !== null ? typed === 404 : missing(e);
+        const gone = typed !== null ? typed === 404 : isMissing(e);
         registrarDiag({ evento: 'anexos.entrega_falhou', nivel: 'aviso', tela: 'anexos',
           codigo: typed !== null ? String(typed) : gone ? '404' : e instanceof Error ? e.name : 'erro' });
         setState({ kind: 'error', reason: gone ? m.file_card_missing() : (e instanceof Error && e.message) || m.file_card_failed() });
       })
       .finally(() => { busy.current = false; });
-  }, [state, open, keepKey, item, sessionName, server, name]);
+  }, [state, open, keepKey, item, sessionName, server, name, dl.busy, dl.run, dl.cancel]);
 
-  return { state, press };
+  return { state, press, progress: dl.progress, cancel: dl.cancel };
 }
 
-function ProgressRing({ progress, color, track, mark }: { progress: number; color: string; track: string; mark: string }) {
-  const r = 12;
-  const c = 2 * Math.PI * r;
-  return (
-    <Svg width={30} height={30} viewBox="0 0 30 30">
-      <Circle cx={15} cy={15} r={r} fill="none" stroke={track} strokeWidth={3} />
-      <Circle cx={15} cy={15} r={r} fill="none" stroke={color} strokeWidth={3} strokeLinecap="round"
-        strokeDasharray={`${c * progress} ${c}`} transform="rotate(-90 15 15)" />
-      <Path d="M11 11l8 8M19 11l-8 8" stroke={mark} strokeWidth={1.6} />
-    </Svg>
-  );
-}
-
-function DownloadButton({ state, press, name, compact = false }: {
-  state: DownloadState; press: () => void; name: string; compact?: boolean;
+function DownloadButton({ state, progress, press, cancel, name, compact = false }: {
+  state: DownloadState; progress: DownloadProgress | null; press: () => void; cancel: () => void; name: string; compact?: boolean;
 }) {
   const { theme } = useUnistyles();
-  if (state.kind === 'loading') {
-    return (
-      <Pressable onPress={press} style={styles.ringBtn} accessibilityRole="button"
-        accessibilityLabel={m.media_cancel_download({ nome: name })}
-        accessibilityValue={state.progress !== null ? { min: 0, max: 100, now: Math.round(state.progress * 100) } : undefined}>
-        {state.progress === null
-          ? <ActivityIndicator color={theme.tokens.accent.base} />
-          : <ProgressRing progress={state.progress} color={theme.tokens.accent.base} track={theme.tokens.border.strong} mark={theme.tokens.text.secondary} />}
-      </Pressable>
-    );
-  }
+  if (progress) return <DownloadRing pct={percentOf(progress)} onCancel={cancel} label={m.file_card_cancel({ nome: name })} />;
   const label = state.kind === 'done' ? m.file_card_open() : state.kind === 'error' ? m.media_again() : m.file_card_download();
   const icon = state.kind === 'done' ? 'ExternalLink' : state.kind === 'error' ? 'RotateCw' : 'Download';
   const color = state.kind === 'error' ? theme.tokens.status.error : theme.tokens.text.primary;
@@ -232,12 +199,8 @@ function DownloadButton({ state, press, name, compact = false }: {
   );
 }
 
-function subLine(state: DownloadState, item: MediaFileItem): { txt: string; error: boolean } {
-  if (state.kind === 'loading') {
-    if (state.progress === null) return { txt: m.file_card_downloading(), error: false };
-    const pct = Math.round(state.progress * 100);
-    return { txt: item.size != null ? m.media_downloading_pct_of({ pct, total: fmtBytes(item.size) }) : m.media_downloading_pct({ pct }), error: false };
-  }
+function subLine(state: DownloadState, progress: DownloadProgress | null, item: MediaFileItem): { txt: string; error: boolean } {
+  if (progress) return { txt: progressText(progress), error: false };
   if (state.kind === 'error') return { txt: m.media_download_failed({ reason: state.reason }), error: true };
   if (state.kind === 'done') return { txt: [item.size != null ? fmtBytes(item.size) : null, m.media_downloaded(), originLabel(item.origin)].filter(Boolean).join(' · '), error: false };
   return { txt: fileDetails(item), error: false };
@@ -250,10 +213,10 @@ export const FileRow = memo(function FileRow({ item, server, sessionName, server
 }) {
   const { theme } = useUnistyles();
   const name = attachmentName(item);
-  const { state, press } = useDownload(item, server, sessionName, serverId);
+  const { state, press, progress, cancel } = useKeptFile(item, server, sessionName, serverId);
   const ext = extOf(name);
-  const sub = subLine(state, item);
-  const urgent = state.kind === 'idle' && item.expiresInDays !== undefined && expiryText(item.expiresInDays).urgent;
+  const sub = subLine(state, progress, item);
+  const urgent = state.kind === 'idle' && !progress && item.expiresInDays !== undefined && expiryText(item.expiresInDays).urgent;
   const viewer = item.kind === 'pdf' || item.kind === 'html';
   return (
     <View style={styles.row}>
@@ -270,7 +233,7 @@ export const FileRow = memo(function FileRow({ item, server, sessionName, server
           </Text>
         </View>
       </Pressable>
-      <DownloadButton state={state} press={press} name={name} />
+      <DownloadButton state={state} progress={progress} press={press} cancel={cancel} name={name} />
     </View>
   );
 });
@@ -284,7 +247,7 @@ export const AudioRow = memo(function AudioRow({ item, server, sessionName, serv
 }) {
   const { theme } = useUnistyles();
   const name = attachmentName(item);
-  const { state, press } = useDownload(item, server, sessionName, serverId);
+  const { state, press, progress, cancel } = useKeptFile(item, server, sessionName, serverId);
   return (
     <View style={styles.audioRow}>
       <AudioChip uri={attachmentUri(item, sessionName, server)} headers={attachmentHeaders(item, server)} name={name}
@@ -295,7 +258,7 @@ export const AudioRow = memo(function AudioRow({ item, server, sessionName, serv
           <Text style={[styles.miniTxt, { color: theme.tokens.accent.base }]} numberOfLines={1}>{m.composer_transcrever_de_novo()}</Text>
         </Pressable>
       ) : null}
-      <DownloadButton state={state} press={press} name={name} compact />
+      <DownloadButton state={state} progress={progress} press={press} cancel={cancel} name={name} compact />
     </View>
   );
 });
@@ -363,12 +326,6 @@ const styles = StyleSheet.create((theme) => ({
     justifyContent: 'center',
     borderRadius: theme.base.radius.sm,
     borderWidth: 1,
-  },
-  ringBtn: {
-    width: 44,
-    height: 44,
-    alignItems: 'center',
-    justifyContent: 'center',
   },
   audioRow: {
     flexDirection: 'row',

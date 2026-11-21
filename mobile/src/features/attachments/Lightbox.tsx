@@ -132,15 +132,17 @@ export function Lightbox({
   // Salvar e compartilhar baixam pelo mesmo download, com anel e cancelamento; `pending` diz qual botão o mostra.
   const dl = useDownload();
   const [pending, setPending] = useState<'save' | 'share' | null>(null);
+  // O `busy` só vale depois do próximo render: dois toques rápidos abriam duas folhas.
+  const running = useRef(false);
   const fetchThen = (which: 'save' | 'share', job: (o: DownloadOptions) => Promise<boolean>, ok?: (r: boolean) => void) => {
-    // O `busy` só vale depois do próximo render: dois toques rápidos abriam duas folhas.
-    if (dl.busy) return;
+    if (running.current) return;
+    running.current = true;
     haptic.selection();
     setPending(which);
     dl.run(job)
       .then((r) => ok?.(r))
       .catch((e: unknown) => { if (!isAbort(e)) toast.erro(e instanceof Error ? e.message : String(e)); })
-      .finally(() => setPending(null));
+      .finally(() => { running.current = false; setPending(null); });
   };
   const save = () => fetchThen('save', (o) => saveImage(uri, headers, filename, o), (gravou) => { if (gravou) toast.ok(m.file_card_saved()); });
   const share = () => fetchThen('share', (o) => shareFile(uri, headers, filename, o).then(() => true));

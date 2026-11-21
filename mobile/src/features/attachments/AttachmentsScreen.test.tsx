@@ -51,7 +51,11 @@ vi.mock('./Lightbox', () => ({ Lightbox: (props: LightboxMockProps) => {
   h.lightbox(props);
   return props.visible ? createElement('div', { 'data-lightbox': props.kind ?? 'image' }, `${props.counter ?? ''}|${props.filename}`) : null;
 } }));
-vi.mock('./mediaCache', () => ({ downloadKept: h.download, deliverLocalFile: h.deliverLocal, keptCopy: h.kept }));
+vi.mock('./mediaCache', () => ({
+  downloadKept: h.download, deliverLocalFile: h.deliverLocal, keptCopy: h.kept,
+  isAbort: (e: unknown) => e instanceof Error && e.name === 'AbortError',
+  isMissing: (e: unknown) => /(status:?|HTTP) 404\b/.test(e instanceof Error ? e.message : String(e)),
+}));
 vi.mock('./DocumentViewer', () => ({
   DocumentViewer: ({ doc }: { doc: { kind: string; name: string; uri: string; headers?: Record<string, string> } | null }) => {
     h.doc(doc);
@@ -69,7 +73,7 @@ vi.mock('../../paraglide/messages', () => Object.fromEntries(
     + 'anexos_imagem_enviada anexos_sem_expiracao anexos_vencido anexos_expira_h anexos_expira_d media_title media_tab_media '
     + 'media_tab_files media_tab_audio media_filter_all media_filter_agent media_filter_user media_origin_agent media_origin_user '
     + 'media_empty media_day_today media_day_yesterday media_day_undated media_when_today media_when_yesterday media_when_date '
-    + 'media_folder_uploads media_cancel_download media_again media_downloading_pct media_downloading_pct_of media_downloaded '
+    + 'media_folder_uploads file_card_cancel media_again file_card_progress file_card_progress_unknown media_downloaded '
     + 'media_download_failed media_changed_during_download gallery_counter gallery_jump_not_found')
     .split(' ').map((k) => [k, (p?: Record<string, unknown>) => (p ? `${k}:${Object.values(p).join(',')}` : k)]),
 ));
@@ -247,7 +251,7 @@ describe('media and files', () => {
     // A chave é só o caminho; data e tamanho vão como a versão gravada com a cópia.
     expect(h.download).toHaveBeenCalledExactlyOnceWith(`s1::sess::upload:${filename}`,
       `https://a.test/api/sessions/sess/uploads/${filename}`, { Authorization: 'Bearer token-a' }, filename,
-      expect.any(Function), expect.any(Function), expect.any(AbortSignal));
+      expect.any(Function), expect.objectContaining({ signal: expect.any(AbortSignal), onProgress: expect.any(Function) }));
     expect(h.download.mock.lastCall![4]()).toEqual({ size: 10, mtime: 0 });
     expect(h.deliverLocal).toHaveBeenCalledExactlyOnceWith(done, filename);
     expect(container.querySelector('[data-doc]')).toBeNull();

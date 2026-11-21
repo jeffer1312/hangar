@@ -92,7 +92,11 @@ vi.mock('../../paraglide/messages', () => ({
   composer_sem_acesso_fotos: () => 'no-photos',
 }));
 
-import { cacheUsage, clearMediaCache, deliverFile, evict, isAbort, isMissing, localCopy, MEDIA_CACHE_LIMIT, PART_SUFFIX, shareFile } from './mediaCache';
+import {
+  cacheUsage, clearMediaCache, deliverFile, deliverLocalFile, downloadKept, evict, isAbort, isMissing, keptCopy, keyHash, localCopy,
+  MEDIA_CACHE_LIMIT, PART_SUFFIX, shareFile,
+} from './mediaCache';
+import { downloadedVersion, keptIsCurrent, keptKey, type KeptVersion } from './attachmentUrls';
 
 // Guardado = arquivo na pasta e registro no índice; o nome guardado termina no nome original.
 const isCached = (_uri: string, name: string) => {
@@ -381,5 +385,120 @@ describe('entrega', () => {
     fetchMock.mockResolvedValue({ status: 416, ok: false, headers: new Headers({ etag: '"e"', 'content-range': 'bytes */0' }) });
     fs.jobs.push(writes(0));
     expect(await deliverFile(URI, H, 'rel.docx')).toBe('empty');
+  });
+});
+
+describe('cópia guardada de "Mídia e arquivos"', () => {
+  const item = { source: 'cited' as const, ref: '/tmp/out/report.pdf', eventId: 'e1' };
+  const key = keptKey('s1', 'sess', item);
+  const download = (version: () => KeptVersion, job: Job = writes(10)) => {
+    fs.jobs.push(job);
+    return downloadKept(key, 'https://a.test/f', undefined, 'report.pdf', version);
+  };
+
+  it('the key is the path only: sizes arriving later do not move the copy', () => {
+    expect(key).toBe('s1::sess::cited:/tmp/out/report.pdf');
+    expect(keptKey('s2', 'sess', item)).not.toBe(key);
+    expect(keptKey('s1', 'other', item)).not.toBe(key);
+    expect(keptKey('s1', 'sess', { ...item, eventId: 'e2' })).toBe(key);
+  });
+
+  it('conversation images with the same position in different messages keep apart; paths do not', () => {
+    const image = (eventId: string) => ({ source: 'transcript' as const, ref: '0', eventId });
+    expect(keptKey('s1', 'sess', image('e1'))).not.toBe(keptKey('s1', 'sess', image('e2')));
+    expect(keptKey('s1', 'sess', image('e1'))).toBe(keptKey('s1', 'sess', image('e1')));
+    for (const source of ['upload', 'cited', 'remote'] as const) {
+      expect(keptKey('s1', 'sess', { source, ref: 'a.png', eventId: 'e1' })).toBe(keptKey('s1', 'sess', { source, ref: 'a.png', eventId: 'e2' }));
+    }
+  });
+
+  it('a file that changed during the download keeps the date of the start: the copy is not current', async () => {
+    let now: KeptVersion = { size: 10, mtime: 5 };
+    await download(() => now, async (t) => { now = { size: 10, mtime: 6 }; return writes(10)(t); });
+    expect(keptCopy(key, 'report.pdf', now)).toBeNull();
+    expect(downloadedVersion({ size: null, mtime: 5 }, { size: 10, mtime: 6 })).toEqual({ size: 10, mtime: 5 });
+    expect(downloadedVersion({ size: null, mtime: null }, { size: 10, mtime: 6 })).toEqual({ size: 10, mtime: 6 });
+  });
+
+  it('size and date measured during the download are stored with the copy and find it afterwards', async () => {
+    let now: KeptVersion = { size: null, mtime: null };
+    const file = await download(() => now, async (t) => { now = { size: 10, mtime: 5 }; return writes(10)(t); });
+    expect(file.uri).toBe(`cache/chat-media/kept-${keyHash(key)}-report.pdf`);
+    expect(keptCopy(key, 'report.pdf', { size: null, mtime: null })?.uri).toBe(file.uri);
+    expect(keptCopy(key, 'report.pdf', { size: 10, mtime: 5 })?.uri).toBe(file.uri);
+  });
+
+  it('a file rewritten on the server with another date or size does not open the stale copy', async () => {
+    await download(() => ({ size: 10, mtime: 5 }));
+    expect(keptCopy(key, 'report.pdf', { size: 10, mtime: 6 })).toBeNull();
+    expect(keptCopy(key, 'report.pdf', { size: 99, mtime: 5 })).toBeNull();
+  });
+
+  it('a copy downloaded before any measure still checks the size against its bytes', async () => {
+    await download(() => ({ size: null, mtime: null }));
+    expect(keptCopy(key, 'report.pdf', { size: 10, mtime: 5 })).not.toBeNull();
+    expect(keptCopy(key, 'report.pdf', { size: 11, mtime: 5 })).toBeNull();
+  });
+
+  it('only what both sides know and differs discards the copy', () => {
+    expect(keptIsCurrent(null, null, { size: 1, mtime: 1 })).toBe(true);
+    expect(keptIsCurrent({ size: 1, mtime: 1 }, 1, { size: null, mtime: null })).toBe(true);
+    expect(keptIsCurrent({ size: 1, mtime: 1 }, 1, { size: 1, mtime: 2 })).toBe(false);
+    expect(keptIsCurrent({ size: null, mtime: null }, 1, { size: 2, mtime: 2 })).toBe(false);
+  });
+
+  it('the name hash is stable and wider than 32 bits', () => {
+    expect(keyHash(key)).toBe(keyHash(key));
+    // Duas metades de 53 bits: bem além dos ~7 caracteres base36 de um hash de 32 bits.
+    expect(keyHash(key).length).toBeGreaterThan(14);
+    const many = new Set(Array.from({ length: 5000 }, (_, i) => keyHash(`s1::sess::upload:f${i}.png`)));
+    expect(many.size).toBe(5000);
+  });
+
+  it('baixa pelo download do cache: progresso com o tamanho conhecido e cancelamento sem deixar cópia', async () => {
+    const progress = vi.fn();
+    fs.jobs.push(async (t) => { t.opts.onProgress?.({ bytesWritten: 4, totalBytes: 0 }); return writes(10)(t); });
+    await downloadKept(key, 'https://a.test/f', H, 'report.pdf', () => ({ size: 10, mtime: 5 }), { onProgress: progress });
+    // O servidor não disse o tamanho na resposta; vale o que a tela já sabia.
+    expect(progress).toHaveBeenCalledWith({ written: 4, total: 10 });
+    expect(fs.tasks[0].opts.headers).toEqual(H);
+
+    const ctl = new AbortController();
+    fs.jobs.push(async (t) => { fs.files.set(t.dest, { size: 10, mtime: Date.now() }); ctl.abort(); return t.dest; });
+    const other = keptKey('s1', 'sess', { ...item, ref: '/tmp/out/b.pdf' });
+    const err = await downloadKept(other, 'https://a.test/b', H, 'b.pdf', () => ({ size: 10, mtime: 5 }), { signal: ctl.signal })
+      .catch((e: unknown) => e);
+    expect(isAbort(err)).toBe(true);
+    expect(keptCopy(other, 'b.pdf', { size: 10, mtime: 5 })).toBeNull();
+    expect([...fs.files.keys()].filter((k) => k.endsWith(PART_SUFFIX))).toEqual([]);
+  });
+
+  it('conta no teto e sai pela ordem de uso; abrir a cópia conta como uso', async () => {
+    const big = Math.floor(MEDIA_CACHE_LIMIT / 2.5);
+    vi.setSystemTime(1000);
+    const kept = await download(() => ({ size: big, mtime: 1 }), writes(big));
+    expect((await cacheUsage()).byKind.document).toBe(big);
+    // Aberta mais tarde: fica, e sai o anexo da conversa que ninguém usou desde então.
+    vi.setSystemTime(1000 + 11 * 60 * 1000);
+    fetchMock.mockResolvedValueOnce(probeReply('"a"', big));
+    fs.jobs.push(writes(big));
+    await localCopy('https://srv/a.mp4', H, 'a.mp4');
+    vi.setSystemTime(1000 + 22 * 60 * 1000);
+    expect(await deliverLocalFile(kept, 'report.pdf')).toBe('opened');
+    vi.setSystemTime(1000 + 33 * 60 * 1000);
+    fetchMock.mockResolvedValueOnce(probeReply('"b"', big));
+    fs.jobs.push(writes(big));
+    await localCopy('https://srv/b.mp4', H, 'b.mp4');
+    vi.useRealTimers();
+    expect(keptCopy(key, 'report.pdf', { size: big, mtime: 1 })).not.toBeNull();
+    expect(isCached('https://srv/a.mp4', 'a.mp4')).toBe(false);
+    expect(isCached('https://srv/b.mp4', 'b.mp4')).toBe(true);
+  });
+
+  it('as pastas da versão anterior saem na limpeza', async () => {
+    fs.files.set('cache/media-files/abc-report.pdf', { size: 5, mtime: 0 });
+    fs.files.set('cache/media-files-version/abc.json', { size: 2, mtime: 0 });
+    await download(() => ({ size: 10, mtime: 5 }));
+    expect([...fs.files.keys()].filter((k) => k.startsWith('cache/media-files'))).toEqual([]);
   });
 });

@@ -15,6 +15,10 @@ export const MEDIA_CACHE_LIMIT = 1024 * 1024 * 1024;
 const MEDIA_DIR = 'chat-media';
 // O leitor de PDF e a folha de texto da página guardam cópias próprias; o "Limpar" leva as duas.
 const SIDE_DIRS = ['pdf-reader', 'chat-page-source'];
+// Onde a versão anterior guardava as cópias de "Mídia e arquivos", fora do teto: hoje moram em `chat-media`.
+const LEGACY_DIRS = ['media-files', 'media-files-version'];
+// Prefixo das cópias guardadas: o nome não cruza com o das cópias da conversa (`hash-nome`).
+const KEPT_PREFIX = 'kept-';
 const PROBE_TIMEOUT_MS = 4000;
 // Só o Android retoma pelo pedaço já gravado; no iOS a sessão em segundo plano espera a rede sozinha.
 const RESUME_DELAYS_MS = [2000, 5000];
@@ -36,7 +40,8 @@ export interface DownloadOptions {
   signal?: AbortSignal;
 }
 
-interface Entry { etag: string | null; size: number; used: number }
+// `version`: só a cópia guardada da tela "Mídia e arquivos", com o tamanho e a data que o servidor dizia ao baixar.
+interface Entry { etag: string | null; size: number; used: number; version?: KeptVersion }
 
 const index = createMMKV({ id: 'hangar-media-cache' });
 
@@ -55,11 +60,28 @@ function mediaDir(): Directory {
 
 const safeName = (name: string) => name.replace(/[^\w.-]/g, '_');
 
+// cyrb53 com duas sementes (~106 bits): com 32 bits, duas chaves de nomes iguais podiam cair no mesmo
+// arquivo e uma abria a cópia da outra.
+function cyrb53(s: string, seed: number): number {
+  let h1 = 0xdeadbeef ^ seed;
+  let h2 = 0x41c6ce57 ^ seed;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    h1 = Math.imul(h1 ^ c, 2654435761);
+    h2 = Math.imul(h2 ^ c, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return 4294967296 * (2097151 & h2) + (h1 >>> 0);
+}
+
+export function keyHash(s: string): string {
+  return `${cyrb53(s, 0).toString(36)}${cyrb53(s, 1).toString(36)}`;
+}
+
 // O nome guarda o endereço inteiro: o mesmo caminho em outra sessão ou máquina é outro arquivo.
 function cacheKey(uri: string, name: string): string {
-  let h = 0;
-  for (let i = 0; i < uri.length; i++) h = (h * 31 + uri.charCodeAt(i)) | 0;
-  return `${(h >>> 0).toString(36)}-${safeName(name)}`;
+  return `${keyHash(uri)}-${safeName(name)}`;
 }
 
 export class HttpStatusError extends Error {
@@ -207,6 +229,10 @@ function stored(): Stored[] {
 // Os usados há mais tempo saem primeiro, até caber no teto; o que acabou de ser pedido e o usado há
 // menos de dez minutos ficam. Sobra de versão antiga (sem registro) e pedaço abandonado saem também.
 export function evict(keep?: string): void {
+  for (const d of LEGACY_DIRS) {
+    const dir = new Directory(Paths.cache, d);
+    if (dir.exists) dir.delete();
+  }
   const now = Date.now();
   const alive: Stored[] = [];
   for (const s of stored()) {
@@ -226,89 +252,46 @@ export function evict(keep?: string): void {
   }
 }
 
-// cyrb53 com duas sementes (~106 bits): com 32 bits, duas chaves de nomes iguais podiam cair no mesmo
-// arquivo e uma abria a cópia da outra.
-function cyrb53(s: string, seed: number): number {
-  let h1 = 0xdeadbeef ^ seed;
-  let h2 = 0x41c6ce57 ^ seed;
-  for (let i = 0; i < s.length; i++) {
-    const c = s.charCodeAt(i);
-    h1 = Math.imul(h1 ^ c, 2654435761);
-    h2 = Math.imul(h2 ^ c, 1597334677);
-  }
-  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
-  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
-  return 4294967296 * (2097151 & h2) + (h1 >>> 0);
-}
-
-export function keyHash(s: string): string {
-  return `${cyrb53(s, 0).toString(36)}${cyrb53(s, 1).toString(36)}`;
-}
-
-// Cópia guardada da tela "Mídia e arquivos", pela chave de `keptKey`.
+// Cópia guardada da tela "Mídia e arquivos", pela chave de `keptKey`. Mora na pasta do cache: conta no teto e
+// sai pela mesma ordem de uso que as outras.
 function keptFile(key: string, name: string): File {
-  const dir = new Directory(Paths.cache, 'media-files');
-  dir.create({ idempotent: true, intermediates: true });
-  return new File(dir, `${keyHash(key)}-${safeName(name)}`);
-}
-
-// Versão gravada com a cópia. Pasta própria: não se mistura com os arquivos baixados.
-function versionFile(key: string): File {
-  const dir = new Directory(Paths.cache, 'media-files-version');
-  dir.create({ idempotent: true, intermediates: true });
-  return new File(dir, `${keyHash(key)}.json`);
-}
-
-function readVersion(key: string): KeptVersion | null {
-  try {
-    const f = versionFile(key);
-    if (!f.exists) return null;
-    const v = JSON.parse(f.textSync()) as Partial<KeptVersion>;
-    return { size: typeof v.size === 'number' ? v.size : null, mtime: typeof v.mtime === 'number' ? v.mtime : null };
-  } catch {
-    return null;
-  }
+  return new File(mediaDir(), `${KEPT_PREFIX}${keyHash(key)}-${safeName(name)}`);
 }
 
 /** A cópia já baixada, ou null; também null quando o servidor diz que o arquivo mudou desde o download. */
 export function keptCopy(key: string, name: string, now: KeptVersion): File | null {
   try {
     const f = keptFile(key, name);
-    if (!f.exists) return null;
-    return keptIsCurrent(readVersion(key), f.size, now) ? f : null;
+    const entry = readEntry(f.name);
+    // Sem registro a limpeza a apagaria: não vale como cópia.
+    if (!f.exists || !entry) return null;
+    return keptIsCurrent(entry.version ?? null, f.size, now) ? f : null;
   } catch {
     return null;
   }
 }
 
-/** Baixa para a cópia guardada com progresso (0..1, ou null sem tamanho) e cancelamento pelo `signal`.
- *  Vai para um nome temporário e só substitui a cópia ao terminar, como o `localCopy`. A versão gravada
- *  é a dos bytes (`downloadedVersion`): o download do expo-file-system não devolve os cabeçalhos da
- *  resposta, então a medida do começo e a do fim são lidas e comparadas. */
+/** Baixa para a cópia guardada pelo mesmo download do cache (progresso, cancelamento pelo `signal`,
+ *  retomada no Android). A versão gravada é a dos bytes (`downloadedVersion`): o download do
+ *  expo-file-system não devolve os cabeçalhos da resposta, então a medida do começo e a do fim são
+ *  lidas e comparadas. */
 export async function downloadKept(
   key: string, uri: string, headers: Record<string, string> | undefined, name: string,
-  version: () => KeptVersion, onProgress: (fraction: number | null) => void, signal: AbortSignal,
+  version: () => KeptVersion, opts: DownloadOptions = {},
 ): Promise<File> {
   const start = version();
   const target = keptFile(key, name);
-  const tmp = new File(target.parentDirectory, `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}.part`);
+  const tmp = new File(mediaDir(), `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}${PART_SUFFIX}`);
   try {
-    const task = File.createDownloadTask(uri, tmp, {
-      headers,
-      // Fora do fundo: cancelar pela tela precisa do JS vivo, e o arquivo é pedido agora.
-      sessionType: 'foreground',
-      signal,
-      onProgress: ({ bytesWritten, totalBytes }) => onProgress(totalBytes > 0 ? Math.min(1, bytesWritten / totalBytes) : null),
-    });
-    const done = await task.downloadAsync();
-    if (!done) throw new Error('paused');
+    await downloadResuming(uri, headers, tmp, start.size, opts);
+    throwIfAborted(opts.signal);
     tmp.moveSync(target, { overwrite: true });
   } catch (e) {
     if (tmp.exists) tmp.delete();
     throw e;
   }
-  // Sem a versão gravada a cópia continua valendo; só a data deixa de ser conferida.
-  try { versionFile(key).write(JSON.stringify(downloadedVersion(start, version()))); } catch { /* idem */ }
+  writeEntry(target.name, { etag: null, size: target.size, used: Date.now(), version: downloadedVersion(start, version()) });
+  evict(target.name);
   return target;
 }
 
@@ -354,7 +337,7 @@ export async function cacheUsage(): Promise<CacheUsage> {
  * expo-video só se apaga sem nenhum player vivo: false = os arquivos saíram, ele ficou.
  */
 export async function clearMediaCache(): Promise<boolean> {
-  for (const d of [MEDIA_DIR, ...SIDE_DIRS]) {
+  for (const d of [MEDIA_DIR, ...SIDE_DIRS, ...LEGACY_DIRS]) {
     const dir = new Directory(Paths.cache, d);
     if (dir.exists) dir.delete();
   }
@@ -423,6 +406,10 @@ export async function openWith(uri: string, headers: Record<string, string> | un
   const f = await localCopy(uri, headers, name, opts);
   if (f.size === 0) return 'empty';
   throwIfAborted(opts?.signal);
+  return openLocal(f, name);
+}
+
+async function openLocal(f: File, name: string): Promise<'opened' | 'no-app'> {
   try {
     await startActivityAsync('android.intent.action.VIEW', { data: f.contentUri, type: mimeType(name), flags: FLAG_GRANT_READ_URI_PERMISSION });
   } catch (e) {
@@ -445,21 +432,15 @@ export async function deliverFile(uri: string, headers: Record<string, string> |
   return 'shared';
 }
 
-// Arquivo já no aparelho (baixado na tela "Mídia e arquivos"): entrega sem rede.
+// Arquivo já no aparelho (baixado na tela "Mídia e arquivos"): entrega sem rede. Conta como uso: a limpeza não
+// apaga o que a folha ou o app que o abriu ainda podem estar lendo.
 export async function deliverLocalFile(f: File, name: string): Promise<'opened' | 'shared' | 'empty' | 'no-app'> {
   if (f.size === 0) return 'empty';
-  if (Platform.OS === 'ios') {
-    await shareLocal(f, name);
-    return 'shared';
-  }
-  try {
-    await startActivityAsync('android.intent.action.VIEW', { data: f.contentUri, type: mimeType(name), flags: FLAG_GRANT_READ_URI_PERMISSION });
-  } catch (e) {
-    // Sem app que abra o tipo (zip, rar…): tentar de novo não resolve.
-    if (String(e instanceof Error ? e.message : e).includes('ActivityNotFoundException')) return 'no-app';
-    throw e;
-  }
-  return 'opened';
+  const entry = readEntry(f.name);
+  if (entry) writeEntry(f.name, { ...entry, used: Date.now() });
+  if (Platform.OS !== 'ios') return openLocal(f, name);
+  await shareLocal(f, name);
+  return 'shared';
 }
 
 export async function openPdfFile(uri: string, headers: Record<string, string> | undefined, name: string, isMounted: () => boolean): Promise<void> {

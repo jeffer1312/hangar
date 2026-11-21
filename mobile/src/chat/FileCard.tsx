@@ -7,7 +7,7 @@ import { fmtBytes, svgIcone } from '@hangar/core';
 import { Icon } from '../ui/Icon';
 import { superficie } from '../theme/superficie';
 import { DownloadRing } from '../features/attachments/DownloadRing';
-import { percentOf, useDownload } from '../features/attachments/useDownload';
+import { percentOf, progressText, useDownload } from '../features/attachments/useDownload';
 import type { DownloadOptions } from '../features/attachments/mediaCache';
 import * as m from '../paraglide/messages';
 
@@ -67,13 +67,7 @@ export const FileCard = memo(function FileCard({ uri, headers, name }: {
 
   const ext = name.includes('.') ? name.split('.').pop()!.toUpperCase() : '';
   const pct = percentOf(dl.progress);
-  const statusLine = dl.progress
-    ? pct != null && dl.progress.total
-      ? m.file_card_progress({ pct: String(pct), size: fmtBytes(dl.progress.total) })
-      : dl.progress.written > 0
-        ? m.file_card_progress_unknown({ size: fmtBytes(dl.progress.written) })
-        : m.file_card_downloading()
-    : statusText[status]?.(size != null ? fmtBytes(size) : '');
+  const statusLine = dl.progress ? progressText(dl.progress) : statusText[status]?.(size != null ? fmtBytes(size) : '');
   const erro = !dl.busy && (status === 'missing' || status === 'failed' || status === 'empty' || status === 'no-app');
   // Arquivo vazio não melhora tentando de novo.
   const retry = status === 'missing' || status === 'failed';

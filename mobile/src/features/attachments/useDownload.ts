@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { fmtBytes } from '@hangar/core';
+import * as m from '../../paraglide/messages';
 import type { DownloadOptions, DownloadProgress } from './mediaCache';
 
 // Dez quadros por segundo bastam para o anel e o "42%": o progresso nativo chega mais rápido que isso.
@@ -56,3 +58,10 @@ export function useDownload() {
 
 export const percentOf = (p: DownloadProgress | null): number | null =>
   p && p.total ? Math.min(100, Math.floor((p.written * 100) / p.total)) : null;
+
+/** "baixando 42% de 24,6 MB · toque para cancelar"; sem o tamanho, só o que já chegou. */
+export function progressText(p: DownloadProgress): string {
+  const pct = percentOf(p);
+  if (pct != null && p.total) return m.file_card_progress({ pct: String(pct), size: fmtBytes(p.total) });
+  return p.written > 0 ? m.file_card_progress_unknown({ size: fmtBytes(p.written) }) : m.file_card_downloading();
+}
