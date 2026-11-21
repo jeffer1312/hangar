@@ -134,7 +134,7 @@ pub fn validate(items: &[Item]) -> Result<(), String> {
         match a.kind.as_str() {
             "text" => {
                 let Some(value) = &a.value else { return Err("value required for text kind".into()) };
-                if value.chars().any(|c| (c as u32) < 32 && c != '\t') { return Err("control characters not allowed".into()); }
+                if value.chars().any(|c| (c as u32) < 32 && !matches!(c, '\t' | '\n' | '\r')) { return Err("control characters not allowed".into()); }
                 if a.type_index.is_none() { return Err("type_index required for text kind".into()); }
             }
             "chat" if a.chat_index.is_none() => return Err("chat_index required for chat kind".into()),
@@ -148,6 +148,11 @@ pub fn validate(items: &[Item]) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// Texto em várias linhas numa linha só, cada quebra (com o branco em volta) virando um espaço.
+fn one_line(text: &str) -> String {
+    text.split(['\n', '\r']).map(str::trim).filter(|line| !line.is_empty()).collect::<Vec<_>>().join(" ")
 }
 
 /// `runtime_terminal._validate_text`: texto de terminal não é branco nem tem caractere de controle.
@@ -168,7 +173,6 @@ fn validate_control(items: &[Item], request_id: &Value) -> Result<(), String> {
                 if !position.as_ref().is_some_and(in_range) { return Err("posição fora da pergunta".into()); }
                 if let Some(value) = a.value.as_deref().filter(|_| a.kind == "text") {
                     if !text_ok(value) { return Err("texto inválido para terminal".into()); }
-                    if value.contains('\n') { return Err("resposta terminal com quebra de linha".into()); }
                 }
             }
             _ => {}
@@ -198,9 +202,13 @@ pub fn terminal_plan(body: &Body, expected: &ExpectedInteraction, panel_open: bo
             else { expected.native_id(Some(&body.request_id)).is_ok() };
         if !same { return Err(interaction_failure(InteractionError::Changed)); }
     }
-    let mut payload = json!({"answers": body.answers_json(), "interaction_id": body.interaction_id});
+    // Digitada na pergunta do terminal, a quebra de linha seria um Enter no meio da resposta: as linhas viram uma.
+    // Pelo plugin a resposta vai inteira, com os parágrafos.
+    let answers: Vec<Item> = body.answers.iter().cloned()
+        .map(|mut a| { if !plugin && a.kind == "text" { a.value = a.value.map(|v| one_line(&v)); } a }).collect();
+    let mut payload = json!({"answers": answers.iter().map(Item::to_json).collect::<Vec<_>>(), "interaction_id": body.interaction_id});
     if !body.request_id.is_null() { payload["request_id"] = body.request_id.clone(); }
-    validate_control(&body.answers, &body.request_id).map_err(|msg| refused(&msg))?;
+    validate_control(&answers, &body.request_id).map_err(|msg| refused(&msg))?;
     if !plugin && body.answers.iter().any(|a| a.kind == "chat") { return Ok(Plan::Chat); }
     Ok(Plan::Control(payload))
 }
@@ -345,4 +353,28 @@ pub async fn answer(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
         }
     };
     respond(&ctx, result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Item, one_line, validate};
+
+    fn text(value: &str) -> Item {
+        Item { kind: "text".into(), question_id: None, indices: None, multi: false, value: Some(value.into()), labels: Vec::new(),
+            type_index: Some(0), chat_index: None }
+    }
+
+    #[test]
+    fn a_free_answer_in_paragraphs_is_accepted_and_typed_as_one_line() {
+        let answer = "não foi isso.\nse for hotfix vai junto.\r\n\n  quanto ao sql server, continua";
+        assert_eq!(validate(&[text(answer)]), Ok(()));
+        assert_eq!(one_line(answer), "não foi isso. se for hotfix vai junto. quanto ao sql server, continua");
+    }
+
+    #[test]
+    fn other_control_characters_are_still_refused() {
+        assert!(validate(&[text("a\u{7}b")]).is_err());
+        assert!(validate(&[text("a\u{1b}[2Jb")]).is_err());
+        assert_eq!(validate(&[text("coluna\tvalor")]), Ok(()));
+    }
 }
