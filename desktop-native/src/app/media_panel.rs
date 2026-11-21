@@ -305,6 +305,7 @@ impl Hangar {
             None => format!("{} · {}", item.name, gallery::origin_text(item.origin, false).unwrap_or_default()),
         };
         let retrying = failed.is_some();
+        let is_video = item.kind == Kind::Video;
         media_cell(SharedString::from(format!("media-cell-{i}")), side, picture, item.kind == Kind::Video, item.name.clone(),
             gallery::origin_text(item.origin, true))
             // A falha fica à vista e o clique busca de novo, em vez de abrir o visor sem imagem.
@@ -314,12 +315,14 @@ impl Hangar {
                 .child(div().text_color(theme::accent()).child(activity::web("file_card_retry")))))
             .cursor_pointer().focusable().tab_stop(true).role(Role::Button).aria_label(label)
             .focus_visible(|el| el.border_color(theme::accent_focus()))
-            .on_click(cx.listener(move |this, _, window, cx| match retry.clone().filter(|_| retrying) {
-                Some(thumb) => {
+            .on_click(cx.listener(move |this, _, window, cx| {
+                if let Some(thumb) = retry.clone().filter(|_| retrying) {
                     this.retry_media(open_key.clone(), thumb, cx);
                     this.redraw(Area::Side, cx);
+                    // Só a capa falhou: o vídeo em si continua abrindo.
+                    if !is_video { return; }
                 }
-                None => this.open_gallery(open_key.clone(), source.clone(), vec![source.clone()], 0, window, cx),
+                this.open_gallery(open_key.clone(), source.clone(), vec![source.clone()], 0, window, cx);
             }))
             .into_any_element()
     }
