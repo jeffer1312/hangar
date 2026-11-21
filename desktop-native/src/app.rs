@@ -3868,8 +3868,11 @@ impl Hangar {
                             let (local, wanted) = (uploads.clone(), source.clone());
                             if let Ok(Some(real)) = tokio::task::spawn_blocking(move || local.local_path(&wanted)).await { return Ok((real, false)); }
                             let name = safe.clone();
-                            tokio::task::spawn_blocking(move || private_copy(&name)).await.ok().and_then(Result::ok)
-                                .ok_or_else(|| (tr("save_failed"), false))?
+                            match tokio::task::spawn_blocking(move || private_copy(&name)).await {
+                                Ok(Ok(path)) => path,
+                                Ok(Err(error)) => return Err(Self::download_failure(&safe, api::download::DownloadError::Disk(error))),
+                                Err(error) => return Err(Self::download_failure(&safe, api::download::DownloadError::Task(error))),
+                            }
                         }
                     };
                     let (progress, progress_key, progress_source) = (tx.clone(), key.clone(), source.clone());
@@ -3880,11 +3883,7 @@ impl Hangar {
                         Ok(Some(path)) => Ok((path, false)),
                         // Vazio não vira arquivo no disco: o card avisa e não há o que abrir.
                         Ok(None) => Ok((PathBuf::new(), true)),
-                        Err(error) => {
-                            let missing = error.status == Some(404);
-                            if !missing { crate::log_line(&format!("arquivo: baixar {safe} falhou: {error:?}")); }
-                            Err((format!("{safe}: {}", Self::fetch_failure(&error)), missing))
-                        }
+                        Err(error) => Err(Self::download_failure(&safe, error)),
                     }
                 }.await;
                 let _ = tx.send(Envelope { connection, selection: None, payload: Payload::Saved(key, source, generation, open, result) }).await;
@@ -3905,6 +3904,26 @@ impl Hangar {
                 }); }
             }
         }).detach();
+    }
+
+    /// O texto do cartão e se o arquivo não existe (404, que o cartão já diz sem frase). A causa vai ao log; a do disco
+    /// também ao cartão. Cancelar não passa aqui: a tarefa abortada não chega a devolver resultado.
+    fn download_failure(shown: &str, error: api::download::DownloadError) -> (String, bool) {
+        match error {
+            api::download::DownloadError::Fetch(error) => {
+                let missing = error.status == Some(404);
+                if !missing { crate::log_line(&format!("arquivo: baixar {shown} falhou: {error:?}")); }
+                (format!("{shown}: {}", Self::fetch_failure(&error)), missing)
+            }
+            api::download::DownloadError::Disk(error) => {
+                crate::log_line(&format!("arquivo: gravar {shown} falhou: {error}"));
+                (format!("{shown}: {error}"), false)
+            }
+            api::download::DownloadError::Task(error) => {
+                crate::log_line(&format!("arquivo: a tarefa que gravava {shown} não terminou: {error}"));
+                (format!("{shown}: {}", tr("save_failed")), false)
+            }
+        }
     }
 
     /// O cartão passa a baixar numa geração nova, que `spawn` leva nas mensagens; um pedido anterior do mesmo cartão é

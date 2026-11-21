@@ -725,7 +725,7 @@ impl Api {
     /// silêncio (`download::IDLE`). `report(feito, total)` recebe o progresso no máximo 10 vezes por segundo; o total é o
     /// `Content-Length`, quando veio. `None`: veio vazio e nada foi gravado. Abortar a tarefa apaga o `.part`.
     pub async fn download(&self, name: &str, source: &Source, target: std::path::PathBuf, report: impl FnMut(u64, Option<u64>))
-        -> Result<Option<std::path::PathBuf>, Failure> {
+        -> Result<Option<std::path::PathBuf>, download::DownloadError> {
         if let Source::Memory(_, bytes) = source { return download::write_bytes(target, &bytes.0).await; }
         let r = self.open_source(name, source, None).await?;
         let total = r.content_length();

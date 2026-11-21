@@ -132,7 +132,26 @@ where S: Stream<Item = Result<B, E>> + Unpin {
     }
 }
 
-fn write_failed() -> Failure { Failure::local("save_failed") }
+/// Por que o arquivo não chegou ao disco. A causa do disco segue até o cartão e o log: `save_failed` sozinho não
+/// dizia se era permissão, disco cheio ou nome recusado.
+#[derive(Debug)]
+pub enum DownloadError {
+    /// A resposta: servidor, rede ou prazo de silêncio.
+    Fetch(Failure),
+    /// Criar, gravar, sincronizar ou trocar o nome do `.part`.
+    Disk(std::io::Error),
+    /// A tarefa de bloqueio que gravava não terminou (pânico, runtime fechando).
+    Task(tokio::task::JoinError),
+}
+
+impl From<Failure> for DownloadError {
+    fn from(failure: Failure) -> Self { Self::Fetch(failure) }
+}
+
+/// Bloqueante fora das threads do runtime, com a causa do disco ou da tarefa.
+async fn on_disk<T: Send + 'static>(job: impl FnOnce() -> std::io::Result<T> + Send + 'static) -> Result<T, DownloadError> {
+    tokio::task::spawn_blocking(job).await.map_err(DownloadError::Task)?.map_err(DownloadError::Disk)
+}
 
 /// Arquivo sendo gravado num `.part` próprio ao lado do destino. Só `finish` o põe no nome final; solto antes disso (falha, cancelamento
 /// pelo `abort` da tarefa), apaga o `.part`, para não sobrar arquivo pela metade com cara de completo.
@@ -147,11 +166,11 @@ pub struct PartWriter {
 }
 
 impl PartWriter {
-    pub async fn create(target: PathBuf) -> Result<Self, Failure> {
+    pub async fn create(target: PathBuf) -> Result<Self, DownloadError> {
         let at = target.clone();
         // `create_new`: nunca abre um `.part` que já existe. Sobra de um processo antigo com o mesmo pid (ou, no
         // Windows, um ainda em exclusão) só faz tentar o próximo nome.
-        let (part, file) = tokio::task::spawn_blocking(move || {
+        let (part, file) = on_disk(move || {
             let mut last = std::io::Error::other("no attempt");
             for _ in 0..8 {
                 let part = part_path(&at, &next_tag());
@@ -162,7 +181,7 @@ impl PartWriter {
                 }
             }
             Err(last)
-        }).await.map_err(|_| write_failed())?.map_err(|_| write_failed())?;
+        }).await?;
         Ok(Self { file: Some(file), buffer: Vec::with_capacity(FLUSH_AT), part, target, written: 0, kept: false })
     }
 
@@ -171,36 +190,37 @@ impl PartWriter {
 
     pub fn written(&self) -> u64 { self.written }
 
-    pub async fn write(&mut self, chunk: &[u8]) -> Result<(), Failure> {
+    pub async fn write(&mut self, chunk: &[u8]) -> Result<(), DownloadError> {
         self.buffer.extend_from_slice(chunk);
         self.written += chunk.len() as u64;
         if self.buffer.len() >= FLUSH_AT { self.flush().await?; }
         Ok(())
     }
 
-    async fn flush(&mut self) -> Result<(), Failure> {
+    async fn flush(&mut self) -> Result<(), DownloadError> {
         if self.buffer.is_empty() { return Ok(()); }
-        let mut file = self.file.take().ok_or_else(write_failed)?;
+        // Sem arquivo: a tarefa de uma escrita anterior não terminou e levou o arquivo junto.
+        let mut file = self.file.take().ok_or_else(|| DownloadError::Disk(std::io::Error::other("part file lost by an earlier write")))?;
         let mut buffer = std::mem::take(&mut self.buffer);
         let (file, buffer, result) = tokio::task::spawn_blocking(move || {
             let result = file.write_all(&buffer);
             buffer.clear();
             (file, buffer, result)
-        }).await.map_err(|_| write_failed())?;
+        }).await.map_err(DownloadError::Task)?;
         self.file = Some(file);
         self.buffer = buffer;
-        result.map_err(|_| write_failed())
+        result.map_err(DownloadError::Disk)
     }
 
     /// Grava o resto, sincroniza e troca o nome: o destino só aparece inteiro.
-    pub async fn finish(mut self) -> Result<PathBuf, Failure> {
+    pub async fn finish(mut self) -> Result<PathBuf, DownloadError> {
         self.flush().await?;
         let file = self.file.take();
         let (part, target) = (self.part.clone(), self.target.clone());
-        tokio::task::spawn_blocking(move || {
+        on_disk(move || {
             if let Some(file) = file { file.sync_all()?; }
             std::fs::rename(&part, &target)
-        }).await.map_err(|_| write_failed())?.map_err(|_| write_failed())?;
+        }).await?;
         self.kept = true;
         Ok(self.target.clone())
     }
@@ -215,7 +235,7 @@ impl Drop for PartWriter {
 }
 
 /// Grava bytes já em memória pelo mesmo caminho do `.part`. Vazio não vira arquivo: devolve `None`.
-pub async fn write_bytes(target: PathBuf, bytes: &[u8]) -> Result<Option<PathBuf>, Failure> {
+pub async fn write_bytes(target: PathBuf, bytes: &[u8]) -> Result<Option<PathBuf>, DownloadError> {
     if bytes.is_empty() { return Ok(None); }
     let mut writer = PartWriter::create(target).await?;
     writer.write(bytes).await?;
@@ -223,7 +243,7 @@ pub async fn write_bytes(target: PathBuf, bytes: &[u8]) -> Result<Option<PathBuf
 }
 
 /// Cópia de um arquivo deste disco, em blocos, com progresso e cancelável entre um bloco e outro. Vazio: `None`.
-pub async fn copy_file(from: PathBuf, target: PathBuf, report: impl FnMut(u64, Option<u64>)) -> Result<Option<PathBuf>, Failure> {
+pub async fn copy_file(from: PathBuf, target: PathBuf, report: impl FnMut(u64, Option<u64>)) -> Result<Option<PathBuf>, DownloadError> {
     use std::io::Read;
     let unreadable = || Failure::local("invalid_response");
     let (mut file, total) = tokio::task::spawn_blocking(move || {
@@ -440,6 +460,28 @@ mod tests {
         task.abort();
         let _ = task.await;
         assert!(left(&dir).is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn disk_failures_keep_the_system_error() {
+        let dir = scratch("disk");
+        // Pasta que não existe: o `.part` não nasce, e o erro é o do sistema, não um `save_failed` genérico.
+        match write_bytes(dir.join("missing").join("i.bin"), b"data").await {
+            Err(DownloadError::Disk(error)) => {
+                assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+                assert!(error.raw_os_error().is_some(), "{error}");
+            }
+            other => panic!("{other:?}"),
+        }
+        // Destino ocupado por uma pasta com conteúdo: a troca de nome falha, com a causa, e o `.part` sai.
+        let target = dir.join("j.bin");
+        std::fs::create_dir_all(target.join("inside")).unwrap();
+        match write_bytes(target.clone(), b"data").await {
+            Err(DownloadError::Disk(error)) => assert!(error.raw_os_error().is_some(), "{error}"),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(left(&dir), ["j.bin"]);
         let _ = std::fs::remove_dir_all(dir);
     }
 

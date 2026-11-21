@@ -246,7 +246,7 @@ impl Uploads {
     /// O arquivo gravado em `target` sem passar inteiro pela memória: deste disco, cópia em blocos; do backend, o
     /// download direto ao disco. `None`: veio vazio e nada foi gravado.
     pub(super) async fn download(&self, api: &Api, name: &str, source: &Source, target: PathBuf, report: impl FnMut(u64, Option<u64>) + Send)
-        -> Result<Option<PathBuf>, Failure> {
+        -> Result<Option<PathBuf>, crate::api::download::DownloadError> {
         enum Here { File(PathBuf), Bytes(Vec<u8>) }
         let Uploads::Local { dir, cwd, jsonl } = self else { return api.download(name, source, target, report).await };
         let (dir, cwd, jsonl, local) = (dir.clone(), cwd.clone(), jsonl.clone(), source.clone());
@@ -260,7 +260,7 @@ impl Uploads {
         match here {
             Some(Ok(Here::File(path))) => crate::api::download::copy_file(path, target, report).await,
             Some(Ok(Here::Bytes(bytes))) => crate::api::download::write_bytes(target, &bytes).await,
-            Some(Err(error)) => Err(error),
+            Some(Err(error)) => Err(error.into()),
             None => api.download(name, source, target, report).await,
         }
     }
