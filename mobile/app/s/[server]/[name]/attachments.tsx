@@ -34,7 +34,7 @@ export default function AttachmentsSheet() {
   const [files, setFiles] = useState<UploadFile[]>([]);
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
-  const [lightbox, setLightbox] = useState<number | null>(null);
+  const [lightbox, setLightbox] = useState<string | null>(null);
   const [doc, setDoc] = useState<DocumentItem | null>(null);
   const [delivering, setDelivering] = useState<string | null>(null);
   const ready = useServers((s) => s.ready);
@@ -91,9 +91,10 @@ export default function AttachmentsSheet() {
   const handlePress = useCallback(
     (f: UploadFile) => {
       if (!target) { toast.erro(m.chat_servidor_removido()); return; }
+      if (Object.keys(fileAuthHeader(target)).length === 0) { toast.erro(m.sessao_expirada()); return; }
       const k = fileKind(f.filename);
       if (k === 'image' || k === 'video') {
-        setLightbox(media.findIndex((x) => x.filename === f.filename));
+        setLightbox(f.filename);
         return;
       }
       const uri = uploadUrlNative(sessionName, f.filename, target);
@@ -104,7 +105,7 @@ export default function AttachmentsSheet() {
       if (delivering) return;
       void deliver(f, uri, fileAuthHeader(target));
     },
-    [sessionName, target, media, delivering, deliver],
+    [sessionName, target, delivering, deliver],
   );
 
   // Volta para a conversa: o Composer mostra "transcrevendo" e recebe o texto ou o motivo da falha.
@@ -150,8 +151,14 @@ export default function AttachmentsSheet() {
     );
   }
 
-  const current = lightbox !== null ? media[lightbox] : null;
-  const step = (dir: 1 | -1) => setLightbox((i) => (i === null ? i : Math.min(media.length - 1, Math.max(0, i + dir))));
+  // O visor guarda o nome, não o índice: a lista pode recarregar com ele aberto.
+  const lightboxIndex = lightbox === null ? -1 : media.findIndex((x) => x.filename === lightbox);
+  const current = lightboxIndex >= 0 ? media[lightboxIndex] : null;
+  const step = (dir: 1 | -1) => {
+    if (lightboxIndex < 0) return;
+    const next = media[Math.min(media.length - 1, Math.max(0, lightboxIndex + dir))];
+    if (next) setLightbox(next.filename);
+  };
 
   return (
     <View style={[styles.container, { backgroundColor: theme.tokens.bg.base }]}>
@@ -200,7 +207,7 @@ export default function AttachmentsSheet() {
         headers={fileAuthHeader(target)}
         filename={current?.filename ?? ''}
         kind={current && fileKind(current.filename) === 'video' ? 'video' : 'image'}
-        counter={current && media.length > 1 ? `${lightbox! + 1}/${media.length}` : undefined}
+        counter={current && media.length > 1 ? `${lightboxIndex + 1}/${media.length}` : undefined}
         onStep={media.length > 1 ? step : undefined}
         onClose={() => setLightbox(null)}
       />

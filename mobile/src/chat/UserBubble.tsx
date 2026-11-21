@@ -140,7 +140,8 @@ export const UserBubble = memo(function UserBubble({ text, sessionName, serverId
       <>
         {caption ? renderCaption(caption) : null}
         {galeria.length ? <View style={styles.thumbs}>
-          {galeria.map((g, i) => <ImageThumb key={g.uri} items={galeria} index={i} style={styles.thumb} />)}
+          {/* A URI muda com a rota (LAN ↔ Tailscale); como chave, remontaria a miniatura e fecharia o visor. */}
+          {galeria.map((_, i) => <ImageThumb key={i} items={galeria} index={i} style={styles.thumb} />)}
         </View> : null}
         {cards}
       </>,
