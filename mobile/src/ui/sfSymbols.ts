@@ -30,6 +30,7 @@ export const SF_SYMBOLS: Partial<Record<IconName, SFSymbol>> = {
   ChevronRight: 'chevron.right',
   ChevronUp: 'chevron.up',
   ChevronsUpDown: 'chevron.up.chevron.down',
+  Circle: 'circle',
   CircleAlert: 'exclamationmark.circle',
   CircleCheck: 'checkmark.circle',
   CircleDollarSign: 'dollarsign.circle',

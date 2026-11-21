@@ -195,6 +195,54 @@ describe('API e execução por máquina', () => {
     expect(result.failed).toEqual([]);
   });
 
+  it('máquina já sabida fora do ar fica de fora sem pedido; cada linha recebe o que a busca achou', async () => {
+    identity = (id) => json({ identificador: id === 'alias' ? 'on' : id, lan_url: '' });
+    read = (id) => json(id === 'current' ? { ...ready(), atualizacao_disponivel: false } : ready());
+    const checks: [string, string][] = [];
+    let targets: string[] = [];
+    const result = await prepareUpdateAll(['on', 'alias', 'current', 'known'].map((id) => server(id)), { ...options,
+      knownOffline: (id) => id === 'known', onCheck: (id, check) => checks.push([id, check.status]),
+      onTargets: (servers) => { targets = servers.map((s) => s.id); } });
+    expect(calls.filter((path) => path.startsWith('known/'))).toEqual([]);
+    expect(result.offline.map((s) => s.id)).toEqual(['known']);
+    expect(result.failed.map((s) => s.id)).toEqual(['known']);
+    expect(result.run.map((entry) => entry.server.id)).toEqual(['on', 'current']);
+    expect(targets).toEqual(['on', 'current', 'known']);
+    expect(checks.slice(0, 4)).toEqual([['on', 'consultando'], ['alias', 'consultando'], ['current', 'consultando'], ['known', 'fora_do_ar']]);
+    expect(checks).toContainEqual(['on', 'disponivel']);
+    expect(checks).toContainEqual(['current', 'em_dia']);
+  });
+
+  it('busca que falhou antes da folha deixa a máquina de fora, com a falha na linha e o motivo guardado', async () => {
+    read = (id) => id === 'nosearch' ? json({ detail: 'fixture-search' }, 503) : json(ready());
+    const checks: Record<string, { status: string; error?: string }> = {};
+    const prepared = await prepareUpdateAll(['ok', 'nosearch'].map((id) => server(id)), { ...options, onCheck: (id, check) => { checks[id] = check; } });
+    expect(prepared.run.map((entry) => entry.server.id)).toEqual(['ok']);
+    expect(prepared.failed.map((s) => s.id)).toEqual(['nosearch']);
+    expect(prepared.offline).toEqual([]);
+    expect(prepared.reasons?.nosearch).toContain('fixture-search');
+    expect(checks.nosearch).toMatchObject({ status: 'falhou', error: prepared.reasons?.nosearch });
+    expect(calls).not.toContain('nosearch/api/update/notes');
+  });
+
+  it('avisos que não vieram deixam a máquina de fora com o motivo dos avisos', async () => {
+    notes = (id) => id === 'nonotes' ? json({ detail: 'fixture-notes' }, 503) : json({ target: 'v2', warnings: [], news: [] });
+    const prepared = await prepareUpdateAll(['ok', 'nonotes'].map((id) => server(id)), options);
+    expect(prepared.failed.map((s) => s.id)).toEqual(['nonotes']);
+    expect(prepared.reasons).toEqual({ nonotes: m.update_notes_failed() });
+  });
+
+  it('com o preparo, a rodada não identifica de novo nem repete a busca', async () => {
+    // A busca do preparo conta como a primeira leitura.
+    read = (_id, count) => json(count <= 2 ? ready() : done());
+    const prepared = await prepareUpdateAll(['p1', 'p2'].map((id) => server(id)), options);
+    calls = [];
+    const result = await updateAll(prepared.run.map((entry) => entry.server), onChange, { ...options, prepared });
+    expect(calls.filter((path) => path.endsWith('/identificador') || path.includes('procurar=1'))).toEqual([]);
+    expect(calls).toContain('p1/api/atualizacao');
+    expect(result.map((item) => item.state.status)).toEqual(['atualizado', 'atualizado']);
+  });
+
   it('quem não leu os avisos fica fora da rodada; o aceite de cada máquina chega ao POST dela', async () => {
     const bodies: Record<string, unknown> = {};
     accept = (id, body) => { bodies[id] = body; return json({ ok: true, started: false }); };

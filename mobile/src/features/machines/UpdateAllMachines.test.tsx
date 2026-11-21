@@ -19,7 +19,7 @@ vi.mock('react-native-mmkv', () => ({ createMMKV: () => ({
 }) }));
 vi.mock('../../stores/servers', () => ({ useServers: (select: (state: { activeId: string | null }) => unknown) => select({ activeId: 'b' }) }));
 vi.mock('@hangar/core', async (original) => ({ ...await original<typeof import('@hangar/core')>(), updateAll: mocks.updateAll,
-  prepareUpdateAll: (servers: Server[]) => mocks.prepare(servers), getArrivedNews: (server: Server) => mocks.arrived(server),
+  prepareUpdateAll: (servers: Server[], opts: unknown) => mocks.prepare(servers, opts), getArrivedNews: (server: Server) => mocks.arrived(server),
   markArrivedSeen: (server: Server, device: string, through: number) => mocks.seen(server, device, through) }));
 vi.mock('react-native', async (original) => ({ ...await original<typeof import('react-native')>(), Platform: { OS: 'ios' } }));
 vi.mock('react-native-keyboard-controller', () => ({ KeyboardAvoidingView: ({ children }: { children: React.ReactNode }) => <div>{children}</div> }));
@@ -46,7 +46,7 @@ beforeEach(() => {
   mocks.prepare.mockReset();
   mocks.arrived.mockReset(); mocks.arrived.mockResolvedValue(null);
   mocks.seen.mockReset(); mocks.seen.mockResolvedValue({ through: 0 });
-  mocks.prepare.mockImplementation(async (servers: Server[]) => ({ run: servers.map((server) => ({ server, notes: null })), failed: [] }));
+  mocks.prepare.mockImplementation(async (servers: Server[]) => ({ run: servers.map((server) => ({ server, notes: null })), failed: [], offline: [] }));
   el = document.createElement('div'); document.body.appendChild(el); root = createRoot(el);
 });
 afterEach(async () => { await act(async () => root.unmount()); el.remove(); });
@@ -69,10 +69,13 @@ describe('atualizar todas as máquinas', () => {
       return new Promise<UpdateAllResult[]>((resolve) => { finish = resolve; });
     });
     const duplicate = { ...first, id: 'duplicate', label: 'fixture-duplicate' };
+    // A identidade antes da folha tira o endereço repetido; a rodada recebe só os representantes.
+    const prepared = { run: [first, second].map((server) => ({ server, notes: null })), failed: [], offline: [] };
+    mocks.prepare.mockResolvedValue(prepared);
     await render([first, second, duplicate]);
     await click(m.update_all_button({ n: '3' }));
     expect(el.textContent).toContain(m.update_all_checking());
-    expect(mocks.updateAll).toHaveBeenCalledWith([first, second, duplicate], expect.any(Function), { accept: {} });
+    expect(mocks.updateAll).toHaveBeenCalledWith([first, second], expect.any(Function), { accept: {}, prepared });
     await act(async () => {
       publish(first.id, { status: 'rodando', state: { fase: 'rodando', texto: 'fixture-progress', passo: 2, total: 9 }, warnings: [] });
       publish(second.id, { status: 'fora_do_ar', warnings: [] });
@@ -153,13 +156,67 @@ describe('atualizar todas as máquinas', () => {
     const { currentConfirmRequest } = await import('../updates/pending');
     let machines: unknown;
     mocks.push.mockImplementationOnce((href: unknown) => { if (href === '/update-confirm') machines = currentConfirmRequest()?.machines; });
-    mocks.prepare.mockResolvedValue({ run: [{ server: first, notes: null }], failed: [second] });
+    const prepared = { run: [{ server: first, notes: null }], failed: [second], offline: [] };
+    mocks.prepare.mockResolvedValue(prepared);
     mocks.updateAll.mockResolvedValue([]);
     mocks.accept = { a: { ids: ['mig'], mode: 'package' } };
     await render(); await click(m.update_all_button({ n: '2' }));
-    expect(mocks.prepare).toHaveBeenCalledWith([first, second]);
-    await expect(machines).resolves.toEqual({ run: [{ server: first, notes: null }], failed: [second] });
-    expect(mocks.updateAll).toHaveBeenCalledWith([first], expect.any(Function), { accept: { a: { ids: ['mig'], mode: 'package' } } });
+    expect(mocks.prepare).toHaveBeenCalledWith([first, second], expect.objectContaining({ knownOffline: expect.any(Function) }));
+    await expect(machines).resolves.toEqual(prepared);
+    expect(mocks.updateAll).toHaveBeenCalledWith([first], expect.any(Function), { accept: { a: { ids: ['mig'], mode: 'package' } }, prepared });
+  });
+
+  it('mostra quanto falta, a máquina fora do ar deixada de fora e o fim com resumo e Fechar', async () => {
+    const off = { ...first, id: 'off', label: 'fixture-offline' };
+    mocks.prepare.mockResolvedValue({ run: [first, second].map((server) => ({ server, notes: null })), failed: [off], offline: [off] });
+    let publish!: (id: string, state: UpdateAllState) => void;
+    let finish!: (results: UpdateAllResult[]) => void;
+    mocks.updateAll.mockImplementation((_servers, onChange) => {
+      publish = onChange;
+      return new Promise<UpdateAllResult[]>((resolve) => { finish = resolve; });
+    });
+    await render([first, second, off]);
+    await click(m.update_all_button({ n: '3' }));
+    expect(el.textContent).toContain(m.update_all_summary_progress({ done: '0', total: '2' }));
+    expect(el.textContent).toContain(m.update_all_offline_skipped());
+    expect(el.textContent).toContain(m.update_all_close_background());
+    await act(async () => publish(second.id, { status: 'em_dia', warnings: [] }));
+    expect(el.textContent).toContain(m.update_all_summary_progress({ done: '1', total: '2' }));
+    await act(async () => finish([{ server: first, state: { status: 'atualizado', warnings: [] } }, { server: second, state: { status: 'em_dia', warnings: [] } }]));
+    expect(el.textContent).toContain(m.update_all_done_title());
+    expect(el.textContent).toContain(`${m.update_all_done_ok()} · ${m.update_all_count_updated_one()}, ${m.update_all_count_current_one()}, ${m.update_all_count_offline_one()}`);
+    expect(el.textContent).toContain(m.update_all_close());
+    expect(el.textContent).not.toContain(m.update_all_close_background());
+  });
+
+  it('quem falhou antes da folha aparece na lista com o motivo e conta como problema no fim', async () => {
+    const broken = { ...first, id: 'broken', label: 'fixture-broken' };
+    const quiet = { ...first, id: 'quiet', label: 'fixture-quiet' };
+    mocks.prepare.mockResolvedValue({ run: [{ server: first, notes: null }], failed: [broken, quiet], offline: [],
+      reasons: { broken: '503: fixture-search' } });
+    mocks.updateAll.mockResolvedValue([{ server: first, state: { status: 'atualizado', warnings: [] } }]);
+    await render([first, broken, quiet]);
+    await click(m.update_all_button({ n: '3' }));
+    expect(el.textContent).toContain(broken.label);
+    expect(el.textContent).toContain(m.update_all_failed({ erro: '503: fixture-search' }));
+    expect(el.textContent).toContain(m.update_all_failed({ erro: m.update_notes_failed() }));
+    expect(el.textContent).toContain(`${m.update_all_done_issues()} · ${m.update_all_count_updated_one()}, ${m.update_all_count_issue_other({ n: '2' })}`);
+    expect(mocks.notification).toHaveBeenCalledWith('error');
+  });
+
+  it('rodada que cai marca como falha a linha que ainda esperava, com o motivo', async () => {
+    let publish!: (id: string, state: UpdateAllState) => void;
+    let fail!: (error: Error) => void;
+    mocks.updateAll.mockImplementation((_servers, onChange) => {
+      publish = onChange;
+      return new Promise<UpdateAllResult[]>((_resolve, reject) => { fail = reject; });
+    });
+    await render(); await click(m.update_all_button({ n: '2' }));
+    await act(async () => publish(first.id, { status: 'em_dia', warnings: [] }));
+    await act(async () => fail(new Error('fixture-crash')));
+    expect(el.textContent).toContain(m.update_all_up_to_date());
+    expect(el.textContent).toContain(m.update_all_failed({ erro: 'fixture-crash' }));
+    expect(el.textContent).not.toContain(m.update_all_checking());
   });
 
   it('servidor ativo atualizado abre "O que chegou para você" ao fechar os resultados', async () => {

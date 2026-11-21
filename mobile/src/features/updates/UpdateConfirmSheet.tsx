@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StyleSheet } from 'react-native-unistyles';
@@ -8,8 +8,9 @@ import { useSettingsColors } from '../config/colors';
 import { Icon } from '../../ui/Icon';
 import { haptic } from '../../ui/haptics';
 import { Notice } from '../machines/parts';
+import { UpdateRow, UpdateSummary, checkText, checkTone } from '../machines/UpdateAllRows';
 import { NewsSections, PrimaryButton, SheetHeader, styles, useNewsTones, useSmallMarkdown } from './WhatsNewSheet';
-import { type ConfirmRequest, type UpdateAcceptances } from './pending';
+import { type ConfirmRequest, type MachineChecks, type UpdateAcceptances } from './pending';
 import * as m from '../../paraglide/messages';
 
 // `title` só no "Atualizar todas": os avisos vêm agrupados por máquina.
@@ -95,12 +96,14 @@ export function UpdateConfirmSheet({ request, onClose }: { request: ConfirmReque
       ? m.update_confirm_all_title({ n: String(request.count) })
       : m.mobile_machines_confirm_operation({ action: m.mobile_machines_update(), name: request.server.label })} />
     <Text style={[styles.body, { color: c.muted }]}>{all ? m.update_confirm_all_body() : m.mobile_machines_confirm_operation_body()}</Text>
-    {!loaded ? <View style={[styles.actions, { alignItems: 'center' }]}>
+    {request.checks ? <MachineCheckList checks={request.checks} ready={!!loaded} /> : null}
+    {!loaded && !request.checks ? <View style={[styles.actions, { alignItems: 'center' }]}>
       <ActivityIndicator color={c.muted} />
       <Text style={[styles.body, { color: c.muted }]}>{m.update_notes_loading()}</Text>
     </View> : null}
     {loaded?.failed ? <Notice error text={m.update_notes_failed()} /> : null}
-    {loaded?.unreachable.map((server) => <Notice key={server.id} error text={m.update_all_warnings_failed({ server: server.label })} />)}
+    {/* Com as linhas, a máquina sem avisos lidos já aparece nelas. */}
+    {request.checks ? null : loaded?.unreachable.map((server) => <Notice key={server.id} error text={m.update_all_warnings_failed({ server: server.label })} />)}
     {groups.length ? <Warnings groups={groups} understood={understood} modes={modes}
       onMode={(id, mode) => setModes((v) => ({ ...v, [id]: mode }))}
       onToggle={() => { haptic.selection(); setUnderstood((v) => !v); }} /> : null}
@@ -113,6 +116,18 @@ export function UpdateConfirmSheet({ request, onClose }: { request: ConfirmReque
       <PrimaryButton label={m.update_confirm_action()} disabled={blocked} onPress={confirm} />
     </View>
   </ScrollView>;
+}
+
+/** Uma linha por máquina, preenchida enquanto cada uma responde; a fora do ar já aparece de fora. */
+function MachineCheckList({ checks, ready }: { checks: MachineChecks; ready: boolean }) {
+  const rows = useSyncExternalStore(checks.subscribe, checks.get);
+  const online = rows.filter((row) => row.check.status !== 'fora_do_ar');
+  const answered = online.filter((row) => row.check.status !== 'consultando').length;
+  const summary = ready && answered === online.length ? m.update_all_summary_ready() : m.update_all_summary_checking({ n: String(online.length) });
+  return <View>
+    <UpdateSummary text={summary} progress={online.length ? answered / online.length : 1} />
+    {rows.map(({ server, check }) => <UpdateRow key={server.id} label={server.label} text={checkText(check)} tone={checkTone(check)} />)}
+  </View>;
 }
 
 /** Bloco âmbar: o "Entendi" mora dentro dele e libera o Atualizar. */

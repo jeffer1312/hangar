@@ -331,6 +331,19 @@ impl Hangar {
             updater.set_servers(local, active, cx);
             if changed { updater.refresh_machine_updates(cx); }
         });
+        self.sync_updater_offline(cx);
+    }
+
+    /// As entradas cuja lista caiu: o "Atualizar todas" as deixa de fora sem esperar o prazo de cada uma.
+    pub(super) fn sync_updater_offline(&self, cx: &mut Context<Self>) {
+        let active = self.active_key();
+        let offline = self.servers.iter().filter(|s| {
+            let key = norm(&s.address);
+            if key == active { !self.list_online && self.list_error.is_some() }
+            else { self.remote.get(&key).is_some_and(|list| !list.online && list.error.is_some()) }
+        }).map(|s| s.id.clone()).collect();
+        let Some(updater) = cx.try_global::<crate::update::Handle>().map(|handle| handle.0.clone()) else { return };
+        updater.update(cx, |updater, _| updater.set_update_all_offline(offline));
     }
 
     /// Só as máquinas do app Electron; a aparência é o Importar das configurações que traz.

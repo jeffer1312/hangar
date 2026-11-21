@@ -2100,6 +2100,7 @@ impl Hangar {
                     };
                     // Menu, renomear, fechar e grupo das linhas desta máquina acompanham a lista dela como os da ativa.
                     let (changed, gone) = self.receive_remote(generation, key.clone(), update, cx);
+                    if changed { self.sync_updater_offline(cx); }
                     if changed {
                         self.tour_dirty = true;
                         self.sidebar_sessions_changed(window, cx);
@@ -2181,7 +2182,7 @@ impl Hangar {
                     let back = !self.list_online;
                     self.list_online = true;
                     self.list_down_since = None;
-                    if back { self.server_back(window, cx); }
+                    if back { self.server_back(window, cx); self.sync_updater_offline(cx); }
                     // A lista pode chegar só pelo stream (a primeira leitura falhou com o backend subindo): sem esta leitura
                     // o botão da voz nasce escondido e nenhuma reconexão o traz de volta.
                     self.refresh_voice_gate(cx);
@@ -2197,6 +2198,7 @@ impl Hangar {
                     self.list_online = false;
                     self.list_error = Some(self.active_failure(&error));
                     self.list_down_since.get_or_insert_with(Instant::now);
+                    self.sync_updater_offline(cx);
                     let server = self.active_key();
                     if self.set_keyring(&server, false, window, cx) { self.redraw(panes::Area::Nav, cx); }
                     if self.set_vault_requests(&server, None, window, cx) { self.redraw(panes::Area::Nav, cx); }
