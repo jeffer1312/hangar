@@ -1,14 +1,17 @@
-import { useContext, useMemo, useState } from 'react';
+import { lazy, Suspense, useContext, useMemo, useState } from 'react';
 import { Pressable, StyleSheet as RNStyleSheet, Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Image } from 'expo-image';
 import { useReducedMotion } from 'react-native-reanimated';
 import * as m from '../paraglide/messages';
-import { GalleryViewer, type GalleryEntry } from '../features/attachments/gallery';
+import type { GalleryEntry } from '../features/attachments/gallery';
 import { GalleryContext } from './galleryContext';
 import { Icon } from '../ui/Icon';
 import { superficie } from '../theme/superficie';
 import { RevealFrame } from './RevealFrame';
+
+// O visor puxa os módulos nativos de arquivo: a bolha não os carrega, só o toque na miniatura.
+const GalleryViewer = lazy(() => import('../features/attachments/gallery').then((mod) => ({ default: mod.GalleryViewer })));
 
 export interface MediaItem {
   uri: string;
@@ -116,7 +119,11 @@ export function ImageThumb({ items, index, style, revealTs, galleryKey }: Props)
           </View>
         )}
       </Pressable>
-      {open !== null ? <GalleryViewer entries={local} openKey={open} onOpenKey={setOpen} onClose={() => setOpen(null)} /> : null}
+      {open !== null ? (
+        <Suspense fallback={null}>
+          <GalleryViewer entries={local} openKey={open} onOpenKey={setOpen} onClose={() => setOpen(null)} />
+        </Suspense>
+      ) : null}
     </>
   );
 }

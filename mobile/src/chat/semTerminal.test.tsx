@@ -178,7 +178,7 @@ vi.mock('./ContextRing', () => ({ ContextRing: () => null }));
 vi.mock('../paraglide/messages', async (importOriginal) => ({
   ...await importOriginal<typeof import('../paraglide/messages')>(),
   ...Object.fromEntries(
-  ('arq_aba askq_sua_resposta bastao_dossie_sub bastao_dossie_titulo chat_ir_inicio chat_voltar_sessoes codex_limites_titulo compartilhar_menu ctx_anexos ctx_atividade ctx_grupo ctx_limites ctx_repositorio ctx_terminal modo_so_ociosa more_fotos_videos_arquivos more_tarefas_agentes mods_celular_mostrar mods_celular_mostrar_um mods_celular_mostrar_paineis mods_celular_ocultar mods_celular_sub plugin_band_label navbar_mais_acoes par_titulo recarregar_sessao recarregar_sessao_detalhe sessao_trocar_de switcher_buscar_conversas term_titulo '
+  ('arq_aba askq_sua_resposta bastao_dossie_sub bastao_dossie_titulo chat_ir_inicio chat_voltar_sessoes codex_limites_titulo compartilhar_menu media_title ctx_atividade ctx_grupo ctx_limites ctx_repositorio ctx_terminal modo_so_ociosa more_fotos_videos_arquivos more_tarefas_agentes mods_celular_mostrar mods_celular_mostrar_um mods_celular_mostrar_paineis mods_celular_ocultar mods_celular_sub plugin_band_label navbar_mais_acoes par_titulo recarregar_sessao recarregar_sessao_detalhe sessao_trocar_de switcher_buscar_conversas term_titulo '
     + 'askq_enviando board_arquivo board_imagem board_remover_anexo codex_orientar composer_anexar_arquivo composer_desfazer_limpeza composer_ditado_limpo composer_enviando_cancelar composer_enviar_mensagem composer_fila_acao composer_fila_aria composer_fila_contagem composer_gravando_audio composer_gravar_audio composer_mandando_grupo composer_mandar_grupo composer_mandar_tambem composer_mensagem composer_parar composer_parar_gravacao composer_pro_grupo composer_pros_dois composer_sessao_trabalhando composer_transcrevendo_audio composer_transcrever_de_novo')
     .concat(' sessao_git chat_acao_git_detalhe cota_conta_ativa accounts_switch_title native_ctl_model_title native_new_chat_reasoning native_mode_bypassPermissions chat_mode_label native_usage_card_session live_voice_action_usage_label native_ctl_all_models native_ctl_featured_models')
     .concat(' live_voice_open composer_mic_style_hint composer_dictation_style composer_session_settings composer_session_settings_hint composer_steer_current_text ditado_estilo_titulo uso_aria codex_orientar_ajuda composer_fila_titulo composer_submission_recover_first queue_steer_uncertain')
@@ -985,7 +985,7 @@ describe('terminal escondido', () => {
     expect(container.querySelector('[aria-label="term_titulo"]')).toBeNull();
     expect(container.querySelector('[aria-label="par_titulo"]')).toBeNull();
     expect(container.querySelector('[aria-label="askq_sua_resposta"]')).toBeNull();
-    expect(container.querySelector('[aria-label="ctx_anexos"]')).toBeNull();
+    expect(container.querySelector('[aria-label="media_title"]')).toBeNull();
     expect(container.querySelector('[aria-label="arq_aba"]')).not.toBeNull();
     act(() => root.unmount());
   });
@@ -994,7 +994,7 @@ describe('terminal escondido', () => {
     const { container, root } = await render(createElement(MoreSheet, { ...sheet, temPergunta: true }));
     expect(container.querySelector('[aria-label="term_titulo"]')).not.toBeNull();
     expect(container.querySelector('[aria-label="askq_sua_resposta"]')).not.toBeNull();
-    expect(container.querySelector('[aria-label="ctx_anexos"]')).not.toBeNull();
+    expect(container.querySelector('[aria-label="media_title"]')).not.toBeNull();
     expect(container.querySelector('[aria-label="par_titulo"]')).not.toBeNull();
     act(() => root.unmount());
   });
@@ -1003,7 +1003,7 @@ describe('terminal escondido', () => {
     const { container, root } = await render(createElement(MoreSheet, { ...sheet, semTerminal: true }));
     expect(container.querySelector('[aria-label="askq_sua_resposta"]')).toBeNull();
     expect(container.querySelector('[aria-label="term_titulo"]')).toBeNull();
-    expect(container.querySelector('[aria-label="ctx_anexos"]')).not.toBeNull();
+    expect(container.querySelector('[aria-label="media_title"]')).not.toBeNull();
     act(() => root.unmount());
   });
 });
