@@ -348,10 +348,11 @@ pub(crate) fn proxy_card_view(view: &CardView, actions: Vec<AnyElement>, body: O
     let tag = |text: String, color: Hsla| div().flex_shrink_0().px(px(7.)).py(px(1.)).rounded(px(6.)).border_1()
         .border_color(color.alpha(0.35)).text_size(px(11.5)).text_color(color).child(text);
     let origin = if view.external { tag(tr("cliproxy_card_external"), theme::warning()) } else { tag(tr("cliproxy_card_managed"), theme::accent()) };
+    // Versão e origem quebram juntas para a linha de baixo, nunca uma em cada linha.
+    let tags = div().flex_shrink_0().flex().items_center().gap(px(8.)).children(view.version.clone().map(|v| tag(v, theme::muted()))).child(origin);
     let title = div().flex().flex_wrap().items_center().gap(px(8.)).min_w_0()
         .child(div().text_size(px(15.)).font_weight(FontWeight::SEMIBOLD).child("CLIProxyAPI"))
-        .children(view.version.clone().map(|v| tag(v, theme::muted())))
-        .child(origin);
+        .child(tags);
     let dot = |color: Hsla| div().size(px(7.)).flex_shrink_0().rounded_full().bg(color);
     let status = match &view.address {
         Some(address) => div().flex().items_center().gap(px(6.)).child(dot(theme::success()))
