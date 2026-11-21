@@ -944,7 +944,11 @@ impl Hangar {
                             accounts.session_list.loading = false;
                             accounts.session_notice = Some(error);
                         },
-                        parsed => if accounts.session_list.finish(seq, parsed) { accounts.session_notice = None; },
+                        // Primeira leitura que falha, sem lista anterior: o motivo fica no aviso, que o seletor mostra.
+                        parsed => {
+                            let error = parsed.as_ref().err().cloned();
+                            if accounts.session_list.finish(seq, parsed) { accounts.session_notice = error; }
+                        }
                     }
                 }
             }

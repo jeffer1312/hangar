@@ -223,7 +223,9 @@ impl Hangar {
         let own = self.provider().0.to_owned();
         let mut tabs = vec![(own, true)];
         if self.handoff_source_now().is_some() {
-            tabs.push(("codex".into(), self.handoff_accounts().is_some_and(|list| !list.is_empty())));
+            // Leitura das contas que falhou deixa a aba aberta: é nela que a falha aparece.
+            let usable = self.handoff_accounts().is_some_and(|list| !list.is_empty()) || self.session_accounts_notice().is_some();
+            tabs.push(("codex".into(), usable));
         }
         tabs
     }
@@ -238,7 +240,8 @@ impl Hangar {
         // A aba do Codex sem conta apta (a última saiu da lista) ou sem troca possível volta ao agente da sessão: o
         // esqueleto fica só para a leitura a caminho.
         let codex_gone = self.provider().0 != "codex"
-            && (self.handoff_source_now().is_none() || self.handoff_accounts().is_some_and(|list| list.is_empty()));
+            && (self.handoff_source_now().is_none()
+                || (self.handoff_accounts().is_some_and(|list| list.is_empty()) && self.session_accounts_notice().is_none()));
         let tab = self.controls.picker_tab.clone().filter(|tab| tab != FAVORITES || has_favorites).filter(|tab| tab != "codex" || !codex_gone)
             .unwrap_or_else(|| if has_favorites { FAVORITES.into() } else { self.provider().0.to_owned() });
         PickerView { own, handoff, tab, has_favorites }
