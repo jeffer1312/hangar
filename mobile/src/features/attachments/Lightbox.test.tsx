@@ -34,7 +34,10 @@ vi.mock('react-native-reanimated', async (original) => ({
     return {};
   },
 }));
-vi.mock('./mediaCache', () => ({ localCopy: vi.fn(), saveImage: vi.fn(), shareFile: vi.fn(), canShareFile: true }));
+vi.mock('./mediaCache', () => ({
+  saveImage: vi.fn(), shareFile: vi.fn(), canShareFile: true,
+  isAbort: (e: unknown) => e instanceof Error && e.name === 'AbortError',
+}));
 vi.mock('../../ui/Toast', () => ({ toast: { ok: vi.fn(), erro: vi.fn() } }));
 vi.mock('../../ui/Icon', () => ({ Icon: () => null }));
 vi.mock('../../paraglide/messages', () => ({
@@ -45,11 +48,40 @@ vi.mock('../../paraglide/messages', () => ({
   visor_anterior: () => 'previous', visor_proxima: () => 'next',
   gallery_video_swipe_hint: () => 'swipe', gallery_video_close_hint: () => 'swipe_close',
   visor_nao_carregou: () => 'did not load', comum_carregando: () => 'loading', arquivo_carregar_erro: () => 'error',
-  lista_tentar_novamente: () => 'retry',
+  lista_tentar_novamente: () => 'retry', file_card_cancel: () => 'cancelar',
 }));
+
+type FakePlayer = {
+  source: unknown; status: string; play: ReturnType<typeof vi.fn>; pause: ReturnType<typeof vi.fn>;
+  listeners: Set<(e: { status: string; error?: { message: string } }) => void>;
+  addListener: (ev: string, l: (e: { status: string; error?: { message: string } }) => void) => { remove: () => void };
+};
+const video = vi.hoisted(() => ({ players: [] as FakePlayer[] }));
+vi.mock('expo-video', async () => {
+  const React = await import('react');
+  return {
+    useVideoPlayer: (source: unknown, setup?: (p: FakePlayer) => void) => {
+      const [p] = React.useState(() => {
+        const listeners = new Set<(e: { status: string; error?: { message: string } }) => void>();
+        const pl: FakePlayer = {
+          source, status: 'idle', play: vi.fn(), pause: vi.fn(), listeners,
+          addListener: (_ev, l) => { listeners.add(l); return { remove: () => listeners.delete(l) }; },
+        };
+        setup?.(pl);
+        video.players.push(pl);
+        return pl;
+      });
+      return p;
+    },
+    VideoView: () => React.createElement('div', { 'data-testid': 'video' }),
+    // A miniatura da conversa (ImageThumb) importa; os testes daqui só abrem imagens nela.
+    createVideoPlayer: vi.fn(),
+  };
+});
 
 import { clampPan, Lightbox, panLimits, type LightboxProps } from './Lightbox';
 import { ImageThumb } from '../../chat/ImageThumb';
+import { useVoiceAudioState } from '../voice/audioSession';
 
 const roots: Root[] = [];
 afterEach(() => { act(() => roots.splice(0).forEach((root) => root.unmount())); });
@@ -270,7 +302,58 @@ it('video also has save, and it saves the open video', async () => {
   const salvar = container.querySelector<HTMLButtonElement>('[aria-label="salvar"]');
   expect(salvar).not.toBeNull();
   await act(async () => salvar!.click());
-  expect(saveImage).toHaveBeenCalledWith('https://example.test/demo.mp4', undefined, 'demo.mp4');
+  expect(saveImage).toHaveBeenCalledWith('https://example.test/demo.mp4', undefined, 'demo.mp4',
+    expect.objectContaining({ signal: expect.any(AbortSignal) }));
+});
+
+it('salvar mostra o anel enquanto baixa, e tocar nele cancela', async () => {
+  const { saveImage } = await import('./mediaCache');
+  let signal: AbortSignal | undefined;
+  vi.mocked(saveImage).mockImplementation((_u, _h, _n, o) => new Promise((_res, rej) => {
+    signal = o?.signal;
+    o?.signal?.addEventListener('abort', () => { const e = new Error('x'); e.name = 'AbortError'; rej(e); });
+  }));
+  const { toast } = await import('../../ui/Toast');
+  const { container } = await render();
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="salvar"]')!.click());
+  expect(container.querySelector('[aria-label="salvar"]')).toBeNull();
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="cancelar"]')!.click());
+  expect(signal?.aborted).toBe(true);
+  expect(container.querySelector('[aria-label="salvar"]')).not.toBeNull();
+  expect(toast.erro).not.toHaveBeenCalled();
+});
+
+it('vídeo do servidor toca pelo player com o token no header, sem baixar antes', async () => {
+  video.players.length = 0;
+  const { saveImage } = await import('./mediaCache');
+  vi.mocked(saveImage).mockClear();
+  const headers = { Authorization: 'Bearer t' };
+  const { container } = await render({ kind: 'video', uri: 'https://srv/api/f.mp4', filename: 'f.mp4', headers });
+  expect(container.querySelector('[data-testid="video"]')).not.toBeNull();
+  expect(video.players).toHaveLength(1);
+  expect(video.players[0].source).toEqual({ uri: 'https://srv/api/f.mp4', headers, useCaching: true });
+  expect(video.players[0].play).toHaveBeenCalledTimes(1);
+  expect(saveImage).not.toHaveBeenCalled();
+  // Erro do player aparece com o motivo, não some calado.
+  act(() => video.players[0].listeners.forEach((l) => l({ status: 'error', error: { message: 'HTTP 403' } })));
+  expect(container.textContent).toContain('did not load');
+  expect(container.textContent).toContain('HTTP 403');
+});
+
+it('voz ao vivo pausa o vídeo aberto', async () => {
+  video.players.length = 0;
+  useVoiceAudioState.setState({ voiceActive: false });
+  await render({ kind: 'video', uri: 'https://srv/api/f.mp4', filename: 'f.mp4' });
+  act(() => useVoiceAudioState.setState({ voiceActive: true }));
+  expect(video.players[0].pause).toHaveBeenCalled();
+  useVoiceAudioState.setState({ voiceActive: false });
+});
+
+it('endereço que não é http(s) não chega ao player', async () => {
+  video.players.length = 0;
+  const { container } = await render({ kind: 'video', uri: 'file:///etc/x.mp4', filename: 'x.mp4' });
+  expect(video.players).toHaveLength(0);
+  expect(container.textContent).toContain('did not load');
 });
 
 it('video steps by the buttons and the strip below the player, which also closes', async () => {
@@ -293,7 +376,8 @@ it('caption, share and "in chat"', async () => {
   expect(container.textContent).toContain('580 KB · today 11:42 · agent');
   expect(container.textContent).toContain('3/8');
   await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="share"]')!.click());
-  expect(shareFile).toHaveBeenCalledWith('https://example.test/1.png', headers, '1.png');
+  expect(shareFile).toHaveBeenCalledWith('https://example.test/1.png', headers, '1.png',
+    expect.objectContaining({ signal: expect.any(AbortSignal) }));
   await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="in_chat"]')!.click());
   expect(onShowInChat).toHaveBeenCalledTimes(1);
 });

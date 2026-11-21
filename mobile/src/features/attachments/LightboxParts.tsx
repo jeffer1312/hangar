@@ -9,7 +9,8 @@ import { Icon, type IconName } from '../../ui/Icon';
 export const THUMB_W = 44;
 const THUMB_H = 58;
 
-export interface LightboxAction { icon: IconName; label: string; a11y: string; onPress: () => void; busy?: boolean }
+/** `slot`: o download em andamento ocupa o lugar do botão (o anel que cancela), com o mesmo rótulo embaixo. */
+export interface LightboxAction { icon: IconName; label: string; a11y: string; onPress: () => void; busy?: boolean; slot?: ReactNode }
 
 /** Nome e, embaixo, "tamanho · data · origem". */
 export function LightboxCaption({ filename, details }: { filename: string; details?: string }) {
@@ -25,7 +26,12 @@ export function LightboxActions({ actions }: { actions: LightboxAction[] }) {
   const { theme } = useUnistyles();
   return (
     <View style={styles.actions}>
-      {actions.map((a) => (
+      {actions.map((a) => a.slot ? (
+        <View key={a.icon} style={styles.action}>
+          {a.slot}
+          <Text style={styles.actionLabel} numberOfLines={1}>{a.label}</Text>
+        </View>
+      ) : (
         <Pressable key={a.icon} onPress={a.onPress} disabled={a.busy} style={styles.action}
           accessibilityRole="button" accessibilityLabel={a.a11y} accessibilityState={{ busy: !!a.busy }}>
           {a.busy ? <ActivityIndicator size="small" color={theme.ink.onAccent} /> : <Icon name={a.icon} size={22} color={theme.ink.onAccent} />}

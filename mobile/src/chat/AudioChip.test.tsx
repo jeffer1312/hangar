@@ -9,15 +9,24 @@ import { setLiveVoiceAudioActive, useVoiceAudioState } from '../features/voice/a
 const h = vi.hoisted(() => ({
   player: { play: vi.fn(), pause: vi.fn(), replace: vi.fn(), seekTo: vi.fn() },
   status: { playing: false, duration: 10, currentTime: 3, error: null as string | null },
+  share: vi.fn(),
+  toast: vi.fn(),
 }));
 vi.mock('expo-audio', () => ({
   useAudioPlayer: () => h.player,
   useAudioPlayerStatus: () => h.status,
 }));
+vi.mock('../features/attachments/mediaCache', () => ({ shareFile: h.share }));
+vi.mock('../ui/Toast', () => ({ toast: { erro: h.toast, ok: () => {} } }));
 vi.mock('../ui/Icon', () => ({ Icon: () => null }));
 vi.mock('../paraglide/messages', () => ({
   anexos_pausar: ({ nome }: { nome: string }) => `pause-${nome}`,
   anexos_tocar: ({ nome }: { nome: string }) => `play-${nome}`,
+  anexos_compartilhar: ({ nome }: { nome: string }) => `share-${nome}`,
+  anexos_baixar: ({ nome }: { nome: string }) => `download-${nome}`,
+  file_card_cancel: ({ nome }: { nome: string }) => `cancel-${nome}`,
+  file_card_missing: () => 'missing',
+  file_card_failed: () => 'failed',
   visor_nao_carregou: () => 'audio-error',
   comum_carregando: () => 'loading',
   board_remover_anexo: () => 'remove-attachment',
@@ -36,6 +45,8 @@ async function mount(props: Partial<Parameters<typeof AudioChip>[0]> = {}) {
   return { container, root };
 }
 const button = (container: HTMLElement) => container.querySelector<HTMLButtonElement>('button')!;
+// O módulo de arquivos carrega sob demanda: espera o import e a promessa assentarem.
+const flush = () => act(async () => { await new Promise((r) => setTimeout(r, 0)); });
 
 beforeEach(() => {
   useVoiceAudioState.setState({ voiceActive: false, dictations: 0 });
@@ -128,7 +139,9 @@ describe('AudioChip — remoção no campo', () => {
 
   it('não oferece remover em bolha da conversa e bloqueia no envio', async () => {
     const { container, root } = await mount();
-    expect(container.querySelectorAll('button')).toHaveLength(1);
+    // Tocar e compartilhar; remover só no rascunho.
+    expect(container.querySelectorAll('button')).toHaveLength(2);
+    expect(container.querySelector('[aria-label="remove-attachment: ditado.m4a"]')).toBeNull();
     const onRemove = vi.fn();
     await act(async () => root.render(createElement(AudioChip, { uri: 'file:///ditado.m4a', name: 'ditado.m4a', onRemove, disabled: true })));
     const remove = container.querySelector<HTMLButtonElement>('[aria-label="remove-attachment: ditado.m4a"]')!;
@@ -136,5 +149,36 @@ describe('AudioChip — remoção no campo', () => {
     expect(button(container).disabled).toBe(true);
     await act(async () => remove.click());
     expect(onRemove).not.toHaveBeenCalled();
+    // No rascunho o áudio ainda não foi enviado: não há o que compartilhar do servidor.
+    expect(container.querySelector('[aria-label="share-ditado.m4a"]')).toBeNull();
+  });
+});
+
+describe('AudioChip — baixar e compartilhar', () => {
+  it('compartilha pela folha do sistema com progresso e cancelamento', async () => {
+    let signal: AbortSignal | undefined;
+    h.share.mockImplementation((_u: string, _h: unknown, _n: string, o: { signal?: AbortSignal }) => new Promise((_res, rej) => {
+      signal = o.signal;
+      o.signal?.addEventListener('abort', () => { const e = new Error('x'); e.name = 'AbortError'; rej(e); });
+    }));
+    const { container } = await mount();
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="share-ditado.m4a"]')!.click());
+    await flush();
+    expect(h.share).toHaveBeenCalledWith('https://a.test/audio.m4a', { Authorization: 'Bearer token' }, 'ditado.m4a', expect.anything());
+    const cancel = container.querySelector<HTMLButtonElement>('[aria-label="cancel-ditado.m4a"]');
+    expect(cancel).not.toBeNull();
+    await act(async () => cancel!.click());
+    await flush();
+    expect(signal?.aborted).toBe(true);
+    expect(container.querySelector('[aria-label="share-ditado.m4a"]')).not.toBeNull();
+    expect(h.toast).not.toHaveBeenCalled();
+  });
+
+  it('falha aparece no aviso, com 404 como "não encontrado"', async () => {
+    h.share.mockRejectedValue(new Error('response has status: 404'));
+    const { container } = await mount();
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="share-ditado.m4a"]')!.click());
+    await flush();
+    expect(h.toast).toHaveBeenCalledWith('ditado.m4a: missing');
   });
 });

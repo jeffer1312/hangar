@@ -1,29 +1,217 @@
-import { Platform, Share } from 'react-native';
-import { Directory, File, Paths } from 'expo-file-system';
+import { Platform } from 'react-native';
+import { Directory, DownloadTask, File, Paths } from 'expo-file-system';
 import { startActivityAsync } from 'expo-intent-launcher';
+import * as Sharing from 'expo-sharing';
+import { createMMKV } from 'react-native-mmkv';
+import { fileKind } from '@hangar/core';
 import * as m from '../../paraglide/messages';
 import { downloadedVersion, keptIsCurrent, type KeptVersion } from './attachmentUrls';
 
 const FLAG_GRANT_READ_URI_PERMISSION = 1;
 
-// Arquivo do servidor exige o token no header, e nem o player do WebView (pede a mídia em pedaços,
-// sem header) nem o "Abrir em…" do sistema o mandam: baixa pro cache e entrega o local.
-// Baixa a cada abertura porque o arquivo pode ter sido regerado no mesmo caminho. O download vai
-// para um nome temporário e só substitui a cópia ao terminar: no Android ele escreve direto no
-// destino, e um download interrompido deixaria o arquivo cortado.
-export async function localCopy(uri: string, headers: Record<string, string> | undefined, name: string): Promise<File> {
-  const dir = new Directory(Paths.cache, 'chat-media');
+/** Teto da pasta de anexos baixados; acima dele saem os usados há mais tempo. */
+export const MEDIA_CACHE_LIMIT = 1024 * 1024 * 1024;
+
+const MEDIA_DIR = 'chat-media';
+// O leitor de PDF e a folha de texto da página guardam cópias próprias; o "Limpar" leva as duas.
+const SIDE_DIRS = ['pdf-reader', 'chat-page-source'];
+const PROBE_TIMEOUT_MS = 4000;
+// Só o Android retoma pelo pedaço já gravado; no iOS a sessão em segundo plano espera a rede sozinha.
+const RESUME_DELAYS_MS = [2000, 5000];
+// `.part` mais novo que isto pode ser de um download em andamento noutra tela.
+const STALE_PART_MS = 60 * 60 * 1000;
+
+export interface DownloadProgress {
+  written: number;
+  /** null = o servidor não disse o tamanho: o anel fica indeterminado. */
+  total: number | null;
+}
+
+export interface DownloadOptions {
+  onProgress?: (p: DownloadProgress) => void;
+  signal?: AbortSignal;
+}
+
+interface Entry { etag: string | null; size: number; used: number }
+
+const index = createMMKV({ id: 'hangar-media-cache' });
+
+function readEntry(key: string): Entry | null {
+  const raw = index.getString(key);
+  if (!raw) return null;
+  try { return JSON.parse(raw) as Entry; } catch { return null; }
+}
+const writeEntry = (key: string, e: Entry) => index.set(key, JSON.stringify(e));
+
+function mediaDir(): Directory {
+  const dir = new Directory(Paths.cache, MEDIA_DIR);
   dir.create({ idempotent: true, intermediates: true });
-  const target = new File(dir, `${keyHash(uri)}-${name.replace(/[^\w.-]/g, '_')}`);
+  return dir;
+}
+
+const safeName = (name: string) => name.replace(/[^\w.-]/g, '_');
+
+// O nome guarda o endereço inteiro: o mesmo caminho em outra sessão ou máquina é outro arquivo.
+function cacheKey(uri: string, name: string): string {
+  let h = 0;
+  for (let i = 0; i < uri.length; i++) h = (h * 31 + uri.charCodeAt(i)) | 0;
+  return `${(h >>> 0).toString(36)}-${safeName(name)}`;
+}
+
+export class HttpStatusError extends Error {
+  constructor(readonly status: number) {
+    // O mesmo texto que o download nativo usa, que é o que as telas reconhecem como 404.
+    super(`response has status: ${status}`);
+  }
+}
+
+export const isMissing = (e: unknown) => /(status:?|HTTP) 404\b/.test(e instanceof Error ? e.message : String(e));
+export const isAbort = (e: unknown) => e instanceof Error && e.name === 'AbortError';
+
+function abortError(): Error {
+  const e = new Error('The operation was aborted.');
+  e.name = 'AbortError';
+  return e;
+}
+
+function wait(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(abortError());
+    const t = setTimeout(() => { signal?.removeEventListener('abort', stop); resolve(); }, ms);
+    const stop = () => { clearTimeout(t); reject(abortError()); };
+    signal?.addEventListener('abort', stop, { once: true });
+  });
+}
+
+interface Probe { etag: string | null; size: number | null }
+
+// Um byte só: devolve o ETag (o servidor o muda quando o arquivo é regerado no mesmo caminho) e o
+// tamanho total pelo Content-Range. null = sem rede; resposta de erro do servidor vira exceção.
+export async function probe(uri: string, headers: Record<string, string> | undefined, signal?: AbortSignal): Promise<Probe | null> {
+  const ctl = new AbortController();
+  const stop = () => ctl.abort();
+  signal?.addEventListener('abort', stop, { once: true });
+  const timer = setTimeout(stop, PROBE_TIMEOUT_MS);
+  try {
+    const r = await fetch(uri, { headers: { ...headers, Range: 'bytes=0-0', 'Cache-Control': 'no-cache' }, signal: ctl.signal });
+    if (r.status === 416) {
+      const total = /\/(\d+)/.exec(r.headers.get('content-range') ?? '');
+      return { etag: r.headers.get('etag'), size: total ? Number(total[1]) : 0 };
+    }
+    if (!r.ok) throw new HttpStatusError(r.status);
+    const range = /\/(\d+)/.exec(r.headers.get('content-range') ?? '');
+    const length = r.headers.get('content-length');
+    const size = range ? Number(range[1]) : r.status === 200 && length ? Number(length) : null;
+    return { etag: r.headers.get('etag'), size };
+  } catch (e) {
+    if (signal?.aborted) throw abortError();
+    if (e instanceof HttpStatusError) throw e;
+    return null;
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener('abort', stop);
+  }
+}
+
+// A queda de rede no Android deixa o pedaço gravado, e o resumo do download nativo de lá é o tamanho
+// dele: o pedido continua com Range. Erro HTTP ou cancelamento não se retomam.
+async function downloadResuming(uri: string, headers: Record<string, string> | undefined, tmp: File, expected: number | null, opts: DownloadOptions): Promise<void> {
+  const onProgress = opts.onProgress
+    ? ({ bytesWritten, totalBytes }: { bytesWritten: number; totalBytes: number }) =>
+      opts.onProgress!({ written: bytesWritten, total: totalBytes > 0 ? totalBytes : expected })
+    : undefined;
+  let task = File.createDownloadTask(uri, tmp, { headers, onProgress, signal: opts.signal });
+  let start = () => task.downloadAsync();
+  for (let attempt = 0; ; attempt++) {
+    let done: File | null;
+    try {
+      done = await start();
+    } catch (e) {
+      task.release();
+      if (opts.signal?.aborted || isAbort(e)) throw abortError();
+      const http = /\b(HTTP|status:?) \d{3}\b/.test(e instanceof Error ? e.message : String(e));
+      if (Platform.OS !== 'android' || http || attempt >= RESUME_DELAYS_MS.length || !tmp.exists || tmp.size <= 0) throw e;
+      await wait(RESUME_DELAYS_MS[attempt], opts.signal);
+      task = DownloadTask.fromSavable(
+        { url: uri, fileUri: tmp.uri, isDirectory: false, headers, resumeData: String(tmp.size) },
+        { onProgress, signal: opts.signal },
+      );
+      start = () => task.resumeAsync();
+      continue;
+    }
+    task.release();
+    // null = pausado; ninguém pausa aqui, então é um download que não terminou.
+    if (!done) throw new Error(m.file_card_failed());
+    return;
+  }
+}
+
+/**
+ * Cópia local do anexo do servidor (o "Abrir em…" do sistema e a folha de compartilhar não mandam o
+ * token). Fica guardada e é reaproveitada: com rede, um pedido de um byte confere se o arquivo mudou
+ * no servidor; sem rede, entrega a guardada. O download vai para um nome temporário e só substitui a
+ * cópia ao terminar e conferir o tamanho: um download cortado nunca vira o arquivo guardado.
+ */
+export async function localCopy(uri: string, headers: Record<string, string> | undefined, name: string, opts: DownloadOptions = {}): Promise<File> {
+  const dir = mediaDir();
+  const key = cacheKey(uri, name);
+  const target = new File(dir, key);
+  const entry = readEntry(key);
+  let info: Probe | null = null;
+  if (entry && target.exists) {
+    // Servidor recusando (arquivo apagado, sessão expirada) não tira a cópia que a pessoa já tem.
+    try { info = await probe(uri, headers, opts.signal); } catch (e) { if (isAbort(e)) throw e; info = null; }
+    const same = !info || (info.etag ? info.etag === entry.etag : info.size === target.size);
+    if (same) {
+      writeEntry(key, { ...entry, used: Date.now() });
+      opts.onProgress?.({ written: target.size, total: target.size });
+      return target;
+    }
+  } else {
+    info = await probe(uri, headers, opts.signal);
+  }
   const tmp = new File(dir, `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}.part`);
   try {
-    await File.downloadFileAsync(uri, tmp, { headers });
+    await downloadResuming(uri, headers, tmp, info?.size ?? null, opts);
+    if (info?.size != null && tmp.size !== info.size) throw new Error(m.file_card_failed());
     tmp.moveSync(target, { overwrite: true });
   } catch (e) {
     if (tmp.exists) tmp.delete();
     throw e;
   }
+  writeEntry(key, { etag: info?.etag ?? null, size: target.size, used: Date.now() });
+  evict(key);
   return target;
+}
+
+interface Stored { key: string; file: File; entry: Entry | null }
+
+function stored(): Stored[] {
+  const dir = new Directory(Paths.cache, MEDIA_DIR);
+  if (!dir.exists) return [];
+  return dir.list().filter((f): f is File => f instanceof File).map((file) => ({ key: file.name, file, entry: readEntry(file.name) }));
+}
+
+// Os usados há mais tempo saem primeiro, até caber no teto; o que acabou de ser pedido fica.
+// Sobra de versão antiga (sem registro) e `.part` abandonado saem também.
+export function evict(keep?: string): void {
+  const now = Date.now();
+  const alive: Stored[] = [];
+  for (const s of stored()) {
+    const part = s.key.endsWith('.part');
+    if (part && now - (s.file.modificationTime ?? now) > STALE_PART_MS) s.file.delete();
+    else if (!part && !s.entry) s.file.delete();
+    else if (!part) alive.push(s);
+  }
+  for (const k of index.getAllKeys()) if (!alive.some((s) => s.key === k)) index.remove(k);
+  let total = alive.reduce((n, s) => n + s.file.size, 0);
+  for (const s of alive.sort((a, b) => a.entry!.used - b.entry!.used)) {
+    if (total <= MEDIA_CACHE_LIMIT) break;
+    if (s.key === keep) continue;
+    total -= s.file.size;
+    s.file.delete();
+    index.remove(s.key);
+  }
 }
 
 // cyrb53 com duas sementes (~106 bits): com 32 bits, duas chaves de nomes iguais podiam cair no mesmo
@@ -49,7 +237,7 @@ export function keyHash(s: string): string {
 function keptFile(key: string, name: string): File {
   const dir = new Directory(Paths.cache, 'media-files');
   dir.create({ idempotent: true, intermediates: true });
-  return new File(dir, `${keyHash(key)}-${name.replace(/[^\w.-]/g, '_')}`);
+  return new File(dir, `${keyHash(key)}-${safeName(name)}`);
 }
 
 // Versão gravada com a cópia. Pasta própria: não se mistura com os arquivos baixados.
@@ -112,18 +300,165 @@ export async function downloadKept(
   return target;
 }
 
+export type CacheKind = 'image' | 'video' | 'audio' | 'document';
+
+export interface CacheUsage {
+  byKind: Record<CacheKind, number>;
+  files: number;
+  /** Bytes dos anexos baixados (o teto é `MEDIA_CACHE_LIMIT`). */
+  total: number;
+  /** Bytes do cache de reprodução do expo-video; null = o módulo não respondeu. */
+  video: number | null;
+}
+
+// O nome guardado termina no nome original, então a extensão diz o tipo.
+const kindOf = (key: string): CacheKind => {
+  const k = fileKind(key);
+  return k === 'image' || k === 'video' || k === 'audio' ? k : 'document';
+};
+
+export async function cacheUsage(): Promise<CacheUsage> {
+  const byKind: Record<CacheKind, number> = { image: 0, video: 0, audio: 0, document: 0 };
+  let files = 0;
+  for (const s of stored()) {
+    if (s.key.endsWith('.part')) continue;
+    byKind[kindOf(s.key)] += s.file.size;
+    files++;
+  }
+  for (const d of SIDE_DIRS) {
+    const dir = new Directory(Paths.cache, d);
+    if (dir.exists) byKind.document += dir.size ?? 0;
+  }
+  let video: number | null = null;
+  try {
+    const { getCurrentVideoCacheSize } = await import('expo-video');
+    video = getCurrentVideoCacheSize();
+  } catch { /* sem o módulo nativo a linha mostra "—" */ }
+  return { byKind, files, total: byKind.image + byKind.video + byKind.audio + byKind.document, video };
+}
+
+/**
+ * Apaga as cópias baixadas e o cache de reprodução. Falha ao apagar arquivo é exceção. O cache do
+ * expo-video só se apaga sem nenhum player vivo: false = os arquivos saíram, ele ficou.
+ */
+export async function clearMediaCache(): Promise<boolean> {
+  for (const d of [MEDIA_DIR, ...SIDE_DIRS]) {
+    const dir = new Directory(Paths.cache, d);
+    if (dir.exists) dir.delete();
+  }
+  index.clearAll();
+  try {
+    const { clearVideoCacheAsync } = await import('expo-video');
+    await clearVideoCacheAsync();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const MIME: Record<string, string> = {
+  doc: 'application/msword', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  odt: 'application/vnd.oasis.opendocument.text', rtf: 'application/rtf',
+  xls: 'application/vnd.ms-excel', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  ods: 'application/vnd.oasis.opendocument.spreadsheet',
+  ppt: 'application/vnd.ms-powerpoint', pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  odp: 'application/vnd.oasis.opendocument.presentation',
+  csv: 'text/csv', tsv: 'text/tab-separated-values', txt: 'text/plain',
+  zip: 'application/zip', tar: 'application/x-tar', gz: 'application/gzip', tgz: 'application/gzip',
+  '7z': 'application/x-7z-compressed', rar: 'application/vnd.rar',
+  pdf: 'application/pdf', html: 'text/html', htm: 'text/html',
+  png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml',
+  avif: 'image/avif', bmp: 'image/bmp',
+  mp4: 'video/mp4', mov: 'video/quicktime', webm: 'video/webm', mkv: 'video/x-matroska', m4v: 'video/x-m4v', avi: 'video/x-msvideo',
+  mp3: 'audio/mpeg', wav: 'audio/wav', m4a: 'audio/mp4', ogg: 'audio/ogg', flac: 'audio/flac', aac: 'audio/aac',
+};
+
+// O iOS escolhe as ações da folha pelo tipo: sem ele um .docx não oferece o Pages nem "Salvar em Arquivos" com ícone certo.
+const UTI: Record<string, string> = {
+  doc: 'com.microsoft.word.doc', docx: 'org.openxmlformats.wordprocessingml.document',
+  xls: 'com.microsoft.excel.xls', xlsx: 'org.openxmlformats.spreadsheetml.sheet',
+  ppt: 'com.microsoft.powerpoint.ppt', pptx: 'org.openxmlformats.presentationml.presentation',
+  rtf: 'public.rtf', csv: 'public.comma-separated-values-text', tsv: 'public.tab-separated-values-text', txt: 'public.plain-text',
+  zip: 'public.zip-archive', gz: 'org.gnu.gnu-zip-archive', tgz: 'org.gnu.gnu-zip-archive', tar: 'public.tar-archive',
+  pdf: 'com.adobe.pdf', html: 'public.html', htm: 'public.html',
+  png: 'public.png', jpg: 'public.jpeg', jpeg: 'public.jpeg', gif: 'com.compuserve.gif', webp: 'org.webmproject.webp',
+  svg: 'public.svg-image', bmp: 'com.microsoft.bmp', avif: 'public.avif',
+  mp4: 'public.mpeg-4', mov: 'com.apple.quicktime-movie', m4v: 'com.apple.m4v-video', avi: 'public.avi',
+  mp3: 'public.mp3', wav: 'com.microsoft.waveform-audio', m4a: 'com.apple.m4a-audio', aac: 'public.aac-audio',
+};
+
+const extOf = (name: string) => name.split('.').pop()?.toLowerCase() ?? '';
+
+export function mimeType(name: string): string {
+  return MIME[extOf(name)] ?? '*/*';
+}
+
+/** O expo-sharing manda arquivo nos dois sistemas; o iOS traz "Salvar em Arquivos" na folha. */
+export const canShareFile = Platform.OS === 'ios' || Platform.OS === 'android';
+
+async function shareLocal(f: File, name: string): Promise<void> {
+  await Sharing.shareAsync(f.uri, { mimeType: mimeType(name), UTI: UTI[extOf(name)] ?? 'public.data', dialogTitle: name });
+}
+
+export async function shareFile(uri: string, headers: Record<string, string> | undefined, name: string, opts?: DownloadOptions): Promise<void> {
+  const f = await localCopy(uri, headers, name, opts);
+  await shareLocal(f, name);
+}
+
+/** Android: entrega a cópia ao app que lê o tipo ("Abrir com"). 'no-app' = nenhum abre; compartilhar continua valendo. */
+export async function openWith(uri: string, headers: Record<string, string> | undefined, name: string, opts?: DownloadOptions): Promise<'opened' | 'empty' | 'no-app'> {
+  const f = await localCopy(uri, headers, name, opts);
+  if (f.size === 0) return 'empty';
+  try {
+    await startActivityAsync('android.intent.action.VIEW', { data: f.contentUri, type: mimeType(name), flags: FLAG_GRANT_READ_URI_PERMISSION });
+  } catch (e) {
+    // Sem app que abra o tipo (zip, rar…): tentar de novo não resolve.
+    if (String(e instanceof Error ? e.message : e).includes('ActivityNotFoundException')) return 'no-app';
+    throw e;
+  }
+  return 'opened';
+}
+
+// Documento citado: o iOS entrega pela folha do sistema (Salvar em Arquivos, Abrir em…), que não diz
+// para onde o arquivo foi, então volta 'shared'; o Android abre no app que lê o tipo. 'empty' = o
+// servidor mandou 0 bytes e não há o que entregar.
+export async function deliverFile(uri: string, headers: Record<string, string> | undefined, name: string, opts?: DownloadOptions): Promise<'opened' | 'shared' | 'empty' | 'no-app'> {
+  if (Platform.OS !== 'ios') return openWith(uri, headers, name, opts);
+  const f = await localCopy(uri, headers, name, opts);
+  if (f.size === 0) return 'empty';
+  await shareLocal(f, name);
+  return 'shared';
+}
+
+// Arquivo já no aparelho (baixado na tela "Mídia e arquivos"): entrega sem rede.
+export async function deliverLocalFile(f: File, name: string): Promise<'opened' | 'shared' | 'empty' | 'no-app'> {
+  if (f.size === 0) return 'empty';
+  if (Platform.OS === 'ios') {
+    await shareLocal(f, name);
+    return 'shared';
+  }
+  try {
+    await startActivityAsync('android.intent.action.VIEW', { data: f.contentUri, type: mimeType(name), flags: FLAG_GRANT_READ_URI_PERMISSION });
+  } catch (e) {
+    // Sem app que abra o tipo (zip, rar…): tentar de novo não resolve.
+    if (String(e instanceof Error ? e.message : e).includes('ActivityNotFoundException')) return 'no-app';
+    throw e;
+  }
+  return 'opened';
+}
+
 export async function openPdfFile(uri: string, headers: Record<string, string> | undefined, name: string, isMounted: () => boolean): Promise<void> {
   let file: File;
   try {
-    file = await localCopy(uri, headers, name);
+    const cached = await localCopy(uri, headers, name);
     if (!isMounted()) return;
-    const dir = new Directory(Paths.cache, 'pdf-reader', file.name);
+    const dir = new Directory(Paths.cache, 'pdf-reader', cached.name);
     dir.create({ idempotent: true, intermediates: true });
-    const safeName = name.replace(/[^\w.-]/g, '_');
-    const filename = !safeName || safeName === '.' || safeName === '..' ? 'documento.pdf' : safeName;
-    const target = new File(dir, filename);
-    file.moveSync(target, { overwrite: true });
-    file = target;
+    const safe = safeName(name);
+    const filename = !safe || safe === '.' || safe === '..' ? 'documento.pdf' : safe;
+    file = new File(dir, filename);
+    // Cópia, não mover: a guardada continua servindo à próxima abertura.
+    cached.copySync(file, { overwrite: true });
   } catch (e) {
     throw new Error(m.native_pdf_download_failed({ reason: e instanceof Error ? e.message : String(e) }));
   }
@@ -138,66 +473,12 @@ export async function openPdfFile(uri: string, headers: Record<string, string> |
   }
 }
 
-// Só o iOS compartilha arquivo pelo Share do RN (o Android só manda texto): ali a folha do sistema
-// já traz "Salvar em Arquivos" e "Abrir em…", que é o baixar e o abrir fora do web.
-export const canShareFile = Platform.OS === 'ios';
-
-export async function shareFile(uri: string, headers: Record<string, string> | undefined, name: string): Promise<void> {
-  const f = await localCopy(uri, headers, name);
-  await Share.share({ url: f.uri });
-}
-
-const MIME: Record<string, string> = {
-  doc: 'application/msword', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  odt: 'application/vnd.oasis.opendocument.text', rtf: 'application/rtf',
-  xls: 'application/vnd.ms-excel', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  ods: 'application/vnd.oasis.opendocument.spreadsheet',
-  ppt: 'application/vnd.ms-powerpoint', pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-  odp: 'application/vnd.oasis.opendocument.presentation',
-  csv: 'text/csv', tsv: 'text/tab-separated-values', txt: 'text/plain',
-  zip: 'application/zip', tar: 'application/x-tar', gz: 'application/gzip', tgz: 'application/gzip',
-  '7z': 'application/x-7z-compressed', rar: 'application/vnd.rar',
-  // A tela "Mídia e arquivos" também entrega estes ao app do sistema depois de baixar.
-  pdf: 'application/pdf', html: 'text/html', htm: 'text/html',
-  mp3: 'audio/mpeg', m4a: 'audio/mp4', wav: 'audio/wav', ogg: 'audio/ogg', flac: 'audio/flac', aac: 'audio/aac',
-};
-
-export function mimeType(name: string): string {
-  return MIME[name.split('.').pop()?.toLowerCase() ?? ''] ?? '*/*';
-}
-
-// Documento citado: o iOS entrega pela folha do sistema (Salvar em Arquivos, Abrir em…); o Android não
-// compartilha arquivo pelo Share do RN, então abre direto no app que lê o tipo. 'empty' = o servidor
-// mandou 0 bytes e não há o que entregar.
-// iOS: a folha não diz para onde o arquivo foi (Copiar, Mail, Salvar em Arquivos), então volta 'shared'.
-// Android: 'opened' = entregue ao app que lê o tipo; a cópia fica só no cache, não foi baixada.
-export async function deliverFile(uri: string, headers: Record<string, string> | undefined, name: string): Promise<'opened' | 'shared' | 'empty' | 'cancelled' | 'no-app'> {
-  return deliverLocalFile(await localCopy(uri, headers, name), name);
-}
-
-// Arquivo já no aparelho (baixado na tela "Mídia e arquivos"): entrega sem rede.
-export async function deliverLocalFile(f: File, name: string): Promise<'opened' | 'shared' | 'empty' | 'cancelled' | 'no-app'> {
-  if (f.size === 0) return 'empty';
+// Imagem ou vídeo do visor: no iOS a folha já traz "Salvar imagem"/"Salvar vídeo"; no Android vai
+// direto para a galeria. Devolve true quando gravou na galeria (o iOS não sabe o que a pessoa escolheu).
+export async function saveImage(uri: string, headers: Record<string, string> | undefined, name: string, opts?: DownloadOptions): Promise<boolean> {
+  const f = await localCopy(uri, headers, name, opts);
   if (Platform.OS === 'ios') {
-    const r = await Share.share({ url: f.uri });
-    return r.action === Share.dismissedAction ? 'cancelled' : 'shared';
-  }
-  try {
-    await startActivityAsync('android.intent.action.VIEW', { data: f.contentUri, type: mimeType(name), flags: FLAG_GRANT_READ_URI_PERMISSION });
-  } catch (e) {
-    // Sem app que abra o tipo (zip, rar…): tentar de novo não resolve.
-    if (String(e instanceof Error ? e.message : e).includes('ActivityNotFoundException')) return 'no-app';
-    throw e;
-  }
-  return 'opened';
-}
-
-// Imagem do visor: no iOS a folha já traz "Salvar imagem"; no Android vai direto para a galeria.
-// Devolve true quando gravou na galeria (o iOS só abre a folha e não sabe o que a pessoa escolheu).
-export async function saveImage(uri: string, headers: Record<string, string> | undefined, name: string): Promise<boolean> {
-  const f = await localCopy(uri, headers, name);
-  if (Platform.OS === 'ios') {
-    await Share.share({ url: f.uri });
+    await shareLocal(f, name);
     return false;
   }
   // Carregado só aqui: é o único uso, e só no Android.
@@ -216,5 +497,5 @@ export async function shareTextFile(text: string, name: string): Promise<void> {
   dir.create({ idempotent: true, intermediates: true });
   const f = new File(dir, name);
   f.write(text);
-  await Share.share({ url: f.uri });
+  await shareLocal(f, name);
 }

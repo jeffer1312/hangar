@@ -1,11 +1,15 @@
 import { useEffect, useState } from 'react';
-import { Pressable, Text, View } from 'react-native';
+import { Platform, Pressable, Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
 import * as m from '../paraglide/messages';
 import { Icon } from '../ui/Icon';
 import { superficie } from '../theme/superficie';
 import { useVoiceAudioState } from '../features/voice/audioSession';
+import { DownloadRing } from '../features/attachments/DownloadRing';
+import { percentOf, useDownload } from '../features/attachments/useDownload';
+import { haptic } from '../ui/haptics';
+import { toast } from '../ui/Toast';
 
 const mmss = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 
@@ -72,6 +76,7 @@ export function AudioChip({ uri, headers, name, onRemove, disabled = false, meta
           <Text style={[styles.meta, { color: theme.tokens.text.muted }]} numberOfLines={1}>{meta}</Text>
         ) : null}
       </View>
+      {onRemove ? null : <AudioShare uri={uri} headers={headers} name={name} />}
       {onRemove ? (
         <Pressable onPress={() => { player.pause(); onRemove(); }} disabled={disabled} style={styles.btn}
           accessibilityRole="button" accessibilityLabel={`${m.board_remover_anexo()}: ${name}`}
@@ -80,6 +85,35 @@ export function AudioChip({ uri, headers, name, onRemove, disabled = false, meta
         </Pressable>
       ) : null}
     </View>
+  );
+}
+
+// Baixar e entregar pela folha do sistema (no iOS ela tem "Salvar em Arquivos"). Fica fora do rascunho
+// do Composer (`onRemove`): ali o áudio ainda é da pessoa e não foi enviado.
+function AudioShare({ uri, headers, name }: { uri: string; headers?: Record<string, string>; name: string }) {
+  const { theme } = useUnistyles();
+  const dl = useDownload();
+  const ios = Platform.OS === 'ios';
+  const share = () => {
+    if (dl.busy) return;
+    haptic.selection();
+    dl.run(async (o) => {
+      // Sob demanda, como no card de arquivo: a lista monta muitas bolhas.
+      const { shareFile } = await import('../features/attachments/mediaCache');
+      await shareFile(uri, headers, name, o);
+    }).catch((e: unknown) => {
+      if (e instanceof Error && e.name === 'AbortError') return;
+      // O toast já vibra.
+      const missing = /(status:?|HTTP) 404\b/.test(e instanceof Error ? e.message : String(e));
+      toast.erro(`${name}: ${missing ? m.file_card_missing() : m.file_card_failed()}`);
+    });
+  };
+  if (dl.busy) return <DownloadRing pct={percentOf(dl.progress)} onCancel={dl.cancel} label={m.file_card_cancel({ nome: name })} />;
+  return (
+    <Pressable onPress={share} style={styles.btn} accessibilityRole="button"
+      accessibilityLabel={ios ? m.anexos_baixar({ nome: name }) : m.anexos_compartilhar({ nome: name })}>
+      <Icon name={ios ? 'Download' : 'Share2'} size={16} color={theme.tokens.text.secondary} />
+    </Pressable>
   );
 }
 

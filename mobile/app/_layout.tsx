@@ -27,6 +27,7 @@ import { installNotificationHandler, pushRegistrationKey, registerExpoPush, retr
 import { getLocale } from '../src/paraglide/runtime';
 import { autoReportUnanswered, putAutoReportEm, registrarDiag } from '@hangar/core';
 import { dropLegacyPendingNews, loadArrivedNews, whatsNewHref } from '../src/features/updates/pending';
+import { configureVideoCache } from '../src/features/attachments/videoCache';
 
 configureCore();
 aplicarTemaSalvo();
@@ -83,6 +84,14 @@ export default function Layout() {
     apply();
     const subscription = Dimensions.addEventListener('change', ({ screen }) => apply(screen));
     return () => subscription.remove();
+  }, []);
+
+  // Teto do cache de reprodução de vídeo: o expo-video só aceita mudar antes de existir algum player.
+  useEffect(() => {
+    configureVideoCache()
+      .catch((e: unknown) => {
+        registrarDiag({ evento: 'video.cache_limit_failed', nivel: 'erro', codigo: 'video_cache_limit_failed', detalhe: e instanceof Error ? e.message : String(e) });
+      });
   }, []);
 
   useEffect(() => {

@@ -11,26 +11,46 @@ vi.mock('react-native', async (original) => {
   return { ...rn, Pressable: ({ accessibilityState, ...props }: ComponentProps<typeof rn.Pressable>) =>
     createElement(rn.Pressable, { ...props, 'aria-busy': accessibilityState?.busy }) };
 });
-const native = vi.hoisted(() => ({ download: vi.fn(), open: vi.fn(), move: vi.fn(), remove: vi.fn(), source: null as unknown }));
-vi.mock('expo-file-system', () => ({
-  Paths: { cache: 'file:///cache' },
-  Directory: class {
-    uri: string;
-    constructor(...parts: (string | { uri: string })[]) { this.uri = parts.map((p) => typeof p === 'string' ? p : p.uri).join('/'); }
-    create() {}
-  },
-  File: class {
-    static downloadFileAsync(uri: string, target: { uri: string }, options: unknown) {
-      return native.download(uri, { uri: target.uri }, options);
+const native = vi.hoisted(() => ({ download: vi.fn(), open: vi.fn(), move: vi.fn(), copy: vi.fn(), remove: vi.fn(), source: null as unknown, store: new Map<string, string>() }));
+vi.mock('expo-file-system', () => {
+  class File {
+    // O download da tarefa chama `native.download`, que o teste controla.
+    static createDownloadTask(uri: string, target: { uri: string }, options: { headers?: Record<string, string> }) {
+      return {
+        state: 'idle',
+        downloadAsync: async () => { await native.download(uri, { uri: target.uri }, { headers: options.headers }); return new File(target.uri); },
+        release: () => {},
+      };
     }
     exists = true;
+    size = 0;
+    modificationTime = 0;
     uri: string;
-    constructor(dir: { uri: string }, name: string) { this.uri = `${dir.uri}/${name}`; }
+    constructor(dir: { uri: string } | string, name?: string) { this.uri = name === undefined ? String(dir) : `${(dir as { uri: string }).uri}/${name}`; }
     get name() { return this.uri.split('/').pop()!; }
     get contentUri() { return this.uri.replace('file:///cache/', 'content://hangar/cache/'); }
     moveSync(target: { uri: string }) { native.move(this.uri, target.uri); this.uri = target.uri; }
+    copySync(target: { uri: string }) { native.copy(this.uri, target.uri); }
     delete() { native.remove(this.uri); }
-  },
+  }
+  return {
+    Paths: { cache: 'file:///cache' },
+    Directory: class {
+      uri: string;
+      constructor(...parts: (string | { uri: string })[]) { this.uri = parts.map((p) => typeof p === 'string' ? p : p.uri).join('/'); }
+      create() {}
+      exists = false;
+      list() { return []; }
+    },
+    File,
+    DownloadTask: { fromSavable: () => { throw new Error('unexpected resume'); } },
+  };
+});
+vi.mock('react-native-mmkv', () => ({
+  createMMKV: () => ({
+    getString: (k: string) => native.store.get(k), set: (k: string, v: string) => { native.store.set(k, v); },
+    remove: (k: string) => native.store.delete(k), getAllKeys: () => [...native.store.keys()], clearAll: () => native.store.clear(),
+  }),
 }));
 vi.mock('expo-intent-launcher', () => ({ startActivityAsync: native.open }));
 vi.mock('react-native-webview', () => ({ WebView: ({ source }: { source: unknown }) => {
@@ -56,8 +76,11 @@ beforeEach(() => {
   native.download.mockReset().mockResolvedValue(undefined);
   native.open.mockReset().mockResolvedValue({ resultCode: 0 });
   native.source = null;
+  native.store.clear();
+  // Sem rede: a conferência de um byte falha na hora e o download segue sem o tamanho.
+  vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Network request failed')));
 });
-afterEach(() => { Platform.OS = originalOS; });
+afterEach(() => { Platform.OS = originalOS; vi.unstubAllGlobals(); });
 
 const doc = { uri: 'https://a.test/api/sessions/s/uploads/manual.pdf', headers: { Authorization: 'Bearer token-a' }, name: 'manual.pdf', kind: 'pdf' as const };
 
@@ -114,7 +137,8 @@ describe('DocumentViewer PDF', () => {
     const { container, root } = render();
     try {
       const button = container.querySelector<HTMLButtonElement>('button[aria-label="native_pdf_open"]')!;
-      act(() => { button.click(); button.click(); });
+      // O download começa depois da conferência de um byte: espera ela assentar.
+      await act(async () => { button.click(); button.click(); });
       expect(native.download).toHaveBeenCalledTimes(1);
       expect(button.disabled).toBe(true);
       expect(native.open).not.toHaveBeenCalled();
@@ -133,7 +157,8 @@ describe('DocumentViewer PDF', () => {
       await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label="native_pdf_open"]')!.click());
       expect(native.open).toHaveBeenCalledTimes(1);
       expect(native.open.mock.calls[0][1].data.split('/').at(-1)).toBe(expected);
-      expect(native.move.mock.calls.at(-1)?.[1].split('/').at(-1)).toBe(expected);
+      // Copiada para o leitor: a guardada no cache continua para a próxima abertura.
+      expect(native.copy.mock.calls.at(-1)?.[1].split('/').at(-1)).toBe(expected);
     } finally { act(() => root.unmount()); }
   });
 
@@ -142,7 +167,7 @@ describe('DocumentViewer PDF', () => {
     native.download.mockImplementationOnce(() => new Promise<void>((resolve) => { finish = resolve; }));
     const { container, root } = render();
     try {
-      act(() => container.querySelector<HTMLButtonElement>('button[aria-label="native_pdf_open"]')!.click());
+      await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label="native_pdf_open"]')!.click());
       expect(native.download).toHaveBeenCalledTimes(1);
       act(() => root.render(action === 'close' ? createElement(DocumentViewer, { doc: null, onClose: vi.fn() }) : null));
       await act(async () => finish());
