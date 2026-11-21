@@ -193,15 +193,13 @@ impl Hangar {
         let kept: Vec<usize> = (0..items.len()).filter(|&i| filter.keeps(items[i].origin)).collect();
         let count = |s: Section| kept.iter().filter(|&&i| s.holds(&items[i])).count();
         let selected = Section::ALL.iter().position(|s| *s == section).unwrap_or(0);
-        let tabs = TabBar::new("media-sections").segmented().small().selected_index(selected)
-            .children(Section::ALL.map(|s| Tab::new().label(tr(s.label()).replace("{n}", &count(s).to_string()))))
+        let tabs = media_section_tabs(Section::ALL.map(count), selected)
             .on_click(cx.listener(|this, ix: &usize, _, cx| {
                 this.media_panel.section = Section::ALL[*ix];
                 this.redraw(Area::Side, cx);
             }));
-        let chips = div().flex().flex_wrap().gap(px(6.)).children(Filter::ALL.iter().enumerate().map(|(i, &chip)| {
-            let label = match chip { Filter::All => "media_filter_all", Filter::Agent => "media_filter_agent", Filter::User => "media_filter_user" };
-            Button::new(SharedString::from(format!("media-filter-{i}"))).outline().xsmall().rounded_full().selected(chip == filter).label(tr(label))
+        let chips = media_filter_row().children(Filter::ALL.iter().enumerate().map(|(i, &chip)| {
+            media_filter_chip(i, chip == filter)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     (this.media_panel.filter, this.media_panel.start, this.media_panel.shown) = (chip, 0, PAGE);
                     this.redraw(Area::Side, cx);
@@ -250,7 +248,7 @@ impl Hangar {
 
     /// Grade de 4 por linha, do dia mais recente para o mais antigo; a página seguinte só pelo botão.
     fn render_media_grid(&mut self, key: &SessionKey, items: &[Item], list: &[usize], width: f32, cx: &mut Context<Self>) -> AnyElement {
-        let side = ((width - PAD * 2. - GAP * (COLUMNS as f32 - 1.)) / COLUMNS as f32).floor().max(32.);
+        let side = media_cell_side(width - PAD * 2.);
         let newest: Vec<usize> = list.iter().rev().copied().collect();
         let shown = self.media_panel.shown.clamp(PAGE, MAX_SHOWN);
         let start = self.media_panel.start.min(newest.len().saturating_sub(1));
@@ -264,10 +262,10 @@ impl Hangar {
                 })))));
         for (day, members) in gallery::by_day(&days) {
             let title = day.map_or_else(|| tr("media_group_undated"), |day| gallery::day_text(gallery::day_name(day, today), true));
-            grid = grid.child(div().mt(px(12.)).mb(px(6.)).text_size(px(11.)).text_color(theme::faint()).child(title));
+            grid = grid.child(media_day_title(title));
             for row in members.chunks(COLUMNS) {
                 let cells: Vec<AnyElement> = row.iter().map(|&i| self.render_media_cell(key, i, &items[i], side, cx)).collect();
-                grid = grid.child(div().flex().gap(px(GAP)).mb(px(GAP)).children(cells));
+                grid = grid.child(media_grid_row(cells));
             }
         }
         let rest = newest.len().saturating_sub(start + shown);
@@ -287,25 +285,13 @@ impl Hangar {
             Some(MediaState::Image(picture)) => Some(picture.clone()),
             _ => None,
         });
-        let video = item.kind == Kind::Video;
         let (open_key, source) = (key.clone(), item.source.clone());
         let label = format!("{} · {}", item.name, gallery::origin_text(item.origin, false).unwrap_or_default());
-        div().id(SharedString::from(format!("media-cell-{i}"))).relative().size(px(side)).flex_shrink_0().rounded(px(6.)).overflow_hidden()
-            .bg(theme::inset()).cursor_pointer().focusable().tab_stop(true).role(Role::Button).aria_label(label)
-            .border_1().border_color(transparent_black()).focus_visible(|el| el.border_color(theme::accent_focus()))
+        media_cell(SharedString::from(format!("media-cell-{i}")), side, picture, item.kind == Kind::Video, item.name.clone(),
+            gallery::origin_text(item.origin, true))
+            .cursor_pointer().focusable().tab_stop(true).role(Role::Button).aria_label(label)
+            .focus_visible(|el| el.border_color(theme::accent_focus()))
             .on_click(cx.listener(move |this, _, window, cx| this.open_gallery(open_key.clone(), source.clone(), vec![source.clone()], 0, window, cx)))
-            .map(|el| match picture {
-                Some(picture) => el.child(img(picture).size_full().object_fit(ObjectFit::Cover)),
-                // Vídeo sem quadro: o nome no lugar da capa.
-                None if video => el.child(div().size_full().p_1().flex().items_end().child(div().w_full().truncate().text_size(px(9.))
-                    .text_color(theme::faint()).child(item.name.clone()))),
-                None => el,
-            })
-            .when(video, |el| el.child(div().absolute().inset_0().flex().items_center().justify_center()
-                .child(div().size(px(22.)).rounded_full().bg(theme::scrim()).flex().items_center().justify_center()
-                    .child(chrome::small_icon(IconName::Play, 11., theme::text())))))
-            .when_some(gallery::origin_text(item.origin, true), |el, who| el.child(div().absolute().top(px(4.)).left(px(4.))
-                .px(px(5.)).rounded(px(4.)).bg(theme::scrim()).text_size(px(9.)).text_color(theme::text()).child(who)))
             .into_any_element()
     }
 
@@ -403,6 +389,45 @@ impl Hangar {
                 .on_click(cx.listener(move |this, _, _, cx| this.keep_file(save_source.clone(), save_name.clone(), false, cx))))
             .into_any_element()
     }
+}
+
+// Partes da aba que a animação da novidade (`crate::news`) também desenha.
+
+/// Lado da miniatura para a grade de 4 por linha ocupar `inner` (a largura sem o respiro dos lados).
+pub(crate) fn media_cell_side(inner: f32) -> f32 { ((inner - GAP * (COLUMNS as f32 - 1.)) / COLUMNS as f32).floor().max(32.) }
+
+/// Mídia, Arquivos e Áudio, cada uma com a contagem.
+pub(crate) fn media_section_tabs(counts: [usize; 3], selected: usize) -> TabBar {
+    TabBar::new("media-sections").segmented().small().selected_index(selected)
+        .children(Section::ALL.iter().zip(counts).map(|(s, n)| Tab::new().label(tr(s.label()).replace("{n}", &n.to_string()))))
+}
+
+pub(crate) fn media_filter_row() -> Div { div().flex().flex_wrap().gap(px(6.)) }
+
+/// Chip `i` de Todos, Do agente e Seus.
+pub(crate) fn media_filter_chip(i: usize, on: bool) -> Button {
+    let label = match Filter::ALL[i] { Filter::All => "media_filter_all", Filter::Agent => "media_filter_agent", Filter::User => "media_filter_user" };
+    Button::new(SharedString::from(format!("media-filter-{i}"))).outline().xsmall().rounded_full().selected(on).label(tr(label))
+}
+
+pub(crate) fn media_day_title(title: String) -> Div { div().mt(px(12.)).mb(px(6.)).text_size(px(11.)).text_color(theme::faint()).child(title) }
+
+pub(crate) fn media_grid_row(cells: Vec<AnyElement>) -> Div { div().flex().gap(px(GAP)).mb(px(GAP)).children(cells) }
+
+/// Miniatura da grade: a imagem (ou a capa do vídeo), o ▶ do vídeo e o selo de quem mandou.
+pub(crate) fn media_cell(id: SharedString, side: f32, picture: Option<Arc<RenderImage>>, video: bool, name: String, who: Option<String>) -> Stateful<Div> {
+    div().id(id).relative().size(px(side)).flex_shrink_0().rounded(px(6.)).overflow_hidden()
+        .bg(theme::inset()).border_1().border_color(transparent_black())
+        .map(|el| match picture {
+            Some(picture) => el.child(img(picture).size_full().object_fit(ObjectFit::Cover)),
+            // Vídeo sem quadro: o nome no lugar da capa.
+            None if video => el.child(div().size_full().p_1().flex().items_end().child(div().w_full().truncate().text_size(px(9.))
+                .text_color(theme::faint()).child(name))),
+            None => el,
+        })
+        .when(video, |el| el.child(div().absolute().inset_0().flex().items_center().justify_center().child(super::viewer::play_badge(22., 11.))))
+        .when_some(who, |el, who| el.child(div().absolute().top(px(4.)).left(px(4.))
+            .px(px(5.)).rounded(px(4.)).bg(theme::scrim()).text_size(px(9.)).text_color(theme::text()).child(who)))
 }
 
 /// `/home/<usuário>/x` vira `~/x`, como a pasta da aba Arquivos.

@@ -1,4 +1,4 @@
-import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { memo, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { ActivityIndicator, FlatList, Pressable, StatusBar, Text, View, type AccessibilityActionEvent } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Image } from 'expo-image';
@@ -266,7 +266,7 @@ export function Lightbox({
   if (!visible) return null;
 
   const topo = (insets.top > 0 ? insets.top : (StatusBar.currentHeight ?? 24)) + theme.base.space[2];
-  const actions: { icon: IconName; label: string; a11y: string; onPress: () => void; busy?: boolean }[] = [
+  const actions: LightboxAction[] = [
     { icon: 'Download', label: m.gallery_save(), a11y: m.anexos_baixar({ nome: filename }), onPress: save, busy: saving },
     ...(canShareFile ? [{ icon: 'Share' as IconName, label: m.gallery_share(), a11y: m.gallery_share_named({ nome: filename }), onPress: share, busy: sharing }] : []),
     ...(onShowInChat ? [{ icon: 'MessageSquare' as IconName, label: m.gallery_in_chat(), a11y: m.gallery_in_chat(), onPress: onShowInChat }] : []),
@@ -343,19 +343,8 @@ export function Lightbox({
         )}
       </View>
       <Animated.View style={[styles.bottom, { paddingBottom: Math.max(insets.bottom, theme.base.space[4]) }, bottomStyle]}>
-        <View style={styles.caption}>
-          <Text style={styles.name} numberOfLines={1}>{filename}</Text>
-          {details ? <Text style={styles.details} numberOfLines={1}>{details}</Text> : null}
-        </View>
-        <View style={styles.actions}>
-          {actions.map((a) => (
-            <Pressable key={a.icon} onPress={a.onPress} disabled={a.busy} style={styles.action}
-              accessibilityRole="button" accessibilityLabel={a.a11y} accessibilityState={{ busy: !!a.busy }}>
-              {a.busy ? <ActivityIndicator size="small" color={theme.ink.onAccent} /> : <Icon name={a.icon} size={22} color={theme.ink.onAccent} />}
-              <Text style={styles.actionLabel} numberOfLines={1}>{a.label}</Text>
-            </Pressable>
-          ))}
-        </View>
+        <LightboxCaption filename={filename} details={details} />
+        <LightboxActions actions={actions} />
         {strip && strip.items.length > 1 ? <Strip items={strip.items} index={strip.index} onSelect={strip.onSelect} /> : null}
       </Animated.View>
     </View>
@@ -392,25 +381,64 @@ function Strip({ items, index, onSelect }: { items: LightboxStripItem[]; index: 
 }
 
 const StripThumb = memo(function StripThumb({ item, active, onPress }: { item: LightboxStripItem; active: boolean; onPress: () => void }) {
+  return (
+    <StripThumbFrame active={active} kind={item.kind} onPress={onPress}
+      label={item.kind === 'video' ? m.anexos_tocar({ nome: item.name }) : m.anexos_ver({ n: item.name })}>
+      <Image source={{ uri: item.uri, headers: item.headers }} style={styles.thumbImg} contentFit="cover" transition={100} />
+    </StripThumbFrame>
+  );
+});
+
+// Partes do visor que recebem só dados: a animação da novidade desenha as mesmas.
+
+export interface LightboxAction { icon: IconName; label: string; a11y: string; onPress: () => void; busy?: boolean }
+
+/** Nome e, embaixo, "tamanho · data · origem". */
+export function LightboxCaption({ filename, details }: { filename: string; details?: string }) {
+  return (
+    <View style={styles.caption}>
+      <Text style={styles.name} numberOfLines={1}>{filename}</Text>
+      {details ? <Text style={styles.details} numberOfLines={1}>{details}</Text> : null}
+    </View>
+  );
+}
+
+export function LightboxActions({ actions }: { actions: LightboxAction[] }) {
+  const { theme } = useUnistyles();
+  return (
+    <View style={styles.actions}>
+      {actions.map((a) => (
+        <Pressable key={a.icon} onPress={a.onPress} disabled={a.busy} style={styles.action}
+          accessibilityRole="button" accessibilityLabel={a.a11y} accessibilityState={{ busy: !!a.busy }}>
+          {a.busy ? <ActivityIndicator size="small" color={theme.ink.onAccent} /> : <Icon name={a.icon} size={22} color={theme.ink.onAccent} />}
+          <Text style={styles.actionLabel} numberOfLines={1}>{a.label}</Text>
+        </Pressable>
+      ))}
+    </View>
+  );
+}
+
+/** Miniatura da faixa: `children` é a imagem; o vídeo mostra o ▶ no lugar. */
+export function StripThumbFrame({ active, kind, onPress, label, children }: {
+  active: boolean; kind: 'image' | 'video'; onPress?: () => void; label?: string; children?: ReactNode;
+}) {
   const { theme } = useUnistyles();
   return (
     <Pressable
       onPress={onPress}
       style={[styles.thumb, { borderColor: active ? theme.tokens.accent.base : 'transparent', opacity: active ? 1 : 0.55 }]}
-      accessibilityRole="button"
-      accessibilityState={{ selected: active }}
-      accessibilityLabel={item.kind === 'video' ? m.anexos_tocar({ nome: item.name }) : m.anexos_ver({ n: item.name })}
+      accessibilityRole={onPress ? 'button' : undefined}
+      accessibilityState={onPress ? { selected: active } : undefined}
+      accessibilityLabel={label}
     >
-      {item.kind === 'image' ? (
-        <Image source={{ uri: item.uri, headers: item.headers }} style={styles.thumbImg} contentFit="cover" transition={100} />
-      ) : (
+      {kind === 'image' ? children : (
         <View style={[styles.thumbImg, styles.thumbVideo]}>
           <Icon name="Play" size={14} color={theme.ink.onAccent} />
         </View>
       )}
     </Pressable>
   );
-});
+}
 
 // Vídeo toca no WebView (o player nativo do sistema dentro dele): o app não tem expo-video. O do
 // servidor vai pro cache antes, porque o player pede o arquivo aos pedaços sem o header do token.

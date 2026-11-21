@@ -566,8 +566,7 @@ impl Viewer {
         div().id("viewer-video").relative().size_full()
             .when_some(poster, |el, poster| el.child(img(poster).absolute().inset_0().size_full().object_fit(ObjectFit::Contain)))
             .child(div().absolute().inset_0().flex().flex_col().items_center().justify_center().gap_3()
-                .child(div().size(px(56.)).rounded_full().bg(theme::scrim()).flex().items_center().justify_center()
-                    .child(chrome::small_icon(IconName::Play, 24., theme::text())))
+                .child(play_badge(56., 24.))
                 .child(div().max_w(px(VIDEO_W - 48.)).px_3().py_1().rounded_md().bg(theme::scrim()).truncate().text_sm().text_color(theme::text())
                     .child(self.item().name.clone()))
                 .when(openable, |el| el.child(Button::new("viewer-video-open").primary().small().icon(IconName::ExternalLink)
@@ -578,12 +577,7 @@ impl Viewer {
     /// Faixa embaixo do palco: as vizinhas da aberta que cabem na largura `width`, com o dia quando muda. Miniaturas do
     /// cache da conversa.
     fn render_strip(&self, width: f32, cx: &mut Context<Self>) -> AnyElement {
-        let total = self.items.len();
-        // Uma vaga fica para os separadores de dia: a aberta não pode cair fora do recorte.
-        let fit = (((width + 8.) / (THUMB_W + 8.)).floor() as usize).saturating_sub(1).max(1);
-        let span = (fit.saturating_sub(1) / 2).min(STRIP_SIDE) * 2 + 1;
-        let start = self.index.saturating_sub(span / 2).min(total.saturating_sub(span));
-        let end = (start + span).min(total);
+        let (start, end) = strip_window(width, THUMB_W, self.items.len(), self.index);
         let (key, shown) = (&self.key, &self.items[start..end]);
         let pictures: Vec<Option<Arc<RenderImage>>> = match self.hangar.upgrade() {
             Some(hangar) => hangar.update(cx, |hangar, _| {
@@ -598,29 +592,22 @@ impl Viewer {
             None => vec![None; shown.len()],
         };
         let today = chrono::Local::now().date_naive();
-        let mut row = div().id("viewer-strip").flex().items_center().gap_2().overflow_hidden();
+        let mut row = strip_row("viewer-strip");
         let mut last_day = (start > 0).then(|| gallery::day_of(self.items[start - 1].ts)).flatten();
         for i in start..end {
             let item = &self.items[i];
             let day = gallery::day_of(item.ts);
             if let Some(day) = day && Some(day) != last_day {
-                row = row.child(div().flex_shrink_0().px_1().text_size(px(11.)).text_color(theme::muted())
-                    .child(gallery::day_text(gallery::day_name(day, today), false)));
+                row = row.child(strip_day(gallery::day_text(gallery::day_name(day, today), false)));
             }
             last_day = day.or(last_day);
             let picture = pictures[i - start].clone();
             let on = i == self.index;
-            row = row.child(div().id(SharedString::from(format!("viewer-strip-{i}"))).relative().flex_shrink_0().w(px(THUMB_W)).h(px(THUMB_H))
-                .rounded(px(6.)).overflow_hidden().bg(theme::inset()).border_2().cursor_pointer()
-                .border_color(if on { theme::accent() } else { transparent_black() }).when(!on, |el| el.opacity(0.55))
-                .role(Role::Button).aria_selected(on).aria_label(item.name.clone())
-                .on_click(cx.listener(move |this, _, window, cx| this.go(i, window, cx)))
-                .when_some(picture, |el, picture| el.child(img(picture).size_full().object_fit(ObjectFit::Cover)))
-                .when(item.kind == Kind::Video, |el| el.child(div().absolute().inset_0().flex().items_center().justify_center()
-                    .child(div().size(px(22.)).rounded_full().bg(theme::scrim()).flex().items_center().justify_center()
-                        .child(chrome::small_icon(IconName::Play, 11., theme::text()))))));
+            row = row.child(strip_thumb(SharedString::from(format!("viewer-strip-{i}")), (THUMB_W, THUMB_H), picture, on, item.kind == Kind::Video)
+                .cursor_pointer().role(Role::Button).aria_selected(on).aria_label(item.name.clone())
+                .on_click(cx.listener(move |this, _, window, cx| this.go(i, window, cx))));
         }
-        div().pt_1().border_t_1().border_color(theme::border()).child(row.pt_2()).into_any_element()
+        strip_frame(row).into_any_element()
     }
 
     fn zoom_at(&mut self, anchor: Option<(f32, f32)>, factor: f32, cx: &mut Context<Self>) {
@@ -691,10 +678,8 @@ impl Render for Viewer {
         let in_chat = self.item().event.is_some();
 
         let header = div().flex().items_center().gap_2().pr(px(36.)).h(px(28. + HEADER_EXTRA))
-            .child(div().flex_1().min_w_0().flex().flex_col()
-                .child(div().truncate().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(theme::text()).child(self.item().name.clone()))
-                .when(!detail.is_empty(), |el| el.child(div().truncate().text_xs().text_color(theme::muted()).child(detail))))
-            .when(total > 1 || self.in_conversation, |el| el.child(div().flex_shrink_0().text_xs().text_color(theme::muted()).child(counter)))
+            .child(viewer_title(self.item().name.clone(), detail))
+            .when(total > 1 || self.in_conversation, |el| el.child(viewer_counter(counter)))
             .child(div().flex().items_center().gap_1()
                 .child(Button::new("viewer-zoom-out").ghost().small().icon(IconName::Minus).tooltip(tr("viewer_zoom_out")).disabled(!has_image)
                     .on_click(cx.listener(|this, _, _, cx| this.zoom_at(None, 1. / STEP, cx))))
@@ -715,8 +700,7 @@ impl Render for Viewer {
                     this.finish_note(cx);
                     if this.marks.is_empty() { this.keep(false, cx) } else { this.save_burned(window, cx) }
                 })))
-            .when(in_chat, |el| el.child(Button::new("viewer-show-in-chat").ghost().small().icon(IconName::MessageSquare)
-                .label(tr("viewer_show_in_chat"))
+            .when(in_chat, |el| el.child(show_in_chat_button()
                 .on_click(cx.listener(|this, _, window, cx| this.show_in_conversation(window, cx)))));
 
         let tools = self.pen.then(|| {
@@ -798,7 +782,7 @@ impl Render for Viewer {
                 .child(div().rounded_md().bg(theme::scrim()).child(Button::new(id).ghost().icon(icon).tooltip(label)
                     .on_click(cx.listener(move |this: &mut Self, _, window, cx| this.step(forward, window, cx)))))
         };
-        let stage = div().id("viewer-stage").relative().w(px(stage_w)).h(px(stage_h)).overflow_hidden().rounded_md().bg(theme::inset())
+        let stage = viewer_stage(stage_w, stage_h)
             .when(self.pen, |el| el.cursor(CursorStyle::Crosshair))
             .when(zoomed && !self.pen, |el| el.cursor(if self.drag.is_some() { CursorStyle::ClosedHand } else { CursorStyle::OpenHand }))
             .on_scroll(cx.listener(|this, event: &ScrollEvent, window, cx| {
@@ -867,6 +851,59 @@ impl Render for Viewer {
         div().id("viewer").track_focus(&self.focus).key_context("Viewer").on_key_down(cx.listener(Self::on_key))
             .flex().flex_col().gap_3().child(header).children(tools).child(stage).children(strip)
     }
+}
+
+// Partes do visor que a animação da novidade (`crate::news`) também desenha.
+
+/// Largura e altura da miniatura da faixa.
+pub(crate) const STRIP_THUMB: (f32, f32) = (THUMB_W, THUMB_H);
+
+/// Recorte da faixa: as vizinhas de `index` que cabem em `width` com miniaturas de `thumb_w`, a aberta no meio.
+pub(crate) fn strip_window(width: f32, thumb_w: f32, total: usize, index: usize) -> (usize, usize) {
+    // Uma vaga fica para os separadores de dia: a aberta não pode cair fora do recorte.
+    let fit = (((width + 8.) / (thumb_w + 8.)).floor() as usize).saturating_sub(1).max(1);
+    let span = (fit.saturating_sub(1) / 2).min(STRIP_SIDE) * 2 + 1;
+    let start = index.saturating_sub(span / 2).min(total.saturating_sub(span));
+    (start, (start + span).min(total))
+}
+
+pub(crate) fn strip_row(id: &'static str) -> Stateful<Div> { div().id(id).flex().items_center().gap_2().overflow_hidden() }
+
+pub(crate) fn strip_frame(row: Stateful<Div>) -> Div { div().pt_1().border_t_1().border_color(theme::border()).child(row.pt_2()) }
+
+/// O dia, na faixa, quando ele muda.
+pub(crate) fn strip_day(text: String) -> Div { div().flex_shrink_0().px_1().text_size(px(11.)).text_color(theme::muted()).child(text) }
+
+/// Miniatura da faixa: a aberta com a borda acesa, as outras apagadas.
+pub(crate) fn strip_thumb(id: SharedString, (w, h): (f32, f32), picture: Option<Arc<RenderImage>>, on: bool, video: bool) -> Stateful<Div> {
+    div().id(id).relative().flex_shrink_0().w(px(w)).h(px(h))
+        .rounded(px(6.)).overflow_hidden().bg(theme::inset()).border_2()
+        .border_color(if on { theme::accent() } else { transparent_black() }).when(!on, |el| el.opacity(0.55))
+        .when_some(picture, |el, picture| el.child(img(picture).size_full().object_fit(ObjectFit::Cover)))
+        .when(video, |el| el.child(div().absolute().inset_0().flex().items_center().justify_center().child(play_badge(22., 11.))))
+}
+
+/// O círculo com o ▶ por cima do vídeo.
+pub(crate) fn play_badge(size: f32, icon: f32) -> Div {
+    div().size(px(size)).rounded_full().bg(theme::scrim()).flex().items_center().justify_center()
+        .child(chrome::small_icon(IconName::Play, icon, theme::text()))
+}
+
+/// Nome e, embaixo, "tamanho · data · de quem".
+pub(crate) fn viewer_title(name: String, detail: String) -> Div {
+    div().flex_1().min_w_0().flex().flex_col()
+        .child(div().truncate().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(theme::text()).child(name))
+        .when(!detail.is_empty(), |el| el.child(div().truncate().text_xs().text_color(theme::muted()).child(detail)))
+}
+
+pub(crate) fn viewer_counter(text: String) -> Div { div().flex_shrink_0().text_xs().text_color(theme::muted()).child(text) }
+
+pub(crate) fn show_in_chat_button() -> Button {
+    Button::new("viewer-show-in-chat").ghost().small().icon(IconName::MessageSquare).label(tr("viewer_show_in_chat"))
+}
+
+pub(crate) fn viewer_stage(w: f32, h: f32) -> Stateful<Div> {
+    div().id("viewer-stage").relative().w(px(w)).h(px(h)).overflow_hidden().rounded_md().bg(theme::inset())
 }
 
 impl Hangar {

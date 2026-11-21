@@ -1845,7 +1845,7 @@ impl Hangar {
         div().id("side-tabs").role(Role::TabList).aria_label(tr("side_tabs")).flex_1().h_full().min_w_0().flex().gap(px(2.)).overflow_hidden()
             .child(tab("side-tab-context", if orq { tr_shared("orq_tab_title", &[]) } else { tr("side_context") }, SideTab::Context, None, cx))
             .when(readable, |el| el.child(tab("side-tab-files", web("arq_aba"), SideTab::Files, None, cx)))
-            .when(readable && !self.open_read_only(), |el| el.child(tab("side-tab-media", tr("media_tab"), SideTab::Media, None, cx)))
+            .when(readable && !self.open_read_only(), |el| el.child(popup::anchor(tab("side-tab-media", tr("media_tab"), SideTab::Media, None, cx), crate::tour::anchors::SIDE_MEDIA)))
             .when(review, |el| { let badge = self.work_review_tab_badge(cx);
                 el.child(popup::anchor(tab("side-tab-review", tr_shared("work_review_tab", &[]), SideTab::Review, badge, cx), crate::tour::anchors::SIDE_REVIEW)) })
             .when(self.has_activity(), |el| el.child(tab("side-tab-activity", self.background_label(), SideTab::Activity, None, cx)))

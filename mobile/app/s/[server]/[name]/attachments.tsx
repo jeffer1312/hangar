@@ -13,7 +13,7 @@ import { chatJumpRoute, requestChatJump } from '../../../../src/stores/chatJump'
 import { superficie } from '../../../../src/theme/superficie';
 import { DocumentViewer, type DocumentItem } from '../../../../src/features/attachments/DocumentViewer';
 import { GalleryViewer, mediaDayTitle, type GalleryEntry } from '../../../../src/features/attachments/gallery';
-import { AudioRow, FileRow, MediaCell, type MediaFileItem } from '../../../../src/features/attachments/MediaFiles';
+import { AudioRow, FileRow, MediaCell, MediaTabs, OriginChips, type MediaFileItem } from '../../../../src/features/attachments/MediaFiles';
 import { attachmentExpiry, attachmentHeaders, attachmentMtime, attachmentName, attachmentSize, attachmentThumbUri, attachmentUri, type AttachmentMeta } from '../../../../src/features/attachments/attachmentUrls';
 import { citedMeta } from '../../../../src/features/attachments/useAttachmentMeta';
 import { DictationError, dictateUpload } from '../../../../src/features/ditado/dictationRun';
@@ -225,17 +225,6 @@ export default function AttachmentsSheet() {
     );
   }
 
-  const tabs: { id: Tab; label: string }[] = [
-    { id: 'media', label: m.media_tab_media({ n: counts.media }) },
-    { id: 'files', label: m.media_tab_files({ n: counts.files }) },
-    { id: 'audio', label: m.media_tab_audio({ n: counts.audio }) },
-  ];
-  const chips: { id: OriginFilter; label: string }[] = [
-    { id: 'all', label: m.media_filter_all() },
-    { id: 'agent', label: m.media_filter_agent() },
-    { id: 'user', label: m.media_filter_user() },
-  ];
-
   const body = loading ? (
     <View style={styles.center}>
       <ActivityIndicator color={theme.tokens.text.secondary} />
@@ -283,25 +272,8 @@ export default function AttachmentsSheet() {
         {m.media_title()}
         {all.length ? <Text style={[styles.count, { color: theme.tokens.text.secondary, backgroundColor: superficie(theme, 0.8) }]}> {all.length}</Text> : null}
       </Text>
-      <View style={[styles.seg, { backgroundColor: superficie(theme, 0.8) }]} accessibilityRole="tablist">
-        {tabs.map((t) => (
-          <Pressable key={t.id} onPress={() => { haptic.selection(); setOpenKey(null); setTab(t.id); }}
-            style={[styles.segItem, tab === t.id && { backgroundColor: theme.tokens.bg.elevated }]}
-            accessibilityRole="tab" accessibilityState={{ selected: tab === t.id }}>
-            <Text style={[styles.segTxt, { color: tab === t.id ? theme.tokens.text.primary : theme.tokens.text.secondary }]} numberOfLines={1}>{t.label}</Text>
-          </Pressable>
-        ))}
-      </View>
-      <View style={styles.chips}>
-        {chips.map((c) => (
-          <Pressable key={c.id} onPress={() => { haptic.selection(); setOpenKey(null); setFilter(c.id); }} hitSlop={6}
-            style={[styles.chip, { borderColor: filter === c.id ? theme.tokens.accent.base : theme.tokens.border.subtle },
-              filter === c.id && { backgroundColor: theme.tokens.accent.dim }]}
-            accessibilityRole="button" accessibilityState={{ selected: filter === c.id }}>
-            <Text style={[styles.chipTxt, { color: filter === c.id ? theme.tokens.text.primary : theme.tokens.text.secondary }]}>{c.label}</Text>
-          </Pressable>
-        ))}
-      </View>
+      <MediaTabs counts={counts} selected={tab} onSelect={(t) => { haptic.selection(); setOpenKey(null); setTab(t); }} />
+      <OriginChips selected={filter} onSelect={(f) => { haptic.selection(); setOpenKey(null); setFilter(f); }} />
       <View style={styles.body}>{body}</View>
 
       {openKey !== null ? (
@@ -335,38 +307,6 @@ const styles = StyleSheet.create((theme) => ({
     paddingVertical: theme.base.space[0.5],
     borderRadius: theme.base.radius.full,
     overflow: 'hidden',
-  },
-  seg: {
-    flexDirection: 'row',
-    padding: theme.base.space[0.5],
-    borderRadius: theme.base.radius.sm,
-    gap: theme.base.space[0.5],
-  },
-  segItem: {
-    flex: 1,
-    minHeight: 44,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: theme.base.radius.sm,
-  },
-  segTxt: {
-    fontSize: theme.base.text.xs,
-    fontWeight: theme.base.weight.medium,
-    fontVariant: ['tabular-nums'],
-  },
-  chips: {
-    flexDirection: 'row',
-    gap: theme.base.space[2],
-  },
-  chip: {
-    minHeight: 32,
-    justifyContent: 'center',
-    paddingHorizontal: theme.base.space[3],
-    borderRadius: theme.base.radius.full,
-    borderWidth: 1,
-  },
-  chipTxt: {
-    fontSize: theme.base.text.xs,
   },
   body: {
     flex: 1,
