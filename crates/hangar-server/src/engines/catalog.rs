@@ -14,10 +14,19 @@ static CACHE: LazyLock<Mutex<Cache>> = LazyLock::new(|| Mutex::new(HashMap::new(
 pub fn supports_fast(service: &AccountService, engine: &str, model: Option<&str>) -> bool {
     allows_fast(FastSupport::read(service, engine).as_ref(), model)
 }
+/// A recusa da criação, da reabertura e da troca quando [`supports_ultrafast`] diz não.
+pub const ULTRAFAST_REFUSED: &str = "Ultra Fast exige conta ChatGPT Pro ou Pro Max fixa no CLIProxyAPI local";
+/// Ultra Fast: o modelo aceita Fast e a conta fixa da sessão pode pedir Ultra Fast. Sem conta fixa o proxy
+/// escolhe a conta, e uma Plus receberia o pedido.
+pub fn supports_ultrafast(service: &AccountService, engine: &str, model: Option<&str>, account: Option<&str>) -> bool {
+    account.is_some_and(|account| supports_fast(service, engine, model) && proxy::ultrafast(service, account))
+}
 /// O motor salvo e o "CLIProxy local" valem para todos os modelos: lidos uma vez por consulta.
 struct FastSupport {
     saved_model: String,
     local: bool,
+    /// `fast: false` no motor tira a opção do seletor; ausente vale ligado.
+    enabled: bool,
 }
 impl FastSupport {
     fn read(service: &AccountService, engine: &str) -> Option<Self> {
@@ -26,6 +35,7 @@ impl FastSupport {
         Some(Self {
             saved_model: saved["model"].as_str().unwrap_or("").to_owned(),
             local: proxy::is_local(&service.env, saved["base_url"].as_str().unwrap_or("")).unwrap_or(false),
+            enabled: saved["fast"] != false,
         })
     }
 }
@@ -43,6 +53,7 @@ fn allows_fast(support: Option<&FastSupport>, model: Option<&str>) -> bool {
         .strip_prefix("gpt-")
         .is_some_and(|s| s.starts_with(|c: char| c.is_ascii_digit()))
         && support.local
+        && support.enabled
 }
 pub fn invalidate(env: &crate::accounts::environment::AccountEnvironment, engine: &str) {
     CACHE
@@ -153,7 +164,12 @@ pub async fn models(
         })
         .collect())
 }
-pub fn picker(service: &AccountService, engine: &str, models: Vec<Value>) -> Vec<Value> {
+pub fn picker(service: &AccountService, engine: &str, account: Option<&str>, models: Vec<Value>) -> Vec<Value> {
     let fast = FastSupport::read(service, engine);
-    models.into_iter().map(|model|json!({"id":model["id"],"context_length":model["context_length"],"vision":model["vision"],"supports_fast":allows_fast(fast.as_ref(),model["id"].as_str())})).collect()
+    // Plano e regra valem para a conta inteira: lidos uma vez.
+    let ultrafast = account.is_some_and(|account| proxy::ultrafast(service, account));
+    models.into_iter().map(|model| {
+        let supports_fast = allows_fast(fast.as_ref(), model["id"].as_str());
+        json!({"id":model["id"],"context_length":model["context_length"],"vision":model["vision"],"supports_fast":supports_fast,"supports_ultrafast":supports_fast && ultrafast})
+    }).collect()
 }

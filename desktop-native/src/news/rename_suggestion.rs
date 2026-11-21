@@ -65,7 +65,7 @@ pub(super) fn render(started: Instant, width: Pixels, window: &mut Window, cx: &
     let suggestion = tr_shared("news_rename_sample_name", &[]);
     let name = if renamed { suggestion.clone() } else { tr_shared("news_rename_sample_generic", &[]) };
     let avatar = chrome::session_avatar(&chrome::AvatarLook::new("claude", None, "idle", false), 20., None);
-    let tab = app::tab_frame(true, false, false).when(compact, |el| el.w(px(f32::from(width) - 2. * pad)))
+    let tab = app::tab_frame(true, false, false, false).when(compact, |el| el.w(px(f32::from(width) - 2. * pad)))
         .child(avatar).child(app::tab_title(name, None, false, false, None, None));
     let stage = div().id("news-rename-suggestion").w(width).p(px(pad)).rounded(px(9.)).border_1().border_color(theme::border().alpha(0.06))
         .bg(linear_gradient(180., linear_color_stop(theme::chrome(), 0.), linear_color_stop(theme::background(), 1.)))

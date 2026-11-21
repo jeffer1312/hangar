@@ -32,22 +32,12 @@ struct ModelsBody {
 /// `access.api-keys` no formato novo, senão `api-keys` na raiz (no novo, a raiz é dos provedores).
 /// Mesma ordem do `computer_control._cliproxy_keys`.
 pub(crate) fn cliproxy_keys(home: &Path) -> Vec<String> {
-    let path = home.join(".cli-proxy-api").join("config.yaml");
-    let text = match std::fs::read_to_string(&path) {
-        Ok(text) => text,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
-        Err(e) => { log(format!("cliproxy config unreadable kind={:?}", e.kind())); return Vec::new() }
-    };
-    let config = match serde_saphyr::from_str::<Value>(&text) {
-        Ok(config) => config,
-        Err(_) => { log("cliproxy config is not valid yaml"); return Vec::new() }
-    };
-    // Chave sem aspas só de dígitos vira número no YAML: continua sendo chave.
-    let as_key = |v: &Value| v.as_str().map(str::to_string).or_else(|| v.is_number().then(|| v.to_string()));
-    [&config["access"]["api-keys"], &config["api-keys"]].into_iter()
-        .map(|list| list.as_array().into_iter().flatten().filter_map(as_key).map(|k| k.trim().to_string())
-            .filter(|k| !k.is_empty()).collect::<Vec<_>>())
-        .find(|keys| !keys.is_empty()).unwrap_or_default()
+    use hangar_cliproxy_setup::config::{read, ReadError};
+    match read(home) {
+        Ok(config) => config.map(|c| c.client_keys).unwrap_or_default(),
+        Err(ReadError::Io(e)) => { log(format!("cliproxy config unreadable kind={:?}", e.kind())); Vec::new() }
+        Err(ReadError::InvalidYaml) => { log("cliproxy config is not valid yaml"); Vec::new() }
+    }
 }
 
 /// Endereço e chave salvos, pela regra do Python: o `jev_aux_*` assim que algum existe, senão o

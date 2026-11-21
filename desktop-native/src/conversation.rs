@@ -649,7 +649,7 @@ pub fn family(name: Option<&str>) -> Family {
         "Grep" | "Glob" | "WebSearch" | "WebFetch" | "ToolSearch" => Family::Search,
         "Edit" | "MultiEdit" | "NotebookEdit" => Family::Edit,
         "Write" => Family::Create,
-        "Bash" | "PowerShell" | "exec" | "exec_command" => Family::Run,
+        "Bash" | "PowerShell" | "exec" | "exec_command" | "REPL" => Family::Run,
         _ => Family::Other,
     }
 }
@@ -701,6 +701,11 @@ pub fn summarize_input(name: Option<&str>, input: Option<&Map<String, Value>>) -
     let found = match name.unwrap_or("") {
         "Read" | "Write" | "Edit" | "MultiEdit" | "NotebookEdit" => first(&["file_path", "path", "notebook_path"]),
         "Bash" | "BashOutput" | "PowerShell" => first(&["command"]),
+        // Script do Code Mode: a descrição; sem ela, a primeira linha do código.
+        "REPL" => match text("description") {
+            d if d.is_empty() => text("code").lines().next().unwrap_or_default().to_owned(),
+            d => d,
+        },
         "exec" | "exec_command" | "write_stdin" => first(&["command", "cmd", "code"]),
         "Grep" | "Glob" => {
             let pattern = text("pattern");

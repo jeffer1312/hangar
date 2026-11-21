@@ -749,7 +749,7 @@ where H: axum::handler::Handler<T, Arc<AppState>>, T: 'static {
         .route("/api/sessions/{name}/notice/fix/preview", axum::routing::post(crate::notice_actions::preview))
         .route("/api/sessions/{name}/notice/fix", axum::routing::post(crate::notice_actions::start))
         .route("/api/sessions/{name}/conta", get(crate::session_write::account::targets_route).fallback(fallback.clone()))
-        .route("/api/sessions/{name}/conta", axum::routing::post(crate::session_write::account::switch_route))
+        .route("/api/sessions/{name}/conta", axum::routing::post(crate::session_write::account::switch_route).delete(crate::session_write::handoff::cancel_route))
         .route("/api/sessions/{name}/btw", axum::routing::post(crate::session_write::btw::ask).get(crate::session_write::btw::list).fallback(fallback.clone()))
         // Painel da fila. `reorder` é caminho fixo: o DELETE e o PATCH dele valem como os de um id de mesmo nome.
         .route("/api/sessions/{name}/queue/reorder", axum::routing::post(crate::session_write::control::queue_reorder)
@@ -1006,6 +1006,7 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/news", get(crate::docs_routes::news))
         .route("/api/manual", get(crate::docs_routes::manual))
         .route("/api/claude/defaults", axum::routing::post(crate::claude_defaults::save).fallback(pass_registered))
+        .route("/api/claude/code-mode", get(crate::claude_defaults::code_mode).fallback(pass_registered))
         .route("/api/session-defaults", axum::routing::get(crate::session_defaults::handle).put(crate::session_defaults::handle))
         // O que já foi visto do tour do nativo: só o dono, nunca repassado (o Python não tem a rota).
         .merge(crate::scheduled_tasks::router())
@@ -1693,6 +1694,9 @@ pub(crate) async fn history(
     tracing::debug!(session = %name, req = %diag_req(&req), "history");
     let inm = req.headers().get(header::IF_NONE_MATCH).and_then(|v| v.to_str().ok()).map(str::to_owned);
     let log_name = name.clone();
+    // Conversa que veio de outro agente: o divisor marca onde o Codex assumiu.
+    let handoff_home = (hreq.provider == crate::transcript::Provider::Codex)
+        .then(|| st.state.runtime.get().map(|runtime| runtime.codex_environment().home)).flatten();
     let done = tokio::task::spawn_blocking(move || -> std::io::Result<(Option<String>, Option<Vec<u8>>)> {
         let etag = history_etag(&hreq);
         if etag.is_some() && etag == inm {
@@ -1700,7 +1704,12 @@ pub(crate) async fn history(
         }
         let before = SKIPPED_LINES.load(Ordering::Relaxed);
         // Já vem com o corte `evs[-limit:]` da rota (Task 9).
-        let evs = merged_history_with_notices(&hreq)?;
+        let mut evs = merged_history_with_notices(&hreq)?;
+        let mut etag = etag;
+        // O ETag não cobre o registro da troca: lido antes de a troca concluir, a resposta não vira cache.
+        if let Some(home) = &handoff_home && !crate::speech::history::transfer_history::insert_handoff_divider(home, &log_name, &hreq.jsonl, &mut evs) {
+            etag = None;
+        }
         tail::log_skipped(&log_name, before);
         Ok((etag, Some(serde_json::to_vec(&evs)?)))
     })

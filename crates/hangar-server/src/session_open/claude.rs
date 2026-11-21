@@ -11,9 +11,12 @@ use serde_json::{Map, Value, json};
 use super::terminal::{PaneSpec, TerminalEnv};
 use super::{Account, SessionSpec};
 
+/// Variável do Code Mode experimental do Claude Code: valor `1` liga.
+pub const CODE_MODE_ENV: &str = "CLAUDE_CODE_EXPERIMENTAL_CODE_MODE";
+
 /// A rota da conta ChatGPT fixa do motor no `hangar-engine` (`cliproxy.engine_env`).
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct EngineRoute { pub account: String, pub credential_id: String, pub home: String, pub base_url: String, pub prefix: String }
+pub struct EngineRoute { pub account: String, pub credential_id: String, pub home: Option<String>, pub base_url: String, pub prefix: String }
 
 /// Endereço e segredo da ponte do plugin do Hangar.
 #[derive(Clone, Debug)]
@@ -32,6 +35,8 @@ pub struct ClaudeContext<'a> {
     pub server_env: &'a BTreeMap<String, String>,
     /// As escolhas de plugins e skills da conversa, já preparadas.
     pub settings: Option<&'a Value>,
+    /// No Windows, o arquivo com essas escolhas (`settings_file`), que o `--settings` recebe no lugar do JSON.
+    pub settings_file: Option<&'a str>,
     /// O envelope `bwrap … --` do só leitura.
     pub read_only: Option<&'a [String]>,
     pub windows: bool,
@@ -115,6 +120,48 @@ pub(crate) fn settings_json(settings: &Value) -> String {
     Value::Object(merged).to_string()
 }
 
+/// No Windows o comando do `new-session` perde as aspas do JSON e o Claude recusa abrir: as escolhas
+/// vão num arquivo. O nome é o hash do conteúdo, então conversas com as mesmas escolhas dividem o arquivo.
+pub(crate) fn settings_file(home: &Path, settings: &Value) -> std::io::Result<String> {
+    let json = settings_json(settings);
+    let dir = home.join(".hangar").join("claude-settings");
+    let path = dir.join(format!("{}.json", sha1_smol::Sha1::from(&json).digest()));
+    if !path.exists() {
+        std::fs::create_dir_all(&dir)?;
+        // Outra abertura com as mesmas escolhas pode ter gravado antes e o Claude dela segurar o arquivo:
+        // no Windows o rename por cima falha, e o conteúdo já é o certo.
+        if let Err(error) = hangar_core::fs::atomic_write(&path, json.as_bytes())
+            && !std::fs::read(&path).is_ok_and(|bytes| bytes == json.as_bytes()) {
+            return Err(error);
+        }
+    }
+    Ok(path.to_string_lossy().into_owned())
+}
+
+/// A velocidade com que uma sessão que já existe volta agora. A criação e a troca recusam velocidade sem
+/// suporte; acordar, restaurar ou reabrir sozinho não: Ultra Fast que perdeu o suporte volta em Fast, e Fast
+/// sem suporte na normal, em vez de a sessão não voltar.
+pub fn relaunch_tier(spec: &SessionSpec, facts: &dyn super::OpenFacts) -> Option<super::ServiceTier> {
+    let tier = spec.service_tier?;
+    let (engine, account) = match &spec.account {
+        Account::Engine { name, account, .. } => (Some(name.as_str()), account.as_deref()),
+        _ => (None, None),
+    };
+    let model = spec.model.as_deref();
+    if !facts.supports_fast(engine, model) {
+        if tier.is_fast() {
+            tracing::warn!(session = %spec.name, tier = tier.name(), "Fast indisponível agora; a sessão volta na velocidade normal");
+        }
+        return None;
+    }
+    if tier == super::ServiceTier::Ultrafast && !facts.supports_ultrafast(engine, model, account) {
+        tracing::warn!(session = %spec.name, engine = engine.unwrap_or(""), account = account.unwrap_or(""), model = model.unwrap_or(""),
+            "Ultra Fast indisponível agora; a sessão volta em Fast");
+        return Some(super::ServiceTier::Priority);
+    }
+    Some(tier)
+}
+
 /// O pane do Claude: argv do agente (com o motor e o só leitura em volta) e o `-e` da sessão.
 pub fn pane(spec: &SessionSpec, sid: &str, ctx: &ClaudeContext) -> PaneSpec {
     let mut claude: Vec<String> = vec!["claude".into(), (if ctx.resume { "--resume" } else { "--session-id" }).into(), sid.into()];
@@ -124,11 +171,13 @@ pub fn pane(spec: &SessionSpec, sid: &str, ctx: &ClaudeContext) -> PaneSpec {
     if let Some(effort) = &spec.effort { claude.extend(["--effort".into(), effort.clone()]); }
     if let Some(mode) = spec.permission_mode { claude.extend(["--permission-mode".into(), mode.name().into()]); }
     if let Some(settings) = ctx.settings.filter(|s| s.as_object().is_some_and(|o| !o.is_empty())) {
-        claude.extend(["--settings".into(), settings_json(settings)]);
+        let value = if ctx.windows { ctx.settings_file.map(str::to_owned) } else { Some(settings_json(settings)) };
+        if let Some(value) = value { claude.extend(["--settings".into(), value]); }
     }
     // O prompt inicial é o posicional do `claude`, depois das opções; começando com `-`, o `--`
-    // impede que vire flag.
-    if let Some(prompt) = ctx.initial_prompt.filter(|p| !p.is_empty()) {
+    // impede que vire flag. No Windows ele vai pela fila da chave (`terminal_life`): o psmux roda o
+    // comando pelo PowerShell, que corta o argumento na primeira aspa dupla.
+    if let Some(prompt) = ctx.initial_prompt.filter(|p| !p.is_empty() && !ctx.windows) {
         if prompt.starts_with('-') { claude.push("--".into()); }
         claude.push(prompt.into());
     }
@@ -137,14 +186,18 @@ pub fn pane(spec: &SessionSpec, sid: &str, ctx: &ClaudeContext) -> PaneSpec {
     if let Account::Engine { name, context_window, .. } = &spec.account {
         command.extend(["hangar-engine".into(), "--exec".into(), name.clone()]);
         if let Some(route) = ctx.engine_route {
-            command.extend(["--account".into(), route.account.clone(), "--account-home".into(), route.home.clone(),
-                "--account-base-url".into(), route.base_url.clone()]);
+            command.extend(["--account".into(), route.account.clone()]);
+            if let Some(home) = &route.home { command.extend(["--account-home".into(), home.clone()]); }
+            command.extend(["--account-base-url".into(), route.base_url.clone()]);
         }
         if let Some(model) = &spec.model {
             command.extend(["--model".into(), model.clone()]);
             if let Some(window) = context_window { command.extend(["--context".into(), window.to_string()]); }
         }
-        if let Some(tier) = spec.service_tier { command.extend(["--service-tier".into(), tier.name().into()]); }
+        // Normal é a falta do campo: só Fast e Ultra Fast (já conferidos na abertura) vão ao provedor.
+        if let Some(tier) = spec.service_tier.filter(|tier| tier.is_fast()) {
+            command.extend(["--service-tier".into(), tier.name().into()]);
+        }
         command.push("--".into());
     }
     command.extend(claude);
@@ -163,6 +216,7 @@ pub fn pane(spec: &SessionSpec, sid: &str, ctx: &ClaudeContext) -> PaneSpec {
         env.push(("HANGAR_PLUGIN_TOKEN".into(), crate::mods::bridge::mint_keyed(&bridge.secret, &spec.name, ctx.bridge_key)));
     }
     if let Some(model) = &spec.subagent_model { env.push(("CLAUDE_CODE_SUBAGENT_MODEL".into(), model.clone())); }
+    if spec.code_mode { env.push((CODE_MODE_ENV.into(), "1".into())); }
     PaneSpec { name: spec.name.clone(), cwd: spec.cwd.clone(), provider: spec.provider, key: spec.key.clone(), env,
         config_dir: spec.account.config_dir().map(str::to_owned), command }
 }

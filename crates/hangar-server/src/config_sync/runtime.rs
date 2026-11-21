@@ -319,13 +319,21 @@ pub fn idle_compact_min_tokens(settings:&Map<String,Value>) -> u64 {
 /// Mínimo de tokens para compactar a sessão parada; `None` = o Claude não compactaria (desligado ou sem autocompact).
 pub fn idle_compaction(settings:&Map<String,Value>) -> Option<u64> {
     let off=|key:&str|settings.get(key).is_some_and(|v|!truthy(v));
-    // Como o Claude lê a variável: só 1/true/yes/on liga; "0" e "false" não desligam o autocompact.
-    let env_on=|key:&str|settings.get("env").and_then(|env|env.get(key)).is_some_and(|v|match v {
+    if off("idleCompaction") || off("autoCompact") || env_on(settings,"DISABLE_AUTO_COMPACT") || env_on(settings,"DISABLE_COMPACT") { return None; }
+    Some(idle_compact_min_tokens(settings))
+}
+
+/// Como o Claude lê uma variável booleana: só 1/true/yes/on liga; "0" e "false" não ligam.
+pub fn env_value_on(value:&Value) -> bool {
+    match value {
         Value::String(s)=>["1","true","yes","on"].contains(&s.trim().to_ascii_lowercase().as_str()),
         other=>other.as_u64()==Some(1) || other.as_bool()==Some(true),
-    });
-    if off("idleCompaction") || off("autoCompact") || env_on("DISABLE_AUTO_COMPACT") || env_on("DISABLE_COMPACT") { return None; }
-    Some(idle_compact_min_tokens(settings))
+    }
+}
+
+/// A variável ligada no `env` do settings.json, lida como o Claude a lê.
+pub fn env_on(settings:&Map<String,Value>, key:&str) -> bool {
+    settings.get("env").and_then(|env|env.get(key)).is_some_and(env_value_on)
 }
 
 /// O `settings.json` principal, de onde o espelho das contas copia: ilegível = `None`.

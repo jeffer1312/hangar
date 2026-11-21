@@ -106,9 +106,13 @@ pub fn plan(spec: &SessionSpec, meta: &Value, ctx: &Context) -> Result<Launch, R
         None => return Err(refused("launch_permission_mode", "modo de permissão da sessão desconhecido; a sessão não foi aberta")),
     };
     let engine = match &spec.account { Account::Engine { name, context_window, .. } => Some((name, context_window)), _ => None };
+    // A criação e a troca de velocidade já recusam Fast sem suporte. Aqui é acordar, restaurar ou reabrir uma sessão
+    // que já existe: se o Fast saiu do motor depois, ela volta na velocidade normal em vez de não voltar.
     let tier = match spec.service_tier {
-        Some(crate::session_open::ServiceTier::Priority) if !ctx.fast =>
-            return Err(refused("launch_service_tier", "service_tier exige Claude com motor GPT no CLIProxyAPI local")),
+        Some(tier) if tier.is_fast() && !ctx.fast => {
+            tracing::warn!(session = %spec.name, tier = tier.name(), "Fast indisponível agora; a sessão volta na velocidade normal");
+            None
+        }
         Some(tier) if ctx.fast => Some(tier),
         _ => None,
     };
@@ -138,8 +142,9 @@ pub fn plan(spec: &SessionSpec, meta: &Value, ctx: &Context) -> Result<Launch, R
     if let Some((name, context_window)) = engine {
         program.extend(["hangar-engine".into(), "--exec".into(), name.clone()]);
         if let Some(route) = ctx.engine_route {
-            program.extend(["--account".into(), route.account.clone(), "--account-home".into(), route.home.clone(),
-                "--account-base-url".into(), route.base_url.clone()]);
+            program.extend(["--account".into(), route.account.clone()]);
+            if let Some(home) = &route.home { program.extend(["--account-home".into(), home.clone()]); }
+            program.extend(["--account-base-url".into(), route.base_url.clone()]);
         }
         if let Some(model) = spec.model.as_deref().filter(|m| !m.is_empty()) {
             program.extend(["--model".into(), model.into()]);
@@ -175,6 +180,7 @@ pub fn plan(spec: &SessionSpec, meta: &Value, ctx: &Context) -> Result<Launch, R
         env.insert("CLAUDE_CONFIG_DIR".into(), dir);
     }
     if let Some(model) = &spec.subagent_model { env.insert("CLAUDE_CODE_SUBAGENT_MODEL".into(), model.clone()); }
+    if spec.code_mode { env.insert(crate::session_open::claude::CODE_MODE_ENV.into(), "1".into()); }
     env.extend(crate::session_open::claude::jev_pairs(spec.jev, ctx.runtime_config));
     if hooks { env.insert("CLAUDE_CODE_ENABLE_FUNCTION_HOOKS".into(), "1".into()); }
     Ok(Launch { program, env })
@@ -211,8 +217,24 @@ pub fn prepare(env: &AccountEnvironment, bridge: Option<&PluginBridge>, meta: &V
     let mut spec = crate::session_open::record::claude_live(&env.home, meta, name)
         .map_err(|error| refused("launch_meta", &format!("registro da sessão ilegível: {error}")))?;
     let facts = crate::session_open::facts::LocalFacts::new(env.clone(), runtime);
-    refresh_window(&mut spec, &facts, &env.home.join(".hangar").join("claude-headless"), name);
+    let sidecar_dir = env.home.join(".hangar").join("claude-headless");
+    refresh_window(&mut spec, &facts, &sidecar_dir, name);
+    persist_relaunch_tier(&mut spec, &facts, &sidecar_dir, name);
     plan_for(env, bridge, &spec, meta, &facts)
+}
+
+/// A velocidade que caiu na volta fica gravada: a tela e a próxima subida leem a de verdade, não a antiga.
+pub(crate) fn persist_relaunch_tier(spec: &mut SessionSpec, facts: &dyn crate::session_open::OpenFacts, sidecar_dir: &Path, name: &str) {
+    let tier = crate::session_open::claude::relaunch_tier(spec, facts);
+    if tier == spec.service_tier { return; }
+    spec.service_tier = tier;
+    let value = tier.map_or(Value::Null, |tier| Value::from(tier.name()));
+    let patch = [("service_tier".to_owned(), value)].into_iter().collect();
+    match super::codex_sidecar::update_if(sidecar_dir, name, &[("key", Value::from(spec.key.clone()))], &patch) {
+        Ok(Some(_)) => {}
+        Ok(None) => tracing::warn!(session = %name, "sidecar mudou de vida; a velocidade efetiva não foi gravada"),
+        Err(error) => tracing::warn!(session = %name, kind = ?error.kind(), "a velocidade efetiva não foi gravada no sidecar"),
+    }
 }
 
 /// O comando de agora para um spec já decidido, sem sessão registrada: a subida da sessão (`prepare`) e
@@ -231,7 +253,15 @@ pub fn plan_for(env: &AccountEnvironment, bridge: Option<&PluginBridge>, spec: &
             .map_err(|error| refused("launch_engine_account", &error.msg))?),
         _ => None,
     };
-    let fast = spec.service_tier.is_some() && facts.supports_fast(engine, spec.model.as_deref());
+    let tier = crate::session_open::claude::relaunch_tier(spec, facts);
+    let fast = tier.is_some();
+    let degraded;
+    let spec = if tier != spec.service_tier {
+        let mut copy = spec.clone();
+        copy.service_tier = tier;
+        degraded = copy;
+        &degraded
+    } else { spec };
     let display = crate::display_env::for_launch(|name| env.base.get(name).filter(|v| !v.is_empty()).cloned());
     plan(spec, meta, &Context { env, runtime_config: &config, plugin_roots: &roots, bridge, engine_route: route.as_ref(), fast, display: &display })
 }
@@ -462,7 +492,7 @@ mod tests {
     }
 
     #[test]
-    fn unknown_mode_read_only_and_priority_without_fast_are_refused() {
+    fn unknown_mode_and_read_only_are_refused_and_fast_without_support_falls_back() {
         let case = case("create_claude_headless_then_launch");
         let env = AccountEnvironment::from_map(case.server_env());
         let ctx = Context { env: &env, runtime_config: &json!({}), plugin_roots: &[], bridge: None, engine_route: None, fast: false, display: &[] };
@@ -473,8 +503,9 @@ mod tests {
         spec.read_only = true;
         assert_eq!(plan(&spec, &case.meta(), &ctx).unwrap_err().code, "headless_read_only");
         let mut spec = case.spec();
+        // Sessão que já existe e perdeu o Fast volta na velocidade normal, sem `--service-tier`.
         spec.service_tier = Some(crate::session_open::ServiceTier::Priority);
-        assert_eq!(plan(&spec, &case.meta(), &ctx).unwrap_err().code, "launch_service_tier");
+        assert!(!plan(&spec, &case.meta(), &ctx).unwrap().program.contains(&"--service-tier".to_owned()), "Fast sem suporte cai no normal");
         spec.service_tier = Some(crate::session_open::ServiceTier::Default);
         assert!(!plan(&spec, &case.meta(), &ctx).unwrap().program.contains(&"--service-tier".to_owned()), "default sem Fast é ignorado");
     }

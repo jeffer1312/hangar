@@ -81,6 +81,7 @@ pub fn list_sig<'a>(rows: impl IntoIterator<Item = &'a SessionRow>) -> String {
             if let (Value::Array(items), Some(name)) = (&mut sig, i.rename_suggestion.as_ref()) { items.push(json!({"rename_suggestion": name, "weak": i.rename_weak})); }
             if let (Value::Array(items), true) = (&mut sig, i.hidden_from_list) { items.push(json!({"hidden_from_list": true})); }
             if let (Value::Array(items), true) = (&mut sig, i.asleep) { items.push(json!({"asleep": true, "wake": i.wake_surface})); }
+            if let (Value::Array(items), Some(handoff)) = (&mut sig, i.handoff.as_ref()) { items.push(json!({"handoff": handoff})); }
             sig
         })
         .collect();
@@ -143,6 +144,20 @@ mod tests {
         assert_ne!(awake, asleep);
         row.wake_surface = Some("terminal".into());
         assert_ne!(asleep, list_sig(&[row]));
+    }
+
+    #[test]
+    fn a_handoff_and_its_state_change_the_signature() {
+        let mut row: SessionRow = serde_json::from_value(json!({"name": "s"})).unwrap();
+        let plain = list_sig(&[row.clone()]);
+        row.handoff = Some(hangar_api::session::Handoff { provider: "codex".into(), account: "codex:a".into(), ..Default::default() });
+        let waiting = list_sig(&[row.clone()]);
+        assert_ne!(plain, waiting);
+        row.handoff.as_mut().unwrap().state = hangar_api::session::HandoffState::Running;
+        assert_ne!(waiting, list_sig(&[row.clone()]));
+        assert!(serde_json::to_value(&row).unwrap()["handoff"]["state"] == "running");
+        row.handoff = None;
+        assert!(serde_json::to_value(&row).unwrap().get("handoff").is_none(), "sem troca, o campo não vai ao JSON");
     }
 
     #[test]

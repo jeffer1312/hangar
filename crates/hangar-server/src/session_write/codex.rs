@@ -376,7 +376,7 @@ async fn not_codex(st: &Arc<AppState>, name: &str, req: Request) -> Response {
     let fields = || object(&bytes, headers);
     let shaped = match route.as_str() {
         "model" => fields().and_then(|f| strings(&f, "model", Some("effort"))).is_some(),
-        "service-tier" => fields().and_then(|f| literal(&f, "service_tier", &["default", "priority"])).is_some(),
+        "service-tier" => fields().and_then(|f| literal(&f, "service_tier", &crate::session_open::ServiceTier::NAMES)).is_some(),
         "codex/mode" => fields().and_then(|f| literal(&f, "mode", &["default", "plan"])).is_some(),
         "question/skip" => fields().and_then(|f| strings(&f, "request_id", Some("interaction_id"))).is_some(),
         "codex-permissions" if post => fields().and_then(|f| strings(&f, "mode", None)).is_some(),
@@ -468,7 +468,7 @@ pub async fn model(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
 
 pub async fn service_tier(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
     let (ctx, bytes) = admitted!(st, peer, req);
-    let Some(tier) = object(&bytes, ctx.headers()).and_then(|f| literal(&f, "service_tier", &["default", "priority"])) else { return invalid_body(ctx.headers()) };
+    let Some(tier) = object(&bytes, ctx.headers()).and_then(|f| literal(&f, "service_tier", &crate::session_open::ServiceTier::NAMES)) else { return invalid_body(ctx.headers()) };
     let sent = run(&ctx, OperationKind::SetServiceTier, json!({"service_tier": tier})).await;
     log_outcome(&ctx.name, "service_tier", &sent, "troca de service tier do Codex não aceita; a rota responde 409 erro_codex_controle");
     answer(&ctx, service_tier_answer(&tier, &sent))

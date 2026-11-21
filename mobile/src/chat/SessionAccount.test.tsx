@@ -613,6 +613,18 @@ describe('F3 motor GPT', () => {
     expect(posts()).toHaveLength(0);
   });
 
+  it('conta conectada só no proxy é destino sem cota e sem aviso de login', async () => {
+    engineReply = async () => json({ motores: { 'local-gpt': { cliproxy_accounts: [...engineAccounts,
+      { account: 'cpa-0123456789ab', credential_id: 'cliproxy:cpa-0123456789ab', email: 'solo@test', label: 'ChatGPT solo' }] } }, arquivo_corrompido: false });
+    postReply = async () => json({ ok: true });
+    const { container } = await mount();
+    const choice = button(container, 'ChatGPT solo')!;
+    expect(choice.disabled).toBe(false);
+    await click(container, 'ChatGPT solo');
+    await act(async () => confirm()());
+    expect(JSON.parse(posts()[0][1].body)).toEqual({ engine_account: 'cpa-0123456789ab' });
+  });
+
   it('exclui a conta por engine_account mesmo antes de conta resolvida chegar', async () => {
     setSession({ ...engineSource, conta: 'chave:local-gpt', engine_account: 'two' });
     const { container } = await mount();

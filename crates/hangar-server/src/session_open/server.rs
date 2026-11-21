@@ -287,6 +287,16 @@ impl OpenHost for ServerHost {
             if let Some(jsonl) = &born.jsonl { self.st.list.seed(&born.name, jsonl); }
             self.st.list.invalidate();
             if let Some(home) = &born.codex_terminal { self.publish_codex_birth(&born.name, home).await; }
+            if born.first_message {
+                match self.st.state.runtime.get().cloned() {
+                    Some(runtime) => {
+                        let name = born.name.clone();
+                        tokio::spawn(async move { crate::runtime::claude_terminal::deliver_first_message(&runtime, &name).await });
+                    }
+                    None => self.st.diag.report("runtime.first_message_failed", &born.name, "runtime_unavailable",
+                        "servidor sem runtime: o prompt inicial do Claude com terminal ficou na fila"),
+                }
+            }
             if !born.remember_provider { return Vec::new(); }
             let (base, provider) = (self.env.claude_base.clone(), born.provider.name());
             match tokio::task::spawn_blocking(move || remember_provider(&base, provider)).await {

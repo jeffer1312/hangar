@@ -420,6 +420,9 @@ pub fn selected_row() -> Hsla { if see_through() { accent_dim() } else { rgb(col
 pub fn status(state: &str) -> Hsla {
     match state { "working" => accent(), "awaiting_input" => warning(), "idle" => success(), "dead" => danger(), _ => muted() }
 }
+/// Ciano de "esperando você" da conversa nova: longe do lilás de execução sem depender do texto.
+pub fn waiting() -> Hsla { rgb(if is_dark() { 0x45c8dc } else { 0x0b7285 }).into() }
+
 /// Pílula de estado (`--pill-*`): fundo e texto.
 pub fn pill(state: &str) -> (Hsla, Hsla) {
     match state {

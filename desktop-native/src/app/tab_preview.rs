@@ -172,7 +172,7 @@ impl Drop for TabPreview {
 
 impl TabPreview {
     fn session_key(&self) -> Option<SessionKey> {
-        SessionKey::new(&self.server, self.slot.as_ref()?.selected.as_ref()?)
+        SessionKey::for_open_chat(&self.server, self.slot.as_ref()?.selected.as_ref()?)
     }
 }
 
@@ -417,7 +417,7 @@ impl Hangar {
         let api = (!self.is_active_key(&target.server)).then(|| self.machine_api(&target.server)).flatten();
         let server=self.machine_api(&target.server).map(|api|api.identity()).unwrap_or_else(||target.server.clone());
         let composer = cx.new(|cx| TextareaState::new(window, cx).auto_grow(1, 10).submit_on_enter(true));
-        if let Some(draft)=SessionKey::new(&server,&session).and_then(|key|self.drafts.get(&key).cloned()) {
+        if let Some(draft)=SessionKey::for_open_chat(&server,&session).and_then(|key|self.drafts.get(&key).cloned()) {
             composer.update(cx,|input,cx|input.set_value(draft,window,cx));
         }
         let composer_sub = cx.subscribe_in(&composer, window, |this, _, event: &InputEvent, window, cx| {

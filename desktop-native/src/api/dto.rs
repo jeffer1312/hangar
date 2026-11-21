@@ -198,6 +198,8 @@ pub struct SessionInfo {
     #[serde(default)] pub hidden_from_list: bool,
     /// Oculta e parada, com o processo fechado pelo servidor; a próxima mensagem a reabre na mesma conversa.
     #[serde(default)] pub asleep: bool,
+    /// Troca de agente pedida pelo seletor de modelos, esperando o turno acabar, em curso ou que falhou.
+    #[serde(default)] pub handoff: Option<hangar_api::session::Handoff>,
     /// Nome do convidado que criou a sessão; `None` = dono do servidor.
     pub owner: Option<String>,
     /// Só na linha `orq`: a sessão do árbitro atual, que o "Falar com o árbitro" abre.
@@ -257,6 +259,12 @@ impl SessionInfo {
         self.provider == "claude" && self.engine_account.as_deref().is_some_and(|a| !a.is_empty())
     }
     pub fn readable(&self) -> bool { self.tracked != Some(false) && self.jsonl.is_some() }
+    /// O Kimi cria o histórico no primeiro envio. A vida gerenciada já identifica o destino.
+    pub fn waiting_for_kimi_input(&self) -> bool {
+        self.provider == "kimi" && self.tracked == Some(false) && self.jsonl.is_none()
+            && !self.headless && self.state != "dead" && self.guest_kind.is_none()
+            && hangar_api::session::runtime_key(self.lifecycle_id.as_deref()).is_some_and(|key| !key.is_empty())
+    }
     pub fn display_state(&self) -> &str {
         if self.provider == "codex" && !self.readable() && !matches!(self.state.as_str(), "awaiting_input" | "dead") { "loading" }
         else { &self.state }
@@ -265,7 +273,9 @@ impl SessionInfo {
     /// O orquestrador sem LLM: tem linha do tempo, mas não recebe mensagem, nome novo, fechar nem interromper.
     pub fn orq(&self) -> bool { self.provider == "orq" }
     /// Tem compositor: a linha `orq` lê a linha do tempo, mas ninguém escreve nela.
-    pub fn takes_messages(&self) -> bool { self.readable() && !self.orq() && !self.read_only() }
+    pub fn takes_messages(&self) -> bool {
+        (self.readable() || self.waiting_for_kimi_input()) && !self.orq() && !self.read_only()
+    }
     /// A sessão da outra pessoa num par externo: acompanha, sem escrever nem mexer nela.
     pub fn read_only(&self) -> bool { self.guest_kind.as_deref() == Some("pair") }
     /// Pares de fora do grupo; servidor sem `pair_externals` manda só o primeiro, sem nível nem endereço (ver e recado).
@@ -975,7 +985,7 @@ mod tests {
     }
 
     #[test]
-    fn only_readable_non_orq_rows_take_the_composer_focus() {
+    fn orq_and_unreadable_claude_rows_do_not_take_the_composer_focus() {
         let orq = SessionInfo { provider: "orq".into(), jsonl: Some("/r/t.jsonl".into()), ..Default::default() };
         assert!(orq.readable() && !orq.takes_messages(), "o compositor da linha `orq` não é desenhado");
         let chat = SessionInfo { provider: "claude".into(), ..orq.clone() };

@@ -120,9 +120,11 @@ pub async fn prepare_sessions(env: crate::accounts::environment::AccountEnvironm
     // `CP_RUST_NO_ORPHAN_SWEEP=1`: o teste que sobe este binário de verdade nunca varre processos da máquina.
     if matches!(crate::config::Config::runtime_instance(), Ok(Some(_)))
         && std::env::var_os("CP_RUST_NO_ORPHAN_SWEEP").is_none_or(|value| value != "1") {
-        let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
-        if home.is_none() { tracing::warn!("HOME ausente: varredura de canos órfãos pulada"); }
-        if let Some(home) = home {
+        // A mesma pasta que o lançamento grava em `HANGAR_CANO_OWNER`: no Windows o `HOME` falta ou vem com `/`.
+        let home = env.home.clone();
+        // Pasta vazia viraria `.hangar` relativa: as sessões vivas sumiriam do conjunto e o cano delas morreria.
+        if home.as_os_str().is_empty() { tracing::warn!("pasta da conta vazia: varredura de canos órfãos pulada"); }
+        else {
             let swept = tokio::task::spawn_blocking(move || {
                 let base = home.join(".hangar");
                 crate::runtime::process::sweep_orphans(&base.join("claude-headless"), &base.join("codex-sessions"),

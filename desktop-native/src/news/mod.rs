@@ -4,6 +4,7 @@ mod account_tags;
 mod agent_fix;
 mod auto_report;
 mod claude_notices;
+mod cliproxy_wizard;
 mod notice_actions;
 mod codex_activity;
 mod code_comments;
@@ -14,10 +15,13 @@ mod desktop_tool_look;
 mod dictation_pill;
 mod login_browser;
 mod memory_dream;
+mod model_handoff;
 mod new_chat_mode;
+mod new_conversation;
 mod no_project;
 mod password_vault;
 mod plugins;
+mod proxy_update;
 mod scheduled_tasks;
 mod hide_from_list;
 mod image_reveal;
@@ -26,6 +30,7 @@ mod search_conversations;
 mod server_status;
 mod sleep_hidden;
 mod speech_pause;
+mod speed_choice;
 mod session_vault;
 mod tour;
 mod updates_manual;
@@ -95,6 +100,11 @@ pub fn animation(name: &str) -> Option<NewsAnimation> {
         "consertar-com-agente" => Some(agent_fix::render),
         "revisao-do-trabalho" => Some(work_review::render),
         "comentar-linhas" => Some(code_comments::render),
+        "seletor-de-modelos" => Some(model_handoff::render),
+        "cliproxy-assistente" => Some(cliproxy_wizard::render),
+        "velocidade-ultra-fast" => Some(speed_choice::render),
+        "atualizar-cliproxy" => Some(proxy_update::render),
+        "conversa-nova" => Some(new_conversation::render),
         _ => None,
     }
 }

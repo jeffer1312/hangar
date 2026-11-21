@@ -38,6 +38,7 @@ export * from './covers';
 export * from './format';
 export * from './contextoUso';
 export * from './agruparSessoes';
+export * from './handoff';
 export * from './plan';
 export * from './orqTimeline';
 export * from './activity';

@@ -55,12 +55,17 @@ pub fn resolve(cmd: &[String], env: &mut BTreeMap<String,String>, tier: &str, cw
         let local = local_root(cwd,home); if local != cwd { paths.push(local.join(".claude/settings.local.json")); }
     }
     let mut extra = json!(env.get("CLAUDE_CODE_EXTRA_BODY").map(String::as_str).unwrap_or("{}"));
+    // Os cabeçalhos da pessoa continuam; o Ultra Fast só acrescenta o dele.
+    let mut headers = env.get("ANTHROPIC_CUSTOM_HEADERS").map(|h| json!(h));
     for path in paths {
         let source = read(&path.to_string_lossy(),true,cwd)?;
         if let Some(value) = source["env"].get("CLAUDE_CODE_EXTRA_BODY") { extra = value.clone(); }
+        if let Some(value) = source["env"].get("ANTHROPIC_CUSTOM_HEADERS") { headers = Some(value.clone()); }
     }
     if let Some(value) = explicit["env"].get("CLAUDE_CODE_EXTRA_BODY") { extra = value.clone(); }
-    let selected = super::environment::service_tier(tier,Some(extra.as_str().ok_or("CLAUDE_CODE_EXTRA_BODY: esperado texto JSON")?))?;
+    if let Some(value) = explicit["env"].get("ANTHROPIC_CUSTOM_HEADERS") { headers = Some(value.clone()); }
+    let headers = headers.map(|h| h.as_str().map(str::to_owned).ok_or("ANTHROPIC_CUSTOM_HEADERS: esperado texto")).transpose()?;
+    let selected = super::environment::service_tier(tier,Some(extra.as_str().ok_or("CLAUDE_CODE_EXTRA_BODY: esperado texto JSON")?),headers.as_deref())?;
     if explicit.get("env").is_none() { explicit["env"] = json!({}); }
     for (k,v) in selected { explicit["env"][&k] = json!(v); env.insert(k,v); }
     Ok((args,explicit))
