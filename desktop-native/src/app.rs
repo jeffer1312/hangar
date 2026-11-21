@@ -293,10 +293,12 @@ fn beta_send_button(enabled: bool, label: String, cx: &App) -> Button {
 }
 
 /// Seletor da conversa nova: caixa de 30 px com borda, rótulo apagado, o valor em negrito e a seta do menu.
-pub(crate) fn beta_pill(id: impl Into<ElementId>, prefix: Option<String>, value: String, rest: Option<String>, cx: &App) -> Button {
+/// `provider` vazio deixa a pílula sem o símbolo do agente.
+pub(crate) fn beta_pill(id: impl Into<ElementId>, provider: &str, prefix: Option<String>, value: String, rest: Option<String>, cx: &App) -> Button {
     Button::new(id).custom(ButtonCustomVariant::new(cx).color(transparent_black()).foreground(theme::muted()).hover(theme::hover()).active(theme::hover()))
         .h(px(30.)).p_0().rounded(px(8.))
         .child(div().h_full().px(px(10.)).rounded(px(8.)).border_1().border_color(theme::border_strong()).flex().items_center().gap(px(6.)).text_size(px(13.)).text_color(theme::muted()).whitespace_nowrap()
+            .when(!provider.is_empty(), |el| el.child(chrome::provider_glyph(provider, 14.)))
             .when_some(prefix, |el, prefix| el.child(prefix))
             .child(div().max_w(px(170.)).truncate().font_weight(FontWeight::SEMIBOLD).text_color(theme::text()).child(value))
             .when_some(rest, |el, rest| el.child(rest))

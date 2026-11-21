@@ -83,6 +83,7 @@ impl Hangar {
                 |button| button.on_click(cx.listener(move |this, _, window, cx| if !this.is_renaming(&target) {
                     this.start_session_rename_with(target.clone(), Some(edit_name.clone()), window, cx);
                 })),
+                |button| button.on_click(cx.listener(move |this, _, _, cx| this.another_rename_suggestion(again.clone(), cx))),
                 |button| button.on_click(cx.listener(move |this, _, _, cx| this.dismiss_rename_suggestion(dismiss.clone(), cx))),
                 |button| popup::anchor(div(), crate::tour::anchors::RENAME_APPLY)
                     .child(button.on_click(cx.listener(move |this, _, _, cx| this.rename_session_to(apply.clone(), name.clone(), cx)))), cx)
@@ -123,9 +124,9 @@ pub(crate) fn rename_strip<E: IntoElement>(suggestion: &str, state: Strip, dismi
 }
 
 /// A sugestão de nome da conversa nova: cartão com filete de destaque, a frase com o nome num botão tracejado que abre o
-/// renomear (`edit`), a linha de baixo e as ações logo depois do texto. Sem "Outra": a fraca se refaz na próxima mensagem.
+/// renomear (`edit`), a linha de baixo e as ações logo depois do texto; "Outra" (`again`) pede outro nome na hora.
 pub(crate) fn beta_rename_strip<E: IntoElement>(suggestion: &str, state: Strip, edit: impl FnOnce(Button) -> Button,
-    dismiss: impl FnOnce(Button) -> Button, apply: impl FnOnce(Button) -> E, cx: &App) -> Stateful<Div> {
+    again: impl FnOnce(Button) -> Button, dismiss: impl FnOnce(Button) -> Button, apply: impl FnOnce(Button) -> E, cx: &App) -> Stateful<Div> {
     let title = tr_shared("rename_suggest_title", &[("name", suggestion)]);
     let busy = state.renaming || state.again;
     // Botões do mockup: "Agora não" com borda e "Renomear" na cor de destaque; a borda mora num filho porque a variante
@@ -159,6 +160,7 @@ pub(crate) fn beta_rename_strip<E: IntoElement>(suggestion: &str, state: Strip, 
                 .child(name))
             .child(div().text_size(px(13.)).text_color(theme::muted()).truncate().child(sub)))
         .child(div().flex_none().flex().items_center().gap(px(8.))
+            .child(again(button("rename-suggest-again", tr_shared("rename_suggest_again", &[]), false).loading(state.again).disabled(busy)))
             .child(dismiss(button("rename-suggest-dismiss", tr_shared("rename_suggest_dismiss", &[]), false).disabled(busy)))
             .child(apply(button("rename-suggest-apply", tr_shared("rename_suggest_apply", &[]), true).loading(state.renaming).disabled(busy))))
 }

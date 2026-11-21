@@ -1473,7 +1473,7 @@ impl Hangar {
                 // Conversa nova: rótulo e valor, "Ditado: só limpar", como os outros seletores com borda.
                 let value = style_label(style);
                 let value = value.chars().next().map(|c| c.to_lowercase().chain(value.chars().skip(1)).collect()).unwrap_or(value);
-                super::beta_pill("dictation-style", Some(tr("beta_dictation_label")), value, None, cx)
+                super::beta_pill("dictation-style", "", Some(tr("beta_dictation_label")), value, None, cx)
             } else { super::menu_pill("dictation-style", style_label(style), false, cx) })
             .tooltip(tr("dictation_style")).accessibility_label(format!("{}: {}", tr("dictation_style"), style_label(style)))
             .disabled(in_flight || !readable)

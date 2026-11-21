@@ -970,9 +970,16 @@ impl Hangar {
     fn commit_session_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(edit) = self.sidebar.editing.as_ref() else { return };
         // A mesma regra do `rename_session_to`: com uma troca de nome em voo, outra sairia com o nome antigo. O diálogo fica
-        // aberto com o botão desligado; o campo da linha fecha sem enviar.
+        // aberto com o botão desligado; o campo da linha fecha sem enviar e avisa, para o nome digitado não sumir calado.
         if self.sidebar.renaming.contains(&edit.target) {
-            if edit.inline { self.sidebar.editing = None; self.root_focus.focus(window, cx); cx.notify(); }
+            if edit.inline {
+                let typed = edit.input.read(cx).value().trim().to_owned();
+                let unchanged = typed.is_empty() || typed == edit.target.name;
+                self.sidebar.editing = None;
+                self.root_focus.focus(window, cx);
+                cx.notify();
+                if !unchanged { window.push_notification(Notification::warning(tr("sidebar_rename_failed").replace("{n}", &tr("sidebar_rename_busy"))), cx); }
+            }
             return;
         }
         let new = edit.input.read(cx).value().trim().to_owned();
@@ -1499,6 +1506,10 @@ impl Hangar {
                                 Some(focus) => focus.focus(window, cx),
                                 None => { self.root_focus.focus(window, cx); self.sidebar.focus_tab = Some(new.clone()); }
                             }
+                        } else if let Some(inline) = self.sidebar.editing.as_ref().filter(|e| e.target == target).map(|e| e.inline) {
+                            // Outra troca (a da sugestão) mudou o nome com a edição aberta: ela renomearia um nome que não existe mais.
+                            self.sidebar.editing = None;
+                            if inline { self.root_focus.focus(window, cx); } else { window.close_dialog(cx); }
                         }
                         let lost = self.sidebar.lost.as_ref() == Some(&target);
                         if lost { self.sidebar.lost = None; }

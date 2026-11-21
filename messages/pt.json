@@ -8863,6 +8863,7 @@
   "native_sidebar_close_title": "Fechar esta sessão?",
   "native_sidebar_close_failed": "fechar: {n}",
   "native_sidebar_rename_failed": "renomear: {n}",
+  "native_sidebar_rename_busy": "outra troca de nome desta sessão ainda está em andamento",
   "native_sidebar_mute_failed": "silenciar: {n}",
   "native_sidebar_editor_failed": "abrir editor: {n}",
   "native_sidebar_mode_failed": "trocar o modo: {n}",

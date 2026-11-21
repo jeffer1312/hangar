@@ -8863,6 +8863,7 @@
   "native_sidebar_close_title": "Close this session?",
   "native_sidebar_close_failed": "close: {n}",
   "native_sidebar_rename_failed": "rename: {n}",
+  "native_sidebar_rename_busy": "another rename of this session is still in progress",
   "native_sidebar_mute_failed": "mute: {n}",
   "native_sidebar_editor_failed": "open editor: {n}",
   "native_sidebar_mode_failed": "switch mode: {n}",

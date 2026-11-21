@@ -240,9 +240,7 @@ impl Hangar {
     /// A etiqueta curta da conta da sessão em foco, a mesma da aba ("claude-7"); sem etiqueta, nada.
     fn focused_account_tag(&self) -> Option<String> {
         let conta = self.selected.as_ref()?.conta.as_deref()?;
-        // As etiquetas são guardadas pelo endereço normalizado da máquina; a da sessão vem primeiro.
-        let server = self.selected_key().map(|key| key.server);
-        server.and_then(|server| self.tags.get(&server)).into_iter().chain(self.tags.get(&self.active_key()))
-            .find_map(|tags| tags.accounts.get(conta)).map(|badge| badge.name.clone())
+        // Só a máquina da sessão, pelo endereço normalizado: a etiqueta de outra ficaria ao lado da cota desta.
+        self.tags.get(&self.open_server())?.accounts.get(conta).map(|badge| badge.name.clone())
     }
 }

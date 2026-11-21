@@ -18,6 +18,8 @@ const CHAT_MIN: f32 = 400.;
 const PANEL_EDGE: f32 = 3.;
 const COST_EVERY: u64 = 30;
 const DIFF_MAX: usize = 20_000;
+/// Espera da conversa nova antes de reler a lista de arquivos depois de uma falha: longa o bastante para não martelar o servidor.
+const BETA_FILES_RETRY: std::time::Duration = std::time::Duration::from_secs(30);
 
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum Shortcut {
@@ -144,6 +146,9 @@ pub(super) struct Side {
     files: Option<(SessionKey, Option<Result<Vec<GitFile>, String>>)>,
     /// Conversa nova: a lista de arquivos do repositório lida sozinha; a assinatura das contagens que a pediu.
     beta_files_sig: Option<(SessionKey, String)>,
+    /// Conversa nova: a última falha da leitura automática, quando e por quê; passado o prazo, a mesma assinatura lê de
+    /// novo, e o motivo fica à vista enquanto relê.
+    beta_files_failed: Option<(SessionKey, std::time::Instant, String)>,
     /// Conversa nova: a última lista lida com sucesso, à vista enquanto a seguinte chega.
     beta_files_last: Option<(SessionKey, Vec<GitFile>)>,
     /// Geração da leitura da lista de arquivos: resposta de uma leitura anterior não substitui a mais nova.
@@ -185,7 +190,7 @@ impl Default for Side {
     fn default() -> Self {
         let saved = appearance::get();
         Self { open: true, menu: false, width: saved.side_width, browser_width: saved.side_browser_width, drag: None, shortcuts: None, project: ProjectShortcuts::default(), cost: None, cost_task: None, cost_gen: 0, orq: Default::default(),
-            files: None, beta_files_sig: None, beta_files_last: None, files_gen: 0, files_auto: false, beta_dismissed: HashSet::new(), diff: None, reloading: HashSet::new(), run_code_pending: HashSet::new(), stop_pending: HashSet::new(), git: None, run: None, browsers: HashMap::new(), remote_browsers: HashMap::new(), browser_open: HashSet::new(), tabs: HashMap::new(),
+            files: None, beta_files_sig: None, beta_files_failed: None, beta_files_last: None, files_gen: 0, files_auto: false, beta_dismissed: HashSet::new(), diff: None, reloading: HashSet::new(), run_code_pending: HashSet::new(), stop_pending: HashSet::new(), git: None, run: None, browsers: HashMap::new(), remote_browsers: HashMap::new(), browser_open: HashSet::new(), tabs: HashMap::new(),
             #[cfg(target_os = "linux")] warm: None,
             shortcut_terms: HashMap::new(), shortcut_focus: HashMap::new(), shortcut_running: HashMap::new(), shortcut_recheck: HashMap::new() }
     }
@@ -211,6 +216,7 @@ impl Side {
         self.project.reset();
         self.files = None;
         self.beta_files_sig = None;
+        self.beta_files_failed = None;
         self.beta_files_last = None;
         self.diff = None;
         self.git = None;
@@ -412,6 +418,8 @@ impl Hangar {
         self.side.files = Some((key.clone(), None));
         if !auto { self.side.diff = None; }
         self.side.files_auto = auto;
+        // A pedida pela pessoa mostra o próprio resultado.
+        if !auto { self.side.beta_files_failed = None; }
         self.side.files_gen += 1;
         let generation = self.side.files_gen;
         let (connection, tx) = (self.connection, self.tx.clone());
@@ -443,12 +451,17 @@ impl Hangar {
         let (Some(api), Some(key)) = (self.session_api(), self.selected_key()) else { return; };
         if self.side.diff.as_ref().is_some_and(|(owner, current, _)| owner == &key && current == &path) { self.side.diff = None; cx.notify(); return; }
         self.side.diff = Some((key.clone(), path.clone(), None));
+        self.fetch_diff(api, key, path);
+        cx.notify();
+    }
+
+    /// Pede o diff de `path`; a resposta só entra se ele ainda for o aberto.
+    fn fetch_diff(&self, api: Api, key: SessionKey, path: String) {
         let (connection, tx) = (self.connection, self.tx.clone());
         self.runtime.spawn(async move {
             let result = api.act(&key.name, &["git", "diff"], Some(json!({"path": path})), false, 30).await;
             let _ = tx.send(Envelope { connection, selection: None, payload: Payload::Reply(key, Reply::Diff(path), result) }).await;
         });
-        cx.notify();
     }
 
     pub(super) fn prefill(&mut self, text: &str, protect: bool, window: &mut Window, cx: &mut Context<Self>) {
@@ -621,10 +634,30 @@ impl Hangar {
                     files
                 }));
                 // A lista boa fica guardada para a conversa nova mostrar enquanto relê; a falha da leitura automática não
-                // é ação da pessoa: vai ao log, e a lista anterior continua à vista.
-                match slot.as_ref() {
-                    Some(Ok(files)) => self.side.beta_files_last = Some((key.clone(), files.clone())),
-                    Some(Err(reason)) if self.side.files_auto => crate::log_line(&format!("painel: leitura automática dos arquivos alterados falhou: {reason}")),
+                // é ação da pessoa: vai ao log, e a lista anterior continua à vista (sem lista, a falha aparece).
+                match slot.clone() {
+                    Some(Ok(files)) => {
+                        self.side.beta_files_failed = None;
+                        // O agente pode ter mexido de novo no arquivo do diff aberto: a leitura automática o relê também.
+                        let reread = self.side.files_auto.then(|| self.side.diff.as_ref()
+                            .filter(|(owner, path, _)| owner == &key && files.iter().any(|f| f.path == *path)).map(|(_, path, _)| path.clone())).flatten();
+                        self.side.beta_files_last = Some((key.clone(), files));
+                        if let (Some(path), Some(api)) = (reread, self.session_api().filter(|_| self.selected_key().as_ref() == Some(&key))) {
+                            self.fetch_diff(api, key.clone(), path);
+                        }
+                    }
+                    Some(Err(reason)) if self.side.files_auto => {
+                        // Uma linha por motivo: a nova tentativa a cada prazo não enche o log.
+                        if self.side.beta_files_failed.as_ref().is_none_or(|(owner, _, old)| *owner != key || *old != reason) {
+                            crate::log_line(&format!("painel: leitura automática dos arquivos alterados falhou: {reason}"));
+                        }
+                        self.side.beta_files_failed = Some((key.clone(), std::time::Instant::now(), reason));
+                        // Sem nada mudando na sessão não haveria outro desenho para tentar de novo.
+                        cx.spawn_in(window, async move |this, cx| {
+                            cx.background_executor().timer(BETA_FILES_RETRY).await;
+                            let _ = this.update(cx, |_, cx| cx.notify());
+                        }).detach();
+                    }
                     _ => {}
                 }
             }
@@ -742,7 +775,8 @@ impl Hangar {
                 Some((_, None, error)) => Some(("—".into(), error.clone())),
             }
         } else { status.and_then(|s| s.cost_usd).map(|usd| (self.money(usd), Some(tr("side_cost_session")))) };
-        // Conversa nova: só o número, "224k de 1M tokens" na mesma linha e a barra; custo, turno e cotas ficam fora.
+        // Conversa nova: só o número, "224k de 1M tokens" na mesma linha e a barra; custo, turno e cotas ficam fora, mas o
+        // limite batido fica, com a hora em que volta.
         if appearance::conversation_beta() {
             let used = status.and_then(|s| s.ctx_used).map(tokens);
             let total = status.and_then(|s| s.ctx_total).map(tokens);
@@ -759,7 +793,9 @@ impl Hangar {
             return div().flex().flex_col().child(beta_title(tr("beta_side_context")))
                 .child(div().flex().items_baseline().gap(px(10.)).min_w_0().child(number)
                     .children(caption.map(|c| c.min_w_0().text_size(px(13.5)).text_color(theme::muted()))))
-                .child(bar).into_any_element();
+                .child(bar)
+                .children(self.limited_line().map(|line| line.mt(px(10.)).text_size(px(12.5))))
+                .into_any_element();
         }
         let mut line = Vec::new();
         if self.chat.state.state != "working" {
@@ -819,16 +855,24 @@ impl Hangar {
             .into_any_element())
     }
 
-    fn render_limits(&self, status: Option<&StatusFields>) -> Option<AnyElement> {
+    /// "Limite até {reset}" quando a sessão bateu o limite de uso.
+    fn limited_line(&self) -> Option<Div> {
         // Antes do primeiro `state` da conversa vale o que a lista de sessões diz.
         let limited = if self.chat.state.state.is_empty() { self.selected.as_ref().and_then(|s| s.limited) == Some(true) } else { self.chat.state.limited };
+        if !limited { return None; }
         let reset = self.chat.state.limit_reset.clone().or_else(|| self.selected.as_ref().and_then(|s| s.limit_reset.clone()));
+        Some(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(theme::limited())
+            .child(reset.map(|r| tr("side_limited_until").replace("{reset}", &r)).unwrap_or_else(|| tr("side_limited"))))
+    }
+
+    fn render_limits(&self, status: Option<&StatusFields>) -> Option<AnyElement> {
+        let limited = self.limited_line();
         let windows: Vec<(String, f64, Option<String>)> = status.map(|s| [
             (tr("limit_5h"), s.five_hour_pct, s.five_hour_reset.clone()),
             (tr("side_limit_7d"), s.weekly_pct, s.weekly_reset.clone()),
             (tr("limit_30d"), s.monthly_pct, s.monthly_reset.clone()),
         ].into_iter().filter_map(|(label, pct, reset)| Some((label, pct?, reset))).collect()).unwrap_or_default();
-        if !limited && windows.is_empty() { return None; }
+        if limited.is_none() && windows.is_empty() { return None; }
         // `RateChips variant="bars"` do web: janelas lado a lado (quebram quando a coluna estreita), rótulo mono calmo
         // à esquerda e número forte à direita, trilho de 4 px e "reseta" embaixo; o aviso de limite vem depois.
         Some(div().flex().flex_col().gap_2()
@@ -842,8 +886,7 @@ impl Hangar {
                         .child(div().mt(px(6.)).child(chrome::meter(pct)))
                         .when_some(reset, |el, r| el.child(div().mt(px(3.)).text_size(px(11.)).text_color(theme::faint()).truncate().child(tr("side_resets").replace("{reset}", &r))))
                 })))
-            .when(limited, |el| el.child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(theme::limited())
-                .child(reset.map(|r| tr("side_limited_until").replace("{reset}", &r)).unwrap_or_else(|| tr("side_limited")))))
+            .children(limited)
             .into_any_element())
     }
 
@@ -936,18 +979,30 @@ impl Hangar {
         let turn_end = (session.state != "working").then_some(session.last_activity).flatten();
         let sig = format!("{:?}/{:?}/{:?}/{:?}/{:?}/{:?}/{:?}", session.git_added, session.git_removed, session.git_dirty,
             session.branch, session.git_ahead, session.git_behind, turn_end);
-        let stale = self.side.beta_files_sig.as_ref().is_none_or(|(owner, old)| *owner != key || *old != sig);
+        let failed = self.side.beta_files_failed.as_ref().filter(|(owner, ..)| *owner == key);
+        let stale = self.side.beta_files_sig.as_ref().is_none_or(|(owner, old)| *owner != key || *old != sig)
+            || failed.is_some_and(|(_, at, _)| at.elapsed() >= BETA_FILES_RETRY);
+        // Uma leitura por vez: a nova trocaria a geração e a resposta da pedida pela pessoa se perderia; a assinatura
+        // que mudou no meio lê quando esta chegar.
+        let in_flight = self.side.files.as_ref().is_some_and(|(owner, slot)| *owner == key && slot.is_none());
         // A assinatura só vale quando a leitura começou: sem conexão agora, a próxima vez tenta de novo.
-        if stale && self.read_files(true, cx) { self.side.beta_files_sig = Some((key.clone(), sig)); }
-        // A falha só aparece quando a pessoa pediu a leitura; enquanto relê, fica a última lista boa.
-        let failure = match self.side.files.as_ref().filter(|(owner, _)| owner == &key) {
-            Some((_, Some(Err(reason)))) if !self.side.files_auto => Some(reason.clone()),
+        if stale && !in_flight && self.read_files(true, cx) { self.side.beta_files_sig = Some((key.clone(), sig)); }
+        let files = self.side.beta_files_last.as_ref().filter(|(owner, _)| owner == &key).map(|(_, list)| list);
+        let slot = self.side.files.as_ref().filter(|(owner, _)| owner == &key).map(|(_, slot)| slot);
+        // A falha da pedida pela pessoa aparece sempre; a da automática só sem lista boa à vista, e continua à vista
+        // enquanto ela relê, para não piscar.
+        let failure = match slot {
+            Some(Some(Err(reason))) if !self.side.files_auto => Some(reason.clone()),
+            _ if files.is_none() => self.side.beta_files_failed.as_ref().filter(|(owner, ..)| *owner == key).map(|(.., reason)| reason.clone()),
             _ => None,
         };
-        let files = self.side.beta_files_last.as_ref().filter(|(owner, _)| owner == &key).map(|(_, list)| list);
+        let loading = files.is_none() && failure.is_none() && matches!(slot, Some(None));
         let count = files.map(Vec::len)
             .or_else(|| session.git_dirty.filter(|n| *n > 0).map(|n| n as usize));
         let (added, removed) = (session.git_added.unwrap_or(0), session.git_removed.unwrap_or(0));
+        // Sem alteração não há lista a esperar: o "carregando" só piscaria embaixo de "sem alterações".
+        let loading = (loading && (added + removed > 0 || session.git_dirty.is_some_and(|n| n > 0)))
+            .then(|| div().mt(px(8.)).text_size(px(12.5)).text_color(theme::muted()).child(tr("side_files_loading")));
         let summary = match count {
             Some(0) | None if added + removed == 0 => div().text_size(px(13.5)).text_color(theme::muted()).child(tr("side_changes_none")),
             _ => div().flex().items_center().gap(px(8.)).text_size(px(13.5)).text_color(theme::muted())
@@ -981,6 +1036,7 @@ impl Hangar {
         div().flex().flex_col()
             .child(div().flex().items_center().justify_between().child(beta_title(tr("side_repository")).mb_0()).child(reload("side-files-reload")))
             .child(div().mt(px(4.)).child(summary))
+            .children(loading)
             .children(failure)
             .when(!rows.is_empty(), |el| el.child(div().id("side-files-list").mt(px(8.)).max_h(px(260.)).overflow_y_scroll().flex().flex_col().gap(px(2.)).children(rows)))
             .children(self.render_side_diff(&key, cx).map(|diff| diff.mt(px(8.))))
@@ -1014,14 +1070,21 @@ impl Hangar {
             else { chrome::small_icon(IconName::CircleCheck, 16., theme::success()).into_any_element() };
         let dismiss_id = agent.id.clone();
         let open = request.clone();
-        let card = div().id("side-subagent").flex().items_start().gap(px(6.)).cursor_pointer()
+        // Um botão do kit, para entrar no Tab e responder a Enter e Espaço; sem cor própria, o cartão fica como era.
+        let label = format!("{}: {}", super::activity::web("tool_abrir_agente"), request.1);
+        let open_card = Button::new("side-subagent")
+            .custom(ButtonCustomVariant::new(cx).color(transparent_black()).foreground(theme::text()).hover(transparent_black()).active(transparent_black()))
+            .flex_1().min_w_0().h_auto().p_0().accessibility_label(label)
             .on_click(cx.listener(move |this, _, _, cx| this.open_agent(open.clone(), cx)))
-            .child(div().w(px(22.)).pt(px(2.)).flex_shrink_0().child(icon))
-            .child(div().flex_1().min_w_0().flex().flex_col()
-                .child(div().truncate().text_size(px(14.5)).font_weight(FontWeight::MEDIUM).text_color(theme::text()).child(request.1.clone()))
-                .child(div().mt(px(2.)).truncate().text_size(px(12.5)).text_color(theme::muted()).child(meta)))
+            .child(div().w_full().min_w_0().flex().items_start().gap(px(6.)).text_left()
+                .child(div().w(px(22.)).pt(px(2.)).flex_shrink_0().child(icon))
+                .child(div().flex_1().min_w_0().flex().flex_col()
+                    .child(div().truncate().text_size(px(14.5)).font_weight(FontWeight::MEDIUM).text_color(theme::text()).child(request.1.clone()))
+                    .child(div().mt(px(2.)).truncate().text_size(px(12.5)).text_color(theme::muted()).child(meta))));
+        let card = div().flex().items_start().gap(px(6.))
+            .child(open_card)
             .child(chrome::icon_button("side-subagent-dismiss", IconName::Close, tr("beta_sub_dismiss"), cx).flex_shrink_0()
-                .on_click(cx.listener(move |this, _, _, cx| { this.side.beta_dismissed.insert(dismiss_id.clone()); cx.stop_propagation(); cx.notify(); })));
+                .on_click(cx.listener(move |this, _, _, cx| { this.side.beta_dismissed.insert(dismiss_id.clone()); cx.notify(); })));
         Some(div().flex().flex_col().child(beta_title(tr("beta_side_subagent"))).child(card).into_any_element())
     }
 
@@ -1115,13 +1178,24 @@ impl Hangar {
                     Shortcut::Send { icon, .. } | Shortcut::Shell { icon, .. } => shortcuts::icon_element(icon.as_deref(), 16., theme::text()),
                 };
                 let fill = tone.map_or_else(theme::raised, |(color, _)| color.opacity(0.08));
+                let faint = text_tone.unwrap_or_else(theme::faint);
+                // O estado do terminal desce para baixo do nome; o ladrilho só cresce quando há essa linha.
+                let line = (!live.line.is_empty()).then(|| div().min_w_0().flex().items_center().gap(px(5.)).text_size(px(11.5)).text_color(faint)
+                    .when(live.state == hangar_live::TileState::Running, |el| el.child(div().size(px(6.)).flex_shrink_0().rounded_full().bg(theme::success())))
+                    .child(div().min_w_0().truncate().child(live.line.clone())));
+                let padded = line.is_some();
                 return Button::new(SharedString::from(id))
                     .custom(ButtonCustomVariant::new(cx).color(fill).foreground(theme::text()).hover(theme::hover()).active(theme::hover()))
-                    .w(px(tile)).flex_shrink_0().h(px(40.)).p_0().rounded(px(10.))
+                    .w(px(tile)).flex_shrink_0().h_auto().min_h(px(40.)).p_0().rounded(px(10.))
                     .tooltip(tip).accessibility_label(accessible).disabled(!readable || busy || (shortcut == Shortcut::Mode && !idle))
                     .when(missing.is_some(), |el| el.opacity(0.55))
-                    .child(div().size_full().rounded(px(10.)).border_1().border_color(if tone.is_some() { edge } else { theme::border_strong() }).px(px(8.)).flex().items_center().justify_center().gap(px(8.))
-                        .text_size(px(13.5)).child(icon).child(div().min_w_0().truncate().child(label)))
+                    .child(div().relative().w_full().h_full().min_h(px(40.)).rounded(px(10.)).border_1().border_color(if tone.is_some() { edge } else { theme::border_strong() })
+                        .px(px(8.)).when(padded, |el| el.py(px(5.))).flex().items_center().justify_center().gap(px(8.))
+                        // As marcas do bloco antigo em ícone, no canto: o texto delas está na dica.
+                        .when(own, |el| el.child(div().absolute().top(px(4.)).right(px(5.)).child(chrome::small_icon(IconName::Folder, 10., theme::faint()))))
+                        .when(live.mark, |el| el.child(div().absolute().top(px(4.)).right(px(if own { 18. } else { 5. })).child(chrome::small_icon(IconName::Globe, 10., faint))))
+                        .text_size(px(13.5)).child(icon)
+                        .child(div().min_w_0().flex().flex_col().child(div().min_w_0().truncate().child(label)).children(line)))
                     .on_click(cx.listener(move |this, _, window, cx| this.run_shortcut(shortcut.clone(), false, window, cx)));
             }
             Button::new(SharedString::from(id))

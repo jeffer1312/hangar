@@ -943,7 +943,7 @@ impl Hangar {
                 let pill = if crate::appearance::conversation_beta() {
                     let (model, size) = super::split_model_label(&text);
                     let rest = [size, effort.filter(|_| busy.is_none()), fast.filter(|_| busy.is_none())].into_iter().flatten().collect::<Vec<_>>();
-                    super::beta_pill(id.clone(), None, model, (!rest.is_empty()).then(|| rest.join(" · ")), cx)
+                    super::beta_pill(id.clone(), self.provider().0, None, model, (!rest.is_empty()).then(|| rest.join(" · ")), cx)
                 } else { super::model_pill(id.clone(), self.provider().0, text, effort.filter(|_| busy.is_none()), fast.filter(|_| busy.is_none()), cx) };
                 pills.push(popup::anchor(div(), id.clone()).child(pill
                     .selected(open == Some(ctl)).disabled(!self.chat_online)
