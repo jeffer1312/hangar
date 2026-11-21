@@ -380,7 +380,7 @@ fn quota_not_updated(q: &Quota) -> Option<String> {
     let status = reason.strip_prefix("http-").filter(|s| s.len() == 3 && s.bytes().all(|b| b.is_ascii_digit()));
     let cause = match (reason, status) {
         ("sem-resposta", _) => tr_shared("cota_causa_sem_resposta", &[]),
-        ("http-429", _) => tr_shared("cota_causa_limite", &[]),
+        ("http-429" | "cliproxy-gerenciamento-http-429", _) => tr_shared("cota_causa_limite", &[]),
         ("http-401" | "http-403", _) => tr_shared("cota_causa_recusou", &[]),
         // 2xx chega quando o corpo não serve (vazio, JSON que não é objeto): é formato, não erro da fonte.
         (_, Some(status)) if !status.starts_with('2') => tr_shared("cota_causa_http", &[("status", status)]),

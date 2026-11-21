@@ -15,7 +15,7 @@ export function sessionCredential(session: AccountSession, credentials: Credenci
 }
 
 export function isCurrentAccount(target: SwitchTarget, session: AccountSession): boolean {
-  return target.engineAccount ? (!target.engineBinding || target.engineBinding === session.engine_binding)
+  return target.engineAccount ? (target.engineBinding ?? null) === (session.engine_binding ?? null)
     && (target.path === session.conta || target.engineAccount === session.engine_account)
     : `claude:${target.path}` === session.conta || normalize(target.path) === normalize(session.config_dir);
 }

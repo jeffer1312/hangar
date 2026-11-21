@@ -114,7 +114,16 @@ pub fn resolve_binding(accounts: &AccountService, binding: &str) -> Result<Value
     if records.iter().enumerate().any(|(i, (_, row))| i != index && row["prefix"] == prefix) {
         return Err("CLIProxyAPI: prefixo da conta vinculada compartilhado".into());
     }
-    associated(accounts, &records)?.into_iter().find_map(|(entry, i)| (i == index).then_some(entry))
+    let entries = match associated(accounts, &records) {
+        Ok(entries) => entries,
+        Err(_) => {
+            if crate::warn_limit::allow(None, "cliproxy_native_association") {
+                tracing::warn!("CLIProxyAPI: login Codex ilegível; a conta vinculada foi conferida no proxy");
+            }
+            entries(Vec::new(), &records)?
+        }
+    };
+    entries.into_iter().find_map(|(entry, i)| (i == index).then_some(entry))
         .ok_or_else(|| "CLIProxyAPI: não consegui resolver a conta vinculada".into())
 }
 

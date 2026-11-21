@@ -1533,6 +1533,7 @@ describe('CreateSessionSheet Codex', () => {
     expect(calls.models.mock.calls.at(-1)?.at(-1)).toBe(account);
     const payload = calls.create.mock.calls[0][1];
     expect(payload.engine_account).toBe(account);
+    expect(payload.engine_binding).toBe('linked-account');
     if (ultrafast) expect(payload.service_tier).toBe('ultrafast');
     else expect(payload).not.toHaveProperty('service_tier');
     root.unmount();

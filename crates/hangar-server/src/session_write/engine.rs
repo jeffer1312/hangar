@@ -212,10 +212,16 @@ pub async fn service_tier(State(st):State<Arc<AppState>>,ConnectInfo(peer):Conne
         return reply(Some(&parts.headers),StatusCode::BAD_REQUEST,detail_body("erro_fast_indisponivel","Fast exige GPT no CLIProxyAPI local",json!({})));
     }
     if tier==ServiceTier::Ultrafast {
-        let (account,model)=(match &spec.account {Account::Engine { account,.. }=>account.clone(),_=>None},runtime.claude_model_in_use(&name).await.or(spec.model.clone()));
+        let (account,binding)=match &spec.account {Account::Engine { account,binding,.. }=>(account.clone(),binding.clone()),_=>(None,None)};
+        let model=runtime.claude_model_in_use(&name).await.or(spec.model.clone());
         let accounts=st.accounts.clone();
-        let ultrafast=match tokio::task::spawn_blocking(move||crate::engines::catalog::supports_ultrafast(&accounts,engine.as_deref().unwrap_or(""),model.as_deref(),account.as_deref())).await {
-            Ok(ultrafast)=>ultrafast,
+        let ultrafast=match tokio::task::spawn_blocking(move|| {
+            let engine = engine.as_deref().unwrap_or("");
+            let route = crate::session_open::facts::session_engine_route(&accounts, engine, account.as_deref(), binding.as_deref())?;
+            Ok::<_, crate::session_open::OpenError>(crate::engines::catalog::supports_ultrafast(&accounts, engine, model.as_deref(), route.as_ref().map(|r| r.account.as_str())))
+        }).await {
+            Ok(Ok(ultrafast))=>ultrafast,
+            Ok(Err(error))=>return reply(Some(&parts.headers), StatusCode::CONFLICT, error.body()),
             Err(error)=>{
                 tracing::error!(%error,session=%name,"Ultra Fast: a conferência da conta caiu");
                 return reply(Some(&parts.headers),StatusCode::INTERNAL_SERVER_ERROR,detail_body("erro_ultrafast_conferencia","não consegui conferir o plano da conta",json!({})));

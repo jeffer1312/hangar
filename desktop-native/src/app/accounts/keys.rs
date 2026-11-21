@@ -757,7 +757,8 @@ impl Hangar {
         if let Some(accounts) = &f.proxy_accounts {
             let mut choices = div().flex().flex_wrap().gap(px(6.));
             for (account, binding) in accounts.iter().filter_map(|a| Some((a, a.binding.as_ref().filter(|_| a.prefix.is_some())?))) {
-                let label = if account.email.is_empty() { &account.label } else { &account.email };
+                let label = if account.email.is_empty() { account.label.as_str() } else { account.email.as_str() };
+                let label = [account.plan.as_deref(), account.prefix.as_deref(), Some(label)].into_iter().flatten().collect::<Vec<_>>().join(" · ");
                 let selected = f.binding.as_deref() == Some(binding.as_str());
                 let binding = binding.clone();
                 choices = choices.child(Button::new(SharedString::from(format!("engine-binding-{binding}"))).outline().small()

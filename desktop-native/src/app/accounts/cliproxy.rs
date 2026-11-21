@@ -58,7 +58,7 @@ struct InstallState {
 enum Start { Follow, Install, Adopt { confirm: bool } }
 
 #[derive(Clone, Deserialize)]
-struct Connected { #[serde(rename = "type")] kind: String, #[serde(default)] email: String, binding: Option<String>, prefix: Option<String> }
+struct Connected { #[serde(rename = "type")] kind: String, #[serde(default)] email: String, binding: Option<String>, prefix: Option<String>, plan: Option<String> }
 
 #[derive(Clone, Deserialize)]
 struct ProxyModel { id: String, context_length: Option<u64> }
@@ -939,7 +939,8 @@ impl Hangar {
                 let existing: Vec<(Brand, Connected)> = w.status.as_ref().and_then(|s| s.as_ref().ok())
                     .map(|s| s.connected.iter().filter_map(|a| Some((Brand::of(&a.kind)?, a.clone()))).collect()).unwrap_or_default();
                 let rows = existing.into_iter().enumerate().map(|(index, (brand, account))| {
-                    let shown = if account.email.is_empty() { brand.name().to_owned() } else { account.email.clone() };
+                    let label = if account.email.is_empty() { brand.name() } else { &account.email };
+                    let shown = [account.plan.as_deref(), account.prefix.as_deref(), Some(label)].into_iter().flatten().collect::<Vec<_>>().join(" · ");
                     let unavailable = busy || (brand == Brand::ChatGpt && account.binding.is_none());
                     div().flex().items_center().gap(px(10.)).px(px(12.)).py(px(8.)).rounded(px(12.)).border_1().border_color(theme::border())
                         .child(brand_logo(brand, 26.))
@@ -1084,7 +1085,7 @@ impl Hangar {
 mod tests {
     use super::{Brand, Connected, ProxyModel, allows_fast, default_model, default_name, new_email, safe_context};
 
-    fn account(kind: &str, email: &str) -> Connected { Connected { kind: kind.into(), email: email.into(), binding: None, prefix: None } }
+    fn account(kind: &str, email: &str) -> Connected { Connected { kind: kind.into(), email: email.into(), binding: None, prefix: None, plan: None } }
     fn model(id: &str) -> ProxyModel { ProxyModel { id: id.into(), context_length: None } }
 
     #[test]

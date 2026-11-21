@@ -29,7 +29,7 @@ export function quotaFailureReason(motivo: string): string | null {
   // Conta ocupada por login, renovação ou redefinição: não houve leitura que falhou.
   if (motivo === 'sessao-viva') return null;
   if (motivo === 'sem-resposta') return m.cota_causa_sem_resposta();
-  if (motivo === 'http-429') return m.cota_causa_limite();
+  if (motivo === 'http-429' || motivo === 'cliproxy-gerenciamento-http-429') return m.cota_causa_limite();
   if (motivo === 'http-401' || motivo === 'http-403') return m.cota_causa_recusou();
   const status = /^http-(\d{3})$/.exec(motivo)?.[1];
   // 2xx chega quando o corpo não serve (vazio, JSON que não é objeto): é formato, não erro da fonte.

@@ -100,7 +100,7 @@ pub fn connected(st: &AppState) -> Value {
         .inspect_err(|error| tracing::warn!(%error, "cliproxy: contas do proxy ilegíveis; o assistente mostra nenhuma"))
         .unwrap_or_default();
     json!(records.iter().filter(|(_, r)| r["disabled"] != true && r["type"].is_string())
-        .map(|(_, r)| json!({"type": r["type"], "email": r["email"].as_str().unwrap_or(""), "binding": proxy::binding_id(r), "prefix":r["prefix"]}))
+        .map(|(_, r)| json!({"type": r["type"], "email": r["email"].as_str().unwrap_or(""), "binding": proxy::binding_id(r), "prefix":r["prefix"], "plan":r["plan_type"]}))
         .collect::<Vec<_>>())
 }
 
@@ -262,7 +262,7 @@ pub async fn handle(st: &AppState, method: &Method, path: &str, bytes: &[u8]) ->
                         let account = auth_id.and_then(|id| {
                             proxy::credentials(&st.accounts.env).ok()?.into_iter().find_map(|(path, record)| {
                                 if path.file_name()?.to_str()? != id || record["disabled"] == true { return None; }
-                                Some(json!({"type":record["type"], "email":record["email"], "binding":proxy::binding_id(&record), "prefix":record["prefix"]}))
+                                Some(json!({"type":record["type"], "email":record["email"], "binding":proxy::binding_id(&record), "prefix":record["prefix"], "plan":record["plan_type"]}))
                             })
                         });
                         json_response(StatusCode::OK, json!({"status": "ok", "naming": naming, "account":account}))

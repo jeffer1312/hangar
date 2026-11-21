@@ -187,6 +187,8 @@ pub struct SessionOpenRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub engine_account: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine_binding: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,

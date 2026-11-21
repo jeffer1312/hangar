@@ -191,11 +191,17 @@ fn resolve_with(request: &SessionOpenRequest, caller: &OpenCaller, facts: &dyn O
             }
         },
     };
+    if request.engine_binding.is_some() && (guest || provider != AgentProvider::Claude || request.engine.as_deref().is_none_or(str::is_empty)) {
+        return Err(OpenError::new(400, "erro_cliproxy_conta", "O vínculo ChatGPT só vale para Claude com motor do proxy local."));
+    }
     let bound_request;
     let mut engine_binding = None;
     let request = if !guest && provider == AgentProvider::Claude && let Some(engine) = request.engine.as_deref().filter(|e| !e.is_empty()) {
         let (account, binding) = facts.engine_account(engine, request.engine_account.as_deref())?;
         engine_binding = binding;
+        if request.engine_binding.as_ref().is_some_and(|expected| engine_binding.as_ref() != Some(expected)) {
+            return Err(OpenError::new(409, "erro_cliproxy_conta", "A conta vinculada ao motor mudou. Reabra a tela de nova sessão."));
+        }
         if request.resume_engine_binding.as_ref().is_some_and(|expected| engine_binding.as_ref() != Some(expected)) {
             return Err(OpenError::new(409, "erro_cliproxy_conta", "O vínculo do motor mudou desde o fechamento da conversa."));
         }

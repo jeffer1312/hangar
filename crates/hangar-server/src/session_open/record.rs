@@ -25,7 +25,10 @@ pub(crate) fn path(home: &Path, key: &str) -> io::Result<PathBuf> {
     Ok(dir(home).join(format!("{key}.json")))
 }
 
-pub fn write(home: &Path, spec: &SessionSpec) -> io::Result<()> { write_at(home, &path(home, &spec.key)?, spec) }
+pub fn write(home: &Path, spec: &SessionSpec) -> io::Result<()> {
+    if let Some(conversation) = &spec.conversation { save_binding_history(home, spec, conversation)?; }
+    write_at(home, &path(home, &spec.key)?, spec)
+}
 
 fn write_at(home: &Path, path: &Path, spec: &SessionSpec) -> io::Result<()> {
     std::fs::create_dir_all(dir(home))?;
@@ -65,18 +68,26 @@ fn binding_history_path(home: &Path, conversation: &str) -> Option<PathBuf> {
 }
 
 pub(crate) fn remember_claude_binding(home: &Path, key: &str, conversation: &str) -> io::Result<()> {
-    let Some(mut spec) = (match read(home, key) {
+    let Some(spec) = (match read(home, key) {
         Err(error) if error.kind() == io::ErrorKind::InvalidInput => None,
         other => other?,
     }) else { return Ok(()) };
-    if spec.provider != AgentProvider::Claude || !matches!(spec.account, Account::Engine { binding: Some(_), .. }) {
+    if let Some(previous) = &spec.conversation { save_binding_history(home, &spec, previous)?; }
+    save_binding_history(home, &spec, conversation)
+}
+
+fn save_binding_history(home: &Path, spec: &SessionSpec, conversation: &str) -> io::Result<()> {
+    if spec.provider != AgentProvider::Claude { return Ok(()); }
+    let bound = matches!(spec.account, Account::Engine { binding: Some(_), .. });
+    let Some(path) = binding_history_path(home, conversation) else {
+        if bound { return Err(io::Error::new(io::ErrorKind::InvalidInput, "identificador de conversa inválido")); }
         return Ok(());
-    }
-    let path = binding_history_path(home, conversation)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "identificador de conversa inválido"))?;
-    spec.conversation = Some(conversation.to_owned());
+    };
+    if !bound && !path.exists() { return Ok(()); }
+    let mut snapshot = spec.clone();
+    snapshot.conversation = Some(conversation.to_owned());
     std::fs::create_dir_all(path.parent().unwrap())?;
-    write_at(home, &path, &spec)
+    write_at(home, &path, &snapshot)
 }
 
 pub(crate) fn archived_claude(home: &Path, conversation: &str) -> Option<SessionSpec> {
@@ -225,6 +236,7 @@ mod tests {
         spec.account = Account::Default;
         write(home.path(), &spec).unwrap();
         assert_eq!(archived_claude(home.path(), next).unwrap().account, Account::Default);
+        assert!(matches!(archived_claude(home.path(), prior).unwrap().account, Account::Engine { binding: Some(_), .. }));
     }
 
     /// SO4: o Arquivo reabre a mesma conversa com chave nova e o spec antigo fica: vale o mais recente.

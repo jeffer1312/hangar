@@ -40,8 +40,9 @@ const server: Server = { id: 'b', label: 'B', baseUrl: 'https://b.local', token:
 const install = (patch: Partial<CliproxyInstall> = {}): CliproxyInstall =>
   ({ state: 'managed', version: 'v1', latest: 'v1', update_available: false, running: true, job: null, ...patch });
 const proxy = (patch: Partial<CliproxyDeteccao> = {}): CliproxyDeteccao => ({
-  found: true, base_url: 'http://127.0.0.1:8317/v1', models: [{ id: 'claude-sonnet-x', context_length: null, vision: null }, { id: 'gpt-6.1-sol', context_length: 872000, vision: null }], error: null,
-  connected: [{ type: 'codex', email: 'velho@x.com', binding: 'old-binding' }], install: install(), ...patch,
+  found: true, base_url: 'http://127.0.0.1:8317/v1', models: [{ id: 'claude-sonnet-x', context_length: null, vision: null },
+    { id: 'velho/gpt-6.1-sol', context_length: 872000, vision: null }, { id: 'novo/gpt-6.1-sol', context_length: 872000, vision: null }], error: null,
+  connected: [{ type: 'codex', email: 'velho@x.com', binding: 'old-binding', prefix: 'velho' }], install: install(), ...patch,
 });
 const roots: Array<ReturnType<typeof createRoot>> = [];
 beforeEach(() => {
@@ -94,8 +95,8 @@ describe('assistente do CLIProxyAPI no celular', () => {
     expect(calls.callback).not.toHaveBeenCalled();
     expect(view.container.textContent).toContain('não parece o endereço de volta');
 
-    calls.status.mockResolvedValue({ status: 'ok', account: { type: 'codex', email: 'novo@x.com', binding: 'new-binding' } });
-    calls.detect.mockResolvedValue(proxy({ connected: [{ type: 'codex', email: 'velho@x.com', binding: 'old-binding' }, { type: 'codex', email: 'novo@x.com', binding: 'new-binding' }] }));
+    calls.status.mockResolvedValue({ status: 'ok', account: { type: 'codex', email: 'novo@x.com', binding: 'new-binding', prefix: 'novo' } });
+    calls.detect.mockResolvedValue(proxy({ connected: [{ type: 'codex', email: 'velho@x.com', binding: 'old-binding', prefix: 'velho' }, { type: 'codex', email: 'novo@x.com', binding: 'new-binding', prefix: 'novo' }] }));
     const callback = 'http://localhost:1455/auth/callback?code=abc&state=st1';
     await fill(view.container, 'Endereço da barra do navegador', callback);
     await click(view.container, 'Concluir login');
@@ -131,8 +132,8 @@ describe('assistente do CLIProxyAPI no celular', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(6000); await settle(); });
     expect(calls.status).toHaveBeenCalledTimes(1);
 
-    calls.status.mockResolvedValue({ status: 'ok', account: { type: 'codex', email: 'novo@x.com', binding: 'new-binding' } });
-    calls.detect.mockResolvedValue(proxy({ connected: [{ type: 'codex', email: 'velho@x.com', binding: 'old-binding' }, { type: 'codex', email: 'novo@x.com', binding: 'new-binding' }] }));
+    calls.status.mockResolvedValue({ status: 'ok', account: { type: 'codex', email: 'novo@x.com', binding: 'new-binding', prefix: 'novo' } });
+    calls.detect.mockResolvedValue(proxy({ connected: [{ type: 'codex', email: 'velho@x.com', binding: 'old-binding', prefix: 'velho' }, { type: 'codex', email: 'novo@x.com', binding: 'new-binding', prefix: 'novo' }] }));
     await fill(view.container, 'Endereço da barra do navegador', 'http://localhost:1455/auth/callback?code=abc&state=st1');
     await click(view.container, 'Concluir login');
     expect(view.container.textContent).toContain('Conta conectada.');
@@ -158,6 +159,15 @@ describe('assistente do CLIProxyAPI no celular', () => {
     }));
   });
 
+  it('não oferece modelos de outra conta quando a escolhida não tem prefixo', async () => {
+    calls.detect.mockResolvedValue(proxy({ connected: [{ type: 'codex', email: 'pro@x.com', binding: 'pro-binding', prefix: null }] }));
+    const view = await show();
+    await click(view.container, 'Usar esta conta');
+    expect(view.container.textContent).toContain(m.cliproxy_account_needs_prefix());
+    expect(button(view.container, 'gpt-6.1-sol')).toBeUndefined();
+    expect(calls.put).not.toHaveBeenCalled();
+  });
+
   it('não adivinha a conta quando o login não informa a identidade', async () => {
     const view = await show();
     await click(view.container, 'ChatGPT, Recomendado');
@@ -178,7 +188,7 @@ describe('assistente do CLIProxyAPI no celular', () => {
   });
 
   it('recusa nome vazio e nome de motor que já existe sem gravar', async () => {
-    calls.status.mockResolvedValue({ status: 'ok', account: { type: 'codex', email: 'velho@x.com', binding: 'old-binding' } });
+    calls.status.mockResolvedValue({ status: 'ok', account: { type: 'codex', email: 'velho@x.com', binding: 'old-binding', prefix: 'velho' } });
     const view = await show(['gpt-velho']);
     await click(view.container, 'ChatGPT, Recomendado');
     await fill(view.container, 'Endereço da barra do navegador', 'http://127.0.0.1:1455/auth/callback?state=st1');
@@ -193,9 +203,10 @@ describe('assistente do CLIProxyAPI no celular', () => {
     expect(calls.put).not.toHaveBeenCalled();
   });
 
-  it('modelo com prefixo de conta (solo/gpt-…) conta como GPT e grava o Fast com o identificador inteiro', async () => {
-    calls.status.mockResolvedValue({ status: 'ok', account: { type: 'codex', email: 'velho@x.com', binding: 'old-binding' } });
-    calls.detect.mockResolvedValue(proxy({ models: [{ id: 'solo/gpt-6.1-sol', context_length: 872000, vision: null }] }));
+  it('modelo com prefixo da conta grava o Fast e só o nome do modelo', async () => {
+    const account = { type: 'codex', email: 'velho@x.com', binding: 'old-binding', prefix: 'solo' };
+    calls.status.mockResolvedValue({ status: 'ok', account });
+    calls.detect.mockResolvedValue(proxy({ connected: [account], models: [{ id: 'solo/gpt-6.1-sol', context_length: 872000, vision: null }] }));
     const view = await show();
     await click(view.container, 'ChatGPT, Recomendado');
     await fill(view.container, 'Endereço da barra do navegador', 'http://127.0.0.1:1455/auth/callback?state=st1');
@@ -203,7 +214,7 @@ describe('assistente do CLIProxyAPI no celular', () => {
     await click(view.container, 'Continuar');
     await fill(view.container, 'Nome', 'GPT solo');
     await click(view.container, 'Concluir');
-    expect(calls.put).toHaveBeenCalledExactlyOnceWith(server, 'gpt-solo', expect.objectContaining({ model: 'solo/gpt-6.1-sol', fast: true }));
+    expect(calls.put).toHaveBeenCalledExactlyOnceWith(server, 'gpt-solo', expect.objectContaining({ model: 'gpt-6.1-sol', fast: true }));
   });
 
   it('pede a senha de gerenciamento quando falta e abre o login depois de salvar', async () => {

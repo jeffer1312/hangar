@@ -20,21 +20,20 @@ fn visible(st: &crate::accounts::AccountService) -> Value {
         match result {
             Ok(true) => {
                 item["cliproxy_accounts"] = json!([]);
-                match accounts.get_or_insert_with(|| proxy::list_accounts(st)) {
-                    Ok(accounts) if accounts.is_empty() => {
-                        item["cliproxy_error"] = json!(
-                            "nenhuma conta ChatGPT conectada no proxy"
-                        )
-                    }
-                    Ok(accounts) => {
-                        if let Some(binding) = item["cliproxy_binding"].as_str() {
-                            match proxy::resolve_binding(st, binding) {
-                                Ok(account) => item["cliproxy_bound_account"] = account,
-                                Err(error) => item["cliproxy_binding_error"] = json!(error),
-                            }
+                if let Some(binding) = item["cliproxy_binding"].as_str() {
+                    match proxy::resolve_binding(st, binding) {
+                        Ok(mut account) => {
+                            account["binding"] = json!(binding);
+                            item["cliproxy_bound_account"] = account;
                         }
-                        item["cliproxy_accounts"] = json!(accounts);
-                    },
+                        Err(error) => item["cliproxy_binding_error"] = json!(error),
+                    }
+                }
+                match accounts.get_or_insert_with(|| proxy::list_accounts(st)) {
+                    Ok(accounts) if !accounts.is_empty() => item["cliproxy_accounts"] = json!(accounts),
+                    _ if item["cliproxy_bound_account"].is_object() =>
+                        item["cliproxy_accounts"] = json!([item["cliproxy_bound_account"].clone()]),
+                    Ok(_) => item["cliproxy_error"] = json!("nenhuma conta ChatGPT conectada no proxy"),
                     Err(e) => item["cliproxy_error"] = json!(e),
                 }
             }
@@ -317,7 +316,8 @@ pub async fn serve(st: &AppState, req: Request) -> Response {
         && (raw_body["cliproxy_binding"].is_string() || (raw_body.get("cliproxy_binding").is_none() && proxy::engine_binding(&env, name).is_some())) {
         let local = match proxy::local(&env) {
             Ok(Some(local)) => local,
-            _ => return coded(400, "erro_cliproxy_ausente", "CLIProxyAPI local indisponível"),
+            Ok(None) => return coded(400, "erro_cliproxy_ausente", "CLIProxyAPI local não configurado"),
+            Err(error) => return coded(400, "erro_cliproxy_config", &error),
         };
         match probe::fetch(&local.base_url, &local.api_key).await {
             Ok(models) => Some(models),

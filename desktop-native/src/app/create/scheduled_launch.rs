@@ -9,6 +9,7 @@ pub(super) const FIELDS: [&str; 17] = [
     "codex_account",
     "engine",
     "engine_account",
+    "engine_binding",
     "model",
     "effort",
     "service_tier",

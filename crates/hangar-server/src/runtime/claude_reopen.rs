@@ -242,13 +242,14 @@ fn preflight(env:&crate::accounts::environment::AccountEnvironment,next:&mut Ses
     use crate::session_open::OpenFacts;
     let facts=crate::session_open::facts::LocalFacts::new(env.clone(),runtime);
     let mut warnings=Vec::new();
-    if let Account::Engine { name,account,binding,config_dir,.. }=&next.account {
+    if let Account::Engine { name,account,binding,config_dir,.. }=&mut next.account {
         // Ilegível não diz que o motor sumiu: tirar a sessão dele seria trocar a conta calado.
         let engines=crate::session_open::facts::engine_names(env)
             .map_err(|_|refused("reopen_engines_unreadable","o catálogo de motores (engines.json) não pôde ser lido; nada foi reaberto"))?;
         if account.is_some() || binding.is_some() || engines.contains(name) {
-            crate::session_open::facts::session_engine_route(&crate::accounts::AccountService::new(env.clone()), name, account.as_deref(), binding.as_deref())
+            let route = crate::session_open::facts::session_engine_route(&crate::accounts::AccountService::new(env.clone()), name, account.as_deref(), binding.as_deref())
                 .map_err(|error| refused("launch_engine_account", &error.msg))?;
+            if let Some(route) = route { *account = Some(route.account); }
         }
         if !engines.contains(name) {
             if account.is_some() {return Err(refused("reopen_engine_missing","motor da conta ChatGPT fixa indisponível; nada foi reaberto"));}

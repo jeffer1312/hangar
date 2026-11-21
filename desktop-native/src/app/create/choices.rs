@@ -357,6 +357,10 @@ impl NewSession {
         self.selected_engine()?.cliproxy_accounts.as_deref()
     }
 
+    pub(super) fn proxy_binding(&self) -> Option<&str> {
+        self.selected_engine()?.cliproxy_binding.as_deref()
+    }
+
     pub(super) fn proxy_account(&self) -> Option<&crate::api::dto::CliProxyAccount> {
         self.proxy_accounts()?.iter().find(|a| a.account == self.engine_account)
     }

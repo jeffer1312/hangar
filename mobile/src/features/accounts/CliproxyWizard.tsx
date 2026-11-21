@@ -22,7 +22,7 @@ import * as m from '../../paraglide/messages';
 export { InstallItems };
 
 type Provider = CliproxyLoginProvider;
-export type Account = { provider: Provider; email: string; binding?: string | null; prefix?: string | null };
+export type Account = { provider: Provider; email: string; binding?: string | null; prefix?: string | null; plan?: string | null };
 type Stage =
   | { k: 'loading' }
   | { k: 'load_error'; error: string }
@@ -60,13 +60,19 @@ const fastFor = (model: string) => /^gpt-\d/.test(model.split('/').pop() ?? '');
 // Mesma regra do nativo (`default_model`): o primeiro da assinatura (GPT com número, ou Claude); sem ele, o primeiro.
 const defaultModel = (models: string[], p: Provider) =>
   models.find(id => p === 'codex' ? fastFor(id) : /claude/i.test(id)) ?? models[0] ?? '';
+const accountPrefix = (info: CliproxyDeteccao | null, account: Account) => {
+  const current = account.binding ? info?.connected?.find(entry => entry.binding === account.binding && entry.type === account.provider) : undefined;
+  return current ? current.prefix : account.prefix;
+};
 const modelsFor = (info: CliproxyDeteccao | null, account: Account) => {
   const all = (info?.models ?? []).map(x => x.id);
-  if (account.provider === 'codex' && account.prefix) {
-    const prefix = `${account.prefix}/`;
+  if (account.provider === 'codex') {
+    const found = accountPrefix(info, account);
+    if (!found) return [];
+    const prefix = `${found}/`;
     return all.filter(id => id.startsWith(prefix)).map(id => id.slice(prefix.length));
   }
-  const own = all.filter(id => account.provider === 'codex' ? /^(gpt|codex|o\d)/i.test(id) : /^claude/i.test(id));
+  const own = all.filter(id => /^claude/i.test(id));
   return own.length ? own : all;
 };
 
@@ -327,7 +333,7 @@ export function CliproxyWizard({ server, names, onSaved, onClose }: {
         setStage({ k: 'pick', error: m.cliproxy_choose_connected_account() });
         return;
       }
-      setStage({ k: 'connected', account: { provider, email: identified.email, binding: identified.binding, prefix: identified.prefix } });
+      setStage({ k: 'connected', account: { provider, email: identified.email, binding: identified.binding, prefix: identified.prefix, plan: identified.plan } });
       return;
     }
     const fresh = own.find(a => !before.current.has(a.email)) ?? own[own.length - 1];
@@ -356,7 +362,10 @@ export function CliproxyWizard({ server, names, onSaved, onClose }: {
   const reloadModels = (account: Account) => run(async () => {
     try {
       const next = await refresh();
-      if (alive.current && !model) setModel(defaultModel(modelsFor(next, account), account.provider));
+      if (alive.current) {
+        const available = modelsFor(next, account);
+        setModel(current => available.includes(current) ? current : defaultModel(available, account.provider));
+      }
     } catch (e) { if (alive.current) setSaveError(message(e)); }
   });
   const save = (account: Account) => run(async () => {
@@ -369,11 +378,14 @@ export function CliproxyWizard({ server, names, onSaved, onClose }: {
     if (!ENGINE_ID.test(id)) return fail(m.mobile_cliproxy_wizard_name_bad());
     if (names.includes(id)) return fail(m.mobile_cliproxy_wizard_name_taken());
     if (!baseUrl) return fail(m.mobile_cliproxy_wizard_load_failed({ erro: infoNow.current?.error ?? m.erro_desconhecido() }));
-    if (!model) return fail(m.mobile_cliproxy_wizard_models_empty());
     if (account.provider === 'codex' && !account.binding) return fail(m.cliproxy_choose_connected_account());
+    if (!model || (account.provider === 'codex' && !modelsFor(infoNow.current, account).includes(model))) {
+      return fail(m.mobile_cliproxy_wizard_models_empty());
+    }
     setSaveError('');
     // Sem janela própria o Claude Code assume 1M; com o limite real menos 5% (margem do Codex), compacta a tempo.
-    const providerModel = account.prefix ? `${account.prefix}/${model}` : model;
+    const prefix = accountPrefix(infoNow.current, account);
+    const providerModel = prefix ? `${prefix}/${model}` : model;
     const limit = infoNow.current?.models.find(x => x.id === providerModel)?.context_length;
     try {
       await putEngineForServer(server, id, { label, base_url: baseUrl, model, subagent_model: model,
@@ -397,7 +409,7 @@ export function CliproxyWizard({ server, names, onSaved, onClose }: {
   const canAdopt = setup?.handover?.ok === true;
   const adoptChosen = adoptPick && canAdopt;
   const existing: Account[] =(info?.connected ?? []).flatMap(a =>
-    a.type === 'codex' || a.type === 'claude' ? [{ provider: a.type, email: a.email, binding: a.binding, prefix: a.prefix }] : []);
+    a.type === 'codex' || a.type === 'claude' ? [{ provider: a.type, email: a.email, binding: a.binding, prefix: a.prefix, plan: a.plan }] : []);
   const body = (() => {
     switch (stage.k) {
       case 'loading': return <View style={styles.center}><ActivityIndicator color={c.muted} />
@@ -523,7 +535,8 @@ export function CliproxyWizard({ server, names, onSaved, onClose }: {
                 {id === model ? <Icon name="Check" size={18} color={c.accent} /> : null}
               </Pressable>)}
             </View> : <>
-              <Text style={[styles.muted, { color: c.muted }]}>{m.mobile_cliproxy_wizard_models_empty()}</Text>
+              <Text style={[styles.muted, { color: c.muted }]}>{stage.account.provider === 'codex' && !accountPrefix(info, stage.account)
+                ? m.cliproxy_account_needs_prefix() : m.mobile_cliproxy_wizard_models_empty()}</Text>
               <Button label={m.mobile_cliproxy_wizard_models_reload()} disabled={busy} onPress={() => void reloadModels(stage.account)} />
             </>}
             <Text style={[styles.muted, { color: c.muted }]}>{m.mobile_cliproxy_wizard_model_desc()}</Text>
@@ -653,7 +666,9 @@ export function AccountLine({ account, onUse, disabled }: { account: Account; on
   const { theme } = useUnistyles();
   return <View style={[styles.account, { borderColor: c.borderStrong }]}>
     <ProviderGlyph provider={account.provider} size={26} />
-    <Text style={[styles.optionText, { color: c.text }]} numberOfLines={1}>{account.email || providerName(account.provider)}</Text>
+    <Text style={[styles.optionText, { color: c.text }]} numberOfLines={2}>
+      {[account.plan, account.prefix, account.email || providerName(account.provider)].filter(Boolean).join(' · ')}
+    </Text>
     {onUse ? <Button label={m.mobile_cliproxy_wizard_use_account()} disabled={disabled} onPress={onUse} /> : <View style={styles.ok}>
       <Icon name="Check" size={14} color={theme.tokens.status.success} />
       <Text style={[styles.small, { color: theme.tokens.status.success }]}>{m.mobile_cliproxy_wizard_connected()}</Text>

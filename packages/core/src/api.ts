@@ -1096,6 +1096,7 @@ export interface CreateSessionBody {
   jev?: boolean;
   // Conta ChatGPT do CLIProxyAPI local (só Claude com motor) e Fast (`priority`) ou Ultra Fast da sessão nova.
   engine_account?: string;
+  engine_binding?: string;
   service_tier?: ServiceTier;
   // Plugins e skills só desta sessão: a diferença do padrão do catálogo (só Claude, sessão nova).
   claude_customizations?: ClaudeCustomizationDelta;
@@ -3148,7 +3149,7 @@ export interface CliproxyDeteccao {
   install?: CliproxyInstall;
 }
 
-export interface CliproxyAccount { type: string; email: string; binding?: string | null; prefix?: string | null }
+export interface CliproxyAccount { type: string; email: string; binding?: string | null; prefix?: string | null; plan?: string | null }
 
 export type CliproxyInstallStep = 'download' | 'config' | 'service' | 'start';
 

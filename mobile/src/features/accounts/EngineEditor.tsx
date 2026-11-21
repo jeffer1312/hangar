@@ -159,7 +159,7 @@ export function EngineEditor({ server, name, engine, names, onSaved, onClose, on
           description={engine.cliproxy_binding_error || (!binding ? m.cliproxy_no_bound_account() : undefined)}>
           <View style={styles.actions}>
             {(engine.cliproxy_accounts ?? []).filter(account => !!account.binding && !!account.prefix).map(account => (
-              <Pill key={account.binding} label={account.email || account.label} disabled={locked || account.binding === binding}
+              <Pill key={account.binding} label={[account.plan, account.prefix, account.email || account.label].filter(Boolean).join(' · ')} disabled={locked || account.binding === binding}
                 onPress={() => setBinding(account.binding)} />
             ))}
             {binding ? <Pill label={m.cliproxy_unbind_account()} disabled={locked} onPress={() => setBinding(null)} /> : null}

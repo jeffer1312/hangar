@@ -220,8 +220,9 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   const engineAccount = boundAccount?.account;
   const bindingBlocked = !!engineConfig?.cliproxy_binding && !engineAccount;
   const proxyQuota = engineConfig?.cliproxy_binding ? cotas.find(c => c.id === `cliproxy-binding:${engineConfig.cliproxy_binding}`) : undefined;
-  const defaultsKey = `${provider}:${provider === 'claude' ? engine : ''}:${engineAccount ?? ''}`;
+  const defaultsKey = `${provider}:${provider === 'claude' ? engine : ''}:${engineAccount ?? ''}:${engineConfig?.cliproxy_binding ?? ''}`;
   const defaultsReady = loadedDefaultsKey === defaultsKey;
+  const previousDefaults = useRef<{ key: string; engine: string | null } | null>(null);
   const choiceTouched = useRef(false);
   const permissionTouched = useRef(false);
   const [listaReduzida, setListaReduzida] = useState(false);
@@ -414,6 +415,12 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     if (!enabled) return;
     const controller = new AbortController();
     let alive = true;
+    const previous = previousDefaults.current;
+    previousDefaults.current = { key: defaultsKey, engine: catalogEngine };
+    if (previous && previous.key !== defaultsKey && (previous.engine || catalogEngine)) {
+      desired.current = { model: '', effort: '' };
+      choiceTouched.current = false;
+    }
     setDefaultsError('');
     setLoadedDefaultsKey(null);
     setPermissao('');
@@ -593,7 +600,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
       // A conta trocada pela cota também vai: é a que a tela mostra.
       config_dir: provider === 'claude' && (accountChosen || !!switchedFrom) ? selectedConfig : null,
       engine: provider === 'claude' ? engine || null : null,
-      ...(engineAccount ? { engine_account: engineAccount } : {}),
+      ...(engineAccount ? { engine_account: engineAccount, engine_binding: engineConfig?.cliproxy_binding } : {}),
       model: (provider === 'claude' || provider === 'pi' || provider === 'kimi' || provider === 'omp') ? modelo || null : null,
       effort: (provider === 'claude' || provider === 'pi' || provider === 'omp') ? esforco || null : null,
       permission_mode: provider === 'claude' ? permissao || null : null,
@@ -835,7 +842,9 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   // Leitura nova falhou e ficaram os números da anterior: sem o motivo, eles pareceriam atuais.
   const cotaAntiga = motivoCotaAntiga(cotaSelecionada);
   // Conta com a janela em 100% não responde: o aviso diz isso em cor de alerta, além dos números.
-  const quotaNotice = proxyEngine ? (boundAccount ? <Text style={styles.hint}>{resumoCota(proxyQuota) || m.conta_cota_sem_leitura()}</Text> : null)
+  const quotaNotice = proxyEngine ? (boundAccount ? <Text style={styles.hint}>
+    {[resumoCota(proxyQuota) || m.conta_cota_sem_leitura(), motivoCotaAntiga(proxyQuota)].filter(Boolean).join(' · ')}
+  </Text> : null)
     : provider === 'claude' && cotaSelecionada ? (
     <Text style={[styles.hint, janelaCheia ? styles.hintAlerta : null]} accessibilityRole={janelaCheia ? 'alert' : undefined}>
       {janelaCheia ? `${m.cota_conta_no_limite({ janela: janelaCheia })} ` : ''}

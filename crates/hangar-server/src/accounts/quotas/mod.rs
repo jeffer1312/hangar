@@ -485,11 +485,15 @@ impl AccountService {
             );
         }
         let mut output = vec![];
+        let management_paused = !cache.needs_refresh("cliproxy-management", now(), true);
         for (source, origin) in sources {
             let id = source["id"].as_str().ok_or_else(AccountError::io)?;
-            let Some(mut value) = cache.get(id) else {
-                continue;
-            };
+            let cached = cache.get(id);
+            let mut value = if management_paused && matches!(origin, Origin::CliProxy(_)) {
+                let mut value = cached.unwrap_or_else(|| reading("indisponivel", vec![], None));
+                value["motivo"] = json!("cliproxy-gerenciamento-http-429");
+                value
+            } else if let Some(value) = cached { value } else { continue };
             for field in ["id", "label", "provedor", "ativa"] {
                 value[field] = source[field].clone();
             }
