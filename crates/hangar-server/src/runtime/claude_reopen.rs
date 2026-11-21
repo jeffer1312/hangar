@@ -721,9 +721,20 @@ impl RuntimeRegistry {
         }
         let mut warnings;
         let automatic=matches!(change.reason,ChangeReason::RebootRestore|ChangeReason::ParkWake|ChangeReason::LimitSwitch|ChangeReason::Sleep);
+        let previous = (sid != current.sid).then(|| {
+            let mut record = current.spec.clone();
+            record.conversation = Some(current.sid.clone());
+            record
+        });
         {let (env,mut spec,settings,handle)=(self.codex_environment(),next,current.settings.clone(),tokio::runtime::Handle::current());
-            (next,warnings)=tokio::task::spawn_blocking(move||preflight(&env,&mut spec,settings.as_ref(),handle,automatic).map(|w|(spec,w))).await
-                .map_err(|_|ReopenFailure::refused(refused("reopen_preflight","a subida nova não pôde ser conferida")))?.map_err(ReopenFailure::refused)?;}
+            (next,warnings)=tokio::task::spawn_blocking(move|| {
+                let warnings = preflight(&env,&mut spec,settings.as_ref(),handle,automatic)?;
+                if let Some(previous) = &previous {
+                    crate::session_open::record::confirm_binding(&env.home, previous)
+                        .map_err(|_| refused("reopen_engine_binding_write", "Não consegui guardar a conta da conversa atual no Arquivo; nada foi reaberto."))?;
+                }
+                Ok((spec,warnings))
+            }).await.map_err(|_|ReopenFailure::refused(refused("reopen_preflight","a subida nova não pôde ser conferida")))?.map_err(ReopenFailure::refused)?;}
         // O único aviso do pré-voo é o motor que sumiu.
         if !warnings.is_empty() {self.diag.report("runtime.reopen_engine_gone",name,"reopen_engine_gone","o motor saiu do catálogo e a sessão volta na conta Anthropic");}
         warnings.extend(reconcile_account(&self.codex_environment(),next.account.config_dir(),&next.cwd).await.map_err(ReopenFailure::refused)?);
