@@ -242,8 +242,8 @@ fn cost(state: &MediaState) -> usize {
     }
 }
 
-/// `width`: o `w` com que a miniatura foi pedida (0 quando quem guarda não pede tamanho).
-struct Entry { state: MediaState, seen: u64, drawn: bool, width: u32 }
+/// `width`: o maior `w` já pedido (0 quando quem guarda não pede tamanho); `installed`: o da imagem guardada.
+struct Entry { state: MediaState, seen: u64, drawn: bool, width: u32, installed: u32 }
 
 /// Cache das prévias com teto: sai primeiro a menos vista, nunca uma desenhada no último quadro.
 pub struct MediaCache<K> { map: HashMap<K, Entry>, bytes: usize, frame: u64, budget: usize }
@@ -271,7 +271,7 @@ impl<K: Eq + Hash + Clone + std::fmt::Debug> MediaCache<K> {
     pub fn start(&mut self, key: K) { self.start_at(key, 0); }
 
     /// `start` de miniatura pedida com largura `width`, guardada para `grow` comparar.
-    pub fn start_at(&mut self, key: K, width: u32) { self.map.insert(key, Entry { state: MediaState::Loading, seen: self.frame, drawn: false, width }); }
+    pub fn start_at(&mut self, key: K, width: u32) { self.map.insert(key, Entry { state: MediaState::Loading, seen: self.frame, drawn: false, width, installed: 0 }); }
 
     /// A tela ficou mais densa que a miniatura guardada: `true` manda buscar de novo em `width`. A imagem atual fica
     /// até a nova chegar, e a largura já fica marcada, para o próximo quadro não pedir outra vez.
@@ -285,10 +285,21 @@ impl<K: Eq + Hash + Clone + std::fmt::Debug> MediaCache<K> {
 
     /// Grava e devolve o que saiu pelo teto, e a imagem que a nova substituiu, para liberar do atlas da GPU.
     pub fn insert(&mut self, key: K, state: MediaState) -> Vec<Arc<RenderImage>> {
+        let installed = self.map.get(&key).map_or(0, |entry| entry.installed);
+        self.insert_sized(key, state, installed)
+    }
+
+    /// `insert` de miniatura pedida com `width`: resposta mais estreita que a imagem já guardada chegou atrasada
+    /// (buscas de tamanhos diferentes terminam fora de ordem) e é devolvida para liberar, sem trocar a maior.
+    pub fn insert_sized(&mut self, key: K, state: MediaState, installed: u32) -> Vec<Arc<RenderImage>> {
+        if let (MediaState::Image(late), Some(entry)) = (&state, self.map.get(&key))
+            && matches!(entry.state, MediaState::Image(_)) && installed < entry.installed {
+            return vec![late.clone()];
+        }
         self.bytes += cost(&state);
-        let width = self.map.get(&key).map_or(0, |entry| entry.width);
+        let width = self.map.get(&key).map_or(installed, |entry| entry.width.max(installed));
         let mut evicted = Vec::new();
-        if let Some(old) = self.map.insert(key, Entry { state, seen: self.frame, drawn: false, width }) {
+        if let Some(old) = self.map.insert(key, Entry { state, seen: self.frame, drawn: false, width, installed }) {
             self.bytes -= cost(&old.state);
             if let MediaState::Image(image) = old.state { evicted.push(image); }
         }
@@ -367,6 +378,18 @@ mod tests {
         assert!(!cache.retry(&2) && cache.contains(&2), "busca em curso fica");
         assert!(!cache.retry(&3));
         assert_eq!(cache.bytes, 4 * 4 * 4);
+    }
+
+    #[test]
+    fn a_narrower_answer_arriving_late_never_replaces_the_wider_thumbnail() {
+        let mut cache = MediaCache::new();
+        cache.start_at(0, 240);
+        assert!(cache.insert_sized(0, picture(4), 240).is_empty());
+        assert!(cache.grow(&0, 480) && cache.grow(&0, 720), "duas buscas maiores em curso");
+        assert_eq!(cache.insert_sized(0, picture(8), 720).len(), 1, "a de 720 troca a de 240");
+        assert_eq!(cache.insert_sized(0, picture(6), 480).len(), 1, "a de 480 atrasada volta para liberar");
+        assert!(!cache.grow(&0, 720), "a de 720 fica guardada e não é pedida de novo");
+        assert_eq!(cache.bytes, 8 * 8 * 4);
     }
 
     #[test]

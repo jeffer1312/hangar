@@ -436,7 +436,7 @@ enum Payload {
     Recent(SessionKey, Result<Vec<UploadFile>, Failure>),
     // Miniatura já decodificada fora da thread da janela; `None` = bytes que não são imagem legível.
     // A miniatura e os quadros da revelação dela.
-    Media(SessionKey, Source, Result<Option<(Arc<RenderImage>, Vec<Arc<RenderImage>>)>, Failure>),
+    Media(SessionKey, Source, u32, Result<Option<(Arc<RenderImage>, Vec<Arc<RenderImage>>)>, Failure>),
     /// Resultado de Abrir/Salvar: o arquivo gravado e se veio vazio, ou a falha e se ele não existe no servidor.
     Saved(SessionKey, Source, bool, Result<(PathBuf, bool), (String, bool)>),
     /// "Abrir no navegador" do HTML citado: o endereço da página com o bilhete dela, ou a falha já em frase.
@@ -2386,7 +2386,7 @@ impl Hangar {
                     }).map_err(|error| Self::failure(&error)));
                 }
             }
-            Payload::Media(key, source, result) => {
+            Payload::Media(key, source, width, result) => {
                 // Revelação que ninguém desenhou até o fim (a conversa saiu da tela) é solta aqui. Sem desenho, espera o
                 // prazo de mensagem ao vivo: quem volta à conversa nesse tempo ainda vê a imagem abrir.
                 let now = Instant::now();
@@ -2412,7 +2412,7 @@ impl Hangar {
                 let slot = (key, source);
                 // A busca maior que falhou não apaga a miniatura que já estava na tela.
                 if matches!(state, MediaState::Image(_)) || !self.media.has_image(&slot) {
-                    for image in self.media.insert(slot, state) { cx.drop_image(image, Some(window)); }
+                    for image in self.media.insert_sized(slot, state, width) { cx.drop_image(image, Some(window)); }
                 }
                 let rows = self.row_ids.len();
                 if rows > 0 { self.follow_content_changed(cx); self.list_state.remeasure_items(0..rows); }
@@ -3703,7 +3703,7 @@ impl Hangar {
                 Err(error) => Err(error),
             };
             media::trace(format_args!("thumb ready {source:?} in {:.1} ms", started.elapsed().as_secs_f64() * 1000.));
-            let _ = tx.send(Envelope { connection, selection: None, payload: Payload::Media(key, source, result) }).await;
+            let _ = tx.send(Envelope { connection, selection: None, payload: Payload::Media(key, source, width, result) }).await;
         });
     }
 
