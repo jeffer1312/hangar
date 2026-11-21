@@ -1469,7 +1469,12 @@ impl Hangar {
         let organized=options.map(|options|options.mode!="none");
         let entity = cx.entity().downgrade();
         // Gravando, some: trocar no meio não muda nada (o backend lê o estilo no fim) e o espaço é do botão de parar.
-        let pill = (!recording&&organized==Some(true)).then(|| super::menu_pill("dictation-style", style_label(style), false, cx)
+        let pill = (!recording&&organized==Some(true)).then(|| (if crate::appearance::conversation_beta() && self.selected.is_some() {
+                // Conversa nova: rótulo e valor, "Ditado: só limpar", como os outros seletores com borda.
+                let value = style_label(style);
+                let value = value.chars().next().map(|c| c.to_lowercase().chain(value.chars().skip(1)).collect()).unwrap_or(value);
+                super::beta_pill("dictation-style", "", Some(tr("beta_dictation_label")), value, None, cx)
+            } else { super::menu_pill("dictation-style", style_label(style), false, cx) })
             .tooltip(tr("dictation_style")).accessibility_label(format!("{}: {}", tr("dictation_style"), style_label(style)))
             .disabled(in_flight || !readable)
             .dropdown_menu(move |menu, _, cx| {

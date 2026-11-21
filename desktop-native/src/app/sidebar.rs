@@ -897,10 +897,15 @@ impl Hangar {
     }
 
     pub(super) fn start_session_rename(&mut self, target: Target, window: &mut Window, cx: &mut Context<Self>) {
+        self.start_session_rename_with(target, None, window, cx);
+    }
+
+    /// Renomear começando de `value` (a sugestão de nome que a pessoa quer mudar), sempre no diálogo.
+    pub(super) fn start_session_rename_with(&mut self, target: Target, value: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
         if !self.target_session(&target).is_some_and(|s| !s.orq()) { return; }
         // No trilho a linha não tem onde mostrar o campo: vai ao diálogo, como o web com a barra recolhida.
-        let inline = appearance::get().navigation == appearance::Navigation::Sidebar && !self.rail();
-        let name = target.name.clone();
+        let inline = value.is_none() && appearance::get().navigation == appearance::Navigation::Sidebar && !self.rail();
+        let name = value.unwrap_or_else(|| target.name.clone());
         let input = cx.new(|cx| InputState::new(window, cx).default_value(name.clone()));
         let old = target.clone();
         let events = cx.subscribe_in(&input, window, move |this, _, event: &InputEvent, window, cx| match event {
@@ -925,6 +930,8 @@ impl Hangar {
             window.open_dialog(cx, move |dialog, window, cx| {
                 let value = input.read(cx).value().trim().to_owned();
                 let (busy, error) = { let s = status.borrow(); (s.sent.is_some(), s.error.clone()) };
+                // Outra troca de nome da mesma sessão em voo (a da sugestão, por exemplo) também segura o Renomear.
+                let busy = busy || weak.upgrade().is_some_and(|this| this.read(cx).sidebar.renaming.contains(&owner));
                 let (commit, cancel, close, owner) = (weak.clone(), weak.clone(), weak.clone(), owner.clone());
                 // Vazio ou igual ao atual não renomeia, e gravando não manda de novo: o botão fica desligado, como o do web.
                 let rename = Button::new("rename-ok").primary().label(tr("sidebar_rename")).disabled(busy || value.is_empty() || value == owner.name)
@@ -962,6 +969,19 @@ impl Hangar {
 
     fn commit_session_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(edit) = self.sidebar.editing.as_ref() else { return };
+        // A mesma regra do `rename_session_to`: com uma troca de nome em voo, outra sairia com o nome antigo. O diálogo fica
+        // aberto com o botão desligado; o campo da linha fecha sem enviar e avisa, para o nome digitado não sumir calado.
+        if self.sidebar.renaming.contains(&edit.target) {
+            if edit.inline {
+                let typed = edit.input.read(cx).value().trim().to_owned();
+                let unchanged = typed.is_empty() || typed == edit.target.name;
+                self.sidebar.editing = None;
+                self.root_focus.focus(window, cx);
+                cx.notify();
+                if !unchanged { window.push_notification(Notification::warning(tr("sidebar_rename_failed").replace("{n}", &tr("sidebar_rename_busy"))), cx); }
+            }
+            return;
+        }
         let new = edit.input.read(cx).value().trim().to_owned();
         let unchanged = new.is_empty() || new == edit.target.name;
         let old = edit.target.clone();
@@ -1486,6 +1506,10 @@ impl Hangar {
                                 Some(focus) => focus.focus(window, cx),
                                 None => { self.root_focus.focus(window, cx); self.sidebar.focus_tab = Some(new.clone()); }
                             }
+                        } else if let Some(inline) = self.sidebar.editing.as_ref().filter(|e| e.target == target).map(|e| e.inline) {
+                            // Outra troca (a da sugestão) mudou o nome com a edição aberta: ela renomearia um nome que não existe mais.
+                            self.sidebar.editing = None;
+                            if inline { self.root_focus.focus(window, cx); } else { window.close_dialog(cx); }
                         }
                         let lost = self.sidebar.lost.as_ref() == Some(&target);
                         if lost { self.sidebar.lost = None; }

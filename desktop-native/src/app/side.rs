@@ -18,6 +18,8 @@ const CHAT_MIN: f32 = 400.;
 const PANEL_EDGE: f32 = 3.;
 const COST_EVERY: u64 = 30;
 const DIFF_MAX: usize = 20_000;
+/// Espera da conversa nova antes de reler a lista de arquivos depois de uma falha: longa o bastante para não martelar o servidor.
+const BETA_FILES_RETRY: std::time::Duration = std::time::Duration::from_secs(30);
 
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum Shortcut {
@@ -142,6 +144,19 @@ pub(super) struct Side {
     /// A aba Orquestração da sessão `orq` aberta.
     pub(super) orq: super::orq_panel::State,
     files: Option<(SessionKey, Option<Result<Vec<GitFile>, String>>)>,
+    /// Conversa nova: a lista de arquivos do repositório lida sozinha; a assinatura das contagens que a pediu.
+    beta_files_sig: Option<(SessionKey, String)>,
+    /// Conversa nova: a última falha da leitura automática, quando e por quê; passado o prazo, a mesma assinatura lê de
+    /// novo, e o motivo fica à vista enquanto relê.
+    beta_files_failed: Option<(SessionKey, std::time::Instant, String)>,
+    /// Conversa nova: a última lista lida com sucesso, à vista enquanto a seguinte chega.
+    beta_files_last: Option<(SessionKey, Vec<GitFile>)>,
+    /// Geração da leitura da lista de arquivos: resposta de uma leitura anterior não substitui a mais nova.
+    files_gen: u64,
+    /// A leitura em voo foi a automática da conversa nova: falha dela vai ao log, não à tela, e o diff aberto fica.
+    files_auto: bool,
+    /// Conversa nova: subagentes dispensados no painel, pelo id da chamada.
+    beta_dismissed: HashSet<String>,
     diff: Option<(SessionKey, String, Option<Result<(String, bool), String>>)>,
     reloading: HashSet<SessionKey>,
     run_code_pending: HashSet<SessionKey>,
@@ -175,7 +190,7 @@ impl Default for Side {
     fn default() -> Self {
         let saved = appearance::get();
         Self { open: true, menu: false, width: saved.side_width, browser_width: saved.side_browser_width, drag: None, shortcuts: None, project: ProjectShortcuts::default(), cost: None, cost_task: None, cost_gen: 0, orq: Default::default(),
-            files: None, diff: None, reloading: HashSet::new(), run_code_pending: HashSet::new(), stop_pending: HashSet::new(), git: None, run: None, browsers: HashMap::new(), remote_browsers: HashMap::new(), browser_open: HashSet::new(), tabs: HashMap::new(),
+            files: None, beta_files_sig: None, beta_files_failed: None, beta_files_last: None, files_gen: 0, files_auto: false, beta_dismissed: HashSet::new(), diff: None, reloading: HashSet::new(), run_code_pending: HashSet::new(), stop_pending: HashSet::new(), git: None, run: None, browsers: HashMap::new(), remote_browsers: HashMap::new(), browser_open: HashSet::new(), tabs: HashMap::new(),
             #[cfg(target_os = "linux")] warm: None,
             shortcut_terms: HashMap::new(), shortcut_focus: HashMap::new(), shortcut_running: HashMap::new(), shortcut_recheck: HashMap::new() }
     }
@@ -200,6 +215,9 @@ impl Side {
     pub fn on_select(&mut self) {
         self.project.reset();
         self.files = None;
+        self.beta_files_sig = None;
+        self.beta_files_failed = None;
+        self.beta_files_last = None;
         self.diff = None;
         self.git = None;
     }
@@ -390,17 +408,27 @@ impl Hangar {
         self.side.cost_task = Some((key, task));
     }
 
-    pub(super) fn load_files(&mut self, cx: &mut Context<Self>) {
-        if self.open_read_only() { return; }
-        let (Some(api), Some(key)) = (self.session_api(), self.selected_key()) else { return; };
+    pub(super) fn load_files(&mut self, cx: &mut Context<Self>) { self.read_files(false, cx); }
+
+    /// Lê a lista de arquivos alterados; diz se a leitura começou. A pedida pela pessoa fecha o diff aberto; a
+    /// automática (conversa nova) só atualiza a lista.
+    fn read_files(&mut self, auto: bool, cx: &mut Context<Self>) -> bool {
+        if self.open_read_only() { return false; }
+        let (Some(api), Some(key)) = (self.session_api(), self.selected_key()) else { return false; };
         self.side.files = Some((key.clone(), None));
-        self.side.diff = None;
+        if !auto { self.side.diff = None; }
+        self.side.files_auto = auto;
+        // A pedida pela pessoa mostra o próprio resultado.
+        if !auto { self.side.beta_files_failed = None; }
+        self.side.files_gen += 1;
+        let generation = self.side.files_gen;
         let (connection, tx) = (self.connection, self.tx.clone());
         self.runtime.spawn(async move {
             let result = api.read(&key.name, &["git", "files"], &[], 30).await;
-            let _ = tx.send(Envelope { connection, selection: None, payload: Payload::Reply(key, Reply::GitFiles, result) }).await;
+            let _ = tx.send(Envelope { connection, selection: None, payload: Payload::Reply(key, Reply::GitFiles(generation), result) }).await;
         });
         cx.notify();
+        true
     }
 
     /// Atalhos do projeto da sessão aberta: lidos ao escolher a sessão e ao abrir a página Atalhos.
@@ -423,12 +451,17 @@ impl Hangar {
         let (Some(api), Some(key)) = (self.session_api(), self.selected_key()) else { return; };
         if self.side.diff.as_ref().is_some_and(|(owner, current, _)| owner == &key && current == &path) { self.side.diff = None; cx.notify(); return; }
         self.side.diff = Some((key.clone(), path.clone(), None));
+        self.fetch_diff(api, key, path);
+        cx.notify();
+    }
+
+    /// Pede o diff de `path`; a resposta só entra se ele ainda for o aberto.
+    fn fetch_diff(&self, api: Api, key: SessionKey, path: String) {
         let (connection, tx) = (self.connection, self.tx.clone());
         self.runtime.spawn(async move {
             let result = api.act(&key.name, &["git", "diff"], Some(json!({"path": path})), false, 30).await;
             let _ = tx.send(Envelope { connection, selection: None, payload: Payload::Reply(key, Reply::Diff(path), result) }).await;
         });
-        cx.notify();
     }
 
     pub(super) fn prefill(&mut self, text: &str, protect: bool, window: &mut Window, cx: &mut Context<Self>) {
@@ -586,7 +619,8 @@ impl Hangar {
                 });
             }
             Reply::OrqPanel(generation) => self.receive_orq_panel(generation, key, result),
-            Reply::GitFiles => {
+            Reply::GitFiles(generation) => {
+                if generation != self.side.files_gen { return; }
                 let Some((owner, slot)) = self.side.files.as_mut() else { return; };
                 if owner != &key { return; }
                 *slot = Some(result.map_err(|error| Self::failure(&error)).map(|value| {
@@ -599,6 +633,33 @@ impl Hangar {
                     files.sort_by_key(|f| std::cmp::Reverse(f.added.unwrap_or(0) + f.removed.unwrap_or(0)));
                     files
                 }));
+                // A lista boa fica guardada para a conversa nova mostrar enquanto relê; a falha da leitura automática não
+                // é ação da pessoa: vai ao log, e a lista anterior continua à vista (sem lista, a falha aparece).
+                match slot.clone() {
+                    Some(Ok(files)) => {
+                        self.side.beta_files_failed = None;
+                        // O agente pode ter mexido de novo no arquivo do diff aberto: a leitura automática o relê também.
+                        let reread = self.side.files_auto.then(|| self.side.diff.as_ref()
+                            .filter(|(owner, path, _)| owner == &key && files.iter().any(|f| f.path == *path)).map(|(_, path, _)| path.clone())).flatten();
+                        self.side.beta_files_last = Some((key.clone(), files));
+                        if let (Some(path), Some(api)) = (reread, self.session_api().filter(|_| self.selected_key().as_ref() == Some(&key))) {
+                            self.fetch_diff(api, key.clone(), path);
+                        }
+                    }
+                    Some(Err(reason)) if self.side.files_auto => {
+                        // Uma linha por motivo: a nova tentativa a cada prazo não enche o log.
+                        if self.side.beta_files_failed.as_ref().is_none_or(|(owner, _, old)| *owner != key || *old != reason) {
+                            crate::log_line(&format!("painel: leitura automática dos arquivos alterados falhou: {reason}"));
+                        }
+                        self.side.beta_files_failed = Some((key.clone(), std::time::Instant::now(), reason));
+                        // Sem nada mudando na sessão não haveria outro desenho para tentar de novo.
+                        cx.spawn_in(window, async move |this, cx| {
+                            cx.background_executor().timer(BETA_FILES_RETRY).await;
+                            let _ = this.update(cx, |_, cx| cx.notify());
+                        }).detach();
+                    }
+                    _ => {}
+                }
             }
             Reply::Diff(path) => {
                 let Some((owner, current, slot)) = self.side.diff.as_mut() else { return; };
@@ -714,6 +775,28 @@ impl Hangar {
                 Some((_, None, error)) => Some(("—".into(), error.clone())),
             }
         } else { status.and_then(|s| s.cost_usd).map(|usd| (self.money(usd), Some(tr("side_cost_session")))) };
+        // Conversa nova: só o número, "224k de 1M tokens" na mesma linha e a barra; custo, turno e cotas ficam fora, mas o
+        // limite batido fica, com a hora em que volta.
+        if appearance::conversation_beta() {
+            let used = status.and_then(|s| s.ctx_used).map(tokens);
+            let total = status.and_then(|s| s.ctx_total).map(tokens);
+            let caption = match (used, total) {
+                (Some(u), Some(t)) => Some(div().flex().items_baseline().gap(px(4.)).child(div().font_family(crate::theme::MONO).child(u))
+                    .child(tr("beta_side_ctx_of")).child(div().font_family(crate::theme::MONO).child(t)).child(tr("beta_side_ctx_tokens"))),
+                _ => None,
+            };
+            let number = div().flex_shrink_0().whitespace_nowrap().text_size(px(30.)).line_height(px(30.)).font_weight(FontWeight::SEMIBOLD).text_color(pct_color)
+                .child(pct.map(|p| format!("{}%", p.round())).unwrap_or_else(|| "—".into()));
+            let bar = div().mt(px(14.)).h(px(6.)).w_full().rounded(px(3.)).bg(theme::border_strong())
+                .child(div().h_full().rounded(px(3.)).bg(theme::accent()).w(relative((pct.unwrap_or(0.).clamp(0., 100.) / 100.) as f32)));
+            let _ = (cost, width, cx);
+            return div().flex().flex_col().child(beta_title(tr("beta_side_context")))
+                .child(div().flex().items_baseline().gap(px(10.)).min_w_0().child(number)
+                    .children(caption.map(|c| c.min_w_0().text_size(px(13.5)).text_color(theme::muted()))))
+                .child(bar)
+                .children(self.limited_line().map(|line| line.mt(px(10.)).text_size(px(12.5))))
+                .into_any_element();
+        }
         let mut line = Vec::new();
         if self.chat.state.state != "working" {
             if let Some(at) = self.selected.as_ref().and_then(|s| s.last_activity) { line.push((tr("side_idle_for").replace("{t}", &ago(now_seconds() - at)), false)); }
@@ -772,16 +855,24 @@ impl Hangar {
             .into_any_element())
     }
 
-    fn render_limits(&self, status: Option<&StatusFields>) -> Option<AnyElement> {
+    /// "Limite até {reset}" quando a sessão bateu o limite de uso.
+    fn limited_line(&self) -> Option<Div> {
         // Antes do primeiro `state` da conversa vale o que a lista de sessões diz.
         let limited = if self.chat.state.state.is_empty() { self.selected.as_ref().and_then(|s| s.limited) == Some(true) } else { self.chat.state.limited };
+        if !limited { return None; }
         let reset = self.chat.state.limit_reset.clone().or_else(|| self.selected.as_ref().and_then(|s| s.limit_reset.clone()));
+        Some(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(theme::limited())
+            .child(reset.map(|r| tr("side_limited_until").replace("{reset}", &r)).unwrap_or_else(|| tr("side_limited"))))
+    }
+
+    fn render_limits(&self, status: Option<&StatusFields>) -> Option<AnyElement> {
+        let limited = self.limited_line();
         let windows: Vec<(String, f64, Option<String>)> = status.map(|s| [
             (tr("limit_5h"), s.five_hour_pct, s.five_hour_reset.clone()),
             (tr("side_limit_7d"), s.weekly_pct, s.weekly_reset.clone()),
             (tr("limit_30d"), s.monthly_pct, s.monthly_reset.clone()),
         ].into_iter().filter_map(|(label, pct, reset)| Some((label, pct?, reset))).collect()).unwrap_or_default();
-        if !limited && windows.is_empty() { return None; }
+        if limited.is_none() && windows.is_empty() { return None; }
         // `RateChips variant="bars"` do web: janelas lado a lado (quebram quando a coluna estreita), rótulo mono calmo
         // à esquerda e número forte à direita, trilho de 4 px e "reseta" embaixo; o aviso de limite vem depois.
         Some(div().flex().flex_col().gap_2()
@@ -795,8 +886,7 @@ impl Hangar {
                         .child(div().mt(px(6.)).child(chrome::meter(pct)))
                         .when_some(reset, |el, r| el.child(div().mt(px(3.)).text_size(px(11.)).text_color(theme::faint()).truncate().child(tr("side_resets").replace("{reset}", &r))))
                 })))
-            .when(limited, |el| el.child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(theme::limited())
-                .child(reset.map(|r| tr("side_limited_until").replace("{reset}", &r)).unwrap_or_else(|| tr("side_limited")))))
+            .children(limited)
             .into_any_element())
     }
 
@@ -805,6 +895,9 @@ impl Hangar {
         let key = self.selected_key()?;
         let repo = status.and_then(|s| s.repo.clone());
         if repo.is_none() && session.git_dirty.is_none() && session.git_added.is_none() { return None; }
+        if appearance::conversation_beta() { return Some(self.render_beta_project(&session, key, cx)); }
+        // Desligada a conversa nova, a lista que ela leu sozinha não vira a lista aberta pelo botão.
+        if self.side.beta_files_sig.take().is_some() { self.side.files = None; self.side.diff = None; }
         let mut body = div().flex().flex_col().gap_2().child(chrome::section_label(tr("side_repository")));
         if let Some(repo) = repo {
             let branch = status.and_then(|s| s.branch.clone()).unwrap_or_default();
@@ -853,26 +946,146 @@ impl Hangar {
             };
             body = body.child(listing);
         }
-        if let Some((owner, path, slot)) = self.side.diff.clone().filter(|(owner, ..)| owner == &key) {
-            let _ = owner;
-            let content = match slot {
-                None => div().text_xs().text_color(theme::muted()).child(tr("side_diff_loading")).into_any_element(),
-                Some(Err(reason)) => div().text_xs().text_color(theme::warning()).child(reason).into_any_element(),
-                Some(Ok((diff, truncated))) if diff.trim().is_empty() => div().text_xs().text_color(theme::muted())
-                    .child(tr(if truncated { "side_diff_truncated" } else { "side_diff_empty" })).into_any_element(),
-                Some(Ok((diff, truncated))) => {
-                    let (shown, clipped) = conversation::clip(&diff, DIFF_MAX);
-                    let view = self.text_view(&format!("side-diff:{path}"), "__side__", conversation::fenced(shown), cx);
-                    div().flex().flex_col().gap_1()
-                        .child(div().id("side-diff").max_h(px(360.)).overflow_y_scroll().text_xs().child(TextView::new(&view).selectable(true).scrollable(false)))
-                        .when(truncated || clipped, |el| el.child(div().text_xs().text_color(theme::muted()).child(tr("side_diff_truncated"))))
-                        .into_any_element()
-                }
-            };
-            body = body.child(div().flex().flex_col().gap_1().p_2().rounded(px(12.)).bg(theme::inset()).border_1().border_color(theme::border())
-                .child(div().text_xs().font_family(crate::theme::MONO).truncate().child(path)).child(content));
-        }
+        body = body.children(self.render_side_diff(&key, cx));
         Some(body.into_any_element())
+    }
+
+    /// O diff do arquivo escolhido na lista do repositório, quando é desta sessão.
+    fn render_side_diff(&mut self, key: &SessionKey, cx: &mut Context<Self>) -> Option<Div> {
+        let (owner, path, slot) = self.side.diff.clone().filter(|(owner, ..)| owner == key)?;
+        let _ = owner;
+        let content = match slot {
+            None => div().text_xs().text_color(theme::muted()).child(tr("side_diff_loading")).into_any_element(),
+            Some(Err(reason)) => div().text_xs().text_color(theme::warning()).child(reason).into_any_element(),
+            Some(Ok((diff, truncated))) if diff.trim().is_empty() => div().text_xs().text_color(theme::muted())
+                .child(tr(if truncated { "side_diff_truncated" } else { "side_diff_empty" })).into_any_element(),
+            Some(Ok((diff, truncated))) => {
+                let (shown, clipped) = conversation::clip(&diff, DIFF_MAX);
+                let view = self.text_view(&format!("side-diff:{path}"), "__side__", conversation::fenced(shown), cx);
+                div().flex().flex_col().gap_1()
+                    .child(div().id("side-diff").max_h(px(360.)).overflow_y_scroll().text_xs().child(TextView::new(&view).selectable(true).scrollable(false)))
+                    .when(truncated || clipped, |el| el.child(div().text_xs().text_color(theme::muted()).child(tr("side_diff_truncated"))))
+                    .into_any_element()
+            }
+        };
+        Some(div().flex().flex_col().gap_1().p_2().rounded(px(12.)).bg(theme::inset()).border_1().border_color(theme::border())
+            .child(div().text_xs().font_family(crate::theme::MONO).truncate().child(path)).child(content))
+    }
+
+    /// Conversa nova: "+46 −0 em 2 arquivos na working tree" e a lista dos arquivos, lida sozinha quando as contagens
+    /// mudam; o clique no arquivo mostra o diff embaixo, como a lista aberta pelo botão.
+    fn render_beta_project(&mut self, session: &SessionInfo, key: SessionKey, cx: &mut Context<Self>) -> AnyElement {
+        // As contagens não dizem quais arquivos mudaram: a branch, os commits e o fim de cada turno também releem.
+        let turn_end = (session.state != "working").then_some(session.last_activity).flatten();
+        let sig = format!("{:?}/{:?}/{:?}/{:?}/{:?}/{:?}/{:?}", session.git_added, session.git_removed, session.git_dirty,
+            session.branch, session.git_ahead, session.git_behind, turn_end);
+        let failed = self.side.beta_files_failed.as_ref().filter(|(owner, ..)| *owner == key);
+        let stale = self.side.beta_files_sig.as_ref().is_none_or(|(owner, old)| *owner != key || *old != sig)
+            || failed.is_some_and(|(_, at, _)| at.elapsed() >= BETA_FILES_RETRY);
+        // Uma leitura por vez: a nova trocaria a geração e a resposta da pedida pela pessoa se perderia; a assinatura
+        // que mudou no meio lê quando esta chegar.
+        let in_flight = self.side.files.as_ref().is_some_and(|(owner, slot)| *owner == key && slot.is_none());
+        // A assinatura só vale quando a leitura começou: sem conexão agora, a próxima vez tenta de novo.
+        if stale && !in_flight && self.read_files(true, cx) { self.side.beta_files_sig = Some((key.clone(), sig)); }
+        let files = self.side.beta_files_last.as_ref().filter(|(owner, _)| owner == &key).map(|(_, list)| list);
+        let slot = self.side.files.as_ref().filter(|(owner, _)| owner == &key).map(|(_, slot)| slot);
+        // A falha da pedida pela pessoa aparece sempre; a da automática só sem lista boa à vista, e continua à vista
+        // enquanto ela relê, para não piscar.
+        let failure = match slot {
+            Some(Some(Err(reason))) if !self.side.files_auto => Some(reason.clone()),
+            _ if files.is_none() => self.side.beta_files_failed.as_ref().filter(|(owner, ..)| *owner == key).map(|(.., reason)| reason.clone()),
+            _ => None,
+        };
+        let loading = files.is_none() && failure.is_none() && matches!(slot, Some(None));
+        let count = files.map(Vec::len)
+            .or_else(|| session.git_dirty.filter(|n| *n > 0).map(|n| n as usize));
+        let (added, removed) = (session.git_added.unwrap_or(0), session.git_removed.unwrap_or(0));
+        // Sem alteração não há lista a esperar: o "carregando" só piscaria embaixo de "sem alterações".
+        let loading = (loading && (added + removed > 0 || session.git_dirty.is_some_and(|n| n > 0)))
+            .then(|| div().mt(px(8.)).text_size(px(12.5)).text_color(theme::muted()).child(tr("side_files_loading")));
+        let summary = match count {
+            Some(0) | None if added + removed == 0 => div().text_size(px(13.5)).text_color(theme::muted()).child(tr("side_changes_none")),
+            _ => div().flex().items_center().gap(px(8.)).text_size(px(13.5)).text_color(theme::muted())
+                .child(div().font_family(crate::theme::MONO).text_size(px(12.)).text_color(theme::success()).child(format!("+{added}")))
+                .child(div().font_family(crate::theme::MONO).text_size(px(12.)).text_color(theme::danger_text()).child(format!("−{removed}")))
+                .when_some(count, |el, n| el.child(tr(if n == 1 { "beta_side_files_one" } else { "beta_side_files" }).replace("{n}", &n.to_string()))),
+        };
+        let reload = |id: &'static str| chrome::icon_button(id, IconName::RefreshCw, tr("side_files_reload"), cx)
+            .on_click(cx.listener(|this, _, _, cx| this.load_files(cx)));
+        let failure = failure.map(|reason| div().mt(px(8.)).flex().items_center().gap(px(8.)).text_size(px(12.5)).text_color(theme::warning())
+            .child(div().flex_1().min_w_0().child(reason))
+            .child(Button::new("side-files-retry").xsmall().outline().label(tr("beta_retry")).on_click(cx.listener(|this, _, _, cx| this.load_files(cx)))));
+        let current = self.side.diff.as_ref().map(|(_, path, _)| path.clone());
+        let rows = files.into_iter().flatten().enumerate().map(|(n, file)| {
+            let (icon, color) = match file.code.trim() {
+                "A" | "??" => (IconName::Plus, theme::success()),
+                "D" => (IconName::Minus, theme::danger_text()),
+                _ => (IconName::Pencil, theme::warning()),
+            };
+            let path = file.path.clone();
+            let selected = current.as_deref() == Some(file.path.as_str());
+            Button::new(SharedString::from(format!("side-file-{n}"))).ghost().w_full().h_auto().p_0().selected(selected)
+                .child(div().w_full().flex().items_center().gap(px(8.)).ml(px(-8.)).px(px(8.)).py(px(6.)).rounded(px(8.))
+                    .font_family(crate::theme::MONO).text_size(px(12.5))
+                    .child(chrome::small_icon(icon, 14., color))
+                    .child(div().flex_1().min_w_0().truncate().text_left().text_color(theme::text()).child(file.path.clone()))
+                    .when_some(file.added.filter(|a| *a > 0), |el, a| el.child(div().flex_shrink_0().text_size(px(12.)).text_color(theme::success()).child(format!("+{a}"))))
+                    .when_some(file.removed.filter(|r| *r > 0), |el, r| el.child(div().flex_shrink_0().text_size(px(12.)).text_color(theme::danger_text()).child(format!("−{r}")))))
+                .on_click(cx.listener(move |this, _, _, cx| this.open_diff(path.clone(), cx)))
+        }).collect::<Vec<_>>();
+        div().flex().flex_col()
+            .child(div().flex().items_center().justify_between().child(beta_title(tr("side_repository")).mb_0()).child(reload("side-files-reload")))
+            .child(div().mt(px(4.)).child(summary))
+            .children(loading)
+            .children(failure)
+            .when(!rows.is_empty(), |el| el.child(div().id("side-files-list").mt(px(8.)).max_h(px(260.)).overflow_y_scroll().flex().flex_col().gap(px(2.)).children(rows)))
+            .children(self.render_side_diff(&key, cx).map(|diff| diff.mt(px(8.))))
+            .into_any_element()
+    }
+
+    /// Conversa nova: o subagente mais recente da conversa, com o estado, o tipo, o modelo e o tempo; o × o tira do
+    /// painel até outro aparecer, e o clique abre a conversa dele.
+    fn render_beta_subagent(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        // Só o mais recente: dispensado, o painel fica sem cartão até outro subagente aparecer.
+        let agent = self.conversation.activity.agents.last().filter(|agent| !self.side.beta_dismissed.contains(&agent.id)).cloned()?;
+        let call = self.chat.events.get(agent.call)?;
+        let request = super::activity::agent_request(call)?;
+        let input = |field: &str| call.tool_input.as_ref().and_then(|i| i.get(field)).and_then(Value::as_str)
+            .map(str::trim).filter(|v| !v.is_empty()).map(str::to_owned);
+        let kind = input("subagent_type").or_else(|| input("agent_type")).unwrap_or_else(|| crate::conversation::tool_display_name("Agent"));
+        let model = self.agent_card_model(agent.call, input("model"));
+        let result = self.conversation.paired.get(&agent.call).and_then(|&i| self.chat.events.get(i));
+        let failed = result.is_some_and(|r| r.is_error == Some(true)) || self.agent_failed(agent.call);
+        let run = self.effective_agent(agent.call);
+        // Esperando o próprio trabalho de fundo ainda é execução: mesmo ícone e mesmo "em execução".
+        let running = !failed && run.as_ref().is_some_and(|a| a.running);
+        let now = chrono::Utc::now().timestamp_millis() as f64 / 1000.;
+        let elapsed = run.as_ref().and_then(|a| a.elapsed(now)).map(chrome::format_ago);
+        let status = if running { tr("beta_sub_running") }
+            else if failed { elapsed.clone().map_or_else(|| tr("beta_sub_failed"), |t| tr("beta_sub_failed_after").replace("{time}", &t)) }
+            else { elapsed.clone().map_or_else(|| tr("beta_sub_done"), |t| tr("beta_sub_done_in").replace("{time}", &t)) };
+        let meta = [Some(kind), model, Some(status)].into_iter().flatten().collect::<Vec<_>>().join(" · ");
+        let icon = if running { chrome::hangar_mark(16., theme::accent()).into_any_element() }
+            else if failed { chrome::small_icon(IconName::CircleX, 16., theme::danger_text()).into_any_element() }
+            else { chrome::small_icon(IconName::CircleCheck, 16., theme::success()).into_any_element() };
+        let dismiss_id = agent.id.clone();
+        let open = request.clone();
+        // Um botão do kit, para entrar no Tab e responder a Enter e Espaço; sem cor própria, o cartão fica como era.
+        let label = format!("{}: {}", super::activity::web("tool_abrir_agente"), request.1);
+        let open_card = Button::new("side-subagent")
+            .custom(ButtonCustomVariant::new(cx).color(transparent_black()).foreground(theme::text()).hover(transparent_black()).active(transparent_black()))
+            .flex_1().min_w_0().h_auto().p_0().accessibility_label(label)
+            .on_click(cx.listener(move |this, _, _, cx| this.open_agent(open.clone(), cx)))
+            .child(div().w_full().min_w_0().flex().items_start().gap(px(6.)).text_left()
+                .child(div().w(px(22.)).pt(px(2.)).flex_shrink_0().child(icon))
+                .child(div().flex_1().min_w_0().flex().flex_col()
+                    .child(div().truncate().text_size(px(14.5)).font_weight(FontWeight::MEDIUM).text_color(theme::text()).child(request.1.clone()))
+                    .child(div().mt(px(2.)).truncate().text_size(px(12.5)).text_color(theme::muted()).child(meta))));
+        let card = div().flex().items_start().gap(px(6.))
+            .child(open_card)
+            .child(chrome::icon_button("side-subagent-dismiss", IconName::Close, tr("beta_sub_dismiss"), cx).flex_shrink_0()
+                .on_click(cx.listener(move |this, _, _, cx| { this.side.beta_dismissed.insert(dismiss_id.clone()); cx.notify(); })));
+        Some(div().flex().flex_col().child(beta_title(tr("beta_side_subagent"))).child(card).into_any_element())
     }
 
     pub(super) fn render_shortcuts(&self, readable: bool, width: f32, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -909,7 +1122,10 @@ impl Hangar {
         // "Ações" do mock: grade de blocos iguais, ícone em cima e rótulo embaixo. As colunas saem da largura do painel
         // (mais colunas quando ele alarga, no máximo cinco), e cada bloco tem a largura exata da coluna: a grade fica no
         // mesmo recuo do título, sem sobra desigual no fim da linha.
+        let beta = appearance::conversation_beta();
         let (_, tile) = shortcut_grid(width - SIDE_PAD * 2. - PANEL_EDGE, list.len());
+        // Conversa nova: três por linha, ícone e nome lado a lado, numa caixa de 40 px com borda.
+        let tile = if beta { beta_tile_width(width - BETA_SIDE_PAD * 2. - PANEL_EDGE, list.len()) } else { tile };
         // Uma linha por atalho No Hangar vivo que outra sessão abriu: vale também onde a dica do bloco não aparece.
         let notes = key.as_ref().map(|key| self.hangar_notes(&key.server, &key.name, &list)).unwrap_or_default();
         // O respiro do topo é da GRADE, não do bloco: reservado só onde a marca "No Hangar" aparecia, ele empurrava
@@ -951,6 +1167,37 @@ impl Hangar {
             let text_tone = match live.state { hangar_live::TileState::Running => Some(theme::success_text()), hangar_live::TileState::Asking => Some(theme::warning_text()), _ => None };
             let edge = tone.map_or_else(theme::border, |(color, alpha)| color.opacity(alpha));
             let accessible = if live.line.is_empty() { label.clone() } else { format!("{label} · {}", live.line) };
+            if beta {
+                let icon = match &shortcut {
+                    Shortcut::Attach => chrome::small_icon(IconName::Paperclip, 16., theme::text()).into_any_element(),
+                    Shortcut::Run if running => chrome::small_icon(IconName::CircleStop, 16., theme::accent()).into_any_element(),
+                    Shortcut::Run => chrome::small_icon(IconName::Play, 16., theme::text()).into_any_element(),
+                    Shortcut::Terminal | Shortcut::External => chrome::small_icon(IconName::SquareTerminal, 16., theme::text()).into_any_element(),
+                    Shortcut::Mode => chrome::small_icon(IconName::GitBranch, 16., theme::text()).into_any_element(),
+                    Shortcut::Browser => chrome::small_icon(IconName::Globe, 16., theme::text()).into_any_element(),
+                    Shortcut::Send { icon, .. } | Shortcut::Shell { icon, .. } => shortcuts::icon_element(icon.as_deref(), 16., theme::text()),
+                };
+                let fill = tone.map_or_else(theme::raised, |(color, _)| color.opacity(0.08));
+                let faint = text_tone.unwrap_or_else(theme::faint);
+                // O estado do terminal desce para baixo do nome; o ladrilho só cresce quando há essa linha.
+                let line = (!live.line.is_empty()).then(|| div().min_w_0().flex().items_center().gap(px(5.)).text_size(px(11.5)).text_color(faint)
+                    .when(live.state == hangar_live::TileState::Running, |el| el.child(div().size(px(6.)).flex_shrink_0().rounded_full().bg(theme::success())))
+                    .child(div().min_w_0().truncate().child(live.line.clone())));
+                let padded = line.is_some();
+                return Button::new(SharedString::from(id))
+                    .custom(ButtonCustomVariant::new(cx).color(fill).foreground(theme::text()).hover(theme::hover()).active(theme::hover()))
+                    .w(px(tile)).flex_shrink_0().h_auto().min_h(px(40.)).p_0().rounded(px(10.))
+                    .tooltip(tip).accessibility_label(accessible).disabled(!readable || busy || (shortcut == Shortcut::Mode && !idle))
+                    .when(missing.is_some(), |el| el.opacity(0.55))
+                    .child(div().relative().w_full().h_full().min_h(px(40.)).rounded(px(10.)).border_1().border_color(if tone.is_some() { edge } else { theme::border_strong() })
+                        .px(px(8.)).when(padded, |el| el.py(px(5.))).flex().items_center().justify_center().gap(px(8.))
+                        // As marcas do bloco antigo em ícone, no canto: o texto delas está na dica.
+                        .when(own, |el| el.child(div().absolute().top(px(4.)).right(px(5.)).child(chrome::small_icon(IconName::Folder, 10., theme::faint()))))
+                        .when(live.mark, |el| el.child(div().absolute().top(px(4.)).right(px(if own { 18. } else { 5. })).child(chrome::small_icon(IconName::Globe, 10., faint))))
+                        .text_size(px(13.5)).child(icon)
+                        .child(div().min_w_0().flex().flex_col().child(div().min_w_0().truncate().child(label)).children(line)))
+                    .on_click(cx.listener(move |this, _, window, cx| this.run_shortcut(shortcut.clone(), false, window, cx)));
+            }
             Button::new(SharedString::from(id))
                 .custom(ButtonCustomVariant::new(cx).color(fill).foreground(if running && shortcut == Shortcut::Run { theme::accent() } else { theme::text() })
                     .hover(theme::hover()).active(theme::hover()))
@@ -979,12 +1226,13 @@ impl Hangar {
                         .child(live.line.clone()))))
                 .on_click(cx.listener(move |this, _, window, cx| this.run_shortcut(shortcut.clone(), false, window, cx)))
         }).collect();
-        let grid = div().flex().flex_wrap().gap(px(SHORTCUT_GAP)).children(buttons);
+        let grid = div().flex().flex_wrap().gap(px(if beta { BETA_TILE_GAP } else { SHORTCUT_GAP })).children(buttons);
         let add = Button::new("side-shortcut-add").ghost().xsmall().icon(IconName::Plus).tooltip(tr("shortcuts_add"))
             .accessibility_label(tr("shortcuts_add"))
             .on_click(cx.listener(|this, _, window, cx| this.open_settings(super::settings::Page::Shortcuts, window, cx)));
         Some(div().flex().flex_col().gap(px(10.))
-            .child(div().flex().items_center().justify_between().child(chrome::section_label(tr("side_actions")))
+            .child(div().flex().items_center().justify_between()
+                .child(if beta { beta_title(tr("side_actions")).mb_0() } else { chrome::section_label(tr("side_actions")) })
                 .child(div().flex().items_center().gap(px(2.)).child(self.transfer_menu_button(cx)).child(add)))
             .child(grid)
             // Uma nota só para todos os terminais abertos por outra sessão, com o nome do atalho em destaque.
@@ -1127,7 +1375,12 @@ impl Hangar {
             .child(chrome::icon_button("side-toggle", IconName::PanelRight, tr("side_hide"), cx).flex_shrink_0()
                 .on_click(cx.listener(|this, _, _, cx| this.toggle_side(cx))));
         let orq = session.orq();
-        let section = |body: AnyElement| div().px_4().py(px(14.)).border_b_1().border_color(theme::border()).child(body);
+        // Conversa nova: seções com mais ar e título em versalete; o verbo do terminal não aparece aqui (já está na
+        // linha do turno, na dica).
+        let beta = appearance::conversation_beta();
+        let section = move |body: AnyElement| div().map(|el| if beta { el.px(px(BETA_SIDE_PAD)).py(px(18.)) } else { el.px_4().py(px(14.)) })
+            .border_b_1().border_color(theme::border()).child(body);
+        let detail = detail.filter(|_| !beta);
         let mut content = div().flex().flex_col();
         if detail.is_some() || self.loop_text().is_some() {
             content = content.child(div().px_4().pt_3().pb_2().flex().flex_col().gap(px(2.))
@@ -1148,10 +1401,13 @@ impl Hangar {
                     .into_any_element());
             }
             notices.extend(self.render_ctx_warning(status.as_ref(), cx));
+            if beta { content = content.children(self.render_beta_subagent(cx).map(section)); }
             content = content.child(section(self.render_context(status.as_ref(), width, cx)))
                 .when(!notices.is_empty(), |el| el.child(div().px_4().py_3().border_b_1().border_color(theme::border()).flex().flex_col().gap_2().children(notices)));
             if !read_only && let Some(project) = self.render_project(status.as_ref(), cx) { content = content.child(section(project)); }
-            if !read_only && let Some(actions) = self.render_shortcuts(readable, width, cx) { content = content.child(div().px(px(SIDE_PAD)).py(px(14.)).child(actions)); }
+            if !read_only && let Some(actions) = self.render_shortcuts(readable, width, cx) {
+                content = content.child(div().map(|el| if beta { el.px(px(BETA_SIDE_PAD)).py(px(18.)) } else { el.px(px(SIDE_PAD)).py(px(14.)) }).child(actions));
+            }
         }
         let queued = if readable { self.pending_count() } else { 0 };
         let orq_body = if orq && tab == Some(SideTab::Context) { self.render_orq_panel(cx) } else { div().into_any_element() };
@@ -1195,8 +1451,11 @@ impl Hangar {
                         }
                     }
                 }))
-                .child(div().flex_shrink_0().px_4().py_3().flex().items_center().justify_between().gap_2().border_t_1().border_color(theme::border()).text_size(px(11.))
-                    .child(div().min_w_0().truncate().text_color(theme::faint()).child(format!("{} · {server}", agent_label(&session.provider))))
+                .child(div().flex_shrink_0().map(|el| if beta { el.px(px(BETA_SIDE_PAD)).py(px(14.)).text_size(px(12.5)) } else { el.px_4().py_3().text_size(px(11.)) })
+                    .flex().items_center().justify_between().gap_2().border_t_1().border_color(theme::border())
+                    .child(div().min_w_0().truncate().text_color(theme::faint()).child(if beta {
+                        tr("beta_side_footer").replace("{agent}", &agent_label(&session.provider)).replace("{server}", &server)
+                    } else { format!("{} · {server}", agent_label(&session.provider)) }))
                     .when(queued > 0, |el| el.child(div().flex_shrink_0().text_color(theme::muted()).child(tr("side_queued").replace("{n}", &queued.to_string()))))),
                 px(if floating { theme::PANEL_RADIUS } else { 0. })))
             .child(handle)
@@ -1206,6 +1465,20 @@ impl Hangar {
 
 /// Recuo lateral das seções do painel (`px_4`) e espaço entre blocos de atalho.
 const SIDE_PAD: f32 = 16.;
+/// Conversa nova: recuo das seções e vão entre as ações, os do mockup.
+const BETA_SIDE_PAD: f32 = 22.;
+const BETA_TILE_GAP: f32 = 8.;
+
+/// Conversa nova: largura de cada ação, três por linha (ou menos, quando há menos), dividindo a linha inteira.
+fn beta_tile_width(inner: f32, count: usize) -> f32 {
+    let columns = count.clamp(1, 3) as f32;
+    ((inner - BETA_TILE_GAP * (columns - 1.)) / columns).floor()
+}
+
+/// Título de seção da conversa nova: 12 px, negrito, em maiúsculas e apagado.
+fn beta_title(text: String) -> Div {
+    div().mb(px(12.)).text_size(px(12.)).font_weight(FontWeight::SEMIBOLD).text_color(theme::faint()).child(text.to_uppercase())
+}
 const SHORTCUT_GAP: f32 = 6.;
 const SHORTCUT_MIN: f32 = 76.;
 

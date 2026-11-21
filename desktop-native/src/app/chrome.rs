@@ -277,18 +277,36 @@ impl RenderOnce for WorkingMark {
 /// Segundos desde `since` ("6s", "1m 5s", "1h 2m"), numa view própria com chave que se redesenha só na virada de cada
 /// segundo, como a `WorkingMark`: a área em volta não acorda.
 #[derive(IntoElement)]
-pub struct Elapsed { key: ElementId, since: Instant, suffix: Option<SharedString> }
+pub struct Elapsed { key: ElementId, since: Instant, suffix: Option<SharedString>, look: ElapsedLook }
 
-impl Elapsed {
-    pub fn new(key: impl Into<ElementId>, since: Instant) -> Self { Self { key: key.into(), since, suffix: None } }
-    /// Texto depois dos segundos, separado por " · ".
-    pub fn suffix(mut self, suffix: Option<SharedString>) -> Self { self.suffix = suffix; self }
+/// Como o tempo aparece: os segundos curtos da linha de trabalho ou o "há 5 min" da conversa nova, com a medida dele.
+#[derive(Clone, Copy, PartialEq)]
+pub enum ElapsedLook {
+    Plain,
+    /// "há 12 s" no tamanho e na cor dados; com `dot`, começa por " · ".
+    Ago { size: f32, color: Hsla, dot: bool },
 }
 
-struct ElapsedView { since: Instant, suffix: Option<SharedString> }
+impl Elapsed {
+    pub fn new(key: impl Into<ElementId>, since: Instant) -> Self { Self { key: key.into(), since, suffix: None, look: ElapsedLook::Plain } }
+    /// Texto depois dos segundos, separado por " · ".
+    pub fn suffix(mut self, suffix: Option<SharedString>) -> Self { self.suffix = suffix; self }
+    pub fn look(mut self, look: ElapsedLook) -> Self { self.look = look; self }
+}
+
+struct ElapsedView { since: Instant, suffix: Option<SharedString>, look: ElapsedLook }
 
 impl Render for ElapsedView {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        if let ElapsedLook::Ago { size, color, dot } = self.look {
+            // O tempo inteiro e, depois dele, o resto da linha (os tokens), que é o que corta quando falta lugar: o texto
+            // cresce de "12 s" a "1 h 5 min" sem invadir o vizinho.
+            let text = crate::i18n::tr("beta_ago").replace("{time}", &format_ago(self.since.elapsed()));
+            return div().size_full().min_w_0().flex().items_center().gap(px(10.)).whitespace_nowrap()
+                .child(div().flex_none().text_size(px(size)).text_color(color).font_weight(FontWeight::MEDIUM)
+                    .child(if dot { format!("· {text}") } else { text }))
+                .when_some(self.suffix.clone(), |el, suffix| el.child(div().min_w_0().truncate().text_size(px(12.5)).text_color(theme::faint()).child(suffix)));
+        }
         let elapsed = format_elapsed(self.since.elapsed());
         div().size_full().min_w_0().flex().items_center().pt(px(1.)).text_size(px(11.)).text_color(theme::faint())
             .child(div().min_w_0().truncate().child(match &self.suffix { Some(suffix) => format!("{elapsed} · {suffix}"), None => elapsed }))
@@ -297,7 +315,7 @@ impl Render for ElapsedView {
 
 impl RenderOnce for Elapsed {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let (since, suffix) = (self.since, self.suffix);
+        let (since, suffix, look) = (self.since, self.suffix, self.look);
         let view = keyed_view(self.key, window, cx, |cx| {
             cx.spawn(async move |view, cx| loop {
                 let Ok(since) = view.read_with(cx, |view: &ElapsedView, _| view.since) else { break };
@@ -310,11 +328,11 @@ impl RenderOnce for Elapsed {
                 // Sem foco o segundo não vira: ninguém olha, e cada virada redesenha a raiz.
                 if view.update(cx, |_, cx| if WINDOW_ACTIVE.get() { cx.notify() }).is_err() { break; }
             }).detach();
-            ElapsedView { since, suffix: suffix.clone() }
+            ElapsedView { since, suffix: suffix.clone(), look }
         });
         // O começo vem de um horário de parede convertido a cada desenho e varia em microssegundos: só um salto conta.
         view.update(cx, |view, cx| {
-            if view.suffix != suffix { view.suffix = suffix; cx.notify(); }
+            if view.suffix != suffix || view.look != look { (view.suffix, view.look) = (suffix, look); cx.notify(); }
             if since.saturating_duration_since(view.since).max(view.since.saturating_duration_since(since)) > Duration::from_millis(500) {
                 view.since = since;
                 cx.notify();
@@ -450,6 +468,17 @@ pub fn format_elapsed(elapsed: Duration) -> String {
         0..60 => format!("{secs}s"),
         60..3600 => format!("{}m {}s", secs / 60, secs % 60),
         _ => format!("{}h {}m", secs / 3600, secs % 3600 / 60),
+    }
+}
+
+/// Tempo da conversa nova ("12 s", "5 min", "1 h 5 min"): o minuto basta depois do primeiro.
+pub fn format_ago(elapsed: Duration) -> String {
+    let secs = elapsed.as_secs();
+    match secs {
+        0..60 => format!("{secs} s"),
+        60..3600 => format!("{} min", secs / 60),
+        _ if secs % 3600 / 60 == 0 => format!("{} h", secs / 3600),
+        _ => format!("{} h {} min", secs / 3600, secs % 3600 / 60),
     }
 }
 
@@ -780,6 +809,24 @@ pub fn state_chip(state: &str, label: String, large: bool) -> AnyElement {
         .text_size(px(12.)).font_weight(FontWeight::MEDIUM)
         .when(state != "limited", |el| el.child(div().size(px(7.)).flex_shrink_0().rounded_full().bg(fg)))
         .child(label).into_any_element()
+}
+
+/// Selo do estado no cabeçalho da conversa nova: pílula com borda na cor do estado, o arco do Hangar animado enquanto
+/// roda, o nome do estado em negrito e, rodando, há quanto tempo o turno começou.
+pub fn beta_state_chip(state: &str, label: String, ago: Option<String>) -> AnyElement {
+    let (bg, fg) = theme::pill(state);
+    let icon = match state {
+        "working" => Some(WorkingMark::new("header-state-mark", 16., theme::accent()).into_any_element()),
+        "awaiting_input" => Some(small_icon(IconName::MessageCircle, 14., fg).into_any_element()),
+        "idle" => Some(small_icon(IconName::CircleCheck, 14., fg).into_any_element()),
+        "dead" => Some(small_icon(IconName::CircleX, 14., fg).into_any_element()),
+        _ => None,
+    };
+    div().id("header-state").flex_shrink_0().h(px(28.)).px(px(12.)).flex().items_center().gap(px(8.)).rounded_full()
+        .bg(bg).border_1().border_color(fg.alpha(0.4)).text_color(fg).text_size(px(13.)).font_weight(FontWeight::SEMIBOLD).whitespace_nowrap()
+        .children(icon).child(label)
+        .when_some(ago, |el, ago| el.child(div().font_weight(FontWeight::NORMAL).text_color(theme::muted()).child(ago)))
+        .into_any_element()
 }
 
 pub fn meter(pct: f64) -> AnyElement {

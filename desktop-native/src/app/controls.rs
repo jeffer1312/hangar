@@ -940,7 +940,12 @@ impl Hangar {
                 let aria = [Some(format!("{name}: {text}")), effort.clone().map(|e| format!("{}: {e}", tr("ctl_effort"))), fast.clone()]
                     .into_iter().flatten().collect::<Vec<_>>().join(" · ");
                 let id = SharedString::from(format!("ctl-{}", ctl.key()));
-                pills.push(popup::anchor(div(), id.clone()).child(super::model_pill(id, self.provider().0, text, effort.filter(|_| busy.is_none()), fast.filter(|_| busy.is_none()), cx)
+                let pill = if crate::appearance::conversation_beta() {
+                    let (model, size) = super::split_model_label(&text);
+                    let rest = [size, effort.filter(|_| busy.is_none()), fast.filter(|_| busy.is_none())].into_iter().flatten().collect::<Vec<_>>();
+                    super::beta_pill(id.clone(), self.provider().0, None, model, (!rest.is_empty()).then(|| rest.join(" · ")), cx)
+                } else { super::model_pill(id.clone(), self.provider().0, text, effort.filter(|_| busy.is_none()), fast.filter(|_| busy.is_none()), cx) };
+                pills.push(popup::anchor(div(), id.clone()).child(pill
                     .selected(open == Some(ctl)).disabled(!self.chat_online)
                     .tooltip(format!("{name} · {}", tr("ctl_effort"))).accessibility_label(aria)
                     .on_click(cx.listener(move |this, _, window, cx| {
@@ -960,7 +965,8 @@ impl Hangar {
             if ctl == Ctl::Mode {
                 let plan = self.ctl_label(ctl).as_deref() == Some("plan");
                 let aria = format!("{name}: {text}");
-                mode = Some(popup::anchor(div(), id.clone()).child(super::menu_pill(id, text, plan, cx).selected(open == Some(ctl)).disabled(!self.chat_online)
+                let pill = if crate::appearance::conversation_beta() { super::beta_mode_pill(id.clone(), text, cx) } else { super::menu_pill(id.clone(), text, plan, cx) };
+                mode = Some(popup::anchor(div(), id.clone()).child(pill.selected(open == Some(ctl)).disabled(!self.chat_online)
                     .tooltip(name.clone()).accessibility_label(aria)
                     .on_click(listener)).into_any_element());
                 continue;

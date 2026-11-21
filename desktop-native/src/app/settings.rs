@@ -10,6 +10,7 @@ use gpui_kit::component::{color_picker::{ColorPicker, ColorPickerEvent, ColorPic
     IndexPath, select::{Select, SelectEvent, SelectState}, searchable_list::{SearchableListItem, SearchableVec}};
 
 mod appearance_page;
+mod beta_page;
 pub(crate) mod memory_dream;
 mod guide;
 mod manual_page;
@@ -21,13 +22,13 @@ pub(crate) use guide::{group_heading as news_group_heading, kind_icon as news_ki
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Page {
-    General, Appearance, Sessions, Updates, Manual, Diary, About,
+    General, Appearance, Sessions, Beta, Updates, Manual, Diary, About,
     Servers, Sync, Connect, Devices, SharedConfig, Accounts, Status, Plugins, Scheduled, Memory, Vault, Orchestration, Harnesses, Voice, Jev, Windows, Notifications, Shortcuts, Attachments, Worktrees, Advanced,
 }
 
 impl Page {
     // Sessões fica no geral: a configuração vale para todas as máquinas, sem seletor.
-    const DEVICE: [Page; 6] = [Page::General, Page::Appearance, Page::Sessions, Page::Updates, Page::Manual, Page::About];
+    const DEVICE: [Page; 7] = [Page::General, Page::Appearance, Page::Sessions, Page::Beta, Page::Updates, Page::Manual, Page::About];
     // O diário é do servidor escolhido no seletor ("O registro de uso de <servidor>"), não do aparelho.
     const SERVER: [Page; 22] = [Page::Diary, Page::Servers, Page::Sync, Page::Connect, Page::Devices, Page::SharedConfig, Page::Accounts, Page::Status, Page::Plugins, Page::Scheduled, Page::Memory, Page::Vault, Page::Orchestration, Page::Harnesses,
         Page::Voice, Page::Jev, Page::Windows, Page::Notifications, Page::Shortcuts, Page::Attachments, Page::Worktrees, Page::Advanced];
@@ -43,7 +44,7 @@ impl Page {
 
     pub(super) fn key(self) -> &'static str {
         match self {
-            Page::General => "general", Page::Appearance => "appearance", Page::Sessions => "sessions", Page::Updates => "updates", Page::Manual => "manual", Page::Diary => "diary", Page::About => "about",
+            Page::General => "general", Page::Appearance => "appearance", Page::Sessions => "sessions", Page::Beta => "beta", Page::Updates => "updates", Page::Manual => "manual", Page::Diary => "diary", Page::About => "about",
             Page::Servers => "servers", Page::Sync => "sync", Page::Connect => "connect", Page::Devices => "devices", Page::SharedConfig => "shared_config", Page::Accounts => "accounts", Page::Status => "status", Page::Plugins => "plugins", Page::Scheduled => "scheduled", Page::Memory => "memory", Page::Vault => "vault", Page::Orchestration => "orchestration",
             Page::Harnesses => "harnesses", Page::Voice => "voice", Page::Jev => "jev", Page::Windows => "windows", Page::Notifications => "notifications",
             Page::Shortcuts => "shortcuts", Page::Attachments => "attachments", Page::Worktrees => "worktrees", Page::Advanced => "advanced",
@@ -52,7 +53,7 @@ impl Page {
 
     fn icon(self) -> IconName {
         match self {
-            Page::General => IconName::Globe, Page::Appearance => IconName::Palette, Page::Sessions => IconName::EyeOff, Page::Diary => IconName::FileText,
+            Page::General => IconName::Globe, Page::Appearance => IconName::Palette, Page::Sessions => IconName::EyeOff, Page::Beta => IconName::FlaskConical, Page::Diary => IconName::FileText,
             Page::Updates => IconName::Sparkles, Page::Manual => IconName::BookOpen,
             Page::About => IconName::Info, Page::Servers => IconName::Server, Page::Sync => IconName::RefreshCw, Page::Connect => IconName::Globe, Page::Devices => IconName::Smartphone, Page::SharedConfig => IconName::Layers,
             Page::Accounts => IconName::User, Page::Status => IconName::Gauge, Page::Plugins => IconName::Package, Page::Scheduled => IconName::Clock, Page::Memory => IconName::Moon, Page::Vault => IconName::KeyRound, Page::Orchestration => IconName::Users, Page::Harnesses => IconName::Activity,
@@ -111,6 +112,7 @@ const PAGE_ROWS: &[(Page, &[(&str, Option<&str>)])] = &[
         ("settings_delivery_mode", Some("settings_delivery_mode_search")),
         ("settings_tray", Some("settings_tray_desc")), ("settings_chrome_autofill", Some("settings_chrome_autofill_desc")),
         ("settings_full_chrome", Some("settings_full_chrome_desc"))]),
+    (Page::Beta, &[("settings_conversation_beta", Some("settings_conversation_beta_hint")), ("settings_code_mode", Some("settings_code_mode_hint"))]),
     (Page::Sessions, &[("settings_auto_hide_label", None), ("settings_sleep_title", Some("settings_sleep_hint"))]),
     (Page::Diary, &[("settings_diary_rules", Some("settings_diary_rule_private")), ("settings_diary_download", Some("settings_diary_rule_local")),
         ("settings_diary_recent", None)]),
@@ -656,8 +658,8 @@ impl Hangar {
         appearance::set(next);
         theme::sync_kit(None, cx);
         // Quem muda as linhas ou o desenho delas refaz a conversa: a lista guarda a altura de cada linha.
-        if (before.tool_look, before.task_list, before.thinking_tools, before.thinking_collapsed, before.table_chart, before.code_font, before.code_size)
-            != (next.tool_look, next.task_list, next.thinking_tools, next.thinking_collapsed, next.table_chart, next.code_font, next.code_size) {
+        if (before.tool_look, before.task_list, before.thinking_tools, before.thinking_collapsed, before.table_chart, before.code_font, before.code_size, before.conversation_beta)
+            != (next.tool_look, next.task_list, next.thinking_tools, next.thinking_collapsed, next.table_chart, next.code_font, next.code_size, next.conversation_beta) {
             self.chat.invalidate();
             self.sync_rows(cx);
             self.list_state.remeasure();
@@ -923,6 +925,7 @@ impl Hangar {
             Page::Appearance => self.render_appearance(wide, cx),
             Page::General => self.render_general(cx),
             Page::Sessions => self.render_sessions_settings(window, cx),
+            Page::Beta => self.render_beta(cx),
             Page::Diary => self.render_diary(cx),
             Page::About => self.render_about(cx),
             Page::Status => self.render_status(window, cx),

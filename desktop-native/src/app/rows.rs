@@ -87,6 +87,23 @@ pub(crate) fn agent_card(id: SharedString, name: String, description: String, mo
     timer: Option<AnyElement>, mark: Option<AnyElement>, ending: Option<AnyElement>, cx: &App) -> Button {
     let tint = if failed { theme::warning() } else { theme::muted() };
     let label = format!("{}: {name} · {description}", super::activity::web("tool_abrir_agente"));
+    // Conversa nova: o cartão na largura do conteúdo, ícone solto, o estado antes do modelo e o modelo com o ponto.
+    if crate::appearance::conversation_beta() {
+        return Button::new(id)
+            .custom(ButtonCustomVariant::new(cx).color(theme::raised()).foreground(theme::text()).hover(theme::hover()).active(theme::hover()))
+            .max_w_full().h(px(40.)).p_0().rounded(px(10.))
+            .accessibility_label(label)
+            .child(div().h_full().min_w_0().pl(px(12.)).pr(px(10.)).rounded(px(10.)).border_1().border_color(theme::border())
+                .flex().items_center().gap(px(10.)).text_size(px(13.))
+                .child(chrome::small_icon(IconName::Bot, 16., tint))
+                .child(div().flex_shrink_0().font_weight(FontWeight::SEMIBOLD).text_color(if failed { theme::warning() } else { theme::text() }).child(name))
+                .child(div().flex_initial().min_w_0().truncate().text_color(theme::muted()).child(description))
+                .when_some(timer, |el, timer| el.child(timer))
+                .when_some(mark, |el, mark| el.child(mark))
+                .when_some(ending, |el, ending| el.child(ending))
+                .when_some(model, |el, model| el.child(div().flex_shrink_0().text_size(px(12.5)).text_color(theme::faint()).child(format!("· {model}"))))
+                .child(chrome::small_icon(IconName::ExternalLink, 14., theme::faint())));
+    }
     Button::new(id)
         .custom(ButtonCustomVariant::new(cx).color(theme::boxed()).foreground(theme::text()).hover(theme::hover()).active(theme::hover()))
         .w_full().h(px(38.)).px(px(10.)).rounded(px(9.)).border_1().border_color(theme::border())
@@ -322,6 +339,11 @@ impl Hangar {
                 let since = Instant::now().checked_sub(elapsed)?;
                 Some(clock.child(tr("agent_running_for"))
                     .child(self.elapsed_slot(super::panes::Area::Conversation, format!("agent-elapsed-{key}"), since, None)).into_any_element())
+            } else if crate::appearance::conversation_beta() && !failed {
+                // Conversa nova: "✓ Concluído em 20 s" no verde do passo terminado.
+                Some(div().flex_shrink_0().flex().items_center().gap(px(4.)).text_size(px(12.5)).text_color(theme::success())
+                    .child(chrome::small_icon(IconName::Check, 14., theme::success()))
+                    .child(tr("beta_agent_done_in").replace("{time}", &chrome::format_ago(elapsed))).into_any_element())
             } else {
                 let label = if failed { tr("agent_failed_after") } else { tr("agent_finished_in") };
                 Some(clock.child(label.replace("{time}", &chrome::format_elapsed(elapsed))).into_any_element())
@@ -335,6 +357,8 @@ impl Hangar {
         let ending = failed.then(|| if duration.is_some() { chrome::small_icon(IconName::CircleX, 13., theme::warning()).into_any_element() } else { failed_ending() });
         let card = agent_card(SharedString::from(format!("agent-card-{key}")), name, description, model, failed, timer, mark, ending, cx)
             .on_click(cx.listener(move |this, _, _, cx| this.open_agent(request.clone(), cx)));
+        // Conversa nova: o cartão tem a largura do conteúdo e fica encostado à esquerda da coluna.
+        if crate::appearance::conversation_beta() { return Some(div().w_full().flex().child(card).into_any_element()); }
         Some(card.into_any_element())
     }
 

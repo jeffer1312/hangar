@@ -118,21 +118,28 @@ impl Hangar {
             .map(|(kind, name, window)| {
             let quota = self.focused_proxy_quota();
             let quota = if quota.is_empty() { tr("no_data") } else { quota };
+            // Conversa nova: a etiqueta curta da conta ("claude-7") em mono, e o uso dito pela janela ("na semana").
+            let beta = crate::appearance::conversation_beta() && !proxy;
+            let beta_name = beta.then(|| self.focused_account_tag()).flatten().unwrap_or_else(|| name.clone());
+            let beta_usage = window.as_ref().filter(|_| beta).map(|(label, pct)| beta_quota_text(label, *pct));
             let label = if proxy { format!("{name} · {quota}") } else { match &window {
-                // Conversa nova: conta primeiro e o percentual dito como uso da janela, sem ambiguidade com saldo.
-                Some((label, pct)) if crate::appearance::conversation_beta() =>
-                    format!("{name} · {}", tr("beta_quota_used").replace("{pct}", &pct.round().to_string()).replace("{window}", label)),
+                Some(_) if beta => format!("{beta_name} · {}", beta_usage.clone().unwrap_or_default()),
+                None if beta => format!("{beta_name} · {}", tr("no_data")),
                 Some((label, pct)) => format!("{}% {label} · {name}", pct.round()),
                 None => format!("{} · {name}", tr("no_data")),
             } };
             Button::new("topbar-account").ghost().small().selected(self.accounts.card && self.accounts.card_top).disabled(!online)
-                .h(px(26.)).px(px(8.)).rounded_full().max_w(px(280.)).min_w_0()
+                .h(px(26.)).px(px(8.)).rounded_full().max_w(px(if beta { 360. } else { 280. })).min_w_0()
                 .child(div().min_w_0().flex().items_center().gap(px(6.)).text_size(px(12.5))
                     .child(chrome::provider_glyph(&kind, 14.))
                     .child(chrome::ring(window.as_ref().map(|w| w.1)))
                     .when(proxy, |el| el.child(div().min_w_0().truncate().text_color(theme::muted()).child(name))
                         .child(div().flex_shrink_0().text_color(theme::muted()).child(quota)))
-                    .when(!proxy, |el| el.child(div().min_w_0().truncate().text_color(theme::muted()).child(label.clone()))))
+                    .when(beta, |el| el.child(div().min_w_0().truncate().font_family(theme::MONO).text_color(theme::text()).child(beta_name.clone()))
+                        // Sem janela de cota, o "sem dados" fica à vista como no desenho de sempre.
+                        .child(div().min_w_0().truncate().text_color(theme::muted())
+                            .child(format!("· {}", beta_usage.clone().unwrap_or_else(|| tr("no_data"))))))
+                    .when(!proxy && !beta, |el| el.child(div().min_w_0().truncate().text_color(theme::muted()).child(label.clone()))))
                 .accessibility_label(format!("{}: {label}", tr("ring_account")))
                 .on_click(cx.listener(|this, _, _, cx| this.toggle_top_usage_card(cx)))
         });
@@ -219,5 +226,21 @@ impl Hangar {
             })
             .when(cfg!(target_os = "windows"), |el| el.child(window_buttons(window, floating)));
         if floating || beside.is_some() { bar.into_any_element() } else { chrome::glass_panel(bar, px(0.)) }
+    }
+}
+
+/// Uso da janela da cota como a conversa nova diz: "23% usado na semana", "40% usado em 5 h".
+fn beta_quota_text(window: &str, pct: f64) -> String {
+    let pct = pct.round().to_string();
+    let key = match window.trim() { "7d" => "beta_quota_week", "5h" => "beta_quota_5h", "30d" => "beta_quota_month", _ => "" };
+    if key.is_empty() { tr("beta_quota_used").replace("{pct}", &pct).replace("{window}", window) } else { tr(key).replace("{pct}", &pct) }
+}
+
+impl Hangar {
+    /// A etiqueta curta da conta da sessão em foco, a mesma da aba ("claude-7"); sem etiqueta, nada.
+    fn focused_account_tag(&self) -> Option<String> {
+        let conta = self.selected.as_ref()?.conta.as_deref()?;
+        // Só a máquina da sessão, pelo endereço normalizado: a etiqueta de outra ficaria ao lado da cota desta.
+        self.tags.get(&self.open_server())?.accounts.get(conta).map(|badge| badge.name.clone())
     }
 }

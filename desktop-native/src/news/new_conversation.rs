@@ -41,13 +41,15 @@ pub(super) fn render(started: Instant, width: Pixels, window: &mut Window, cx: &
             .bg(linear_gradient(180., linear_color_stop(theme::chrome(), 0.), linear_color_stop(theme::background(), 1.)))
             .flex().flex_col().gap(px(12.)).text_color(theme::text())
             .child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(if new { theme::accent_text() } else { theme::muted() })
-                .child(format!("{} · {label}", tr("settings_conversation_beta"))))
+                .child(format!("{} · {label}", tr("news_conversation_beta"))))
             .child(tabs);
         if compact { return stage.into_any_element(); }
         // Miniatura só leitura: os botões da faixa ficam sem clique e fora do Tab.
-        stage.child(app::rename_strip(&tr_shared("news_rename_sample_name", &[]), app::RenameStrip { weak: true, ..Default::default() },
-                |button| button.tab_stop(false), |button| button.tab_stop(false), |button| button.tab_stop(false)))
-            .into_any_element()
+        let sample = tr_shared("news_rename_sample_name", &[]);
+        let strip = app::RenameStrip { weak: true, ..Default::default() };
+        let card = if new { app::beta_rename_strip(&sample, strip, |button| button.tab_stop(false), |button| button.tab_stop(false), |button| button.tab_stop(false), |button| button.tab_stop(false), cx) }
+            else { app::rename_strip(&sample, strip, |button| button.tab_stop(false), |button| button.tab_stop(false), |button| button.tab_stop(false)) };
+        stage.child(card).into_any_element()
     })
 }
 

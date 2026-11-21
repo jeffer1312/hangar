@@ -33,7 +33,7 @@ pub(super) struct Panes {
 
 /// O que se pinta num lugar: a marca animada, o avatar trabalhando ou os segundos da linha "trabalhando".
 #[derive(Clone)]
-pub(super) enum Floating { Mark(Hsla), Avatar(super::chrome::AvatarLook), Elapsed(Instant, Option<SharedString>), Shimmer(SharedString), ThinkingFocus(SharedString) }
+pub(super) enum Floating { Mark(Hsla), Avatar(super::chrome::AvatarLook), Elapsed(Instant, Option<SharedString>), Ago(Instant, Option<SharedString>, super::chrome::ElapsedLook), Shimmer(SharedString), ThinkingFocus(SharedString) }
 
 /// Um lugar vazio deixado por uma área guardada: posição, recorte dela e quando o lugar nasceu. A área que não repinta
 /// deixa os lugares do último desenho, que continuam certos; a que redesenha apaga os seus e grava os que aparecerem.
@@ -202,6 +202,14 @@ impl Hangar {
             .into_any_element()
     }
 
+    /// O "· há 12 s" da conversa nova, pintado fora da view guardada como os segundos; `width` reserva o lugar.
+    /// `suffix` vem depois do tempo no mesmo texto; o lugar ocupa o resto da linha, e o tempo nunca é cortado.
+    pub(super) fn ago_slot(&self, area: Area, key: impl Into<SharedString>, since: Instant, suffix: Option<SharedString>, look: super::chrome::ElapsedLook) -> AnyElement {
+        div().flex_1().min_w_0().h_full()
+            .child(mark_place(self.panes.marks.clone(), area, key.into(), Floating::Ago(since, suffix, look)))
+            .into_any_element()
+    }
+
     /// O título `text` com o brilho passando, pintado fora da view guardada; na área fica o mesmo texto invisível, que
     /// dá a medida e o corte.
     pub(super) fn shimmer_slot(&self, area: Area, key: impl Into<SharedString>, text: String) -> AnyElement {
@@ -286,13 +294,14 @@ impl Element for FloatingMark {
         places.into_iter().map(|place| {
             // Texto em cache nasce visível: sem foco, o relógio não redesenha depois do primeiro quadro. O avatar já estava
             // parado na linha: entrar com o fade apagaria o logo.
-            let t = if self.reduce_motion || matches!(place.draw, Floating::Avatar(_) | Floating::Elapsed(..) | Floating::Shimmer(_) | Floating::ThinkingFocus(_)) { 1. }
+            let t = if self.reduce_motion || matches!(place.draw, Floating::Avatar(_) | Floating::Elapsed(..) | Floating::Ago(..) | Floating::Shimmer(_) | Floating::ThinkingFocus(_)) { 1. }
                 else { crate::motion::ease_out((place.born.elapsed().as_secs_f32() / self.fade.as_secs_f32()).min(1.)) };
             let width = f32::from(place.at.size.width);
             let inner = match place.draw {
                 Floating::Mark(color) => super::chrome::WorkingMark::new(place.key.clone(), width, color).into_any_element(),
                 Floating::Avatar(look) => super::chrome::LiveAvatar::new(place.key.clone(), look, width).into_any_element(),
                 Floating::Elapsed(since, suffix) => super::chrome::Elapsed::new(place.key.clone(), since).suffix(suffix).into_any_element(),
+                Floating::Ago(since, suffix, look) => super::chrome::Elapsed::new(place.key.clone(), since).suffix(suffix).look(look).into_any_element(),
                 Floating::Shimmer(text) => super::chrome::Shimmer::new(place.key.clone(), text).into_any_element(),
                 Floating::ThinkingFocus(label) => super::chrome::ThinkingFocus::new(place.key.clone(), label).into_any_element(),
             };
