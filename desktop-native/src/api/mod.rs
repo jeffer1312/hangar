@@ -266,7 +266,7 @@ fn failure_detail(body: Option<Value>, status: u16) -> String {
             // Par externo, botões dos mods, abertura de sessão e conta presa: a frase do web pelo código; o `detalhe`
             // de uma recusa e o rótulo do botão vêm nos parâmetros.
             if let Some(code) = fields.get("code").and_then(Value::as_str)
-                .filter(|code| code.starts_with("erro_par_") || code.starts_with("erro_mod_") || code.starts_with("session_open_")
+                .filter(|code| code.starts_with("erro_par_") || code.starts_with("erro_mod_") || code.starts_with("session_open_") || code.starts_with("erro_arq_")
                     || matches!(*code, "erro_resume_so_claude" | "erro_session_id_invalido" | "erro_conta_sem_login" | "erro_sem_conta_destino"
                         | "erro_liberar_sessao" | "erro_liberar_conta")) {
                 let params = fields.get("params").and_then(Value::as_object).map(|p| p.iter()

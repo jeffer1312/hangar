@@ -672,6 +672,15 @@ impl Hangar {
         self.keep_file(Source::Cited(path), name, true, cx);
     }
 
+    /// Arquivo ou pasta renomeado pela árvore: as abas abertas nele, ou dentro dele, seguem o nome novo.
+    pub(super) fn files_renamed(&mut self, old: &str, new: &str) {
+        let inside = format!("{old}/");
+        for tab in &mut self.files.tabs {
+            if tab.path == old { tab.path = new.to_owned(); }
+            else if let Some(rest) = tab.path.strip_prefix(&inside) { tab.path = format!("{new}/{rest}"); }
+        }
+    }
+
     fn file_reveal_system(&mut self, cx: &mut Context<Self>) {
         let path = self.files.tabs[self.files.active].path.clone();
         match self.file_on_disk(&path) {

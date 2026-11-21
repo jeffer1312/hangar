@@ -13,6 +13,7 @@ chrono.workspace = true
 tempfile.workspace = true
 ring = "=0.17.14"
 tracing.workspace = true
+trash = "5.4.0"
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true

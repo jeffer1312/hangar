@@ -816,7 +816,8 @@ pub fn state_chip(state: &str, label: String, large: bool) -> AnyElement {
 pub fn beta_state_chip(state: &str, label: String, ago: Option<String>) -> AnyElement {
     let (bg, fg) = theme::pill(state);
     let icon = match state {
-        "working" => Some(WorkingMark::new("header-state-mark", 16., theme::accent()).into_any_element()),
+        // Parado de propósito: a conversa já anima o trabalho em andamento; aqui basta o ponto e o tempo.
+        "working" => Some(div().size(px(8.)).rounded_full().bg(theme::accent()).into_any_element()),
         "awaiting_input" => Some(small_icon(IconName::MessageCircle, 14., fg).into_any_element()),
         "idle" => Some(small_icon(IconName::CircleCheck, 14., fg).into_any_element()),
         "dead" => Some(small_icon(IconName::CircleX, 14., fg).into_any_element()),

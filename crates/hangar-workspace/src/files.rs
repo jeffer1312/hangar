@@ -635,6 +635,95 @@ pub fn scan(root: &str, path: Option<&str>, roots: &[String]) -> Result<Value> {
     });
     Ok(json!({"entries":list,"error":null}))
 }
+/// Nome de um item criado ou renomeado: uma parte só do caminho, nunca `.git`.
+fn entry_name(name: &str) -> Result<&str> {
+    let name = name.trim();
+    if name.is_empty() || name == "." || name == ".." || name.eq_ignore_ascii_case(".git") || name.contains(['/', '\\', '\0']) {
+        return Err(file_error(400, "erro_arq_nome_invalido", "nome inválido"));
+    }
+    Ok(name)
+}
+
+/// O caminho da sessão, com `/`, para o app achar o item na árvore.
+fn session_relative(cwd: &Path, target: &Path) -> String {
+    target.strip_prefix(real(cwd)).map(|p| p.to_string_lossy().replace('\\', "/")).unwrap_or_default()
+}
+
+/// O item em si, não o destino de um atalho: renomear ou apagar um link mexe no link. A pasta de cima é a que passa
+/// pelas mesmas guardas da leitura; a raiz da sessão nunca é alvo.
+fn own_entry(cwd: &Path, path: &str) -> Result<PathBuf> {
+    resolve(cwd, path)?;
+    let joined = cwd.join(path);
+    let name = joined.file_name().filter(|n| *n != "." && *n != "..")
+        .ok_or_else(|| file_error(400, "erro_arq_caminho_invalido", "caminho inválido"))?;
+    let root = real(cwd);
+    if real(&joined) == root {
+        return Err(file_error(400, "erro_arq_raiz_da_sessao", "a pasta da sessão não muda por aqui"));
+    }
+    let parent = real(joined.parent().unwrap_or(cwd));
+    if !parent.starts_with(&root) {
+        return Err(file_error(400, "erro_arq_fora_da_raiz", "caminho sai da raiz da sessão"));
+    }
+    let entry = parent.join(name);
+    if entry == root {
+        return Err(file_error(400, "erro_arq_raiz_da_sessao", "a pasta da sessão não muda por aqui"));
+    }
+    if entry.strip_prefix(&root).is_ok_and(|rest| rest.components().any(|c| c.as_os_str() == ".git")) {
+        return Err(file_error(403, "erro_arq_area_do_git", "área interna do git"));
+    }
+    Ok(entry)
+}
+
+fn exists_error(e: std::io::Error) -> WorkspaceError {
+    if e.kind() == std::io::ErrorKind::AlreadyExists {
+        file_error(409, "erro_arq_ja_existe", "já existe um item com esse nome")
+    } else {
+        io_error(e, "erro_arq_escrita_falhou")
+    }
+}
+
+/// Novo nome na mesma pasta. Nome que já existe recusa; só a troca de maiúsculas do próprio item passa.
+pub fn rename(cwd: &Path, path: &str, name: &str) -> Result<Value> {
+    let source = own_entry(cwd, path)?;
+    let name = entry_name(name)?;
+    let target = source.with_file_name(name);
+    if target == source {
+        return Ok(json!({"path": session_relative(cwd, &source)}));
+    }
+    let same = |a: &Path, b: &Path| a.symlink_metadata().ok().zip(b.symlink_metadata().ok())
+        .is_some_and(|_| real(a) == real(b) && a.to_string_lossy().to_lowercase() == b.to_string_lossy().to_lowercase());
+    if target.symlink_metadata().is_ok() && !same(&source, &target) {
+        return Err(file_error(409, "erro_arq_ja_existe", "já existe um item com esse nome"));
+    }
+    std::fs::rename(&source, &target).map_err(|e| io_error(e, "erro_arq_escrita_falhou"))?;
+    Ok(json!({"path": session_relative(cwd, &target)}))
+}
+
+/// Manda para a lixeira do sistema da máquina da sessão; nunca apaga de vez.
+pub fn trash(cwd: &Path, path: &str) -> Result<Value> {
+    let entry = own_entry(cwd, path)?;
+    trash::delete(&entry).map_err(|e| {
+        tracing::warn!(erro = %e, "lixeira recusou o item");
+        file_error(409, "erro_arq_lixeira_falhou", "não deu para mandar para a lixeira")
+    })?;
+    Ok(json!({"path": session_relative(cwd, &entry)}))
+}
+
+/// Arquivo vazio ou pasta dentro de `path` (vazio é a raiz da sessão).
+pub fn create(cwd: &Path, path: Option<&str>, name: &str, dir: bool) -> Result<Value> {
+    let folder = resolve(cwd, path.unwrap_or(""))?;
+    if !folder.is_dir() {
+        return Err(file_error(400, "erro_arq_nao_e_pasta", "não é uma pasta"));
+    }
+    let target = folder.join(entry_name(name)?);
+    if dir {
+        std::fs::create_dir(&target).map_err(exists_error)?;
+    } else {
+        std::fs::OpenOptions::new().write(true).create_new(true).open(&target).map_err(exists_error)?;
+    }
+    Ok(json!({"path": session_relative(cwd, &target), "dir": dir}))
+}
+
 pub fn mkdir(root: &str, path: Option<&str>, name: &str, roots: &[String]) -> Result<Value> {
     let parent = folder(root, path, roots)?;
     let name = name.trim();
@@ -665,6 +754,38 @@ pub fn mkdir(root: &str, path: Option<&str>, name: &str, roots: &[String]) -> Re
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn create_rename_and_guards_stay_inside_the_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path();
+        std::fs::create_dir(cwd.join(".git")).unwrap();
+        assert_eq!(super::create(cwd, None, "docs", true).unwrap()["path"], "docs");
+        assert_eq!(super::create(cwd, Some("docs"), "a.md", false).unwrap()["path"], "docs/a.md");
+        assert_eq!(super::create(cwd, Some("docs"), "a.md", false).unwrap_err().code.as_deref(), Some("erro_arq_ja_existe"));
+        assert_eq!(super::rename(cwd, "docs/a.md", "b.md").unwrap()["path"], "docs/b.md");
+        assert!(cwd.join("docs/b.md").is_file() && !cwd.join("docs/a.md").exists());
+        super::create(cwd, Some("docs"), "c.md", false).unwrap();
+        assert_eq!(super::rename(cwd, "docs/c.md", "b.md").unwrap_err().code.as_deref(), Some("erro_arq_ja_existe"));
+        for bad in ["", "..", ".git", "x/y"] {
+            assert_eq!(super::rename(cwd, "docs/b.md", bad).unwrap_err().code.as_deref(), Some("erro_arq_nome_invalido"), "{bad}");
+        }
+        assert_eq!(super::rename(cwd, ".git", "x").unwrap_err().code.as_deref(), Some("erro_arq_area_do_git"));
+        assert_eq!(super::rename(cwd, "../fora", "x").unwrap_err().status, 400);
+        assert_eq!(super::trash(cwd, "").unwrap_err().code.as_deref(), Some("erro_arq_raiz_da_sessao"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rename_moves_the_link_not_what_it_points_to() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path();
+        std::fs::write(cwd.join("alvo.txt"), "x").unwrap();
+        std::os::unix::fs::symlink(cwd.join("alvo.txt"), cwd.join("atalho.txt")).unwrap();
+        assert_eq!(super::rename(cwd, "atalho.txt", "outro.txt").unwrap()["path"], "outro.txt");
+        assert!(cwd.join("alvo.txt").is_file());
+        assert!(cwd.join("outro.txt").symlink_metadata().unwrap().file_type().is_symlink());
+    }
+
     #[test]
     fn file_gone_during_save_is_a_conflict_like_python() {
         let gone = super::vanished(std::io::Error::from(std::io::ErrorKind::NotFound));
