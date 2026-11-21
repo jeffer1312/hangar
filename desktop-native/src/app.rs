@@ -1983,7 +1983,9 @@ impl Hangar {
                 return;
             }
             Payload::Reply(key, reply, result) => {
-                let lost = self.selected_key().as_ref() == Some(&key) && result.as_ref().err().is_some_and(|e| self.chat_auth_lost(e));
+                // Leitura do catálogo do Codex já trocada não abre o diálogo de conexão: ela é descartada logo adiante.
+                let current = !matches!(reply, Reply::HandoffCatalog(read) if !self.handoff_read_current(&key, read));
+                let lost = current && self.selected_key().as_ref() == Some(&key) && result.as_ref().err().is_some_and(|e| self.chat_auth_lost(e));
                 if lost
                     && !matches!(reply, Reply::Diff(_)) { self.open_connection(window, cx); }
                 let owner=key.clone();

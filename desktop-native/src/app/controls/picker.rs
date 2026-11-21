@@ -190,6 +190,11 @@ impl Hangar {
         handoff.catalog = Some(result.map_err(|error| Self::failure(&error)));
     }
 
+    /// A resposta é da leitura do catálogo do Codex que o seletor ainda espera: uma trocada é descartada.
+    pub(in crate::app) fn handoff_read_current(&self, key: &SessionKey, read: u64) -> bool {
+        self.controls.handoff.as_ref().is_some_and(|h| h.key == *key && h.read == read)
+    }
+
     fn handoff_catalog(&self) -> Option<&HandoffCatalog> {
         let key = self.selected_key()?;
         self.controls.handoff.as_ref().filter(|h| h.key == key)
@@ -229,7 +234,11 @@ impl Hangar {
         let has_favorites = own.iter().chain(&handoff).any(|c| favorites.contains(&c.key));
         // A aba à vista: a escolhida, ou os favoritos quando algum está na lista, ou o agente da sessão.
         // Sem favorito sobrando, a aba de Favoritos sai do trilho e a lista volta ao agente da sessão.
-        let tab = self.controls.picker_tab.clone().filter(|tab| tab != FAVORITES || has_favorites)
+        // A aba do Codex sem conta apta (a última saiu da lista) ou sem troca possível volta ao agente da sessão: o
+        // esqueleto fica só para a leitura a caminho.
+        let codex_gone = self.provider().0 != "codex"
+            && (self.handoff_source_now().is_none() || self.handoff_accounts().is_some_and(|list| list.is_empty()));
+        let tab = self.controls.picker_tab.clone().filter(|tab| tab != FAVORITES || has_favorites).filter(|tab| tab != "codex" || !codex_gone)
             .unwrap_or_else(|| if has_favorites { FAVORITES.into() } else { self.provider().0.to_owned() });
         PickerView { own, handoff, tab, has_favorites }
     }
@@ -559,11 +568,18 @@ impl Hangar {
         }
         let handoff_tab = !searching && tab == "codex" && self.provider().0 != "codex";
         let handoff_state = self.handoff_catalog().map(|h| (&h.catalog, h.account.label.clone()));
-        let hint = (handoff_tab || rows.get(pick).is_some_and(|c| matches!(c.pick, Pick::Handoff { .. })))
+        let focus_handoff = rows.get(pick).is_some_and(|c| matches!(c.pick, Pick::Handoff { .. }));
+        let hint = (handoff_tab || focus_handoff)
             .then(|| handoff_state.as_ref().map(|(_, label)| label.clone())).flatten()
             .map(|label| div().px(px(8.)).pb(px(4.)).text_xs().text_color(theme::muted()).whitespace_normal()
                 .child(tr("picker_handoff_hint").replace("{account}", &label)));
-        let reasoning = (matches!(catalog, Some(Ok(_))) || handoff_tab).then(|| self.picker_reasoning(own, &rows, busy, cx));
+        // A releitura das contas que falhou deixa a lista anterior valendo para a troca; o aviso diz que ela pode estar velha.
+        let accounts_problem = (handoff_tab || focus_handoff).then(|| self.session_accounts_notice()).flatten()
+            .map(|reason| div().px(px(8.)).pb(px(4.)).text_xs().text_color(theme::danger()).whitespace_normal()
+                .child(tr("accounts_refresh_failed").replace("{reason}", reason)));
+        // Linha de troca em foco com o catálogo do Codex lido: os níveis dela aparecem mesmo com o do agente em erro.
+        let handoff_levels = focus_handoff && matches!(handoff_state, Some((Some(Ok(_)), _)));
+        let reasoning = (matches!(catalog, Some(Ok(_))) || handoff_tab || handoff_levels).then(|| self.picker_reasoning(own, &rows, busy, cx));
         // Carga ou erro do catálogo do agente: acima das linhas que chegaram, nunca no lugar delas; a lista à vista é a
         // mesma que o teclado e o clique percorrem.
         let own_state = (!handoff_tab && !matches!(catalog, Some(Ok(_)))).then(|| self.ctl_load_state(Ctl::Model, catalog, cx)).flatten();
@@ -586,7 +602,7 @@ impl Hangar {
             .capture_action(cx.listener(|this, _: &MoveDown, _, cx| this.move_ctl(1, false, cx)))
             .child(Input::new(&self.ctl_search).appearance(false).h(px(40.)).text_size(px(16.)).aria_label(tr("picker_search"))
                 .prefix(chrome::small_icon(IconName::Search, 16., theme::faint())));
-        let center = div().flex_1().min_w_0().flex().flex_col().gap(px(2.)).px(px(4.)).child(search).children(hint).children(own_state).child(list);
+        let center = div().flex_1().min_w_0().flex().flex_col().gap(px(2.)).px(px(4.)).child(search).children(hint).children(accounts_problem).children(own_state).child(list);
         let (speed, context) = match catalog {
             Some(Ok(catalog)) => (self.picker_speed(catalog, busy, cx), self.render_context_footer(catalog, busy, cx)),
             _ => (None, None),
