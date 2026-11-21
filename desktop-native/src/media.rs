@@ -361,7 +361,7 @@ mod tests {
 
     #[test]
     fn svg_is_rasterized_without_reading_files_from_disk() {
-        let square = br#"<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg" width="24" height="12"><rect width="24" height="12" fill="#ff0000"/></svg>"#;
+        let square = br##"<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg" width="24" height="12"><rect width="24" height="12" fill="#ff0000"/></svg>"##;
         let image = oriented(square).unwrap();
         assert_eq!((image.width(), image.height()), (512, 256), "ícone pequeno amplia até o piso, na proporção");
         assert_eq!(image.to_rgba8().get_pixel(10, 10).0, [255, 0, 0, 255]);
