@@ -1,5 +1,5 @@
-import { memo, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, FlatList, Pressable, StatusBar, Text, View } from 'react-native';
+import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { ActivityIndicator, FlatList, Pressable, StatusBar, Text, View, type AccessibilityActionEvent } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Image } from 'expo-image';
 import { WebView } from 'react-native-webview';
@@ -52,6 +52,24 @@ const ZOOM_DUPLO = 2.5;
 const EIXO = 8;
 const THUMB_W = 44;
 const THUMB_H = 58;
+// Acima disto o segundo toque já não é toque duplo: o toque simples fecha sem esperar o padrão do sistema.
+const DUPLO_MS = 250;
+
+/** Quanto a imagem ampliada pode andar para cada lado sem mostrar a borda: metade do que ela, no
+ *  tamanho em que aparece (`contain`), passa da caixa. Caixa ainda sem medida não limita. */
+export function panLimits(boxW: number, boxH: number, natW: number, natH: number, scale: number): { x: number; y: number } {
+  'worklet';
+  if (!(boxW > 0 && boxH > 0)) return { x: Infinity, y: Infinity };
+  const fit = natW > 0 && natH > 0 ? Math.min(boxW / natW, boxH / natH) : 0;
+  const w = fit ? natW * fit : boxW;
+  const h = fit ? natH * fit : boxH;
+  return { x: Math.max(0, (w * scale - boxW) / 2), y: Math.max(0, (h * scale - boxH) / 2) };
+}
+
+export function clampPan(v: number, limit: number): number {
+  'worklet';
+  return Math.min(limit, Math.max(-limit, v));
+}
 
 export function Lightbox({
   visible, uri, headers, filename, onClose, kind = 'image', counter, onStep, imageBackground, details, onShowInChat, strip,
@@ -71,6 +89,9 @@ export function Lightbox({
   const closing = useSharedValue(false);
   const boxW = useSharedValue(0);
   const boxH = useSharedValue(0);
+  // Tamanho natural da imagem aberta (0 = ainda não carregou): limita a panorâmica à imagem, não à caixa.
+  const natW = useSharedValue(0);
+  const natH = useSharedValue(0);
 
   const reset = () => {
     scale.value = 1;
@@ -83,8 +104,11 @@ export function Lightbox({
     closing.value = false;
   };
   // Trocar de mídia na galeria não herda o zoom da anterior; abrir ou fechar por qualquer caminho também não.
+  // Antes da pintura: a mídia nova nunca aparece um quadro com o zoom da anterior.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(reset, [uri, visible]);
+  useLayoutEffect(reset, [uri, visible]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useLayoutEffect(() => { natW.value = 0; natH.value = 0; }, [uri]);
 
   const handleClose = () => {
     reset();
@@ -132,7 +156,16 @@ export function Lightbox({
         translateY.value = 0;
         savedX.value = 0;
         savedY.value = 0;
+        return;
       }
+      // Diminuir o zoom encolhe o limite: a imagem volta a cobrir a caixa em vez de mostrar a borda.
+      const lim = panLimits(boxW.value, boxH.value, natW.value, natH.value, scale.value);
+      const x = clampPan(translateX.value, lim.x);
+      const y = clampPan(translateY.value, lim.y);
+      if (x !== translateX.value) translateX.value = withTiming(x);
+      if (y !== translateY.value) translateY.value = withTiming(y);
+      savedX.value = x;
+      savedY.value = y;
     });
 
   const pan = Gesture.Pan()
@@ -143,8 +176,9 @@ export function Lightbox({
     .onUpdate((e) => {
       if (e.numberOfPointers > 1) panUsedZoom.value = true;
       if (scale.value > 1) {
-        translateX.value = savedX.value + e.translationX;
-        translateY.value = savedY.value + e.translationY;
+        const lim = panLimits(boxW.value, boxH.value, natW.value, natH.value, scale.value);
+        translateX.value = clampPan(savedX.value + e.translationX, lim.x);
+        translateY.value = clampPan(savedY.value + e.translationY, lim.y);
         return;
       }
       if (panUsedZoom.value) return;
@@ -155,6 +189,11 @@ export function Lightbox({
       else if (axis.value === 2) dismissY.value = Math.max(0, e.translationY);
     })
     .onEnd((e, success) => {
+      if (scale.value > 1) {
+        const lim = panLimits(boxW.value, boxH.value, natW.value, natH.value, scale.value);
+        translateX.value = clampPan(translateX.value, lim.x);
+        translateY.value = clampPan(translateY.value, lim.y);
+      }
       savedX.value = translateX.value;
       savedY.value = translateY.value;
       if (!success || panUsedZoom.value || scale.value > 1) return;
@@ -175,7 +214,7 @@ export function Lightbox({
     });
 
   // Toque duplo alterna entre o tamanho original e o zoom no ponto tocado.
-  const doubleTap = Gesture.Tap().numberOfTaps(2).maxDistance(10).onEnd((e, success) => {
+  const doubleTap = Gesture.Tap().numberOfTaps(2).maxDistance(10).maxDelay(DUPLO_MS).onEnd((e, success) => {
     if (!success) return;
     if (scale.value > 1) {
       scale.value = withTiming(1);
@@ -186,8 +225,9 @@ export function Lightbox({
       savedY.value = 0;
       return;
     }
-    const tx = (boxW.value / 2 - e.x) * (ZOOM_DUPLO - 1);
-    const ty = (boxH.value / 2 - e.y) * (ZOOM_DUPLO - 1);
+    const lim = panLimits(boxW.value, boxH.value, natW.value, natH.value, ZOOM_DUPLO);
+    const tx = clampPan((boxW.value / 2 - e.x) * (ZOOM_DUPLO - 1), lim.x);
+    const ty = clampPan((boxH.value / 2 - e.y) * (ZOOM_DUPLO - 1), lim.y);
     scale.value = withTiming(ZOOM_DUPLO);
     translateX.value = withTiming(tx);
     translateY.value = withTiming(ty);
@@ -231,6 +271,16 @@ export function Lightbox({
     ...(canShareFile ? [{ icon: 'Share' as IconName, label: m.gallery_share(), a11y: m.gallery_share_named({ nome: filename }), onPress: share, busy: sharing }] : []),
     ...(onShowInChat ? [{ icon: 'MessageSquare' as IconName, label: m.gallery_in_chat(), a11y: m.gallery_in_chat(), onPress: onShowInChat }] : []),
   ];
+  // Arrastar não existe para quem usa o VoiceOver: deslizar para cima/baixo passa de mídia.
+  const stepA11y = onStep ? {
+    accessibilityRole: 'adjustable' as const,
+    accessibilityValue: counter ? { text: counter } : undefined,
+    accessibilityActions: [{ name: 'increment' }, { name: 'decrement' }],
+    onAccessibilityAction: (ev: AccessibilityActionEvent) => {
+      if (ev.nativeEvent.actionName === 'increment') onStep(1);
+      else if (ev.nativeEvent.actionName === 'decrement') onStep(-1);
+    },
+  } : { accessibilityValue: counter ? { text: counter } : undefined };
 
   return (
     <View style={StyleSheet.absoluteFill}>
@@ -249,9 +299,33 @@ export function Lightbox({
       </Animated.View>
       <View style={styles.stage}>
         {kind === 'video' ? (
-          <View style={styles.videoWrap}>
+          <Animated.View style={[styles.videoWrap, animatedStyle]}>
             <VideoPage uri={uri} headers={headers} name={filename} />
-          </View>
+            {/* O WebView fica com os toques do player: passar e fechar moram nesta faixa, fora dele. */}
+            <View style={styles.videoBar}>
+              {onStep ? (
+                <Pressable onPress={() => onStep(-1)} style={styles.roundBtn} accessibilityRole="button" accessibilityLabel={m.visor_anterior()}>
+                  <Icon name="ChevronLeft" size={20} color={theme.ink.onAccent} />
+                </Pressable>
+              ) : null}
+              <GestureDetector gesture={pan}>
+                <View
+                  style={styles.grip}
+                  accessible
+                  accessibilityLabel={filename}
+                  accessibilityHint={onStep ? m.gallery_video_swipe_hint() : m.gallery_video_close_hint()}
+                  {...stepA11y}
+                >
+                  <View style={styles.gripBar} />
+                </View>
+              </GestureDetector>
+              {onStep ? (
+                <Pressable onPress={() => onStep(1)} style={styles.roundBtn} accessibilityRole="button" accessibilityLabel={m.visor_proxima()}>
+                  <Icon name="ChevronRight" size={20} color={theme.ink.onAccent} />
+                </Pressable>
+              ) : null}
+            </View>
+          </Animated.View>
         ) : (
           <GestureDetector gesture={composed}>
             <Animated.View
@@ -259,17 +333,11 @@ export function Lightbox({
               onLayout={(e) => { boxW.value = e.nativeEvent.layout.width; boxH.value = e.nativeEvent.layout.height; }}
               accessible
               accessibilityLabel={filename}
-              accessibilityValue={counter ? { text: counter } : undefined}
-              // Arrastar não existe para quem usa o VoiceOver: deslizar para cima/baixo passa de mídia.
-              accessibilityRole={onStep ? 'adjustable' : 'image'}
-              accessibilityActions={onStep ? [{ name: 'increment' }, { name: 'decrement' }] : undefined}
-              onAccessibilityAction={(ev) => {
-                if (!onStep) return;
-                if (ev.nativeEvent.actionName === 'increment') onStep(1);
-                else if (ev.nativeEvent.actionName === 'decrement') onStep(-1);
-              }}
+              accessibilityRole="image"
+              {...stepA11y}
             >
-              <Image source={{ uri, headers }} style={[styles.img, imageBackground ? { backgroundColor: imageBackground } : null]} contentFit="contain" transition={200} />
+              <Image source={{ uri, headers }} style={[styles.img, imageBackground ? { backgroundColor: imageBackground } : null]} contentFit="contain" transition={200}
+                onLoad={(e) => { natW.value = e.source.width; natH.value = e.source.height; }} />
             </Animated.View>
           </GestureDetector>
         )}
@@ -453,6 +521,24 @@ const styles = StyleSheet.create((theme) => ({
     flex: 1,
     justifyContent: 'center',
     paddingHorizontal: theme.base.space[2],
+  },
+  videoBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.base.space[2],
+    paddingTop: theme.base.space[2],
+  },
+  grip: {
+    flex: 1,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  gripBar: {
+    width: 40,
+    height: 4,
+    borderRadius: theme.base.radius.full,
+    backgroundColor: 'rgba(255,255,255,0.4)',
   },
   video: {
     flex: 1,

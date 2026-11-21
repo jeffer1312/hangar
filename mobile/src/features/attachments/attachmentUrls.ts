@@ -43,6 +43,21 @@ export function attachmentSize(a: Pick<Ref, 'source' | 'ref'>, meta: AttachmentM
   return typeof size === 'number' && Number.isFinite(size) ? size : null;
 }
 
+/** Chave da cópia guardada: servidor + sessão + caminho, não a URL, porque a URL muda com a rota
+ *  (rede local ↔ Tailscale) e o arquivo baixado deixaria de ser achado sem conexão. Data e tamanho
+ *  entram também: arquivo regerado no mesmo caminho é outra cópia, e a antiga não abre no lugar dele. */
+export function keptKey(
+  serverId: string, sessionName: string,
+  item: Pick<Ref, 'source' | 'ref'> & { size?: number | null; mtime?: number | null },
+): string {
+  return `${serverId}::${sessionName}::${item.source}:${item.ref}::${item.mtime ?? ''}:${item.size ?? ''}`;
+}
+
+export function attachmentMtime(a: Pick<Ref, 'source' | 'ref'>, meta: AttachmentMeta): number | null {
+  const mtime = a.source === 'upload' ? meta.uploads.get(a.ref)?.mtime : a.source === 'cited' ? meta.cited.get(a.ref)?.mtime : undefined;
+  return typeof mtime === 'number' && Number.isFinite(mtime) ? mtime : null;
+}
+
 /** Prazo do upload; undefined quando não é um upload que a lista conhece. */
 export function attachmentExpiry(a: Pick<Ref, 'source' | 'ref'>, meta: AttachmentMeta): number | null | undefined {
   if (a.source !== 'upload') return undefined;

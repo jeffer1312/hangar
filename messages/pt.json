@@ -11984,5 +11984,8 @@
   "gallery_share": "Compartilhar",
   "gallery_share_named": "Compartilhar {nome}",
   "gallery_in_chat": "Na conversa",
-  "gallery_counter": "{n} de {total}"
+  "gallery_counter": "{n} de {total}",
+  "gallery_jump_not_found": "A mensagem não está no trecho carregado da conversa. Role para cima para carregar as anteriores.",
+  "gallery_video_swipe_hint": "Arraste para os lados para trocar de mídia, ou para baixo para fechar",
+  "gallery_video_close_hint": "Arraste para baixo para fechar"
 }

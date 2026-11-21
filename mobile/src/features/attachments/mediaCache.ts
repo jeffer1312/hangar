@@ -13,9 +13,7 @@ const FLAG_GRANT_READ_URI_PERMISSION = 1;
 export async function localCopy(uri: string, headers: Record<string, string> | undefined, name: string): Promise<File> {
   const dir = new Directory(Paths.cache, 'chat-media');
   dir.create({ idempotent: true, intermediates: true });
-  let h = 0;
-  for (let i = 0; i < uri.length; i++) h = (h * 31 + uri.charCodeAt(i)) | 0;
-  const target = new File(dir, `${(h >>> 0).toString(36)}-${name.replace(/[^\w.-]/g, '_')}`);
+  const target = new File(dir, `${keyHash(uri)}-${name.replace(/[^\w.-]/g, '_')}`);
   const tmp = new File(dir, `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}.part`);
   try {
     await File.downloadFileAsync(uri, tmp, { headers });
@@ -27,14 +25,30 @@ export async function localCopy(uri: string, headers: Record<string, string> | u
   return target;
 }
 
-// Cópia guardada da tela "Mídia e arquivos". A chave é servidor + sessão + caminho, não a URL: a URL
-// muda com a rota (rede local ↔ Tailscale) e o arquivo baixado deixaria de ser achado sem conexão.
+// cyrb53 com duas sementes (~106 bits): com 32 bits, duas chaves de nomes iguais podiam cair no mesmo
+// arquivo e uma abria a cópia da outra.
+function cyrb53(s: string, seed: number): number {
+  let h1 = 0xdeadbeef ^ seed;
+  let h2 = 0x41c6ce57 ^ seed;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    h1 = Math.imul(h1 ^ c, 2654435761);
+    h2 = Math.imul(h2 ^ c, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return 4294967296 * (2097151 & h2) + (h1 >>> 0);
+}
+
+export function keyHash(s: string): string {
+  return `${cyrb53(s, 0).toString(36)}${cyrb53(s, 1).toString(36)}`;
+}
+
+// Cópia guardada da tela "Mídia e arquivos", pela chave de `keptKey`.
 function keptFile(key: string, name: string): File {
   const dir = new Directory(Paths.cache, 'media-files');
   dir.create({ idempotent: true, intermediates: true });
-  let h = 0;
-  for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) | 0;
-  return new File(dir, `${(h >>> 0).toString(36)}-${name.replace(/[^\w.-]/g, '_')}`);
+  return new File(dir, `${keyHash(key)}-${name.replace(/[^\w.-]/g, '_')}`);
 }
 
 /** A cópia já baixada, ou null. */

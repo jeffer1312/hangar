@@ -11984,5 +11984,8 @@
   "gallery_share": "Share",
   "gallery_share_named": "Share {nome}",
   "gallery_in_chat": "In chat",
-  "gallery_counter": "{n} of {total}"
+  "gallery_counter": "{n} of {total}",
+  "gallery_jump_not_found": "That message isn't in the loaded part of the conversation. Scroll up to load earlier messages.",
+  "gallery_video_swipe_hint": "Swipe sideways to switch media, or down to close",
+  "gallery_video_close_hint": "Swipe down to close"
 }

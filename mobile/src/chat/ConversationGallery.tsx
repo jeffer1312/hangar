@@ -5,6 +5,8 @@ import { attachmentExpiry, attachmentHeaders, attachmentName, attachmentSize, at
 import { useGalleryMeta } from '../features/attachments/useAttachmentMeta';
 import { useServers } from '../stores/servers';
 import { useRouteBase } from '../net/routeBase';
+import { toast } from '../ui/Toast';
+import * as m from '../paraglide/messages';
 
 // O visor puxa os módulos nativos de arquivo (salvar, compartilhar, vídeo): a lista da conversa não
 // os carrega, e eles só entram quando a pessoa abre uma mídia.
@@ -19,8 +21,8 @@ interface Props {
   events: ChatEvent[];
   serverId: string;
   sessionName: string;
-  /** Fecha o visor e leva a lista até a mensagem. */
-  onShowInChat: (eventId: string) => void;
+  /** Leva a lista até a mensagem; false = ela não está na lista (o visor fica aberto e avisa). */
+  onShowInChat: (eventId: string) => boolean;
 }
 
 // Fechada, só guarda a chave: nada do visor monta, e evento novo não refaz a lista de mídias.
@@ -46,7 +48,10 @@ export const ConversationGallery = forwardRef<ConversationGalleryHandle, Props>(
       openKey={openKey}
       onOpenKey={setOpenKey}
       onClose={() => setOpenKey(null)}
-      onShowInChat={(eventId) => { setOpenKey(null); onShowInChat(eventId); }}
+      onShowInChat={(eventId) => {
+        if (onShowInChat(eventId)) setOpenKey(null);
+        else toast.erro(m.gallery_jump_not_found());
+      }}
     />
   );
 });

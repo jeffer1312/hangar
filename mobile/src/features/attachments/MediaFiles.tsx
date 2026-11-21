@@ -12,7 +12,7 @@ import { toast } from '../../ui/Toast';
 import { haptic } from '../../ui/haptics';
 import { superficie } from '../../theme/superficie';
 import { AudioChip } from '../../chat/AudioChip';
-import { attachmentHeaders, attachmentName, attachmentThumbUri, attachmentUri } from './attachmentUrls';
+import { attachmentHeaders, attachmentName, attachmentThumbUri, attachmentUri, keptKey } from './attachmentUrls';
 import { deliverLocalFile, downloadKept, keptCopy } from './mediaCache';
 import { expiryText, originLabel } from './gallery';
 
@@ -21,6 +21,8 @@ type Theme = UnistylesThemes[keyof UnistylesThemes];
 /** Um item da tela: o anexo da conversa (ou o upload fora do histórico carregado) com o que o servidor sabe dele. */
 export interface MediaFileItem extends ConversationAttachment {
   size: number | null;
+  /** Data do arquivo no servidor; null/ausente quando ele não informa. */
+  mtime?: number | null;
   /** Prazo do upload em dias (null = sem prazo); ausente quando não é upload conhecido. */
   expiresInDays?: number | null;
 }
@@ -97,14 +99,23 @@ type DownloadState =
 const missing = (e: unknown) => /status:? 404\b|HTTP 404\b/.test(e instanceof Error ? e.message : String(e));
 const aborted = (e: unknown) => e instanceof Error && (e.name === 'AbortError' || /cancel/i.test(e.message));
 
+function keptState(key: string, name: string): DownloadState {
+  const kept = keptCopy(key, name);
+  return kept ? { kind: 'done', file: kept } : { kind: 'idle' };
+}
+
 /** Baixar → progresso (tocar cancela) → abre; o já baixado abre na hora, sem rede. */
 function useDownload(item: MediaFileItem, server: Server, sessionName: string, serverId: string) {
   const name = attachmentName(item);
-  const keepKey = `${serverId}::${sessionName}::${item.source}:${item.ref}`;
-  const [state, setState] = useState<DownloadState>(() => {
-    const kept = keptCopy(keepKey, name);
-    return kept ? { kind: 'done', file: kept } : { kind: 'idle' };
-  });
+  const keepKey = keptKey(serverId, sessionName, item);
+  const [state, setState] = useState<DownloadState>(() => keptState(keepKey, name));
+  // Data ou tamanho mudou (arquivo regerado, ou a medida chegou depois): vale a cópia desta versão.
+  const shownKey = useRef(keepKey);
+  useEffect(() => {
+    if (shownKey.current === keepKey) return;
+    shownKey.current = keepKey;
+    setState((s) => (s.kind === 'loading' ? s : keptState(keepKey, name)));
+  }, [keepKey, name]);
   const abort = useRef<AbortController | null>(null);
   const alive = useRef(true);
   useEffect(() => { alive.current = true; return () => { alive.current = false; abort.current?.abort(); }; }, []);

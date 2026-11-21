@@ -70,7 +70,7 @@ vi.mock('../../paraglide/messages', () => Object.fromEntries(
     + 'media_tab_files media_tab_audio media_filter_all media_filter_agent media_filter_user media_origin_agent media_origin_user '
     + 'media_empty media_day_today media_day_yesterday media_day_undated media_when_today media_when_yesterday media_when_date '
     + 'media_folder_uploads media_cancel_download media_again media_downloading_pct media_downloading_pct_of media_downloaded '
-    + 'media_download_failed gallery_counter')
+    + 'media_download_failed gallery_counter gallery_jump_not_found')
     .split(' ').map((k) => [k, (p?: Record<string, unknown>) => (p ? `${k}:${Object.values(p).join(',')}` : k)]),
 ));
 
@@ -227,7 +227,8 @@ describe('media and files', () => {
     const { container, root } = await render();
     await click(container, 'media_tab_files:1');
     await click(container, `file_card_download: ${filename}`);
-    expect(h.download).toHaveBeenCalledExactlyOnceWith(`s1::sess::upload:${filename}`,
+    // A chave leva data e tamanho do servidor: arquivo regerado no mesmo caminho é outra cópia.
+    expect(h.download).toHaveBeenCalledExactlyOnceWith(`s1::sess::upload:${filename}::0:10`,
       `https://a.test/api/sessions/sess/uploads/${filename}`, { Authorization: 'Bearer token-a' }, filename,
       expect.any(Function), expect.any(AbortSignal));
     expect(h.deliverLocal).toHaveBeenCalledExactlyOnceWith(done, filename);
@@ -250,6 +251,17 @@ describe('media and files', () => {
     await click(container, 'file_card_open: pacote.zip');
     expect(h.download).not.toHaveBeenCalled();
     expect(h.deliverLocal).toHaveBeenCalledWith(kept, 'pacote.zip');
+    expect(h.kept).toHaveBeenCalledWith('s1::sess::upload:pacote.zip::0:10', 'pacote.zip');
+    act(() => root.unmount());
+  });
+
+  it('a file regenerated on the server does not open the old copy', async () => {
+    h.list.mockResolvedValueOnce({ files: [{ ...file('pacote.zip', 7), size: 99 }] });
+    h.kept.mockImplementation((key: string) => (key === 's1::sess::upload:pacote.zip::0:10' ? { uri: 'file:///cache/old', size: 10 } : null));
+    const { container, root } = await render();
+    await click(container, 'media_tab_files:1');
+    expect(h.kept).toHaveBeenCalledWith('s1::sess::upload:pacote.zip::7:99', 'pacote.zip');
+    expect(find(container, 'file_card_download: pacote.zip')).toBeDefined();
     act(() => root.unmount());
   });
 

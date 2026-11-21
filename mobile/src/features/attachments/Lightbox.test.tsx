@@ -42,9 +42,12 @@ vi.mock('../../paraglide/messages', () => ({
   anexos_ver: ({ n }: { n: string }) => `abrir ${n}`, anexos_tocar: ({ nome }: { nome: string }) => `tocar ${nome}`,
   gallery_save: () => 'gallery_save', gallery_share: () => 'gallery_share', gallery_share_named: () => 'share',
   gallery_in_chat: () => 'in_chat', gallery_counter: ({ n, total }: { n: number; total: number }) => `${n}/${total}`,
+  visor_anterior: () => 'previous', visor_proxima: () => 'next',
+  gallery_video_swipe_hint: () => 'swipe', gallery_video_close_hint: () => 'swipe_close',
+  visor_nao_carregou: () => 'did not load', comum_carregando: () => 'loading', arquivo_carregar_erro: () => 'error',
 }));
 
-import { Lightbox, type LightboxProps } from './Lightbox';
+import { clampPan, Lightbox, panLimits, type LightboxProps } from './Lightbox';
 import { ImageThumb } from '../../chat/ImageThumb';
 
 const roots: Root[] = [];
@@ -127,6 +130,8 @@ it('the close tap does not share the gallery drag on iOS, and the double tap com
   expect(pan.config.simultaneousWith).not.toContain(single);
   expect(pan.config.simultaneousWith).toContain(pinch);
   expect(single.config).toMatchObject({ maxDist: 10 });
+  // Sem prazo curto, o toque simples que fecha esperava o padrão do sistema para o segundo toque.
+  expect(double.config).toMatchObject({ maxDelayMs: 250 });
   // Exclusive: o toque simples só vale quando o duplo falha.
   expect(single.config.requireToFail).toContain(double);
 });
@@ -183,6 +188,19 @@ it('with zoom the pan accumulates, the tap does not close and dragging down does
   drag(0, 300);
   expect(onStep).not.toHaveBeenCalled();
   expect(onClose).not.toHaveBeenCalled();
+});
+
+it('the zoomed pan stops at the edge of the scaled image', () => {
+  // Caixa 400×800, foto 1000×500 (aparece 400×200). Em 2×: 800×400, sobram 200 de cada lado e nada na vertical.
+  expect(panLimits(400, 800, 1000, 500, 2)).toEqual({ x: 200, y: 0 });
+  // Antes de a foto carregar, vale a caixa inteira.
+  expect(panLimits(400, 800, 0, 0, 2)).toEqual({ x: 200, y: 400 });
+  // Caixa sem medida não limita.
+  expect(panLimits(0, 0, 1000, 500, 2)).toEqual({ x: Infinity, y: Infinity });
+  expect(clampPan(350, 200)).toBe(200);
+  expect(clampPan(-350, 200)).toBe(-200);
+  expect(clampPan(120, 200)).toBe(120);
+  expect(clampPan(50, 0)).toBe(0);
 });
 
 it('double tap zooms in and a second one goes back', async () => {
@@ -247,6 +265,17 @@ it('video also has save, and it saves the open video', async () => {
   expect(salvar).not.toBeNull();
   await act(async () => salvar!.click());
   expect(saveImage).toHaveBeenCalledWith('https://example.test/demo.mp4', undefined, 'demo.mp4');
+});
+
+it('video steps by the buttons and the strip below the player, which also closes', async () => {
+  const { container, onStep, onClose } = await render({ kind: 'video', uri: 'https://example.test/demo.mp4', filename: 'demo.mp4' });
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="next"]')!.click());
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="previous"]')!.click());
+  expect(onStep.mock.calls).toEqual([[1], [-1]]);
+  drag(-100);
+  expect(onStep).toHaveBeenLastCalledWith(1);
+  drag(5, 200);
+  expect(onClose).toHaveBeenCalledTimes(1);
 });
 
 it('caption, share and "in chat"', async () => {

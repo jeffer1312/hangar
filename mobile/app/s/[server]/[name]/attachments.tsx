@@ -14,7 +14,7 @@ import { superficie } from '../../../../src/theme/superficie';
 import { DocumentViewer, type DocumentItem } from '../../../../src/features/attachments/DocumentViewer';
 import { GalleryViewer, mediaDayTitle, type GalleryEntry } from '../../../../src/features/attachments/gallery';
 import { AudioRow, FileRow, MediaCell, type MediaFileItem } from '../../../../src/features/attachments/MediaFiles';
-import { attachmentExpiry, attachmentHeaders, attachmentName, attachmentSize, attachmentThumbUri, attachmentUri, type AttachmentMeta } from '../../../../src/features/attachments/attachmentUrls';
+import { attachmentExpiry, attachmentHeaders, attachmentMtime, attachmentName, attachmentSize, attachmentThumbUri, attachmentUri, type AttachmentMeta } from '../../../../src/features/attachments/attachmentUrls';
 import { citedMeta } from '../../../../src/features/attachments/useAttachmentMeta';
 import { DictationError, dictateUpload } from '../../../../src/features/ditado/dictationRun';
 import { dictationStyleStore } from '../../../../src/features/ditado/ditadoEstiloStore';
@@ -46,7 +46,7 @@ function collect(events: Parameters<typeof conversationAttachments>[0], uploads:
       kind: fileKind(f.filename) ?? 'document', name: f.filename, ref: f.filename,
     });
   }
-  const items = [...byRef.values()].map((a): MediaFileItem => ({ ...a, size: attachmentSize(a, meta), expiresInDays: attachmentExpiry(a, meta) }));
+  const items = [...byRef.values()].map((a): MediaFileItem => ({ ...a, size: attachmentSize(a, meta), mtime: attachmentMtime(a, meta), expiresInDays: attachmentExpiry(a, meta) }));
   return newestFirst(items, (x) => x.ts);
 }
 
@@ -54,7 +54,7 @@ function collect(events: Parameters<typeof conversationAttachments>[0], uploads:
 function reuse(prev: Map<string, MediaFileItem>, items: MediaFileItem[]): MediaFileItem[] {
   return items.map((x) => {
     const old = prev.get(x.key);
-    return old && old.eventId === x.eventId && old.ts === x.ts && old.ref === x.ref && old.size === x.size
+    return old && old.eventId === x.eventId && old.ts === x.ts && old.ref === x.ref && old.size === x.size && old.mtime === x.mtime
       && old.expiresInDays === x.expiresInDays && old.name === x.name ? old : x;
   });
 }
