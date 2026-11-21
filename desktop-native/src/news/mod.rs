@@ -11,6 +11,7 @@ mod code_comments;
 mod compact_idle;
 mod composer_history;
 mod connect_approval;
+mod conversation_gallery;
 mod desktop_tool_look;
 mod dictation_pill;
 mod login_browser;
@@ -107,6 +108,7 @@ pub fn animation(name: &str) -> Option<NewsAnimation> {
         "atualizar-cliproxy" => Some(proxy_update::render),
         "entregar-cliproxy" => Some(adopt_cliproxy::render),
         "conversa-nova" => Some(new_conversation::render),
+        "galeria-da-conversa" => Some(conversation_gallery::render),
         _ => None,
     }
 }

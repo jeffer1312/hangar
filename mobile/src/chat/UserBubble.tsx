@@ -3,7 +3,7 @@ import { Pressable, Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { ImageThumb, type MediaItem } from './ImageThumb';
 import { FileCard } from './FileCard';
-import { fileKind, hasContextRefs, parseImageMessage, parsePeerMessage, parseRealtimeDelegation, transcriptImageUrlNative, uploadUrlNative, fileAuthHeader, type QuoteRef } from '@hangar/core';
+import { fileKind, hasContextRefs, parseImageMessage, parsePeerMessage, parseRealtimeDelegation, transcriptImageUrlNative, uploadUrlNative, userMessageFiles, fileAuthHeader, type QuoteRef } from '@hangar/core';
 import { ContextRefView } from './ContextRefView';
 import * as m from '../paraglide/messages';
 import { BubbleActions } from './BubbleActions';
@@ -51,16 +51,13 @@ export const UserBubble = memo(function UserBubble({ text, sessionName, serverId
   const doTerminal = imageCount > 0 && !!sessionName && !!eventId;
   const hasImages = (!!parsed && !!sessionName) || doTerminal;
   const caption = peer ? body : (parsed ? parsed.caption : doTerminal ? text : '');
-  // Como no web: com o caminho escrito pra TODAS as fotos, as últimas `imageCount` já vêm do
-  // transcript, e mostrar as duas fontes duplicava cada imagem.
-  const filenames = !parsed || !sessionName ? []
-    : doTerminal && parsed.marcadores === parsed.filenames.length
-      ? parsed.filenames.slice(0, Math.max(0, parsed.filenames.length - imageCount))
-      : parsed.filenames;
+  // A mesma separação que a galeria da conversa usa (core): a foto escrita e colada sai uma vez, e o
+  // vídeo anexado como `arquivo:` é mídia que toca no visor.
+  const attached = sessionName ? userMessageFiles(text, doTerminal ? imageCount : 0) : null;
+  const filenames = attached?.images ?? [];
   // Recalcula as URLs quando a rota do servidor muda; o valor em si sai do `baseOf` dentro delas.
   useRouteBase(server);
-  // Vídeo anexado vai como `arquivo:` (com os quadros como `imagem:`), mas é mídia: toca no visor.
-  const videos = parsed?.files.filter((f) => fileKind(f) === 'video') ?? [];
+  const videos = attached?.videos ?? [];
   const otherFiles = parsed?.files.filter((f) => fileKind(f) !== 'video') ?? [];
   const galeria: MediaItem[] = hasImages && server ? [
     ...videos.map((fn): MediaItem => ({ uri: uploadUrlNative(sessionName!, fn, server), headers: fileAuthHeader(server), name: fn, kind: 'video' })),
@@ -141,7 +138,8 @@ export const UserBubble = memo(function UserBubble({ text, sessionName, serverId
         {caption ? renderCaption(caption) : null}
         {galeria.length ? <View style={styles.thumbs}>
           {/* A URI muda com a rota (LAN ↔ Tailscale); como chave, remontaria a miniatura e fecharia o visor. */}
-          {galeria.map((_, i) => <ImageThumb key={i} items={galeria} index={i} style={styles.thumb} />)}
+          {galeria.map((_, i) => <ImageThumb key={i} items={galeria} index={i} style={styles.thumb}
+            galleryKey={eventId ? `${eventId}#${i}` : undefined} />)}
         </View> : null}
         {cards}
       </>,

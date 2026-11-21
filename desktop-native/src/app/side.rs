@@ -1433,6 +1433,7 @@ impl Hangar {
                     None if menu => self.render_side_menu(cx),
                     None => div().flex_1().min_h_0().children(self.subagent_tab_view()).into_any_element(),
                     Some(SideTab::Files) => div().flex_1().min_h_0().child(self.render_tree(cx)).into_any_element(),
+                    Some(SideTab::Media) => div().flex_1().min_h_0().child(self.render_media_panel(width, cx)).into_any_element(),
                     Some(SideTab::Activity) => div().flex_1().min_h_0().child(self.activity_view()).into_any_element(),
                     Some(SideTab::Git) => div().flex_1().min_h_0().children(self.side_git(window, cx)).into_any_element(),
                     // A revisão ganha a altura inteira do painel, com o recuo das seções do Contexto.

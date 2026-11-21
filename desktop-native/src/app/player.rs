@@ -11,6 +11,8 @@ pub(super) struct Player {
     ticking: bool,
 }
 
+pub(super) struct AudioState { pub(super) playing: bool, pub(super) loading: bool, pub(super) duration: Option<f64>, pub(super) error: Option<String> }
+
 /// Fatias da barra de posição: cada uma leva o áudio até o meio dela.
 const SEGMENTS: usize = 48;
 
@@ -91,6 +93,17 @@ impl Hangar {
             }).unwrap_or(false);
             if !playing { break; }
         }).detach();
+    }
+
+    /// O áudio da chave para quem desenha o próprio botão (a linha da aba Mídia): duração só depois de carregado.
+    pub(super) fn audio_state(&self, key: &str) -> AudioState {
+        let current = self.player.current.as_ref().filter(|(k, _)| k == key).map(|(_, playback)| playback);
+        AudioState {
+            playing: current.is_some_and(|playback| !playback.paused()),
+            loading: self.player.loading.as_deref() == Some(key),
+            duration: current.map(Playback::duration),
+            error: self.player.error.as_ref().filter(|(k, _)| k == key).map(|(_, error)| error.clone()),
+        }
     }
 
     /// Tocar/pausar, barra de posição (clique leva até ali) e tempo. `play` busca os bytes no primeiro clique.

@@ -2,6 +2,7 @@ import { Platform, Share } from 'react-native';
 import { Directory, File, Paths } from 'expo-file-system';
 import { startActivityAsync } from 'expo-intent-launcher';
 import * as m from '../../paraglide/messages';
+import { downloadedVersion, keptIsCurrent, type KeptVersion } from './attachmentUrls';
 
 const FLAG_GRANT_READ_URI_PERMISSION = 1;
 
@@ -13,9 +14,7 @@ const FLAG_GRANT_READ_URI_PERMISSION = 1;
 export async function localCopy(uri: string, headers: Record<string, string> | undefined, name: string): Promise<File> {
   const dir = new Directory(Paths.cache, 'chat-media');
   dir.create({ idempotent: true, intermediates: true });
-  let h = 0;
-  for (let i = 0; i < uri.length; i++) h = (h * 31 + uri.charCodeAt(i)) | 0;
-  const target = new File(dir, `${(h >>> 0).toString(36)}-${name.replace(/[^\w.-]/g, '_')}`);
+  const target = new File(dir, `${keyHash(uri)}-${name.replace(/[^\w.-]/g, '_')}`);
   const tmp = new File(dir, `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}.part`);
   try {
     await File.downloadFileAsync(uri, tmp, { headers });
@@ -24,6 +23,92 @@ export async function localCopy(uri: string, headers: Record<string, string> | u
     if (tmp.exists) tmp.delete();
     throw e;
   }
+  return target;
+}
+
+// cyrb53 com duas sementes (~106 bits): com 32 bits, duas chaves de nomes iguais podiam cair no mesmo
+// arquivo e uma abria a cópia da outra.
+function cyrb53(s: string, seed: number): number {
+  let h1 = 0xdeadbeef ^ seed;
+  let h2 = 0x41c6ce57 ^ seed;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    h1 = Math.imul(h1 ^ c, 2654435761);
+    h2 = Math.imul(h2 ^ c, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return 4294967296 * (2097151 & h2) + (h1 >>> 0);
+}
+
+export function keyHash(s: string): string {
+  return `${cyrb53(s, 0).toString(36)}${cyrb53(s, 1).toString(36)}`;
+}
+
+// Cópia guardada da tela "Mídia e arquivos", pela chave de `keptKey`.
+function keptFile(key: string, name: string): File {
+  const dir = new Directory(Paths.cache, 'media-files');
+  dir.create({ idempotent: true, intermediates: true });
+  return new File(dir, `${keyHash(key)}-${name.replace(/[^\w.-]/g, '_')}`);
+}
+
+// Versão gravada com a cópia. Pasta própria: não se mistura com os arquivos baixados.
+function versionFile(key: string): File {
+  const dir = new Directory(Paths.cache, 'media-files-version');
+  dir.create({ idempotent: true, intermediates: true });
+  return new File(dir, `${keyHash(key)}.json`);
+}
+
+function readVersion(key: string): KeptVersion | null {
+  try {
+    const f = versionFile(key);
+    if (!f.exists) return null;
+    const v = JSON.parse(f.textSync()) as Partial<KeptVersion>;
+    return { size: typeof v.size === 'number' ? v.size : null, mtime: typeof v.mtime === 'number' ? v.mtime : null };
+  } catch {
+    return null;
+  }
+}
+
+/** A cópia já baixada, ou null; também null quando o servidor diz que o arquivo mudou desde o download. */
+export function keptCopy(key: string, name: string, now: KeptVersion): File | null {
+  try {
+    const f = keptFile(key, name);
+    if (!f.exists) return null;
+    return keptIsCurrent(readVersion(key), f.size, now) ? f : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Baixa para a cópia guardada com progresso (0..1, ou null sem tamanho) e cancelamento pelo `signal`.
+ *  Vai para um nome temporário e só substitui a cópia ao terminar, como o `localCopy`. A versão gravada
+ *  é a dos bytes (`downloadedVersion`): o download do expo-file-system não devolve os cabeçalhos da
+ *  resposta, então a medida do começo e a do fim são lidas e comparadas. */
+export async function downloadKept(
+  key: string, uri: string, headers: Record<string, string> | undefined, name: string,
+  version: () => KeptVersion, onProgress: (fraction: number | null) => void, signal: AbortSignal,
+): Promise<File> {
+  const start = version();
+  const target = keptFile(key, name);
+  const tmp = new File(target.parentDirectory, `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}.part`);
+  try {
+    const task = File.createDownloadTask(uri, tmp, {
+      headers,
+      // Fora do fundo: cancelar pela tela precisa do JS vivo, e o arquivo é pedido agora.
+      sessionType: 'foreground',
+      signal,
+      onProgress: ({ bytesWritten, totalBytes }) => onProgress(totalBytes > 0 ? Math.min(1, bytesWritten / totalBytes) : null),
+    });
+    const done = await task.downloadAsync();
+    if (!done) throw new Error('paused');
+    tmp.moveSync(target, { overwrite: true });
+  } catch (e) {
+    if (tmp.exists) tmp.delete();
+    throw e;
+  }
+  // Sem a versão gravada a cópia continua valendo; só a data deixa de ser conferida.
+  try { versionFile(key).write(JSON.stringify(downloadedVersion(start, version()))); } catch { /* idem */ }
   return target;
 }
 
@@ -72,6 +157,9 @@ const MIME: Record<string, string> = {
   csv: 'text/csv', tsv: 'text/tab-separated-values', txt: 'text/plain',
   zip: 'application/zip', tar: 'application/x-tar', gz: 'application/gzip', tgz: 'application/gzip',
   '7z': 'application/x-7z-compressed', rar: 'application/vnd.rar',
+  // A tela "Mídia e arquivos" também entrega estes ao app do sistema depois de baixar.
+  pdf: 'application/pdf', html: 'text/html', htm: 'text/html',
+  mp3: 'audio/mpeg', m4a: 'audio/mp4', wav: 'audio/wav', ogg: 'audio/ogg', flac: 'audio/flac', aac: 'audio/aac',
 };
 
 export function mimeType(name: string): string {
@@ -84,7 +172,11 @@ export function mimeType(name: string): string {
 // iOS: a folha não diz para onde o arquivo foi (Copiar, Mail, Salvar em Arquivos), então volta 'shared'.
 // Android: 'opened' = entregue ao app que lê o tipo; a cópia fica só no cache, não foi baixada.
 export async function deliverFile(uri: string, headers: Record<string, string> | undefined, name: string): Promise<'opened' | 'shared' | 'empty' | 'cancelled' | 'no-app'> {
-  const f = await localCopy(uri, headers, name);
+  return deliverLocalFile(await localCopy(uri, headers, name), name);
+}
+
+// Arquivo já no aparelho (baixado na tela "Mídia e arquivos"): entrega sem rede.
+export async function deliverLocalFile(f: File, name: string): Promise<'opened' | 'shared' | 'empty' | 'cancelled' | 'no-app'> {
   if (f.size === 0) return 'empty';
   if (Platform.OS === 'ios') {
     const r = await Share.share({ url: f.uri });

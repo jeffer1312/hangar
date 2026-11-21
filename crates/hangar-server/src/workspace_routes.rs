@@ -797,7 +797,7 @@ fn resolve_many(
     let mut outside = 0;
     for (path, (bases, hit)) in paths.iter().zip(local) {
         if let Some(target) = hit {
-            found.insert(path.clone(), target);
+            found.insert(path.clone(), hangar_workspace::files::with_stat(target));
         } else if !found.contains_key(path) && cited.get(path).is_some() && outside < 30 {
             outside += 1;
             if let Some(at) = pending.iter().position(|p| p == path)
@@ -806,7 +806,7 @@ fn resolve_many(
             {
                 found.insert(
                     path.clone(),
-                    json!({"relativo":null,"real":p.to_string_lossy()}),
+                    hangar_workspace::files::with_stat(json!({"relativo":null,"real":p.to_string_lossy()})),
                 );
             }
         }
