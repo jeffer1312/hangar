@@ -7,13 +7,8 @@ import * as m from '../../paraglide/messages';
 // O mock padrão do reanimated já responde movimento reduzido.
 vi.mock('expo-router', () => ({ useIsFocused: () => true, useRouter: () => ({ push: vi.fn() }) }));
 vi.mock('expo-linear-gradient', () => ({ LinearGradient: ({ children }: { children?: ReactNode }) => createElement('div', null, children) }));
-// O visor e a grade trazem o cache de arquivos e o player de áudio, que são nativos; a animação não os usa.
-vi.mock('../attachments/mediaCache', () => ({ canShareFile: false, localCopy: vi.fn(), saveImage: vi.fn(), shareFile: vi.fn(),
-  downloadKept: vi.fn(), deliverLocalFile: vi.fn(), keptCopy: () => null }));
-vi.mock('../attachments/LightboxModal', () => ({ LightboxModal: () => null }));
-vi.mock('../../chat/AudioChip', () => ({ AudioChip: () => null }));
+// Sem mock do cache de arquivos, do player nem do toast: a animação só importa as partes leves do visor e da grade.
 vi.mock('../../ui/Icon', () => ({ Icon: () => null }));
-vi.mock('../../ui/Toast', () => ({ toast: { erro: () => {}, ok: () => {} } }));
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 (HTMLElement.prototype as HTMLElement & { measureInWindow?: unknown }).measureInWindow =
   (done: (x: number, y: number, w: number, h: number) => void) => done(0, 0, 340, 400);

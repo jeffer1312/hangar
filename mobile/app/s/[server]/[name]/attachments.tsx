@@ -13,7 +13,8 @@ import { chatJumpRoute, requestChatJump } from '../../../../src/stores/chatJump'
 import { superficie } from '../../../../src/theme/superficie';
 import { DocumentViewer, type DocumentItem } from '../../../../src/features/attachments/DocumentViewer';
 import { GalleryViewer, mediaDayTitle, type GalleryEntry } from '../../../../src/features/attachments/gallery';
-import { AudioRow, FileRow, MediaCell, MediaTabs, OriginChips, type MediaFileItem } from '../../../../src/features/attachments/MediaFiles';
+import { AudioRow, FileRow, MediaCell, type MediaFileItem } from '../../../../src/features/attachments/MediaFiles';
+import { MediaTabs, OriginChips } from '../../../../src/features/attachments/MediaFilesParts';
 import { attachmentExpiry, attachmentHeaders, attachmentMtime, attachmentName, attachmentSize, attachmentThumbUri, attachmentUri, type AttachmentMeta } from '../../../../src/features/attachments/attachmentUrls';
 import { citedMeta } from '../../../../src/features/attachments/useAttachmentMeta';
 import { DictationError, dictateUpload } from '../../../../src/features/ditado/dictationRun';

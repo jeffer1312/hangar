@@ -10,9 +10,9 @@ import { Icon } from '../../ui/Icon';
 import { WorkingMarkPaused } from '../../ui/WorkingMark';
 import { superficie } from '../../theme/superficie';
 import { SPACE } from '../../theme/scale';
-import { LightboxActions, LightboxCaption, StripThumbFrame } from '../attachments/Lightbox';
-import { MediaCellFrame, MediaTabs, OriginChips } from '../attachments/MediaFiles';
-import { originLabel } from '../attachments/gallery';
+import { LightboxActions, LightboxCaption, StripThumbFrame } from '../attachments/LightboxParts';
+import { MediaCellFrame, MediaTabs, OriginChips } from '../attachments/MediaFilesParts';
+import { originLabel } from '../attachments/origin';
 import { useScriptStep } from './scriptStep';
 
 // Roteiro da `galeria-da-conversa`: o visor passa de lado pela mídia da conversa inteira, com a faixa embaixo e o

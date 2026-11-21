@@ -4,6 +4,7 @@ import * as m from '../../paraglide/messages';
 import { haptic } from '../../ui/haptics';
 import { Lightbox, type LightboxProps, type LightboxStripItem } from './Lightbox';
 import { LightboxModal } from './LightboxModal';
+import { originLabel } from './origin';
 
 export interface GalleryEntry {
   key: string;
@@ -53,8 +54,6 @@ export function mediaDayTitle(day: number | null): string {
   if (rel === 'yesterday') return m.media_day_yesterday();
   return d.toLocaleDateString(intlLocale(), { weekday: 'long', day: 'numeric', month: 'long' });
 }
-
-export const originLabel = (o: AttachmentOrigin) => (o === 'agent' ? m.media_origin_agent() : m.media_origin_user());
 
 /** Prazo do upload em texto curto; `urgent` pinta de aviso. */
 export function expiryText(d: number | null): { txt: string; urgent: boolean } {

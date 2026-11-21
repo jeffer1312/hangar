@@ -1,4 +1,4 @@
-import { memo, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ActivityIndicator, FlatList, Pressable, StatusBar, Text, View, type AccessibilityActionEvent } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Image } from 'expo-image';
@@ -13,6 +13,7 @@ import { canShareFile, localCopy, saveImage, shareFile } from './mediaCache';
 import { toast } from '../../ui/Toast';
 import { haptic } from '../../ui/haptics';
 import { SPACE } from '../../theme/scale';
+import { LightboxActions, LightboxCaption, StripThumbFrame, THUMB_W, type LightboxAction } from './LightboxParts';
 
 export interface LightboxStripItem {
   key: string;
@@ -50,8 +51,6 @@ const VELOCIDADE_FECHA = 900;
 const ZOOM_DUPLO = 2.5;
 // Gesto decide o eixo depois desta distância: lado passa de mídia, baixo fecha.
 const EIXO = 8;
-const THUMB_W = 44;
-const THUMB_H = 58;
 // Acima disto o segundo toque já não é toque duplo: o toque simples fecha sem esperar o padrão do sistema.
 const DUPLO_MS = 250;
 
@@ -389,57 +388,6 @@ const StripThumb = memo(function StripThumb({ item, active, onPress }: { item: L
   );
 });
 
-// Partes do visor que recebem só dados: a animação da novidade desenha as mesmas.
-
-export interface LightboxAction { icon: IconName; label: string; a11y: string; onPress: () => void; busy?: boolean }
-
-/** Nome e, embaixo, "tamanho · data · origem". */
-export function LightboxCaption({ filename, details }: { filename: string; details?: string }) {
-  return (
-    <View style={styles.caption}>
-      <Text style={styles.name} numberOfLines={1}>{filename}</Text>
-      {details ? <Text style={styles.details} numberOfLines={1}>{details}</Text> : null}
-    </View>
-  );
-}
-
-export function LightboxActions({ actions }: { actions: LightboxAction[] }) {
-  const { theme } = useUnistyles();
-  return (
-    <View style={styles.actions}>
-      {actions.map((a) => (
-        <Pressable key={a.icon} onPress={a.onPress} disabled={a.busy} style={styles.action}
-          accessibilityRole="button" accessibilityLabel={a.a11y} accessibilityState={{ busy: !!a.busy }}>
-          {a.busy ? <ActivityIndicator size="small" color={theme.ink.onAccent} /> : <Icon name={a.icon} size={22} color={theme.ink.onAccent} />}
-          <Text style={styles.actionLabel} numberOfLines={1}>{a.label}</Text>
-        </Pressable>
-      ))}
-    </View>
-  );
-}
-
-/** Miniatura da faixa: `children` é a imagem; o vídeo mostra o ▶ no lugar. */
-export function StripThumbFrame({ active, kind, onPress, label, children }: {
-  active: boolean; kind: 'image' | 'video'; onPress?: () => void; label?: string; children?: ReactNode;
-}) {
-  const { theme } = useUnistyles();
-  return (
-    <Pressable
-      onPress={onPress}
-      style={[styles.thumb, { borderColor: active ? theme.tokens.accent.base : 'transparent', opacity: active ? 1 : 0.55 }]}
-      accessibilityRole={onPress ? 'button' : undefined}
-      accessibilityState={onPress ? { selected: active } : undefined}
-      accessibilityLabel={label}
-    >
-      {kind === 'image' ? children : (
-        <View style={[styles.thumbImg, styles.thumbVideo]}>
-          <Icon name="Play" size={14} color={theme.ink.onAccent} />
-        </View>
-      )}
-    </Pressable>
-  );
-}
-
 // Vídeo toca no WebView (o player nativo do sistema dentro dele): o app não tem expo-video. O do
 // servidor vai pro cache antes, porque o player pede o arquivo aos pedaços sem o header do token.
 function VideoPage({ uri, headers, name }: { uri: string; headers?: Record<string, string>; name: string }) {
@@ -585,56 +533,13 @@ const styles = StyleSheet.create((theme) => ({
     gap: theme.base.space[1],
     zIndex: 2,
   },
-  caption: {
-    paddingHorizontal: theme.base.space[4],
-    paddingTop: theme.base.space[2],
-    gap: theme.base.space[0.5],
-  },
-  name: {
-    color: theme.ink.onAccent,
-    fontSize: theme.base.text.xs,
-    fontWeight: theme.base.weight.medium,
-  },
-  details: {
-    color: 'rgba(255,255,255,0.62)',
-    fontSize: theme.base.text.xxs,
-    fontVariant: ['tabular-nums'],
-  },
-  actions: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    paddingHorizontal: theme.base.space[2],
-  },
-  action: {
-    minWidth: 72,
-    minHeight: 52,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: theme.base.space[1],
-  },
-  actionLabel: {
-    color: theme.ink.onAccent,
-    fontSize: theme.base.text.xxxs,
-  },
   strip: {
     gap: theme.base.space[1],
     paddingHorizontal: theme.base.space[3],
     paddingTop: theme.base.space[1],
   },
-  thumb: {
-    width: THUMB_W,
-    height: THUMB_H,
-    borderRadius: theme.base.radius.xs,
-    borderWidth: 2,
-    overflow: 'hidden',
-  },
   thumbImg: {
     width: '100%',
     height: '100%',
-  },
-  thumbVideo: {
-    backgroundColor: '#222',
-    alignItems: 'center',
-    justifyContent: 'center',
   },
 }));
