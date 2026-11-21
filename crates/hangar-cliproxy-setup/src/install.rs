@@ -296,8 +296,11 @@ pub async fn running_tag(paths: &Paths, key: Option<&str>) -> Option<String> {
     if let Some((asked, at, tag)) = last.as_ref() && asked == key && at.elapsed() < VERSION_FOR {
         return tag.clone();
     }
+    // Só a versão lida fica guardada; sem resposta, a próxima tela pergunta de novo (senha recusada já não sai daqui).
     let tag = running_version(&base, Some(key)).await.and_then(|probe| probe.version).map(|v| format!("v{v}"));
-    *last = Some((key.to_owned(), Instant::now(), tag.clone()));
+    if tag.is_some() {
+        *last = Some((key.to_owned(), Instant::now(), tag.clone()));
+    }
     tag
 }
 
@@ -422,7 +425,7 @@ pub async fn handover(paths: &Paths) -> Result<Runner, Failure> {
         if running && !loaded {
             return Err(Failure::new("cliproxy_entrega_sem_servico", format!("{base} responde, mas {label} não está carregado")));
         }
-        let disabled = !loaded && launchd_disabled(&label).await?;
+        let disabled = launchd_disabled(&label).await?;
         return Ok(Runner::LaunchAgent { plist, label, loaded, disabled, running });
     }
     if running {
@@ -461,8 +464,15 @@ impl Runner {
                 }
                 Ok(())
             }
-            Self::LaunchAgent { plist, loaded: true, .. } =>
-                Ok(service::run("launchctl load", "launchctl", &["load", "-w", &plist.to_string_lossy()]).await?),
+            Self::LaunchAgent { plist, label, loaded: true, disabled, .. } => {
+                service::run("launchctl load", "launchctl", &["load", "-w", &plist.to_string_lossy()]).await?;
+                // O `-w` tira o desligado: carregado e desligado pela pessoa, ele volta desligado.
+                if *disabled {
+                    let target = format!("gui/{}/{label}", user_id().await?);
+                    service::run("launchctl disable", "launchctl", &["disable", &target]).await?;
+                }
+                Ok(())
+            }
             Self::LaunchAgent { disabled: true, .. } => Ok(()),
             Self::LaunchAgent { label, .. } => {
                 let target = format!("gui/{}/{label}", user_id().await?);
@@ -611,7 +621,10 @@ async fn give_back(paths: &Paths, runner: &Runner, base: &str) -> (bool, Result<
     });
     let gone = removed.is_ok();
     let back = async {
-        runner.restore().await?;
+        if let Err(failure) = runner.restore().await {
+            let left = removed.err().map(|e| format!("; {}", e.detail)).unwrap_or_default();
+            return Err(Failure::new(failure.code, format!("{}{left}", failure.detail)));
+        }
         removed?;
         if runner.was_running() && !wait_port(base).await {
             return Err(Failure::new("cliproxy_nao_subiu", format!("o serviço de fora não voltou a responder em {base}")));
