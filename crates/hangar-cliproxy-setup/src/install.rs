@@ -251,8 +251,10 @@ fn external_config(unit: Option<&std::path::Path>, units: &[std::path::PathBuf],
     if detect::is_system_unit(unit) && (raw.contains("%h") || raw.contains("$HOME") || raw.contains("${HOME}")) {
         return Err(manual(format!("{} é de sistema: a pasta do {raw} depende do usuário que a roda", unit.display())));
     }
-    let path = std::path::PathBuf::from(expand_home(&raw, home));
-    if path.is_absolute() {
+    let expanded = expand_home(&raw, home);
+    let path = std::path::PathBuf::from(&expanded);
+    // Unit é texto do systemd: `/` no começo é caminho absoluto em qualquer máquina que a leia.
+    if path.is_absolute() || expanded.starts_with('/') {
         return Ok(Some(path));
     }
     // `--config` relativo é lido da pasta em que o proxy roda.
@@ -356,7 +358,7 @@ async fn user_id() -> Result<String, Failure> {
 fn accounts_dir_moves(working_dir: Option<&str>, home: &std::path::Path, ours: &std::path::Path) -> Option<String> {
     let config = config::read(home).ok().flatten()?;
     let dir = config.auth_dir.as_deref().map(str::trim).filter(|d| !d.is_empty())?;
-    if std::path::Path::new(dir).is_absolute() || dir.starts_with('~') {
+    if std::path::Path::new(dir).is_absolute() || dir.starts_with(['~', '/']) {
         return None;
     }
     let expanded = expand_home(working_dir?, home);
