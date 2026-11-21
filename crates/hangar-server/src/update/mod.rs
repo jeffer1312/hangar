@@ -315,8 +315,8 @@ fn is_current(layout: &Layout, dir: &Path) -> bool {
     matches!((real(&layout.current()), real(dir)), (Ok(a), Ok(b)) if a == b)
 }
 
-/// Tira a pasta do lugar para `versions/.trash-<n>`: no Windows o `rename` recusa pasta com processo
-/// vivo, e uma pasta pela metade nunca fica com nome de versão.
+/// Tira a pasta do lugar para `versions/.trash-<n>`: uma pasta pela metade nunca fica com nome de
+/// versão.
 fn to_trash(layout: &Layout, dir: &Path) -> std::io::Result<PathBuf> {
     let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
     let trash = layout.versions().join(format!(".trash-{}-{stamp}", std::process::id()));
@@ -367,9 +367,9 @@ pub trait InUse {
 }
 
 /// Em uso de verdade. Linux: algum processo do `/proc` com `exe`, `cwd` ou arquivo mapeado
-/// (`maps`) dentro da pasta; processo que não se deixa ler (outro usuário) é ignorado. Fora do
-/// Linux, não: no Windows a própria troca de nome da poda recusa pasta com processo vivo (acesso
-/// negado) e a poda conta isso como em uso.
+/// (`maps`) dentro da pasta; processo que não se deixa ler (outro usuário) é ignorado. Windows:
+/// algum processo com o executável dentro da pasta, que a troca de nome deixaria passar e o apagar
+/// não; o processo com a pasta como `cwd` a troca de nome já recusa.
 pub struct ProcInUse;
 
 impl InUse for ProcInUse {
@@ -385,7 +385,16 @@ impl InUse for ProcInUse {
         })
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(windows)]
+    fn in_use(&self, dir: &Path) -> bool {
+        use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
+        let Ok(dir) = real(dir) else { return false };
+        let mut system = System::new();
+        system.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing().with_exe(UpdateKind::Always));
+        system.processes().values().any(|p| p.exe().and_then(|exe| real(exe).ok()).is_some_and(|exe| exe.starts_with(&dir)))
+    }
+
+    #[cfg(not(any(target_os = "linux", windows)))]
     fn in_use(&self, _dir: &Path) -> bool { false }
 }
 
@@ -412,7 +421,12 @@ pub fn prune(layout: &Layout, previous: Option<&Path>, in_use: &dyn InUse) -> Pr
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().into_owned();
         if name.starts_with(".trash-") {
-            let _ = std::fs::remove_dir_all(&path);
+            match std::fs::remove_dir_all(&path) {
+                Ok(()) => {}
+                // A sobra nasceu de um apagar que falhou e já foi aos avisos; aqui só tenta de novo.
+                Err(e) if held_by_process(&e) => out.in_use.push(path),
+                Err(e) => out.failed.push(format!("a sobra {name} de uma poda anterior não foi apagada: {e}")),
+            }
             continue;
         }
         // Só pasta de versão de verdade: `.tmp` de extração e links ficam.
@@ -984,7 +998,11 @@ pub async fn run<R: Restarter, H: HealthProbe>(job: &Job<'_>, steps: std::sync::
 
     let layout = job.layout.clone();
     let pruned = blocking(move || Ok(prune(&layout, previous.as_deref(), &*in_use))).await;
-    for failure in pruned.map_or_else(|e| vec![e.to_string()], |p| p.failed) {
+    let failed = pruned.map_or_else(|e| vec![e.to_string()], |p| {
+        for dir in &p.in_use { tracing::info!(path = %dir.display(), "update: versão em uso por um processo, fica para a próxima poda"); }
+        p.failed
+    });
+    for failure in failed {
         state.warn(&failure);
     }
     if let Err(error)=state.try_write(json!({"fase": "pronto", "ok": true, "texto": "Atualizado"})) {return failed_before(&state,health,UpdateError::Io(error)).await;}
