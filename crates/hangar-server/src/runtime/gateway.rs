@@ -778,25 +778,7 @@ impl RuntimeRegistry {
             let rows:Vec<Value> = store.state().rows.iter()
                 .filter(|row|super::queue::row_waits(row) && row["ts"].as_f64().is_some_and(|ts|ts >= since)).cloned().collect();
             let clock = || ClockSample { monotonic_s:0.0,epoch_s:SystemTime::now().duration_since(UNIX_EPOCH).map_or(0.0,|d|d.as_secs_f64()) };
-            let mut restamped = 0;
-            for row in rows {
-                let (old,text) = (row["id"].as_str().unwrap_or("").to_owned(),row["text"].as_str().unwrap_or("").to_owned());
-                if old.is_empty() || text.is_empty() { continue; }
-                // A nova entra antes de a antiga sair: falha no meio deixa o texto em dobro, nunca sem ele.
-                let id = crate::mods::state::random_hex(16);
-                let pre_transcript = carried || row["pre_transcript"]==true;
-                let action = if row["conversation"]==true { Action::AppendConversation { text,pre_transcript,entry_id:Some(id.clone()) } }
-                    else { Action::Append { text,delivered:false,ts:None,pre_transcript,entry_id:Some(id.clone()) } };
-                store.exec(generation,&format!("restamp:{id}"),clock(),action).map_err(|_|failure("queue_io"))?;
-                let cancelled = store.exec(generation,&format!("restamp-cancel:{id}"),clock(),Action::Cancel { entry_id:old }).map_err(|_|failure("queue_io"))?;
-                // A antiga em voo fica onde está: a cópia sai, para não entregar duas vezes.
-                if cancelled != json!("cancelled") {
-                    store.exec(generation,&format!("restamp-undo:{id}"),clock(),Action::Cancel { entry_id:id }).map_err(|_|failure("queue_io"))?;
-                    continue;
-                }
-                restamped += 1;
-            }
-            Ok(restamped)
+            restamp_rows(&mut store,rows,carried,&mut |store:&mut Store,call:&str,action:Action|store.exec(generation,call,clock(),action))
         }).await.map_err(|_|failure("queue_job"))?
     }
     /// Painel de terminal aberto na sessão (rodapé ou celular).
@@ -3513,6 +3495,41 @@ async fn events(State(state):State<Gateway>) -> Response {
     Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(10))).into_response()
 }
 
+/// Cada texto ganha uma cópia com a hora de agora e a linha antiga sai.
+fn restamp_rows(store:&mut Store,rows:Vec<Value>,carried:bool,exec:&mut dyn FnMut(&mut Store,&str,Action)->std::io::Result<Value>) -> Result<usize,RuntimeError> {
+    let mut restamped = 0;
+    for row in rows {
+        let (old,text) = (row["id"].as_str().unwrap_or("").to_owned(),row["text"].as_str().unwrap_or("").to_owned());
+        if old.is_empty() || text.is_empty() { continue; }
+        // A nova entra antes de a antiga sair: falha no meio deixa o texto em dobro, nunca sem ele.
+        let id = crate::mods::state::random_hex(16);
+        let pre_transcript = carried || row["pre_transcript"]==true;
+        let action = if row["conversation"]==true { Action::AppendConversation { text,pre_transcript,entry_id:Some(id.clone()) } }
+            else { Action::Append { text,delivered:false,ts:None,pre_transcript,entry_id:Some(id.clone()) } };
+        let step = exec(store,&format!("restamp:{id}"),action)
+            .and_then(|_|exec(store,&format!("restamp-cancel:{id}"),Action::Cancel { entry_id:old.clone() }));
+        let cancelled = match step {
+            Ok(cancelled)=>cancelled,
+            Err(_)=>{
+                // A falha pode vir depois de gravar: quem decide é a fila relida. As duas esperando, a cópia sai; a
+                // antiga já fora, a cópia fica. Sem conseguir reler, o dobro fica, nunca a perda.
+                let waits = |store:&Store,id:&str|store.state().rows.iter().any(|row|row["id"]==id && super::queue::row_waits(row));
+                if store.unfence().is_ok() && waits(store,&old) && waits(store,&id) {
+                    let _ = exec(store,&format!("restamp-undo:{id}"),Action::Cancel { entry_id:id.clone() });
+                }
+                return Err(failure("queue_io"));
+            }
+        };
+        // A antiga em voo fica onde está: a cópia sai, para não entregar duas vezes.
+        if cancelled != json!("cancelled") {
+            exec(store,&format!("restamp-undo:{id}"),Action::Cancel { entry_id:id }).map_err(|_|failure("queue_io"))?;
+            continue;
+        }
+        restamped += 1;
+    }
+    Ok(restamped)
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -4050,6 +4067,27 @@ pub(crate) mod tests {
         registry.entries.lock().await.insert("B".into(),Entry {generation:7,handle:EntryHandle::Terminal {target:target.clone(),handle:handle.clone()},lease_path:target.lease_path.clone(),name:"same".into(),mods_life:0,provider:"claude".into(),account_key:None,relaunch:None,settings_owner:None,
             mode_source:crate::terminal_facts::ModeSource {binding:crate::terminal_facts::LocalTerminalFacts::binding(&target),transcript:target.transcript.clone(),confirmed:None},live:registry.live_sender("same"),runtime_target:None,cano_birth:None,auto_respawn:None,respawn_inflight:false});
         (target,handle)
+    }
+
+    /// O cancelamento da linha antiga falha, antes ou depois de gravado: o texto fica na fila uma vez só.
+    #[test]
+    fn a_failed_cancel_during_restamp_leaves_the_text_exactly_once() {
+        for persisted in [false,true] {
+            let dir=tempfile::tempdir().unwrap();
+            let row=json!({"id":"old","text":"a","ts":1000.0,"delivered":false,"confirmed":false});
+            let mut store=Store::open(&dir.path().join("K.json"),dir.path(),QueueState::new("K",1,"s",vec![row.clone()])).unwrap();
+            let (generation,clock)=(store.state().generation,ClockSample {monotonic_s:0.0,epoch_s:2000.0});
+            let mut exec=|store:&mut Store,call:&str,action:Action| {
+                if call.starts_with("restamp-cancel:") {
+                    if persisted { store.exec(generation,call,clock,action)?; }
+                    return Err(std::io::Error::other("fixture"));
+                }
+                store.exec(generation,call,clock,action)
+            };
+            assert_eq!(restamp_rows(&mut store,vec![row],false,&mut exec).unwrap_err().code,"queue_io");
+            let waiting:Vec<_>=store.state().rows.iter().filter(|r|super::super::queue::row_waits(r)).map(|r|r["text"].clone()).collect();
+            assert_eq!(waiting,vec![json!("a")],"cancelamento gravado: {persisted}");
+        }
     }
 
     /// Troca de agente segurando a fila e nada esperando no Hangar: o Orientar não aperta tecla, porque a fila do
