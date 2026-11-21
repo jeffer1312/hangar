@@ -38,6 +38,19 @@ test("linha compacta: trecho longo fica em três linhas, com reticências", () =
   ].join("\n"));
 });
 
+test("linha compacta: código mostra o arquivo e as linhas, o trecho e o comentário", () => {
+  const c = fixtures.serialize.find((x) => x.name === "código com comentário e texto digitado")!;
+  expect(compactUserRow(c.message)).toBe([
+    "Código: files.rs L12–L14",
+    "> fn open(&self) {",
+    '>     self.load("a\\tb");',
+    "> }",
+    "renomeie para read",
+    "",
+    "faça isso",
+  ].join("\n"));
+});
+
 test("linha compacta: elemento sem papel nem nome mostra a tag", () => {
   const c = fixtures.serialize.find((x) => x.name === "elemento mínimo")!;
   expect(compactUserRow(c.message)).toBe("Elemento: <div> — about:blank");

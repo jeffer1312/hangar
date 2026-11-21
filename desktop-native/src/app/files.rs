@@ -7,6 +7,9 @@ mod navigation;
 mod reader;
 mod reader_images;
 mod lifecycle;
+mod comments;
+pub(crate) use comments::comment_card;
+mod table;
 pub(crate) mod grammars;
 
 actions!(file_view, [CloseFile, NextFile, PreviousFile, SaveFile, FindFile, GoToFileLine]);
@@ -14,6 +17,8 @@ actions!(file_view, [CloseFile, NextFile, PreviousFile, SaveFile, FindFile, GoTo
 /// Lado maior da imagem decodificada: cabe numa tela grande sem guardar o original inteiro na memória.
 const PICTURE_SIDE: u32 = 4096;
 const UNREADABLE_PICTURE: &str = "file_image_unreadable";
+/// Prazo da leitura que pode trazer até 256 MB de outra máquina: os 30 s de costume não bastam num link lento.
+const LARGE_READ_SECONDS: u64 = 300;
 
 pub(super) struct Files {
     owner: Option<SessionOwner>,
@@ -28,6 +33,8 @@ pub(super) struct Files {
     return_focus: Option<FocusHandle>,
     _focus_lost: Subscription,
     preview_find: navigation::PreviewFind,
+    /// Quebra de linha do código, ligada como antes; arquivo grande abre sempre sem ela.
+    word_wrap: bool,
     _refresh_task: Task<()>,
 }
 
@@ -48,7 +55,9 @@ impl FileTab {
 }
 
 #[derive(serde::Deserialize)]
-pub(super) struct Content { path: String, text: String, truncated: bool, digest: Option<String>, #[serde(skip)] external: bool }
+pub(super) struct Content { path: String, text: String, truncated: bool, digest: Option<String>, #[serde(skip)] external: bool,
+    /// CSV e TSV montados na leitura, fora da thread da janela.
+    #[serde(skip)] table: Option<Arc<table::TableData>> }
 impl Content {
     fn editable(&self) -> bool { !self.truncated && self.digest.as_ref().is_some_and(|digest| !digest.is_empty()) }
 }
@@ -84,11 +93,21 @@ struct Document {
     reloading: bool,
     disk_changed: bool,
     close_after_save: bool,
+    /// Tamanho do arquivo acima do teto de edição: só leitura, sem cores e sem quebra de linha, e o texto mora só no
+    /// editor (`base.text` fica vazio) para não guardar duas cópias.
+    large_size: Option<usize>,
+    comment: comments::LineComments,
+    /// CSV e TSV: a tabela da leitura; o código fica no editor.
+    table: Option<Arc<table::TableData>>,
+    /// O texto mudou no editor depois de a tabela ser montada: ela é refeita ao voltar para a tabela.
+    table_stale: bool,
 }
 
 impl Document {
-    fn editable(&self) -> bool { self.base.editable() }
+    /// Arquivo grande nunca é editável: o texto mora só no editor e não haveria com o que comparar.
+    fn editable(&self) -> bool { self.base.editable() && !self.large() }
     fn dirty(&self) -> bool { self.dirty }
+    fn large(&self) -> bool { self.large_size.is_some() }
 }
 
 fn file_failure(error: &Failure) -> String {
@@ -151,7 +170,7 @@ impl Files {
         let focus = cx.focus_handle();
         let lost = cx.on_focus_lost(window, |this, window, cx| this.files_focus_lost(window, cx));
         Self { owner: None, hidden: false, tabs: Vec::new(), active: 0, serial: 0, expanded: false,
-            viewport_width: std::rc::Rc::new(std::cell::Cell::new(1000.)), focus, return_focus: None, _focus_lost: lost, preview_find: navigation::PreviewFind::new(window, cx),
+            viewport_width: std::rc::Rc::new(std::cell::Cell::new(1000.)), focus, return_focus: None, _focus_lost: lost, preview_find: navigation::PreviewFind::new(window, cx), word_wrap: true,
             _refresh_task: lifecycle::watch_files(window, cx) }
     }
 }
@@ -159,8 +178,8 @@ impl Files {
 async fn read_file(api: Api, name: String, mut path: String, candidates: Vec<String>, local: Option<PathBuf>, here: bool) -> Result<Content, Failure> {
     // Servidor nesta máquina (a árvore já provou): caminho da raiz sai do disco, com as mesmas travas.
     if let Some(root) = local.filter(|root| !path.starts_with('/') && !std::path::Path::new(&path).is_absolute() && root.join(&path).exists()) {
-        return tokio::task::spawn_blocking(move || super::tree::read_local(&root, &path).map(|read|
-            Content { path, text: read.text, truncated: read.truncated, digest: read.digest, external: false }))
+        return tokio::task::spawn_blocking(move || super::tree::read_local(&root, &path, true).map(|read|
+            with_table(Content { path, text: read.text, truncated: read.truncated, digest: read.digest, external: false, table: None })))
             .await.unwrap_or_else(|_| Err(Failure::local("invalid_response")));
     }
     // Citado fora da raiz, com o servidor nesta máquina: também do disco, o próprio caminho ou o primeiro candidato que existe.
@@ -178,8 +197,8 @@ async fn read_file(api: Api, name: String, mut path: String, candidates: Vec<Str
             else { return Err(Failure::local("file_missing")) };
         return tokio::task::spawn_blocking(move || {
             let folder = std::fs::canonicalize(&folder).map_err(|_| Failure::local("file_missing"))?;
-            super::tree::read_local(&folder, &file_name).map(|read|
-                Content { path, text: read.text, truncated: read.truncated, digest: read.digest, external: true })
+            super::tree::read_local(&folder, &file_name, true).map(|read|
+                with_table(Content { path, text: read.text, truncated: read.truncated, digest: read.digest, external: true, table: None }))
         }).await.unwrap_or_else(|_| Err(Failure::local("invalid_response")));
     }
     let mut resolved = api.act(&name, &["files", "resolver"], Some(json!({"caminhos": [&path]})), false, 30).await?;
@@ -193,10 +212,17 @@ async fn read_file(api: Api, name: String, mut path: String, candidates: Vec<Str
         Some(Value::Null) => (["file", "text"], path.as_str()),
         _ => return Err(Failure::local("invalid_response")),
     };
-    let mut content: Content = serde_json::from_value(api.read(&name, &route, &[("path", requested)], 30).await?)
+    let mut content: Content = serde_json::from_value(api.read(&name, &route, &[("path", requested), ("large", "1")], LARGE_READ_SECONDS).await?)
         .map_err(|_| Failure::local("invalid_response"))?;
     content.external = route[0] == "file";
-    Ok(content)
+    Ok(with_table(content))
+}
+
+/// CSV e TSV viram tabela aqui, na tarefa da leitura; acima do teto o arquivo abre só como texto.
+fn with_table(mut content: Content) -> Content {
+    content.table = table::delimiter(&content.path).filter(|_| content.text.len() <= table::TABLE_MAX_BYTES)
+        .map(|delim| Arc::new(table::parse(&content.text, delim)));
+    content
 }
 
 impl Hangar {
@@ -256,7 +282,7 @@ impl Hangar {
         let fetch_picture = matches!(picture, Some(Picture::Loading));
         let is_picture = picture.is_some();
         let mut reader = reader::ReaderSettings::default();
-        if file_language(&path) != "markdown" { reader.set_mode(reader::ReaderMode::Source); }
+        if file_language(&path) != "markdown" && table::delimiter(&path).is_none() { reader.set_mode(reader::ReaderMode::Source); }
         self.files.tabs.push(FileTab { id, path: path.clone(), line, content: None, picture, reader, pending_anchor: None });
         self.files.active = self.files.tabs.len() - 1;
         self.focus_file(window, cx);
@@ -344,14 +370,23 @@ impl Hangar {
         };
         let Some(ix) = self.files.tabs.iter().position(|tab| tab.id == id) else { return };
         let path = &self.files.tabs[ix].path;
-        self.files.tabs[ix].content = Some(result.map(|content| {
-            let editor = cx.new(|cx| EditorState::new(window, cx).language(file_language(path)).default_value(content.text.clone()).soft_wrap(true));
+        let word_wrap = self.files.word_wrap;
+        self.files.tabs[ix].content = Some(result.map(|mut content| {
+            let large_size = Some(content.text.len()).filter(|len| *len > hangar_workspace::files::MAX_BYTES);
+            let language = if large_size.is_some() { "text" } else { file_language(path) };
+            let text = if large_size.is_some() { std::mem::take(&mut content.text) } else { content.text.clone() };
+            let editor = cx.new(|cx| EditorState::new(window, cx).language(language).default_value(text).soft_wrap(word_wrap && large_size.is_none()));
+            let comment = comments::LineComments::new(&editor, cx);
+            let table = content.table.take();
             let changed = cx.subscribe_in(&editor, window, move |this: &mut Self, _, event: &InputEvent, _, cx| {
                 if matches!(event, InputEvent::Change) {
                     if let Some(tab) = this.files.tabs.iter_mut().find(|tab| tab.id == id) {
                         if let Some(Ok(doc)) = &mut tab.content {
-                            doc.dirty = doc.editor.read(cx).value().as_ref() != doc.base.text;
+                            // Arquivo grande é só leitura e não guarda o texto em `base`: nunca fica "não salvo".
+                            doc.dirty = !doc.large() && doc.editor.read(cx).value().as_ref() != doc.base.text;
                             doc.saved = None;
+                            // Edição deixa a tabela para ser refeita ao voltar; Descartar marca à parte e Recarregar traz a nova.
+                            if doc.table.is_some() && !doc.large() { doc.table_stale = true; }
                             if let Some(view) = &doc.markdown {
                                 let text = doc.editor.read(cx).value().to_string();
                                 view.update(cx, |view, cx| view.set_text(&text, cx));
@@ -367,7 +402,7 @@ impl Hangar {
                     if doc.cursor != position { doc.cursor = position; cx.notify(); }
                 }
             });
-            let markdown = (file_language(path) == "markdown").then(|| cx.new(|cx| TextViewState::markdown(&content.text, cx).scrollable(true)));
+            let markdown = (large_size.is_none() && file_language(path) == "markdown").then(|| cx.new(|cx| TextViewState::markdown(&content.text, cx).scrollable(true)));
             let markdown_changed = markdown.as_ref().map(|view| {
                 let weak = cx.entity().downgrade();
                 view.read(cx).list_state().set_scroll_handler(move |_, _, cx| { let _ = weak.update(cx, |_, cx| cx.notify()); });
@@ -378,7 +413,7 @@ impl Hangar {
             });
             let doc = Document { editor, base: content, saving: false, dirty: false, saved: None, error: None, markdown, _changed: changed,
                 reader_images: Default::default(), _cursor: cursor, _markdown_changed: markdown_changed, cursor: Position::new(0, 0), poll_error: None,
-                read_seq: 0, checking: false, reloading: false, disk_changed: false, close_after_save: false };
+                read_seq: 0, checking: false, reloading: false, disk_changed: false, close_after_save: false, large_size, comment, table, table_stale: false };
             doc.editor.update(cx, |state, cx| state.set_readonly(!doc.editable(), cx));
             doc
         }).map_err(|error| match error.status {
@@ -387,6 +422,9 @@ impl Hangar {
             None if error.detail == "file_missing" => activity::web("erro_arq_inexistente"),
             _ => file_failure(&error),
         }));
+        // Arquivo grande abre no código (a leitura de Markdown não é montada para ele); CSV grande até o teto da tabela
+        // abre nela, que é a vista leve.
+        if matches!(&self.files.tabs[ix].content, Some(Ok(doc)) if doc.large() && doc.table.is_none()) { self.files.tabs[ix].reader.set_mode(reader::ReaderMode::Source); }
         // A leitura não toma o foco de outra aba, diálogo ou campo aberto enquanto esperava.
         if ix == self.files.active && self.files.focus.contains_focused(window, cx) { self.focus_file(window, cx); }
         cx.notify();
@@ -456,6 +494,8 @@ impl Hangar {
         if doc.saving || doc.reloading { return; }
         doc.editor.update(cx, |state, cx| state.set_value(doc.base.text.clone(), window, cx));
         if let Some(markdown) = &doc.markdown { markdown.update(cx, |state, cx| state.set_text(&doc.base.text, cx)); }
+        // `set_value` não avisa a mudança: a tabela montada com a edição descartada fica para ser refeita.
+        doc.table_stale = doc.table.is_some();
         doc.dirty = false;
         (doc.error, doc.saved) = (None, None);
         cx.notify();
@@ -556,6 +596,7 @@ impl Hangar {
     pub(super) fn files_escape(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         if !self.files_visible() { return false; }
         if self.files.preview_find.open { self.close_preview_find(window, cx); return true; }
+        if self.cancel_line_comment(window, cx) { return true; }
         if let Some(Ok(doc)) = &self.files.tabs[self.files.active].content {
             if doc.editor.read(cx).search_session().open {
                 doc.editor.update(cx, |state, cx| { state.close_search(cx); state.focus(window, cx); });
@@ -566,6 +607,18 @@ impl Hangar {
         self.restore_file_focus(window, cx);
         cx.notify();
         true
+    }
+
+    /// Liga ou desliga a quebra de linha do código em todas as abas, menos as de arquivo grande.
+    fn toggle_word_wrap(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.files.word_wrap = !self.files.word_wrap;
+        let wrap = self.files.word_wrap;
+        for tab in &self.files.tabs {
+            if let Some(Ok(doc)) = &tab.content {
+                if !doc.large() { doc.editor.update(cx, |state, cx| state.set_soft_wrap(wrap, window, cx)); }
+            }
+        }
+        cx.notify();
     }
 
     pub(super) fn files_expanded(&self) -> bool { self.files.expanded && self.files_visible() }
@@ -696,6 +749,10 @@ impl Hangar {
                         .label(tr("file_position").replace("{line}", &(position.line + 1).to_string()).replace("{column}", &(position.character + 1).to_string()))
                         .tooltip(tr("file_goto_shortcut")).on_click(cx.listener(|this, _, window, cx| this.open_file_line(window, cx))))
                 })
+                .when(tab.reader.mode.source(), |el| el.child(Button::new("file-wrap").ghost().xsmall().label(tr("file_wrap"))
+                    .selected(self.files.word_wrap && !doc.large()).disabled(doc.large())
+                    .tooltip(tr(if doc.large() { "file_wrap_large" } else if self.files.word_wrap { "file_wrap_off" } else { "file_wrap_on" }))
+                    .on_click(cx.listener(|this, _, window, cx| this.toggle_word_wrap(window, cx)))))
                 .child(chrome::icon_button("file-reload", IconName::RefreshCw, tr("file_reload"), cx).disabled(doc.saving || doc.reloading)
                     .on_click(cx.listener(|this, _, window, cx| this.reload_file(window, cx))))
                 .when(doc.saved.is_some(), |el| el.child(div().px_1().text_xs().text_color(theme::success()).child(tr("file_saved"))))
@@ -705,7 +762,23 @@ impl Hangar {
                     .child(Button::new("file-save").primary().xsmall().label(tr(if doc.saving { "file_saving" } else { "file_save" }))
                         .tooltip(tr("file_save_shortcut")).disabled(doc.saving || doc.reloading)
                         .on_click(cx.listener(|this, _, _, cx| this.save_file(cx)))))
-                .when(doc.markdown.is_some(), |el| el.child(self.reader_toolbar(tab, cx))))
+                .when(doc.markdown.is_some(), |el| el.child(self.reader_toolbar(tab, cx)))
+                .when(doc.table.is_some(), |el| el.child(Button::new("file-table-toggle").ghost().xsmall()
+                    .label(tr(if tab.reader.mode.reading() { "file_show_code" } else { "file_show_table" }))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        let tab = &mut this.files.tabs[this.files.active];
+                        let reading = tab.reader.mode.reading();
+                        // Voltando para a tabela depois de editar: ela é montada de novo com o texto atual. Acima do teto da
+                        // abertura a tabela sai e a aba fica no código; Recarregar a traz de volta.
+                        if let (false, Some(Ok(doc))) = (reading, tab.content.as_mut()) && doc.table_stale {
+                            let text = doc.editor.read(cx).text();
+                            doc.table = table::delimiter(&tab.path).filter(|_| text.len() <= table::TABLE_MAX_BYTES)
+                                .map(|delim| Arc::new(table::parse(&text.to_string(), delim)));
+                            doc.table_stale = false;
+                            if doc.table.is_none() { cx.notify(); return; }
+                        }
+                        this.set_reader_mode(if reading { reader::ReaderMode::Source } else { reader::ReaderMode::Reading }, window, cx);
+                    })))))
             .when(tab.zoomable(), |el| el
                 .child(chrome::icon_button("file-zoom", IconName::Plus, tr("file_zoom"), cx)
                     .on_click(cx.listener(|this, _, window, cx| this.zoom_picture(window, cx)))))
@@ -733,9 +806,11 @@ impl Hangar {
                 .into_any_element(),
             (Some(Picture::Loading), _) | (None, None) => state(tr("file_loading"), theme::faint()),
             (Some(Picture::Failed(error)), _) | (None, Some(Err(error))) => state(error.clone(), theme::danger()),
+            (None, Some(Ok(doc))) if tab.reader.mode.reading() && doc.table.is_some() =>
+                self.render_table(doc.table.clone().expect("tabela conferida no padrão"), cx),
             (None, Some(Ok(doc))) if tab.reader.mode.reading() && doc.markdown.is_some() =>
                 self.render_reader(tab, doc, self.files.viewport_width.get(), cx),
-            (None, Some(Ok(doc))) => Self::reader_source(tab, doc).into_any_element(),
+            (None, Some(Ok(doc))) => self.reader_source(tab, doc, cx).into_any_element(),
         };
         let viewport_width = self.files.viewport_width.clone();
         let owner = cx.entity().downgrade();
@@ -760,6 +835,10 @@ impl Hangar {
             .child(measure)
             .child(strip)
             .child(toolbar)
+            .children(doc.and_then(|doc| doc.large_size).map(|size| div().id("file-large").role(Role::Status)
+                .flex_shrink_0().px_3().py(px(6.)).border_b_1().border_color(theme::warning().opacity(0.2)).bg(theme::warning().opacity(0.08))
+                .text_size(px(11.)).text_color(theme::warning_text())
+                .child(tr("file_large").replace("{size}", &super::human_size(size as u64)))))
             .children(doc.filter(|doc| doc.disk_changed).map(|_| div().id("file-disk-changed").role(Role::Alert)
                 .flex_shrink_0().px_3().py_2().text_sm().text_color(theme::warning()).child(tr("file_disk_changed"))))
             .children(doc.and_then(|doc| doc.poll_error.as_ref()).map(|error| div().id("file-poll-error").role(Role::Alert)

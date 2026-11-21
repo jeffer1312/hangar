@@ -7,6 +7,7 @@ mod audio;
 mod browser;
 mod cards;
 mod chat;
+mod code_theme;
 mod composer;
 mod context_refs;
 mod source_map;

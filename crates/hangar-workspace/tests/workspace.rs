@@ -605,6 +605,9 @@ mod task3_contract {
         fs::write(&huge,vec![b'x';512*1024+1024]).unwrap();
         let read=op(root,"read_file",json!({"path":"huge.bin"})); assert_eq!(read["truncated"],true); assert!(read["digest"].is_null());
         assert_eq!(read["text"].as_str().unwrap().len(),512*1024);
+        let large=op(root,"read_file",json!({"path":"huge.bin","large":true}));
+        assert_eq!(large["truncated"],false); assert!(large["digest"].is_null());
+        assert_eq!(large["text"].as_str().unwrap().len(),512*1024+1024);
         for bad in ["../outside","--output=x","\0"] { assert_eq!(run(root,"read_file",json!({"path":bad})).unwrap_err().status,400); }
     }
 

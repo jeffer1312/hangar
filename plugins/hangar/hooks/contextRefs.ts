@@ -1,4 +1,4 @@
-// Leitor dos blocos `<hangar-ref …>` (citação e elemento) que o Hangar põe no texto da mensagem.
+// Leitor dos blocos `<hangar-ref …>` (citação, elemento e linhas de arquivo) que o Hangar põe no texto da mensagem.
 // O formato é o contrato do `packages/core` (seção 1 de
 // docs/superpowers/specs/2026-10-15-t3-citacao-mermaid-elemento-contratos.md); o plugin não importa
 // `packages/`, então repete aqui só a leitura. Os casos de teste são os mesmos
@@ -25,7 +25,17 @@ export type ElementRef = {
   comment: string;
 };
 
-export type ContextRef = QuoteRef | ElementRef;
+export type CodeRef = {
+  kind: "code";
+  path: string;
+  start: number;
+  end: number;
+  lang: string;
+  text: string;
+  comment: string;
+};
+
+export type ContextRef = QuoteRef | ElementRef | CodeRef;
 
 export type ContextSegment = { text: string } | { ref: ContextRef };
 
@@ -39,6 +49,8 @@ const ATTR_DECODED: Record<string, string> = {
   amp: "&", quot: '"', lt: "<", gt: ">", "#10": "\n", "#13": "\r", "#9": "\t",
 };
 const CONTENT_ESCAPE = /&(amp;)?((?:amp;)*)(lt;)(\/?hangar-)/gi;
+// Número de linha: inteiro positivo, sem zero à esquerda nem sinal, até nove dígitos.
+const LINE = /^[1-9][0-9]{0,8}$/;
 
 export const hasContextRef = (message: string): boolean => message.includes("<hangar-ref");
 
@@ -90,6 +102,18 @@ const readRef = (rawAttrs: string, body: string): ContextRef | null => {
     if (!children || text === undefined || !text.trim()) return null;
     return {
       kind, source: attr("source"), before: attr("before"), after: attr("after"),
+      text, comment: (children.get("comment") ?? "").trim(),
+    };
+  }
+  if (kind === "code") {
+    const children = readChildren(body, ["text", "comment"]);
+    const text = children?.get("text");
+    const start = attrs.get("start");
+    const end = attrs.get("end");
+    if (!children || text === undefined || !attr("path") || !start || !end || !LINE.test(start) || !LINE.test(end)) return null;
+    if (Number(start) > Number(end)) return null;
+    return {
+      kind, path: attr("path"), start: Number(start), end: Number(end), lang: attr("lang"),
       text, comment: (children.get("comment") ?? "").trim(),
     };
   }
@@ -156,15 +180,25 @@ const elementLabel = (ref: ElementRef): string => {
   return ref.role && ref.name ? `${ref.role} "${ref.name}"` : `<${ref.tag}>`;
 };
 
+// Mesma regra do rótulo do contrato: nome do arquivo e as linhas.
+const codeLabel = (ref: CodeRef): string => {
+  const name = ref.path.split(/[\\/]/).pop() || ref.path;
+  return ref.start === ref.end ? `${name} L${ref.start}` : `${name} L${ref.start}–L${ref.end}`;
+};
+
+const refLines = (ref: ContextRef): string[] => {
+  if (ref.kind === "quote") return compactQuote(ref.text).map((line) => `> ${line}`);
+  if (ref.kind === "code") return [`Código: ${codeLabel(ref)}`, ...compactQuote(ref.text).map((line) => `> ${line}`)];
+  return [`Elemento: ${elementLabel(ref)} — ${ref.url}`];
+};
+
 const refRow = (ref: ContextRef): string => {
-  const lines = ref.kind === "quote"
-    ? compactQuote(ref.text).map((line) => `> ${line}`)
-    : [`Elemento: ${elementLabel(ref)} — ${ref.url}`];
+  const lines = refLines(ref);
   if (ref.comment.trim()) lines.push(ref.comment);
   return lines.join("\n");
 };
 
-// O texto da linha do usuário com cada bloco no lugar de `> trecho` ou `Elemento: …` e o comentário;
+// O texto da linha do usuário com cada bloco no lugar de `> trecho`, `Código: …` ou `Elemento: …` e o comentário;
 // `null` quando não há bloco lido (a linha fica como o engine a desenha).
 export const compactUserRow = (message: string): string | null => {
   if (!hasContextRef(message)) return null;

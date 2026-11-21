@@ -7,6 +7,7 @@ mod claude_notices;
 mod cliproxy_wizard;
 mod notice_actions;
 mod codex_activity;
+mod code_comments;
 mod compact_idle;
 mod composer_history;
 mod connect_approval;
@@ -98,6 +99,7 @@ pub fn animation(name: &str) -> Option<NewsAnimation> {
         "tela-de-status" => Some(server_status::render),
         "consertar-com-agente" => Some(agent_fix::render),
         "revisao-do-trabalho" => Some(work_review::render),
+        "comentar-linhas" => Some(code_comments::render),
         "seletor-de-modelos" => Some(model_handoff::render),
         "cliproxy-assistente" => Some(cliproxy_wizard::render),
         "velocidade-ultra-fast" => Some(speed_choice::render),

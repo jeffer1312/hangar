@@ -143,10 +143,10 @@ pub(crate) fn resolve(root: &Path, rel: &str) -> Result<PathBuf, Failure> {
     hangar_workspace::files::resolve(root, rel).map_err(workspace_failure)
 }
 
-/// Lê um arquivo da raiz como o `read_at` do backend: binário recusado, corte em 512 KB e a impressão SHA-256 do que
-/// foi lido, que a gravação pelo servidor confere.
-pub(crate) fn read_local(root: &Path, rel: &str) -> Result<Read, Failure> {
-    let result = hangar_workspace::files::read(&hangar_workspace::files::resolve(root, rel).map_err(workspace_failure)?, rel).map_err(workspace_failure)?;
+/// Lê um arquivo da raiz como o `read_at` do backend: binário recusado, corte em 512 KB (256 MB com `large`) e a
+/// impressão SHA-256 do que foi lido até 512 KB, que a gravação pelo servidor confere.
+pub(crate) fn read_local(root: &Path, rel: &str, large: bool) -> Result<Read, Failure> {
+    let result = hangar_workspace::files::read(&hangar_workspace::files::resolve(root, rel).map_err(workspace_failure)?, rel, large).map_err(workspace_failure)?;
     let read: hangar_api::workspace::FileContent = serde_json::from_value(result).map_err(|_| refuse("invalid_response"))?;
     Ok(Read { text: read.text, truncated: read.truncated, digest: read.digest })
 }
@@ -237,7 +237,7 @@ mod tests {
         assert_eq!(code("gitlink/config").as_deref(), Some("erro_arq_area_do_git"));
         assert_eq!(code("/etc/passwd").as_deref(), Some("erro_arq_caminho_invalido"));
         assert_eq!(code("-x").as_deref(), Some("erro_arq_caminho_invalido"));
-        assert!(read_local(&root, "escape/secret").is_err());
+        assert!(read_local(&root, "escape/secret", false).is_err());
 
         // A listagem não mostra `.git`, nem atalho para fora ou para dentro dele.
         let listing = remote_listing(&hangar_workspace::files::list(&root, Some(""), false).unwrap());

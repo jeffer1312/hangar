@@ -1,4 +1,5 @@
-//! Citar trecho de uma resposta e a bandeja de referências acima do campo de mensagem (citação e elemento do navegador).
+//! Citar trecho de uma resposta e a bandeja de referências acima do campo de mensagem (citação, elemento do navegador
+//! e linhas de arquivo).
 //! O texto enviado leva os blocos de `context_refs` antes do que foi digitado, e a mensagem do usuário que volta da
 //! conversa mostra cada bloco formatado; clicar numa citação volta ao trecho de origem.
 use std::ops::Range;
@@ -74,8 +75,14 @@ pub(super) fn split_refs(text: &str) -> (Vec<ContextRef>, String) {
     (refs, typed.to_owned())
 }
 
+/// O trecho de arquivo como bloco de código cercado, na linguagem dele: a conversa já sabe desenhar esse bloco.
+fn code_markdown(code: &context_refs::Code) -> String {
+    let lang: String = code.lang.chars().filter(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '_' | '#' | '.')).collect();
+    crate::conversation::fenced_as(&code.text, if lang.is_empty() { "text" } else { &lang })
+}
+
 /// Pedaço da mensagem do usuário com blocos, com o Markdown já pronto.
-pub(super) enum Piece { Text(String), Quote(Quote, String), Element(context_refs::Element) }
+pub(super) enum Piece { Text(String), Quote(Quote, String), Element(context_refs::Element), Code(context_refs::Code, String) }
 
 /// A mensagem do usuário com citação ou elemento, lida uma vez no preparo, para o desenho não reler o texto a cada
 /// quadro: os pedaços, cada um com a posição dele (a chave da vista), e se ela é longa.
@@ -88,12 +95,16 @@ pub(super) fn ref_message(body: &str) -> Option<RefMessage> {
     if !segments.iter().any(|s| matches!(s, Segment::Ref(_))) { return None; }
     // Longa: o digitado ou alguma citação passa do limite de linhas.
     let typed: String = segments.iter().filter_map(|s| match s { Segment::Text(t) => Some(t.as_str()), _ => None }).collect();
-    let long = long_message(typed.trim()) || segments.iter().any(|s| matches!(s, Segment::Ref(ContextRef::Quote(q)) if long_message(&q.text)));
+    let long = long_message(typed.trim()) || segments.iter().any(|s| match s {
+        Segment::Ref(ContextRef::Quote(Quote { text, .. }) | ContextRef::Code(context_refs::Code { text, .. })) => long_message(text),
+        _ => false,
+    });
     let pieces = segments.into_iter().enumerate().filter_map(|(n, segment)| Some((n, match segment {
         Segment::Text(text) if text.trim().is_empty() => return None,
         Segment::Text(text) => Piece::Text(safe_markdown(text.trim())),
         Segment::Ref(ContextRef::Quote(quote)) => { let markdown = safe_markdown(&quote.text); Piece::Quote(quote, markdown) }
         Segment::Ref(ContextRef::Element(element)) => Piece::Element(element),
+        Segment::Ref(ContextRef::Code(code)) => { let markdown = code_markdown(&code); Piece::Code(code, markdown) }
     }))).collect();
     Some(RefMessage { pieces, long })
 }
@@ -104,6 +115,7 @@ pub(super) fn summary(text: &str) -> String {
     context_refs::parse(text).into_iter().filter_map(|segment| match segment {
         Segment::Text(t) => Some(t.trim().to_owned()).filter(|t| !t.is_empty()),
         Segment::Ref(r @ ContextRef::Quote(_)) => Some(tr("ref_quote_short").replace("{label}", &r.label())),
+        Segment::Ref(r @ ContextRef::Code(_)) => Some(tr("ref_code_short").replace("{label}", &r.label())),
         Segment::Ref(r) => Some(tr("ref_element_short").replace("{label}", &r.label())),
     }).collect::<Vec<_>>().join("\n")
 }
@@ -210,6 +222,14 @@ impl Hangar {
     /// Põe o elemento na bandeja com o anexo do recorte dele.
     pub(super) fn add_element_ref(&mut self, key: &SessionKey, element: context_refs::Element, shot: Option<u64>, cx: &mut Context<Self>) {
         self.hold_context_ref(key, Held { r: ContextRef::Element(element), shot }, cx);
+    }
+
+    /// Linhas (1-based) dos trechos de `path` que estão na bandeja: o leitor de arquivos as marca na margem.
+    pub(super) fn code_ref_lines(&self, key: &SessionKey, path: &str) -> Vec<(u32, u32)> {
+        self.quotes.context_refs.get(key).into_iter().flatten().filter_map(|held| match &held.r {
+            ContextRef::Code(code) if code.path == path => Some((code.start, code.end)),
+            _ => None,
+        }).collect()
     }
 
     pub(super) fn has_context_refs(&self, key: &SessionKey) -> bool { self.quotes.context_refs.get(key).is_some_and(|l| !l.is_empty()) }
@@ -421,6 +441,7 @@ impl Hangar {
         let shown = match &item {
             ContextRef::Quote(quote) => safe_markdown(&quote.text),
             ContextRef::Element(element) => format!("**{}**  \n`{}`", element.label(), element.url),
+            ContextRef::Code(code) => format!("**{}**\n\n{}", code.label(), code_markdown(code)),
         };
         let excerpt = cx.new(|cx| TextViewState::markdown(&shown, cx));
         // Enter, "Comentar e continuar" e "Finalizar" gravam do mesmo jeito; `finish` diz para onde o foco vai depois.
@@ -520,14 +541,14 @@ impl Hangar {
         let editing = self.quotes.editing.as_ref().filter(|(k, _, _)| k == key).map(|(_, at, input)| (*at, input.clone()));
         let chips = list.iter().map(|h| &h.r).enumerate().map(|(at, r)| {
             let label = r.label();
-            let (icon, kind) = match r { ContextRef::Quote(_) => (IconName::TextQuote, tr("ref_quote_title")), ContextRef::Element(_) => (IconName::Globe, tr_shared("cite_element", &[])) };
+            let (icon, kind) = match r {
+                ContextRef::Quote(_) => (IconName::TextQuote, tr("ref_quote_title")),
+                ContextRef::Element(_) => (IconName::Globe, tr_shared("cite_element", &[])),
+                ContextRef::Code(_) => (IconName::Code, tr_shared("cite_code", &[])),
+            };
             let on = editing.as_ref().is_some_and(|(i, _)| *i == at);
             let (edit_key, remove_key) = (key.clone(), key.clone());
-            div().id(SharedString::from(format!("context-ref-{at}"))).flex().items_center().gap(px(6.)).max_w(px(340.)).h(px(30.))
-                .pl(px(9.)).pr(px(3.)).rounded(px(10.)).bg(theme::inset()).border_1()
-                .border_color(if on { theme::accent() } else { theme::border() })
-                .child(chrome::small_icon(icon, 14., theme::muted()))
-                .child(div().min_w_0().flex_1().truncate().text_xs().text_color(theme::text()).child(label.clone()))
+            ref_chip(SharedString::from(format!("context-ref-{at}")), icon, label.clone(), on)
                 .child(Button::new(SharedString::from(format!("context-ref-edit-{at}"))).ghost().xsmall()
                     .icon(chrome::small_icon(IconName::Pencil, 12., theme::muted())).disabled(busy)
                     .tooltip(tr("ref_comment")).accessibility_label(format!("{}: {kind} {label}", tr("ref_comment")))
@@ -559,6 +580,7 @@ impl Hangar {
             }
             Piece::Quote(quote, markdown) => self.render_quote(id, *n, quote, markdown, clamp, cx),
             Piece::Element(element) => self.render_element(id, *n, element, cx),
+            Piece::Code(code, markdown) => self.render_code(id, *n, code, markdown, clamp, cx),
         }).collect()
     }
 
@@ -577,6 +599,27 @@ impl Hangar {
             .child(collapse(chat_text(&view, cx).on_link_click(open_web_link)
                 .markdown_extensions(citation_extensions(&key, cx.weak_entity())), clamp, false).text_color(theme::muted()));
         div().flex().flex_col().gap(px(4.)).child(head).child(body)
+            .when(!comment.is_empty(), |el| el.child(div().pt(px(2.)).whitespace_normal().child(comment)))
+            .into_any_element()
+    }
+
+    /// Linhas de arquivo: cabeçalho com o nome e as linhas (o caminho inteiro embaixo, quando difere), o trecho como bloco
+    /// de código e o comentário fora, como na citação.
+    fn render_code(&mut self, id: &str, n: usize, code: &context_refs::Code, markdown: &str, clamp: bool, cx: &mut Context<Self>) -> AnyElement {
+        let key = format!("{id}#c{n}");
+        let view = self.text_view(&key, id, markdown.to_owned(), cx);
+        let label = code.label();
+        let comment = code.comment.trim().to_owned();
+        let head = div().flex().items_center().gap(px(6.)).min_w_0().text_xs().text_color(theme::muted())
+            .child(chrome::small_icon(IconName::Code, 13., theme::muted()))
+            .child(div().flex_shrink_0().child(tr_shared("cite_code", &[])))
+            .child(div().min_w_0().truncate().font_family(theme::MONO).font_weight(FontWeight::SEMIBOLD).text_color(theme::text()).child(label.clone()));
+        let full_path = !label.starts_with(code.path.as_str());
+        let body = div().pl(px(10.)).border_l_2().border_color(theme::accent())
+            .child(collapse(chat_text(&view, cx), clamp, false));
+        div().flex().flex_col().gap(px(4.)).child(head)
+            .when(full_path, |el| el.child(div().truncate().font_family(theme::MONO).text_xs().text_color(theme::faint()).child(code.path.clone())))
+            .child(body)
             .when(!comment.is_empty(), |el| el.child(div().pt(px(2.)).whitespace_normal().child(comment)))
             .into_any_element()
     }
@@ -712,11 +755,20 @@ pub(super) fn cite_menu_item(view: &WeakEntity<Hangar>, row: &str, window: &mut 
         .on_click(move |_, window, cx| { let _ = view.update(cx, |this, cx| this.cite(key.clone(), quote.clone(), window, cx)); }))
 }
 
+/// Chip da bandeja sem os botões: a bandeja e a animação da novidade desenham igual.
+pub(crate) fn ref_chip(id: SharedString, icon: IconName, label: String, on: bool) -> Stateful<Div> {
+    div().id(id).flex().items_center().gap(px(6.)).max_w(px(340.)).h(px(30.))
+        .pl(px(9.)).pr(px(3.)).rounded(px(10.)).bg(theme::inset()).border_1()
+        .border_color(if on { theme::accent() } else { theme::border() })
+        .child(chrome::small_icon(icon, 14., theme::muted()))
+        .child(div().min_w_0().flex_1().truncate().text_xs().text_color(theme::text()).child(label))
+}
+
 #[cfg(test)]
 mod tests {
     // Sem glob: o `test` da gpui colide com o atributo padrão.
-    use super::{as_shown, rendered_range, split_refs, summary};
-    use crate::context_refs::{self, ContextRef, Quote};
+    use super::{as_shown, code_markdown, rendered_range, split_refs, summary};
+    use crate::context_refs::{self, Code, ContextRef, Quote};
 
     #[test]
     fn rendered_range_skips_markup_and_keeps_the_repetition() {
@@ -766,5 +818,15 @@ mod tests {
         let line = summary(&message);
         assert!(line.contains("trecho citado") && line.ends_with("explique") && !line.contains("<hangar-"), "{line}");
         assert_eq!(summary("sem bloco"), "sem bloco");
+    }
+
+    #[test]
+    fn code_ref_round_trips_and_draws_as_a_fenced_block() {
+        let code = Code { path: "src/app/a.rs".into(), start: 3, end: 4, lang: "r s".into(), text: "let a = ```;".into(), comment: String::new() };
+        let message = context_refs::compose(&[ContextRef::Code(code.clone())], "veja");
+        assert_eq!(split_refs(&message), (vec![ContextRef::Code(code.clone())], "veja".to_owned()));
+        assert!(summary(&message).contains("a.rs L3–L4"), "{}", summary(&message));
+        // A cerca passa das crases do trecho, e a linguagem sai sem espaço.
+        assert_eq!(code_markdown(&code), "````rs\nlet a = ```;\n````");
     }
 }

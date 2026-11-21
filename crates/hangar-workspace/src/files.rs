@@ -10,6 +10,8 @@ use std::{
     path::{Path, PathBuf},
 };
 pub const MAX_BYTES: usize = 512 * 1024;
+/// Teto da leitura pedida com `large`: o leitor de arquivo grande abre sem edição até aqui.
+pub const LARGE_MAX_BYTES: usize = 256 * 1024 * 1024;
 pub const MAX_ENTRIES: usize = 1000;
 pub const MAX_HITS: usize = 200;
 
@@ -52,7 +54,9 @@ pub fn resolve(cwd: &Path, path: &str) -> Result<PathBuf> {
     }
     Ok(target)
 }
-pub fn read(target: &Path, path: &str) -> Result<Value> {
+/// `large` sobe o teto para LARGE_MAX_BYTES; a impressão (e com ela a edição) continua só até MAX_BYTES.
+pub fn read(target: &Path, path: &str, large: bool) -> Result<Value> {
+    let limit = if large { LARGE_MAX_BYTES } else { MAX_BYTES };
     if target.is_dir() {
         return Err(file_error(400, "erro_arq_e_pasta", "isso é uma pasta"));
     }
@@ -65,18 +69,18 @@ pub fn read(target: &Path, path: &str) -> Result<Value> {
     }
     let file = std::fs::File::open(target).map_err(|e| io_error(e, "erro_arq_lista_falhou"))?;
     let mut bytes = Vec::new();
-    file.take(MAX_BYTES as u64 + 1)
+    file.take(limit as u64 + 1)
         .read_to_end(&mut bytes)
         .map_err(|e| io_error(e, "erro_arq_lista_falhou"))?;
     if bytes.contains(&0) {
         return Err(file_error(415, "erro_arq_binario", "arquivo binário"));
     }
-    let truncated = bytes.len() > MAX_BYTES;
-    let digest = (!truncated).then(|| digest(&bytes));
-    bytes.truncate(MAX_BYTES);
+    let truncated = bytes.len() > limit;
+    let digest = (bytes.len() <= MAX_BYTES).then(|| digest(&bytes));
+    bytes.truncate(limit);
     let result = FileContent {
         path: path.into(),
-        text: String::from_utf8_lossy(&bytes).into_owned(),
+        text: String::from_utf8(bytes).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned()),
         size: target
             .metadata()
             .map_err(|e| io_error(e, "erro_arq_lista_falhou"))?
