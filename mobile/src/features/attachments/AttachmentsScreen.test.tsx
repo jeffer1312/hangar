@@ -76,6 +76,7 @@ vi.mock('../../paraglide/messages', () => Object.fromEntries(
 
 import AttachmentsScreen from '../../../app/s/[server]/[name]/attachments';
 import { useChatJump } from '../../stores/chatJump';
+import { keptIsCurrent, type KeptVersion } from './attachmentUrls';
 
 const file = (filename: string, mtime = 0): UploadFile => ({ filename, size: 10, mtime, expires_in_days: null });
 async function render() {
@@ -227,10 +228,11 @@ describe('media and files', () => {
     const { container, root } = await render();
     await click(container, 'media_tab_files:1');
     await click(container, `file_card_download: ${filename}`);
-    // A chave leva data e tamanho do servidor: arquivo regerado no mesmo caminho é outra cópia.
-    expect(h.download).toHaveBeenCalledExactlyOnceWith(`s1::sess::upload:${filename}::0:10`,
+    // A chave é só o caminho; data e tamanho vão como a versão gravada com a cópia.
+    expect(h.download).toHaveBeenCalledExactlyOnceWith(`s1::sess::upload:${filename}`,
       `https://a.test/api/sessions/sess/uploads/${filename}`, { Authorization: 'Bearer token-a' }, filename,
-      expect.any(Function), expect.any(AbortSignal));
+      expect.any(Function), expect.any(Function), expect.any(AbortSignal));
+    expect(h.download.mock.lastCall![4]()).toEqual({ size: 10, mtime: 0 });
     expect(h.deliverLocal).toHaveBeenCalledExactlyOnceWith(done, filename);
     expect(container.querySelector('[data-doc]')).toBeNull();
     expect(h.toast).not.toHaveBeenCalled();
@@ -251,18 +253,56 @@ describe('media and files', () => {
     await click(container, 'file_card_open: pacote.zip');
     expect(h.download).not.toHaveBeenCalled();
     expect(h.deliverLocal).toHaveBeenCalledWith(kept, 'pacote.zip');
-    expect(h.kept).toHaveBeenCalledWith('s1::sess::upload:pacote.zip::0:10', 'pacote.zip');
+    expect(h.kept).toHaveBeenCalledWith('s1::sess::upload:pacote.zip', 'pacote.zip', { size: 10, mtime: 0 });
     act(() => root.unmount());
   });
 
   it('a file regenerated on the server does not open the old copy', async () => {
     h.list.mockResolvedValueOnce({ files: [{ ...file('pacote.zip', 7), size: 99 }] });
-    h.kept.mockImplementation((key: string) => (key === 's1::sess::upload:pacote.zip::0:10' ? { uri: 'file:///cache/old', size: 10 } : null));
+    // Cópia gravada da versão de data 0 e 10 bytes.
+    const stored: KeptVersion = { size: 10, mtime: 0 };
+    h.kept.mockImplementation((_key: string, _name: string, now: KeptVersion) =>
+      (keptIsCurrent(stored, 10, now) ? { uri: 'file:///cache/old', size: 10 } : null));
     const { container, root } = await render();
     await click(container, 'media_tab_files:1');
-    expect(h.kept).toHaveBeenCalledWith('s1::sess::upload:pacote.zip::7:99', 'pacote.zip');
+    expect(h.kept).toHaveBeenCalledWith('s1::sess::upload:pacote.zip', 'pacote.zip', { size: 99, mtime: 7 });
     expect(find(container, 'file_card_download: pacote.zip')).toBeDefined();
     act(() => root.unmount());
+  });
+
+  it('sizes arriving after the download started keep the copy: no second download', async () => {
+    h.list.mockResolvedValueOnce({ files: [] });
+    let measure!: (v: unknown) => void;
+    h.resolve.mockImplementation(() => new Promise((resolve) => { measure = resolve; }));
+    h.events = [{ kind: 'assistant_msg', id: 'a1', text: 'pacote em /tmp/out/p.zip', ts: 10 }];
+    // O que o `mediaCache` real faz: grava a versão ao terminar e confere na leitura.
+    let stored: KeptVersion | null = null;
+    const copy = { uri: 'file:///cache/p', size: 10 };
+    h.kept.mockImplementation((_key: string, _name: string, now: KeptVersion) => (stored && keptIsCurrent(stored, 10, now) ? copy : null));
+    let finish!: () => void;
+    h.download.mockImplementationOnce((_k: string, _u: string, _h: unknown, _n: string, version: () => KeptVersion) =>
+      new Promise((resolve) => { finish = () => { stored = version(); resolve(copy); }; }));
+    h.deliverLocal.mockResolvedValue('opened');
+    const { container, root } = await render();
+    await click(container, 'media_tab_files:1');
+    await click(container, 'file_card_download: p.zip');
+    expect(h.download.mock.lastCall![0]).toBe('s1::sess::cited:/tmp/out/p.zip');
+    const measured = { ok: { '/tmp/out/p.zip': { relativo: null, real: '/tmp/out/p.zip', size: 10, mtime: 5 } }, faltam: [] };
+    await act(async () => measure(measured));
+    await act(async () => finish());
+    expect(stored).toEqual({ size: 10, mtime: 5 });
+    expect(find(container, 'file_card_open: p.zip')).toBeDefined();
+    act(() => root.unmount());
+
+    // Voltando à tela, já com a medida: a mesma chave acha a cópia.
+    h.list.mockResolvedValueOnce({ files: [] });
+    h.resolve.mockResolvedValue(measured);
+    const again = await render();
+    await click(again.container, 'media_tab_files:1');
+    await click(again.container, 'file_card_open: p.zip');
+    expect(h.download).toHaveBeenCalledTimes(1);
+    expect(h.deliverLocal).toHaveBeenLastCalledWith(copy, 'p.zip');
+    act(() => again.root.unmount());
   });
 
   it('a file that does not open says why, and a failed download offers "again"', async () => {

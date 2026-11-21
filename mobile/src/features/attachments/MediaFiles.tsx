@@ -12,7 +12,7 @@ import { toast } from '../../ui/Toast';
 import { haptic } from '../../ui/haptics';
 import { superficie } from '../../theme/superficie';
 import { AudioChip } from '../../chat/AudioChip';
-import { attachmentHeaders, attachmentName, attachmentThumbUri, attachmentUri, keptKey } from './attachmentUrls';
+import { attachmentHeaders, attachmentName, attachmentThumbUri, attachmentUri, keptKey, type KeptVersion } from './attachmentUrls';
 import { deliverLocalFile, downloadKept, keptCopy } from './mediaCache';
 import { expiryText } from './gallery';
 import { originLabel } from './origin';
@@ -88,8 +88,8 @@ type DownloadState =
 const missing = (e: unknown) => /status:? 404\b|HTTP 404\b/.test(e instanceof Error ? e.message : String(e));
 const aborted = (e: unknown) => e instanceof Error && (e.name === 'AbortError' || /cancel/i.test(e.message));
 
-function keptState(key: string, name: string): DownloadState {
-  const kept = keptCopy(key, name);
+function keptState(key: string, name: string, version: KeptVersion): DownloadState {
+  const kept = keptCopy(key, name, version);
   return kept ? { kind: 'done', file: kept } : { kind: 'idle' };
 }
 
@@ -97,14 +97,20 @@ function keptState(key: string, name: string): DownloadState {
 function useDownload(item: MediaFileItem, server: Server, sessionName: string, serverId: string) {
   const name = attachmentName(item);
   const keepKey = keptKey(serverId, sessionName, item);
-  const [state, setState] = useState<DownloadState>(() => keptState(keepKey, name));
-  // Data ou tamanho mudou (arquivo regerado, ou a medida chegou depois): vale a cópia desta versão.
-  const shownKey = useRef(keepKey);
+  const size = item.size ?? null;
+  const mtime = item.mtime ?? null;
+  // O download lê a versão ao terminar: a medida que chega no meio vale para a cópia gravada.
+  const version = useRef<KeptVersion>({ size, mtime });
+  useEffect(() => { version.current = { size, mtime }; }, [size, mtime]);
+  const [state, setState] = useState<DownloadState>(() => keptState(keepKey, name, { size, mtime }));
+  // Data ou tamanho mudou (arquivo regerado, ou a medida chegou depois): a cópia é conferida de novo.
+  const shown = `${keepKey}\n${name}\n${size}\n${mtime}`;
+  const shownRef = useRef(shown);
   useEffect(() => {
-    if (shownKey.current === keepKey) return;
-    shownKey.current = keepKey;
-    setState((s) => (s.kind === 'loading' ? s : keptState(keepKey, name)));
-  }, [keepKey, name]);
+    if (shownRef.current === shown) return;
+    shownRef.current = shown;
+    setState((s) => (s.kind === 'loading' ? s : keptState(keepKey, name, { size, mtime })));
+  }, [shown, keepKey, name, size, mtime]);
   const abort = useRef<AbortController | null>(null);
   const alive = useRef(true);
   useEffect(() => { alive.current = true; return () => { alive.current = false; abort.current?.abort(); }; }, []);
@@ -146,7 +152,7 @@ function useDownload(item: MediaFileItem, server: Server, sessionName: string, s
     abort.current = ctrl;
     setState({ kind: 'loading', progress: null });
     let last = -1;
-    downloadKept(keepKey, attachmentUri(item, sessionName, server), attachmentHeaders(item, server), name, (p) => {
+    downloadKept(keepKey, attachmentUri(item, sessionName, server), attachmentHeaders(item, server), name, () => version.current, (p) => {
       // Um redesenho por ponto percentual, não por pedaço recebido.
       const pct = p === null ? -1 : Math.floor(p * 100);
       if (pct === last || !alive.current) return;

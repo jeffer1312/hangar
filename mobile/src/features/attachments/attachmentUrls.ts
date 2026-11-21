@@ -45,12 +45,21 @@ export function attachmentSize(a: Pick<Ref, 'source' | 'ref'>, meta: AttachmentM
 
 /** Chave da cópia guardada: servidor + sessão + caminho, não a URL, porque a URL muda com a rota
  *  (rede local ↔ Tailscale) e o arquivo baixado deixaria de ser achado sem conexão. Data e tamanho
- *  entram também: arquivo regerado no mesmo caminho é outra cópia, e a antiga não abre no lugar dele. */
-export function keptKey(
-  serverId: string, sessionName: string,
-  item: Pick<Ref, 'source' | 'ref'> & { size?: number | null; mtime?: number | null },
-): string {
-  return `${serverId}::${sessionName}::${item.source}:${item.ref}::${item.mtime ?? ''}:${item.size ?? ''}`;
+ *  ficam fora: chegam depois do download começar, e a chave mudaria entre gravar e ler. Eles vão
+ *  junto da cópia (`KeptVersion`) e são conferidos na leitura. */
+export function keptKey(serverId: string, sessionName: string, item: Pick<Ref, 'source' | 'ref'>): string {
+  return `${serverId}::${sessionName}::${item.source}:${item.ref}`;
+}
+
+/** Versão do arquivo no servidor, do que se sabe dela. */
+export interface KeptVersion { size: number | null; mtime: number | null }
+
+/** A cópia guardada ainda é o arquivo do servidor? Só o que os dois lados sabem e difere a descarta:
+ *  o tamanho contra os bytes baixados, a data contra a gravada com a cópia. */
+export function keptIsCurrent(stored: KeptVersion | null, keptBytes: number | null, now: KeptVersion): boolean {
+  if (now.size != null && keptBytes != null && now.size !== keptBytes) return false;
+  if (now.mtime != null && stored?.mtime != null && now.mtime !== stored.mtime) return false;
+  return true;
 }
 
 export function attachmentMtime(a: Pick<Ref, 'source' | 'ref'>, meta: AttachmentMeta): number | null {

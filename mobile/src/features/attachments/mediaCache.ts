@@ -2,6 +2,7 @@ import { Platform, Share } from 'react-native';
 import { Directory, File, Paths } from 'expo-file-system';
 import { startActivityAsync } from 'expo-intent-launcher';
 import * as m from '../../paraglide/messages';
+import { keptIsCurrent, type KeptVersion } from './attachmentUrls';
 
 const FLAG_GRANT_READ_URI_PERMISSION = 1;
 
@@ -51,21 +52,41 @@ function keptFile(key: string, name: string): File {
   return new File(dir, `${keyHash(key)}-${name.replace(/[^\w.-]/g, '_')}`);
 }
 
-/** A cópia já baixada, ou null. */
-export function keptCopy(key: string, name: string): File | null {
+// Versão gravada com a cópia. Pasta própria: não se mistura com os arquivos baixados.
+function versionFile(key: string): File {
+  const dir = new Directory(Paths.cache, 'media-files-version');
+  dir.create({ idempotent: true, intermediates: true });
+  return new File(dir, `${keyHash(key)}.json`);
+}
+
+function readVersion(key: string): KeptVersion | null {
+  try {
+    const f = versionFile(key);
+    if (!f.exists) return null;
+    const v = JSON.parse(f.textSync()) as Partial<KeptVersion>;
+    return { size: typeof v.size === 'number' ? v.size : null, mtime: typeof v.mtime === 'number' ? v.mtime : null };
+  } catch {
+    return null;
+  }
+}
+
+/** A cópia já baixada, ou null; também null quando o servidor diz que o arquivo mudou desde o download. */
+export function keptCopy(key: string, name: string, now: KeptVersion): File | null {
   try {
     const f = keptFile(key, name);
-    return f.exists ? f : null;
+    if (!f.exists) return null;
+    return keptIsCurrent(readVersion(key), f.size, now) ? f : null;
   } catch {
     return null;
   }
 }
 
 /** Baixa para a cópia guardada com progresso (0..1, ou null sem tamanho) e cancelamento pelo `signal`.
- *  Vai para um nome temporário e só substitui a cópia ao terminar, como o `localCopy`. */
+ *  Vai para um nome temporário e só substitui a cópia ao terminar, como o `localCopy`. A versão é
+ *  lida ao terminar: data que chegou durante o download vale para esta cópia. */
 export async function downloadKept(
   key: string, uri: string, headers: Record<string, string> | undefined, name: string,
-  onProgress: (fraction: number | null) => void, signal: AbortSignal,
+  version: () => KeptVersion, onProgress: (fraction: number | null) => void, signal: AbortSignal,
 ): Promise<File> {
   const target = keptFile(key, name);
   const tmp = new File(target.parentDirectory, `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}.part`);
@@ -84,6 +105,8 @@ export async function downloadKept(
     if (tmp.exists) tmp.delete();
     throw e;
   }
+  // Sem a versão gravada a cópia continua valendo; só a data deixa de ser conferida.
+  try { versionFile(key).write(JSON.stringify(version())); } catch { /* idem */ }
   return target;
 }
 
