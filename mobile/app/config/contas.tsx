@@ -210,16 +210,20 @@ function ServerAccounts({ server }: { server: Server | null }) {
     credentials.map(accountForCredential).filter((id): id is CodexAccount => id !== null).map((account) => account.id),
   );
   const built: IdentityRow[] = [
-    ...credentials.map((credential): IdentityRow => {
+    ...credentials.filter(credential => credential.tipo !== 'cliproxy').map((credential): IdentityRow => {
       const account = accountForCredential(credential);
       const title = account?.name ?? credential.nome ?? credential.nome_natural;
       const group = credentialGroup(credential);
       const status = account ? accountStatus(account, credential) : credentialStatus(credential, title);
       const engineName = credential.tipo === 'chave' && credential.id.startsWith('chave:') ? credential.id.slice(6) : undefined;
+      const motor = engineName ? engines.data?.motores[engineName] : undefined;
+      const bound = motor?.cliproxy_bound_account;
+      const binding = bound ? [bound.email || bound.label, bound.plan].filter(Boolean).join(' · ')
+        : motor?.cliproxy_binding || motor?.cliproxy_accounts ? motor.cliproxy_binding_error || m.cliproxy_no_bound_account() : '';
       return {
         key: `credential:${credential.id}`, group, title, ...status,
         description: group === 'claude_engine'
-          ? [m.accounts_list_runs_in_claude_code(), proxyNote(engineName), status.description].filter(Boolean).join(' · ')
+          ? [m.accounts_list_runs_in_claude_code(), proxyNote(engineName), binding || status.description].filter(Boolean).join(' · ')
           : status.description,
         provider: providerOf(credential, account),
         active: credential.ativa,

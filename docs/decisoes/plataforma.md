@@ -52,6 +52,13 @@ Decisões do usuário:
   correspondente no Hangar vira `cpa-<e-mail ≤12>-<12 hex>` (`credential_id` `cliproxy:<id>`) e
   fica fixa por sessão pelo prefixo de modelo, sem `--account-home`. Credencial solta quebrada ou
   prefixo repetido anula só aquela conta, não as outras.
+- **Usar esta conta vincula o motor, não só a sessão.** O cadastro guarda a identidade ChatGPT opaca,
+  não o e-mail sugerido no rótulo. Motores Pro e Plus podem ter o mesmo endereço, chave e modelo:
+  sem guardar a escolha, a conta fica a cargo do proxy. Lançamento, retomada e troca conferem o vínculo
+  e passam o modelo prefixado também no `--model` do Claude; vínculo alterado não troca conta em silêncio.
+  A cota da assinatura é consultada pela credencial exata na API administrativa v8 do proxy local,
+  com destino de leitura fixo e cache por identidade. O 429 do ChatGPT pausa só a conta; o da gestão
+  pausa as consultas de todas. O motor local não consulta a rota `/usages` do leitor Kimi.
 - **Fast disponível, nunca ligado por padrão.** O motor criado pelo assistente grava `fast`;
   ausente vale ligado (o seletor oferece Fast nos modelos `gpt-<dígito>` do proxy local), `false`
   tira a opção. A sessão continua nascendo sem Fast; a chave do assistente diz "Permitir Fast".

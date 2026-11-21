@@ -72,7 +72,7 @@ impl QuotaCache {
     }
 
     pub fn update(&mut self, id: &str, reading: Value, now: f64) {
-        let limited = reading["motivo"] == "http-429";
+        let limited = matches!(reading["motivo"].as_str(), Some("http-429" | "cliproxy-gerenciamento-http-429"));
         let good = reading["estado"] == "lida";
         // A última leitura boa fica, mas com o motivo da falha nova: números velhos sem aviso
         // pareciam certos.

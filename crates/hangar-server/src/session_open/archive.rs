@@ -386,10 +386,21 @@ pub fn plan(w: &Where, facts: &dyn OpenFacts, project: &str, sid: &str, body: Ar
         name = format!("{base}-{i}");
     }
     let config_dir = body.config_dir.clone().or_else(|| found.owner.clone());
-    let request = SessionOpenRequest { name: Some(name), cwd: found.cwd.clone(), config_dir, provider: Some(provider.name().into()),
+    let mut request = SessionOpenRequest { name: Some(name), cwd: found.cwd.clone(), config_dir, provider: Some(provider.name().into()),
         codex_account: found.codex_account.clone(), account_bound: provider == AgentProvider::Codex,
         engine: body.engine, engine_account: body.engine_account, model: body.model,
-        headless: body.headless, ..Default::default() };
+        headless: body.headless, resume_existing: true, ..Default::default() };
+    if provider == AgentProvider::Claude
+        && let Some(previous) = super::record::archived_claude(w.home, sid)
+        && let super::Account::Engine { name, account: Some(account), binding: Some(binding), .. } = previous.account {
+        if request.engine.as_deref().is_some_and(|value| value != name) {
+            return Err(OpenError::new(409, "erro_cliproxy_conta", "A conversa arquivada usa outra conta ChatGPT. Retome com o motor original."));
+        }
+        request.engine = Some(name);
+        request.engine_account = request.engine_account.filter(|requested| requested != &account);
+        request.resume_engine_binding = Some(binding);
+        request.model = request.model.or(previous.model);
+    }
     Ok(Plan { request, found, provider, project: project.to_owned(), relocated, remember })
 }
 

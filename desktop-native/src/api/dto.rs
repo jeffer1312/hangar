@@ -131,6 +131,7 @@ pub struct SessionInfo {
     #[serde(default)] pub avisos: Vec<String>,
     pub engine: Option<String>,
     pub engine_account: Option<String>,
+    pub engine_binding: Option<String>,
     #[serde(default)] pub headless: bool,
     #[serde(default)] pub state: String,
     pub tracked: Option<bool>,
@@ -247,6 +248,8 @@ pub struct CliProxyAccount {
     pub email: String,
     pub label: String,
     pub prefix: Option<String>,
+    pub binding: Option<String>,
+    pub plan: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]

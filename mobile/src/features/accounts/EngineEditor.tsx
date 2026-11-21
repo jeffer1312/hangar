@@ -31,6 +31,7 @@ export function EngineEditor({ server, name, engine, names, onSaved, onClose, on
     engine?.[flag] ?? (flag === 'prompt_caching' || flag === 'adaptive_thinking'),
   ])) as Record<Flag, boolean>);
   const [vision, setVision] = useState<boolean | null>(engine?.vision ?? null);
+  const [binding, setBinding] = useState<string | null | undefined>(engine?.cliproxy_binding);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [proxyUrl, setProxyUrl] = useState<string | null>(null);
@@ -111,6 +112,7 @@ export function EngineEditor({ server, name, engine, names, onSaved, onClose, on
     }
     const payload: Record<string, unknown> = { label: value.label, base_url: baseUrl, model: value.model,
       subagent_model: value.subagent_model, ...enabled };
+    if (binding !== engine?.cliproxy_binding) payload.cliproxy_binding = binding;
     if (vision !== null) payload.vision = vision;
     for (const key of numbers) payload[key] = value[key] ? Number(value[key]) : '';
     if (proxyUrl) payload.use_cliproxy_key = true;
@@ -153,6 +155,16 @@ export function EngineEditor({ server, name, engine, names, onSaved, onClose, on
         </View> : null}
         {detecting || proxyNotice ? <Text style={styles.muted}>{detecting ? m.cliproxy_detecting() : proxyNotice}</Text> : null}
         {(['name', 'label', 'base_url', 'api_key', 'model', 'subagent_model', ...numbers] as TextField[]).map(field)}
+        {engine && (engine.cliproxy_accounts || engine.cliproxy_binding) ? <SettingsRow title={m.cliproxy_bound_account()}
+          description={engine.cliproxy_binding_error || (!binding ? m.cliproxy_no_bound_account() : undefined)}>
+          <View style={styles.actions}>
+            {(engine.cliproxy_accounts ?? []).filter(account => !!account.binding && !!account.prefix).map(account => (
+              <Pill key={account.binding} label={[account.plan, account.prefix, account.email || account.label].filter(Boolean).join(' · ')} disabled={locked || account.binding === binding}
+                onPress={() => setBinding(account.binding)} />
+            ))}
+            {binding ? <Pill label={m.cliproxy_unbind_account()} disabled={locked} onPress={() => setBinding(null)} /> : null}
+          </View>
+        </SettingsRow> : null}
         <View style={styles.actions}>
           {([null, true, false] as const).filter(value => value !== null || engine?.vision == null).map(value => <Pill key={String(value)}
             label={value == null ? m.mobile_accounts_engine_vision_auto() : value ? m.mobile_accounts_engine_vision_yes() : m.mobile_accounts_engine_vision_no()}

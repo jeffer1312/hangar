@@ -71,6 +71,87 @@ fn proxy_only_id(record: &Value) -> Option<String> {
     Some(if local.is_empty() { format!("{PROXY_ONLY}{hash}") } else { format!("{PROXY_ONLY}{local}-{hash}") })
 }
 
+pub fn binding_id(record: &Value) -> Option<String> {
+    if record["type"] != "codex" || record["disabled"] == true { return None; }
+    let id = record["account_id"].as_str().filter(|id| !id.is_empty())?;
+    let hash = ring::digest::digest(&ring::digest::SHA256, id.as_bytes());
+    Some(hash.as_ref().iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(""))
+}
+
+fn binding_record<'a>(records: &'a [(PathBuf, Value)], binding: &str) -> Result<(usize, &'a PathBuf, &'a Value), String> {
+    let mut matches = records.iter().enumerate().filter(|(_, (_, row))| binding_id(row).as_deref() == Some(binding));
+    let Some((index, (path, record))) = matches.next() else { return Err("CLIProxyAPI: a conta vinculada não está conectada".into()) };
+    if matches.next().is_some() { return Err("CLIProxyAPI: mais de uma credencial ativa para a conta vinculada".into()) }
+    Ok((index, path, record))
+}
+
+pub fn quota_bindings(env: &AccountEnvironment) -> Result<Vec<(String, String)>, String> {
+    if local(env)?.is_none() { return Ok(Vec::new()); }
+    let records = credentials(env)?;
+    let mut bindings = std::collections::BTreeMap::new();
+    for (_, row) in &records {
+        if let Some(binding) = binding_id(row) {
+            bindings.entry(binding).and_modify(|label| *label = None).or_insert_with(|| Some(row["email"].as_str().unwrap_or("ChatGPT").to_owned()));
+        }
+    }
+    Ok(bindings.into_iter().filter_map(|(binding, label)| label.map(|label| (binding, label))).collect())
+}
+
+pub fn quota_identity(env: &AccountEnvironment, binding: &str) -> Result<(String, String), String> {
+    let records = credentials(env)?;
+    let (_, path, record) = binding_record(&records, binding)?;
+    let filename = path.file_name().and_then(|v| v.to_str()).ok_or("CLIProxyAPI: nome de credencial inválido")?;
+    let account_id = record["account_id"].as_str().ok_or("CLIProxyAPI: credencial sem conta ChatGPT")?;
+    Ok((filename.to_owned(), account_id.to_owned()))
+}
+
+pub fn quota_id(binding: &str) -> String { format!("cliproxy-binding:{binding}") }
+
+pub fn resolve_binding(accounts: &AccountService, binding: &str) -> Result<Value, String> {
+    let records = credentials(&accounts.env)?;
+    let (index, _, record) = binding_record(&records, binding)?;
+    let prefix = record["prefix"].as_str().filter(|p| PREFIX.is_match(p)).ok_or("CLIProxyAPI: conta vinculada sem prefixo válido")?;
+    if records.iter().enumerate().any(|(i, (_, row))| i != index && row["prefix"] == prefix) {
+        return Err("CLIProxyAPI: prefixo da conta vinculada compartilhado".into());
+    }
+    let entries = match associated(accounts, &records) {
+        Ok(entries) => entries,
+        Err(_) => {
+            if crate::warn_limit::allow(None, "cliproxy_native_association") {
+                tracing::warn!("CLIProxyAPI: login Codex ilegível; a conta vinculada foi conferida no proxy");
+            }
+            entries(Vec::new(), &records)?
+        }
+    };
+    entries.into_iter().find_map(|(entry, i)| (i == index).then_some(entry))
+        .ok_or_else(|| "CLIProxyAPI: não consegui resolver a conta vinculada".into())
+}
+
+pub(crate) fn engine_binding(env: &AccountEnvironment, engine: &str) -> Option<String> {
+    store::state(env).0.get(engine)?.get("cliproxy_binding")?.as_str().map(str::to_owned)
+}
+
+pub(crate) fn engine_bound_entry(accounts: &AccountService, engine: &str, requested: Option<&str>) -> Result<Option<(String, Value)>, String> {
+    let engines = store::state(&accounts.env).0;
+    let Some(saved) = engines.get(engine) else { return Ok(None) };
+    let Some(binding) = saved["cliproxy_binding"].as_str() else { return Ok(None) };
+    if !is_local(&accounts.env, saved["base_url"].as_str().unwrap_or(""))? {
+        return Err("CLIProxyAPI: o endereço do motor vinculado não é mais o do proxy local".into());
+    }
+    let entry = resolve_binding(accounts, binding)?;
+    let account = entry["account"].as_str().ok_or("CLIProxyAPI: conta vinculada sem identificador")?;
+    if requested.is_some_and(|r| r != account) {
+        return Err("Este motor está vinculado a outra conta ChatGPT. Use o motor da conta desejada.".into());
+    }
+    Ok(Some((binding.to_owned(), entry)))
+}
+
+pub fn engine_account(accounts: &AccountService, engine: &str, requested: Option<&str>) -> Result<Option<String>, String> {
+    Ok(engine_bound_entry(accounts, engine, requested)?
+        .and_then(|(_, entry)| entry["account"].as_str().map(str::to_owned))
+        .or_else(|| requested.map(str::to_owned)))
+}
+
 /// As contas Codex do Hangar que casam com uma credencial, e as credenciais que sobram como contas só do proxy.
 pub fn entries(visible: Vec<(String,PathBuf)>, records: &[(PathBuf,Value)]) -> Result<Vec<(Value,usize)>,String> {
     let mut result = associate(visible, records)?;
@@ -173,11 +254,27 @@ pub fn prefix_model(model: &str, prefix: &str) -> Result<String,String> {
     Ok(format!("{prefix}/{model}"))
 }
 
-pub fn list_accounts(accounts: &AccountService) -> Result<Vec<Value>, String> {
+pub fn list_accounts(accounts: &AccountService) -> Result<Vec<Value>, String> { list_with_bindings(accounts, false) }
+
+pub(crate) fn list_quota_accounts(accounts: &AccountService) -> Result<Vec<Value>, String> { list_with_bindings(accounts, true) }
+
+fn list_with_bindings(accounts: &AccountService, quota_only: bool) -> Result<Vec<Value>, String> {
     let records = credentials(&accounts.env)?;
-    let associated = associated(accounts, &records)?;
-    checked_prefixes(&associated, &records)?;
-    Ok(associated.into_iter().map(|(e, _)| e).collect())
+    let associated = match associated(accounts, &records) {
+        Ok(entries) => entries,
+        Err(_) if quota_only => {
+            if crate::warn_limit::allow(None, "cliproxy_quota_native_association") {
+                tracing::warn!("CLIProxyAPI: associação Codex indisponível; cotas seguem pela identidade do proxy");
+            }
+            entries(Vec::new(), &records)?
+        }
+        Err(error) => return Err(error),
+    };
+    if !quota_only { checked_prefixes(&associated, &records)?; }
+    Ok(associated.into_iter().map(|(mut e, i)| {
+        e["binding"] = json!(binding_id(&records[i].1));
+        e
+    }).collect())
 }
 
 fn management_path(env: &AccountEnvironment) -> PathBuf { env.home.join(".claude").join("cliproxy-management.key") }
@@ -244,6 +341,53 @@ pub async fn naming(accounts: &AccountService) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_saved_binding_survives_a_relogin_and_refuses_ambiguous_credentials() {
+        let home = tempfile::tempdir().unwrap();
+        let dir = home.path().join(".cli-proxy-api");
+        fs::create_dir_all(&dir).unwrap();
+        let accounts = AccountService::new(AccountEnvironment::from_map([("HOME".into(), home.path().to_string_lossy().into_owned())].into()));
+        let first = json!({"type":"codex","account_id":"acc-pro","email":"before@example.com","prefix":"pro"});
+        let binding = binding_id(&first).unwrap();
+        let after = json!({"type":"codex","account_id":"acc-pro","email":"after@example.com","prefix":"pro"});
+        let plus = json!({"type":"codex","account_id":"acc-plus","email":"before@example.com","prefix":"plus"});
+        fs::write(dir.join("new.json"), after.to_string()).unwrap();
+        fs::write(dir.join("plus.json"), plus.to_string()).unwrap();
+        assert_eq!(resolve_binding(&accounts, &binding).unwrap()["prefix"], "pro");
+        fs::write(dir.join("duplicate.json"), first.to_string()).unwrap();
+        assert!(resolve_binding(&accounts, &binding).is_err());
+    }
+
+    #[test]
+    fn bound_motors_cannot_share_or_replace_each_others_account() {
+        let home = tempfile::tempdir().unwrap();
+        let dir = home.path().join(".cli-proxy-api");
+        fs::create_dir_all(&dir).unwrap();
+        fs::create_dir_all(home.path().join(".claude")).unwrap();
+        fs::write(dir.join("config.yaml"), "host: 127.0.0.1\nport: 8317\napi-keys:\n  - dummy\n").unwrap();
+        let pro = json!({"type":"codex","account_id":"acc-pro","email":"pro@example.test","prefix":"pro","plan_type":"pro"});
+        let plus = json!({"type":"codex","account_id":"acc-plus","email":"plus@example.test","prefix":"plus","plan_type":"plus"});
+        fs::write(dir.join("pro.json"), pro.to_string()).unwrap();
+        fs::write(dir.join("plus.json"), plus.to_string()).unwrap();
+        let accounts = AccountService::new(AccountEnvironment::from_map([("HOME".into(), home.path().to_string_lossy().into_owned())].into()));
+        let models = [json!({"id":"pro/gpt-6.2-sol"}), json!({"id":"plus/gpt-6.2-sol"})];
+        let make = |record: &Value| json!({"base_url":"http://127.0.0.1:8317","api_key":"dummy","model":"gpt-6.2-sol",
+            "cliproxy_binding":binding_id(record).unwrap()}).as_object().unwrap().clone();
+        assert!(store::create(&accounts, "gpt-pro", make(&pro), Some(&models)).unwrap());
+        assert!(store::create(&accounts, "gpt-plus", make(&plus), Some(&models)).unwrap());
+        let (pro_binding, pro_entry) = engine_bound_entry(&accounts, "gpt-pro", None).unwrap().unwrap();
+        let (_, plus_entry) = engine_bound_entry(&accounts, "gpt-plus", None).unwrap().unwrap();
+        assert_eq!(pro_entry["plan"], "pro");
+        assert_eq!(plus_entry["plan"], "plus");
+        assert!(engine_bound_entry(&accounts, "gpt-pro", plus_entry["account"].as_str()).is_err());
+        let selected = super::super::environment::Selection { account: pro_entry["account"].as_str(),
+            account_base: Some("http://127.0.0.1:8317"), binding: Some(&pro_binding), ..Default::default() };
+        let env = super::super::environment::derive(&accounts, "gpt-pro", selected).unwrap();
+        assert_eq!(env["ANTHROPIC_MODEL"], "pro/gpt-6.2-sol");
+        assert!(store::put(&accounts, "gpt-pro", json!({"subagent_model":"gpt-unknown"}).as_object().unwrap().clone(), Some(&models)).is_err());
+        assert_eq!(store::state(&accounts.env).0["gpt-pro"]["cliproxy_binding"], pro_binding);
+    }
 
     #[test]
     fn a_proxy_only_account_with_two_active_credentials_says_why_instead_of_vanishing() {

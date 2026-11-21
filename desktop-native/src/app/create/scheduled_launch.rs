@@ -2,13 +2,14 @@ use std::collections::HashSet;
 
 use serde_json::Value;
 
-pub(super) const FIELDS: [&str; 17] = [
+pub(super) const FIELDS: [&str; 18] = [
     "cwd",
     "provider",
     "config_dir",
     "codex_account",
     "engine",
     "engine_account",
+    "engine_binding",
     "model",
     "effort",
     "service_tier",

@@ -148,6 +148,10 @@ pub fn fork_argv(meta: &Value, sid: &str, question: &str) -> Vec<String> {
     if let Some(model) = &model { argv.extend(["--model".into(), model.clone()]); }
     if truthy(meta.get("engine")) {
         let mut pre = vec!["hangar-engine".to_owned(), "--exec".into(), text(&meta["engine"])];
+        for (field, flag) in [("engine_account", "--account"), ("engine_home", "--account-home"),
+            ("engine_account_base_url", "--account-base-url"), ("engine_binding", "--account-binding")] {
+            if let Some(value) = meta[field].as_str() { pre.extend([flag.into(), value.into()]); }
+        }
         if let Some(model) = &model {
             pre.extend(["--model".into(), model.clone()]);
             if truthy(meta.get("context_window")) { pre.extend(["--context".into(), text(&meta["context_window"])]); }
@@ -221,8 +225,18 @@ pub async fn ask_headless(meta: &Value, question: &str, projects: &Path, program
     if !tokio::task::spawn_blocking(move || transcript(&base_check, &cwd_check, &session_id).exists()).await.unwrap_or(false) {
         return Err(no_conversation(409));
     }
+    let mut meta = meta.clone();
+    if let Some(engine) = meta["engine"].as_str() {
+        let accounts = crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::capture());
+        let route = crate::session_open::facts::session_engine_route(&accounts, engine, meta["engine_account"].as_str(), meta["engine_binding"].as_str())
+            .map_err(|error| fail(error.status, "erro_cliproxy_conta", &error.msg))?;
+        if let Some(route) = route {
+            meta["engine_home"] = json!(route.home);
+            meta["engine_account_base_url"] = json!(route.base_url);
+        }
+    }
     let sid = crate::session_open::open::uuid4(&crate::mods::state::random_hex(16));
-    let argv = fork_argv(meta, &sid, &question);
+    let argv = fork_argv(&meta, &sid, &question);
     let ran = run_fork(&argv, programs, &cwd, config_dir.as_deref(), timeout).await;
     let (base_clean, cwd_clean, sid_clean) = (base.clone(), cwd.clone(), sid.clone());
     let removed = tokio::task::spawn_blocking(move || {

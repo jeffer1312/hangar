@@ -796,7 +796,10 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   config completado, com cópia, nunca reinstalado. Ele só passa ao Hangar a pedido da pessoa
   ("Deixar o Hangar cuidar"), com o mesmo config e as mesmas contas: o serviço de fora é desligado,
   nunca desinstalado, e volta se a versão do Hangar não responder. Atualiza só pelo botão,
-  confirmando com sessão viva no proxy. Conta logada só no proxy entra no seletor como `cliproxy:cpa-…`, fixa por sessão.
+  confirmando com sessão viva no proxy. Conta logada só no proxy entra no seletor como `cliproxy:cpa-…`.
+  **Usar esta conta** vincula o próprio motor à identidade ChatGPT escolhida; motor vinculado não aceita
+  outra conta nem cai no rodízio. A sessão grava o vínculo, e a cota vem da assinatura consultada pelo proxy,
+  sem exigir login Codex. Motor antigo sem vínculo só é vinculado pelo editor, nunca pelo nome.
   O motor do assistente grava `fast`; ausente vale disponível, e a sessão nasce sem Fast. Ultra Fast
   só com conta fixa Pro/Pro Max e a regra do cabeçalho `X-Hangar-Speed` no config (proxy v8+). Evidência em
   [plataforma.md](docs/decisoes/plataforma.md#cliproxyapi-instalado-e-configurado-pelo-hangar-19112026).

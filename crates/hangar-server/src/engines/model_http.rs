@@ -60,12 +60,20 @@ pub async fn response(st:&AppState,method:&Method,path:&str,query:Option<&str>) 
         }
         let engine=engine?;
         if params.get("provider").is_some_and(|p|p!="claude") {return None;}
+        let account = match super::proxy::engine_account(&st.accounts, engine, account) {
+            Ok(account) => account,
+            Err(error) => return Some(crate::provider_models::ModelError::coded(400, "erro_cliproxy_conta", &error, json!({})).response()),
+        };
+        let account = account.as_deref();
         return Some(match catalog::models(&st.accounts,engine,account,refresh).await {
             Ok(models)=>{
                 let models=catalog::picker(&st.accounts,engine,account,models);
                 let fast=models.iter().any(|m|m["supports_fast"]==true);
                 let ultrafast=models.iter().any(|m|m["supports_ultrafast"]==true);
-                json_response(StatusCode::OK,json!({"kind":"engine","reduced":false,"models":models,"supports_fast":fast,"supports_ultrafast":ultrafast}))
+                let engines = store::state(&st.accounts.env).0;
+                let default = engines.get(engine).and_then(|s| s["model"].as_str())
+                    .and_then(|m| m.rsplit('/').next()).filter(|m| models.iter().any(|row| row["id"] == *m));
+                json_response(StatusCode::OK,json!({"kind":"engine","reduced":false,"default":default,"models":models,"supports_fast":fast,"supports_ultrafast":ultrafast}))
             },
             Err(error)=>error.response(),
         });
@@ -88,9 +96,16 @@ pub async fn response(st:&AppState,method:&Method,path:&str,query:Option<&str>) 
             Err(code) => catalog_failure(code),
         });
     };
-    Some(match catalog::models(&st.accounts,engine,row.engine_account.as_deref(),refresh).await {
+    let route = if row.engine_binding.is_some() {
+        match crate::session_open::facts::session_engine_route(&st.accounts, engine, row.engine_account.as_deref(), row.engine_binding.as_deref()) {
+            Ok(route) => route,
+            Err(error) => return Some(json_response(StatusCode::CONFLICT, error.body())),
+        }
+    } else { None };
+    let account = route.as_ref().map(|r| r.account.as_str()).or(row.engine_account.as_deref());
+    Some(match catalog::models(&st.accounts,engine,account,refresh).await {
         Ok(models)=>{
-            let models=catalog::picker(&st.accounts,&engine,row.engine_account.as_deref(),models);
+            let models=catalog::picker(&st.accounts,engine,account,models);
             let fast=models.iter().any(|m|m["supports_fast"]==true);
             let ultrafast=models.iter().any(|m|m["supports_ultrafast"]==true);
             let mut result=json!({"kind":"engine","engine":engine,"models":models});
